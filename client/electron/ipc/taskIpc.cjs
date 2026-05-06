@@ -1,0 +1,21 @@
+const { ipcMain } = require('electron');
+
+function registerTaskIpc({ taskService }) {
+  ipcMain.handle('tasks:start-bid-analysis', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.startBidAnalysis(payload);
+  });
+  ipcMain.handle('tasks:start-outline-generation', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.startOutlineGeneration(payload);
+  });
+  ipcMain.handle('tasks:get-active', (event) => {
+    taskService.subscribe(event.sender);
+    return taskService.getActiveTasks();
+  });
+  ipcMain.on('tasks:subscribe', (event) => {
+    taskService.subscribe(event.sender);
+  });
+}
+
+module.exports = { registerTaskIpc };

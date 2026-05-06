@@ -90,7 +90,7 @@ function DocumentAnalysisPage({
 
       <section className="analysis-markdown-card">
         <div className="analysis-result-head">
-          <strong>Markdown 解析结果</strong>
+          <strong>招标文件内容</strong>
           <span>{fileContent ? '来自原始招标文件' : '等待上传'}</span>
         </div>
 

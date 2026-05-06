@@ -97,6 +97,9 @@ const initialState: SettingsPageState = {
     provider: 'local',
     mineru_token: '',
   },
+  general: {
+    developer_mode: false,
+  },
 };
 
 function SettingsPage() {
@@ -131,6 +134,9 @@ function SettingsPage() {
         },
         imageModel: config.image_model,
         fileParser: config.file_parser,
+        general: {
+          developer_mode: Boolean(config.developer_mode),
+        },
       }));
       setSavedConfig(config);
     } catch (error) {
@@ -145,6 +151,7 @@ function SettingsPage() {
     model_name: state.textModel.model_name,
     image_model: state.imageModel,
     file_parser: state.fileParser,
+    developer_mode: state.general.developer_mode,
   });
 
   const saveClientConfig = async (config: ClientConfig) => {
@@ -218,6 +225,15 @@ function SettingsPage() {
     await saveClientConfig(createClientConfig());
   };
 
+  const openConfigFolder = async () => {
+    try {
+      await window.yibiao?.config.openConfigFolder();
+      showToast('已打开配置文件夹', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '打开配置文件夹失败', 'error');
+    }
+  };
+
   const fetchTextModels = async () => {
     try {
       setLoadingModels('text');
@@ -275,6 +291,10 @@ function SettingsPage() {
       });
     }
 
+    if (activeTab === 'general') {
+      return Boolean(state.general.developer_mode) !== Boolean(savedConfig.developer_mode);
+    }
+
     if (activeTab === 'image-model') {
       return JSON.stringify(state.imageModel) !== JSON.stringify(savedConfig.image_model);
     }
@@ -287,6 +307,10 @@ function SettingsPage() {
   };
 
   const saveActiveTabConfig = async () => {
+    if (activeTab === 'general') {
+      await saveClientConfig(createClientConfig());
+      return;
+    }
     if (activeTab === 'text-model') {
       await saveTextConfig();
       return;
@@ -300,7 +324,7 @@ function SettingsPage() {
     }
   };
 
-  const canSaveActiveTab = activeTab === 'text-model' || activeTab === 'image-model' || activeTab === 'file-parser';
+  const canSaveActiveTab = activeTab === 'general' || activeTab === 'text-model' || activeTab === 'image-model' || activeTab === 'file-parser';
   const activeTabDirty = isActiveTabDirty();
   const settingsToolbarGroups: FloatingToolbarGroup[] = canSaveActiveTab
     ? [
@@ -383,6 +407,38 @@ function SettingsPage() {
                 <option value="classic">经典布局</option>
               </select>
             </div>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>开发者模式</strong>
+                <span>启用后保存每次 AI 请求和响应的完整日志，便于排查模型输出问题</span>
+              </div>
+              <span className="settings-switch-control">
+                <input
+                  type="checkbox"
+                  checked={state.general.developer_mode}
+                  onChange={(event) => setState((prev) => ({
+                    ...prev,
+                    general: { ...prev.general, developer_mode: event.target.checked },
+                  }))}
+                />
+                <span className="settings-switch-track" aria-hidden="true">
+                  <span className="settings-switch-thumb" />
+                </span>
+              </span>
+            </label>
+            {state.general.developer_mode && (
+              <div className="settings-row">
+                <div className="settings-row-copy">
+                  <strong>配置文件夹</strong>
+                  <span>打开本机配置、工作区缓存和开发者日志所在目录</span>
+                </div>
+                <div className="settings-action-cell">
+                  <button type="button" className="inline-action" onClick={openConfigFolder}>
+                    打开配置文件夹
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </section>
       )}

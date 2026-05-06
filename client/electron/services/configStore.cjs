@@ -16,6 +16,7 @@ const defaultConfig = {
     provider: 'local',
     mineru_token: '',
   },
+  developer_mode: false,
 };
 
 function normalizeConfig(config) {

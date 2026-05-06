@@ -1,4 +1,7 @@
+import { useEffect } from 'react';
 import DocumentAnalysisPage from './DocumentAnalysisPage';
+import BidAnalysisPage from './BidAnalysisPage';
+import OutlineEditPage from './OutlineEditPage';
 import ContentEditPage from './ContentEditPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon } from '../../../shared/ui';
@@ -7,6 +10,7 @@ import type { TechnicalPlanStep } from '../types';
 const steps: TechnicalPlanStep[] = [
   'document-analysis',
   'bid-analysis',
+  'outline-generation',
   'content-edit',
   'expand',
 ];
@@ -14,8 +18,9 @@ const steps: TechnicalPlanStep[] = [
 const stepLabels: Record<TechnicalPlanStep, string> = {
   'document-analysis': '上传招标文件',
   'bid-analysis': '招标文件解析',
+  'outline-generation': '目录生成',
   'content-edit': '生成正文',
-  expand: '扩写',
+  expand: '扩写改写',
 };
 
 const resetState = {
@@ -24,18 +29,32 @@ const resetState = {
   fileContent: '',
   projectOverview: '',
   techRequirements: '',
+  bidAnalysisMode: 'key' as const,
+  bidAnalysisTasks: {},
+  bidAnalysisProgress: 0,
+  outlineMode: 'free' as const,
+  bidAnalysisTask: undefined,
+  outlineGenerationTask: undefined,
   outlineData: null,
 };
 
 function TechnicalPlanHome() {
   const { state, setState } = useTechnicalPlanWorkflow();
   const activeIndex = steps.indexOf(state.step);
-  const isNextDisabled = activeIndex >= steps.length - 1 || (state.step === 'document-analysis' && !state.fileContent);
+  const bidAnalysisReady = Boolean(state.projectOverview && state.techRequirements && state.bidAnalysisProgress === 100);
+  const isNextDisabled = activeIndex >= steps.length - 1
+    || (state.step === 'document-analysis' && !state.fileContent)
+    || (state.step === 'bid-analysis' && !bidAnalysisReady)
+    || (state.step === 'outline-generation' && !state.outlineData);
   const nextTooltip = state.step === 'document-analysis' && !state.fileContent
     ? '上传完招标文件后才能进入下一步'
-    : activeIndex >= steps.length - 1
-      ? '当前已经是最后一步'
-      : `进入${stepLabels[steps[activeIndex + 1]]}`;
+    : state.step === 'bid-analysis' && !bidAnalysisReady
+      ? '招标文件解析完成后才能进入目录生成'
+      : state.step === 'outline-generation' && !state.outlineData
+        ? '目录生成完成后才能进入正文生成'
+        : activeIndex >= steps.length - 1
+          ? '当前已经是最后一步'
+          : `进入${stepLabels[steps[activeIndex + 1]]}`;
 
   const switchStep = (step: TechnicalPlanStep) => {
     setState((prev) => ({ ...prev, step }));
@@ -47,6 +66,51 @@ function TechnicalPlanHome() {
       switchStep(nextStep);
     }
   };
+
+  useEffect(() => {
+    if (!window.yibiao?.tasks) {
+      return;
+    }
+
+    const unsubscribe = window.yibiao.tasks.onTaskEvent<typeof state>((event) => {
+      const taskType = (event.task as { type?: string } | undefined)?.type;
+      const technicalPlan = event.technicalPlan;
+
+      if (!technicalPlan) {
+        return;
+      }
+
+      setState((prev) => {
+        if (taskType === 'bid-analysis') {
+          return {
+            ...prev,
+            bidAnalysisTask: technicalPlan.bidAnalysisTask,
+            bidAnalysisTasks: technicalPlan.bidAnalysisTasks || prev.bidAnalysisTasks,
+            bidAnalysisProgress: technicalPlan.bidAnalysisProgress ?? prev.bidAnalysisProgress,
+            projectOverview: technicalPlan.projectOverview ?? prev.projectOverview,
+            techRequirements: technicalPlan.techRequirements ?? prev.techRequirements,
+          };
+        }
+
+        if (taskType === 'outline-generation') {
+          return {
+            ...prev,
+            outlineGenerationTask: technicalPlan.outlineGenerationTask,
+            outlineData: technicalPlan.outlineGenerationTask?.status === 'success' && technicalPlan.outlineData
+              ? technicalPlan.outlineData
+              : prev.outlineData,
+          };
+        }
+
+        return prev;
+      });
+    });
+    window.yibiao.tasks.getActiveTasks().catch((error) => {
+      console.warn('获取后台任务状态失败', error);
+    });
+
+    return unsubscribe;
+  }, [setState]);
 
   const toolbarGroups = [
     {
@@ -104,22 +168,49 @@ function TechnicalPlanHome() {
             fileContent,
             projectOverview: '',
             techRequirements: '',
+            bidAnalysisTasks: {},
+            bidAnalysisProgress: 0,
+            outlineMode: 'free',
+            bidAnalysisTask: undefined,
+            outlineGenerationTask: undefined,
+            outlineData: null,
           }))}
         />
       )}
 
       {state.step === 'bid-analysis' && (
-        <section className="empty-panel compact-placeholder">
-          <span className="section-kicker">STEP 02</span>
-          <h3>招标文件解析</h3>
-          <p>后续在这里基于已上传的招标文件 Markdown 进行 AI 标书理解。</p>
-        </section>
+        <BidAnalysisPage
+          fileContent={state.fileContent}
+          mode={state.bidAnalysisMode}
+          tasks={state.bidAnalysisTasks}
+          task={state.bidAnalysisTask}
+          progress={state.bidAnalysisProgress}
+          onModeChange={(mode) => setState((prev) => ({ ...prev, bidAnalysisMode: mode }))}
+          onTasksChange={(updater) => setState((prev) => ({ ...prev, bidAnalysisTasks: updater(prev.bidAnalysisTasks) }))}
+          onProgressChange={(progress) => setState((prev) => ({ ...prev, bidAnalysisProgress: progress }))}
+          onRequiredResultChange={(projectOverview, techRequirements) => setState((prev) => ({
+            ...prev,
+            projectOverview,
+            techRequirements,
+          }))}
+        />
+      )}
+      {state.step === 'outline-generation' && (
+        <OutlineEditPage
+          projectOverview={state.projectOverview}
+          techRequirements={state.techRequirements}
+          outlineMode={state.outlineMode}
+          outlineData={state.outlineData}
+          task={state.outlineGenerationTask}
+          onOutlineModeChange={(outlineMode) => setState((prev) => ({ ...prev, outlineMode }))}
+          onOutlineGenerated={(outlineData) => setState((prev) => ({ ...prev, outlineData }))}
+        />
       )}
       {state.step === 'content-edit' && <ContentEditPage />}
       {state.step === 'expand' && (
         <section className="empty-panel compact-placeholder">
-          <span className="section-kicker">STEP 04</span>
-          <h3>扩写</h3>
+          <span className="section-kicker">STEP 05</span>
+          <h3>扩写改写</h3>
           <p>后续接入旧方案导入、章节扩写和人工校准。</p>
         </section>
       )}

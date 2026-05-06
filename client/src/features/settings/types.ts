@@ -8,4 +8,7 @@ export interface SettingsPageState {
   };
   imageModel: ImageModelConfig;
   fileParser: FileParserConfig;
+  general: {
+    developer_mode: boolean;
+  };
 }

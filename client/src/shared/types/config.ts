@@ -43,4 +43,5 @@ export interface FileParserConfig {
 export interface ClientConfig extends AiConfig {
   image_model: ImageModelConfig;
   file_parser: FileParserConfig;
+  developer_mode?: boolean;
 }
