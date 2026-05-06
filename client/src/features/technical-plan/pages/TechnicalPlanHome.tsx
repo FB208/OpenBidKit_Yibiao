@@ -1,5 +1,4 @@
 import DocumentAnalysisPage from './DocumentAnalysisPage';
-import OutlineEditPage from './OutlineEditPage';
 import ContentEditPage from './ContentEditPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon } from '../../../shared/ui';
@@ -7,14 +6,14 @@ import type { TechnicalPlanStep } from '../types';
 
 const steps: TechnicalPlanStep[] = [
   'document-analysis',
-  'outline-edit',
+  'bid-analysis',
   'content-edit',
   'expand',
 ];
 
 const stepLabels: Record<TechnicalPlanStep, string> = {
-  'document-analysis': '标书解析',
-  'outline-edit': '目录编辑',
+  'document-analysis': '上传招标文件',
+  'bid-analysis': '招标文件解析',
   'content-edit': '生成正文',
   expand: '扩写',
 };
@@ -31,6 +30,12 @@ const resetState = {
 function TechnicalPlanHome() {
   const { state, setState } = useTechnicalPlanWorkflow();
   const activeIndex = steps.indexOf(state.step);
+  const isNextDisabled = activeIndex >= steps.length - 1 || (state.step === 'document-analysis' && !state.fileContent);
+  const nextTooltip = state.step === 'document-analysis' && !state.fileContent
+    ? '上传完招标文件后才能进入下一步'
+    : activeIndex >= steps.length - 1
+      ? '当前已经是最后一步'
+      : `进入${stepLabels[steps[activeIndex + 1]]}`;
 
   const switchStep = (step: TechnicalPlanStep) => {
     setState((prev) => ({ ...prev, step }));
@@ -58,7 +63,7 @@ function TechnicalPlanHome() {
           id: 'home',
           label: '首页',
           variant: state.step === 'document-analysis' ? 'primary' as const : 'secondary' as const,
-          tooltip: '回到标书解析',
+          tooltip: '回到上传招标文件',
           onClick: () => switchStep('document-analysis'),
         },
       ],
@@ -79,8 +84,8 @@ function TechnicalPlanHome() {
           label: '下一步',
           icon: <ToolbarArrowRightIcon />,
           variant: 'primary' as const,
-          disabled: activeIndex >= steps.length - 1,
-          tooltip: activeIndex >= steps.length - 1 ? '当前已经是最后一步' : `进入${stepLabels[steps[activeIndex + 1]]}`,
+          disabled: isNextDisabled,
+          tooltip: nextTooltip,
           onClick: () => goToOffset(1),
         },
       ],
@@ -100,11 +105,16 @@ function TechnicalPlanHome() {
             projectOverview: '',
             techRequirements: '',
           }))}
-          onNext={() => switchStep('outline-edit')}
         />
       )}
 
-      {state.step === 'outline-edit' && <OutlineEditPage />}
+      {state.step === 'bid-analysis' && (
+        <section className="empty-panel compact-placeholder">
+          <span className="section-kicker">STEP 02</span>
+          <h3>招标文件解析</h3>
+          <p>后续在这里基于已上传的招标文件 Markdown 进行 AI 标书理解。</p>
+        </section>
+      )}
       {state.step === 'content-edit' && <ContentEditPage />}
       {state.step === 'expand' && (
         <section className="empty-panel compact-placeholder">

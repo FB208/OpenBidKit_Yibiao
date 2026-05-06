@@ -15,14 +15,12 @@ interface DocumentAnalysisPageProps {
   fileName: string;
   fileContent: string;
   onFileImported: (fileName: string, fileContent: string) => void;
-  onNext: () => void;
 }
 
 function DocumentAnalysisPage({
   fileName,
   fileContent,
   onFileImported,
-  onNext,
 }: DocumentAnalysisPageProps) {
   const [parserLabel, setParserLabel] = useState(parserLabels.local);
   const [busy, setBusy] = useState(false);
@@ -110,9 +108,6 @@ function DocumentAnalysisPage({
         )}
       </section>
 
-      <div className="plan-step-actions">
-        <button type="button" className="primary-action" onClick={onNext} disabled={!fileContent}>进入目录编辑</button>
-      </div>
     </div>
   );
 }

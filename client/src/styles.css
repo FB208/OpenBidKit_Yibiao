@@ -995,7 +995,7 @@ button {
 .app-toast-viewport {
   position: fixed;
   right: 28px;
-  bottom: 28px;
+  top: 28px;
   z-index: 80;
   display: grid;
   gap: 12px;

@@ -1,6 +1,6 @@
 import type { OutlineData } from '../../shared/types';
 
-export type TechnicalPlanStep = 'document-analysis' | 'outline-edit' | 'content-edit' | 'expand';
+export type TechnicalPlanStep = 'document-analysis' | 'bid-analysis' | 'content-edit' | 'expand';
 
 export interface TechnicalPlanState {
   step: TechnicalPlanStep;
