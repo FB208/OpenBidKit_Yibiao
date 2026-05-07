@@ -3,8 +3,9 @@ import type { OutlineData, OutlineMode } from '../../shared/types';
 export type TechnicalPlanStep = 'document-analysis' | 'bid-analysis' | 'outline-generation' | 'content-edit' | 'expand';
 export type BidAnalysisMode = 'key' | 'full';
 export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
-export type BackgroundTaskType = 'bid-analysis' | 'outline-generation';
+export type BackgroundTaskType = 'bid-analysis' | 'outline-generation' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'success' | 'error';
+export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
 
 export interface BackgroundTaskState {
   task_id: string;
@@ -27,6 +28,17 @@ export interface BidAnalysisTaskState {
 
 export type BidAnalysisTasks = Record<string, BidAnalysisTaskState>;
 
+export interface ContentGenerationSectionState {
+  id: string;
+  title: string;
+  status: ContentGenerationSectionStatus;
+  content: string;
+  error?: string;
+  updated_at?: string;
+}
+
+export type ContentGenerationSections = Record<string, ContentGenerationSectionState>;
+
 export interface TechnicalPlanState {
   step: TechnicalPlanStep;
   fileName: string;
@@ -39,5 +51,7 @@ export interface TechnicalPlanState {
   outlineMode: OutlineMode;
   bidAnalysisTask?: BackgroundTaskState;
   outlineGenerationTask?: BackgroundTaskState;
+  contentGenerationTask?: BackgroundTaskState;
+  contentGenerationSections: ContentGenerationSections;
   outlineData: OutlineData | null;
 }

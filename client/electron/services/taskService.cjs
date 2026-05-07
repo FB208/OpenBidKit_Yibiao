@@ -1,6 +1,13 @@
 const crypto = require('node:crypto');
 const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
+const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
 const { runOutlineGenerationTask } = require('./outlineGenerationTask.cjs');
+
+const taskFields = {
+  'bid-analysis': 'bidAnalysisTask',
+  'outline-generation': 'outlineGenerationTask',
+  'content-generation': 'contentGenerationTask',
+};
 
 function now() {
   return new Date().toISOString();
@@ -43,7 +50,7 @@ function createTaskService({ aiService, workspaceStore }) {
   }
 
   function getTaskField(type) {
-    return type === 'bid-analysis' ? 'bidAnalysisTask' : 'outlineGenerationTask';
+    return taskFields[type];
   }
 
   function startTask(type, payload, runner, initialPartial = {}) {
@@ -91,6 +98,9 @@ function createTaskService({ aiService, workspaceStore }) {
     },
     startOutlineGeneration(payload) {
       return startTask('outline-generation', payload, runOutlineGenerationTask, { outlineMode: payload.mode });
+    },
+    startContentGeneration(payload) {
+      return startTask('content-generation', payload, runContentGenerationTask);
     },
     getActiveTasks() {
       return Array.from(activeTasks.values());

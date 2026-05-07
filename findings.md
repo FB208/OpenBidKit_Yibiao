@@ -17,3 +17,7 @@
 - Step02/Step03 后台任务运行时，Renderer 的整包技术方案保存可能覆盖 Main 刚写入的任务进度；已在 `useTechnicalPlanWorkflow` 中跳过运行中任务状态下的 debounce/卸载保存，避免写入竞争。
 - client 目录生成失败率高的根因是此前只仿写了 backend 流程，未迁移 `OpenAIUtil.collect_json_response()` 的完整链路；后端每一步 JSON 调用都在同一函数内执行解析、Pydantic schema 校验、业务 validator、JSON 修复和最多 3 轮重试，而 client 此前把业务校验放在 `requestJson()` 外部，导致校验失败不能进入修复/重试。
 - 已将 client 目录生成 prompt 和 validator 对齐 backend：完整目录只要求非空且至少三级；一级目录只要求非空；children 只要求二级目录非空；不再额外把“无描述/没有提及”作为生成失败条件。
+- backend `/api/content/generate-chapter-stream` 的契约很轻：请求包含 `chapter`、`parent_chapters`、`sibling_chapters`、`project_overview`，服务端用 `build_chapter_content_messages()` 后以 `temperature=0.7` 流式返回纯正文 chunk。
+- 旧 `frontend/src/pages/ContentEdit.tsx` 已实现可参考的叶子节点收集、父级章节查找、同级章节查找、5 并发生成和 Word 导出 payload 构造；但旧版依赖浏览器 SSE、`file-saver` 和本地草稿缓存，client 需要改为 Main 后台任务与工作区文件存储。
+- backend `/api/document/export-word` 的 payload 是 `{ project_name?, project_overview?, outline }`，其中 `outline` 节点包含 `id/title/description/children/content`；导出服务只对叶子节点渲染 `content`，Markdown 支持标题、列表、表格行、粗体/斜体/代码。
+- client 现有 `exportService.cjs` 是未实现占位；`preload.cjs` 已暴露 `window.yibiao.export.exportWord(payload)`，但 Main 侧还需要实现保存对话框和 docx 写入。

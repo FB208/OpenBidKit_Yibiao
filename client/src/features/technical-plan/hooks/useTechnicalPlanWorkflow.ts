@@ -14,11 +14,15 @@ const initialState: TechnicalPlanState = {
   outlineMode: 'free',
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
+  contentGenerationTask: undefined,
+  contentGenerationSections: {},
   outlineData: null,
 };
 
 function hasRunningTask(state: TechnicalPlanState) {
-  return state.bidAnalysisTask?.status === 'running' || state.outlineGenerationTask?.status === 'running';
+  return state.bidAnalysisTask?.status === 'running'
+    || state.outlineGenerationTask?.status === 'running'
+    || state.contentGenerationTask?.status === 'running';
 }
 
 export function useTechnicalPlanWorkflow() {

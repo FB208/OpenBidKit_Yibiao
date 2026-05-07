@@ -4,8 +4,9 @@ import BidAnalysisPage from './BidAnalysisPage';
 import OutlineEditPage from './OutlineEditPage';
 import ContentEditPage from './ContentEditPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
-import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon } from '../../../shared/ui';
+import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
 import type { TechnicalPlanStep } from '../types';
+import type { OutlineData, OutlineItem } from '../../../shared/types';
 
 const steps: TechnicalPlanStep[] = [
   'document-analysis',
@@ -35,13 +36,47 @@ const resetState = {
   outlineMode: 'free' as const,
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
+  contentGenerationTask: undefined,
+  contentGenerationSections: {},
   outlineData: null,
 };
 
+function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
+  return items.flatMap((item) => item.children?.length ? collectLeafItems(item.children) : [item]);
+}
+
+function clearOutlineContent(items: OutlineItem[]): OutlineItem[] {
+  return items.map((item) => {
+    const { content: _content, children, ...rest } = item;
+    return children?.length ? { ...rest, children: clearOutlineContent(children) } : rest;
+  });
+}
+
+function updateOutlineItemContent(items: OutlineItem[], itemId: string, content: string): OutlineItem[] {
+  return items.map((item) => {
+    if (item.id === itemId) {
+      return { ...item, content };
+    }
+
+    return item.children?.length
+      ? { ...item, children: updateOutlineItemContent(item.children, itemId, content) }
+      : item;
+  });
+}
+
+function resetGeneratedContent(outlineData: OutlineData): OutlineData {
+  return {
+    ...outlineData,
+    outline: clearOutlineContent(outlineData.outline),
+  };
+}
+
 function TechnicalPlanHome() {
   const { state, setState } = useTechnicalPlanWorkflow();
+  const { showToast } = useToast();
   const activeIndex = steps.indexOf(state.step);
   const bidAnalysisReady = Boolean(state.projectOverview && state.techRequirements && state.bidAnalysisProgress === 100);
+  const isContentGenerating = state.contentGenerationTask?.status === 'running';
   const isNextDisabled = activeIndex >= steps.length - 1
     || (state.step === 'document-analysis' && !state.fileContent)
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
@@ -93,12 +128,25 @@ function TechnicalPlanHome() {
         }
 
         if (taskType === 'outline-generation') {
+          const nextOutlineData = technicalPlan.outlineGenerationTask?.status === 'success' && technicalPlan.outlineData
+            ? resetGeneratedContent(technicalPlan.outlineData)
+            : prev.outlineData;
+
           return {
             ...prev,
             outlineGenerationTask: technicalPlan.outlineGenerationTask,
-            outlineData: technicalPlan.outlineGenerationTask?.status === 'success' && technicalPlan.outlineData
-              ? technicalPlan.outlineData
-              : prev.outlineData,
+            outlineData: nextOutlineData,
+            contentGenerationTask: nextOutlineData !== prev.outlineData ? undefined : prev.contentGenerationTask,
+            contentGenerationSections: nextOutlineData !== prev.outlineData ? {} : prev.contentGenerationSections,
+          };
+        }
+
+        if (taskType === 'content-generation') {
+          return {
+            ...prev,
+            contentGenerationTask: technicalPlan.contentGenerationTask,
+            contentGenerationSections: technicalPlan.contentGenerationSections || prev.contentGenerationSections,
+            outlineData: technicalPlan.outlineData || prev.outlineData,
           };
         }
 
@@ -111,6 +159,111 @@ function TechnicalPlanHome() {
 
     return unsubscribe;
   }, [setState]);
+
+  const exportWord = async () => {
+    if (!state.outlineData?.outline?.length) {
+      showToast('请先生成目录', 'info');
+      return;
+    }
+
+    try {
+      const result = await window.yibiao?.export.exportWord({
+        project_name: state.outlineData.project_name,
+        project_overview: state.outlineData.project_overview || state.projectOverview,
+        outline: state.outlineData.outline,
+      });
+      if (result?.canceled) {
+        showToast('已取消导出', 'info');
+        return;
+      }
+      showToast(result?.message || 'Word 已导出', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '导出 Word 失败', 'error');
+    }
+  };
+
+  const saveChapterContent = async (item: OutlineItem, content: string) => {
+    if (!state.outlineData?.outline?.length) {
+      throw new Error('当前没有可保存的目录');
+    }
+
+    const updatedOutlineData = {
+      ...state.outlineData,
+      outline: updateOutlineItemContent(state.outlineData.outline, item.id, content),
+    };
+    const updatedSections = {
+      ...state.contentGenerationSections,
+      [item.id]: {
+        id: item.id,
+        title: item.title || '未命名章节',
+        status: content.trim() ? 'success' as const : 'idle' as const,
+        content,
+        updated_at: new Date().toISOString(),
+      },
+    };
+
+    setState((prev) => ({
+      ...prev,
+      outlineData: updatedOutlineData,
+      contentGenerationSections: updatedSections,
+    }));
+    await window.yibiao?.workspace.updateTechnicalPlan({
+      outlineData: updatedOutlineData,
+      contentGenerationSections: updatedSections,
+    });
+  };
+
+  const generatedContentCount = state.outlineData?.outline
+    ? collectLeafItems(state.outlineData.outline).filter((item) => item.content?.trim()).length
+    : 0;
+
+  const navigationActions = state.step === 'content-edit'
+    ? [
+      {
+        id: 'previous-step',
+        label: '上一步',
+        icon: <ToolbarArrowLeftIcon />,
+        disabled: activeIndex <= 0,
+        tooltip: activeIndex <= 0 ? '当前已经是第一步' : `返回${stepLabels[steps[activeIndex - 1]]}`,
+        onClick: () => goToOffset(-1),
+      },
+      {
+        id: 'export-word',
+        label: '导出 Word',
+        icon: <ToolbarDocumentIcon />,
+        variant: 'primary' as const,
+        disabled: isContentGenerating || !state.outlineData,
+        tooltip: isContentGenerating ? '正文生成中，完成后再导出' : generatedContentCount ? '导出当前技术方案正文' : '可导出空目录文档，建议先生成正文',
+        onClick: exportWord,
+      },
+      {
+        id: 'continue-expand',
+        label: '继续扩写',
+        icon: <ToolbarArrowRightIcon />,
+        disabled: !state.outlineData,
+        tooltip: '进入扩写改写步骤',
+        onClick: () => switchStep('expand'),
+      },
+    ]
+    : [
+      {
+        id: 'previous-step',
+        label: '上一步',
+        icon: <ToolbarArrowLeftIcon />,
+        disabled: activeIndex <= 0,
+        tooltip: activeIndex <= 0 ? '当前已经是第一步' : `返回${stepLabels[steps[activeIndex - 1]]}`,
+        onClick: () => goToOffset(-1),
+      },
+      {
+        id: 'next-step',
+        label: '下一步',
+        icon: <ToolbarArrowRightIcon />,
+        variant: 'primary' as const,
+        disabled: isNextDisabled,
+        tooltip: nextTooltip,
+        onClick: () => goToOffset(1),
+      },
+    ];
 
   const toolbarGroups = [
     {
@@ -134,25 +287,7 @@ function TechnicalPlanHome() {
     },
     {
       id: 'technical-plan-navigation',
-      actions: [
-        {
-          id: 'previous-step',
-          label: '上一步',
-          icon: <ToolbarArrowLeftIcon />,
-          disabled: activeIndex <= 0,
-          tooltip: activeIndex <= 0 ? '当前已经是第一步' : `返回${stepLabels[steps[activeIndex - 1]]}`,
-          onClick: () => goToOffset(-1),
-        },
-        {
-          id: 'next-step',
-          label: '下一步',
-          icon: <ToolbarArrowRightIcon />,
-          variant: 'primary' as const,
-          disabled: isNextDisabled,
-          tooltip: nextTooltip,
-          onClick: () => goToOffset(1),
-        },
-      ],
+      actions: navigationActions,
     },
   ];
 
@@ -173,6 +308,8 @@ function TechnicalPlanHome() {
             outlineMode: 'free',
             bidAnalysisTask: undefined,
             outlineGenerationTask: undefined,
+            contentGenerationTask: undefined,
+            contentGenerationSections: {},
             outlineData: null,
           }))}
         />
@@ -203,10 +340,23 @@ function TechnicalPlanHome() {
           outlineData={state.outlineData}
           task={state.outlineGenerationTask}
           onOutlineModeChange={(outlineMode) => setState((prev) => ({ ...prev, outlineMode }))}
-          onOutlineGenerated={(outlineData) => setState((prev) => ({ ...prev, outlineData }))}
+          onOutlineGenerated={(outlineData) => setState((prev) => ({
+            ...prev,
+            outlineData: resetGeneratedContent(outlineData),
+            contentGenerationTask: undefined,
+            contentGenerationSections: {},
+          }))}
         />
       )}
-      {state.step === 'content-edit' && <ContentEditPage />}
+      {state.step === 'content-edit' && (
+        <ContentEditPage
+          outlineData={state.outlineData}
+          projectOverview={state.projectOverview}
+          task={state.contentGenerationTask}
+          sections={state.contentGenerationSections}
+          onContentSaved={saveChapterContent}
+        />
+      )}
       {state.step === 'expand' && (
         <section className="empty-panel compact-placeholder">
           <span className="section-kicker">STEP 05</span>

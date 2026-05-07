@@ -42,3 +42,27 @@
 - [completed] 3. 在 client `outlineGenerationTask.cjs` 中迁移 backend prompt、标准化 schema 和 validator。
 - [completed] 4. 将目录生成每一步改为通过 `collectJsonResponse` 执行修复和重试。
 - [completed] 5. 运行模块加载、假 AI 流程和 `npm run build` 验证。
+
+## Current Task: Step04 正文生成与 Word 导出
+
+### Goal
+实现客户端 Step04“生成正文”：参考 backend `/api/content/generate-chapter-stream` 为目录叶子章节生成正文；页面左侧显示目录树和生成状态，右侧显示正文内容；展示全局统计；技术方案 toolbar 在 Step04 改为“导出 Word”和“继续扩写”。
+
+### Phases
+- [completed] 1. 记录后端契约、旧前端实现和当前 client 架构要点。
+- [completed] 2. 新增 Main 侧正文生成后台任务、任务类型、IPC/preload API。
+- [completed] 3. 扩展技术方案状态与 Renderer 类型，合并后台正文任务事件。
+- [completed] 4. 重做 `ContentEditPage` 为左目录树、右正文阅读器、全局统计和生成入口。
+- [completed] 5. 实现独立客户端 Word 导出服务，并接入 Step04 toolbar。
+- [completed] 6. 补充样式，运行模块加载、假任务和 `npm run build` 验证。
+
+### Decisions
+- 正文生成继续放到 Electron Main 后台任务，Renderer 只启动任务、订阅任务事件并展示状态。
+- 仅为叶子节点生成正文，父节点状态由子节点聚合。
+- 正文内容直接回写到 `outlineData.outline[*].content`，导出 Word 直接复用这份结构。
+- Step04 toolbar 不再出现“下一步”，而是显示“导出 Word”和“继续扩写”。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| `contentGenerationTask.cjs` 中 `??` 和 `||` 混用导致 CJS 语法错误 | 第一次模块加载验证 | 将正文内容表达式拆成 `outlineContent` 中间变量 |

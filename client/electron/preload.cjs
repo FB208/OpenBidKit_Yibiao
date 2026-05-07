@@ -33,11 +33,13 @@ const bridge = {
   workspace: {
     loadTechnicalPlan: () => ipcRenderer.invoke('workspace:load-technical-plan'),
     saveTechnicalPlan: (state) => ipcRenderer.invoke('workspace:save-technical-plan', state),
+    updateTechnicalPlan: (partial) => ipcRenderer.invoke('workspace:update-technical-plan', partial),
     clearTechnicalPlan: () => ipcRenderer.invoke('workspace:clear-technical-plan'),
   },
   tasks: {
     startBidAnalysis: (payload) => ipcRenderer.invoke('tasks:start-bid-analysis', payload),
     startOutlineGeneration: (payload) => ipcRenderer.invoke('tasks:start-outline-generation', payload),
+    startContentGeneration: (payload) => ipcRenderer.invoke('tasks:start-content-generation', payload),
     getActiveTasks: () => ipcRenderer.invoke('tasks:get-active'),
     onTaskEvent: (callback) => {
       ipcRenderer.send('tasks:subscribe');

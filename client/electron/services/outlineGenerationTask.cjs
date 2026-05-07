@@ -574,7 +574,12 @@ async function runOutlineGenerationTask({ aiService, workspaceStore, updateTask,
   let technicalPlan = workspaceStore.updateTechnicalPlan({ outlineMode: payload.mode, outlineGenerationTask: updateTask({ status: 'running', progress: 5, logs }) });
   updateTask({ status: 'running', progress: 5, logs }, technicalPlan);
   const outline = payload.mode === 'aligned' ? await alignedWorkflow(aiService, payload, log) : await freeWorkflow(aiService, payload, log);
-  technicalPlan = workspaceStore.updateTechnicalPlan({ outlineData: { ...outline, project_overview: payload.overview }, outlineGenerationTask: updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }) });
+  technicalPlan = workspaceStore.updateTechnicalPlan({
+    outlineData: { ...outline, project_overview: payload.overview },
+    contentGenerationTask: undefined,
+    contentGenerationSections: {},
+    outlineGenerationTask: updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }),
+  });
   updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }, technicalPlan);
 }
 

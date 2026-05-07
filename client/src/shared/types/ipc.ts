@@ -28,15 +28,17 @@ export interface YibiaoBridge {
   workspace: {
     loadTechnicalPlan: <TState = unknown>() => Promise<TState | null>;
     saveTechnicalPlan: (state: unknown) => Promise<unknown>;
+    updateTechnicalPlan: <TState = unknown>(partial: unknown) => Promise<TState>;
     clearTechnicalPlan: () => Promise<unknown>;
   };
   tasks: {
     startBidAnalysis: (payload: unknown) => Promise<unknown>;
     startOutlineGeneration: (payload: unknown) => Promise<unknown>;
+    startContentGeneration: (payload: unknown) => Promise<unknown>;
     getActiveTasks: () => Promise<unknown[]>;
     onTaskEvent: <TState = unknown>(callback: (event: TaskEvent<TState>) => void) => () => void;
   };
   export: {
-    exportWord: (payload: unknown) => Promise<unknown>;
+    exportWord: (payload: unknown) => Promise<{ success: boolean; canceled?: boolean; path?: string; message?: string }>;
   };
 }

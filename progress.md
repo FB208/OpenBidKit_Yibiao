@@ -13,3 +13,8 @@
 - 已完成 Step03 目录生成迁移：将旧版后端目录生成 Prompt 与自由/评分项对齐工作流迁入 client service，新增目录生成页面、过程日志、目录树、详情编辑、添加/删除目录项；`npm run build` 通过。
 - 已完成 Step02/Step03 后台任务化：新增 Main 侧 `taskService`、`bidAnalysisTask`、`outlineGenerationTask` 和 `tasks:*` IPC/preload，招标文件解析和目录生成切页面不中断，任务状态与结果持续写入 `technical_plan.json`；`npm run build` 和任务模块加载验证通过。
 - 已严格对齐后端 `/api/outline/generate-stream` 的目录生成容错机制：client `aiService` 新增 `collectJsonResponse`，目录生成每一步改为 schema 标准化 + validator + JSON 修复 + 最多 3 轮重试；`outlineGenerationTask.cjs` prompt、validator 和工作流已按 backend `OutlineService` 迁移；模块加载、假 AI 流程和 `npm run build` 验证通过。
+- 开始 Step04 正文生成与 Word 导出：已确认后端正文生成接口、导出 Word payload、旧前端叶子节点生成逻辑和 client 当前任务/导出占位结构。
+- 已新增 Main 侧正文生成任务、任务 IPC/preload 入口、技术方案正文状态类型、Step04 页面主体和 Word 导出服务；首次 CJS 模块验证发现 `??`/`||` 混用语法错误，已改为中间变量修复。
+- Step04 正文生成与 Word 导出已完成集成：模块加载验证、Word buffer 生成、假 AI 正文任务流程和 `npm run build` 均通过；构建仍有既有 chunk 体积警告。
+- 已核对并修复 Step04 代码评审问题：目录变更时清空正文生成缓存和 outline 节点旧 content；正文 Markdown 渲染移除 `rehypeRaw`，避免模型输出 HTML 被渲染成 DOM；任务模块加载和 `npm run build` 通过。
+- 已给正文生成结果增加开头重复章节标题过滤：在 Main 侧流式结果写入工作区前清理独立标题行，覆盖编号标题、Markdown 标题、加粗标题和中文序号标题；针对性用例、假 AI 任务和 `npm run build` 通过。
