@@ -88,6 +88,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install build type dependencies
+        run: npm install --no-save @types/plist
+
       - name: Sync package version from tag
         env:
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}

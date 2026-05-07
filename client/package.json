@@ -108,6 +108,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
+    "@types/plist": "^3.0.5",
     "@types/react": "^19.1.11",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^5.0.0",

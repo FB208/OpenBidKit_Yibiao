@@ -28,3 +28,4 @@
 - Windows 本地打包调研：未签名阶段仍可能触发 `winCodeSign` 资源编辑链路，当前 Windows 用户没有创建符号链接权限会导致解压失败；关闭 `win.signAndEditExecutable` 后 NSIS 安装包验证通过。
 - v2.0.1 Release 空产物根因：workflow 先用 `gh release create` 创建了正式 Release，但 `electron-builder --publish always` 默认以 draft 发布类型工作，日志显示 `existingType=release publishingType=draft`，因此所有安装包、blockmap 和 `latest*.yml` 都被跳过上传。
 - v2.0.1 Release 说明只有 `Full Changelog` 根因：GitHub `--generate-notes` 在没有可识别 PR/分组内容时只生成比较链接；改为 workflow 内显式用 `git log` 生成提交列表更可控。
+- Actions `Build renderer` 报 `TS2688: Cannot find type definition file for 'plist'`：干净 CI 环境或重跑旧 tag 时缺少 `@types/plist`，但 TypeScript 会从 electron-builder 相关类型链路发现 `plist` 类型引用；已将 `@types/plist` 显式加入 devDependency，并在 workflow `npm ci` 后 `npm install --no-save @types/plist` 以兼容重跑旧 tag。

@@ -69,6 +69,7 @@
 | Windows 本地打包解压 `winCodeSign` 时因当前用户无符号链接权限失败 | 第一次 Windows unpacked 打包验证 | 当前阶段不做签名，关闭 `win.signAndEditExecutable`，避免触发 winCodeSign 资源编辑链路 |
 | Actions 成功但 Release 没有产物 | 首次 `v2.0.1` 远程发布验证 | 改为 `electron-builder --publish never` 只构建，再用 `gh release upload --clobber` 显式上传产物，避免 `existingType=release publishingType=draft` 冲突 |
 | Release 说明只有 `Full Changelog` | 首次 `v2.0.1` 远程发布验证 | 改为 workflow 用 `git log` 生成提交列表，并在 Release 已存在时用 `gh release edit --notes-file` 更新说明 |
+| Actions `Build renderer` 报 `TS2688: Cannot find type definition file for 'plist'` | 修复后手动重跑 `v2.0.1` | 显式安装 `@types/plist`，并在 workflow 中补 `npm install --no-save @types/plist` 兼容旧 tag |
 
 ## Current Task: GitHub Release 自动打包与客户端更新检查
 
