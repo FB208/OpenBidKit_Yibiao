@@ -130,13 +130,46 @@ jobs:
         if: runner.os == 'macOS'
         run: npx electron-builder --mac --publish never
 
+      - name: Package macOS DMG with instructions
+        if: runner.os == 'macOS'
+        run: |
+          shopt -s nullglob
+          for dmg in release/*.dmg; do
+            base="$(basename "$dmg" .dmg)"
+            package_dir="release/${base}-package"
+            rm -rf "$package_dir"
+            mkdir -p "$package_dir"
+            cp "$dmg" "$package_dir/"
+            cat > "$package_dir/macOS使用说明.txt" <<'EOF'
+macOS 使用说明
+
+如果双击 App 提示“已损坏，无法打开”或“无法验证开发者”，这是因为本软件未进行 Apple 官方签名和公证，并不代表文件真的损坏。
+
+使用步骤：
+
+1. 双击 dmg 文件。
+2. 将“易标投标工具箱.app”拖到“应用程序”文件夹。
+3. 打开“终端”App。
+4. 执行下面命令：
+
+xattr -dr com.apple.quarantine /Applications/易标投标工具箱.app
+
+5. 再从“应用程序”中打开“易标投标工具箱”。
+
+如果仍无法打开，请右键点击 App，选择“打开”，再确认打开。
+EOF
+            (cd release && ditto -c -k --sequesterRsrc --keepParent "$(basename "$package_dir")" "${base}-package.zip")
+            rm -rf "$package_dir"
+            rm -f "$dmg"
+          done
+
       - name: Upload release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
         run: |
           shopt -s nullglob
-          files=(release/*.exe release/*.msi release/*.zip release/*.dmg release/*.blockmap release/latest*.yml)
+          files=(release/*.exe release/*.msi release/*.zip release/*.blockmap release/latest*.yml)
           if [ ${#files[@]} -eq 0 ]; then
             echo "No release assets found."
             exit 1
