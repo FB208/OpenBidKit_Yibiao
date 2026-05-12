@@ -4,21 +4,24 @@ import {
 } from '../shared/ui';
 import type { FloatingToolbarGroup } from '../shared/ui';
 import type { SectionId } from '../shared/types/navigation';
-import { sectionOrder } from './menuConfig';
+import { getSectionOrder } from './menuConfig';
 
 interface BuildToolbarGroupsOptions {
   activeSection: SectionId;
+  developerMode: boolean;
   onSectionChange: (section: SectionId) => void;
 }
 
 export function buildToolbarGroups({
   activeSection,
+  developerMode,
   onSectionChange,
 }: BuildToolbarGroupsOptions): FloatingToolbarGroup[] {
-  if (activeSection === 'settings' || activeSection === 'technical-plan') {
+  if (activeSection === 'settings' || activeSection === 'technical-plan' || activeSection === 'developer-test') {
     return [];
   }
 
+  const sectionOrder = getSectionOrder(developerMode);
   const activeIndex = sectionOrder.indexOf(activeSection);
   const goToSection = (offset: number) => {
     const nextSection = sectionOrder[activeIndex + offset];

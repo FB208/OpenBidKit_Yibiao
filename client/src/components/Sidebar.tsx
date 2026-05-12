@@ -1,11 +1,12 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useState, type ComponentType, type ReactElement, type SVGProps } from 'react';
-import { appMenuItems } from '../app/menuConfig';
+import { getAppMenuItems } from '../app/menuConfig';
 import type { SectionId } from '../shared/types/navigation';
 import logoUrl from '../../assets/icon_256.png';
 
 interface SidebarProps {
   activeSection: SectionId;
+  developerMode: boolean;
   onSectionChange: (section: SectionId) => void;
 }
 
@@ -14,11 +15,13 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'knowledge-base': ArchiveIcon,
   'duplicate-check': CompareIcon,
   'rejection-check': ShieldIcon,
+  'developer-test': FlaskIcon,
   settings: GearIcon,
 };
 
-function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
+function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const menuItems = getAppMenuItems(developerMode);
 
   return (
     <aside className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}>
@@ -44,7 +47,7 @@ function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
       </button>
 
       <nav className="sidebar-nav" aria-label="主菜单">
-        {appMenuItems.map((item) => {
+        {menuItems.map((item) => {
           const Icon = navigationIcons[item.id];
           const isActive = item.id === activeSection;
           const button = (
@@ -154,6 +157,17 @@ function ShieldIcon(props: SVGProps<SVGSVGElement>) {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
       <path d="M12 3.5 18.5 6v5.4c0 4.25-2.55 7.55-6.5 9.1-3.95-1.55-6.5-4.85-6.5-9.1V6z" />
       <path d="m9 12.2 2 2 4-4.5" />
+    </svg>
+  );
+}
+
+function FlaskIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
+      <path d="M9 3.8h6" />
+      <path d="M10.5 3.8v5.4l-4.2 7.4c-.85 1.5.24 3.4 1.96 3.4h7.48c1.72 0 2.81-1.9 1.96-3.4l-4.2-7.4V3.8" />
+      <path d="M8.5 15.8h7" />
+      <path d="M10 12.5h4" />
     </svg>
   );
 }

@@ -154,7 +154,11 @@ const initialState: SettingsPageState = {
   },
 };
 
-function SettingsPage() {
+interface SettingsPageProps {
+  onDeveloperModeChange?: (developerMode: boolean) => void;
+}
+
+function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [state, setState] = useState<SettingsPageState>(initialState);
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [savedConfig, setSavedConfig] = useState<ClientConfig | null>(null);
@@ -247,6 +251,7 @@ function SettingsPage() {
       showToast(result?.success ? '配置已保存' : result?.message || '配置保存失败', result?.success ? 'success' : 'error');
       if (result?.success) {
         setSavedConfig(config);
+        onDeveloperModeChange?.(Boolean(config.developer_mode));
       }
       return Boolean(result?.success);
     } catch (error) {

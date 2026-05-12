@@ -22,6 +22,7 @@ function isResponseFormatUnsupported(message) {
     'unsupported',
     'unknown parameter',
     'invalid parameter',
+    'must be',
   ].some((marker) => normalized.includes(marker));
 }
 
@@ -468,7 +469,7 @@ async function streamChatWithConfig(app, config, request, onEvent) {
   }
 
   const requestId = createRequestId();
-  const requestBody = createChatRequestBody(config, request, { stream: true });
+  let requestBody = createChatRequestBody(config, request, { stream: true });
   const rawEvents = [];
   const contentParts = [];
 
@@ -481,9 +482,19 @@ async function streamChatWithConfig(app, config, request, onEvent) {
     created_at: new Date().toISOString(),
   });
 
-  const response = await fetchChatCompletion(config, requestBody);
+  let response = await fetchChatCompletion(config, requestBody);
 
   try {
+    if (!response.ok && request.response_format) {
+      const detail = await response.text().catch(() => '');
+      if (isResponseFormatUnsupported(detail)) {
+        requestBody = createChatRequestBody(config, request, { stream: true, omitResponseFormat: true });
+        response = await fetchChatCompletion(config, requestBody);
+      } else {
+        throw new Error(detail || 'AI 流式请求失败');
+      }
+    }
+
     await ensureOk(response, 'AI 流式请求失败');
   } catch (error) {
     writeAiLog(app, config, {

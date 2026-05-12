@@ -23,4 +23,18 @@ export const appMenuItems: AppMenuItem[] = [
   },
 ];
 
-export const sectionOrder: SectionId[] = appMenuItems.map((item) => item.id);
+const developerMenuItems: AppMenuItem[] = [
+  {
+    id: 'developer-test',
+    label: '测试页',
+    description: '开发者问题复现入口',
+  },
+];
+
+export function getAppMenuItems(developerMode: boolean): AppMenuItem[] {
+  return developerMode ? [...appMenuItems, ...developerMenuItems] : appMenuItems;
+}
+
+export function getSectionOrder(developerMode: boolean): SectionId[] {
+  return getAppMenuItems(developerMode).map((item) => item.id);
+}

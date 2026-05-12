@@ -616,6 +616,54 @@ button {
   font-size: 24px;
 }
 
+.developer-test-hero {
+  padding: 28px 34px;
+}
+
+.developer-test-hero .hero-copy {
+  max-width: none;
+}
+
+.developer-test-hero h2 {
+  margin: 10px 0 12px;
+  font-size: clamp(34px, 5vw, 56px);
+}
+
+.developer-test-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.developer-test-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.developer-test-panel {
+  min-width: 0;
+  padding: 24px;
+}
+
+.developer-test-panel.is-wide {
+  grid-column: 1 / -1;
+}
+
+.developer-test-panel pre {
+  max-height: 300px;
+  margin: 18px 0 0;
+  overflow: auto;
+  padding: 16px;
+  color: #243047;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f5f8ff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 18px;
+}
+
 .progress-track {
   height: 8px;
   overflow: hidden;
@@ -3343,6 +3391,10 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .developer-test-grid {
+    grid-template-columns: 1fr;
+  }
+
   .bid-analysis-command-bar,
   .bid-analysis-workspace,
   .content-generation-command-bar,
@@ -3509,6 +3561,11 @@ button {
 
   .bid-analysis-mode-pill {
     min-width: 140px;
+  }
+
+  .developer-test-hero,
+  .developer-test-panel {
+    padding: 22px 20px;
   }
 
   .bid-analysis-reader-head {
