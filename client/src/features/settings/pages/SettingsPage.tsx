@@ -373,8 +373,17 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const fetchTextModels = async () => {
     try {
       setLoadingModels('text');
-      const result = await window.yibiao?.config.listModels();
-      setTextModels(result?.models || []);
+      const result = await window.yibiao?.config.listModels(createClientConfig());
+      const models = result?.models || [];
+      setTextModels(models);
+      if (result?.success && models.length > 0) {
+        setState((prev) => ({
+          ...prev,
+          textModel: models.includes(prev.textModel.model_name)
+            ? prev.textModel
+            : { ...prev.textModel, model_name: models[0] },
+        }));
+      }
       showToast(result?.message || `获取到 ${result?.models.length || 0} 个文本模型`, result?.success ? 'success' : 'info');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '获取文本模型失败', 'error');
@@ -401,7 +410,9 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         setImageModels(models);
         setState((prev) => ({
           ...prev,
-          imageModel: prev.imageModel.model_name ? prev.imageModel : resetImageModelStatus({ ...prev.imageModel, model_name: models[0] }),
+          imageModel: models.includes(prev.imageModel.model_name)
+            ? prev.imageModel
+            : resetImageModelStatus({ ...prev.imageModel, model_name: models[0] }),
         }));
         showToast('已载入 Google AI Studio 生图模型', 'success');
         return;
@@ -705,6 +716,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 value={state.imageModel.provider}
                 onChange={(event) => {
                   const provider = event.target.value as ImageModelProvider;
+                  setImageModels([]);
                   updateImageModelConfig({
                     provider,
                     base_url: imageProviderDefaults[provider].base_url,

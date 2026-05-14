@@ -5,7 +5,7 @@ const { ipcMain, shell } = require('electron');
 function registerConfigIpc({ configStore, aiService }) {
   ipcMain.handle('config:load', () => configStore.load());
   ipcMain.handle('config:save', (_event, config) => configStore.save(config));
-  ipcMain.handle('config:list-models', () => aiService.listModels());
+  ipcMain.handle('config:list-models', (_event, config) => aiService.listModels(config));
   ipcMain.handle('config:open-config-folder', async () => {
     const configFolder = path.dirname(configStore.getConfigFilePath());
     fs.mkdirSync(configFolder, { recursive: true });

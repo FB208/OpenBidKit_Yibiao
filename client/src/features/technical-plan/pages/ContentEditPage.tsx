@@ -508,7 +508,7 @@ function ContentEditPage({ outlineData, projectOverview, referenceKnowledgeDocum
             <strong>{item.id} {item.title}</strong>
             <small>{isLeaf ? `${statusLabels[status]} · ${words} 字` : `${statusLabels[status]} · ${leafCount} 个小节 · ${words} 字`}</small>
           </span>
-          {isLeaf && status === 'success' ? (
+          {isLeaf && (status === 'success' || status === 'error') ? (
             <Popover.Root
               open={confirmRegenerateItem?.id === item.id}
               onOpenChange={(open) => setConfirmRegenerateItem(open ? item : null)}
@@ -524,7 +524,7 @@ function ContentEditPage({ outlineData, projectOverview, referenceKnowledgeDocum
               <Popover.Portal>
                 <Popover.Content className="content-regenerate-popover" side="top" align="end" sideOffset={8}>
                   <strong>重新生成此小节？</strong>
-                  <span>将覆盖当前正文内容。</span>
+                  <span>{status === 'error' ? '将重新尝试生成失败的小节。' : '将覆盖当前正文内容。'}</span>
                   <div>
                     <button
                       type="button"

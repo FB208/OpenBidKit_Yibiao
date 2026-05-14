@@ -27,7 +27,7 @@ const bridge = {
   config: {
     load: () => ipcRenderer.invoke('config:load'),
     save: (config) => ipcRenderer.invoke('config:save', config),
-    listModels: () => ipcRenderer.invoke('config:list-models'),
+    listModels: (config) => ipcRenderer.invoke('config:list-models', config),
     openConfigFolder: () => ipcRenderer.invoke('config:open-config-folder'),
   },
   ai: {

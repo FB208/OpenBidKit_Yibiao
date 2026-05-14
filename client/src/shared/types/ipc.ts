@@ -45,7 +45,7 @@ export interface YibiaoBridge {
   config: {
     load: () => Promise<ClientConfig>;
     save: (config: ClientConfig) => Promise<ConfigSaveResult>;
-    listModels: () => Promise<ModelListResult>;
+    listModels: (config?: ClientConfig) => Promise<ModelListResult>;
     openConfigFolder: () => Promise<{ success: boolean; path: string }>;
   };
   ai: {

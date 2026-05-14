@@ -845,8 +845,8 @@ function createAiService({ app, configStore }) {
       return generateImageWithConfig(app, config, request);
     },
 
-    async listModels() {
-      const config = configStore.load();
+    async listModels(configOverride) {
+      const config = configOverride || configStore.load();
 
       if (!config.api_key) {
         return { success: false, message: '请先填写文本模型 API Key', models: [] };
