@@ -875,6 +875,30 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             </div>
             <div><span>运行模式</span><strong>独立 Electron 客户端</strong></div>
           </div>
+          <div className="privacy-statement">
+            <div className="privacy-statement-head">
+              <span>Privacy</span>
+              <strong>隐私声明</strong>
+              <p>本工具尽量把数据处理留在本机和你自行选择的服务商之间，只保留运行所必需的最少信息。</p>
+            </div>
+            <div className="privacy-list">
+              <article className="privacy-item">
+                <span>01</span>
+                <strong>你的业务数据不会被我收集</strong>
+                <p>应用不会上传、收集或保存你配置的 API Key、导入的招标文件、解析后的文档内容、生成的方案正文、导出文件或其他业务结果。</p>
+              </article>
+              <article className="privacy-item">
+                <span>02</span>
+                <strong>线上 AI 请求只发送给你配置的服务商</strong>
+                <p>当你使用 OpenAI 兼容接口、MinerU 或其他线上 API 时，应用会把完成任务所需的内容发送给你自行配置的服务商。这是实现文档解析、内容生成、模型测试等功能的必要步骤；这些请求不经过我的服务器，我也不会额外留存任何请求内容或生成结果。</p>
+              </article>
+              <article className="privacy-item">
+                <span>03</span>
+                <strong>匿名埋点只用于了解功能使用情况</strong>
+                <p>为了判断开源项目是否有人使用、哪些功能更常用，应用会把匿名页面访问和功能使用次数上报到 Cloudflare。统计不包含文档内容、文件名、本地路径、API Key、用户输入、生成结果或任何可还原业务内容的信息。</p>
+              </article>
+            </div>
+          </div>
         </section>
       )}
       </div>

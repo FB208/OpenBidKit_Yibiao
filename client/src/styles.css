@@ -3798,6 +3798,80 @@ button {
   opacity: 0.85;
 }
 
+.privacy-statement {
+  display: grid;
+  gap: 18px;
+  margin: 0 36px 36px;
+  padding: 22px;
+  color: var(--yb-text-soft);
+  background:
+    radial-gradient(circle at top left, rgba(33, 116, 253, 0.14), transparent 36%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(248, 251, 255, 0.92));
+  border: 1px solid rgba(33, 116, 253, 0.16);
+  border-radius: 22px;
+  box-shadow: 0 18px 42px rgba(33, 116, 253, 0.08);
+}
+
+.privacy-statement-head {
+  display: grid;
+  gap: 8px;
+}
+
+.privacy-statement-head span {
+  width: fit-content;
+  padding: 4px 10px;
+  color: var(--yb-primary);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: rgba(33, 116, 253, 0.1);
+  border: 1px solid rgba(33, 116, 253, 0.16);
+  border-radius: 999px;
+}
+
+.privacy-statement-head strong {
+  color: var(--yb-text);
+  font-size: 18px;
+}
+
+.privacy-statement-head p,
+.privacy-item p {
+  margin: 0;
+  line-height: 1.75;
+}
+
+.privacy-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.privacy-item {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(33, 116, 253, 0.12);
+  border-radius: 18px;
+}
+
+.privacy-item > span {
+  width: fit-content;
+  padding: 4px 9px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  background: var(--yb-primary);
+  border-radius: 999px;
+}
+
+.privacy-item strong {
+  color: var(--yb-text);
+  font-size: 15px;
+}
+
 .knowledge-page {
   min-height: 0;
   gap: 12px;
@@ -4482,6 +4556,10 @@ button {
     grid-template-columns: 1fr;
   }
 
+  .privacy-list {
+    grid-template-columns: 1fr;
+  }
+
   .analysis-result-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -4741,6 +4819,11 @@ button {
   .about-grid {
     padding-right: 20px;
     padding-left: 20px;
+  }
+
+  .privacy-statement {
+    margin-right: 20px;
+    margin-left: 20px;
   }
 
   .hero-panel,
