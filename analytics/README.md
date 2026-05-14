@@ -85,7 +85,7 @@ Dataset 不需要手动创建，第一次写入后会自动创建 `agnet_analyti
 | 自定义域名 | `analytics.agnet.top` |
 | Analytics Engine binding | `ANALYTICS` |
 | Analytics Engine dataset | `agnet_analytics` |
-| 必需 Secret | `ACCOUNT_ID`、`ADMIN_TOKEN`、`ANALYTICS_API_TOKEN` |
+| 变量保留 | `keep_vars: true`，避免部署覆盖后台配置 |
 
 部署后在 Worker 的 `Settings -> Variables and Secrets` 配置 Secret：
 
@@ -94,6 +94,8 @@ Dataset 不需要手动创建，第一次写入后会自动创建 `agnet_analyti
 | `ACCOUNT_ID` | Cloudflare Account ID |
 | `ADMIN_TOKEN` | 统计看板查询密码 |
 | `ANALYTICS_API_TOKEN` | 上一步创建的 API Token |
+
+注意：不要在 `wrangler.jsonc` 里声明 `secrets.required`。首次 GitHub 部署时 Secret 还没配置，Wrangler 会在部署前校验并失败。正确流程是先部署 Worker，再到 Cloudflare 后台配置这些 Secret，然后重新部署或直接访问验证。
 
 确认绑定：
 

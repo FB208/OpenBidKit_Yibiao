@@ -5,13 +5,6 @@
   "compatibility_date": "2026-05-14",
   "workers_dev": true,
   "keep_vars": true,
-  "secrets": {
-    "required": [
-      "ACCOUNT_ID",
-      "ADMIN_TOKEN",
-      "ANALYTICS_API_TOKEN"
-    ]
-  },
   "routes": [
     {
       "pattern": "analytics.agnet.top",
