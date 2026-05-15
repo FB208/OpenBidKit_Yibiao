@@ -25,18 +25,11 @@
 
 Visit the website for product information, online demos, and support.
 
-<table width="100%" cellspacing="0" cellpadding="8">
-  <tr>
-    <td width="18%" align="center" bgcolor="#eef5ff">
-      <font color="#2174FD"><strong>Ad Slot</strong></font><br>
-      <font color="#5B54D3"><sub>Partnership</sub></font>
-    </td>
-    <td align="center" bgcolor="#fbfdff">
-      <font color="#172033"><strong>Looking for an API relay provider that supports image-and-text APIs~~~</strong></font><br>
-      <font color="#63718b"><sub>Image generation / multimodal models / OpenAI-like APIs are welcome for integration</sub></font>
-    </td>
-  </tr>
-</table>
+> **Ad Slot · Partnership**
+>
+> **Looking for an API relay provider that supports image-and-text APIs~~~**
+>
+> Image generation / multimodal models / OpenAI-like APIs are welcome for integration.
 
 <h2 align="center">✨ Features & Advantages</h2>
 
@@ -98,9 +91,11 @@ Download the latest release from [GitHub Releases](https://github.com/yibiaoai/y
 
 ### 🎬 Usage Demo
 
-<video src="./screenshots/知识库+正文生成.mp4" controls width="100%">
+<video src="./screenshots/知识库+正文生成.mp4" controls="controls" width="100%" poster="./screenshots/5.png">
   Your browser does not support video playback. Please open screenshots/知识库+正文生成.mp4.
 </video>
+
+[Video not playing? Open the demo video](./screenshots/知识库+正文生成.mp4)
 
 ## 🛠️ Technical Architecture
 

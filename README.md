@@ -26,18 +26,11 @@
 
 获取更多产品信息、在线体验和技术支持。
 
-<table width="100%" cellspacing="0" cellpadding="8">
-  <tr>
-    <td width="18%" align="center" bgcolor="#eef5ff">
-      <font color="#2174FD"><strong>广告位</strong></font><br>
-      <font color="#5B54D3"><sub>合作招募</sub></font>
-    </td>
-    <td align="center" bgcolor="#fbfdff">
-      <font color="#172033"><strong>有没有支持图文API的中转站合作下呀~~~</strong></font><br>
-      <font color="#63718b"><sub>支持生图 / 图文模型 / OpenAI Like API，欢迎合作接入</sub></font>
-    </td>
-  </tr>
-</table>
+> **广告位 · 合作招募**
+>
+> **有没有支持图文API的中转站合作下呀~~~**
+>
+> 支持生图 / 图文模型 / OpenAI Like API，欢迎合作接入。
 
 
 <h2 align="center">✨ 核心功能与优势</h2>
@@ -102,9 +95,11 @@
 
 ### 🎬 使用方式
 
-<video src="./screenshots/知识库+正文生成.mp4" controls width="100%">
+<video src="./screenshots/知识库+正文生成.mp4" controls="controls" width="100%" poster="./screenshots/5.png">
   您的浏览器不支持视频播放，请查看 screenshots/知识库+正文生成.mp4。
 </video>
+
+[无法播放？点击查看演示视频](./screenshots/知识库+正文生成.mp4)
 
 ## 🛠️ 技术架构
 
