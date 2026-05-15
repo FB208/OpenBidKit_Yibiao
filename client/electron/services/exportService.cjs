@@ -29,6 +29,8 @@ const {
 const MAX_IMAGE_WIDTH = 520;
 const NUMBERING_REFERENCE_PREFIX = 'technical-plan-numbering';
 const DOCX_TABLE_WIDTH_TWIPS = 9000;
+const MERMAID_EXPORT_RETRY_ATTEMPTS = 2;
+const MERMAID_EXPORT_RETRY_DELAY_MS = 3000;
 
 function encodeMermaidForInk(code) {
   const state = JSON.stringify({
@@ -40,6 +42,10 @@ function encodeMermaidForInk(code) {
 
 function mermaidInkUrl(code) {
   return `https://mermaid.ink/img/${encodeMermaidForInk(code)}?type=png&bgColor=!white`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function clampPercent(value) {
@@ -482,11 +488,37 @@ async function loadImage(source, context = {}) {
   };
 }
 
-async function imageRunFromNode(node, context) {
+async function loadImageWithRetry(source, context = {}, options = {}) {
+  const retryAttempts = Math.max(0, Number(options.retryAttempts) || 0);
+  const retryDelayMs = Math.max(0, Number(options.retryDelayMs) || 0);
+  let attempt = 0;
+
+  while (attempt <= retryAttempts) {
+    try {
+      return await loadImage(source, context);
+    } catch (error) {
+      if (attempt >= retryAttempts) {
+        throw error;
+      }
+
+      attempt += 1;
+      if (typeof options.onRetry === 'function') {
+        options.onRetry(attempt, error);
+      }
+      if (retryDelayMs > 0) {
+        await delay(retryDelayMs);
+      }
+    }
+  }
+
+  return null;
+}
+
+async function imageRunFromNode(node, context, options = {}) {
   let loaded = null;
   const imageLabel = compactText(node.alt || node.url || '未知图片');
   try {
-    loaded = await loadImage(node.url, context);
+    loaded = await loadImageWithRetry(node.url, context, options.loadRetry);
   } catch (error) {
     const message = `图片无法导出：${imageLabel}，${compactText(error.message || '下载失败', 120)}`;
     addWarning(context, message);
@@ -532,8 +564,8 @@ async function imageRunFromNode(node, context) {
   });
 }
 
-async function imageParagraphFromSource(source, alt, context) {
-  return paragraph([await imageRunFromNode({ url: source, alt }, context)], { alignment: AlignmentType.CENTER });
+async function imageParagraphFromSource(source, alt, context, options = {}) {
+  return paragraph([await imageRunFromNode({ url: source, alt }, context, options)], { alignment: AlignmentType.CENTER });
 }
 
 async function inlineRuns(nodes = [], context = {}, marks = {}) {
@@ -843,7 +875,15 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
         const nextIndex = (context.convertedMermaidCount || 0) + 1;
         const total = context.stats?.mermaidCount || nextIndex;
         reportConversionProgress(context, `正在转换 Mermaid 图 ${nextIndex}/${total}，可能需要联网等待。`);
-        blocks.push(await imageParagraphFromSource(mermaidInkUrl(node.value), 'Mermaid 图', context));
+        blocks.push(await imageParagraphFromSource(mermaidInkUrl(node.value), 'Mermaid 图', context, {
+          loadRetry: {
+            retryAttempts: MERMAID_EXPORT_RETRY_ATTEMPTS,
+            retryDelayMs: MERMAID_EXPORT_RETRY_DELAY_MS,
+            onRetry: (attempt) => {
+              reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败，3 秒后第 ${attempt} 次重试。`);
+            },
+          },
+        }));
         context.convertedMermaidCount = nextIndex;
         reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 已处理。`);
       } else {
