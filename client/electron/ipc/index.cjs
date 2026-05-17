@@ -18,7 +18,7 @@ const { createWorkspaceStore } = require('../services/workspaceStore.cjs');
 function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall }) {
   const configStore = createConfigStore(app);
   const aiService = createAiService({ app, configStore });
-  const fileService = createFileService({ configStore });
+  const fileService = createFileService({ app, configStore });
   const exportService = createExportService();
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore });
   const workspaceStore = createWorkspaceStore(app);

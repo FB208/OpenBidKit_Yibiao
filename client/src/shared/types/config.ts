@@ -42,6 +42,7 @@ export type FileParserProvider = 'local' | 'mineru-accurate-api' | 'mineru-agent
 export interface FileParserConfig {
   provider: FileParserProvider;
   mineru_token?: string;
+  preserve_images?: boolean;
 }
 
 export interface ClientConfig extends AiConfig {

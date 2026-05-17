@@ -19,6 +19,7 @@ const defaultConfig = {
   file_parser: {
     provider: 'local',
     mineru_token: '',
+    preserve_images: true,
   },
   developer_mode: false,
   real_time_render: true,

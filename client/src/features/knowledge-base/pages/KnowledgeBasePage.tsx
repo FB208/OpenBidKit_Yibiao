@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
 import remarkGfm from 'remark-gfm';
 import { useToast } from '../../../shared/ui';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeItem } from '../types';
 
 const emptyIndex: KnowledgeBaseIndex = { folders: [], documents: [] };
+
+function markdownUrlTransform(value: string) {
+  return value.startsWith('yibiao-asset://') ? value : defaultUrlTransform(value);
+}
 
 const statusLabels: Record<KnowledgeDocument['status'], string> = {
   pending: '等待处理',
@@ -484,7 +488,7 @@ function KnowledgeDocumentViewer({
                 <details>
                   <summary>查看原文</summary>
                   <div className="knowledge-item-content markdown-viewer">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} urlTransform={markdownUrlTransform}>
                       {item.content}
                     </ReactMarkdown>
                   </div>
@@ -494,7 +498,7 @@ function KnowledgeDocumentViewer({
           </div>
         ) : (
           <div className="markdown-viewer knowledge-viewer-markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} urlTransform={markdownUrlTransform}>
               {markdownPreview || '暂无 Markdown 内容'}
             </ReactMarkdown>
           </div>

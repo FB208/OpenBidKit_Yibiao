@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { getTechnicalPlanFilePath } = require('../utils/paths.cjs');
+const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 
 function createWorkspaceStore(app) {
   const technicalPlanFile = getTechnicalPlanFilePath(app);
@@ -45,6 +46,7 @@ function createWorkspaceStore(app) {
         if (fs.existsSync(technicalPlanFile)) {
           fs.unlinkSync(technicalPlanFile);
         }
+        deleteImportedImageBatches(app, 'technical-plan');
         return { success: true, message: '技术方案缓存已清空', file_path: technicalPlanFile };
       } catch (error) {
         throw new Error(`技术方案缓存清空失败：${error.message}`);

@@ -5,7 +5,7 @@ const { fileURLToPath } = require('node:url');
 const { app, dialog, nativeImage } = require('electron');
 const cheerio = require('cheerio');
 const { imageSize } = require('image-size');
-const { getGeneratedImagesDir } = require('../utils/paths.cjs');
+const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
 const {
   AlignmentType,
   BorderStyle,
@@ -425,12 +425,17 @@ function resolveAssetImagePath(url) {
   if (!app?.getPath) return null;
 
   const assetUrl = new URL(url);
-  if (assetUrl.hostname !== 'generated-images') return null;
+  const assetRoots = {
+    'generated-images': getGeneratedImagesDir(app),
+    'imported-images': getImportedImagesDir(app),
+  };
+  const rootDir = assetRoots[assetUrl.hostname];
+  if (!rootDir) return null;
 
   const relativePath = decodeURIComponent(assetUrl.pathname.replace(/^\/+/, ''));
   if (!relativePath) return null;
 
-  const baseDir = path.resolve(getGeneratedImagesDir(app));
+  const baseDir = path.resolve(rootDir);
   const resolvedPath = path.resolve(baseDir, relativePath);
   if (resolvedPath !== baseDir && !resolvedPath.startsWith(`${baseDir}${path.sep}`)) {
     return null;

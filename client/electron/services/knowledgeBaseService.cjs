@@ -4,6 +4,8 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { dialog } = require('electron');
 const { getKnowledgeBaseDir } = require('../utils/paths.cjs');
+const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
+const { parseDocumentWithConfig } = require('./fileService.cjs');
 
 const supportedExtensions = new Set(['.doc', '.docx', '.wps', '.pdf', '.md', '.markdown']);
 const oversizedBlockChars = 8000;
@@ -819,8 +821,8 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
     debugLog(documentId, 'prepare:start', { source_file_path: sourceFilePath });
 
     try {
-      const { convertPathToMarkdown } = await import('./doc2markdown/convert.mjs');
       const document = getDocument(documentId);
+      const config = configStore ? configStore.load() : { file_parser: { provider: 'local', preserve_images: true } };
       const documentDir = fromRelative(baseDir, document.document_dir);
       const sourcePath = fromRelative(baseDir, document.source_path);
       const markdownPath = fromRelative(baseDir, document.markdown_path);
@@ -834,7 +836,7 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
       debugLog(documentId, 'prepare:copied-source', { source_path: sourcePath });
 
       updateDocument(documentId, { status: 'converting', progress: 15, message: '正在转换为 Markdown' }, webContents);
-      const markdown = stripMarkdownFence((await convertPathToMarkdown(sourcePath, { includeImages: false })).trim());
+      const markdown = stripMarkdownFence((await parseDocumentWithConfig(app, sourcePath, config, { assetScope: `knowledge-${documentId}` })).trim());
       if (!markdown) throw new Error('文档未解析出有效 Markdown 内容');
       await fsp.writeFile(markdownPath, `${markdown}\n`, 'utf-8');
       debugLog(documentId, 'prepare:converted-markdown', { markdown_path: markdownPath, markdown_chars: markdown.length });
@@ -1162,6 +1164,7 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
       }
 
       for (const document of documentsToDelete) {
+        deleteImportedImageBatches(app, `knowledge-${document.id}`);
         fs.rmSync(fromRelative(baseDir, document.document_dir), { recursive: true, force: true });
         fs.rmSync(getDebugLogPath(app, document.id), { force: true });
       }
@@ -1181,6 +1184,7 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
         throw new Error('该文档正在处理中，请完成后再删除');
       }
 
+      deleteImportedImageBatches(app, `knowledge-${documentId}`);
       fs.rmSync(fromRelative(baseDir, document.document_dir), { recursive: true, force: true });
       fs.rmSync(getDebugLogPath(app, documentId), { force: true });
       saveIndex({ ...index, documents: index.documents.filter((item) => item.id !== documentId) });

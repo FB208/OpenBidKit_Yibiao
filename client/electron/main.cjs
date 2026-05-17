@@ -4,7 +4,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { registerIpcHandlers } = require('./ipc/index.cjs');
 const { setupAutoUpdate, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall } = require('./services/updateService.cjs');
-const { getGeneratedImagesDir } = require('./utils/paths.cjs');
+const { getGeneratedImagesDir, getImportedImagesDir } = require('./utils/paths.cjs');
 
 const rendererUrl = process.env.ELECTRON_RENDERER_URL;
 const iconPath = path.join(__dirname, '../assets/icon.ico');
@@ -18,7 +18,12 @@ function registerAssetProtocol() {
   protocol.handle('yibiao-asset', (request) => {
     try {
       const url = new URL(request.url);
-      if (url.hostname !== 'generated-images') {
+      const assetRoots = {
+        'generated-images': getGeneratedImagesDir(app),
+        'imported-images': getImportedImagesDir(app),
+      };
+      const rootDir = assetRoots[url.hostname];
+      if (!rootDir) {
         return new Response('Not found', { status: 404 });
       }
 
@@ -27,7 +32,7 @@ function registerAssetProtocol() {
         return new Response('Not found', { status: 404 });
       }
 
-      const baseDir = path.resolve(getGeneratedImagesDir(app));
+      const baseDir = path.resolve(rootDir);
       const filePath = path.resolve(baseDir, relativePath);
       if (filePath !== baseDir && !filePath.startsWith(`${baseDir}${path.sep}`)) {
         return new Response('Forbidden', { status: 403 });

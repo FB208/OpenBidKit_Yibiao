@@ -1,7 +1,9 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { dialog } = require('electron');
 const AdmZip = require('adm-zip');
+const { getImportedImagesDir } = require('../utils/paths.cjs');
 
 const parserLabels = {
   local: '本地解析',
@@ -16,6 +18,9 @@ const mineruAgentSupportedExtensions = new Set([
 const mineruAccurateSupportedExtensions = new Set([
   '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.png', '.jpg', '.jpeg', '.jp2', '.webp', '.gif', '.bmp', '.html',
 ]);
+const remoteImageTimeoutMs = 10000;
+const markdownImagePattern = /!\[(?<alt>[^\]]*)\]\((?<target><[^>]+>|[^)\s]+)(?<title>\s+"[^"]*")?\)/gi;
+const htmlImageSrcPattern = /(<img\b[^>]*?\bsrc=["'])(?<src>[^"']+)(["'][^>]*>)/gi;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -31,7 +36,29 @@ function getSupportedExtensions(provider) {
   return localSupportedExtensions;
 }
 
-async function parseLocalDocument(filePath) {
+function getSelectableExtensions(provider) {
+  if (provider === 'local') {
+    return localSupportedExtensions;
+  }
+  return new Set([...getSupportedExtensions(provider), ...localSupportedExtensions]);
+}
+
+function resolveFileParser(config, filePath) {
+  const requestedProvider = config.file_parser?.provider || 'local';
+  const ext = path.extname(filePath).toLowerCase();
+  const requestedSupported = getSupportedExtensions(requestedProvider).has(ext);
+  if (requestedSupported) {
+    return { provider: requestedProvider, requestedProvider, ext, supported: true, fallbackToLocal: false };
+  }
+
+  if (requestedProvider !== 'local' && localSupportedExtensions.has(ext)) {
+    return { provider: 'local', requestedProvider, ext, supported: true, fallbackToLocal: true };
+  }
+
+  return { provider: requestedProvider, requestedProvider, ext, supported: false, fallbackToLocal: false };
+}
+
+async function parseLocalDocument(filePath, options = {}) {
   const ext = path.extname(filePath).toLowerCase();
 
   if (ext === '.txt') {
@@ -39,7 +66,7 @@ async function parseLocalDocument(filePath) {
   }
 
   const { convertPathToMarkdown } = await import('./doc2markdown/convert.mjs');
-  return convertPathToMarkdown(filePath, { includeImages: false });
+  return convertPathToMarkdown(filePath, { includeImages: options.preserveImages });
 }
 
 function formatImportError(error) {
@@ -50,7 +77,7 @@ function formatImportError(error) {
   return `文件解析失败：${rawMessage || '未知错误'}`;
 }
 
-async function parseWithMineruAgent(filePath) {
+async function parseWithMineruAgent(filePath, options = {}) {
   const fileName = path.basename(filePath);
   const createResponse = await fetch('https://mineru.net/api/v1/agent/parse/file', {
     method: 'POST',
@@ -80,7 +107,11 @@ async function parseWithMineruAgent(filePath) {
   if (!markdownUrl) {
     throw new Error('MinerU-Agent 解析完成但未返回 markdown_url');
   }
-  return downloadText(markdownUrl, '下载 MinerU-Agent Markdown 失败');
+  return downloadText(markdownUrl, '下载 MinerU-Agent Markdown 失败').then((markdown) => (
+    options.preserveImages
+      ? rewriteMarkdownImages(markdown, options.assets, { baseUrl: markdownUrl })
+      : stripMarkdownImages(markdown)
+  ));
 }
 
 async function pollMineruAgent(taskId, fileName) {
@@ -109,7 +140,7 @@ async function pollMineruAgent(taskId, fileName) {
   throw new Error(`MinerU-Agent 轮询超时，请稍后重试，task_id: ${taskId}`);
 }
 
-async function parseWithMineruAccurate(filePath, token) {
+async function parseWithMineruAccurate(filePath, token, options = {}) {
   if (!token) {
     throw new Error('请先在设置中填写 MinerU Token');
   }
@@ -147,7 +178,7 @@ async function parseWithMineruAccurate(filePath, token) {
     throw new Error('MinerU 精准解析完成但未返回 full_zip_url');
   }
   const zipBuffer = await downloadBuffer(fullZipUrl);
-  return extractMarkdownFromZip(zipBuffer);
+  return extractMarkdownFromZip(zipBuffer, options);
 }
 
 async function pollMineruAccurate(token, batchId, fileName) {
@@ -203,7 +234,7 @@ async function downloadBuffer(url) {
   return Buffer.from(await response.arrayBuffer());
 }
 
-function extractMarkdownFromZip(zipBuffer) {
+async function extractMarkdownFromZip(zipBuffer, options = {}) {
   const zip = new AdmZip(zipBuffer);
   const entries = zip.getEntries();
   const fullMd = entries.find((entry) => /(^|[/\\])full\.md$/i.test(entry.entryName));
@@ -212,30 +243,226 @@ function extractMarkdownFromZip(zipBuffer) {
   if (!target) {
     throw new Error('MinerU 精准解析结果 zip 中未找到 Markdown 文件');
   }
-  return target.getData().toString('utf8');
+  const markdown = target.getData().toString('utf8');
+  if (!options.preserveImages) {
+    return stripMarkdownImages(markdown);
+  }
+  return rewriteMarkdownImages(markdown, options.assets, {
+    zipEntries: entries,
+    markdownEntryName: target.entryName,
+  });
 }
 
 function makeDataId(fileName) {
   return fileName.replace(/[^A-Za-z0-9_.-]+/g, '_').slice(0, 96) || 'document';
 }
 
-async function parseDocument(filePath, config) {
-  const provider = config.file_parser?.provider || 'local';
-  if (provider === 'mineru-agent-api') {
-    return parseWithMineruAgent(filePath);
-  }
-  if (provider === 'mineru-accurate-api') {
-    return parseWithMineruAccurate(filePath, config.file_parser?.mineru_token || '');
-  }
-  return parseLocalDocument(filePath);
+function isPreserveImagesEnabled(config) {
+  return config.file_parser?.preserve_images !== false;
 }
 
-function createFileService({ configStore } = {}) {
+function stripMarkdownImages(text) {
+  return String(text || '')
+    .replace(markdownImagePattern, '')
+    .replace(/<img\b[^>]*>/gi, '')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+function createAssetContext(app, scope = 'documents') {
+  if (!app?.getPath) return null;
+  const safeScope = String(scope || 'documents').replace(/[^A-Za-z0-9._-]+/g, '_') || 'documents';
+  const batchId = `${safeScope}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+  return {
+    baseDir: path.join(getImportedImagesDir(app), batchId),
+    urlPrefix: `yibiao-asset://imported-images/${encodeURIComponent(batchId)}`,
+    index: 0,
+  };
+}
+
+async function deleteImportedImageAssets(assets) {
+  if (!assets?.baseDir) return;
+  await fs.rm(assets.baseDir, { recursive: true, force: true });
+}
+
+function imageExtensionFromMime(mime) {
+  const normalized = String(mime || '').toLowerCase();
+  if (normalized.includes('jpeg') || normalized.includes('jpg')) return '.jpg';
+  if (normalized.includes('png')) return '.png';
+  if (normalized.includes('gif')) return '.gif';
+  if (normalized.includes('bmp')) return '.bmp';
+  if (normalized.includes('webp')) return '.webp';
+  return '';
+}
+
+function imageExtensionFromPath(value) {
+  const ext = path.extname(String(value || '').split(/[?#]/)[0]).toLowerCase();
+  return ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'].includes(ext) ? (ext === '.jpeg' ? '.jpg' : ext) : '';
+}
+
+async function saveImportedImage(assets, buffer, sourceName, mime) {
+  if (!assets || !buffer?.length) return null;
+  const ext = imageExtensionFromMime(mime) || imageExtensionFromPath(sourceName) || '.png';
+  assets.index += 1;
+  const fileName = `image-${String(assets.index).padStart(4, '0')}${ext}`;
+  await fs.mkdir(assets.baseDir, { recursive: true });
+  await fs.writeFile(path.join(assets.baseDir, fileName), buffer);
+  return `${assets.urlPrefix}/${encodeURIComponent(fileName)}`;
+}
+
+function cleanMarkdownImageTarget(target) {
+  const value = String(target || '').trim();
+  return value.startsWith('<') && value.endsWith('>') ? value.slice(1, -1) : value;
+}
+
+function parseDataUrl(value) {
+  const match = /^data:([^;,]+);base64,(.+)$/i.exec(String(value || ''));
+  if (!match) return null;
+  return { mime: match[1], buffer: Buffer.from(match[2], 'base64') };
+}
+
+async function loadRemoteImage(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), remoteImageTimeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) return null;
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType && !/^image\//i.test(contentType)) return null;
+    return { buffer: Buffer.from(await response.arrayBuffer()), mime: contentType };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function findZipEntryImage(zipEntries, imagePath, markdownEntryName) {
+  let decodedPath = imagePath;
+  try {
+    decodedPath = decodeURIComponent(imagePath);
+  } catch {
+    decodedPath = imagePath;
+  }
+  const normalized = decodedPath.replace(/\\/g, '/').replace(/^\.\//, '');
+  const markdownDir = path.posix.dirname(String(markdownEntryName || '').replace(/\\/g, '/'));
+  const candidates = [
+    normalized,
+    path.posix.normalize(path.posix.join(markdownDir === '.' ? '' : markdownDir, normalized)),
+  ].map((item) => item.replace(/^\/+/, '').toLowerCase());
+  const direct = zipEntries.find((entry) => candidates.includes(entry.entryName.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()));
+  if (direct) return direct;
+  const basename = path.posix.basename(normalized).toLowerCase();
+  return zipEntries.find((entry) => path.posix.basename(entry.entryName.replace(/\\/g, '/')).toLowerCase() === basename);
+}
+
+function isPathInsideDirectory(baseDir, targetPath) {
+  const relative = path.relative(baseDir, targetPath);
+  return relative === '' || (relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+async function resolveImageToAssetUrl(source, assets, context = {}) {
+  const value = cleanMarkdownImageTarget(source);
+  if (!value) return null;
+  if (/^yibiao-asset:\/\//i.test(value)) return value;
+
+  const data = parseDataUrl(value);
+  if (data) {
+    return saveImportedImage(assets, data.buffer, 'data-image', data.mime);
+  }
+
+  if (/^https?:\/\//i.test(value) || context.baseUrl) {
+    try {
+      const url = /^https?:\/\//i.test(value) ? value : new URL(value, context.baseUrl).toString();
+      const loaded = await loadRemoteImage(url);
+      if (loaded) {
+        return saveImportedImage(assets, loaded.buffer, url, loaded.mime);
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  if (context.zipEntries) {
+    const entry = findZipEntryImage(context.zipEntries, value, context.markdownEntryName);
+    if (entry && !entry.isDirectory) {
+      return saveImportedImage(assets, entry.getData(), entry.entryName, '');
+    }
+  }
+
+  if (context.localBaseDir && !/^[a-z][a-z0-9+.-]*:/i.test(value)) {
+    try {
+      let decodedValue = value;
+      try {
+        decodedValue = decodeURIComponent(value);
+      } catch {
+        decodedValue = value;
+      }
+      if (path.isAbsolute(decodedValue)) {
+        return null;
+      }
+      const baseDir = path.resolve(context.localBaseDir);
+      const localPath = path.resolve(baseDir, decodedValue);
+      if (!isPathInsideDirectory(baseDir, localPath)) {
+        return null;
+      }
+      const buffer = await fs.readFile(localPath);
+      return saveImportedImage(assets, buffer, localPath, '');
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+async function rewriteMarkdownImages(markdown, assets, context = {}) {
+  let result = String(markdown || '');
+  const markdownMatches = [...result.matchAll(markdownImagePattern)];
+  for (const match of markdownMatches) {
+    const nextUrl = await resolveImageToAssetUrl(match.groups?.target || '', assets, context);
+    const alt = match.groups?.alt || '';
+    const title = match.groups?.title || '';
+    result = result.replace(match[0], nextUrl ? `![${alt}](${nextUrl}${title})` : '');
+  }
+
+  const htmlMatches = [...result.matchAll(htmlImageSrcPattern)];
+  for (const match of htmlMatches) {
+    const nextUrl = await resolveImageToAssetUrl(match.groups?.src || '', assets, context);
+    result = result.replace(match[0], nextUrl ? `${match[1]}${nextUrl}${match[3]}` : '');
+  }
+  return result;
+}
+
+async function parseDocumentWithConfig(app, filePath, config, options = {}) {
+  const parser = resolveFileParser(config, filePath);
+  if (!parser.supported) {
+    throw new Error(`当前${parserLabels[parser.requestedProvider] || '解析方式'}不支持该文件格式`);
+  }
+  const provider = parser.provider;
+  const preserveImages = isPreserveImagesEnabled(config);
+  const assets = preserveImages ? createAssetContext(app, options.assetScope || 'documents') : null;
+  const parseOptions = { preserveImages, assets };
+  let markdown = '';
+  try {
+    if (provider === 'mineru-agent-api') {
+      markdown = await parseWithMineruAgent(filePath, parseOptions);
+    } else if (provider === 'mineru-accurate-api') {
+      markdown = await parseWithMineruAccurate(filePath, config.file_parser?.mineru_token || '', parseOptions);
+    } else {
+      markdown = await parseLocalDocument(filePath, parseOptions);
+      markdown = preserveImages ? await rewriteMarkdownImages(markdown, assets, { localBaseDir: path.dirname(filePath) }) : stripMarkdownImages(markdown);
+    }
+  } catch (error) {
+    await deleteImportedImageAssets(assets).catch(() => undefined);
+    throw error;
+  }
+  return preserveImages ? markdown : stripMarkdownImages(markdown);
+}
+
+function createFileService({ app, configStore } = {}) {
   return {
     async importDocument() {
       const config = configStore ? configStore.load() : { file_parser: { provider: 'local' } };
       const provider = config.file_parser?.provider || 'local';
-      const supportedExtensions = getSupportedExtensions(provider);
+      const supportedExtensions = getSelectableExtensions(provider);
       const result = await dialog.showOpenDialog({
         title: '选择招标文件',
         properties: ['openFile'],
@@ -251,6 +478,7 @@ function createFileService({ configStore } = {}) {
 
       const filePath = result.filePaths[0];
       const ext = path.extname(filePath).toLowerCase();
+      const parser = resolveFileParser(config, filePath);
 
       if (!supportedExtensions.has(ext)) {
         return { success: false, message: `当前${parserLabels[provider] || '解析方式'}不支持该文件格式` };
@@ -258,14 +486,14 @@ function createFileService({ configStore } = {}) {
 
       let fileContent = '';
       try {
-        fileContent = (await parseDocument(filePath, config)).trim();
+        fileContent = (await parseDocumentWithConfig(app, filePath, config, { assetScope: 'technical-plan' })).trim();
       } catch (error) {
         return {
           success: false,
           message: formatImportError(error),
           file_name: path.basename(filePath),
-          parser_provider: provider,
-          parser_label: parserLabels[provider] || '本地解析',
+          parser_provider: parser.provider,
+          parser_label: parserLabels[parser.provider] || '本地解析',
         };
       }
 
@@ -275,11 +503,11 @@ function createFileService({ configStore } = {}) {
 
       return {
         success: true,
-        message: '文件解析完成',
+        message: parser.fallbackToLocal ? '文件解析完成，当前格式已自动使用本地解析' : '文件解析完成',
         file_content: fileContent,
         file_name: path.basename(filePath),
-        parser_provider: provider,
-        parser_label: parserLabels[provider] || '本地解析',
+        parser_provider: parser.provider,
+        parser_label: parserLabels[parser.provider] || '本地解析',
       };
     },
   };
@@ -287,4 +515,6 @@ function createFileService({ configStore } = {}) {
 
 module.exports = {
   createFileService,
+  parseDocumentWithConfig,
+  resolveFileParser,
 };
