@@ -1,5 +1,14 @@
 export type { AiStreamEvent, ChatCompletionRequest, ChatMessage, JsonCompletionRequest } from './ai';
-export type { AnalysisType, BidProjectDraft, FileImportResult } from './bid';
+export type {
+  AnalysisType,
+  BidProjectDraft,
+  DuplicateAnalysisTabId,
+  DuplicateCheckStep,
+  DuplicateCheckWorkspaceState,
+  FileImportResult,
+  FileSelectionResult,
+  LocalFileSelection,
+} from './bid';
 export type {
   AiConfig,
   ClientConfig,

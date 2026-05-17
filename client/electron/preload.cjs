@@ -49,6 +49,7 @@ const bridge = {
   },
   file: {
     importDocument: () => ipcRenderer.invoke('file:import-document'),
+    selectDuplicateCheckFiles: (options) => ipcRenderer.invoke('file:select-duplicate-check-files', options),
   },
   knowledgeBase: {
     list: () => ipcRenderer.invoke('knowledge-base:list'),
@@ -72,6 +73,9 @@ const bridge = {
     saveTechnicalPlan: (state) => ipcRenderer.invoke('workspace:save-technical-plan', state),
     updateTechnicalPlan: (partial) => ipcRenderer.invoke('workspace:update-technical-plan', partial),
     clearTechnicalPlan: () => ipcRenderer.invoke('workspace:clear-technical-plan'),
+    loadDuplicateCheck: () => ipcRenderer.invoke('workspace:load-duplicate-check'),
+    saveDuplicateCheck: (state) => ipcRenderer.invoke('workspace:save-duplicate-check', state),
+    clearDuplicateCheck: () => ipcRenderer.invoke('workspace:clear-duplicate-check'),
   },
   tasks: {
     startBidAnalysis: (payload) => ipcRenderer.invoke('tasks:start-bid-analysis', payload),

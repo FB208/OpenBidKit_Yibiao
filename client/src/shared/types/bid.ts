@@ -20,6 +20,32 @@ export interface FileImportResult {
   old_outline?: string;
 }
 
+export interface LocalFileSelection {
+  id: string;
+  file_name: string;
+  file_path: string;
+  extension: string;
+  size: number;
+  modified_at: string;
+}
+
+export interface FileSelectionResult {
+  success: boolean;
+  message: string;
+  files?: LocalFileSelection[];
+}
+
+export type DuplicateCheckStep = 'upload' | 'analysis';
+
+export type DuplicateAnalysisTabId = 'metadata' | 'outline' | 'content' | 'image';
+
+export interface DuplicateCheckWorkspaceState {
+  tenderFile: LocalFileSelection | null;
+  bidFiles: LocalFileSelection[];
+  step?: DuplicateCheckStep;
+  activeAnalysisTab?: DuplicateAnalysisTabId;
+}
+
 export interface ChapterContentContext {
   project_overview: string;
 }

@@ -7,11 +7,10 @@ interface AppShellProps {
   activeSection: SectionId;
   children: ReactNode;
   developerMode: boolean;
-  toolbar?: ReactNode;
   onSectionChange: (section: SectionId) => void;
 }
 
-function AppShell({ activeSection, children, developerMode, toolbar, onSectionChange }: AppShellProps) {
+function AppShell({ activeSection, children, developerMode, onSectionChange }: AppShellProps) {
   return (
     <Tooltip.Provider delayDuration={120} skipDelayDuration={80}>
       <div className="app-shell">
@@ -21,7 +20,6 @@ function AppShell({ activeSection, children, developerMode, toolbar, onSectionCh
           <section className="content-shell" aria-label="主内容">
             {children}
           </section>
-          {toolbar}
         </main>
       </div>
     </Tooltip.Provider>

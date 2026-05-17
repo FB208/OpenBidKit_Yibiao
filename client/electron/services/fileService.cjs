@@ -18,6 +18,7 @@ const mineruAgentSupportedExtensions = new Set([
 const mineruAccurateSupportedExtensions = new Set([
   '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.png', '.jpg', '.jpeg', '.jp2', '.webp', '.gif', '.bmp', '.html',
 ]);
+const duplicateCheckSupportedExtensions = new Set(['.doc', '.docx', '.wps', '.pdf', '.md', '.markdown']);
 const remoteImageTimeoutMs = 10000;
 const markdownImagePattern = /!\[(?<alt>[^\]]*)\]\((?<target><[^>]+>|[^)\s]+)(?<title>\s+"[^"]*")?\)/gi;
 const htmlImageSrcPattern = /(<img\b[^>]*?\bsrc=["'])(?<src>[^"']+)(["'][^>]*>)/gi;
@@ -255,6 +256,19 @@ async function extractMarkdownFromZip(zipBuffer, options = {}) {
 
 function makeDataId(fileName) {
   return fileName.replace(/[^A-Za-z0-9_.-]+/g, '_').slice(0, 96) || 'document';
+}
+
+async function createLocalFileSelection(filePath) {
+  const stats = await fs.stat(filePath);
+  const extension = path.extname(filePath).toLowerCase();
+  return {
+    id: crypto.createHash('sha1').update(filePath).digest('hex'),
+    file_name: path.basename(filePath),
+    file_path: filePath,
+    extension,
+    size: stats.size,
+    modified_at: stats.mtime.toISOString(),
+  };
 }
 
 function isPreserveImagesEnabled(config) {
@@ -508,6 +522,34 @@ function createFileService({ app, configStore } = {}) {
         file_name: path.basename(filePath),
         parser_provider: parser.provider,
         parser_label: parserLabels[parser.provider] || '本地解析',
+      };
+    },
+
+    async selectDuplicateCheckFiles(options = {}) {
+      const multiple = options?.multiple !== false;
+      const result = await dialog.showOpenDialog({
+        title: multiple ? '选择投标文件' : '选择招标文件',
+        properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+        filters: [
+          { name: '标书文档', extensions: [...duplicateCheckSupportedExtensions].map((item) => item.slice(1)) },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      });
+
+      if (result.canceled || result.filePaths.length === 0) {
+        return { success: false, message: '已取消选择', files: [] };
+      }
+
+      const supportedPaths = result.filePaths.filter((filePath) => duplicateCheckSupportedExtensions.has(path.extname(filePath).toLowerCase()));
+      if (!supportedPaths.length) {
+        return { success: false, message: '未选择支持的文件类型', files: [] };
+      }
+
+      const files = await Promise.all(supportedPaths.map(createLocalFileSelection));
+      return {
+        success: true,
+        message: `已选择 ${files.length} 个文件`,
+        files,
       };
     },
   };

@@ -1,5 +1,5 @@
 import type { AiStreamEvent, ChatCompletionRequest, JsonCompletionRequest } from './ai';
-import type { FileImportResult } from './bid';
+import type { DuplicateCheckWorkspaceState, FileImportResult, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseMutationResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 
@@ -66,6 +66,7 @@ export interface YibiaoBridge {
   };
   file: {
     importDocument: () => Promise<FileImportResult>;
+    selectDuplicateCheckFiles: (options?: { multiple?: boolean }) => Promise<FileSelectionResult>;
   };
   knowledgeBase: {
     list: () => Promise<KnowledgeBaseIndex>;
@@ -85,6 +86,9 @@ export interface YibiaoBridge {
     saveTechnicalPlan: (state: unknown) => Promise<unknown>;
     updateTechnicalPlan: <TState = unknown>(partial: unknown) => Promise<TState>;
     clearTechnicalPlan: () => Promise<unknown>;
+    loadDuplicateCheck: () => Promise<DuplicateCheckWorkspaceState | null>;
+    saveDuplicateCheck: (state: DuplicateCheckWorkspaceState) => Promise<unknown>;
+    clearDuplicateCheck: () => Promise<unknown>;
   };
   tasks: {
     startBidAnalysis: (payload: unknown) => Promise<unknown>;
