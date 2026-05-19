@@ -319,6 +319,7 @@ track('page_view', {
 | --- | --- |
 | `unauthorized` | 检查统计页面输入的 `ADMIN_TOKEN` 是否与 Worker Secret 一致 |
 | `NOTICE_STORE is not configured` | 先确认 Worker 的 `Settings -> Bindings` 存在 `NOTICE_STORE`，或本地运行 `cd analytics\worker; npm run setup:notice-kv` 后提交更新后的 `wrangler.jsonc` 并重新部署 Worker |
+| 公告无法发布或读取 | 访问 `https://analytics.agnet.top/health`，确认 `noticeStoreConfigured` 为 `true` 后再测试公告发布 |
 | `invalid projectName` | 检查项目名格式 |
 | `invalid event` | 仅支持 `app_open`、`page_view` |
 | `missing page` | `page_view` 必须传 `page` |

@@ -196,6 +196,7 @@ export default {
         ok: true,
         workerCodeVersion: WORKER_CODE_VERSION,
         noticeTimeFormat: 'YYYY-MM-DD HH:mm:ss Asia/Shanghai',
+        noticeStoreConfigured: Boolean(env.NOTICE_STORE),
       });
     }
 

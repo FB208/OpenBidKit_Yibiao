@@ -53,28 +53,29 @@ function parseNamespaceId(output) {
 }
 
 function parseNamespaceList(output, workerName) {
+  const preferredTitles = new Set([
+    bindingName,
+    workerName ? `${workerName}-${bindingName}` : '',
+  ].filter(Boolean));
   let namespaces;
+
   try {
     namespaces = JSON.parse(output);
   } catch {
     const start = output.indexOf('[');
     const end = output.lastIndexOf(']');
     if (start === -1 || end === -1 || end <= start) {
-      return '';
+      return parseTextNamespaceList(output, preferredTitles);
     }
 
     try {
       namespaces = JSON.parse(output.slice(start, end + 1));
     } catch {
-      return '';
+      return parseTextNamespaceList(output, preferredTitles);
     }
   }
 
   const items = Array.isArray(namespaces) ? namespaces : [];
-  const preferredTitles = new Set([
-    bindingName,
-    workerName ? `${workerName}-${bindingName}` : '',
-  ].filter(Boolean));
 
   const exact = items.find((item) => preferredTitles.has(String(item.title || '')));
   if (exact?.id) {
@@ -82,7 +83,49 @@ function parseNamespaceList(output, workerName) {
   }
 
   const suffix = items.find((item) => String(item.title || '').endsWith(`-${bindingName}`));
-  return suffix?.id || '';
+  if (suffix?.id) {
+    return suffix.id;
+  }
+
+  const textId = parseTextNamespaceList(output, preferredTitles);
+  if (textId) {
+    return textId;
+  }
+
+  return '';
+}
+
+function parseTextNamespaceList(output, preferredTitles) {
+  const lines = String(output || '').split(/\r?\n/);
+  const hexIdPattern = /\b[0-9a-f]{32}\b/i;
+
+  for (const title of preferredTitles) {
+    for (const line of lines) {
+      if (!line.includes(title)) {
+        continue;
+      }
+
+      const id = line.match(hexIdPattern)?.[0] || '';
+      if (id) {
+        return id;
+      }
+    }
+  }
+
+  for (const line of lines) {
+    const cells = line.split('│').map((cell) => cell.trim()).filter(Boolean);
+    const id = cells.find((cell) => hexIdPattern.test(cell))?.match(hexIdPattern)?.[0] || '';
+    if (!id) {
+      continue;
+    }
+
+    const title = cells.find((cell) => preferredTitles.has(cell) || cell.endsWith(`-${bindingName}`));
+    if (title) {
+      return id;
+    }
+  }
+
+  return '';
 }
 
 function updateWranglerConfig(namespaceId) {
@@ -138,7 +181,7 @@ if (envNamespaceId) {
 }
 
 const workerName = getWorkerName(source);
-const listResult = runWrangler(['kv', 'namespace', 'list', '--json']);
+const listResult = runWrangler(['kv', 'namespace', 'list']);
 if (listResult.status === 0) {
   const existingId = parseNamespaceList(listResult.output, workerName);
   if (existingId) {
@@ -151,7 +194,7 @@ if (listResult.status === 0) {
 const createResult = runWrangler(['kv', 'namespace', 'create', bindingName]);
 if (createResult.status !== 0) {
   if (/already exists/i.test(createResult.output)) {
-    const retryListResult = runWrangler(['kv', 'namespace', 'list', '--json']);
+    const retryListResult = runWrangler(['kv', 'namespace', 'list']);
     if (retryListResult.status === 0) {
       const existingId = parseNamespaceList(retryListResult.output, workerName);
       if (existingId) {
@@ -160,10 +203,6 @@ if (createResult.status !== 0) {
         process.exit(0);
       }
     }
-
-    console.warn('NOTICE_STORE KV namespace already exists, but its id was not returned by wrangler list.');
-    console.warn('Continuing deployment so wrangler can preserve the existing Cloudflare binding via keep_vars.');
-    process.exit(0);
   }
 
   printCredentialHelp(createResult.output || listResult.output);
