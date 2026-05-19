@@ -160,6 +160,10 @@ if (createResult.status !== 0) {
         process.exit(0);
       }
     }
+
+    console.warn('NOTICE_STORE KV namespace already exists, but its id was not returned by wrangler list.');
+    console.warn('Continuing deployment so wrangler can preserve the existing Cloudflare binding via keep_vars.');
+    process.exit(0);
   }
 
   printCredentialHelp(createResult.output || listResult.output);
