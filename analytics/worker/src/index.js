@@ -4,6 +4,7 @@ const PROJECT_NAME_PATTERN = /^[a-zA-Z0-9._-]{1,80}$/;
 const NOTICE_KEY_PREFIX = 'project_notice:';
 const NOTICE_TITLE_MAX_LENGTH = 120;
 const NOTICE_CONTENT_MAX_LENGTH = 20000;
+const WORKER_CODE_VERSION = 'notice-time-readable-v1';
 const CONFIG_USAGE_FIELDS = [
   { key: 'fileParserProviders', blob: 'blob9' },
   { key: 'realTimeRender', blob: 'blob10' },
@@ -190,7 +191,12 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === '/health') {
-      return json({ code: 0, ok: true });
+      return json({
+        code: 0,
+        ok: true,
+        workerCodeVersion: WORKER_CODE_VERSION,
+        noticeTimeFormat: 'YYYY-MM-DD HH:mm:ss Asia/Shanghai',
+      });
     }
 
     if (url.pathname === '/track') {
