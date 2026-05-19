@@ -28,6 +28,8 @@ function renderConfigUsage(usage) {
     ['realTimeRender', '实时渲染'],
     ['imageProviders', '生图服务商'],
     ['imageModelStatuses', '生图模型状态'],
+    ['textModelNames', '文本模型'],
+    ['imageModelNames', '生图模型'],
     ['bidAnalysisModes', 'Step 02 解析模式'],
     ['outlineModes', 'Step 03 目录模式'],
     ['tableRequirements', '正文表格需求'],

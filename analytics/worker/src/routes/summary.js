@@ -33,6 +33,19 @@ export async function handleSummary(request, env, url) {
     ORDER BY date ASC, event ASC
   `;
 
+  const dailyClientsSql = `
+    SELECT
+      toDate(timestamp) AS date,
+      COUNT(DISTINCT blob7) AS clients
+    FROM ${DATASET}
+    WHERE blob1 = ${project}
+      AND blob2 IN ('app_open', 'page_view')
+      AND blob7 != ''
+      AND timestamp >= NOW() - INTERVAL '${days}' DAY
+    GROUP BY date
+    ORDER BY date ASC
+  `;
+
   const pagesSql = `
     SELECT
       blob3 AS page,
@@ -49,10 +62,12 @@ export async function handleSummary(request, env, url) {
   const versionsSql = `
     SELECT
       blob4 AS version,
+      COUNT(DISTINCT blob7) AS clients,
       SUM(_sample_interval) AS count
     FROM ${DATASET}
     WHERE blob1 = ${project}
       AND blob4 != ''
+      AND blob7 != ''
       AND timestamp >= NOW() - INTERVAL '${days}' DAY
     GROUP BY version
     ORDER BY version DESC
@@ -115,8 +130,9 @@ export async function handleSummary(request, env, url) {
   `;
 
   try {
-    const [daily, pages, versions, totalClients, todayActiveClients, wau, mau, activeClients, newClients] = await Promise.all([
+    const [daily, dailyClients, pages, versions, totalClients, todayActiveClients, wau, mau, activeClients, newClients] = await Promise.all([
       queryAnalytics(env, dailySql),
+      queryAnalytics(env, dailyClientsSql),
       queryAnalytics(env, pagesSql),
       queryAnalytics(env, versionsSql),
       queryAnalytics(env, totalClientsSql),
@@ -147,6 +163,7 @@ export async function handleSummary(request, env, url) {
       newClients: clientStats.newClients,
       returningClients: Math.max(0, clientStats.activeClients - clientStats.newClients),
       daily: daily.data || [],
+      dailyClients: dailyClients.data || [],
       pages: pages.data || [],
       versions: versions.data || [],
     });

@@ -16,6 +16,8 @@ interface ConfigUsagePayload {
   real_time_render?: boolean;
   image_provider?: string;
   image_model_status?: string;
+  text_model_name?: string;
+  image_model_name?: string;
   bid_analysis_mode?: string;
   outline_mode?: string;
   table_requirement?: string;
@@ -110,6 +112,8 @@ function buildBaseConfigUsage(config?: ClientConfig | null): ConfigUsagePayload 
     real_time_render: config ? config.real_time_render !== false : undefined,
     image_provider: config?.image_model?.provider,
     image_model_status: config?.image_model?.status || undefined,
+    text_model_name: config?.model_name,
+    image_model_name: config?.image_model?.model_name,
   };
 }
 
