@@ -2021,6 +2021,23 @@ button {
   transform: translate(-50%, -50%);
 }
 
+.remote-notice-title {
+  margin: 0;
+  color: var(--yb-text);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.remote-notice-time {
+  margin-top: -10px;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+}
+
 .remote-notice-content {
   min-height: 0;
   max-height: 380px;
@@ -2126,13 +2143,6 @@ button {
   align-items: center;
   justify-content: flex-end;
   gap: 16px;
-}
-
-.remote-notice-actions span {
-  margin-right: auto;
-  color: var(--yb-text-muted);
-  font-size: 12px;
-  line-height: 1.5;
 }
 
 .remote-notice-preview-modal {

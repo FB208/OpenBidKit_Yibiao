@@ -149,13 +149,13 @@ function UpdateNotifier() {
       <Dialog.Portal>
         <Dialog.Overlay className="remote-notice-modal" />
         <Dialog.Content className="remote-notice-card">
-          <Dialog.Title className="sr-only">{remoteNotice?.title || '公告'}</Dialog.Title>
+          <Dialog.Title className="remote-notice-title">{remoteNotice?.title || '公告'}</Dialog.Title>
           <Dialog.Description className="sr-only">远程公告</Dialog.Description>
+          {remoteNotice?.updatedAt ? <div className="remote-notice-time">公告时间：{remoteNotice.updatedAt}</div> : null}
           <div className="remote-notice-content">
             <MarkdownRenderer allowRawHtml={false} components={noticeMarkdownComponents}>{remoteNotice?.content || ''}</MarkdownRenderer>
           </div>
           <div className="remote-notice-actions">
-            <span>{remoteNotice?.updatedAt ? `公告时间：${remoteNotice.updatedAt}` : ''}</span>
             <button className="primary-action" type="button" onClick={closeRemoteNotice}>知道了</button>
           </div>
         </Dialog.Content>
