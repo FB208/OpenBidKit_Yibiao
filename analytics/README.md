@@ -21,6 +21,10 @@ analytics/
   dashboard/   # 统计看板 Worker Static Assets
 ```
 
+`worker/src/` 采用模块化结构：`index.js` 只负责路由分发，`routes/` 放接口处理，`services/` 放 Analytics Engine 与 KV 访问，`http.js`、`utils.js`、`constants.js` 放公共能力。
+
+`dashboard/public/` 是无需构建的静态看板：`index.html` 负责页面骨架，`styles.css` 负责样式，`src/` 下使用原生 ES Module 拆分 API、渲染、标签页和各标签页逻辑。
+
 核心接口：
 
 | 接口 | 用途 | 鉴权 |
