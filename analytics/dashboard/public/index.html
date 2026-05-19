@@ -109,15 +109,22 @@
 
     input,
     select,
+    textarea,
     button {
-      height: 40px;
       border-radius: 12px;
       border: 1px solid #d0d5dd;
       font: inherit;
     }
 
     input,
-    select {
+    select,
+    button {
+      height: 40px;
+    }
+
+    input,
+    select,
+    textarea {
       width: 100%;
       padding: 0 12px;
       background: #fff;
@@ -125,8 +132,16 @@
       outline: none;
     }
 
+    textarea {
+      min-height: 180px;
+      padding: 12px;
+      line-height: 1.65;
+      resize: vertical;
+    }
+
     input:focus,
-    select:focus {
+    select:focus,
+    textarea:focus {
       border-color: var(--primary);
       box-shadow: 0 0 0 3px var(--primary-soft);
     }
@@ -204,6 +219,115 @@
       font-size: 18px;
     }
 
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .section-head h2 {
+      margin: 0;
+    }
+
+    .pager {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .pager button {
+      align-self: auto;
+      height: 32px;
+      padding: 0 10px;
+      border-radius: 10px;
+    }
+
+    .usage-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .usage-card {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel-soft);
+    }
+
+    .usage-card h3 {
+      margin: 0 0 10px;
+      font-size: 15px;
+    }
+
+    .notice-panel {
+      margin-bottom: 16px;
+    }
+
+    .notice-form {
+      display: grid;
+      grid-template-columns: 1fr 220px;
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .notice-field-wide {
+      grid-column: 1 / -1;
+    }
+
+    .notice-meta,
+    .notice-status {
+      padding: 10px 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+      background: var(--panel-soft);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      white-space: pre-wrap;
+    }
+
+    .notice-status {
+      display: none;
+      margin-top: 12px;
+    }
+
+    .notice-status.ok {
+      display: block;
+      color: #166534;
+      background: #f0fdf4;
+      border-color: #bbf7d0;
+    }
+
+    .notice-status.error {
+      display: block;
+      color: #991b1b;
+      background: #fef2f2;
+      border-color: #fecaca;
+    }
+
+    .notice-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .notice-actions button {
+      align-self: auto;
+    }
+
+    .notice-actions .danger-button {
+      color: #991b1b;
+      background: #fef2f2;
+      border-color: #fecaca;
+    }
+
     table {
       width: 100%;
       border-collapse: collapse;
@@ -245,8 +369,14 @@
       .hero,
       .controls,
       .cards,
-      .grid {
+      .grid,
+      .usage-grid,
+      .notice-form {
         grid-template-columns: 1fr;
+        display: grid;
+      }
+
+      .notice-actions {
         display: grid;
       }
 
@@ -297,11 +427,48 @@
     <div class="panel hint">Token 只保存在当前浏览器 localStorage，不写入仓库，也不会提交到服务端。</div>
     <div id="errorBox" class="error"></div>
 
+    <section class="panel section notice-panel">
+      <div class="section-head">
+        <div>
+          <h2>公告管理</h2>
+          <p>发布后客户端会在启动和每 30 分钟轮询时拉取最新 Markdown 公告。同一公告关闭后不再显示，重新发布会生成新的公告 ID。</p>
+        </div>
+        <button id="loadNoticeButton" type="button">读取公告</button>
+      </div>
+      <div id="noticeMeta" class="notice-meta">当前未读取公告。</div>
+      <div class="notice-form">
+        <label>
+          公告标题
+          <input id="noticeTitle" maxlength="120" placeholder="例如：开源许可证提醒" />
+        </label>
+        <label>
+          状态
+          <select id="noticeEnabled">
+            <option value="true" selected>启用</option>
+            <option value="false">保存但不展示</option>
+          </select>
+        </label>
+        <label class="notice-field-wide">
+          Markdown 内容
+          <textarea id="noticeContent" maxlength="20000" placeholder="输入 Markdown 公告内容。支持标题、列表、链接、加粗等语法。"></textarea>
+        </label>
+      </div>
+      <div class="notice-actions">
+        <button id="disableNoticeButton" class="danger-button" type="button">停用公告</button>
+        <button id="publishNoticeButton" type="button">发布公告</button>
+      </div>
+      <div id="noticeStatus" class="notice-status"></div>
+    </section>
+
     <section class="cards">
       <div class="panel card"><span>打开量</span><strong id="totalOpen">0</strong></div>
       <div class="panel card"><span>页面访问量</span><strong id="totalView">0</strong></div>
-      <div class="panel card"><span>页面数</span><strong id="totalPages">0</strong></div>
-      <div class="panel card"><span>版本数</span><strong id="totalVersions">0</strong></div>
+      <div class="panel card"><span>总客户端数</span><strong id="totalClients">0</strong></div>
+      <div class="panel card"><span>今日活跃客户端</span><strong id="todayActiveClients">0</strong></div>
+      <div class="panel card"><span>近 7 天活跃</span><strong id="wau">0</strong></div>
+      <div class="panel card"><span>近 30 天活跃</span><strong id="mau">0</strong></div>
+      <div class="panel card"><span>新客户端</span><strong id="newClients">0</strong></div>
+      <div class="panel card"><span>回访客户端</span><strong id="returningClients">0</strong></div>
     </section>
 
     <section class="grid">
@@ -321,9 +488,26 @@
         <div id="versionsTable"></div>
       </div>
       <div class="panel section">
-        <h2>最近事件</h2>
-        <div id="latestTable"></div>
+        <h2>留存概览</h2>
+        <div id="retentionTable"></div>
       </div>
+    </section>
+
+    <section class="panel section">
+      <h2>配置使用情况</h2>
+      <div id="configUsage"></div>
+    </section>
+
+    <section class="panel section">
+      <div class="section-head">
+        <h2>最近事件</h2>
+        <div class="pager">
+          <button id="prevLatestPage" type="button">上一页</button>
+          <span id="latestPageInfo">第 1 页</span>
+          <button id="nextLatestPage" type="button">下一页</button>
+        </div>
+      </div>
+      <div id="latestTable"></div>
     </section>
   </main>
 
@@ -342,13 +526,34 @@
       statusText: $('statusText'),
       totalOpen: $('totalOpen'),
       totalView: $('totalView'),
-      totalPages: $('totalPages'),
-      totalVersions: $('totalVersions'),
+      totalClients: $('totalClients'),
+      todayActiveClients: $('todayActiveClients'),
+      wau: $('wau'),
+      mau: $('mau'),
+      newClients: $('newClients'),
+      returningClients: $('returningClients'),
       dailyTable: $('dailyTable'),
       pagesTable: $('pagesTable'),
       versionsTable: $('versionsTable'),
+      retentionTable: $('retentionTable'),
+      configUsage: $('configUsage'),
       latestTable: $('latestTable'),
+      prevLatestPage: $('prevLatestPage'),
+      nextLatestPage: $('nextLatestPage'),
+      latestPageInfo: $('latestPageInfo'),
+      loadNoticeButton: $('loadNoticeButton'),
+      publishNoticeButton: $('publishNoticeButton'),
+      disableNoticeButton: $('disableNoticeButton'),
+      noticeMeta: $('noticeMeta'),
+      noticeStatus: $('noticeStatus'),
+      noticeTitle: $('noticeTitle'),
+      noticeEnabled: $('noticeEnabled'),
+      noticeContent: $('noticeContent'),
     };
+
+    let latestPage = 1;
+    let latestTotal = 0;
+    const latestPageSize = 10;
 
     function normalizeApiBase(value) {
       return String(value || '').trim().replace(/\/+$/, '');
@@ -391,12 +596,21 @@
       state.errorBox.textContent = message || '';
     }
 
-    async function requestJson(path) {
+    async function requestJson(path, options = {}) {
       const apiBase = normalizeApiBase(state.apiBase.value);
+      const headers = {
+        Authorization: `Bearer ${state.adminToken.value.trim()}`,
+      };
+      if (options.body !== undefined) {
+        headers['Content-Type'] = 'application/json';
+      }
+
       const response = await fetch(`${apiBase}${path}`, {
+        method: options.method || 'GET',
         headers: {
-          Authorization: `Bearer ${state.adminToken.value.trim()}`,
+          ...headers,
         },
+        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
       });
 
       const data = await response.json().catch(() => null);
@@ -434,6 +648,114 @@
       }
     }
 
+    function setNoticeStatus(message, type = '') {
+      state.noticeStatus.className = type ? `notice-status ${type}` : 'notice-status';
+      state.noticeStatus.textContent = message || '';
+    }
+
+    function renderNoticeMeta(notice) {
+      if (!notice) {
+        state.noticeMeta.textContent = '当前项目暂无公告。';
+        return;
+      }
+
+      const enabledText = notice.enabled === false ? '停用' : '启用';
+      state.noticeMeta.textContent = `公告 ID：${notice.id || '-'}\n状态：${enabledText}\n公告时间：${notice.updatedAt || '-'}\n项目：${notice.projectName || '-'}`;
+    }
+
+    function fillNoticeForm(notice) {
+      state.noticeTitle.value = notice?.title || '';
+      state.noticeEnabled.value = notice?.enabled === false ? 'false' : 'true';
+      state.noticeContent.value = notice?.content || '';
+      renderNoticeMeta(notice);
+    }
+
+    function getSelectedProjectName() {
+      return state.projectName.value.trim();
+    }
+
+    async function loadNotice(options = {}) {
+      try {
+        if (!state.adminToken.value.trim()) {
+          throw new Error('请先输入 ADMIN_TOKEN');
+        }
+        const projectName = getSelectedProjectName();
+        if (!projectName) {
+          throw new Error('请先输入项目名');
+        }
+
+        const data = await requestJson(`/api/notice?projectName=${encodeURIComponent(projectName)}`);
+        fillNoticeForm(data.notice || null);
+        if (!options.quiet) {
+          setNoticeStatus(data.notice ? '公告已读取。' : '当前项目暂无公告。', 'ok');
+        }
+      } catch (error) {
+        if (!options.quiet) {
+          setNoticeStatus(error?.message || String(error), 'error');
+        }
+      }
+    }
+
+    async function publishNotice() {
+      setNoticeStatus('');
+      try {
+        if (!state.adminToken.value.trim()) {
+          throw new Error('请先输入 ADMIN_TOKEN');
+        }
+        const projectName = getSelectedProjectName();
+        if (!projectName) {
+          throw new Error('请先输入项目名');
+        }
+        const title = state.noticeTitle.value.trim();
+        const content = state.noticeContent.value.trim();
+        if (!title) {
+          throw new Error('请先填写公告标题');
+        }
+        if (!content) {
+          throw new Error('请先填写 Markdown 内容');
+        }
+
+        state.publishNoticeButton.disabled = true;
+        const data = await requestJson('/api/notice', {
+          method: 'POST',
+          body: {
+            projectName,
+            title,
+            content,
+            enabled: state.noticeEnabled.value !== 'false',
+          },
+        });
+        fillNoticeForm(data.notice || null);
+        setNoticeStatus('公告已发布。客户端会在下一次轮询时拉取新公告。', 'ok');
+      } catch (error) {
+        setNoticeStatus(error?.message || String(error), 'error');
+      } finally {
+        state.publishNoticeButton.disabled = false;
+      }
+    }
+
+    async function disableNotice() {
+      setNoticeStatus('');
+      try {
+        if (!state.adminToken.value.trim()) {
+          throw new Error('请先输入 ADMIN_TOKEN');
+        }
+        const projectName = getSelectedProjectName();
+        if (!projectName) {
+          throw new Error('请先输入项目名');
+        }
+
+        state.disableNoticeButton.disabled = true;
+        await requestJson(`/api/notice?projectName=${encodeURIComponent(projectName)}`, { method: 'DELETE' });
+        fillNoticeForm(null);
+        setNoticeStatus('公告已停用。客户端后续不会再拉取到该公告。', 'ok');
+      } catch (error) {
+        setNoticeStatus(error?.message || String(error), 'error');
+      } finally {
+        state.disableNoticeButton.disabled = false;
+      }
+    }
+
     function renderTable(target, rows, columns, emptyText) {
       if (!rows || rows.length === 0) {
         target.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
@@ -453,7 +775,70 @@
       target.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
     }
 
-    async function refresh() {
+    function formatPercent(value) {
+      return `${(Number(value || 0) * 100).toFixed(1)}%`;
+    }
+
+    function labelConfigValue(groupKey, value) {
+      const labels = {
+        fileParserProviders: {
+          local: '本地解析',
+          'mineru-accurate-api': 'MinerU 精准解析 API',
+          'mineru-agent-api': 'MinerU-Agent 轻量解析 API',
+        },
+        realTimeRender: { true: '开启', false: '关闭' },
+        imageProviders: { volcengine: '火山方舟', 'google-ai-studio': 'Google AI Studio' },
+        imageModelStatuses: { untested: '未测试', available: '可用', unavailable: '不可用' },
+        bidAnalysisModes: { key: '只解析关键项', full: '完整解析' },
+        outlineModes: { free: '自由生成', aligned: '按评分项对齐' },
+        tableRequirements: { none: '不要', light: '少量', moderate: '适中', heavy: '大量' },
+        useMermaidImages: { true: '开启', false: '关闭' },
+        useAiImages: { true: '开启', false: '关闭' },
+      };
+
+      return labels[groupKey]?.[value] || value || '-';
+    }
+
+    function renderConfigUsage(usage) {
+      const groups = [
+        ['fileParserProviders', '文件解析方式'],
+        ['realTimeRender', '实时渲染'],
+        ['imageProviders', '生图服务商'],
+        ['imageModelStatuses', '生图模型状态'],
+        ['bidAnalysisModes', 'Step 02 解析模式'],
+        ['outlineModes', 'Step 03 目录模式'],
+        ['tableRequirements', '正文表格需求'],
+        ['useMermaidImages', 'Mermaid 图片'],
+        ['useAiImages', 'AI 生图'],
+      ];
+
+      state.configUsage.innerHTML = `<div class="usage-grid">${groups.map(([key, label]) => {
+        const rows = usage?.[key] || [];
+        const body = rows.length
+          ? `<table><thead><tr><th>取值</th><th>客户端</th><th>次数</th></tr></thead><tbody>${rows.map((row) => `
+              <tr>
+                <td><code>${escapeHtml(labelConfigValue(key, row.value))}</code></td>
+                <td>${formatNumber(row.clients)}</td>
+                <td>${formatNumber(row.events)}</td>
+              </tr>
+            `).join('')}</tbody></table>`
+          : '<div class="empty">暂无数据</div>';
+        return `<div class="usage-card"><h3>${escapeHtml(label)}</h3>${body}</div>`;
+      }).join('')}</div>`;
+    }
+
+    function updateLatestPager() {
+      const totalPages = Math.max(1, Math.ceil(latestTotal / latestPageSize));
+      state.latestPageInfo.textContent = `第 ${latestPage} / ${totalPages} 页，共 ${formatNumber(latestTotal)} 条`;
+      state.prevLatestPage.disabled = latestPage <= 1;
+      state.nextLatestPage.disabled = latestPage >= totalPages;
+    }
+
+    async function refresh(options = {}) {
+      if (options.resetLatestPage) {
+        latestPage = 1;
+      }
+
       setError('');
       setStatus('', '加载中');
       state.refreshButton.disabled = true;
@@ -472,9 +857,11 @@
 
         const projectName = encodeURIComponent(state.projectName.value);
         const days = encodeURIComponent(state.days.value);
-        const [summary, latest] = await Promise.all([
+        const [summary, latest, retention, configUsage] = await Promise.all([
           requestJson(`/api/summary?projectName=${projectName}&days=${days}`),
-          requestJson(`/api/latest?projectName=${projectName}&limit=50`),
+          requestJson(`/api/latest?projectName=${projectName}&page=${latestPage}`),
+          requestJson(`/api/retention?projectName=${projectName}&days=${days}`),
+          requestJson(`/api/config-usage?projectName=${projectName}&days=${days}`),
         ]);
 
         const daily = normalizeDaily(summary.daily || []);
@@ -485,8 +872,12 @@
 
         state.totalOpen.textContent = formatNumber(totalOpen);
         state.totalView.textContent = formatNumber(totalView);
-        state.totalPages.textContent = formatNumber(pages.length);
-        state.totalVersions.textContent = formatNumber(versions.length);
+        state.totalClients.textContent = formatNumber(summary.totalClients);
+        state.todayActiveClients.textContent = formatNumber(summary.todayActiveClients);
+        state.wau.textContent = formatNumber(summary.wau);
+        state.mau.textContent = formatNumber(summary.mau);
+        state.newClients.textContent = formatNumber(summary.newClients);
+        state.returningClients.textContent = formatNumber(summary.returningClients);
 
         renderTable(state.dailyTable, daily, [
           { key: 'date', label: '日期' },
@@ -504,6 +895,22 @@
           { key: 'count', label: '事件数' },
         ], '暂无版本数据');
 
+        renderTable(state.retentionTable, (retention.retention || []).map((row) => ({
+          ...row,
+          retentionRate: formatPercent(row.retentionRate),
+        })), [
+          { key: 'day', label: '留存日' },
+          { key: 'cohortClients', label: '可观察客户端' },
+          { key: 'retainedClients', label: '回访客户端' },
+          { key: 'retentionRate', label: '留存率' },
+        ], '暂无留存数据');
+
+        renderConfigUsage(configUsage.usage || {});
+
+        latestTotal = Number(latest.total || 0);
+        latestPage = Number(latest.page || latestPage);
+        updateLatestPager();
+
         renderTable(state.latestTable, latest.events || [], [
           { key: 'timestamp', label: '时间' },
           { key: 'event', label: '事件', code: true },
@@ -511,8 +918,11 @@
           { key: 'version', label: '版本', code: true },
           { key: 'platform', label: '平台' },
           { key: 'arch', label: '架构' },
+          { key: 'clientCreatedAt', label: '创建日期' },
           { key: 'clientId', label: '客户端ID', code: true },
         ], '暂无最近事件');
+
+        void loadNotice({ quiet: true });
 
         setStatus('ok', '已连接');
       } catch (error) {
@@ -520,17 +930,30 @@
         setError(error?.message || String(error));
       } finally {
         state.refreshButton.disabled = false;
+        updateLatestPager();
       }
     }
 
-    state.refreshButton.addEventListener('click', refresh);
+    state.refreshButton.addEventListener('click', () => refresh({ resetLatestPage: true }));
+    state.loadNoticeButton.addEventListener('click', () => loadNotice());
+    state.publishNoticeButton.addEventListener('click', publishNotice);
+    state.disableNoticeButton.addEventListener('click', disableNotice);
+    state.prevLatestPage.addEventListener('click', () => {
+      latestPage = Math.max(1, latestPage - 1);
+      refresh();
+    });
+    state.nextLatestPage.addEventListener('click', () => {
+      latestPage += 1;
+      refresh();
+    });
     state.apiBase.addEventListener('change', saveSettings);
     state.adminToken.addEventListener('change', saveSettings);
     state.projectName.addEventListener('change', saveSettings);
     state.days.addEventListener('change', saveSettings);
 
     loadSettings();
-    if (state.adminToken.value.trim()) refresh();
+    updateLatestPager();
+    if (state.adminToken.value.trim()) refresh({ resetLatestPage: true });
   </script>
 </body>
 </html>

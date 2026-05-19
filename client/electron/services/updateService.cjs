@@ -1,26 +1,10 @@
-const { dialog, shell } = require('electron');
 const https = require('node:https');
 
 const LATEST_RELEASE_API = 'https://api.github.com/repos/FB208/OpenBidKit_Yibiao/releases/latest';
-const LATEST_RELEASE_PAGE = 'https://github.com/FB208/OpenBidKit_Yibiao/releases/latest';
-
-function formatReleaseNotes(releaseNotes) {
-  if (!releaseNotes) {
-    return '';
-  }
-
-  if (Array.isArray(releaseNotes)) {
-    return releaseNotes
-      .map((item) => item?.note || item?.version || '')
-      .filter(Boolean)
-      .join('\n\n');
-  }
-
-  return String(releaseNotes);
-}
 
 let autoUpdaterInstance = null;
-let shouldOpenDownloadPageForUpdate = false;
+let downloadedUpdateVersion = '';
+let activeUpdateCheckPromise = null;
 
 function compareVersions(a, b) {
   const pa = String(a || '').replace(/^v/, '').split('.').map(Number);
@@ -64,52 +48,119 @@ function fetchLatestRelease() {
   });
 }
 
-async function triggerUpdateDownload({ mainWindow, onProgress, onDownloaded, onError }) {
-  if (!autoUpdaterInstance || shouldOpenDownloadPageForUpdate) {
-    shell.openExternal(LATEST_RELEASE_PAGE);
+function formatErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error || '未知错误');
+}
+
+function setProgressBar(mainWindow, progress) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
+  mainWindow.setProgressBar(progress);
+}
 
-  autoUpdaterInstance.removeAllListeners('download-progress');
-  autoUpdaterInstance.removeAllListeners('update-downloaded');
-  autoUpdaterInstance.removeAllListeners('error');
+function getDisabledResult() {
+  return { enabled: false, updateAvailable: false };
+}
 
-  autoUpdaterInstance.on('download-progress', (progress) => {
-    if (!mainWindow.isDestroyed()) {
-      mainWindow.setProgressBar(Math.max(0, Math.min(1, progress.percent / 100)));
+async function runUpdateCheck({ app, mainWindow, onProgress, onDownloaded, onError }) {
+  const release = await fetchLatestRelease();
+  if (!release.version || compareVersions(release.version, app.getVersion()) <= 0) {
+    return { enabled: true, updateAvailable: false };
+  }
+
+  let downloadedVersion = release.version;
+  let downloadedNotified = false;
+  let errorNotified = false;
+  const notifyError = (message) => {
+    if (errorNotified) {
+      return;
     }
-    onProgress?.(progress.percent);
-  });
+    errorNotified = true;
+    onError?.(message);
+  };
 
-  autoUpdaterInstance.on('update-downloaded', (info) => {
-    if (!mainWindow.isDestroyed()) {
-      mainWindow.setProgressBar(-1);
-    }
-    onDownloaded?.(info.version);
-  });
+  const handleProgress = (progress) => {
+    const percent = Number(progress?.percent || 0);
+    setProgressBar(mainWindow, Math.max(0, Math.min(1, percent / 100)));
+    onProgress?.(percent);
+  };
 
-  autoUpdaterInstance.on('error', (error) => {
-    if (!mainWindow.isDestroyed()) {
-      mainWindow.setProgressBar(-1);
-    }
-    onError?.(error instanceof Error ? error.message : String(error));
-  });
+  const handleDownloaded = (info) => {
+    downloadedVersion = info?.version || release.version;
+    downloadedUpdateVersion = downloadedVersion;
+    downloadedNotified = true;
+    setProgressBar(mainWindow, -1);
+    onDownloaded?.(downloadedVersion);
+  };
+
+  const handleError = (error) => {
+    setProgressBar(mainWindow, -1);
+    notifyError(formatErrorMessage(error));
+  };
+
+  autoUpdaterInstance.on('download-progress', handleProgress);
+  autoUpdaterInstance.on('update-downloaded', handleDownloaded);
+  autoUpdaterInstance.on('error', handleError);
 
   try {
     const result = await autoUpdaterInstance.checkForUpdates();
     if (!result) {
-      shell.openExternal(LATEST_RELEASE_PAGE);
-      return;
+      throw new Error('未找到可下载的更新包');
     }
 
     await autoUpdaterInstance.downloadUpdate();
+    downloadedUpdateVersion = downloadedVersion;
+    setProgressBar(mainWindow, -1);
+    if (!downloadedNotified) {
+      onDownloaded?.(downloadedVersion);
+    }
+    return { enabled: true, updateAvailable: true, version: downloadedVersion, downloaded: true };
   } catch (error) {
-    onError?.(error instanceof Error ? error.message : String(error));
+    const message = formatErrorMessage(error);
+    notifyError(message);
+    return { enabled: true, updateAvailable: true, version: release.version, failed: true, message };
+  } finally {
+    autoUpdaterInstance.removeListener('download-progress', handleProgress);
+    autoUpdaterInstance.removeListener('update-downloaded', handleDownloaded);
+    autoUpdaterInstance.removeListener('error', handleError);
+    setProgressBar(mainWindow, -1);
   }
 }
 
+async function checkAndDownloadUpdate(options = {}) {
+  const { app } = options;
+  if (!app?.isPackaged) {
+    return getDisabledResult();
+  }
+  if (!autoUpdaterInstance) {
+    return { enabled: true, updateAvailable: false, failed: true, message: '自动更新未初始化' };
+  }
+  if (downloadedUpdateVersion) {
+    return { enabled: true, updateAvailable: true, version: downloadedUpdateVersion, downloaded: true };
+  }
+  if (activeUpdateCheckPromise) {
+    return activeUpdateCheckPromise;
+  }
+
+  activeUpdateCheckPromise = runUpdateCheck(options)
+    .catch((error) => {
+      const message = formatErrorMessage(error);
+      options.onError?.(message);
+      return { enabled: true, updateAvailable: false, failed: true, message };
+    })
+    .finally(() => {
+      activeUpdateCheckPromise = null;
+    });
+  return activeUpdateCheckPromise;
+}
+
+function triggerUpdateDownload(options) {
+  return checkAndDownloadUpdate(options);
+}
+
 function quitAndInstall() {
-  if (autoUpdaterInstance) {
+  if (autoUpdaterInstance && downloadedUpdateVersion) {
     autoUpdaterInstance.quitAndInstall(false, true);
   }
 }
@@ -121,105 +172,28 @@ function setupAutoUpdate({ app, mainWindow }) {
 
   const { autoUpdater } = require('electron-updater');
   autoUpdaterInstance = autoUpdater;
-  shouldOpenDownloadPageForUpdate = app.getName() === 'OpenBidKit_Yibiao';
-
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
 
   autoUpdater.on('download-progress', (progress) => {
-    if (!mainWindow.isDestroyed()) {
-      mainWindow.setProgressBar(Math.max(0, Math.min(1, progress.percent / 100)));
-    }
+    const percent = Number(progress?.percent || 0);
+    setProgressBar(mainWindow, Math.max(0, Math.min(1, percent / 100)));
   });
 
-  autoUpdater.on('update-downloaded', async (info) => {
-    if (!mainWindow.isDestroyed()) {
-      mainWindow.setProgressBar(-1);
-    }
-
-    const result = await dialog.showMessageBox(mainWindow, {
-      type: 'info',
-      buttons: ['重启安装', '稍后'],
-      defaultId: 0,
-      cancelId: 1,
-      title: '更新已下载',
-      message: `新版本 ${info.version} 已下载完成`,
-      detail: '是否立即重启应用并安装更新？',
-      noLink: true,
-    });
-
-    if (result.response === 0) {
-      autoUpdater.quitAndInstall(false, true);
-    }
+  autoUpdater.on('update-downloaded', (info) => {
+    downloadedUpdateVersion = info?.version || downloadedUpdateVersion;
+    setProgressBar(mainWindow, -1);
   });
 
   autoUpdater.on('error', (error) => {
-    if (!mainWindow.isDestroyed()) {
-      mainWindow.setProgressBar(-1);
-    }
+    setProgressBar(mainWindow, -1);
     console.warn('自动更新检查失败', error);
   });
-
-  setTimeout(() => {
-    fetchLatestRelease().then(async (release) => {
-      if (!release.version || compareVersions(release.version, app.getVersion()) <= 0) {
-        return;
-      }
-
-      const result = await dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        buttons: [shouldOpenDownloadPageForUpdate ? '打开下载页' : '立即更新', '稍后'],
-        defaultId: 0,
-        cancelId: 1,
-        title: '发现新版本',
-        message: `发现新版本 ${release.version}`,
-        detail: formatReleaseNotes(release.body) || '是否现在下载更新？',
-        noLink: true,
-      });
-
-      if (result.response !== 0) {
-        return;
-      }
-
-      await triggerUpdateDownload({
-        mainWindow,
-        onDownloaded: async (version) => {
-          const dialogResult = await dialog.showMessageBox(mainWindow, {
-            type: 'info',
-            buttons: ['重启安装', '稍后'],
-            defaultId: 0,
-            cancelId: 1,
-            title: '更新已下载',
-            message: `新版本 ${version} 已下载完成`,
-            detail: '是否立即重启应用并安装更新？',
-            noLink: true,
-          });
-
-          if (dialogResult.response === 0) {
-            autoUpdater.quitAndInstall(false, true);
-          }
-        },
-        onError: async (message) => {
-          await dialog.showMessageBox(mainWindow, {
-            type: 'error',
-            buttons: ['打开下载页', '知道了'],
-            defaultId: 0,
-            cancelId: 1,
-            title: '更新下载失败',
-            message: '更新下载失败',
-            detail: message,
-            noLink: true,
-          }).then((dialogResult) => {
-            if (dialogResult.response === 0) {
-              shell.openExternal(LATEST_RELEASE_PAGE);
-            }
-          });
-        },
-      });
-    }).catch((error) => {
-      console.warn('启动自动更新检查失败', error);
-    });
-  }, 3000);
 }
 
-module.exports = { setupAutoUpdate, triggerUpdateDownload, quitAndInstall };
+module.exports = {
+  setupAutoUpdate,
+  checkAndDownloadUpdate,
+  triggerUpdateDownload,
+  quitAndInstall,
+};

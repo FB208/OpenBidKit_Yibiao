@@ -1,5 +1,33 @@
 export type { AiStreamEvent, ChatCompletionRequest, ChatMessage, JsonCompletionRequest } from './ai';
-export type { AnalysisType, BidProjectDraft, FileImportResult } from './bid';
+export type {
+  AnalysisType,
+  BidProjectDraft,
+  DuplicateAnalysisTabId,
+  DuplicateAnalysisStatus,
+  DuplicateCheckStep,
+  DuplicateCheckWorkspaceState,
+  DuplicateContentAnalysisState,
+  DuplicateContentExtractionItem,
+  DuplicateContentSentenceItem,
+  DuplicateImageAnalysisState,
+  DuplicateImageFileResult,
+  DuplicateImageItem,
+  DuplicateMetadataAnalysisState,
+  DuplicateMetadataComparisonRow,
+  DuplicateMetadataFileResult,
+  DuplicateMetadataItem,
+  DuplicateOutlineAnalysisState,
+  DuplicateOutlineFileResult,
+  DuplicateOutlineGroup,
+  DuplicateOutlineItem,
+  DuplicateOutlineItemSource,
+  DuplicateOutlineMatchType,
+  DuplicateOutlinePairwiseSimilarity,
+  DuplicateSubTaskProgress,
+  FileImportResult,
+  FileSelectionResult,
+  LocalFileSelection,
+} from './bid';
 export type {
   AiConfig,
   ClientConfig,
@@ -14,4 +42,4 @@ export type {
 } from './config';
 export type { AppMenuItem, SectionId } from './navigation';
 export type { OutlineData, OutlineItem, OutlineMode, TechnicalRequirementGroup } from './outline';
-export type { LatestReleaseInfo, WordExportProgressEvent, WordExportResult, YibiaoBridge } from './ipc';
+export type { LatestReleaseInfo, UpdateCheckResult, WordExportProgressEvent, WordExportResult, YibiaoBridge } from './ipc';

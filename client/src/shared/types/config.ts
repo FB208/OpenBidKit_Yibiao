@@ -48,4 +48,7 @@ export interface ClientConfig extends AiConfig {
   image_model: ImageModelConfig;
   file_parser: FileParserConfig;
   developer_mode?: boolean;
+  real_time_render?: boolean;
+  analytics_client_id?: string;
+  analytics_created_at?: string;
 }

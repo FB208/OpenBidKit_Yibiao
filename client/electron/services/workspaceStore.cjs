@@ -1,9 +1,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { getTechnicalPlanFilePath } = require('../utils/paths.cjs');
+const { getDuplicateCheckDir, getDuplicateCheckFilePath, getTechnicalPlanFilePath } = require('../utils/paths.cjs');
+const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 
 function createWorkspaceStore(app) {
   const technicalPlanFile = getTechnicalPlanFilePath(app);
+  const duplicateCheckFile = getDuplicateCheckFilePath(app);
+  const duplicateCheckDir = getDuplicateCheckDir(app);
 
   return {
     getTechnicalPlanFilePath() {
@@ -45,9 +48,55 @@ function createWorkspaceStore(app) {
         if (fs.existsSync(technicalPlanFile)) {
           fs.unlinkSync(technicalPlanFile);
         }
+        deleteImportedImageBatches(app, 'technical-plan');
         return { success: true, message: '技术方案缓存已清空', file_path: technicalPlanFile };
       } catch (error) {
         throw new Error(`技术方案缓存清空失败：${error.message}`);
+      }
+    },
+
+    loadDuplicateCheck() {
+      if (!fs.existsSync(duplicateCheckFile)) {
+        return null;
+      }
+
+      try {
+        const raw = fs.readFileSync(duplicateCheckFile, 'utf-8');
+        return JSON.parse(raw);
+      } catch (error) {
+        throw new Error(`标书查重缓存读取失败：${error.message}`);
+      }
+    },
+
+    saveDuplicateCheck(state) {
+      try {
+        fs.mkdirSync(path.dirname(duplicateCheckFile), { recursive: true });
+        fs.writeFileSync(duplicateCheckFile, JSON.stringify(state, null, 2), 'utf-8');
+        return { success: true, message: '标书查重缓存已保存', file_path: duplicateCheckFile };
+      } catch (error) {
+        throw new Error(`标书查重缓存保存失败：${error.message}`);
+      }
+    },
+
+    updateDuplicateCheck(partial) {
+      const prev = this.loadDuplicateCheck() || {};
+      const next = { ...prev, ...partial };
+      this.saveDuplicateCheck(next);
+      return next;
+    },
+
+    clearDuplicateCheck() {
+      try {
+        if (fs.existsSync(duplicateCheckFile)) {
+          fs.unlinkSync(duplicateCheckFile);
+        }
+        if (fs.existsSync(duplicateCheckDir)) {
+          fs.rmSync(duplicateCheckDir, { recursive: true, force: true });
+        }
+        deleteImportedImageBatches(app, 'duplicate-check-content');
+        return { success: true, message: '标书查重缓存已清空', file_path: duplicateCheckFile };
+      } catch (error) {
+        throw new Error(`标书查重缓存清空失败：${error.message}`);
       }
     },
   };

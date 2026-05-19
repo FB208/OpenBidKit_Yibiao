@@ -1,5 +1,5 @@
 import type { AiStreamEvent, ChatCompletionRequest, JsonCompletionRequest } from './ai';
-import type { FileImportResult } from './bid';
+import type { DuplicateCheckWorkspaceState, DuplicateMetadataAnalysisState, FileImportResult, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseMutationResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 
@@ -32,12 +32,23 @@ export interface LatestReleaseInfo {
   html_url: string;
 }
 
+export interface UpdateCheckResult {
+  enabled: boolean;
+  updateAvailable: boolean;
+  version?: string;
+  downloaded?: boolean;
+  failed?: boolean;
+  message?: string;
+}
+
 export interface YibiaoBridge {
   appName: string;
   platform: string;
   getVersion: () => Promise<string>;
   getLatestVersion: () => Promise<LatestReleaseInfo>;
-  startUpdate: () => Promise<void>;
+  openExternal: (url: string) => Promise<{ success: boolean; message?: string }>;
+  checkUpdate: () => Promise<UpdateCheckResult>;
+  startUpdate: () => Promise<UpdateCheckResult>;
   quitAndInstall: () => Promise<void>;
   onUpdateProgress: (callback: (event: { percent: number }) => void) => () => void;
   onUpdateDownloaded: (callback: (event: { version: string }) => void) => () => void;
@@ -45,7 +56,7 @@ export interface YibiaoBridge {
   config: {
     load: () => Promise<ClientConfig>;
     save: (config: ClientConfig) => Promise<ConfigSaveResult>;
-    listModels: () => Promise<ModelListResult>;
+    listModels: (config?: ClientConfig) => Promise<ModelListResult>;
     openConfigFolder: () => Promise<{ success: boolean; path: string }>;
   };
   ai: {
@@ -56,6 +67,7 @@ export interface YibiaoBridge {
   };
   file: {
     importDocument: () => Promise<FileImportResult>;
+    selectDuplicateCheckFiles: (options?: { multiple?: boolean }) => Promise<FileSelectionResult>;
   };
   knowledgeBase: {
     list: () => Promise<KnowledgeBaseIndex>;
@@ -70,11 +82,18 @@ export interface YibiaoBridge {
     readAnalysis: (documentId: string) => Promise<KnowledgeAnalysisSnapshot>;
     onEvent: (callback: (event: KnowledgeBaseEvent) => void) => () => void;
   };
+  duplicateCheck: {
+    startMetadataAnalysis: (payload: { tenderFile: DuplicateCheckWorkspaceState['tenderFile']; bidFiles: DuplicateCheckWorkspaceState['bidFiles']; force?: boolean }) => Promise<DuplicateMetadataAnalysisState>;
+    onEvent: (callback: (event: { duplicateCheck: DuplicateCheckWorkspaceState }) => void) => () => void;
+  };
   workspace: {
     loadTechnicalPlan: <TState = unknown>() => Promise<TState | null>;
     saveTechnicalPlan: (state: unknown) => Promise<unknown>;
     updateTechnicalPlan: <TState = unknown>(partial: unknown) => Promise<TState>;
     clearTechnicalPlan: () => Promise<unknown>;
+    loadDuplicateCheck: () => Promise<DuplicateCheckWorkspaceState | null>;
+    saveDuplicateCheck: (state: DuplicateCheckWorkspaceState) => Promise<unknown>;
+    clearDuplicateCheck: () => Promise<unknown>;
   };
   tasks: {
     startBidAnalysis: (payload: unknown) => Promise<unknown>;

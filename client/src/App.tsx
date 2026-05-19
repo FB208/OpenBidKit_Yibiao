@@ -1,21 +1,22 @@
 import { useEffect, useState } from 'react';
 import AppRouter from './app/AppRouter';
-import { buildToolbarGroups } from './app/toolbarConfig';
+import UpdateNotifier from './app/UpdateNotifier';
 import AppShell from './components/AppShell';
-import { trackAppOpen, trackPageView } from './shared/analytics/analytics';
-import { FloatingToolbar } from './shared/ui';
+import { trackAppOpen, trackConfigUsage, trackPageView } from './shared/analytics/analytics';
 import type { SectionId } from './shared/types/navigation';
 
 function App() {
   const [activeSection, setActiveSection] = useState<SectionId>('technical-plan');
   const [developerMode, setDeveloperMode] = useState(false);
-  const toolbarGroups = buildToolbarGroups({ activeSection, developerMode, onSectionChange: setActiveSection });
 
   useEffect(() => {
     trackAppOpen();
 
     void window.yibiao?.config.load()
-      .then((config) => setDeveloperMode(Boolean(config?.developer_mode)))
+      .then((config) => {
+        setDeveloperMode(Boolean(config?.developer_mode));
+        trackConfigUsage({}, config);
+      })
       .catch((error) => console.warn('读取开发者模式失败', error));
   }, []);
 
@@ -30,14 +31,16 @@ function App() {
   }, [activeSection, developerMode]);
 
   return (
-    <AppShell
-      activeSection={activeSection}
-      developerMode={developerMode}
-      toolbar={<FloatingToolbar groups={toolbarGroups} />}
-      onSectionChange={setActiveSection}
-    >
-      <AppRouter activeSection={activeSection} onDeveloperModeChange={setDeveloperMode} />
-    </AppShell>
+    <>
+      <UpdateNotifier />
+      <AppShell
+        activeSection={activeSection}
+        developerMode={developerMode}
+        onSectionChange={setActiveSection}
+      >
+        <AppRouter activeSection={activeSection} onDeveloperModeChange={setDeveloperMode} />
+      </AppShell>
+    </>
   );
 }
 

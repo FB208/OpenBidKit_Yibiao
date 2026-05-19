@@ -27,9 +27,13 @@ analytics/
 | --- | --- | --- |
 | `GET /health` | 检查 API Worker | 无 |
 | `POST /track` | 上报埋点 | 无 |
+| `GET /notice` | 客户端读取最新公告 | 无 |
 | `GET /api/projects` | 查询最近 90 天出现过的项目名 | `ADMIN_TOKEN` |
 | `GET /api/summary` | 查询每日统计、页面排行、版本分布 | `ADMIN_TOKEN` |
 | `GET /api/latest` | 查询最近事件 | `ADMIN_TOKEN` |
+| `GET /api/notice` | 读取当前项目公告 | `ADMIN_TOKEN` |
+| `POST /api/notice` | 发布或更新当前项目公告 | `ADMIN_TOKEN` |
+| `DELETE /api/notice` | 停用当前项目公告 | `ADMIN_TOKEN` |
 
 事件类型：
 
@@ -45,6 +49,7 @@ analytics/
 3. 输入 Worker Secret 中配置的 `ADMIN_TOKEN`。
 4. 输入项目名，例如 `yibiao-client`。
 5. 点击“刷新”。
+6. 如需发布客户端公告，在“公告管理”中填写标题和 Markdown 内容后点击“发布公告”。
 
 ## 二、首次部署
 
@@ -55,6 +60,48 @@ analytics/
 3. 点击 `Enable`。
 
 Dataset 不需要手动创建，第一次写入后会自动创建 `agnet_analytics`。
+
+### 1.1 创建公告 KV
+
+客户端公告保存到 Cloudflare KV，绑定名固定为 `NOTICE_STORE`。
+
+`analytics/worker` 部署前会自动运行 `setup:notice-kv`：如果 `wrangler.jsonc` 已有 `NOTICE_STORE` 的 id，会直接复用；如果 Cloudflare 账号下已有同名 namespace，会自动复用；否则会自动创建并把 id 写入本次部署环境中的 `wrangler.jsonc` 后继续部署。
+
+自动创建要求执行部署的 CI 环境具备 Cloudflare 凭据：
+
+| 变量 | 说明 |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | 需要具备 Workers KV namespace 读写和 Worker 部署权限 |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Account ID，避免 Wrangler 在非交互环境选择账号 |
+
+如果凭据只配置在 GitHub Actions Secrets，而当前部署跑在 Cloudflare Workers Builds 中，Cloudflare 构建环境读取不到 GitHub Secrets。此时要么把同名变量也配置到 Cloudflare Worker 的构建环境变量，要么改用 GitHub Actions 执行 `npm run deploy`。
+
+本地首次启用时，也可以在登录 Wrangler 后手动运行：
+
+```powershell
+cd analytics\worker
+npm run setup:notice-kv
+```
+
+脚本会优先查询并复用现有 namespace；不存在时才执行 `wrangler kv namespace create NOTICE_STORE`，并把 namespace id 写入 `analytics/worker/wrangler.jsonc` 的 `kv_namespaces`。
+
+如果需要手动配置，也可以运行：
+
+```powershell
+cd analytics\worker
+npx wrangler kv namespace create NOTICE_STORE
+```
+
+然后在 `analytics/worker/wrangler.jsonc` 中加入：
+
+```jsonc
+"kv_namespaces": [
+  {
+    "binding": "NOTICE_STORE",
+    "id": "<上一步输出的 namespace id>"
+  }
+]
+```
 
 ### 2. 创建 Analytics API Token
 
@@ -85,6 +132,7 @@ Dataset 不需要手动创建，第一次写入后会自动创建 `agnet_analyti
 | 自定义域名 | `analytics.agnet.top` |
 | Analytics Engine binding | `ANALYTICS` |
 | Analytics Engine dataset | `agnet_analytics` |
+| 公告 KV binding | `NOTICE_STORE`（部署前自动创建或复用） |
 | 变量保留 | `keep_vars: true`，避免部署覆盖后台配置 |
 
 部署后在 Worker 的 `Settings -> Variables and Secrets` 配置 Secret：
@@ -169,6 +217,41 @@ Invoke-RestMethod `
 
 Analytics Engine 写入后可能需要等待几十秒才能查到。
 
+发布公告：
+
+```powershell
+Invoke-RestMethod `
+  -Uri "https://analytics.agnet.top/api/notice" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Headers @{ Authorization = "Bearer <ADMIN_TOKEN>" } `
+  -Body '{"projectName":"yibiao-client","title":"公告标题","content":"## Markdown 公告内容","enabled":true}'
+```
+
+客户端读取公告：
+
+```powershell
+Invoke-RestMethod -Uri "https://analytics.agnet.top/notice?projectName=yibiao-client"
+```
+
+### 6. 查看 Worker 错误日志
+
+本地登录 Cloudflare 后，可实时查看 API Worker 日志：
+
+```powershell
+cd analytics\worker
+npx wrangler tail agnet-analytics-api --format pretty
+```
+
+如果尚未登录，先执行：
+
+```powershell
+cd analytics\worker
+npx wrangler login
+```
+
+查询接口失败时，Worker 会输出类似 `[analytics] summary query failed ...` 的错误日志。
+
 ## 三、接入新项目
 
 不需要修改 Worker 配置。任意合法 `projectName` 都可以直接上报和查询。
@@ -237,9 +320,33 @@ track('page_view', {
 | 问题 | 处理 |
 | --- | --- |
 | `unauthorized` | 检查统计页面输入的 `ADMIN_TOKEN` 是否与 Worker Secret 一致 |
+| `NOTICE_STORE is not configured` | 检查部署环境是否有 `CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID`；或本地运行 `cd analytics\worker; npm run setup:notice-kv` 后重新部署 Worker |
 | `invalid projectName` | 检查项目名格式 |
 | `invalid event` | 仅支持 `app_open`、`page_view` |
 | `missing page` | `page_view` 必须传 `page` |
 | 查询为空 | 先上报测试数据，等待几十秒再查 |
 | 自定义域名未生效 | 检查对应 Worker 的 `Settings -> Domains & Routes` 和 `wrangler.jsonc` |
 | 绑定不存在 | 检查 API Worker 的 `Settings -> Bindings` 是否存在 `ANALYTICS` |
+
+## 五、自动部署触发规则
+
+Cloudflare Workers Builds 会在生产分支推送时触发构建。仓库里已将两个项目的 `deploy` 命令改为按目录校验：
+
+| Worker | 监听目录 |
+| --- | --- |
+| `agnet-analytics-api` | `analytics/worker` |
+| `agnet-analytics-dashboard` | `analytics/dashboard` |
+
+如果本次提交没有修改对应目录，构建会成功结束，但不会执行 `wrangler deploy`。
+
+如果需要强制重新部署，在 Cloudflare 的 Deploy command 临时改为：
+
+```text
+FORCE_DEPLOY=1 npm run deploy
+```
+
+重试成功后再改回：
+
+```text
+npm run deploy
+```

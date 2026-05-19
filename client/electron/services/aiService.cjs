@@ -37,6 +37,34 @@ function writeAiLog(app, config, payload) {
   fs.writeFileSync(path.join(logsDir, fileName), JSON.stringify(payload, null, 2), 'utf-8');
 }
 
+function responseMeta(response) {
+  if (!response) {
+    return null;
+  }
+
+  const headers = {};
+  response.headers?.forEach?.((value, key) => {
+    const normalizedKey = String(key || '').toLowerCase();
+    if (['authorization', 'cookie', 'set-cookie', 'x-api-key'].includes(normalizedKey)) {
+      return;
+    }
+    headers[normalizedKey] = value;
+  });
+
+  return {
+    status: response.status,
+    status_text: response.statusText,
+    headers,
+  };
+}
+
+function normalizeAiError(error, fallbackMessage) {
+  if (error?.name === 'AbortError') {
+    return `AI 请求超时（${AI_REQUEST_TIMEOUT_MS / 1000} 秒）`;
+  }
+  return error?.message || String(error || '') || fallbackMessage;
+}
+
 function createHeaders(apiKey) {
   return {
     'Content-Type': 'application/json',
@@ -475,6 +503,26 @@ async function streamChatWithConfig(app, config, request, onEvent) {
   let requestBody = createChatRequestBody(config, request, { stream: true });
   const rawEvents = [];
   const contentParts = [];
+  const startedAt = Date.now();
+  let response = null;
+  let responseMetadata = null;
+  let phase = 'request';
+  let ignoredSseLineCount = 0;
+  let lastIgnoredSseLine = '';
+
+  function streamStats() {
+    const partialContent = contentParts.join('');
+    return {
+      phase,
+      elapsed_ms: Date.now() - startedAt,
+      raw_event_count: rawEvents.length,
+      ignored_sse_line_count: ignoredSseLineCount,
+      last_ignored_sse_line: lastIgnoredSseLine,
+      partial_content_chars: partialContent.length,
+      partial_content_tail: partialContent.slice(-2000),
+      response_meta: responseMetadata,
+    };
+  }
 
   writeAiLog(app, config, {
     request_id: requestId,
@@ -482,79 +530,112 @@ async function streamChatWithConfig(app, config, request, onEvent) {
     url: `${trimBaseUrl(config.base_url)}/chat/completions`,
     request: requestBody,
     status: 'pending',
+    diagnostics: streamStats(),
     created_at: new Date().toISOString(),
   });
 
-  let response = await fetchChatCompletion(config, requestBody);
-
   try {
+    phase = 'fetching-response';
+    response = await fetchChatCompletion(config, requestBody);
+    responseMetadata = responseMeta(response);
+
+    phase = 'checking-response-status';
     if (!response.ok && request.response_format) {
       const detail = await response.text().catch(() => '');
       if (isResponseFormatUnsupported(detail)) {
+        phase = 'retrying-without-response-format';
         requestBody = createChatRequestBody(config, request, { stream: true, omitResponseFormat: true });
         response = await fetchChatCompletion(config, requestBody);
+        responseMetadata = responseMeta(response);
       } else {
         throw new Error(detail || 'AI 流式请求失败');
       }
     }
 
     await ensureOk(response, 'AI 流式请求失败');
+
+    phase = 'stream-open';
+    writeAiLog(app, config, {
+      request_id: requestId,
+      type: 'stream-open',
+      url: `${trimBaseUrl(config.base_url)}/chat/completions`,
+      request: requestBody,
+      response_meta: responseMetadata,
+      diagnostics: streamStats(),
+      created_at: new Date().toISOString(),
+    });
+
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    const emitLine = (line) => {
+      if (!line.startsWith('data:')) {
+        return;
+      }
+
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') {
+        return;
+      }
+
+      try {
+        const data = JSON.parse(payload);
+        rawEvents.push(data);
+        const chunk = data.choices?.[0]?.delta?.content || '';
+        if (chunk) {
+          contentParts.push(chunk);
+          onEvent({ type: 'chunk', chunk });
+        }
+      } catch {
+        ignoredSseLineCount += 1;
+        lastIgnoredSseLine = payload.slice(0, 1000);
+        // 忽略供应商偶发的非 JSON SSE 行，避免中断已返回内容。
+      }
+    };
+
+    if (!response.body) {
+      throw new Error('AI 流式响应体为空');
+    }
+
+    phase = 'reading-stream';
+    for await (const chunk of response.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+      lines.forEach((line) => emitLine(line.trim()));
+    }
+
+    phase = 'flushing-stream-buffer';
+    buffer.split(/\r?\n/).forEach((line) => emitLine(line.trim()));
+
+    phase = 'done';
+    writeAiLog(app, config, {
+      request_id: requestId,
+      type: 'stream',
+      url: `${trimBaseUrl(config.base_url)}/chat/completions`,
+      request: requestBody,
+      response: rawEvents,
+      response_meta: responseMetadata,
+      diagnostics: streamStats(),
+      content: contentParts.join(''),
+      created_at: new Date().toISOString(),
+    });
+    onEvent({ type: 'done' });
   } catch (error) {
+    const message = normalizeAiError(error, 'AI 流式请求失败');
     writeAiLog(app, config, {
       request_id: requestId,
       type: 'stream-error',
       url: `${trimBaseUrl(config.base_url)}/chat/completions`,
       request: requestBody,
-      error: error.message,
+      response: rawEvents,
+      response_meta: responseMetadata,
+      error: message,
+      diagnostics: streamStats(),
       created_at: new Date().toISOString(),
     });
-    throw error;
+    throw new Error(message);
   }
-
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-
-  const emitLine = (line) => {
-    if (!line.startsWith('data:')) {
-      return;
-    }
-
-    const payload = line.slice(5).trim();
-    if (!payload || payload === '[DONE]') {
-      return;
-    }
-
-    try {
-      const data = JSON.parse(payload);
-      rawEvents.push(data);
-      const chunk = data.choices?.[0]?.delta?.content || '';
-      if (chunk) {
-        contentParts.push(chunk);
-        onEvent({ type: 'chunk', chunk });
-      }
-    } catch {
-      // 忽略供应商偶发的非 JSON SSE 行，避免中断已返回内容。
-    }
-  };
-
-  for await (const chunk of response.body) {
-    buffer += decoder.decode(chunk, { stream: true });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || '';
-    lines.forEach((line) => emitLine(line.trim()));
-  }
-
-  buffer.split(/\r?\n/).forEach((line) => emitLine(line.trim()));
-  writeAiLog(app, config, {
-    request_id: requestId,
-    type: 'stream',
-    url: `${trimBaseUrl(config.base_url)}/chat/completions`,
-    request: requestBody,
-    response: rawEvents,
-    content: contentParts.join(''),
-    created_at: new Date().toISOString(),
-  });
-  onEvent({ type: 'done' });
 }
 
 async function testVolcengineImageModel(config) {
@@ -845,8 +926,8 @@ function createAiService({ app, configStore }) {
       return generateImageWithConfig(app, config, request);
     },
 
-    async listModels() {
-      const config = configStore.load();
+    async listModels(configOverride) {
+      const config = configOverride || configStore.load();
 
       if (!config.api_key) {
         return { success: false, message: '请先填写文本模型 API Key', models: [] };

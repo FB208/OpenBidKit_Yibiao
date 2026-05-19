@@ -1,7 +1,8 @@
-const { ipcMain } = require('electron');
+const { ipcMain, shell } = require('electron');
 const https = require('node:https');
 const { registerAiIpc } = require('./aiIpc.cjs');
 const { registerConfigIpc } = require('./configIpc.cjs');
+const { registerDuplicateCheckIpc } = require('./duplicateCheckIpc.cjs');
 const { registerExportIpc } = require('./exportIpc.cjs');
 const { registerFileIpc } = require('./fileIpc.cjs');
 const { registerKnowledgeBaseIpc } = require('./knowledgeBaseIpc.cjs');
@@ -9,30 +10,61 @@ const { registerTaskIpc } = require('./taskIpc.cjs');
 const { registerWorkspaceIpc } = require('./workspaceIpc.cjs');
 const { createAiService } = require('../services/aiService.cjs');
 const { createConfigStore } = require('../services/configStore.cjs');
+const { createDuplicateCheckService } = require('../services/duplicateCheckService.cjs');
 const { createExportService } = require('../services/exportService.cjs');
 const { createFileService } = require('../services/fileService.cjs');
 const { createKnowledgeBaseService } = require('../services/knowledgeBaseService.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
 const { createWorkspaceStore } = require('../services/workspaceStore.cjs');
 
-function registerIpcHandlers({ app, mainWindow, triggerUpdateDownload, quitAndInstall }) {
+function normalizeExternalUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const candidate = /^www\./i.test(raw) ? `https://${raw}` : raw;
+
+  try {
+    const url = new URL(candidate);
+    return ['http:', 'https:'].includes(url.protocol) ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall }) {
   const configStore = createConfigStore(app);
   const aiService = createAiService({ app, configStore });
-  const fileService = createFileService({ configStore });
+  const fileService = createFileService({ app, configStore });
   const exportService = createExportService();
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore });
   const workspaceStore = createWorkspaceStore(app);
+  const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore });
   const taskService = createTaskService({ aiService, workspaceStore, knowledgeBaseService });
 
   registerConfigIpc({ configStore, aiService });
   registerAiIpc({ aiService });
   registerFileIpc({ fileService });
+  registerDuplicateCheckIpc({ duplicateCheckService });
   registerKnowledgeBaseIpc({ knowledgeBaseService });
   registerExportIpc({ exportService });
   registerWorkspaceIpc({ workspaceStore });
   registerTaskIpc({ taskService });
 
   ipcMain.handle('app:get-version', () => app.getVersion());
+
+  ipcMain.handle('app:open-external', async (_event, url) => {
+    const externalUrl = normalizeExternalUrl(url);
+    if (!externalUrl) {
+      return { success: false, message: '不支持的外部链接' };
+    }
+    try {
+      await shell.openExternal(externalUrl);
+      return { success: true };
+    } catch (error) {
+      const preview = externalUrl.length > 300 ? `${externalUrl.slice(0, 300)}...` : externalUrl;
+      console.warn('[app] 打开外部链接失败', { url: preview, message: error.message || String(error) });
+      return { success: false, message: '外部链接打开失败' };
+    }
+  });
 
   ipcMain.handle('app:get-latest-version', () => {
     return new Promise((resolve, reject) => {
@@ -66,9 +98,27 @@ function registerIpcHandlers({ app, mainWindow, triggerUpdateDownload, quitAndIn
     quitAndInstall();
   });
 
+  ipcMain.handle('app:check-update', (event) => {
+    const webContents = event.sender;
+    return checkAndDownloadUpdate({
+      app,
+      mainWindow,
+      onProgress: (percent) => {
+        webContents.send('app:update-progress', { percent });
+      },
+      onDownloaded: (version) => {
+        webContents.send('app:update-downloaded', { version });
+      },
+      onError: (message) => {
+        webContents.send('app:update-error', { message });
+      },
+    });
+  });
+
   ipcMain.handle('app:start-update', (event) => {
     const webContents = event.sender;
-    triggerUpdateDownload({
+    return triggerUpdateDownload({
+      app,
       mainWindow,
       onProgress: (percent) => {
         webContents.send('app:update-progress', { percent });

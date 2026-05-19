@@ -19,6 +19,9 @@ const MARKDOWN_SUFFIXES = new Set(['.md', '.markdown']);
 const DOCX_SUFFIXES = new Set(['.docx']);
 const PDF_SUFFIXES = new Set(['.pdf']);
 const LEGACY_WORD_SUFFIXES = new Set(['.doc', '.wps']);
+const PDF_HEADER = Buffer.from('%PDF-');
+const ZIP_LOCAL_FILE_HEADER = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+const OLE_COMPOUND_HEADER = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
 const MARKDOWN_IMAGE_PATTERN = /!\[(?<alt>[^\]]*)\]\((?<target><[^>]+>|[^)\s]+)(?<title>\s+"[^"]*")?\)/gi;
 const PDF_POINT_TOLERANCE = 2.5;
 const PDF_GRID_MIN_LINE_LENGTH = 12;
@@ -42,19 +45,20 @@ export class ConversionError extends Error {
 export async function convertPathToMarkdown(inputPath, options = {}) {
   const resolvedPath = path.resolve(inputPath);
   const includeImages = Boolean(options.includeImages);
+  const imageResolver = typeof options.imageResolver === 'function' ? options.imageResolver : null;
   const format = await detectFileFormat(resolvedPath);
 
   if (format === 'markdown') {
-    return convertMarkdownFile(resolvedPath, includeImages);
+    return convertMarkdownFile(resolvedPath, includeImages, imageResolver);
   }
   if (format === 'docx') {
-    return convertDocxFile(resolvedPath, includeImages);
+    return convertDocxFile(resolvedPath, includeImages, imageResolver);
   }
   if (format === 'pdf') {
-    return convertPdfFile(resolvedPath, includeImages);
+    return convertPdfFile(resolvedPath, includeImages, imageResolver);
   }
   if (format === 'legacy_word') {
-    return convertLegacyWordFile(resolvedPath, includeImages);
+    return convertLegacyWordFile(resolvedPath, includeImages, imageResolver);
   }
 
   throw new ConversionError('unsupported_format', '不支持的文件格式', {
@@ -67,19 +71,40 @@ export async function detectFileFormat(inputPath) {
   const suffix = path.extname(inputPath).toLowerCase();
   const header = await readFileHeader(inputPath, 8);
 
+  if (isPdfHeader(header)) {
+    return 'pdf';
+  }
+  if (isZipHeader(header)) {
+    return 'docx';
+  }
+  if (isOleCompoundHeader(header)) {
+    return 'legacy_word';
+  }
   if (MARKDOWN_SUFFIXES.has(suffix)) {
     return 'markdown';
   }
-  if (PDF_SUFFIXES.has(suffix) || header.subarray(0, 5).toString() === '%PDF-') {
+  if (PDF_SUFFIXES.has(suffix)) {
     return 'pdf';
   }
-  if (DOCX_SUFFIXES.has(suffix) || header.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))) {
+  if (DOCX_SUFFIXES.has(suffix)) {
     return 'docx';
   }
-  if (LEGACY_WORD_SUFFIXES.has(suffix) || header.equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))) {
+  if (LEGACY_WORD_SUFFIXES.has(suffix)) {
     return 'legacy_word';
   }
   return 'unknown';
+}
+
+function isPdfHeader(header) {
+  return header.subarray(0, PDF_HEADER.length).equals(PDF_HEADER);
+}
+
+function isZipHeader(header) {
+  return header.subarray(0, ZIP_LOCAL_FILE_HEADER.length).equals(ZIP_LOCAL_FILE_HEADER);
+}
+
+function isOleCompoundHeader(header) {
+  return header.subarray(0, OLE_COMPOUND_HEADER.length).equals(OLE_COMPOUND_HEADER);
 }
 
 async function readFileHeader(inputPath, bytes) {
@@ -87,7 +112,7 @@ async function readFileHeader(inputPath, bytes) {
   return buffer.subarray(0, bytes);
 }
 
-async function convertMarkdownFile(inputPath, includeImages) {
+async function convertMarkdownFile(inputPath, includeImages, imageResolver) {
   const raw = await readFile(inputPath);
   const detected = chardet.detect(raw) || 'UTF-8';
   let text = iconv.decode(raw, normalizeEncoding(detected));
@@ -95,7 +120,7 @@ async function convertMarkdownFile(inputPath, includeImages) {
   text = normalizeNewlinesOnly(text);
 
   if (includeImages) {
-    text = await inlineLocalMarkdownImages(text, path.dirname(inputPath));
+    text = await inlineLocalMarkdownImages(text, path.dirname(inputPath), imageResolver);
   } else {
     text = stripMarkdownImages(text);
   }
@@ -113,10 +138,10 @@ function normalizeEncoding(value) {
   return value;
 }
 
-async function convertDocxFile(inputPath, includeImages) {
+async function convertDocxFile(inputPath, includeImages, imageResolver) {
   const result = await mammoth.convertToHtml(
     { path: inputPath },
-    { convertImage: buildMammothImageConverter(includeImages) }
+    { convertImage: buildMammothImageConverter(includeImages, imageResolver) }
   );
   const html = cleanHtml(result.value, includeImages);
   const { html: htmlWithoutTables, placeholders } = preserveTables(html);
@@ -125,11 +150,18 @@ async function convertDocxFile(inputPath, includeImages) {
   return normalizeGeneratedMarkdown(includeImages ? markdown : stripMarkdownImages(markdown));
 }
 
-function buildMammothImageConverter(includeImages) {
+function buildMammothImageConverter(includeImages, imageResolver) {
   return mammoth.images.imgElement(async (image) => {
     if (!includeImages) {
       return { src: '' };
     }
+
+    if (imageResolver) {
+      const buffer = await image.readAsBuffer();
+      const src = await imageResolver({ buffer, mime: image.contentType, sourceName: 'docx-image' });
+      return { src: src || '' };
+    }
+
     const base64 = await image.readAsBase64String();
     return { src: `data:${image.contentType};base64,${base64}` };
   });
@@ -147,6 +179,13 @@ function cleanHtml(html, includeImages) {
     }
     if (href.startsWith('#')) {
       anchor.replaceWith(anchor.contents());
+    }
+  });
+
+  $('img').each((_, element) => {
+    const image = $(element);
+    if (!image.attr('src')) {
+      image.remove();
     }
   });
 
@@ -186,7 +225,7 @@ function restoreTables(markdown, placeholders) {
   return restored;
 }
 
-async function convertPdfFile(inputPath, includeImages) {
+async function convertPdfFile(inputPath, includeImages, imageResolver) {
   const buffer = await readFile(inputPath);
   const parser = new PDFParse({ data: buffer });
 
@@ -195,7 +234,7 @@ async function convertPdfFile(inputPath, includeImages) {
     const tableResult = await safePdfCall(() => parser.getTable());
     const pdfJsTableResult = await safePdfCall(() => extractPdfJsTables(buffer));
     const imageResult = includeImages ? await safePdfCall(() => parser.getImage()) : null;
-    const markdown = renderPdfMarkdown(textResult, tableResult, pdfJsTableResult, imageResult, includeImages);
+    const markdown = await renderPdfMarkdown(textResult, tableResult, pdfJsTableResult, imageResult, includeImages, imageResolver);
 
     if (!hasInformativeText(markdown)) {
       throw new ConversionError('pdf_text_layer_missing', 'PDF 未检测到可选中文字层', {
@@ -521,7 +560,7 @@ function renderPdfJsCellText(items) {
     .join('<br>');
 }
 
-function renderPdfMarkdown(textResult, tableResult, pdfJsTableResult, imageResult, includeImages) {
+async function renderPdfMarkdown(textResult, tableResult, pdfJsTableResult, imageResult, includeImages, imageResolver) {
   const textPages = Array.isArray(textResult?.pages) ? textResult.pages : [];
   const tablePages = Array.isArray(tableResult?.pages) ? tableResult.pages : [];
   const pdfJsTablePages = Array.isArray(pdfJsTableResult?.pages) ? pdfJsTableResult.pages : [];
@@ -555,7 +594,8 @@ function renderPdfMarkdown(textResult, tableResult, pdfJsTableResult, imageResul
       for (let imageIndex = 0; imageIndex < images.length; imageIndex += 1) {
         const dataUrl = images[imageIndex]?.dataUrl;
         if (dataUrl) {
-          pageParts.push(`![Page ${index + 1} Image ${imageIndex + 1}](${dataUrl})`);
+          const assetUrl = imageResolver ? await resolveDataUrlImage(dataUrl, imageResolver, `pdf-page-${index + 1}-image-${imageIndex + 1}`) : null;
+          pageParts.push(`![Page ${index + 1} Image ${imageIndex + 1}](${assetUrl || dataUrl})`);
         }
       }
     }
@@ -684,7 +724,7 @@ function renderMarkdownTableRow(row) {
   return `|${row.join('|')}|`;
 }
 
-async function convertLegacyWordFile(inputPath, includeImages) {
+export async function withLegacyWordDocxFile(inputPath, callback) {
   const soffice = await findLibreOfficeCommand();
   if (!soffice) {
     throw new ConversionError('office_backend_missing', '未找到 LibreOffice，无法转换 DOC/WPS 文件', {
@@ -694,7 +734,7 @@ async function convertLegacyWordFile(inputPath, includeImages) {
 
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'doc2md-node-'));
   try {
-    const legacyInput = path.join(tempDir, `${safeStem(inputPath)}${path.extname(inputPath).toLowerCase() || '.doc'}`);
+    const legacyInput = path.join(tempDir, `${safeStem(inputPath)}${await getLegacyConversionSuffix(inputPath)}`);
     await copyFile(inputPath, legacyInput);
     await runLibreOfficeConvert(soffice, legacyInput, tempDir);
     const files = await readdir(tempDir);
@@ -704,10 +744,23 @@ async function convertLegacyWordFile(inputPath, includeImages) {
         inputPath,
       });
     }
-    return convertDocxFile(path.join(tempDir, docxName), includeImages);
+    return await callback(path.join(tempDir, docxName), tempDir);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+}
+
+async function convertLegacyWordFile(inputPath, includeImages, imageResolver) {
+  return withLegacyWordDocxFile(inputPath, (docxPath) => convertDocxFile(docxPath, includeImages, imageResolver));
+}
+
+async function getLegacyConversionSuffix(inputPath) {
+  const suffix = path.extname(inputPath).toLowerCase();
+  const header = await readFileHeader(inputPath, 8);
+  if (DOCX_SUFFIXES.has(suffix) && isOleCompoundHeader(header)) {
+    return '.doc';
+  }
+  return suffix || '.doc';
 }
 
 async function findLibreOfficeCommand() {
@@ -894,10 +947,10 @@ function stripMarkdownImages(text) {
     .replace(/\n{3,}/g, '\n\n');
 }
 
-async function inlineLocalMarkdownImages(text, baseDir) {
+async function inlineLocalMarkdownImages(text, baseDir, imageResolver) {
   const replacements = [];
   for (const match of text.matchAll(MARKDOWN_IMAGE_PATTERN)) {
-    replacements.push(replaceMarkdownImage(match, baseDir));
+    replacements.push(replaceMarkdownImage(match, baseDir, imageResolver));
   }
 
   let result = text;
@@ -909,7 +962,7 @@ async function inlineLocalMarkdownImages(text, baseDir) {
   return result;
 }
 
-async function replaceMarkdownImage(match, baseDir) {
+async function replaceMarkdownImage(match, baseDir, imageResolver) {
   const target = match.groups?.target || '';
   const cleanTarget = target.startsWith('<') && target.endsWith('>') ? target.slice(1, -1) : target;
   if (isRemoteOrDataUrl(cleanTarget)) {
@@ -921,7 +974,12 @@ async function replaceMarkdownImage(match, baseDir) {
     return null;
   }
 
-  const dataUri = await pathToDataUri(localPath);
+  const dataUri = imageResolver
+    ? await pathToAssetUri(localPath, imageResolver)
+    : await pathToDataUri(localPath);
+  if (!dataUri) {
+    return null;
+  }
   const alt = match.groups?.alt || '';
   const title = match.groups?.title || '';
   return { original: match[0], next: `![${alt}](${dataUri}${title})` };
@@ -938,16 +996,34 @@ function resolveLocalPath(baseDir, target) {
   } catch {
     decodedTarget = target;
   }
-  const candidate = path.isAbsolute(decodedTarget)
-    ? decodedTarget
-    : path.resolve(baseDir, decodedTarget);
+  if (path.isAbsolute(decodedTarget)) {
+    return null;
+  }
+  const resolvedBaseDir = path.resolve(baseDir);
+  const candidate = path.resolve(resolvedBaseDir, decodedTarget);
+  const relative = path.relative(resolvedBaseDir, candidate);
+  if (relative && (relative.startsWith('..') || path.isAbsolute(relative))) {
+    return null;
+  }
   return existsSync(candidate) ? candidate : null;
+}
+
+async function pathToAssetUri(inputPath, imageResolver) {
+  const mimeType = lookupMimeType(inputPath) || 'application/octet-stream';
+  const buffer = await readFile(inputPath);
+  return imageResolver({ buffer, mime: mimeType, sourceName: inputPath });
 }
 
 async function pathToDataUri(inputPath) {
   const mimeType = lookupMimeType(inputPath) || 'application/octet-stream';
   const data = await readFile(inputPath);
   return `data:${mimeType};base64,${data.toString('base64')}`;
+}
+
+async function resolveDataUrlImage(dataUrl, imageResolver, sourceName) {
+  const match = /^data:([^;,]+);base64,(.+)$/i.exec(String(dataUrl || ''));
+  if (!match) return null;
+  return imageResolver({ buffer: Buffer.from(match[2], 'base64'), mime: match[1], sourceName });
 }
 
 function safeStem(inputPath) {

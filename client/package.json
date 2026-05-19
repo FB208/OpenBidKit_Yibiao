@@ -89,6 +89,7 @@
     "@radix-ui/react-toast": "^1.2.15",
     "@radix-ui/react-tooltip": "^1.2.8",
     "adm-zip": "^0.5.17",
+    "cfb": "^1.2.2",
     "chardet": "^2.1.1",
     "cheerio": "^1.2.0",
     "docx": "^9.6.1",

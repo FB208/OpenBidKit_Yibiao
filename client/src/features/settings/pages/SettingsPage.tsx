@@ -1,22 +1,13 @@
 import { useEffect, useState } from 'react';
+import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, useToast } from '../../../shared/ui';
+import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProvider, ImageModelStatus, LatestReleaseInfo } from '../../../shared/types';
+import type { ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProvider, ImageModelStatus } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'about';
-
-function compareVersions(a: string, b: string): number {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = pa[i] || 0;
-    const nb = pb[i] || 0;
-    if (na > nb) return 1;
-    if (na < nb) return -1;
-  }
-  return 0;
-}
+type UpdateStatus = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'error' | 'disabled';
 
 const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
   { id: 'general', label: '通用' },
@@ -151,6 +142,7 @@ const initialState: SettingsPageState = {
   },
   general: {
     developer_mode: false,
+    real_time_render: false,
   },
 };
 
@@ -169,16 +161,15 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [testingImageModel, setTestingImageModel] = useState(false);
   const [imageTestPreview, setImageTestPreview] = useState<{ src: string; title: string } | null>(null);
   const [appVersion, setAppVersion] = useState('');
-  const [latestRelease, setLatestRelease] = useState<LatestReleaseInfo | null>(null);
-  const [updateStatus, setUpdateStatus] = useState<'idle' | 'downloading' | 'downloaded' | 'error'>('idle');
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
   const [updatePercent, setUpdatePercent] = useState(0);
+  const [updateVersion, setUpdateVersion] = useState('');
   const [updateError, setUpdateError] = useState('');
   const { showToast } = useToast();
 
   useEffect(() => {
     void loadTextConfig();
     void window.yibiao?.getVersion().then(setAppVersion);
-    void window.yibiao?.getLatestVersion().then(setLatestRelease).catch(() => undefined);
 
     const unsubs: Array<() => void> = [];
     unsubs.push(
@@ -188,7 +179,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       }) ?? (() => {})
     );
     unsubs.push(
-      window.yibiao?.onUpdateDownloaded(() => {
+      window.yibiao?.onUpdateDownloaded(({ version }) => {
+        if (version) {
+          setUpdateVersion(version);
+        }
         setUpdateStatus('downloaded');
       }) ?? (() => {})
     );
@@ -217,9 +211,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
           model_name: config.model_name,
         },
         imageModel: config.image_model,
-        fileParser: config.file_parser,
+        fileParser: {
+          provider: config.file_parser.provider,
+          mineru_token: config.file_parser.mineru_token || '',
+        },
         general: {
           developer_mode: Boolean(config.developer_mode),
+          real_time_render: config.real_time_render === true,
         },
       }));
       setSavedConfig(config);
@@ -235,9 +233,59 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     base_url: state.textModel.base_url,
     model_name: state.textModel.model_name,
     image_model: state.imageModel,
-    file_parser: state.fileParser,
+    file_parser: {
+      provider: state.fileParser.provider,
+      mineru_token: state.fileParser.mineru_token || '',
+    },
     developer_mode: state.general.developer_mode,
+    real_time_render: state.general.real_time_render,
   });
+
+  const checkForUpdates = async () => {
+    if (updateStatus === 'checking' || updateStatus === 'downloading') {
+      return;
+    }
+
+    try {
+      setUpdateStatus('checking');
+      setUpdatePercent(0);
+      setUpdateError('');
+      const result = await window.yibiao?.checkUpdate();
+      if (!result?.enabled) {
+        setUpdateStatus('disabled');
+        showToast('开发调试模式不执行自动更新', 'info');
+        return;
+      }
+      if (result.failed) {
+        const message = result.message || '检查更新失败';
+        setUpdateStatus('error');
+        setUpdateError(message);
+        showToast(message, 'error');
+        return;
+      }
+      if (!result.updateAvailable) {
+        setUpdateStatus('idle');
+        showToast('已是最新版本', 'success');
+        return;
+      }
+
+      const version = result.version || updateVersion;
+      setUpdateVersion(version);
+      if (result.downloaded) {
+        setUpdateStatus('downloaded');
+        showUpdateReadyToast(showToast, version);
+        return;
+      }
+
+      setUpdateStatus('idle');
+      showToast('发现新版本，但更新包尚未下载完成，请稍后重试', 'info');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '检查更新失败';
+      setUpdateStatus('error');
+      setUpdateError(message);
+      showToast(message, 'error');
+    }
+  };
 
   const updateImageModelConfig = (partial: Partial<ImageModelConfig>) => {
     setState((prev) => ({
@@ -253,6 +301,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       if (result?.success) {
         setSavedConfig(config);
         onDeveloperModeChange?.(Boolean(config.developer_mode));
+        trackConfigUsage({}, config);
       }
       return Boolean(result?.success);
     } catch (error) {
@@ -272,6 +321,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       general: { ...prev.general, developer_mode: developerMode },
     }));
     onDeveloperModeChange?.(developerMode);
+  };
+
+  const updateRealTimeRender = (realTimeRender: boolean) => {
+    setState((prev) => ({
+      ...prev,
+      general: { ...prev.general, real_time_render: realTimeRender },
+    }));
   };
 
   const testTextConfig = async () => {
@@ -319,6 +375,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       await window.yibiao?.config.save(testedConfig);
       setState((prev) => ({ ...prev, imageModel: testedConfig.image_model }));
       setSavedConfig(testedConfig);
+      trackConfigUsage({}, testedConfig);
       const previewSrc = result?.image_url || (result?.image_data ? `data:${result.mime_type || 'image/png'};base64,${result.image_data}` : '');
 
       if (previewSrc) {
@@ -341,6 +398,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       await window.yibiao?.config.save(failedConfig).catch(() => undefined);
       setState((prev) => ({ ...prev, imageModel: failedConfig.image_model }));
       setSavedConfig(failedConfig);
+      trackConfigUsage({}, failedConfig);
       showToast(message, 'error');
     } finally {
       setTestingImageModel(false);
@@ -363,8 +421,17 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const fetchTextModels = async () => {
     try {
       setLoadingModels('text');
-      const result = await window.yibiao?.config.listModels();
-      setTextModels(result?.models || []);
+      const result = await window.yibiao?.config.listModels(createClientConfig());
+      const models = result?.models || [];
+      setTextModels(models);
+      if (result?.success && models.length > 0) {
+        setState((prev) => ({
+          ...prev,
+          textModel: models.includes(prev.textModel.model_name)
+            ? prev.textModel
+            : { ...prev.textModel, model_name: models[0] },
+        }));
+      }
       showToast(result?.message || `获取到 ${result?.models.length || 0} 个文本模型`, result?.success ? 'success' : 'info');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '获取文本模型失败', 'error');
@@ -391,7 +458,9 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         setImageModels(models);
         setState((prev) => ({
           ...prev,
-          imageModel: prev.imageModel.model_name ? prev.imageModel : resetImageModelStatus({ ...prev.imageModel, model_name: models[0] }),
+          imageModel: models.includes(prev.imageModel.model_name)
+            ? prev.imageModel
+            : resetImageModelStatus({ ...prev.imageModel, model_name: models[0] }),
         }));
         showToast('已载入 Google AI Studio 生图模型', 'success');
         return;
@@ -418,7 +487,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
 
     if (activeTab === 'general') {
-      return Boolean(state.general.developer_mode) !== Boolean(savedConfig.developer_mode);
+      return Boolean(state.general.developer_mode) !== Boolean(savedConfig.developer_mode)
+        || Boolean(state.general.real_time_render) !== (savedConfig.real_time_render !== false);
     }
 
     if (activeTab === 'image-model') {
@@ -485,6 +555,16 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       ]
     : [];
 
+  const updateBusy = updateStatus === 'checking' || updateStatus === 'downloading';
+  const updateStatusText = (() => {
+    if (updateStatus === 'checking') return '正在检查更新...';
+    if (updateStatus === 'downloading') return `正在下载 ${updatePercent}%`;
+    if (updateStatus === 'downloaded') return updateVersion ? `新版本 ${updateVersion} 已准备好` : '更新已准备好';
+    if (updateStatus === 'error') return `更新失败：${updateError || '未知错误'}`;
+    if (updateStatus === 'disabled') return '开发调试模式不执行自动更新';
+    return '启动后自动检查，每 30 分钟轮询';
+  })();
+
   return (
     <div className="settings-page">
       <div className="settings-page-scroll">
@@ -537,6 +617,22 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <option value="classic">经典布局</option>
               </select>
             </div>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>实时渲染</strong>
+                <span>生成过程中卡顿，可关闭实时渲染以提升性能</span>
+              </div>
+              <span className="settings-switch-control">
+                <input
+                  type="checkbox"
+                  checked={state.general.real_time_render}
+                  onChange={(event) => updateRealTimeRender(event.target.checked)}
+                />
+                <span className="settings-switch-track" aria-hidden="true">
+                  <span className="settings-switch-thumb" />
+                </span>
+              </span>
+            </label>
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>开发者模式</strong>
@@ -678,6 +774,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 value={state.imageModel.provider}
                 onChange={(event) => {
                   const provider = event.target.value as ImageModelProvider;
+                  setImageModels([]);
                   updateImageModelConfig({
                     provider,
                     base_url: imageProviderDefaults[provider].base_url,
@@ -844,34 +941,21 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             <div><span>GitHub 仓库</span><a href="https://github.com/FB208/OpenBidKit_Yibiao" target="_blank" rel="noreferrer">FB208/OpenBidKit_Yibiao</a></div>
             <div>
               <span>自动更新</span>
-              <strong>
-                {latestRelease
-                  ? compareVersions(latestRelease.version, appVersion) > 0
-                    ? updateStatus === 'downloading'
-                      ? `正在下载 ${updatePercent}%`
-                      : updateStatus === 'downloaded'
-                        ? '下载完成，重启安装'
-                        : updateStatus === 'error'
-                          ? `更新失败：${updateError}`
-                          : `最新版本 ${latestRelease.version}`
-                    : '已是最新版本'
-                  : '检查中...'}
-              </strong>
-              {latestRelease && compareVersions(latestRelease.version, appVersion) > 0 && updateStatus !== 'downloading' && (
-                <button
-                  type="button"
-                  className="update-button"
-                  onClick={() => {
-                    if (updateStatus === 'downloaded') {
-                      void window.yibiao?.quitAndInstall();
-                    } else {
-                      void window.yibiao?.startUpdate();
-                    }
-                  }}
-                >
-                  {updateStatus === 'downloaded' ? '重启安装' : '立即更新'}
-                </button>
-              )}
+              <strong>{updateStatusText}</strong>
+              <button
+                type="button"
+                className="update-button"
+                disabled={updateBusy}
+                onClick={() => {
+                  if (updateStatus === 'downloaded') {
+                    void window.yibiao?.quitAndInstall();
+                    return;
+                  }
+                  void checkForUpdates();
+                }}
+              >
+                {updateStatus === 'downloaded' ? '安装并重启' : updateBusy ? '检查中...' : '检查更新'}
+              </button>
             </div>
             <div><span>运行模式</span><strong>独立 Electron 客户端</strong></div>
           </div>

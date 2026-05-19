@@ -5,6 +5,12 @@ const MERMAID_REPAIR_ATTEMPTS = 3;
 const MERMAID_RENDER_TIMEOUT_MS = 15000;
 const AI_IMAGE_CONCURRENCY = 2;
 const MERMAID_IMAGE_CONCURRENCY = 5;
+const TABLE_REQUIREMENT_LABELS = {
+  none: '不要',
+  light: '少量',
+  moderate: '适中',
+  heavy: '大量',
+};
 
 function singleLine(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -104,6 +110,35 @@ async function validateMermaidRender(code) {
 function normalizePriority(value) {
   const priority = Math.round(Number(value) || 0);
   return Math.max(1, Math.min(priority || 3, 5));
+}
+
+function normalizeTableRequirement(value) {
+  const text = String(value || '').trim();
+  if (['none', 'light', 'moderate', 'heavy'].includes(text)) {
+    return text;
+  }
+  if (text === '不要') return 'none';
+  if (text === '少量') return 'light';
+  if (text === '适中') return 'moderate';
+  if (text === '大量') return 'heavy';
+  return 'heavy';
+}
+
+function maxTablesForRequirement(requirement, leafCount) {
+  if (requirement === 'none') return 0;
+  if (requirement === 'light') return Math.floor(Math.max(0, leafCount) * 0.2);
+  if (requirement === 'moderate') return Math.floor(Math.max(0, leafCount) * 0.4);
+  return null;
+}
+
+function clearContentPlanTable(contentPlan) {
+  return {
+    ...contentPlan,
+    table: {
+      needed: false,
+      purpose: '',
+    },
+  };
 }
 
 function normalizeKnowledgeItemIds(value, allowedKnowledgeItemIds) {
@@ -239,7 +274,7 @@ function validateMermaidRepairResult(result) {
 
 function formatContentPlanForPrompt(plan) {
   const lines = [
-    `表格：${plan.table.needed ? `需要，目的：${plan.table.purpose || '提升正文表达清晰度'}` : '不需要'}`,
+    `表格：${plan.table.needed ? `需要，目的：${plan.table.purpose || '提升正文表达清晰度'}` : '不需要，本小节不要输出 Markdown 表格'}`,
     `AI 生图：${plan.image.needed ? `需要，风格：${plan.image.style}，标题：${plan.image.title}` : '不需要'}`,
   ];
   return lines.join('\n');
@@ -319,10 +354,17 @@ function renderKnowledgeItemsForPrompt(items) {
   })).filter((item) => item.id && item.title && item.resume), null, 2);
 }
 
-function buildChapterContentPlanMessages({ chapter, parentChapters, siblingChapters, projectOverview, regenerateRequirement, imageGenerationAvailable, mermaidGenerationAvailable, maxAiImages, totalSections, knowledgeItems }) {
+function buildChapterContentPlanMessages({ chapter, parentChapters, siblingChapters, projectOverview, regenerateRequirement, tableRequirement, maxTables, tableTotalSections, imageGenerationAvailable, mermaidGenerationAvailable, maxAiImages, totalSections, knowledgeItems }) {
   const chapterId = chapter.id || 'unknown';
   const chapterTitle = chapter.title || '未命名章节';
   const chapterDescription = chapter.description || '';
+  const tableRequirementLabel = TABLE_REQUIREMENT_LABELS[tableRequirement] || TABLE_REQUIREMENT_LABELS.heavy;
+  const tablePlanningAllowed = tableRequirement !== 'none';
+  const tableLimitInstruction = tableRequirement === 'heavy'
+    ? '表格需求为“大量”，保持现有编排逻辑；仍然只有明显适合表格的小节才将 table.needed 设为 true。'
+    : tableRequirement === 'none'
+      ? '表格需求为“不要”，table.needed 必须为 false，table.purpose 留空。'
+      : `表格需求为“${tableRequirementLabel}”，table.needed 表示进入表格候选池，不代表最终一定生成；全文表格上限为 ${maxTables || 0} 个，共 ${tableTotalSections || totalSections || 0} 个叶子小节，系统后续会全局择优。`;
   const messages = [
     {
       role: 'system',
@@ -330,17 +372,18 @@ function buildChapterContentPlanMessages({ chapter, parentChapters, siblingChapt
 
 要求：
 1. 只返回 JSON，不要输出解释、总结或 Markdown。
-2. 由你自行判断是否适合使用表格或配图，判断要克制、合情合理，不要为了形式而硬插。
-3. 表格仅在能明显提升表达清晰度时使用，例如归纳职责、步骤、参数、风险、措施、成果等。
-4. ${mermaidGenerationAvailable ? '可以自行判断是否需要 Mermaid 图；Mermaid 只适合简单、抽象、文本节点型关系图，例如少量节点的流程、层级、时间线或职责关系，不用于复杂工程场景或实物示意。' : '当前未启用 Mermaid 图，mermaid.needed 必须为 false。'}
-5. ${imageGenerationAvailable ? '可以自行判断是否需要 AI 生图；AI 生图适合设备、现场、机柜、电池、系统架构、部署拓扑、施工/运维场景、工程空间关系、实物示意等更具象的图。' : '当前未启用或不可用 AI 生图，image.needed 必须为 false。'}
-6. Mermaid 图和 AI 生图都只是候选判断，可以同时为 true；系统会在配图阶段保证同一个章节最终只执行一种配图。
-7. ${imageGenerationAvailable ? `image.needed 表示进入 AI 生图候选池，不代表最终一定生成；本次 AI 生图上限为 ${maxAiImages || 0} 张，共 ${totalSections || 0} 个小节，系统后续会全局择优。` : '由于 AI 生图不可用，image 字段只需返回不需要。'}
-8. ${imageGenerationAvailable ? '不要求用满 AI 生图上限；但遇到具象工程对象或现场场景时，不要过度保守，可以适度提名候选。没有具象对象、空间关系或实物场景时仍不要硬插。' : '不要为了满足格式而编造 AI 生图需求。'}
-9. priority 含义：3 表示有价值候选，4 表示推荐，5 表示强推荐；只有达到 3 才将 image.needed 设为 true。
-10. engineering_diagram 表示工程图示风，适合系统架构、部署拓扑、设备连接、机柜布置、电池更换方案、施工组织或运维场景示意等具象工程图。
-11. realistic_photo 表示专业实景示意风，适合设备、场地、机房、施工现场、检测工具、运维操作等真实场景表现。
-12. knowledge.item_ids 只能从参考知识库轻量条目的 id 中选择；可以多选，可以为空数组；不要编造 id，不要输出 reason。`,
+2. ${tablePlanningAllowed ? '由你自行判断是否适合使用表格或配图，判断要克制、合情合理，不要为了形式而硬插。' : '本次不编排表格，table.needed 必须为 false；仍可判断是否适合配图。'}
+3. ${tableLimitInstruction}
+4. ${tablePlanningAllowed ? '表格仅在能明显提升表达清晰度时使用，例如归纳职责、步骤、参数、风险、措施、成果等。' : '不要为了满足 JSON 格式而编造表格目的。'}
+5. ${mermaidGenerationAvailable ? '可以自行判断是否需要 Mermaid 图；Mermaid 只适合简单、抽象、文本节点型关系图，例如少量节点的流程、层级、时间线或职责关系，不用于复杂工程场景或实物示意。' : '当前未启用 Mermaid 图，mermaid.needed 必须为 false。'}
+6. ${imageGenerationAvailable ? '可以自行判断是否需要 AI 生图；AI 生图适合设备、现场、机柜、电池、系统架构、部署拓扑、施工/运维场景、工程空间关系、实物示意等更具象的图。' : '当前未启用或不可用 AI 生图，image.needed 必须为 false。'}
+7. Mermaid 图和 AI 生图都只是候选判断，可以同时为 true；系统会在配图阶段保证同一个章节最终只执行一种配图。
+8. ${imageGenerationAvailable ? `image.needed 表示进入 AI 生图候选池，不代表最终一定生成；本次 AI 生图上限为 ${maxAiImages || 0} 张，共 ${totalSections || 0} 个小节，系统后续会全局择优。` : '由于 AI 生图不可用，image 字段只需返回不需要。'}
+9. ${imageGenerationAvailable ? '不要求用满 AI 生图上限；但遇到具象工程对象或现场场景时，不要过度保守，可以适度提名候选。没有具象对象、空间关系或实物场景时仍不要硬插。' : '不要为了满足格式而编造 AI 生图需求。'}
+10. priority 含义：3 表示有价值候选，4 表示推荐，5 表示强推荐；只有达到 3 才将 image.needed 设为 true。
+11. engineering_diagram 表示工程图示风，适合系统架构、部署拓扑、设备连接、机柜布置、电池更换方案、施工组织或运维场景示意等具象工程图。
+12. realistic_photo 表示专业实景示意风，适合设备、场地、机房、施工现场、检测工具、运维操作等真实场景表现。
+13. knowledge.item_ids 只能从参考知识库轻量条目的 id 中选择；可以多选，可以为空数组；不要编造 id，不要输出 reason。`,
     },
   ];
 
@@ -774,6 +817,41 @@ function pickDistributedImageTargets(plannedItems, limit) {
   return new Set(selected.keys());
 }
 
+function pickDistributedTableTargets(plannedItems, limit) {
+  if (limit <= 0 || !plannedItems.length) {
+    return new Set();
+  }
+
+  if (plannedItems.length <= limit) {
+    return new Set(plannedItems.map(({ item }) => item.id));
+  }
+
+  const selected = new Map();
+  for (let slot = 0; slot < limit; slot += 1) {
+    const start = Math.floor((slot * plannedItems.length) / limit);
+    const end = Math.floor(((slot + 1) * plannedItems.length) / limit);
+    const group = plannedItems.slice(start, Math.max(start + 1, end));
+    const candidate = group[Math.floor(group.length / 2)] || group[0];
+    selected.set(candidate.item.id, candidate);
+  }
+
+  return new Set(selected.keys());
+}
+
+function countRetainedTablePlans(plans, excludedItemIds) {
+  let count = 0;
+  for (const [itemId, value] of Object.entries(plans || {})) {
+    if (excludedItemIds?.has(itemId)) {
+      continue;
+    }
+    const storedPlan = normalizeStoredContentPlan(value);
+    if (storedPlan?.plan?.table?.needed) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function createImageStat() {
   return { planned: 0, attempted: 0, success: 0, failed: 0, skipped: 0 };
 }
@@ -889,6 +967,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   const regenerateRequirement = String(payload.requirement || '').trim();
   const concurrency = Math.max(1, Math.min(Number(payload.concurrency) || 5, 8));
   const generationOptions = payload.generationOptions || payload.generation_options || {};
+  const realTimeRender = payload.real_time_render !== false && payload.realTimeRender !== false;
+  const tableRequirement = normalizeTableRequirement(generationOptions.tableRequirement ?? generationOptions.table_requirement);
+  const maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(payload, storedPlan);
   const imageAvailability = aiService.getImageModelAvailability
     ? aiService.getImageModelAvailability()
@@ -929,16 +1010,27 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       throw new Error('未找到要重新生成的正文小节');
     }
   }
+  const taskItemIds = new Set(tasksToRun.map(({ item }) => item.id));
+  const retainedTableCount = maxTables === null ? 0 : countRetainedTablePlans(storedContentPlans, taskItemIds);
+  const maxTablesForRun = maxTables === null ? null : Math.max(0, maxTables - retainedTableCount);
   let logs = [`准备生成正文，共 ${leaves.length} 个小节。`];
   if (targetItemId) {
     logs = [`准备重新生成正文小节：${targetItemId}。`];
   }
+  logs = [...logs, tableRequirement === 'heavy'
+    ? '表格需求：大量，保持现有表格编排逻辑。'
+    : tableRequirement === 'none'
+      ? '表格需求：不要，本次正文编排不会安排表格。'
+      : `表格需求：${TABLE_REQUIREMENT_LABELS[tableRequirement]}，全文最多 ${maxTables} 个表格，本轮最多新增 ${maxTablesForRun} 个。`];
   logs = [...logs, aiImagesEnabled
     ? `AI 生图已启用，将在整体编排后择优生成，最多 ${maxAiImages} 张。`
     : 'AI 生图未启用或不可用，本次不会调用生图接口。'];
   logs = [...logs, mermaidImagesEnabled
     ? 'Mermaid 图片已启用，适合简单图示的小节会优先使用 Mermaid 图。'
     : 'Mermaid 图片未启用。'];
+  if (!realTimeRender) {
+    logs = [...logs, '实时渲染已关闭，每个小节生成完成后再刷新正文。'];
+  }
   knowledgeItems = loadContentKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, (message) => {
     logs = [...logs, message];
   });
@@ -1040,6 +1132,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
           siblingChapters,
           projectOverview,
           regenerateRequirement,
+          tableRequirement,
+          maxTables,
+          tableTotalSections: leaves.length,
           imageGenerationAvailable: aiImagesEnabled && maxAiImages > 0,
           mermaidGenerationAvailable: mermaidImagesEnabled,
           maxAiImages,
@@ -1055,6 +1150,10 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     } catch (error) {
       contentPlan = normalizeContentPlan({}, allowedKnowledgeItemIds);
       logs = [...logs, `编排失败：${item.id} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}，将按纯正文生成。`];
+    }
+
+    if (tableRequirement === 'none') {
+      contentPlan = clearContentPlanTable(contentPlan);
     }
 
     contentPlans.set(item.id, contentPlan);
@@ -1073,6 +1172,18 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
 
     await runWithConcurrency(tasksToRun, concurrency, planOne);
 
+    const tableCandidates = tasksToRun.filter(({ item }) => contentPlans.get(item.id)?.table.needed);
+    const selectedTableIds = maxTablesForRun === null
+      ? new Set(tableCandidates.map(({ item }) => item.id))
+      : pickDistributedTableTargets(tableCandidates, maxTablesForRun);
+    if (maxTablesForRun !== null) {
+      for (const { item } of tableCandidates) {
+        if (!selectedTableIds.has(item.id)) {
+          contentPlans.set(item.id, clearContentPlanTable(contentPlans.get(item.id)));
+        }
+      }
+    }
+
     const mermaidCandidates = tasksToRun.filter(({ item }) => contentPlans.get(item.id)?.mermaid.needed);
     const aiImageCandidates = tasksToRun.filter(({ item }) => contentPlans.get(item.id)?.image.needed);
     selectedAiImageIds = pickDistributedImageTargets(
@@ -1086,7 +1197,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     imageStats.ai.planned = selectedAiImageIds.size;
     imageStats.ai.skipped += Math.max(0, aiImageCandidates.length - selectedAiImageIds.size);
 
-    logs = [...logs, `整体编排完成：AI 生图候选 ${aiImageCandidates.length} 张，入选 ${selectedAiImageIds.size} 张；Mermaid 候选 ${mermaidCandidates.length} 张，执行 ${mermaidImageTargets.length} 张。`];
+    logs = [...logs, `整体编排完成：表格候选 ${tableCandidates.length} 个，${maxTablesForRun === null ? '保持现有编排' : `入选 ${selectedTableIds.size} 个`}；AI 生图候选 ${aiImageCandidates.length} 张，入选 ${selectedAiImageIds.size} 张；Mermaid 候选 ${mermaidCandidates.length} 张，执行 ${mermaidImageTargets.length} 张。`];
     const mermaidImageIds = new Set(mermaidImageTargets.map(({ item }) => item.id));
     persistContentPlans(tasksToRun, ({ item }) => {
       if (selectedAiImageIds.has(item.id)) {
@@ -1157,7 +1268,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         }
         rawContent += event.chunk;
         content = stripRepeatedChapterTitle(normalizeGeneratedMarkdown(rawContent), item);
-        if (!isSingleSectionRegeneration) {
+        if (realTimeRender && !isSingleSectionRegeneration) {
           saveSection(item, { status: 'running', content, error: undefined }, content);
         }
       });

@@ -6,6 +6,14 @@ export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
 export type BackgroundTaskType = 'bid-analysis' | 'outline-generation' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
+export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
+
+export interface ContentGenerationOptions {
+  useAiImages: boolean;
+  maxAiImages: number;
+  useMermaidImages: boolean;
+  tableRequirement: ContentTableRequirement;
+}
 
 export interface ContentImageStats {
   planned: number;
@@ -112,6 +120,7 @@ export interface TechnicalPlanState {
   bidAnalysisTask?: BackgroundTaskState;
   outlineGenerationTask?: BackgroundTaskState;
   contentGenerationTask?: BackgroundTaskState;
+  contentGenerationOptions?: ContentGenerationOptions;
   contentGenerationSections: ContentGenerationSections;
   contentGenerationPlans: ContentGenerationPlans;
   outlineData: OutlineData | null;

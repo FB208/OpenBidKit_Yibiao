@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "node ../scripts/deploy-if-changed.mjs analytics/dashboard"
   },
   "devDependencies": {
     "wrangler": "^4.13.2"

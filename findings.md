@@ -1,6 +1,15 @@
 # Findings
 
 ## Research Log
+- 远程公告通道适合使用 Cloudflare KV：需求只保存每个 `projectName` 最新一份公告，KV 的 key-value 模型比 D1 更轻量；Worker 现有 `ADMIN_TOKEN` 鉴权可复用到公告管理接口。
+- 客户端已有 `UpdateNotifier`，版本检查间隔为 30 分钟；可在同一个定时器里并行检查更新和远程公告，但更新继续用 Toast，公告使用独立 Dialog，避免同时触发时互相覆盖。
+- 客户端已有 `MarkdownRenderer`，公告渲染必须传 `allowRawHtml={false}`，避免远程公告里的 HTML 被渲染成 DOM。
+- Dashboard 是单文件静态页，已有 `requestJson()` 默认 GET + Bearer token；公告发布需要扩展为支持 POST/DELETE JSON body。
+- 公告管理的 `DELETE /api/notice` 会触发浏览器 CORS 预检，Worker 的 `Access-Control-Allow-Methods` 必须包含 `DELETE`，否则 Dashboard 停用公告会失败。
+- 本轮统计扩展只做“活跃与留存”和“配置使用情况”。现有 Analytics Engine blob1-blob7 已用于 project/event/page/version/platform/arch/clientId；可从 blob8 起扩展 `clientCreatedAt` 和配置枚举字段，保持旧数据兼容。
+- 客户端现有 `analytics.ts` 只支持 `app_open/page_view`，并从 `user_config` 读取 `analytics_client_id`；可继续通过 `window.yibiao.config.load()` 读取 `analytics_created_at` 和配置项。
+- Dashboard 当前仍按旧 `/api/latest?limit=50` 调用，Worker 已改为分页 `page/pageSize=10`，需要同步页面分页控件。
+- 留存查询使用 `blob8` 的 `analytics_created_at` 作为 cohort 日期；为兼容旧事件和异常空值，SQL 中使用 `toDateOrNull(blob8)`，旧数据不会进入留存口径但仍可进入总客户端/活跃客户端。
 - 当前客户端 `DocumentAnalysisPage` 仍是“导入文件 + AI 解析项目概述/评分要求”的旧交互，导入后没有 Markdown 渲染原始提取内容。
 - 当前 `client/electron/services/fileService.cjs` 只用 `mammoth.extractRawText` 和 `pdf-parse` 做纯文本提取，未按配置中的 `file_parser.provider` 分流，也未使用 `tools/doc2markdown-node` 的 Markdown 还原逻辑。
 - 配置文件中 `file_parser.provider` 已存在，值为 `local`、`mineru-accurate-api`、`mineru-agent-api`，但文件解析服务没有读取配置。
@@ -75,3 +84,26 @@
 - Step04 知识库编排不需要单独全局分配阶段：将完整知识库轻量清单作为每个叶子节点编排请求的稳定前缀即可利用服务商缓存；多对多关系通过每个叶子节点独立选择 `knowledge.item_ids` 自然产生，不需要全局唯一性约束。
 - Step04 编排阶段的知识库输入边界应保持为 `id/title/resume`，不提交 `content`；当前实现只落盘 `knowledge.item_ids`，正文生成阶段暂不消费知识库正文。
 - Step04 正文生成阶段应用知识库的最小边界：程序用 `knowledge.item_ids` 定位条目，但给正文模型只传 `content`；知识库素材放在项目概述之后、章节上下文之前，可让相同素材组合在不同章节间尽量复用服务商 prompt cache 前缀。
+- 知识库当前已有日志只覆盖 `查看原文` 和全文 Markdown 内容渲染阶段；`openDocument()` 的点击、IPC 读取、JSON 解析、`setItemsPreview`、条目列表整体渲染和下一帧可见尚未被记录，这正是继续定位用户感知慢点的缺口。
+- 新增 `document-items` trace 后，条目页会记录 `click:open-document`、`ipc:read:start/end`、`items:metrics`、`state:set-items-preview`、React Profiler、`dom:commit`、`dom:next-frame-visible` 和 Long Task；可与 `document-markdown`、`item-source` trace 直接对比。
+- 知识条目列表滚动重置的根因是此前 `sourceItem ? 原文页 : 列表` 会用原文视图替换条目列表，列表 DOM 被卸载；改为 Dialog 后列表保持挂载，关闭原文不会丢失滚动位置。
+- 标书查重元数据模块实现边界：正文提取覆盖招标文件和投标文件，且 `preserveImages: true`；元数据横向对比仅覆盖投标文件。DOCX 元数据来自 `docProps/core.xml`、`app.xml`、`custom.xml`，PDF 元数据来自 `pdf-parse` 的 `getInfo()`，DOC/WPS 当前正文可通过既有 LibreOffice 链路提取，元数据先保留文件系统信息。
+- 标书查重时间类元数据对比规则已改为日期粒度：`created_at/modified_at/accessed_at/created/modified` 同一天出现于多份投标文件时用橙色高亮；非时间类重复仍用红色高亮。
+- `.doc/.wps` 元数据增强可通过 `cfb` 读取 OLE Compound File，重点流名是 `\u0005SummaryInformation` 和 `\u0005DocumentSummaryInformation`；前者覆盖作者、最后作者、模板、创建/修改/打印时间、页数、字数、应用程序等，后者覆盖类别、公司、管理者、应用版本、字节/行/段落/字符数、自定义属性等。
+- WPS/账号没有稳定标准字段；实现上应从 WPS/Kingsoft/KSO/account/email/uid 等关键词命中的标准属性、自定义属性、OLE 流和 PDF XMP/原始记录中生成 `wps:*` 疑似字段，并在 UI 中标为“疑似 WPS 用户/账号”。
+- PDF 元数据不能只读固定 `Title/Author/Creator/Producer`；`pdf-parse` 的 `getInfo()` 同时返回 `info`、可迭代 `metadata`、`fingerprints`、`permission`，原始 PDF 字节中还可能有增量更新残留的 `/Author`、`/Creator`、`/ModDate` 等记录。
+- `.doc/.wps` 采用双来源读取更稳：原始 OLE/HPSF 属性优先，LibreOffice 转 `.docx` 后的 `docProps/*` 作为补充；转换失败时仍保留 OLE 已读字段并记录 `metadata_error`。
+- 标书查重目录分析接入点：`duplicateCheckService.cjs` 已在 Step02 并发提取正文和元数据，正文保存到 `userData/workspace/duplicate-check/contents/<fileId>.md`；目录分析应复用这些 Markdown，不重新解析原文件。
+- 招标文件目录规则：招标文件不参与横向重复对比，但需拆句生成白名单；投标目录项命中招标文件句子/短句时标记为来自招标文件并从重复组和整体相似度中排除。
+- 目录提取第一版应走纯程序：显式目录块（目录/目次/Contents + 点线页码/编号）优先，Markdown `#` 标题次之，短行编号/粗体/第X章等语义标题兜底。
+- 正文比对可复用 `duplicate-check/contents/*.md`：先移除 Markdown/HTML 图片，再按句号、问号、感叹号、分号和换行拆句；投标文件内先去重，再用全局 Map 聚合跨文件重复，避免文件两两全文比较。
+- 图片比对可直接扫描 Markdown 图片链接；当前保留图片流程会把本地图片转为 `yibiao-asset://imported-images/...`，Main 侧可根据协议根目录解析回文件并计算 SHA256，筛出完全一致图片。
+- 正文表格拼接问题的真实根因是 DOCX/WPS 转 Markdown 后保留了 HTML `<table>`，而正文分句前直接 `replace(/<[^>]+>/g, ' ')` 删除 `<td>/<tr>/<p>` 等结构标签，导致“无偏离”“2”“供应商的报价应包括...”等不同单元格被压成同一段文本。
+- `isLikelyMergedTableSentence()` 这类按“无偏离/特别要求/交货地点”等业务词跳过整句的规则属于特例过滤，会误伤真实商务响应内容；正确修复是保留表格结构边界，让单元格独立分句。
+- 新正文分句链路应先提取结构化文本块：HTML 表格按 `<td>/<th>` 单元格提取，单元格内 `<p>/<li>/<br>` 作为内部边界；Markdown 管道表按 GFM 表格行列解析；普通 Markdown 段落再按自然句末符分句。
+- 真实缓存验证结果：`9e2770208cb01a044c6e6eaff29328cc83faf75c.md` 中“供应商的报价应包括...”前后块已变为 `无偏离`、`2`、正文单元格、投标应答单元格、`无偏离`、`3`，模拟重复分析中 `无偏离\s*\d+`、表头串联类异常重复句数量为 0。
+- `特别要求：交货时要求供应商就所投产品提供产品说明书...` 未被招标白名单排除的根因不是招标原文缺失，而是招标文件分句为 `3.特别要求：...`，投标文件分句为 `特别要求：...`，此前 normalized 完全相等匹配无法跨过句首序号差异。
+- 正文比对和招标引用排除都应忽略句首结构性序号；实现边界是仅剥离句首阿拉伯数字层级编号、中文编号、括号编号和圈号，不处理正文中间的 `GB/T 29768-2013`、`30天`、`3年`、`第2包` 等业务数字。
+- 真实缓存复验结果：招标白名单已包含去掉 `3.` 后的目标句，投标文件中该目标句命中白名单 5 次，模拟重复分析 `targetInDuplicates=false`；总重复句由 132 降到 116。
+- 截图中 `1. 供应商资格要求证明文件`、`（四）法定代表人资格证明书` 等仍出现的原因不是 `normalized` 未去序号；当前缓存中这些项的 `normalized` 已去序号，UI 展示的是保留原文的 `sentence`。真正问题是此前先用原句做 `isInformativeContentSentence()`，短标题加上序号后长度达标进入投标重复池，而招标文件同名无序号短标题长度不足没有进入白名单。
+- 修复后正文分句先生成 `normalized` 再判断信息量；同时句首序号剥离支持 Markdown 转义 `1\.`、全角数字、括号/圈号后额外分隔符和 `第一章/第1节/第二部分`。真实缓存模拟结果：招标白名单句子数 717，投标正文句子数 6167，命中招标白名单 1997，重复句 105，截图短标题重复项 0，normalized 句首序号残留 0，目标“特别要求”重复项 0。

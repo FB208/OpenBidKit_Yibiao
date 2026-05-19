@@ -75,7 +75,11 @@ function buildMessages(fileContent, task) {
 async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, payload }) {
   const mode = payload.mode || 'key';
   const selectedTasks = getBidAnalysisTasks(mode);
-  let technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisMode: mode, bidAnalysisTask: updateTask({ status: 'running', progress: 0, logs: ['开始解析招标文件。'] }) });
+  const realTimeRender = payload.real_time_render !== false && payload.realTimeRender !== false;
+  const initialLogs = realTimeRender
+    ? ['开始解析招标文件。']
+    : ['开始解析招标文件。', '实时渲染已关闭，每项解析完成后再刷新结果。'];
+  let technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisMode: mode, bidAnalysisTask: updateTask({ status: 'running', progress: 0, logs: initialLogs }) });
   const currentTasks = technicalPlan.bidAnalysisTasks || {};
   const tasksToRun = selectedTasks.filter((task) => currentTasks[task.id]?.status !== 'success');
 
@@ -93,6 +97,9 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
     await aiService.streamChat({ messages: buildMessages(payload.fileContent, task), temperature: 0.1, response_format: task.output === 'json' ? { type: 'json_object' } : undefined }, (event) => {
       if (event.type === 'chunk' && event.chunk) {
         content += event.chunk;
+        if (!realTimeRender) {
+          return;
+        }
         const prev = workspaceStore.loadTechnicalPlan() || {};
         const nextTasks = { ...(prev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'running', content } };
         technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTasks: nextTasks, bidAnalysisProgress: doneProgress(nextTasks) });

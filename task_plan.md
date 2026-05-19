@@ -149,6 +149,55 @@
 | planning skill 示例路径 `~/.opencode/.../session-catchup.py` 不存在 | 第一次 catchup | 改用实际路径 `~/.config/opencode/.../session-catchup.py` |
 | `git diff --check` 报 `client/doc/知识库设计.md:63: new blank line at EOF` | 收尾检查 | 该文件非本次修改，按工作区保护规则未改动；本次修改文件仅有 LF/CRLF 提示 |
 
+## Current Task: 标书查重目录分析首版
+
+### Goal
+在标书查重中新增纯程序目录查重：元数据提取完成后自动开始目录分析；基于已提取 Markdown 目录，不接 AI；招标文件只用于句子白名单，命中的投标目录项不计重复；投标文件之间做多级目录重复和相似度对比。
+
+### Phases
+- [completed] 1. 记录方案和现有查重服务接入点。
+- [completed] 2. 扩展类型与工作区状态，加入目录分析结果。
+- [completed] 3. 实现招标句子白名单、目录提取、多级树构建和重复比对。
+- [completed] 4. 接入后台流程：元数据完成后启动目录分析，必要时等待正文提取结果。
+- [completed] 5. 重做目录 Tab 展示：概览、相似度矩阵、文件目录树、重复组。
+- [completed] 6. 运行 CJS/Preload 检查、构建和 diff 检查。
+
+### Decisions
+- 第一版不接 AI，不重新解析原始文件，直接读取 `duplicate-check/contents/*.md`。
+- 招标文件不参与投标文件间比对，只拆句作为“不计重复”的白名单。
+- 显式目录块优先，其次 Markdown 标题，最后语义标题兜底。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+| planning skill 示例路径 `~/.opencode/.../session-catchup.py` 不存在 | 第一次 catchup | 改用实际路径 `~/.config/opencode/.../session-catchup.py` |
+| `git diff --check` 报 `client/doc/标书查重.md:54 trailing whitespace` | 收尾检查 | 该文件是既有/用户改动，本轮未修改，按工作区保护规则未处理；本轮修改文件仅有 LF/CRLF 提示 |
+
+## Current Task: Analytics 远程公告通道
+
+### Goal
+基于 Cloudflare KV 在 `analytics/` 增加可管理的 Markdown 公告通道；客户端与现有 30 分钟版本检查共用轮询，但公告用独立弹窗展示，关闭后同一公告不再显示，除非后台发布新公告。
+
+### Phases
+- [completed] 1. 新增 Worker 公告公开读取与管理员读写接口，使用 KV binding `NOTICE_STORE`。
+- [completed] 2. 在 Analytics Dashboard 增加公告管理 UI，支持读取、发布和停用最新公告。
+- [completed] 3. 在客户端接入远程公告轮询，与版本检查共用定时器但展示互不干扰。
+- [completed] 4. 更新 Analytics 部署文档，说明 KV 创建和接口。
+- [completed] 5. 运行 Worker 语法检查、Dashboard 脚本检查和客户端构建验证。
+
+### Decisions
+- 使用 Cloudflare KV，不使用 D1；只保存每个 projectName 的最新一份公告。
+- 客户端公告内容用 Markdown 渲染，并禁用 raw HTML。
+- 公告不预置任何内容，只从 Analytics Dashboard 发布。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| planning skill 示例路径 `~/.opencode/.../session-catchup.py` 不存在 | 第一次 catchup | 改用实际路径 `~/.config/opencode/.../session-catchup.py` |
+| Dashboard 脚本检查命令报 `Unterminated regexp literal` | 第一次 Dashboard 检查 | PowerShell/Node `-e` 中正则字面量转义导致，改用字符串索引提取 `<script>` 内容 |
+| `remoteNotice.ts` 构建报 `enabled` 类型比较恒定 | 第一次 `npm run build` | `normalizeNotice()` 过滤停用公告后直接归一为 `enabled: true` |
+
 ## Current Task: GitHub Release 自动打包与客户端更新检查
 
 ### Goal
@@ -617,6 +666,27 @@
 ### Errors Encountered
 | Error | Attempt | Resolution |
 | --- | --- | --- |
+
+## Current Task: 活跃留存与配置使用统计
+
+### Goal
+只补充两类统计：活跃与留存、配置使用情况。客户端异步上报匿名配置状态，不采集 API Key、Base URL、模型名、文件名、路径、文档内容或生成内容；统计页展示活跃客户端、留存概览和配置分布。
+
+### Phases
+- [completed] 1. 扩展客户端配置和埋点封装：`analytics_created_at`、`config_usage`、配置字段白名单。
+- [completed] 2. 在设置保存、Step02、Step03、Step04 启动点接入配置使用上报。
+- [completed] 3. 扩展 Worker `/track`、`/api/summary`，新增 `/api/retention` 与 `/api/config-usage`。
+- [completed] 4. 更新 Dashboard 展示活跃指标、留存概览、配置使用分布和最近事件分页。
+- [completed] 5. 运行 Worker 语法检查、客户端构建和空白检查。
+
+### Decisions
+- `client_id` 和 `analytics_created_at` 都存入 Electron `userData/user_config.json`。
+- 配置使用事件只记录枚举值和布尔值，不记录任何用户内容或密钥。
+- 留存基于 `analytics_created_at` cohort 和 `app_open` 活跃事件计算；缺少创建日期的旧事件不参与留存。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
 | PowerShell 中首次 `node -e` smoke test 使用外层单引号导致传给 Node 的 JS 字符串引号被剥离 | 第一次 smoke test | 改用外层双引号、JS 字符串使用单引号后重跑通过 |
 
 ## Current Task: Step04 正文生成阶段应用知识库
@@ -639,3 +709,188 @@
 ### Errors Encountered
 | Error | Attempt | Resolution |
 | --- | --- | --- |
+
+## Current Task: 知识库查看链路性能埋点
+
+### Goal
+补充知识库开发者模式渲染调试日志，覆盖从点击“查看条目/Markdown”到 IPC 读取、状态更新、条目列表渲染、DOM 提交和下一帧可见的完整链路，用于定位用户感知慢点。
+
+### Phases
+- [completed] 1. 记录当前代码结构和已有日志覆盖范围。
+- [completed] 2. 实现 `openDocument()` 读取链路日志和内容规模统计。
+- [completed] 3. 给知识条目列表增加 Profiler、DOM 指标、Long Task 和下一帧可见日志。
+- [completed] 4. 保持日志仅开发者模式启用，并兼容现有复制日志按钮。
+- [completed] 5. 运行构建验证并记录结果。
+
+### Decisions
+- 不继续盲调 `查看原文`，先用日志确认慢点位于读取、IPC、JSON 解析、列表渲染还是单条原文渲染。
+- 本轮只加开发者模式诊断日志，不改变知识库业务流程和自动匹配逻辑。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| `collectItemsContentMetrics()` 返回的 `metrics` 被 TypeScript 推断成不含 `chars` 的窄类型 | 第一次 `npm run build` | 将集合指标显式声明为 `Record<string, number>` 后重跑构建通过 |
+
+## Current Task: 知识条目原文弹窗化
+
+### Goal
+将知识库“查看原文”从页面内替换/跳转改为弹窗，关闭后保持条目列表 DOM 和滚动位置，避免用户在列表底部查看原文后回到顶部。
+
+### Phases
+- [completed] 1. 查找现有 Radix Dialog 用法和知识库原文查看代码。
+- [completed] 2. 将原文查看改为 Dialog，条目列表始终渲染。
+- [completed] 3. 新增知识库原文弹窗遮罩、卡片、标题和正文内部滚动样式。
+- [completed] 4. 运行 `npm run build` 验证。
+
+### Decisions
+- 保留现有 `openSourceItem()`、`closeSourceItem()`、`sourceTrace` 和 `sourceRendering` 调试链路。
+- 弹窗关闭只清理当前原文状态，不卸载条目列表。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: 标书查重元数据模块
+
+### Goal
+实现标书查重 Step02 的元数据子模块：首次从 Step01 进入 Step02 时自动启动分析；正文内容提取和投标文件元数据提取并发执行，两条任务内部按文件线性处理；正文提取保留图片；元数据横向对比并标红重复项。
+
+### Phases
+- [completed] 1. 新增 Main 侧标书查重服务、IPC、preload 和类型。
+- [completed] 2. 实现内容提取任务：所有文件线性提取 Markdown，`preserveImages: true`，按文件独立资源 scope 保存内容。
+- [completed] 3. 实现元数据提取任务：投标文件线性提取文件系统、DOCX、PDF 元数据。
+- [completed] 4. Renderer 接入 Step02 自动启动、事件合并和缓存持久化。
+- [completed] 5. 元数据 tab 展示进度、横向对比表和重复项标红。
+- [completed] 6. 运行 CJS 语法检查和客户端构建验证。
+
+### Decisions
+- 招标文件参与正文提取，不参与元数据横向对比。
+- 正文提取必须保留图片，图片资源使用 `duplicate-check-content-<fileId>` 前缀，便于重置时清理。
+- 元数据重复标红只比较同一元数据项下的非空规范化值；文件名、路径、扩展名、大小等基础标识不参与标红。
+- 时间类元数据不要求完全一致；同一天出现于多份投标文件时用橙色高亮。
+- “重新查重”使用 `force: true` 强制重跑当前文件批次。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| TypeScript 报 `file is possibly null` | 第一次 `npm run build` | 在计算签名前先构造 `LocalFileSelection[]`，避免 `filter(Boolean)` 后类型未收窄 |
+
+## Current Task: 标书查重 WPS/DOC/PDF 元数据增强
+
+### Goal
+增强标书查重元数据读取能力，重点覆盖 `.wps/.doc` 的 OLE/HPSF 文档属性、LibreOffice 转 `.docx` 后的补充属性，以及 PDF 全量 Info/XMP/原始记录；尽可能识别 WPS/Kingsoft/账号相关痕迹。
+
+### Phases
+- [completed] 1. 新增 `cfb` 依赖并确认 CommonJS API 可用。
+- [completed] 2. 将 legacy Word 转 DOCX 临时转换逻辑抽成 `withLegacyWordDocxFile()` 供元数据流程复用。
+- [completed] 3. 实现 OLE Property Set Stream 解析，读取 `SummaryInformation`、`DocumentSummaryInformation` 和自定义属性。
+- [completed] 4. `.doc/.wps` 元数据流程改为原始 OLE 属性 + 转换 DOCX 属性补充，失败时保留已读字段并记录 `metadata_error`。
+- [completed] 5. PDF 元数据改为展开全部 `info`、可迭代 XMP、fingerprints、permissions 和原始 `/Author` 等记录。
+- [completed] 6. 更新动态比较规则，新增 `converted_docx:`、`pdf_info:`、`pdf_xmp:`、`pdf_raw:`、`ole_signal:`、`wps:` 前缀参与横向比较。
+- [completed] 7. 运行语法检查、模块加载、`npm run build`、`npm audit` 和 `git diff --check`。
+
+### Decisions
+- WPS 账号不是标准 Office 元数据字段，本轮只标记“疑似 WPS 用户/账号”字段，不承诺一定能从离线文件读出真实账号。
+- `.doc/.wps` 转 DOCX 失败不阻断 OLE 元数据结果；同时在表格中写入 `metadata_error` 说明失败原因。
+- PDF 保留跨格式可比的 canonical 字段，同时用 `pdf_info:*` / `pdf_xmp:*` / `pdf_raw:*` 展开来源字段。
+- 原始 OLE/PDF 二进制扫描只截取命中 WPS/Kingsoft/account/email 等关键词的短片段，避免把整段正文或 XML 塞进对比表。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| planning skill 示例路径 `~/.opencode/.../session-catchup.py` 不存在 | 第一次 catchup | 改用实际路径 `~/.config/opencode/.../session-catchup.py` |
+| `npm audit` 报 1 个 moderate 漏洞 | 依赖变更后审计 | 漏洞来自既有 `mermaid 11.14.0`，本次新增 `cfb` 未引入新审计项；未自动 `npm audit fix`，避免扩大依赖变更 |
+
+## Current Task: 标书查重正文和图片比对
+
+### Goal
+在标书查重 Step02 中新增纯程序正文和图片比对：正文按句子聚合重复，引用招标文件句子不计重复；图片按 hash 筛选完全相同图片；正文和图片分析在正文 Markdown 提取完成后并发执行，不调用 AI。
+
+### Phases
+- [completed] 1. 记录范围和现有查重流程接入点。
+- [completed] 2. 扩展共享类型和工作区状态，新增正文/图片分析状态。
+- [completed] 3. 实现正文句子拆分、招标白名单排除和 Map 聚合重复句子。
+- [completed] 4. 实现 Markdown 图片提取、`yibiao-asset` 本地解析、hash 聚合重复图片。
+- [completed] 5. 接入后台流程，正文提取完成后并发运行目录、正文、图片分析。
+- [completed] 6. 实现正文/图片 Tab UI：投标文件编号条、分页重复句子列表、分页重复图片列表。
+- [completed] 7. 运行 CJS 检查、构建和 diff 检查。
+
+### Decisions
+- 不调用 AI，不做语义相似，只做规则拆句和精确规范化匹配。
+- 正文比对忽略 Markdown 图片和 HTML 图片；投标文件中命中招标文件句子的内容不计重复。
+- 图片只按 SHA256 字节 hash 判断完全一致，不做感知 hash 或截图相似度。
+- 使用全局 Map 聚合，避免投标文件两两全文比较。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| `git diff --check` 报 `client/doc/标书查重.md:54 trailing whitespace` | 收尾检查 | 该文件是既有/用户改动，本轮未修改；本轮相关文件 diff check 仅 LF/CRLF 提示 |
+
+## Current Task: 标书查重正文分句结构化修复
+
+### Goal
+修复正文比对中 HTML/Markdown 表格单元格被拼成同一句的问题，移除“疑似表格拼接”特例过滤，把正文分句从字符串硬过滤改为先提取结构化文本块再分句。
+
+### Phases
+- [completed] 1. 复核正文分句链路、真实缓存表格形态和依赖。
+- [completed] 2. 将 HTML 表格按 `<td>/<th>` 单元格提取文本块，保留 `<p>/<li>/<br>` 内部边界。
+- [completed] 3. 将 Markdown 管道表按表格行列解析，不再把 `|` 替换成句号。
+- [completed] 4. 移除 `isLikelyMergedTableSentence()` 特例过滤，正文清洗不再删除编号前缀。
+- [completed] 5. 用真实缓存和合成 Markdown 表格验证错误拼接句消失。
+- [completed] 6. 运行 CJS 检查、模块加载、`npm run build` 和本次文件 diff check。
+
+### Decisions
+- 表格边界由结构解析决定，不再通过 `无偏离` 等业务词特例过滤。
+- 正文句子保留原始标点和编号；规范化只清理控制字符和空白。
+- 短字段不一概丢弃，`交货期：30天`、`质保期：三年` 这类字段会保留；`无偏离` 这类低信息短词仍不进入重复句。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| planning skill 示例路径 `~/.opencode/.../session-catchup.py` 不存在 | 第一次 catchup | 改用实际路径 `~/.config/opencode/.../session-catchup.py` |
+
+## Current Task: 标书查重正文比对忽略句首序号
+
+### Goal
+正文重复比对和招标引用排除都忽略句首结构性序号，避免 `3.特别要求：...` 与 `特别要求：...` 因序号差异无法匹配；展示句仍保留原文，正文内部数字、型号、标准号、金额、日期不受影响。
+
+### Phases
+- [completed] 1. 复现目标句在招标文件和投标文件中 normalized 不一致的问题。
+- [completed] 2. 增加只处理句首结构性序号的规范化逻辑。
+- [completed] 3. 用真实缓存验证目标句命中招标白名单并从重复句中消失。
+- [completed] 4. 验证 `GB/T 29768-2013`、`交货期：30天`、`质保期：3年`、`第2包` 不被误删。
+- [completed] 5. 运行 CJS 检查、模块加载、`npm run build` 和本次文件 diff check。
+
+### Decisions
+- 只剥离句首结构性序号：阿拉伯数字层级编号、中文编号、括号编号、圈号。
+- 不处理正文中间的数字和业务字段；标点差异仍按不同内容处理。
+- 当前继续复用 `normalized` 作为正文比对和招标白名单 key，`sentence` 保留原文用于展示。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: 标书查重正文序号归一化二次修复
+
+### Goal
+修复截图中短标题类正文重复项仍出现的问题：重复判断和招标白名单阶段继续忽略句首结构序号，但不通过 UI 隐藏原文；调整正文句子入库顺序并补齐低风险序号格式。
+
+### Phases
+- [completed] 1. 核对当前序号覆盖范围、截图相关缓存结果和前端展示字段。
+- [completed] 2. 定位短标题仍进入重复结果的真实原因：先按原句判断信息量，再去序号归一化。
+- [completed] 3. 将正文分句流程改为先生成 `normalized`，再用 `normalized` 判断是否进入正文句库/招标白名单。
+- [completed] 4. 补齐 Markdown 转义序号、全角数字、括号/圈号后分隔符和章节号等低风险句首结构序号。
+- [completed] 5. 用真实缓存模拟正文分析，确认截图短标题重复项消失且招标引用排除仍有效。
+- [completed] 6. 运行 CJS 检查、preload/IPC 检查、`npm run build` 和本次文件 diff check。
+
+### Decisions
+- 前端继续展示 `sentence` 原文作为证据，不改成 `normalized`。
+- 重复聚合和招标文件白名单统一使用 `normalized`，即去句首结构序号后的文本。
+- 不做全局 `NFKC`，不删除正文标点，只对句首结构序号做局部剥离。
+- 英文字母编号、罗马数字、附件/表图编号暂不纳入本轮剥离，避免误伤型号或正文引用。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| planning skill 示例路径 `~/.opencode/.../session-catchup.py` 不存在 | 第一次 catchup | 改用实际路径 `~/.config/opencode/.../session-catchup.py` |
+| VM 方式验证私有函数时相对 `require('../utils/paths.cjs')` 失败 | 第一次函数验证 | 使用 `module.createRequire(file)` 以服务文件路径创建本地 require |

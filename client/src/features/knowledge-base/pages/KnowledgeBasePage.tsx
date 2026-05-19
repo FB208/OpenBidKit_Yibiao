@@ -1,11 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import rehypeRaw from 'rehype-raw';
-import remarkGfm from 'remark-gfm';
-import { useToast } from '../../../shared/ui';
+import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import type { Components } from 'react-markdown';
+import { MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeItem } from '../types';
 
+declare global {
+  interface Window {
+    __knowledgeRenderDebugLogs?: Array<Record<string, unknown>>;
+  }
+}
+
 const emptyIndex: KnowledgeBaseIndex = { folders: [], documents: [] };
+const emptyDocuments: KnowledgeDocument[] = [];
+const documentRenderBatchSize = 80;
+const knowledgeItemSourceComponents: Components = {
+  a({ children }) {
+    return <span className="knowledge-item-link-text">{children}</span>;
+  },
+  img({ node: _node, ...props }) {
+    return <img {...props} loading="lazy" decoding="async" />;
+  },
+};
 
 const statusLabels: Record<KnowledgeDocument['status'], string> = {
   pending: '等待处理',
@@ -21,6 +36,259 @@ const statusLabels: Record<KnowledgeDocument['status'], string> = {
   error: '失败',
 };
 
+type RenderDebugKind = 'item-source' | 'document-markdown' | 'document-items';
+
+interface RenderDebugTrace {
+  id: string;
+  kind: RenderDebugKind;
+  startedAt: number;
+  documentId: string;
+  documentName: string;
+  itemId?: string;
+  itemTitle?: string;
+  contentLength: number;
+  contentMetrics: Record<string, number>;
+  longTasks: Array<Record<string, number | string>>;
+  longTaskObserver?: PerformanceObserver;
+  finished?: boolean;
+}
+
+let renderDebugSeq = 0;
+
+const contentMetricKeys = [
+  'chars',
+  'lines',
+  'htmlTags',
+  'htmlTables',
+  'htmlRows',
+  'htmlCells',
+  'markdownImages',
+  'htmlImages',
+  'importedAssets',
+  'bareUrls',
+  'markdownLinks',
+] as const;
+
+function nowMs() {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function roundMs(value: number) {
+  return Math.round(value * 10) / 10;
+}
+
+function countMatches(text: string, pattern: RegExp) {
+  return (text.match(pattern) || []).length;
+}
+
+function collectContentMetrics(content: string) {
+  const text = String(content || '');
+  return {
+    chars: text.length,
+    lines: text ? text.split(/\r?\n/).length : 0,
+    htmlTags: countMatches(text, /<[^>]+>/g),
+    htmlTables: countMatches(text, /<table\b/gi),
+    htmlRows: countMatches(text, /<tr\b/gi),
+    htmlCells: countMatches(text, /<(?:td|th)\b/gi),
+    markdownImages: countMatches(text, /!\[[^\]]*\]\([^)]*\)/g),
+    htmlImages: countMatches(text, /<img\b/gi),
+    importedAssets: countMatches(text, /yibiao-asset:\/\/imported-images/gi),
+    bareUrls: countMatches(text, /\b(?:https?:\/\/|www\.)[^\s)）]+/gi),
+    markdownLinks: countMatches(text, /\[[^\]]{0,200}\]\([^)]{1,500}\)/g),
+  };
+}
+
+function collectItemsContentMetrics(items: KnowledgeItem[]) {
+  const totals: Record<string, number> = Object.fromEntries(contentMetricKeys.map((key) => [key, 0]));
+  let totalTitleChars = 0;
+  let totalResumeChars = 0;
+  let maxItemContentLength = 0;
+  let maxItemId = '';
+  let maxItemTitle = '';
+  let itemsWithHtml = 0;
+  let itemsWithTables = 0;
+  let itemsWithImages = 0;
+  let itemsWithImportedAssets = 0;
+  let itemsWithBareUrls = 0;
+
+  items.forEach((item) => {
+    const content = String(item.content || '');
+    const metrics = collectContentMetrics(content);
+    contentMetricKeys.forEach((key) => {
+      totals[key] += metrics[key];
+    });
+    totalTitleChars += String(item.title || '').length;
+    totalResumeChars += String(item.resume || '').length;
+    if (metrics.chars > maxItemContentLength) {
+      maxItemContentLength = metrics.chars;
+      maxItemId = item.id;
+      maxItemTitle = item.title;
+    }
+    if (metrics.htmlTags) itemsWithHtml += 1;
+    if (metrics.htmlTables) itemsWithTables += 1;
+    if (metrics.markdownImages || metrics.htmlImages) itemsWithImages += 1;
+    if (metrics.importedAssets) itemsWithImportedAssets += 1;
+    if (metrics.bareUrls) itemsWithBareUrls += 1;
+  });
+
+  const metrics: Record<string, number> = {
+    ...totals,
+    itemCount: items.length,
+    totalTitleChars,
+    totalResumeChars,
+    maxItemContentLength,
+    itemsWithHtml,
+    itemsWithTables,
+    itemsWithImages,
+    itemsWithImportedAssets,
+    itemsWithBareUrls,
+  };
+
+  return {
+    metrics,
+    maxItemId,
+    maxItemTitle,
+  };
+}
+
+function collectDomMetrics(element: HTMLElement | null) {
+  if (!element) return {};
+  return {
+    domNodes: element.querySelectorAll('*').length,
+    tables: element.querySelectorAll('table').length,
+    rows: element.querySelectorAll('tr').length,
+    cells: element.querySelectorAll('td, th').length,
+    images: element.querySelectorAll('img').length,
+    links: element.querySelectorAll('a').length,
+    textChars: element.textContent?.length || 0,
+    htmlChars: element.innerHTML.length,
+    scrollHeight: element.scrollHeight,
+    clientHeight: element.clientHeight,
+  };
+}
+
+function logRenderDebug(trace: RenderDebugTrace | null | undefined, event: string, payload: Record<string, unknown> = {}) {
+  if (!trace || trace.finished) return;
+  const entry = {
+    traceId: trace.id,
+    kind: trace.kind,
+    event,
+    elapsedMs: roundMs(nowMs() - trace.startedAt),
+    documentId: trace.documentId,
+    itemId: trace.itemId,
+    ...payload,
+  };
+  if (typeof window !== 'undefined') {
+    window.__knowledgeRenderDebugLogs = window.__knowledgeRenderDebugLogs || [];
+    window.__knowledgeRenderDebugLogs.push(entry);
+  }
+  console.info('[knowledge-render-debug]', entry);
+}
+
+function startLongTaskObserver(trace: RenderDebugTrace) {
+  if (typeof PerformanceObserver === 'undefined') return;
+  try {
+    const observer = new PerformanceObserver((list) => {
+      list.getEntries().forEach((entry) => {
+        const task = {
+          startMs: roundMs(entry.startTime - trace.startedAt),
+          durationMs: roundMs(entry.duration),
+          name: entry.name || 'longtask',
+        };
+        trace.longTasks.push(task);
+        logRenderDebug(trace, 'longtask', task);
+      });
+    });
+    observer.observe({ entryTypes: ['longtask'] });
+    trace.longTaskObserver = observer;
+  } catch (error) {
+    logRenderDebug(trace, 'longtask:observer-unavailable', { message: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+function createRenderDebugTrace(kind: RenderDebugKind, document: KnowledgeDocument, content: string, item?: KnowledgeItem) {
+  const trace: RenderDebugTrace = {
+    id: `${kind}-${Date.now()}-${++renderDebugSeq}`,
+    kind,
+    startedAt: nowMs(),
+    documentId: document.id,
+    documentName: document.file_name,
+    itemId: item?.id,
+    itemTitle: item?.title,
+    contentLength: String(content || '').length,
+    contentMetrics: collectContentMetrics(content),
+    longTasks: [],
+  };
+  startLongTaskObserver(trace);
+  logRenderDebug(trace, 'trace:start', {
+    documentName: trace.documentName,
+    itemTitle: trace.itemTitle,
+    contentLength: trace.contentLength,
+    metrics: trace.contentMetrics,
+  });
+  console.table([{ traceId: trace.id, ...trace.contentMetrics }]);
+  return trace;
+}
+
+function updateTraceContentMetrics(trace: RenderDebugTrace | null | undefined, content: string) {
+  if (!trace || trace.finished) return;
+  const metrics = collectContentMetrics(content);
+  trace.contentLength = String(content || '').length;
+  trace.contentMetrics = metrics;
+  logRenderDebug(trace, 'content:metrics', {
+    contentLength: trace.contentLength,
+    metrics,
+  });
+}
+
+function updateTraceItemsMetrics(trace: RenderDebugTrace | null | undefined, items: KnowledgeItem[]) {
+  if (!trace || trace.finished) return;
+  const { metrics, maxItemId, maxItemTitle } = collectItemsContentMetrics(items);
+  trace.contentLength = metrics.chars;
+  trace.contentMetrics = metrics;
+  logRenderDebug(trace, 'items:metrics', {
+    itemCount: items.length,
+    contentLength: trace.contentLength,
+    metrics,
+    maxItemId,
+    maxItemTitle,
+  });
+}
+
+function finishRenderDebugTrace(trace: RenderDebugTrace | null | undefined, reason: string, payload: Record<string, unknown> = {}) {
+  if (!trace || trace.finished) return;
+  logRenderDebug(trace, 'trace:finish', {
+    reason,
+    totalMs: roundMs(nowMs() - trace.startedAt),
+    longTaskCount: trace.longTasks.length,
+    ...payload,
+  });
+  if (trace.longTasks.length) {
+    console.table(trace.longTasks.map((task) => ({ traceId: trace.id, ...task })));
+  }
+  trace.longTaskObserver?.disconnect();
+  trace.finished = true;
+}
+
+function logProfilerRender(
+  trace: RenderDebugTrace | null | undefined,
+  profilerId: string,
+  phase: string,
+  actualDuration: number,
+  baseDuration: number,
+  startTime: number,
+  commitTime: number
+) {
+  logRenderDebug(trace, 'react-profiler', {
+    profilerId,
+    phase,
+    actualDurationMs: roundMs(actualDuration),
+    baseDurationMs: roundMs(baseDuration),
+    profilerStartMs: roundMs(startTime - (trace?.startedAt || 0)),
+    profilerCommitMs: roundMs(commitTime - (trace?.startedAt || 0)),
+  });
+}
+
 type KnowledgeViewer = {
   document: KnowledgeDocument;
   mode: 'analysis' | 'items' | 'markdown';
@@ -29,8 +297,11 @@ type KnowledgeViewer = {
 function KnowledgeBasePage() {
   const [index, setIndex] = useState<KnowledgeBaseIndex>(emptyIndex);
   const [activeFolderId, setActiveFolderId] = useState('');
+  const [listLoading, setListLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [viewer, setViewer] = useState<KnowledgeViewer | null>(null);
+  const [viewerLoading, setViewerLoading] = useState(false);
+  const [viewerTrace, setViewerTrace] = useState<RenderDebugTrace | null>(null);
   const [markdownPreview, setMarkdownPreview] = useState('');
   const [itemsPreview, setItemsPreview] = useState<KnowledgeItem[]>([]);
   const [analysisSnapshot, setAnalysisSnapshot] = useState<KnowledgeAnalysisSnapshot | null>(null);
@@ -40,18 +311,30 @@ function KnowledgeBasePage() {
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [visibleDocumentCount, setVisibleDocumentCount] = useState(documentRenderBatchSize);
   const autoMatchingIdsRef = useRef(new Set<string>());
+  const viewerRequestIdRef = useRef(0);
+  const viewerTraceRef = useRef<RenderDebugTrace | null>(null);
   const { showToast } = useToast();
 
   const activeFolder = index.folders.find((folder) => folder.id === activeFolderId) || index.folders[0];
-  const documents = useMemo(
-    () => index.documents.filter((document) => document.folder_id === activeFolder?.id),
-    [activeFolder?.id, index.documents]
-  );
+  const documentsByFolder = useMemo(() => {
+    const grouped = new Map<string, KnowledgeDocument[]>();
+    index.documents.forEach((document) => {
+      const folderDocuments = grouped.get(document.folder_id);
+      if (folderDocuments) {
+        folderDocuments.push(document);
+        return;
+      }
+      grouped.set(document.folder_id, [document]);
+    });
+    return grouped;
+  }, [index.documents]);
+  const documents = activeFolder ? documentsByFolder.get(activeFolder.id) || emptyDocuments : emptyDocuments;
+  const visibleDocuments = documents.slice(0, Math.min(visibleDocumentCount, documents.length));
 
   useEffect(() => {
-    void loadIndex();
-    void loadDeveloperMode();
+    void loadInitialData();
     window.addEventListener('focus', loadDeveloperMode);
     document.addEventListener('visibilitychange', loadDeveloperMode);
     const unsubscribe = window.yibiao?.knowledgeBase.onEvent(({ document }) => {
@@ -72,6 +355,20 @@ function KnowledgeBasePage() {
   }, []);
 
   useEffect(() => {
+    setVisibleDocumentCount(documentRenderBatchSize);
+  }, [activeFolder?.id, documents.length]);
+
+  useEffect(() => {
+    if (visibleDocumentCount >= documents.length) return undefined;
+    const timeoutId = window.setTimeout(() => {
+      startTransition(() => {
+        setVisibleDocumentCount((count) => Math.min(count + documentRenderBatchSize, documents.length));
+      });
+    }, 24);
+    return () => window.clearTimeout(timeoutId);
+  }, [documents.length, visibleDocumentCount]);
+
+  useEffect(() => {
     if (developerMode) return;
     const pendingDocuments = index.documents.filter((document) => document.status === 'ready_for_matching' && !autoMatchingIdsRef.current.has(document.id));
     pendingDocuments.forEach((document) => {
@@ -82,12 +379,15 @@ function KnowledgeBasePage() {
 
   useEffect(() => {
     if (!developerMode && viewer?.mode === 'analysis') {
+      viewerRequestIdRef.current += 1;
       setViewer(null);
+      setViewerLoading(false);
+      setAnalysisSnapshot(null);
     }
   }, [developerMode, viewer?.mode]);
 
   useEffect(() => {
-    if (!activeFolderId && index.folders[0]) {
+    if ((!activeFolderId || !index.folders.some((folder) => folder.id === activeFolderId)) && index.folders[0]) {
       setActiveFolderId(index.folders[0].id);
     }
   }, [activeFolderId, index.folders]);
@@ -98,13 +398,24 @@ function KnowledgeBasePage() {
     }
   }, [viewer?.document.id, viewer?.document.status, viewer?.mode]);
 
-  const loadIndex = async () => {
+  const loadInitialData = async () => {
     try {
-      await loadDeveloperMode();
-      const data = await window.yibiao?.knowledgeBase.list();
-      if (data) setIndex(data);
+      setListLoading(true);
+      const [config, data] = await Promise.all([
+        window.yibiao?.config.load(),
+        window.yibiao?.knowledgeBase.list(),
+      ]);
+      setDeveloperMode(Boolean(config?.developer_mode));
+      if (data) {
+        setIndex(data);
+        setActiveFolderId((currentId) => (
+          data.folders.some((folder) => folder.id === currentId) ? currentId : data.folders[0]?.id || ''
+        ));
+      }
     } catch (error) {
       showToast(error instanceof Error ? error.message : '读取知识库失败', 'error');
+    } finally {
+      setListLoading(false);
     }
   };
 
@@ -194,7 +505,7 @@ function KnowledgeBasePage() {
   };
 
   const deleteFolder = async (folderId: string, folderName: string) => {
-    const count = index.documents.filter((document) => document.folder_id === folderId).length;
+    const count = documentsByFolder.get(folderId)?.length || 0;
     if (!window.confirm(`确定删除文件夹“${folderName}”吗？其中 ${count} 个文档也会一起删除。`)) return;
 
     try {
@@ -225,30 +536,124 @@ function KnowledgeBasePage() {
     }
   };
 
+  const finishActiveViewerTrace = (reason: string, payload: Record<string, unknown> = {}) => {
+    finishRenderDebugTrace(viewerTraceRef.current, reason, payload);
+    viewerTraceRef.current = null;
+    setViewerTrace(null);
+  };
+
+  const createViewerTrace = (document: KnowledgeDocument, mode: KnowledgeViewer['mode'], requestId: number) => {
+    finishActiveViewerTrace('viewer-trace-replaced', { nextMode: mode, requestId });
+    if (!developerMode || mode === 'analysis') {
+      return null;
+    }
+
+    const kind: RenderDebugKind = mode === 'markdown' ? 'document-markdown' : 'document-items';
+    const trace = createRenderDebugTrace(kind, document, '');
+    viewerTraceRef.current = trace;
+    setViewerTrace(trace);
+    logRenderDebug(trace, 'click:open-document', {
+      mode,
+      requestId,
+      status: document.status,
+      itemCount: document.item_count || 0,
+      blockCount: document.block_count || 0,
+      filteredBlockCount: document.filtered_block_count || 0,
+      candidateItemCount: document.candidate_item_count || 0,
+    });
+    return trace;
+  };
+
   const openDocument = async (document: KnowledgeDocument, mode: KnowledgeViewer['mode']) => {
     if (mode === 'analysis' && !developerMode) {
       return;
     }
-    setViewer({ document, mode });
-    setMarkdownPreview('');
-    setItemsPreview([]);
+    const requestId = viewerRequestIdRef.current + 1;
+    viewerRequestIdRef.current = requestId;
+    const trace = createViewerTrace(document, mode, requestId);
+    setViewerLoading(mode !== 'analysis');
+    logRenderDebug(trace, 'state:loading-start', { loading: mode !== 'analysis' });
+    startTransition(() => {
+      setViewer({ document, mode });
+      setMarkdownPreview('');
+      setItemsPreview([]);
+      if (mode === 'analysis') {
+        setAnalysisSnapshot(null);
+      }
+    });
+    logRenderDebug(trace, 'state:viewer-transition-scheduled', { mode });
     if (mode === 'analysis') {
-      setAnalysisSnapshot(null);
       await loadAnalysis(document.id);
       return;
     }
 
     try {
       if (mode === 'markdown') {
+        const readStartedAt = nowMs();
+        logRenderDebug(trace, 'ipc:read:start', { api: 'knowledgeBase.readMarkdown', requestId });
         const markdown = await window.yibiao?.knowledgeBase.readMarkdown(document.id);
-        setMarkdownPreview(markdown || '');
+        const content = markdown || '';
+        logRenderDebug(trace, 'ipc:read:end', {
+          api: 'knowledgeBase.readMarkdown',
+          requestId,
+          readMs: roundMs(nowMs() - readStartedAt),
+          contentLength: content.length,
+        });
+        if (viewerRequestIdRef.current !== requestId) {
+          finishRenderDebugTrace(trace, 'stale-read-result', { requestId, latestRequestId: viewerRequestIdRef.current });
+          return;
+        }
+        updateTraceContentMetrics(trace, content);
+        if (viewerRequestIdRef.current === requestId) {
+          logRenderDebug(trace, 'state:set-markdown-preview', { contentLength: content.length });
+          setMarkdownPreview(content);
+        }
       } else {
+        const readStartedAt = nowMs();
+        logRenderDebug(trace, 'ipc:read:start', { api: 'knowledgeBase.readItems', requestId });
         const items = await window.yibiao?.knowledgeBase.readItems(document.id);
-        setItemsPreview(items || []);
+        const nextItems = items || [];
+        logRenderDebug(trace, 'ipc:read:end', {
+          api: 'knowledgeBase.readItems',
+          requestId,
+          readMs: roundMs(nowMs() - readStartedAt),
+          itemCount: nextItems.length,
+        });
+        if (viewerRequestIdRef.current !== requestId) {
+          finishRenderDebugTrace(trace, 'stale-read-result', { requestId, latestRequestId: viewerRequestIdRef.current });
+          return;
+        }
+        updateTraceItemsMetrics(trace, nextItems);
+        if (viewerRequestIdRef.current === requestId) {
+          logRenderDebug(trace, 'state:set-items-preview', { itemCount: nextItems.length });
+          setItemsPreview(nextItems);
+        }
       }
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '读取文档结果失败', 'error');
+      if (viewerRequestIdRef.current === requestId) {
+        logRenderDebug(trace, 'ipc:read:error', { message: error instanceof Error ? error.message : String(error) });
+        finishRenderDebugTrace(trace, 'read-error');
+        showToast(error instanceof Error ? error.message : '读取文档结果失败', 'error');
+      }
+    } finally {
+      if (viewerRequestIdRef.current === requestId) {
+        setViewerLoading(false);
+        logRenderDebug(trace, 'state:loading-false');
+      }
     }
+  };
+
+  const closeViewer = () => {
+    viewerRequestIdRef.current += 1;
+    finishActiveViewerTrace('viewer-closed');
+    startTransition(() => {
+      setViewer(null);
+      setViewerLoading(false);
+      setViewerTrace(null);
+      setItemsPreview([]);
+      setMarkdownPreview('');
+      setAnalysisSnapshot(null);
+    });
   };
 
   const startMatching = async (targetDocument = viewer?.document, batchSizeOverride = batchSize, options?: { silent?: boolean }) => {
@@ -279,11 +684,13 @@ function KnowledgeBasePage() {
         itemsPreview={itemsPreview}
         markdownPreview={markdownPreview}
         analysisSnapshot={analysisSnapshot}
+        viewerLoading={viewerLoading}
+        viewerTrace={viewerTrace}
         batchSize={batchSize}
         startingMatching={startingMatching}
         developerMode={developerMode}
         onBatchSizeChange={setBatchSize}
-        onBack={() => setViewer(null)}
+        onBack={closeViewer}
         onModeChange={(mode) => void openDocument(viewer.document, mode)}
         onStartMatching={() => void startMatching()}
         onRefreshAnalysis={() => void loadAnalysis(viewer.document.id)}
@@ -341,13 +748,18 @@ function KnowledgeBasePage() {
             <strong>文件夹</strong>
             <span>{index.folders.length} 个</span>
           </div>
-          {index.folders.length ? (
+          {listLoading ? (
+            <div className="knowledge-empty-box">
+              <strong>正在读取知识库...</strong>
+              <p>请稍候，正在加载文件夹和文档列表。</p>
+            </div>
+          ) : index.folders.length ? (
             <div className="knowledge-folder-list">
               {index.folders.map((folder) => {
-                const count = index.documents.filter((document) => document.folder_id === folder.id).length;
+                const count = documentsByFolder.get(folder.id)?.length || 0;
                 return (
                   <article key={folder.id} className={`knowledge-folder-card ${folder.id === activeFolder?.id ? 'is-active' : ''}`}>
-                    <button type="button" className="knowledge-folder-main" onClick={() => setActiveFolderId(folder.id)}>
+                    <button type="button" className="knowledge-folder-main" onClick={() => startTransition(() => setActiveFolderId(folder.id))}>
                       <span aria-hidden="true">F</span>
                       <strong>{folder.name}</strong>
                       <small>{count} 个文档</small>
@@ -374,9 +786,14 @@ function KnowledgeBasePage() {
             <span>{documents.length} 个文档</span>
           </div>
 
-          {documents.length ? (
+          {listLoading ? (
+            <div className="knowledge-empty-box large">
+              <strong>正在读取知识库...</strong>
+              <p>文档列表加载完成后会自动显示。</p>
+            </div>
+          ) : documents.length ? (
             <div className="knowledge-document-list">
-              {documents.map((document) => (
+              {visibleDocuments.map((document) => (
                 <article className="knowledge-document-card" key={document.id}>
                   <div className="knowledge-document-title">
                     <div className="knowledge-document-name">
@@ -402,6 +819,12 @@ function KnowledgeBasePage() {
                   </div>
                 </article>
               ))}
+              {visibleDocuments.length < documents.length && (
+                <div className="knowledge-empty-box">
+                  <strong>正在加载更多文档...</strong>
+                  <p>已显示 {visibleDocuments.length} / {documents.length} 个文档。</p>
+                </div>
+              )}
             </div>
           ) : (
             <div className="knowledge-empty-box large">
@@ -421,6 +844,8 @@ interface KnowledgeDocumentViewerProps {
   itemsPreview: KnowledgeItem[];
   markdownPreview: string;
   analysisSnapshot: KnowledgeAnalysisSnapshot | null;
+  viewerLoading: boolean;
+  viewerTrace: RenderDebugTrace | null;
   batchSize: number;
   startingMatching: boolean;
   developerMode: boolean;
@@ -437,6 +862,8 @@ function KnowledgeDocumentViewer({
   itemsPreview,
   markdownPreview,
   analysisSnapshot,
+  viewerLoading,
+  viewerTrace,
   batchSize,
   startingMatching,
   developerMode,
@@ -446,6 +873,66 @@ function KnowledgeDocumentViewer({
   onStartMatching,
   onRefreshAnalysis,
 }: KnowledgeDocumentViewerProps) {
+  const { showToast } = useToast();
+  const [sourceItem, setSourceItem] = useState<KnowledgeItem | null>(null);
+  const [sourceRendering, setSourceRendering] = useState(false);
+  const [sourceTrace, setSourceTrace] = useState<RenderDebugTrace | null>(null);
+  const renderRequestIdRef = useRef(0);
+  const sourceTraceRef = useRef<RenderDebugTrace | null>(null);
+
+  useEffect(() => {
+    finishRenderDebugTrace(sourceTraceRef.current, 'viewer-reset');
+    sourceTraceRef.current = null;
+    setSourceItem(null);
+    setSourceRendering(false);
+    setSourceTrace(null);
+    renderRequestIdRef.current += 1;
+  }, [document.id, mode]);
+
+  const openSourceItem = (item: KnowledgeItem) => {
+    renderRequestIdRef.current += 1;
+    const requestId = renderRequestIdRef.current;
+    finishRenderDebugTrace(sourceTraceRef.current, 'source-trace-replaced');
+    const trace = developerMode ? createRenderDebugTrace('item-source', document, item.content || '', item) : null;
+    sourceTraceRef.current = trace;
+
+    setSourceItem(item);
+    setSourceRendering(true);
+    setSourceTrace(trace);
+    logRenderDebug(trace, 'click:open-source');
+    window.requestAnimationFrame(() => {
+      if (renderRequestIdRef.current === requestId) {
+        logRenderDebug(trace, 'raf:release-markdown-render');
+        setSourceRendering(false);
+      }
+    });
+  };
+
+  const closeSourceItem = () => {
+    renderRequestIdRef.current += 1;
+    finishRenderDebugTrace(sourceTraceRef.current, 'source-view-closed');
+    sourceTraceRef.current = null;
+    setSourceItem(null);
+    setSourceRendering(false);
+    setSourceTrace(null);
+  };
+
+  const copyDebugLogs = async () => {
+    const logs = window.__knowledgeRenderDebugLogs || [];
+    if (!logs.length) {
+      showToast('暂无渲染调试日志', 'info');
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(logs, null, 2));
+      showToast(`渲染调试日志已复制（${logs.length} 条）`, 'success');
+    } catch (error) {
+      console.warn('复制渲染调试日志失败', error);
+      showToast('复制调试日志失败', 'error');
+    }
+  };
+
   return (
     <div className="page-stack knowledge-viewer-page">
       <section className="knowledge-workspace-bar knowledge-viewer-bar">
@@ -457,6 +944,7 @@ function KnowledgeDocumentViewer({
         </div>
         <div className="knowledge-toolbar-actions">
           <button type="button" className="secondary-action" onClick={onBack}>返回知识库</button>
+          {developerMode && <button type="button" className="secondary-action" onClick={() => void copyDebugLogs()}>复制调试日志</button>}
           {developerMode && <button type="button" className={`secondary-action ${mode === 'analysis' ? 'is-active' : ''}`} onClick={() => onModeChange('analysis')}>分析调试</button>}
           <button type="button" className={`secondary-action ${mode === 'items' ? 'is-active' : ''}`} onClick={() => onModeChange('items')} disabled={document.status !== 'success'}>知识条目</button>
           <button type="button" className={`secondary-action ${mode === 'markdown' ? 'is-active' : ''}`} onClick={() => onModeChange('markdown')} disabled={!canOpenMarkdown(document)}>Markdown</button>
@@ -475,32 +963,176 @@ function KnowledgeDocumentViewer({
             onRefresh={onRefreshAnalysis}
           />
         ) : mode === 'items' ? (
-          <div className="knowledge-item-list knowledge-viewer-item-list">
-            {itemsPreview.length ? itemsPreview.map((item) => (
-              <article className="knowledge-item-card" key={item.id}>
-                {developerMode && <code className="knowledge-entity-id">条目ID：{item.id}</code>}
-                <strong>{item.title}</strong>
-                <p>{item.resume}</p>
-                <details>
-                  <summary>查看原文</summary>
-                  <div className="knowledge-item-content markdown-viewer">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
-                      {item.content}
-                    </ReactMarkdown>
-                  </div>
-                </details>
-              </article>
-            )) : <div className="knowledge-empty-box"><strong>暂无知识条目</strong><p>文档完成整理后会显示结果。</p></div>}
-          </div>
+          viewerLoading ? (
+            <div className="knowledge-empty-box">
+              <strong>正在读取知识条目...</strong>
+              <p>条目较多时需要稍等片刻。</p>
+            </div>
+          ) : (
+            <DebuggableMarkdownContent
+              className="knowledge-item-list knowledge-viewer-item-list"
+              debugTrace={mode === 'items' ? viewerTrace : null}
+              developerMode={developerMode}
+              profilerId="knowledge-items-list"
+            >
+              {itemsPreview.length ? itemsPreview.map((item) => (
+                <KnowledgeItemCard
+                  key={item.id}
+                  item={item}
+                  developerMode={developerMode}
+                  onOpenSource={() => openSourceItem(item)}
+                />
+              )) : <div className="knowledge-empty-box"><strong>暂无知识条目</strong><p>文档完成整理后会显示结果。</p></div>}
+            </DebuggableMarkdownContent>
+          )
         ) : (
           <div className="markdown-viewer knowledge-viewer-markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
-              {markdownPreview || '暂无 Markdown 内容'}
-            </ReactMarkdown>
+            {viewerLoading ? (
+              <div className="knowledge-empty-box large">
+                <strong>正在读取 Markdown...</strong>
+                <p>原文内容较大时需要稍等片刻。</p>
+              </div>
+            ) : (
+              <DebuggableMarkdownContent
+                className="knowledge-markdown-debug-content"
+                debugTrace={mode === 'markdown' ? viewerTrace : null}
+                developerMode={developerMode}
+                profilerId="knowledge-document-markdown"
+              >
+                <MarkdownRenderer>{markdownPreview || '暂无 Markdown 内容'}</MarkdownRenderer>
+              </DebuggableMarkdownContent>
+            )}
           </div>
         )}
       </section>
+
+      <Dialog.Root open={Boolean(sourceItem)} onOpenChange={(open) => !open && closeSourceItem()}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="knowledge-source-modal" />
+          {sourceItem && (
+            <KnowledgeItemSourceDialog
+              item={sourceItem}
+              developerMode={developerMode}
+              rendering={sourceRendering}
+              debugTrace={sourceTrace}
+              onClose={closeSourceItem}
+            />
+          )}
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
+  );
+}
+
+interface KnowledgeItemCardProps {
+  item: KnowledgeItem;
+  developerMode: boolean;
+  onOpenSource: () => void;
+}
+
+function KnowledgeItemCard({ item, developerMode, onOpenSource }: KnowledgeItemCardProps) {
+  return (
+    <article className="knowledge-item-card">
+      {developerMode && <code className="knowledge-entity-id">条目ID：{item.id}</code>}
+      <strong>{item.title}</strong>
+      <p>{item.resume}</p>
+      <button type="button" className="knowledge-item-source-action" onClick={onOpenSource}>查看原文</button>
+    </article>
+  );
+}
+
+interface KnowledgeItemSourceViewerProps {
+  item: KnowledgeItem;
+  developerMode: boolean;
+  rendering: boolean;
+  debugTrace: RenderDebugTrace | null;
+  onClose: () => void;
+}
+
+function KnowledgeItemSourceDialog({ item, developerMode, rendering, debugTrace, onClose }: KnowledgeItemSourceViewerProps) {
+  useLayoutEffect(() => {
+    if (!developerMode || !debugTrace || !rendering) return;
+    logRenderDebug(debugTrace, 'loading:commit');
+  }, [debugTrace, developerMode, rendering]);
+
+  useEffect(() => {
+    if (!developerMode || !debugTrace || !rendering) return undefined;
+    const frameId = window.requestAnimationFrame(() => {
+      logRenderDebug(debugTrace, 'loading:next-frame-visible');
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [debugTrace, developerMode, rendering]);
+
+  return (
+    <Dialog.Content className="knowledge-source-dialog-card knowledge-source-viewer">
+      <div className="knowledge-source-head">
+        <div>
+          <span>知识条目原文</span>
+          <Dialog.Title>{item.title}</Dialog.Title>
+          <Dialog.Description>查看该知识条目对应的原始 Markdown 片段。</Dialog.Description>
+          {developerMode && <code className="knowledge-entity-id">条目ID：{item.id}</code>}
+        </div>
+        <button type="button" className="secondary-action" onClick={onClose}>关闭</button>
+      </div>
+      {rendering ? (
+        <div className="knowledge-empty-box large knowledge-source-loading">
+          <span className="inline-spinner" aria-hidden="true" />
+          <strong>正在渲染原文...</strong>
+          <p>内容较大时需要稍等片刻。</p>
+        </div>
+      ) : (
+        <DebuggableMarkdownContent
+          className="markdown-viewer knowledge-source-content"
+          debugTrace={debugTrace}
+          developerMode={developerMode}
+          profilerId="knowledge-item-source"
+        >
+          <MarkdownRenderer enableGfm={false} components={knowledgeItemSourceComponents}>
+            {item.content || '暂无原文内容'}
+          </MarkdownRenderer>
+        </DebuggableMarkdownContent>
+      )}
+    </Dialog.Content>
+  );
+}
+
+interface DebuggableMarkdownContentProps {
+  children: ReactNode;
+  className: string;
+  debugTrace: RenderDebugTrace | null;
+  developerMode: boolean;
+  profilerId: string;
+}
+
+function DebuggableMarkdownContent({ children, className, debugTrace, developerMode, profilerId }: DebuggableMarkdownContentProps) {
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!developerMode || !debugTrace) return;
+    logRenderDebug(debugTrace, 'dom:commit', collectDomMetrics(contentRef.current));
+  });
+
+  useEffect(() => {
+    if (!developerMode || !debugTrace) return undefined;
+    const frameId = window.requestAnimationFrame(() => {
+      logRenderDebug(debugTrace, 'dom:next-frame-visible', collectDomMetrics(contentRef.current));
+      finishRenderDebugTrace(debugTrace, 'next-frame-visible');
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [debugTrace, developerMode]);
+
+  const content = <div ref={contentRef} className={className}>{children}</div>;
+  if (!developerMode || !debugTrace) return content;
+
+  return (
+    <Profiler
+      id={profilerId}
+      onRender={(id, phase, actualDuration, baseDuration, startTime, commitTime) => {
+        logProfilerRender(debugTrace, id, phase, actualDuration, baseDuration, startTime, commitTime);
+      }}
+    >
+      {content}
+    </Profiler>
   );
 }
 
