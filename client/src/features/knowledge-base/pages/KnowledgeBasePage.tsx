@@ -1,7 +1,7 @@
 import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import type { Components } from 'react-markdown';
-import { MarkdownRenderer, useToast } from '../../../shared/ui';
+import { isLibreOfficeRequiredMessage, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeItem } from '../types';
 
 declare global {
@@ -313,9 +313,11 @@ function KnowledgeBasePage() {
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [visibleDocumentCount, setVisibleDocumentCount] = useState(documentRenderBatchSize);
   const autoMatchingIdsRef = useRef(new Set<string>());
+  const documentParseNoticeIdsRef = useRef(new Set<string>());
   const viewerRequestIdRef = useRef(0);
   const viewerTraceRef = useRef<RenderDebugTrace | null>(null);
   const { showToast } = useToast();
+  const { showDocumentParseNotice } = useDocumentParseNotice();
 
   const activeFolder = index.folders.find((folder) => folder.id === activeFolderId) || index.folders[0];
   const documentsByFolder = useMemo(() => {
@@ -338,6 +340,13 @@ function KnowledgeBasePage() {
     window.addEventListener('focus', loadDeveloperMode);
     document.addEventListener('visibilitychange', loadDeveloperMode);
     const unsubscribe = window.yibiao?.knowledgeBase.onEvent(({ document }) => {
+      const parseMessage = document.error || document.message;
+      if (document.status === 'error'
+        && isLibreOfficeRequiredMessage(parseMessage)
+        && !documentParseNoticeIdsRef.current.has(document.id)) {
+        documentParseNoticeIdsRef.current.add(document.id);
+        showDocumentParseNotice(parseMessage);
+      }
       setIndex((prev) => ({
         ...prev,
         documents: prev.documents.some((item) => item.id === document.id)
@@ -473,7 +482,12 @@ function KnowledgeBasePage() {
       setLoading(true);
       const result = await window.yibiao?.knowledgeBase.uploadDocuments(activeFolder.id);
       if (!result?.success) {
-        showToast(result?.message || '未选择文档', 'info');
+        const message = result?.message || '未选择文档';
+        if (isLibreOfficeRequiredMessage(message)) {
+          showDocumentParseNotice(message);
+          return;
+        }
+        showToast(message, 'info');
         return;
       }
       if (result.documents?.length) {
@@ -481,7 +495,12 @@ function KnowledgeBasePage() {
       }
       showToast(result.message, 'success');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '上传文档失败', 'error');
+      const message = error instanceof Error ? error.message : '上传文档失败';
+      if (isLibreOfficeRequiredMessage(message)) {
+        showDocumentParseNotice(message);
+        return;
+      }
+      showToast(message, 'error');
     } finally {
       setLoading(false);
     }

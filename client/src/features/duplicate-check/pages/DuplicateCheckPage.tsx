@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, useToast } from '../../../shared/ui';
+import { FloatingToolbar, isLibreOfficeRequiredMessage, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { DuplicateAnalysisStatus, DuplicateAnalysisTabId, DuplicateCheckStep, DuplicateCheckWorkspaceState, DuplicateContentAnalysisState, DuplicateImageAnalysisState, DuplicateMetadataAnalysisState, DuplicateOutlineAnalysisState, DuplicateOutlineFileResult, DuplicateOutlineItem, LocalFileSelection } from '../../../shared/types';
 
@@ -576,7 +576,9 @@ function DuplicateCheckPage() {
   const startedMetadataSignatureRef = useRef<string | null>(null);
   const currentAnalysisSignatureRef = useRef('');
   const hydratedRef = useRef(false);
+  const documentParseNoticeIdsRef = useRef(new Set<string>());
   const { showToast } = useToast();
+  const { showDocumentParseNotice } = useDocumentParseNotice();
 
   const totalSize = useMemo(() => bidFiles.reduce((sum, file) => sum + file.size, tenderFile?.size || 0), [bidFiles, tenderFile]);
   const canGoNext = bidFiles.length > 0;
@@ -635,6 +637,15 @@ function DuplicateCheckPage() {
         || event.duplicateCheck.contentAnalysis?.signature
         || event.duplicateCheck.imageAnalysis?.signature;
       if (eventSignature && eventSignature !== currentAnalysisSignatureRef.current) return;
+      event.duplicateCheck.metadataAnalysis?.contentFiles?.forEach((file) => {
+        const noticeId = `content:${file.file_id}`;
+        if (file.status === 'error'
+          && isLibreOfficeRequiredMessage(file.error)
+          && !documentParseNoticeIdsRef.current.has(noticeId)) {
+          documentParseNoticeIdsRef.current.add(noticeId);
+          showDocumentParseNotice(file.error);
+        }
+      });
       setMetadataAnalysis(event.duplicateCheck.metadataAnalysis);
       setOutlineAnalysis(event.duplicateCheck.outlineAnalysis);
       setContentAnalysis(event.duplicateCheck.contentAnalysis);
@@ -671,7 +682,12 @@ function DuplicateCheckPage() {
       })
       .catch((error) => {
         startedMetadataSignatureRef.current = null;
-        showToast(error instanceof Error ? error.message : '启动元数据分析失败', 'error');
+        const message = error instanceof Error ? error.message : '启动元数据分析失败';
+        if (isLibreOfficeRequiredMessage(message)) {
+          showDocumentParseNotice(message);
+          return;
+        }
+        showToast(message, 'error');
       });
   };
 
@@ -699,7 +715,12 @@ function DuplicateCheckPage() {
       setBusy('tender');
       const result = await selectFiles(false);
       if (!result?.success || !result.files?.length) {
-        showToast(result?.message || '未选择招标文件', result?.message === '已取消选择' ? 'info' : 'error');
+        const message = result?.message || '未选择招标文件';
+        if (isLibreOfficeRequiredMessage(message)) {
+          showDocumentParseNotice(message);
+          return;
+        }
+        showToast(message, message === '已取消选择' ? 'info' : 'error');
         return;
       }
       setTenderFile(result.files[0]);
@@ -710,7 +731,12 @@ function DuplicateCheckPage() {
       startedMetadataSignatureRef.current = null;
       showToast('招标文件已加入，暂不执行解析', 'success');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '选择招标文件失败', 'error');
+      const message = error instanceof Error ? error.message : '选择招标文件失败';
+      if (isLibreOfficeRequiredMessage(message)) {
+        showDocumentParseNotice(message);
+        return;
+      }
+      showToast(message, 'error');
     } finally {
       setBusy(null);
     }
@@ -721,7 +747,12 @@ function DuplicateCheckPage() {
       setBusy('bid');
       const result = await selectFiles(true);
       if (!result?.success || !result.files?.length) {
-        showToast(result?.message || '未选择投标文件', result?.message === '已取消选择' ? 'info' : 'error');
+        const message = result?.message || '未选择投标文件';
+        if (isLibreOfficeRequiredMessage(message)) {
+          showDocumentParseNotice(message);
+          return;
+        }
+        showToast(message, message === '已取消选择' ? 'info' : 'error');
         return;
       }
 
@@ -740,7 +771,12 @@ function DuplicateCheckPage() {
         showToast('投标文件已加入，暂不执行解析', 'success');
       }
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '选择投标文件失败', 'error');
+      const message = error instanceof Error ? error.message : '选择投标文件失败';
+      if (isLibreOfficeRequiredMessage(message)) {
+        showDocumentParseNotice(message);
+        return;
+      }
+      showToast(message, 'error');
     } finally {
       setBusy(null);
     }

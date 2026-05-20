@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MarkdownRenderer, useToast } from '../../../shared/ui';
+import { isLibreOfficeRequiredMessage, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FileParserProvider } from '../../../shared/types';
 
 const parserLabels: Record<FileParserProvider, string> = {
@@ -22,6 +22,7 @@ function DocumentAnalysisPage({
   const [parserLabel, setParserLabel] = useState(parserLabels.local);
   const [busy, setBusy] = useState(false);
   const { showToast } = useToast();
+  const { showDocumentParseNotice } = useDocumentParseNotice();
 
   useEffect(() => {
     let mounted = true;
@@ -55,6 +56,10 @@ function DocumentAnalysisPage({
 
       if (!result?.success || !result.file_content) {
         const message = result?.message || '未导入文件';
+        if (isLibreOfficeRequiredMessage(message)) {
+          showDocumentParseNotice(message);
+          return;
+        }
         showToast(message, message === '已取消选择' ? 'info' : 'error');
         return;
       }
@@ -65,7 +70,12 @@ function DocumentAnalysisPage({
       }
       showToast(result.message, 'success');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '文件解析失败', 'error');
+      const message = error instanceof Error ? error.message : '文件解析失败';
+      if (isLibreOfficeRequiredMessage(message)) {
+        showDocumentParseNotice(message);
+        return;
+      }
+      showToast(message, 'error');
     } finally {
       setBusy(false);
     }
