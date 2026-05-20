@@ -12,9 +12,11 @@ interface SidebarProps {
 
 const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>> = {
   'technical-plan': DocumentIcon,
+  'business-bid': BriefcaseIcon,
   'knowledge-base': ArchiveIcon,
   'duplicate-check': CompareIcon,
   'rejection-check': ShieldIcon,
+  'bid-opportunity': RadarIcon,
   'developer-test': FlaskIcon,
   settings: GearIcon,
 };
@@ -127,6 +129,17 @@ function DocumentIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function BriefcaseIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
+      <path d="M5 8h14v11.5H5z" />
+      <path d="M9 8V5.5h6V8" />
+      <path d="M5 12.5h14" />
+      <path d="M10.5 12.5v2h3v-2" />
+    </svg>
+  );
+}
+
 function ArchiveIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
@@ -157,6 +170,17 @@ function ShieldIcon(props: SVGProps<SVGSVGElement>) {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
       <path d="M12 3.5 18.5 6v5.4c0 4.25-2.55 7.55-6.5 9.1-3.95-1.55-6.5-4.85-6.5-9.1V6z" />
       <path d="m9 12.2 2 2 4-4.5" />
+    </svg>
+  );
+}
+
+function RadarIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
+      <path d="M12 20.5a8.5 8.5 0 1 0 0-17 8.5 8.5 0 0 0 0 17Z" />
+      <path d="M12 16.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Z" />
+      <path d="M12 12 18 6" />
+      <path d="M12 12h.01" />
     </svg>
   );
 }

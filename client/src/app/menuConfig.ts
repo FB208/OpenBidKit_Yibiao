@@ -7,6 +7,11 @@ export const appMenuItems: AppMenuItem[] = [
     description: '方案生成与正文编排',
   },
   {
+    id: 'business-bid',
+    label: '商务标',
+    description: '商务响应与报价材料',
+  },
+  {
     id: 'knowledge-base',
     label: '知识库',
     description: '素材、模板和案例资产',
@@ -20,6 +25,11 @@ export const appMenuItems: AppMenuItem[] = [
     id: 'rejection-check',
     label: '废标项检查',
     description: '硬性条款与响应完整性',
+  },
+  {
+    id: 'bid-opportunity',
+    label: '投标机会',
+    description: '机会发现与线索跟踪',
   },
 ];
 
