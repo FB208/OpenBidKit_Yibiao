@@ -4,6 +4,10 @@
   "main": "src/index.js",
   "compatibility_date": "2026-05-14",
   "workers_dev": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
   "keep_vars": true,
   "routes": [
     {

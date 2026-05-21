@@ -3,6 +3,10 @@
   "name": "agnet-analytics-dashboard",
   "compatibility_date": "2026-05-14",
   "workers_dev": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
   "routes": [
     {
       "pattern": "static.analytics.agnet.top",
