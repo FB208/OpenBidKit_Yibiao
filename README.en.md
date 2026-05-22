@@ -25,11 +25,11 @@
 
 Visit the website for more product information, online demos, and technical support.
 
-> **Ad Slot · Partnership**
+> **Ad Slot · Jlaude API**
 >
-> **Looking for an API relay provider that supports image-and-text APIs~~~**
+> Focused on the full GPT series, lower cost than DeepSeek V4 PRO, stable and fast for 7 months. Native chat in Yanwuchang plus unlimited-canvas image generation, all in one place, practical and affordable.
 >
-> Image generation / multimodal models / OpenAI-like APIs are welcome for integration.
+> Direct link: https://jlaudeapi.com
 
 <h2 align="center">✨ Features & Advantages</h2>
 
