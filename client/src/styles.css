@@ -5247,6 +5247,58 @@ button {
   box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.12);
 }
 
+.input-with-action {
+  display: grid;
+  width: 100%;
+  min-height: 44px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  overflow: hidden;
+  background: #eef3fa;
+  border: 1px solid #ccd6e3;
+  border-radius: 14px;
+}
+
+.input-with-action:focus-within {
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.58);
+  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.12);
+}
+
+.settings-row .input-with-action input {
+  min-height: 42px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.settings-row .input-with-action input:focus {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.input-with-action-button {
+  min-height: 42px;
+  padding: 0 18px;
+  color: var(--yb-primary);
+  font-weight: 800;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.48);
+  border: 0;
+  border-left: 1px solid #ccd6e3;
+}
+
+.input-with-action-button:hover:not(:disabled) {
+  color: var(--yb-primary-deep);
+  background: rgba(33, 116, 253, 0.1);
+}
+
+.input-with-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
 .settings-row select:disabled {
   color: #536176;
   opacity: 1;

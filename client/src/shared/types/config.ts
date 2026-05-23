@@ -1,7 +1,16 @@
-export interface AiConfig {
+export type TextModelProvider = 'jinlong' | 'volcengine' | 'xiaomi' | 'deepseek' | 'longcat' | 'custom';
+
+export interface TextModelConfig {
   api_key: string;
-  base_url?: string;
+  base_url: string;
   model_name: string;
+}
+
+export type TextModelProfiles = Record<TextModelProvider, TextModelConfig>;
+
+export interface AiConfig extends TextModelConfig {
+  text_model_provider: TextModelProvider;
+  text_model_profiles: TextModelProfiles;
 }
 
 export interface ConfigSaveResult {

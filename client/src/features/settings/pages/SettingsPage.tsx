@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { FloatingToolbar, useToast } from '../../../shared/ui';
+import { FloatingToolbar, InputWithAction, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProvider, ImageModelStatus } from '../../../shared/types';
+import type { ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProvider, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'about';
@@ -16,6 +16,66 @@ const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
   { id: 'file-parser', label: '文件解析' },
   { id: 'about', label: '关于' },
 ];
+
+const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
+  { value: 'jinlong', label: '金龙中转站【推荐】' },
+  { value: 'volcengine', label: '火山方舟' },
+  { value: 'xiaomi', label: '小米 token plan' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'longcat', label: '龙猫' },
+  { value: 'custom', label: '自定义' },
+];
+
+const oldXiaomiBaseUrl = 'https://api.xiaomimimo.com/v1';
+
+const textProviderDefaults: TextModelProfiles = {
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo' },
+  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '' },
+  xiaomi: { api_key: '', base_url: 'https://token-plan-cn.xiaomimimo.com/v1', model_name: '' },
+  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '' },
+  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '' },
+  custom: { api_key: '', base_url: '', model_name: '' },
+};
+
+const textProviderApiKeyUrls: Partial<Record<TextModelProvider, string>> = {
+  jinlong: 'https://jlaudeapi.com/keys',
+  volcengine: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
+  xiaomi: 'https://platform.xiaomimimo.com/console/api-keys',
+  deepseek: 'https://platform.deepseek.com/api_keys',
+  longcat: 'https://longcat.chat/platform/api_keys',
+};
+
+function createDefaultTextModelProfiles(): TextModelProfiles {
+  return textModelProviders.reduce((profiles, provider) => ({
+    ...profiles,
+    [provider.value]: { ...textProviderDefaults[provider.value] },
+  }), {} as TextModelProfiles);
+}
+
+function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partial<TextModelConfig>): TextModelConfig {
+  const defaults = textProviderDefaults[provider];
+  const baseUrl = profile?.base_url ?? defaults.base_url;
+  return {
+    api_key: profile?.api_key ?? defaults.api_key,
+    base_url: provider === 'xiaomi' && baseUrl === oldXiaomiBaseUrl ? defaults.base_url : baseUrl,
+    model_name: profile?.model_name ?? defaults.model_name,
+  };
+}
+
+function normalizeTextModelProfiles(profiles?: Partial<TextModelProfiles>): TextModelProfiles {
+  return textModelProviders.reduce((nextProfiles, provider) => ({
+    ...nextProfiles,
+    [provider.value]: normalizeTextModelProfile(provider.value, profiles?.[provider.value]),
+  }), {} as TextModelProfiles);
+}
+
+function textProfileFromState(textModel: SettingsPageState['textModel']): TextModelConfig {
+  return {
+    api_key: textModel.api_key,
+    base_url: textModel.base_url,
+    model_name: textModel.model_name,
+  };
+}
 
 const imageProviders: Array<{ value: ImageModelProvider; label: string }> = [
   { value: 'volcengine', label: '火山方舟' },
@@ -123,10 +183,10 @@ const parserOptions = [
 
 const initialState: SettingsPageState = {
   textModel: {
-    api_key: '',
-    base_url: '',
-    model_name: 'gpt-3.5-turbo',
+    provider: 'jinlong',
+    ...textProviderDefaults.jinlong,
   },
+  textModelProfiles: createDefaultTextModelProfiles(),
   imageModel: {
     provider: 'volcengine',
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
@@ -203,13 +263,16 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         return;
       }
 
+      const textModelProfiles = normalizeTextModelProfiles(config.text_model_profiles);
+      const activeTextProfile = normalizeTextModelProfile(config.text_model_provider, textModelProfiles[config.text_model_provider]);
+
       setState((prev) => ({
         ...prev,
         textModel: {
-          api_key: config.api_key,
-          base_url: config.base_url || '',
-          model_name: config.model_name,
+          provider: config.text_model_provider,
+          ...activeTextProfile,
         },
+        textModelProfiles,
         imageModel: config.image_model,
         fileParser: {
           provider: config.file_parser.provider,
@@ -228,18 +291,30 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
   };
 
-  const createClientConfig = (): ClientConfig => ({
-    api_key: state.textModel.api_key,
-    base_url: state.textModel.base_url,
-    model_name: state.textModel.model_name,
-    image_model: state.imageModel,
-    file_parser: {
-      provider: state.fileParser.provider,
-      mineru_token: state.fileParser.mineru_token || '',
-    },
-    developer_mode: state.general.developer_mode,
-    real_time_render: state.general.real_time_render,
+  const getCurrentTextModelProfiles = (): TextModelProfiles => ({
+    ...state.textModelProfiles,
+    [state.textModel.provider]: textProfileFromState(state.textModel),
   });
+
+  const createClientConfig = (): ClientConfig => {
+    const textModelProfiles = getCurrentTextModelProfiles();
+    const activeTextProfile = textModelProfiles[state.textModel.provider];
+
+    return {
+      text_model_provider: state.textModel.provider,
+      text_model_profiles: textModelProfiles,
+      api_key: activeTextProfile.api_key,
+      base_url: activeTextProfile.base_url,
+      model_name: activeTextProfile.model_name,
+      image_model: state.imageModel,
+      file_parser: {
+        provider: state.fileParser.provider,
+        mineru_token: state.fileParser.mineru_token || '',
+      },
+      developer_mode: state.general.developer_mode,
+      real_time_render: state.general.real_time_render,
+    };
+  };
 
   const checkForUpdates = async () => {
     if (updateStatus === 'checking' || updateStatus === 'downloading') {
@@ -330,6 +405,58 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }));
   };
 
+  const updateTextModelProvider = (provider: TextModelProvider) => {
+    setTextModels([]);
+    setState((prev) => ({
+      ...prev,
+      textModelProfiles: {
+        ...prev.textModelProfiles,
+        [prev.textModel.provider]: textProfileFromState(prev.textModel),
+      },
+      textModel: {
+        provider,
+        ...normalizeTextModelProfile(provider, prev.textModelProfiles[provider]),
+      },
+    }));
+  };
+
+  const updateTextModelConfig = (partial: Partial<TextModelConfig>, options: { clearModels?: boolean } = {}) => {
+    if (options.clearModels) {
+      setTextModels([]);
+    }
+
+    setState((prev) => ({
+      ...prev,
+      ...(() => {
+        const textModel = { ...prev.textModel, ...partial };
+        return {
+          textModel,
+          textModelProfiles: {
+            ...prev.textModelProfiles,
+            [prev.textModel.provider]: textProfileFromState(textModel),
+          },
+        };
+      })(),
+    }));
+  };
+
+  const openTextProviderApiKeyPage = async () => {
+    const url = textProviderApiKeyUrls[state.textModel.provider];
+    if (!url) {
+      showToast('自定义服务商没有预置 API Key 获取页面', 'info');
+      return;
+    }
+
+    try {
+      const result = await window.yibiao?.openExternal(url);
+      if (result && !result.success) {
+        showToast(result.message || '打开 API Key 获取页面失败', 'error');
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '打开 API Key 获取页面失败', 'error');
+    }
+  };
+
   const testTextConfig = async () => {
     try {
       setTestingTextModel(true);
@@ -341,6 +468,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       const content = await window.yibiao?.ai.chat({
         messages: [{ role: 'user', content: 'hi' }],
         temperature: 0,
+        timeout_ms: 30000,
+        timeout_message: '文本模型测试超时，请检查 Base URL、API Key 或模型名称',
       });
       const reply = (content || '').trim();
       showToast(reply ? `测试成功：${reply.slice(0, 160)}` : '测试成功', 'success');
@@ -427,9 +556,18 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       if (result?.success && models.length > 0) {
         setState((prev) => ({
           ...prev,
-          textModel: models.includes(prev.textModel.model_name)
-            ? prev.textModel
-            : { ...prev.textModel, model_name: models[0] },
+          ...(() => {
+            const textModel = models.includes(prev.textModel.model_name)
+              ? prev.textModel
+              : { ...prev.textModel, model_name: models[0] };
+            return {
+              textModel,
+              textModelProfiles: {
+                ...prev.textModelProfiles,
+                [prev.textModel.provider]: textProfileFromState(textModel),
+              },
+            };
+          })(),
         }));
       }
       showToast(result?.message || `获取到 ${result?.models.length || 0} 个文本模型`, result?.success ? 'success' : 'info');
@@ -479,10 +617,12 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
 
     if (activeTab === 'text-model') {
-      return JSON.stringify(state.textModel) !== JSON.stringify({
-        api_key: savedConfig.api_key,
-        base_url: savedConfig.base_url || '',
-        model_name: savedConfig.model_name,
+      return JSON.stringify({
+        provider: state.textModel.provider,
+        profiles: getCurrentTextModelProfiles(),
+      }) !== JSON.stringify({
+        provider: savedConfig.text_model_provider,
+        profiles: normalizeTextModelProfiles(savedConfig.text_model_profiles),
       });
     }
 
@@ -522,6 +662,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
   const canSaveActiveTab = activeTab === 'general' || activeTab === 'text-model' || activeTab === 'image-model' || activeTab === 'file-parser';
   const activeTabDirty = isActiveTabDirty();
+  const currentTextProviderDefault = textProviderDefaults[state.textModel.provider];
   const imageModelStatus: ImageModelStatus = state.imageModel.status || 'untested';
   const currentImageStatus = imageStatusMeta[imageModelStatus];
   const imageTestTime = formatImageTestTime(state.imageModel.tested_at);
@@ -675,17 +816,28 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
           <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
+                <strong>服务提供商</strong>
+                <span>选择服务商会自动填入预置 Base URL，后续仍可手动调整</span>
+              </div>
+              <select
+                value={state.textModel.provider}
+                onChange={(event) => updateTextModelProvider(event.target.value as TextModelProvider)}
+              >
+                {textModelProviders.map((provider) => (
+                  <option value={provider.value} key={provider.value}>{provider.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
                 <strong>Base URL</strong>
                 <span>OpenAI Like 接口地址，用于文本生成和分析任务</span>
               </div>
               <input
                 type="text"
                 value={state.textModel.base_url}
-              placeholder="例如 https://api.openai.com/v1"
-              onChange={(event) => setState((prev) => ({
-                ...prev,
-                  textModel: { ...prev.textModel, base_url: event.target.value },
-                }))}
+                placeholder={currentTextProviderDefault.base_url || '例如 https://api.openai.com/v1'}
+                onChange={(event) => updateTextModelConfig({ base_url: event.target.value }, { clearModels: true })}
               />
             </label>
             <label className="settings-row">
@@ -693,14 +845,15 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <strong>API Key</strong>
                 <span>仅保存在本机配置文件中，不暴露给 Renderer 以外的原始能力</span>
               </div>
-              <input
+              <InputWithAction
                 type="password"
                 value={state.textModel.api_key}
-              placeholder="请输入文本模型 API Key"
-              onChange={(event) => setState((prev) => ({
-                ...prev,
-                  textModel: { ...prev.textModel, api_key: event.target.value },
-                }))}
+                placeholder="请输入文本模型 API Key"
+                onChange={(event) => updateTextModelConfig({ api_key: event.target.value }, { clearModels: true })}
+                actionLabel="获取"
+                actionTitle="打开当前服务商的 API Key 获取页面"
+                actionDisabled={!textProviderApiKeyUrls[state.textModel.provider]}
+                onAction={() => { void openTextProviderApiKeyPage(); }}
               />
             </label>
             <label className="settings-row">
@@ -712,10 +865,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 {textModels.length > 0 ? (
                   <select
                     value={state.textModel.model_name}
-                    onChange={(event) => setState((prev) => ({
-                      ...prev,
-                      textModel: { ...prev.textModel, model_name: event.target.value },
-                    }))}
+                    onChange={(event) => updateTextModelConfig({ model_name: event.target.value })}
                   >
                     {textModels.map((model) => <option value={model} key={model}>{model}</option>)}
                   </select>
@@ -724,10 +874,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                     type="text"
                     value={state.textModel.model_name}
                     placeholder="例如 deepseek-chat"
-                    onChange={(event) => setState((prev) => ({
-                      ...prev,
-                      textModel: { ...prev.textModel, model_name: event.target.value },
-                    }))}
+                    onChange={(event) => updateTextModelConfig({ model_name: event.target.value })}
                   />
                 )}
                 <button

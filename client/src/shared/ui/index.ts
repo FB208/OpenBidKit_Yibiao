@@ -1,4 +1,6 @@
 export { default as FloatingToolbar } from './FloatingToolbar';
+export { default as InputWithAction } from './InputWithAction';
+export type { InputWithActionProps } from './InputWithAction';
 export type {
   FloatingToolbarAction,
   FloatingToolbarActionVariant,

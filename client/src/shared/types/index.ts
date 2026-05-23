@@ -39,6 +39,9 @@ export type {
   ImageModelProvider,
   ImageModelStatus,
   ModelListResult,
+  TextModelConfig,
+  TextModelProvider,
+  TextModelProfiles,
 } from './config';
 export type { AppMenuItem, SectionId } from './navigation';
 export type { OutlineData, OutlineItem, OutlineMode, TechnicalRequirementGroup } from './outline';

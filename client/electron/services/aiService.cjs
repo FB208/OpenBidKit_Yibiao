@@ -67,6 +67,38 @@ function normalizeAiError(error, fallbackMessage) {
   return error?.message || String(error || '') || fallbackMessage;
 }
 
+function normalizeRequestTimeoutMs(request) {
+  const timeoutMs = Number(request?.timeout_ms);
+  return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : AI_REQUEST_TIMEOUT_MS;
+}
+
+function createAbortError() {
+  const error = new Error('AI 请求超时');
+  error.name = 'AbortError';
+  return error;
+}
+
+function createOperationTimeout(timeoutMs) {
+  const controller = new AbortController();
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(createAbortError());
+    }, timeoutMs);
+    controller.signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
+  });
+
+  return {
+    signal: controller.signal,
+    run(promise) {
+      return Promise.race([promise, timeoutPromise]);
+    },
+    clear() {
+      controller.abort();
+    },
+  };
+}
+
 function createHeaders(apiKey) {
   return {
     'Content-Type': 'application/json',
@@ -439,19 +471,21 @@ function createChatRequestBody(config, request, options = {}) {
   return body;
 }
 
-async function fetchChatCompletion(app, config, body) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+async function fetchChatCompletion(app, config, body, options = {}) {
+  const controller = options.signal ? null : new AbortController();
+  const timer = controller ? setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS) : null;
   try {
     trackAiRequest(app, config, { ai_request_type: 'text' });
     return await fetch(`${trimBaseUrl(config.base_url)}/chat/completions`, {
       method: 'POST',
       headers: createHeaders(config.api_key),
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal: options.signal || controller.signal,
     });
   } finally {
-    clearTimeout(timer);
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 }
 
@@ -468,6 +502,8 @@ async function chatWithConfig(app, config, request) {
   let requestBody = createChatRequestBody(config, request);
   let responseData = null;
   let errorMessage = '';
+  const timeoutMs = normalizeRequestTimeoutMs(request);
+  const timeout = createOperationTimeout(timeoutMs);
 
   try {
     writeAiLog(app, config, {
@@ -478,19 +514,19 @@ async function chatWithConfig(app, config, request) {
       status: 'pending',
       created_at: new Date().toISOString(),
     });
-    let response = await fetchChatCompletion(app, config, requestBody);
+    let response = await timeout.run(fetchChatCompletion(app, config, requestBody, { signal: timeout.signal }));
     if (!response.ok && request.response_format) {
-      const detail = await response.text().catch(() => '');
+      const detail = await timeout.run(response.text().catch(() => ''));
       if (isResponseFormatUnsupported(detail)) {
         requestBody = createChatRequestBody(config, request, { omitResponseFormat: true });
-        response = await fetchChatCompletion(app, config, requestBody);
+        response = await timeout.run(fetchChatCompletion(app, config, requestBody, { signal: timeout.signal }));
       } else {
         throw new Error(detail || 'AI 请求失败');
       }
     }
 
-    await ensureOk(response, 'AI 请求失败');
-    responseData = await response.json();
+    await timeout.run(ensureOk(response, 'AI 请求失败'));
+    responseData = await timeout.run(response.json());
     const content = responseData.choices?.[0]?.message?.content || '';
     writeAiLog(app, config, {
       request_id: requestId,
@@ -503,7 +539,9 @@ async function chatWithConfig(app, config, request) {
     });
     return content;
   } catch (error) {
-    errorMessage = error.name === 'AbortError' ? `AI 请求超时（${AI_REQUEST_TIMEOUT_MS / 1000} 秒）` : error.message;
+    errorMessage = error.name === 'AbortError'
+      ? request.timeout_message || `AI 请求超时（${timeoutMs / 1000} 秒）`
+      : error.message;
     writeAiLog(app, config, {
       request_id: requestId,
       type: 'chat-error',
@@ -514,6 +552,8 @@ async function chatWithConfig(app, config, request) {
       created_at: new Date().toISOString(),
     });
     throw new Error(errorMessage || 'AI 请求失败');
+  } finally {
+    timeout.clear();
   }
 }
 

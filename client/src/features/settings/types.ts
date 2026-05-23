@@ -1,11 +1,10 @@
-import type { FileParserConfig, ImageModelConfig } from '../../shared/types';
+import type { FileParserConfig, ImageModelConfig, TextModelConfig, TextModelProfiles, TextModelProvider } from '../../shared/types';
 
 export interface SettingsPageState {
-  textModel: {
-    api_key: string;
-    base_url: string;
-    model_name: string;
+  textModel: TextModelConfig & {
+    provider: TextModelProvider;
   };
+  textModelProfiles: TextModelProfiles;
   imageModel: ImageModelConfig;
   fileParser: FileParserConfig;
   general: {

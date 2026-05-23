@@ -8,6 +8,8 @@ export interface ChatMessage {
 export interface ChatRequestOptions {
   temperature?: number;
   response_format?: { type: 'json_object' };
+  timeout_ms?: number;
+  timeout_message?: string;
 }
 
 export interface ChatCompletionRequest extends ChatRequestOptions {
