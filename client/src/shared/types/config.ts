@@ -33,7 +33,7 @@ export interface ImageModelTestResult {
   mime_type?: string;
 }
 
-export type ImageModelProvider = 'jinlong' | 'volcengine' | 'google-ai-studio';
+export type ImageModelProvider = 'jinlong' | 'volcengine' | 'google-ai-studio' | 'custom';
 export type ImageModelStatus = 'untested' | 'available' | 'unavailable';
 
 export interface ImageModelConfig {

@@ -54,7 +54,7 @@ function createDefaultTextModelProfiles(): TextModelProfiles {
 
 function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partial<TextModelConfig>): TextModelConfig {
   const defaults = textProviderDefaults[provider];
-  const baseUrl = profile?.base_url ?? defaults.base_url;
+  const baseUrl = provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url;
   return {
     api_key: profile?.api_key ?? defaults.api_key,
     base_url: provider === 'xiaomi' && baseUrl === oldXiaomiBaseUrl ? defaults.base_url : baseUrl,
@@ -72,7 +72,7 @@ function normalizeTextModelProfiles(profiles?: Partial<TextModelProfiles>): Text
 function textProfileFromState(textModel: SettingsPageState['textModel']): TextModelConfig {
   return {
     api_key: textModel.api_key,
-    base_url: textModel.base_url,
+    base_url: textModel.provider === 'custom' ? textModel.base_url : textProviderDefaults[textModel.provider].base_url,
     model_name: textModel.model_name,
   };
 }
@@ -81,6 +81,7 @@ const imageProviders: Array<{ value: ImageModelProvider; label: string }> = [
   { value: 'jinlong', label: '金龙中转站【推荐】' },
   { value: 'volcengine', label: '火山方舟' },
   { value: 'google-ai-studio', label: 'Google AI Studio' },
+  { value: 'custom', label: '自定义 OpenAI-like' },
 ];
 
 const imageProviderDefaults: ImageModelProfiles = {
@@ -111,41 +112,56 @@ const imageProviderDefaults: ImageModelProfiles = {
     tested_at: '',
     last_error: '',
   },
+  custom: {
+    provider: 'custom',
+    base_url: '',
+    api_key: '',
+    model_name: '',
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  },
 };
 
 const imageProviderApiKeyUrls: Record<ImageModelProvider, string> = {
   jinlong: 'https://jlaudeapi.com/keys',
   volcengine: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
   'google-ai-studio': 'https://aistudio.google.com/api-keys',
+  custom: '',
 };
 
 const imageProviderLabels: Record<ImageModelProvider, string> = {
   jinlong: '金龙中转站',
   volcengine: '火山方舟',
   'google-ai-studio': 'Google AI Studio',
+  custom: '自定义生图服务',
 };
 
 function getImageBaseUrlDescription(provider: ImageModelProvider) {
   if (provider === 'jinlong') return '金龙中转站 OpenAI 兼容接口地址';
   if (provider === 'volcengine') return '火山方舟 OpenAI 兼容接口地址';
+  if (provider === 'custom') return '填写兼容 OpenAI /images/generations 的接口地址';
   return 'Google Gemini API REST 地址';
 }
 
 function getImageApiKeyDescription(provider: ImageModelProvider) {
   if (provider === 'jinlong') return '用于调用金龙中转站图片生成 API';
   if (provider === 'volcengine') return '用于调用火山方舟图片生成 API';
+  if (provider === 'custom') return '用于调用自定义 OpenAI-like 生图接口';
   return '用于调用 Google AI Studio Gemini API';
 }
 
 function getImageModelDescription(provider: ImageModelProvider) {
   if (provider === 'jinlong') return '填写金龙中转站已开通的生图模型名称';
   if (provider === 'volcengine') return '填写火山方舟控制台中已开通的模型或推理接入点 ID';
+  if (provider === 'custom') return '填写自定义接口支持的生图模型名称';
   return '选择或填写支持图片生成的 Gemini 模型';
 }
 
 function getImageModelPlaceholder(provider: ImageModelProvider) {
   if (provider === 'jinlong') return '请输入已开通的生图模型名称';
   if (provider === 'volcengine') return '请输入已开通的模型或推理接入点 ID';
+  if (provider === 'custom') return '请输入 OpenAI-like 生图模型名称';
   return 'gemini-3.1-flash-image-preview';
 }
 
@@ -160,7 +176,7 @@ function normalizeImageModelProfile(provider: ImageModelProvider, profile?: Part
   const defaults = imageProviderDefaults[provider];
   return {
     provider,
-    base_url: profile?.base_url ?? defaults.base_url,
+    base_url: provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url,
     api_key: profile?.api_key ?? defaults.api_key,
     model_name: profile?.model_name ?? defaults.model_name,
     status: profile?.status ?? defaults.status,
@@ -179,7 +195,7 @@ function normalizeImageModelProfiles(profiles?: Partial<ImageModelProfiles>): Im
 function imageProfileFromState(imageModel: ImageModelConfig): ImageModelConfig {
   return {
     provider: imageModel.provider,
-    base_url: imageModel.base_url || '',
+    base_url: imageModel.provider === 'custom' ? imageModel.base_url || '' : imageProviderDefaults[imageModel.provider].base_url,
     api_key: imageModel.api_key,
     model_name: imageModel.model_name,
     status: imageModel.status || 'untested',
@@ -587,6 +603,11 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
   const openImageProviderApiKeyPage = async () => {
     const url = imageProviderApiKeyUrls[state.imageModel.provider];
+    if (!url) {
+      showToast('自定义生图服务没有预置 API Key 获取页面', 'info');
+      return;
+    }
+
     try {
       const result = await window.yibiao?.openExternal(url);
       if (result && !result.success) {
@@ -745,10 +766,21 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const fetchImageModels = async () => {
     try {
       setLoadingModels('image');
-      if (state.imageModel.provider === 'jinlong') {
+      if (state.imageModel.provider === 'jinlong' || state.imageModel.provider === 'custom') {
+        const providerLabel = imageProviderLabels[state.imageModel.provider];
+        const baseUrl = state.imageModel.provider === 'custom'
+          ? state.imageModel.base_url || ''
+          : state.imageModel.base_url || imageProviderDefaults[state.imageModel.provider].base_url || '';
+
         if (!state.imageModel.api_key.trim()) {
           setImageModels([]);
-          showToast('请先填写金龙中转站 API Key', 'info');
+          showToast(`请先填写${providerLabel} API Key`, 'info');
+          return;
+        }
+
+        if (!baseUrl.trim()) {
+          setImageModels([]);
+          showToast(`请先填写${providerLabel} Base URL`, 'info');
           return;
         }
 
@@ -756,7 +788,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         const result = await window.yibiao?.config.listModels({
           ...config,
           api_key: state.imageModel.api_key,
-          base_url: state.imageModel.base_url || imageProviderDefaults.jinlong.base_url || '',
+          base_url: baseUrl,
           model_name: state.imageModel.model_name,
         });
         const models = result?.models || [];
@@ -778,7 +810,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             })(),
           }));
         }
-        showToast(result?.message || `获取到 ${models.length} 个金龙中转站模型`, result?.success ? 'success' : 'info');
+        showToast(result?.message || `获取到 ${models.length} 个${providerLabel}模型`, result?.success ? 'success' : 'info');
         return;
       }
 
@@ -1033,7 +1065,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>服务提供商</strong>
-                <span>选择服务商会自动填入预置 Base URL，后续仍可手动调整</span>
+                <span>选择服务商会自动使用预置 Base URL；只有自定义服务商允许修改</span>
               </div>
               <select
                 value={state.textModel.provider}
@@ -1054,6 +1086,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 value={state.textModel.base_url}
                 placeholder={currentTextProviderDefault.base_url || '例如 https://api.openai.com/v1'}
                 onChange={(event) => updateTextModelConfig({ base_url: event.target.value }, { clearModels: true })}
+                disabled={state.textModel.provider !== 'custom'}
               />
             </label>
             <label className="settings-row">
@@ -1153,8 +1186,9 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               <input
                 type="text"
                 value={state.imageModel.base_url || ''}
-                placeholder={imageProviderDefaults[state.imageModel.provider].base_url}
+                placeholder={state.imageModel.provider === 'custom' ? 'https://api.example.com/v1' : imageProviderDefaults[state.imageModel.provider].base_url}
                 onChange={(event) => updateImageModelConfig({ base_url: event.target.value }, { clearModels: true })}
+                disabled={state.imageModel.provider !== 'custom'}
               />
             </label>
             <label className="settings-row">

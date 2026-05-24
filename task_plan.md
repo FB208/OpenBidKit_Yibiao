@@ -1,5 +1,68 @@
 # Task Plan
 
+## Current Task: GitHub 仓库统计接口修复
+
+### Goal
+修复 `GET /api/github-repo-stats` 返回 `code:0, repo:null, cached:false` 导致统计页读不到 GitHub stars/forks/open issues 的问题。
+
+### Phases
+- [completed] 1. 定位 Worker 路由和 Dashboard 调用路径，确认 `repo:null` 来自 GitHub 拉取失败被 catch 吞掉。
+- [completed] 2. 验证 `FB208/OpenBidKit_Yibiao` GitHub API 和仓库页本身可访问，排除仓库名错误。
+- [completed] 3. 改造 Worker：支持可选 `GITHUB_API_TOKEN`、GitHub HTML 兜底解析、手动 TTL 缓存和实时失败返回旧缓存。
+- [completed] 4. 不再在无缓存失败时返回 `code:0, repo:null`，改为 502 和可诊断错误信息。
+- [completed] 5. 运行 Worker 语法检查、handler 实测、HTML fallback 实测、stale cache fallback 实测和 diff 检查。
+- [completed] 6. 按 review 修复 HTML fallback 部分字段解析失败会缓存 0 的问题，并补 Dashboard 自定义生图服务商中文标签。
+- [completed] 7. 按 review 修复模型使用表 provider 标签：文本模型和生图模型分开使用标签表，避免文本 `custom` 显示成自定义生图服务。
+
+### Decisions
+- 使用现有 `NOTICE_STORE` KV 保存 GitHub stats 缓存，不新增 KV binding。
+- 正常缓存新鲜度仍是 30 分钟；KV key 保留 7 天，用于 GitHub 实时接口失败时返回 stale 缓存。
+- GitHub API 优先；API 失败后抓取公开仓库 HTML 中的 counters 兜底。
+- HTML fallback 只有 stars、forks、open issues 三个字段全部解析成功才返回结果；部分字段缺失时不写入缓存，有旧缓存则返回旧缓存。
+- Dashboard 模型使用表按分组区分 provider 标签：`textModelUsage` 使用文本模型服务商标签，`imageModelUsage` 使用生图服务商标签。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: 生图模型测试超时
+
+### Goal
+给设置页生图模型测试增加 5 分钟超时，覆盖 OpenAI-like 和 Google AI Studio 生图测试。
+
+### Phases
+- [completed] 1. 为 OpenAI-like 生图测试接入 `AI_REQUEST_TIMEOUT_MS` 和 `AbortController`。
+- [completed] 2. 为 Google AI Studio 生图测试接入同一个 5 分钟超时。
+- [completed] 3. 运行 `node --check electron/services/aiService.cjs` 和 `npm run build`。
+
+### Decisions
+- 生图测试超时复用全局 `AI_REQUEST_TIMEOUT_MS = 300000`，不新增独立配置项。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: 生图自定义 OpenAI-like 模式
+
+### Goal
+为生图模型新增 `custom` 服务商，允许用户填写自定义 Base URL/API Key/模型名称，并复用 OpenAI compatible `/images/generations` 生图接口完成测试、正文配图和模型列表获取。
+
+### Phases
+- [completed] 1. 梳理当前生图 provider、profiles、设置页和 Main 侧生图调用路径。
+- [completed] 2. 扩展共享类型、Renderer 默认配置和 Main 配置归一化，加入 `custom` 生图 provider。
+- [completed] 3. 调整设置页自定义生图 UI：Base URL 可编辑、API Key 获取提示、模型列表获取。
+- [completed] 4. 将 Main 侧测试和正文配图的 OpenAI compatible 分支兼容 `custom`。
+- [completed] 5. 运行语法检查和客户端构建验证。
+
+### Decisions
+- 自定义生图只按 OpenAI compatible 格式实现，不设计额外降级协议。
+- 预置生图服务商仍锁定预置 Base URL，只有 `custom` 可编辑。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| planning skill 示例路径 `~/.opencode/.../session-catchup.py` 不存在 | 第一次 catchup | 改用实际路径 `~/.config/opencode/.../session-catchup.py` |
+
 ## Goal
 重做客户端“导入招标文件/标书解析”页面：标题显示配置中的文件解析方式；页面主体用 Markdown 渲染上传招标文件直接提取出的内容；三种解析方式参考 `tools/mineru-agent-demo/`、`tools/mineru-accurate-demo/`、`tools/doc2markdown-node/`，优先完整还原 Node 版本地解析链路。
 
@@ -173,6 +236,28 @@
 
 | planning skill 示例路径 `~/.opencode/.../session-catchup.py` 不存在 | 第一次 catchup | 改用实际路径 `~/.config/opencode/.../session-catchup.py` |
 | `git diff --check` 报 `client/doc/标书查重.md:54 trailing whitespace` | 收尾检查 | 该文件是既有/用户改动，本轮未修改，按工作区保护规则未处理；本轮修改文件仅有 LF/CRLF 提示 |
+
+## Current Task: AI 模型使用埋点与 Analytics 展示
+
+### Goal
+为客户端文本模型和生图模型 AI 请求增加服务商、Base URL、模型和 token 用量埋点；Analytics“模型使用”模块展示真实请求记录维度，不再按模型名 lower 聚合，按 total_tokens 从高到低排序。
+
+### Phases
+- [completed] 1. 改造客户端 `aiService.cjs`，异步吞错上报 AI 请求元数据与 token usage。
+- [completed] 2. 改造 Analytics Worker `/track` 写入字段和 `/api/config-usage` 模型使用查询。
+- [completed] 3. 改造 Dashboard “模型使用”表格展示服务商、Base URL、模型、客户端、次数和 token。
+- [completed] 4. 更新 Analytics README 采集口径说明。
+- [completed] 5. 运行客户端构建与 Worker/Dashboard 语法验证。
+
+### Decisions
+- 所有埋点必须异步执行，异常吞掉，不影响用户主流程。
+- 允许牺牲部分准确性；token 缺失或解析失败时记 0。
+- 流式文本请求尝试 `stream_options.include_usage=true`；服务商不支持时自动重试不带该字段。
+- 模型使用统计保留真实 provider/base_url/model 字符串，不做 lower 聚合。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
 
 ## Current Task: Analytics 远程公告通道
 

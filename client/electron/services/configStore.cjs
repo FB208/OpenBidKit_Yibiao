@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const { getConfigFilePath } = require('../utils/paths.cjs');
 
 const textModelProviders = ['jinlong', 'volcengine', 'xiaomi', 'deepseek', 'longcat', 'custom'];
-const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio'];
+const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'custom'];
 const oldXiaomiBaseUrl = 'https://api.xiaomimimo.com/v1';
 
 const textProviderBaseUrls = {
@@ -77,6 +77,15 @@ const defaultImageModelProfiles = {
     tested_at: '',
     last_error: '',
   },
+  custom: {
+    provider: 'custom',
+    base_url: '',
+    api_key: '',
+    model_name: '',
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  },
 };
 
 const defaultConfig = {
@@ -118,7 +127,9 @@ function isImageModelProvider(value) {
 function normalizeTextModelProfile(provider, profile) {
   const defaults = defaultTextModelProfiles[provider];
   const source = profile || {};
-  const sourceBaseUrl = source.base_url !== undefined ? source.base_url : defaults.base_url;
+  const sourceBaseUrl = provider === 'custom'
+    ? source.base_url !== undefined ? source.base_url : defaults.base_url
+    : defaults.base_url;
   return {
     api_key: source.api_key !== undefined ? source.api_key : defaults.api_key,
     base_url: provider === 'xiaomi' && sourceBaseUrl === oldXiaomiBaseUrl ? defaults.base_url : sourceBaseUrl,
@@ -138,7 +149,9 @@ function normalizeTextModelProfiles(sourceProfiles) {
 }
 
 function textProfileFromFlatConfig(source, fallback, provider) {
-  const sourceBaseUrl = source.base_url !== undefined ? source.base_url : fallback.base_url;
+  const sourceBaseUrl = provider === 'custom'
+    ? source.base_url !== undefined ? source.base_url : fallback.base_url
+    : fallback.base_url;
   return {
     api_key: source.api_key !== undefined ? source.api_key : fallback.api_key,
     base_url: provider === 'xiaomi' && sourceBaseUrl === oldXiaomiBaseUrl ? fallback.base_url : sourceBaseUrl,
@@ -151,7 +164,9 @@ function normalizeImageModelProfile(provider, profile) {
   const source = profile || {};
   return {
     provider,
-    base_url: source.base_url !== undefined ? source.base_url : defaults.base_url,
+    base_url: provider === 'custom'
+      ? source.base_url !== undefined ? source.base_url : defaults.base_url
+      : defaults.base_url,
     api_key: source.api_key !== undefined ? source.api_key : defaults.api_key,
     model_name: source.model_name !== undefined ? source.model_name : defaults.model_name,
     status: source.status !== undefined ? source.status : defaults.status,

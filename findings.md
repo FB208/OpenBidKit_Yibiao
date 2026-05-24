@@ -107,3 +107,11 @@
 - 真实缓存复验结果：招标白名单已包含去掉 `3.` 后的目标句，投标文件中该目标句命中白名单 5 次，模拟重复分析 `targetInDuplicates=false`；总重复句由 132 降到 116。
 - 截图中 `1. 供应商资格要求证明文件`、`（四）法定代表人资格证明书` 等仍出现的原因不是 `normalized` 未去序号；当前缓存中这些项的 `normalized` 已去序号，UI 展示的是保留原文的 `sentence`。真正问题是此前先用原句做 `isInformativeContentSentence()`，短标题加上序号后长度达标进入投标重复池，而招标文件同名无序号短标题长度不足没有进入白名单。
 - 修复后正文分句先生成 `normalized` 再判断信息量；同时句首序号剥离支持 Markdown 转义 `1\.`、全角数字、括号/圈号后额外分隔符和 `第一章/第1节/第二部分`。真实缓存模拟结果：招标白名单句子数 717，投标正文句子数 6167，命中招标白名单 1997，重复句 105，截图短标题重复项 0，normalized 句首序号残留 0，目标“特别要求”重复项 0。
+- AI 模型使用埋点现状：客户端 Main 侧已有 `ai_request`，但请求发起前上报，只含请求类型和文本/生图模型名，拿不到 token usage；Analytics Worker 当前用 `blob18/blob19` 按模型名聚合且 lower，无法反映服务商、Base URL 和真实模型状态。
+- Analytics Engine 当前 `track.js` 已写入 `blob1` 到 `blob20`，可在 `ai_request` 事件中复用 `blob9-blob12` 表示 provider/base_url/model/request_type，同时保留旧 `blob18/blob19/blob20` 兼容；`doubles` 可扩展为计数、prompt_tokens、completion_tokens、total_tokens。
+- OpenAI 兼容 chat 响应 token 通常在 `responseData.usage.prompt_tokens/completion_tokens/total_tokens`；Google Gemini 生图响应 token 通常在 `usageMetadata.promptTokenCount/candidatesTokenCount/totalTokenCount`；OpenAI 兼容图片如不返回 usage 则记 0。
+- 用户确认不兼容旧客户端模型统计；Base URL 策略改为预置锁定：文本模型只有 `custom` 可编辑，生图无自定义服务商所以全部禁用编辑；旧配置中非自定义服务商保存过的 Base URL 会被归一回预置地址。
+- 生图当前已有金龙/火山 OpenAI compatible 实现：Main 侧 `testOpenAICompatibleImageModel()` 和 `generateOpenAICompatibleImage()` 都调用 `${baseUrl}/images/generations`，可直接把 `custom` 纳入同一分支；Renderer 侧需让 `imageProfileFromState()` 和配置归一化只对 `custom` 保留用户 Base URL。
+- 自定义生图已按 OpenAI compatible 协议接入：`POST {base_url}/images/generations`，`Authorization: Bearer <api_key>`，请求体含 `model/prompt/size/response_format`；若服务端明确不支持 `response_format`，会自动重试一次不带该字段。测试预览同时支持返回 `data[0].url` 和 `data[0].b64_json`。
+- `/api/github-repo-stats` 的 `repo:null` 代码路径在 `analytics/worker/src/routes/githubRepoStats.js`：GitHub API fetch 失败后 catch 只记录日志并返回 `{ code: 0, repo: null, cached: false }`，Dashboard 因 `code:0` 不会暴露错误原因。仓库 `FB208/OpenBidKit_Yibiao` 本身公开可访问，直接 GitHub API 返回 stars=399、forks=147、openIssues=4。修复后 API 优先，失败走 GitHub HTML counter 兜底；KV 缓存采用手动 30 分钟新鲜度、7 天 stale 保留，无缓存且实时读取失败时返回 502 诊断信息。
+- GitHub HTML fallback 不能把未解析出的 counter 当 0：真实场景中 GitHub 页面某个 id 变化会导致未知字段被缓存为 0。已改为三个 counter 全部解析成功才接受 HTML fallback，否则无缓存返回 502，有 stale cache 返回旧缓存。

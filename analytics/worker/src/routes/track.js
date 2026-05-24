@@ -2,6 +2,11 @@ import { ALLOWED_EVENTS } from '../constants.js';
 import { json, methodNotAllowed } from '../http.js';
 import { isValidProjectName, normalizeMetricValue, normalizeText } from '../utils.js';
 
+function normalizeTokenNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+}
+
 export async function handleTrack(request, env) {
   if (request.method !== 'POST') {
     return methodNotAllowed();
@@ -29,6 +34,18 @@ export async function handleTrack(request, env) {
     const textModelName = normalizeText(body.text_model_name || body.textModelName, 120);
     const imageModelName = normalizeText(body.image_model_name || body.imageModelName, 120);
     const aiRequestType = normalizeText(body.ai_request_type || body.aiRequestType, 20);
+    const aiModelProvider = normalizeText(body.ai_model_provider || body.aiModelProvider, 80);
+    const aiModelBaseUrl = normalizeText(body.ai_model_base_url || body.aiModelBaseUrl, 200);
+    const aiModelName = normalizeText(body.ai_model_name || body.aiModelName, 160);
+    const promptTokens = normalizeTokenNumber(body.prompt_tokens ?? body.promptTokens);
+    const completionTokens = normalizeTokenNumber(body.completion_tokens ?? body.completionTokens);
+    const totalTokens = normalizeTokenNumber(body.total_tokens ?? body.totalTokens) || promptTokens + completionTokens;
+    const normalizedTextModelName = textModelName || (aiRequestType === 'text' ? aiModelName : '');
+    const normalizedImageModelName = imageModelName || (aiRequestType === 'image' ? aiModelName : '');
+    const modelProviderBlob = event === 'ai_request' ? aiModelProvider : fileParserProvider;
+    const modelBaseUrlBlob = event === 'ai_request' ? aiModelBaseUrl : realTimeRender;
+    const modelNameBlob = event === 'ai_request' ? aiModelName : imageProvider;
+    const requestTypeBlob = event === 'ai_request' ? aiRequestType : imageModelStatus;
 
     if (!isValidProjectName(projectName)) {
       return json({ code: 400, message: 'invalid projectName' }, { status: 400 });
@@ -52,20 +69,20 @@ export async function handleTrack(request, env) {
         arch,
         clientId,
         clientCreatedAt,
-        fileParserProvider,
-        realTimeRender,
-        imageProvider,
-        imageModelStatus,
+        modelProviderBlob,
+        modelBaseUrlBlob,
+        modelNameBlob,
+        requestTypeBlob,
         bidAnalysisMode,
         outlineMode,
         tableRequirement,
         useMermaidImages,
         useAiImages,
-        textModelName,
-        imageModelName,
+        normalizedTextModelName,
+        normalizedImageModelName,
         aiRequestType,
       ],
-      doubles: [1],
+      doubles: [1, promptTokens, completionTokens, totalTokens],
       indexes: [projectName],
     });
 

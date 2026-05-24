@@ -35,6 +35,7 @@ analytics/
 | `GET /api/projects` | 查询最近 90 天出现过的项目名 | `ADMIN_TOKEN` |
 | `GET /api/summary` | 查询每日统计、页面排行、版本分布 | `ADMIN_TOKEN` |
 | `GET /api/latest` | 查询最近事件 | `ADMIN_TOKEN` |
+| `GET /api/github-repo-stats` | 查询 GitHub 仓库 stars、forks、open issues | `ADMIN_TOKEN` |
 | `GET /api/notice` | 读取当前项目公告 | `ADMIN_TOKEN` |
 | `POST /api/notice` | 发布或更新当前项目公告 | `ADMIN_TOKEN` |
 | `DELETE /api/notice` | 停用当前项目公告 | `ADMIN_TOKEN` |
@@ -48,7 +49,7 @@ analytics/
 | `config_usage` | 配置使用快照 | 否 |
 | `ai_request` | AI 接口请求 | 否 |
 
-`ai_request` 只统计模型名称和请求类型，不采集 API Key、Base URL、Prompt、响应内容或错误详情。
+`ai_request` 统计请求类型、服务商、模型端点域名、模型名称和 token 用量（`prompt_tokens`、`completion_tokens`、`total_tokens`）。模型端点只上传 hostname，不携带协议、路径、端口、账号密码、查询参数或 hash；不采集 API Key、Prompt、响应内容或错误详情。
 
 统计页面使用：
 
@@ -149,6 +150,12 @@ npx wrangler kv namespace create NOTICE_STORE
 | `ADMIN_TOKEN` | 统计看板查询密码 |
 | `ANALYTICS_API_TOKEN` | 上一步创建的 API Token |
 
+可选 Secret：
+
+| Secret | 说明 |
+| --- | --- |
+| `GITHUB_API_TOKEN` | GitHub 仓库统计接口使用；不配置时使用公开 API + HTML 兜底，配置后可降低 GitHub API 限流概率 |
+
 注意：不要在 `wrangler.jsonc` 里声明 `secrets.required`。首次 GitHub 部署时 Secret 还没配置，Wrangler 会在部署前校验并失败。正确流程是先部署 Worker，再到 Cloudflare 后台配置这些 Secret，然后重新部署或直接访问验证。
 
 确认绑定：
@@ -231,10 +238,10 @@ Analytics Engine 写入后可能需要等待几十秒才能查到。
 | 老客户端活跃 | 所选时间范围内活跃客户端数减去新增客户端数 |
 | 每日统计中的客户端数 | 当天有任意打开或页面访问事件上报的去重客户端数 |
 | 版本分布中的活跃客户端数 | 所选时间范围内该版本上报过事件的去重客户端数 |
-| 配置使用中的文本模型和生图模型 | 所选时间范围内真实 AI 接口请求使用的模型名称、去重客户端数和请求次数 |
+| 配置使用中的文本模型和生图模型 | 所选时间范围内真实 AI 接口请求使用的服务商、模型端点域名、模型名称、去重客户端数、请求次数和 token 用量；模型使用表按 `total_tokens` 从高到低排序 |
 | 留存概览中的当日回访客户端 | 创建后 D1/D3/D7 当天再次打开 App 的客户端数 |
 
-配置使用只采集模型名称、开关和枚举类配置，不采集 `api_key`、`base_url`、`mineru_token`、Prompt、响应内容、错误详情等敏感数据。
+配置使用只采集模型服务商、模型端点域名、模型名称、token 用量、开关和枚举类配置，不采集 `api_key`、完整 `base_url`、`mineru_token`、Prompt、响应内容、错误详情等敏感数据。
 
 发布公告：
 

@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { getAiLogsDir, getGeneratedImagesDir } = require('../utils/paths.cjs');
 
 const AI_REQUEST_TIMEOUT_MS = 300000;
+const IMAGE_MODEL_TEST_TIMEOUT_MESSAGE = '生图模型测试超时，请检查 Base URL、API Key 或模型名称';
 const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const ANALYTICS_PROJECT_NAME = 'yibiao-client';
 const OPENAI_IMAGE_PROVIDER_META = {
@@ -19,10 +20,24 @@ const OPENAI_IMAGE_PROVIDER_META = {
     logProvider: 'volcengine',
     modelLabel: '模型名称或推理接入点 ID',
   },
+  custom: {
+    label: '自定义生图服务',
+    defaultBaseUrl: '',
+    logProvider: 'custom',
+    modelLabel: '生图模型名称',
+  },
 };
 
 function trimBaseUrl(baseUrl) {
-  return (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+  return String(baseUrl || '').trim().replace(/\/+$/, '');
+}
+
+function requireBaseUrl(baseUrl, message) {
+  const trimmed = trimBaseUrl(baseUrl);
+  if (!trimmed) {
+    throw new Error(message);
+  }
+  return trimmed;
 }
 
 function createRequestId() {
@@ -39,6 +54,19 @@ function isResponseFormatUnsupported(message) {
     'unknown parameter',
     'invalid parameter',
     'must be',
+  ].some((marker) => normalized.includes(marker));
+}
+
+function isStreamOptionsUnsupported(message) {
+  const normalized = String(message || '').toLowerCase();
+  return normalized.includes('stream_options') && [
+    'not supported',
+    'does not support',
+    'not support',
+    'unsupported',
+    'unknown parameter',
+    'invalid parameter',
+    'unrecognized',
   ].some((marker) => normalized.includes(marker));
 }
 
@@ -81,6 +109,56 @@ function normalizeAiError(error, fallbackMessage) {
   return error?.message || String(error || '') || fallbackMessage;
 }
 
+function normalizeTokenNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+}
+
+function normalizeTokenUsage(usage) {
+  const source = usage || {};
+  const promptTokens = normalizeTokenNumber(source.prompt_tokens ?? source.promptTokens ?? source.promptTokenCount);
+  const completionTokens = normalizeTokenNumber(
+    source.completion_tokens
+    ?? source.completionTokens
+    ?? source.completionTokenCount
+    ?? source.candidatesTokenCount,
+  );
+  const totalTokens = normalizeTokenNumber(source.total_tokens ?? source.totalTokens ?? source.totalTokenCount)
+    || promptTokens + completionTokens;
+
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: totalTokens,
+  };
+}
+
+function normalizeAnalyticsEndpointHost(baseUrl) {
+  const rawValue = String(baseUrl || '').trim();
+  if (!rawValue) {
+    return '';
+  }
+
+  const candidates = rawValue.includes('://') ? [rawValue] : [`https://${rawValue}`];
+  for (const candidate of candidates) {
+    try {
+      return new URL(candidate).hostname.toLowerCase();
+    } catch {
+      // 尝试下一个候选格式。
+    }
+  }
+
+  return '';
+}
+
+function extractOpenAIUsage(responseData) {
+  return normalizeTokenUsage(responseData?.usage);
+}
+
+function extractGoogleUsage(responseData) {
+  return normalizeTokenUsage(responseData?.usageMetadata || responseData?.usage_metadata);
+}
+
 function normalizeRequestTimeoutMs(request) {
   const timeoutMs = Number(request?.timeout_ms);
   return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : AI_REQUEST_TIMEOUT_MS;
@@ -121,26 +199,46 @@ function createHeaders(apiKey) {
 }
 
 function trackAiRequest(app, config, payload) {
-  const imageConfig = config.image_model || {};
-  const body = {
-    projectName: ANALYTICS_PROJECT_NAME,
-    event: 'ai_request',
-    version: typeof app?.getVersion === 'function' ? app.getVersion() : '',
-    platform: process.platform,
-    arch: process.arch,
-    client_id: config.analytics_client_id || '',
-    client_created_at: config.analytics_created_at || '',
-    ai_request_type: payload.ai_request_type || '',
-    text_model_name: payload.ai_request_type === 'text' ? config.model_name || '' : '',
-    image_model_name: payload.ai_request_type === 'image' ? imageConfig.model_name || '' : '',
-  };
-
   void Promise.resolve()
-    .then(() => fetch(ANALYTICS_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }))
+    .then(() => {
+      const imageConfig = config.image_model || {};
+      const requestType = payload.ai_request_type || '';
+      const tokenUsage = normalizeTokenUsage(payload.usage);
+      const modelProvider = requestType === 'image'
+        ? imageConfig.provider || ''
+        : config.text_model_provider || '';
+      const modelBaseUrl = requestType === 'image'
+        ? imageConfig.base_url || ''
+        : config.base_url || '';
+      const modelEndpointHost = normalizeAnalyticsEndpointHost(modelBaseUrl);
+      const modelName = requestType === 'image'
+        ? imageConfig.model_name || ''
+        : config.model_name || '';
+      const body = {
+        projectName: ANALYTICS_PROJECT_NAME,
+        event: 'ai_request',
+        version: typeof app?.getVersion === 'function' ? app.getVersion() : '',
+        platform: process.platform,
+        arch: process.arch,
+        client_id: config.analytics_client_id || '',
+        client_created_at: config.analytics_created_at || '',
+        ai_request_type: requestType,
+        ai_model_provider: modelProvider,
+        ai_model_base_url: modelEndpointHost,
+        ai_model_name: modelName,
+        prompt_tokens: tokenUsage.prompt_tokens,
+        completion_tokens: tokenUsage.completion_tokens,
+        total_tokens: tokenUsage.total_tokens,
+        text_model_name: requestType === 'text' ? modelName : '',
+        image_model_name: requestType === 'image' ? modelName : '',
+      };
+
+      return fetch(ANALYTICS_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    })
     .catch(() => undefined);
 }
 
@@ -165,6 +263,10 @@ function getImageModelAvailability(config) {
 
   if (!imageConfig.model_name) {
     return { available: false, status: 'unavailable', message: '请先填写生图模型名称' };
+  }
+
+  if (!trimBaseUrl(imageConfig.base_url)) {
+    return { available: false, status: 'unavailable', message: '请先填写生图模型 Base URL' };
   }
 
   return { available: true, status: 'available', message: '生图模型可用' };
@@ -226,6 +328,37 @@ async function ensureOk(response, fallbackMessage) {
     detail = body.error?.message || body.message || '';
   } catch {
     detail = await response.text().catch(() => '');
+  }
+
+  throw new Error(detail || fallbackMessage);
+}
+
+async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, fallbackMessage, options = {}) {
+  const sendRequest = (body) => fetch(`${baseUrl}/images/generations`, {
+    method: 'POST',
+    headers: createHeaders(apiKey),
+    body: JSON.stringify(body),
+    signal: options.signal,
+  });
+  const response = await sendRequest(requestBody);
+  if (response.ok) {
+    return response;
+  }
+
+  let detail = '';
+  try {
+    const body = await response.json();
+    detail = body.error?.message || body.message || '';
+  } catch {
+    detail = await response.text().catch(() => '');
+  }
+
+  if (requestBody.response_format && isResponseFormatUnsupported(detail)) {
+    const retryBody = { ...requestBody };
+    delete retryBody.response_format;
+    const retryResponse = await sendRequest(retryBody);
+    await ensureOk(retryResponse, fallbackMessage);
+    return retryResponse;
   }
 
   throw new Error(detail || fallbackMessage);
@@ -480,6 +613,9 @@ function createChatRequestBody(config, request, options = {}) {
 
   if (options.stream) {
     body.stream = true;
+    if (!options.omitStreamOptions) {
+      body.stream_options = { include_usage: true };
+    }
   }
 
   return body;
@@ -489,8 +625,8 @@ async function fetchChatCompletion(app, config, body, options = {}) {
   const controller = options.signal ? null : new AbortController();
   const timer = controller ? setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS) : null;
   try {
-    trackAiRequest(app, config, { ai_request_type: 'text' });
-    return await fetch(`${trimBaseUrl(config.base_url)}/chat/completions`, {
+    const baseUrl = requireBaseUrl(config.base_url, '请先在设置中配置文本模型 Base URL');
+    return await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: createHeaders(config.api_key),
       body: JSON.stringify(body),
@@ -512,10 +648,13 @@ async function chatWithConfig(app, config, request) {
     throw new Error('请先在设置中配置文本模型名称');
   }
 
+  requireBaseUrl(config.base_url, '请先在设置中配置文本模型 Base URL');
+
   const requestId = createRequestId();
   let requestBody = createChatRequestBody(config, request);
   let responseData = null;
   let errorMessage = '';
+  let analyticsTracked = false;
   const timeoutMs = normalizeRequestTimeoutMs(request);
   const timeout = createOperationTimeout(timeoutMs);
 
@@ -541,6 +680,8 @@ async function chatWithConfig(app, config, request) {
 
     await timeout.run(ensureOk(response, 'AI 请求失败'));
     responseData = await timeout.run(response.json());
+    trackAiRequest(app, config, { ai_request_type: 'text', usage: extractOpenAIUsage(responseData) });
+    analyticsTracked = true;
     const content = responseData.choices?.[0]?.message?.content || '';
     writeAiLog(app, config, {
       request_id: requestId,
@@ -556,6 +697,10 @@ async function chatWithConfig(app, config, request) {
     errorMessage = error.name === 'AbortError'
       ? request.timeout_message || `AI 请求超时（${timeoutMs / 1000} 秒）`
       : error.message;
+    if (!analyticsTracked) {
+      trackAiRequest(app, config, { ai_request_type: 'text' });
+      analyticsTracked = true;
+    }
     writeAiLog(app, config, {
       request_id: requestId,
       type: 'chat-error',
@@ -580,6 +725,8 @@ async function streamChatWithConfig(app, config, request, onEvent) {
     throw new Error('请先在设置中配置文本模型名称');
   }
 
+  requireBaseUrl(config.base_url, '请先在设置中配置文本模型 Base URL');
+
   const requestId = createRequestId();
   let requestBody = createChatRequestBody(config, request, { stream: true });
   const rawEvents = [];
@@ -587,6 +734,8 @@ async function streamChatWithConfig(app, config, request, onEvent) {
   const startedAt = Date.now();
   let response = null;
   let responseMetadata = null;
+  let streamUsage = normalizeTokenUsage();
+  let analyticsTracked = false;
   let phase = 'request';
   let ignoredSseLineCount = 0;
   let lastIgnoredSseLine = '';
@@ -617,20 +766,32 @@ async function streamChatWithConfig(app, config, request, onEvent) {
 
   try {
     phase = 'fetching-response';
-    response = await fetchChatCompletion(app, config, requestBody);
-    responseMetadata = responseMeta(response);
+    let omitResponseFormat = false;
+    let omitStreamOptions = false;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      requestBody = createChatRequestBody(config, request, { stream: true, omitResponseFormat, omitStreamOptions });
+      response = await fetchChatCompletion(app, config, requestBody);
+      responseMetadata = responseMeta(response);
 
-    phase = 'checking-response-status';
-    if (!response.ok && request.response_format) {
-      const detail = await response.text().catch(() => '');
-      if (isResponseFormatUnsupported(detail)) {
-        phase = 'retrying-without-response-format';
-        requestBody = createChatRequestBody(config, request, { stream: true, omitResponseFormat: true });
-        response = await fetchChatCompletion(app, config, requestBody);
-        responseMetadata = responseMeta(response);
-      } else {
-        throw new Error(detail || 'AI 流式请求失败');
+      phase = 'checking-response-status';
+      if (response.ok) {
+        break;
       }
+
+      const detail = await response.text().catch(() => '');
+      if (!omitResponseFormat && request.response_format && isResponseFormatUnsupported(detail)) {
+        phase = 'retrying-without-response-format';
+        omitResponseFormat = true;
+        continue;
+      }
+
+      if (!omitStreamOptions && isStreamOptionsUnsupported(detail)) {
+        phase = 'retrying-without-stream-options';
+        omitStreamOptions = true;
+        continue;
+      }
+
+      throw new Error(detail || 'AI 流式请求失败');
     }
 
     await ensureOk(response, 'AI 流式请求失败');
@@ -662,6 +823,9 @@ async function streamChatWithConfig(app, config, request, onEvent) {
       try {
         const data = JSON.parse(payload);
         rawEvents.push(data);
+        if (data.usage) {
+          streamUsage = normalizeTokenUsage(data.usage);
+        }
         const chunk = data.choices?.[0]?.delta?.content || '';
         if (chunk) {
           contentParts.push(chunk);
@@ -690,6 +854,8 @@ async function streamChatWithConfig(app, config, request, onEvent) {
     buffer.split(/\r?\n/).forEach((line) => emitLine(line.trim()));
 
     phase = 'done';
+    trackAiRequest(app, config, { ai_request_type: 'text', usage: streamUsage });
+    analyticsTracked = true;
     writeAiLog(app, config, {
       request_id: requestId,
       type: 'stream',
@@ -704,6 +870,10 @@ async function streamChatWithConfig(app, config, request, onEvent) {
     onEvent({ type: 'done' });
   } catch (error) {
     const message = normalizeAiError(error, 'AI 流式请求失败');
+    if (!analyticsTracked) {
+      trackAiRequest(app, config, { ai_request_type: 'text', usage: streamUsage });
+      analyticsTracked = true;
+    }
     writeAiLog(app, config, {
       request_id: requestId,
       type: 'stream-error',
@@ -722,6 +892,8 @@ async function streamChatWithConfig(app, config, request, onEvent) {
 async function testOpenAICompatibleImageModel(app, config, provider) {
   const imageConfig = config.image_model || {};
   const meta = OPENAI_IMAGE_PROVIDER_META[provider] || OPENAI_IMAGE_PROVIDER_META.volcengine;
+  let responseData = null;
+  let analyticsTracked = false;
 
   if (!imageConfig.api_key) {
     throw new Error(`请先填写${meta.label} API Key`);
@@ -731,40 +903,61 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
     throw new Error(`请先填写${meta.label}${meta.modelLabel}`);
   }
 
-  trackAiRequest(app, config, { ai_request_type: 'image' });
-  const response = await fetch(`${trimBaseUrl(imageConfig.base_url || meta.defaultBaseUrl)}/images/generations`, {
-    method: 'POST',
-    headers: createHeaders(imageConfig.api_key),
-    body: JSON.stringify({
+  const baseUrl = requireBaseUrl(imageConfig.base_url, `${meta.label} Base URL 缺失，请重新选择服务商后保存配置`);
+  const timeout = createOperationTimeout(AI_REQUEST_TIMEOUT_MS);
+
+  try {
+    const requestBody = {
       model: imageConfig.model_name,
       prompt: 'a simple blue dot on a white background',
       size: '2048x2048',
       response_format: 'url',
-    }),
-  });
+    };
+    let response = null;
+    try {
+      response = await timeout.run(fetchOpenAICompatibleImageResponse(
+        baseUrl,
+        imageConfig.api_key,
+        requestBody,
+        `${meta.label}生图测试失败`,
+        { signal: timeout.signal },
+      ));
+    } catch (error) {
+      const message = error.message || '';
+      if (message.includes('does not exist') || message.includes('do not have access')) {
+        throw new Error(`${meta.label}生图模型不可用，请确认${meta.modelLabel}已开通并可访问。原始错误：${message}`);
+      }
 
-  try {
-    await ensureOk(response, `${meta.label}生图测试失败`);
-  } catch (error) {
-    const message = error.message || '';
-    if (message.includes('does not exist') || message.includes('do not have access')) {
-      throw new Error(`${meta.label}生图模型不可用，请确认${meta.modelLabel}已开通并可访问。原始错误：${message}`);
+      throw error;
     }
 
-    throw error;
-  }
-  const data = await response.json();
-  const imageUrl = data.data?.[0]?.url || '';
+    responseData = await timeout.run(response.json());
+    trackAiRequest(app, config, { ai_request_type: 'image', usage: extractOpenAIUsage(responseData) });
+    analyticsTracked = true;
+    const firstImage = responseData.data?.[0] || {};
+    const imageUrl = firstImage.url || '';
+    const imageData = firstImage.b64_json || '';
 
-  return {
-    success: true,
-    message: imageUrl ? `测试成功：已生成图片 ${imageUrl}` : '测试成功：已返回生图结果',
-    image_url: imageUrl,
-  };
+    return {
+      success: true,
+      message: imageUrl ? `测试成功：已生成图片 ${imageUrl}` : '测试成功：已返回生图结果',
+      image_url: imageUrl,
+      image_data: imageData,
+      mime_type: 'image/png',
+    };
+  } catch (error) {
+    if (!analyticsTracked) {
+      trackAiRequest(app, config, { ai_request_type: 'image' });
+    }
+    throw new Error(error?.name === 'AbortError' ? IMAGE_MODEL_TEST_TIMEOUT_MESSAGE : error?.message || '生图模型测试失败');
+  } finally {
+    timeout.clear();
+  }
 }
 
 async function testGoogleImageModel(app, config) {
   const imageConfig = config.image_model || {};
+  let analyticsTracked = false;
 
   if (!imageConfig.api_key) {
     throw new Error('请先填写 Google AI Studio API Key');
@@ -774,39 +967,53 @@ async function testGoogleImageModel(app, config) {
     throw new Error('请先填写 Google 生图模型名称');
   }
 
-  trackAiRequest(app, config, { ai_request_type: 'image' });
-  const response = await fetch(`${trimBaseUrl(imageConfig.base_url || 'https://generativelanguage.googleapis.com/v1beta')}/models/${encodeURIComponent(imageConfig.model_name)}:generateContent`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': imageConfig.api_key,
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: 'Create a simple blue dot on a white background.' }],
-        },
-      ],
-      generationConfig: {
-        responseModalities: ['TEXT', 'IMAGE'],
+  const baseUrl = requireBaseUrl(imageConfig.base_url, 'Google AI Studio Base URL 缺失，请重新选择服务商后保存配置');
+  const timeout = createOperationTimeout(AI_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await timeout.run(fetch(`${baseUrl}/models/${encodeURIComponent(imageConfig.model_name)}:generateContent`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': imageConfig.api_key,
       },
-    }),
-  });
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: 'Create a simple blue dot on a white background.' }],
+          },
+        ],
+        generationConfig: {
+          responseModalities: ['TEXT', 'IMAGE'],
+        },
+      }),
+      signal: timeout.signal,
+    }));
 
-  await ensureOk(response, 'Google AI Studio 生图测试失败');
-  const data = await response.json();
-  const parts = data.candidates?.[0]?.content?.parts || [];
-  const text = parts.find((part) => part.text)?.text || '';
-  const imagePart = parts.find((part) => part.inlineData?.data || part.inline_data?.data);
-  const inlineData = imagePart?.inlineData || imagePart?.inline_data;
+    await timeout.run(ensureOk(response, 'Google AI Studio 生图测试失败'));
+    const data = await timeout.run(response.json());
+    trackAiRequest(app, config, { ai_request_type: 'image', usage: extractGoogleUsage(data) });
+    analyticsTracked = true;
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    const text = parts.find((part) => part.text)?.text || '';
+    const imagePart = parts.find((part) => part.inlineData?.data || part.inline_data?.data);
+    const inlineData = imagePart?.inlineData || imagePart?.inline_data;
 
-  return {
-    success: true,
-    message: inlineData?.data ? `测试成功：已返回图片${text ? `，${text}` : ''}` : `测试成功：${text || '已返回生成结果'}`,
-    image_data: inlineData?.data || '',
-    mime_type: inlineData?.mimeType || inlineData?.mime_type || 'image/png',
-  };
+    return {
+      success: true,
+      message: inlineData?.data ? `测试成功：已返回图片${text ? `，${text}` : ''}` : `测试成功：${text || '已返回生成结果'}`,
+      image_data: inlineData?.data || '',
+      mime_type: inlineData?.mimeType || inlineData?.mime_type || 'image/png',
+    };
+  } catch (error) {
+    if (!analyticsTracked) {
+      trackAiRequest(app, config, { ai_request_type: 'image' });
+    }
+    throw new Error(error?.name === 'AbortError' ? IMAGE_MODEL_TEST_TIMEOUT_MESSAGE : error?.message || '生图模型测试失败');
+  } finally {
+    timeout.clear();
+  }
 }
 
 async function generateOpenAICompatibleImage(app, config, request, provider) {
@@ -819,26 +1026,24 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
     size: request.size || '2048x2048',
     response_format: 'url',
   };
+  const baseUrl = requireBaseUrl(imageConfig.base_url, `${meta.label} Base URL 缺失，请重新选择服务商后保存配置`);
   let responseData = null;
+  let analyticsTracked = false;
 
   try {
     writeAiLog(app, config, {
       request_id: requestId,
       type: 'image-pending',
       provider: meta.logProvider,
-      url: `${trimBaseUrl(imageConfig.base_url || meta.defaultBaseUrl)}/images/generations`,
+      url: `${baseUrl}/images/generations`,
       request: requestBody,
       status: 'pending',
       created_at: new Date().toISOString(),
     });
-    trackAiRequest(app, config, { ai_request_type: 'image' });
-    const response = await fetch(`${trimBaseUrl(imageConfig.base_url || meta.defaultBaseUrl)}/images/generations`, {
-      method: 'POST',
-      headers: createHeaders(imageConfig.api_key),
-      body: JSON.stringify(requestBody),
-    });
-    await ensureOk(response, `${meta.label}生图失败`);
+    const response = await fetchOpenAICompatibleImageResponse(baseUrl, imageConfig.api_key, requestBody, `${meta.label}生图失败`);
     responseData = await response.json();
+    trackAiRequest(app, config, { ai_request_type: 'image', usage: extractOpenAIUsage(responseData) });
+    analyticsTracked = true;
 
     const item = responseData.data?.[0] || {};
     const image = item.b64_json
@@ -863,6 +1068,10 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
     });
     return { success: true, title: request.title || '', ...saved };
   } catch (error) {
+    if (!analyticsTracked) {
+      trackAiRequest(app, config, { ai_request_type: 'image' });
+      analyticsTracked = true;
+    }
     writeAiLog(app, config, {
       request_id: requestId,
       type: 'image-error',
@@ -890,20 +1099,21 @@ async function generateGoogleImage(app, config, request) {
       responseModalities: ['TEXT', 'IMAGE'],
     },
   };
+  const baseUrl = requireBaseUrl(imageConfig.base_url, 'Google AI Studio Base URL 缺失，请重新选择服务商后保存配置');
   let responseData = null;
+  let analyticsTracked = false;
 
   try {
     writeAiLog(app, config, {
       request_id: requestId,
       type: 'image-pending',
       provider: 'google-ai-studio',
-      url: `${trimBaseUrl(imageConfig.base_url || 'https://generativelanguage.googleapis.com/v1beta')}/models/${encodeURIComponent(imageConfig.model_name)}:generateContent`,
+      url: `${baseUrl}/models/${encodeURIComponent(imageConfig.model_name)}:generateContent`,
       request: requestBody,
       status: 'pending',
       created_at: new Date().toISOString(),
     });
-    trackAiRequest(app, config, { ai_request_type: 'image' });
-    const response = await fetch(`${trimBaseUrl(imageConfig.base_url || 'https://generativelanguage.googleapis.com/v1beta')}/models/${encodeURIComponent(imageConfig.model_name)}:generateContent`, {
+    const response = await fetch(`${baseUrl}/models/${encodeURIComponent(imageConfig.model_name)}:generateContent`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -913,6 +1123,8 @@ async function generateGoogleImage(app, config, request) {
     });
     await ensureOk(response, 'Google AI Studio 生图失败');
     responseData = await response.json();
+    trackAiRequest(app, config, { ai_request_type: 'image', usage: extractGoogleUsage(responseData) });
+    analyticsTracked = true;
     const parts = responseData.candidates?.[0]?.content?.parts || [];
     const imagePart = parts.find((part) => part.inlineData?.data || part.inline_data?.data);
     const inlineData = imagePart?.inlineData || imagePart?.inline_data;
@@ -936,6 +1148,10 @@ async function generateGoogleImage(app, config, request) {
     });
     return { success: true, title: request.title || '', ...saved };
   } catch (error) {
+    if (!analyticsTracked) {
+      trackAiRequest(app, config, { ai_request_type: 'image' });
+      analyticsTracked = true;
+    }
     writeAiLog(app, config, {
       request_id: requestId,
       type: 'image-error',
@@ -955,7 +1171,7 @@ async function generateImageWithConfig(app, config, request) {
     throw new Error(availability.message);
   }
 
-  if (config.image_model?.provider === 'jinlong' || config.image_model?.provider === 'volcengine') {
+  if (config.image_model?.provider === 'jinlong' || config.image_model?.provider === 'volcengine' || config.image_model?.provider === 'custom') {
     return generateOpenAICompatibleImage(app, config, request, config.image_model.provider);
   }
 
@@ -996,7 +1212,7 @@ function createAiService({ app, configStore }) {
         analytics_created_at: config.analytics_created_at || currentConfig.analytics_created_at,
       };
 
-      if (trackedConfig.image_model?.provider === 'jinlong' || trackedConfig.image_model?.provider === 'volcengine') {
+      if (trackedConfig.image_model?.provider === 'jinlong' || trackedConfig.image_model?.provider === 'volcengine' || trackedConfig.image_model?.provider === 'custom') {
         return testOpenAICompatibleImageModel(app, trackedConfig, trackedConfig.image_model.provider);
       }
 
@@ -1025,6 +1241,10 @@ function createAiService({ app, configStore }) {
 
       if (!config.api_key) {
         return { success: false, message: '请先填写文本模型 API Key', models: [] };
+      }
+
+      if (!trimBaseUrl(config.base_url)) {
+        return { success: false, message: '请先填写文本模型 Base URL', models: [] };
       }
 
       const response = await fetch(`${trimBaseUrl(config.base_url)}/models`, {

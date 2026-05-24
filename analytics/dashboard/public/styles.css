@@ -282,10 +282,15 @@ button:disabled {
 
 .usage-card {
   min-width: 0;
+  overflow-x: auto;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--panel-soft);
+}
+
+.usage-card-wide {
+  grid-column: 1 / -1;
 }
 
 .usage-card h3 {
