@@ -37,6 +37,7 @@ export type {
   ImageModelTestResult,
   ImageModelConfig,
   ImageModelProvider,
+  ImageModelProfiles,
   ImageModelStatus,
   ModelListResult,
   TextModelConfig,

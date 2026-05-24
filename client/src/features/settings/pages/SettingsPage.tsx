@@ -3,7 +3,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, InputWithAction, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProvider, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider } from '../../../shared/types';
+import type { ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'about';
@@ -78,20 +78,115 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
 }
 
 const imageProviders: Array<{ value: ImageModelProvider; label: string }> = [
+  { value: 'jinlong', label: '金龙中转站【推荐】' },
   { value: 'volcengine', label: '火山方舟' },
   { value: 'google-ai-studio', label: 'Google AI Studio' },
 ];
 
-const imageProviderDefaults: Record<ImageModelProvider, { base_url: string; model_name: string }> = {
-  volcengine: {
-    base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+const imageProviderDefaults: ImageModelProfiles = {
+  jinlong: {
+    provider: 'jinlong',
+    base_url: 'https://jlaudeapi.com/v1',
+    api_key: '',
     model_name: '',
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  },
+  volcengine: {
+    provider: 'volcengine',
+    base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+    api_key: '',
+    model_name: '',
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
   },
   'google-ai-studio': {
+    provider: 'google-ai-studio',
     base_url: 'https://generativelanguage.googleapis.com/v1beta',
+    api_key: '',
     model_name: 'gemini-3.1-flash-image-preview',
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
   },
 };
+
+const imageProviderApiKeyUrls: Record<ImageModelProvider, string> = {
+  jinlong: 'https://jlaudeapi.com/keys',
+  volcengine: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
+  'google-ai-studio': 'https://aistudio.google.com/api-keys',
+};
+
+const imageProviderLabels: Record<ImageModelProvider, string> = {
+  jinlong: '金龙中转站',
+  volcengine: '火山方舟',
+  'google-ai-studio': 'Google AI Studio',
+};
+
+function getImageBaseUrlDescription(provider: ImageModelProvider) {
+  if (provider === 'jinlong') return '金龙中转站 OpenAI 兼容接口地址';
+  if (provider === 'volcengine') return '火山方舟 OpenAI 兼容接口地址';
+  return 'Google Gemini API REST 地址';
+}
+
+function getImageApiKeyDescription(provider: ImageModelProvider) {
+  if (provider === 'jinlong') return '用于调用金龙中转站图片生成 API';
+  if (provider === 'volcengine') return '用于调用火山方舟图片生成 API';
+  return '用于调用 Google AI Studio Gemini API';
+}
+
+function getImageModelDescription(provider: ImageModelProvider) {
+  if (provider === 'jinlong') return '填写金龙中转站已开通的生图模型名称';
+  if (provider === 'volcengine') return '填写火山方舟控制台中已开通的模型或推理接入点 ID';
+  return '选择或填写支持图片生成的 Gemini 模型';
+}
+
+function getImageModelPlaceholder(provider: ImageModelProvider) {
+  if (provider === 'jinlong') return '请输入已开通的生图模型名称';
+  if (provider === 'volcengine') return '请输入已开通的模型或推理接入点 ID';
+  return 'gemini-3.1-flash-image-preview';
+}
+
+function createDefaultImageModelProfiles(): ImageModelProfiles {
+  return imageProviders.reduce((profiles, provider) => ({
+    ...profiles,
+    [provider.value]: { ...imageProviderDefaults[provider.value] },
+  }), {} as ImageModelProfiles);
+}
+
+function normalizeImageModelProfile(provider: ImageModelProvider, profile?: Partial<ImageModelConfig>): ImageModelConfig {
+  const defaults = imageProviderDefaults[provider];
+  return {
+    provider,
+    base_url: profile?.base_url ?? defaults.base_url,
+    api_key: profile?.api_key ?? defaults.api_key,
+    model_name: profile?.model_name ?? defaults.model_name,
+    status: profile?.status ?? defaults.status,
+    tested_at: profile?.tested_at ?? defaults.tested_at,
+    last_error: profile?.last_error ?? defaults.last_error,
+  };
+}
+
+function normalizeImageModelProfiles(profiles?: Partial<ImageModelProfiles>): ImageModelProfiles {
+  return imageProviders.reduce((nextProfiles, provider) => ({
+    ...nextProfiles,
+    [provider.value]: normalizeImageModelProfile(provider.value, profiles?.[provider.value]),
+  }), {} as ImageModelProfiles);
+}
+
+function imageProfileFromState(imageModel: ImageModelConfig): ImageModelConfig {
+  return {
+    provider: imageModel.provider,
+    base_url: imageModel.base_url || '',
+    api_key: imageModel.api_key,
+    model_name: imageModel.model_name,
+    status: imageModel.status || 'untested',
+    tested_at: imageModel.tested_at || '',
+    last_error: imageModel.last_error || '',
+  };
+}
 
 const imageStatusMeta: Record<ImageModelStatus, { label: string; description: string }> = {
   untested: {
@@ -188,14 +283,9 @@ const initialState: SettingsPageState = {
   },
   textModelProfiles: createDefaultTextModelProfiles(),
   imageModel: {
-    provider: 'volcengine',
-    base_url: 'https://ark.cn-beijing.volces.com/api/v3',
-    api_key: '',
-    model_name: '',
-    status: 'untested',
-    tested_at: '',
-    last_error: '',
+    ...imageProviderDefaults.jinlong,
   },
+  imageModelProfiles: createDefaultImageModelProfiles(),
   fileParser: {
     provider: 'local',
     mineru_token: '',
@@ -265,6 +355,9 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
       const textModelProfiles = normalizeTextModelProfiles(config.text_model_profiles);
       const activeTextProfile = normalizeTextModelProfile(config.text_model_provider, textModelProfiles[config.text_model_provider]);
+      const imageModelProfiles = normalizeImageModelProfiles(config.image_model_profiles);
+      const activeImageProfile = normalizeImageModelProfile(config.image_model.provider, config.image_model);
+      imageModelProfiles[activeImageProfile.provider] = activeImageProfile;
 
       setState((prev) => ({
         ...prev,
@@ -273,7 +366,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
           ...activeTextProfile,
         },
         textModelProfiles,
-        imageModel: config.image_model,
+        imageModel: activeImageProfile,
+        imageModelProfiles,
         fileParser: {
           provider: config.file_parser.provider,
           mineru_token: config.file_parser.mineru_token || '',
@@ -296,9 +390,16 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     [state.textModel.provider]: textProfileFromState(state.textModel),
   });
 
+  const getCurrentImageModelProfiles = (): ImageModelProfiles => ({
+    ...state.imageModelProfiles,
+    [state.imageModel.provider]: imageProfileFromState(state.imageModel),
+  });
+
   const createClientConfig = (): ClientConfig => {
     const textModelProfiles = getCurrentTextModelProfiles();
     const activeTextProfile = textModelProfiles[state.textModel.provider];
+    const imageModelProfiles = getCurrentImageModelProfiles();
+    const activeImageProfile = imageModelProfiles[state.imageModel.provider];
 
     return {
       text_model_provider: state.textModel.provider,
@@ -306,7 +407,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       api_key: activeTextProfile.api_key,
       base_url: activeTextProfile.base_url,
       model_name: activeTextProfile.model_name,
-      image_model: state.imageModel,
+      image_model: activeImageProfile,
+      image_model_profiles: imageModelProfiles,
       file_parser: {
         provider: state.fileParser.provider,
         mineru_token: state.fileParser.mineru_token || '',
@@ -362,10 +464,36 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
   };
 
-  const updateImageModelConfig = (partial: Partial<ImageModelConfig>) => {
+  const updateImageModelConfig = (partial: Partial<Omit<ImageModelConfig, 'provider'>>, options: { clearModels?: boolean } = {}) => {
+    if (options.clearModels) {
+      setImageModels([]);
+    }
+
     setState((prev) => ({
       ...prev,
-      imageModel: resetImageModelStatus({ ...prev.imageModel, ...partial }),
+      ...(() => {
+        const imageModel = resetImageModelStatus({ ...prev.imageModel, ...partial });
+        return {
+          imageModel,
+          imageModelProfiles: {
+            ...prev.imageModelProfiles,
+            [prev.imageModel.provider]: imageProfileFromState(imageModel),
+          },
+        };
+      })(),
+    }));
+  };
+
+  const updateImageModelProvider = (provider: ImageModelProvider) => {
+    setImageModels([]);
+    setImageTestPreview(null);
+    setState((prev) => ({
+      ...prev,
+      imageModelProfiles: {
+        ...prev.imageModelProfiles,
+        [prev.imageModel.provider]: imageProfileFromState(prev.imageModel),
+      },
+      imageModel: normalizeImageModelProfile(provider, prev.imageModelProfiles[provider]),
     }));
   };
 
@@ -457,6 +585,18 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
   };
 
+  const openImageProviderApiKeyPage = async () => {
+    const url = imageProviderApiKeyUrls[state.imageModel.provider];
+    try {
+      const result = await window.yibiao?.openExternal(url);
+      if (result && !result.success) {
+        showToast(result.message || '打开生图服务 API Key 获取页面失败', 'error');
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '打开生图服务 API Key 获取页面失败', 'error');
+    }
+  };
+
   const testTextConfig = async () => {
     try {
       setTestingTextModel(true);
@@ -492,40 +632,64 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       if (!result?.success) {
         throw new Error(result?.message || '生图模型测试失败');
       }
+      const testedImageModel: ImageModelConfig = {
+        ...config.image_model,
+        status: 'available',
+        tested_at: new Date().toISOString(),
+        last_error: '',
+      };
       const testedConfig: ClientConfig = {
         ...config,
-        image_model: {
-          ...config.image_model,
-          status: 'available',
-          tested_at: new Date().toISOString(),
-          last_error: '',
+        image_model: testedImageModel,
+        image_model_profiles: {
+          ...config.image_model_profiles,
+          [testedImageModel.provider]: testedImageModel,
         },
       };
       await window.yibiao?.config.save(testedConfig);
-      setState((prev) => ({ ...prev, imageModel: testedConfig.image_model }));
+      setState((prev) => ({
+        ...prev,
+        imageModel: testedConfig.image_model,
+        imageModelProfiles: {
+          ...prev.imageModelProfiles,
+          [testedConfig.image_model.provider]: imageProfileFromState(testedConfig.image_model),
+        },
+      }));
       setSavedConfig(testedConfig);
       trackConfigUsage({}, testedConfig);
       const previewSrc = result?.image_url || (result?.image_data ? `data:${result.mime_type || 'image/png'};base64,${result.image_data}` : '');
 
       if (previewSrc) {
-        setImageTestPreview({ src: previewSrc, title: `${state.imageModel.provider === 'volcengine' ? '火山方舟' : 'Google AI Studio'} 测试图片` });
+        setImageTestPreview({ src: previewSrc, title: `${imageProviderLabels[state.imageModel.provider]} 测试图片` });
       }
 
       showToast(result?.message || '生图模型测试成功', result?.success ? 'success' : 'error');
     } catch (error) {
       const message = error instanceof Error ? error.message : '生图模型测试失败';
       const config = createClientConfig();
+      const failedImageModel: ImageModelConfig = {
+        ...config.image_model,
+        status: 'unavailable',
+        tested_at: new Date().toISOString(),
+        last_error: message,
+      };
       const failedConfig: ClientConfig = {
         ...config,
-        image_model: {
-          ...config.image_model,
-          status: 'unavailable',
-          tested_at: new Date().toISOString(),
-          last_error: message,
+        image_model: failedImageModel,
+        image_model_profiles: {
+          ...config.image_model_profiles,
+          [failedImageModel.provider]: failedImageModel,
         },
       };
       await window.yibiao?.config.save(failedConfig).catch(() => undefined);
-      setState((prev) => ({ ...prev, imageModel: failedConfig.image_model }));
+      setState((prev) => ({
+        ...prev,
+        imageModel: failedConfig.image_model,
+        imageModelProfiles: {
+          ...prev.imageModelProfiles,
+          [failedConfig.image_model.provider]: imageProfileFromState(failedConfig.image_model),
+        },
+      }));
       setSavedConfig(failedConfig);
       trackConfigUsage({}, failedConfig);
       showToast(message, 'error');
@@ -581,6 +745,43 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const fetchImageModels = async () => {
     try {
       setLoadingModels('image');
+      if (state.imageModel.provider === 'jinlong') {
+        if (!state.imageModel.api_key.trim()) {
+          setImageModels([]);
+          showToast('请先填写金龙中转站 API Key', 'info');
+          return;
+        }
+
+        const config = createClientConfig();
+        const result = await window.yibiao?.config.listModels({
+          ...config,
+          api_key: state.imageModel.api_key,
+          base_url: state.imageModel.base_url || imageProviderDefaults.jinlong.base_url || '',
+          model_name: state.imageModel.model_name,
+        });
+        const models = result?.models || [];
+        setImageModels(models);
+        if (result?.success && models.length > 0) {
+          setState((prev) => ({
+            ...prev,
+            ...(() => {
+              const imageModel = models.includes(prev.imageModel.model_name)
+                ? prev.imageModel
+                : resetImageModelStatus({ ...prev.imageModel, model_name: models[0] });
+              return {
+                imageModel,
+                imageModelProfiles: {
+                  ...prev.imageModelProfiles,
+                  [prev.imageModel.provider]: imageProfileFromState(imageModel),
+                },
+              };
+            })(),
+          }));
+        }
+        showToast(result?.message || `获取到 ${models.length} 个金龙中转站模型`, result?.success ? 'success' : 'info');
+        return;
+      }
+
       if (state.imageModel.provider === 'volcengine') {
         setImageModels([]);
         showToast('火山方舟请填写控制台中已开通的模型或推理接入点 ID。');
@@ -596,9 +797,18 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         setImageModels(models);
         setState((prev) => ({
           ...prev,
-          imageModel: models.includes(prev.imageModel.model_name)
-            ? prev.imageModel
-            : resetImageModelStatus({ ...prev.imageModel, model_name: models[0] }),
+          ...(() => {
+            const imageModel = models.includes(prev.imageModel.model_name)
+              ? prev.imageModel
+              : resetImageModelStatus({ ...prev.imageModel, model_name: models[0] });
+            return {
+              imageModel,
+              imageModelProfiles: {
+                ...prev.imageModelProfiles,
+                [prev.imageModel.provider]: imageProfileFromState(imageModel),
+              },
+            };
+          })(),
         }));
         showToast('已载入 Google AI Studio 生图模型', 'success');
         return;
@@ -632,7 +842,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
 
     if (activeTab === 'image-model') {
-      return JSON.stringify(state.imageModel) !== JSON.stringify(savedConfig.image_model);
+      return JSON.stringify({
+        provider: state.imageModel.provider,
+        profiles: getCurrentImageModelProfiles(),
+      }) !== JSON.stringify({
+        provider: savedConfig.image_model.provider,
+        profiles: normalizeImageModelProfiles(savedConfig.image_model_profiles),
+      });
     }
 
     if (activeTab === 'file-parser') {
@@ -921,12 +1137,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 value={state.imageModel.provider}
                 onChange={(event) => {
                   const provider = event.target.value as ImageModelProvider;
-                  setImageModels([]);
-                  updateImageModelConfig({
-                    provider,
-                    base_url: imageProviderDefaults[provider].base_url,
-                    model_name: imageProviderDefaults[provider].model_name,
-                  });
+                  updateImageModelProvider(provider);
                 }}
               >
                 {imageProviders.map((provider) => (
@@ -937,31 +1148,34 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>Base URL</strong>
-                <span>{state.imageModel.provider === 'volcengine' ? '火山方舟 OpenAI 兼容接口地址' : 'Google Gemini API REST 地址'}</span>
+                <span>{getImageBaseUrlDescription(state.imageModel.provider)}</span>
               </div>
               <input
                 type="text"
                 value={state.imageModel.base_url || ''}
                 placeholder={imageProviderDefaults[state.imageModel.provider].base_url}
-                onChange={(event) => updateImageModelConfig({ base_url: event.target.value })}
+                onChange={(event) => updateImageModelConfig({ base_url: event.target.value }, { clearModels: true })}
               />
             </label>
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>API Key</strong>
-                <span>{state.imageModel.provider === 'volcengine' ? '用于调用火山方舟图片生成 API' : '用于调用 Google AI Studio Gemini API'}</span>
+                <span>{getImageApiKeyDescription(state.imageModel.provider)}</span>
               </div>
-              <input
+              <InputWithAction
                 type="password"
                 value={state.imageModel.api_key}
-              placeholder="请输入生图服务 API Key"
-              onChange={(event) => updateImageModelConfig({ api_key: event.target.value })}
+                placeholder="请输入生图服务 API Key"
+                onChange={(event) => updateImageModelConfig({ api_key: event.target.value }, { clearModels: true })}
+                actionLabel="获取"
+                actionTitle="打开当前生图服务商的 API Key 获取页面"
+                onAction={() => { void openImageProviderApiKeyPage(); }}
               />
             </label>
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>模型名称</strong>
-                <span>{state.imageModel.provider === 'volcengine' ? '填写火山方舟控制台中已开通的模型或推理接入点 ID' : '选择或填写支持图片生成的 Gemini 模型'}</span>
+                <span>{getImageModelDescription(state.imageModel.provider)}</span>
               </div>
               <div className="settings-control-with-action">
                 {imageModels.length > 0 ? (
@@ -975,7 +1189,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   <input
                     type="text"
                     value={state.imageModel.model_name}
-                    placeholder={state.imageModel.provider === 'volcengine' ? '请输入已开通的模型或推理接入点 ID' : 'gemini-3.1-flash-image-preview'}
+                    placeholder={getImageModelPlaceholder(state.imageModel.provider)}
                     onChange={(event) => updateImageModelConfig({ model_name: event.target.value })}
                   />
                 )}

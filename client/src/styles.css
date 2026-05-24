@@ -5258,6 +5258,10 @@ button {
   border-radius: 14px;
 }
 
+.input-with-action.has-password-reveal {
+  grid-template-columns: minmax(0, 1fr) 44px auto;
+}
+
 .input-with-action:focus-within {
   background: #ffffff;
   border-color: rgba(33, 116, 253, 0.58);
@@ -5287,6 +5291,40 @@ button {
   background: rgba(255, 255, 255, 0.48);
   border: 0;
   border-left: 1px solid #ccd6e3;
+}
+
+.input-with-action-icon-button {
+  display: inline-flex;
+  width: 44px;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: #627189;
+  background: rgba(255, 255, 255, 0.28);
+  border: 0;
+  border-left: 1px solid #ccd6e3;
+}
+
+.input-with-action-icon-button:hover:not(:disabled),
+.input-with-action-icon-button[aria-pressed="true"]:not(:disabled) {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.1);
+}
+
+.input-with-action-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.input-with-action-eye-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
 }
 
 .input-with-action-button:hover:not(:disabled) {

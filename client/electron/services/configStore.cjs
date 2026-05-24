@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { getConfigFilePath } = require('../utils/paths.cjs');
 
 const textModelProviders = ['jinlong', 'volcengine', 'xiaomi', 'deepseek', 'longcat', 'custom'];
+const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio'];
 const oldXiaomiBaseUrl = 'https://api.xiaomimimo.com/v1';
 
 const textProviderBaseUrls = {
@@ -48,13 +49,17 @@ const defaultTextModelProfiles = {
   },
 };
 
-const defaultConfig = {
-  text_model_provider: 'jinlong',
-  text_model_profiles: defaultTextModelProfiles,
-  api_key: '',
-  base_url: textProviderBaseUrls.jinlong,
-  model_name: 'gpt-3.5-turbo',
-  image_model: {
+const defaultImageModelProfiles = {
+  jinlong: {
+    provider: 'jinlong',
+    base_url: 'https://jlaudeapi.com/v1',
+    api_key: '',
+    model_name: '',
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  },
+  volcengine: {
     provider: 'volcengine',
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     api_key: '',
@@ -63,6 +68,27 @@ const defaultConfig = {
     tested_at: '',
     last_error: '',
   },
+  'google-ai-studio': {
+    provider: 'google-ai-studio',
+    base_url: 'https://generativelanguage.googleapis.com/v1beta',
+    api_key: '',
+    model_name: 'gemini-3.1-flash-image-preview',
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  },
+};
+
+const defaultConfig = {
+  text_model_provider: 'jinlong',
+  text_model_profiles: defaultTextModelProfiles,
+  api_key: '',
+  base_url: textProviderBaseUrls.jinlong,
+  model_name: 'gpt-3.5-turbo',
+  image_model: {
+    ...defaultImageModelProfiles.jinlong,
+  },
+  image_model_profiles: defaultImageModelProfiles,
   file_parser: {
     provider: 'local',
     mineru_token: '',
@@ -83,6 +109,10 @@ function createAnalyticsCreatedAt() {
 
 function isTextModelProvider(value) {
   return textModelProviders.includes(value);
+}
+
+function isImageModelProvider(value) {
+  return imageModelProviders.includes(value);
 }
 
 function normalizeTextModelProfile(provider, profile) {
@@ -116,6 +146,31 @@ function textProfileFromFlatConfig(source, fallback, provider) {
   };
 }
 
+function normalizeImageModelProfile(provider, profile) {
+  const defaults = defaultImageModelProfiles[provider];
+  const source = profile || {};
+  return {
+    provider,
+    base_url: source.base_url !== undefined ? source.base_url : defaults.base_url,
+    api_key: source.api_key !== undefined ? source.api_key : defaults.api_key,
+    model_name: source.model_name !== undefined ? source.model_name : defaults.model_name,
+    status: source.status !== undefined ? source.status : defaults.status,
+    tested_at: source.tested_at !== undefined ? source.tested_at : defaults.tested_at,
+    last_error: source.last_error !== undefined ? source.last_error : defaults.last_error,
+  };
+}
+
+function normalizeImageModelProfiles(sourceProfiles) {
+  const profiles = {};
+  imageModelProviders.forEach((provider) => {
+    profiles[provider] = normalizeImageModelProfile(
+      provider,
+      sourceProfiles && typeof sourceProfiles === 'object' ? sourceProfiles[provider] : null,
+    );
+  });
+  return profiles;
+}
+
 function normalizeConfig(config) {
   const source = config || {};
   const fileParser = source.file_parser ? source.file_parser : {};
@@ -127,6 +182,11 @@ function normalizeConfig(config) {
   const textModelProfiles = normalizeTextModelProfiles(source.text_model_profiles);
   textModelProfiles[textModelProvider] = textProfileFromFlatConfig(source, textModelProfiles[textModelProvider], textModelProvider);
   const activeTextProfile = textModelProfiles[textModelProvider];
+  const sourceImageModel = source.image_model && typeof source.image_model === 'object' ? source.image_model : {};
+  const imageModelProvider = isImageModelProvider(sourceImageModel.provider) ? sourceImageModel.provider : defaultConfig.image_model.provider;
+  const imageModelProfiles = normalizeImageModelProfiles(source.image_model_profiles);
+  imageModelProfiles[imageModelProvider] = normalizeImageModelProfile(imageModelProvider, sourceImageModel);
+  const activeImageProfile = imageModelProfiles[imageModelProvider];
 
   return {
     ...defaultConfig,
@@ -136,10 +196,8 @@ function normalizeConfig(config) {
     api_key: activeTextProfile.api_key,
     base_url: activeTextProfile.base_url,
     model_name: activeTextProfile.model_name,
-    image_model: {
-      ...defaultConfig.image_model,
-      ...(source.image_model ? source.image_model : {}),
-    },
+    image_model: activeImageProfile,
+    image_model_profiles: imageModelProfiles,
     file_parser: {
       provider: fileParser.provider || defaultConfig.file_parser.provider,
       mineru_token: fileParser.mineru_token || defaultConfig.file_parser.mineru_token,
@@ -204,6 +262,10 @@ function createConfigStore(app) {
           text_model_profiles: {
             ...currentConfig.text_model_profiles,
             ...(config && config.text_model_profiles ? config.text_model_profiles : {}),
+          },
+          image_model_profiles: {
+            ...currentConfig.image_model_profiles,
+            ...(config && config.image_model_profiles ? config.image_model_profiles : {}),
           },
           analytics_client_id: config?.analytics_client_id || currentConfig.analytics_client_id,
           analytics_created_at: config?.analytics_created_at || currentConfig.analytics_created_at,

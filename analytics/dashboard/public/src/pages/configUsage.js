@@ -10,7 +10,7 @@ function labelConfigValue(groupKey, value) {
       'mineru-agent-api': 'MinerU-Agent 轻量解析 API',
     },
     realTimeRender: { true: '开启', false: '关闭' },
-    imageProviders: { volcengine: '火山方舟', 'google-ai-studio': 'Google AI Studio' },
+    imageProviders: { jinlong: '金龙中转站', volcengine: '火山方舟', 'google-ai-studio': 'Google AI Studio' },
     imageModelStatuses: { untested: '未测试', available: '可用', unavailable: '不可用' },
     bidAnalysisModes: { key: '只解析关键项', full: '完整解析' },
     outlineModes: { free: '自由生成', aligned: '按评分项对齐' },

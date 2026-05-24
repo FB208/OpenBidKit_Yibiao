@@ -33,7 +33,7 @@ export interface ImageModelTestResult {
   mime_type?: string;
 }
 
-export type ImageModelProvider = 'volcengine' | 'google-ai-studio';
+export type ImageModelProvider = 'jinlong' | 'volcengine' | 'google-ai-studio';
 export type ImageModelStatus = 'untested' | 'available' | 'unavailable';
 
 export interface ImageModelConfig {
@@ -46,6 +46,8 @@ export interface ImageModelConfig {
   last_error?: string;
 }
 
+export type ImageModelProfiles = Record<ImageModelProvider, ImageModelConfig>;
+
 export type FileParserProvider = 'local' | 'mineru-accurate-api' | 'mineru-agent-api';
 
 export interface FileParserConfig {
@@ -55,6 +57,7 @@ export interface FileParserConfig {
 
 export interface ClientConfig extends AiConfig {
   image_model: ImageModelConfig;
+  image_model_profiles: ImageModelProfiles;
   file_parser: FileParserConfig;
   developer_mode?: boolean;
   real_time_render?: boolean;

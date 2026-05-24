@@ -6,6 +6,20 @@ const { getAiLogsDir, getGeneratedImagesDir } = require('../utils/paths.cjs');
 const AI_REQUEST_TIMEOUT_MS = 300000;
 const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const ANALYTICS_PROJECT_NAME = 'yibiao-client';
+const OPENAI_IMAGE_PROVIDER_META = {
+  jinlong: {
+    label: '金龙中转站',
+    defaultBaseUrl: 'https://jlaudeapi.com/v1',
+    logProvider: 'jinlong',
+    modelLabel: '生图模型名称',
+  },
+  volcengine: {
+    label: '火山方舟',
+    defaultBaseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    logProvider: 'volcengine',
+    modelLabel: '模型名称或推理接入点 ID',
+  },
+};
 
 function trimBaseUrl(baseUrl) {
   return (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
@@ -705,19 +719,20 @@ async function streamChatWithConfig(app, config, request, onEvent) {
   }
 }
 
-async function testVolcengineImageModel(app, config) {
+async function testOpenAICompatibleImageModel(app, config, provider) {
   const imageConfig = config.image_model || {};
+  const meta = OPENAI_IMAGE_PROVIDER_META[provider] || OPENAI_IMAGE_PROVIDER_META.volcengine;
 
   if (!imageConfig.api_key) {
-    throw new Error('请先填写火山方舟 API Key');
+    throw new Error(`请先填写${meta.label} API Key`);
   }
 
   if (!imageConfig.model_name) {
-    throw new Error('请先填写火山方舟生图模型名称');
+    throw new Error(`请先填写${meta.label}${meta.modelLabel}`);
   }
 
   trackAiRequest(app, config, { ai_request_type: 'image' });
-  const response = await fetch(`${trimBaseUrl(imageConfig.base_url || 'https://ark.cn-beijing.volces.com/api/v3')}/images/generations`, {
+  const response = await fetch(`${trimBaseUrl(imageConfig.base_url || meta.defaultBaseUrl)}/images/generations`, {
     method: 'POST',
     headers: createHeaders(imageConfig.api_key),
     body: JSON.stringify({
@@ -729,11 +744,11 @@ async function testVolcengineImageModel(app, config) {
   });
 
   try {
-    await ensureOk(response, '火山方舟生图测试失败');
+    await ensureOk(response, `${meta.label}生图测试失败`);
   } catch (error) {
     const message = error.message || '';
     if (message.includes('does not exist') || message.includes('do not have access')) {
-      throw new Error(`火山方舟生图模型不可用，请确认模型名称或推理接入点 ID 已开通并可访问。原始错误：${message}`);
+      throw new Error(`${meta.label}生图模型不可用，请确认${meta.modelLabel}已开通并可访问。原始错误：${message}`);
     }
 
     throw error;
@@ -794,8 +809,9 @@ async function testGoogleImageModel(app, config) {
   };
 }
 
-async function generateVolcengineImage(app, config, request) {
+async function generateOpenAICompatibleImage(app, config, request, provider) {
   const imageConfig = config.image_model || {};
+  const meta = OPENAI_IMAGE_PROVIDER_META[provider] || OPENAI_IMAGE_PROVIDER_META.volcengine;
   const requestId = createRequestId();
   const requestBody = {
     model: imageConfig.model_name,
@@ -809,19 +825,19 @@ async function generateVolcengineImage(app, config, request) {
     writeAiLog(app, config, {
       request_id: requestId,
       type: 'image-pending',
-      provider: 'volcengine',
-      url: `${trimBaseUrl(imageConfig.base_url || 'https://ark.cn-beijing.volces.com/api/v3')}/images/generations`,
+      provider: meta.logProvider,
+      url: `${trimBaseUrl(imageConfig.base_url || meta.defaultBaseUrl)}/images/generations`,
       request: requestBody,
       status: 'pending',
       created_at: new Date().toISOString(),
     });
     trackAiRequest(app, config, { ai_request_type: 'image' });
-    const response = await fetch(`${trimBaseUrl(imageConfig.base_url || 'https://ark.cn-beijing.volces.com/api/v3')}/images/generations`, {
+    const response = await fetch(`${trimBaseUrl(imageConfig.base_url || meta.defaultBaseUrl)}/images/generations`, {
       method: 'POST',
       headers: createHeaders(imageConfig.api_key),
       body: JSON.stringify(requestBody),
     });
-    await ensureOk(response, '火山方舟生图失败');
+    await ensureOk(response, `${meta.label}生图失败`);
     responseData = await response.json();
 
     const item = responseData.data?.[0] || {};
@@ -832,14 +848,14 @@ async function generateVolcengineImage(app, config, request) {
         : null;
 
     if (!image) {
-      throw new Error('火山方舟生图未返回图片数据');
+      throw new Error(`${meta.label}生图未返回图片数据`);
     }
 
     const saved = saveGeneratedImage(app, image);
     writeAiLog(app, config, {
       request_id: requestId,
       type: 'image',
-      provider: 'volcengine',
+      provider: meta.logProvider,
       request: requestBody,
       response: safeImageResponse(responseData),
       result: saved,
@@ -850,7 +866,7 @@ async function generateVolcengineImage(app, config, request) {
     writeAiLog(app, config, {
       request_id: requestId,
       type: 'image-error',
-      provider: 'volcengine',
+      provider: meta.logProvider,
       request: requestBody,
       response: responseData ? safeImageResponse(responseData) : null,
       error: error.message,
@@ -939,8 +955,8 @@ async function generateImageWithConfig(app, config, request) {
     throw new Error(availability.message);
   }
 
-  if (config.image_model?.provider === 'volcengine') {
-    return generateVolcengineImage(app, config, request);
+  if (config.image_model?.provider === 'jinlong' || config.image_model?.provider === 'volcengine') {
+    return generateOpenAICompatibleImage(app, config, request, config.image_model.provider);
   }
 
   if (config.image_model?.provider === 'google-ai-studio') {
@@ -980,8 +996,8 @@ function createAiService({ app, configStore }) {
         analytics_created_at: config.analytics_created_at || currentConfig.analytics_created_at,
       };
 
-      if (trackedConfig.image_model?.provider === 'volcengine') {
-        return testVolcengineImageModel(app, trackedConfig);
+      if (trackedConfig.image_model?.provider === 'jinlong' || trackedConfig.image_model?.provider === 'volcengine') {
+        return testOpenAICompatibleImageModel(app, trackedConfig, trackedConfig.image_model.provider);
       }
 
       if (trackedConfig.image_model?.provider === 'google-ai-studio') {
