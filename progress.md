@@ -1,6 +1,10 @@
 # Progress
 
 ## Session Log
+- 开始废标项检查流式检查与单项重试改造：已先按用户要求把流式 JSON 请求使用方法和 JSON 修复边界写入 `client/开发说明.md`；本轮不新增后端到页面的流式返回，只改 Main 到 AI 服务商的请求模式。
+- 已完成废标项检查流式检查与单项重试改造：Main 侧三类检查主请求改用 `streamChat`，JSON 解析失败复用原非流式修复链路；页面错误态新增只重试当前检查的按钮；验证通过 CJS `node --check`、`npm run build` 和 `git diff --check`，仅有既有 LF/CRLF 与 chunk 体积警告。
+- 已修复废标项检查流式进度导致的前端扰动：Main 侧不再把流式 chunk 接收字数写入 workspace，只保留阶段状态和最终结果；Renderer 后台任务事件同步时不再覆盖当前用户查看的 Step/Tab，避免切到错别字检查后被任务事件切回废标项检查。验证通过相关 CJS `node --check`、`npm run build` 和 `git diff --check`。
+- 已修复小米模型逻辑谬误 JSON 非法转义问题：`aiService.cjs` 在原始候选解析失败后会尝试修复 JSON 字符串内部的非法反斜杠转义（如 `1\.`），并补强 JSON 修复 prompt；旧小米日志内容解析 smoke test 返回 3 条 findings，`node --check`、`npm run build`、`git diff --check` 通过。
 - 开始实现废标项检查 Step03 三类并发检查：用户要求废标项检查、错别字检查、逻辑谬误检查并发执行；错别字结果用 `错别字 -> 正确的字` 折叠列表展示并支持复制真实原文；逻辑谬误结果展示标题、原文/位置、原因和建议。
 - 已完成三类检查代码接入待验证：新增错别字/逻辑谬误类型、工作区缓存字段、Prompt 和 service；Step03 会按配置并发启动废标项、错别字、逻辑谬误任务；错别字结果先用投标文件原文精确定位并重截取原文片段，无法定位的候选会被过滤。
 - 验证完成：`cd client; npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 通过，仅有 Git LF/CRLF 提示。

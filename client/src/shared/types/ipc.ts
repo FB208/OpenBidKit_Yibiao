@@ -4,9 +4,10 @@ import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListRes
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseMutationResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 
-export interface TaskEvent<TState = unknown> {
+export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown> {
   task: unknown;
-  technicalPlan: TState;
+  technicalPlan?: TState;
+  rejectionCheck?: TRejectionCheckState;
 }
 
 export interface WordExportProgressEvent {
@@ -104,8 +105,10 @@ export interface YibiaoBridge {
     startBidAnalysis: (payload: unknown) => Promise<unknown>;
     startOutlineGeneration: (payload: unknown) => Promise<unknown>;
     startContentGeneration: (payload: unknown) => Promise<unknown>;
+    startRejectionItemsExtraction: (payload: unknown) => Promise<unknown>;
+    startRejectionCheck: (payload: unknown) => Promise<unknown>;
     getActiveTasks: () => Promise<unknown[]>;
-    onTaskEvent: <TState = unknown>(callback: (event: TaskEvent<TState>) => void) => () => void;
+    onTaskEvent: <TState = unknown, TRejectionCheckState = unknown>(callback: (event: TaskEvent<TState, TRejectionCheckState>) => void) => () => void;
   };
   export: {
     exportWord: (payload: unknown) => Promise<WordExportResult>;

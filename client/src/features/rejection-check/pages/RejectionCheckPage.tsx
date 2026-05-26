@@ -3,10 +3,10 @@ import * as Switch from '@radix-ui/react-switch';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FloatingToolbar, isLibreOfficeRequiredMessage, MarkdownEditor, MarkdownRenderer, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import { runLogicCheck, runRejectionItemCheck, runTypoCheck, streamInvalidBidAndRejectionItems } from '../services/rejectionCheckService';
 import type {
   LogicCheckFinding,
   LogicCheckResultState,
+  RejectionBackgroundTaskState,
   RejectionCheckFinding,
   RejectionCheckStep,
   RejectionCheckOptions,
@@ -114,6 +114,24 @@ function createEmptyLogicCheckResultState(): LogicCheckResultState {
   return { status: 'idle', findings: [] };
 }
 
+function normalizeBackgroundTaskState(state?: Partial<RejectionBackgroundTaskState> | null): RejectionBackgroundTaskState | undefined {
+  if (!state || typeof state !== 'object') return undefined;
+  const type = state.type === 'rejection-items-extraction' || state.type === 'rejection-check-run' ? state.type : undefined;
+  const status = state.status === 'running' || state.status === 'success' || state.status === 'error' ? state.status : undefined;
+  if (!type || !status || typeof state.task_id !== 'string') return undefined;
+
+  return {
+    task_id: state.task_id,
+    type,
+    status,
+    progress: Number.isFinite(Number(state.progress)) ? Number(state.progress) : 0,
+    logs: Array.isArray(state.logs) ? state.logs.map((item) => String(item)) : [],
+    started_at: typeof state.started_at === 'string' ? state.started_at : new Date().toISOString(),
+    updated_at: typeof state.updated_at === 'string' ? state.updated_at : new Date().toISOString(),
+    error: typeof state.error === 'string' ? state.error : undefined,
+  };
+}
+
 function normalizeCheckOptions(options?: Partial<RejectionCheckOptions> | null): RejectionCheckOptions {
   return {
     rejectionCheck: true,
@@ -144,17 +162,12 @@ function normalizeExtractionState(state?: Partial<RejectionExtractionState> | nu
   }
 
   const content = typeof state.content === 'string' ? stripTripleQuoteWrapper(state.content) : '';
-  const normalizedStatus = ['idle', 'running', 'success', 'error'].includes(state.status || '') ? state.status : 'idle';
-  const status = normalizedStatus === 'running'
-    ? content.trim() ? 'error' : 'idle'
-    : normalizedStatus;
+  const status = ['idle', 'running', 'success', 'error'].includes(state.status || '') ? state.status : 'idle';
   return {
     ...state,
     status: status as RejectionExtractionState['status'],
     content,
-    error: normalizedStatus === 'running' && content.trim()
-      ? state.error || '上次解析未完成，请重新解析'
-      : state.error,
+    error: state.error,
   };
 }
 
@@ -188,8 +201,7 @@ function normalizeRejectionCheckResultState(state?: Partial<RejectionCheckResult
   const findings = Array.isArray(state.findings)
     ? state.findings.map((item, index) => normalizeFindingState(item, index)).filter((item): item is RejectionCheckFinding => Boolean(item))
     : [];
-  const normalizedStatus = ['idle', 'running', 'success', 'error'].includes(state.status || '') ? state.status : 'idle';
-  const status = normalizedStatus === 'running' ? 'idle' : normalizedStatus;
+  const status = ['idle', 'running', 'success', 'error'].includes(state.status || '') ? state.status : 'idle';
   const activeFindingId = findings.some((item) => item.id === state.activeFindingId) ? state.activeFindingId : undefined;
 
   return {
@@ -225,8 +237,7 @@ function normalizeTypoCheckResultState(state?: Partial<TypoCheckResultState> | n
   const findings = Array.isArray(state.findings)
     ? state.findings.map((item, index) => normalizeTypoFindingState(item, index)).filter((item): item is TypoCheckFinding => Boolean(item))
     : [];
-  const normalizedStatus = ['idle', 'running', 'success', 'error'].includes(state.status || '') ? state.status : 'idle';
-  const status = normalizedStatus === 'running' ? 'idle' : normalizedStatus;
+  const status = ['idle', 'running', 'success', 'error'].includes(state.status || '') ? state.status : 'idle';
   const activeFindingId = findings.some((item) => item.id === state.activeFindingId) ? state.activeFindingId : undefined;
 
   return {
@@ -261,8 +272,7 @@ function normalizeLogicCheckResultState(state?: Partial<LogicCheckResultState> |
   const findings = Array.isArray(state.findings)
     ? state.findings.map((item, index) => normalizeLogicFindingState(item, index)).filter((item): item is LogicCheckFinding => Boolean(item))
     : [];
-  const normalizedStatus = ['idle', 'running', 'success', 'error'].includes(state.status || '') ? state.status : 'idle';
-  const status = normalizedStatus === 'running' ? 'idle' : normalizedStatus;
+  const status = ['idle', 'running', 'success', 'error'].includes(state.status || '') ? state.status : 'idle';
   const activeFindingId = findings.some((item) => item.id === state.activeFindingId) ? state.activeFindingId : undefined;
 
   return {
@@ -558,6 +568,8 @@ function RejectionCheckPage() {
   const [rejectionCheckResult, setRejectionCheckResult] = useState<RejectionCheckResultState>(() => createEmptyRejectionCheckResultState());
   const [typoCheckResult, setTypoCheckResult] = useState<TypoCheckResultState>(() => createEmptyTypoCheckResultState());
   const [logicCheckResult, setLogicCheckResult] = useState<LogicCheckResultState>(() => createEmptyLogicCheckResultState());
+  const [extractionTask, setExtractionTask] = useState<RejectionBackgroundTaskState | undefined>();
+  const [checkTask, setCheckTask] = useState<RejectionBackgroundTaskState | undefined>();
   const [customCheckItems, setCustomCheckItems] = useState('');
   const [checkOptions, setCheckOptions] = useState<RejectionCheckOptions>(defaultCheckOptions);
   const [draftCheckOptions, setDraftCheckOptions] = useState<RejectionCheckOptions>(defaultCheckOptions);
@@ -566,7 +578,7 @@ function RejectionCheckPage() {
   const hydratedRef = useRef(false);
   const autoStartedSignatureRef = useRef('');
   const technicalPlanCheckSignatureRef = useRef('');
-  const streamCleanupRef = useRef<(() => void) | null>(null);
+  const activeTaskTypesRef = useRef<Set<string> | null>(null);
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
 
@@ -585,12 +597,14 @@ function RejectionCheckPage() {
     || typoCheckResult.findings.length
     || logicCheckResult.status !== 'idle'
     || logicCheckResult.findings.length
+    || extractionTask
+    || checkTask
     || customCheckItems.trim()
     || checkOptionsChanged,
   );
   const canGoNext = Boolean(tenderDocument && bidDocument);
   const activeIndex = steps.indexOf(step);
-  const extractionRunning = invalidBidAndRejectionItems.status === 'running';
+  const extractionRunning = invalidBidAndRejectionItems.status === 'running' || extractionTask?.status === 'running';
   const extractionMatchesTender = Boolean(tenderSignature && invalidBidAndRejectionItems.tenderSignature === tenderSignature);
   const visibleExtractionStatus = extractionMatchesTender ? invalidBidAndRejectionItems.status : 'idle';
   const visibleExtractionContent = extractionMatchesTender ? invalidBidAndRejectionItems.content : '';
@@ -630,7 +644,9 @@ function RejectionCheckPage() {
   const rejectionCheckRunning = rejectionCheckResult.status === 'running';
   const typoCheckRunning = typoCheckResult.status === 'running';
   const logicCheckRunning = logicCheckResult.status === 'running';
-  const checkRunning = rejectionCheckRunning || typoCheckRunning || logicCheckRunning;
+  const backgroundCheckRunning = checkTask?.status === 'running';
+  const checkRunning = rejectionCheckRunning || typoCheckRunning || logicCheckRunning || backgroundCheckRunning;
+  const customCheckItemsDisabled = extractionRunning || checkRunning;
   const hasStaleRejectionCheckResult = Boolean(
     currentRejectionCheckInputSignature
     && rejectionCheckResult.inputSignature
@@ -650,12 +666,30 @@ function RejectionCheckPage() {
     && (logicCheckResult.findings.length || logicCheckResult.status !== 'idle'),
   );
 
-  useEffect(() => {
-    return () => {
-      streamCleanupRef.current?.();
-      streamCleanupRef.current = null;
-    };
-  }, []);
+  function applyWorkspaceState(state: RejectionCheckWorkspaceState, options: { syncViewState?: boolean } = {}) {
+    const syncViewState = options.syncViewState !== false;
+    setTenderDocument(state.tenderDocument || null);
+    setBidDocument(state.bidDocument || null);
+    if (syncViewState) {
+      setActiveDocumentTab(state.activeDocumentTab === 'bid' ? 'bid' : 'tender');
+      setStep(state.step === 'items' || state.step === 'results' ? state.step : 'documents');
+      setActiveResultTab(state.activeResultTab === 'custom' ? 'custom' : 'analysis');
+      setActiveCheckResultTab(checkResultTabs.some((tab) => tab.id === state.activeCheckResultTab) ? state.activeCheckResultTab as RejectionCheckResultTab : 'rejection');
+    }
+    setInvalidBidAndRejectionItems(normalizeExtractionState({
+      ...(state.invalidBidAndRejectionItems || {}),
+      content: stripTripleQuoteWrapper(state.invalidBidAndRejectionItems?.content || ''),
+    }));
+    setRejectionCheckResult(normalizeRejectionCheckResultState(state.rejectionCheckResult));
+    setTypoCheckResult(normalizeTypoCheckResultState(state.typoCheckResult));
+    setLogicCheckResult(normalizeLogicCheckResultState(state.logicCheckResult));
+    setExtractionTask(normalizeBackgroundTaskState(state.extractionTask));
+    setCheckTask(normalizeBackgroundTaskState(state.checkTask));
+    setCustomCheckItems(typeof state.customCheckItems === 'string' ? state.customCheckItems : '');
+    const nextOptions = normalizeCheckOptions(state.checkOptions);
+    setCheckOptions(nextOptions);
+    setDraftCheckOptions(nextOptions);
+  }
 
   useEffect(() => {
     let canceled = false;
@@ -663,23 +697,7 @@ function RejectionCheckPage() {
     void window.yibiao?.workspace.loadRejectionCheck()
       .then((state) => {
         if (canceled || !state) return;
-        setTenderDocument(state.tenderDocument || null);
-        setBidDocument(state.bidDocument || null);
-        setActiveDocumentTab(state.activeDocumentTab === 'bid' ? 'bid' : 'tender');
-        setStep(state.step === 'items' || state.step === 'results' ? state.step : 'documents');
-        setActiveResultTab(state.activeResultTab === 'custom' ? 'custom' : 'analysis');
-        setActiveCheckResultTab(checkResultTabs.some((tab) => tab.id === state.activeCheckResultTab) ? state.activeCheckResultTab as RejectionCheckResultTab : 'rejection');
-        setInvalidBidAndRejectionItems(normalizeExtractionState({
-          ...(state.invalidBidAndRejectionItems || {}),
-          content: stripTripleQuoteWrapper(state.invalidBidAndRejectionItems?.content || ''),
-        }));
-        setRejectionCheckResult(normalizeRejectionCheckResultState(state.rejectionCheckResult));
-        setTypoCheckResult(normalizeTypoCheckResultState(state.typoCheckResult));
-        setLogicCheckResult(normalizeLogicCheckResultState(state.logicCheckResult));
-        setCustomCheckItems(typeof state.customCheckItems === 'string' ? state.customCheckItems : '');
-        const nextOptions = normalizeCheckOptions(state.checkOptions);
-        setCheckOptions(nextOptions);
-        setDraftCheckOptions(nextOptions);
+        applyWorkspaceState(state);
       })
       .catch((error) => {
         showToast(error instanceof Error ? error.message : '读取废标项检查缓存失败', 'error');
@@ -687,6 +705,9 @@ function RejectionCheckPage() {
       .finally(() => {
         if (!canceled) {
           hydratedRef.current = true;
+          if (activeTaskTypesRef.current) {
+            markStaleTasksWithoutActive(activeTaskTypesRef.current);
+          }
         }
       });
 
@@ -697,6 +718,10 @@ function RejectionCheckPage() {
 
   useEffect(() => {
     if (!hydratedRef.current) return;
+
+    if (extractionRunning || checkRunning) {
+      return;
+    }
 
     const state: RejectionCheckWorkspaceState = {
       tenderDocument,
@@ -709,6 +734,8 @@ function RejectionCheckPage() {
       rejectionCheckResult,
       typoCheckResult,
       logicCheckResult,
+      extractionTask,
+      checkTask,
       customCheckItems,
       checkOptions,
     };
@@ -716,7 +743,37 @@ function RejectionCheckPage() {
       .catch((error) => {
         showToast(error instanceof Error ? error.message : '保存废标项检查缓存失败', 'error');
       });
-  }, [activeCheckResultTab, activeDocumentTab, activeResultTab, bidDocument, checkOptions, customCheckItems, invalidBidAndRejectionItems, logicCheckResult, rejectionCheckResult, showToast, step, tenderDocument, typoCheckResult]);
+  }, [activeCheckResultTab, activeDocumentTab, activeResultTab, bidDocument, checkOptions, checkRunning, checkTask, customCheckItems, extractionRunning, extractionTask, invalidBidAndRejectionItems, logicCheckResult, rejectionCheckResult, showToast, step, tenderDocument, typoCheckResult]);
+
+  useEffect(() => {
+    if (!window.yibiao?.tasks) {
+      return;
+    }
+
+    const unsubscribe = window.yibiao.tasks.onTaskEvent<unknown, RejectionCheckWorkspaceState>((event) => {
+      if (event.rejectionCheck) {
+        applyWorkspaceState(event.rejectionCheck, { syncViewState: false });
+      }
+    });
+
+    void window.yibiao.tasks.getActiveTasks()
+      .then((tasks) => {
+        const activeTypes = new Set((Array.isArray(tasks) ? tasks : [])
+          .map((task) => {
+            const type = task && typeof task === 'object' ? (task as { type?: string }).type : '';
+            return typeof type === 'string' ? type : '';
+          }));
+        activeTaskTypesRef.current = activeTypes;
+        if (hydratedRef.current) {
+          markStaleTasksWithoutActive(activeTypes);
+        }
+      })
+      .catch((error) => {
+        console.warn('获取废标项检查后台任务状态失败', error);
+      });
+
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     if (!hydratedRef.current || step !== 'items' || !tenderDocument || !tenderSignature) {
@@ -731,12 +788,12 @@ function RejectionCheckPage() {
   }, [extractionRunning, invalidBidAndRejectionItems.content, invalidBidAndRejectionItems.source, invalidBidAndRejectionItems.tenderSignature, step, tenderDocument, tenderSignature]);
 
   function clearExtractionForTenderChange() {
-    streamCleanupRef.current?.();
-    streamCleanupRef.current = null;
     autoStartedSignatureRef.current = '';
     technicalPlanCheckSignatureRef.current = '';
     setInvalidBidAndRejectionItems(createEmptyExtractionState());
     setRejectionCheckResult(createEmptyRejectionCheckResultState());
+    setExtractionTask(undefined);
+    setCheckTask(undefined);
   }
 
   async function importParsedDocument(role: RejectionDocumentRole) {
@@ -774,6 +831,7 @@ function RejectionCheckPage() {
         setRejectionCheckResult(createEmptyRejectionCheckResultState());
         setTypoCheckResult(createEmptyTypoCheckResultState());
         setLogicCheckResult(createEmptyLogicCheckResultState());
+        setCheckTask(undefined);
         setBidDocument(nextDocument);
       }
       setActiveDocumentTab(role);
@@ -832,6 +890,7 @@ function RejectionCheckPage() {
       setRejectionCheckResult(createEmptyRejectionCheckResultState());
       setTypoCheckResult(createEmptyTypoCheckResultState());
       setLogicCheckResult(createEmptyLogicCheckResultState());
+      setCheckTask(undefined);
       setBidDocument(null);
     }
   }
@@ -897,114 +956,81 @@ function RejectionCheckPage() {
       }
     }
 
-    startInvalidBidAndRejectionItemsExtraction(tenderSignature);
+    void startInvalidBidAndRejectionItemsExtraction(tenderSignature);
   }
 
-  function startInvalidBidAndRejectionItemsExtraction(signature: string) {
+  async function startInvalidBidAndRejectionItemsExtraction(signature: string) {
     if (!tenderDocument) {
       showToast('请先准备招标文件', 'info');
       return;
     }
 
-    streamCleanupRef.current?.();
-    streamCleanupRef.current = null;
     autoStartedSignatureRef.current = signature;
-
-    setInvalidBidAndRejectionItems({
+    const startedAt = new Date().toISOString();
+    const nextExtractionState: RejectionExtractionState = {
       status: 'running',
       content: '',
       source: 'ai',
       tenderSignature: signature,
-      updatedAt: new Date().toISOString(),
-    });
-    setRejectionCheckResult(createEmptyRejectionCheckResultState());
-
-    let canceled = false;
-    let contentBuffer = '';
-    const finishExtraction = () => {
-      if (canceled) {
-        return;
-      }
-
-      canceled = true;
-      const cleanup = streamCleanupRef.current;
-      streamCleanupRef.current = null;
-      cleanup?.();
-      const finishedAt = new Date().toISOString();
-      const content = stripTripleQuoteWrapper(contentBuffer);
-      setInvalidBidAndRejectionItems((prev) => ({
-        ...prev,
-        content,
-        status: content.trim() ? 'success' : 'error',
-        error: content.trim() ? undefined : '模型未返回解析内容',
-        source: 'ai',
-        tenderSignature: signature,
-        updatedAt: finishedAt,
-      }));
+      updatedAt: startedAt,
     };
+    const nextExtractionTask: RejectionBackgroundTaskState = {
+      task_id: `local-${Date.now()}`,
+      type: 'rejection-items-extraction',
+      status: 'running',
+      progress: 5,
+      logs: ['正在启动无效与废标项解析任务。'],
+      started_at: startedAt,
+      updated_at: startedAt,
+    };
+    const emptyRejectionCheckResult = createEmptyRejectionCheckResultState();
+
+    setInvalidBidAndRejectionItems(nextExtractionState);
+    setRejectionCheckResult(emptyRejectionCheckResult);
+    setExtractionTask(nextExtractionTask);
+    setCheckTask(undefined);
 
     try {
-      const unsubscribe = streamInvalidBidAndRejectionItems(tenderDocument.content, (event) => {
-        if (canceled) {
-          return;
-        }
+      const starter = window.yibiao?.tasks.startRejectionItemsExtraction;
+      if (typeof starter !== 'function') {
+        throw new Error('后台任务接口尚未加载，请重启应用后重试');
+      }
 
-        if (event.type === 'chunk' && event.chunk) {
-          contentBuffer += event.chunk;
-          setInvalidBidAndRejectionItems((prev) => ({
-            ...prev,
-            status: 'running',
-            content: contentBuffer,
-            source: 'ai',
-            tenderSignature: signature,
-            updatedAt: new Date().toISOString(),
-          }));
-          return;
-        }
-
-        if (event.type === 'error') {
-          canceled = true;
-          const cleanup = streamCleanupRef.current;
-          streamCleanupRef.current = null;
-          cleanup?.();
-          setInvalidBidAndRejectionItems((prev) => ({
-            ...prev,
-            status: 'error',
-            error: event.message || '无效与废标项解析失败',
-            source: 'ai',
-            tenderSignature: signature,
-            updatedAt: new Date().toISOString(),
-          }));
-          showToast(event.message || '无效与废标项解析失败', 'error');
-          return;
-        }
-
-        if (event.type === 'done') {
-          finishExtraction();
-        }
+      await starter({
+        tenderContent: tenderDocument.content,
+        tenderSignature: signature,
+        workspaceState: {
+          tenderDocument,
+          bidDocument,
+          activeDocumentTab,
+          step,
+          activeResultTab,
+          activeCheckResultTab,
+          customCheckItems,
+          checkOptions,
+          invalidBidAndRejectionItems: nextExtractionState,
+          rejectionCheckResult: emptyRejectionCheckResult,
+          extractionTask: nextExtractionTask,
+          checkTask: undefined,
+        },
       });
-
-      streamCleanupRef.current = () => {
-        canceled = true;
-        unsubscribe?.();
-      };
+      showToast('无效与废标项解析任务已在后台启动', 'success');
     } catch (error) {
-      streamCleanupRef.current = null;
+      const message = error instanceof Error ? error.message : '启动无效与废标项解析失败';
       setInvalidBidAndRejectionItems({
         status: 'error',
         content: '',
-        error: error instanceof Error ? error.message : '启动无效与废标项解析失败',
+        error: message,
         source: 'ai',
         tenderSignature: signature,
         updatedAt: new Date().toISOString(),
       });
-      showToast(error instanceof Error ? error.message : '启动无效与废标项解析失败', 'error');
+      setExtractionTask((prev) => prev ? { ...prev, status: 'error', progress: 100, error: message, logs: [message], updated_at: new Date().toISOString() } : prev);
+      showToast(message, 'error');
     }
   }
 
   function resetWorkspace() {
-    streamCleanupRef.current?.();
-    streamCleanupRef.current = null;
     autoStartedSignatureRef.current = '';
     technicalPlanCheckSignatureRef.current = '';
     setStep('documents');
@@ -1017,6 +1043,8 @@ function RejectionCheckPage() {
     setRejectionCheckResult(createEmptyRejectionCheckResultState());
     setTypoCheckResult(createEmptyTypoCheckResultState());
     setLogicCheckResult(createEmptyLogicCheckResultState());
+    setExtractionTask(undefined);
+    setCheckTask(undefined);
     setCustomCheckItems('');
     setCheckOptions(defaultCheckOptions);
     setDraftCheckOptions(defaultCheckOptions);
@@ -1047,7 +1075,7 @@ function RejectionCheckPage() {
     showToast('检查配置已保存', 'success');
   }
 
-  async function startChecks(options: RejectionCheckOptions = checkOptions) {
+  async function startChecks(options: RejectionCheckOptions = checkOptions, runOptions: RejectionCheckOptions = options) {
     if (checkRunning) {
       return;
     }
@@ -1057,186 +1085,127 @@ function RejectionCheckPage() {
       return;
     }
 
-    if (options.rejectionCheck && (visibleExtractionStatus !== 'success' || !visibleExtractionContent.trim())) {
+    if (runOptions.rejectionCheck && (visibleExtractionStatus !== 'success' || !visibleExtractionContent.trim())) {
       showToast('请先完成无效与废标项解析', 'info');
       setStep('items');
       return;
     }
 
-    if (options.rejectionCheck && !currentRejectionCheckInputSignature) {
+    if (runOptions.rejectionCheck && !currentRejectionCheckInputSignature) {
       showToast('检查输入不完整，请确认投标文件和检查项', 'info');
       return;
     }
 
-    if (!options.rejectionCheck && !options.typoCheck && !options.logicCheck) {
+    if (!runOptions.rejectionCheck && !runOptions.typoCheck && !runOptions.logicCheck) {
       showToast('请至少启用一种检查', 'info');
       return;
     }
 
-    setActiveCheckResultTab(options.rejectionCheck ? 'rejection' : options.typoCheck ? 'typo' : 'logic');
-    const bidContent = bidDocument.content;
-    const tasks: Array<Promise<void>> = [];
+    const nextActiveCheckResultTab: RejectionCheckResultTab = runOptions.rejectionCheck ? 'rejection' : runOptions.typoCheck ? 'typo' : 'logic';
+    setActiveCheckResultTab(nextActiveCheckResultTab);
+    const startedAt = new Date().toISOString();
+    const nextRejectionCheckResult: RejectionCheckResultState = runOptions.rejectionCheck
+      ? {
+          status: 'running',
+          findings: [],
+          inputSignature: currentRejectionCheckInputSignature,
+          progressMessage: '第一轮：正在分析检查范围。',
+          updatedAt: startedAt,
+        }
+      : rejectionCheckResult;
+    const nextTypoCheckResult: TypoCheckResultState = runOptions.typoCheck
+      ? {
+          status: 'running',
+          findings: [],
+          inputSignature: bidSignature,
+          progressMessage: '正在识别错别字候选。',
+          updatedAt: startedAt,
+        }
+      : typoCheckResult;
+    const nextLogicCheckResult: LogicCheckResultState = runOptions.logicCheck
+      ? {
+          status: 'running',
+          findings: [],
+          inputSignature: bidSignature,
+          progressMessage: '正在检查逻辑谬误。',
+          updatedAt: startedAt,
+        }
+      : logicCheckResult;
+    const nextCheckTask: RejectionBackgroundTaskState = {
+      task_id: `local-${Date.now()}`,
+      type: 'rejection-check-run',
+      status: 'running',
+      progress: 5,
+      logs: ['正在启动检查任务。'],
+      started_at: startedAt,
+      updated_at: startedAt,
+    };
 
-    if (options.rejectionCheck) {
-      const inputSignature = currentRejectionCheckInputSignature;
-      setRejectionCheckResult({
-        status: 'running',
-        findings: [],
-        inputSignature,
-        progressMessage: '第一轮：正在分析检查范围。',
-        updatedAt: new Date().toISOString(),
-      });
+    if (runOptions.rejectionCheck) {
+      setRejectionCheckResult(nextRejectionCheckResult);
+    }
 
-      tasks.push(runRejectionItemCheck({
+    if (runOptions.typoCheck) {
+      setTypoCheckResult(nextTypoCheckResult);
+    }
+
+    if (runOptions.logicCheck) {
+      setLogicCheckResult(nextLogicCheckResult);
+    }
+
+    setCheckTask(nextCheckTask);
+
+    try {
+      const starter = window.yibiao?.tasks.startRejectionCheck;
+      if (typeof starter !== 'function') {
+        throw new Error('后台任务接口尚未加载，请重启应用后重试');
+      }
+
+      await starter({
+        checkOptions: options,
+        runOptions,
+        bidContent: bidDocument.content,
         invalidBidAndRejectionItems: visibleExtractionContent,
         customCheckItems,
-        bidContent,
-        onProgress: (message) => {
-          setRejectionCheckResult((prev) => prev.inputSignature === inputSignature
-            ? {
-                ...prev,
-                status: 'running',
-                progressMessage: message,
-                updatedAt: new Date().toISOString(),
-              }
-            : prev);
+        rejectionInputSignature: currentRejectionCheckInputSignature,
+        bidSignature,
+        workspaceState: {
+          tenderDocument,
+          bidDocument,
+          activeDocumentTab,
+          step,
+          activeResultTab,
+          activeCheckResultTab: nextActiveCheckResultTab,
+          invalidBidAndRejectionItems,
+          rejectionCheckResult: nextRejectionCheckResult,
+          typoCheckResult: nextTypoCheckResult,
+          logicCheckResult: nextLogicCheckResult,
+          checkTask: nextCheckTask,
+          customCheckItems,
+          checkOptions: options,
         },
-      })
-        .then((findings) => {
-          setRejectionCheckResult((prev) => prev.inputSignature === inputSignature
-            ? {
-                status: 'success',
-                findings,
-                inputSignature,
-                activeFindingId: findings[0]?.id,
-                progressMessage: findings.length ? `发现 ${findings.length} 个需复核风险项` : '未发现符合条件的废标项风险',
-                updatedAt: new Date().toISOString(),
-              }
-            : prev);
-        })
-        .catch((error) => {
-          const message = error instanceof Error ? error.message : '废标项检查失败';
-          setRejectionCheckResult((prev) => prev.inputSignature === inputSignature
-            ? {
-                ...prev,
-                status: 'error',
-                error: message,
-                progressMessage: message,
-                updatedAt: new Date().toISOString(),
-              }
-            : prev);
-          throw error;
-        }));
-    }
-
-    if (options.typoCheck) {
-      const inputSignature = bidSignature;
-      setTypoCheckResult({
-        status: 'running',
-        findings: [],
-        inputSignature,
-        progressMessage: '正在识别错别字候选。',
-        updatedAt: new Date().toISOString(),
       });
-
-      tasks.push(runTypoCheck({
-        bidContent,
-        onProgress: (message) => {
-          setTypoCheckResult((prev) => prev.inputSignature === inputSignature
-            ? {
-                ...prev,
-                status: 'running',
-                progressMessage: message,
-                updatedAt: new Date().toISOString(),
-              }
-            : prev);
-        },
-      })
-        .then((findings) => {
-          setTypoCheckResult((prev) => prev.inputSignature === inputSignature
-            ? {
-                status: 'success',
-                findings,
-                inputSignature,
-                activeFindingId: findings[0]?.id,
-                progressMessage: findings.length ? `发现 ${findings.length} 个疑似错别字` : '未发现明确错别字',
-                updatedAt: new Date().toISOString(),
-              }
-            : prev);
-        })
-        .catch((error) => {
-          const message = error instanceof Error ? error.message : '错别字检查失败';
-          setTypoCheckResult((prev) => prev.inputSignature === inputSignature
-            ? {
-                ...prev,
-                status: 'error',
-                error: message,
-                progressMessage: message,
-                updatedAt: new Date().toISOString(),
-              }
-            : prev);
-          throw error;
-        }));
+      showToast('检查任务已在后台启动', 'success');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '启动检查任务失败';
+      if (runOptions.rejectionCheck) {
+        setRejectionCheckResult((prev) => prev.inputSignature === currentRejectionCheckInputSignature
+          ? { ...prev, status: 'error', error: message, progressMessage: message, updatedAt: new Date().toISOString() }
+          : prev);
+      }
+      if (runOptions.typoCheck) {
+        setTypoCheckResult((prev) => prev.inputSignature === bidSignature
+          ? { ...prev, status: 'error', error: message, progressMessage: message, updatedAt: new Date().toISOString() }
+          : prev);
+      }
+      if (runOptions.logicCheck) {
+        setLogicCheckResult((prev) => prev.inputSignature === bidSignature
+          ? { ...prev, status: 'error', error: message, progressMessage: message, updatedAt: new Date().toISOString() }
+          : prev);
+      }
+      setCheckTask((prev) => prev ? { ...prev, status: 'error', error: message, progress: 100, updated_at: new Date().toISOString() } : prev);
+      showToast(message, 'error');
     }
-
-    if (options.logicCheck) {
-      const inputSignature = bidSignature;
-      setLogicCheckResult({
-        status: 'running',
-        findings: [],
-        inputSignature,
-        progressMessage: '正在检查逻辑谬误。',
-        updatedAt: new Date().toISOString(),
-      });
-
-      tasks.push(runLogicCheck({
-        bidContent,
-        onProgress: (message) => {
-          setLogicCheckResult((prev) => prev.inputSignature === inputSignature
-            ? {
-                ...prev,
-                status: 'running',
-                progressMessage: message,
-                updatedAt: new Date().toISOString(),
-              }
-            : prev);
-        },
-      })
-        .then((findings) => {
-          setLogicCheckResult((prev) => prev.inputSignature === inputSignature
-            ? {
-                status: 'success',
-                findings,
-                inputSignature,
-                activeFindingId: findings[0]?.id,
-                progressMessage: findings.length ? `发现 ${findings.length} 个逻辑问题` : '未发现明确逻辑谬误',
-                updatedAt: new Date().toISOString(),
-              }
-            : prev);
-        })
-        .catch((error) => {
-          const message = error instanceof Error ? error.message : '逻辑谬误检查失败';
-          setLogicCheckResult((prev) => prev.inputSignature === inputSignature
-            ? {
-                ...prev,
-                status: 'error',
-                error: message,
-                progressMessage: message,
-                updatedAt: new Date().toISOString(),
-              }
-            : prev);
-          throw error;
-        }));
-    }
-
-    const results = await Promise.allSettled(tasks);
-    const failedCount = results.filter((result) => result.status === 'rejected').length;
-    if (failedCount) {
-      showToast(`检查完成，${failedCount} 个任务失败，请查看对应结果`, 'error');
-      return;
-    }
-
-    showToast('检查完成', 'success');
   }
 
   function startCheckWithOptions() {
@@ -1244,6 +1213,14 @@ function RejectionCheckPage() {
     applyCheckOptions(nextOptions);
     setCheckConfigDialogOpen(false);
     void startChecks(nextOptions);
+  }
+
+  function retrySingleCheck(tabId: RejectionCheckResultTab) {
+    void startChecks(checkOptions, {
+      rejectionCheck: tabId === 'rejection',
+      typoCheck: tabId === 'typo',
+      logicCheck: tabId === 'logic',
+    });
   }
 
   function toggleFinding(findingId: string) {
@@ -1325,6 +1302,62 @@ function RejectionCheckPage() {
         updatedAt: new Date().toISOString(),
       };
     });
+  }
+
+  function markStaleTasksWithoutActive(activeTypes: Set<string>) {
+    if (!activeTypes.has('rejection-items-extraction')) {
+      markStaleExtractionTask();
+    }
+    if (!activeTypes.has('rejection-check-run')) {
+      markStaleCheckTask();
+    }
+  }
+
+  function markStaleExtractionTask() {
+    setInvalidBidAndRejectionItems((prev) => prev.status === 'running'
+      ? {
+          ...prev,
+          status: 'error',
+          error: '上次解析未完成，请重新解析',
+          updatedAt: new Date().toISOString(),
+        }
+      : prev);
+    setExtractionTask((prev) => prev?.status === 'running'
+      ? {
+          ...prev,
+          status: 'error',
+          progress: 100,
+          error: '上次解析未完成，请重新解析',
+          logs: ['上次解析未完成，请重新解析。'],
+          updated_at: new Date().toISOString(),
+        }
+      : prev);
+  }
+
+  function markStaleCheckTask() {
+    const staleMessage = '上次检查未完成，请重新检查';
+    const markResult = <T extends RejectionCheckResultState | TypoCheckResultState | LogicCheckResultState>(prev: T): T => (prev.status === 'running'
+      ? {
+          ...prev,
+          status: 'error',
+          error: staleMessage,
+          progressMessage: staleMessage,
+          updatedAt: new Date().toISOString(),
+        }
+      : prev);
+    setRejectionCheckResult(markResult);
+    setTypoCheckResult(markResult);
+    setLogicCheckResult(markResult);
+    setCheckTask((prev) => prev?.status === 'running'
+      ? {
+          ...prev,
+          status: 'error',
+          progress: 100,
+          error: staleMessage,
+          logs: [staleMessage],
+          updated_at: new Date().toISOString(),
+        }
+      : prev);
   }
 
   function switchStep(nextStep: RejectionCheckStep) {
@@ -1424,6 +1457,9 @@ function RejectionCheckPage() {
           <div className="markdown-empty-state rejection-finding-empty is-error">
             <strong>{typoCheckResult.error || '错别字检查失败'}</strong>
             <p>请确认模型配置可用，或重新检查当前投标文件。</p>
+            <button type="button" className="secondary-action" onClick={() => retrySingleCheck('typo')} disabled={checkRunning || extractionRunning || !bidDocument}>
+              重新检查错别字
+            </button>
           </div>
         ) : visibleTypoFindings.length ? (
           <div className="rejection-finding-list">
@@ -1477,6 +1513,9 @@ function RejectionCheckPage() {
           <div className="markdown-empty-state rejection-finding-empty is-error">
             <strong>{logicCheckResult.error || '逻辑谬误检查失败'}</strong>
             <p>请确认模型配置可用，或重新检查当前投标文件。</p>
+            <button type="button" className="secondary-action" onClick={() => retrySingleCheck('logic')} disabled={checkRunning || extractionRunning || !bidDocument}>
+              重新检查逻辑谬误
+            </button>
           </div>
         ) : visibleLogicFindings.length ? (
           <div className="rejection-finding-list">
@@ -1706,7 +1745,7 @@ function RejectionCheckPage() {
           >
             <div className="analysis-result-head rejection-reader-head">
               <strong>{activeResultTab === 'analysis' ? '解析结果' : '自定义检查项'}</strong>
-              <span>{activeResultTab === 'analysis' ? `${extractionStatusLabels[visibleExtractionStatus]} · ${resultSourceLabel}` : '可填写补充检查口径、人工关注项或项目经验'}</span>
+              <span>{activeResultTab === 'analysis' ? `${extractionStatusLabels[visibleExtractionStatus]} · ${resultSourceLabel}` : customCheckItemsDisabled ? '任务运行中暂不能修改自定义检查项，当前检查会使用启动任务时的内容' : '可填写补充检查口径、人工关注项或项目经验'}</span>
             </div>
 
             {activeResultTab === 'analysis' ? (
@@ -1727,6 +1766,7 @@ function RejectionCheckPage() {
                 className="rejection-custom-editor"
                 value={customCheckItems}
                 onChange={setCustomCheckItems}
+                disabled={customCheckItemsDisabled}
                 placeholder="输入自定义检查项，例如：\n- 关注报价文件是否存在多处不一致\n- 关注资格证明材料有效期是否覆盖投标截止时间\n- 关注技术偏离表是否遗漏关键参数响应"
               />
             )}
@@ -1833,6 +1873,9 @@ function RejectionCheckPage() {
                     <div className="markdown-empty-state rejection-finding-empty is-error">
                       <strong>{rejectionCheckResult.error || '废标项检查失败'}</strong>
                       <p>请确认模型配置可用，或重新检查当前投标文件。</p>
+                      <button type="button" className="secondary-action" onClick={() => retrySingleCheck('rejection')} disabled={checkRunning || extractionRunning || !bidDocument || visibleExtractionStatus !== 'success' || !currentRejectionCheckInputSignature}>
+                        重新检查废标项
+                      </button>
                     </div>
                   ) : visibleRejectionFindings.length ? (
                     <div className="rejection-finding-list">

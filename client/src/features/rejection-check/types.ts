@@ -18,6 +18,21 @@ export type RejectionFindingType = 'invalidBid' | 'rejectionItem';
 
 export type RejectionFindingSeverity = 'high' | 'medium' | 'low';
 
+export type RejectionBackgroundTaskType = 'rejection-items-extraction' | 'rejection-check-run';
+
+export type RejectionBackgroundTaskStatus = 'running' | 'success' | 'error';
+
+export interface RejectionBackgroundTaskState {
+  task_id: string;
+  type: RejectionBackgroundTaskType;
+  status: RejectionBackgroundTaskStatus;
+  progress: number;
+  logs: string[];
+  started_at: string;
+  updated_at: string;
+  error?: string;
+}
+
 export interface RejectionDocumentContent {
   role: RejectionDocumentRole;
   fileName: string;
@@ -40,6 +55,8 @@ export interface RejectionCheckWorkspaceState {
   rejectionCheckResult?: RejectionCheckResultState;
   typoCheckResult?: TypoCheckResultState;
   logicCheckResult?: LogicCheckResultState;
+  extractionTask?: RejectionBackgroundTaskState;
+  checkTask?: RejectionBackgroundTaskState;
 }
 
 export interface RejectionCheckOptions {

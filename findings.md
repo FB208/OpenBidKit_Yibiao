@@ -1,6 +1,9 @@
 # Findings
 
 ## Research Log
+- 废标项检查 Step03 的三类检查主请求已全部迁移到 Main 后台任务，当前失败根因是错别字 `collectJsonResponse()` 非流式全文 JSON 请求在 300 秒内未拿到完整响应；项目已有 `aiService.streamChat()` 且支持 `response_format: { type: 'json_object' }`，可直接用于后端到 AI 服务商的流式 JSON 主请求。
+- `aiService.cjs` 原有 `parseJsonContent()`、`repairJsonResponse()`、`collectJsonResponseWithConfig()` 已覆盖 balanced JSON 提取、修复和重试；流式主请求结束后的 JSON 解析失败应复用这些修复逻辑，而不是把完整长文本再走一次非流式请求。
+- 小米 `mimo-v2.5-pro` 逻辑谬误失败根因是流式主请求返回 JSON 字符串中存在非法反斜杠转义（如 `1\.`），修复请求也原样返回导致二次 `JSON.parse()` 失败；应在 Main 侧解析候选中增加本地非法转义修复，并增强 JSON 修复 prompt。
 - 废标项检查 Step03 当前只有 `rejectionCheckResult` 一份状态，错别字和逻辑谬误 Tab 仍是占位；需要新增独立结果状态，而不是把三类结果混在同一个 findings 数组里。
 - 当前 `RejectionFindingItem` 和 `.rejection-finding-*` 样式已经覆盖折叠列表、单项展开、详情块和删除按钮，错别字/逻辑谬误可以复用该视觉模式并补充复制按钮。
 - `aiClient.requestJson()` 可复用 Main 侧 JSON 修复链路；错别字本地校验应放在 feature service 的 normalizer 之后，确保 AI 幻觉原文不会进入 UI。

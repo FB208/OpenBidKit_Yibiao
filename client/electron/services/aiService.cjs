@@ -457,6 +457,71 @@ function extractBalancedJsonCandidates(content) {
   return candidates;
 }
 
+const jsonEscapeChars = new Set(['"', '\\', '/', 'b', 'f', 'n', 'r', 't']);
+const markdownEscapeChars = new Set(['.', '(', ')', '[', ']', '{', '}', '#', '*', '+', '-', '_', '!', '<', '>', '|', '`']);
+
+function repairInvalidJsonStringEscapes(content) {
+  const text = String(content || '');
+  let output = '';
+  let inString = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (!inString) {
+      output += char;
+      if (char === '"') {
+        inString = true;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      output += char;
+      inString = false;
+      continue;
+    }
+
+    if (char !== '\\') {
+      output += char;
+      continue;
+    }
+
+    const nextChar = text[index + 1] || '';
+    if (!nextChar) {
+      output += '\\\\';
+      continue;
+    }
+
+    if (nextChar === 'u') {
+      const unicodeDigits = text.slice(index + 2, index + 6);
+      if (/^[0-9a-fA-F]{4}$/.test(unicodeDigits)) {
+        output += text.slice(index, index + 6);
+        index += 5;
+      } else {
+        output += '\\\\';
+      }
+      continue;
+    }
+
+    if (jsonEscapeChars.has(nextChar)) {
+      output += char + nextChar;
+      index += 1;
+      continue;
+    }
+
+    if (markdownEscapeChars.has(nextChar)) {
+      output += nextChar;
+      index += 1;
+      continue;
+    }
+
+    output += '\\\\';
+  }
+
+  return output;
+}
+
 function parseJsonContent(content) {
   const normalized = String(content || '').replace(/^\uFEFF/, '').trim();
   const candidates = [
@@ -471,7 +536,15 @@ function parseJsonContent(content) {
     withBalancedCandidates.push(...extractBalancedJsonCandidates(candidate));
   }
 
-  const uniqueCandidates = [...new Set(withBalancedCandidates.map((item) => item.trim()).filter(Boolean))];
+  const repairedCandidates = [];
+  for (const candidate of withBalancedCandidates) {
+    const repaired = repairInvalidJsonStringEscapes(candidate);
+    if (repaired !== candidate) {
+      repairedCandidates.push(repaired);
+    }
+  }
+
+  const uniqueCandidates = [...new Set([...withBalancedCandidates, ...repairedCandidates].map((item) => item.trim()).filter(Boolean))];
   let lastError = null;
 
   for (const candidate of uniqueCandidates) {
@@ -505,7 +578,8 @@ function buildJsonRepairMessages(invalidContent, issues, targetDescription) {
 2. 尽量保留原有结构、字段值、节点顺序和已生成内容
 3. 若缺少必填字段，应结合现有上下文补齐合理内容，不要用空字符串敷衍
 4. 若存在多余说明、代码块包裹、字段名错误、children 结构不规范或顶层包裹错误，应修正为合法 JSON
-5. 只返回修复后的完整 JSON，不要输出任何解释`,
+5. 必须修复 JSON 字符串中的非法反斜杠转义，例如将 1\\. 改为 1.，或将必须保留的反斜杠写成 \\\\
+6. 只返回修复后的完整 JSON，不要输出任何解释`,
     },
     { role: 'user', content: `目标结果类型：${targetDescription}` },
     { role: 'user', content: `当前校验问题：\n${issueLines}` },
@@ -528,6 +602,14 @@ async function emitProgress(progressCallback, message) {
   await Promise.resolve(progressCallback(message));
 }
 
+function normalizeJsonPayload(request, parsed) {
+  const normalized = request.normalizer ? request.normalizer(parsed) : parsed;
+  if (request.validator) {
+    request.validator(normalized);
+  }
+  return normalized;
+}
+
 async function repairJsonResponse(app, config, invalidContent, issues, temperature, responseFormat, progressCallback, progressLabel, repairMessagesBuilder) {
   await emitProgress(progressCallback, `${progressLabel}格式校验失败，正在基于当前结果进行修复。`);
   return chatWithConfig(app, config, {
@@ -537,6 +619,35 @@ async function repairJsonResponse(app, config, invalidContent, issues, temperatu
     temperature,
     response_format: responseFormat,
   });
+}
+
+async function parseOrRepairJsonResponseWithConfig(app, config, request, content) {
+  const temperature = request.temperature ?? 0.7;
+  const responseFormat = request.response_format || { type: 'json_object' };
+  const progressLabel = request.progressLabel || 'JSON结果';
+  const failureMessage = request.failureMessage || '模型返回的 JSON 数据格式无效';
+
+  try {
+    return normalizeJsonPayload(request, parseJsonContent(content));
+  } catch (error) {
+    const issues = formatJsonIssues(error);
+    try {
+      const repairedContent = await repairJsonResponse(
+        app,
+        config,
+        content,
+        issues,
+        temperature,
+        responseFormat,
+        request.progressCallback,
+        progressLabel,
+        request.repairMessagesBuilder,
+      );
+      return normalizeJsonPayload(request, parseJsonContent(repairedContent));
+    } catch {
+      throw new Error(failureMessage);
+    }
+  }
 }
 
 async function collectJsonResponseWithConfig(app, config, request) {
@@ -557,11 +668,7 @@ async function collectJsonResponseWithConfig(app, config, request) {
 
     try {
       const parsed = parseJsonContent(content);
-      const normalized = request.normalizer ? request.normalizer(parsed) : parsed;
-      if (request.validator) {
-        request.validator(normalized);
-      }
-      return normalized;
+      return normalizeJsonPayload(request, parsed);
     } catch (error) {
       lastError = error;
       const issues = formatJsonIssues(error);
@@ -579,11 +686,7 @@ async function collectJsonResponseWithConfig(app, config, request) {
           request.repairMessagesBuilder,
         );
         const repairedParsed = parseJsonContent(repairedContent);
-        const repairedNormalized = request.normalizer ? request.normalizer(repairedParsed) : repairedParsed;
-        if (request.validator) {
-          request.validator(repairedNormalized);
-        }
-        return repairedNormalized;
+        return normalizeJsonPayload(request, repairedParsed);
       } catch (repairError) {
         lastError = repairError;
 
@@ -1197,6 +1300,11 @@ function createAiService({ app, configStore }) {
     async collectJsonResponse(request) {
       const config = configStore.load();
       return collectJsonResponseWithConfig(app, config, request);
+    },
+
+    async parseJsonResponseContent(request, content) {
+      const config = configStore.load();
+      return parseOrRepairJsonResponseWithConfig(app, config, request, content);
     },
 
     async streamChat(request, onEvent) {

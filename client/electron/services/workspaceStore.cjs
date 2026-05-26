@@ -124,6 +124,13 @@ function createWorkspaceStore(app) {
       }
     },
 
+    updateRejectionCheck(partial) {
+      const prev = this.loadRejectionCheck() || {};
+      const next = { ...prev, ...partial };
+      this.saveRejectionCheck(next);
+      return next;
+    },
+
     clearRejectionCheck() {
       try {
         if (fs.existsSync(rejectionCheckFile)) {

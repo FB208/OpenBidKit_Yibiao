@@ -1,5 +1,28 @@
 # Task Plan
 
+## Current Task: 废标项检查流式检查与单项重试
+
+### Goal
+将废标项检查 Step03 的废标项、错别字、逻辑谬误三类 Main 侧 AI 主请求改为后端到 AI 服务商的流式请求，并支持某一类检查失败后只重试该类任务。
+
+### Phases
+- [completed] 1. 将流式 JSON 使用方式和 JSON 修复边界写入 `client/开发说明.md`。
+- [completed] 2. 复用现有 `streamChat` 与 JSON 修复链路改造 Main 侧三类检查。
+- [completed] 3. 改造 Step03 页面，错误态提供单项重试按钮且不覆盖其他结果。
+- [completed] 4. 运行 CJS 语法检查、客户端构建和 diff 检查。
+- [completed] 5. 修复小米模型返回 `1\.` 等非法 JSON 转义导致逻辑谬误结果解析失败的问题。
+
+### Decisions
+- 不新增 Main 到 Renderer 的流式返回能力；Renderer 仍只订阅后台任务事件和 workspace 快照。
+- 主请求使用 `streamChat()`，JSON 修复继续复用非流式修复链路，因为修复输入是短 JSON/近似 JSON。
+- `checkOptions` 保留 UI 配置含义，新增本次执行选项控制单项重试。
+- 流式 chunk 接收过程不写入 workspace；后台任务事件只同步结果和任务状态，不覆盖用户当前查看的 Tab。
+- JSON 解析仍优先使用原始模型输出；只有原始候选解析失败后才尝试修复字符串内部非法反斜杠转义，避免改变正常 JSON 语义。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
 ## Current Task: 废标项检查三类并发检查
 
 ### Goal
