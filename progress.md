@@ -1,6 +1,9 @@
 # Progress
 
 ## Session Log
+- 开始实现废标项检查 Step03 三类并发检查：用户要求废标项检查、错别字检查、逻辑谬误检查并发执行；错别字结果用 `错别字 -> 正确的字` 折叠列表展示并支持复制真实原文；逻辑谬误结果展示标题、原文/位置、原因和建议。
+- 已完成三类检查代码接入待验证：新增错别字/逻辑谬误类型、工作区缓存字段、Prompt 和 service；Step03 会按配置并发启动废标项、错别字、逻辑谬误任务；错别字结果先用投标文件原文精确定位并重截取原文片段，无法定位的候选会被过滤。
+- 验证完成：`cd client; npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 通过，仅有 Git LF/CRLF 提示。
 - 开始 Analytics 远程公告通道实现：用户确认使用 Cloudflare KV；目标是 Worker/Dashboard/Client 全链路实现 Markdown 公告，客户端与 30 分钟版本检查共用轮询，公告关闭后同 ID 不再显示。
 - 文件型计划 catchup 首次使用示例路径失败，实际脚本位于 `~/.config/opencode/.../session-catchup.py`，已重跑成功并记录到计划。
 - 已完成 Analytics Worker 和 Dashboard 公告管理改造：Worker 新增公开 `/notice`、管理员 `/api/notice` GET/POST/DELETE；Dashboard 新增公告标题、启用状态、Markdown 内容、读取/发布/停用交互。
@@ -101,3 +104,9 @@
 - 已修复 Analytics GitHub 仓库统计接口：`/api/github-repo-stats` 不再吞掉错误返回 `code:0, repo:null`；新增可选 `GITHUB_API_TOKEN`、GitHub HTML fallback、KV 手动 TTL 缓存和 stale cache 兜底；更新 `WORKER_CODE_VERSION=github-stats-resilient-v1` 与 README。验证通过：`node --check` Worker 相关文件、真实 handler 调用返回 `github-api` 数据、模拟 GitHub API 403 时 HTML fallback 返回数据、模拟全失败时 stale cache 返回数据、`git diff --check` 本轮 Analytics 文件。
 - 按 review 继续修复：`parseRepoStatsFromHtml()` 现在要求 stars/forks/open issues 全部解析成功才返回，避免部分 counter 缺失时缓存 0；Dashboard `imageProviders` 增加 `custom: 自定义生图服务`。验证通过：GitHub stats route 与 Dashboard configUsage 语法检查、完整 HTML fallback、部分 HTML 缺失返回 502 且不缓存、部分 HTML 缺失时返回 stale cache、`git diff --check`。
 - 按 review 修复模型使用表 provider 标签：新增 `textModelProviders` 标签表，`renderModelUsageGroups()` 根据分组 key 选择文本或生图标签，避免文本 `custom` 显示成“自定义生图服务”，并补中文展示小米/DeepSeek/龙猫。验证通过：`node --check analytics/dashboard/public/src/pages/configUsage.js`、`git diff --check -- analytics/dashboard/public/src/pages/configUsage.js`。
+## Rejection Check Step03 Session
+- 开始实现废标项检查 Step03：已确认现有页面、类型、Prompt 和 AI 调用边界；本轮会新增结果状态、三轮纯 user prompt、AI 检查服务、可展开/删除结果列表和样式，并运行客户端构建验证。
+- 已完成代码接入：新增 Step03 风险项类型和工作区字段；三轮 AI 检查使用纯 user messages 与 `aiClient.chat()`；页面支持开始/重新检查、运行态、持久化、单项展开、自动折叠和删除；样式已覆盖桌面和移动端。
+- 验证完成：`cd client && npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 通过，仅有 Git LF/CRLF 提示。
+- 按评审修复 Step03 健壮性：废标项 Step02 流式解析不再因 10 秒无 chunk 自动标成功；缓存中的 `running + content` 恢复为 error 并要求重新解析；Step03 检查要求 Step02 状态为 success；第三轮最终 JSON 改为 `aiClient.requestJson()`，复用 Main 侧 JSON 提取、修复和重试链路。
+- 评审修复验证完成：`cd client && npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 通过，仅有 Git LF/CRLF 提示。

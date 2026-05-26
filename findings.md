@@ -1,6 +1,10 @@
 # Findings
 
 ## Research Log
+- 废标项检查 Step03 当前只有 `rejectionCheckResult` 一份状态，错别字和逻辑谬误 Tab 仍是占位；需要新增独立结果状态，而不是把三类结果混在同一个 findings 数组里。
+- 当前 `RejectionFindingItem` 和 `.rejection-finding-*` 样式已经覆盖折叠列表、单项展开、详情块和删除按钮，错别字/逻辑谬误可以复用该视觉模式并补充复制按钮。
+- `aiClient.requestJson()` 可复用 Main 侧 JSON 修复链路；错别字本地校验应放在 feature service 的 normalizer 之后，确保 AI 幻觉原文不会进入 UI。
+- 项目已有 `navigator.clipboard.writeText()` + Toast 的复制交互，废标项检查页面可按标书查重页的方式实现“复制原文”。
 - 远程公告通道适合使用 Cloudflare KV：需求只保存每个 `projectName` 最新一份公告，KV 的 key-value 模型比 D1 更轻量；Worker 现有 `ADMIN_TOKEN` 鉴权可复用到公告管理接口。
 - 客户端已有 `UpdateNotifier`，版本检查间隔为 30 分钟；可在同一个定时器里并行检查更新和远程公告，但更新继续用 Toast，公告使用独立 Dialog，避免同时触发时互相覆盖。
 - 客户端已有 `MarkdownRenderer`，公告渲染必须传 `allowRawHtml={false}`，避免远程公告里的 HTML 被渲染成 DOM。
@@ -115,3 +119,10 @@
 - 自定义生图已按 OpenAI compatible 协议接入：`POST {base_url}/images/generations`，`Authorization: Bearer <api_key>`，请求体含 `model/prompt/size/response_format`；若服务端明确不支持 `response_format`，会自动重试一次不带该字段。测试预览同时支持返回 `data[0].url` 和 `data[0].b64_json`。
 - `/api/github-repo-stats` 的 `repo:null` 代码路径在 `analytics/worker/src/routes/githubRepoStats.js`：GitHub API fetch 失败后 catch 只记录日志并返回 `{ code: 0, repo: null, cached: false }`，Dashboard 因 `code:0` 不会暴露错误原因。仓库 `FB208/OpenBidKit_Yibiao` 本身公开可访问，直接 GitHub API 返回 stars=399、forks=147、openIssues=4。修复后 API 优先，失败走 GitHub HTML counter 兜底；KV 缓存采用手动 30 分钟新鲜度、7 天 stale 保留，无缓存且实时读取失败时返回 502 诊断信息。
 - GitHub HTML fallback 不能把未解析出的 counter 当 0：真实场景中 GitHub 页面某个 id 变化会导致未知字段被缓存为 0。已改为三个 counter 全部解析成功才接受 HTML fallback，否则无缓存返回 502，有 stale cache 返回旧缓存。
+## Rejection Check Step03 Findings
+- Step03 当前只是 UI 骨架：`RejectionCheckPage.tsx` 中“开始检查”只打开配置或提示后续接入，结果内容区域固定显示占位文案。
+- `rejectionCheckService.ts` 中旧 `requestRejectionCheck()` 依赖未实现的 `buildRejectionCheckMessages()`，且旧类型 `RejectionCheckReport/RejectionRiskItem` 未被页面使用，适合用最小改动替换为新检查流程。
+- `aiClient.requestJson()` 会进入 Main 侧 JSON 修复链路，默认修复 prompt 使用 system 消息；Step03 若要严格不写 system prompt，应使用 `aiClient.chat()` 并自行解析 JSON。
+- `MarkdownRenderer` 默认开启 raw HTML；Step03 展示 AI 输出详情时必须显式传 `allowRawHtml={false}`。
+- Step02 自定义检查项占位示例包含“签字盖章”，与 Step03 只检查电子投标文件的约束冲突，需要同步改为电子文件可判断的示例。
+- 评审指出的三处健壮性问题成立：10 秒 idle 自动完成可能截断流式输出；error 状态保留 partial content 时 Step03 不能只按 content 非空放行；Step03 最终 JSON 直接 `JSON.parse()` 没有复用 Main 侧 balanced JSON 提取、修复和重试能力。

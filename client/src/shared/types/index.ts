@@ -47,4 +47,21 @@ export type {
 export type { AppMenuItem, SectionId } from './navigation';
 export type { OutlineData, OutlineItem, OutlineMode, TechnicalRequirementGroup } from './outline';
 export type { LatestReleaseInfo, UpdateCheckResult, WordExportProgressEvent, WordExportResult, YibiaoBridge } from './ipc';
-export type { RejectionCheckWorkspaceState, RejectionDocumentContent, RejectionDocumentRole, RejectionDocumentSource } from '../../features/rejection-check/types';
+export type {
+  RejectionCheckFinding,
+  RejectionCheckResultState,
+  RejectionCheckRunStatus,
+  RejectionCheckStep,
+  RejectionCheckOptions,
+  RejectionCheckResultTab,
+  RejectionCheckWorkspaceState,
+  RejectionDocumentContent,
+  RejectionDocumentRole,
+  RejectionDocumentSource,
+  RejectionExtractionSource,
+  RejectionExtractionState,
+  RejectionExtractionStatus,
+  RejectionFindingSeverity,
+  RejectionFindingType,
+  RejectionResultTab,
+} from '../../features/rejection-check/types';

@@ -1,5 +1,27 @@
 # Task Plan
 
+## Current Task: 废标项检查三类并发检查
+
+### Goal
+在 `client/` 废标项检查 Step03 中实现“废标项检查、错别字检查、逻辑谬误检查”三个任务并发执行；错别字结果必须通过本地算法校验并修正原文片段，逻辑谬误输出标题、原文/位置、原因和建议，三类结果都使用折叠列表展示。
+
+### Phases
+- [completed] 1. 扩展类型、工作区状态和归一化逻辑，支持三类独立检查结果。
+- [completed] 2. 新增错别字与逻辑谬误 Prompt、AI 服务和错别字原文校验/修正算法。
+- [completed] 3. 改造 Step03 页面：按配置并发启动三类任务，分别展示运行/成功/失败状态。
+- [completed] 4. 实现错别字、逻辑谬误折叠列表 UI，错别字支持复制原文和删除。
+- [completed] 5. 补充样式和移动端适配，运行构建与 diff 检查。
+
+### Decisions
+- 三个检查任务在 Renderer 层用 `Promise.allSettled()` 并发启动，单项失败只影响对应 Tab。
+- 错别字和逻辑谬误只向 AI 提交投标文件原文和检查要求，不提交招标文件或 Step02 废标项解析结果。
+- 错别字必须通过本地 `bidContent` 定位校验；无法在原文中定位的候选丢弃，原文片段由程序从真实位置截取。
+- 结果详情中的 AI 输出仍通过 `MarkdownRenderer allowRawHtml={false}` 渲染。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
 ## Current Task: GitHub 仓库统计接口修复
 
 ### Goal
@@ -979,3 +1001,28 @@
 | --- | --- | --- |
 | planning skill 示例路径 `~/.opencode/.../session-catchup.py` 不存在 | 第一次 catchup | 改用实际路径 `~/.config/opencode/.../session-catchup.py` |
 | VM 方式验证私有函数时相对 `require('../utils/paths.cjs')` 失败 | 第一次函数验证 | 使用 `module.createRequire(file)` 以服务文件路径创建本地 require |
+## Current Task: 废标项检查 Step03 结果与三轮 AI 检查
+
+### Goal
+实现 `client/src/features/rejection-check` 的 Step03“废标项检查”：基于 Step02 无效/废标项解析、自定义检查项和单份投标文件原文，执行三轮 AI 检查，并用可展开、可删除的结果列表展示风险项。
+
+### Phases
+- [completed] 1. 扩展废标项检查类型、结果状态和工作区持久化字段。
+- [completed] 2. 实现 Step03 三轮纯 user prompt 和 AI 服务编排。
+- [completed] 3. 接入页面开始/重新检查、运行态、持久化、删除和单项展开逻辑。
+- [completed] 4. 补充结果列表样式和移动端适配。
+- [completed] 5. 运行构建与差异检查验证。
+
+### Decisions
+- Step03 新检查逻辑不使用 `system` role；三轮请求均为多组 `user` messages。
+- 为避免 JSON 修复链路引入系统提示词，Step03 使用 `aiClient.chat()` 搭配 `response_format: { type: 'json_object' }`，再在 Renderer service 中手动解析和规范化结果。
+- 只实现 `废标项检查` Tab 的实际内容；`错别字检查`、`逻辑谬误检查` 暂保留占位。
+- AI 检查仅覆盖电子投标文件中可判断的缺失、冲突、未响应和材料风险；排除签字、盖章、密封、纸质正副本、现场递交等纸质/线下事项。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+### Validation
+- `cd client && npm run build` 通过；仅有既有 chunk 体积警告。
+- `git diff --check` 通过；仅有 Git LF/CRLF 提示。

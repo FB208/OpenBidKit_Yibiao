@@ -1,4 +1,5 @@
 import { aiClient } from '../../../shared/ai/aiClient';
+import { buildInvalidBidAndRejectionItemsPrompt } from '../../../shared/prompts';
 import type { AiStreamEvent, ChatMessage } from '../../../shared/types';
 import type { BidAnalysisMode } from '../types';
 
@@ -229,7 +230,7 @@ export const bidAnalysisTasks: BidAnalysisTaskDefinition[] = [
     description: '投标无效、废标相关风险项。',
     required: false,
     output: 'markdown',
-    buildTaskPrompt: () => '任务：提取招标文件中与投标无效、废标项相关的信息。保持原文准确性，以列表形式输出 Markdown，不要使用表格。仅输出整理结果。',
+    buildTaskPrompt: buildInvalidBidAndRejectionItemsPrompt,
   },
   {
     id: 'signingProcess',
@@ -263,6 +264,10 @@ export function getBidAnalysisTasks(mode: BidAnalysisMode) {
   return mode === 'key' ? bidAnalysisTasks.filter((task) => task.required) : bidAnalysisTasks;
 }
 
+export function getBidAnalysisTaskById(taskId: string) {
+  return bidAnalysisTasks.find((task) => task.id === taskId);
+}
+
 export function streamBidAnalysisTask(
   fileContent: string,
   task: BidAnalysisTaskDefinition,
@@ -276,4 +281,16 @@ export function streamBidAnalysisTask(
     },
     onEvent
   );
+}
+
+export function streamInvalidBidAndRejectionItemsTask(
+  fileContent: string,
+  onEvent: (event: AiStreamEvent) => void
+) {
+  const task = getBidAnalysisTaskById('discardedBids');
+  if (!task) {
+    throw new Error('未找到无效投标与废标项解析任务');
+  }
+
+  return streamBidAnalysisTask(fileContent, task, onEvent);
 }

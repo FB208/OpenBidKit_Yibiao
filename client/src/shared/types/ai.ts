@@ -20,6 +20,9 @@ export interface JsonCompletionRequest<TInput = unknown> extends ChatRequestOpti
   messages: ChatMessage[];
   schemaName?: string;
   input?: TInput;
+  max_retries?: number;
+  progressLabel?: string;
+  failureMessage?: string;
 }
 
 export interface AiStreamEvent {

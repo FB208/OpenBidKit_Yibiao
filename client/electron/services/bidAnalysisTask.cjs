@@ -22,6 +22,43 @@ ${outputJson}
 仅输出 JSON，不要输出其他内容。`;
 }
 
+function buildInvalidBidAndRejectionItemsPrompt() {
+  return `任务：提取并分析招标文件中的“无效投标”和“废标项”。
+
+概念边界：
+1. “无效投标”指投标人、投标文件、签章密封、递交时间、报价、保证金、资格条件、实质性响应等原因导致投标被认定为无效、否决、不予受理或按无效响应处理的情形。
+2. “废标项”指可能导致项目废标、采购失败、重新招标、终止评审、有效投标人不足或实质性响应不足的条款或风险项。
+3. 原文使用“否决投标”“投标无效”“不予受理”“无效响应”“重大偏差”“实质性偏离”“废标情形”等同义表达时，也要按上述边界归类。
+
+输出要求：
+1. 必须明确区分“无效投标”和“废标项”。
+2. “原文中明确提到的”只能提取招标文件原文中明确出现或同义表达的内容，尽量保留原文关键句；如果没有提及，写“- 原文未提及”。
+3. “此类标书还可能涉及的”只补充原文未明确提及、但结合本招标文件类型和招投标经验判断非常重要的高风险遗漏项。
+4. 不要罗列所有常见可能项，不要输出泛泛的通用清单；每个小节最多输出 3-5 条。
+5. 如果没有明显需要补充的关键项，写“- 暂未发现必须补充的高风险项”。
+6. 经验补充项每条前缀使用“重点补充：”，并用一句话说明为什么需要关注。
+7. 不要使用表格，使用 Markdown 列表。
+8. 仅输出下方格式，不要输出解释、过程或额外段落。
+9. 不要输出三重引号、代码块标记或其他格式包裹符。
+
+输出格式：
+# 原文中明确提到的
+
+## 无效投标
+- ...
+
+## 废标项
+- ...
+
+# 此类标书还可能涉及的
+
+## 无效投标
+- 重点补充：...
+
+## 废标项
+- 重点补充：...`;
+}
+
 const tasks = [
   {
     id: 'projectOverview', label: '项目概述', required: true, output: 'markdown', description: '提取项目基本信息、背景目的、规模预算、时间安排、实施内容和技术特点。',
@@ -55,7 +92,7 @@ const tasks = [
   { id: 'openBid', label: '开标要求', required: false, output: 'json', description: '开标时间地点、参与要求、无效标和流程。', prompt: () => jsonTask('提取开标信息', '提取时间地点、参与要求、无效标认定、异议处理、开标流程。', `{"time_place":"时间地点","part_req":"参与要求","invalid_bid":"无效标认定","objection":"异议处理","bid_process":"开标流程"}`) },
   { id: 'evaluationBid', label: '评标要求', required: false, output: 'json', description: '评标委员会、评分构成、方法和原则。', prompt: () => jsonTask('提取评标信息', '提取评标委员会组成、职责、评分构成、评标方法类型、评标原则和方法细节、其他评标相关说明。', `{"committee":"评标委员会组成","duties":"评标委员会职责","scoring":"评分构成","method":"评标方法类型","principles":"评标原则和方法细节","others":"其他和评标相关的说明"}`) },
   { id: 'businessScoring', label: '商务评分要求', required: false, output: 'markdown', description: '商务评分因素，为商务方案准备。', prompt: () => '任务：提取招标文件中的商务评分因素，为编写投标文件中的商务方案做准备。整理成 Markdown，不要使用表格。仅输出整理结果。' },
-  { id: 'discardedBids', label: '无效标与废标项', required: false, output: 'markdown', description: '投标无效、废标相关风险项。', prompt: () => '任务：提取招标文件中与投标无效、废标项相关的信息。以列表形式输出 Markdown，不要使用表格。仅输出整理结果。' },
+  { id: 'discardedBids', label: '无效标与废标项', required: false, output: 'markdown', description: '投标无效、废标相关风险项。', prompt: buildInvalidBidAndRejectionItemsPrompt },
   { id: 'signingProcess', label: '合同授予与签订', required: false, output: 'json', description: '中标公示、合同签订、履约保证金和合同文本。', prompt: () => jsonTask('提取合同授予和签订流程', '提取中标公示、合同签订、履约保证金、合同文本等信息。', `{"bid_notice":"中标公示","contract_sign":"合同签订","performance_bond":"履约保证金","contract_text":"合同文本"}`) },
   { id: 'terminationCondition', label: '合同解除和终止', required: false, output: 'json', description: '违约解除、不可抗力、合同终止和争议解决。', prompt: () => jsonTask('提取合同解除和终止条件', '提取违约解除、不可抗力、合同终止、争议解决等信息。', `{"breach_termination":"违约解除","force_majeure":"不可抗力","contract_termination":"合同终止","dispute_resolution":"争议解决"}`) },
 ];
@@ -64,12 +101,39 @@ function getBidAnalysisTasks(mode) {
   return mode === 'key' ? tasks.filter((task) => task.required) : tasks;
 }
 
+function getBidAnalysisTaskById(taskId) {
+  return tasks.find((task) => task.id === taskId);
+}
+
 function buildMessages(fileContent, task) {
   return [
     { role: 'system', content: stableSystemPrompt },
     { role: 'user', content: `以下是完整招标文件 Markdown 原文。后续任务必须仅基于这份原文完成：\n\n${fileContent}` },
     { role: 'user', content: task.prompt() },
   ];
+}
+
+async function runSingleBidAnalysisPromptTask({ aiService, fileContent, task, onChunk }) {
+  let content = '';
+  await aiService.streamChat({ messages: buildMessages(fileContent, task), temperature: 0.1, response_format: task.output === 'json' ? { type: 'json_object' } : undefined }, (event) => {
+    if (event.type === 'chunk' && event.chunk) {
+      content += event.chunk;
+      if (typeof onChunk === 'function') {
+        onChunk(content, event.chunk, event);
+      }
+    }
+  });
+
+  return content;
+}
+
+function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent, onChunk }) {
+  const task = getBidAnalysisTaskById('discardedBids');
+  if (!task) {
+    throw new Error('未找到无效投标与废标项解析任务');
+  }
+
+  return runSingleBidAnalysisPromptTask({ aiService, fileContent, task, onChunk });
 }
 
 async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, payload }) {
@@ -89,22 +153,23 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
   }
 
   async function runOne(task) {
-    let content = '';
     workspaceStore.updateTechnicalPlan({
       bidAnalysisTasks: { ...(workspaceStore.loadTechnicalPlan()?.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'running', content: '' } },
     });
 
-    await aiService.streamChat({ messages: buildMessages(payload.fileContent, task), temperature: 0.1, response_format: task.output === 'json' ? { type: 'json_object' } : undefined }, (event) => {
-      if (event.type === 'chunk' && event.chunk) {
-        content += event.chunk;
+    const content = await runSingleBidAnalysisPromptTask({
+      aiService,
+      fileContent: payload.fileContent,
+      task,
+      onChunk: (nextContent) => {
         if (!realTimeRender) {
           return;
         }
         const prev = workspaceStore.loadTechnicalPlan() || {};
-        const nextTasks = { ...(prev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'running', content } };
+        const nextTasks = { ...(prev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'running', content: nextContent } };
         technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTasks: nextTasks, bidAnalysisProgress: doneProgress(nextTasks) });
         updateTask({ status: 'running', progress: technicalPlan.bidAnalysisProgress || 0 }, technicalPlan);
-      }
+      },
     });
 
     const prev = workspaceStore.loadTechnicalPlan() || {};
@@ -128,6 +193,10 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
 }
 
 module.exports = {
+  buildInvalidBidAndRejectionItemsPrompt,
+  getBidAnalysisTaskById,
   getBidAnalysisTasks,
+  runInvalidBidAndRejectionItemsExtraction,
   runBidAnalysisTask,
+  runSingleBidAnalysisPromptTask,
 };
