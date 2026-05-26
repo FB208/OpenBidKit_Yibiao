@@ -20,6 +20,10 @@ function getDuplicateCheckFilePath(app) {
   return path.join(getWorkspaceDir(app), 'duplicate_check.json');
 }
 
+function getRejectionCheckFilePath(app) {
+  return path.join(getWorkspaceDir(app), 'rejection_check.json');
+}
+
 function getDuplicateCheckDir(app) {
   return path.join(getWorkspaceDir(app), 'duplicate-check');
 }
@@ -48,6 +52,7 @@ module.exports = {
   getGeneratedImagesDir,
   getImportedImagesDir,
   getKnowledgeBaseDir,
+  getRejectionCheckFilePath,
   getTechnicalPlanFilePath,
   getWorkspaceDir,
   getUserDataPath,

@@ -47,3 +47,4 @@ export type {
 export type { AppMenuItem, SectionId } from './navigation';
 export type { OutlineData, OutlineItem, OutlineMode, TechnicalRequirementGroup } from './outline';
 export type { LatestReleaseInfo, UpdateCheckResult, WordExportProgressEvent, WordExportResult, YibiaoBridge } from './ipc';
+export type { RejectionCheckWorkspaceState, RejectionDocumentContent, RejectionDocumentRole, RejectionDocumentSource } from '../../features/rejection-check/types';

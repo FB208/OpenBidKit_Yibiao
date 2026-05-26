@@ -4,7 +4,7 @@ import * as Switch from '@radix-ui/react-switch';
 import { Children, isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { Components } from 'react-markdown';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { MarkdownRenderer, useToast } from '../../../shared/ui';
+import { MarkdownEditor, MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
 import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement } from '../types';
 
@@ -323,7 +323,6 @@ function ContentEditPage({
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
   const [draftGenerationOptions, setDraftGenerationOptions] = useState<ContentGenerationOptions>(defaultContentGenerationOptions);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const firstLeafId = leaves[0]?.id || '';
   const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
@@ -557,27 +556,6 @@ function ContentEditPage({
     }
   };
 
-  const insertMarkdown = (prefix: string, suffix = '') => {
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      return;
-    }
-
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const scrollTop = textarea.scrollTop;
-    const selected = draftContent.slice(start, end) || '文本';
-    const next = draftContent.slice(0, start) + prefix + selected + suffix + draftContent.slice(end);
-    setDraftContent(next);
-
-    requestAnimationFrame(() => {
-      textarea.focus();
-      textarea.scrollTop = scrollTop;
-      textarea.selectionStart = start + prefix.length;
-      textarea.selectionEnd = start + prefix.length + selected.length;
-    });
-  };
-
   const renderTree = (items: OutlineItem[], level = 0): ReactNode => items.map((item) => {
     const meta = outlineMeta.get(item.id);
     const status = meta?.status || 'idle';
@@ -728,23 +706,11 @@ function ContentEditPage({
           </div>
 
           {selectedItem && selectedIsLeaf && editing && !isPreviewing ? (
-            <div className="content-editor-shell">
-              <div className="content-editor-toolbar">
-                <button type="button" onClick={() => insertMarkdown('**', '**')} title="加粗"><strong>B</strong></button>
-                <button type="button" onClick={() => insertMarkdown('*', '*')} title="斜体"><em>I</em></button>
-                <button type="button" onClick={() => insertMarkdown('## ')} title="标题">H</button>
-                <button type="button" onClick={() => insertMarkdown('> ')} title="引用">❝</button>
-                <button type="button" onClick={() => insertMarkdown('- ')} title="无序列表">•</button>
-                <button type="button" onClick={() => insertMarkdown('1. ')} title="有序列表">1.</button>
-              </div>
-              <textarea
-                ref={textareaRef}
-                className="content-editor-textarea"
-                value={draftContent}
-                onChange={(e) => setDraftContent(e.target.value)}
-                placeholder="输入 Markdown 正文..."
-              />
-            </div>
+            <MarkdownEditor
+              value={draftContent}
+              onChange={setDraftContent}
+              placeholder="输入 Markdown 正文..."
+            />
           ) : selectedItem && selectedIsLeaf && editing && isPreviewing ? (
             <div className="markdown-viewer content-generation-output">
               {draftContent.trim() ? (

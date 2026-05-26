@@ -1,12 +1,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { getDuplicateCheckDir, getDuplicateCheckFilePath, getTechnicalPlanFilePath } = require('../utils/paths.cjs');
+const { getDuplicateCheckDir, getDuplicateCheckFilePath, getRejectionCheckFilePath, getTechnicalPlanFilePath } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 
 function createWorkspaceStore(app) {
   const technicalPlanFile = getTechnicalPlanFilePath(app);
   const duplicateCheckFile = getDuplicateCheckFilePath(app);
   const duplicateCheckDir = getDuplicateCheckDir(app);
+  const rejectionCheckFile = getRejectionCheckFilePath(app);
 
   return {
     getTechnicalPlanFilePath() {
@@ -97,6 +98,41 @@ function createWorkspaceStore(app) {
         return { success: true, message: '标书查重缓存已清空', file_path: duplicateCheckFile };
       } catch (error) {
         throw new Error(`标书查重缓存清空失败：${error.message}`);
+      }
+    },
+
+    loadRejectionCheck() {
+      if (!fs.existsSync(rejectionCheckFile)) {
+        return null;
+      }
+
+      try {
+        const raw = fs.readFileSync(rejectionCheckFile, 'utf-8');
+        return JSON.parse(raw);
+      } catch (error) {
+        throw new Error(`废标项检查缓存读取失败：${error.message}`);
+      }
+    },
+
+    saveRejectionCheck(state) {
+      try {
+        fs.mkdirSync(path.dirname(rejectionCheckFile), { recursive: true });
+        fs.writeFileSync(rejectionCheckFile, JSON.stringify(state, null, 2), 'utf-8');
+        return { success: true, message: '废标项检查缓存已保存', file_path: rejectionCheckFile };
+      } catch (error) {
+        throw new Error(`废标项检查缓存保存失败：${error.message}`);
+      }
+    },
+
+    clearRejectionCheck() {
+      try {
+        if (fs.existsSync(rejectionCheckFile)) {
+          fs.unlinkSync(rejectionCheckFile);
+        }
+        deleteImportedImageBatches(app, 'rejection-check');
+        return { success: true, message: '废标项检查缓存已清空', file_path: rejectionCheckFile };
+      } catch (error) {
+        throw new Error(`废标项检查缓存清空失败：${error.message}`);
       }
     },
   };

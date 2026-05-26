@@ -50,6 +50,7 @@ const bridge = {
   },
   file: {
     importDocument: () => ipcRenderer.invoke('file:import-document'),
+    importRejectionCheckDocument: (role) => ipcRenderer.invoke('file:import-rejection-check-document', role),
     selectDuplicateCheckFiles: (options) => ipcRenderer.invoke('file:select-duplicate-check-files', options),
   },
   knowledgeBase: {
@@ -85,6 +86,9 @@ const bridge = {
     loadDuplicateCheck: () => ipcRenderer.invoke('workspace:load-duplicate-check'),
     saveDuplicateCheck: (state) => ipcRenderer.invoke('workspace:save-duplicate-check', state),
     clearDuplicateCheck: () => ipcRenderer.invoke('workspace:clear-duplicate-check'),
+    loadRejectionCheck: () => ipcRenderer.invoke('workspace:load-rejection-check'),
+    saveRejectionCheck: (state) => ipcRenderer.invoke('workspace:save-rejection-check', state),
+    clearRejectionCheck: () => ipcRenderer.invoke('workspace:clear-rejection-check'),
   },
   tasks: {
     startBidAnalysis: (payload) => ipcRenderer.invoke('tasks:start-bid-analysis', payload),

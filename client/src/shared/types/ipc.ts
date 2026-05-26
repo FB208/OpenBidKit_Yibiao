@@ -2,6 +2,7 @@ import type { AiStreamEvent, ChatCompletionRequest, JsonCompletionRequest } from
 import type { DuplicateCheckWorkspaceState, DuplicateMetadataAnalysisState, FileImportResult, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseMutationResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
+import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 
 export interface TaskEvent<TState = unknown> {
   task: unknown;
@@ -67,6 +68,7 @@ export interface YibiaoBridge {
   };
   file: {
     importDocument: () => Promise<FileImportResult>;
+    importRejectionCheckDocument: (role: RejectionDocumentRole) => Promise<FileImportResult>;
     selectDuplicateCheckFiles: (options?: { multiple?: boolean }) => Promise<FileSelectionResult>;
   };
   knowledgeBase: {
@@ -94,6 +96,9 @@ export interface YibiaoBridge {
     loadDuplicateCheck: () => Promise<DuplicateCheckWorkspaceState | null>;
     saveDuplicateCheck: (state: DuplicateCheckWorkspaceState) => Promise<unknown>;
     clearDuplicateCheck: () => Promise<unknown>;
+    loadRejectionCheck: () => Promise<RejectionCheckWorkspaceState | null>;
+    saveRejectionCheck: (state: RejectionCheckWorkspaceState) => Promise<unknown>;
+    clearRejectionCheck: () => Promise<unknown>;
   };
   tasks: {
     startBidAnalysis: (payload: unknown) => Promise<unknown>;
