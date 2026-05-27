@@ -1,11 +1,12 @@
 # AGENTS.md
 
 ## 范围
-- `archive/` 是归档数据，默认不要读取、修改、格式化、测试或把其中内容作为当前架构依据。
-- 当前有效产品代码在 `client/`；根 `README.md` 和 `.vscode/tasks.json`、`.vscode/launch.json` 仍提到旧 `frontend/`、`backend/`，不要按这些旧路径推断入口。
-- `analytics/` 是独立 Cloudflare Workers 埋点服务；`tools/` 下是独立文档解析/MinerU 验证项目，不是 `client/` 的运行依赖。
+- `archive/` 是归档的历史数据，不要读取，完全忽略掉即可。
+- 当前有效产品代码在 `client/`；
+- `analytics/` 是独立 Cloudflare Workers 埋点服务，用于统计、分析、查看`client/`中提交的埋点信息。
 
 ## Client
+- 开发Client前，必须先阅读`client/开发说明.md`，保持框架风格一致性。
 - 没有 root `package.json`；客户端命令都先 `cd client`。
 - 安装/验证：`npm ci` 后 `npm run build`。`npm run build` 等价 `tsc --noEmit && vite build`，仓库未配置 lint/test 脚本。
 - 开发启动：`npm run dev`，固定 Vite `127.0.0.1:5173 --strictPort` 后再启动 Electron。
@@ -51,13 +52,7 @@
 - 不把 `ACCOUNT_ID`、`ADMIN_TOKEN`、`ANALYTICS_API_TOKEN` 等密钥写入仓库；Worker 配置保留 `keep_vars: true`，不要在 `wrangler.jsonc` 增加 `secrets.required`。
 - 禁止删除、绕过或弱化任何埋点、统计、Analytics Dashboard 展示和 Worker 聚合逻辑；如确需调整，必须等价保留统计能力并说明影响。
 
-## Tools
-- `tools/doc2markdown-node`、`tools/mineru-agent-demo`、`tools/mineru-accurate-demo` 都是独立 Node POC，分别在各自目录 `npm install` 后运行 `npm run smoke`/`npm run parse`。
-- `tools/mineru-agent-demo` 不用 token；`tools/mineru-accurate-demo` 使用本目录 `.env` 的 `MINERU_API_TOKEN`，不要提交。
-- `tools/Doc2MarkdownService` 是独立 FastAPI 服务：`python -m venv .venv; .\.venv\Scripts\activate; pip install -r requirements.txt; python -m uvicorn app.main:app --host 0.0.0.0 --port 8000`；样本冒烟：`python tests/smoke_samples.py`。
-
-
 ## 开发规范
-- 尽量保持整体编码风格的统一
-- 前端组件和样式尽量封装和复用，保持样式风格统一
-- 当用户提出功能异常时，不要猜原因，而是真实的去排查代码，增加调试日志，精准定位问题再去想办法解决
+- 尽量保持整体编码风格的统一。
+- 前端组件和样式尽量封装和复用，保持样式风格统一。
+- 当用户提出功能异常时，不要猜原因，而是真实的去排查代码，增加调试日志，精准定位问题再去想办法解决。
