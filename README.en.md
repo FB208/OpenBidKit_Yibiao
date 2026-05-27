@@ -1,3 +1,5 @@
+<img src="./screenshots/banner.webp" alt="Yibiao usage demo video" width="100%">
+
 # Yibiao Bid Toolbox - AI Bid Proposal Writing Assistant
 
 <p align="center">
@@ -13,11 +15,16 @@
 </p>
 
 <p align="left">
-  <strong>🚀 Out-of-the-box, open-source, and free AI bid proposal writing tool focused on AI proposal writing, bid AI, and AI bid generation.</strong>
+  <strong>🚀 Out-of-the-box, open-source, and free AI bid proposal writing tool</strong>
   <br>
-  Yibiao Bid Toolbox is an intelligent bid document creation tool for tendering and bidding workflows. It is designed for proposal writers, presales engineers, project managers, and bid teams. The product covers the full workflow from importing tender documents to exporting editable Word proposals, including tender document parsing, scoring-point extraction, proposal outline generation, technical proposal drafting, expansion and rewriting, knowledge base reuse, duplicate-check workspace, and rejection-risk checklist workspace.
+  Yibiao Bid Toolbox is an intelligent bid document creation tool for tendering and bidding scenarios. It is fully open source and includes AI-generated technical proposals, image-and-text generation, commercial bid support, enterprise knowledge base management, duplicate checking, rejection-risk checks, tender information, and more features under development.
   <br>
-  If you are looking for a free AI proposal writing tool, bid AI assistant, AI bid generation software, tender response generator, or technical proposal drafting assistant, Yibiao can be used as an open-source reference to improve proposal writing efficiency and reduce the time spent on repetitive writing, manual scoring-point organization, and rejection-risk checks.
+  It supports all OpenAI-like AI APIs. DeepSeek, LongCat, and Volcano Ark are deeply adapted, and local models can also be connected through Ollama, LM Studio, and similar tools.
+  <br>
+  <br>
+  <strong>❓ What problem does it solve?</strong>
+  <br>
+  There are many paid AI bid-writing tools today, but they are extremely expensive. A single proposal can cost tens of yuan, and unless a company reimburses it, small-business workers can hardly afford them. Free tools often have very poor quality. OpenBidKit aims to become the OpenClaw of the bidding field by providing an out-of-the-box, high-quality proposal writing tool. In our tests, generating a 200,000-word bid proposal with DeepSeek V4 Flash costs only about 0.8-1 yuan. We are also working hard to support the completely free LongCat Flash Lite, so proposal writers no longer need to buy their own feed.
 </p>
 
 ## 🌐 Official Website
@@ -142,14 +149,22 @@ You may use, modify, distribute, and commercialize this project, but modified ve
 
 ## 🙋‍♂️ Contact
 
+<table>
+  <tr>
+    <td width="50%" valign="top">
+
 - **Official Website**: [https://yibiao.pro](https://yibiao.pro)
 - **Feedback**: [GitHub Issues](https://github.com/yibiaoai/yibiao-simple/issues)
 - **Email**: support@yibiao.pro
 
-<p>
-  <strong>WeCom</strong><br>
-  <img src="./screenshots/企业微信.png" alt="WeCom QR code" width="180">
-</p>
+    </td>
+    <td width="33%" valign="top">
+      <p>
+        <img src="./screenshots/企业微信.png" alt="WeCom QR code" width="180">
+      </p>
+    </td>
+  </tr>
+</table>
 
 ## Star History
 
@@ -170,3 +185,5 @@ You may use, modify, distribute, and commercialize this project, but modified ve
 <p align="center">
   Made with ❤️ by the Yibiao Team
 </p>
+
+`AI Proposal Writing` `Bid AI` `AI Bid Generation` `Free Bid Proposal Tool`
