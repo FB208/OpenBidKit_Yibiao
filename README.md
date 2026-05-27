@@ -155,14 +155,24 @@
 
 ## 🙋‍♂️ 联系我们
 
+<table>
+  <tr>
+    <td width="50%" valign="top">
+
 - **官方网站**: [https://yibiao.pro](https://yibiao.pro)
 - **问题反馈**: [GitHub Issues](https://github.com/yibiaoai/yibiao-simple/issues)
 - **邮箱联系**: support@yibiao.pro
 
-<p>
-  <strong>企业微信</strong><br>
-  <img src="./screenshots/企业微信.png" alt="企业微信二维码" width="180">
-</p>
+    </td>
+    <td width="33%" valign="top">
+      <p>
+        <img src="./screenshots/企业微信.png" alt="企业微信二维码" width="180">
+      </p>
+    </td>
+  </tr>
+</table>
+
+
 
 ## Star History
 
