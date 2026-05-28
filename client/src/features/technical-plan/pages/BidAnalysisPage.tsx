@@ -168,6 +168,7 @@ function BidAnalysisPage({
   const activeTaskState = activeTask ? tasks[activeTask.id] : undefined;
   const activeTaskStatus = activeTaskState?.status || 'idle';
   const activeTaskContent = activeTaskState?.content || '';
+  const failedTaskCount = selectedTasks.filter((task) => tasks[task.id]?.status === 'error').length;
   const doneCount = selectedTasks.filter((task) => {
     const status = tasks[task.id]?.status;
     return status === 'success' || status === 'error';
@@ -189,24 +190,35 @@ function BidAnalysisPage({
     onProgressChange(Math.round((nextDoneCount / nextTasks.length) * 100));
   };
 
-  const startAnalysis = async () => {
+  const startAnalysis = async (taskIds?: string[]) => {
     if (!fileContent) {
       showToast('请先上传招标文件', 'info');
       return;
     }
 
+    const retryTask = taskIds?.length === 1 ? selectedTasks.find((task) => task.id === taskIds[0]) : undefined;
+
     try {
       setRunning(true);
       const config = await window.yibiao?.config.load();
       const shouldRealTimeRender = config?.real_time_render === true;
-      await window.yibiao?.tasks.startBidAnalysis({ mode, fileContent, real_time_render: shouldRealTimeRender });
+      await window.yibiao?.tasks.startBidAnalysis({ mode, fileContent, task_ids: taskIds, real_time_render: shouldRealTimeRender });
       trackConfigUsage({ bid_analysis_mode: mode }, config);
-      showToast('招标文件解析任务已在后台启动', 'success');
+      showToast(retryTask ? `${retryTask.label}重新解析任务已在后台启动` : '招标文件解析任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动解析任务失败', 'error');
     } finally {
       setRunning(false);
     }
+  };
+
+  const retryActiveTask = () => {
+    if (!activeTask || activeTaskStatus !== 'error') {
+      showToast('当前解析项没有失败，无需单独重试', 'info');
+      return;
+    }
+
+    startAnalysis([activeTask.id]);
   };
 
   const copyActiveResult = async () => {
@@ -245,8 +257,8 @@ function BidAnalysisPage({
             </button>
           ))}
         </div>
-        <button type="button" className="primary-action" onClick={startAnalysis} disabled={taskRunning || !fileContent}>
-          {taskRunning ? '解析中...' : progress > 0 ? '重新解析' : '开始解析'}
+        <button type="button" className="primary-action" onClick={() => startAnalysis()} disabled={taskRunning || !fileContent}>
+          {taskRunning ? '解析中...' : failedTaskCount > 0 ? `重试失败项(${failedTaskCount})` : progress > 0 ? '重新解析' : '开始解析'}
         </button>
       </section>
 
@@ -313,6 +325,9 @@ function BidAnalysisPage({
             </div>
             <div className="bid-analysis-reader-actions">
               <span className={`bid-analysis-status is-${activeTaskStatus}`}>{statusLabel[activeTaskStatus]}</span>
+              {activeTaskStatus === 'error' && (
+                <button type="button" className="secondary-action" onClick={retryActiveTask} disabled={taskRunning || !fileContent}>重新解析此项</button>
+              )}
               <button type="button" className="secondary-action" onClick={copyActiveResult} disabled={!activeTaskContent}>复制</button>
             </div>
           </div>

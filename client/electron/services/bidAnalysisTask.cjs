@@ -139,13 +139,23 @@ function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent, onCh
 async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, payload }) {
   const mode = payload.mode || 'key';
   const selectedTasks = getBidAnalysisTasks(mode);
+  const requestedTaskIds = Array.isArray(payload.task_ids)
+    ? new Set(payload.task_ids.filter((taskId) => typeof taskId === 'string'))
+    : null;
+  const scopedTasks = requestedTaskIds
+    ? selectedTasks.filter((task) => requestedTaskIds.has(task.id))
+    : selectedTasks;
+  if (requestedTaskIds && scopedTasks.length === 0) {
+    throw new Error('未找到可重新解析的招标文件解析项');
+  }
   const realTimeRender = payload.real_time_render !== false && payload.realTimeRender !== false;
+  const initialMessage = requestedTaskIds ? '开始重新解析选中的招标文件解析项。' : '开始解析招标文件。';
   const initialLogs = realTimeRender
-    ? ['开始解析招标文件。']
-    : ['开始解析招标文件。', '实时渲染已关闭，每项解析完成后再刷新结果。'];
+    ? [initialMessage]
+    : [initialMessage, '实时渲染已关闭，每项解析完成后再刷新结果。'];
   let technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisMode: mode, bidAnalysisTask: updateTask({ status: 'running', progress: 0, logs: initialLogs }) });
   const currentTasks = technicalPlan.bidAnalysisTasks || {};
-  const tasksToRun = selectedTasks.filter((task) => currentTasks[task.id]?.status !== 'success');
+  const tasksToRun = requestedTaskIds ? scopedTasks : scopedTasks.filter((task) => currentTasks[task.id]?.status !== 'success');
 
   function doneProgress(nextTasks) {
     const done = selectedTasks.filter((task) => ['success', 'error'].includes(nextTasks[task.id]?.status)).length;
@@ -153,9 +163,10 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
   }
 
   async function runOne(task) {
-    workspaceStore.updateTechnicalPlan({
-      bidAnalysisTasks: { ...(workspaceStore.loadTechnicalPlan()?.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'running', content: '' } },
-    });
+    const runningPrev = workspaceStore.loadTechnicalPlan() || {};
+    const runningTasks = { ...(runningPrev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'running', content: '' } };
+    technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTasks: runningTasks, bidAnalysisProgress: doneProgress(runningTasks) });
+    updateTask({ status: 'running', progress: technicalPlan.bidAnalysisProgress || 0 }, technicalPlan);
 
     const content = await runSingleBidAnalysisPromptTask({
       aiService,
