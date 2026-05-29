@@ -17,7 +17,6 @@ interface ContentEditPageProps {
   sections: ContentGenerationSections;
   onContentGenerationOptionsChange: (options: ContentGenerationOptions) => Promise<void> | void;
   onContentSaved: (item: OutlineItem, content: string) => Promise<void> | void;
-  onContentReset: () => Promise<OutlineData> | OutlineData;
 }
 
 type TreeStatus = ContentGenerationSectionStatus | 'partial' | 'planning';
@@ -306,7 +305,6 @@ function ContentEditPage({
   sections,
   onContentGenerationOptionsChange,
   onContentSaved,
-  onContentReset,
 }: ContentEditPageProps) {
   const { showToast } = useToast();
   const leaves = useMemo(() => outlineData?.outline ? collectLeafItems(outlineData.outline) : [], [outlineData]);
@@ -448,15 +446,14 @@ function ContentEditPage({
       const savedGenerationOptions = await saveDraftGenerationOptions(false, nextImageModelAvailable);
       const shouldRealTimeRender = config?.real_time_render === true;
       const regenerate = leaves.length > 0 && completedCount === leaves.length;
-      const nextOutlineData = regenerate ? await onContentReset() : outlineData;
       if (regenerate) {
         setEditingItemId(null);
         setIsPreviewing(false);
         setDraftContent('');
       }
       await window.yibiao?.tasks.startContentGeneration({
-        outlineData: nextOutlineData,
-        projectOverview: nextOutlineData.project_overview || projectOverview,
+        outlineData,
+        projectOverview: outlineData.project_overview || projectOverview,
         reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
         regenerate,
         generationOptions: {

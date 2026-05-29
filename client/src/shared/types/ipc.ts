@@ -1,13 +1,14 @@
 import type { AiStreamEvent, ChatCompletionRequest, JsonCompletionRequest } from './ai';
-import type { DuplicateCheckWorkspaceState, DuplicateMetadataAnalysisState, FileImportResult, FileSelectionResult } from './bid';
+import type { DuplicateCheckWorkspaceState, FileImportResult, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseMutationResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 
-export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown> {
+export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDuplicateCheckState = unknown> {
   task: unknown;
   technicalPlan?: TState;
   rejectionCheck?: TRejectionCheckState;
+  duplicateCheck?: TDuplicateCheckState;
 }
 
 export interface WordExportProgressEvent {
@@ -85,10 +86,6 @@ export interface YibiaoBridge {
     readAnalysis: (documentId: string) => Promise<KnowledgeAnalysisSnapshot>;
     onEvent: (callback: (event: KnowledgeBaseEvent) => void) => () => void;
   };
-  duplicateCheck: {
-    startMetadataAnalysis: (payload: { tenderFile: DuplicateCheckWorkspaceState['tenderFile']; bidFiles: DuplicateCheckWorkspaceState['bidFiles']; force?: boolean }) => Promise<DuplicateMetadataAnalysisState>;
-    onEvent: (callback: (event: { duplicateCheck: DuplicateCheckWorkspaceState }) => void) => () => void;
-  };
   workspace: {
     loadTechnicalPlan: <TState = unknown>() => Promise<TState | null>;
     saveTechnicalPlan: (state: unknown) => Promise<unknown>;
@@ -107,8 +104,9 @@ export interface YibiaoBridge {
     startContentGeneration: (payload: unknown) => Promise<unknown>;
     startRejectionItemsExtraction: (payload: unknown) => Promise<unknown>;
     startRejectionCheck: (payload: unknown) => Promise<unknown>;
+    startDuplicateAnalysis: (payload: unknown) => Promise<unknown>;
     getActiveTasks: () => Promise<unknown[]>;
-    onTaskEvent: <TState = unknown, TRejectionCheckState = unknown>(callback: (event: TaskEvent<TState, TRejectionCheckState>) => void) => () => void;
+    onTaskEvent: <TState = unknown, TRejectionCheckState = unknown, TDuplicateCheckState = unknown>(callback: (event: TaskEvent<TState, TRejectionCheckState, TDuplicateCheckState>) => void) => () => void;
   };
   export: {
     exportWord: (payload: unknown) => Promise<WordExportResult>;

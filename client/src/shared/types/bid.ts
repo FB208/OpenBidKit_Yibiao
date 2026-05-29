@@ -226,11 +226,27 @@ export interface DuplicateImageAnalysisState {
   duplicateImages: DuplicateImageItem[];
 }
 
+export interface DuplicateCheckTaskState {
+  task_id: string;
+  type: 'duplicate-analysis';
+  group?: 'duplicate-check';
+  step?: number;
+  lock_policy?: string;
+  payload_signature?: string;
+  status: 'running' | 'success' | 'error';
+  progress: number;
+  logs: string[];
+  started_at: string;
+  updated_at: string;
+  error?: string;
+}
+
 export interface DuplicateCheckWorkspaceState {
   tenderFile: LocalFileSelection | null;
   bidFiles: LocalFileSelection[];
   step?: DuplicateCheckStep;
   activeAnalysisTab?: DuplicateAnalysisTabId;
+  analysisTask?: DuplicateCheckTaskState;
   metadataAnalysis?: DuplicateMetadataAnalysisState;
   outlineAnalysis?: DuplicateOutlineAnalysisState;
   contentAnalysis?: DuplicateContentAnalysisState;

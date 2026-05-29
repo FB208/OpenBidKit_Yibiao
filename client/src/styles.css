@@ -1219,11 +1219,16 @@ button {
   border-radius: 16px;
 }
 
-.bid-analysis-task-item:hover,
+.bid-analysis-task-item:hover:not(:disabled),
 .bid-analysis-task-item.is-active {
   background: #ffffff;
   border-color: rgba(33, 116, 253, 0.16);
   box-shadow: 0 10px 28px rgba(23, 32, 51, 0.08);
+}
+
+.bid-analysis-task-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
 }
 
 .bid-analysis-task-item.is-active::before {

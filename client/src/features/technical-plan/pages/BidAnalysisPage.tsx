@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { MarkdownRenderer, useToast } from '../../../shared/ui';
@@ -157,6 +157,8 @@ function BidAnalysisPage({
   onRequiredResultChange,
 }: BidAnalysisPageProps) {
   const [running, setRunning] = useState(false);
+  const [fullRerunLocked, setFullRerunLocked] = useState(false);
+  const [fullRerunSeenRunning, setFullRerunSeenRunning] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState('projectOverview');
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const { showToast } = useToast();
@@ -169,11 +171,12 @@ function BidAnalysisPage({
   const activeTaskStatus = activeTaskState?.status || 'idle';
   const activeTaskContent = activeTaskState?.content || '';
   const failedTaskCount = selectedTasks.filter((task) => tasks[task.id]?.status === 'error').length;
+  const allSelectedTasksSucceeded = selectedTasks.length > 0 && selectedTasks.every((task) => tasks[task.id]?.status === 'success');
   const doneCount = selectedTasks.filter((task) => {
     const status = tasks[task.id]?.status;
     return status === 'success' || status === 'error';
   }).length;
-  const taskRunning = running || task?.status === 'running';
+  const taskRunning = running || fullRerunLocked || task?.status === 'running';
   const requiredDone = Boolean(
     tasks.projectOverview?.status === 'success'
     && tasks.projectOverview.content
@@ -190,6 +193,22 @@ function BidAnalysisPage({
     onProgressChange(Math.round((nextDoneCount / nextTasks.length) * 100));
   };
 
+  useEffect(() => {
+    if (!fullRerunLocked) {
+      return;
+    }
+
+    if (task?.status === 'running') {
+      setFullRerunSeenRunning(true);
+      return;
+    }
+
+    if (fullRerunSeenRunning && task?.status) {
+      setFullRerunLocked(false);
+      setFullRerunSeenRunning(false);
+    }
+  }, [fullRerunLocked, fullRerunSeenRunning, task?.status]);
+
   const startAnalysis = async (taskIds?: string[]) => {
     if (!fileContent) {
       showToast('请先上传招标文件', 'info');
@@ -197,15 +216,24 @@ function BidAnalysisPage({
     }
 
     const retryTask = taskIds?.length === 1 ? selectedTasks.find((task) => task.id === taskIds[0]) : undefined;
+    const forceRerun = !taskIds?.length && allSelectedTasksSucceeded;
 
     try {
       setRunning(true);
+      if (forceRerun) {
+        setFullRerunSeenRunning(false);
+        setFullRerunLocked(true);
+      }
       const config = await window.yibiao?.config.load();
       const shouldRealTimeRender = config?.real_time_render === true;
-      await window.yibiao?.tasks.startBidAnalysis({ mode, fileContent, task_ids: taskIds, real_time_render: shouldRealTimeRender });
+      await window.yibiao?.tasks.startBidAnalysis({ mode, fileContent, task_ids: taskIds, force_rerun: forceRerun, real_time_render: shouldRealTimeRender });
       trackConfigUsage({ bid_analysis_mode: mode }, config);
       showToast(retryTask ? `${retryTask.label}重新解析任务已在后台启动` : '招标文件解析任务已在后台启动', 'success');
     } catch (error) {
+      if (forceRerun) {
+        setFullRerunLocked(false);
+        setFullRerunSeenRunning(false);
+      }
       showToast(error instanceof Error ? error.message : '启动解析任务失败', 'error');
     } finally {
       setRunning(false);
@@ -303,6 +331,7 @@ function BidAnalysisPage({
                         className={`bid-analysis-task-item is-${status}${visibleSelectedTaskId === task.id ? ' is-active' : ''}`}
                         key={task.id}
                         onClick={() => setSelectedTaskId(task.id)}
+                        disabled={fullRerunLocked}
                       >
                         <strong>{task.label}</strong>
                         <small>{content ? `${content.length} 字` : task.description}</small>

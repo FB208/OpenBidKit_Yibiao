@@ -21,6 +21,10 @@ function registerTaskIpc({ taskService }) {
     taskService.subscribe(event.sender);
     return taskService.startRejectionCheck(payload);
   });
+  ipcMain.handle('tasks:start-duplicate-analysis', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.startDuplicateAnalysis(payload);
+  });
   ipcMain.handle('tasks:get-active', (event) => {
     taskService.subscribe(event.sender);
     return taskService.getActiveTasks();

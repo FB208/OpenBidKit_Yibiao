@@ -70,14 +70,6 @@ const bridge = {
       return () => ipcRenderer.removeListener('knowledge-base:event', listener);
     },
   },
-  duplicateCheck: {
-    startMetadataAnalysis: (payload) => ipcRenderer.invoke('duplicate-check:start-metadata-analysis', payload),
-    onEvent: (callback) => {
-      const listener = (_event, payload) => callback(payload);
-      ipcRenderer.on('duplicate-check:event', listener);
-      return () => ipcRenderer.removeListener('duplicate-check:event', listener);
-    },
-  },
   workspace: {
     loadTechnicalPlan: () => ipcRenderer.invoke('workspace:load-technical-plan'),
     saveTechnicalPlan: (state) => ipcRenderer.invoke('workspace:save-technical-plan', state),
@@ -96,6 +88,7 @@ const bridge = {
     startContentGeneration: (payload) => ipcRenderer.invoke('tasks:start-content-generation', payload),
     startRejectionItemsExtraction: (payload) => ipcRenderer.invoke('tasks:start-rejection-items-extraction', payload),
     startRejectionCheck: (payload) => ipcRenderer.invoke('tasks:start-rejection-check', payload),
+    startDuplicateAnalysis: (payload) => ipcRenderer.invoke('tasks:start-duplicate-analysis', payload),
     getActiveTasks: () => ipcRenderer.invoke('tasks:get-active'),
     onTaskEvent: (callback) => {
       ipcRenderer.send('tasks:subscribe');

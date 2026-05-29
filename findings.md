@@ -1,6 +1,11 @@
 # Findings
 
 ## Research Log
+- 当前 `taskService.cjs` 只用 `activeTasks: Map<type, task>` 按任务类型去重，不存在任务组锁；因此 `content-generation` 运行中仍可启动 `bid-analysis`，会造成技术方案工作区交叉写入风险。
+- 技术方案 Step02 全量重跑当前在 Renderer 的 `BidAnalysisPage.tsx` 里先 `onAnalysisReset()` 清空页面状态，再调用 `config.load()` 和 `startBidAnalysis()`；按新策略应改为 Main 侧启动后清空。
+- 已确认 Step04 Main 侧 `contentGenerationTask.cjs` 在 `regenerate && !targetItemId` 时会清空 `outlineData.outline[*].content`，并以空 sections/plans 启动；因此需要移除 Renderer 侧 `onContentReset()` 预清空，避免启动失败时旧正文被前端 autosave 覆盖。
+- 标书查重现有 `duplicateCheckService.cjs` 已经是“外层整轮分析 + 内部子任务并发”模型：`run()` 内部先提取正文和元数据，正文完成后并发目录、正文、图片分析；迁入 `taskService` 时只需要把外层整轮分析建模为 `duplicate-analysis`，不应拆散内部并发子流程。
+- `duplicate-check:start-metadata-analysis` 旧 IPC 可以保留为兼容入口，但应优先转发到 `taskService.startDuplicateAnalysis()`，避免绕过任务组锁。
 - 当前 `.doc/.wps` 本地解析入口是 `client/electron/services/doc2markdown/convert.mjs` 的 `withLegacyWordDocxFile()`：先找 LibreOffice `soffice`，再 `--headless --convert-to docx`，成功后继续用 `mammoth.convertToHtml()` 转 Markdown。
 - `.doc/.wps` 转换也被 `duplicateCheckService.cjs` 的 legacy 元数据补充复用，因此多后端转换应改 `withLegacyWordDocxFile()`，不要在业务侧另写分支。
 - 当前错误提示常量在 Main `documentParseErrors.cjs` 和 Renderer `DocumentParseNoticeProvider.tsx` 各有一份，文案只提示安装 LibreOffice；新增后端后需要同步改成“LibreOffice、WPS Office 或 Microsoft Word”。

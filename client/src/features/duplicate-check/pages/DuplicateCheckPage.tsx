@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, isLibreOfficeRequiredMessage, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { DuplicateAnalysisStatus, DuplicateAnalysisTabId, DuplicateCheckStep, DuplicateCheckWorkspaceState, DuplicateContentAnalysisState, DuplicateImageAnalysisState, DuplicateMetadataAnalysisState, DuplicateOutlineAnalysisState, LocalFileSelection } from '../../../shared/types';
+import type { DuplicateAnalysisStatus, DuplicateAnalysisTabId, DuplicateCheckStep, DuplicateCheckTaskState, DuplicateCheckWorkspaceState, DuplicateContentAnalysisState, DuplicateImageAnalysisState, DuplicateMetadataAnalysisState, DuplicateOutlineAnalysisState, LocalFileSelection } from '../../../shared/types';
 
 const guideItems = [
   '同设备、同用户、同一个 WPS 账号、时间相近等问题，一秒锁定。',
@@ -46,7 +46,7 @@ function formatDate(value: string) {
   return date.toLocaleString('zh-CN', { hour12: false });
 }
 
-function FilePill({ file, onRemove }: { file: LocalFileSelection; onRemove: () => void }) {
+function FilePill({ file, onRemove, disabled = false }: { file: LocalFileSelection; onRemove: () => void; disabled?: boolean }) {
   return (
     <article className="duplicate-file-pill">
       <div className="duplicate-file-icon">{file.extension.replace('.', '').slice(0, 4).toUpperCase() || 'DOC'}</div>
@@ -54,7 +54,7 @@ function FilePill({ file, onRemove }: { file: LocalFileSelection; onRemove: () =
         <strong title={file.file_name}>{file.file_name}</strong>
         <span>{formatFileSize(file.size)} · {formatDate(file.modified_at)}</span>
       </div>
-      <button type="button" onClick={onRemove} aria-label={`删除 ${file.file_name}`}>删除</button>
+      <button type="button" onClick={onRemove} aria-label={`删除 ${file.file_name}`} disabled={disabled}>删除</button>
     </article>
   );
 }
@@ -498,7 +498,7 @@ function DuplicateImagePane({ analysis, bidFiles }: { analysis?: DuplicateImageA
   );
 }
 
-function DuplicateAnalysisPane({ activeTab, onTabChange, metadataAnalysis, outlineAnalysis, contentAnalysis, imageAnalysis, bidFiles, onRerun }: { activeTab: DuplicateAnalysisTabId; onTabChange: (tab: DuplicateAnalysisTabId) => void; metadataAnalysis?: DuplicateMetadataAnalysisState; outlineAnalysis?: DuplicateOutlineAnalysisState; contentAnalysis?: DuplicateContentAnalysisState; imageAnalysis?: DuplicateImageAnalysisState; bidFiles: LocalFileSelection[]; onRerun: () => void }) {
+function DuplicateAnalysisPane({ activeTab, onTabChange, metadataAnalysis, outlineAnalysis, contentAnalysis, imageAnalysis, bidFiles, startingAnalysis, onRerun }: { activeTab: DuplicateAnalysisTabId; onTabChange: (tab: DuplicateAnalysisTabId) => void; metadataAnalysis?: DuplicateMetadataAnalysisState; outlineAnalysis?: DuplicateOutlineAnalysisState; contentAnalysis?: DuplicateContentAnalysisState; imageAnalysis?: DuplicateImageAnalysisState; bidFiles: LocalFileSelection[]; startingAnalysis: boolean; onRerun: () => void }) {
   const activeItem = analysisTabs.find((item) => item.id === activeTab) || analysisTabs[0];
   const metadataStatus = metadataAnalysis?.status || 'pending';
   const metadataProgress = metadataAnalysis?.status === 'success' || metadataAnalysis?.status === 'error'
@@ -506,7 +506,7 @@ function DuplicateAnalysisPane({ activeTab, onTabChange, metadataAnalysis, outli
     : metadataAnalysis?.metadataExtraction?.total
       ? Math.round((metadataAnalysis.metadataExtraction.completed / metadataAnalysis.metadataExtraction.total) * 100)
       : 0;
-  const analysisRunning = metadataStatus === 'running' || outlineAnalysis?.status === 'running' || contentAnalysis?.status === 'running' || imageAnalysis?.status === 'running';
+  const analysisRunning = startingAnalysis || metadataStatus === 'running' || outlineAnalysis?.status === 'running' || contentAnalysis?.status === 'running' || imageAnalysis?.status === 'running';
 
   return (
     <section className="duplicate-analysis-panel">
@@ -516,7 +516,7 @@ function DuplicateAnalysisPane({ activeTab, onTabChange, metadataAnalysis, outli
           <h2>查重结果</h2>
         </div>
         <button type="button" className="secondary-action" onClick={onRerun} disabled={!bidFiles.length || analysisRunning}>
-          重新查重
+          {analysisRunning ? '分析中...' : '重新查重'}
         </button>
       </div>
 
@@ -603,6 +603,8 @@ function DuplicateCheckPage() {
   const [outlineAnalysis, setOutlineAnalysis] = useState<DuplicateOutlineAnalysisState | undefined>();
   const [contentAnalysis, setContentAnalysis] = useState<DuplicateContentAnalysisState | undefined>();
   const [imageAnalysis, setImageAnalysis] = useState<DuplicateImageAnalysisState | undefined>();
+  const [analysisTask, setAnalysisTask] = useState<DuplicateCheckTaskState | undefined>();
+  const [startingAnalysis, setStartingAnalysis] = useState(false);
   const [busy, setBusy] = useState<'tender' | 'bid' | null>(null);
   const [analyticsReady, setAnalyticsReady] = useState(false);
   const startedMetadataSignatureRef = useRef<string | null>(null);
@@ -613,6 +615,12 @@ function DuplicateCheckPage() {
   const { showDocumentParseNotice } = useDocumentParseNotice();
 
   const totalSize = useMemo(() => bidFiles.reduce((sum, file) => sum + file.size, tenderFile?.size || 0), [bidFiles, tenderFile]);
+  const isAnalysisRunning = startingAnalysis
+    || analysisTask?.status === 'running'
+    || metadataAnalysis?.status === 'running'
+    || outlineAnalysis?.status === 'running'
+    || contentAnalysis?.status === 'running'
+    || imageAnalysis?.status === 'running';
   const canGoNext = bidFiles.length > 0;
   const activeIndex = steps.indexOf(step);
   const isNextDisabled = activeIndex >= steps.length - 1 || !canGoNext;
@@ -644,6 +652,7 @@ function DuplicateCheckPage() {
         setOutlineAnalysis(state.outlineAnalysis);
         setContentAnalysis(state.contentAnalysis);
         setImageAnalysis(state.imageAnalysis);
+        setAnalysisTask(state.analysisTask);
       })
       .catch((error) => {
         showToast(error instanceof Error ? error.message : '读取标书查重缓存失败', 'error');
@@ -663,21 +672,22 @@ function DuplicateCheckPage() {
   useEffect(() => {
     if (!hydratedRef.current) return;
 
-    const state: DuplicateCheckWorkspaceState = { tenderFile, bidFiles, step, activeAnalysisTab, metadataAnalysis, outlineAnalysis, contentAnalysis, imageAnalysis };
+    const state: DuplicateCheckWorkspaceState = { tenderFile, bidFiles, step, activeAnalysisTab, analysisTask, metadataAnalysis, outlineAnalysis, contentAnalysis, imageAnalysis };
     void window.yibiao?.workspace.saveDuplicateCheck(state)
       .catch((error) => {
         showToast(error instanceof Error ? error.message : '保存标书查重缓存失败', 'error');
       });
-  }, [activeAnalysisTab, bidFiles, metadataAnalysis, outlineAnalysis, contentAnalysis, imageAnalysis, showToast, step, tenderFile]);
+  }, [activeAnalysisTab, analysisTask, bidFiles, metadataAnalysis, outlineAnalysis, contentAnalysis, imageAnalysis, showToast, step, tenderFile]);
 
   useEffect(() => {
-    const unsubscribe = window.yibiao?.duplicateCheck?.onEvent?.((event) => {
+    const unsubscribe = window.yibiao?.tasks?.onTaskEvent<unknown, unknown, DuplicateCheckWorkspaceState>((event) => {
       if (!event?.duplicateCheck) return;
       const eventSignature = event.duplicateCheck.metadataAnalysis?.signature
         || event.duplicateCheck.outlineAnalysis?.signature
         || event.duplicateCheck.contentAnalysis?.signature
         || event.duplicateCheck.imageAnalysis?.signature;
       if (eventSignature && eventSignature !== currentAnalysisSignatureRef.current) return;
+      setStartingAnalysis(false);
       event.duplicateCheck.metadataAnalysis?.contentFiles?.forEach((file) => {
         const noticeId = `content:${file.file_id}`;
         if (file.status === 'error'
@@ -691,6 +701,10 @@ function DuplicateCheckPage() {
       setOutlineAnalysis(event.duplicateCheck.outlineAnalysis);
       setContentAnalysis(event.duplicateCheck.contentAnalysis);
       setImageAnalysis(event.duplicateCheck.imageAnalysis);
+      setAnalysisTask(event.duplicateCheck.analysisTask);
+    });
+    window.yibiao?.tasks?.getActiveTasks().catch((error) => {
+      console.warn('获取标书查重后台任务状态失败', error);
     });
     return () => unsubscribe?.();
   }, []);
@@ -704,25 +718,23 @@ function DuplicateCheckPage() {
     currentAnalysisSignatureRef.current = currentAnalysisSignature;
   }, [currentAnalysisSignature]);
 
-  const startMetadataAnalysis = (force = false) => {
+  const startDuplicateAnalysis = (force = false) => {
     if (!bidFiles.length) {
       showToast('请先上传至少一份投标文件', 'info');
       return;
     }
     if (force) {
       startedMetadataSignatureRef.current = null;
-      setMetadataAnalysis(undefined);
-      setOutlineAnalysis(undefined);
-      setContentAnalysis(undefined);
-      setImageAnalysis(undefined);
     }
     startedMetadataSignatureRef.current = currentAnalysisSignature;
-    void window.yibiao?.duplicateCheck?.startMetadataAnalysis({ tenderFile, bidFiles, force })
-      .then((analysis) => {
-        if (analysis) setMetadataAnalysis(analysis);
+    setStartingAnalysis(true);
+    void window.yibiao?.tasks?.startDuplicateAnalysis({ tenderFile, bidFiles, force })
+      .then(() => {
+        showToast(force ? '标书查重重新分析任务已在后台启动' : '标书查重分析任务已在后台启动', 'success');
       })
       .catch((error) => {
         startedMetadataSignatureRef.current = null;
+        setStartingAnalysis(false);
         const message = error instanceof Error ? error.message : '启动元数据分析失败';
         if (isLibreOfficeRequiredMessage(message)) {
           showDocumentParseNotice(message);
@@ -740,7 +752,7 @@ function DuplicateCheckPage() {
       && contentAnalysis?.status === 'success'
       && imageAnalysis?.status === 'success') return;
     if (startedMetadataSignatureRef.current === currentAnalysisSignature) return;
-    startMetadataAnalysis(false);
+    startDuplicateAnalysis(false);
   }, [bidFiles, contentAnalysis?.status, currentAnalysisSignature, imageAnalysis?.status, metadataAnalysis?.signature, metadataAnalysis?.status, outlineAnalysis?.status, showToast, step, tenderFile]);
 
   const selectFiles = async (multiple: boolean) => {
@@ -752,6 +764,10 @@ function DuplicateCheckPage() {
   };
 
   const uploadTenderFile = async () => {
+    if (isAnalysisRunning) {
+      showToast('标书查重分析正在运行，请完成后再调整文件', 'info');
+      return;
+    }
     try {
       setBusy('tender');
       const result = await selectFiles(false);
@@ -769,6 +785,7 @@ function DuplicateCheckPage() {
       setOutlineAnalysis(undefined);
       setContentAnalysis(undefined);
       setImageAnalysis(undefined);
+      setAnalysisTask(undefined);
       startedMetadataSignatureRef.current = null;
       showToast('招标文件已加入，暂不执行解析', 'success');
     } catch (error) {
@@ -784,6 +801,10 @@ function DuplicateCheckPage() {
   };
 
   const uploadBidFiles = async () => {
+    if (isAnalysisRunning) {
+      showToast('标书查重分析正在运行，请完成后再调整文件', 'info');
+      return;
+    }
     try {
       setBusy('bid');
       const result = await selectFiles(true);
@@ -808,6 +829,7 @@ function DuplicateCheckPage() {
         setOutlineAnalysis(undefined);
         setContentAnalysis(undefined);
         setImageAnalysis(undefined);
+        setAnalysisTask(undefined);
         startedMetadataSignatureRef.current = null;
         showToast('投标文件已加入，暂不执行解析', 'success');
       }
@@ -824,6 +846,10 @@ function DuplicateCheckPage() {
   };
 
   const resetFiles = () => {
+    if (isAnalysisRunning) {
+      showToast('标书查重分析正在运行，请完成后再重置文件', 'info');
+      return;
+    }
     setTenderFile(null);
     setBidFiles([]);
     setStep('upload');
@@ -832,6 +858,8 @@ function DuplicateCheckPage() {
     setOutlineAnalysis(undefined);
     setContentAnalysis(undefined);
     setImageAnalysis(undefined);
+    setAnalysisTask(undefined);
+    setStartingAnalysis(false);
     startedMetadataSignatureRef.current = null;
     void window.yibiao?.workspace.clearDuplicateCheck()
       .catch((error) => {
@@ -858,6 +886,7 @@ function DuplicateCheckPage() {
           id: 'reset',
           label: '重置',
           variant: 'danger',
+          disabled: isAnalysisRunning,
           tooltip: '清空当前标书查重流程',
           onClick: resetFiles,
         },
@@ -920,19 +949,20 @@ function DuplicateCheckPage() {
                 </div>
                 <div className="duplicate-upload-content">
                   {tenderFile ? (
-                    <FilePill file={tenderFile} onRemove={() => {
+                    <FilePill file={tenderFile} disabled={isAnalysisRunning} onRemove={() => {
                       setTenderFile(null);
                       setMetadataAnalysis(undefined);
                       setOutlineAnalysis(undefined);
                       setContentAnalysis(undefined);
                       setImageAnalysis(undefined);
+                      setAnalysisTask(undefined);
                       startedMetadataSignatureRef.current = null;
                     }} />
                   ) : (
                     <div className="duplicate-empty-upload" />
                   )}
                 </div>
-                <button type="button" className="primary-action duplicate-upload-button" onClick={uploadTenderFile} disabled={busy !== null}>
+                <button type="button" className="primary-action duplicate-upload-button" onClick={uploadTenderFile} disabled={busy !== null || isAnalysisRunning}>
                   {busy === 'tender' ? '选择中...' : tenderFile ? '替换' : '上传'}
                 </button>
               </article>
@@ -947,12 +977,13 @@ function DuplicateCheckPage() {
                   {bidFiles.length ? (
                     <div className="duplicate-file-list">
                       {bidFiles.map((file) => (
-                        <FilePill key={file.file_path} file={file} onRemove={() => {
+                        <FilePill key={file.file_path} file={file} disabled={isAnalysisRunning} onRemove={() => {
                           setBidFiles((prev) => prev.filter((item) => item.file_path !== file.file_path));
                           setMetadataAnalysis(undefined);
                           setOutlineAnalysis(undefined);
                           setContentAnalysis(undefined);
                           setImageAnalysis(undefined);
+                          setAnalysisTask(undefined);
                           startedMetadataSignatureRef.current = null;
                         }} />
                       ))}
@@ -961,7 +992,7 @@ function DuplicateCheckPage() {
                     <div className="duplicate-empty-upload" />
                   )}
                 </div>
-                <button type="button" className="primary-action duplicate-upload-button" onClick={uploadBidFiles} disabled={busy !== null}>
+                <button type="button" className="primary-action duplicate-upload-button" onClick={uploadBidFiles} disabled={busy !== null || isAnalysisRunning}>
                   {busy === 'bid' ? '选择中...' : '上传'}
                 </button>
               </article>
@@ -990,7 +1021,7 @@ function DuplicateCheckPage() {
           </section>
         </>
       ) : (
-        <DuplicateAnalysisPane activeTab={activeAnalysisTab} onTabChange={setActiveAnalysisTab} metadataAnalysis={metadataAnalysis} outlineAnalysis={outlineAnalysis} contentAnalysis={contentAnalysis} imageAnalysis={imageAnalysis} bidFiles={bidFiles} onRerun={() => startMetadataAnalysis(true)} />
+        <DuplicateAnalysisPane activeTab={activeAnalysisTab} onTabChange={setActiveAnalysisTab} metadataAnalysis={metadataAnalysis} outlineAnalysis={outlineAnalysis} contentAnalysis={contentAnalysis} imageAnalysis={imageAnalysis} bidFiles={bidFiles} startingAnalysis={startingAnalysis || analysisTask?.status === 'running'} onRerun={() => startDuplicateAnalysis(true)} />
       )}
 
       <FloatingToolbar groups={toolbarGroups} label="标书查重工具条" />

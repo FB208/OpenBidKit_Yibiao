@@ -1,5 +1,48 @@
 # Task Plan
 
+## Current Task: 后台任务组锁与技术方案清空策略
+
+### Goal
+按 `client/开发说明.md` 新增的任务组规则落地当前已有后台任务：技术方案组内任务互斥，Step02/Step03/Step04 重新生成时由 Main 侧统一清空当前及后续缓存，避免下游 active task 与上游重跑交叉写入工作区。
+
+### Phases
+- [completed] 1. 梳理 `taskService`、技术方案任务和当前前端清空点。
+- [completed] 2. 在 `taskService.cjs` 建立任务定义、任务组锁检查和冲突提示。
+- [completed] 3. 将技术方案 Step02 全量重跑清空收敛到 Main 侧，并移除 Renderer 启动前业务清空。
+- [completed] 4. 为 Step03/Step04 启动补齐后续缓存清空规则。
+- [completed] 5. 运行 Main 语法检查与客户端构建验证。
+
+### Decisions
+- 先落地 `taskService` 内已有 `technical-plan` 与 `rejection-check` 任务；知识库、标书查重保留现有服务结构，后续再迁移统一事件体系。
+- `technical-plan` 使用 `group-exclusive`，同组不同任务运行中直接拒绝启动；同类型运行中保持返回已有任务。
+- 清空动作只在 Main 侧任务 runner 开始后执行，Renderer 不再在 IPC 确认前清空持久化业务数据。
+- Step03 目录生成启动时由 `taskService` 初始状态清空旧 `outlineData` 和 Step04 缓存；Step04 全文重跑继续由 `contentGenerationTask.cjs` 在 Main 侧清空正文内容和章节缓存。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: 标书查重迁入任务组体系
+
+### Goal
+将标书查重整轮分析纳入 `taskService` 的 `duplicate-check` 任务组，保留元数据、目录、正文、图片四个子流程的内部并发，统一由任务组负责启动、锁定、active task 和任务事件回放。
+
+### Phases
+- [completed] 1. 扩展 `taskService` 支持 `duplicateCheck` stateKey 和 `duplicate-analysis` 任务定义。
+- [completed] 2. 改造 `duplicateCheckService`，新增 `runAnalysisTask()` 作为 taskService runner，保留内部子任务并发。
+- [completed] 3. 同步 IPC、preload、共享类型和 `DuplicateCheckPage` 订阅逻辑，改为走 `tasks:event`。
+- [completed] 4. 运行 CJS 语法检查、客户端构建、模块加载和任务注册 smoke test。
+
+### Decisions
+- `duplicate-check` 使用 `group-exclusive`，整轮分析对外是一个 `duplicate-analysis` 任务。
+- `metadataAnalysis`、`outlineAnalysis`、`contentAnalysis`、`imageAnalysis` 继续作为业务子状态存在，不拆成四个独立 task。
+- 保留旧 `duplicate-check:start-metadata-analysis` IPC 兼容入口，但内部优先转发到 `taskService.startDuplicateAnalysis()`。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| `DuplicateCheckTaskState` 未从 `shared/types/index.ts` 导出导致构建失败 | 第一次 `npm run build` | 在共享类型入口补导出后重跑构建通过 |
+
 ## Current Task: DOC/WPS 本地转换后端自动识别
 
 ### Goal

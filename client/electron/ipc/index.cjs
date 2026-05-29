@@ -2,7 +2,6 @@ const { ipcMain, shell } = require('electron');
 const https = require('node:https');
 const { registerAiIpc } = require('./aiIpc.cjs');
 const { registerConfigIpc } = require('./configIpc.cjs');
-const { registerDuplicateCheckIpc } = require('./duplicateCheckIpc.cjs');
 const { registerExportIpc } = require('./exportIpc.cjs');
 const { registerFileIpc } = require('./fileIpc.cjs');
 const { registerKnowledgeBaseIpc } = require('./knowledgeBaseIpc.cjs');
@@ -38,12 +37,11 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore });
   const workspaceStore = createWorkspaceStore(app);
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore });
-  const taskService = createTaskService({ aiService, workspaceStore, knowledgeBaseService });
+  const taskService = createTaskService({ aiService, workspaceStore, knowledgeBaseService, duplicateCheckService });
 
   registerConfigIpc({ configStore, aiService });
   registerAiIpc({ aiService });
   registerFileIpc({ fileService });
-  registerDuplicateCheckIpc({ duplicateCheckService });
   registerKnowledgeBaseIpc({ knowledgeBaseService });
   registerExportIpc({ exportService });
   registerWorkspaceIpc({ workspaceStore });

@@ -1725,12 +1725,34 @@ function createInitialImageAnalysis(signature, bidFiles) {
 }
 
 function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) {
-  const running = new Map();
-
-  function emit(webContents, state) {
-    if (webContents && !webContents.isDestroyed()) {
-      webContents.send('duplicate-check:event', { duplicateCheck: state });
+  function emit(target, state) {
+    if (typeof target === 'function') {
+      target(state);
     }
+  }
+
+  function analysisProgress(value) {
+    if (!value) return 0;
+    if (value.status === 'success' || value.status === 'error') return 100;
+    return Math.max(0, Math.min(Number(value.progress) || 0, 99));
+  }
+
+  function overallProgress(state) {
+    const values = [
+      analysisProgress(state?.metadataAnalysis),
+      analysisProgress(state?.outlineAnalysis),
+      analysisProgress(state?.contentAnalysis),
+      analysisProgress(state?.imageAnalysis),
+    ];
+    return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+  }
+
+  function latestAnalysisMessage(state) {
+    return state?.imageAnalysis?.message
+      || state?.contentAnalysis?.message
+      || state?.outlineAnalysis?.message
+      || state?.metadataAnalysis?.message
+      || '标书查重分析运行中。';
   }
 
   function isCurrentDuplicateCheckSignature(signature) {
@@ -2038,52 +2060,51 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     return { status: failed ? 'error' : 'success', duplicateImages };
   }
 
-  async function run(signature, payload, webContents) {
+  async function run(signature, payload, target) {
     const tenderFile = payload.tenderFile || null;
     const bidFiles = Array.isArray(payload.bidFiles) ? payload.bidFiles : [];
     const allFiles = [tenderFile, ...bidFiles].filter(Boolean);
 
     try {
-      const contentPromise = runContentExtraction(allFiles, webContents, signature);
-      const metadataFiles = await runMetadataExtraction(bidFiles, webContents, signature);
-      updateOutlineAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于目录分析', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, webContents, signature);
-      updateContentAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于正文比对', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, webContents, signature);
-      updateImageAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于图片比对', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, webContents, signature);
+      const contentPromise = runContentExtraction(allFiles, target, signature);
+      const metadataFiles = await runMetadataExtraction(bidFiles, target, signature);
+      updateOutlineAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于目录分析', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, target, signature);
+      updateContentAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于正文比对', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, target, signature);
+      updateImageAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于图片比对', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, target, signature);
       const contentFiles = await contentPromise;
       const [outlineFiles, contentResult, imageResult] = await Promise.all([
-        runOutlineAnalysis(tenderFile, bidFiles, contentFiles, signature, webContents),
-        runContentDuplicateAnalysis(tenderFile, bidFiles, contentFiles, signature, webContents),
-        runImageDuplicateAnalysis(bidFiles, contentFiles, signature, webContents),
+        runOutlineAnalysis(tenderFile, bidFiles, contentFiles, signature, target),
+        runContentDuplicateAnalysis(tenderFile, bidFiles, contentFiles, signature, target),
+        runImageDuplicateAnalysis(bidFiles, contentFiles, signature, target),
       ]);
       const failed = contentFiles.some((item) => item.status === 'error')
         || metadataFiles.some((item) => item.status === 'error')
         || outlineFiles.some((item) => item.status === 'error')
         || contentResult.status === 'error'
         || imageResult.status === 'error';
-      updateAnalysis({ status: failed ? 'error' : 'success', progress: 100, message: failed ? '部分文件分析失败' : '元数据分析完成' }, webContents, signature);
+      updateAnalysis({ status: failed ? 'error' : 'success', progress: 100, message: failed ? '部分文件分析失败' : '元数据分析完成' }, target, signature);
+      return failed ? 'error' : 'success';
     } catch (error) {
-      updateAnalysis({ status: 'error', progress: 100, message: error.message || '元数据分析失败' }, webContents, signature);
-    } finally {
-      running.delete(signature);
+      updateAnalysis({ status: 'error', progress: 100, message: error.message || '元数据分析失败' }, target, signature);
+      return 'error';
     }
   }
 
   return {
-    startMetadataAnalysis(payload = {}, webContents) {
+    async runAnalysisTask({ workspaceStore: taskWorkspaceStore, updateTask, payload }) {
       const signature = createSignature(payload);
       const force = payload.force === true;
-      const current = workspaceStore.loadDuplicateCheck() || {};
+      const current = taskWorkspaceStore.loadDuplicateCheck() || {};
       if (!force
         && current.metadataAnalysis?.signature === signature && current.metadataAnalysis?.status === 'success'
         && current.outlineAnalysis?.signature === signature && current.outlineAnalysis?.status === 'success'
         && current.contentAnalysis?.signature === signature && current.contentAnalysis?.status === 'success'
         && current.imageAnalysis?.signature === signature && current.imageAnalysis?.status === 'success') {
-        emit(webContents, current);
-        return current.metadataAnalysis;
-      }
-      if (!force && running.has(signature)) {
-        emit(webContents, current);
-        return current.metadataAnalysis || { status: 'running', signature };
+        const nextState = taskWorkspaceStore.updateDuplicateCheck({
+          analysisTask: updateTask({ status: 'success', progress: 100, logs: ['标书查重分析已完成，无需重复分析。'] }),
+        });
+        updateTask({ status: 'success', progress: 100, logs: ['标书查重分析已完成，无需重复分析。'] }, nextState);
+        return;
       }
 
       const bidFiles = Array.isArray(payload.bidFiles) ? payload.bidFiles : [];
@@ -2091,11 +2112,38 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       const outlineAnalysis = createInitialOutlineAnalysis(signature, bidFiles);
       const contentAnalysis = createInitialContentAnalysis(signature, bidFiles);
       const imageAnalysis = createInitialImageAnalysis(signature, bidFiles);
-      const next = workspaceStore.updateDuplicateCheck({ tenderFile: payload.tenderFile || null, bidFiles, metadataAnalysis, outlineAnalysis, contentAnalysis, imageAnalysis });
-      emit(webContents, next);
-      const promise = run(signature, payload, webContents);
-      running.set(signature, promise);
-      return metadataAnalysis;
+      const initialLogs = [force ? '开始重新执行标书查重分析。' : '开始执行标书查重分析。'];
+      let latestLog = initialLogs[0];
+      let state = taskWorkspaceStore.updateDuplicateCheck({
+        tenderFile: payload.tenderFile || null,
+        bidFiles,
+        metadataAnalysis,
+        outlineAnalysis,
+        contentAnalysis,
+        imageAnalysis,
+        analysisTask: updateTask({ status: 'running', progress: 0, logs: initialLogs }),
+      });
+      updateTask({ status: 'running', progress: 0, logs: initialLogs }, state);
+
+      const notifyTask = (nextState) => {
+        const message = latestAnalysisMessage(nextState);
+        const partial = { status: 'running', progress: overallProgress(nextState) };
+        if (message && message !== latestLog) {
+          latestLog = message;
+          partial.logs = [message];
+        }
+        updateTask(partial, nextState);
+      };
+
+      const finalStatus = await run(signature, payload, notifyTask);
+      state = taskWorkspaceStore.loadDuplicateCheck() || state;
+      const doneLog = finalStatus === 'success' ? '标书查重分析完成。' : '标书查重分析完成，部分结果失败。';
+      const finalTask = updateTask({ status: finalStatus, progress: 100, logs: [doneLog] });
+      if (!isCurrentDuplicateCheckSignature(signature)) {
+        return;
+      }
+      const finalState = taskWorkspaceStore.updateDuplicateCheck({ analysisTask: finalTask });
+      updateTask({ status: finalStatus, progress: 100, logs: [doneLog] }, finalState);
     },
   };
 }

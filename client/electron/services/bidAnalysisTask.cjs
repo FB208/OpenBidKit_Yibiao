@@ -139,6 +139,7 @@ function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent, onCh
 async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, payload }) {
   const mode = payload.mode || 'key';
   const selectedTasks = getBidAnalysisTasks(mode);
+  const forceRerun = payload.force_rerun === true || payload.forceRerun === true;
   const requestedTaskIds = Array.isArray(payload.task_ids)
     ? new Set(payload.task_ids.filter((taskId) => typeof taskId === 'string'))
     : null;
@@ -149,18 +150,43 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
     throw new Error('未找到可重新解析的招标文件解析项');
   }
   const realTimeRender = payload.real_time_render !== false && payload.realTimeRender !== false;
-  const initialMessage = requestedTaskIds ? '开始重新解析选中的招标文件解析项。' : '开始解析招标文件。';
-  const initialLogs = realTimeRender
-    ? [initialMessage]
-    : [initialMessage, '实时渲染已关闭，每项解析完成后再刷新结果。'];
-  let technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisMode: mode, bidAnalysisTask: updateTask({ status: 'running', progress: 0, logs: initialLogs }) });
-  const currentTasks = technicalPlan.bidAnalysisTasks || {};
-  const tasksToRun = requestedTaskIds ? scopedTasks : scopedTasks.filter((task) => currentTasks[task.id]?.status !== 'success');
-
   function doneProgress(nextTasks) {
     const done = selectedTasks.filter((task) => ['success', 'error'].includes(nextTasks[task.id]?.status)).length;
     return Math.round((done / selectedTasks.length) * 100);
   }
+
+  const initialMessage = requestedTaskIds
+    ? '开始重新解析选中的招标文件解析项。'
+    : forceRerun
+      ? '开始重新解析全部招标文件解析项。'
+      : '开始解析招标文件。';
+  const initialLogs = realTimeRender
+    ? [initialMessage]
+    : [initialMessage, '实时渲染已关闭，每项解析完成后再刷新结果。'];
+  let initialPartial = { bidAnalysisMode: mode, bidAnalysisTask: updateTask({ status: 'running', progress: 0, logs: initialLogs }) };
+  if (forceRerun && !requestedTaskIds) {
+    const prev = workspaceStore.loadTechnicalPlan() || {};
+    const resetTasks = { ...(prev.bidAnalysisTasks || {}) };
+    for (const task of selectedTasks) {
+      resetTasks[task.id] = { id: task.id, label: task.label, status: 'idle', content: '' };
+    }
+    initialPartial = {
+      ...initialPartial,
+      projectOverview: '',
+      techRequirements: '',
+      bidAnalysisTasks: resetTasks,
+      bidAnalysisProgress: 0,
+      outlineGenerationTask: undefined,
+      contentGenerationTask: undefined,
+      contentGenerationOptions: undefined,
+      contentGenerationSections: {},
+      contentGenerationPlans: {},
+      outlineData: null,
+    };
+  }
+  let technicalPlan = workspaceStore.updateTechnicalPlan(initialPartial);
+  const currentTasks = technicalPlan.bidAnalysisTasks || {};
+  const tasksToRun = requestedTaskIds || forceRerun ? scopedTasks : scopedTasks.filter((task) => currentTasks[task.id]?.status !== 'success');
 
   async function runOne(task) {
     const runningPrev = workspaceStore.loadTechnicalPlan() || {};

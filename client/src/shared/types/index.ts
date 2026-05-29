@@ -5,6 +5,7 @@ export type {
   DuplicateAnalysisTabId,
   DuplicateAnalysisStatus,
   DuplicateCheckStep,
+  DuplicateCheckTaskState,
   DuplicateCheckWorkspaceState,
   DuplicateContentAnalysisState,
   DuplicateContentExtractionItem,

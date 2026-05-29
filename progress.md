@@ -1,6 +1,9 @@
 # Progress
 
 ## Session Log
+- 开始执行后台任务组锁与技术方案清空策略：已确认当前文档规则，准备先改 `taskService.cjs` 的技术方案/废标项任务定义与锁检查，再把 Step02/Step03/Step04 清空规则收敛到 Main 侧。
+- 已完成后台任务组锁与技术方案清空策略：`taskService.cjs` 新增任务定义、组锁冲突检查和任务元数据；技术方案/废标项检查组内不同任务并发启动会被拒绝；Step03 启动时 Main 侧清旧目录/正文；Step02/Step04 去掉 Renderer 启动前业务清空。验证通过 4 个 CJS `node --check`、技术方案组锁冲突 smoke test、`cd client; npm run build` 和 `git diff --check`，构建仅有既有 chunk 体积警告，diff check 仅有既有 LF/CRLF 提示。
+- 已完成标书查重迁入任务组体系：新增 `duplicate-analysis` 外层任务和 `duplicateCheck` stateKey；`duplicateCheckService.runAnalysisTask()` 作为 taskService runner，内部元数据/目录/正文/图片子流程并发保持不变；前端改为 `tasks.startDuplicateAnalysis()` + `tasks.onTaskEvent()`；旧 `duplicate-check:start-metadata-analysis` IPC 兼容转发到 taskService。验证通过相关 CJS 语法检查、模块加载、任务注册 smoke test、`npm run build` 和 `git diff --check`。
 - 开始 DOC/WPS 本地转换后端自动识别：已确认现有链路只在 `withLegacyWordDocxFile()` 中找 LibreOffice；本轮会保留后续 DOCX Markdown 提取，只新增 LibreOffice/WPS/Word 候选转换和统一提示。
 - 已完成 DOC/WPS 本地转换后端自动识别：`withLegacyWordDocxFile()` 现在按候选后端实际转换并校验 DOCX；Windows 通过 PowerShell COM 支持 WPS/Word；缺失提示已改为 LibreOffice/WPS Office/Microsoft Word 任一即可。验证通过 `node --check`、转换模块动态 import、`npm run build`、`git diff --check`；构建仍只有既有 chunk 体积警告，diff check 只有 LF/CRLF 提示。
 - 开始废标项检查流式检查与单项重试改造：已先按用户要求把流式 JSON 请求使用方法和 JSON 修复边界写入 `client/开发说明.md`；本轮不新增后端到页面的流式返回，只改 Main 到 AI 服务商的请求模式。

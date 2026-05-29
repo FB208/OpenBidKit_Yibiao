@@ -81,6 +81,10 @@ const initialExportProgress: ExportProgressState = {
 
 const MAX_UI_TASK_LOGS = 80;
 
+function hasOwnField<T extends object>(value: T, field: PropertyKey) {
+  return Object.prototype.hasOwnProperty.call(value, field);
+}
+
 function trimTaskLogs(task?: BackgroundTaskState): BackgroundTaskState | undefined {
   if (!task?.logs || task.logs.length <= MAX_UI_TASK_LOGS) {
     return task;
@@ -168,6 +172,7 @@ function TechnicalPlanHome() {
 
       setState((prev) => {
         if (taskType === 'bid-analysis') {
+          const outlineDataReset = hasOwnField(technicalPlan, 'outlineData') && technicalPlan.outlineData === null;
           return {
             ...prev,
             bidAnalysisTask: trimTaskLogs(technicalPlan.bidAnalysisTask) || latestTask,
@@ -175,13 +180,23 @@ function TechnicalPlanHome() {
             bidAnalysisProgress: technicalPlan.bidAnalysisProgress ?? prev.bidAnalysisProgress,
             projectOverview: technicalPlan.projectOverview ?? prev.projectOverview,
             techRequirements: technicalPlan.techRequirements ?? prev.techRequirements,
+            outlineGenerationTask: outlineDataReset ? undefined : prev.outlineGenerationTask,
+            contentGenerationTask: outlineDataReset ? undefined : prev.contentGenerationTask,
+            contentGenerationOptions: outlineDataReset ? undefined : prev.contentGenerationOptions,
+            contentGenerationSections: outlineDataReset ? {} : prev.contentGenerationSections,
+            contentGenerationPlans: outlineDataReset ? {} : prev.contentGenerationPlans,
+            outlineData: hasOwnField(technicalPlan, 'outlineData') ? technicalPlan.outlineData : prev.outlineData,
           };
         }
 
         if (taskType === 'outline-generation') {
+          const hasOutlineData = hasOwnField(technicalPlan, 'outlineData');
           const nextOutlineData = technicalPlan.outlineGenerationTask?.status === 'success' && technicalPlan.outlineData
             ? resetGeneratedContent(technicalPlan.outlineData)
-            : prev.outlineData;
+            : hasOutlineData
+              ? technicalPlan.outlineData
+              : prev.outlineData;
+          const outlineDataChanged = nextOutlineData !== prev.outlineData;
 
           return {
             ...prev,
@@ -191,9 +206,9 @@ function TechnicalPlanHome() {
               ? technicalPlan.referenceKnowledgeDocumentIds
               : prev.referenceKnowledgeDocumentIds,
             outlineData: nextOutlineData,
-            contentGenerationTask: nextOutlineData !== prev.outlineData ? undefined : prev.contentGenerationTask,
-            contentGenerationSections: nextOutlineData !== prev.outlineData ? {} : prev.contentGenerationSections,
-            contentGenerationPlans: nextOutlineData !== prev.outlineData ? {} : prev.contentGenerationPlans,
+            contentGenerationTask: outlineDataChanged ? undefined : prev.contentGenerationTask,
+            contentGenerationSections: outlineDataChanged ? {} : prev.contentGenerationSections,
+            contentGenerationPlans: outlineDataChanged ? {} : prev.contentGenerationPlans,
           };
         }
 
@@ -323,28 +338,6 @@ function TechnicalPlanHome() {
       outlineData: updatedOutlineData,
       contentGenerationSections: updatedSections,
     });
-  };
-
-  const resetContentGeneration = async () => {
-    if (!state.outlineData?.outline?.length) {
-      throw new Error('当前没有可重新生成的目录');
-    }
-
-    const updatedOutlineData = resetGeneratedContent(state.outlineData);
-    setState((prev) => ({
-      ...prev,
-      outlineData: updatedOutlineData,
-      contentGenerationTask: undefined,
-      contentGenerationSections: {},
-      contentGenerationPlans: {},
-    }));
-    await window.yibiao?.workspace.updateTechnicalPlan({
-      outlineData: updatedOutlineData,
-      contentGenerationTask: undefined,
-      contentGenerationSections: {},
-      contentGenerationPlans: {},
-    });
-    return updatedOutlineData;
   };
 
   const resetTechnicalPlan = () => {
@@ -511,7 +504,6 @@ function TechnicalPlanHome() {
           sections={state.contentGenerationSections}
           onContentGenerationOptionsChange={saveContentGenerationOptions}
           onContentSaved={saveChapterContent}
-          onContentReset={resetContentGeneration}
         />
       )}
       {state.step === 'expand' && (
