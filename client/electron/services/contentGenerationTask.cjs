@@ -1,10 +1,15 @@
 const zlib = require('node:zlib');
+const { countReadableWords } = require('../utils/wordCount.cjs');
 
 const IMAGE_STYLES = new Set(['engineering_diagram', 'realistic_photo']);
 const MERMAID_REPAIR_ATTEMPTS = 3;
 const MERMAID_RENDER_TIMEOUT_MS = 15000;
 const AI_IMAGE_CONCURRENCY = 2;
 const MERMAID_IMAGE_CONCURRENCY = 5;
+const CONTENT_EXPANSION_CONCURRENCY = 2;
+const MAX_OUTLINE_EXPANSION_ROUNDS = 3;
+const OUTLINE_EXPANSION_TARGET_RATIO = 0.8;
+const MIN_SECTION_EXPANSION_INCREMENT = 800;
 const TABLE_REQUIREMENT_LABELS = {
   none: '不要',
   light: '少量',
@@ -122,6 +127,15 @@ function normalizeTableRequirement(value) {
   if (text === '适中') return 'moderate';
   if (text === '大量') return 'heavy';
   return 'heavy';
+}
+
+function normalizeMinimumWords(value) {
+  const words = Number(value);
+  return Math.max(0, Number.isFinite(words) ? Math.round(words) : 0);
+}
+
+function countContentWords(content) {
+  return countReadableWords(String(content || ''));
 }
 
 function maxTablesForRequirement(requirement, leafCount) {
@@ -553,6 +567,309 @@ function buildChapterContentMessages({ chapter, parentChapters, siblingChapters,
   return messages;
 }
 
+function formatOutlineForPrompt(items, level = 1, lines = []) {
+  for (const item of items || []) {
+    const indent = '  '.repeat(Math.max(0, level - 1));
+    lines.push(`${indent}- ${item.id || 'unknown'} ${item.title || '未命名章节'}：${item.description || ''}`);
+    if (item.children?.length) {
+      formatOutlineForPrompt(item.children, level + 1, lines);
+    }
+  }
+  return lines.join('\n');
+}
+
+function createOutlineNodeMap(items) {
+  const map = new Map();
+  function visit(nodes, level = 1, parent = null) {
+    for (const item of nodes || []) {
+      const id = String(item?.id || '').trim();
+      if (id) {
+        map.set(id, { item, level, parent });
+      }
+      if (item?.children?.length) {
+        visit(item.children, level + 1, item);
+      }
+    }
+  }
+  visit(items || []);
+  return map;
+}
+
+function formatOutlineExpansionParents(nodeMap) {
+  return Array.from(nodeMap.entries())
+    .filter(([, info]) => info.level >= 1 && info.level <= 3)
+    .map(([id, info]) => {
+      const childLevel = info.level + 1;
+      return `- ${id} ${info.item.title || '未命名章节'}（当前 ${info.level} 级，可新增 ${childLevel} 级目录）`;
+    })
+    .join('\n');
+}
+
+function buildOutlineExpansionMessages({ projectOverview, techRequirements, outlineData, currentWords, minimumWords, medianLeafWords, round, nodeMap }) {
+  const sampleParentId = Array.from(nodeMap.entries()).find(([, info]) => info.level === 1)?.[0] || '1';
+  return [
+    {
+      role: 'user',
+      content: `你是投标技术方案目录补充专家。当前技术方案正文字数不足，需要通过补充二级、三级或四级目录扩展可生成正文的空间。
+
+要求：
+1. 只返回 JSON，不要输出解释、总结或 Markdown。
+2. 只能新增二级、三级、四级目录，严禁新增、删除、重命名或调整一级目录。
+3. 只能把新增目录挂到下面给出的允许 parent_id 下，parent_id 必须逐字复制。
+4. 只输出新增目录，不要输出完整目录，不要输出正文内容。
+5. 允许补充通用但不违背项目的技术方案内容，例如组织管理、质量控制、安全管理、进度保障、验收交付、运维服务、培训计划、资料管理、风险控制、应急响应等。
+6. 不要重复已有目录，不要输出明显凑字数的空泛标题。
+7. 四级目录不能再包含 children。
+
+返回格式：
+{
+  "additions": [
+    {
+      "parent_id": "${sampleParentId}",
+      "title": "新增目录标题",
+      "description": "新增目录说明",
+      "children": [
+        { "title": "可选下级目录标题", "description": "可选下级目录说明" }
+      ]
+    }
+  ]
+}`,
+    },
+    { role: 'user', content: `项目概述：\n${projectOverview || '未提供'}` },
+    { role: 'user', content: `技术评分要求：\n${techRequirements || '未提供'}` },
+    { role: 'user', content: `当前完整目录：\n${formatOutlineForPrompt(outlineData.outline || [])}` },
+    { role: 'user', content: `允许新增目录的 parent_id：\n${formatOutlineExpansionParents(nodeMap)}` },
+    { role: 'user', content: `当前总字数：${currentWords}\n预期最低字数：${minimumWords}\n当前叶子节点字数中位数：${medianLeafWords}\n本次补目录轮次：${round}/${MAX_OUTLINE_EXPANSION_ROUNDS}\n请只返回新增目录 JSON。` },
+  ];
+}
+
+const OUTLINE_EXPANSION_TOP_LEVEL_KEYS = new Set(['additions']);
+const OUTLINE_EXPANSION_ADDITION_KEYS = new Set(['parent_id', 'parentId', 'title', 'name', 'description', 'summary', 'resume', 'children']);
+const OUTLINE_EXPANSION_CHILD_KEYS = new Set(['title', 'name', 'description', 'summary', 'resume', 'children']);
+const OUTLINE_EXPANSION_FORBIDDEN_KEY_NAMES = new Set([
+  'id',
+  'outline',
+  'content',
+  'markdown',
+  'body',
+  'image',
+  'images',
+  'picture',
+  'pictures',
+  'table',
+  'tables',
+  'plan',
+  'plans',
+  'contentplan',
+  'contentplans',
+  'contentgenerationplans',
+  'contentgenerationsections',
+  'illustration',
+  'illustrationtype',
+  'mermaid',
+]);
+
+function normalizeFieldName(value) {
+  return String(value || '').replace(/[_\-\s]/g, '').toLowerCase();
+}
+
+function collectUnexpectedOutlineExpansionKeys(value, path, allowedKeys, issues) {
+  for (const key of Object.keys(value || {})) {
+    if (allowedKeys.has(key)) {
+      continue;
+    }
+    const normalizedKey = normalizeFieldName(key);
+    if (OUTLINE_EXPANSION_FORBIDDEN_KEY_NAMES.has(normalizedKey)) {
+      issues.push(`${path}.${key} 不允许返回完整目录、正文、图片、表格或编排计划字段`);
+    } else {
+      issues.push(`${path}.${key} 不是允许的新增目录字段`);
+    }
+  }
+}
+
+function normalizeOutlineExpansionChild(value, level, path, issues, allowedKeys = OUTLINE_EXPANSION_CHILD_KEYS) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    issues.push(`${path} 必须是对象`);
+    return null;
+  }
+  collectUnexpectedOutlineExpansionKeys(value, path, allowedKeys, issues);
+  const title = singleLine(value.title || value.name);
+  if (!title) {
+    issues.push(`${path}.title 缺失`);
+    return null;
+  }
+  const description = String(value.description || value.summary || value.resume || title).trim() || title;
+  const node = { title, description };
+  if (level < 4 && Array.isArray(value.children) && value.children.length) {
+    const children = [];
+    value.children.forEach((child, index) => {
+      const normalized = normalizeOutlineExpansionChild(child, level + 1, `${path}.children[${index}]`, issues);
+      if (normalized) children.push(normalized);
+    });
+    if (children.length) node.children = children;
+  }
+  if (level >= 4 && Array.isArray(value.children) && value.children.length) {
+    issues.push(`${path}.children 四级目录不能包含下级目录`);
+  }
+  return node;
+}
+
+function normalizeOutlineExpansionResponse(payload, context) {
+  const raw = payload?.result && typeof payload.result === 'object' ? payload.result : payload || {};
+  const issues = [];
+  const additions = [];
+
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('补目录返回格式无效：顶层必须是只包含 additions 数组的对象');
+  }
+
+  collectUnexpectedOutlineExpansionKeys(raw, 'root', OUTLINE_EXPANSION_TOP_LEVEL_KEYS, issues);
+
+  if (raw.additions === undefined) {
+    issues.push('root.additions 缺失');
+  } else if (!Array.isArray(raw.additions)) {
+    issues.push('root.additions 必须是数组');
+  }
+
+  const candidates = Array.isArray(raw.additions) ? raw.additions : [];
+
+  candidates.forEach((candidate, index) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      issues.push(`additions[${index}] 必须是对象`);
+      return;
+    }
+    const parentId = String(candidate.parent_id || candidate.parentId || '').trim();
+    const parentInfo = context.nodeMap.get(parentId);
+    if (!parentId || !parentInfo || parentInfo.level < 1 || parentInfo.level > 3) {
+      issues.push(`additions[${index}].parent_id 无效：${parentId || '空'}`);
+      return;
+    }
+    const child = normalizeOutlineExpansionChild(candidate, parentInfo.level + 1, `additions[${index}]`, issues, OUTLINE_EXPANSION_ADDITION_KEYS);
+    if (child) {
+      additions.push({ parent_id: parentId, ...child });
+    }
+  });
+
+  if (issues.length) {
+    throw new Error(`补目录返回格式无效：${issues.join('；')}`);
+  }
+
+  return { additions };
+}
+
+function validateOutlineExpansionResponse(payload) {
+  if (!payload || !Array.isArray(payload.additions)) {
+    throw new Error('补目录结果缺少 additions 数组');
+  }
+}
+
+function buildOutlineExpansionRepairMessages({ invalidContent, issues }, nodeMap) {
+  const issueLines = (issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
+  return [
+    {
+      role: 'user',
+      content: `你是严格的 JSON 修复器。请把模型输出修复为“最低字数补目录”JSON。
+
+必须满足：
+1. 顶层只能有 additions 数组。
+2. 每条 additions 必须包含 parent_id、title、description，可以包含 children。
+3. parent_id 必须逐字复制允许列表中的 ID。
+4. 只能新增二级、三级、四级目录；四级目录不能包含 children。
+5. 禁止输出完整 outline、正文、图片、表格或解释文字。
+6. 如果没有可补充目录，返回 {"additions":[]}。
+
+允许的 parent_id：
+${formatOutlineExpansionParents(nodeMap)}`,
+    },
+    { role: 'user', content: `错误列表：\n${issueLines}` },
+    { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
+  ];
+}
+
+function buildContentExpansionMessages({ outlineData, context, projectOverview, currentContent, currentWords, targetWords }) {
+  const { item, parentChapters, siblingChapters } = context;
+  const chapterPath = [...(parentChapters || []), item]
+    .map((chapter) => `${chapter.id || 'unknown'} ${chapter.title || '未命名章节'}`)
+    .join(' > ');
+  const siblingLines = (siblingChapters || [])
+    .filter((chapter) => chapter.id !== item.id)
+    .map((chapter) => `- ${chapter.id || 'unknown'} ${chapter.title || '未命名章节'}：${chapter.description || ''}`)
+    .join('\n');
+
+  return [
+    {
+      role: 'user',
+      content: `你是投标技术方案正文扩写助手。请只针对指定章节进行扩写，避免与其他章节重复。
+
+要求：
+1. 只返回 JSON，不要输出解释、总结或 Markdown 代码围栏。
+2. 不要返回完整正文，只返回一次局部扩写操作。
+3. operation 只能是 "insert" 或 "replace"。
+4. insert 表示新增一个或多个段落，anchor 填写建议插入在哪个原段落之后；如果适合放末尾，anchor 写 "end"。
+5. replace 表示重写并扩写某个原段落，anchor 必须填写要替换的原段落关键摘录。
+6. content 只写新增或替换后的正文片段，不要包含章节标题。
+7. 禁止输出图片 Markdown、Mermaid、代码块或其他图表代码。
+8. 扩写内容必须服务当前章节，不要写其他目录应承载的内容。
+
+返回格式：
+{
+  "operation": "insert",
+  "anchor": "end",
+  "content": "扩写后的新增段落或替换段落"
+}`,
+    },
+    { role: 'user', content: `项目概述：\n${projectOverview || '未提供'}` },
+    { role: 'user', content: `完整目录：\n${formatOutlineForPrompt(outlineData.outline || [])}` },
+    { role: 'user', content: `当前章节路径：${chapterPath}\n当前章节描述：${item.description || ''}` },
+    { role: 'user', content: `同级章节（扩写时避免重复）：\n${siblingLines || '无'}` },
+    { role: 'user', content: `当前章节原正文：\n${currentContent}` },
+    { role: 'user', content: `当前章节统计字数：${currentWords}\n期望本章节扩写后至少达到：${targetWords}\n请返回一次局部扩写 JSON。` },
+  ];
+}
+
+function normalizeContentExpansionPatch(value) {
+  const source = value?.result && typeof value.result === 'object' ? value.result : value || {};
+  const rawPatch = Array.isArray(source.operations) ? source.operations[0] : Array.isArray(source.patches) ? source.patches[0] : source;
+  const operation = String(rawPatch.operation || rawPatch.type || '').trim().toLowerCase();
+  const anchor = singleLine(rawPatch.anchor || rawPatch.position || rawPatch.after || rawPatch.target || rawPatch.replace_target || 'end') || 'end';
+  const content = normalizeGeneratedMarkdown(String(rawPatch.content || rawPatch.paragraph || rawPatch.text || rawPatch.new_content || ''))
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .trim();
+  return { operation, anchor, content };
+}
+
+function validateContentExpansionPatch(patch) {
+  if (!patch || !['insert', 'replace'].includes(patch.operation)) {
+    throw new Error(`扩写结果 operation 无效：${patch?.operation || '空'}，只能是 insert 或 replace`);
+  }
+  if (!String(patch.content || '').trim()) {
+    throw new Error('扩写结果缺少 content');
+  }
+}
+
+function buildContentExpansionRepairMessages({ invalidContent, issues }) {
+  const issueLines = (issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
+  return [
+    {
+      role: 'user',
+      content: `你是严格的 JSON 修复器。请把模型输出修复为“正文局部扩写”JSON。
+
+必须满足：
+1. 顶层只能包含 operation、anchor、content。
+2. operation 只能是 "insert" 或 "replace"。
+3. 严禁使用 delete、rewrite_full、rewrite、append、update 或其他 operation。
+4. insert 表示新增段落；anchor 写建议插入在哪个原段落之后，无法确定时写 "end"。
+5. replace 表示重写并扩写一个原段落；anchor 必须是要替换的原段落关键摘录。
+6. content 只能是新增或替换后的正文片段，不要返回完整章节正文。
+7. content 不得包含章节标题、图片 Markdown、Mermaid、代码块或解释文字。
+8. 只返回 JSON，不要输出 Markdown 代码围栏或解释。`,
+    },
+    { role: 'user', content: `错误列表：\n${issueLines}` },
+    { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
+  ];
+}
+
 function normalizeChildren(item) {
   return Array.isArray(item.children) ? item.children : [];
 }
@@ -673,6 +990,223 @@ function clearOutlineContent(items) {
   });
 }
 
+function cloneOutlineItems(items) {
+  return (items || []).map((item) => ({
+    ...item,
+    ...(item.knowledge_item_ids?.length ? { knowledge_item_ids: [...item.knowledge_item_ids] } : {}),
+    ...(item.children?.length ? { children: cloneOutlineItems(item.children) } : {}),
+  }));
+}
+
+function outlineDepth(items) {
+  return items?.length ? 1 + Math.max(...items.map((item) => outlineDepth(item.children || []))) : 0;
+}
+
+function flattenOutlineRows(items, level = 1, parent = null, rows = []) {
+  (items || []).forEach((item, index) => {
+    const id = String(item?.id || '').trim();
+    const row = {
+      item,
+      id,
+      title: String(item?.title || '').trim(),
+      description: String(item?.description || '').trim(),
+      level,
+      parent,
+      path: parent ? `${parent.path}.children[${index}]` : `outline[${index}]`,
+    };
+    rows.push(row);
+    flattenOutlineRows(normalizeChildren(item), level + 1, row, rows);
+  });
+  return rows;
+}
+
+function validateOutlineTree(rows) {
+  const issues = [];
+  const seenIds = new Set();
+
+  for (const row of rows) {
+    const children = normalizeChildren(row.item);
+    if (!row.id) {
+      issues.push(`${row.path}.id 缺失`);
+    } else if (seenIds.has(row.id)) {
+      issues.push(`${row.path}.id 重复：${row.id}`);
+    } else {
+      seenIds.add(row.id);
+    }
+    if (!row.title) {
+      issues.push(`${row.path}.title 缺失`);
+    }
+    if (!row.description) {
+      issues.push(`${row.path}.description 缺失`);
+    }
+    if (row.level > 4) {
+      issues.push(`${row.path} 目录层级不能超过四级`);
+    }
+    if (row.parent?.id && row.id && !row.id.startsWith(`${row.parent.id}.`)) {
+      issues.push(`${row.path}.id 必须挂在父级 ${row.parent.id} 下`);
+    }
+    if (children.length && Object.prototype.hasOwnProperty.call(row.item || {}, 'content') && String(row.item.content || '').trim()) {
+      issues.push(`${row.path} 是非叶子节点，不能保留正文 content`);
+    }
+  }
+
+  return issues;
+}
+
+function validateOutlineExpansionApplied(beforeItems, afterItems) {
+  if (!(afterItems || []).length) {
+    throw new Error('补目录后完整目录不能为空');
+  }
+  if (outlineDepth(afterItems) > 4) {
+    throw new Error('补目录后目录层级不能超过四级');
+  }
+  if ((beforeItems || []).length !== (afterItems || []).length) {
+    throw new Error('补目录不允许改变一级目录数量');
+  }
+
+  const beforeRows = flattenOutlineRows(beforeItems || []);
+  const afterRows = flattenOutlineRows(afterItems || []);
+  const beforeById = new Map(beforeRows.filter((row) => row.id).map((row) => [row.id, row]));
+  const afterById = new Map(afterRows.filter((row) => row.id).map((row) => [row.id, row]));
+  const treeIssues = validateOutlineTree(afterRows);
+  if (treeIssues.length) {
+    throw new Error(`补目录后完整目录结构无效：${treeIssues.join('；')}`);
+  }
+
+  (beforeItems || []).forEach((beforeItem, index) => {
+    const afterItem = afterItems[index];
+    if (String(beforeItem.id || '').trim() !== String(afterItem?.id || '').trim()) {
+      throw new Error('补目录不允许修改一级目录 ID 或顺序');
+    }
+    if (String(beforeItem.title || '').trim() !== String(afterItem?.title || '').trim()) {
+      throw new Error('补目录不允许修改一级目录标题');
+    }
+  });
+
+  for (const beforeRow of beforeRows) {
+    const afterRow = beforeRow.id ? afterById.get(beforeRow.id) : null;
+    if (!afterRow) {
+      throw new Error(`补目录不允许删除既有目录节点：${beforeRow.id || beforeRow.path}`);
+    }
+    if (beforeRow.level !== afterRow.level) {
+      throw new Error(`补目录不允许改变既有目录层级：${beforeRow.id}`);
+    }
+    if (beforeRow.title !== afterRow.title) {
+      throw new Error(`补目录不允许修改既有目录标题：${beforeRow.id}`);
+    }
+    if (beforeRow.description !== afterRow.description) {
+      throw new Error(`补目录不允许修改既有目录说明：${beforeRow.id}`);
+    }
+  }
+
+  for (const afterRow of afterRows) {
+    if (!beforeById.has(afterRow.id) && (afterRow.level < 2 || afterRow.level > 4)) {
+      throw new Error(`新增目录只能出现在二级、三级、四级：${afterRow.id}`);
+    }
+  }
+}
+
+function nextChildId(parent, existingIds) {
+  const prefix = `${parent.id}.`;
+  const childIndexes = normalizeChildren(parent)
+    .map((child) => String(child.id || ''))
+    .filter((id) => id.startsWith(prefix))
+    .map((id) => Number(id.slice(prefix.length).split('.')[0]))
+    .filter((value) => Number.isFinite(value));
+  let nextIndex = childIndexes.length ? Math.max(...childIndexes) + 1 : 1;
+  let id = `${prefix}${nextIndex}`;
+  while (existingIds.has(id)) {
+    nextIndex += 1;
+    id = `${prefix}${nextIndex}`;
+  }
+  existingIds.add(id);
+  return id;
+}
+
+function createOutlineItemFromExpansion(addition, parent, existingIds, invalidatedItemIds) {
+  const item = {
+    id: nextChildId(parent, existingIds),
+    title: addition.title,
+    description: addition.description || addition.title,
+  };
+  const children = Array.isArray(addition.children) ? addition.children : [];
+  if (children.length) {
+    item.children = [];
+    for (const child of children) {
+      item.children.push(createOutlineItemFromExpansion(child, item, existingIds, invalidatedItemIds));
+    }
+  }
+  return item;
+}
+
+function applyOutlineExpansionAdditions(outlineItems, patch) {
+  const beforeOutline = outlineItems || [];
+  const outline = cloneOutlineItems(beforeOutline);
+  const nodeMap = createOutlineNodeMap(outline);
+  const existingIds = new Set(Array.from(nodeMap.keys()));
+  const invalidatedItemIds = new Set();
+  let addedCount = 0;
+
+  for (const addition of patch.additions || []) {
+    const parent = nodeMap.get(addition.parent_id);
+    if (!parent || parent.level < 1 || parent.level > 3) {
+      continue;
+    }
+    if (!parent.item.children?.length) {
+      invalidatedItemIds.add(parent.item.id);
+    }
+    const nextItem = createOutlineItemFromExpansion(addition, parent.item, existingIds, invalidatedItemIds);
+    parent.item.children = [...(parent.item.children || []), nextItem];
+    delete parent.item.content;
+    function register(node, level) {
+      nodeMap.set(node.id, { item: node, level, parent: parent.item });
+      addedCount += 1;
+      if (node.children?.length) node.children.forEach((child) => register(child, level + 1));
+    }
+    register(nextItem, parent.level + 1);
+  }
+
+  validateOutlineExpansionApplied(beforeOutline, outline);
+  return { outline, invalidatedItemIds, addedCount };
+}
+
+function normalizeParagraphs(content) {
+  return String(content || '').split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+}
+
+function applyContentExpansionPatch(content, patch) {
+  const normalizedContent = String(content || '').trim();
+  const patchContent = normalizeGeneratedMarkdown(patch.content).trim();
+  if (!normalizedContent) {
+    return patchContent;
+  }
+
+  const paragraphs = normalizeParagraphs(normalizedContent);
+  const anchor = String(patch.anchor || '').trim();
+  const anchorKey = anchor.replace(/\s+/g, ' ').trim();
+  const anchorIndex = anchorKey && !/^end$/i.test(anchorKey)
+    ? paragraphs.findIndex((paragraph) => paragraph.replace(/\s+/g, ' ').includes(anchorKey) || anchorKey.includes(paragraph.replace(/\s+/g, ' ')))
+    : -1;
+
+  if (patch.operation === 'replace' && anchorIndex >= 0) {
+    const next = [...paragraphs];
+    next[anchorIndex] = patchContent;
+    return next.join('\n\n');
+  }
+
+  if (/^start$/i.test(anchorKey)) {
+    return [patchContent, ...paragraphs].join('\n\n');
+  }
+
+  if (anchorIndex >= 0) {
+    const next = [...paragraphs];
+    next.splice(anchorIndex + 1, 0, patchContent);
+    return next.join('\n\n');
+  }
+
+  return `${normalizedContent}\n\n${patchContent}`;
+}
+
 function escapeRegExp(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -726,6 +1260,30 @@ function appendGeneratedImageMarkdown(content, imagePlan, generatedImage) {
   const caption = title.endsWith('示意图') ? title : `${title}示意图`;
   const normalizedContent = String(content || '').trimEnd();
   return `${normalizedContent}\n\n![${caption}](${generatedImage.asset_url})\n\n*图：${caption}*`;
+}
+
+function hasExistingIllustration(content, illustrationType) {
+  const text = String(content || '');
+  if (!text.trim()) {
+    return false;
+  }
+
+  const hasMarkdownImage = /!\[[^\]]*\]\([^)]*\)/.test(text) || /<img\b[^>]*>/i.test(text);
+  const hasMermaidBlock = /```\s*mermaid[\s\S]*?```/i.test(text);
+
+  if (illustrationType === 'ai' || illustrationType === 'mermaid') {
+    return hasMarkdownImage || hasMermaidBlock;
+  }
+  return false;
+}
+
+function stripIllustrationsForExpansion(content) {
+  return String(content || '')
+    .replace(/```\s*mermaid[\s\S]*?```/gi, '\n')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/^\s*\*?图[:：][^\n]*\*?\s*$/gm, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function appendMermaidImageMarkdown(content, mermaidPlan) {
@@ -852,6 +1410,20 @@ function countRetainedTablePlans(plans, excludedItemIds) {
   return count;
 }
 
+function countRetainedIllustrationPlans(plans, excludedItemIds, illustrationType) {
+  let count = 0;
+  for (const [itemId, value] of Object.entries(plans || {})) {
+    if (excludedItemIds?.has(itemId)) {
+      continue;
+    }
+    const storedPlan = normalizeStoredContentPlan(value);
+    if (storedPlan?.illustration_type === illustrationType) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function createImageStat() {
   return { planned: 0, attempted: 0, success: 0, failed: 0, skipped: 0 };
 }
@@ -953,6 +1525,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   }
 
   const projectOverview = payload.projectOverview || outlineData.project_overview || storedPlan.projectOverview || '';
+  const techRequirements = payload.techRequirements || payload.tech_requirements || storedPlan.techRequirements || '';
   const regenerate = Boolean(payload.regenerate);
   const targetItemId = String(payload.targetItemId || '').trim();
   const fullRegenerate = regenerate && !targetItemId;
@@ -960,7 +1533,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     outlineData = { ...outlineData, outline: clearOutlineContent(outlineData.outline) };
   }
 
-  const leaves = collectLeafContexts(outlineData.outline);
+  let leaves = collectLeafContexts(outlineData.outline);
   if (!leaves.length) {
     throw new Error('当前目录没有可生成正文的小节');
   }
@@ -969,7 +1542,8 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   const generationOptions = payload.generationOptions || payload.generation_options || {};
   const realTimeRender = payload.real_time_render !== false && payload.realTimeRender !== false;
   const tableRequirement = normalizeTableRequirement(generationOptions.tableRequirement ?? generationOptions.table_requirement);
-  const maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
+  let maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
+  const minimumWords = targetItemId ? 0 : normalizeMinimumWords(generationOptions.minimumWords ?? generationOptions.minimum_words);
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(payload, storedPlan);
   const imageAvailability = aiService.getImageModelAvailability
     ? aiService.getImageModelAvailability()
@@ -977,7 +1551,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   const aiImagesEnabled = Boolean(generationOptions.useAiImages ?? generationOptions.use_ai_images ?? imageAvailability.available) && imageAvailability.available;
   const mermaidImagesEnabled = Boolean(generationOptions.useMermaidImages ?? generationOptions.use_mermaid_images ?? Boolean(targetItemId));
   const requestedMaxImages = Number(generationOptions.maxAiImages ?? generationOptions.max_ai_images);
-  const maxAiImages = aiImagesEnabled
+  const configuredMaxAiImages = aiImagesEnabled
     ? Math.max(0, Math.min(Number.isFinite(requestedMaxImages) ? Math.round(requestedMaxImages) : 6, targetItemId ? 1 : leaves.length))
     : 0;
   const imageStats = { ai: createImageStat(), mermaid: createImageStat() };
@@ -987,6 +1561,10 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     planning_completed: 0,
     generation_total: 0,
     generation_completed: 0,
+    outline_expansion_total: MAX_OUTLINE_EXPANSION_ROUNDS,
+    outline_expansion_completed: 0,
+    minimum_words: minimumWords,
+    current_words: 0,
     illustration_total: 0,
     illustration_completed: 0,
   };
@@ -999,6 +1577,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   let aiImageTargets = [];
   let mermaidImageTargets = [];
   let sections = createInitialSections(leaves, fullRegenerate ? {} : storedPlan.contentGenerationSections);
+  const touchedItemIds = new Set();
   let tasksToRun = leaves.filter(({ item }) => {
     const section = sections[item.id];
     const content = section?.content || item.content || '';
@@ -1010,9 +1589,23 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       throw new Error('未找到要重新生成的正文小节');
     }
   }
-  const taskItemIds = new Set(tasksToRun.map(({ item }) => item.id));
-  const retainedTableCount = maxTables === null ? 0 : countRetainedTablePlans(storedContentPlans, taskItemIds);
-  const maxTablesForRun = maxTables === null ? null : Math.max(0, maxTables - retainedTableCount);
+  let runLimits = { maxTablesForRun: maxTables, maxAiImagesForRun: configuredMaxAiImages, retainedTableCount: 0, retainedAiImageCount: 0 };
+
+  function refreshRunLimits(targets = tasksToRun) {
+    const taskItemIds = new Set(targets.map(({ item }) => item.id));
+    maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
+    const retainedTableCount = maxTables === null ? 0 : countRetainedTablePlans(storedContentPlans, taskItemIds);
+    const retainedAiImageCount = countRetainedIllustrationPlans(storedContentPlans, taskItemIds, 'ai');
+    runLimits = {
+      maxTablesForRun: maxTables === null ? null : Math.max(0, maxTables - retainedTableCount),
+      maxAiImagesForRun: Math.max(0, configuredMaxAiImages - retainedAiImageCount),
+      retainedTableCount,
+      retainedAiImageCount,
+    };
+    return runLimits;
+  }
+
+  refreshRunLimits(tasksToRun);
   let logs = [`准备生成正文，共 ${leaves.length} 个小节。`];
   if (targetItemId) {
     logs = [`准备重新生成正文小节：${targetItemId}。`];
@@ -1021,10 +1614,13 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     ? '表格需求：大量，保持现有表格编排逻辑。'
     : tableRequirement === 'none'
       ? '表格需求：不要，本次正文编排不会安排表格。'
-      : `表格需求：${TABLE_REQUIREMENT_LABELS[tableRequirement]}，全文最多 ${maxTables} 个表格，本轮最多新增 ${maxTablesForRun} 个。`];
+      : `表格需求：${TABLE_REQUIREMENT_LABELS[tableRequirement]}，全文最多 ${maxTables} 个表格，本轮最多新增 ${runLimits.maxTablesForRun} 个。`];
   logs = [...logs, aiImagesEnabled
-    ? `AI 生图已启用，将在整体编排后择优生成，最多 ${maxAiImages} 张。`
+    ? `AI 生图已启用，将在整体编排后择优生成，全文最多 ${configuredMaxAiImages} 张，本轮最多新增 ${runLimits.maxAiImagesForRun} 张。`
     : 'AI 生图未启用或不可用，本次不会调用生图接口。'];
+  if (minimumWords > 0) {
+    logs = [...logs, `最低字数已启用：${minimumWords} 字，正文生成后将自动补足。`];
+  }
   logs = [...logs, mermaidImagesEnabled
     ? 'Mermaid 图片已启用，适合简单图示的小节会优先使用 Mermaid 图。'
     : 'Mermaid 图片未启用。'];
@@ -1039,8 +1635,26 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     logs = [...logs, message];
   });
 
+  function getLeafContentForWords(item) {
+    return sections[item.id]?.content || item.content || '';
+  }
+
+  function countTotalContentWords() {
+    return leaves.reduce((sum, { item }) => sum + countContentWords(getLeafContentForWords(item)), 0);
+  }
+
+  function leafWordStats() {
+    return leaves.map((context) => ({
+      ...context,
+      content: getLeafContentForWords(context.item),
+      words: countContentWords(getLeafContentForWords(context.item)),
+    }));
+  }
+
   function statsSnapshot() {
     contentStats.generation_completed = leaves.filter(({ item }) => ['success', 'error'].includes(sections[item.id]?.status)).length;
+    contentStats.current_words = countTotalContentWords();
+    contentStats.minimum_words = minimumWords;
     return { images: { total: sumImageStats(imageStats.ai, imageStats.mermaid), ai: { ...imageStats.ai }, mermaid: { ...imageStats.mermaid } }, content: { ...contentStats } };
   }
 
@@ -1054,12 +1668,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, technicalPlan);
 
   if (!tasksToRun.length) {
-    logs = [...logs, '正文已全部生成，无需重复生成。'];
-    technicalPlan = workspaceStore.updateTechnicalPlan({
-      contentGenerationTask: updateTask({ status: 'success', progress: 100, logs, stats: statsSnapshot() }),
-    });
-    updateTask({ status: 'success', progress: 100, logs, stats: statsSnapshot() }, technicalPlan);
-    return;
+    logs = [...logs, '正文已全部生成，将检查最低字数要求。'];
   }
 
   function saveSection(item, partial, contentForOutline, taskPartial = {}) {
@@ -1071,6 +1680,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       ...currentOutlineData,
       outline: updateOutlineItemContent(currentOutlineData.outline || outlineData.outline, item.id, outlineContent),
     };
+    outlineData = nextOutlineData;
     const saved = workspaceStore.updateTechnicalPlan({
       contentGenerationSections: sections,
       outlineData: nextOutlineData,
@@ -1135,9 +1745,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
           tableRequirement,
           maxTables,
           tableTotalSections: leaves.length,
-          imageGenerationAvailable: aiImagesEnabled && maxAiImages > 0,
+          imageGenerationAvailable: aiImagesEnabled && runLimits.maxAiImagesForRun > 0,
           mermaidGenerationAvailable: mermaidImagesEnabled,
-          maxAiImages,
+          maxAiImages: runLimits.maxAiImagesForRun,
           totalSections: tasksToRun.length,
           knowledgeItems,
         }),
@@ -1163,6 +1773,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   }
 
   async function planAll() {
+    refreshRunLimits(tasksToRun);
     contentStats.phase = 'planning';
     contentStats.planning_total = tasksToRun.length;
     contentStats.planning_completed = 0;
@@ -1173,10 +1784,10 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     await runWithConcurrency(tasksToRun, concurrency, planOne);
 
     const tableCandidates = tasksToRun.filter(({ item }) => contentPlans.get(item.id)?.table.needed);
-    const selectedTableIds = maxTablesForRun === null
+    const selectedTableIds = runLimits.maxTablesForRun === null
       ? new Set(tableCandidates.map(({ item }) => item.id))
-      : pickDistributedTableTargets(tableCandidates, maxTablesForRun);
-    if (maxTablesForRun !== null) {
+      : pickDistributedTableTargets(tableCandidates, runLimits.maxTablesForRun);
+    if (runLimits.maxTablesForRun !== null) {
       for (const { item } of tableCandidates) {
         if (!selectedTableIds.has(item.id)) {
           contentPlans.set(item.id, clearContentPlanTable(contentPlans.get(item.id)));
@@ -1188,7 +1799,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     const aiImageCandidates = tasksToRun.filter(({ item }) => contentPlans.get(item.id)?.image.needed);
     selectedAiImageIds = pickDistributedImageTargets(
       aiImageCandidates.map((context) => ({ ...context, plan: contentPlans.get(context.item.id) })),
-      maxAiImages,
+      runLimits.maxAiImagesForRun,
     );
     aiImageTargets = tasksToRun.filter(({ item }) => selectedAiImageIds.has(item.id));
     mermaidImageTargets = mermaidCandidates.filter(({ item }) => !selectedAiImageIds.has(item.id));
@@ -1197,7 +1808,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     imageStats.ai.planned = selectedAiImageIds.size;
     imageStats.ai.skipped += Math.max(0, aiImageCandidates.length - selectedAiImageIds.size);
 
-    logs = [...logs, `整体编排完成：表格候选 ${tableCandidates.length} 个，${maxTablesForRun === null ? '保持现有编排' : `入选 ${selectedTableIds.size} 个`}；AI 生图候选 ${aiImageCandidates.length} 张，入选 ${selectedAiImageIds.size} 张；Mermaid 候选 ${mermaidCandidates.length} 张，执行 ${mermaidImageTargets.length} 张。`];
+    logs = [...logs, `整体编排完成：表格候选 ${tableCandidates.length} 个，${runLimits.maxTablesForRun === null ? '保持现有编排' : `入选 ${selectedTableIds.size} 个`}；AI 生图候选 ${aiImageCandidates.length} 张，入选 ${selectedAiImageIds.size} 张；Mermaid 候选 ${mermaidCandidates.length} 张，执行 ${mermaidImageTargets.length} 张。`];
     const mermaidImageIds = new Set(mermaidImageTargets.map(({ item }) => item.id));
     persistContentPlans(tasksToRun, ({ item }) => {
       if (selectedAiImageIds.has(item.id)) {
@@ -1275,6 +1886,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
 
       content = stripRepeatedChapterTitle(normalizeGeneratedMarkdown(rawContent), item);
       logs = [...logs, `生成完成：${item.id} ${item.title || '未命名章节'}`];
+      touchedItemIds.add(item.id);
       saveSection(item, { status: 'success', content, error: undefined }, content, { logs });
     } catch (error) {
       const message = error.message || '正文生成失败';
@@ -1285,6 +1897,259 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         error: message,
       }, isSingleSectionRegeneration ? previousContent : content, { logs });
     }
+  }
+
+  function pruneRuntimeContentPlans() {
+    const leafIds = new Set(leaves.map(({ item }) => item.id));
+    for (const itemId of Array.from(contentPlans.keys())) {
+      if (!leafIds.has(itemId)) {
+        contentPlans.delete(itemId);
+      }
+    }
+  }
+
+  function refreshOutlineState(nextOutline, invalidatedItemIds = new Set()) {
+    outlineData = { ...outlineData, outline: nextOutline };
+    for (const itemId of invalidatedItemIds) {
+      delete sections[itemId];
+      delete storedContentPlans[itemId];
+      contentPlans.delete(itemId);
+    }
+    leaves = collectLeafContexts(outlineData.outline);
+    sections = createInitialSections(leaves, sections);
+    storedContentPlans = pruneContentGenerationPlans(storedContentPlans, leaves);
+    pruneRuntimeContentPlans();
+    refreshRunLimits(tasksToRun);
+    const saved = workspaceStore.updateTechnicalPlan({
+      outlineData,
+      contentGenerationSections: sections,
+      contentGenerationPlans: storedContentPlans,
+    });
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved);
+    return saved;
+  }
+
+  function medianLeafWords() {
+    const words = leafWordStats()
+      .map((item) => item.words)
+      .filter((value) => value > 0)
+      .sort((a, b) => a - b);
+    if (!words.length) return 600;
+    return words[Math.floor(words.length / 2)] || 600;
+  }
+
+  function pendingContentContexts() {
+    return leaves.filter(({ item }) => {
+      const section = sections[item.id];
+      const content = section?.content || item.content || '';
+      return section?.status === 'error' || !String(content).trim();
+    });
+  }
+
+  async function runOutlineExpansionRound(round) {
+    const nodeMap = createOutlineNodeMap(outlineData.outline || []);
+    const currentWords = countTotalContentWords();
+    contentStats.phase = 'outline-expanding';
+    contentStats.outline_expansion_total = MAX_OUTLINE_EXPANSION_ROUNDS;
+    contentStats.outline_expansion_completed = round - 1;
+    logs = [...logs, `最低字数未达标，开始第 ${round}/${MAX_OUTLINE_EXPANSION_ROUNDS} 轮补目录。`];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+    const patch = await aiService.collectJsonResponse({
+      messages: buildOutlineExpansionMessages({
+        projectOverview,
+        techRequirements,
+        outlineData,
+        currentWords,
+        minimumWords,
+        medianLeafWords: medianLeafWords(),
+        round,
+        nodeMap,
+      }),
+      temperature: 0.4,
+      progressLabel: '最低字数补目录',
+      failureMessage: '模型返回的补目录数据格式无效',
+      normalizer: (value) => normalizeOutlineExpansionResponse(value, { nodeMap }),
+      validator: validateOutlineExpansionResponse,
+      repairMessagesBuilder: (context) => buildOutlineExpansionRepairMessages(context, nodeMap),
+    });
+
+    if (!patch.additions.length) {
+      contentStats.outline_expansion_completed = round;
+      logs = [...logs, `第 ${round} 轮补目录未返回可用新增目录。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return 0;
+    }
+
+    const { outline, invalidatedItemIds, addedCount } = applyOutlineExpansionAdditions(outlineData.outline || [], patch);
+    contentStats.outline_expansion_completed = round;
+    logs = [...logs, `第 ${round} 轮补目录已应用：新增 ${addedCount} 个目录节点，清空 ${invalidatedItemIds.size} 个旧叶子正文并返还其编排额度。`];
+    refreshOutlineState(outline, invalidatedItemIds);
+    return addedCount;
+  }
+
+  async function runOutlineExpansionIfNeeded() {
+    if (minimumWords <= 0 || countTotalContentWords() >= minimumWords * OUTLINE_EXPANSION_TARGET_RATIO) {
+      return;
+    }
+
+    let addedTotal = 0;
+    for (let round = 1; round <= MAX_OUTLINE_EXPANSION_ROUNDS; round += 1) {
+      try {
+        addedTotal += await runOutlineExpansionRound(round);
+      } catch (error) {
+        logs = [...logs, `第 ${round} 轮补目录失败：${error.message || '模型返回无效'}。`];
+        contentStats.outline_expansion_completed = round;
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      }
+
+      const estimatedWords = countTotalContentWords() + pendingContentContexts().length * medianLeafWords();
+      if (estimatedWords >= minimumWords * OUTLINE_EXPANSION_TARGET_RATIO) {
+        logs = [...logs, `补目录预估可达到最低字数的 ${Math.round(OUTLINE_EXPANSION_TARGET_RATIO * 100)}%，准备生成新增正文。`];
+        break;
+      }
+    }
+
+    tasksToRun = pendingContentContexts();
+    if (!tasksToRun.length) {
+      logs = [...logs, addedTotal ? '补目录后没有待生成叶子，直接进入正文扩写。' : '未补充到可生成目录，直接进入正文扩写。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return;
+    }
+
+    refreshRunLimits(tasksToRun);
+    logs = [...logs, `开始为补充后的 ${tasksToRun.length} 个叶子小节生成正文。`];
+    await planAll();
+    await runWithConcurrency(tasksToRun, concurrency, runOne);
+  }
+
+  function refreshIllustrationTargetsFromStoredPlans(candidateItemIds) {
+    imageStats.ai = createImageStat();
+    imageStats.mermaid = createImageStat();
+    const currentPlan = workspaceStore.loadTechnicalPlan() || {};
+    const currentSections = currentPlan.contentGenerationSections || sections;
+    const candidateIds = candidateItemIds instanceof Set ? candidateItemIds : new Set();
+    const targets = leaves.filter(({ item }) => {
+      if (!candidateIds.has(item.id)) {
+        return false;
+      }
+      const section = currentSections[item.id] || {};
+      const content = section.content || item.content || '';
+      return section.status === 'success' && String(content || '').trim();
+    });
+    applyIllustrationTargets(targets, ({ item }) => {
+      const storedContentPlan = normalizeStoredContentPlan(storedContentPlans[item.id]);
+      if (storedContentPlan?.plan) {
+        contentPlans.set(item.id, storedContentPlan.plan);
+      }
+      const illustrationType = storedContentPlan?.illustration_type || 'none';
+      const content = currentSections[item.id]?.content || item.content || '';
+      if (illustrationType !== 'none' && hasExistingIllustration(content, illustrationType)) {
+        imageStats[illustrationType].skipped += 1;
+        return 'none';
+      }
+      return illustrationType;
+    });
+  }
+
+  let expansionOffset = 0;
+
+  function selectExpansionBatch() {
+    const candidates = leafWordStats()
+      .filter(({ item, content }) => sections[item.id]?.status === 'success' && String(content || '').trim())
+      .sort((a, b) => a.words - b.words);
+    if (!candidates.length) return { batch: [], completesCycle: false };
+
+    const middle = Math.floor(candidates.length / 2);
+    const maxOffset = Math.max(middle, candidates.length - 1 - middle);
+    if (expansionOffset === 0 || expansionOffset > maxOffset) {
+      expansionOffset = 1;
+      return { batch: [candidates[middle]], completesCycle: maxOffset === 0 };
+    }
+
+    const batch = [];
+    if (middle - expansionOffset >= 0) {
+      batch.push(candidates[middle - expansionOffset]);
+    }
+    if (middle + expansionOffset < candidates.length && batch.length < CONTENT_EXPANSION_CONCURRENCY) {
+      batch.push(candidates[middle + expansionOffset]);
+    }
+    expansionOffset += 1;
+    return { batch, completesCycle: expansionOffset > maxOffset };
+  }
+
+  async function expandOneSection(context) {
+    const { item, content, words } = context;
+    const contentForPrompt = stripIllustrationsForExpansion(content) || content;
+    const targetWords = Math.max(words * 2, words + MIN_SECTION_EXPANSION_INCREMENT);
+    logs = [...logs, `开始扩写：${item.id} ${item.title || '未命名章节'}（当前 ${words} 字，目标 ${targetWords} 字）。`];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+    try {
+      const patch = await aiService.collectJsonResponse({
+        messages: buildContentExpansionMessages({
+          outlineData,
+          context,
+          projectOverview,
+          currentContent: contentForPrompt,
+          currentWords: words,
+          targetWords,
+        }),
+        temperature: 0.7,
+        progressLabel: '正文扩写',
+        failureMessage: '模型返回的正文扩写结果格式无效',
+        normalizer: normalizeContentExpansionPatch,
+        validator: validateContentExpansionPatch,
+        repairMessagesBuilder: buildContentExpansionRepairMessages,
+      });
+      const nextContent = applyContentExpansionPatch(content, patch);
+      const nextWords = countContentWords(nextContent);
+      logs = [...logs, `扩写完成：${item.id} ${item.title || '未命名章节'}（${words} -> ${nextWords} 字）。`];
+      touchedItemIds.add(item.id);
+      saveSection(item, { status: 'success', content: nextContent, error: undefined }, nextContent, { logs });
+    } catch (error) {
+      logs = [...logs, `扩写失败：${item.id} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    }
+  }
+
+  async function ensureMinimumWords() {
+    let currentWords = countTotalContentWords();
+    logs = [...logs, `正文生成后当前总字数 ${currentWords} 字，最低字数 ${minimumWords} 字。`];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    if (currentWords >= minimumWords) {
+      logs = [...logs, '当前总字数已达到最低字数要求。'];
+      return;
+    }
+
+    await runOutlineExpansionIfNeeded();
+
+    currentWords = countTotalContentWords();
+    let expansionCycleStartWords = currentWords;
+    while (currentWords < minimumWords) {
+      contentStats.phase = 'expanding';
+      logs = [...logs, `开始正文扩写，当前 ${currentWords}/${minimumWords} 字。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+      const { batch, completesCycle } = selectExpansionBatch();
+      if (!batch.length) {
+        throw new Error('没有可扩写的成功正文小节，无法补足最低字数');
+      }
+      await Promise.all(batch.map(expandOneSection));
+      currentWords = countTotalContentWords();
+      if (completesCycle) {
+        if (currentWords <= expansionCycleStartWords) {
+          const message = `正文扩写已覆盖一轮可选小节，但总字数没有增长，无法继续补足最低字数（当前 ${currentWords}/${minimumWords} 字）。`;
+          logs = [...logs, message];
+          updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+          throw new Error(message);
+        }
+        expansionCycleStartWords = currentWords;
+      }
+    }
+
+    logs = [...logs, `最低字数已达成：${currentWords}/${minimumWords} 字，准备进入配图阶段。`];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
   }
 
   function getCurrentSuccessfulContent(item) {
@@ -1393,13 +2258,20 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
   }
 
-  if (targetItemId) {
-    await prepareSingleSectionPlan();
-  } else {
-    await planAll();
+  if (tasksToRun.length) {
+    if (targetItemId) {
+      await prepareSingleSectionPlan();
+    } else {
+      await planAll();
+    }
+
+    await runWithConcurrency(tasksToRun, concurrency, runOne);
   }
 
-  await runWithConcurrency(tasksToRun, concurrency, runOne);
+  if (!targetItemId) {
+    await ensureMinimumWords();
+    refreshIllustrationTargetsFromStoredPlans(touchedItemIds);
+  }
 
   await runIllustrations();
 
@@ -1411,6 +2283,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     ? (failedCount ? `小节重新生成结束，当前整体进度 ${finalProgress}%，${failedCount} 个小节失败。` : `小节重新生成完成，当前整体进度 ${finalProgress}%。`)
     : (failedCount ? `正文生成完成，${failedCount} 个小节失败。` : '正文生成完成。')];
   technicalPlan = workspaceStore.updateTechnicalPlan({
+    outlineData,
     contentGenerationSections: sections,
     contentGenerationPlans: storedContentPlans,
     contentGenerationTask: updateTask({ status: finalStatus, progress: finalProgress, logs, stats: statsSnapshot() }),

@@ -13,6 +13,7 @@ export interface ContentGenerationOptions {
   maxAiImages: number;
   useMermaidImages: boolean;
   tableRequirement: ContentTableRequirement;
+  minimumWords: number;
 }
 
 export interface ContentImageStats {
@@ -34,11 +35,15 @@ export interface BackgroundTaskState {
   error?: string;
   stats?: {
     content?: {
-      phase: 'planning' | 'generating' | 'illustrating' | 'done';
+      phase: 'planning' | 'generating' | 'outline-expanding' | 'expanding' | 'illustrating' | 'done';
       planning_total: number;
       planning_completed: number;
       generation_total: number;
       generation_completed: number;
+      outline_expansion_total?: number;
+      outline_expansion_completed?: number;
+      minimum_words?: number;
+      current_words?: number;
       illustration_total?: number;
       illustration_completed?: number;
     };

@@ -1,6 +1,10 @@
 # Findings
 
 ## Research Log
+- Step04 最低字数当前缺口：Renderer `ContentEditPage.tsx` 的 `countWords()` 只是去空白长度，会把图片 Markdown、URL、代码块、Mermaid 代码都算入；Main 侧 `contentGenerationTask.cjs` 当前没有字数统计，也没有 `outline-expanding/expanding` 阶段。
+- Step04 当前完整流程在 `contentGenerationTask.cjs` 中是 `planAll/prepareSingleSectionPlan -> runOne -> runIllustrations -> done`；最低字数逻辑应插入 `runOne` 之后、`runIllustrations` 之前。
+- 当前 `contentGenerationPlans` 按叶子 ID 保存最终表格/配图编排；补目录若让旧叶子变成非叶子，必须删除对应 section/plan/content，否则额度计算和导出都会错。
+- 现有图表/表格额度计算已支持“排除本轮任务 ID 后扣减历史计划”：`countRetainedTablePlans()` 和 `maxTablesForRun`，新增叶子生成时可复用同思路并重新按当前有效叶子裁剪 plans。
 - 当前 `taskService.cjs` 只用 `activeTasks: Map<type, task>` 按任务类型去重，不存在任务组锁；因此 `content-generation` 运行中仍可启动 `bid-analysis`，会造成技术方案工作区交叉写入风险。
 - 技术方案 Step02 全量重跑当前在 Renderer 的 `BidAnalysisPage.tsx` 里先 `onAnalysisReset()` 清空页面状态，再调用 `config.load()` 和 `startBidAnalysis()`；按新策略应改为 Main 侧启动后清空。
 - 已确认 Step04 Main 侧 `contentGenerationTask.cjs` 在 `regenerate && !targetItemId` 时会清空 `outlineData.outline[*].content`，并以空 sections/plans 启动；因此需要移除 Renderer 侧 `onContentReset()` 预清空，避免启动失败时旧正文被前端 autosave 覆盖。
@@ -134,6 +138,9 @@
 - 自定义生图已按 OpenAI compatible 协议接入：`POST {base_url}/images/generations`，`Authorization: Bearer <api_key>`，请求体含 `model/prompt/size/response_format`；若服务端明确不支持 `response_format`，会自动重试一次不带该字段。测试预览同时支持返回 `data[0].url` 和 `data[0].b64_json`。
 - `/api/github-repo-stats` 的 `repo:null` 代码路径在 `analytics/worker/src/routes/githubRepoStats.js`：GitHub API fetch 失败后 catch 只记录日志并返回 `{ code: 0, repo: null, cached: false }`，Dashboard 因 `code:0` 不会暴露错误原因。仓库 `FB208/OpenBidKit_Yibiao` 本身公开可访问，直接 GitHub API 返回 stars=399、forks=147、openIssues=4。修复后 API 优先，失败走 GitHub HTML counter 兜底；KV 缓存采用手动 30 分钟新鲜度、7 天 stale 保留，无缓存且实时读取失败时返回 502 诊断信息。
 - GitHub HTML fallback 不能把未解析出的 counter 当 0：真实场景中 GitHub 页面某个 id 变化会导致未知字段被缓存为 0。已改为三个 counter 全部解析成功才接受 HTML fallback，否则无缓存返回 502，有 stale cache 返回旧缓存。
+- Step04 最低字数最终配图不能简单扫描所有成功叶子：继续生成正文时历史成功章节仍保留 `contentGenerationPlans.illustration_type`，如果再次按所有成功叶子入队，会重复追加图片或 Mermaid。正确口径是本次任务生成、补目录生成或扩写过且当前成功的叶子，并对正文中已有图片/Mermaid 做幂等跳过。
+- Step04 补字数不能只有 `while (currentWords < minimumWords)`：如果扩写请求持续失败、返回无效 JSON 或合并后字数不增加，`selectExpansionBatch()` 会循环选择成功叶子导致后台任务无限 running。应按“完整覆盖一轮可选叶子后总字数是否增长”退出，不引入固定次数上限。
+- Step04 扩写 JSON 的 `operation` 不能在 normalizer 里把非 `replace` 默认转成 `insert`：这会让 `delete/rewrite_full/rewrite` 等非法操作绕过 validator，无法进入 JSON 修复链路。应保留原始 operation 并由 validator 拒绝非法值。
 ## Rejection Check Step03 Findings
 - Step03 当前只是 UI 骨架：`RejectionCheckPage.tsx` 中“开始检查”只打开配置或提示后续接入，结果内容区域固定显示占位文案。
 - `rejectionCheckService.ts` 中旧 `requestRejectionCheck()` 依赖未实现的 `buildRejectionCheckMessages()`，且旧类型 `RejectionCheckReport/RejectionRiskItem` 未被页面使用，适合用最小改动替换为新检查流程。

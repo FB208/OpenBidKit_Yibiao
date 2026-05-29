@@ -1,5 +1,46 @@
 # Task Plan
 
+## Current Task: Step04 最低字数控制
+
+### Goal
+在技术方案 Step04 正文生成中实现最低字数配置：默认 0 不限制；生成后不足时按设计先补目录或直接扩写，扩写不设硬上限直到达标；补目录允许新增二/三/四级目录并在旧叶子变非叶子时返还表格、AI 图、Mermaid 图等编排额度；配图必须在最低字数达标后执行。
+
+### Phases
+- [completed] 1. 梳理当前 Step04 生成链路并建立实现计划。
+- [completed] 2. 新增统一字数统计工具，接入 Renderer 总字数展示和 Main 判断。
+- [completed] 3. 扩展 `ContentGenerationOptions`、任务 stats 类型和正文生成配置 UI。
+- [completed] 4. 改造 `contentGenerationTask.cjs`：补目录、生成新增叶子、无限扩写、额度返还、阶段进度。
+- [completed] 5. 运行 CJS 语法检查、客户端构建和必要 smoke test。
+- [completed] 6. 按最新反馈完善 `client/doc/字数控制.md`，明确补目录/扩写阶段不配图，最低字数达标后统一配图。
+- [completed] 7. 修正最终配图目标，进入图片阶段时按当前有效且正文成功的全部叶子统一汇总。
+- [completed] 8. 修正补字数批次顺序，首批只扩写中位数节点，后续按左右两端成对扩写。
+- [completed] 9. 增强补目录 JSON 严格校验和合并后完整目录校验。
+- [completed] 10. 运行 CJS 语法检查、针对性 smoke test、客户端构建和 diff 检查。
+
+### Decisions
+- Renderer 只负责配置、启动和展示，最低字数补足全流程放在 Main 后台任务中。
+- 最低字数为 `0` 时保持现有生成行为，不额外消耗 AI 请求。
+- 补字数不设置硬上限；如果可选节点耗尽，允许重新从成功叶子中循环选择并继续扩写。
+- 补目录最多 3 轮，最终达标责任交给补字数阶段。
+- 尽量保留既有节点 ID；新增节点由程序分配不冲突 ID，旧叶子变非叶子时清空正文和编排计划并返还额度。
+- 补目录 JSON 顶层只接受 `additions`；如果同时返回合法新增目录和 `outline`、正文、图片、表格、编排计划等非法字段，也必须触发 JSON 修复。
+- 最终配图目标不再按本轮生成/扩写 ID 过滤，统一使用当前有效且 `status: success` 的叶子节点。
+- 补字数选择顺序固定为首批中位数，第二批起按中位数左右偏移成对选择；可选节点耗尽后重新回到中位数。
+- 最终配图目标改为本次任务实际生成、补目录生成或扩写过的成功叶子；历史成功但本次未触达的小节不重新配图。
+- `minimumWords = 0` 不使用单独流程；进入最低字数检查后通过 `currentWords >= minimumWords` 自然跳过补目录/扩写。
+- 配图阶段对正文中已有图片或 Mermaid 图的小节做幂等跳过，避免重复追加配图。
+- 补字数不设置固定次数上限；完整覆盖一轮可选成功叶子后如果总字数没有增长，则结束扩写并报错，避免无限消耗 AI 请求。
+- 扩写 JSON 必须保留原始 `operation` 并只允许 `insert` / `replace`；非法操作应触发 JSON 修复，不能默认当作 `insert`。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 补目录 smoke test 访问 `children[0]` 报错 | 第一次补目录 smoke test | 测试初始正文过长，未触发补目录；改为按 stream 调用次数返回短初稿/长新增正文后通过 |
+| 扩写顺序 smoke test 首次解析到根目录 `1` | 第一次扩写顺序 smoke test | 测试脚本从章节路径取了第一个 ID；改为取路径最后一段后通过 |
+| 首次全文配图 smoke test 两个标题都解析成 `B Pic` | 第一次首次全文配图 smoke test | 测试脚本从 prompt 提取章节 ID 不可靠；改为按编排调用序号返回不同标题后通过 |
+| 无增长保护 smoke test 扩写请求计数为 6 | 第一次无增长保护 smoke test | 测试最低字数过高导致先触发 3 轮补目录，计数混入补目录请求；改为直接进入扩写区间后通过 |
+| 无 | 扩写非法 operation smoke test | `delete` 被 validator 拒绝，未追加非法 content，随后由无增长保护结束任务 |
+
 ## Current Task: 后台任务组锁与技术方案清空策略
 
 ### Goal

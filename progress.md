@@ -1,6 +1,10 @@
 # Progress
 
 ## Session Log
+- 开始 Step04 最低字数控制实现：已根据 `client/doc/字数控制.md` 和用户反馈确认范围，准备先新增统一字数统计，再扩展配置/UI，最后改造 Main 侧正文生成任务，把扩写插入配图前。
+- 已完成第一轮代码接入：新增 Renderer/Main 同口径字数统计工具；Step04 配置 UI 增加最低字数，任务 stats 支持 `outline-expanding/expanding`；Main 侧正文任务已插入补目录、生成新增叶子、无限扩写和配图前统一刷新配图目标。`node --check` 已通过 `contentGenerationTask.cjs`、`wordCount.cjs`、`preload.cjs`。
+- 验证进展：`npm run build` 通过，仅有既有 chunk 体积警告；正文任务模块加载通过；字数统计 smoke test 返回 9，确认图片、Mermaid 代码块和裸 URL 未计入；最低字数扩写 smoke test 通过，任务最终 `success` 且字数达标；补目录清理旧叶子 smoke test 通过，旧 `1.1` section/plan 被移除，新 `1.1.1` section 生成。
+- 修正并验证“继续生成”配图范围：最终配图目标只取本轮生成/扩写过的叶子，避免保留的旧章节重复插图；smoke test 确认已有 `1.1` 未重复配图，新增 `1.2` 正常配图。
 - 开始执行后台任务组锁与技术方案清空策略：已确认当前文档规则，准备先改 `taskService.cjs` 的技术方案/废标项任务定义与锁检查，再把 Step02/Step03/Step04 清空规则收敛到 Main 侧。
 - 已完成后台任务组锁与技术方案清空策略：`taskService.cjs` 新增任务定义、组锁冲突检查和任务元数据；技术方案/废标项检查组内不同任务并发启动会被拒绝；Step03 启动时 Main 侧清旧目录/正文；Step02/Step04 去掉 Renderer 启动前业务清空。验证通过 4 个 CJS `node --check`、技术方案组锁冲突 smoke test、`cd client; npm run build` 和 `git diff --check`，构建仅有既有 chunk 体积警告，diff check 仅有既有 LF/CRLF 提示。
 - 已完成标书查重迁入任务组体系：新增 `duplicate-analysis` 外层任务和 `duplicateCheck` stateKey；`duplicateCheckService.runAnalysisTask()` 作为 taskService runner，内部元数据/目录/正文/图片子流程并发保持不变；前端改为 `tasks.startDuplicateAnalysis()` + `tasks.onTaskEvent()`；旧 `duplicate-check:start-metadata-analysis` IPC 兼容转发到 taskService。验证通过相关 CJS 语法检查、模块加载、任务注册 smoke test、`npm run build` 和 `git diff --check`。
@@ -119,3 +123,6 @@
 - 验证完成：`cd client && npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 通过，仅有 Git LF/CRLF 提示。
 - 按评审修复 Step03 健壮性：废标项 Step02 流式解析不再因 10 秒无 chunk 自动标成功；缓存中的 `running + content` 恢复为 error 并要求重新解析；Step03 检查要求 Step02 状态为 success；第三轮最终 JSON 改为 `aiClient.requestJson()`，复用 Main 侧 JSON 提取、修复和重试链路。
 - 评审修复验证完成：`cd client && npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 通过，仅有 Git LF/CRLF 提示。
+- 已修复 Step04 继续生成重复配图问题：最终配图目标改为本次任务实际生成/补目录生成/扩写过的成功叶子，历史成功但本次未触达的小节不重新配图；`minimumWords=0` 通过正常字数判断自然跳过补目录/扩写；扩写 prompt 会移除旧图片/Mermaid 上下文；已有图片或 Mermaid 的目标小节会跳过配图。验证通过 CJS 语法检查、继续生成不重复配图 smoke test、首次全文配图 smoke test、扩写顺序 smoke test、`npm run build` 和 `git diff --check`（仅 LF/CRLF 警告）。
+- 已修复 Step04 补字数无限循环风险：扩写批次现在会返回是否完成一整轮候选覆盖，`ensureMinimumWords()` 在每轮开始记录总字数，完整一轮后如果总字数没有增长就写日志并抛错结束任务，不设置固定次数上限。验证通过 CJS 语法检查、无增长保护 smoke test、扩写顺序 smoke test、`npm run build` 和 `git diff --check`（仅 LF/CRLF 警告）。
+- 已修复 Step04 扩写非法 operation 被吞成 insert 的问题：`normalizeContentExpansionPatch()` 现在保留原始 operation，`validateContentExpansionPatch()` 会拒绝非 `insert/replace` 并触发 JSON 修复链路；新增正文扩写专用修复 prompt，明确禁止 `delete/rewrite_full/rewrite/append/update`。验证通过 CJS 语法检查、非法 operation smoke test、`npm run build` 和 `git diff --check`（仅 LF/CRLF 警告）。

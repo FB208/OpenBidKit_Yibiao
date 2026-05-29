@@ -6,6 +6,7 @@ import type { Components } from 'react-markdown';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { MarkdownEditor, MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
+import { countReadableWords } from '../../../shared/utils/wordCount';
 import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement } from '../types';
 
 interface ContentEditPageProps {
@@ -54,6 +55,7 @@ const defaultContentGenerationOptions: ContentGenerationOptions = {
   maxAiImages: 6,
   useMermaidImages: true,
   tableRequirement: 'heavy',
+  minimumWords: 0,
 };
 
 function isContentTableRequirement(value: unknown): value is ContentTableRequirement {
@@ -72,6 +74,7 @@ function normalizeGenerationOptions(options: ContentGenerationOptions | undefine
   const fallback = buildDefaultGenerationOptions(imageModelAvailable, leafCount);
   const maxAiImagesLimit = Math.max(1, leafCount);
   const requestedMaxAiImages = Number(options?.maxAiImages ?? fallback.maxAiImages);
+  const requestedMinimumWords = Number(options?.minimumWords ?? fallback.minimumWords);
   const tableRequirement = options?.tableRequirement;
 
   return {
@@ -79,6 +82,7 @@ function normalizeGenerationOptions(options: ContentGenerationOptions | undefine
     maxAiImages: Math.max(0, Math.min(Number.isFinite(requestedMaxAiImages) ? Math.round(requestedMaxAiImages) : fallback.maxAiImages, maxAiImagesLimit)),
     useMermaidImages: Boolean(options?.useMermaidImages ?? fallback.useMermaidImages),
     tableRequirement: isContentTableRequirement(tableRequirement) ? tableRequirement : fallback.tableRequirement,
+    minimumWords: Math.max(0, Number.isFinite(requestedMinimumWords) ? Math.round(requestedMinimumWords) : fallback.minimumWords),
   };
 }
 
@@ -110,7 +114,7 @@ function findItem(items: OutlineItem[], id: string): OutlineItem | null {
 }
 
 function countWords(content: string) {
-  return content.replace(/\s+/g, '').length;
+  return countReadableWords(content);
 }
 
 function getLeafContent(item: OutlineItem, sections: ContentGenerationSections) {
@@ -328,6 +332,8 @@ function ContentEditPage({
   const running = task?.status === 'running';
   const contentStats = task?.stats?.content;
   const planning = running && contentStats?.phase === 'planning';
+  const outlineExpanding = running && contentStats?.phase === 'outline-expanding';
+  const expanding = running && contentStats?.phase === 'expanding';
   const illustrating = running && contentStats?.phase === 'illustrating';
   const outlineMeta = useMemo(() => outlineData?.outline ? buildOutlineMeta(outlineData.outline, sections, planning) : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections]);
   const contentSummary = useMemo(() => leaves.reduce((summary, item) => {
@@ -343,18 +349,41 @@ function ContentEditPage({
   const planningTotal = contentStats?.planning_total || leaves.length;
   const planningCompleted = contentStats?.planning_completed || 0;
   const planningProgress = planningTotal ? Math.round((planningCompleted / planningTotal) * 100) : 0;
+  const outlineExpansionTotal = contentStats?.outline_expansion_total || 3;
+  const outlineExpansionCompleted = contentStats?.outline_expansion_completed || 0;
+  const outlineExpansionProgress = outlineExpansionTotal ? Math.round((outlineExpansionCompleted / outlineExpansionTotal) * 100) : 0;
+  const minimumWords = contentStats?.minimum_words || 0;
+  const currentWords = contentStats?.current_words ?? totalWords;
+  const wordExpansionProgress = minimumWords ? Math.min(100, Math.round((currentWords / minimumWords) * 100)) : 0;
   const illustrationTotal = contentStats?.illustration_total || 0;
   const illustrationCompleted = contentStats?.illustration_completed || 0;
   const illustrationProgress = illustrationTotal ? Math.round((illustrationCompleted / illustrationTotal) * 100) : 0;
-  const displayProgress = planning ? planningProgress : illustrating ? illustrationProgress : progress;
-  const displayProgressLabel = planning ? '编排统计' : illustrating ? '配图统计' : '生成统计';
+  const displayProgress = planning ? planningProgress : outlineExpanding ? outlineExpansionProgress : expanding ? wordExpansionProgress : illustrating ? illustrationProgress : progress;
+  const displayProgressLabel = planning ? '编排统计' : outlineExpanding ? '补目录' : expanding ? '扩写进度' : illustrating ? '配图统计' : '生成统计';
   const displayProgressCount = planning
     ? `${planningCompleted}/${planningTotal}`
-    : illustrating
-      ? `${illustrationCompleted}/${illustrationTotal}`
-      : `${completedCount}/${leaves.length}`;
-  const progressPhaseLabel = planning ? '正文编排' : illustrating ? '正文配图' : '正文生成';
+    : outlineExpanding
+      ? `${outlineExpansionCompleted}/${outlineExpansionTotal}`
+      : expanding
+        ? `${wordExpansionProgress}%`
+        : illustrating
+          ? `${illustrationCompleted}/${illustrationTotal}`
+          : `${completedCount}/${leaves.length}`;
+  const progressPhaseLabel = planning ? '正文编排' : outlineExpanding ? '正文补目录' : expanding ? '正文扩写' : illustrating ? '正文配图' : '正文生成';
   const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${illustrating ? ' is-illustrating' : ''}`;
+  const progressDescription = planning
+    ? `正在编排正文结构，已完成 ${planningCompleted}/${planningTotal} 个小节。`
+    : outlineExpanding
+      ? `正在补充目录，已完成 ${outlineExpansionCompleted}/${outlineExpansionTotal} 轮。`
+      : expanding
+        ? `正在扩写正文，最低字数达成 ${wordExpansionProgress}%。`
+        : illustrating
+          ? `正在生成配图，已完成 ${illustrationCompleted}/${illustrationTotal} 张。`
+          : running
+            ? task?.logs?.[task.logs.length - 1] || '正文生成任务正在运行。'
+            : completedCount
+              ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。`
+              : '点击生成正文后，目录会实时显示每个小节状态。';
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
   const editing = Boolean(selectedItem && selectedIsLeaf && editingItemId === selectedItem.id);
   const imageStats = task?.stats?.images;
@@ -461,6 +490,7 @@ function ContentEditPage({
           maxAiImages: savedGenerationOptions.maxAiImages,
           useMermaidImages: savedGenerationOptions.useMermaidImages,
           tableRequirement: savedGenerationOptions.tableRequirement,
+          minimumWords: savedGenerationOptions.minimumWords,
         },
         real_time_render: shouldRealTimeRender,
       });
@@ -669,7 +699,7 @@ function ContentEditPage({
                 <div className={progressTrackClass} aria-label={`${progressPhaseLabel}进度 ${displayProgress}%`}>
                   <span style={{ width: `${displayProgress}%` }} />
                 </div>
-                <p>{planning ? `正在编排正文结构，已完成 ${planningCompleted}/${planningTotal} 个小节。` : illustrating ? `正在生成配图，已完成 ${illustrationCompleted}/${illustrationTotal} 张。` : running ? task?.logs?.[task.logs.length - 1] || '正文生成任务正在运行。' : completedCount ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。` : '点击生成正文后，目录会实时显示每个小节状态。'}</p>
+                <p>{progressDescription}</p>
                 {failedCount > 0 && <small>失败 {failedCount} 个小节</small>}
               </div>
             )}
@@ -747,7 +777,7 @@ function ContentEditPage({
               <Dialog.Description>
                 {completedCount === leaves.length && leaves.length
                   ? '重新生成会先清空全文正文、章节状态和任务进度，再从头生成。'
-                  : '开始生成前确认是否配图，以及本次最多生成多少张 AI 图片。'}
+                  : '配置正文生成方式；最低字数为 0 时按模型默认长度生成。'}
               </Dialog.Description>
             </div>
             <div className="content-generation-config-list">
@@ -762,6 +792,22 @@ function ContentEditPage({
                 >
                   {tableRequirementOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
                 </select>
+              </label>
+              <label className="content-generation-config-row">
+                <span>
+                  <strong>最低字数</strong>
+                  <small>0 表示不限制；低于最低字数时会自动补充目录或扩写正文。</small>
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={draftGenerationOptions.minimumWords}
+                  onChange={(event) => setDraftGenerationOptions((prev) => ({
+                    ...prev,
+                    minimumWords: Math.max(0, Math.round(Number(event.target.value) || 0)),
+                  }))}
+                />
               </label>
               <label className="content-generation-config-row">
                 <span>
