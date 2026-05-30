@@ -56,6 +56,7 @@ const defaultContentGenerationOptions: ContentGenerationOptions = {
   useMermaidImages: true,
   tableRequirement: 'heavy',
   minimumWords: 0,
+  contentConcurrency: 5,
 };
 
 function isContentTableRequirement(value: unknown): value is ContentTableRequirement {
@@ -75,6 +76,7 @@ function normalizeGenerationOptions(options: ContentGenerationOptions | undefine
   const maxAiImagesLimit = Math.max(1, leafCount);
   const requestedMaxAiImages = Number(options?.maxAiImages ?? fallback.maxAiImages);
   const requestedMinimumWords = Number(options?.minimumWords ?? fallback.minimumWords);
+  const requestedContentConcurrency = Number(options?.contentConcurrency ?? fallback.contentConcurrency);
   const tableRequirement = options?.tableRequirement;
 
   return {
@@ -83,6 +85,7 @@ function normalizeGenerationOptions(options: ContentGenerationOptions | undefine
     useMermaidImages: Boolean(options?.useMermaidImages ?? fallback.useMermaidImages),
     tableRequirement: isContentTableRequirement(tableRequirement) ? tableRequirement : fallback.tableRequirement,
     minimumWords: Math.max(0, Number.isFinite(requestedMinimumWords) ? Math.round(requestedMinimumWords) : fallback.minimumWords),
+    contentConcurrency: Math.max(1, Number.isFinite(requestedContentConcurrency) ? Math.round(requestedContentConcurrency) : fallback.contentConcurrency),
   };
 }
 
@@ -333,9 +336,11 @@ function ContentEditPage({
   const running = task?.status === 'running';
   const pausing = task?.status === 'pausing' || pausePending;
   const paused = task?.status === 'paused';
+  const taskFailed = task?.status === 'error';
   const taskInFlight = running || pausing;
-  const phaseVisible = taskInFlight || paused;
+  const phaseVisible = taskInFlight || paused || taskFailed;
   const taskBlocksGeneration = taskInFlight || paused;
+  const generationStrategyLocked = paused;
   const contentStats = task?.stats?.content;
   const planning = phaseVisible && contentStats?.phase === 'planning';
   const outlineExpanding = phaseVisible && contentStats?.phase === 'outline-expanding';
@@ -358,8 +363,12 @@ function ContentEditPage({
   const outlineExpansionTotal = contentStats?.outline_expansion_total || 3;
   const outlineExpansionCompleted = contentStats?.outline_expansion_completed || 0;
   const outlineExpansionProgress = outlineExpansionTotal ? Math.round((outlineExpansionCompleted / outlineExpansionTotal) * 100) : 0;
-  const minimumWords = contentStats?.minimum_words || 0;
+  const minimumWords = contentStats?.minimum_words ?? contentGenerationOptions?.minimumWords ?? 0;
   const currentWords = contentStats?.current_words ?? totalWords;
+  const minimumWordsUnmet = minimumWords > 0 && currentWords < minimumWords;
+  const canRetryMinimumWords = taskFailed && minimumWordsUnmet && completedCount === leaves.length;
+  const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
+  const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
   const wordExpansionProgress = minimumWords ? Math.min(100, Math.round((currentWords / minimumWords) * 100)) : 0;
   const illustrationTotal = contentStats?.illustration_total || 0;
   const illustrationCompleted = contentStats?.illustration_completed || 0;
@@ -377,7 +386,11 @@ function ContentEditPage({
           : `${completedCount}/${leaves.length}`;
   const progressPhaseLabel = planning ? '正文编排' : outlineExpanding ? '正文补目录' : expanding ? '正文扩写' : illustrating ? '正文配图' : '正文生成';
   const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${illustrating ? ' is-illustrating' : ''}`;
-  const progressDescription = planning
+  const progressDescription = taskFailed
+    ? minimumWordsUnmet
+      ? `正文扩写失败：当前 ${currentWords}/${minimumWords} 字。${taskErrorMessage}`
+      : taskErrorMessage
+    : planning
     ? paused ? `正文生成已暂停在编排阶段，已完成 ${planningCompleted}/${planningTotal} 个小节。` : `正在编排正文结构，已完成 ${planningCompleted}/${planningTotal} 个小节。`
     : outlineExpanding
       ? paused ? `正文生成已暂停在补目录阶段，已完成 ${outlineExpansionCompleted}/${outlineExpansionTotal} 轮。` : `正在补充目录，已完成 ${outlineExpansionCompleted}/${outlineExpansionTotal} 轮。`
@@ -388,13 +401,26 @@ function ContentEditPage({
           : pausing
             ? '正在暂停正文生成，已发出的 AI 请求完成后会停止调度新任务。'
             : running
-              ? task?.logs?.[task.logs.length - 1] || '正文生成任务正在运行。'
+              ? latestTaskLog || '正文生成任务正在运行。'
               : paused
                 ? '正文生成已暂停，可导出当前已完成内容或点击继续。'
                 : completedCount
                   ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。`
                   : '点击生成正文后，目录会实时显示每个小节状态。';
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
+  const generationButtonLabel = pausing
+    ? '正在暂停中...'
+    : running
+      ? '暂停'
+      : paused
+        ? '继续'
+        : canRetryMinimumWords
+          ? '继续补足字数'
+          : completedCount === leaves.length && leaves.length
+            ? '重新生成正文'
+            : completedCount > 0
+              ? '继续生成正文'
+              : '生成正文';
   const editing = Boolean(selectedItem && selectedIsLeaf && editingItemId === selectedItem.id);
   const imageStats = task?.stats?.images;
   const aiImageStats = normalizeImageStats(imageStats?.ai);
@@ -443,6 +469,10 @@ function ContentEditPage({
       showToast('请先生成目录', 'info');
       return;
     }
+    if (taskInFlight) {
+      showToast('正文生成任务进行中，请暂停后再修改配置', 'info');
+      return;
+    }
 
     try {
       const config = await window.yibiao?.config.load();
@@ -457,13 +487,19 @@ function ContentEditPage({
   };
 
   const saveDraftGenerationOptions = async (showSuccess: boolean, imageAvailable = imageModelAvailable) => {
-    const nextOptions = normalizeGenerationOptions(draftGenerationOptions, imageAvailable, leaves.length);
+    const normalizedDraftOptions = normalizeGenerationOptions(draftGenerationOptions, imageAvailable, leaves.length);
+    const currentOptions = contentGenerationOptions
+      ? { ...defaultContentGenerationOptions, ...contentGenerationOptions }
+      : normalizeGenerationOptions(undefined, imageAvailable, leaves.length);
+    const nextOptions = paused
+      ? { ...currentOptions, contentConcurrency: normalizedDraftOptions.contentConcurrency }
+      : normalizedDraftOptions;
     await onContentGenerationOptionsChange(nextOptions);
-    setDraftGenerationOptions(nextOptions);
+    setDraftGenerationOptions(normalizeGenerationOptions(nextOptions, imageAvailable, leaves.length));
 
     if (showSuccess) {
       setGenerationDialogOpen(false);
-      showToast('正文生成配置已保存', 'success');
+      showToast(paused ? '正文生成并发速度已保存，继续后生效' : '正文生成配置已保存', 'success');
     }
 
     return nextOptions;
@@ -530,7 +566,7 @@ function ContentEditPage({
       setImageModelStatus(nextImageModelStatus);
       const savedGenerationOptions = await saveDraftGenerationOptions(false, nextImageModelAvailable);
       const shouldRealTimeRender = config?.real_time_render === true;
-      const regenerate = leaves.length > 0 && completedCount === leaves.length;
+      const regenerate = leaves.length > 0 && completedCount === leaves.length && !canRetryMinimumWords;
       if (regenerate) {
         setEditingItemId(null);
         setIsPreviewing(false);
@@ -547,6 +583,7 @@ function ContentEditPage({
           useMermaidImages: savedGenerationOptions.useMermaidImages,
           tableRequirement: savedGenerationOptions.tableRequirement,
           minimumWords: savedGenerationOptions.minimumWords,
+          contentConcurrency: savedGenerationOptions.contentConcurrency,
         },
         real_time_render: shouldRealTimeRender,
       });
@@ -554,9 +591,10 @@ function ContentEditPage({
         table_requirement: savedGenerationOptions.tableRequirement,
         use_mermaid_images: savedGenerationOptions.useMermaidImages,
         use_ai_images: nextImageModelAvailable && savedGenerationOptions.useAiImages,
+        content_concurrency: savedGenerationOptions.contentConcurrency,
       }, config);
       setGenerationDialogOpen(false);
-      showToast(regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
+      showToast(canRetryMinimumWords ? '正文补足字数任务已在后台启动' : regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动正文生成任务失败', 'error');
     }
@@ -586,6 +624,7 @@ function ContentEditPage({
           maxAiImages: savedGenerationOptions.maxAiImages,
           useMermaidImages: savedGenerationOptions.useMermaidImages,
           tableRequirement: savedGenerationOptions.tableRequirement,
+          contentConcurrency: savedGenerationOptions.contentConcurrency,
         },
         real_time_render: shouldRealTimeRender,
       });
@@ -593,6 +632,7 @@ function ContentEditPage({
         table_requirement: savedGenerationOptions.tableRequirement,
         use_mermaid_images: savedGenerationOptions.useMermaidImages,
         use_ai_images: nextImageModelAvailable && savedGenerationOptions.useAiImages,
+        content_concurrency: savedGenerationOptions.contentConcurrency,
       }, config);
       setSelectedItemId(requirementItem.id);
       setRequirementItem(null);
@@ -725,9 +765,24 @@ function ContentEditPage({
           <span><strong>{completedCount}</strong> 已生成</span>
           <span><strong>{totalWords}</strong> 字</span>
         </div>
-        <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={pausing || !leaves.length}>
-          {pausing ? '正在暂停中...' : running ? '暂停' : paused ? '继续' : completedCount === leaves.length && leaves.length ? '重新生成正文' : completedCount > 0 ? '继续生成正文' : '生成正文'}
-        </button>
+        <div className="content-generation-actions">
+          <button
+            type="button"
+            className="outline-config-action"
+            onClick={openGenerationDialog}
+            disabled={taskInFlight || !leaves.length}
+            aria-label="打开正文生成配置"
+            title="正文生成配置"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
+            </svg>
+          </button>
+          <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={pausing || !leaves.length}>
+            {generationButtonLabel}
+          </button>
+        </div>
       </section>
 
       {developerMode && imageStats && (
@@ -831,9 +886,13 @@ function ContentEditPage({
               <span className="section-kicker">生成配置</span>
               <Dialog.Title>正文生成配置</Dialog.Title>
               <Dialog.Description>
-                {completedCount === leaves.length && leaves.length
-                  ? '重新生成会先清空全文正文、章节状态和任务进度，再从头生成。'
-                  : '配置正文生成方式；最低字数为 0 时按模型默认长度生成。'}
+                {paused
+                  ? '任务已暂停，仅可修改正文生成并发速度，继续后生效。'
+                  : canRetryMinimumWords
+                    ? '将保留已生成正文，继续扩写未达标的最低字数。'
+                    : completedCount === leaves.length && leaves.length
+                      ? '重新生成会先清空全文正文、章节状态和任务进度，再从头生成。'
+                      : '配置正文生成方式；最低字数为 0 时按模型默认长度生成。'}
               </Dialog.Description>
             </div>
             <div className="content-generation-config-list">
@@ -844,6 +903,7 @@ function ContentEditPage({
                 </span>
                 <select
                   value={draftGenerationOptions.tableRequirement}
+                  disabled={generationStrategyLocked}
                   onChange={(event) => setDraftGenerationOptions((prev) => ({ ...prev, tableRequirement: event.target.value as ContentTableRequirement }))}
                 >
                   {tableRequirementOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
@@ -859,9 +919,26 @@ function ContentEditPage({
                   min="0"
                   step="1000"
                   value={draftGenerationOptions.minimumWords}
+                  disabled={generationStrategyLocked}
                   onChange={(event) => setDraftGenerationOptions((prev) => ({
                     ...prev,
                     minimumWords: Math.max(0, Math.round(Number(event.target.value) || 0)),
+                  }))}
+                />
+              </label>
+              <label className="content-generation-config-row">
+                <span>
+                  <strong>正文生成并发速度</strong>
+                  <small>同时发起的正文编排、正文生成和字数扩写请求数，不影响配图。</small>
+                </span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={draftGenerationOptions.contentConcurrency}
+                  onChange={(event) => setDraftGenerationOptions((prev) => ({
+                    ...prev,
+                    contentConcurrency: Math.max(1, Math.round(Number(event.target.value) || 1)),
                   }))}
                 />
               </label>
@@ -875,7 +952,7 @@ function ContentEditPage({
                   <Switch.Root
                     className="content-generation-switch"
                     checked={draftGenerationOptions.useAiImages && imageModelAvailable}
-                    disabled={!imageModelAvailable}
+                    disabled={generationStrategyLocked || !imageModelAvailable}
                     onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useAiImages: checked }))}
                     aria-label="是否使用 AI 生图"
                   >
@@ -893,7 +970,7 @@ function ContentEditPage({
                   min="0"
                   max={Math.max(1, leaves.length)}
                   value={draftGenerationOptions.maxAiImages}
-                  disabled={!draftGenerationOptions.useAiImages || !imageModelAvailable}
+                  disabled={generationStrategyLocked || !draftGenerationOptions.useAiImages || !imageModelAvailable}
                   onChange={(event) => setDraftGenerationOptions((prev) => ({
                     ...prev,
                     maxAiImages: Math.max(0, Math.min(Number(event.target.value) || 0, Math.max(1, leaves.length))),
@@ -908,6 +985,7 @@ function ContentEditPage({
                 <Switch.Root
                   className="content-generation-switch"
                   checked={draftGenerationOptions.useMermaidImages}
+                  disabled={generationStrategyLocked}
                   onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useMermaidImages: checked }))}
                   aria-label="是否生成 Mermaid 图片"
                 >
@@ -920,10 +998,10 @@ function ContentEditPage({
             </div>
             <div className="content-regenerate-actions">
               <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
-              <button type="button" className="secondary-action" onClick={saveGenerationOptions} disabled={taskBlocksGeneration}>
-                保存配置
+              <button type="button" className="secondary-action" onClick={saveGenerationOptions} disabled={taskInFlight}>
+                {paused ? '保存并发速度' : '保存配置'}
               </button>
-              <button type="button" className="primary-action" onClick={startGeneration} disabled={taskBlocksGeneration}>开始生成</button>
+              {!paused && <button type="button" className="primary-action" onClick={startGeneration} disabled={taskBlocksGeneration}>{canRetryMinimumWords ? '继续补足字数' : '开始生成'}</button>}
             </div>
           </Dialog.Content>
         </Dialog.Portal>

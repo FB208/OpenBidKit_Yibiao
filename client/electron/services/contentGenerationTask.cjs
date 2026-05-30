@@ -2,11 +2,11 @@ const zlib = require('node:zlib');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 
 const IMAGE_STYLES = new Set(['engineering_diagram', 'realistic_photo']);
+const DEFAULT_CONTENT_CONCURRENCY = 5;
 const MERMAID_REPAIR_ATTEMPTS = 3;
 const MERMAID_RENDER_TIMEOUT_MS = 15000;
 const AI_IMAGE_CONCURRENCY = 2;
 const MERMAID_IMAGE_CONCURRENCY = 5;
-const CONTENT_EXPANSION_CONCURRENCY = 2;
 const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 const MAX_OUTLINE_EXPANSION_ROUNDS = 3;
 const OUTLINE_EXPANSION_TARGET_RATIO = 0.8;
@@ -133,6 +133,19 @@ function normalizeTableRequirement(value) {
 function normalizeMinimumWords(value) {
   const words = Number(value);
   return Math.max(0, Number.isFinite(words) ? Math.round(words) : 0);
+}
+
+function normalizeContentConcurrency(value) {
+  const concurrency = Number(value);
+  return Math.max(1, Number.isFinite(concurrency) ? Math.round(concurrency) : DEFAULT_CONTENT_CONCURRENCY);
+}
+
+function isDeveloperModeEnabled(aiService) {
+  try {
+    return Boolean(aiService?.isDeveloperMode?.());
+  } catch {
+    return false;
+  }
 }
 
 function countContentWords(content) {
@@ -1475,22 +1488,53 @@ function orderExpansionCandidates(candidates) {
   return ordered;
 }
 
-async function runWithConcurrency(items, limit, worker, shouldStop) {
-  const workerCount = Math.min(Math.max(1, limit), items.length);
-  let nextIndex = 0;
+async function runWorkerPool({ limit, getNextItem, worker, shouldStop, onItemStart, onItemComplete }) {
+  const workerCount = Math.max(1, Math.floor(Number(limit) || 1));
+  let activeCount = 0;
 
   async function runWorker() {
-    while (nextIndex < items.length) {
+    while (true) {
       if (shouldStop?.()) {
         return;
       }
-      const item = items[nextIndex];
-      nextIndex += 1;
-      await worker(item);
+      const item = getNextItem();
+      if (!item) {
+        return;
+      }
+
+      activeCount += 1;
+      onItemStart?.(item, activeCount);
+      try {
+        const result = await worker(item);
+        activeCount -= 1;
+        await onItemComplete?.(item, result, activeCount);
+      } catch (error) {
+        activeCount -= 1;
+        throw error;
+      }
     }
   }
 
   await Promise.all(Array.from({ length: workerCount }, runWorker));
+}
+
+async function runItemsWithWorkerPool(items, limit, worker, shouldStop) {
+  const workerCount = Math.min(Math.max(1, Math.floor(Number(limit) || 1)), Math.max(1, items.length));
+  let nextIndex = 0;
+
+  await runWorkerPool({
+    limit: workerCount,
+    shouldStop,
+    getNextItem() {
+      if (nextIndex >= items.length) {
+        return null;
+      }
+      const item = items[nextIndex];
+      nextIndex += 1;
+      return item;
+    },
+    worker,
+  });
 }
 
 function createInitialSections(leaves, existingSections) {
@@ -1584,8 +1628,11 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     throw new Error('当前目录没有可生成正文的小节');
   }
   const regenerateRequirement = resume ? contentRuntime.regenerate_requirement : String(payload.requirement || '').trim();
-  const concurrency = Math.max(1, Math.min(Number(payload.concurrency) || 5, 8));
   const generationOptions = payload.generationOptions || payload.generation_options || storedPlan.contentGenerationOptions || {};
+  const contentConcurrency = normalizeContentConcurrency(
+    generationOptions.contentConcurrency ?? generationOptions.content_concurrency ?? payload.concurrency,
+  );
+  const developerModeEnabled = isDeveloperModeEnabled(aiService);
   const realTimeRender = payload.real_time_render !== false && payload.realTimeRender !== false;
   const tableRequirement = normalizeTableRequirement(generationOptions.tableRequirement ?? generationOptions.table_requirement);
   let maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
@@ -1682,6 +1729,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   if (targetItemId) {
     logs = [`准备重新生成正文小节：${targetItemId}。`];
   }
+  logs = [...logs, `正文生成并发速度：${contentConcurrency}。`];
   logs = [...logs, tableRequirement === 'heavy'
     ? '表格需求：大量，保持现有表格编排逻辑。'
     : tableRequirement === 'none'
@@ -1699,6 +1747,15 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   if (!realTimeRender) {
     logs = [...logs, '实时渲染已关闭，每个小节生成完成后再刷新正文。'];
   }
+
+  function appendDeveloperLog(message) {
+    if (!developerModeEnabled) {
+      return;
+    }
+    logs = [...logs, message];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+  }
+
   knowledgeItems = loadContentKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, (message) => {
     logs = [...logs, message];
   });
@@ -1912,7 +1969,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       : `继续整体编排决策，共 ${tasksToRun.length} 个小节，复用 ${tasksToRun.length - planningTargets.length} 个历史编排。`];
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
 
-    await runWithConcurrency(planningTargets, concurrency, planOne, isPauseRequested);
+    await runItemsWithWorkerPool(planningTargets, contentConcurrency, planOne, isPauseRequested);
     pauseIfRequested('正文生成已在编排阶段暂停，可导出当前已完成内容，稍后继续。');
 
     const tableCandidates = tasksToRun.filter(({ item }) => contentPlans.get(item.id)?.table.needed);
@@ -2171,7 +2228,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         retryItemIds.add(item.id);
       }
     }
-    await runWithConcurrency(tasksToRun, concurrency, runOne, isPauseRequested);
+    await runItemsWithWorkerPool(tasksToRun, contentConcurrency, runOne, isPauseRequested);
     pauseIfRequested('正文生成已在补目录新增正文生成阶段暂停，可导出当前已完成内容，稍后继续。');
   }
 
@@ -2217,30 +2274,111 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     return orderedIds;
   }
 
-  function selectExpansionBatch(currentWords) {
+  function getExpansionCycle(currentWords) {
     let cycleIds = contentRuntime.expansion_cycle_item_ids.filter((itemId) => sections[itemId]?.status === 'success');
-    const attemptedIds = new Set(contentRuntime.expansion_attempted_item_ids);
+    let attemptedIds = new Set(contentRuntime.expansion_attempted_item_ids);
     if (!cycleIds.length || cycleIds.every((itemId) => attemptedIds.has(itemId))) {
       cycleIds = createExpansionCycle(currentWords);
-      attemptedIds.clear();
+      attemptedIds = new Set(contentRuntime.expansion_attempted_item_ids);
     }
 
-    const statsById = new Map(leafWordStats().map((context) => [context.item.id, context]));
-    const batchSize = attemptedIds.size === 0 ? 1 : CONTENT_EXPANSION_CONCURRENCY;
-    const batch = cycleIds
-      .filter((itemId) => !attemptedIds.has(itemId))
-      .map((itemId) => statsById.get(itemId))
-      .filter(Boolean)
-      .slice(0, batchSize);
-    return { batch, completesCycle: attemptedIds.size + batch.length >= cycleIds.length };
+    return { cycleIds, attemptedIds };
   }
 
-  function markExpansionBatchAttempted(batch) {
-    const attemptedIds = new Set(contentRuntime.expansion_attempted_item_ids);
-    for (const { item } of batch) {
-      attemptedIds.add(item.id);
+  function persistExpansionAttempted(attemptedIds) {
+    workspaceStore.updateTechnicalPlan({
+      contentGenerationRuntime: syncRuntime({ expansion_attempted_item_ids: Array.from(attemptedIds) }),
+    });
+  }
+
+  function selectNextExpansionContext(cycleIds, attemptedIds) {
+    const statsById = new Map(leafWordStats().map((context) => [context.item.id, context]));
+    let changed = false;
+    for (const itemId of cycleIds) {
+      if (attemptedIds.has(itemId)) {
+        continue;
+      }
+      const context = statsById.get(itemId);
+      if (context && sections[itemId]?.status === 'success' && String(context.content || '').trim()) {
+        return context;
+      }
+      attemptedIds.add(itemId);
+      changed = true;
     }
-    syncRuntime({ expansion_attempted_item_ids: Array.from(attemptedIds) });
+
+    if (changed) {
+      persistExpansionAttempted(attemptedIds);
+    }
+    return null;
+  }
+
+  async function runExpansionWorkerPool(startWords) {
+    let currentWords = startWords;
+    const { cycleIds, attemptedIds } = getExpansionCycle(currentWords);
+    let launchedCount = 0;
+    let minimumReachedLogged = false;
+    let pauseLogged = false;
+
+    appendDeveloperLog(`扩写工作池启动：并发 ${contentConcurrency}，候选 ${cycleIds.filter((itemId) => !attemptedIds.has(itemId)).length} 个，当前 ${currentWords}/${minimumWords} 字。`);
+
+    await runWorkerPool({
+      limit: contentConcurrency,
+      shouldStop: () => currentWords >= minimumWords || isPauseRequested(),
+      getNextItem() {
+        if (currentWords >= minimumWords) {
+          if (!minimumReachedLogged) {
+            appendDeveloperLog('扩写已达最低字数，停止调度新请求，等待已发出的请求完成。');
+            minimumReachedLogged = true;
+          }
+          return null;
+        }
+        if (isPauseRequested()) {
+          if (!pauseLogged) {
+            appendDeveloperLog('扩写暂停请求已收到，停止调度新请求，等待已发出的请求完成。');
+            pauseLogged = true;
+          }
+          return null;
+        }
+
+        const context = selectNextExpansionContext(cycleIds, attemptedIds);
+        if (!context) {
+          return null;
+        }
+
+        attemptedIds.add(context.item.id);
+        persistExpansionAttempted(attemptedIds);
+        launchedCount += 1;
+        return context;
+      },
+      onItemStart(context, activeCount) {
+        appendDeveloperLog(`扩写请求发出：${context.item.id} ${context.item.title || '未命名章节'}，在飞 ${activeCount}/${contentConcurrency}。`);
+      },
+      async worker(context) {
+        await expandOneSection(context);
+        return context.item;
+      },
+      onItemComplete(_context, item, activeCount) {
+        currentWords = countTotalContentWords();
+        appendDeveloperLog(`扩写请求完成：${item.id} ${item.title || '未命名章节'}，当前 ${currentWords}/${minimumWords} 字，在飞 ${activeCount}/${contentConcurrency}。`);
+        if (currentWords >= minimumWords) {
+          if (!minimumReachedLogged) {
+            appendDeveloperLog('扩写已达最低字数，停止调度新请求，等待已发出的请求完成。');
+            minimumReachedLogged = true;
+          }
+        } else if (isPauseRequested()) {
+          if (!pauseLogged) {
+            appendDeveloperLog('扩写暂停请求已收到，停止调度新请求，等待已发出的请求完成。');
+            pauseLogged = true;
+          }
+        }
+      },
+    });
+
+    return {
+      currentWords,
+      completesCycle: cycleIds.length > 0 && cycleIds.every((itemId) => attemptedIds.has(itemId)),
+      launchedCount,
+    };
   }
 
   async function expandOneSection(context) {
@@ -2295,14 +2433,13 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       logs = [...logs, `开始正文扩写，当前 ${currentWords}/${minimumWords} 字。`];
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
 
-      const { batch, completesCycle } = selectExpansionBatch(currentWords);
-      if (!batch.length) {
+      const expansionResult = await runExpansionWorkerPool(currentWords);
+      currentWords = expansionResult.currentWords;
+      if (!expansionResult.launchedCount) {
+        pauseIfRequested('正文生成已在扩写阶段暂停，可导出当前已完成内容，稍后继续。');
         throw new Error('没有可扩写的成功正文小节，无法补足最低字数');
       }
-      await Promise.all(batch.map(expandOneSection));
-      markExpansionBatchAttempted(batch);
-      currentWords = countTotalContentWords();
-      if (completesCycle) {
+      if (expansionResult.completesCycle) {
         const expansionCycleStartWords = Number.isFinite(contentRuntime.expansion_cycle_start_words)
           ? contentRuntime.expansion_cycle_start_words
           : currentWords;
@@ -2424,8 +2561,8 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     }
 
     await Promise.all([
-      runWithConcurrency(aiImageTargets, AI_IMAGE_CONCURRENCY, runAiIllustration, isPauseRequested),
-      runWithConcurrency(mermaidImageTargets, MERMAID_IMAGE_CONCURRENCY, runMermaidIllustration, isPauseRequested),
+      runItemsWithWorkerPool(aiImageTargets, AI_IMAGE_CONCURRENCY, runAiIllustration, isPauseRequested),
+      runItemsWithWorkerPool(mermaidImageTargets, MERMAID_IMAGE_CONCURRENCY, runMermaidIllustration, isPauseRequested),
     ]);
 
     pauseIfRequested('正文生成已在配图阶段暂停，可导出当前已完成内容，稍后继续。');
@@ -2443,7 +2580,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       }
 
       pauseIfRequested('正文生成已在正文编排后暂停，可导出当前已完成内容，稍后继续。');
-      await runWithConcurrency(tasksToRun, concurrency, runOne, isPauseRequested);
+      await runItemsWithWorkerPool(tasksToRun, contentConcurrency, runOne, isPauseRequested);
       pauseIfRequested('正文生成已在正文生成阶段暂停，可导出当前已完成内容，稍后继续。');
     }
 

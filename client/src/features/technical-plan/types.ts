@@ -14,6 +14,7 @@ export interface ContentGenerationOptions {
   useMermaidImages: boolean;
   tableRequirement: ContentTableRequirement;
   minimumWords: number;
+  contentConcurrency: number;
 }
 
 export interface ContentImageStats {

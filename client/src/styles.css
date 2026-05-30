@@ -1464,6 +1464,12 @@ button {
   letter-spacing: 0;
 }
 
+.content-generation-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .content-dev-stats-panel {
   position: absolute;
   top: 96px;
@@ -7618,6 +7624,10 @@ button {
   }
 
   .content-generation-stats {
+    justify-content: flex-start;
+  }
+
+  .content-generation-actions {
     justify-content: flex-start;
   }
 

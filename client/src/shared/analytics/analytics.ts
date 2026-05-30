@@ -21,6 +21,7 @@ interface ConfigUsagePayload {
   table_requirement?: string;
   use_mermaid_images?: boolean;
   use_ai_images?: boolean;
+  content_concurrency?: number;
 }
 
 let appOpenTracked = false;
