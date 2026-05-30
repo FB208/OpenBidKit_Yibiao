@@ -43,6 +43,7 @@ const resetState = {
   contentGenerationOptions: undefined,
   contentGenerationSections: {},
   contentGenerationPlans: {},
+  contentGenerationRuntime: undefined,
   outlineData: null,
 };
 
@@ -125,7 +126,9 @@ function TechnicalPlanHome() {
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
   const activeIndex = steps.indexOf(state.step);
   const bidAnalysisReady = Boolean(state.projectOverview && state.techRequirements && state.bidAnalysisProgress === 100);
-  const isContentGenerating = state.contentGenerationTask?.status === 'running';
+  const contentTaskStatus = state.contentGenerationTask?.status;
+  const isContentGenerating = contentTaskStatus === 'running' || contentTaskStatus === 'pausing';
+  const isContentPaused = contentTaskStatus === 'paused';
   const isExporting = exportProgress.running;
   const isNextDisabled = activeIndex >= steps.length - 1
     || (state.step === 'document-analysis' && !state.fileContent)
@@ -185,6 +188,7 @@ function TechnicalPlanHome() {
             contentGenerationOptions: outlineDataReset ? undefined : prev.contentGenerationOptions,
             contentGenerationSections: outlineDataReset ? {} : prev.contentGenerationSections,
             contentGenerationPlans: outlineDataReset ? {} : prev.contentGenerationPlans,
+            contentGenerationRuntime: outlineDataReset ? undefined : prev.contentGenerationRuntime,
             outlineData: hasOwnField(technicalPlan, 'outlineData') ? technicalPlan.outlineData : prev.outlineData,
           };
         }
@@ -209,6 +213,7 @@ function TechnicalPlanHome() {
             contentGenerationTask: outlineDataChanged ? undefined : prev.contentGenerationTask,
             contentGenerationSections: outlineDataChanged ? {} : prev.contentGenerationSections,
             contentGenerationPlans: outlineDataChanged ? {} : prev.contentGenerationPlans,
+            contentGenerationRuntime: outlineDataChanged ? undefined : prev.contentGenerationRuntime,
           };
         }
 
@@ -222,6 +227,7 @@ function TechnicalPlanHome() {
               : prev.referenceKnowledgeDocumentIds,
             contentGenerationSections: technicalPlan.contentGenerationSections || prev.contentGenerationSections,
             contentGenerationPlans: technicalPlan.contentGenerationPlans || prev.contentGenerationPlans,
+            contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
             outlineData: technicalPlan.outlineData || prev.outlineData,
           };
         }
@@ -373,7 +379,7 @@ function TechnicalPlanHome() {
         icon: <ToolbarDocumentIcon />,
         variant: 'primary' as const,
         disabled: isContentGenerating || isExporting || !state.outlineData,
-        tooltip: isContentGenerating ? '正文生成中，完成后再导出' : isExporting ? 'Word 正在导出，请稍候' : generatedContentCount ? '导出当前技术方案正文' : '可导出空目录文档，建议先生成正文',
+        tooltip: isContentGenerating ? '正文生成或暂停处理中，完成暂停后再导出' : isExporting ? 'Word 正在导出，请稍候' : isContentPaused ? '正文生成已暂停，可导出当前已完成内容' : generatedContentCount ? '导出当前技术方案正文' : '可导出空目录文档，建议先生成正文',
         onClick: exportWord,
       },
       {
@@ -453,6 +459,7 @@ function TechnicalPlanHome() {
             contentGenerationOptions: undefined,
             contentGenerationSections: {},
             contentGenerationPlans: {},
+            contentGenerationRuntime: undefined,
             outlineData: null,
           }))}
         />
@@ -491,6 +498,7 @@ function TechnicalPlanHome() {
             contentGenerationTask: undefined,
             contentGenerationSections: {},
             contentGenerationPlans: {},
+            contentGenerationRuntime: undefined,
           }))}
         />
       )}

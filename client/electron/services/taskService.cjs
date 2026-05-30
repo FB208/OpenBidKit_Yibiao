@@ -88,6 +88,90 @@ function getPayloadSignature(type, payload) {
   return undefined;
 }
 
+function isActiveTaskStatus(status) {
+  return status === 'running' || status === 'pausing';
+}
+
+const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
+
+function collectLeafItems(items) {
+  return (items || []).flatMap((item) => item?.children?.length ? collectLeafItems(item.children) : [item]);
+}
+
+function clearOutlineContentByIds(items, interruptedIds) {
+  if (!(interruptedIds instanceof Set) || !interruptedIds.size) {
+    return items;
+  }
+
+  return (items || []).map((item) => {
+    const nextItem = interruptedIds.has(item.id) ? { ...item, content: '' } : { ...item };
+    if (item?.children?.length) {
+      nextItem.children = clearOutlineContentByIds(item.children, interruptedIds);
+    }
+    return nextItem;
+  });
+}
+
+function normalizeInterruptedContentSections(technicalPlan) {
+  const sections = technicalPlan?.contentGenerationSections || {};
+  const interruptedIds = new Set();
+  const nextSections = { ...sections };
+
+  for (const [itemId, section] of Object.entries(sections)) {
+    if (section?.status !== 'running') {
+      continue;
+    }
+    interruptedIds.add(itemId);
+    // 单小节重新生成时异常退出可能丢失旧正文；场景极窄，恢复优先保证可继续重跑，不额外保存旧正文。
+    nextSections[itemId] = {
+      ...section,
+      status: 'error',
+      content: '',
+      error: INTERRUPTED_SECTION_ERROR,
+      updated_at: now(),
+    };
+  }
+
+  if (!interruptedIds.size) {
+    return { sections, outlineData: technicalPlan?.outlineData, interruptedIds };
+  }
+
+  const outlineData = technicalPlan?.outlineData?.outline
+    ? {
+      ...technicalPlan.outlineData,
+      outline: clearOutlineContentByIds(technicalPlan.outlineData.outline, interruptedIds),
+    }
+    : technicalPlan?.outlineData;
+
+  return { sections: nextSections, outlineData, interruptedIds };
+}
+
+function inferContentGenerationPhase(technicalPlan) {
+  const taskContent = technicalPlan?.contentGenerationTask?.stats?.content || {};
+  const taskPhase = taskContent.phase;
+  const runtimePhase = technicalPlan?.contentGenerationRuntime?.phase;
+  if (['outline-expanding', 'expanding', 'illustrating'].includes(taskPhase)) {
+    return taskPhase;
+  }
+  if (['planning', 'generating', 'outline-expanding', 'expanding', 'illustrating'].includes(runtimePhase)) {
+    return runtimePhase;
+  }
+
+  const leaves = collectLeafItems(technicalPlan?.outlineData?.outline || []);
+  const sections = technicalPlan?.contentGenerationSections || {};
+  const completed = leaves.filter((item) => sections[item.id]?.status === 'success').length;
+  const minimumWords = Number(taskContent.minimum_words ?? technicalPlan?.contentGenerationOptions?.minimumWords ?? 0) || 0;
+  const currentWords = Number(taskContent.current_words ?? 0) || 0;
+
+  if (leaves.length && completed >= leaves.length && minimumWords > 0 && currentWords < minimumWords) {
+    return 'expanding';
+  }
+  if (leaves.length && completed > 0) {
+    return 'generating';
+  }
+  return taskPhase || 'planning';
+}
+
 function createTask(type, payload) {
   const definition = getTaskDefinition(type);
   const scopeId = getScopeId(payload);
@@ -111,6 +195,7 @@ function createTask(type, payload) {
 function createTaskService({ aiService, workspaceStore, knowledgeBaseService, duplicateCheckService }) {
   const subscribers = new Set();
   const activeTasks = new Map();
+  const activeTaskControls = new Map();
 
   function emit(task, snapshot) {
     const event = { task, ...snapshot };
@@ -157,7 +242,7 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
 
     const nextScopeId = getScopeId(payload);
     for (const task of activeTasks.values()) {
-      if (task.status !== 'running' || task.type === type) {
+      if (!isActiveTaskStatus(task.status) || task.type === type) {
         continue;
       }
 
@@ -181,6 +266,17 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
   function assertTaskCanStart(type, payload) {
     const conflict = getActiveTaskConflict(type, payload);
     if (!conflict) {
+      const definition = getTaskDefinition(type);
+      if (definition.group === 'technical-plan') {
+        const technicalPlan = workspaceStore.loadTechnicalPlan() || {};
+        const pausedContentTask = technicalPlan.contentGenerationTask;
+        if (pausedContentTask?.status === 'paused') {
+          if (type === 'content-generation' && payload?.resume) {
+            return;
+          }
+          throw new Error('正文生成已暂停，请先继续当前正文生成任务或重置技术方案后再启动新的任务。');
+        }
+      }
       return;
     }
 
@@ -198,6 +294,16 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
     return workspaceStore.updateTechnicalPlan(partial);
   }
 
+  function loadWorkspaceState(definition) {
+    if (definition.stateKey === 'rejectionCheck') {
+      return workspaceStore.loadRejectionCheck();
+    }
+    if (definition.stateKey === 'duplicateCheck') {
+      return workspaceStore.loadDuplicateCheck();
+    }
+    return workspaceStore.loadTechnicalPlan();
+  }
+
   function buildSnapshot(definition, state) {
     if (definition.stateKey === 'rejectionCheck') {
       return { rejectionCheck: state };
@@ -210,7 +316,7 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
 
   function startManagedTask(type, payload, runner, initialPartial = {}) {
     const existingTask = activeTasks.get(type);
-    if (existingTask?.status === 'running') {
+    if (existingTask && isActiveTaskStatus(existingTask.status)) {
       const nextPayloadSignature = getPayloadSignature(type, payload);
       if (existingTask.payload_signature && nextPayloadSignature && existingTask.payload_signature !== nextPayloadSignature) {
         const definition = getTaskDefinition(type);
@@ -227,31 +333,106 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
     activeTasks.set(type, task);
     const taskField = getTaskField(type);
     let currentTask = task;
+    const taskControl = {
+      pauseRequested: false,
+      isPauseRequested() {
+        return this.pauseRequested;
+      },
+      requestPause() {
+        this.pauseRequested = true;
+        const pausedLogs = currentTask.logs?.length
+          ? currentTask.logs
+          : ['已请求暂停，正在等待当前 AI 请求完成。'];
+        const pausingTask = updateTask({ status: 'pausing', pause_requested: true, logs: pausedLogs });
+        const state = updateWorkspaceState(definition, { [taskField]: pausingTask });
+        emit(pausingTask, buildSnapshot(definition, state));
+        return pausingTask;
+      },
+    };
+    activeTaskControls.set(type, taskControl);
 
     const updateTask = (partial, technicalPlan) => {
+      const nextStatus = currentTask.status === 'pausing' && partial.status === 'running'
+        ? 'pausing'
+        : partial.status || currentTask.status;
       currentTask = {
         ...currentTask,
         ...partial,
+        status: nextStatus,
+        pause_requested: partial.pause_requested === false ? false : taskControl.pauseRequested || partial.pause_requested,
         logs: partial.logs ? partial.logs : currentTask.logs,
         updated_at: now(),
       };
       activeTasks.set(type, currentTask);
-      if (technicalPlan) emit(currentTask, buildSnapshot(definition, technicalPlan));
+      if (technicalPlan) {
+        const persistedState = taskField ? updateWorkspaceState(definition, { [taskField]: currentTask }) : technicalPlan;
+        emit(currentTask, buildSnapshot(definition, persistedState));
+      }
       return currentTask;
     };
 
+    const previousState = loadWorkspaceState(definition) || {};
     const state = updateWorkspaceState(definition, { ...initialPartial, [taskField]: currentTask });
     emit(currentTask, buildSnapshot(definition, state));
 
-    runner({ aiService, workspaceStore, knowledgeBaseService, updateTask, payload }).catch((error) => {
+    runner({ aiService, workspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
       const failedTask = updateTask({ status: 'error', error: error.message || '任务执行失败' });
       const nextState = updateWorkspaceState(definition, { [taskField]: failedTask });
       emit(failedTask, buildSnapshot(definition, nextState));
     }).finally(() => {
       activeTasks.delete(type);
+      activeTaskControls.delete(type);
     });
 
     return currentTask;
+  }
+
+  function recoverInterruptedContentGenerationTask() {
+    if (activeTasks.has('content-generation')) {
+      return;
+    }
+
+    const technicalPlan = workspaceStore.loadTechnicalPlan() || {};
+    const contentTask = technicalPlan.contentGenerationTask;
+    if (!isActiveTaskStatus(contentTask?.status)) {
+      return;
+    }
+
+    const { sections, outlineData, interruptedIds } = normalizeInterruptedContentSections(technicalPlan);
+    const normalizedPlan = interruptedIds.size
+      ? { ...technicalPlan, contentGenerationSections: sections, outlineData }
+      : technicalPlan;
+    const phase = inferContentGenerationPhase(normalizedPlan);
+    const nextLogs = [
+      ...(Array.isArray(contentTask.logs) ? contentTask.logs : []),
+      '上次正文生成因应用关闭而暂停，可点击继续恢复。',
+    ];
+    const nextStats = {
+      ...(contentTask.stats || {}),
+      content: {
+        ...(contentTask.stats?.content || {}),
+        phase,
+      },
+    };
+    const pausedTask = {
+      ...contentTask,
+      status: 'paused',
+      pause_requested: false,
+      logs: nextLogs,
+      stats: nextStats,
+      updated_at: now(),
+    };
+    const state = workspaceStore.updateTechnicalPlan({
+      outlineData,
+      contentGenerationSections: sections,
+      contentGenerationTask: pausedTask,
+      contentGenerationRuntime: {
+        ...(normalizedPlan.contentGenerationRuntime || {}),
+        phase,
+        updated_at: now(),
+      },
+    });
+    emit(pausedTask, { technicalPlan: state });
   }
 
   return {
@@ -267,10 +448,26 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
         contentGenerationTask: undefined,
         contentGenerationSections: {},
         contentGenerationPlans: {},
+        contentGenerationRuntime: undefined,
       });
     },
     startContentGeneration(payload) {
       return startManagedTask('content-generation', payload, runContentGenerationTask);
+    },
+    pauseContentGeneration() {
+      const task = activeTasks.get('content-generation');
+      const control = activeTaskControls.get('content-generation');
+      if (task && isActiveTaskStatus(task.status) && control?.requestPause) {
+        return control.requestPause();
+      }
+
+      const technicalPlan = workspaceStore.loadTechnicalPlan() || {};
+      const contentTask = technicalPlan.contentGenerationTask;
+      if (contentTask?.status === 'paused' || contentTask?.status === 'pausing') {
+        return contentTask;
+      }
+
+      throw new Error('当前没有正在生成的正文任务。');
     },
     startRejectionItemsExtraction(payload) {
       return startManagedTask('rejection-items-extraction', payload, runRejectionItemsExtractionTask, payload?.workspaceState || {});
@@ -285,6 +482,7 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
       return startManagedTask('duplicate-analysis', payload, duplicateCheckService.runAnalysisTask);
     },
     getActiveTasks() {
+      recoverInterruptedContentGenerationTask();
       return Array.from(activeTasks.values());
     },
   };

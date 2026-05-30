@@ -1,5 +1,31 @@
 # Task Plan
 
+## Current Task: Step04 正文生成暂停与继续
+
+### Goal
+给技术方案 Step04 正文生成增加协作式暂停/继续：点击暂停后立即进入“正在暂停中”，不强制中断已发出的 AI 请求；当前并发请求结束后落盘为 paused，允许导出已完成部分；点击继续后从 workspace 中的正文、编排、最低字数扩写和配图进度继续，避免重复扩写或重复配图。
+
+### Phases
+- [completed] 1. 扩展后台任务状态、IPC/preload/types，支持 `pausing` / `paused` 和暂停请求。
+- [completed] 2. 改造 `contentGenerationTask.cjs`，实现安全检查点、协作式暂停和 resume 恢复。
+- [completed] 3. 持久化正文任务 runtime，覆盖扩写轮次、已尝试小节、本轮触达小节和配图恢复。
+- [completed] 4. 改造 Step04 前端按钮和导出禁用条件，显示“暂停/正在暂停中/继续”。
+- [completed] 5. 运行语法检查、暂停/继续 smoke test、客户端构建和 diff 检查。
+
+### Decisions
+- 暂停不取消任何正在执行的 AI 请求，只阻止调度下一批编排、正文生成、补目录、扩写或配图。
+- `pausing` 期间仍视为任务占用中，导出禁用；`paused` 允许导出当前已生成内容。
+- 继续使用 `startContentGeneration({ resume: true })`，不弹配置窗口，沿用 workspace 中的 `contentGenerationOptions` 和暂停 runtime。
+- 扩写恢复需要稳定顺序和已尝试小节集合，不能依赖内存中的 `expansionOffset`。
+- 配图恢复以本轮 `touchedItemIds` + 现有幂等检测为准，避免 paused/resume 后重复追加图片或 Mermaid。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| resume 后立即 error：没有可继续的已暂停正文生成任务 | 第一次暂停/继续 smoke test | `taskService` 启动新任务前会先把 workspace 任务写成 running，runner 再读取 workspace 时看不到 paused；改为把启动前 workspace 快照传给 runner，resume 用该快照校验和恢复 |
+| 扩写暂停 smoke test 中左右小节也在首次暂停前被扩写 | 第一次扩写恢复 smoke test | 新 runtime 批次选择按并发数取了首批多个候选，破坏原“首批只扩写中位数”规则；改为当前扩写轮 attempted 为空时 batch size 固定为 1 |
+| 软件重启后扩写中任务显示成编排中 | 用户复现 | 任务阶段更新只广播未落盘，重启后 workspace 保留初始 planning；改为 `updateTask()` 同步持久化任务快照，并在 `getActiveTasks()` 中把无 active task 的 running/pausing 正文任务恢复为 paused + 推断 phase |
+
 ## Current Task: Step04 最低字数控制
 
 ### Goal

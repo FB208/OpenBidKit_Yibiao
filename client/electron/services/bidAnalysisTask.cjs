@@ -181,6 +181,7 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
       contentGenerationOptions: undefined,
       contentGenerationSections: {},
       contentGenerationPlans: {},
+      contentGenerationRuntime: undefined,
       outlineData: null,
     };
   }

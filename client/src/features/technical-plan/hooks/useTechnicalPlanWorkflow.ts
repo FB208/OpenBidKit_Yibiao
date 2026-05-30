@@ -18,13 +18,15 @@ const initialState: TechnicalPlanState = {
   contentGenerationTask: undefined,
   contentGenerationSections: {},
   contentGenerationPlans: {},
+  contentGenerationRuntime: undefined,
   outlineData: null,
 };
 
 function hasRunningTask(state: TechnicalPlanState) {
   return state.bidAnalysisTask?.status === 'running'
     || state.outlineGenerationTask?.status === 'running'
-    || state.contentGenerationTask?.status === 'running';
+    || state.contentGenerationTask?.status === 'running'
+    || state.contentGenerationTask?.status === 'pausing';
 }
 
 export function useTechnicalPlanWorkflow() {

@@ -1002,6 +1002,7 @@ async function runOutlineGenerationTask({ aiService, workspaceStore, knowledgeBa
     contentGenerationTask: undefined,
     contentGenerationSections: {},
     contentGenerationPlans: {},
+    contentGenerationRuntime: undefined,
     outlineGenerationTask: updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }),
   });
   updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }, technicalPlan);

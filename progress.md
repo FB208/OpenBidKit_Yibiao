@@ -1,6 +1,11 @@
 # Progress
 
 ## Session Log
+- 开始 Step04 正文生成暂停与继续：目标是在不强制中断当前 AI 请求的前提下，点击暂停立即显示“正在暂停中”，当前并发请求完成后进入 paused 并允许导出；继续时从 workspace 恢复扩写/配图进度。
+- 已完成暂停/继续第一轮代码接入：`taskService` 增加 content-generation 暂停控制器和 `tasks:pause-content-generation` IPC；正文生成任务增加 `contentGenerationRuntime`、安全检查点、扩写轮次持久化、pausing/paused 落盘和 resume 恢复。CJS 语法检查已通过 `taskService.cjs`、`contentGenerationTask.cjs`、`taskIpc.cjs`、`preload.cjs`。
+- 已修复并验证暂停/继续恢复细节：resume 时改用任务启动前的 workspace 快照，避免 taskService 先写入 running 后让 runner 看不到 paused；扩写恢复保持首批仅中位数、后续左右扩散。暂停/继续 smoke test 和扩写进度恢复 smoke test 均通过。
+- Step04 正文生成暂停与继续验证完成：`node --check` 覆盖 `taskService.cjs`、`contentGenerationTask.cjs`、`taskIpc.cjs`、`preload.cjs`；暂停/继续 smoke test、扩写恢复 smoke test、单小节暂停继续 smoke test、`npm run build`、`git diff --check` 均通过。构建仍只有既有 chunk 体积警告，diff check 仅 LF/CRLF 提示。
+- 已修复软件重启后扩写中任务显示成编排中的问题：`taskService.updateTask()` 现在会把每次任务阶段 stats 同步持久化到 workspace；`getActiveTasks()` 发现 workspace 中正文任务仍是 running/pausing 但 Main 无 active task 时，会自动改为 paused，并用 runtime 或“已生成数量 + 最低字数”推断 phase。已验证扩写阶段快照落盘和 stale running 恢复为 paused + expanding。
 - 开始 Step04 最低字数控制实现：已根据 `client/doc/字数控制.md` 和用户反馈确认范围，准备先新增统一字数统计，再扩展配置/UI，最后改造 Main 侧正文生成任务，把扩写插入配图前。
 - 已完成第一轮代码接入：新增 Renderer/Main 同口径字数统计工具；Step04 配置 UI 增加最低字数，任务 stats 支持 `outline-expanding/expanding`；Main 侧正文任务已插入补目录、生成新增叶子、无限扩写和配图前统一刷新配图目标。`node --check` 已通过 `contentGenerationTask.cjs`、`wordCount.cjs`、`preload.cjs`。
 - 验证进展：`npm run build` 通过，仅有既有 chunk 体积警告；正文任务模块加载通过；字数统计 smoke test 返回 9，确认图片、Mermaid 代码块和裸 URL 未计入；最低字数扩写 smoke test 通过，任务最终 `success` 且字数达标；补目录清理旧叶子 smoke test 通过，旧 `1.1` section/plan 被移除，新 `1.1.1` section 生成。

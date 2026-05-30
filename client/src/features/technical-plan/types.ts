@@ -4,7 +4,7 @@ export type TechnicalPlanStep = 'document-analysis' | 'bid-analysis' | 'outline-
 export type BidAnalysisMode = 'key' | 'full';
 export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
 export type BackgroundTaskType = 'bid-analysis' | 'outline-generation' | 'content-generation';
-export type BackgroundTaskStatus = 'running' | 'success' | 'error';
+export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 
@@ -111,6 +111,18 @@ export interface ContentGenerationPlanState {
 
 export type ContentGenerationPlans = Record<string, ContentGenerationPlanState>;
 
+export interface ContentGenerationRuntimeState {
+  phase?: string;
+  touched_item_ids?: string[];
+  outline_expansion_completed?: number;
+  expansion_cycle_item_ids?: string[];
+  expansion_attempted_item_ids?: string[];
+  expansion_cycle_start_words?: number;
+  target_item_id?: string;
+  regenerate_requirement?: string;
+  updated_at?: string;
+}
+
 export interface TechnicalPlanState {
   step: TechnicalPlanStep;
   fileName: string;
@@ -128,5 +140,6 @@ export interface TechnicalPlanState {
   contentGenerationOptions?: ContentGenerationOptions;
   contentGenerationSections: ContentGenerationSections;
   contentGenerationPlans: ContentGenerationPlans;
+  contentGenerationRuntime?: ContentGenerationRuntimeState;
   outlineData: OutlineData | null;
 }

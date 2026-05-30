@@ -325,16 +325,22 @@ function ContentEditPage({
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
   const [draftGenerationOptions, setDraftGenerationOptions] = useState<ContentGenerationOptions>(defaultContentGenerationOptions);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
+  const [pausePending, setPausePending] = useState(false);
   const firstLeafId = leaves[0]?.id || '';
   const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
   const selectedContent = selectedItem && selectedIsLeaf ? getLeafContent(selectedItem, sections) : '';
   const running = task?.status === 'running';
+  const pausing = task?.status === 'pausing' || pausePending;
+  const paused = task?.status === 'paused';
+  const taskInFlight = running || pausing;
+  const phaseVisible = taskInFlight || paused;
+  const taskBlocksGeneration = taskInFlight || paused;
   const contentStats = task?.stats?.content;
-  const planning = running && contentStats?.phase === 'planning';
-  const outlineExpanding = running && contentStats?.phase === 'outline-expanding';
-  const expanding = running && contentStats?.phase === 'expanding';
-  const illustrating = running && contentStats?.phase === 'illustrating';
+  const planning = phaseVisible && contentStats?.phase === 'planning';
+  const outlineExpanding = phaseVisible && contentStats?.phase === 'outline-expanding';
+  const expanding = phaseVisible && contentStats?.phase === 'expanding';
+  const illustrating = phaseVisible && contentStats?.phase === 'illustrating';
   const outlineMeta = useMemo(() => outlineData?.outline ? buildOutlineMeta(outlineData.outline, sections, planning) : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections]);
   const contentSummary = useMemo(() => leaves.reduce((summary, item) => {
     const status = getLeafStatus(item, sections);
@@ -372,18 +378,22 @@ function ContentEditPage({
   const progressPhaseLabel = planning ? '正文编排' : outlineExpanding ? '正文补目录' : expanding ? '正文扩写' : illustrating ? '正文配图' : '正文生成';
   const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${illustrating ? ' is-illustrating' : ''}`;
   const progressDescription = planning
-    ? `正在编排正文结构，已完成 ${planningCompleted}/${planningTotal} 个小节。`
+    ? paused ? `正文生成已暂停在编排阶段，已完成 ${planningCompleted}/${planningTotal} 个小节。` : `正在编排正文结构，已完成 ${planningCompleted}/${planningTotal} 个小节。`
     : outlineExpanding
-      ? `正在补充目录，已完成 ${outlineExpansionCompleted}/${outlineExpansionTotal} 轮。`
+      ? paused ? `正文生成已暂停在补目录阶段，已完成 ${outlineExpansionCompleted}/${outlineExpansionTotal} 轮。` : `正在补充目录，已完成 ${outlineExpansionCompleted}/${outlineExpansionTotal} 轮。`
       : expanding
-        ? `正在扩写正文，最低字数达成 ${wordExpansionProgress}%。`
+        ? paused ? `正文生成已暂停在扩写阶段，最低字数达成 ${wordExpansionProgress}%。` : `正在扩写正文，最低字数达成 ${wordExpansionProgress}%。`
         : illustrating
-          ? `正在生成配图，已完成 ${illustrationCompleted}/${illustrationTotal} 张。`
-          : running
-            ? task?.logs?.[task.logs.length - 1] || '正文生成任务正在运行。'
-            : completedCount
-              ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。`
-              : '点击生成正文后，目录会实时显示每个小节状态。';
+          ? paused ? `正文生成已暂停在配图阶段，已完成 ${illustrationCompleted}/${illustrationTotal} 张。` : `正在生成配图，已完成 ${illustrationCompleted}/${illustrationTotal} 张。`
+          : pausing
+            ? '正在暂停正文生成，已发出的 AI 请求完成后会停止调度新任务。'
+            : running
+              ? task?.logs?.[task.logs.length - 1] || '正文生成任务正在运行。'
+              : paused
+                ? '正文生成已暂停，可导出当前已完成内容或点击继续。'
+                : completedCount
+                  ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。`
+                  : '点击生成正文后，目录会实时显示每个小节状态。';
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
   const editing = Boolean(selectedItem && selectedIsLeaf && editingItemId === selectedItem.id);
   const imageStats = task?.stats?.images;
@@ -412,6 +422,12 @@ function ContentEditPage({
       })
       .catch((error) => console.warn('读取开发者模式失败', error));
   }, []);
+
+  useEffect(() => {
+    if (task?.status !== 'running') {
+      setPausePending(false);
+    }
+  }, [task?.status]);
 
   useEffect(() => {
     if (!selectedItem || selectedItem.id === editingItemId) {
@@ -459,6 +475,46 @@ function ContentEditPage({
     } catch (error) {
       showToast(error instanceof Error ? error.message : '正文生成配置保存失败', 'error');
     }
+  };
+
+  const pauseGeneration = async () => {
+    if (!running) {
+      return;
+    }
+
+    setPausePending(true);
+    try {
+      await window.yibiao?.tasks.pauseContentGeneration();
+      showToast('正在暂停正文生成，当前 AI 请求完成后会停止调度新任务', 'info');
+    } catch (error) {
+      setPausePending(false);
+      showToast(error instanceof Error ? error.message : '暂停正文生成失败', 'error');
+    }
+  };
+
+  const resumeGeneration = async () => {
+    if (!paused) {
+      return;
+    }
+
+    try {
+      await window.yibiao?.tasks.startContentGeneration({ resume: true });
+      showToast('已继续正文生成任务', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '继续正文生成失败', 'error');
+    }
+  };
+
+  const handleGenerationButtonClick = () => {
+    if (running) {
+      void pauseGeneration();
+      return;
+    }
+    if (paused) {
+      void resumeGeneration();
+      return;
+    }
+    void openGenerationDialog();
   };
 
   const startGeneration = async () => {
@@ -623,7 +679,7 @@ function ContentEditPage({
                     <button
                       type="button"
                       className="primary-action"
-                      disabled={running}
+                      disabled={taskBlocksGeneration}
                       onClick={() => {
                         setRequirementItem(item);
                         setRegenerateRequirement('');
@@ -669,8 +725,8 @@ function ContentEditPage({
           <span><strong>{completedCount}</strong> 已生成</span>
           <span><strong>{totalWords}</strong> 字</span>
         </div>
-        <button type="button" className="primary-action" onClick={openGenerationDialog} disabled={running || !leaves.length}>
-          {running ? '正文生成中...' : completedCount === leaves.length && leaves.length ? '重新生成正文' : completedCount > 0 ? '继续生成正文' : '生成正文'}
+        <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={pausing || !leaves.length}>
+          {pausing ? '正在暂停中...' : running ? '暂停' : paused ? '继续' : completedCount === leaves.length && leaves.length ? '重新生成正文' : completedCount > 0 ? '继续生成正文' : '生成正文'}
         </button>
       </section>
 
@@ -727,7 +783,7 @@ function ContentEditPage({
                   <button type="button" className="secondary-action" onClick={cancelEditingContent}>取消</button>
                 </>
               ) : (
-                <button type="button" className="secondary-action" onClick={startEditingContent} disabled={!selectedItem || !selectedIsLeaf || running}>编辑</button>
+                <button type="button" className="secondary-action" onClick={startEditingContent} disabled={!selectedItem || !selectedIsLeaf || taskInFlight}>编辑</button>
               )}
             </div>
           </div>
@@ -753,7 +809,7 @@ function ContentEditPage({
           ) : selectedItem && selectedIsLeaf ? (
             <div className="markdown-empty-state content-generation-empty">
               <strong>{getLeafStatus(selectedItem, sections) === 'error' ? sections[selectedItem.id]?.error || '正文生成失败' : '正文待生成'}</strong>
-              <p>{running ? '如果该小节正在生成，模型返回内容后会实时显示在这里。' : '点击生成正文后，后台会按目录小节生成内容。'}</p>
+              <p>{taskInFlight ? '如果该小节正在生成，模型返回内容后会实时显示在这里。' : paused ? '任务已暂停，可先导出当前内容或点击继续。' : '点击生成正文后，后台会按目录小节生成内容。'}</p>
             </div>
           ) : (
             <div className="markdown-empty-state content-generation-empty">
@@ -864,10 +920,10 @@ function ContentEditPage({
             </div>
             <div className="content-regenerate-actions">
               <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
-              <button type="button" className="secondary-action" onClick={saveGenerationOptions} disabled={running}>
+              <button type="button" className="secondary-action" onClick={saveGenerationOptions} disabled={taskBlocksGeneration}>
                 保存配置
               </button>
-              <button type="button" className="primary-action" onClick={startGeneration} disabled={running}>开始生成</button>
+              <button type="button" className="primary-action" onClick={startGeneration} disabled={taskBlocksGeneration}>开始生成</button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
@@ -897,7 +953,7 @@ function ContentEditPage({
             />
             <div className="content-regenerate-actions">
               <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
-              <button type="button" className="primary-action" onClick={startSectionRegeneration} disabled={running}>开始重新生成</button>
+              <button type="button" className="primary-action" onClick={startSectionRegeneration} disabled={taskBlocksGeneration}>开始重新生成</button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
