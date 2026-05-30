@@ -20,6 +20,9 @@ export const CONFIG_USAGE_FIELDS = [
   { key: 'tableRequirements', blob: 'blob15' },
   { key: 'useMermaidImages', blob: 'blob16' },
   { key: 'useAiImages', blob: 'blob17' },
+  { key: 'contentConcurrencies', blob: 'blob18' },
+  { key: 'contentGenerationActions', blob: 'blob19' },
+  { key: 'minimumWords', blob: 'blob20' },
 ];
 
 export const MODEL_USAGE_FIELDS = [

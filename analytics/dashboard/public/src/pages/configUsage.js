@@ -25,6 +25,13 @@ function labelConfigValue(groupKey, value) {
     tableRequirements: { none: '不要', light: '少量', moderate: '适中', heavy: '大量' },
     useMermaidImages: { true: '开启', false: '关闭' },
     useAiImages: { true: '开启', false: '关闭' },
+    contentGenerationActions: {
+      start: '首次生成',
+      'continue': '继续生成',
+      regenerate: '重新生成正文',
+      retry_minimum_words: '继续补足字数',
+      regenerate_section: '小节重新生成',
+    },
   };
 
   return labels[groupKey]?.[value] || value || '-';
@@ -42,6 +49,9 @@ const configUsageGroups = [
   ['bidAnalysisModes', 'Step 02 解析模式'],
   ['outlineModes', 'Step 03 目录模式'],
   ['tableRequirements', '正文表格需求'],
+  ['minimumWords', '最低字数'],
+  ['contentConcurrencies', '正文生成并发速度'],
+  ['contentGenerationActions', '正文生成动作'],
   ['useMermaidImages', 'Mermaid 图片'],
   ['useAiImages', 'AI 生图'],
 ];

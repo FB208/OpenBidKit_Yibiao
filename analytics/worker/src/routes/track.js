@@ -7,6 +7,16 @@ function normalizeTokenNumber(value) {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
 }
 
+function normalizeNumberMetricValue(value, maxLength) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+
+  const number = Number(text);
+  if (!Number.isFinite(number)) return '';
+
+  return String(Math.max(0, Math.round(number))).slice(0, maxLength);
+}
+
 export async function handleTrack(request, env) {
   if (request.method !== 'POST') {
     return methodNotAllowed();
@@ -31,6 +41,9 @@ export async function handleTrack(request, env) {
     const tableRequirement = normalizeText(body.table_requirement || body.tableRequirement, 50);
     const useMermaidImages = normalizeMetricValue(body.use_mermaid_images ?? body.useMermaidImages, 20);
     const useAiImages = normalizeMetricValue(body.use_ai_images ?? body.useAiImages, 20);
+    const contentConcurrency = normalizeNumberMetricValue(body.content_concurrency ?? body.contentConcurrency, 20);
+    const contentGenerationAction = normalizeText(body.content_generation_action || body.contentGenerationAction, 50);
+    const minimumWords = normalizeNumberMetricValue(body.minimum_words ?? body.minimumWords, 20);
     const textModelName = normalizeText(body.text_model_name || body.textModelName, 120);
     const imageModelName = normalizeText(body.image_model_name || body.imageModelName, 120);
     const aiRequestType = normalizeText(body.ai_request_type || body.aiRequestType, 20);
@@ -46,6 +59,9 @@ export async function handleTrack(request, env) {
     const modelBaseUrlBlob = event === 'ai_request' ? aiModelBaseUrl : realTimeRender;
     const modelNameBlob = event === 'ai_request' ? aiModelName : imageProvider;
     const requestTypeBlob = event === 'ai_request' ? aiRequestType : imageModelStatus;
+    const contentConcurrencyBlob = event === 'config_usage' ? contentConcurrency : normalizedTextModelName;
+    const contentGenerationActionBlob = event === 'config_usage' ? contentGenerationAction : normalizedImageModelName;
+    const minimumWordsBlob = event === 'config_usage' ? minimumWords : aiRequestType;
 
     if (!isValidProjectName(projectName)) {
       return json({ code: 400, message: 'invalid projectName' }, { status: 400 });
@@ -78,9 +94,9 @@ export async function handleTrack(request, env) {
         tableRequirement,
         useMermaidImages,
         useAiImages,
-        normalizedTextModelName,
-        normalizedImageModelName,
-        aiRequestType,
+        contentConcurrencyBlob,
+        contentGenerationActionBlob,
+        minimumWordsBlob,
       ],
       doubles: [1, promptTokens, completionTokens, totalTokens],
       indexes: [projectName],

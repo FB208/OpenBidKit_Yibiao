@@ -567,6 +567,13 @@ function ContentEditPage({
       const savedGenerationOptions = await saveDraftGenerationOptions(false, nextImageModelAvailable);
       const shouldRealTimeRender = config?.real_time_render === true;
       const regenerate = leaves.length > 0 && completedCount === leaves.length && !canRetryMinimumWords;
+      const contentGenerationAction = canRetryMinimumWords
+        ? 'retry_minimum_words'
+        : regenerate
+          ? 'regenerate'
+          : completedCount > 0
+            ? 'continue'
+            : 'start';
       if (regenerate) {
         setEditingItemId(null);
         setIsPreviewing(false);
@@ -592,6 +599,8 @@ function ContentEditPage({
         use_mermaid_images: savedGenerationOptions.useMermaidImages,
         use_ai_images: nextImageModelAvailable && savedGenerationOptions.useAiImages,
         content_concurrency: savedGenerationOptions.contentConcurrency,
+        content_generation_action: contentGenerationAction,
+        minimum_words: savedGenerationOptions.minimumWords,
       }, config);
       setGenerationDialogOpen(false);
       showToast(canRetryMinimumWords ? '正文补足字数任务已在后台启动' : regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
@@ -633,6 +642,8 @@ function ContentEditPage({
         use_mermaid_images: savedGenerationOptions.useMermaidImages,
         use_ai_images: nextImageModelAvailable && savedGenerationOptions.useAiImages,
         content_concurrency: savedGenerationOptions.contentConcurrency,
+        content_generation_action: 'regenerate_section',
+        minimum_words: savedGenerationOptions.minimumWords,
       }, config);
       setSelectedItemId(requirementItem.id);
       setRequirementItem(null);
