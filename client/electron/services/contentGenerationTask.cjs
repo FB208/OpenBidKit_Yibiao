@@ -612,17 +612,21 @@ function createOutlineNodeMap(items) {
   return map;
 }
 
-function formatOutlineExpansionParents(nodeMap) {
-  return Array.from(nodeMap.entries())
-    .filter(([, info]) => info.level >= 1 && info.level <= 3)
-    .map(([id, info]) => {
-      const childLevel = info.level + 1;
-      return `- ${id} ${info.item.title || '未命名章节'}（当前 ${info.level} 级，可新增 ${childLevel} 级目录）`;
-    })
-    .join('\n');
+function formatOutlineExpansionContext(items, level = 1, lines = []) {
+  for (const item of items || []) {
+    const id = String(item?.id || 'unknown').trim() || 'unknown';
+    const title = singleLine(item?.title || '未命名章节');
+    const indent = '  '.repeat(Math.max(0, level - 1));
+    const addState = level >= 1 && level <= 3 ? `add:L${level + 1}` : 'locked';
+    lines.push(`${indent}- ${id} | L${level} | ${addState} | ${title}`);
+    if (item?.children?.length) {
+      formatOutlineExpansionContext(item.children, level + 1, lines);
+    }
+  }
+  return lines.join('\n');
 }
 
-function buildOutlineExpansionMessages({ projectOverview, techRequirements, outlineData, currentWords, minimumWords, medianLeafWords, round, nodeMap }) {
+function buildOutlineExpansionMessages({ projectOverview, outlineData, currentWords, minimumWords, medianLeafWords, round, nodeMap }) {
   const sampleParentId = Array.from(nodeMap.entries()).find(([, info]) => info.level === 1)?.[0] || '1';
   return [
     {
@@ -632,7 +636,7 @@ function buildOutlineExpansionMessages({ projectOverview, techRequirements, outl
 要求：
 1. 只返回 JSON，不要输出解释、总结或 Markdown。
 2. 只能新增二级、三级、四级目录，严禁新增、删除、重命名或调整一级目录。
-3. 只能把新增目录挂到下面给出的允许 parent_id 下，parent_id 必须逐字复制。
+3. parent_id 只能使用目录上下文中标记为 add:* 的节点 ID，必须逐字复制；locked 节点不能作为 parent_id。
 4. 只输出新增目录，不要输出完整目录，不要输出正文内容。
 5. 允许补充通用但不违背项目的技术方案内容，例如组织管理、质量控制、安全管理、进度保障、验收交付、运维服务、培训计划、资料管理、风险控制、应急响应等。
 6. 不要重复已有目录，不要输出明显凑字数的空泛标题。
@@ -653,9 +657,7 @@ function buildOutlineExpansionMessages({ projectOverview, techRequirements, outl
 }`,
     },
     { role: 'user', content: `项目概述：\n${projectOverview || '未提供'}` },
-    { role: 'user', content: `技术评分要求：\n${techRequirements || '未提供'}` },
-    { role: 'user', content: `当前完整目录：\n${formatOutlineForPrompt(outlineData.outline || [])}` },
-    { role: 'user', content: `允许新增目录的 parent_id：\n${formatOutlineExpansionParents(nodeMap)}` },
+    { role: 'user', content: `目录上下文（每行：id | 层级 | 可挂载状态 | 标题）：\n${formatOutlineExpansionContext(outlineData.outline || [])}` },
     { role: 'user', content: `当前总字数：${currentWords}\n预期最低字数：${minimumWords}\n当前叶子节点字数中位数：${medianLeafWords}\n本次补目录轮次：${round}/${MAX_OUTLINE_EXPANSION_ROUNDS}\n请只返回新增目录 JSON。` },
   ];
 }
@@ -780,7 +782,7 @@ function validateOutlineExpansionResponse(payload) {
   }
 }
 
-function buildOutlineExpansionRepairMessages({ invalidContent, issues }, nodeMap) {
+function buildOutlineExpansionRepairMessages({ invalidContent, issues }, outlineItems) {
   const issueLines = (issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
   return [
     {
@@ -790,13 +792,13 @@ function buildOutlineExpansionRepairMessages({ invalidContent, issues }, nodeMap
 必须满足：
 1. 顶层只能有 additions 数组。
 2. 每条 additions 必须包含 parent_id、title、description，可以包含 children。
-3. parent_id 必须逐字复制允许列表中的 ID。
+3. parent_id 只能使用目录上下文中标记为 add:* 的节点 ID，必须逐字复制；locked 节点不能作为 parent_id。
 4. 只能新增二级、三级、四级目录；四级目录不能包含 children。
 5. 禁止输出完整 outline、正文、图片、表格或解释文字。
 6. 如果没有可补充目录，返回 {"additions":[]}。
 
-允许的 parent_id：
-${formatOutlineExpansionParents(nodeMap)}`,
+目录上下文（每行：id | 层级 | 可挂载状态 | 标题）：
+${formatOutlineExpansionContext(outlineItems || [])}`,
     },
     { role: 'user', content: `错误列表：\n${issueLines}` },
     { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
@@ -2221,7 +2223,6 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     const patch = await aiService.collectJsonResponse({
       messages: buildOutlineExpansionMessages({
         projectOverview,
-        techRequirements,
         outlineData,
         currentWords,
         minimumWords,
@@ -2235,7 +2236,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       failureMessage: '模型返回的补目录数据格式无效',
       normalizer: (value) => normalizeOutlineExpansionResponse(value, { nodeMap }),
       validator: validateOutlineExpansionResponse,
-      repairMessagesBuilder: (context) => buildOutlineExpansionRepairMessages(context, nodeMap),
+      repairMessagesBuilder: (context) => buildOutlineExpansionRepairMessages(context, outlineData.outline || []),
       progressCallback: (message) => updateOutlineExpansionProgress(round, 2, message || '补目录结果格式校验失败，正在修复'),
     });
 

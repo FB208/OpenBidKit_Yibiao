@@ -5,7 +5,7 @@ import { Children, isValidElement, memo, useCallback, useEffect, useMemo, useRef
 import type { Components } from 'react-markdown';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { MarkdownEditor, MarkdownRenderer, useToast } from '../../../shared/ui';
-import type { ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
+import type { ClientConfig, ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
 import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement } from '../types';
 
@@ -26,6 +26,16 @@ interface OutlineNodeMeta {
   status: TreeStatus;
   leafCount: number;
   words: number;
+}
+
+type ContentGenerationAction = 'start' | 'continue' | 'retry_minimum_words' | 'regenerate';
+
+interface PendingMinimumWordsChoice {
+  options: ContentGenerationOptions;
+  imageModelAvailable: boolean;
+  config: ClientConfig | null;
+  currentWords: number;
+  minimumWords: number;
 }
 
 const statusLabels: Record<TreeStatus, string> = {
@@ -327,6 +337,7 @@ function ContentEditPage({
   const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
   const [draftGenerationOptions, setDraftGenerationOptions] = useState<ContentGenerationOptions>(defaultContentGenerationOptions);
+  const [pendingMinimumWordsChoice, setPendingMinimumWordsChoice] = useState<PendingMinimumWordsChoice | null>(null);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [pausePending, setPausePending] = useState(false);
   const firstLeafId = leaves[0]?.id || '';
@@ -522,6 +533,46 @@ function ContentEditPage({
     }
   };
 
+  const shouldAskMinimumWordsChoice = (options: ContentGenerationOptions) => leaves.length > 0
+    && completedCount === leaves.length
+    && !canRetryMinimumWords
+    && options.minimumWords > 0
+    && totalWords < options.minimumWords;
+
+  const openGenerationChoiceOrDialog = async () => {
+    if (!outlineData?.outline?.length) {
+      showToast('请先生成目录', 'info');
+      return;
+    }
+    if (taskInFlight) {
+      showToast('正文生成任务进行中，请暂停后再修改配置', 'info');
+      return;
+    }
+
+    try {
+      const config = await window.yibiao?.config.load();
+      const nextStatus = config?.image_model?.status || 'untested';
+      const available = nextStatus === 'available';
+      const savedOptions = normalizeGenerationOptions(contentGenerationOptions, available, leaves.length);
+      setImageModelStatus(nextStatus);
+      if (shouldAskMinimumWordsChoice(savedOptions)) {
+        setPendingMinimumWordsChoice({
+          options: savedOptions,
+          imageModelAvailable: available,
+          config: config || null,
+          currentWords: totalWords,
+          minimumWords: savedOptions.minimumWords,
+        });
+        return;
+      }
+
+      setDraftGenerationOptions(savedOptions);
+      setGenerationDialogOpen(true);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '读取生成配置失败', 'error');
+    }
+  };
+
   const pauseGeneration = async () => {
     if (!running) {
       return;
@@ -559,7 +610,62 @@ function ContentEditPage({
       void resumeGeneration();
       return;
     }
+    if (completedCount === leaves.length && leaves.length) {
+      void openGenerationChoiceOrDialog();
+      return;
+    }
     void openGenerationDialog();
+  };
+
+  const launchContentGeneration = async ({
+    savedGenerationOptions,
+    nextImageModelAvailable,
+    config,
+    regenerate,
+    contentGenerationAction,
+  }: {
+    savedGenerationOptions: ContentGenerationOptions;
+    nextImageModelAvailable: boolean;
+    config?: ClientConfig | null;
+    regenerate: boolean;
+    contentGenerationAction: ContentGenerationAction;
+  }) => {
+    if (!outlineData?.outline?.length) {
+      showToast('请先生成目录', 'info');
+      return;
+    }
+
+    if (regenerate) {
+      setEditingItemId(null);
+      setIsPreviewing(false);
+      setDraftContent('');
+    }
+
+    await window.yibiao?.tasks.startContentGeneration({
+      outlineData,
+      projectOverview: outlineData.project_overview || projectOverview,
+      reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
+      regenerate,
+      generationOptions: {
+        useAiImages: nextImageModelAvailable && savedGenerationOptions.useAiImages,
+        maxAiImages: savedGenerationOptions.maxAiImages,
+        useMermaidImages: savedGenerationOptions.useMermaidImages,
+        tableRequirement: savedGenerationOptions.tableRequirement,
+        minimumWords: savedGenerationOptions.minimumWords,
+        contentConcurrency: savedGenerationOptions.contentConcurrency,
+      },
+    });
+    trackConfigUsage({
+      table_requirement: savedGenerationOptions.tableRequirement,
+      use_mermaid_images: savedGenerationOptions.useMermaidImages,
+      use_ai_images: nextImageModelAvailable && savedGenerationOptions.useAiImages,
+      content_concurrency: savedGenerationOptions.contentConcurrency,
+      content_generation_action: contentGenerationAction,
+      minimum_words: savedGenerationOptions.minimumWords,
+    }, config);
+    setGenerationDialogOpen(false);
+    setPendingMinimumWordsChoice(null);
+    showToast(contentGenerationAction === 'retry_minimum_words' ? '正文补足字数任务已在后台启动' : regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
   };
 
   const startGeneration = async () => {
@@ -574,45 +680,65 @@ function ContentEditPage({
       const nextImageModelAvailable = nextImageModelStatus === 'available';
       setImageModelStatus(nextImageModelStatus);
       const savedGenerationOptions = await saveDraftGenerationOptions(false, nextImageModelAvailable);
+      if (shouldAskMinimumWordsChoice(savedGenerationOptions)) {
+        setPendingMinimumWordsChoice({
+          options: savedGenerationOptions,
+          imageModelAvailable: nextImageModelAvailable,
+          config: config || null,
+          currentWords: totalWords,
+          minimumWords: savedGenerationOptions.minimumWords,
+        });
+        setGenerationDialogOpen(false);
+        return;
+      }
+
       const regenerate = leaves.length > 0 && completedCount === leaves.length && !canRetryMinimumWords;
-      const contentGenerationAction = canRetryMinimumWords
+      const contentGenerationAction: ContentGenerationAction = canRetryMinimumWords
         ? 'retry_minimum_words'
         : regenerate
           ? 'regenerate'
           : completedCount > 0
             ? 'continue'
             : 'start';
-      if (regenerate) {
-        setEditingItemId(null);
-        setIsPreviewing(false);
-        setDraftContent('');
-      }
-      await window.yibiao?.tasks.startContentGeneration({
-        outlineData,
-        projectOverview: outlineData.project_overview || projectOverview,
-        reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
-        regenerate,
-        generationOptions: {
-          useAiImages: nextImageModelAvailable && savedGenerationOptions.useAiImages,
-          maxAiImages: savedGenerationOptions.maxAiImages,
-          useMermaidImages: savedGenerationOptions.useMermaidImages,
-          tableRequirement: savedGenerationOptions.tableRequirement,
-          minimumWords: savedGenerationOptions.minimumWords,
-          contentConcurrency: savedGenerationOptions.contentConcurrency,
-        },
-      });
-      trackConfigUsage({
-        table_requirement: savedGenerationOptions.tableRequirement,
-        use_mermaid_images: savedGenerationOptions.useMermaidImages,
-        use_ai_images: nextImageModelAvailable && savedGenerationOptions.useAiImages,
-        content_concurrency: savedGenerationOptions.contentConcurrency,
-        content_generation_action: contentGenerationAction,
-        minimum_words: savedGenerationOptions.minimumWords,
-      }, config);
-      setGenerationDialogOpen(false);
-      showToast(canRetryMinimumWords ? '正文补足字数任务已在后台启动' : regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
+      await launchContentGeneration({ savedGenerationOptions, nextImageModelAvailable, config, regenerate, contentGenerationAction });
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动正文生成任务失败', 'error');
+    }
+  };
+
+  const continueMinimumWordsExpansion = async () => {
+    if (!pendingMinimumWordsChoice) {
+      return;
+    }
+
+    try {
+      await launchContentGeneration({
+        savedGenerationOptions: pendingMinimumWordsChoice.options,
+        nextImageModelAvailable: pendingMinimumWordsChoice.imageModelAvailable,
+        config: pendingMinimumWordsChoice.config,
+        regenerate: false,
+        contentGenerationAction: 'retry_minimum_words',
+      });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '启动正文补足字数任务失败', 'error');
+    }
+  };
+
+  const regenerateAfterMinimumWordsChoice = async () => {
+    if (!pendingMinimumWordsChoice) {
+      return;
+    }
+
+    try {
+      await launchContentGeneration({
+        savedGenerationOptions: pendingMinimumWordsChoice.options,
+        nextImageModelAvailable: pendingMinimumWordsChoice.imageModelAvailable,
+        config: pendingMinimumWordsChoice.config,
+        regenerate: true,
+        contentGenerationAction: 'regenerate',
+      });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '启动正文重新生成任务失败', 'error');
     }
   };
 
@@ -1018,6 +1144,36 @@ function ContentEditPage({
                 {paused ? '保存并发速度' : '保存配置'}
               </button>
               {!paused && <button type="button" className="primary-action" onClick={startGeneration} disabled={taskBlocksGeneration}>{canRetryMinimumWords ? '继续补足字数' : '开始生成'}</button>}
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root
+        open={Boolean(pendingMinimumWordsChoice)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingMinimumWordsChoice(null);
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="content-generation-config-card">
+            <div className="content-regenerate-card-head">
+              <span className="section-kicker">补齐字数</span>
+              <Dialog.Title>正文已生成，是否继续补齐字数？</Dialog.Title>
+              <Dialog.Description>
+                当前约 {pendingMinimumWordsChoice?.currentWords ?? totalWords} 字，新的最低字数为 {pendingMinimumWordsChoice?.minimumWords ?? 0} 字。可以保留现有正文继续补齐，也可以清空后重新生成。
+              </Dialog.Description>
+            </div>
+            <div className="content-generation-config-note">
+              选择“继续补齐字数”会保留已生成正文，仅执行补目录和正文扩写；选择“清空重新生成”会覆盖当前全部正文。
+            </div>
+            <div className="content-regenerate-actions">
+              <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
+              <button type="button" className="secondary-action" onClick={regenerateAfterMinimumWordsChoice} disabled={taskBlocksGeneration}>清空重新生成</button>
+              <button type="button" className="primary-action" onClick={continueMinimumWordsExpansion} disabled={taskBlocksGeneration}>继续补齐字数</button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
