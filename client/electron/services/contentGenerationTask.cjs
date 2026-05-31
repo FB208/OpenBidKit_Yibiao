@@ -512,7 +512,9 @@ function buildChapterContentMessages({ chapter, parentChapters, siblingChapters,
 7. 正文只生成文字、列表、表格等内容，配图由系统另行处理。
 8. 严禁输出 Mermaid、PlantUML、Graphviz、flowchart、graph、sequenceDiagram 等图表代码块、mermaid.ink 链接或图片 Markdown；配图由系统另行处理。
 9. 表格单元格内如有多项内容，优先使用编号、顿号、分号或短句，不要使用 HTML <br> 标签。
-10. 直接返回章节内容，不生成标题，不要任何额外说明。`,
+10. 严禁使用 Markdown 标题语法（#、##、###、####、#####、######），也不要生成与当前章节同级或下级的伪目录标题。
+11. 如需在正文中分层表达，只能使用普通段落、列表、表格或加粗引导语，例如 **实施要点：**。
+12. 直接返回章节内容，不生成标题，不要任何额外说明。`,
     },
   ];
 
@@ -576,7 +578,7 @@ function buildChapterContentMessages({ chapter, parentChapters, siblingChapters,
 章节描述: ${chapterDescription}
 
 请根据项目概述信息和上述章节层级关系，生成详细的专业内容，确保与上级章节的内容逻辑相承，同时避免与同级章节内容重复，突出本章节的独特性和技术方案优势。
-直接返回编写的正文内容，不要输出标题、解释、总结等任何其他内容`,
+直接返回编写的正文内容，不要输出标题、Markdown 标题、解释、总结等任何其他内容`,
   });
 
   return messages;
@@ -825,6 +827,7 @@ function buildContentExpansionMessages({ outlineData, context, projectOverview, 
 6. content 只写新增或替换后的正文片段，不要包含章节标题。
 7. 禁止输出图片 Markdown、Mermaid、代码块或其他图表代码。
 8. 扩写内容必须服务当前章节，不要写其他目录应承载的内容。
+9. 严禁使用 Markdown 标题语法（#、##、###、####、#####、######），也不要新增伪目录标题；需要分层时使用加粗引导语或列表。
 
 返回格式：
 {
@@ -877,7 +880,7 @@ function buildContentExpansionRepairMessages({ invalidContent, issues }) {
 4. insert 表示新增段落；anchor 写建议插入在哪个原段落之后，无法确定时写 "end"。
 5. replace 表示重写并扩写一个原段落；anchor 必须是要替换的原段落关键摘录。
 6. content 只能是新增或替换后的正文片段，不要返回完整章节正文。
-7. content 不得包含章节标题、图片 Markdown、Mermaid、代码块或解释文字。
+7. content 不得包含章节标题、Markdown 标题、图片 Markdown、Mermaid、代码块或解释文字。
 8. 只返回 JSON，不要输出 Markdown 代码围栏或解释。`,
     },
     { role: 'user', content: `错误列表：\n${issueLines}` },
@@ -1264,6 +1267,37 @@ function stripRepeatedChapterTitle(content, chapter) {
     nextLines.shift();
   }
   return [...rawLines.slice(0, firstContentLine), ...nextLines].join('\n').trimStart();
+}
+
+function stripMarkdownHeadingsFromLeafContent(content) {
+  let inFence = false;
+  return String(content || '').split(/\r?\n/).map((line) => {
+    if (/^\s*(?:```|~~~)/.test(line)) {
+      inFence = !inFence;
+      return line;
+    }
+    if (inFence) {
+      return line;
+    }
+
+    const match = /^(\s*)#{1,6}\s+(.+?)\s*#*\s*$/.exec(line);
+    if (!match) {
+      return line;
+    }
+
+    const text = match[2].trim();
+    const unwrapped = text
+      .replace(/^\*\*(.+)\*\*$/, '$1')
+      .replace(/^__(.+)__$/, '$1')
+      .trim();
+    return `${match[1]}**${unwrapped || text}**`;
+  }).join('\n');
+}
+
+function normalizeLeafContentForSave(content, chapter) {
+  return stripMarkdownHeadingsFromLeafContent(
+    stripRepeatedChapterTitle(normalizeGeneratedMarkdown(content), chapter),
+  );
 }
 
 function appendGeneratedImageMarkdown(content, imagePlan, generatedImage) {
@@ -1846,9 +1880,26 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
 
   function saveSection(item, partial, contentForOutline, taskPartial = {}) {
     const prev = workspaceStore.loadTechnicalPlan() || {};
-    sections = withSection(prev.contentGenerationSections || sections, item, partial);
+    const hasPartialContent = Object.prototype.hasOwnProperty.call(partial || {}, 'content');
+    const hasOutlineContent = contentForOutline !== undefined;
+    const nextPartial = { ...(partial || {}) };
+    if (hasPartialContent) {
+      nextPartial.content = normalizeLeafContentForSave(nextPartial.content, item);
+    }
+    sections = withSection(prev.contentGenerationSections || sections, item, nextPartial);
     const currentOutlineData = prev.outlineData || outlineData;
-    const outlineContent = contentForOutline ?? (sections[item.id].content || '');
+    const outlineContent = hasOutlineContent || hasPartialContent
+      ? normalizeLeafContentForSave(contentForOutline ?? (sections[item.id].content || ''), item)
+      : (sections[item.id].content || '');
+    if (hasOutlineContent || hasPartialContent) {
+      sections = {
+        ...sections,
+        [item.id]: {
+          ...sections[item.id],
+          content: outlineContent,
+        },
+      };
+    }
     const nextOutlineData = {
       ...currentOutlineData,
       outline: updateOutlineItemContent(currentOutlineData.outline || outlineData.outline, item.id, outlineContent),
