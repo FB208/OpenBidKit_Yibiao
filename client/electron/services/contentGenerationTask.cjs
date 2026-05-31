@@ -9,6 +9,7 @@ const AI_IMAGE_CONCURRENCY = 2;
 const MERMAID_IMAGE_CONCURRENCY = 5;
 const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 const MAX_OUTLINE_EXPANSION_ROUNDS = 3;
+const OUTLINE_EXPANSION_STEPS_PER_ROUND = 6;
 const OUTLINE_EXPANSION_TARGET_RATIO = 0.8;
 const MIN_SECTION_EXPANSION_INCREMENT = 800;
 const TABLE_REQUIREMENT_LABELS = {
@@ -1655,6 +1656,11 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     generation_completed: 0,
     outline_expansion_total: MAX_OUTLINE_EXPANSION_ROUNDS,
     outline_expansion_completed: 0,
+    outline_expansion_step_total: MAX_OUTLINE_EXPANSION_ROUNDS * OUTLINE_EXPANSION_STEPS_PER_ROUND,
+    outline_expansion_step_completed: 0,
+    outline_expansion_round: 0,
+    outline_expansion_round_total: MAX_OUTLINE_EXPANSION_ROUNDS,
+    outline_expansion_step_label: '',
     minimum_words: minimumWords,
     current_words: 0,
     illustration_total: 0,
@@ -2126,6 +2132,25 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     });
   }
 
+  function updateOutlineExpansionProgress(round, stepCompleted, label, planSnapshot) {
+    const normalizedRound = Math.max(1, Math.min(MAX_OUTLINE_EXPANSION_ROUNDS, Math.round(Number(round) || 1)));
+    const normalizedStep = Math.max(0, Math.min(OUTLINE_EXPANSION_STEPS_PER_ROUND, Math.round(Number(stepCompleted) || 0)));
+    contentStats.phase = 'outline-expanding';
+    contentStats.outline_expansion_total = MAX_OUTLINE_EXPANSION_ROUNDS;
+    contentStats.outline_expansion_completed = normalizedStep >= OUTLINE_EXPANSION_STEPS_PER_ROUND
+      ? normalizedRound
+      : normalizedRound - 1;
+    contentStats.outline_expansion_step_total = MAX_OUTLINE_EXPANSION_ROUNDS * OUTLINE_EXPANSION_STEPS_PER_ROUND;
+    contentStats.outline_expansion_step_completed = ((normalizedRound - 1) * OUTLINE_EXPANSION_STEPS_PER_ROUND) + normalizedStep;
+    contentStats.outline_expansion_round = normalizedRound;
+    contentStats.outline_expansion_round_total = MAX_OUTLINE_EXPANSION_ROUNDS;
+    contentStats.outline_expansion_step_label = label || '';
+    return updateTask(
+      { status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() },
+      planSnapshot || workspaceStore.loadTechnicalPlan(),
+    );
+  }
+
   async function runOutlineExpansionRound(round) {
     const nodeMap = createOutlineNodeMap(outlineData.outline || []);
     const currentWords = countTotalContentWords();
@@ -2135,7 +2160,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     syncRuntime({ phase: 'outline-expanding' });
     logs = [...logs, `最低字数未达标，开始第 ${round}/${MAX_OUTLINE_EXPANSION_ROUNDS} 轮补目录。`];
     const started = workspaceStore.updateTechnicalPlan({ contentGenerationRuntime: contentRuntime });
-    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, started);
+    updateOutlineExpansionProgress(round, 1, '准备目录上下文和字数统计', started);
+
+    updateOutlineExpansionProgress(round, 2, '正在请求 AI 生成新增目录');
 
     const patch = await aiService.collectJsonResponse({
       messages: buildOutlineExpansionMessages({
@@ -2154,21 +2181,24 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       normalizer: (value) => normalizeOutlineExpansionResponse(value, { nodeMap }),
       validator: validateOutlineExpansionResponse,
       repairMessagesBuilder: (context) => buildOutlineExpansionRepairMessages(context, nodeMap),
+      progressCallback: (message) => updateOutlineExpansionProgress(round, 2, message || '补目录结果格式校验失败，正在修复'),
     });
 
+    updateOutlineExpansionProgress(round, 3, `补目录结果校验通过，返回 ${patch.additions.length} 条新增目录`);
+
     if (!patch.additions.length) {
-      contentStats.outline_expansion_completed = round;
       syncRuntime({ outline_expansion_completed: round });
       logs = [...logs, `第 ${round} 轮补目录未返回可用新增目录。`];
-      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      updateOutlineExpansionProgress(round, 5, '本轮未返回可用新增目录，准备评估字数');
       return 0;
     }
 
+    updateOutlineExpansionProgress(round, 4, '正在应用新增目录并校验完整目录结构');
     const { outline, invalidatedItemIds, addedCount } = applyOutlineExpansionAdditions(outlineData.outline || [], patch);
-    contentStats.outline_expansion_completed = round;
     syncRuntime({ outline_expansion_completed: round });
     logs = [...logs, `第 ${round} 轮补目录已应用：新增 ${addedCount} 个目录节点，清空 ${invalidatedItemIds.size} 个旧叶子正文并返还其编排额度。`];
     refreshOutlineState(outline, invalidatedItemIds);
+    updateOutlineExpansionProgress(round, 5, `已新增 ${addedCount} 个目录节点，正在刷新待生成小节`);
     return addedCount;
   }
 
@@ -2182,20 +2212,22 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     for (let round = completedRounds + 1; round <= MAX_OUTLINE_EXPANSION_ROUNDS; round += 1) {
       try {
         addedTotal += await runOutlineExpansionRound(round);
+        updateOutlineExpansionProgress(round, OUTLINE_EXPANSION_STEPS_PER_ROUND, '本轮补目录已完成，正在检查暂停请求');
         pauseIfRequested('正文生成已在补目录阶段暂停，可导出当前已完成内容，稍后继续。');
       } catch (error) {
         if (error?.code === 'CONTENT_GENERATION_PAUSED') {
           throw error;
         }
         logs = [...logs, `第 ${round} 轮补目录失败：${error.message || '模型返回无效'}。`];
-        contentStats.outline_expansion_completed = round;
         syncRuntime({ outline_expansion_completed: round });
-        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+        updateOutlineExpansionProgress(round, OUTLINE_EXPANSION_STEPS_PER_ROUND, '本轮补目录失败，准备评估是否继续');
       }
 
+      updateOutlineExpansionProgress(round, OUTLINE_EXPANSION_STEPS_PER_ROUND, '正在预估补目录后的可达字数');
       const estimatedWords = countTotalContentWords() + pendingContentContexts().length * medianLeafWords();
       if (estimatedWords >= minimumWords * OUTLINE_EXPANSION_TARGET_RATIO) {
         logs = [...logs, `补目录预估可达到最低字数的 ${Math.round(OUTLINE_EXPANSION_TARGET_RATIO * 100)}%，准备生成新增正文。`];
+        updateOutlineExpansionProgress(round, OUTLINE_EXPANSION_STEPS_PER_ROUND, '预估字数已达标，准备生成新增正文');
         break;
       }
     }

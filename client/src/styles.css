@@ -1506,6 +1506,7 @@ button {
 }
 
 .content-generation-progress-track {
+  position: relative;
   height: 10px;
   margin: 18px 20px 0;
   overflow: hidden;
@@ -1529,12 +1530,38 @@ button {
   background: linear-gradient(90deg, #1cb874, #58d68d);
 }
 
+.content-generation-progress-track.is-outline-expanding {
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.content-generation-progress-track.is-outline-expanding span {
+  background: linear-gradient(90deg, #f59e0b, #f97316);
+}
+
 .content-generation-progress-track.is-illustrating {
   background: rgba(139, 92, 246, 0.12);
 }
 
 .content-generation-progress-track.is-illustrating span {
   background: linear-gradient(90deg, #8b5cf6, #2174fd);
+}
+
+.content-generation-progress-track.is-active::after {
+  position: absolute;
+  inset: 0;
+  content: '';
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.42), transparent);
+  animation: content-progress-sweep 1.35s linear infinite;
+}
+
+@keyframes content-progress-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(100%);
+  }
 }
 
 .content-generation-progress-card p {

@@ -43,6 +43,11 @@ export interface BackgroundTaskState {
       generation_completed: number;
       outline_expansion_total?: number;
       outline_expansion_completed?: number;
+      outline_expansion_step_total?: number;
+      outline_expansion_step_completed?: number;
+      outline_expansion_round?: number;
+      outline_expansion_round_total?: number;
+      outline_expansion_step_label?: string;
       minimum_words?: number;
       current_words?: number;
       illustration_total?: number;

@@ -362,7 +362,14 @@ function ContentEditPage({
   const planningProgress = planningTotal ? Math.round((planningCompleted / planningTotal) * 100) : 0;
   const outlineExpansionTotal = contentStats?.outline_expansion_total || 3;
   const outlineExpansionCompleted = contentStats?.outline_expansion_completed || 0;
-  const outlineExpansionProgress = outlineExpansionTotal ? Math.round((outlineExpansionCompleted / outlineExpansionTotal) * 100) : 0;
+  const outlineExpansionStepTotal = contentStats?.outline_expansion_step_total || outlineExpansionTotal;
+  const outlineExpansionStepCompleted = contentStats?.outline_expansion_step_total
+    ? contentStats?.outline_expansion_step_completed || 0
+    : outlineExpansionCompleted;
+  const outlineExpansionRound = contentStats?.outline_expansion_round || Math.min(outlineExpansionCompleted + 1, outlineExpansionTotal);
+  const outlineExpansionRoundTotal = contentStats?.outline_expansion_round_total || outlineExpansionTotal;
+  const outlineExpansionStepLabel = contentStats?.outline_expansion_step_label || '';
+  const outlineExpansionProgress = outlineExpansionStepTotal ? Math.round((outlineExpansionStepCompleted / outlineExpansionStepTotal) * 100) : 0;
   const minimumWords = contentStats?.minimum_words ?? contentGenerationOptions?.minimumWords ?? 0;
   const currentWords = contentStats?.current_words ?? totalWords;
   const minimumWordsUnmet = minimumWords > 0 && currentWords < minimumWords;
@@ -378,14 +385,14 @@ function ContentEditPage({
   const displayProgressCount = planning
     ? `${planningCompleted}/${planningTotal}`
     : outlineExpanding
-      ? `${outlineExpansionCompleted}/${outlineExpansionTotal}`
+      ? `${outlineExpansionStepCompleted}/${outlineExpansionStepTotal}`
       : expanding
         ? `${wordExpansionProgress}%`
         : illustrating
           ? `${illustrationCompleted}/${illustrationTotal}`
           : `${completedCount}/${leaves.length}`;
   const progressPhaseLabel = planning ? '正文编排' : outlineExpanding ? '正文补目录' : expanding ? '正文扩写' : illustrating ? '正文配图' : '正文生成';
-  const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${illustrating ? ' is-illustrating' : ''}`;
+  const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${outlineExpanding ? ' is-outline-expanding' : ''}${illustrating ? ' is-illustrating' : ''}${taskInFlight && (planning || outlineExpanding || expanding || illustrating) ? ' is-active' : ''}`;
   const progressDescription = taskFailed
     ? minimumWordsUnmet
       ? `正文扩写失败：当前 ${currentWords}/${minimumWords} 字。${taskErrorMessage}`
@@ -393,7 +400,9 @@ function ContentEditPage({
     : planning
     ? paused ? `正文生成已暂停在编排阶段，已完成 ${planningCompleted}/${planningTotal} 个小节。` : `正在编排正文结构，已完成 ${planningCompleted}/${planningTotal} 个小节。`
     : outlineExpanding
-      ? paused ? `正文生成已暂停在补目录阶段，已完成 ${outlineExpansionCompleted}/${outlineExpansionTotal} 轮。` : `正在补充目录，已完成 ${outlineExpansionCompleted}/${outlineExpansionTotal} 轮。`
+      ? paused
+        ? `正文生成已暂停在补目录阶段，第 ${outlineExpansionRound}/${outlineExpansionRoundTotal} 轮，已完成 ${outlineExpansionStepCompleted}/${outlineExpansionStepTotal} 步。${outlineExpansionStepLabel}`
+        : `正在补目录，第 ${outlineExpansionRound}/${outlineExpansionRoundTotal} 轮：${outlineExpansionStepLabel || `已完成 ${outlineExpansionCompleted}/${outlineExpansionTotal} 轮`}`
       : expanding
         ? paused ? `正文生成已暂停在扩写阶段，最低字数达成 ${wordExpansionProgress}%。` : `正在扩写正文，最低字数达成 ${wordExpansionProgress}%。`
         : illustrating
