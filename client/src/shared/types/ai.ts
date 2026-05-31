@@ -10,6 +10,8 @@ export interface ChatRequestOptions {
   response_format?: { type: 'json_object' };
   timeout_ms?: number;
   timeout_message?: string;
+  logTitle?: string;
+  log_title?: string;
 }
 
 export interface ChatCompletionRequest extends ChatRequestOptions {

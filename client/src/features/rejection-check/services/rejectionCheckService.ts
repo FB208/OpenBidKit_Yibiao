@@ -257,12 +257,14 @@ export async function runRejectionItemCheck(input: RunRejectionItemCheckInput): 
   const analysis = await aiClient.chat({
     messages: buildRejectionCheckAnalysisMessages(input),
     temperature: 0.1,
+    logTitle: '废标项检查-范围分析',
   });
 
   input.onProgress?.('第二轮：正在逐项检查投标文件。');
   const draftFindings = await aiClient.chat({
     messages: buildRejectionCheckInspectionMessages(input, analysis),
     temperature: 0.1,
+    logTitle: '废标项检查-逐项检查',
   });
 
   input.onProgress?.('第三轮：正在补充、去重并生成结果。');
@@ -271,6 +273,7 @@ export async function runRejectionItemCheck(input: RunRejectionItemCheckInput): 
     temperature: 0.1,
     schemaName: 'RejectionCheckFindings',
     progressLabel: '废标项检查结果',
+    logTitle: '废标项检查-最终结果',
     failureMessage: '废标项检查结果格式无效，请重新检查',
   });
 
@@ -284,6 +287,7 @@ export async function runTypoCheck(input: RunBidContentCheckInput): Promise<Typo
     temperature: 0.1,
     schemaName: 'TypoCheckFindings',
     progressLabel: '错别字检查结果',
+    logTitle: '错别字检查结果',
     failureMessage: '错别字检查结果格式无效，请重新检查',
   });
 
@@ -298,6 +302,7 @@ export async function runLogicCheck(input: RunBidContentCheckInput): Promise<Log
     temperature: 0.1,
     schemaName: 'LogicCheckFindings',
     progressLabel: '逻辑谬误检查结果',
+    logTitle: '逻辑谬误检查结果',
     failureMessage: '逻辑谬误检查结果格式无效，请重新检查',
   });
 

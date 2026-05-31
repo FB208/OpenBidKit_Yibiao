@@ -4,5 +4,5 @@ import type { DuplicateCheckReport } from '../types';
 
 export async function requestDuplicateCheck(documentContent: string) {
   const messages = buildDuplicateCheckMessages({ documentContent });
-  return aiClient.requestJson<DuplicateCheckReport>({ messages, schemaName: 'DuplicateCheckReport' });
+  return aiClient.requestJson<DuplicateCheckReport>({ messages, schemaName: 'DuplicateCheckReport', logTitle: '标书查重' });
 }

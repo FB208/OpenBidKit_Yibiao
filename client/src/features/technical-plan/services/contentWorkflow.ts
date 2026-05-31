@@ -9,5 +9,5 @@ export async function requestChapterContent(options: {
   projectOverview?: string;
 }) {
   const messages = buildChapterContentMessages(options);
-  return aiClient.chat({ messages, temperature: 0.7 });
+  return aiClient.chat({ messages, temperature: 0.7, logTitle: `正文生成-${options.chapter.id}-${options.chapter.title || '未命名章节'}` });
 }

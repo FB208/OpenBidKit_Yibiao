@@ -118,6 +118,7 @@ async function runSingleBidAnalysisPromptTask({ aiService, fileContent, task }) 
     messages: buildMessages(fileContent, task),
     temperature: 0.1,
     response_format: task.output === 'json' ? { type: 'json_object' } : undefined,
+    logTitle: `招标解析-${task.label}`,
   });
 }
 

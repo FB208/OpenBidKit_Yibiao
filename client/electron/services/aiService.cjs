@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { getAiLogsDir, getGeneratedImagesDir } = require('../utils/paths.cjs');
 
 const AI_REQUEST_TIMEOUT_MS = 300000;
+const MAX_AI_LOG_TITLE_LENGTH = 64;
 const IMAGE_MODEL_TEST_TIMEOUT_MESSAGE = '生图模型测试超时，请检查 Base URL、API Key 或模型名称';
 const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const ANALYTICS_PROJECT_NAME = 'yibiao-client';
@@ -44,6 +45,33 @@ function createRequestId() {
   return `${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID()}`;
 }
 
+function sanitizeAiLogTitle(value) {
+  return String(value || '')
+    .replace(/[<>:"/\\|?*\x00-\x1F]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_AI_LOG_TITLE_LENGTH)
+    .replace(/[. ]+$/g, '');
+}
+
+function resolveAiLogTitle(request, fallback = '') {
+  return sanitizeAiLogTitle(request?.logTitle || request?.log_title || request?.progressLabel || request?.schemaName || fallback);
+}
+
+function buildAiLogFileName(payload) {
+  const requestId = String(payload.request_id || createRequestId()).trim();
+  const logTitle = sanitizeAiLogTitle(payload.log_title);
+  if (!logTitle) {
+    return `${requestId}.json`;
+  }
+
+  const match = /^(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(requestId);
+  if (match) {
+    return `${match[1]}-${logTitle}-${match[2]}.json`;
+  }
+  return `${requestId}-${logTitle}.json`;
+}
+
 function isResponseFormatUnsupported(message) {
   const normalized = String(message || '').toLowerCase();
   return normalized.includes('response_format') && [
@@ -64,8 +92,10 @@ function writeAiLog(app, config, payload) {
 
   const logsDir = getAiLogsDir(app);
   fs.mkdirSync(logsDir, { recursive: true });
-  const fileName = `${payload.request_id}.json`;
-  fs.writeFileSync(path.join(logsDir, fileName), JSON.stringify(payload, null, 2), 'utf-8');
+  const logTitle = sanitizeAiLogTitle(payload.log_title);
+  const logPayload = logTitle ? { ...payload, log_title: logTitle } : payload;
+  const fileName = buildAiLogFileName(logPayload);
+  fs.writeFileSync(path.join(logsDir, fileName), JSON.stringify(logPayload, null, 2), 'utf-8');
 }
 
 function normalizeTokenNumber(value) {
@@ -569,7 +599,7 @@ function normalizeJsonPayload(request, parsed) {
   return normalized;
 }
 
-async function repairJsonResponse(app, config, invalidContent, issues, temperature, responseFormat, progressCallback, progressLabel, repairMessagesBuilder) {
+async function repairJsonResponse(app, config, invalidContent, issues, temperature, responseFormat, progressCallback, progressLabel, repairMessagesBuilder, logTitle) {
   await emitProgress(progressCallback, `${progressLabel}格式校验失败，正在基于当前结果进行修复。`);
   return chatWithConfig(app, config, {
     messages: repairMessagesBuilder
@@ -577,6 +607,7 @@ async function repairJsonResponse(app, config, invalidContent, issues, temperatu
       : buildJsonRepairMessages(invalidContent, issues, progressLabel),
     temperature,
     response_format: responseFormat,
+    logTitle: logTitle ? `${logTitle}修复` : `${progressLabel}修复`,
   });
 }
 
@@ -585,6 +616,7 @@ async function parseOrRepairJsonResponseWithConfig(app, config, request, content
   const responseFormat = request.response_format || { type: 'json_object' };
   const progressLabel = request.progressLabel || 'JSON结果';
   const failureMessage = request.failureMessage || '模型返回的 JSON 数据格式无效';
+  const logTitle = resolveAiLogTitle(request, progressLabel);
 
   try {
     return normalizeJsonPayload(request, parseJsonContent(content));
@@ -601,6 +633,7 @@ async function parseOrRepairJsonResponseWithConfig(app, config, request, content
         request.progressCallback,
         progressLabel,
         request.repairMessagesBuilder,
+        logTitle,
       );
       return normalizeJsonPayload(request, parseJsonContent(repairedContent));
     } catch {
@@ -616,6 +649,7 @@ async function collectJsonResponseWithConfig(app, config, request) {
   const responseFormat = request.response_format || { type: 'json_object' };
   const progressLabel = request.progressLabel || 'JSON结果';
   const failureMessage = request.failureMessage || '模型返回的 JSON 数据格式无效';
+  const logTitle = resolveAiLogTitle(request, progressLabel);
   let lastError = null;
 
   for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
@@ -623,6 +657,9 @@ async function collectJsonResponseWithConfig(app, config, request) {
       messages: request.messages,
       temperature,
       response_format: responseFormat,
+      timeout_ms: request.timeout_ms,
+      timeout_message: request.timeout_message,
+      logTitle,
     });
 
     try {
@@ -643,6 +680,7 @@ async function collectJsonResponseWithConfig(app, config, request) {
           request.progressCallback,
           progressLabel,
           request.repairMessagesBuilder,
+          logTitle,
         );
         const repairedParsed = parseJsonContent(repairedContent);
         return normalizeJsonPayload(request, repairedParsed);
@@ -706,6 +744,7 @@ async function chatWithConfig(app, config, request) {
   requireBaseUrl(config.base_url, '请先在设置中配置文本模型 Base URL');
 
   const requestId = createRequestId();
+  const logTitle = resolveAiLogTitle(request, '文本请求');
   let requestBody = createChatRequestBody(config, request);
   let responseData = null;
   let errorMessage = '';
@@ -716,6 +755,7 @@ async function chatWithConfig(app, config, request) {
   try {
     writeAiLog(app, config, {
       request_id: requestId,
+      log_title: logTitle,
       type: 'chat-pending',
       url: `${trimBaseUrl(config.base_url)}/chat/completions`,
       request: requestBody,
@@ -740,6 +780,7 @@ async function chatWithConfig(app, config, request) {
     const content = responseData.choices?.[0]?.message?.content || '';
     writeAiLog(app, config, {
       request_id: requestId,
+      log_title: logTitle,
       type: 'chat',
       url: `${trimBaseUrl(config.base_url)}/chat/completions`,
       request: requestBody,
@@ -758,6 +799,7 @@ async function chatWithConfig(app, config, request) {
     }
     writeAiLog(app, config, {
       request_id: requestId,
+      log_title: logTitle,
       type: 'chat-error',
       url: `${trimBaseUrl(config.base_url)}/chat/completions`,
       request: requestBody,
@@ -902,6 +944,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
   const imageConfig = config.image_model || {};
   const meta = OPENAI_IMAGE_PROVIDER_META[provider] || OPENAI_IMAGE_PROVIDER_META.volcengine;
   const requestId = createRequestId();
+  const logTitle = resolveAiLogTitle(request, request.title ? `AI生图-${request.title}` : 'AI生图');
   const requestBody = {
     model: imageConfig.model_name,
     prompt: normalizeImagePrompt(request),
@@ -915,6 +958,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
   try {
     writeAiLog(app, config, {
       request_id: requestId,
+      log_title: logTitle,
       type: 'image-pending',
       provider: meta.logProvider,
       url: `${baseUrl}/images/generations`,
@@ -941,6 +985,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
     const saved = saveGeneratedImage(app, image);
     writeAiLog(app, config, {
       request_id: requestId,
+      log_title: logTitle,
       type: 'image',
       provider: meta.logProvider,
       request: requestBody,
@@ -956,6 +1001,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
     }
     writeAiLog(app, config, {
       request_id: requestId,
+      log_title: logTitle,
       type: 'image-error',
       provider: meta.logProvider,
       request: requestBody,
@@ -970,6 +1016,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
 async function generateGoogleImage(app, config, request) {
   const imageConfig = config.image_model || {};
   const requestId = createRequestId();
+  const logTitle = resolveAiLogTitle(request, request.title ? `AI生图-${request.title}` : 'AI生图');
   const requestBody = {
     contents: [
       {
@@ -988,6 +1035,7 @@ async function generateGoogleImage(app, config, request) {
   try {
     writeAiLog(app, config, {
       request_id: requestId,
+      log_title: logTitle,
       type: 'image-pending',
       provider: 'google-ai-studio',
       url: `${baseUrl}/models/${encodeURIComponent(imageConfig.model_name)}:generateContent`,
@@ -1021,6 +1069,7 @@ async function generateGoogleImage(app, config, request) {
     });
     writeAiLog(app, config, {
       request_id: requestId,
+      log_title: logTitle,
       type: 'image',
       provider: 'google-ai-studio',
       request: requestBody,
@@ -1036,6 +1085,7 @@ async function generateGoogleImage(app, config, request) {
     }
     writeAiLog(app, config, {
       request_id: requestId,
+      log_title: logTitle,
       type: 'image-error',
       provider: 'google-ai-studio',
       request: requestBody,

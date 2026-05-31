@@ -621,6 +621,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         temperature: 0,
         timeout_ms: 30000,
         timeout_message: '文本模型测试超时，请检查 Base URL、API Key 或模型名称',
+        logTitle: '文本模型测试',
       });
       const reply = (content || '').trim();
       showToast(reply ? `测试成功：${reply.slice(0, 160)}` : '测试成功', 'success');

@@ -1374,6 +1374,7 @@ async function prepareRenderableMermaidPlan({ aiService, context, projectOvervie
           attempt,
         }),
         temperature: 0.1,
+        logTitle: `Mermaid配图修复-${item.id}-${currentPlan.title || item.title || '未命名章节'}`,
         progressLabel: 'Mermaid 配图修复',
         failureMessage: '模型返回的 Mermaid 修复结果格式无效',
         normalizer: normalizeMermaidRepairResult,
@@ -1977,6 +1978,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
           knowledgeItems,
         }),
         temperature: 0.2,
+        logTitle: `正文编排-${item.id}-${item.title || '未命名章节'}`,
         progressLabel: '正文编排决策',
         failureMessage: '模型返回的正文编排决策格式无效',
         normalizer: (value) => normalizeContentPlan(value, allowedKnowledgeItemIds),
@@ -2117,6 +2119,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       const generatedContent = await aiService.chat({
         messages: buildChapterContentMessages({ chapter: item, parentChapters, siblingChapters, projectOverview, regenerateRequirement, contentPlan, knowledgeContents }),
         temperature: 0.7,
+        logTitle: `正文生成-${item.id}-${item.title || '未命名章节'}`,
       });
       rawContent += generatedContent || '';
 
@@ -2227,6 +2230,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         nodeMap,
       }),
       temperature: 0.4,
+      logTitle: `最低字数补目录第${round}轮`,
       progressLabel: '最低字数补目录',
       failureMessage: '模型返回的补目录数据格式无效',
       normalizer: (value) => normalizeOutlineExpansionResponse(value, { nodeMap }),
@@ -2470,6 +2474,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
           targetWords,
         }),
         temperature: 0.7,
+        logTitle: `正文扩写-${item.id}-${item.title || '未命名章节'}`,
         progressLabel: '正文扩写',
         failureMessage: '模型返回的正文扩写结果格式无效',
         normalizer: normalizeContentExpansionPatch,
@@ -2561,6 +2566,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     try {
       const generatedImage = await aiService.generateImage({
         title: contentPlan.image.title,
+        logTitle: `AI生图-${item.id}-${contentPlan.image.title || item.title || '未命名章节'}`,
         prompt: contentPlan.image.prompt,
         style: contentPlan.image.style,
       });

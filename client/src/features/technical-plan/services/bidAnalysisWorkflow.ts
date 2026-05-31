@@ -276,6 +276,7 @@ export function requestBidAnalysisTask(
     messages: buildMessages(fileContent, task.buildTaskPrompt()),
     temperature: 0.1,
     response_format: task.output === 'json' ? { type: 'json_object' } : undefined,
+    logTitle: `招标解析-${task.label}`,
   });
 }
 

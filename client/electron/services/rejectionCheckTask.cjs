@@ -312,7 +312,10 @@ function normalizeLogicCheckFindings(parsed) {
 }
 
 async function runText(aiService, request, _onProgress, label) {
-  const content = await aiService.chat(request);
+  const content = await aiService.chat({
+    ...request,
+    logTitle: request.logTitle || request.log_title || label,
+  });
   if (!content.trim()) {
     throw new Error(`${label}未返回内容`);
   }
@@ -324,6 +327,7 @@ async function runJson(aiService, request, onProgress, _label) {
     ...request,
     response_format: request.response_format || { type: 'json_object' },
     progressCallback: request.progressCallback || onProgress,
+    logTitle: request.logTitle || request.log_title || request.progressLabel || _label,
   };
   return aiService.collectJsonResponse ? aiService.collectJsonResponse(jsonRequest) : aiService.requestJson(jsonRequest);
 }
