@@ -113,27 +113,21 @@ function buildMessages(fileContent, task) {
   ];
 }
 
-async function runSingleBidAnalysisPromptTask({ aiService, fileContent, task, onChunk }) {
-  let content = '';
-  await aiService.streamChat({ messages: buildMessages(fileContent, task), temperature: 0.1, response_format: task.output === 'json' ? { type: 'json_object' } : undefined }, (event) => {
-    if (event.type === 'chunk' && event.chunk) {
-      content += event.chunk;
-      if (typeof onChunk === 'function') {
-        onChunk(content, event.chunk, event);
-      }
-    }
+async function runSingleBidAnalysisPromptTask({ aiService, fileContent, task }) {
+  return aiService.chat({
+    messages: buildMessages(fileContent, task),
+    temperature: 0.1,
+    response_format: task.output === 'json' ? { type: 'json_object' } : undefined,
   });
-
-  return content;
 }
 
-function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent, onChunk }) {
+function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent }) {
   const task = getBidAnalysisTaskById('discardedBids');
   if (!task) {
     throw new Error('未找到无效投标与废标项解析任务');
   }
 
-  return runSingleBidAnalysisPromptTask({ aiService, fileContent, task, onChunk });
+  return runSingleBidAnalysisPromptTask({ aiService, fileContent, task });
 }
 
 async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, payload }) {
@@ -149,7 +143,6 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
   if (requestedTaskIds && scopedTasks.length === 0) {
     throw new Error('未找到可重新解析的招标文件解析项');
   }
-  const realTimeRender = payload.real_time_render !== false && payload.realTimeRender !== false;
   function doneProgress(nextTasks) {
     const done = selectedTasks.filter((task) => ['success', 'error'].includes(nextTasks[task.id]?.status)).length;
     return Math.round((done / selectedTasks.length) * 100);
@@ -160,9 +153,7 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
     : forceRerun
       ? '开始重新解析全部招标文件解析项。'
       : '开始解析招标文件。';
-  const initialLogs = realTimeRender
-    ? [initialMessage]
-    : [initialMessage, '实时渲染已关闭，每项解析完成后再刷新结果。'];
+  const initialLogs = [initialMessage];
   let initialPartial = { bidAnalysisMode: mode, bidAnalysisTask: updateTask({ status: 'running', progress: 0, logs: initialLogs }) };
   if (forceRerun && !requestedTaskIds) {
     const prev = workspaceStore.loadTechnicalPlan() || {};
@@ -199,15 +190,6 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
       aiService,
       fileContent: payload.fileContent,
       task,
-      onChunk: (nextContent) => {
-        if (!realTimeRender) {
-          return;
-        }
-        const prev = workspaceStore.loadTechnicalPlan() || {};
-        const nextTasks = { ...(prev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'running', content: nextContent } };
-        technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTasks: nextTasks, bidAnalysisProgress: doneProgress(nextTasks) });
-        updateTask({ status: 'running', progress: technicalPlan.bidAnalysisProgress || 0 }, technicalPlan);
-      },
     });
 
     const prev = workspaceStore.loadTechnicalPlan() || {};

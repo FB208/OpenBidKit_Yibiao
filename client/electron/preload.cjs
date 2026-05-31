@@ -1,7 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-let streamRequestId = 0;
-
 const bridge = {
   appName: '易标投标工具箱',
   platform: process.platform,
@@ -36,17 +34,6 @@ const bridge = {
     chat: (request) => ipcRenderer.invoke('ai:chat', request),
     requestJson: (request) => ipcRenderer.invoke('ai:request-json', request),
     testImageModel: (config) => ipcRenderer.invoke('ai:test-image-model', config),
-    streamChat: (request, onEvent) => {
-      const requestId = ++streamRequestId;
-      const channel = `ai:stream-chat:event:${requestId}`;
-      const listener = (_event, payload) => onEvent(payload);
-      ipcRenderer.on(channel, listener);
-      ipcRenderer.send('ai:stream-chat', requestId, request);
-
-      return () => {
-        ipcRenderer.removeListener(channel, listener);
-      };
-    },
   },
   file: {
     importDocument: () => ipcRenderer.invoke('file:import-document'),

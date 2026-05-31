@@ -1,4 +1,4 @@
-import type { AiStreamEvent, ChatCompletionRequest, JsonCompletionRequest } from './ai';
+import type { ChatCompletionRequest, JsonCompletionRequest } from './ai';
 import type { DuplicateCheckWorkspaceState, FileImportResult, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseMutationResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
@@ -66,7 +66,6 @@ export interface YibiaoBridge {
     chat: (request: ChatCompletionRequest) => Promise<string>;
     requestJson: <TResult = unknown>(request: JsonCompletionRequest) => Promise<TResult>;
     testImageModel: (config: ClientConfig) => Promise<ImageModelTestResult>;
-    streamChat: (request: ChatCompletionRequest, onEvent: (event: AiStreamEvent) => void) => () => void;
   };
   file: {
     importDocument: () => Promise<FileImportResult>;

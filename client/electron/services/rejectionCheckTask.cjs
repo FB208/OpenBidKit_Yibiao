@@ -311,54 +311,40 @@ function normalizeLogicCheckFindings(parsed) {
   return findings;
 }
 
-async function runStreamText(aiService, request, _onProgress, label) {
-  let content = '';
-  await aiService.streamChat(request, (event) => {
-    if (event?.type === 'chunk' && event.chunk) {
-      content += event.chunk;
-    }
-    if (event?.type === 'error') {
-      throw new Error(event.message || `${label}流式请求失败`);
-    }
-  });
-
+async function runText(aiService, request, _onProgress, label) {
+  const content = await aiService.chat(request);
   if (!content.trim()) {
     throw new Error(`${label}未返回内容`);
   }
   return content;
 }
 
-async function runStreamJson(aiService, request, onProgress, label) {
+async function runJson(aiService, request, onProgress, _label) {
   const jsonRequest = {
     ...request,
     response_format: request.response_format || { type: 'json_object' },
     progressCallback: request.progressCallback || onProgress,
   };
-  const content = await runStreamText(aiService, jsonRequest, onProgress, label);
-  onProgress(`${label}正在整理检查结果。`);
-  if (typeof aiService.parseJsonResponseContent === 'function') {
-    return aiService.parseJsonResponseContent(jsonRequest, content);
-  }
-  return JSON.parse(content);
+  return aiService.collectJsonResponse ? aiService.collectJsonResponse(jsonRequest) : aiService.requestJson(jsonRequest);
 }
 
 async function runRejectionItemCheck(aiService, input, onProgress) {
   onProgress('第一轮：正在分析检查范围。');
-  const analysis = await runStreamText(
+  const analysis = await runText(
     aiService,
     { messages: buildRejectionCheckAnalysisMessages(input), temperature: 0.1 },
     onProgress,
     '第一轮分析',
   );
   onProgress('第二轮：正在逐项检查投标文件。');
-  const draftFindings = await runStreamText(
+  const draftFindings = await runText(
     aiService,
     { messages: buildRejectionCheckInspectionMessages(input, analysis), temperature: 0.1 },
     onProgress,
     '第二轮检查',
   );
   onProgress('第三轮：正在补充、去重并生成结果。');
-  const payload = await runStreamJson(aiService, {
+  const payload = await runJson(aiService, {
     messages: buildRejectionCheckFinalMessages(input, analysis, draftFindings),
     temperature: 0.1,
     schemaName: 'RejectionCheckFindings',
@@ -370,7 +356,7 @@ async function runRejectionItemCheck(aiService, input, onProgress) {
 
 async function runTypoCheck(aiService, input, onProgress) {
   onProgress('正在识别错别字候选。');
-  const payload = await runStreamJson(aiService, {
+  const payload = await runJson(aiService, {
     messages: buildTypoCheckMessages({ bidContent: input.bidContent }),
     temperature: 0.1,
     schemaName: 'TypoCheckFindings',
@@ -383,7 +369,7 @@ async function runTypoCheck(aiService, input, onProgress) {
 
 async function runLogicCheck(aiService, input, onProgress) {
   onProgress('正在检查逻辑谬误。');
-  const payload = await runStreamJson(aiService, {
+  const payload = await runJson(aiService, {
     messages: buildLogicCheckMessages({ bidContent: input.bidContent }),
     temperature: 0.1,
     schemaName: 'LogicCheckFindings',
@@ -409,8 +395,6 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, upda
   const tenderSignature = String(payload?.tenderSignature || '');
   if (!tenderContent.trim() || !tenderSignature) throw new Error('缺少招标文件内容，无法解析无效与废标项');
 
-  let contentBuffer = '';
-  let chunkCount = 0;
   const logs = ['开始解析无效与废标项。'];
   updateExtractionState(workspaceStore, updateTask, { status: 'running', progress: 5, logs }, {
     status: 'running',
@@ -426,19 +410,6 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, upda
     content = await runInvalidBidAndRejectionItemsExtraction({
       aiService,
       fileContent: tenderContent,
-      onChunk: (nextContent) => {
-        contentBuffer = nextContent;
-        chunkCount += 1;
-        const progress = Math.min(90, 10 + chunkCount * 3);
-        updateExtractionState(workspaceStore, updateTask, { status: 'running', progress, logs: [...logs, '正在接收模型解析结果。'] }, {
-          status: 'running',
-          content: contentBuffer,
-          source: 'ai',
-          tenderSignature,
-          error: undefined,
-          updatedAt: now(),
-        });
-      },
     });
   } catch (error) {
     const message = error?.message || '无效与废标项解析失败';
@@ -449,7 +420,7 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, upda
       error: message,
     }, {
       status: 'error',
-      content: contentBuffer,
+      content: '',
       source: 'ai',
       tenderSignature,
       error: message,
@@ -458,7 +429,7 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, upda
     return;
   }
 
-  const finalContent = stripTripleQuoteWrapper(content || contentBuffer);
+  const finalContent = stripTripleQuoteWrapper(content);
   const success = Boolean(finalContent.trim());
   updateExtractionState(workspaceStore, updateTask, {
     status: success ? 'success' : 'error',

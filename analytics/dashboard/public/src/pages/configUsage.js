@@ -9,7 +9,6 @@ function labelConfigValue(groupKey, value) {
       'mineru-accurate-api': 'MinerU 精准解析 API',
       'mineru-agent-api': 'MinerU-Agent 轻量解析 API',
     },
-    realTimeRender: { true: '开启', false: '关闭' },
     textModelProviders: {
       jinlong: '金龙中转站',
       volcengine: '火山方舟',
@@ -43,7 +42,6 @@ function labelModelProvider(groupKey, value) {
 
 const configUsageGroups = [
   ['fileParserProviders', '文件解析方式'],
-  ['realTimeRender', '实时渲染'],
   ['imageProviders', '生图服务商'],
   ['imageModelStatuses', '生图模型状态'],
   ['bidAnalysisModes', 'Step 02 解析模式'],

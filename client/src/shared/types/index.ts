@@ -1,4 +1,4 @@
-export type { AiStreamEvent, ChatCompletionRequest, ChatMessage, JsonCompletionRequest } from './ai';
+export type { ChatCompletionRequest, ChatMessage, JsonCompletionRequest } from './ai';
 export type {
   AnalysisType,
   BidProjectDraft,

@@ -10,6 +10,5 @@ export interface SettingsPageState {
   fileParser: FileParserConfig;
   general: {
     developer_mode: boolean;
-    real_time_render: boolean;
   };
 }

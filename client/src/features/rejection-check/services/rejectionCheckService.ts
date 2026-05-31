@@ -7,7 +7,7 @@ import {
   buildTypoCheckMessages,
 } from '../../../shared/prompts';
 import { aiClient } from '../../../shared/ai';
-import type { AiStreamEvent, ChatMessage } from '../../../shared/types';
+import type { ChatMessage } from '../../../shared/types';
 import { createId } from '../../../shared/utils/ids';
 import type { LogicCheckFinding, RejectionCheckFinding, RejectionFindingSeverity, RejectionFindingType, TypoCheckFinding } from '../types';
 
@@ -25,19 +25,6 @@ export function buildInvalidBidAndRejectionItemsMessages(fileContent: string): C
     { role: 'user', content: `以下是完整招标文件 Markdown 原文。后续任务必须优先基于这份原文完成：\n\n${fileContent}` },
     { role: 'user', content: buildInvalidBidAndRejectionItemsPrompt() },
   ];
-}
-
-export function streamInvalidBidAndRejectionItems(
-  fileContent: string,
-  onEvent: (event: AiStreamEvent) => void,
-) {
-  return aiClient.streamChat(
-    {
-      messages: buildInvalidBidAndRejectionItemsMessages(fileContent),
-      temperature: 0.1,
-    },
-    onEvent,
-  );
 }
 
 interface RunRejectionItemCheckInput {

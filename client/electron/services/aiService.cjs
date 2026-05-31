@@ -57,19 +57,6 @@ function isResponseFormatUnsupported(message) {
   ].some((marker) => normalized.includes(marker));
 }
 
-function isStreamOptionsUnsupported(message) {
-  const normalized = String(message || '').toLowerCase();
-  return normalized.includes('stream_options') && [
-    'not supported',
-    'does not support',
-    'not support',
-    'unsupported',
-    'unknown parameter',
-    'invalid parameter',
-    'unrecognized',
-  ].some((marker) => normalized.includes(marker));
-}
-
 function writeAiLog(app, config, payload) {
   if (!config.developer_mode) {
     return;
@@ -79,34 +66,6 @@ function writeAiLog(app, config, payload) {
   fs.mkdirSync(logsDir, { recursive: true });
   const fileName = `${payload.request_id}.json`;
   fs.writeFileSync(path.join(logsDir, fileName), JSON.stringify(payload, null, 2), 'utf-8');
-}
-
-function responseMeta(response) {
-  if (!response) {
-    return null;
-  }
-
-  const headers = {};
-  response.headers?.forEach?.((value, key) => {
-    const normalizedKey = String(key || '').toLowerCase();
-    if (['authorization', 'cookie', 'set-cookie', 'x-api-key'].includes(normalizedKey)) {
-      return;
-    }
-    headers[normalizedKey] = value;
-  });
-
-  return {
-    status: response.status,
-    status_text: response.statusText,
-    headers,
-  };
-}
-
-function normalizeAiError(error, fallbackMessage) {
-  if (error?.name === 'AbortError') {
-    return `AI 请求超时（${AI_REQUEST_TIMEOUT_MS / 1000} 秒）`;
-  }
-  return error?.message || String(error || '') || fallbackMessage;
 }
 
 function normalizeTokenNumber(value) {
@@ -714,13 +673,6 @@ function createChatRequestBody(config, request, options = {}) {
     body.response_format = request.response_format;
   }
 
-  if (options.stream) {
-    body.stream = true;
-    if (!options.omitStreamOptions) {
-      body.stream_options = { include_usage: true };
-    }
-  }
-
   return body;
 }
 
@@ -816,179 +768,6 @@ async function chatWithConfig(app, config, request) {
     throw new Error(errorMessage || 'AI 请求失败');
   } finally {
     timeout.clear();
-  }
-}
-
-async function streamChatWithConfig(app, config, request, onEvent) {
-  if (!config.api_key) {
-    throw new Error('请先在设置中配置文本模型 API Key');
-  }
-
-  if (!config.model_name) {
-    throw new Error('请先在设置中配置文本模型名称');
-  }
-
-  requireBaseUrl(config.base_url, '请先在设置中配置文本模型 Base URL');
-
-  const requestId = createRequestId();
-  let requestBody = createChatRequestBody(config, request, { stream: true });
-  const rawEvents = [];
-  const contentParts = [];
-  const startedAt = Date.now();
-  let response = null;
-  let responseMetadata = null;
-  let streamUsage = normalizeTokenUsage();
-  let analyticsTracked = false;
-  let phase = 'request';
-  let ignoredSseLineCount = 0;
-  let lastIgnoredSseLine = '';
-
-  function streamStats() {
-    const partialContent = contentParts.join('');
-    return {
-      phase,
-      elapsed_ms: Date.now() - startedAt,
-      raw_event_count: rawEvents.length,
-      ignored_sse_line_count: ignoredSseLineCount,
-      last_ignored_sse_line: lastIgnoredSseLine,
-      partial_content_chars: partialContent.length,
-      partial_content_tail: partialContent.slice(-2000),
-      response_meta: responseMetadata,
-    };
-  }
-
-  writeAiLog(app, config, {
-    request_id: requestId,
-    type: 'stream-pending',
-    url: `${trimBaseUrl(config.base_url)}/chat/completions`,
-    request: requestBody,
-    status: 'pending',
-    diagnostics: streamStats(),
-    created_at: new Date().toISOString(),
-  });
-
-  try {
-    phase = 'fetching-response';
-    let omitResponseFormat = false;
-    let omitStreamOptions = false;
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      requestBody = createChatRequestBody(config, request, { stream: true, omitResponseFormat, omitStreamOptions });
-      response = await fetchChatCompletion(app, config, requestBody);
-      responseMetadata = responseMeta(response);
-
-      phase = 'checking-response-status';
-      if (response.ok) {
-        break;
-      }
-
-      const detail = await response.text().catch(() => '');
-      if (!omitResponseFormat && request.response_format && isResponseFormatUnsupported(detail)) {
-        phase = 'retrying-without-response-format';
-        omitResponseFormat = true;
-        continue;
-      }
-
-      if (!omitStreamOptions && isStreamOptionsUnsupported(detail)) {
-        phase = 'retrying-without-stream-options';
-        omitStreamOptions = true;
-        continue;
-      }
-
-      throw new Error(detail || 'AI 流式请求失败');
-    }
-
-    await ensureOk(response, 'AI 流式请求失败');
-
-    phase = 'stream-open';
-    writeAiLog(app, config, {
-      request_id: requestId,
-      type: 'stream-open',
-      url: `${trimBaseUrl(config.base_url)}/chat/completions`,
-      request: requestBody,
-      response_meta: responseMetadata,
-      diagnostics: streamStats(),
-      created_at: new Date().toISOString(),
-    });
-
-    const decoder = new TextDecoder('utf-8');
-    let buffer = '';
-
-    const emitLine = (line) => {
-      if (!line.startsWith('data:')) {
-        return;
-      }
-
-      const payload = line.slice(5).trim();
-      if (!payload || payload === '[DONE]') {
-        return;
-      }
-
-      try {
-        const data = JSON.parse(payload);
-        rawEvents.push(data);
-        if (data.usage) {
-          streamUsage = normalizeTokenUsage(data.usage);
-        }
-        const chunk = data.choices?.[0]?.delta?.content || '';
-        if (chunk) {
-          contentParts.push(chunk);
-          onEvent({ type: 'chunk', chunk });
-        }
-      } catch {
-        ignoredSseLineCount += 1;
-        lastIgnoredSseLine = payload.slice(0, 1000);
-        // 忽略供应商偶发的非 JSON SSE 行，避免中断已返回内容。
-      }
-    };
-
-    if (!response.body) {
-      throw new Error('AI 流式响应体为空');
-    }
-
-    phase = 'reading-stream';
-    for await (const chunk of response.body) {
-      buffer += decoder.decode(chunk, { stream: true });
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() || '';
-      lines.forEach((line) => emitLine(line.trim()));
-    }
-
-    phase = 'flushing-stream-buffer';
-    buffer.split(/\r?\n/).forEach((line) => emitLine(line.trim()));
-
-    phase = 'done';
-    trackAiRequest(app, config, { ai_request_type: 'text', usage: streamUsage });
-    analyticsTracked = true;
-    writeAiLog(app, config, {
-      request_id: requestId,
-      type: 'stream',
-      url: `${trimBaseUrl(config.base_url)}/chat/completions`,
-      request: requestBody,
-      response: rawEvents,
-      response_meta: responseMetadata,
-      diagnostics: streamStats(),
-      content: contentParts.join(''),
-      created_at: new Date().toISOString(),
-    });
-    onEvent({ type: 'done' });
-  } catch (error) {
-    const message = normalizeAiError(error, 'AI 流式请求失败');
-    if (!analyticsTracked) {
-      trackAiRequest(app, config, { ai_request_type: 'text', usage: streamUsage });
-      analyticsTracked = true;
-    }
-    writeAiLog(app, config, {
-      request_id: requestId,
-      type: 'stream-error',
-      url: `${trimBaseUrl(config.base_url)}/chat/completions`,
-      request: requestBody,
-      response: rawEvents,
-      response_meta: responseMetadata,
-      error: message,
-      diagnostics: streamStats(),
-      created_at: new Date().toISOString(),
-    });
-    throw new Error(message);
   }
 }
 
@@ -1305,11 +1084,6 @@ function createAiService({ app, configStore }) {
     async parseJsonResponseContent(request, content) {
       const config = configStore.load();
       return parseOrRepairJsonResponseWithConfig(app, config, request, content);
-    },
-
-    async streamChat(request, onEvent) {
-      const config = configStore.load();
-      return streamChatWithConfig(app, config, request, onEvent);
     },
 
     async testImageModel(config) {

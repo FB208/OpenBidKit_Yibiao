@@ -565,7 +565,6 @@ function ContentEditPage({
       const nextImageModelAvailable = nextImageModelStatus === 'available';
       setImageModelStatus(nextImageModelStatus);
       const savedGenerationOptions = await saveDraftGenerationOptions(false, nextImageModelAvailable);
-      const shouldRealTimeRender = config?.real_time_render === true;
       const regenerate = leaves.length > 0 && completedCount === leaves.length && !canRetryMinimumWords;
       const contentGenerationAction = canRetryMinimumWords
         ? 'retry_minimum_words'
@@ -592,7 +591,6 @@ function ContentEditPage({
           minimumWords: savedGenerationOptions.minimumWords,
           contentConcurrency: savedGenerationOptions.contentConcurrency,
         },
-        real_time_render: shouldRealTimeRender,
       });
       trackConfigUsage({
         table_requirement: savedGenerationOptions.tableRequirement,
@@ -620,7 +618,6 @@ function ContentEditPage({
       const nextImageModelAvailable = nextImageModelStatus === 'available';
       const savedGenerationOptions = normalizeGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length);
       setImageModelStatus(nextImageModelStatus);
-      const shouldRealTimeRender = config?.real_time_render === true;
       await window.yibiao?.tasks.startContentGeneration({
         outlineData,
         projectOverview: outlineData.project_overview || projectOverview,
@@ -635,7 +632,6 @@ function ContentEditPage({
           tableRequirement: savedGenerationOptions.tableRequirement,
           contentConcurrency: savedGenerationOptions.contentConcurrency,
         },
-        real_time_render: shouldRealTimeRender,
       });
       trackConfigUsage({
         table_requirement: savedGenerationOptions.tableRequirement,

@@ -13,7 +13,6 @@ interface AnalyticsIdentity {
 
 interface ConfigUsagePayload {
   file_parser_provider?: string;
-  real_time_render?: boolean;
   image_provider?: string;
   image_model_status?: string;
   bid_analysis_mode?: string;
@@ -110,7 +109,6 @@ function booleanText(value: boolean | undefined) {
 function buildBaseConfigUsage(config?: ClientConfig | null): ConfigUsagePayload {
   return {
     file_parser_provider: config?.file_parser?.provider,
-    real_time_render: config ? config.real_time_render !== false : undefined,
     image_provider: config?.image_model?.provider,
     image_model_status: config?.image_model?.status || undefined,
   };
@@ -119,7 +117,6 @@ function buildBaseConfigUsage(config?: ClientConfig | null): ConfigUsagePayload 
 function normalizeUsagePayload(payload: ConfigUsagePayload) {
   return {
     ...payload,
-    real_time_render: booleanText(payload.real_time_render),
     use_mermaid_images: booleanText(payload.use_mermaid_images),
     use_ai_images: booleanText(payload.use_ai_images),
   };

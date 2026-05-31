@@ -1,9 +1,8 @@
-import { useRef, useState } from 'react';
-import type { AiStreamEvent } from '../../../shared/types';
-import { getBidAnalysisTasks, streamBidAnalysisTask } from '../../technical-plan/services/bidAnalysisWorkflow';
+import { useState } from 'react';
+import { getBidAnalysisTasks, requestBidAnalysisTask } from '../../technical-plan/services/bidAnalysisWorkflow';
 import { requestOutlineGeneration } from '../../technical-plan/services/outlineWorkflow';
 
-type RunningMode = 'stream' | 'non-stream' | null;
+type RunningMode = 'text' | 'json' | null;
 
 const sampleTenderContent = `# 易标测试项目招标文件
 
@@ -24,74 +23,49 @@ const sampleOutlineInput = {
   mode: 'free' as const,
 };
 
-const streamTask = getBidAnalysisTasks('full').find((task) => task.id === 'projectInfo');
+const textTask = getBidAnalysisTasks('full').find((task) => task.id === 'projectInfo');
 
 function DeveloperTestPage() {
   const [runningMode, setRunningMode] = useState<RunningMode>(null);
   const [events, setEvents] = useState<string[]>([]);
   const [content, setContent] = useState('');
   const [result, setResult] = useState('');
-  const cleanupRef = useRef<(() => void) | null>(null);
 
   const appendEvent = (message: string) => {
     setEvents((prev) => [...prev, `[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${message}`]);
   };
 
-  const stopStream = () => {
-    cleanupRef.current?.();
-    cleanupRef.current = null;
-    setRunningMode(null);
-    appendEvent('已停止监听流式事件。');
-  };
-
   const resetOutput = () => {
-    cleanupRef.current?.();
-    cleanupRef.current = null;
     setEvents([]);
     setContent('');
     setResult('');
   };
 
-  const runStreamTest = () => {
-    if (!streamTask) {
+  const runTextTest = async () => {
+    if (!textTask) {
       appendEvent('未找到项目中的 JSON 招标文件解析任务。');
       return;
     }
 
     resetOutput();
-    setRunningMode('stream');
-    appendEvent(`调用项目真实流式请求：streamBidAnalysisTask(${streamTask.label})。`);
+    setRunningMode('text');
+    appendEvent(`调用项目真实文本请求：requestBidAnalysisTask(${textTask.label})。`);
 
-    cleanupRef.current = streamBidAnalysisTask(sampleTenderContent, streamTask, (event: AiStreamEvent) => {
-      if (event.type === 'chunk') {
-        setContent((prev) => `${prev}${event.chunk || ''}`);
-        return;
-      }
-
-      if (event.type === 'error') {
-        appendEvent(`错误事件：${event.message || 'AI 流式请求失败'}`);
-        setRunningMode(null);
-        cleanupRef.current?.();
-        cleanupRef.current = null;
-        return;
-      }
-
-      if (event.type === 'done') {
-        appendEvent('流式请求完成。');
-        setRunningMode(null);
-        cleanupRef.current?.();
-        cleanupRef.current = null;
-        return;
-      }
-
-      appendEvent(event.message || `收到事件：${event.type}`);
-    });
+    try {
+      const nextContent = await requestBidAnalysisTask(sampleTenderContent, textTask);
+      setContent(nextContent);
+      appendEvent('文本请求完成。');
+    } catch (error) {
+      appendEvent(`文本请求错误：${error instanceof Error ? error.message : 'AI 文本请求失败'}`);
+    } finally {
+      setRunningMode(null);
+    }
   };
 
-  const runNonStreamTest = async () => {
+  const runJsonTest = async () => {
     resetOutput();
-    setRunningMode('non-stream');
-    appendEvent('调用项目真实非流式请求：requestOutlineGeneration。');
+    setRunningMode('json');
+    appendEvent('调用项目真实 JSON 请求：requestOutlineGeneration。');
 
     try {
       const outline = await requestOutlineGeneration({
@@ -99,9 +73,9 @@ function DeveloperTestPage() {
         onProgress: appendEvent,
       });
       setResult(JSON.stringify(outline, null, 2));
-      appendEvent('非流式请求完成。');
+      appendEvent('JSON 请求完成。');
     } catch (error) {
-      appendEvent(`非流式错误：${error instanceof Error ? error.message : 'AI 非流式请求失败'}`);
+      appendEvent(`JSON 请求错误：${error instanceof Error ? error.message : 'AI JSON 请求失败'}`);
     } finally {
       setRunningMode(null);
     }
@@ -116,17 +90,14 @@ function DeveloperTestPage() {
           <span className="eyebrow">Developer Reproduction</span>
           <h2>测试页</h2>
           <p>
-            这里复用项目真实业务请求来复现 response_format 兼容问题：流式按钮使用招标文件解析任务，非流式按钮使用目录生成任务。
+            这里复用项目真实业务请求来复现 response_format 兼容问题：文本按钮使用招标文件解析任务，JSON 按钮使用目录生成任务。
           </p>
           <div className="developer-test-actions">
-            <button type="button" className="primary-action" onClick={runStreamTest} disabled={running || !streamTask}>
-              {runningMode === 'stream' ? '流式请求中...' : '测试流式'}
+            <button type="button" className="primary-action" onClick={runTextTest} disabled={running || !textTask}>
+              {runningMode === 'text' ? '文本请求中...' : '测试文本请求'}
             </button>
-            <button type="button" className="primary-action" onClick={runNonStreamTest} disabled={running}>
-              {runningMode === 'non-stream' ? '非流式请求中...' : '测试非流式'}
-            </button>
-            <button type="button" className="secondary-action" onClick={stopStream} disabled={runningMode !== 'stream'}>
-              停止流式监听
+            <button type="button" className="primary-action" onClick={runJsonTest} disabled={running}>
+              {runningMode === 'json' ? 'JSON 请求中...' : '测试 JSON 请求'}
             </button>
           </div>
         </div>
@@ -136,15 +107,15 @@ function DeveloperTestPage() {
         <section className="panel developer-test-panel">
           <div className="settings-section-title">
             <span />
-            <strong>流式复用入口</strong>
+            <strong>文本复用入口</strong>
           </div>
-          <pre>{JSON.stringify({ service: 'streamBidAnalysisTask', task: streamTask?.id, fileContent: sampleTenderContent }, null, 2)}</pre>
+          <pre>{JSON.stringify({ service: 'requestBidAnalysisTask', task: textTask?.id, fileContent: sampleTenderContent }, null, 2)}</pre>
         </section>
 
         <section className="panel developer-test-panel">
           <div className="settings-section-title">
             <span />
-            <strong>非流式复用入口</strong>
+            <strong>JSON 复用入口</strong>
           </div>
           <pre>{JSON.stringify({ service: 'requestOutlineGeneration', input: sampleOutlineInput }, null, 2)}</pre>
         </section>

@@ -225,8 +225,7 @@ function BidAnalysisPage({
         setFullRerunLocked(true);
       }
       const config = await window.yibiao?.config.load();
-      const shouldRealTimeRender = config?.real_time_render === true;
-      await window.yibiao?.tasks.startBidAnalysis({ mode, fileContent, task_ids: taskIds, force_rerun: forceRerun, real_time_render: shouldRealTimeRender });
+      await window.yibiao?.tasks.startBidAnalysis({ mode, fileContent, task_ids: taskIds, force_rerun: forceRerun });
       trackConfigUsage({ bid_analysis_mode: mode }, config);
       showToast(retryTask ? `${retryTask.label}重新解析任务已在后台启动` : '招标文件解析任务已在后台启动', 'success');
     } catch (error) {

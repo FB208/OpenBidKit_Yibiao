@@ -1633,7 +1633,6 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     generationOptions.contentConcurrency ?? generationOptions.content_concurrency ?? payload.concurrency,
   );
   const developerModeEnabled = isDeveloperModeEnabled(aiService);
-  const realTimeRender = payload.real_time_render !== false && payload.realTimeRender !== false;
   const tableRequirement = normalizeTableRequirement(generationOptions.tableRequirement ?? generationOptions.table_requirement);
   let maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
   const minimumWords = targetItemId ? 0 : normalizeMinimumWords(generationOptions.minimumWords ?? generationOptions.minimum_words);
@@ -1744,9 +1743,6 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   logs = [...logs, mermaidImagesEnabled
     ? 'Mermaid 图片已启用，适合简单图示的小节会优先使用 Mermaid 图。'
     : 'Mermaid 图片未启用。'];
-  if (!realTimeRender) {
-    logs = [...logs, '实时渲染已关闭，每个小节生成完成后再刷新正文。'];
-  }
 
   function appendDeveloperLog(message) {
     if (!developerModeEnabled) {
@@ -2061,19 +2057,11 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       const contentPlan = contentPlans.get(item.id) || normalizeContentPlan({});
       const knowledgeContents = resolveKnowledgeContents(contentPlan.knowledge?.item_ids, knowledgeContentMap);
 
-      await aiService.streamChat({
+      const generatedContent = await aiService.chat({
         messages: buildChapterContentMessages({ chapter: item, parentChapters, siblingChapters, projectOverview, regenerateRequirement, contentPlan, knowledgeContents }),
         temperature: 0.7,
-      }, (event) => {
-        if (event.type !== 'chunk' || !event.chunk) {
-          return;
-        }
-        rawContent += event.chunk;
-        content = stripRepeatedChapterTitle(normalizeGeneratedMarkdown(rawContent), item);
-        if (realTimeRender && !isSingleSectionRegeneration) {
-          saveSection(item, { status: 'running', content, error: undefined }, content);
-        }
       });
+      rawContent += generatedContent || '';
 
       content = stripRepeatedChapterTitle(normalizeGeneratedMarkdown(rawContent), item);
       logs = [...logs, `生成完成：${item.id} ${item.title || '未命名章节'}`];

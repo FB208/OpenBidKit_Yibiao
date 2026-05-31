@@ -103,7 +103,6 @@ const defaultConfig = {
     mineru_token: '',
   },
   developer_mode: false,
-  real_time_render: true,
   analytics_client_id: '',
   analytics_created_at: '',
 };
@@ -205,7 +204,6 @@ function normalizeConfig(config) {
 
   return {
     ...defaultConfig,
-    ...source,
     text_model_provider: textModelProvider,
     text_model_profiles: textModelProfiles,
     api_key: activeTextProfile.api_key,
@@ -217,6 +215,9 @@ function normalizeConfig(config) {
       provider: fileParser.provider || defaultConfig.file_parser.provider,
       mineru_token: fileParser.mineru_token || defaultConfig.file_parser.mineru_token,
     },
+    developer_mode: source.developer_mode === undefined ? defaultConfig.developer_mode : Boolean(source.developer_mode),
+    analytics_client_id: source.analytics_client_id || defaultConfig.analytics_client_id,
+    analytics_created_at: source.analytics_created_at || defaultConfig.analytics_created_at,
   };
 }
 

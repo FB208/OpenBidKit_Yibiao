@@ -1,6 +1,6 @@
 import { aiClient } from '../../../shared/ai/aiClient';
 import { buildInvalidBidAndRejectionItemsPrompt } from '../../../shared/prompts';
-import type { AiStreamEvent, ChatMessage } from '../../../shared/types';
+import type { ChatMessage } from '../../../shared/types';
 import type { BidAnalysisMode } from '../types';
 
 export interface BidAnalysisTaskDefinition {
@@ -268,29 +268,22 @@ export function getBidAnalysisTaskById(taskId: string) {
   return bidAnalysisTasks.find((task) => task.id === taskId);
 }
 
-export function streamBidAnalysisTask(
+export function requestBidAnalysisTask(
   fileContent: string,
-  task: BidAnalysisTaskDefinition,
-  onEvent: (event: AiStreamEvent) => void
+  task: BidAnalysisTaskDefinition
 ) {
-  return aiClient.streamChat(
-    {
-      messages: buildMessages(fileContent, task.buildTaskPrompt()),
-      temperature: 0.1,
-      response_format: task.output === 'json' ? { type: 'json_object' } : undefined,
-    },
-    onEvent
-  );
+  return aiClient.chat({
+    messages: buildMessages(fileContent, task.buildTaskPrompt()),
+    temperature: 0.1,
+    response_format: task.output === 'json' ? { type: 'json_object' } : undefined,
+  });
 }
 
-export function streamInvalidBidAndRejectionItemsTask(
-  fileContent: string,
-  onEvent: (event: AiStreamEvent) => void
-) {
+export function requestInvalidBidAndRejectionItemsTask(fileContent: string) {
   const task = getBidAnalysisTaskById('discardedBids');
   if (!task) {
     throw new Error('未找到无效投标与废标项解析任务');
   }
 
-  return streamBidAnalysisTask(fileContent, task, onEvent);
+  return requestBidAnalysisTask(fileContent, task);
 }

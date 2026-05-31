@@ -33,7 +33,6 @@ export async function handleTrack(request, env) {
     const clientId = normalizeText(body.client_id || body.clientId, 120);
     const clientCreatedAt = normalizeText(body.client_created_at || body.clientCreatedAt, 20);
     const fileParserProvider = normalizeText(body.file_parser_provider || body.fileParserProvider, 50);
-    const realTimeRender = normalizeMetricValue(body.real_time_render ?? body.realTimeRender, 20);
     const imageProvider = normalizeText(body.image_provider || body.imageProvider, 50);
     const imageModelStatus = normalizeText(body.image_model_status || body.imageModelStatus, 50);
     const bidAnalysisMode = normalizeText(body.bid_analysis_mode || body.bidAnalysisMode, 50);
@@ -56,7 +55,7 @@ export async function handleTrack(request, env) {
     const normalizedTextModelName = textModelName || (aiRequestType === 'text' ? aiModelName : '');
     const normalizedImageModelName = imageModelName || (aiRequestType === 'image' ? aiModelName : '');
     const modelProviderBlob = event === 'ai_request' ? aiModelProvider : fileParserProvider;
-    const modelBaseUrlBlob = event === 'ai_request' ? aiModelBaseUrl : realTimeRender;
+    const modelBaseUrlBlob = event === 'ai_request' ? aiModelBaseUrl : '';
     const modelNameBlob = event === 'ai_request' ? aiModelName : imageProvider;
     const requestTypeBlob = event === 'ai_request' ? aiRequestType : imageModelStatus;
     const contentConcurrencyBlob = event === 'config_usage' ? contentConcurrency : normalizedTextModelName;

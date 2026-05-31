@@ -1,4 +1,4 @@
-import type { AiStreamEvent, ChatCompletionRequest, JsonCompletionRequest } from '../types';
+import type { ChatCompletionRequest, JsonCompletionRequest } from '../types';
 
 const getBridge = () => {
   if (!window.yibiao) {
@@ -15,9 +15,5 @@ export const aiClient = {
 
   requestJson<TResult = unknown>(request: JsonCompletionRequest): Promise<TResult> {
     return getBridge().ai.requestJson<TResult>(request);
-  },
-
-  streamChat(request: ChatCompletionRequest, onEvent: (event: AiStreamEvent) => void): () => void {
-    return getBridge().ai.streamChat(request, onEvent);
   },
 };

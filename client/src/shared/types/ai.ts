@@ -24,9 +24,3 @@ export interface JsonCompletionRequest<TInput = unknown> extends ChatRequestOpti
   progressLabel?: string;
   failureMessage?: string;
 }
-
-export interface AiStreamEvent {
-  type: 'chunk' | 'progress' | 'error' | 'done';
-  chunk?: string;
-  message?: string;
-}
