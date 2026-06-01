@@ -1845,11 +1845,12 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     }
 
     logs = [...logs, message];
+    const runtime = syncRuntime();
     const saved = workspaceStore.updateTechnicalPlan({
       outlineData,
       contentGenerationSections: sections,
       contentGenerationPlans: storedContentPlans,
-      contentGenerationRuntime: syncRuntime(),
+      contentGenerationRuntime: runtime,
       contentGenerationTask: updateTask({ status: 'paused', progress: progressFor(leaves, sections), logs, stats: statsSnapshot(), pause_requested: false }),
     });
     updateTask({ status: 'paused', progress: progressFor(leaves, sections), logs, stats: statsSnapshot(), pause_requested: false }, saved);
@@ -1865,15 +1866,25 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     }
   }
 
+  const initialRuntime = syncRuntime();
   let technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineData,
     contentGenerationSections: sections,
     contentGenerationPlans: storedContentPlans,
-    contentGenerationRuntime: syncRuntime(),
+    contentGenerationRuntime: initialRuntime,
     referenceKnowledgeDocumentIds,
     contentGenerationTask: updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }),
   });
-  updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, technicalPlan);
+  updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, technicalPlan, {
+    contentRuntime: initialRuntime,
+    technicalPlanPatch: {
+      outlineData,
+      contentGenerationSections: sections,
+      contentGenerationPlans: storedContentPlans,
+      contentGenerationRuntime: initialRuntime,
+      referenceKnowledgeDocumentIds,
+    },
+  });
 
   if (!tasksToRun.length) {
     logs = [...logs, '正文已全部生成，将检查最低字数要求。'];
@@ -1906,12 +1917,17 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       outline: updateOutlineItemContent(currentOutlineData.outline || outlineData.outline, item.id, outlineContent),
     };
     outlineData = nextOutlineData;
+    const runtime = syncRuntime();
     const saved = workspaceStore.updateTechnicalPlan({
       contentGenerationSections: sections,
       outlineData: nextOutlineData,
-      contentGenerationRuntime: syncRuntime(),
+      contentGenerationRuntime: runtime,
     });
-    updateTask({ status: 'running', progress: progressFor(leaves, sections), stats: statsSnapshot(), ...taskPartial }, saved);
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), stats: statsSnapshot(), ...taskPartial }, saved, {
+      outlineData: nextOutlineData,
+      contentSection: sections[item.id],
+      contentRuntime: runtime,
+    });
     return saved;
   }
 
@@ -2159,13 +2175,22 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     storedContentPlans = pruneContentGenerationPlans(storedContentPlans, leaves);
     pruneRuntimeContentPlans();
     refreshRunLimits(tasksToRun);
+    const runtime = syncRuntime();
     const saved = workspaceStore.updateTechnicalPlan({
       outlineData,
       contentGenerationSections: sections,
       contentGenerationPlans: storedContentPlans,
-      contentGenerationRuntime: syncRuntime(),
+      contentGenerationRuntime: runtime,
     });
-    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved);
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved, {
+      outlineData,
+      contentRuntime: runtime,
+      technicalPlanPatch: {
+        contentGenerationSections: sections,
+        contentGenerationPlans: storedContentPlans,
+        contentGenerationRuntime: runtime,
+      },
+    });
     return saved;
   }
 

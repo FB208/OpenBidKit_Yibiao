@@ -1,14 +1,20 @@
 import type { ChatCompletionRequest, JsonCompletionRequest } from './ai';
-import type { DuplicateCheckWorkspaceState, FileImportResult, FileSelectionResult } from './bid';
+import type { DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseMutationResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
-import type { ContentGenerationOptions, TechnicalPlanState, TechnicalPlanStep } from '../../features/technical-plan/types';
+import type { BidAnalysisTaskState, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationRuntimeState, ContentGenerationSectionState, TechnicalPlanState, TechnicalPlanStep } from '../../features/technical-plan/types';
 import type { OutlineData, OutlineMode } from './outline';
 
 export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDuplicateCheckState = unknown> {
   task: unknown;
   technicalPlan?: TState;
+  technicalPlanPatch?: Partial<TechnicalPlanState>;
+  bidItem?: BidAnalysisTaskState;
+  outlineData?: OutlineData | null;
+  contentSection?: ContentGenerationSectionState;
+  contentPlan?: { nodeId: string; value: ContentGenerationPlanState | null };
+  contentRuntime?: ContentGenerationRuntimeState;
   rejectionCheck?: TRejectionCheckState;
   duplicateCheck?: TDuplicateCheckState;
 }
@@ -70,8 +76,6 @@ export interface YibiaoBridge {
     testImageModel: (config: ClientConfig) => Promise<ImageModelTestResult>;
   };
   file: {
-    importDocument: () => Promise<FileImportResult>;
-    importRejectionCheckDocument: (role: RejectionDocumentRole) => Promise<FileImportResult>;
     selectDuplicateCheckFiles: (options?: { multiple?: boolean }) => Promise<FileSelectionResult>;
   };
   knowledgeBase: {
@@ -98,13 +102,21 @@ export interface YibiaoBridge {
     saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<TechnicalPlanState>;
     clear: () => Promise<{ success: boolean; message?: string; state: TechnicalPlanState }>;
   };
-  workspace: {
-    loadDuplicateCheck: () => Promise<DuplicateCheckWorkspaceState | null>;
-    saveDuplicateCheck: (state: DuplicateCheckWorkspaceState) => Promise<unknown>;
-    clearDuplicateCheck: () => Promise<unknown>;
-    loadRejectionCheck: () => Promise<RejectionCheckWorkspaceState | null>;
-    saveRejectionCheck: (state: RejectionCheckWorkspaceState) => Promise<unknown>;
-    clearRejectionCheck: () => Promise<unknown>;
+  duplicateCheck: {
+    loadState: () => Promise<DuplicateCheckWorkspaceState>;
+    saveFiles: (payload: Pick<DuplicateCheckWorkspaceState, 'tenderFile' | 'bidFiles'> & Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<DuplicateCheckWorkspaceState>;
+    saveUiState: (payload: Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<DuplicateCheckWorkspaceState>;
+    updateState: (partial: Partial<DuplicateCheckWorkspaceState>) => Promise<DuplicateCheckWorkspaceState>;
+    clear: () => Promise<{ success: boolean; message?: string; state: DuplicateCheckWorkspaceState }>;
+  };
+  rejectionCheck: {
+    loadState: () => Promise<RejectionCheckWorkspaceState>;
+    importDocument: (role: RejectionDocumentRole) => Promise<{ success: boolean; message?: string; state: RejectionCheckWorkspaceState }>;
+    importTenderFromTechnicalPlan: () => Promise<{ success: boolean; message?: string; state: RejectionCheckWorkspaceState }>;
+    removeDocument: (role: RejectionDocumentRole) => Promise<RejectionCheckWorkspaceState>;
+    saveUiState: (payload: Partial<Pick<RejectionCheckWorkspaceState, 'step' | 'activeDocumentTab' | 'activeResultTab' | 'activeCheckResultTab' | 'customCheckItems' | 'checkOptions'>>) => Promise<RejectionCheckWorkspaceState>;
+    updateState: (partial: Partial<RejectionCheckWorkspaceState>) => Promise<RejectionCheckWorkspaceState>;
+    clear: () => Promise<{ success: boolean; message?: string; state: RejectionCheckWorkspaceState }>;
   };
   tasks: {
     startBidAnalysis: (payload: unknown) => Promise<unknown>;

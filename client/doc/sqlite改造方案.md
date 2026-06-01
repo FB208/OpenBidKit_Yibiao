@@ -117,10 +117,10 @@ PRAGMA user_version = 1;
 
 完整结构说明文件：
 
-- 在仓库根目录新增 `sql/technical_plan_schema.sql`，保存技术方案模块最新完整数据结构。
+- 在仓库根目录维护 `sql/workspace_schema.sql`，保存工作区 SQLite 最新完整数据结构；技术方案是其中的 `technical_plan_*` 部分。
 - SQL 文件用于开源开发者理解、评审和排查问题，不作为用户运行时手动执行脚本。
 - 运行时建表和升级以客户端代码中的 migration 为准。
-- 每次表结构变化后，必须同步更新 `sql/technical_plan_schema.sql` 和 migration 版本。
+- 每次表结构变化后，必须同步更新 `sql/workspace_schema.sql` 和 migration 版本。
 
 ### 4.3 自动初始化与升级策略
 
@@ -189,7 +189,7 @@ const migrations = [
 
 - 不要只依赖 `CREATE TABLE IF NOT EXISTS` 管理结构变化，它只能处理首次建表，不能可靠处理新增字段、拆表、索引变更和数据搬迁。
 - 不允许直接修改历史 migration；已经发布的 migration 只能追加新版本修正。
-- `sql/technical_plan_schema.sql` 始终表示最新完整结构，migration 表示从旧版本升级到新版本的过程。
+- `sql/workspace_schema.sql` 始终表示最新完整结构，migration 表示从旧版本升级到新版本的过程。
 
 #### technical_plan_meta
 
@@ -453,7 +453,7 @@ technicalPlan: {
 - `window.yibiao.workspace.updateTechnicalPlan`
 - `window.yibiao.workspace.clearTechnicalPlan`
 
-`workspaceStore.cjs` 保留给标书查重、废标项检查使用，不再负责技术方案。
+后续标书查重、废标项检查也已迁入 `duplicateCheckStore.cjs` / `rejectionCheckStore.cjs`，`workspaceStore.cjs` 不再作为有效工作区入口。
 
 ### 5.4 后台任务接口调整
 
@@ -526,7 +526,6 @@ interface TechnicalPlanTaskEvent {
 - `electron/services/bidAnalysisTask.cjs`
 - `electron/services/outlineGenerationTask.cjs`
 - `electron/services/contentGenerationTask.cjs`
-- `electron/services/workspaceStore.cjs`
 
 重点变化：
 
@@ -592,7 +591,7 @@ better-sqlite3
 - 建立 `technical_plan_*` 表。
 - 实现 `schemaVersion`、migration 列表、`PRAGMA user_version` 升级流程。
 - 实现升级前备份、升级失败中断、DB 版本高于代码版本时拒绝写入。
-- 将根目录 `sql/technical_plan_schema.sql` 作为最新完整结构参考文件纳入维护。
+- 将根目录 `sql/workspace_schema.sql` 作为最新完整结构参考文件纳入维护。
 - 在 IPC 初始化时创建 DB 实例，并传给 `technicalPlanStore`。
 
 验收标准：
@@ -720,8 +719,8 @@ better-sqlite3
 修改内容：
 
 - 移除 preload 中 `workspace.*TechnicalPlan` 方法。
-- 移除 `workspaceIpc.cjs` 中技术方案 handle。
-- `workspaceStore.cjs` 删除技术方案相关方法，只保留查重和废标项检查。
+- 移除 `workspaceIpc.cjs` 中技术方案 handle；后续 v2 已删除旧 workspace IPC。
+- `workspaceStore.cjs` 删除技术方案相关方法；后续 v2 已由功能专用 Store 完全替代。
 - 删除或重命名 `technicalPlanStorage.ts` 中旧的整包 save 语义，改成技术方案专用 client。
 - 全仓搜索 `fileContent`、`loadTechnicalPlan`、`updateTechnicalPlan`、`saveTechnicalPlan`，移除技术方案旧调用。
 
@@ -824,11 +823,11 @@ SQLite 事务只包快速本地写入。
 
 ### 8.9 SQL 说明文件维护
 
-根目录 `sql/technical_plan_schema.sql` 是给开源开发者阅读的最新完整结构，不是运行时唯一来源。
+根目录 `sql/workspace_schema.sql` 是给开源开发者阅读的最新完整结构，不是运行时唯一来源。
 
 注意事项：
 
-- 修改表结构时，必须同时追加 migration 和更新 `sql/technical_plan_schema.sql`。
+- 修改表结构时，必须同时追加 migration 和更新 `sql/workspace_schema.sql`。
 - 不要让 SQL 文件和实际 migration 产生字段差异。
 - Code Review 时要检查 schema 文件、migration、TypeScript 类型三者是否一致。
 - SQL 文件可以使用 `CREATE TABLE IF NOT EXISTS` 方便开发者本地查看，但产品运行时仍必须通过 migration 管理升级。
@@ -933,7 +932,7 @@ npm run dist:win
 - 升级前能生成 `yibiao.sqlite.backup-YYYYMMDD-HHmmss` 备份文件。
 - 人为制造 migration SQL 错误后，技术方案功能停止写入并提示数据库升级失败。
 - 人为把 `PRAGMA user_version` 设置为高于当前代码版本后，技术方案功能提示客户端版本过低。
-- 检查 `sql/technical_plan_schema.sql` 与实际升级后的数据库结构一致。
+- 检查 `sql/workspace_schema.sql` 与实际升级后的数据库结构一致。
 
 ## 10. 执行优先级建议
 

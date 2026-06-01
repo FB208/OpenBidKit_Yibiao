@@ -395,8 +395,13 @@ function updateExtractionState(workspaceStore, updateTask, taskPartial, extracti
 }
 
 async function runRejectionItemsExtractionTask({ aiService, workspaceStore, updateTask, payload }) {
-  const tenderContent = String(payload?.tenderContent || '');
-  const tenderSignature = String(payload?.tenderSignature || '');
+  const state = workspaceStore.loadRejectionCheck ? workspaceStore.loadRejectionCheck() : {};
+  const tenderDocument = state.tenderDocument || null;
+  if (typeof workspaceStore.readDocumentMarkdown !== 'function' || typeof workspaceStore.createDocumentSignature !== 'function') {
+    throw new Error('废标项检查存储接口尚未初始化');
+  }
+  const tenderContent = String(workspaceStore.readDocumentMarkdown('tender') || '');
+  const tenderSignature = String(workspaceStore.createDocumentSignature({ ...tenderDocument, content: tenderContent }) || '');
   if (!tenderContent.trim() || !tenderSignature) throw new Error('缺少招标文件内容，无法解析无效与废标项');
 
   const logs = ['开始解析无效与废标项。'];
@@ -462,13 +467,21 @@ function updateCheckWorkspace(workspaceStore, updateTask, taskPartial, partial) 
 }
 
 async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, payload }) {
-  const options = payload?.checkOptions || {};
+  const state = workspaceStore.loadRejectionCheck ? workspaceStore.loadRejectionCheck() : {};
+  const options = state.checkOptions || {};
   const runOptions = payload?.runOptions || options;
-  const bidContent = String(payload?.bidContent || '');
-  const invalidBidAndRejectionItems = String(payload?.invalidBidAndRejectionItems || '');
-  const customCheckItems = String(payload?.customCheckItems || '');
-  const rejectionInputSignature = String(payload?.rejectionInputSignature || '');
-  const bidSignature = String(payload?.bidSignature || '');
+  const bidDocument = state.bidDocument || null;
+  if (typeof workspaceStore.readDocumentMarkdown !== 'function'
+    || typeof workspaceStore.createDocumentSignature !== 'function'
+    || typeof workspaceStore.createRejectionCheckInputSignature !== 'function') {
+    throw new Error('废标项检查存储接口尚未初始化');
+  }
+  const bidContent = String(workspaceStore.readDocumentMarkdown('bid') || '');
+  const currentBidDocument = bidDocument ? { ...bidDocument, content: bidContent } : null;
+  const invalidBidAndRejectionItems = String(state.invalidBidAndRejectionItems?.content || '');
+  const customCheckItems = String(state.customCheckItems ?? '');
+  const rejectionInputSignature = String(workspaceStore.createRejectionCheckInputSignature(currentBidDocument, invalidBidAndRejectionItems, customCheckItems) || '');
+  const bidSignature = String(workspaceStore.createDocumentSignature(currentBidDocument) || '');
   if (!bidContent.trim() || !bidSignature) throw new Error('缺少投标文件内容，无法开始检查');
 
   const enabledTasks = [

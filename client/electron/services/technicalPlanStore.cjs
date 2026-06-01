@@ -632,10 +632,6 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     return loadTechnicalPlan();
   }
 
-  function saveTechnicalPlan(state) {
-    return updateTechnicalPlan(state || {});
-  }
-
   function updateStep(step) {
     return updateTechnicalPlan({ step });
   }
@@ -741,7 +737,6 @@ function createTechnicalPlanStore({ app, db, fileService }) {
 
   return {
     loadTechnicalPlan,
-    saveTechnicalPlan,
     updateTechnicalPlan,
     clearTechnicalPlan,
     importTenderDocument,

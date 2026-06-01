@@ -36,8 +36,6 @@ const bridge = {
     testImageModel: (config) => ipcRenderer.invoke('ai:test-image-model', config),
   },
   file: {
-    importDocument: () => ipcRenderer.invoke('file:import-document'),
-    importRejectionCheckDocument: (role) => ipcRenderer.invoke('file:import-rejection-check-document', role),
     selectDuplicateCheckFiles: (options) => ipcRenderer.invoke('file:select-duplicate-check-files', options),
   },
   knowledgeBase: {
@@ -68,13 +66,21 @@ const bridge = {
     saveChapterContent: (payload) => ipcRenderer.invoke('technical-plan:save-chapter-content', payload),
     clear: () => ipcRenderer.invoke('technical-plan:clear'),
   },
-  workspace: {
-    loadDuplicateCheck: () => ipcRenderer.invoke('workspace:load-duplicate-check'),
-    saveDuplicateCheck: (state) => ipcRenderer.invoke('workspace:save-duplicate-check', state),
-    clearDuplicateCheck: () => ipcRenderer.invoke('workspace:clear-duplicate-check'),
-    loadRejectionCheck: () => ipcRenderer.invoke('workspace:load-rejection-check'),
-    saveRejectionCheck: (state) => ipcRenderer.invoke('workspace:save-rejection-check', state),
-    clearRejectionCheck: () => ipcRenderer.invoke('workspace:clear-rejection-check'),
+  duplicateCheck: {
+    loadState: () => ipcRenderer.invoke('duplicate-check:load-state'),
+    saveFiles: (payload) => ipcRenderer.invoke('duplicate-check:save-files', payload),
+    saveUiState: (payload) => ipcRenderer.invoke('duplicate-check:save-ui-state', payload),
+    updateState: (partial) => ipcRenderer.invoke('duplicate-check:update-state', partial),
+    clear: () => ipcRenderer.invoke('duplicate-check:clear'),
+  },
+  rejectionCheck: {
+    loadState: () => ipcRenderer.invoke('rejection-check:load-state'),
+    importDocument: (role) => ipcRenderer.invoke('rejection-check:import-document', role),
+    importTenderFromTechnicalPlan: () => ipcRenderer.invoke('rejection-check:import-tender-from-technical-plan'),
+    removeDocument: (role) => ipcRenderer.invoke('rejection-check:remove-document', role),
+    saveUiState: (payload) => ipcRenderer.invoke('rejection-check:save-ui-state', payload),
+    updateState: (partial) => ipcRenderer.invoke('rejection-check:update-state', partial),
+    clear: () => ipcRenderer.invoke('rejection-check:clear'),
   },
   tasks: {
     startBidAnalysis: (payload) => ipcRenderer.invoke('tasks:start-bid-analysis', payload),

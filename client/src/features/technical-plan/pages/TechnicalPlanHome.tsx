@@ -170,7 +170,7 @@ function TechnicalPlanHome() {
     const unsubscribe = window.yibiao.tasks.onTaskEvent<typeof state>((event) => {
       const taskType = (event.task as { type?: string } | undefined)?.type;
       const latestTask = trimTaskLogs(event.task as BackgroundTaskState | undefined);
-      const technicalPlan = event.technicalPlan;
+      const technicalPlan = event.technicalPlanPatch || event.technicalPlan;
 
       if (!technicalPlan) {
         return;
@@ -182,7 +182,11 @@ function TechnicalPlanHome() {
           return {
             ...prev,
             bidAnalysisTask: trimTaskLogs(technicalPlan.bidAnalysisTask) || latestTask,
-            bidAnalysisTasks: technicalPlan.bidAnalysisTasks || prev.bidAnalysisTasks,
+            bidAnalysisTasks: {
+              ...prev.bidAnalysisTasks,
+              ...(technicalPlan.bidAnalysisTasks || {}),
+              ...(event.bidItem ? { [event.bidItem.id]: event.bidItem } : {}),
+            },
             bidAnalysisProgress: technicalPlan.bidAnalysisProgress ?? prev.bidAnalysisProgress,
             projectOverview: technicalPlan.projectOverview ?? prev.projectOverview,
             techRequirements: technicalPlan.techRequirements ?? prev.techRequirements,
@@ -192,7 +196,7 @@ function TechnicalPlanHome() {
             contentGenerationSections: outlineDataReset ? {} : prev.contentGenerationSections,
             contentGenerationPlans: outlineDataReset ? {} : prev.contentGenerationPlans,
             contentGenerationRuntime: outlineDataReset ? undefined : prev.contentGenerationRuntime,
-            outlineData: hasOwnField(technicalPlan, 'outlineData') ? technicalPlan.outlineData : prev.outlineData,
+            outlineData: hasOwnField(technicalPlan, 'outlineData') ? (technicalPlan.outlineData || null) : prev.outlineData,
           };
         }
 
@@ -201,7 +205,7 @@ function TechnicalPlanHome() {
           const nextOutlineData = technicalPlan.outlineGenerationTask?.status === 'success' && technicalPlan.outlineData
             ? resetGeneratedContent(technicalPlan.outlineData)
             : hasOutlineData
-              ? technicalPlan.outlineData
+              ? (technicalPlan.outlineData || null)
               : prev.outlineData;
           const outlineDataChanged = nextOutlineData !== prev.outlineData;
 
@@ -221,6 +225,19 @@ function TechnicalPlanHome() {
         }
 
         if (taskType === 'content-generation') {
+          const hasPatchOutlineData = hasOwnField(technicalPlan, 'outlineData') || hasOwnField(event, 'outlineData');
+          const patchOutlineData = hasOwnField(technicalPlan, 'outlineData') ? technicalPlan.outlineData : event.outlineData;
+          const contentSection = event.contentSection;
+          const nextSections = hasOwnField(technicalPlan, 'contentGenerationSections')
+            ? (technicalPlan.contentGenerationSections || {})
+            : contentSection
+              ? { ...prev.contentGenerationSections, [contentSection.id]: contentSection }
+              : prev.contentGenerationSections;
+          const nextOutlineData = hasPatchOutlineData
+            ? (patchOutlineData || null)
+            : contentSection?.content !== undefined && prev.outlineData
+              ? { ...prev.outlineData, outline: updateOutlineItemContent(prev.outlineData.outline, contentSection.id, contentSection.content) }
+              : prev.outlineData;
           return {
             ...prev,
             contentGenerationTask: latestTask || trimTaskLogs(technicalPlan.contentGenerationTask),
@@ -228,10 +245,10 @@ function TechnicalPlanHome() {
             referenceKnowledgeDocumentIds: Array.isArray(technicalPlan.referenceKnowledgeDocumentIds)
               ? technicalPlan.referenceKnowledgeDocumentIds
               : prev.referenceKnowledgeDocumentIds,
-            contentGenerationSections: technicalPlan.contentGenerationSections || prev.contentGenerationSections,
-            contentGenerationPlans: technicalPlan.contentGenerationPlans || prev.contentGenerationPlans,
+            contentGenerationSections: nextSections,
+            contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
             contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
-            outlineData: technicalPlan.outlineData || prev.outlineData,
+            outlineData: nextOutlineData,
           };
         }
 

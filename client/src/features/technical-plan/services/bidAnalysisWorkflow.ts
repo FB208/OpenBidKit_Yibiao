@@ -1,6 +1,4 @@
-import { aiClient } from '../../../shared/ai/aiClient';
 import { buildInvalidBidAndRejectionItemsPrompt } from '../../../shared/prompts';
-import type { ChatMessage } from '../../../shared/types';
 import type { BidAnalysisMode } from '../types';
 
 export interface BidAnalysisTaskDefinition {
@@ -10,22 +8,6 @@ export interface BidAnalysisTaskDefinition {
   required: boolean;
   output: 'markdown' | 'json';
   buildTaskPrompt: () => string;
-}
-
-const stableSystemPrompt = `你是专业的招标文件分析助手。请严格基于用户提供的招标文件原文完成提取和总结。
-
-通用要求：
-1. 保持信息全面、准确，尽量使用原文内容，不要自行编造。
-2. 如果原文没有提及，明确写“没有提及”或“原文未提及”。
-3. 只输出最终结果，不输出过程、提示语或客套话。
-4. 始终使用简体中文。`;
-
-function buildMessages(fileContent: string, taskPrompt: string): ChatMessage[] {
-  return [
-    { role: 'system', content: stableSystemPrompt },
-    { role: 'user', content: `以下是完整招标文件 Markdown 原文。后续任务必须仅基于这份原文完成：\n\n${fileContent}` },
-    { role: 'user', content: taskPrompt },
-  ];
 }
 
 function jsonTask(title: string, goals: string, outputJson: string) {
@@ -266,25 +248,4 @@ export function getBidAnalysisTasks(mode: BidAnalysisMode) {
 
 export function getBidAnalysisTaskById(taskId: string) {
   return bidAnalysisTasks.find((task) => task.id === taskId);
-}
-
-export function requestBidAnalysisTask(
-  fileContent: string,
-  task: BidAnalysisTaskDefinition
-) {
-  return aiClient.chat({
-    messages: buildMessages(fileContent, task.buildTaskPrompt()),
-    temperature: 0.1,
-    response_format: task.output === 'json' ? { type: 'json_object' } : undefined,
-    logTitle: `招标解析-${task.label}`,
-  });
-}
-
-export function requestInvalidBidAndRejectionItemsTask(fileContent: string) {
-  const task = getBidAnalysisTaskById('discardedBids');
-  if (!task) {
-    throw new Error('未找到无效投标与废标项解析任务');
-  }
-
-  return requestBidAnalysisTask(fileContent, task);
 }

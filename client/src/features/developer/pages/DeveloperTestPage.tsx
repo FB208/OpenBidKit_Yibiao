@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { getBidAnalysisTasks, requestBidAnalysisTask } from '../../technical-plan/services/bidAnalysisWorkflow';
+import { aiClient } from '../../../shared/ai/aiClient';
+import { getBidAnalysisTasks } from '../../technical-plan/services/bidAnalysisWorkflow';
 import { requestOutlineGeneration } from '../../technical-plan/services/outlineWorkflow';
 
 type RunningMode = 'text' | 'json' | null;
@@ -25,6 +26,14 @@ const sampleOutlineInput = {
 
 const textTask = getBidAnalysisTasks('full').find((task) => task.id === 'projectInfo');
 
+const textSystemPrompt = `你是专业的招标文件分析助手。请严格基于用户提供的招标文件原文完成提取和总结。
+
+通用要求：
+1. 保持信息全面、准确，尽量使用原文内容，不要自行编造。
+2. 如果原文没有提及，明确写“没有提及”或“原文未提及”。
+3. 只输出最终结果，不输出过程、提示语或客套话。
+4. 始终使用简体中文。`;
+
 function DeveloperTestPage() {
   const [runningMode, setRunningMode] = useState<RunningMode>(null);
   const [events, setEvents] = useState<string[]>([]);
@@ -49,10 +58,19 @@ function DeveloperTestPage() {
 
     resetOutput();
     setRunningMode('text');
-    appendEvent(`调用项目真实文本请求：requestBidAnalysisTask(${textTask.label})。`);
+    appendEvent(`调用通用 AI 文本请求：aiClient.chat(${textTask.label})。`);
 
     try {
-      const nextContent = await requestBidAnalysisTask(sampleTenderContent, textTask);
+      const nextContent = await aiClient.chat({
+        messages: [
+          { role: 'system', content: textSystemPrompt },
+          { role: 'user', content: `以下是完整招标文件 Markdown 原文。后续任务必须仅基于这份原文完成：\n\n${sampleTenderContent}` },
+          { role: 'user', content: textTask.buildTaskPrompt() },
+        ],
+        temperature: 0.1,
+        response_format: textTask.output === 'json' ? { type: 'json_object' } : undefined,
+        logTitle: `开发者测试-${textTask.label}`,
+      });
       setContent(nextContent);
       appendEvent('文本请求完成。');
     } catch (error) {
@@ -109,7 +127,7 @@ function DeveloperTestPage() {
             <span />
             <strong>文本复用入口</strong>
           </div>
-          <pre>{JSON.stringify({ service: 'requestBidAnalysisTask', task: textTask?.id, fileContent: sampleTenderContent }, null, 2)}</pre>
+          <pre>{JSON.stringify({ service: 'aiClient.chat', task: textTask?.id, sample: sampleTenderContent }, null, 2)}</pre>
         </section>
 
         <section className="panel developer-test-panel">

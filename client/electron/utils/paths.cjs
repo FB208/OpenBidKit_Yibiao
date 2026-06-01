@@ -24,16 +24,21 @@ function getTechnicalPlanTenderMarkdownPath(app) {
   return path.join(getTechnicalPlanDir(app), 'tender.md');
 }
 
-function getDuplicateCheckFilePath(app) {
-  return path.join(getWorkspaceDir(app), 'duplicate_check.json');
-}
-
-function getRejectionCheckFilePath(app) {
-  return path.join(getWorkspaceDir(app), 'rejection_check.json');
-}
-
 function getDuplicateCheckDir(app) {
   return path.join(getWorkspaceDir(app), 'duplicate-check');
+}
+
+function getDuplicateCheckContentDir(app) {
+  return path.join(getDuplicateCheckDir(app), 'contents');
+}
+
+function getRejectionCheckDir(app) {
+  return path.join(getWorkspaceDir(app), 'rejection-check');
+}
+
+function getRejectionCheckDocumentMarkdownPath(app, role) {
+  const fileName = role === 'bid' ? 'bid.md' : 'tender.md';
+  return path.join(getRejectionCheckDir(app), fileName);
 }
 
 function getGeneratedImagesDir(app) {
@@ -54,13 +59,14 @@ function getAiLogsDir(app) {
 
 module.exports = {
   getAiLogsDir,
+  getDuplicateCheckContentDir,
   getDuplicateCheckDir,
   getConfigFilePath,
-  getDuplicateCheckFilePath,
   getGeneratedImagesDir,
   getImportedImagesDir,
   getKnowledgeBaseDir,
-  getRejectionCheckFilePath,
+  getRejectionCheckDir,
+  getRejectionCheckDocumentMarkdownPath,
   getTechnicalPlanDir,
   getTechnicalPlanTenderMarkdownPath,
   getWorkspaceDir,

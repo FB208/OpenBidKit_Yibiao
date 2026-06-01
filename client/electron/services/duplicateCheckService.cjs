@@ -7,7 +7,7 @@ const CFB = require('cfb');
 const cheerio = require('cheerio');
 const iconv = require('iconv-lite');
 const { PDFParse } = require('pdf-parse');
-const { getDuplicateCheckDir, getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
+const { getDuplicateCheckContentDir, getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
 const { normalizeDocumentParseError } = require('./documentParseErrors.cjs');
 const { parseDocumentWithConfig } = require('./fileService.cjs');
 
@@ -1807,7 +1807,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
 
   async function runContentExtraction(allFiles, webContents, signature) {
     const config = configStore ? configStore.load() : { file_parser: { provider: 'local' } };
-    const dir = path.join(getDuplicateCheckDir(app), 'contents');
+    const dir = getDuplicateCheckContentDir(app);
     await fs.mkdir(dir, { recursive: true });
     const results = [];
     updateAnalysis({ contentExtraction: { status: 'running', completed: 0, total: allFiles.length }, message: '正在提取正文内容' }, webContents, signature);

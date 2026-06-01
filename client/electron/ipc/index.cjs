@@ -2,22 +2,24 @@ const { ipcMain, shell } = require('electron');
 const https = require('node:https');
 const { registerAiIpc } = require('./aiIpc.cjs');
 const { registerConfigIpc } = require('./configIpc.cjs');
+const { registerDuplicateCheckIpc } = require('./duplicateCheckIpc.cjs');
 const { registerExportIpc } = require('./exportIpc.cjs');
 const { registerFileIpc } = require('./fileIpc.cjs');
 const { registerKnowledgeBaseIpc } = require('./knowledgeBaseIpc.cjs');
+const { registerRejectionCheckIpc } = require('./rejectionCheckIpc.cjs');
 const { registerTaskIpc } = require('./taskIpc.cjs');
 const { registerTechnicalPlanIpc } = require('./technicalPlanIpc.cjs');
-const { registerWorkspaceIpc } = require('./workspaceIpc.cjs');
 const { createAiService } = require('../services/aiService.cjs');
 const { createConfigStore } = require('../services/configStore.cjs');
 const { createDuplicateCheckService } = require('../services/duplicateCheckService.cjs');
+const { createDuplicateCheckStore } = require('../services/duplicateCheckStore.cjs');
 const { createExportService } = require('../services/exportService.cjs');
 const { createFileService } = require('../services/fileService.cjs');
 const { createKnowledgeBaseService } = require('../services/knowledgeBaseService.cjs');
+const { createRejectionCheckStore } = require('../services/rejectionCheckStore.cjs');
 const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
-const { createWorkspaceStore } = require('../services/workspaceStore.cjs');
 
 function normalizeExternalUrl(value) {
   const raw = String(value || '').trim();
@@ -49,6 +51,18 @@ function registerUnavailableTechnicalPlanIpc(error) {
     'technical-plan:save-content-generation-options',
     'technical-plan:save-chapter-content',
     'technical-plan:clear',
+    'duplicate-check:load-state',
+    'duplicate-check:save-files',
+    'duplicate-check:save-ui-state',
+    'duplicate-check:update-state',
+    'duplicate-check:clear',
+    'rejection-check:load-state',
+    'rejection-check:import-document',
+    'rejection-check:import-tender-from-technical-plan',
+    'rejection-check:remove-document',
+    'rejection-check:save-ui-state',
+    'rejection-check:update-state',
+    'rejection-check:clear',
     'tasks:start-bid-analysis',
     'tasks:start-outline-generation',
     'tasks:start-content-generation',
@@ -67,21 +81,23 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const fileService = createFileService({ app, configStore });
   const exportService = createExportService();
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore });
-  const workspaceStore = createWorkspaceStore(app);
-  const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore });
 
   registerConfigIpc({ configStore, aiService });
   registerAiIpc({ aiService });
   registerFileIpc({ fileService });
   registerKnowledgeBaseIpc({ knowledgeBaseService });
   registerExportIpc({ exportService });
-  registerWorkspaceIpc({ workspaceStore });
 
   try {
     const sqliteDatabase = createSqliteDatabase(app);
     const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService });
-    const taskService = createTaskService({ aiService, workspaceStore, technicalPlanStore, knowledgeBaseService, duplicateCheckService });
+    const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db });
+    const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore });
+    const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
+    const taskService = createTaskService({ aiService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
     registerTechnicalPlanIpc({ technicalPlanStore });
+    registerDuplicateCheckIpc({ duplicateCheckStore });
+    registerRejectionCheckIpc({ rejectionCheckStore });
     registerTaskIpc({ taskService });
   } catch (error) {
     registerUnavailableTechnicalPlanIpc(error);

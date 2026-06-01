@@ -18,7 +18,7 @@
 - 招标文件 Markdown 保存为 `workspace/technical-plan/tender.md`，SQLite 只存路径和元数据。
 - 技术方案不再使用 `window.yibiao.workspace.*TechnicalPlan`，改为 `window.yibiao.technicalPlan`。
 - 后台任务不再从 Renderer 接收大文本或完整目录；Main 侧从 SQLite 和 `.md` 文件读取权威输入。
-- 根目录 `sql/technical_plan_schema.sql` 是开源说明文件；运行时建表升级以代码 migration 为准。
+- 根目录 `sql/workspace_schema.sql` 是工作区 SQLite 开源说明文件；运行时建表升级以代码 migration 为准。
 
 ### Errors Encountered
 | Error | Attempt | Resolution |
@@ -1209,3 +1209,38 @@
 ### Validation
 - `cd client && npm run build` 通过；仅有既有 chunk 体积警告。
 - `git diff --check` 通过；仅有 Git LF/CRLF 提示。
+
+## Current Task: 标书查重与废标项检查 SQLite v2 改造
+
+### Goal
+将标书查重和废标项检查从旧 `workspace/*.json` 整包缓存迁入 `workspace/yibiao.sqlite` v2；Markdown 大文本文件化；不迁移、不读取旧 JSON；Renderer 改为功能专用 bridge API，后台任务从 Main Store 读取权威输入。
+
+### Phases
+- [completed] 1. 扩展 `sqliteDatabase.cjs` 到 schema v2，并新增两个模块路径 helper。
+- [completed] 2. 新增 `duplicateCheckStore.cjs`、`rejectionCheckStore.cjs` 和对应 IPC/preload/types。
+- [completed] 3. 改造 `taskService.cjs`、`duplicateCheckService.cjs`、`rejectionCheckTask.cjs` 使用新 Store。
+- [completed] 4. 改造 `DuplicateCheckPage.tsx`、`RejectionCheckPage.tsx`，移除旧 workspace JSON 读写和大文本任务 payload。
+- [completed] 5. 删除旧 `workspaceStore.cjs` / `workspaceIpc.cjs`，更新开发说明和 SQLite 方案文档。
+- [completed] 6. 完成 CJS 语法检查、Electron SQLite v2 Store 冒烟、客户端构建和依赖审计。
+
+### Decisions
+- 旧 `duplicate_check.json` / `rejection_check.json` 不迁移、不读取、不 fallback；升级后两个模块以空 SQLite 状态启动。
+- SQLite runtime schema 版本升为 `PRAGMA user_version = 2`，与 `sql/workspace_schema.sql` 保持一致。
+- 标书查重继续复用现有 runner 逻辑，但 `updateDuplicateCheck()` 由 Store 拆写 SQLite 表，不再写 JSON 文件。
+- 废标项检查任务只从 Main Store 读取招标/投标 Markdown 和解析结果；Renderer 启动任务只传运行选项。
+- 从技术方案导入废标项检查招标文件时，立即写入本模块 `rejection-check/tender.md` 快照；如果技术方案已有废标项解析结果，同步保存为本模块解析结果。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| SQLite Store 冒烟在普通 Node 下加载 `better-sqlite3` 失败，提示 Node ABI 137 与 Electron ABI 145 不匹配 | 第一次 SQLite 冒烟 | 这是当前 native 依赖为 Electron 重建后的预期状态；改用 Electron 运行时执行临时 smoke 脚本验证 v2 Store |
+| 标书查重目录项 ID 在不同投标文件中重复，直接写入 `duplicate_check_outline_items.item_id` 会主键冲突 | 复查 `duplicateCheckStore.cjs` 目录保存链路 | Store 内部改用 `file_id::item_id` 作为 SQLite 主键，API 读回时还原原 ID；分组恢复按 `file_id` 精确标记，避免同名 ID 串到其他文件 |
+| 方案复查发现标书查重文件重选未删除旧 Markdown/图片、content_hash 未落库，废标项任务仍保留大文本 payload fallback | 对照 SQLite v2 方案逐项搜索 | 补充清理 `duplicate-check/contents/` 和 `duplicate-check-content-*`，清空时删除整个 `duplicate-check/`，正文提取后写入 SHA256，移除废标项大文本 fallback，并删除未引用 Renderer 服务 |
+
+### Validation
+- `node --check` 通过：`sqliteDatabase.cjs`、`duplicateCheckStore.cjs`、`rejectionCheckStore.cjs`、`duplicateCheckService.cjs`、`rejectionCheckTask.cjs`、`taskService.cjs`、`preload.cjs`、`ipc/index.cjs`、`duplicateCheckIpc.cjs`、`rejectionCheckIpc.cjs`。
+- Electron 运行时 SQLite v2 Store 冒烟通过：schemaVersion=2，标书查重元数据读回，废标项检查 Markdown 文件读回。
+- Electron 运行时标书查重目录回归 smoke 通过：不同投标文件相同目录项 ID 可写入，父子关系读回保持原 API ID，未参与分组的同 ID 目录项不会被误标记。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- `cd client; npm audit` 仍报 3 个既有漏洞：2 moderate、1 high。
+- `git diff --check` 仅有既有 LF/CRLF 提示。

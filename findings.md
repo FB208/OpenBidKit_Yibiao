@@ -8,6 +8,8 @@
 - 目录编辑/保存必须由 Main 侧兜底清空旧正文：即使 Renderer 已清空 `outlineData.content`，`technicalPlanStore.saveOutline()` 也需要再次清空内容和正文生成缓存，避免误传带正文目录导致旧内容污染。
 - `config:load` 未注册的根因不是配置 IPC 缺失，而是 `better-sqlite3` native 模块 ABI 不匹配导致 `createSqliteDatabase()` 抛错，且旧初始化顺序在注册 `config:load` 前就执行 SQLite 初始化。Electron 41 需要 `NODE_MODULE_VERSION 145`，本机 Node 安装得到的是 137；必须用 `electron-builder install-app-deps` 为 Electron 重建 native 依赖。
 - Main IPC 注册顺序不应让单个功能初始化失败拖垮基础接口；基础配置、AI、文件、知识库、导出、非 SQLite workspace IPC 应先注册，SQLite 技术方案初始化失败时只注册技术方案/任务接口的明确失败 handler。
+- 废标项检查和标书查重 SQLite 升级方案已定为“不迁移旧 JSON 数据”：升级后首次打开这两个模块显示空状态，用户重新选择/导入文件并重新分析；这样避免迁移绝对路径、大文本、任务中间态和历史解析结果造成一致性风险。
+- SQL 说明文件已从技术方案单模块视角升级为工作区 SQLite 视角：`sql/workspace_schema.sql` 记录目标完整 schema，当前代码仍以 runtime migration 为准，v2 表结构在后续代码实施时再落地。
 - Step04 最低字数当前缺口：Renderer `ContentEditPage.tsx` 的 `countWords()` 只是去空白长度，会把图片 Markdown、URL、代码块、Mermaid 代码都算入；Main 侧 `contentGenerationTask.cjs` 当前没有字数统计，也没有 `outline-expanding/expanding` 阶段。
 - Step04 当前完整流程在 `contentGenerationTask.cjs` 中是 `planAll/prepareSingleSectionPlan -> runOne -> runIllustrations -> done`；最低字数逻辑应插入 `runOne` 之后、`runIllustrations` 之前。
 - 当前 `contentGenerationPlans` 按叶子 ID 保存最终表格/配图编排；补目录若让旧叶子变成非叶子，必须删除对应 section/plan/content，否则额度计算和导出都会错。
@@ -155,3 +157,11 @@
 - `MarkdownRenderer` 默认开启 raw HTML；Step03 展示 AI 输出详情时必须显式传 `allowRawHtml={false}`。
 - Step02 自定义检查项占位示例包含“签字盖章”，与 Step03 只检查电子投标文件的约束冲突，需要同步改为电子文件可判断的示例。
 - 评审指出的三处健壮性问题成立：10 秒 idle 自动完成可能截断流式输出；error 状态保留 partial content 时 Step03 不能只按 content 非空放行；Step03 最终 JSON 直接 `JSON.parse()` 没有复用 Main 侧 balanced JSON 提取、修复和重试能力。
+- 标书查重与废标项检查 SQLite v2 已落地：旧 `workspaceStore.cjs` / `workspaceIpc.cjs` 被删除，Renderer 不再调用 `window.yibiao.workspace.*DuplicateCheck` 或 `*RejectionCheck`；功能状态由 `duplicateCheckStore` / `rejectionCheckStore` 聚合返回。
+- `better-sqlite3` 当前按 Electron ABI 145 重建，普通 Node 24 会因 ABI 137 不匹配无法执行 SQLite smoke；涉及 SQLite 实例化的冒烟测试应使用 Electron 运行时，`node --check` 仍可用于 CJS 语法检查。
+- 标书查重目录项 ID 在每份投标文件内从 `O00001` 递增，不能直接作为全局 SQLite 主键；Store 内部需用 `file_id::item_id` 落库，API 返回时再去作用域，同时恢复分组标记时必须按 `group.item_ids[file_id]` 定位，不能只按 item_id 跨全文件搜索。
+- 方案复查补漏已处理：`duplicateCheckStore.saveFiles()` 需要同步清旧 Markdown 和 imported images；`duplicate_check_files.content_hash` 应在 Markdown 提取结果保存时写入；废标项检查 Main 任务不应保留大文本 payload fallback；未引用的 Renderer 侧废标项 AI 服务会误导后续开发，应删除。
+- 技术方案任务事件复查补漏已处理：`tasks:event` 不再给技术方案发送完整 `TechnicalPlanState`，改为 `technicalPlanPatch`，正文生成单章节保存额外发送 `contentSection` 和必要 `outlineData/contentRuntime`；查重和废标项检查仍沿用完整 workspace 快照事件。
+- 技术方案旧 Renderer AI service 清理边界：正式 Step02 已由 Main `bidAnalysisTask.cjs` 读取 `tender.md`，`bidAnalysisWorkflow.ts` 只保留任务定义供 UI 展示；开发者测试页如需样例 AI 请求，应直接调用通用 `aiClient`，不要恢复 `requestBidAnalysisTask(fileContent, ...)`。
+- 进一步清理确认：`fileService.importDocument()` 仍是技术方案 Main 内部导入能力，不能删；但 `window.yibiao.file.importDocument` 和 `file:import-document` 已无 Renderer 调用，应删除。旧 `shared/storage/draftStorage.ts` / `workspaceStorage.ts` 是 localStorage 业务大文本缓存残留，已不符合当前 Main Store/SQLite 权威存储边界。
+- 评审指出的两个 P2 均有效：`saveUiState()` 构造含 `undefined` 的 own property 会触发 Store 归一化并把未传字段重置为默认值；duplicate-check stale running 恢复只写 SQLite 不 emit，会让已加载页面继续保持 running。两处均已修复。
