@@ -115,6 +115,82 @@ PRAGMA busy_timeout = 5000;
 PRAGMA user_version = 1;
 ```
 
+完整结构说明文件：
+
+- 在仓库根目录新增 `sql/technical_plan_schema.sql`，保存技术方案模块最新完整数据结构。
+- SQL 文件用于开源开发者理解、评审和排查问题，不作为用户运行时手动执行脚本。
+- 运行时建表和升级以客户端代码中的 migration 为准。
+- 每次表结构变化后，必须同步更新 `sql/technical_plan_schema.sql` 和 migration 版本。
+
+### 4.3 自动初始化与升级策略
+
+SQLite 文件和表结构由客户端自动管理，用户安装或升级客户端后不需要手动执行 SQL。
+
+首次创建流程：
+
+- Electron Main 初始化 SQLite 服务时，先创建 `userData/workspace/` 目录。
+- 调用 `new Database(getWorkspaceDatabasePath(app))` 打开数据库；文件不存在时 SQLite 会自动创建空 DB 文件。
+- 执行基础 PRAGMA：`journal_mode = WAL`、`foreign_keys = ON`、`busy_timeout = 5000`。
+- 读取 `PRAGMA user_version`，首次创建时值为 `0`。
+- 依次执行 migration `1` 到当前代码版本。
+- 每个 migration 成功后，把 `PRAGMA user_version` 更新到对应版本。
+
+升级流程：
+
+- 用户升级客户端后，安装包不会覆盖 `userData/workspace/yibiao.sqlite`。
+- 新版本客户端启动时读取当前 DB 的 `user_version`。
+- 如果 DB 版本低于代码中的 `schemaVersion`，自动按顺序执行缺失 migration。
+- 如果 DB 版本等于 `schemaVersion`，只执行 PRAGMA 和基本完整性检查，不重复建表。
+- 如果 DB 版本高于当前代码版本，说明用户可能用过更高版本客户端，应阻止技术方案功能继续写入，并提示客户端版本过低。
+
+建议 migration 代码形态：
+
+```js
+const schemaVersion = 1;
+
+const migrations = [
+  {
+    version: 1,
+    description: '创建技术方案 SQLite 初始表结构',
+    up(db) {
+      db.exec(`
+        CREATE TABLE technical_plan_meta (...);
+        CREATE TABLE technical_plan_tasks (...);
+      `);
+    },
+  },
+];
+```
+
+执行规则：
+
+- migration 必须幂等地按版本顺序执行，但单个版本不要求重复执行。
+- 每个 migration 必须放进事务。
+- migration 中只做结构变化和必要的数据搬迁，不执行 AI 请求、文件解析、图片生成、Word 导出等耗时任务。
+- migration 成功后再更新 `user_version`。
+- migration 失败时停止初始化技术方案存储，不能继续用半升级的库写入业务数据。
+
+升级前备份策略：
+
+- 当 `user_version > 0` 且需要升级时，升级前先执行 SQLite checkpoint，确保 WAL 内容落入主库文件。
+- 复制 `yibiao.sqlite` 为 `yibiao.sqlite.backup-YYYYMMDD-HHmmss`。
+- 如果存在 `yibiao.sqlite-wal`、`yibiao.sqlite-shm`，也一起复制备份。
+- 备份失败时不继续升级，提示数据库备份失败。
+- 首次创建新库时不需要备份。
+
+升级失败处理：
+
+- 不删除原 DB。
+- 不自动回滚到旧结构后继续写入。
+- 技术方案功能提示“本地数据库升级失败，请备份数据后联系开发者”。
+- 日志中记录当前版本、目标版本、失败 migration 版本和错误信息。
+
+开发约束：
+
+- 不要只依赖 `CREATE TABLE IF NOT EXISTS` 管理结构变化，它只能处理首次建表，不能可靠处理新增字段、拆表、索引变更和数据搬迁。
+- 不允许直接修改历史 migration；已经发布的 migration 只能追加新版本修正。
+- `sql/technical_plan_schema.sql` 始终表示最新完整结构，migration 表示从旧版本升级到新版本的过程。
+
 #### technical_plan_meta
 
 保存技术方案单例元数据。
@@ -272,7 +348,7 @@ CREATE TABLE technical_plan_content_plans (
 );
 ```
 
-### 4.3 Renderer 目标状态
+### 4.4 Renderer 目标状态
 
 `TechnicalPlanState` 建议调整为：
 
@@ -323,7 +399,10 @@ export interface TechnicalPlanState {
 
 - 打开 `workspace/yibiao.sqlite`。
 - 初始化 PRAGMA。
-- 执行 schema 初始化。
+- 读取 `PRAGMA user_version` 并执行自动 migration。
+- 首次创建时自动建表，升级时自动补齐缺失结构。
+- 升级前创建数据库备份，升级失败时阻止技术方案继续写入。
+- 拒绝用低版本客户端写入高版本数据库。
 - 暴露共享 DB 实例。
 - 提供关闭钩子，应用退出前关闭 DB。
 
@@ -503,7 +582,7 @@ better-sqlite3
 
 ### 第 1 批：依赖、路径、SQLite 基础设施
 
-目标：先把 DB 能打开、建表、关闭，不接业务。
+目标：先把 DB 能打开、建表、自动升级、关闭，不接业务。
 
 修改内容：
 
@@ -511,6 +590,9 @@ better-sqlite3
 - 新增 DB 路径方法。
 - 新增 `sqliteDatabase.cjs`。
 - 建立 `technical_plan_*` 表。
+- 实现 `schemaVersion`、migration 列表、`PRAGMA user_version` 升级流程。
+- 实现升级前备份、升级失败中断、DB 版本高于代码版本时拒绝写入。
+- 将根目录 `sql/technical_plan_schema.sql` 作为最新完整结构参考文件纳入维护。
 - 在 IPC 初始化时创建 DB 实例，并传给 `technicalPlanStore`。
 
 验收标准：
@@ -518,6 +600,9 @@ better-sqlite3
 - `node --check` 通过新增 `.cjs` 文件。
 - `npm run build` 通过。
 - `npm run dev` 启动后 `userData/workspace/yibiao.sqlite` 可创建。
+- 新库 `PRAGMA user_version` 等于当前 `schemaVersion`。
+- 手工把测试库 `user_version` 调低后，启动应用会自动升级到当前版本。
+- 手工把测试库 `user_version` 调高后，技术方案功能会拒绝继续写入并给出明确错误。
 
 ### 第 2 批：技术方案专用 Store 和 IPC
 
@@ -737,6 +822,17 @@ SQLite 事务只包快速本地写入。
 - SQLite DB 路径来自 `app.getPath('userData')`，要兼容中文用户名路径。
 - 文件路径不要手写分隔符，使用 `path.join()`。
 
+### 8.9 SQL 说明文件维护
+
+根目录 `sql/technical_plan_schema.sql` 是给开源开发者阅读的最新完整结构，不是运行时唯一来源。
+
+注意事项：
+
+- 修改表结构时，必须同时追加 migration 和更新 `sql/technical_plan_schema.sql`。
+- 不要让 SQL 文件和实际 migration 产生字段差异。
+- Code Review 时要检查 schema 文件、migration、TypeScript 类型三者是否一致。
+- SQL 文件可以使用 `CREATE TABLE IF NOT EXISTS` 方便开发者本地查看，但产品运行时仍必须通过 migration 管理升级。
+
 ## 9. 验证方法
 
 ### 9.1 静态检查
@@ -825,6 +921,19 @@ npm run dist:win
 - 正文生成每完成一节，只有对应目录节点 `content` 和对应 section 状态变化。
 - 目录编辑后，正文 section 和 plan 表被清空。
 - 重置后，所有 `technical_plan_*` 表回到空状态或单行初始状态。
+
+### 9.5 自动升级验证
+
+建议在开发环境准备临时测试库验证升级逻辑。
+
+验证清单：
+
+- 删除 `workspace/yibiao.sqlite` 后启动应用，数据库自动创建，`PRAGMA user_version` 等于当前 `schemaVersion`。
+- 使用旧 schema 测试库启动新客户端，migration 自动执行，原有可保留数据仍可读取。
+- 升级前能生成 `yibiao.sqlite.backup-YYYYMMDD-HHmmss` 备份文件。
+- 人为制造 migration SQL 错误后，技术方案功能停止写入并提示数据库升级失败。
+- 人为把 `PRAGMA user_version` 设置为高于当前代码版本后，技术方案功能提示客户端版本过低。
+- 检查 `sql/technical_plan_schema.sql` 与实际升级后的数据库结构一致。
 
 ## 10. 执行优先级建议
 
