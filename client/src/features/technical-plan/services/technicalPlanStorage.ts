@@ -14,16 +14,12 @@ function isTechnicalPlanState(state: TechnicalPlanState | null): state is Techni
 
 export const technicalPlanStorage = {
   async load(): Promise<TechnicalPlanState | null> {
-    const state = await window.yibiao?.workspace.loadTechnicalPlan<TechnicalPlanState>();
+    const state = await window.yibiao?.technicalPlan.loadState();
 
     if (!isTechnicalPlanState(state || null)) {
       return null;
     }
 
     return state || null;
-  },
-
-  async save(state: TechnicalPlanState) {
-    await window.yibiao?.workspace.saveTechnicalPlan(state);
   },
 };

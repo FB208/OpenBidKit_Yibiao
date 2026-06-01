@@ -129,10 +129,19 @@ export interface ContentGenerationRuntimeState {
   updated_at?: string;
 }
 
+export interface TechnicalPlanTenderFile {
+  fileName: string;
+  markdownPath: string;
+  markdownChars: number;
+  contentHash: string;
+  parserLabel?: string;
+  importedAt?: string;
+  updatedAt: string;
+}
+
 export interface TechnicalPlanState {
   step: TechnicalPlanStep;
-  fileName: string;
-  fileContent: string;
+  tenderFile: TechnicalPlanTenderFile | null;
   projectOverview: string;
   techRequirements: string;
   bidAnalysisMode: BidAnalysisMode;

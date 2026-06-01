@@ -25,8 +25,7 @@ import type {
 } from '../types';
 
 interface TechnicalPlanSnapshot {
-  fileName?: string;
-  fileContent?: string;
+  tenderFile?: { fileName?: string } | null;
   bidAnalysisTasks?: Record<string, { status?: string; content?: string }>;
 }
 
@@ -863,16 +862,16 @@ function RejectionCheckPage() {
   }
 
   async function readTenderFromTechnicalPlan() {
-    const loader = window.yibiao?.workspace.loadTechnicalPlan;
-    if (typeof loader !== 'function') {
+    if (!window.yibiao?.technicalPlan) {
       showToast('技术方案缓存接口尚未加载，请重启应用后重试', 'error');
       return;
     }
 
     try {
       setBusy('technical-plan');
-      const technicalPlan = await loader<TechnicalPlanSnapshot>();
-      if (!technicalPlan?.fileContent?.trim()) {
+      const technicalPlan = await window.yibiao.technicalPlan.loadState() as TechnicalPlanSnapshot;
+      const markdown = await window.yibiao.technicalPlan.readTenderMarkdown();
+      if (!markdown.trim()) {
         showToast('技术方案中暂无可读取的招标文件正文', 'info');
         return;
       }
@@ -881,8 +880,8 @@ function RejectionCheckPage() {
       setTenderDocument(createDocumentContent(
         'tender',
         'technical-plan',
-        technicalPlan.fileName || '技术方案招标文件',
-        technicalPlan.fileContent,
+        technicalPlan.tenderFile?.fileName || '技术方案招标文件',
+        markdown,
       ));
       setActiveDocumentTab('tender');
       showToast('已从技术方案读取招标文件', 'success');
@@ -919,13 +918,13 @@ function RejectionCheckPage() {
     }
 
     technicalPlanCheckSignatureRef.current = signature;
-    const loader = window.yibiao?.workspace.loadTechnicalPlan;
-    if (typeof loader !== 'function') {
+    if (!window.yibiao?.technicalPlan) {
       return false;
     }
 
-    const technicalPlan = await loader<TechnicalPlanSnapshot>();
-    if (technicalPlan?.fileContent?.trim() !== tenderDocument.content.trim()) {
+    const technicalPlan = await window.yibiao.technicalPlan.loadState() as TechnicalPlanSnapshot;
+    const markdown = await window.yibiao.technicalPlan.readTenderMarkdown();
+    if (markdown.trim() !== tenderDocument.content.trim()) {
       return false;
     }
 

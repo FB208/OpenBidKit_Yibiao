@@ -57,11 +57,18 @@ const bridge = {
       return () => ipcRenderer.removeListener('knowledge-base:event', listener);
     },
   },
+  technicalPlan: {
+    loadState: () => ipcRenderer.invoke('technical-plan:load-state'),
+    importTenderDocument: () => ipcRenderer.invoke('technical-plan:import-tender-document'),
+    readTenderMarkdown: () => ipcRenderer.invoke('technical-plan:read-tender-markdown'),
+    updateStep: (step) => ipcRenderer.invoke('technical-plan:update-step', step),
+    saveOutlineConfig: (payload) => ipcRenderer.invoke('technical-plan:save-outline-config', payload),
+    saveOutline: (outlineData) => ipcRenderer.invoke('technical-plan:save-outline', outlineData),
+    saveContentGenerationOptions: (options) => ipcRenderer.invoke('technical-plan:save-content-generation-options', options),
+    saveChapterContent: (payload) => ipcRenderer.invoke('technical-plan:save-chapter-content', payload),
+    clear: () => ipcRenderer.invoke('technical-plan:clear'),
+  },
   workspace: {
-    loadTechnicalPlan: () => ipcRenderer.invoke('workspace:load-technical-plan'),
-    saveTechnicalPlan: (state) => ipcRenderer.invoke('workspace:save-technical-plan', state),
-    updateTechnicalPlan: (partial) => ipcRenderer.invoke('workspace:update-technical-plan', partial),
-    clearTechnicalPlan: () => ipcRenderer.invoke('workspace:clear-technical-plan'),
     loadDuplicateCheck: () => ipcRenderer.invoke('workspace:load-duplicate-check'),
     saveDuplicateCheck: (state) => ipcRenderer.invoke('workspace:save-duplicate-check', state),
     clearDuplicateCheck: () => ipcRenderer.invoke('workspace:clear-duplicate-check'),

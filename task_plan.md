@@ -1,5 +1,32 @@
 # Task Plan
 
+## Current Task: 技术方案 SQLite 存储改造
+
+### Goal
+按 `client/doc/sqlite改造方案.md` 落地技术方案模块 SQLite 改造：招标文件 Markdown 文件化，结构化状态进入 `workspace/yibiao.sqlite`，移除技术方案旧 JSON workspace 链路，不兼容旧 `technical_plan.json`，并完成构建验证。
+
+### Phases
+- [completed] 1. 建立 SQLite 基础设施、schema migration、路径和技术方案 Store。
+- [completed] 2. 新增技术方案 IPC/preload/types，并接入 Main 初始化。
+- [completed] 3. 改造 Renderer 技术方案状态、导入 Markdown、步骤与配置保存链路。
+- [completed] 4. 改造 Step02/Step03/Step04 后台任务，改为通过 technicalPlanStore 局部读写。
+- [completed] 5. 清理旧技术方案 workspace API 和 fileContent/fileName 状态引用。
+- [completed] 6. 运行 CJS 语法检查、客户端构建和必要 smoke test。
+
+### Decisions
+- 不兼容旧 `technical_plan.json`，不读取、不迁移、不 fallback。
+- 招标文件 Markdown 保存为 `workspace/technical-plan/tender.md`，SQLite 只存路径和元数据。
+- 技术方案不再使用 `window.yibiao.workspace.*TechnicalPlan`，改为 `window.yibiao.technicalPlan`。
+- 后台任务不再从 Renderer 接收大文本或完整目录；Main 侧从 SQLite 和 `.md` 文件读取权威输入。
+- 根目录 `sql/technical_plan_schema.sql` 是开源说明文件；运行时建表升级以代码 migration 为准。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| SQLite 冒烟测试首次 `node -e` 报 `Unexpected end of input` | 第一次冒烟测试 | Windows `cmd` 引号嵌套错误导致脚本被截断；改成单层 `node -e "..."` 后通过 |
+| `npm audit` 仍报 3 个漏洞 | 依赖审计 | 记录为当前依赖审计结果，未按本轮任务自动执行 `npm audit fix` |
+| Electron 启动后 `config:load` 没有注册 handler | 用户反馈后复现 | `better-sqlite3` 按 Node ABI 137 编译，而 Electron 41 需要 ABI 145，SQLite 初始化在 IPC 注册前抛错；新增 `postinstall: electron-builder install-app-deps` 并重建 native 依赖，同时让基础 IPC 先注册、SQLite 初始化失败时只影响技术方案/任务接口 |
+
 ## Current Task: Step04 正文生成暂停与继续
 
 ### Goal

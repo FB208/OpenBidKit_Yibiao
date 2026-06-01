@@ -6,6 +6,7 @@ const { registerExportIpc } = require('./exportIpc.cjs');
 const { registerFileIpc } = require('./fileIpc.cjs');
 const { registerKnowledgeBaseIpc } = require('./knowledgeBaseIpc.cjs');
 const { registerTaskIpc } = require('./taskIpc.cjs');
+const { registerTechnicalPlanIpc } = require('./technicalPlanIpc.cjs');
 const { registerWorkspaceIpc } = require('./workspaceIpc.cjs');
 const { createAiService } = require('../services/aiService.cjs');
 const { createConfigStore } = require('../services/configStore.cjs');
@@ -13,7 +14,9 @@ const { createDuplicateCheckService } = require('../services/duplicateCheckServi
 const { createExportService } = require('../services/exportService.cjs');
 const { createFileService } = require('../services/fileService.cjs');
 const { createKnowledgeBaseService } = require('../services/knowledgeBaseService.cjs');
+const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
+const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
 const { createWorkspaceStore } = require('../services/workspaceStore.cjs');
 
 function normalizeExternalUrl(value) {
@@ -29,6 +32,35 @@ function normalizeExternalUrl(value) {
   }
 }
 
+function registerUnavailableTechnicalPlanIpc(error) {
+  const message = `技术方案数据库初始化失败：${error?.message || String(error)}`;
+  const throwUnavailable = () => {
+    throw new Error(message);
+  };
+
+  console.error('[ipc] 技术方案数据库初始化失败', error);
+  [
+    'technical-plan:load-state',
+    'technical-plan:import-tender-document',
+    'technical-plan:read-tender-markdown',
+    'technical-plan:update-step',
+    'technical-plan:save-outline-config',
+    'technical-plan:save-outline',
+    'technical-plan:save-content-generation-options',
+    'technical-plan:save-chapter-content',
+    'technical-plan:clear',
+    'tasks:start-bid-analysis',
+    'tasks:start-outline-generation',
+    'tasks:start-content-generation',
+    'tasks:pause-content-generation',
+    'tasks:start-rejection-items-extraction',
+    'tasks:start-rejection-check',
+    'tasks:start-duplicate-analysis',
+    'tasks:get-active',
+  ].forEach((channel) => ipcMain.handle(channel, throwUnavailable));
+  ipcMain.on('tasks:subscribe', () => {});
+}
+
 function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall }) {
   const configStore = createConfigStore(app);
   const aiService = createAiService({ app, configStore });
@@ -37,7 +69,6 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore });
   const workspaceStore = createWorkspaceStore(app);
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore });
-  const taskService = createTaskService({ aiService, workspaceStore, knowledgeBaseService, duplicateCheckService });
 
   registerConfigIpc({ configStore, aiService });
   registerAiIpc({ aiService });
@@ -45,7 +76,16 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerKnowledgeBaseIpc({ knowledgeBaseService });
   registerExportIpc({ exportService });
   registerWorkspaceIpc({ workspaceStore });
-  registerTaskIpc({ taskService });
+
+  try {
+    const sqliteDatabase = createSqliteDatabase(app);
+    const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService });
+    const taskService = createTaskService({ aiService, workspaceStore, technicalPlanStore, knowledgeBaseService, duplicateCheckService });
+    registerTechnicalPlanIpc({ technicalPlanStore });
+    registerTaskIpc({ taskService });
+  } catch (error) {
+    registerUnavailableTechnicalPlanIpc(error);
+  }
 
   ipcMain.handle('app:get-version', () => app.getVersion());
 

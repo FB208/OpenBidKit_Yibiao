@@ -1,6 +1,13 @@
 # Progress
 
 ## Session Log
+- 开始技术方案 SQLite 存储改造：范围限定技术方案模块；已读取既有文件型计划，确认本轮要移除旧 `technical_plan.json` 兼容、招标 Markdown 文件化、结构化数据进入 SQLite，并按方案分批改造 Main/IPC/Renderer/任务服务。
+- 已完成技术方案 SQLite 存储改造收尾：新增 `sqliteDatabase.cjs`、`technicalPlanStore.cjs`、`technicalPlanIpc.cjs`，接入 `window.yibiao.technicalPlan`；技术方案招标文件 Markdown 保存到 `workspace/technical-plan/tender.md`，结构化状态保存到 `workspace/yibiao.sqlite`。
+- 已清理旧技术方案 workspace API：Renderer 不再调用 `window.yibiao.workspace.load/save/update/clearTechnicalPlan`；`workspaceStore.cjs` 只保留标书查重和废标项检查；废标项检查从技术方案读取招标文件时改用 `technicalPlan.loadState()` 和 `readTenderMarkdown()`。
+- 已收紧技术方案后台任务输入：Step02 招标解析只从 Main 侧 Markdown 文件读取；Step03 只从 SQLite 读取项目概述和技术评分要求；Step04 只从 SQLite 读取目录、项目概述、技术要求和参考知识库配置，不再接收 Renderer 传完整目录或大文本。
+- 已补强目录保存规则：`technicalPlanStore.saveOutline()` 在 Main 侧强制清空目录正文和正文生成缓存，避免目录编辑/重生成后旧正文污染导出。
+- 验证完成：`node --check` 覆盖 SQLite、技术方案 Store/IPC、任务服务、Step02/Step03/Step04 任务和 preload；SQLite Store 冒烟测试通过；`cd client; npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 仅有 LF/CRLF 提示；`npm audit` 仍为 3 个漏洞（2 moderate、1 high），未自动修复。
+- 已修复 Electron 启动后 `config:load` 未注册：复现日志显示 `better-sqlite3.node` ABI 不匹配（Node 137 vs Electron 145）导致 SQLite 初始化在 IPC 注册前抛错；已新增 `postinstall` 自动执行 `electron-builder install-app-deps`，本地已重建 native 依赖，并调整 IPC 注册顺序让基础配置接口先注册；`client/开发说明.md` 已补充 native 依赖重建说明。验证通过 `npm run postinstall`、`npm run start`、`npm run dev`、`npm run build`、相关 `node --check`。
 - 开始 Step04 正文生成暂停与继续：目标是在不强制中断当前 AI 请求的前提下，点击暂停立即显示“正在暂停中”，当前并发请求完成后进入 paused 并允许导出；继续时从 workspace 恢复扩写/配图进度。
 - 已完成暂停/继续第一轮代码接入：`taskService` 增加 content-generation 暂停控制器和 `tasks:pause-content-generation` IPC；正文生成任务增加 `contentGenerationRuntime`、安全检查点、扩写轮次持久化、pausing/paused 落盘和 resume 恢复。CJS 语法检查已通过 `taskService.cjs`、`contentGenerationTask.cjs`、`taskIpc.cjs`、`preload.cjs`。
 - 已修复并验证暂停/继续恢复细节：resume 时改用任务启动前的 workspace 快照，避免 taskService 先写入 running 后让 runner 看不到 paused；扩写恢复保持首批仅中位数、后续左右扩散。暂停/继续 smoke test 和扩写进度恢复 smoke test 均通过。

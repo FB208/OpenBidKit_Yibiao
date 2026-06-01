@@ -908,11 +908,8 @@ function collectLeafContexts(items, parents = []) {
   return results;
 }
 
-function normalizeReferenceDocumentIds(payload, storedPlan) {
-  const raw = payload?.reference_knowledge_document_ids
-    ?? payload?.referenceKnowledgeDocumentIds
-    ?? storedPlan?.referenceKnowledgeDocumentIds
-    ?? [];
+function normalizeReferenceDocumentIds(storedPlan) {
+  const raw = storedPlan?.referenceKnowledgeDocumentIds ?? [];
   return Array.isArray(raw)
     ? [...new Set(raw.map((id) => String(id || '').trim()).filter(Boolean))]
     : [];
@@ -1643,14 +1640,14 @@ function withSection(sections, item, partial) {
 async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }) {
   const resume = Boolean(payload.resume);
   const storedPlan = resume ? (previousState || {}) : (workspaceStore.loadTechnicalPlan() || {});
-  let outlineData = payload.outlineData || storedPlan.outlineData;
+  let outlineData = storedPlan.outlineData;
 
   if (!outlineData?.outline?.length) {
     throw new Error('请先生成目录，再生成正文');
   }
 
-  const projectOverview = payload.projectOverview || outlineData.project_overview || storedPlan.projectOverview || '';
-  const techRequirements = payload.techRequirements || payload.tech_requirements || storedPlan.techRequirements || '';
+  const projectOverview = outlineData.project_overview || storedPlan.projectOverview || '';
+  const techRequirements = storedPlan.techRequirements || '';
   if (resume && storedPlan.contentGenerationTask?.status !== 'paused') {
     throw new Error('没有可继续的已暂停正文生成任务');
   }
@@ -1675,7 +1672,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   const tableRequirement = normalizeTableRequirement(generationOptions.tableRequirement ?? generationOptions.table_requirement);
   let maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
   const minimumWords = targetItemId ? 0 : normalizeMinimumWords(generationOptions.minimumWords ?? generationOptions.minimum_words);
-  const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(payload, storedPlan);
+  const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
   const imageAvailability = aiService.getImageModelAvailability
     ? aiService.getImageModelAvailability()
     : { available: false, message: '生图模型不可用' };

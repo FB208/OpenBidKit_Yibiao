@@ -12,8 +12,16 @@ function getWorkspaceDir(app) {
   return path.join(getUserDataPath(app), 'workspace');
 }
 
-function getTechnicalPlanFilePath(app) {
-  return path.join(getWorkspaceDir(app), 'technical_plan.json');
+function getWorkspaceDatabasePath(app) {
+  return path.join(getWorkspaceDir(app), 'yibiao.sqlite');
+}
+
+function getTechnicalPlanDir(app) {
+  return path.join(getWorkspaceDir(app), 'technical-plan');
+}
+
+function getTechnicalPlanTenderMarkdownPath(app) {
+  return path.join(getTechnicalPlanDir(app), 'tender.md');
 }
 
 function getDuplicateCheckFilePath(app) {
@@ -53,7 +61,9 @@ module.exports = {
   getImportedImagesDir,
   getKnowledgeBaseDir,
   getRejectionCheckFilePath,
-  getTechnicalPlanFilePath,
+  getTechnicalPlanDir,
+  getTechnicalPlanTenderMarkdownPath,
   getWorkspaceDir,
+  getWorkspaceDatabasePath,
   getUserDataPath,
 };

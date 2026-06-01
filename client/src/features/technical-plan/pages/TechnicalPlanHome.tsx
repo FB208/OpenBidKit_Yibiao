@@ -28,8 +28,7 @@ const stepLabels: Record<TechnicalPlanStep, string> = {
 
 const resetState = {
   step: 'document-analysis' as TechnicalPlanStep,
-  fileName: '',
-  fileContent: '',
+  tenderFile: null,
   projectOverview: '',
   techRequirements: '',
   bidAnalysisMode: 'key' as const,
@@ -123,6 +122,7 @@ function resetGeneratedContent(outlineData: OutlineData): OutlineData {
 function TechnicalPlanHome() {
   const { state, setState } = useTechnicalPlanWorkflow();
   const { showToast } = useToast();
+  const [tenderMarkdown, setTenderMarkdown] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
   const activeIndex = steps.indexOf(state.step);
   const bidAnalysisReady = Boolean(state.projectOverview && state.techRequirements && state.bidAnalysisProgress === 100);
@@ -131,10 +131,10 @@ function TechnicalPlanHome() {
   const isContentPaused = contentTaskStatus === 'paused';
   const isExporting = exportProgress.running;
   const isNextDisabled = activeIndex >= steps.length - 1
-    || (state.step === 'document-analysis' && !state.fileContent)
+    || (state.step === 'document-analysis' && !state.tenderFile)
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
     || (state.step === 'outline-generation' && !state.outlineData);
-  const nextTooltip = state.step === 'document-analysis' && !state.fileContent
+  const nextTooltip = state.step === 'document-analysis' && !state.tenderFile
     ? '上传完招标文件后才能进入下一步'
     : state.step === 'bid-analysis' && !bidAnalysisReady
       ? '招标文件解析完成后才能进入目录生成'
@@ -150,6 +150,9 @@ function TechnicalPlanHome() {
 
   const switchStep = (step: TechnicalPlanStep) => {
     setState((prev) => ({ ...prev, step }));
+    window.yibiao?.technicalPlan.updateStep(step).catch((error) => {
+      showToast(error instanceof Error ? error.message : '保存技术方案步骤失败', 'error');
+    });
   };
 
   const goToOffset = (offset: number) => {
@@ -241,6 +244,25 @@ function TechnicalPlanHome() {
 
     return unsubscribe;
   }, [setState]);
+
+  useEffect(() => {
+    if (state.step !== 'document-analysis') {
+      return;
+    }
+    if (!state.tenderFile) {
+      setTenderMarkdown('');
+      return;
+    }
+    let mounted = true;
+    window.yibiao?.technicalPlan.readTenderMarkdown().then((markdown) => {
+      if (mounted) setTenderMarkdown(markdown || '');
+    }).catch((error) => {
+      if (mounted) showToast(error instanceof Error ? error.message : '读取招标文件 Markdown 失败', 'error');
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [showToast, state.step, state.tenderFile]);
 
   const exportWord = async () => {
     if (!state.outlineData?.outline?.length) {
@@ -340,23 +362,28 @@ function TechnicalPlanHome() {
       outlineData: updatedOutlineData,
       contentGenerationSections: updatedSections,
     }));
-    await window.yibiao?.workspace.updateTechnicalPlan({
-      outlineData: updatedOutlineData,
-      contentGenerationSections: updatedSections,
-    });
+    const saved = await window.yibiao?.technicalPlan.saveChapterContent({ nodeId: item.id, content });
+    if (saved) setState((prev) => ({ ...prev, ...saved }));
   };
 
-  const resetTechnicalPlan = () => {
+  const resetTechnicalPlan = async () => {
     if (!window.confirm('会清空整个技术方案编写进度，是否确认？')) {
       return;
     }
 
-    setState(resetState);
+    try {
+      const result = await window.yibiao?.technicalPlan.clear();
+      setState(result?.state || resetState);
+      setTenderMarkdown('');
+      showToast(result?.message || '技术方案已重置', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '重置技术方案失败', 'error');
+    }
   };
 
   const saveContentGenerationOptions = async (contentGenerationOptions: ContentGenerationOptions) => {
-    await window.yibiao?.workspace.updateTechnicalPlan({ contentGenerationOptions });
-    setState((prev) => ({ ...prev, contentGenerationOptions }));
+    const saved = await window.yibiao?.technicalPlan.saveContentGenerationOptions(contentGenerationOptions);
+    setState((prev) => ({ ...prev, ...(saved || {}), contentGenerationOptions }));
   };
 
   const generatedContentCount = state.outlineData?.outline
@@ -441,33 +468,18 @@ function TechnicalPlanHome() {
     <div className="page-stack technical-workbench">
       {state.step === 'document-analysis' && (
         <DocumentAnalysisPage
-          fileName={state.fileName}
-          fileContent={state.fileContent}
-          onFileImported={(fileName, fileContent) => setState((prev) => ({
-            ...prev,
-            fileName,
-            fileContent,
-            projectOverview: '',
-            techRequirements: '',
-            bidAnalysisTasks: {},
-            bidAnalysisProgress: 0,
-            outlineMode: 'aligned',
-            referenceKnowledgeDocumentIds: [],
-            bidAnalysisTask: undefined,
-            outlineGenerationTask: undefined,
-            contentGenerationTask: undefined,
-            contentGenerationOptions: undefined,
-            contentGenerationSections: {},
-            contentGenerationPlans: {},
-            contentGenerationRuntime: undefined,
-            outlineData: null,
-          }))}
+          tenderFile={state.tenderFile}
+          tenderMarkdown={tenderMarkdown}
+          onFileImported={(nextState, markdown) => {
+            setState((prev) => ({ ...prev, ...nextState }));
+            setTenderMarkdown(markdown);
+          }}
         />
       )}
 
       {state.step === 'bid-analysis' && (
         <BidAnalysisPage
-          fileContent={state.fileContent}
+          hasTenderFile={Boolean(state.tenderFile)}
           mode={state.bidAnalysisMode}
           tasks={state.bidAnalysisTasks}
           task={state.bidAnalysisTask}
@@ -490,23 +502,35 @@ function TechnicalPlanHome() {
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           outlineData={state.outlineData}
           task={state.outlineGenerationTask}
-          onOutlineModeChange={(outlineMode) => setState((prev) => ({ ...prev, outlineMode }))}
-          onReferenceKnowledgeDocumentsChange={(referenceKnowledgeDocumentIds) => setState((prev) => ({ ...prev, referenceKnowledgeDocumentIds }))}
-          onOutlineGenerated={(outlineData) => setState((prev) => ({
-            ...prev,
-            outlineData: resetGeneratedContent(outlineData),
-            contentGenerationTask: undefined,
-            contentGenerationSections: {},
-            contentGenerationPlans: {},
-            contentGenerationRuntime: undefined,
-          }))}
+          onOutlineConfigChange={(outlineMode, referenceKnowledgeDocumentIds) => {
+            setState((prev) => ({ ...prev, outlineMode, referenceKnowledgeDocumentIds }));
+            window.yibiao?.technicalPlan.saveOutlineConfig({ outlineMode, referenceKnowledgeDocumentIds }).then((saved) => {
+              setState((prev) => ({ ...prev, ...saved }));
+            }).catch((error) => {
+              showToast(error instanceof Error ? error.message : '保存目录配置失败', 'error');
+            });
+          }}
+          onOutlineGenerated={(outlineData) => {
+            const nextOutlineData = resetGeneratedContent(outlineData);
+            setState((prev) => ({
+              ...prev,
+              outlineData: nextOutlineData,
+              contentGenerationTask: undefined,
+              contentGenerationSections: {},
+              contentGenerationPlans: {},
+              contentGenerationRuntime: undefined,
+            }));
+            window.yibiao?.technicalPlan.saveOutline(nextOutlineData).then((saved) => {
+              setState((prev) => ({ ...prev, ...saved }));
+            }).catch((error) => {
+              showToast(error instanceof Error ? error.message : '保存目录失败', 'error');
+            });
+          }}
         />
       )}
       {state.step === 'content-edit' && (
         <ContentEditPage
           outlineData={state.outlineData}
-          projectOverview={state.projectOverview}
-          referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           task={state.contentGenerationTask}
           contentGenerationOptions={state.contentGenerationOptions}
           sections={state.contentGenerationSections}

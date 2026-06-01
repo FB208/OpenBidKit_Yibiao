@@ -3,6 +3,8 @@ import type { DuplicateCheckWorkspaceState, FileImportResult, FileSelectionResul
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseMutationResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
+import type { ContentGenerationOptions, TechnicalPlanState, TechnicalPlanStep } from '../../features/technical-plan/types';
+import type { OutlineData, OutlineMode } from './outline';
 
 export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDuplicateCheckState = unknown> {
   task: unknown;
@@ -85,11 +87,18 @@ export interface YibiaoBridge {
     readAnalysis: (documentId: string) => Promise<KnowledgeAnalysisSnapshot>;
     onEvent: (callback: (event: KnowledgeBaseEvent) => void) => () => void;
   };
+  technicalPlan: {
+    loadState: () => Promise<TechnicalPlanState>;
+    importTenderDocument: () => Promise<{ success: boolean; message?: string; state: TechnicalPlanState; markdown: string }>;
+    readTenderMarkdown: () => Promise<string>;
+    updateStep: (step: TechnicalPlanStep) => Promise<TechnicalPlanState>;
+    saveOutlineConfig: (payload: { outlineMode: OutlineMode; referenceKnowledgeDocumentIds: string[] }) => Promise<TechnicalPlanState>;
+    saveOutline: (outlineData: OutlineData) => Promise<TechnicalPlanState>;
+    saveContentGenerationOptions: (options: ContentGenerationOptions) => Promise<TechnicalPlanState>;
+    saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<TechnicalPlanState>;
+    clear: () => Promise<{ success: boolean; message?: string; state: TechnicalPlanState }>;
+  };
   workspace: {
-    loadTechnicalPlan: <TState = unknown>() => Promise<TState | null>;
-    saveTechnicalPlan: (state: unknown) => Promise<unknown>;
-    updateTechnicalPlan: <TState = unknown>(partial: unknown) => Promise<TState>;
-    clearTechnicalPlan: () => Promise<unknown>;
     loadDuplicateCheck: () => Promise<DuplicateCheckWorkspaceState | null>;
     saveDuplicateCheck: (state: DuplicateCheckWorkspaceState) => Promise<unknown>;
     clearDuplicateCheck: () => Promise<unknown>;

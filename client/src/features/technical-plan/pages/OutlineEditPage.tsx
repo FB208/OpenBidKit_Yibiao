@@ -14,8 +14,7 @@ interface OutlineEditPageProps {
   referenceKnowledgeDocumentIds: string[];
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
-  onOutlineModeChange: (mode: OutlineMode) => void;
-  onReferenceKnowledgeDocumentsChange: (documentIds: string[]) => void;
+  onOutlineConfigChange: (mode: OutlineMode, documentIds: string[]) => void;
   onOutlineGenerated: (outlineData: OutlineData) => void;
 }
 
@@ -115,8 +114,7 @@ function OutlineEditPage({
   referenceKnowledgeDocumentIds,
   outlineData,
   task,
-  onOutlineModeChange,
-  onReferenceKnowledgeDocumentsChange,
+  onOutlineConfigChange,
   onOutlineGenerated,
 }: OutlineEditPageProps) {
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
@@ -237,8 +235,7 @@ function OutlineEditPage({
   };
 
   const saveOutlineConfig = () => {
-    onOutlineModeChange(draftOutlineMode);
-    onReferenceKnowledgeDocumentsChange(draftKnowledgeDocumentIds);
+    onOutlineConfigChange(draftOutlineMode, draftKnowledgeDocumentIds);
     setGenerationDialogOpen(false);
     showToast('目录生成配置已保存', 'success');
   };
@@ -254,12 +251,9 @@ function OutlineEditPage({
       setStartingOutline(true);
       setLocalStartAt(startedNow);
       setNowTick(startedNow);
-      onOutlineModeChange(draftOutlineMode);
-      onReferenceKnowledgeDocumentsChange(draftKnowledgeDocumentIds);
+      onOutlineConfigChange(draftOutlineMode, draftKnowledgeDocumentIds);
       setGenerationDialogOpen(false);
       await window.yibiao?.tasks.startOutlineGeneration({
-        overview: projectOverview,
-        requirements: techRequirements,
         mode: draftOutlineMode,
         reference_knowledge_document_ids: draftKnowledgeDocumentIds,
       });

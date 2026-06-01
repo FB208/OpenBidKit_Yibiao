@@ -1,6 +1,13 @@
 # Findings
 
 ## Research Log
+- 技术方案 SQLite 改造当前关键边界：旧 `workspaceStore.cjs` 的 `load/save/update/clearTechnicalPlan` 是所有 Main 任务和 Renderer 缓存的中心入口；本轮应新增 `technicalPlanStore.cjs` 接管技术方案，`workspaceStore.cjs` 最终只保留查重和废标项检查。
+- 技术方案大文本边界：`TechnicalPlanState.fileContent` 和 `BidAnalysisPage.startBidAnalysis({ fileContent })` 是 Renderer 传大文本的主要路径；最佳版本应删除该状态和 payload，由 Main 侧从 `workspace/technical-plan/tender.md` 读取。
+- 技术方案 SQLite 改造已落地的权威边界：`technicalPlanStore.cjs` 负责 SQLite 结构化状态，`workspace/technical-plan/tender.md` 负责招标 Markdown 原文；`workspaceStore.cjs` 不再包含技术方案 JSON 方法。
+- Step02/Step03/Step04 后台任务最终输入边界：Renderer 只传模式、重跑范围、配置和操作意图；招标 Markdown、项目概述、技术评分要求、目录、正文缓存和参考知识库选择都由 Main 侧从 `technicalPlanStore` 读取。
+- 目录编辑/保存必须由 Main 侧兜底清空旧正文：即使 Renderer 已清空 `outlineData.content`，`technicalPlanStore.saveOutline()` 也需要再次清空内容和正文生成缓存，避免误传带正文目录导致旧内容污染。
+- `config:load` 未注册的根因不是配置 IPC 缺失，而是 `better-sqlite3` native 模块 ABI 不匹配导致 `createSqliteDatabase()` 抛错，且旧初始化顺序在注册 `config:load` 前就执行 SQLite 初始化。Electron 41 需要 `NODE_MODULE_VERSION 145`，本机 Node 安装得到的是 137；必须用 `electron-builder install-app-deps` 为 Electron 重建 native 依赖。
+- Main IPC 注册顺序不应让单个功能初始化失败拖垮基础接口；基础配置、AI、文件、知识库、导出、非 SQLite workspace IPC 应先注册，SQLite 技术方案初始化失败时只注册技术方案/任务接口的明确失败 handler。
 - Step04 最低字数当前缺口：Renderer `ContentEditPage.tsx` 的 `countWords()` 只是去空白长度，会把图片 Markdown、URL、代码块、Mermaid 代码都算入；Main 侧 `contentGenerationTask.cjs` 当前没有字数统计，也没有 `outline-expanding/expanding` 阶段。
 - Step04 当前完整流程在 `contentGenerationTask.cjs` 中是 `planAll/prepareSingleSectionPlan -> runOne -> runIllustrations -> done`；最低字数逻辑应插入 `runOne` 之后、`runIllustrations` 之前。
 - 当前 `contentGenerationPlans` 按叶子 ID 保存最终表格/配图编排；补目录若让旧叶子变成非叶子，必须删除对应 section/plan/content，否则额度计算和导出都会错。

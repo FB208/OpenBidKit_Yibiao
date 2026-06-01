@@ -192,7 +192,7 @@ function createTask(type, payload) {
   };
 }
 
-function createTaskService({ aiService, workspaceStore, knowledgeBaseService, duplicateCheckService }) {
+function createTaskService({ aiService, workspaceStore, technicalPlanStore, knowledgeBaseService, duplicateCheckService }) {
   const subscribers = new Set();
   const activeTasks = new Map();
   const activeTaskControls = new Map();
@@ -209,7 +209,7 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
   function getSnapshotForTask(task) {
     const definition = getTaskDefinition(task.type);
     if (definition.stateKey === 'technicalPlan') {
-      return { technicalPlan: workspaceStore.loadTechnicalPlan() };
+      return { technicalPlan: technicalPlanStore.loadTechnicalPlan() };
     }
     if (definition.stateKey === 'rejectionCheck') {
       return { rejectionCheck: workspaceStore.loadRejectionCheck() };
@@ -268,7 +268,7 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
     if (!conflict) {
       const definition = getTaskDefinition(type);
       if (definition.group === 'technical-plan') {
-        const technicalPlan = workspaceStore.loadTechnicalPlan() || {};
+        const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
         const pausedContentTask = technicalPlan.contentGenerationTask;
         if (pausedContentTask?.status === 'paused') {
           if (type === 'content-generation' && payload?.resume) {
@@ -285,23 +285,29 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
   }
 
   function updateWorkspaceState(definition, partial) {
+    if (definition.stateKey === 'technicalPlan') {
+      return technicalPlanStore.updateTechnicalPlan(partial);
+    }
     if (definition.stateKey === 'rejectionCheck') {
       return workspaceStore.updateRejectionCheck(partial);
     }
     if (definition.stateKey === 'duplicateCheck') {
       return workspaceStore.updateDuplicateCheck(partial);
     }
-    return workspaceStore.updateTechnicalPlan(partial);
+    return technicalPlanStore.updateTechnicalPlan(partial);
   }
 
   function loadWorkspaceState(definition) {
+    if (definition.stateKey === 'technicalPlan') {
+      return technicalPlanStore.loadTechnicalPlan();
+    }
     if (definition.stateKey === 'rejectionCheck') {
       return workspaceStore.loadRejectionCheck();
     }
     if (definition.stateKey === 'duplicateCheck') {
       return workspaceStore.loadDuplicateCheck();
     }
-    return workspaceStore.loadTechnicalPlan();
+    return technicalPlanStore.loadTechnicalPlan();
   }
 
   function buildSnapshot(definition, state) {
@@ -375,7 +381,8 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
     const state = updateWorkspaceState(definition, { ...initialPartial, [taskField]: currentTask });
     emit(currentTask, buildSnapshot(definition, state));
 
-    runner({ aiService, workspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
+    const runnerWorkspaceStore = definition.stateKey === 'technicalPlan' ? technicalPlanStore : workspaceStore;
+    runner({ aiService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
       const failedTask = updateTask({ status: 'error', error: error.message || '任务执行失败' });
       const nextState = updateWorkspaceState(definition, { [taskField]: failedTask });
       emit(failedTask, buildSnapshot(definition, nextState));
@@ -392,7 +399,7 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
       return;
     }
 
-    const technicalPlan = workspaceStore.loadTechnicalPlan() || {};
+    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const contentTask = technicalPlan.contentGenerationTask;
     if (!isActiveTaskStatus(contentTask?.status)) {
       return;
@@ -422,7 +429,7 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
       stats: nextStats,
       updated_at: now(),
     };
-    const state = workspaceStore.updateTechnicalPlan({
+    const state = technicalPlanStore.updateTechnicalPlan({
       outlineData,
       contentGenerationSections: sections,
       contentGenerationTask: pausedTask,
@@ -461,7 +468,7 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
         return control.requestPause();
       }
 
-      const technicalPlan = workspaceStore.loadTechnicalPlan() || {};
+      const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
       const contentTask = technicalPlan.contentGenerationTask;
       if (contentTask?.status === 'paused' || contentTask?.status === 'pausing') {
         return contentTask;
