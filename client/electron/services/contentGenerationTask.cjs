@@ -11,6 +11,7 @@ const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 const MAX_OUTLINE_EXPANSION_ROUNDS = 3;
 const OUTLINE_EXPANSION_STEPS_PER_ROUND = 6;
 const OUTLINE_EXPANSION_TARGET_RATIO = 0.8;
+const EARLY_CONTENT_PROBE_COUNT = 3;
 const MIN_SECTION_EXPANSION_INCREMENT = 800;
 const TABLE_REQUIREMENT_LABELS = {
   none: '不要',
@@ -1781,7 +1782,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     ? `AI 生图已启用，将在整体编排后择优生成，全文最多 ${configuredMaxAiImages} 张，本轮最多新增 ${runLimits.maxAiImagesForRun} 张。`
     : 'AI 生图未启用或不可用，本次不会调用生图接口。'];
   if (minimumWords > 0) {
-    logs = [...logs, `最低字数已启用：${minimumWords} 字，正文生成后将自动补足。`];
+    logs = [...logs, `最低字数已启用：${minimumWords} 字，将在采样预估后补目录，并在正文生成后扩写补足。`];
   }
   logs = [...logs, mermaidImagesEnabled
     ? 'Mermaid 图片已启用，适合简单图示的小节会优先使用 Mermaid 图。'
@@ -2188,6 +2189,48 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     });
   }
 
+  function selectEarlyContentProbeTargets(targets) {
+    const source = Array.isArray(targets) ? targets : [];
+    if (source.length <= EARLY_CONTENT_PROBE_COUNT) {
+      return source;
+    }
+
+    const indexes = [0, Math.floor((source.length - 1) / 2), source.length - 1];
+    const selected = new Map();
+    for (const index of indexes) {
+      const context = source[index];
+      if (context?.item?.id) {
+        selected.set(context.item.id, context);
+      }
+    }
+    return Array.from(selected.values());
+  }
+
+  function averageGeneratedWords(targets) {
+    const words = (Array.isArray(targets) ? targets : [])
+      .map(({ item }) => countContentWords(getLeafContentForWords(item)))
+      .filter((value) => value > 0);
+    if (!words.length) {
+      return 0;
+    }
+    return Math.round(words.reduce((sum, value) => sum + value, 0) / words.length);
+  }
+
+  function estimateTotalWords(leafAverageWords) {
+    const averageWords = Number(leafAverageWords);
+    const fallbackWords = medianLeafWords();
+    const wordsPerPendingLeaf = Number.isFinite(averageWords) && averageWords > 0 ? averageWords : fallbackWords;
+    return countTotalContentWords() + pendingContentContexts().length * wordsPerPendingLeaf;
+  }
+
+  function rememberRetryTargets(targets) {
+    for (const { item } of targets || []) {
+      if (sections[item.id]?.status === 'error') {
+        retryItemIds.add(item.id);
+      }
+    }
+  }
+
   function updateOutlineExpansionProgress(round, stepCompleted, label, planSnapshot) {
     const normalizedRound = Math.max(1, Math.min(MAX_OUTLINE_EXPANSION_ROUNDS, Math.round(Number(round) || 1)));
     const normalizedStep = Math.max(0, Math.min(OUTLINE_EXPANSION_STEPS_PER_ROUND, Math.round(Number(stepCompleted) || 0)));
@@ -2258,9 +2301,17 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     return addedCount;
   }
 
-  async function runOutlineExpansionIfNeeded() {
-    if (minimumWords <= 0 || countTotalContentWords() >= minimumWords * OUTLINE_EXPANSION_TARGET_RATIO) {
-      return;
+  async function runOutlineExpansionIfNeeded(initialEstimatedWords, leafAverageWords) {
+    if (minimumWords <= 0) {
+      return 0;
+    }
+
+    let estimatedWords = Number(initialEstimatedWords);
+    if (!Number.isFinite(estimatedWords)) {
+      estimatedWords = estimateTotalWords(leafAverageWords);
+    }
+    if (estimatedWords >= minimumWords * OUTLINE_EXPANSION_TARGET_RATIO) {
+      return 0;
     }
 
     let addedTotal = 0;
@@ -2280,32 +2331,65 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       }
 
       updateOutlineExpansionProgress(round, OUTLINE_EXPANSION_STEPS_PER_ROUND, '正在预估补目录后的可达字数');
-      const estimatedWords = countTotalContentWords() + pendingContentContexts().length * medianLeafWords();
+      estimatedWords = estimateTotalWords(leafAverageWords);
       if (estimatedWords >= minimumWords * OUTLINE_EXPANSION_TARGET_RATIO) {
-        logs = [...logs, `补目录预估可达到最低字数的 ${Math.round(OUTLINE_EXPANSION_TARGET_RATIO * 100)}%，准备生成新增正文。`];
-        updateOutlineExpansionProgress(round, OUTLINE_EXPANSION_STEPS_PER_ROUND, '预估字数已达标，准备生成新增正文');
+        logs = [...logs, `补目录预估可达到最低字数的 ${Math.round(OUTLINE_EXPANSION_TARGET_RATIO * 100)}%，准备补充新增小节编排。`];
+        updateOutlineExpansionProgress(round, OUTLINE_EXPANSION_STEPS_PER_ROUND, '预估字数已达标，准备补充新增小节编排');
         break;
       }
     }
 
-    tasksToRun = pendingContentContexts();
-    if (!tasksToRun.length) {
-      logs = [...logs, addedTotal ? '补目录后没有待生成叶子，直接进入正文扩写。' : '未补充到可生成目录，直接进入正文扩写。'];
-      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
-      return;
+    return addedTotal;
+  }
+
+  async function runEarlyContentProbeIfNeeded() {
+    if (minimumWords <= 0 || targetItemId || !tasksToRun.length) {
+      return false;
     }
 
-    refreshRunLimits(tasksToRun);
-    logs = [...logs, `开始为补充后的 ${tasksToRun.length} 个叶子小节生成正文。`];
-    await planAll();
-    pauseIfRequested('正文生成已在补目录新增正文编排后暂停，可导出当前已完成内容，稍后继续。');
-    for (const { item } of tasksToRun) {
-      if (sections[item.id]?.status === 'error') {
-        retryItemIds.add(item.id);
-      }
+    const probeTargets = selectEarlyContentProbeTargets(tasksToRun);
+    if (!probeTargets.length) {
+      return false;
     }
-    await runItemsWithWorkerPool(tasksToRun, contentConcurrency, runOne, isPauseRequested);
-    pauseIfRequested('正文生成已在补目录新增正文生成阶段暂停，可导出当前已完成内容，稍后继续。');
+
+    logs = [...logs, `最低字数预估：先生成 ${probeTargets.length} 个样本小节。`];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    await runItemsWithWorkerPool(probeTargets, contentConcurrency, runOne, isPauseRequested);
+    pauseIfRequested('正文生成已在最低字数采样阶段暂停，可导出当前已完成内容，稍后继续。');
+
+    const averageWords = averageGeneratedWords(probeTargets);
+    tasksToRun = pendingContentContexts();
+    rememberRetryTargets(tasksToRun);
+
+    if (averageWords <= 0) {
+      logs = [...logs, '最低字数预估：样本正文未成功生成，跳过前置补目录。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return false;
+    }
+
+    const estimatedWords = estimateTotalWords(averageWords);
+    logs = [...logs, `最低字数预估：样本平均 ${averageWords} 字，预计全文约 ${estimatedWords} 字。`];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+    const addedCount = await runOutlineExpansionIfNeeded(estimatedWords, averageWords);
+    tasksToRun = pendingContentContexts();
+    rememberRetryTargets(tasksToRun);
+    if (addedCount > 0) {
+      logs = [...logs, `补目录完成，开始为 ${tasksToRun.length} 个待生成小节补充编排。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      await planAll();
+      pauseIfRequested('正文生成已在补目录新增正文编排后暂停，可导出当前已完成内容，稍后继续。');
+      tasksToRun = pendingContentContexts();
+      rememberRetryTargets(tasksToRun);
+      return true;
+    }
+
+    const nextEstimatedWords = estimateTotalWords(averageWords);
+    logs = [...logs, nextEstimatedWords >= minimumWords * OUTLINE_EXPANSION_TARGET_RATIO
+      ? '最低字数预估已达到补目录阈值，继续生成正文。'
+      : '补目录未新增可用目录，继续生成正文并由后续扩写兜底。'];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    return false;
   }
 
   function refreshIllustrationTargetsFromStoredPlans(candidateItemIds) {
@@ -2495,16 +2579,12 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
 
   async function ensureMinimumWords() {
     let currentWords = countTotalContentWords();
-    logs = [...logs, `正文生成后当前总字数 ${currentWords} 字，最低字数 ${minimumWords} 字。`];
+    logs = [...logs, `最低字数兜底检查：当前总字数 ${currentWords} 字，最低字数 ${minimumWords} 字。`];
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
     if (currentWords >= minimumWords) {
       logs = [...logs, '当前总字数已达到最低字数要求。'];
       return;
     }
-
-    await runOutlineExpansionIfNeeded();
-
-    currentWords = countTotalContentWords();
     while (currentWords < minimumWords) {
       contentStats.phase = 'expanding';
       logs = [...logs, `开始正文扩写，当前 ${currentWords}/${minimumWords} 字。`];
@@ -2653,13 +2733,18 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     if (tasksToRun.length) {
       if (targetItemId) {
         await prepareSingleSectionPlan();
+        pauseIfRequested('正文生成已在正文编排后暂停，可导出当前已完成内容，稍后继续。');
+        await runItemsWithWorkerPool(tasksToRun, contentConcurrency, runOne, isPauseRequested);
+        pauseIfRequested('正文生成已在正文生成阶段暂停，可导出当前已完成内容，稍后继续。');
       } else {
         await planAll();
+        pauseIfRequested('正文生成已在正文编排后暂停，可导出当前已完成内容，稍后继续。');
+        await runEarlyContentProbeIfNeeded();
+        if (tasksToRun.length) {
+          await runItemsWithWorkerPool(tasksToRun, contentConcurrency, runOne, isPauseRequested);
+          pauseIfRequested('正文生成已在正文生成阶段暂停，可导出当前已完成内容，稍后继续。');
+        }
       }
-
-      pauseIfRequested('正文生成已在正文编排后暂停，可导出当前已完成内容，稍后继续。');
-      await runItemsWithWorkerPool(tasksToRun, contentConcurrency, runOne, isPauseRequested);
-      pauseIfRequested('正文生成已在正文生成阶段暂停，可导出当前已完成内容，稍后继续。');
     }
 
     if (!targetItemId) {
