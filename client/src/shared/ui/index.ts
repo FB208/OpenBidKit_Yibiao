@@ -1,4 +1,6 @@
 export { default as FloatingToolbar } from './FloatingToolbar';
+export { default as DetailHelpLink } from './DetailHelpLink';
+export type { DetailHelpLinkProps } from './DetailHelpLink';
 export { default as InputWithAction } from './InputWithAction';
 export type { InputWithActionProps } from './InputWithAction';
 export { default as MarkdownEditor } from './MarkdownEditor';

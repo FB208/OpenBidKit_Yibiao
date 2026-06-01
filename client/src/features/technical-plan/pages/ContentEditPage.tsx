@@ -4,7 +4,7 @@ import * as Switch from '@radix-ui/react-switch';
 import { Children, isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { Components } from 'react-markdown';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { MarkdownEditor, MarkdownRenderer, useToast } from '../../../shared/ui';
+import { DetailHelpLink, MarkdownEditor, MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { ClientConfig, ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
 import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement } from '../types';
@@ -1054,7 +1054,7 @@ function ContentEditPage({
               <label className="content-generation-config-row">
                 <span>
                   <strong>最低字数</strong>
-                  <small>0 表示不限制；低于最低字数时会自动补充目录或扩写正文。</small>
+                  <small>低于最低字数时会自动补充目录或扩写正文。</small>
                 </span>
                 <input
                   type="number"
@@ -1068,12 +1068,19 @@ function ContentEditPage({
                   }))}
                 />
               </label>
-              <label className="content-generation-config-row">
+              <div className="content-generation-config-row">
                 <span>
                   <strong>正文生成并发速度</strong>
-                  <small>同时发起的正文编排、正文生成和字数扩写请求数，不影响配图。</small>
+                  <small>
+                    AI接口请求的并发速率
+                    <DetailHelpLink title="正文生成并发速度说明">
+                      同时发起的正文编排、正文生成和字数扩写请求数，不影响配图。<br/>
+                      具体并发上限取决于配置的API接口限制，设置过高会报429错误。
+                    </DetailHelpLink>
+                  </small>
                 </span>
                 <input
+                  aria-label="正文生成并发速度"
                   type="number"
                   min="1"
                   step="1"
@@ -1083,7 +1090,7 @@ function ContentEditPage({
                     contentConcurrency: Math.max(1, Math.round(Number(event.target.value) || 1)),
                   }))}
                 />
-              </label>
+              </div>
               <label className="content-generation-config-row">
                 <span>
                   <strong>使用 AI 生图</strong>
