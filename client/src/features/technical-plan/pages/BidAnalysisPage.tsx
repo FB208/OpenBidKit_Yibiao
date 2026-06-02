@@ -5,7 +5,7 @@ import { MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, BidAnalysisMode, BidAnalysisTasks, BidAnalysisTaskState } from '../types';
 
 interface BidAnalysisPageProps {
-  fileContent: string;
+  hasTenderFile: boolean;
   mode: BidAnalysisMode;
   tasks: BidAnalysisTasks;
   task?: BackgroundTaskState;
@@ -146,7 +146,7 @@ function JsonResultTable({ content }: { content: string }) {
 }
 
 function BidAnalysisPage({
-  fileContent,
+  hasTenderFile,
   mode,
   tasks,
   task,
@@ -210,7 +210,7 @@ function BidAnalysisPage({
   }, [fullRerunLocked, fullRerunSeenRunning, task?.status]);
 
   const startAnalysis = async (taskIds?: string[]) => {
-    if (!fileContent) {
+    if (!hasTenderFile) {
       showToast('请先上传招标文件', 'info');
       return;
     }
@@ -225,7 +225,7 @@ function BidAnalysisPage({
         setFullRerunLocked(true);
       }
       const config = await window.yibiao?.config.load();
-      await window.yibiao?.tasks.startBidAnalysis({ mode, fileContent, task_ids: taskIds, force_rerun: forceRerun });
+      await window.yibiao?.tasks.startBidAnalysis({ mode, task_ids: taskIds, force_rerun: forceRerun });
       trackConfigUsage({ bid_analysis_mode: mode }, config);
       showToast(retryTask ? `${retryTask.label}重新解析任务已在后台启动` : '招标文件解析任务已在后台启动', 'success');
     } catch (error) {
@@ -284,7 +284,7 @@ function BidAnalysisPage({
             </button>
           ))}
         </div>
-        <button type="button" className="primary-action" onClick={() => startAnalysis()} disabled={taskRunning || !fileContent}>
+        <button type="button" className="primary-action" onClick={() => startAnalysis()} disabled={taskRunning || !hasTenderFile}>
           {taskRunning ? '解析中...' : failedTaskCount > 0 ? `重试失败项(${failedTaskCount})` : progress > 0 ? '重新解析' : '开始解析'}
         </button>
       </section>
@@ -354,7 +354,7 @@ function BidAnalysisPage({
             <div className="bid-analysis-reader-actions">
               <span className={`bid-analysis-status is-${activeTaskStatus}`}>{statusLabel[activeTaskStatus]}</span>
               {activeTaskStatus === 'error' && (
-                <button type="button" className="secondary-action" onClick={retryActiveTask} disabled={taskRunning || !fileContent}>重新解析此项</button>
+                <button type="button" className="secondary-action" onClick={retryActiveTask} disabled={taskRunning || !hasTenderFile}>重新解析此项</button>
               )}
               <button type="button" className="secondary-action" onClick={copyActiveResult} disabled={!activeTaskContent}>复制</button>
             </div>

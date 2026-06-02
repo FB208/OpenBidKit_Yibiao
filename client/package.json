@@ -12,7 +12,9 @@
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac",
+    "postinstall": "electron-builder install-app-deps",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "smoke:electron-native": "electron scripts/electron-native-smoke.cjs",
     "start": "electron ."
   },
   "build": {
@@ -89,6 +91,7 @@
     "@radix-ui/react-toast": "^1.2.15",
     "@radix-ui/react-tooltip": "^1.2.8",
     "adm-zip": "^0.5.17",
+    "better-sqlite3": "^12.10.0",
     "cfb": "^1.2.2",
     "chardet": "^2.1.1",
     "cheerio": "^1.2.0",

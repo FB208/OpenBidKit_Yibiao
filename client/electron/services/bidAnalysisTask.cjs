@@ -134,6 +134,10 @@ function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent }) {
 async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, payload }) {
   const mode = payload.mode || 'key';
   const selectedTasks = getBidAnalysisTasks(mode);
+  const fileContent = workspaceStore.readTenderMarkdown();
+  if (!String(fileContent || '').trim()) {
+    throw new Error('请先上传招标文件，再开始解析');
+  }
   const forceRerun = payload.force_rerun === true || payload.forceRerun === true;
   const requestedTaskIds = Array.isArray(payload.task_ids)
     ? new Set(payload.task_ids.filter((taskId) => typeof taskId === 'string'))
@@ -189,7 +193,7 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
 
     const content = await runSingleBidAnalysisPromptTask({
       aiService,
-      fileContent: payload.fileContent,
+      fileContent,
       task,
     });
 

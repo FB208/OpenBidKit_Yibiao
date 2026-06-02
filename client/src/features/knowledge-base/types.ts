@@ -56,6 +56,27 @@ export interface KnowledgeBaseStartMatchingResult {
   document?: KnowledgeDocument;
 }
 
+export interface KnowledgeBaseMigrationStatus {
+  needsMigration: boolean;
+  legacyFolderCount: number;
+  legacyDocumentCount: number;
+  legacyCompletedDocumentCount?: number;
+  legacySkippedDocumentCount?: number;
+  migrationCompleted?: boolean;
+  cleanupPending?: boolean;
+  message?: string;
+}
+
+export interface KnowledgeBaseMigrationResult {
+  success: boolean;
+  message: string;
+  index?: KnowledgeBaseIndex;
+  migratedFolderCount?: number;
+  migratedDocumentCount?: number;
+  skippedDocumentCount?: number;
+  cleanupPending?: boolean;
+}
+
 export interface KnowledgeBaseMutationResult {
   success: boolean;
   message: string;

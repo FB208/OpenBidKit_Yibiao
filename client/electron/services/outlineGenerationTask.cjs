@@ -984,6 +984,12 @@ async function runOutlineGenerationTask({ aiService, workspaceStore, knowledgeBa
   }
 
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(payload);
+  const storedPlan = workspaceStore.loadTechnicalPlan() || {};
+  const overview = storedPlan.projectOverview || '';
+  const requirements = storedPlan.techRequirements || '';
+  if (!overview || !requirements) {
+    throw new Error('请先完成招标文件解析，再生成目录');
+  }
   let technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineMode: payload.mode,
     referenceKnowledgeDocumentIds,
@@ -992,13 +998,15 @@ async function runOutlineGenerationTask({ aiService, workspaceStore, knowledgeBa
   updateTask({ status: 'running', progress: 5, logs }, technicalPlan);
   const taskPayload = {
     ...payload,
+    overview,
+    requirements,
     reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
   };
   let outline = taskPayload.mode === 'aligned' ? await alignedWorkflow(aiService, taskPayload, log) : await freeWorkflow(aiService, taskPayload, log);
   const knowledgeItems = loadOutlineKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);
   outline = await enhanceOutlineWithKnowledgeAdditions(aiService, taskPayload, outline, knowledgeItems, log);
   technicalPlan = workspaceStore.updateTechnicalPlan({
-    outlineData: { ...outline, project_overview: payload.overview },
+    outlineData: { ...outline, project_overview: overview },
     contentGenerationTask: undefined,
     contentGenerationSections: {},
     contentGenerationPlans: {},

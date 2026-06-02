@@ -614,6 +614,18 @@ function DuplicateCheckPage() {
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
 
+  function applyDuplicateCheckState(state: DuplicateCheckWorkspaceState) {
+    setTenderFile(state.tenderFile || null);
+    setBidFiles(Array.isArray(state.bidFiles) ? state.bidFiles : []);
+    setStep(state.step === 'analysis' ? 'analysis' : 'upload');
+    setActiveAnalysisTab(analysisTabs.some((item) => item.id === state.activeAnalysisTab) ? state.activeAnalysisTab as DuplicateAnalysisTabId : defaultAnalysisTab);
+    setMetadataAnalysis(state.metadataAnalysis);
+    setOutlineAnalysis(state.outlineAnalysis);
+    setContentAnalysis(state.contentAnalysis);
+    setImageAnalysis(state.imageAnalysis);
+    setAnalysisTask(state.analysisTask);
+  }
+
   const totalSize = useMemo(() => bidFiles.reduce((sum, file) => sum + file.size, tenderFile?.size || 0), [bidFiles, tenderFile]);
   const isAnalysisRunning = startingAnalysis
     || analysisTask?.status === 'running'
@@ -641,18 +653,10 @@ function DuplicateCheckPage() {
   useEffect(() => {
     let canceled = false;
 
-    void window.yibiao?.workspace.loadDuplicateCheck()
+    void window.yibiao?.duplicateCheck.loadState()
       .then((state) => {
         if (canceled || !state) return;
-        setTenderFile(state.tenderFile || null);
-        setBidFiles(Array.isArray(state.bidFiles) ? state.bidFiles : []);
-        setStep(state.step === 'analysis' ? 'analysis' : 'upload');
-        setActiveAnalysisTab(analysisTabs.some((item) => item.id === state.activeAnalysisTab) ? state.activeAnalysisTab as DuplicateAnalysisTabId : defaultAnalysisTab);
-        setMetadataAnalysis(state.metadataAnalysis);
-        setOutlineAnalysis(state.outlineAnalysis);
-        setContentAnalysis(state.contentAnalysis);
-        setImageAnalysis(state.imageAnalysis);
-        setAnalysisTask(state.analysisTask);
+        applyDuplicateCheckState(state);
       })
       .catch((error) => {
         showToast(error instanceof Error ? error.message : '读取标书查重缓存失败', 'error');
@@ -672,12 +676,11 @@ function DuplicateCheckPage() {
   useEffect(() => {
     if (!hydratedRef.current) return;
 
-    const state: DuplicateCheckWorkspaceState = { tenderFile, bidFiles, step, activeAnalysisTab, analysisTask, metadataAnalysis, outlineAnalysis, contentAnalysis, imageAnalysis };
-    void window.yibiao?.workspace.saveDuplicateCheck(state)
+    void window.yibiao?.duplicateCheck.saveUiState({ step, activeAnalysisTab })
       .catch((error) => {
-        showToast(error instanceof Error ? error.message : '保存标书查重缓存失败', 'error');
+        showToast(error instanceof Error ? error.message : '保存标书查重页面状态失败', 'error');
       });
-  }, [activeAnalysisTab, analysisTask, bidFiles, metadataAnalysis, outlineAnalysis, contentAnalysis, imageAnalysis, showToast, step, tenderFile]);
+  }, [activeAnalysisTab, showToast, step]);
 
   useEffect(() => {
     const unsubscribe = window.yibiao?.tasks?.onTaskEvent<unknown, unknown, DuplicateCheckWorkspaceState>((event) => {
@@ -763,6 +766,18 @@ function DuplicateCheckPage() {
     return selector({ multiple });
   };
 
+  const persistSelectedFiles = async (nextTenderFile: LocalFileSelection | null, nextBidFiles: LocalFileSelection[], nextStep: DuplicateCheckStep = step) => {
+    const saver = window.yibiao?.duplicateCheck?.saveFiles;
+    if (typeof saver !== 'function') {
+      throw new Error('标书查重缓存接口尚未加载，请重启应用后重试');
+    }
+    const state = await saver({ tenderFile: nextTenderFile, bidFiles: nextBidFiles, step: nextStep, activeAnalysisTab });
+    applyDuplicateCheckState(state);
+    setStartingAnalysis(false);
+    startedMetadataSignatureRef.current = null;
+    return state;
+  };
+
   const uploadTenderFile = async () => {
     if (isAnalysisRunning) {
       showToast('标书查重分析正在运行，请完成后再调整文件', 'info');
@@ -780,13 +795,7 @@ function DuplicateCheckPage() {
         showToast(message, message === '已取消选择' ? 'info' : 'error');
         return;
       }
-      setTenderFile(result.files[0]);
-      setMetadataAnalysis(undefined);
-      setOutlineAnalysis(undefined);
-      setContentAnalysis(undefined);
-      setImageAnalysis(undefined);
-      setAnalysisTask(undefined);
-      startedMetadataSignatureRef.current = null;
+      await persistSelectedFiles(result.files[0], bidFiles);
       showToast('招标文件已加入，暂不执行解析', 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : '选择招标文件失败';
@@ -823,14 +832,8 @@ function DuplicateCheckPage() {
       if (nextFiles.length < result.files.length) {
         showToast('已跳过重复选择的投标文件', 'info');
       }
-      setBidFiles((prev) => [...prev, ...nextFiles]);
       if (nextFiles.length > 0) {
-        setMetadataAnalysis(undefined);
-        setOutlineAnalysis(undefined);
-        setContentAnalysis(undefined);
-        setImageAnalysis(undefined);
-        setAnalysisTask(undefined);
-        startedMetadataSignatureRef.current = null;
+        await persistSelectedFiles(tenderFile, [...bidFiles, ...nextFiles]);
         showToast('投标文件已加入，暂不执行解析', 'success');
       }
     } catch (error) {
@@ -850,22 +853,16 @@ function DuplicateCheckPage() {
       showToast('标书查重分析正在运行，请完成后再重置文件', 'info');
       return;
     }
-    setTenderFile(null);
-    setBidFiles([]);
-    setStep('upload');
-    setActiveAnalysisTab(defaultAnalysisTab);
-    setMetadataAnalysis(undefined);
-    setOutlineAnalysis(undefined);
-    setContentAnalysis(undefined);
-    setImageAnalysis(undefined);
-    setAnalysisTask(undefined);
-    setStartingAnalysis(false);
-    startedMetadataSignatureRef.current = null;
-    void window.yibiao?.workspace.clearDuplicateCheck()
+    void window.yibiao?.duplicateCheck.clear()
+      .then((result) => {
+        if (result?.state) applyDuplicateCheckState(result.state);
+        setStartingAnalysis(false);
+        startedMetadataSignatureRef.current = null;
+        showToast('已重置上传列表', 'success');
+      })
       .catch((error) => {
         showToast(error instanceof Error ? error.message : '清空标书查重缓存失败', 'error');
       });
-    showToast('已重置上传列表', 'success');
   };
 
   const switchStep = (nextStep: DuplicateCheckStep) => {
@@ -950,13 +947,8 @@ function DuplicateCheckPage() {
                 <div className="duplicate-upload-content">
                   {tenderFile ? (
                     <FilePill file={tenderFile} disabled={isAnalysisRunning} onRemove={() => {
-                      setTenderFile(null);
-                      setMetadataAnalysis(undefined);
-                      setOutlineAnalysis(undefined);
-                      setContentAnalysis(undefined);
-                      setImageAnalysis(undefined);
-                      setAnalysisTask(undefined);
-                      startedMetadataSignatureRef.current = null;
+                      void persistSelectedFiles(null, bidFiles)
+                        .catch((error) => showToast(error instanceof Error ? error.message : '移除招标文件失败', 'error'));
                     }} />
                   ) : (
                     <div className="duplicate-empty-upload" />
@@ -978,13 +970,8 @@ function DuplicateCheckPage() {
                     <div className="duplicate-file-list">
                       {bidFiles.map((file) => (
                         <FilePill key={file.file_path} file={file} disabled={isAnalysisRunning} onRemove={() => {
-                          setBidFiles((prev) => prev.filter((item) => item.file_path !== file.file_path));
-                          setMetadataAnalysis(undefined);
-                          setOutlineAnalysis(undefined);
-                          setContentAnalysis(undefined);
-                          setImageAnalysis(undefined);
-                          setAnalysisTask(undefined);
-                          startedMetadataSignatureRef.current = null;
+                          void persistSelectedFiles(tenderFile, bidFiles.filter((item) => item.file_path !== file.file_path))
+                            .catch((error) => showToast(error instanceof Error ? error.message : '移除投标文件失败', 'error'));
                         }} />
                       ))}
                     </div>

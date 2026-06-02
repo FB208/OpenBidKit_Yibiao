@@ -2,19 +2,25 @@ const { ipcMain, shell } = require('electron');
 const https = require('node:https');
 const { registerAiIpc } = require('./aiIpc.cjs');
 const { registerConfigIpc } = require('./configIpc.cjs');
+const { registerDuplicateCheckIpc } = require('./duplicateCheckIpc.cjs');
 const { registerExportIpc } = require('./exportIpc.cjs');
 const { registerFileIpc } = require('./fileIpc.cjs');
 const { registerKnowledgeBaseIpc } = require('./knowledgeBaseIpc.cjs');
+const { registerRejectionCheckIpc } = require('./rejectionCheckIpc.cjs');
 const { registerTaskIpc } = require('./taskIpc.cjs');
-const { registerWorkspaceIpc } = require('./workspaceIpc.cjs');
+const { registerTechnicalPlanIpc } = require('./technicalPlanIpc.cjs');
 const { createAiService } = require('../services/aiService.cjs');
 const { createConfigStore } = require('../services/configStore.cjs');
 const { createDuplicateCheckService } = require('../services/duplicateCheckService.cjs');
+const { createDuplicateCheckStore } = require('../services/duplicateCheckStore.cjs');
 const { createExportService } = require('../services/exportService.cjs');
 const { createFileService } = require('../services/fileService.cjs');
 const { createKnowledgeBaseService } = require('../services/knowledgeBaseService.cjs');
+const { createKnowledgeBaseStore } = require('../services/knowledgeBaseStore.cjs');
+const { createRejectionCheckStore } = require('../services/rejectionCheckStore.cjs');
+const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
-const { createWorkspaceStore } = require('../services/workspaceStore.cjs');
+const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
 
 function normalizeExternalUrl(value) {
   const raw = String(value || '').trim();
@@ -29,23 +35,87 @@ function normalizeExternalUrl(value) {
   }
 }
 
+function registerUnavailableTechnicalPlanIpc(error) {
+  const message = `工作区数据库初始化失败：${error?.message || String(error)}`;
+  const throwUnavailable = () => {
+    throw new Error(message);
+  };
+
+  console.error('[ipc] 工作区数据库初始化失败', error);
+  [
+    'technical-plan:load-state',
+    'technical-plan:import-tender-document',
+    'technical-plan:read-tender-markdown',
+    'technical-plan:update-step',
+    'technical-plan:save-outline-config',
+    'technical-plan:save-outline',
+    'technical-plan:save-content-generation-options',
+    'technical-plan:save-chapter-content',
+    'technical-plan:clear',
+    'duplicate-check:load-state',
+    'duplicate-check:save-files',
+    'duplicate-check:save-ui-state',
+    'duplicate-check:update-state',
+    'duplicate-check:clear',
+    'rejection-check:load-state',
+    'rejection-check:import-document',
+    'rejection-check:import-tender-from-technical-plan',
+    'rejection-check:remove-document',
+    'rejection-check:save-ui-state',
+    'rejection-check:update-state',
+    'rejection-check:clear',
+    'knowledge-base:get-migration-status',
+    'knowledge-base:migrate-legacy',
+    'knowledge-base:list',
+    'knowledge-base:create-folder',
+    'knowledge-base:rename-folder',
+    'knowledge-base:delete-folder',
+    'knowledge-base:delete-document',
+    'knowledge-base:upload-documents',
+    'knowledge-base:start-matching',
+    'knowledge-base:read-markdown',
+    'knowledge-base:read-items',
+    'knowledge-base:read-analysis',
+    'tasks:start-bid-analysis',
+    'tasks:start-outline-generation',
+    'tasks:start-content-generation',
+    'tasks:pause-content-generation',
+    'tasks:start-rejection-items-extraction',
+    'tasks:start-rejection-check',
+    'tasks:start-duplicate-analysis',
+    'tasks:get-active',
+  ].forEach((channel) => ipcMain.handle(channel, throwUnavailable));
+  ipcMain.on('tasks:subscribe', () => {});
+}
+
 function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall }) {
   const configStore = createConfigStore(app);
   const aiService = createAiService({ app, configStore });
   const fileService = createFileService({ app, configStore });
   const exportService = createExportService();
-  const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore });
-  const workspaceStore = createWorkspaceStore(app);
-  const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore });
-  const taskService = createTaskService({ aiService, workspaceStore, knowledgeBaseService, duplicateCheckService });
 
   registerConfigIpc({ configStore, aiService });
   registerAiIpc({ aiService });
   registerFileIpc({ fileService });
-  registerKnowledgeBaseIpc({ knowledgeBaseService });
   registerExportIpc({ exportService });
-  registerWorkspaceIpc({ workspaceStore });
-  registerTaskIpc({ taskService });
+
+  try {
+    const sqliteDatabase = createSqliteDatabase(app);
+    const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
+    const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
+    const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService });
+    const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db });
+    const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore });
+    const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
+    const taskService = createTaskService({ aiService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
+    registerKnowledgeBaseIpc({ knowledgeBaseService });
+    registerTechnicalPlanIpc({ technicalPlanStore });
+    registerDuplicateCheckIpc({ duplicateCheckStore });
+    registerRejectionCheckIpc({ rejectionCheckStore });
+    registerTaskIpc({ taskService });
+  } catch (error) {
+    registerUnavailableTechnicalPlanIpc(error);
+  }
 
   ipcMain.handle('app:get-version', () => app.getVersion());
 

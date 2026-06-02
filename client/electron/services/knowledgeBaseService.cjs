@@ -24,57 +24,8 @@ function safeName(name) {
   return String(name || '未命名').replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_').trim() || '未命名';
 }
 
-function createEmptyIndex() {
-  return { folders: [], documents: [] };
-}
-
-function normalizeDocument(document) {
-  const documentDir = document?.document_dir || path.join('folders', document?.folder_id || 'unknown', 'documents', document?.id || createId('doc')).replace(/\\/g, '/');
-  return {
-    ...document,
-    document_dir: documentDir,
-    source_path: document?.source_path || path.join(documentDir, 'source').replace(/\\/g, '/'),
-    markdown_path: document?.markdown_path || path.join(documentDir, 'content.md').replace(/\\/g, '/'),
-    blocks_path: document?.blocks_path || path.join(documentDir, 'blocks.json').replace(/\\/g, '/'),
-    filtered_blocks_path: document?.filtered_blocks_path || path.join(documentDir, 'filtered_blocks.json').replace(/\\/g, '/'),
-    candidate_items_path: document?.candidate_items_path || path.join(documentDir, 'candidate_items.json').replace(/\\/g, '/'),
-    match_result_path: document?.match_result_path || path.join(documentDir, 'match_result.json').replace(/\\/g, '/'),
-    report_path: document?.report_path || path.join(documentDir, 'report.json').replace(/\\/g, '/'),
-    items_path: document?.items_path || path.join(documentDir, 'items.json').replace(/\\/g, '/'),
-    item_count: Number(document?.item_count || 0),
-    block_count: Number(document?.block_count || 0),
-    filtered_block_count: Number(document?.filtered_block_count || 0),
-    candidate_item_count: Number(document?.candidate_item_count || 0),
-    discarded_block_count: Number(document?.discarded_block_count || 0),
-    system_discarded_after_retry_count: Number(document?.system_discarded_after_retry_count || 0),
-  };
-}
-
-function normalizeIndex(index) {
-  return {
-    folders: Array.isArray(index?.folders) ? index.folders : [],
-    documents: Array.isArray(index?.documents) ? index.documents.map(normalizeDocument) : [],
-  };
-}
-
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
-}
-
-function readJson(filePath, fallback) {
-  if (!fs.existsSync(filePath)) {
-    return fallback;
-  }
-  return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-}
-
-function writeJson(filePath, value) {
-  ensureDir(path.dirname(filePath));
-  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf-8');
-}
-
-function getIndexPath(baseDir) {
-  return path.join(baseDir, 'index.json');
 }
 
 function getDebugLogsDir(app) {
@@ -693,20 +644,6 @@ function createFinalItems(items, matches, blocks, fileName) {
   }).filter((item) => item.content);
 }
 
-function sumContentChars(items) {
-  return items.reduce((sum, item) => sum + getContentCharCount(item.content), 0);
-}
-
-function countCoveredUniqueBlockChars(items, blocks) {
-  const blockMap = new Map(blocks.map((block) => [block.id, block]));
-  const covered = new Set();
-  items.forEach((item) => {
-    if (!Array.isArray(item?.source_block_ids)) return;
-    item.source_block_ids.forEach((id) => covered.add(String(id)));
-  });
-  return Array.from(covered).reduce((sum, id) => sum + getContentCharCount(blockMap.get(id)?.content || ''), 0);
-}
-
 function createReport({ blocks, filteredBlocks, candidateItems, finalItems, matches, discarded, systemDiscarded, recoveryAttempts, batchSize }) {
   const matched = new Set();
   matches.forEach((match) => match.block_ids.forEach((id) => matched.add(id)));
@@ -734,11 +671,14 @@ function createReport({ blocks, filteredBlocks, candidateItems, finalItems, matc
   };
 }
 
-function createKnowledgeBaseService({ app, aiService, configStore }) {
+function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore }) {
   const baseDir = getKnowledgeBaseDir(app);
-  const indexPath = getIndexPath(baseDir);
   const activePreparations = new Set();
   const activeMatches = new Set();
+
+  if (!knowledgeBaseStore) {
+    throw new Error('知识库数据库服务尚未初始化');
+  }
 
   function isDeveloperMode() {
     try {
@@ -768,16 +708,6 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
     }
   }
 
-  function loadIndex() {
-    ensureDir(baseDir);
-    return normalizeIndex(readJson(indexPath, createEmptyIndex()));
-  }
-
-  function saveIndex(index) {
-    writeJson(indexPath, normalizeIndex(index));
-    return normalizeIndex(index);
-  }
-
   function emitProgress(webContents, document) {
     if (!webContents?.isDestroyed()) {
       webContents.send('knowledge-base:event', { document });
@@ -785,12 +715,7 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
   }
 
   function updateDocument(documentId, partial, webContents) {
-    const index = loadIndex();
-    const documents = index.documents.map((document) => (
-      document.id === documentId ? normalizeDocument({ ...document, ...partial, updated_at: now() }) : document
-    ));
-    const next = saveIndex({ ...index, documents });
-    const document = next.documents.find((item) => item.id === documentId);
+    const document = knowledgeBaseStore.updateDocument(documentId, { ...partial, updated_at: now() });
     if (document) emitProgress(webContents, document);
     debugLog(documentId, 'document:update', {
       status: partial.status,
@@ -806,10 +731,17 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
   }
 
   function getDocument(documentId) {
-    const index = loadIndex();
-    const document = index.documents.find((item) => item.id === documentId);
-    if (!document) throw new Error('知识库文档不存在');
-    return document;
+    return knowledgeBaseStore.getDocument(documentId);
+  }
+
+  function getActiveDocumentIds() {
+    return [...new Set([...activePreparations, ...activeMatches])];
+  }
+
+  function recoverInterruptedDocuments() {
+    const recovered = knowledgeBaseStore.recoverInterruptedDocuments(getActiveDocumentIds());
+    recovered.forEach((document) => debugLog(document.id, 'document:recover-interrupted', { status: document.status, message: document.message }));
+    return recovered;
   }
 
   async function prepareDocument(documentId, sourceFilePath, webContents) {
@@ -826,9 +758,6 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
       const documentDir = fromRelative(baseDir, document.document_dir);
       const sourcePath = fromRelative(baseDir, document.source_path);
       const markdownPath = fromRelative(baseDir, document.markdown_path);
-      const blocksPath = fromRelative(baseDir, document.blocks_path);
-      const filteredBlocksPath = fromRelative(baseDir, document.filtered_blocks_path);
-      const candidateItemsPath = fromRelative(baseDir, document.candidate_items_path);
 
       updateDocument(documentId, { status: 'copying', progress: 5, message: '正在复制原始文件' }, webContents);
       ensureDir(documentDir);
@@ -839,14 +768,14 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
       const markdown = stripMarkdownFence((await parseDocumentWithConfig(app, sourcePath, config, { assetScope: `knowledge-${documentId}`, preserveImages: false })).trim());
       if (!markdown) throw new Error('文档未解析出有效 Markdown 内容');
       await fsp.writeFile(markdownPath, `${markdown}\n`, 'utf-8');
+      knowledgeBaseStore.updateMarkdownMetadata(documentId, markdown);
       debugLog(documentId, 'prepare:converted-markdown', { markdown_path: markdownPath, markdown_chars: markdown.length });
 
       const rawBlocks = createRawBlocks(markdown);
       const semanticBlocks = mergeSemanticBlocks(rawBlocks);
       const { blocks, filtered_blocks: filteredBlocks } = filterBlocks(semanticBlocks);
       if (!blocks.length) throw new Error('筛选后没有可分析的正文内容');
-      writeJson(blocksPath, blocks);
-      writeJson(filteredBlocksPath, filteredBlocks);
+      knowledgeBaseStore.saveBlocks(documentId, blocks, filteredBlocks);
       debugLog(documentId, 'prepare:blocks-ready', {
         raw_block_count: rawBlocks.length,
         semantic_block_count: semanticBlocks.length,
@@ -911,10 +840,9 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
 
       const candidateItems = mergeCandidateItems(firstItems, supplementItems);
       if (!candidateItems.length) throw new Error('AI 未提取出可用知识条目');
-      writeJson(candidateItemsPath, candidateItems);
+      knowledgeBaseStore.saveCandidateItems(documentId, candidateItems);
       debugLog(documentId, 'prepare:candidates-saved', {
         candidate_item_count: candidateItems.length,
-        candidate_items_path: candidateItemsPath,
         sample: getItemSample(candidateItems),
       });
       updateDocument(documentId, {
@@ -952,9 +880,9 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
     try {
       const document = getDocument(documentId);
       const normalizedBatchSize = Math.max(1, Math.min(100, Math.floor(Number(batchSize) || 1)));
-      const blocks = readJson(fromRelative(baseDir, document.blocks_path), []);
-      const filteredBlocks = readJson(fromRelative(baseDir, document.filtered_blocks_path), []);
-      const initialItems = readJson(fromRelative(baseDir, document.candidate_items_path), []);
+      const blocks = knowledgeBaseStore.readBlocks(documentId);
+      const filteredBlocks = knowledgeBaseStore.readFilteredBlocks(documentId);
+      const initialItems = knowledgeBaseStore.readCandidateItems(documentId);
       if (!blocks.length) throw new Error('缺少正文 block，请重新上传文档');
       if (!initialItems.length) throw new Error('缺少候选知识条目，请等待条目提取完成');
       debugLog(documentId, 'match:inputs-ready', {
@@ -1099,16 +1027,10 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
         report,
       };
 
-      writeJson(fromRelative(baseDir, document.candidate_items_path), items);
-      writeJson(fromRelative(baseDir, document.match_result_path), matchResult);
-      writeJson(fromRelative(baseDir, document.report_path), report);
-      writeJson(fromRelative(baseDir, document.items_path), finalItems);
+      knowledgeBaseStore.saveMatchResult(documentId, { candidateItems: items, matchResult, report, finalItems });
       debugLog(documentId, 'match:saved', {
         final_item_count: finalItems.length,
         report,
-        items_path: fromRelative(baseDir, document.items_path),
-        report_path: fromRelative(baseDir, document.report_path),
-        match_result_path: fromRelative(baseDir, document.match_result_path),
       });
       updateDocument(documentId, {
         status: 'success',
@@ -1132,32 +1054,32 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
   }
 
   return {
+    getMigrationStatus() {
+      recoverInterruptedDocuments();
+      return knowledgeBaseStore.getMigrationStatus();
+    },
+
+    migrateLegacy() {
+      const result = knowledgeBaseStore.migrateLegacy();
+      recoverInterruptedDocuments();
+      return { ...result, index: knowledgeBaseStore.list() };
+    },
+
     list() {
-      return loadIndex();
+      recoverInterruptedDocuments();
+      return knowledgeBaseStore.list();
     },
 
     createFolder(name) {
-      const index = loadIndex();
-      const folder = { id: createId('folder'), name: safeName(name), created_at: now(), updated_at: now() };
-      saveIndex({ ...index, folders: [...index.folders, folder] });
-      return folder;
+      return knowledgeBaseStore.createFolder(name);
     },
 
     renameFolder(folderId, name) {
-      const nextName = safeName(name);
-      const index = loadIndex();
-      const folder = index.folders.find((item) => item.id === folderId);
-      if (!folder) throw new Error('知识库文件夹不存在');
-
-      const folders = index.folders.map((item) => (
-        item.id === folderId ? { ...item, name: nextName, updated_at: now() } : item
-      ));
-      saveIndex({ ...index, folders });
-      return folders.find((item) => item.id === folderId);
+      return knowledgeBaseStore.renameFolder(folderId, name);
     },
 
     deleteFolder(folderId) {
-      const index = loadIndex();
+      const index = knowledgeBaseStore.list();
       const folder = index.folders.find((item) => item.id === folderId);
       if (!folder) throw new Error('知识库文件夹不存在');
 
@@ -1173,17 +1095,12 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
         fs.rmSync(getDebugLogPath(app, document.id), { force: true });
       }
       fs.rmSync(fromRelative(baseDir, path.join('folders', folderId)), { recursive: true, force: true });
-      saveIndex({
-        folders: index.folders.filter((item) => item.id !== folderId),
-        documents: index.documents.filter((document) => document.folder_id !== folderId),
-      });
+      knowledgeBaseStore.deleteFolder(folderId);
       return { success: true, message: `已删除文件夹“${folder.name}”及 ${documentsToDelete.length} 个文档` };
     },
 
     deleteDocument(documentId) {
-      const index = loadIndex();
-      const document = index.documents.find((item) => item.id === documentId);
-      if (!document) throw new Error('知识库文档不存在');
+      const document = getDocument(documentId);
       if (activePreparations.has(documentId) || activeMatches.has(documentId)) {
         throw new Error('该文档正在处理中，请完成后再删除');
       }
@@ -1191,12 +1108,12 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
       deleteImportedImageBatches(app, `knowledge-${documentId}`);
       fs.rmSync(fromRelative(baseDir, document.document_dir), { recursive: true, force: true });
       fs.rmSync(getDebugLogPath(app, documentId), { force: true });
-      saveIndex({ ...index, documents: index.documents.filter((item) => item.id !== documentId) });
+      knowledgeBaseStore.deleteDocument(documentId);
       return { success: true, message: `已删除文档“${document.file_name}”` };
     },
 
     async uploadDocuments(folderId, webContents) {
-      const currentIndex = loadIndex();
+      const currentIndex = knowledgeBaseStore.list();
       const folder = currentIndex.folders.find((item) => item.id === folderId);
       if (!folder) throw new Error('请先选择知识库文件夹');
 
@@ -1214,26 +1131,19 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
       }
 
       const created = [];
-      let index = loadIndex();
       for (const filePath of result.filePaths) {
         const ext = path.extname(filePath).toLowerCase();
         if (!supportedExtensions.has(ext)) continue;
         const documentId = createId('doc');
         const documentDir = path.join('folders', folderId, 'documents', documentId).replace(/\\/g, '/');
         const sourceName = `source${ext}`;
-        const document = normalizeDocument({
+        const document = {
           id: documentId,
           folder_id: folderId,
           file_name: path.basename(filePath),
           document_dir: documentDir,
           source_path: path.join(documentDir, sourceName).replace(/\\/g, '/'),
           markdown_path: path.join(documentDir, 'content.md').replace(/\\/g, '/'),
-          blocks_path: path.join(documentDir, 'blocks.json').replace(/\\/g, '/'),
-          filtered_blocks_path: path.join(documentDir, 'filtered_blocks.json').replace(/\\/g, '/'),
-          candidate_items_path: path.join(documentDir, 'candidate_items.json').replace(/\\/g, '/'),
-          match_result_path: path.join(documentDir, 'match_result.json').replace(/\\/g, '/'),
-          report_path: path.join(documentDir, 'report.json').replace(/\\/g, '/'),
-          items_path: path.join(documentDir, 'items.json').replace(/\\/g, '/'),
           status: 'pending',
           progress: 0,
           message: '等待处理',
@@ -1245,10 +1155,10 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
           system_discarded_after_retry_count: 0,
           created_at: now(),
           updated_at: now(),
-        });
-        index = saveIndex({ ...index, documents: [...index.documents, document] });
-        created.push(document);
-        emitProgress(webContents, document);
+        };
+        const savedDocument = knowledgeBaseStore.createDocument(document);
+        created.push(savedDocument);
+        emitProgress(webContents, savedDocument);
         prepareDocument(documentId, filePath, webContents);
       }
 
@@ -1269,85 +1179,19 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
     },
 
     getOutlineReferences(documentIds) {
-      const ids = Array.isArray(documentIds) ? documentIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
-      if (!ids.length) {
-        return { items: [] };
-      }
-
-      const index = loadIndex();
-      const seen = new Set();
-      const items = [];
-      ids.forEach((documentId) => {
-        const document = index.documents.find((item) => item.id === documentId);
-        if (!document || document.status !== 'success') {
-          return;
-        }
-
-        let documentItems = [];
-        try {
-          documentItems = readJson(fromRelative(baseDir, document.items_path), []);
-        } catch (error) {
-          console.warn('[knowledge-base] 读取知识库目录引用失败', { documentId, message: error.message || String(error) });
-          return;
-        }
-
-        (Array.isArray(documentItems) ? documentItems : []).forEach((item) => {
-          const itemId = String(item?.id || '').trim();
-          const title = String(item?.title || '').trim();
-          const resume = String(item?.resume || item?.summary || '').trim();
-          if (!itemId || !title || !resume) {
-            return;
-          }
-          const referenceId = `${document.id}::${itemId}`;
-          if (seen.has(referenceId)) {
-            return;
-          }
-          seen.add(referenceId);
-          items.push({ id: referenceId, title, resume });
-        });
-      });
-
-      return { items };
+      return knowledgeBaseStore.getOutlineReferences(documentIds);
     },
 
     readMarkdown(documentId) {
-      const document = getDocument(documentId);
-      const filePath = fromRelative(baseDir, document.markdown_path);
-      return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '';
+      return knowledgeBaseStore.readMarkdown(documentId);
     },
 
     readItems(documentId) {
-      const document = getDocument(documentId);
-      return readJson(fromRelative(baseDir, document.items_path), []);
+      return knowledgeBaseStore.readItems(documentId);
     },
 
     readAnalysis(documentId) {
-      const document = getDocument(documentId);
-      const markdownPath = fromRelative(baseDir, document.markdown_path);
-      const markdown = fs.existsSync(markdownPath) ? fs.readFileSync(markdownPath, 'utf-8') : '';
-      const blocks = readJson(fromRelative(baseDir, document.blocks_path), []);
-      const filteredBlocks = readJson(fromRelative(baseDir, document.filtered_blocks_path), []);
-      const candidateItems = readJson(fromRelative(baseDir, document.candidate_items_path), []);
-      const items = readJson(fromRelative(baseDir, document.items_path), []);
-      const report = readJson(fromRelative(baseDir, document.report_path), null);
-      const matchResult = readJson(fromRelative(baseDir, document.match_result_path), null);
-      const markdown_chars = getContentCharCount(markdown);
-      const kept_block_chars = sumContentChars(blocks);
-      const covered_unique_content_chars = countCoveredUniqueBlockChars(items, blocks);
-      return {
-        document,
-        block_count: blocks.length,
-        filtered_blocks_count: filteredBlocks.length,
-        markdown_chars,
-        kept_block_chars,
-        covered_unique_content_chars,
-        coverage_rate_vs_markdown: markdown_chars ? Number((covered_unique_content_chars / markdown_chars).toFixed(4)) : 0,
-        candidate_items: candidateItems,
-        report,
-        discarded: matchResult?.discarded || [],
-        system_discarded_after_retry: matchResult?.system_discarded_after_retry || [],
-        debug_log_path: isDeveloperMode() ? getDebugLogPath(app, documentId) : '',
-      };
+      return knowledgeBaseStore.readAnalysis(documentId, { debugLogPath: isDeveloperMode() ? getDebugLogPath(app, documentId) : '' });
     },
   };
 }

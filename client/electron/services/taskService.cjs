@@ -92,6 +92,18 @@ function isActiveTaskStatus(status) {
   return status === 'running' || status === 'pausing';
 }
 
+function hasOwn(value, field) {
+  return Object.prototype.hasOwnProperty.call(value || {}, field);
+}
+
+function copyPatchFields(target, source, fields) {
+  for (const field of fields) {
+    if (hasOwn(source, field)) {
+      target[field] = source[field];
+    }
+  }
+}
+
 const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 
 function collectLeafItems(items) {
@@ -192,7 +204,7 @@ function createTask(type, payload) {
   };
 }
 
-function createTaskService({ aiService, workspaceStore, knowledgeBaseService, duplicateCheckService }) {
+function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService }) {
   const subscribers = new Set();
   const activeTasks = new Map();
   const activeTaskControls = new Map();
@@ -206,16 +218,92 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
     }
   }
 
+  function buildTechnicalPlanSnapshot(task, state = {}, eventPatch = {}) {
+    const patch = { ...(eventPatch.technicalPlanPatch || {}) };
+    const taskField = getTaskField(task.type);
+    if (taskField) {
+      patch[taskField] = state?.[taskField] || task;
+    }
+
+    if (task.type === 'bid-analysis') {
+      copyPatchFields(patch, state, ['bidAnalysisMode', 'bidAnalysisProgress', 'projectOverview', 'techRequirements', 'bidAnalysisTasks']);
+      if (state.outlineData === null) {
+        copyPatchFields(patch, state, [
+          'outlineData',
+          'outlineGenerationTask',
+          'contentGenerationTask',
+          'contentGenerationOptions',
+          'contentGenerationSections',
+          'contentGenerationPlans',
+          'contentGenerationRuntime',
+        ]);
+      }
+    }
+
+    if (task.type === 'outline-generation') {
+      copyPatchFields(patch, state, ['outlineMode', 'referenceKnowledgeDocumentIds']);
+      if (task.status === 'success' || state.outlineData === null || hasOwn(eventPatch, 'outlineData')) {
+        copyPatchFields(patch, state, [
+          'outlineData',
+          'contentGenerationTask',
+          'contentGenerationSections',
+          'contentGenerationPlans',
+          'contentGenerationRuntime',
+        ]);
+      }
+    }
+
+    if (task.type === 'content-generation') {
+      copyPatchFields(patch, state, ['contentGenerationRuntime']);
+      if (!isActiveTaskStatus(task.status)) {
+        copyPatchFields(patch, state, [
+          'outlineData',
+          'contentGenerationSections',
+          'contentGenerationPlans',
+          'contentGenerationRuntime',
+        ]);
+      }
+    }
+
+    if (hasOwn(eventPatch, 'outlineData')) {
+      patch.outlineData = eventPatch.outlineData;
+    }
+    if (hasOwn(eventPatch, 'contentRuntime')) {
+      patch.contentGenerationRuntime = eventPatch.contentRuntime;
+    }
+
+    const event = { technicalPlanPatch: patch };
+    if (hasOwn(eventPatch, 'bidItem')) event.bidItem = eventPatch.bidItem;
+    if (hasOwn(eventPatch, 'outlineData')) event.outlineData = eventPatch.outlineData;
+    if (hasOwn(eventPatch, 'contentSection')) event.contentSection = eventPatch.contentSection;
+    if (hasOwn(eventPatch, 'contentPlan')) event.contentPlan = eventPatch.contentPlan;
+    if (hasOwn(eventPatch, 'contentRuntime')) event.contentRuntime = eventPatch.contentRuntime;
+    return event;
+  }
+
+  function buildSnapshot(definition, state, task, eventPatch) {
+    if (definition.stateKey === 'technicalPlan') {
+      return buildTechnicalPlanSnapshot(task, state, eventPatch);
+    }
+    if (definition.stateKey === 'rejectionCheck') {
+      return { rejectionCheck: state };
+    }
+    if (definition.stateKey === 'duplicateCheck') {
+      return { duplicateCheck: state };
+    }
+    return {};
+  }
+
   function getSnapshotForTask(task) {
     const definition = getTaskDefinition(task.type);
     if (definition.stateKey === 'technicalPlan') {
-      return { technicalPlan: workspaceStore.loadTechnicalPlan() };
+      return buildSnapshot(definition, technicalPlanStore.loadTechnicalPlan(), task);
     }
     if (definition.stateKey === 'rejectionCheck') {
-      return { rejectionCheck: workspaceStore.loadRejectionCheck() };
+      return { rejectionCheck: rejectionCheckStore.loadRejectionCheck() };
     }
     if (definition.stateKey === 'duplicateCheck') {
-      return { duplicateCheck: workspaceStore.loadDuplicateCheck() };
+      return { duplicateCheck: duplicateCheckStore.loadDuplicateCheck() };
     }
     return {};
   }
@@ -268,7 +356,7 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
     if (!conflict) {
       const definition = getTaskDefinition(type);
       if (definition.group === 'technical-plan') {
-        const technicalPlan = workspaceStore.loadTechnicalPlan() || {};
+        const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
         const pausedContentTask = technicalPlan.contentGenerationTask;
         if (pausedContentTask?.status === 'paused') {
           if (type === 'content-generation' && payload?.resume) {
@@ -285,33 +373,29 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
   }
 
   function updateWorkspaceState(definition, partial) {
+    if (definition.stateKey === 'technicalPlan') {
+      return technicalPlanStore.updateTechnicalPlan(partial);
+    }
     if (definition.stateKey === 'rejectionCheck') {
-      return workspaceStore.updateRejectionCheck(partial);
+      return rejectionCheckStore.updateRejectionCheck(partial);
     }
     if (definition.stateKey === 'duplicateCheck') {
-      return workspaceStore.updateDuplicateCheck(partial);
+      return duplicateCheckStore.updateDuplicateCheck(partial);
     }
-    return workspaceStore.updateTechnicalPlan(partial);
+    return technicalPlanStore.updateTechnicalPlan(partial);
   }
 
   function loadWorkspaceState(definition) {
+    if (definition.stateKey === 'technicalPlan') {
+      return technicalPlanStore.loadTechnicalPlan();
+    }
     if (definition.stateKey === 'rejectionCheck') {
-      return workspaceStore.loadRejectionCheck();
+      return rejectionCheckStore.loadRejectionCheck();
     }
     if (definition.stateKey === 'duplicateCheck') {
-      return workspaceStore.loadDuplicateCheck();
+      return duplicateCheckStore.loadDuplicateCheck();
     }
-    return workspaceStore.loadTechnicalPlan();
-  }
-
-  function buildSnapshot(definition, state) {
-    if (definition.stateKey === 'rejectionCheck') {
-      return { rejectionCheck: state };
-    }
-    if (definition.stateKey === 'duplicateCheck') {
-      return { duplicateCheck: state };
-    }
-    return { technicalPlan: state };
+    return technicalPlanStore.loadTechnicalPlan();
   }
 
   function startManagedTask(type, payload, runner, initialPartial = {}) {
@@ -345,13 +429,13 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
           : ['已请求暂停，正在等待当前 AI 请求完成。'];
         const pausingTask = updateTask({ status: 'pausing', pause_requested: true, logs: pausedLogs });
         const state = updateWorkspaceState(definition, { [taskField]: pausingTask });
-        emit(pausingTask, buildSnapshot(definition, state));
+        emit(pausingTask, buildSnapshot(definition, state, pausingTask));
         return pausingTask;
       },
     };
     activeTaskControls.set(type, taskControl);
 
-    const updateTask = (partial, technicalPlan) => {
+    const updateTask = (partial, workspaceState, eventPatch) => {
       const nextStatus = currentTask.status === 'pausing' && partial.status === 'running'
         ? 'pausing'
         : partial.status || currentTask.status;
@@ -364,21 +448,26 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
         updated_at: now(),
       };
       activeTasks.set(type, currentTask);
-      if (technicalPlan) {
-        const persistedState = taskField ? updateWorkspaceState(definition, { [taskField]: currentTask }) : technicalPlan;
-        emit(currentTask, buildSnapshot(definition, persistedState));
+      if (workspaceState) {
+        const persistedState = taskField ? updateWorkspaceState(definition, { [taskField]: currentTask }) : workspaceState;
+        emit(currentTask, buildSnapshot(definition, persistedState, currentTask, eventPatch));
       }
       return currentTask;
     };
 
     const previousState = loadWorkspaceState(definition) || {};
     const state = updateWorkspaceState(definition, { ...initialPartial, [taskField]: currentTask });
-    emit(currentTask, buildSnapshot(definition, state));
+    emit(currentTask, buildSnapshot(definition, state, currentTask));
 
-    runner({ aiService, workspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
+    const runnerWorkspaceStore = definition.stateKey === 'technicalPlan'
+      ? technicalPlanStore
+      : definition.stateKey === 'rejectionCheck'
+        ? rejectionCheckStore
+        : duplicateCheckStore;
+    runner({ aiService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
       const failedTask = updateTask({ status: 'error', error: error.message || '任务执行失败' });
       const nextState = updateWorkspaceState(definition, { [taskField]: failedTask });
-      emit(failedTask, buildSnapshot(definition, nextState));
+      emit(failedTask, buildSnapshot(definition, nextState, failedTask));
     }).finally(() => {
       activeTasks.delete(type);
       activeTaskControls.delete(type);
@@ -392,7 +481,7 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
       return;
     }
 
-    const technicalPlan = workspaceStore.loadTechnicalPlan() || {};
+    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const contentTask = technicalPlan.contentGenerationTask;
     if (!isActiveTaskStatus(contentTask?.status)) {
       return;
@@ -422,7 +511,7 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
       stats: nextStats,
       updated_at: now(),
     };
-    const state = workspaceStore.updateTechnicalPlan({
+    const state = technicalPlanStore.updateTechnicalPlan({
       outlineData,
       contentGenerationSections: sections,
       contentGenerationTask: pausedTask,
@@ -432,7 +521,79 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
         updated_at: now(),
       },
     });
-    emit(pausedTask, { technicalPlan: state });
+    emit(pausedTask, buildSnapshot(getTaskDefinition('content-generation'), state, pausedTask));
+  }
+
+  function recoverInterruptedRejectionCheckTasks() {
+    const staleExtractionMessage = '上次解析未完成，请重新解析';
+    const staleCheckMessage = '上次检查未完成，请重新检查';
+    const state = rejectionCheckStore.loadRejectionCheck() || {};
+    const partial = {};
+
+    if (!activeTasks.has('rejection-items-extraction') && state.extractionTask?.status === 'running') {
+      partial.invalidBidAndRejectionItems = state.invalidBidAndRejectionItems?.status === 'running'
+        ? { ...state.invalidBidAndRejectionItems, status: 'error', error: staleExtractionMessage, updatedAt: now() }
+        : state.invalidBidAndRejectionItems;
+      partial.extractionTask = {
+        ...state.extractionTask,
+        status: 'error',
+        progress: 100,
+        error: staleExtractionMessage,
+        logs: [staleExtractionMessage],
+        updated_at: now(),
+      };
+    }
+
+    if (!activeTasks.has('rejection-check-run') && state.checkTask?.status === 'running') {
+      const markResult = (result) => result?.status === 'running'
+        ? { ...result, status: 'error', error: staleCheckMessage, progressMessage: staleCheckMessage, updatedAt: now() }
+        : result;
+      partial.rejectionCheckResult = markResult(state.rejectionCheckResult);
+      partial.typoCheckResult = markResult(state.typoCheckResult);
+      partial.logicCheckResult = markResult(state.logicCheckResult);
+      partial.checkTask = {
+        ...state.checkTask,
+        status: 'error',
+        progress: 100,
+        error: staleCheckMessage,
+        logs: [staleCheckMessage],
+        updated_at: now(),
+      };
+    }
+
+    if (Object.keys(partial).length) {
+      rejectionCheckStore.updateRejectionCheck(partial);
+    }
+  }
+
+  function recoverInterruptedDuplicateCheckTask() {
+    if (activeTasks.has('duplicate-analysis')) {
+      return;
+    }
+    const state = duplicateCheckStore.loadDuplicateCheck() || {};
+    if (state.analysisTask?.status !== 'running') {
+      return;
+    }
+    const message = '上次标书查重分析未完成，请重新分析';
+    const markAnalysis = (analysis) => analysis?.status === 'running'
+      ? { ...analysis, status: 'error', progress: 100, message, updated_at: now() }
+      : analysis;
+    const recoveredTask = {
+      ...state.analysisTask,
+      status: 'error',
+      progress: 100,
+      logs: [message],
+      error: message,
+      updated_at: now(),
+    };
+    const nextState = duplicateCheckStore.updateDuplicateCheck({
+      analysisTask: recoveredTask,
+      metadataAnalysis: markAnalysis(state.metadataAnalysis),
+      outlineAnalysis: markAnalysis(state.outlineAnalysis),
+      contentAnalysis: markAnalysis(state.contentAnalysis),
+      imageAnalysis: markAnalysis(state.imageAnalysis),
+    });
+    emit(nextState.analysisTask || recoveredTask, { duplicateCheck: nextState });
   }
 
   return {
@@ -461,7 +622,7 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
         return control.requestPause();
       }
 
-      const technicalPlan = workspaceStore.loadTechnicalPlan() || {};
+      const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
       const contentTask = technicalPlan.contentGenerationTask;
       if (contentTask?.status === 'paused' || contentTask?.status === 'pausing') {
         return contentTask;
@@ -483,6 +644,8 @@ function createTaskService({ aiService, workspaceStore, knowledgeBaseService, du
     },
     getActiveTasks() {
       recoverInterruptedContentGenerationTask();
+      recoverInterruptedRejectionCheckTasks();
+      recoverInterruptedDuplicateCheckTask();
       return Array.from(activeTasks.values());
     },
   };

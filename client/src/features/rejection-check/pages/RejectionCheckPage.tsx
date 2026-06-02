@@ -24,12 +24,6 @@ import type {
   TypoCheckResultState,
 } from '../types';
 
-interface TechnicalPlanSnapshot {
-  fileName?: string;
-  fileContent?: string;
-  bidAnalysisTasks?: Record<string, { status?: string; content?: string }>;
-}
-
 const steps: RejectionCheckStep[] = ['documents', 'items', 'results'];
 
 const stepLabels: Record<RejectionCheckStep, string> = {
@@ -305,23 +299,6 @@ function getFileBadge(document: RejectionDocumentContent) {
   return extension ? extension.slice(0, 4).toUpperCase() : 'DOC';
 }
 
-function createDocumentContent(
-  role: RejectionDocumentRole,
-  source: RejectionDocumentSource,
-  fileName: string,
-  content: string,
-  parserLabel?: string,
-): RejectionDocumentContent {
-  return {
-    role,
-    fileName,
-    content,
-    source,
-    parserLabel,
-    importedAt: new Date().toISOString(),
-  };
-}
-
 function createDocumentSignature(document: RejectionDocumentContent | null) {
   if (!document) {
     return '';
@@ -358,11 +335,6 @@ function createRejectionCheckInputSignature(
     custom.slice(0, 800),
     custom.slice(-800),
   ].join('\n---yibiao-rejection-check-input---\n');
-}
-
-function getTechnicalPlanDiscardedBids(technicalPlan: TechnicalPlanSnapshot | null | undefined) {
-  const task = technicalPlan?.bidAnalysisTasks?.discardedBids;
-  return task?.status === 'success' && task.content?.trim() ? task.content : '';
 }
 
 function stripTripleQuoteWrapper(content: string) {
@@ -579,7 +551,6 @@ function RejectionCheckPage() {
   const [analyticsReady, setAnalyticsReady] = useState(false);
   const hydratedRef = useRef(false);
   const autoStartedSignatureRef = useRef('');
-  const technicalPlanCheckSignatureRef = useRef('');
   const activeTaskTypesRef = useRef<Set<string> | null>(null);
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
@@ -704,10 +675,17 @@ function RejectionCheckPage() {
     setDraftCheckOptions(nextOptions);
   }
 
+  function persistRejectionState(partial: Partial<RejectionCheckWorkspaceState>, fallbackMessage: string) {
+    void window.yibiao?.rejectionCheck.updateState(partial)
+      .catch((error) => {
+        showToast(error instanceof Error ? error.message : fallbackMessage, 'error');
+      });
+  }
+
   useEffect(() => {
     let canceled = false;
 
-    void window.yibiao?.workspace.loadRejectionCheck()
+    void window.yibiao?.rejectionCheck.loadState()
       .then((state) => {
         if (canceled || !state) return;
         applyWorkspaceState(state);
@@ -733,31 +711,18 @@ function RejectionCheckPage() {
   useEffect(() => {
     if (!hydratedRef.current) return;
 
-    if (extractionRunning || checkRunning) {
-      return;
-    }
-
-    const state: RejectionCheckWorkspaceState = {
-      tenderDocument,
-      bidDocument,
+    void window.yibiao?.rejectionCheck.saveUiState({
       activeDocumentTab,
       step,
       activeResultTab,
       activeCheckResultTab,
-      invalidBidAndRejectionItems,
-      rejectionCheckResult,
-      typoCheckResult,
-      logicCheckResult,
-      extractionTask,
-      checkTask,
       customCheckItems,
       checkOptions,
-    };
-    void window.yibiao?.workspace.saveRejectionCheck(state)
+    })
       .catch((error) => {
-        showToast(error instanceof Error ? error.message : '保存废标项检查缓存失败', 'error');
+        showToast(error instanceof Error ? error.message : '保存废标项检查页面状态失败', 'error');
       });
-  }, [activeCheckResultTab, activeDocumentTab, activeResultTab, bidDocument, checkOptions, checkRunning, checkTask, customCheckItems, extractionRunning, extractionTask, invalidBidAndRejectionItems, logicCheckResult, rejectionCheckResult, showToast, step, tenderDocument, typoCheckResult]);
+  }, [activeCheckResultTab, activeDocumentTab, activeResultTab, checkOptions, customCheckItems, showToast, step]);
 
   useEffect(() => {
     if (!window.yibiao?.tasks) {
@@ -801,19 +766,10 @@ function RejectionCheckPage() {
     void prepareInvalidBidAndRejectionItems(false);
   }, [extractionRunning, invalidBidAndRejectionItems.content, invalidBidAndRejectionItems.source, invalidBidAndRejectionItems.tenderSignature, step, tenderDocument, tenderSignature]);
 
-  function clearExtractionForTenderChange() {
-    autoStartedSignatureRef.current = '';
-    technicalPlanCheckSignatureRef.current = '';
-    setInvalidBidAndRejectionItems(createEmptyExtractionState());
-    setRejectionCheckResult(createEmptyRejectionCheckResultState());
-    setExtractionTask(undefined);
-    setCheckTask(undefined);
-  }
-
   async function importParsedDocument(role: RejectionDocumentRole) {
     const documentLabel = documentLabels[role];
     try {
-      const importer = window.yibiao?.file.importRejectionCheckDocument;
+      const importer = window.yibiao?.rejectionCheck.importDocument;
       if (typeof importer !== 'function') {
         throw new Error('文件解析接口尚未加载，请重启应用后重试');
       }
@@ -821,7 +777,7 @@ function RejectionCheckPage() {
       setBusy(role === 'tender' ? 'tender-upload' : 'bid-upload');
       const result = await importer(role);
 
-      if (!result?.success || !result.file_content) {
+      if (!result?.success) {
         const message = result?.message || `未选择${documentLabel}`;
         if (isLibreOfficeRequiredMessage(message)) {
           showDocumentParseNotice(message);
@@ -831,25 +787,8 @@ function RejectionCheckPage() {
         return;
       }
 
-      const nextDocument = createDocumentContent(
-        role,
-        'upload',
-        result.file_name || documentLabel,
-        result.file_content,
-        result.parser_label,
-      );
-      if (role === 'tender') {
-        clearExtractionForTenderChange();
-        setTenderDocument(nextDocument);
-      } else {
-        setRejectionCheckResult(createEmptyRejectionCheckResultState());
-        setTypoCheckResult(createEmptyTypoCheckResultState());
-        setLogicCheckResult(createEmptyLogicCheckResultState());
-        setCheckTask(undefined);
-        setBidDocument(nextDocument);
-      }
-      setActiveDocumentTab(role);
-      showToast(`${documentLabel}已解析`, 'success');
+      applyWorkspaceState(result.state);
+      showToast(result.message || `${documentLabel}已解析`, 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : `${documentLabel}解析失败`;
       if (isLibreOfficeRequiredMessage(message)) {
@@ -863,29 +802,21 @@ function RejectionCheckPage() {
   }
 
   async function readTenderFromTechnicalPlan() {
-    const loader = window.yibiao?.workspace.loadTechnicalPlan;
-    if (typeof loader !== 'function') {
-      showToast('技术方案缓存接口尚未加载，请重启应用后重试', 'error');
+    if (!window.yibiao?.rejectionCheck?.importTenderFromTechnicalPlan) {
+      showToast('废标项检查缓存接口尚未加载，请重启应用后重试', 'error');
       return;
     }
 
     try {
       setBusy('technical-plan');
-      const technicalPlan = await loader<TechnicalPlanSnapshot>();
-      if (!technicalPlan?.fileContent?.trim()) {
-        showToast('技术方案中暂无可读取的招标文件正文', 'info');
+      const result = await window.yibiao.rejectionCheck.importTenderFromTechnicalPlan();
+      if (!result?.success) {
+        showToast(result?.message || '技术方案中暂无可读取的招标文件正文', 'info');
         return;
       }
 
-      clearExtractionForTenderChange();
-      setTenderDocument(createDocumentContent(
-        'tender',
-        'technical-plan',
-        technicalPlan.fileName || '技术方案招标文件',
-        technicalPlan.fileContent,
-      ));
-      setActiveDocumentTab('tender');
-      showToast('已从技术方案读取招标文件', 'success');
+      applyWorkspaceState(result.state);
+      showToast(result.message || '已从技术方案读取招标文件', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '读取技术方案招标文件失败', 'error');
     } finally {
@@ -894,55 +825,13 @@ function RejectionCheckPage() {
   }
 
   function removeDocument(role: RejectionDocumentRole) {
-    if (role === 'tender') {
-      clearExtractionForTenderChange();
-      setTenderDocument(null);
-      if (step === 'items') {
-        setStep('documents');
-      }
-    } else {
-      setRejectionCheckResult(createEmptyRejectionCheckResultState());
-      setTypoCheckResult(createEmptyTypoCheckResultState());
-      setLogicCheckResult(createEmptyLogicCheckResultState());
-      setCheckTask(undefined);
-      setBidDocument(null);
-    }
-  }
-
-  async function tryUseTechnicalPlanDiscardedBids(signature: string) {
-    if (!tenderDocument || tenderDocument.source !== 'technical-plan') {
-      return false;
-    }
-
-    if (technicalPlanCheckSignatureRef.current === signature && invalidBidAndRejectionItems.source === 'technical-plan') {
-      return hasCurrentExtraction;
-    }
-
-    technicalPlanCheckSignatureRef.current = signature;
-    const loader = window.yibiao?.workspace.loadTechnicalPlan;
-    if (typeof loader !== 'function') {
-      return false;
-    }
-
-    const technicalPlan = await loader<TechnicalPlanSnapshot>();
-    if (technicalPlan?.fileContent?.trim() !== tenderDocument.content.trim()) {
-      return false;
-    }
-
-    const content = stripTripleQuoteWrapper(getTechnicalPlanDiscardedBids(technicalPlan));
-    if (!content) {
-      return false;
-    }
-
-    setInvalidBidAndRejectionItems({
-      status: 'success',
-      content,
-      source: 'technical-plan',
-      tenderSignature: signature,
-      updatedAt: new Date().toISOString(),
-    });
-    setRejectionCheckResult(createEmptyRejectionCheckResultState());
-    return true;
+    void window.yibiao?.rejectionCheck.removeDocument(role)
+      .then((state) => {
+        applyWorkspaceState({ ...state, step: role === 'tender' && step === 'items' ? 'documents' : state.step });
+      })
+      .catch((error) => {
+        showToast(error instanceof Error ? error.message : `移除${documentLabels[role]}失败`, 'error');
+      });
   }
 
   async function prepareInvalidBidAndRejectionItems(force: boolean) {
@@ -960,14 +849,6 @@ function RejectionCheckPage() {
         return;
       }
 
-      try {
-        const usedTechnicalPlanResult = await tryUseTechnicalPlanDiscardedBids(tenderSignature);
-        if (usedTechnicalPlanResult) {
-          return;
-        }
-      } catch (error) {
-        showToast(error instanceof Error ? error.message : '读取技术方案无效标与废标项失败', 'error');
-      }
     }
 
     void startInvalidBidAndRejectionItemsExtraction(tenderSignature);
@@ -1010,24 +891,7 @@ function RejectionCheckPage() {
         throw new Error('后台任务接口尚未加载，请重启应用后重试');
       }
 
-      await starter({
-        tenderContent: tenderDocument.content,
-        tenderSignature: signature,
-        workspaceState: {
-          tenderDocument,
-          bidDocument,
-          activeDocumentTab,
-          step,
-          activeResultTab,
-          activeCheckResultTab,
-          customCheckItems,
-          checkOptions,
-          invalidBidAndRejectionItems: nextExtractionState,
-          rejectionCheckResult: emptyRejectionCheckResult,
-          extractionTask: nextExtractionTask,
-          checkTask: undefined,
-        },
-      });
+      await starter({ tenderSignature: signature });
       showToast('无效与废标项解析任务已在后台启动', 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : '启动无效与废标项解析失败';
@@ -1046,7 +910,6 @@ function RejectionCheckPage() {
 
   function resetWorkspace() {
     autoStartedSignatureRef.current = '';
-    technicalPlanCheckSignatureRef.current = '';
     setStep('documents');
     setTenderDocument(null);
     setBidDocument(null);
@@ -1063,11 +926,14 @@ function RejectionCheckPage() {
     setCheckOptions(defaultCheckOptions);
     setDraftCheckOptions(defaultCheckOptions);
     setCheckConfigDialogOpen(false);
-    void window.yibiao?.workspace.clearRejectionCheck()
+    void window.yibiao?.rejectionCheck.clear()
+      .then((result) => {
+        if (result?.state) applyWorkspaceState(result.state);
+        showToast('已重置废标项检查文件', 'success');
+      })
       .catch((error) => {
         showToast(error instanceof Error ? error.message : '清空废标项检查缓存失败', 'error');
       });
-    showToast('已重置废标项检查文件', 'success');
   }
 
   function openCheckConfigDialog() {
@@ -1175,29 +1041,16 @@ function RejectionCheckPage() {
         throw new Error('后台任务接口尚未加载，请重启应用后重试');
       }
 
+      await window.yibiao?.rejectionCheck.saveUiState({
+        activeCheckResultTab: nextActiveCheckResultTab,
+        customCheckItems,
+        checkOptions: options,
+      });
+
       await starter({
         checkOptions: options,
         runOptions,
-        bidContent: bidDocument.content,
-        invalidBidAndRejectionItems: visibleExtractionContent,
         customCheckItems,
-        rejectionInputSignature: currentRejectionCheckInputSignature,
-        bidSignature,
-        workspaceState: {
-          tenderDocument,
-          bidDocument,
-          activeDocumentTab,
-          step,
-          activeResultTab,
-          activeCheckResultTab: nextActiveCheckResultTab,
-          invalidBidAndRejectionItems,
-          rejectionCheckResult: nextRejectionCheckResult,
-          typoCheckResult: nextTypoCheckResult,
-          logicCheckResult: nextLogicCheckResult,
-          checkTask: nextCheckTask,
-          customCheckItems,
-          checkOptions: options,
-        },
       });
       showToast('检查任务已在后台启动', 'success');
     } catch (error) {
@@ -1238,45 +1091,49 @@ function RejectionCheckPage() {
   }
 
   function toggleFinding(findingId: string) {
-    setRejectionCheckResult((prev) => ({
-      ...prev,
-      activeFindingId: prev.activeFindingId === findingId ? undefined : findingId,
+    const next = {
+      ...rejectionCheckResult,
+      activeFindingId: rejectionCheckResult.activeFindingId === findingId ? undefined : findingId,
       updatedAt: new Date().toISOString(),
-    }));
+    };
+    setRejectionCheckResult(next);
+    persistRejectionState({ rejectionCheckResult: next }, '保存废标项结果状态失败');
   }
 
   function deleteFinding(findingId: string) {
-    setRejectionCheckResult((prev) => {
-      const findings = prev.findings.filter((item) => item.id !== findingId);
-      return {
-        ...prev,
-        findings,
-        activeFindingId: prev.activeFindingId === findingId ? undefined : prev.activeFindingId,
-        progressMessage: findings.length ? `保留 ${findings.length} 个需复核风险项` : '所有风险项已处理',
-        updatedAt: new Date().toISOString(),
-      };
-    });
+    const findings = rejectionCheckResult.findings.filter((item) => item.id !== findingId);
+    const next = {
+      ...rejectionCheckResult,
+      findings,
+      activeFindingId: rejectionCheckResult.activeFindingId === findingId ? undefined : rejectionCheckResult.activeFindingId,
+      progressMessage: findings.length ? `保留 ${findings.length} 个需复核风险项` : '所有风险项已处理',
+      updatedAt: new Date().toISOString(),
+    };
+    setRejectionCheckResult(next);
+    persistRejectionState({ rejectionCheckResult: next }, '保存废标项结果状态失败');
   }
 
   function toggleTypoFinding(findingId: string) {
-    setTypoCheckResult((prev) => ({
-      ...prev,
-      activeFindingId: prev.activeFindingId === findingId ? undefined : findingId,
+    const next = {
+      ...typoCheckResult,
+      activeFindingId: typoCheckResult.activeFindingId === findingId ? undefined : findingId,
       updatedAt: new Date().toISOString(),
-    }));
+    };
+    setTypoCheckResult(next);
+    persistRejectionState({ typoCheckResult: next }, '保存错别字结果状态失败');
   }
 
   function deleteTypoFinding(findingId: string) {
-    setTypoCheckResult((prev) => {
-      const findings = prev.findings.filter((item) => item.id !== findingId);
-      return {
-        ...prev,
-        findings,
-        activeFindingId: prev.activeFindingId === findingId ? undefined : prev.activeFindingId,
-        progressMessage: findings.length ? `保留 ${findings.length} 个疑似错别字` : '所有错别字项已处理',
-        updatedAt: new Date().toISOString(),
-      };
-    });
+    const findings = typoCheckResult.findings.filter((item) => item.id !== findingId);
+    const next = {
+      ...typoCheckResult,
+      findings,
+      activeFindingId: typoCheckResult.activeFindingId === findingId ? undefined : typoCheckResult.activeFindingId,
+      progressMessage: findings.length ? `保留 ${findings.length} 个疑似错别字` : '所有错别字项已处理',
+      updatedAt: new Date().toISOString(),
+    };
+    setTypoCheckResult(next);
+    persistRejectionState({ typoCheckResult: next }, '保存错别字结果状态失败');
   }
 
   async function copyTypoOriginal(finding: TypoCheckFinding) {
@@ -1298,24 +1155,26 @@ function RejectionCheckPage() {
   }
 
   function toggleLogicFinding(findingId: string) {
-    setLogicCheckResult((prev) => ({
-      ...prev,
-      activeFindingId: prev.activeFindingId === findingId ? undefined : findingId,
+    const next = {
+      ...logicCheckResult,
+      activeFindingId: logicCheckResult.activeFindingId === findingId ? undefined : findingId,
       updatedAt: new Date().toISOString(),
-    }));
+    };
+    setLogicCheckResult(next);
+    persistRejectionState({ logicCheckResult: next }, '保存逻辑谬误结果状态失败');
   }
 
   function deleteLogicFinding(findingId: string) {
-    setLogicCheckResult((prev) => {
-      const findings = prev.findings.filter((item) => item.id !== findingId);
-      return {
-        ...prev,
-        findings,
-        activeFindingId: prev.activeFindingId === findingId ? undefined : prev.activeFindingId,
-        progressMessage: findings.length ? `保留 ${findings.length} 个逻辑问题` : '所有逻辑问题已处理',
-        updatedAt: new Date().toISOString(),
-      };
-    });
+    const findings = logicCheckResult.findings.filter((item) => item.id !== findingId);
+    const next = {
+      ...logicCheckResult,
+      findings,
+      activeFindingId: logicCheckResult.activeFindingId === findingId ? undefined : logicCheckResult.activeFindingId,
+      progressMessage: findings.length ? `保留 ${findings.length} 个逻辑问题` : '所有逻辑问题已处理',
+      updatedAt: new Date().toISOString(),
+    };
+    setLogicCheckResult(next);
+    persistRejectionState({ logicCheckResult: next }, '保存逻辑谬误结果状态失败');
   }
 
   function markStaleTasksWithoutActive(activeTypes: Set<string>) {

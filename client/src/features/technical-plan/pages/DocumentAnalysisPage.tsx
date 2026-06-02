@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { isLibreOfficeRequiredMessage, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FileParserProvider } from '../../../shared/types';
+import type { TechnicalPlanState, TechnicalPlanTenderFile } from '../types';
 
 const parserLabels: Record<FileParserProvider, string> = {
   local: '本地解析',
@@ -9,14 +10,14 @@ const parserLabels: Record<FileParserProvider, string> = {
 };
 
 interface DocumentAnalysisPageProps {
-  fileName: string;
-  fileContent: string;
-  onFileImported: (fileName: string, fileContent: string) => void;
+  tenderFile: TechnicalPlanTenderFile | null;
+  tenderMarkdown: string;
+  onFileImported: (state: TechnicalPlanState, markdown: string) => void;
 }
 
 function DocumentAnalysisPage({
-  fileName,
-  fileContent,
+  tenderFile,
+  tenderMarkdown,
   onFileImported,
 }: DocumentAnalysisPageProps) {
   const [parserLabel, setParserLabel] = useState(parserLabels.local);
@@ -52,9 +53,9 @@ function DocumentAnalysisPage({
   const importDocument = async () => {
     try {
       setBusy(true);
-      const result = await window.yibiao?.file.importDocument();
+      const result = await window.yibiao?.technicalPlan.importTenderDocument();
 
-      if (!result?.success || !result.file_content) {
+      if (!result?.success || !result.markdown) {
         const message = result?.message || '未导入文件';
         if (isLibreOfficeRequiredMessage(message)) {
           showDocumentParseNotice(message);
@@ -64,11 +65,11 @@ function DocumentAnalysisPage({
         return;
       }
 
-      onFileImported(result.file_name || '未命名文件', result.file_content);
-      if (result.parser_label) {
-        setParserLabel(result.parser_label);
+      onFileImported(result.state, result.markdown);
+      if (result.state.tenderFile?.parserLabel) {
+        setParserLabel(result.state.tenderFile.parserLabel);
       }
-      showToast(result.message, 'success');
+      showToast(result.message || '招标文件已导入', 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : '文件解析失败';
       if (isLibreOfficeRequiredMessage(message)) {
@@ -91,7 +92,7 @@ function DocumentAnalysisPage({
         </div>
         <div className="analysis-actions">
           <button type="button" className="primary-action" onClick={importDocument} disabled={busy}>
-            {busy ? '解析中...' : fileContent ? '重新选择文件' : '选择文件'}
+            {busy ? '解析中...' : tenderFile ? '重新选择文件' : '选择文件'}
           </button>
         </div>
       </section>
@@ -99,13 +100,13 @@ function DocumentAnalysisPage({
       <section className="analysis-markdown-card">
         <div className="analysis-result-head">
           <strong>招标文件内容</strong>
-          <span>{fileContent ? '来自原始招标文件' : '等待上传'}</span>
+          <span>{tenderFile ? `${tenderFile.fileName} · ${tenderFile.markdownChars} 字` : '等待上传'}</span>
         </div>
 
-        {fileContent ? (
+        {tenderMarkdown ? (
           <div className="markdown-viewer">
             <MarkdownRenderer>
-              {fileContent}
+              {tenderMarkdown}
             </MarkdownRenderer>
           </div>
         ) : (

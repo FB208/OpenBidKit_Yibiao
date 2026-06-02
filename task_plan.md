@@ -1,5 +1,32 @@
 # Task Plan
 
+## Current Task: 技术方案 SQLite 存储改造
+
+### Goal
+按 `client/doc/sqlite改造方案.md` 落地技术方案模块 SQLite 改造：招标文件 Markdown 文件化，结构化状态进入 `workspace/yibiao.sqlite`，移除技术方案旧 JSON workspace 链路，不兼容旧 `technical_plan.json`，并完成构建验证。
+
+### Phases
+- [completed] 1. 建立 SQLite 基础设施、schema migration、路径和技术方案 Store。
+- [completed] 2. 新增技术方案 IPC/preload/types，并接入 Main 初始化。
+- [completed] 3. 改造 Renderer 技术方案状态、导入 Markdown、步骤与配置保存链路。
+- [completed] 4. 改造 Step02/Step03/Step04 后台任务，改为通过 technicalPlanStore 局部读写。
+- [completed] 5. 清理旧技术方案 workspace API 和 fileContent/fileName 状态引用。
+- [completed] 6. 运行 CJS 语法检查、客户端构建和必要 smoke test。
+
+### Decisions
+- 不兼容旧 `technical_plan.json`，不读取、不迁移、不 fallback。
+- 招标文件 Markdown 保存为 `workspace/technical-plan/tender.md`，SQLite 只存路径和元数据。
+- 技术方案不再使用 `window.yibiao.workspace.*TechnicalPlan`，改为 `window.yibiao.technicalPlan`。
+- 后台任务不再从 Renderer 接收大文本或完整目录；Main 侧从 SQLite 和 `.md` 文件读取权威输入。
+- 根目录 `sql/workspace_schema.sql` 是工作区 SQLite 开源说明文件；运行时建表升级以代码 migration 为准。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| SQLite 冒烟测试首次 `node -e` 报 `Unexpected end of input` | 第一次冒烟测试 | Windows `cmd` 引号嵌套错误导致脚本被截断；改成单层 `node -e "..."` 后通过 |
+| `npm audit` 仍报 3 个漏洞 | 依赖审计 | 记录为当前依赖审计结果，未按本轮任务自动执行 `npm audit fix` |
+| Electron 启动后 `config:load` 没有注册 handler | 用户反馈后复现 | `better-sqlite3` 按 Node ABI 137 编译，而 Electron 41 需要 ABI 145，SQLite 初始化在 IPC 注册前抛错；新增 `postinstall: electron-builder install-app-deps` 并重建 native 依赖，同时让基础 IPC 先注册、SQLite 初始化失败时只影响技术方案/任务接口 |
+
 ## Current Task: Step04 正文生成暂停与继续
 
 ### Goal
@@ -1182,3 +1209,185 @@
 ### Validation
 - `cd client && npm run build` 通过；仅有既有 chunk 体积警告。
 - `git diff --check` 通过；仅有 Git LF/CRLF 提示。
+
+## Current Task: 标书查重与废标项检查 SQLite v2 改造
+
+### Goal
+将标书查重和废标项检查从旧 `workspace/*.json` 整包缓存迁入 `workspace/yibiao.sqlite` v2；Markdown 大文本文件化；不迁移、不读取旧 JSON；Renderer 改为功能专用 bridge API，后台任务从 Main Store 读取权威输入。
+
+### Phases
+- [completed] 1. 扩展 `sqliteDatabase.cjs` 到 schema v2，并新增两个模块路径 helper。
+- [completed] 2. 新增 `duplicateCheckStore.cjs`、`rejectionCheckStore.cjs` 和对应 IPC/preload/types。
+- [completed] 3. 改造 `taskService.cjs`、`duplicateCheckService.cjs`、`rejectionCheckTask.cjs` 使用新 Store。
+- [completed] 4. 改造 `DuplicateCheckPage.tsx`、`RejectionCheckPage.tsx`，移除旧 workspace JSON 读写和大文本任务 payload。
+- [completed] 5. 删除旧 `workspaceStore.cjs` / `workspaceIpc.cjs`，更新开发说明和 SQLite 方案文档。
+- [completed] 6. 完成 CJS 语法检查、Electron SQLite v2 Store 冒烟、客户端构建和依赖审计。
+
+### Decisions
+- 旧 `duplicate_check.json` / `rejection_check.json` 不迁移、不读取、不 fallback；升级后两个模块以空 SQLite 状态启动。
+- SQLite runtime schema 版本升为 `PRAGMA user_version = 2`，与 `sql/workspace_schema.sql` 保持一致。
+- 标书查重继续复用现有 runner 逻辑，但 `updateDuplicateCheck()` 由 Store 拆写 SQLite 表，不再写 JSON 文件。
+- 废标项检查任务只从 Main Store 读取招标/投标 Markdown 和解析结果；Renderer 启动任务只传运行选项。
+- 从技术方案导入废标项检查招标文件时，立即写入本模块 `rejection-check/tender.md` 快照；如果技术方案已有废标项解析结果，同步保存为本模块解析结果。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| SQLite Store 冒烟在普通 Node 下加载 `better-sqlite3` 失败，提示 Node ABI 137 与 Electron ABI 145 不匹配 | 第一次 SQLite 冒烟 | 这是当前 native 依赖为 Electron 重建后的预期状态；改用 Electron 运行时执行临时 smoke 脚本验证 v2 Store |
+| 标书查重目录项 ID 在不同投标文件中重复，直接写入 `duplicate_check_outline_items.item_id` 会主键冲突 | 复查 `duplicateCheckStore.cjs` 目录保存链路 | Store 内部改用 `file_id::item_id` 作为 SQLite 主键，API 读回时还原原 ID；分组恢复按 `file_id` 精确标记，避免同名 ID 串到其他文件 |
+| 方案复查发现标书查重文件重选未删除旧 Markdown/图片、content_hash 未落库，废标项任务仍保留大文本 payload fallback | 对照 SQLite v2 方案逐项搜索 | 补充清理 `duplicate-check/contents/` 和 `duplicate-check-content-*`，清空时删除整个 `duplicate-check/`，正文提取后写入 SHA256，移除废标项大文本 fallback，并删除未引用 Renderer 服务 |
+
+### Validation
+- `node --check` 通过：`sqliteDatabase.cjs`、`duplicateCheckStore.cjs`、`rejectionCheckStore.cjs`、`duplicateCheckService.cjs`、`rejectionCheckTask.cjs`、`taskService.cjs`、`preload.cjs`、`ipc/index.cjs`、`duplicateCheckIpc.cjs`、`rejectionCheckIpc.cjs`。
+- Electron 运行时 SQLite v2 Store 冒烟通过：schemaVersion=2，标书查重元数据读回，废标项检查 Markdown 文件读回。
+- Electron 运行时标书查重目录回归 smoke 通过：不同投标文件相同目录项 ID 可写入，父子关系读回保持原 API ID，未参与分组的同 ID 目录项不会被误标记。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- `cd client; npm audit` 仍报 3 个既有漏洞：2 moderate、1 high。
+- `git diff --check` 仅有既有 LF/CRLF 提示。
+
+## Current Task: 知识库 SQLite v3 文档设计
+
+### Goal
+先只更新文档、SQL 说明和开发说明，明确知识库从旧 `knowledge-base/index.json` 与每文档 JSON 文件迁入 `workspace/yibiao.sqlite` v3 的目标结构和用户确认迁移流程：用户升级后首次进入知识库，如检测到历史知识库数据，必须提示确认后自动迁移；迁移完成并校验后删除旧索引/结果 JSON，下次进入不再弹窗。
+
+### Phases
+- [completed] 1. 新增知识库 SQLite v3 独立设计文档。
+- [completed] 2. 更新 `sql/workspace_schema.sql`，补充 knowledge_* v3 目标表结构。
+- [completed] 3. 更新 `client/开发说明.md`，记录知识库存储边界、迁移弹窗和清理规则。
+- [completed] 4. 更新既有 SQLite 文档中的知识库后续范围引用。
+- [completed] 5. 运行文档差异检查并记录结果。
+
+### Decisions
+- 知识库是长期用户资产，不能像查重/废标项一样丢弃旧数据；必须显式提示并迁移。
+- 迁移由用户进入知识库页面触发确认，不在应用启动时静默执行。
+- 迁移成功后删除旧 `index.json` 和每文档旧结果 JSON；原始上传文件、`content.md`、导入图片资产和开发者日志不作为废弃历史数据删除。
+- 本轮只改文档和 SQL 说明，不改运行代码；runtime migration 后续单独实施。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+### Validation
+- `git diff --check` 覆盖本轮已跟踪文档/SQL/计划文件，通过且仅有 LF/CRLF 提示。
+- 使用 Grep 搜索 `client/doc/*.md` 行尾空白，未发现匹配。
+
+## Current Task: 知识库 SQLite v3 运行实现
+
+### Goal
+将知识库从旧 `knowledge-base/index.json` 与每文档结果 JSON 迁入 `workspace/yibiao.sqlite` v3；进入知识库页面时检测旧数据并提示用户确认迁移；迁移成功并校验后清理旧索引和结果 JSON，同时保留 `source.<ext>`、`content.md`、导入图片和开发者日志。
+
+### Phases
+- [completed] 1. 扩展 `sqliteDatabase.cjs` 到 schema v3，新增 `knowledge_*` runtime migration。
+- [completed] 2. 新增 `knowledgeBaseStore.cjs`，实现知识库 CRUD、结构化结果读写、旧 JSON 迁移、校验和清理。
+- [completed] 3. 改造 `knowledgeBaseService.cjs`，业务流程保留在 Service，持久化读写委托 Store。
+- [completed] 4. 接入 IPC、preload、共享类型和知识库页面迁移确认流程。
+- [completed] 5. 运行 CJS 语法检查、Electron 运行时迁移 smoke、客户端构建和 diff 检查。
+- [completed] 6. 按方案复查补齐迁移关键结果数校验、stale running 恢复和迁移期间操作禁用。
+
+### Decisions
+- 知识库 SQLite v3 与技术方案、标书查重、废标项检查共用 `workspace/yibiao.sqlite`。
+- 旧知识库必须迁移，不做升级后空置；迁移只在用户进入知识库页面并确认后执行。
+- 迁移确认弹窗必须明确提示：只迁移旧版 `status = success` 的已完成文档，未完成或处理中的文档会被丢弃且不会迁移到新版本知识库。
+- 迁移清理只删除旧 `index.json` 和每文档结果 JSON，不删除原始上传文件、Markdown 原文、导入图片和开发者日志。
+- 知识库暂不接入统一 `taskService.cjs`，仍由 `knowledgeBaseService.cjs` 按 `documentId` 管理准备和匹配互斥。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| Electron 迁移 smoke 报 `ReferenceError: markdown_hash is not defined` | 第一次知识库 v3 迁移 smoke | `insertOrUpdateDocument()` 中对象参数误用蛇形变量名；改为显式映射 `markdown_hash: markdownHash` 和 `markdown_chars: markdownChars` 后 smoke 通过 |
+| 复查发现旧 `index.json` 解析失败不会写入迁移错误状态，且迁移校验只查文档 | 迁移事务复查 | 将旧索引读取和解析纳入 `try/catch`，失败时写 `knowledge_migration_meta.status = error`；迁移后同时校验文件夹和文档存在 |
+| 方案复查发现关键结果数未校验、迁移期间 UI 操作未全禁用、旧 running 状态不会恢复 | 对照 `client/doc/sqlite改造方案_知识库.md` 审查 | 迁移事务内补齐 block/条目/来源关系/报告等数量校验；页面增加 `migrationRunning` 统一禁用；Service 调 Store 恢复无 active 任务的处理中状态为 error |
+
+### Validation
+- `node --check` 通过：`electron/services/sqliteDatabase.cjs`、`electron/services/knowledgeBaseStore.cjs`、`electron/services/knowledgeBaseService.cjs`、`electron/ipc/knowledgeBaseIpc.cjs`、`electron/ipc/index.cjs`、`electron/preload.cjs`。
+- Electron 运行时知识库 v3 迁移 smoke 通过：schemaVersion=3，旧 `index.json` 检测为需迁移，确认迁移后 SQLite 列表/条目/技术方案引用可读，旧结果 JSON 与 `index.json` 已删除，`content.md` 保留。
+- Electron 运行时知识库 v3 回归 smoke 通过：迁移关键结果数校验失败时事务回滚、旧 `index.json` 和结果 JSON 保留、`knowledge_migration_meta.status = error`；无 active 任务的 `matching` 文档恢复为 `error`。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- `git diff --check` 通过，仅有 LF/CRLF 提示。
+
+## Current Task: SQLite 改造后废弃代码清理
+
+### Goal
+仅清理已确认无引用、会误导后续开发的 Renderer 旧服务、占位 Prompt、未实现占位工具和旧错误工具；保留仍被开发者测试页或 Main 运行链路使用的代码。
+
+### Phases
+- [completed] 1. 搜索并确认废弃 Renderer 旧服务、占位 Prompt 和未实现 JSON 修复工具的引用边界。
+- [completed] 2. 删除明确废弃文件并更新 `shared/prompts`、`shared/ai` 导出与开发说明。
+- [completed] 3. 继续清理无引用的 `ClientNotImplementedError` / `getErrorMessage()` 旧占位工具文件。
+- [completed] 4. 重新搜索残留引用，确认仅剩 Main 侧真实实现函数命中。
+- [completed] 5. 运行客户端构建和 diff 检查。
+
+### Decisions
+- 保留 `outlineWorkflow.ts` 和 `bidAnalysisWorkflow.ts`，因为仍被开发者测试页或现有页面使用。
+- 保留 `jsonRepairPrompts.ts` 和 Main 侧 `repairJsonResponse()`，它们是当前 AI JSON 修复链路的真实实现，不属于已删的 `jsonRepair.ts` 占位工具。
+- 删除 `client/src/shared/utils/errors.ts`，因为 `ClientNotImplementedError` 和 `getErrorMessage()` 均只在自身文件中出现。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+### Validation
+- 残留搜索通过：`ClientNotImplementedError|getErrorMessage|NotImplemented|尚未实现` 在 `client/src` 无命中。
+- 残留搜索通过：`contentWorkflow|duplicateCheckService.ts|knowledgeBaseService.ts|contentPrompts|duplicatePrompts|expandPrompts|jsonRepair.ts|buildDuplicateCheckMessages|buildExpandOutlineMessages|JsonRepairIssue` 在 `client` 无命中。
+- `buildChapterContentMessages` 和 `repairJsonResponse` 的剩余命中均位于 Electron Main 真实运行实现。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- `git diff --check` 通过，仅有 LF/CRLF 提示。
+
+## Current Task: 知识库迁移完成态过滤评审修复
+
+### Goal
+修复评审指出的旧知识库运行中状态迁移后首屏 stale running 问题，并按用户确认改为只迁移旧版 `status = success` 的已完成文档；未完成、处理中或未知状态文档在确认提示中明确告知会被丢弃且不会迁移到新版本知识库。
+
+### Phases
+- [completed] 1. 核查 `migrateLegacy()`、`list()` 和 `recoverInterruptedDocuments()` 调用链，确认评审有效。
+- [completed] 2. 修改 `knowledgeBaseStore.migrateLegacy()`，只写入 success 文档并统计跳过数量。
+- [completed] 3. 修改 `knowledgeBaseService.migrateLegacy()`，迁移后执行恢复并返回最新 `list()`。
+- [completed] 4. 更新页面确认提示、迁移状态/结果类型和知识库迁移文档。
+- [completed] 5. 运行 CJS 语法检查、Electron smoke、客户端构建和残留搜索。
+
+### Decisions
+- 旧知识库文件夹继续迁移；旧文档只有 `status = success` 才迁移。
+- 非完成状态文档不写入 SQLite；迁移成功后旧 `index.json` 和旧结果 JSON 会清理，因此这些文档不会再出现在新版本知识库。
+- 原始上传文件、`content.md`、导入图片和开发者日志仍按既有规则保留，不在迁移清理中删除。
+- 页面确认框必须显示总文档数、已完成数量和未完成/处理中数量，并明确未完成或处理中文档会被丢弃。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+### Validation
+- `node --check electron\services\knowledgeBaseStore.cjs` 通过。
+- `node --check electron\services\knowledgeBaseService.cjs` 通过。
+- Electron 运行时 `knowledge-v3-smoke.cjs` 通过。
+- Electron 运行时 `knowledge-v3-regression-smoke.cjs` 通过。
+- Electron 运行时 `knowledge-v3-skip-smoke.cjs` 通过：3 个旧文档中只迁移 1 个 success，跳过 2 个非完成/未知状态文档，旧索引删除，跳过文档 `content.md` 保留。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+
+## Current Task: 知识库迁移确认弹窗统一风格
+
+### Goal
+把知识库旧数据迁移确认从系统 `window.confirm` 替换为项目内 Radix Dialog，并重新排版长提示文案：明确当前版本不支持继续处理旧版知识库，提示用户如有未完成文档需回退旧版本解析为“已完成”后再更新，只迁移已完成文档并展示统计数量。
+
+### Phases
+- [completed] 1. 核查项目内 Dialog 组件和既有弹窗样式复用点。
+- [completed] 2. 改造 `KnowledgeBasePage.tsx`，检测迁移后打开页面内 Dialog，不再调用迁移用 `window.confirm`。
+- [completed] 3. 新增迁移弹窗结构：标题、旧版不再支持处理提示、迁移规则警告、旧文档统计、开始/暂不迁移按钮。
+- [completed] 4. 新增 `.knowledge-migration-*` 样式和移动端单列布局。
+- [completed] 5. 更新开发说明和知识库 SQLite 方案文档。
+- [completed] 6. 运行 CJS 语法检查、客户端构建和 diff 检查。
+
+### Decisions
+- 迁移确认使用 `@radix-ui/react-dialog` 和既有 `.content-regenerate-modal` 遮罩，按钮继续复用 `primary-action` / `secondary-action`。
+- 迁移弹窗关闭或“暂不迁移”只暂缓本次迁移，下次进入知识库继续提示。
+- 迁移执行中禁用关闭和按钮，避免中途误操作。
+- 本轮只替换知识库迁移确认弹窗；知识库页删除/重命名的既有系统确认不是本次迁移流程。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| TypeScript 报迁移后读取结果可能为 `undefined` | 第一次 `npm run build` | 对 `result.index || knowledgeBase.list()` 的结果显式判空，失败时抛出可读错误 |
+
+### Validation
+- `node --check electron\services\knowledgeBaseStore.cjs` 通过。
+- `node --check electron\services\knowledgeBaseService.cjs` 通过。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。

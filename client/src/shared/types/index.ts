@@ -1,7 +1,5 @@
 export type { ChatCompletionRequest, ChatMessage, JsonCompletionRequest } from './ai';
 export type {
-  AnalysisType,
-  BidProjectDraft,
   DuplicateAnalysisTabId,
   DuplicateAnalysisStatus,
   DuplicateCheckStep,
@@ -25,7 +23,6 @@ export type {
   DuplicateOutlineMatchType,
   DuplicateOutlinePairwiseSimilarity,
   DuplicateSubTaskProgress,
-  FileImportResult,
   FileSelectionResult,
   LocalFileSelection,
 } from './bid';

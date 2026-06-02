@@ -11,8 +11,6 @@ import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSe
 
 interface ContentEditPageProps {
   outlineData: OutlineData | null;
-  projectOverview: string;
-  referenceKnowledgeDocumentIds: string[];
   task?: BackgroundTaskState;
   contentGenerationOptions?: ContentGenerationOptions;
   sections: ContentGenerationSections;
@@ -315,8 +313,6 @@ const MarkdownContent = memo(function MarkdownContent({ content, onPreviewImage 
 
 function ContentEditPage({
   outlineData,
-  projectOverview,
-  referenceKnowledgeDocumentIds,
   task,
   contentGenerationOptions,
   sections,
@@ -642,9 +638,6 @@ function ContentEditPage({
     }
 
     await window.yibiao?.tasks.startContentGeneration({
-      outlineData,
-      projectOverview: outlineData.project_overview || projectOverview,
-      reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
       regenerate,
       generationOptions: {
         useAiImages: nextImageModelAvailable && savedGenerationOptions.useAiImages,
@@ -754,9 +747,6 @@ function ContentEditPage({
       const savedGenerationOptions = normalizeGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length);
       setImageModelStatus(nextImageModelStatus);
       await window.yibiao?.tasks.startContentGeneration({
-        outlineData,
-        projectOverview: outlineData.project_overview || projectOverview,
-        reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
         regenerate: true,
         targetItemId: requirementItem.id,
         requirement: regenerateRequirement,

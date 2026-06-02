@@ -1,6 +1,15 @@
 # Findings
 
 ## Research Log
+- 技术方案 SQLite 改造当前关键边界：旧 `workspaceStore.cjs` 的 `load/save/update/clearTechnicalPlan` 是所有 Main 任务和 Renderer 缓存的中心入口；本轮应新增 `technicalPlanStore.cjs` 接管技术方案，`workspaceStore.cjs` 最终只保留查重和废标项检查。
+- 技术方案大文本边界：`TechnicalPlanState.fileContent` 和 `BidAnalysisPage.startBidAnalysis({ fileContent })` 是 Renderer 传大文本的主要路径；最佳版本应删除该状态和 payload，由 Main 侧从 `workspace/technical-plan/tender.md` 读取。
+- 技术方案 SQLite 改造已落地的权威边界：`technicalPlanStore.cjs` 负责 SQLite 结构化状态，`workspace/technical-plan/tender.md` 负责招标 Markdown 原文；`workspaceStore.cjs` 不再包含技术方案 JSON 方法。
+- Step02/Step03/Step04 后台任务最终输入边界：Renderer 只传模式、重跑范围、配置和操作意图；招标 Markdown、项目概述、技术评分要求、目录、正文缓存和参考知识库选择都由 Main 侧从 `technicalPlanStore` 读取。
+- 目录编辑/保存必须由 Main 侧兜底清空旧正文：即使 Renderer 已清空 `outlineData.content`，`technicalPlanStore.saveOutline()` 也需要再次清空内容和正文生成缓存，避免误传带正文目录导致旧内容污染。
+- `config:load` 未注册的根因不是配置 IPC 缺失，而是 `better-sqlite3` native 模块 ABI 不匹配导致 `createSqliteDatabase()` 抛错，且旧初始化顺序在注册 `config:load` 前就执行 SQLite 初始化。Electron 41 需要 `NODE_MODULE_VERSION 145`，本机 Node 安装得到的是 137；必须用 `electron-builder install-app-deps` 为 Electron 重建 native 依赖。
+- Main IPC 注册顺序不应让单个功能初始化失败拖垮基础接口；基础配置、AI、文件、知识库、导出、非 SQLite workspace IPC 应先注册，SQLite 技术方案初始化失败时只注册技术方案/任务接口的明确失败 handler。
+- 废标项检查和标书查重 SQLite 升级方案已定为“不迁移旧 JSON 数据”：升级后首次打开这两个模块显示空状态，用户重新选择/导入文件并重新分析；这样避免迁移绝对路径、大文本、任务中间态和历史解析结果造成一致性风险。
+- SQL 说明文件已从技术方案单模块视角升级为工作区 SQLite 视角：`sql/workspace_schema.sql` 记录目标完整 schema，当前代码仍以 runtime migration 为准，v2 表结构在后续代码实施时再落地。
 - Step04 最低字数当前缺口：Renderer `ContentEditPage.tsx` 的 `countWords()` 只是去空白长度，会把图片 Markdown、URL、代码块、Mermaid 代码都算入；Main 侧 `contentGenerationTask.cjs` 当前没有字数统计，也没有 `outline-expanding/expanding` 阶段。
 - Step04 当前完整流程在 `contentGenerationTask.cjs` 中是 `planAll/prepareSingleSectionPlan -> runOne -> runIllustrations -> done`；最低字数逻辑应插入 `runOne` 之后、`runIllustrations` 之前。
 - 当前 `contentGenerationPlans` 按叶子 ID 保存最终表格/配图编排；补目录若让旧叶子变成非叶子，必须删除对应 section/plan/content，否则额度计算和导出都会错。
@@ -148,3 +157,19 @@
 - `MarkdownRenderer` 默认开启 raw HTML；Step03 展示 AI 输出详情时必须显式传 `allowRawHtml={false}`。
 - Step02 自定义检查项占位示例包含“签字盖章”，与 Step03 只检查电子投标文件的约束冲突，需要同步改为电子文件可判断的示例。
 - 评审指出的三处健壮性问题成立：10 秒 idle 自动完成可能截断流式输出；error 状态保留 partial content 时 Step03 不能只按 content 非空放行；Step03 最终 JSON 直接 `JSON.parse()` 没有复用 Main 侧 balanced JSON 提取、修复和重试能力。
+- 标书查重与废标项检查 SQLite v2 已落地：旧 `workspaceStore.cjs` / `workspaceIpc.cjs` 被删除，Renderer 不再调用 `window.yibiao.workspace.*DuplicateCheck` 或 `*RejectionCheck`；功能状态由 `duplicateCheckStore` / `rejectionCheckStore` 聚合返回。
+- `better-sqlite3` 当前按 Electron ABI 145 重建，普通 Node 24 会因 ABI 137 不匹配无法执行 SQLite smoke；涉及 SQLite 实例化的冒烟测试应使用 Electron 运行时，`node --check` 仍可用于 CJS 语法检查。
+- 标书查重目录项 ID 在每份投标文件内从 `O00001` 递增，不能直接作为全局 SQLite 主键；Store 内部需用 `file_id::item_id` 落库，API 返回时再去作用域，同时恢复分组标记时必须按 `group.item_ids[file_id]` 定位，不能只按 item_id 跨全文件搜索。
+- 方案复查补漏已处理：`duplicateCheckStore.saveFiles()` 需要同步清旧 Markdown 和 imported images；`duplicate_check_files.content_hash` 应在 Markdown 提取结果保存时写入；废标项检查 Main 任务不应保留大文本 payload fallback；未引用的 Renderer 侧废标项 AI 服务会误导后续开发，应删除。
+- 技术方案任务事件复查补漏已处理：`tasks:event` 不再给技术方案发送完整 `TechnicalPlanState`，改为 `technicalPlanPatch`，正文生成单章节保存额外发送 `contentSection` 和必要 `outlineData/contentRuntime`；查重和废标项检查仍沿用完整 workspace 快照事件。
+- 技术方案旧 Renderer AI service 清理边界：正式 Step02 已由 Main `bidAnalysisTask.cjs` 读取 `tender.md`，`bidAnalysisWorkflow.ts` 只保留任务定义供 UI 展示；开发者测试页如需样例 AI 请求，应直接调用通用 `aiClient`，不要恢复 `requestBidAnalysisTask(fileContent, ...)`。
+- 进一步清理确认：`fileService.importDocument()` 仍是技术方案 Main 内部导入能力，不能删；但 `window.yibiao.file.importDocument` 和 `file:import-document` 已无 Renderer 调用，应删除。旧 `shared/storage/draftStorage.ts` / `workspaceStorage.ts` 是 localStorage 业务大文本缓存残留，已不符合当前 Main Store/SQLite 权威存储边界。
+- 评审指出的两个 P2 均有效：`saveUiState()` 构造含 `undefined` 的 own property 会触发 Store 归一化并把未传字段重置为默认值；duplicate-check stale running 恢复只写 SQLite 不 emit，会让已加载页面继续保持 running。两处均已修复。
+- 知识库 SQLite 改造与查重/废标项不同：知识库是用户长期资产，不能升级后空置；应在进入知识库页面时检测旧 `workspace/knowledge-base/index.json`，用户确认后一次性迁移到 SQLite，迁移成功并校验后删除旧 `index.json` 和每文档结果 JSON，保留原始上传文件、`content.md`、导入图片和开发者日志。
+- 知识库 v3 目标结构无需把 Markdown 原文写入 SQLite：`source.<ext>` 和 `content.md` 保留在既有文档目录中，SQLite 保存路径/hash/字符数和结构化分析结果；迁移完成后删除的是旧索引/结果 JSON，不删除用户资料副本和可按需读取的 Markdown 原文。
+- 知识库 v3 运行实现已验证的边界：旧 `blocks.json` / `filtered_blocks.json` / `candidate_items.json` / `match_result.json` / `report.json` / `items.json` 仅作为迁移输入；迁移成功并校验 SQLite 文件夹/文档存在后清理这些结果 JSON 和 `index.json`，`content.md` 与 `source.<ext>` 保留。Electron 运行时 smoke 可读回 `readItems()` 和 `getOutlineReferences()`，说明技术方案知识库引用可使用迁移后的 SQLite 条目。
+- 普通语法检查无法发现 CJS 运行期对象属性变量名错误：本轮 `node --check` 通过但 Electron smoke 捕获了 `markdown_hash is not defined`；涉及 SQLite Store 的迁移/CRUD 后续仍应用 Electron 运行时 smoke 覆盖真实 `better-sqlite3` 执行路径。
+- 方案复查确认的三处缺口已修复：迁移不能只校验文件夹/文档存在，还必须校验关键结果数，否则跳过无 id 条目后会误删旧 JSON；迁移期间页面所有知识库操作入口都应禁用；知识库 Service 维护 active 内存集合，因此 stale running 恢复必须由 Service 带 active documentIds 调 Store 执行，不能只放在 Store 内部盲目恢复。
+- SQLite 改造后废弃代码清理边界已确认：`contentWorkflow.ts`、旧查重/知识库 Renderer service、`contentPrompts.ts`、`duplicatePrompts.ts`、`expandPrompts.ts`、`jsonRepair.ts` 和 `ClientNotImplementedError` 旧工具均无运行引用，可删除；但 `jsonRepairPrompts.ts`、Main 侧 `repairJsonResponse()` 和 `contentGenerationTask.cjs` 中的 `buildChapterContentMessages()` 是当前真实运行链路，不能按同名旧占位误删。
+- 评审指出的知识库迁移 stale running 首屏问题成立：`knowledgeBaseService.migrateLegacy()` 原先直接返回 Store 迁移结果，绕过 `list()` / `getMigrationStatus()` 的 `recoverInterruptedDocuments()`；页面又优先用 `result.index` 渲染，所以旧版运行中状态会短暂显示。最终产品口径改为只迁移旧版 `status = success` 文档，非完成或未知状态文档跳过且不写入 SQLite，同时 Service 迁移后重新走恢复和 `list()` 作为防御。
+- 知识库迁移确认弹窗应使用项目内 Radix Dialog，不再使用系统 `window.confirm`；长文案需要拆成可扫描的模块：旧版不再支持继续处理、回退旧版完成解析的建议、只迁移“已完成”文档的规则，以及旧文档总数/可迁移/将跳过三列统计。
