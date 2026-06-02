@@ -23,6 +23,7 @@ const initialState: TechnicalPlanState = {
 
 export function useTechnicalPlanWorkflow() {
   const [state, setState] = useState<TechnicalPlanState>(initialState);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -35,6 +36,10 @@ export function useTechnicalPlanWorkflow() {
         }
       } catch (error) {
         console.warn('技术方案缓存读取失败', error);
+      } finally {
+        if (mounted) {
+          setHydrated(true);
+        }
       }
     };
 
@@ -46,6 +51,7 @@ export function useTechnicalPlanWorkflow() {
   }, []);
 
   return {
+    hydrated,
     state,
     setState,
   };

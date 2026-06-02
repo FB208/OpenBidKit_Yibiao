@@ -120,7 +120,7 @@ function resetGeneratedContent(outlineData: OutlineData): OutlineData {
 }
 
 function TechnicalPlanHome() {
-  const { state, setState } = useTechnicalPlanWorkflow();
+  const { hydrated, state, setState } = useTechnicalPlanWorkflow();
   const { showToast } = useToast();
   const [tenderMarkdown, setTenderMarkdown] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
@@ -145,8 +145,10 @@ function TechnicalPlanHome() {
           : `进入${stepLabels[steps[activeIndex + 1]]}`;
 
   useEffect(() => {
+    if (!hydrated) return;
+
     trackPageView(`technical-plan/${state.step}`);
-  }, [state.step]);
+  }, [hydrated, state.step]);
 
   const switchStep = (step: TechnicalPlanStep) => {
     setState((prev) => ({ ...prev, step }));

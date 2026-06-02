@@ -174,3 +174,4 @@
 - 评审指出的知识库迁移 stale running 首屏问题成立：`knowledgeBaseService.migrateLegacy()` 原先直接返回 Store 迁移结果，绕过 `list()` / `getMigrationStatus()` 的 `recoverInterruptedDocuments()`；页面又优先用 `result.index` 渲染，所以旧版运行中状态会短暂显示。最终产品口径改为只迁移旧版 `status = success` 文档，非完成或未知状态文档跳过且不写入 SQLite，同时 Service 迁移后重新走恢复和 `list()` 作为防御。
 - 知识库迁移确认弹窗应使用项目内 Radix Dialog，不再使用系统 `window.confirm`；长文案需要拆成可扫描的模块：旧版不再支持继续处理、回退旧版完成解析的建议、只迁移“已完成”文档的规则，以及旧文档总数/可迁移/将跳过三列统计。
 - `client/开发说明.md` 的长期价值在于记录架构边界和协作规则，不适合持续追加功能实现流水账；preload API 清单、具体 Step04 策略、发布排错细节等容易过期，应收敛为原则和权威文件入口。
+- SQLite 重构后埋点排查确认：`ai_request` 主链路未被切断，后台任务仍经 Main 侧 `aiService` 统一上报；技术方案页因状态从 SQLite 异步恢复，会先渲染默认 `document-analysis`，若立即上报会污染首屏子步骤统计，应等待 `technicalPlanStorage.load()` 完成后再上报。
