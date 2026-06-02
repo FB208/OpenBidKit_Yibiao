@@ -173,3 +173,4 @@
 - SQLite 改造后废弃代码清理边界已确认：`contentWorkflow.ts`、旧查重/知识库 Renderer service、`contentPrompts.ts`、`duplicatePrompts.ts`、`expandPrompts.ts`、`jsonRepair.ts` 和 `ClientNotImplementedError` 旧工具均无运行引用，可删除；但 `jsonRepairPrompts.ts`、Main 侧 `repairJsonResponse()` 和 `contentGenerationTask.cjs` 中的 `buildChapterContentMessages()` 是当前真实运行链路，不能按同名旧占位误删。
 - 评审指出的知识库迁移 stale running 首屏问题成立：`knowledgeBaseService.migrateLegacy()` 原先直接返回 Store 迁移结果，绕过 `list()` / `getMigrationStatus()` 的 `recoverInterruptedDocuments()`；页面又优先用 `result.index` 渲染，所以旧版运行中状态会短暂显示。最终产品口径改为只迁移旧版 `status = success` 文档，非完成或未知状态文档跳过且不写入 SQLite，同时 Service 迁移后重新走恢复和 `list()` 作为防御。
 - 知识库迁移确认弹窗应使用项目内 Radix Dialog，不再使用系统 `window.confirm`；长文案需要拆成可扫描的模块：旧版不再支持继续处理、回退旧版完成解析的建议、只迁移“已完成”文档的规则，以及旧文档总数/可迁移/将跳过三列统计。
+- `client/开发说明.md` 的长期价值在于记录架构边界和协作规则，不适合持续追加功能实现流水账；preload API 清单、具体 Step04 策略、发布排错细节等容易过期，应收敛为原则和权威文件入口。

@@ -1391,3 +1391,27 @@
 - `node --check electron\services\knowledgeBaseStore.cjs` 通过。
 - `node --check electron\services\knowledgeBaseService.cjs` 通过。
 - `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+
+## Current Task: client 开发说明精简整理
+
+### Goal
+按“快速理解架构、统一协作规范、组件复用和验证标准”的目标，精简 `client/开发说明.md`，删除偏功能实现流水账和过细记录，保留对开发人员与 AI 有长期指导价值的架构边界和约束。
+
+### Phases
+- [completed] 1. 复核当前开发说明中的过细实现记录和过期表述。
+- [completed] 2. 重写文档结构，聚焦技术栈、架构边界、目录职责、Main/IPC/Store、数据存储、后台任务、UI、AI、埋点、发布和验证标准。
+- [completed] 3. 保留近期关键协作约束：Main 后台任务、SQLite Store、大文本文件化、项目内 Dialog、Toast、埋点不可删、Electron native 验证。
+- [completed] 4. 运行文档 diff 检查。
+
+### Decisions
+- 删除 preload API 全量清单，改为以 `src/shared/types/ipc.ts` 为 bridge 类型权威。
+- 删除技术方案 Step04、发布细节等过细流水账，只保留可长期复用的原则和入口。
+- 保留知识库迁移的核心协作规则，但把详细实现指向 `client/doc/sqlite改造方案_知识库.md`。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 首次覆盖文档的 patch 缺少结束标记 | 第一次 apply_patch | 重新提交完整 Delete/Add patch 后成功 |
+
+### Validation
+- `git diff --check -- client/开发说明.md` 通过，仅有 LF/CRLF 提示。
