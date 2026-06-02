@@ -105,7 +105,7 @@ export function buildRequirementGroupsMessages(requirements: string, suggestions
       content: `你是一个专业的招标文件分析专家。请从技术评分要求中提取适合作为技术标一级目录的评分大类。
 
 要求：
-1. 只提取技术评分大类，不要提取商务、报价、资质、售后服务等非技术类条目。
+1. 只提取技术评分大类，不要提取商务、报价、资质等非技术类条目。
 2. 每个大类都必须适合作为技术标一级目录标题，标题要专业、简洁、完整。
 3. 同一大类下的细项、子项、分值说明、评分标准要归入 detail_points，不要拆成多个一级目录。
 4. requirement_id 必须唯一，使用 R1、R2、R3 这种格式。
