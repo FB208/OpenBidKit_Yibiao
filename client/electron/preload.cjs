@@ -39,6 +39,8 @@ const bridge = {
     selectDuplicateCheckFiles: (options) => ipcRenderer.invoke('file:select-duplicate-check-files', options),
   },
   knowledgeBase: {
+    getMigrationStatus: () => ipcRenderer.invoke('knowledge-base:get-migration-status'),
+    migrateLegacy: () => ipcRenderer.invoke('knowledge-base:migrate-legacy'),
     list: () => ipcRenderer.invoke('knowledge-base:list'),
     createFolder: (name) => ipcRenderer.invoke('knowledge-base:create-folder', name),
     renameFolder: (folderId, name) => ipcRenderer.invoke('knowledge-base:rename-folder', folderId, name),

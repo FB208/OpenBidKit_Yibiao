@@ -33,7 +33,7 @@
 
 本次不纳入范围：
 
-- 知识库存储迁移。
+- 知识库存储迁移，另见 `client/doc/sqlite改造方案_知识库.md`。
 - 配置 `user_config.json` 迁移。
 - 旧 `duplicate_check.json` / `rejection_check.json` 数据迁移。
 - AI prompt、算法和 UI 视觉重构。
@@ -127,8 +127,8 @@ SQL 说明文件：
 
 - 将根目录 `sql/technical_plan_schema.sql` 重命名为 `sql/workspace_schema.sql`。
 - 文件内容调整为工作区 SQLite 最新完整结构说明。
-- 包含已落地的 `technical_plan_*` 表和本方案目标新增的 `duplicate_check_*`、`rejection_check_*` 表。
-- 文件顶部必须注明：运行时代码尚未完成 v2 migration 前，以代码 schema version 为准。
+- 包含已落地的 `technical_plan_*` 表、本方案目标新增的 `duplicate_check_*`、`rejection_check_*` 表，以及后续知识库 v3 目标表。
+- 文件顶部必须注明：运行时代码以 Electron Main 侧 migration 为准，说明文件可能先记录下一阶段目标结构。
 
 ## 5. 标书查重表设计
 

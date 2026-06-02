@@ -16,6 +16,7 @@ const { createDuplicateCheckStore } = require('../services/duplicateCheckStore.c
 const { createExportService } = require('../services/exportService.cjs');
 const { createFileService } = require('../services/fileService.cjs');
 const { createKnowledgeBaseService } = require('../services/knowledgeBaseService.cjs');
+const { createKnowledgeBaseStore } = require('../services/knowledgeBaseStore.cjs');
 const { createRejectionCheckStore } = require('../services/rejectionCheckStore.cjs');
 const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
@@ -35,12 +36,12 @@ function normalizeExternalUrl(value) {
 }
 
 function registerUnavailableTechnicalPlanIpc(error) {
-  const message = `技术方案数据库初始化失败：${error?.message || String(error)}`;
+  const message = `工作区数据库初始化失败：${error?.message || String(error)}`;
   const throwUnavailable = () => {
     throw new Error(message);
   };
 
-  console.error('[ipc] 技术方案数据库初始化失败', error);
+  console.error('[ipc] 工作区数据库初始化失败', error);
   [
     'technical-plan:load-state',
     'technical-plan:import-tender-document',
@@ -63,6 +64,18 @@ function registerUnavailableTechnicalPlanIpc(error) {
     'rejection-check:save-ui-state',
     'rejection-check:update-state',
     'rejection-check:clear',
+    'knowledge-base:get-migration-status',
+    'knowledge-base:migrate-legacy',
+    'knowledge-base:list',
+    'knowledge-base:create-folder',
+    'knowledge-base:rename-folder',
+    'knowledge-base:delete-folder',
+    'knowledge-base:delete-document',
+    'knowledge-base:upload-documents',
+    'knowledge-base:start-matching',
+    'knowledge-base:read-markdown',
+    'knowledge-base:read-items',
+    'knowledge-base:read-analysis',
     'tasks:start-bid-analysis',
     'tasks:start-outline-generation',
     'tasks:start-content-generation',
@@ -80,21 +93,22 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const aiService = createAiService({ app, configStore });
   const fileService = createFileService({ app, configStore });
   const exportService = createExportService();
-  const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore });
 
   registerConfigIpc({ configStore, aiService });
   registerAiIpc({ aiService });
   registerFileIpc({ fileService });
-  registerKnowledgeBaseIpc({ knowledgeBaseService });
   registerExportIpc({ exportService });
 
   try {
     const sqliteDatabase = createSqliteDatabase(app);
+    const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
+    const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
     const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService });
     const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db });
     const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore });
     const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
     const taskService = createTaskService({ aiService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
+    registerKnowledgeBaseIpc({ knowledgeBaseService });
     registerTechnicalPlanIpc({ technicalPlanStore });
     registerDuplicateCheckIpc({ duplicateCheckStore });
     registerRejectionCheckIpc({ rejectionCheckStore });

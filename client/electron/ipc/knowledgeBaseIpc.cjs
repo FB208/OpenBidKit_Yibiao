@@ -1,6 +1,8 @@
 const { ipcMain } = require('electron');
 
 function registerKnowledgeBaseIpc({ knowledgeBaseService }) {
+  ipcMain.handle('knowledge-base:get-migration-status', () => knowledgeBaseService.getMigrationStatus());
+  ipcMain.handle('knowledge-base:migrate-legacy', () => knowledgeBaseService.migrateLegacy());
   ipcMain.handle('knowledge-base:list', () => knowledgeBaseService.list());
   ipcMain.handle('knowledge-base:create-folder', (_event, name) => knowledgeBaseService.createFolder(name));
   ipcMain.handle('knowledge-base:rename-folder', (_event, folderId, name) => knowledgeBaseService.renameFolder(folderId, name));

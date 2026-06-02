@@ -4,7 +4,7 @@
 -- 1. 本文件用于开源开发者阅读、评审和排查问题，展示 workspace/yibiao.sqlite 的目标完整表结构。
 -- 2. 用户运行客户端时不需要手动执行本文件。
 -- 3. 客户端运行时建表和升级以 Electron Main 侧 migration 代码为准。
--- 4. 当前代码已落地 technical_plan_* v1 以及 duplicate_check_* / rejection_check_* v2。
+-- 4. 当前运行代码已落地 technical_plan_* v1 以及 duplicate_check_* / rejection_check_* v2；本文件补充 knowledge_* v3 目标结构。
 -- 5. 每次表结构调整后，需要同步更新本文件和 runtime migration 版本。
 -- 6. 本文件不保存历史版本，每次更新都写入最新目标完整结构。
 
@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -471,3 +471,186 @@ CREATE TABLE IF NOT EXISTS rejection_check_logic_findings (
 
 CREATE INDEX IF NOT EXISTS idx_rejection_check_logic_order
 ON rejection_check_logic_findings(sort_order);
+
+-- ============================================================================
+-- 知识库 knowledge_*（v3 目标设计）
+-- ============================================================================
+
+-- 旧知识库数据迁移状态。
+-- 旧数据来源是 userData/workspace/knowledge-base/index.json 和每文档结果 JSON。
+-- 用户进入知识库页面后确认迁移；迁移成功并校验后删除旧 index.json 和每文档结果 JSON。
+CREATE TABLE IF NOT EXISTS knowledge_migration_meta (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  legacy_index_hash TEXT,
+  status TEXT NOT NULL DEFAULT 'idle',
+  migrated_folder_count INTEGER NOT NULL DEFAULT 0,
+  migrated_document_count INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT,
+  completed_at TEXT,
+  cleanup_completed_at TEXT,
+  error TEXT
+);
+
+-- 知识库文件夹。
+CREATE TABLE IF NOT EXISTS knowledge_folders (
+  folder_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_folders_order
+ON knowledge_folders(sort_order, created_at);
+
+-- 知识库文档元数据和处理状态。
+-- 原始文件和 Markdown 原文仍保存在 knowledge-base/folders/<folderId>/documents/<documentId>/ 下。
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+  document_id TEXT PRIMARY KEY,
+  folder_id TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  document_dir TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  markdown_path TEXT NOT NULL,
+  markdown_hash TEXT,
+  markdown_chars INTEGER NOT NULL DEFAULT 0,
+  source_extension TEXT,
+  status TEXT NOT NULL,
+  progress INTEGER NOT NULL DEFAULT 0,
+  message TEXT NOT NULL DEFAULT '',
+  error TEXT,
+  item_count INTEGER NOT NULL DEFAULT 0,
+  block_count INTEGER NOT NULL DEFAULT 0,
+  filtered_block_count INTEGER NOT NULL DEFAULT 0,
+  candidate_item_count INTEGER NOT NULL DEFAULT 0,
+  discarded_block_count INTEGER NOT NULL DEFAULT 0,
+  system_discarded_after_retry_count INTEGER NOT NULL DEFAULT 0,
+  last_batch_size INTEGER,
+  parser_label TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (folder_id) REFERENCES knowledge_folders(folder_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_folder_order
+ON knowledge_documents(folder_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_status
+ON knowledge_documents(status);
+
+-- 知识库有效 block 和筛除 block。
+-- is_filtered = 0 表示进入 AI 分析的有效 block；is_filtered = 1 表示程序筛除的 block。
+CREATE TABLE IF NOT EXISTS knowledge_blocks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id TEXT NOT NULL,
+  block_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  heading_path_json TEXT,
+  content TEXT NOT NULL,
+  content_chars INTEGER NOT NULL DEFAULT 0,
+  is_filtered INTEGER NOT NULL DEFAULT 0,
+  filter_reason TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (document_id) REFERENCES knowledge_documents(document_id) ON DELETE CASCADE,
+  UNIQUE(document_id, block_id, is_filtered)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_blocks_document_order
+ON knowledge_blocks(document_id, is_filtered, sort_order);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_blocks_block_id
+ON knowledge_blocks(document_id, block_id);
+
+-- 知识库候选条目。
+-- 来源包括首轮提取、补充提取和补漏新增；当前实现可先用 source 记录 first/supplement/recovery。
+CREATE TABLE IF NOT EXISTS knowledge_candidate_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  source TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (document_id) REFERENCES knowledge_documents(document_id) ON DELETE CASCADE,
+  UNIQUE(document_id, item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_candidate_items_document_order
+ON knowledge_candidate_items(document_id, sort_order);
+
+-- 知识库最终条目。
+-- item_id 仍保持单文档内 K000001 形式；跨文档引用由服务层返回 documentId::itemId。
+CREATE TABLE IF NOT EXISTS knowledge_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  resume TEXT NOT NULL,
+  content TEXT NOT NULL,
+  source_file TEXT,
+  content_chars INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (document_id) REFERENCES knowledge_documents(document_id) ON DELETE CASCADE,
+  UNIQUE(document_id, item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_items_document_order
+ON knowledge_items(document_id, sort_order);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_items_title
+ON knowledge_items(title);
+
+-- 最终条目引用的来源 block。
+CREATE TABLE IF NOT EXISTS knowledge_item_blocks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  block_id TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (document_id) REFERENCES knowledge_documents(document_id) ON DELETE CASCADE,
+  UNIQUE(document_id, item_id, block_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_item_blocks_item_order
+ON knowledge_item_blocks(document_id, item_id, sort_order);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_item_blocks_block
+ON knowledge_item_blocks(document_id, block_id);
+
+-- AI 舍弃和系统重试后舍弃的 block 组。
+-- source: ai / system。
+CREATE TABLE IF NOT EXISTS knowledge_discarded_groups (
+  group_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  block_ids_json TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (document_id) REFERENCES knowledge_documents(document_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_discarded_document_order
+ON knowledge_discarded_groups(document_id, source, sort_order);
+
+-- 知识库分析报告。
+CREATE TABLE IF NOT EXISTS knowledge_reports (
+  document_id TEXT PRIMARY KEY,
+  total_blocks INTEGER NOT NULL DEFAULT 0,
+  filtered_blocks_count INTEGER NOT NULL DEFAULT 0,
+  candidate_items_count INTEGER NOT NULL DEFAULT 0,
+  final_items_count INTEGER NOT NULL DEFAULT 0,
+  matched_blocks_count INTEGER NOT NULL DEFAULT 0,
+  discarded_blocks_count INTEGER NOT NULL DEFAULT 0,
+  system_discarded_after_retry_count INTEGER NOT NULL DEFAULT 0,
+  new_items_from_recovery_count INTEGER NOT NULL DEFAULT 0,
+  recovery_attempt_count INTEGER NOT NULL DEFAULT 0,
+  batch_size INTEGER NOT NULL DEFAULT 20,
+  coverage_rate REAL NOT NULL DEFAULT 0,
+  matched_rate REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (document_id) REFERENCES knowledge_documents(document_id) ON DELETE CASCADE
+);
