@@ -152,3 +152,4 @@
 - 已确认评审指出的知识库迁移 stale running 首屏问题成立，并按用户确认改为只迁移旧版 `status = success` 文档：`migrateLegacy()` 迁移前统计已完成/跳过数量，非完成或未知状态文档不写入 SQLite，返回跳过数量；Service 迁移后重新执行恢复和 `list()`，避免返回过期运行态；页面确认框明确提示未完成或处理中的文档会被丢弃。验证通过 CJS 语法检查、既有知识库迁移 smoke、回归 smoke、新增 skip smoke、`npm run build`。
 - 已将知识库迁移确认从系统 `window.confirm` 替换为项目内 Radix Dialog：页面检测到旧索引后打开统一风格弹窗，排版为标题、旧版不再支持继续处理提示、迁移规则警告和三列统计；文案明确建议未完成文档需回退旧版本解析为“已完成”后再更新。补充移动端单列样式，更新开发说明和知识库迁移方案。验证通过 CJS 语法检查和 `npm run build`，构建仅有既有 chunk 体积警告。
 - 已按用户要求精简 `client/开发说明.md`：保留技术栈、架构边界、目录职责、Main/IPC/Store、数据存储、后台任务、UI 复用、AI/Prompt、埋点、发布和验证标准；删除 preload API 全量清单、过细功能流水账和重复实现说明。验证通过 `git diff --check -- client/开发说明.md`，仅有 LF/CRLF 提示。
+- 已完成 SQLite 重构后埋点排查并按用户取舍优化：不为一次性知识库迁移弹窗/迁移动作新增埋点；确认 Main 侧 `ai_request` 链路仍由 `aiService.chat()` / `generateImage()` 统一上报；修复技术方案页子步骤 `page_view` 在 SQLite 状态异步恢复前误报默认 `technical-plan/document-analysis` 的问题。验证通过 `cd client; npm run build` 和 `git diff --check`，仅有既有 chunk 体积警告与 LF/CRLF 提示。
