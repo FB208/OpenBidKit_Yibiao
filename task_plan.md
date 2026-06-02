@@ -1,5 +1,75 @@
 # Task Plan
 
+## Current Task: Step05 全文一致性审计
+
+### Goal
+在技术方案 Step05 正文生成中新增可选“全文一致性审计”：默认开启，正文扩写完成后、配图前按目录顺序分组审计正文与 Step04 全局事实/Step02 关键解析项是否冲突；发现冲突后按小节并发执行 opencode 风格的 `old_text/new_text` 精确唯一局部替换修复，单章重新生成也执行同范围审计。
+
+### Phases
+- [completed] 1. 扩展正文生成配置、任务 stats 类型、前端配置开关、payload 和配置使用埋点。
+- [completed] 2. 新增审计分组、审计 prompt、审计 JSON 归一化和修复 prompt。
+- [completed] 3. 新增 `old_text/new_text` 精确唯一替换算法，行号辅助定位，找不到或多处命中时拒绝修改并重试。
+- [completed] 4. 将审计/修复插入最低字数补足之后、配图之前，并覆盖单章重新生成。
+- [completed] 5. 更新中断恢复阶段识别 `auditing`，运行 CJS 语法检查和客户端构建。
+- [completed] 6. 运行最终 `git diff --check`。
+
+### Decisions
+- 审计默认开启；暂停状态下保持现有规则，只允许改正文生成并发速度。
+- 分组阈值按正文内容 30 万字计算，目录编号/标题只进入 prompt，不参与总字数计算。
+- 审计失败或修复失败不让正文任务整体失败；失败小节只记录日志，后续仍进入配图。
+- 修复阶段不做模糊匹配、不做 replaceAll、不按相似度猜测；`old_text` 必须在当前小节唯一命中。
+- 修复后若全文低于最低字数，会补足一次并再做一次一致性复审，避免死循环。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 配置弹窗首次补丁上下文不匹配 | 插入“全文一致性审计”开关 | 重新读取配置片段后用更小范围补丁插入 |
+
+## Current Task: Step05 正文编排事实选择改造
+
+### Goal
+改造技术方案 Step05 正文生成：编排阶段额外读取 Step02 项目信息、甲方信息、交货和服务要求，并只传 Step04 全局事实标题，要求 AI 判断当前小节正文会用到哪些事实；正文生成、单章重新生成和扩写阶段再按编排结果传入所需事实的标题和详情，保证事实口径统一。
+
+### Phases
+- [completed] 1. 扩展正文编排结果结构，新增 `facts.titles` 并同步 Renderer 类型。
+- [completed] 2. 编排 prompt 增加 Step02 三项关键解析结果和 Step04 全局事实标题清单。
+- [completed] 3. 正文生成按 `facts.titles` 解析事实标题+内容详情并注入 prompt；旧编排缓存缺少 facts 时视为需要重新编排。
+- [completed] 4. 单章重新生成、正文扩写和 Mermaid 修复按当前章节编排结果注入选中事实详情。
+- [completed] 5. 运行 `node --check`、`npm run build` 和 `git diff --check`。
+
+### Decisions
+- 编排阶段只暴露全局事实标题，不暴露事实内容，避免编排请求携带过多大文本。
+- 正文生成和扩写阶段只传当前章节编排选中的事实详情，不再整包注入全部全局事实。
+- 旧 `contentGenerationPlans` 若没有 `facts` 字段，则在新流程中不复用，单章重新生成会重新编排目标章节。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: Step04 全局事实设定
+
+### Goal
+在技术方案 Step03 目录生成后新增 Step04“全局事实设定”，自动基于招标文件 Markdown、已生成目录和选中知识库完整条目生成全文一致性事实；支持用户编辑；只有全局事实完成后才能进入后续正文生成，并将事实注入后续正文编排/生成/扩写，减少全文逻辑冲突。
+
+### Phases
+- [completed] 1. 扩展技术方案步骤、类型、SQLite schema、Store 和 IPC/preload 基础能力。
+- [completed] 2. 新增 Main 侧全局事实两轮 AI 后台任务及任务组接入。
+- [completed] 3. 新增 Step04 Renderer 页面，支持自动启动、左侧大项进度、右侧 Markdown 编辑/预览/保存/重解析。
+- [completed] 4. 将全局事实注入正文编排、正文生成、补目录、正文扩写和 Mermaid 修复等后续任务，并补 Main 侧前置校验。
+- [completed] 5. 更新样式、SQL 说明和步骤序号，运行 CJS 语法检查与客户端构建。
+
+### Decisions
+- Step04 使用独立 SQLite 表 `technical_plan_global_fact_groups`，按大项保存 Markdown 内容，便于左侧大项列表和右侧编辑。
+- 全局事实 AI 任务两轮执行：第一轮生成完整大项和内容，第二轮只返回补充 patch，程序按目标大项合并。
+- 进入 Step04 内容为空时自动启动；失败后不自动无限重试，由页面提供重新解析。
+- 目录重新生成或招标解析强制重跑会清空全局事实和后续正文缓存。
+- 用户保存编辑后的全局事实会清空后续正文缓存，避免旧正文继续引用旧事实。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| `taskService.cjs` 首次补丁只落了启动入口和事件字段，缺少 runner 导入和任务定义 | 第一次任务服务接入补丁 | 改用小范围精确补丁补上 `runGlobalFactsTask` 导入、`global-facts-generation` 定义和正文任务 Step 05 |
+
 ## Current Task: 技术方案 SQLite 存储改造
 
 ### Goal

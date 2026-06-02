@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
 const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
+const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
 const { runOutlineGenerationTask } = require('./outlineGenerationTask.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
 
@@ -23,11 +24,20 @@ const taskDefinitions = {
     stateKey: 'technicalPlan',
     field: 'outlineGenerationTask',
   },
+  'global-facts-generation': {
+    label: '全局事实设定',
+    group: 'technical-plan',
+    groupLabel: '技术方案',
+    step: 4,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'technicalPlan',
+    field: 'globalFactsTask',
+  },
   'content-generation': {
     label: '正文生成',
     group: 'technical-plan',
     groupLabel: '技术方案',
-    step: 4,
+    step: 5,
     lockPolicy: 'group-exclusive',
     stateKey: 'technicalPlan',
     field: 'contentGenerationTask',
@@ -162,10 +172,10 @@ function inferContentGenerationPhase(technicalPlan) {
   const taskContent = technicalPlan?.contentGenerationTask?.stats?.content || {};
   const taskPhase = taskContent.phase;
   const runtimePhase = technicalPlan?.contentGenerationRuntime?.phase;
-  if (['outline-expanding', 'expanding', 'illustrating'].includes(taskPhase)) {
+  if (['outline-expanding', 'expanding', 'auditing', 'illustrating'].includes(taskPhase)) {
     return taskPhase;
   }
-  if (['planning', 'generating', 'outline-expanding', 'expanding', 'illustrating'].includes(runtimePhase)) {
+  if (['planning', 'generating', 'outline-expanding', 'expanding', 'auditing', 'illustrating'].includes(runtimePhase)) {
     return runtimePhase;
   }
 
@@ -231,6 +241,8 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
         copyPatchFields(patch, state, [
           'outlineData',
           'outlineGenerationTask',
+          'globalFactsTask',
+          'globalFacts',
           'contentGenerationTask',
           'contentGenerationOptions',
           'contentGenerationSections',
@@ -245,6 +257,20 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
       if (task.status === 'success' || state.outlineData === null || hasOwn(eventPatch, 'outlineData')) {
         copyPatchFields(patch, state, [
           'outlineData',
+          'globalFactsTask',
+          'globalFacts',
+          'contentGenerationTask',
+          'contentGenerationSections',
+          'contentGenerationPlans',
+          'contentGenerationRuntime',
+        ]);
+      }
+    }
+
+    if (task.type === 'global-facts-generation') {
+      copyPatchFields(patch, state, ['globalFacts']);
+      if (!isActiveTaskStatus(task.status)) {
+        copyPatchFields(patch, state, [
           'contentGenerationTask',
           'contentGenerationSections',
           'contentGenerationPlans',
@@ -524,6 +550,30 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
     emit(pausedTask, buildSnapshot(getTaskDefinition('content-generation'), state, pausedTask));
   }
 
+  function recoverInterruptedGlobalFactsTask() {
+    if (activeTasks.has('global-facts-generation')) {
+      return;
+    }
+
+    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
+    const globalFactsTask = technicalPlan.globalFactsTask;
+    if (!isActiveTaskStatus(globalFactsTask?.status)) {
+      return;
+    }
+
+    const message = '上次全局事实设定未完成，请重新解析';
+    const recoveredTask = {
+      ...globalFactsTask,
+      status: 'error',
+      progress: 100,
+      error: message,
+      logs: [...(Array.isArray(globalFactsTask.logs) ? globalFactsTask.logs : []), message],
+      updated_at: now(),
+    };
+    const state = technicalPlanStore.updateTechnicalPlan({ globalFactsTask: recoveredTask });
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('global-facts-generation'), state, recoveredTask));
+  }
+
   function recoverInterruptedRejectionCheckTasks() {
     const staleExtractionMessage = '上次解析未完成，请重新解析';
     const staleCheckMessage = '上次检查未完成，请重新检查';
@@ -606,6 +656,17 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
         outlineMode: payload?.mode,
         referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
         outlineData: null,
+        globalFactsTask: undefined,
+        globalFacts: [],
+        contentGenerationTask: undefined,
+        contentGenerationSections: {},
+        contentGenerationPlans: {},
+        contentGenerationRuntime: undefined,
+      });
+    },
+    startGlobalFactsGeneration(payload) {
+      return startManagedTask('global-facts-generation', payload, runGlobalFactsTask, {
+        globalFacts: [],
         contentGenerationTask: undefined,
         contentGenerationSections: {},
         contentGenerationPlans: {},
@@ -644,6 +705,7 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
     },
     getActiveTasks() {
       recoverInterruptedContentGenerationTask();
+      recoverInterruptedGlobalFactsTask();
       recoverInterruptedRejectionCheckTasks();
       recoverInterruptedDuplicateCheckTask();
       return Array.from(activeTasks.values());

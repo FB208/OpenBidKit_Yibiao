@@ -1,3 +1,5 @@
+const { getBidAnalysisTasks } = require('./bidAnalysisTask.cjs');
+
 function formatSuggestions(suggestions) {
   if (!suggestions?.length) return '';
   return `\n\n本轮修正建议：\n${suggestions.map((item, index) => `${index + 1}. ${item}`).join('\n')}`;
@@ -38,6 +40,16 @@ function collectKnowledgeAdditionParents(items) {
   }
   visit(items || []);
   return parents;
+}
+
+function getMissingRequiredBidAnalysisLabels(storedPlan) {
+  const bidAnalysisTasks = storedPlan?.bidAnalysisTasks || {};
+  return getBidAnalysisTasks('key')
+    .filter((task) => {
+      const state = bidAnalysisTasks[task.id];
+      return state?.status !== 'success' || !String(state.content || '').trim();
+    })
+    .map((task) => task.label);
 }
 
 function formatKnowledgeAdditionParents(parents) {
@@ -987,8 +999,9 @@ async function runOutlineGenerationTask({ aiService, workspaceStore, knowledgeBa
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
   const overview = storedPlan.projectOverview || '';
   const requirements = storedPlan.techRequirements || '';
-  if (!overview || !requirements) {
-    throw new Error('请先完成招标文件解析，再生成目录');
+  const missingRequiredBidAnalysisLabels = getMissingRequiredBidAnalysisLabels(storedPlan);
+  if (missingRequiredBidAnalysisLabels.length) {
+    throw new Error(`请先完成关键招标文件解析项：${missingRequiredBidAnalysisLabels.join('、')}`);
   }
   let technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineMode: payload.mode,
@@ -1007,6 +1020,8 @@ async function runOutlineGenerationTask({ aiService, workspaceStore, knowledgeBa
   outline = await enhanceOutlineWithKnowledgeAdditions(aiService, taskPayload, outline, knowledgeItems, log);
   technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineData: { ...outline, project_overview: overview },
+    globalFactsTask: undefined,
+    globalFacts: [],
     contentGenerationTask: undefined,
     contentGenerationSections: {},
     contentGenerationPlans: {},

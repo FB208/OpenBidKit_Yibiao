@@ -65,6 +65,7 @@ const defaultContentGenerationOptions: ContentGenerationOptions = {
   tableRequirement: 'heavy',
   minimumWords: 0,
   contentConcurrency: 5,
+  enableConsistencyAudit: true,
 };
 
 function isContentTableRequirement(value: unknown): value is ContentTableRequirement {
@@ -94,6 +95,7 @@ function normalizeGenerationOptions(options: ContentGenerationOptions | undefine
     tableRequirement: isContentTableRequirement(tableRequirement) ? tableRequirement : fallback.tableRequirement,
     minimumWords: Math.max(0, Number.isFinite(requestedMinimumWords) ? Math.round(requestedMinimumWords) : fallback.minimumWords),
     contentConcurrency: Math.max(1, Number.isFinite(requestedContentConcurrency) ? Math.round(requestedContentConcurrency) : fallback.contentConcurrency),
+    enableConsistencyAudit: Boolean(options?.enableConsistencyAudit ?? fallback.enableConsistencyAudit),
   };
 }
 
@@ -352,6 +354,7 @@ function ContentEditPage({
   const planning = phaseVisible && contentStats?.phase === 'planning';
   const outlineExpanding = phaseVisible && contentStats?.phase === 'outline-expanding';
   const expanding = phaseVisible && contentStats?.phase === 'expanding';
+  const auditing = phaseVisible && contentStats?.phase === 'auditing';
   const illustrating = phaseVisible && contentStats?.phase === 'illustrating';
   const outlineMeta = useMemo(() => outlineData?.outline ? buildOutlineMeta(outlineData.outline, sections, planning) : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections]);
   const contentSummary = useMemo(() => leaves.reduce((summary, item) => {
@@ -384,22 +387,35 @@ function ContentEditPage({
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
   const wordExpansionProgress = minimumWords ? Math.min(100, Math.round((currentWords / minimumWords) * 100)) : 0;
+  const auditGroupTotal = contentStats?.audit_group_total || 0;
+  const auditGroupCompleted = contentStats?.audit_group_completed || 0;
+  const auditConflictTotal = contentStats?.audit_conflict_total || 0;
+  const auditFixTotal = contentStats?.audit_fix_total || 0;
+  const auditFixCompleted = contentStats?.audit_fix_completed || 0;
+  const auditFixFailed = contentStats?.audit_fix_failed || 0;
+  const auditProgress = auditFixTotal
+    ? Math.round((auditFixCompleted / auditFixTotal) * 100)
+    : auditGroupTotal
+      ? Math.round((auditGroupCompleted / auditGroupTotal) * 100)
+      : 0;
   const illustrationTotal = contentStats?.illustration_total || 0;
   const illustrationCompleted = contentStats?.illustration_completed || 0;
   const illustrationProgress = illustrationTotal ? Math.round((illustrationCompleted / illustrationTotal) * 100) : 0;
-  const displayProgress = planning ? planningProgress : outlineExpanding ? outlineExpansionProgress : expanding ? wordExpansionProgress : illustrating ? illustrationProgress : progress;
-  const displayProgressLabel = planning ? '编排统计' : outlineExpanding ? '补目录' : expanding ? '扩写进度' : illustrating ? '配图统计' : '生成统计';
+  const displayProgress = planning ? planningProgress : outlineExpanding ? outlineExpansionProgress : expanding ? wordExpansionProgress : auditing ? auditProgress : illustrating ? illustrationProgress : progress;
+  const displayProgressLabel = planning ? '编排统计' : outlineExpanding ? '补目录' : expanding ? '扩写进度' : auditing ? '一致性审计' : illustrating ? '配图统计' : '生成统计';
   const displayProgressCount = planning
     ? `${planningCompleted}/${planningTotal}`
     : outlineExpanding
       ? `${outlineExpansionStepCompleted}/${outlineExpansionStepTotal}`
       : expanding
         ? `${wordExpansionProgress}%`
-        : illustrating
-          ? `${illustrationCompleted}/${illustrationTotal}`
-          : `${completedCount}/${leaves.length}`;
-  const progressPhaseLabel = planning ? '正文编排' : outlineExpanding ? '正文补目录' : expanding ? '正文扩写' : illustrating ? '正文配图' : '正文生成';
-  const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${outlineExpanding ? ' is-outline-expanding' : ''}${illustrating ? ' is-illustrating' : ''}${taskInFlight && (planning || outlineExpanding || expanding || illustrating) ? ' is-active' : ''}`;
+        : auditing
+          ? auditFixTotal ? `${auditFixCompleted}/${auditFixTotal}` : `${auditGroupCompleted}/${auditGroupTotal}`
+          : illustrating
+            ? `${illustrationCompleted}/${illustrationTotal}`
+            : `${completedCount}/${leaves.length}`;
+  const progressPhaseLabel = planning ? '正文编排' : outlineExpanding ? '正文补目录' : expanding ? '正文扩写' : auditing ? '全文一致性审计' : illustrating ? '正文配图' : '正文生成';
+  const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${outlineExpanding ? ' is-outline-expanding' : ''}${auditing ? ' is-auditing' : ''}${illustrating ? ' is-illustrating' : ''}${taskInFlight && (planning || outlineExpanding || expanding || auditing || illustrating) ? ' is-active' : ''}`;
   const progressDescription = taskFailed
     ? minimumWordsUnmet
       ? `正文扩写失败：当前 ${currentWords}/${minimumWords} 字。${taskErrorMessage}`
@@ -412,17 +428,23 @@ function ContentEditPage({
         : `正在补目录，第 ${outlineExpansionRound}/${outlineExpansionRoundTotal} 轮：${outlineExpansionStepLabel || `已完成 ${outlineExpansionCompleted}/${outlineExpansionTotal} 轮`}`
       : expanding
         ? paused ? `正文生成已暂停在扩写阶段，最低字数达成 ${wordExpansionProgress}%。` : `正在扩写正文，最低字数达成 ${wordExpansionProgress}%。`
-        : illustrating
-          ? paused ? `正文生成已暂停在配图阶段，已完成 ${illustrationCompleted}/${illustrationTotal} 张。` : `正在生成配图，已完成 ${illustrationCompleted}/${illustrationTotal} 张。`
-          : pausing
-            ? '正在暂停正文生成，已发出的 AI 请求完成后会停止调度新任务。'
-            : running
-              ? latestTaskLog || '正文生成任务正在运行。'
-              : paused
-                ? '正文生成已暂停，可导出当前已完成内容或点击继续。'
-                : completedCount
-                  ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。`
-                  : '点击生成正文后，目录会实时显示每个小节状态。';
+        : auditing
+          ? paused
+            ? `正文生成已暂停在一致性审计阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 组，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
+            : auditFixTotal
+              ? `正在修复一致性冲突，已完成 ${auditFixCompleted}/${auditFixTotal} 个小节${auditFixFailed ? `，${auditFixFailed} 个需人工核对` : ''}。`
+              : `正在审计全文一致性，已完成 ${auditGroupCompleted}/${auditGroupTotal} 组${auditConflictTotal ? `，发现 ${auditConflictTotal} 个冲突小节` : ''}。`
+          : illustrating
+            ? paused ? `正文生成已暂停在配图阶段，已完成 ${illustrationCompleted}/${illustrationTotal} 张。` : `正在生成配图，已完成 ${illustrationCompleted}/${illustrationTotal} 张。`
+            : pausing
+              ? '正在暂停正文生成，已发出的 AI 请求完成后会停止调度新任务。'
+              : running
+                ? latestTaskLog || '正文生成任务正在运行。'
+                : paused
+                  ? '正文生成已暂停，可导出当前已完成内容或点击继续。'
+                  : completedCount
+                    ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。`
+                    : '点击生成正文后，目录会实时显示每个小节状态。';
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
   const generationButtonLabel = pausing
     ? '正在暂停中...'
@@ -646,6 +668,7 @@ function ContentEditPage({
         tableRequirement: savedGenerationOptions.tableRequirement,
         minimumWords: savedGenerationOptions.minimumWords,
         contentConcurrency: savedGenerationOptions.contentConcurrency,
+        enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
       },
     });
     trackConfigUsage({
@@ -655,6 +678,7 @@ function ContentEditPage({
       content_concurrency: savedGenerationOptions.contentConcurrency,
       content_generation_action: contentGenerationAction,
       minimum_words: savedGenerationOptions.minimumWords,
+      enable_consistency_audit: savedGenerationOptions.enableConsistencyAudit,
     }, config);
     setGenerationDialogOpen(false);
     setPendingMinimumWordsChoice(null);
@@ -756,6 +780,7 @@ function ContentEditPage({
           useMermaidImages: savedGenerationOptions.useMermaidImages,
           tableRequirement: savedGenerationOptions.tableRequirement,
           contentConcurrency: savedGenerationOptions.contentConcurrency,
+          enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
         },
       });
       trackConfigUsage({
@@ -765,6 +790,7 @@ function ContentEditPage({
         content_concurrency: savedGenerationOptions.contentConcurrency,
         content_generation_action: 'regenerate_section',
         minimum_words: savedGenerationOptions.minimumWords,
+        enable_consistency_audit: savedGenerationOptions.enableConsistencyAudit,
       }, config);
       setSelectedItemId(requirementItem.id);
       setRequirementItem(null);
@@ -888,7 +914,7 @@ function ContentEditPage({
     <div className="plan-step-body content-generation-page">
       <section className="content-generation-command-bar">
         <div>
-          <span className="section-kicker">STEP 04</span>
+          <span className="section-kicker">STEP 05</span>
           <strong>正文生成</strong>
           <p>按目录叶子小节并发生成技术方案正文，页面切换不会中断后台任务。</p>
         </div>
@@ -1058,13 +1084,28 @@ function ContentEditPage({
                   }))}
                 />
               </label>
+              <label className="content-generation-config-row">
+                <span>
+                  <strong>全文一致性审计</strong>
+                  <small>正文扩写完成后，先检查并修复与全局事实冲突的内容，再进入配图。</small>
+                </span>
+                <Switch.Root
+                  className="content-generation-switch"
+                  checked={draftGenerationOptions.enableConsistencyAudit}
+                  disabled={generationStrategyLocked}
+                  onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, enableConsistencyAudit: checked }))}
+                  aria-label="是否启用全文一致性审计"
+                >
+                  <Switch.Thumb className="content-generation-switch-thumb" />
+                </Switch.Root>
+              </label>
               <div className="content-generation-config-row">
                 <span>
                   <strong>正文生成并发速度</strong>
                   <small>
                     AI接口请求的并发速率
                     <DetailHelpLink title="正文生成并发速度说明">
-                      同时发起的正文编排、正文生成和字数扩写请求数，不影响配图。<br/>
+                      同时发起的正文编排、正文生成、字数扩写和一致性审计请求数，不影响配图。<br/>
                       具体并发上限取决于配置的API接口限制，设置过高会报429错误。
                     </DetailHelpLink>
                   </small>

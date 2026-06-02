@@ -3,17 +3,20 @@ import { useEffect, useState } from 'react';
 import DocumentAnalysisPage from './DocumentAnalysisPage';
 import BidAnalysisPage from './BidAnalysisPage';
 import OutlineEditPage from './OutlineEditPage';
+import GlobalFactsPage from './GlobalFactsPage';
 import ContentEditPage from './ContentEditPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
+import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, ContentGenerationOptions, TechnicalPlanStep } from '../types';
+import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, TechnicalPlanStep } from '../types';
 import type { OutlineData, OutlineItem, WordExportProgressEvent } from '../../../shared/types';
 
 const steps: TechnicalPlanStep[] = [
   'document-analysis',
   'bid-analysis',
   'outline-generation',
+  'global-facts',
   'content-edit',
   'expand',
 ];
@@ -22,6 +25,7 @@ const stepLabels: Record<TechnicalPlanStep, string> = {
   'document-analysis': '上传招标文件',
   'bid-analysis': '招标文件解析',
   'outline-generation': '目录生成',
+  'global-facts': '全局事实设定',
   'content-edit': '生成正文',
   expand: '扩写改写',
 };
@@ -38,6 +42,8 @@ const resetState = {
   referenceKnowledgeDocumentIds: [] as string[],
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
+  globalFactsTask: undefined,
+  globalFacts: [] as GlobalFactGroupState[],
   contentGenerationTask: undefined,
   contentGenerationOptions: undefined,
   contentGenerationSections: {},
@@ -80,6 +86,7 @@ const initialExportProgress: ExportProgressState = {
 };
 
 const MAX_UI_TASK_LOGS = 80;
+const requiredBidAnalysisTasks = getBidAnalysisTasks('key');
 
 function hasOwnField<T extends object>(value: T, field: PropertyKey) {
   return Object.prototype.hasOwnProperty.call(value, field);
@@ -91,6 +98,13 @@ function trimTaskLogs(task?: BackgroundTaskState): BackgroundTaskState | undefin
   }
 
   return { ...task, logs: task.logs.slice(-MAX_UI_TASK_LOGS) };
+}
+
+function areRequiredBidAnalysisTasksReady(tasks: BidAnalysisTasks) {
+  return requiredBidAnalysisTasks.every((task) => {
+    const state = tasks[task.id];
+    return state?.status === 'success' && state.content.trim();
+  });
 }
 
 function clearOutlineContent(items: OutlineItem[]): OutlineItem[] {
@@ -125,7 +139,8 @@ function TechnicalPlanHome() {
   const [tenderMarkdown, setTenderMarkdown] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
   const activeIndex = steps.indexOf(state.step);
-  const bidAnalysisReady = Boolean(state.projectOverview && state.techRequirements && state.bidAnalysisProgress === 100);
+  const bidAnalysisReady = areRequiredBidAnalysisTasksReady(state.bidAnalysisTasks);
+  const globalFactsReady = state.globalFacts.length > 0 && state.globalFactsTask?.status === 'success';
   const contentTaskStatus = state.contentGenerationTask?.status;
   const isContentGenerating = contentTaskStatus === 'running' || contentTaskStatus === 'pausing';
   const isContentPaused = contentTaskStatus === 'paused';
@@ -133,16 +148,19 @@ function TechnicalPlanHome() {
   const isNextDisabled = activeIndex >= steps.length - 1
     || (state.step === 'document-analysis' && !state.tenderFile)
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
-    || (state.step === 'outline-generation' && !state.outlineData);
+    || (state.step === 'outline-generation' && !state.outlineData)
+    || (state.step === 'global-facts' && !globalFactsReady);
   const nextTooltip = state.step === 'document-analysis' && !state.tenderFile
     ? '上传完招标文件后才能进入下一步'
     : state.step === 'bid-analysis' && !bidAnalysisReady
       ? '招标文件解析完成后才能进入目录生成'
       : state.step === 'outline-generation' && !state.outlineData
-        ? '目录生成完成后才能进入正文生成'
-        : activeIndex >= steps.length - 1
-          ? '当前已经是最后一步'
-          : `进入${stepLabels[steps[activeIndex + 1]]}`;
+        ? '目录生成完成后才能进入全局事实设定'
+        : state.step === 'global-facts' && !globalFactsReady
+          ? '全局事实设定完成后才能进入正文生成'
+          : activeIndex >= steps.length - 1
+            ? '当前已经是最后一步'
+            : `进入${stepLabels[steps[activeIndex + 1]]}`;
 
   useEffect(() => {
     if (!hydrated) return;
@@ -193,6 +211,8 @@ function TechnicalPlanHome() {
             projectOverview: technicalPlan.projectOverview ?? prev.projectOverview,
             techRequirements: technicalPlan.techRequirements ?? prev.techRequirements,
             outlineGenerationTask: outlineDataReset ? undefined : prev.outlineGenerationTask,
+            globalFactsTask: outlineDataReset ? undefined : prev.globalFactsTask,
+            globalFacts: outlineDataReset ? [] : prev.globalFacts,
             contentGenerationTask: outlineDataReset ? undefined : prev.contentGenerationTask,
             contentGenerationOptions: outlineDataReset ? undefined : prev.contentGenerationOptions,
             contentGenerationSections: outlineDataReset ? {} : prev.contentGenerationSections,
@@ -219,10 +239,26 @@ function TechnicalPlanHome() {
               ? technicalPlan.referenceKnowledgeDocumentIds
               : prev.referenceKnowledgeDocumentIds,
             outlineData: nextOutlineData,
+            globalFactsTask: outlineDataChanged ? undefined : prev.globalFactsTask,
+            globalFacts: outlineDataChanged ? [] : prev.globalFacts,
             contentGenerationTask: outlineDataChanged ? undefined : prev.contentGenerationTask,
             contentGenerationSections: outlineDataChanged ? {} : prev.contentGenerationSections,
             contentGenerationPlans: outlineDataChanged ? {} : prev.contentGenerationPlans,
             contentGenerationRuntime: outlineDataChanged ? undefined : prev.contentGenerationRuntime,
+          };
+        }
+
+        if (taskType === 'global-facts-generation') {
+          const hasGlobalFacts = hasOwnField(technicalPlan, 'globalFacts');
+          const globalFactsChanged = hasGlobalFacts && technicalPlan.globalFacts !== prev.globalFacts;
+          return {
+            ...prev,
+            globalFactsTask: trimTaskLogs(technicalPlan.globalFactsTask) || latestTask,
+            globalFacts: hasGlobalFacts ? (technicalPlan.globalFacts || []) : prev.globalFacts,
+            contentGenerationTask: globalFactsChanged ? undefined : prev.contentGenerationTask,
+            contentGenerationSections: globalFactsChanged ? {} : prev.contentGenerationSections,
+            contentGenerationPlans: globalFactsChanged ? {} : prev.contentGenerationPlans,
+            contentGenerationRuntime: globalFactsChanged ? undefined : prev.contentGenerationRuntime,
           };
         }
 
@@ -405,6 +441,11 @@ function TechnicalPlanHome() {
     setState((prev) => ({ ...prev, ...(saved || {}), contentGenerationOptions }));
   };
 
+  const saveGlobalFacts = async (globalFacts: GlobalFactGroupState[]) => {
+    const saved = await window.yibiao?.technicalPlan.saveGlobalFacts(globalFacts);
+    setState((prev) => ({ ...prev, ...(saved || {}), globalFacts }));
+  };
+
   const generatedContentCount = state.outlineData?.outline
     ? collectLeafItems(state.outlineData.outline).filter((item) => item.content?.trim()).length
     : 0;
@@ -534,6 +575,8 @@ function TechnicalPlanHome() {
             setState((prev) => ({
               ...prev,
               outlineData: nextOutlineData,
+              globalFactsTask: undefined,
+              globalFacts: [],
               contentGenerationTask: undefined,
               contentGenerationSections: {},
               contentGenerationPlans: {},
@@ -545,6 +588,14 @@ function TechnicalPlanHome() {
               showToast(error instanceof Error ? error.message : '保存目录失败', 'error');
             });
           }}
+        />
+      )}
+      {state.step === 'global-facts' && (
+        <GlobalFactsPage
+          outlineData={state.outlineData}
+          globalFacts={state.globalFacts}
+          task={state.globalFactsTask}
+          onGlobalFactsSaved={saveGlobalFacts}
         />
       )}
       {state.step === 'content-edit' && (
@@ -563,7 +614,7 @@ function TechnicalPlanHome() {
             <strong>正在开发中，敬请期待</strong>
             <span>此功能尚未完成，请先不要使用。</span>
           </div>
-          <span className="section-kicker">STEP 05</span>
+          <span className="section-kicker">STEP 06</span>
           <h3>扩写改写</h3>
           <p>后续接入旧方案导入、章节扩写和人工校准。</p>
         </section>

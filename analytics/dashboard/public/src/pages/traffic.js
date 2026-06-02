@@ -7,6 +7,7 @@ const pageLabels = {
   'technical-plan/document-analysis': '技术方案 - 上传招标文件',
   'technical-plan/bid-analysis': '技术方案 - 招标文件解析',
   'technical-plan/outline-generation': '技术方案 - 目录生成',
+  'technical-plan/global-facts': '技术方案 - 全局事实设定',
   'technical-plan/content-edit': '技术方案 - 生成正文',
   'technical-plan/expand': '技术方案 - 扩写改写',
   'business-bid': '商务标',

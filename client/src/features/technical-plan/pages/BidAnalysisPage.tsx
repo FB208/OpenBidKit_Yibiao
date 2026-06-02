@@ -20,7 +20,7 @@ const modeOptions: Array<{ id: BidAnalysisMode; title: string; desc: string; bad
   {
     id: 'key',
     title: '只解析关键项',
-    desc: '项目概述、技术评分要求。适合快速进入目录生成。',
+    desc: '项目概述、技术评分、项目信息、甲方信息、交货和服务要求。',
     badge: '默认',
   },
   {
@@ -32,10 +32,10 @@ const modeOptions: Array<{ id: BidAnalysisMode; title: string; desc: string; bad
 ];
 
 const taskGroups = [
-  { title: '必需项', ids: ['projectOverview', 'techRequirements', 'projectInfo'] },
+  { title: '关键项', ids: ['projectOverview', 'techRequirements', 'projectInfo', 'partAInfo', 'deliveryAndServiceRequirements'] },
   { title: '投标流程', ids: ['keyInfo', 'marginInfo', 'openBid'] },
   { title: '评审要求', ids: ['qualificationReview', 'complianceCheck', 'evaluationBid', 'businessScoring'] },
-  { title: '主体与合同', ids: ['partAInfo', 'agentInfo', 'discardedBids', 'signingProcess', 'terminationCondition'] },
+  { title: '主体与合同', ids: ['agentInfo', 'discardedBids', 'signingProcess', 'terminationCondition'] },
 ];
 
 const statusLabel: Record<BidAnalysisTaskState['status'], string> = {
@@ -93,6 +93,15 @@ const jsonFieldLabels: Record<string, string> = {
   force_majeure: '不可抗力',
   contract_termination: '合同终止',
   dispute_resolution: '争议解决',
+  implementation_period: '实施周期/工期/交付期限',
+  delivery_scope: '交付范围',
+  delivery_location: '交付/实施地点',
+  acceptance_requirements: '验收要求',
+  warranty_period: '质保期',
+  after_sales_service: '售后服务要求',
+  response_time: '响应时限',
+  training_requirements: '培训要求',
+  documentation_requirements: '资料/文档交付要求',
 };
 
 function tryParseJsonObject(content: string): Record<string, unknown> | null {
@@ -163,6 +172,7 @@ function BidAnalysisPage({
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const { showToast } = useToast();
   const selectedTasks = useMemo(() => getBidAnalysisTasks(mode), [mode]);
+  const requiredTasks = useMemo(() => getBidAnalysisTasks('key'), []);
   const visibleSelectedTaskId = selectedTasks.some((task) => task.id === selectedTaskId)
     ? selectedTaskId
     : selectedTasks[0]?.id || 'projectOverview';
@@ -177,12 +187,7 @@ function BidAnalysisPage({
     return status === 'success' || status === 'error';
   }).length;
   const taskRunning = running || fullRerunLocked || task?.status === 'running';
-  const requiredDone = Boolean(
-    tasks.projectOverview?.status === 'success'
-    && tasks.projectOverview.content
-    && tasks.techRequirements?.status === 'success'
-    && tasks.techRequirements.content
-  );
+  const requiredDone = requiredTasks.every((task) => tasks[task.id]?.status === 'success' && tasks[task.id]?.content);
 
   const syncProgressForMode = (nextMode: BidAnalysisMode) => {
     const nextTasks = getBidAnalysisTasks(nextMode);
@@ -306,7 +311,7 @@ function BidAnalysisPage({
                 <div className="content-generation-progress-track" aria-label={`解析进度 ${progress}%`}>
                   <span style={{ width: `${progress}%` }} />
                 </div>
-                <p>{requiredDone && progress === 100 ? '关键项已解析完成，可以进入下一步。' : '等待项目概述和技术评分要求解析成功。'}</p>
+                <p>{requiredDone ? '关键项已解析完成，可以进入下一步。' : '等待项目概述、技术评分、项目信息、甲方信息和交货服务要求解析成功。'}</p>
               </div>
             )}
           </div>

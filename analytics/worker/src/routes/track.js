@@ -40,6 +40,7 @@ export async function handleTrack(request, env) {
     const tableRequirement = normalizeText(body.table_requirement || body.tableRequirement, 50);
     const useMermaidImages = normalizeMetricValue(body.use_mermaid_images ?? body.useMermaidImages, 20);
     const useAiImages = normalizeMetricValue(body.use_ai_images ?? body.useAiImages, 20);
+    const enableConsistencyAudit = normalizeMetricValue(body.enable_consistency_audit ?? body.enableConsistencyAudit, 20);
     const contentConcurrency = normalizeNumberMetricValue(body.content_concurrency ?? body.contentConcurrency, 20);
     const contentGenerationAction = normalizeText(body.content_generation_action || body.contentGenerationAction, 50);
     const minimumWords = normalizeNumberMetricValue(body.minimum_words ?? body.minimumWords, 20);
@@ -55,7 +56,7 @@ export async function handleTrack(request, env) {
     const normalizedTextModelName = textModelName || (aiRequestType === 'text' ? aiModelName : '');
     const normalizedImageModelName = imageModelName || (aiRequestType === 'image' ? aiModelName : '');
     const modelProviderBlob = event === 'ai_request' ? aiModelProvider : fileParserProvider;
-    const modelBaseUrlBlob = event === 'ai_request' ? aiModelBaseUrl : '';
+    const modelBaseUrlBlob = event === 'ai_request' ? aiModelBaseUrl : event === 'config_usage' ? enableConsistencyAudit : '';
     const modelNameBlob = event === 'ai_request' ? aiModelName : imageProvider;
     const requestTypeBlob = event === 'ai_request' ? aiRequestType : imageModelStatus;
     const contentConcurrencyBlob = event === 'config_usage' ? contentConcurrency : normalizedTextModelName;

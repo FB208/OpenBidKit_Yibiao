@@ -23,6 +23,7 @@ interface ConfigUsagePayload {
   content_concurrency?: number;
   content_generation_action?: string;
   minimum_words?: number;
+  enable_consistency_audit?: boolean;
 }
 
 let appOpenTracked = false;
@@ -119,6 +120,7 @@ function normalizeUsagePayload(payload: ConfigUsagePayload) {
     ...payload,
     use_mermaid_images: booleanText(payload.use_mermaid_images),
     use_ai_images: booleanText(payload.use_ai_images),
+    enable_consistency_audit: booleanText(payload.enable_consistency_audit),
   };
 }
 

@@ -24,6 +24,7 @@ function labelConfigValue(groupKey, value) {
     tableRequirements: { none: '不要', light: '少量', moderate: '适中', heavy: '大量' },
     useMermaidImages: { true: '开启', false: '关闭' },
     useAiImages: { true: '开启', false: '关闭' },
+    enableConsistencyAudit: { true: '开启', false: '关闭' },
     contentGenerationActions: {
       start: '首次生成',
       'continue': '继续生成',
@@ -50,6 +51,7 @@ const configUsageGroups = [
   ['minimumWords', '最低字数'],
   ['contentConcurrencies', '正文生成并发速度'],
   ['contentGenerationActions', '正文生成动作'],
+  ['enableConsistencyAudit', '全文一致性审计'],
   ['useMermaidImages', 'Mermaid 图片'],
   ['useAiImages', 'AI 生图'],
 ];

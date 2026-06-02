@@ -1397,6 +1397,263 @@ button {
   overflow: auto;
 }
 
+.global-facts-page {
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.global-facts-command-bar,
+.global-facts-workspace {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(220, 223, 230, 0.88);
+  border-radius: 24px;
+  box-shadow: var(--yb-shadow);
+}
+
+.global-facts-command-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 18px;
+  padding: 22px 24px;
+  background:
+    radial-gradient(circle at 92% 10%, rgba(28, 184, 116, 0.14), transparent 28%),
+    rgba(255, 255, 255, 0.94);
+}
+
+.global-facts-command-bar strong {
+  display: block;
+  margin: 7px 0 5px;
+  color: var(--yb-text);
+  font-size: 24px;
+  letter-spacing: -0.025em;
+}
+
+.global-facts-command-bar p {
+  margin: 0;
+  color: var(--yb-text-soft);
+}
+
+.global-facts-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.global-facts-stats span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 9px 11px;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  font-weight: 800;
+  background: rgba(28, 184, 116, 0.09);
+  border: 1px solid rgba(28, 184, 116, 0.14);
+  border-radius: 999px;
+}
+
+.global-facts-stats strong {
+  margin: 0;
+  color: #0f8f58;
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.global-facts-workspace {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.global-facts-panel,
+.global-facts-reader {
+  min-width: 0;
+  min-height: 0;
+}
+
+.global-facts-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  background: linear-gradient(180deg, rgba(248, 250, 253, 0.86), #ffffff);
+  border-right: 1px solid var(--yb-border-soft);
+}
+
+.global-facts-panel-head {
+  align-items: center;
+  padding: 18px 20px;
+}
+
+.global-facts-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  scrollbar-gutter: stable;
+}
+
+.global-facts-item {
+  display: grid;
+  gap: 5px;
+  padding: 14px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 16px;
+}
+
+.global-facts-item:hover,
+.global-facts-item.is-active {
+  background: #ffffff;
+  border-color: rgba(28, 184, 116, 0.18);
+  box-shadow: 0 10px 28px rgba(23, 32, 51, 0.08);
+}
+
+.global-facts-item strong {
+  overflow: hidden;
+  color: var(--yb-text);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.global-facts-item small {
+  overflow: hidden;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.global-facts-empty-list {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  color: var(--yb-text-soft);
+  text-align: center;
+  background: rgba(248, 250, 253, 0.78);
+  border: 1px dashed var(--yb-border-soft);
+  border-radius: 18px;
+}
+
+.global-facts-empty-list strong {
+  color: var(--yb-text);
+}
+
+.global-facts-empty-list p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.global-facts-panel-actions {
+  padding: 14px 16px;
+  border-top: 1px solid var(--yb-border-soft);
+}
+
+.global-facts-panel-actions .secondary-action {
+  width: 100%;
+}
+
+.global-facts-reader {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.global-facts-reader-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.global-facts-reader-head strong {
+  display: block;
+  margin: 7px 0;
+  color: var(--yb-text);
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.global-facts-reader-head p {
+  margin: 0;
+  color: var(--yb-text-soft);
+  line-height: 1.65;
+}
+
+.global-facts-reader-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.global-facts-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.global-facts-edit-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--yb-border-soft);
+}
+
+.global-facts-edit-pane label {
+  display: grid;
+  gap: 8px;
+  padding: 14px 18px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.global-facts-edit-pane label span {
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.global-facts-edit-pane input {
+  width: 100%;
+  padding: 11px 12px;
+  color: var(--yb-text);
+  font-size: 15px;
+  font-weight: 800;
+  background: rgba(248, 250, 253, 0.86);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 12px;
+  outline: none;
+}
+
+.global-facts-edit-pane input:focus {
+  border-color: rgba(28, 184, 116, 0.45);
+  box-shadow: 0 0 0 3px rgba(28, 184, 116, 0.12);
+}
+
+.global-facts-preview-pane {
+  max-height: none;
+  min-height: 0;
+  overflow: auto;
+  padding: 22px 24px 28px;
+}
+
+.global-facts-empty {
+  min-height: 0;
+  overflow: auto;
+}
+
 .content-generation-page {
   position: relative;
   min-height: 0;
@@ -1536,6 +1793,14 @@ button {
 
 .content-generation-progress-track.is-outline-expanding span {
   background: linear-gradient(90deg, #f59e0b, #f97316);
+}
+
+.content-generation-progress-track.is-auditing {
+  background: rgba(14, 165, 233, 0.13);
+}
+
+.content-generation-progress-track.is-auditing span {
+  background: linear-gradient(90deg, #0ea5e9, #14b8a6);
 }
 
 .content-generation-progress-track.is-illustrating {
@@ -7514,8 +7779,11 @@ button {
   }
 
   .bid-analysis-command-bar,
+  .global-facts-command-bar,
   .rejection-result-command-bar,
   .bid-analysis-workspace,
+  .global-facts-workspace,
+  .global-facts-editor-grid,
   .content-generation-command-bar,
   .content-generation-workspace,
   .outline-command-bar,
@@ -7532,6 +7800,8 @@ button {
   .outline-progress-log,
   .outline-detail-body,
   .bid-analysis-task-list,
+  .global-facts-list,
+  .global-facts-preview-pane,
   .bid-analysis-output,
   .bid-analysis-json-table-wrap,
   .content-outline-list,
@@ -7545,6 +7815,7 @@ button {
   }
 
   .bid-analysis-command-bar,
+  .global-facts-command-bar,
   .rejection-result-command-bar {
     align-items: stretch;
   }
@@ -7554,6 +7825,12 @@ button {
   }
 
   .bid-analysis-task-pane {
+    border-right: 0;
+    border-bottom: 1px solid var(--yb-border-soft);
+  }
+
+  .global-facts-panel,
+  .global-facts-edit-pane {
     border-right: 0;
     border-bottom: 1px solid var(--yb-border-soft);
   }

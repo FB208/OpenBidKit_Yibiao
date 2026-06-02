@@ -4,7 +4,7 @@
 -- 1. 本文件用于开源开发者阅读、评审和排查问题，展示 workspace/yibiao.sqlite 的目标完整表结构。
 -- 2. 用户运行客户端时不需要手动执行本文件。
 -- 3. 客户端运行时建表和升级以 Electron Main 侧 migration 代码为准。
--- 4. 当前运行代码已落地 technical_plan_* v1 以及 duplicate_check_* / rejection_check_* v2；本文件补充 knowledge_* v3 目标结构。
+-- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3 和 technical_plan_global_fact_groups v4 目标结构。
 -- 5. 每次表结构调整后，需要同步更新本文件和 runtime migration 版本。
 -- 6. 本文件不保存历史版本，每次更新都写入最新目标完整结构。
 
@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -124,6 +124,20 @@ CREATE TABLE IF NOT EXISTS technical_plan_content_plans (
   updated_at TEXT NOT NULL,
   FOREIGN KEY (node_id) REFERENCES technical_plan_outline_nodes(node_id) ON DELETE CASCADE
 );
+
+-- 技术方案全局事实大项。
+-- 用于在正文生成前统一约束人员资质、供货周期、金额数字、品牌型号等全文一致性事实。
+CREATE TABLE IF NOT EXISTS technical_plan_global_fact_groups (
+  group_id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_technical_plan_global_fact_groups_order
+ON technical_plan_global_fact_groups(sort_order);
 
 -- ============================================================================
 -- 标书查重 duplicate_check_*（v2 目标设计）

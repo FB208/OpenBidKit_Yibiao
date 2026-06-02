@@ -19,6 +19,8 @@ const initialState = {
   referenceKnowledgeDocumentIds: [],
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
+  globalFactsTask: undefined,
+  globalFacts: [],
   contentGenerationTask: undefined,
   contentGenerationOptions: undefined,
   contentGenerationSections: {},
@@ -30,6 +32,7 @@ const initialState = {
 const taskFieldTypes = {
   bidAnalysisTask: 'bid-analysis',
   outlineGenerationTask: 'outline-generation',
+  globalFactsTask: 'global-facts-generation',
   contentGenerationTask: 'content-generation',
 };
 
@@ -73,7 +76,16 @@ function normalizeStatus(value, allowed, fallback) {
 }
 
 function isValidStep(value) {
-  return ['document-analysis', 'bid-analysis', 'outline-generation', 'content-edit', 'expand'].includes(value);
+  return ['document-analysis', 'bid-analysis', 'outline-generation', 'global-facts', 'content-edit', 'expand'].includes(value);
+}
+
+function normalizeGlobalFactId(value, index) {
+  const id = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_\-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return id || `fact_${String(index + 1).padStart(3, '0')}`;
 }
 
 function isValidBidMode(value) {
@@ -496,6 +508,57 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     }, {});
   }
 
+  function normalizeGlobalFactGroups(groups) {
+    const seen = new Set();
+    return (Array.isArray(groups) ? groups : []).map((group, index) => {
+      const title = String(group?.title || '').trim();
+      const content = String(group?.content || '').trim();
+      if (!title || !content) return null;
+      let id = normalizeGlobalFactId(group?.id || group?.group_id || title, index);
+      let suffix = 2;
+      while (seen.has(id)) {
+        id = `${id}_${suffix}`;
+        suffix += 1;
+      }
+      seen.add(id);
+      return {
+        id,
+        title,
+        content,
+        updated_at: group?.updated_at || group?.updatedAt || now(),
+      };
+    }).filter(Boolean);
+  }
+
+  function loadGlobalFacts() {
+    return db.prepare('SELECT * FROM technical_plan_global_fact_groups ORDER BY sort_order ASC, group_id ASC').all().map((row) => ({
+      id: row.group_id,
+      title: row.title,
+      content: row.content || '',
+      updated_at: row.updated_at || undefined,
+    }));
+  }
+
+  function replaceGlobalFacts(groups) {
+    const normalized = normalizeGlobalFactGroups(groups);
+    db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    if (!normalized.length) return;
+
+    const insert = db.prepare(`
+      INSERT INTO technical_plan_global_fact_groups (group_id, title, content, sort_order, created_at, updated_at)
+      VALUES (@group_id, @title, @content, @sort_order, @created_at, @updated_at)
+    `);
+    const timestamp = now();
+    normalized.forEach((group, index) => insert.run({
+      group_id: group.id,
+      title: group.title,
+      content: group.content,
+      sort_order: index,
+      created_at: timestamp,
+      updated_at: group.updated_at || timestamp,
+    }));
+  }
+
   function saveContentPlans(plans) {
     const entries = Object.entries(plans || {});
     if (!entries.length) {
@@ -534,6 +597,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_bid_items').run();
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
+    db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     updateMeta({
       step: 'document-analysis',
       bid_analysis_mode: 'key',
@@ -546,10 +610,17 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   }
 
   function clearContentGenerationState() {
+    db.prepare("UPDATE technical_plan_outline_nodes SET content = '', updated_at = ?").run(now());
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
     db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'content-generation'").run();
     updateMeta({ content_generation_runtime_json: null });
+  }
+
+  function clearGlobalFactsAndContentState() {
+    db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'global-facts-generation'").run();
+    clearContentGenerationState();
   }
 
   function applyPartial(partial) {
@@ -569,6 +640,10 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     if (hasOwn(partial, 'bidAnalysisTasks')) saveBidItems(partial.bidAnalysisTasks, nextBidMode);
     if (hasOwn(partial, 'projectOverview')) upsertDerivedBidItem('projectOverview', partial.projectOverview, nextBidMode);
     if (hasOwn(partial, 'techRequirements')) upsertDerivedBidItem('techRequirements', partial.techRequirements, nextBidMode);
+    if (hasOwn(partial, 'globalFacts')) {
+      replaceGlobalFacts(partial.globalFacts);
+      clearContentGenerationState();
+    }
 
     for (const [field, type] of Object.entries(taskFieldTypes)) {
       if (hasOwn(partial, field)) saveTask(type, partial[field]);
@@ -615,6 +690,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       outlineMode: isValidOutlineMode(meta.outline_mode) ? meta.outline_mode : 'aligned',
       referenceKnowledgeDocumentIds: loadReferenceDocumentIds(),
       ...tasks,
+      globalFacts: loadGlobalFacts(),
       contentGenerationOptions: safeJsonParse(meta.content_generation_options_json, undefined),
       contentGenerationRuntime: safeJsonParse(meta.content_generation_runtime_json, undefined),
       contentGenerationSections: loadContentSections(outlineData),
@@ -643,7 +719,26 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   function saveOutline(outlineData) {
     const transaction = db.transaction(() => {
       saveOutlineData(clearOutlineDataContent(outlineData));
+      clearGlobalFactsAndContentState();
+    });
+    transaction();
+    return loadTechnicalPlan();
+  }
+
+  function saveGlobalFacts(globalFacts) {
+    const transaction = db.transaction(() => {
+      replaceGlobalFacts(globalFacts);
       clearContentGenerationState();
+      const timestamp = now();
+      saveTask('global-facts-generation', {
+        task_id: `manual-global-facts-${Date.now()}`,
+        type: 'global-facts-generation',
+        status: 'success',
+        progress: 100,
+        logs: ['全局事实已保存。'],
+        started_at: timestamp,
+        updated_at: timestamp,
+      });
     });
     transaction();
     return loadTechnicalPlan();
@@ -724,6 +819,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       db.prepare('DELETE FROM technical_plan_bid_items').run();
       db.prepare('DELETE FROM technical_plan_reference_docs').run();
       db.prepare('DELETE FROM technical_plan_outline_nodes').run();
+      db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
       db.prepare('DELETE FROM technical_plan_meta').run();
       ensureMetaRow();
     });
@@ -744,6 +840,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     updateStep,
     saveOutlineConfig,
     saveOutline,
+    saveGlobalFacts,
     saveContentGenerationOptions,
     saveChapterContent,
   };

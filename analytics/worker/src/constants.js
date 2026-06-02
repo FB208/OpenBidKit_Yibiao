@@ -12,6 +12,7 @@ export const GITHUB_REPO_STATS_STALE_TTL_SECONDS = 604800;
 
 export const CONFIG_USAGE_FIELDS = [
   { key: 'fileParserProviders', blob: 'blob9' },
+  { key: 'enableConsistencyAudit', blob: 'blob10' },
   { key: 'imageProviders', blob: 'blob11' },
   { key: 'imageModelStatuses', blob: 'blob12' },
   { key: 'bidAnalysisModes', blob: 'blob13' },

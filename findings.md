@@ -1,6 +1,19 @@
 # Findings
 
 ## Research Log
+- opencode `edit` 工具实际是 `oldString/newString/replaceAll` 模型：默认不 replaceAll，匹配结果必须唯一；找不到或多处命中会报错并要求提供更多上下文。正文一致性修复不能使用简单 `anchor`，应改为 `old_text/new_text` 精确唯一替换，并在多处命中时拒绝应用。
+- 全文一致性审计在当前正文任务中的最小安全插入点是 `ensureMinimumWords()` 之后、`refreshIllustrationTargetsFromStoredPlans()` / `runIllustrations()` 之前；这样修复后的正文会成为配图和 Word 导出的权威内容。
+- 审计阶段不需要新增任务类型或 SQLite 表：作为 `content-generation` 内部 `stats.content.phase = 'auditing'` 即可，暂停/继续时不保存中间审计结果，恢复后从已落盘正文重新审计更简单稳妥。
+- 修复正文必须同时更新 `outlineData.outline[*].content` 和 `contentGenerationSections[sectionId].content`，复用现有 `saveSection()` 可保持正文展示、导出和任务事件一致。
+- Step04 全局事实设定需要新增 `global-facts` 步骤，当前技术方案步骤只有 `document-analysis/bid-analysis/outline-generation/content-edit/expand`，后台任务类型也只有 `bid-analysis/outline-generation/content-generation`。
+- 技术方案 Store 当前没有全局事实表；新增事实可按 `group_id/title/content/status/sort_order/updated_at` 保存，Main 侧 `loadTechnicalPlan()` 聚合成数组供页面显示。
+- 知识库已有 `knowledgeBaseService.readItems(documentId)` 可读取完整 `title/resume/content` 条目；全局事实任务应使用完整 `content`，不同于 Step03 目录增强的轻量 `resume`。
+- 正文生成当前只把 `projectOverview` 注入正文 prompt，后续一致性控制需要把全局事实同时注入正文编排、正文生成、补目录和扩写相关 prompt，并在 Main 侧阻止未完成事实时启动正文生成。
+- Step03 目录重新生成当前只清空目录和正文缓存；新增全局事实后也必须清空事实缓存和事实任务状态，防止目录变化后事实仍引用旧目录。
+- 全局事实任务接入 `taskService` 必须同时包含 runner 导入、`taskDefinitions` 定义、启动入口和 `buildTechnicalPlanSnapshot()` patch 字段；否则 Renderer 可以调用启动入口，但 Main 会因 `runGlobalFactsTask` 未定义或 task field 缺失导致任务状态无法正确落盘/回放。
+- 全局事实作为 Step04 后，正文生成的最小安全边界是 Main 侧校验 `globalFactsTask.status === 'success'` 且 `globalFacts` 可格式化为非空文本；前端导航 gating 只是体验约束，不能替代 Main 侧保护。
+- Step05 正文编排更适合只传全局事实标题：AI 先判断当前章节需要哪些事实，生成阶段再按 `facts.titles` 注入标题+内容详情，可减少每个编排请求的大文本输入，并避免所有章节无差别携带全部事实。
+- 旧正文编排缓存没有 `facts` 字段，继续复用会导致单章重新生成或扩写拿不到事实选择结果；新流程中 `normalizeStoredContentPlan()` 对缺少 facts 的旧 plan 返回 null，让目标章节重新编排。
 - 技术方案 SQLite 改造当前关键边界：旧 `workspaceStore.cjs` 的 `load/save/update/clearTechnicalPlan` 是所有 Main 任务和 Renderer 缓存的中心入口；本轮应新增 `technicalPlanStore.cjs` 接管技术方案，`workspaceStore.cjs` 最终只保留查重和废标项检查。
 - 技术方案大文本边界：`TechnicalPlanState.fileContent` 和 `BidAnalysisPage.startBidAnalysis({ fileContent })` 是 Renderer 传大文本的主要路径；最佳版本应删除该状态和 payload，由 Main 侧从 `workspace/technical-plan/tender.md` 读取。
 - 技术方案 SQLite 改造已落地的权威边界：`technicalPlanStore.cjs` 负责 SQLite 结构化状态，`workspace/technical-plan/tender.md` 负责招标 Markdown 原文；`workspaceStore.cjs` 不再包含技术方案 JSON 方法。

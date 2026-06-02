@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 3;
+const schemaVersion = 4;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -100,6 +100,34 @@ function createInitialSchema(db) {
       updated_at TEXT NOT NULL,
       FOREIGN KEY (node_id) REFERENCES technical_plan_outline_nodes(node_id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS technical_plan_global_fact_groups (
+      group_id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_technical_plan_global_fact_groups_order
+    ON technical_plan_global_fact_groups(sort_order);
+  `);
+}
+
+function createTechnicalPlanGlobalFactsSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS technical_plan_global_fact_groups (
+      group_id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_technical_plan_global_fact_groups_order
+    ON technical_plan_global_fact_groups(sort_order);
   `);
 }
 
@@ -609,6 +637,11 @@ const migrations = [
     version: 3,
     description: '新增知识库 SQLite 表结构',
     up: createKnowledgeBaseSchema,
+  },
+  {
+    version: 4,
+    description: '新增技术方案全局事实表结构',
+    up: createTechnicalPlanGlobalFactsSchema,
   },
 ];
 

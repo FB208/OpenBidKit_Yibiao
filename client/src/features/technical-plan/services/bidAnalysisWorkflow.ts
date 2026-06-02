@@ -79,7 +79,7 @@ export const bidAnalysisTasks: BidAnalysisTaskDefinition[] = [
     id: 'projectInfo',
     label: '项目信息',
     description: '项目名称、编号、类型、预算和地址。',
-    required: false,
+    required: true,
     output: 'json',
     buildTaskPrompt: () => jsonTask('提取项目信息', '提取项目名称、项目编号、项目类型、项目预算、项目地址。', `{
   "project_name": "项目名称",
@@ -93,13 +93,31 @@ export const bidAnalysisTasks: BidAnalysisTaskDefinition[] = [
     id: 'partAInfo',
     label: '甲方信息',
     description: '招标人公司、地址、联系人和电话。',
-    required: false,
+    required: true,
     output: 'json',
     buildTaskPrompt: () => jsonTask('提取甲方信息', '提取公司名称、地址、联系人、联系电话。', `{
   "company_name": "公司名称",
   "address": "地址",
   "contact_person": "联系人",
   "contact_phone": "联系电话"
+}`),
+  },
+  {
+    id: 'deliveryAndServiceRequirements',
+    label: '交货和服务要求',
+    description: '实施周期、交付范围、地点、验收、质保、售后、响应、培训和文档要求。',
+    required: true,
+    output: 'json',
+    buildTaskPrompt: () => jsonTask('提取交货和服务要求', '提取实施周期/工期/交付期限、交付范围、交付/实施地点、验收要求、质保期、售后服务要求、响应时限、培训要求、资料/文档交付要求。', `{
+  "implementation_period": "实施周期/工期/交付期限",
+  "delivery_scope": "交付范围",
+  "delivery_location": "交付/实施地点",
+  "acceptance_requirements": "验收要求",
+  "warranty_period": "质保期",
+  "after_sales_service": "售后服务要求",
+  "response_time": "响应时限",
+  "training_requirements": "培训要求",
+  "documentation_requirements": "资料/文档交付要求"
 }`),
   },
   {

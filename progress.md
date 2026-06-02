@@ -1,6 +1,17 @@
 # Progress
 
 ## Session Log
+- 开始执行 Step05 全文一致性审计实现：已确认默认开启、单章重新生成也审计；修复策略改为 opencode 风格的 `old_text/new_text` 精确唯一替换，不使用 anchor 模糊定位或 replaceAll。
+- 已完成全文一致性审计代码接入：`ContentGenerationOptions` 新增 `enableConsistencyAudit`；正文生成配置弹窗新增开关；任务 stats 新增 `auditing` 阶段和审计/修复计数；全文生成、补字数和单章重生成都会把开关传给 Main。
+- Main 侧已新增审计分组、审计 JSON、修复 JSON、行号辅助、精确唯一替换和失败重试逻辑；审计插入在最低字数补足后、配图前；修复失败只记录日志，不阻塞配图；修复后若低于最低字数会补足一次并复审一次。
+- 已更新 `taskService.cjs` 中断恢复阶段识别 `auditing`；验证通过 `node --check electron\services\contentGenerationTask.cjs`、`node --check electron\services\taskService.cjs` 和 `cd client; npm run build`，构建仅有既有 chunk 体积警告。
+- 已补充审计阶段进度条配色，并在样式变更后重跑 `cd client; npm run build` 通过，仍仅有既有 chunk 体积警告。
+- 最终 `git diff --check` 通过，仅输出既有 LF/CRLF 提示。
+- 开始 Step04 全局事实设定实现：已确认需要新增 `global-facts` 步骤、SQLite v4 表、Main 后台任务、Renderer 页面、IPC/preload 类型，以及后续正文生成 prompt 注入和前置校验。
+- 已完成 Step04 全局事实设定：Main 侧新增 `global-facts-generation` 两轮 AI 任务并接入任务组；SQLite v4 新增 `technical_plan_global_fact_groups`；Renderer 新增 `GlobalFactsPage`，进入时无内容自动启动，支持左侧事实大项、进度、右侧 Markdown 编辑/预览/保存/重解析；`TechnicalPlanHome` 插入 Step04 并要求全局事实完成后才能进入正文生成。
+- 已将全局事实注入后续正文链路：`contentGenerationTask.cjs` 启动正文生成前校验 `globalFactsTask.status === success` 且事实非空，并把事实注入正文编排、正文生成、最低字数补目录、正文扩写和 Mermaid 修复提示词。上游招标解析全量重跑、目录生成/编辑会清空全局事实和后续正文缓存；手动保存事实会清空旧正文缓存。
+- 验证完成：`node --check` 覆盖 `electron\services\globalFactsTask.cjs`、`taskService.cjs`、`contentGenerationTask.cjs`、`technicalPlanStore.cjs`、`sqliteDatabase.cjs`、`electron\ipc\taskIpc.cjs`、`technicalPlanIpc.cjs`、`index.cjs` 和 `electron\preload.cjs`；`cd client; npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 通过，仅有 LF/CRLF 提示。
+- 已完成 Step05 正文编排事实选择改造：`ContentGenerationPlanData` 新增 `facts.titles`；编排阶段额外传入 Step02 项目信息、甲方信息、交货和服务要求，以及 Step04 全局事实标题清单；正文生成、单章重新生成、正文扩写和 Mermaid 修复按编排选中的标题解析事实详情后注入 prompt。验证通过 `node --check electron\services\contentGenerationTask.cjs`、`cd client; npm run build` 和 `git diff --check`，构建仍只有既有 chunk 体积警告，diff check 仍只有 LF/CRLF 提示。
 - 开始技术方案 SQLite 存储改造：范围限定技术方案模块；已读取既有文件型计划，确认本轮要移除旧 `technical_plan.json` 兼容、招标 Markdown 文件化、结构化数据进入 SQLite，并按方案分批改造 Main/IPC/Renderer/任务服务。
 - 已完成技术方案 SQLite 存储改造收尾：新增 `sqliteDatabase.cjs`、`technicalPlanStore.cjs`、`technicalPlanIpc.cjs`，接入 `window.yibiao.technicalPlan`；技术方案招标文件 Markdown 保存到 `workspace/technical-plan/tender.md`，结构化状态保存到 `workspace/yibiao.sqlite`。
 - 已清理旧技术方案 workspace API：Renderer 不再调用 `window.yibiao.workspace.load/save/update/clearTechnicalPlan`；`workspaceStore.cjs` 只保留标书查重和废标项检查；废标项检查从技术方案读取招标文件时改用 `technicalPlan.loadState()` 和 `readTenderMarkdown()`。

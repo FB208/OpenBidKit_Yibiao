@@ -9,6 +9,10 @@ function registerTaskIpc({ taskService }) {
     taskService.subscribe(event.sender);
     return taskService.startOutlineGeneration(payload);
   });
+  ipcMain.handle('tasks:start-global-facts-generation', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.startGlobalFactsGeneration(payload);
+  });
   ipcMain.handle('tasks:start-content-generation', (event, payload) => {
     taskService.subscribe(event.sender);
     return taskService.startContentGeneration(payload);

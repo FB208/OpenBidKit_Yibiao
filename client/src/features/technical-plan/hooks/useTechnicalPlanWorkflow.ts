@@ -14,6 +14,8 @@ const initialState: TechnicalPlanState = {
   referenceKnowledgeDocumentIds: [],
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
+  globalFactsTask: undefined,
+  globalFacts: [],
   contentGenerationTask: undefined,
   contentGenerationSections: {},
   contentGenerationPlans: {},

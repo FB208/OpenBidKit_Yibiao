@@ -1,9 +1,9 @@
 import type { OutlineData, OutlineMode } from '../../shared/types';
 
-export type TechnicalPlanStep = 'document-analysis' | 'bid-analysis' | 'outline-generation' | 'content-edit' | 'expand';
+export type TechnicalPlanStep = 'document-analysis' | 'bid-analysis' | 'outline-generation' | 'global-facts' | 'content-edit' | 'expand';
 export type BidAnalysisMode = 'key' | 'full';
 export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
-export type BackgroundTaskType = 'bid-analysis' | 'outline-generation' | 'content-generation';
+export type BackgroundTaskType = 'bid-analysis' | 'outline-generation' | 'global-facts-generation' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
@@ -15,6 +15,7 @@ export interface ContentGenerationOptions {
   tableRequirement: ContentTableRequirement;
   minimumWords: number;
   contentConcurrency: number;
+  enableConsistencyAudit: boolean;
 }
 
 export interface ContentImageStats {
@@ -36,7 +37,7 @@ export interface BackgroundTaskState {
   error?: string;
   stats?: {
     content?: {
-      phase: 'planning' | 'generating' | 'outline-expanding' | 'expanding' | 'illustrating' | 'done';
+      phase: 'planning' | 'generating' | 'outline-expanding' | 'expanding' | 'auditing' | 'illustrating' | 'done';
       planning_total: number;
       planning_completed: number;
       generation_total: number;
@@ -50,6 +51,12 @@ export interface BackgroundTaskState {
       outline_expansion_step_label?: string;
       minimum_words?: number;
       current_words?: number;
+      audit_group_total?: number;
+      audit_group_completed?: number;
+      audit_conflict_total?: number;
+      audit_fix_total?: number;
+      audit_fix_completed?: number;
+      audit_fix_failed?: number;
       illustration_total?: number;
       illustration_completed?: number;
     };
@@ -71,6 +78,13 @@ export interface BidAnalysisTaskState {
 
 export type BidAnalysisTasks = Record<string, BidAnalysisTaskState>;
 
+export interface GlobalFactGroupState {
+  id: string;
+  title: string;
+  content: string;
+  updated_at?: string;
+}
+
 export interface ContentGenerationSectionState {
   id: string;
   title: string;
@@ -87,6 +101,9 @@ export type ContentIllustrationType = 'ai' | 'mermaid' | 'none';
 export interface ContentGenerationPlanData {
   knowledge: {
     item_ids: string[];
+  };
+  facts: {
+    titles: string[];
   };
   table: {
     needed: boolean;
@@ -151,6 +168,8 @@ export interface TechnicalPlanState {
   referenceKnowledgeDocumentIds: string[];
   bidAnalysisTask?: BackgroundTaskState;
   outlineGenerationTask?: BackgroundTaskState;
+  globalFactsTask?: BackgroundTaskState;
+  globalFacts: GlobalFactGroupState[];
   contentGenerationTask?: BackgroundTaskState;
   contentGenerationOptions?: ContentGenerationOptions;
   contentGenerationSections: ContentGenerationSections;
