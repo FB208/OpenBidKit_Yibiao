@@ -31,8 +31,7 @@ function valueToMarkdown(value) {
       if (item && typeof item === 'object') {
         const name = singleLine(item.name || item.title || item.fact || item.key || '事实项');
         const detail = singleLine(item.value || item.content || item.detail || item.description || item.requirement || '');
-        const source = singleLine(item.source || item.evidence || item.basis || '');
-        return [`- **${name}**${detail ? `：${detail}` : ''}`, source ? `  - 依据：${source}` : ''].filter(Boolean).join('\n');
+        return `- **${name}**${detail ? `：${detail}` : ''}`;
       }
       return `- ${singleLine(item)}`;
     }).filter(Boolean).join('\n');
@@ -143,7 +142,7 @@ function mergeGlobalFactPatches(groups, patches) {
       continue;
     }
 
-    const title = patch.title || '补充事实';
+    const title = patch.title || '补充事实变量';
     const id = ensureUniqueId(normalizeFactId(patch.new_group_id || title, nextGroups.length), used);
     nextGroups.push({ id, title, content: String(patch.content || '').trim() });
   }
@@ -169,7 +168,7 @@ function normalizeReferenceDocumentIds(storedPlan) {
 
 function loadKnowledgeItems(knowledgeBaseService, documentIds, log) {
   if (!documentIds.length) {
-    log('未选择参考知识库，本次只基于招标文件和目录分析全局事实。', 12);
+    log('未选择参考知识库，本次只基于招标文件、Step02 解析结果和目录预设关键信息。', 12);
     return [];
   }
   if (!knowledgeBaseService?.readItems) {
@@ -209,22 +208,41 @@ function formatKnowledgeItemsForPrompt(items) {
   })), null, 2);
 }
 
-function buildFirstRoundMessages({ tenderMarkdown, outlineData, knowledgeItems }) {
+function formatBidAnalysisFactForPrompt(storedPlan, itemId, label) {
+  const item = storedPlan?.bidAnalysisTasks?.[itemId];
+  const content = item?.status === 'success' ? String(item.content || '').trim() : '';
+  return content ? `## ${label}\n${content}` : '';
+}
+
+function formatBidAnalysisFactsForPrompt(storedPlan) {
+  return [
+    formatBidAnalysisFactForPrompt(storedPlan, 'projectInfo', '项目信息'),
+    formatBidAnalysisFactForPrompt(storedPlan, 'partAInfo', '甲方信息'),
+    formatBidAnalysisFactForPrompt(storedPlan, 'deliveryAndServiceRequirements', '交货和服务要求'),
+  ].filter(Boolean).join('\n\n') || '未提供 Step02 关键解析结果。';
+}
+
+function buildFirstRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems }) {
   return [
     {
       role: 'system',
-      content: `你是严格的投标技术方案全文一致性事实规划专家。请识别后续撰写正文时必须全篇保持一致的事实口径。
+      content: `用户正在编写投标书中的技术方案，在编写之前，为了保持全文关键变量一致，需要提前根据招标文件内容和已列出的投标技术方案提纲，把需要全文保持一致的关键变量编辑好。
 
-必须覆盖但不限于：项目名称、甲方/招标人、交付范围、实施周期/供货周期、交付地点、验收、质保、售后响应、培训、资料交付、人员名单与资质、组织角色、金额数字、品牌型号、技术参数、关键时间节点、标准规范、系统名称和专有名词。
+工作方式：
+1. 以“已生成技术方案目录”为主，判断在这些目录的正文写作时，哪些变量一旦随机生成就会导致全文前后不一致。
+2. 变量类别由你自行判断，比如；人名、时间、型号、工期、质保期等。以上只是示例，不要为了覆盖示例硬凑。
+3. 招标文件、关键解析结果和知识库可以作为参考，如果里面有能用到的信息，优先使用。
+4. 如果用户提交的材料中没有可用信息，但是你分析某变量对全文一致性很重要，你需要根据你的专业能力来编辑，允许出现虚拟内容，但必须合情合理。
+5. 仅编写技术方案部分，不要涉及商务部分所需要的内容。
 
-要求：
-1. 只基于输入材料提取或归纳，不要编造。
-2. 第一轮就要尽量完整，输出全局事实大项和每项内容。
-3. 每个大项 content 使用 Markdown，写清“统一口径”“依据/来源”“正文使用提醒”。
-4. 不要输出正文段落，不要写投标承诺之外的新事实。
-5. 只返回 JSON。`,
+输出要求：
+1. 只返回有价值的变量组。
+3. 优先输出具体变量，例如“项目经理：张伟，负责总体协调”，不要输出“严格按照招标文件执行”这类空话。
+5. 不要输出长段落、分析过程、来源说明、风险提示或正文草稿。
+6. 只返回 JSON。`,
     },
-    { role: 'user', content: `招标文件 Markdown 原文：\n${tenderMarkdown}` },
+    { role: 'user', content: `招标文件原文：\n${tenderMarkdown}` },
+    { role: 'user', content: `关键解析结果：\n${bidAnalysisFactsText}` },
     { role: 'user', content: `已生成技术方案目录：\n${formatOutlineForPrompt(outlineData.outline || [])}` },
     { role: 'user', content: `用户选中的知识库完整条目：\n${formatKnowledgeItemsForPrompt(knowledgeItems)}` },
     {
@@ -233,9 +251,9 @@ function buildFirstRoundMessages({ tenderMarkdown, outlineData, knowledgeItems }
 {
   "groups": [
     {
-      "id": "delivery_schedule",
-      "title": "交付周期与服务时限",
-      "content": "Markdown 内容"
+      "id": "project_team",
+      "title": "项目角色变量",
+      "content": "- 项目经理：张伟，负责总体协调。\n- 技术负责人：李明，负责方案设计和联调验收。"
     }
   ]
 }`,
@@ -243,34 +261,37 @@ function buildFirstRoundMessages({ tenderMarkdown, outlineData, knowledgeItems }
   ];
 }
 
-function buildSecondRoundMessages({ tenderMarkdown, outlineData, knowledgeItems, groups }) {
+function buildSecondRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, groups }) {
   return [
     {
       role: 'system',
-      content: `你是严格的投标技术方案全文一致性事实审校专家。请基于完整输入和第一轮全局事实大项，查漏补缺。
+      content: `你的任务是帮用户补充“全局变量”的细节。用户会发给你一份全局事实变量。请基于用户输入信息，检查是否还有投标文件技术方案写作时会反复用到、且必须全文保持全文一致的变量需要补充。
 
 要求：
-1. 不要返回全部内容，只返回需要补充或替换的 patch。
-2. 优先补充遗漏的人员资质、时间、金额、品牌型号、技术参数、地点、验收质保售后等高冲突事实。
-3. 如果某个补充属于已有大项，target_group_id 必须使用已有 id。
-4. 如确实需要新增大项，提供 title 和 content。
-5. 没有可补充内容时返回 {"patches":[]}。
-6. 只返回 JSON。`,
+1. 不要重新生成全部内容，只返回需要补充或替换的 patches。
+2. 重点查漏补缺遗漏的变量，不要重复第一轮已有内容。
+3. 如果补充内容属于已有大项，target_group_id 必须使用已有 id。
+4. 如果确实需要新增大项，提供 title 和 content。
+5. mode 只能是 append、prepend 或 replace；默认使用 append。只有已有大项明显不适合作为变量表时才使用 replace。
+6. 每条 content 只写短 bullet，直接给可复用的变量值，不要写分析过程、来源说明、风险提示或正文草稿。
+7. 没有可补充内容时返回 {"patches":[]}。
+8. 只返回 JSON。`,
     },
-    { role: 'user', content: `招标文件 Markdown 原文：\n${tenderMarkdown}` },
+    { role: 'user', content: `招标文件原文：\n${tenderMarkdown}` },
+    { role: 'user', content: `关键解析结果：\n${bidAnalysisFactsText}` },
     { role: 'user', content: `已生成技术方案目录：\n${formatOutlineForPrompt(outlineData.outline || [])}` },
     { role: 'user', content: `用户选中的知识库完整条目：\n${formatKnowledgeItemsForPrompt(knowledgeItems)}` },
-    { role: 'user', content: `第一轮全局事实大项：\n${JSON.stringify(groups, null, 2)}` },
+    { role: 'user', content: `全局事实变量：\n${JSON.stringify(groups, null, 2)}` },
     {
       role: 'user',
       content: `请返回 JSON，格式如下：
 {
   "patches": [
     {
-      "target_group_id": "delivery_schedule",
-      "title": "交付周期与服务时限",
+      "target_group_id": "project_team",
+      "title": "项目角色变量",
       "mode": "append",
-      "content": "仅补充内容 Markdown"
+      "content": "- 现场负责人：王强，负责现场实施协调。"
     }
   ]
 }`,
@@ -283,7 +304,7 @@ async function collectJson(aiService, options) {
 }
 
 async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseService, updateTask }) {
-  let logs = ['开始生成全局事实。'];
+  let logs = ['开始生成全局事实变量。'];
   let currentProgress = 5;
   function log(message, progress = currentProgress) {
     currentProgress = Math.max(currentProgress, Math.min(progress, 99));
@@ -313,43 +334,44 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
   updateTask({ status: 'running', progress: 5, logs }, technicalPlan);
 
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
-  log('正在读取招标文件、目录和参考知识库。', 10);
+  const bidAnalysisFactsText = formatBidAnalysisFactsForPrompt(storedPlan);
+  log('正在读取招标文件、Step02 解析结果、目录和参考知识库。', 10);
   const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);
 
-  log('第一轮：正在生成全局事实大项和完整内容。', 25);
+  log('正在预设后续正文会反复用到的全局事实变量。', 25);
   const firstRound = await collectJson(aiService, {
-    messages: buildFirstRoundMessages({ tenderMarkdown, outlineData, knowledgeItems }),
+    messages: buildFirstRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems }),
     temperature: 0.2,
-    logTitle: '全局事实-第一轮',
-    progressLabel: '全局事实第一轮',
-    failureMessage: '模型返回的全局事实格式无效',
+    logTitle: '全局事实变量',
+    progressLabel: '全局事实变量',
+    failureMessage: '模型返回的全局事实变量格式无效',
     normalizer: normalizeGlobalFactsResponse,
     validator: validateGlobalFactsResponse,
-    progressCallback: (message) => log(message, 32),
+    progressCallback: (message) => log(message, 45),
   });
   let groups = firstRound.groups;
   technicalPlan = workspaceStore.updateTechnicalPlan({ globalFacts: groups });
   updateTask({ status: 'running', progress: 62, logs }, technicalPlan);
 
-  log('第二轮：正在根据已有大项查漏补缺。', 68);
+  log('第二轮：正在根据第一轮大项补充遗漏的全局事实变量。', 68);
   const secondRound = await collectJson(aiService, {
-    messages: buildSecondRoundMessages({ tenderMarkdown, outlineData, knowledgeItems, groups }),
+    messages: buildSecondRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, groups }),
     temperature: 0.2,
-    logTitle: '全局事实-第二轮补充',
-    progressLabel: '全局事实第二轮',
-    failureMessage: '模型返回的全局事实补充格式无效',
+    logTitle: '全局事实变量-第二轮补充',
+    progressLabel: '全局事实变量第二轮',
+    failureMessage: '模型返回的全局事实变量补充格式无效',
     normalizer: normalizeGlobalFactsPatchResponse,
     validator: validateGlobalFactsPatchResponse,
     progressCallback: (message) => log(message, 74),
   });
 
   groups = mergeGlobalFactPatches(groups, secondRound.patches || []);
-  log(`全局事实合并完成：${groups.length} 个大项，补充 ${secondRound.patches?.length || 0} 条。`, 92);
+  log(`全局事实变量合并完成：${groups.length} 个大项，补充 ${secondRound.patches?.length || 0} 条。`, 92);
   technicalPlan = workspaceStore.updateTechnicalPlan({
     globalFacts: groups,
-    globalFactsTask: updateTask({ status: 'success', progress: 100, logs: [...logs, '全局事实生成完成。'] }),
+    globalFactsTask: updateTask({ status: 'success', progress: 100, logs: [...logs, '全局事实变量生成完成。'] }),
   });
-  updateTask({ status: 'success', progress: 100, logs: [...logs, '全局事实生成完成。'] }, technicalPlan);
+  updateTask({ status: 'success', progress: 100, logs: [...logs, '全局事实变量生成完成。'] }, technicalPlan);
 }
 
 module.exports = {

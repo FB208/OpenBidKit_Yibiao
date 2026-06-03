@@ -43,7 +43,7 @@ function appendGlobalFactsMessage(messages, globalFactsText) {
   if (!content) return;
   messages.push({
     role: 'user',
-    content: `全局事实设定（全文必须保持一致，禁止与这些口径冲突）：\n${content}`,
+    content: `全局事实变量（正文涉及时优先使用这些变量值，避免各章节随机变化）：\n${content}`,
   });
 }
 
@@ -52,7 +52,7 @@ function appendSelectedFactsMessage(messages, selectedFactsText) {
   if (!content) return;
   messages.push({
     role: 'user',
-    content: `本章节需要引用的全局事实（如正文涉及这些内容，必须以事实详情为准，保证全文统一）：\n${content}`,
+    content: `本章节需要使用的全局事实变量（正文涉及时优先使用这些变量值，保证全文一致）：\n${content}`,
   });
 }
 
@@ -409,7 +409,7 @@ function validateMermaidRepairResult(result) {
 
 function formatContentPlanForPrompt(plan) {
   const lines = [
-    `事实：${plan.facts?.titles?.length ? plan.facts.titles.join('；') : '无'}`,
+    `事实变量：${plan.facts?.titles?.length ? plan.facts.titles.join('；') : '无'}`,
     `表格：${plan.table.needed ? `需要，目的：${plan.table.purpose || '提升正文表达清晰度'}` : '不需要，本小节不要输出 Markdown 表格'}`,
     `AI 生图：${plan.image.needed ? `需要，风格：${plan.image.style}，标题：${plan.image.title}` : '不需要'}`,
   ];
@@ -521,8 +521,8 @@ function buildChapterContentPlanMessages({ chapter, parentChapters, siblingChapt
 11. engineering_diagram 表示工程图示风，适合系统架构、部署拓扑、设备连接、机柜布置、电池更换方案、施工组织或运维场景示意等具象工程图。
 12. realistic_photo 表示专业实景示意风，适合设备、场地、机房、施工现场、检测工具、运维操作等真实场景表现。
 13. knowledge.item_ids 只能从参考知识库轻量条目的 id 中选择；可以多选，可以为空数组；不要编造 id，不要输出 reason。
-14. facts.titles 只能从全局事实标题清单中选择；请选择编写本章节正文时会用到的事实标题，可以多选，可以为空数组；不要编造标题，不要输出事实内容。
-15. 编排判断必须结合 Step02 关键解析结果和全局事实标题，不要规划会造成时间、地点、人员、设备、标准或交付口径冲突的表达。`,
+14. facts.titles 只能从全局事实变量标题清单中选择；请选择编写本章节正文时会用到的变量组标题，可以多选，可以为空数组；不要编造标题，不要输出具体变量内容。
+15. 编排判断必须结合 Step02 关键解析结果和全局事实变量标题，不要规划会造成时间、地点、人员、设备、标准或服务承诺前后不一致的表达。`,
     },
   ];
 
@@ -539,7 +539,7 @@ ${renderKnowledgeItemsForPrompt(knowledgeItems)}`,
     messages.push({ role: 'user', content: `Step02 关键解析结果（用于判断正文需要引用哪些事实）：\n${bidAnalysisFactsText}` });
   }
   if (String(globalFactTitlesText || '').trim()) {
-    messages.push({ role: 'user', content: `Step04 全局事实标题清单（编排时只能选择标题，不要输出事实内容）：\n${globalFactTitlesText}` });
+    messages.push({ role: 'user', content: `Step04 全局事实变量标题清单（编排时只能选择标题，不要输出具体变量内容）：\n${globalFactTitlesText}` });
   }
 
   if (parentChapters?.length) {
@@ -579,7 +579,7 @@ JSON 格式：
     "item_ids": ["从参考知识库轻量条目中选择的 id；没有合适条目时返回空数组"]
   },
   "facts": {
-    "titles": ["从全局事实标题清单中选择正文会用到的事实标题；没有需要引用的事实时返回空数组"]
+    "titles": ["从全局事实变量标题清单中选择正文会用到的变量组标题；没有需要引用的变量时返回空数组"]
   },
   "table": {
     "needed": true,
@@ -634,7 +634,7 @@ function buildChapterContentMessages({ chapter, parentChapters, siblingChapters,
 10. 严禁使用 Markdown 标题语法（#、##、###、####、#####、######），也不要生成与当前章节同级或下级的伪目录标题。
 11. 如需在正文中分层表达，只能使用普通段落、列表、表格或加粗引导语，例如 **实施要点：**。
 12. 直接返回章节内容，不生成标题，不要任何额外说明。
-13. 如果本章节需要引用的全局事实中包含相关内容，涉及项目名称、甲方、周期、地点、验收、质保、售后、人员、设备、标准等事实时，必须以事实详情为准，不得前后矛盾。`,
+13. 如果本章节需要使用的全局事实变量中包含相关内容，必须优先使用变量值，不得前后矛盾。`,
     },
   ];
 
@@ -762,7 +762,7 @@ function buildOutlineExpansionMessages({ projectOverview, globalFactsText, outli
 5. 允许补充通用但不违背项目的技术方案内容，例如组织管理、质量控制、安全管理、进度保障、验收交付、运维服务、培训计划、资料管理、风险控制、应急响应等。
 6. 不要重复已有目录，不要输出明显凑字数的空泛标题。
 7. 四级目录不能再包含 children。
-8. 新增目录必须服从全局事实设定，不要引入与既定项目范围、周期、地点、验收、质保、售后或技术边界冲突的方向。
+8. 新增目录不得引入与全局事实变量冲突的项目范围、周期、地点、验收、质保、售后或技术边界方向。
 
 返回格式：
 {
@@ -779,7 +779,7 @@ function buildOutlineExpansionMessages({ projectOverview, globalFactsText, outli
 }`,
     },
     { role: 'user', content: `项目概述：\n${projectOverview || '未提供'}` },
-    ...(String(globalFactsText || '').trim() ? [{ role: 'user', content: `全局事实设定（新增目录不得冲突）：\n${globalFactsText}` }] : []),
+    ...(String(globalFactsText || '').trim() ? [{ role: 'user', content: `全局事实变量（新增目录不得冲突）：\n${globalFactsText}` }] : []),
     { role: 'user', content: `目录上下文（每行：id | 层级 | 可挂载状态 | 标题）：\n${formatOutlineExpansionContext(outlineData.outline || [])}` },
     { role: 'user', content: `当前总字数：${currentWords}\n预期最低字数：${minimumWords}\n当前叶子节点字数中位数：${medianLeafWords}\n本次补目录轮次：${round}/${MAX_OUTLINE_EXPANSION_ROUNDS}\n请只返回新增目录 JSON。` },
   ];
@@ -953,7 +953,7 @@ function buildContentExpansionMessages({ outlineData, context, projectOverview, 
 7. 禁止输出图片 Markdown、Mermaid、代码块或其他图表代码。
 8. 扩写内容必须服务当前章节，不要写其他目录应承载的内容。
 9. 严禁使用 Markdown 标题语法（#、##、###、####、#####、######），也不要新增伪目录标题；需要分层时使用加粗引导语或列表。
-10. 如果本章节需要引用的全局事实中包含相关内容，扩写必须以事实详情为准，不得新增与既定事实冲突的时间、地点、人员、设备、标准或服务承诺。
+10. 如果本章节需要使用的全局事实变量中包含相关内容，扩写必须优先使用变量值，不得新增前后不一致的时间、地点、人员、设备、标准或服务承诺。
 
 返回格式：
 {
@@ -963,7 +963,7 @@ function buildContentExpansionMessages({ outlineData, context, projectOverview, 
 }`,
     },
     { role: 'user', content: `项目概述：\n${projectOverview || '未提供'}` },
-    ...(String(selectedFactsText || '').trim() ? [{ role: 'user', content: `本章节需要引用的全局事实（扩写涉及这些内容时必须参考）：\n${selectedFactsText}` }] : []),
+    ...(String(selectedFactsText || '').trim() ? [{ role: 'user', content: `本章节需要使用的全局事实变量（扩写涉及这些内容时必须参考）：\n${selectedFactsText}` }] : []),
     { role: 'user', content: `完整目录：\n${formatOutlineForPrompt(outlineData.outline || [])}` },
     { role: 'user', content: `当前章节路径：${chapterPath}\n当前章节描述：${item.description || ''}` },
     { role: 'user', content: `同级章节（扩写时避免重复）：\n${siblingLines || '无'}` },
@@ -1160,7 +1160,7 @@ function buildConsistencyAuditMessages({ group, globalFactsText, bidAnalysisFact
   "conflicts": [
     {
       "section_id": "1.2.3",
-      "fact_title": "相关事实标题",
+      "fact_title": "相关事实变量标题",
       "evidence": "正文中的冲突原文摘录",
       "reason": "为什么与事实冲突",
       "severity": "high"
@@ -1169,7 +1169,7 @@ function buildConsistencyAuditMessages({ group, globalFactsText, bidAnalysisFact
 }`,
     },
     { role: 'user', content: `允许返回的目录编号清单：\n${JSON.stringify(allowedIds, null, 2)}` },
-    { role: 'user', content: `Step04 全局事实设定：\n${globalFactsText || '未提供'}` },
+    { role: 'user', content: `Step04 全局事实变量：\n${globalFactsText || '未提供'}` },
     { role: 'user', content: `Step02 关键解析结果（项目信息、甲方信息、交货和服务要求）：\n${bidAnalysisFactsText || '未提供'}` },
     { role: 'user', content: `待审计正文分组：\n${formatConsistencyAuditGroupContent(group)}` },
   ];
@@ -1280,7 +1280,7 @@ function buildConsistencyRepairMessages({ context, conflicts, globalFactsText, b
     },
     { role: 'user', content: `当前小节：${item.id || 'unknown'} ${item.title || '未命名章节'}\n路径：${formatChapterPath(context)}\n描述：${item.description || ''}` },
     { role: 'user', content: `审计发现的冲突：\n${JSON.stringify(conflicts || [], null, 2)}` },
-    { role: 'user', content: `Step04 全局事实设定：\n${globalFactsText || '未提供'}` },
+    { role: 'user', content: `Step04 全局事实变量：\n${globalFactsText || '未提供'}` },
     { role: 'user', content: `Step02 关键解析结果（项目信息、甲方信息、交货和服务要求）：\n${bidAnalysisFactsText || '未提供'}` },
     { role: 'user', content: `当前小节正文（带行号；patch 的 old_text/new_text 不要包含这些行号）：\n${formatContentWithLineNumbers(currentContent)}` },
     { role: 'user', content: `修复尝试次数：${attempt}/${CONSISTENCY_REPAIR_MAX_ATTEMPTS}${failureBlock}\n请只返回 JSON。` },
@@ -2508,7 +2508,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     }, leaves);
     workspaceStore.updateTechnicalPlan({ contentGenerationPlans: storedContentPlans, contentGenerationRuntime: syncRuntime() });
     contentStats.planning_completed += 1;
-    logs = [...logs, `编排完成：${item.id} ${item.title || '未命名章节'}（知识库：${contentPlan.knowledge.item_ids.length} 条，事实：${contentPlan.facts.titles.length} 项，表格：${contentPlan.table.needed ? '需要' : '不需要'}，Mermaid：${contentPlan.mermaid.needed ? '需要' : '不需要'}，AI 图：${contentPlan.image.needed ? '需要' : '不需要'}）`];
+    logs = [...logs, `编排完成：${item.id} ${item.title || '未命名章节'}（知识库：${contentPlan.knowledge.item_ids.length} 条，事实变量：${contentPlan.facts.titles.length} 项，表格：${contentPlan.table.needed ? '需要' : '不需要'}，Mermaid：${contentPlan.mermaid.needed ? '需要' : '不需要'}，AI 图：${contentPlan.image.needed ? '需要' : '不需要'}）`];
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
   }
 

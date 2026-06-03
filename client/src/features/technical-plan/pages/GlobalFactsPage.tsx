@@ -77,12 +77,7 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
   }, [hasOutline, showToast]);
 
   useEffect(() => {
-    if (globalFacts.length) {
-      autoStartedRef.current = false;
-      return;
-    }
-
-    if (!hasOutline || task?.status === 'running' || starting || autoStartedRef.current) {
+    if (!hasOutline || globalFacts.length || task?.status || starting || autoStartedRef.current) {
       return;
     }
 
@@ -142,16 +137,16 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
     const nextGroup: GlobalFactGroupState = {
       id: createFactId(),
       title: '新增事实大项',
-      content: '- **统一口径**：请填写需要全篇保持一致的事实。',
+      content: '- 项目经理：张伟，高级工程师，负责总体协调和质量把关。',
       updated_at: new Date().toISOString(),
     };
-    await saveFacts([...globalFacts, nextGroup], '已新增全局事实大项');
+    await saveFacts([...globalFacts, nextGroup], '已新增事实大项');
     setSelectedGroupId(nextGroup.id);
   };
 
   const deleteActiveGroup = async () => {
     if (!activeGroup) return;
-    await saveFacts(globalFacts.filter((group) => group.id !== activeGroup.id), '已删除全局事实大项');
+    await saveFacts(globalFacts.filter((group) => group.id !== activeGroup.id), '已删除事实大项');
   };
 
   const copyActiveGroup = async () => {
@@ -169,7 +164,7 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
         <div>
           <span className="section-kicker">STEP 04</span>
           <strong>全局事实设定</strong>
-          <p>基于招标文件、目录和已选知识库生成全文一致性事实口径，后续正文生成会严格参考这些内容。</p>
+          <p>基于目录提前预设正文会反复用到的事实变量，避免各小节随机生成人员、时间、型号等内容。</p>
         </div>
         <div className="global-facts-stats">
           <span><strong>{globalFacts.length}</strong> 个大项</span>
@@ -230,7 +225,7 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
             <div>
               <span className="section-kicker">事实内容</span>
               <strong>{activeGroup?.title || '等待全局事实'}</strong>
-              <p>{activeGroup ? '可直接编辑事实口径；保存后会清空旧正文生成缓存，避免引用旧事实。' : '全局事实生成完成后，可在这里查看和编辑。'}</p>
+              <p>{activeGroup ? '可直接编辑事实变量；保存后会清空旧正文生成缓存，避免继续使用旧内容。' : '全局事实生成完成后，可在这里查看和编辑。'}</p>
             </div>
             <div className="global-facts-reader-actions">
               <button type="button" className="secondary-action" onClick={copyActiveGroup} disabled={!activeGroup || !draftContent}>复制</button>
@@ -250,7 +245,7 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
                   value={draftContent}
                   onChange={setDraftContent}
                   disabled={running || saving}
-                  placeholder="填写全篇需要保持一致的事实口径、依据来源和正文使用提醒..."
+                  placeholder="填写后续正文需要统一使用的事实变量，例如人员、时间、型号、服务承诺等..."
                 />
               </div>
               <div className="global-facts-preview-pane markdown-viewer">
@@ -264,7 +259,7 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
           ) : (
             <div className="markdown-empty-state global-facts-empty">
               <strong>{hasOutline ? '等待全局事实生成' : '请先生成目录'}</strong>
-              <p>{hasOutline ? 'AI 会先生成完整事实大项，再进行第二轮查漏补缺。' : '目录生成完成后，本步骤会自动开始。'}</p>
+              <p>{hasOutline ? 'AI 会基于目录提前生成正文可能反复用到的短小事实变量。' : '目录生成完成后，本步骤会自动开始。'}</p>
             </div>
           )}
         </article>
