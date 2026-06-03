@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { dialog } = require('electron');
 const AdmZip = require('adm-zip');
 const { formatDocumentParseError, isLibreOfficeMissingError, normalizeDocumentParseError } = require('./documentParseErrors.cjs');
+const { compactLogError, createDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
 const { getImportedImagesDir } = require('../utils/paths.cjs');
 
 const parserLabels = {
@@ -58,6 +59,34 @@ function resolveFileParser(config, filePath) {
   }
 
   return { provider: requestedProvider, requestedProvider, ext, supported: false, fallbackToLocal: false };
+}
+
+async function summarizeFileForLog(filePath) {
+  const summary = {
+    file_name: path.basename(filePath || ''),
+    extension: path.extname(filePath || '').toLowerCase(),
+  };
+  try {
+    const stats = await fs.stat(filePath);
+    summary.size = stats.size;
+    summary.modified_at = stats.mtime.toISOString();
+  } catch {
+    summary.size = null;
+    summary.modified_at = '';
+  }
+  return summary;
+}
+
+function summarizeParserForLog(parser, options = {}) {
+  return {
+    provider: parser.provider,
+    requested_provider: parser.requestedProvider,
+    extension: parser.ext,
+    supported: parser.supported,
+    fallback_to_local: parser.fallbackToLocal,
+    preserve_images: options.preserveImages === true,
+    asset_scope: String(options.assetScope || 'documents'),
+  };
 }
 
 async function parseLocalDocument(filePath, options = {}) {
@@ -469,9 +498,27 @@ async function replaceMatchesAsync(text, pattern, createReplacement) {
 }
 
 async function parseDocumentWithConfig(app, filePath, config, options = {}) {
+  const startedAt = Date.now();
   const parser = resolveFileParser(config, filePath);
+  const developerLogger = createDeveloperLogger({
+    app,
+    config,
+    moduleName: 'file-parser',
+    name: path.basename(filePath || 'document'),
+    meta: summarizeParserForLog(parser, options),
+  });
+  developerLogger.write('file.parse.started', {
+    file: await summarizeFileForLog(filePath),
+    parser: summarizeParserForLog(parser, options),
+  });
   if (!parser.supported) {
-    throw new Error(`当前${parserLabels[parser.requestedProvider] || '解析方式'}不支持该文件格式`);
+    const error = new Error(`当前${parserLabels[parser.requestedProvider] || '解析方式'}不支持该文件格式`);
+    developerLogger.write('file.parse.error', {
+      duration_ms: Date.now() - startedAt,
+      parser: summarizeParserForLog(parser, options),
+      error: compactLogError(error),
+    });
+    throw error;
   }
   const provider = parser.provider;
   const preserveImages = options.preserveImages === true;
@@ -489,9 +536,22 @@ async function parseDocumentWithConfig(app, filePath, config, options = {}) {
     }
   } catch (error) {
     await deleteImportedImageAssets(assets).catch(() => undefined);
+    developerLogger.write('file.parse.error', {
+      duration_ms: Date.now() - startedAt,
+      parser: summarizeParserForLog(parser, options),
+      asset_count: assets?.index || 0,
+      error: compactLogError(error),
+    });
     throw normalizeDocumentParseError(error, filePath);
   }
-  return preserveImages ? markdown : stripMarkdownImages(markdown);
+  const result = preserveImages ? markdown : stripMarkdownImages(markdown);
+  developerLogger.write('file.parse.completed', {
+    duration_ms: Date.now() - startedAt,
+    parser: summarizeParserForLog(parser, options),
+    asset_count: assets?.index || 0,
+    markdown_metrics: textMetrics(result),
+  });
+  return result;
 }
 
 function createFileService({ app, configStore } = {}) {

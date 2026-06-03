@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { compactLogError, createNoopDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
 const { runInvalidBidAndRejectionItemsExtraction } = require('./bidAnalysisTask.cjs');
 
 const checkRunStatus = ['idle', 'running', 'success', 'error'];
@@ -311,6 +312,34 @@ function normalizeLogicCheckFindings(parsed) {
   return findings;
 }
 
+function createRejectionDeveloperLogger(aiService, name, meta = {}) {
+  try {
+    return aiService?.createDeveloperLogger?.('rejection-check', { name, meta }) || createNoopDeveloperLogger();
+  } catch {
+    return createNoopDeveloperLogger();
+  }
+}
+
+function summarizeFindingsForLog(kind, findings = []) {
+  const result = {
+    kind,
+    count: findings.length,
+  };
+  if (kind === 'rejection') {
+    result.by_type = findings.reduce((counts, item) => {
+      const type = item.type || 'unknown';
+      counts[type] = (counts[type] || 0) + 1;
+      return counts;
+    }, {});
+    result.by_severity = findings.reduce((counts, item) => {
+      const severity = item.severity || 'unknown';
+      counts[severity] = (counts[severity] || 0) + 1;
+      return counts;
+    }, {});
+  }
+  return result;
+}
+
 async function runText(aiService, request, _onProgress, label) {
   const content = await aiService.chat({
     ...request,
@@ -403,6 +432,13 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, upda
   const tenderContent = String(workspaceStore.readDocumentMarkdown('tender') || '');
   const tenderSignature = String(workspaceStore.createDocumentSignature({ ...tenderDocument, content: tenderContent }) || '');
   if (!tenderContent.trim() || !tenderSignature) throw new Error('缺少招标文件内容，无法解析无效与废标项');
+  const developerLogger = createRejectionDeveloperLogger(aiService, 'rejection-items-extraction', {
+    tender_signature: tenderSignature,
+  });
+  developerLogger.write('rejection.extraction.started', {
+    tender_signature: tenderSignature,
+    tender_content_metrics: textMetrics(tenderContent),
+  });
 
   const logs = ['开始解析无效与废标项。'];
   updateExtractionState(workspaceStore, updateTask, { status: 'running', progress: 5, logs }, {
@@ -422,6 +458,10 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, upda
     });
   } catch (error) {
     const message = error?.message || '无效与废标项解析失败';
+    developerLogger.write('rejection.extraction.error', {
+      tender_signature: tenderSignature,
+      error: compactLogError(error),
+    });
     updateExtractionState(workspaceStore, updateTask, {
       status: 'error',
       progress: 100,
@@ -440,6 +480,12 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, upda
 
   const finalContent = stripTripleQuoteWrapper(content);
   const success = Boolean(finalContent.trim());
+  developerLogger.write('rejection.extraction.completed', {
+    tender_signature: tenderSignature,
+    status: success ? 'success' : 'error',
+    output_metrics: textMetrics(finalContent),
+    error: success ? undefined : '模型未返回解析内容',
+  });
   updateExtractionState(workspaceStore, updateTask, {
     status: success ? 'success' : 'error',
     progress: 100,
@@ -494,6 +540,20 @@ async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, pa
     throw new Error('请先完成无效与废标项解析');
   }
 
+  const developerLogger = createRejectionDeveloperLogger(aiService, 'rejection-check-run', {
+    bid_signature: bidSignature,
+    rejection_input_signature: rejectionInputSignature,
+    enabled_tasks: enabledTasks,
+  });
+  developerLogger.write('rejection.check.started', {
+    bid_signature: bidSignature,
+    rejection_input_signature: rejectionInputSignature,
+    enabled_tasks: enabledTasks,
+    bid_content_metrics: textMetrics(bidContent),
+    invalid_items_metrics: textMetrics(invalidBidAndRejectionItems),
+    custom_items_metrics: textMetrics(customCheckItems),
+  });
+
   let completed = 0;
   const logs = ['开始检查投标文件。'];
   const initialPartial = { checkOptions: options };
@@ -508,11 +568,22 @@ async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, pa
   }
 
   async function runOne(kind, label, runner, resultKey, inputSignature) {
+    developerLogger.write('rejection.check.stage.started', {
+      kind,
+      label,
+      input_signature: inputSignature,
+    });
     try {
       const findings = await runner((message) => {
         updateOverall(`${label}：${message}`, { [resultKey]: createRunningResult(inputSignature, message) });
       });
       completed += 1;
+      developerLogger.write('rejection.check.stage.completed', {
+        kind,
+        label,
+        input_signature: inputSignature,
+        result: summarizeFindingsForLog(kind, findings),
+      });
       updateOverall(`${label}完成。`, {
         [resultKey]: {
           status: 'success',
@@ -527,6 +598,12 @@ async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, pa
     } catch (error) {
       completed += 1;
       const message = error.message || `${label}失败`;
+      developerLogger.write('rejection.check.stage.error', {
+        kind,
+        label,
+        input_signature: inputSignature,
+        error: compactLogError(error),
+      });
       updateOverall(`${label}失败：${message}`, {
         [resultKey]: { status: 'error', findings: [], inputSignature, error: message, progressMessage: message, updatedAt: now() },
       });
@@ -553,6 +630,12 @@ async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, pa
     logs: failed.length ? [`检查完成，${failed.length} 个任务失败。`] : ['检查完成。'],
     error: failed.length ? `${failed.length} 个检查任务失败` : undefined,
   }, {});
+  developerLogger.write('rejection.check.completed', {
+    status: failed.length ? 'error' : 'success',
+    enabled_tasks: enabledTasks,
+    failed_count: failed.length,
+    results: results.map((item) => ({ kind: item.kind, status: item.status, error: item.error || undefined })),
+  });
 }
 
 module.exports = {

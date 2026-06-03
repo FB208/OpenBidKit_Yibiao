@@ -8,6 +8,7 @@ const cheerio = require('cheerio');
 const iconv = require('iconv-lite');
 const { PDFParse } = require('pdf-parse');
 const { getDuplicateCheckContentDir, getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
+const { compactLogError, createDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
 const { normalizeDocumentParseError } = require('./documentParseErrors.cjs');
 const { parseDocumentWithConfig } = require('./fileService.cjs');
 
@@ -1724,6 +1725,46 @@ function createInitialImageAnalysis(signature, bidFiles) {
   };
 }
 
+function summarizeDuplicateFileForLog(file, role) {
+  if (!file) return null;
+  return {
+    role,
+    file_id: stableFileId(file),
+    file_name: file.file_name || path.basename(file.file_path || ''),
+    extension: file.extension || path.extname(file.file_name || file.file_path || '').toLowerCase(),
+    size: file.size ?? null,
+    modified_at: file.modified_at || '',
+  };
+}
+
+function summarizeResultStatus(results = []) {
+  const total = results.length;
+  const errorCount = results.filter((item) => item.status === 'error').length;
+  return {
+    total,
+    success_count: total - errorCount,
+    error_count: errorCount,
+  };
+}
+
+function summarizeContentExtractionResults(results = []) {
+  const base = summarizeResultStatus(results);
+  const lengths = results.map((item) => Number(item.content_length) || 0);
+  return {
+    ...base,
+    total_content_chars: lengths.reduce((sum, value) => sum + value, 0),
+    max_content_chars: Math.max(0, ...lengths),
+  };
+}
+
+function loadDeveloperConfig(configStore) {
+  try {
+    return configStore?.load?.() || {};
+  } catch {
+    return {};
+  }
+}
+
 function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) {
   function emit(target, state) {
     if (typeof target === 'function') {
@@ -1805,11 +1846,16 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     return next;
   }
 
-  async function runContentExtraction(allFiles, webContents, signature) {
+  async function runContentExtraction(allFiles, webContents, signature, developerLogger, tenderFile) {
     const config = configStore ? configStore.load() : { file_parser: { provider: 'local' } };
     const dir = getDuplicateCheckContentDir(app);
     await fs.mkdir(dir, { recursive: true });
     const results = [];
+    developerLogger?.write('duplicate.content_extraction.started', {
+      signature,
+      file_count: allFiles.length,
+      files: allFiles.map((file) => summarizeDuplicateFileForLog(file, file === tenderFile ? 'tender' : 'bid')),
+    });
     updateAnalysis({ contentExtraction: { status: 'running', completed: 0, total: allFiles.length }, message: '正在提取正文内容' }, webContents, signature);
 
     for (const file of allFiles) {
@@ -1822,27 +1868,52 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         const contentPath = path.join(dir, `${fileId}.md`);
         await fs.writeFile(contentPath, markdown, 'utf-8');
         results.push({ file_id: fileId, file_name: file.file_name, status: 'success', content_path: contentPath, content_length: markdown.length });
+        developerLogger?.write('duplicate.content_extraction.file.completed', {
+          file: summarizeDuplicateFileForLog(file, file === tenderFile ? 'tender' : 'bid'),
+          markdown_metrics: textMetrics(markdown),
+        });
       } catch (error) {
         results.push({ file_id: fileId, file_name: file.file_name, status: 'error', error: error.message || '正文提取失败' });
+        developerLogger?.write('duplicate.content_extraction.file.error', {
+          file: summarizeDuplicateFileForLog(file, file === tenderFile ? 'tender' : 'bid'),
+          error: compactLogError(error),
+        });
       }
       updateAnalysis({ contentExtraction: { status: 'running', completed: results.length, total: allFiles.length }, contentFiles: results, message: `正文内容提取 ${results.length}/${allFiles.length}` }, webContents, signature);
     }
 
     const status = results.some((item) => item.status === 'error') ? 'error' : 'success';
     updateAnalysis({ contentExtraction: { status, completed: results.length, total: allFiles.length }, contentFiles: results }, webContents, signature);
+    developerLogger?.write('duplicate.content_extraction.completed', {
+      signature,
+      status,
+      result: summarizeContentExtractionResults(results),
+    });
     return results;
   }
 
-  async function runMetadataExtraction(bidFiles, webContents, signature) {
+  async function runMetadataExtraction(bidFiles, webContents, signature, developerLogger) {
     const results = [];
+    developerLogger?.write('duplicate.metadata_extraction.started', {
+      signature,
+      bid_file_count: bidFiles.length,
+    });
     updateAnalysis({ metadataExtraction: { status: 'running', completed: 0, total: bidFiles.length }, message: '正在提取投标文件元数据' }, webContents, signature);
 
     for (const file of bidFiles) {
       const fileId = stableFileId(file);
       try {
         results.push({ file_id: fileId, file_name: file.file_name, status: 'success', metadata: await extractMetadata(file) });
+        developerLogger?.write('duplicate.metadata_extraction.file.completed', {
+          file: summarizeDuplicateFileForLog(file, 'bid'),
+          metadata_count: results[results.length - 1].metadata.length,
+        });
       } catch (error) {
         results.push({ file_id: fileId, file_name: file.file_name, status: 'error', error: error.message || '元数据提取失败', metadata: [] });
+        developerLogger?.write('duplicate.metadata_extraction.file.error', {
+          file: summarizeDuplicateFileForLog(file, 'bid'),
+          error: compactLogError(error),
+        });
       }
       const rows = buildRows(results);
       updateAnalysis({ metadataExtraction: { status: 'running', completed: results.length, total: bidFiles.length }, files: results, rows, message: `元数据提取 ${results.length}/${bidFiles.length}` }, webContents, signature);
@@ -1851,6 +1922,13 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     const rows = buildRows(results);
     const status = results.some((item) => item.status === 'error') ? 'error' : 'success';
     updateAnalysis({ metadataExtraction: { status, completed: results.length, total: bidFiles.length }, files: results, rows }, webContents, signature);
+    developerLogger?.write('duplicate.metadata_extraction.completed', {
+      signature,
+      status,
+      result: summarizeResultStatus(results),
+      row_count: rows.length,
+      repeated_row_count: rows.filter((row) => row.repeated).length,
+    });
     return results;
   }
 
@@ -1861,7 +1939,12 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     return fs.readFile(item.content_path, 'utf-8');
   }
 
-  async function runOutlineAnalysis(tenderFile, bidFiles, contentFiles, signature, webContents) {
+  async function runOutlineAnalysis(tenderFile, bidFiles, contentFiles, signature, webContents, developerLogger) {
+    developerLogger?.write('duplicate.outline_analysis.started', {
+      signature,
+      bid_file_count: bidFiles.length,
+      tender_file: summarizeDuplicateFileForLog(tenderFile, 'tender'),
+    });
     updateOutlineAnalysis({ status: 'running', progress: 5, extraction: { status: 'running', completed: 0, total: bidFiles.length }, message: '正在准备目录分析' }, webContents, signature);
     const results = [];
     let tenderSentences = [];
@@ -1871,8 +1954,14 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         tenderSentences = splitTenderSentences(tenderMarkdown);
       } catch (error) {
         updateOutlineAnalysis({ message: `招标文件句子白名单生成失败，继续对比投标文件目录：${error.message || error}` }, webContents, signature);
+        developerLogger?.write('duplicate.outline_analysis.tender_whitelist.error', {
+          error: compactLogError(error),
+        });
       }
     }
+    developerLogger?.write('duplicate.outline_analysis.tender_whitelist.completed', {
+      tender_sentence_count: tenderSentences.length,
+    });
 
     updateOutlineAnalysis({ tenderSentenceCount: tenderSentences.length, message: '正在提取投标文件目录' }, webContents, signature);
     for (const file of bidFiles) {
@@ -1891,8 +1980,19 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
           tender_matched_count: tenderMatchedCount,
           items: extracted.items,
         });
+        developerLogger?.write('duplicate.outline_analysis.file.completed', {
+          file: summarizeDuplicateFileForLog(file, 'bid'),
+          source: extracted.source,
+          confidence: extracted.confidence,
+          item_count: extracted.items.length,
+          tender_matched_count: tenderMatchedCount,
+        });
       } catch (error) {
         results.push({ file_id: fileId, file_name: file.file_name, status: 'error', item_count: 0, tender_matched_count: 0, items: [], error: error.message || '目录提取失败' });
+        developerLogger?.write('duplicate.outline_analysis.file.error', {
+          file: summarizeDuplicateFileForLog(file, 'bid'),
+          error: compactLogError(error),
+        });
       }
       updateOutlineAnalysis({
         status: 'running',
@@ -1919,10 +2019,24 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       duplicateGroups: comparison.duplicateGroups,
       pairwiseSimilarities: comparison.pairwiseSimilarities,
     }, webContents, signature);
+    developerLogger?.write('duplicate.outline_analysis.completed', {
+      signature,
+      status: failed ? 'error' : 'success',
+      result: summarizeResultStatus(results),
+      tender_sentence_count: tenderSentences.length,
+      tender_matched_item_count: results.reduce((sum, item) => sum + (item.tender_matched_count || 0), 0),
+      duplicate_group_count: comparison.duplicateGroups.length,
+      pairwise_similarity_count: comparison.pairwiseSimilarities.length,
+    });
     return results;
   }
 
-  async function runContentDuplicateAnalysis(tenderFile, bidFiles, contentFiles, signature, webContents) {
+  async function runContentDuplicateAnalysis(tenderFile, bidFiles, contentFiles, signature, webContents, developerLogger) {
+    developerLogger?.write('duplicate.content_analysis.started', {
+      signature,
+      bid_file_count: bidFiles.length,
+      tender_file: summarizeDuplicateFileForLog(tenderFile, 'tender'),
+    });
     updateContentAnalysis({ status: 'running', progress: 5, extraction: { status: 'running', completed: 0, total: bidFiles.length }, message: '正在准备正文比对' }, webContents, signature);
     let tenderSentenceSet = new Set();
     if (tenderFile) {
@@ -1931,8 +2045,14 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         tenderSentenceSet = new Set(splitContentSentences(tenderMarkdown).map((item) => item.normalized));
       } catch (error) {
         updateContentAnalysis({ message: `招标文件句子白名单生成失败，继续比对投标正文：${error.message || error}` }, webContents, signature);
+        developerLogger?.write('duplicate.content_analysis.tender_whitelist.error', {
+          error: compactLogError(error),
+        });
       }
     }
+    developerLogger?.write('duplicate.content_analysis.tender_whitelist.completed', {
+      tender_sentence_count: tenderSentenceSet.size,
+    });
 
     const globalSentences = new Map();
     let totalSentenceCount = 0;
@@ -1964,6 +2084,10 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         }
       } catch (error) {
         updateContentAnalysis({ message: `${file.file_name} 正文比对失败：${error.message || error}` }, webContents, signature);
+        developerLogger?.write('duplicate.content_analysis.file.error', {
+          file: summarizeDuplicateFileForLog(file, 'bid'),
+          error: compactLogError(error),
+        });
       }
 
       updateContentAnalysis({
@@ -1989,10 +2113,22 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       extraction: { status: 'success', completed: bidFiles.length, total: bidFiles.length },
       duplicateSentences,
     }, webContents, signature);
+    developerLogger?.write('duplicate.content_analysis.completed', {
+      signature,
+      status: 'success',
+      tender_sentence_count: tenderSentenceSet.size,
+      tender_matched_sentence_count: tenderMatchedSentenceCount,
+      total_sentence_count: totalSentenceCount,
+      duplicate_sentence_count: duplicateSentences.length,
+    });
     return { status: 'success', duplicateSentences };
   }
 
-  async function runImageDuplicateAnalysis(bidFiles, contentFiles, signature, webContents) {
+  async function runImageDuplicateAnalysis(bidFiles, contentFiles, signature, webContents, developerLogger) {
+    developerLogger?.write('duplicate.image_analysis.started', {
+      signature,
+      bid_file_count: bidFiles.length,
+    });
     updateImageAnalysis({ status: 'running', progress: 5, extraction: { status: 'running', completed: 0, total: bidFiles.length }, message: '正在准备图片比对' }, webContents, signature);
     const results = [];
     const globalImages = new Map();
@@ -2031,8 +2167,17 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
           globalImages.set(hash, global);
         }
         results.push({ file_id: fileId, file_name: file.file_name, status: 'success', image_count: imageOccurrences.length, unique_image_count: local.size });
+        developerLogger?.write('duplicate.image_analysis.file.completed', {
+          file: summarizeDuplicateFileForLog(file, 'bid'),
+          image_count: imageOccurrences.length,
+          unique_image_count: local.size,
+        });
       } catch (error) {
         results.push({ file_id: fileId, file_name: file.file_name, status: 'error', image_count: 0, unique_image_count: 0, error: error.message || '图片比对失败' });
+        developerLogger?.write('duplicate.image_analysis.file.error', {
+          file: summarizeDuplicateFileForLog(file, 'bid'),
+          error: compactLogError(error),
+        });
       }
 
       updateImageAnalysis({
@@ -2057,25 +2202,38 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       totalImageCount,
       duplicateImages,
     }, webContents, signature);
+    developerLogger?.write('duplicate.image_analysis.completed', {
+      signature,
+      status: failed ? 'error' : 'success',
+      result: summarizeResultStatus(results),
+      total_image_count: totalImageCount,
+      duplicate_image_count: duplicateImages.length,
+    });
     return { status: failed ? 'error' : 'success', duplicateImages };
   }
 
-  async function run(signature, payload, target) {
+  async function run(signature, payload, target, developerLogger) {
     const tenderFile = payload.tenderFile || null;
     const bidFiles = Array.isArray(payload.bidFiles) ? payload.bidFiles : [];
     const allFiles = [tenderFile, ...bidFiles].filter(Boolean);
+    developerLogger?.write('duplicate.pipeline.started', {
+      signature,
+      tender_file: summarizeDuplicateFileForLog(tenderFile, 'tender'),
+      bid_file_count: bidFiles.length,
+      file_count: allFiles.length,
+    });
 
     try {
-      const contentPromise = runContentExtraction(allFiles, target, signature);
-      const metadataFiles = await runMetadataExtraction(bidFiles, target, signature);
+      const contentPromise = runContentExtraction(allFiles, target, signature, developerLogger, tenderFile);
+      const metadataFiles = await runMetadataExtraction(bidFiles, target, signature, developerLogger);
       updateOutlineAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于目录分析', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, target, signature);
       updateContentAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于正文比对', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, target, signature);
       updateImageAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于图片比对', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, target, signature);
       const contentFiles = await contentPromise;
       const [outlineFiles, contentResult, imageResult] = await Promise.all([
-        runOutlineAnalysis(tenderFile, bidFiles, contentFiles, signature, target),
-        runContentDuplicateAnalysis(tenderFile, bidFiles, contentFiles, signature, target),
-        runImageDuplicateAnalysis(bidFiles, contentFiles, signature, target),
+        runOutlineAnalysis(tenderFile, bidFiles, contentFiles, signature, target, developerLogger),
+        runContentDuplicateAnalysis(tenderFile, bidFiles, contentFiles, signature, target, developerLogger),
+        runImageDuplicateAnalysis(bidFiles, contentFiles, signature, target, developerLogger),
       ]);
       const failed = contentFiles.some((item) => item.status === 'error')
         || metadataFiles.some((item) => item.status === 'error')
@@ -2083,9 +2241,22 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         || contentResult.status === 'error'
         || imageResult.status === 'error';
       updateAnalysis({ status: failed ? 'error' : 'success', progress: 100, message: failed ? '部分文件分析失败' : '元数据分析完成' }, target, signature);
+      developerLogger?.write('duplicate.pipeline.completed', {
+        signature,
+        status: failed ? 'error' : 'success',
+        content_extraction: summarizeResultStatus(contentFiles),
+        metadata_extraction: summarizeResultStatus(metadataFiles),
+        outline_analysis: summarizeResultStatus(outlineFiles),
+        content_duplicate_status: contentResult.status,
+        image_duplicate_status: imageResult.status,
+      });
       return failed ? 'error' : 'success';
     } catch (error) {
       updateAnalysis({ status: 'error', progress: 100, message: error.message || '元数据分析失败' }, target, signature);
+      developerLogger?.write('duplicate.pipeline.error', {
+        signature,
+        error: compactLogError(error),
+      });
       return 'error';
     }
   }
@@ -2094,6 +2265,25 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     async runAnalysisTask({ workspaceStore: taskWorkspaceStore, updateTask, payload }) {
       const signature = createSignature(payload);
       const force = payload.force === true;
+      const bidFiles = Array.isArray(payload.bidFiles) ? payload.bidFiles : [];
+      const developerLogger = createDeveloperLogger({
+        app,
+        config: loadDeveloperConfig(configStore),
+        moduleName: 'duplicate-check',
+        name: 'duplicate-analysis',
+        meta: {
+          signature,
+          force,
+          tender_file: summarizeDuplicateFileForLog(payload.tenderFile || null, 'tender'),
+          bid_file_count: bidFiles.length,
+        },
+      });
+      developerLogger.write('duplicate.task.started', {
+        signature,
+        force,
+        tender_file: summarizeDuplicateFileForLog(payload.tenderFile || null, 'tender'),
+        bid_files: bidFiles.map((file) => summarizeDuplicateFileForLog(file, 'bid')),
+      });
       const current = taskWorkspaceStore.loadDuplicateCheck() || {};
       if (!force
         && current.metadataAnalysis?.signature === signature && current.metadataAnalysis?.status === 'success'
@@ -2104,10 +2294,10 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
           analysisTask: updateTask({ status: 'success', progress: 100, logs: ['标书查重分析已完成，无需重复分析。'] }),
         });
         updateTask({ status: 'success', progress: 100, logs: ['标书查重分析已完成，无需重复分析。'] }, nextState);
+        developerLogger.write('duplicate.task.skipped', { signature, reason: 'already_success' });
         return;
       }
 
-      const bidFiles = Array.isArray(payload.bidFiles) ? payload.bidFiles : [];
       const metadataAnalysis = createInitialAnalysis(signature, bidFiles);
       const outlineAnalysis = createInitialOutlineAnalysis(signature, bidFiles);
       const contentAnalysis = createInitialContentAnalysis(signature, bidFiles);
@@ -2135,15 +2325,21 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         updateTask(partial, nextState);
       };
 
-      const finalStatus = await run(signature, payload, notifyTask);
+      const finalStatus = await run(signature, payload, notifyTask, developerLogger);
       state = taskWorkspaceStore.loadDuplicateCheck() || state;
       const doneLog = finalStatus === 'success' ? '标书查重分析完成。' : '标书查重分析完成，部分结果失败。';
       const finalTask = updateTask({ status: finalStatus, progress: 100, logs: [doneLog] });
       if (!isCurrentDuplicateCheckSignature(signature)) {
+        developerLogger.write('duplicate.task.stale_signature', { signature });
         return;
       }
       const finalState = taskWorkspaceStore.updateDuplicateCheck({ analysisTask: finalTask });
       updateTask({ status: finalStatus, progress: 100, logs: [doneLog] }, finalState);
+      developerLogger.write('duplicate.task.completed', {
+        signature,
+        status: finalStatus,
+        progress: 100,
+      });
     },
   };
 }

@@ -5,6 +5,7 @@ const { fileURLToPath } = require('node:url');
 const { app, dialog, nativeImage } = require('electron');
 const cheerio = require('cheerio');
 const { imageSize } = require('image-size');
+const { compactLogError, createDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
 const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
 const {
   AlignmentType,
@@ -74,10 +75,16 @@ function reportConversionProgress(context, message) {
   reportProgress(context, 10 + (done / total) * 78, message);
 }
 
+function writeExportLog(context, event, payload = {}) {
+  if (!context?.developerLogger?.enabled) return;
+  context.developerLogger.write(event, payload);
+}
+
 function addWarning(context, message) {
   if (context?.warnings) {
     context.warnings.push(message);
   }
+  writeExportLog(context, 'export.warning', { message });
   console.warn(`[export-word] ${message}`);
 }
 
@@ -119,6 +126,34 @@ function countOutlineStats(items = []) {
   }
 
   return { leafCount, mermaidCount };
+}
+
+function collectOutlineContents(items = []) {
+  const contents = [];
+  for (const item of items || []) {
+    if (item.children?.length) {
+      contents.push(...collectOutlineContents(item.children));
+    } else {
+      contents.push(String(item.content || ''));
+    }
+  }
+  return contents;
+}
+
+function countOutlineContentMetrics(items = []) {
+  const contents = collectOutlineContents(items);
+  return {
+    ...textMetrics(contents.join('\n\n')),
+    leaf_content_count: contents.filter((content) => content.trim()).length,
+  };
+}
+
+function loadDeveloperConfig(configStore) {
+  try {
+    return configStore?.load?.() || {};
+  } catch {
+    return {};
+  }
 }
 
 function sanitizeFilename(value) {
@@ -404,6 +439,27 @@ function imageTypeFromPath(filePath) {
   return ['png', 'jpg', 'gif', 'bmp', 'webp'].includes(ext) ? ext : null;
 }
 
+function describeImageSourceForLog(source) {
+  const value = String(source || '').trim();
+  if (!value) return { kind: 'empty' };
+  if (/^data:/i.test(value)) return { kind: 'data-url' };
+  try {
+    const url = new URL(value);
+    if (url.protocol === 'yibiao-asset:') {
+      return { kind: 'asset', host: url.hostname, extension: path.extname(url.pathname || '').toLowerCase() };
+    }
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return { kind: 'remote', protocol: url.protocol.replace(':', ''), host: url.hostname, extension: path.extname(url.pathname || '').toLowerCase() };
+    }
+    if (url.protocol === 'file:') {
+      return { kind: 'local-file-url', extension: path.extname(url.pathname || '').toLowerCase() };
+    }
+    return { kind: 'url', protocol: url.protocol.replace(':', '') };
+  } catch {
+    return { kind: path.isAbsolute(value) ? 'local-path' : 'relative-path', extension: path.extname(value).toLowerCase() };
+  }
+}
+
 function normalizeImageForDocx(loaded) {
   if (!loaded?.buffer || !loaded.type) {
     return loaded;
@@ -522,16 +578,35 @@ async function loadImageWithRetry(source, context = {}, options = {}) {
 async function imageRunFromNode(node, context, options = {}) {
   let loaded = null;
   const imageLabel = compactText(node.alt || node.url || '未知图片');
+  const imageIndex = (context.imageCount || 0) + 1;
+  context.imageCount = imageIndex;
+  writeExportLog(context, 'export.image.started', {
+    image_index: imageIndex,
+    label: imageLabel,
+    source: describeImageSourceForLog(node.url),
+  });
   try {
     loaded = await loadImageWithRetry(node.url, context, options.loadRetry);
   } catch (error) {
     const message = `图片无法导出：${imageLabel}，${compactText(error.message || '下载失败', 120)}`;
     addWarning(context, message);
+    writeExportLog(context, 'export.image.error', {
+      image_index: imageIndex,
+      label: imageLabel,
+      phase: 'load',
+      error: compactLogError(error),
+    });
     return textRun(`[${message}]`, { color: 'C83220' });
   }
   if (!loaded?.buffer || !loaded.type) {
     const message = `图片无法导出：${imageLabel}，未找到可用图片数据`;
     addWarning(context, message);
+    writeExportLog(context, 'export.image.error', {
+      image_index: imageIndex,
+      label: imageLabel,
+      phase: 'load',
+      reason: 'missing_image_data',
+    });
     return textRun(`[${message}]`, { color: 'C83220' });
   }
 
@@ -540,6 +615,13 @@ async function imageRunFromNode(node, context, options = {}) {
   } catch (error) {
     const message = `图片无法导出：${imageLabel}，${error.message || '图片格式转换失败'}`;
     addWarning(context, message);
+    writeExportLog(context, 'export.image.error', {
+      image_index: imageIndex,
+      label: imageLabel,
+      phase: 'normalize',
+      source_type: loaded.type,
+      error: compactLogError(error),
+    });
     return textRun(`[${message}]`, { color: 'C83220' });
   }
 
@@ -549,6 +631,14 @@ async function imageRunFromNode(node, context, options = {}) {
   } catch (error) {
     const message = `图片无法导出：${imageLabel}，图片尺寸识别失败`;
     addWarning(context, message);
+    writeExportLog(context, 'export.image.error', {
+      image_index: imageIndex,
+      label: imageLabel,
+      phase: 'size',
+      type: loaded.type,
+      bytes: loaded.buffer.length,
+      error: compactLogError(error),
+    });
     return textRun(`[${message}]`, { color: 'C83220' });
   }
   const sourceWidth = size.width || MAX_IMAGE_WIDTH;
@@ -556,6 +646,17 @@ async function imageRunFromNode(node, context, options = {}) {
   const ratio = Math.min(1, MAX_IMAGE_WIDTH / sourceWidth);
   const width = Math.round(sourceWidth * ratio);
   const height = Math.round(sourceHeight * ratio);
+  context.imageSuccessCount = (context.imageSuccessCount || 0) + 1;
+  writeExportLog(context, 'export.image.completed', {
+    image_index: imageIndex,
+    label: imageLabel,
+    type: loaded.type,
+    bytes: loaded.buffer.length,
+    source_width: sourceWidth,
+    source_height: sourceHeight,
+    output_width: width,
+    output_height: height,
+  });
 
   return new ImageRun({
     type: loaded.type,
@@ -879,6 +980,11 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
       if (String(node.lang || '').toLowerCase() === 'mermaid') {
         const nextIndex = (context.convertedMermaidCount || 0) + 1;
         const total = context.stats?.mermaidCount || nextIndex;
+        writeExportLog(context, 'export.mermaid.started', {
+          mermaid_index: nextIndex,
+          total,
+          code_metrics: textMetrics(node.value),
+        });
         reportConversionProgress(context, `正在转换 Mermaid 图 ${nextIndex}/${total}，可能需要联网等待。`);
         blocks.push(await imageParagraphFromSource(mermaidInkUrl(node.value), 'Mermaid 图', context, {
           loadRetry: {
@@ -890,6 +996,10 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
           },
         }));
         context.convertedMermaidCount = nextIndex;
+        writeExportLog(context, 'export.mermaid.completed', {
+          mermaid_index: nextIndex,
+          total,
+        });
         reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 已处理。`);
       } else {
         blocks.push(paragraph([new TextRun({ text: cleanText(node.value), font: 'Consolas', size: 21, color: '243048' })], {
@@ -982,10 +1092,17 @@ async function buildDocxResult(payload, options = {}) {
     stats,
     convertedLeafCount: 0,
     convertedMermaidCount: 0,
+    imageCount: 0,
+    imageSuccessCount: 0,
     numberingReferences: [],
     numberingIndex: 0,
     unsupportedHtmlTags: new Set(),
+    developerLogger: options.developerLogger,
   };
+  writeExportLog(context, 'export.docx.build.started', {
+    stats,
+    content_metrics: countOutlineContentMetrics(payload.outline || []),
+  });
   const children = [
     paragraph([textRun('内容由 AI 生成', { italics: true, size: 18 })], { alignment: AlignmentType.CENTER, after: 120 }),
     paragraph([textRun(payload.project_name || '投标技术文件', { bold: true, size: 34 })], { alignment: AlignmentType.CENTER, after: 300 }),
@@ -1018,7 +1135,18 @@ async function buildDocxResult(payload, options = {}) {
     }],
   });
 
-  return { buffer: await Packer.toBuffer(doc), warnings: context.warnings, stats };
+  const buffer = await Packer.toBuffer(doc);
+  writeExportLog(context, 'export.docx.build.completed', {
+    stats,
+    warning_count: context.warnings.length,
+    converted_leaf_count: context.convertedLeafCount,
+    converted_mermaid_count: context.convertedMermaidCount,
+    image_count: context.imageCount,
+    image_success_count: context.imageSuccessCount,
+    image_failure_count: Math.max(0, context.imageCount - context.imageSuccessCount),
+    buffer_bytes: buffer.length,
+  });
+  return { buffer, warnings: context.warnings, stats };
 }
 
 async function buildDocxBuffer(payload, options = {}) {
@@ -1026,14 +1154,31 @@ async function buildDocxBuffer(payload, options = {}) {
   return result.buffer;
 }
 
-function createExportService() {
+function createExportService({ configStore } = {}) {
   return {
     async exportWord(payload = {}, onProgress) {
+      const stats = countOutlineStats(Array.isArray(payload.outline) ? payload.outline : []);
+      const developerLogger = createDeveloperLogger({
+        app,
+        config: loadDeveloperConfig(configStore),
+        moduleName: 'export',
+        name: 'word-export',
+        meta: {
+          project_name: sanitizeFilename(payload.project_name || '投标技术文件'),
+          stats,
+        },
+      });
+      developerLogger.write('export.word.started', {
+        project_name: sanitizeFilename(payload.project_name || '投标技术文件'),
+        stats,
+        content_metrics: countOutlineContentMetrics(Array.isArray(payload.outline) ? payload.outline : []),
+      });
       if (!Array.isArray(payload.outline) || !payload.outline.length) {
-        throw new Error('没有可导出的目录内容');
+        const error = new Error('没有可导出的目录内容');
+        developerLogger.write('export.word.error', { error: compactLogError(error) });
+        throw error;
       }
 
-      const stats = countOutlineStats(payload.outline || []);
       const progressContext = { onProgress, warnings: [], stats };
       reportProgress(progressContext, 2, stats.mermaidCount
         ? `检测到 ${stats.mermaidCount} 张 Mermaid 图，导出时会转换为 Word 图片。`
@@ -1048,18 +1193,40 @@ function createExportService() {
 
       if (result.canceled || !result.filePath) {
         reportProgress(progressContext, 0, '已取消导出。', { phase: 'canceled' });
+        developerLogger.write('export.word.canceled', { stats });
         return { success: false, canceled: true, message: '已取消导出' };
       }
 
-      const warnings = [];
-      const buildResult = await buildDocxResult(payload, { onProgress, warnings });
-      reportProgress({ onProgress, warnings: buildResult.warnings, stats: buildResult.stats }, 96, '正在写入 Word 文件。');
-      fs.writeFileSync(result.filePath, buildResult.buffer);
-      const message = buildResult.warnings.length
-        ? `Word 已导出，但有 ${buildResult.warnings.length} 处图片未能插入，请打开文档核对。`
-        : 'Word 已导出，请打开文档核对图片、表格和版式。';
-      reportProgress({ onProgress, warnings: buildResult.warnings, stats: buildResult.stats }, 100, message, { phase: 'success' });
-      return { success: true, path: result.filePath, message, warnings: buildResult.warnings };
+      try {
+        const warnings = [];
+        const buildResult = await buildDocxResult(payload, { onProgress, warnings, developerLogger });
+        reportProgress({ onProgress, warnings: buildResult.warnings, stats: buildResult.stats }, 96, '正在写入 Word 文件。');
+        developerLogger.write('export.word.write.started', {
+          output_file_name: path.basename(result.filePath),
+          output_extension: path.extname(result.filePath).toLowerCase(),
+          buffer_bytes: buildResult.buffer.length,
+        });
+        fs.writeFileSync(result.filePath, buildResult.buffer);
+        const message = buildResult.warnings.length
+          ? `Word 已导出，但有 ${buildResult.warnings.length} 处图片未能插入，请打开文档核对。`
+          : 'Word 已导出，请打开文档核对图片、表格和版式。';
+        reportProgress({ onProgress, warnings: buildResult.warnings, stats: buildResult.stats }, 100, message, { phase: 'success' });
+        developerLogger.write('export.word.completed', {
+          output_file_name: path.basename(result.filePath),
+          output_extension: path.extname(result.filePath).toLowerCase(),
+          buffer_bytes: buildResult.buffer.length,
+          warning_count: buildResult.warnings.length,
+          stats: buildResult.stats,
+        });
+        return { success: true, path: result.filePath, message, warnings: buildResult.warnings };
+      } catch (error) {
+        developerLogger.write('export.word.error', {
+          output_file_name: path.basename(result.filePath),
+          output_extension: path.extname(result.filePath).toLowerCase(),
+          error: compactLogError(error),
+        });
+        throw error;
+      }
     },
   };
 }

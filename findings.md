@@ -1,6 +1,12 @@
 # Findings
 
 ## Research Log
+- 多模块调试日志应抽取为通用 JSONL 工具：`aiService` 内的技术方案 logger 已证明路径和格式可行，但其他服务更适合直接根据 `app + config.developer_mode` 创建模块级 logger，避免把非 AI 模块依赖塞进 `aiService`。
+- 通用开发者日志已落地到 `electron/utils/developerLog.cjs`：按 `developer_mode` 开关创建 `userData/logs/<module>/*.jsonl`，每行含 `at/scope/log_id/event`；写入失败只警告不影响主流程。`aiService.createDeveloperLogger(moduleName, request)` 解决了废标项检查 runner 没有直接拿到 `app/configStore` 的问题。
+- 本轮新增模块日志的敏感边界：文件解析和查重只写文件名、扩展名、大小、修改时间、内容 hash/计数，不写完整本地路径或正文；废标项检查只写输入规模和结果计数，不写招标/投标正文；Word 导出只写输出文件名和扩展名，不写完整保存路径。
+- 技术方案当前没有类似 `logs/ai/` 的程序执行详细日志文件；`technical_plan_tasks.logs_json` 是界面任务进度日志，包含状态、进度和阶段文案，不适合记录 patch 匹配次数、正文 hash、保存结果等调试细节。
+- 现有 `aiService.isDeveloperMode()` 可作为技术方案开发者日志开关；知识库已有 `logs/knowledge-base/<documentId>.jsonl` 的开发者日志先例，因此技术方案应新增 `logs/technical-plan/*.jsonl`，而不是扩展 SQLite。
+- 技术方案开发者日志已接入正文生成任务：文件名沿用 AI 日志的时间戳+标题+UUID 格式但后缀为 `.jsonl`，每行包含 `at/scope/log_id/event` 和事件 payload；开发者模式关闭时返回 no-op logger，不写文件也不影响任务。
 - opencode `edit` 工具实际是 `oldString/newString/replaceAll` 模型：默认不 replaceAll，匹配结果必须唯一；找不到或多处命中会报错并要求提供更多上下文。正文一致性修复不能使用简单 `anchor`，应改为 `old_text/new_text` 精确唯一替换，并在多处命中时拒绝应用。
 - 全文一致性审计在当前正文任务中的最小安全插入点是 `ensureMinimumWords()` 之后、`refreshIllustrationTargetsFromStoredPlans()` / `runIllustrations()` 之前；这样修复后的正文会成为配图和 Word 导出的权威内容。
 - 审计阶段不需要新增任务类型或 SQLite 表：作为 `content-generation` 内部 `stats.content.phase = 'auditing'` 即可，暂停/继续时不保存中间审计结果，恢复后从已落盘正文重新审计更简单稳妥。

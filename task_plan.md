@@ -1,5 +1,50 @@
 # Task Plan
 
+## Current Task: 多模块开发者模式文件日志
+
+### Goal
+将开发者模式文件日志扩展到标书查重、废标项检查、文件解析和 Word 导出等模块，统一写入 `userData/logs/<module>/` 的 JSONL 文件；日志用于定位程序执行细节，不写 SQLite，不改变业务流程。
+
+### Phases
+- [completed] 1. 抽取通用开发者 JSONL 日志工具，统一路径、文件名、UTF-8 写入和 no-op 行为。
+- [completed] 2. 接入文件解析链路，记录解析方式、文件类型、转换后端、耗时、输出 Markdown 指标和错误。
+- [completed] 3. 接入标书查重链路，记录整轮分析、元数据/目录/正文/图片分析关键统计和错误。
+- [completed] 4. 接入废标项检查链路，记录解析、废标项检查、错别字、逻辑谬误检查的输入规模、结果统计和错误。
+- [completed] 5. 接入 Word 导出链路，记录导出章节、图片/Mermaid 处理、warnings 和结果。
+- [completed] 6. 运行 CJS 语法检查、客户端构建和 diff 检查。
+
+### Decisions
+- 继续只在 `developer_mode` 开启时写文件。
+- 每个模块写入独立目录：`logs/file-parser/`、`logs/duplicate-check/`、`logs/rejection-check/`、`logs/export/`。
+- JSONL 只记录执行指标、hash、计数、错误，不记录 API Key、Token 等敏感配置。
+- 不增加重试、fallback 或改变任务结果，只增加可观测性。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 本轮实现 | 相关 CJS `node --check`、`npm run build`、`git diff --check` 通过；构建仅有既有 chunk 体积警告，diff check 仅 LF/CRLF 提示 |
+
+## Current Task: 技术方案开发者模式文件日志
+
+### Goal
+在开发者模式开启时，为技术方案正文生成链路增加类似 AI 日志的文件型调试日志，写入 `userData/logs/technical-plan/`，重点覆盖正文生成、一致性审计和一致性修复的程序执行细节；不改变现有业务逻辑，不把详细调试日志写入 SQLite。
+
+### Phases
+- [completed] 1. 记录现有日志边界，确认 SQLite 只保留任务状态/界面日志，详细调试日志应进入 `logs/technical-plan/`。
+- [completed] 2. 新增开发者模式文件日志工具或 AI service 写入入口，统一 JSONL 输出、脱敏和 Windows UTF-8 写入。
+- [completed] 3. 接入 `contentGenerationTask.cjs`，记录正文生成任务阶段、一致性审计 conflicts、一致性修复 patches、匹配/应用/保存结果。
+- [completed] 4. 运行 CJS 语法检查、客户端构建和必要 diff 检查。
+
+### Decisions
+- 只在 `developer_mode` 开启时写文件日志。
+- 文件日志放在 `userData/logs/technical-plan/`，不进入 SQLite。
+- 不改变 AI prompt、修复判断规则、失败处理策略和 UI 任务日志。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 本轮实现 | `node --check`、`npm run build` 和 `git diff --check` 通过，diff check 仅 LF/CRLF 提示 |
+
 ## Current Task: Step05 全文一致性审计
 
 ### Goal

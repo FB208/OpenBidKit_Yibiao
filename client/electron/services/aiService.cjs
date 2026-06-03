@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { getAiLogsDir, getGeneratedImagesDir } = require('../utils/paths.cjs');
+const { createDeveloperLogger } = require('../utils/developerLog.cjs');
 
 const AI_REQUEST_TIMEOUT_MS = 300000;
 const MAX_AI_LOG_TITLE_LENGTH = 64;
@@ -96,6 +97,16 @@ function writeAiLog(app, config, payload) {
   const logPayload = logTitle ? { ...payload, log_title: logTitle } : payload;
   const fileName = buildAiLogFileName(logPayload);
   fs.writeFileSync(path.join(logsDir, fileName), JSON.stringify(logPayload, null, 2), 'utf-8');
+}
+
+function createModuleDeveloperLogger(app, config, moduleName, request = {}) {
+  return createDeveloperLogger({
+    app,
+    config,
+    moduleName,
+    name: request.name || request.logTitle || moduleName,
+    meta: request.meta || {},
+  });
 }
 
 function normalizeTokenNumber(value) {
@@ -1161,6 +1172,16 @@ function createAiService({ app, configStore }) {
 
     isDeveloperMode() {
       return Boolean(configStore.load()?.developer_mode);
+    },
+
+    createTechnicalPlanDeveloperLogger(request) {
+      const config = configStore.load();
+      return createModuleDeveloperLogger(app, config, 'technical-plan', request);
+    },
+
+    createDeveloperLogger(moduleName, request) {
+      const config = configStore.load();
+      return createModuleDeveloperLogger(app, config, moduleName, request);
     },
 
     async generateImage(request) {

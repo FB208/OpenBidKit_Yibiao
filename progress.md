@@ -1,6 +1,10 @@
 # Progress
 
 ## Session Log
+- 开始执行多模块开发者模式文件日志：范围扩展到文件解析、标书查重、废标项检查和 Word 导出；日志统一放入 `userData/logs/<module>/`，不写 SQLite，不改变业务逻辑。
+- 已完成多模块开发者模式文件日志：新增通用 `electron/utils/developerLog.cjs`，`paths.cjs` 提供 `getDeveloperLogsDir()`；`aiService` 暴露通用 `createDeveloperLogger()` 并保持 technical-plan 日志行为；文件解析写入 `logs/file-parser/`，标书查重写入 `logs/duplicate-check/`，废标项检查写入 `logs/rejection-check/`，Word 导出写入 `logs/export/`。日志只在开发者模式开启时写 JSONL，记录计数、hash、耗时、warning 和错误，不写 API Key/Token/Base URL/完整输出路径。验证通过相关 CJS `node --check`、`npm run build` 和 `git diff --check`；构建仍只有既有 chunk 体积警告，diff check 仅 LF/CRLF 提示。
+- 开始实现技术方案开发者模式文件日志：用户明确需要类似 AI 日志的详细程序执行日志，放入 `logs` 文件夹，不写 SQLite；已确认当前 SQLite 只适合任务状态和界面日志。
+- 已完成技术方案开发者模式文件日志：新增 `userData/logs/technical-plan/*.jsonl` 写入能力；正文生成任务会记录任务启动/完成/失败、章节保存、一致性审计分组和冲突、一致性修复最终 patches、每个 patch 的 old/new 文本、匹配次数、行号命中、应用结果和保存后的正文 hash。验证通过 `node --check electron\services\aiService.cjs`、`node --check electron\services\contentGenerationTask.cjs`、`node --check electron\utils\paths.cjs`、`npm run build` 和 `git diff --check`；构建仍只有既有 chunk 体积警告，diff check 仅 LF/CRLF 提示。
 - 开始执行 Step05 全文一致性审计实现：已确认默认开启、单章重新生成也审计；修复策略改为 opencode 风格的 `old_text/new_text` 精确唯一替换，不使用 anchor 模糊定位或 replaceAll。
 - 已完成全文一致性审计代码接入：`ContentGenerationOptions` 新增 `enableConsistencyAudit`；正文生成配置弹窗新增开关；任务 stats 新增 `auditing` 阶段和审计/修复计数；全文生成、补字数和单章重生成都会把开关传给 Main。
 - Main 侧已新增审计分组、审计 JSON、修复 JSON、行号辅助、精确唯一替换和失败重试逻辑；审计插入在最低字数补足后、配图前；修复失败只记录日志，不阻塞配图；修复后若低于最低字数会补足一次并复审一次。

@@ -57,8 +57,17 @@ function getAiLogsDir(app) {
   return path.join(getUserDataPath(app), 'logs', 'ai');
 }
 
+function getDeveloperLogsDir(app, moduleName) {
+  return path.join(getUserDataPath(app), 'logs', String(moduleName || 'app'));
+}
+
+function getTechnicalPlanLogsDir(app) {
+  return getDeveloperLogsDir(app, 'technical-plan');
+}
+
 module.exports = {
   getAiLogsDir,
+  getDeveloperLogsDir,
   getDuplicateCheckContentDir,
   getDuplicateCheckDir,
   getConfigFilePath,
@@ -68,6 +77,7 @@ module.exports = {
   getRejectionCheckDir,
   getRejectionCheckDocumentMarkdownPath,
   getTechnicalPlanDir,
+  getTechnicalPlanLogsDir,
   getTechnicalPlanTenderMarkdownPath,
   getWorkspaceDir,
   getWorkspaceDatabasePath,

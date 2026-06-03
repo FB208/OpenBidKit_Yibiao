@@ -94,7 +94,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const configStore = createConfigStore(app);
   const aiService = createAiService({ app, configStore });
   const fileService = createFileService({ app, configStore });
-  const exportService = createExportService();
+  const exportService = createExportService({ configStore });
 
   registerConfigIpc({ configStore, aiService });
   registerAiIpc({ aiService });

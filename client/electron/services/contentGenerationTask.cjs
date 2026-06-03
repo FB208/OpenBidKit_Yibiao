@@ -1,4 +1,6 @@
+const crypto = require('node:crypto');
 const zlib = require('node:zlib');
+const { createNoopDeveloperLogger } = require('../utils/developerLog.cjs');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 
 const IMAGE_STYLES = new Set(['engineering_diagram', 'realistic_photo']);
@@ -237,6 +239,26 @@ function isDeveloperModeEnabled(aiService) {
     return Boolean(aiService?.isDeveloperMode?.());
   } catch {
     return false;
+  }
+}
+
+function textHash(value) {
+  return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
+}
+
+function textMetrics(value) {
+  const content = String(value || '');
+  return {
+    chars: content.length,
+    hash: textHash(content),
+  };
+}
+
+function createContentDeveloperLogger(aiService, request) {
+  try {
+    return aiService?.createTechnicalPlanDeveloperLogger?.(request) || createNoopDeveloperLogger();
+  } catch {
+    return createNoopDeveloperLogger();
   }
 }
 
@@ -1079,6 +1101,38 @@ function replaceLineRange(content, startLine, endLine, replacement) {
   return nextLines.join('\n');
 }
 
+function describeConsistencyPatchMatch(content, patch) {
+  const currentContent = normalizeNewlines(content);
+  const oldText = normalizeConsistencyPatchText(patch.old_text);
+  const newText = normalizeConsistencyPatchText(patch.new_text);
+  const startLine = Number(patch.start_line);
+  const endLine = Number(patch.end_line);
+  const detail = {
+    section_id: singleLine(patch.section_id),
+    start_line: Number.isFinite(startLine) ? startLine : 0,
+    end_line: Number.isFinite(endLine) ? endLine : 0,
+    old_text: oldText,
+    new_text: newText,
+    old_text_metrics: textMetrics(oldText),
+    new_text_metrics: textMetrics(newText),
+    before_content_metrics: textMetrics(currentContent),
+    line_range: null,
+    exact_match_count: 0,
+  };
+
+  if (Number.isFinite(startLine) && Number.isFinite(endLine) && startLine > 0 && endLine >= startLine) {
+    const candidate = extractLineRangeText(currentContent, startLine, endLine);
+    detail.line_range = {
+      exists: candidate !== null,
+      matches_old_text: candidate === oldText,
+      candidate_metrics: candidate === null ? null : textMetrics(candidate),
+    };
+  }
+
+  detail.exact_match_count = findExactOccurrences(currentContent, oldText).length;
+  return detail;
+}
+
 function applyExactConsistencyPatch(content, patch) {
   const currentContent = normalizeNewlines(content);
   const oldText = normalizeConsistencyPatchText(patch.old_text);
@@ -1116,18 +1170,31 @@ function applyExactConsistencyPatch(content, patch) {
 function applyConsistencyRepairPatches(content, patches) {
   let nextContent = normalizeNewlines(content);
   const errors = [];
+  const patchResults = [];
   let appliedCount = 0;
 
   for (const [index, patch] of (patches || []).entries()) {
+    const detail = { index, ...describeConsistencyPatchMatch(nextContent, patch) };
     try {
       nextContent = applyExactConsistencyPatch(nextContent, patch);
       appliedCount += 1;
+      patchResults.push({
+        ...detail,
+        applied: true,
+        after_content_metrics: textMetrics(nextContent),
+      });
     } catch (error) {
       errors.push(`patch[${index}] ${error.message || '应用失败'}`);
+      patchResults.push({
+        ...detail,
+        applied: false,
+        error: error.message || '应用失败',
+        after_content_metrics: textMetrics(nextContent),
+      });
     }
   }
 
-  return { content: nextContent, appliedCount, errors };
+  return { content: nextContent, appliedCount, errors, patchResults };
 }
 
 function formatConsistencyAuditGroupContent(group) {
@@ -2275,6 +2342,42 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     ? '全文一致性审计已启用，正文扩写完成后将在配图前检查并修复事实冲突。'
     : '全文一致性审计未启用，本次正文生成将直接进入配图阶段。'];
 
+  const developerLogger = createContentDeveloperLogger(aiService, {
+    name: targetItemId ? `content-generation-${targetItemId}` : 'content-generation',
+    meta: {
+      mode: targetItemId ? 'single-section' : 'full',
+      target_item_id: targetItemId || '',
+      resume,
+      regenerate,
+      full_regenerate: fullRegenerate,
+      leaf_count: leaves.length,
+      task_count: tasksToRun.length,
+      content_concurrency: contentConcurrency,
+      table_requirement: tableRequirement,
+      minimum_words: minimumWords,
+      ai_images_enabled: aiImagesEnabled,
+      mermaid_images_enabled: mermaidImagesEnabled,
+      enable_consistency_audit: enableConsistencyAudit,
+      generation_options: generationOptions,
+    },
+  });
+
+  function writeDeveloperLog(event, payload = {}) {
+    if (!developerLogger.enabled) {
+      return;
+    }
+    try {
+      developerLogger.write(event, payload);
+    } catch {
+      // 调试日志不能影响正文生成主流程。
+    }
+  }
+
+  writeDeveloperLog('content.task.started', {
+    sections: leaves.map(({ item }) => ({ id: item.id, title: item.title || '未命名章节' })),
+    tasks_to_run: tasksToRun.map(({ item }) => item.id),
+  });
+
   function appendDeveloperLog(message) {
     if (!developerModeEnabled) {
       return;
@@ -2413,6 +2516,14 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       outlineData: nextOutlineData,
       contentGenerationRuntime: runtime,
     });
+    if (hasOutlineContent || hasPartialContent) {
+      writeDeveloperLog('content.section.saved', {
+        section_id: item.id,
+        title: item.title || '未命名章节',
+        status: sections[item.id]?.status || 'idle',
+        content_metrics: textMetrics(outlineContent),
+      });
+    }
     updateTask({ status: 'running', progress: progressFor(leaves, sections), stats: statsSnapshot(), ...taskPartial }, saved, {
       outlineData: nextOutlineData,
       contentSection: sections[item.id],
@@ -3191,13 +3302,33 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     let currentContent = sections[item.id]?.content || item.content || '';
     let failures = [];
     let appliedTotal = 0;
+    writeDeveloperLog('consistency.repair.section.start', {
+      section_id: item.id,
+      title: item.title || '未命名章节',
+      conflict_count: (conflicts || []).length,
+      conflicts,
+      content_metrics: textMetrics(currentContent),
+    });
 
     for (let attempt = 1; attempt <= CONSISTENCY_REPAIR_MAX_ATTEMPTS; attempt += 1) {
       if (isPauseRequested()) {
+        writeDeveloperLog('consistency.repair.section.paused', {
+          section_id: item.id,
+          title: item.title || '未命名章节',
+          applied_count: appliedTotal,
+        });
         return { appliedCount: appliedTotal, failed: false, paused: true };
       }
 
       try {
+        writeDeveloperLog('consistency.repair.attempt.start', {
+          section_id: item.id,
+          title: item.title || '未命名章节',
+          attempt,
+          max_attempts: CONSISTENCY_REPAIR_MAX_ATTEMPTS,
+          previous_failures: failures,
+          content_metrics: textMetrics(currentContent),
+        });
         const response = await aiService.collectJsonResponse({
           messages: buildConsistencyRepairMessages({
             context,
@@ -3217,35 +3348,83 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
           repairMessagesBuilder: (contextForRepair) => buildConsistencyRepairJsonRepairMessages(contextForRepair, item.id),
           max_retries: 1,
         });
+        writeDeveloperLog('consistency.repair.response', {
+          section_id: item.id,
+          title: item.title || '未命名章节',
+          attempt,
+          patch_count: response.patches.length,
+          patches: response.patches,
+        });
 
         if (!response.patches.length) {
           failures = ['模型未返回可应用的 patches'];
+          writeDeveloperLog('consistency.repair.no_patches', {
+            section_id: item.id,
+            title: item.title || '未命名章节',
+            attempt,
+          });
         } else {
           const result = applyConsistencyRepairPatches(currentContent, response.patches);
+          writeDeveloperLog('consistency.repair.apply_result', {
+            section_id: item.id,
+            title: item.title || '未命名章节',
+            attempt,
+            applied_count: result.appliedCount,
+            errors: result.errors,
+            patch_results: result.patchResults,
+          });
           if (result.appliedCount > 0) {
             currentContent = result.content;
             appliedTotal += result.appliedCount;
             rememberTouchedItem(item.id);
             saveSection(item, { status: 'success', content: currentContent, error: undefined }, currentContent, { logs });
+            writeDeveloperLog('consistency.repair.section.saved', {
+              section_id: item.id,
+              title: item.title || '未命名章节',
+              attempt,
+              applied_total: appliedTotal,
+              content_metrics: textMetrics(currentContent),
+            });
           }
           if (!result.errors.length) {
+            writeDeveloperLog('consistency.repair.section.done', {
+              section_id: item.id,
+              title: item.title || '未命名章节',
+              applied_count: appliedTotal,
+              failed: false,
+            });
             return { appliedCount: appliedTotal, failed: false, paused: false };
           }
           failures = result.errors;
         }
       } catch (error) {
         failures = [error.message || '模型返回无效'];
+        writeDeveloperLog('consistency.repair.attempt.error', {
+          section_id: item.id,
+          title: item.title || '未命名章节',
+          attempt,
+          error: error.message || '模型返回无效',
+          stack: error.stack || '',
+        });
       }
 
       logs = [...logs, `一致性修复第 ${attempt}/${CONSISTENCY_REPAIR_MAX_ATTEMPTS} 次未完成：${item.id} ${item.title || '未命名章节'}，${failures.join('；')}。`];
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
     }
 
+    writeDeveloperLog('consistency.repair.section.done', {
+      section_id: item.id,
+      title: item.title || '未命名章节',
+      applied_count: appliedTotal,
+      failed: true,
+      errors: failures,
+    });
     return { appliedCount: appliedTotal, failed: true, paused: false, errors: failures };
   }
 
   async function runConsistencyAuditIfEnabled(options = {}) {
     if (!enableConsistencyAudit) {
+      writeDeveloperLog('consistency.audit.skipped', { reason: 'disabled' });
       logs = [...logs, '全文一致性审计未启用，跳过审计阶段。'];
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
       return { ran: false, fixedCount: 0, failedCount: 0 };
@@ -3253,6 +3432,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
 
     const auditTargets = buildConsistencyAuditTargets(options.targetItemId || targetItemId);
     if (!auditTargets.length) {
+      writeDeveloperLog('consistency.audit.skipped', { reason: 'no_targets', target_item_id: options.targetItemId || targetItemId || '' });
       logs = [...logs, '全文一致性审计跳过：没有可审计的成功正文小节。'];
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
       return { ran: false, fixedCount: 0, failedCount: 0 };
@@ -3273,11 +3453,38 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     logs = [...logs, options.reaudit
       ? `开始一致性复审：${auditTargets.length} 个小节，拆分为 ${auditGroups.length} 组。`
       : `开始全文一致性审计：${auditTargets.length} 个小节，拆分为 ${auditGroups.length} 组，并发 ${contentConcurrency}。`];
+    writeDeveloperLog('consistency.audit.start', {
+      reaudit: Boolean(options.reaudit),
+      target_item_id: options.targetItemId || targetItemId || '',
+      target_count: auditTargets.length,
+      group_count: auditGroups.length,
+      concurrency: contentConcurrency,
+      group_word_limit: CONSISTENCY_AUDIT_GROUP_WORD_LIMIT,
+      groups: auditGroups.map((group) => ({
+        index: group.index,
+        total: group.total,
+        words: group.words,
+        target_words: group.targetWords,
+        total_words: group.totalWords,
+        sections: group.items.map(({ item, words, content }) => ({
+          id: item.id,
+          title: item.title || '未命名章节',
+          words,
+          content_metrics: textMetrics(content),
+        })),
+      })),
+    });
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
 
     await runItemsWithWorkerPool(auditGroups, contentConcurrency, async (group) => {
       const allowedIds = new Set(group.items.map(({ item }) => item.id).filter(Boolean));
       try {
+        writeDeveloperLog('consistency.audit.group.start', {
+          index: group.index,
+          total: group.total,
+          words: group.words,
+          allowed_ids: [...allowedIds],
+        });
         const response = await aiService.collectJsonResponse({
           messages: buildConsistencyAuditMessages({ group, globalFactsText, bidAnalysisFactsText }),
           temperature: 0.1,
@@ -3297,8 +3504,21 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         }
         contentStats.audit_conflict_total = conflictsBySectionId.size;
         logs = [...logs, `一致性审计完成：第 ${group.index}/${group.total} 组，发现 ${response.conflicts.length} 条冲突，累计 ${conflictsBySectionId.size} 个冲突小节。`];
+        writeDeveloperLog('consistency.audit.group.success', {
+          index: group.index,
+          total: group.total,
+          conflict_count: response.conflicts.length,
+          conflicts: response.conflicts,
+          conflict_section_count: conflictsBySectionId.size,
+        });
       } catch (error) {
         logs = [...logs, `一致性审计失败：第 ${group.index}/${group.total} 组，${error.message || '模型返回无效'}，已跳过该组。`];
+        writeDeveloperLog('consistency.audit.group.error', {
+          index: group.index,
+          total: group.total,
+          error: error.message || '模型返回无效',
+          stack: error.stack || '',
+        });
       } finally {
         contentStats.audit_group_completed += 1;
         updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
@@ -3316,9 +3536,20 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     logs = [...logs, repairTargets.length
       ? `一致性审计发现 ${repairTargets.length} 个冲突小节，开始局部修复，并发 ${contentConcurrency}。`
       : '一致性审计未发现需要修复的事实冲突。'];
+    writeDeveloperLog('consistency.repair.start', {
+      target_count: repairTargets.length,
+      concurrency: contentConcurrency,
+      targets: repairTargets.map(({ context, conflicts }) => ({
+        section_id: context.item.id,
+        title: context.item.title || '未命名章节',
+        conflict_count: conflicts.length,
+        conflicts,
+      })),
+    });
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
 
     if (!repairTargets.length) {
+      writeDeveloperLog('consistency.audit.done', { fixed_count: 0, failed_count: 0, repair_target_count: 0 });
       return { ran: true, fixedCount: 0, failedCount: 0 };
     }
 
@@ -3347,6 +3578,11 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     pauseIfRequested('正文生成已在一致性修复阶段暂停，可导出当前已完成内容，稍后继续。');
 
     logs = [...logs, `一致性审计完成：发现 ${repairTargets.length} 个冲突小节，成功修复 ${fixedCount} 个，${contentStats.audit_fix_failed} 个需人工核对。`];
+    writeDeveloperLog('consistency.audit.done', {
+      repair_target_count: repairTargets.length,
+      fixed_count: fixedCount,
+      failed_count: contentStats.audit_fix_failed,
+    });
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
     return { ran: true, fixedCount, failedCount: contentStats.audit_fix_failed };
   }
@@ -3509,6 +3745,13 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     logs = [...logs, targetItemId
       ? (failedCount ? `小节重新生成结束，当前整体进度 ${finalProgress}%，${failedCount} 个小节失败。` : `小节重新生成完成，当前整体进度 ${finalProgress}%。`)
       : (failedCount ? `正文生成完成，${failedCount} 个小节失败。` : '正文生成完成。')];
+    writeDeveloperLog('content.task.completed', {
+      status: finalStatus,
+      progress: finalProgress,
+      failed_count: failedCount,
+      stats: statsSnapshot(),
+      touched_item_ids: [...touchedItemIds],
+    });
     technicalPlan = workspaceStore.updateTechnicalPlan({
       outlineData,
       contentGenerationSections: sections,
@@ -3519,8 +3762,18 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     updateTask({ status: finalStatus, progress: finalProgress, logs, stats: statsSnapshot(), pause_requested: false }, technicalPlan);
   } catch (error) {
     if (error?.code === 'CONTENT_GENERATION_PAUSED') {
+      writeDeveloperLog('content.task.paused', {
+        message: error.message || 'paused',
+        stats: statsSnapshot(),
+        touched_item_ids: [...touchedItemIds],
+      });
       return;
     }
+    writeDeveloperLog('content.task.error', {
+      error: error.message || '任务执行失败',
+      stack: error.stack || '',
+      stats: statsSnapshot(),
+    });
     throw error;
   }
 }
