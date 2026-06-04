@@ -423,6 +423,46 @@ function headingLevel(level) {
   return HeadingLevel.HEADING_4;
 }
 
+
+function cmToTwips(cm) {
+  return Math.round(Number(cm) * 567);
+}
+
+function headingStyleForLevel(level, headingRules) {
+  const rule = (headingRules || []).find((r) => r.level === level);
+  if (!rule) {
+    return {
+      font: level <= 2 ? '黑体' : '宋体',
+      size: level === 1 ? 36 : level === 2 ? 28 : 24,
+      bold: level <= 5,
+      spaceBefore: level === 1 ? 200 : 160,
+      spaceAfter: 120,
+      indent: level >= 5 ? 480 : 0,
+      lineSpacing: level === 6 ? 288 : 276,
+    };
+  }
+  const lineVal = Number(rule.lineSpacing) || 1;
+  return {
+    font: rule.font || '宋体',
+    size: Number(rule.fontSize) || 24,
+    bold: level <= 5,
+    spaceBefore: Math.round(Number(rule.spaceBefore || 0) * 20),
+    spaceAfter: Math.round(Number(rule.spaceAfter || 0) * 20),
+    indent: Math.round((Number(rule.indent) || 0) * 240),
+    lineSpacing: Math.round(lineVal * 240),
+  };
+}
+
+function formatHeadingPrefix(level, index, headingNumbering) {
+  const rule = (headingNumbering || []).find((r) => r.level === level);
+  if (!rule) return '';
+  const nums = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+    '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十',
+    '二十一', '二十二', '二十三', '二十四', '二十五', '二十六', '二十七', '二十八', '二十九', '三十'];
+  const num = nums[index] || String(index);
+  return (rule.prefix || '') + num + (rule.suffix || '');
+}
+
 function imageTypeFromMime(mime) {
   if (!mime) return null;
   if (mime.includes('png')) return 'png';
@@ -1037,14 +1077,16 @@ async function addMarkdownContent(children, content, context) {
   children.push(...await markdownToDocxBlocks(content, context));
 }
 
-async function addOutlineItems(children, items, context, level = 1) {
+async function addOutlineItems(children, items, context, formatConfig, level = 1) {
   for (const item of items || []) {
     const title = `${item.id || ''} ${item.title || '未命名章节'}`.trim();
-    children.push(paragraph([textRun(title, { bold: true })], {
-      heading: headingLevel(level),
-      before: level === 1 ? 320 : 200,
-      after: 120,
-    }));
+    const hStyle = headingStyleForLevel(level, (formatConfig || {}).heading_rules || (formatConfig || {}).headingRules || []);
+      children.push(paragraph([textRun(title, { bold: hStyle.bold, font: hStyle.font, size: hStyle.size })], {
+        heading: headingLevel(level),
+        alignment: hStyle.alignment,
+        spacing: { before: hStyle.spaceBefore, after: hStyle.spaceAfter, line: hStyle.lineSpacing },
+        indent: hStyle.indent ? { firstLine: hStyle.indent } : undefined,
+      }));
 
     if (!item.children?.length) {
       if (String(item.content || '').trim()) {
@@ -1055,7 +1097,7 @@ async function addOutlineItems(children, items, context, level = 1) {
       continue;
     }
 
-    await addOutlineItems(children, item.children, context, level + 1);
+    await addOutlineItems(children, item.children, context, formatConfig, level + 1);
   }
 }
 
@@ -1083,7 +1125,7 @@ function createNumberingConfig(context) {
   };
 }
 
-async function buildDocxResult(payload, options = {}) {
+async function buildDocxResult(payload, options = {}, formatConfig) {
   const stats = countOutlineStats(payload.outline || []);
   const context = {
     baseDir: payload.base_dir || payload.baseDir,
@@ -1128,7 +1170,12 @@ async function buildDocxResult(payload, options = {}) {
     sections: [{
       properties: {
         page: {
-          margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
+          margin: {
+            top: cmToTwips((formatConfig?.page_format || formatConfig?.pageFormat || {}).marginTop || 2),
+            right: cmToTwips((formatConfig?.page_format || formatConfig?.pageFormat || {}).marginRight || 2),
+            bottom: cmToTwips((formatConfig?.page_format || formatConfig?.pageFormat || {}).marginBottom || 2),
+            left: cmToTwips((formatConfig?.page_format || formatConfig?.pageFormat || {}).marginLeft || 2),
+          },
         },
       },
       children,

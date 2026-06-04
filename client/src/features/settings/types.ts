@@ -1,4 +1,4 @@
-import type { FileParserConfig, ImageModelConfig, ImageModelProfiles, TextModelConfig, TextModelProfiles, TextModelProvider } from '../../shared/types';
+import type { DocumentFormatConfig, FileParserConfig, ImageModelConfig, ImageModelProfiles, TextModelConfig, TextModelProfiles, TextModelProvider } from '../../shared/types';
 
 export interface SettingsPageState {
   textModel: TextModelConfig & {
@@ -11,4 +11,5 @@ export interface SettingsPageState {
   general: {
     developer_mode: boolean;
   };
+  documentFormat: DocumentFormatConfig;
 }

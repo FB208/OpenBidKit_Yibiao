@@ -62,4 +62,47 @@ export interface ClientConfig extends AiConfig {
   developer_mode?: boolean;
   analytics_client_id?: string;
   analytics_created_at?: string;
+  document_format: DocumentFormatConfig;
+}
+
+export interface HeadingNumberingRule {
+  level: number;
+  prefix: string;
+  suffix: string;
+}
+
+export interface HeadingFormatRule {
+  level: number;
+  label: string;
+  font: string;
+  fontSize: number;
+  alignment: 'center' | 'justify';
+  spaceBefore: number;
+  spaceAfter: number;
+  indent: number;
+  lineSpacing: number;
+  numberingEnabled: boolean;
+}
+
+export interface PageFormatConfig {
+  paperSize: string;
+  orientation: 'portrait' | 'landscape';
+  marginTop: number;
+  marginBottom: number;
+  marginLeft: number;
+  marginRight: number;
+  footerEnabled: boolean;
+  footerMargin: number;
+  footerFont: string;
+  footerFontSize: number;
+  footerAlignment: string;
+  pageNumberEnabled: boolean;
+  pageNumberFormat: string;
+  headerEnabled: boolean;
+}
+
+export interface DocumentFormatConfig {
+  headingNumbering: HeadingNumberingRule[];
+  headingRules: HeadingFormatRule[];
+  pageFormat: PageFormatConfig;
 }

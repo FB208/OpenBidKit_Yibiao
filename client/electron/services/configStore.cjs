@@ -105,6 +105,40 @@ const defaultConfig = {
   developer_mode: false,
   analytics_client_id: '',
   analytics_created_at: '',
+  document_format: {
+    heading_numbering: [
+      { level: 1, prefix: '第一章 ', suffix: ' ' },
+      { level: 2, prefix: '第一节 ', suffix: ' ' },
+      { level: 3, prefix: '', suffix: '、' },
+      { level: 4, prefix: '（', suffix: '）' },
+      { level: 5, prefix: '', suffix: '、' },
+      { level: 6, prefix: '(', suffix: ') ' },
+    ],
+    heading_rules: [
+      { level: 1, label: '一级标题（第一章）', font: '黑体', fontSize: 36, alignment: 'center', spaceBefore: 10, spaceAfter: 10, indent: 0, lineSpacing: 1, numberingEnabled: true },
+      { level: 2, label: '二级标题（第一节）', font: '黑体', fontSize: 28, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 1.5, lineSpacing: 1, numberingEnabled: true },
+      { level: 3, label: '三级标题（一、）', font: '黑体', fontSize: 26, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 1.5, lineSpacing: 1, numberingEnabled: true },
+      { level: 4, label: '四级标题（（一））', font: '黑体', fontSize: 26, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 1.5, lineSpacing: 1, numberingEnabled: true },
+      { level: 5, label: '五级标题（1、）', font: '黑体', fontSize: 24, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 2, lineSpacing: 1, numberingEnabled: true },
+      { level: 6, label: '正文条目（(1)）', font: '宋体', fontSize: 24, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 2, lineSpacing: 1.2, numberingEnabled: false },
+    ],
+    page_format: {
+      paperSize: 'A4',
+      orientation: 'portrait',
+      marginTop: 2,
+      marginBottom: 2,
+      marginLeft: 2,
+      marginRight: 2,
+      footerEnabled: true,
+      footerMargin: 1.75,
+      footerFont: '宋体',
+      footerFontSize: 18,
+      footerAlignment: 'left',
+      pageNumberEnabled: true,
+      pageNumberFormat: '第X页',
+      headerEnabled: false,
+    },
+  },
 };
 
 function createAnalyticsClientId() {
@@ -218,6 +252,68 @@ function normalizeConfig(config) {
     developer_mode: source.developer_mode === undefined ? defaultConfig.developer_mode : Boolean(source.developer_mode),
     analytics_client_id: source.analytics_client_id || defaultConfig.analytics_client_id,
     analytics_created_at: source.analytics_created_at || defaultConfig.analytics_created_at,
+    document_format: normalizeDocumentFormat(source.document_format),
+  };
+}
+
+function normalizeDocumentFormat(source) {
+  const df = source && typeof source === 'object' ? source : {};
+  return {
+    heading_numbering: normalizeHeadingNumbering(df.heading_numbering || df.headingNumbering),
+    heading_rules: normalizeHeadingRules(df.heading_rules || df.headingRules),
+    page_format: normalizePageFormat(df.page_format || df.pageFormat),
+  };
+}
+
+function normalizeHeadingNumbering(source) {
+  if (!Array.isArray(source) || !source.length) return defaultHeadingNumbering();
+  return source.map((rule, index) => ({
+    level: Number(rule.level) || index + 1,
+    prefix: String(rule.prefix || ''),
+    suffix: String(rule.suffix || ''),
+  }));
+}
+
+function defaultHeadingNumbering() {
+  return defaultConfig.document_format.heading_numbering;
+}
+
+function normalizeHeadingRules(source) {
+  if (!Array.isArray(source) || !source.length) return defaultHeadingRules();
+  return source.map((rule, index) => ({
+    level: Number(rule.level) || index + 1,
+    label: String(rule.label || rule.name || ''),
+    font: String(rule.font || '宋体'),
+    fontSize: Number(rule.fontSize || rule.font_size || rule.fontsize || 24),
+    alignment: ['center', 'justify'].includes(rule.alignment) ? rule.alignment : 'justify',
+    spaceBefore: Math.max(0, Number(rule.spaceBefore ?? rule.space_before ?? 10)),
+    spaceAfter: Math.max(0, Number(rule.spaceAfter ?? rule.space_after ?? 10)),
+    indent: Math.max(0, Number(rule.indent ?? 0)),
+    lineSpacing: Math.max(0.5, Number(rule.lineSpacing ?? rule.line_spacing ?? rule.spacing ?? 1)),
+    numberingEnabled: Boolean(rule.numberingEnabled ?? rule.numbering_enabled ?? rule.numbered ?? true),
+  }));
+}
+
+function defaultHeadingRules() {
+  return defaultConfig.document_format.heading_rules;
+}
+
+function normalizePageFormat(source) {
+  return {
+    paperSize: String(source.paperSize || source.paper_size || source.paper || 'A4'),
+    orientation: source.orientation === 'landscape' ? 'landscape' : 'portrait',
+    marginTop: Number(source.marginTop ?? source.margin_top ?? source.marginTop ?? 2),
+    marginBottom: Number(source.marginBottom ?? source.margin_bottom ?? 2),
+    marginLeft: Number(source.marginLeft ?? source.margin_left ?? 2),
+    marginRight: Number(source.marginRight ?? source.margin_right ?? 2),
+    footerEnabled: source.footerEnabled !== false && source.footer_enabled !== false,
+    footerMargin: Number(source.footerMargin ?? source.footer_margin ?? 1.75),
+    footerFont: String(source.footerFont || source.footer_font || '宋体'),
+    footerFontSize: Number(source.footerFontSize ?? source.footer_font_size ?? 18),
+    footerAlignment: String(source.footerAlignment || source.footer_alignment || 'left'),
+    pageNumberEnabled: source.pageNumberEnabled !== false && source.page_number_enabled !== false,
+    pageNumberFormat: String(source.pageNumberFormat || source.page_number_format || '第X页'),
+    headerEnabled: Boolean(source.headerEnabled || source.header_enabled),
   };
 }
 

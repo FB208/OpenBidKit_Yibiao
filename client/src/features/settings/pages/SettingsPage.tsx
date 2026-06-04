@@ -3,10 +3,11 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, InputWithAction, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider } from '../../../shared/types';
+import type { ClientConfig, DocumentFormatConfig, FileParserProvider, HeadingFormatRule, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelStatus, PageFormatConfig, TextModelConfig, TextModelProfiles, TextModelProvider } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
+import DocumentFormatTab from './DocumentFormatTab';
 
-type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'about';
+type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'document-format' | 'about';
 type UpdateStatus = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'error' | 'disabled';
 
 const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
@@ -14,6 +15,7 @@ const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
   { id: 'text-model', label: '文本模型' },
   { id: 'image-model', label: '生图模型' },
   { id: 'file-parser', label: '文件解析' },
+  { id: 'document-format', label: '文档格式' },
   { id: 'about', label: '关于' },
 ];
 
@@ -309,6 +311,40 @@ const initialState: SettingsPageState = {
   general: {
     developer_mode: false,
   },
+  documentFormat: {
+    headingNumbering: [
+      { level: 1, prefix: '第一章 ', suffix: ' ' },
+      { level: 2, prefix: '第一节 ', suffix: ' ' },
+      { level: 3, prefix: '', suffix: '、' },
+      { level: 4, prefix: '（', suffix: '）' },
+      { level: 5, prefix: '', suffix: '、' },
+      { level: 6, prefix: '(', suffix: ') ' },
+    ],
+    headingRules: [
+      { level: 1, label: '一级标题（第一章）', font: '黑体', fontSize: 36, alignment: 'center', spaceBefore: 10, spaceAfter: 10, indent: 0, lineSpacing: 1, numberingEnabled: true },
+      { level: 2, label: '二级标题（第一节）', font: '黑体', fontSize: 28, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 1.5, lineSpacing: 1, numberingEnabled: true },
+      { level: 3, label: '三级标题（一、）', font: '黑体', fontSize: 26, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 1.5, lineSpacing: 1, numberingEnabled: true },
+      { level: 4, label: '四级标题（（一））', font: '黑体', fontSize: 26, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 1.5, lineSpacing: 1, numberingEnabled: true },
+      { level: 5, label: '五级标题（1、）', font: '黑体', fontSize: 24, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 2, lineSpacing: 1, numberingEnabled: true },
+      { level: 6, label: '正文条目（(1)）', font: '宋体', fontSize: 24, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 2, lineSpacing: 1.2, numberingEnabled: false },
+    ],
+    pageFormat: {
+      paperSize: 'A4',
+      orientation: 'portrait',
+      marginTop: 2,
+      marginBottom: 2,
+      marginLeft: 2,
+      marginRight: 2,
+      footerEnabled: true,
+      footerMargin: 1.75,
+      footerFont: '宋体',
+      footerFontSize: 18,
+      footerAlignment: 'left',
+      pageNumberEnabled: true,
+      pageNumberFormat: '第X页',
+      headerEnabled: false,
+    },
+  },
 };
 
 interface SettingsPageProps {
@@ -390,6 +426,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         general: {
           developer_mode: Boolean(config.developer_mode),
         },
+        documentFormat: config.document_format || initialState.documentFormat,
       }));
       setSavedConfig(config);
       onDeveloperModeChange?.(Boolean(config.developer_mode));
@@ -428,6 +465,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         mineru_token: state.fileParser.mineru_token || '',
       },
       developer_mode: state.general.developer_mode,
+      document_format: state.documentFormat,
     };
   };
 
@@ -877,6 +915,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       return JSON.stringify(state.fileParser) !== JSON.stringify(savedConfig.file_parser);
     }
 
+    if (activeTab === 'document-format') {
+      return JSON.stringify(state.documentFormat) !== JSON.stringify(savedConfig.document_format);
+    }
+
     return false;
   };
 
@@ -895,10 +937,14 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
     if (activeTab === 'file-parser') {
       await saveFileParserConfig();
+      return;
+    }
+    if (activeTab === 'document-format') {
+      await saveClientConfig(createClientConfig());
     }
   };
 
-  const canSaveActiveTab = activeTab === 'general' || activeTab === 'text-model' || activeTab === 'image-model' || activeTab === 'file-parser';
+  const canSaveActiveTab = activeTab === 'general' || activeTab === 'text-model' || activeTab === 'image-model' || activeTab === 'file-parser' || activeTab === 'document-format';
   const activeTabDirty = isActiveTabDirty();
   const currentTextProviderDefault = textProviderDefaults[state.textModel.provider];
   const imageModelStatus: ImageModelStatus = state.imageModel.status || 'untested';
@@ -1297,6 +1343,14 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             招标文件大多数是 Word 或 Word 导出的带文字层 PDF，本地解析可以适应 95% 以上的情况；如果解析失败，再尝试 MinerU 精准解析 API。
           </div>
         </section>
+      )}
+
+
+      {activeTab === 'document-format' && (
+        <DocumentFormatTab
+          documentFormat={state.documentFormat}
+          onChange={(documentFormat) => setState((prev) => ({ ...prev, documentFormat }))}
+        />
       )}
 
       {activeTab === 'about' && (
