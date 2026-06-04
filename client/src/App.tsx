@@ -5,6 +5,10 @@ import AppShell from './components/AppShell';
 import { trackAppOpen, trackConfigUsage, trackPageView } from './shared/analytics/analytics';
 import type { SectionId } from './shared/types/navigation';
 
+function isDeveloperSection(section: SectionId) {
+  return section.startsWith('developer-');
+}
+
 function App() {
   const [activeSection, setActiveSection] = useState<SectionId>('technical-plan');
   const [developerMode, setDeveloperMode] = useState(false);
@@ -26,7 +30,7 @@ function App() {
   }, [activeSection]);
 
   useEffect(() => {
-    if (!developerMode && activeSection === 'developer-test') {
+    if (!developerMode && isDeveloperSection(activeSection)) {
       setActiveSection('technical-plan');
     }
   }, [activeSection, developerMode]);
@@ -51,7 +55,9 @@ function App() {
       >
         <AppRouter
           activeSection={activeSection}
+          developerMode={developerMode}
           onDeveloperModeChange={setDeveloperMode}
+          onSectionChange={(section) => { void requestSectionChange(section); }}
           registerLeaveGuard={(guard) => {
             leaveGuardRef.current = guard;
           }}

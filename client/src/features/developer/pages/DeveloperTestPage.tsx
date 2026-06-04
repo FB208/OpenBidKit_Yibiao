@@ -105,10 +105,10 @@ function DeveloperTestPage() {
     <div className="page-stack developer-test-page">
       <section className="panel developer-test-hero">
         <div className="hero-copy">
-          <span className="eyebrow">Developer Reproduction</span>
-          <h2>测试页</h2>
+          <span className="eyebrow">JSON Request Lab</span>
+          <h2>Json请求测试</h2>
           <p>
-            这里复用项目真实业务请求来复现 response_format 兼容问题：文本按钮使用招标文件解析任务，JSON 按钮使用目录生成任务。
+            这里复用项目真实业务请求来复现 response_format 兼容问题：文本按钮使用招标文件解析任务，Json 按钮使用目录生成任务。
           </p>
           <div className="developer-test-actions">
             <button type="button" className="primary-action" onClick={runTextTest} disabled={running || !textTask}>

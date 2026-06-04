@@ -32,6 +32,10 @@ const pageLabels = {
   'rejection-check/results/logic': '废标项检查 - 逻辑谬误结果',
   'bid-opportunity': '投标机会',
   'developer-test': '测试页',
+  'developer-json-test': '测试页 - Json请求测试',
+  'developer-prompt-lab': '测试页 - Prompt调试台',
+  'developer-parser-sandbox': '测试页 - 文件解析沙盘',
+  'developer-export-preview': '测试页 - 导出链路预演',
   settings: '设置',
 };
 

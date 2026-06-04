@@ -1,6 +1,6 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useState, type ComponentType, type ReactElement, type SVGProps } from 'react';
-import { getAppMenuItems } from '../app/menuConfig';
+import { getAppMenuItems, getParentMenuItemBySection } from '../app/menuConfig';
 import type { SectionId } from '../shared/types/navigation';
 import logoUrl from '../../assets/icon_256.png';
 
@@ -18,12 +18,17 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'rejection-check': ShieldIcon,
   'bid-opportunity': RadarIcon,
   'developer-test': FlaskIcon,
+  'developer-json-test': FlaskIcon,
+  'developer-prompt-lab': FlaskIcon,
+  'developer-parser-sandbox': FlaskIcon,
+  'developer-export-preview': FlaskIcon,
   settings: GearIcon,
 };
 
 function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const menuItems = getAppMenuItems(developerMode);
+  const activeParent = getParentMenuItemBySection(activeSection, developerMode);
 
   return (
     <aside className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}>
@@ -51,12 +56,13 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
       <nav className="sidebar-nav" aria-label="主菜单">
         {menuItems.map((item) => {
           const Icon = navigationIcons[item.id];
-          const isActive = item.id === activeSection;
+          const childCount = item.children?.length ?? 0;
+          const isActive = item.id === activeSection || activeParent?.id === item.id;
           const button = (
             <button
               key={item.id}
               type="button"
-              className={`nav-item ${isActive ? 'is-active' : ''}`}
+              className={`nav-item ${isActive ? 'is-active' : ''} ${childCount ? 'has-children' : ''}`}
               onClick={() => onSectionChange(item.id)}
               aria-label={item.label}
               aria-current={isActive ? 'page' : undefined}
@@ -68,6 +74,7 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
                 <strong>{item.label}</strong>
                 <small>{item.description}</small>
               </span>
+              {childCount > 0 && <span className="nav-child-count" aria-label={`${childCount} 个二级入口`}>{childCount}</span>}
             </button>
           );
 
