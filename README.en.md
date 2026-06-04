@@ -27,7 +27,7 @@
   <br>
   <strong>❓ What problem does it solve?</strong>
   <br>
-  There are many paid AI bid-writing tools today, but they are extremely expensive. A single proposal can cost tens of yuan, and unless a company reimburses it, small-business workers can hardly afford them. Free tools often have very poor quality. OpenBidKit aims to become the OpenClaw of the bidding field by providing an out-of-the-box, high-quality proposal writing tool. In our tests, generating a 200,000-word bid proposal with DeepSeek V4 Flash costs only about 0.8-1 yuan. We are also working hard to support the completely free LongCat Flash Lite, so proposal writers no longer need to buy their own feed.
+  There are many paid AI bid-writing tools today, but they are extremely expensive. A single proposal can cost tens of yuan, and unless a company reimburses it, small-business workers can hardly afford them. Free tools often have very poor quality. OpenBidKit aims to become the OpenClaw of the bidding field by providing an out-of-the-box, high-quality proposal writing tool. In our tests, generating a 200,000-word bid proposal with DeepSeek V4 Flash costs only about 0.8-1 yuan. We are also working hard to support the completely free LongCat-2.0-Preview, so proposal writers no longer need to buy their own feed.
 </p>
 
 ## 🌐 Official Website
@@ -41,6 +41,20 @@ Visit the website for more product information, online demos, and technical supp
 > Focused on the full GPT series, lower cost than DeepSeek V4 PRO, stable and fast for 7 months. Native chat in Yanwuchang plus unlimited-canvas image generation, all in one place, practical and affordable.
 >
 > Direct link: https://jlaudeapi.com
+
+## 📢 Statement
+
+Recently, we have received many issue-based attacks that baselessly smear and attack this repository. I hereby state:
+
+1. I will not stop open-sourcing this project. Never!
+2. Even if it becomes commercialized in the future, I will follow excellent open-source projects such as Excalidraw and NocoDB, and only charge for B2B services such as project management, cloud storage, team collaboration, and enterprise services. I give my personal word that the basic features for personal use will remain open source and free forever, and the generation quality will strive to match paid software.
+
+<img src="./screenshots/issue_claim.png" alt="Yibiao issue statement" width="100%">
+
+## 🍉 Acknowledgements
+
+- Thanks to all users for your support and trust.
+- Special thanks to friends from <a href="https://linux.do/" rel="nofollow">linuxdo</a> for your support and encouragement.
 
 <h2 align="center">✨ Features & Advantages</h2>
 
