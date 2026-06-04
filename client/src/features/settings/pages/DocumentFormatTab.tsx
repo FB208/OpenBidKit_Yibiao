@@ -1,19 +1,62 @@
-import type { DocumentFormatConfig, HeadingFormatRule, PageFormatConfig } from '../../../shared/types';
+import type { DocumentFormatConfig, HeadingFormatRule, HeadingNumberingRule, PageFormatConfig } from '../../../shared/types';
 
 interface DocumentFormatTabProps {
-  documentFormat: DocumentFormatConfig;
+  document_format: DocumentFormatConfig;
   onChange: (value: DocumentFormatConfig) => void;
 }
 
-const headingNumberingLabels = ['第一章', '第一节', '一、', '（一）', '1、', '(1)'];
+const numberingPresets: Array<{ label: string; rules: Array<{ prefix: string; suffix: string }> }> = [
+  {
+    label: '国标公文',
+    rules: [
+      { prefix: '第一章 ', suffix: ' ' },
+      { prefix: '第一节 ', suffix: ' ' },
+      { prefix: '', suffix: '、' },
+      { prefix: '（', suffix: '）' },
+      { prefix: '', suffix: '、' },
+      { prefix: '(', suffix: ') ' },
+    ],
+  },
+  {
+    label: '纯数字层级',
+    rules: [
+      { prefix: '', suffix: ' ' },
+      { prefix: '', suffix: '.' },
+      { prefix: '', suffix: '.' },
+      { prefix: '', suffix: '.' },
+      { prefix: '', suffix: ')' },
+      { prefix: '(', suffix: ')' },
+    ],
+  },
+  {
+    label: '中文序号',
+    rules: [
+      { prefix: '', suffix: '、' },
+      { prefix: '（', suffix: '）' },
+      { prefix: '', suffix: '、' },
+      { prefix: '（', suffix: '）' },
+      { prefix: '', suffix: '、' },
+      { prefix: '(', suffix: ') ' },
+    ],
+  },
+];
 
-function DocumentFormatTab({ documentFormat, onChange }: DocumentFormatTabProps) {
-  const { headingRules, pageFormat } = documentFormat;
+const numberStyles = [
+  { value: 'chinese', label: '一、二、三' },
+  { value: 'arabic', label: '1、2、3' },
+  { value: 'roman', label: 'Ⅰ、Ⅱ、Ⅲ' },
+  { value: 'lower-alpha', label: 'a、b、c' },
+  { value: 'upper-alpha', label: 'A、B、C' },
+  { value: 'circled', label: '①②③' },
+];
+
+function DocumentFormatTab({ document_format, onChange }: DocumentFormatTabProps) {
+  const { heading_numbering, heading_rules, page_format } = document_format;
 
   const updateHeadingRule = (level: number, partial: Partial<HeadingFormatRule>) => {
     onChange({
-      ...documentFormat,
-      headingRules: headingRules.map((rule) =>
+      ...document_format,
+      heading_rules: heading_rules.map((rule) =>
         rule.level === level ? { ...rule, ...partial } : rule
       ),
     });
@@ -21,8 +64,28 @@ function DocumentFormatTab({ documentFormat, onChange }: DocumentFormatTabProps)
 
   const updatePageFormat = (partial: Partial<PageFormatConfig>) => {
     onChange({
-      ...documentFormat,
-      pageFormat: { ...pageFormat, ...partial },
+      ...document_format,
+      page_format: { ...page_format, ...partial },
+    });
+  };
+
+  const updateNumberingRule = (level: number, partial: Partial<HeadingNumberingRule>) => {
+    onChange({
+      ...document_format,
+      heading_numbering: heading_numbering.map((rule) =>
+        rule.level === level ? { ...rule, ...partial } : rule
+      ),
+    });
+  };
+
+  const applyNumberingPreset = (preset: typeof numberingPresets[number]) => {
+    onChange({
+      ...document_format,
+      heading_numbering: preset.rules.map((rule, index) => ({
+        level: index + 1,
+        prefix: rule.prefix,
+        suffix: rule.suffix,
+      })),
     });
   };
 
@@ -49,32 +112,77 @@ function DocumentFormatTab({ documentFormat, onChange }: DocumentFormatTabProps)
           <strong>文档目录层级规则（标题编号规范）</strong>
         </div>
         <div className="format-section-desc">
-          采用国标公文中文层级编号，编号规则如下：
+          配置各层级标题的编号格式。前缀/后缀中的空格、括号等字面字符会原样保留，序号按层级自动编号。
         </div>
+
+        <div className="format-presets">
+          <span className="format-presets-label">预设：</span>
+          {numberingPresets.map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              className="text-button format-preset-btn"
+              onClick={() => applyNumberingPreset(preset)}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+
         <div className="format-numbering-table-wrap">
           <table className="format-numbering-table">
             <thead>
               <tr>
                 <th>层级</th>
-                <th>编号格式</th>
-                <th>示例</th>
+                <th>前导符</th>
+                <th>序号样式</th>
+                <th>后缀符</th>
+                <th>预览</th>
               </tr>
             </thead>
             <tbody>
-              {headingNumberingLabels.map((label, index) => (
-                <tr key={index}>
-                  <td>{index + 1} 级</td>
-                  <td><code>{label}</code></td>
-                  <td>
-                    {index === 0 ? '第一章 项目概述' :
-                     index === 1 ? '第一节 项目背景' :
-                     index === 2 ? '一、技术方案' :
-                     index === 3 ? '（一）系统架构' :
-                     index === 4 ? '1、服务器选型' :
-                     '(1) 详细参数说明'}
-                  </td>
-                </tr>
-              ))}
+              {heading_numbering.map((rule) => {
+                const previewNum = rule.level <= 3 ? '一' :
+                  rule.level <= 4 ? '一' : '1';
+                const preview = `${rule.prefix || ''}${previewNum}${rule.suffix || ''}标题示例`;
+                return (
+                  <tr key={rule.level}>
+                    <td className="format-cell-short">{rule.level} 级</td>
+                    <td>
+                      <input
+                        type="text"
+                        className="format-text-input"
+                        value={rule.prefix}
+                        onChange={(e) => updateNumberingRule(rule.level, { prefix: e.target.value })}
+                        placeholder="如: 第"
+                      />
+                    </td>
+                    <td>
+                      <select
+                        className="format-table-select"
+                        value={rule.number_style || 'chinese'}
+                        onChange={(e) => updateNumberingRule(rule.level, { number_style: e.target.value })}
+                      >
+                        {numberStyles.map((s) => (
+                          <option key={s.value} value={s.value}>{s.label}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        type="text"
+                        className="format-text-input"
+                        value={rule.suffix}
+                        onChange={(e) => updateNumberingRule(rule.level, { suffix: e.target.value })}
+                        placeholder="如: 、"
+                      />
+                    </td>
+                    <td className="format-cell-preview">
+                      <code>{preview}</code>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -100,57 +208,57 @@ function DocumentFormatTab({ documentFormat, onChange }: DocumentFormatTabProps)
               <div className="format-row">
                 <label className="format-mini-label">上</label>
                 <input type="number" className="format-number" step={0.1} min={0.5} max={5}
-                  value={pageFormat.marginTop} onChange={(e) => updatePageFormat({ marginTop: Number(e.target.value) })} />
+                  value={page_format.marginTop} onChange={(e) => updatePageFormat({ marginTop: Number(e.target.value) })} />
                 <span className="format-unit">cm</span>
                 <label className="format-mini-label">下</label>
                 <input type="number" className="format-number" step={0.1} min={0.5} max={5}
-                  value={pageFormat.marginBottom} onChange={(e) => updatePageFormat({ marginBottom: Number(e.target.value) })} />
+                  value={page_format.marginBottom} onChange={(e) => updatePageFormat({ marginBottom: Number(e.target.value) })} />
                 <span className="format-unit">cm</span>
                 <label className="format-mini-label">左</label>
                 <input type="number" className="format-number" step={0.1} min={0.5} max={5}
-                  value={pageFormat.marginLeft} onChange={(e) => updatePageFormat({ marginLeft: Number(e.target.value) })} />
+                  value={page_format.marginLeft} onChange={(e) => updatePageFormat({ marginLeft: Number(e.target.value) })} />
                 <span className="format-unit">cm</span>
                 <label className="format-mini-label">右</label>
                 <input type="number" className="format-number" step={0.1} min={0.5} max={5}
-                  value={pageFormat.marginRight} onChange={(e) => updatePageFormat({ marginRight: Number(e.target.value) })} />
+                  value={page_format.marginRight} onChange={(e) => updatePageFormat({ marginRight: Number(e.target.value) })} />
                 <span className="format-unit">cm</span>
               </div>
             </div>
             <div className="format-field">
               <label>页眉</label>
-              <span className="format-value">{pageFormat.headerEnabled ? '启用' : '关闭'}</span>
+              <span className="format-value">{page_format.headerEnabled ? '启用' : '关闭'}</span>
             </div>
             <div className="format-field">
               <label>页脚</label>
               <div className="format-row">
-                <select className="format-select" value={pageFormat.footerEnabled ? 'on' : 'off'}
+                <select className="format-select" value={page_format.footerEnabled ? 'on' : 'off'}
                   onChange={(e) => updatePageFormat({ footerEnabled: e.target.value === 'on' })}>
                   <option value="on">启用</option>
                   <option value="off">关闭</option>
                 </select>
-                {pageFormat.footerEnabled && (
+                {page_format.footerEnabled && (
                   <>
                     <label className="format-mini-label">距底边</label>
                     <input type="number" className="format-number" step={0.05} min={0.5} max={5}
-                      value={pageFormat.footerMargin} onChange={(e) => updatePageFormat({ footerMargin: Number(e.target.value) })} />
+                      value={page_format.footerMargin} onChange={(e) => updatePageFormat({ footerMargin: Number(e.target.value) })} />
                     <span className="format-unit">cm</span>
                   </>
                 )}
               </div>
-              {pageFormat.footerEnabled && (
-                <div className="format-detail">字体：{pageFormat.footerFont} 小五 · 左对齐</div>
+              {page_format.footerEnabled && (
+                <div className="format-detail">字体：{page_format.footerFont} 小五 · 左对齐</div>
               )}
             </div>
             <div className="format-field">
               <label>页码</label>
               <div className="format-row">
-                <select className="format-select" value={pageFormat.pageNumberEnabled ? 'on' : 'off'}
+                <select className="format-select" value={page_format.pageNumberEnabled ? 'on' : 'off'}
                   onChange={(e) => updatePageFormat({ pageNumberEnabled: e.target.value === 'on' })}>
                   <option value="on">启用</option>
                   <option value="off">关闭</option>
                 </select>
-                {pageFormat.pageNumberEnabled && (
-                  <span className="format-detail-inline">页面居中 · 格式：{pageFormat.pageNumberFormat}</span>
+                {page_format.pageNumberEnabled && (
+                  <span className="format-detail-inline">页面居中 · 格式：{page_format.pageNumberFormat}</span>
                 )}
               </div>
             </div>
@@ -175,7 +283,7 @@ function DocumentFormatTab({ documentFormat, onChange }: DocumentFormatTabProps)
                 </tr>
               </thead>
               <tbody>
-                {headingRules.map((rule) => (
+                {heading_rules.map((rule) => (
                   <tr key={rule.level}>
                     <td className="format-cell-label">{rule.label}</td>
                     <td>

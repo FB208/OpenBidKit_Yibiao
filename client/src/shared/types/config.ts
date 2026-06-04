@@ -69,6 +69,7 @@ export interface HeadingNumberingRule {
   level: number;
   prefix: string;
   suffix: string;
+  number_style?: string;
 }
 
 export interface HeadingFormatRule {
@@ -102,7 +103,7 @@ export interface PageFormatConfig {
 }
 
 export interface DocumentFormatConfig {
-  headingNumbering: HeadingNumberingRule[];
-  headingRules: HeadingFormatRule[];
-  pageFormat: PageFormatConfig;
+  heading_numbering: HeadingNumberingRule[];
+  heading_rules: HeadingFormatRule[];
+  page_format: PageFormatConfig;
 }

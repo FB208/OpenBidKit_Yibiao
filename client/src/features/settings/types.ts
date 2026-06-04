@@ -11,5 +11,5 @@ export interface SettingsPageState {
   general: {
     developer_mode: boolean;
   };
-  documentFormat: DocumentFormatConfig;
+  document_format: DocumentFormatConfig;
 }

@@ -8618,15 +8618,21 @@ button {
   font-size: 12px;
 }
 
+.format-heading-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .format-heading-table {
-  width: 100%;
+  width: auto;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 12px;
 }
 
 .format-heading-table th,
 .format-heading-table td {
-  padding: 8px 6px;
+  padding: 8px 10px;
   text-align: left;
   border-bottom: 1px solid var(--yb-border-soft);
   white-space: nowrap;
@@ -8637,8 +8643,6 @@ button {
   font-weight: 600;
   font-size: 11px;
   background: rgba(248, 250, 253, 0.6);
-  position: sticky;
-  top: 0;
 }
 
 .format-heading-table tbody tr:hover {
@@ -8648,17 +8652,18 @@ button {
 .format-cell-label {
   color: var(--yb-text);
   font-weight: 600;
-  min-width: 130px;
+  min-width: 140px;
 }
 
 .format-cell-numbers {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
+  min-width: 88px;
 }
 
 .format-table-select {
-  padding: 4px 6px;
+  padding: 5px 8px;
   color: var(--yb-text);
   font-size: 12px;
   border: 1px solid var(--yb-border-soft);
@@ -8673,8 +8678,8 @@ button {
 }
 
 .format-table-num {
-  width: 40px;
-  padding: 4px 6px;
+  width: 38px;
+  padding: 5px 4px;
   color: var(--yb-text);
   font-size: 12px;
   text-align: center;
@@ -8686,4 +8691,60 @@ button {
 
 .format-table-num:focus {
   border-color: var(--yb-primary);
+}
+
+/* 编号预设按钮 */
+.format-presets {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 20px 12px;
+  flex-wrap: wrap;
+}
+
+.format-presets-label {
+  color: var(--yb-text-muted);
+  font-size: 12px;
+}
+
+.format-preset-btn {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(33, 116, 253, 0.06);
+}
+
+.format-preset-btn:hover {
+  background: rgba(33, 116, 253, 0.12);
+}
+
+/* 编号编辑输入框 */
+.format-text-input {
+  width: 72px;
+  padding: 5px 8px;
+  color: var(--yb-text);
+  font-size: 12px;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 6px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.format-text-input:focus {
+  border-color: var(--yb-primary);
+}
+
+.format-cell-short {
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  min-width: 40px;
+}
+
+.format-cell-preview code {
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.06);
+  border-radius: 4px;
+  white-space: nowrap;
 }

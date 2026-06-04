@@ -107,12 +107,12 @@ const defaultConfig = {
   analytics_created_at: '',
   document_format: {
     heading_numbering: [
-      { level: 1, prefix: '第一章 ', suffix: ' ' },
-      { level: 2, prefix: '第一节 ', suffix: ' ' },
-      { level: 3, prefix: '', suffix: '、' },
-      { level: 4, prefix: '（', suffix: '）' },
-      { level: 5, prefix: '', suffix: '、' },
-      { level: 6, prefix: '(', suffix: ') ' },
+      { level: 1, prefix: '第一章 ', suffix: ' ', number_style: 'chinese' },
+      { level: 2, prefix: '第一节 ', suffix: ' ', number_style: 'chinese' },
+      { level: 3, prefix: '', suffix: '、', number_style: 'chinese' },
+      { level: 4, prefix: '（', suffix: '）', number_style: 'chinese' },
+      { level: 5, prefix: '', suffix: '、', number_style: 'arabic' },
+      { level: 6, prefix: '(', suffix: ') ', number_style: 'arabic' },
     ],
     heading_rules: [
       { level: 1, label: '一级标题（第一章）', font: '黑体', fontSize: 36, alignment: 'center', spaceBefore: 10, spaceAfter: 10, indent: 0, lineSpacing: 1, numberingEnabled: true },
@@ -266,11 +266,12 @@ function normalizeDocumentFormat(source) {
 }
 
 function normalizeHeadingNumbering(source) {
-  if (!Array.isArray(source) || !source.length) return defaultHeadingNumbering();
+  if (!source || !Array.isArray(source) || !source.length) return defaultHeadingNumbering();
   return source.map((rule, index) => ({
     level: Number(rule.level) || index + 1,
     prefix: String(rule.prefix || ''),
     suffix: String(rule.suffix || ''),
+    number_style: String(rule.number_style || rule.numberStyle || 'chinese'),
   }));
 }
 
@@ -279,7 +280,7 @@ function defaultHeadingNumbering() {
 }
 
 function normalizeHeadingRules(source) {
-  if (!Array.isArray(source) || !source.length) return defaultHeadingRules();
+  if (!source || !Array.isArray(source) || !source.length) return defaultHeadingRules();
   return source.map((rule, index) => ({
     level: Number(rule.level) || index + 1,
     label: String(rule.label || rule.name || ''),
@@ -299,6 +300,7 @@ function defaultHeadingRules() {
 }
 
 function normalizePageFormat(source) {
+  if (!source || typeof source !== 'object') return defaultConfig.document_format.page_format;
   return {
     paperSize: String(source.paperSize || source.paper_size || source.paper || 'A4'),
     orientation: source.orientation === 'landscape' ? 'landscape' : 'portrait',

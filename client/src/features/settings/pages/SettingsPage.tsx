@@ -311,16 +311,16 @@ const initialState: SettingsPageState = {
   general: {
     developer_mode: false,
   },
-  documentFormat: {
-    headingNumbering: [
-      { level: 1, prefix: '第一章 ', suffix: ' ' },
-      { level: 2, prefix: '第一节 ', suffix: ' ' },
-      { level: 3, prefix: '', suffix: '、' },
-      { level: 4, prefix: '（', suffix: '）' },
-      { level: 5, prefix: '', suffix: '、' },
-      { level: 6, prefix: '(', suffix: ') ' },
+  document_format: {
+    heading_numbering: [
+      { level: 1, prefix: '第一章 ', suffix: ' ', number_style: 'chinese' },
+      { level: 2, prefix: '第一节 ', suffix: ' ', number_style: 'chinese' },
+      { level: 3, prefix: '', suffix: '、', number_style: 'chinese' },
+      { level: 4, prefix: '（', suffix: '）', number_style: 'chinese' },
+      { level: 5, prefix: '', suffix: '、', number_style: 'arabic' },
+      { level: 6, prefix: '(', suffix: ') ', number_style: 'arabic' },
     ],
-    headingRules: [
+    heading_rules: [
       { level: 1, label: '一级标题（第一章）', font: '黑体', fontSize: 36, alignment: 'center', spaceBefore: 10, spaceAfter: 10, indent: 0, lineSpacing: 1, numberingEnabled: true },
       { level: 2, label: '二级标题（第一节）', font: '黑体', fontSize: 28, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 1.5, lineSpacing: 1, numberingEnabled: true },
       { level: 3, label: '三级标题（一、）', font: '黑体', fontSize: 26, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 1.5, lineSpacing: 1, numberingEnabled: true },
@@ -328,7 +328,7 @@ const initialState: SettingsPageState = {
       { level: 5, label: '五级标题（1、）', font: '黑体', fontSize: 24, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 2, lineSpacing: 1, numberingEnabled: true },
       { level: 6, label: '正文条目（(1)）', font: '宋体', fontSize: 24, alignment: 'justify', spaceBefore: 10, spaceAfter: 10, indent: 2, lineSpacing: 1.2, numberingEnabled: false },
     ],
-    pageFormat: {
+    page_format: {
       paperSize: 'A4',
       orientation: 'portrait',
       marginTop: 2,
@@ -426,7 +426,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         general: {
           developer_mode: Boolean(config.developer_mode),
         },
-        documentFormat: config.document_format || initialState.documentFormat,
+        document_format: config.document_format || initialState.document_format,
       }));
       setSavedConfig(config);
       onDeveloperModeChange?.(Boolean(config.developer_mode));
@@ -465,7 +465,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         mineru_token: state.fileParser.mineru_token || '',
       },
       developer_mode: state.general.developer_mode,
-      document_format: state.documentFormat,
+      document_format: state.document_format,
     };
   };
 
@@ -916,7 +916,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
 
     if (activeTab === 'document-format') {
-      return JSON.stringify(state.documentFormat) !== JSON.stringify(savedConfig.document_format);
+      return JSON.stringify(state.document_format) !== JSON.stringify(savedConfig.document_format);
     }
 
     return false;
@@ -1348,8 +1348,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
       {activeTab === 'document-format' && (
         <DocumentFormatTab
-          documentFormat={state.documentFormat}
-          onChange={(documentFormat) => setState((prev) => ({ ...prev, documentFormat }))}
+          document_format={state.document_format}
+          onChange={(document_format) => setState((prev) => ({ ...prev, document_format }))}
         />
       )}
 
