@@ -765,6 +765,429 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     return loadTechnicalPlan();
   }
 
+  // ============================================================
+  // 附件管理
+  // ============================================================
+
+  function getAttachmentsDir() {
+    return path.join(path.dirname(tenderMarkdownPath), 'attachments');
+  }
+
+  async function importAttachment() {
+    if (!fileService?.importDocument) {
+      throw new Error('文件导入服务尚未初始化');
+    }
+
+    const result = await fileService.importDocument();
+    if (!result?.success || !result.file_content) {
+      return {
+        success: false,
+        message: result?.message || '未导入文件',
+        attachment: null,
+      };
+    }
+
+    const markdown = String(result.file_content || '').trim();
+    const attachmentId = `att-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+    const attachmentDir = path.join(getAttachmentsDir(), attachmentId);
+    const sourcePath = path.join(attachmentDir, 'source');
+    const markdownPath = path.join(attachmentDir, 'content.md');
+    fs.mkdirSync(attachmentDir, { recursive: true });
+
+    const sourceFilePath = result.file_path || result.filePath;
+    if (sourceFilePath && fs.existsSync(sourceFilePath)) {
+      fs.copyFileSync(sourceFilePath, sourcePath);
+    }
+    fs.writeFileSync(markdownPath, `${markdown}\n`, 'utf-8');
+
+    const timestamp = now();
+    const extension = (result.file_name || '').split('.').pop()?.toLowerCase() || '';
+    const relativeSourcePath = path.relative(path.dirname(path.dirname(tenderMarkdownPath)), sourcePath).replace(/\\/g, '/');
+    const relativeMarkdownPath = path.relative(path.dirname(path.dirname(tenderMarkdownPath)), markdownPath).replace(/\\/g, '/');
+
+    db.prepare(`
+      INSERT INTO technical_plan_attachments (
+        attachment_id, file_name, source_path, markdown_path, markdown_chars, content_hash,
+        parser_label, attachment_type, file_size, extension, created_at, updated_at
+      ) VALUES (
+        @attachment_id, @file_name, @source_path, @markdown_path, @markdown_chars, @content_hash,
+        @parser_label, @attachment_type, @file_size, @extension, @created_at, @updated_at
+      )
+    `).run({
+      attachment_id: attachmentId,
+      file_name: result.file_name || '未命名附件',
+      source_path: relativeSourcePath,
+      markdown_path: relativeMarkdownPath,
+      markdown_chars: markdown.length,
+      content_hash: stableHash(markdown),
+      parser_label: result.parser_label || null,
+      attachment_type: 'reference',
+      file_size: Number(result.file_size || 0),
+      extension,
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+
+    return {
+      success: true,
+      message: '附件已导入',
+      attachment: db.prepare('SELECT * FROM technical_plan_attachments WHERE attachment_id = ?').get(attachmentId),
+    };
+  }
+
+  function listAttachments(bidSectionId) {
+    if (bidSectionId) {
+      return db.prepare(`
+        SELECT * FROM technical_plan_attachments
+        WHERE bid_section_id = ? OR bid_section_id IS NULL
+        ORDER BY sort_order ASC, created_at ASC
+      `).all(bidSectionId);
+    }
+    return db.prepare('SELECT * FROM technical_plan_attachments ORDER BY sort_order ASC, created_at ASC').all();
+  }
+
+  function readAttachmentMarkdown(attachmentId) {
+    const attachment = db.prepare('SELECT * FROM technical_plan_attachments WHERE attachment_id = ?').get(attachmentId);
+    if (!attachment?.markdown_path) return '';
+    const resolvedPath = resolveMarkdownPath(attachment.markdown_path);
+    if (!fs.existsSync(resolvedPath)) return '';
+    return fs.readFileSync(resolvedPath, 'utf-8');
+  }
+
+  function deleteAttachment(attachmentId) {
+    const attachment = db.prepare('SELECT * FROM technical_plan_attachments WHERE attachment_id = ?').get(attachmentId);
+    if (!attachment) throw new Error('未找到该附件');
+    db.prepare('DELETE FROM technical_plan_attachments WHERE attachment_id = ?').run(attachmentId);
+    const attachmentDir = path.dirname(resolveMarkdownPath(attachment.source_path || attachment.markdown_path || ''));
+    if (fs.existsSync(attachmentDir)) {
+      fs.rmSync(attachmentDir, { recursive: true, force: true });
+    }
+  }
+
+  function setAttachmentType(attachmentId, attachmentType) {
+    if (!['procurement_list', 'technical_spec', 'reference'].includes(attachmentType)) {
+      throw new Error('附件分类无效');
+    }
+    db.prepare('UPDATE technical_plan_attachments SET attachment_type = ?, updated_at = ? WHERE attachment_id = ?')
+      .run(attachmentType, now(), attachmentId);
+  }
+
+  function setAttachmentBidSection(attachmentId, bidSectionId) {
+    if (bidSectionId) {
+      const section = db.prepare('SELECT section_id FROM technical_plan_bid_sections WHERE section_id = ?').get(bidSectionId);
+      if (!section) throw new Error('未找到该标段');
+    }
+    db.prepare('UPDATE technical_plan_attachments SET bid_section_id = ?, updated_at = ? WHERE attachment_id = ?')
+      .run(bidSectionId || null, now(), attachmentId);
+  }
+
+  // ============================================================
+  // 采购清单
+  // ============================================================
+
+  function saveProcurementItems(attachmentId, items) {
+    const attachment = db.prepare('SELECT attachment_id FROM technical_plan_attachments WHERE attachment_id = ?').get(attachmentId);
+    if (!attachment) throw new Error('未找到该附件');
+
+    const transaction = db.transaction(() => {
+      db.prepare('DELETE FROM technical_plan_procurement_items WHERE attachment_id = ?').run(attachmentId);
+      if (!Array.isArray(items) || !items.length) return;
+
+      const timestamp = now();
+      const insert = db.prepare(`
+        INSERT INTO technical_plan_procurement_items (
+          item_id, attachment_id, item_number, item_name, model_spec, unit, quantity,
+          is_core, params_json, notes, sort_order, created_at, updated_at
+        ) VALUES (
+          @item_id, @attachment_id, @item_number, @item_name, @model_spec, @unit, @quantity,
+          @is_core, @params_json, @notes, @sort_order, @created_at, @updated_at
+        )
+      `);
+
+      items.forEach((item, index) => {
+        const itemId = `proc-${attachmentId}-${index + 1}`;
+        insert.run({
+          item_id: itemId,
+          attachment_id: attachmentId,
+          item_number: Number(item.item_number || item.itemNumber || (index + 1)),
+          item_name: String(item.item_name || item.itemName || ''),
+          model_spec: item.model_spec || item.modelSpec || null,
+          unit: item.unit || null,
+          quantity: Number(item.quantity) || null,
+          is_core: item.is_core || item.isCore ? 1 : 0,
+          params_json: Array.isArray(item.params) ? JSON.stringify(item.params) : (item.params_json || item.paramsJson || null),
+          notes: item.notes || null,
+          sort_order: index,
+          created_at: timestamp,
+          updated_at: timestamp,
+        });
+      });
+    });
+    transaction();
+  }
+
+  function listProcurementItems(bidSectionId) {
+    if (bidSectionId) {
+      return db.prepare(`
+        SELECT pi.* FROM technical_plan_procurement_items pi
+        WHERE pi.bid_section_id = ? OR pi.bid_section_id IS NULL
+        ORDER BY pi.sort_order ASC
+      `).all(bidSectionId);
+    }
+    return db.prepare('SELECT * FROM technical_plan_procurement_items ORDER BY sort_order ASC').all();
+  }
+
+  function getProcurementItemsForSection(bidSectionId) {
+    if (!bidSectionId) return [];
+    return db.prepare(`
+      SELECT DISTINCT pi.* FROM technical_plan_procurement_items pi
+      LEFT JOIN technical_plan_attachments a ON a.attachment_id = pi.attachment_id
+      WHERE pi.bid_section_id = ?
+         OR (pi.bid_section_id IS NULL AND (a.bid_section_id = ? OR a.bid_section_id IS NULL))
+      ORDER BY pi.sort_order ASC
+    `).all(bidSectionId, bidSectionId);
+  }
+
+  // ============================================================
+  // 标段管理
+  // ============================================================
+
+  function extractBidSections(sections) {
+    if (!Array.isArray(sections) || !sections.length) {
+      updateMeta({ bid_sections_extracted: 1 });
+      return [];
+    }
+
+    const transaction = db.transaction(() => {
+      db.prepare('DELETE FROM technical_plan_bid_sections').run();
+      const timestamp = now();
+      const insert = db.prepare(`
+        INSERT INTO technical_plan_bid_sections (section_id, label, title, description, budget, status, sort_order, created_at, updated_at)
+        VALUES (@section_id, @label, @title, @description, @budget, @status, @sort_order, @created_at, @updated_at)
+      `);
+
+      const result = sections.map((section, index) => {
+        const sectionId = `bid-sec-${index + 1}`;
+        insert.run({
+          section_id: sectionId,
+          label: String(section.label || `标段${index + 1}`).trim(),
+          title: String(section.title || '').trim(),
+          description: String(section.description || '').trim() || null,
+          budget: section.budget ? String(section.budget).trim() : null,
+          status: 'idle',
+          sort_order: index,
+          created_at: timestamp,
+          updated_at: timestamp,
+        });
+        return sectionId;
+      });
+
+      updateMeta({ bid_sections_extracted: 1 });
+      return result;
+    });
+
+    return transaction();
+  }
+
+  function listBidSections() {
+    return db.prepare('SELECT * FROM technical_plan_bid_sections ORDER BY sort_order ASC, section_id ASC').all();
+  }
+
+  function hasMultipleSections() {
+    const count = db.prepare('SELECT COUNT(*) AS cnt FROM technical_plan_bid_sections').get();
+    return (count?.cnt || 0) >= 2;
+  }
+
+  function selectBidSections(sectionIds) {
+    const allSections = listBidSections();
+    const selectedSet = new Set((Array.isArray(sectionIds) ? sectionIds : []).map(String));
+
+    const transaction = db.transaction(() => {
+      for (const section of allSections) {
+        const nextStatus = selectedSet.has(section.section_id) ? 'selected' : 'idle';
+        db.prepare('UPDATE technical_plan_bid_sections SET status = ?, updated_at = ? WHERE section_id = ?')
+          .run(nextStatus, now(), section.section_id);
+      }
+
+      const firstSelected = allSections.find((s) => selectedSet.has(s.section_id));
+      if (firstSelected) {
+        updateMeta({ current_bid_section_id: firstSelected.section_id });
+      }
+    });
+    transaction();
+
+    return allSections.filter((s) => selectedSet.has(s.section_id));
+  }
+
+  // ============================================================
+  // 工作区快照（多标段切换用）
+  // ============================================================
+
+  function _snapshotWorkspaceState(sectionId) {
+    const bidItems = db.prepare('SELECT * FROM technical_plan_bid_items ORDER BY sort_order ASC').all();
+    const outlineNodes = db.prepare('SELECT * FROM technical_plan_outline_nodes ORDER BY level ASC, parent_node_id ASC, sort_order ASC').all();
+    const tasks = db.prepare('SELECT * FROM technical_plan_tasks').all();
+    const contentSections = db.prepare('SELECT * FROM technical_plan_content_sections').all();
+    const contentPlans = db.prepare('SELECT * FROM technical_plan_content_plans').all();
+    const globalFacts = db.prepare('SELECT * FROM technical_plan_global_fact_groups ORDER BY sort_order ASC').all();
+    const referenceDocs = db.prepare('SELECT * FROM technical_plan_reference_docs ORDER BY sort_order ASC').all();
+    const meta = db.prepare('SELECT * FROM technical_plan_meta WHERE id = 1').get();
+
+    db.prepare(`
+      INSERT INTO technical_plan_bid_section_state (
+        section_id, bid_items_json, outline_data_json, tasks_json,
+        content_sections_json, content_plans_json, global_facts_json,
+        reference_doc_ids_json, content_generation_options_json,
+        content_generation_runtime_json, updated_at
+      ) VALUES (
+        @section_id, @bid_items_json, @outline_data_json, @tasks_json,
+        @content_sections_json, @content_plans_json, @global_facts_json,
+        @reference_doc_ids_json, @content_generation_options_json,
+        @content_generation_runtime_json, @updated_at
+      )
+      ON CONFLICT(section_id) DO UPDATE SET
+        bid_items_json = excluded.bid_items_json,
+        outline_data_json = excluded.outline_data_json,
+        tasks_json = excluded.tasks_json,
+        content_sections_json = excluded.content_sections_json,
+        content_plans_json = excluded.content_plans_json,
+        global_facts_json = excluded.global_facts_json,
+        reference_doc_ids_json = excluded.reference_doc_ids_json,
+        content_generation_options_json = excluded.content_generation_options_json,
+        content_generation_runtime_json = excluded.content_generation_runtime_json,
+        updated_at = excluded.updated_at
+    `).run({
+      section_id: sectionId,
+      bid_items_json: JSON.stringify(bidItems),
+      outline_data_json: JSON.stringify(outlineNodes),
+      tasks_json: JSON.stringify(tasks),
+      content_sections_json: JSON.stringify(contentSections),
+      content_plans_json: JSON.stringify(contentPlans),
+      global_facts_json: JSON.stringify(globalFacts),
+      reference_doc_ids_json: JSON.stringify(referenceDocs),
+      content_generation_options_json: meta?.content_generation_options_json || null,
+      content_generation_runtime_json: meta?.content_generation_runtime_json || null,
+      updated_at: now(),
+    });
+  }
+
+  function _clearWorkspaceTables() {
+    db.prepare('DELETE FROM technical_plan_tasks').run();
+    db.prepare('DELETE FROM technical_plan_bid_items').run();
+    db.prepare('DELETE FROM technical_plan_reference_docs').run();
+    db.prepare('DELETE FROM technical_plan_outline_nodes').run();
+    db.prepare('DELETE FROM technical_plan_content_sections').run();
+    db.prepare('DELETE FROM technical_plan_content_plans').run();
+    db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+  }
+
+  function _restoreWorkspaceState(sectionId) {
+    const snapshot = db.prepare('SELECT * FROM technical_plan_bid_section_state WHERE section_id = ?').get(sectionId);
+    if (!snapshot) return;
+
+    _clearWorkspaceTables();
+
+    const timestamp = now();
+
+    const bidItems = safeJsonParse(snapshot.bid_items_json, []);
+    if (bidItems.length) {
+      const insert = db.prepare(`
+        INSERT INTO technical_plan_bid_items (item_id, label, status, content, error, sort_order, updated_at)
+        VALUES (@item_id, @label, @status, @content, @error, @sort_order, @updated_at)
+      `);
+      for (const row of bidItems) {
+        insert.run({ ...row, updated_at: row.updated_at || timestamp });
+      }
+    }
+
+    const outlineNodes = safeJsonParse(snapshot.outline_data_json, []);
+    if (outlineNodes.length) {
+      const insert = db.prepare(`
+        INSERT INTO technical_plan_outline_nodes (node_id, parent_node_id, sort_order, level, title, description, source_requirement_id, source_requirement_title, knowledge_item_ids_json, content, created_at, updated_at)
+        VALUES (@node_id, @parent_node_id, @sort_order, @level, @title, @description, @source_requirement_id, @source_requirement_title, @knowledge_item_ids_json, @content, @created_at, @updated_at)
+      `);
+      for (const row of outlineNodes) {
+        insert.run({ ...row, created_at: row.created_at || timestamp, updated_at: row.updated_at || timestamp });
+      }
+    }
+
+    const tasks = safeJsonParse(snapshot.tasks_json, []);
+    if (tasks.length) {
+      const insert = db.prepare(`
+        INSERT INTO technical_plan_tasks (type, task_id, status, progress, logs_json, stats_json, error, pause_requested, started_at, updated_at)
+        VALUES (@type, @task_id, @status, @progress, @logs_json, @stats_json, @error, @pause_requested, @started_at, @updated_at)
+      `);
+      for (const row of tasks) {
+        insert.run({ ...row, updated_at: row.updated_at || timestamp });
+      }
+    }
+
+    const contentSections = safeJsonParse(snapshot.content_sections_json, []);
+    if (contentSections.length) {
+      const insert = db.prepare('INSERT INTO technical_plan_content_sections (node_id, status, error, updated_at) VALUES (@node_id, @status, @error, @updated_at)');
+      for (const row of contentSections) {
+        insert.run({ ...row, updated_at: row.updated_at || timestamp });
+      }
+    }
+
+    const contentPlans = safeJsonParse(snapshot.content_plans_json, []);
+    if (contentPlans.length) {
+      const insert = db.prepare('INSERT INTO technical_plan_content_plans (node_id, plan_json, illustration_type, updated_at) VALUES (@node_id, @plan_json, @illustration_type, @updated_at)');
+      for (const row of contentPlans) {
+        insert.run({ ...row, updated_at: row.updated_at || timestamp });
+      }
+    }
+
+    const globalFacts = safeJsonParse(snapshot.global_facts_json, []);
+    if (globalFacts.length) {
+      const insert = db.prepare(`
+        INSERT INTO technical_plan_global_fact_groups (group_id, title, content, sort_order, created_at, updated_at)
+        VALUES (@group_id, @title, @content, @sort_order, @created_at, @updated_at)
+      `);
+      for (const row of globalFacts) {
+        insert.run({ ...row, created_at: row.created_at || timestamp, updated_at: row.updated_at || timestamp });
+      }
+    }
+
+    const referenceDocs = safeJsonParse(snapshot.reference_doc_ids_json, []);
+    if (referenceDocs.length) {
+      const insert = db.prepare('INSERT INTO technical_plan_reference_docs (document_id, sort_order) VALUES (@document_id, @sort_order)');
+      for (const row of referenceDocs) {
+        insert.run({ ...row });
+      }
+    }
+
+    updateMeta({
+      current_bid_section_id: sectionId,
+      content_generation_options_json: snapshot.content_generation_options_json || null,
+      content_generation_runtime_json: snapshot.content_generation_runtime_json || null,
+    });
+  }
+
+  function switchToBidSection(sectionId) {
+    const section = db.prepare('SELECT * FROM technical_plan_bid_sections WHERE section_id = ?').get(sectionId);
+    if (!section) throw new Error('未找到该标段');
+
+    const meta = ensureMetaRow();
+    const currentSectionId = meta.current_bid_section_id;
+
+    if (currentSectionId && currentSectionId !== sectionId) {
+      _snapshotWorkspaceState(currentSectionId);
+    }
+
+    _restoreWorkspaceState(sectionId);
+    return loadTechnicalPlan();
+  }
+
+  function getSelectedBidSections() {
+    return db.prepare("SELECT * FROM technical_plan_bid_sections WHERE status = 'selected' ORDER BY sort_order ASC").all();
+  }
+
+  function getCurrentBidSectionId() {
+    const meta = ensureMetaRow();
+    return meta.current_bid_section_id || null;
+  }
+
   async function importTenderDocument() {
     if (!fileService?.importDocument) {
       throw new Error('文件导入服务尚未初始化');
@@ -843,6 +1266,25 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     saveGlobalFacts,
     saveContentGenerationOptions,
     saveChapterContent,
+    // 附件
+    importAttachment,
+    listAttachments,
+    readAttachmentMarkdown,
+    deleteAttachment,
+    setAttachmentType,
+    setAttachmentBidSection,
+    // 采购清单
+    saveProcurementItems,
+    listProcurementItems,
+    getProcurementItemsForSection,
+    // 标段
+    extractBidSections,
+    listBidSections,
+    hasMultipleSections,
+    selectBidSections,
+    switchToBidSection,
+    getSelectedBidSections,
+    getCurrentBidSectionId,
   };
 }
 

@@ -3,7 +3,7 @@ import type { DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseMigrationResult, KnowledgeBaseMigrationStatus, KnowledgeBaseMutationResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
-import type { BidAnalysisTaskState, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationRuntimeState, ContentGenerationSectionState, GlobalFactGroupState, TechnicalPlanState, TechnicalPlanStep } from '../../features/technical-plan/types';
+import type { AttachmentImportResult, BidAnalysisTaskState, BidSection, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationRuntimeState, ContentGenerationSectionState, GlobalFactGroupState, ProcurementItem, TechnicalPlanState, TechnicalPlanStep, TenderAttachment } from '../../features/technical-plan/types';
 import type { OutlineData, OutlineMode } from './outline';
 
 export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDuplicateCheckState = unknown> {
@@ -104,6 +104,23 @@ export interface YibiaoBridge {
     saveContentGenerationOptions: (options: ContentGenerationOptions) => Promise<TechnicalPlanState>;
     saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<TechnicalPlanState>;
     clear: () => Promise<{ success: boolean; message?: string; state: TechnicalPlanState }>;
+    // 附件
+    importAttachment: () => Promise<AttachmentImportResult>;
+    listAttachments: (bidSectionId?: string) => Promise<TenderAttachment[]>;
+    readAttachmentMarkdown: (attachmentId: string) => Promise<string>;
+    deleteAttachment: (attachmentId: string) => Promise<void>;
+    setAttachmentType: (attachmentId: string, attachmentType: string) => Promise<void>;
+    setAttachmentBidSection: (attachmentId: string, bidSectionId: string | null) => Promise<void>;
+    saveProcurementItems: (attachmentId: string, items: unknown[]) => Promise<void>;
+    listProcurementItems: (bidSectionId?: string) => Promise<ProcurementItem[]>;
+    // 标段
+    extractBidSections: (sections: unknown[]) => Promise<string[]>;
+    listBidSections: () => Promise<BidSection[]>;
+    hasMultipleSections: () => Promise<boolean>;
+    selectBidSections: (sectionIds: string[]) => Promise<BidSection[]>;
+    switchBidSection: (sectionId: string) => Promise<TechnicalPlanState>;
+    getSelectedBidSections: () => Promise<BidSection[]>;
+    getCurrentBidSectionId: () => Promise<string | null>;
   };
   duplicateCheck: {
     loadState: () => Promise<DuplicateCheckWorkspaceState>;

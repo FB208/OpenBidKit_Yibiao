@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 4;
+const schemaVersion = 5;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -622,6 +622,96 @@ function createKnowledgeBaseSchema(db) {
   `);
 }
 
+function createBidSectionsAndAttachmentsSchema(db) {
+  db.exec(`
+    ALTER TABLE technical_plan_meta ADD COLUMN current_bid_section_id TEXT;
+  `);
+  db.exec(`
+    ALTER TABLE technical_plan_meta ADD COLUMN bid_sections_extracted INTEGER DEFAULT 0;
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS technical_plan_bid_sections (
+      section_id     TEXT PRIMARY KEY,
+      label          TEXT NOT NULL,
+      title          TEXT NOT NULL,
+      description    TEXT,
+      budget         TEXT,
+      status         TEXT NOT NULL DEFAULT 'idle',
+      sort_order     INTEGER NOT NULL DEFAULT 0,
+      created_at     TEXT NOT NULL,
+      updated_at     TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_bid_sections_status_order
+    ON technical_plan_bid_sections(status, sort_order);
+
+    CREATE TABLE IF NOT EXISTS technical_plan_attachments (
+      attachment_id   TEXT PRIMARY KEY,
+      bid_section_id  TEXT,
+      file_name       TEXT NOT NULL,
+      source_path     TEXT NOT NULL,
+      markdown_path   TEXT,
+      markdown_chars  INTEGER DEFAULT 0,
+      content_hash    TEXT,
+      parser_label    TEXT,
+      attachment_type TEXT NOT NULL DEFAULT 'reference',
+      file_size       INTEGER DEFAULT 0,
+      extension       TEXT,
+      sort_order      INTEGER NOT NULL DEFAULT 0,
+      created_at      TEXT NOT NULL,
+      updated_at      TEXT NOT NULL,
+      FOREIGN KEY (bid_section_id) REFERENCES technical_plan_bid_sections(section_id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_attachments_section
+    ON technical_plan_attachments(bid_section_id);
+
+    CREATE INDEX IF NOT EXISTS idx_attachments_type
+    ON technical_plan_attachments(attachment_type);
+
+    CREATE TABLE IF NOT EXISTS technical_plan_procurement_items (
+      item_id        TEXT PRIMARY KEY,
+      attachment_id  TEXT NOT NULL,
+      bid_section_id TEXT,
+      item_number    INTEGER,
+      item_name      TEXT NOT NULL,
+      model_spec     TEXT,
+      unit           TEXT,
+      quantity       REAL,
+      is_core        INTEGER DEFAULT 0,
+      params_json    TEXT,
+      notes          TEXT,
+      sort_order     INTEGER NOT NULL DEFAULT 0,
+      created_at     TEXT NOT NULL,
+      updated_at     TEXT NOT NULL,
+      FOREIGN KEY (attachment_id) REFERENCES technical_plan_attachments(attachment_id) ON DELETE CASCADE,
+      FOREIGN KEY (bid_section_id) REFERENCES technical_plan_bid_sections(section_id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_procurement_items_attachment
+    ON technical_plan_procurement_items(attachment_id);
+
+    CREATE INDEX IF NOT EXISTS idx_procurement_items_section
+    ON technical_plan_procurement_items(bid_section_id);
+
+    CREATE TABLE IF NOT EXISTS technical_plan_bid_section_state (
+      section_id                  TEXT PRIMARY KEY,
+      bid_items_json              TEXT,
+      outline_data_json           TEXT,
+      tasks_json                  TEXT,
+      content_sections_json       TEXT,
+      content_plans_json          TEXT,
+      global_facts_json           TEXT,
+      reference_doc_ids_json      TEXT,
+      content_generation_options_json TEXT,
+      content_generation_runtime_json TEXT,
+      updated_at                  TEXT NOT NULL,
+      FOREIGN KEY (section_id) REFERENCES technical_plan_bid_sections(section_id) ON DELETE CASCADE
+    );
+  `);
+}
+
 const migrations = [
   {
     version: 1,
@@ -642,6 +732,11 @@ const migrations = [
     version: 4,
     description: '新增技术方案全局事实表结构',
     up: createTechnicalPlanGlobalFactsSchema,
+  },
+  {
+    version: 5,
+    description: '新增标段选择、招标文件附件和采购清单表结构',
+    up: createBidSectionsAndAttachmentsSchema,
   },
 ];
 

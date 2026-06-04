@@ -8215,3 +8215,262 @@ button {
     border-radius: 24px;
   }
 }
+
+/* ============================================================
+   招标文件附件
+   ============================================================ */
+
+.analysis-attachments-card {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(220, 223, 230, 0.88);
+  border-radius: 28px;
+  box-shadow: var(--yb-shadow);
+  overflow: hidden;
+}
+
+.analysis-attachments-card .analysis-result-head {
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.attachment-list {
+  padding: 0;
+}
+
+.attachment-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.attachment-item:last-child {
+  border-bottom: 0;
+}
+
+.attachment-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.attachment-name {
+  color: var(--yb-text);
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-meta {
+  color: var(--yb-text-muted);
+  font-size: 12px;
+}
+
+.attachment-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.attachment-actions .type-select {
+  padding: 6px 10px;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  background: rgba(248, 250, 253, 0.8);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+}
+
+.attachment-actions .type-select:focus {
+  border-color: var(--yb-primary);
+}
+
+.attachment-empty {
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.attachment-empty p {
+  margin: 0;
+  color: var(--yb-text-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.attachment-footer {
+  padding: 14px 20px;
+  border-top: 1px solid var(--yb-border-soft);
+}
+
+.attachment-preview {
+  border-top: 1px solid var(--yb-border-soft);
+}
+
+.attachment-preview .markdown-viewer {
+  padding: 20px;
+  min-height: 260px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+/* ============================================================
+   标段选择
+   ============================================================ */
+
+.bid-section-list-card {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(220, 223, 230, 0.88);
+  border-radius: 28px;
+  box-shadow: var(--yb-shadow);
+  overflow: hidden;
+}
+
+.bid-section-list-header {
+  display: flex;
+  align-items: center;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.bid-section-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--yb-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.bid-section-select-all input[type="checkbox"] {
+  accent-color: var(--yb-primary);
+}
+
+.bid-section-items {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.bid-section-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--yb-border-soft);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.bid-section-item:last-child {
+  border-bottom: 0;
+}
+
+.bid-section-item:hover {
+  background: rgba(33, 116, 253, 0.04);
+}
+
+.bid-section-item.selected {
+  background: rgba(33, 116, 253, 0.06);
+}
+
+.bid-section-item input[type="checkbox"] {
+  margin-top: 2px;
+  flex-shrink: 0;
+  accent-color: var(--yb-primary);
+}
+
+.bid-section-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bid-section-item-body strong {
+  color: var(--yb-text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.bid-section-item-body p {
+  margin: 0;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.bid-section-budget {
+  display: inline-block;
+  margin-top: 2px;
+  color: var(--yb-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.bid-section-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--yb-border-soft);
+}
+
+/* ============================================================
+   标段切换 Tab
+   ============================================================ */
+
+.bid-section-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 0 0 14px;
+  overflow-x: auto;
+}
+
+.bid-section-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 18px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.bid-section-tab:hover {
+  color: var(--yb-primary);
+  border-color: rgba(33, 116, 253, 0.28);
+  background: rgba(33, 116, 253, 0.05);
+}
+
+.bid-section-tab.active {
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--yb-primary) 0%, var(--yb-violet) 100%);
+  border-color: transparent;
+  box-shadow: 0 10px 24px rgba(33, 116, 253, 0.2);
+}
+
+.bid-section-tab-title {
+  font-size: 11px;
+  opacity: 0.72;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bid-section-tab.active .bid-section-tab-title {
+  opacity: 0.9;
+}

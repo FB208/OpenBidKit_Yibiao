@@ -68,6 +68,23 @@ const bridge = {
     saveContentGenerationOptions: (options) => ipcRenderer.invoke('technical-plan:save-content-generation-options', options),
     saveChapterContent: (payload) => ipcRenderer.invoke('technical-plan:save-chapter-content', payload),
     clear: () => ipcRenderer.invoke('technical-plan:clear'),
+    // 附件
+    importAttachment: () => ipcRenderer.invoke('technical-plan:import-attachment'),
+    listAttachments: (bidSectionId) => ipcRenderer.invoke('technical-plan:list-attachments', bidSectionId),
+    readAttachmentMarkdown: (attachmentId) => ipcRenderer.invoke('technical-plan:read-attachment-markdown', attachmentId),
+    deleteAttachment: (attachmentId) => ipcRenderer.invoke('technical-plan:delete-attachment', attachmentId),
+    setAttachmentType: (attachmentId, attachmentType) => ipcRenderer.invoke('technical-plan:set-attachment-type', attachmentId, attachmentType),
+    setAttachmentBidSection: (attachmentId, bidSectionId) => ipcRenderer.invoke('technical-plan:set-attachment-bid-section', attachmentId, bidSectionId),
+    saveProcurementItems: (attachmentId, items) => ipcRenderer.invoke('technical-plan:save-procurement-items', attachmentId, items),
+    listProcurementItems: (bidSectionId) => ipcRenderer.invoke('technical-plan:list-procurement-items', bidSectionId),
+    // 标段
+    extractBidSections: (sections) => ipcRenderer.invoke('technical-plan:extract-bid-sections', sections),
+    listBidSections: () => ipcRenderer.invoke('technical-plan:list-bid-sections'),
+    hasMultipleSections: () => ipcRenderer.invoke('technical-plan:has-multiple-sections'),
+    selectBidSections: (sectionIds) => ipcRenderer.invoke('technical-plan:select-bid-sections', sectionIds),
+    switchBidSection: (sectionId) => ipcRenderer.invoke('technical-plan:switch-bid-section', sectionId),
+    getSelectedBidSections: () => ipcRenderer.invoke('technical-plan:get-selected-bid-sections'),
+    getCurrentBidSectionId: () => ipcRenderer.invoke('technical-plan:get-current-bid-section-id'),
   },
   duplicateCheck: {
     loadState: () => ipcRenderer.invoke('duplicate-check:load-state'),

@@ -4,7 +4,7 @@
 -- 1. 本文件用于开源开发者阅读、评审和排查问题，展示 workspace/yibiao.sqlite 的目标完整表结构。
 -- 2. 用户运行客户端时不需要手动执行本文件。
 -- 3. 客户端运行时建表和升级以 Electron Main 侧 migration 代码为准。
--- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3 和 technical_plan_global_fact_groups v4 目标结构。
+-- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4 和标段/附件/采购清单 v5 目标结构。
 -- 5. 每次表结构调整后，需要同步更新本文件和 runtime migration 版本。
 -- 6. 本文件不保存历史版本，每次更新都写入最新目标完整结构。
 
@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   outline_project_overview TEXT,
   content_generation_options_json TEXT,
   content_generation_runtime_json TEXT,
+  current_bid_section_id TEXT,
+  bid_sections_extracted INTEGER DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -667,4 +669,92 @@ CREATE TABLE IF NOT EXISTS knowledge_reports (
   matched_rate REAL NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   FOREIGN KEY (document_id) REFERENCES knowledge_documents(document_id) ON DELETE CASCADE
+);
+
+-- ============================================================================
+-- 标段、附件和采购清单 v5 新增
+-- ============================================================================
+
+-- 标段/标包信息，AI 从招标文件中解析。仅当检测到 ≥2 个标段时 UI 才会出现选择。
+CREATE TABLE IF NOT EXISTS technical_plan_bid_sections (
+  section_id     TEXT PRIMARY KEY,
+  label          TEXT NOT NULL,
+  title          TEXT NOT NULL,
+  description    TEXT,
+  budget         TEXT,
+  status         TEXT NOT NULL DEFAULT 'idle',  -- idle / selected
+  sort_order     INTEGER NOT NULL DEFAULT 0,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_bid_sections_status_order
+ON technical_plan_bid_sections(status, sort_order);
+
+-- 招标文件附件。bid_section_id 为 NULL 表示所有标段共享。
+CREATE TABLE IF NOT EXISTS technical_plan_attachments (
+  attachment_id   TEXT PRIMARY KEY,
+  bid_section_id  TEXT,
+  file_name       TEXT NOT NULL,
+  source_path     TEXT NOT NULL,
+  markdown_path   TEXT,
+  markdown_chars  INTEGER DEFAULT 0,
+  content_hash    TEXT,
+  parser_label    TEXT,
+  attachment_type TEXT NOT NULL DEFAULT 'reference',  -- procurement_list / technical_spec / reference
+  file_size       INTEGER DEFAULT 0,
+  extension       TEXT,
+  sort_order      INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  FOREIGN KEY (bid_section_id) REFERENCES technical_plan_bid_sections(section_id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_attachments_section
+ON technical_plan_attachments(bid_section_id);
+
+CREATE INDEX IF NOT EXISTS idx_attachments_type
+ON technical_plan_attachments(attachment_type);
+
+-- 采购清单结构化数据，从附件中 AI 提取。
+CREATE TABLE IF NOT EXISTS technical_plan_procurement_items (
+  item_id        TEXT PRIMARY KEY,
+  attachment_id  TEXT NOT NULL,
+  bid_section_id TEXT,
+  item_number    INTEGER,
+  item_name      TEXT NOT NULL,
+  model_spec     TEXT,
+  unit           TEXT,
+  quantity       REAL,
+  is_core        INTEGER DEFAULT 0,
+  params_json    TEXT,  -- [{param, value, is_critical}]
+  notes          TEXT,
+  sort_order     INTEGER NOT NULL DEFAULT 0,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  FOREIGN KEY (attachment_id) REFERENCES technical_plan_attachments(attachment_id) ON DELETE CASCADE,
+  FOREIGN KEY (bid_section_id) REFERENCES technical_plan_bid_sections(section_id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_procurement_items_attachment
+ON technical_plan_procurement_items(attachment_id);
+
+CREATE INDEX IF NOT EXISTS idx_procurement_items_section
+ON technical_plan_procurement_items(bid_section_id);
+
+-- 标段工作区快照。切换标段时将当前工作区表数据序列化保存到此表，
+-- 然后从目标标段的快照恢复。
+CREATE TABLE IF NOT EXISTS technical_plan_bid_section_state (
+  section_id                  TEXT PRIMARY KEY,
+  bid_items_json              TEXT,
+  outline_data_json           TEXT,
+  tasks_json                  TEXT,
+  content_sections_json       TEXT,
+  content_plans_json          TEXT,
+  global_facts_json           TEXT,
+  reference_doc_ids_json      TEXT,
+  content_generation_options_json TEXT,
+  content_generation_runtime_json TEXT,
+  updated_at                  TEXT NOT NULL,
+  FOREIGN KEY (section_id) REFERENCES technical_plan_bid_sections(section_id) ON DELETE CASCADE
 );

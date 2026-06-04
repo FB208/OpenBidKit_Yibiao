@@ -96,6 +96,7 @@ const tasks = [
   { id: 'discardedBids', label: '无效标与废标项', required: false, output: 'markdown', description: '投标无效、废标相关风险项。', prompt: buildInvalidBidAndRejectionItemsPrompt },
   { id: 'signingProcess', label: '合同授予与签订', required: false, output: 'json', description: '中标公示、合同签订、履约保证金和合同文本。', prompt: () => jsonTask('提取合同授予和签订流程', '提取中标公示、合同签订、履约保证金、合同文本等信息。', `{"bid_notice":"中标公示","contract_sign":"合同签订","performance_bond":"履约保证金","contract_text":"合同文本"}`) },
   { id: 'terminationCondition', label: '合同解除和终止', required: false, output: 'json', description: '违约解除、不可抗力、合同终止和争议解决。', prompt: () => jsonTask('提取合同解除和终止条件', '提取违约解除、不可抗力、合同终止、争议解决等信息。', `{"breach_termination":"违约解除","force_majeure":"不可抗力","contract_termination":"合同终止","dispute_resolution":"争议解决"}`) },
+  { id: 'bidSections', label: '标段/标包信息', required: false, output: 'json', description: '提取招标文件中的标段/标包/分包信息，包括编号、名称、预算和采购内容概要。', prompt: () => jsonTask('提取标段/标包信息', '提取招标文件中所有的标段/标包/分包信息。包括每个标段的编号、名称、预算金额（如有）、采购内容概要。注意区分标段（同一项目下的独立分包），不要和招标项目本身混淆。如果招标文件没有明确分标段（只有单一采购包），返回空数组。', '{"sections":[{"label":"标段编号/名称","title":"标段主要内容概括","description":"标段范围描述","budget":"预算金额（如有）"}]}') },
 ];
 
 function getBidAnalysisTasks(mode) {
@@ -205,6 +206,15 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
     const partial = { bidAnalysisTasks: nextTasks, bidAnalysisProgress: doneProgress(nextTasks) };
     if (task.id === 'projectOverview') partial.projectOverview = content;
     if (task.id === 'techRequirements') partial.techRequirements = content;
+    if (task.id === 'bidSections' && typeof workspaceStore.extractBidSections === 'function') {
+      try {
+        const parsed = JSON.parse(content);
+        const sections = parsed?.sections || (Array.isArray(parsed) ? parsed : []);
+        workspaceStore.extractBidSections(sections);
+      } catch (_error) {
+        // 解析失败不影响其他任务，标段列表保持为空
+      }
+    }
     technicalPlan = workspaceStore.updateTechnicalPlan(partial);
     updateTask({ status: 'running', progress: technicalPlan.bidAnalysisProgress || 0 }, technicalPlan);
   }

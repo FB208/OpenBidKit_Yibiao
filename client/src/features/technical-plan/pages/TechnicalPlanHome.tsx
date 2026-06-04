@@ -2,6 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useState } from 'react';
 import DocumentAnalysisPage from './DocumentAnalysisPage';
 import BidAnalysisPage from './BidAnalysisPage';
+import BidSectionSelector from '../components/BidSectionSelector';
 import OutlineEditPage from './OutlineEditPage';
 import GlobalFactsPage from './GlobalFactsPage';
 import ContentEditPage from './ContentEditPage';
@@ -9,7 +10,7 @@ import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, TechnicalPlanStep } from '../types';
+import type { BackgroundTaskState, BidAnalysisTasks, BidSection, ContentGenerationOptions, GlobalFactGroupState, TechnicalPlanStep, TenderAttachment } from '../types';
 import type { OutlineData, OutlineItem, WordExportProgressEvent } from '../../../shared/types';
 
 const steps: TechnicalPlanStep[] = [
@@ -50,6 +51,9 @@ const resetState = {
   contentGenerationPlans: {},
   contentGenerationRuntime: undefined,
   outlineData: null,
+  bidSections: [] as BidSection[],
+  currentBidSectionId: undefined as string | undefined,
+  attachments: [] as TenderAttachment[],
 };
 
 function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
@@ -168,6 +172,33 @@ function TechnicalPlanHome() {
     trackPageView(`technical-plan/${state.step}`);
   }, [hydrated, state.step]);
 
+  // 加载标段和附件列表
+  useEffect(() => {
+    if (!hydrated) return;
+    let mounted = true;
+
+    const loadSideData = async () => {
+      try {
+        const [sections, atts] = await Promise.all([
+          window.yibiao?.technicalPlan.listBidSections(),
+          window.yibiao?.technicalPlan.listAttachments(),
+        ]);
+        if (mounted) {
+          setState((prev) => ({
+            ...prev,
+            bidSections: sections || [],
+            attachments: atts || [],
+          }));
+        }
+      } catch (_error) {
+        // 静默失败
+      }
+    };
+
+    loadSideData();
+    return () => { mounted = false; };
+  }, [hydrated]);
+
   const switchStep = (step: TechnicalPlanStep) => {
     setState((prev) => ({ ...prev, step }));
     window.yibiao?.technicalPlan.updateStep(step).catch((error) => {
@@ -199,6 +230,14 @@ function TechnicalPlanHome() {
       setState((prev) => {
         if (taskType === 'bid-analysis') {
           const outlineDataReset = hasOwnField(technicalPlan, 'outlineData') && technicalPlan.outlineData === null;
+          // 当任务完成时刷新标段列表
+          if (latestTask?.status === 'success') {
+            window.yibiao?.technicalPlan.listBidSections().then((sections) => {
+              if (sections?.length) {
+                setState((prev) => ({ ...prev, bidSections: sections }));
+              }
+            }).catch(() => {});
+          }
           return {
             ...prev,
             bidAnalysisTask: trimTaskLogs(technicalPlan.bidAnalysisTask) || latestTask,
@@ -450,6 +489,55 @@ function TechnicalPlanHome() {
     ? collectLeafItems(state.outlineData.outline).filter((item) => item.content?.trim()).length
     : 0;
 
+  const selectedBidSections = state.bidSections.filter((s) => s.status === 'selected');
+  const showBidSectionTabs = selectedBidSections.length >= 2;
+
+  const handleBidSectionSelect = async (sectionIds: string[]) => {
+    try {
+      const selectedSections = await window.yibiao?.technicalPlan.selectBidSections(sectionIds);
+      if (selectedSections?.length) {
+        const currentId = await window.yibiao?.technicalPlan.getCurrentBidSectionId();
+        const loadedState = await window.yibiao?.technicalPlan.loadState();
+        setState((prev) => ({
+          ...prev,
+          ...(loadedState || {}),
+          bidSections: selectedSections,
+          currentBidSectionId: currentId || undefined,
+          attachments: loadedState?.attachments || prev.attachments,
+        }));
+        switchStep('outline-generation');
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '选择标段失败', 'error');
+    }
+  };
+
+  const handleBidSectionSkip = () => {
+    switchStep('outline-generation');
+  };
+
+  const switchBidSection = async (sectionId: string) => {
+    if (sectionId === state.currentBidSectionId) return;
+    try {
+      const nextState = await window.yibiao?.technicalPlan.switchBidSection(sectionId);
+      const sections = await window.yibiao?.technicalPlan.listBidSections();
+      setState((prev) => ({
+        ...prev,
+        ...nextState,
+        bidSections: sections || [],
+        currentBidSectionId: sectionId,
+      }));
+      // Reload tender markdown for the document analysis page if needed
+      if (nextState?.step === 'document-analysis' && nextState?.tenderFile) {
+        window.yibiao?.technicalPlan.readTenderMarkdown().then((md) => {
+          setTenderMarkdown(md || '');
+        }).catch(() => {});
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '切换标段失败', 'error');
+    }
+  };
+
   const navigationActions = state.step === 'content-edit'
     ? [
       {
@@ -526,13 +614,33 @@ function TechnicalPlanHome() {
 
   return (
     <div className="page-stack technical-workbench">
+      {showBidSectionTabs && (
+        <div className="bid-section-tabs">
+          {selectedBidSections.map((section) => (
+            <button
+              key={section.section_id}
+              type="button"
+              className={`bid-section-tab ${section.section_id === state.currentBidSectionId ? 'active' : ''}`}
+              onClick={() => switchBidSection(section.section_id)}
+            >
+              {section.label}
+              <span className="bid-section-tab-title">{section.title}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {state.step === 'document-analysis' && (
         <DocumentAnalysisPage
           tenderFile={state.tenderFile}
           tenderMarkdown={tenderMarkdown}
+          attachments={state.attachments}
           onFileImported={(nextState, markdown) => {
-            setState((prev) => ({ ...prev, ...nextState }));
+            setState((prev) => ({ ...prev, ...nextState, attachments: nextState.attachments || [] }));
             setTenderMarkdown(markdown);
+          }}
+          onAttachmentsChanged={(attachments) => {
+            setState((prev) => ({ ...prev, attachments }));
           }}
         />
       )}
@@ -554,6 +662,15 @@ function TechnicalPlanHome() {
           }))}
         />
       )}
+
+      {state.step === 'bid-analysis' && state.bidAnalysisTask?.status === 'success' && state.bidSections.length >= 2 && (
+        <BidSectionSelector
+          bidSections={state.bidSections}
+          onConfirm={handleBidSectionSelect}
+          onSkip={handleBidSectionSkip}
+        />
+      )}
+
       {state.step === 'outline-generation' && (
         <OutlineEditPage
           projectOverview={state.projectOverview}

@@ -21,6 +21,9 @@ const initialState: TechnicalPlanState = {
   contentGenerationPlans: {},
   contentGenerationRuntime: undefined,
   outlineData: null,
+  bidSections: [],
+  currentBidSectionId: undefined,
+  attachments: [],
 };
 
 export function useTechnicalPlanWorkflow() {

@@ -52,6 +52,22 @@ function getMissingRequiredBidAnalysisLabels(storedPlan) {
     .map((task) => task.label);
 }
 
+function formatProcurementItemsForPrompt(items) {
+  if (!items?.length) return '';
+  const lines = ['当前标段采购清单（共' + items.length + '项）：'];
+  items.forEach((item) => {
+    const label = item.item_name || '';
+    const qty = item.quantity ? ` ${item.quantity}${item.unit || '项'}` : '';
+    const core = item.is_core ? ' ★核心产品' : '';
+    lines.push(`${item.item_number || ''}. ${label}${qty}${core}`);
+    if (item.model_spec) {
+      lines.push(`   型号规格: ${item.model_spec}`);
+    }
+  });
+  lines.push('\n请基于以上采购清单生成标书目录。核心产品应安排独立章节重点描述。每个清单项的关键技术参数应在对应章节的description中体现。');
+  return lines.join('\n');
+}
+
 function formatKnowledgeAdditionParents(parents) {
   return (parents || []).map((item) => [
     `- ${item.id} ${item.title || '未命名二级目录'}（所属一级：${item.parentTitle || '未命名一级目录'}）`,
@@ -145,22 +161,28 @@ JSON 格式要求：
 }`;
 }
 
-function generateOutlineMessages({ overview, requirements, suggestions }) {
-  return [
+function generateOutlineMessages({ overview, requirements, suggestions, procurementItems }) {
+  const messages = [
     { role: 'system', content: outlineSystemPrompt() },
     { role: 'user', content: `项目概述：\n${overview}` },
     { role: 'user', content: `技术评分要求：\n${requirements}` },
-    { role: 'user', content: `请生成完整的技术标目录结构，确保覆盖所有技术评分要点。${formatSuggestions(suggestions)}` },
   ];
+  const procText = formatProcurementItemsForPrompt(procurementItems);
+  if (procText) messages.push({ role: 'user', content: procText });
+  messages.push({ role: 'user', content: `请生成完整的技术标目录结构，确保覆盖所有技术评分要点。${formatSuggestions(suggestions)}` });
+  return messages;
 }
 
-function generateTopLevelOutlineMessages({ overview, requirements, suggestions }) {
-  return [
+function generateTopLevelOutlineMessages({ overview, requirements, suggestions, procurementItems }) {
+  const messages = [
     { role: 'system', content: topLevelOutlineSystemPrompt() },
     { role: 'user', content: `项目概述：\n${overview}` },
     { role: 'user', content: `技术评分要求：\n${requirements}` },
-    { role: 'user', content: `请仅生成一级目录列表，不要生成二级和三级目录。返回的 JSON 仍然使用 outline 字段，每个一级目录都必须包含 id、title、description。${formatSuggestions(suggestions)}` },
   ];
+  const procText = formatProcurementItemsForPrompt(procurementItems);
+  if (procText) messages.push({ role: 'user', content: procText });
+  messages.push({ role: 'user', content: `请仅生成一级目录列表，不要生成二级和三级目录。返回的 JSON 仍然使用 outline 字段，每个一级目录都必须包含 id、title、description。${formatSuggestions(suggestions)}` });
+  return messages;
 }
 
 function extractRequirementGroupsMessages(requirements, suggestions) {
@@ -1009,11 +1031,32 @@ async function runOutlineGenerationTask({ aiService, workspaceStore, knowledgeBa
     outlineGenerationTask: updateTask({ status: 'running', progress: 5, logs }),
   });
   updateTask({ status: 'running', progress: 5, logs }, technicalPlan);
+
+  // 加载当前标段的采购清单
+  let procurementItems = [];
+  try {
+    const currentSectionId = typeof workspaceStore.getCurrentBidSectionId === 'function'
+      ? workspaceStore.getCurrentBidSectionId()
+      : null;
+    if (currentSectionId && typeof workspaceStore.getProcurementItemsForSection === 'function') {
+      procurementItems = workspaceStore.getProcurementItemsForSection(currentSectionId);
+    }
+    if (!procurementItems.length && typeof workspaceStore.listProcurementItems === 'function') {
+      procurementItems = workspaceStore.listProcurementItems();
+    }
+    if (procurementItems.length) {
+      log(`检测到 ${procurementItems.length} 个采购清单项，将基于清单生成目录。`, 6);
+    }
+  } catch (_error) {
+    // 静默降级
+  }
+
   const taskPayload = {
     ...payload,
     overview,
     requirements,
     reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
+    procurementItems,
   };
   let outline = taskPayload.mode === 'aligned' ? await alignedWorkflow(aiService, taskPayload, log) : await freeWorkflow(aiService, taskPayload, log);
   const knowledgeItems = loadOutlineKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);

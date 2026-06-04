@@ -156,6 +156,60 @@ export interface TechnicalPlanTenderFile {
   updatedAt: string;
 }
 
+export interface BidSection {
+  section_id: string;
+  label: string;
+  title: string;
+  description?: string;
+  budget?: string;
+  status: 'idle' | 'selected';
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AttachmentType = 'procurement_list' | 'technical_spec' | 'reference';
+
+export interface TenderAttachment {
+  attachment_id: string;
+  bid_section_id?: string;
+  file_name: string;
+  source_path: string;
+  markdown_path?: string;
+  markdown_chars: number;
+  content_hash?: string;
+  parser_label?: string;
+  attachment_type: AttachmentType;
+  file_size: number;
+  extension?: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProcurementItem {
+  item_id: string;
+  attachment_id: string;
+  bid_section_id?: string;
+  item_number: number;
+  item_name: string;
+  model_spec?: string;
+  unit?: string;
+  quantity?: number;
+  is_core: number;
+  params_json?: string;
+  notes?: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AttachmentImportResult {
+  success: boolean;
+  message?: string;
+  attachment: TenderAttachment | null;
+}
+
 export interface TechnicalPlanState {
   step: TechnicalPlanStep;
   tenderFile: TechnicalPlanTenderFile | null;
@@ -176,4 +230,7 @@ export interface TechnicalPlanState {
   contentGenerationPlans: ContentGenerationPlans;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   outlineData: OutlineData | null;
+  bidSections: BidSection[];
+  currentBidSectionId?: string;
+  attachments: TenderAttachment[];
 }

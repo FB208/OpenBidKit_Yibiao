@@ -2160,6 +2160,40 @@ function now() {
   return new Date().toISOString();
 }
 
+function formatProcurementItemsForChapter(items) {
+  if (!items?.length) return '';
+  const lines = ['\n★ 本章节必须响应的采购清单项：'];
+  for (const item of items) {
+    const core = item.is_core ? '【核心产品】' : '';
+    lines.push(`\n${item.item_number || ''}. ${item.item_name}${core} (${item.quantity || ''}${item.unit || '项'})`);
+    if (item.model_spec) lines.push(`   型号规格: ${item.model_spec}`);
+    if (item.params_json) {
+      try {
+        const params = typeof item.params_json === 'string' ? JSON.parse(item.params_json) : item.params_json;
+        if (Array.isArray(params)) {
+          for (const p of params) {
+            const critical = p.is_critical ? '★' : '';
+            lines.push(`   ${critical}${p.param}: ${p.value}`);
+          }
+        }
+      } catch (_) {
+        // skip
+      }
+    }
+  }
+  lines.push('\n请在正文中逐项响应上述技术参数，★标记的为必须满足的关键要求。');
+  return lines.join('\n');
+}
+
+function matchProcurementItemsToChapter(items, chapterTitle) {
+  if (!items?.length || !chapterTitle) return [];
+  const title = String(chapterTitle || '').toLowerCase();
+  return items.filter((item) => {
+    const name = String(item.item_name || '').toLowerCase();
+    return title.includes(name) || name.includes(title);
+  });
+}
+
 function withSection(sections, item, partial) {
   return {
     ...(sections || {}),
@@ -2393,6 +2427,52 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   knowledgeContentMap = loadContentKnowledgeContentMap(knowledgeBaseService, referenceKnowledgeDocumentIds, (message) => {
     logs = [...logs, message];
   });
+
+  // 加载采购清单项
+  let procurementItemsForTask = [];
+  try {
+    const currentSectionId = typeof workspaceStore.getCurrentBidSectionId === 'function'
+      ? workspaceStore.getCurrentBidSectionId()
+      : null;
+    if (currentSectionId && typeof workspaceStore.getProcurementItemsForSection === 'function') {
+      procurementItemsForTask = workspaceStore.getProcurementItemsForSection(currentSectionId);
+    }
+    if (!procurementItemsForTask.length && typeof workspaceStore.listProcurementItems === 'function') {
+      procurementItemsForTask = workspaceStore.listProcurementItems();
+    }
+    if (procurementItemsForTask.length) {
+      logs = [...logs, `当前标段采购清单共 ${procurementItemsForTask.length} 项，正文生成时会逐项响应技术参数。`];
+    }
+  } catch (_error) {
+    // 静默降级，不影响正文生成
+  }
+
+  // 加载附件上下文（技术规格 + 参考说明）
+  let attachmentContextForTask = '';
+  try {
+    if (typeof workspaceStore.listAttachments === 'function' && typeof workspaceStore.readAttachmentMarkdown === 'function') {
+      const attachments = workspaceStore.listAttachments(currentSectionId || undefined) || [];
+      const contextParts = [];
+      for (const att of attachments) {
+        if (att.attachment_type === 'procurement_list') continue; // 采购清单已单独处理
+        try {
+          const md = workspaceStore.readAttachmentMarkdown(att.attachment_id);
+          if (!md) continue;
+          const maxChars = att.attachment_type === 'technical_spec' ? 5000 : 2000;
+          const snippet = md.slice(0, maxChars);
+          contextParts.push(`【${att.file_name}】\n${snippet}`);
+        } catch (_e) {
+          // 单个附件读取失败不影响整体
+        }
+      }
+      if (contextParts.length) {
+        attachmentContextForTask = '以下为招标文件附件内容，请在正文生成时参考吸收其中的技术信息：\n\n' + contextParts.join('\n\n---\n\n');
+        logs = [...logs, `已加载 ${contextParts.length} 个附件作为正文参考上下文。`];
+      }
+    }
+  } catch (_error) {
+    // 静默降级
+  }
 
   function getLeafContentForWords(item) {
     return sections[item.id]?.content || item.content || '';
@@ -2736,8 +2816,17 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       const knowledgeContents = resolveKnowledgeContents(contentPlan.knowledge?.item_ids, knowledgeContentMap);
       const selectedFactsText = resolveSelectedFactsText(contentPlan, globalFacts);
 
+      const contentMessages = buildChapterContentMessages({ chapter: item, parentChapters, siblingChapters, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents });
+      if (attachmentContextForTask) {
+        contentMessages.push({ role: 'user', content: attachmentContextForTask });
+      }
+      const matchedProcurementItems = matchProcurementItemsToChapter(procurementItemsForTask, item.title || '');
+      if (matchedProcurementItems.length) {
+        contentMessages.push({ role: 'user', content: formatProcurementItemsForChapter(matchedProcurementItems) });
+      }
+
       const generatedContent = await aiService.chat({
-        messages: buildChapterContentMessages({ chapter: item, parentChapters, siblingChapters, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents }),
+        messages: contentMessages,
         temperature: 0.7,
         logTitle: `正文生成-${item.id}-${item.title || '未命名章节'}`,
       });
