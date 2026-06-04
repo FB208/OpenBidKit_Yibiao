@@ -283,40 +283,6 @@ button {
   white-space: nowrap;
 }
 
-.nav-item.has-children {
-  position: relative;
-}
-
-.nav-child-count {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 24px;
-  margin-left: auto;
-  place-items: center;
-  color: var(--yb-primary);
-  font-size: 12px;
-  font-weight: 900;
-  background: rgba(33, 116, 253, 0.09);
-  border: 1px solid rgba(33, 116, 253, 0.14);
-  border-radius: 999px;
-}
-
-.nav-item.is-active .nav-child-count {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.16);
-  border-color: rgba(255, 255, 255, 0.22);
-}
-
-.is-collapsed .nav-child-count {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 18px;
-  height: 18px;
-  font-size: 10px;
-}
-
 .sidebar-footer {
   margin-top: auto;
   padding-top: 18px;

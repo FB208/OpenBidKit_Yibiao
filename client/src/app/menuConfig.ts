@@ -1,15 +1,38 @@
 import type { AppMenuItem, SectionId } from '../shared/types/navigation';
 
+const githubStarNotice = {
+  message: '正在开发中，在github给作者点个star，可以加速开发。',
+  actionLabel: '点此直达',
+  externalUrl: 'https://github.com/FB208/OpenBidKit_Yibiao',
+};
+
 export const appMenuItems: AppMenuItem[] = [
   {
-    id: 'technical-plan',
-    label: '技术方案',
-    description: '方案生成与正文编排',
-  },
-  {
-    id: 'business-bid',
-    label: '商务标',
-    description: '商务响应与报价材料',
+    id: 'bid-generation',
+    label: '标书生成',
+    description: '技术方案与商务标编制',
+    children: [
+      {
+        id: 'technical-plan',
+        label: '生成技术方案',
+        description: '根据招标文件重头编写一份标书',
+        icon: 'document',
+      },
+      {
+        id: 'existing-plan-expansion',
+        label: '已有方案扩写',
+        description: '解决人写技术方案太薄的问题，上传写好的方案，进行优化和扩充，遵从原方案真实可落地，又能扩写出厚厚的标书',
+        icon: 'expand',
+        notice: githubStarNotice,
+      },
+      {
+        id: 'business-bid',
+        label: '商务标',
+        description: '整理商务响应、报价口径和合同偏离材料。',
+        icon: 'briefcase',
+        notice: githubStarNotice,
+      },
+    ],
   },
   {
     id: 'knowledge-base',
@@ -17,19 +40,29 @@ export const appMenuItems: AppMenuItem[] = [
     description: '素材、模板和案例资产',
   },
   {
-    id: 'duplicate-check',
-    label: '标书查重',
-    description: '相似度与重复表达检测',
-  },
-  {
-    id: 'rejection-check',
-    label: '废标项检查',
-    description: '硬性条款与响应完整性',
+    id: 'bid-check',
+    label: '标书检查',
+    description: '查重、废标项与合规检查',
+    children: [
+      {
+        id: 'duplicate-check',
+        label: '标书查重',
+        description: '相似度与重复表达检测',
+        icon: 'compare',
+      },
+      {
+        id: 'rejection-check',
+        label: '废标项检查',
+        description: '硬性条款与响应完整性',
+        icon: 'shield',
+      },
+    ],
   },
   {
     id: 'bid-opportunity',
     label: '投标机会',
     description: '机会发现与线索跟踪',
+    notice: githubStarNotice,
   },
 ];
 

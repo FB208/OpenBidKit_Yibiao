@@ -3,7 +3,9 @@ import { renderTable } from '../render.js';
 import { state } from '../state.js';
 
 const pageLabels = {
+  'bid-generation': '标书生成',
   'technical-plan': '技术方案',
+  'existing-plan-expansion': '标书生成 - 已有方案扩写',
   'technical-plan/document-analysis': '技术方案 - 上传招标文件',
   'technical-plan/bid-analysis': '技术方案 - 招标文件解析',
   'technical-plan/outline-generation': '技术方案 - 目录生成',
@@ -16,6 +18,7 @@ const pageLabels = {
   'knowledge-base/viewer/items': '知识库 - 知识条目',
   'knowledge-base/viewer/markdown': '知识库 - Markdown 原文',
   'knowledge-base/viewer/analysis': '知识库 - 分析调试',
+  'bid-check': '标书检查',
   'duplicate-check': '标书查重',
   'duplicate-check/upload': '标书查重 - 选择标书',
   'duplicate-check/analysis/metadata': '标书查重 - 元数据结果',

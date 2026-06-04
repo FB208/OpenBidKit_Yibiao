@@ -1,7 +1,8 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useState, type ComponentType, type ReactElement, type SVGProps } from 'react';
 import { getAppMenuItems, getParentMenuItemBySection } from '../app/menuConfig';
-import type { SectionId } from '../shared/types/navigation';
+import type { AppMenuItem, SectionId } from '../shared/types/navigation';
+import { useToast } from '../shared/ui';
 import logoUrl from '../../assets/icon_256.png';
 
 interface SidebarProps {
@@ -11,9 +12,12 @@ interface SidebarProps {
 }
 
 const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>> = {
+  'bid-generation': BidGenerationIcon,
   'technical-plan': DocumentIcon,
+  'existing-plan-expansion': DocumentIcon,
   'business-bid': BriefcaseIcon,
   'knowledge-base': ArchiveIcon,
+  'bid-check': BidCheckIcon,
   'duplicate-check': CompareIcon,
   'rejection-check': ShieldIcon,
   'bid-opportunity': RadarIcon,
@@ -27,8 +31,27 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
 
 function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const { showToast } = useToast();
   const menuItems = getAppMenuItems(developerMode);
   const activeParent = getParentMenuItemBySection(activeSection, developerMode);
+
+  const handleMenuItemClick = (item: AppMenuItem) => {
+    if (!item.notice) {
+      onSectionChange(item.id);
+      return;
+    }
+
+    showToast(item.notice.message, 'info', {
+      duration: 7000,
+      actions: item.notice.externalUrl ? [
+        {
+          label: item.notice.actionLabel || '打开链接',
+          variant: 'primary',
+          onClick: () => openExternalUrl(item.notice?.externalUrl || ''),
+        },
+      ] : undefined,
+    });
+  };
 
   return (
     <aside className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}>
@@ -56,14 +79,13 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
       <nav className="sidebar-nav" aria-label="主菜单">
         {menuItems.map((item) => {
           const Icon = navigationIcons[item.id];
-          const childCount = item.children?.length ?? 0;
           const isActive = item.id === activeSection || activeParent?.id === item.id;
           const button = (
             <button
               key={item.id}
               type="button"
-              className={`nav-item ${isActive ? 'is-active' : ''} ${childCount ? 'has-children' : ''}`}
-              onClick={() => onSectionChange(item.id)}
+              className={`nav-item ${isActive ? 'is-active' : ''}`}
+              onClick={() => handleMenuItemClick(item)}
               aria-label={item.label}
               aria-current={isActive ? 'page' : undefined}
             >
@@ -74,7 +96,6 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
                 <strong>{item.label}</strong>
                 <small>{item.description}</small>
               </span>
-              {childCount > 0 && <span className="nav-child-count" aria-label={`${childCount} 个二级入口`}>{childCount}</span>}
             </button>
           );
 
@@ -87,6 +108,17 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
       </div>
     </aside>
   );
+}
+
+async function openExternalUrl(url: string) {
+  if (!url) return;
+
+  if (window.yibiao?.openExternal) {
+    await window.yibiao.openExternal(url);
+    return;
+  }
+
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 function renderSettingsButton(activeSection: SectionId, onSectionChange: (section: SectionId) => void) {
@@ -125,6 +157,18 @@ function wrapTooltip(label: string, child: ReactElement) {
   );
 }
 
+function BidGenerationIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
+      <path d="M6 5.2h7.2l4.8 4.8v8.8H6z" />
+      <path d="M13 5.5V10h4.5" />
+      <path d="M8.8 13.2h6.4" />
+      <path d="M8.8 16.3h4.5" />
+      <path d="M4.5 7.2v13h12" />
+    </svg>
+  );
+}
+
 function DocumentIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
@@ -153,6 +197,18 @@ function ArchiveIcon(props: SVGProps<SVGSVGElement>) {
       <path d="M5 7.5h14v12H5z" />
       <path d="M4 4.5h16v3H4z" />
       <path d="M9 11.2h6" />
+    </svg>
+  );
+}
+
+function BidCheckIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
+      <path d="M7 4.2h10v15.6H7z" />
+      <path d="M9.5 8h5" />
+      <path d="m9.5 12.3 1.5 1.5 3.7-4" />
+      <path d="M9.5 17h5" />
+      <path d="M5 6.2v15h10" />
     </svg>
   );
 }
