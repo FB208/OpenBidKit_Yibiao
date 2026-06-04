@@ -7,6 +7,14 @@ export type BackgroundTaskType = 'bid-analysis' | 'outline-generation' | 'global
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
+export type SaveOutlineReason = 'sort' | 'edit' | 'delete' | 'add-root' | 'add-child' | 'replace';
+
+export interface SaveOutlineRequest {
+  outlineData: OutlineData;
+  reason: SaveOutlineReason;
+  idMap?: Record<string, string>;
+  affectedNodeIds?: string[];
+}
 
 export interface ContentGenerationOptions {
   useAiImages: boolean;

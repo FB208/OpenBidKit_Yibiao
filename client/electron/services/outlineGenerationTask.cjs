@@ -1020,8 +1020,6 @@ async function runOutlineGenerationTask({ aiService, workspaceStore, knowledgeBa
   outline = await enhanceOutlineWithKnowledgeAdditions(aiService, taskPayload, outline, knowledgeItems, log);
   technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineData: { ...outline, project_overview: overview },
-    globalFactsTask: undefined,
-    globalFacts: [],
     contentGenerationTask: undefined,
     contentGenerationSections: {},
     contentGenerationPlans: {},

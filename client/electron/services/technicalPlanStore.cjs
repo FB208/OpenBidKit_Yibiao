@@ -136,6 +136,47 @@ function clearOutlineDataContent(outlineData) {
   return { ...outlineData, outline: clearOutlineItemContent(outlineData.outline) };
 }
 
+const outlineSaveReasons = new Set(['sort', 'edit', 'delete', 'add-root', 'add-child', 'replace']);
+
+function normalizeOutlineSaveReason(value) {
+  return outlineSaveReasons.has(value) ? value : 'replace';
+}
+
+function normalizeStringMap(value) {
+  const entries = value && typeof value === 'object' ? Object.entries(value) : [];
+  const map = new Map();
+  for (const [from, to] of entries) {
+    const fromId = String(from || '').trim();
+    const toId = String(to || '').trim();
+    if (fromId && toId) map.set(fromId, toId);
+  }
+  return map;
+}
+
+function normalizeStringSet(value) {
+  return new Set((Array.isArray(value) ? value : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean));
+}
+
+function reverseIdMap(idMap) {
+  const reversed = new Map();
+  for (const [oldId, newId] of idMap.entries()) {
+    reversed.set(newId, oldId);
+  }
+  return reversed;
+}
+
+function mapOutlineItems(items, mapper) {
+  return (items || []).map((item) => {
+    const nextItem = mapper(item);
+    if (item?.children?.length) {
+      nextItem.children = mapOutlineItems(item.children, mapper);
+    }
+    return nextItem;
+  });
+}
+
 function createTechnicalPlanStore({ app, db, fileService }) {
   const tenderMarkdownPath = getTechnicalPlanTenderMarkdownPath(app);
 
@@ -617,10 +658,89 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     updateMeta({ content_generation_runtime_json: null });
   }
 
-  function clearGlobalFactsAndContentState() {
-    db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
-    db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'global-facts-generation'").run();
-    clearContentGenerationState();
+  function loadOutlinePersistenceSnapshot() {
+    return {
+      nodes: db.prepare('SELECT node_id, content FROM technical_plan_outline_nodes').all().reduce((acc, row) => {
+        acc[row.node_id] = { content: row.content || '' };
+        return acc;
+      }, {}),
+      sections: db.prepare('SELECT node_id, status, error, updated_at FROM technical_plan_content_sections').all(),
+      plans: db.prepare('SELECT node_id, plan_json, illustration_type, updated_at FROM technical_plan_content_plans').all(),
+    };
+  }
+
+  function assertOutlineMutationAllowed() {
+    const task = db.prepare("SELECT status FROM technical_plan_tasks WHERE type = 'content-generation'").get();
+    if (['running', 'pausing', 'paused'].includes(task?.status)) {
+      throw new Error('正文生成任务正在运行或暂停中，请结束后再调整目录');
+    }
+  }
+
+  function shouldClearSavedNode({ clearAll, oldId, newId, affectedIds }) {
+    return clearAll || affectedIds.has(oldId) || (!oldId && affectedIds.has(newId));
+  }
+
+  function buildOutlineWithPersistedContent(outlineData, { snapshot, reverseMap, affectedIds, clearAll }) {
+    if (!outlineData?.outline?.length) return outlineData;
+    return {
+      ...outlineData,
+      outline: mapOutlineItems(outlineData.outline, (item) => {
+        const newId = String(item?.id || '').trim();
+        const oldId = reverseMap.get(newId) || newId;
+        const clearContent = shouldClearSavedNode({ clearAll, oldId, newId, affectedIds });
+        const oldContent = snapshot.nodes[oldId]?.content;
+        return {
+          ...item,
+          content: clearContent ? '' : String(oldContent ?? item?.content ?? ''),
+        };
+      }),
+    };
+  }
+
+  function restoreMappedContentRows({ snapshot, idMap, affectedIds, nextIds, clearAll }) {
+    db.prepare('DELETE FROM technical_plan_content_sections').run();
+    db.prepare('DELETE FROM technical_plan_content_plans').run();
+
+    if (clearAll || !nextIds.size) return;
+
+    const insertSection = db.prepare(`
+      INSERT INTO technical_plan_content_sections (node_id, status, error, updated_at)
+      VALUES (@node_id, @status, @error, @updated_at)
+    `);
+    const seenSections = new Set();
+    for (const row of snapshot.sections) {
+      const oldId = String(row.node_id || '').trim();
+      const newId = idMap.get(oldId) || oldId;
+      if (!newId || !nextIds.has(newId) || seenSections.has(newId)) continue;
+      if (shouldClearSavedNode({ clearAll, oldId, newId, affectedIds })) continue;
+      seenSections.add(newId);
+      insertSection.run({
+        node_id: newId,
+        status: normalizeStatus(row.status, ['idle', 'running', 'success', 'error'], 'idle'),
+        error: row.error || null,
+        updated_at: row.updated_at || now(),
+      });
+    }
+
+    const insertPlan = db.prepare(`
+      INSERT INTO technical_plan_content_plans (node_id, plan_json, illustration_type, updated_at)
+      VALUES (@node_id, @plan_json, @illustration_type, @updated_at)
+    `);
+    const seenPlans = new Set();
+    for (const row of snapshot.plans) {
+      const oldId = String(row.node_id || '').trim();
+      const newId = idMap.get(oldId) || oldId;
+      if (!newId || !nextIds.has(newId) || seenPlans.has(newId)) continue;
+      if (shouldClearSavedNode({ clearAll, oldId, newId, affectedIds })) continue;
+      if (!row.plan_json) continue;
+      seenPlans.add(newId);
+      insertPlan.run({
+        node_id: newId,
+        plan_json: row.plan_json,
+        illustration_type: row.illustration_type || 'none',
+        updated_at: row.updated_at || now(),
+      });
+    }
   }
 
   function applyPartial(partial) {
@@ -716,10 +836,28 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     return updateTechnicalPlan({ outlineMode, referenceKnowledgeDocumentIds });
   }
 
-  function saveOutline(outlineData) {
+  function saveOutline(payload) {
+    const request = payload?.outlineData ? payload : { outlineData: payload, reason: 'replace' };
+    const outlineData = request?.outlineData;
+    const reason = normalizeOutlineSaveReason(request?.reason);
+    const idMap = normalizeStringMap(request?.idMap);
+    const reverseMap = reverseIdMap(idMap);
+    const affectedIds = normalizeStringSet(request?.affectedNodeIds);
+    const clearAll = reason === 'replace';
+    const invalidatesContentTask = reason !== 'sort';
+
     const transaction = db.transaction(() => {
-      saveOutlineData(clearOutlineDataContent(outlineData));
-      clearGlobalFactsAndContentState();
+      assertOutlineMutationAllowed();
+      const snapshot = loadOutlinePersistenceSnapshot();
+      const outlineToSave = buildOutlineWithPersistedContent(outlineData, { snapshot, reverseMap, affectedIds, clearAll });
+      saveOutlineData(outlineToSave);
+      const rows = flattenOutlineItems(outlineToSave?.outline || []);
+      const nextIds = new Set(rows.map((row) => row.node_id));
+      restoreMappedContentRows({ snapshot, idMap, affectedIds, nextIds, clearAll });
+      if (invalidatesContentTask) {
+        db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'content-generation'").run();
+        updateMeta({ content_generation_runtime_json: null });
+      }
     });
     transaction();
     return loadTechnicalPlan();

@@ -3486,9 +3486,31 @@ button {
   box-shadow: 0 10px 24px rgba(33, 116, 253, 0.16);
 }
 
+.outline-tree-tools .outline-save-sort-action {
+  color: #ffffff;
+  background: linear-gradient(135deg, #16a34a, #2174fd);
+  border-color: transparent;
+  box-shadow: 0 10px 24px rgba(22, 163, 74, 0.18);
+}
+
+.outline-sort-notice {
+  margin: 0 16px;
+  padding: 10px 12px;
+  color: #166534;
+  font-size: 12px;
+  line-height: 1.65;
+  background: rgba(22, 163, 74, 0.08);
+  border: 1px solid rgba(22, 163, 74, 0.18);
+  border-radius: 14px;
+}
+
 .outline-tree-list {
   overflow: auto;
   padding: 16px;
+}
+
+.outline-tree-list.is-sorting {
+  user-select: none;
 }
 
 .outline-tree-node {
@@ -3508,6 +3530,53 @@ button {
   background: transparent;
   border: 1px solid transparent;
   border-radius: 16px;
+}
+
+.outline-tree-item.is-sorting {
+  grid-template-columns: 24px 34px minmax(0, 1fr);
+  cursor: grab;
+}
+
+.outline-tree-item.is-dragging {
+  opacity: 0.42;
+}
+
+.outline-tree-item.is-drop-before::before,
+.outline-tree-item.is-drop-after::after {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  z-index: 1;
+  height: 3px;
+  content: "";
+  background: linear-gradient(90deg, var(--yb-primary), var(--yb-violet));
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px rgba(33, 116, 253, 0.12);
+}
+
+.outline-tree-item.is-drop-before::before {
+  top: -5px;
+}
+
+.outline-tree-item.is-drop-after::after {
+  bottom: -5px;
+}
+
+.outline-tree-item.is-drop-invalid {
+  border-color: rgba(239, 68, 68, 0.28);
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.outline-tree-drag-handle {
+  display: inline-flex;
+  width: 24px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  color: #7a8798;
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: -0.18em;
 }
 
 .outline-tree-item:hover,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import AppRouter from './app/AppRouter';
 import UpdateNotifier from './app/UpdateNotifier';
 import AppShell from './components/AppShell';
@@ -8,6 +8,7 @@ import type { SectionId } from './shared/types/navigation';
 function App() {
   const [activeSection, setActiveSection] = useState<SectionId>('technical-plan');
   const [developerMode, setDeveloperMode] = useState(false);
+  const leaveGuardRef = useRef<((nextSection?: string) => Promise<boolean>) | null>(null);
 
   useEffect(() => {
     trackAppOpen();
@@ -30,15 +31,31 @@ function App() {
     }
   }, [activeSection, developerMode]);
 
+  const requestSectionChange = async (section: SectionId) => {
+    if (section === activeSection) {
+      return;
+    }
+    const allowed = await (leaveGuardRef.current?.(section) ?? Promise.resolve(true));
+    if (allowed) {
+      setActiveSection(section);
+    }
+  };
+
   return (
     <>
       <UpdateNotifier />
       <AppShell
         activeSection={activeSection}
         developerMode={developerMode}
-        onSectionChange={setActiveSection}
+        onSectionChange={(section) => { void requestSectionChange(section); }}
       >
-        <AppRouter activeSection={activeSection} onDeveloperModeChange={setDeveloperMode} />
+        <AppRouter
+          activeSection={activeSection}
+          onDeveloperModeChange={setDeveloperMode}
+          registerLeaveGuard={(guard) => {
+            leaveGuardRef.current = guard;
+          }}
+        />
       </AppShell>
     </>
   );

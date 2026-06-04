@@ -1,6 +1,8 @@
 # Progress
 
 ## Session Log
+- 开始 Step03 目录排序与局部正文保留实现：目标是不新增 IPC 通道，改造 `saveOutline()` 语义，排序保留正文并支持未保存排序离开确认；当前工作区存在非本次修改的 `文章/新系列一：关于AI知识库的一点拙见.md`，本轮不触碰。
+- 已完成 Step03 目录排序与局部正文保留实现：`saveOutline()` 改为 `outlineData/reason/idMap/affectedNodeIds` 入参；排序按旧 ID 到新 ID 映射迁移正文、章节状态和正文规划；编辑、删除、添加子目录只清空涉及正文；全局事实不再受目录操作影响；Step03 支持同级拖拽排序、保存排序、切换步骤/主菜单时询问“排序结果是否保存”。验证通过 4 个 CJS `node --check`、`npm run build` 和 `git diff --check`，构建仍只有既有 chunk 体积警告，diff check 只有 LF/CRLF 提示。
 - 开始执行多模块开发者模式文件日志：范围扩展到文件解析、标书查重、废标项检查和 Word 导出；日志统一放入 `userData/logs/<module>/`，不写 SQLite，不改变业务逻辑。
 - 已完成多模块开发者模式文件日志：新增通用 `electron/utils/developerLog.cjs`，`paths.cjs` 提供 `getDeveloperLogsDir()`；`aiService` 暴露通用 `createDeveloperLogger()` 并保持 technical-plan 日志行为；文件解析写入 `logs/file-parser/`，标书查重写入 `logs/duplicate-check/`，废标项检查写入 `logs/rejection-check/`，Word 导出写入 `logs/export/`。日志只在开发者模式开启时写 JSONL，记录计数、hash、耗时、warning 和错误，不写 API Key/Token/Base URL/完整输出路径。验证通过相关 CJS `node --check`、`npm run build` 和 `git diff --check`；构建仍只有既有 chunk 体积警告，diff check 仅 LF/CRLF 提示。
 - 开始实现技术方案开发者模式文件日志：用户明确需要类似 AI 日志的详细程序执行日志，放入 `logs` 文件夹，不写 SQLite；已确认当前 SQLite 只适合任务状态和界面日志。

@@ -11,12 +11,13 @@ import TechnicalPlanHome from '../features/technical-plan/pages/TechnicalPlanHom
 interface AppRouterProps {
   activeSection: SectionId;
   onDeveloperModeChange: (developerMode: boolean) => void;
+  registerLeaveGuard?: (guard: ((nextSection?: string) => Promise<boolean>) | null) => void;
 }
 
-function AppRouter({ activeSection, onDeveloperModeChange }: AppRouterProps) {
+function AppRouter({ activeSection, onDeveloperModeChange, registerLeaveGuard }: AppRouterProps) {
   switch (activeSection) {
     case 'technical-plan':
-      return <TechnicalPlanHome />;
+      return <TechnicalPlanHome registerLeaveGuard={registerLeaveGuard} />;
     case 'business-bid':
       return <BusinessBidPage />;
     case 'knowledge-base':

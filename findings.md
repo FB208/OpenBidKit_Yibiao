@@ -1,6 +1,9 @@
 # Findings
 
 ## Research Log
+- Step03 目录排序改造关键边界：当前 `OutlineItem.id` 同时是章节编号和 SQLite `technical_plan_outline_nodes.node_id`，排序重新编号时必须通过 `oldId -> newId` 映射迁移 `outline_nodes.content`、`content_sections` 和 `content_plans`，否则无法区分排序和删除/新增。
+- 当前 `technicalPlanStore.saveOutline()` 会调用 `clearOutlineDataContent()` 和 `clearGlobalFactsAndContentState()`，因此必须改为带操作意图的保存语义；排序不应清空正文，全局事实不应再被目录操作清空。
+- 删除目录时不能只传删除根节点作为受影响 ID：章节编号会复用，旧 `1.1` 删除后其他节点可能变成新 `1.1`。正确边界是传入被删除子树全部旧 ID，并且 Main 侧清空判断只匹配旧 ID。
 - 多模块调试日志应抽取为通用 JSONL 工具：`aiService` 内的技术方案 logger 已证明路径和格式可行，但其他服务更适合直接根据 `app + config.developer_mode` 创建模块级 logger，避免把非 AI 模块依赖塞进 `aiService`。
 - 通用开发者日志已落地到 `electron/utils/developerLog.cjs`：按 `developer_mode` 开关创建 `userData/logs/<module>/*.jsonl`，每行含 `at/scope/log_id/event`；写入失败只警告不影响主流程。`aiService.createDeveloperLogger(moduleName, request)` 解决了废标项检查 runner 没有直接拿到 `app/configStore` 的问题。
 - 本轮新增模块日志的敏感边界：文件解析和查重只写文件名、扩展名、大小、修改时间、内容 hash/计数，不写完整本地路径或正文；废标项检查只写输入规模和结果计数，不写招标/投标正文；Word 导出只写输出文件名和扩展名，不写完整保存路径。

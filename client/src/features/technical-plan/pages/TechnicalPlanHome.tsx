@@ -1,5 +1,5 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import DocumentAnalysisPage from './DocumentAnalysisPage';
 import BidAnalysisPage from './BidAnalysisPage';
 import OutlineEditPage from './OutlineEditPage';
@@ -9,8 +9,18 @@ import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, TechnicalPlanStep } from '../types';
+import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanStep } from '../types';
 import type { OutlineData, OutlineItem, WordExportProgressEvent } from '../../../shared/types';
+
+interface TechnicalPlanHomeProps {
+  registerLeaveGuard?: (guard: ((nextSection?: string) => Promise<boolean>) | null) => void;
+}
+
+interface OutlineSortGuard {
+  hasUnsavedSort: () => boolean;
+  saveSort: () => Promise<void>;
+  discardSort: () => void;
+}
 
 const steps: TechnicalPlanStep[] = [
   'document-analysis',
@@ -107,13 +117,6 @@ function areRequiredBidAnalysisTasksReady(tasks: BidAnalysisTasks) {
   });
 }
 
-function clearOutlineContent(items: OutlineItem[]): OutlineItem[] {
-  return items.map((item) => {
-    const { content: _content, children, ...rest } = item;
-    return children?.length ? { ...rest, children: clearOutlineContent(children) } : rest;
-  });
-}
-
 function updateOutlineItemContent(items: OutlineItem[], itemId: string, content: string): OutlineItem[] {
   return items.map((item) => {
     if (item.id === itemId) {
@@ -126,18 +129,15 @@ function updateOutlineItemContent(items: OutlineItem[], itemId: string, content:
   });
 }
 
-function resetGeneratedContent(outlineData: OutlineData): OutlineData {
-  return {
-    ...outlineData,
-    outline: clearOutlineContent(outlineData.outline),
-  };
-}
-
-function TechnicalPlanHome() {
+function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const { hydrated, state, setState } = useTechnicalPlanWorkflow();
   const { showToast } = useToast();
   const [tenderMarkdown, setTenderMarkdown] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
+  const [sortLeaveDialogOpen, setSortLeaveDialogOpen] = useState(false);
+  const [savingSortBeforeLeave, setSavingSortBeforeLeave] = useState(false);
+  const sortGuardRef = useRef<OutlineSortGuard | null>(null);
+  const sortLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const activeIndex = steps.indexOf(state.step);
   const bidAnalysisReady = areRequiredBidAnalysisTasksReady(state.bidAnalysisTasks);
   const globalFactsReady = state.globalFacts.length > 0 && state.globalFactsTask?.status === 'success';
@@ -162,23 +162,82 @@ function TechnicalPlanHome() {
             ? '当前已经是最后一步'
             : `进入${stepLabels[steps[activeIndex + 1]]}`;
 
+  const resolveSortLeave = (allowed: boolean) => {
+    sortLeaveResolverRef.current?.(allowed);
+    sortLeaveResolverRef.current = null;
+    setSortLeaveDialogOpen(false);
+  };
+
+  const confirmPendingSortLeave = useCallback(async () => {
+    const guard = sortGuardRef.current;
+    if (!guard?.hasUnsavedSort()) {
+      return true;
+    }
+
+    setSortLeaveDialogOpen(true);
+    return new Promise<boolean>((resolve) => {
+      sortLeaveResolverRef.current = resolve;
+    });
+  }, []);
+
+  const continueSorting = () => {
+    resolveSortLeave(false);
+  };
+
+  const discardSortAndLeave = () => {
+    sortGuardRef.current?.discardSort();
+    resolveSortLeave(true);
+  };
+
+  const saveSortAndLeave = async () => {
+    const guard = sortGuardRef.current;
+    if (!guard) {
+      resolveSortLeave(true);
+      return;
+    }
+
+    try {
+      setSavingSortBeforeLeave(true);
+      await guard.saveSort();
+      resolveSortLeave(true);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存排序失败', 'error');
+    } finally {
+      setSavingSortBeforeLeave(false);
+    }
+  };
+
   useEffect(() => {
     if (!hydrated) return;
 
     trackPageView(`technical-plan/${state.step}`);
   }, [hydrated, state.step]);
 
-  const switchStep = (step: TechnicalPlanStep) => {
+  useEffect(() => {
+    if (!registerLeaveGuard) return;
+    registerLeaveGuard(confirmPendingSortLeave);
+    return () => registerLeaveGuard(null);
+  }, [confirmPendingSortLeave, registerLeaveGuard]);
+
+  const switchStep = async (step: TechnicalPlanStep) => {
+    if (step === state.step) {
+      return;
+    }
+    const allowed = await confirmPendingSortLeave();
+    if (!allowed) {
+      return;
+    }
+
     setState((prev) => ({ ...prev, step }));
     window.yibiao?.technicalPlan.updateStep(step).catch((error) => {
       showToast(error instanceof Error ? error.message : '保存技术方案步骤失败', 'error');
     });
   };
 
-  const goToOffset = (offset: number) => {
+  const goToOffset = async (offset: number) => {
     const nextStep = steps[activeIndex + offset];
     if (nextStep) {
-      switchStep(nextStep);
+      await switchStep(nextStep);
     }
   };
 
@@ -224,11 +283,7 @@ function TechnicalPlanHome() {
 
         if (taskType === 'outline-generation') {
           const hasOutlineData = hasOwnField(technicalPlan, 'outlineData');
-          const nextOutlineData = technicalPlan.outlineGenerationTask?.status === 'success' && technicalPlan.outlineData
-            ? resetGeneratedContent(technicalPlan.outlineData)
-            : hasOutlineData
-              ? (technicalPlan.outlineData || null)
-              : prev.outlineData;
+          const nextOutlineData = hasOutlineData ? (technicalPlan.outlineData || null) : prev.outlineData;
           const outlineDataChanged = nextOutlineData !== prev.outlineData;
 
           return {
@@ -239,12 +294,12 @@ function TechnicalPlanHome() {
               ? technicalPlan.referenceKnowledgeDocumentIds
               : prev.referenceKnowledgeDocumentIds,
             outlineData: nextOutlineData,
-            globalFactsTask: outlineDataChanged ? undefined : prev.globalFactsTask,
-            globalFacts: outlineDataChanged ? [] : prev.globalFacts,
-            contentGenerationTask: outlineDataChanged ? undefined : prev.contentGenerationTask,
-            contentGenerationSections: outlineDataChanged ? {} : prev.contentGenerationSections,
-            contentGenerationPlans: outlineDataChanged ? {} : prev.contentGenerationPlans,
-            contentGenerationRuntime: outlineDataChanged ? undefined : prev.contentGenerationRuntime,
+            globalFactsTask: hasOwnField(technicalPlan, 'globalFactsTask') ? trimTaskLogs(technicalPlan.globalFactsTask) : prev.globalFactsTask,
+            globalFacts: hasOwnField(technicalPlan, 'globalFacts') ? (technicalPlan.globalFacts || []) : prev.globalFacts,
+            contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : (outlineDataChanged ? undefined : prev.contentGenerationTask),
+            contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : (outlineDataChanged ? {} : prev.contentGenerationSections),
+            contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : (outlineDataChanged ? {} : prev.contentGenerationPlans),
+            contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : (outlineDataChanged ? undefined : prev.contentGenerationRuntime),
           };
         }
 
@@ -446,6 +501,11 @@ function TechnicalPlanHome() {
     setState((prev) => ({ ...prev, ...(saved || {}), globalFacts }));
   };
 
+  const saveOutline = async (request: SaveOutlineRequest) => {
+    const saved = await window.yibiao?.technicalPlan.saveOutline(request);
+    setState((prev) => ({ ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData }));
+  };
+
   const generatedContentCount = state.outlineData?.outline
     ? collectLeafItems(state.outlineData.outline).filter((item) => item.content?.trim()).length
     : 0;
@@ -458,7 +518,7 @@ function TechnicalPlanHome() {
         icon: <ToolbarArrowLeftIcon />,
         disabled: activeIndex <= 0,
         tooltip: activeIndex <= 0 ? '当前已经是第一步' : `返回${stepLabels[steps[activeIndex - 1]]}`,
-        onClick: () => goToOffset(-1),
+        onClick: () => { void goToOffset(-1); },
       },
       {
         id: 'export-word',
@@ -475,7 +535,7 @@ function TechnicalPlanHome() {
         icon: <ToolbarArrowRightIcon />,
         disabled: !state.outlineData,
         tooltip: '进入扩写改写步骤',
-        onClick: () => switchStep('expand'),
+        onClick: () => { void switchStep('expand'); },
       },
     ]
     : [
@@ -485,7 +545,7 @@ function TechnicalPlanHome() {
         icon: <ToolbarArrowLeftIcon />,
         disabled: activeIndex <= 0,
         tooltip: activeIndex <= 0 ? '当前已经是第一步' : `返回${stepLabels[steps[activeIndex - 1]]}`,
-        onClick: () => goToOffset(-1),
+        onClick: () => { void goToOffset(-1); },
       },
       {
         id: 'next-step',
@@ -494,7 +554,7 @@ function TechnicalPlanHome() {
         variant: 'primary' as const,
         disabled: isNextDisabled,
         tooltip: nextTooltip,
-        onClick: () => goToOffset(1),
+        onClick: () => { void goToOffset(1); },
       },
     ];
 
@@ -514,7 +574,7 @@ function TechnicalPlanHome() {
           label: '首页',
           variant: state.step === 'document-analysis' ? 'primary' as const : 'secondary' as const,
           tooltip: '回到上传招标文件',
-          onClick: () => switchStep('document-analysis'),
+          onClick: () => { void switchStep('document-analysis'); },
         },
       ],
     },
@@ -562,6 +622,7 @@ function TechnicalPlanHome() {
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           outlineData={state.outlineData}
           task={state.outlineGenerationTask}
+          contentTaskStatus={state.contentGenerationTask?.status}
           onOutlineConfigChange={(outlineMode, referenceKnowledgeDocumentIds) => {
             setState((prev) => ({ ...prev, outlineMode, referenceKnowledgeDocumentIds }));
             window.yibiao?.technicalPlan.saveOutlineConfig({ outlineMode, referenceKnowledgeDocumentIds }).then((saved) => {
@@ -570,23 +631,9 @@ function TechnicalPlanHome() {
               showToast(error instanceof Error ? error.message : '保存目录配置失败', 'error');
             });
           }}
-          onOutlineGenerated={(outlineData) => {
-            const nextOutlineData = resetGeneratedContent(outlineData);
-            setState((prev) => ({
-              ...prev,
-              outlineData: nextOutlineData,
-              globalFactsTask: undefined,
-              globalFacts: [],
-              contentGenerationTask: undefined,
-              contentGenerationSections: {},
-              contentGenerationPlans: {},
-              contentGenerationRuntime: undefined,
-            }));
-            window.yibiao?.technicalPlan.saveOutline(nextOutlineData).then((saved) => {
-              setState((prev) => ({ ...prev, ...saved }));
-            }).catch((error) => {
-              showToast(error instanceof Error ? error.message : '保存目录失败', 'error');
-            });
+          onOutlineSaved={saveOutline}
+          onSortGuardChange={(guard) => {
+            sortGuardRef.current = guard;
           }}
         />
       )}
@@ -619,6 +666,28 @@ function TechnicalPlanHome() {
           <p>后续接入旧方案导入、章节扩写和人工校准。</p>
         </section>
       )}
+
+      <Dialog.Root open={sortLeaveDialogOpen} onOpenChange={(open) => !open && continueSorting()}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="content-regenerate-card outline-sort-leave-card">
+            <div className="content-regenerate-card-head">
+              <span className="section-kicker">目录排序</span>
+              <Dialog.Title>排序结果是否保存</Dialog.Title>
+              <Dialog.Description>
+                当前目录排序还没有保存。保存后会更新目录编号并保留已生成正文；不保存则丢弃本次排序草稿。
+              </Dialog.Description>
+            </div>
+            <div className="content-regenerate-actions">
+              <button type="button" className="secondary-action" onClick={continueSorting} disabled={savingSortBeforeLeave}>继续排序</button>
+              <button type="button" className="secondary-action" onClick={discardSortAndLeave} disabled={savingSortBeforeLeave}>不保存</button>
+              <button type="button" className="primary-action" onClick={() => { void saveSortAndLeave(); }} disabled={savingSortBeforeLeave}>
+                {savingSortBeforeLeave ? '正在保存...' : '保存排序'}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <Dialog.Root
         open={exportProgress.open}

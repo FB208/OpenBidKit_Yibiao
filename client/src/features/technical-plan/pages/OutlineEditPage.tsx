@@ -1,9 +1,9 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, DragEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { useToast } from '../../../shared/ui';
-import type { BackgroundTaskState } from '../types';
+import type { BackgroundTaskState, SaveOutlineRequest } from '../types';
 import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
 import type { OutlineData, OutlineItem, OutlineMode } from '../../../shared/types';
 
@@ -14,8 +14,33 @@ interface OutlineEditPageProps {
   referenceKnowledgeDocumentIds: string[];
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
+  contentTaskStatus?: BackgroundTaskState['status'];
   onOutlineConfigChange: (mode: OutlineMode, documentIds: string[]) => void;
-  onOutlineGenerated: (outlineData: OutlineData) => void;
+  onOutlineSaved: (request: SaveOutlineRequest) => Promise<void>;
+  onSortGuardChange?: (guard: OutlineSortGuard | null) => void;
+}
+
+interface OutlineSortGuard {
+  hasUnsavedSort: () => boolean;
+  saveSort: () => Promise<void>;
+  discardSort: () => void;
+}
+
+interface RenumberResult {
+  outline: OutlineItem[];
+  idMap: Record<string, string>;
+}
+
+interface OutlineLocation {
+  parentId: string | null;
+  level: number;
+  index: number;
+}
+
+interface DropTargetState {
+  itemId: string;
+  position: 'before' | 'after';
+  valid: boolean;
 }
 
 const emptyKnowledgeIndex: KnowledgeBaseIndex = { folders: [], documents: [] };
@@ -46,14 +71,83 @@ function formatDuration(milliseconds: number) {
   return `${minutes}:${seconds}`;
 }
 
-function renumberOutlineItems(items: OutlineItem[], parentPrefix = ''): OutlineItem[] {
-  return items.map((item, index) => {
+function renumberOutlineItemsWithIdMap(items: OutlineItem[], parentPrefix = ''): RenumberResult {
+  const idMap: Record<string, string> = {};
+  const outline = items.map((item, index) => {
     const id = parentPrefix ? `${parentPrefix}.${index + 1}` : `${index + 1}`;
+    const childResult = item.children?.length ? renumberOutlineItemsWithIdMap(item.children, id) : null;
+    idMap[item.id] = id;
+    if (childResult) {
+      Object.assign(idMap, childResult.idMap);
+    }
     return {
       ...item,
       id,
-      children: item.children?.length ? renumberOutlineItems(item.children, id) : undefined,
+      children: childResult?.outline,
     };
+  });
+
+  return { outline, idMap };
+}
+
+function createIdentityIdMap(items: OutlineItem[], idMap: Record<string, string> = {}) {
+  items.forEach((item) => {
+    idMap[item.id] = item.id;
+    if (item.children?.length) {
+      createIdentityIdMap(item.children, idMap);
+    }
+  });
+  return idMap;
+}
+
+function composeIdMap(baseMap: Record<string, string>, stepMap: Record<string, string>) {
+  return Object.fromEntries(Object.entries(baseMap).map(([oldId, currentId]) => [oldId, stepMap[currentId] || currentId]));
+}
+
+function findOutlineLocation(items: OutlineItem[], itemId: string, parentId: string | null = null, level = 0): OutlineLocation | null {
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item.id === itemId) {
+      return { parentId, level, index };
+    }
+    if (item.children?.length) {
+      const child = findOutlineLocation(item.children, itemId, item.id, level + 1);
+      if (child) return child;
+    }
+  }
+  return null;
+}
+
+function reorderSiblingItems(items: OutlineItem[], draggedId: string, targetId: string, position: 'before' | 'after') {
+  const draggedIndex = items.findIndex((item) => item.id === draggedId);
+  const targetIndex = items.findIndex((item) => item.id === targetId);
+  if (draggedIndex < 0 || targetIndex < 0 || draggedIndex === targetIndex) {
+    return items;
+  }
+
+  const next = [...items];
+  const [dragged] = next.splice(draggedIndex, 1);
+  const adjustedTargetIndex = next.findIndex((item) => item.id === targetId);
+  const insertIndex = position === 'before' ? adjustedTargetIndex : adjustedTargetIndex + 1;
+  next.splice(insertIndex, 0, dragged);
+  return next;
+}
+
+function reorderOutlineSiblings(items: OutlineItem[], parentId: string | null, draggedId: string, targetId: string, position: 'before' | 'after'): OutlineItem[] {
+  if (parentId === null) {
+    return reorderSiblingItems(items, draggedId, targetId, position);
+  }
+
+  return items.map((item) => {
+    if (item.id === parentId) {
+      return {
+        ...item,
+        children: reorderSiblingItems(item.children || [], draggedId, targetId, position),
+      };
+    }
+    return item.children?.length
+      ? { ...item, children: reorderOutlineSiblings(item.children, parentId, draggedId, targetId, position) }
+      : item;
   });
 }
 
@@ -114,8 +208,10 @@ function OutlineEditPage({
   referenceKnowledgeDocumentIds,
   outlineData,
   task,
+  contentTaskStatus,
   onOutlineConfigChange,
-  onOutlineGenerated,
+  onOutlineSaved,
+  onSortGuardChange,
 }: OutlineEditPageProps) {
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -133,12 +229,22 @@ function OutlineEditPage({
   const [loadingKnowledge, setLoadingKnowledge] = useState(false);
   const [localStartAt, setLocalStartAt] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [sorting, setSorting] = useState(false);
+  const [draftOutlineData, setDraftOutlineData] = useState<OutlineData | null>(null);
+  const [sortDirty, setSortDirty] = useState(false);
+  const [savingSort, setSavingSort] = useState(false);
+  const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<DropTargetState | null>(null);
   const logListRef = useRef<HTMLDivElement | null>(null);
+  const sortIdMapRef = useRef<Record<string, string>>({});
   const { showToast } = useToast();
-  const selectedItem = outlineData && selectedItemId ? findOutlineItem(outlineData.outline, selectedItemId) : null;
+  const activeOutlineData = sorting ? draftOutlineData : outlineData;
+  const selectedItem = activeOutlineData && selectedItemId ? findOutlineItem(activeOutlineData.outline, selectedItemId) : null;
   const taskRunning = task?.status === 'running';
   const taskFailed = task?.status === 'error';
   const generating = startingOutline || taskRunning;
+  const contentMutationLocked = contentTaskStatus === 'running' || contentTaskStatus === 'pausing' || contentTaskStatus === 'paused';
+  const outlineMutationLocked = generating || contentMutationLocked || savingSort;
   const progressLogs = task?.logs || [];
   const latestLog = progressLogs[progressLogs.length - 1];
   const progress = generating
@@ -158,19 +264,19 @@ function OutlineEditPage({
   const staleText = generating && Number.isFinite(updatedAt) ? `最近更新 ${Math.floor(Math.max(0, nowTick - updatedAt) / 1000)} 秒前` : '';
 
   useEffect(() => {
-    if (outlineData?.outline?.length) {
-      const validIds = collectOutlineIds(outlineData.outline);
+    if (activeOutlineData?.outline?.length) {
+      const validIds = collectOutlineIds(activeOutlineData.outline);
       setExpandedItems((prev) => {
         const next = new Set([...prev].filter((id) => validIds.has(id)));
-        return next.size ? next : collectRootIds(outlineData.outline);
+        return next.size ? next : collectRootIds(activeOutlineData.outline);
       });
-      setSelectedItemId((prev) => (prev && validIds.has(prev) ? prev : outlineData.outline[0]?.id || null));
+      setSelectedItemId((prev) => (prev && validIds.has(prev) ? prev : activeOutlineData.outline[0]?.id || null));
       return;
     }
 
     setExpandedItems(new Set());
     setSelectedItemId(null);
-  }, [outlineData]);
+  }, [activeOutlineData]);
 
   useEffect(() => {
     if (task?.status) {
@@ -223,6 +329,15 @@ function OutlineEditPage({
   };
 
   const openGenerationDialog = () => {
+    if (sorting) {
+      showToast('请先保存当前目录排序', 'info');
+      return;
+    }
+    const lockMessage = getMutationLockMessage();
+    if (lockMessage) {
+      showToast(lockMessage, 'info');
+      return;
+    }
     if (!projectOverview || !techRequirements) {
       showToast('请先完成招标文件解析', 'info');
       return;
@@ -241,6 +356,10 @@ function OutlineEditPage({
   };
 
   const generateOutline = async () => {
+    const lockMessage = getMutationLockMessage();
+    if (lockMessage) {
+      throw new Error(lockMessage);
+    }
     if (!projectOverview || !techRequirements) {
       showToast('请先完成招标文件解析', 'info');
       return;
@@ -308,15 +427,33 @@ function OutlineEditPage({
     setDraftKnowledgeDocumentIds([]);
   };
 
-  const updateOutline = (outline: OutlineItem[]) => {
+  const getMutationLockMessage = () => {
+    if (generating) return '目录生成任务正在运行，当前目录暂不可编辑';
+    if (contentMutationLocked) return '正文生成任务正在运行或暂停中，请结束后再调整目录';
+    return '';
+  };
+
+  const saveOutlineChange = async (outline: OutlineItem[], reason: SaveOutlineRequest['reason'], affectedNodeIds: string[] = []) => {
     if (!outlineData) {
       return;
     }
-    onOutlineGenerated({ ...outlineData, outline: renumberOutlineItems(outline) });
+    const lockMessage = getMutationLockMessage();
+    if (lockMessage) {
+      showToast(lockMessage, 'info');
+      return;
+    }
+
+    const renumbered = renumberOutlineItemsWithIdMap(outline);
+    await onOutlineSaved({
+      outlineData: { ...outlineData, outline: renumbered.outline },
+      reason,
+      idMap: renumbered.idMap,
+      affectedNodeIds,
+    });
   };
 
   const startEditing = (item: OutlineItem) => {
-    if (generating) {
+    if (sorting || outlineMutationLocked) {
       return;
     }
     setSelectedItemId(item.id);
@@ -325,22 +462,26 @@ function OutlineEditPage({
     setEditDescription(item.description);
   };
 
-  const saveEditing = () => {
-    if (!outlineData || !editingItemId || generating) {
+  const saveEditing = async () => {
+    if (!outlineData || !editingItemId || sorting || outlineMutationLocked) {
       return;
     }
 
-    updateOutline(updateOutlineItem(outlineData.outline, editingItemId, (item) => ({
-      ...item,
-      title: editTitle.trim() || item.title,
-      description: editDescription.trim(),
-    })));
-    setEditingItemId(null);
-    showToast('目录项已更新', 'success');
+    try {
+      await saveOutlineChange(updateOutlineItem(outlineData.outline, editingItemId, (item) => ({
+        ...item,
+        title: editTitle.trim() || item.title,
+        description: editDescription.trim(),
+      })), 'edit', [editingItemId]);
+      setEditingItemId(null);
+      showToast('目录项已更新，相关正文已清空', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存目录项失败', 'error');
+    }
   };
 
-  const addRootItem = () => {
-    if (!outlineData || generating) {
+  const addRootItem = async () => {
+    if (!outlineData || sorting || outlineMutationLocked) {
       return;
     }
 
@@ -349,13 +490,20 @@ function OutlineEditPage({
       title: '新目录项',
       description: '请编辑描述',
     };
-    updateOutline([...outlineData.outline, newItem]);
-    setSelectedItemId(newItem.id);
-    setTimeout(() => startEditing(newItem), 0);
+    try {
+      await saveOutlineChange([...outlineData.outline, newItem], 'add-root');
+      setSelectedItemId(newItem.id);
+      setEditingItemId(newItem.id);
+      setEditTitle(newItem.title);
+      setEditDescription(newItem.description);
+      showToast('一级目录已添加', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '添加一级目录失败', 'error');
+    }
   };
 
-  const addChildItem = (parentId: string) => {
-    if (!outlineData || generating) {
+  const addChildItem = async (parentId: string) => {
+    if (!outlineData || sorting || outlineMutationLocked) {
       return;
     }
 
@@ -367,22 +515,40 @@ function OutlineEditPage({
       description: '请编辑描述',
     };
 
-    updateOutline(updateOutlineItem(outlineData.outline, parentId, (item) => ({
-      ...item,
-      children: [...(item.children || []), newItem],
-    })));
-    setExpandedItems((prev) => new Set(prev).add(parentId));
-    setSelectedItemId(newItem.id);
-    setTimeout(() => startEditing(newItem), 0);
+    try {
+      await saveOutlineChange(updateOutlineItem(outlineData.outline, parentId, (item) => ({
+        ...item,
+        children: [...(item.children || []), newItem],
+      })), 'add-child', [parentId]);
+      setExpandedItems((prev) => new Set(prev).add(parentId));
+      setSelectedItemId(newItem.id);
+      setEditingItemId(newItem.id);
+      setEditTitle(newItem.title);
+      setEditDescription(newItem.description);
+      showToast('子目录已添加，父目录正文已清空', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '添加子目录失败', 'error');
+    }
   };
 
-  const removeItem = (itemId: string) => {
-    if (!outlineData || generating) {
+  const removeItem = async (itemId: string) => {
+    if (!outlineData || sorting || outlineMutationLocked) {
       return;
     }
-    updateOutline(deleteOutlineItem(outlineData.outline, itemId));
-    setSelectedItemId(null);
-    showToast('目录项已删除', 'success');
+    try {
+      const removedItem = findOutlineItem(outlineData.outline, itemId);
+      const removedIds = removedItem ? [...collectOutlineIds([removedItem])] : [itemId];
+      const nextOutline = deleteOutlineItem(outlineData.outline, itemId);
+      if (!nextOutline.length) {
+        showToast('至少保留一个目录项', 'info');
+        return;
+      }
+      await saveOutlineChange(nextOutline, 'delete', removedIds);
+      setSelectedItemId(null);
+      showToast('目录项已删除', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '删除目录项失败', 'error');
+    }
   };
 
   const toggleExpanded = (itemId: string) => {
@@ -398,8 +564,8 @@ function OutlineEditPage({
   };
 
   const expandAllItems = () => {
-    if (outlineData?.outline?.length) {
-      setExpandedItems(collectOutlineIds(outlineData.outline));
+    if (activeOutlineData?.outline?.length) {
+      setExpandedItems(collectOutlineIds(activeOutlineData.outline));
     }
   };
 
@@ -407,14 +573,165 @@ function OutlineEditPage({
     setExpandedItems(new Set());
   };
 
+  const startSorting = () => {
+    if (!outlineData?.outline?.length) {
+      return;
+    }
+    const lockMessage = getMutationLockMessage();
+    if (lockMessage) {
+      showToast(lockMessage, 'info');
+      return;
+    }
+
+    setDraftOutlineData(outlineData);
+    sortIdMapRef.current = createIdentityIdMap(outlineData.outline);
+    setSorting(true);
+    setSortDirty(false);
+    setEditingItemId(null);
+    setDraggingItemId(null);
+    setDropTarget(null);
+  };
+
+  const discardSorting = () => {
+    setSorting(false);
+    setDraftOutlineData(null);
+    setSortDirty(false);
+    setSavingSort(false);
+    setDraggingItemId(null);
+    setDropTarget(null);
+    sortIdMapRef.current = {};
+  };
+
+  const saveSorting = async () => {
+    if (!draftOutlineData?.outline?.length) {
+      discardSorting();
+      return;
+    }
+    if (!sortDirty) {
+      discardSorting();
+      return;
+    }
+    const lockMessage = getMutationLockMessage();
+    if (lockMessage) {
+      throw new Error(lockMessage);
+    }
+
+    setSavingSort(true);
+    try {
+      await onOutlineSaved({
+        outlineData: draftOutlineData,
+        reason: 'sort',
+        idMap: sortIdMapRef.current,
+      });
+      discardSorting();
+      showToast('目录排序已保存', 'success');
+    } finally {
+      setSavingSort(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!onSortGuardChange) return;
+    onSortGuardChange({
+      hasUnsavedSort: () => sorting && sortDirty,
+      saveSort: saveSorting,
+      discardSort: discardSorting,
+    });
+    return () => onSortGuardChange(null);
+  }, [onSortGuardChange, sorting, sortDirty, draftOutlineData]);
+
+  const getDropPosition = (event: DragEvent<HTMLElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+  };
+
+  const canDropOnTarget = (draggedId: string, targetId: string) => {
+    if (!activeOutlineData?.outline?.length || draggedId === targetId) return false;
+    const dragged = findOutlineLocation(activeOutlineData.outline, draggedId);
+    const target = findOutlineLocation(activeOutlineData.outline, targetId);
+    return Boolean(dragged && target && dragged.parentId === target.parentId && dragged.level === target.level);
+  };
+
+  const handleDragStart = (event: DragEvent<HTMLDivElement>, item: OutlineItem) => {
+    if (!sorting) {
+      return;
+    }
+    setDraggingItemId(item.id);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', item.id);
+  };
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>, item: OutlineItem) => {
+    if (!sorting || !draggingItemId) {
+      return;
+    }
+    event.preventDefault();
+    const valid = canDropOnTarget(draggingItemId, item.id);
+    event.dataTransfer.dropEffect = valid ? 'move' : 'none';
+    setDropTarget({ itemId: item.id, position: getDropPosition(event), valid });
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>, item: OutlineItem) => {
+    event.preventDefault();
+    if (!sorting || !draftOutlineData?.outline?.length || !draggingItemId) {
+      return;
+    }
+
+    const valid = canDropOnTarget(draggingItemId, item.id);
+    if (!valid) {
+      setDraggingItemId(null);
+      setDropTarget(null);
+      showToast('只能同级目录排序', 'info');
+      return;
+    }
+
+    const sourceLocation = findOutlineLocation(draftOutlineData.outline, draggingItemId);
+    if (!sourceLocation) {
+      setDraggingItemId(null);
+      setDropTarget(null);
+      return;
+    }
+
+    const position = dropTarget?.itemId === item.id ? dropTarget.position : getDropPosition(event);
+    const reordered = reorderOutlineSiblings(draftOutlineData.outline, sourceLocation.parentId, draggingItemId, item.id, position);
+    const renumbered = renumberOutlineItemsWithIdMap(reordered);
+    sortIdMapRef.current = composeIdMap(sortIdMapRef.current, renumbered.idMap);
+    setDraftOutlineData({ ...draftOutlineData, outline: renumbered.outline });
+    setExpandedItems((prev) => new Set([...prev].map((id) => renumbered.idMap[id] || id)));
+    setSelectedItemId((prev) => (prev ? renumbered.idMap[prev] || prev : prev));
+    setSortDirty(true);
+    setDraggingItemId(null);
+    setDropTarget(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggingItemId(null);
+    setDropTarget(null);
+  };
+
   const renderItem = (item: OutlineItem, level = 0) => {
     const hasChildren = Boolean(item.children?.length);
     const isExpanded = expandedItems.has(item.id);
     const isActive = selectedItemId === item.id;
+    const isDragging = draggingItemId === item.id;
+    const isDropTarget = dropTarget?.itemId === item.id;
+    const dropClass = isDropTarget
+      ? dropTarget.valid
+        ? ` is-drop-${dropTarget.position}`
+        : ' is-drop-invalid'
+      : '';
 
     return (
       <div className="outline-tree-node" key={item.id} style={{ '--outline-level': level } as CSSProperties}>
-        <div className={`outline-tree-item${isActive ? ' is-active' : ''}`}>
+        <div
+          className={`outline-tree-item${isActive ? ' is-active' : ''}${sorting ? ' is-sorting' : ''}${isDragging ? ' is-dragging' : ''}${dropClass}`}
+          draggable={sorting}
+          onDragStart={(event) => handleDragStart(event, item)}
+          onDragOver={(event) => handleDragOver(event, item)}
+          onDrop={(event) => handleDrop(event, item)}
+          onDragEnd={handleDragEnd}
+        >
+          {sorting && <span className="outline-tree-drag-handle" aria-hidden="true">⋮⋮</span>}
           <button
             type="button"
             className={`outline-tree-toggle${hasChildren ? '' : ' is-leaf'}${isExpanded ? ' is-expanded' : ''}`}
@@ -556,7 +873,7 @@ function OutlineEditPage({
             type="button"
             className="outline-config-action"
             onClick={openGenerationDialog}
-            disabled={generating || !projectOverview || !techRequirements}
+            disabled={generating || sorting || contentMutationLocked || !projectOverview || !techRequirements}
             aria-label="打开目录生成配置"
             title="目录生成配置"
           >
@@ -565,7 +882,7 @@ function OutlineEditPage({
               <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
             </svg>
           </button>
-          <button type="button" className="primary-action" onClick={openGenerationDialog} disabled={generating || !projectOverview || !techRequirements}>
+          <button type="button" className="primary-action" onClick={openGenerationDialog} disabled={generating || sorting || contentMutationLocked || !projectOverview || !techRequirements}>
             {generating ? 'AI 正在生成目录' : outlineData ? '重新生成目录' : '生成目录'}
           </button>
         </div>
@@ -610,21 +927,37 @@ function OutlineEditPage({
           <div className="analysis-result-head outline-tree-head">
             <div>
               <strong>目录结构</strong>
-              <span>{outlineData?.outline?.length || 0} 个一级目录</span>
+              <span>{activeOutlineData?.outline?.length || 0} 个一级目录{sorting ? ' · 排序中' : ''}</span>
             </div>
             <div className="outline-tree-tools">
-              {outlineData && (
-                <button type="button" className="outline-add-root-action" onClick={addRootItem} disabled={generating}>
+              {sorting ? (
+                <button type="button" className="outline-save-sort-action" onClick={() => { void saveSorting().catch((error) => showToast(error instanceof Error ? error.message : '保存排序失败', 'error')); }} disabled={savingSort}>
+                  {savingSort ? '正在保存...' : '保存排序'}
+                </button>
+              ) : (
+                <>
+                {outlineData && (
+                <button type="button" className="outline-add-root-action" onClick={() => { void addRootItem(); }} disabled={outlineMutationLocked}>
                   添加一级目录
                 </button>
+                )}
+                {outlineData && (
+                  <button type="button" onClick={startSorting} disabled={outlineMutationLocked || !outlineData?.outline?.length}>目录排序</button>
+                )}
+                <button type="button" onClick={expandAllItems} disabled={!activeOutlineData?.outline?.length}>全部展开</button>
+                <button type="button" onClick={collapseAllItems} disabled={!activeOutlineData?.outline?.length}>全部折叠</button>
+                </>
               )}
-              <button type="button" onClick={expandAllItems} disabled={!outlineData?.outline?.length}>全部展开</button>
-              <button type="button" onClick={collapseAllItems} disabled={!outlineData?.outline?.length}>全部折叠</button>
             </div>
           </div>
-          {outlineData?.outline?.length ? (
-            <div className="outline-tree-list">
-              {outlineData.outline.map((item) => renderItem(item))}
+          {sorting && (
+            <div className="outline-sort-notice">
+              仅支持同级目录排序。拖动时只在前端调整顺序，点击“保存排序”后才会写入数据库；已生成正文会跟随目录项保留。
+            </div>
+          )}
+          {activeOutlineData?.outline?.length ? (
+            <div className={`outline-tree-list${sorting ? ' is-sorting' : ''}`}>
+              {activeOutlineData.outline.map((item) => renderItem(item))}
             </div>
           ) : (
             <div className="markdown-empty-state outline-empty-state">
@@ -643,23 +976,27 @@ function OutlineEditPage({
           </div>
           {selectedItem ? (
             <div className="outline-detail-body">
-              {generating && (
+              {(generating || contentMutationLocked || sorting) && (
                 <div className="outline-detail-lock">
-                  目录生成任务正在运行，当前目录暂不可编辑，避免覆盖后台生成结果。
+                  {sorting
+                    ? '目录排序中，当前目录暂不可编辑。'
+                    : contentMutationLocked
+                      ? '正文生成任务正在运行或暂停中，当前目录暂不可编辑。'
+                      : '目录生成任务正在运行，当前目录暂不可编辑，避免覆盖后台生成结果。'}
                 </div>
               )}
               {editingItemId === selectedItem.id ? (
                 <>
                   <label>
                     <span>标题</span>
-                    <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} disabled={generating} />
+                    <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} disabled={outlineMutationLocked || sorting} />
                   </label>
                   <label>
                     <span>描述</span>
-                    <textarea value={editDescription} onChange={(event) => setEditDescription(event.target.value)} disabled={generating} />
+                    <textarea value={editDescription} onChange={(event) => setEditDescription(event.target.value)} disabled={outlineMutationLocked || sorting} />
                   </label>
                   <div className="outline-detail-actions">
-                    <button type="button" className="primary-action" onClick={saveEditing} disabled={generating}>保存</button>
+                    <button type="button" className="primary-action" onClick={() => { void saveEditing(); }} disabled={outlineMutationLocked || sorting}>保存</button>
                     <button type="button" className="secondary-action" onClick={() => setEditingItemId(null)}>取消</button>
                   </div>
                 </>
@@ -669,9 +1006,9 @@ function OutlineEditPage({
                   <p>{selectedItem.description || '无描述'}</p>
                   {selectedItem.source_requirement_title && <small>来源评分项：{selectedItem.source_requirement_title}</small>}
                   <div className="outline-detail-actions">
-                    <button type="button" className="primary-action" onClick={() => startEditing(selectedItem)} disabled={generating}>编辑</button>
-                    <button type="button" className="secondary-action" onClick={() => addChildItem(selectedItem.id)} disabled={generating}>添加子目录</button>
-                    <button type="button" className="danger-action" onClick={() => removeItem(selectedItem.id)} disabled={generating}>删除</button>
+                    <button type="button" className="primary-action" onClick={() => startEditing(selectedItem)} disabled={outlineMutationLocked || sorting}>编辑</button>
+                    <button type="button" className="secondary-action" onClick={() => { void addChildItem(selectedItem.id); }} disabled={outlineMutationLocked || sorting}>添加子目录</button>
+                    <button type="button" className="danger-action" onClick={() => { void removeItem(selectedItem.id); }} disabled={outlineMutationLocked || sorting}>删除</button>
                   </div>
                 </>
               )}
@@ -702,7 +1039,7 @@ function OutlineEditPage({
                   type="button"
                   className={`outline-generation-mode-card${draftOutlineMode === 'free' ? ' is-active' : ''}`}
                   onClick={() => setDraftOutlineMode('free')}
-                  disabled={generating}
+                  disabled={generating || contentMutationLocked}
                 >
                   <strong>自由生成</strong>
                   <span>完全由 AI 分析并生成目录，标题贴近技术评分项语义，但不完全一致。</span>
@@ -711,7 +1048,7 @@ function OutlineEditPage({
                   type="button"
                   className={`outline-generation-mode-card${draftOutlineMode === 'aligned' ? ' is-active' : ''}`}
                   onClick={() => setDraftOutlineMode('aligned')}
-                  disabled={generating}
+                  disabled={generating || contentMutationLocked}
                 >
                   <strong>按评分项对齐</strong>
                   <span>一级目录完全和技术评分项要求一致，二三级目录由 AI 生成。</span>
@@ -729,10 +1066,10 @@ function OutlineEditPage({
 
             <div className="content-regenerate-actions">
               <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
-              <button type="button" className="secondary-action" onClick={saveOutlineConfig} disabled={generating}>
+              <button type="button" className="secondary-action" onClick={saveOutlineConfig} disabled={generating || contentMutationLocked}>
                 保存配置
               </button>
-              <button type="button" className="primary-action" onClick={generateOutline} disabled={generating || !projectOverview || !techRequirements}>
+              <button type="button" className="primary-action" onClick={generateOutline} disabled={generating || contentMutationLocked || !projectOverview || !techRequirements}>
                 开始生成
               </button>
             </div>

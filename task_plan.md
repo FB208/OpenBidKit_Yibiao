@@ -1,5 +1,28 @@
 # Task Plan
 
+## Current Task: Step03 目录排序与局部正文保留
+
+### Goal
+技术方案 Step03 支持同级目录拖拽排序；排序只在前端重排，点击保存后再写 SQLite。目录保存改为按操作意图局部处理正文：排序不清空正文；编辑/删除只清空涉及节点；新增子目录只清空变为非叶子的父节点正文；任何目录操作不再清空全局事实。
+
+### Phases
+- [completed] 1. 调整 `saveOutline()` 保存语义和类型，支持 `reason/idMap/affectedNodeIds`。
+- [completed] 2. Main 侧按映射迁移正文、正文状态和正文规划，保留全局事实。
+- [completed] 3. Step03 实现排序状态、同级拖拽、本地草稿、保存排序和未保存离开确认。
+- [completed] 4. 接入技术方案内部步骤切换和左侧主菜单切换守卫。
+- [completed] 5. 同步样式，运行 CJS 检查和客户端构建。
+
+### Decisions
+- 不新增 IPC 通道，继续使用 `technical-plan:save-outline`。
+- `saveOutline()` 入参改为对象形式，包含 `outlineData/reason/idMap/affectedNodeIds`。
+- 排序必须传 `oldId -> newId` 映射，避免章节编号作为主键时正文串章。
+- 目录重新生成仍清空正文和正文缓存，但不清空全局事实。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 删除目录编号复用可能误迁移旧子树正文 | 复核保存映射逻辑 | 删除时传入被删除子树全部旧 ID，Main 侧只按旧 ID 判断清空，避免旧 `2` 变新 `1` 时被误清空或旧 `1` 正文误挂载 |
+
 ## Current Task: 多模块开发者模式文件日志
 
 ### Goal
