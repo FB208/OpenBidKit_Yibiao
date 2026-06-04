@@ -3493,17 +3493,6 @@ button {
   box-shadow: 0 10px 24px rgba(22, 163, 74, 0.18);
 }
 
-.outline-sort-notice {
-  margin: 0 16px;
-  padding: 10px 12px;
-  color: #166534;
-  font-size: 12px;
-  line-height: 1.65;
-  background: rgba(22, 163, 74, 0.08);
-  border: 1px solid rgba(22, 163, 74, 0.18);
-  border-radius: 14px;
-}
-
 .outline-tree-list {
   overflow: auto;
   padding: 16px;

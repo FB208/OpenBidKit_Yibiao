@@ -268,7 +268,7 @@ function OutlineEditPage({
       const validIds = collectOutlineIds(activeOutlineData.outline);
       setExpandedItems((prev) => {
         const next = new Set([...prev].filter((id) => validIds.has(id)));
-        return next.size ? next : collectRootIds(activeOutlineData.outline);
+        return next.size || sorting ? next : collectRootIds(activeOutlineData.outline);
       });
       setSelectedItemId((prev) => (prev && validIds.has(prev) ? prev : activeOutlineData.outline[0]?.id || null));
       return;
@@ -590,6 +590,7 @@ function OutlineEditPage({
     setEditingItemId(null);
     setDraggingItemId(null);
     setDropTarget(null);
+    showToast('仅支持同级目录排序；拖动只在前端调整，点击保存排序后才会写入数据库。', 'info');
   };
 
   const discardSorting = () => {
@@ -931,9 +932,13 @@ function OutlineEditPage({
             </div>
             <div className="outline-tree-tools">
               {sorting ? (
-                <button type="button" className="outline-save-sort-action" onClick={() => { void saveSorting().catch((error) => showToast(error instanceof Error ? error.message : '保存排序失败', 'error')); }} disabled={savingSort}>
-                  {savingSort ? '正在保存...' : '保存排序'}
-                </button>
+                <>
+                  <button type="button" className="outline-save-sort-action" onClick={() => { void saveSorting().catch((error) => showToast(error instanceof Error ? error.message : '保存排序失败', 'error')); }} disabled={savingSort}>
+                    {savingSort ? '正在保存...' : '保存排序'}
+                  </button>
+                  <button type="button" onClick={expandAllItems} disabled={!activeOutlineData?.outline?.length}>全部展开</button>
+                  <button type="button" onClick={collapseAllItems} disabled={!activeOutlineData?.outline?.length}>全部折叠</button>
+                </>
               ) : (
                 <>
                 {outlineData && (
@@ -950,11 +955,6 @@ function OutlineEditPage({
               )}
             </div>
           </div>
-          {sorting && (
-            <div className="outline-sort-notice">
-              仅支持同级目录排序。拖动时只在前端调整顺序，点击“保存排序”后才会写入数据库；已生成正文会跟随目录项保留。
-            </div>
-          )}
           {activeOutlineData?.outline?.length ? (
             <div className={`outline-tree-list${sorting ? ' is-sorting' : ''}`}>
               {activeOutlineData.outline.map((item) => renderItem(item))}
