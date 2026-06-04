@@ -2362,10 +2362,12 @@ button {
   left: 50%;
   z-index: 101;
   display: grid;
-  width: min(620px, calc(100vw - 40px));
+  width: min(920px, calc(100vw - 40px));
+  max-height: min(760px, calc(100vh - 40px));
   transform: translate(-50%, -50%);
   gap: 18px;
   padding: 24px;
+  overflow: hidden;
   background: #ffffff;
   border: 1px solid rgba(220, 223, 230, 0.9);
   border-radius: 24px;
@@ -2706,7 +2708,12 @@ button {
 
 .content-generation-config-list {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
 }
 
 .content-generation-config-row {
@@ -2814,6 +2821,7 @@ button {
 }
 
 .content-generation-config-note {
+  grid-column: 1 / -1;
   padding: 12px 14px;
   background: rgba(255, 209, 102, 0.14);
   border: 1px solid rgba(190, 145, 35, 0.18);
@@ -7999,6 +8007,10 @@ button {
 
   .floating-toolbar-button {
     padding: 9px 12px;
+  }
+
+  .content-generation-config-list {
+    grid-template-columns: 1fr;
   }
 
   .stage-grid,
