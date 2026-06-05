@@ -1476,8 +1476,16 @@ button {
   overflow: hidden;
 }
 
-.technical-workbench > .plan-step-body:not(.bid-analysis-page):not(.outline-generation-page):not(.content-generation-page) {
+.technical-workbench > .plan-step-body:not(.document-analysis-page):not(.bid-analysis-page):not(.outline-generation-page):not(.content-generation-page) {
   grid-template-rows: auto minmax(0, 1fr);
+}
+
+.technical-workbench > .document-analysis-page {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.technical-workbench > .document-analysis-page.has-section-hint {
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .analysis-import-card,
@@ -3970,12 +3978,6 @@ button {
 
 .analysis-section-hint-detail {
   color: var(--yb-text-soft);
-}
-
-.analysis-section-hint-note {
-  margin-left: auto;
-  color: var(--yb-text-muted);
-  font-size: 12px;
 }
 
 .outline-knowledge-folder-list {

@@ -139,8 +139,12 @@ function DocumentAnalysisPage({
     setPendingSelection(null);
   };
 
+  const selectedSectionTitle = tenderFile?.selectedSectionTitle;
+  const selectedSectionHeadLine = tenderFile?.selectedSectionHeadLine;
+  const hasSectionHint = Boolean(selectedSectionTitle);
+
   return (
-    <div className="plan-step-body">
+    <div className={`plan-step-body document-analysis-page${hasSectionHint ? ' has-section-hint' : ''}`}>
       <section className="analysis-import-card">
         <div>
           <span className="section-kicker">STEP 01</span>
@@ -154,14 +158,13 @@ function DocumentAnalysisPage({
         </div>
       </section>
 
-      {tenderFile?.selectedSectionTitle && (
+      {selectedSectionTitle && (
         <section className="analysis-section-hint">
           <strong>投标标段：</strong>
-          <span>{tenderFile.selectedSectionTitle}</span>
-          {tenderFile.selectedSectionHeadLine && (
-            <span className="analysis-section-hint-detail">（{tenderFile.selectedSectionHeadLine.replace(/^.*?标段[：:]\s*/, '')}）</span>
+          <span>{selectedSectionTitle}</span>
+          {selectedSectionHeadLine && (
+            <span className="analysis-section-hint-detail">（{selectedSectionHeadLine.replace(/^.*?标段[：:]\s*/, '')}）</span>
           )}
-          <span className="analysis-section-hint-note">后续解析和生成将只关注该标段相关内容</span>
         </section>
       )}
 
