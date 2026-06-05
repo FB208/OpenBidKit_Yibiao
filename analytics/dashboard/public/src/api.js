@@ -30,11 +30,15 @@ export function getEncodedProjectAndDays() {
 }
 
 export function assertReady() {
-  if (!state.adminToken.value.trim()) {
-    throw new Error('请先输入 ADMIN_TOKEN');
-  }
+  assertAdminToken();
   if (!getSelectedProjectName()) {
     throw new Error('请先输入项目名');
+  }
+}
+
+export function assertAdminToken() {
+  if (!state.adminToken.value.trim()) {
+    throw new Error('请先输入 ADMIN_TOKEN');
   }
 }
 
@@ -51,6 +55,23 @@ export async function requestJson(path, options = {}) {
     method: options.method || 'GET',
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+  });
+
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data || data.code !== 0) {
+    throw new Error(data?.message || `请求失败：${response.status}`);
+  }
+  return data;
+}
+
+export async function requestFormData(path, formData, options = {}) {
+  const apiBase = normalizeApiBase(state.apiBase.value);
+  const response = await fetch(`${apiBase}${path}`, {
+    method: options.method || 'POST',
+    headers: {
+      Authorization: `Bearer ${state.adminToken.value.trim()}`,
+    },
+    body: formData,
   });
 
   const data = await response.json().catch(() => null);

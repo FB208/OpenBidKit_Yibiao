@@ -3,6 +3,7 @@ import { loadConfigUsage, loadModelUsage } from './pages/configUsage.js';
 import { loadLatest } from './pages/latest.js';
 import { disableNotice, loadNotice, publishNotice } from './pages/notice.js';
 import { loadOverview } from './pages/overview.js';
+import { bindResourceEvents, loadResources } from './pages/resources.js';
 import { loadTraffic } from './pages/traffic.js';
 import { setError, setStatus, updateLatestPager } from './render.js';
 import { appState, state } from './state.js';
@@ -15,6 +16,7 @@ const tabLoaders = {
   models: () => loadModelUsage(),
   latest: (options = {}) => loadLatest(options),
   notice: () => loadNotice(),
+  resources: () => loadResources(),
 };
 
 async function refreshActiveTab(options = {}) {
@@ -40,6 +42,7 @@ function bindEvents() {
   state.loadNoticeButton.addEventListener('click', () => loadNotice().catch(() => undefined));
   state.publishNoticeButton.addEventListener('click', publishNotice);
   state.disableNoticeButton.addEventListener('click', disableNotice);
+  bindResourceEvents();
   state.prevLatestPage.addEventListener('click', () => {
     appState.latestPage = Math.max(1, appState.latestPage - 1);
     void refreshActiveTab();

@@ -54,6 +54,7 @@
       <button class="tab-button" type="button" data-tab-button="models">模型使用</button>
       <button class="tab-button" type="button" data-tab-button="latest">最近事件</button>
       <button class="tab-button" type="button" data-tab-button="notice">公告管理</button>
+      <button class="tab-button" type="button" data-tab-button="resources">资源管理</button>
     </nav>
 
     <section id="tab-overview" class="tab-panel" data-tab-panel="overview">
@@ -160,6 +161,70 @@
           <button id="publishNoticeButton" type="button">发布公告</button>
         </div>
         <div id="noticeStatus" class="notice-status"></div>
+      </section>
+    </section>
+
+    <section id="tab-resources" class="tab-panel" data-tab-panel="resources">
+      <section class="panel section resource-panel">
+        <div class="section-head">
+          <div>
+            <h2>资源管理</h2>
+            <p>管理客户端“资源下载”页展示的全局资源。图片保存到 OpenBidKit R2 存储桶，标题、标签、介绍和弹窗 Markdown 内容保存到 D1。</p>
+          </div>
+          <div class="resource-head-actions">
+            <button id="loadResourcesButton" type="button">读取资源</button>
+            <button id="newResourceButton" type="button">新增资源</button>
+          </div>
+        </div>
+
+        <form id="resourceForm" class="resource-form">
+          <input id="resourceId" type="hidden" />
+          <div class="resource-image-editor">
+            <span>图片</span>
+            <div id="resourceImagePreview" class="resource-image-preview">无图片</div>
+            <input id="resourceImage" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
+            <label class="resource-checkbox-row">
+              <input id="resourceRemoveImage" type="checkbox" />
+              清空已有图片
+            </label>
+          </div>
+
+          <label>
+            标题
+            <input id="resourceTitle" maxlength="160" placeholder="例如：投标文件结构拆解模板" />
+          </label>
+          <label>
+            标签
+            <input id="resourceTags" maxlength="500" placeholder="多个标签用逗号分隔" />
+          </label>
+          <label>
+            状态
+            <select id="resourceEnabled">
+              <option value="true" selected>启用</option>
+              <option value="false">停用</option>
+            </select>
+          </label>
+          <label>
+            排序
+            <input id="resourceSortOrder" type="number" value="0" />
+          </label>
+          <label class="resource-field-wide">
+            介绍
+            <textarea id="resourceDescription" maxlength="1200" placeholder="客户端资源卡片上展示的简短介绍。"></textarea>
+          </label>
+          <label class="resource-field-wide">
+            弹窗内容 Markdown
+            <textarea id="resourceModalContent" maxlength="50000" placeholder="可填写下载链接、下载方式和使用说明等。客户端会按 Markdown 渲染。"></textarea>
+          </label>
+
+          <div class="resource-actions">
+            <button id="resetResourceButton" class="secondary-button" type="button">清空表单</button>
+            <button id="saveResourceButton" type="submit">保存资源</button>
+          </div>
+        </form>
+
+        <div id="resourcesStatus" class="notice-status"></div>
+        <div id="resourcesTable" class="resource-table-wrap"></div>
       </section>
     </section>
   </main>

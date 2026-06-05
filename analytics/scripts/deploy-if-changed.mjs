@@ -43,18 +43,28 @@ function runPreDeploySetupIfNeeded() {
   const source = readFileSync(workerConfigPath, 'utf8');
   if (hasNoticeStoreBinding(source)) {
     console.log('NOTICE_STORE KV namespace already configured; skipping setup.');
-    return;
+  } else {
+    console.log('NOTICE_STORE KV namespace is not configured; running setup.');
+    const setupScript = resolve(__dirname, 'setup-notice-kv.mjs');
+    const result = spawnSync(process.execPath, [setupScript], {
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    });
+
+    if (result.status !== 0) {
+      process.exit(result.status ?? 1);
+    }
   }
 
-  console.log('NOTICE_STORE KV namespace is not configured; running setup.');
-  const setupScript = resolve(__dirname, 'setup-notice-kv.mjs');
-  const result = spawnSync(process.execPath, [setupScript], {
+  console.log('Ensuring resource D1 database and R2 bucket.');
+  const resourceSetupScript = resolve(__dirname, 'setup-resource-storage.mjs');
+  const resourceResult = spawnSync(process.execPath, [resourceSetupScript], {
     stdio: 'inherit',
     shell: process.platform === 'win32',
   });
 
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
+  if (resourceResult.status !== 0) {
+    process.exit(resourceResult.status ?? 1);
   }
 }
 

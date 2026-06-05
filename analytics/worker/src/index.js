@@ -6,6 +6,7 @@ import { handleLatest } from './routes/latest.js';
 import { handleAdminNotice, handlePublicNotice } from './routes/notice.js';
 import { handleProjects } from './routes/projects.js';
 import { handleRetention } from './routes/retention.js';
+import { handleAdminResources, handlePublicResources, handleResourceImage } from './routes/resources.js';
 import { handleSummary } from './routes/summary.js';
 import { handleTrack } from './routes/track.js';
 
@@ -13,8 +14,11 @@ const routes = new Map([
   ['/health', (request, env) => handleHealth(env)],
   ['/track', handleTrack],
   ['/notice', handlePublicNotice],
+  ['/resources', handlePublicResources],
+  ['/resource-image', handleResourceImage],
   ['/api/projects', handleProjects],
   ['/api/notice', handleAdminNotice],
+  ['/api/resources', handleAdminResources],
   ['/api/summary', handleSummary],
   ['/api/latest', handleLatest],
   ['/api/retention', handleRetention],

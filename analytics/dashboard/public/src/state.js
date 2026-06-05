@@ -42,6 +42,23 @@ export const state = {
   noticeTitle: $('noticeTitle'),
   noticeEnabled: $('noticeEnabled'),
   noticeContent: $('noticeContent'),
+  loadResourcesButton: $('loadResourcesButton'),
+  newResourceButton: $('newResourceButton'),
+  resourceForm: $('resourceForm'),
+  resourceId: $('resourceId'),
+  resourceImagePreview: $('resourceImagePreview'),
+  resourceImage: $('resourceImage'),
+  resourceRemoveImage: $('resourceRemoveImage'),
+  resourceTitle: $('resourceTitle'),
+  resourceTags: $('resourceTags'),
+  resourceEnabled: $('resourceEnabled'),
+  resourceSortOrder: $('resourceSortOrder'),
+  resourceDescription: $('resourceDescription'),
+  resourceModalContent: $('resourceModalContent'),
+  resetResourceButton: $('resetResourceButton'),
+  saveResourceButton: $('saveResourceButton'),
+  resourcesStatus: $('resourcesStatus'),
+  resourcesTable: $('resourcesTable'),
 };
 
 export const appState = {
@@ -49,4 +66,5 @@ export const appState = {
   latestPage: 1,
   latestTotal: 0,
   latestPageSize: 10,
+  resources: [],
 };

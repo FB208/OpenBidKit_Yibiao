@@ -1,5 +1,28 @@
 # Task Plan
 
+## Current Task: 资源管理 D1/R2 与客户端资源下载
+
+### Goal
+在 `analytics/` 增加全局资源管理能力：Dashboard 通过 D1+R2 管理图片、标题、标签、介绍和 Markdown 弹窗内容；Worker 提供公开资源读取与图片代理接口；`client/` 资源下载页从 Analytics 接口读取资源，支持搜索，图片为空时使用现有彩色书籍封面占位。
+
+### Phases
+- [completed] 1. 新增 D1/R2 自动化创建脚本、D1 migration，并接入 Worker 部署前 setup。
+- [completed] 2. 新增 Analytics Worker 资源存储服务、公开资源接口、后台管理接口和 R2 图片代理。
+- [completed] 3. 新增 Analytics Dashboard “资源管理” Tab，支持表格展示、编辑表单、图片上传/清空和删除。
+- [completed] 4. 改造 Client 资源下载页：搜索框、接口读取、图片/默认封面展示、Markdown 弹窗内容。
+- [completed] 5. 运行语法检查、Dashboard 脚本检查和客户端构建验证。
+
+### Decisions
+- R2 真实 bucket 名使用小写 `openbidkit`，展示名仍叫 `OpenBidKit`。
+- 资源全局只有一套，不按 `projectName` 隔离。
+- 弹窗内容按 Markdown 渲染，客户端必须 `allowRawHtml={false}`。
+- 客户端公开读取接口不需要 `ADMIN_TOKEN`；Dashboard 管理接口继续复用 `ADMIN_TOKEN`。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 本轮实现 | Analytics Worker/脚本/Dashboard `node --check`、`cd client; npm run build`、`git diff --check` 通过；构建仅有既有 chunk 体积警告，diff check 仅 LF/CRLF 提示 |
+
 ## Current Task: Step03 目录排序与局部正文保留
 
 ### Goal

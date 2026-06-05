@@ -64,6 +64,11 @@ export const appMenuItems: AppMenuItem[] = [
     description: '机会发现与线索跟踪',
     notice: githubStarNotice,
   },
+  {
+    id: 'resources',
+    label: '资源下载',
+    description: '投标相关资料、工具下载',
+  },
 ];
 
 const developerMenuItems: AppMenuItem[] = [

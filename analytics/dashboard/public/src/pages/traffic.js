@@ -14,6 +14,7 @@ const pageLabels = {
   'technical-plan/expand': '技术方案 - 扩写改写',
   'business-bid': '商务标',
   'knowledge-base': '知识库',
+  resources: '资源下载',
   'knowledge-base/library': '知识库 - 文档列表',
   'knowledge-base/viewer/items': '知识库 - 知识条目',
   'knowledge-base/viewer/markdown': '知识库 - Markdown 原文',

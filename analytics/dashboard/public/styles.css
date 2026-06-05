@@ -361,6 +361,125 @@ button:disabled {
   border-color: #fecaca;
 }
 
+.resource-panel {
+  margin-bottom: 16px;
+}
+
+.resource-head-actions,
+.resource-actions,
+.resource-row-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.resource-head-actions button,
+.resource-actions button,
+.resource-row-actions button {
+  align-self: auto;
+}
+
+.secondary-button {
+  color: var(--primary);
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.danger-button {
+  color: #991b1b;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.resource-form {
+  display: grid;
+  grid-template-columns: 180px 1.2fr 1fr 160px 120px;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 14px;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+
+.resource-image-editor {
+  display: grid;
+  grid-row: span 4;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.resource-image-preview {
+  display: grid;
+  min-height: 128px;
+  place-items: center;
+  overflow: hidden;
+  color: var(--muted);
+  background: #fff;
+  border: 1px dashed #cbd5e1;
+  border-radius: 14px;
+}
+
+.resource-image-preview img {
+  width: 100%;
+  height: 128px;
+  object-fit: cover;
+}
+
+.resource-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.resource-checkbox-row input {
+  width: auto;
+  height: auto;
+}
+
+.resource-field-wide,
+.resource-actions {
+  grid-column: 2 / -1;
+}
+
+.resource-actions {
+  justify-content: flex-end;
+}
+
+.resource-table-wrap {
+  overflow-x: auto;
+  margin-top: 14px;
+}
+
+.resource-thumb,
+.resource-thumb-placeholder {
+  display: grid;
+  width: 76px;
+  height: 58px;
+  place-items: center;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.resource-thumb {
+  object-fit: cover;
+}
+
+.resource-row-actions button {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+td small {
+  color: var(--muted);
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -404,13 +523,22 @@ code {
   .cards,
   .grid,
   .usage-grid,
-  .notice-form {
+  .notice-form,
+  .resource-form {
     grid-template-columns: 1fr;
     display: grid;
   }
 
-  .notice-actions {
+  .notice-actions,
+  .resource-head-actions,
+  .resource-actions {
     display: grid;
+  }
+
+  .resource-image-editor,
+  .resource-field-wide,
+  .resource-actions {
+    grid-column: auto;
   }
 
   button {
