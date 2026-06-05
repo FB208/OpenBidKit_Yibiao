@@ -42,21 +42,32 @@ function detectTotalSectionCount(markdown) {
 }
 
 const sectionDefinitionPatterns = [
-  /([一二三四五六七八九十壹贰叁肆伍]+)标段[：:]/g,
-  /(\d+)标段[：:]/g,
-  /第([一二三四五六七八九十壹贰叁肆伍\d]+)标段[：:]/g,
-  /标段([一二三四五六七八九十壹贰叁肆伍\d]+)[：:]/g,
-  /([一二三四五六七八九十壹贰叁肆伍]+)包[：:]/g,
-  /(\d+)包[：:]/g,
-  /第([一二三四五六七八九十壹贰叁肆伍\d]+)包[：:]/g,
-  /包([一二三四五六七八九十壹贰叁肆伍\d]+)[：:]/g,
-  /([一二三四五六七八九十壹贰叁肆伍]+)分包[：:]/g,
-  /(\d+)分包[：:]/g,
-  /第([一二三四五六七八九十壹贰叁肆伍\d]+)分包[：:]/g,
-  /分包([一二三四五六七八九十壹贰叁肆伍\d]+)[：:]/g,
-  /([一二三四五六七八九十壹贰叁肆伍]+)标包[：:]/g,
-  /(\d+)标包[：:]/g,
+  { pattern: /([一二三四五六七八九十壹贰叁肆伍]+)标段[：:]/g, unit: '标段' },
+  { pattern: /(\d+)标段[：:]/g, unit: '标段' },
+  { pattern: /第([一二三四五六七八九十壹贰叁肆伍\d]+)标段[：:]/g, unit: '标段' },
+  { pattern: /标段([一二三四五六七八九十壹贰叁肆伍\d]+)[：:]/g, unit: '标段' },
+  { pattern: /([一二三四五六七八九十壹贰叁肆伍]+)标包[：:]/g, unit: '标包' },
+  { pattern: /(\d+)标包[：:]/g, unit: '标包' },
+  { pattern: /第([一二三四五六七八九十壹贰叁肆伍\d]+)标包[：:]/g, unit: '标包' },
+  { pattern: /标包([一二三四五六七八九十壹贰叁肆伍\d]+)[：:]/g, unit: '标包' },
+  { pattern: /([一二三四五六七八九十壹贰叁肆伍]+)分包[：:]/g, unit: '分包' },
+  { pattern: /(\d+)分包[：:]/g, unit: '分包' },
+  { pattern: /第([一二三四五六七八九十壹贰叁肆伍\d]+)分包[：:]/g, unit: '分包' },
+  { pattern: /分包([一二三四五六七八九十壹贰叁肆伍\d]+)[：:]/g, unit: '分包' },
+  { pattern: /([一二三四五六七八九十壹贰叁肆伍]+)包[：:]/g, unit: '包' },
+  { pattern: /(\d+)包[：:]/g, unit: '包' },
+  { pattern: /第([一二三四五六七八九十壹贰叁肆伍\d]+)包[：:]/g, unit: '包' },
+  { pattern: /包([一二三四五六七八九十壹贰叁肆伍\d]+)[：:]/g, unit: '包' },
 ];
+
+function getSectionUnit(title) {
+  const match = String(title || '').match(/(标段|标包|分包|包)$/);
+  return match?.[1] || '标段';
+}
+
+function stripSectionPrefix(headLine) {
+  return String(headLine || '').replace(/^.*?(?:标段|标包|分包|包)[：:]\s*/, '');
+}
 
 function extractLineContext(markdown, matchIndex, maxLength = 240) {
   const text = String(markdown || '');
@@ -122,7 +133,7 @@ function detectBidSections(markdown) {
   }
 
   const rawSections = [];
-  for (const pattern of sectionDefinitionPatterns) {
+  for (const { pattern, unit } of sectionDefinitionPatterns) {
     pattern.lastIndex = 0;
     let match = pattern.exec(text);
     while (match) {
@@ -132,7 +143,8 @@ function detectBidSections(markdown) {
         rawSections.push({
           index,
           id: `section-${index}`,
-          title: `${formatChineseNumber(index)}标段`,
+          unit,
+          title: `${formatChineseNumber(index)}${unit}`,
           headLine,
           description,
           matchIndex: match.index,
@@ -163,6 +175,7 @@ function toSectionOutput(section) {
   return {
     id: section.id,
     index: section.index,
+    unit: section.unit,
     title: section.title,
     headLine: section.headLine,
     description: section.description,
@@ -173,7 +186,9 @@ function buildSectionContextHint(selectedSection) {
   if (!selectedSection?.title) {
     return '';
   }
-  return `本项目包含多个标段，投标人只投【${selectedSection.title}${selectedSection.headLine ? `（${selectedSection.headLine.replace(/^.*?标段[：:]\s*/, '')}）` : ''}】。请仅关注与【${selectedSection.title}】相关的评分标准、报价要求、采购清单、投标保证金、入围数量等内容，忽略其他标段特有的内容。通用条款（资格要求、合同条款、评标流程、投标文件格式等）正常参考。`;
+  const unit = getSectionUnit(selectedSection.title);
+  const detail = selectedSection.headLine ? stripSectionPrefix(selectedSection.headLine) : '';
+  return `本项目包含多个${unit}，投标人只投【${selectedSection.title}${detail ? `（${detail}）` : ''}】。请仅关注与【${selectedSection.title}】相关的评分标准、报价要求、采购清单、投标保证金、入围数量等内容，忽略其他${unit}特有的内容。通用条款（资格要求、合同条款、评标流程、投标文件格式等）正常参考。`;
 }
 
 module.exports = {

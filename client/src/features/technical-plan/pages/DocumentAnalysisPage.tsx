@@ -155,10 +155,10 @@ function DocumentAnalysisPage({
 
       {selectedSectionTitle && (
         <section className="analysis-section-hint">
-          <strong>投标标段：</strong>
+          <strong>投标范围：</strong>
           <span>{selectedSectionTitle}</span>
           {selectedSectionHeadLine && (
-            <span className="analysis-section-hint-detail">（{selectedSectionHeadLine.replace(/^.*?标段[：:]\s*/, '')}）</span>
+            <span className="analysis-section-hint-detail">（{selectedSectionHeadLine.replace(/^.*?(?:标段|标包|分包|包)[：:]\s*/, '')}）</span>
           )}
         </section>
       )}

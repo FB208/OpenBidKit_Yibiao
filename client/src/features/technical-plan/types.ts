@@ -170,6 +170,7 @@ export interface TechnicalPlanTenderFile {
 export interface DetectedBidSection {
   id: string;
   index: number;
+  unit: string;
   title: string;
   headLine: string;
   description: string;

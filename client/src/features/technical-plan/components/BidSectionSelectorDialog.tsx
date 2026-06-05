@@ -28,15 +28,15 @@ function BidSectionSelectorDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="content-regenerate-modal" />
         <Dialog.Content className="bid-section-selector-card">
-          <Dialog.Title className="sr-only">选择投标标段</Dialog.Title>
-          <Dialog.Description className="sr-only">检测到招标文件包含多个标段，请选择本次投标的标段。</Dialog.Description>
+          <Dialog.Title className="sr-only">选择投标范围</Dialog.Title>
+          <Dialog.Description className="sr-only">检测到招标文件包含多个标段或包，请选择本次投标范围。</Dialog.Description>
 
           <div className="bid-section-selector-head">
-            <h2>选择投标标段</h2>
-            <p>检测到本招标文件共包含 <strong>{declaredLabel}</strong>，请选择您要投标的标段。后续解析和生成将只关注该标段相关内容。</p>
+            <h2>选择投标范围</h2>
+            <p>检测到本招标文件共包含 <strong>{declaredLabel}</strong>，请选择您要投标的范围。后续解析和生成将只关注该范围相关内容。</p>
           </div>
 
-          <div className="bid-section-selector-list" role="radiogroup" aria-label="标段列表">
+          <div className="bid-section-selector-list" role="radiogroup" aria-label="投标范围列表">
             {sections.map((section) => {
               const isSelected = section.id === selectedId;
               return (
