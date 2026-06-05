@@ -11,6 +11,7 @@
 - [completed] 3. 新增 Analytics Dashboard “资源管理” Tab，支持表格展示、编辑表单、图片上传/清空和删除。
 - [completed] 4. 改造 Client 资源下载页：搜索框、接口读取、图片/默认封面展示、Markdown 弹窗内容。
 - [completed] 5. 运行语法检查、Dashboard 脚本检查和客户端构建验证。
+- [completed] 6. 将 Client 资源真实图片改为完整缩放显示，并完成构建与 diff 检查。
 
 ### Decisions
 - R2 真实 bucket 名使用小写 `openbidkit`，展示名仍叫 `OpenBidKit`。

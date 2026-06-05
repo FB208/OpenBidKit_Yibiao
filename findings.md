@@ -6,6 +6,7 @@
 - 当前 KV 自动化脚本通过部署前 setup 修改 `worker/wrangler.jsonc`；D1/R2 可以复用此模式，但 D1 还需要 `wrangler d1 migrations apply --remote` 建表。
 - Dashboard 是无构建静态 ES Module；新增 Tab 需要同步 `index.html`、`tabs.js`、`state.js`、`main.js`、`styles.css` 和 `pages/resources.js`。
 - Client 资源页已有两列书架样式和 Dialog；后续需要把静态数据替换为 `https://analytics.agnet.top/resources?q=...`，弹窗用 `MarkdownRenderer allowRawHtml={false}` 展示 `modalContent`。
+- Client 资源页列表和详情弹窗共用 `ResourceCover`，因此 `.resource-book-image` 改为 `object-fit: contain` 会同时让两处真实图片完整显示；无图占位仍保留原彩色封面样式。
 - Step03 目录排序改造关键边界：当前 `OutlineItem.id` 同时是章节编号和 SQLite `technical_plan_outline_nodes.node_id`，排序重新编号时必须通过 `oldId -> newId` 映射迁移 `outline_nodes.content`、`content_sections` 和 `content_plans`，否则无法区分排序和删除/新增。
 - 当前 `technicalPlanStore.saveOutline()` 会调用 `clearOutlineDataContent()` 和 `clearGlobalFactsAndContentState()`，因此必须改为带操作意图的保存语义；排序不应清空正文，全局事实不应再被目录操作清空。
 - 删除目录时不能只传删除根节点作为受影响 ID：章节编号会复用，旧 `1.1` 删除后其他节点可能变成新 `1.1`。正确边界是传入被删除子树全部旧 ID，并且 Main 侧清空判断只匹配旧 ID。

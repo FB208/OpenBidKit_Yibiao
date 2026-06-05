@@ -372,10 +372,20 @@ button:disabled {
   gap: 10px;
 }
 
+.resource-head-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
 .resource-head-actions button,
 .resource-actions button,
 .resource-row-actions button {
   align-self: auto;
+  white-space: nowrap;
+}
+
+.resource-head-actions button {
+  min-width: 98px;
 }
 
 .secondary-button {
@@ -423,7 +433,7 @@ button:disabled {
 .resource-image-preview img {
   width: 100%;
   height: 128px;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .resource-checkbox-row {
@@ -451,6 +461,31 @@ button:disabled {
   margin-top: 14px;
 }
 
+.resource-table {
+  min-width: 980px;
+  table-layout: fixed;
+}
+
+.resource-image-cell {
+  width: 92px;
+}
+
+.resource-title-cell {
+  width: 190px;
+}
+
+.resource-tags-cell {
+  width: 96px;
+}
+
+.resource-modal-cell {
+  width: 220px;
+}
+
+.resource-row-actions {
+  width: 128px;
+}
+
 .resource-thumb,
 .resource-thumb-placeholder {
   display: grid;
@@ -466,7 +501,24 @@ button:disabled {
 }
 
 .resource-thumb {
-  object-fit: cover;
+  object-fit: contain;
+}
+
+.resource-title-cell strong,
+.resource-title-cell small,
+.resource-tag-list span {
+  white-space: nowrap;
+}
+
+.resource-tag-list {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.resource-description-cell,
+.resource-modal-cell {
+  line-height: 1.65;
 }
 
 .resource-row-actions button {

@@ -4,6 +4,7 @@
 - 开始资源管理 D1/R2 与客户端资源下载实现：已确认资源全局一套、R2 bucket 用 `openbidkit`、弹窗内容按 Markdown 渲染；进入文件型计划跟踪，先做 Analytics 自动化存储与 Worker 接口。
 - 已完成资源管理主体代码接入：新增 D1 `resources` migration、`setup-resource-storage.mjs` 自动创建/复用 D1 与 R2 并应用 migration；Worker 新增 `/resources`、`/resource-image`、`/api/resources`；Dashboard 新增资源管理 Tab 和 multipart 图片上传表单；Client 资源页改为接口读取、搜索和 Markdown 弹窗。第一轮 `node --check` 覆盖脚本、Worker routes/services/index 和 Dashboard resources 页面均通过。
 - 资源管理实现验证完成：`node --check` 覆盖 Analytics 部署脚本、资源 setup 脚本、Worker 入口/资源路由/资源 Store、Dashboard 主脚本/API/资源页；`cd client; npm run build` 通过；`git diff --check` 通过且仅有 LF/CRLF 提示，客户端构建仍只有既有 chunk 体积警告。
+- 客户端资源下载页图片展示收尾完成：真实图片由裁切填充改为 `object-fit: contain` 并增加内边距，列表和详情弹窗共用封面组件因此都会完整显示图片；`cd client; npm run build` 通过，`git diff --check -- client/src/styles.css` 仅有 LF/CRLF 提示。
 - 开始 Step03 目录排序与局部正文保留实现：目标是不新增 IPC 通道，改造 `saveOutline()` 语义，排序保留正文并支持未保存排序离开确认；当前工作区存在非本次修改的 `文章/新系列一：关于AI知识库的一点拙见.md`，本轮不触碰。
 - 已完成 Step03 目录排序与局部正文保留实现：`saveOutline()` 改为 `outlineData/reason/idMap/affectedNodeIds` 入参；排序按旧 ID 到新 ID 映射迁移正文、章节状态和正文规划；编辑、删除、添加子目录只清空涉及正文；全局事实不再受目录操作影响；Step03 支持同级拖拽排序、保存排序、切换步骤/主菜单时询问“排序结果是否保存”。验证通过 4 个 CJS `node --check`、`npm run build` 和 `git diff --check`，构建仍只有既有 chunk 体积警告，diff check 只有 LF/CRLF 提示。
 - 开始执行多模块开发者模式文件日志：范围扩展到文件解析、标书查重、废标项检查和 Word 导出；日志统一放入 `userData/logs/<module>/`，不写 SQLite，不改变业务逻辑。

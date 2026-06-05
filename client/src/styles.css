@@ -988,7 +988,8 @@ button {
   display: block;
   width: 82px;
   height: 118px;
-  object-fit: cover;
+  object-fit: contain;
+  padding: 6px;
   background: #f8fbff;
   border: 1px solid rgba(220, 223, 230, 0.9);
   border-radius: 12px 18px 18px 12px;

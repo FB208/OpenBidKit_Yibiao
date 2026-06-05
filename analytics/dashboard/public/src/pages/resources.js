@@ -20,6 +20,22 @@ function renderResourceImage(resource) {
   return '<span class="resource-thumb-placeholder">无图片</span>';
 }
 
+function renderResourceTags(resource) {
+  const tags = resource.tags?.length ? resource.tags : splitTags(resource.tagsText);
+  if (!tags.length) {
+    return '-';
+  }
+
+  return `<div class="resource-tag-list">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>`;
+}
+
+function splitTags(value) {
+  return String(value || '')
+    .split(/[，,;；\n\r]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function renderResourcesTable() {
   const resources = appState.resources || [];
   if (!resources.length) {
@@ -29,11 +45,11 @@ function renderResourcesTable() {
 
   const rows = resources.map((resource) => `
     <tr>
-      <td>${renderResourceImage(resource)}</td>
-      <td><strong>${escapeHtml(resource.title)}</strong><br /><small>${escapeHtml(resource.enabled ? '启用' : '停用')} · 排序 ${escapeHtml(resource.sortOrder)}</small></td>
-      <td>${escapeHtml(resource.tagsText || (resource.tags || []).join(', ') || '-')}</td>
-      <td>${escapeHtml(truncate(resource.description, 90) || '-')}</td>
-      <td>${escapeHtml(truncate(resource.modalContent, 120) || '-')}</td>
+      <td class="resource-image-cell">${renderResourceImage(resource)}</td>
+      <td class="resource-title-cell"><strong>${escapeHtml(resource.title)}</strong><br /><small>${escapeHtml(resource.enabled ? '启用' : '停用')} · 排序 ${escapeHtml(resource.sortOrder)}</small></td>
+      <td class="resource-tags-cell">${renderResourceTags(resource)}</td>
+      <td class="resource-description-cell">${escapeHtml(truncate(resource.description, 90) || '-')}</td>
+      <td class="resource-modal-cell">${escapeHtml(truncate(resource.modalContent, 80) || '-')}</td>
       <td class="resource-row-actions">
         <button type="button" class="secondary-button" data-resource-action="edit" data-resource-id="${escapeHtml(resource.id)}">编辑</button>
         <button type="button" class="danger-button" data-resource-action="delete" data-resource-id="${escapeHtml(resource.id)}">删除</button>
@@ -42,7 +58,7 @@ function renderResourcesTable() {
   `).join('');
 
   state.resourcesTable.innerHTML = `
-    <table>
+    <table class="resource-table">
       <thead>
         <tr>
           <th>图片</th>
