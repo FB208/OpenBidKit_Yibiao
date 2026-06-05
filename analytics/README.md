@@ -53,8 +53,11 @@ analytics/
 | `page_view` | 页面访问 | 是 |
 | `config_usage` | 配置使用快照 | 否 |
 | `ai_request` | AI 接口请求 | 否 |
+| `resource_click` | 客户端资源下载页点击资源 | 否 |
 
 `ai_request` 统计请求类型、服务商、模型端点域名、模型名称和 token 用量（`prompt_tokens`、`completion_tokens`、`total_tokens`）。模型端点只上传 hostname，不携带协议、路径、端口、账号密码、查询参数或 hash；不采集 API Key、Prompt、响应内容或错误详情。
+
+`resource_click` 只上传 Worker 生成的短资源统计 key，不上传资源标题、标签、介绍、弹窗内容或下载链接。Dashboard “资源管理”会按当前项目名和天数范围查询点击量；查询失败时点击量按 0 展示，不影响资源列表读取和编辑。
 
 统计页面使用：
 

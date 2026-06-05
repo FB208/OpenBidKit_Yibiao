@@ -1,5 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useState, type FormEvent } from 'react';
+import { trackResourceClick } from '../../../shared/analytics/analytics';
 import { MarkdownRenderer, useToast } from '../../../shared/ui';
 
 interface ResourceItem {
@@ -9,6 +10,7 @@ interface ResourceItem {
   tags: string[];
   modalContent: string;
   imageUrl: string;
+  analyticsKey: string;
 }
 
 type ResourceTone = 'blue' | 'violet' | 'cyan' | 'slate';
@@ -83,7 +85,10 @@ function ResourcesPage() {
                 type="button"
                 className="resource-book-row"
                 key={item.id}
-                onClick={() => setSelectedResource(item)}
+                onClick={() => {
+                  trackResourceClick(item.analyticsKey);
+                  setSelectedResource(item);
+                }}
                 aria-label={`查看资源：${item.title}`}
               >
                 <ResourceCover item={item} />
@@ -164,6 +169,7 @@ function normalizeResource(item: ResourceItem): ResourceItem {
     tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag)).filter(Boolean) : [],
     modalContent: String(item.modalContent || ''),
     imageUrl: String(item.imageUrl || ''),
+    analyticsKey: String(item.analyticsKey || ''),
   };
 }
 

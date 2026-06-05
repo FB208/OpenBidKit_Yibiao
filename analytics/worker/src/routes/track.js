@@ -17,6 +17,10 @@ function normalizeNumberMetricValue(value, maxLength) {
   return String(Math.max(0, Math.round(number))).slice(0, maxLength);
 }
 
+function isValidResourceKey(value) {
+  return /^[a-zA-Z0-9._:-]{1,80}$/.test(value);
+}
+
 export async function handleTrack(request, env) {
   if (request.method !== 'POST') {
     return methodNotAllowed();
@@ -50,12 +54,13 @@ export async function handleTrack(request, env) {
     const aiModelProvider = normalizeText(body.ai_model_provider || body.aiModelProvider, 80);
     const aiModelBaseUrl = normalizeText(body.ai_model_base_url || body.aiModelBaseUrl, 200);
     const aiModelName = normalizeText(body.ai_model_name || body.aiModelName, 160);
+    const resourceKey = normalizeText(body.resource_key || body.resourceKey, 80);
     const promptTokens = normalizeTokenNumber(body.prompt_tokens ?? body.promptTokens);
     const completionTokens = normalizeTokenNumber(body.completion_tokens ?? body.completionTokens);
     const totalTokens = normalizeTokenNumber(body.total_tokens ?? body.totalTokens) || promptTokens + completionTokens;
     const normalizedTextModelName = textModelName || (aiRequestType === 'text' ? aiModelName : '');
     const normalizedImageModelName = imageModelName || (aiRequestType === 'image' ? aiModelName : '');
-    const modelProviderBlob = event === 'ai_request' ? aiModelProvider : fileParserProvider;
+    const modelProviderBlob = event === 'ai_request' ? aiModelProvider : event === 'resource_click' ? resourceKey : fileParserProvider;
     const modelBaseUrlBlob = event === 'ai_request' ? aiModelBaseUrl : event === 'config_usage' ? enableConsistencyAudit : '';
     const modelNameBlob = event === 'ai_request' ? aiModelName : imageProvider;
     const requestTypeBlob = event === 'ai_request' ? aiRequestType : imageModelStatus;
@@ -73,6 +78,10 @@ export async function handleTrack(request, env) {
 
     if (event === 'page_view' && !page) {
       return json({ code: 400, message: 'missing page' }, { status: 400 });
+    }
+
+    if (event === 'resource_click' && !isValidResourceKey(resourceKey)) {
+      return json({ code: 400, message: 'missing resource_key' }, { status: 400 });
     }
 
     env.ANALYTICS.writeDataPoint({

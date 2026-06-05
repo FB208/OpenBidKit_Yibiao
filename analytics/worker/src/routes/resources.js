@@ -1,4 +1,5 @@
 import {
+  DATASET,
   RESOURCE_ALLOWED_IMAGE_TYPES,
   RESOURCE_DESCRIPTION_MAX_LENGTH,
   RESOURCE_IMAGE_MAX_BYTES,
@@ -7,6 +8,7 @@ import {
   RESOURCE_TITLE_MAX_LENGTH,
 } from '../constants.js';
 import { corsHeaders, json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
+import { queryAnalytics } from '../services/analyticsQuery.js';
 import {
   buildResourceImageUrl,
   createResourceId,
@@ -18,7 +20,7 @@ import {
   readResource,
   upsertResource,
 } from '../services/resourceStore.js';
-import { normalizeText } from '../utils.js';
+import { isValidProjectName, logQueryError, normalizeText, safeDays, sqlString } from '../utils.js';
 
 const allowedImageTypes = new Set(RESOURCE_ALLOWED_IMAGE_TYPES);
 
@@ -93,7 +95,56 @@ export async function handleAdminResources(request, env, url) {
 
 async function handleAdminGetResources(env, url) {
   const resources = await listAdminResources(env, { origin: url.origin });
-  return json({ code: 0, resources }, { headers: { 'Cache-Control': 'no-store' } });
+  const resourcesWithStats = await attachResourceClickStats(env, resources, url);
+  return json({ code: 0, resources: resourcesWithStats }, { headers: { 'Cache-Control': 'no-store' } });
+}
+
+async function attachResourceClickStats(env, resources, url) {
+  const clickCounts = await queryResourceClickCounts(env, resources, url);
+  return resources.map((resource) => ({
+    ...resource,
+    clickCount: clickCounts.get(resource.analyticsKey) || 0,
+  }));
+}
+
+async function queryResourceClickCounts(env, resources, url) {
+  if (!env.ACCOUNT_ID || !env.ANALYTICS_API_TOKEN || !resources.length) {
+    return new Map();
+  }
+
+  const projectName = normalizeText(url.searchParams.get('projectName') || 'yibiao-client', 80);
+  if (!isValidProjectName(projectName)) {
+    return new Map();
+  }
+
+  const days = safeDays(url.searchParams.get('days'));
+  const resourceKeys = Array.from(new Set(
+    resources.map((resource) => normalizeText(resource.analyticsKey, 80)).filter(Boolean),
+  ));
+
+  if (!resourceKeys.length) {
+    return new Map();
+  }
+
+  const sql = `
+    SELECT
+      blob9 AS resourceKey,
+      SUM(_sample_interval) AS clickCount
+    FROM ${DATASET}
+    WHERE blob1 = ${sqlString(projectName)}
+      AND blob2 = 'resource_click'
+      AND blob9 IN (${resourceKeys.map((key) => sqlString(key)).join(', ')})
+      AND timestamp >= NOW() - INTERVAL '${days}' DAY
+    GROUP BY resourceKey
+  `;
+
+  try {
+    const result = await queryAnalytics(env, sql);
+    return new Map((result.data || []).map((row) => [row.resourceKey, Number(row.clickCount || 0)]));
+  } catch (error) {
+    logQueryError('resource clicks', error);
+    return new Map();
+  }
 }
 
 async function handleAdminSaveResource(request, env, url) {

@@ -44,11 +44,12 @@ export function normalizeResourceRow(row, origin = '') {
     return null;
   }
 
+  const id = normalizeText(row.id, 120);
   const imageKey = normalizeImageKey(row.image_key);
   const imageUrl = imageKey ? buildResourceImageUrl(origin, imageKey) : '';
 
   return {
-    id: normalizeText(row.id, 120),
+    id,
     title: normalizeText(row.title, RESOURCE_TITLE_MAX_LENGTH),
     tags: splitResourceTags(row.tags),
     tagsText: normalizeText(row.tags, RESOURCE_TAGS_MAX_LENGTH),
@@ -56,11 +57,26 @@ export function normalizeResourceRow(row, origin = '') {
     modalContent: normalizeText(row.modal_content, RESOURCE_MODAL_CONTENT_MAX_LENGTH),
     imageKey,
     imageUrl,
+    analyticsKey: createResourceAnalyticsKey(id),
     sortOrder: normalizeSortOrder(row.sort_order),
     enabled: Number(row.enabled) !== 0,
     createdAt: normalizeText(row.created_at, 40),
     updatedAt: normalizeText(row.updated_at, 40),
   };
+}
+
+export function createResourceAnalyticsKey(id) {
+  const text = normalizeText(id, 120);
+  if (!text) {
+    return '';
+  }
+
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `r_${hash.toString(36)}`;
 }
 
 export function buildResourceImageUrl(origin, imageKey) {
@@ -166,6 +182,10 @@ export async function upsertResource(env, input, { origin = '' } = {}) {
   const imageUrl = imageKey ? buildResourceImageUrl(origin, imageKey) : '';
   const createdAt = existing?.createdAt || now;
 
+  if (!existing) {
+    await shiftSortOrderForInsert(db, normalized.sortOrder);
+  }
+
   await db.prepare(
     `INSERT INTO resources (id, title, tags, description, modal_content, image_key, image_url, sort_order, enabled, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -206,6 +226,39 @@ export async function deleteResource(env, id) {
   const existing = await readResource(env, resourceId);
   await db.prepare('DELETE FROM resources WHERE id = ?').bind(resourceId).run();
   return existing;
+}
+
+async function shiftSortOrderForInsert(db, sortOrder) {
+  const result = await db.prepare(
+    `SELECT sort_order
+     FROM resources
+     WHERE sort_order >= ?
+     ORDER BY sort_order ASC
+     LIMIT 1000`,
+  ).bind(sortOrder).all();
+
+  let upperOrder = sortOrder;
+  for (const row of result.results || []) {
+    const order = normalizeSortOrder(row.sort_order);
+    if (order < upperOrder) {
+      continue;
+    }
+    if (order > upperOrder) {
+      break;
+    }
+    upperOrder += 1;
+  }
+
+  if (upperOrder === sortOrder) {
+    return;
+  }
+
+  await db.prepare(
+    `UPDATE resources
+     SET sort_order = sort_order + 1
+     WHERE sort_order >= ?
+       AND sort_order < ?`,
+  ).bind(sortOrder, upperOrder).run();
 }
 
 function requireResourceDb(env) {

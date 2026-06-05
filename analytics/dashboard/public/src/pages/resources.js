@@ -1,5 +1,5 @@
-import { assertAdminToken, requestFormData, requestJson, saveSettings } from '../api.js';
-import { escapeHtml } from '../render.js';
+import { assertAdminToken, getEncodedProjectAndDays, requestFormData, requestJson, saveSettings } from '../api.js';
+import { escapeHtml, formatNumber } from '../render.js';
 import { appState, state } from '../state.js';
 
 function setResourcesStatus(message, type = '') {
@@ -29,6 +29,18 @@ function renderResourceTags(resource) {
   return `<div class="resource-tag-list">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>`;
 }
 
+function getNextResourceSortOrder() {
+  const maxOrder = (appState.resources || []).reduce((max, resource) => {
+    const order = Number(resource.sortOrder);
+    return Number.isFinite(order) ? Math.max(max, Math.trunc(order)) : max;
+  }, 0);
+  return maxOrder + 1;
+}
+
+function isBlankNewResourceForm() {
+  return !state.resourceId.value.trim() && !state.resourceTitle.value.trim();
+}
+
 function splitTags(value) {
   return String(value || '')
     .split(/[，,;；\n\r]+/)
@@ -48,6 +60,7 @@ function renderResourcesTable() {
       <td class="resource-image-cell">${renderResourceImage(resource)}</td>
       <td class="resource-title-cell"><strong>${escapeHtml(resource.title)}</strong><br /><small>${escapeHtml(resource.enabled ? '启用' : '停用')} · 排序 ${escapeHtml(resource.sortOrder)}</small></td>
       <td class="resource-tags-cell">${renderResourceTags(resource)}</td>
+      <td>${escapeHtml(formatNumber(resource.clickCount))}</td>
       <td class="resource-description-cell">${escapeHtml(truncate(resource.description, 90) || '-')}</td>
       <td class="resource-modal-cell">${escapeHtml(truncate(resource.modalContent, 80) || '-')}</td>
       <td class="resource-row-actions">
@@ -64,6 +77,7 @@ function renderResourcesTable() {
           <th>图片</th>
           <th>标题</th>
           <th>标签</th>
+          <th>点击量</th>
           <th>介绍</th>
           <th>弹窗内容</th>
           <th>操作</th>
@@ -93,7 +107,7 @@ export function resetResourceForm() {
   state.resourceForm.reset();
   state.resourceId.value = '';
   state.resourceEnabled.value = 'true';
-  state.resourceSortOrder.value = '0';
+  state.resourceSortOrder.value = String(getNextResourceSortOrder());
   state.resourceRemoveImage.checked = false;
   updateImagePreview(null);
   setResourcesStatus('已清空表单，可新增资源。', 'ok');
@@ -116,9 +130,13 @@ export async function loadResources(options = {}) {
   try {
     assertAdminToken();
     saveSettings();
-    const data = await requestJson('/api/resources');
+    const { projectName, days } = getEncodedProjectAndDays();
+    const data = await requestJson(`/api/resources?projectName=${projectName}&days=${days}`);
     appState.resources = data.resources || [];
     renderResourcesTable();
+    if (isBlankNewResourceForm()) {
+      state.resourceSortOrder.value = String(getNextResourceSortOrder());
+    }
     if (!options.quiet) {
       setResourcesStatus(`已读取 ${appState.resources.length} 条资源。`, 'ok');
     }

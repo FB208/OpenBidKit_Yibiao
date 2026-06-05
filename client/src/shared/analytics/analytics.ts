@@ -4,7 +4,7 @@ const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const PROJECT_NAME = 'yibiao-client';
 const LEGACY_CLIENT_ID_KEY = 'analytics_client_id';
 
-type AnalyticsEvent = 'app_open' | 'page_view' | 'config_usage';
+type AnalyticsEvent = 'app_open' | 'page_view' | 'config_usage' | 'resource_click';
 
 interface AnalyticsIdentity {
   clientId: string;
@@ -176,4 +176,11 @@ export function trackConfigUsage(payload: ConfigUsagePayload = {}, config?: Clie
   void window.yibiao?.config.load()
     .then((loadedConfig) => send(loadedConfig))
     .catch(() => send(null));
+}
+
+export function trackResourceClick(resourceKey: string) {
+  const key = resourceKey.trim();
+  if (!/^[a-zA-Z0-9._:-]{1,80}$/.test(key)) return;
+
+  sendAnalytics('resource_click', 'resources', { resource_key: key });
 }
