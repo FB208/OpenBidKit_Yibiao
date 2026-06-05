@@ -1,8 +1,10 @@
+const { buildSectionContextHint } = require('../utils/bidSectionDetector.cjs');
+
 const stableSystemPrompt = `你是专业的招标文件分析助手。请严格基于用户提供的招标文件原文完成提取和总结。
 
 通用要求：
 1. 保持信息全面、准确，尽量使用原文内容，不要自行编造。
-2. 如果原文没有提及，明确写“没有提及”或“原文未提及”。
+2. 如果原文没有提及，明确写”没有提及”或”原文未提及”。
 3. 只输出最终结果，不输出过程、提示语或客套话。
 4. 始终使用简体中文。`;
 
@@ -106,30 +108,36 @@ function getBidAnalysisTaskById(taskId) {
   return tasks.find((task) => task.id === taskId);
 }
 
-function buildMessages(fileContent, task) {
-  return [
+function buildMessages(fileContent, task, sectionHint) {
+  const messages = [
     { role: 'system', content: stableSystemPrompt },
+  ];
+  if (sectionHint) {
+    messages.push({ role: 'system', content: sectionHint });
+  }
+  messages.push(
     { role: 'user', content: `以下是完整招标文件 Markdown 原文。后续任务必须仅基于这份原文完成：\n\n${fileContent}` },
     { role: 'user', content: task.prompt() },
-  ];
+  );
+  return messages;
 }
 
-async function runSingleBidAnalysisPromptTask({ aiService, fileContent, task }) {
+async function runSingleBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint }) {
   return aiService.chat({
-    messages: buildMessages(fileContent, task),
+    messages: buildMessages(fileContent, task, sectionHint),
     temperature: 0.1,
     response_format: task.output === 'json' ? { type: 'json_object' } : undefined,
     logTitle: `招标解析-${task.label}`,
   });
 }
 
-function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent }) {
+function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent, sectionHint }) {
   const task = getBidAnalysisTaskById('discardedBids');
   if (!task) {
     throw new Error('未找到无效投标与废标项解析任务');
   }
 
-  return runSingleBidAnalysisPromptTask({ aiService, fileContent, task });
+  return runSingleBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint });
 }
 
 async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, payload }) {
@@ -139,6 +147,12 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
   if (!String(fileContent || '').trim()) {
     throw new Error('请先上传招标文件，再开始解析');
   }
+  const storedPlanForHint = workspaceStore.loadTechnicalPlan() || {};
+  const selectedSection = storedPlanForHint.tenderFile?.selectedSectionTitle ? {
+    title: storedPlanForHint.tenderFile.selectedSectionTitle,
+    headLine: storedPlanForHint.tenderFile.selectedSectionHeadLine || '',
+  } : null;
+  const sectionHint = selectedSection ? buildSectionContextHint(selectedSection) : '';
   const forceRerun = payload.force_rerun === true || payload.forceRerun === true;
   const requestedTaskIds = Array.isArray(payload.task_ids)
     ? new Set(payload.task_ids.filter((taskId) => typeof taskId === 'string'))
@@ -198,6 +212,7 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
       aiService,
       fileContent,
       task,
+      sectionHint,
     });
 
     const prev = workspaceStore.loadTechnicalPlan() || {};

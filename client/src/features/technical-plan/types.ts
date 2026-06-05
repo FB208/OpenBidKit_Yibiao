@@ -161,7 +161,18 @@ export interface TechnicalPlanTenderFile {
   contentHash: string;
   parserLabel?: string;
   importedAt?: string;
+  selectedSectionId?: string;
+  selectedSectionTitle?: string;
+  selectedSectionHeadLine?: string;
   updatedAt: string;
+}
+
+export interface DetectedBidSection {
+  id: string;
+  index: number;
+  title: string;
+  headLine: string;
+  description: string;
 }
 
 export interface TechnicalPlanState {

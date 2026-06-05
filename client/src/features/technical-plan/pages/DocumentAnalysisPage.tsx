@@ -1,13 +1,20 @@
 import { useEffect, useState } from 'react';
 import { isLibreOfficeRequiredMessage, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FileParserProvider } from '../../../shared/types';
-import type { TechnicalPlanState, TechnicalPlanTenderFile } from '../types';
+import type { DetectedBidSection, TechnicalPlanState, TechnicalPlanTenderFile } from '../types';
+import BidSectionSelectorDialog from '../components/BidSectionSelectorDialog';
 
 const parserLabels: Record<FileParserProvider, string> = {
   local: '本地解析',
   'mineru-accurate-api': 'MinerU 精准解析 API',
   'mineru-agent-api': 'MinerU-Agent 轻量解析 API',
 };
+
+interface PendingBidSectionSelection {
+  sections: DetectedBidSection[];
+  totalDeclared?: number | null;
+  pendingMarkdownPath: string;
+}
 
 interface DocumentAnalysisPageProps {
   tenderFile: TechnicalPlanTenderFile | null;
@@ -22,6 +29,7 @@ function DocumentAnalysisPage({
 }: DocumentAnalysisPageProps) {
   const [parserLabel, setParserLabel] = useState(parserLabels.local);
   const [busy, setBusy] = useState(false);
+  const [pendingSelection, setPendingSelection] = useState<PendingBidSectionSelection | null>(null);
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
 
@@ -55,13 +63,27 @@ function DocumentAnalysisPage({
       setBusy(true);
       const result = await window.yibiao?.technicalPlan.importTenderDocument();
 
-      if (!result?.success || !result.markdown) {
+      if (!result?.success) {
         const message = result?.message || '未导入文件';
         if (isLibreOfficeRequiredMessage(message)) {
           showDocumentParseNotice(message);
           return;
         }
         showToast(message, message === '已取消选择' ? 'info' : 'error');
+        return;
+      }
+
+      if (result.needsSectionSelection && result.sections && result.pendingMarkdownPath) {
+        setPendingSelection({
+          sections: result.sections,
+          totalDeclared: result.totalDeclared,
+          pendingMarkdownPath: result.pendingMarkdownPath,
+        });
+        return;
+      }
+
+      if (!result.state || !result.markdown) {
+        showToast('招标文件解析结果为空', 'error');
         return;
       }
 
@@ -82,6 +104,41 @@ function DocumentAnalysisPage({
     }
   };
 
+  const handleSectionSelect = async (sectionId: string) => {
+    if (!pendingSelection) return;
+    try {
+      setBusy(true);
+      const result = await window.yibiao?.technicalPlan.selectBidSection(
+        pendingSelection.pendingMarkdownPath,
+        sectionId,
+      );
+      if (!result?.success || !result.state || !result.markdown) {
+        showToast(result?.message || '标段选择失败', 'error');
+        return;
+      }
+      onFileImported(result.state, result.markdown);
+      if (result.state.tenderFile?.parserLabel) {
+        setParserLabel(result.state.tenderFile.parserLabel);
+      }
+      showToast(result.message || '已选择标段并导入招标文件', 'success');
+      setPendingSelection(null);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '标段选择失败', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSectionCancel = async () => {
+    if (!pendingSelection) return;
+    try {
+      await window.yibiao?.technicalPlan.cancelBidSectionSelection(pendingSelection.pendingMarkdownPath);
+    } catch {
+      // 忽略取消失败
+    }
+    setPendingSelection(null);
+  };
+
   return (
     <div className="plan-step-body">
       <section className="analysis-import-card">
@@ -96,6 +153,17 @@ function DocumentAnalysisPage({
           </button>
         </div>
       </section>
+
+      {tenderFile?.selectedSectionTitle && (
+        <section className="analysis-section-hint">
+          <strong>投标标段：</strong>
+          <span>{tenderFile.selectedSectionTitle}</span>
+          {tenderFile.selectedSectionHeadLine && (
+            <span className="analysis-section-hint-detail">（{tenderFile.selectedSectionHeadLine.replace(/^.*?标段[：:]\s*/, '')}）</span>
+          )}
+          <span className="analysis-section-hint-note">后续解析和生成将只关注该标段相关内容</span>
+        </section>
+      )}
 
       <section className="analysis-markdown-card">
         <div className="analysis-result-head">
@@ -117,6 +185,14 @@ function DocumentAnalysisPage({
         )}
       </section>
 
+      <BidSectionSelectorDialog
+        open={Boolean(pendingSelection)}
+        sections={pendingSelection?.sections || []}
+        totalDeclared={pendingSelection?.totalDeclared}
+        onSelect={handleSectionSelect}
+        onCancel={handleSectionCancel}
+        busy={busy}
+      />
     </div>
   );
 }

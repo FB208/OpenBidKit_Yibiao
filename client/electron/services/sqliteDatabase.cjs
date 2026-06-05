@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 4;
+const schemaVersion = 7;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -129,6 +129,31 @@ function createTechnicalPlanGlobalFactsSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_technical_plan_global_fact_groups_order
     ON technical_plan_global_fact_groups(sort_order);
   `);
+}
+
+function addTechnicalPlanBidSectionV6Compat(db) {
+  // v6 兼容：部分旧版本客户端可能已添加 current_bid_section_id 和 bid_sections_extracted，
+  // 此处做幂等处理，如果列已存在则 ALTER TABLE 会抛错，用 try/catch 忽略。
+  const cols = db.prepare("PRAGMA table_info(technical_plan_meta)").all().map((row) => row.name);
+  const addIfMissing = (name, type) => {
+    if (!cols.includes(name)) {
+      db.exec(`ALTER TABLE technical_plan_meta ADD COLUMN ${name} ${type}`);
+    }
+  };
+  addIfMissing('current_bid_section_id', 'TEXT');
+  addIfMissing('bid_sections_extracted', 'INTEGER');
+}
+
+function addTechnicalPlanSelectedSection(db) {
+  const cols = db.prepare("PRAGMA table_info(technical_plan_meta)").all().map((row) => row.name);
+  const addIfMissing = (name, type) => {
+    if (!cols.includes(name)) {
+      db.exec(`ALTER TABLE technical_plan_meta ADD COLUMN ${name} ${type}`);
+    }
+  };
+  addIfMissing('selected_section_id', 'TEXT');
+  addIfMissing('selected_section_title', 'TEXT');
+  addIfMissing('selected_section_head_line', 'TEXT');
 }
 
 function createDuplicateCheckSchema(db) {
@@ -642,6 +667,21 @@ const migrations = [
     version: 4,
     description: '新增技术方案全局事实表结构',
     up: createTechnicalPlanGlobalFactsSchema,
+  },
+  {
+    version: 5,
+    description: '技术方案新增标段选择字段',
+    up: addTechnicalPlanBidSectionV6Compat,
+  },
+  {
+    version: 6,
+    description: '兼容旧版标段字段（幂等）',
+    up: addTechnicalPlanBidSectionV6Compat,
+  },
+  {
+    version: 7,
+    description: '技术方案新增标段选择字段（selected_section）',
+    up: addTechnicalPlanSelectedSection,
   },
 ];
 

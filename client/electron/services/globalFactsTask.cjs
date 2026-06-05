@@ -1,3 +1,5 @@
+const { buildSectionContextHint } = require('../utils/bidSectionDetector.cjs');
+
 function singleLine(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
@@ -222,14 +224,14 @@ function formatBidAnalysisFactsForPrompt(storedPlan) {
   ].filter(Boolean).join('\n\n') || '未提供 Step02 关键解析结果。';
 }
 
-function buildFirstRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems }) {
-  return [
+function buildFirstRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, sectionHint }) {
+  const messages = [
     {
       role: 'system',
       content: `用户正在编写投标书中的技术方案，在编写之前，为了保持全文关键变量一致，需要提前根据招标文件内容和已列出的投标技术方案提纲，把需要全文保持一致的关键变量编辑好。
 
 工作方式：
-1. 以“已生成技术方案目录”为主，判断在这些目录的正文写作时，哪些变量一旦随机生成就会导致全文前后不一致。
+1. 以”已生成技术方案目录”为主，判断在这些目录的正文写作时，哪些变量一旦随机生成就会导致全文前后不一致。
 2. 必须要包含的变量类别：工期、运维期或交货时间，这三个至少有一个，根据项目类型判断用哪个。其他变量类别由你自行判断，比如；人名、时间、品牌、型号、质保期等根据用户提交内容仔细分析。
 3. 招标文件、关键解析结果和知识库可以作为参考，如果里面有能用到的信息，优先使用。
 4. 如果用户提交的材料中没有可用信息，但是你分析某变量对全文一致性很重要，你需要根据你的专业能力来编辑，允许出现虚拟内容，但必须合情合理。
@@ -237,10 +239,15 @@ function buildFirstRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFacts
 
 输出要求：
 1. 只返回有价值的变量组。
-3. 优先输出具体变量，例如“项目经理：张伟，负责总体协调”，不要输出“严格按照招标文件执行”这类空话。
+3. 优先输出具体变量，例如”项目经理：张伟，负责总体协调”，不要输出”严格按照招标文件执行”这类空话。
 5. 不要输出长段落、分析过程、来源说明、风险提示或正文草稿。
 6. 只返回 JSON。`,
     },
+  ];
+  if (sectionHint) {
+    messages.push({ role: 'system', content: sectionHint });
+  }
+  messages.push(
     { role: 'user', content: `招标文件原文：\n${tenderMarkdown}` },
     { role: 'user', content: `关键解析结果：\n${bidAnalysisFactsText}` },
     { role: 'user', content: `已生成技术方案目录：\n${formatOutlineForPrompt(outlineData.outline || [])}` },
@@ -249,23 +256,24 @@ function buildFirstRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFacts
       role: 'user',
       content: `请返回 JSON，格式如下：
 {
-  "groups": [
+  “groups”: [
     {
-      "id": "project_team",
-      "title": "项目角色变量",
-      "content": "- 项目经理：张伟，负责总体协调。\n- 技术负责人：李明，负责方案设计和联调验收。"
+      “id”: “project_team”,
+      “title”: “项目角色变量”,
+      “content”: “- 项目经理：张伟，负责总体协调。\n- 技术负责人：李明，负责方案设计和联调验收。”
     }
   ]
 }`,
     },
-  ];
+  );
+  return messages;
 }
 
-function buildSecondRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, groups }) {
-  return [
+function buildSecondRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, groups, sectionHint }) {
+  const messages = [
     {
       role: 'system',
-      content: `你的任务是帮用户补充“全局变量”的细节。用户会发给你一份全局事实变量。请基于用户输入信息，检查是否还有投标文件技术方案写作时会反复用到、且必须全文保持全文一致的变量需要补充。
+      content: `你的任务是帮用户补充”全局变量”的细节。用户会发给你一份全局事实变量。请基于用户输入信息，检查是否还有投标文件技术方案写作时会反复用到、且必须全文保持全文一致的变量需要补充。
 
 要求：
 1. 不要重新生成全部内容，只返回需要补充或替换的 patches。
@@ -277,6 +285,11 @@ function buildSecondRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFact
 7. 没有可补充内容时返回 {"patches":[]}。
 8. 只返回 JSON。`,
     },
+  ];
+  if (sectionHint) {
+    messages.push({ role: 'system', content: sectionHint });
+  }
+  messages.push(
     { role: 'user', content: `招标文件原文：\n${tenderMarkdown}` },
     { role: 'user', content: `关键解析结果：\n${bidAnalysisFactsText}` },
     { role: 'user', content: `已生成技术方案目录：\n${formatOutlineForPrompt(outlineData.outline || [])}` },
@@ -296,7 +309,8 @@ function buildSecondRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFact
   ]
 }`,
     },
-  ];
+  );
+  return messages;
 }
 
 async function collectJson(aiService, options) {
@@ -338,9 +352,15 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
   log('正在读取招标文件、Step02 解析结果、目录和参考知识库。', 10);
   const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);
 
+  const selectedSection = storedPlan.tenderFile?.selectedSectionTitle ? {
+    title: storedPlan.tenderFile.selectedSectionTitle,
+    headLine: storedPlan.tenderFile.selectedSectionHeadLine || '',
+  } : null;
+  const sectionHint = selectedSection ? buildSectionContextHint(selectedSection) : '';
+
   log('正在预设后续正文会反复用到的全局事实变量。', 25);
   const firstRound = await collectJson(aiService, {
-    messages: buildFirstRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems }),
+    messages: buildFirstRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, sectionHint }),
     temperature: 0.2,
     logTitle: '全局事实变量',
     progressLabel: '全局事实变量',
@@ -355,7 +375,7 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
 
   log('第二轮：正在根据第一轮大项补充遗漏的全局事实变量。', 68);
   const secondRound = await collectJson(aiService, {
-    messages: buildSecondRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, groups }),
+    messages: buildSecondRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, groups, sectionHint }),
     temperature: 0.2,
     logTitle: '全局事实变量-第二轮补充',
     progressLabel: '全局事实变量第二轮',
