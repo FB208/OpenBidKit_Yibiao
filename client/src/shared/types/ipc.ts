@@ -103,12 +103,11 @@ export interface YibiaoBridge {
       needsSectionSelection?: boolean;
       sections?: DetectedBidSection[];
       totalDeclared?: number | null;
-      pendingMarkdownPath?: string;
       fileName?: string;
-      parserLabel?: string;
+      parserLabel?: string | null;
     }>;
-    selectBidSection: (pendingMarkdownPath: string, sectionId: string) => Promise<{ success: boolean; message?: string; state: TechnicalPlanState; markdown: string }>;
-    cancelBidSectionSelection: (pendingMarkdownPath: string) => Promise<{ success: boolean; message?: string }>;
+    selectBidSection: (sectionId: string) => Promise<{ success: boolean; message?: string; state: TechnicalPlanState; markdown: string }>;
+    cancelBidSectionSelection: () => Promise<{ success: boolean; message?: string }>;
     readTenderMarkdown: () => Promise<string>;
     updateStep: (step: TechnicalPlanStep) => Promise<TechnicalPlanState>;
     saveOutlineConfig: (payload: { outlineMode: OutlineMode; referenceKnowledgeDocumentIds: string[] }) => Promise<TechnicalPlanState>;

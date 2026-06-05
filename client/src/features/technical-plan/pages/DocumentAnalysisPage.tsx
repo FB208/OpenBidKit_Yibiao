@@ -13,7 +13,6 @@ const parserLabels: Record<FileParserProvider, string> = {
 interface PendingBidSectionSelection {
   sections: DetectedBidSection[];
   totalDeclared?: number | null;
-  pendingMarkdownPath: string;
 }
 
 interface DocumentAnalysisPageProps {
@@ -73,11 +72,10 @@ function DocumentAnalysisPage({
         return;
       }
 
-      if (result.needsSectionSelection && result.sections && result.pendingMarkdownPath) {
+      if (result.needsSectionSelection && result.sections) {
         setPendingSelection({
           sections: result.sections,
           totalDeclared: result.totalDeclared,
-          pendingMarkdownPath: result.pendingMarkdownPath,
         });
         return;
       }
@@ -108,10 +106,7 @@ function DocumentAnalysisPage({
     if (!pendingSelection) return;
     try {
       setBusy(true);
-      const result = await window.yibiao?.technicalPlan.selectBidSection(
-        pendingSelection.pendingMarkdownPath,
-        sectionId,
-      );
+      const result = await window.yibiao?.technicalPlan.selectBidSection(sectionId);
       if (!result?.success || !result.state || !result.markdown) {
         showToast(result?.message || '标段选择失败', 'error');
         return;
@@ -132,7 +127,7 @@ function DocumentAnalysisPage({
   const handleSectionCancel = async () => {
     if (!pendingSelection) return;
     try {
-      await window.yibiao?.technicalPlan.cancelBidSectionSelection(pendingSelection.pendingMarkdownPath);
+      await window.yibiao?.technicalPlan.cancelBidSectionSelection();
     } catch {
       // 忽略取消失败
     }

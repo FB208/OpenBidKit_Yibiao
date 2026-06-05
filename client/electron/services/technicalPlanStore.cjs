@@ -180,6 +180,59 @@ function mapOutlineItems(items, mapper) {
 
 function createTechnicalPlanStore({ app, db, fileService }) {
   const tenderMarkdownPath = getTechnicalPlanTenderMarkdownPath(app);
+  let pendingTenderSelection = null;
+
+  function isPendingTenderMarkdownPath(filePath) {
+    const resolvedPath = path.resolve(String(filePath || ''));
+    const expectedDir = path.resolve(path.dirname(tenderMarkdownPath));
+    return path.dirname(resolvedPath).toLowerCase() === expectedDir.toLowerCase()
+      && /^tender-pending-\d+\.tmp\.md$/.test(path.basename(resolvedPath));
+  }
+
+  function getPendingTenderSelection() {
+    const markdownPath = pendingTenderSelection?.markdownPath
+      ? path.resolve(pendingTenderSelection.markdownPath)
+      : '';
+    if (!markdownPath || !isPendingTenderMarkdownPath(markdownPath)) {
+      pendingTenderSelection = null;
+      throw new Error('待选择的招标文件已过期，请重新导入');
+    }
+
+    let stats;
+    try {
+      stats = fs.lstatSync(markdownPath);
+    } catch {
+      pendingTenderSelection = null;
+      throw new Error('待选择的招标文件已过期，请重新导入');
+    }
+
+    if (!stats.isFile()) {
+      pendingTenderSelection = null;
+      throw new Error('待选择的招标文件已过期，请重新导入');
+    }
+
+    return {
+      markdownPath,
+      fileName: pendingTenderSelection.fileName || '未命名文件',
+      parserLabel: pendingTenderSelection.parserLabel || null,
+    };
+  }
+
+  function cleanupPendingTenderSelection() {
+    const markdownPath = pendingTenderSelection?.markdownPath
+      ? path.resolve(pendingTenderSelection.markdownPath)
+      : '';
+    pendingTenderSelection = null;
+    if (!markdownPath || !isPendingTenderMarkdownPath(markdownPath) || !fs.existsSync(markdownPath)) {
+      return;
+    }
+    try {
+      const stats = fs.lstatSync(markdownPath);
+      if (stats.isFile()) fs.rmSync(markdownPath, { force: true });
+    } catch {
+      // 清理临时文件失败不影响主流程
+    }
+  }
 
   function ensureMetaRow() {
     const existing = db.prepare('SELECT * FROM technical_plan_meta WHERE id = 1').get();
@@ -926,6 +979,9 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     }
 
     const markdown = String(result.file_content || '').trim();
+    const fileName = result.file_name || '未命名文件';
+    const parserLabel = result.parser_label || null;
+    cleanupPendingTenderSelection();
     const sectionDetection = detectBidSections(markdown);
 
     if (sectionDetection.hasMultiple && sectionDetection.sections.length >= 2) {
@@ -933,21 +989,25 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       fs.mkdirSync(targetDir, { recursive: true });
       const pendingPath = path.join(targetDir, `tender-pending-${Date.now()}.tmp.md`);
       fs.writeFileSync(pendingPath, `${markdown}\n`, 'utf-8');
+      pendingTenderSelection = {
+        markdownPath: pendingPath,
+        fileName,
+        parserLabel,
+      };
       return {
         success: true,
         needsSectionSelection: true,
         sections: sectionDetection.sections,
         totalDeclared: sectionDetection.totalDeclared,
-        pendingMarkdownPath: pendingPath,
-        fileName: result.file_name || '未命名文件',
-        parserLabel: result.parser_label || null,
+        fileName,
+        parserLabel,
         message: result.message || '检测到多个标段，请选择投标标段',
       };
     }
 
     return saveTenderMarkdownAndState(markdown, {
-      fileName: result.file_name || '未命名文件',
-      parserLabel: result.parser_label || null,
+      fileName,
+      parserLabel,
       message: result.message || '招标文件已导入',
       fallbackToLocal: result.fallbackToLocal === true,
     });
@@ -990,12 +1050,9 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     }
   }
 
-  function selectBidSection(pendingMarkdownPath, sectionId) {
-    if (!pendingMarkdownPath || !fs.existsSync(pendingMarkdownPath)) {
-      throw new Error('待选择的招标文件已过期，请重新导入');
-    }
-
-    const fullMarkdown = fs.readFileSync(pendingMarkdownPath, 'utf-8').trim();
+  function selectBidSection(sectionId) {
+    const pendingSelection = getPendingTenderSelection();
+    const fullMarkdown = fs.readFileSync(pendingSelection.markdownPath, 'utf-8').trim();
     if (!fullMarkdown) {
       throw new Error('待选择的招标文件内容为空');
     }
@@ -1006,33 +1063,23 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       throw new Error('未找到指定的标段信息，请重新导入文件');
     }
 
-    try {
-      fs.rmSync(pendingMarkdownPath, { force: true });
-    } catch {
-      // 清理临时文件失败不影响主流程
-    }
-
-    const meta = ensureMetaRow();
-    return saveTenderMarkdownAndState(fullMarkdown, {
-      fileName: meta.tender_file_name || '未命名文件',
-      parserLabel: meta.tender_parser_label || null,
+    const result = saveTenderMarkdownAndState(fullMarkdown, {
+      fileName: pendingSelection.fileName,
+      parserLabel: pendingSelection.parserLabel,
       message: `已选择【${selected.title}】，招标文件已导入`,
       selectedSection: selected,
     });
+    cleanupPendingTenderSelection();
+    return result;
   }
 
-  function cancelBidSectionSelection(pendingMarkdownPath) {
-    if (pendingMarkdownPath && fs.existsSync(pendingMarkdownPath)) {
-      try {
-        fs.rmSync(pendingMarkdownPath, { force: true });
-      } catch {
-        // 忽略清理失败
-      }
-    }
+  function cancelBidSectionSelection() {
+    cleanupPendingTenderSelection();
     return { success: true, message: '已取消标段选择' };
   }
 
   function clearTechnicalPlan() {
+    cleanupPendingTenderSelection();
     const transaction = db.transaction(() => {
       db.prepare('DELETE FROM technical_plan_tasks').run();
       db.prepare('DELETE FROM technical_plan_bid_items').run();
