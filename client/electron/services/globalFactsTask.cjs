@@ -256,11 +256,11 @@ function buildFirstRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFacts
       role: 'user',
       content: `请返回 JSON，格式如下：
 {
-  “groups”: [
+  "groups": [
     {
-      “id”: “project_team”,
-      “title”: “项目角色变量”,
-      “content”: “- 项目经理：张伟，负责总体协调。\n- 技术负责人：李明，负责方案设计和联调验收。”
+      "id": "project_team",
+      "title": "项目角色变量",
+      "content": "- 项目经理：张伟，负责总体协调。\n- 技术负责人：李明，负责方案设计和联调验收。"
     }
   ]
 }`,
