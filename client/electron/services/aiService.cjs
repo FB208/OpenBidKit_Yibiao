@@ -715,7 +715,6 @@ function createChatRequestBody(config, request, options = {}) {
   const body = {
     model: config.model_name,
     messages: request.messages,
-    temperature: request.temperature ?? 0.3,
   };
 
   if (request.response_format && !options.omitResponseFormat) {
