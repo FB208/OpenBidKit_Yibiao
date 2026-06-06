@@ -161,7 +161,27 @@ export interface TechnicalPlanTenderFile {
   contentHash: string;
   parserLabel?: string;
   importedAt?: string;
+  selectedSectionId?: string;
+  selectedSectionTitle?: string;
+  selectedSectionHeadLine?: string;
   updatedAt: string;
+}
+
+export interface DetectedBidSection {
+  id: string;
+  index: number;
+  unit: string;
+  title: string;
+  headLine: string;
+  description: string;
+}
+
+export interface PendingSectionSelection {
+  fileName: string;
+  parserLabel?: string | null;
+  sections: DetectedBidSection[];
+  totalDeclared?: number | null;
+  createdAt?: string;
 }
 
 export interface TechnicalPlanState {
@@ -184,4 +204,5 @@ export interface TechnicalPlanState {
   contentGenerationPlans: ContentGenerationPlans;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   outlineData: OutlineData | null;
+  pendingSectionSelection: PendingSectionSelection | null;
 }

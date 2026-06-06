@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { isLibreOfficeRequiredMessage, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FileParserProvider } from '../../../shared/types';
-import type { TechnicalPlanState, TechnicalPlanTenderFile } from '../types';
+import type { PendingSectionSelection, TechnicalPlanState, TechnicalPlanTenderFile } from '../types';
+import BidSectionSelectorDialog from '../components/BidSectionSelectorDialog';
 
 const parserLabels: Record<FileParserProvider, string> = {
   local: '本地解析',
@@ -12,16 +13,21 @@ const parserLabels: Record<FileParserProvider, string> = {
 interface DocumentAnalysisPageProps {
   tenderFile: TechnicalPlanTenderFile | null;
   tenderMarkdown: string;
+  pendingSectionSelection: PendingSectionSelection | null;
   onFileImported: (state: TechnicalPlanState, markdown: string) => void;
+  onStateChanged: (state: TechnicalPlanState) => void;
 }
 
 function DocumentAnalysisPage({
   tenderFile,
   tenderMarkdown,
+  pendingSectionSelection,
   onFileImported,
+  onStateChanged,
 }: DocumentAnalysisPageProps) {
   const [parserLabel, setParserLabel] = useState(parserLabels.local);
   const [busy, setBusy] = useState(false);
+  const [pendingSelection, setPendingSelection] = useState<PendingSectionSelection | null>(null);
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
 
@@ -50,18 +56,41 @@ function DocumentAnalysisPage({
     };
   }, [showToast]);
 
+  useEffect(() => {
+    setPendingSelection(pendingSectionSelection);
+  }, [pendingSectionSelection]);
+
   const importDocument = async () => {
     try {
       setBusy(true);
       const result = await window.yibiao?.technicalPlan.importTenderDocument();
 
-      if (!result?.success || !result.markdown) {
+      if (!result?.success) {
         const message = result?.message || '未导入文件';
         if (isLibreOfficeRequiredMessage(message)) {
           showDocumentParseNotice(message);
           return;
         }
         showToast(message, message === '已取消选择' ? 'info' : 'error');
+        return;
+      }
+
+      if (result.needsSectionSelection && result.sections) {
+        const nextPendingSelection = {
+          fileName: result.fileName || '未命名文件',
+          parserLabel: result.parserLabel || undefined,
+          sections: result.sections,
+          totalDeclared: result.totalDeclared,
+        };
+        setPendingSelection(nextPendingSelection);
+        if (result.state) {
+          onStateChanged(result.state);
+        }
+        return;
+      }
+
+      if (!result.state || !result.markdown) {
+        showToast('招标文件解析结果为空', 'error');
         return;
       }
 
@@ -82,8 +111,52 @@ function DocumentAnalysisPage({
     }
   };
 
+  const handleSectionSelect = async (sectionId: string) => {
+    if (!pendingSelection) return;
+    try {
+      setBusy(true);
+      const selectedSection = pendingSelection.sections.find((section) => section.id === sectionId);
+      if (!selectedSection) {
+        showToast('未找到选择的投标范围', 'error');
+        return;
+      }
+      const result = await window.yibiao?.technicalPlan.selectBidSection(selectedSection);
+      if (!result?.success || !result.state || !result.markdown) {
+        showToast(result?.message || '标段选择失败', 'error');
+        return;
+      }
+      onFileImported(result.state, result.markdown);
+      if (result.state.tenderFile?.parserLabel) {
+        setParserLabel(result.state.tenderFile.parserLabel);
+      }
+      showToast(result.message || '已选择标段并导入招标文件', 'success');
+      setPendingSelection(null);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '标段选择失败', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSectionCancel = async () => {
+    if (!pendingSelection) return;
+    try {
+      const result = await window.yibiao?.technicalPlan.cancelBidSectionSelection();
+      if (result?.state) {
+        onStateChanged(result.state);
+      }
+    } catch {
+      // 忽略取消失败
+    }
+    setPendingSelection(null);
+  };
+
+  const selectedSectionTitle = tenderFile?.selectedSectionTitle;
+  const selectedSectionHeadLine = tenderFile?.selectedSectionHeadLine;
+  const hasSectionHint = Boolean(selectedSectionTitle);
+
   return (
-    <div className="plan-step-body">
+    <div className={`plan-step-body document-analysis-page${hasSectionHint ? ' has-section-hint' : ''}`}>
       <section className="analysis-import-card">
         <div>
           <span className="section-kicker">STEP 01</span>
@@ -96,6 +169,16 @@ function DocumentAnalysisPage({
           </button>
         </div>
       </section>
+
+      {selectedSectionTitle && (
+        <section className="analysis-section-hint">
+          <strong>投标范围：</strong>
+          <span>{selectedSectionTitle}</span>
+          {selectedSectionHeadLine && (
+            <span className="analysis-section-hint-detail">（{selectedSectionHeadLine.replace(/^.*?(?:标段|标包|分包|包)[：:]\s*/, '')}）</span>
+          )}
+        </section>
+      )}
 
       <section className="analysis-markdown-card">
         <div className="analysis-result-head">
@@ -117,6 +200,14 @@ function DocumentAnalysisPage({
         )}
       </section>
 
+      <BidSectionSelectorDialog
+        open={Boolean(pendingSelection)}
+        sections={pendingSelection?.sections || []}
+        totalDeclared={pendingSelection?.totalDeclared}
+        onSelect={handleSectionSelect}
+        onCancel={handleSectionCancel}
+        busy={busy}
+      />
     </div>
   );
 }
