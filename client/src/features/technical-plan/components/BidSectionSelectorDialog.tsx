@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import type { DetectedBidSection } from '../types';
 
@@ -20,6 +20,10 @@ function BidSectionSelectorDialog({
   busy,
 }: BidSectionSelectorDialogProps) {
   const [selectedId, setSelectedId] = useState<string>(sections[0]?.id || '');
+
+  useEffect(() => {
+    setSelectedId(open ? sections[0]?.id || '' : '');
+  }, [open, sections]);
 
   const declaredLabel = totalDeclared ? `${totalDeclared} 个` : `${sections.length} 个`;
 
