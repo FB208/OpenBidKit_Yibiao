@@ -35,59 +35,128 @@ function normalizeExternalUrl(value) {
   }
 }
 
-function registerUnavailableTechnicalPlanIpc(error) {
+const workspaceDatabaseChannels = [
+  'technical-plan:load-state',
+  'technical-plan:import-tender-document',
+  'technical-plan:select-bid-section',
+  'technical-plan:cancel-bid-section-selection',
+  'technical-plan:read-tender-markdown',
+  'technical-plan:update-step',
+  'technical-plan:save-outline-config',
+  'technical-plan:save-outline',
+  'technical-plan:save-global-facts',
+  'technical-plan:save-content-generation-options',
+  'technical-plan:save-chapter-content',
+  'technical-plan:clear',
+  'duplicate-check:load-state',
+  'duplicate-check:save-files',
+  'duplicate-check:save-ui-state',
+  'duplicate-check:update-state',
+  'duplicate-check:clear',
+  'rejection-check:load-state',
+  'rejection-check:import-document',
+  'rejection-check:import-tender-from-technical-plan',
+  'rejection-check:remove-document',
+  'rejection-check:save-ui-state',
+  'rejection-check:update-state',
+  'rejection-check:clear',
+  'knowledge-base:get-migration-status',
+  'knowledge-base:migrate-legacy',
+  'knowledge-base:list',
+  'knowledge-base:create-folder',
+  'knowledge-base:rename-folder',
+  'knowledge-base:delete-folder',
+  'knowledge-base:delete-document',
+  'knowledge-base:upload-documents',
+  'knowledge-base:start-matching',
+  'knowledge-base:read-markdown',
+  'knowledge-base:read-items',
+  'knowledge-base:read-analysis',
+  'tasks:start-bid-analysis',
+  'tasks:start-outline-generation',
+  'tasks:start-global-facts-generation',
+  'tasks:start-content-generation',
+  'tasks:pause-content-generation',
+  'tasks:start-rejection-items-extraction',
+  'tasks:start-rejection-check',
+  'tasks:start-duplicate-analysis',
+  'tasks:get-active',
+];
+
+function clearWorkspaceDatabaseIpc() {
+  workspaceDatabaseChannels.forEach((channel) => ipcMain.removeHandler(channel));
+  ipcMain.removeAllListeners('tasks:subscribe');
+}
+
+function registerPendingWorkspaceDatabaseIpc(getStatus) {
+  clearWorkspaceDatabaseIpc();
+  const throwPending = () => {
+    const status = getStatus();
+    const message = status?.message || '本地数据库正在检查或升级，请稍候';
+    throw new Error(message);
+  };
+  workspaceDatabaseChannels.forEach((channel) => ipcMain.handle(channel, throwPending));
+  ipcMain.on('tasks:subscribe', () => {});
+}
+
+function registerUnavailableWorkspaceDatabaseIpc(error) {
   const message = `工作区数据库初始化失败：${error?.message || String(error)}`;
   const throwUnavailable = () => {
     throw new Error(message);
   };
 
   console.error('[ipc] 工作区数据库初始化失败', error);
-  [
-    'technical-plan:load-state',
-    'technical-plan:import-tender-document',
-    'technical-plan:read-tender-markdown',
-    'technical-plan:update-step',
-    'technical-plan:save-outline-config',
-    'technical-plan:save-outline',
-    'technical-plan:save-global-facts',
-    'technical-plan:save-content-generation-options',
-    'technical-plan:save-chapter-content',
-    'technical-plan:clear',
-    'duplicate-check:load-state',
-    'duplicate-check:save-files',
-    'duplicate-check:save-ui-state',
-    'duplicate-check:update-state',
-    'duplicate-check:clear',
-    'rejection-check:load-state',
-    'rejection-check:import-document',
-    'rejection-check:import-tender-from-technical-plan',
-    'rejection-check:remove-document',
-    'rejection-check:save-ui-state',
-    'rejection-check:update-state',
-    'rejection-check:clear',
-    'knowledge-base:get-migration-status',
-    'knowledge-base:migrate-legacy',
-    'knowledge-base:list',
-    'knowledge-base:create-folder',
-    'knowledge-base:rename-folder',
-    'knowledge-base:delete-folder',
-    'knowledge-base:delete-document',
-    'knowledge-base:upload-documents',
-    'knowledge-base:start-matching',
-    'knowledge-base:read-markdown',
-    'knowledge-base:read-items',
-    'knowledge-base:read-analysis',
-    'tasks:start-bid-analysis',
-    'tasks:start-outline-generation',
-    'tasks:start-global-facts-generation',
-    'tasks:start-content-generation',
-    'tasks:pause-content-generation',
-    'tasks:start-rejection-items-extraction',
-    'tasks:start-rejection-check',
-    'tasks:start-duplicate-analysis',
-    'tasks:get-active',
-  ].forEach((channel) => ipcMain.handle(channel, throwUnavailable));
+  clearWorkspaceDatabaseIpc();
+  workspaceDatabaseChannels.forEach((channel) => ipcMain.handle(channel, throwUnavailable));
   ipcMain.on('tasks:subscribe', () => {});
+}
+
+function registerWorkspaceDatabaseStatusIpc({ mainWindow }) {
+  let status = {
+    phase: 'checking',
+    ready: false,
+    message: '正在准备本地数据库',
+    updatedAt: new Date().toISOString(),
+  };
+
+  const updateStatus = (nextStatus) => {
+    status = {
+      ...status,
+      ...nextStatus,
+      ready: nextStatus?.phase === 'ready' ? true : Boolean(nextStatus?.ready),
+      updatedAt: new Date().toISOString(),
+    };
+    if (!mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send('workspace-database:status', status);
+    }
+  };
+
+  ipcMain.handle('workspace-database:get-status', () => status);
+
+  return {
+    getStatus: () => status,
+    updateStatus,
+  };
+}
+
+function registerWorkspaceDatabaseServices({ app, configStore, aiService, fileService, updateStatus }) {
+  const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
+  const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
+  const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
+  const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService });
+  const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db });
+  const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore });
+  const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
+  const taskService = createTaskService({ aiService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
+
+  clearWorkspaceDatabaseIpc();
+  registerKnowledgeBaseIpc({ knowledgeBaseService });
+  registerTechnicalPlanIpc({ technicalPlanStore });
+  registerDuplicateCheckIpc({ duplicateCheckStore });
+  registerRejectionCheckIpc({ rejectionCheckStore });
+  registerTaskIpc({ taskService });
+  updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
+  return { sqliteDatabase };
 }
 
 function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall }) {
@@ -95,28 +164,37 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const aiService = createAiService({ app, configStore });
   const fileService = createFileService({ app, configStore });
   const exportService = createExportService({ configStore });
+  const databaseStatus = registerWorkspaceDatabaseStatusIpc({ mainWindow });
+  let workspaceDatabaseStarted = false;
 
   registerConfigIpc({ configStore, aiService });
   registerAiIpc({ aiService });
   registerFileIpc({ fileService });
   registerExportIpc({ exportService });
+  registerPendingWorkspaceDatabaseIpc(databaseStatus.getStatus);
 
-  try {
-    const sqliteDatabase = createSqliteDatabase(app);
-    const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
-    const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
-    const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService });
-    const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db });
-    const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore });
-    const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
-    const taskService = createTaskService({ aiService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
-    registerKnowledgeBaseIpc({ knowledgeBaseService });
-    registerTechnicalPlanIpc({ technicalPlanStore });
-    registerDuplicateCheckIpc({ duplicateCheckStore });
-    registerRejectionCheckIpc({ rejectionCheckStore });
-    registerTaskIpc({ taskService });
-  } catch (error) {
-    registerUnavailableTechnicalPlanIpc(error);
+  const startWorkspaceDatabase = () => {
+    if (workspaceDatabaseStarted) return;
+    workspaceDatabaseStarted = true;
+    databaseStatus.updateStatus({ phase: 'checking', ready: false, message: '正在检查本地数据库' });
+    setTimeout(() => {
+      try {
+        registerWorkspaceDatabaseServices({ app, configStore, aiService, fileService, updateStatus: databaseStatus.updateStatus });
+      } catch (error) {
+        databaseStatus.updateStatus({
+          phase: 'error',
+          ready: false,
+          message: `本地数据库初始化失败：${error?.message || String(error)}`,
+        });
+        registerUnavailableWorkspaceDatabaseIpc(error);
+      }
+    }, 120);
+  };
+
+  if (mainWindow.webContents.isLoading()) {
+    mainWindow.webContents.once('did-finish-load', startWorkspaceDatabase);
+  } else {
+    startWorkspaceDatabase();
   }
 
   ipcMain.handle('app:get-version', () => app.getVersion());

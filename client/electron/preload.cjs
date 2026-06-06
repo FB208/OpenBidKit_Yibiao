@@ -24,6 +24,14 @@ const bridge = {
     ipcRenderer.on('app:update-error', listener);
     return () => ipcRenderer.removeListener('app:update-error', listener);
   },
+  database: {
+    getStatus: () => ipcRenderer.invoke('workspace-database:get-status'),
+    onStatus: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('workspace-database:status', listener);
+      return () => ipcRenderer.removeListener('workspace-database:status', listener);
+    },
+  },
   config: {
     load: () => ipcRenderer.invoke('config:load'),
     save: (config) => ipcRenderer.invoke('config:save', config),

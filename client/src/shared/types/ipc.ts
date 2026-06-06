@@ -52,6 +52,19 @@ export interface UpdateCheckResult {
   message?: string;
 }
 
+export type WorkspaceDatabasePhase = 'checking' | 'repairing' | 'backing-up' | 'upgrading' | 'ready' | 'error';
+
+export interface WorkspaceDatabaseStatus {
+  phase: WorkspaceDatabasePhase;
+  ready: boolean;
+  message: string;
+  updatedAt?: string;
+  currentVersion?: number;
+  targetVersion?: number;
+  migrationVersion?: number;
+  migrationDescription?: string;
+}
+
 export interface YibiaoBridge {
   appName: string;
   platform: string;
@@ -64,6 +77,10 @@ export interface YibiaoBridge {
   onUpdateProgress: (callback: (event: { percent: number }) => void) => () => void;
   onUpdateDownloaded: (callback: (event: { version: string }) => void) => () => void;
   onUpdateError: (callback: (event: { message: string }) => void) => () => void;
+  database: {
+    getStatus: () => Promise<WorkspaceDatabaseStatus>;
+    onStatus: (callback: (status: WorkspaceDatabaseStatus) => void) => () => void;
+  };
   config: {
     load: () => Promise<ClientConfig>;
     save: (config: ClientConfig) => Promise<ConfigSaveResult>;

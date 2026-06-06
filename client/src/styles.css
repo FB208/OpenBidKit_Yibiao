@@ -36,6 +36,107 @@ body {
   overflow: hidden;
 }
 
+.workspace-database-gate {
+  display: grid;
+  width: 100vw;
+  height: 100vh;
+  place-items: center;
+  padding: 32px;
+  color: var(--yb-text);
+  background:
+    radial-gradient(circle at 72% 18%, rgba(33, 116, 253, 0.16), transparent 28%),
+    radial-gradient(circle at 24% 22%, rgba(91, 84, 211, 0.12), transparent 30%),
+    linear-gradient(180deg, #ffffff 0%, var(--yb-bg) 52%, #f1f6ff 100%);
+}
+
+.workspace-database-card {
+  display: flex;
+  width: min(560px, 100%);
+  align-items: center;
+  gap: 22px;
+  padding: 30px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(220, 223, 230, 0.86);
+  border-radius: 30px;
+  box-shadow: var(--yb-shadow);
+}
+
+.workspace-database-mark {
+  display: grid;
+  position: relative;
+  width: 58px;
+  height: 58px;
+  flex: 0 0 58px;
+  place-items: center;
+  color: #ffffff;
+  font-size: 28px;
+  font-weight: 800;
+  background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
+  border-radius: 22px;
+  box-shadow: 0 16px 34px rgba(33, 116, 253, 0.22);
+}
+
+.workspace-database-mark span {
+  width: 24px;
+  height: 24px;
+  border: 3px solid rgba(255, 255, 255, 0.42);
+  border-top-color: #ffffff;
+  border-radius: 999px;
+  animation: workspace-database-spin 880ms linear infinite;
+}
+
+.workspace-database-mark.is-error {
+  background: linear-gradient(135deg, #e74c3c, #c0392b);
+  box-shadow: 0 16px 34px rgba(231, 76, 60, 0.22);
+}
+
+.workspace-database-copy {
+  min-width: 0;
+}
+
+.workspace-database-copy h1 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.3;
+}
+
+.workspace-database-copy p {
+  margin: 10px 0 0;
+  color: var(--yb-text-soft);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.workspace-database-copy small {
+  display: block;
+  margin-top: 12px;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.workspace-database-eyebrow {
+  margin: 0 0 8px !important;
+  color: var(--yb-primary-deep) !important;
+  font-size: 12px !important;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+@keyframes workspace-database-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 640px) {
+  .workspace-database-card {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 24px;
+  }
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

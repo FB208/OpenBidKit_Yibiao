@@ -671,6 +671,187 @@ function createKnowledgeBaseSchema(db) {
   `);
 }
 
+const schemaHealthTableGroups = [
+  {
+    version: 1,
+    tables: [
+      'technical_plan_meta',
+      'technical_plan_tasks',
+      'technical_plan_bid_items',
+      'technical_plan_reference_docs',
+      'technical_plan_outline_nodes',
+      'technical_plan_content_sections',
+      'technical_plan_content_plans',
+    ],
+    repair: createInitialSchema,
+  },
+  {
+    version: 2,
+    tables: [
+      'duplicate_check_meta',
+      'duplicate_check_files',
+      'duplicate_check_tasks',
+      'duplicate_check_analysis_sections',
+      'duplicate_check_content_files',
+      'duplicate_check_metadata_items',
+      'duplicate_check_outline_items',
+      'duplicate_check_outline_groups',
+      'duplicate_check_outline_pairwise',
+      'duplicate_check_content_duplicates',
+      'duplicate_check_content_occurrences',
+      'duplicate_check_image_files',
+      'duplicate_check_duplicate_images',
+      'duplicate_check_image_occurrences',
+    ],
+    repair: createDuplicateCheckSchema,
+  },
+  {
+    version: 2,
+    tables: [
+      'rejection_check_meta',
+      'rejection_check_documents',
+      'rejection_check_tasks',
+      'rejection_check_extraction',
+      'rejection_check_results',
+      'rejection_check_risk_findings',
+      'rejection_check_typo_findings',
+      'rejection_check_logic_findings',
+    ],
+    repair: createRejectionCheckSchema,
+  },
+  {
+    version: 3,
+    tables: [
+      'knowledge_migration_meta',
+      'knowledge_folders',
+      'knowledge_documents',
+      'knowledge_blocks',
+      'knowledge_candidate_items',
+      'knowledge_items',
+      'knowledge_item_blocks',
+      'knowledge_discarded_groups',
+      'knowledge_reports',
+    ],
+    repair: createKnowledgeBaseSchema,
+  },
+  {
+    version: 4,
+    tables: ['technical_plan_global_fact_groups'],
+    repair: createTechnicalPlanGlobalFactsSchema,
+  },
+];
+
+const schemaHealthColumnGroups = [
+  {
+    version: 1,
+    table: 'technical_plan_meta',
+    columns: {
+      step: 'TEXT',
+      tender_file_name: 'TEXT',
+      tender_markdown_path: 'TEXT',
+      tender_markdown_hash: 'TEXT',
+      tender_markdown_chars: 'INTEGER',
+      tender_parser_label: 'TEXT',
+      tender_imported_at: 'TEXT',
+      bid_analysis_mode: 'TEXT',
+      outline_mode: 'TEXT',
+      outline_project_name: 'TEXT',
+      outline_project_overview: 'TEXT',
+      content_generation_options_json: 'TEXT',
+      content_generation_runtime_json: 'TEXT',
+      created_at: 'TEXT',
+      updated_at: 'TEXT',
+    },
+  },
+  {
+    version: 5,
+    table: 'technical_plan_meta',
+    columns: {
+      current_bid_section_id: 'TEXT',
+      bid_sections_extracted: 'INTEGER',
+    },
+  },
+  {
+    version: 7,
+    table: 'technical_plan_meta',
+    columns: {
+      selected_section_id: 'TEXT',
+      selected_section_title: 'TEXT',
+      selected_section_head_line: 'TEXT',
+    },
+  },
+  {
+    version: 8,
+    table: 'technical_plan_meta',
+    columns: {
+      pending_tender_markdown_path: 'TEXT',
+      pending_tender_file_name: 'TEXT',
+      pending_tender_parser_label: 'TEXT',
+      pending_tender_sections_json: 'TEXT',
+      pending_tender_total_declared: 'INTEGER',
+      pending_tender_created_at: 'TEXT',
+    },
+  },
+];
+
+function quoteIdentifier(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
+function getExistingTables(db) {
+  return new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name));
+}
+
+function getExistingColumns(db, tableName) {
+  return new Set(db.prepare(`PRAGMA table_info(${quoteIdentifier(tableName)})`).all().map((row) => row.name));
+}
+
+function emitDatabaseStatus(onStatus, status) {
+  if (typeof onStatus === 'function') {
+    onStatus(status);
+  }
+}
+
+function ensureWorkspaceSchemaHealth(db, targetVersion = schemaVersion, onStatus) {
+  emitDatabaseStatus(onStatus, {
+    phase: 'checking',
+    message: '正在检查本地数据库结构',
+    targetVersion,
+  });
+  let existingTables = getExistingTables(db);
+  for (const group of schemaHealthTableGroups) {
+    if (group.version > targetVersion) continue;
+    if (group.tables.every((tableName) => existingTables.has(tableName))) continue;
+    emitDatabaseStatus(onStatus, {
+      phase: 'repairing',
+      message: '正在修复本地数据库表结构',
+      targetVersion,
+    });
+    group.repair(db);
+    existingTables = getExistingTables(db);
+  }
+
+  const columnCache = new Map();
+  for (const group of schemaHealthColumnGroups) {
+    if (group.version > targetVersion || !existingTables.has(group.table)) continue;
+    let existingColumns = columnCache.get(group.table);
+    if (!existingColumns) {
+      existingColumns = getExistingColumns(db, group.table);
+      columnCache.set(group.table, existingColumns);
+    }
+    for (const [columnName, columnType] of Object.entries(group.columns)) {
+      if (existingColumns.has(columnName)) continue;
+      emitDatabaseStatus(onStatus, {
+        phase: 'repairing',
+        message: '正在修复本地数据库字段',
+        targetVersion,
+      });
+      db.exec(`ALTER TABLE ${quoteIdentifier(group.table)} ADD COLUMN ${quoteIdentifier(columnName)} ${columnType}`);
+      existingColumns.add(columnName);
+    }
+  }
+}
+
 const migrations = [
   {
     version: 1,
@@ -724,11 +905,15 @@ function copyIfExists(source, target) {
   }
 }
 
-function backupDatabaseFiles(db, databasePath) {
+function backupDatabaseFiles(db, databasePath, onStatus) {
   if (!fs.existsSync(databasePath)) {
     return;
   }
 
+  emitDatabaseStatus(onStatus, {
+    phase: 'backing-up',
+    message: '正在备份本地数据库',
+  });
   db.pragma('wal_checkpoint(TRUNCATE)');
   const suffix = `backup-${timestampForFileName()}`;
   copyIfExists(databasePath, `${databasePath}.${suffix}`);
@@ -736,17 +921,18 @@ function backupDatabaseFiles(db, databasePath) {
   copyIfExists(`${databasePath}-shm`, `${databasePath}-shm.${suffix}`);
 }
 
-function applyMigrations(db, databasePath) {
+function applyMigrations(db, databasePath, onStatus) {
   const currentVersion = Number(db.pragma('user_version', { simple: true }) || 0);
   if (currentVersion > schemaVersion) {
     throw new Error(`本地数据库版本 ${currentVersion} 高于当前客户端支持版本 ${schemaVersion}，请升级客户端后再使用技术方案功能。`);
   }
   if (currentVersion === schemaVersion) {
+    ensureWorkspaceSchemaHealth(db, schemaVersion, onStatus);
     return;
   }
 
   if (currentVersion > 0) {
-    backupDatabaseFiles(db, databasePath);
+    backupDatabaseFiles(db, databasePath, onStatus);
   }
 
   const runMigration = db.transaction((migration) => {
@@ -756,14 +942,26 @@ function applyMigrations(db, databasePath) {
 
   for (const migration of migrations.filter((item) => item.version > currentVersion).sort((a, b) => a.version - b.version)) {
     try {
+      ensureWorkspaceSchemaHealth(db, migration.version - 1, onStatus);
+      emitDatabaseStatus(onStatus, {
+        phase: 'upgrading',
+        message: `正在升级本地数据库（v${migration.version}）`,
+        currentVersion,
+        targetVersion: migration.version,
+        migrationVersion: migration.version,
+        migrationDescription: migration.description,
+      });
       runMigration(migration);
+      ensureWorkspaceSchemaHealth(db, migration.version, onStatus);
     } catch (error) {
       throw new Error(`数据库升级失败（v${migration.version} ${migration.description}）：${error.message || String(error)}`);
     }
   }
+
+  ensureWorkspaceSchemaHealth(db, schemaVersion, onStatus);
 }
 
-function createSqliteDatabase(app) {
+function createSqliteDatabase(app, options = {}) {
   const databasePath = getWorkspaceDatabasePath(app);
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const db = new Database(databasePath);
@@ -771,7 +969,7 @@ function createSqliteDatabase(app) {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
-  applyMigrations(db, databasePath);
+  applyMigrations(db, databasePath, options.onStatus);
 
   const close = () => {
     if (db.open) {
