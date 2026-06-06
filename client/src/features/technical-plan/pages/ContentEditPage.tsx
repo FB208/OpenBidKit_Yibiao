@@ -8,6 +8,9 @@ import { DetailHelpLink, MarkdownEditor, MarkdownRenderer, useToast } from '../.
 import type { ClientConfig, ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
 import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement } from '../types';
+import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
+import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
+import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
 
 interface ContentEditPageProps {
   outlineData: OutlineData | null;
@@ -338,6 +341,7 @@ function ContentEditPage({
   const [pendingMinimumWordsChoice, setPendingMinimumWordsChoice] = useState<PendingMinimumWordsChoice | null>(null);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [pausePending, setPausePending] = useState(false);
+  const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const firstLeafId = leaves[0]?.id || '';
   const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
@@ -483,6 +487,9 @@ function ContentEditPage({
       .then((config) => {
         setDeveloperMode(Boolean(config.developer_mode));
         setImageModelStatus(config.image_model?.status || 'untested');
+        if (config.export_format) {
+          setExportFormat(config.export_format);
+        }
       })
       .catch((error) => console.warn('读取开发者模式失败', error));
   }, []);
@@ -853,7 +860,7 @@ function ContentEditPage({
         >
           <span className="content-outline-dot" aria-hidden="true" />
           <span className="content-outline-text">
-            <strong>{item.id} {item.title}</strong>
+            <strong>{formatOutlineTitle(item.id, item.title, exportFormat.headings[Math.min(item.id.split('.').length - 1, 5)].numbering_format)}</strong>
             <small>{isLeaf ? `${statusLabels[status]} · ${words} 字` : `${statusLabels[status]} · ${leafCount} 个小节 · ${words} 字`}</small>
           </span>
           {isLeaf && (status === 'success' || status === 'error') ? (

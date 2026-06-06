@@ -12,10 +12,12 @@ const {
   BorderStyle,
   Document,
   ExternalHyperlink,
+  Footer,
   HeadingLevel,
   ImageRun,
   LevelFormat,
   Packer,
+  PageNumber,
   Paragraph,
   ShadingType,
   Table,
@@ -171,7 +173,7 @@ function cleanText(value) {
 function textRun(text, options = {}) {
   return new TextRun({
     text: cleanText(text),
-    font: '宋体',
+    font: options.font || '宋体',
     size: options.size || 24,
     bold: options.bold,
     italics: options.italics,
@@ -208,7 +210,7 @@ function paragraph(children, options = {}) {
     alignment: options.alignment,
     bullet: options.bullet,
     numbering: options.numbering,
-    spacing: { before: options.before || 0, after: options.after ?? 160, line: 360 },
+    spacing: { before: options.before || 0, after: options.after ?? 160, line: options.line || 360 },
     indent: options.indent,
     border: options.border,
     shading: options.shading,
@@ -420,7 +422,95 @@ function headingLevel(level) {
   if (level <= 1) return HeadingLevel.HEADING_1;
   if (level === 2) return HeadingLevel.HEADING_2;
   if (level === 3) return HeadingLevel.HEADING_3;
-  return HeadingLevel.HEADING_4;
+  if (level === 4) return HeadingLevel.HEADING_4;
+  if (level === 5) return HeadingLevel.HEADING_5;
+  return HeadingLevel.HEADING_6;
+}
+
+// ── 导出格式工具函数 ────────────────────────────
+
+const SIZE_TO_HALF_PT = {
+  '初号': 84, '小初': 72, '一号': 52, '小一': 48, '二号': 44, '小二': 36,
+  '三号': 32, '小三': 30, '四号': 28, '小四': 24, '五号': 21, '小五': 18,
+  '六号': 15, '小六': 13,
+};
+
+function chineseSizeToHalfPt(sizeName) {
+  return SIZE_TO_HALF_PT[sizeName] || 24;
+}
+
+function cmToTwips(cm) {
+  return Math.round((cm || 0) * 567);
+}
+
+function alignmentToWordType(align) {
+  const map = {
+    '居中对齐': AlignmentType.CENTER,
+    '两端对齐': AlignmentType.JUSTIFIED,
+    '左对齐': AlignmentType.LEFT,
+    '右对齐': AlignmentType.RIGHT,
+  };
+  return map[align] || AlignmentType.JUSTIFIED;
+}
+
+function numberToChinese(num) {
+  const digits = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+  const tens = ['', '十', '二十', '三十', '四十', '五十', '六十', '七十', '八十', '九十'];
+  const n = Math.max(1, Math.min(9999, Math.floor(Number(num) || 1)));
+  if (n <= 9) return digits[n];
+  if (n <= 19) return `十${n === 10 ? '' : digits[n - 10]}`;
+  if (n <= 99) {
+    const t = Math.floor(n / 10);
+    const o = n % 10;
+    return `${tens[t]}${o ? digits[o] : ''}`;
+  }
+  if (n <= 999) {
+    const h = Math.floor(n / 100);
+    const r = n % 100;
+    return `${digits[h]}百${r === 0 ? '' : r <= 9 ? `零${digits[r]}` : r <= 19 ? `一${numberToChinese(r)}` : numberToChinese(r)}`;
+  }
+  const th = Math.floor(n / 1000);
+  const r = n % 1000;
+  return `${digits[th]}千${r === 0 ? '' : r < 100 ? `零${numberToChinese(r)}` : numberToChinese(r)}`;
+}
+
+function formatOutlineNumber(id, numberingFormat) {
+  const parts = String(id || '').split('.').filter(Boolean);
+  if (!parts.length) return '';
+
+  const lastPart = parseInt(parts[parts.length - 1], 10);
+  if (!Number.isFinite(lastPart) || lastPart <= 0) return '';
+
+  const cn = numberToChinese(lastPart);
+
+  switch (numberingFormat) {
+    case 'chinese-chapter': return `第${cn}章`;
+    case 'chinese-section': return `第${cn}节`;
+    case 'chinese-dun':     return `${cn}、`;
+    case 'chinese-paren':   return `（${cn}）`;
+    case 'arabic-dun':      return `${lastPart}、`;
+    case 'arabic-dot':      return `${lastPart}.`;
+    case 'arabic-paren':    return `(${lastPart})`;
+    case 'arabic':          return `${lastPart}`;
+    case 'none':            return '';
+    default:                return '';
+  }
+}
+
+function formatOutlineTitle(id, title, numberingFormat) {
+  const prefix = formatOutlineNumber(id, numberingFormat);
+  return prefix ? `${prefix} ${title || ''}` : String(title || '');
+}
+
+function getHeadingStyle(exportFormat, level) {
+  const headings = (exportFormat && Array.isArray(exportFormat.headings)) ? exportFormat.headings : [];
+  const idx = Math.min(level - 1, 5);
+  return headings[idx] || null;
+}
+
+function getHeadingNumberingFormat(exportFormat, level) {
+  const style = getHeadingStyle(exportFormat, level);
+  return (style && style.numbering_format) ? style.numbering_format : 'none';
 }
 
 function imageTypeFromMime(mime) {
@@ -921,11 +1011,31 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
 
   for (const node of nodes) {
     if (node.type === 'heading') {
-      blocks.push(paragraph(await inlineRuns(node.children, context), {
-        heading: headingLevel(node.depth),
-        before: node.depth === 1 ? 280 : 180,
-        after: 120,
-      }));
+      const mdLevel = Math.min(node.depth || 1, 6);
+      const style = getHeadingStyle(context.exportFormat, mdLevel);
+      const headingOpts = {
+        heading: headingLevel(mdLevel),
+        before: style ? style.spacing_before_pt * 20 : (mdLevel === 1 ? 280 : 180),
+        after: style ? style.spacing_after_pt * 20 : 120,
+      };
+      if (style) {
+        headingOpts.alignment = alignmentToWordType(style.alignment);
+        if (style.line_spacing) {
+          headingOpts.line = 240 * style.line_spacing;
+        }
+        if (style.first_line_indent_chars > 0) {
+          headingOpts.indent = { firstLine: style.first_line_indent_chars * 240 };
+        }
+      }
+      const runMarks = {};
+      if (style) {
+        runMarks.font = style.font || '黑体';
+        runMarks.size = chineseSizeToHalfPt(style.size || '小四');
+        runMarks.bold = false;
+      } else {
+        runMarks.bold = true;
+      }
+      blocks.push(paragraph(await inlineRuns(node.children, context, runMarks), headingOpts));
     } else if (node.type === 'paragraph') {
       blocks.push(paragraph(await inlineRuns(node.children, context), {
         after: options.inTable ? 80 : 160,
@@ -1039,12 +1149,34 @@ async function addMarkdownContent(children, content, context) {
 
 async function addOutlineItems(children, items, context, level = 1) {
   for (const item of items || []) {
-    const title = `${item.id || ''} ${item.title || '未命名章节'}`.trim();
-    children.push(paragraph([textRun(title, { bold: true })], {
+    const numberingFormat = getHeadingNumberingFormat(context.exportFormat, level);
+    const title = formatOutlineTitle(item.id, item.title, numberingFormat);
+    const style = getHeadingStyle(context.exportFormat, level);
+    const displayTitle = title;
+
+    const runOptions = { bold: false };
+    if (style) {
+      runOptions.font = style.font || '黑体';
+      runOptions.size = chineseSizeToHalfPt(style.size || '小四');
+      if (style.font === '楷体') {
+        runOptions.bold = false;
+      }
+    } else {
+      runOptions.bold = true;
+    }
+
+    const paraOptions = {
       heading: headingLevel(level),
-      before: level === 1 ? 320 : 200,
-      after: 120,
-    }));
+      alignment: style ? alignmentToWordType(style.alignment) : undefined,
+      before: style ? style.spacing_before_pt * 20 : (level === 1 ? 320 : 200),
+      after: style ? style.spacing_after_pt * 20 : 120,
+      line: style ? 240 * (style.line_spacing || 1) : undefined,
+    };
+    if (style && style.first_line_indent_chars > 0) {
+      paraOptions.indent = { firstLine: style.first_line_indent_chars * 240 };
+    }
+
+    children.push(paragraph([textRun(displayTitle, runOptions)], paraOptions));
 
     if (!item.children?.length) {
       if (String(item.content || '').trim()) {
@@ -1083,7 +1215,57 @@ function createNumberingConfig(context) {
   };
 }
 
+function buildHeadingParagraphStyles(exportFormat) {
+  const styles = [];
+  const names = ['Heading 1', 'Heading 2', 'Heading 3', 'Heading 4', 'Heading 5', 'Heading 6'];
+  const ids = ['Heading1', 'Heading2', 'Heading3', 'Heading4', 'Heading5', 'Heading6'];
+
+  for (let i = 0; i < 6; i += 1) {
+    const style = getHeadingStyle(exportFormat, i + 1);
+    if (!style) {
+      styles.push({
+        id: ids[i],
+        name: names[i],
+        basedOn: 'Normal',
+        run: { bold: false },
+        paragraph: { spacing: { before: 200, after: 120 } },
+      });
+      continue;
+    }
+
+    const halfPt = chineseSizeToHalfPt(style.size);
+    const lineSpacing = 240 * (style.line_spacing || 1);
+    const indentOpts = {};
+    if (style.first_line_indent_chars > 0) {
+      indentOpts.firstLine = style.first_line_indent_chars * 240;
+    }
+
+    styles.push({
+      id: ids[i],
+      name: names[i],
+      basedOn: 'Normal',
+      run: {
+        font: style.font || 'SimHei',
+        size: halfPt,
+        bold: false,
+      },
+      paragraph: {
+        spacing: {
+          before: (style.spacing_before_pt || 10) * 20,
+          after: (style.spacing_after_pt || 10) * 20,
+          line: lineSpacing,
+        },
+        alignment: alignmentToWordType(style.alignment),
+        ...(Object.keys(indentOpts).length ? { indent: indentOpts } : {}),
+      },
+    });
+  }
+
+  return styles;
+}
+
 async function buildDocxResult(payload, options = {}) {
+  const exportFormat = (payload && payload.export_format) || null;
   const stats = countOutlineStats(payload.outline || []);
   const context = {
     baseDir: payload.base_dir || payload.baseDir,
@@ -1098,11 +1280,20 @@ async function buildDocxResult(payload, options = {}) {
     numberingIndex: 0,
     unsupportedHtmlTags: new Set(),
     developerLogger: options.developerLogger,
+    exportFormat,
   };
   writeExportLog(context, 'export.docx.build.started', {
     stats,
     content_metrics: countOutlineContentMetrics(payload.outline || []),
   });
+
+  // 正文默认样式
+  const bodyStyle = (exportFormat && exportFormat.body_text) ? exportFormat.body_text : null;
+  const bodyFont = bodyStyle ? (bodyStyle.font || '宋体') : '宋体';
+  const bodySizeHalfPt = bodyStyle ? chineseSizeToHalfPt(bodyStyle.size || '小四') : 24;
+  const bodyLineSpacing = bodyStyle ? 240 * (bodyStyle.line_spacing_multiple || 1.2) : 360;
+  const bodyAfterSpacing = bodyStyle ? (bodyStyle.spacing_after_pt || 0) * 20 : 160;
+
   const children = [
     paragraph([textRun('内容由 AI 生成', { italics: true, size: 18 })], { alignment: AlignmentType.CENTER, after: 120 }),
     paragraph([textRun(payload.project_name || '投标技术文件', { bold: true, size: 34 })], { alignment: AlignmentType.CENTER, after: 300 }),
@@ -1114,24 +1305,68 @@ async function buildDocxResult(payload, options = {}) {
   await addOutlineItems(children, payload.outline || [], context);
   reportProgress(context, 90, '正在生成 Word 文件。');
 
+  // 页面设置
+  const pageSetup = (exportFormat && exportFormat.page) ? exportFormat.page : null;
+  const pageMargin = pageSetup ? {
+    top: cmToTwips(pageSetup.margin_top_cm || 2),
+    bottom: cmToTwips(pageSetup.margin_bottom_cm || 2),
+    left: cmToTwips(pageSetup.margin_left_cm || 2),
+    right: cmToTwips(pageSetup.margin_right_cm || 2),
+  } : { top: 1440, right: 1440, bottom: 1440, left: 1440 };
+
+  // 页脚 — 页码
+  const sectionChildren = [...children];
+  const footerEnabled = pageSetup ? pageSetup.footer_enabled !== false : true;
+  const pageNumberEnabled = pageSetup ? pageSetup.page_number_enabled !== false : true;
+  const footerFont = pageSetup ? (pageSetup.footer_font || '宋体') : '宋体';
+  const footerSize = chineseSizeToHalfPt(pageSetup ? (pageSetup.footer_size || '小五') : '小五');
+  const pageNumberFormat = pageSetup ? (pageSetup.page_number_format || '第{page}页') : '第{page}页';
+  const pageNumParts = (pageNumberFormat || '第{page}页').split('{page}');
+
+  let footers = undefined;
+  if (footerEnabled && pageNumberEnabled) {
+    const footerChildren = [];
+    if (pageNumParts[0]) {
+      footerChildren.push(new TextRun({ text: pageNumParts[0], font: footerFont, size: footerSize }));
+    }
+    footerChildren.push(new TextRun({ children: [PageNumber.CURRENT], font: footerFont, size: footerSize }));
+    if (pageNumParts[1]) {
+      footerChildren.push(new TextRun({ text: pageNumParts[1], font: footerFont, size: footerSize }));
+    }
+
+    footers = {
+      default: new Footer({
+        children: [
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: footerChildren,
+          }),
+        ],
+      }),
+    };
+  }
+
   const numbering = createNumberingConfig(context);
+  const headingStyles = buildHeadingParagraphStyles(exportFormat);
   const doc = new Document({
     ...(numbering ? { numbering } : {}),
     styles: {
       default: {
         document: {
-          run: { font: '宋体', size: 24 },
-          paragraph: { spacing: { line: 360, after: 160 } },
+          run: { font: bodyFont, size: bodySizeHalfPt },
+          paragraph: { spacing: { line: bodyLineSpacing, after: bodyAfterSpacing } },
         },
       },
+      paragraphStyles: headingStyles,
     },
     sections: [{
       properties: {
         page: {
-          margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
+          margin: pageMargin,
         },
       },
-      children,
+      footers,
+      children: sectionChildren,
     }],
   });
 
