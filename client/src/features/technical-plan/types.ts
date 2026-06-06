@@ -176,6 +176,14 @@ export interface DetectedBidSection {
   description: string;
 }
 
+export interface PendingSectionSelection {
+  fileName: string;
+  parserLabel?: string | null;
+  sections: DetectedBidSection[];
+  totalDeclared?: number | null;
+  createdAt?: string;
+}
+
 export interface TechnicalPlanState {
   step: TechnicalPlanStep;
   tenderFile: TechnicalPlanTenderFile | null;
@@ -196,4 +204,5 @@ export interface TechnicalPlanState {
   contentGenerationPlans: ContentGenerationPlans;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   outlineData: OutlineData | null;
+  pendingSectionSelection: PendingSectionSelection | null;
 }

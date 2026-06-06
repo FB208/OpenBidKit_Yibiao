@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { isLibreOfficeRequiredMessage, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FileParserProvider } from '../../../shared/types';
-import type { DetectedBidSection, TechnicalPlanState, TechnicalPlanTenderFile } from '../types';
+import type { PendingSectionSelection, TechnicalPlanState, TechnicalPlanTenderFile } from '../types';
 import BidSectionSelectorDialog from '../components/BidSectionSelectorDialog';
 
 const parserLabels: Record<FileParserProvider, string> = {
@@ -10,25 +10,24 @@ const parserLabels: Record<FileParserProvider, string> = {
   'mineru-agent-api': 'MinerU-Agent 轻量解析 API',
 };
 
-interface PendingBidSectionSelection {
-  sections: DetectedBidSection[];
-  totalDeclared?: number | null;
-}
-
 interface DocumentAnalysisPageProps {
   tenderFile: TechnicalPlanTenderFile | null;
   tenderMarkdown: string;
+  pendingSectionSelection: PendingSectionSelection | null;
   onFileImported: (state: TechnicalPlanState, markdown: string) => void;
+  onStateChanged: (state: TechnicalPlanState) => void;
 }
 
 function DocumentAnalysisPage({
   tenderFile,
   tenderMarkdown,
+  pendingSectionSelection,
   onFileImported,
+  onStateChanged,
 }: DocumentAnalysisPageProps) {
   const [parserLabel, setParserLabel] = useState(parserLabels.local);
   const [busy, setBusy] = useState(false);
-  const [pendingSelection, setPendingSelection] = useState<PendingBidSectionSelection | null>(null);
+  const [pendingSelection, setPendingSelection] = useState<PendingSectionSelection | null>(null);
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
 
@@ -57,6 +56,10 @@ function DocumentAnalysisPage({
     };
   }, [showToast]);
 
+  useEffect(() => {
+    setPendingSelection(pendingSectionSelection);
+  }, [pendingSectionSelection]);
+
   const importDocument = async () => {
     try {
       setBusy(true);
@@ -73,10 +76,16 @@ function DocumentAnalysisPage({
       }
 
       if (result.needsSectionSelection && result.sections) {
-        setPendingSelection({
+        const nextPendingSelection = {
+          fileName: result.fileName || '未命名文件',
+          parserLabel: result.parserLabel || undefined,
           sections: result.sections,
           totalDeclared: result.totalDeclared,
-        });
+        };
+        setPendingSelection(nextPendingSelection);
+        if (result.state) {
+          onStateChanged(result.state);
+        }
         return;
       }
 
@@ -132,7 +141,10 @@ function DocumentAnalysisPage({
   const handleSectionCancel = async () => {
     if (!pendingSelection) return;
     try {
-      await window.yibiao?.technicalPlan.cancelBidSectionSelection();
+      const result = await window.yibiao?.technicalPlan.cancelBidSectionSelection();
+      if (result?.state) {
+        onStateChanged(result.state);
+      }
     } catch {
       // 忽略取消失败
     }

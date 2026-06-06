@@ -60,6 +60,7 @@ const resetState = {
   contentGenerationPlans: {},
   contentGenerationRuntime: undefined,
   outlineData: null,
+  pendingSectionSelection: null,
 };
 
 function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
@@ -145,22 +146,25 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const isContentGenerating = contentTaskStatus === 'running' || contentTaskStatus === 'pausing';
   const isContentPaused = contentTaskStatus === 'paused';
   const isExporting = exportProgress.running;
+  const hasPendingSectionSelection = Boolean(state.pendingSectionSelection);
   const isNextDisabled = activeIndex >= steps.length - 1
-    || (state.step === 'document-analysis' && !state.tenderFile)
+    || (state.step === 'document-analysis' && (!state.tenderFile || hasPendingSectionSelection))
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
     || (state.step === 'outline-generation' && !state.outlineData)
     || (state.step === 'global-facts' && !globalFactsReady);
-  const nextTooltip = state.step === 'document-analysis' && !state.tenderFile
-    ? '上传完招标文件后才能进入下一步'
-    : state.step === 'bid-analysis' && !bidAnalysisReady
-      ? '招标文件解析完成后才能进入目录生成'
-      : state.step === 'outline-generation' && !state.outlineData
-        ? '目录生成完成后才能进入全局事实设定'
-        : state.step === 'global-facts' && !globalFactsReady
-          ? '全局事实设定完成后才能进入正文生成'
-          : activeIndex >= steps.length - 1
-            ? '当前已经是最后一步'
-            : `进入${stepLabels[steps[activeIndex + 1]]}`;
+  const nextTooltip = state.step === 'document-analysis' && hasPendingSectionSelection
+    ? '请先选择本次投标范围'
+    : state.step === 'document-analysis' && !state.tenderFile
+      ? '上传完招标文件后才能进入下一步'
+      : state.step === 'bid-analysis' && !bidAnalysisReady
+        ? '招标文件解析完成后才能进入目录生成'
+        : state.step === 'outline-generation' && !state.outlineData
+          ? '目录生成完成后才能进入全局事实设定'
+          : state.step === 'global-facts' && !globalFactsReady
+            ? '全局事实设定完成后才能进入正文生成'
+            : activeIndex >= steps.length - 1
+              ? '当前已经是最后一步'
+              : `进入${stepLabels[steps[activeIndex + 1]]}`;
 
   const resolveSortLeave = (allowed: boolean) => {
     sortLeaveResolverRef.current?.(allowed);
@@ -582,10 +586,12 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         <DocumentAnalysisPage
           tenderFile={state.tenderFile}
           tenderMarkdown={tenderMarkdown}
+          pendingSectionSelection={state.pendingSectionSelection}
           onFileImported={(nextState, markdown) => {
             setState((prev) => ({ ...prev, ...nextState }));
             setTenderMarkdown(markdown);
           }}
+          onStateChanged={(nextState) => setState((prev) => ({ ...prev, ...nextState }))}
         />
       )}
 

@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 7;
+const schemaVersion = 8;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -16,12 +16,21 @@ function createInitialSchema(db) {
       tender_markdown_chars INTEGER NOT NULL DEFAULT 0,
       tender_parser_label TEXT,
       tender_imported_at TEXT,
+      pending_tender_markdown_path TEXT,
+      pending_tender_file_name TEXT,
+      pending_tender_parser_label TEXT,
+      pending_tender_sections_json TEXT,
+      pending_tender_total_declared INTEGER,
+      pending_tender_created_at TEXT,
       bid_analysis_mode TEXT NOT NULL DEFAULT 'key',
       outline_mode TEXT NOT NULL DEFAULT 'aligned',
       outline_project_name TEXT,
       outline_project_overview TEXT,
       content_generation_options_json TEXT,
       content_generation_runtime_json TEXT,
+      selected_section_id TEXT,
+      selected_section_title TEXT,
+      selected_section_head_line TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -154,6 +163,21 @@ function addTechnicalPlanSelectedSection(db) {
   addIfMissing('selected_section_id', 'TEXT');
   addIfMissing('selected_section_title', 'TEXT');
   addIfMissing('selected_section_head_line', 'TEXT');
+}
+
+function addTechnicalPlanPendingTenderSelection(db) {
+  const cols = db.prepare("PRAGMA table_info(technical_plan_meta)").all().map((row) => row.name);
+  const addIfMissing = (name, type) => {
+    if (!cols.includes(name)) {
+      db.exec(`ALTER TABLE technical_plan_meta ADD COLUMN ${name} ${type}`);
+    }
+  };
+  addIfMissing('pending_tender_markdown_path', 'TEXT');
+  addIfMissing('pending_tender_file_name', 'TEXT');
+  addIfMissing('pending_tender_parser_label', 'TEXT');
+  addIfMissing('pending_tender_sections_json', 'TEXT');
+  addIfMissing('pending_tender_total_declared', 'INTEGER');
+  addIfMissing('pending_tender_created_at', 'TEXT');
 }
 
 function createDuplicateCheckSchema(db) {
@@ -682,6 +706,11 @@ const migrations = [
     version: 7,
     description: '技术方案新增标段选择字段（selected_section）',
     up: addTechnicalPlanSelectedSection,
+  },
+  {
+    version: 8,
+    description: '技术方案新增待选择标段恢复状态',
+    up: addTechnicalPlanPendingTenderSelection,
   },
 ];
 
