@@ -1050,23 +1050,18 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     }
   }
 
-  function selectBidSection(sectionId) {
+  function selectBidSection(selectedSection) {
     const pendingSelection = getPendingTenderSelection();
     const fullMarkdown = fs.readFileSync(pendingSelection.markdownPath, 'utf-8').trim();
     if (!fullMarkdown) {
       throw new Error('待选择的招标文件内容为空');
     }
-
-    const detection = detectBidSections(fullMarkdown);
-    const selected = detection.sections.find((section) => section.id === sectionId);
-    if (!selected) {
-      throw new Error('未找到指定的标段信息，请重新导入文件');
-    }
+    const selected = selectedSection || {};
 
     const result = saveTenderMarkdownAndState(fullMarkdown, {
       fileName: pendingSelection.fileName,
       parserLabel: pendingSelection.parserLabel,
-      message: `已选择【${selected.title}】，招标文件已导入`,
+      message: `已选择【${selected.title || '投标范围'}】，招标文件已导入`,
       selectedSection: selected,
     });
     cleanupPendingTenderSelection();

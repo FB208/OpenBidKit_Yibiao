@@ -60,7 +60,7 @@ const bridge = {
   technicalPlan: {
     loadState: () => ipcRenderer.invoke('technical-plan:load-state'),
     importTenderDocument: () => ipcRenderer.invoke('technical-plan:import-tender-document'),
-    selectBidSection: (sectionId) => ipcRenderer.invoke('technical-plan:select-bid-section', sectionId),
+    selectBidSection: (selectedSection) => ipcRenderer.invoke('technical-plan:select-bid-section', selectedSection),
     cancelBidSectionSelection: () => ipcRenderer.invoke('technical-plan:cancel-bid-section-selection'),
     readTenderMarkdown: () => ipcRenderer.invoke('technical-plan:read-tender-markdown'),
     updateStep: (step) => ipcRenderer.invoke('technical-plan:update-step', step),

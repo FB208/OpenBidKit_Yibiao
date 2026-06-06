@@ -106,7 +106,12 @@ function DocumentAnalysisPage({
     if (!pendingSelection) return;
     try {
       setBusy(true);
-      const result = await window.yibiao?.technicalPlan.selectBidSection(sectionId);
+      const selectedSection = pendingSelection.sections.find((section) => section.id === sectionId);
+      if (!selectedSection) {
+        showToast('未找到选择的投标范围', 'error');
+        return;
+      }
+      const result = await window.yibiao?.technicalPlan.selectBidSection(selectedSection);
       if (!result?.success || !result.state || !result.markdown) {
         showToast(result?.message || '标段选择失败', 'error');
         return;

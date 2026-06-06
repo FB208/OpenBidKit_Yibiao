@@ -106,7 +106,7 @@ export interface YibiaoBridge {
       fileName?: string;
       parserLabel?: string | null;
     }>;
-    selectBidSection: (sectionId: string) => Promise<{ success: boolean; message?: string; state: TechnicalPlanState; markdown: string }>;
+    selectBidSection: (selectedSection: DetectedBidSection) => Promise<{ success: boolean; message?: string; state: TechnicalPlanState; markdown: string }>;
     cancelBidSectionSelection: () => Promise<{ success: boolean; message?: string }>;
     readTenderMarkdown: () => Promise<string>;
     updateStep: (step: TechnicalPlanStep) => Promise<TechnicalPlanState>;
