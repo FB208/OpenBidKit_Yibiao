@@ -58,14 +58,10 @@ jobs:
             gh release create "$TAG_NAME" --title "$TAG_NAME" --notes-file release_notes.md
           fi
 
-  build:
-    name: Build ${{ matrix.os }}
+  build-windows:
+    name: Build Windows
     needs: create-release
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
+    runs-on: windows-latest
 
     defaults:
       run:
@@ -85,16 +81,95 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install build type dependencies
+        run: npm install --no-save @types/plist
+
+      - name: Rebuild Electron native dependencies
+        run: npm run postinstall
+
+      - name: Smoke test Electron native dependencies
+        run: npm run smoke:electron-native
+
+      - name: Sync package version from tag
+        env:
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Build renderer
+        run: npm run build
+
+      - name: Build Windows NSIS and ZIP artifacts
+        run: npx electron-builder --win nsis zip --publish never
+
+      - name: Build Windows MSI artifact
+        run: npx electron-builder --win msi --publish never -c.productName=OpenBidKit_Yibiao -c.extraMetadata.author=mark -c.copyright="Copyright (c) 2026 mark"
+
+      - name: Upload release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+        run: |
+          shopt -s nullglob
+          files=(release/*.exe release/*.msi release/*.zip release/*.blockmap release/latest*.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No release assets found."
+            exit 1
+          fi
+          gh release upload "$TAG_NAME" "${files[@]}" --clobber
+
+  build-macos:
+    name: Build macOS ${{ matrix.arch }}
+    needs: create-release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x64
+          - runner: macos-15
+            arch: arm64
+
+    defaults:
+      run:
+        working-directory: client
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Verify runner architecture
+        run: |
+          actual_arch="$(node -p process.arch)"
+          if [ "$actual_arch" != "${{ matrix.arch }}" ]; then
+            echo "Expected ${{ matrix.arch }} runner, got ${actual_arch}."
+            exit 1
+          fi
+
       - name: Cache Electron build downloads
-        if: runner.os == 'macOS'
         uses: actions/cache@v4
         with:
           path: |
             ~/Library/Caches/electron
             ~/Library/Caches/electron-builder
-          key: ${{ runner.os }}-electron-${{ hashFiles('client/package-lock.json') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-electron-${{ hashFiles('client/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-electron-
+            ${{ runner.os }}-${{ matrix.arch }}-electron-
 
       - name: Install dependencies
         run: npm ci
@@ -116,7 +191,6 @@ jobs:
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Generate macOS icon
-        if: runner.os == 'macOS'
         run: |
           rm -rf assets/icon.iconset
           mkdir -p assets/icon.iconset
@@ -135,47 +209,34 @@ jobs:
       - name: Build renderer
         run: npm run build
 
-      - name: Preload Electron macOS runtimes
-        if: runner.os == 'macOS'
+      - name: Preload Electron macOS runtime
         run: |
           export ELECTRON_CACHE="$HOME/Library/Caches/electron"
           ELECTRON_VERSION="$(node -p "require('./node_modules/electron/package.json').version")"
-          cache_dir="$ELECTRON_CACHE"
-          mkdir -p "$cache_dir"
+          file="$ELECTRON_CACHE/electron-v${ELECTRON_VERSION}-darwin-${{ matrix.arch }}.zip"
+          mkdir -p "$ELECTRON_CACHE"
 
-          for arch in x64 arm64; do
-            file="$cache_dir/electron-v${ELECTRON_VERSION}-darwin-${arch}.zip"
-            if [ -f "$file" ] && unzip -tq "$file" >/dev/null 2>&1; then
-              echo "Electron ${ELECTRON_VERSION} darwin-${arch} already cached."
-              continue
-            fi
+          if [ -f "$file" ] && unzip -tq "$file" >/dev/null 2>&1; then
+            echo "Electron ${ELECTRON_VERSION} darwin-${{ matrix.arch }} already cached."
+            exit 0
+          fi
 
-            tmp="${file}.tmp"
-            rm -f "$file" "$tmp"
-            curl --fail --location --retry 5 --retry-all-errors --retry-delay 10 \
-              "https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}/electron-v${ELECTRON_VERSION}-darwin-${arch}.zip" \
-              --output "$tmp"
-            unzip -tq "$tmp" >/dev/null
-            mv "$tmp" "$file"
-          done
+          tmp="${file}.tmp"
+          rm -f "$file" "$tmp"
+          curl --fail --location --retry 5 --retry-all-errors --retry-delay 10 \
+            "https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}/electron-v${ELECTRON_VERSION}-darwin-${{ matrix.arch }}.zip" \
+            --output "$tmp"
+          unzip -tq "$tmp" >/dev/null
+          mv "$tmp" "$file"
 
-      - name: Build Windows NSIS and ZIP artifacts
-        if: runner.os == 'Windows'
-        run: npx electron-builder --win nsis zip --publish never
-
-      - name: Build Windows MSI artifact
-        if: runner.os == 'Windows'
-        run: npx electron-builder --win msi --publish never -c.productName=OpenBidKit_Yibiao -c.extraMetadata.author=mark -c.copyright="Copyright (c) 2026 mark"
-
-      - name: Build and publish macOS artifacts
-        if: runner.os == 'macOS'
+      - name: Build macOS artifacts
         run: |
           export ELECTRON_CACHE="$HOME/Library/Caches/electron"
           export ELECTRON_BUILDER_CACHE="$HOME/Library/Caches/electron-builder"
 
           for attempt in 1 2 3; do
-            echo "Build macOS artifacts, attempt ${attempt}/3."
-            if npx electron-builder --mac --publish never; then
+            echo "Build macOS ${{ matrix.arch }} artifacts, attempt ${attempt}/3."
+            if npx electron-builder --mac --${{ matrix.arch }} --publish never; then
               exit 0
             fi
 
@@ -186,11 +247,19 @@ jobs:
             sleep $((attempt * 20))
           done
 
+      - name: Verify packaged native architectures
+        run: node scripts/verify-macos-native-arch.cjs "${{ matrix.arch }}" release
+
       - name: Package macOS DMG with instructions
-        if: runner.os == 'macOS'
         run: |
           shopt -s nullglob
-          for dmg in release/*.dmg; do
+          dmgs=(release/*.dmg)
+          if [ ${#dmgs[@]} -ne 1 ]; then
+            echo "Expected exactly one macOS ${{ matrix.arch }} DMG, found ${#dmgs[@]}."
+            exit 1
+          fi
+
+          for dmg in "${dmgs[@]}"; do
             base="$(basename "$dmg" .dmg)"
             package_dir="release/${base}-package"
             rm -rf "$package_dir"
@@ -219,15 +288,74 @@ jobs:
             rm -f "$dmg"
           done
 
-      - name: Upload release assets
+      - name: Stage macOS release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            client/release/*.zip
+            client/release/*.blockmap
+            client/release/latest-mac.yml
+          if-no-files-found: error
+
+  publish-macos:
+    name: Publish macOS
+    needs:
+      - create-release
+      - build-macos
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install manifest tooling
+        working-directory: client
+        run: npm ci --ignore-scripts --omit=optional
+
+      - name: Download macOS x64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-x64
+          path: artifacts/x64
+
+      - name: Download macOS arm64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-arm64
+          path: artifacts/arm64
+
+      - name: Merge macOS update manifests
+        run: |
+          node client/scripts/merge-mac-update-manifests.cjs \
+            artifacts/x64/latest-mac.yml \
+            artifacts/arm64/latest-mac.yml \
+            artifacts/latest-mac.yml
+
+      - name: Upload macOS release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
         run: |
           shopt -s nullglob
-          files=(release/*.exe release/*.msi release/*.zip release/*.blockmap release/latest*.yml)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No release assets found."
+          files=(
+            artifacts/x64/*.zip
+            artifacts/x64/*.blockmap
+            artifacts/arm64/*.zip
+            artifacts/arm64/*.blockmap
+            artifacts/latest-mac.yml
+          )
+          if [ ${#files[@]} -ne 5 ]; then
+            echo "Expected five macOS release assets, found ${#files[@]}."
             exit 1
           fi
           gh release upload "$TAG_NAME" "${files[@]}" --clobber

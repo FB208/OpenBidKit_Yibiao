@@ -124,6 +124,7 @@
     "cross-env": "^10.0.0",
     "electron": "^41.5.0",
     "electron-builder": "^26.8.1",
+    "js-yaml": "^4.1.1",
     "typescript": "^5.9.2",
     "vite": "^7.1.7",
     "wait-on": "^8.0.4"
