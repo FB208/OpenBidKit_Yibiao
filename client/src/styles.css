@@ -1804,6 +1804,81 @@ button {
   text-align: center;
 }
 
+/* ── 导出格式预览 — 正文样式 ──────────────────────── */
+.markdown-viewer.export-format-preview {
+  font-family: var(--ef-body-font, inherit);
+  font-size: var(--ef-body-size, inherit);
+  text-align: var(--ef-body-align, inherit);
+  line-height: var(--ef-body-line-height, inherit);
+  color: inherit;
+}
+.markdown-viewer.export-format-preview p {
+  margin-top: var(--ef-body-spacing-before, 0);
+  margin-bottom: var(--ef-body-spacing-after, 0);
+  text-indent: var(--ef-body-indent, 0);
+}
+.markdown-viewer.export-format-preview ul,
+.markdown-viewer.export-format-preview ol {
+  margin-top: var(--ef-body-spacing-before, 0);
+  margin-bottom: var(--ef-body-spacing-after, 0);
+}
+
+/* ── 导出格式预览 — 标题样式 ──────────────────────── */
+.markdown-viewer.export-format-preview h1 {
+  font-family: var(--ef-h1-font, inherit);
+  font-size: var(--ef-h1-size, inherit);
+  text-align: var(--ef-h1-align, inherit);
+  line-height: var(--ef-h1-line-height, inherit);
+  margin-top: var(--ef-h1-spacing-before, 0);
+  margin-bottom: var(--ef-h1-spacing-after, 0);
+  text-indent: var(--ef-h1-indent, 0);
+}
+.markdown-viewer.export-format-preview h2 {
+  font-family: var(--ef-h2-font, inherit);
+  font-size: var(--ef-h2-size, inherit);
+  text-align: var(--ef-h2-align, inherit);
+  line-height: var(--ef-h2-line-height, inherit);
+  margin-top: var(--ef-h2-spacing-before, 0);
+  margin-bottom: var(--ef-h2-spacing-after, 0);
+  text-indent: var(--ef-h2-indent, 0);
+}
+.markdown-viewer.export-format-preview h3 {
+  font-family: var(--ef-h3-font, inherit);
+  font-size: var(--ef-h3-size, inherit);
+  text-align: var(--ef-h3-align, inherit);
+  line-height: var(--ef-h3-line-height, inherit);
+  margin-top: var(--ef-h3-spacing-before, 0);
+  margin-bottom: var(--ef-h3-spacing-after, 0);
+  text-indent: var(--ef-h3-indent, 0);
+}
+.markdown-viewer.export-format-preview h4 {
+  font-family: var(--ef-h4-font, inherit);
+  font-size: var(--ef-h4-size, inherit);
+  text-align: var(--ef-h4-align, inherit);
+  line-height: var(--ef-h4-line-height, inherit);
+  margin-top: var(--ef-h4-spacing-before, 0);
+  margin-bottom: var(--ef-h4-spacing-after, 0);
+  text-indent: var(--ef-h4-indent, 0);
+}
+.markdown-viewer.export-format-preview h5 {
+  font-family: var(--ef-h5-font, inherit);
+  font-size: var(--ef-h5-size, inherit);
+  text-align: var(--ef-h5-align, inherit);
+  line-height: var(--ef-h5-line-height, inherit);
+  margin-top: var(--ef-h5-spacing-before, 0);
+  margin-bottom: var(--ef-h5-spacing-after, 0);
+  text-indent: var(--ef-h5-indent, 0);
+}
+.markdown-viewer.export-format-preview h6 {
+  font-family: var(--ef-h6-font, inherit);
+  font-size: var(--ef-h6-size, inherit);
+  text-align: var(--ef-h6-align, inherit);
+  line-height: var(--ef-h6-line-height, inherit);
+  margin-top: var(--ef-h6-spacing-before, 0);
+  margin-bottom: var(--ef-h6-spacing-after, 0);
+  text-indent: var(--ef-h6-indent, 0);
+}
+
 .markdown-clickable-image {
   cursor: zoom-in;
 }
@@ -9332,5 +9407,398 @@ button {
   .empty-panel,
   .settings-page-section {
     border-radius: 24px;
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   导出格式设置页
+   ═══════════════════════════════════════════════════ */
+
+.export-format-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.export-format-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--yb-text-muted);
+}
+
+.export-format-layout {
+  display: grid;
+  grid-template-columns: minmax(480px, 1fr) minmax(360px, 480px);
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── 左侧配置表单 ── */
+
+.export-format-config {
+  overflow-y: auto;
+  padding: 0 0 32px;
+}
+
+.export-format-header {
+  padding: 32px 36px 16px;
+}
+
+.export-format-header h2 {
+  margin: 8px 0 4px;
+  font-size: 24px;
+  color: var(--yb-text);
+}
+
+.export-format-header p {
+  color: var(--yb-text-soft);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* ── 预设卡片 ── */
+
+.export-format-preset-list {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  padding: 0 36px 8px;
+}
+
+.export-format-preset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  background: rgba(33, 116, 253, 0.04);
+  border: 2px solid transparent;
+  border-radius: 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.export-format-preset-card:hover {
+  background: rgba(33, 116, 253, 0.08);
+}
+
+.export-format-preset-card.is-active {
+  background: rgba(33, 116, 253, 0.06);
+  border-color: var(--yb-primary);
+}
+
+.export-format-preset-card strong {
+  font-size: 16px;
+  color: var(--yb-text);
+}
+
+.export-format-preset-hint {
+  font-size: 13px;
+  color: var(--yb-text-muted);
+  line-height: 1.5;
+}
+
+/* ── 页边距网格 ── */
+
+.export-format-margin-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.export-format-margin-grid input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  color: var(--yb-text);
+  background-color: #eef3fa;
+  border: 1px solid #ccd6e3;
+  border-radius: 14px;
+  outline: none;
+  text-align: center;
+}
+
+.export-format-margin-grid input:focus {
+  background-color: #ffffff;
+  border-color: rgba(33, 116, 253, 0.58);
+  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.12);
+}
+
+/* ── 行内开关 + 输入 ── */
+/* 复用 .settings-switch-control，这里只保留弹性容器 */
+
+.export-format-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ── 标题格式卡片 ── */
+
+.export-format-heading-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 36px 8px;
+}
+
+.export-format-heading-card {
+  background: rgba(33, 116, 253, 0.02);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.export-format-heading-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 18px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.export-format-heading-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--yb-text);
+}
+
+.export-format-heading-example {
+  font-size: 13px;
+  color: var(--yb-text-muted);
+  flex: 1;
+}
+
+.export-format-heading-chevron {
+  font-size: 14px;
+  color: var(--yb-text-muted);
+  transition: transform 0.2s;
+}
+
+.export-format-heading-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.export-format-heading-body {
+  padding: 0 18px 18px;
+}
+
+.export-format-heading-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  padding: 0 36px 8px;
+}
+
+.export-format-heading-card .export-format-heading-grid {
+  padding: 0;
+}
+
+.export-format-heading-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.export-format-heading-grid label > span {
+  font-size: 13px;
+  color: var(--yb-text-soft);
+}
+
+.export-format-heading-grid select,
+.export-format-heading-grid input {
+  min-height: 38px;
+  padding: 8px 12px;
+  color: var(--yb-text);
+  background: #eef3fa;
+  border: 1px solid #ccd6e3;
+  border-radius: 14px;
+  outline: none;
+  font-size: 14px;
+}
+
+.export-format-heading-grid select:focus,
+.export-format-heading-grid input:focus {
+  background: var(--yb-surface);
+  border-color: rgba(33, 116, 253, 0.58);
+  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.12);
+}
+
+.export-format-heading-switch {
+  flex-direction: row !important;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ── 右侧预览面板 ── */
+
+.export-format-preview-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--yb-bg);
+  border-left: 1px solid var(--yb-border-soft);
+}
+
+.export-format-preview-header {
+  padding: 24px 24px 12px;
+}
+
+.export-format-preview-header strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 15px;
+  color: var(--yb-text);
+}
+
+.export-format-preview-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  justify-content: center;
+}
+
+/* ── A4 纸面模拟 ── */
+
+.export-format-paper {
+  width: 210mm;
+  max-width: 100%;
+  padding: var(--ef-page-padding-top, 2cm) var(--ef-page-padding-right, 2cm) var(--ef-page-padding-bottom, 2cm) var(--ef-page-padding-left, 2cm);
+  background: var(--yb-surface);
+  box-shadow: var(--yb-shadow), 0 0 1px rgba(0, 0, 0, 0.06);
+  border-radius: 2px;
+  font-family: var(--ef-body-font, 'SimSun', serif);
+  font-size: var(--ef-body-size, 12pt);
+  color: var(--yb-text);
+  line-height: var(--ef-body-line-height, 1.5);
+}
+
+/* 预览内容 — 正文段落 */
+.export-format-preview-content p {
+  font-family: var(--ef-body-font, 'SimSun', serif);
+  font-size: var(--ef-body-size, 12pt);
+  text-align: var(--ef-body-align, justify);
+  margin-top: var(--ef-body-spacing-before, 0pt);
+  margin-bottom: var(--ef-body-spacing-after, 0pt);
+  text-indent: var(--ef-body-indent, 2em);
+  line-height: var(--ef-body-line-height, 1.5);
+}
+
+/* 预览内容 — 各级标题 */
+.export-format-preview-content h1 {
+  font-family: var(--ef-h1-font, 'SimHei', sans-serif);
+  font-size: var(--ef-h1-size, 18pt);
+  text-align: var(--ef-h1-align, center);
+  margin-top: var(--ef-h1-spacing-before, 10pt);
+  margin-bottom: var(--ef-h1-spacing-after, 10pt);
+  text-indent: var(--ef-h1-indent, 0);
+  line-height: var(--ef-h1-line-height, 1);
+  font-weight: normal;
+}
+
+.export-format-preview-content h2 {
+  font-family: var(--ef-h2-font, 'SimHei', sans-serif);
+  font-size: var(--ef-h2-size, 14pt);
+  text-align: var(--ef-h2-align, justify);
+  margin-top: var(--ef-h2-spacing-before, 10pt);
+  margin-bottom: var(--ef-h2-spacing-after, 10pt);
+  text-indent: var(--ef-h2-indent, 0);
+  line-height: var(--ef-h2-line-height, 1);
+  font-weight: normal;
+}
+
+.export-format-preview-content h3 {
+  font-family: var(--ef-h3-font, 'SimHei', sans-serif);
+  font-size: var(--ef-h3-size, 12pt);
+  text-align: var(--ef-h3-align, justify);
+  margin-top: var(--ef-h3-spacing-before, 10pt);
+  margin-bottom: var(--ef-h3-spacing-after, 10pt);
+  text-indent: var(--ef-h3-indent, 0);
+  line-height: var(--ef-h3-line-height, 1);
+  font-weight: normal;
+}
+
+.export-format-preview-content h4 {
+  font-family: var(--ef-h4-font, 'KaiTi', serif);
+  font-size: var(--ef-h4-size, 12pt);
+  text-align: var(--ef-h4-align, justify);
+  margin-top: var(--ef-h4-spacing-before, 5pt);
+  margin-bottom: var(--ef-h4-spacing-after, 5pt);
+  text-indent: var(--ef-h4-indent, 0);
+  line-height: var(--ef-h4-line-height, 1);
+  font-weight: normal;
+}
+
+.export-format-preview-content h5 {
+  font-family: var(--ef-h5-font, 'SimHei', sans-serif);
+  font-size: var(--ef-h5-size, 12pt);
+  text-align: var(--ef-h5-align, justify);
+  margin-top: var(--ef-h5-spacing-before, 5pt);
+  margin-bottom: var(--ef-h5-spacing-after, 5pt);
+  text-indent: var(--ef-h5-indent, 0);
+  line-height: var(--ef-h5-line-height, 1);
+  font-weight: normal;
+}
+
+.export-format-preview-content h6 {
+  font-family: var(--ef-h6-font, 'SimSun', serif);
+  font-size: var(--ef-h6-size, 12pt);
+  text-align: var(--ef-h6-align, justify);
+  margin-top: var(--ef-h6-spacing-before, 0pt);
+  margin-bottom: var(--ef-h6-spacing-after, 0pt);
+  text-indent: var(--ef-h6-indent, 0);
+  line-height: var(--ef-h6-line-height, 1);
+  font-weight: normal;
+}
+
+/* 预览内容 — 表格 */
+.export-format-preview-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-family: var(--ef-body-font, 'SimSun', serif);
+  font-size: var(--ef-body-size, 12pt);
+}
+
+.export-format-preview-content th,
+.export-format-preview-content td {
+  padding: 6px 10px;
+  border: 1px solid var(--yb-border);
+  text-align: left;
+}
+
+.export-format-preview-content th {
+  background: rgba(33, 116, 253, 0.06);
+  font-weight: 600;
+}
+
+/* ── 响应式 ── */
+
+@media (max-width: 1100px) {
+  .export-format-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 400px;
+  }
+
+  .export-format-preview-panel {
+    border-left: none;
+    border-top: 1px solid var(--yb-border-soft);
+  }
+
+  .export-format-preset-list {
+    grid-template-columns: 1fr;
   }
 }

@@ -11,6 +11,8 @@ import { trackPageView } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanStep } from '../types';
 import type { OutlineData, OutlineItem, WordExportProgressEvent } from '../../../shared/types';
+import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
+import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 
 interface TechnicalPlanHomeProps {
   registerLeaveGuard?: (guard: ((nextSection?: string) => Promise<boolean>) | null) => void;
@@ -135,6 +137,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const { showToast } = useToast();
   const [tenderMarkdown, setTenderMarkdown] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
+  const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const [sortLeaveDialogOpen, setSortLeaveDialogOpen] = useState(false);
   const [savingSortBeforeLeave, setSavingSortBeforeLeave] = useState(false);
   const sortGuardRef = useRef<OutlineSortGuard | null>(null);
@@ -216,6 +219,16 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
 
     trackPageView(`technical-plan/${state.step}`);
   }, [hydrated, state.step]);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.yibiao?.config.load().then((cfg) => {
+      if (!cancelled && cfg?.export_format) {
+        setExportFormat(cfg.export_format);
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!registerLeaveGuard) return;
@@ -384,6 +397,15 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       return;
     }
 
+    // 每次导出前重新读取最新配置（用户可能在导出格式页修改过）
+    let latestExportFormat = exportFormat;
+    try {
+      const cfg = await window.yibiao?.config.load();
+      if (cfg?.export_format) {
+        latestExportFormat = cfg.export_format;
+      }
+    } catch { /* 读不到用已有值 */ }
+
     const requestId = `export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const mermaidCount = countOutlineMermaidDiagrams(state.outlineData.outline);
     let unsubscribe: (() => void) | undefined;
@@ -420,6 +442,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         requestId,
         project_name: state.outlineData.project_name,
         outline: state.outlineData.outline,
+        export_format: latestExportFormat,
       });
       if (result?.canceled) {
         setExportProgress(initialExportProgress);

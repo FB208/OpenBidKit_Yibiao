@@ -43,6 +43,26 @@ export type {
   TextModelProfiles,
 } from './config';
 export type { AppMenuItem, SectionId } from './navigation';
+export type {
+  ExportFormatConfig,
+  NumberingFormat,
+  HeadingStyleConfig,
+  BodyTextStyleConfig,
+  PageSetupConfig,
+} from './exportFormat';
+export {
+  FONT_OPTIONS,
+  SIZE_OPTIONS,
+  ALIGNMENT_OPTIONS,
+  SIZE_TO_PT,
+  FONT_TO_CSS,
+  ALIGNMENT_TO_CSS,
+  NUMBERING_FORMATS,
+  PAPER_SIZES,
+  PAPER_DIMENSIONS,
+  DEFAULT_EXPORT_FORMAT,
+  HEADING_LEVEL_LABELS,
+} from './exportFormat';
 export type { OutlineData, OutlineItem, OutlineMode, TechnicalRequirementGroup } from './outline';
 export type { LatestReleaseInfo, UpdateCheckResult, WordExportProgressEvent, WordExportResult, WorkspaceDatabasePhase, WorkspaceDatabaseStatus, YibiaoBridge } from './ipc';
 export type {

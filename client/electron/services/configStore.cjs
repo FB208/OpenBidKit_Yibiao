@@ -88,6 +88,41 @@ const defaultImageModelProfiles = {
   },
 };
 
+const defaultExportFormat = {
+  page: {
+    paper_size: 'a4',
+    orientation: 'portrait',
+    margin_top_cm: 2,
+    margin_bottom_cm: 2,
+    margin_left_cm: 2,
+    margin_right_cm: 2,
+    footer_enabled: true,
+    footer_distance_cm: 1.75,
+    footer_font: '宋体',
+    footer_size: '小五',
+    page_number_enabled: true,
+    page_number_format: '第{page}页',
+    header_enabled: false,
+  },
+  headings: [
+    { font: '黑体', size: '小二', alignment: '居中对齐', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'chinese-chapter' },
+    { font: '黑体', size: '四号', alignment: '两端对齐', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 1.5, line_spacing: 1, numbering_format: 'chinese-section' },
+    { font: '黑体', size: '小四', alignment: '两端对齐', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'chinese-dun' },
+    { font: '楷体', size: '小四', alignment: '两端对齐', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'chinese-paren' },
+    { font: '黑体', size: '小四', alignment: '两端对齐', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'arabic-dun' },
+    { font: '宋体', size: '小四', alignment: '两端对齐', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'arabic-paren' },
+  ],
+  body_text: {
+    font: '宋体',
+    size: '小四',
+    alignment: '两端对齐',
+    spacing_before_pt: 0,
+    spacing_after_pt: 0,
+    first_line_indent_chars: 2,
+    line_spacing_multiple: 1.2,
+  },
+};
+
 const defaultConfig = {
   text_model_provider: 'jinlong',
   text_model_profiles: defaultTextModelProfiles,
@@ -102,6 +137,7 @@ const defaultConfig = {
     provider: 'local',
     mineru_token: '',
   },
+  export_format: defaultExportFormat,
   developer_mode: false,
   analytics_client_id: '',
   analytics_created_at: '',
@@ -185,6 +221,59 @@ function normalizeImageModelProfiles(sourceProfiles) {
   return profiles;
 }
 
+const VALID_NUMBERING_FORMATS = ['chinese-chapter','chinese-section','chinese-dun','chinese-paren','arabic-dun','arabic-dot','arabic-paren','arabic','none'];
+
+function normalizeExportFormat(source) {
+  const def = defaultExportFormat;
+  if (!source || typeof source !== 'object') return { page: { ...def.page }, headings: def.headings.map(h => ({ ...h })), body_text: { ...def.body_text } };
+
+  const srcPage = source.page && typeof source.page === 'object' ? source.page : {};
+  const page = {
+    paper_size: ['a4','a3','a5','b4','b5','letter','legal','16k'].includes(srcPage.paper_size) ? srcPage.paper_size : def.page.paper_size,
+    orientation: ['portrait', 'landscape'].includes(srcPage.orientation) ? srcPage.orientation : def.page.orientation,
+    margin_top_cm: typeof srcPage.margin_top_cm === 'number' ? srcPage.margin_top_cm : def.page.margin_top_cm,
+    margin_bottom_cm: typeof srcPage.margin_bottom_cm === 'number' ? srcPage.margin_bottom_cm : def.page.margin_bottom_cm,
+    margin_left_cm: typeof srcPage.margin_left_cm === 'number' ? srcPage.margin_left_cm : def.page.margin_left_cm,
+    margin_right_cm: typeof srcPage.margin_right_cm === 'number' ? srcPage.margin_right_cm : def.page.margin_right_cm,
+    footer_enabled: typeof srcPage.footer_enabled === 'boolean' ? srcPage.footer_enabled : def.page.footer_enabled,
+    footer_distance_cm: typeof srcPage.footer_distance_cm === 'number' ? srcPage.footer_distance_cm : def.page.footer_distance_cm,
+    footer_font: typeof srcPage.footer_font === 'string' && srcPage.footer_font ? srcPage.footer_font : def.page.footer_font,
+    footer_size: typeof srcPage.footer_size === 'string' && srcPage.footer_size ? srcPage.footer_size : def.page.footer_size,
+    page_number_enabled: typeof srcPage.page_number_enabled === 'boolean' ? srcPage.page_number_enabled : def.page.page_number_enabled,
+    page_number_format: typeof srcPage.page_number_format === 'string' && srcPage.page_number_format ? srcPage.page_number_format : def.page.page_number_format,
+    header_enabled: typeof srcPage.header_enabled === 'boolean' ? srcPage.header_enabled : def.page.header_enabled,
+  };
+
+  const srcHeadings = Array.isArray(source.headings) ? source.headings : [];
+  const headings = def.headings.map((defH, i) => {
+    const srcH = srcHeadings[i];
+    if (!srcH || typeof srcH !== 'object') return { ...defH };
+    return {
+      font: typeof srcH.font === 'string' && srcH.font ? srcH.font : defH.font,
+      size: typeof srcH.size === 'string' && srcH.size ? srcH.size : defH.size,
+      alignment: typeof srcH.alignment === 'string' && srcH.alignment ? srcH.alignment : defH.alignment,
+      spacing_before_pt: typeof srcH.spacing_before_pt === 'number' ? srcH.spacing_before_pt : defH.spacing_before_pt,
+      spacing_after_pt: typeof srcH.spacing_after_pt === 'number' ? srcH.spacing_after_pt : defH.spacing_after_pt,
+      first_line_indent_chars: typeof srcH.first_line_indent_chars === 'number' ? srcH.first_line_indent_chars : defH.first_line_indent_chars,
+      line_spacing: typeof srcH.line_spacing === 'number' ? srcH.line_spacing : defH.line_spacing,
+      numbering_format: typeof srcH.numbering_format === 'string' && VALID_NUMBERING_FORMATS.includes(srcH.numbering_format) ? srcH.numbering_format : defH.numbering_format,
+    };
+  });
+
+  const srcBody = source.body_text && typeof source.body_text === 'object' ? source.body_text : {};
+  const body_text = {
+    font: typeof srcBody.font === 'string' && srcBody.font ? srcBody.font : def.body_text.font,
+    size: typeof srcBody.size === 'string' && srcBody.size ? srcBody.size : def.body_text.size,
+    alignment: typeof srcBody.alignment === 'string' && srcBody.alignment ? srcBody.alignment : def.body_text.alignment,
+    spacing_before_pt: typeof srcBody.spacing_before_pt === 'number' ? srcBody.spacing_before_pt : def.body_text.spacing_before_pt,
+    spacing_after_pt: typeof srcBody.spacing_after_pt === 'number' ? srcBody.spacing_after_pt : def.body_text.spacing_after_pt,
+    first_line_indent_chars: typeof srcBody.first_line_indent_chars === 'number' ? srcBody.first_line_indent_chars : def.body_text.first_line_indent_chars,
+    line_spacing_multiple: typeof srcBody.line_spacing_multiple === 'number' ? srcBody.line_spacing_multiple : def.body_text.line_spacing_multiple,
+  };
+
+  return { page, headings, body_text };
+}
+
 function normalizeConfig(config) {
   const source = config || {};
   const fileParser = source.file_parser ? source.file_parser : {};
@@ -215,6 +304,7 @@ function normalizeConfig(config) {
       provider: fileParser.provider || defaultConfig.file_parser.provider,
       mineru_token: fileParser.mineru_token || defaultConfig.file_parser.mineru_token,
     },
+    export_format: normalizeExportFormat(source.export_format),
     developer_mode: source.developer_mode === undefined ? defaultConfig.developer_mode : Boolean(source.developer_mode),
     analytics_client_id: source.analytics_client_id || defaultConfig.analytics_client_id,
     analytics_created_at: source.analytics_created_at || defaultConfig.analytics_created_at,

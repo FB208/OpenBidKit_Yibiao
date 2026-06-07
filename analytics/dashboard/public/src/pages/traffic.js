@@ -34,6 +34,7 @@ const pageLabels = {
   'rejection-check/results/rejection': '废标项检查 - 废标项结果',
   'rejection-check/results/typo': '废标项检查 - 错别字结果',
   'rejection-check/results/logic': '废标项检查 - 逻辑谬误结果',
+  'export-format': '导出格式',
   'bid-opportunity': '投标机会',
   'developer-test': '测试页',
   'developer-json-test': '测试页 - Json请求测试',
