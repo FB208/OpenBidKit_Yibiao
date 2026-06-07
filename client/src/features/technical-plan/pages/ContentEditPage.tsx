@@ -10,6 +10,7 @@ import { countReadableWords } from '../../../shared/utils/wordCount';
 import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement } from '../types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
+import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
 
 interface ContentEditPageProps {
@@ -346,6 +347,7 @@ function ContentEditPage({
   const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
   const selectedContent = selectedItem && selectedIsLeaf ? getLeafContent(selectedItem, sections) : '';
+  const exportFormatPreviewStyle = useMemo<CSSProperties>(() => buildExportFormatCssVars(exportFormat), [exportFormat]);
   const running = task?.status === 'running';
   const pausing = task?.status === 'pausing' || pausePending;
   const paused = task?.status === 'paused';
@@ -1015,7 +1017,7 @@ function ContentEditPage({
               placeholder="输入 Markdown 正文..."
             />
           ) : selectedItem && selectedIsLeaf && editing && isPreviewing ? (
-            <div className="markdown-viewer content-generation-output">
+            <div className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle}>
               {draftContent.trim() ? (
                 <MarkdownContent content={draftContent} onPreviewImage={handlePreviewImage} />
               ) : (
@@ -1023,7 +1025,7 @@ function ContentEditPage({
               )}
             </div>
           ) : selectedItem && selectedIsLeaf && selectedContent.trim() ? (
-            <div className="markdown-viewer content-generation-output">
+            <div className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle}>
               <MarkdownContent content={selectedContent} onPreviewImage={handlePreviewImage} />
             </div>
           ) : selectedItem && selectedIsLeaf ? (

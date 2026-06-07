@@ -1804,6 +1804,81 @@ button {
   text-align: center;
 }
 
+/* ── 导出格式预览 — 正文样式 ──────────────────────── */
+.markdown-viewer.export-format-preview {
+  font-family: var(--ef-body-font, inherit);
+  font-size: var(--ef-body-size, inherit);
+  text-align: var(--ef-body-align, inherit);
+  line-height: var(--ef-body-line-height, inherit);
+  color: inherit;
+}
+.markdown-viewer.export-format-preview p {
+  margin-top: var(--ef-body-spacing-before, 0);
+  margin-bottom: var(--ef-body-spacing-after, 0);
+  text-indent: var(--ef-body-indent, 0);
+}
+.markdown-viewer.export-format-preview ul,
+.markdown-viewer.export-format-preview ol {
+  margin-top: var(--ef-body-spacing-before, 0);
+  margin-bottom: var(--ef-body-spacing-after, 0);
+}
+
+/* ── 导出格式预览 — 标题样式 ──────────────────────── */
+.markdown-viewer.export-format-preview h1 {
+  font-family: var(--ef-h1-font, inherit);
+  font-size: var(--ef-h1-size, inherit);
+  text-align: var(--ef-h1-align, inherit);
+  line-height: var(--ef-h1-line-height, inherit);
+  margin-top: var(--ef-h1-spacing-before, 0);
+  margin-bottom: var(--ef-h1-spacing-after, 0);
+  text-indent: var(--ef-h1-indent, 0);
+}
+.markdown-viewer.export-format-preview h2 {
+  font-family: var(--ef-h2-font, inherit);
+  font-size: var(--ef-h2-size, inherit);
+  text-align: var(--ef-h2-align, inherit);
+  line-height: var(--ef-h2-line-height, inherit);
+  margin-top: var(--ef-h2-spacing-before, 0);
+  margin-bottom: var(--ef-h2-spacing-after, 0);
+  text-indent: var(--ef-h2-indent, 0);
+}
+.markdown-viewer.export-format-preview h3 {
+  font-family: var(--ef-h3-font, inherit);
+  font-size: var(--ef-h3-size, inherit);
+  text-align: var(--ef-h3-align, inherit);
+  line-height: var(--ef-h3-line-height, inherit);
+  margin-top: var(--ef-h3-spacing-before, 0);
+  margin-bottom: var(--ef-h3-spacing-after, 0);
+  text-indent: var(--ef-h3-indent, 0);
+}
+.markdown-viewer.export-format-preview h4 {
+  font-family: var(--ef-h4-font, inherit);
+  font-size: var(--ef-h4-size, inherit);
+  text-align: var(--ef-h4-align, inherit);
+  line-height: var(--ef-h4-line-height, inherit);
+  margin-top: var(--ef-h4-spacing-before, 0);
+  margin-bottom: var(--ef-h4-spacing-after, 0);
+  text-indent: var(--ef-h4-indent, 0);
+}
+.markdown-viewer.export-format-preview h5 {
+  font-family: var(--ef-h5-font, inherit);
+  font-size: var(--ef-h5-size, inherit);
+  text-align: var(--ef-h5-align, inherit);
+  line-height: var(--ef-h5-line-height, inherit);
+  margin-top: var(--ef-h5-spacing-before, 0);
+  margin-bottom: var(--ef-h5-spacing-after, 0);
+  text-indent: var(--ef-h5-indent, 0);
+}
+.markdown-viewer.export-format-preview h6 {
+  font-family: var(--ef-h6-font, inherit);
+  font-size: var(--ef-h6-size, inherit);
+  text-align: var(--ef-h6-align, inherit);
+  line-height: var(--ef-h6-line-height, inherit);
+  margin-top: var(--ef-h6-spacing-before, 0);
+  margin-bottom: var(--ef-h6-spacing-after, 0);
+  text-indent: var(--ef-h6-indent, 0);
+}
+
 .markdown-clickable-image {
   cursor: zoom-in;
 }
