@@ -1391,7 +1391,8 @@ async function buildDocxResult(payload, options = {}) {
     bottom: cmToTwips(pageSetup.margin_bottom_cm || 2),
     left: cmToTwips(pageSetup.margin_left_cm || 2),
     right: cmToTwips(pageSetup.margin_right_cm || 2),
-  } : { top: 1440, right: 1440, bottom: 1440, left: 1440 };
+    footer: cmToTwips(pageSetup.footer_distance_cm ?? 1.75),
+  } : { top: 1440, right: 1440, bottom: 1440, left: 1440, footer: cmToTwips(1.75) };
 
   // 纸张尺寸与方向
   const pageSizeConfig = {};
