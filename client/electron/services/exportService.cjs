@@ -35,6 +35,22 @@ const DOCX_TABLE_WIDTH_TWIPS = 9000;
 const MERMAID_EXPORT_RETRY_ATTEMPTS = 2;
 const MERMAID_EXPORT_RETRY_DELAY_MS = 3000;
 
+// 纸张尺寸 mm（portrait 模式 width × height），与 Renderer exportFormat.ts 保持一致
+const PAPER_DIMENSIONS_MM = {
+  a4: { width: 210, height: 297 },
+  a3: { width: 297, height: 420 },
+  a5: { width: 148, height: 210 },
+  b4: { width: 250, height: 353 },
+  b5: { width: 176, height: 250 },
+  letter: { width: 215.9, height: 279.4 },
+  legal: { width: 215.9, height: 355.6 },
+  '16k': { width: 184, height: 260 },
+};
+
+function mmToTwips(mm) {
+  return Math.round(mm * 56.6929); // 1mm = 1440 twips ÷ 25.4 mm/inch
+}
+
 function encodeMermaidForInk(code) {
   const state = JSON.stringify({
     code: String(code || ''),
@@ -765,6 +781,13 @@ async function imageParagraphFromSource(source, alt, context, options = {}) {
 }
 
 async function inlineRuns(nodes = [], context = {}, marks = {}) {
+  // 正文样式作为基础，调用方显式传入的 font/size 覆盖（如标题、代码）
+  if (context.bodyRunFont && !('font' in marks)) {
+    marks = { font: context.bodyRunFont, ...marks };
+  }
+  if (context.bodyRunSize && !('size' in marks)) {
+    marks = { size: context.bodyRunSize, ...marks };
+  }
   const runs = [];
 
   for (const node of nodes) {
@@ -822,6 +845,13 @@ function hasBlockHtmlChildren($, node) {
 }
 
 async function htmlInlineRuns($, nodes = [], context = {}, marks = {}) {
+  // 正文样式作为基础，调用方显式传入的 font/size 覆盖
+  if (context.bodyRunFont && !('font' in marks)) {
+    marks = { font: context.bodyRunFont, ...marks };
+  }
+  if (context.bodyRunSize && !('size' in marks)) {
+    marks = { size: context.bodyRunSize, ...marks };
+  }
   const runs = [];
 
   for (const node of nodes) {
@@ -911,6 +941,9 @@ async function htmlListToDocx($, listNode, context, options = {}) {
     const listOptions = ordered
       ? { numbering: { reference: numberingReference, level: Math.min(options.listLevel || 0, 2) } }
       : { bullet: { level: Math.min(options.listLevel || 0, 2) } };
+    // 列表项继承正文行距和段后间距
+    if (context.bodyLineSpacing) listOptions.line = context.bodyLineSpacing;
+    if (context.bodyAfterSpacing != null) listOptions.after = context.bodyAfterSpacing;
     blocks.push(paragraph(await htmlInlineRuns($, inlineNodes, context), listOptions));
 
     for (const childList of $(itemNode).children('ul,ol').toArray()) {
@@ -921,10 +954,26 @@ async function htmlListToDocx($, listNode, context, options = {}) {
   return blocks;
 }
 
+/** 从 context 提取正文段落选项，供 HTML 正文段落使用 */
+function buildHtmlBodyParaOpts(context) {
+  const opts = {};
+  if (context.bodyAfterSpacing != null) opts.after = context.bodyAfterSpacing;
+  if (context.bodyLineSpacing) opts.line = context.bodyLineSpacing;
+  if (context.bodyAlignment) opts.alignment = context.bodyAlignment;
+  if (context.bodyIndent) opts.indent = context.bodyIndent;
+  if (context.bodyBeforeSpacing) opts.before = context.bodyBeforeSpacing;
+  return opts;
+}
+
 async function htmlNodeToDocxBlocks($, node, context, options = {}) {
   if (node.type === 'text') {
     const text = String(node.data || '').trim();
-    return text ? [paragraph([textRun(text)])] : [];
+    if (!text) return [];
+    const runOpts = {};
+    if (context.bodyRunFont) runOpts.font = context.bodyRunFont;
+    if (context.bodyRunSize) runOpts.size = context.bodyRunSize;
+    const paraOpts = buildHtmlBodyParaOpts(context);
+    return [paragraph([textRun(text, runOpts)], paraOpts)];
   }
 
   if (node.type !== 'tag') {
@@ -964,9 +1013,10 @@ async function htmlNodeToDocxBlocks($, node, context, options = {}) {
     return htmlNodesToDocxBlocks($, $(node).contents().toArray(), context, options);
   }
   if (['p', 'div', 'section', 'article', 'span', 'strong', 'b', 'em', 'i', 'a', 'code'].includes(tag)) {
-    return [paragraph(await htmlInlineRuns($, $(node).contents().toArray(), context), {
-      alignment: /^图[:：]/.test($(node).text().trim()) ? AlignmentType.CENTER : undefined,
-    })];
+    const isFigureCaption = /^图[:：]/.test($(node).text().trim());
+    const htmlParaOpts = buildHtmlBodyParaOpts(context);
+    if (isFigureCaption) htmlParaOpts.alignment = AlignmentType.CENTER;
+    return [paragraph(await htmlInlineRuns($, $(node).contents().toArray(), context), htmlParaOpts)];
   }
 
   addUnsupportedHtmlWarning(context, tag);
@@ -1037,10 +1087,21 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
       }
       blocks.push(paragraph(await inlineRuns(node.children, context, runMarks), headingOpts));
     } else if (node.type === 'paragraph') {
-      blocks.push(paragraph(await inlineRuns(node.children, context), {
-        after: options.inTable ? 80 : 160,
-        alignment: !options.inTable && (isImageOnlyParagraph(node) || isFigureCaptionParagraph(node)) ? AlignmentType.CENTER : undefined,
-      }));
+      const isImagePara = !options.inTable && (isImageOnlyParagraph(node) || isFigureCaptionParagraph(node));
+      const bodyParaOpts = {
+        after: options.inTable ? 80 : (context.bodyAfterSpacing ?? 160),
+        alignment: isImagePara ? AlignmentType.CENTER : (context.bodyAlignment || undefined),
+      };
+      if (!options.inTable && context.bodyLineSpacing) {
+        bodyParaOpts.line = context.bodyLineSpacing;
+      }
+      if (!options.inTable && context.bodyIndent) {
+        bodyParaOpts.indent = context.bodyIndent;
+      }
+      if (!options.inTable && context.bodyBeforeSpacing) {
+        bodyParaOpts.before = context.bodyBeforeSpacing;
+      }
+      blocks.push(paragraph(await inlineRuns(node.children, context), bodyParaOpts));
     } else if (node.type === 'list') {
       const numberingReference = node.ordered ? createOrderedListReference(context) : null;
       for (const item of node.children || []) {
@@ -1049,6 +1110,9 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
         const listOptions = node.ordered
           ? { numbering: { reference: numberingReference, level: Math.min(options.listLevel || 0, 2) } }
           : { bullet: { level: Math.min(options.listLevel || 0, 2) } };
+        // 列表项继承正文行距和段后间距
+        if (context.bodyLineSpacing) listOptions.line = context.bodyLineSpacing;
+        if (context.bodyAfterSpacing != null) listOptions.after = context.bodyAfterSpacing;
         blocks.push(paragraph(await inlineRuns(firstParagraph?.children || [], context), listOptions));
         blocks.push(...await markdownNodesToDocx(restChildren, context, { ...options, listLevel: (options.listLevel || 0) + 1 }));
       }
@@ -1294,6 +1358,21 @@ async function buildDocxResult(payload, options = {}) {
   const bodyLineSpacing = bodyStyle ? 240 * (bodyStyle.line_spacing_multiple || 1.2) : 360;
   const bodyAfterSpacing = bodyStyle ? (bodyStyle.spacing_after_pt || 0) * 20 : 160;
 
+  // 注入正文样式到 context，供正文段落/文本渲染时使用
+  context.bodyRunFont = bodyFont;
+  context.bodyRunSize = bodySizeHalfPt;
+  context.bodyLineSpacing = bodyLineSpacing;
+  context.bodyAfterSpacing = bodyAfterSpacing;
+  if (bodyStyle) {
+    context.bodyAlignment = alignmentToWordType(bodyStyle.alignment);
+    if (bodyStyle.first_line_indent_chars > 0) {
+      context.bodyIndent = { firstLine: bodyStyle.first_line_indent_chars * 240 };
+    }
+    if (bodyStyle.spacing_before_pt > 0) {
+      context.bodyBeforeSpacing = bodyStyle.spacing_before_pt * 20;
+    }
+  }
+
   const children = [
     paragraph([textRun('内容由 AI 生成', { italics: true, size: 18 })], { alignment: AlignmentType.CENTER, after: 120 }),
     paragraph([textRun(payload.project_name || '投标技术文件', { bold: true, size: 34 })], { alignment: AlignmentType.CENTER, after: 300 }),
@@ -1313,6 +1392,22 @@ async function buildDocxResult(payload, options = {}) {
     left: cmToTwips(pageSetup.margin_left_cm || 2),
     right: cmToTwips(pageSetup.margin_right_cm || 2),
   } : { top: 1440, right: 1440, bottom: 1440, left: 1440 };
+
+  // 纸张尺寸与方向
+  const pageSizeConfig = {};
+  if (pageSetup && pageSetup.paper_size) {
+    const dims = PAPER_DIMENSIONS_MM[pageSetup.paper_size];
+    if (dims) {
+      const isLandscape = pageSetup.orientation === 'landscape';
+      pageSizeConfig.size = {
+        width: mmToTwips(isLandscape ? dims.height : dims.width),
+        height: mmToTwips(isLandscape ? dims.width : dims.height),
+      };
+      if (isLandscape) {
+        pageSizeConfig.orientation = 'landscape';
+      }
+    }
+  }
 
   // 页脚 — 页码
   const sectionChildren = [...children];
@@ -1363,6 +1458,7 @@ async function buildDocxResult(payload, options = {}) {
       properties: {
         page: {
           margin: pageMargin,
+          ...pageSizeConfig,
         },
       },
       footers,
