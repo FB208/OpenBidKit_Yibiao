@@ -273,8 +273,27 @@ function MermaidBlock({ code }: { code: string }) {
   );
 }
 
+function reactNodeText(children: ReactNode): string {
+  return Children.toArray(children).map((child) => {
+    if (typeof child === 'string' || typeof child === 'number') {
+      return String(child);
+    }
+    if (isValidElement<{ children?: ReactNode }>(child)) {
+      return reactNodeText(child.props.children);
+    }
+    return '';
+  }).join('');
+}
+
 const MarkdownContent = memo(function MarkdownContent({ content, onPreviewImage }: { content: string; onPreviewImage: (src: string, alt: string) => void }) {
   const markdownComponents = useMemo<Components>(() => ({
+    p({ children, className, ...props }) {
+      const isFigureCaption = /^图[:：]/.test(reactNodeText(children).trim());
+      const nextClassName = isFigureCaption
+        ? [className, 'markdown-figure-caption'].filter(Boolean).join(' ')
+        : className;
+      return <p {...props} className={nextClassName}>{children}</p>;
+    },
     pre({ children, ...props }) {
       const child = Children.count(children) === 1 ? Children.only(children) : null;
       if (isValidElement(child)) {

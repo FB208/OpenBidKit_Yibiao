@@ -18,6 +18,7 @@ const {
   LevelFormat,
   Packer,
   PageNumber,
+  PageOrientation,
   Paragraph,
   ShadingType,
   Table,
@@ -1015,7 +1016,10 @@ async function htmlNodeToDocxBlocks($, node, context, options = {}) {
   if (['p', 'div', 'section', 'article', 'span', 'strong', 'b', 'em', 'i', 'a', 'code'].includes(tag)) {
     const isFigureCaption = /^图[:：]/.test($(node).text().trim());
     const htmlParaOpts = buildHtmlBodyParaOpts(context);
-    if (isFigureCaption) htmlParaOpts.alignment = AlignmentType.CENTER;
+    if (isFigureCaption) {
+      htmlParaOpts.alignment = AlignmentType.CENTER;
+      delete htmlParaOpts.indent;
+    }
     return [paragraph(await htmlInlineRuns($, $(node).contents().toArray(), context), htmlParaOpts)];
   }
 
@@ -1095,7 +1099,7 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
       if (!options.inTable && context.bodyLineSpacing) {
         bodyParaOpts.line = context.bodyLineSpacing;
       }
-      if (!options.inTable && context.bodyIndent) {
+      if (!options.inTable && !isImagePara && context.bodyIndent) {
         bodyParaOpts.indent = context.bodyIndent;
       }
       if (!options.inTable && context.bodyBeforeSpacing) {
@@ -1403,10 +1407,8 @@ async function buildDocxResult(payload, options = {}) {
       pageSizeConfig.size = {
         width: mmToTwips(isLandscape ? dims.height : dims.width),
         height: mmToTwips(isLandscape ? dims.width : dims.height),
+        orientation: isLandscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT,
       };
-      if (isLandscape) {
-        pageSizeConfig.orientation = 'landscape';
-      }
     }
   }
 

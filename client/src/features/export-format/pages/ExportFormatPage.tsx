@@ -28,6 +28,14 @@ function headingNumberExample(index: number, fmt: NumberingFormat): string {
   return formatOutlineNumber(sampleIds[index] || '1', fmt);
 }
 
+function createDefaultExportFormat(): ExportFormatConfig {
+  return {
+    page: { ...DEFAULT_EXPORT_FORMAT.page },
+    headings: DEFAULT_EXPORT_FORMAT.headings.map((heading) => ({ ...heading })),
+    body_text: { ...DEFAULT_EXPORT_FORMAT.body_text },
+  };
+}
+
 // ── 组件 ──────────────────────────────────────────
 
 function ExportFormatPage() {
@@ -92,6 +100,11 @@ function ExportFormatPage() {
     }
   }, [config, showToast]);
 
+  const handleResetDefault = useCallback(() => {
+    setConfig(createDefaultExportFormat());
+    showToast('已恢复默认导出格式，保存后生效', 'info');
+  }, [showToast]);
+
   // 折叠控制
   const toggleHeading = useCallback((index: number) => {
     setExpandedHeadings(prev => {
@@ -103,7 +116,13 @@ function ExportFormatPage() {
   }, []);
 
   // 工具条
-  const toolbarGroups: FloatingToolbarGroup[] = isDirty
+  const resetToolbarGroup: FloatingToolbarGroup = {
+    id: 'export-format-reset',
+    actions: [
+      { id: 'reset-default', label: '重置默认', variant: 'secondary', tooltip: '恢复默认导出格式，保存后生效', onClick: handleResetDefault },
+    ],
+  };
+  const saveToolbarGroups: FloatingToolbarGroup[] = isDirty
     ? [
         {
           id: 'export-format-save-state',
@@ -126,6 +145,10 @@ function ExportFormatPage() {
           ],
         },
       ];
+  const toolbarGroups: FloatingToolbarGroup[] = [
+    resetToolbarGroup,
+    ...saveToolbarGroups,
+  ];
 
   if (!loaded) {
     return <div className="export-format-page"><div className="export-format-loading">加载中…</div></div>;
@@ -190,11 +213,8 @@ function ExportFormatPage() {
                 </div>
               </label>
               <label className="settings-row">
-                <div className="settings-row-copy"><strong>页眉</strong></div>
-                <label className="settings-switch-control">
-                  <input type="checkbox" checked={config.page.header_enabled} onChange={e => updatePage({ header_enabled: e.target.checked })} />
-                  <span className="settings-switch-track" aria-hidden="true"><span className="settings-switch-thumb" /></span>
-                </label>
+                <div className="settings-row-copy"><strong>页眉</strong><span>暂未支持页眉导出，当前配置不会影响 Word 文件。</span></div>
+                <span className="export-format-disabled-note">暂未支持</span>
               </label>
             </div>
           </section>
