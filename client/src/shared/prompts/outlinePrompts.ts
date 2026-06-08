@@ -20,6 +20,44 @@ function formatSuggestions(suggestions?: string[]) {
   return `\n\n本轮修正建议：\n${suggestions.map((item, index) => `${index + 1}. ${item}`).join('\n')}`;
 }
 
+function childrenOutlineJsonExample(parentId?: string) {
+  const id = String(parentId || '1').trim() || '1';
+  return `{
+  "children": [
+    {
+      "id": "${id}.1",
+      "title": "二级目录标题",
+      "description": "二级目录说明",
+      "children": [
+        {
+          "id": "${id}.1.1",
+          "title": "三级目录标题",
+          "description": "三级目录说明"
+        },
+        {
+          "id": "${id}.1.2",
+          "title": "三级目录标题",
+          "description": "三级目录说明"
+        }
+      ]
+    }
+  ]
+}`;
+}
+
+function childrenOutlineStructureRules(parentId?: string) {
+  const id = String(parentId || '1').trim() || '1';
+  return `结构要求：
+1. 顶层 children 只能放当前一级目录的直接子目录，也就是二级目录。
+2. 每个二级目录都必须包含非空 children 数组，children 内是三级目录。
+3. 不要把评分细项直接作为没有子节点的二级目录；应先归纳二级主题，再在其下展开三级响应要点、实施措施、证明材料或验收标准。
+4. 三级目录只包含 id、title、description，不要继续包含 children。
+5. 编号必须以当前一级目录编号 ${id} 为前缀，例如二级 ${id}.1，三级 ${id}.1.1。
+
+返回示例：
+${childrenOutlineJsonExample(id)}`;
+}
+
 function outlineSystemPrompt() {
   return `你是一个专业的标书编写专家。根据提供的项目概述和技术评分要求，生成投标文件中技术标部分的目录结构。
 如果用户提供了自己编写的目录，你要保证目录满足技术评分要求，并充分结合用户自己编写的目录。
@@ -131,17 +169,16 @@ export function buildChildrenOutlineMessages({ overview, requirements, parentIte
 
 要求：
 1. 只输出当前一级目录下的二级和三级目录，不要重复输出一级目录本身。
-2. 返回标准 JSON，格式为 {"children": [...]}。
-3. children 中只能包含当前一级目录的直接子目录，每个节点必须包含 id、title、description。
-4. 二级目录下如有三级目录，同样使用 children 字段。
-5. 章节编号必须以给定的一级目录编号为前缀，例如父级是 2，则二级目录编号从 2.1 开始，三级目录编号从 2.1.1 开始。
-6. 只返回 JSON，不要输出其他内容。`,
+2. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
+3. 只返回 JSON，不要输出其他内容。
+
+${childrenOutlineStructureRules(parentId)}`,
     },
     { role: 'user', content: `项目概述：\n${overview}` },
     { role: 'user', content: `技术评分要求：\n${requirements}` },
     ...(oldOutline ? [{ role: 'user' as const, content: `用户自己编写的目录：\n${oldOutline}` }] : []),
     { role: 'user', content: `当前一级目录：\n编号：${parentId}\n标题：${parentTitle}\n描述：${parentDescription}` },
-    { role: 'user', content: `请仅生成该一级目录下的二级、三级目录，返回格式必须是 {"children": [...]}。${formatSuggestions(suggestions)}` },
+    { role: 'user', content: `请仅生成该一级目录下的二级、三级目录；每个二级目录必须包含三级目录，返回格式必须是 {"children": [...]}。${formatSuggestions(suggestions)}` },
   ];
 }
 
@@ -157,16 +194,17 @@ export function buildAlignedChildrenOutlineMessages({ overview, requirements, pa
 1. 一级目录标题和顺序已经固定，不能修改、重命名、合并或删除一级目录。
 2. 只输出当前一级目录下的二级和三级目录，不要重复输出一级目录本身。
 3. 二级和三级目录要覆盖当前技术评分大类及其细项，不能越界写入其他评分大类内容。
-4. 返回标准 JSON，格式为 {"children": [...]}。
-5. 章节编号必须以给定的一级目录编号为前缀。
-6. 只返回 JSON，不要输出其他内容。`,
+4. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
+5. 只返回 JSON，不要输出其他内容。
+
+${childrenOutlineStructureRules(parentItem.id)}`,
     },
     { role: 'user', content: `项目概述：\n${overview}` },
     { role: 'user', content: `技术评分要求原文：\n${requirements}` },
     ...(oldOutline ? [{ role: 'user' as const, content: `用户自己编写的目录参考：\n${oldOutline}` }] : []),
     { role: 'user', content: `当前固定一级目录：\n编号：${parentItem.id}\n标题：${parentItem.title}\n描述：${parentItem.description}` },
     { role: 'user', content: `当前对应的技术评分大类：\nrequirement_id：${requirementGroup?.requirement_id || ''}\n标题：${requirementGroup?.title || ''}\n描述：${requirementGroup?.description || ''}\n细项：\n${detailPoints}` },
-    { role: 'user', content: `请仅生成该一级目录下的二级、三级目录，一级目录标题必须保持为当前给定标题，返回格式必须是 {"children": [...]}。${formatSuggestions(suggestions)}` },
+    { role: 'user', content: `请仅生成该一级目录下的二级、三级目录；每个二级目录必须包含三级目录，一级目录标题必须保持为当前给定标题，返回格式必须是 {"children": [...]}。${formatSuggestions(suggestions)}` },
   ];
 }
 
