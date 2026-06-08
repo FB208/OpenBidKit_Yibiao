@@ -918,7 +918,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
               <Dialog.Title>确认切换到{workflowSwitchRequest ? workflowLabel(workflowSwitchRequest.to) : '新模式'}</Dialog.Title>
               <Dialog.Description>
                 {workflowSwitchRequest
-                  ? `当前保存的进度是「${workflowLabel(workflowSwitchRequest.from)}」模式生成的。\n\t切换到「${workflowLabel(workflowSwitchRequest.to)}」会清空之前的已有进度。是否继续？`
+                  ? `当前保存的进度是「${workflowLabel(workflowSwitchRequest.from)}」模式生成的。切换到「${workflowLabel(workflowSwitchRequest.to)}」会清空之前的已有进度。是否继续？`
                   : '切换模式会清空当前模式下的生成进度。'}
               </Dialog.Description>
             </div>
