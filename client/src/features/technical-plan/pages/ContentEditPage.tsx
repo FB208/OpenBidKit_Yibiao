@@ -8,6 +8,10 @@ import { DetailHelpLink, MarkdownEditor, MarkdownRenderer, useToast } from '../.
 import type { ClientConfig, ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
 import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement, TechnicalPlanWorkflowKind } from '../types';
+import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
+import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
+import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
+import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
 
 interface ContentEditPageProps {
   workflowKind: TechnicalPlanWorkflowKind;
@@ -272,8 +276,27 @@ function MermaidBlock({ code }: { code: string }) {
   );
 }
 
+function reactNodeText(children: ReactNode): string {
+  return Children.toArray(children).map((child) => {
+    if (typeof child === 'string' || typeof child === 'number') {
+      return String(child);
+    }
+    if (isValidElement<{ children?: ReactNode }>(child)) {
+      return reactNodeText(child.props.children);
+    }
+    return '';
+  }).join('');
+}
+
 const MarkdownContent = memo(function MarkdownContent({ content, onPreviewImage }: { content: string; onPreviewImage: (src: string, alt: string) => void }) {
   const markdownComponents = useMemo<Components>(() => ({
+    p({ children, className, ...props }) {
+      const isFigureCaption = /^图[:：]/.test(reactNodeText(children).trim());
+      const nextClassName = isFigureCaption
+        ? [className, 'markdown-figure-caption'].filter(Boolean).join(' ')
+        : className;
+      return <p {...props} className={nextClassName}>{children}</p>;
+    },
     pre({ children, ...props }) {
       const child = Children.count(children) === 1 ? Children.only(children) : null;
       if (isValidElement(child)) {
@@ -343,10 +366,12 @@ function ContentEditPage({
   const [pendingMinimumWordsChoice, setPendingMinimumWordsChoice] = useState<PendingMinimumWordsChoice | null>(null);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [pausePending, setPausePending] = useState(false);
+  const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const firstLeafId = leaves[0]?.id || '';
   const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
   const selectedContent = selectedItem && selectedIsLeaf ? getLeafContent(selectedItem, sections) : '';
+  const exportFormatPreviewStyle = useMemo<CSSProperties>(() => buildExportFormatCssVars(exportFormat), [exportFormat]);
   const running = task?.status === 'running';
   const pausing = task?.status === 'pausing' || pausePending;
   const paused = task?.status === 'paused';
@@ -496,6 +521,9 @@ function ContentEditPage({
       .then((config) => {
         setDeveloperMode(Boolean(config.developer_mode));
         setImageModelStatus(config.image_model?.status || 'untested');
+        if (config.export_format) {
+          setExportFormat(config.export_format);
+        }
       })
       .catch((error) => console.warn('读取开发者模式失败', error));
   }, []);
@@ -870,7 +898,7 @@ function ContentEditPage({
         >
           <span className="content-outline-dot" aria-hidden="true" />
           <span className="content-outline-text">
-            <strong>{item.id} {item.title}</strong>
+            <strong>{formatOutlineTitle(item.id, item.title, exportFormat.headings[Math.min(item.id.split('.').length - 1, 5)].numbering_format)}</strong>
             <small>{isLeaf ? `${statusLabels[status]} · ${words} 字` : `${statusLabels[status]} · ${leafCount} 个小节 · ${words} 字`}</small>
           </span>
           {isLeaf && (status === 'success' || status === 'error') ? (
@@ -1025,7 +1053,7 @@ function ContentEditPage({
               placeholder="输入 Markdown 正文..."
             />
           ) : selectedItem && selectedIsLeaf && editing && isPreviewing ? (
-            <div className="markdown-viewer content-generation-output">
+            <div className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle}>
               {draftContent.trim() ? (
                 <MarkdownContent content={draftContent} onPreviewImage={handlePreviewImage} />
               ) : (
@@ -1033,7 +1061,7 @@ function ContentEditPage({
               )}
             </div>
           ) : selectedItem && selectedIsLeaf && selectedContent.trim() ? (
-            <div className="markdown-viewer content-generation-output">
+            <div className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle}>
               <MarkdownContent content={selectedContent} onPreviewImage={handlePreviewImage} />
             </div>
           ) : selectedItem && selectedIsLeaf ? (

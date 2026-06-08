@@ -59,6 +59,7 @@ export interface ClientConfig extends AiConfig {
   image_model: ImageModelConfig;
   image_model_profiles: ImageModelProfiles;
   file_parser: FileParserConfig;
+  export_format?: import('./exportFormat').ExportFormatConfig;
   developer_mode?: boolean;
   analytics_client_id?: string;
   analytics_created_at?: string;

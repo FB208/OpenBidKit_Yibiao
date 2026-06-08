@@ -58,6 +58,11 @@ export const appMenuItems: AppMenuItem[] = [
     ],
   },
   {
+    id: 'export-format',
+    label: '导出格式',
+    description: 'Word 文档排版与编号格式设置',
+  },
+  {
     id: 'bid-opportunity',
     label: '投标机会',
     description: '机会发现与线索跟踪',
