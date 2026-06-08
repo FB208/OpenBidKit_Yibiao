@@ -1,6 +1,13 @@
 # Progress
 
 ## Session Log
+- 开始已有方案扩写 Step05 正文还原与扩写改造：已将文件型计划切换到本轮任务；目标是在扩写模式中新增原方案还原、基于原文优化扩写、补目录锁定和可选原方案覆盖审计，普通生成技术方案保持不变。
+- 已完成前端配置接入：`ContentGenerationOptions` 新增 `enableOriginalPlanCoverageAudit`，正文任务 phase 类型新增 `restoring/original-auditing`；`ContentEditPage` 接收 `workflowKind`，仅扩写模式显示“原方案覆盖审计”开关，启动正文生成和单章重生成时会传递该配置。
+- 已完成 Main 侧主体接入：`contentGenerationTask.cjs` 已支持 `original_material` 编排状态、原方案段落拆分、原方案还原映射 Prompt、还原阶段、已还原节点首轮优化扩写分支、`restored && !optimized` 续跑判断，以及补目录 `locked-restored` 锁定规则；`taskService` 已识别新增阶段。
+- 已完成已有方案扩写 Step05 收尾：扩写模式可选“原方案覆盖审计”已接入最低字数扩充之后、一致性审计之前；覆盖审计按已还原小节和 `source_ids` 检查 covered/partial/missing/conflict，partial/missing 通过现有 insert/replace 局部补写，conflict 只记录日志；单章重新生成也按目标小节审计。前端进度展示和埋点 payload 类型已同步。验证通过 `node --check electron\services\contentGenerationTask.cjs`、`node --check electron\services\taskService.cjs`、`cd client; npm run build` 和 `git diff --check`；构建仅有既有 chunk 体积警告，diff check 仅 LF/CRLF 提示。
+- 已修复 Step05 原方案状态续跑一致性风险：新增原方案运行态校验，续跑和待生成判断同时检查正文、`source_ids` 和 `original_material`；原方案还原正文与 plan、优化正文与 `optimized=true` 改为同一次 Store transaction 落盘；单章重新生成已还原小节会先用真实原文重建并重新优化；覆盖审计只审计有效且已优化的原方案小节。验证通过 `node --check electron\services\contentGenerationTask.cjs`、`node --check electron\services\taskService.cjs`、`cd client; npm run build` 和 `git diff --check`；构建仍只有既有 chunk 体积警告，diff check 仅 LF/CRLF 提示。
+- 已完成 Step05 评审补漏：替换“原方案”后会清空 Step03 目录、Step04 全局事实、Step05 正文/编排/还原/runtime 和相关技术方案任务，保留招标文件、Step02 招标解析结果和参考知识库选择；Analytics Dashboard 补齐 `existing-plan-expansion/*` 子步骤中文映射。验证通过 `node --check electron\services\technicalPlanStore.cjs`、`node --check analytics\dashboard\public\src\pages\traffic.js`、`cd client; npm run build` 和 `git diff --check`；构建仅有既有 chunk 体积警告，diff check 仅 LF/CRLF 提示。
+- 已完成两种技术方案模式切换确认：从“生成技术方案”和“已有方案扩写”互相切换时，若存在模式相关进度会弹窗说明保留招标文件、Step02 解析和参考知识库选择，并清空原方案、目录、全局事实、正文、正文生成配置/计划/runtime 和 Step03-Step05 任务；无模式相关进度时静默安全切换；技术方案任务运行中会阻止切换。已通过 `node --check electron\services\technicalPlanStore.cjs`、`node --check electron\ipc\technicalPlanIpc.cjs`、`node --check electron\preload.cjs`、`cd client; npm run build` 和 `git diff --check`，构建仅有既有 chunk 体积警告，diff check 仅 LF/CRLF 提示。
 - 开始资源管理 D1/R2 与客户端资源下载实现：已确认资源全局一套、R2 bucket 用 `openbidkit`、弹窗内容按 Markdown 渲染；进入文件型计划跟踪，先做 Analytics 自动化存储与 Worker 接口。
 - 已完成资源管理主体代码接入：新增 D1 `resources` migration、`setup-resource-storage.mjs` 自动创建/复用 D1 与 R2 并应用 migration；Worker 新增 `/resources`、`/resource-image`、`/api/resources`；Dashboard 新增资源管理 Tab 和 multipart 图片上传表单；Client 资源页改为接口读取、搜索和 Markdown 弹窗。第一轮 `node --check` 覆盖脚本、Worker routes/services/index 和 Dashboard resources 页面均通过。
 - 资源管理实现验证完成：`node --check` 覆盖 Analytics 部署脚本、资源 setup 脚本、Worker 入口/资源路由/资源 Store、Dashboard 主脚本/API/资源页；`cd client; npm run build` 通过；`git diff --check` 通过且仅有 LF/CRLF 提示，客户端构建仍只有既有 chunk 体积警告。

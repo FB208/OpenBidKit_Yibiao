@@ -555,58 +555,65 @@ async function parseDocumentWithConfig(app, filePath, config, options = {}) {
 }
 
 function createFileService({ app, configStore } = {}) {
-  return {
-    async importDocument() {
-      const config = configStore ? configStore.load() : { file_parser: { provider: 'local' } };
-      const provider = config.file_parser?.provider || 'local';
-      const supportedExtensions = getSelectableExtensions(provider);
-      const result = await dialog.showOpenDialog({
-        title: '选择招标文件',
-        properties: ['openFile'],
-        filters: [
-          { name: parserLabels[provider] || '招标文件', extensions: [...supportedExtensions].map((item) => item.slice(1)) },
-          { name: '所有文件', extensions: ['*'] },
-        ],
-      });
+  async function importTechnicalPlanDocument(documentLabel = '招标文件') {
+    const label = String(documentLabel || '招标文件').trim() || '招标文件';
+    const config = configStore ? configStore.load() : { file_parser: { provider: 'local' } };
+    const provider = config.file_parser?.provider || 'local';
+    const supportedExtensions = getSelectableExtensions(provider);
+    const result = await dialog.showOpenDialog({
+      title: `选择${label}`,
+      properties: ['openFile'],
+      filters: [
+        { name: parserLabels[provider] || label, extensions: [...supportedExtensions].map((item) => item.slice(1)) },
+        { name: '所有文件', extensions: ['*'] },
+      ],
+    });
 
-      if (result.canceled || result.filePaths.length === 0) {
-        return { success: false, message: '已取消选择' };
-      }
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: false, message: '已取消选择' };
+    }
 
-      const filePath = result.filePaths[0];
-      const ext = path.extname(filePath).toLowerCase();
-      const parser = resolveFileParser(config, filePath);
+    const filePath = result.filePaths[0];
+    const ext = path.extname(filePath).toLowerCase();
+    const parser = resolveFileParser(config, filePath);
 
-      if (!supportedExtensions.has(ext)) {
-        return { success: false, message: `当前${parserLabels[provider] || '解析方式'}不支持该文件格式` };
-      }
+    if (!supportedExtensions.has(ext)) {
+      return { success: false, message: `当前${parserLabels[provider] || '解析方式'}不支持该文件格式` };
+    }
 
-      let fileContent = '';
-      try {
-        fileContent = (await parseDocumentWithConfig(app, filePath, config, { assetScope: 'technical-plan', preserveImages: false })).trim();
-      } catch (error) {
-        return {
-          success: false,
-          message: formatImportError(error, filePath),
-          file_name: path.basename(filePath),
-          parser_provider: parser.provider,
-          parser_label: parserLabels[parser.provider] || '本地解析',
-        };
-      }
-
-      if (!fileContent) {
-        return { success: false, message: '未提取到有效 Markdown 内容，请检查文件内容' };
-      }
-
+    let fileContent = '';
+    try {
+      fileContent = (await parseDocumentWithConfig(app, filePath, config, { assetScope: 'technical-plan', preserveImages: false })).trim();
+    } catch (error) {
       return {
-        success: true,
-        message: parser.fallbackToLocal ? '文件解析完成，当前格式已自动使用本地解析' : '文件解析完成',
-        file_content: fileContent,
+        success: false,
+        message: formatImportError(error, filePath),
         file_name: path.basename(filePath),
         parser_provider: parser.provider,
         parser_label: parserLabels[parser.provider] || '本地解析',
       };
+    }
+
+    if (!fileContent) {
+      return { success: false, message: '未提取到有效 Markdown 内容，请检查文件内容' };
+    }
+
+    return {
+      success: true,
+      message: parser.fallbackToLocal ? '文件解析完成，当前格式已自动使用本地解析' : '文件解析完成',
+      file_content: fileContent,
+      file_name: path.basename(filePath),
+      parser_provider: parser.provider,
+      parser_label: parserLabels[parser.provider] || '本地解析',
+    };
+  }
+
+  return {
+    async importDocument() {
+      return importTechnicalPlanDocument('招标文件');
     },
+
+    importTechnicalPlanDocument,
 
     async importRejectionCheckDocument(role = 'tender') {
       const documentRole = role === 'bid' ? 'bid' : 'tender';

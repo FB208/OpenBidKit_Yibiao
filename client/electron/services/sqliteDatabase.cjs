@@ -3,12 +3,13 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 8;
+const schemaVersion = 9;
 
 function createInitialSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS technical_plan_meta (
       id INTEGER PRIMARY KEY CHECK (id = 1),
+      workflow_kind TEXT NOT NULL DEFAULT 'technical-plan',
       step TEXT NOT NULL DEFAULT 'document-analysis',
       tender_file_name TEXT,
       tender_markdown_path TEXT,
@@ -16,6 +17,12 @@ function createInitialSchema(db) {
       tender_markdown_chars INTEGER NOT NULL DEFAULT 0,
       tender_parser_label TEXT,
       tender_imported_at TEXT,
+      original_plan_file_name TEXT,
+      original_plan_markdown_path TEXT,
+      original_plan_markdown_hash TEXT,
+      original_plan_markdown_chars INTEGER NOT NULL DEFAULT 0,
+      original_plan_parser_label TEXT,
+      original_plan_imported_at TEXT,
       pending_tender_markdown_path TEXT,
       pending_tender_file_name TEXT,
       pending_tender_parser_label TEXT,
@@ -178,6 +185,22 @@ function addTechnicalPlanPendingTenderSelection(db) {
   addIfMissing('pending_tender_sections_json', 'TEXT');
   addIfMissing('pending_tender_total_declared', 'INTEGER');
   addIfMissing('pending_tender_created_at', 'TEXT');
+}
+
+function addTechnicalPlanWorkflowAndOriginalPlan(db) {
+  const cols = db.prepare("PRAGMA table_info(technical_plan_meta)").all().map((row) => row.name);
+  const addIfMissing = (name, type) => {
+    if (!cols.includes(name)) {
+      db.exec(`ALTER TABLE technical_plan_meta ADD COLUMN ${name} ${type}`);
+    }
+  };
+  addIfMissing('workflow_kind', "TEXT NOT NULL DEFAULT 'technical-plan'");
+  addIfMissing('original_plan_file_name', 'TEXT');
+  addIfMissing('original_plan_markdown_path', 'TEXT');
+  addIfMissing('original_plan_markdown_hash', 'TEXT');
+  addIfMissing('original_plan_markdown_chars', 'INTEGER NOT NULL DEFAULT 0');
+  addIfMissing('original_plan_parser_label', 'TEXT');
+  addIfMissing('original_plan_imported_at', 'TEXT');
 }
 
 function createDuplicateCheckSchema(db) {
@@ -792,6 +815,19 @@ const schemaHealthColumnGroups = [
       pending_tender_created_at: 'TEXT',
     },
   },
+  {
+    version: 9,
+    table: 'technical_plan_meta',
+    columns: {
+      workflow_kind: "TEXT NOT NULL DEFAULT 'technical-plan'",
+      original_plan_file_name: 'TEXT',
+      original_plan_markdown_path: 'TEXT',
+      original_plan_markdown_hash: 'TEXT',
+      original_plan_markdown_chars: 'INTEGER NOT NULL DEFAULT 0',
+      original_plan_parser_label: 'TEXT',
+      original_plan_imported_at: 'TEXT',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -892,6 +928,11 @@ const migrations = [
     version: 8,
     description: '技术方案新增待选择标段恢复状态',
     up: addTechnicalPlanPendingTenderSelection,
+  },
+  {
+    version: 9,
+    description: '技术方案新增工作流类型和原方案文件状态',
+    up: addTechnicalPlanWorkflowAndOriginalPlan,
   },
 ];
 

@@ -172,10 +172,10 @@ function inferContentGenerationPhase(technicalPlan) {
   const taskContent = technicalPlan?.contentGenerationTask?.stats?.content || {};
   const taskPhase = taskContent.phase;
   const runtimePhase = technicalPlan?.contentGenerationRuntime?.phase;
-  if (['outline-expanding', 'expanding', 'auditing', 'illustrating'].includes(taskPhase)) {
+  if (['restoring', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'illustrating'].includes(taskPhase)) {
     return taskPhase;
   }
-  if (['planning', 'generating', 'outline-expanding', 'expanding', 'auditing', 'illustrating'].includes(runtimePhase)) {
+  if (['planning', 'restoring', 'generating', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'illustrating'].includes(runtimePhase)) {
     return runtimePhase;
   }
 
@@ -655,11 +655,6 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
       return startManagedTask('outline-generation', payload, runOutlineGenerationTask, {
         outlineMode: payload?.mode,
         referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
-        outlineData: null,
-        contentGenerationTask: undefined,
-        contentGenerationSections: {},
-        contentGenerationPlans: {},
-        contentGenerationRuntime: undefined,
       });
     },
     startGlobalFactsGeneration(payload) {

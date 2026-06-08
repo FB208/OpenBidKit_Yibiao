@@ -7,13 +7,14 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { DetailHelpLink, MarkdownEditor, MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { ClientConfig, ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
-import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement } from '../types';
+import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement, TechnicalPlanWorkflowKind } from '../types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
 
 interface ContentEditPageProps {
+  workflowKind: TechnicalPlanWorkflowKind;
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
   contentGenerationOptions?: ContentGenerationOptions;
@@ -70,6 +71,7 @@ const defaultContentGenerationOptions: ContentGenerationOptions = {
   minimumWords: 0,
   contentConcurrency: 5,
   enableConsistencyAudit: true,
+  enableOriginalPlanCoverageAudit: false,
 };
 
 function isContentTableRequirement(value: unknown): value is ContentTableRequirement {
@@ -84,7 +86,7 @@ function buildDefaultGenerationOptions(imageModelAvailable: boolean, leafCount: 
   };
 }
 
-function normalizeGenerationOptions(options: ContentGenerationOptions | undefined, imageModelAvailable: boolean, leafCount: number): ContentGenerationOptions {
+function normalizeGenerationOptions(options: ContentGenerationOptions | undefined, imageModelAvailable: boolean, leafCount: number, isExpansionWorkflow = false): ContentGenerationOptions {
   const fallback = buildDefaultGenerationOptions(imageModelAvailable, leafCount);
   const maxAiImagesLimit = Math.max(1, leafCount);
   const requestedMaxAiImages = Number(options?.maxAiImages ?? fallback.maxAiImages);
@@ -100,6 +102,7 @@ function normalizeGenerationOptions(options: ContentGenerationOptions | undefine
     minimumWords: Math.max(0, Number.isFinite(requestedMinimumWords) ? Math.round(requestedMinimumWords) : fallback.minimumWords),
     contentConcurrency: Math.max(1, Number.isFinite(requestedContentConcurrency) ? Math.round(requestedContentConcurrency) : fallback.contentConcurrency),
     enableConsistencyAudit: Boolean(options?.enableConsistencyAudit ?? fallback.enableConsistencyAudit),
+    enableOriginalPlanCoverageAudit: isExpansionWorkflow ? Boolean(options?.enableOriginalPlanCoverageAudit ?? fallback.enableOriginalPlanCoverageAudit) : false,
   };
 }
 
@@ -337,6 +340,7 @@ const MarkdownContent = memo(function MarkdownContent({ content, onPreviewImage 
 });
 
 function ContentEditPage({
+  workflowKind,
   outlineData,
   task,
   contentGenerationOptions,
@@ -345,6 +349,7 @@ function ContentEditPage({
   onContentSaved,
 }: ContentEditPageProps) {
   const { showToast } = useToast();
+  const isExpansionWorkflow = workflowKind === 'existing-plan-expansion';
   const leaves = useMemo(() => outlineData?.outline ? collectLeafItems(outlineData.outline) : [], [outlineData]);
   const [selectedItemId, setSelectedItemId] = useState('');
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
@@ -377,8 +382,10 @@ function ContentEditPage({
   const generationStrategyLocked = paused;
   const contentStats = task?.stats?.content;
   const planning = phaseVisible && contentStats?.phase === 'planning';
+  const restoring = phaseVisible && contentStats?.phase === 'restoring';
   const outlineExpanding = phaseVisible && contentStats?.phase === 'outline-expanding';
   const expanding = phaseVisible && contentStats?.phase === 'expanding';
+  const originalAuditing = phaseVisible && contentStats?.phase === 'original-auditing';
   const auditing = phaseVisible && contentStats?.phase === 'auditing';
   const illustrating = phaseVisible && contentStats?.phase === 'illustrating';
   const outlineMeta = useMemo(() => outlineData?.outline ? buildOutlineMeta(outlineData.outline, sections, planning) : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections]);
@@ -426,21 +433,21 @@ function ContentEditPage({
   const illustrationTotal = contentStats?.illustration_total || 0;
   const illustrationCompleted = contentStats?.illustration_completed || 0;
   const illustrationProgress = illustrationTotal ? Math.round((illustrationCompleted / illustrationTotal) * 100) : 0;
-  const displayProgress = planning ? planningProgress : outlineExpanding ? outlineExpansionProgress : expanding ? wordExpansionProgress : auditing ? auditProgress : illustrating ? illustrationProgress : progress;
-  const displayProgressLabel = planning ? '编排统计' : outlineExpanding ? '补目录' : expanding ? '扩写进度' : auditing ? '一致性审计' : illustrating ? '配图统计' : '生成统计';
+  const displayProgress = planning ? planningProgress : outlineExpanding ? outlineExpansionProgress : expanding ? wordExpansionProgress : originalAuditing || auditing ? auditProgress : illustrating ? illustrationProgress : progress;
+  const displayProgressLabel = planning ? '编排统计' : restoring ? '原方案还原' : outlineExpanding ? '补目录' : expanding ? '扩写进度' : originalAuditing ? '原方案审计' : auditing ? '一致性审计' : illustrating ? '配图统计' : '生成统计';
   const displayProgressCount = planning
     ? `${planningCompleted}/${planningTotal}`
     : outlineExpanding
       ? `${outlineExpansionStepCompleted}/${outlineExpansionStepTotal}`
       : expanding
         ? `${wordExpansionProgress}%`
-        : auditing
+        : originalAuditing || auditing
           ? auditFixTotal ? `${auditFixCompleted}/${auditFixTotal}` : `${auditGroupCompleted}/${auditGroupTotal}`
           : illustrating
             ? `${illustrationCompleted}/${illustrationTotal}`
             : `${completedCount}/${leaves.length}`;
-  const progressPhaseLabel = planning ? '正文编排' : outlineExpanding ? '正文补目录' : expanding ? '正文扩写' : auditing ? '全文一致性审计' : illustrating ? '正文配图' : '正文生成';
-  const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${outlineExpanding ? ' is-outline-expanding' : ''}${auditing ? ' is-auditing' : ''}${illustrating ? ' is-illustrating' : ''}${taskInFlight && (planning || outlineExpanding || expanding || auditing || illustrating) ? ' is-active' : ''}`;
+  const progressPhaseLabel = planning ? '正文编排' : restoring ? '原方案还原' : outlineExpanding ? '正文补目录' : expanding ? '正文扩写' : originalAuditing ? '原方案覆盖审计' : auditing ? '全文一致性审计' : illustrating ? '正文配图' : '正文生成';
+  const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${outlineExpanding ? ' is-outline-expanding' : ''}${originalAuditing || auditing ? ' is-auditing' : ''}${illustrating ? ' is-illustrating' : ''}${taskInFlight && (planning || outlineExpanding || expanding || originalAuditing || auditing || illustrating) ? ' is-active' : ''}`;
   const progressDescription = taskFailed
     ? minimumWordsUnmet
       ? `正文扩写失败：当前 ${currentWords}/${minimumWords} 字。${taskErrorMessage}`
@@ -453,12 +460,18 @@ function ContentEditPage({
         : `正在补目录，第 ${outlineExpansionRound}/${outlineExpansionRoundTotal} 轮：${outlineExpansionStepLabel || `已完成 ${outlineExpansionCompleted}/${outlineExpansionTotal} 轮`}`
       : expanding
         ? paused ? `正文生成已暂停在扩写阶段，最低字数达成 ${wordExpansionProgress}%。` : `正在扩写正文，最低字数达成 ${wordExpansionProgress}%。`
-        : auditing
+        : originalAuditing
           ? paused
-            ? `正文生成已暂停在一致性审计阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 组，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
+            ? `正文生成已暂停在原方案覆盖审计阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 个小节，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
             : auditFixTotal
-              ? `正在修复一致性冲突，已完成 ${auditFixCompleted}/${auditFixTotal} 个小节${auditFixFailed ? `，${auditFixFailed} 个需人工核对` : ''}。`
-              : `正在审计全文一致性，已完成 ${auditGroupCompleted}/${auditGroupTotal} 组${auditConflictTotal ? `，发现 ${auditConflictTotal} 个冲突小节` : ''}。`
+              ? `正在补写原方案缺失内容，已完成 ${auditFixCompleted}/${auditFixTotal} 个小节${auditFixFailed ? `，${auditFixFailed} 个需人工核对` : ''}。`
+              : `正在审计原方案覆盖情况，已完成 ${auditGroupCompleted}/${auditGroupTotal} 个小节${auditConflictTotal ? `，发现 ${auditConflictTotal} 个需核对来源段` : ''}。`
+          : auditing
+            ? paused
+              ? `正文生成已暂停在一致性审计阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 组，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
+              : auditFixTotal
+                ? `正在修复一致性冲突，已完成 ${auditFixCompleted}/${auditFixTotal} 个小节${auditFixFailed ? `，${auditFixFailed} 个需人工核对` : ''}。`
+                : `正在审计全文一致性，已完成 ${auditGroupCompleted}/${auditGroupTotal} 组${auditConflictTotal ? `，发现 ${auditConflictTotal} 个冲突小节` : ''}。`
           : illustrating
             ? paused ? `正文生成已暂停在配图阶段，已完成 ${illustrationCompleted}/${illustrationTotal} 张。` : `正在生成配图，已完成 ${illustrationCompleted}/${illustrationTotal} 张。`
             : pausing
@@ -545,7 +558,7 @@ function ContentEditPage({
       const nextStatus = config?.image_model?.status || 'untested';
       const available = nextStatus === 'available';
       setImageModelStatus(nextStatus);
-      setDraftGenerationOptions(normalizeGenerationOptions(contentGenerationOptions, available, leaves.length));
+      setDraftGenerationOptions(normalizeGenerationOptions(contentGenerationOptions, available, leaves.length, isExpansionWorkflow));
       setGenerationDialogOpen(true);
     } catch (error) {
       showToast(error instanceof Error ? error.message : '读取生成配置失败', 'error');
@@ -553,15 +566,15 @@ function ContentEditPage({
   };
 
   const saveDraftGenerationOptions = async (showSuccess: boolean, imageAvailable = imageModelAvailable) => {
-    const normalizedDraftOptions = normalizeGenerationOptions(draftGenerationOptions, imageAvailable, leaves.length);
+    const normalizedDraftOptions = normalizeGenerationOptions(draftGenerationOptions, imageAvailable, leaves.length, isExpansionWorkflow);
     const currentOptions = contentGenerationOptions
       ? { ...defaultContentGenerationOptions, ...contentGenerationOptions }
-      : normalizeGenerationOptions(undefined, imageAvailable, leaves.length);
+      : normalizeGenerationOptions(undefined, imageAvailable, leaves.length, isExpansionWorkflow);
     const nextOptions = paused
       ? { ...currentOptions, contentConcurrency: normalizedDraftOptions.contentConcurrency }
       : normalizedDraftOptions;
     await onContentGenerationOptionsChange(nextOptions);
-    setDraftGenerationOptions(normalizeGenerationOptions(nextOptions, imageAvailable, leaves.length));
+    setDraftGenerationOptions(normalizeGenerationOptions(nextOptions, imageAvailable, leaves.length, isExpansionWorkflow));
 
     if (showSuccess) {
       setGenerationDialogOpen(false);
@@ -599,7 +612,7 @@ function ContentEditPage({
       const config = await window.yibiao?.config.load();
       const nextStatus = config?.image_model?.status || 'untested';
       const available = nextStatus === 'available';
-      const savedOptions = normalizeGenerationOptions(contentGenerationOptions, available, leaves.length);
+      const savedOptions = normalizeGenerationOptions(contentGenerationOptions, available, leaves.length, isExpansionWorkflow);
       setImageModelStatus(nextStatus);
       if (shouldAskMinimumWordsChoice(savedOptions)) {
         setPendingMinimumWordsChoice({
@@ -697,6 +710,7 @@ function ContentEditPage({
         minimumWords: savedGenerationOptions.minimumWords,
         contentConcurrency: savedGenerationOptions.contentConcurrency,
         enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
+        enableOriginalPlanCoverageAudit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
       },
     });
     trackConfigUsage({
@@ -707,6 +721,7 @@ function ContentEditPage({
       content_generation_action: contentGenerationAction,
       minimum_words: savedGenerationOptions.minimumWords,
       enable_consistency_audit: savedGenerationOptions.enableConsistencyAudit,
+      enable_original_plan_coverage_audit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
     }, config);
     setGenerationDialogOpen(false);
     setPendingMinimumWordsChoice(null);
@@ -796,7 +811,7 @@ function ContentEditPage({
       const config = await window.yibiao?.config.load();
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
-      const savedGenerationOptions = normalizeGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length);
+      const savedGenerationOptions = normalizeGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length, isExpansionWorkflow);
       setImageModelStatus(nextImageModelStatus);
       await window.yibiao?.tasks.startContentGeneration({
         regenerate: true,
@@ -809,6 +824,7 @@ function ContentEditPage({
           tableRequirement: savedGenerationOptions.tableRequirement,
           contentConcurrency: savedGenerationOptions.contentConcurrency,
           enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
+          enableOriginalPlanCoverageAudit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
         },
       });
       trackConfigUsage({
@@ -819,6 +835,7 @@ function ContentEditPage({
         content_generation_action: 'regenerate_section',
         minimum_words: savedGenerationOptions.minimumWords,
         enable_consistency_audit: savedGenerationOptions.enableConsistencyAudit,
+        enable_original_plan_coverage_audit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
       }, config);
       setSelectedItemId(requirementItem.id);
       setRequirementItem(null);
@@ -1127,6 +1144,23 @@ function ContentEditPage({
                   <Switch.Thumb className="content-generation-switch-thumb" />
                 </Switch.Root>
               </label>
+              {isExpansionWorkflow && (
+                <label className="content-generation-config-row">
+                  <span>
+                    <strong>原方案覆盖审计</strong>
+                    <small>检查原方案中的核心内容是否已经保留到生成正文中；默认关闭，开启后会增加一次审计和修复请求。</small>
+                  </span>
+                  <Switch.Root
+                    className="content-generation-switch"
+                    checked={draftGenerationOptions.enableOriginalPlanCoverageAudit}
+                    disabled={generationStrategyLocked}
+                    onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, enableOriginalPlanCoverageAudit: checked }))}
+                    aria-label="是否启用原方案覆盖审计"
+                  >
+                    <Switch.Thumb className="content-generation-switch-thumb" />
+                  </Switch.Root>
+                </label>
+              )}
               <div className="content-generation-config-row">
                 <span>
                   <strong>正文生成并发速度</strong>

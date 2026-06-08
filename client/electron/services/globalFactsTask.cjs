@@ -224,16 +224,20 @@ function formatBidAnalysisFactsForPrompt(storedPlan) {
   ].filter(Boolean).join('\n\n') || '未提供 Step02 关键解析结果。';
 }
 
-function buildFirstRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, sectionHint }) {
+function buildFirstRoundMessages({ tenderMarkdown, originalPlanMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, sectionHint }) {
+  const isExpansionWorkflow = Boolean(String(originalPlanMarkdown || '').trim());
   const messages = [
     {
       role: 'system',
       content: `用户正在编写投标书中的技术方案，在编写之前，为了保持全文关键变量一致，需要提前根据招标文件内容和已列出的投标技术方案提纲，把需要全文保持一致的关键变量编辑好。
 
+${isExpansionWorkflow ? `当前是“已有方案扩写”模式。用户提供的原方案就是本次要编写和扩充的投标技术方案核心草稿，后续扩写后的正文必须保留原方案中已经存在的内容、事实、承诺、技术路线、服务范围、设备参数、人员安排、实施方法和表达重点。
+在提取全局事实变量时，必须把原方案作为最重要的信息来源，优先从原方案中抽取可复用、需要全文一致的变量；招标文件、关键解析结果、目录和知识库用于补充、校验和纠偏，不能因为生成新内容而丢掉原方案已有信息。` : ''}
+
 工作方式：
 1. 以”已生成技术方案目录”为主，判断在这些目录的正文写作时，哪些变量一旦随机生成就会导致全文前后不一致。
 2. 必须要包含的变量类别：工期、运维期或交货时间，这三个至少有一个，根据项目类型判断用哪个。其他变量类别由你自行判断，比如；人名、时间、品牌、型号、质保期等根据用户提交内容仔细分析。
-3. 招标文件、关键解析结果和知识库可以作为参考，如果里面有能用到的信息，优先使用。
+3. ${isExpansionWorkflow ? '原方案中的既有内容优先级最高；如果原方案已经写明人员、周期、设备、品牌、型号、质保、售后、技术路线或实施方法，必须优先提取为全局事实变量。' : '招标文件、关键解析结果和知识库可以作为参考，如果里面有能用到的信息，优先使用。'}
 4. 如果用户提交的材料中没有可用信息，但是你分析某变量对全文一致性很重要，你需要根据你的专业能力来编辑，允许出现虚拟内容，但必须合情合理。
 5. 仅编写技术方案部分，不要涉及商务部分所需要的内容。
 
@@ -249,6 +253,7 @@ function buildFirstRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFacts
   }
   messages.push(
     { role: 'user', content: `招标文件原文：\n${tenderMarkdown}` },
+    ...(isExpansionWorkflow ? [{ role: 'user', content: `原方案正文（本次扩写的核心草稿，必须重点参考并保留其已有内容）：\n${originalPlanMarkdown}` }] : []),
     { role: 'user', content: `关键解析结果：\n${bidAnalysisFactsText}` },
     { role: 'user', content: `已生成技术方案目录：\n${formatOutlineForPrompt(outlineData.outline || [])}` },
     { role: 'user', content: `用户选中的知识库完整条目：\n${formatKnowledgeItemsForPrompt(knowledgeItems)}` },
@@ -269,11 +274,15 @@ function buildFirstRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFacts
   return messages;
 }
 
-function buildSecondRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, groups, sectionHint }) {
+function buildSecondRoundMessages({ tenderMarkdown, originalPlanMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, groups, sectionHint }) {
+  const isExpansionWorkflow = Boolean(String(originalPlanMarkdown || '').trim());
   const messages = [
     {
       role: 'system',
       content: `你的任务是帮用户补充”全局变量”的细节。用户会发给你一份全局事实变量。请基于用户输入信息，检查是否还有投标文件技术方案写作时会反复用到、且必须全文保持全文一致的变量需要补充。
+
+${isExpansionWorkflow ? `当前是“已有方案扩写”模式。用户提供的原方案是本次要扩写的投标技术方案核心草稿，已有内容必须在后续扩写正文中被保留。
+第二轮查漏补缺时，要重点检查第一轮是否遗漏了原方案中的既有承诺、技术路线、服务范围、设备参数、人员安排、工期/交付/质保/售后安排、实施方法、验收标准和关键表达。只要这些内容后续正文会反复使用或会影响全文一致性，就必须补充到全局事实变量中。` : ''}
 
 要求：
 1. 不要重新生成全部内容，只返回需要补充或替换的 patches。
@@ -291,6 +300,7 @@ function buildSecondRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFact
   }
   messages.push(
     { role: 'user', content: `招标文件原文：\n${tenderMarkdown}` },
+    ...(isExpansionWorkflow ? [{ role: 'user', content: `原方案正文（本次扩写的核心草稿，必须重点参考并保留其已有内容）：\n${originalPlanMarkdown}` }] : []),
     { role: 'user', content: `关键解析结果：\n${bidAnalysisFactsText}` },
     { role: 'user', content: `已生成技术方案目录：\n${formatOutlineForPrompt(outlineData.outline || [])}` },
     { role: 'user', content: `用户选中的知识库完整条目：\n${formatKnowledgeItemsForPrompt(knowledgeItems)}` },
@@ -332,6 +342,20 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
   if (!String(tenderMarkdown || '').trim()) {
     throw new Error('请先上传招标文件，再生成全局事实');
   }
+  const isExpansionWorkflow = storedPlan.workflowKind === 'existing-plan-expansion';
+  let originalPlanMarkdown = '';
+  if (isExpansionWorkflow) {
+    if (!storedPlan.originalPlanFile) {
+      throw new Error('请先上传原方案，再生成全局事实');
+    }
+    if (!workspaceStore.readOriginalPlanMarkdown) {
+      throw new Error('原方案读取服务尚未初始化');
+    }
+    originalPlanMarkdown = workspaceStore.readOriginalPlanMarkdown();
+    if (!String(originalPlanMarkdown || '').trim()) {
+      throw new Error('请先上传原方案，再生成全局事实');
+    }
+  }
   const outlineData = storedPlan.outlineData;
   if (!outlineData?.outline?.length) {
     throw new Error('请先生成目录，再生成全局事实');
@@ -350,6 +374,9 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
   const bidAnalysisFactsText = formatBidAnalysisFactsForPrompt(storedPlan);
   log('正在读取招标文件、Step02 解析结果、目录和参考知识库。', 10);
+  if (isExpansionWorkflow) {
+    log('已读取原方案，本次将优先从原方案抽取全局事实变量。', 18);
+  }
   const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);
 
   const selectedSection = storedPlan.tenderFile?.selectedSectionTitle ? {
@@ -360,7 +387,7 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
 
   log('正在预设后续正文会反复用到的全局事实变量。', 25);
   const firstRound = await collectJson(aiService, {
-    messages: buildFirstRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, sectionHint }),
+    messages: buildFirstRoundMessages({ tenderMarkdown, originalPlanMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, sectionHint }),
     temperature: 0.2,
     logTitle: '全局事实变量',
     progressLabel: '全局事实变量',
@@ -375,7 +402,7 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
 
   log('第二轮：正在根据第一轮大项补充遗漏的全局事实变量。', 68);
   const secondRound = await collectJson(aiService, {
-    messages: buildSecondRoundMessages({ tenderMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, groups, sectionHint }),
+    messages: buildSecondRoundMessages({ tenderMarkdown, originalPlanMarkdown, outlineData, bidAnalysisFactsText, knowledgeItems, groups, sectionHint }),
     temperature: 0.2,
     logTitle: '全局事实变量-第二轮补充',
     progressLabel: '全局事实变量第二轮',

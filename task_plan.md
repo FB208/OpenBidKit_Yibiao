@@ -1,5 +1,43 @@
 # Task Plan
 
+## Current Task: 已有方案扩写 Step05 正文还原与扩写
+
+### Goal
+在 `existing-plan-expansion` 工作流中改造 Step05 正文生成：正文编排后新增原方案还原阶段，AI 只返回原方案段编号归属，程序拼接真实原文写入叶子节点；首轮正文生成对已还原节点走“基于原文优化扩写”分支；补目录时锁定已还原节点；原方案覆盖审计作为扩写模式专属设置项默认关闭。
+
+### Phases
+- [completed] 1. 梳理现有正文生成、配置 UI、任务阶段和 content plan 持久化边界。
+- [completed] 2. 扩展 Renderer 类型和 Step05 设置 UI，增加扩写模式专属覆盖审计开关。
+- [completed] 3. 扩展 Main 正文生成 plan 结构，新增原方案段落拆分、映射还原阶段和保存逻辑。
+- [completed] 4. 改造首轮正文生成分支、续跑判断和补目录锁定规则。
+- [completed] 5. 接入可选原方案覆盖审计和修复阶段。
+- [completed] 6. 运行语法检查和客户端构建验证。
+- [completed] 7. 修复评审发现的替换原方案下游状态失效和 Analytics 步骤映射问题。
+- [completed] 8. 增加两种技术方案模式切换确认，确认后保留招标文件、Step02 解析和参考知识库，清空模式相关进度。
+
+### Decisions
+- 不新增 SQLite 表，原方案还原状态优先保存到 `contentGenerationPlans.plan.original_material`。
+- 还原阶段 AI 只返回 `node_id/source_ids`，正文由程序按原方案段编号拼接真实原文。
+- 已还原节点首轮生成替换还原正文，不追加正文，完成后设置 `optimized = true`。
+- 字数扩充阶段保持现有逻辑，不额外注入原方案。
+- 已还原节点在补目录上下文中标记 `locked-restored`，不允许作为新增目录父节点。
+- 替换原方案后从 Step03 起全部失效：清空目录、全局事实、正文、正文编排/还原状态、runtime 和相关任务，但保留招标文件、Step02 解析结果和参考知识库选择。
+- Analytics 子步骤上报使用 `${workflowKind}/${state.step}`，Dashboard 必须为 `existing-plan-expansion/*` 补中文映射。
+- “生成技术方案”和“已有方案扩写”直接切换时必须先提示用户；确认后只保留招标文件、已选标段、Step02 解析结果和参考知识库选择，清空原方案、目录、全局事实、正文、正文生成配置/计划/runtime 和 Step03-Step05 任务。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 构建时报 `enable_original_plan_coverage_audit` 不在 `ConfigUsagePayload` | 第一次 `npm run build` | 已同步 `client/src/shared/analytics/analytics.ts` 的配置使用埋点类型和布尔值归一化；重跑构建通过 |
+
+### Validation
+- `node --check electron\services\technicalPlanStore.cjs` 通过。
+- `node --check electron\ipc\technicalPlanIpc.cjs` 通过。
+- `node --check electron\preload.cjs` 通过。
+- `node --check analytics\dashboard\public\src\pages\traffic.js` 通过。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- `git diff --check` 通过，仅有 LF/CRLF 提示。
+
 ## Current Task: 资源管理 D1/R2 与客户端资源下载
 
 ### Goal

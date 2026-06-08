@@ -17,6 +17,8 @@ const EARLY_CONTENT_PROBE_COUNT = 3;
 const MIN_SECTION_EXPANSION_INCREMENT = 800;
 const CONSISTENCY_AUDIT_GROUP_WORD_LIMIT = 300000;
 const CONSISTENCY_REPAIR_MAX_ATTEMPTS = 2;
+const ORIGINAL_PLAN_SEGMENT_MAX_CHARS = 6000;
+const ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS = 2;
 const TABLE_REQUIREMENT_LABELS = {
   none: '不要',
   light: '少量',
@@ -292,6 +294,29 @@ function normalizeKnowledgeItemIds(value, allowedKnowledgeItemIds) {
   return [...new Set(filtered)];
 }
 
+function normalizeOriginalMaterial(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const sourceIds = Array.isArray(source.source_ids || source.sourceIds)
+    ? source.source_ids || source.sourceIds
+    : [];
+  const sourceTitles = Array.isArray(source.source_titles || source.sourceTitles)
+    ? source.source_titles || source.sourceTitles
+    : [];
+  const sourceHashes = Array.isArray(source.source_hashes || source.sourceHashes)
+    ? source.source_hashes || source.sourceHashes
+    : [];
+  return {
+    restored: Boolean(source.restored),
+    optimized: Boolean(source.optimized),
+    source_ids: [...new Set(sourceIds.map((id) => String(id || '').trim()).filter(Boolean))],
+    source_titles: [...new Set(sourceTitles.map((title) => singleLine(title)).filter(Boolean))],
+    source_hashes: [...new Set(sourceHashes.map((hash) => String(hash || '').trim()).filter(Boolean))],
+    restored_chars: Math.max(0, Math.round(Number(source.restored_chars ?? source.restoredChars) || 0)),
+    ...(source.restored_at || source.restoredAt ? { restored_at: source.restored_at || source.restoredAt } : {}),
+    ...(source.optimized_at || source.optimizedAt ? { optimized_at: source.optimized_at || source.optimizedAt } : {}),
+  };
+}
+
 function normalizeContentPlan(value, allowedKnowledgeItemIds, allowedFactTitles) {
   const source = value?.plan && typeof value.plan === 'object' ? value.plan : value || {};
   const knowledgeSource = source.knowledge;
@@ -342,6 +367,7 @@ function normalizeContentPlan(value, allowedKnowledgeItemIds, allowedFactTitles)
       priority: imageNeeded ? normalizePriority(image.priority) : 0,
       reason: imageNeeded ? singleLine(image.reason) : '',
     },
+    original_material: normalizeOriginalMaterial(source.original_material || source.originalMaterial),
   };
 }
 
@@ -372,6 +398,16 @@ function normalizeStoredContentPlan(value) {
     illustration_type: normalizeIllustrationType(value.illustration_type || value.illustrationType),
     updated_at: value.updated_at || value.updatedAt || now(),
   };
+}
+
+function originalMaterialFromStoredPlan(value) {
+  const storedPlan = normalizeStoredContentPlan(value);
+  return normalizeOriginalMaterial(storedPlan?.plan?.original_material);
+}
+
+function needsOriginalMaterialOptimization(value) {
+  const originalMaterial = originalMaterialFromStoredPlan(value);
+  return originalMaterial.restored && !originalMaterial.optimized;
 }
 
 function pruneContentGenerationPlans(plans, leaves) {
@@ -434,6 +470,7 @@ function formatContentPlanForPrompt(plan) {
     `事实变量：${plan.facts?.titles?.length ? plan.facts.titles.join('；') : '无'}`,
     `表格：${plan.table.needed ? `需要，目的：${plan.table.purpose || '提升正文表达清晰度'}` : '不需要，本小节不要输出 Markdown 表格'}`,
     `AI 生图：${plan.image.needed ? `需要，风格：${plan.image.style}，标题：${plan.image.title}` : '不需要'}`,
+    `原方案还原：${plan.original_material?.restored ? `已还原 ${plan.original_material.restored_chars || 0} 字` : '未还原'}`,
   ];
   return lines.join('\n');
 }
@@ -727,6 +764,237 @@ function buildChapterContentMessages({ chapter, parentChapters, siblingChapters,
   return messages;
 }
 
+function buildRestoredChapterContentMessages({ chapter, parentChapters, siblingChapters, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent }) {
+  const messages = buildChapterContentMessages({
+    chapter,
+    parentChapters,
+    siblingChapters,
+    projectOverview,
+    selectedFactsText,
+    regenerateRequirement,
+    contentPlan,
+    knowledgeContents,
+  });
+  messages.splice(1, 0, {
+    role: 'user',
+    content: `当前章节已经从用户原方案中还原出正文底稿。该底稿是用户已经写好的真实技术方案内容，必须作为本章节的基础保留。
+
+处理要求：
+1. 首要遵从正文底稿，不要从零重写成另一套方案。
+2. 必须保留底稿中的实质信息、技术路线、服务承诺、设备参数、人员安排、周期、验收、售后和实施方法。
+3. 可以调整语序、合并重复表达、提升专业性、补充细节、增加过渡和说明，让正文更完整、更适合投标文件。
+4. 不要提到“原方案”“历史文档”“用户原文”或“底稿”。
+5. 输出当前章节完整正文，不输出标题。
+
+已还原正文底稿：
+${String(restoredContent || '').trim()}`,
+  });
+  return messages;
+}
+
+function splitLongOriginalSegment(segment) {
+  const content = String(segment.content || '').trim();
+  if (!content || content.length <= ORIGINAL_PLAN_SEGMENT_MAX_CHARS) {
+    return content ? [segment] : [];
+  }
+
+  const paragraphs = content.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  const chunks = [];
+  let buffer = [];
+  let size = 0;
+  for (const paragraph of paragraphs.length ? paragraphs : [content]) {
+    if (buffer.length && size + paragraph.length > ORIGINAL_PLAN_SEGMENT_MAX_CHARS) {
+      chunks.push({ ...segment, content: buffer.join('\n\n') });
+      buffer = [];
+      size = 0;
+    }
+    buffer.push(paragraph);
+    size += paragraph.length;
+  }
+  if (buffer.length) {
+    chunks.push({ ...segment, content: buffer.join('\n\n') });
+  }
+  return chunks;
+}
+
+function splitOriginalPlanSegments(markdown) {
+  const lines = normalizeNewlines(markdown).split('\n');
+  const rawSegments = [];
+  let titleStack = [];
+  let currentTitlePath = [];
+  let buffer = [];
+
+  function flush() {
+    const content = buffer.join('\n').trim();
+    if (content) {
+      rawSegments.push({ title_path: [...currentTitlePath], content });
+    }
+    buffer = [];
+  }
+
+  for (const line of lines) {
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
+    if (heading) {
+      flush();
+      const level = heading[1].length;
+      const title = singleLine(heading[2]);
+      titleStack = titleStack.slice(0, level - 1);
+      titleStack[level - 1] = title;
+      currentTitlePath = titleStack.filter(Boolean);
+      buffer.push(line.trim());
+      continue;
+    }
+    buffer.push(line);
+  }
+  flush();
+
+  const sourceSegments = rawSegments.length ? rawSegments : [{ title_path: [], content: String(markdown || '').trim() }];
+  const segments = sourceSegments.flatMap(splitLongOriginalSegment)
+    .map((segment, index) => {
+      const content = String(segment.content || '').trim();
+      return {
+        id: `P${String(index + 1).padStart(3, '0')}`,
+        title_path: Array.isArray(segment.title_path) ? segment.title_path.map((title) => singleLine(title)).filter(Boolean) : [],
+        content,
+        hash: textHash(content),
+        chars: content.length,
+      };
+    })
+    .filter((segment) => segment.content);
+
+  return segments;
+}
+
+function formatOriginalSegmentsForPrompt(segments) {
+  return (segments || []).map((segment) => `<original_segment id="${segment.id}">
+标题路径：${segment.title_path?.length ? segment.title_path.join(' > ') : '未识别标题'}
+字符数：${segment.chars || String(segment.content || '').length}
+原文：
+${segment.content}
+</original_segment>`).join('\n\n');
+}
+
+function formatRestoreTargetsForPrompt(targets) {
+  return (targets || []).map(({ item, parentChapters, siblingChapters }) => {
+    const parentPath = (parentChapters || []).map((parent) => `${parent.id || 'unknown'} ${parent.title || '未命名章节'}`).join(' > ') || '无';
+    const siblings = (siblingChapters || [])
+      .filter((sibling) => sibling.id !== item.id)
+      .map((sibling) => `${sibling.id || 'unknown'} ${sibling.title || '未命名章节'}`)
+      .join('；') || '无';
+    return `- node_id: ${item.id || 'unknown'}
+  标题: ${item.title || '未命名章节'}
+  描述: ${item.description || ''}
+  上级章节: ${parentPath}
+  同级章节: ${siblings}`;
+  }).join('\n');
+}
+
+function buildOriginalMaterialRestoreMessages({ targets, originalSegments, projectOverview, bidAnalysisFactsText, globalFactTitlesText }) {
+  return [
+    {
+      role: 'user',
+      content: `你是投标技术方案原文归属判断助手。用户提供的原方案是本次要扩写的核心草稿。请判断每个原方案段落应该还原到当前目录的哪个叶子小节。
+
+要求：
+1. 只返回 JSON，不要输出解释、总结或 Markdown。
+2. 你只能返回原方案段编号与叶子节点 ID 的映射，严禁改写、总结或生成正文。
+3. node_id 必须逐字使用“当前可还原叶子节点”中给出的 ID。
+4. source_ids 必须逐字使用“原方案段落”中的编号。
+5. 每个原方案段默认只分配给一个最匹配的主节点；如果完全不适合当前叶子节点，可以不分配。
+6. 优先按标题语义、章节职责、技术路线和同级章节边界归属，避免把同一内容拆散到无关章节。
+
+返回格式：
+{
+  "assignments": [
+    { "node_id": "1.1", "source_ids": ["P001", "P002"] }
+  ]
+}`,
+    },
+    { role: 'user', content: `项目概述：\n${projectOverview || '未提供'}` },
+    { role: 'user', content: `Step02 关键解析结果：\n${bidAnalysisFactsText || '未提供'}` },
+    { role: 'user', content: `Step04 全局事实变量标题清单：\n${globalFactTitlesText || '未提供'}` },
+    { role: 'user', content: `当前可还原叶子节点：\n${formatRestoreTargetsForPrompt(targets) || '无'}` },
+    { role: 'user', content: `原方案段落：\n${formatOriginalSegmentsForPrompt(originalSegments)}` },
+    { role: 'user', content: '请只返回 JSON，不要生成正文。' },
+  ];
+}
+
+function normalizeOriginalRestoreAssignments(value, context) {
+  const source = value?.result && typeof value.result === 'object' ? value.result : value || {};
+  const rawAssignments = Array.isArray(source)
+    ? source
+    : Array.isArray(source.assignments)
+      ? source.assignments
+      : Array.isArray(source.items)
+        ? source.items
+        : [];
+  const allowedNodeIds = context.allowedNodeIds || new Set();
+  const allowedSourceIds = context.allowedSourceIds || new Set();
+  const usedSourceIds = new Set();
+  const byNode = new Map();
+
+  for (const assignment of rawAssignments) {
+    const nodeId = String(assignment?.node_id || assignment?.nodeId || assignment?.id || '').trim();
+    if (!allowedNodeIds.has(nodeId)) {
+      continue;
+    }
+    const rawSourceIds = Array.isArray(assignment.source_ids || assignment.sourceIds)
+      ? assignment.source_ids || assignment.sourceIds
+      : Array.isArray(assignment.sources)
+        ? assignment.sources
+        : [];
+    const sourceIds = rawSourceIds
+      .map((sourceId) => String(sourceId || '').trim())
+      .filter((sourceId) => allowedSourceIds.has(sourceId) && !usedSourceIds.has(sourceId));
+    if (!sourceIds.length) {
+      continue;
+    }
+    for (const sourceId of sourceIds) {
+      usedSourceIds.add(sourceId);
+    }
+    byNode.set(nodeId, [...(byNode.get(nodeId) || []), ...sourceIds]);
+  }
+
+  return {
+    assignments: Array.from(byNode.entries()).map(([node_id, source_ids]) => ({
+      node_id,
+      source_ids: [...new Set(source_ids)],
+    })),
+  };
+}
+
+function validateOriginalRestoreAssignments(value) {
+  if (!value || !Array.isArray(value.assignments)) {
+    throw new Error('原方案还原映射缺少 assignments 数组');
+  }
+  for (const assignment of value.assignments) {
+    if (!assignment.node_id || !Array.isArray(assignment.source_ids)) {
+      throw new Error('原方案还原映射项缺少 node_id 或 source_ids');
+    }
+  }
+}
+
+function buildOriginalRestoreRepairMessages({ invalidContent, issues }, targets, originalSegments) {
+  const issueLines = (issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
+  return [
+    {
+      role: 'user',
+      content: `你是严格的 JSON 修复器。请把模型输出修复为“原方案段落归属映射”JSON。
+
+必须满足：
+1. 顶层只能包含 assignments 数组。
+2. 每条 assignment 必须包含 node_id 和 source_ids。
+3. node_id 只能使用当前可还原叶子节点中的 ID。
+4. source_ids 只能使用原方案段落编号。
+5. 严禁输出正文、总结、解释或 Markdown。`,
+    },
+    { role: 'user', content: `当前可还原叶子节点：\n${formatRestoreTargetsForPrompt(targets) || '无'}` },
+    { role: 'user', content: `可用原方案段编号：\n${(originalSegments || []).map((segment) => segment.id).join('、')}` },
+    { role: 'user', content: `错误列表：\n${issueLines}` },
+    { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
+  ];
+}
+
 function formatOutlineForPrompt(items, level = 1, lines = []) {
   for (const item of items || []) {
     const indent = '  '.repeat(Math.max(0, level - 1));
@@ -755,22 +1023,22 @@ function createOutlineNodeMap(items) {
   return map;
 }
 
-function formatOutlineExpansionContext(items, level = 1, lines = []) {
+function formatOutlineExpansionContext(items, level = 1, lines = [], restoredNodeIds = new Set()) {
   for (const item of items || []) {
     const id = String(item?.id || 'unknown').trim() || 'unknown';
     const title = singleLine(item?.title || '未命名章节');
     const indent = '  '.repeat(Math.max(0, level - 1));
-    const addState = level >= 1 && level <= 3 ? `add:L${level + 1}` : 'locked';
+    const addState = restoredNodeIds.has(id) ? 'locked-restored' : level >= 1 && level <= 3 ? `add:L${level + 1}` : 'locked';
     lines.push(`${indent}- ${id} | L${level} | ${addState} | ${title}`);
     if (item?.children?.length) {
-      formatOutlineExpansionContext(item.children, level + 1, lines);
+      formatOutlineExpansionContext(item.children, level + 1, lines, restoredNodeIds);
     }
   }
   return lines.join('\n');
 }
 
-function buildOutlineExpansionMessages({ projectOverview, globalFactsText, outlineData, currentWords, minimumWords, medianLeafWords, round, nodeMap }) {
-  const sampleParentId = Array.from(nodeMap.entries()).find(([, info]) => info.level === 1)?.[0] || '1';
+function buildOutlineExpansionMessages({ projectOverview, globalFactsText, outlineData, currentWords, minimumWords, medianLeafWords, round, nodeMap, restoredNodeIds }) {
+  const sampleParentId = Array.from(nodeMap.entries()).find(([id, info]) => info.level === 1 && !restoredNodeIds?.has(id))?.[0] || '1';
   return [
     {
       role: 'user',
@@ -779,12 +1047,13 @@ function buildOutlineExpansionMessages({ projectOverview, globalFactsText, outli
 要求：
 1. 只返回 JSON，不要输出解释、总结或 Markdown。
 2. 只能新增二级、三级、四级目录，严禁新增、删除、重命名或调整一级目录。
-3. parent_id 只能使用目录上下文中标记为 add:* 的节点 ID，必须逐字复制；locked 节点不能作为 parent_id。
+3. parent_id 只能使用目录上下文中标记为 add:* 的节点 ID，必须逐字复制；locked 和 locked-restored 节点不能作为 parent_id。
 4. 只输出新增目录，不要输出完整目录，不要输出正文内容。
 5. 允许补充通用但不违背项目的技术方案内容，例如组织管理、质量控制、安全管理、进度保障、验收交付、运维服务、培训计划、资料管理、风险控制、应急响应等。
 6. 不要重复已有目录，不要输出明显凑字数的空泛标题。
 7. 四级目录不能再包含 children。
 8. 新增目录不得引入与全局事实变量冲突的项目范围、周期、地点、验收、质保、售后或技术边界方向。
+9. locked-restored 节点已经承载用户原方案正文，严禁新增子节点，不允许把已还原正文节点拆成下级目录。
 
 返回格式：
 {
@@ -802,7 +1071,7 @@ function buildOutlineExpansionMessages({ projectOverview, globalFactsText, outli
     },
     { role: 'user', content: `项目概述：\n${projectOverview || '未提供'}` },
     ...(String(globalFactsText || '').trim() ? [{ role: 'user', content: `全局事实变量（新增目录不得冲突）：\n${globalFactsText}` }] : []),
-    { role: 'user', content: `目录上下文（每行：id | 层级 | 可挂载状态 | 标题）：\n${formatOutlineExpansionContext(outlineData.outline || [])}` },
+    { role: 'user', content: `目录上下文（每行：id | 层级 | 可挂载状态 | 标题）：\n${formatOutlineExpansionContext(outlineData.outline || [], 1, [], restoredNodeIds)}` },
     { role: 'user', content: `当前总字数：${currentWords}\n预期最低字数：${minimumWords}\n当前叶子节点字数中位数：${medianLeafWords}\n本次补目录轮次：${round}/${MAX_OUTLINE_EXPANSION_ROUNDS}\n请只返回新增目录 JSON。` },
   ];
 }
@@ -908,6 +1177,10 @@ function normalizeOutlineExpansionResponse(payload, context) {
       issues.push(`additions[${index}].parent_id 无效：${parentId || '空'}`);
       return;
     }
+    if (context.restoredNodeIds?.has(parentId)) {
+      issues.push(`additions[${index}].parent_id 不能使用已还原原方案正文的节点：${parentId}`);
+      return;
+    }
     const child = normalizeOutlineExpansionChild(candidate, parentInfo.level + 1, `additions[${index}]`, issues, OUTLINE_EXPANSION_ADDITION_KEYS);
     if (child) {
       additions.push({ parent_id: parentId, ...child });
@@ -927,7 +1200,7 @@ function validateOutlineExpansionResponse(payload) {
   }
 }
 
-function buildOutlineExpansionRepairMessages({ invalidContent, issues }, outlineItems) {
+function buildOutlineExpansionRepairMessages({ invalidContent, issues }, outlineItems, restoredNodeIds = new Set()) {
   const issueLines = (issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
   return [
     {
@@ -937,13 +1210,14 @@ function buildOutlineExpansionRepairMessages({ invalidContent, issues }, outline
 必须满足：
 1. 顶层只能有 additions 数组。
 2. 每条 additions 必须包含 parent_id、title、description，可以包含 children。
-3. parent_id 只能使用目录上下文中标记为 add:* 的节点 ID，必须逐字复制；locked 节点不能作为 parent_id。
+3. parent_id 只能使用目录上下文中标记为 add:* 的节点 ID，必须逐字复制；locked 和 locked-restored 节点不能作为 parent_id。
 4. 只能新增二级、三级、四级目录；四级目录不能包含 children。
 5. 禁止输出完整 outline、正文、图片、表格或解释文字。
 6. 如果没有可补充目录，返回 {"additions":[]}。
+7. locked-restored 节点已经承载用户原方案正文，严禁新增子节点。
 
 目录上下文（每行：id | 层级 | 可挂载状态 | 标题）：
-${formatOutlineExpansionContext(outlineItems || [])}`,
+${formatOutlineExpansionContext(outlineItems || [], 1, [], restoredNodeIds)}`,
     },
     { role: 'user', content: `错误列表：\n${issueLines}` },
     { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
@@ -1420,6 +1694,202 @@ function buildConsistencyRepairJsonRepairMessages({ invalidContent, issues }, ex
     },
     { role: 'user', content: `错误列表：\n${issueLines}` },
     { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
+  ];
+}
+
+const ORIGINAL_COVERAGE_STATUSES = new Set(['covered', 'partial', 'missing', 'conflict']);
+
+function normalizeOriginalCoverageStatus(value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (ORIGINAL_COVERAGE_STATUSES.has(text)) return text;
+  if (['已覆盖', '覆盖', '完整', '保留', '保留完整'].includes(text)) return 'covered';
+  if (['部分', '部分覆盖', '部分保留', 'partial_covered'].includes(text)) return 'partial';
+  if (['缺失', '未覆盖', '未保留', '遗漏'].includes(text)) return 'missing';
+  if (['冲突', '矛盾', '不一致'].includes(text)) return 'conflict';
+  return text;
+}
+
+function formatOriginalCoverageSources(sources) {
+  return (sources || []).map((segment) => `<source id="${segment.id}">
+标题路径：${segment.title_path?.length ? segment.title_path.join(' > ') : '未识别标题'}
+字符数：${segment.chars || String(segment.content || '').length}
+原文：
+${segment.content || ''}
+</source>`).join('\n\n');
+}
+
+function buildOriginalCoverageAuditMessages({ target }) {
+  const allowedSourceIds = (target.sources || []).map((segment) => segment.id).filter(Boolean);
+  return [
+    {
+      role: 'user',
+      content: `你是投标技术方案原方案覆盖审计助手。请检查当前小节正文是否保留了原方案来源段中的实质内容。
+
+要求：
+1. 只返回 JSON，不要输出解释、总结或 Markdown。
+2. 必须对每个 source_id 返回一条 items 记录，covered 也必须返回。
+3. 可接受改写、扩写、调序、合并和专业化表达；不要因为不是逐字一致就判为缺失。
+4. 重点检查原方案中的实质信息、技术路线、服务承诺、设备参数、人员安排、周期、验收、售后、实施方法是否仍然保留。
+5. status 只能是 covered、partial、missing、conflict。
+6. covered 表示核心内容已经保留；partial 表示部分核心信息缺失；missing 表示该来源段核心内容基本没有体现；conflict 表示正文与来源段核心事实明显相反或矛盾。
+7. conflict 只报告，不要求修复；partial/missing 请给出 missing_points 和 repair_suggestion。
+8. node_id 必须是当前小节编号，source_id 必须来自允许清单。
+
+返回格式：
+{
+  "items": [
+    {
+      "source_id": "P001",
+      "node_id": "${target.item.id || 'unknown'}",
+      "status": "covered",
+      "missing_points": [],
+      "repair_suggestion": ""
+    }
+  ]
+}`,
+    },
+    { role: 'user', content: `当前小节：${target.item.id || 'unknown'} ${target.item.title || '未命名章节'}\n路径：${formatChapterPath(target)}\n描述：${target.item.description || ''}` },
+    { role: 'user', content: `允许的 source_id：\n${JSON.stringify(allowedSourceIds, null, 2)}` },
+    { role: 'user', content: `原方案来源段：\n${formatOriginalCoverageSources(target.sources)}` },
+    { role: 'user', content: `当前小节正文：\n${target.content || ''}` },
+    { role: 'user', content: '请只返回覆盖审计 JSON。' },
+  ];
+}
+
+function normalizeOriginalCoverageAuditResponse(value, context = {}) {
+  const source = value?.result && typeof value.result === 'object' ? value.result : value || {};
+  const rawItems = Array.isArray(source)
+    ? source
+    : Array.isArray(source.items)
+      ? source.items
+      : Array.isArray(source.results)
+        ? source.results
+        : Array.isArray(source.coverage)
+          ? source.coverage
+          : [];
+  const allowedSourceIds = context.allowedSourceIds instanceof Set ? context.allowedSourceIds : new Set(context.allowedSourceIds || []);
+  const expectedNodeId = String(context.expectedNodeId || '').trim();
+  const issues = [];
+  const items = [];
+  const seenSourceIds = new Set();
+
+  rawItems.forEach((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      issues.push(`items[${index}] 必须是对象`);
+      return;
+    }
+    const sourceId = String(item.source_id || item.sourceId || item.id || '').trim();
+    if (!sourceId || !allowedSourceIds.has(sourceId)) {
+      issues.push(`items[${index}].source_id 无效：${sourceId || '空'}`);
+      return;
+    }
+    if (seenSourceIds.has(sourceId)) {
+      issues.push(`items[${index}].source_id 重复：${sourceId}`);
+      return;
+    }
+    const nodeId = singleLine(item.node_id || item.nodeId || item.section_id || item.sectionId || expectedNodeId);
+    if (!nodeId || (expectedNodeId && nodeId !== expectedNodeId)) {
+      issues.push(`items[${index}].node_id 无效：${nodeId || '空'}`);
+      return;
+    }
+    const status = normalizeOriginalCoverageStatus(item.status || item.coverage_status || item.coverageStatus);
+    if (!ORIGINAL_COVERAGE_STATUSES.has(status)) {
+      issues.push(`items[${index}].status 无效：${status || '空'}`);
+      return;
+    }
+    const rawMissingPoints = Array.isArray(item.missing_points || item.missingPoints)
+      ? item.missing_points || item.missingPoints
+      : item.missing_point || item.missingPoint || item.reason
+        ? [item.missing_point || item.missingPoint || item.reason]
+        : [];
+    seenSourceIds.add(sourceId);
+    items.push({
+      source_id: sourceId,
+      node_id: nodeId,
+      status,
+      missing_points: rawMissingPoints.map((point) => String(point || '').trim()).filter(Boolean),
+      repair_suggestion: String(item.repair_suggestion || item.repairSuggestion || item.suggestion || '').trim(),
+    });
+  });
+
+  if (issues.length) {
+    throw new Error(`原方案覆盖审计结果格式无效：${issues.join('；')}`);
+  }
+  return { items };
+}
+
+function validateOriginalCoverageAuditResponse(value, allowedSourceIds) {
+  if (!value || !Array.isArray(value.items)) {
+    throw new Error('原方案覆盖审计结果缺少 items 数组');
+  }
+  const allowed = allowedSourceIds instanceof Set ? allowedSourceIds : new Set(allowedSourceIds || []);
+  const seen = new Set(value.items.map((item) => item.source_id).filter(Boolean));
+  const missing = Array.from(allowed).filter((sourceId) => !seen.has(sourceId));
+  if (missing.length) {
+    throw new Error(`原方案覆盖审计缺少 source_id：${missing.join('、')}`);
+  }
+}
+
+function buildOriginalCoverageAuditJsonRepairMessages({ invalidContent, issues }, target) {
+  const issueLines = (issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
+  const allowedSourceIds = (target.sources || []).map((segment) => segment.id).filter(Boolean);
+  return [
+    {
+      role: 'user',
+      content: `你是严格的 JSON 修复器。请把模型输出修复为“原方案覆盖审计”JSON。
+
+必须满足：
+1. 顶层只能包含 items 数组。
+2. 必须为每个 source_id 返回一条 item，不能遗漏，不能重复。
+3. 每条 item 必须包含 source_id、node_id、status、missing_points、repair_suggestion。
+4. node_id 必须是 ${target.item.id || 'unknown'}。
+5. status 只能是 covered、partial、missing、conflict。
+6. 禁止输出正文、修复 patch、Markdown 或解释文字。
+
+允许的 source_id：
+${JSON.stringify(allowedSourceIds, null, 2)}`,
+    },
+    { role: 'user', content: `错误列表：\n${issueLines}` },
+    { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
+  ];
+}
+
+function buildOriginalCoverageRepairMessages({ target, coverageItems, currentContent, attempt, failures }) {
+  const failureBlock = (failures || []).length
+    ? `\n上次补写应用失败原因：\n${failures.map((failure, index) => `${index + 1}. ${failure}`).join('\n')}\n请重新返回可应用的 insert/replace patch。`
+    : '';
+  const sourceById = new Map((target.sources || []).map((segment) => [segment.id, segment]));
+  const issueSourceIds = [...new Set((coverageItems || []).map((item) => item.source_id).filter(Boolean))];
+  const issueSources = issueSourceIds.map((sourceId) => sourceById.get(sourceId)).filter(Boolean);
+
+  return [
+    {
+      role: 'user',
+      content: `你是投标技术方案正文原方案覆盖修复助手。请只针对当前小节返回一次局部补写 patch，用于补回原方案中缺失的实质内容。
+
+要求：
+1. 只返回 JSON，不要输出解释、总结或 Markdown 代码围栏。
+2. 不要返回完整正文，只返回一次 insert 或 replace 操作。
+3. operation 只能是 "insert" 或 "replace"。
+4. 优先使用 insert 在合适段落后补充缺失内容；如果正文已有同主题但内容不完整，可使用 replace 扩写该段。
+5. anchor 填写建议插入/替换的当前正文段落关键摘录；适合放末尾时写 "end"。
+6. content 只写新增或替换后的正文片段，不要包含章节标题。
+7. 必须补回审计指出的 partial/missing 核心信息，但不要提到“原方案”“来源段”“用户原文”。
+8. 不要新增图片 Markdown、Mermaid、代码块或伪目录标题。
+9. 保持与当前小节职责一致，不要写其他章节内容。
+
+返回格式：
+{
+  "operation": "insert",
+  "anchor": "end",
+  "content": "补写后的正文片段"
+}`,
+    },
+    { role: 'user', content: `当前小节：${target.item.id || 'unknown'} ${target.item.title || '未命名章节'}\n路径：${formatChapterPath(target)}\n描述：${target.item.description || ''}` },
+    { role: 'user', content: `需要补回的原方案来源段：\n${formatOriginalCoverageSources(issueSources)}` },
+    { role: 'user', content: `覆盖审计问题：\n${JSON.stringify(coverageItems || [], null, 2)}` },
+    { role: 'user', content: `当前小节正文：\n${currentContent || ''}` },
+    { role: 'user', content: `补写尝试次数：${attempt}/${ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS}${failureBlock}\n请只返回 JSON。` },
   ];
 }
 
@@ -2192,6 +2662,26 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   const globalFactTitlesText = formatGlobalFactTitlesForPrompt(globalFacts);
   const allowedFactTitles = new Set(globalFacts.map((group) => singleLine(group?.title)).filter(Boolean));
   const bidAnalysisFactsText = formatBidAnalysisFactsForPrompt(storedPlan);
+  const isExpansionWorkflow = storedPlan.workflowKind === 'existing-plan-expansion';
+  let originalPlanMarkdown = '';
+  let originalPlanSegments = [];
+  if (isExpansionWorkflow) {
+    if (!storedPlan.originalPlanFile) {
+      throw new Error('请先上传原方案，再生成正文');
+    }
+    if (!workspaceStore.readOriginalPlanMarkdown) {
+      throw new Error('原方案读取服务尚未初始化');
+    }
+    originalPlanMarkdown = workspaceStore.readOriginalPlanMarkdown();
+    if (!String(originalPlanMarkdown || '').trim()) {
+      throw new Error('请先上传原方案，再生成正文');
+    }
+    originalPlanSegments = splitOriginalPlanSegments(originalPlanMarkdown);
+    if (!originalPlanSegments.length) {
+      throw new Error('原方案正文为空，无法执行已有方案扩写');
+    }
+  }
+  const originalPlanSegmentById = new Map(originalPlanSegments.map((segment) => [segment.id, segment]));
 
   const projectOverview = outlineData.project_overview || storedPlan.projectOverview || '';
   const techRequirements = storedPlan.techRequirements || '';
@@ -2226,6 +2716,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   const aiImagesEnabled = Boolean(generationOptions.useAiImages ?? generationOptions.use_ai_images ?? imageAvailability.available) && imageAvailability.available;
   const mermaidImagesEnabled = Boolean(generationOptions.useMermaidImages ?? generationOptions.use_mermaid_images ?? Boolean(targetItemId));
   const enableConsistencyAudit = Boolean(generationOptions.enableConsistencyAudit ?? generationOptions.enable_consistency_audit ?? true);
+  const enableOriginalPlanCoverageAudit = isExpansionWorkflow && Boolean(generationOptions.enableOriginalPlanCoverageAudit ?? generationOptions.enable_original_plan_coverage_audit ?? false);
   const requestedMaxImages = Number(generationOptions.maxAiImages ?? generationOptions.max_ai_images);
   const configuredMaxAiImages = aiImagesEnabled
     ? Math.max(0, Math.min(Number.isFinite(requestedMaxImages) ? Math.round(requestedMaxImages) : 6, targetItemId ? 1 : leaves.length))
@@ -2273,7 +2764,8 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   let tasksToRun = leaves.filter(({ item }) => {
     const section = sections[item.id];
     const content = section?.content || item.content || '';
-    return regenerate || section?.status === 'error' || !String(content).trim();
+    const originalState = getOriginalMaterialRuntimeState(item);
+    return regenerate || section?.status === 'error' || !String(content).trim() || originalState.needsOptimization || originalState.needsRestoreRepair;
   });
   if (targetItemId) {
     const targetSection = sections[targetItemId];
@@ -2341,6 +2833,10 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   logs = [...logs, enableConsistencyAudit
     ? '全文一致性审计已启用，正文扩写完成后将在配图前检查并修复事实冲突。'
     : '全文一致性审计未启用，本次正文生成将直接进入配图阶段。'];
+  if (isExpansionWorkflow) {
+    logs = [...logs, `已有方案扩写模式：已读取原方案并拆分为 ${originalPlanSegments.length} 个原文段。`];
+    logs = [...logs, enableOriginalPlanCoverageAudit ? '原方案覆盖审计已启用，将在字数扩充后检查原文保留情况。' : '原方案覆盖审计未启用。'];
+  }
 
   const developerLogger = createContentDeveloperLogger(aiService, {
     name: targetItemId ? `content-generation-${targetItemId}` : 'content-generation',
@@ -2358,6 +2854,8 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       ai_images_enabled: aiImagesEnabled,
       mermaid_images_enabled: mermaidImagesEnabled,
       enable_consistency_audit: enableConsistencyAudit,
+      enable_original_plan_coverage_audit: enableOriginalPlanCoverageAudit,
+      original_plan_segment_count: originalPlanSegments.length,
       generation_options: generationOptions,
     },
   });
@@ -2532,6 +3030,138 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     return saved;
   }
 
+  function getStoredContentPlan(itemId) {
+    return normalizeStoredContentPlan(storedContentPlans[itemId]);
+  }
+
+  function getContentPlanForItem(itemId) {
+    const plan = contentPlans.get(itemId) || getStoredContentPlan(itemId)?.plan || normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
+    contentPlans.set(itemId, plan);
+    return plan;
+  }
+
+  function saveContentPlanForItem(itemId, plan, illustrationType) {
+    const storedContentPlan = getStoredContentPlan(itemId);
+    const nextIllustrationType = normalizeIllustrationType(illustrationType || storedContentPlan?.illustration_type || 'none');
+    contentPlans.set(itemId, plan);
+    storedContentPlans = pruneContentGenerationPlans({
+      ...storedContentPlans,
+      [itemId]: createStoredContentPlan(plan, nextIllustrationType),
+    }, leaves);
+    const saved = workspaceStore.updateTechnicalPlan({ contentGenerationPlans: storedContentPlans, contentGenerationRuntime: syncRuntime() });
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved);
+    return saved;
+  }
+
+  function getOriginalMaterialRuntimeState(itemOrId) {
+    const itemId = typeof itemOrId === 'string' ? itemOrId : String(itemOrId?.id || '').trim();
+    const item = typeof itemOrId === 'string' ? leaves.find((context) => context.item.id === itemId)?.item : itemOrId;
+    const plan = contentPlans.get(itemId) || getStoredContentPlan(itemId)?.plan || normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
+    const originalMaterial = normalizeOriginalMaterial(plan.original_material);
+    const sourceSegments = originalMaterial.source_ids.map((sourceId) => originalPlanSegmentById.get(sourceId)).filter(Boolean);
+    const allSourcesValid = Boolean(originalMaterial.source_ids.length) && sourceSegments.length === originalMaterial.source_ids.length;
+    const content = sections[itemId]?.content || item?.content || '';
+    const hasContent = Boolean(String(content || '').trim());
+    const validRestored = Boolean(originalMaterial.restored && allSourcesValid && hasContent);
+    const needsRestoreRepair = Boolean(originalMaterial.restored && !validRestored);
+    return {
+      plan,
+      originalMaterial,
+      sourceSegments,
+      allSourcesValid,
+      content,
+      hasContent,
+      validRestored,
+      needsRestoreRepair,
+      canRebuildRestoredContent: Boolean(originalMaterial.restored && allSourcesValid && !hasContent),
+      needsOptimization: Boolean(validRestored && !originalMaterial.optimized),
+    };
+  }
+
+  function buildOriginalMaterialFromSegments(segments, previous = {}) {
+    const restoredContent = segments.map((segment) => segment.content).join('\n\n').trim();
+    return normalizeOriginalMaterial({
+      restored: true,
+      optimized: false,
+      source_ids: segments.map((segment) => segment.id),
+      source_titles: segments.map((segment) => segment.title_path?.join(' > ') || segment.id),
+      source_hashes: segments.map((segment) => segment.hash),
+      restored_chars: restoredContent.length,
+      restored_at: previous.restored_at || now(),
+    });
+  }
+
+  function saveSectionAndContentPlan(item, partial, contentForOutline, plan, illustrationType, taskPartial = {}) {
+    const prev = workspaceStore.loadTechnicalPlan() || {};
+    const hasPartialContent = Object.prototype.hasOwnProperty.call(partial || {}, 'content');
+    const hasOutlineContent = contentForOutline !== undefined;
+    const nextPartial = { ...(partial || {}) };
+    if (hasPartialContent) {
+      nextPartial.content = normalizeLeafContentForSave(nextPartial.content, item);
+    }
+    sections = withSection(prev.contentGenerationSections || sections, item, nextPartial);
+    const currentOutlineData = prev.outlineData || outlineData;
+    const outlineContent = hasOutlineContent || hasPartialContent
+      ? normalizeLeafContentForSave(contentForOutline ?? (sections[item.id].content || ''), item)
+      : (sections[item.id].content || '');
+    if (hasOutlineContent || hasPartialContent) {
+      sections = {
+        ...sections,
+        [item.id]: {
+          ...sections[item.id],
+          content: outlineContent,
+        },
+      };
+    }
+    const nextOutlineData = {
+      ...currentOutlineData,
+      outline: updateOutlineItemContent(currentOutlineData.outline || outlineData.outline, item.id, outlineContent),
+    };
+    outlineData = nextOutlineData;
+    const storedContentPlan = getStoredContentPlan(item.id);
+    const nextIllustrationType = normalizeIllustrationType(illustrationType || storedContentPlan?.illustration_type || 'none');
+    contentPlans.set(item.id, plan);
+    storedContentPlans = pruneContentGenerationPlans({
+      ...storedContentPlans,
+      [item.id]: createStoredContentPlan(plan, nextIllustrationType),
+    }, leaves);
+    const runtime = syncRuntime();
+    const saved = workspaceStore.updateTechnicalPlan({
+      contentGenerationSections: sections,
+      outlineData: nextOutlineData,
+      contentGenerationPlans: storedContentPlans,
+      contentGenerationRuntime: runtime,
+    });
+    if (hasOutlineContent || hasPartialContent) {
+      writeDeveloperLog('content.section.saved', {
+        section_id: item.id,
+        title: item.title || '未命名章节',
+        status: sections[item.id]?.status || 'idle',
+        content_metrics: textMetrics(outlineContent),
+      });
+    }
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), stats: statsSnapshot(), ...taskPartial }, saved, {
+      outlineData: nextOutlineData,
+      contentSection: sections[item.id],
+      contentRuntime: runtime,
+      technicalPlanPatch: {
+        contentGenerationPlans: storedContentPlans,
+        contentGenerationRuntime: runtime,
+      },
+    });
+    return saved;
+  }
+
+  function getRestoredNodeIds() {
+    const restoredIds = new Set();
+    for (const { item } of leaves) {
+      if (getOriginalMaterialRuntimeState(item).validRestored) {
+        restoredIds.add(item.id);
+      }
+    }
+    return restoredIds;
+  }
+
   function illustrationTypeForSinglePlan(contentPlan) {
     if (contentPlan.image.needed) {
       return 'ai';
@@ -2686,6 +3316,94 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
   }
 
+  async function restoreOriginalMaterialsIfNeeded(targets) {
+    if (!isExpansionWorkflow || !originalPlanSegments.length || !targets?.length) {
+      return;
+    }
+
+    const targetStates = targets.map((context) => ({ context, state: getOriginalMaterialRuntimeState(context.item) }));
+    const rebuildTargets = targetStates.filter(({ state }) => state.canRebuildRestoredContent || (targetItemId && regenerate && state.validRestored));
+    const restoreTargets = targetStates
+      .filter(({ state }) => !state.validRestored && !state.canRebuildRestoredContent)
+      .map(({ context }) => context);
+    if (!restoreTargets.length && !rebuildTargets.length) {
+      logs = [...logs, '原方案还原：当前待生成小节均已完成还原，跳过还原阶段。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return;
+    }
+
+    contentStats.phase = 'restoring';
+    workspaceStore.updateTechnicalPlan({ contentGenerationRuntime: syncRuntime({ phase: 'restoring' }) });
+    logs = [...logs, `开始原方案还原：${originalPlanSegments.length} 个原文段，${restoreTargets.length} 个候选叶子小节，${rebuildTargets.length} 个小节可直接重建原文。`];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+    const assignedSourceIds = new Set();
+    let restoredCount = 0;
+    for (const { context, state } of rebuildTargets) {
+      const segments = state.sourceSegments;
+      segments.forEach((segment) => assignedSourceIds.add(segment.id));
+      const restoredContent = segments.map((segment) => segment.content).join('\n\n').trim();
+      const originalMaterial = buildOriginalMaterialFromSegments(segments, state.originalMaterial);
+      saveSectionAndContentPlan(context.item, { status: 'idle', content: restoredContent, error: undefined }, restoredContent, {
+        ...state.plan,
+        original_material: originalMaterial,
+      }, undefined, { logs });
+      restoredCount += 1;
+    }
+
+    if (restoreTargets.length) {
+      const allowedNodeIds = new Set(restoreTargets.map(({ item }) => item.id).filter(Boolean));
+      const allowedSourceIds = new Set(originalPlanSegments.map((segment) => segment.id));
+      const result = await aiService.collectJsonResponse({
+        messages: buildOriginalMaterialRestoreMessages({
+          targets: restoreTargets,
+          originalSegments: originalPlanSegments,
+          projectOverview,
+          bidAnalysisFactsText,
+          globalFactTitlesText,
+        }),
+        temperature: 0.1,
+        logTitle: '原方案正文还原映射',
+        progressLabel: '原方案还原',
+        failureMessage: '模型返回的原方案还原映射格式无效',
+        normalizer: (value) => normalizeOriginalRestoreAssignments(value, { allowedNodeIds, allowedSourceIds }),
+        validator: validateOriginalRestoreAssignments,
+        repairMessagesBuilder: (context) => buildOriginalRestoreRepairMessages(context, restoreTargets, originalPlanSegments),
+        progressCallback: (message) => {
+          logs = [...logs, message || '原方案还原映射格式校验失败，正在修复'];
+          updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+        },
+      });
+
+      const targetById = new Map(restoreTargets.map((context) => [context.item.id, context]));
+      for (const assignment of result.assignments || []) {
+        const context = targetById.get(assignment.node_id);
+        if (!context) {
+          continue;
+        }
+        const segments = (assignment.source_ids || []).map((sourceId) => originalPlanSegmentById.get(sourceId)).filter(Boolean);
+        if (!segments.length) {
+          continue;
+        }
+        segments.forEach((segment) => assignedSourceIds.add(segment.id));
+        const restoredContent = segments.map((segment) => segment.content).join('\n\n').trim();
+        const plan = getContentPlanForItem(context.item.id);
+        const originalMaterial = buildOriginalMaterialFromSegments(segments);
+        saveSectionAndContentPlan(context.item, { status: 'idle', content: restoredContent, error: undefined }, restoredContent, {
+          ...plan,
+          original_material: originalMaterial,
+        }, undefined, { logs });
+        restoredCount += 1;
+      }
+    }
+
+    const unassignedCount = originalPlanSegments.filter((segment) => !assignedSourceIds.has(segment.id)).length;
+    logs = [...logs, `原方案还原完成：已还原 ${restoredCount} 个小节，未分配原文段 ${unassignedCount} 个。`];
+    contentStats.phase = 'generating';
+    workspaceStore.updateTechnicalPlan({ contentGenerationRuntime: syncRuntime({ phase: 'generating' }) });
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+  }
+
   async function prepareSingleSectionPlan() {
     const context = tasksToRun[0];
     const storedContentPlan = normalizeStoredContentPlan(storedContentPlans[context.item.id]);
@@ -2722,9 +3440,15 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     const previousSection = sections[item.id] || {};
     const previousContent = previousSection.content || item.content || '';
     const isSingleSectionRegeneration = Boolean(targetItemId);
-    let rawContent = regenerate || retryItemIds.has(item.id) ? '' : previousContent;
+    let contentPlan = getContentPlanForItem(item.id);
+    let originalState = getOriginalMaterialRuntimeState(item);
+    let originalMaterial = originalState.originalMaterial;
+    const needsRestoredOptimization = originalState.needsOptimization;
+    let rawContent = needsRestoredOptimization ? previousContent : regenerate || retryItemIds.has(item.id) ? '' : previousContent;
     let content = stripRepeatedChapterTitle(normalizeGeneratedMarkdown(rawContent), item);
-    logs = [...logs, `开始生成：${item.id} ${item.title || '未命名章节'}`];
+    logs = [...logs, needsRestoredOptimization
+      ? `开始基于原方案优化扩写：${item.id} ${item.title || '未命名章节'}`
+      : `开始生成：${item.id} ${item.title || '未命名章节'}`];
     saveSection(item, {
       status: 'running',
       content: isSingleSectionRegeneration ? previousContent : content,
@@ -2732,21 +3456,39 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     }, isSingleSectionRegeneration ? previousContent : content, { logs });
 
     try {
-      const contentPlan = contentPlans.get(item.id) || normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
+      contentPlan = getContentPlanForItem(item.id);
+      originalState = getOriginalMaterialRuntimeState(item);
+      originalMaterial = originalState.originalMaterial;
       const knowledgeContents = resolveKnowledgeContents(contentPlan.knowledge?.item_ids, knowledgeContentMap);
       const selectedFactsText = resolveSelectedFactsText(contentPlan, globalFacts);
 
       const generatedContent = await aiService.chat({
-        messages: buildChapterContentMessages({ chapter: item, parentChapters, siblingChapters, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents }),
+        messages: needsRestoredOptimization
+          ? buildRestoredChapterContentMessages({ chapter: item, parentChapters, siblingChapters, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent: previousContent })
+          : buildChapterContentMessages({ chapter: item, parentChapters, siblingChapters, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents }),
         temperature: 0.7,
-        logTitle: `正文生成-${item.id}-${item.title || '未命名章节'}`,
+        logTitle: `${needsRestoredOptimization ? '原方案优化扩写' : '正文生成'}-${item.id}-${item.title || '未命名章节'}`,
       });
-      rawContent += generatedContent || '';
+
+      rawContent = needsRestoredOptimization ? generatedContent || '' : rawContent + (generatedContent || '');
 
       content = stripRepeatedChapterTitle(normalizeGeneratedMarkdown(rawContent), item);
-      logs = [...logs, `生成完成：${item.id} ${item.title || '未命名章节'}`];
+      logs = [...logs, needsRestoredOptimization
+        ? `原方案优化扩写完成：${item.id} ${item.title || '未命名章节'}`
+        : `生成完成：${item.id} ${item.title || '未命名章节'}`];
       rememberTouchedItem(item.id);
-      saveSection(item, { status: 'success', content, error: undefined }, content, { logs });
+      if (needsRestoredOptimization) {
+        saveSectionAndContentPlan(item, { status: 'success', content, error: undefined }, content, {
+          ...contentPlan,
+          original_material: normalizeOriginalMaterial({
+            ...originalMaterial,
+            optimized: true,
+            optimized_at: now(),
+          }),
+        }, undefined, { logs });
+      } else {
+        saveSection(item, { status: 'success', content, error: undefined }, content, { logs });
+      }
     } catch (error) {
       const message = error.message || '正文生成失败';
       logs = [...logs, `生成失败：${item.id} ${item.title || '未命名章节'}，${message}${isSingleSectionRegeneration ? '。已保留原正文。' : ''}`];
@@ -2811,7 +3553,8 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     return leaves.filter(({ item }) => {
       const section = sections[item.id];
       const content = section?.content || item.content || '';
-      return section?.status === 'error' || !String(content).trim();
+      const originalState = getOriginalMaterialRuntimeState(item);
+      return section?.status === 'error' || !String(content).trim() || originalState.needsOptimization || originalState.needsRestoreRepair;
     });
   }
 
@@ -2878,6 +3621,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
 
   async function runOutlineExpansionRound(round) {
     const nodeMap = createOutlineNodeMap(outlineData.outline || []);
+    const restoredNodeIds = getRestoredNodeIds();
     const currentWords = countTotalContentWords();
     contentStats.phase = 'outline-expanding';
     contentStats.outline_expansion_total = MAX_OUTLINE_EXPANSION_ROUNDS;
@@ -2899,14 +3643,15 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         medianLeafWords: medianLeafWords(),
         round,
         nodeMap,
+        restoredNodeIds,
       }),
       temperature: 0.4,
       logTitle: `最低字数补目录第${round}轮`,
       progressLabel: '最低字数补目录',
       failureMessage: '模型返回的补目录数据格式无效',
-      normalizer: (value) => normalizeOutlineExpansionResponse(value, { nodeMap }),
+      normalizer: (value) => normalizeOutlineExpansionResponse(value, { nodeMap, restoredNodeIds }),
       validator: validateOutlineExpansionResponse,
-      repairMessagesBuilder: (context) => buildOutlineExpansionRepairMessages(context, outlineData.outline || []),
+      repairMessagesBuilder: (context) => buildOutlineExpansionRepairMessages(context, outlineData.outline || [], restoredNodeIds),
       progressCallback: (message) => updateOutlineExpansionProgress(round, 2, message || '补目录结果格式校验失败，正在修复'),
     });
 
@@ -3249,6 +3994,289 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
 
     logs = [...logs, `最低字数已达成：${currentWords}/${minimumWords} 字，准备进入后续阶段。`];
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+  }
+
+  function buildOriginalCoverageAuditTargets(auditTargetItemId = '') {
+    if (!isExpansionWorkflow || !originalPlanSegments.length) {
+      return [];
+    }
+    const normalizedTargetId = String(auditTargetItemId || '').trim();
+    const segmentMap = new Map(originalPlanSegments.map((segment) => [segment.id, segment]));
+    return leaves
+      .filter(({ item }) => !normalizedTargetId || item.id === normalizedTargetId)
+      .map((context) => {
+        const originalState = getOriginalMaterialRuntimeState(context.item);
+        const sources = originalState.originalMaterial.source_ids.map((sourceId) => segmentMap.get(sourceId)).filter(Boolean);
+        return {
+          ...context,
+          content: originalState.content,
+          originalMaterial: originalState.originalMaterial,
+          sources,
+          originalState,
+        };
+      })
+      .filter(({ item, originalState, sources }) => sections[item.id]?.status === 'success' && originalState.validRestored && !originalState.needsOptimization && sources.length);
+  }
+
+  async function repairOriginalCoverageSection({ target, coverageItems }) {
+    const { item } = target;
+    let currentContent = sections[item.id]?.content || item.content || '';
+    let failures = [];
+    let appliedTotal = 0;
+    writeDeveloperLog('original_coverage.repair.section.start', {
+      section_id: item.id,
+      title: item.title || '未命名章节',
+      issue_count: (coverageItems || []).length,
+      coverage_items: coverageItems,
+      content_metrics: textMetrics(currentContent),
+    });
+
+    for (let attempt = 1; attempt <= ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS; attempt += 1) {
+      if (isPauseRequested()) {
+        writeDeveloperLog('original_coverage.repair.section.paused', {
+          section_id: item.id,
+          title: item.title || '未命名章节',
+          applied_count: appliedTotal,
+        });
+        return { appliedCount: appliedTotal, failed: false, paused: true };
+      }
+
+      try {
+        writeDeveloperLog('original_coverage.repair.attempt.start', {
+          section_id: item.id,
+          title: item.title || '未命名章节',
+          attempt,
+          max_attempts: ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS,
+          previous_failures: failures,
+          content_metrics: textMetrics(currentContent),
+        });
+        const patch = await aiService.collectJsonResponse({
+          messages: buildOriginalCoverageRepairMessages({
+            target,
+            coverageItems,
+            currentContent,
+            attempt,
+            failures,
+          }),
+          temperature: 0.2,
+          logTitle: `原方案覆盖修复-${item.id}-${item.title || '未命名章节'}`,
+          progressLabel: '原方案覆盖修复',
+          failureMessage: '模型返回的原方案覆盖修复结果格式无效',
+          normalizer: normalizeContentExpansionPatch,
+          validator: validateContentExpansionPatch,
+          repairMessagesBuilder: buildContentExpansionRepairMessages,
+          max_retries: 1,
+        });
+        writeDeveloperLog('original_coverage.repair.response', {
+          section_id: item.id,
+          title: item.title || '未命名章节',
+          attempt,
+          patch,
+        });
+
+        const nextContent = applyContentExpansionPatch(currentContent, patch);
+        if (normalizeNewlines(nextContent).trim() === normalizeNewlines(currentContent).trim()) {
+          failures = ['补写 patch 应用后正文没有变化'];
+          writeDeveloperLog('original_coverage.repair.no_change', {
+            section_id: item.id,
+            title: item.title || '未命名章节',
+            attempt,
+            patch,
+          });
+        } else {
+          currentContent = nextContent;
+          appliedTotal += 1;
+          rememberTouchedItem(item.id);
+          saveSection(item, { status: 'success', content: currentContent, error: undefined }, currentContent, { logs });
+          writeDeveloperLog('original_coverage.repair.section.saved', {
+            section_id: item.id,
+            title: item.title || '未命名章节',
+            attempt,
+            applied_total: appliedTotal,
+            content_metrics: textMetrics(currentContent),
+          });
+          return { appliedCount: appliedTotal, failed: false, paused: false };
+        }
+      } catch (error) {
+        failures = [error.message || '模型返回无效'];
+        writeDeveloperLog('original_coverage.repair.attempt.error', {
+          section_id: item.id,
+          title: item.title || '未命名章节',
+          attempt,
+          error: error.message || '模型返回无效',
+          stack: error.stack || '',
+        });
+      }
+
+      logs = [...logs, `原方案覆盖修复第 ${attempt}/${ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS} 次未完成：${item.id} ${item.title || '未命名章节'}，${failures.join('；')}。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    }
+
+    writeDeveloperLog('original_coverage.repair.section.done', {
+      section_id: item.id,
+      title: item.title || '未命名章节',
+      applied_count: appliedTotal,
+      failed: true,
+      errors: failures,
+    });
+    return { appliedCount: appliedTotal, failed: true, paused: false, errors: failures };
+  }
+
+  async function runOriginalPlanCoverageAuditIfEnabled(options = {}) {
+    if (!isExpansionWorkflow) {
+      return { ran: false, fixedCount: 0, failedCount: 0 };
+    }
+    if (!enableOriginalPlanCoverageAudit) {
+      writeDeveloperLog('original_coverage.audit.skipped', { reason: 'disabled' });
+      logs = [...logs, '原方案覆盖审计未启用，跳过审计阶段。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return { ran: false, fixedCount: 0, failedCount: 0 };
+    }
+
+    const auditTargets = buildOriginalCoverageAuditTargets(options.targetItemId || targetItemId);
+    if (!auditTargets.length) {
+      writeDeveloperLog('original_coverage.audit.skipped', { reason: 'no_targets', target_item_id: options.targetItemId || targetItemId || '' });
+      logs = [...logs, '原方案覆盖审计跳过：没有可审计的已还原成功正文小节。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return { ran: false, fixedCount: 0, failedCount: 0 };
+    }
+
+    const coverageIssuesBySectionId = new Map();
+    let issueCount = 0;
+    let conflictCount = 0;
+    contentStats.phase = 'original-auditing';
+    contentStats.audit_group_total = auditTargets.length;
+    contentStats.audit_group_completed = 0;
+    contentStats.audit_conflict_total = 0;
+    contentStats.audit_fix_total = 0;
+    contentStats.audit_fix_completed = 0;
+    contentStats.audit_fix_failed = 0;
+    workspaceStore.updateTechnicalPlan({ contentGenerationRuntime: syncRuntime({ phase: 'original-auditing' }) });
+    logs = [...logs, `开始原方案覆盖审计：${auditTargets.length} 个已还原小节，并发 ${contentConcurrency}。`];
+    writeDeveloperLog('original_coverage.audit.start', {
+      target_item_id: options.targetItemId || targetItemId || '',
+      target_count: auditTargets.length,
+      concurrency: contentConcurrency,
+      targets: auditTargets.map((target) => ({
+        section_id: target.item.id,
+        title: target.item.title || '未命名章节',
+        source_ids: target.sources.map((segment) => segment.id),
+        content_metrics: textMetrics(target.content),
+      })),
+    });
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+    await runItemsWithWorkerPool(auditTargets, contentConcurrency, async (target) => {
+      const allowedSourceIds = new Set(target.sources.map((segment) => segment.id).filter(Boolean));
+      try {
+        writeDeveloperLog('original_coverage.audit.section.start', {
+          section_id: target.item.id,
+          title: target.item.title || '未命名章节',
+          source_ids: [...allowedSourceIds],
+        });
+        const response = await aiService.collectJsonResponse({
+          messages: buildOriginalCoverageAuditMessages({ target }),
+          temperature: 0.1,
+          logTitle: `原方案覆盖审计-${target.item.id}-${target.item.title || '未命名章节'}`,
+          progressLabel: '原方案覆盖审计',
+          failureMessage: '模型返回的原方案覆盖审计结果格式无效',
+          normalizer: (value) => normalizeOriginalCoverageAuditResponse(value, { allowedSourceIds, expectedNodeId: target.item.id }),
+          validator: (value) => validateOriginalCoverageAuditResponse(value, allowedSourceIds),
+          repairMessagesBuilder: (contextForRepair) => buildOriginalCoverageAuditJsonRepairMessages(contextForRepair, target),
+          max_retries: 1,
+        });
+        const coverageItems = response.items || [];
+        const repairItems = coverageItems.filter((item) => ['partial', 'missing'].includes(item.status));
+        const conflictItems = coverageItems.filter((item) => item.status === 'conflict');
+        if (repairItems.length) {
+          coverageIssuesBySectionId.set(target.item.id, { target, coverageItems: repairItems });
+        }
+        issueCount += repairItems.length + conflictItems.length;
+        conflictCount += conflictItems.length;
+        contentStats.audit_conflict_total = issueCount;
+        logs = [...logs, `原方案覆盖审计完成：${target.item.id} ${target.item.title || '未命名章节'}，需补写 ${repairItems.length} 段，冲突 ${conflictItems.length} 段。`];
+        writeDeveloperLog('original_coverage.audit.section.success', {
+          section_id: target.item.id,
+          title: target.item.title || '未命名章节',
+          items: coverageItems,
+          repair_count: repairItems.length,
+          conflict_count: conflictItems.length,
+        });
+      } catch (error) {
+        logs = [...logs, `原方案覆盖审计失败：${target.item.id} ${target.item.title || '未命名章节'}，${error.message || '模型返回无效'}，已跳过该小节。`];
+        writeDeveloperLog('original_coverage.audit.section.error', {
+          section_id: target.item.id,
+          title: target.item.title || '未命名章节',
+          error: error.message || '模型返回无效',
+          stack: error.stack || '',
+        });
+      } finally {
+        contentStats.audit_group_completed += 1;
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      }
+    }, isPauseRequested);
+
+    pauseIfRequested('正文生成已在原方案覆盖审计阶段暂停，可导出当前已完成内容，稍后继续。');
+
+    const repairTargets = Array.from(coverageIssuesBySectionId.values());
+    contentStats.audit_fix_total = repairTargets.length;
+    contentStats.audit_fix_completed = 0;
+    contentStats.audit_fix_failed = 0;
+    logs = [...logs, repairTargets.length
+      ? `原方案覆盖审计发现 ${repairTargets.length} 个小节需要补写，开始局部修复。${conflictCount ? `另有 ${conflictCount} 个来源段存在冲突，保留给一致性审计或人工核对。` : ''}`
+      : `原方案覆盖审计未发现需要自动补写的来源段。${conflictCount ? `发现 ${conflictCount} 个冲突来源段，保留给一致性审计或人工核对。` : ''}`];
+    writeDeveloperLog('original_coverage.repair.start', {
+      target_count: repairTargets.length,
+      conflict_count: conflictCount,
+      issue_count: issueCount,
+      concurrency: contentConcurrency,
+      targets: repairTargets.map(({ target, coverageItems }) => ({
+        section_id: target.item.id,
+        title: target.item.title || '未命名章节',
+        coverage_items: coverageItems,
+      })),
+    });
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+    if (!repairTargets.length) {
+      writeDeveloperLog('original_coverage.audit.done', { fixed_count: 0, failed_count: 0, repair_target_count: 0, conflict_count: conflictCount });
+      return { ran: true, fixedCount: 0, failedCount: 0 };
+    }
+
+    let fixedCount = 0;
+    await runItemsWithWorkerPool(repairTargets, contentConcurrency, async (target) => {
+      const item = target.target.item;
+      try {
+        const result = await repairOriginalCoverageSection(target);
+        if (result.appliedCount > 0) {
+          fixedCount += 1;
+          logs = [...logs, `原方案覆盖修复完成：${item.id} ${item.title || '未命名章节'}，应用 ${result.appliedCount} 个局部补写。`];
+        }
+        if (result.failed) {
+          contentStats.audit_fix_failed += 1;
+          logs = [...logs, `原方案覆盖修复需人工核对：${item.id} ${item.title || '未命名章节'}，${(result.errors || []).join('；') || '未能应用补写 patch'}。`];
+        }
+      } catch (error) {
+        contentStats.audit_fix_failed += 1;
+        logs = [...logs, `原方案覆盖修复失败：${item.id} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}。`];
+      } finally {
+        contentStats.audit_fix_completed += 1;
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      }
+    }, isPauseRequested);
+
+    pauseIfRequested('正文生成已在原方案覆盖修复阶段暂停，可导出当前已完成内容，稍后继续。');
+
+    logs = [...logs, `原方案覆盖审计完成：发现 ${repairTargets.length} 个需补写小节，成功修复 ${fixedCount} 个，${contentStats.audit_fix_failed} 个需人工核对。`];
+    writeDeveloperLog('original_coverage.audit.done', {
+      repair_target_count: repairTargets.length,
+      fixed_count: fixedCount,
+      failed_count: contentStats.audit_fix_failed,
+      conflict_count: conflictCount,
+      issue_count: issueCount,
+    });
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    return { ran: true, fixedCount, failedCount: contentStats.audit_fix_failed };
   }
 
   function buildConsistencyAuditTargets(auditTargetItemId = '') {
@@ -3702,11 +4730,15 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       if (targetItemId) {
         await prepareSingleSectionPlan();
         pauseIfRequested('正文生成已在正文编排后暂停，可导出当前已完成内容，稍后继续。');
+        await restoreOriginalMaterialsIfNeeded(tasksToRun);
+        pauseIfRequested('正文生成已在原方案还原阶段暂停，可导出当前已完成内容，稍后继续。');
         await runItemsWithWorkerPool(tasksToRun, contentConcurrency, runOne, isPauseRequested);
         pauseIfRequested('正文生成已在正文生成阶段暂停，可导出当前已完成内容，稍后继续。');
       } else {
         await planAll();
         pauseIfRequested('正文生成已在正文编排后暂停，可导出当前已完成内容，稍后继续。');
+        await restoreOriginalMaterialsIfNeeded(tasksToRun);
+        pauseIfRequested('正文生成已在原方案还原阶段暂停，可导出当前已完成内容，稍后继续。');
         await runEarlyContentProbeIfNeeded();
         if (tasksToRun.length) {
           await runItemsWithWorkerPool(tasksToRun, contentConcurrency, runOne, isPauseRequested);
@@ -3718,6 +4750,8 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     if (!targetItemId) {
       await ensureMinimumWords();
       pauseIfRequested('正文生成已在最低字数检查后暂停，可导出当前已完成内容，稍后继续。');
+      await runOriginalPlanCoverageAuditIfEnabled();
+      pauseIfRequested('正文生成已在原方案覆盖审计后暂停，可导出当前已完成内容，稍后继续。');
       await runConsistencyAuditIfEnabled();
       if (minimumWords > 0 && countTotalContentWords() < minimumWords) {
         logs = [...logs, `一致性修复后总字数低于最低字数，准备重新扩写补足（当前 ${countTotalContentWords()}/${minimumWords} 字）。`];
@@ -3727,11 +4761,13 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         await runConsistencyAuditIfEnabled({ reaudit: true });
       }
       refreshIllustrationTargetsFromStoredPlans(touchedItemIds);
-    } else if (!tasksToRun.length) {
-      await runConsistencyAuditIfEnabled({ targetItemId });
-      refreshIllustrationTargetsFromStoredPlans(new Set([targetItemId]));
     } else {
+      await runOriginalPlanCoverageAuditIfEnabled({ targetItemId });
+      pauseIfRequested('正文生成已在原方案覆盖审计后暂停，可导出当前已完成内容，稍后继续。');
       await runConsistencyAuditIfEnabled({ targetItemId });
+      if (!tasksToRun.length) {
+        refreshIllustrationTargetsFromStoredPlans(new Set([targetItemId]));
+      }
     }
 
     pauseIfRequested('正文生成已在配图前暂停，可导出当前已完成内容，稍后继续。');

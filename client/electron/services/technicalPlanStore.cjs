@@ -2,15 +2,18 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { getBidAnalysisTasks } = require('./bidAnalysisTask.cjs');
-const { getTechnicalPlanTenderMarkdownPath } = require('../utils/paths.cjs');
+const { getTechnicalPlanOriginalPlanMarkdownPath, getTechnicalPlanTenderMarkdownPath } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 const { detectBidSections } = require('../utils/bidSectionDetector.cjs');
 
 const tenderMarkdownRelativePath = path.join('technical-plan', 'tender.md').replace(/\\/g, '/');
+const originalPlanMarkdownRelativePath = path.join('technical-plan', 'original-plan.md').replace(/\\/g, '/');
 
 const initialState = {
+  workflowKind: 'technical-plan',
   step: 'document-analysis',
   tenderFile: null,
+  originalPlanFile: null,
   projectOverview: '',
   techRequirements: '',
   bidAnalysisMode: 'key',
@@ -75,6 +78,10 @@ function fromDbBool(value) {
 
 function normalizeStatus(value, allowed, fallback) {
   return allowed.includes(value) ? value : fallback;
+}
+
+function normalizeWorkflowKind(value) {
+  return value === 'existing-plan-expansion' ? 'existing-plan-expansion' : 'technical-plan';
 }
 
 function isValidStep(value) {
@@ -181,6 +188,7 @@ function mapOutlineItems(items, mapper) {
 
 function createTechnicalPlanStore({ app, db, fileService }) {
   const tenderMarkdownPath = getTechnicalPlanTenderMarkdownPath(app);
+  const originalPlanMarkdownPath = getTechnicalPlanOriginalPlanMarkdownPath(app);
   const workspaceRootPath = path.dirname(path.dirname(tenderMarkdownPath));
   let pendingTenderSelection = null;
 
@@ -338,8 +346,8 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     if (existing) return existing;
     const timestamp = now();
     db.prepare(`
-      INSERT INTO technical_plan_meta (id, step, bid_analysis_mode, outline_mode, created_at, updated_at)
-      VALUES (1, 'document-analysis', 'key', 'aligned', @timestamp, @timestamp)
+      INSERT INTO technical_plan_meta (id, workflow_kind, step, bid_analysis_mode, outline_mode, created_at, updated_at)
+      VALUES (1, 'technical-plan', 'document-analysis', 'key', 'aligned', @timestamp, @timestamp)
     `).run({ timestamp });
     return db.prepare('SELECT * FROM technical_plan_meta WHERE id = 1').get();
   }
@@ -365,6 +373,15 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     const meta = ensureMetaRow();
     const filePath = resolveMarkdownPath(meta.tender_markdown_path || tenderMarkdownRelativePath);
     if (!meta.tender_markdown_path || !fs.existsSync(filePath)) {
+      return '';
+    }
+    return fs.readFileSync(filePath, 'utf-8');
+  }
+
+  function readOriginalPlanMarkdown() {
+    const meta = ensureMetaRow();
+    const filePath = resolveMarkdownPath(meta.original_plan_markdown_path || originalPlanMarkdownRelativePath);
+    if (!meta.original_plan_markdown_path || !fs.existsSync(filePath)) {
       return '';
     }
     return fs.readFileSync(filePath, 'utf-8');
@@ -820,6 +837,49 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     updateMeta({ content_generation_runtime_json: null });
   }
 
+  function clearDownstreamFromOriginalPlan() {
+    db.prepare("DELETE FROM technical_plan_tasks WHERE type IN ('outline-generation', 'global-facts-generation', 'content-generation')").run();
+    db.prepare('DELETE FROM technical_plan_outline_nodes').run();
+    db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    db.prepare('DELETE FROM technical_plan_content_sections').run();
+    db.prepare('DELETE FROM technical_plan_content_plans').run();
+    updateMeta({
+      step: 'document-analysis',
+      outline_project_name: null,
+      outline_project_overview: null,
+      content_generation_runtime_json: null,
+    });
+  }
+
+  function assertNoTechnicalPlanTaskRunning() {
+    const row = db.prepare("SELECT type FROM technical_plan_tasks WHERE status IN ('running', 'pausing') LIMIT 1").get();
+    if (row) {
+      throw new Error('当前有技术方案任务正在运行，请等待任务结束后再切换模式');
+    }
+  }
+
+  function clearWorkflowSpecificState(workflowKind) {
+    db.prepare("DELETE FROM technical_plan_tasks WHERE type IN ('outline-generation', 'global-facts-generation', 'content-generation')").run();
+    db.prepare('DELETE FROM technical_plan_content_sections').run();
+    db.prepare('DELETE FROM technical_plan_content_plans').run();
+    db.prepare('DELETE FROM technical_plan_outline_nodes').run();
+    db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    updateMeta({
+      workflow_kind: normalizeWorkflowKind(workflowKind),
+      step: 'document-analysis',
+      original_plan_file_name: null,
+      original_plan_markdown_path: null,
+      original_plan_markdown_hash: null,
+      original_plan_markdown_chars: 0,
+      original_plan_parser_label: null,
+      original_plan_imported_at: null,
+      outline_project_name: null,
+      outline_project_overview: null,
+      content_generation_options_json: null,
+      content_generation_runtime_json: null,
+    });
+  }
+
   function loadOutlinePersistenceSnapshot() {
     return {
       nodes: db.prepare('SELECT node_id, content FROM technical_plan_outline_nodes').all().reduce((acc, row) => {
@@ -909,6 +969,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     const meta = ensureMetaRow();
     const metaUpdates = {};
 
+    if (hasOwn(partial, 'workflowKind')) metaUpdates.workflow_kind = normalizeWorkflowKind(partial.workflowKind);
     if (hasOwn(partial, 'step') && isValidStep(partial.step)) metaUpdates.step = partial.step;
     if (hasOwn(partial, 'bidAnalysisMode') && isValidBidMode(partial.bidAnalysisMode)) metaUpdates.bid_analysis_mode = partial.bidAnalysisMode;
     if (hasOwn(partial, 'outlineMode') && isValidOutlineMode(partial.outlineMode)) metaUpdates.outline_mode = partial.outlineMode;
@@ -962,11 +1023,22 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       selectedSectionHeadLine: meta.selected_section_head_line || undefined,
       updatedAt: meta.updated_at,
     } : null;
+    const originalPlanFile = meta.original_plan_markdown_path ? {
+      fileName: meta.original_plan_file_name || '原方案',
+      markdownPath: meta.original_plan_markdown_path,
+      markdownChars: Number(meta.original_plan_markdown_chars || 0),
+      contentHash: meta.original_plan_markdown_hash || '',
+      parserLabel: meta.original_plan_parser_label || undefined,
+      importedAt: meta.original_plan_imported_at || undefined,
+      updatedAt: meta.updated_at,
+    } : null;
 
     return {
       ...initialState,
+      workflowKind: normalizeWorkflowKind(meta.workflow_kind),
       step: isValidStep(meta.step) ? meta.step : 'document-analysis',
       tenderFile,
+      originalPlanFile,
       projectOverview: bidAnalysisTasks.projectOverview?.status === 'success' ? bidAnalysisTasks.projectOverview.content : '',
       techRequirements: bidAnalysisTasks.techRequirements?.status === 'success' ? bidAnalysisTasks.techRequirements.content : '',
       bidAnalysisMode,
@@ -996,6 +1068,31 @@ function createTechnicalPlanStore({ app, db, fileService }) {
 
   function updateStep(step) {
     return updateTechnicalPlan({ step });
+  }
+
+  function setWorkflowKind(workflowKind) {
+    return updateTechnicalPlan({ workflowKind: normalizeWorkflowKind(workflowKind) });
+  }
+
+  function switchWorkflowKind(workflowKind) {
+    const nextWorkflowKind = normalizeWorkflowKind(workflowKind);
+    const meta = ensureMetaRow();
+    if (normalizeWorkflowKind(meta.workflow_kind) === nextWorkflowKind) {
+      return loadTechnicalPlan();
+    }
+
+    const originalPlanFilePath = meta.original_plan_markdown_path
+      ? resolveMarkdownPath(meta.original_plan_markdown_path)
+      : originalPlanMarkdownPath;
+    const transaction = db.transaction(() => {
+      assertNoTechnicalPlanTaskRunning();
+      clearWorkflowSpecificState(nextWorkflowKind);
+    });
+    transaction();
+    if (fs.existsSync(originalPlanFilePath)) {
+      fs.rmSync(originalPlanFilePath, { force: true });
+    }
+    return loadTechnicalPlan();
   }
 
   function saveOutlineConfig({ outlineMode, referenceKnowledgeDocumentIds } = {}) {
@@ -1131,6 +1228,60 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     });
   }
 
+  async function importOriginalPlanDocument() {
+    const importer = fileService?.importTechnicalPlanDocument || fileService?.importDocument;
+    if (!importer) {
+      throw new Error('文件导入服务尚未初始化');
+    }
+
+    const result = fileService.importTechnicalPlanDocument
+      ? await fileService.importTechnicalPlanDocument('原方案')
+      : await importer();
+    if (!result?.success || !result.file_content) {
+      return {
+        success: false,
+        message: result?.message || '未导入文件',
+        state: loadTechnicalPlan(),
+        markdown: '',
+      };
+    }
+
+    const markdown = String(result.file_content || '').trim();
+    const fileName = result.file_name || '未命名文件';
+    const parserLabel = result.parser_label || null;
+    const targetDir = path.dirname(originalPlanMarkdownPath);
+    const tempPath = path.join(targetDir, `original-plan-${Date.now()}.tmp.md`);
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(tempPath, `${markdown}\n`, 'utf-8');
+
+    try {
+      fs.renameSync(tempPath, originalPlanMarkdownPath);
+      const timestamp = now();
+      const transaction = db.transaction(() => {
+        updateMeta({
+          workflow_kind: 'existing-plan-expansion',
+          original_plan_file_name: fileName,
+          original_plan_markdown_path: originalPlanMarkdownRelativePath,
+          original_plan_markdown_hash: stableHash(markdown),
+          original_plan_markdown_chars: markdown.length,
+          original_plan_parser_label: parserLabel || null,
+          original_plan_imported_at: timestamp,
+        });
+        clearDownstreamFromOriginalPlan();
+      });
+      transaction();
+      return {
+        success: true,
+        message: result.message || '原方案已导入',
+        state: loadTechnicalPlan(),
+        markdown,
+      };
+    } catch (error) {
+      if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
+      throw error;
+    }
+  }
+
   function saveTenderMarkdownAndState(markdown, { fileName, parserLabel, message, selectedSection, fallbackToLocal }) {
     const targetDir = path.dirname(tenderMarkdownPath);
     const tempPath = path.join(targetDir, `tender-${Date.now()}.tmp.md`);
@@ -1195,6 +1346,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
 
   function clearTechnicalPlan() {
     cleanupPendingTenderSelection();
+    const workflowKind = normalizeWorkflowKind(ensureMetaRow().workflow_kind);
     const transaction = db.transaction(() => {
       db.prepare('DELETE FROM technical_plan_tasks').run();
       db.prepare('DELETE FROM technical_plan_bid_items').run();
@@ -1203,10 +1355,14 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
       db.prepare('DELETE FROM technical_plan_meta').run();
       ensureMetaRow();
+      updateMeta({ workflow_kind: workflowKind });
     });
     transaction();
     if (fs.existsSync(tenderMarkdownPath)) {
       fs.rmSync(tenderMarkdownPath, { force: true });
+    }
+    if (fs.existsSync(originalPlanMarkdownPath)) {
+      fs.rmSync(originalPlanMarkdownPath, { force: true });
     }
     deleteImportedImageBatches(app, 'technical-plan');
     return { success: true, message: '技术方案缓存已清空', state: loadTechnicalPlan() };
@@ -1217,10 +1373,14 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     updateTechnicalPlan,
     clearTechnicalPlan,
     importTenderDocument,
+    importOriginalPlanDocument,
     selectBidSection,
     cancelBidSectionSelection,
     readTenderMarkdown,
+    readOriginalPlanMarkdown,
     updateStep,
+    setWorkflowKind,
+    switchWorkflowKind,
     saveOutlineConfig,
     saveOutline,
     saveGlobalFacts,
