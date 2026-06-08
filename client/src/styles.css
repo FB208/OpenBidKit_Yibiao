@@ -3475,6 +3475,30 @@ button {
   box-shadow: 0 28px 72px rgba(23, 32, 51, 0.24);
 }
 
+.workflow-switch-card {
+  width: min(620px, calc(100vw - 40px));
+}
+
+.workflow-switch-summary {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.7;
+  background: rgba(244, 247, 251, 0.86);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 16px;
+}
+
+.workflow-switch-summary span:first-child {
+  color: #17803d;
+}
+
+.workflow-switch-summary span:last-child {
+  color: #b42318;
+}
+
 .remote-notice-modal {
   position: fixed;
   inset: 0;

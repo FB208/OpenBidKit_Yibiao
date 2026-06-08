@@ -135,6 +135,7 @@ export interface YibiaoBridge {
     readOriginalPlanMarkdown: () => Promise<string>;
     updateStep: (step: TechnicalPlanStep) => Promise<TechnicalPlanState>;
     setWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
+    switchWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
     saveOutlineConfig: (payload: { outlineMode: OutlineMode; referenceKnowledgeDocumentIds: string[] }) => Promise<TechnicalPlanState>;
     saveOutline: (payload: SaveOutlineRequest) => Promise<TechnicalPlanState>;
     saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<TechnicalPlanState>;

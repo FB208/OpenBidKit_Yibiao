@@ -9,18 +9,26 @@ import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
+import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
 import type { OutlineData, OutlineItem, WordExportProgressEvent } from '../../../shared/types';
+import type { SectionId } from '../../../shared/types/navigation';
 
 interface TechnicalPlanHomeProps {
   workflowKind: TechnicalPlanWorkflowKind;
   registerLeaveGuard?: (guard: ((nextSection?: string) => Promise<boolean>) | null) => void;
+  onSectionChange?: (section: SectionId) => void;
 }
 
 interface OutlineSortGuard {
   hasUnsavedSort: () => boolean;
   saveSort: () => Promise<void>;
   discardSort: () => void;
+}
+
+interface WorkflowSwitchRequest {
+  from: TechnicalPlanWorkflowKind;
+  to: TechnicalPlanWorkflowKind;
+  navigateBackOnCancel: boolean;
 }
 
 const steps: TechnicalPlanStep[] = [
@@ -121,6 +129,37 @@ function areRequiredBidAnalysisTasksReady(tasks: BidAnalysisTasks) {
   });
 }
 
+function workflowKindFromSection(section?: string): TechnicalPlanWorkflowKind | null {
+  if (section === 'technical-plan') return 'technical-plan';
+  if (section === 'existing-plan-expansion') return 'existing-plan-expansion';
+  return null;
+}
+
+function workflowLabel(kind: TechnicalPlanWorkflowKind) {
+  return kind === 'existing-plan-expansion' ? '已有方案扩写' : '生成技术方案';
+}
+
+function hasRunningTechnicalPlanTask(state: TechnicalPlanState) {
+  return [state.bidAnalysisTask, state.outlineGenerationTask, state.globalFactsTask, state.contentGenerationTask]
+    .some((task) => task?.status === 'running' || task?.status === 'pausing');
+}
+
+function hasWorkflowSpecificProgress(state: TechnicalPlanState) {
+  return Boolean(
+    state.originalPlanFile
+    || state.outlineData
+    || state.globalFacts.length > 0
+    || Object.keys(state.contentGenerationSections || {}).length > 0
+    || Object.keys(state.contentGenerationPlans || {}).length > 0
+    || state.contentGenerationRuntime
+    || state.contentGenerationOptions
+    || state.outlineGenerationTask
+    || state.globalFactsTask
+    || state.contentGenerationTask
+    || ['outline-generation', 'global-facts', 'content-edit', 'expand'].includes(state.step),
+  );
+}
+
 function updateOutlineItemContent(items: OutlineItem[], itemId: string, content: string): OutlineItem[] {
   return items.map((item) => {
     if (item.id === itemId) {
@@ -133,7 +172,7 @@ function updateOutlineItemContent(items: OutlineItem[], itemId: string, content:
   });
 }
 
-function TechnicalPlanHome({ workflowKind, registerLeaveGuard }: TechnicalPlanHomeProps) {
+function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }: TechnicalPlanHomeProps) {
   const { hydrated, state, setState } = useTechnicalPlanWorkflow();
   const { showToast } = useToast();
   const [tenderMarkdown, setTenderMarkdown] = useState('');
@@ -141,8 +180,13 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard }: TechnicalPlanHo
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
   const [sortLeaveDialogOpen, setSortLeaveDialogOpen] = useState(false);
   const [savingSortBeforeLeave, setSavingSortBeforeLeave] = useState(false);
+  const [workflowSwitchRequest, setWorkflowSwitchRequest] = useState<WorkflowSwitchRequest | null>(null);
+  const [switchingWorkflow, setSwitchingWorkflow] = useState(false);
   const sortGuardRef = useRef<OutlineSortGuard | null>(null);
   const sortLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
+  const workflowSwitchResolverRef = useRef<((allowed: boolean) => void) | null>(null);
+  const skippedWorkflowSwitchPromptRef = useRef<TechnicalPlanWorkflowKind | null>(null);
+  const lastExecutedWorkflowSwitchRef = useRef<TechnicalPlanWorkflowKind | null>(null);
   const activeIndex = steps.indexOf(state.step);
   const bidAnalysisReady = areRequiredBidAnalysisTasksReady(state.bidAnalysisTasks);
   const globalFactsReady = state.globalFacts.length > 0 && state.globalFactsTask?.status === 'success';
@@ -179,7 +223,51 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard }: TechnicalPlanHo
     setSortLeaveDialogOpen(false);
   };
 
-  const confirmPendingSortLeave = useCallback(async () => {
+  const executeWorkflowSwitch = useCallback(async (targetWorkflowKind: TechnicalPlanWorkflowKind) => {
+    if (!window.yibiao?.technicalPlan.switchWorkflowKind) {
+      showToast('技术方案工作流切换服务尚未初始化', 'error');
+      return false;
+    }
+
+    try {
+      setSwitchingWorkflow(true);
+      const saved = await window.yibiao.technicalPlan.switchWorkflowKind(targetWorkflowKind);
+      lastExecutedWorkflowSwitchRef.current = targetWorkflowKind;
+      setState((prev) => ({ ...prev, ...saved, workflowKind: targetWorkflowKind }));
+      setOriginalPlanMarkdown('');
+      showToast(`已切换到${workflowLabel(targetWorkflowKind)}`, 'success');
+      return true;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '切换技术方案工作流失败', 'error');
+      return false;
+    } finally {
+      setSwitchingWorkflow(false);
+    }
+  }, [setState, showToast]);
+
+  const resolveWorkflowSwitch = useCallback((allowed: boolean) => {
+    const request = workflowSwitchRequest;
+    workflowSwitchResolverRef.current?.(allowed);
+    workflowSwitchResolverRef.current = null;
+    setWorkflowSwitchRequest(null);
+    if (!allowed && request?.navigateBackOnCancel) {
+      skippedWorkflowSwitchPromptRef.current = request.to;
+      onSectionChange?.(request.from);
+    }
+  }, [onSectionChange, workflowSwitchRequest]);
+
+  const openWorkflowSwitchDialog = useCallback((targetWorkflowKind: TechnicalPlanWorkflowKind, navigateBackOnCancel: boolean) => {
+    setWorkflowSwitchRequest({
+      from: state.workflowKind,
+      to: targetWorkflowKind,
+      navigateBackOnCancel,
+    });
+    return new Promise<boolean>((resolve) => {
+      workflowSwitchResolverRef.current = resolve;
+    });
+  }, [state.workflowKind]);
+
+  const confirmSortLeaveOnly = useCallback(async () => {
     const guard = sortGuardRef.current;
     if (!guard?.hasUnsavedSort()) {
       return true;
@@ -190,6 +278,29 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard }: TechnicalPlanHo
       sortLeaveResolverRef.current = resolve;
     });
   }, []);
+
+  const confirmPendingSortLeave = useCallback(async (nextSection?: string) => {
+    const targetWorkflowKind = workflowKindFromSection(nextSection);
+    if (!targetWorkflowKind || targetWorkflowKind === state.workflowKind) {
+      return confirmSortLeaveOnly();
+    }
+
+    if (hasRunningTechnicalPlanTask(state)) {
+      showToast('当前有技术方案任务正在运行，请等待任务结束后再切换模式', 'info');
+      return false;
+    }
+
+    const sortAllowed = await confirmSortLeaveOnly();
+    if (!sortAllowed) {
+      return false;
+    }
+
+    if (hasWorkflowSpecificProgress(state)) {
+      return openWorkflowSwitchDialog(targetWorkflowKind, false);
+    }
+
+    return executeWorkflowSwitch(targetWorkflowKind);
+  }, [confirmSortLeaveOnly, executeWorkflowSwitch, openWorkflowSwitchDialog, showToast, state]);
 
   const continueSorting = () => {
     resolveSortLeave(false);
@@ -218,6 +329,21 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard }: TechnicalPlanHo
     }
   };
 
+  const cancelWorkflowSwitch = () => {
+    resolveWorkflowSwitch(false);
+  };
+
+  const confirmWorkflowSwitch = async () => {
+    if (!workflowSwitchRequest) {
+      return;
+    }
+
+    const switched = await executeWorkflowSwitch(workflowSwitchRequest.to);
+    if (switched) {
+      resolveWorkflowSwitch(true);
+    }
+  };
+
   useEffect(() => {
     if (!hydrated) return;
 
@@ -226,14 +352,37 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard }: TechnicalPlanHo
 
   useEffect(() => {
     if (!hydrated || state.workflowKind === workflowKind) return;
+    if (skippedWorkflowSwitchPromptRef.current === workflowKind) return;
+    if (lastExecutedWorkflowSwitchRef.current === state.workflowKind) return;
+    if (workflowSwitchRequest || switchingWorkflow) return;
 
-    setState((prev) => ({ ...prev, workflowKind }));
-    window.yibiao?.technicalPlan.setWorkflowKind(workflowKind).then((saved) => {
-      setState((prev) => ({ ...prev, ...saved, workflowKind }));
-    }).catch((error) => {
-      showToast(error instanceof Error ? error.message : '保存技术方案工作流类型失败', 'error');
-    });
-  }, [hydrated, setState, showToast, state.workflowKind, workflowKind]);
+    const run = async () => {
+      if (hasRunningTechnicalPlanTask(state)) {
+        showToast('当前有技术方案任务正在运行，请等待任务结束后再切换模式', 'info');
+        onSectionChange?.(state.workflowKind);
+        return;
+      }
+
+      if (hasWorkflowSpecificProgress(state)) {
+        await openWorkflowSwitchDialog(workflowKind, true);
+        return;
+      }
+
+      const switched = await executeWorkflowSwitch(workflowKind);
+      if (!switched) {
+        onSectionChange?.(state.workflowKind);
+      }
+    };
+
+    void run();
+  }, [executeWorkflowSwitch, hydrated, onSectionChange, openWorkflowSwitchDialog, showToast, state, switchingWorkflow, workflowKind, workflowSwitchRequest]);
+
+  useEffect(() => {
+    if (state.workflowKind === workflowKind) {
+      skippedWorkflowSwitchPromptRef.current = null;
+      lastExecutedWorkflowSwitchRef.current = null;
+    }
+  }, [state.workflowKind, workflowKind]);
 
   useEffect(() => {
     if (!registerLeaveGuard) return;
@@ -552,6 +701,9 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard }: TechnicalPlanHo
   const generatedContentCount = state.outlineData?.outline
     ? collectLeafItems(state.outlineData.outline).filter((item) => item.content?.trim()).length
     : 0;
+  const workflowSwitchClearText = workflowSwitchRequest?.to === 'technical-plan'
+    ? '原方案、目录、全局事实、正文和生成进度'
+    : '目录、全局事实、正文和生成进度';
 
   const navigationActions = state.step === 'content-edit'
     ? [
@@ -728,6 +880,33 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard }: TechnicalPlanHo
               <button type="button" className="secondary-action" onClick={discardSortAndLeave} disabled={savingSortBeforeLeave}>不保存</button>
               <button type="button" className="primary-action" onClick={() => { void saveSortAndLeave(); }} disabled={savingSortBeforeLeave}>
                 {savingSortBeforeLeave ? '正在保存...' : '保存排序'}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={Boolean(workflowSwitchRequest)} onOpenChange={(open) => !open && !switchingWorkflow && cancelWorkflowSwitch()}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="content-regenerate-card workflow-switch-card">
+            <div className="content-regenerate-card-head">
+              <span className="section-kicker">切换模式</span>
+              <Dialog.Title>确认切换到{workflowSwitchRequest ? workflowLabel(workflowSwitchRequest.to) : '新模式'}</Dialog.Title>
+              <Dialog.Description>
+                {workflowSwitchRequest
+                  ? `当前保存的进度是「${workflowLabel(workflowSwitchRequest.from)}」模式生成的。切换到「${workflowLabel(workflowSwitchRequest.to)}」会保留招标文件、招标文件解析结果和参考知识库选择，但会清空${workflowSwitchClearText}。是否继续？`
+                  : '切换模式会清空当前模式下的生成进度。'}
+              </Dialog.Description>
+            </div>
+            <div className="workflow-switch-summary">
+              <span>保留：招标文件、招标文件解析结果、参考知识库选择</span>
+              <span>清空：{workflowSwitchClearText}</span>
+            </div>
+            <div className="content-regenerate-actions">
+              <button type="button" className="secondary-action" onClick={cancelWorkflowSwitch} disabled={switchingWorkflow}>取消</button>
+              <button type="button" className="primary-action" onClick={() => { void confirmWorkflowSwitch(); }} disabled={switchingWorkflow}>
+                {switchingWorkflow ? '正在切换...' : '继续切换'}
               </button>
             </div>
           </Dialog.Content>

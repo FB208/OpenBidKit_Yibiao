@@ -851,6 +851,35 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     });
   }
 
+  function assertNoTechnicalPlanTaskRunning() {
+    const row = db.prepare("SELECT type FROM technical_plan_tasks WHERE status IN ('running', 'pausing') LIMIT 1").get();
+    if (row) {
+      throw new Error('当前有技术方案任务正在运行，请等待任务结束后再切换模式');
+    }
+  }
+
+  function clearWorkflowSpecificState(workflowKind) {
+    db.prepare("DELETE FROM technical_plan_tasks WHERE type IN ('outline-generation', 'global-facts-generation', 'content-generation')").run();
+    db.prepare('DELETE FROM technical_plan_content_sections').run();
+    db.prepare('DELETE FROM technical_plan_content_plans').run();
+    db.prepare('DELETE FROM technical_plan_outline_nodes').run();
+    db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    updateMeta({
+      workflow_kind: normalizeWorkflowKind(workflowKind),
+      step: 'document-analysis',
+      original_plan_file_name: null,
+      original_plan_markdown_path: null,
+      original_plan_markdown_hash: null,
+      original_plan_markdown_chars: 0,
+      original_plan_parser_label: null,
+      original_plan_imported_at: null,
+      outline_project_name: null,
+      outline_project_overview: null,
+      content_generation_options_json: null,
+      content_generation_runtime_json: null,
+    });
+  }
+
   function loadOutlinePersistenceSnapshot() {
     return {
       nodes: db.prepare('SELECT node_id, content FROM technical_plan_outline_nodes').all().reduce((acc, row) => {
@@ -1043,6 +1072,27 @@ function createTechnicalPlanStore({ app, db, fileService }) {
 
   function setWorkflowKind(workflowKind) {
     return updateTechnicalPlan({ workflowKind: normalizeWorkflowKind(workflowKind) });
+  }
+
+  function switchWorkflowKind(workflowKind) {
+    const nextWorkflowKind = normalizeWorkflowKind(workflowKind);
+    const meta = ensureMetaRow();
+    if (normalizeWorkflowKind(meta.workflow_kind) === nextWorkflowKind) {
+      return loadTechnicalPlan();
+    }
+
+    const originalPlanFilePath = meta.original_plan_markdown_path
+      ? resolveMarkdownPath(meta.original_plan_markdown_path)
+      : originalPlanMarkdownPath;
+    const transaction = db.transaction(() => {
+      assertNoTechnicalPlanTaskRunning();
+      clearWorkflowSpecificState(nextWorkflowKind);
+    });
+    transaction();
+    if (fs.existsSync(originalPlanFilePath)) {
+      fs.rmSync(originalPlanFilePath, { force: true });
+    }
+    return loadTechnicalPlan();
   }
 
   function saveOutlineConfig({ outlineMode, referenceKnowledgeDocumentIds } = {}) {
@@ -1330,6 +1380,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     readOriginalPlanMarkdown,
     updateStep,
     setWorkflowKind,
+    switchWorkflowKind,
     saveOutlineConfig,
     saveOutline,
     saveGlobalFacts,

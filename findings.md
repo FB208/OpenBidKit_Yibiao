@@ -5,6 +5,7 @@
 - 已有方案扩写 Step05 覆盖审计边界：只在扩写模式且用户开启时执行，审计目标来自 `original_material.source_ids` 和当前成功正文；`covered` 不处理，`partial/missing` 用现有 insert/replace 机制局部补写，`conflict` 只记录并交给一致性审计或人工核对；执行位置在最低字数扩充后、全文一致性审计前。
 - 原方案是 `existing-plan-expansion` 的核心草稿输入：一旦替换，旧目录、全局事实、正文、正文编排计划、`original_material` 还原状态、runtime 和相关任务都依赖旧原方案，必须从 Step03 起失效；招标 Markdown、Step02 招标解析结果和参考知识库选择不依赖原方案，可保留。
 - 技术方案页面访问埋点使用 `${workflowKind}/${state.step}`；新增共用流程入口后，Analytics Dashboard 不能只映射 `existing-plan-expansion` 总入口，还必须映射 `existing-plan-expansion/document-analysis`、`bid-analysis`、`outline-generation`、`global-facts`、`content-edit` 和 `expand`。
+- 两种技术方案模式共用同一技术方案工作区，不能只切 `workflowKind`：模式切换确认后应在 Main 侧原子清空模式相关下游状态，保留两种模式可复用的招标文件、Step02 解析结果和参考知识库选择；Renderer 侧通过已有主菜单 leave guard 拦截直接切换，二级菜单直接进入时再由页面加载 effect 兜底确认。
 - 资源管理实施边界：用户确认真实 R2 bucket 名可用小写 `openbidkit`，资源全局只有一套，不按 `projectName` 隔离；客户端弹窗内容按 Markdown 渲染且禁用 raw HTML。
 - 当前 Analytics Worker 使用模块化 routes/services，管理接口可复用 `requireAdmin()`；公开接口可挂 `/resources` 和 `/resource-image`，后台接口挂 `/api/resources`。
 - 当前 KV 自动化脚本通过部署前 setup 修改 `worker/wrangler.jsonc`；D1/R2 可以复用此模式，但 D1 还需要 `wrangler d1 migrations apply --remote` 建表。

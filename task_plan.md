@@ -13,6 +13,7 @@
 - [completed] 5. 接入可选原方案覆盖审计和修复阶段。
 - [completed] 6. 运行语法检查和客户端构建验证。
 - [completed] 7. 修复评审发现的替换原方案下游状态失效和 Analytics 步骤映射问题。
+- [completed] 8. 增加两种技术方案模式切换确认，确认后保留招标文件、Step02 解析和参考知识库，清空模式相关进度。
 
 ### Decisions
 - 不新增 SQLite 表，原方案还原状态优先保存到 `contentGenerationPlans.plan.original_material`。
@@ -22,6 +23,7 @@
 - 已还原节点在补目录上下文中标记 `locked-restored`，不允许作为新增目录父节点。
 - 替换原方案后从 Step03 起全部失效：清空目录、全局事实、正文、正文编排/还原状态、runtime 和相关任务，但保留招标文件、Step02 解析结果和参考知识库选择。
 - Analytics 子步骤上报使用 `${workflowKind}/${state.step}`，Dashboard 必须为 `existing-plan-expansion/*` 补中文映射。
+- “生成技术方案”和“已有方案扩写”直接切换时必须先提示用户；确认后只保留招标文件、已选标段、Step02 解析结果和参考知识库选择，清空原方案、目录、全局事实、正文、正文生成配置/计划/runtime 和 Step03-Step05 任务。
 
 ### Errors Encountered
 | Error | Attempt | Resolution |
@@ -30,6 +32,8 @@
 
 ### Validation
 - `node --check electron\services\technicalPlanStore.cjs` 通过。
+- `node --check electron\ipc\technicalPlanIpc.cjs` 通过。
+- `node --check electron\preload.cjs` 通过。
 - `node --check analytics\dashboard\public\src\pages\traffic.js` 通过。
 - `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
 - `git diff --check` 通过，仅有 LF/CRLF 提示。
