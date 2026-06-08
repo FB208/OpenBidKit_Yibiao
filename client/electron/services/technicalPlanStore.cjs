@@ -17,6 +17,7 @@ const initialState = {
   projectOverview: '',
   techRequirements: '',
   bidAnalysisMode: 'key',
+  bidAnalysisSelectedTaskIds: [],
   bidAnalysisTasks: {},
   bidAnalysisProgress: 0,
   outlineMode: 'aligned',
@@ -98,7 +99,46 @@ function normalizeGlobalFactId(value, index) {
 }
 
 function isValidBidMode(value) {
-  return value === 'key' || value === 'full';
+  return value === 'key' || value === 'full' || value === 'custom';
+}
+
+function getAllBidAnalysisTasks() {
+  return getBidAnalysisTasks('full');
+}
+
+function getRequiredBidAnalysisTaskIds() {
+  return getBidAnalysisTasks('key').map((task) => task.id);
+}
+
+function normalizeBidAnalysisTaskIds(taskIds) {
+  const requestedIds = new Set((Array.isArray(taskIds) ? taskIds : [])
+    .map((taskId) => String(taskId || '').trim())
+    .filter(Boolean));
+  return getAllBidAnalysisTasks()
+    .filter((task) => requestedIds.has(task.id))
+    .map((task) => task.id);
+}
+
+function normalizeBidAnalysisConfig(mode, selectedTaskIds) {
+  const allTaskIds = getAllBidAnalysisTasks().map((task) => task.id);
+  const requiredTaskIds = getRequiredBidAnalysisTaskIds();
+  const requiredSet = new Set(requiredTaskIds);
+  const selectedSet = new Set([...requiredTaskIds, ...normalizeBidAnalysisTaskIds(selectedTaskIds)]);
+  const selectedIds = allTaskIds.filter((taskId) => selectedSet.has(taskId));
+  const hasOptional = selectedIds.some((taskId) => !requiredSet.has(taskId));
+  const hasAll = selectedIds.length === allTaskIds.length;
+
+  if (mode === 'full' || hasAll) {
+    return { mode: 'full', selectedTaskIds: allTaskIds };
+  }
+  if (mode === 'custom' || hasOptional) {
+    return { mode: 'custom', selectedTaskIds: selectedIds };
+  }
+  return { mode: 'key', selectedTaskIds: requiredTaskIds };
+}
+
+function getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds) {
+  return normalizeBidAnalysisConfig(mode, selectedTaskIds).selectedTaskIds;
 }
 
 function isValidOutlineMode(value) {
@@ -472,8 +512,8 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     }, {});
   }
 
-  function getBidItemSortOrder(itemId, mode) {
-    const fullTasks = getBidAnalysisTasks(mode === 'full' ? 'full' : 'key');
+  function getBidItemSortOrder(itemId) {
+    const fullTasks = getAllBidAnalysisTasks();
     const index = fullTasks.findIndex((task) => task.id === itemId);
     return index >= 0 ? index : 9999;
   }
@@ -538,11 +578,11 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     });
   }
 
-  function calculateBidProgress(mode, bidTasks) {
-    const selectedTasks = getBidAnalysisTasks(mode);
-    if (!selectedTasks.length) return 0;
-    const done = selectedTasks.filter((task) => ['success', 'error'].includes(bidTasks[task.id]?.status)).length;
-    return Math.round((done / selectedTasks.length) * 100);
+  function calculateBidProgress(mode, bidTasks, selectedTaskIds) {
+    const selectedIds = getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds);
+    if (!selectedIds.length) return 0;
+    const done = selectedIds.filter((taskId) => ['success', 'error'].includes(bidTasks[taskId]?.status)).length;
+    return Math.round((done / selectedIds.length) * 100);
   }
 
   function loadOutlineData(meta) {
@@ -812,6 +852,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     updateMeta({
       step: 'document-analysis',
       bid_analysis_mode: 'key',
+      bid_analysis_selected_task_ids_json: null,
       outline_mode: 'aligned',
       outline_project_name: null,
       outline_project_overview: null,
@@ -972,6 +1013,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     if (hasOwn(partial, 'workflowKind')) metaUpdates.workflow_kind = normalizeWorkflowKind(partial.workflowKind);
     if (hasOwn(partial, 'step') && isValidStep(partial.step)) metaUpdates.step = partial.step;
     if (hasOwn(partial, 'bidAnalysisMode') && isValidBidMode(partial.bidAnalysisMode)) metaUpdates.bid_analysis_mode = partial.bidAnalysisMode;
+    if (hasOwn(partial, 'bidAnalysisSelectedTaskIds')) metaUpdates.bid_analysis_selected_task_ids_json = jsonOrNull(normalizeBidAnalysisTaskIds(partial.bidAnalysisSelectedTaskIds));
     if (hasOwn(partial, 'outlineMode') && isValidOutlineMode(partial.outlineMode)) metaUpdates.outline_mode = partial.outlineMode;
     if (hasOwn(partial, 'contentGenerationOptions')) metaUpdates.content_generation_options_json = jsonOrNull(partial.contentGenerationOptions);
     if (hasOwn(partial, 'contentGenerationRuntime')) metaUpdates.content_generation_runtime_json = jsonOrNull(partial.contentGenerationRuntime);
@@ -1008,6 +1050,10 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   function loadTechnicalPlan() {
     const meta = ensureMetaRow();
     const bidAnalysisMode = isValidBidMode(meta.bid_analysis_mode) ? meta.bid_analysis_mode : 'key';
+    const bidAnalysisSelectedTaskIds = getBidAnalysisTaskIdsForConfig(
+      bidAnalysisMode,
+      safeJsonParse(meta.bid_analysis_selected_task_ids_json, []),
+    );
     const bidAnalysisTasks = loadBidItems();
     const outlineData = loadOutlineData(meta);
     const tasks = loadTasks();
@@ -1042,8 +1088,9 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       projectOverview: bidAnalysisTasks.projectOverview?.status === 'success' ? bidAnalysisTasks.projectOverview.content : '',
       techRequirements: bidAnalysisTasks.techRequirements?.status === 'success' ? bidAnalysisTasks.techRequirements.content : '',
       bidAnalysisMode,
+      bidAnalysisSelectedTaskIds,
       bidAnalysisTasks,
-      bidAnalysisProgress: calculateBidProgress(bidAnalysisMode, bidAnalysisTasks),
+      bidAnalysisProgress: calculateBidProgress(bidAnalysisMode, bidAnalysisTasks, bidAnalysisSelectedTaskIds),
       outlineMode: isValidOutlineMode(meta.outline_mode) ? meta.outline_mode : 'aligned',
       referenceKnowledgeDocumentIds: loadReferenceDocumentIds(),
       ...tasks,
@@ -1097,6 +1144,14 @@ function createTechnicalPlanStore({ app, db, fileService }) {
 
   function saveOutlineConfig({ outlineMode, referenceKnowledgeDocumentIds } = {}) {
     return updateTechnicalPlan({ outlineMode, referenceKnowledgeDocumentIds });
+  }
+
+  function saveBidAnalysisConfig({ mode, selectedTaskIds } = {}) {
+    const config = normalizeBidAnalysisConfig(mode, selectedTaskIds);
+    return updateTechnicalPlan({
+      bidAnalysisMode: config.mode,
+      bidAnalysisSelectedTaskIds: config.selectedTaskIds,
+    });
   }
 
   function saveOutline(payload) {
@@ -1381,6 +1436,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     updateStep,
     setWorkflowKind,
     switchWorkflowKind,
+    saveBidAnalysisConfig,
     saveOutlineConfig,
     saveOutline,
     saveGlobalFacts,

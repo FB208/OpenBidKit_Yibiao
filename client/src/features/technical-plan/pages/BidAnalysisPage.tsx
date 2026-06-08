@@ -1,38 +1,73 @@
+import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
+import { bidAnalysisTasks, getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { MarkdownRenderer, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, BidAnalysisMode, BidAnalysisTasks, BidAnalysisTaskState } from '../types';
+import type { BackgroundTaskState, BidAnalysisMode, BidAnalysisTasks, BidAnalysisTaskState, TechnicalPlanState } from '../types';
 
 interface BidAnalysisPageProps {
   hasTenderFile: boolean;
   mode: BidAnalysisMode;
+  selectedTaskIds: string[];
   tasks: BidAnalysisTasks;
   task?: BackgroundTaskState;
   progress: number;
-  onModeChange: (mode: BidAnalysisMode) => void;
-  onTasksChange: (updater: (prev: BidAnalysisTasks) => BidAnalysisTasks) => void;
   onProgressChange: (progress: number) => void;
-  onRequiredResultChange: (projectOverview: string, techRequirements: string) => void;
+  onConfigSaved: (state: TechnicalPlanState) => void;
 }
 
-const modeOptions: Array<{ id: BidAnalysisMode; title: string; desc: string; badge: string }> = [
+const modeOptions: Array<{ id: 'key' | 'full'; title: string; badge: string }> = [
   {
     id: 'key',
     title: '只解析关键项',
-    desc: '项目概述、技术评分、项目信息、甲方信息、交货和服务要求。',
     badge: '默认',
   },
   {
     id: 'full',
     title: '完整解析',
-    desc: '并发提取项目、甲方、代理、评标、合同等完整信息。',
     badge: '更多 Token',
   },
 ];
 
+const allBidAnalysisTaskIds = bidAnalysisTasks.map((task) => task.id);
+const requiredBidAnalysisTaskIds = getBidAnalysisTasks('key').map((task) => task.id);
+const requiredBidAnalysisTaskIdSet = new Set(requiredBidAnalysisTaskIds);
+
+function normalizeSelectedTaskIds(taskIds: string[]) {
+  const requestedIds = new Set(taskIds);
+  return allBidAnalysisTaskIds.filter((taskId) => requiredBidAnalysisTaskIdSet.has(taskId) || requestedIds.has(taskId));
+}
+
+function getSelectedTaskIdsForMode(mode: BidAnalysisMode, taskIds: string[]) {
+  if (mode === 'full') {
+    return allBidAnalysisTaskIds;
+  }
+  if (mode === 'custom') {
+    return normalizeSelectedTaskIds(taskIds);
+  }
+  return requiredBidAnalysisTaskIds;
+}
+
+function getModeForSelection(taskIds: string[]): BidAnalysisMode {
+  const selectedIds = normalizeSelectedTaskIds(taskIds);
+  if (selectedIds.length === allBidAnalysisTaskIds.length) {
+    return 'full';
+  }
+  if (selectedIds.some((taskId) => !requiredBidAnalysisTaskIdSet.has(taskId))) {
+    return 'custom';
+  }
+  return 'key';
+}
+
+function getModeLabel(mode: BidAnalysisMode) {
+  if (mode === 'full') return '完整解析';
+  if (mode === 'custom') return '自定义解析';
+  return '只解析关键项';
+}
+
 const taskGroups = [
   { title: '关键项', ids: ['projectOverview', 'techRequirements', 'projectInfo', 'partAInfo', 'deliveryAndServiceRequirements'] },
+  { title: '采购与响应', ids: ['procurementList', 'responseFileRequirements'] },
   { title: '投标流程', ids: ['keyInfo', 'marginInfo', 'openBid'] },
   { title: '评审要求', ids: ['qualificationReview', 'complianceCheck', 'evaluationBid', 'businessScoring'] },
   { title: '主体与合同', ids: ['agentInfo', 'discardedBids', 'signingProcess', 'terminationCondition'] },
@@ -157,21 +192,26 @@ function JsonResultTable({ content }: { content: string }) {
 function BidAnalysisPage({
   hasTenderFile,
   mode,
+  selectedTaskIds,
   tasks,
   task,
   progress,
-  onModeChange,
-  onTasksChange,
   onProgressChange,
-  onRequiredResultChange,
+  onConfigSaved,
 }: BidAnalysisPageProps) {
   const [running, setRunning] = useState(false);
   const [fullRerunLocked, setFullRerunLocked] = useState(false);
   const [fullRerunSeenRunning, setFullRerunSeenRunning] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState('projectOverview');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [draftSelectedTaskIds, setDraftSelectedTaskIds] = useState<string[]>(() => getSelectedTaskIdsForMode(mode, selectedTaskIds));
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const { showToast } = useToast();
-  const selectedTasks = useMemo(() => getBidAnalysisTasks(mode), [mode]);
+  const effectiveSelectedTaskIds = useMemo(() => getSelectedTaskIdsForMode(mode, selectedTaskIds), [mode, selectedTaskIds]);
+  const selectedTasks = useMemo(() => {
+    const selectedIdSet = new Set(effectiveSelectedTaskIds);
+    return bidAnalysisTasks.filter((task) => selectedIdSet.has(task.id));
+  }, [effectiveSelectedTaskIds]);
   const requiredTasks = useMemo(() => getBidAnalysisTasks('key'), []);
   const visibleSelectedTaskId = selectedTasks.some((task) => task.id === selectedTaskId)
     ? selectedTaskId
@@ -181,16 +221,17 @@ function BidAnalysisPage({
   const activeTaskStatus = activeTaskState?.status || 'idle';
   const activeTaskContent = activeTaskState?.content || '';
   const failedTaskCount = selectedTasks.filter((task) => tasks[task.id]?.status === 'error').length;
-  const allSelectedTasksSucceeded = selectedTasks.length > 0 && selectedTasks.every((task) => tasks[task.id]?.status === 'success');
   const doneCount = selectedTasks.filter((task) => {
     const status = tasks[task.id]?.status;
     return status === 'success' || status === 'error';
   }).length;
   const taskRunning = running || fullRerunLocked || task?.status === 'running';
   const requiredDone = requiredTasks.every((task) => tasks[task.id]?.status === 'success' && tasks[task.id]?.content);
+  const configLabel = getModeLabel(mode);
 
-  const syncProgressForMode = (nextMode: BidAnalysisMode) => {
-    const nextTasks = getBidAnalysisTasks(nextMode);
+  const syncProgressForSelection = (nextTaskIds: string[]) => {
+    const selectedIdSet = new Set(normalizeSelectedTaskIds(nextTaskIds));
+    const nextTasks = bidAnalysisTasks.filter((task) => selectedIdSet.has(task.id));
     const nextDoneCount = nextTasks.filter((task) => {
       const status = tasks[task.id]?.status;
       return status === 'success' || status === 'error';
@@ -214,14 +255,49 @@ function BidAnalysisPage({
     }
   }, [fullRerunLocked, fullRerunSeenRunning, task?.status]);
 
-  const startAnalysis = async (taskIds?: string[]) => {
+  useEffect(() => {
+    if (!settingsOpen) {
+      return;
+    }
+
+    setDraftSelectedTaskIds(effectiveSelectedTaskIds);
+  }, [effectiveSelectedTaskIds, settingsOpen]);
+
+  const openSettingsDialog = () => {
+    if (taskRunning) {
+      showToast('招标文件解析任务正在运行，请等待任务结束后再调整配置', 'info');
+      return;
+    }
+    setDraftSelectedTaskIds(effectiveSelectedTaskIds);
+    setSettingsOpen(true);
+  };
+
+  const saveConfig = async (nextTaskIds = draftSelectedTaskIds, closeDialog = true) => {
+    const normalizedTaskIds = normalizeSelectedTaskIds(nextTaskIds);
+    const nextMode = getModeForSelection(normalizedTaskIds);
+    const saved = await window.yibiao?.technicalPlan.saveBidAnalysisConfig({ mode: nextMode, selectedTaskIds: normalizedTaskIds });
+    if (saved) {
+      onConfigSaved(saved);
+    }
+    syncProgressForSelection(normalizedTaskIds);
+    if (closeDialog) {
+      setSettingsOpen(false);
+      showToast('招标文件解析配置已保存', 'success');
+    }
+    return { mode: nextMode, selectedTaskIds: normalizedTaskIds };
+  };
+
+  const startAnalysis = async (taskIds?: string[], nextTaskIds = draftSelectedTaskIds) => {
     if (!hasTenderFile) {
       showToast('请先上传招标文件', 'info');
       return;
     }
 
-    const retryTask = taskIds?.length === 1 ? selectedTasks.find((task) => task.id === taskIds[0]) : undefined;
-    const forceRerun = !taskIds?.length && allSelectedTasksSucceeded;
+    const normalizedTaskIds = normalizeSelectedTaskIds(nextTaskIds);
+    const nextSelectedIdSet = new Set(normalizedTaskIds);
+    const nextSelectedTasks = bidAnalysisTasks.filter((task) => nextSelectedIdSet.has(task.id));
+    const retryTask = taskIds?.length === 1 ? nextSelectedTasks.find((task) => task.id === taskIds[0]) : undefined;
+    const forceRerun = !taskIds?.length && nextSelectedTasks.length > 0 && nextSelectedTasks.every((task) => tasks[task.id]?.status === 'success');
 
     try {
       setRunning(true);
@@ -229,9 +305,16 @@ function BidAnalysisPage({
         setFullRerunSeenRunning(false);
         setFullRerunLocked(true);
       }
+      const configState = await saveConfig(normalizedTaskIds, false);
       const config = await window.yibiao?.config.load();
-      await window.yibiao?.tasks.startBidAnalysis({ mode, task_ids: taskIds, force_rerun: forceRerun });
-      trackConfigUsage({ bid_analysis_mode: mode }, config);
+      await window.yibiao?.tasks.startBidAnalysis({
+        mode: configState.mode,
+        selected_task_ids: configState.selectedTaskIds,
+        task_ids: taskIds,
+        force_rerun: forceRerun,
+      });
+      trackConfigUsage({ bid_analysis_mode: configState.mode }, config);
+      setSettingsOpen(false);
       showToast(retryTask ? `${retryTask.label}重新解析任务已在后台启动` : '招标文件解析任务已在后台启动', 'success');
     } catch (error) {
       if (forceRerun) {
@@ -250,7 +333,27 @@ function BidAnalysisPage({
       return;
     }
 
-    startAnalysis([activeTask.id]);
+    startAnalysis([activeTask.id], effectiveSelectedTaskIds);
+  };
+
+  const toggleDraftTask = (taskId: string) => {
+    if (requiredBidAnalysisTaskIdSet.has(taskId) || taskRunning) {
+      return;
+    }
+
+    setDraftSelectedTaskIds((prev) => {
+      const selectedSet = new Set(normalizeSelectedTaskIds(prev));
+      if (selectedSet.has(taskId)) {
+        selectedSet.delete(taskId);
+      } else {
+        selectedSet.add(taskId);
+      }
+      return allBidAnalysisTaskIds.filter((id) => selectedSet.has(id));
+    });
+  };
+
+  const selectPreset = (preset: 'key' | 'full') => {
+    setDraftSelectedTaskIds(preset === 'full' ? allBidAnalysisTaskIds : requiredBidAnalysisTaskIds);
   };
 
   const copyActiveResult = async () => {
@@ -263,6 +366,29 @@ function BidAnalysisPage({
     showToast('解析结果已复制', 'success');
   };
 
+  const renderConfigTask = (definition: typeof bidAnalysisTasks[number]) => {
+    const selected = normalizeSelectedTaskIds(draftSelectedTaskIds).includes(definition.id);
+    const required = definition.required;
+
+    return (
+      <label className={`bid-analysis-config-item${selected ? ' is-selected' : ''}${required ? ' is-required' : ''}`} key={definition.id}>
+        <input
+          type="checkbox"
+          checked={selected}
+          disabled={required || taskRunning}
+          onChange={() => toggleDraftTask(definition.id)}
+        />
+        <span>
+          <strong>{definition.label}</strong>
+        </span>
+        {required && <em>必选</em>}
+      </label>
+    );
+  };
+
+  const draftMode = getModeForSelection(draftSelectedTaskIds);
+  const draftSelectedCount = normalizeSelectedTaskIds(draftSelectedTaskIds).length;
+
   return (
     <div className="plan-step-body bid-analysis-page">
       <section className="bid-analysis-command-bar">
@@ -271,27 +397,28 @@ function BidAnalysisPage({
           <strong>招标文件解析</strong>
           <p>并发解析招标文件，关键项成功后进入目录生成。</p>
         </div>
-        <div className="bid-analysis-mode-switch" role="radiogroup" aria-label="解析模式">
-          {modeOptions.map((option) => (
-            <button
-              type="button"
-              className={`bid-analysis-mode-pill${mode === option.id ? ' is-active' : ''}`}
-              key={option.id}
-              onClick={() => {
-                onModeChange(option.id);
-                syncProgressForMode(option.id);
-                setSelectedTaskId(getBidAnalysisTasks(option.id)[0]?.id || 'projectOverview');
-              }}
-              disabled={taskRunning}
-            >
-              <span>{option.title}</span>
-              <small>{option.badge}</small>
-            </button>
-          ))}
+        <div className="bid-analysis-config-chip" title="当前解析配置">
+          <span>{configLabel}</span>
+          <small>{selectedTasks.length} 项</small>
         </div>
-        <button type="button" className="primary-action" onClick={() => startAnalysis()} disabled={taskRunning || !hasTenderFile}>
-          {taskRunning ? '解析中...' : failedTaskCount > 0 ? `重试失败项(${failedTaskCount})` : progress > 0 ? '重新解析' : '开始解析'}
-        </button>
+        <div className="bid-analysis-command-actions">
+          <button
+            type="button"
+            className="outline-config-action"
+            onClick={openSettingsDialog}
+            disabled={taskRunning}
+            aria-label="打开招标文件解析配置"
+            title="招标文件解析配置"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
+            </svg>
+          </button>
+          <button type="button" className="primary-action" onClick={openSettingsDialog} disabled={taskRunning}>
+            {taskRunning ? '解析中...' : failedTaskCount > 0 ? `重试失败项(${failedTaskCount})` : progress > 0 ? '重新解析' : '开始解析'}
+          </button>
+        </div>
       </section>
 
       <section className="bid-analysis-workspace">
@@ -383,6 +510,79 @@ function BidAnalysisPage({
           )}
         </article>
       </section>
+
+      <Dialog.Root open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="bid-analysis-config-card">
+            <Dialog.Title className="sr-only">招标文件解析配置</Dialog.Title>
+            <Dialog.Description className="sr-only">选择本次招标文件需要解析的项目。</Dialog.Description>
+
+            <header className="bid-analysis-config-head">
+              <div>
+                <span className="section-kicker">解析项选择</span>
+                <strong>{getModeLabel(draftMode)}</strong>
+              </div>
+              <div className="bid-analysis-config-presets" role="group" aria-label="快速选择解析项">
+                {modeOptions.map((option) => (
+                  <button
+                    type="button"
+                    className={`bid-analysis-config-preset${draftMode === option.id ? ' is-active' : ''}`}
+                    key={option.id}
+                    onClick={() => selectPreset(option.id)}
+                    disabled={taskRunning}
+                  >
+                    <span>{option.title}</span>
+                    <small>{option.badge}</small>
+                  </button>
+                ))}
+              </div>
+            </header>
+
+            <section className="bid-analysis-config-section">
+              <div className="bid-analysis-config-section-head">
+                <strong>关键项</strong>
+                <span>{requiredBidAnalysisTaskIds.length} 项必选</span>
+              </div>
+              <div className="bid-analysis-config-grid">
+                {bidAnalysisTasks.filter((definition) => definition.required).map(renderConfigTask)}
+              </div>
+            </section>
+
+            <section className="bid-analysis-config-section">
+              <div className="bid-analysis-config-section-head">
+                <strong>其他项</strong>
+                <span>当前共选择 {draftSelectedCount} 项</span>
+              </div>
+              <div className="bid-analysis-config-grid">
+                {bidAnalysisTasks.filter((definition) => !definition.required).map(renderConfigTask)}
+              </div>
+            </section>
+
+            <div className="content-regenerate-actions bid-analysis-config-actions">
+              <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => {
+                  void saveConfig().catch((error) => showToast(error instanceof Error ? error.message : '保存解析配置失败', 'error'));
+                }}
+                disabled={taskRunning}
+              >
+                保存配置
+              </button>
+              <button
+                type="button"
+                className="primary-action"
+                onClick={() => { void startAnalysis(undefined, draftSelectedTaskIds); }}
+                disabled={taskRunning || !hasTenderFile}
+              >
+                开始解析
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }

@@ -10,6 +10,7 @@ const initialState: TechnicalPlanState = {
   projectOverview: '',
   techRequirements: '',
   bidAnalysisMode: 'key',
+  bidAnalysisSelectedTaskIds: [],
   bidAnalysisTasks: {},
   bidAnalysisProgress: 0,
   outlineMode: 'aligned',

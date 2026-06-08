@@ -59,6 +59,7 @@ const resetState = {
   projectOverview: '',
   techRequirements: '',
   bidAnalysisMode: 'key' as const,
+  bidAnalysisSelectedTaskIds: [] as string[],
   bidAnalysisTasks: {},
   bidAnalysisProgress: 0,
   outlineMode: 'aligned' as const,
@@ -445,6 +446,10 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           return {
             ...prev,
             bidAnalysisTask: trimTaskLogs(technicalPlan.bidAnalysisTask) || latestTask,
+            bidAnalysisMode: technicalPlan.bidAnalysisMode ?? prev.bidAnalysisMode,
+            bidAnalysisSelectedTaskIds: Array.isArray(technicalPlan.bidAnalysisSelectedTaskIds)
+              ? technicalPlan.bidAnalysisSelectedTaskIds
+              : prev.bidAnalysisSelectedTaskIds,
             bidAnalysisTasks: {
               ...prev.bidAnalysisTasks,
               ...(technicalPlan.bidAnalysisTasks || {}),
@@ -820,17 +825,12 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         <BidAnalysisPage
           hasTenderFile={Boolean(state.tenderFile)}
           mode={state.bidAnalysisMode}
+          selectedTaskIds={state.bidAnalysisSelectedTaskIds}
           tasks={state.bidAnalysisTasks}
           task={state.bidAnalysisTask}
           progress={state.bidAnalysisProgress}
-          onModeChange={(mode) => setState((prev) => ({ ...prev, bidAnalysisMode: mode }))}
-          onTasksChange={(updater) => setState((prev) => ({ ...prev, bidAnalysisTasks: updater(prev.bidAnalysisTasks) }))}
           onProgressChange={(progress) => setState((prev) => ({ ...prev, bidAnalysisProgress: progress }))}
-          onRequiredResultChange={(projectOverview, techRequirements) => setState((prev) => ({
-            ...prev,
-            projectOverview,
-            techRequirements,
-          }))}
+          onConfigSaved={(nextState) => setState((prev) => ({ ...prev, ...nextState }))}
         />
       )}
       {state.step === 'outline-generation' && (

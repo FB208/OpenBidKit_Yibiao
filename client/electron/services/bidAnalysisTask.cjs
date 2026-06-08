@@ -87,6 +87,36 @@ const tasks = [
   { id: 'projectInfo', label: '项目信息', required: true, output: 'json', description: '项目名称、编号、类型、预算和地址。', prompt: () => jsonTask('提取项目信息', '提取项目名称、项目编号、项目类型、项目预算、项目地址。', `{"project_name":"项目名称","project_number":"项目编号","project_type":"项目类型","project_budget":"项目预算","project_address":"项目地址"}`) },
   { id: 'partAInfo', label: '甲方信息', required: true, output: 'json', description: '招标人公司、地址、联系人和电话。', prompt: () => jsonTask('提取甲方信息', '提取公司名称、地址、联系人、联系电话。', `{"company_name":"公司名称","address":"地址","contact_person":"联系人","contact_phone":"联系电话"}`) },
   { id: 'deliveryAndServiceRequirements', label: '交货和服务要求', required: true, output: 'json', description: '实施周期、交付范围、地点、验收、质保、售后、响应、培训和文档要求。', prompt: () => jsonTask('提取交货和服务要求', '提取实施周期/工期/交付期限、交付范围、交付/实施地点、验收要求、质保期、售后服务要求、响应时限、培训要求、资料/文档交付要求。', `{"implementation_period":"实施周期/工期/交付期限","delivery_scope":"交付范围","delivery_location":"交付/实施地点","acceptance_requirements":"验收要求","warranty_period":"质保期","after_sales_service":"售后服务要求","response_time":"响应时限","training_requirements":"培训要求","documentation_requirements":"资料/文档交付要求"}`) },
+  {
+    id: 'procurementList', label: '采购清单', required: false, output: 'markdown', description: '采购内容、数量、规格参数、交付和验收要求。',
+    prompt: () => `任务：提取招标文件、询比文件或采购文件中的采购清单/采购需求信息。
+
+请从原文中识别与“采购清单、采购需求、采购内容、货物需求、服务内容、技术参数、规格要求、报价清单、分项报价、工程量清单”等含义相近的内容。
+
+提取要求：
+1. 优先保留原文中的表格、条目和字段含义，不要自行补充原文没有的信息。
+2. 如果原文是表格，请尽量整理为 Markdown 表格；如果表格结构复杂，可以按“清单项 + 要求说明”的方式整理。
+3. 如果不同章节分别描述采购内容、技术参数、数量、交付、验收、质保等要求，请合并整理，但要避免编造不存在的字段。
+4. 字段名称不要求固定，按原文实际出现的信息组织，例如名称、规格型号、技术参数、单位、数量、预算/限价、交付地点、交付时间、验收要求、质保要求、备注等。
+5. 如果没有找到明确采购清单，请说明“未找到明确采购清单”，并列出可能相关的采购需求段落摘要。
+6. 只输出整理结果，不要输出分析过程。`,
+  },
+  {
+    id: 'responseFileRequirements', label: '响应文件要求', required: false, output: 'markdown', description: '响应文件组成、格式模板、签章、递交和偏离表要求。',
+    prompt: () => `任务：提取招标文件、询比文件或采购文件中关于响应文件/投标文件编制与提交的要求。
+
+请识别与“响应文件、投标文件、报价文件、资格证明文件、商务响应、技术响应、偏离表、响应文件格式、投标文件格式、递交要求、签字盖章、密封上传”等含义相近的内容。
+
+提取要求：
+1. 按原文实际结构整理，不要强制套用固定模板。
+2. 重点提取响应文件需要包含哪些部分，例如报价文件、商务文件、技术文件、资格证明、承诺函、授权委托书、响应表、偏离表、分项报价表等。
+3. 如果原文提供了固定格式、表格或附件模板，请提取模板名称、用途、填写要求和关键字段。
+4. 提取签字盖章、文件命名、装订/密封、上传格式、份数、递交截止时间、递交方式等要求。
+5. 区分“必须提供”和“如适用/可选提供”的内容；如果原文没有明确区分，不要自行判断。
+6. 不要生成供应商自己的最终响应文件，不要编造公司信息、报价、资质、承诺内容。
+7. 如果没有找到明确响应文件要求，请说明“未找到明确响应文件要求”，并列出可能相关的投标/响应文件格式段落摘要。
+8. 只输出整理结果，不要输出分析过程。`,
+  },
   { id: 'agentInfo', label: '代理机构信息', required: false, output: 'json', description: '代理机构联系方式和账户信息。', prompt: () => jsonTask('提取代理机构信息', '提取代理机构名称、地址、联系人、电话、邮箱和银行账户信息。', `{"company_name":"公司名称","address":"地址","contact_person":"联系人","contact_phone":"联系电话","email":"联系邮箱","bank_account_name":"银行账户名称","bank_account_number":"银行账户账号","bank_account_address":"银行账户开户行","bank_account_address_detail":"银行账户开户行地址"}`) },
   { id: 'keyInfo', label: '投标关键节点', required: false, output: 'json', description: '公告、获取文件、递交、截止和开标信息。', prompt: () => jsonTask('提取投标关键节点', '提取招标公告发布日期、招标文件获取方式、售价、获取时间、提交地点、截止时间、开标时间、开标地点和其他注意事项。', `{"bid_announcement_time":"招标公告发布日期","bid_file_get_way":"招标文件获取方式","bid_file_price":"招标文件售价","get_bid_file_time":"获取招标文件时间","bid_document_submission_location":"投标文件提交地点","bid_submission_deadline":"投标截止时间","bid_opening_time":"开标时间","bid_opening_address":"开标地点","other_notes":"其他注意事项"}`) },
   { id: 'marginInfo', label: '投标保证金', required: false, output: 'json', description: '保证金金额、方式、截止和退还条件。', prompt: () => jsonTask('提取投标保证金信息', '提取投标保证金、缴纳方式、截止日期、退还条件、不予退还情形和其他注意事项。', `{"bidding_deposit":"投标保证金","payment_method":"缴纳方式","due_date":"截止日期","refund_conditions":"退还条件","non_refundable_conditions":"不予退还的情形","other_notes":"其他注意事项"}`) },
@@ -101,7 +131,31 @@ const tasks = [
 ];
 
 function getBidAnalysisTasks(mode) {
-  return mode === 'key' ? tasks.filter((task) => task.required) : tasks;
+  return mode === 'full' ? tasks : tasks.filter((task) => task.required);
+}
+
+function normalizeBidAnalysisTaskIds(taskIds) {
+  const requestedIds = new Set((Array.isArray(taskIds) ? taskIds : [])
+    .map((taskId) => String(taskId || '').trim())
+    .filter(Boolean));
+  return tasks.filter((task) => requestedIds.has(task.id)).map((task) => task.id);
+}
+
+function normalizeBidAnalysisConfig(mode, selectedTaskIds) {
+  const requiredTaskIds = getBidAnalysisTasks('key').map((task) => task.id);
+  const requiredSet = new Set(requiredTaskIds);
+  const selectedSet = new Set([...requiredTaskIds, ...normalizeBidAnalysisTaskIds(selectedTaskIds)]);
+  const selectedIds = tasks.filter((task) => selectedSet.has(task.id)).map((task) => task.id);
+  const hasOptional = selectedIds.some((taskId) => !requiredSet.has(taskId));
+  const hasAll = selectedIds.length === tasks.length;
+
+  if (mode === 'full' || hasAll) {
+    return { mode: 'full', taskIds: tasks.map((task) => task.id) };
+  }
+  if (mode === 'custom' || hasOptional) {
+    return { mode: 'custom', taskIds: selectedIds };
+  }
+  return { mode: 'key', taskIds: requiredTaskIds };
 }
 
 function getBidAnalysisTaskById(taskId) {
@@ -141,8 +195,10 @@ function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent, sect
 }
 
 async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, payload }) {
-  const mode = payload.mode || 'key';
-  const selectedTasks = getBidAnalysisTasks(mode);
+  const config = normalizeBidAnalysisConfig(payload.mode, payload.selected_task_ids || payload.selectedTaskIds);
+  const mode = config.mode;
+  const selectedTaskIdSet = new Set(config.taskIds);
+  const selectedTasks = tasks.filter((task) => selectedTaskIdSet.has(task.id));
   const fileContent = workspaceStore.readTenderMarkdown();
   if (!String(fileContent || '').trim()) {
     throw new Error('请先上传招标文件，再开始解析');
@@ -174,7 +230,7 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
       ? '开始重新解析全部招标文件解析项。'
       : '开始解析招标文件。';
   const initialLogs = [initialMessage];
-  let initialPartial = { bidAnalysisMode: mode, bidAnalysisTask: updateTask({ status: 'running', progress: 0, logs: initialLogs }) };
+  let initialPartial = { bidAnalysisMode: mode, bidAnalysisSelectedTaskIds: config.taskIds, bidAnalysisTask: updateTask({ status: 'running', progress: 0, logs: initialLogs }) };
   if (forceRerun && !requestedTaskIds) {
     const prev = workspaceStore.loadTechnicalPlan() || {};
     const resetTasks = { ...(prev.bidAnalysisTasks || {}) };
