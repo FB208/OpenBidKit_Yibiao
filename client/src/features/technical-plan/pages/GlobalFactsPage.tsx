@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MarkdownEditor, MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { OutlineData } from '../../../shared/types';
 import type { BackgroundTaskState, GlobalFactGroupState } from '../types';
@@ -43,7 +43,6 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
   const [starting, setStarting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
-  const autoStartedRef = useRef(false);
   const hasOutline = Boolean(outlineData?.outline?.length);
   const running = starting || task?.status === 'running';
   const taskFailed = task?.status === 'error';
@@ -54,7 +53,7 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
   const totalChars = useMemo(() => globalFacts.reduce((sum, group) => sum + group.content.length, 0), [globalFacts]);
   const dirty = Boolean(activeGroup && (draftTitle !== activeGroup.title || draftContent !== activeGroup.content));
 
-  const startGeneration = useCallback(async (auto = false) => {
+  const startGeneration = useCallback(async () => {
     if (!hasOutline) {
       showToast('请先生成目录，再进行全局事实设定', 'info');
       return;
@@ -63,27 +62,13 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
     try {
       setStarting(true);
       await window.yibiao?.tasks.startGlobalFactsGeneration({});
-      if (!auto) {
-        showToast('全局事实设定任务已在后台启动', 'success');
-      }
+      showToast('全局事实设定任务已在后台启动', 'success');
     } catch (error) {
-      if (auto) {
-        autoStartedRef.current = false;
-      }
       showToast(error instanceof Error ? error.message : '启动全局事实设定失败', 'error');
     } finally {
       setStarting(false);
     }
   }, [hasOutline, showToast]);
-
-  useEffect(() => {
-    if (!hasOutline || globalFacts.length || task?.status || starting || autoStartedRef.current) {
-      return;
-    }
-
-    autoStartedRef.current = true;
-    void startGeneration(true);
-  }, [globalFacts.length, hasOutline, starting, startGeneration, task?.status]);
 
   useEffect(() => {
     if (!globalFacts.length) {
@@ -170,7 +155,7 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
           <span><strong>{globalFacts.length}</strong> 个大项</span>
           <span><strong>{totalChars}</strong> 字</span>
         </div>
-        <button type="button" className="primary-action" onClick={() => startGeneration(false)} disabled={running || !hasOutline}>
+        <button type="button" className="primary-action" onClick={() => startGeneration()} disabled={running || !hasOutline}>
           {running ? '生成中...' : globalFacts.length ? '重新解析' : '开始解析'}
         </button>
       </section>
@@ -192,7 +177,7 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
                 <div className={`content-generation-progress-track${running ? ' is-active' : ''}`} aria-label={`全局事实设定进度 ${progress}%`}>
                   <span style={{ width: `${progress}%` }} />
                 </div>
-                <p>{taskFailed ? task?.error || latestLog || '全局事实设定失败，请重新解析。' : latestLog || '首次进入本步骤时会自动开始解析。'}</p>
+                <p>{taskFailed ? task?.error || latestLog || '全局事实设定失败，请重新解析。' : latestLog || '点击“开始解析”后，后台会生成全局事实变量。'}</p>
                 {taskFailed && <small>失败后不会自动重试，可点击“重新解析”。</small>}
               </div>
             )}
@@ -211,7 +196,7 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
             )) : (
               <div className="global-facts-empty-list">
                 <strong>{running ? '正在生成全局事实' : '暂无全局事实'}</strong>
-                <p>{hasOutline ? '等待后台任务返回事实大项。' : '请先完成目录生成。'}</p>
+                <p>{hasOutline ? '点击“开始解析”后，等待后台任务返回事实大项。' : '请先完成目录生成。'}</p>
               </div>
             )}
           </div>
@@ -259,7 +244,7 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
           ) : (
             <div className="markdown-empty-state global-facts-empty">
               <strong>{hasOutline ? '等待全局事实生成' : '请先生成目录'}</strong>
-              <p>{hasOutline ? 'AI 会基于目录提前生成正文可能反复用到的短小事实变量。' : '目录生成完成后，本步骤会自动开始。'}</p>
+              <p>{hasOutline ? '点击“开始解析”后，AI 会基于目录提前生成正文可能反复用到的短小事实变量。' : '目录生成完成后，点击“开始解析”生成全局事实。'}</p>
             </div>
           )}
         </article>

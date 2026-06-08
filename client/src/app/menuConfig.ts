@@ -23,7 +23,6 @@ export const appMenuItems: AppMenuItem[] = [
         label: '已有方案扩写',
         description: '解决人写技术方案太薄的问题，上传写好的方案，进行优化和扩充，遵从原方案真实可落地，又能扩写出厚厚的标书',
         icon: 'expand',
-        notice: githubStarNotice,
       },
       {
         id: 'business-bid',

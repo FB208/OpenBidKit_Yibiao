@@ -38,10 +38,13 @@ function normalizeExternalUrl(value) {
 const workspaceDatabaseChannels = [
   'technical-plan:load-state',
   'technical-plan:import-tender-document',
+  'technical-plan:import-original-plan-document',
   'technical-plan:select-bid-section',
   'technical-plan:cancel-bid-section-selection',
   'technical-plan:read-tender-markdown',
+  'technical-plan:read-original-plan-markdown',
   'technical-plan:update-step',
+  'technical-plan:set-workflow-kind',
   'technical-plan:save-outline-config',
   'technical-plan:save-outline',
   'technical-plan:save-global-facts',

@@ -24,6 +24,7 @@ interface ConfigUsagePayload {
   content_generation_action?: string;
   minimum_words?: number;
   enable_consistency_audit?: boolean;
+  enable_original_plan_coverage_audit?: boolean;
 }
 
 let appOpenTracked = false;
@@ -121,6 +122,7 @@ function normalizeUsagePayload(payload: ConfigUsagePayload) {
     use_mermaid_images: booleanText(payload.use_mermaid_images),
     use_ai_images: booleanText(payload.use_ai_images),
     enable_consistency_audit: booleanText(payload.enable_consistency_audit),
+    enable_original_plan_coverage_audit: booleanText(payload.enable_original_plan_coverage_audit),
   };
 }
 

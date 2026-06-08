@@ -9,10 +9,11 @@ import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanStep } from '../types';
+import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
 import type { OutlineData, OutlineItem, WordExportProgressEvent } from '../../../shared/types';
 
 interface TechnicalPlanHomeProps {
+  workflowKind: TechnicalPlanWorkflowKind;
   registerLeaveGuard?: (guard: ((nextSection?: string) => Promise<boolean>) | null) => void;
 }
 
@@ -32,7 +33,7 @@ const steps: TechnicalPlanStep[] = [
 ];
 
 const stepLabels: Record<TechnicalPlanStep, string> = {
-  'document-analysis': '上传招标文件',
+  'document-analysis': '选择标书',
   'bid-analysis': '招标文件解析',
   'outline-generation': '目录生成',
   'global-facts': '全局事实设定',
@@ -41,8 +42,10 @@ const stepLabels: Record<TechnicalPlanStep, string> = {
 };
 
 const resetState = {
+  workflowKind: 'technical-plan' as TechnicalPlanWorkflowKind,
   step: 'document-analysis' as TechnicalPlanStep,
   tenderFile: null,
+  originalPlanFile: null,
   projectOverview: '',
   techRequirements: '',
   bidAnalysisMode: 'key' as const,
@@ -130,10 +133,11 @@ function updateOutlineItemContent(items: OutlineItem[], itemId: string, content:
   });
 }
 
-function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
+function TechnicalPlanHome({ workflowKind, registerLeaveGuard }: TechnicalPlanHomeProps) {
   const { hydrated, state, setState } = useTechnicalPlanWorkflow();
   const { showToast } = useToast();
   const [tenderMarkdown, setTenderMarkdown] = useState('');
+  const [originalPlanMarkdown, setOriginalPlanMarkdown] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
   const [sortLeaveDialogOpen, setSortLeaveDialogOpen] = useState(false);
   const [savingSortBeforeLeave, setSavingSortBeforeLeave] = useState(false);
@@ -147,8 +151,9 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const isContentPaused = contentTaskStatus === 'paused';
   const isExporting = exportProgress.running;
   const hasPendingSectionSelection = Boolean(state.pendingSectionSelection);
+  const requiresOriginalPlan = workflowKind === 'existing-plan-expansion';
   const isNextDisabled = activeIndex >= steps.length - 1
-    || (state.step === 'document-analysis' && (!state.tenderFile || hasPendingSectionSelection))
+    || (state.step === 'document-analysis' && (!state.tenderFile || hasPendingSectionSelection || (requiresOriginalPlan && !state.originalPlanFile)))
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
     || (state.step === 'outline-generation' && !state.outlineData)
     || (state.step === 'global-facts' && !globalFactsReady);
@@ -156,15 +161,17 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     ? '请先选择本次投标范围'
     : state.step === 'document-analysis' && !state.tenderFile
       ? '上传完招标文件后才能进入下一步'
-      : state.step === 'bid-analysis' && !bidAnalysisReady
-        ? '招标文件解析完成后才能进入目录生成'
-        : state.step === 'outline-generation' && !state.outlineData
-          ? '目录生成完成后才能进入全局事实设定'
-          : state.step === 'global-facts' && !globalFactsReady
-            ? '全局事实设定完成后才能进入正文生成'
-            : activeIndex >= steps.length - 1
-              ? '当前已经是最后一步'
-              : `进入${stepLabels[steps[activeIndex + 1]]}`;
+      : state.step === 'document-analysis' && requiresOriginalPlan && !state.originalPlanFile
+        ? '上传完原方案后才能进入下一步'
+        : state.step === 'bid-analysis' && !bidAnalysisReady
+          ? '招标文件解析完成后才能进入目录生成'
+          : state.step === 'outline-generation' && !state.outlineData
+            ? '目录生成完成后才能进入全局事实设定'
+            : state.step === 'global-facts' && !globalFactsReady
+              ? '全局事实设定完成后才能进入正文生成'
+              : activeIndex >= steps.length - 1
+                ? '当前已经是最后一步'
+                : `进入${stepLabels[steps[activeIndex + 1]]}`;
 
   const resolveSortLeave = (allowed: boolean) => {
     sortLeaveResolverRef.current?.(allowed);
@@ -214,8 +221,19 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   useEffect(() => {
     if (!hydrated) return;
 
-    trackPageView(`technical-plan/${state.step}`);
-  }, [hydrated, state.step]);
+    trackPageView(`${workflowKind}/${state.step}`);
+  }, [hydrated, state.step, workflowKind]);
+
+  useEffect(() => {
+    if (!hydrated || state.workflowKind === workflowKind) return;
+
+    setState((prev) => ({ ...prev, workflowKind }));
+    window.yibiao?.technicalPlan.setWorkflowKind(workflowKind).then((saved) => {
+      setState((prev) => ({ ...prev, ...saved, workflowKind }));
+    }).catch((error) => {
+      showToast(error instanceof Error ? error.message : '保存技术方案工作流类型失败', 'error');
+    });
+  }, [hydrated, setState, showToast, state.workflowKind, workflowKind]);
 
   useEffect(() => {
     if (!registerLeaveGuard) return;
@@ -378,6 +396,26 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     };
   }, [showToast, state.step, state.tenderFile]);
 
+  useEffect(() => {
+    if (state.step !== 'document-analysis' || !requiresOriginalPlan) {
+      setOriginalPlanMarkdown('');
+      return;
+    }
+    if (!state.originalPlanFile) {
+      setOriginalPlanMarkdown('');
+      return;
+    }
+    let mounted = true;
+    window.yibiao?.technicalPlan.readOriginalPlanMarkdown().then((markdown) => {
+      if (mounted) setOriginalPlanMarkdown(markdown || '');
+    }).catch((error) => {
+      if (mounted) showToast(error instanceof Error ? error.message : '读取原方案 Markdown 失败', 'error');
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [requiresOriginalPlan, showToast, state.originalPlanFile, state.step]);
+
   const exportWord = async () => {
     if (!state.outlineData?.outline?.length) {
       showToast('请先生成目录', 'info');
@@ -487,8 +525,9 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
 
     try {
       const result = await window.yibiao?.technicalPlan.clear();
-      setState(result?.state || resetState);
+      setState(result?.state || { ...resetState, workflowKind });
       setTenderMarkdown('');
+      setOriginalPlanMarkdown('');
       showToast(result?.message || '技术方案已重置', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '重置技术方案失败', 'error');
@@ -569,7 +608,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           id: 'home',
           label: '首页',
           variant: state.step === 'document-analysis' ? 'primary' as const : 'secondary' as const,
-          tooltip: '回到上传招标文件',
+          tooltip: '回到选择标书',
           onClick: () => { void switchStep('document-analysis'); },
         },
       ],
@@ -584,12 +623,19 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     <div className="page-stack technical-workbench">
       {state.step === 'document-analysis' && (
         <DocumentAnalysisPage
+          workflowKind={workflowKind}
           tenderFile={state.tenderFile}
           tenderMarkdown={tenderMarkdown}
+          originalPlanFile={state.originalPlanFile}
+          originalPlanMarkdown={originalPlanMarkdown}
           pendingSectionSelection={state.pendingSectionSelection}
           onFileImported={(nextState, markdown) => {
             setState((prev) => ({ ...prev, ...nextState }));
             setTenderMarkdown(markdown);
+          }}
+          onOriginalPlanImported={(nextState, markdown) => {
+            setState((prev) => ({ ...prev, ...nextState }));
+            setOriginalPlanMarkdown(markdown);
           }}
           onStateChanged={(nextState) => setState((prev) => ({ ...prev, ...nextState }))}
         />
@@ -645,6 +691,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       )}
       {state.step === 'content-edit' && (
         <ContentEditPage
+          workflowKind={workflowKind}
           outlineData={state.outlineData}
           task={state.contentGenerationTask}
           contentGenerationOptions={state.contentGenerationOptions}
