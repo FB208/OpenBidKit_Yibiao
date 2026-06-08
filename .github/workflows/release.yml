@@ -347,6 +347,22 @@ jobs:
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
         run: |
           shopt -s nullglob
+
+          require_single_asset() {
+            local label="$1"
+            shift
+            if [ "$#" -ne 1 ]; then
+              echo "Expected exactly one ${label}, found $#."
+              exit 1
+            fi
+          }
+
+          require_single_asset "macOS x64 package ZIP" artifacts/x64/*-package.zip
+          require_single_asset "macOS x64 DMG blockmap" artifacts/x64/*.dmg.blockmap
+          require_single_asset "macOS arm64 package ZIP" artifacts/arm64/*-package.zip
+          require_single_asset "macOS arm64 DMG blockmap" artifacts/arm64/*.dmg.blockmap
+          require_single_asset "merged macOS update manifest" artifacts/latest-mac.yml
+
           files=(
             artifacts/x64/*.zip
             artifacts/x64/*.blockmap
@@ -354,8 +370,4 @@ jobs:
             artifacts/arm64/*.blockmap
             artifacts/latest-mac.yml
           )
-          if [ ${#files[@]} -ne 5 ]; then
-            echo "Expected five macOS release assets, found ${#files[@]}."
-            exit 1
-          fi
           gh release upload "$TAG_NAME" "${files[@]}" --clobber
