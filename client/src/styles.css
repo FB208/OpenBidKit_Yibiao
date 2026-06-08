@@ -180,6 +180,24 @@ button {
     linear-gradient(180deg, #ffffff 0%, var(--yb-bg) 48%, #f1f6ff 100%);
 }
 
+.mac-window-drag-region {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 84px;
+  z-index: 10;
+  height: 28px;
+  -webkit-app-region: drag;
+}
+
+.app-shell.is-mac button,
+.app-shell.is-mac input,
+.app-shell.is-mac select,
+.app-shell.is-mac textarea,
+.app-shell.is-mac a {
+  -webkit-app-region: no-drag;
+}
+
 .sidebar {
   position: relative;
   z-index: 2;
@@ -449,6 +467,7 @@ button {
   border-radius: 999px;
   box-shadow: 0 20px 54px rgba(23, 32, 51, 0.14), 0 6px 18px rgba(33, 116, 253, 0.1);
   backdrop-filter: blur(16px);
+  -webkit-app-region: no-drag;
 }
 
 .floating-toolbar.is-dragging {
