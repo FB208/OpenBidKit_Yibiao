@@ -185,7 +185,7 @@ button {
   top: 0;
   right: 0;
   left: 84px;
-  z-index: 60;
+  z-index: 10;
   height: 28px;
   -webkit-app-region: drag;
 }
@@ -467,6 +467,7 @@ button {
   border-radius: 999px;
   box-shadow: 0 20px 54px rgba(23, 32, 51, 0.14), 0 6px 18px rgba(33, 116, 253, 0.1);
   backdrop-filter: blur(16px);
+  -webkit-app-region: no-drag;
 }
 
 .floating-toolbar.is-dragging {
