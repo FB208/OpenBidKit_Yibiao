@@ -236,7 +236,7 @@ jobs:
 
           for attempt in 1 2 3; do
             echo "Build macOS ${{ matrix.arch }} artifacts, attempt ${attempt}/3."
-            if npx electron-builder --mac --${{ matrix.arch }} --publish never; then
+            if npx electron-builder --mac dmg:${{ matrix.arch }} --publish never; then
               exit 0
             fi
 
