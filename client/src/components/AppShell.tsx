@@ -11,9 +11,12 @@ interface AppShellProps {
 }
 
 function AppShell({ activeSection, children, developerMode, onSectionChange }: AppShellProps) {
+  const isMac = navigator.platform.toLowerCase().includes('mac');
+
   return (
     <Tooltip.Provider delayDuration={120} skipDelayDuration={80}>
-      <div className="app-shell">
+      <div className={`app-shell${isMac ? ' is-mac' : ''}`}>
+        {isMac && <div className="mac-window-drag-region" aria-hidden="true" />}
         <Sidebar activeSection={activeSection} developerMode={developerMode} onSectionChange={onSectionChange} />
 
         <main className="main-area">
