@@ -261,7 +261,7 @@ export const bidAnalysisTasks: BidAnalysisTaskDefinition[] = [
 ];
 
 export function getBidAnalysisTasks(mode: BidAnalysisMode) {
-  return mode === 'key' ? bidAnalysisTasks.filter((task) => task.required) : bidAnalysisTasks;
+  return mode === 'full' ? bidAnalysisTasks : bidAnalysisTasks.filter((task) => task.required);
 }
 
 export function getBidAnalysisTaskById(taskId: string) {

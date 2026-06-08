@@ -4,7 +4,7 @@
 -- 1. 本文件用于开源开发者阅读、评审和排查问题，展示 workspace/yibiao.sqlite 的目标完整表结构。
 -- 2. 用户运行客户端时不需要手动执行本文件。
 -- 3. 客户端运行时建表和升级以 Electron Main 侧 migration 代码为准。
--- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、待选择标段恢复状态 v8、工作流类型和原方案文件状态 v9 目标结构。
+-- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、待选择标段恢复状态 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10 目标结构。
 -- 5. 每次表结构调整后，需要同步更新本文件和 runtime migration 版本。
 -- 6. 本文件不保存历史版本，每次更新都写入最新目标完整结构。
 
@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 9;
+PRAGMA user_version = 10;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   pending_tender_total_declared INTEGER,
   pending_tender_created_at TEXT,
   bid_analysis_mode TEXT NOT NULL DEFAULT 'key',
+  -- v10 招标解析项选择配置，JSON 数组，关键项由运行时代码强制并入。
+  bid_analysis_selected_task_ids_json TEXT,
   outline_mode TEXT NOT NULL DEFAULT 'aligned',
   outline_project_name TEXT,
   outline_project_overview TEXT,

@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 9;
+const schemaVersion = 10;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -30,6 +30,7 @@ function createInitialSchema(db) {
       pending_tender_total_declared INTEGER,
       pending_tender_created_at TEXT,
       bid_analysis_mode TEXT NOT NULL DEFAULT 'key',
+      bid_analysis_selected_task_ids_json TEXT,
       outline_mode TEXT NOT NULL DEFAULT 'aligned',
       outline_project_name TEXT,
       outline_project_overview TEXT,
@@ -201,6 +202,13 @@ function addTechnicalPlanWorkflowAndOriginalPlan(db) {
   addIfMissing('original_plan_markdown_chars', 'INTEGER NOT NULL DEFAULT 0');
   addIfMissing('original_plan_parser_label', 'TEXT');
   addIfMissing('original_plan_imported_at', 'TEXT');
+}
+
+function addTechnicalPlanBidAnalysisSelection(db) {
+  const cols = db.prepare("PRAGMA table_info(technical_plan_meta)").all().map((row) => row.name);
+  if (!cols.includes('bid_analysis_selected_task_ids_json')) {
+    db.exec('ALTER TABLE technical_plan_meta ADD COLUMN bid_analysis_selected_task_ids_json TEXT');
+  }
 }
 
 function createDuplicateCheckSchema(db) {
@@ -828,6 +836,13 @@ const schemaHealthColumnGroups = [
       original_plan_imported_at: 'TEXT',
     },
   },
+  {
+    version: 10,
+    table: 'technical_plan_meta',
+    columns: {
+      bid_analysis_selected_task_ids_json: 'TEXT',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -933,6 +948,11 @@ const migrations = [
     version: 9,
     description: '技术方案新增工作流类型和原方案文件状态',
     up: addTechnicalPlanWorkflowAndOriginalPlan,
+  },
+  {
+    version: 10,
+    description: '技术方案新增招标解析项选择配置',
+    up: addTechnicalPlanBidAnalysisSelection,
   },
 ];
 

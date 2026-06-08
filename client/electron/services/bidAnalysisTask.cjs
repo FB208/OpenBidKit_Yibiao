@@ -101,7 +101,31 @@ const tasks = [
 ];
 
 function getBidAnalysisTasks(mode) {
-  return mode === 'key' ? tasks.filter((task) => task.required) : tasks;
+  return mode === 'full' ? tasks : tasks.filter((task) => task.required);
+}
+
+function normalizeBidAnalysisTaskIds(taskIds) {
+  const requestedIds = new Set((Array.isArray(taskIds) ? taskIds : [])
+    .map((taskId) => String(taskId || '').trim())
+    .filter(Boolean));
+  return tasks.filter((task) => requestedIds.has(task.id)).map((task) => task.id);
+}
+
+function normalizeBidAnalysisConfig(mode, selectedTaskIds) {
+  const requiredTaskIds = getBidAnalysisTasks('key').map((task) => task.id);
+  const requiredSet = new Set(requiredTaskIds);
+  const selectedSet = new Set([...requiredTaskIds, ...normalizeBidAnalysisTaskIds(selectedTaskIds)]);
+  const selectedIds = tasks.filter((task) => selectedSet.has(task.id)).map((task) => task.id);
+  const hasOptional = selectedIds.some((taskId) => !requiredSet.has(taskId));
+  const hasAll = selectedIds.length === tasks.length;
+
+  if (mode === 'full' || hasAll) {
+    return { mode: 'full', taskIds: tasks.map((task) => task.id) };
+  }
+  if (mode === 'custom' || hasOptional) {
+    return { mode: 'custom', taskIds: selectedIds };
+  }
+  return { mode: 'key', taskIds: requiredTaskIds };
 }
 
 function getBidAnalysisTaskById(taskId) {
@@ -141,8 +165,10 @@ function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent, sect
 }
 
 async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, payload }) {
-  const mode = payload.mode || 'key';
-  const selectedTasks = getBidAnalysisTasks(mode);
+  const config = normalizeBidAnalysisConfig(payload.mode, payload.selected_task_ids || payload.selectedTaskIds);
+  const mode = config.mode;
+  const selectedTaskIdSet = new Set(config.taskIds);
+  const selectedTasks = tasks.filter((task) => selectedTaskIdSet.has(task.id));
   const fileContent = workspaceStore.readTenderMarkdown();
   if (!String(fileContent || '').trim()) {
     throw new Error('请先上传招标文件，再开始解析');
@@ -174,7 +200,7 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
       ? '开始重新解析全部招标文件解析项。'
       : '开始解析招标文件。';
   const initialLogs = [initialMessage];
-  let initialPartial = { bidAnalysisMode: mode, bidAnalysisTask: updateTask({ status: 'running', progress: 0, logs: initialLogs }) };
+  let initialPartial = { bidAnalysisMode: mode, bidAnalysisSelectedTaskIds: config.taskIds, bidAnalysisTask: updateTask({ status: 'running', progress: 0, logs: initialLogs }) };
   if (forceRerun && !requestedTaskIds) {
     const prev = workspaceStore.loadTechnicalPlan() || {};
     const resetTasks = { ...(prev.bidAnalysisTasks || {}) };

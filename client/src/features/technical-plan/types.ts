@@ -2,7 +2,7 @@ import type { OutlineData, OutlineMode } from '../../shared/types';
 
 export type TechnicalPlanStep = 'document-analysis' | 'bid-analysis' | 'outline-generation' | 'global-facts' | 'content-edit' | 'expand';
 export type TechnicalPlanWorkflowKind = 'technical-plan' | 'existing-plan-expansion';
-export type BidAnalysisMode = 'key' | 'full';
+export type BidAnalysisMode = 'key' | 'full' | 'custom';
 export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
 export type BackgroundTaskType = 'bid-analysis' | 'outline-generation' | 'global-facts-generation' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
@@ -214,6 +214,7 @@ export interface TechnicalPlanState {
   projectOverview: string;
   techRequirements: string;
   bidAnalysisMode: BidAnalysisMode;
+  bidAnalysisSelectedTaskIds: string[];
   bidAnalysisTasks: BidAnalysisTasks;
   bidAnalysisProgress: number;
   outlineMode: OutlineMode;
