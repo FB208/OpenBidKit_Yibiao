@@ -34,7 +34,7 @@ const textProviderDefaults: TextModelProfiles = {
 };
 
 const textProviderApiKeyUrls: Partial<Record<TextModelProvider, string>> = {
-  jinlong: 'https://jlaudeapi.com/keys',
+  jinlong: 'https://s.markup.com.cn/jl',
   volcengine: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
   deepseek: 'https://platform.deepseek.com/api_keys',
   longcat: 'https://longcat.chat/platform/api_keys',
@@ -119,7 +119,7 @@ const imageProviderDefaults: ImageModelProfiles = {
 };
 
 const imageProviderApiKeyUrls: Record<ImageModelProvider, string> = {
-  jinlong: 'https://jlaudeapi.com/keys',
+  jinlong: 'https://s.markup.com.cn/jl',
   volcengine: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
   'google-ai-studio': 'https://aistudio.google.com/api-keys',
   custom: '',
