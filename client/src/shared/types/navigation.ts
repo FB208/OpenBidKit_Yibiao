@@ -8,6 +8,7 @@ export type SectionId =
   | 'bid-check'
   | 'duplicate-check'
   | 'rejection-check'
+  | 'ai-evaluation'
   | 'export-format'
   | 'bid-opportunity'
   | 'developer-test'

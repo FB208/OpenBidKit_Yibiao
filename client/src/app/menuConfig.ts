@@ -55,6 +55,13 @@ export const appMenuItems: AppMenuItem[] = [
         description: '硬性条款与响应完整性',
         icon: 'shield',
       },
+      {
+        id: 'ai-evaluation',
+        label: 'AI评标',
+        description: '模拟AI评标，对标书进行打分，出具评标报告',
+        icon: 'tool',
+        notice: githubStarNotice,
+      },
     ],
   },
   {
