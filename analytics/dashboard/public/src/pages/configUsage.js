@@ -12,7 +12,6 @@ function labelConfigValue(groupKey, value) {
     textModelProviders: {
       jinlong: '金龙中转站',
       volcengine: '火山方舟',
-      xiaomi: '小米 MiMo',
       deepseek: 'DeepSeek',
       longcat: '龙猫',
       custom: '自定义文本服务',

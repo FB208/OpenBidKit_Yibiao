@@ -1,4 +1,4 @@
-export type TextModelProvider = 'jinlong' | 'volcengine' | 'xiaomi' | 'deepseek' | 'longcat' | 'custom';
+export type TextModelProvider = 'jinlong' | 'volcengine' | 'deepseek' | 'longcat' | 'custom';
 
 export interface TextModelConfig {
   api_key: string;

@@ -20,27 +20,22 @@ const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
 const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
   { value: 'jinlong', label: '金龙中转站【推荐】' },
   { value: 'volcengine', label: '火山方舟' },
-  { value: 'xiaomi', label: '小米 token plan' },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'longcat', label: '龙猫' },
   { value: 'custom', label: '自定义' },
 ];
 
-const oldXiaomiBaseUrl = 'https://api.xiaomimimo.com/v1';
-
 const textProviderDefaults: TextModelProfiles = {
   jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo' },
   volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '' },
-  xiaomi: { api_key: '', base_url: 'https://token-plan-cn.xiaomimimo.com/v1', model_name: '' },
   deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '' },
   longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '' },
   custom: { api_key: '', base_url: '', model_name: '' },
 };
 
 const textProviderApiKeyUrls: Partial<Record<TextModelProvider, string>> = {
-  jinlong: 'https://jlaudeapi.com/keys',
+  jinlong: 'https://s.markup.com.cn/jl',
   volcengine: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
-  xiaomi: 'https://platform.xiaomimimo.com/console/api-keys',
   deepseek: 'https://platform.deepseek.com/api_keys',
   longcat: 'https://longcat.chat/platform/api_keys',
 };
@@ -57,7 +52,7 @@ function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partia
   const baseUrl = provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url;
   return {
     api_key: profile?.api_key ?? defaults.api_key,
-    base_url: provider === 'xiaomi' && baseUrl === oldXiaomiBaseUrl ? defaults.base_url : baseUrl,
+    base_url: baseUrl,
     model_name: profile?.model_name ?? defaults.model_name,
   };
 }
@@ -124,7 +119,7 @@ const imageProviderDefaults: ImageModelProfiles = {
 };
 
 const imageProviderApiKeyUrls: Record<ImageModelProvider, string> = {
-  jinlong: 'https://jlaudeapi.com/keys',
+  jinlong: 'https://s.markup.com.cn/jl',
   volcengine: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
   'google-ai-studio': 'https://aistudio.google.com/api-keys',
   custom: '',
