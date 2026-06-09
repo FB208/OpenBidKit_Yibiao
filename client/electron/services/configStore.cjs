@@ -3,14 +3,12 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { getConfigFilePath } = require('../utils/paths.cjs');
 
-const textModelProviders = ['jinlong', 'volcengine', 'xiaomi', 'deepseek', 'longcat', 'custom'];
+const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'longcat', 'custom'];
 const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'custom'];
-const oldXiaomiBaseUrl = 'https://api.xiaomimimo.com/v1';
 
 const textProviderBaseUrls = {
   jinlong: 'https://jlaudeapi.com/v1',
   volcengine: 'https://ark.cn-beijing.volces.com/api/v3',
-  xiaomi: 'https://token-plan-cn.xiaomimimo.com/v1',
   deepseek: 'https://api.deepseek.com',
   longcat: 'https://api.longcat.chat/openai/v1',
   custom: '',
@@ -25,11 +23,6 @@ const defaultTextModelProfiles = {
   volcengine: {
     api_key: '',
     base_url: textProviderBaseUrls.volcengine,
-    model_name: '',
-  },
-  xiaomi: {
-    api_key: '',
-    base_url: textProviderBaseUrls.xiaomi,
     model_name: '',
   },
   deepseek: {
@@ -167,7 +160,7 @@ function normalizeTextModelProfile(provider, profile) {
     : defaults.base_url;
   return {
     api_key: source.api_key !== undefined ? source.api_key : defaults.api_key,
-    base_url: provider === 'xiaomi' && sourceBaseUrl === oldXiaomiBaseUrl ? defaults.base_url : sourceBaseUrl,
+    base_url: sourceBaseUrl,
     model_name: source.model_name !== undefined ? source.model_name : defaults.model_name,
   };
 }
@@ -189,8 +182,36 @@ function textProfileFromFlatConfig(source, fallback, provider) {
     : fallback.base_url;
   return {
     api_key: source.api_key !== undefined ? source.api_key : fallback.api_key,
-    base_url: provider === 'xiaomi' && sourceBaseUrl === oldXiaomiBaseUrl ? fallback.base_url : sourceBaseUrl,
+    base_url: sourceBaseUrl,
     model_name: source.model_name !== undefined ? source.model_name : fallback.model_name,
+  };
+}
+
+function hasTextModelProfileData(profile) {
+  return Boolean(profile && ['api_key', 'base_url', 'model_name'].some((key) => String(profile[key] || '').trim()));
+}
+
+function getSourceTextModelProfiles(source) {
+  return source.text_model_profiles && typeof source.text_model_profiles === 'object'
+    ? source.text_model_profiles
+    : {};
+}
+
+function pickTextProfileField(primary, secondary, fallback) {
+  if (primary !== undefined && String(primary).trim()) return primary;
+  if (secondary !== undefined && String(secondary).trim()) return secondary;
+  if (primary !== undefined) return primary;
+  if (secondary !== undefined) return secondary;
+  return fallback;
+}
+
+function textProfileFromUnknownProvider(source, sourceProvider, fallback) {
+  const sourceProfiles = getSourceTextModelProfiles(source);
+  const selectedProfile = sourceProvider ? sourceProfiles[sourceProvider] : null;
+  return {
+    api_key: pickTextProfileField(source.api_key, selectedProfile?.api_key, fallback.api_key),
+    base_url: pickTextProfileField(source.base_url, selectedProfile?.base_url, fallback.base_url),
+    model_name: pickTextProfileField(source.model_name, selectedProfile?.model_name, fallback.model_name),
   };
 }
 
@@ -278,12 +299,17 @@ function normalizeConfig(config) {
   const source = config || {};
   const fileParser = source.file_parser ? source.file_parser : {};
   const hasTextProvider = Object.prototype.hasOwnProperty.call(source, 'text_model_provider');
-  const sourceTextProvider = isTextModelProvider(source.text_model_provider)
-    ? source.text_model_provider
+  const rawTextProvider = typeof source.text_model_provider === 'string' ? source.text_model_provider : '';
+  const sourceTextProvider = isTextModelProvider(rawTextProvider)
+    ? rawTextProvider
     : '';
   const textModelProvider = sourceTextProvider || (hasTextProvider || config ? 'custom' : defaultConfig.text_model_provider);
   const textModelProfiles = normalizeTextModelProfiles(source.text_model_profiles);
-  textModelProfiles[textModelProvider] = textProfileFromFlatConfig(source, textModelProfiles[textModelProvider], textModelProvider);
+  if (sourceTextProvider) {
+    textModelProfiles[textModelProvider] = textProfileFromFlatConfig(source, textModelProfiles[textModelProvider], textModelProvider);
+  } else if (textModelProvider === 'custom' && !hasTextModelProfileData(textModelProfiles.custom)) {
+    textModelProfiles.custom = textProfileFromUnknownProvider(source, rawTextProvider, textModelProfiles.custom);
+  }
   const activeTextProfile = textModelProfiles[textModelProvider];
   const sourceImageModel = source.image_model && typeof source.image_model === 'object' ? source.image_model : {};
   const imageModelProvider = isImageModelProvider(sourceImageModel.provider) ? sourceImageModel.provider : defaultConfig.image_model.provider;
