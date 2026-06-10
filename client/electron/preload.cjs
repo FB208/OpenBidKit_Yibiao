@@ -55,6 +55,7 @@ const bridge = {
     deleteFolder: (folderId) => ipcRenderer.invoke('knowledge-base:delete-folder', folderId),
     deleteDocument: (documentId) => ipcRenderer.invoke('knowledge-base:delete-document', documentId),
     uploadDocuments: (folderId) => ipcRenderer.invoke('knowledge-base:upload-documents', folderId),
+    retryDocument: (documentId) => ipcRenderer.invoke('knowledge-base:retry-document', documentId),
     startMatching: (documentId, batchSize) => ipcRenderer.invoke('knowledge-base:start-matching', documentId, batchSize),
     readMarkdown: (documentId) => ipcRenderer.invoke('knowledge-base:read-markdown', documentId),
     readItems: (documentId) => ipcRenderer.invoke('knowledge-base:read-items', documentId),

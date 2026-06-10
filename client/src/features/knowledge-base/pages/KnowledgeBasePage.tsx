@@ -315,6 +315,7 @@ function KnowledgeBasePage() {
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [retryingDocumentIds, setRetryingDocumentIds] = useState<Set<string>>(() => new Set());
   const [visibleDocumentCount, setVisibleDocumentCount] = useState(documentRenderBatchSize);
   const autoMatchingIdsRef = useRef(new Set<string>());
   const documentParseNoticeIdsRef = useRef(new Set<string>());
@@ -632,6 +633,47 @@ function KnowledgeBasePage() {
     }
   };
 
+  const retryDocument = async (document: KnowledgeDocument) => {
+    if (migrationRunning) {
+      showToast('知识库迁移中，请稍候', 'info');
+      return;
+    }
+
+    setRetryingDocumentIds((prev) => new Set(prev).add(document.id));
+    try {
+      const result = await window.yibiao?.knowledgeBase.retryDocument(document.id);
+      if (result?.document) {
+        const updatedDocument = result.document;
+        setIndex((prev) => ({ ...prev, documents: mergeDocuments(prev.documents, [updatedDocument]) }));
+        setViewer((prev) => (prev?.document.id === updatedDocument.id ? { ...prev, document: updatedDocument } : prev));
+        setAnalysisSnapshot((prev) => (prev?.document.id === updatedDocument.id ? { ...prev, document: updatedDocument } : prev));
+      }
+      if (!result?.success) {
+        const message = result?.message || '重试失败';
+        if (isLibreOfficeRequiredMessage(message)) {
+          showDocumentParseNotice(message);
+          return;
+        }
+        showToast(message, 'info');
+        return;
+      }
+      showToast(result.message || '已重新开始解析', 'success');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '重试失败';
+      if (isLibreOfficeRequiredMessage(message)) {
+        showDocumentParseNotice(message);
+        return;
+      }
+      showToast(message, 'error');
+    } finally {
+      setRetryingDocumentIds((prev) => {
+        const next = new Set(prev);
+        next.delete(document.id);
+        return next;
+      });
+    }
+  };
+
   const finishActiveViewerTrace = (reason: string, payload: Record<string, unknown> = {}) => {
     finishRenderDebugTrace(viewerTraceRef.current, reason, payload);
     viewerTraceRef.current = null;
@@ -912,32 +954,40 @@ function KnowledgeBasePage() {
             </div>
           ) : documents.length ? (
             <div className="knowledge-document-list">
-              {visibleDocuments.map((document) => (
-                <article className="knowledge-document-card" key={document.id}>
-                  <div className="knowledge-document-title">
-                    <div className="knowledge-document-name">
-                      <strong>{document.file_name}</strong>
-                      {developerMode && <code className="knowledge-entity-id">文档ID：{document.id}</code>}
+              {visibleDocuments.map((document) => {
+                const retrying = retryingDocumentIds.has(document.id);
+                return (
+                  <article className="knowledge-document-card" key={document.id}>
+                    <div className="knowledge-document-title">
+                      <div className="knowledge-document-name">
+                        <strong>{document.file_name}</strong>
+                        {developerMode && <code className="knowledge-entity-id">文档ID：{document.id}</code>}
+                      </div>
+                      <span className={`knowledge-status is-${document.status}`}>{statusLabels[document.status]}</span>
                     </div>
-                    <span className={`knowledge-status is-${document.status}`}>{statusLabels[document.status]}</span>
-                  </div>
-                  <div className="knowledge-progress-track" aria-label={`处理进度 ${document.progress}%`}>
-                    <span style={{ width: `${Math.max(0, Math.min(100, document.progress || 0))}%` }} />
-                  </div>
-                  <div className="knowledge-document-meta">
-                    <span>{document.message}</span>
-                    <span>{document.item_count || 0} 条知识</span>
-                    <span>{document.candidate_item_count || 0} 个候选</span>
-                    <span>{document.block_count || 0} 个 block</span>
-                  </div>
-                  <div className="knowledge-document-actions">
-                    {developerMode && <button type="button" onClick={() => void openDocument(document, 'analysis')} disabled={migrationRunning || !canOpenAnalysis(document)}>分析调试</button>}
-                    <button type="button" onClick={() => void openDocument(document, 'items')} disabled={migrationRunning || document.status !== 'success'}>查看条目</button>
-                    <button type="button" onClick={() => void openDocument(document, 'markdown')} disabled={migrationRunning || !canOpenMarkdown(document)}>查看 Markdown</button>
-                    <button type="button" className="is-danger" onClick={() => void deleteDocument(document)} disabled={migrationRunning}>删除</button>
-                  </div>
-                </article>
-              ))}
+                    <div className="knowledge-progress-track" aria-label={`处理进度 ${document.progress}%`}>
+                      <span style={{ width: `${Math.max(0, Math.min(100, document.progress || 0))}%` }} />
+                    </div>
+                    <div className="knowledge-document-meta">
+                      <span>{document.message}</span>
+                      <span>{document.item_count || 0} 条知识</span>
+                      <span>{document.candidate_item_count || 0} 个候选</span>
+                      <span>{document.block_count || 0} 个 block</span>
+                    </div>
+                    <div className="knowledge-document-actions">
+                      {developerMode && <button type="button" onClick={() => void openDocument(document, 'analysis')} disabled={migrationRunning || !canOpenAnalysis(document)}>分析调试</button>}
+                      <button type="button" onClick={() => void openDocument(document, 'items')} disabled={migrationRunning || document.status !== 'success'}>查看条目</button>
+                      <button type="button" onClick={() => void openDocument(document, 'markdown')} disabled={migrationRunning || !canOpenMarkdown(document)}>查看 Markdown</button>
+                      {document.status === 'error' && (
+                        <button type="button" className="is-retry" onClick={() => void retryDocument(document)} disabled={migrationRunning || retrying}>
+                          {retrying ? '重试中...' : '重试'}
+                        </button>
+                      )}
+                      <button type="button" className="is-danger" onClick={() => void deleteDocument(document)} disabled={migrationRunning}>删除</button>
+                    </div>
+                  </article>
+                );
+              })}
               {visibleDocuments.length < documents.length && (
                 <div className="knowledge-empty-box">
                   <strong>正在加载更多文档...</strong>

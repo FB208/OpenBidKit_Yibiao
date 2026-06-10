@@ -8882,6 +8882,12 @@ button {
   opacity: 0.45;
 }
 
+.knowledge-document-actions button.is-retry {
+  color: #c2410c;
+  background: rgba(249, 115, 22, 0.1);
+  border-color: rgba(249, 115, 22, 0.24);
+}
+
 .knowledge-folder-actions button.is-danger,
 .knowledge-document-actions button.is-danger {
   color: #b91c1c;

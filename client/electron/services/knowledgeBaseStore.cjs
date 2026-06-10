@@ -4,7 +4,8 @@ const path = require('node:path');
 const { getKnowledgeBaseDir } = require('../utils/paths.cjs');
 
 const documentStatuses = ['pending', 'copying', 'converting', 'extracting', 'ready_for_matching', 'matching', 'recovering', 'analyzing', 'saving', 'success', 'error'];
-const interruptedStatuses = ['copying', 'converting', 'extracting', 'matching', 'recovering', 'analyzing', 'saving'];
+const documentStepKeys = ['copy_source', 'convert_markdown', 'build_blocks', 'extract_first_items', 'extract_supplement_items', 'merge_candidates', 'match_batches', 'recover_missing', 'save_result'];
+const stepStatuses = ['idle', 'running', 'success', 'error'];
 const legacyResultJsonFiles = [
   'blocks.json',
   'filtered_blocks.json',
@@ -30,6 +31,10 @@ function normalizeStatus(value) {
   return documentStatuses.includes(value) ? value : 'pending';
 }
 
+function normalizeStepStatus(value) {
+  return stepStatuses.includes(value) ? value : 'idle';
+}
+
 function safeJsonParse(value, fallback) {
   if (!value) return fallback;
   try {
@@ -46,6 +51,10 @@ function readJson(filePath, fallback) {
 
 function jsonOrNull(value) {
   return value === undefined || value === null ? null : JSON.stringify(value);
+}
+
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object || {}, key);
 }
 
 function stableHash(content) {
@@ -279,19 +288,43 @@ function createKnowledgeBaseStore({ app, db }) {
 
   function recoverInterruptedDocuments(activeDocumentIds = []) {
     const activeIds = new Set((Array.isArray(activeDocumentIds) ? activeDocumentIds : []).map((id) => String(id || '')).filter(Boolean));
+    const legacyRows = db.prepare(`
+      SELECT d.document_id
+      FROM knowledge_documents d
+      WHERE d.status != 'success'
+        AND NOT EXISTS (
+          SELECT 1 FROM knowledge_document_steps s WHERE s.document_id = d.document_id LIMIT 1
+        )
+    `).all();
+    const interruptedStatuses = ['pending', 'copying', 'converting', 'extracting', 'matching', 'recovering', 'analyzing', 'saving'];
     const placeholders = interruptedStatuses.map(() => '?').join(', ');
-    const rows = db.prepare(`SELECT document_id FROM knowledge_documents WHERE status IN (${placeholders})`).all(...interruptedStatuses);
-    const staleIds = rows.map((row) => row.document_id).filter((documentId) => !activeIds.has(documentId));
-    if (!staleIds.length) return [];
+    const interruptedRows = db.prepare(`
+      SELECT d.document_id
+      FROM knowledge_documents d
+      WHERE d.status IN (${placeholders})
+        AND EXISTS (
+          SELECT 1 FROM knowledge_document_steps s WHERE s.document_id = d.document_id LIMIT 1
+        )
+    `).all(...interruptedStatuses);
+    const legacyIds = legacyRows.map((row) => row.document_id).filter((documentId) => !activeIds.has(documentId));
+    const interruptedIds = interruptedRows.map((row) => row.document_id).filter((documentId) => !activeIds.has(documentId));
+    if (!legacyIds.length && !interruptedIds.length) return [];
     const timestamp = now();
-    const message = '上次任务未完成，请重新执行';
-    const update = db.prepare(`
+    const updateLegacy = db.prepare(`
       UPDATE knowledge_documents
-      SET status = 'error', progress = 100, message = @message, error = @message, updated_at = @updated_at
+      SET status = 'error', progress = 0, message = @message, error = @message, updated_at = @updated_at
       WHERE document_id = @document_id
     `);
-    staleIds.forEach((documentId) => update.run({ document_id: documentId, message, updated_at: timestamp }));
-    return staleIds.map((documentId) => getDocument(documentId));
+    const updateInterrupted = db.prepare(`
+      UPDATE knowledge_documents
+      SET status = 'error', message = @message, error = @message, updated_at = @updated_at
+      WHERE document_id = @document_id
+    `);
+    const legacyMessage = '上次任务未完成，请点击重试重新解析';
+    const interruptedMessage = '上次任务中断，请点击重试继续处理';
+    legacyIds.forEach((documentId) => updateLegacy.run({ document_id: documentId, message: legacyMessage, updated_at: timestamp }));
+    interruptedIds.forEach((documentId) => updateInterrupted.run({ document_id: documentId, message: interruptedMessage, updated_at: timestamp }));
+    return [...new Set([...legacyIds, ...interruptedIds])].map((documentId) => getDocument(documentId));
   }
 
   function getDocument(documentId) {
@@ -605,6 +638,230 @@ function createKnowledgeBaseStore({ app, db }) {
       });
     });
     transaction();
+  }
+
+  function stepFromRow(row) {
+    if (!row) return null;
+    return {
+      document_id: row.document_id,
+      step_key: row.step_key,
+      status: normalizeStepStatus(row.status),
+      result: safeJsonParse(row.result_json, null),
+      error: row.error || undefined,
+      started_at: row.started_at || undefined,
+      completed_at: row.completed_at || undefined,
+      updated_at: row.updated_at,
+    };
+  }
+
+  function assertDocumentStepKey(stepKey) {
+    if (!documentStepKeys.includes(stepKey)) {
+      throw new Error(`未知知识库处理步骤：${stepKey}`);
+    }
+  }
+
+  function getDocumentStep(documentId, stepKey) {
+    getDocument(documentId);
+    assertDocumentStepKey(stepKey);
+    return stepFromRow(db.prepare('SELECT * FROM knowledge_document_steps WHERE document_id = ? AND step_key = ?').get(documentId, stepKey));
+  }
+
+  function saveDocumentStep(documentId, stepKey, fields = {}) {
+    getDocument(documentId);
+    assertDocumentStepKey(stepKey);
+    const timestamp = now();
+    const current = db.prepare('SELECT * FROM knowledge_document_steps WHERE document_id = ? AND step_key = ?').get(documentId, stepKey);
+    const status = normalizeStepStatus(fields.status || current?.status || 'idle');
+    let startedAt = current?.started_at || null;
+    let completedAt = current?.completed_at || null;
+    let error = hasOwn(fields, 'error') ? fields.error ? String(fields.error) : null : current?.error || null;
+
+    if (status === 'running') {
+      startedAt = timestamp;
+      completedAt = null;
+      error = null;
+    } else if (status === 'success') {
+      startedAt = startedAt || timestamp;
+      completedAt = timestamp;
+      error = null;
+    } else if (status === 'error') {
+      startedAt = startedAt || timestamp;
+      completedAt = timestamp;
+      error = error || '处理失败';
+    } else {
+      startedAt = null;
+      completedAt = null;
+      error = null;
+    }
+
+    const resultJson = hasOwn(fields, 'result') ? jsonOrNull(fields.result) : current?.result_json || null;
+    db.prepare(`
+      INSERT INTO knowledge_document_steps (document_id, step_key, status, result_json, error, started_at, completed_at, updated_at)
+      VALUES (@document_id, @step_key, @status, @result_json, @error, @started_at, @completed_at, @updated_at)
+      ON CONFLICT(document_id, step_key) DO UPDATE SET
+        status = excluded.status,
+        result_json = excluded.result_json,
+        error = excluded.error,
+        started_at = excluded.started_at,
+        completed_at = excluded.completed_at,
+        updated_at = excluded.updated_at
+    `).run({
+      document_id: documentId,
+      step_key: stepKey,
+      status,
+      result_json: resultJson,
+      error,
+      started_at: startedAt,
+      completed_at: completedAt,
+      updated_at: timestamp,
+    });
+    return getDocumentStep(documentId, stepKey);
+  }
+
+  function batchFromRow(row) {
+    if (!row) return null;
+    return {
+      document_id: row.document_id,
+      batch_index: Number(row.batch_index || 0),
+      status: normalizeStepStatus(row.status),
+      item_ids: safeJsonParse(row.item_ids_json, []),
+      matches: safeJsonParse(row.matches_json, []),
+      error: row.error || undefined,
+      started_at: row.started_at || undefined,
+      completed_at: row.completed_at || undefined,
+      updated_at: row.updated_at,
+    };
+  }
+
+  function getMatchBatch(documentId, batchIndex) {
+    getDocument(documentId);
+    return batchFromRow(db.prepare('SELECT * FROM knowledge_match_batches WHERE document_id = ? AND batch_index = ?').get(documentId, Number(batchIndex || 0)));
+  }
+
+  function readMatchBatches(documentId) {
+    getDocument(documentId);
+    return db.prepare('SELECT * FROM knowledge_match_batches WHERE document_id = ? ORDER BY batch_index ASC').all(documentId).map(batchFromRow);
+  }
+
+  function saveMatchBatch(documentId, batchIndex, fields = {}) {
+    getDocument(documentId);
+    const index = Number(batchIndex || 0);
+    const timestamp = now();
+    const current = db.prepare('SELECT * FROM knowledge_match_batches WHERE document_id = ? AND batch_index = ?').get(documentId, index);
+    const status = normalizeStepStatus(fields.status || current?.status || 'idle');
+    let startedAt = current?.started_at || null;
+    let completedAt = current?.completed_at || null;
+    let error = hasOwn(fields, 'error') ? fields.error ? String(fields.error) : null : current?.error || null;
+
+    if (status === 'running') {
+      startedAt = timestamp;
+      completedAt = null;
+      error = null;
+    } else if (status === 'success') {
+      startedAt = startedAt || timestamp;
+      completedAt = timestamp;
+      error = null;
+    } else if (status === 'error') {
+      startedAt = startedAt || timestamp;
+      completedAt = timestamp;
+      error = error || '处理失败';
+    } else {
+      startedAt = null;
+      completedAt = null;
+      error = null;
+    }
+
+    const itemIdsJson = hasOwn(fields, 'itemIds') ? jsonOrNull(fields.itemIds) || '[]' : current?.item_ids_json || '[]';
+    const matchesJson = hasOwn(fields, 'matches') ? jsonOrNull(fields.matches) : current?.matches_json || null;
+    db.prepare(`
+      INSERT INTO knowledge_match_batches (document_id, batch_index, status, item_ids_json, matches_json, error, started_at, completed_at, updated_at)
+      VALUES (@document_id, @batch_index, @status, @item_ids_json, @matches_json, @error, @started_at, @completed_at, @updated_at)
+      ON CONFLICT(document_id, batch_index) DO UPDATE SET
+        status = excluded.status,
+        item_ids_json = excluded.item_ids_json,
+        matches_json = excluded.matches_json,
+        error = excluded.error,
+        started_at = excluded.started_at,
+        completed_at = excluded.completed_at,
+        updated_at = excluded.updated_at
+    `).run({
+      document_id: documentId,
+      batch_index: index,
+      status,
+      item_ids_json: itemIdsJson,
+      matches_json: matchesJson,
+      error,
+      started_at: startedAt,
+      completed_at: completedAt,
+      updated_at: timestamp,
+    });
+    return getMatchBatch(documentId, index);
+  }
+
+  function deleteDocumentStepsFrom(documentId, stepKey) {
+    assertDocumentStepKey(stepKey);
+    const startIndex = documentStepKeys.indexOf(stepKey);
+    const keys = documentStepKeys.slice(startIndex);
+    if (!keys.length) return;
+    const placeholders = keys.map(() => '?').join(', ');
+    db.prepare(`DELETE FROM knowledge_document_steps WHERE document_id = ? AND step_key IN (${placeholders})`).run(documentId, ...keys);
+  }
+
+  function clearFinalArtifacts(documentId) {
+    db.prepare('DELETE FROM knowledge_item_blocks WHERE document_id = ?').run(documentId);
+    db.prepare('DELETE FROM knowledge_items WHERE document_id = ?').run(documentId);
+    db.prepare('DELETE FROM knowledge_discarded_groups WHERE document_id = ?').run(documentId);
+    db.prepare('DELETE FROM knowledge_reports WHERE document_id = ?').run(documentId);
+  }
+
+  function clearMatchBatches(documentId) {
+    getDocument(documentId);
+    db.prepare('DELETE FROM knowledge_match_batches WHERE document_id = ?').run(documentId);
+  }
+
+  function clearDocumentProcessingFromStep(documentId, stepKey) {
+    getDocument(documentId);
+    assertDocumentStepKey(stepKey);
+    const startIndex = documentStepKeys.indexOf(stepKey);
+    const transaction = db.transaction(() => {
+      deleteDocumentStepsFrom(documentId, stepKey);
+      if (startIndex <= documentStepKeys.indexOf('convert_markdown')) {
+        db.prepare(`
+          UPDATE knowledge_documents
+          SET markdown_hash = NULL, markdown_chars = 0, parser_label = NULL, updated_at = ?
+          WHERE document_id = ?
+        `).run(now(), documentId);
+      }
+      if (startIndex <= documentStepKeys.indexOf('build_blocks')) {
+        db.prepare('DELETE FROM knowledge_blocks WHERE document_id = ?').run(documentId);
+      }
+      if (startIndex <= documentStepKeys.indexOf('merge_candidates')) {
+        db.prepare('DELETE FROM knowledge_candidate_items WHERE document_id = ?').run(documentId);
+      }
+      if (startIndex <= documentStepKeys.indexOf('match_batches')) {
+        db.prepare('DELETE FROM knowledge_match_batches WHERE document_id = ?').run(documentId);
+      }
+      if (startIndex <= documentStepKeys.indexOf('save_result')) {
+        clearFinalArtifacts(documentId);
+      }
+
+      const resetFields = {
+        error: null,
+        last_batch_size: null,
+      };
+      if (startIndex <= documentStepKeys.indexOf('build_blocks')) {
+        Object.assign(resetFields, { block_count: 0, filtered_block_count: 0 });
+      }
+      if (startIndex <= documentStepKeys.indexOf('merge_candidates')) {
+        Object.assign(resetFields, { candidate_item_count: 0 });
+      }
+      if (startIndex <= documentStepKeys.indexOf('save_result')) {
+        Object.assign(resetFields, { item_count: 0, discarded_block_count: 0, system_discarded_after_retry_count: 0 });
+      }
+      updateDocument(documentId, resetFields);
+    });
+    transaction();
+    return getDocument(documentId);
   }
 
   function readItems(documentId) {
@@ -997,6 +1254,13 @@ function createKnowledgeBaseStore({ app, db }) {
     updateMarkdownMetadata,
     getDocument,
     recoverInterruptedDocuments,
+    getDocumentStep,
+    saveDocumentStep,
+    clearDocumentProcessingFromStep,
+    clearMatchBatches,
+    getMatchBatch,
+    readMatchBatches,
+    saveMatchBatch,
     readMarkdown,
     saveBlocks: saveBlocksTransaction,
     readBlocks,

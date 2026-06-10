@@ -56,6 +56,12 @@ export interface KnowledgeBaseStartMatchingResult {
   document?: KnowledgeDocument;
 }
 
+export interface KnowledgeBaseRetryDocumentResult {
+  success: boolean;
+  message: string;
+  document?: KnowledgeDocument;
+}
+
 export interface KnowledgeBaseMigrationStatus {
   needsMigration: boolean;
   legacyFolderCount: number;
