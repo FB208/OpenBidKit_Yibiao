@@ -3,7 +3,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, InputWithAction, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider } from '../../../shared/types';
+import type { AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'about';
@@ -25,12 +25,17 @@ const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
   { value: 'custom', label: '自定义' },
 ];
 
+const textRequestModeOptions: Array<{ value: AiRequestMode; label: string }> = [
+  { value: 'normal', label: '普通请求' },
+  { value: 'stream', label: '流式请求' },
+];
+
 const textProviderDefaults: TextModelProfiles = {
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo' },
-  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '' },
-  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '' },
-  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '' },
-  custom: { api_key: '', base_url: '', model_name: '' },
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', request_mode: 'normal' },
+  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', request_mode: 'normal' },
+  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', request_mode: 'normal' },
+  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', request_mode: 'normal' },
+  custom: { api_key: '', base_url: '', model_name: '', request_mode: 'normal' },
 };
 
 const textProviderApiKeyUrls: Partial<Record<TextModelProvider, string>> = {
@@ -47,6 +52,10 @@ function createDefaultTextModelProfiles(): TextModelProfiles {
   }), {} as TextModelProfiles);
 }
 
+function normalizeAiRequestMode(value?: AiRequestMode): AiRequestMode {
+  return value === 'stream' ? 'stream' : 'normal';
+}
+
 function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partial<TextModelConfig>): TextModelConfig {
   const defaults = textProviderDefaults[provider];
   const baseUrl = provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url;
@@ -54,6 +63,7 @@ function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partia
     api_key: profile?.api_key ?? defaults.api_key,
     base_url: baseUrl,
     model_name: profile?.model_name ?? defaults.model_name,
+    request_mode: normalizeAiRequestMode(profile?.request_mode ?? defaults.request_mode),
   };
 }
 
@@ -69,6 +79,7 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
     api_key: textModel.api_key,
     base_url: textModel.provider === 'custom' ? textModel.base_url : textProviderDefaults[textModel.provider].base_url,
     model_name: textModel.model_name,
+    request_mode: textModel.request_mode,
   };
 }
 
@@ -416,6 +427,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       api_key: activeTextProfile.api_key,
       base_url: activeTextProfile.base_url,
       model_name: activeTextProfile.model_name,
+      request_mode: activeTextProfile.request_mode,
       image_model: activeImageProfile,
       image_model_profiles: imageModelProfiles,
       file_parser: {
@@ -1109,6 +1121,20 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   {testingTextModel ? '测试中' : '测试'}
                 </button>
               </div>
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>请求方式</strong>
+                <span>流式请求只影响后端调用方式，应用仍等待完整结果后继续流程</span>
+              </div>
+              <select
+                value={state.textModel.request_mode}
+                onChange={(event) => updateTextModelConfig({ request_mode: event.target.value as AiRequestMode })}
+              >
+                {textRequestModeOptions.map((option) => (
+                  <option value={option.value} key={option.value}>{option.label}</option>
+                ))}
+              </select>
             </label>
           </div>
         </section>

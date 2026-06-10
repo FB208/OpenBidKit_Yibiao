@@ -164,6 +164,10 @@ function normalizeRequestTimeoutMs(request) {
   return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : AI_REQUEST_TIMEOUT_MS;
 }
 
+function normalizeTextRequestMode(config) {
+  return config?.request_mode === 'stream' ? 'stream' : 'normal';
+}
+
 function createAbortError() {
   const error = new Error('AI 请求超时');
   error.name = 'AbortError';
@@ -717,6 +721,10 @@ function createChatRequestBody(config, request, options = {}) {
     messages: request.messages,
   };
 
+  if (options.stream) {
+    body.stream = true;
+  }
+
   if (request.response_format && !options.omitResponseFormat) {
     body.response_format = request.response_format;
   }
@@ -742,6 +750,154 @@ async function fetchChatCompletion(app, config, body, options = {}) {
   }
 }
 
+function createAiHttpError(detail, fallbackMessage) {
+  const error = new Error(detail || fallbackMessage);
+  error.responseFormatUnsupported = isResponseFormatUnsupported(detail);
+  return error;
+}
+
+async function ensureTextAiResponseOk(response, fallbackMessage) {
+  if (response.ok) {
+    return;
+  }
+
+  let detail = '';
+  const rawText = await response.text().catch(() => '');
+  try {
+    const body = rawText ? JSON.parse(rawText) : null;
+    detail = body?.error?.message || body?.message || '';
+  } catch {
+    detail = rawText;
+  }
+
+  throw createAiHttpError(detail, fallbackMessage);
+}
+
+function appendStreamChoiceContent(choice, contentParts) {
+  const deltaContent = choice?.delta?.content;
+  const messageContent = choice?.message?.content;
+  const textContent = choice?.text;
+
+  if (typeof deltaContent === 'string') {
+    contentParts.push(deltaContent);
+    return;
+  }
+
+  if (typeof messageContent === 'string') {
+    contentParts.push(messageContent);
+    return;
+  }
+
+  if (typeof textContent === 'string') {
+    contentParts.push(textContent);
+  }
+}
+
+function readStreamDataLine(line, state) {
+  const trimmed = String(line || '').trim();
+  if (!trimmed || trimmed.startsWith(':') || !trimmed.startsWith('data:')) {
+    return;
+  }
+
+  const data = trimmed.slice(5).trim();
+  if (!data) {
+    return;
+  }
+
+  if (data === '[DONE]') {
+    state.done = true;
+    return;
+  }
+
+  let payload = null;
+  try {
+    payload = JSON.parse(data);
+  } catch (error) {
+    throw new Error(`AI 流式响应解析失败：${error.message}`);
+  }
+
+  if (payload?.error) {
+    throw new Error(payload.error.message || payload.error || 'AI 流式请求失败');
+  }
+
+  if (payload?.usage) {
+    state.usage = payload.usage;
+  }
+
+  const choices = Array.isArray(payload?.choices) ? payload.choices : [];
+  choices.forEach((choice) => appendStreamChoiceContent(choice, state.contentParts));
+}
+
+async function readOpenAIChatStream(response) {
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    throw new Error('AI 流式响应不可读');
+  }
+
+  const decoder = new TextDecoder('utf-8');
+  const state = { done: false, usage: null, contentParts: [] };
+  let buffer = '';
+
+  while (!state.done) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      readStreamDataLine(line, state);
+      if (state.done) {
+        break;
+      }
+    }
+  }
+
+  buffer += decoder.decode();
+  if (!state.done && buffer.trim()) {
+    buffer.split(/\r?\n/).forEach((line) => readStreamDataLine(line, state));
+  }
+
+  const content = state.contentParts.join('');
+  return {
+    content,
+    usage: state.usage,
+    responseData: {
+      stream: true,
+      choices: [{ message: { content } }],
+      usage: state.usage,
+    },
+  };
+}
+
+async function requestTextAiNormal(app, config, requestBody, options = {}) {
+  const response = await fetchChatCompletion(app, config, requestBody, { signal: options.signal });
+  await ensureTextAiResponseOk(response, 'AI 请求失败');
+  const responseData = await response.json();
+  return {
+    content: responseData.choices?.[0]?.message?.content || '',
+    usage: extractOpenAIUsage(responseData),
+    responseData,
+  };
+}
+
+async function requestTextAiStream(app, config, requestBody, options = {}) {
+  const response = await fetchChatCompletion(app, config, requestBody, { signal: options.signal });
+  await ensureTextAiResponseOk(response, 'AI 请求失败');
+  return readOpenAIChatStream(response);
+}
+
+async function requestTextAi(app, config, requestBody, options = {}) {
+  if (options.requestMode === 'stream') {
+    return requestTextAiStream(app, config, requestBody, options);
+  }
+
+  return requestTextAiNormal(app, config, requestBody, options);
+}
+
 async function chatWithConfig(app, config, request) {
   if (!config.api_key) {
     throw new Error('请先在设置中配置文本模型 API Key');
@@ -755,7 +911,8 @@ async function chatWithConfig(app, config, request) {
 
   const requestId = createRequestId();
   const logTitle = resolveAiLogTitle(request, '文本请求');
-  let requestBody = createChatRequestBody(config, request);
+  const requestMode = normalizeTextRequestMode(config);
+  let requestBody = createChatRequestBody(config, request, { stream: requestMode === 'stream' });
   let responseData = null;
   let errorMessage = '';
   let analyticsTracked = false;
@@ -767,31 +924,33 @@ async function chatWithConfig(app, config, request) {
       request_id: requestId,
       log_title: logTitle,
       type: 'chat-pending',
+      request_mode: requestMode,
       url: `${trimBaseUrl(config.base_url)}/chat/completions`,
       request: requestBody,
       status: 'pending',
       created_at: new Date().toISOString(),
     });
-    let response = await timeout.run(fetchChatCompletion(app, config, requestBody, { signal: timeout.signal }));
-    if (!response.ok && request.response_format) {
-      const detail = await timeout.run(response.text().catch(() => ''));
-      if (isResponseFormatUnsupported(detail)) {
-        requestBody = createChatRequestBody(config, request, { omitResponseFormat: true });
-        response = await timeout.run(fetchChatCompletion(app, config, requestBody, { signal: timeout.signal }));
-      } else {
-        throw new Error(detail || 'AI 请求失败');
+    let result = null;
+    try {
+      result = await timeout.run(requestTextAi(app, config, requestBody, { signal: timeout.signal, requestMode }));
+    } catch (error) {
+      if (!request.response_format || !error.responseFormatUnsupported) {
+        throw error;
       }
+
+      requestBody = createChatRequestBody(config, request, { omitResponseFormat: true, stream: requestMode === 'stream' });
+      result = await timeout.run(requestTextAi(app, config, requestBody, { signal: timeout.signal, requestMode }));
     }
 
-    await timeout.run(ensureOk(response, 'AI 请求失败'));
-    responseData = await timeout.run(response.json());
-    trackAiRequest(app, config, { ai_request_type: 'text', usage: extractOpenAIUsage(responseData) });
+    responseData = result.responseData;
+    trackAiRequest(app, config, { ai_request_type: 'text', usage: result.usage });
     analyticsTracked = true;
-    const content = responseData.choices?.[0]?.message?.content || '';
+    const content = result.content || '';
     writeAiLog(app, config, {
       request_id: requestId,
       log_title: logTitle,
       type: 'chat',
+      request_mode: requestMode,
       url: `${trimBaseUrl(config.base_url)}/chat/completions`,
       request: requestBody,
       response: responseData,
@@ -811,6 +970,7 @@ async function chatWithConfig(app, config, request) {
       request_id: requestId,
       log_title: logTitle,
       type: 'chat-error',
+      request_mode: requestMode,
       url: `${trimBaseUrl(config.base_url)}/chat/completions`,
       request: requestBody,
       response: responseData,

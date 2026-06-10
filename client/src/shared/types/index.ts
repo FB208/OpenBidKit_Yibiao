@@ -28,6 +28,7 @@ export type {
 } from './bid';
 export type {
   AiConfig,
+  AiRequestMode,
   ClientConfig,
   ConfigSaveResult,
   FileParserConfig,
