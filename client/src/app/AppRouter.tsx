@@ -39,7 +39,7 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <TechnicalPlanHome workflowKind="existing-plan-expansion" registerLeaveGuard={registerLeaveGuard} onSectionChange={onSectionChange} />;
     case 'business-bid':
       return <BusinessBidPage />;
-    case 'knowledge-base':
+    case 'document-knowledge-base':
       return <KnowledgeBasePage />;
     case 'resources':
       return <ResourcesPage />;

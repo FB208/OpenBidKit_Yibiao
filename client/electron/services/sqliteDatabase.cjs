@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 10;
+const schemaVersion = 11;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -209,6 +209,24 @@ function addTechnicalPlanBidAnalysisSelection(db) {
   if (!cols.includes('bid_analysis_selected_task_ids_json')) {
     db.exec('ALTER TABLE technical_plan_meta ADD COLUMN bid_analysis_selected_task_ids_json TEXT');
   }
+}
+
+function addKnowledgeDocumentSortOrder(db) {
+  const cols = db.prepare("PRAGMA table_info(knowledge_documents)").all().map((row) => row.name);
+  if (!cols.includes('sort_order')) {
+    db.exec('ALTER TABLE knowledge_documents ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
+    const folders = db.prepare('SELECT DISTINCT folder_id FROM knowledge_documents').all();
+    const documentsByFolder = db.prepare('SELECT document_id FROM knowledge_documents WHERE folder_id = ? ORDER BY created_at DESC, document_id ASC');
+    const updateOrder = db.prepare('UPDATE knowledge_documents SET sort_order = ? WHERE document_id = ?');
+    for (const folder of folders) {
+      documentsByFolder.all(folder.folder_id).forEach((document, index) => updateOrder.run(index, document.document_id));
+    }
+  }
+  db.exec(`
+    DROP INDEX IF EXISTS idx_knowledge_documents_folder_order;
+    CREATE INDEX IF NOT EXISTS idx_knowledge_documents_folder_order
+    ON knowledge_documents(folder_id, sort_order, created_at DESC);
+  `);
 }
 
 function createDuplicateCheckSchema(db) {
@@ -582,13 +600,14 @@ function createKnowledgeBaseSchema(db) {
       system_discarded_after_retry_count INTEGER NOT NULL DEFAULT 0,
       last_batch_size INTEGER,
       parser_label TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (folder_id) REFERENCES knowledge_folders(folder_id) ON DELETE CASCADE
     );
 
     CREATE INDEX IF NOT EXISTS idx_knowledge_documents_folder_order
-    ON knowledge_documents(folder_id, created_at DESC);
+    ON knowledge_documents(folder_id, sort_order, created_at DESC);
 
     CREATE INDEX IF NOT EXISTS idx_knowledge_documents_status
     ON knowledge_documents(status);
@@ -878,6 +897,13 @@ const schemaHealthColumnGroups = [
       bid_analysis_selected_task_ids_json: 'TEXT',
     },
   },
+  {
+    version: 11,
+    table: 'knowledge_documents',
+    columns: {
+      sort_order: 'INTEGER NOT NULL DEFAULT 0',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -988,6 +1014,11 @@ const migrations = [
     version: 10,
     description: '技术方案新增招标解析项选择配置',
     up: addTechnicalPlanBidAnalysisSelection,
+  },
+  {
+    version: 11,
+    description: '知识库文档新增手动排序字段',
+    up: addKnowledgeDocumentSortOrder,
   },
 ];
 

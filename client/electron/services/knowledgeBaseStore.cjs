@@ -35,6 +35,10 @@ function normalizeStepStatus(value) {
   return stepStatuses.includes(value) ? value : 'idle';
 }
 
+function normalizeDropPosition(value) {
+  return value === 'before' ? 'before' : 'after';
+}
+
 function safeJsonParse(value, fallback) {
   if (!value) return fallback;
   try {
@@ -93,6 +97,7 @@ function normalizeDocument(document) {
   const sourceExtension = String(document?.source_extension || document?.extension || path.extname(document?.source_path || document?.file_name || '') || '').toLowerCase();
   const sourcePath = normalizeRelativePath(document?.source_path || path.join(documentDir, sourceExtension ? `source${sourceExtension}` : 'source'));
   const markdownPath = normalizeRelativePath(document?.markdown_path || path.join(documentDir, 'content.md'));
+  const hasSortOrder = hasOwn(document, 'sort_order') || hasOwn(document, 'sortOrder');
   return {
     id: documentId,
     folder_id: folderId,
@@ -113,6 +118,7 @@ function normalizeDocument(document) {
     system_discarded_after_retry_count: Number(document?.system_discarded_after_retry_count || 0),
     last_batch_size: document?.last_batch_size === undefined || document?.last_batch_size === null ? undefined : Number(document.last_batch_size || 0),
     parser_label: document?.parser_label ? String(document.parser_label) : undefined,
+    sort_order: hasSortOrder ? Number(document.sort_order ?? document.sortOrder ?? 0) : undefined,
     created_at: document?.created_at || now(),
     updated_at: document?.updated_at || now(),
   };
@@ -127,7 +133,16 @@ function normalizeIndex(index) {
     updated_at: folder?.updated_at || now(),
   })) : [];
   const folderIds = new Set(folders.map((folder) => folder.id));
-  const documents = Array.isArray(index?.documents) ? index.documents.map(normalizeDocument) : [];
+  const orderByFolder = new Map();
+  const documents = Array.isArray(index?.documents) ? index.documents.map((document) => {
+    const normalized = normalizeDocument(document);
+    if (normalized.sort_order === undefined) {
+      const nextOrder = orderByFolder.get(normalized.folder_id) || 0;
+      normalized.sort_order = nextOrder;
+      orderByFolder.set(normalized.folder_id, nextOrder + 1);
+    }
+    return normalized;
+  }) : [];
   for (const document of documents) {
     if (!folderIds.has(document.folder_id)) {
       folderIds.add(document.folder_id);
@@ -177,6 +192,7 @@ function createKnowledgeBaseStore({ app, db }) {
       system_discarded_after_retry_count: Number(row.system_discarded_after_retry_count || 0),
       last_batch_size: row.last_batch_size === null || row.last_batch_size === undefined ? undefined : Number(row.last_batch_size || 0),
       parser_label: row.parser_label || undefined,
+      sort_order: Number(row.sort_order || 0),
       created_at: row.created_at,
       updated_at: row.updated_at,
       error: row.error || undefined,
@@ -187,6 +203,7 @@ function createKnowledgeBaseStore({ app, db }) {
     return {
       id: row.folder_id,
       name: row.name,
+      sort_order: Number(row.sort_order || 0),
       created_at: row.created_at,
       updated_at: row.updated_at,
     };
@@ -222,12 +239,12 @@ function createKnowledgeBaseStore({ app, db }) {
       INSERT INTO knowledge_documents (
         document_id, folder_id, file_name, document_dir, source_path, markdown_path, markdown_hash, markdown_chars,
         source_extension, status, progress, message, error, item_count, block_count, filtered_block_count,
-        candidate_item_count, discarded_block_count, system_discarded_after_retry_count, last_batch_size, parser_label,
+        candidate_item_count, discarded_block_count, system_discarded_after_retry_count, last_batch_size, parser_label, sort_order,
         created_at, updated_at
       ) VALUES (
         @document_id, @folder_id, @file_name, @document_dir, @source_path, @markdown_path, @markdown_hash, @markdown_chars,
         @source_extension, @status, @progress, @message, @error, @item_count, @block_count, @filtered_block_count,
-        @candidate_item_count, @discarded_block_count, @system_discarded_after_retry_count, @last_batch_size, @parser_label,
+        @candidate_item_count, @discarded_block_count, @system_discarded_after_retry_count, @last_batch_size, @parser_label, @sort_order,
         @created_at, @updated_at
       ) ON CONFLICT(document_id) DO UPDATE SET
         folder_id = excluded.folder_id,
@@ -250,6 +267,7 @@ function createKnowledgeBaseStore({ app, db }) {
         system_discarded_after_retry_count = excluded.system_discarded_after_retry_count,
         last_batch_size = excluded.last_batch_size,
         parser_label = excluded.parser_label,
+        sort_order = excluded.sort_order,
         updated_at = excluded.updated_at
     `).run({
       document_id: normalized.id,
@@ -273,6 +291,7 @@ function createKnowledgeBaseStore({ app, db }) {
       system_discarded_after_retry_count: normalized.system_discarded_after_retry_count,
       last_batch_size: normalized.last_batch_size === undefined ? null : normalized.last_batch_size,
       parser_label: normalized.parser_label || null,
+      sort_order: Number(normalized.sort_order || 0),
       created_at: normalized.created_at,
       updated_at: normalized.updated_at,
     });
@@ -282,7 +301,12 @@ function createKnowledgeBaseStore({ app, db }) {
   function list() {
     ensureBaseDir();
     const folders = db.prepare('SELECT * FROM knowledge_folders ORDER BY sort_order ASC, created_at ASC').all().map(folderFromRow);
-    const documents = db.prepare('SELECT * FROM knowledge_documents ORDER BY created_at DESC').all().map(documentFromRow);
+    const documents = db.prepare(`
+      SELECT d.*
+      FROM knowledge_documents d
+      LEFT JOIN knowledge_folders f ON f.folder_id = d.folder_id
+      ORDER BY COALESCE(f.sort_order, 0) ASC, d.folder_id ASC, d.sort_order ASC, d.created_at DESC, d.document_id ASC
+    `).all().map(documentFromRow);
     return { folders, documents };
   }
 
@@ -361,8 +385,110 @@ function createKnowledgeBaseStore({ app, db }) {
     return document;
   }
 
+  function getNextDocumentSortOrder(folderId) {
+    return Number(db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS value FROM knowledge_documents WHERE folder_id = ?').get(folderId)?.value ?? -1) + 1;
+  }
+
+  function reorderIds(ids, draggedId, targetId, position) {
+    const draggedIndex = ids.indexOf(draggedId);
+    const targetIndex = ids.indexOf(targetId);
+    if (draggedIndex < 0 || targetIndex < 0 || draggedId === targetId) return ids;
+    const next = [...ids];
+    const [dragged] = next.splice(draggedIndex, 1);
+    const adjustedTargetIndex = next.indexOf(targetId);
+    next.splice(position === 'before' ? adjustedTargetIndex : adjustedTargetIndex + 1, 0, dragged);
+    return next;
+  }
+
+  function resequenceFolderIds(folderIds) {
+    const timestamp = now();
+    const update = db.prepare('UPDATE knowledge_folders SET sort_order = ?, updated_at = ? WHERE folder_id = ?');
+    folderIds.forEach((folderId, index) => update.run(index, timestamp, folderId));
+  }
+
+  function resequenceDocumentIds(folderId, documentIds, timestamp = now()) {
+    const update = db.prepare('UPDATE knowledge_documents SET sort_order = ?, updated_at = ? WHERE document_id = ? AND folder_id = ?');
+    documentIds.forEach((documentId, index) => update.run(index, timestamp, documentId, folderId));
+  }
+
+  function getOrderedDocumentIds(folderId, excludedDocumentId) {
+    const rows = db.prepare(`
+      SELECT document_id
+      FROM knowledge_documents
+      WHERE folder_id = ? AND document_id != ?
+      ORDER BY sort_order ASC, created_at DESC, document_id ASC
+    `).all(folderId, excludedDocumentId || '');
+    return rows.map((row) => row.document_id);
+  }
+
   function createDocument(document) {
-    return insertOrUpdateDocument(document);
+    const withOrder = hasOwn(document, 'sort_order') || hasOwn(document, 'sortOrder')
+      ? document
+      : { ...document, sort_order: getNextDocumentSortOrder(document?.folder_id || document?.folderId || 'unknown') };
+    return insertOrUpdateDocument(withOrder);
+  }
+
+  function reorderFolders(draggedFolderId, targetFolderId, position) {
+    const normalizedPosition = normalizeDropPosition(position);
+    const folderIds = db.prepare('SELECT folder_id FROM knowledge_folders ORDER BY sort_order ASC, created_at ASC').all().map((row) => row.folder_id);
+    if (!folderIds.includes(draggedFolderId) || !folderIds.includes(targetFolderId)) {
+      throw new Error('知识库文件夹不存在');
+    }
+    if (draggedFolderId === targetFolderId) return list();
+    db.transaction(() => resequenceFolderIds(reorderIds(folderIds, draggedFolderId, targetFolderId, normalizedPosition)))();
+    return list();
+  }
+
+  function moveDocument(documentId, targetFolderId, options = {}) {
+    const document = getDocument(documentId);
+    const folder = db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(targetFolderId);
+    if (!folder) throw new Error('目标知识库文件夹不存在');
+
+    const targetDocumentId = options.targetDocumentId ? String(options.targetDocumentId) : '';
+    const normalizedPosition = normalizeDropPosition(options.position);
+    const targetDocument = targetDocumentId ? getDocument(targetDocumentId) : null;
+    if (targetDocument && targetDocument.folder_id !== targetFolderId) {
+      throw new Error('目标文档不在目标文件夹中');
+    }
+
+    const timestamp = now();
+    const targetIds = getOrderedDocumentIds(targetFolderId, documentId);
+    const insertIndex = targetDocumentId
+      ? Math.max(0, targetIds.indexOf(targetDocumentId)) + (normalizedPosition === 'after' ? 1 : 0)
+      : targetIds.length;
+    if (targetDocumentId && !targetIds.includes(targetDocumentId)) {
+      throw new Error('目标文档不存在');
+    }
+    const nextTargetIds = [...targetIds];
+    nextTargetIds.splice(insertIndex, 0, documentId);
+
+    const updateDocumentLocation = db.prepare(`
+      UPDATE knowledge_documents
+      SET folder_id = @folder_id,
+        document_dir = COALESCE(@document_dir, document_dir),
+        source_path = COALESCE(@source_path, source_path),
+        markdown_path = COALESCE(@markdown_path, markdown_path),
+        sort_order = @sort_order,
+        updated_at = @updated_at
+      WHERE document_id = @document_id
+    `);
+    const transaction = db.transaction(() => {
+      if (document.folder_id !== targetFolderId) {
+        resequenceDocumentIds(document.folder_id, getOrderedDocumentIds(document.folder_id, documentId), timestamp);
+      }
+      updateDocumentLocation.run({
+        document_id: documentId,
+        folder_id: targetFolderId,
+        document_dir: options.documentDir || null,
+        source_path: options.sourcePath || null,
+        markdown_path: options.markdownPath || null,
+        sort_order: insertIndex,
+        updated_at: timestamp,
+      });
+      resequenceDocumentIds(targetFolderId, nextTargetIds, timestamp);
+    });
+    transaction();
+    return { index: list(), document: getDocument(documentId) };
   }
 
   function updateDocument(documentId, partial = {}) {
@@ -1246,10 +1372,12 @@ function createKnowledgeBaseStore({ app, db }) {
   return {
     list,
     createFolder,
+    reorderFolders,
     renameFolder,
     deleteFolder,
     deleteDocument,
     createDocument,
+    moveDocument,
     updateDocument,
     updateMarkdownMetadata,
     getDocument,

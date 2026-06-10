@@ -17,6 +17,8 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'existing-plan-expansion': DocumentIcon,
   'business-bid': BriefcaseIcon,
   'knowledge-base': ArchiveIcon,
+  'document-knowledge-base': ArchiveIcon,
+  'image-knowledge-base': ArchiveIcon,
   resources: ResourcesIcon,
   'bid-check': BidCheckIcon,
   'duplicate-check': CompareIcon,

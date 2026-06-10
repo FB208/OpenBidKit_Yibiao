@@ -40,6 +40,19 @@ function fromRelative(baseDir, relativePath) {
   return path.join(baseDir, relativePath || '');
 }
 
+function normalizeRelativePath(value) {
+  return String(value || '').replace(/\\/g, '/');
+}
+
+function rebaseDocumentRelativePath(value, oldDocumentDir, newDocumentDir) {
+  const normalized = normalizeRelativePath(value);
+  const oldPrefix = normalizeRelativePath(oldDocumentDir).replace(/\/+$/, '');
+  const nextPrefix = normalizeRelativePath(newDocumentDir).replace(/\/+$/, '');
+  if (normalized === oldPrefix) return nextPrefix;
+  if (normalized.startsWith(`${oldPrefix}/`)) return `${nextPrefix}${normalized.slice(oldPrefix.length)}`;
+  return normalizeRelativePath(path.join(nextPrefix, path.basename(normalized)));
+}
+
 function getPromptSummary(messages) {
   return (messages || []).map((message, index) => ({
     index: index + 1,
@@ -1277,6 +1290,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       return knowledgeBaseStore.renameFolder(folderId, name);
     },
 
+    reorderFolder(draggedFolderId, targetFolderId, position) {
+      return { success: true, message: '文件夹排序已保存', index: knowledgeBaseStore.reorderFolders(draggedFolderId, targetFolderId, position) };
+    },
+
     deleteFolder(folderId) {
       const index = knowledgeBaseStore.list();
       const folder = index.folders.find((item) => item.id === folderId);
@@ -1309,6 +1326,57 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       fs.rmSync(getDebugLogPath(app, documentId), { force: true });
       knowledgeBaseStore.deleteDocument(documentId);
       return { success: true, message: `已删除文档“${document.file_name}”` };
+    },
+
+    moveDocument(documentId, targetFolderId, targetDocumentId, position) {
+      const document = getDocument(documentId);
+      if (activePreparations.has(documentId) || activeMatches.has(documentId)) {
+        throw new Error('该文档正在处理中，请完成后再移动');
+      }
+      if (!['ready_for_matching', 'success', 'error'].includes(document.status)) {
+        throw new Error('该文档正在处理中，请完成后再移动');
+      }
+
+      const index = knowledgeBaseStore.list();
+      const targetFolder = index.folders.find((folder) => folder.id === targetFolderId);
+      if (!targetFolder) throw new Error('目标知识库文件夹不存在');
+
+      let moveOptions = { targetDocumentId, position };
+      let oldDir = '';
+      let newDir = '';
+      if (document.folder_id !== targetFolderId) {
+        const newDocumentDir = path.join('folders', targetFolderId, 'documents', documentId).replace(/\\/g, '/');
+        oldDir = fromRelative(baseDir, document.document_dir);
+        newDir = fromRelative(baseDir, newDocumentDir);
+        if (!fs.existsSync(oldDir)) {
+          throw new Error('文档文件不存在，无法移动');
+        }
+        if (fs.existsSync(newDir)) {
+          throw new Error('目标文件夹中已存在同名文档目录，无法移动');
+        }
+        ensureDir(path.dirname(newDir));
+        fs.renameSync(oldDir, newDir);
+        moveOptions = {
+          ...moveOptions,
+          documentDir: newDocumentDir,
+          sourcePath: rebaseDocumentRelativePath(document.source_path, document.document_dir, newDocumentDir),
+          markdownPath: rebaseDocumentRelativePath(document.markdown_path, document.document_dir, newDocumentDir),
+        };
+      }
+
+      try {
+        const result = knowledgeBaseStore.moveDocument(documentId, targetFolderId, moveOptions);
+        return { success: true, message: `已移动文档“${document.file_name}”`, index: result.index, document: result.document };
+      } catch (error) {
+        if (oldDir && newDir && fs.existsSync(newDir) && !fs.existsSync(oldDir)) {
+          try {
+            fs.renameSync(newDir, oldDir);
+          } catch {
+            // 回滚失败时保留原始错误，避免掩盖数据库更新问题。
+          }
+        }
+        throw error;
+      }
     },
 
     async uploadDocuments(folderId, webContents) {

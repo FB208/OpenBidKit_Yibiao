@@ -568,13 +568,14 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
   system_discarded_after_retry_count INTEGER NOT NULL DEFAULT 0,
   last_batch_size INTEGER,
   parser_label TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (folder_id) REFERENCES knowledge_folders(folder_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_folder_order
-ON knowledge_documents(folder_id, created_at DESC);
+ON knowledge_documents(folder_id, sort_order, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_status
 ON knowledge_documents(status);
