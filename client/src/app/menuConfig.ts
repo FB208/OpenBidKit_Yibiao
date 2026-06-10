@@ -37,6 +37,21 @@ export const appMenuItems: AppMenuItem[] = [
     id: 'knowledge-base',
     label: '知识库',
     description: '素材、模板和案例资产',
+    children: [
+      {
+        id: 'document-knowledge-base',
+        label: '文档知识库',
+        description: '管理文档资料、案例素材和可复用知识条目',
+        icon: 'document',
+      },
+      {
+        id: 'image-knowledge-base',
+        label: '图片知识库',
+        description: '管理图片素材、图示和视觉参考资料',
+        icon: 'file',
+        notice: githubStarNotice,
+      },
+    ],
   },
   {
     id: 'bid-check',

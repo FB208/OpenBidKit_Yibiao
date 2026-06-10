@@ -4,6 +4,8 @@ export type SectionId =
   | 'existing-plan-expansion'
   | 'business-bid'
   | 'knowledge-base'
+  | 'document-knowledge-base'
+  | 'image-knowledge-base'
   | 'resources'
   | 'bid-check'
   | 'duplicate-check'

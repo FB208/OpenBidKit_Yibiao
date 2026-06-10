@@ -412,15 +412,7 @@ function OutlineEditPage({
   };
 
   const toggleKnowledgeFolder = (folderId: string) => {
-    setExpandedKnowledgeFolderIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(folderId)) {
-        next.delete(folderId);
-      } else {
-        next.add(folderId);
-      }
-      return next;
-    });
+    setExpandedKnowledgeFolderIds((prev) => (prev.has(folderId) ? new Set() : new Set([folderId])));
   };
 
   const selectFolderDocuments = (documents: KnowledgeDocument[]) => {
@@ -790,6 +782,7 @@ function OutlineEditPage({
 
       return documents.length ? [{ folder, documents }] : [];
     });
+    const visibleDocumentCount = visibleFolders.reduce((total, group) => total + group.documents.length, 0);
 
     if (!availableDocuments.length) {
       return <div className="outline-knowledge-empty">暂无已完成的知识库文档，可先到知识库上传并处理完成后再选择。</div>;
@@ -797,17 +790,20 @@ function OutlineEditPage({
 
     return (
       <div className="outline-knowledge-compact">
-        <input
-          className="outline-knowledge-search"
-          value={knowledgeSearch}
-          onChange={(event) => setKnowledgeSearch(event.target.value)}
-          placeholder="搜索文件夹或文档"
-        />
+        <div className="outline-knowledge-search-row">
+          <input
+            className="outline-knowledge-search"
+            value={knowledgeSearch}
+            onChange={(event) => setKnowledgeSearch(event.target.value)}
+            placeholder="搜索文件夹或文档"
+          />
+          <span>{keyword ? `匹配 ${visibleDocumentCount} 个文档` : `共 ${availableDocuments.length} 个可用文档`}</span>
+        </div>
         <div className="outline-knowledge-grid">
           <div className="outline-knowledge-browser">
             <div className="outline-knowledge-pane-head">
               <strong>知识库</strong>
-              <span>{availableDocuments.length} 个可用</span>
+              <span>{visibleFolders.length} 个文件夹</span>
             </div>
             <div className="outline-knowledge-folder-list compact">
               {visibleFolders.length ? visibleFolders.map(({ folder, documents }) => {
@@ -817,7 +813,7 @@ function OutlineEditPage({
                 return (
                   <section className="outline-knowledge-folder compact" key={folder.id}>
                     <div className="outline-knowledge-folder-head compact">
-                      <button type="button" onClick={() => toggleKnowledgeFolder(folder.id)} disabled={Boolean(keyword)}>
+                      <button type="button" onClick={() => toggleKnowledgeFolder(folder.id)} disabled={Boolean(keyword)} aria-expanded={expanded}>
                         <span>{expanded ? '▾' : '▸'}</span>
                         <strong>{folder.name}</strong>
                       </button>

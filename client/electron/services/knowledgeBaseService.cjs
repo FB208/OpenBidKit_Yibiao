@@ -40,6 +40,19 @@ function fromRelative(baseDir, relativePath) {
   return path.join(baseDir, relativePath || '');
 }
 
+function normalizeRelativePath(value) {
+  return String(value || '').replace(/\\/g, '/');
+}
+
+function rebaseDocumentRelativePath(value, oldDocumentDir, newDocumentDir) {
+  const normalized = normalizeRelativePath(value);
+  const oldPrefix = normalizeRelativePath(oldDocumentDir).replace(/\/+$/, '');
+  const nextPrefix = normalizeRelativePath(newDocumentDir).replace(/\/+$/, '');
+  if (normalized === oldPrefix) return nextPrefix;
+  if (normalized.startsWith(`${oldPrefix}/`)) return `${nextPrefix}${normalized.slice(oldPrefix.length)}`;
+  return normalizeRelativePath(path.join(nextPrefix, path.basename(normalized)));
+}
+
 function getPromptSummary(messages) {
   return (messages || []).map((message, index) => ({
     index: index + 1,
@@ -744,6 +757,51 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     return recovered;
   }
 
+  function isSamePath(a, b) {
+    return path.resolve(String(a || '')).toLowerCase() === path.resolve(String(b || '')).toLowerCase();
+  }
+
+  function getStep(documentId, stepKey) {
+    return knowledgeBaseStore.getDocumentStep(documentId, stepKey);
+  }
+
+  function stepCanReuse(step, hasArtifact) {
+    return Boolean(hasArtifact && (!step || step.status === 'success'));
+  }
+
+  function getStepItems(documentId, stepKey) {
+    const result = getStep(documentId, stepKey)?.result;
+    return Array.isArray(result?.items) ? result.items : null;
+  }
+
+  function isSameStringList(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((value, index) => String(value) === String(b[index]));
+  }
+
+  function isRecoveryStepResult(value) {
+    return Boolean(value
+      && Array.isArray(value.items)
+      && Array.isArray(value.matches)
+      && Array.isArray(value.discarded)
+      && Array.isArray(value.system_discarded)
+      && Array.isArray(value.recovery_attempts));
+  }
+
+  async function runDocumentStep(documentId, stepKey, worker) {
+    knowledgeBaseStore.saveDocumentStep(documentId, stepKey, { status: 'running' });
+    try {
+      const result = await worker();
+      knowledgeBaseStore.saveDocumentStep(documentId, stepKey, { status: 'success', result });
+      debugLog(documentId, `step:${stepKey}:success`);
+      return result;
+    } catch (error) {
+      knowledgeBaseStore.saveDocumentStep(documentId, stepKey, { status: 'error', error: error.message || String(error) });
+      debugLog(documentId, `step:${stepKey}:error`, { message: error.message || String(error) });
+      throw error;
+    }
+  }
+
   async function prepareDocument(documentId, sourceFilePath, webContents) {
     if (activePreparations.has(documentId)) {
       debugLog(documentId, 'prepare:skip-active');
@@ -758,93 +816,184 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       const documentDir = fromRelative(baseDir, document.document_dir);
       const sourcePath = fromRelative(baseDir, document.source_path);
       const markdownPath = fromRelative(baseDir, document.markdown_path);
+      let markdown = fs.existsSync(markdownPath) ? fs.readFileSync(markdownPath, 'utf-8').trim() : '';
+      let blocks = knowledgeBaseStore.readBlocks(documentId);
+      let filteredBlocks = knowledgeBaseStore.readFilteredBlocks(documentId);
+      let firstItems = getStepItems(documentId, 'extract_first_items');
+      let supplementItems = getStepItems(documentId, 'extract_supplement_items');
+      let candidateItems = knowledgeBaseStore.readCandidateItems(documentId);
 
-      updateDocument(documentId, { status: 'copying', progress: 5, message: '正在复制原始文件' }, webContents);
-      ensureDir(documentDir);
-      await fsp.copyFile(sourceFilePath, sourcePath);
-      debugLog(documentId, 'prepare:copied-source', { source_path: sourcePath });
+      const copyStep = getStep(documentId, 'copy_source');
+      if (stepCanReuse(copyStep, fs.existsSync(sourcePath))) {
+        if (!copyStep) knowledgeBaseStore.saveDocumentStep(documentId, 'copy_source', { status: 'success', result: { source_path: document.source_path } });
+        debugLog(documentId, 'prepare:reuse-source', { source_path: sourcePath });
+      } else {
+        if (!fs.existsSync(sourceFilePath)) {
+          throw new Error('原始文件不存在，请重新上传');
+        }
+        knowledgeBaseStore.clearDocumentProcessingFromStep(documentId, 'copy_source');
+        updateDocument(documentId, { status: 'copying', progress: 5, message: '正在复制原始文件', error: null }, webContents);
+        await runDocumentStep(documentId, 'copy_source', async () => {
+          ensureDir(documentDir);
+          if (!isSamePath(sourceFilePath, sourcePath)) {
+            await fsp.copyFile(sourceFilePath, sourcePath);
+          }
+          debugLog(documentId, 'prepare:copied-source', { source_path: sourcePath });
+          return { source_path: document.source_path };
+        });
+      }
 
-      updateDocument(documentId, { status: 'converting', progress: 15, message: '正在转换为 Markdown' }, webContents);
-      const markdown = stripMarkdownFence((await parseDocumentWithConfig(app, sourcePath, config, { assetScope: `knowledge-${documentId}`, preserveImages: false })).trim());
-      if (!markdown) throw new Error('文档未解析出有效 Markdown 内容');
-      await fsp.writeFile(markdownPath, `${markdown}\n`, 'utf-8');
-      knowledgeBaseStore.updateMarkdownMetadata(documentId, markdown);
-      debugLog(documentId, 'prepare:converted-markdown', { markdown_path: markdownPath, markdown_chars: markdown.length });
+      const convertStep = getStep(documentId, 'convert_markdown');
+      if (stepCanReuse(convertStep, Boolean(markdown))) {
+        if (!convertStep) knowledgeBaseStore.saveDocumentStep(documentId, 'convert_markdown', { status: 'success', result: { markdown_chars: markdown.length } });
+        debugLog(documentId, 'prepare:reuse-markdown', { markdown_chars: markdown.length });
+      } else {
+        knowledgeBaseStore.clearDocumentProcessingFromStep(documentId, 'convert_markdown');
+        blocks = [];
+        filteredBlocks = [];
+        firstItems = null;
+        supplementItems = null;
+        candidateItems = [];
+        updateDocument(documentId, { status: 'converting', progress: 15, message: '正在转换为 Markdown', error: null }, webContents);
+        const result = await runDocumentStep(documentId, 'convert_markdown', async () => {
+          const parsedMarkdown = stripMarkdownFence((await parseDocumentWithConfig(app, sourcePath, config, { assetScope: `knowledge-${documentId}`, preserveImages: false })).trim());
+          if (!parsedMarkdown) throw new Error('文档未解析出有效 Markdown 内容');
+          await fsp.writeFile(markdownPath, `${parsedMarkdown}\n`, 'utf-8');
+          knowledgeBaseStore.updateMarkdownMetadata(documentId, parsedMarkdown);
+          debugLog(documentId, 'prepare:converted-markdown', { markdown_path: markdownPath, markdown_chars: parsedMarkdown.length });
+          return { markdown_chars: parsedMarkdown.length };
+        });
+        markdown = fs.readFileSync(markdownPath, 'utf-8').trim();
+        if (!result?.markdown_chars || !markdown) throw new Error('文档未解析出有效 Markdown 内容');
+      }
 
-      const rawBlocks = createRawBlocks(markdown);
-      const semanticBlocks = mergeSemanticBlocks(rawBlocks);
-      const { blocks, filtered_blocks: filteredBlocks } = filterBlocks(semanticBlocks);
-      if (!blocks.length) throw new Error('筛选后没有可分析的正文内容');
-      knowledgeBaseStore.saveBlocks(documentId, blocks, filteredBlocks);
-      debugLog(documentId, 'prepare:blocks-ready', {
-        raw_block_count: rawBlocks.length,
-        semantic_block_count: semanticBlocks.length,
-        block_count: blocks.length,
-        filtered_block_count: filteredBlocks.length,
-        block_text_chars: renderBlocksForPrompt(blocks).length,
-        filtered_reasons: filteredBlocks.reduce((acc, block) => {
-          acc[block.reason] = (acc[block.reason] || 0) + 1;
-          return acc;
-        }, {}),
-      });
+      const blockStep = getStep(documentId, 'build_blocks');
+      if (stepCanReuse(blockStep, blocks.length > 0)) {
+        if (!blockStep) knowledgeBaseStore.saveDocumentStep(documentId, 'build_blocks', { status: 'success', result: { block_count: blocks.length, filtered_block_count: filteredBlocks.length } });
+        debugLog(documentId, 'prepare:reuse-blocks', { block_count: blocks.length, filtered_block_count: filteredBlocks.length });
+      } else {
+        knowledgeBaseStore.clearDocumentProcessingFromStep(documentId, 'build_blocks');
+        firstItems = null;
+        supplementItems = null;
+        candidateItems = [];
+        const result = await runDocumentStep(documentId, 'build_blocks', async () => {
+          const rawBlocks = createRawBlocks(markdown);
+          const semanticBlocks = mergeSemanticBlocks(rawBlocks);
+          const filtered = filterBlocks(semanticBlocks);
+          if (!filtered.blocks.length) throw new Error('筛选后没有可分析的正文内容');
+          knowledgeBaseStore.saveBlocks(documentId, filtered.blocks, filtered.filtered_blocks);
+          debugLog(documentId, 'prepare:blocks-ready', {
+            raw_block_count: rawBlocks.length,
+            semantic_block_count: semanticBlocks.length,
+            block_count: filtered.blocks.length,
+            filtered_block_count: filtered.filtered_blocks.length,
+            block_text_chars: renderBlocksForPrompt(filtered.blocks).length,
+            filtered_reasons: filtered.filtered_blocks.reduce((acc, block) => {
+              acc[block.reason] = (acc[block.reason] || 0) + 1;
+              return acc;
+            }, {}),
+          });
+          return { block_count: filtered.blocks.length, filtered_block_count: filtered.filtered_blocks.length };
+        });
+        blocks = knowledgeBaseStore.readBlocks(documentId);
+        filteredBlocks = knowledgeBaseStore.readFilteredBlocks(documentId);
+        updateDocument(documentId, { block_count: result.block_count, filtered_block_count: result.filtered_block_count }, webContents);
+      }
 
       const blockText = renderBlocksForPrompt(blocks);
-      updateDocument(documentId, {
-        status: 'extracting',
-        progress: 35,
-        message: 'AI 正在首次提取知识条目',
-        block_count: blocks.length,
-        filtered_block_count: filteredBlocks.length,
-      }, webContents);
-      const firstMessages = buildInitialItemMessages(document.file_name, blockText);
-      debugLog(documentId, 'ai:first-items:start', {
-        prompt: getPromptSummary(firstMessages),
-      });
-      const first = await aiService.collectJsonResponse({
-        messages: firstMessages,
-        temperature: 0.2,
-        response_format: { type: 'json_object' },
-        logTitle: `知识库条目提取-${document.file_name}`,
-        normalizer: (value) => ({ items: normalizeCandidateItems(value) }),
-        validator: validateCandidateItems,
-        failureMessage: '知识库条目提取失败，AI 未返回有效 JSON',
-        progressLabel: '知识库条目提取',
-      });
-      const firstItems = Array.isArray(first?.items) ? first.items : [];
-      debugLog(documentId, 'ai:first-items:done', {
-        item_count: firstItems.length,
-        sample: getItemSample(firstItems),
-      });
+      if (candidateItems.length > 0
+        && !getStep(documentId, 'extract_first_items')
+        && !getStep(documentId, 'extract_supplement_items')
+        && !getStep(documentId, 'merge_candidates')) {
+        const legacyItems = candidateItems.map(({ title, summary }) => ({ title, summary }));
+        firstItems = legacyItems;
+        supplementItems = [];
+        knowledgeBaseStore.saveDocumentStep(documentId, 'extract_first_items', { status: 'success', result: { items: firstItems } });
+        knowledgeBaseStore.saveDocumentStep(documentId, 'extract_supplement_items', { status: 'success', result: { items: supplementItems } });
+        knowledgeBaseStore.saveDocumentStep(documentId, 'merge_candidates', { status: 'success', result: { candidate_item_count: candidateItems.length } });
+        debugLog(documentId, 'prepare:reuse-legacy-candidates', { candidate_item_count: candidateItems.length });
+      }
+      const firstStep = getStep(documentId, 'extract_first_items');
+      if (stepCanReuse(firstStep, Array.isArray(firstItems))) {
+        if (!firstStep) knowledgeBaseStore.saveDocumentStep(documentId, 'extract_first_items', { status: 'success', result: { items: firstItems } });
+        debugLog(documentId, 'prepare:reuse-first-items', { item_count: firstItems.length });
+      } else {
+        knowledgeBaseStore.clearDocumentProcessingFromStep(documentId, 'extract_first_items');
+        supplementItems = null;
+        candidateItems = [];
+        updateDocument(documentId, {
+          status: 'extracting',
+          progress: 35,
+          message: 'AI 正在首次提取知识条目',
+          block_count: blocks.length,
+          filtered_block_count: filteredBlocks.length,
+          error: null,
+        }, webContents);
+        const result = await runDocumentStep(documentId, 'extract_first_items', async () => {
+          const firstMessages = buildInitialItemMessages(document.file_name, blockText);
+          debugLog(documentId, 'ai:first-items:start', { prompt: getPromptSummary(firstMessages) });
+          const first = await aiService.collectJsonResponse({
+            messages: firstMessages,
+            temperature: 0.2,
+            response_format: { type: 'json_object' },
+            logTitle: `知识库条目提取-${document.file_name}`,
+            normalizer: (value) => ({ items: normalizeCandidateItems(value) }),
+            validator: validateCandidateItems,
+            failureMessage: '知识库条目提取失败，AI 未返回有效 JSON',
+            progressLabel: '知识库条目提取',
+          });
+          const items = Array.isArray(first?.items) ? first.items : [];
+          debugLog(documentId, 'ai:first-items:done', { item_count: items.length, sample: getItemSample(items) });
+          return { items };
+        });
+        firstItems = result.items;
+      }
 
-      updateDocument(documentId, { status: 'extracting', progress: 55, message: 'AI 正在补充遗漏知识条目' }, webContents);
-      const supplementMessages = buildSupplementItemMessages(document.file_name, blockText, firstItems);
-      debugLog(documentId, 'ai:supplement-items:start', {
-        first_item_count: firstItems.length,
-        prompt: getPromptSummary(supplementMessages),
-      });
-      const supplement = await aiService.collectJsonResponse({
-        messages: supplementMessages,
-        temperature: 0.2,
-        response_format: { type: 'json_object' },
-        logTitle: `知识库条目补充-${document.file_name}`,
-        normalizer: (value) => ({ items: normalizeCandidateItems(value) }),
-        validator: validateCandidateItems,
-        failureMessage: '知识库条目补充失败，AI 未返回有效 JSON',
-        progressLabel: '知识库条目补充',
-      });
-      const supplementItems = Array.isArray(supplement?.items) ? supplement.items : [];
-      debugLog(documentId, 'ai:supplement-items:done', {
-        item_count: supplementItems.length,
-        sample: getItemSample(supplementItems),
-      });
+      const supplementStep = getStep(documentId, 'extract_supplement_items');
+      if (stepCanReuse(supplementStep, Array.isArray(supplementItems))) {
+        if (!supplementStep) knowledgeBaseStore.saveDocumentStep(documentId, 'extract_supplement_items', { status: 'success', result: { items: supplementItems } });
+        debugLog(documentId, 'prepare:reuse-supplement-items', { item_count: supplementItems.length });
+      } else {
+        knowledgeBaseStore.clearDocumentProcessingFromStep(documentId, 'extract_supplement_items');
+        candidateItems = [];
+        updateDocument(documentId, { status: 'extracting', progress: 55, message: 'AI 正在补充遗漏知识条目', error: null }, webContents);
+        const result = await runDocumentStep(documentId, 'extract_supplement_items', async () => {
+          const supplementMessages = buildSupplementItemMessages(document.file_name, blockText, firstItems);
+          debugLog(documentId, 'ai:supplement-items:start', { first_item_count: firstItems.length, prompt: getPromptSummary(supplementMessages) });
+          const supplement = await aiService.collectJsonResponse({
+            messages: supplementMessages,
+            temperature: 0.2,
+            response_format: { type: 'json_object' },
+            logTitle: `知识库条目补充-${document.file_name}`,
+            normalizer: (value) => ({ items: normalizeCandidateItems(value) }),
+            validator: validateCandidateItems,
+            failureMessage: '知识库条目补充失败，AI 未返回有效 JSON',
+            progressLabel: '知识库条目补充',
+          });
+          const items = Array.isArray(supplement?.items) ? supplement.items : [];
+          debugLog(documentId, 'ai:supplement-items:done', { item_count: items.length, sample: getItemSample(items) });
+          return { items };
+        });
+        supplementItems = result.items;
+      }
 
-      const candidateItems = mergeCandidateItems(firstItems, supplementItems);
-      if (!candidateItems.length) throw new Error('AI 未提取出可用知识条目');
-      knowledgeBaseStore.saveCandidateItems(documentId, candidateItems);
-      debugLog(documentId, 'prepare:candidates-saved', {
-        candidate_item_count: candidateItems.length,
-        sample: getItemSample(candidateItems),
-      });
+      const mergeStep = getStep(documentId, 'merge_candidates');
+      if (stepCanReuse(mergeStep, candidateItems.length > 0)) {
+        if (!mergeStep) knowledgeBaseStore.saveDocumentStep(documentId, 'merge_candidates', { status: 'success', result: { candidate_item_count: candidateItems.length } });
+        debugLog(documentId, 'prepare:reuse-candidates', { candidate_item_count: candidateItems.length });
+      } else {
+        knowledgeBaseStore.clearDocumentProcessingFromStep(documentId, 'merge_candidates');
+        const result = await runDocumentStep(documentId, 'merge_candidates', async () => {
+          const mergedItems = mergeCandidateItems(firstItems, supplementItems);
+          if (!mergedItems.length) throw new Error('AI 未提取出可用知识条目');
+          knowledgeBaseStore.saveCandidateItems(documentId, mergedItems);
+          debugLog(documentId, 'prepare:candidates-saved', { candidate_item_count: mergedItems.length, sample: getItemSample(mergedItems) });
+          return { candidate_item_count: mergedItems.length };
+        });
+        candidateItems = knowledgeBaseStore.readCandidateItems(documentId);
+        if (!result?.candidate_item_count || !candidateItems.length) throw new Error('AI 未提取出可用知识条目');
+      }
+
       updateDocument(documentId, {
         status: 'ready_for_matching',
         progress: 65,
@@ -869,17 +1018,21 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     }
   }
 
-  async function matchDocument(documentId, batchSize, webContents) {
+  async function matchDocument(documentId, batchSize, webContents, options = {}) {
     if (activeMatches.has(documentId)) {
       debugLog(documentId, 'match:skip-active');
       return;
     }
     activeMatches.add(documentId);
-    debugLog(documentId, 'match:start', { requested_batch_size: batchSize });
+    const force = Boolean(options.force);
+    debugLog(documentId, 'match:start', { requested_batch_size: batchSize, force });
 
     try {
       const document = getDocument(documentId);
       const normalizedBatchSize = Math.max(1, Math.min(100, Math.floor(Number(batchSize) || 1)));
+      if (force) {
+        knowledgeBaseStore.clearDocumentProcessingFromStep(documentId, 'match_batches');
+      }
       const blocks = knowledgeBaseStore.readBlocks(documentId);
       const filteredBlocks = knowledgeBaseStore.readFilteredBlocks(documentId);
       const initialItems = knowledgeBaseStore.readCandidateItems(documentId);
@@ -894,7 +1047,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
 
       const blockText = renderBlocksForPrompt(blocks);
       const blockOrder = getBlockOrder(blocks);
-      const itemIds = new Set(initialItems.map((item) => item.id));
+      const candidateItemIds = new Set(initialItems.map((item) => item.id));
       const batches = [];
       for (let index = 0; index < initialItems.length; index += normalizedBatchSize) {
         batches.push(initialItems.slice(index, index + normalizedBatchSize));
@@ -902,144 +1055,203 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
 
       const matches = [];
       const matchBatches = [];
+      knowledgeBaseStore.saveDocumentStep(documentId, 'match_batches', { status: 'running' });
       updateDocument(documentId, { status: 'matching', progress: 66, message: `开始匹配段落，共 ${batches.length} 批`, last_batch_size: normalizedBatchSize }, webContents);
       for (let index = 0; index < batches.length; index += 1) {
+        const batchIndex = index + 1;
+        const batchItemIds = batches[index].map((item) => item.id);
+        const savedBatch = force ? null : knowledgeBaseStore.getMatchBatch(documentId, batchIndex);
+        if (savedBatch?.status === 'success' && isSameStringList(savedBatch.item_ids, batchItemIds) && Array.isArray(savedBatch.matches)) {
+          debugLog(documentId, 'match:reuse-batch', { batch_index: batchIndex, match_count: savedBatch.matches.length });
+          const batchResult = { batch_index: batchIndex, item_ids: batchItemIds, matches: savedBatch.matches };
+          matchBatches.push(batchResult);
+          matches.push(...savedBatch.matches);
+          continue;
+        }
+
         const progress = Math.min(88, 66 + Math.round(((index + 1) / batches.length) * 22));
-        updateDocument(documentId, { status: 'matching', progress, message: `AI 正在匹配段落 ${index + 1}/${batches.length}` }, webContents);
+        updateDocument(documentId, { status: 'matching', progress, message: `AI 正在匹配段落 ${batchIndex}/${batches.length}` }, webContents);
+        knowledgeBaseStore.saveMatchBatch(documentId, batchIndex, { status: 'running', itemIds: batchItemIds, matches: [] });
         const matchMessages = buildMatchMessages(document.file_name, blockText, batches[index]);
         debugLog(documentId, 'ai:match-batch:start', {
-          batch_index: index + 1,
+          batch_index: batchIndex,
           batch_count: batches.length,
-          item_ids: batches[index].map((item) => item.id),
+          item_ids: batchItemIds,
           prompt: getPromptSummary(matchMessages),
         });
-        const parsed = await aiService.collectJsonResponse({
-          messages: matchMessages,
-          temperature: 0.1,
-          response_format: { type: 'json_object' },
-          logTitle: `知识库段落匹配-${document.file_name}-第${index + 1}批`,
-          normalizer: (value) => normalizeMatchResult(value, itemIds, blocks, blockOrder),
-          validator: validateMatchResult,
-          failureMessage: '知识库段落匹配失败，AI 未返回有效 JSON',
-          progressLabel: '知识库段落匹配',
+        try {
+          const parsed = await aiService.collectJsonResponse({
+            messages: matchMessages,
+            temperature: 0.1,
+            response_format: { type: 'json_object' },
+            logTitle: `知识库段落匹配-${document.file_name}-第${batchIndex}批`,
+            normalizer: (value) => normalizeMatchResult(value, candidateItemIds, blocks, blockOrder),
+            validator: validateMatchResult,
+            failureMessage: '知识库段落匹配失败，AI 未返回有效 JSON',
+            progressLabel: '知识库段落匹配',
+          });
+          knowledgeBaseStore.saveMatchBatch(documentId, batchIndex, { status: 'success', itemIds: batchItemIds, matches: parsed.matches });
+          debugLog(documentId, 'ai:match-batch:done', {
+            batch_index: batchIndex,
+            match_count: parsed.matches.length,
+            matches: getMatchSummary(parsed.matches),
+          });
+          const batchResult = { batch_index: batchIndex, item_ids: batchItemIds, matches: parsed.matches };
+          matchBatches.push(batchResult);
+          matches.push(...parsed.matches);
+        } catch (error) {
+          knowledgeBaseStore.saveMatchBatch(documentId, batchIndex, { status: 'error', itemIds: batchItemIds, error: error.message || String(error) });
+          knowledgeBaseStore.saveDocumentStep(documentId, 'match_batches', { status: 'error', error: error.message || String(error) });
+          throw error;
+        }
+      }
+      knowledgeBaseStore.saveDocumentStep(documentId, 'match_batches', { status: 'success', result: { batch_size: normalizedBatchSize, batch_count: batches.length } });
+
+      const recoveryStep = getStep(documentId, 'recover_missing');
+      let recoveryResult = recoveryStep?.result;
+      if (!force && recoveryStep?.status === 'success' && isRecoveryStepResult(recoveryResult)) {
+        debugLog(documentId, 'recovery:reuse', {
+          item_count: recoveryResult.items.length,
+          match_count: recoveryResult.matches.length,
+          recovery_attempt_count: recoveryResult.recovery_attempts.length,
         });
-        debugLog(documentId, 'ai:match-batch:done', {
-          batch_index: index + 1,
-          match_count: parsed.matches.length,
-          matches: getMatchSummary(parsed.matches),
+      } else {
+        knowledgeBaseStore.clearDocumentProcessingFromStep(documentId, 'recover_missing');
+        recoveryResult = await runDocumentStep(documentId, 'recover_missing', async () => {
+          const items = [...initialItems];
+          const recoveredMatches = [...matches];
+          const discarded = [];
+          const systemDiscarded = [];
+          const recoveryAttempts = [];
+
+          for (let attempt = 0; attempt < recoveryMaxAttempts; attempt += 1) {
+            const missingBlocks = getMissingBlocks(blocks, recoveredMatches, discarded, systemDiscarded);
+            debugLog(documentId, 'recovery:missing-check', {
+              attempt: attempt + 1,
+              missing_block_count: missingBlocks.length,
+            });
+            if (!missingBlocks.length) break;
+
+            updateDocument(documentId, {
+              status: 'recovering',
+              progress: Math.min(96, 90 + attempt * 3),
+              message: `AI 正在补漏遗漏段落 ${attempt + 1}/${recoveryMaxAttempts}，剩余 ${missingBlocks.length} 个 block`,
+            }, webContents);
+            const currentItemIds = new Set(items.map((item) => item.id));
+            const recoveryMessages = buildRecoveryMessages(document.file_name, items, missingBlocks);
+            debugLog(documentId, 'ai:recovery:start', {
+              attempt: attempt + 1,
+              missing_block_count: missingBlocks.length,
+              item_count: items.length,
+              prompt: getPromptSummary(recoveryMessages),
+            });
+            const parsed = await aiService.collectJsonResponse({
+              messages: recoveryMessages,
+              temperature: 0.1,
+              response_format: { type: 'json_object' },
+              logTitle: `知识库遗漏补漏-${document.file_name}-第${attempt + 1}轮`,
+              normalizer: (value) => normalizeRecoveryResult(value, currentItemIds, blocks, blockOrder),
+              validator: validateRecoveryResult,
+              failureMessage: '知识库遗漏段落补漏失败，AI 未返回有效 JSON',
+              progressLabel: '知识库遗漏补漏',
+            });
+            debugLog(documentId, 'ai:recovery:done', {
+              attempt: attempt + 1,
+              match_count: parsed.matches.length,
+              new_item_count: parsed.new_items.length,
+              discarded_group_count: parsed.discarded.length,
+              matches: getMatchSummary(parsed.matches),
+            });
+
+            const newItemsWithIds = parsed.new_items.map((item) => {
+              const id = nextKnowledgeItemId(items);
+              const next = { id, title: item.title, summary: item.summary };
+              items.push(next);
+              recoveredMatches.push({ id, ranges: item.ranges, block_ids: item.block_ids });
+              return { ...next, ranges: item.ranges, block_ids: item.block_ids };
+            });
+            recoveredMatches.push(...parsed.matches);
+            discarded.push(...parsed.discarded.map((item) => ({ ...item, source: `recovery_${attempt + 1}` })));
+            recoveryAttempts.push({
+              attempt: attempt + 1,
+              missing_before_count: missingBlocks.length,
+              matches: parsed.matches,
+              new_items: newItemsWithIds,
+              discarded: parsed.discarded,
+            });
+          }
+
+          const remaining = getMissingBlocks(blocks, recoveredMatches, discarded, systemDiscarded);
+          debugLog(documentId, 'match:remaining-after-recovery', { remaining_block_count: remaining.length });
+          if (remaining.length) {
+            systemDiscarded.push({
+              block_ids: remaining.map((block) => block.id),
+              reason: 'system_discarded_after_retry',
+            });
+          }
+
+          return {
+            items,
+            matches: recoveredMatches,
+            discarded,
+            system_discarded: systemDiscarded,
+            recovery_attempts: recoveryAttempts,
+          };
         });
-        const batchResult = { batch_index: index + 1, item_ids: batches[index].map((item) => item.id), matches: parsed.matches };
-        matchBatches.push(batchResult);
-        matches.push(...parsed.matches);
       }
 
-      const items = [...initialItems];
-      const discarded = [];
-      const systemDiscarded = [];
-      const recoveryAttempts = [];
-
-      for (let attempt = 0; attempt < recoveryMaxAttempts; attempt += 1) {
-        const missingBlocks = getMissingBlocks(blocks, matches, discarded, systemDiscarded);
-        debugLog(documentId, 'recovery:missing-check', {
-          attempt: attempt + 1,
-          missing_block_count: missingBlocks.length,
-        });
-        if (!missingBlocks.length) break;
-
+      const savedItems = knowledgeBaseStore.readItems(documentId);
+      const saveStep = getStep(documentId, 'save_result');
+      if (!force && saveStep?.status === 'success' && savedItems.length) {
+        debugLog(documentId, 'save:reuse', { item_count: savedItems.length });
         updateDocument(documentId, {
-          status: 'recovering',
-          progress: Math.min(96, 90 + attempt * 3),
-          message: `AI 正在补漏遗漏段落 ${attempt + 1}/${recoveryMaxAttempts}，剩余 ${missingBlocks.length} 个 block`,
+          status: 'success',
+          progress: 100,
+          message: `整理完成，共 ${savedItems.length} 条`,
+          item_count: savedItems.length,
         }, webContents);
-        const currentItemIds = new Set(items.map((item) => item.id));
-        const recoveryMessages = buildRecoveryMessages(document.file_name, items, missingBlocks);
-        debugLog(documentId, 'ai:recovery:start', {
-          attempt: attempt + 1,
-          missing_block_count: missingBlocks.length,
-          item_count: items.length,
-          prompt: getPromptSummary(recoveryMessages),
-        });
-        const parsed = await aiService.collectJsonResponse({
-          messages: recoveryMessages,
-          temperature: 0.1,
-          response_format: { type: 'json_object' },
-          logTitle: `知识库遗漏补漏-${document.file_name}-第${attempt + 1}轮`,
-          normalizer: (value) => normalizeRecoveryResult(value, currentItemIds, blocks, blockOrder),
-          validator: validateRecoveryResult,
-          failureMessage: '知识库遗漏段落补漏失败，AI 未返回有效 JSON',
-          progressLabel: '知识库遗漏补漏',
-        });
-        debugLog(documentId, 'ai:recovery:done', {
-          attempt: attempt + 1,
-          match_count: parsed.matches.length,
-          new_item_count: parsed.new_items.length,
-          discarded_group_count: parsed.discarded.length,
-          matches: getMatchSummary(parsed.matches),
-        });
-
-        const newItemsWithIds = parsed.new_items.map((item) => {
-          const id = nextKnowledgeItemId(items);
-          const next = { id, title: item.title, summary: item.summary };
-          items.push(next);
-          matches.push({ id, ranges: item.ranges, block_ids: item.block_ids });
-          return { ...next, ranges: item.ranges, block_ids: item.block_ids };
-        });
-        matches.push(...parsed.matches);
-        discarded.push(...parsed.discarded.map((item) => ({ ...item, source: `recovery_${attempt + 1}` })));
-        recoveryAttempts.push({
-          attempt: attempt + 1,
-          missing_before_count: missingBlocks.length,
-          matches: parsed.matches,
-          new_items: newItemsWithIds,
-          discarded: parsed.discarded,
-        });
-      }
-
-      const remaining = getMissingBlocks(blocks, matches, discarded, systemDiscarded);
-      debugLog(documentId, 'match:remaining-after-recovery', { remaining_block_count: remaining.length });
-      if (remaining.length) {
-        systemDiscarded.push({
-          block_ids: remaining.map((block) => block.id),
-          reason: 'system_discarded_after_retry',
-        });
+        return;
       }
 
       updateDocument(documentId, { status: 'saving', progress: 98, message: '正在回填正文并保存知识条目' }, webContents);
-      const finalItems = createFinalItems(items, matches, blocks, document.file_name);
-      const report = createReport({
-        blocks,
-        filteredBlocks,
-        candidateItems: items,
-        finalItems,
-        matches,
-        discarded,
-        systemDiscarded,
-        recoveryAttempts,
-        batchSize: normalizedBatchSize,
-      });
-      const matchResult = {
-        candidate_items: items,
-        match_batches: matchBatches,
-        recovery_attempts: recoveryAttempts,
-        final_matches: matches,
-        discarded,
-        system_discarded_after_retry: systemDiscarded,
-        report,
-      };
+      const saveResult = await runDocumentStep(documentId, 'save_result', async () => {
+        const finalItems = createFinalItems(recoveryResult.items, recoveryResult.matches, blocks, document.file_name);
+        const report = createReport({
+          blocks,
+          filteredBlocks,
+          candidateItems: recoveryResult.items,
+          finalItems,
+          matches: recoveryResult.matches,
+          discarded: recoveryResult.discarded,
+          systemDiscarded: recoveryResult.system_discarded,
+          recoveryAttempts: recoveryResult.recovery_attempts,
+          batchSize: normalizedBatchSize,
+        });
+        const matchResult = {
+          candidate_items: recoveryResult.items,
+          match_batches: matchBatches,
+          recovery_attempts: recoveryResult.recovery_attempts,
+          final_matches: recoveryResult.matches,
+          discarded: recoveryResult.discarded,
+          system_discarded_after_retry: recoveryResult.system_discarded,
+          report,
+        };
 
-      knowledgeBaseStore.saveMatchResult(documentId, { candidateItems: items, matchResult, report, finalItems });
-      debugLog(documentId, 'match:saved', {
-        final_item_count: finalItems.length,
-        report,
+        knowledgeBaseStore.saveMatchResult(documentId, { candidateItems: recoveryResult.items, matchResult, report, finalItems });
+        debugLog(documentId, 'match:saved', {
+          final_item_count: finalItems.length,
+          report,
+        });
+        return { final_item_count: finalItems.length, report };
       });
       updateDocument(documentId, {
         status: 'success',
         progress: 100,
-        message: `整理完成，共 ${finalItems.length} 条，覆盖率 ${Math.round(report.coverage_rate * 100)}%`,
-        item_count: finalItems.length,
-        candidate_item_count: items.length,
-        discarded_block_count: report.discarded_blocks_count,
-        system_discarded_after_retry_count: report.system_discarded_after_retry_count,
+        message: `整理完成，共 ${saveResult.final_item_count} 条，覆盖率 ${Math.round(saveResult.report.coverage_rate * 100)}%`,
+        item_count: saveResult.final_item_count,
+        candidate_item_count: recoveryResult.items.length,
+        discarded_block_count: saveResult.report.discarded_blocks_count,
+        system_discarded_after_retry_count: saveResult.report.system_discarded_after_retry_count,
       }, webContents);
     } catch (error) {
       debugLog(documentId, 'match:error', {
@@ -1078,6 +1290,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       return knowledgeBaseStore.renameFolder(folderId, name);
     },
 
+    reorderFolder(draggedFolderId, targetFolderId, position) {
+      return { success: true, message: '文件夹排序已保存', index: knowledgeBaseStore.reorderFolders(draggedFolderId, targetFolderId, position) };
+    },
+
     deleteFolder(folderId) {
       const index = knowledgeBaseStore.list();
       const folder = index.folders.find((item) => item.id === folderId);
@@ -1110,6 +1326,57 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       fs.rmSync(getDebugLogPath(app, documentId), { force: true });
       knowledgeBaseStore.deleteDocument(documentId);
       return { success: true, message: `已删除文档“${document.file_name}”` };
+    },
+
+    moveDocument(documentId, targetFolderId, targetDocumentId, position) {
+      const document = getDocument(documentId);
+      if (activePreparations.has(documentId) || activeMatches.has(documentId)) {
+        throw new Error('该文档正在处理中，请完成后再移动');
+      }
+      if (!['ready_for_matching', 'success', 'error'].includes(document.status)) {
+        throw new Error('该文档正在处理中，请完成后再移动');
+      }
+
+      const index = knowledgeBaseStore.list();
+      const targetFolder = index.folders.find((folder) => folder.id === targetFolderId);
+      if (!targetFolder) throw new Error('目标知识库文件夹不存在');
+
+      let moveOptions = { targetDocumentId, position };
+      let oldDir = '';
+      let newDir = '';
+      if (document.folder_id !== targetFolderId) {
+        const newDocumentDir = path.join('folders', targetFolderId, 'documents', documentId).replace(/\\/g, '/');
+        oldDir = fromRelative(baseDir, document.document_dir);
+        newDir = fromRelative(baseDir, newDocumentDir);
+        if (!fs.existsSync(oldDir)) {
+          throw new Error('文档文件不存在，无法移动');
+        }
+        if (fs.existsSync(newDir)) {
+          throw new Error('目标文件夹中已存在同名文档目录，无法移动');
+        }
+        ensureDir(path.dirname(newDir));
+        fs.renameSync(oldDir, newDir);
+        moveOptions = {
+          ...moveOptions,
+          documentDir: newDocumentDir,
+          sourcePath: rebaseDocumentRelativePath(document.source_path, document.document_dir, newDocumentDir),
+          markdownPath: rebaseDocumentRelativePath(document.markdown_path, document.document_dir, newDocumentDir),
+        };
+      }
+
+      try {
+        const result = knowledgeBaseStore.moveDocument(documentId, targetFolderId, moveOptions);
+        return { success: true, message: `已移动文档“${document.file_name}”`, index: result.index, document: result.document };
+      } catch (error) {
+        if (oldDir && newDir && fs.existsSync(newDir) && !fs.existsSync(oldDir)) {
+          try {
+            fs.renameSync(newDir, oldDir);
+          } catch {
+            // 回滚失败时保留原始错误，避免掩盖数据库更新问题。
+          }
+        }
+        throw error;
+      }
     },
 
     async uploadDocuments(folderId, webContents) {
@@ -1165,6 +1432,25 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       return { success: Boolean(created.length), message: created.length ? `已加入 ${created.length} 个文档处理任务` : '未选择支持的文档类型', documents: created };
     },
 
+    retryDocument(documentId, webContents) {
+      const document = getDocument(documentId);
+      debugLog(documentId, 'ipc:retry-document', { current_status: document.status });
+      if (activePreparations.has(documentId) || activeMatches.has(documentId)) {
+        return { success: false, message: '该文档正在处理中', document };
+      }
+      if (document.status !== 'error') {
+        return { success: false, message: '只有解析失败的文档可以重试', document };
+      }
+
+      const sourcePath = fromRelative(baseDir, document.source_path);
+      if (!fs.existsSync(sourcePath)) {
+        return { success: false, message: '原始文件不存在，请重新上传', document };
+      }
+
+      prepareDocument(documentId, sourcePath, webContents);
+      return { success: true, message: '已重新开始解析', document: getDocument(documentId) };
+    },
+
     startMatching(documentId, batchSize, webContents) {
       const document = getDocument(documentId);
       debugLog(documentId, 'ipc:start-matching', { batch_size: batchSize, current_status: document.status });
@@ -1174,7 +1460,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       if (!['ready_for_matching', 'success', 'error'].includes(document.status)) {
         return { success: false, message: '请等待候选知识条目提取完成', document };
       }
-      matchDocument(documentId, batchSize, webContents);
+      matchDocument(documentId, batchSize, webContents, { force: document.status === 'success' });
       return { success: true, message: '已开始分批匹配段落', document };
     },
 

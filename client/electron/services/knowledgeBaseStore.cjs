@@ -4,7 +4,8 @@ const path = require('node:path');
 const { getKnowledgeBaseDir } = require('../utils/paths.cjs');
 
 const documentStatuses = ['pending', 'copying', 'converting', 'extracting', 'ready_for_matching', 'matching', 'recovering', 'analyzing', 'saving', 'success', 'error'];
-const interruptedStatuses = ['copying', 'converting', 'extracting', 'matching', 'recovering', 'analyzing', 'saving'];
+const documentStepKeys = ['copy_source', 'convert_markdown', 'build_blocks', 'extract_first_items', 'extract_supplement_items', 'merge_candidates', 'match_batches', 'recover_missing', 'save_result'];
+const stepStatuses = ['idle', 'running', 'success', 'error'];
 const legacyResultJsonFiles = [
   'blocks.json',
   'filtered_blocks.json',
@@ -30,6 +31,14 @@ function normalizeStatus(value) {
   return documentStatuses.includes(value) ? value : 'pending';
 }
 
+function normalizeStepStatus(value) {
+  return stepStatuses.includes(value) ? value : 'idle';
+}
+
+function normalizeDropPosition(value) {
+  return value === 'before' ? 'before' : 'after';
+}
+
 function safeJsonParse(value, fallback) {
   if (!value) return fallback;
   try {
@@ -46,6 +55,10 @@ function readJson(filePath, fallback) {
 
 function jsonOrNull(value) {
   return value === undefined || value === null ? null : JSON.stringify(value);
+}
+
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object || {}, key);
 }
 
 function stableHash(content) {
@@ -84,6 +97,7 @@ function normalizeDocument(document) {
   const sourceExtension = String(document?.source_extension || document?.extension || path.extname(document?.source_path || document?.file_name || '') || '').toLowerCase();
   const sourcePath = normalizeRelativePath(document?.source_path || path.join(documentDir, sourceExtension ? `source${sourceExtension}` : 'source'));
   const markdownPath = normalizeRelativePath(document?.markdown_path || path.join(documentDir, 'content.md'));
+  const hasSortOrder = hasOwn(document, 'sort_order') || hasOwn(document, 'sortOrder');
   return {
     id: documentId,
     folder_id: folderId,
@@ -104,6 +118,7 @@ function normalizeDocument(document) {
     system_discarded_after_retry_count: Number(document?.system_discarded_after_retry_count || 0),
     last_batch_size: document?.last_batch_size === undefined || document?.last_batch_size === null ? undefined : Number(document.last_batch_size || 0),
     parser_label: document?.parser_label ? String(document.parser_label) : undefined,
+    sort_order: hasSortOrder ? Number(document.sort_order ?? document.sortOrder ?? 0) : undefined,
     created_at: document?.created_at || now(),
     updated_at: document?.updated_at || now(),
   };
@@ -118,7 +133,16 @@ function normalizeIndex(index) {
     updated_at: folder?.updated_at || now(),
   })) : [];
   const folderIds = new Set(folders.map((folder) => folder.id));
-  const documents = Array.isArray(index?.documents) ? index.documents.map(normalizeDocument) : [];
+  const orderByFolder = new Map();
+  const documents = Array.isArray(index?.documents) ? index.documents.map((document) => {
+    const normalized = normalizeDocument(document);
+    if (normalized.sort_order === undefined) {
+      const nextOrder = orderByFolder.get(normalized.folder_id) || 0;
+      normalized.sort_order = nextOrder;
+      orderByFolder.set(normalized.folder_id, nextOrder + 1);
+    }
+    return normalized;
+  }) : [];
   for (const document of documents) {
     if (!folderIds.has(document.folder_id)) {
       folderIds.add(document.folder_id);
@@ -168,6 +192,7 @@ function createKnowledgeBaseStore({ app, db }) {
       system_discarded_after_retry_count: Number(row.system_discarded_after_retry_count || 0),
       last_batch_size: row.last_batch_size === null || row.last_batch_size === undefined ? undefined : Number(row.last_batch_size || 0),
       parser_label: row.parser_label || undefined,
+      sort_order: Number(row.sort_order || 0),
       created_at: row.created_at,
       updated_at: row.updated_at,
       error: row.error || undefined,
@@ -178,6 +203,7 @@ function createKnowledgeBaseStore({ app, db }) {
     return {
       id: row.folder_id,
       name: row.name,
+      sort_order: Number(row.sort_order || 0),
       created_at: row.created_at,
       updated_at: row.updated_at,
     };
@@ -213,12 +239,12 @@ function createKnowledgeBaseStore({ app, db }) {
       INSERT INTO knowledge_documents (
         document_id, folder_id, file_name, document_dir, source_path, markdown_path, markdown_hash, markdown_chars,
         source_extension, status, progress, message, error, item_count, block_count, filtered_block_count,
-        candidate_item_count, discarded_block_count, system_discarded_after_retry_count, last_batch_size, parser_label,
+        candidate_item_count, discarded_block_count, system_discarded_after_retry_count, last_batch_size, parser_label, sort_order,
         created_at, updated_at
       ) VALUES (
         @document_id, @folder_id, @file_name, @document_dir, @source_path, @markdown_path, @markdown_hash, @markdown_chars,
         @source_extension, @status, @progress, @message, @error, @item_count, @block_count, @filtered_block_count,
-        @candidate_item_count, @discarded_block_count, @system_discarded_after_retry_count, @last_batch_size, @parser_label,
+        @candidate_item_count, @discarded_block_count, @system_discarded_after_retry_count, @last_batch_size, @parser_label, @sort_order,
         @created_at, @updated_at
       ) ON CONFLICT(document_id) DO UPDATE SET
         folder_id = excluded.folder_id,
@@ -241,6 +267,7 @@ function createKnowledgeBaseStore({ app, db }) {
         system_discarded_after_retry_count = excluded.system_discarded_after_retry_count,
         last_batch_size = excluded.last_batch_size,
         parser_label = excluded.parser_label,
+        sort_order = excluded.sort_order,
         updated_at = excluded.updated_at
     `).run({
       document_id: normalized.id,
@@ -264,6 +291,7 @@ function createKnowledgeBaseStore({ app, db }) {
       system_discarded_after_retry_count: normalized.system_discarded_after_retry_count,
       last_batch_size: normalized.last_batch_size === undefined ? null : normalized.last_batch_size,
       parser_label: normalized.parser_label || null,
+      sort_order: Number(normalized.sort_order || 0),
       created_at: normalized.created_at,
       updated_at: normalized.updated_at,
     });
@@ -273,25 +301,54 @@ function createKnowledgeBaseStore({ app, db }) {
   function list() {
     ensureBaseDir();
     const folders = db.prepare('SELECT * FROM knowledge_folders ORDER BY sort_order ASC, created_at ASC').all().map(folderFromRow);
-    const documents = db.prepare('SELECT * FROM knowledge_documents ORDER BY created_at DESC').all().map(documentFromRow);
+    const documents = db.prepare(`
+      SELECT d.*
+      FROM knowledge_documents d
+      LEFT JOIN knowledge_folders f ON f.folder_id = d.folder_id
+      ORDER BY COALESCE(f.sort_order, 0) ASC, d.folder_id ASC, d.sort_order ASC, d.created_at DESC, d.document_id ASC
+    `).all().map(documentFromRow);
     return { folders, documents };
   }
 
   function recoverInterruptedDocuments(activeDocumentIds = []) {
     const activeIds = new Set((Array.isArray(activeDocumentIds) ? activeDocumentIds : []).map((id) => String(id || '')).filter(Boolean));
+    const legacyRows = db.prepare(`
+      SELECT d.document_id
+      FROM knowledge_documents d
+      WHERE d.status != 'success'
+        AND NOT EXISTS (
+          SELECT 1 FROM knowledge_document_steps s WHERE s.document_id = d.document_id LIMIT 1
+        )
+    `).all();
+    const interruptedStatuses = ['pending', 'copying', 'converting', 'extracting', 'matching', 'recovering', 'analyzing', 'saving'];
     const placeholders = interruptedStatuses.map(() => '?').join(', ');
-    const rows = db.prepare(`SELECT document_id FROM knowledge_documents WHERE status IN (${placeholders})`).all(...interruptedStatuses);
-    const staleIds = rows.map((row) => row.document_id).filter((documentId) => !activeIds.has(documentId));
-    if (!staleIds.length) return [];
+    const interruptedRows = db.prepare(`
+      SELECT d.document_id
+      FROM knowledge_documents d
+      WHERE d.status IN (${placeholders})
+        AND EXISTS (
+          SELECT 1 FROM knowledge_document_steps s WHERE s.document_id = d.document_id LIMIT 1
+        )
+    `).all(...interruptedStatuses);
+    const legacyIds = legacyRows.map((row) => row.document_id).filter((documentId) => !activeIds.has(documentId));
+    const interruptedIds = interruptedRows.map((row) => row.document_id).filter((documentId) => !activeIds.has(documentId));
+    if (!legacyIds.length && !interruptedIds.length) return [];
     const timestamp = now();
-    const message = '上次任务未完成，请重新执行';
-    const update = db.prepare(`
+    const updateLegacy = db.prepare(`
       UPDATE knowledge_documents
-      SET status = 'error', progress = 100, message = @message, error = @message, updated_at = @updated_at
+      SET status = 'error', progress = 0, message = @message, error = @message, updated_at = @updated_at
       WHERE document_id = @document_id
     `);
-    staleIds.forEach((documentId) => update.run({ document_id: documentId, message, updated_at: timestamp }));
-    return staleIds.map((documentId) => getDocument(documentId));
+    const updateInterrupted = db.prepare(`
+      UPDATE knowledge_documents
+      SET status = 'error', message = @message, error = @message, updated_at = @updated_at
+      WHERE document_id = @document_id
+    `);
+    const legacyMessage = '上次任务未完成，请点击重试重新解析';
+    const interruptedMessage = '上次任务中断，请点击重试继续处理';
+    legacyIds.forEach((documentId) => updateLegacy.run({ document_id: documentId, message: legacyMessage, updated_at: timestamp }));
+    interruptedIds.forEach((documentId) => updateInterrupted.run({ document_id: documentId, message: interruptedMessage, updated_at: timestamp }));
+    return [...new Set([...legacyIds, ...interruptedIds])].map((documentId) => getDocument(documentId));
   }
 
   function getDocument(documentId) {
@@ -328,8 +385,110 @@ function createKnowledgeBaseStore({ app, db }) {
     return document;
   }
 
+  function getNextDocumentSortOrder(folderId) {
+    return Number(db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS value FROM knowledge_documents WHERE folder_id = ?').get(folderId)?.value ?? -1) + 1;
+  }
+
+  function reorderIds(ids, draggedId, targetId, position) {
+    const draggedIndex = ids.indexOf(draggedId);
+    const targetIndex = ids.indexOf(targetId);
+    if (draggedIndex < 0 || targetIndex < 0 || draggedId === targetId) return ids;
+    const next = [...ids];
+    const [dragged] = next.splice(draggedIndex, 1);
+    const adjustedTargetIndex = next.indexOf(targetId);
+    next.splice(position === 'before' ? adjustedTargetIndex : adjustedTargetIndex + 1, 0, dragged);
+    return next;
+  }
+
+  function resequenceFolderIds(folderIds) {
+    const timestamp = now();
+    const update = db.prepare('UPDATE knowledge_folders SET sort_order = ?, updated_at = ? WHERE folder_id = ?');
+    folderIds.forEach((folderId, index) => update.run(index, timestamp, folderId));
+  }
+
+  function resequenceDocumentIds(folderId, documentIds, timestamp = now()) {
+    const update = db.prepare('UPDATE knowledge_documents SET sort_order = ?, updated_at = ? WHERE document_id = ? AND folder_id = ?');
+    documentIds.forEach((documentId, index) => update.run(index, timestamp, documentId, folderId));
+  }
+
+  function getOrderedDocumentIds(folderId, excludedDocumentId) {
+    const rows = db.prepare(`
+      SELECT document_id
+      FROM knowledge_documents
+      WHERE folder_id = ? AND document_id != ?
+      ORDER BY sort_order ASC, created_at DESC, document_id ASC
+    `).all(folderId, excludedDocumentId || '');
+    return rows.map((row) => row.document_id);
+  }
+
   function createDocument(document) {
-    return insertOrUpdateDocument(document);
+    const withOrder = hasOwn(document, 'sort_order') || hasOwn(document, 'sortOrder')
+      ? document
+      : { ...document, sort_order: getNextDocumentSortOrder(document?.folder_id || document?.folderId || 'unknown') };
+    return insertOrUpdateDocument(withOrder);
+  }
+
+  function reorderFolders(draggedFolderId, targetFolderId, position) {
+    const normalizedPosition = normalizeDropPosition(position);
+    const folderIds = db.prepare('SELECT folder_id FROM knowledge_folders ORDER BY sort_order ASC, created_at ASC').all().map((row) => row.folder_id);
+    if (!folderIds.includes(draggedFolderId) || !folderIds.includes(targetFolderId)) {
+      throw new Error('知识库文件夹不存在');
+    }
+    if (draggedFolderId === targetFolderId) return list();
+    db.transaction(() => resequenceFolderIds(reorderIds(folderIds, draggedFolderId, targetFolderId, normalizedPosition)))();
+    return list();
+  }
+
+  function moveDocument(documentId, targetFolderId, options = {}) {
+    const document = getDocument(documentId);
+    const folder = db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(targetFolderId);
+    if (!folder) throw new Error('目标知识库文件夹不存在');
+
+    const targetDocumentId = options.targetDocumentId ? String(options.targetDocumentId) : '';
+    const normalizedPosition = normalizeDropPosition(options.position);
+    const targetDocument = targetDocumentId ? getDocument(targetDocumentId) : null;
+    if (targetDocument && targetDocument.folder_id !== targetFolderId) {
+      throw new Error('目标文档不在目标文件夹中');
+    }
+
+    const timestamp = now();
+    const targetIds = getOrderedDocumentIds(targetFolderId, documentId);
+    const insertIndex = targetDocumentId
+      ? Math.max(0, targetIds.indexOf(targetDocumentId)) + (normalizedPosition === 'after' ? 1 : 0)
+      : targetIds.length;
+    if (targetDocumentId && !targetIds.includes(targetDocumentId)) {
+      throw new Error('目标文档不存在');
+    }
+    const nextTargetIds = [...targetIds];
+    nextTargetIds.splice(insertIndex, 0, documentId);
+
+    const updateDocumentLocation = db.prepare(`
+      UPDATE knowledge_documents
+      SET folder_id = @folder_id,
+        document_dir = COALESCE(@document_dir, document_dir),
+        source_path = COALESCE(@source_path, source_path),
+        markdown_path = COALESCE(@markdown_path, markdown_path),
+        sort_order = @sort_order,
+        updated_at = @updated_at
+      WHERE document_id = @document_id
+    `);
+    const transaction = db.transaction(() => {
+      if (document.folder_id !== targetFolderId) {
+        resequenceDocumentIds(document.folder_id, getOrderedDocumentIds(document.folder_id, documentId), timestamp);
+      }
+      updateDocumentLocation.run({
+        document_id: documentId,
+        folder_id: targetFolderId,
+        document_dir: options.documentDir || null,
+        source_path: options.sourcePath || null,
+        markdown_path: options.markdownPath || null,
+        sort_order: insertIndex,
+        updated_at: timestamp,
+      });
+      resequenceDocumentIds(targetFolderId, nextTargetIds, timestamp);
+    });
+    transaction();
+    return { index: list(), document: getDocument(documentId) };
   }
 
   function updateDocument(documentId, partial = {}) {
@@ -605,6 +764,230 @@ function createKnowledgeBaseStore({ app, db }) {
       });
     });
     transaction();
+  }
+
+  function stepFromRow(row) {
+    if (!row) return null;
+    return {
+      document_id: row.document_id,
+      step_key: row.step_key,
+      status: normalizeStepStatus(row.status),
+      result: safeJsonParse(row.result_json, null),
+      error: row.error || undefined,
+      started_at: row.started_at || undefined,
+      completed_at: row.completed_at || undefined,
+      updated_at: row.updated_at,
+    };
+  }
+
+  function assertDocumentStepKey(stepKey) {
+    if (!documentStepKeys.includes(stepKey)) {
+      throw new Error(`未知知识库处理步骤：${stepKey}`);
+    }
+  }
+
+  function getDocumentStep(documentId, stepKey) {
+    getDocument(documentId);
+    assertDocumentStepKey(stepKey);
+    return stepFromRow(db.prepare('SELECT * FROM knowledge_document_steps WHERE document_id = ? AND step_key = ?').get(documentId, stepKey));
+  }
+
+  function saveDocumentStep(documentId, stepKey, fields = {}) {
+    getDocument(documentId);
+    assertDocumentStepKey(stepKey);
+    const timestamp = now();
+    const current = db.prepare('SELECT * FROM knowledge_document_steps WHERE document_id = ? AND step_key = ?').get(documentId, stepKey);
+    const status = normalizeStepStatus(fields.status || current?.status || 'idle');
+    let startedAt = current?.started_at || null;
+    let completedAt = current?.completed_at || null;
+    let error = hasOwn(fields, 'error') ? fields.error ? String(fields.error) : null : current?.error || null;
+
+    if (status === 'running') {
+      startedAt = timestamp;
+      completedAt = null;
+      error = null;
+    } else if (status === 'success') {
+      startedAt = startedAt || timestamp;
+      completedAt = timestamp;
+      error = null;
+    } else if (status === 'error') {
+      startedAt = startedAt || timestamp;
+      completedAt = timestamp;
+      error = error || '处理失败';
+    } else {
+      startedAt = null;
+      completedAt = null;
+      error = null;
+    }
+
+    const resultJson = hasOwn(fields, 'result') ? jsonOrNull(fields.result) : current?.result_json || null;
+    db.prepare(`
+      INSERT INTO knowledge_document_steps (document_id, step_key, status, result_json, error, started_at, completed_at, updated_at)
+      VALUES (@document_id, @step_key, @status, @result_json, @error, @started_at, @completed_at, @updated_at)
+      ON CONFLICT(document_id, step_key) DO UPDATE SET
+        status = excluded.status,
+        result_json = excluded.result_json,
+        error = excluded.error,
+        started_at = excluded.started_at,
+        completed_at = excluded.completed_at,
+        updated_at = excluded.updated_at
+    `).run({
+      document_id: documentId,
+      step_key: stepKey,
+      status,
+      result_json: resultJson,
+      error,
+      started_at: startedAt,
+      completed_at: completedAt,
+      updated_at: timestamp,
+    });
+    return getDocumentStep(documentId, stepKey);
+  }
+
+  function batchFromRow(row) {
+    if (!row) return null;
+    return {
+      document_id: row.document_id,
+      batch_index: Number(row.batch_index || 0),
+      status: normalizeStepStatus(row.status),
+      item_ids: safeJsonParse(row.item_ids_json, []),
+      matches: safeJsonParse(row.matches_json, []),
+      error: row.error || undefined,
+      started_at: row.started_at || undefined,
+      completed_at: row.completed_at || undefined,
+      updated_at: row.updated_at,
+    };
+  }
+
+  function getMatchBatch(documentId, batchIndex) {
+    getDocument(documentId);
+    return batchFromRow(db.prepare('SELECT * FROM knowledge_match_batches WHERE document_id = ? AND batch_index = ?').get(documentId, Number(batchIndex || 0)));
+  }
+
+  function readMatchBatches(documentId) {
+    getDocument(documentId);
+    return db.prepare('SELECT * FROM knowledge_match_batches WHERE document_id = ? ORDER BY batch_index ASC').all(documentId).map(batchFromRow);
+  }
+
+  function saveMatchBatch(documentId, batchIndex, fields = {}) {
+    getDocument(documentId);
+    const index = Number(batchIndex || 0);
+    const timestamp = now();
+    const current = db.prepare('SELECT * FROM knowledge_match_batches WHERE document_id = ? AND batch_index = ?').get(documentId, index);
+    const status = normalizeStepStatus(fields.status || current?.status || 'idle');
+    let startedAt = current?.started_at || null;
+    let completedAt = current?.completed_at || null;
+    let error = hasOwn(fields, 'error') ? fields.error ? String(fields.error) : null : current?.error || null;
+
+    if (status === 'running') {
+      startedAt = timestamp;
+      completedAt = null;
+      error = null;
+    } else if (status === 'success') {
+      startedAt = startedAt || timestamp;
+      completedAt = timestamp;
+      error = null;
+    } else if (status === 'error') {
+      startedAt = startedAt || timestamp;
+      completedAt = timestamp;
+      error = error || '处理失败';
+    } else {
+      startedAt = null;
+      completedAt = null;
+      error = null;
+    }
+
+    const itemIdsJson = hasOwn(fields, 'itemIds') ? jsonOrNull(fields.itemIds) || '[]' : current?.item_ids_json || '[]';
+    const matchesJson = hasOwn(fields, 'matches') ? jsonOrNull(fields.matches) : current?.matches_json || null;
+    db.prepare(`
+      INSERT INTO knowledge_match_batches (document_id, batch_index, status, item_ids_json, matches_json, error, started_at, completed_at, updated_at)
+      VALUES (@document_id, @batch_index, @status, @item_ids_json, @matches_json, @error, @started_at, @completed_at, @updated_at)
+      ON CONFLICT(document_id, batch_index) DO UPDATE SET
+        status = excluded.status,
+        item_ids_json = excluded.item_ids_json,
+        matches_json = excluded.matches_json,
+        error = excluded.error,
+        started_at = excluded.started_at,
+        completed_at = excluded.completed_at,
+        updated_at = excluded.updated_at
+    `).run({
+      document_id: documentId,
+      batch_index: index,
+      status,
+      item_ids_json: itemIdsJson,
+      matches_json: matchesJson,
+      error,
+      started_at: startedAt,
+      completed_at: completedAt,
+      updated_at: timestamp,
+    });
+    return getMatchBatch(documentId, index);
+  }
+
+  function deleteDocumentStepsFrom(documentId, stepKey) {
+    assertDocumentStepKey(stepKey);
+    const startIndex = documentStepKeys.indexOf(stepKey);
+    const keys = documentStepKeys.slice(startIndex);
+    if (!keys.length) return;
+    const placeholders = keys.map(() => '?').join(', ');
+    db.prepare(`DELETE FROM knowledge_document_steps WHERE document_id = ? AND step_key IN (${placeholders})`).run(documentId, ...keys);
+  }
+
+  function clearFinalArtifacts(documentId) {
+    db.prepare('DELETE FROM knowledge_item_blocks WHERE document_id = ?').run(documentId);
+    db.prepare('DELETE FROM knowledge_items WHERE document_id = ?').run(documentId);
+    db.prepare('DELETE FROM knowledge_discarded_groups WHERE document_id = ?').run(documentId);
+    db.prepare('DELETE FROM knowledge_reports WHERE document_id = ?').run(documentId);
+  }
+
+  function clearMatchBatches(documentId) {
+    getDocument(documentId);
+    db.prepare('DELETE FROM knowledge_match_batches WHERE document_id = ?').run(documentId);
+  }
+
+  function clearDocumentProcessingFromStep(documentId, stepKey) {
+    getDocument(documentId);
+    assertDocumentStepKey(stepKey);
+    const startIndex = documentStepKeys.indexOf(stepKey);
+    const transaction = db.transaction(() => {
+      deleteDocumentStepsFrom(documentId, stepKey);
+      if (startIndex <= documentStepKeys.indexOf('convert_markdown')) {
+        db.prepare(`
+          UPDATE knowledge_documents
+          SET markdown_hash = NULL, markdown_chars = 0, parser_label = NULL, updated_at = ?
+          WHERE document_id = ?
+        `).run(now(), documentId);
+      }
+      if (startIndex <= documentStepKeys.indexOf('build_blocks')) {
+        db.prepare('DELETE FROM knowledge_blocks WHERE document_id = ?').run(documentId);
+      }
+      if (startIndex <= documentStepKeys.indexOf('merge_candidates')) {
+        db.prepare('DELETE FROM knowledge_candidate_items WHERE document_id = ?').run(documentId);
+      }
+      if (startIndex <= documentStepKeys.indexOf('match_batches')) {
+        db.prepare('DELETE FROM knowledge_match_batches WHERE document_id = ?').run(documentId);
+      }
+      if (startIndex <= documentStepKeys.indexOf('save_result')) {
+        clearFinalArtifacts(documentId);
+      }
+
+      const resetFields = {
+        error: null,
+        last_batch_size: null,
+      };
+      if (startIndex <= documentStepKeys.indexOf('build_blocks')) {
+        Object.assign(resetFields, { block_count: 0, filtered_block_count: 0 });
+      }
+      if (startIndex <= documentStepKeys.indexOf('merge_candidates')) {
+        Object.assign(resetFields, { candidate_item_count: 0 });
+      }
+      if (startIndex <= documentStepKeys.indexOf('save_result')) {
+        Object.assign(resetFields, { item_count: 0, discarded_block_count: 0, system_discarded_after_retry_count: 0 });
+      }
+      updateDocument(documentId, resetFields);
+    });
+    transaction();
+    return getDocument(documentId);
   }
 
   function readItems(documentId) {
@@ -989,14 +1372,23 @@ function createKnowledgeBaseStore({ app, db }) {
   return {
     list,
     createFolder,
+    reorderFolders,
     renameFolder,
     deleteFolder,
     deleteDocument,
     createDocument,
+    moveDocument,
     updateDocument,
     updateMarkdownMetadata,
     getDocument,
     recoverInterruptedDocuments,
+    getDocumentStep,
+    saveDocumentStep,
+    clearDocumentProcessingFromStep,
+    clearMatchBatches,
+    getMatchBatch,
+    readMatchBatches,
+    saveMatchBatch,
     readMarkdown,
     saveBlocks: saveBlocksTransaction,
     readBlocks,

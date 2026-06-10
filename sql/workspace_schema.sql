@@ -568,13 +568,14 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
   system_discarded_after_retry_count INTEGER NOT NULL DEFAULT 0,
   last_batch_size INTEGER,
   parser_label TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (folder_id) REFERENCES knowledge_folders(folder_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_folder_order
-ON knowledge_documents(folder_id, created_at DESC);
+ON knowledge_documents(folder_id, sort_order, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_status
 ON knowledge_documents(status);
@@ -695,3 +696,38 @@ CREATE TABLE IF NOT EXISTS knowledge_reports (
   created_at TEXT NOT NULL,
   FOREIGN KEY (document_id) REFERENCES knowledge_documents(document_id) ON DELETE CASCADE
 );
+
+-- 知识库文档处理步骤状态，用于失败后从可信断点重试。
+CREATE TABLE IF NOT EXISTS knowledge_document_steps (
+  document_id TEXT NOT NULL,
+  step_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'idle',
+  result_json TEXT,
+  error TEXT,
+  started_at TEXT,
+  completed_at TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (document_id, step_key),
+  FOREIGN KEY (document_id) REFERENCES knowledge_documents(document_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_document_steps_status
+ON knowledge_document_steps(document_id, status);
+
+-- 知识库段落匹配批次状态，用于只重试失败或缺失的批次。
+CREATE TABLE IF NOT EXISTS knowledge_match_batches (
+  document_id TEXT NOT NULL,
+  batch_index INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'idle',
+  item_ids_json TEXT NOT NULL DEFAULT '[]',
+  matches_json TEXT,
+  error TEXT,
+  started_at TEXT,
+  completed_at TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (document_id, batch_index),
+  FOREIGN KEY (document_id) REFERENCES knowledge_documents(document_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_match_batches_status
+ON knowledge_match_batches(document_id, status, batch_index);

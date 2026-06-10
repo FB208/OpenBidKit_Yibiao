@@ -1,4 +1,4 @@
-import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import type { Components } from 'react-markdown';
 import { trackPageView } from '../../../shared/analytics/analytics';
@@ -38,6 +38,15 @@ const statusLabels: Record<KnowledgeDocument['status'], string> = {
 };
 
 type RenderDebugKind = 'item-source' | 'document-markdown' | 'document-items';
+type KnowledgeDropPosition = 'before' | 'after';
+type KnowledgeDragPayload =
+  | { kind: 'folder'; folderId: string }
+  | { kind: 'document'; documentId: string; folderId: string };
+
+interface KnowledgeDocumentDropTarget {
+  documentId: string;
+  position: KnowledgeDropPosition;
+}
 
 interface RenderDebugTrace {
   id: string;
@@ -315,7 +324,12 @@ function KnowledgeBasePage() {
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [retryingDocumentIds, setRetryingDocumentIds] = useState<Set<string>>(() => new Set());
   const [visibleDocumentCount, setVisibleDocumentCount] = useState(documentRenderBatchSize);
+  const [dragPayload, setDragPayload] = useState<KnowledgeDragPayload | null>(null);
+  const [folderDropTargetId, setFolderDropTargetId] = useState<string | null>(null);
+  const [documentDropTarget, setDocumentDropTarget] = useState<KnowledgeDocumentDropTarget | null>(null);
+  const [dragSaving, setDragSaving] = useState(false);
   const autoMatchingIdsRef = useRef(new Set<string>());
   const documentParseNoticeIdsRef = useRef(new Set<string>());
   const viewerRequestIdRef = useRef(0);
@@ -451,6 +465,101 @@ function KnowledgeBasePage() {
     setActiveFolderId((currentId) => (
       data.folders.some((folder) => folder.id === currentId) ? currentId : data.folders[0]?.id || ''
     ));
+  };
+
+  const clearDragState = () => {
+    setDragPayload(null);
+    setFolderDropTargetId(null);
+    setDocumentDropTarget(null);
+  };
+
+  const getDropPosition = (event: DragEvent<HTMLElement>): KnowledgeDropPosition => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+  };
+
+  const startFolderDrag = (event: DragEvent<HTMLElement>, folderId: string) => {
+    if (migrationRunning || dragSaving) {
+      event.preventDefault();
+      return;
+    }
+    event.stopPropagation();
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', `folder:${folderId}`);
+    setDragPayload({ kind: 'folder', folderId });
+  };
+
+  const startDocumentDrag = (event: DragEvent<HTMLElement>, document: KnowledgeDocument) => {
+    if (migrationRunning || dragSaving || !canMoveKnowledgeDocument(document)) {
+      event.preventDefault();
+      return;
+    }
+    event.stopPropagation();
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', `document:${document.id}`);
+    setDragPayload({ kind: 'document', documentId: document.id, folderId: document.folder_id });
+  };
+
+  const handleFolderDragOver = (event: DragEvent<HTMLElement>, folderId: string) => {
+    if (!dragPayload || migrationRunning || dragSaving) return;
+    if (dragPayload.kind === 'folder' && dragPayload.folderId === folderId) return;
+    if (dragPayload.kind === 'document' && dragPayload.folderId === folderId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    setFolderDropTargetId(folderId);
+    setDocumentDropTarget(null);
+  };
+
+  const handleFolderDrop = async (event: DragEvent<HTMLElement>, folderId: string) => {
+    if (!dragPayload || migrationRunning || dragSaving) return;
+    event.preventDefault();
+    const payload = dragPayload;
+    const position = getDropPosition(event);
+    setDragSaving(true);
+    try {
+      const result = payload.kind === 'folder'
+        ? await window.yibiao?.knowledgeBase.reorderFolder(payload.folderId, folderId, position)
+        : await window.yibiao?.knowledgeBase.moveDocument(payload.documentId, folderId, null, 'after');
+      if (!result?.success || !result.index) {
+        throw new Error(result?.message || '拖拽操作失败');
+      }
+      applyKnowledgeIndex(result.index);
+      showToast(result.message, 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '拖拽操作失败', 'error');
+    } finally {
+      setDragSaving(false);
+      clearDragState();
+    }
+  };
+
+  const handleDocumentDragOver = (event: DragEvent<HTMLElement>, document: KnowledgeDocument) => {
+    if (!dragPayload || dragPayload.kind !== 'document' || migrationRunning || dragSaving || dragPayload.documentId === document.id) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    setFolderDropTargetId(null);
+    setDocumentDropTarget({ documentId: document.id, position: getDropPosition(event) });
+  };
+
+  const handleDocumentDrop = async (event: DragEvent<HTMLElement>, document: KnowledgeDocument) => {
+    if (!dragPayload || dragPayload.kind !== 'document' || migrationRunning || dragSaving || dragPayload.documentId === document.id) return;
+    event.preventDefault();
+    const position = getDropPosition(event);
+    setDragSaving(true);
+    try {
+      const result = await window.yibiao?.knowledgeBase.moveDocument(dragPayload.documentId, document.folder_id, document.id, position);
+      if (!result?.success || !result.index) {
+        throw new Error(result?.message || '文档排序失败');
+      }
+      applyKnowledgeIndex(result.index);
+      setActiveFolderId(document.folder_id);
+      showToast(result.message, 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '文档排序失败', 'error');
+    } finally {
+      setDragSaving(false);
+      clearDragState();
+    }
   };
 
   const cancelMigration = () => {
@@ -629,6 +738,47 @@ function KnowledgeBasePage() {
       showToast(result?.message || '文档已删除', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '删除文档失败', 'error');
+    }
+  };
+
+  const retryDocument = async (document: KnowledgeDocument) => {
+    if (migrationRunning) {
+      showToast('知识库迁移中，请稍候', 'info');
+      return;
+    }
+
+    setRetryingDocumentIds((prev) => new Set(prev).add(document.id));
+    try {
+      const result = await window.yibiao?.knowledgeBase.retryDocument(document.id);
+      if (result?.document) {
+        const updatedDocument = result.document;
+        setIndex((prev) => ({ ...prev, documents: mergeDocuments(prev.documents, [updatedDocument]) }));
+        setViewer((prev) => (prev?.document.id === updatedDocument.id ? { ...prev, document: updatedDocument } : prev));
+        setAnalysisSnapshot((prev) => (prev?.document.id === updatedDocument.id ? { ...prev, document: updatedDocument } : prev));
+      }
+      if (!result?.success) {
+        const message = result?.message || '重试失败';
+        if (isLibreOfficeRequiredMessage(message)) {
+          showDocumentParseNotice(message);
+          return;
+        }
+        showToast(message, 'info');
+        return;
+      }
+      showToast(result.message || '已重新开始解析', 'success');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '重试失败';
+      if (isLibreOfficeRequiredMessage(message)) {
+        showDocumentParseNotice(message);
+        return;
+      }
+      showToast(message, 'error');
+    } finally {
+      setRetryingDocumentIds((prev) => {
+        const next = new Set(prev);
+        next.delete(document.id);
+        return next;
+      });
     }
   };
 
@@ -876,13 +1026,30 @@ function KnowledgeBasePage() {
             <div className="knowledge-folder-list">
               {index.folders.map((folder) => {
                 const count = documentsByFolder.get(folder.id)?.length || 0;
+                const dragging = dragPayload?.kind === 'folder' && dragPayload.folderId === folder.id;
+                const dropTarget = folderDropTargetId === folder.id;
                 return (
-                  <article key={folder.id} className={`knowledge-folder-card ${folder.id === activeFolder?.id ? 'is-active' : ''}`}>
-                    <button type="button" className="knowledge-folder-main" onClick={() => startTransition(() => setActiveFolderId(folder.id))} disabled={migrationRunning}>
-                      <span aria-hidden="true">F</span>
-                      <strong>{folder.name}</strong>
-                      <small>{count} 个文档</small>
-                    </button>
+                  <article
+                    key={folder.id}
+                    className={`knowledge-folder-card ${folder.id === activeFolder?.id ? 'is-active' : ''}${dragging ? ' is-dragging' : ''}${dropTarget ? ' is-drop-target' : ''}`}
+                    onDragOver={(event) => handleFolderDragOver(event, folder.id)}
+                    onDrop={(event) => { void handleFolderDrop(event, folder.id); }}
+                  >
+                    <div className="knowledge-folder-row">
+                      <span
+                        className="knowledge-drag-handle"
+                        draggable={!migrationRunning && !dragSaving}
+                        onDragStart={(event) => startFolderDrag(event, folder.id)}
+                        onDragEnd={clearDragState}
+                        title="拖拽排序"
+                        aria-hidden="true"
+                      >⋮⋮</span>
+                      <button type="button" className="knowledge-folder-main" onClick={() => startTransition(() => setActiveFolderId(folder.id))} disabled={migrationRunning}>
+                        <span aria-hidden="true">F</span>
+                        <strong>{folder.name}</strong>
+                        <small>{dropTarget && dragPayload?.kind === 'document' ? '松开移动到此文件夹' : `${count} 个文档`}</small>
+                      </button>
+                    </div>
                     <div className="knowledge-folder-actions">
                       <button type="button" onClick={() => void renameFolder(folder.id, folder.name)} disabled={migrationRunning}>重命名</button>
                       <button type="button" className="is-danger" onClick={() => void deleteFolder(folder.id, folder.name)} disabled={migrationRunning}>删除</button>
@@ -912,32 +1079,58 @@ function KnowledgeBasePage() {
             </div>
           ) : documents.length ? (
             <div className="knowledge-document-list">
-              {visibleDocuments.map((document) => (
-                <article className="knowledge-document-card" key={document.id}>
-                  <div className="knowledge-document-title">
-                    <div className="knowledge-document-name">
-                      <strong>{document.file_name}</strong>
-                      {developerMode && <code className="knowledge-entity-id">文档ID：{document.id}</code>}
+              {visibleDocuments.map((document) => {
+                const retrying = retryingDocumentIds.has(document.id);
+                const canDragDocument = canMoveKnowledgeDocument(document) && !migrationRunning && !dragSaving;
+                const dragging = dragPayload?.kind === 'document' && dragPayload.documentId === document.id;
+                const dropTarget = documentDropTarget?.documentId === document.id ? ` is-drop-${documentDropTarget.position}` : '';
+                return (
+                  <article
+                    className={`knowledge-document-card${dragging ? ' is-dragging' : ''}${dropTarget}`}
+                    key={document.id}
+                    onDragOver={(event) => handleDocumentDragOver(event, document)}
+                    onDrop={(event) => { void handleDocumentDrop(event, document); }}
+                  >
+                    <div className="knowledge-document-title">
+                      <div className="knowledge-document-title-main">
+                        <span
+                          className="knowledge-drag-handle"
+                          draggable={canDragDocument}
+                          onDragStart={(event) => startDocumentDrag(event, document)}
+                          onDragEnd={clearDragState}
+                          title={canDragDocument ? '拖拽排序或移动到文件夹' : '处理中，暂不可拖动'}
+                          aria-hidden="true"
+                        >⋮⋮</span>
+                        <div className="knowledge-document-name">
+                          <strong>{document.file_name}</strong>
+                          {developerMode && <code className="knowledge-entity-id">文档ID：{document.id}</code>}
+                        </div>
+                      </div>
+                      <span className={`knowledge-status is-${document.status}`}>{statusLabels[document.status]}</span>
                     </div>
-                    <span className={`knowledge-status is-${document.status}`}>{statusLabels[document.status]}</span>
-                  </div>
-                  <div className="knowledge-progress-track" aria-label={`处理进度 ${document.progress}%`}>
-                    <span style={{ width: `${Math.max(0, Math.min(100, document.progress || 0))}%` }} />
-                  </div>
-                  <div className="knowledge-document-meta">
-                    <span>{document.message}</span>
-                    <span>{document.item_count || 0} 条知识</span>
-                    <span>{document.candidate_item_count || 0} 个候选</span>
-                    <span>{document.block_count || 0} 个 block</span>
-                  </div>
-                  <div className="knowledge-document-actions">
-                    {developerMode && <button type="button" onClick={() => void openDocument(document, 'analysis')} disabled={migrationRunning || !canOpenAnalysis(document)}>分析调试</button>}
-                    <button type="button" onClick={() => void openDocument(document, 'items')} disabled={migrationRunning || document.status !== 'success'}>查看条目</button>
-                    <button type="button" onClick={() => void openDocument(document, 'markdown')} disabled={migrationRunning || !canOpenMarkdown(document)}>查看 Markdown</button>
-                    <button type="button" className="is-danger" onClick={() => void deleteDocument(document)} disabled={migrationRunning}>删除</button>
-                  </div>
-                </article>
-              ))}
+                    <div className="knowledge-progress-track" aria-label={`处理进度 ${document.progress}%`}>
+                      <span style={{ width: `${Math.max(0, Math.min(100, document.progress || 0))}%` }} />
+                    </div>
+                    <div className="knowledge-document-meta">
+                      <span>{document.message}</span>
+                      <span>{document.item_count || 0} 条知识</span>
+                      <span>{document.candidate_item_count || 0} 个候选</span>
+                      <span>{document.block_count || 0} 个 block</span>
+                    </div>
+                    <div className="knowledge-document-actions">
+                      {developerMode && <button type="button" onClick={() => void openDocument(document, 'analysis')} disabled={migrationRunning || !canOpenAnalysis(document)}>分析调试</button>}
+                      <button type="button" onClick={() => void openDocument(document, 'items')} disabled={migrationRunning || document.status !== 'success'}>查看条目</button>
+                      <button type="button" onClick={() => void openDocument(document, 'markdown')} disabled={migrationRunning || !canOpenMarkdown(document)}>查看 Markdown</button>
+                      {document.status === 'error' && (
+                        <button type="button" className="is-retry" onClick={() => void retryDocument(document)} disabled={migrationRunning || retrying}>
+                          {retrying ? '重试中...' : '重试'}
+                        </button>
+                      )}
+                      <button type="button" className="is-danger" onClick={() => void deleteDocument(document)} disabled={migrationRunning}>删除</button>
+                    </div>
+                  </article>
+                );
+              })}
               {visibleDocuments.length < documents.length && (
                 <div className="knowledge-empty-box">
                   <strong>正在加载更多文档...</strong>
@@ -1449,6 +1642,10 @@ function canOpenAnalysis(document: KnowledgeDocument) {
 
 function canOpenMarkdown(document: KnowledgeDocument) {
   return !['pending', 'copying'].includes(document.status);
+}
+
+function canMoveKnowledgeDocument(document: KnowledgeDocument) {
+  return ['ready_for_matching', 'success', 'error'].includes(document.status);
 }
 
 function getMigrationCounts(status: KnowledgeBaseMigrationStatus) {

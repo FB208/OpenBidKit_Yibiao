@@ -56,6 +56,12 @@ export interface KnowledgeBaseStartMatchingResult {
   document?: KnowledgeDocument;
 }
 
+export interface KnowledgeBaseRetryDocumentResult {
+  success: boolean;
+  message: string;
+  document?: KnowledgeDocument;
+}
+
 export interface KnowledgeBaseMigrationStatus {
   needsMigration: boolean;
   legacyFolderCount: number;
@@ -82,11 +88,17 @@ export interface KnowledgeBaseMutationResult {
   message: string;
 }
 
+export interface KnowledgeBaseIndexMutationResult extends KnowledgeBaseMutationResult {
+  index: KnowledgeBaseIndex;
+  document?: KnowledgeDocument;
+}
+
 export type KnowledgeDocumentStatus = 'pending' | 'copying' | 'converting' | 'extracting' | 'ready_for_matching' | 'matching' | 'recovering' | 'analyzing' | 'saving' | 'success' | 'error';
 
 export interface KnowledgeFolder {
   id: string;
   name: string;
+  sort_order?: number;
   created_at: string;
   updated_at: string;
 }
@@ -105,6 +117,7 @@ export interface KnowledgeDocument {
   discarded_block_count?: number;
   system_discarded_after_retry_count?: number;
   last_batch_size?: number;
+  sort_order?: number;
   created_at: string;
   updated_at: string;
   error?: string;
