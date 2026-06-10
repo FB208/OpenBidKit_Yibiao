@@ -1188,6 +1188,7 @@ button {
   display: grid;
   min-width: 0;
   gap: 9px;
+  padding-right: 132px;
 }
 
 .resource-book-meta {
@@ -1222,6 +1223,25 @@ button {
   color: var(--yb-text-soft);
   font-size: 13px;
   line-height: 1.72;
+}
+
+.resource-book-stats {
+  position: absolute;
+  top: 17px;
+  right: 22px;
+  z-index: 1;
+  display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  align-items: center;
+  padding: 5px 10px;
+  color: #36547c;
+  font-size: 12px;
+  font-weight: 800;
+  background: rgba(33, 116, 253, 0.07);
+  border: 1px solid rgba(33, 116, 253, 0.12);
+  border-radius: 999px;
+  box-shadow: 0 8px 18px rgba(33, 116, 253, 0.08);
 }
 
 .resources-empty-state {
@@ -1373,6 +1393,15 @@ button {
     grid-template-columns: 76px minmax(0, 1fr);
     gap: 16px;
     padding: 16px;
+  }
+
+  .resource-book-copy {
+    padding-right: 0;
+  }
+
+  .resource-book-stats {
+    top: 12px;
+    right: 14px;
   }
 
   .resource-book-row::after {

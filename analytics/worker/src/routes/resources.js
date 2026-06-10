@@ -34,7 +34,8 @@ export async function handlePublicResources(request, env, url) {
       query: url.searchParams.get('q') || url.searchParams.get('query') || '',
       origin: url.origin,
     });
-    return json({ code: 0, resources }, { headers: { 'Cache-Control': 'no-store' } });
+    const resourcesWithStats = await attachResourceClickStats(env, resources, url);
+    return json({ code: 0, resources: resourcesWithStats }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('[analytics] public resources failed', error?.message || String(error));
     return json({ code: 500, message: error?.message || 'resources query failed' }, { status: 500 });

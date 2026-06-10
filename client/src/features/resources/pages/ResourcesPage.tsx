@@ -11,12 +11,15 @@ interface ResourceItem {
   modalContent: string;
   imageUrl: string;
   analyticsKey: string;
+  clickCount: number;
 }
 
 type ResourceTone = 'blue' | 'violet' | 'cyan' | 'slate';
 
 const RESOURCES_ENDPOINT = 'https://analytics.agnet.top/resources';
+const RESOURCE_CLICK_DAYS = 30;
 const resourceTones: ResourceTone[] = ['blue', 'violet', 'cyan', 'slate'];
+const clickCountFormatter = new Intl.NumberFormat('zh-CN');
 
 interface ResourcesResponse {
   code: number;
@@ -38,7 +41,12 @@ function ResourcesPage() {
   const loadResources = async (query: string) => {
     setLoading(true);
     try {
-      const url = query.trim() ? `${RESOURCES_ENDPOINT}?q=${encodeURIComponent(query.trim())}` : RESOURCES_ENDPOINT;
+      const params = new URLSearchParams({ days: String(RESOURCE_CLICK_DAYS) });
+      if (query.trim()) {
+        params.set('q', query.trim());
+      }
+
+      const url = `${RESOURCES_ENDPOINT}?${params.toString()}`;
       const response = await fetch(url);
       const data = await response.json().catch(() => null) as ResourcesResponse | null;
       if (!response.ok || !data || data.code !== 0) {
@@ -99,6 +107,7 @@ function ResourcesPage() {
                   </span>
                   <strong className="resource-book-title">{item.title}</strong>
                   <span className="resource-book-description">{item.description}</span>
+                  <span className="resource-book-stats">近{RESOURCE_CLICK_DAYS}天点击 {formatResourceClickCount(item.clickCount)} 次</span>
                 </span>
               </button>
             ))}
@@ -170,7 +179,17 @@ function normalizeResource(item: ResourceItem): ResourceItem {
     modalContent: String(item.modalContent || ''),
     imageUrl: String(item.imageUrl || ''),
     analyticsKey: String(item.analyticsKey || ''),
+    clickCount: normalizeClickCount(item.clickCount),
   };
+}
+
+function normalizeClickCount(value: unknown) {
+  const count = Number(value || 0);
+  return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+}
+
+function formatResourceClickCount(value: number) {
+  return clickCountFormatter.format(normalizeClickCount(value));
 }
 
 function getCoverTitle(title: string) {
