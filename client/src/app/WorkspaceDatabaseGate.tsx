@@ -5,7 +5,6 @@ interface WorkspaceDatabaseGateProps {
   children: ReactNode;
 }
 
-const RELEASE_DOWNLOAD_URL = 'https://github.com/FB208/OpenBidKit_Yibiao/releases/latest';
 const DATABASE_VERSION_TOO_NEW_MARKER = '高于当前客户端支持版本';
 
 const phaseLabels: Record<WorkspaceDatabasePhase, string> = {
@@ -21,8 +20,11 @@ function WorkspaceDatabaseGate({ children }: WorkspaceDatabaseGateProps) {
   const [status, setStatus] = useState<WorkspaceDatabaseStatus | null>(null);
   const [showGate, setShowGate] = useState(false);
 
-  const openReleasePage = () => {
-    void window.yibiao?.openExternal(RELEASE_DOWNLOAD_URL);
+  const openReleasePage = async () => {
+    const url = await window.yibiao?.getUpdateDownloadUrl();
+    if (url) {
+      await window.yibiao?.openExternal(url);
+    }
   };
 
   useEffect(() => {
@@ -100,7 +102,7 @@ function WorkspaceDatabaseGate({ children }: WorkspaceDatabaseGateProps) {
           {showReleaseLink && (
             <div className="workspace-database-actions">
               <button type="button" className="primary-action" onClick={openReleasePage}>下载新版客户端</button>
-              <span>将打开最新 Release 页面，请下载并安装新版客户端后重试。</span>
+              <span>将打开当前自动更新渠道的新版下载地址，请下载并安装新版客户端后重试。</span>
             </div>
           )}
         </div>

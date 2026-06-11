@@ -5,6 +5,7 @@ const bridge = {
   platform: process.platform,
   getVersion: () => ipcRenderer.invoke('app:get-version'),
   getLatestVersion: () => ipcRenderer.invoke('app:get-latest-version'),
+  getUpdateDownloadUrl: () => ipcRenderer.invoke('app:get-update-download-url'),
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
   checkUpdate: () => ipcRenderer.invoke('app:check-update'),
   startUpdate: () => ipcRenderer.invoke('app:start-update'),

@@ -42,6 +42,7 @@ export type {
   TextModelConfig,
   TextModelProvider,
   TextModelProfiles,
+  UpdateChannel,
 } from './config';
 export type { AppMenuItem, SectionId } from './navigation';
 export type {

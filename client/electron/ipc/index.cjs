@@ -1,5 +1,4 @@
 const { ipcMain, shell } = require('electron');
-const https = require('node:https');
 const { registerAiIpc } = require('./aiIpc.cjs');
 const { registerConfigIpc } = require('./configIpc.cjs');
 const { registerDuplicateCheckIpc } = require('./duplicateCheckIpc.cjs');
@@ -162,7 +161,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, fileSe
   return { sqliteDatabase };
 }
 
-function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall }) {
+function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl }) {
   const configStore = createConfigStore(app);
   const aiService = createAiService({ app, configStore });
   const fileService = createFileService({ app, configStore });
@@ -217,34 +216,8 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     }
   });
 
-  ipcMain.handle('app:get-latest-version', () => {
-    return new Promise((resolve, reject) => {
-      const url = 'https://api.github.com/repos/FB208/OpenBidKit_Yibiao/releases/latest';
-      const request = https.get(url, { headers: { 'User-Agent': 'yibiao-client' } }, (response) => {
-        let data = '';
-        response.on('data', (chunk) => { data += chunk; });
-        response.on('end', () => {
-          try {
-            const release = JSON.parse(data);
-            resolve({
-              version: release.tag_name?.replace(/^v/, '') || '',
-              name: release.name || '',
-              body: release.body || '',
-              published_at: release.published_at || '',
-              html_url: release.html_url || '',
-            });
-          } catch (error) {
-            reject(new Error('解析 GitHub API 响应失败'));
-          }
-        });
-      });
-      request.on('error', (error) => reject(error));
-      request.setTimeout(10000, () => {
-        request.destroy();
-        reject(new Error('请求超时'));
-      });
-    });
-  });
+  ipcMain.handle('app:get-latest-version', () => getLatestVersion({ configStore }));
+  ipcMain.handle('app:get-update-download-url', () => getUpdateDownloadUrl({ configStore }));
   ipcMain.handle('app:quit-and-install', () => {
     quitAndInstall();
   });
@@ -254,6 +227,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     return checkAndDownloadUpdate({
       app,
       mainWindow,
+      configStore,
       onProgress: (percent) => {
         webContents.send('app:update-progress', { percent });
       },
@@ -271,6 +245,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     return triggerUpdateDownload({
       app,
       mainWindow,
+      configStore,
       onProgress: (percent) => {
         webContents.send('app:update-progress', { percent });
       },

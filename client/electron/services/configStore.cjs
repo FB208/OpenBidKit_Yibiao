@@ -6,6 +6,7 @@ const { getConfigFilePath } = require('../utils/paths.cjs');
 const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'longcat', 'custom'];
 const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'custom'];
 const aiRequestModes = ['normal', 'stream'];
+const updateChannels = ['github', 'cloudflare'];
 
 const textProviderBaseUrls = {
   jinlong: 'https://jlaudeapi.com/v1',
@@ -141,6 +142,7 @@ const defaultConfig = {
     provider: 'local',
     mineru_token: '',
   },
+  update_channel: 'github',
   export_format: defaultExportFormat,
   developer_mode: false,
   analytics_client_id: '',
@@ -165,6 +167,10 @@ function isImageModelProvider(value) {
 
 function normalizeAiRequestMode(value, fallback = 'stream') {
   return aiRequestModes.includes(value) ? value : fallback;
+}
+
+function normalizeUpdateChannel(value, fallback = defaultConfig.update_channel) {
+  return updateChannels.includes(value) ? value : fallback;
 }
 
 function normalizeTextModelProfile(provider, profile) {
@@ -350,6 +356,7 @@ function normalizeConfig(config) {
       provider: fileParser.provider || defaultConfig.file_parser.provider,
       mineru_token: fileParser.mineru_token || defaultConfig.file_parser.mineru_token,
     },
+    update_channel: normalizeUpdateChannel(source.update_channel),
     export_format: normalizeExportFormat(source.export_format),
     developer_mode: source.developer_mode === undefined ? defaultConfig.developer_mode : Boolean(source.developer_mode),
     analytics_client_id: source.analytics_client_id || defaultConfig.analytics_client_id,

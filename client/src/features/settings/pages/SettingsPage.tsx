@@ -3,7 +3,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, InputWithAction, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider } from '../../../shared/types';
+import type { AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'about';
@@ -16,6 +16,15 @@ const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
   { id: 'file-parser', label: '文件解析' },
   { id: 'about', label: '关于' },
 ];
+
+const updateChannelOptions: Array<{ value: UpdateChannel; label: string; description: string }> = [
+  { value: 'github', label: 'GitHub', description: '使用 GitHub Release 检查和下载更新' },
+  { value: 'cloudflare', label: 'Cloudflare', description: '使用 Cloudflare R2 镜像检查和下载更新' },
+];
+
+function normalizeUpdateChannel(value?: string): UpdateChannel {
+  return value === 'cloudflare' ? 'cloudflare' : 'github';
+}
 
 const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
   { value: 'jinlong', label: '金龙中转站【推荐】' },
@@ -320,6 +329,7 @@ const initialState: SettingsPageState = {
   },
   general: {
     developer_mode: false,
+    update_channel: 'github',
   },
 };
 
@@ -401,6 +411,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         },
         general: {
           developer_mode: Boolean(config.developer_mode),
+          update_channel: normalizeUpdateChannel(config.update_channel),
         },
       }));
       setSavedConfig(config);
@@ -440,6 +451,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         provider: state.fileParser.provider,
         mineru_token: state.fileParser.mineru_token || '',
       },
+      update_channel: state.general.update_channel,
       developer_mode: state.general.developer_mode,
     };
   };
@@ -550,6 +562,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       general: { ...prev.general, developer_mode: developerMode },
     }));
     onDeveloperModeChange?.(developerMode);
+  };
+
+  const updateUpdateChannel = (updateChannel: UpdateChannel) => {
+    setState((prev) => ({
+      ...prev,
+      general: { ...prev.general, update_channel: updateChannel },
+    }));
   };
 
   const updateTextModelProvider = (provider: TextModelProvider) => {
@@ -873,7 +892,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
 
     if (activeTab === 'general') {
-      return Boolean(state.general.developer_mode) !== Boolean(savedConfig.developer_mode);
+      return JSON.stringify({
+        developer_mode: Boolean(state.general.developer_mode),
+        update_channel: state.general.update_channel,
+      }) !== JSON.stringify({
+        developer_mode: Boolean(savedConfig.developer_mode),
+        update_channel: normalizeUpdateChannel(savedConfig.update_channel),
+      });
     }
 
     if (activeTab === 'image-model') {
@@ -1009,6 +1034,20 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <option value="classic">经典布局</option>
               </select>
             </div>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>自动更新渠道</strong>
+                <span>{updateChannelOptions.find((option) => option.value === state.general.update_channel)?.description || '选择自动检查更新和下载客户端安装包的来源'}</span>
+              </div>
+              <select
+                value={state.general.update_channel}
+                onChange={(event) => updateUpdateChannel(event.target.value as UpdateChannel)}
+              >
+                {updateChannelOptions.map((option) => (
+                  <option value={option.value} key={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>开发者模式</strong>

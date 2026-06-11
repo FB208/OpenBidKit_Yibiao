@@ -1,6 +1,6 @@
 import type { ChatCompletionRequest, JsonCompletionRequest } from './ai';
 import type { DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
-import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult } from './config';
+import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult, UpdateChannel } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMigrationResult, KnowledgeBaseMigrationStatus, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 import type { BidAnalysisMode, BidAnalysisTaskState, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
@@ -41,6 +41,8 @@ export interface LatestReleaseInfo {
   body: string;
   published_at: string;
   html_url: string;
+  download_url?: string;
+  channel?: UpdateChannel;
 }
 
 export interface UpdateCheckResult {
@@ -50,6 +52,7 @@ export interface UpdateCheckResult {
   downloaded?: boolean;
   failed?: boolean;
   message?: string;
+  channel?: UpdateChannel;
 }
 
 export type WorkspaceDatabasePhase = 'checking' | 'repairing' | 'backing-up' | 'upgrading' | 'ready' | 'error';
@@ -70,6 +73,7 @@ export interface YibiaoBridge {
   platform: string;
   getVersion: () => Promise<string>;
   getLatestVersion: () => Promise<LatestReleaseInfo>;
+  getUpdateDownloadUrl: () => Promise<string>;
   openExternal: (url: string) => Promise<{ success: boolean; message?: string }>;
   checkUpdate: () => Promise<UpdateCheckResult>;
   startUpdate: () => Promise<UpdateCheckResult>;
