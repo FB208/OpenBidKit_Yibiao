@@ -372,8 +372,8 @@ jobs:
           )
           gh release upload "$TAG_NAME" "${files[@]}" --clobber
 
-  sync-gitee-release:
-    name: Sync Gitee Release
+  publish-r2-release:
+    name: Publish R2 Release
     needs:
       - build-windows
       - publish-macos
@@ -390,24 +390,8 @@ jobs:
         with:
           node-version: 22
 
-      - name: Trigger Gitee pull mirror after release assets uploaded
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
-          GITEE_REPO: ${{ secrets.GITEE_REPO }}
-        run: |
-          if [ -z "$GITEE_TOKEN" ] || [ -z "$GITEE_OWNER" ] || [ -z "$GITEE_REPO" ]; then
-            echo "Gitee mirror secrets are missing."
-            exit 1
-          fi
-
-          sleep 30
-
-          response="$(curl --fail --show-error --silent --request POST --retry 3 --retry-all-errors --retry-delay 20 \
-            "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/remote_mirror/pull?access_token=${GITEE_TOKEN}"
-          )"
-
-          echo "Gitee mirror response: ${response}"
+      - name: Install R2 publish tooling
+        run: npm install --no-save --package-lock=false @aws-sdk/client-s3
 
       - name: Download GitHub Release assets
         env:
@@ -419,13 +403,15 @@ jobs:
           gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url > github-release.json
           ls -lah release-assets
 
-      - name: Sync Gitee Release assets
+      - name: Publish release assets to Cloudflare R2
         env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
-          GITEE_REPO: ${{ secrets.GITEE_REPO }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET || 'openbidkit' }}
+          R2_RELEASE_PREFIX: ${{ vars.R2_RELEASE_PREFIX || 'release' }}
+          R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
           RELEASE_ASSETS_DIR: release-assets
           GITHUB_RELEASE_JSON: github-release.json
-          GITEE_TAG_WAIT_SECONDS: 600
-        run: node .github/scripts/sync-gitee-release.mjs
+        run: node .github/scripts/publish-r2-release.mjs
