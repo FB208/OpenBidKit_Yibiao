@@ -3,7 +3,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, InputWithAction, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider } from '../../../shared/types';
+import type { AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'about';
@@ -25,12 +25,17 @@ const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
   { value: 'custom', label: '自定义' },
 ];
 
+const aiRequestModeOptions: Array<{ value: AiRequestMode; label: string }> = [
+  { value: 'normal', label: '普通请求' },
+  { value: 'stream', label: '流式请求' },
+];
+
 const textProviderDefaults: TextModelProfiles = {
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo' },
-  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '' },
-  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '' },
-  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '' },
-  custom: { api_key: '', base_url: '', model_name: '' },
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', request_mode: 'stream' },
+  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', request_mode: 'stream' },
+  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', request_mode: 'stream' },
+  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', request_mode: 'stream' },
+  custom: { api_key: '', base_url: '', model_name: '', request_mode: 'stream' },
 };
 
 const textProviderApiKeyUrls: Partial<Record<TextModelProvider, string>> = {
@@ -47,6 +52,10 @@ function createDefaultTextModelProfiles(): TextModelProfiles {
   }), {} as TextModelProfiles);
 }
 
+function normalizeAiRequestMode(value?: AiRequestMode): AiRequestMode {
+  return value === 'normal' ? 'normal' : 'stream';
+}
+
 function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partial<TextModelConfig>): TextModelConfig {
   const defaults = textProviderDefaults[provider];
   const baseUrl = provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url;
@@ -54,6 +63,7 @@ function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partia
     api_key: profile?.api_key ?? defaults.api_key,
     base_url: baseUrl,
     model_name: profile?.model_name ?? defaults.model_name,
+    request_mode: normalizeAiRequestMode(profile?.request_mode ?? defaults.request_mode),
   };
 }
 
@@ -69,6 +79,7 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
     api_key: textModel.api_key,
     base_url: textModel.provider === 'custom' ? textModel.base_url : textProviderDefaults[textModel.provider].base_url,
     model_name: textModel.model_name,
+    request_mode: textModel.request_mode,
   };
 }
 
@@ -85,6 +96,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: 'https://jlaudeapi.com/v1',
     api_key: '',
     model_name: '',
+    request_mode: 'stream',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -94,6 +106,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     api_key: '',
     model_name: '',
+    request_mode: 'stream',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -103,6 +116,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: 'https://generativelanguage.googleapis.com/v1beta',
     api_key: '',
     model_name: 'gemini-3.1-flash-image-preview',
+    request_mode: 'stream',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -112,6 +126,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: '',
     api_key: '',
     model_name: '',
+    request_mode: 'stream',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -174,6 +189,7 @@ function normalizeImageModelProfile(provider: ImageModelProvider, profile?: Part
     base_url: provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url,
     api_key: profile?.api_key ?? defaults.api_key,
     model_name: profile?.model_name ?? defaults.model_name,
+    request_mode: normalizeAiRequestMode(profile?.request_mode ?? defaults.request_mode),
     status: profile?.status ?? defaults.status,
     tested_at: profile?.tested_at ?? defaults.tested_at,
     last_error: profile?.last_error ?? defaults.last_error,
@@ -193,6 +209,7 @@ function imageProfileFromState(imageModel: ImageModelConfig): ImageModelConfig {
     base_url: imageModel.provider === 'custom' ? imageModel.base_url || '' : imageProviderDefaults[imageModel.provider].base_url,
     api_key: imageModel.api_key,
     model_name: imageModel.model_name,
+    request_mode: imageModel.request_mode,
     status: imageModel.status || 'untested',
     tested_at: imageModel.tested_at || '',
     last_error: imageModel.last_error || '',
@@ -416,6 +433,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       api_key: activeTextProfile.api_key,
       base_url: activeTextProfile.base_url,
       model_name: activeTextProfile.model_name,
+      request_mode: activeTextProfile.request_mode,
       image_model: activeImageProfile,
       image_model_profiles: imageModelProfiles,
       file_parser: {
@@ -1110,6 +1128,20 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 </button>
               </div>
             </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>请求方式</strong>
+                <span>流式请求只影响后端调用方式，应用仍等待完整结果后继续流程</span>
+              </div>
+              <select
+                value={state.textModel.request_mode}
+                onChange={(event) => updateTextModelConfig({ request_mode: event.target.value as AiRequestMode })}
+              >
+                {aiRequestModeOptions.map((option) => (
+                  <option value={option.value} key={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
           </div>
         </section>
       )}
@@ -1210,6 +1242,20 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   {testingImageModel ? '测试中' : '测试'}
                 </button>
               </div>
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>请求方式</strong>
+                <span>流式请求只影响后端调用方式，应用仍等待完整图片生成后继续流程</span>
+              </div>
+              <select
+                value={state.imageModel.request_mode}
+                onChange={(event) => updateImageModelConfig({ request_mode: event.target.value as AiRequestMode })}
+              >
+                {aiRequestModeOptions.map((option) => (
+                  <option value={option.value} key={option.value}>{option.label}</option>
+                ))}
+              </select>
             </label>
           </div>
           {imageTestPreview && (
