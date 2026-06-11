@@ -123,6 +123,20 @@ body {
   letter-spacing: 0.16em;
 }
 
+.workspace-database-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+.workspace-database-actions span {
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 @keyframes workspace-database-spin {
   to {
     transform: rotate(360deg);
@@ -134,6 +148,11 @@ body {
     align-items: flex-start;
     flex-direction: column;
     padding: 24px;
+  }
+
+  .workspace-database-actions {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 
