@@ -371,3 +371,29 @@ jobs:
             artifacts/latest-mac.yml
           )
           gh release upload "$TAG_NAME" "${files[@]}" --clobber
+
+  trigger-gitee-mirror:
+    name: Trigger Gitee Mirror Sync
+    needs:
+      - build-windows
+      - publish-macos
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Gitee pull mirror after release assets uploaded
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
+          GITEE_REPO: ${{ secrets.GITEE_REPO }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ] || [ -z "$GITEE_OWNER" ] || [ -z "$GITEE_REPO" ]; then
+            echo "Gitee mirror secrets are missing."
+            exit 1
+          fi
+
+          sleep 30
+
+          curl --fail --show-error --silent --request POST --retry 3 --retry-all-errors --retry-delay 20 \
+            "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/remote_mirror/pull?access_token=${GITEE_TOKEN}"
+
+          echo "Gitee mirror sync triggered."
