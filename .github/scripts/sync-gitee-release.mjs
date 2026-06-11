@@ -128,6 +128,7 @@ function buildReleaseBody(githubRelease, githubRepository, tagName) {
 async function createGiteeRelease(owner, repo, token, githubRelease, githubRepository, tagName) {
   const payload = {
     tag_name: tagName,
+    target_commitish: tagName,
     name: githubRelease.name || tagName,
     body: buildReleaseBody(githubRelease, githubRepository, tagName),
     prerelease: Boolean(githubRelease.isPrerelease),
@@ -145,6 +146,7 @@ async function createGiteeRelease(owner, repo, token, githubRelease, githubRepos
 async function updateGiteeRelease(owner, repo, token, releaseId, githubRelease, githubRepository, tagName) {
   const payload = {
     tag_name: tagName,
+    target_commitish: tagName,
     name: githubRelease.name || tagName,
     body: buildReleaseBody(githubRelease, githubRepository, tagName),
     prerelease: Boolean(githubRelease.isPrerelease),
