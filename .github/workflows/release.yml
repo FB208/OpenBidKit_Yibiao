@@ -372,14 +372,24 @@ jobs:
           )
           gh release upload "$TAG_NAME" "${files[@]}" --clobber
 
-  trigger-gitee-mirror:
-    name: Trigger Gitee Mirror Sync
+  sync-gitee-release:
+    name: Sync Gitee Release
     needs:
       - build-windows
       - publish-macos
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Trigger Gitee pull mirror after release assets uploaded
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
@@ -393,7 +403,29 @@ jobs:
 
           sleep 30
 
-          curl --fail --show-error --silent --request POST --retry 3 --retry-all-errors --retry-delay 20 \
+          response="$(curl --fail --show-error --silent --request POST --retry 3 --retry-all-errors --retry-delay 20 \
             "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/remote_mirror/pull?access_token=${GITEE_TOKEN}"
+          )"
 
-          echo "Gitee mirror sync triggered."
+          echo "Gitee mirror response: ${response}"
+
+      - name: Download GitHub Release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+        run: |
+          mkdir -p release-assets
+          gh release download "$TAG_NAME" --dir release-assets --clobber
+          gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url > github-release.json
+          ls -lah release-assets
+
+      - name: Sync Gitee Release assets
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
+          GITEE_REPO: ${{ secrets.GITEE_REPO }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          RELEASE_ASSETS_DIR: release-assets
+          GITHUB_RELEASE_JSON: github-release.json
+          GITEE_TAG_WAIT_SECONDS: 600
+        run: node .github/scripts/sync-gitee-release.mjs
