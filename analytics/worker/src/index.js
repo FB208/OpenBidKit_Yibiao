@@ -28,16 +28,21 @@ const routes = new Map([
 
 export default {
   async fetch(request, env) {
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: corsHeaders });
-    }
+    try {
+      if (request.method === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: corsHeaders });
+      }
 
-    const url = new URL(request.url);
-    const handler = routes.get(url.pathname);
-    if (handler) {
-      return handler(request, env, url);
-    }
+      const url = new URL(request.url);
+      const handler = routes.get(url.pathname);
+      if (handler) {
+        return handler(request, env, url);
+      }
 
-    return json({ code: 404, message: 'not found' }, { status: 404 });
+      return json({ code: 404, message: 'not found' }, { status: 404 });
+    } catch (e) {
+      console.error('Unhandled worker error:', e);
+      return json({ code: 500, message: 'internal server error' }, { status: 500 });
+    }
   },
 };
