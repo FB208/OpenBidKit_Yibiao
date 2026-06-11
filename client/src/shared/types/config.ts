@@ -43,6 +43,7 @@ export interface ImageModelConfig {
   base_url?: string;
   api_key: string;
   model_name: string;
+  request_mode: AiRequestMode;
   status?: ImageModelStatus;
   tested_at?: string;
   last_error?: string;

@@ -25,7 +25,7 @@ const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
   { value: 'custom', label: '自定义' },
 ];
 
-const textRequestModeOptions: Array<{ value: AiRequestMode; label: string }> = [
+const aiRequestModeOptions: Array<{ value: AiRequestMode; label: string }> = [
   { value: 'normal', label: '普通请求' },
   { value: 'stream', label: '流式请求' },
 ];
@@ -96,6 +96,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: 'https://jlaudeapi.com/v1',
     api_key: '',
     model_name: '',
+    request_mode: 'normal',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -105,6 +106,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     api_key: '',
     model_name: '',
+    request_mode: 'normal',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -114,6 +116,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: 'https://generativelanguage.googleapis.com/v1beta',
     api_key: '',
     model_name: 'gemini-3.1-flash-image-preview',
+    request_mode: 'normal',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -123,6 +126,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: '',
     api_key: '',
     model_name: '',
+    request_mode: 'normal',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -185,6 +189,7 @@ function normalizeImageModelProfile(provider: ImageModelProvider, profile?: Part
     base_url: provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url,
     api_key: profile?.api_key ?? defaults.api_key,
     model_name: profile?.model_name ?? defaults.model_name,
+    request_mode: normalizeAiRequestMode(profile?.request_mode ?? defaults.request_mode),
     status: profile?.status ?? defaults.status,
     tested_at: profile?.tested_at ?? defaults.tested_at,
     last_error: profile?.last_error ?? defaults.last_error,
@@ -204,6 +209,7 @@ function imageProfileFromState(imageModel: ImageModelConfig): ImageModelConfig {
     base_url: imageModel.provider === 'custom' ? imageModel.base_url || '' : imageProviderDefaults[imageModel.provider].base_url,
     api_key: imageModel.api_key,
     model_name: imageModel.model_name,
+    request_mode: imageModel.request_mode,
     status: imageModel.status || 'untested',
     tested_at: imageModel.tested_at || '',
     last_error: imageModel.last_error || '',
@@ -1131,7 +1137,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 value={state.textModel.request_mode}
                 onChange={(event) => updateTextModelConfig({ request_mode: event.target.value as AiRequestMode })}
               >
-                {textRequestModeOptions.map((option) => (
+                {aiRequestModeOptions.map((option) => (
                   <option value={option.value} key={option.value}>{option.label}</option>
                 ))}
               </select>
@@ -1236,6 +1242,20 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   {testingImageModel ? '测试中' : '测试'}
                 </button>
               </div>
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>请求方式</strong>
+                <span>流式请求只影响后端调用方式，应用仍等待完整图片生成后继续流程</span>
+              </div>
+              <select
+                value={state.imageModel.request_mode}
+                onChange={(event) => updateImageModelConfig({ request_mode: event.target.value as AiRequestMode })}
+              >
+                {aiRequestModeOptions.map((option) => (
+                  <option value={option.value} key={option.value}>{option.label}</option>
+                ))}
+              </select>
             </label>
           </div>
           {imageTestPreview && (
