@@ -20,31 +20,31 @@ const defaultTextModelProfiles = {
     api_key: '',
     base_url: textProviderBaseUrls.jinlong,
     model_name: 'gpt-3.5-turbo',
-    request_mode: 'normal',
+    request_mode: 'stream',
   },
   volcengine: {
     api_key: '',
     base_url: textProviderBaseUrls.volcengine,
     model_name: '',
-    request_mode: 'normal',
+    request_mode: 'stream',
   },
   deepseek: {
     api_key: '',
     base_url: textProviderBaseUrls.deepseek,
     model_name: '',
-    request_mode: 'normal',
+    request_mode: 'stream',
   },
   longcat: {
     api_key: '',
     base_url: textProviderBaseUrls.longcat,
     model_name: '',
-    request_mode: 'normal',
+    request_mode: 'stream',
   },
   custom: {
     api_key: '',
     base_url: '',
     model_name: '',
-    request_mode: 'normal',
+    request_mode: 'stream',
   },
 };
 
@@ -54,7 +54,7 @@ const defaultImageModelProfiles = {
     base_url: 'https://jlaudeapi.com/v1',
     api_key: '',
     model_name: '',
-    request_mode: 'normal',
+    request_mode: 'stream',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -64,7 +64,7 @@ const defaultImageModelProfiles = {
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     api_key: '',
     model_name: '',
-    request_mode: 'normal',
+    request_mode: 'stream',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -74,7 +74,7 @@ const defaultImageModelProfiles = {
     base_url: 'https://generativelanguage.googleapis.com/v1beta',
     api_key: '',
     model_name: 'gemini-3.1-flash-image-preview',
-    request_mode: 'normal',
+    request_mode: 'stream',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -84,7 +84,7 @@ const defaultImageModelProfiles = {
     base_url: '',
     api_key: '',
     model_name: '',
-    request_mode: 'normal',
+    request_mode: 'stream',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -132,7 +132,7 @@ const defaultConfig = {
   api_key: '',
   base_url: textProviderBaseUrls.jinlong,
   model_name: 'gpt-3.5-turbo',
-  request_mode: 'normal',
+  request_mode: 'stream',
   image_model: {
     ...defaultImageModelProfiles.jinlong,
   },
@@ -163,7 +163,7 @@ function isImageModelProvider(value) {
   return imageModelProviders.includes(value);
 }
 
-function normalizeAiRequestMode(value, fallback = 'normal') {
+function normalizeAiRequestMode(value, fallback = 'stream') {
   return aiRequestModes.includes(value) ? value : fallback;
 }
 

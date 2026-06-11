@@ -31,11 +31,11 @@ const aiRequestModeOptions: Array<{ value: AiRequestMode; label: string }> = [
 ];
 
 const textProviderDefaults: TextModelProfiles = {
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', request_mode: 'normal' },
-  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', request_mode: 'normal' },
-  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', request_mode: 'normal' },
-  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', request_mode: 'normal' },
-  custom: { api_key: '', base_url: '', model_name: '', request_mode: 'normal' },
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', request_mode: 'stream' },
+  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', request_mode: 'stream' },
+  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', request_mode: 'stream' },
+  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', request_mode: 'stream' },
+  custom: { api_key: '', base_url: '', model_name: '', request_mode: 'stream' },
 };
 
 const textProviderApiKeyUrls: Partial<Record<TextModelProvider, string>> = {
@@ -53,7 +53,7 @@ function createDefaultTextModelProfiles(): TextModelProfiles {
 }
 
 function normalizeAiRequestMode(value?: AiRequestMode): AiRequestMode {
-  return value === 'stream' ? 'stream' : 'normal';
+  return value === 'normal' ? 'normal' : 'stream';
 }
 
 function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partial<TextModelConfig>): TextModelConfig {
@@ -96,7 +96,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: 'https://jlaudeapi.com/v1',
     api_key: '',
     model_name: '',
-    request_mode: 'normal',
+    request_mode: 'stream',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -106,7 +106,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     api_key: '',
     model_name: '',
-    request_mode: 'normal',
+    request_mode: 'stream',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -116,7 +116,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: 'https://generativelanguage.googleapis.com/v1beta',
     api_key: '',
     model_name: 'gemini-3.1-flash-image-preview',
-    request_mode: 'normal',
+    request_mode: 'stream',
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -126,7 +126,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: '',
     api_key: '',
     model_name: '',
-    request_mode: 'normal',
+    request_mode: 'stream',
     status: 'untested',
     tested_at: '',
     last_error: '',

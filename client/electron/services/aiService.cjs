@@ -165,11 +165,11 @@ function normalizeRequestTimeoutMs(request) {
 }
 
 function normalizeTextRequestMode(config) {
-  return config?.request_mode === 'stream' ? 'stream' : 'normal';
+  return config?.request_mode === 'normal' ? 'normal' : 'stream';
 }
 
 function normalizeImageRequestMode(imageConfig) {
-  return imageConfig?.request_mode === 'stream' ? 'stream' : 'normal';
+  return imageConfig?.request_mode === 'normal' ? 'normal' : 'stream';
 }
 
 function createAbortError() {
