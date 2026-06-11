@@ -32,7 +32,7 @@ analytics/
 | `GET /health` | 检查 API Worker | 无 |
 | `POST /track` | 上报埋点 | 无 |
 | `GET /notice` | 客户端读取最新公告 | 无 |
-| `GET /resources` | 客户端读取全局资源列表，支持 `q` 搜索 | 无 |
+| `GET /resources` | 客户端读取全局资源列表，支持 `q` 搜索和 `days` 点击统计窗口 | 无 |
 | `GET /resource-image` | 通过 Worker 代理读取 R2 资源图片 | 无 |
 | `GET /api/projects` | 查询最近 90 天出现过的项目名 | `ADMIN_TOKEN` |
 | `GET /api/summary` | 查询每日统计、页面排行、版本分布 | `ADMIN_TOKEN` |
@@ -57,7 +57,7 @@ analytics/
 
 `ai_request` 统计请求类型、服务商、模型端点域名、模型名称和 token 用量（`prompt_tokens`、`completion_tokens`、`total_tokens`）。模型端点只上传 hostname，不携带协议、路径、端口、账号密码、查询参数或 hash；不采集 API Key、Prompt、响应内容或错误详情。
 
-`resource_click` 只上传 Worker 生成的短资源统计 key，不上传资源标题、标签、介绍、弹窗内容或下载链接。Dashboard “资源管理”会按当前项目名和天数范围查询点击量；查询失败时点击量按 0 展示，不影响资源列表读取和编辑。
+`resource_click` 只上传 Worker 生成的短资源统计 key，不上传资源标题、标签、介绍、弹窗内容或下载链接。客户端资源下载页默认展示近 30 天点击量；Dashboard “资源管理”会按当前项目名和天数范围查询点击量；查询失败时点击量按 0 展示，不影响资源列表读取和编辑。
 
 统计页面使用：
 
