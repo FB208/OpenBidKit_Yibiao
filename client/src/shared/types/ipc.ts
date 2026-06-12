@@ -55,6 +55,14 @@ export interface UpdateCheckResult {
   channel?: UpdateChannel;
 }
 
+export interface GpuHardwareAccelerationStatus {
+  configured: boolean;
+  enabled: boolean;
+  currentEnabled: boolean;
+  trial: boolean;
+  forcedDisabled: boolean;
+}
+
 export type WorkspaceDatabasePhase = 'checking' | 'repairing' | 'backing-up' | 'upgrading' | 'ready' | 'error';
 
 export interface WorkspaceDatabaseStatus {
@@ -72,6 +80,10 @@ export interface YibiaoBridge {
   appName: string;
   platform: string;
   getVersion: () => Promise<string>;
+  getGpuHardwareAccelerationStatus: () => Promise<GpuHardwareAccelerationStatus>;
+  saveGpuHardwareAccelerationPreference: (enabled: boolean) => Promise<ConfigSaveResult & { enabled: boolean; configured: boolean; restartRequired: boolean }>;
+  startGpuHardwareAccelerationTrial: () => Promise<{ success: boolean }>;
+  relaunchWithGpuHardwareAccelerationDisabled: () => Promise<{ success: boolean }>;
   getLatestVersion: () => Promise<LatestReleaseInfo>;
   getUpdateDownloadUrl: () => Promise<string>;
   openExternal: (url: string) => Promise<{ success: boolean; message?: string }>;

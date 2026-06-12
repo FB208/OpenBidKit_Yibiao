@@ -330,6 +330,8 @@ const initialState: SettingsPageState = {
   general: {
     developer_mode: false,
     update_channel: 'github',
+    gpu_hardware_acceleration_enabled: true,
+    gpu_hardware_acceleration_configured: true,
   },
 };
 
@@ -412,6 +414,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         general: {
           developer_mode: Boolean(config.developer_mode),
           update_channel: normalizeUpdateChannel(config.update_channel),
+          gpu_hardware_acceleration_enabled: Boolean(config.gpu_hardware_acceleration_enabled),
+          gpu_hardware_acceleration_configured: Boolean(config.gpu_hardware_acceleration_configured),
         },
       }));
       setSavedConfig(config);
@@ -452,6 +456,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         mineru_token: state.fileParser.mineru_token || '',
       },
       update_channel: state.general.update_channel,
+      gpu_hardware_acceleration_enabled: state.general.gpu_hardware_acceleration_enabled,
+      gpu_hardware_acceleration_configured: state.general.gpu_hardware_acceleration_configured,
       developer_mode: state.general.developer_mode,
     };
   };
@@ -568,6 +574,17 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     setState((prev) => ({
       ...prev,
       general: { ...prev.general, update_channel: updateChannel },
+    }));
+  };
+
+  const updateGpuHardwareAcceleration = (enabled: boolean) => {
+    setState((prev) => ({
+      ...prev,
+      general: {
+        ...prev.general,
+        gpu_hardware_acceleration_enabled: enabled,
+        gpu_hardware_acceleration_configured: true,
+      },
     }));
   };
 
@@ -895,9 +912,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       return JSON.stringify({
         developer_mode: Boolean(state.general.developer_mode),
         update_channel: state.general.update_channel,
+        gpu_hardware_acceleration_enabled: Boolean(state.general.gpu_hardware_acceleration_enabled),
+        gpu_hardware_acceleration_configured: Boolean(state.general.gpu_hardware_acceleration_configured),
       }) !== JSON.stringify({
         developer_mode: Boolean(savedConfig.developer_mode),
         update_channel: normalizeUpdateChannel(savedConfig.update_channel),
+        gpu_hardware_acceleration_enabled: Boolean(savedConfig.gpu_hardware_acceleration_enabled),
+        gpu_hardware_acceleration_configured: Boolean(savedConfig.gpu_hardware_acceleration_configured),
       });
     }
 
@@ -920,7 +941,27 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
   const saveActiveTabConfig = async () => {
     if (activeTab === 'general') {
-      await saveClientConfig(createClientConfig());
+      const nextConfig = createClientConfig();
+      const previousGpuEnabled = Boolean(savedConfig?.gpu_hardware_acceleration_enabled);
+      const nextGpuEnabled = Boolean(state.general.gpu_hardware_acceleration_enabled);
+
+      if (!previousGpuEnabled && nextGpuEnabled) {
+        const saved = await saveClientConfig({
+          ...nextConfig,
+          gpu_hardware_acceleration_enabled: false,
+          gpu_hardware_acceleration_configured: true,
+        });
+        if (saved) {
+          showToast('即将重启试用 GPU 硬件加速', 'info');
+          await window.yibiao?.startGpuHardwareAccelerationTrial();
+        }
+        return;
+      }
+
+      const saved = await saveClientConfig(nextConfig);
+      if (saved && previousGpuEnabled !== nextGpuEnabled) {
+        showToast(nextGpuEnabled ? 'GPU 硬件加速将在重启后启用' : 'GPU 硬件加速将在重启后关闭', 'info');
+      }
       return;
     }
     if (activeTab === 'text-model') {
@@ -1047,6 +1088,22 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   <option value={option.value} key={option.value}>{option.label}</option>
                 ))}
               </select>
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>GPU 硬件加速</strong>
+                <span>启用后界面可能更流畅；极少数电脑启用后会闪退，关闭后兼容性更好。修改后需重启生效。</span>
+              </div>
+              <span className="settings-switch-control">
+                <input
+                  type="checkbox"
+                  checked={state.general.gpu_hardware_acceleration_enabled}
+                  onChange={(event) => updateGpuHardwareAcceleration(event.target.checked)}
+                />
+                <span className="settings-switch-track" aria-hidden="true">
+                  <span className="settings-switch-thumb" />
+                </span>
+              </span>
             </label>
             <label className="settings-row">
               <div className="settings-row-copy">

@@ -3812,6 +3812,30 @@ button {
   transform: translate(-50%, -50%);
 }
 
+.gpu-acceleration-card {
+  width: min(480px, calc(100vw - 40px));
+}
+
+.gpu-acceleration-card h2 {
+  margin: 0;
+  color: var(--yb-text);
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.gpu-acceleration-copy {
+  margin: 0;
+  color: var(--yb-text-soft);
+  line-height: 1.8;
+}
+
+.gpu-acceleration-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 .content-generation-config-card {
   position: fixed;
   top: 50%;

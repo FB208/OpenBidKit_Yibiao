@@ -161,13 +161,46 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, fileSe
   return { sqliteDatabase };
 }
 
-function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl }) {
+function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [] }) {
   const configStore = createConfigStore(app);
   const aiService = createAiService({ app, configStore });
   const fileService = createFileService({ app, configStore });
   const exportService = createExportService({ configStore });
   const databaseStatus = registerWorkspaceDatabaseStatusIpc({ mainWindow });
   let workspaceDatabaseStarted = false;
+  let gpuTrialRelaunchStarted = false;
+
+  const saveGpuHardwareAccelerationPreference = (enabled) => {
+    const nextEnabled = Boolean(enabled);
+    const currentConfig = configStore.load();
+    const result = configStore.save({
+      ...currentConfig,
+      gpu_hardware_acceleration_enabled: nextEnabled,
+      gpu_hardware_acceleration_configured: true,
+    });
+    return {
+      ...result,
+      enabled: nextEnabled,
+      configured: true,
+      restartRequired: nextEnabled !== Boolean(gpuStartupState.hardwareAccelerationEnabled),
+    };
+  };
+
+  const buildGpuTrialRelaunchArgs = () => {
+    const excludedArgs = new Set([gpuTrialArg, ...forceDisableGpuArgs]);
+    return process.argv
+      .slice(1)
+      .filter((arg) => !excludedArgs.has(String(arg).split('=')[0]))
+      .concat(gpuTrialArg);
+  };
+
+  const buildGpuDisabledRelaunchArgs = () => {
+    const excludedArgs = new Set([gpuTrialArg, ...forceDisableGpuArgs]);
+    return process.argv
+      .slice(1)
+      .filter((arg) => !excludedArgs.has(String(arg).split('=')[0]))
+      .concat('--disable-gpu');
+  };
 
   registerConfigIpc({ configStore, aiService });
   registerAiIpc({ aiService });
@@ -200,6 +233,48 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   }
 
   ipcMain.handle('app:get-version', () => app.getVersion());
+
+  ipcMain.handle('app:get-gpu-hardware-acceleration-status', () => {
+    const config = configStore.load();
+    return {
+      configured: Boolean(config.gpu_hardware_acceleration_configured),
+      enabled: Boolean(config.gpu_hardware_acceleration_enabled),
+      currentEnabled: Boolean(gpuStartupState.hardwareAccelerationEnabled),
+      trial: Boolean(gpuStartupState.trial),
+      forcedDisabled: Boolean(gpuStartupState.forcedDisabled),
+    };
+  });
+
+  ipcMain.handle('app:save-gpu-hardware-acceleration-preference', (_event, enabled) => saveGpuHardwareAccelerationPreference(enabled));
+
+  ipcMain.handle('app:start-gpu-hardware-acceleration-trial', () => {
+    if (gpuTrialRelaunchStarted) {
+      return { success: true };
+    }
+
+    gpuTrialRelaunchStarted = true;
+    const args = buildGpuTrialRelaunchArgs();
+    setTimeout(() => {
+      app.relaunch({ args });
+      app.exit(0);
+    }, 50);
+    return { success: true };
+  });
+
+  ipcMain.handle('app:relaunch-with-gpu-hardware-acceleration-disabled', () => {
+    saveGpuHardwareAccelerationPreference(false);
+    if (gpuTrialRelaunchStarted) {
+      return { success: true };
+    }
+
+    gpuTrialRelaunchStarted = true;
+    const args = buildGpuDisabledRelaunchArgs();
+    setTimeout(() => {
+      app.relaunch({ args });
+      app.exit(0);
+    }, 50);
+    return { success: true };
+  });
 
   ipcMain.handle('app:open-external', async (_event, url) => {
     const externalUrl = normalizeExternalUrl(url);

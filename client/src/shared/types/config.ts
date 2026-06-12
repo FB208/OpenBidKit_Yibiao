@@ -64,6 +64,8 @@ export interface ClientConfig extends AiConfig {
   image_model_profiles: ImageModelProfiles;
   file_parser: FileParserConfig;
   update_channel?: UpdateChannel;
+  gpu_hardware_acceleration_enabled?: boolean;
+  gpu_hardware_acceleration_configured?: boolean;
   export_format?: import('./exportFormat').ExportFormatConfig;
   developer_mode?: boolean;
   analytics_client_id?: string;

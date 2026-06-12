@@ -11,5 +11,7 @@ export interface SettingsPageState {
   general: {
     developer_mode: boolean;
     update_channel: UpdateChannel;
+    gpu_hardware_acceleration_enabled: boolean;
+    gpu_hardware_acceleration_configured: boolean;
   };
 }

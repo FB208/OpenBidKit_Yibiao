@@ -143,6 +143,8 @@ const defaultConfig = {
     mineru_token: '',
   },
   update_channel: 'github',
+  gpu_hardware_acceleration_enabled: true,
+  gpu_hardware_acceleration_configured: true,
   export_format: defaultExportFormat,
   developer_mode: false,
   analytics_client_id: '',
@@ -341,6 +343,14 @@ function normalizeConfig(config) {
   const imageModelProfiles = normalizeImageModelProfiles(source.image_model_profiles);
   imageModelProfiles[imageModelProvider] = normalizeImageModelProfile(imageModelProvider, sourceImageModel);
   const activeImageProfile = imageModelProfiles[imageModelProvider];
+  const hasGpuHardwareAccelerationEnabled = typeof source.gpu_hardware_acceleration_enabled === 'boolean';
+  const hasGpuHardwareAccelerationConfigured = typeof source.gpu_hardware_acceleration_configured === 'boolean';
+  const gpuHardwareAccelerationConfigured = hasGpuHardwareAccelerationConfigured
+    ? source.gpu_hardware_acceleration_configured
+    : defaultConfig.gpu_hardware_acceleration_configured;
+  const gpuHardwareAccelerationEnabled = gpuHardwareAccelerationConfigured === false
+    ? defaultConfig.gpu_hardware_acceleration_enabled
+    : hasGpuHardwareAccelerationEnabled ? source.gpu_hardware_acceleration_enabled : defaultConfig.gpu_hardware_acceleration_enabled;
 
   return {
     ...defaultConfig,
@@ -357,6 +367,8 @@ function normalizeConfig(config) {
       mineru_token: fileParser.mineru_token || defaultConfig.file_parser.mineru_token,
     },
     update_channel: normalizeUpdateChannel(source.update_channel),
+    gpu_hardware_acceleration_enabled: gpuHardwareAccelerationEnabled,
+    gpu_hardware_acceleration_configured: gpuHardwareAccelerationConfigured === false ? true : gpuHardwareAccelerationConfigured,
     export_format: normalizeExportFormat(source.export_format),
     developer_mode: source.developer_mode === undefined ? defaultConfig.developer_mode : Boolean(source.developer_mode),
     analytics_client_id: source.analytics_client_id || defaultConfig.analytics_client_id,
@@ -368,8 +380,18 @@ function createConfigStore(app) {
   const configFile = getConfigFilePath(app);
 
   function persist(config) {
+    let tempFile = '';
     fs.mkdirSync(path.dirname(configFile), { recursive: true });
-    fs.writeFileSync(configFile, JSON.stringify(config, null, 2), 'utf-8');
+    try {
+      tempFile = `${configFile}.${process.pid}.${Date.now()}.tmp`;
+      fs.writeFileSync(tempFile, JSON.stringify(config, null, 2), 'utf-8');
+      fs.renameSync(tempFile, configFile);
+    } catch (error) {
+      if (tempFile) {
+        try { fs.rmSync(tempFile, { force: true }); } catch {}
+      }
+      throw error;
+    }
   }
 
   function withAnalyticsIdentity(config) {
