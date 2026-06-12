@@ -952,8 +952,24 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
           gpu_hardware_acceleration_configured: true,
         });
         if (saved) {
-          showToast('即将重启试用 GPU 硬件加速', 'info');
-          await window.yibiao?.startGpuHardwareAccelerationTrial();
+          try {
+            const result = await window.yibiao?.startGpuHardwareAccelerationTrial();
+            if (!result?.success) {
+              throw new Error('GPU 硬件加速试启用失败');
+            }
+            showToast('即将重启试用 GPU 硬件加速', 'info');
+          } catch (error) {
+            setState((prev) => ({
+              ...prev,
+              general: {
+                ...prev.general,
+                gpu_hardware_acceleration_enabled: false,
+                gpu_hardware_acceleration_configured: true,
+              },
+            }));
+            const message = error instanceof Error ? error.message : 'GPU 硬件加速试启用失败';
+            showToast(`${message}，已保持关闭，请稍后重试。`, 'error');
+          }
         }
         return;
       }
