@@ -13,7 +13,8 @@ export async function queryAnalytics(env, sql) {
   });
 
   if (!response.ok) {
-    throw new Error(await response.text());
+    console.error('Analytics query failed:', await response.text());
+    throw new Error('Analytics query failed');
   }
 
   return response.json();
