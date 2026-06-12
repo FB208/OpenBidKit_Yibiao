@@ -39,7 +39,6 @@ export async function handleSummary(request, env, url) {
       COUNT(DISTINCT blob7) AS clients
     FROM ${DATASET}
     WHERE blob1 = ${project}
-      AND blob2 IN ('app_open', 'page_view')
       AND blob7 != ''
       AND timestamp >= NOW() - INTERVAL '${days}' DAY
     GROUP BY date
