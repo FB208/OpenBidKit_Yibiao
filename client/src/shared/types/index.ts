@@ -77,6 +77,7 @@ export type {
   RejectionCheckWorkspaceState,
   RejectionDocumentContent,
   RejectionDocumentRole,
+  RejectionDocumentTabId,
   RejectionDocumentSource,
   RejectionExtractionSource,
   RejectionExtractionState,

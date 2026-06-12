@@ -2,11 +2,11 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { getRejectionCheckDir, getRejectionCheckDocumentMarkdownPath } = require('../utils/paths.cjs');
-const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
+const { deleteImportedImageBatches, deleteImportedImageBatchesForExactScope } = require('../utils/importedImages.cjs');
 
 const initialState = {
   tenderDocument: null,
-  bidDocument: null,
+  bidDocuments: [],
   activeDocumentTab: 'tender',
   step: 'documents',
   activeResultTab: 'analysis',
@@ -36,10 +36,7 @@ const resultFieldTypes = {
 
 const resultTypeFields = Object.fromEntries(Object.entries(resultFieldTypes).map(([field, type]) => [type, field]));
 
-const documentRelativePaths = {
-  tender: 'rejection-check/tender.md',
-  bid: 'rejection-check/bid.md',
-};
+const tenderDocumentId = 'tender';
 
 function now() {
   return new Date().toISOString();
@@ -78,6 +75,11 @@ function normalizeDocumentRole(value) {
   return value === 'bid' ? 'bid' : 'tender';
 }
 
+function normalizeDocumentTab(value) {
+  const tab = String(value || '').trim();
+  return tab || 'tender';
+}
+
 function normalizeResultTab(value) {
   return value === 'custom' ? 'custom' : 'analysis';
 }
@@ -105,7 +107,9 @@ function stripTripleQuoteWrapper(content) {
 function createDocumentSignature(document) {
   if (!document) return '';
   const content = String(document.content || '').trim();
+  const signatureId = document.role === 'bid' && document.id === 'bid-1' ? 'bid' : document.id || document.role;
   return [
+    signatureId,
     document.source,
     document.fileName,
     content.length,
@@ -114,8 +118,9 @@ function createDocumentSignature(document) {
   ].join('\n---yibiao-rejection-signature---\n');
 }
 
-function createRejectionCheckInputSignature(bidDocument, invalidBidAndRejectionItems, customCheckItems) {
-  const bidSignature = createDocumentSignature(bidDocument);
+function createRejectionCheckInputSignature(bidDocuments, invalidBidAndRejectionItems, customCheckItems) {
+  const documents = Array.isArray(bidDocuments) ? bidDocuments : [bidDocuments].filter(Boolean);
+  const bidSignature = documents.map(createDocumentSignature).filter(Boolean).join('\n---yibiao-rejection-bid-document---\n');
   const analysis = String(invalidBidAndRejectionItems || '').trim();
   if (!bidSignature || !analysis) return '';
   const custom = String(customCheckItems || '').trim();
@@ -178,88 +183,155 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     });
   }
 
-  function resolveMarkdownPath(relativeOrAbsolutePath, role) {
+  function createBidDocumentId(fileName, markdown) {
+    const hash = stableHash(`${String(fileName || '')}\n${String(markdown || '')}`).slice(0, 16);
+    return `bid-${hash}`;
+  }
+
+  function getDocumentMarkdownRelativePath(role, documentId) {
+    if (role === 'bid') {
+      const safeDocumentId = String(documentId || 'bid').replace(/[^a-zA-Z0-9_-]/g, '_');
+      return `rejection-check/bids/${safeDocumentId}.md`;
+    }
+    return 'rejection-check/tender.md';
+  }
+
+  function resolveMarkdownPath(relativeOrAbsolutePath, role, documentId) {
     const value = String(relativeOrAbsolutePath || '').trim();
-    if (!value) return getRejectionCheckDocumentMarkdownPath(app, role);
+    if (!value) return getRejectionCheckDocumentMarkdownPath(app, role, documentId);
     return path.isAbsolute(value) ? value : path.join(path.dirname(rejectionCheckDir), value);
   }
 
-  function readDocumentMarkdown(role) {
-    const documentRole = normalizeDocumentRole(role);
-    const row = db.prepare('SELECT * FROM rejection_check_documents WHERE role = ?').get(documentRole);
+  function loadDocumentRow(roleOrDocumentId, documentId) {
+    if (documentId) {
+      return db.prepare('SELECT * FROM rejection_check_documents WHERE document_id = ? AND role = ?').get(String(documentId), normalizeDocumentRole(roleOrDocumentId));
+    }
+    const value = String(roleOrDocumentId || '').trim();
+    if (value === 'tender') {
+      return db.prepare("SELECT * FROM rejection_check_documents WHERE role = 'tender' ORDER BY sort_order ASC LIMIT 1").get();
+    }
+    if (value === 'bid') {
+      return db.prepare("SELECT * FROM rejection_check_documents WHERE role = 'bid' ORDER BY sort_order ASC LIMIT 1").get();
+    }
+    return db.prepare('SELECT * FROM rejection_check_documents WHERE document_id = ?').get(value);
+  }
+
+  function readDocumentMarkdown(roleOrDocumentId, documentId) {
+    const row = loadDocumentRow(roleOrDocumentId, documentId);
     if (!row) return '';
-    const filePath = resolveMarkdownPath(row.markdown_path, documentRole);
+    const filePath = resolveMarkdownPath(row.markdown_path, row.role, row.document_id);
     if (!fs.existsSync(filePath)) return '';
     return fs.readFileSync(filePath, 'utf-8');
   }
 
-  function writeDocumentMarkdown(role, markdown) {
+  function writeDocumentMarkdown(role, documentId, markdown) {
     const documentRole = normalizeDocumentRole(role);
-    const targetPath = getRejectionCheckDocumentMarkdownPath(app, documentRole);
-    const tempPath = path.join(path.dirname(targetPath), `${documentRole}-${Date.now()}.tmp.md`);
+    const targetPath = getRejectionCheckDocumentMarkdownPath(app, documentRole, documentId);
+    const tempPath = path.join(path.dirname(targetPath), `${documentRole}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp.md`);
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     fs.writeFileSync(tempPath, `${String(markdown || '').trim()}\n`, 'utf-8');
     fs.renameSync(tempPath, targetPath);
     return targetPath;
   }
 
-  function saveDocument(document) {
+  function saveDocument(document, sortOrder = 0) {
     if (!document?.role) return;
     const role = normalizeDocumentRole(document.role);
     const markdown = String(document.content || '').trim();
     if (!markdown) return;
-    writeDocumentMarkdown(role, markdown);
+    const documentId = role === 'tender'
+      ? tenderDocumentId
+      : String(document.id || createBidDocumentId(document.fileName, markdown));
+    writeDocumentMarkdown(role, documentId, markdown);
     const timestamp = now();
     db.prepare(`
       INSERT INTO rejection_check_documents (
-        role, source, file_name, markdown_path, content_hash, content_chars, parser_label, imported_at, updated_at
+        document_id, role, source, file_name, markdown_path, content_hash, content_chars, parser_label, sort_order, imported_at, updated_at
       ) VALUES (
-        @role, @source, @file_name, @markdown_path, @content_hash, @content_chars, @parser_label, @imported_at, @updated_at
-      ) ON CONFLICT(role) DO UPDATE SET
+        @document_id, @role, @source, @file_name, @markdown_path, @content_hash, @content_chars, @parser_label, @sort_order, @imported_at, @updated_at
+      ) ON CONFLICT(document_id) DO UPDATE SET
+        role = excluded.role,
         source = excluded.source,
         file_name = excluded.file_name,
         markdown_path = excluded.markdown_path,
         content_hash = excluded.content_hash,
         content_chars = excluded.content_chars,
         parser_label = excluded.parser_label,
+        sort_order = excluded.sort_order,
         imported_at = excluded.imported_at,
         updated_at = excluded.updated_at
     `).run({
+      document_id: documentId,
       role,
       source: document.source === 'technical-plan' ? 'technical-plan' : 'upload',
       file_name: String(document.fileName || (role === 'bid' ? '投标文件' : '招标文件')),
-      markdown_path: documentRelativePaths[role],
+      markdown_path: getDocumentMarkdownRelativePath(role, documentId),
       content_hash: stableHash(markdown),
       content_chars: markdown.length,
       parser_label: document.parserLabel ? String(document.parserLabel) : null,
+      sort_order: role === 'bid' ? Number(sortOrder || 0) : 0,
       imported_at: document.importedAt || timestamp,
       updated_at: timestamp,
     });
+    return documentId;
   }
 
-  function loadDocument(role) {
-    const documentRole = normalizeDocumentRole(role);
-    const row = db.prepare('SELECT * FROM rejection_check_documents WHERE role = ?').get(documentRole);
+  function documentFromRow(row) {
     if (!row) return null;
     return {
-      role: documentRole,
+      id: row.document_id || row.role,
+      role: normalizeDocumentRole(row.role),
       fileName: row.file_name,
-      content: readDocumentMarkdown(documentRole),
+      content: readDocumentMarkdown(row.document_id || row.role),
       source: row.source === 'technical-plan' ? 'technical-plan' : 'upload',
       parserLabel: row.parser_label || undefined,
       importedAt: row.imported_at,
     };
   }
 
-  function clearDocument(role) {
-    const documentRole = normalizeDocumentRole(role);
-    db.prepare('DELETE FROM rejection_check_documents WHERE role = ?').run(documentRole);
-    const targetPath = getRejectionCheckDocumentMarkdownPath(app, documentRole);
+  function loadTenderDocument() {
+    return documentFromRow(db.prepare("SELECT * FROM rejection_check_documents WHERE role = 'tender' ORDER BY sort_order ASC LIMIT 1").get());
+  }
+
+  function loadBidDocuments() {
+    return db.prepare("SELECT * FROM rejection_check_documents WHERE role = 'bid' ORDER BY sort_order ASC, imported_at ASC").all().map(documentFromRow).filter(Boolean);
+  }
+
+  function resequenceBidDocuments() {
+    const rows = db.prepare("SELECT document_id FROM rejection_check_documents WHERE role = 'bid' ORDER BY sort_order ASC, imported_at ASC").all();
+    const update = db.prepare('UPDATE rejection_check_documents SET sort_order = ?, updated_at = ? WHERE document_id = ?');
+    const timestamp = now();
+    rows.forEach((row, index) => update.run(index, timestamp, row.document_id));
+  }
+
+  function removeMarkdownForRow(row) {
+    if (!row) return;
+    const targetPath = resolveMarkdownPath(row.markdown_path, row.role, row.document_id);
     if (fs.existsSync(targetPath)) fs.rmSync(targetPath, { force: true });
-    deleteImportedImageBatches(app, `rejection-check-${documentRole}`);
+  }
+
+  function clearDocument(role, documentId) {
+    const documentRole = normalizeDocumentRole(role);
     if (documentRole === 'tender') {
+      const rows = db.prepare("SELECT * FROM rejection_check_documents WHERE role = 'tender'").all();
+      rows.forEach(removeMarkdownForRow);
+      db.prepare("DELETE FROM rejection_check_documents WHERE role = 'tender'").run();
+      deleteImportedImageBatches(app, 'rejection-check-tender');
       clearExtractionAndCheckResults();
     } else {
+      const rows = documentId
+        ? db.prepare("SELECT * FROM rejection_check_documents WHERE role = 'bid' AND document_id = ?").all(String(documentId))
+        : db.prepare("SELECT * FROM rejection_check_documents WHERE role = 'bid'").all();
+      rows.forEach(removeMarkdownForRow);
+      if (documentId) {
+        db.prepare("DELETE FROM rejection_check_documents WHERE role = 'bid' AND document_id = ?").run(String(documentId));
+        deleteImportedImageBatches(app, `rejection-check-bid-${documentId}`);
+        if (documentId === 'bid-1') deleteImportedImageBatchesForExactScope(app, 'rejection-check-bid');
+      } else {
+        db.prepare("DELETE FROM rejection_check_documents WHERE role = 'bid'").run();
+        deleteImportedImageBatches(app, 'rejection-check-bid');
+      }
+      resequenceBidDocuments();
       clearCheckResults();
     }
   }
@@ -381,13 +453,14 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     if (resultType === 'rejection') {
       const insert = db.prepare(`
         INSERT INTO rejection_check_risk_findings (
-          finding_id, type, severity, title, summary, requirement, bid_evidence, risk_reason, suggestion, sort_order, created_at, updated_at
+          finding_id, bid_document_id, type, severity, title, summary, requirement, bid_evidence, risk_reason, suggestion, sort_order, created_at, updated_at
         ) VALUES (
-          @finding_id, @type, @severity, @title, @summary, @requirement, @bid_evidence, @risk_reason, @suggestion, @sort_order, @created_at, @updated_at
+          @finding_id, @bid_document_id, @type, @severity, @title, @summary, @requirement, @bid_evidence, @risk_reason, @suggestion, @sort_order, @created_at, @updated_at
         )
       `);
       findings.forEach((item, index) => insert.run({
         finding_id: String(item.id || `rejection-finding-${index + 1}`),
+        bid_document_id: item.bidDocumentId ? String(item.bidDocumentId) : null,
         type: item.type === 'invalidBid' ? 'invalidBid' : 'rejectionItem',
         severity: ['high', 'medium', 'low'].includes(item.severity) ? item.severity : 'medium',
         title: String(item.title || ''),
@@ -404,13 +477,14 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     if (resultType === 'typo') {
       const insert = db.prepare(`
         INSERT INTO rejection_check_typo_findings (
-          finding_id, wrong_text, correct_text, original_excerpt, reason, location_hint, sort_order, created_at, updated_at
+          finding_id, bid_document_id, wrong_text, correct_text, original_excerpt, reason, location_hint, sort_order, created_at, updated_at
         ) VALUES (
-          @finding_id, @wrong_text, @correct_text, @original_excerpt, @reason, @location_hint, @sort_order, @created_at, @updated_at
+          @finding_id, @bid_document_id, @wrong_text, @correct_text, @original_excerpt, @reason, @location_hint, @sort_order, @created_at, @updated_at
         )
       `);
       findings.forEach((item, index) => insert.run({
         finding_id: String(item.id || `typo-finding-${index + 1}`),
+        bid_document_id: item.bidDocumentId ? String(item.bidDocumentId) : null,
         wrong_text: String(item.wrongText || ''),
         correct_text: String(item.correctText || ''),
         original_excerpt: String(item.originalExcerpt || ''),
@@ -424,13 +498,14 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     if (resultType === 'logic') {
       const insert = db.prepare(`
         INSERT INTO rejection_check_logic_findings (
-          finding_id, title, original_text, location_hint, fallacy_reason, suggestion, sort_order, created_at, updated_at
+          finding_id, bid_document_id, title, original_text, location_hint, fallacy_reason, suggestion, sort_order, created_at, updated_at
         ) VALUES (
-          @finding_id, @title, @original_text, @location_hint, @fallacy_reason, @suggestion, @sort_order, @created_at, @updated_at
+          @finding_id, @bid_document_id, @title, @original_text, @location_hint, @fallacy_reason, @suggestion, @sort_order, @created_at, @updated_at
         )
       `);
       findings.forEach((item, index) => insert.run({
         finding_id: String(item.id || `logic-finding-${index + 1}`),
+        bid_document_id: item.bidDocumentId ? String(item.bidDocumentId) : null,
         title: String(item.title || ''),
         original_text: String(item.originalText || ''),
         location_hint: String(item.locationHint || ''),
@@ -462,9 +537,11 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
   }
 
   function loadFindingRows(resultType) {
+    const fallbackBidDocumentId = db.prepare("SELECT document_id FROM rejection_check_documents WHERE role = 'bid' ORDER BY sort_order ASC LIMIT 1").get()?.document_id || '';
     if (resultType === 'rejection') {
       return db.prepare('SELECT * FROM rejection_check_risk_findings ORDER BY sort_order ASC').all().map((item) => ({
         id: item.finding_id,
+        bidDocumentId: item.bid_document_id || fallbackBidDocumentId,
         type: item.type,
         severity: item.severity,
         title: item.title,
@@ -478,6 +555,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     if (resultType === 'typo') {
       return db.prepare('SELECT * FROM rejection_check_typo_findings ORDER BY sort_order ASC').all().map((item) => ({
         id: item.finding_id,
+        bidDocumentId: item.bid_document_id || fallbackBidDocumentId,
         wrongText: item.wrong_text,
         correctText: item.correct_text,
         originalExcerpt: item.original_excerpt,
@@ -487,6 +565,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     }
     return db.prepare('SELECT * FROM rejection_check_logic_findings ORDER BY sort_order ASC').all().map((item) => ({
       id: item.finding_id,
+      bidDocumentId: item.bid_document_id || fallbackBidDocumentId,
       title: item.title,
       originalText: item.original_text,
       locationHint: item.location_hint,
@@ -513,7 +592,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     ensureMetaRow();
     const metaUpdates = {};
     if (hasOwn(partial, 'step')) metaUpdates.step = normalizeStep(partial.step);
-    if (hasOwn(partial, 'activeDocumentTab')) metaUpdates.active_document_tab = normalizeDocumentRole(partial.activeDocumentTab);
+    if (hasOwn(partial, 'activeDocumentTab')) metaUpdates.active_document_tab = normalizeDocumentTab(partial.activeDocumentTab);
     if (hasOwn(partial, 'activeResultTab')) metaUpdates.active_result_tab = normalizeResultTab(partial.activeResultTab);
     if (hasOwn(partial, 'activeCheckResultTab')) metaUpdates.active_check_result_tab = normalizeCheckResultTab(partial.activeCheckResultTab);
     if (hasOwn(partial, 'customCheckItems')) metaUpdates.custom_check_items = String(partial.customCheckItems || '');
@@ -524,9 +603,9 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
       if (partial.tenderDocument) saveDocument(partial.tenderDocument);
       else clearDocument('tender');
     }
-    if (hasOwn(partial, 'bidDocument')) {
-      if (partial.bidDocument) saveDocument(partial.bidDocument);
-      else clearDocument('bid');
+    if (hasOwn(partial, 'bidDocuments')) {
+      clearDocument('bid');
+      (Array.isArray(partial.bidDocuments) ? partial.bidDocuments : []).forEach((document, index) => saveDocument(document, index));
     }
     if (hasOwn(partial, 'invalidBidAndRejectionItems')) saveExtraction(partial.invalidBidAndRejectionItems);
     for (const [field, type] of Object.entries(resultFieldTypes)) {
@@ -540,11 +619,19 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
   function loadRejectionCheck() {
     const meta = ensureMetaRow();
     const tasks = loadTasks();
+    const tenderDocument = loadTenderDocument();
+    const bidDocuments = loadBidDocuments();
+    const activeDocumentTab = normalizeDocumentTab(meta.active_document_tab);
+    const validActiveDocumentTab = activeDocumentTab === 'tender' || bidDocuments.some((document) => document.id === activeDocumentTab)
+      ? activeDocumentTab
+      : tenderDocument
+        ? 'tender'
+        : bidDocuments[0]?.id || 'tender';
     return {
       ...initialState,
-      tenderDocument: loadDocument('tender'),
-      bidDocument: loadDocument('bid'),
-      activeDocumentTab: normalizeDocumentRole(meta.active_document_tab),
+      tenderDocument,
+      bidDocuments,
+      activeDocumentTab: validActiveDocumentTab,
       step: normalizeStep(meta.step),
       activeResultTab: normalizeResultTab(meta.active_result_tab),
       activeCheckResultTab: normalizeCheckResultTab(meta.active_check_result_tab),
@@ -573,25 +660,85 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     }
     const documentRole = normalizeDocumentRole(role);
     const result = await fileService.importRejectionCheckDocument(documentRole);
-    if (!result?.success || !result.file_content) {
+    const importedDocuments = Array.isArray(result?.documents)
+      ? result.documents
+      : result?.file_content
+        ? [result]
+        : [];
+    if (!result?.success || !importedDocuments.length) {
       return { success: false, message: result?.message || '未导入文件', state: loadRejectionCheck() };
     }
-    const document = {
-      role: documentRole,
-      fileName: result.file_name || (documentRole === 'bid' ? '投标文件' : '招标文件'),
-      content: result.file_content,
-      source: 'upload',
-      parserLabel: result.parser_label || undefined,
-      importedAt: now(),
-    };
+    let addedCount = 0;
+    let skippedCount = 0;
+    let firstAddedBidDocumentId = '';
     const transaction = db.transaction(() => {
-      saveDocument(document);
-      if (documentRole === 'tender') clearExtractionAndCheckResults();
-      else clearCheckResults();
-      updateMeta({ active_document_tab: documentRole });
+      if (documentRole === 'tender') {
+        const first = importedDocuments[0];
+        const document = {
+          id: tenderDocumentId,
+          role: documentRole,
+          fileName: first.file_name || '招标文件',
+          content: first.file_content,
+          source: 'upload',
+          parserLabel: first.parser_label || undefined,
+          importedAt: now(),
+        };
+        saveDocument(document);
+        clearExtractionAndCheckResults();
+        updateMeta({ active_document_tab: 'tender' });
+        addedCount = 1;
+        return;
+      }
+
+      const existingRows = db.prepare("SELECT document_id, file_name, content_hash FROM rejection_check_documents WHERE role = 'bid'").all();
+      const existingKeys = new Set(existingRows.map((row) => `${row.file_name}\u0000${row.content_hash}`));
+      let sortOrder = existingRows.length;
+      for (const item of importedDocuments) {
+        const markdown = String(item.file_content || '').trim();
+        if (!markdown) continue;
+        const fileName = item.file_name || '投标文件';
+        const contentHash = stableHash(markdown);
+        const key = `${fileName}\u0000${contentHash}`;
+        if (existingKeys.has(key)) {
+          skippedCount += 1;
+          continue;
+        }
+        const documentId = createBidDocumentId(fileName, markdown);
+        const savedDocumentId = saveDocument({
+          id: documentId,
+          role: 'bid',
+          fileName,
+          content: markdown,
+          source: 'upload',
+          parserLabel: item.parser_label || undefined,
+          importedAt: now(),
+        }, sortOrder);
+        existingKeys.add(key);
+        if (!firstAddedBidDocumentId) firstAddedBidDocumentId = savedDocumentId;
+        sortOrder += 1;
+        addedCount += 1;
+      }
+      if (addedCount > 0) {
+        clearCheckResults();
+        updateMeta({ active_document_tab: firstAddedBidDocumentId || 'tender' });
+      }
     });
     transaction();
-    return { success: true, message: result.message || '文件解析完成', state: loadRejectionCheck() };
+    const failedCount = Array.isArray(result?.errors) ? result.errors.length : 0;
+    const fallbackToLocal = importedDocuments.some((item) => item?.fallback_to_local) || String(result?.message || '').includes('自动使用本地解析');
+    if (documentRole === 'bid' && addedCount === 0) {
+      const messageParts = [];
+      if (skippedCount > 0) messageParts.push(`已跳过 ${skippedCount} 份重复文件`);
+      if (failedCount > 0) messageParts.push(`失败 ${failedCount} 份`);
+      const message = messageParts.length ? messageParts.join('，') : result.message || '未导入文件';
+      return { success: false, message, state: loadRejectionCheck() };
+    }
+    const bidMessageParts = [`已解析 ${addedCount} 份投标文件`];
+    if (fallbackToLocal) bidMessageParts.push('当前格式已自动使用本地解析');
+    if (skippedCount > 0) bidMessageParts.push(`跳过 ${skippedCount} 份重复文件`);
+    if (failedCount > 0) bidMessageParts.push(`失败 ${failedCount} 份`);
+    const message = documentRole === 'bid' ? bidMessageParts.join('，') : result.message || '文件解析完成';
+    return { success: true, message, state: loadRejectionCheck() };
   }
 
   async function importTenderFromTechnicalPlan() {
@@ -604,6 +751,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     }
     const technicalPlan = technicalPlanStore.loadTechnicalPlan();
     const document = {
+      id: tenderDocumentId,
       role: 'tender',
       fileName: technicalPlan?.tenderFile?.fileName || '技术方案招标文件',
       content: markdown,
@@ -630,10 +778,15 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     return { success: true, message: '已从技术方案读取招标文件', state: loadRejectionCheck() };
   }
 
-  function removeDocument(role) {
+  function removeDocument(role, documentId) {
     const transaction = db.transaction(() => {
-      clearDocument(role);
-      updateMeta({ active_document_tab: normalizeDocumentRole(role) });
+      clearDocument(role, documentId);
+      if (normalizeDocumentRole(role) === 'bid') {
+        const nextBid = db.prepare("SELECT document_id FROM rejection_check_documents WHERE role = 'bid' ORDER BY sort_order ASC LIMIT 1").get();
+        updateMeta({ active_document_tab: nextBid?.document_id || 'tender' });
+      } else {
+        updateMeta({ active_document_tab: 'tender' });
+      }
     });
     transaction();
     return loadRejectionCheck();

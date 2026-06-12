@@ -1,6 +1,9 @@
 # Progress
 
 ## Session Log
+- 开始废标项检查多投标文件支持：已读取现有计划、确认 catchup 无输出，并记录当前单投标文件边界；下一步从类型和 Store/SQLite schema 开始改造，确保 UI 与后台任务共用同一多文件模型。
+- 继续废标项检查多投标文件支持收尾：`npm run build` 已通过后，复核发现 v12 迁移提前创建 `role/sort_order` 索引会卡住旧库；已改为先处理旧表结构，再创建完整 schema，并用 Electron runtime 冒烟测试确认旧 v11 库可升级到 v12、旧 bid 迁为 `bid-1`、旧结果写入 `bid_document_id=bid-1`。
+- 废标项检查多投标文件支持已完成收尾验证：CJS `node --check` 覆盖 SQLite、fileService、rejectionCheckStore、rejectionCheckTask 和 preload；`cd client; npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 通过，仅有 LF/CRLF 提示；旧单文件字段残留复扫无业务依赖。
 - 开始已有方案扩写 Step05 正文还原与扩写改造：已将文件型计划切换到本轮任务；目标是在扩写模式中新增原方案还原、基于原文优化扩写、补目录锁定和可选原方案覆盖审计，普通生成技术方案保持不变。
 - 已完成前端配置接入：`ContentGenerationOptions` 新增 `enableOriginalPlanCoverageAudit`，正文任务 phase 类型新增 `restoring/original-auditing`；`ContentEditPage` 接收 `workflowKind`，仅扩写模式显示“原方案覆盖审计”开关，启动正文生成和单章重生成时会传递该配置。
 - 已完成 Main 侧主体接入：`contentGenerationTask.cjs` 已支持 `original_material` 编排状态、原方案段落拆分、原方案还原映射 Prompt、还原阶段、已还原节点首轮优化扩写分支、`restored && !optimized` 续跑判断，以及补目录 `locked-restored` 锁定规则；`taskService` 已识别新增阶段。

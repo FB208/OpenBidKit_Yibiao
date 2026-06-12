@@ -1,5 +1,42 @@
 # Task Plan
 
+## Current Task: 废标项检查多投标文件支持
+
+### Goal
+标书检查-废标项检查支持一个招标文件对应多份投标文件：投标文件上传样式参考标书查重；正文预览 Tab 动态显示“投标文件1/2/...”；多份投标文件一起提交给 AI；三类检查结果必须结构化归属到具体投标文件，并在 UI 中按文件筛选/分组展示。
+
+### Phases
+- [completed] 1. 更新计划文件并确认现有单投标文件边界。
+- [completed] 2. 改造类型、IPC 类型和页面状态为多投标文件模型。
+- [completed] 3. 改造 SQLite schema、Store 和文件导入/移除逻辑。
+- [completed] 4. 改造废标检查 Main 任务与 Prompt，结果带投标文件归属。
+- [completed] 5. 改造页面正文动态 Tab、结果筛选/分组和删除/复制交互。
+- [completed] 6. 补充样式和 SQL 说明文件。
+- [completed] 7. 运行 CJS 检查与客户端构建验证。
+
+### Decisions
+- 不保留旧 `bidDocument` 单份模型作为业务分支；运行态统一使用 `bidDocuments[]`。
+- 结果结构必须包含 `bidDocumentId`，页面不依赖 AI 在证据文本中手写文件名来区分归属。
+- “全部”结果视图按投标文件分组展示；文件筛选提供“全部/投标文件1/投标文件2”。
+- 招标文件仍单份；投标文件支持追加上传、多选、去重和逐份移除。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| v12 迁移先调用完整废标 schema 会在旧表上创建 `role/sort_order` 索引，旧表缺 `sort_order` 导致升级失败 | 复核 `migrateRejectionCheckMultiBidDocuments()` | 改为先识别旧表并重命名/重建，或先补 `sort_order` 后再建完整 schema；Electron runtime 旧 v11 冒烟测试通过 |
+| 普通 Node 运行迁移 smoke 时 `better-sqlite3` ABI 不匹配 | `node -e` 实例化测试库 | 改用 Electron runtime 执行临时 CJS 冒烟脚本，验证完成后删除临时脚本 |
+
+### Validation
+- `node --check electron\services\sqliteDatabase.cjs` 通过。
+- `node --check electron\services\fileService.cjs` 通过。
+- `node --check electron\services\rejectionCheckStore.cjs` 通过。
+- `node --check electron\services\rejectionCheckTask.cjs` 通过。
+- `node --check electron\preload.cjs` 通过。
+- Electron runtime 旧 v11 废标项检查库升级到 v12 冒烟测试通过。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- `git diff --check` 通过，仅有 LF/CRLF 提示。
+- 旧单文件字段残留复扫无 `state.bidDocument` / `bidDocument:` / `readDocumentMarkdown('bid')` 业务依赖。
+
 ## Current Task: 已有方案扩写 Step05 正文还原与扩写
 
 ### Goal

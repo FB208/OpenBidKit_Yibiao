@@ -18,6 +18,7 @@ import type {
   RejectionDocumentContent,
   RejectionDocumentRole,
   RejectionDocumentSource,
+  RejectionDocumentTabId,
   RejectionExtractionState,
   RejectionResultTab,
   TypoCheckFinding,
@@ -31,8 +32,6 @@ const stepLabels: Record<RejectionCheckStep, string> = {
   items: '无效与废标项',
   results: '检查结果',
 };
-
-const documentTabs: RejectionDocumentRole[] = ['tender', 'bid'];
 
 const resultTabs: Array<{ id: RejectionResultTab; label: string }> = [
   { id: 'analysis', label: '解析结果' },
@@ -177,6 +176,7 @@ function normalizeFindingState(item: Partial<RejectionCheckFinding> | null | und
 
   return {
     id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `rejection-finding-${index + 1}`,
+    bidDocumentId: typeof item.bidDocumentId === 'string' && item.bidDocumentId.trim() ? item.bidDocumentId.trim() : '',
     type,
     severity,
     title,
@@ -216,6 +216,7 @@ function normalizeTypoFindingState(item: Partial<TypoCheckFinding> | null | unde
 
   return {
     id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `typo-finding-${index + 1}`,
+    bidDocumentId: typeof item.bidDocumentId === 'string' && item.bidDocumentId.trim() ? item.bidDocumentId.trim() : '',
     wrongText,
     correctText,
     originalExcerpt,
@@ -251,6 +252,7 @@ function normalizeLogicFindingState(item: Partial<LogicCheckFinding> | null | un
 
   return {
     id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `logic-finding-${index + 1}`,
+    bidDocumentId: typeof item.bidDocumentId === 'string' && item.bidDocumentId.trim() ? item.bidDocumentId.trim() : '',
     title,
     originalText: typeof item.originalText === 'string' && item.originalText.trim() ? item.originalText.trim() : '未提供明确原文摘录，请结合位置线索复核。',
     locationHint: typeof item.locationHint === 'string' && item.locationHint.trim() ? item.locationHint.trim() : '未明确具体位置，请结合原文摘录复核。',
@@ -305,7 +307,9 @@ function createDocumentSignature(document: RejectionDocumentContent | null) {
   }
 
   const content = document.content.trim();
+  const signatureId = document.role === 'bid' && document.id === 'bid-1' ? 'bid' : document.id || document.role;
   return [
+    signatureId,
     document.source,
     document.fileName,
     content.length,
@@ -315,11 +319,11 @@ function createDocumentSignature(document: RejectionDocumentContent | null) {
 }
 
 function createRejectionCheckInputSignature(
-  bidDocument: RejectionDocumentContent | null,
+  bidDocuments: RejectionDocumentContent[],
   invalidBidAndRejectionItems: string,
   customCheckItems: string,
 ) {
-  const bidSignature = createDocumentSignature(bidDocument);
+  const bidSignature = bidDocuments.map(createDocumentSignature).filter(Boolean).join('\n---yibiao-rejection-bid-document---\n');
   const analysis = invalidBidAndRejectionItems.trim();
   if (!bidSignature || !analysis) {
     return '';
@@ -335,6 +339,15 @@ function createRejectionCheckInputSignature(
     custom.slice(0, 800),
     custom.slice(-800),
   ].join('\n---yibiao-rejection-check-input---\n');
+}
+
+function getBidDocumentLabel(bidDocuments: RejectionDocumentContent[], documentId: string) {
+  const index = bidDocuments.findIndex((document) => document.id === documentId);
+  return index >= 0 ? `投标文件${index + 1}` : '投标文件';
+}
+
+function createBidDocumentsSignature(bidDocuments: RejectionDocumentContent[]) {
+  return bidDocuments.map(createDocumentSignature).filter(Boolean).join('\n---yibiao-rejection-bid-signature---\n');
 }
 
 function stripTripleQuoteWrapper(content: string) {
@@ -412,7 +425,7 @@ function TypoOriginalBlock({ excerpt, wrongText }: { excerpt: string; wrongText:
   );
 }
 
-function RejectionFindingItem({ finding, expanded, onToggle, onDelete }: { finding: RejectionCheckFinding; expanded: boolean; onToggle: () => void; onDelete: () => void }) {
+function RejectionFindingItem({ finding, bidLabel, expanded, onToggle, onDelete }: { finding: RejectionCheckFinding; bidLabel: string; expanded: boolean; onToggle: () => void; onDelete: () => void }) {
   return (
     <article className={`rejection-finding-item is-${finding.type} is-${finding.severity}${expanded ? ' is-expanded' : ''}`}>
       <div className="rejection-finding-row">
@@ -426,6 +439,7 @@ function RejectionFindingItem({ finding, expanded, onToggle, onDelete }: { findi
           <span className="rejection-finding-title-wrap">
             <span>
               <strong>{finding.title}</strong>
+              <em className="rejection-finding-file-tag">{bidLabel}</em>
               <em className={`rejection-finding-tag is-${finding.type}`}>{findingTypeLabels[finding.type]}</em>
               <em className={`rejection-finding-severity is-${finding.severity}`}>{findingSeverityLabels[finding.severity]}</em>
             </span>
@@ -449,7 +463,7 @@ function RejectionFindingItem({ finding, expanded, onToggle, onDelete }: { findi
   );
 }
 
-function TypoFindingItem({ finding, expanded, onToggle, onDelete, onCopyOriginal, onCopyWrong }: { finding: TypoCheckFinding; expanded: boolean; onToggle: () => void; onDelete: () => void; onCopyOriginal: () => void; onCopyWrong: () => void }) {
+function TypoFindingItem({ finding, bidLabel, expanded, onToggle, onDelete, onCopyOriginal, onCopyWrong }: { finding: TypoCheckFinding; bidLabel: string; expanded: boolean; onToggle: () => void; onDelete: () => void; onCopyOriginal: () => void; onCopyWrong: () => void }) {
   return (
     <article className={`rejection-finding-item is-typo${expanded ? ' is-expanded' : ''}`}>
       <div className="rejection-finding-row">
@@ -468,6 +482,7 @@ function TypoFindingItem({ finding, expanded, onToggle, onDelete, onCopyOriginal
                 <span>{finding.correctText}</span>
               </strong>
               <em className="rejection-finding-tag is-typo">错别字</em>
+              <em className="rejection-finding-file-tag">{bidLabel}</em>
             </span>
             <small>{finding.reason}</small>
           </span>
@@ -495,7 +510,7 @@ function TypoFindingItem({ finding, expanded, onToggle, onDelete, onCopyOriginal
   );
 }
 
-function LogicFindingItem({ finding, expanded, onToggle, onDelete }: { finding: LogicCheckFinding; expanded: boolean; onToggle: () => void; onDelete: () => void }) {
+function LogicFindingItem({ finding, bidLabel, expanded, onToggle, onDelete }: { finding: LogicCheckFinding; bidLabel: string; expanded: boolean; onToggle: () => void; onDelete: () => void }) {
   return (
     <article className={`rejection-finding-item is-logic${expanded ? ' is-expanded' : ''}`}>
       <div className="rejection-finding-row">
@@ -509,6 +524,7 @@ function LogicFindingItem({ finding, expanded, onToggle, onDelete }: { finding: 
           <span className="rejection-finding-title-wrap">
             <span>
               <strong>{finding.title}</strong>
+              <em className="rejection-finding-file-tag">{bidLabel}</em>
               <em className="rejection-finding-tag is-logic">逻辑谬误</em>
             </span>
             <small>{finding.locationHint}</small>
@@ -533,10 +549,11 @@ function LogicFindingItem({ finding, expanded, onToggle, onDelete }: { finding: 
 function RejectionCheckPage() {
   const [step, setStep] = useState<RejectionCheckStep>('documents');
   const [tenderDocument, setTenderDocument] = useState<RejectionDocumentContent | null>(null);
-  const [bidDocument, setBidDocument] = useState<RejectionDocumentContent | null>(null);
-  const [activeDocumentTab, setActiveDocumentTab] = useState<RejectionDocumentRole>('tender');
+  const [bidDocuments, setBidDocuments] = useState<RejectionDocumentContent[]>([]);
+  const [activeDocumentTab, setActiveDocumentTab] = useState<RejectionDocumentTabId>('tender');
   const [activeResultTab, setActiveResultTab] = useState<RejectionResultTab>('analysis');
   const [activeCheckResultTab, setActiveCheckResultTab] = useState<RejectionCheckResultTab>('rejection');
+  const [activeResultBidDocumentId, setActiveResultBidDocumentId] = useState('all');
   const [invalidBidAndRejectionItems, setInvalidBidAndRejectionItems] = useState<RejectionExtractionState>(() => createEmptyExtractionState());
   const [rejectionCheckResult, setRejectionCheckResult] = useState<RejectionCheckResultState>(() => createEmptyRejectionCheckResultState());
   const [typoCheckResult, setTypoCheckResult] = useState<TypoCheckResultState>(() => createEmptyTypoCheckResultState());
@@ -555,10 +572,11 @@ function RejectionCheckPage() {
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
 
-  const activeDocument = activeDocumentTab === 'tender' ? tenderDocument : bidDocument;
+  const activeBidDocument = bidDocuments.find((document) => document.id === activeDocumentTab) || null;
+  const activeDocument = activeDocumentTab === 'tender' ? tenderDocument : activeBidDocument;
   const tenderSignature = useMemo(() => createDocumentSignature(tenderDocument), [tenderDocument]);
-  const bidSignature = useMemo(() => createDocumentSignature(bidDocument), [bidDocument]);
-  const hasAnyDocument = Boolean(tenderDocument || bidDocument);
+  const bidSignature = useMemo(() => createBidDocumentsSignature(bidDocuments), [bidDocuments]);
+  const hasAnyDocument = Boolean(tenderDocument || bidDocuments.length);
   const checkOptionsChanged = checkOptions.typoCheck !== defaultCheckOptions.typoCheck
     || checkOptions.logicCheck !== defaultCheckOptions.logicCheck;
   const hasAnyWorkspaceData = Boolean(
@@ -575,7 +593,7 @@ function RejectionCheckPage() {
     || customCheckItems.trim()
     || checkOptionsChanged,
   );
-  const canGoNext = Boolean(tenderDocument && bidDocument);
+  const canGoNext = Boolean(tenderDocument && bidDocuments.length);
   const activeIndex = steps.indexOf(step);
   const extractionRunning = invalidBidAndRejectionItems.status === 'running' || extractionTask?.status === 'running';
   const extractionMatchesTender = Boolean(tenderSignature && invalidBidAndRejectionItems.tenderSignature === tenderSignature);
@@ -593,8 +611,8 @@ function RejectionCheckPage() {
         : '等待解析';
   const activeCheckResult = checkResultTabs.find((tab) => tab.id === activeCheckResultTab) || checkResultTabs[0];
   const currentRejectionCheckInputSignature = useMemo(
-    () => createRejectionCheckInputSignature(bidDocument, visibleExtractionContent, customCheckItems),
-    [bidDocument, customCheckItems, visibleExtractionContent],
+    () => createRejectionCheckInputSignature(bidDocuments, visibleExtractionContent, customCheckItems),
+    [bidDocuments, customCheckItems, visibleExtractionContent],
   );
   const rejectionCheckMatchesInput = Boolean(
     currentRejectionCheckInputSignature
@@ -643,7 +661,7 @@ function RejectionCheckPage() {
     if (!analyticsReady) return;
 
     const page = step === 'documents'
-      ? `rejection-check/documents/${activeDocumentTab}`
+      ? `rejection-check/documents/${activeDocumentTab === 'tender' ? 'tender' : 'bid'}`
       : step === 'items'
         ? `rejection-check/items/${activeResultTab}`
         : `rejection-check/results/${activeCheckResultTab}`;
@@ -653,9 +671,13 @@ function RejectionCheckPage() {
   function applyWorkspaceState(state: RejectionCheckWorkspaceState, options: { syncViewState?: boolean } = {}) {
     const syncViewState = options.syncViewState !== false;
     setTenderDocument(state.tenderDocument || null);
-    setBidDocument(state.bidDocument || null);
+    const nextBidDocuments = Array.isArray(state.bidDocuments) ? state.bidDocuments : [];
+    setBidDocuments(nextBidDocuments);
     if (syncViewState) {
-      setActiveDocumentTab(state.activeDocumentTab === 'bid' ? 'bid' : 'tender');
+      const nextActiveDocumentTab = state.activeDocumentTab === 'tender' || nextBidDocuments.some((document) => document.id === state.activeDocumentTab)
+        ? state.activeDocumentTab
+        : 'tender';
+      setActiveDocumentTab(nextActiveDocumentTab);
       setStep(state.step === 'items' || state.step === 'results' ? state.step : 'documents');
       setActiveResultTab(state.activeResultTab === 'custom' ? 'custom' : 'analysis');
       setActiveCheckResultTab(checkResultTabs.some((tab) => tab.id === state.activeCheckResultTab) ? state.activeCheckResultTab as RejectionCheckResultTab : 'rejection');
@@ -755,6 +777,12 @@ function RejectionCheckPage() {
   }, []);
 
   useEffect(() => {
+    if (activeResultBidDocumentId !== 'all' && !bidDocuments.some((document) => document.id === activeResultBidDocumentId)) {
+      setActiveResultBidDocumentId('all');
+    }
+  }, [activeResultBidDocumentId, bidDocuments]);
+
+  useEffect(() => {
     if (!hydratedRef.current || step !== 'items' || !tenderDocument || !tenderSignature) {
       return;
     }
@@ -783,7 +811,7 @@ function RejectionCheckPage() {
           showDocumentParseNotice(message);
           return;
         }
-        showToast(message, message === '已取消选择' ? 'info' : 'error');
+        showToast(message, message === '已取消选择' || message.startsWith('已跳过') ? 'info' : 'error');
         return;
       }
 
@@ -824,8 +852,8 @@ function RejectionCheckPage() {
     }
   }
 
-  function removeDocument(role: RejectionDocumentRole) {
-    void window.yibiao?.rejectionCheck.removeDocument(role)
+  function removeDocument(role: RejectionDocumentRole, documentId?: string) {
+    void window.yibiao?.rejectionCheck.removeDocument(role, documentId)
       .then((state) => {
         applyWorkspaceState({ ...state, step: role === 'tender' && step === 'items' ? 'documents' : state.step });
       })
@@ -912,8 +940,9 @@ function RejectionCheckPage() {
     autoStartedSignatureRef.current = '';
     setStep('documents');
     setTenderDocument(null);
-    setBidDocument(null);
+    setBidDocuments([]);
     setActiveDocumentTab('tender');
+    setActiveResultBidDocumentId('all');
     setActiveResultTab('analysis');
     setActiveCheckResultTab('rejection');
     setInvalidBidAndRejectionItems(createEmptyExtractionState());
@@ -960,8 +989,8 @@ function RejectionCheckPage() {
       return;
     }
 
-    if (!bidDocument || !bidSignature) {
-      showToast('请先准备投标文件', 'info');
+    if (!bidDocuments.length || !bidSignature) {
+      showToast('请先准备至少一份投标文件', 'info');
       return;
     }
 
@@ -983,6 +1012,7 @@ function RejectionCheckPage() {
 
     const nextActiveCheckResultTab: RejectionCheckResultTab = runOptions.rejectionCheck ? 'rejection' : runOptions.typoCheck ? 'typo' : 'logic';
     setActiveCheckResultTab(nextActiveCheckResultTab);
+    setActiveResultBidDocumentId('all');
     const startedAt = new Date().toISOString();
     const nextRejectionCheckResult: RejectionCheckResultState = runOptions.rejectionCheck
       ? {
@@ -1302,6 +1332,132 @@ function RejectionCheckPage() {
     );
   }
 
+  function filterFindingsByActiveBid<T extends { bidDocumentId: string }>(findings: T[]) {
+    return activeResultBidDocumentId === 'all'
+      ? findings
+      : findings.filter((finding) => finding.bidDocumentId === activeResultBidDocumentId);
+  }
+
+  function groupFindingsByBid<T extends { bidDocumentId: string }>(findings: T[]) {
+    const filteredFindings = filterFindingsByActiveBid(findings);
+    if (activeResultBidDocumentId !== 'all') {
+      const document = bidDocuments.find((item) => item.id === activeResultBidDocumentId);
+      return document ? [{ document, findings: filteredFindings }] : [];
+    }
+    return bidDocuments
+      .map((document) => ({ document, findings: filteredFindings.filter((finding) => finding.bidDocumentId === document.id) }))
+      .filter((group) => group.findings.length > 0);
+  }
+
+  function renderBidResultFilter(findings: Array<{ bidDocumentId: string }>) {
+    const counts = new Map<string, number>();
+    findings.forEach((finding) => counts.set(finding.bidDocumentId, (counts.get(finding.bidDocumentId) || 0) + 1));
+    return (
+      <div className="rejection-bid-result-filter" role="tablist" aria-label="按投标文件筛选结果">
+        <button type="button" className={activeResultBidDocumentId === 'all' ? 'is-active' : ''} onClick={() => setActiveResultBidDocumentId('all')}>
+          全部 <span>{findings.length}</span>
+        </button>
+        {bidDocuments.map((document, index) => (
+          <button
+            type="button"
+            key={document.id}
+            className={activeResultBidDocumentId === document.id ? 'is-active' : ''}
+            onClick={() => setActiveResultBidDocumentId(document.id)}
+            title={document.fileName}
+          >
+            {`投标文件${index + 1}`} <span>{counts.get(document.id) || 0}</span>
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  function renderRejectionFindingGroups(findings: RejectionCheckFinding[]) {
+    const groups = groupFindingsByBid(findings);
+    return (
+      <div className="rejection-finding-list">
+        {groups.map((group) => (
+          <section className="rejection-finding-group" key={group.document.id}>
+            {activeResultBidDocumentId === 'all' && (
+              <div className="rejection-finding-group-head">
+                <strong>{getBidDocumentLabel(bidDocuments, group.document.id)}</strong>
+                <span>{group.document.fileName} · {group.findings.length} 个风险项</span>
+              </div>
+            )}
+            {group.findings.map((finding) => (
+              <RejectionFindingItem
+                key={finding.id}
+                finding={finding}
+                bidLabel={getBidDocumentLabel(bidDocuments, finding.bidDocumentId)}
+                expanded={rejectionCheckResult.activeFindingId === finding.id}
+                onToggle={() => toggleFinding(finding.id)}
+                onDelete={() => deleteFinding(finding.id)}
+              />
+            ))}
+          </section>
+        ))}
+      </div>
+    );
+  }
+
+  function renderTypoFindingGroups(findings: TypoCheckFinding[]) {
+    const groups = groupFindingsByBid(findings);
+    return (
+      <div className="rejection-finding-list">
+        {groups.map((group) => (
+          <section className="rejection-finding-group" key={group.document.id}>
+            {activeResultBidDocumentId === 'all' && (
+              <div className="rejection-finding-group-head">
+                <strong>{getBidDocumentLabel(bidDocuments, group.document.id)}</strong>
+                <span>{group.document.fileName} · {group.findings.length} 个错别字</span>
+              </div>
+            )}
+            {group.findings.map((finding) => (
+              <TypoFindingItem
+                key={finding.id}
+                finding={finding}
+                bidLabel={getBidDocumentLabel(bidDocuments, finding.bidDocumentId)}
+                expanded={typoCheckResult.activeFindingId === finding.id}
+                onToggle={() => toggleTypoFinding(finding.id)}
+                onDelete={() => deleteTypoFinding(finding.id)}
+                onCopyOriginal={() => void copyTypoOriginal(finding)}
+                onCopyWrong={() => void copyTypoWrong(finding)}
+              />
+            ))}
+          </section>
+        ))}
+      </div>
+    );
+  }
+
+  function renderLogicFindingGroups(findings: LogicCheckFinding[]) {
+    const groups = groupFindingsByBid(findings);
+    return (
+      <div className="rejection-finding-list">
+        {groups.map((group) => (
+          <section className="rejection-finding-group" key={group.document.id}>
+            {activeResultBidDocumentId === 'all' && (
+              <div className="rejection-finding-group-head">
+                <strong>{getBidDocumentLabel(bidDocuments, group.document.id)}</strong>
+                <span>{group.document.fileName} · {group.findings.length} 个逻辑问题</span>
+              </div>
+            )}
+            {group.findings.map((finding) => (
+              <LogicFindingItem
+                key={finding.id}
+                finding={finding}
+                bidLabel={getBidDocumentLabel(bidDocuments, finding.bidDocumentId)}
+                expanded={logicCheckResult.activeFindingId === finding.id}
+                onToggle={() => toggleLogicFinding(finding.id)}
+                onDelete={() => deleteLogicFinding(finding.id)}
+              />
+            ))}
+          </section>
+        ))}
+      </div>
+    );
+  }
+
   function renderTypoCheckContent() {
     if (!checkOptions.typoCheck) {
       return renderDisabledCheckContent('错别字检查');
@@ -1320,6 +1476,7 @@ function RejectionCheckPage() {
             <small>{visibleTypoCheckStatus === 'success' ? `${visibleTypoFindings.length} 个错别字` : typoCheckResult.progressMessage || '等待执行'}</small>
           </div>
         </div>
+        {renderBidResultFilter(visibleTypoFindings)}
 
         {visibleTypoCheckStatus === 'running' ? (
           <div className="markdown-empty-state rejection-finding-empty">
@@ -1330,24 +1487,12 @@ function RejectionCheckPage() {
           <div className="markdown-empty-state rejection-finding-empty is-error">
             <strong>{typoCheckResult.error || '错别字检查失败'}</strong>
             <p>请确认模型配置可用，或重新检查当前投标文件。</p>
-            <button type="button" className="secondary-action" onClick={() => retrySingleCheck('typo')} disabled={checkRunning || extractionRunning || !bidDocument}>
+            <button type="button" className="secondary-action" onClick={() => retrySingleCheck('typo')} disabled={checkRunning || extractionRunning || !bidDocuments.length}>
               重新检查错别字
             </button>
           </div>
-        ) : visibleTypoFindings.length ? (
-          <div className="rejection-finding-list">
-            {visibleTypoFindings.map((finding) => (
-              <TypoFindingItem
-                key={finding.id}
-                finding={finding}
-                expanded={typoCheckResult.activeFindingId === finding.id}
-                onToggle={() => toggleTypoFinding(finding.id)}
-                onDelete={() => deleteTypoFinding(finding.id)}
-                onCopyOriginal={() => void copyTypoOriginal(finding)}
-                onCopyWrong={() => void copyTypoWrong(finding)}
-              />
-            ))}
-          </div>
+        ) : filterFindingsByActiveBid(visibleTypoFindings).length ? (
+          renderTypoFindingGroups(visibleTypoFindings)
         ) : (
           <div className="markdown-empty-state rejection-finding-empty">
             <strong>{visibleTypoCheckStatus === 'success' ? '暂未发现错别字' : hasStaleTypoCheckResult ? '投标文件已变化' : '等待错别字检查'}</strong>
@@ -1376,6 +1521,7 @@ function RejectionCheckPage() {
             <small>{visibleLogicCheckStatus === 'success' ? `${visibleLogicFindings.length} 个逻辑问题` : logicCheckResult.progressMessage || '等待执行'}</small>
           </div>
         </div>
+        {renderBidResultFilter(visibleLogicFindings)}
 
         {visibleLogicCheckStatus === 'running' ? (
           <div className="markdown-empty-state rejection-finding-empty">
@@ -1386,22 +1532,12 @@ function RejectionCheckPage() {
           <div className="markdown-empty-state rejection-finding-empty is-error">
             <strong>{logicCheckResult.error || '逻辑谬误检查失败'}</strong>
             <p>请确认模型配置可用，或重新检查当前投标文件。</p>
-            <button type="button" className="secondary-action" onClick={() => retrySingleCheck('logic')} disabled={checkRunning || extractionRunning || !bidDocument}>
+            <button type="button" className="secondary-action" onClick={() => retrySingleCheck('logic')} disabled={checkRunning || extractionRunning || !bidDocuments.length}>
               重新检查逻辑谬误
             </button>
           </div>
-        ) : visibleLogicFindings.length ? (
-          <div className="rejection-finding-list">
-            {visibleLogicFindings.map((finding) => (
-              <LogicFindingItem
-                key={finding.id}
-                finding={finding}
-                expanded={logicCheckResult.activeFindingId === finding.id}
-                onToggle={() => toggleLogicFinding(finding.id)}
-                onDelete={() => deleteLogicFinding(finding.id)}
-              />
-            ))}
-          </div>
+        ) : filterFindingsByActiveBid(visibleLogicFindings).length ? (
+          renderLogicFindingGroups(visibleLogicFindings)
         ) : (
           <div className="markdown-empty-state rejection-finding-empty">
             <strong>{visibleLogicCheckStatus === 'success' ? '暂未发现逻辑谬误' : hasStaleLogicCheckResult ? '投标文件已变化' : '等待逻辑谬误检查'}</strong>
@@ -1503,20 +1639,28 @@ function RejectionCheckPage() {
                 <div className="rejection-upload-label">
                   <span>02</span>
                   <strong>投标文件</strong>
+                  <small>必选，可多份</small>
                 </div>
                 <div className="rejection-upload-content">
-                  {bidDocument ? (
-                    <DocumentFilePill document={bidDocument} onRemove={() => removeDocument('bid')} />
+                  {bidDocuments.length ? (
+                    <div className="duplicate-file-list rejection-bid-file-list">
+                      {bidDocuments.map((document, index) => (
+                        <div className="rejection-bid-file-entry" key={document.id}>
+                          <span>{`投标文件${index + 1}`}</span>
+                          <DocumentFilePill document={document} onRemove={() => removeDocument('bid', document.id)} />
+                        </div>
+                      ))}
+                    </div>
                   ) : (
                     <div className="rejection-empty-upload">
                       <strong>等待投标文件</strong>
-                      <span>重新上传会直接替换当前投标文件。</span>
+                      <span>可一次选择多份，也可以后续继续追加上传。</span>
                     </div>
                   )}
                 </div>
                 <div className="rejection-upload-actions single-action">
                   <button type="button" className="primary-action" onClick={() => void importParsedDocument('bid')} disabled={busy !== null}>
-                    {busy === 'bid-upload' ? '解析中...' : bidDocument ? '替换' : '上传'}
+                    {busy === 'bid-upload' ? '解析中...' : bidDocuments.length ? '继续上传' : '上传'}
                   </button>
                 </div>
               </article>
@@ -1524,20 +1668,20 @@ function RejectionCheckPage() {
           </section>
 
           <div className="rejection-document-tabs" role="tablist" aria-label="废标项检查正文切换">
-            {documentTabs.map((tab) => {
-              const isActive = tab === activeDocumentTab;
+            {[{ id: 'tender', label: '招标文件' }, ...bidDocuments.map((document, index) => ({ id: document.id, label: `投标文件${index + 1}` }))].map((tab) => {
+              const isActive = tab.id === activeDocumentTab;
               return (
                 <button
                   type="button"
                   className={`rejection-document-tab${isActive ? ' is-active' : ''}`}
                   role="tab"
                   aria-selected={isActive}
-                  aria-controls={`rejection-document-panel-${tab}`}
-                  id={`rejection-document-tab-${tab}`}
-                  key={tab}
-                  onClick={() => setActiveDocumentTab(tab)}
+                  aria-controls={`rejection-document-panel-${tab.id}`}
+                  id={`rejection-document-tab-${tab.id}`}
+                  key={tab.id}
+                  onClick={() => setActiveDocumentTab(tab.id)}
                 >
-                  <strong>{documentLabels[tab]}</strong>
+                  <strong>{tab.label}</strong>
                 </button>
               );
             })}
@@ -1550,7 +1694,7 @@ function RejectionCheckPage() {
             aria-labelledby={`rejection-document-tab-${activeDocumentTab}`}
           >
             <div className="analysis-result-head rejection-reader-head">
-              <strong>{documentLabels[activeDocumentTab]}正文</strong>
+              <strong>{activeDocumentTab === 'tender' ? '招标文件正文' : `${getBidDocumentLabel(bidDocuments, activeDocumentTab)}正文`}</strong>
               <span>{activeDocument ? `${activeDocument.fileName} · ${sourceLabels[activeDocument.source]}` : '等待上传'}</span>
             </div>
 
@@ -1562,8 +1706,8 @@ function RejectionCheckPage() {
               </div>
             ) : (
               <div className="markdown-empty-state rejection-empty-reader">
-                <strong>尚未准备{documentLabels[activeDocumentTab]}</strong>
-                <p>{activeDocumentTab === 'tender' ? '可从技术方案读取招标文件，也可以直接上传并解析成 Markdown。' : '请上传一份投标文件，页面会在这里展示解析后的 Markdown 正文。'}</p>
+                <strong>尚未准备{activeDocumentTab === 'tender' ? '招标文件' : '投标文件'}</strong>
+                <p>{activeDocumentTab === 'tender' ? '可从技术方案读取招标文件，也可以直接上传并解析成 Markdown。' : '请上传至少一份投标文件，页面会在这里展示解析后的 Markdown 正文。'}</p>
               </div>
             )}
           </section>
@@ -1736,6 +1880,7 @@ function RejectionCheckPage() {
                       <small>{visibleRejectionCheckStatus === 'success' ? `${visibleRejectionFindings.length} 个风险项` : rejectionCheckResult.progressMessage || '等待执行'}</small>
                     </div>
                   </div>
+                  {renderBidResultFilter(visibleRejectionFindings)}
 
                   {visibleRejectionCheckStatus === 'running' ? (
                     <div className="markdown-empty-state rejection-finding-empty">
@@ -1746,22 +1891,12 @@ function RejectionCheckPage() {
                     <div className="markdown-empty-state rejection-finding-empty is-error">
                       <strong>{rejectionCheckResult.error || '废标项检查失败'}</strong>
                       <p>请确认模型配置可用，或重新检查当前投标文件。</p>
-                      <button type="button" className="secondary-action" onClick={() => retrySingleCheck('rejection')} disabled={checkRunning || extractionRunning || !bidDocument || visibleExtractionStatus !== 'success' || !currentRejectionCheckInputSignature}>
+                      <button type="button" className="secondary-action" onClick={() => retrySingleCheck('rejection')} disabled={checkRunning || extractionRunning || !bidDocuments.length || visibleExtractionStatus !== 'success' || !currentRejectionCheckInputSignature}>
                         重新检查废标项
                       </button>
                     </div>
-                  ) : visibleRejectionFindings.length ? (
-                    <div className="rejection-finding-list">
-                      {visibleRejectionFindings.map((finding) => (
-                        <RejectionFindingItem
-                          key={finding.id}
-                          finding={finding}
-                          expanded={rejectionCheckResult.activeFindingId === finding.id}
-                          onToggle={() => toggleFinding(finding.id)}
-                          onDelete={() => deleteFinding(finding.id)}
-                        />
-                      ))}
-                    </div>
+                  ) : filterFindingsByActiveBid(visibleRejectionFindings).length ? (
+                    renderRejectionFindingGroups(visibleRejectionFindings)
                   ) : (
                     <div className="markdown-empty-state rejection-finding-empty">
                       <strong>{visibleRejectionCheckStatus === 'success' ? '暂未发现废标项风险' : hasStaleRejectionCheckResult ? '检查输入已变化' : '等待废标项检查'}</strong>
@@ -1827,7 +1962,7 @@ function RejectionCheckPage() {
                   <button type="button" className="secondary-action" onClick={saveCheckOptions}>
                     保存配置
                   </button>
-                  <button type="button" className="primary-action" onClick={startCheckWithOptions} disabled={checkRunning || extractionRunning || !bidDocument || (draftCheckOptions.rejectionCheck && (visibleExtractionStatus !== 'success' || !currentRejectionCheckInputSignature))}>
+                  <button type="button" className="primary-action" onClick={startCheckWithOptions} disabled={checkRunning || extractionRunning || !bidDocuments.length || (draftCheckOptions.rejectionCheck && (visibleExtractionStatus !== 'success' || !currentRejectionCheckInputSignature))}>
                     {checkActionLabel}
                   </button>
                 </div>

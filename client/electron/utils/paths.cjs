@@ -44,9 +44,12 @@ function getRejectionCheckDir(app) {
   return path.join(getWorkspaceDir(app), 'rejection-check');
 }
 
-function getRejectionCheckDocumentMarkdownPath(app, role) {
-  const fileName = role === 'bid' ? 'bid.md' : 'tender.md';
-  return path.join(getRejectionCheckDir(app), fileName);
+function getRejectionCheckDocumentMarkdownPath(app, role, documentId) {
+  if (role === 'bid') {
+    const safeDocumentId = String(documentId || 'bid').replace(/[^a-zA-Z0-9_-]/g, '_');
+    return path.join(getRejectionCheckDir(app), 'bids', `${safeDocumentId}.md`);
+  }
+  return path.join(getRejectionCheckDir(app), 'tender.md');
 }
 
 function getGeneratedImagesDir(app) {
