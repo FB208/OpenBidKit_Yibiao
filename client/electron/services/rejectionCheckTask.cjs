@@ -25,6 +25,21 @@ function normalizeText(value) {
   return String(value || '').trim();
 }
 
+function getBidDocumentIdFromItem(item, bidDocumentIds) {
+  const candidates = [item.bidDocumentId, item.bid_document_id, item.documentId, item.document_id, item.fileId, item.file_id, item.sourceFile, item.source_file]
+    .map((value) => normalizeText(value))
+    .filter(Boolean);
+  for (const candidate of candidates) {
+    if (bidDocumentIds.has(candidate)) return candidate;
+  }
+  return bidDocumentIds.size === 1 ? Array.from(bidDocumentIds)[0] : '';
+}
+
+function formatBidDocumentsForPrompt(input) {
+  const documents = Array.isArray(input.bidDocuments) ? input.bidDocuments : [];
+  return documents.map((document, index) => `【投标文件${index + 1}｜bidDocumentId：${document.id}｜文件名：${document.fileName || document.id}】\n${document.content}`).join('\n\n--- 投标文件分隔线 ---\n\n');
+}
+
 function getArrayPayload(parsed, keys) {
   if (Array.isArray(parsed)) return parsed;
   if (!parsed || typeof parsed !== 'object') return [];
@@ -70,12 +85,12 @@ ${input.customCheckItems.trim()}`,
 
   messages.push({
     role: 'user',
-    content: `【废标项检查输入 v1｜投标文件原文】
-以下是完整投标文件 Markdown 原文。后续检查只能引用这份电子投标文件中可见的内容作为证据。
+    content: `【废标项检查输入 v2｜投标文件原文】
+以下是本次需要一起检查的多份投标文件 Markdown 原文。每份文件都有唯一 bidDocumentId。后续每条风险必须明确返回所属 bidDocumentId，只能引用对应投标文件中可见的内容作为证据。
 
 重要限制：当前原文由文本解析得到，图片、扫描件、截图、附件页等非文本内容可能已被过滤或无法完整呈现。检查材料缺失时，不得要求必须看到图片内容、扫描件正文或附件正文；如果投标文件中已经出现某项材料的章节标题、目录项、附件标题、材料清单项、表格条目、页码线索、图片占位线索或其他可表明该材料已插入/已提交的结构性文本线索，应视为该材料至少存在提交线索。
 
-${input.bidContent}`,
+${formatBidDocumentsForPrompt(input)}`,
   });
 
   return messages;
@@ -92,7 +107,7 @@ function buildRejectionCheckAnalysisMessages(input) {
 分析要求：
 1. 梳理“无效投标”和“废标项”中哪些能通过电子投标文件内容判断。
 2. 明确排除签字、盖章、密封、纸质正副本、现场递交、开标现场授权到场、纸质文件封装等纸质或线下事项。
-3. 结合投标文件目录和正文结构，指出重点核查章节、附件、报价、资格材料、技术/商务响应位置。
+3. 结合各投标文件目录和正文结构，指出重点核查章节、附件、报价、资格材料、技术/商务响应位置，并说明是否存在不同文件需要分别关注的风险。
 4. 判断材料是否缺失时，先识别章节标题、目录项、附件标题、材料清单项、表格条目、页码线索、图片占位线索等结构性文本线索；只要存在这类线索，就不能因为图片或扫描件正文不可见而判定缺失。
 5. 如果某项检查需要外部事实、现场行为或纸质原件才能判断，标记为“不纳入电子文件检查”。
 6. 仅输出分析结论，使用简体中文。`,
@@ -108,10 +123,10 @@ ${analysis}` },
     {
       role: 'user',
       content: `【废标项检查任务 v1｜第二轮：检查】
-请基于第一轮分析逐项检查电子投标文件，输出初步风险列表。
+请基于第一轮分析逐项检查所有电子投标文件，输出初步风险列表。
 
 检查要求：
-1. 每条风险必须有投标文件中的明确证据；证据不足不要输出。
+1. 每条风险必须有某一份投标文件中的明确证据，并写明 bidDocumentId；证据不足不要输出。
 2. 不检查签字、盖章、密封、纸质正副本、现场递交、纸质原件等事项。
 3. 重点关注实质性条款未响应、必要章节或附件缺失、资格材料明显缺失/过期、报价或关键承诺前后矛盾、技术/商务偏离未说明等电子正文可判断风险。
 4. 判断“材料缺失”时，只有在目录、章节标题、附件标题、材料清单、正文、表格和其他结构性线索中均找不到对应材料痕迹，才可以输出疑似缺失；不得仅因图片内容、扫描件正文或附件正文不可见而输出缺失风险。
@@ -147,6 +162,7 @@ JSON 格式：
 {
   "findings": [
     {
+      "bidDocumentId": "对应投标文件的 bidDocumentId，例如 bid-xxxx",
       "type": "invalidBid",
       "severity": "high",
       "title": "不超过 28 个中文字符的风险标题",
@@ -166,21 +182,21 @@ JSON 格式：
 
 function buildTypoCheckMessages(input) {
   return [
-    { role: 'user', content: `【错别字检查输入 v1｜投标文件原文】
-以下是完整投标文件 Markdown 原文。后续只能检查这份原文中真实存在的文字。
+    { role: 'user', content: `【错别字检查输入 v2｜投标文件原文】
+以下是本次需要一起检查的多份投标文件 Markdown 原文。每份文件都有唯一 bidDocumentId。后续只能检查这些原文中真实存在的文字，每条结果必须返回所属 bidDocumentId。
 
-${input.bidContent}` },
+${formatBidDocumentsForPrompt(input)}` },
     { role: 'user', content: `【错别字检查任务 v1】
 请检查投标文件中的错别字、明显别字、同音错字、形近错字和明显录入错误，并输出 JSON。
 
 检查要求：
 1. 只输出你高度确信的错别字，不输出风格建议、标点偏好、表达优化或术语争议。
-2. 每条必须来自投标文件原文，wrongText 必须是原文中出现的原始错字或短词。
+2. 每条必须来自某一份投标文件原文，wrongText 必须是原文中出现的原始错字或短词，bidDocumentId 必须是输入中提供的真实 ID。
 3. correctText 是建议改成的正确字词。
 4. originalExcerpt 尽量摘录包含 wrongText 的原文短片段，便于程序校验；不要改写原文。
 5. 如果没有明确错别字，返回 {"findings":[]}。
 
-JSON 格式：{"findings":[{"wrongText":"原文中的错别字或短词","correctText":"建议正确字词","originalExcerpt":"包含错别字的原文短片段","reason":"为什么判断为错别字"}]}
+JSON 格式：{"findings":[{"bidDocumentId":"对应投标文件的 bidDocumentId","wrongText":"原文中的错别字或短词","correctText":"建议正确字词","originalExcerpt":"包含错别字的原文短片段","reason":"为什么判断为错别字"}]}
 
 仅输出 JSON，不要输出 Markdown、代码块或解释。` },
   ];
@@ -188,10 +204,10 @@ JSON 格式：{"findings":[{"wrongText":"原文中的错别字或短词","correc
 
 function buildLogicCheckMessages(input) {
   return [
-    { role: 'user', content: `【逻辑谬误检查输入 v1｜投标文件原文】
-以下是完整投标文件 Markdown 原文。后续只能基于这份投标文件内容进行逻辑一致性检查。
+    { role: 'user', content: `【逻辑谬误检查输入 v2｜投标文件原文】
+以下是本次需要一起检查的多份投标文件 Markdown 原文。每份文件都有唯一 bidDocumentId。后续只能基于这些投标文件内容进行逻辑一致性检查，每条结果必须返回所属 bidDocumentId。
 
-${input.bidContent}` },
+${formatBidDocumentsForPrompt(input)}` },
     { role: 'user', content: `【逻辑谬误检查任务 v1】
 请检查投标文件中的逻辑谬误和前后不一致问题，并输出 JSON。
 
@@ -201,25 +217,28 @@ ${input.bidContent}` },
 
 输出要求：
 1. 只保留有明确文本依据的问题，避免泛泛而谈。
-2. 问题可能涉及多处原文，originalText 可摘录关键原文，locationHint 写明大概位置、章节、表格或上下文线索。
+2. 问题可能涉及同一份投标文件内的多处原文，originalText 可摘录关键原文，locationHint 写明大概位置、章节、表格或上下文线索，bidDocumentId 必须是输入中提供的真实 ID。
 3. title 必须简短明确，便于作为折叠列表标题。
 4. 如果没有明确逻辑谬误，返回 {"findings":[]}。
 
-JSON 格式：{"findings":[{"title":"不超过 28 个中文字符的简短标题","originalText":"关键原文摘录，可包含多处摘录","locationHint":"大概位置、章节、表格或上下文线索","fallacyReason":"谬误原因或前后不一致原因","suggestion":"修改建议"}]}
+JSON 格式：{"findings":[{"bidDocumentId":"对应投标文件的 bidDocumentId","title":"不超过 28 个中文字符的简短标题","originalText":"关键原文摘录，可包含同一份文件内多处摘录","locationHint":"大概位置、章节、表格或上下文线索","fallacyReason":"谬误原因或前后不一致原因","suggestion":"修改建议"}]}
 
 仅输出 JSON，不要输出 Markdown、代码块或解释。` },
   ];
 }
 
-function normalizeRejectionCheckFindings(parsed) {
+function normalizeRejectionCheckFindings(parsed, bidDocuments) {
+  const bidDocumentIds = new Set((Array.isArray(bidDocuments) ? bidDocuments : []).map((document) => document.id).filter(Boolean));
   return getArrayPayload(parsed, ['findings', 'items', 'risks'])
     .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
     .map((item) => {
+      const bidDocumentId = getBidDocumentIdFromItem(item, bidDocumentIds);
       const title = normalizeText(item.title).slice(0, 80);
       const bidEvidence = normalizeText(item.bidEvidence || item.evidence || item.bid_evidence);
       const riskReason = normalizeText(item.riskReason || item.reason || item.risk_reason);
       return {
         id: normalizeText(item.id) || createId('rejection_finding'),
+        bidDocumentId,
         type: normalizeFindingType(item.type),
         severity: normalizeSeverity(item.severity),
         title,
@@ -230,7 +249,7 @@ function normalizeRejectionCheckFindings(parsed) {
         suggestion: normalizeText(item.suggestion) || '请结合招标文件要求和投标文件原文人工复核后处理。',
       };
     })
-    .filter((item) => item.title && item.bidEvidence && item.riskReason);
+    .filter((item) => item.bidDocumentId && item.title && item.bidEvidence && item.riskReason);
 }
 
 function findVerifiedTypoPosition(bidContent, wrongText, originalExcerpt) {
@@ -266,48 +285,57 @@ function createLineLocationHint(bidContent, position) {
   return `原文第 ${before.split(/\r\n|\r|\n/).length} 行附近`;
 }
 
-function normalizeTypoCheckFindings(parsed, bidContent) {
+function normalizeTypoCheckFindings(parsed, bidDocuments) {
+  const documents = Array.isArray(bidDocuments) ? bidDocuments : [];
+  const bidDocumentIds = new Set(documents.map((document) => document.id).filter(Boolean));
+  const documentMap = new Map(documents.map((document) => [document.id, document]));
   const seen = new Set();
   const findings = [];
   for (const item of getArrayPayload(parsed, ['findings', 'items', 'typos'])) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const bidDocumentId = getBidDocumentIdFromItem(item, bidDocumentIds);
+    const bidDocument = documentMap.get(bidDocumentId);
+    if (!bidDocument?.content) continue;
     const wrongText = normalizeText(item.wrongText || item.wrong_text || item.wrong || item.typo).slice(0, 60);
     const correctText = normalizeText(item.correctText || item.correct_text || item.correct || item.suggestion).slice(0, 60);
     const originalExcerpt = normalizeText(item.originalExcerpt || item.original_excerpt || item.excerpt || item.context);
     const reason = normalizeText(item.reason || item.riskReason || item.detail) || '疑似错别字，请结合原文复核。';
     if (!wrongText || !correctText || wrongText === correctText) continue;
-    const position = findVerifiedTypoPosition(bidContent, wrongText, originalExcerpt);
+    const position = findVerifiedTypoPosition(bidDocument.content, wrongText, originalExcerpt);
     if (position < 0) continue;
-    const key = `${wrongText}\u0000${correctText}\u0000${position}`;
+    const key = `${bidDocumentId}\u0000${wrongText}\u0000${correctText}\u0000${position}`;
     if (seen.has(key)) continue;
     seen.add(key);
     findings.push({
       id: normalizeText(item.id) || createId('typo_finding'),
+      bidDocumentId,
       wrongText,
       correctText,
-      originalExcerpt: createVerifiedTypoExcerpt(bidContent, position, wrongText),
+      originalExcerpt: createVerifiedTypoExcerpt(bidDocument.content, position, wrongText),
       reason,
-      locationHint: createLineLocationHint(bidContent, position),
+      locationHint: createLineLocationHint(bidDocument.content, position),
     });
   }
   return findings;
 }
 
-function normalizeLogicCheckFindings(parsed) {
+function normalizeLogicCheckFindings(parsed, bidDocuments) {
+  const bidDocumentIds = new Set((Array.isArray(bidDocuments) ? bidDocuments : []).map((document) => document.id).filter(Boolean));
   const seen = new Set();
   const findings = [];
   for (const item of getArrayPayload(parsed, ['findings', 'items', 'risks', 'issues'])) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const bidDocumentId = getBidDocumentIdFromItem(item, bidDocumentIds);
     const title = normalizeText(item.title || item.summary).slice(0, 80);
     const originalText = normalizeText(item.originalText || item.original_text || item.evidence || item.bidEvidence) || '未提供明确原文摘录，请结合位置线索复核。';
     const locationHint = normalizeText(item.locationHint || item.location_hint || item.location || item.position) || '未明确具体位置，请结合原文摘录复核。';
     const fallacyReason = normalizeText(item.fallacyReason || item.fallacy_reason || item.reason || item.riskReason);
     const suggestion = normalizeText(item.suggestion || item.recommendation) || '请结合投标文件上下文人工复核后修改。';
-    if (!title || !fallacyReason) continue;
-    const key = `${title}\u0000${fallacyReason}`;
+    if (!bidDocumentId || !title || !fallacyReason) continue;
+    const key = `${bidDocumentId}\u0000${title}\u0000${fallacyReason}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    findings.push({ id: normalizeText(item.id) || createId('logic_finding'), title, originalText, locationHint, fallacyReason, suggestion });
+    findings.push({ id: normalizeText(item.id) || createId('logic_finding'), bidDocumentId, title, originalText, locationHint, fallacyReason, suggestion });
   }
   return findings;
 }
@@ -384,32 +412,32 @@ async function runRejectionItemCheck(aiService, input, onProgress) {
     progressLabel: '废标项检查结果',
     failureMessage: '废标项检查结果格式无效，请重新检查',
   }, onProgress, '第三轮定稿');
-  return normalizeRejectionCheckFindings(payload);
+  return normalizeRejectionCheckFindings(payload, input.bidDocuments);
 }
 
 async function runTypoCheck(aiService, input, onProgress) {
   onProgress('正在识别错别字候选。');
   const payload = await runJson(aiService, {
-    messages: buildTypoCheckMessages({ bidContent: input.bidContent }),
+    messages: buildTypoCheckMessages({ bidDocuments: input.bidDocuments }),
     temperature: 0.1,
     schemaName: 'TypoCheckFindings',
     progressLabel: '错别字检查结果',
     failureMessage: '错别字检查结果格式无效，请重新检查',
   }, onProgress, '错别字检查');
   onProgress('正在校验错别字原文位置。');
-  return normalizeTypoCheckFindings(payload, input.bidContent);
+  return normalizeTypoCheckFindings(payload, input.bidDocuments);
 }
 
 async function runLogicCheck(aiService, input, onProgress) {
   onProgress('正在检查逻辑谬误。');
   const payload = await runJson(aiService, {
-    messages: buildLogicCheckMessages({ bidContent: input.bidContent }),
+    messages: buildLogicCheckMessages({ bidDocuments: input.bidDocuments }),
     temperature: 0.1,
     schemaName: 'LogicCheckFindings',
     progressLabel: '逻辑谬误检查结果',
     failureMessage: '逻辑谬误检查结果格式无效，请重新检查',
   }, onProgress, '逻辑谬误检查');
-  return normalizeLogicCheckFindings(payload);
+  return normalizeLogicCheckFindings(payload, input.bidDocuments);
 }
 
 function updateExtractionState(workspaceStore, updateTask, taskPartial, extractionPartial) {
@@ -516,19 +544,20 @@ async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, pa
   const state = workspaceStore.loadRejectionCheck ? workspaceStore.loadRejectionCheck() : {};
   const options = state.checkOptions || {};
   const runOptions = payload?.runOptions || options;
-  const bidDocument = state.bidDocument || null;
+  const bidDocuments = Array.isArray(state.bidDocuments) ? state.bidDocuments : [];
   if (typeof workspaceStore.readDocumentMarkdown !== 'function'
     || typeof workspaceStore.createDocumentSignature !== 'function'
     || typeof workspaceStore.createRejectionCheckInputSignature !== 'function') {
     throw new Error('废标项检查存储接口尚未初始化');
   }
-  const bidContent = String(workspaceStore.readDocumentMarkdown('bid') || '');
-  const currentBidDocument = bidDocument ? { ...bidDocument, content: bidContent } : null;
+  const currentBidDocuments = bidDocuments
+    .map((document) => ({ ...document, content: String(workspaceStore.readDocumentMarkdown(document.id) || '') }))
+    .filter((document) => document.id && document.content.trim());
   const invalidBidAndRejectionItems = String(state.invalidBidAndRejectionItems?.content || '');
   const customCheckItems = String(state.customCheckItems ?? '');
-  const rejectionInputSignature = String(workspaceStore.createRejectionCheckInputSignature(currentBidDocument, invalidBidAndRejectionItems, customCheckItems) || '');
-  const bidSignature = String(workspaceStore.createDocumentSignature(currentBidDocument) || '');
-  if (!bidContent.trim() || !bidSignature) throw new Error('缺少投标文件内容，无法开始检查');
+  const rejectionInputSignature = String(workspaceStore.createRejectionCheckInputSignature(currentBidDocuments, invalidBidAndRejectionItems, customCheckItems) || '');
+  const bidSignature = currentBidDocuments.map((document) => workspaceStore.createDocumentSignature(document)).filter(Boolean).join('\n---yibiao-rejection-bid-signature---\n');
+  if (!currentBidDocuments.length || !bidSignature) throw new Error('缺少投标文件内容，无法开始检查');
 
   const enabledTasks = [
     runOptions.rejectionCheck ? 'rejection' : '',
@@ -549,7 +578,8 @@ async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, pa
     bid_signature: bidSignature,
     rejection_input_signature: rejectionInputSignature,
     enabled_tasks: enabledTasks,
-    bid_content_metrics: textMetrics(bidContent),
+    bid_document_count: currentBidDocuments.length,
+    bid_content_metrics: currentBidDocuments.map((document) => ({ id: document.id, file_name: document.fileName, ...textMetrics(document.content) })),
     invalid_items_metrics: textMetrics(invalidBidAndRejectionItems),
     custom_items_metrics: textMetrics(customCheckItems),
   });
@@ -613,13 +643,13 @@ async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, pa
 
   const tasks = [];
   if (runOptions.rejectionCheck) {
-    tasks.push(runOne('rejection', '废标项检查', (onProgress) => runRejectionItemCheck(aiService, { invalidBidAndRejectionItems, customCheckItems, bidContent }, onProgress), 'rejectionCheckResult', rejectionInputSignature));
+    tasks.push(runOne('rejection', '废标项检查', (onProgress) => runRejectionItemCheck(aiService, { invalidBidAndRejectionItems, customCheckItems, bidDocuments: currentBidDocuments }, onProgress), 'rejectionCheckResult', rejectionInputSignature));
   }
   if (runOptions.typoCheck) {
-    tasks.push(runOne('typo', '错别字检查', (onProgress) => runTypoCheck(aiService, { bidContent }, onProgress), 'typoCheckResult', bidSignature));
+    tasks.push(runOne('typo', '错别字检查', (onProgress) => runTypoCheck(aiService, { bidDocuments: currentBidDocuments }, onProgress), 'typoCheckResult', bidSignature));
   }
   if (runOptions.logicCheck) {
-    tasks.push(runOne('logic', '逻辑谬误检查', (onProgress) => runLogicCheck(aiService, { bidContent }, onProgress), 'logicCheckResult', bidSignature));
+    tasks.push(runOne('logic', '逻辑谬误检查', (onProgress) => runLogicCheck(aiService, { bidDocuments: currentBidDocuments }, onProgress), 'logicCheckResult', bidSignature));
   }
 
   const results = await Promise.all(tasks);

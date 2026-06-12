@@ -1,5 +1,7 @@
 export type RejectionDocumentRole = 'tender' | 'bid';
 
+export type RejectionDocumentTabId = 'tender' | string;
+
 export type RejectionDocumentSource = 'upload' | 'technical-plan';
 
 export type RejectionCheckStep = 'documents' | 'items' | 'results';
@@ -34,6 +36,7 @@ export interface RejectionBackgroundTaskState {
 }
 
 export interface RejectionDocumentContent {
+  id: string;
   role: RejectionDocumentRole;
   fileName: string;
   content: string;
@@ -44,8 +47,8 @@ export interface RejectionDocumentContent {
 
 export interface RejectionCheckWorkspaceState {
   tenderDocument: RejectionDocumentContent | null;
-  bidDocument: RejectionDocumentContent | null;
-  activeDocumentTab: RejectionDocumentRole;
+  bidDocuments: RejectionDocumentContent[];
+  activeDocumentTab: RejectionDocumentTabId;
   step?: RejectionCheckStep;
   activeResultTab?: RejectionResultTab;
   activeCheckResultTab?: RejectionCheckResultTab;
@@ -76,6 +79,7 @@ export interface RejectionExtractionState {
 
 export interface RejectionCheckFinding {
   id: string;
+  bidDocumentId: string;
   type: RejectionFindingType;
   severity: RejectionFindingSeverity;
   title: string;
@@ -98,6 +102,7 @@ export interface RejectionCheckResultState {
 
 export interface TypoCheckFinding {
   id: string;
+  bidDocumentId: string;
   wrongText: string;
   correctText: string;
   originalExcerpt: string;
@@ -117,6 +122,7 @@ export interface TypoCheckResultState {
 
 export interface LogicCheckFinding {
   id: string;
+  bidDocumentId: string;
   title: string;
   originalText: string;
   locationHint: string;

@@ -1,6 +1,11 @@
 # Findings
 
 ## Research Log
+- 废标项检查当前为单投标文件链路：Renderer 使用 `bidDocument`，Store 以 `rejection_check_documents.role` 主键保存 `bid`，Main 任务只读取 `readDocumentMarkdown('bid')`，三类结果表都没有文件归属字段。
+- 标书查重的多投标文件上传样式已在 `DuplicateCheckPage.tsx` 落地，可复用 `duplicate-upload-row`、文件列表和文件 pill 的交互思路；废标检查已有 `DocumentFilePill` 和正文 Tab 样式，可小幅扩展。
+- 多文件结果显示应以结构化 `bidDocumentId` 为权威：AI Prompt 需要列出可用投标文件 ID，并要求每条废标/错别字/逻辑问题返回所属 ID；Normalizer 必须过滤不存在的 ID。
+- 旧 SQLite schema 需要 runtime migration：`rejection_check_documents` 从 `role` 主键改为 `document_id` 主键并保留 `role/sort_order`；三类 findings 增加 `bid_document_id`，旧单份 bid 可迁移为 `bid-1`。
+- v12 迁移不能在旧表上先调用完整 `createRejectionCheckSchema()`：旧 `rejection_check_documents` 没有 `sort_order`，提前创建 `idx_rejection_check_documents_role_order` 会失败。已改为先识别旧表并重命名/重建，或先补 `sort_order` 后再建完整 schema；Electron 运行时旧 v11 冒烟测试确认升级到 v12 后旧 bid 为 `bid-1`，旧 finding 归属 `bid-1`。
 - 已有方案扩写 Step05 目标边界：还原阶段 AI 只做原方案段落到当前目录叶子节点的编号映射，程序拼接真实原文；还原状态落到 `contentGenerationPlans.plan.original_material`；首轮正文生成对 `restored && !optimized` 节点走基于原文优化扩写分支；补目录阶段必须锁定已还原节点，避免“还原 -> 拆节点 -> 再还原”的循环。
 - 已有方案扩写 Step05 覆盖审计边界：只在扩写模式且用户开启时执行，审计目标来自 `original_material.source_ids` 和当前成功正文；`covered` 不处理，`partial/missing` 用现有 insert/replace 机制局部补写，`conflict` 只记录并交给一致性审计或人工核对；执行位置在最低字数扩充后、全文一致性审计前。
 - 原方案是 `existing-plan-expansion` 的核心草稿输入：一旦替换，旧目录、全局事实、正文、正文编排计划、`original_material` 还原状态、runtime 和相关任务都依赖旧原方案，必须从 Step03 起失效；招标 Markdown、Step02 招标解析结果和参考知识库选择不依赖原方案，可保留。

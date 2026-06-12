@@ -4,7 +4,7 @@
 -- 1. 本文件用于开源开发者阅读、评审和排查问题，展示 workspace/yibiao.sqlite 的目标完整表结构。
 -- 2. 用户运行客户端时不需要手动执行本文件。
 -- 3. 客户端运行时建表和升级以 Electron Main 侧 migration 代码为准。
--- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、待选择标段恢复状态 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10 目标结构。
+-- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、待选择标段恢复状态 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12 目标结构。
 -- 5. 每次表结构调整后，需要同步更新本文件和 runtime migration 版本。
 -- 6. 本文件不保存历史版本，每次更新都写入最新目标完整结构。
 
@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 10;
+PRAGMA user_version = 12;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -410,18 +410,23 @@ CREATE TABLE IF NOT EXISTS rejection_check_meta (
 );
 
 -- 废标项检查招标/投标文档元数据。
--- Markdown 原文不进入 SQLite，保存到 userData/workspace/rejection-check/tender.md 或 bid.md。
+-- 招标文件保持单份；投标文件可多份。Markdown 原文不进入 SQLite，保存到 userData/workspace/rejection-check/tender.md 或 rejection-check/bids/<document_id>.md。
 CREATE TABLE IF NOT EXISTS rejection_check_documents (
-  role TEXT PRIMARY KEY,
+  document_id TEXT PRIMARY KEY,
+  role TEXT NOT NULL,
   source TEXT NOT NULL,
   file_name TEXT NOT NULL,
   markdown_path TEXT NOT NULL,
   content_hash TEXT NOT NULL,
   content_chars INTEGER NOT NULL DEFAULT 0,
   parser_label TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
   imported_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_rejection_check_documents_role_order
+ON rejection_check_documents(role, sort_order);
 
 -- 废标项检查后台任务状态。
 CREATE TABLE IF NOT EXISTS rejection_check_tasks (
@@ -462,6 +467,7 @@ CREATE TABLE IF NOT EXISTS rejection_check_results (
 -- 废标项检查风险结果。
 CREATE TABLE IF NOT EXISTS rejection_check_risk_findings (
   finding_id TEXT PRIMARY KEY,
+  bid_document_id TEXT,
   type TEXT NOT NULL,
   severity TEXT NOT NULL,
   title TEXT NOT NULL,
@@ -484,6 +490,7 @@ ON rejection_check_risk_findings(severity);
 -- 错别字检查结果。
 CREATE TABLE IF NOT EXISTS rejection_check_typo_findings (
   finding_id TEXT PRIMARY KEY,
+  bid_document_id TEXT,
   wrong_text TEXT NOT NULL,
   correct_text TEXT NOT NULL,
   original_excerpt TEXT NOT NULL,
@@ -500,6 +507,7 @@ ON rejection_check_typo_findings(sort_order);
 -- 逻辑谬误检查结果。
 CREATE TABLE IF NOT EXISTS rejection_check_logic_findings (
   finding_id TEXT PRIMARY KEY,
+  bid_document_id TEXT,
   title TEXT NOT NULL,
   original_text TEXT NOT NULL,
   location_hint TEXT NOT NULL,

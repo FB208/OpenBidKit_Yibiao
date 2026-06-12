@@ -7095,6 +7095,11 @@ button {
   font-size: 19px;
 }
 
+.rejection-upload-label small {
+  color: var(--yb-text-soft);
+  font-size: 12px;
+}
+
 .rejection-empty-upload span,
 .rejection-file-info span {
   color: var(--yb-text-soft);
@@ -7191,6 +7196,27 @@ button {
   font-weight: 700;
   background: rgba(200, 50, 32, 0.08);
   border: 0;
+  border-radius: 999px;
+}
+
+.rejection-bid-file-list {
+  display: grid;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.rejection-bid-file-entry {
+  display: grid;
+  gap: 6px;
+}
+
+.rejection-bid-file-entry > span {
+  width: max-content;
+  padding: 3px 8px;
+  color: var(--yb-primary);
+  font-size: 12px;
+  font-weight: 900;
+  background: rgba(33, 116, 253, 0.09);
   border-radius: 999px;
 }
 
@@ -7466,6 +7492,67 @@ button {
   gap: 12px;
 }
 
+.rejection-bid-result-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0 2px;
+}
+
+.rejection-bid-result-filter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  color: var(--yb-text-soft);
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(27, 50, 92, 0.12);
+  border-radius: 999px;
+}
+
+.rejection-bid-result-filter button.is-active {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.1);
+  border-color: rgba(33, 116, 253, 0.24);
+}
+
+.rejection-bid-result-filter span {
+  min-width: 18px;
+  padding: 2px 6px;
+  color: inherit;
+  font-size: 12px;
+  background: rgba(27, 50, 92, 0.08);
+  border-radius: 999px;
+}
+
+.rejection-finding-group {
+  display: grid;
+  gap: 10px;
+}
+
+.rejection-finding-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  color: var(--yb-text-soft);
+  background: linear-gradient(90deg, rgba(33, 116, 253, 0.08), rgba(91, 84, 211, 0.04));
+  border: 1px solid rgba(33, 116, 253, 0.12);
+  border-radius: 16px;
+}
+
+.rejection-finding-group-head strong {
+  color: var(--yb-text);
+}
+
+.rejection-finding-group-head span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .rejection-finding-item {
   overflow: hidden;
   background: rgba(255, 255, 255, 0.96);
@@ -7547,6 +7634,7 @@ button {
 }
 
 .rejection-finding-tag,
+.rejection-finding-file-tag,
 .rejection-finding-severity {
   flex: 0 0 auto;
   padding: 4px 8px;
@@ -7554,6 +7642,11 @@ button {
   font-style: normal;
   font-weight: 900;
   border-radius: 999px;
+}
+
+.rejection-finding-file-tag {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.1);
 }
 
 .rejection-finding-tag.is-invalidBid {
@@ -9906,6 +9999,17 @@ button {
     flex-direction: column;
   }
 
+  .rejection-upload-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .rejection-upload-actions,
+  .rejection-upload-actions.single-action {
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
   .technical-document-page-title {
     align-items: stretch;
     flex-direction: column;
@@ -9913,6 +10017,7 @@ button {
 
   .rejection-document-tabs {
     width: 100%;
+    overflow-x: auto;
   }
 
   .technical-document-tabs {
@@ -9920,7 +10025,8 @@ button {
   }
 
   .rejection-document-tab {
-    flex: 1;
+    min-width: 116px;
+    flex: 1 0 auto;
   }
 
   .technical-document-tab {
@@ -9981,6 +10087,21 @@ button {
   }
 
   .rejection-finding-summary {
+    flex-direction: column;
+  }
+
+  .rejection-bid-result-filter {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 6px;
+  }
+
+  .rejection-bid-result-filter button {
+    flex: 0 0 auto;
+  }
+
+  .rejection-finding-group-head {
+    align-items: stretch;
     flex-direction: column;
   }
 
