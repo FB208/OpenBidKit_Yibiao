@@ -19,6 +19,20 @@ const tabLoaders = {
   resources: () => loadResources(),
 };
 
+function getLatestTotalPages() {
+  return Math.max(1, Math.ceil(appState.latestTotal / appState.latestPageSize));
+}
+
+function jumpLatestPage() {
+  const value = Number(state.latestPageInput.value || appState.latestPage);
+  if (!Number.isFinite(value)) {
+    return;
+  }
+
+  appState.latestPage = Math.min(Math.max(1, Math.floor(value)), getLatestTotalPages());
+  void refreshActiveTab();
+}
+
 async function refreshActiveTab(options = {}) {
   setError('');
   setStatus('', '加载中');
@@ -50,6 +64,12 @@ function bindEvents() {
   state.nextLatestPage.addEventListener('click', () => {
     appState.latestPage += 1;
     void refreshActiveTab();
+  });
+  state.jumpLatestPage.addEventListener('click', jumpLatestPage);
+  state.latestPageInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      jumpLatestPage();
+    }
   });
 
   for (const button of state.tabButtons) {

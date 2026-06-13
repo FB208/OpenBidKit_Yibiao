@@ -49,6 +49,8 @@ export function renderTable(target, rows, columns, emptyText) {
 export function updateLatestPager() {
   const totalPages = Math.max(1, Math.ceil(appState.latestTotal / appState.latestPageSize));
   state.latestPageInfo.textContent = `第 ${appState.latestPage} / ${totalPages} 页，共 ${formatNumber(appState.latestTotal)} 条`;
+  state.latestPageInput.value = String(appState.latestPage);
+  state.latestPageInput.max = String(totalPages);
   state.prevLatestPage.disabled = appState.latestPage <= 1;
   state.nextLatestPage.disabled = appState.latestPage >= totalPages;
 }

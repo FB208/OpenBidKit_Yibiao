@@ -1,33 +1,44 @@
 # Task Plan
 
-## Current Task: Analytics 长期统计与历史总数改造
+## Current Task: Analytics 长期统计去 Queue 与每日汇总改造
 
 ### Goal
-按 `client/doc/统计改造计划.md` 实现 Analytics 长期统计：新增 `ANALYTICS_DB` D1 和 Queue 聚合链路，`/track` 先入队再写 Analytics Engine，Queue Consumer 批内聚合写 D1；Dashboard 拆分长期累计、固定窗口、范围分析，并为访问分析、配置使用、模型使用、资源管理增加“历史总数”。
+按 `client/doc/统计改造计划.md` 的最终方案实现 Analytics 长期统计：`/track` 只写 Analytics Engine，Worker Cron 每天汇总昨日 Analytics Engine 聚合结果到 `ANALYTICS_DB` D1；D1 只保存每日聚合结果和匿名 hash 去重索引，不保存原始事件明细或明文 `client_id`。
 
 ### Phases
 - [completed] 1. 梳理现有 Analytics Worker/Dashboard 边界并补充文件型计划。
 - [completed] 2. 新增 D1 migration、Analytics storage setup 脚本、部署前 setup 接入。
-- [completed] 3. 新增 D1 聚合服务和 Queue Consumer，改造 `/track` 写入顺序。
+- [completed] 3. 去除 Queue 热路径，新增 Analytics Engine track 服务和每日汇总服务。
 - [completed] 4. 新增/改造 D1 查询接口：overview、traffic history、config/model/resource history、projects。
 - [completed] 5. 改造 Dashboard 控件、概览页分区和各 Tab 历史总数。
 - [completed] 6. 更新文档与运行语法检查/必要构建验证。
+- [completed] 7. 新增 Analytics Engine 到 D1 的历史回填脚本、命令入口和文档说明。
+- [completed] 8. 将旧 Queue/monthly 方案迁移为 D1 daily rollup + Cron，更新 setup、wrangler、README 和统计改造计划。
 
 ### Decisions
-- 不改桌面客户端埋点入口；`event_id` 由 Worker 生成，客户端继续 fire-and-forget。
-- D1 不保存原始事件明细，只保存客户端生命周期、每日活跃、月度聚合、维度去重和维度累计。
+- 不改桌面客户端埋点入口；客户端继续 fire-and-forget。
+- `/track` 不再生成 `event_id`、不投递 Queue、不中转 D1，只写 Analytics Engine。
+- D1 不保存原始事件明细，只保存每日聚合表和匿名客户端/维度 hash 去重索引。
 - 生产 Dashboard 不再允许任意 API 地址，固定使用 `https://analytics.agnet.top` 或当前同源；开发调试可通过构建/运行配置放开。
 - 近期 7/30/90 天灵活分析暂保留 Analytics Engine 数据源；历史总数和长期累计读 D1，并在 Dashboard 标注数据源差异。
+- Cron 固定为 `15 18 * * *`，北京时间每天 02:15 汇总昨日。
 
 ### Errors Encountered
 | Error | Attempt | Resolution |
 | --- | --- | --- |
+| 本机非交互环境缺少 `CLOUDFLARE_API_TOKEN`，`npm run setup:analytics-storage` 无法创建/配置远程 D1 | 尝试执行生产回填前先运行 setup | 已确认未写入远程资源；需要设置 `CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID` 后重跑 setup，再执行 backfill |
+| 旧 setup 补丁按上下文删除 Queue 函数失败 | `apply_patch` 局部匹配正则转义块 | 改为整文件替换 `setup-analytics-storage.mjs`，保留 D1 setup 并新增 Cron 检查 |
 
 ### Validation
-- `node --check` 通过：`analytics/worker/src/index.js`、`src/services/analyticsRollup.js`、`src/services/analyticsD1Query.js`、`src/routes/track.js`、`src/routes/overview.js`、`src/routes/traffic.js`、`src/routes/summary.js`、`src/routes/configUsage.js`、`src/routes/projects.js`、`src/routes/resources.js`。
-- `node --check` 通过：`analytics/scripts/setup-analytics-storage.mjs`、`analytics/scripts/deploy-if-changed.mjs`。
+- `node --check` 通过：`src/services/analyticsTrack.js`、`src/services/analyticsDailyRollup.js`、`src/services/analyticsD1Query.js`、`src/routes/track.js`、`src/index.js`、`../scripts/setup-analytics-storage.mjs`、`../scripts/backfill-analytics-rollups.mjs`。
+- `node --check` 通过：`src/routes/overview.js`、`src/routes/summary.js`、`src/routes/traffic.js`、`src/routes/configUsage.js`、`src/routes/projects.js`、`src/routes/resources.js`、`../scripts/deploy-if-changed.mjs`。
+- `npm run backfill:analytics -- --project yibiao-client --start 2026-03-15 --end 2026-06-12 --dry-run` 通过。
+- `git diff --check` 通过，仅有 LF/CRLF 提示。
+- 历史记录：旧 Queue 版曾通过 Worker/Dashboard/setup/deploy/backfill 语法检查，现已被 daily rollup 方案替换。
 - `node --check` 通过：Dashboard `public/src/api.js`、`state.js`、`main.js`、`pages/overview.js`、`pages/traffic.js`、`pages/configUsage.js`、`pages/resources.js`。
 - `git diff --check` 通过，仅有 LF/CRLF 提示。
+- `node --check analytics/scripts/backfill-analytics-rollups.mjs` 通过。
+- `npm run backfill:analytics -- --project yibiao-client --start 2026-03-15 --end 2026-06-12 --dry-run` 通过。
 
 ## Current Task: 废标项检查多投标文件支持
 

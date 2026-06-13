@@ -5,6 +5,12 @@
 - Analytics D1 聚合精确去重边界：不能依赖 SQLite `changes()` 在 D1 batch 中跨语句累计新增维度客户端数；已改为先写 `analytics_dimension_clients`，再按 `project/dimension/key` 从关系表 `COUNT(*)/MIN/MAX` 重算 `analytics_dimension_client_totals`，避免重复事件、回填和并发写入导致累计客户端数偏移。
 - Analytics Queue Consumer 批处理边界：聚合写入和事件 `done` 标记必须处于同一个 D1 batch transaction；如果完整队列批次语句数过多，只能递归拆成子批次提交，不能先提交统计再单独标记 done，否则失败重试会重复累计。
 - Dashboard 范围选择边界：顶部不能再保留全局 `days`，否则用户会继续误以为长期累计和固定窗口受该选择影响；范围选择应下放到概览范围分析、访问分析、配置使用、模型使用和资源管理点击统计，各自决定读 Analytics Engine 近期数据还是 D1 历史总数。
+- Analytics 回填执行边界：`ANALYTICS_DB` 是 `wrangler.jsonc` 的 D1 binding，Worker 运行时通过 `env.ANALYTICS_DB` 访问；`ANALYTICS_ROLLUP_QUEUE` 是 Queue producer binding，`queues.consumers` 绑定同名队列到 Worker `queue(batch, env)`。当前本机未设置 `CLOUDFLARE_API_TOKEN`，setup/backfill 不能实际操作远程 Cloudflare 资源。
+- 访问分析版本分布今日活跃偏低的根因是口径不一致：概览 D1 今日活跃按上海业务日统计任意事件去重客户端；版本分布近期查询此前使用 Analytics Engine UTC `toDate(NOW())` 且过滤 `blob4 != ''`，空版本客户端被静默丢弃。修复后空版本归为“未知版本”，今日判断统一使用 `Asia/Shanghai`。
+- Analytics Queue 方案已废弃：每条 `/track` 投递 Queue 会直接消耗 Cloudflare Queues 用量，当前最终方案改为 `/track -> Analytics Engine`，再由 Worker Cron 每天汇总昨日 Analytics Engine 聚合结果到 D1。
+- 新长期统计 D1 权威表是 `analytics_daily_summary`、`analytics_daily_page_stats`、`analytics_daily_version_stats`、`analytics_daily_config_stats`、`analytics_daily_model_stats`、`analytics_daily_resource_stats`、`analytics_client_index` 和 `analytics_dimension_client_index`；旧 `analytics_monthly_*`、`analytics_clients`、`analytics_processed_events` 只作为旧方案残留，不再作为新查询权威来源。
+- 匿名客户端 hash 口径为 `sha256(projectName + ':' + client_id)`；维度 key 口径为 `dimension_type + '_' + sha256(dimension_type + ':' + label).slice(0, 24)`。D1 不保存明文 `client_id`，但可用匿名 hash 索引做长期去重。
+- Cron Trigger 使用 `15 18 * * *`，即北京时间每天 02:15 汇总昨日。旧线上 Queue 必须在去 Queue Worker 部署并验证 `/track` 后再删除。
 - 废标项检查当前为单投标文件链路：Renderer 使用 `bidDocument`，Store 以 `rejection_check_documents.role` 主键保存 `bid`，Main 任务只读取 `readDocumentMarkdown('bid')`，三类结果表都没有文件归属字段。
 - 标书查重的多投标文件上传样式已在 `DuplicateCheckPage.tsx` 落地，可复用 `duplicate-upload-row`、文件列表和文件 pill 的交互思路；废标检查已有 `DocumentFilePill` 和正文 Tab 样式，可小幅扩展。
 - 多文件结果显示应以结构化 `bidDocumentId` 为权威：AI Prompt 需要列出可用投标文件 ID，并要求每条废标/错别字/逻辑问题返回所属 ID；Normalizer 必须过滤不存在的 ID。

@@ -7,6 +7,12 @@
 - Analytics Dashboard 已改造为分区范围控制：顶部移除全局时间范围，概览页读 D1 长期累计并保留独立范围分析选择；访问分析、配置使用、模型使用、资源管理分别支持最近 7/30/90 天和历史总数；ADMIN_TOKEN 默认写 sessionStorage，勾选记住后才写 localStorage；生产看板 API 地址固定到 `https://analytics.agnet.top` 或同源。
 - `analytics/README.md` 已补充 D1/Queue 长期统计架构、`setup:analytics-storage`、新增接口、`range=history` 数据源差异、Dashboard Token 存储和指标口径说明。
 - Analytics 长期统计验证完成：Worker 新增/修改模块、Dashboard ES Module、setup/deploy 脚本均通过 `node --check`；`git diff --check` 通过，仅有 LF/CRLF 提示。
+- 已新增 Analytics Engine 到 D1 历史回填脚本 `analytics/scripts/backfill-analytics-rollups.mjs` 和 `npm run backfill:analytics` 命令；脚本支持 `--remote/--local/--dry-run`、默认阻止回填当前业务日，月度聚合写 `source=backfill`，并重算维度客户端 totals。`node --check` 和 dry-run 验证通过。
+- 尝试执行 `npm run setup:analytics-storage` 时 Wrangler 因当前非交互环境缺少 `CLOUDFLARE_API_TOKEN` 停止；远程 `ANALYTICS_DB`/`ANALYTICS_ROLLUP_QUEUE` 尚未在当前 `wrangler.jsonc` 中写入，真实回填需要先配置 Cloudflare 凭据后重跑 setup。
+- 已修复 Analytics 访问分析版本分布与今日活跃口径不一致：近期 Analytics Engine 查询不再过滤空版本，空版本统一归为“未知版本”，今日判断改为 `Asia/Shanghai` 业务日；D1 历史模式也把空 `last_version` 归为“未知版本”，并把今日有活跃但不在版本排行中的版本补入结果。最近事件增加页码输入跳转，后端排序改为稳定时间倒排。
+- 继续 Analytics 长期统计去 Queue 改造：`/track` 当前只写 Analytics Engine；Worker `scheduled()` 调用每日汇总；`analyticsD1Query.js` 已迁移到 `analytics_daily_*` 表和匿名 hash 索引；`setup-analytics-storage.mjs` 已改成只创建/复用 D1、确认 Cron、执行 migration；`wrangler.jsonc` 已加入 `15 18 * * *`。
+- 已重写 `backfill-analytics-rollups.mjs` 为 daily rollup 回填：按上海业务日逐日查询 Analytics Engine，写入 `analytics_daily_summary/page/version/config/model/resource` 和匿名客户端/维度索引，统一 `source=rollup`；`client/doc/统计改造计划.md` 与 `analytics/README.md` 已更新为 D1 + Cron 最终方案，并补充旧 Queue 安全下线顺序。
+- Analytics 去 Queue 改造验证完成：`node --check` 覆盖 `analyticsTrack`、`analyticsDailyRollup`、`analyticsD1Query`、Worker 入口、相关 routes、setup/backfill/deploy 脚本；回填 dry-run 覆盖 2026-03-15 到 2026-06-12 共 90 天；`git diff --check` 通过，仅有 LF/CRLF 提示。
 - 开始废标项检查多投标文件支持：已读取现有计划、确认 catchup 无输出，并记录当前单投标文件边界；下一步从类型和 Store/SQLite schema 开始改造，确保 UI 与后台任务共用同一多文件模型。
 - 继续废标项检查多投标文件支持收尾：`npm run build` 已通过后，复核发现 v12 迁移提前创建 `role/sort_order` 索引会卡住旧库；已改为先处理旧表结构，再创建完整 schema，并用 Electron runtime 冒烟测试确认旧 v11 库可升级到 v12、旧 bid 迁为 `bid-1`、旧结果写入 `bid_document_id=bid-1`。
 - 废标项检查多投标文件支持已完成收尾验证：CJS `node --check` 覆盖 SQLite、fileService、rejectionCheckStore、rejectionCheckTask 和 preload；`cd client; npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 通过，仅有 LF/CRLF 提示；旧单文件字段残留复扫无业务依赖。

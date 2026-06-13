@@ -20,5 +20,10 @@
       "binding": "ANALYTICS",
       "dataset": "agnet_analytics"
     }
-  ]
+  ],
+  "triggers": {
+    "crons": [
+      "15 18 * * *"
+    ]
+  }
 }

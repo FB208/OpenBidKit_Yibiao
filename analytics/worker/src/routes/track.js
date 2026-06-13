@@ -1,10 +1,9 @@
 import { json, methodNotAllowed } from '../http.js';
 import {
-  enqueueAnalyticsRollup,
   normalizeTrackBody,
   validateTrackEvent,
   writeAnalyticsDataPoint,
-} from '../services/analyticsRollup.js';
+} from '../services/analyticsTrack.js';
 
 export async function handleTrack(request, env) {
   if (request.method !== 'POST') {
@@ -19,15 +18,9 @@ export async function handleTrack(request, env) {
       return json({ code: 400, message: validationError }, { status: 400 });
     }
 
-    await enqueueAnalyticsRollup(env, event);
+    writeAnalyticsDataPoint(env, event);
 
-    try {
-      writeAnalyticsDataPoint(env, event);
-    } catch (error) {
-      console.error('[analytics] analytics engine write failed', error?.message || String(error));
-    }
-
-    return json({ code: 0, eventId: event.eventId }, { status: 202 });
+    return json({ code: 0 });
   } catch (error) {
     console.error('[analytics] track failed', error?.message || String(error));
     return json({ code: 500, message: 'internal error' }, { status: 500 });

@@ -1,6 +1,6 @@
 # 埋点统计部署手册
 
-本目录维护通用匿名埋点统计服务，采用 `Cloudflare Workers + Analytics Engine + D1 + Queue + Workers Static Assets`。
+本目录维护通用匿名埋点统计服务，采用 `Cloudflare Workers + Analytics Engine + D1 + Cron Triggers + Workers Static Assets`。
 
 公开仓库只保存源码，不保存 `ACCOUNT_ID`、`ADMIN_TOKEN`、`ANALYTICS_API_TOKEN` 等密钥。
 
@@ -61,9 +61,9 @@ analytics/
 
 `ai_request` 统计请求类型、服务商、模型端点域名、模型名称和 token 用量（`prompt_tokens`、`completion_tokens`、`total_tokens`）。模型端点只上传 hostname，不携带协议、路径、端口、账号密码、查询参数或 hash；不采集 API Key、Prompt、响应内容或错误详情。
 
-`resource_click` 只上传 Worker 生成的短资源统计 key，不上传资源标题、标签、介绍、弹窗内容或下载链接。客户端资源下载页默认展示近 30 天点击量；Dashboard “资源管理”会按当前项目名和点击统计范围查询点击量，选择“历史总数”时读取 D1 月度聚合；查询失败时点击量按 0 展示，不影响资源列表读取和编辑。
+`resource_click` 只上传 Worker 生成的短资源统计 key，不上传资源标题、标签、介绍、弹窗内容或下载链接。客户端资源下载页默认展示近 30 天点击量；Dashboard “资源管理”会按当前项目名和点击统计范围查询点击量，选择“历史总数”时读取 D1 每日汇总；查询失败时点击量按 0 展示，不影响资源列表读取和编辑。
 
-上报写入顺序：`POST /track` 会先把规范化事件投递到 `ANALYTICS_ROLLUP_QUEUE`，成功后再写 Analytics Engine。接口成功返回 `202` 和 `eventId`。D1 长期统计由 Queue Consumer 异步写入，Analytics Engine 仍用于最近事件和 90 天内灵活分析。
+上报写入顺序：`POST /track` 只规范化、校验并写入 Analytics Engine，接口成功返回 `{ "code": 0 }`。D1 长期统计不在上报热路径写入，由 Worker Cron 每天按 `Asia/Shanghai` 业务日汇总昨日 Analytics Engine 聚合结果后写入 `ANALYTICS_DB`。Analytics Engine 仍用于最近事件和 90 天内灵活分析。
 
 统计页面使用：
 
@@ -145,16 +145,16 @@ npx wrangler kv namespace create NOTICE_STORE
 ]
 ```
 
-### 1.3 创建长期统计 D1 和 Queue
+### 1.3 创建长期统计 D1 和 Cron
 
-长期累计统计保存到独立 D1，实时聚合任务通过 Cloudflare Queue 异步处理。绑定名固定为：
+长期累计统计保存到独立 D1，Worker Cron 每天汇总前一日 Analytics Engine 聚合结果。绑定名固定为：
 
 | 资源 | 名称 | Binding |
 | --- | --- | --- |
 | D1 数据库 | `openbidkit-analytics` | `ANALYTICS_DB` |
-| Queue | `openbidkit-analytics-rollup` | `ANALYTICS_ROLLUP_QUEUE` |
+| Cron Trigger | 每天 UTC `18:15`，北京时间 `02:15` | `15 18 * * *` |
 
-`analytics/worker` 部署前会自动运行 `setup:analytics-storage`：创建或复用 D1/Queue，写入 `wrangler.jsonc`，并执行 `analytics-migrations/` 下的 D1 migration。自动创建要求执行脚本的环境具备 D1、Queue 和 Worker 部署权限。
+`analytics/worker` 部署前会自动运行 `setup:analytics-storage`：创建或复用 D1，写入 `wrangler.jsonc`，确认 Cron Trigger，并执行 `analytics-migrations/` 下的 D1 migration。自动创建要求执行脚本的环境具备 D1 和 Worker 部署权限。
 
 本地首次启用时，也可以在登录 Wrangler 后手动运行：
 
@@ -163,7 +163,31 @@ cd analytics\worker
 npm run setup:analytics-storage
 ```
 
-如果要通过环境变量直接指定已有 D1，可以设置 `ANALYTICS_DB_ID`。Queue 按名称 `openbidkit-analytics-rollup` 复用或创建。
+如果要通过环境变量直接指定已有 D1，可以设置 `ANALYTICS_DB_ID`。脚本不会创建或配置 Cloudflare Queue。
+
+配置位置：
+
+| Binding | 含义 | 写入位置 | 生效位置 |
+| --- | --- | --- | --- |
+| `ANALYTICS_DB` | 长期统计 D1 数据库绑定，Worker 通过 `env.ANALYTICS_DB` 读写 D1 | `analytics/worker/wrangler.jsonc` 的 `d1_databases` | Cloudflare Worker `Settings -> Bindings` |
+| Cron Trigger | 每天北京时间凌晨汇总昨日统计 | `analytics/worker/wrangler.jsonc` 的 `triggers.crons` | Cloudflare Worker `Settings -> Triggers` |
+
+`setup:analytics-storage` 会自动创建或复用 D1，并把类似下面的配置写入 `analytics/worker/wrangler.jsonc`：
+
+```jsonc
+"d1_databases": [
+  {
+    "binding": "ANALYTICS_DB",
+    "database_name": "openbidkit-analytics",
+    "database_id": "<D1 database id>"
+  }
+],
+"triggers": {
+  "crons": [
+    "15 18 * * *"
+  ]
+}
+```
 
 ### 2. 创建 Analytics API Token
 
@@ -198,7 +222,7 @@ npm run setup:analytics-storage
 | 资源 D1 binding | `RESOURCE_DB`（首次部署时创建或复用，并自动执行 migration） |
 | 资源 R2 binding | `RESOURCE_BUCKET`（bucket 名为 `openbidkit`） |
 | 长期统计 D1 binding | `ANALYTICS_DB`（首次部署时创建或复用，并自动执行 migration） |
-| 长期统计 Queue producer/consumer | `ANALYTICS_ROLLUP_QUEUE` / `openbidkit-analytics-rollup` |
+| 长期统计 Cron Trigger | `15 18 * * *`，北京时间每天 02:15 汇总昨日 |
 | 变量保留 | `keep_vars: true`，避免部署覆盖后台配置 |
 
 部署后在 Worker 的 `Settings -> Variables and Secrets` 配置 Secret：
@@ -287,22 +311,57 @@ Invoke-RestMethod `
   -Headers @{ Authorization = "Bearer <ADMIN_TOKEN>" }
 ```
 
-D1 长期统计由 Queue Consumer 异步写入，Analytics Engine 写入后也可能需要等待几十秒才能查到；历史总数和最近范围出现短暂不一致属于预期。
+D1 长期统计由 Cron 每天汇总昨日数据，Analytics Engine 写入后也可能需要等待几十秒才能查到；历史总数和最近范围存在一天级汇总延迟属于预期。
+
+### 5.1 回填 Analytics Engine 最近历史到 D1
+
+长期统计 D1 上线前的历史数据不会自动出现，需要从 Analytics Engine 可查询窗口回填。回填最多覆盖 Analytics Engine 当前仍保留的数据，通常约最近 90 天；超过保留期的数据无法恢复。
+
+回填脚本：`analytics/scripts/backfill-analytics-rollups.mjs`。脚本会按 `Asia/Shanghai` 业务日逐日查询 Analytics Engine 聚合结果，并写入 `ANALYTICS_DB` 的每日汇总表和匿名 hash 去重索引，写入口径统一使用 `source = 'rollup'`，与 Cron 汇总结果保持一致。重复执行同一天会先重建该日汇总表行；匿名客户端/维度索引是累计索引，不保存原始 `client_id`。
+
+生产回填示例：
+
+```powershell
+cd analytics\worker
+$env:ACCOUNT_ID = "<Cloudflare Account ID>"
+$env:ANALYTICS_API_TOKEN = "<Analytics Engine Read Token>"
+npm run backfill:analytics -- --project yibiao-client --start 2026-03-15 --end 2026-06-12 --remote
+```
+
+参数说明：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--project` | 回填的项目名，例如 `yibiao-client` |
+| `--start` | 回填起始业务日期，`Asia/Shanghai`，格式 `YYYY-MM-DD` |
+| `--end` | 回填结束业务日期，`Asia/Shanghai`，格式 `YYYY-MM-DD`。默认不要包含今天，避免当天 Analytics Engine 数据仍在变化 |
+| `--remote` | 写入 Cloudflare 远程 D1，即生产 `ANALYTICS_DB` |
+| `--local` | 写入本地 Wrangler D1，用于开发验证 |
+| `--dry-run` | 只打印回填计划，不查询 Analytics Engine，不写 D1 |
+
+推荐先执行 dry-run 确认范围：
+
+```powershell
+cd analytics\worker
+npm run backfill:analytics -- --project yibiao-client --start 2026-03-15 --end 2026-06-12 --dry-run
+```
+
+不要默认回填今天。如果确实要回填当天，必须确认当天 Analytics Engine 数据已经稳定，并显式加 `--allow-current-day`。
 
 概览指标口径：
 
 | 指标 | 说明 |
 | --- | --- |
 | 总客户端数 | D1 中历史上报过任意事件的去重客户端数，不等于每日客户端数相加 |
-| 累计打开量 / 累计页面访问量 / 累计 AI 请求 / 累计资源点击 | D1 月度聚合按 `source IN ('live', 'backfill')` 汇总 |
-| 今日活跃客户端 | D1 中今天上报过任意事件的去重客户端数 |
+| 累计打开量 / 累计页面访问量 / 累计 AI 请求 / 累计资源点击 | D1 每日汇总按 `source = 'rollup'` 汇总 |
+| 今日活跃客户端 | D1 中今天上报过任意事件的去重客户端数；Cron 默认只汇总到昨日，未手动汇总今天时为 0 |
 | 近 7/30 天活跃 | D1 中最近 7/30 天上报过任意事件的去重客户端数 |
 | 新增客户端 | 所选时间范围内创建、并且期间有过任意事件上报的去重客户端数 |
 | 老客户端活跃 | 所选时间范围内活跃客户端数减去新增客户端数 |
 | 每日统计中的客户端数 | 当天有任意事件上报的去重客户端数 |
-| 访问分析历史总数 | D1 月度页面/版本聚合；最近 7/30/90 天仍从 Analytics Engine 查询 |
-| 配置使用历史总数 | D1 月度配置聚合 + 维度客户端去重；最近 7/30/90 天仍从 Analytics Engine 查询 |
-| 模型使用历史总数 | D1 月度模型聚合 + 维度客户端去重，包含 token 用量；最近 7/30/90 天仍从 Analytics Engine 查询 |
+| 访问分析历史总数 | D1 每日页面/版本汇总 + 匿名维度客户端索引；最近 7/30/90 天仍从 Analytics Engine 查询 |
+| 配置使用历史总数 | D1 每日配置汇总 + 匿名维度客户端索引；最近 7/30/90 天仍从 Analytics Engine 查询 |
+| 模型使用历史总数 | D1 每日模型汇总 + 匿名维度客户端索引，包含 token 用量；最近 7/30/90 天仍从 Analytics Engine 查询 |
 | 留存概览中的当日回访客户端 | 创建后 D1/D3/D7 当天再次打开 App 的客户端数 |
 
 配置使用只采集模型服务商、模型端点域名、模型名称、token 用量、开关、数字和枚举类配置，不采集 `api_key`、完整 `base_url`、`mineru_token`、Prompt、响应内容、错误详情等敏感数据。
@@ -413,11 +472,20 @@ track('page_view', {
 | `NOTICE_STORE is not configured` | 先确认 Worker 的 `Settings -> Bindings` 存在 `NOTICE_STORE`，或本地运行 `cd analytics\worker; npm run setup:notice-kv` 后提交更新后的 `wrangler.jsonc` 并重新部署 Worker |
 | 公告无法发布或读取 | 访问 `https://analytics.agnet.top/health`，确认 `noticeStoreConfigured` 为 `true` 后再测试公告发布 |
 | `invalid projectName` | 检查项目名格式 |
-| `invalid event` | 仅支持 `app_open`、`page_view` |
+| `invalid event` | 仅支持 `app_open`、`page_view`、`config_usage`、`ai_request`、`resource_click` |
 | `missing page` | `page_view` 必须传 `page` |
 | 查询为空 | 先上报测试数据，等待几十秒再查 |
 | 自定义域名未生效 | 检查对应 Worker 的 `Settings -> Domains & Routes` 和 `wrangler.jsonc` |
-| 绑定不存在 | 检查 API Worker 的 `Settings -> Bindings` 是否存在 `ANALYTICS` |
+| 绑定不存在 | 检查 API Worker 的 `Settings -> Bindings` 是否存在 `ANALYTICS` 和 `ANALYTICS_DB` |
+| 历史总数没有当天数据 | Cron 默认北京时间 02:15 汇总昨日数据，今天的数据仍以 Analytics Engine 最近范围查询为准 |
+
+### 6.1 下线旧 Queue
+
+如果线上曾部署过旧 Queue 方案，不要先在 Cloudflare 后台删除 Queue binding，否则旧线上 `/track` 会因为缺少 `ANALYTICS_ROLLUP_QUEUE` 失败。安全顺序是：
+
+1. 先部署当前去 Queue 的 Worker，确认 `/track` 成功返回 `{ "code": 0 }`。
+2. 确认 `wrangler.jsonc` 和 Worker 绑定中不再需要 `ANALYTICS_ROLLUP_QUEUE`。
+3. 再到 Cloudflare 删除 `openbidkit-analytics-rollup` Queue 和关联 consumer。
 
 ## 五、自动部署触发规则
 

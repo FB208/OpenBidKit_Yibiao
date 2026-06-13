@@ -11,7 +11,7 @@ import { handleAdminResources, handlePublicResources, handleResourceImage } from
 import { handleSummary } from './routes/summary.js';
 import { handleTrack } from './routes/track.js';
 import { handleTraffic } from './routes/traffic.js';
-import { consumeAnalyticsRollupBatch } from './services/analyticsRollup.js';
+import { rollupYesterdayForAllProjects } from './services/analyticsDailyRollup.js';
 
 const routes = new Map([
   ['/health', (request, env) => handleHealth(env)],
@@ -47,7 +47,7 @@ export default {
     return json({ code: 404, message: 'not found' }, { status: 404 });
   },
 
-  async queue(batch, env) {
-    await consumeAnalyticsRollupBatch(batch, env);
+  async scheduled(event, env) {
+    await rollupYesterdayForAllProjects(env, { reason: 'cron', scheduledTime: event.scheduledTime });
   },
 };

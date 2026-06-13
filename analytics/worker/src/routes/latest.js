@@ -43,7 +43,7 @@ export async function handleLatest(request, env, url) {
       blob8 AS clientCreatedAt
     FROM ${DATASET}
     WHERE blob1 = ${project}
-    ORDER BY timestamp DESC
+    ORDER BY timestamp DESC, blob7 DESC, blob2 DESC, blob3 DESC
     LIMIT ${pageSize} OFFSET ${offset}
   `;
 

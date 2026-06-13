@@ -296,6 +296,13 @@ button:disabled {
   border-radius: 10px;
 }
 
+.pager input {
+  width: 72px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 10px;
+}
+
 .usage-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

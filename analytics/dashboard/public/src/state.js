@@ -44,6 +44,8 @@ export const state = {
   latestTable: $('latestTable'),
   prevLatestPage: $('prevLatestPage'),
   nextLatestPage: $('nextLatestPage'),
+  latestPageInput: $('latestPageInput'),
+  jumpLatestPage: $('jumpLatestPage'),
   latestPageInfo: $('latestPageInfo'),
   loadNoticeButton: $('loadNoticeButton'),
   publishNoticeButton: $('publishNoticeButton'),

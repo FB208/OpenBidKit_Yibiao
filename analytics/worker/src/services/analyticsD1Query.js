@@ -1,7 +1,8 @@
 import { CONFIG_USAGE_FIELDS, MODEL_USAGE_FIELDS } from '../constants.js';
-import { getBusinessDateDaysAgo, getBusinessToday } from './analyticsRollup.js';
+import { getBusinessDateDaysAgo, getBusinessToday } from './analyticsDailyRollup.js';
 
-const HISTORY_SOURCES_SQL = "('live', 'backfill')";
+const SOURCE_SQL = "'rollup'";
+const UNKNOWN_VERSION = '未知版本';
 
 function requireAnalyticsDb(env) {
   if (!env.ANALYTICS_DB) {
@@ -27,95 +28,91 @@ function rangeStart(days) {
   return getBusinessDateDaysAgo(Math.max(0, Number(days || 1) - 1));
 }
 
-async function countDailyClients(db, projectName, startDate, endDate = '') {
-  const rows = await first(db, `
-    SELECT COUNT(DISTINCT client_id) AS count
-    FROM analytics_daily_client_activity
+async function countActiveClients(db, projectName, startDate, endDate = '') {
+  const row = await first(db, `
+    SELECT COUNT(*) AS count
+    FROM analytics_client_index
     WHERE project_name = ?
-      AND activity_date >= ?
-      ${endDate ? 'AND activity_date <= ?' : ''}
+      AND last_seen_date >= ?
+      ${endDate ? 'AND last_seen_date <= ?' : ''}
   `, endDate ? [projectName, startDate, endDate] : [projectName, startDate]);
-  return number(rows?.count);
+  return number(row?.count);
 }
 
 async function countNewClients(db, projectName, startDate, endDate = '') {
-  const rows = await first(db, `
+  const row = await first(db, `
     SELECT COUNT(*) AS count
-    FROM analytics_clients
+    FROM analytics_client_index
     WHERE project_name = ?
       AND client_created_date >= ?
       ${endDate ? 'AND client_created_date <= ?' : ''}
   `, endDate ? [projectName, startDate, endDate] : [projectName, startDate]);
-  return number(rows?.count);
+  return number(row?.count);
 }
 
 async function queryHistoryTotals(db, projectName) {
-  const [eventTotals, clientTotals] = await Promise.all([
-    all(db, `
-      SELECT
-        event,
-        SUM(event_count) AS eventCount,
-        SUM(prompt_tokens) AS promptTokens,
-        SUM(completion_tokens) AS completionTokens,
-        SUM(total_tokens) AS totalTokens
-      FROM analytics_monthly_event_stats
-      WHERE project_name = ? AND source IN ${HISTORY_SOURCES_SQL}
-      GROUP BY event
-    `, [projectName]),
+  const [totals, clients] = await Promise.all([
     first(db, `
       SELECT
-        COUNT(*) AS totalClients,
+        SUM(event_count) AS totalEvents,
+        SUM(app_open_count) AS totalOpen,
+        SUM(page_view_count) AS totalView,
+        SUM(config_usage_count) AS totalConfigUsage,
+        SUM(ai_request_count) AS totalAiRequests,
+        SUM(resource_click_count) AS totalResourceClicks,
+        SUM(prompt_tokens) AS totalPromptTokens,
+        SUM(completion_tokens) AS totalCompletionTokens,
+        SUM(total_tokens) AS totalTokens,
         MIN(first_seen_at) AS firstSeenAt,
         MAX(last_seen_at) AS lastSeenAt
-      FROM analytics_clients
+      FROM analytics_daily_summary
+      WHERE project_name = ? AND source = ${SOURCE_SQL}
+    `, [projectName]),
+    first(db, `
+      SELECT COUNT(*) AS totalClients
+      FROM analytics_client_index
       WHERE project_name = ?
     `, [projectName]),
   ]);
 
-  const byEvent = new Map(eventTotals.map((row) => [row.event, row]));
-  const getEventCount = (event) => number(byEvent.get(event)?.eventCount);
   return {
-    totalClients: number(clientTotals?.totalClients),
-    totalEvents: eventTotals.reduce((sum, row) => sum + number(row.eventCount), 0),
-    totalOpen: getEventCount('app_open'),
-    totalView: getEventCount('page_view'),
-    totalConfigUsage: getEventCount('config_usage'),
-    totalAiRequests: getEventCount('ai_request'),
-    totalResourceClicks: getEventCount('resource_click'),
-    totalPromptTokens: eventTotals.reduce((sum, row) => sum + number(row.promptTokens), 0),
-    totalCompletionTokens: eventTotals.reduce((sum, row) => sum + number(row.completionTokens), 0),
-    totalTokens: eventTotals.reduce((sum, row) => sum + number(row.totalTokens), 0),
-    firstSeenAt: clientTotals?.firstSeenAt || '',
-    lastSeenAt: clientTotals?.lastSeenAt || '',
+    totalClients: number(clients?.totalClients),
+    totalEvents: number(totals?.totalEvents),
+    totalOpen: number(totals?.totalOpen),
+    totalView: number(totals?.totalView),
+    totalConfigUsage: number(totals?.totalConfigUsage),
+    totalAiRequests: number(totals?.totalAiRequests),
+    totalResourceClicks: number(totals?.totalResourceClicks),
+    totalPromptTokens: number(totals?.totalPromptTokens),
+    totalCompletionTokens: number(totals?.totalCompletionTokens),
+    totalTokens: number(totals?.totalTokens),
+    firstSeenAt: totals?.firstSeenAt || '',
+    lastSeenAt: totals?.lastSeenAt || '',
   };
 }
 
 async function queryDailyRows(db, projectName, startDate) {
-  const [daily, dailyClients] = await Promise.all([
+  const [daily, clients] = await Promise.all([
     all(db, `
-      SELECT activity_date AS date, 'app_open' AS event, SUM(app_open_count) AS count
-      FROM analytics_daily_client_activity
-      WHERE project_name = ? AND activity_date >= ?
-      GROUP BY activity_date
+      SELECT activity_date AS date, 'app_open' AS event, app_open_count AS count
+      FROM analytics_daily_summary
+      WHERE project_name = ? AND source = ${SOURCE_SQL} AND activity_date >= ?
       UNION ALL
-      SELECT activity_date AS date, 'page_view' AS event, SUM(page_view_count) AS count
-      FROM analytics_daily_client_activity
-      WHERE project_name = ? AND activity_date >= ?
-      GROUP BY activity_date
+      SELECT activity_date AS date, 'page_view' AS event, page_view_count AS count
+      FROM analytics_daily_summary
+      WHERE project_name = ? AND source = ${SOURCE_SQL} AND activity_date >= ?
       ORDER BY date ASC, event ASC
     `, [projectName, startDate, projectName, startDate]),
     all(db, `
-      SELECT activity_date AS date, COUNT(*) AS clients
-      FROM analytics_daily_client_activity
-      WHERE project_name = ? AND activity_date >= ?
-      GROUP BY activity_date
+      SELECT activity_date AS date, active_clients AS clients
+      FROM analytics_daily_summary
+      WHERE project_name = ? AND source = ${SOURCE_SQL} AND activity_date >= ?
       ORDER BY activity_date ASC
     `, [projectName, startDate]),
   ]);
-
   return {
     daily: daily.map((row) => ({ ...row, count: number(row.count) })),
-    dailyClients: dailyClients.map((row) => ({ ...row, clients: number(row.clients) })),
+    dailyClients: clients.map((row) => ({ ...row, clients: number(row.clients) })),
   };
 }
 
@@ -127,21 +124,26 @@ export async function queryD1Traffic(env, projectName) {
       SELECT
         stats.page,
         SUM(stats.view_count) AS count,
-        COALESCE(MAX(totals.client_count), 0) AS clients
-      FROM analytics_monthly_page_stats stats
+        COALESCE(MAX(clients.client_count), 0) AS clients
+      FROM analytics_daily_page_stats stats
       LEFT JOIN analytics_dimension_values dim_values
         ON dim_values.project_name = stats.project_name
        AND dim_values.dimension_type = 'page'
        AND dim_values.label = stats.page
-      LEFT JOIN analytics_dimension_client_totals totals
-        ON totals.project_name = dim_values.project_name
-       AND totals.dimension_type = dim_values.dimension_type
-       AND totals.dimension_key = dim_values.dimension_key
-      WHERE stats.project_name = ? AND stats.source IN ${HISTORY_SOURCES_SQL}
+      LEFT JOIN (
+        SELECT project_name, dimension_type, dimension_key, COUNT(*) AS client_count
+        FROM analytics_dimension_client_index
+        WHERE project_name = ? AND dimension_type = 'page'
+        GROUP BY project_name, dimension_type, dimension_key
+      ) clients
+        ON clients.project_name = dim_values.project_name
+       AND clients.dimension_type = dim_values.dimension_type
+       AND clients.dimension_key = dim_values.dimension_key
+      WHERE stats.project_name = ? AND stats.source = ${SOURCE_SQL}
       GROUP BY stats.page
       ORDER BY count DESC, clients DESC, stats.page ASC
       LIMIT 100
-    `, [projectName]),
+    `, [projectName, projectName]),
     all(db, `
       SELECT
         stats.version,
@@ -151,47 +153,55 @@ export async function queryD1Traffic(env, projectName) {
         SUM(stats.config_usage_count) AS configUsageCount,
         SUM(stats.ai_request_count) AS aiRequestCount,
         SUM(stats.resource_click_count) AS resourceClickCount,
-        COALESCE(MAX(totals.client_count), 0) AS clients
-      FROM analytics_monthly_version_stats stats
+        COALESCE(MAX(clients.client_count), 0) AS clients
+      FROM analytics_daily_version_stats stats
       LEFT JOIN analytics_dimension_values dim_values
         ON dim_values.project_name = stats.project_name
        AND dim_values.dimension_type = 'version'
        AND dim_values.label = stats.version
-      LEFT JOIN analytics_dimension_client_totals totals
-        ON totals.project_name = dim_values.project_name
-       AND totals.dimension_type = dim_values.dimension_type
-       AND totals.dimension_key = dim_values.dimension_key
-      WHERE stats.project_name = ? AND stats.source IN ${HISTORY_SOURCES_SQL}
+      LEFT JOIN (
+        SELECT project_name, dimension_type, dimension_key, COUNT(*) AS client_count
+        FROM analytics_dimension_client_index
+        WHERE project_name = ? AND dimension_type = 'version'
+        GROUP BY project_name, dimension_type, dimension_key
+      ) clients
+        ON clients.project_name = dim_values.project_name
+       AND clients.dimension_type = dim_values.dimension_type
+       AND clients.dimension_key = dim_values.dimension_key
+      WHERE stats.project_name = ? AND stats.source = ${SOURCE_SQL}
       GROUP BY stats.version
       ORDER BY stats.version DESC
       LIMIT 100
-    `, [projectName]),
+    `, [projectName, projectName]),
     all(db, `
-      SELECT last_version AS version, COUNT(*) AS todayClients
-      FROM analytics_clients
-      WHERE project_name = ? AND last_seen_date = ? AND last_version != ''
-      GROUP BY last_version
+      SELECT version, client_count AS todayClients
+      FROM analytics_daily_version_stats
+      WHERE project_name = ? AND source = ${SOURCE_SQL} AND activity_date = ?
     `, [projectName, today]),
   ]);
 
-  const todayByVersion = new Map(todayVersions.map((row) => [row.version, number(row.todayClients)]));
+  const todayByVersion = new Map(todayVersions.map((row) => [row.version || UNKNOWN_VERSION, number(row.todayClients)]));
+  const versionRows = versions.map((row) => ({
+    version: row.version || UNKNOWN_VERSION,
+    clients: number(row.clients),
+    todayClients: todayByVersion.get(row.version || UNKNOWN_VERSION) || 0,
+    count: number(row.count),
+    appOpenCount: number(row.appOpenCount),
+    pageViewCount: number(row.pageViewCount),
+    configUsageCount: number(row.configUsageCount),
+    aiRequestCount: number(row.aiRequestCount),
+    resourceClickCount: number(row.resourceClickCount),
+  }));
+  const existing = new Set(versionRows.map((row) => row.version));
+  for (const [version, todayClients] of todayByVersion.entries()) {
+    if (!existing.has(version)) {
+      versionRows.push({ version, clients: todayClients, todayClients, count: 0 });
+    }
+  }
+
   return {
-    pages: pages.map((row) => ({
-      page: row.page,
-      count: number(row.count),
-      clients: number(row.clients),
-    })),
-    versions: versions.map((row) => ({
-      version: row.version,
-      clients: number(row.clients),
-      todayClients: todayByVersion.get(row.version) || 0,
-      count: number(row.count),
-      appOpenCount: number(row.appOpenCount),
-      pageViewCount: number(row.pageViewCount),
-      configUsageCount: number(row.configUsageCount),
-      aiRequestCount: number(row.aiRequestCount),
-      resourceClickCount: number(row.resourceClickCount),
-    })),
+    pages: pages.map((row) => ({ page: row.page, count: number(row.count), clients: number(row.clients) })),
+    versions: versionRows,
   };
 }
 
@@ -203,13 +213,13 @@ export async function queryD1Overview(env, projectName, days) {
   const last7Start = getBusinessDateDaysAgo(6);
   const last30Start = getBusinessDateDaysAgo(29);
 
-  const [historyTotals, todayActiveClients, yesterdayActiveClients, wau, mau, activeClients, todayNewClients, newClients, last30NewClients, dailyRows, traffic] = await Promise.all([
+  const [historyTotals, todayRow, yesterdayRow, wau, mau, activeClients, todayNewClients, newClients, last30NewClients, dailyRows, traffic] = await Promise.all([
     queryHistoryTotals(db, projectName),
-    countDailyClients(db, projectName, today, today),
-    countDailyClients(db, projectName, yesterday, yesterday),
-    countDailyClients(db, projectName, last7Start),
-    countDailyClients(db, projectName, last30Start),
-    countDailyClients(db, projectName, startDate),
+    first(db, `SELECT active_clients AS count FROM analytics_daily_summary WHERE project_name = ? AND source = ${SOURCE_SQL} AND activity_date = ?`, [projectName, today]),
+    first(db, `SELECT active_clients AS count FROM analytics_daily_summary WHERE project_name = ? AND source = ${SOURCE_SQL} AND activity_date = ?`, [projectName, yesterday]),
+    countActiveClients(db, projectName, last7Start),
+    countActiveClients(db, projectName, last30Start),
+    countActiveClients(db, projectName, startDate),
     countNewClients(db, projectName, today, today),
     countNewClients(db, projectName, startDate),
     countNewClients(db, projectName, last30Start),
@@ -224,8 +234,8 @@ export async function queryD1Overview(env, projectName, days) {
     range: 'history',
     source: 'd1',
     ...historyTotals,
-    todayActiveClients,
-    yesterdayActiveClients,
+    todayActiveClients: number(todayRow?.count),
+    yesterdayActiveClients: number(yesterdayRow?.count),
     wau,
     mau,
     activeClients,
@@ -244,23 +254,26 @@ async function queryConfigField(db, projectName, field) {
     SELECT
       stats.value AS value,
       SUM(stats.report_count) AS events,
-      COALESCE(MAX(totals.client_count), 0) AS clients
-    FROM analytics_monthly_config_stats stats
+      COALESCE(MAX(clients.client_count), 0) AS clients
+    FROM analytics_daily_config_stats stats
     LEFT JOIN analytics_dimension_values dim_values
       ON dim_values.project_name = stats.project_name
      AND dim_values.dimension_type = 'config'
      AND dim_values.label = stats.field_key || '=' || stats.value
-    LEFT JOIN analytics_dimension_client_totals totals
-      ON totals.project_name = dim_values.project_name
-     AND totals.dimension_type = dim_values.dimension_type
-     AND totals.dimension_key = dim_values.dimension_key
-    WHERE stats.project_name = ?
-      AND stats.source IN ${HISTORY_SOURCES_SQL}
-      AND stats.field_key = ?
+    LEFT JOIN (
+      SELECT project_name, dimension_type, dimension_key, COUNT(*) AS client_count
+      FROM analytics_dimension_client_index
+      WHERE project_name = ? AND dimension_type = 'config'
+      GROUP BY project_name, dimension_type, dimension_key
+    ) clients
+      ON clients.project_name = dim_values.project_name
+     AND clients.dimension_type = dim_values.dimension_type
+     AND clients.dimension_key = dim_values.dimension_key
+    WHERE stats.project_name = ? AND stats.source = ${SOURCE_SQL} AND stats.field_key = ?
     GROUP BY stats.value
     ORDER BY clients DESC, events DESC, stats.value ASC
     LIMIT 50
-  `, [projectName, field.key]);
+  `, [projectName, projectName, field.key]);
 }
 
 async function queryModelField(db, projectName, field) {
@@ -273,23 +286,26 @@ async function queryModelField(db, projectName, field) {
       SUM(stats.prompt_tokens) AS prompt_tokens,
       SUM(stats.completion_tokens) AS completion_tokens,
       SUM(stats.total_tokens) AS total_tokens,
-      COALESCE(MAX(totals.client_count), 0) AS clients
-    FROM analytics_monthly_model_stats stats
+      COALESCE(MAX(clients.client_count), 0) AS clients
+    FROM analytics_daily_model_stats stats
     LEFT JOIN analytics_dimension_values dim_values
       ON dim_values.project_name = stats.project_name
      AND dim_values.dimension_type = 'model'
      AND dim_values.label = stats.request_type || '|' || stats.provider || '|' || stats.endpoint_host || '|' || stats.model
-    LEFT JOIN analytics_dimension_client_totals totals
-      ON totals.project_name = dim_values.project_name
-     AND totals.dimension_type = dim_values.dimension_type
-     AND totals.dimension_key = dim_values.dimension_key
-    WHERE stats.project_name = ?
-      AND stats.source IN ${HISTORY_SOURCES_SQL}
-      AND stats.request_type = ?
+    LEFT JOIN (
+      SELECT project_name, dimension_type, dimension_key, COUNT(*) AS client_count
+      FROM analytics_dimension_client_index
+      WHERE project_name = ? AND dimension_type = 'model'
+      GROUP BY project_name, dimension_type, dimension_key
+    ) clients
+      ON clients.project_name = dim_values.project_name
+     AND clients.dimension_type = dim_values.dimension_type
+     AND clients.dimension_key = dim_values.dimension_key
+    WHERE stats.project_name = ? AND stats.source = ${SOURCE_SQL} AND stats.request_type = ?
     GROUP BY stats.provider, stats.endpoint_host, stats.model
     ORDER BY total_tokens DESC, events DESC, clients DESC, stats.model ASC
     LIMIT 100
-  `, [projectName, field.requestType]);
+  `, [projectName, projectName, field.requestType]);
 }
 
 export async function queryD1ConfigUsage(env, projectName) {
@@ -299,15 +315,9 @@ export async function queryD1ConfigUsage(env, projectName) {
     ...MODEL_USAGE_FIELDS.map((field) => queryModelField(db, projectName, field)),
   ]);
   const usage = {};
-
   CONFIG_USAGE_FIELDS.forEach((field, index) => {
-    usage[field.key] = (results[index] || []).map((row) => ({
-      value: row.value,
-      clients: number(row.clients),
-      events: number(row.events),
-    }));
+    usage[field.key] = (results[index] || []).map((row) => ({ value: row.value, clients: number(row.clients), events: number(row.events) }));
   });
-
   MODEL_USAGE_FIELDS.forEach((field, index) => {
     usage[field.key] = (results[CONFIG_USAGE_FIELDS.length + index] || []).map((row) => ({
       provider: row.provider,
@@ -320,50 +330,30 @@ export async function queryD1ConfigUsage(env, projectName) {
       total_tokens: number(row.total_tokens),
     }));
   });
-
   return usage;
 }
 
 export async function queryD1ResourceClickCounts(env, projectName, resourceKeys = []) {
   const db = requireAnalyticsDb(env);
   const keys = Array.from(new Set(resourceKeys.filter(Boolean)));
-  if (!keys.length) {
-    return new Map();
-  }
+  if (!keys.length) return new Map();
 
   const placeholders = keys.map(() => '?').join(', ');
   const rows = await all(db, `
-    SELECT
-      stats.resource_key AS resourceKey,
-      SUM(stats.click_count) AS clickCount,
-      COALESCE(MAX(totals.client_count), 0) AS clients
-    FROM analytics_monthly_resource_stats stats
-    LEFT JOIN analytics_dimension_values dim_values
-      ON dim_values.project_name = stats.project_name
-     AND dim_values.dimension_type = 'resource'
-     AND dim_values.label = stats.resource_key
-    LEFT JOIN analytics_dimension_client_totals totals
-      ON totals.project_name = dim_values.project_name
-     AND totals.dimension_type = dim_values.dimension_type
-     AND totals.dimension_key = dim_values.dimension_key
-    WHERE stats.project_name = ?
-      AND stats.source IN ${HISTORY_SOURCES_SQL}
-      AND stats.resource_key IN (${placeholders})
-    GROUP BY stats.resource_key
+    SELECT resource_key AS resourceKey, SUM(click_count) AS clickCount, MAX(client_count) AS clients
+    FROM analytics_daily_resource_stats
+    WHERE project_name = ? AND source = ${SOURCE_SQL} AND resource_key IN (${placeholders})
+    GROUP BY resource_key
   `, [projectName, ...keys]);
-
-  return new Map(rows.map((row) => [row.resourceKey, {
-    clickCount: number(row.clickCount),
-    clients: number(row.clients),
-  }]));
+  return new Map(rows.map((row) => [row.resourceKey, { clickCount: number(row.clickCount), clients: number(row.clients) }]));
 }
 
 export async function queryD1Projects(env) {
   const db = requireAnalyticsDb(env);
   const rows = await all(db, `
-    SELECT project_name AS projectName FROM analytics_clients
+    SELECT project_name AS projectName FROM analytics_client_index
     UNION
-    SELECT project_name AS projectName FROM analytics_monthly_event_stats
+    SELECT project_name AS projectName FROM analytics_daily_summary
     ORDER BY projectName ASC
   `);
   return rows.map((row) => row.projectName).filter(Boolean);

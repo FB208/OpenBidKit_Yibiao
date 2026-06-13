@@ -18,7 +18,9 @@ export async function loadLatest(options = {}) {
   appState.latestPage = Number(latest.page || appState.latestPage);
   updateLatestPager();
 
-  renderTable(state.latestTable, latest.events || [], [
+  const events = [...(latest.events || [])].sort((left, right) => Date.parse(right.timestamp || '') - Date.parse(left.timestamp || ''));
+
+  renderTable(state.latestTable, events, [
     { key: 'timestamp', label: '时间' },
     { key: 'event', label: '事件', code: true },
     { key: 'page', label: '页面', code: true },

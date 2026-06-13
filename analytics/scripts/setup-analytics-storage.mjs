@@ -10,8 +10,7 @@ const migrationsDir = resolve(workerDir, 'analytics-migrations');
 
 const d1BindingName = 'ANALYTICS_DB';
 const d1DatabaseName = 'openbidkit-analytics';
-const queueBindingName = 'ANALYTICS_ROLLUP_QUEUE';
-const queueName = 'openbidkit-analytics-rollup';
+const dailyRollupCron = '15 18 * * *';
 
 function readConfig() {
   return readFileSync(workerConfigPath, 'utf8');
@@ -134,56 +133,22 @@ function updateD1Config(databaseId) {
   writeConfig(insertConfigArrayBlock(source, 'd1_databases', objectBlock));
 }
 
-function hasQueueProducer(source) {
-  const escapedBinding = escapeRegExp(queueBindingName);
-  const escapedQueue = escapeRegExp(queueName);
-  const pattern = new RegExp(`\\{[\\s\\S]*?"binding"\\s*:\\s*"${escapedBinding}"[\\s\\S]*?"queue"\\s*:\\s*"${escapedQueue}"[\\s\\S]*?\\}`);
-  return pattern.test(source);
-}
-
-function hasQueueConsumer(source) {
-  const escapedQueue = escapeRegExp(queueName);
-  const pattern = new RegExp(`\\{[\\s\\S]*?"queue"\\s*:\\s*"${escapedQueue}"[\\s\\S]*?"max_batch_size"[\\s\\S]*?\\}`);
-  return pattern.test(source);
-}
-
-function insertQueueArrayItem(source, propertyName, itemBlock) {
-  const arrayPattern = new RegExp(`"${escapeRegExp(propertyName)}"\\s*:\\s*\\[`);
-  if (arrayPattern.test(source)) {
-    return source.replace(arrayPattern, `"${propertyName}": [\n      ${itemBlock},`);
+function ensureCronTrigger() {
+  const source = readConfig();
+  if (source.includes(`"${dailyRollupCron}"`)) {
+    console.log(`Analytics daily rollup cron already configured: ${dailyRollupCron}`);
+    return;
   }
 
-  const queuesPattern = /"queues"\s*:\s*\{/;
-  if (queuesPattern.test(source)) {
-    return source.replace(queuesPattern, `"queues": {\n    "${propertyName}": [\n      ${itemBlock}\n    ],`);
+  const cronsPattern = /"crons"\s*:\s*\[/;
+  if (cronsPattern.test(source)) {
+    writeConfig(source.replace(cronsPattern, `"crons": [\n      "${dailyRollupCron}",`));
+    console.log(`Analytics daily rollup cron added: ${dailyRollupCron}`);
+    return;
   }
 
-  const objectBody = `    "${propertyName}": [\n      ${itemBlock}\n    ]`;
-  return insertTopLevelObjectBlock(source, 'queues', objectBody);
-}
-
-function updateQueueConfig() {
-  const producerBlock = `{
-        "binding": "${queueBindingName}",
-        "queue": "${queueName}"
-      }`;
-  const consumerBlock = `{
-        "queue": "${queueName}",
-        "max_batch_size": 50,
-        "max_batch_timeout": 5
-      }`;
-
-  let source = readConfig();
-  if (!hasQueueProducer(source)) {
-    source = insertQueueArrayItem(source, 'producers', producerBlock);
-    writeConfig(source);
-  }
-
-  source = readConfig();
-  if (!hasQueueConsumer(source)) {
-    source = insertQueueArrayItem(source, 'consumers', consumerBlock);
-    writeConfig(source);
-  }
+  writeConfig(insertTopLevelObjectBlock(source, 'triggers', `    "crons": [\n      "${dailyRollupCron}"\n    ]`));
+  console.log(`Analytics daily rollup cron configured: ${dailyRollupCron}`);
 }
 
 function printCredentialHelp(output) {
@@ -191,8 +156,8 @@ function printCredentialHelp(output) {
     console.error(output);
   }
   console.error([
-    'Unable to create or find Cloudflare D1/Queue resources for analytics rollups.',
-    'For CI, set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID with D1, Queue and Worker deployment permissions.',
+    'Unable to create or find Cloudflare D1 resources for analytics rollups.',
+    'For CI, set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID with D1 and Worker deployment permissions.',
     'For local setup, run `npx wrangler login` or set CLOUDFLARE_API_TOKEN before `npm run setup:analytics-storage`.',
   ].join('\n'));
 }
@@ -245,23 +210,6 @@ function ensureD1Database() {
   return databaseId;
 }
 
-function ensureQueue() {
-  const source = readConfig();
-  if (hasQueueProducer(source) && hasQueueConsumer(source)) {
-    console.log(`ANALYTICS_ROLLUP_QUEUE queue already configured: ${queueName}`);
-    return;
-  }
-
-  const createResult = runWrangler(['queues', 'create', queueName]);
-  if (createResult.status !== 0 && !/already exists/i.test(createResult.output)) {
-    printCredentialHelp(createResult.output);
-    process.exit(createResult.status || 1);
-  }
-
-  updateQueueConfig();
-  console.log(`ANALYTICS_ROLLUP_QUEUE queue configured: ${queueName}`);
-}
-
 function applyAnalyticsMigrations() {
   const files = readdirSync(migrationsDir)
     .filter((fileName) => fileName.endsWith('.sql'))
@@ -279,5 +227,5 @@ function applyAnalyticsMigrations() {
 }
 
 ensureD1Database();
-ensureQueue();
+ensureCronTrigger();
 applyAnalyticsMigrations();
