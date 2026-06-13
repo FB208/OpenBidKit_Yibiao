@@ -255,6 +255,13 @@ async function fetchDailyPayload(env, projectName, activityDate) {
     GROUP BY event
   `, `${activityDate} events`);
 
+  const eventClientRows = await queryAnalytics(env, `
+    SELECT blob2 AS event, COUNT(DISTINCT blob7) AS clientCount
+    FROM ${DATASET}
+    WHERE ${where} AND blob2 IN (${eventList}) AND blob7 != ''
+    GROUP BY event
+  `, `${activityDate} event clients`);
+
   const activeRows = await queryAnalytics(env, `
     SELECT COUNT(DISTINCT blob7) AS activeClients, MIN(timestamp) AS firstSeenAt, MAX(timestamp) AS lastSeenAt
     FROM ${DATASET}
@@ -284,7 +291,7 @@ async function fetchDailyPayload(env, projectName, activityDate) {
   const versionClientRows = await queryAnalytics(env, `
     SELECT ${versionExpr} AS version, COUNT(DISTINCT blob7) AS clientCount
     FROM ${DATASET}
-    WHERE ${where} AND blob7 != ''
+    WHERE ${where} AND blob2 = 'app_open' AND blob7 != ''
     GROUP BY version
   `, `${activityDate} version clients`);
 
@@ -332,6 +339,7 @@ async function fetchDailyPayload(env, projectName, activityDate) {
 
   return {
     eventRows,
+    eventClientRows,
     active: activeRows[0] || {},
     newClients: intValue(newRows[0]?.newClients),
     pageRows,
@@ -491,6 +499,7 @@ function buildDailyStatements(projectName, activityDate, payload) {
     'analytics_daily_config_stats',
     'analytics_daily_model_stats',
     'analytics_daily_resource_stats',
+    'analytics_daily_event_client_stats',
   ].map((table) => `DELETE FROM ${table} WHERE project_name = ${project} AND activity_date = ${date} AND source = ${source};`);
 
   statements.push(`INSERT INTO analytics_daily_summary (
@@ -530,6 +539,11 @@ function buildDailyStatements(projectName, activityDate, payload) {
   for (const row of payload.resourceRows) {
     statements.push(`INSERT INTO analytics_daily_resource_stats (project_name, activity_date, source, resource_key, click_count, client_count)
       VALUES (${project}, ${date}, ${source}, ${sqlText(row.resourceKey, 80)}, ${intValue(row.clickCount)}, ${intValue(row.clientCount)});`);
+  }
+
+  for (const row of payload.eventClientRows) {
+    statements.push(`INSERT INTO analytics_daily_event_client_stats (project_name, activity_date, source, event, client_count)
+      VALUES (${project}, ${date}, ${source}, ${sqlText(row.event, 50)}, ${intValue(row.clientCount)});`);
   }
 
   appendClientStatements(statements, projectName, activityDate, payload.clientRows);

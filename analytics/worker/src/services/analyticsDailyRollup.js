@@ -162,6 +162,13 @@ async function fetchDailyPayload(env, projectName, activityDate) {
     GROUP BY event
   `, 'events');
 
+  const eventClientRows = await analyticsRows(env, `
+    SELECT blob2 AS event, COUNT(DISTINCT blob7) AS clientCount
+    FROM ${DATASET}
+    WHERE ${where} AND blob2 IN (${eventList}) AND blob7 != ''
+    GROUP BY event
+  `, 'event clients');
+
   const activeRows = await analyticsRows(env, `
     SELECT COUNT(DISTINCT blob7) AS activeClients, MIN(timestamp) AS firstSeenAt, MAX(timestamp) AS lastSeenAt
     FROM ${DATASET}
@@ -191,7 +198,7 @@ async function fetchDailyPayload(env, projectName, activityDate) {
   const versionClientRows = await analyticsRows(env, `
     SELECT ${versionExpr} AS version, COUNT(DISTINCT blob7) AS clientCount
     FROM ${DATASET}
-    WHERE ${where} AND blob7 != ''
+    WHERE ${where} AND blob2 = 'app_open' AND blob7 != ''
     GROUP BY version
   `, 'version clients');
 
@@ -239,6 +246,7 @@ async function fetchDailyPayload(env, projectName, activityDate) {
 
   return {
     eventRows,
+    eventClientRows,
     active: activeRows[0] || {},
     newClients: number(newRows[0]?.newClients),
     pageRows,
@@ -483,6 +491,7 @@ async function writeDailyPayload(env, projectName, activityDate, payload, option
     'analytics_daily_config_stats',
     'analytics_daily_model_stats',
     'analytics_daily_resource_stats',
+    'analytics_daily_event_client_stats',
   ]) {
     addStatement(statements, db, `DELETE FROM ${table} WHERE project_name = ? AND activity_date = ? AND source = ?`, [projectName, activityDate, SOURCE_ROLLUP]);
   }
@@ -569,6 +578,12 @@ async function writeDailyPayload(env, projectName, activityDate, payload, option
     addStatement(statements, db, `
       INSERT INTO analytics_daily_resource_stats (project_name, activity_date, source, resource_key, click_count, client_count)
       VALUES (?, ?, ?, ?, ?, ?)`, [projectName, activityDate, SOURCE_ROLLUP, normalizeText(row.resourceKey, 80), number(row.clickCount), number(row.clientCount)]);
+  }
+
+  for (const row of payload.eventClientRows) {
+    addStatement(statements, db, `
+      INSERT INTO analytics_daily_event_client_stats (project_name, activity_date, source, event, client_count)
+      VALUES (?, ?, ?, ?, ?)`, [projectName, activityDate, SOURCE_ROLLUP, normalizeText(row.event, 50), number(row.clientCount)]);
   }
 
   await appendClientStatements(statements, db, projectName, activityDate, payload.clientRows);

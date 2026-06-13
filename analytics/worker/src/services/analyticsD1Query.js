@@ -39,6 +39,65 @@ async function countActiveClients(db, projectName, startDate, endDate = '') {
   return number(row?.count);
 }
 
+async function countEventClients(db, projectName, event, startDate, endDate = '') {
+  const row = await first(db, `
+    SELECT COUNT(DISTINCT clients.client_hash) AS count
+    FROM analytics_dimension_client_index clients
+    INNER JOIN analytics_dimension_values values_map
+      ON values_map.project_name = clients.project_name
+     AND values_map.dimension_type = clients.dimension_type
+     AND values_map.dimension_key = clients.dimension_key
+    WHERE clients.project_name = ?
+      AND clients.dimension_type = 'event'
+      AND values_map.label = ?
+      AND clients.last_seen_date >= ?
+      ${endDate ? 'AND clients.last_seen_date <= ?' : ''}
+  `, endDate ? [projectName, event, startDate, endDate] : [projectName, event, startDate]);
+  return number(row?.count);
+}
+
+async function countNewEventClients(db, projectName, event, startDate, endDate = '') {
+  const row = await first(db, `
+    SELECT COUNT(DISTINCT client_index.client_hash) AS count
+    FROM analytics_client_index client_index
+    INNER JOIN analytics_dimension_client_index event_clients
+      ON event_clients.project_name = client_index.project_name
+     AND event_clients.client_hash = client_index.client_hash
+    INNER JOIN analytics_dimension_values values_map
+      ON values_map.project_name = event_clients.project_name
+     AND values_map.dimension_type = event_clients.dimension_type
+     AND values_map.dimension_key = event_clients.dimension_key
+    WHERE client_index.project_name = ?
+      AND event_clients.dimension_type = 'event'
+      AND values_map.label = ?
+      AND client_index.client_created_date >= ?
+      AND event_clients.last_seen_date >= ?
+      ${endDate ? 'AND client_index.client_created_date <= ? AND event_clients.last_seen_date <= ?' : ''}
+  `, endDate ? [projectName, event, startDate, startDate, endDate, endDate] : [projectName, event, startDate, startDate]);
+  return number(row?.count);
+}
+
+async function queryDailyEventClients(db, projectName, event, activityDate) {
+  const row = await first(db, `
+    SELECT COALESCE(
+      event_clients.client_count,
+      CASE
+        WHEN summary.app_open_count < summary.active_clients THEN summary.app_open_count
+        ELSE summary.active_clients
+      END,
+      0
+    ) AS count
+    FROM analytics_daily_summary summary
+    LEFT JOIN analytics_daily_event_client_stats event_clients
+      ON event_clients.project_name = summary.project_name
+     AND event_clients.activity_date = summary.activity_date
+     AND event_clients.source = summary.source
+     AND event_clients.event = ?
+    WHERE summary.project_name = ? AND summary.source = ${SOURCE_SQL} AND summary.activity_date = ?
+  `, [event, projectName, activityDate]);
+  return number(row?.count);
+}
+
 async function countNewClients(db, projectName, startDate, endDate = '') {
   const row = await first(db, `
     SELECT COUNT(*) AS count
@@ -104,10 +163,23 @@ async function queryDailyRows(db, projectName, startDate) {
       ORDER BY date ASC, event ASC
     `, [projectName, startDate, projectName, startDate]),
     all(db, `
-      SELECT activity_date AS date, active_clients AS clients
-      FROM analytics_daily_summary
-      WHERE project_name = ? AND source = ${SOURCE_SQL} AND activity_date >= ?
-      ORDER BY activity_date ASC
+      SELECT
+        summary.activity_date AS date,
+        COALESCE(
+          event_clients.client_count,
+          CASE
+            WHEN summary.app_open_count < summary.active_clients THEN summary.app_open_count
+            ELSE summary.active_clients
+          END
+        ) AS clients
+      FROM analytics_daily_summary summary
+      LEFT JOIN analytics_daily_event_client_stats event_clients
+        ON event_clients.project_name = summary.project_name
+       AND event_clients.activity_date = summary.activity_date
+       AND event_clients.source = summary.source
+       AND event_clients.event = 'app_open'
+      WHERE summary.project_name = ? AND summary.source = ${SOURCE_SQL} AND summary.activity_date >= ?
+      ORDER BY summary.activity_date ASC
     `, [projectName, startDate]),
   ]);
   return {
@@ -215,14 +287,14 @@ export async function queryD1Overview(env, projectName, days) {
 
   const [historyTotals, todayRow, yesterdayRow, wau, mau, activeClients, todayNewClients, newClients, last30NewClients, dailyRows, traffic] = await Promise.all([
     queryHistoryTotals(db, projectName),
-    first(db, `SELECT active_clients AS count FROM analytics_daily_summary WHERE project_name = ? AND source = ${SOURCE_SQL} AND activity_date = ?`, [projectName, today]),
-    first(db, `SELECT active_clients AS count FROM analytics_daily_summary WHERE project_name = ? AND source = ${SOURCE_SQL} AND activity_date = ?`, [projectName, yesterday]),
-    countActiveClients(db, projectName, last7Start),
-    countActiveClients(db, projectName, last30Start),
-    countActiveClients(db, projectName, startDate),
-    countNewClients(db, projectName, today, today),
-    countNewClients(db, projectName, startDate),
-    countNewClients(db, projectName, last30Start),
+    queryDailyEventClients(db, projectName, 'app_open', today),
+    queryDailyEventClients(db, projectName, 'app_open', yesterday),
+    countEventClients(db, projectName, 'app_open', last7Start),
+    countEventClients(db, projectName, 'app_open', last30Start),
+    countEventClients(db, projectName, 'app_open', startDate),
+    countNewEventClients(db, projectName, 'app_open', today, today),
+    countNewEventClients(db, projectName, 'app_open', startDate),
+    countNewEventClients(db, projectName, 'app_open', last30Start),
     queryDailyRows(db, projectName, startDate),
     queryD1Traffic(env, projectName),
   ]);
@@ -234,8 +306,8 @@ export async function queryD1Overview(env, projectName, days) {
     range: 'history',
     source: 'd1',
     ...historyTotals,
-    todayActiveClients: number(todayRow?.count),
-    yesterdayActiveClients: number(yesterdayRow?.count),
+    todayActiveClients: todayRow,
+    yesterdayActiveClients: yesterdayRow,
     wau,
     mau,
     activeClients,

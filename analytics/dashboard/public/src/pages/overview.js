@@ -64,7 +64,7 @@ export async function loadOverview() {
 
   renderTable(state.dailyTable, daily, [
     { key: 'date', label: '日期' },
-    { key: 'clients', label: '客户端数' },
+    { key: 'clients', label: '打开客户端数' },
     { key: 'appOpen', label: '打开量' },
     { key: 'pageView', label: '页面访问量' },
   ], '暂无每日统计数据');

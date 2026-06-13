@@ -14,6 +14,7 @@
 - 已重写 `backfill-analytics-rollups.mjs` 为 daily rollup 回填：按上海业务日逐日查询 Analytics Engine，写入 `analytics_daily_summary/page/version/config/model/resource` 和匿名客户端/维度索引，统一 `source=rollup`；`client/doc/统计改造计划.md` 与 `analytics/README.md` 已更新为 D1 + Cron 最终方案，并补充旧 Queue 安全下线顺序。
 - Analytics 去 Queue 改造验证完成：`node --check` 覆盖 `analyticsTrack`、`analyticsDailyRollup`、`analyticsD1Query`、Worker 入口、相关 routes、setup/backfill/deploy 脚本；回填 dry-run 覆盖 2026-03-15 到 2026-06-12 共 90 天；`git diff --check` 通过，仅有 LF/CRLF 提示。
 - 已修复今日活跃客户端与版本分布不一致残留：`/api/summary` 仍过滤 `blob4 != ''` 且按 UTC 判断今日，已改为和 `/api/traffic` 一样把空版本归为“未知版本”、按 `Asia/Shanghai` 判断今日，并补入只在今日活跃但不在范围版本列表中的版本；`/api/traffic` 今日版本查询去掉 `LIMIT 100`，避免版本组被截断。验证通过 `node --check` 和相关 diff check。
+- 已修复“日活客户端大于打开量”的口径漏洞：新增 `analytics_daily_event_client_stats`，Cron/backfill 写入每天每事件去重客户端数；概览今日/昨日/近 7/30 天和每日统计改为按 `app_open` 去重客户端展示，旧行未回填新表时用 `min(active_clients, app_open_count)` 兜底；看板文案从“活跃客户端/客户端数”改为“打开客户端”。验证通过相关 `node --check`、backfill dry-run 和 diff check。
 - 开始废标项检查多投标文件支持：已读取现有计划、确认 catchup 无输出，并记录当前单投标文件边界；下一步从类型和 Store/SQLite schema 开始改造，确保 UI 与后台任务共用同一多文件模型。
 - 继续废标项检查多投标文件支持收尾：`npm run build` 已通过后，复核发现 v12 迁移提前创建 `role/sort_order` 索引会卡住旧库；已改为先处理旧表结构，再创建完整 schema，并用 Electron runtime 冒烟测试确认旧 v11 库可升级到 v12、旧 bid 迁为 `bid-1`、旧结果写入 `bid_document_id=bid-1`。
 - 废标项检查多投标文件支持已完成收尾验证：CJS `node --check` 覆盖 SQLite、fileService、rejectionCheckStore、rejectionCheckTask 和 preload；`cd client; npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 通过，仅有 LF/CRLF 提示；旧单文件字段残留复扫无业务依赖。

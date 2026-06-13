@@ -73,6 +73,7 @@ export async function handleTraffic(request, env, url) {
       COUNT(DISTINCT blob7) AS todayClients
     FROM ${DATASET}
     WHERE blob1 = ${project}
+      AND blob2 = 'app_open'
       AND blob7 != ''
       AND ${todayExpr}
     GROUP BY version

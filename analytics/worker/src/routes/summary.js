@@ -54,6 +54,7 @@ export async function handleSummary(request, env, url) {
       COUNT(DISTINCT blob7) AS clients
     FROM ${DATASET}
     WHERE blob1 = ${project}
+      AND blob2 = 'app_open'
       AND blob7 != ''
       AND timestamp >= NOW() - INTERVAL '${days}' DAY
     GROUP BY date
@@ -93,6 +94,7 @@ export async function handleSummary(request, env, url) {
       COUNT(DISTINCT blob7) AS todayClients
     FROM ${DATASET}
     WHERE blob1 = ${project}
+      AND blob2 = 'app_open'
       AND blob7 != ''
       AND ${todayExpr}
     GROUP BY version
@@ -111,6 +113,7 @@ export async function handleSummary(request, env, url) {
       COUNT(DISTINCT blob7) AS todayActiveClients
     FROM ${DATASET}
     WHERE blob1 = ${project}
+      AND blob2 = 'app_open'
       AND blob7 != ''
       AND ${todayExpr}
   `;
@@ -120,6 +123,7 @@ export async function handleSummary(request, env, url) {
       COUNT(DISTINCT blob7) AS wau
     FROM ${DATASET}
     WHERE blob1 = ${project}
+      AND blob2 = 'app_open'
       AND blob7 != ''
       AND timestamp >= NOW() - INTERVAL '7' DAY
   `;
@@ -129,6 +133,7 @@ export async function handleSummary(request, env, url) {
       COUNT(DISTINCT blob7) AS mau
     FROM ${DATASET}
     WHERE blob1 = ${project}
+      AND blob2 = 'app_open'
       AND blob7 != ''
       AND timestamp >= NOW() - INTERVAL '30' DAY
   `;
@@ -138,6 +143,7 @@ export async function handleSummary(request, env, url) {
       COUNT(DISTINCT blob7) AS activeClients
     FROM ${DATASET}
     WHERE blob1 = ${project}
+      AND blob2 = 'app_open'
       AND blob7 != ''
       AND timestamp >= NOW() - INTERVAL '${days}' DAY
   `;
@@ -147,6 +153,7 @@ export async function handleSummary(request, env, url) {
       COUNT(DISTINCT blob7) AS newClients
     FROM ${DATASET}
     WHERE blob1 = ${project}
+      AND blob2 = 'app_open'
       AND blob7 != ''
       AND blob8 != ''
       AND blob8 >= ${sqlString(isoDateDaysAgo(days))}

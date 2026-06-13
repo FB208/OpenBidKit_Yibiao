@@ -76,8 +76,8 @@ export async function loadTraffic() {
 
   renderTable(state.versionsTable, summary.versions || [], [
     { key: 'version', label: '版本', code: true },
-    { key: 'clients', label: range === 'history' ? '累计客户端数' : '活跃客户端数' },
-    { key: 'todayClients', label: '今日活跃客户端' },
+    { key: 'clients', label: range === 'history' ? '累计触达客户端数' : '触达客户端数' },
+    { key: 'todayClients', label: '今日打开客户端' },
     { key: 'count', label: range === 'history' ? '累计事件数' : '事件数' },
   ], '暂无版本数据');
 }

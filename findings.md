@@ -12,6 +12,7 @@
 - 匿名客户端 hash 口径为 `sha256(projectName + ':' + client_id)`；维度 key 口径为 `dimension_type + '_' + sha256(dimension_type + ':' + label).slice(0, 24)`。D1 不保存明文 `client_id`，但可用匿名 hash 索引做长期去重。
 - Cron Trigger 使用 `15 18 * * *`，即北京时间每天 02:15 汇总昨日。旧线上 Queue 必须在去 Queue Worker 部署并验证 `/track` 后再删除。
 - 今日活跃与版本分布不一致还有第二条旧路径：`/api/summary` 仍使用 `blob4 != ''` 过滤空版本，并用 UTC `toDate(timestamp)=toDate(NOW())` 判断今日；即使 `/api/traffic` 已修，旧页面或调用 `/api/summary` 的路径仍会丢失“未知版本”。
+- “日活客户端 > 打开量”的根因是口径混用：`active_clients` 原本统计任意事件去重客户端，而看板文案把它当日活展示；当客户端只上报 `page_view/config_usage/ai_request` 或历史数据缺少 `app_open` 时，就会出现日活大于打开量。DAU/每日客户端必须改为 `app_open` 去重客户端，任意事件触达只能作为单独指标展示。
 - 废标项检查当前为单投标文件链路：Renderer 使用 `bidDocument`，Store 以 `rejection_check_documents.role` 主键保存 `bid`，Main 任务只读取 `readDocumentMarkdown('bid')`，三类结果表都没有文件归属字段。
 - 标书查重的多投标文件上传样式已在 `DuplicateCheckPage.tsx` 落地，可复用 `duplicate-upload-row`、文件列表和文件 pill 的交互思路；废标检查已有 `DocumentFilePill` 和正文 Tab 样式，可小幅扩展。
 - 多文件结果显示应以结构化 `bidDocumentId` 为权威：AI Prompt 需要列出可用投标文件 ID，并要求每条废标/错别字/逻辑问题返回所属 ID；Normalizer 必须过滤不存在的 ID。
