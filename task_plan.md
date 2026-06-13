@@ -1,5 +1,33 @@
 # Task Plan
 
+## Current Task: Analytics 北京时间统一修复
+
+### Goal
+保证之后新增的客户端身份、Analytics Engine 近期查询、最近事件展示、留存计算和 Cron 汇总写入时间均统一使用北京时间 `Asia/Shanghai`；不修正已存在数据。
+
+### Phases
+- [completed] 1. 将客户端 `analytics_created_at` 生成口径改为北京时间日期。
+- [completed] 2. 将 Worker 近期 AE 查询从 UTC 滚动窗口改为北京时间自然日范围。
+- [completed] 3. 将最近事件、留存和 Cron 首次访问时间统一为北京时间展示/落库。
+- [completed] 4. 运行语法检查、客户端构建、边界时间验证和 diff 检查。
+
+### Decisions
+- 不覆盖已存在的 `analytics_created_at`，只影响之后缺失身份的新客户端。
+- `today/7/30/90` 这类统计范围按北京时间自然日计算，不按 `NOW() - INTERVAL` 的滚动窗口计算。
+- Dashboard 仍直接展示 API 返回值，由 Worker 保证返回北京时间字符串。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 本轮实现 | 相关语法检查、客户端构建、北京时间边界验证和 diff check 通过 |
+
+### Validation
+- `node --check` 通过：`client/electron/services/configStore.cjs`。
+- `node --check` 通过：`analytics/worker/src/utils.js`、`services/analyticsStatsStore.js`、`routes/latest.js`、`routes/retention.js`、`routes/resources.js`、`routes/projects.js`。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- 北京时间边界验证通过：`2026-06-12T16:30:00.000Z` 识别为 `2026-06-13 00:30:00`。
+- `git diff --check` 通过，仅有 LF/CRLF 提示。
+
 ## Current Task: Analytics 统计功能新版完整重构
 
 ### Goal

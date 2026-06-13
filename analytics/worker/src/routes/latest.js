@@ -1,7 +1,7 @@
 import { ALLOWED_EVENTS, DATASET } from '../constants.js';
 import { json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
 import { queryAnalytics } from '../services/analyticsQuery.js';
-import { isValidProjectName, logQueryError, normalizeText, safePage, sqlString } from '../utils.js';
+import { businessDateTimeSqlExpression, isValidProjectName, logQueryError, normalizeText, safePage, sqlString } from '../utils.js';
 
 export async function handleLatest(request, env, url) {
   if (request.method !== 'GET') {
@@ -35,7 +35,7 @@ export async function handleLatest(request, env, url) {
 
   const sql = `
     SELECT
-      timestamp,
+      ${businessDateTimeSqlExpression()} AS timestamp,
       blob1 AS projectName,
       blob2 AS event,
       blob3 AS page,

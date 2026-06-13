@@ -1,6 +1,7 @@
 # Progress
 
 ## Session Log
+- 已完成 Analytics 北京时间统一修复：客户端新生成 `analytics_created_at` 改为 `Asia/Shanghai` 日期；Worker 公共工具新增北京时间 SQL 表达式和自然日范围；`today/7/30/90` 近期 AE 查询、资源点击、项目兜底、最近事件、留存和 Cron 写入 `first_seen_at` 均统一为北京时间口径。验证通过相关 `node --check`、`cd client; npm run build`、北京时间边界用例和 `git diff --check`，仅有既有 chunk 体积警告与 LF/CRLF 提示。
 - 优化 `/track` D1 热路径：`recordTrackClient()` 现在只对 `client_created_at` 最近 3 天内的客户端尝试实时写 D1；同一 Worker 实例内通过有上限的内存 Set 避免重复尝试；去掉老客户端每条事件的 D1 SELECT；真实插入新客户端后才更新 `stats_totals.total_clients`；D1 写入失败只 warning，`/track` 仍返回成功。验证通过相关 `node --check`、热路径 grep 复扫和 `git diff --check -- analytics`。
 - 修复代码评审指出的历史维度客户端数重复累计问题：新版 migration 增加 `stats_dimension_clients`，Cron 汇总对页面/版本/配置/模型/资源写入 `dimension + client_id` 去重关系，聚合表只累加事件/点击/请求/token，`client_count` 改为从关系表重算累计唯一客户端数。验证通过 `node --check analytics/worker/src/services/analyticsStatsStore.js`、`node --check analytics/worker/src/index.js`、错误模式 grep 复扫和 `git diff --check -- analytics`。
 - Analytics 统计新版完整重构已完成代码接入：旧 `analytics_*` migration、旧 D1 查询服务、旧 daily rollup 服务、旧 `/api/summary` 和旧 backfill 脚本已删除；新增 `stats_*` schema、`analyticsStatsStore.js`、`/api/clients`、`/api/client-detail`，`/track` 写 AE 后实时写 `stats_clients`，Cron 改为北京时间 02:00 汇总前一天数据。

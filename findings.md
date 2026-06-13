@@ -1,6 +1,8 @@
 # Findings
 
 ## Research Log
+- Analytics 北京时间修复边界：客户端 `analytics_created_at` 只能修正之后新生成身份的日期，已存在配置只有日期没有时刻，不能可靠判断是否属于北京时间 00:00-07:59 的 UTC 前一天偏差；本轮不处理历史数据。
+- Analytics 统计页时间统一口径：Worker API 应返回已按 `Asia/Shanghai` 格式化的日期/时间，Dashboard 不再二次转换；近期 AE 范围按北京时间自然日 `today + 前 N-1 天`，不使用 `NOW() - INTERVAL` 滚动窗口。
 - Analytics 长期统计改造边界：当前有效方案要求新增独立 `ANALYTICS_DB` 和 Queue，D1 只保存生命周期、每日活跃、月度预聚合、维度去重和维度累计；`/track` 必须先 Queue 入队，成功后再写 Analytics Engine，客户端继续静默处理埋点失败。
 - Analytics D1 聚合精确去重边界：不能依赖 SQLite `changes()` 在 D1 batch 中跨语句累计新增维度客户端数；已改为先写 `analytics_dimension_clients`，再按 `project/dimension/key` 从关系表 `COUNT(*)/MIN/MAX` 重算 `analytics_dimension_client_totals`，避免重复事件、回填和并发写入导致累计客户端数偏移。
 - Analytics Queue Consumer 批处理边界：聚合写入和事件 `done` 标记必须处于同一个 D1 batch transaction；如果完整队列批次语句数过多，只能递归拆成子批次提交，不能先提交统计再单独标记 done，否则失败重试会重复累计。

@@ -21,7 +21,7 @@ import {
   readResource,
   upsertResource,
 } from '../services/resourceStore.js';
-import { isValidProjectName, logQueryError, normalizeText, safeDays, sqlString } from '../utils.js';
+import { businessDateRangeCondition, getBusinessDateDaysAgo, getBusinessToday, isValidProjectName, logQueryError, normalizeText, safeDays, sqlString } from '../utils.js';
 
 const allowedImageTypes = new Set(RESOURCE_ALLOWED_IMAGE_TYPES);
 
@@ -142,6 +142,7 @@ async function queryResourceClickCounts(env, resources, url) {
     return new Map();
   }
 
+  const dateWhere = businessDateRangeCondition(getBusinessDateDaysAgo(days - 1), getBusinessToday());
   const sql = `
     SELECT
       blob9 AS resourceKey,
@@ -150,7 +151,7 @@ async function queryResourceClickCounts(env, resources, url) {
     WHERE blob1 = ${sqlString(projectName)}
       AND blob2 = 'resource_click'
       AND blob9 IN (${resourceKeys.map((key) => sqlString(key)).join(', ')})
-      AND timestamp >= NOW() - INTERVAL '${days}' DAY
+      AND ${dateWhere}
     GROUP BY resourceKey
   `;
 

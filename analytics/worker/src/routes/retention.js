@@ -1,7 +1,7 @@
 import { DATASET } from '../constants.js';
 import { json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
 import { queryAnalytics } from '../services/analyticsQuery.js';
-import { addIsoDays, datePart, daysSinceIsoDate, isValidProjectName, isoDateDaysAgo, logQueryError, normalizeText, safeDays, sqlString } from '../utils.js';
+import { addBusinessDateDays, businessDateSqlExpression, datePart, daysSinceBusinessDate, getBusinessDateDaysAgo, isValidProjectName, logQueryError, normalizeText, safeDays, sqlString } from '../utils.js';
 
 export async function handleRetention(request, env, url) {
   if (request.method !== 'GET') {
@@ -22,7 +22,7 @@ export async function handleRetention(request, env, url) {
   const project = sqlString(projectName);
   const sql = `
     SELECT
-      timestamp,
+      ${businessDateSqlExpression()} AS activeDate,
       blob7 AS clientId,
       blob8 AS clientCreatedAt
     FROM ${DATASET}
@@ -30,7 +30,7 @@ export async function handleRetention(request, env, url) {
       AND blob2 = 'app_open'
       AND blob7 != ''
       AND blob8 != ''
-      AND blob8 >= ${sqlString(isoDateDaysAgo(days))}
+      AND blob8 >= ${sqlString(getBusinessDateDaysAgo(days))}
     ORDER BY timestamp ASC
     LIMIT 50000
   `;
@@ -42,8 +42,8 @@ export async function handleRetention(request, env, url) {
     for (const row of result.data || []) {
       const clientId = String(row.clientId || '');
       const clientCreatedAt = datePart(row.clientCreatedAt);
-      const activeDate = datePart(row.timestamp);
-      const age = daysSinceIsoDate(clientCreatedAt);
+      const activeDate = datePart(row.activeDate);
+      const age = daysSinceBusinessDate(clientCreatedAt);
       if (!clientId || !clientCreatedAt || !activeDate || !Number.isFinite(age) || age < 0 || age > days) {
         continue;
       }
@@ -58,13 +58,13 @@ export async function handleRetention(request, env, url) {
       let retainedClients = 0;
 
       for (const client of clients.values()) {
-        const age = daysSinceIsoDate(client.clientCreatedAt);
+        const age = daysSinceBusinessDate(client.clientCreatedAt);
         if (!Number.isFinite(age) || age < day || age > days) {
           continue;
         }
 
         cohortClients += 1;
-        if (client.activeDates.has(addIsoDays(client.clientCreatedAt, day))) {
+        if (client.activeDates.has(addBusinessDateDays(client.clientCreatedAt, day))) {
           retainedClients += 1;
         }
       }

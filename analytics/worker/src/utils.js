@@ -1,5 +1,7 @@
 import { PROJECT_NAME_PATTERN } from './constants.js';
 
+const BUSINESS_TIME_ZONE = 'Asia/Shanghai';
+
 export function normalizeText(value, maxLength) {
   return String(value || '').trim().slice(0, maxLength);
 }
@@ -35,18 +37,19 @@ export function safePage(value) {
 }
 
 export function isoDateDaysAgo(days) {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() - days);
-  return date.toISOString().slice(0, 10);
+  return getBusinessDateDaysAgo(days);
 }
 
 export function daysSinceIsoDate(value) {
-  const date = new Date(`${String(value || '').slice(0, 10)}T00:00:00.000Z`);
-  if (Number.isNaN(date.getTime())) return NaN;
+  return daysSinceBusinessDate(value);
+}
 
-  const now = new Date();
-  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  return Math.floor((todayUtc - date.getTime()) / 86400000);
+export function daysSinceBusinessDate(value) {
+  const date = new Date(`${String(value || '').slice(0, 10)}T00:00:00.000Z`);
+  const today = new Date(`${getBusinessToday()}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || Number.isNaN(today.getTime())) return NaN;
+
+  return Math.floor((today.getTime() - date.getTime()) / 86400000);
 }
 
 export function addIsoDays(value, days) {
@@ -54,7 +57,14 @@ export function addIsoDays(value, days) {
   if (Number.isNaN(date.getTime())) return '';
 
   date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function addBusinessDateDays(value, days) {
+  return addIsoDays(value, days);
 }
 
 export function datePart(value) {
@@ -64,7 +74,7 @@ export function datePart(value) {
 export function getBusinessDateDaysAgo(days = 0, baseDate = new Date()) {
   const date = new Date(baseDate.getTime() - Math.max(0, Number(days || 0)) * 86400000);
   const parts = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
+    timeZone: BUSINESS_TIME_ZONE,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -79,7 +89,7 @@ export function getBusinessToday(baseDate = new Date()) {
 
 export function formatBusinessDateTime(date = new Date()) {
   const parts = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
+    timeZone: BUSINESS_TIME_ZONE,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -92,6 +102,19 @@ export function formatBusinessDateTime(date = new Date()) {
   return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}:${values.second}`;
 }
 
+export function businessDateSqlExpression(value = 'timestamp') {
+  return `formatDateTime(${value}, '%Y-%m-%d', '${BUSINESS_TIME_ZONE}')`;
+}
+
+export function businessDateTimeSqlExpression(value = 'timestamp') {
+  return `formatDateTime(${value}, '%Y-%m-%d %H:%M:%S', '${BUSINESS_TIME_ZONE}')`;
+}
+
+export function businessDateRangeCondition(startDate, endDate = getBusinessToday()) {
+  const dateExpr = businessDateSqlExpression();
+  return `${dateExpr} >= ${sqlString(startDate)} AND ${dateExpr} <= ${sqlString(endDate)}`;
+}
+
 export function logQueryError(scope, error) {
   console.error(`[analytics] ${scope} query failed`, error?.message || String(error));
 }
@@ -102,7 +125,7 @@ export function sqlString(value) {
 
 export function formatNoticeTime(date = new Date()) {
   const parts = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
+    timeZone: BUSINESS_TIME_ZONE,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

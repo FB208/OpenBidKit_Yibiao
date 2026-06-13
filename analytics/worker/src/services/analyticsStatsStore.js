@@ -1,5 +1,8 @@
 import { ALLOWED_EVENTS, CONFIG_USAGE_FIELDS, DATASET, MODEL_USAGE_FIELDS } from '../constants.js';
 import {
+  businessDateRangeCondition,
+  businessDateSqlExpression,
+  businessDateTimeSqlExpression,
   formatBusinessDateTime,
   getBusinessDateDaysAgo,
   getBusinessToday,
@@ -107,7 +110,7 @@ function allowedEventsSql() {
 }
 
 function businessDateCondition(activityDate) {
-  return `formatDateTime(timestamp, '%Y-%m-%d', 'Asia/Shanghai') = ${sqlString(activityDate)}`;
+  return `${businessDateSqlExpression()} = ${sqlString(activityDate)}`;
 }
 
 function aeRangeCondition(range) {
@@ -116,7 +119,7 @@ function aeRangeCondition(range) {
   }
 
   const days = range === '7' ? 7 : 30;
-  return `timestamp >= NOW() - INTERVAL '${days}' DAY`;
+  return businessDateRangeCondition(getBusinessDateDaysAgo(days - 1), getBusinessToday());
 }
 
 function modelFiltersSql(filters) {
@@ -364,7 +367,7 @@ export async function queryStatsClientDetail(env, projectName, clientId, range) 
   const rangeWhere = range === 'all' ? '' : `AND ${aeRangeCondition(range === '7' ? '7' : '30')}`;
   const sql = `
     SELECT
-      formatDateTime(timestamp, '%Y-%m-%d', 'Asia/Shanghai') AS date,
+      ${businessDateSqlExpression()} AS date,
       blob2 AS event,
       SUM(_sample_interval) AS count
     FROM ${DATASET}
@@ -672,7 +675,7 @@ async function queryRollupData(env, projectName, activityDate) {
     queryAnalytics(env, `
       SELECT
         blob7 AS clientId,
-        min(timestamp) AS firstSeenAt,
+        ${businessDateTimeSqlExpression('min(timestamp)')} AS firstSeenAt,
         max(timestamp) AS lastSeenAt,
         argMax(${versionExpr}, timestamp) AS lastVersion,
         argMax(blob5, timestamp) AS platform,
