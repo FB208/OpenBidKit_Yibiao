@@ -1,5 +1,36 @@
 # Task Plan
 
+## Current Task: Analytics 统计功能新版完整重构
+
+### Goal
+按 `client/doc/统计改造计划.md` 的完整方案重构 `analytics/` 埋点统计功能：公告管理和资源管理保持不变；AE 采集字段保持不变；`ANALYTICS_DB` 统计库放弃旧表结构并基于新版 `stats_*` 表重建；`/track` 写 AE 并实时写客户端表；Cron 每天北京时间 2 点汇总前一天 AE 数据到 D1；Dashboard 按标签页懒加载，新增客户端统计，并按历史/D1、今天/7天/30天 AE 的口径查询。
+
+### Phases
+- [completed] 1. 重建 Analytics D1 schema、setup 脚本和旧统计入口清理。
+- [completed] 2. 实现新版统计存储服务、`/track` 实时客户端写入和 Cron 汇总。
+- [completed] 3. 替换 Worker 统计接口：overview、clients、client-detail、traffic、config/model、latest、projects、resources。
+- [completed] 4. 改造 Dashboard：概览、客户端统计、访问分析、配置、模型、最近事件筛选和标签页加载。
+- [completed] 5. 更新 `analytics/逻辑梳理.md`、README 和执行说明。
+- [completed] 6. 运行 Worker/脚本/Dashboard 语法检查和必要验证。
+
+### Decisions
+- `ANALYTICS_DB` binding 名保留，但旧 `analytics_*` 统计表和旧数据可直接删除；用户可直接删除 Cloudflare D1 `openbidkit-analytics` 后由 setup 重建。
+- D1 可以明文保存 `client_id`，用于客户端统计列表和新增客户端判断。
+- 活跃客户端口径为任意有效事件去重客户端，不再限定 `app_open`。
+- 历史范围读 D1；今天/7天/30天读 AE；最近事件只读 AE，不入 D1。
+- 资源管理不属于埋点统计改造，功能保持不变；资源点击历史统计需迁移到新版统计表以保持资源点击数可用。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| `git diff --check` 全仓检查报 `client/doc/统计改造计划.md:65 new blank line at EOF` | 最终空白检查 | 该文件是用户先改的需求文档，本轮未直接修改；已单独运行 `git diff --check -- analytics`，本轮 analytics 变更仅有 LF/CRLF 提示无空白错误 |
+
+### Validation
+- `node --check` 通过：`analytics/worker/src/services/analyticsStatsStore.js`、`routes/overview.js`、`routes/clients.js`、`routes/traffic.js`、`routes/configUsage.js`、`routes/latest.js`、`routes/track.js`、`routes/projects.js`、`routes/resources.js`、`src/index.js`。
+- `node --check` 通过：`analytics/scripts/setup-analytics-storage.mjs`、`analytics/scripts/deploy-if-changed.mjs`、Dashboard `api.js`、`state.js`、`main.js`、`tabs.js`、`render.js`、`pages/overview.js`、`pages/clients.js`、`pages/traffic.js`、`pages/configUsage.js`、`pages/latest.js`、`pages/resources.js`。
+- 旧引用扫描通过：旧 `analyticsD1Query`、`analyticsDailyRollup`、`/api/summary`、`backfill:analytics`、Queue、旧 `analytics_daily_*` / `analytics_monthly_*` / anonymous index 表引用已从 `analytics/` 代码和文档中清理。
+- `git diff --check -- analytics` 通过，仅有 LF/CRLF 提示。
+
 ## Current Task: Analytics 长期统计去 Queue 与每日汇总改造
 
 ### Goal

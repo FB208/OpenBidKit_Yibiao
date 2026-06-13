@@ -1,4 +1,5 @@
 import { loadSettings, saveSettings } from './api.js';
+import { loadClients, loadClientDetail } from './pages/clients.js';
 import { loadConfigUsage, loadModelUsage } from './pages/configUsage.js';
 import { loadLatest } from './pages/latest.js';
 import { disableNotice, loadNotice, publishNotice } from './pages/notice.js';
@@ -11,6 +12,7 @@ import { activateTab, getInitialTab } from './tabs.js';
 
 const tabLoaders = {
   overview: () => loadOverview(),
+  clients: () => loadClients(),
   traffic: () => loadTraffic(),
   config: () => loadConfigUsage(),
   models: () => loadModelUsage(),
@@ -83,10 +85,15 @@ function bindEvents() {
   state.adminToken.addEventListener('change', saveSettings);
   state.rememberToken.addEventListener('change', saveSettings);
   state.projectName.addEventListener('change', saveSettings);
-  state.overviewRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
   state.trafficRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
   state.configRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
   state.modelRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
+  state.modelProviderFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
+  state.modelEndpointFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
+  state.modelNameFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
+  state.latestEventFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
+  state.closeClientDetail.addEventListener('click', () => state.clientDetailDialog.close());
+  state.clientDetailRange.addEventListener('change', () => loadClientDetail().catch((error) => setError(error?.message || String(error))));
   state.resourceClickRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
 }
 

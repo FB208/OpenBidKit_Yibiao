@@ -1,6 +1,12 @@
 # Progress
 
 ## Session Log
+- 优化 `/track` D1 热路径：`recordTrackClient()` 现在只对 `client_created_at` 最近 3 天内的客户端尝试实时写 D1；同一 Worker 实例内通过有上限的内存 Set 避免重复尝试；去掉老客户端每条事件的 D1 SELECT；真实插入新客户端后才更新 `stats_totals.total_clients`；D1 写入失败只 warning，`/track` 仍返回成功。验证通过相关 `node --check`、热路径 grep 复扫和 `git diff --check -- analytics`。
+- 修复代码评审指出的历史维度客户端数重复累计问题：新版 migration 增加 `stats_dimension_clients`，Cron 汇总对页面/版本/配置/模型/资源写入 `dimension + client_id` 去重关系，聚合表只累加事件/点击/请求/token，`client_count` 改为从关系表重算累计唯一客户端数。验证通过 `node --check analytics/worker/src/services/analyticsStatsStore.js`、`node --check analytics/worker/src/index.js`、错误模式 grep 复扫和 `git diff --check -- analytics`。
+- Analytics 统计新版完整重构已完成代码接入：旧 `analytics_*` migration、旧 D1 查询服务、旧 daily rollup 服务、旧 `/api/summary` 和旧 backfill 脚本已删除；新增 `stats_*` schema、`analyticsStatsStore.js`、`/api/clients`、`/api/client-detail`，`/track` 写 AE 后实时写 `stats_clients`，Cron 改为北京时间 02:00 汇总前一天数据。
+- Analytics Dashboard 已改造为新版信息架构：概览去掉时间范围和旧冗余卡片；新增“客户端统计”标签页和客户端详情弹窗；访问/配置/模型范围改为历史/今天/7天/30天默认历史；模型使用增加服务商、域名、模型筛选；最近事件增加事件筛选。
+- 文档已同步新版：`analytics/逻辑梳理.md` 改为新版 `stats_*` 数据库和查询逻辑；`analytics/README.md` 改为新版部署、删库重建、接口和口径说明。验证通过 Worker/脚本/Dashboard `node --check`，旧引用扫描通过；`git diff --check -- analytics` 通过，仅有 LF/CRLF 提示。全仓 `git diff --check` 只剩用户先改的 `client/doc/统计改造计划.md` EOF 空行提示，本轮未动该文件。
+- 开始 Analytics 统计功能新版完整重构：已复读 `client/doc/统计改造计划.md`，用户确认 `ANALYTICS_DB` binding 名保留、旧 `openbidkit-analytics` 可直接删库重建；本轮会一次性替换统计 schema、Worker 接口、Cron、Dashboard，并同步 `analytics/逻辑梳理.md`。
 - 开始执行 Analytics 长期统计与历史总数改造：已读取 `client/doc/统计改造计划.md`、恢复文件型计划并运行 session catchup 无输出；本轮范围为 analytics Worker/Dashboard/脚本/迁移，不改桌面客户端埋点入口。
 - Analytics 长期统计 Worker 接入已推进：`/track` 改为先 `ANALYTICS_ROLLUP_QUEUE.send()` 成功后再写 Analytics Engine，Worker `queue()` 已接入 `consumeAnalyticsRollupBatch()`；D1 聚合服务语法检查通过，维度客户端累计改为按关系表重算 totals，D1 batch 超阈值时递归拆子批次并把 done 状态放在同一子批次事务内。
 - Analytics D1 历史查询接口已新增/接入：新增 `analyticsD1Query.js`、`/api/overview`、`/api/traffic`，`/api/summary?range=history`、`/api/config-usage?range=history` 和 `/api/model-usage` 可读 D1，资源点击 `range=history` 读 D1，`/api/projects` 优先 D1 回退 Analytics Engine；相关 Worker JS `node --check` 通过。

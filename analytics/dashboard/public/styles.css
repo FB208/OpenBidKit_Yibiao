@@ -303,6 +303,53 @@ button:disabled {
   border-radius: 10px;
 }
 
+.filter-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0 16px;
+}
+
+.link-button {
+  align-self: auto;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 10px;
+  color: var(--primary);
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.client-dialog {
+  width: min(1040px, calc(100vw - 32px));
+  max-height: calc(100vh - 56px);
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+}
+
+.client-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.28);
+}
+
+.dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.dialog-head h2 {
+  margin: 0 0 6px;
+}
+
+.dialog-head button {
+  align-self: auto;
+}
+
 .usage-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -604,6 +651,7 @@ code {
   .cards,
   .grid,
   .usage-grid,
+  .filter-row,
   .notice-form,
   .resource-form {
     grid-template-columns: 1fr;

@@ -19,10 +19,13 @@ export function normalizeApiBase(value) {
 export function saveSettings() {
   localStorage.setItem('analytics_api_base', normalizeApiBase(state.apiBase.value));
   localStorage.setItem('analytics_project_name', state.projectName.value);
-  localStorage.setItem('analytics_overview_range', state.overviewRange.value);
   localStorage.setItem('analytics_traffic_range', state.trafficRange.value);
   localStorage.setItem('analytics_config_range', state.configRange.value);
   localStorage.setItem('analytics_model_range', state.modelRange.value);
+  localStorage.setItem('analytics_model_provider_filter', state.modelProviderFilter.value);
+  localStorage.setItem('analytics_model_endpoint_filter', state.modelEndpointFilter.value);
+  localStorage.setItem('analytics_model_name_filter', state.modelNameFilter.value);
+  localStorage.setItem('analytics_latest_event_filter', state.latestEventFilter.value);
   localStorage.setItem('analytics_resource_click_range', state.resourceClickRange.value);
 
   const token = state.adminToken.value.trim();
@@ -42,10 +45,13 @@ export function loadSettings() {
   state.rememberToken.checked = localStorage.getItem('analytics_remember_token') === 'true';
   state.adminToken.value = sessionStorage.getItem('analytics_admin_token') || (state.rememberToken.checked ? localStorage.getItem('analytics_admin_token') : '') || '';
   state.projectName.value = localStorage.getItem('analytics_project_name') || state.projectName.value;
-  state.overviewRange.value = localStorage.getItem('analytics_overview_range') || '30';
-  state.trafficRange.value = localStorage.getItem('analytics_traffic_range') || '30';
-  state.configRange.value = localStorage.getItem('analytics_config_range') || '30';
-  state.modelRange.value = localStorage.getItem('analytics_model_range') || '30';
+  state.trafficRange.value = localStorage.getItem('analytics_traffic_range') || 'history';
+  state.configRange.value = localStorage.getItem('analytics_config_range') || 'history';
+  state.modelRange.value = localStorage.getItem('analytics_model_range') || 'history';
+  state.modelProviderFilter.value = localStorage.getItem('analytics_model_provider_filter') || '';
+  state.modelEndpointFilter.value = localStorage.getItem('analytics_model_endpoint_filter') || '';
+  state.modelNameFilter.value = localStorage.getItem('analytics_model_name_filter') || '';
+  state.latestEventFilter.value = localStorage.getItem('analytics_latest_event_filter') || '';
   state.resourceClickRange.value = localStorage.getItem('analytics_resource_click_range') || '30';
 }
 
@@ -61,11 +67,8 @@ export function getEncodedProjectAndDays(daysValue = '30') {
 }
 
 export function buildRangeQuery(rangeValue) {
-  const range = String(rangeValue || '30');
-  if (range === 'history') {
-    return 'range=history';
-  }
-  return `days=${encodeURIComponent(range)}`;
+  const range = String(rangeValue || 'history');
+  return `range=${encodeURIComponent(range)}`;
 }
 
 export function assertReady() {

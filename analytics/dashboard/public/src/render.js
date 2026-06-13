@@ -37,7 +37,7 @@ export function renderTable(target, rows, columns, emptyText) {
   const body = rows.map((row) => {
     const cells = columns.map((column) => {
       const value = row[column.key] == null || row[column.key] === '' ? '-' : row[column.key];
-      const content = column.code ? `<code>${escapeHtml(value)}</code>` : escapeHtml(value);
+      const content = column.html ? value : column.code ? `<code>${escapeHtml(value)}</code>` : escapeHtml(value);
       return `<td>${content}</td>`;
     }).join('');
     return `<tr>${cells}</tr>`;

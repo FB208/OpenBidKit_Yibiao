@@ -20,6 +20,14 @@ export function safeDays(value) {
   return Math.max(1, Math.min(Math.floor(days), 90));
 }
 
+export function safeStatsRange(value, defaultRange = 'history') {
+  const range = normalizeText(value, 20);
+  if (['history', 'today', '7', '30'].includes(range)) {
+    return range;
+  }
+  return defaultRange;
+}
+
 export function safePage(value) {
   const page = Number(value || 1);
   if (!Number.isFinite(page)) return 1;
@@ -51,6 +59,37 @@ export function addIsoDays(value, days) {
 
 export function datePart(value) {
   return String(value || '').slice(0, 10);
+}
+
+export function getBusinessDateDaysAgo(days = 0, baseDate = new Date()) {
+  const date = new Date(baseDate.getTime() - Math.max(0, Number(days || 0)) * 86400000);
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+export function getBusinessToday(baseDate = new Date()) {
+  return getBusinessDateDaysAgo(0, baseDate);
+}
+
+export function formatBusinessDateTime(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}:${values.second}`;
 }
 
 export function logQueryError(scope, error) {

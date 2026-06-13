@@ -10,7 +10,7 @@ const migrationsDir = resolve(workerDir, 'analytics-migrations');
 
 const d1BindingName = 'ANALYTICS_DB';
 const d1DatabaseName = 'openbidkit-analytics';
-const dailyRollupCron = '15 18 * * *';
+const dailyRollupCron = '0 18 * * *';
 
 function readConfig() {
   return readFileSync(workerConfigPath, 'utf8');
@@ -58,11 +58,11 @@ function parseJsonArrayFromOutput(output) {
   }
 }
 
-function parseD1List(output) {
-  const items = parseJsonArrayFromOutput(output);
-  const exact = items.find((item) => String(item.name || item.database_name || '') === d1DatabaseName);
-  const id = exact?.uuid || exact?.id || exact?.database_id || '';
-  return id ? String(id) : '';
+function normalizeD1Item(item) {
+  return {
+    id: String(item.uuid || item.id || item.database_id || '').trim(),
+    name: String(item.name || item.database_name || '').trim(),
+  };
 }
 
 function parseD1CreateId(output) {
@@ -134,9 +134,16 @@ function updateD1Config(databaseId) {
 }
 
 function ensureCronTrigger() {
-  const source = readConfig();
+  let source = readConfig();
+  const oldCron = '15 18 * * *';
+  if (source.includes(`"${oldCron}"`)) {
+    source = source.replace(`"${oldCron}"`, `"${dailyRollupCron}"`);
+    writeConfig(source);
+  }
+
+  source = readConfig();
   if (source.includes(`"${dailyRollupCron}"`)) {
-    console.log(`Analytics daily rollup cron already configured: ${dailyRollupCron}`);
+    console.log(`Analytics daily rollup cron configured: ${dailyRollupCron}`);
     return;
   }
 
@@ -156,34 +163,48 @@ function printCredentialHelp(output) {
     console.error(output);
   }
   console.error([
-    'Unable to create or find Cloudflare D1 resources for analytics rollups.',
+    'Unable to create or find Cloudflare D1 resources for analytics stats.',
     'For CI, set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID with D1 and Worker deployment permissions.',
     'For local setup, run `npx wrangler login` or set CLOUDFLARE_API_TOKEN before `npm run setup:analytics-storage`.',
   ].join('\n'));
 }
 
+function listD1Databases() {
+  const result = runWrangler(['d1', 'list', '--json']);
+  if (result.status !== 0) {
+    return { ok: false, output: result.output, items: [] };
+  }
+  return { ok: true, output: result.output, items: parseJsonArrayFromOutput(result.output).map(normalizeD1Item) };
+}
+
 function ensureD1Database() {
   const configuredId = getConfiguredD1DatabaseId(readConfig());
-  if (configuredId) {
-    console.log(`ANALYTICS_DB D1 database already configured: ${configuredId}`);
-    return configuredId;
-  }
-
   const envDatabaseId = String(process.env.ANALYTICS_DB_ID || '').trim();
+
   if (envDatabaseId) {
     updateD1Config(envDatabaseId);
     console.log(`ANALYTICS_DB D1 database configured from ANALYTICS_DB_ID: ${envDatabaseId}`);
     return envDatabaseId;
   }
 
-  const listResult = runWrangler(['d1', 'list', '--json']);
-  if (listResult.status === 0) {
-    const existingId = parseD1List(listResult.output);
-    if (existingId) {
-      updateD1Config(existingId);
-      console.log(`ANALYTICS_DB D1 database reused: ${existingId}`);
-      return existingId;
+  const listResult = listD1Databases();
+  if (listResult.ok) {
+    const configured = configuredId ? listResult.items.find((item) => item.id === configuredId) : null;
+    if (configured?.id) {
+      console.log(`ANALYTICS_DB D1 database already configured: ${configured.id}`);
+      return configured.id;
     }
+
+    const existingByName = listResult.items.find((item) => item.name === d1DatabaseName);
+    if (existingByName?.id) {
+      updateD1Config(existingByName.id);
+      console.log(`ANALYTICS_DB D1 database reused: ${existingByName.id}`);
+      return existingByName.id;
+    }
+  } else if (configuredId) {
+    console.warn('Unable to verify configured ANALYTICS_DB, using current wrangler.jsonc database_id.');
+    console.warn(listResult.output);
+    return configuredId;
   }
 
   const createResult = runWrangler(['d1', 'create', d1DatabaseName]);
@@ -194,9 +215,9 @@ function ensureD1Database() {
 
   let databaseId = parseD1CreateId(createResult.output);
   if (!databaseId) {
-    const retryListResult = runWrangler(['d1', 'list', '--json']);
-    if (retryListResult.status === 0) {
-      databaseId = parseD1List(retryListResult.output);
+    const retryListResult = listD1Databases();
+    if (retryListResult.ok) {
+      databaseId = retryListResult.items.find((item) => item.name === d1DatabaseName)?.id || '';
     }
   }
 

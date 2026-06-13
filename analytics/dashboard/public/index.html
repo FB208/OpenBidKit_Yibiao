@@ -40,11 +40,12 @@
       <button id="refreshButton">刷新当前页</button>
     </section>
 
-    <div class="panel hint">Token 默认仅保存在当前会话 sessionStorage；勾选“记住 Token”后才写入 localStorage。历史总数来自 D1，最近 7/30/90 天分析来自 Analytics Engine，两个数据源可能存在轻微差异。</div>
+    <div class="panel hint">Token 默认仅保存在当前会话 sessionStorage；勾选“记住 Token”后才写入 localStorage。历史统计来自 D1，今天/7天/30天分析来自 Analytics Engine。</div>
     <div id="errorBox" class="error"></div>
 
     <nav class="tabs" aria-label="看板标签页">
       <button class="tab-button" type="button" data-tab-button="overview">概览</button>
+      <button class="tab-button" type="button" data-tab-button="clients">客户端统计</button>
       <button class="tab-button" type="button" data-tab-button="traffic">访问分析</button>
       <button class="tab-button" type="button" data-tab-button="config">配置使用</button>
       <button class="tab-button" type="button" data-tab-button="models">模型使用</button>
@@ -59,33 +60,10 @@
         <div class="panel card"><span>累计页面访问量</span><strong id="totalView">0</strong></div>
         <div class="panel card"><span>累计事件数</span><strong id="totalEvents">0</strong></div>
         <div class="panel card"><span>累计 AI 请求</span><strong id="totalAiRequests">0</strong></div>
-        <div class="panel card"><span>累计资源点击</span><strong id="totalResourceClicks">0</strong></div>
         <div class="panel card"><span>总客户端数</span><strong id="totalClients">0</strong></div>
-        <div class="panel card"><span>今日打开客户端</span><strong id="todayActiveClients">0</strong></div>
-        <div class="panel card"><span>昨日打开客户端</span><strong id="yesterdayActiveClients">0</strong></div>
-        <div class="panel card"><span>近 7 天打开客户端</span><strong id="wau">0</strong></div>
-        <div class="panel card"><span>近 30 天打开客户端</span><strong id="mau">0</strong></div>
+        <div class="panel card"><span>今日活跃客户端</span><strong id="todayActiveClients">0</strong></div>
         <div class="panel card"><span>今日新增客户端</span><strong id="todayNewClients">0</strong></div>
-        <div class="panel card"><span>近 30 天新增</span><strong id="last30NewClients">0</strong></div>
-        <div class="panel card"><span>范围新增客户端</span><strong id="newClients">0</strong></div>
-        <div class="panel card"><span>老客户端打开</span><strong id="returningClients">0</strong></div>
-      </section>
-
-      <section class="panel section">
-        <div class="section-head">
-          <div>
-            <h2>范围分析</h2>
-            <p>仅影响下方每日统计、留存概览、范围新增和老客户端打开。</p>
-          </div>
-          <label class="inline-select">
-            范围
-            <select id="overviewRange">
-              <option value="7">最近 7 天</option>
-              <option value="30" selected>最近 30 天</option>
-              <option value="90">最近 90 天</option>
-            </select>
-          </label>
-        </div>
+        <div class="panel card"><span>7 日新增客户端</span><strong id="last7NewClients">0</strong></div>
       </section>
 
       <section class="cards">
@@ -107,20 +85,32 @@
       </section>
     </section>
 
+    <section id="tab-clients" class="tab-panel" data-tab-panel="clients">
+      <section class="panel section">
+        <div class="section-head">
+          <div>
+            <h2>客户端统计</h2>
+            <p>客户端列表来自 D1；详情弹窗实时查询 Analytics Engine。</p>
+          </div>
+        </div>
+        <div id="clientsTable"></div>
+      </section>
+    </section>
+
     <section id="tab-traffic" class="tab-panel" data-tab-panel="traffic">
       <section class="panel section">
         <div class="section-head">
           <div>
             <h2>访问分析范围</h2>
-            <p>历史总数来自 D1 月度聚合；最近范围来自 Analytics Engine。</p>
+            <p>历史来自 D1；今天、7 天、30 天来自 Analytics Engine。</p>
           </div>
           <label class="inline-select">
             范围
             <select id="trafficRange">
-              <option value="7">最近 7 天</option>
-              <option value="30" selected>最近 30 天</option>
-              <option value="90">最近 90 天</option>
-              <option value="history">历史总数</option>
+              <option value="history" selected>历史</option>
+              <option value="today">今天</option>
+              <option value="7">7 天</option>
+              <option value="30">30 天</option>
             </select>
           </label>
         </div>
@@ -147,10 +137,10 @@
           <label class="inline-select">
             范围
             <select id="configRange">
-              <option value="7">最近 7 天</option>
-              <option value="30" selected>最近 30 天</option>
-              <option value="90">最近 90 天</option>
-              <option value="history">历史总数</option>
+              <option value="history" selected>历史</option>
+              <option value="today">今天</option>
+              <option value="7">7 天</option>
+              <option value="30">30 天</option>
             </select>
           </label>
         </div>
@@ -168,11 +158,28 @@
           <label class="inline-select">
             范围
             <select id="modelRange">
-              <option value="7">最近 7 天</option>
-              <option value="30" selected>最近 30 天</option>
-              <option value="90">最近 90 天</option>
-              <option value="history">历史总数</option>
+              <option value="history" selected>历史</option>
+              <option value="today">今天</option>
+              <option value="7">7 天</option>
+              <option value="30">30 天</option>
             </select>
+          </label>
+        </div>
+        <div class="filter-row">
+          <label>
+            服务商
+            <input id="modelProviderFilter" list="modelProviderOptions" placeholder="全部" />
+            <datalist id="modelProviderOptions"></datalist>
+          </label>
+          <label>
+            域名
+            <input id="modelEndpointFilter" list="modelEndpointOptions" placeholder="全部" />
+            <datalist id="modelEndpointOptions"></datalist>
+          </label>
+          <label>
+            模型
+            <input id="modelNameFilter" list="modelNameOptions" placeholder="全部" />
+            <datalist id="modelNameOptions"></datalist>
           </label>
         </div>
         <div id="modelUsage"></div>
@@ -182,7 +189,14 @@
     <section id="tab-latest" class="tab-panel" data-tab-panel="latest">
       <section class="panel section">
         <div class="section-head">
-          <h2>最近事件</h2>
+          <div>
+            <h2>最近事件</h2>
+            <label class="inline-select">
+              事件
+              <input id="latestEventFilter" list="latestEventOptions" placeholder="全部事件" />
+              <datalist id="latestEventOptions"></datalist>
+            </label>
+          </div>
           <div class="pager">
             <button id="prevLatestPage" type="button">上一页</button>
             <span id="latestPageInfo">第 1 页</span>
@@ -301,6 +315,34 @@
         <div id="resourcesTable" class="resource-table-wrap"></div>
       </section>
     </section>
+
+    <dialog id="clientDetailDialog" class="client-dialog">
+      <div class="dialog-head">
+        <div>
+          <h2>客户端详情</h2>
+          <p id="clientDetailTitle">未选择客户端</p>
+        </div>
+        <button id="closeClientDetail" type="button">关闭</button>
+      </div>
+      <label class="inline-select">
+        时间维度
+        <select id="clientDetailRange">
+          <option value="7" selected>7 天</option>
+          <option value="30">30 天</option>
+          <option value="all">全部</option>
+        </select>
+      </label>
+      <div class="grid">
+        <div class="panel section">
+          <h3>每日事件</h3>
+          <div id="clientDetailDaily"></div>
+        </div>
+        <div class="panel section">
+          <h3>事件汇总</h3>
+          <div id="clientDetailEvents"></div>
+        </div>
+      </div>
+    </dialog>
   </main>
 
   <script type="module" src="./src/main.js"></script>

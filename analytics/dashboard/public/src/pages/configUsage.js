@@ -97,22 +97,52 @@ function renderModelUsageGroups(target, usage, groups) {
   }).join('')}</div>`;
 }
 
-async function loadUsage(rangeValue) {
+function fillDatalist(target, values) {
+  target.innerHTML = '';
+  for (const value of Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b, 'zh-CN'))) {
+    const option = document.createElement('option');
+    option.value = value;
+    target.appendChild(option);
+  }
+}
+
+async function loadConfigUsageData(rangeValue) {
   assertReady();
   await loadProjectOptions();
   saveSettings();
 
-  const range = String(rangeValue || '30');
-  const { projectName, days } = getEncodedProjectAndDays(range === 'history' ? '30' : range);
-  return requestJson(`/api/config-usage?projectName=${projectName}&${range === 'history' ? buildRangeQuery(range) : `days=${days}`}`);
+  const range = String(rangeValue || 'history');
+  const { projectName } = getEncodedProjectAndDays();
+  return requestJson(`/api/config-usage?projectName=${projectName}&${buildRangeQuery(range)}`);
+}
+
+async function loadModelUsageData(rangeValue) {
+  assertReady();
+  await loadProjectOptions();
+  saveSettings();
+
+  const range = String(rangeValue || 'history');
+  const { projectName } = getEncodedProjectAndDays();
+  const params = new URLSearchParams(buildRangeQuery(range));
+  const provider = state.modelProviderFilter.value.trim();
+  const endpointHost = state.modelEndpointFilter.value.trim();
+  const model = state.modelNameFilter.value.trim();
+  if (provider) params.set('provider', provider);
+  if (endpointHost) params.set('endpointHost', endpointHost);
+  if (model) params.set('model', model);
+  return requestJson(`/api/model-usage?projectName=${projectName}&${params.toString()}`);
 }
 
 export async function loadConfigUsage() {
-  const data = await loadUsage(state.configRange.value);
+  const data = await loadConfigUsageData(state.configRange.value);
   renderUsageGroups(state.configUsage, data.usage || {}, configUsageGroups);
 }
 
 export async function loadModelUsage() {
-  const data = await loadUsage(state.modelRange.value);
+  const data = await loadModelUsageData(state.modelRange.value);
+  const rows = Object.values(data.usage || {}).flat();
+  fillDatalist(state.modelProviderOptions, rows.map((row) => row.provider));
+  fillDatalist(state.modelEndpointOptions, rows.map((row) => row.endpoint_host));
+  fillDatalist(state.modelNameOptions, rows.map((row) => row.model));
   renderModelUsageGroups(state.modelUsage, data.usage || {}, modelUsageGroups);
 }

@@ -67,7 +67,7 @@ function runPreDeploySetupIfNeeded() {
     process.exit(resourceResult.status ?? 1);
   }
 
-  console.log('Ensuring analytics D1 database and rollup queue.');
+  console.log('Ensuring analytics D1 database and stats schema.');
   const analyticsSetupScript = resolve(__dirname, 'setup-analytics-storage.mjs');
   const analyticsResult = spawnSync(process.execPath, [analyticsSetupScript], {
     stdio: 'inherit',

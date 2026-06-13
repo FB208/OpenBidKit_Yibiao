@@ -4,6 +4,7 @@ import {
   validateTrackEvent,
   writeAnalyticsDataPoint,
 } from '../services/analyticsTrack.js';
+import { recordTrackClient } from '../services/analyticsStatsStore.js';
 
 export async function handleTrack(request, env) {
   if (request.method !== 'POST') {
@@ -19,6 +20,11 @@ export async function handleTrack(request, env) {
     }
 
     writeAnalyticsDataPoint(env, event);
+    try {
+      await recordTrackClient(env, event);
+    } catch (error) {
+      console.warn('[analytics] realtime client record failed', error?.message || String(error));
+    }
 
     return json({ code: 0 });
   } catch (error) {

@@ -8,7 +8,7 @@ import {
   RESOURCE_TITLE_MAX_LENGTH,
 } from '../constants.js';
 import { corsHeaders, json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
-import { queryD1ResourceClickCounts } from '../services/analyticsD1Query.js';
+import { queryStatsResourceClickCounts } from '../services/analyticsStatsStore.js';
 import { queryAnalytics } from '../services/analyticsQuery.js';
 import {
   buildResourceImageUrl,
@@ -130,7 +130,7 @@ async function queryResourceClickCounts(env, resources, url) {
 
   if (normalizeText(url.searchParams.get('range'), 20) === 'history') {
     try {
-      const historyCounts = await queryD1ResourceClickCounts(env, projectName, resourceKeys);
+      const historyCounts = await queryStatsResourceClickCounts(env, projectName, resourceKeys);
       return new Map(Array.from(historyCounts.entries()).map(([key, value]) => [key, value.clickCount]));
     } catch (error) {
       logQueryError('resource clicks history', error);
