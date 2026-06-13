@@ -4,6 +4,10 @@ import { queryD1Overview } from '../services/analyticsD1Query.js';
 import { queryAnalytics } from '../services/analyticsQuery.js';
 import { isValidProjectName, isoDateDaysAgo, logQueryError, normalizeText, safeDays, sqlString } from '../utils.js';
 
+const UNKNOWN_VERSION = '未知版本';
+const versionExpr = `if(blob4 = '', ${sqlString(UNKNOWN_VERSION)}, blob4)`;
+const todayExpr = "formatDateTime(timestamp, '%Y-%m-%d', 'Asia/Shanghai') = formatDateTime(NOW(), '%Y-%m-%d', 'Asia/Shanghai')";
+
 export async function handleSummary(request, env, url) {
   if (request.method !== 'GET') {
     return methodNotAllowed();
@@ -33,7 +37,7 @@ export async function handleSummary(request, env, url) {
   const project = sqlString(projectName);
   const dailySql = `
     SELECT
-      toDate(timestamp) AS date,
+      formatDateTime(timestamp, '%Y-%m-%d', 'Asia/Shanghai') AS date,
       blob2 AS event,
       SUM(_sample_interval) AS count
     FROM ${DATASET}
@@ -46,7 +50,7 @@ export async function handleSummary(request, env, url) {
 
   const dailyClientsSql = `
     SELECT
-      toDate(timestamp) AS date,
+      formatDateTime(timestamp, '%Y-%m-%d', 'Asia/Shanghai') AS date,
       COUNT(DISTINCT blob7) AS clients
     FROM ${DATASET}
     WHERE blob1 = ${project}
@@ -71,12 +75,11 @@ export async function handleSummary(request, env, url) {
 
   const versionsSql = `
     SELECT
-      blob4 AS version,
+      ${versionExpr} AS version,
       COUNT(DISTINCT blob7) AS clients,
       SUM(_sample_interval) AS count
     FROM ${DATASET}
     WHERE blob1 = ${project}
-      AND blob4 != ''
       AND blob7 != ''
       AND timestamp >= NOW() - INTERVAL '${days}' DAY
     GROUP BY version
@@ -86,15 +89,13 @@ export async function handleSummary(request, env, url) {
 
   const todayVersionsSql = `
     SELECT
-      blob4 AS version,
+      ${versionExpr} AS version,
       COUNT(DISTINCT blob7) AS todayClients
     FROM ${DATASET}
     WHERE blob1 = ${project}
-      AND blob4 != ''
       AND blob7 != ''
-      AND toDate(timestamp) = toDate(NOW())
+      AND ${todayExpr}
     GROUP BY version
-    LIMIT 100
   `;
 
   const totalClientsSql = `
@@ -111,7 +112,7 @@ export async function handleSummary(request, env, url) {
     FROM ${DATASET}
     WHERE blob1 = ${project}
       AND blob7 != ''
-      AND toDate(timestamp) = toDate(NOW())
+      AND ${todayExpr}
   `;
 
   const wauSql = `
@@ -174,11 +175,18 @@ export async function handleSummary(request, env, url) {
       activeClients: Number(activeClients.data?.[0]?.activeClients || 0),
       newClients: Number(newClients.data?.[0]?.newClients || 0),
     };
-    const todayClientsByVersion = new Map((todayVersions.data || []).map((row) => [row.version, Number(row.todayClients || 0)]));
+    const todayClientsByVersion = new Map((todayVersions.data || []).map((row) => [row.version || UNKNOWN_VERSION, Number(row.todayClients || 0)]));
     const versionsWithTodayClients = (versions.data || []).map((row) => ({
       ...row,
-      todayClients: todayClientsByVersion.get(row.version) || 0,
+      version: row.version || UNKNOWN_VERSION,
+      todayClients: todayClientsByVersion.get(row.version || UNKNOWN_VERSION) || 0,
     }));
+    const existingVersions = new Set(versionsWithTodayClients.map((row) => row.version));
+    for (const [version, todayClients] of todayClientsByVersion.entries()) {
+      if (!existingVersions.has(version)) {
+        versionsWithTodayClients.push({ version, clients: todayClients, count: 0, todayClients });
+      }
+    }
 
     return json({
       code: 0,

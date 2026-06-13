@@ -76,7 +76,6 @@ export async function handleTraffic(request, env, url) {
       AND blob7 != ''
       AND ${todayExpr}
     GROUP BY version
-    LIMIT 100
   `;
 
   try {
