@@ -1,4 +1,4 @@
-import { assertReady, getEncodedProjectAndDays, loadProjectOptions, requestJson, saveSettings } from '../api.js';
+import { assertReady, buildRangeQuery, getEncodedProjectAndDays, loadProjectOptions, requestJson, saveSettings } from '../api.js';
 import { escapeHtml, formatNumber } from '../render.js';
 import { state } from '../state.js';
 
@@ -97,21 +97,22 @@ function renderModelUsageGroups(target, usage, groups) {
   }).join('')}</div>`;
 }
 
-async function loadUsage() {
+async function loadUsage(rangeValue) {
   assertReady();
   await loadProjectOptions();
   saveSettings();
 
-  const { projectName, days } = getEncodedProjectAndDays();
-  return requestJson(`/api/config-usage?projectName=${projectName}&days=${days}`);
+  const range = String(rangeValue || '30');
+  const { projectName, days } = getEncodedProjectAndDays(range === 'history' ? '30' : range);
+  return requestJson(`/api/config-usage?projectName=${projectName}&${range === 'history' ? buildRangeQuery(range) : `days=${days}`}`);
 }
 
 export async function loadConfigUsage() {
-  const data = await loadUsage();
+  const data = await loadUsage(state.configRange.value);
   renderUsageGroups(state.configUsage, data.usage || {}, configUsageGroups);
 }
 
 export async function loadModelUsage() {
-  const data = await loadUsage();
+  const data = await loadUsage(state.modelRange.value);
   renderModelUsageGroups(state.modelUsage, data.usage || {}, modelUsageGroups);
 }

@@ -1,4 +1,4 @@
-import { assertAdminToken, getEncodedProjectAndDays, requestFormData, requestJson, saveSettings } from '../api.js';
+import { assertAdminToken, buildRangeQuery, getEncodedProjectAndDays, requestFormData, requestJson, saveSettings } from '../api.js';
 import { escapeHtml, formatNumber } from '../render.js';
 import { appState, state } from '../state.js';
 
@@ -130,8 +130,9 @@ export async function loadResources(options = {}) {
   try {
     assertAdminToken();
     saveSettings();
-    const { projectName, days } = getEncodedProjectAndDays();
-    const data = await requestJson(`/api/resources?projectName=${projectName}&days=${days}`);
+    const range = state.resourceClickRange.value;
+    const { projectName, days } = getEncodedProjectAndDays(range === 'history' ? '30' : range);
+    const data = await requestJson(`/api/resources?projectName=${projectName}&${range === 'history' ? buildRangeQuery(range) : `days=${days}`}`);
     appState.resources = data.resources || [];
     renderResourcesTable();
     if (isBlankNewResourceForm()) {

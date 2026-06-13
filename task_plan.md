@@ -1,5 +1,34 @@
 # Task Plan
 
+## Current Task: Analytics 长期统计与历史总数改造
+
+### Goal
+按 `client/doc/统计改造计划.md` 实现 Analytics 长期统计：新增 `ANALYTICS_DB` D1 和 Queue 聚合链路，`/track` 先入队再写 Analytics Engine，Queue Consumer 批内聚合写 D1；Dashboard 拆分长期累计、固定窗口、范围分析，并为访问分析、配置使用、模型使用、资源管理增加“历史总数”。
+
+### Phases
+- [completed] 1. 梳理现有 Analytics Worker/Dashboard 边界并补充文件型计划。
+- [completed] 2. 新增 D1 migration、Analytics storage setup 脚本、部署前 setup 接入。
+- [completed] 3. 新增 D1 聚合服务和 Queue Consumer，改造 `/track` 写入顺序。
+- [completed] 4. 新增/改造 D1 查询接口：overview、traffic history、config/model/resource history、projects。
+- [completed] 5. 改造 Dashboard 控件、概览页分区和各 Tab 历史总数。
+- [completed] 6. 更新文档与运行语法检查/必要构建验证。
+
+### Decisions
+- 不改桌面客户端埋点入口；`event_id` 由 Worker 生成，客户端继续 fire-and-forget。
+- D1 不保存原始事件明细，只保存客户端生命周期、每日活跃、月度聚合、维度去重和维度累计。
+- 生产 Dashboard 不再允许任意 API 地址，固定使用 `https://analytics.agnet.top` 或当前同源；开发调试可通过构建/运行配置放开。
+- 近期 7/30/90 天灵活分析暂保留 Analytics Engine 数据源；历史总数和长期累计读 D1，并在 Dashboard 标注数据源差异。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+### Validation
+- `node --check` 通过：`analytics/worker/src/index.js`、`src/services/analyticsRollup.js`、`src/services/analyticsD1Query.js`、`src/routes/track.js`、`src/routes/overview.js`、`src/routes/traffic.js`、`src/routes/summary.js`、`src/routes/configUsage.js`、`src/routes/projects.js`、`src/routes/resources.js`。
+- `node --check` 通过：`analytics/scripts/setup-analytics-storage.mjs`、`analytics/scripts/deploy-if-changed.mjs`。
+- `node --check` 通过：Dashboard `public/src/api.js`、`state.js`、`main.js`、`pages/overview.js`、`pages/traffic.js`、`pages/configUsage.js`、`pages/resources.js`。
+- `git diff --check` 通过，仅有 LF/CRLF 提示。
+
 ## Current Task: 废标项检查多投标文件支持
 
 ### Goal

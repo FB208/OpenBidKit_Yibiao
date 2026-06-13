@@ -35,23 +35,29 @@ export async function loadOverview() {
   await loadProjectOptions();
   saveSettings();
 
-  const { projectName, days } = getEncodedProjectAndDays();
+  const { projectName, days } = getEncodedProjectAndDays(state.overviewRange.value);
   const [summary, retention, githubStats] = await Promise.all([
-    requestJson(`/api/summary?projectName=${projectName}&days=${days}`),
+    requestJson(`/api/overview?projectName=${projectName}&days=${days}`),
     requestJson(`/api/retention?projectName=${projectName}&days=${days}`),
     requestJson('/api/github-repo-stats').catch(() => ({ repo: null })),
   ]);
 
   const daily = normalizeDaily(summary.daily || [], summary.dailyClients || []);
-  const totalOpen = daily.reduce((sum, row) => sum + row.appOpen, 0);
-  const totalView = daily.reduce((sum, row) => sum + row.pageView, 0);
+  const totalOpen = Number(summary.totalOpen || 0);
+  const totalView = Number(summary.totalView || 0);
 
   state.totalOpen.textContent = formatNumber(totalOpen);
   state.totalView.textContent = formatNumber(totalView);
+  state.totalEvents.textContent = formatNumber(summary.totalEvents);
+  state.totalAiRequests.textContent = formatNumber(summary.totalAiRequests);
+  state.totalResourceClicks.textContent = formatNumber(summary.totalResourceClicks);
   state.totalClients.textContent = formatNumber(summary.totalClients);
   state.todayActiveClients.textContent = formatNumber(summary.todayActiveClients);
+  state.yesterdayActiveClients.textContent = formatNumber(summary.yesterdayActiveClients);
   state.wau.textContent = formatNumber(summary.wau);
   state.mau.textContent = formatNumber(summary.mau);
+  state.todayNewClients.textContent = formatNumber(summary.todayNewClients);
+  state.last30NewClients.textContent = formatNumber(summary.last30NewClients);
   state.newClients.textContent = formatNumber(summary.newClients);
   state.returningClients.textContent = formatNumber(summary.returningClients);
   renderGitHubStats(githubStats.repo);

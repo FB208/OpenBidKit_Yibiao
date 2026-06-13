@@ -61,8 +61,13 @@ function bindEvents() {
 
   state.apiBase.addEventListener('change', saveSettings);
   state.adminToken.addEventListener('change', saveSettings);
+  state.rememberToken.addEventListener('change', saveSettings);
   state.projectName.addEventListener('change', saveSettings);
-  state.days.addEventListener('change', saveSettings);
+  state.overviewRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
+  state.trafficRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
+  state.configRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
+  state.modelRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
+  state.resourceClickRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
 }
 
 loadSettings();

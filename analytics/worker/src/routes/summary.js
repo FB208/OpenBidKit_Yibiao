@@ -1,5 +1,6 @@
 import { DATASET } from '../constants.js';
 import { json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
+import { queryD1Overview } from '../services/analyticsD1Query.js';
 import { queryAnalytics } from '../services/analyticsQuery.js';
 import { isValidProjectName, isoDateDaysAgo, logQueryError, normalizeText, safeDays, sqlString } from '../utils.js';
 
@@ -14,9 +15,19 @@ export async function handleSummary(request, env, url) {
 
   const projectName = normalizeText(url.searchParams.get('projectName'), 80);
   const days = safeDays(url.searchParams.get('days'));
+  const range = normalizeText(url.searchParams.get('range'), 20);
 
   if (!isValidProjectName(projectName)) {
     return json({ code: 400, message: 'invalid projectName' }, { status: 400 });
+  }
+
+  if (range === 'history') {
+    try {
+      return json(await queryD1Overview(env, projectName, days));
+    } catch (error) {
+      logQueryError('summary history', error);
+      return json({ code: 500, message: 'query failed' }, { status: 500 });
+    }
   }
 
   const project = sqlString(projectName);

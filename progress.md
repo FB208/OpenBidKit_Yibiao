@@ -1,6 +1,12 @@
 # Progress
 
 ## Session Log
+- 开始执行 Analytics 长期统计与历史总数改造：已读取 `client/doc/统计改造计划.md`、恢复文件型计划并运行 session catchup 无输出；本轮范围为 analytics Worker/Dashboard/脚本/迁移，不改桌面客户端埋点入口。
+- Analytics 长期统计 Worker 接入已推进：`/track` 改为先 `ANALYTICS_ROLLUP_QUEUE.send()` 成功后再写 Analytics Engine，Worker `queue()` 已接入 `consumeAnalyticsRollupBatch()`；D1 聚合服务语法检查通过，维度客户端累计改为按关系表重算 totals，D1 batch 超阈值时递归拆子批次并把 done 状态放在同一子批次事务内。
+- Analytics D1 历史查询接口已新增/接入：新增 `analyticsD1Query.js`、`/api/overview`、`/api/traffic`，`/api/summary?range=history`、`/api/config-usage?range=history` 和 `/api/model-usage` 可读 D1，资源点击 `range=history` 读 D1，`/api/projects` 优先 D1 回退 Analytics Engine；相关 Worker JS `node --check` 通过。
+- Analytics Dashboard 已改造为分区范围控制：顶部移除全局时间范围，概览页读 D1 长期累计并保留独立范围分析选择；访问分析、配置使用、模型使用、资源管理分别支持最近 7/30/90 天和历史总数；ADMIN_TOKEN 默认写 sessionStorage，勾选记住后才写 localStorage；生产看板 API 地址固定到 `https://analytics.agnet.top` 或同源。
+- `analytics/README.md` 已补充 D1/Queue 长期统计架构、`setup:analytics-storage`、新增接口、`range=history` 数据源差异、Dashboard Token 存储和指标口径说明。
+- Analytics 长期统计验证完成：Worker 新增/修改模块、Dashboard ES Module、setup/deploy 脚本均通过 `node --check`；`git diff --check` 通过，仅有 LF/CRLF 提示。
 - 开始废标项检查多投标文件支持：已读取现有计划、确认 catchup 无输出，并记录当前单投标文件边界；下一步从类型和 Store/SQLite schema 开始改造，确保 UI 与后台任务共用同一多文件模型。
 - 继续废标项检查多投标文件支持收尾：`npm run build` 已通过后，复核发现 v12 迁移提前创建 `role/sort_order` 索引会卡住旧库；已改为先处理旧表结构，再创建完整 schema，并用 Electron runtime 冒烟测试确认旧 v11 库可升级到 v12、旧 bid 迁为 `bid-1`、旧结果写入 `bid_document_id=bid-1`。
 - 废标项检查多投标文件支持已完成收尾验证：CJS `node --check` 覆盖 SQLite、fileService、rejectionCheckStore、rejectionCheckTask 和 preload；`cd client; npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 通过，仅有 LF/CRLF 提示；旧单文件字段残留复扫无业务依赖。

@@ -1,5 +1,6 @@
 import { DATASET } from '../constants.js';
 import { json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
+import { queryD1Projects } from '../services/analyticsD1Query.js';
 import { queryAnalytics } from '../services/analyticsQuery.js';
 import { logQueryError } from '../utils.js';
 
@@ -10,6 +11,17 @@ export async function handleProjects(request, env) {
 
   if (!requireAdmin(request, env)) {
     return unauthorized();
+  }
+
+  if (env.ANALYTICS_DB) {
+    try {
+      const projects = await queryD1Projects(env);
+      if (projects.length) {
+        return json({ code: 0, projects, source: 'd1' });
+      }
+    } catch (error) {
+      logQueryError('projects d1', error);
+    }
   }
 
   const sql = `

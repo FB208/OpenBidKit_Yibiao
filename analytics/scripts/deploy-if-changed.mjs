@@ -66,6 +66,17 @@ function runPreDeploySetupIfNeeded() {
   if (resourceResult.status !== 0) {
     process.exit(resourceResult.status ?? 1);
   }
+
+  console.log('Ensuring analytics D1 database and rollup queue.');
+  const analyticsSetupScript = resolve(__dirname, 'setup-analytics-storage.mjs');
+  const analyticsResult = spawnSync(process.execPath, [analyticsSetupScript], {
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
+
+  if (analyticsResult.status !== 0) {
+    process.exit(analyticsResult.status ?? 1);
+  }
 }
 
 function hasNoticeStoreBinding(source) {

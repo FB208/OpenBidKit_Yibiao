@@ -8,6 +8,7 @@ import {
   RESOURCE_TITLE_MAX_LENGTH,
 } from '../constants.js';
 import { corsHeaders, json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
+import { queryD1ResourceClickCounts } from '../services/analyticsD1Query.js';
 import { queryAnalytics } from '../services/analyticsQuery.js';
 import {
   buildResourceImageUrl,
@@ -109,7 +110,7 @@ async function attachResourceClickStats(env, resources, url) {
 }
 
 async function queryResourceClickCounts(env, resources, url) {
-  if (!env.ACCOUNT_ID || !env.ANALYTICS_API_TOKEN || !resources.length) {
+  if (!resources.length) {
     return new Map();
   }
 
@@ -124,6 +125,20 @@ async function queryResourceClickCounts(env, resources, url) {
   ));
 
   if (!resourceKeys.length) {
+    return new Map();
+  }
+
+  if (normalizeText(url.searchParams.get('range'), 20) === 'history') {
+    try {
+      const historyCounts = await queryD1ResourceClickCounts(env, projectName, resourceKeys);
+      return new Map(Array.from(historyCounts.entries()).map(([key, value]) => [key, value.clickCount]));
+    } catch (error) {
+      logQueryError('resource clicks history', error);
+      return new Map();
+    }
+  }
+
+  if (!env.ACCOUNT_ID || !env.ANALYTICS_API_TOKEN) {
     return new Map();
   }
 

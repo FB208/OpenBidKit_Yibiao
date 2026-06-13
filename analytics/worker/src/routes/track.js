@@ -1,25 +1,10 @@
-import { ALLOWED_EVENTS } from '../constants.js';
 import { json, methodNotAllowed } from '../http.js';
-import { isValidProjectName, normalizeMetricValue, normalizeText } from '../utils.js';
-
-function normalizeTokenNumber(value) {
-  const number = Number(value || 0);
-  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
-}
-
-function normalizeNumberMetricValue(value, maxLength) {
-  const text = String(value ?? '').trim();
-  if (!text) return '';
-
-  const number = Number(text);
-  if (!Number.isFinite(number)) return '';
-
-  return String(Math.max(0, Math.round(number))).slice(0, maxLength);
-}
-
-function isValidResourceKey(value) {
-  return /^[a-zA-Z0-9._:-]{1,80}$/.test(value);
-}
+import {
+  enqueueAnalyticsRollup,
+  normalizeTrackBody,
+  validateTrackEvent,
+  writeAnalyticsDataPoint,
+} from '../services/analyticsRollup.js';
 
 export async function handleTrack(request, env) {
   if (request.method !== 'POST') {
@@ -28,91 +13,23 @@ export async function handleTrack(request, env) {
 
   try {
     const body = await request.json();
-    const projectName = normalizeText(body.projectName || body.project_name, 80);
-    const event = normalizeText(body.event, 50);
-    const page = normalizeText(body.page, 120);
-    const version = normalizeText(body.version, 50);
-    const platform = normalizeText(body.platform, 50);
-    const arch = normalizeText(body.arch, 50);
-    const clientId = normalizeText(body.client_id || body.clientId, 120);
-    const clientCreatedAt = normalizeText(body.client_created_at || body.clientCreatedAt, 20);
-    const fileParserProvider = normalizeText(body.file_parser_provider || body.fileParserProvider, 50);
-    const imageProvider = normalizeText(body.image_provider || body.imageProvider, 50);
-    const imageModelStatus = normalizeText(body.image_model_status || body.imageModelStatus, 50);
-    const bidAnalysisMode = normalizeText(body.bid_analysis_mode || body.bidAnalysisMode, 50);
-    const outlineMode = normalizeText(body.outline_mode || body.outlineMode, 50);
-    const tableRequirement = normalizeText(body.table_requirement || body.tableRequirement, 50);
-    const useMermaidImages = normalizeMetricValue(body.use_mermaid_images ?? body.useMermaidImages, 20);
-    const useAiImages = normalizeMetricValue(body.use_ai_images ?? body.useAiImages, 20);
-    const enableConsistencyAudit = normalizeMetricValue(body.enable_consistency_audit ?? body.enableConsistencyAudit, 20);
-    const contentConcurrency = normalizeNumberMetricValue(body.content_concurrency ?? body.contentConcurrency, 20);
-    const contentGenerationAction = normalizeText(body.content_generation_action || body.contentGenerationAction, 50);
-    const minimumWords = normalizeNumberMetricValue(body.minimum_words ?? body.minimumWords, 20);
-    const textModelName = normalizeText(body.text_model_name || body.textModelName, 120);
-    const imageModelName = normalizeText(body.image_model_name || body.imageModelName, 120);
-    const aiRequestType = normalizeText(body.ai_request_type || body.aiRequestType, 20);
-    const aiModelProvider = normalizeText(body.ai_model_provider || body.aiModelProvider, 80);
-    const aiModelBaseUrl = normalizeText(body.ai_model_base_url || body.aiModelBaseUrl, 200);
-    const aiModelName = normalizeText(body.ai_model_name || body.aiModelName, 160);
-    const resourceKey = normalizeText(body.resource_key || body.resourceKey, 80);
-    const promptTokens = normalizeTokenNumber(body.prompt_tokens ?? body.promptTokens);
-    const completionTokens = normalizeTokenNumber(body.completion_tokens ?? body.completionTokens);
-    const totalTokens = normalizeTokenNumber(body.total_tokens ?? body.totalTokens) || promptTokens + completionTokens;
-    const normalizedTextModelName = textModelName || (aiRequestType === 'text' ? aiModelName : '');
-    const normalizedImageModelName = imageModelName || (aiRequestType === 'image' ? aiModelName : '');
-    const modelProviderBlob = event === 'ai_request' ? aiModelProvider : event === 'resource_click' ? resourceKey : fileParserProvider;
-    const modelBaseUrlBlob = event === 'ai_request' ? aiModelBaseUrl : event === 'config_usage' ? enableConsistencyAudit : '';
-    const modelNameBlob = event === 'ai_request' ? aiModelName : imageProvider;
-    const requestTypeBlob = event === 'ai_request' ? aiRequestType : imageModelStatus;
-    const contentConcurrencyBlob = event === 'config_usage' ? contentConcurrency : normalizedTextModelName;
-    const contentGenerationActionBlob = event === 'config_usage' ? contentGenerationAction : normalizedImageModelName;
-    const minimumWordsBlob = event === 'config_usage' ? minimumWords : aiRequestType;
-
-    if (!isValidProjectName(projectName)) {
-      return json({ code: 400, message: 'invalid projectName' }, { status: 400 });
+    const event = normalizeTrackBody(body);
+    const validationError = validateTrackEvent(event);
+    if (validationError) {
+      return json({ code: 400, message: validationError }, { status: 400 });
     }
 
-    if (!ALLOWED_EVENTS.has(event)) {
-      return json({ code: 400, message: 'invalid event' }, { status: 400 });
+    await enqueueAnalyticsRollup(env, event);
+
+    try {
+      writeAnalyticsDataPoint(env, event);
+    } catch (error) {
+      console.error('[analytics] analytics engine write failed', error?.message || String(error));
     }
 
-    if (event === 'page_view' && !page) {
-      return json({ code: 400, message: 'missing page' }, { status: 400 });
-    }
-
-    if (event === 'resource_click' && !isValidResourceKey(resourceKey)) {
-      return json({ code: 400, message: 'missing resource_key' }, { status: 400 });
-    }
-
-    env.ANALYTICS.writeDataPoint({
-      blobs: [
-        projectName,
-        event,
-        page,
-        version,
-        platform,
-        arch,
-        clientId,
-        clientCreatedAt,
-        modelProviderBlob,
-        modelBaseUrlBlob,
-        modelNameBlob,
-        requestTypeBlob,
-        bidAnalysisMode,
-        outlineMode,
-        tableRequirement,
-        useMermaidImages,
-        useAiImages,
-        contentConcurrencyBlob,
-        contentGenerationActionBlob,
-        minimumWordsBlob,
-      ],
-      doubles: [1, promptTokens, completionTokens, totalTokens],
-      indexes: [projectName],
-    });
-
-    return json({ code: 0 });
-  } catch {
+    return json({ code: 0, eventId: event.eventId }, { status: 202 });
+  } catch (error) {
+    console.error('[analytics] track failed', error?.message || String(error));
     return json({ code: 500, message: 'internal error' }, { status: 500 });
   }
 }

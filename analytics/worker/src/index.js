@@ -4,11 +4,14 @@ import { handleGitHubRepoStats } from './routes/githubRepoStats.js';
 import { handleHealth } from './routes/health.js';
 import { handleLatest } from './routes/latest.js';
 import { handleAdminNotice, handlePublicNotice } from './routes/notice.js';
+import { handleOverview } from './routes/overview.js';
 import { handleProjects } from './routes/projects.js';
 import { handleRetention } from './routes/retention.js';
 import { handleAdminResources, handlePublicResources, handleResourceImage } from './routes/resources.js';
 import { handleSummary } from './routes/summary.js';
 import { handleTrack } from './routes/track.js';
+import { handleTraffic } from './routes/traffic.js';
+import { consumeAnalyticsRollupBatch } from './services/analyticsRollup.js';
 
 const routes = new Map([
   ['/health', (request, env) => handleHealth(env)],
@@ -19,10 +22,13 @@ const routes = new Map([
   ['/api/projects', handleProjects],
   ['/api/notice', handleAdminNotice],
   ['/api/resources', handleAdminResources],
+  ['/api/overview', handleOverview],
   ['/api/summary', handleSummary],
+  ['/api/traffic', handleTraffic],
   ['/api/latest', handleLatest],
   ['/api/retention', handleRetention],
   ['/api/config-usage', handleConfigUsage],
+  ['/api/model-usage', handleConfigUsage],
   ['/api/github-repo-stats', handleGitHubRepoStats],
 ]);
 
@@ -39,5 +45,9 @@ export default {
     }
 
     return json({ code: 404, message: 'not found' }, { status: 404 });
+  },
+
+  async queue(batch, env) {
+    await consumeAnalyticsRollupBatch(batch, env);
   },
 };

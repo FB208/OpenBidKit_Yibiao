@@ -1,0 +1,283 @@
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const workerDir = resolve(__dirname, '../worker');
+const workerConfigPath = resolve(workerDir, 'wrangler.jsonc');
+const migrationsDir = resolve(workerDir, 'analytics-migrations');
+
+const d1BindingName = 'ANALYTICS_DB';
+const d1DatabaseName = 'openbidkit-analytics';
+const queueBindingName = 'ANALYTICS_ROLLUP_QUEUE';
+const queueName = 'openbidkit-analytics-rollup';
+
+function readConfig() {
+  return readFileSync(workerConfigPath, 'utf8');
+}
+
+function writeConfig(source) {
+  writeFileSync(workerConfigPath, source, 'utf8');
+}
+
+function runWrangler(args) {
+  const result = spawnSync('npx', ['wrangler', ...args], {
+    cwd: workerDir,
+    encoding: 'utf8',
+    shell: process.platform === 'win32',
+  });
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`.trim();
+
+  return {
+    status: result.status ?? 1,
+    output,
+  };
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function parseJsonArrayFromOutput(output) {
+  try {
+    const parsed = JSON.parse(output);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    const start = output.indexOf('[');
+    const end = output.lastIndexOf(']');
+    if (start === -1 || end === -1 || end <= start) {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(output.slice(start, end + 1));
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+}
+
+function parseD1List(output) {
+  const items = parseJsonArrayFromOutput(output);
+  const exact = items.find((item) => String(item.name || item.database_name || '') === d1DatabaseName);
+  const id = exact?.uuid || exact?.id || exact?.database_id || '';
+  return id ? String(id) : '';
+}
+
+function parseD1CreateId(output) {
+  const patterns = [
+    /database_id\s*=\s*"([^"]+)"/i,
+    /"database_id"\s*:\s*"([^"]+)"/i,
+    /"uuid"\s*:\s*"([^"]+)"/i,
+    /\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = output.match(pattern);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return '';
+}
+
+function getConfiguredD1DatabaseId(source) {
+  const escapedBinding = escapeRegExp(d1BindingName);
+  const pattern = new RegExp(`\\{[\\s\\S]*?"binding"\\s*:\\s*"${escapedBinding}"[\\s\\S]*?"database_id"\\s*:\\s*"([^"]*)"[\\s\\S]*?\\}`);
+  const id = source.match(pattern)?.[1]?.trim() || '';
+  return id && !id.includes('<') ? id : '';
+}
+
+function insertConfigArrayBlock(source, propertyName, objectBlock) {
+  const propertyPattern = new RegExp(`"${escapeRegExp(propertyName)}"\\s*:\\s*\\[`);
+  if (propertyPattern.test(source)) {
+    return source.replace(propertyPattern, `"${propertyName}": [\n    ${objectBlock},`);
+  }
+
+  const insertAt = source.lastIndexOf('\n}');
+  if (insertAt === -1) {
+    throw new Error('Unable to locate closing brace in wrangler.jsonc');
+  }
+
+  const block = `  "${propertyName}": [\n    ${objectBlock}\n  ]`;
+  return `${source.slice(0, insertAt)},\n${block}${source.slice(insertAt)}`;
+}
+
+function insertTopLevelObjectBlock(source, propertyName, objectBody) {
+  const insertAt = source.lastIndexOf('\n}');
+  if (insertAt === -1) {
+    throw new Error('Unable to locate closing brace in wrangler.jsonc');
+  }
+
+  const block = `  "${propertyName}": {\n${objectBody}\n  }`;
+  return `${source.slice(0, insertAt)},\n${block}${source.slice(insertAt)}`;
+}
+
+function updateD1Config(databaseId) {
+  const source = readConfig();
+  const escapedBinding = escapeRegExp(d1BindingName);
+  const bindingObjectPattern = new RegExp(`(\\{[\\s\\S]*?"binding"\\s*:\\s*"${escapedBinding}"[\\s\\S]*?"database_id"\\s*:\\s*")[^"]*("[\\s\\S]*?\\})`);
+
+  if (bindingObjectPattern.test(source)) {
+    writeConfig(source.replace(bindingObjectPattern, `$1${databaseId}$2`));
+    return;
+  }
+
+  const objectBlock = `{
+      "binding": "${d1BindingName}",
+      "database_name": "${d1DatabaseName}",
+      "database_id": "${databaseId}"
+    }`;
+  writeConfig(insertConfigArrayBlock(source, 'd1_databases', objectBlock));
+}
+
+function hasQueueProducer(source) {
+  const escapedBinding = escapeRegExp(queueBindingName);
+  const escapedQueue = escapeRegExp(queueName);
+  const pattern = new RegExp(`\\{[\\s\\S]*?"binding"\\s*:\\s*"${escapedBinding}"[\\s\\S]*?"queue"\\s*:\\s*"${escapedQueue}"[\\s\\S]*?\\}`);
+  return pattern.test(source);
+}
+
+function hasQueueConsumer(source) {
+  const escapedQueue = escapeRegExp(queueName);
+  const pattern = new RegExp(`\\{[\\s\\S]*?"queue"\\s*:\\s*"${escapedQueue}"[\\s\\S]*?"max_batch_size"[\\s\\S]*?\\}`);
+  return pattern.test(source);
+}
+
+function insertQueueArrayItem(source, propertyName, itemBlock) {
+  const arrayPattern = new RegExp(`"${escapeRegExp(propertyName)}"\\s*:\\s*\\[`);
+  if (arrayPattern.test(source)) {
+    return source.replace(arrayPattern, `"${propertyName}": [\n      ${itemBlock},`);
+  }
+
+  const queuesPattern = /"queues"\s*:\s*\{/;
+  if (queuesPattern.test(source)) {
+    return source.replace(queuesPattern, `"queues": {\n    "${propertyName}": [\n      ${itemBlock}\n    ],`);
+  }
+
+  const objectBody = `    "${propertyName}": [\n      ${itemBlock}\n    ]`;
+  return insertTopLevelObjectBlock(source, 'queues', objectBody);
+}
+
+function updateQueueConfig() {
+  const producerBlock = `{
+        "binding": "${queueBindingName}",
+        "queue": "${queueName}"
+      }`;
+  const consumerBlock = `{
+        "queue": "${queueName}",
+        "max_batch_size": 50,
+        "max_batch_timeout": 5
+      }`;
+
+  let source = readConfig();
+  if (!hasQueueProducer(source)) {
+    source = insertQueueArrayItem(source, 'producers', producerBlock);
+    writeConfig(source);
+  }
+
+  source = readConfig();
+  if (!hasQueueConsumer(source)) {
+    source = insertQueueArrayItem(source, 'consumers', consumerBlock);
+    writeConfig(source);
+  }
+}
+
+function printCredentialHelp(output) {
+  if (output) {
+    console.error(output);
+  }
+  console.error([
+    'Unable to create or find Cloudflare D1/Queue resources for analytics rollups.',
+    'For CI, set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID with D1, Queue and Worker deployment permissions.',
+    'For local setup, run `npx wrangler login` or set CLOUDFLARE_API_TOKEN before `npm run setup:analytics-storage`.',
+  ].join('\n'));
+}
+
+function ensureD1Database() {
+  const configuredId = getConfiguredD1DatabaseId(readConfig());
+  if (configuredId) {
+    console.log(`ANALYTICS_DB D1 database already configured: ${configuredId}`);
+    return configuredId;
+  }
+
+  const envDatabaseId = String(process.env.ANALYTICS_DB_ID || '').trim();
+  if (envDatabaseId) {
+    updateD1Config(envDatabaseId);
+    console.log(`ANALYTICS_DB D1 database configured from ANALYTICS_DB_ID: ${envDatabaseId}`);
+    return envDatabaseId;
+  }
+
+  const listResult = runWrangler(['d1', 'list', '--json']);
+  if (listResult.status === 0) {
+    const existingId = parseD1List(listResult.output);
+    if (existingId) {
+      updateD1Config(existingId);
+      console.log(`ANALYTICS_DB D1 database reused: ${existingId}`);
+      return existingId;
+    }
+  }
+
+  const createResult = runWrangler(['d1', 'create', d1DatabaseName]);
+  if (createResult.status !== 0 && !/already exists/i.test(createResult.output)) {
+    printCredentialHelp(createResult.output || listResult.output);
+    process.exit(createResult.status || 1);
+  }
+
+  let databaseId = parseD1CreateId(createResult.output);
+  if (!databaseId) {
+    const retryListResult = runWrangler(['d1', 'list', '--json']);
+    if (retryListResult.status === 0) {
+      databaseId = parseD1List(retryListResult.output);
+    }
+  }
+
+  if (!databaseId) {
+    console.error(createResult.output || listResult.output);
+    throw new Error('Unable to parse D1 database id from Wrangler output.');
+  }
+
+  updateD1Config(databaseId);
+  console.log(`ANALYTICS_DB D1 database created and configured: ${databaseId}`);
+  return databaseId;
+}
+
+function ensureQueue() {
+  const source = readConfig();
+  if (hasQueueProducer(source) && hasQueueConsumer(source)) {
+    console.log(`ANALYTICS_ROLLUP_QUEUE queue already configured: ${queueName}`);
+    return;
+  }
+
+  const createResult = runWrangler(['queues', 'create', queueName]);
+  if (createResult.status !== 0 && !/already exists/i.test(createResult.output)) {
+    printCredentialHelp(createResult.output);
+    process.exit(createResult.status || 1);
+  }
+
+  updateQueueConfig();
+  console.log(`ANALYTICS_ROLLUP_QUEUE queue configured: ${queueName}`);
+}
+
+function applyAnalyticsMigrations() {
+  const files = readdirSync(migrationsDir)
+    .filter((fileName) => fileName.endsWith('.sql'))
+    .sort();
+
+  for (const fileName of files) {
+    const filePath = resolve(migrationsDir, fileName);
+    const result = runWrangler(['d1', 'execute', d1BindingName, '--remote', '--file', filePath]);
+    if (result.status !== 0) {
+      console.error(result.output);
+      process.exit(result.status || 1);
+    }
+    console.log(`ANALYTICS_DB migration applied: ${fileName}`);
+  }
+}
+
+ensureD1Database();
+ensureQueue();
+applyAnalyticsMigrations();

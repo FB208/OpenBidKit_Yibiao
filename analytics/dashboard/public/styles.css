@@ -82,7 +82,7 @@ p {
 
 .controls {
   display: grid;
-  grid-template-columns: 1.3fr 1.5fr 0.9fr 0.7fr auto;
+  grid-template-columns: 1.3fr 1.5fr 0.7fr 0.9fr auto;
   gap: 12px;
   padding: 16px;
   margin-bottom: 16px;
@@ -93,6 +93,23 @@ label {
   gap: 6px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  align-self: end;
+  gap: 8px;
+  height: 40px;
+}
+
+.checkbox-label input {
+  width: auto;
+  height: auto;
+}
+
+.inline-select {
+  min-width: 180px;
 }
 
 input,
@@ -257,6 +274,11 @@ button:disabled {
 
 .section-head h2 {
   margin: 0;
+}
+
+.section-head p {
+  margin-top: 6px;
+  line-height: 1.5;
 }
 
 .pager {

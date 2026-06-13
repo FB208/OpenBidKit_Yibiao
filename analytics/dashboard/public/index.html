@@ -28,23 +28,19 @@
         ADMIN_TOKEN
         <input id="adminToken" type="password" placeholder="输入 Worker Secret 中的 ADMIN_TOKEN" />
       </label>
+      <label class="checkbox-label">
+        <input id="rememberToken" type="checkbox" />
+        记住 Token
+      </label>
       <label>
         项目
         <input id="projectName" value="yibiao-client" placeholder="输入项目名，例如 yibiao-client" list="projectOptions" />
         <datalist id="projectOptions"></datalist>
       </label>
-      <label>
-        时间范围
-        <select id="days">
-          <option value="7">最近 7 天</option>
-          <option value="30" selected>最近 30 天</option>
-          <option value="90">最近 90 天</option>
-        </select>
-      </label>
       <button id="refreshButton">刷新当前页</button>
     </section>
 
-    <div class="panel hint">Token 只保存在当前浏览器 localStorage，不写入仓库，也不会提交到服务端。</div>
+    <div class="panel hint">Token 默认仅保存在当前会话 sessionStorage；勾选“记住 Token”后才写入 localStorage。历史总数来自 D1，最近 7/30/90 天分析来自 Analytics Engine，两个数据源可能存在轻微差异。</div>
     <div id="errorBox" class="error"></div>
 
     <nav class="tabs" aria-label="看板标签页">
@@ -59,14 +55,37 @@
 
     <section id="tab-overview" class="tab-panel" data-tab-panel="overview">
       <section class="cards">
-        <div class="panel card"><span>打开量</span><strong id="totalOpen">0</strong></div>
-        <div class="panel card"><span>页面访问量</span><strong id="totalView">0</strong></div>
+        <div class="panel card"><span>累计打开量</span><strong id="totalOpen">0</strong></div>
+        <div class="panel card"><span>累计页面访问量</span><strong id="totalView">0</strong></div>
+        <div class="panel card"><span>累计事件数</span><strong id="totalEvents">0</strong></div>
+        <div class="panel card"><span>累计 AI 请求</span><strong id="totalAiRequests">0</strong></div>
+        <div class="panel card"><span>累计资源点击</span><strong id="totalResourceClicks">0</strong></div>
         <div class="panel card"><span>总客户端数</span><strong id="totalClients">0</strong></div>
         <div class="panel card"><span>今日活跃客户端</span><strong id="todayActiveClients">0</strong></div>
+        <div class="panel card"><span>昨日活跃客户端</span><strong id="yesterdayActiveClients">0</strong></div>
         <div class="panel card"><span>近 7 天活跃</span><strong id="wau">0</strong></div>
         <div class="panel card"><span>近 30 天活跃</span><strong id="mau">0</strong></div>
-        <div class="panel card"><span>新增客户端</span><strong id="newClients">0</strong></div>
+        <div class="panel card"><span>今日新增客户端</span><strong id="todayNewClients">0</strong></div>
+        <div class="panel card"><span>近 30 天新增</span><strong id="last30NewClients">0</strong></div>
+        <div class="panel card"><span>范围新增客户端</span><strong id="newClients">0</strong></div>
         <div class="panel card"><span>老客户端活跃</span><strong id="returningClients">0</strong></div>
+      </section>
+
+      <section class="panel section">
+        <div class="section-head">
+          <div>
+            <h2>范围分析</h2>
+            <p>仅影响下方每日统计、留存概览、范围新增和老客户端活跃。</p>
+          </div>
+          <label class="inline-select">
+            范围
+            <select id="overviewRange">
+              <option value="7">最近 7 天</option>
+              <option value="30" selected>最近 30 天</option>
+              <option value="90">最近 90 天</option>
+            </select>
+          </label>
+        </div>
       </section>
 
       <section class="cards">
@@ -89,6 +108,23 @@
     </section>
 
     <section id="tab-traffic" class="tab-panel" data-tab-panel="traffic">
+      <section class="panel section">
+        <div class="section-head">
+          <div>
+            <h2>访问分析范围</h2>
+            <p>历史总数来自 D1 月度聚合；最近范围来自 Analytics Engine。</p>
+          </div>
+          <label class="inline-select">
+            范围
+            <select id="trafficRange">
+              <option value="7">最近 7 天</option>
+              <option value="30" selected>最近 30 天</option>
+              <option value="90">最近 90 天</option>
+              <option value="history">历史总数</option>
+            </select>
+          </label>
+        </div>
+      </section>
       <section class="grid">
         <div class="panel section">
           <h2>页面访问排行</h2>
@@ -103,14 +139,42 @@
 
     <section id="tab-config" class="tab-panel" data-tab-panel="config">
       <section class="panel section">
-        <h2>配置使用情况</h2>
+        <div class="section-head">
+          <div>
+            <h2>配置使用情况</h2>
+            <p>历史总数展示累计上报次数和累计客户端数。</p>
+          </div>
+          <label class="inline-select">
+            范围
+            <select id="configRange">
+              <option value="7">最近 7 天</option>
+              <option value="30" selected>最近 30 天</option>
+              <option value="90">最近 90 天</option>
+              <option value="history">历史总数</option>
+            </select>
+          </label>
+        </div>
         <div id="configUsage"></div>
       </section>
     </section>
 
     <section id="tab-models" class="tab-panel" data-tab-panel="models">
       <section class="panel section">
-        <h2>模型使用</h2>
+        <div class="section-head">
+          <div>
+            <h2>模型使用</h2>
+            <p>历史总数展示累计请求数、Tokens 和累计客户端数。</p>
+          </div>
+          <label class="inline-select">
+            范围
+            <select id="modelRange">
+              <option value="7">最近 7 天</option>
+              <option value="30" selected>最近 30 天</option>
+              <option value="90">最近 90 天</option>
+              <option value="history">历史总数</option>
+            </select>
+          </label>
+        </div>
         <div id="modelUsage"></div>
       </section>
     </section>
@@ -171,6 +235,15 @@
             <h2>资源管理</h2>
           </div>
           <div class="resource-head-actions">
+            <label class="inline-select">
+              点击统计
+              <select id="resourceClickRange">
+                <option value="7">最近 7 天</option>
+                <option value="30" selected>最近 30 天</option>
+                <option value="90">最近 90 天</option>
+                <option value="history">历史总数</option>
+              </select>
+            </label>
             <button id="loadResourcesButton" type="button">读取资源</button>
             <button id="newResourceButton" type="button">新增资源</button>
           </div>

@@ -1,32 +1,71 @@
 import { state } from './state.js';
 
+const productionApiBase = 'https://analytics.agnet.top';
+
+function isLocalDashboard() {
+  return ['localhost', '127.0.0.1', ''].includes(window.location.hostname) || window.location.protocol === 'file:';
+}
+
 export function normalizeApiBase(value) {
-  return String(value || '').trim().replace(/\/+$/, '');
+  const normalized = String(value || '').trim().replace(/\/+$/, '') || productionApiBase;
+  if (isLocalDashboard()) {
+    return normalized;
+  }
+
+  const sameOrigin = window.location.origin.replace(/\/+$/, '');
+  return normalized === sameOrigin ? sameOrigin : productionApiBase;
 }
 
 export function saveSettings() {
   localStorage.setItem('analytics_api_base', normalizeApiBase(state.apiBase.value));
-  localStorage.setItem('analytics_admin_token', state.adminToken.value.trim());
   localStorage.setItem('analytics_project_name', state.projectName.value);
-  localStorage.setItem('analytics_days', state.days.value);
+  localStorage.setItem('analytics_overview_range', state.overviewRange.value);
+  localStorage.setItem('analytics_traffic_range', state.trafficRange.value);
+  localStorage.setItem('analytics_config_range', state.configRange.value);
+  localStorage.setItem('analytics_model_range', state.modelRange.value);
+  localStorage.setItem('analytics_resource_click_range', state.resourceClickRange.value);
+
+  const token = state.adminToken.value.trim();
+  sessionStorage.setItem('analytics_admin_token', token);
+  if (state.rememberToken.checked) {
+    localStorage.setItem('analytics_remember_token', 'true');
+    localStorage.setItem('analytics_admin_token', token);
+  } else {
+    localStorage.removeItem('analytics_remember_token');
+    localStorage.removeItem('analytics_admin_token');
+  }
 }
 
 export function loadSettings() {
-  state.apiBase.value = localStorage.getItem('analytics_api_base') || state.apiBase.value;
-  state.adminToken.value = localStorage.getItem('analytics_admin_token') || '';
+  state.apiBase.value = normalizeApiBase(localStorage.getItem('analytics_api_base') || state.apiBase.value);
+  state.apiBase.disabled = !isLocalDashboard();
+  state.rememberToken.checked = localStorage.getItem('analytics_remember_token') === 'true';
+  state.adminToken.value = sessionStorage.getItem('analytics_admin_token') || (state.rememberToken.checked ? localStorage.getItem('analytics_admin_token') : '') || '';
   state.projectName.value = localStorage.getItem('analytics_project_name') || state.projectName.value;
-  state.days.value = localStorage.getItem('analytics_days') || '30';
+  state.overviewRange.value = localStorage.getItem('analytics_overview_range') || '30';
+  state.trafficRange.value = localStorage.getItem('analytics_traffic_range') || '30';
+  state.configRange.value = localStorage.getItem('analytics_config_range') || '30';
+  state.modelRange.value = localStorage.getItem('analytics_model_range') || '30';
+  state.resourceClickRange.value = localStorage.getItem('analytics_resource_click_range') || '30';
 }
 
 export function getSelectedProjectName() {
   return state.projectName.value.trim();
 }
 
-export function getEncodedProjectAndDays() {
+export function getEncodedProjectAndDays(daysValue = '30') {
   return {
     projectName: encodeURIComponent(getSelectedProjectName()),
-    days: encodeURIComponent(state.days.value),
+    days: encodeURIComponent(daysValue),
   };
+}
+
+export function buildRangeQuery(rangeValue) {
+  const range = String(rangeValue || '30');
+  if (range === 'history') {
+    return 'range=history';
+  }
+  return `days=${encodeURIComponent(range)}`;
 }
 
 export function assertReady() {

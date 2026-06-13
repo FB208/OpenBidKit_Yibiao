@@ -1,6 +1,6 @@
 # 埋点统计部署手册
 
-本目录维护通用匿名埋点统计服务，采用 `Cloudflare Workers + Analytics Engine + Workers Static Assets`。
+本目录维护通用匿名埋点统计服务，采用 `Cloudflare Workers + Analytics Engine + D1 + Queue + Workers Static Assets`。
 
 公开仓库只保存源码，不保存 `ACCOUNT_ID`、`ADMIN_TOKEN`、`ANALYTICS_API_TOKEN` 等密钥。
 
@@ -34,8 +34,12 @@ analytics/
 | `GET /notice` | 客户端读取最新公告 | 无 |
 | `GET /resources` | 客户端读取全局资源列表，支持 `q` 搜索和 `days` 点击统计窗口 | 无 |
 | `GET /resource-image` | 通过 Worker 代理读取 R2 资源图片 | 无 |
-| `GET /api/projects` | 查询最近 90 天出现过的项目名 | `ADMIN_TOKEN` |
-| `GET /api/summary` | 查询每日统计、页面排行、版本分布 | `ADMIN_TOKEN` |
+| `GET /api/projects` | 查询项目名，优先读取 D1 长期统计，必要时回退 Analytics Engine | `ADMIN_TOKEN` |
+| `GET /api/overview` | 查询 D1 长期累计、固定窗口和范围分析概览 | `ADMIN_TOKEN` |
+| `GET /api/summary` | 查询每日统计、页面排行、版本分布；`range=history` 时读取 D1 | `ADMIN_TOKEN` |
+| `GET /api/traffic` | 查询访问分析；支持 `days=7/30/90` 或 `range=history` | `ADMIN_TOKEN` |
+| `GET /api/config-usage` | 查询配置使用；支持 `days=7/30/90` 或 `range=history` | `ADMIN_TOKEN` |
+| `GET /api/model-usage` | 查询模型使用，返回结构同 `/api/config-usage` | `ADMIN_TOKEN` |
 | `GET /api/latest` | 查询最近事件 | `ADMIN_TOKEN` |
 | `GET /api/github-repo-stats` | 查询 GitHub 仓库 stars、forks、open issues | `ADMIN_TOKEN` |
 | `GET /api/notice` | 读取当前项目公告 | `ADMIN_TOKEN` |
@@ -57,16 +61,19 @@ analytics/
 
 `ai_request` 统计请求类型、服务商、模型端点域名、模型名称和 token 用量（`prompt_tokens`、`completion_tokens`、`total_tokens`）。模型端点只上传 hostname，不携带协议、路径、端口、账号密码、查询参数或 hash；不采集 API Key、Prompt、响应内容或错误详情。
 
-`resource_click` 只上传 Worker 生成的短资源统计 key，不上传资源标题、标签、介绍、弹窗内容或下载链接。客户端资源下载页默认展示近 30 天点击量；Dashboard “资源管理”会按当前项目名和天数范围查询点击量；查询失败时点击量按 0 展示，不影响资源列表读取和编辑。
+`resource_click` 只上传 Worker 生成的短资源统计 key，不上传资源标题、标签、介绍、弹窗内容或下载链接。客户端资源下载页默认展示近 30 天点击量；Dashboard “资源管理”会按当前项目名和点击统计范围查询点击量，选择“历史总数”时读取 D1 月度聚合；查询失败时点击量按 0 展示，不影响资源列表读取和编辑。
+
+上报写入顺序：`POST /track` 会先把规范化事件投递到 `ANALYTICS_ROLLUP_QUEUE`，成功后再写 Analytics Engine。接口成功返回 `202` 和 `eventId`。D1 长期统计由 Queue Consumer 异步写入，Analytics Engine 仍用于最近事件和 90 天内灵活分析。
 
 统计页面使用：
 
 1. 打开 `https://static.analytics.agnet.top`。
-2. API 地址填写 `https://analytics.agnet.top`。
-3. 输入 Worker Secret 中配置的 `ADMIN_TOKEN`。
+2. 生产看板 API 地址固定为 `https://analytics.agnet.top`；本地开发看板可手动填写开发地址。
+3. 输入 Worker Secret 中配置的 `ADMIN_TOKEN`。Token 默认只保存到当前会话 `sessionStorage`；勾选“记住 Token”后才写入 `localStorage`。
 4. 输入项目名，例如 `yibiao-client`。
 5. 点击“刷新”。
 6. 如需发布客户端公告，在“公告管理”中填写标题和 Markdown 内容后点击“发布公告”。
+7. 访问分析、配置使用、模型使用和资源管理各自选择最近 7/30/90 天或历史总数；历史总数来自 D1，最近范围来自 Analytics Engine，两者可能因写入延迟、回填范围和数据源不同存在轻微差异。
 
 ## 二、首次部署
 
@@ -138,6 +145,26 @@ npx wrangler kv namespace create NOTICE_STORE
 ]
 ```
 
+### 1.3 创建长期统计 D1 和 Queue
+
+长期累计统计保存到独立 D1，实时聚合任务通过 Cloudflare Queue 异步处理。绑定名固定为：
+
+| 资源 | 名称 | Binding |
+| --- | --- | --- |
+| D1 数据库 | `openbidkit-analytics` | `ANALYTICS_DB` |
+| Queue | `openbidkit-analytics-rollup` | `ANALYTICS_ROLLUP_QUEUE` |
+
+`analytics/worker` 部署前会自动运行 `setup:analytics-storage`：创建或复用 D1/Queue，写入 `wrangler.jsonc`，并执行 `analytics-migrations/` 下的 D1 migration。自动创建要求执行脚本的环境具备 D1、Queue 和 Worker 部署权限。
+
+本地首次启用时，也可以在登录 Wrangler 后手动运行：
+
+```powershell
+cd analytics\worker
+npm run setup:analytics-storage
+```
+
+如果要通过环境变量直接指定已有 D1，可以设置 `ANALYTICS_DB_ID`。Queue 按名称 `openbidkit-analytics-rollup` 复用或创建。
+
 ### 2. 创建 Analytics API Token
 
 1. 进入 Cloudflare `My Profile -> API Tokens`。
@@ -170,6 +197,8 @@ npx wrangler kv namespace create NOTICE_STORE
 | 公告 KV binding | `NOTICE_STORE`（首次部署时创建或复用） |
 | 资源 D1 binding | `RESOURCE_DB`（首次部署时创建或复用，并自动执行 migration） |
 | 资源 R2 binding | `RESOURCE_BUCKET`（bucket 名为 `openbidkit`） |
+| 长期统计 D1 binding | `ANALYTICS_DB`（首次部署时创建或复用，并自动执行 migration） |
+| 长期统计 Queue producer/consumer | `ANALYTICS_ROLLUP_QUEUE` / `openbidkit-analytics-rollup` |
 | 变量保留 | `keep_vars: true`，避免部署覆盖后台配置 |
 
 部署后在 Worker 的 `Settings -> Variables and Secrets` 配置 Secret：
@@ -258,21 +287,22 @@ Invoke-RestMethod `
   -Headers @{ Authorization = "Bearer <ADMIN_TOKEN>" }
 ```
 
-Analytics Engine 写入后可能需要等待几十秒才能查到。
+D1 长期统计由 Queue Consumer 异步写入，Analytics Engine 写入后也可能需要等待几十秒才能查到；历史总数和最近范围出现短暂不一致属于预期。
 
 概览指标口径：
 
 | 指标 | 说明 |
 | --- | --- |
-| 总客户端数 | 历史上报过任意事件的去重客户端数，不等于每日客户端数相加 |
-| 今日活跃客户端 | 今天上报过任意事件的去重客户端数 |
-| 近 7/30 天活跃 | 最近 7/30 天上报过任意事件的去重客户端数 |
+| 总客户端数 | D1 中历史上报过任意事件的去重客户端数，不等于每日客户端数相加 |
+| 累计打开量 / 累计页面访问量 / 累计 AI 请求 / 累计资源点击 | D1 月度聚合按 `source IN ('live', 'backfill')` 汇总 |
+| 今日活跃客户端 | D1 中今天上报过任意事件的去重客户端数 |
+| 近 7/30 天活跃 | D1 中最近 7/30 天上报过任意事件的去重客户端数 |
 | 新增客户端 | 所选时间范围内创建、并且期间有过任意事件上报的去重客户端数 |
 | 老客户端活跃 | 所选时间范围内活跃客户端数减去新增客户端数 |
 | 每日统计中的客户端数 | 当天有任意事件上报的去重客户端数 |
-| 版本分布中的活跃客户端数 | 所选时间范围内该版本上报过事件的去重客户端数 |
-| 配置使用中的正文生成配置 | 所选时间范围内正文表格需求、最低字数、正文生成并发速度、正文生成动作、全文一致性审计、Mermaid 图片、AI 生图等配置快照的去重客户端数和上报次数 |
-| 配置使用中的文本模型和生图模型 | 所选时间范围内真实 AI 接口请求使用的服务商、模型端点域名、模型名称、去重客户端数、请求次数和 token 用量；模型使用表按 `total_tokens` 从高到低排序 |
+| 访问分析历史总数 | D1 月度页面/版本聚合；最近 7/30/90 天仍从 Analytics Engine 查询 |
+| 配置使用历史总数 | D1 月度配置聚合 + 维度客户端去重；最近 7/30/90 天仍从 Analytics Engine 查询 |
+| 模型使用历史总数 | D1 月度模型聚合 + 维度客户端去重，包含 token 用量；最近 7/30/90 天仍从 Analytics Engine 查询 |
 | 留存概览中的当日回访客户端 | 创建后 D1/D3/D7 当天再次打开 App 的客户端数 |
 
 配置使用只采集模型服务商、模型端点域名、模型名称、token 用量、开关、数字和枚举类配置，不采集 `api_key`、完整 `base_url`、`mineru_token`、Prompt、响应内容、错误详情等敏感数据。

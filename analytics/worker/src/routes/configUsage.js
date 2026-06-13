@@ -1,5 +1,6 @@
 import { CONFIG_USAGE_FIELDS, DATASET, MODEL_USAGE_FIELDS } from '../constants.js';
 import { json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
+import { queryD1ConfigUsage } from '../services/analyticsD1Query.js';
 import { queryAnalytics } from '../services/analyticsQuery.js';
 import { isValidProjectName, logQueryError, normalizeText, safeDays, sqlString } from '../utils.js';
 
@@ -54,9 +55,26 @@ export async function handleConfigUsage(request, env, url) {
 
   const projectName = normalizeText(url.searchParams.get('projectName'), 80);
   const days = safeDays(url.searchParams.get('days'));
+  const range = normalizeText(url.searchParams.get('range'), 20);
 
   if (!isValidProjectName(projectName)) {
     return json({ code: 400, message: 'invalid projectName' }, { status: 400 });
+  }
+
+  if (range === 'history') {
+    try {
+      return json({
+        code: 0,
+        projectName,
+        days,
+        range: 'history',
+        source: 'd1',
+        usage: await queryD1ConfigUsage(env, projectName),
+      });
+    } catch (error) {
+      logQueryError('config-usage history', error);
+      return json({ code: 500, message: 'query failed' }, { status: 500 });
+    }
   }
 
   const project = sqlString(projectName);

@@ -7,7 +7,8 @@
     "dev": "wrangler dev",
     "deploy": "node ../scripts/deploy-if-changed.mjs analytics/worker",
     "setup:notice-kv": "node ../scripts/setup-notice-kv.mjs",
-    "setup:resources": "node ../scripts/setup-resource-storage.mjs"
+    "setup:resources": "node ../scripts/setup-resource-storage.mjs",
+    "setup:analytics-storage": "node ../scripts/setup-analytics-storage.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.13.2"

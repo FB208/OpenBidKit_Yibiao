@@ -1,4 +1,4 @@
-import { assertReady, getEncodedProjectAndDays, loadProjectOptions, requestJson, saveSettings } from '../api.js';
+import { assertReady, buildRangeQuery, getEncodedProjectAndDays, loadProjectOptions, requestJson, saveSettings } from '../api.js';
 import { renderTable } from '../render.js';
 import { state } from '../state.js';
 
@@ -59,8 +59,9 @@ export async function loadTraffic() {
   await loadProjectOptions();
   saveSettings();
 
-  const { projectName, days } = getEncodedProjectAndDays();
-  const summary = await requestJson(`/api/summary?projectName=${projectName}&days=${days}`);
+  const range = state.trafficRange.value;
+  const { projectName, days } = getEncodedProjectAndDays(range === 'history' ? '30' : range);
+  const summary = await requestJson(`/api/traffic?projectName=${projectName}&${range === 'history' ? buildRangeQuery(range) : `days=${days}`}`);
   const pages = (summary.pages || []).map((row) => ({
     ...row,
     pageLabel: getPageLabel(row.page),
@@ -69,13 +70,14 @@ export async function loadTraffic() {
   renderTable(state.pagesTable, pages, [
     { key: 'pageLabel', label: '功能名称' },
     { key: 'page', label: '路由', code: true },
-    { key: 'count', label: '访问量' },
+    { key: 'count', label: range === 'history' ? '累计访问量' : '访问量' },
+    ...(range === 'history' ? [{ key: 'clients', label: '累计客户端数' }] : []),
   ], '暂无页面访问数据');
 
   renderTable(state.versionsTable, summary.versions || [], [
     { key: 'version', label: '版本', code: true },
-    { key: 'clients', label: '活跃客户端数' },
+    { key: 'clients', label: range === 'history' ? '累计客户端数' : '活跃客户端数' },
     { key: 'todayClients', label: '今日活跃客户端' },
-    { key: 'count', label: '事件数' },
+    { key: 'count', label: range === 'history' ? '累计事件数' : '事件数' },
   ], '暂无版本数据');
 }

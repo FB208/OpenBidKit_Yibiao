@@ -1,6 +1,10 @@
 # Findings
 
 ## Research Log
+- Analytics 长期统计改造边界：当前有效方案要求新增独立 `ANALYTICS_DB` 和 Queue，D1 只保存生命周期、每日活跃、月度预聚合、维度去重和维度累计；`/track` 必须先 Queue 入队，成功后再写 Analytics Engine，客户端继续静默处理埋点失败。
+- Analytics D1 聚合精确去重边界：不能依赖 SQLite `changes()` 在 D1 batch 中跨语句累计新增维度客户端数；已改为先写 `analytics_dimension_clients`，再按 `project/dimension/key` 从关系表 `COUNT(*)/MIN/MAX` 重算 `analytics_dimension_client_totals`，避免重复事件、回填和并发写入导致累计客户端数偏移。
+- Analytics Queue Consumer 批处理边界：聚合写入和事件 `done` 标记必须处于同一个 D1 batch transaction；如果完整队列批次语句数过多，只能递归拆成子批次提交，不能先提交统计再单独标记 done，否则失败重试会重复累计。
+- Dashboard 范围选择边界：顶部不能再保留全局 `days`，否则用户会继续误以为长期累计和固定窗口受该选择影响；范围选择应下放到概览范围分析、访问分析、配置使用、模型使用和资源管理点击统计，各自决定读 Analytics Engine 近期数据还是 D1 历史总数。
 - 废标项检查当前为单投标文件链路：Renderer 使用 `bidDocument`，Store 以 `rejection_check_documents.role` 主键保存 `bid`，Main 任务只读取 `readDocumentMarkdown('bid')`，三类结果表都没有文件归属字段。
 - 标书查重的多投标文件上传样式已在 `DuplicateCheckPage.tsx` 落地，可复用 `duplicate-upload-row`、文件列表和文件 pill 的交互思路；废标检查已有 `DocumentFilePill` 和正文 Tab 样式，可小幅扩展。
 - 多文件结果显示应以结构化 `bidDocumentId` 为权威：AI Prompt 需要列出可用投标文件 ID，并要求每条废标/错别字/逻辑问题返回所属 ID；Normalizer 必须过滤不存在的 ID。
