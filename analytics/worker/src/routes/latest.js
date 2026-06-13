@@ -47,7 +47,7 @@ export async function handleLatest(request, env, url) {
     FROM ${DATASET}
     WHERE blob1 = ${project}
       ${eventCondition}
-    ORDER BY timestamp DESC, blob7 DESC, blob2 DESC, blob3 DESC
+    ORDER BY timestamp DESC, clientId DESC, event DESC, page DESC
     LIMIT ${pageSize} OFFSET ${offset}
   `;
 
