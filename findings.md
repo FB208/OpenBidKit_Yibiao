@@ -1,6 +1,9 @@
 # Findings
 
 ## Research Log
+- Analytics stats 历史回填脚本最稳妥的边界是复用 Worker `rollupStatsDay()`，而不是在脚本中复制一套 AE 聚合和 D1 upsert SQL；脚本只负责同目录 `.env`、远程 D1 API bridge、AE 历史日期发现和异常保护。
+- Cloudflare D1 REST Query API 可用于本地脚本直接写远程 D1：`POST /accounts/{account_id}/d1/database/{database_id}/query`，body 为 `{ sql, params }`；D1 database id 可通过 `GET /accounts/{account_id}/d1/database?name=openbidkit-analytics` 自动发现。
+- 历史回填不能静默重跑 `running/failed` 日期：新版聚合表按累计 `+ excluded` 写入，若失败前已经部分提交，直接重跑会重复累加；脚本应在发现非 success 的已有状态时停止，要求人工检查或重建库。
 - Analytics 北京时间修复边界：客户端 `analytics_created_at` 只能修正之后新生成身份的日期，已存在配置只有日期没有时刻，不能可靠判断是否属于北京时间 00:00-07:59 的 UTC 前一天偏差；本轮不处理历史数据。
 - Analytics 统计页时间统一口径：Worker API 应返回已按 `Asia/Shanghai` 格式化的日期/时间，Dashboard 不再二次转换；近期 AE 范围按北京时间自然日 `today + 前 N-1 天`，不使用 `NOW() - INTERVAL` 滚动窗口。
 - Analytics 长期统计改造边界：当前有效方案要求新增独立 `ANALYTICS_DB` 和 Queue，D1 只保存生命周期、每日活跃、月度预聚合、维度去重和维度累计；`/track` 必须先 Queue 入队，成功后再写 Analytics Engine，客户端继续静默处理埋点失败。

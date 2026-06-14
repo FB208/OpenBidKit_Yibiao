@@ -1,5 +1,34 @@
 # Task Plan
 
+## Current Task: Analytics stats 历史回填脚本
+
+### Goal
+编写本地零参数执行脚本，从 `analytics/scripts/.env` 读取 Cloudflare/Analytics 凭据，把 Analytics Engine 中 `yibiao-client` 在执行当天北京时间之前的所有历史数据按新版 `stats_*` 逻辑回填到 D1 `openbidkit-analytics`，复用线上 Cron 口径，避免重复实现统计逻辑。
+
+### Phases
+- [completed] 1. 梳理新版 D1 schema、Cron 写入逻辑和 Cloudflare D1 REST API。
+- [completed] 2. 新增 `analytics/scripts/backfill-analytics-stats.mjs`，固定读取同目录 `.env`，封装远程 D1 `prepare/bind/run/all/first`，自动发现 AE 历史日期并调用 `rollupStatsDay()`。
+- [completed] 3. 新增 `analytics/worker` npm 命令 `backfill:analytics-stats`。
+- [completed] 4. 更新 `analytics/README.md` 历史回填说明。
+- [completed] 5. 运行脚本语法检查、帮助命令、dry-run 和 diff 检查。
+
+### Decisions
+- 回填脚本不复制 Cron 聚合 SQL，直接 import `rollupStatsDay()`，保证历史回填和每天 02:00 汇总同口径。
+- 通过 Cloudflare D1 REST API 写远程 D1，不依赖本地 wrangler 登录；`analytics/scripts/.env` 提供 `CLOUDFLARE_API_TOKEN` / `ANALYTICS_API_TOKEN`。
+- 脚本不接受命令行参数，固定回填 `yibiao-client`，自动处理北京时间今天之前的 AE 历史日期；今天/7天/30天仍实时读 AE。
+- `stats_rollup_runs.status = success` 的日期跳过；存在 `running/failed` 状态时停止，避免重复累加污染。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 本轮实现 | `node --check`、`--help`、`--dry-run`、diff check 通过 |
+
+### Validation
+- `node --check analytics\scripts\backfill-analytics-stats.mjs` 通过。
+- `cd analytics\worker; npm run backfill:analytics-stats -- --help` 已验证会拒绝参数并提示配置 `analytics/scripts/.env` 后零参数执行。
+- 本机当前没有 `analytics/scripts/.env`，未执行真实回填。
+- `git diff --check -- analytics/scripts/backfill-analytics-stats.mjs analytics/worker/package.json analytics/README.md` 通过，仅有 LF/CRLF 提示。
+
 ## Current Task: Analytics 北京时间统一修复
 
 ### Goal

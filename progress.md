@@ -1,6 +1,7 @@
 # Progress
 
 ## Session Log
+- 已新增并按要求简化 Analytics stats 历史回填脚本：`analytics/scripts/backfill-analytics-stats.mjs` 不接受参数，固定读取同目录 `.env`，固定项目 `yibiao-client`，自动发现 AE 中北京时间今天之前的所有有数据日期；脚本用 Cloudflare D1 REST API 封装远程 `ANALYTICS_DB.prepare().bind().run/all/first()`，复用线上 `rollupStatsDay()` 写入新版 `stats_*` 表；跳过 success 日期，遇到 running/failed 状态停止以避免重复累加。新增 `npm run backfill:analytics-stats` 命令并更新 README。验证通过 `node --check` 和参数拒绝检查；本机没有 `analytics/scripts/.env`，未执行真实回填。
 - 已完成 Analytics 北京时间统一修复：客户端新生成 `analytics_created_at` 改为 `Asia/Shanghai` 日期；Worker 公共工具新增北京时间 SQL 表达式和自然日范围；`today/7/30/90` 近期 AE 查询、资源点击、项目兜底、最近事件、留存和 Cron 写入 `first_seen_at` 均统一为北京时间口径。验证通过相关 `node --check`、`cd client; npm run build`、北京时间边界用例和 `git diff --check`，仅有既有 chunk 体积警告与 LF/CRLF 提示。
 - 优化 `/track` D1 热路径：`recordTrackClient()` 现在只对 `client_created_at` 最近 3 天内的客户端尝试实时写 D1；同一 Worker 实例内通过有上限的内存 Set 避免重复尝试；去掉老客户端每条事件的 D1 SELECT；真实插入新客户端后才更新 `stats_totals.total_clients`；D1 写入失败只 warning，`/track` 仍返回成功。验证通过相关 `node --check`、热路径 grep 复扫和 `git diff --check -- analytics`。
 - 修复代码评审指出的历史维度客户端数重复累计问题：新版 migration 增加 `stats_dimension_clients`，Cron 汇总对页面/版本/配置/模型/资源写入 `dimension + client_id` 去重关系，聚合表只累加事件/点击/请求/token，`client_count` 改为从关系表重算累计唯一客户端数。验证通过 `node --check analytics/worker/src/services/analyticsStatsStore.js`、`node --check analytics/worker/src/index.js`、错误模式 grep 复扫和 `git diff --check -- analytics`。

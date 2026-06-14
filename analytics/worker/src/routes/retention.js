@@ -31,7 +31,7 @@ export async function handleRetention(request, env, url) {
       AND blob7 != ''
       AND blob8 != ''
       AND blob8 >= ${sqlString(getBusinessDateDaysAgo(days))}
-    ORDER BY timestamp ASC
+    ORDER BY activeDate ASC, clientId ASC
     LIMIT 50000
   `;
 
