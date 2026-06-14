@@ -36,9 +36,35 @@ export async function loadClients() {
     { key: 'activeDays', label: '访问天数' },
     { key: 'lastActiveDate', label: '最近活跃日期' },
     { key: 'lastActiveVersion', label: '最近活跃版本', code: true },
+    { key: 'lastAccessIp', label: '最后访问 IP', code: true },
     { key: 'action', label: '操作', html: true },
   ], '暂无客户端数据');
   bindClientDetailButtons();
+}
+
+export async function loadIpStats(options = {}) {
+  if (options.resetIpPage) {
+    appState.ipPage = 1;
+  }
+
+  assertReady();
+  await loadProjectOptions();
+  saveSettings();
+
+  const { projectName } = getEncodedProjectAndDays();
+  const data = await requestJson(`/api/ip-stats?projectName=${projectName}&page=${appState.ipPage}`);
+  appState.ipTotal = Number(data.total || 0);
+  appState.ipPage = Number(data.page || appState.ipPage);
+  appState.ipPageSize = Number(data.pageSize || appState.ipPageSize);
+  const rows = (data.items || []).map((item) => ({
+    ip: item.ip,
+    clientCount: formatNumber(item.clientCount),
+  }));
+
+  renderTable(state.ipStatsTable, rows, [
+    { key: 'ip', label: 'IP 地址', code: true },
+    { key: 'clientCount', label: '客户端数' },
+  ], '暂无 IP 统计数据');
 }
 
 export async function loadClientDetail() {

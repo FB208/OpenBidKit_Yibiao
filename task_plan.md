@@ -1,5 +1,37 @@
 # Task Plan
 
+## Current Task: Analytics IP 统计与垃圾埋点识别
+
+### Goal
+在 Analytics Worker 侧从 Cloudflare 请求头读取公网 IP，写入 AE 空闲字段并同步到 D1 客户端表；Dashboard 客户端统计展示最后访问 IP，并新增 IP 统计分页标签页，用于识别异常 client_id 聚集来源。当前只做观察与统计，不自动封禁。
+
+### Phases
+- [completed] 1. 扩展计划记录并确认现有 AE/D1/Dashboard 接入点。
+- [completed] 2. `/track` 读取 `CF-Connecting-IP`，写入 `blob13=client_ip`。
+- [completed] 3. `stats_clients` 增加 `last_access_ip`，实时新客户端写入并由每日 rollup 更新。
+- [completed] 4. 新增 Worker IP 统计分页接口。
+- [completed] 5. Dashboard 客户端表增加最后访问 IP，并新增 IP 统计标签页。
+- [completed] 6. 同步 README/逻辑梳理并运行语法检查、模块加载和 diff 检查。
+
+### Decisions
+- IP 来源只信任 Worker 请求头 `CF-Connecting-IP`，不接受客户端自报公网 IP。
+- AE 使用空闲 `blob13` 存 `client_ip`，不影响 `ai_request`、`resource_click`、`config_usage` 既有字段。
+- IP 分组统计读 D1 `stats_clients.last_access_ip`，不直接对 AE 做高基数分页。
+- 本轮只做统计观察，不做自动封禁或拦截。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| `file://` 打开 Dashboard 时 ES Module 被 CORS 拦截 | 静态页浏览器验证 | 改用本地 HTTP 静态服务加载，页面正常 |
+
+### Validation
+- `node --check` 通过：`analyticsTrack.js`、`analyticsStatsStore.js`、`routes/track.js`、`routes/clients.js`、Worker `index.js`、`setup-analytics-storage.mjs`。
+- Dashboard ES Module `node --check` 通过：`main.js`、`state.js`、`render.js`、`tabs.js`、`pages/clients.js`。
+- Worker IP 相关模块动态 import 通过。
+- `normalizeTrackBody()` smoke 通过：`CF-Connecting-IP` 会写入 AE `blob13`，blobs 长度为 20。
+- Dashboard 本地 HTTP 静态加载通过，IP 统计标签页可渲染且无控制台错误。
+- `git diff --check` 通过，仅有 LF/CRLF 提示。
+
 ## Current Task: Analytics config_usage 键值对改造
 
 ### Goal

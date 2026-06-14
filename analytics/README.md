@@ -26,11 +26,12 @@
 | 接口 | 数据源 | 鉴权 | 用途 |
 | --- | --- | --- | --- |
 | `GET /health` | Worker | 无 | 健康检查 |
-| `POST /track` | AE + D1 | 无 | 写 AE；仅对 `client_created_at` 距当前业务日期不超过 1 天的新客户端尝试实时写 `stats_clients` |
+| `POST /track` | AE + D1 | 无 | 写 AE；从 `CF-Connecting-IP` 记录客户端 IP；仅对 `client_created_at` 距当前业务日期不超过 1 天的新客户端尝试实时写 `stats_clients` |
 | `GET /api/projects` | D1 优先，AE 兜底 | `ADMIN_TOKEN` | 项目列表 |
 | `GET /api/overview` | D1 + AE + KV | `ADMIN_TOKEN` | 概览总数、新增、今日活跃、每日统计 |
 | `GET /api/clients` | D1 | `ADMIN_TOKEN` | 客户端统计列表 |
 | `GET /api/client-detail` | AE | `ADMIN_TOKEN` | 单客户端 7天/30天/全部事件明细 |
+| `GET /api/ip-stats` | D1 | `ADMIN_TOKEN` | 按最后访问 IP 汇总客户端数，分页返回 |
 | `GET /api/traffic` | D1 或 AE | `ADMIN_TOKEN` | 访问分析，`range=history/today/7/30` |
 | `GET /api/config-usage` | D1 或 AE | `ADMIN_TOKEN` | 配置使用，`range=history/today/7/30` |
 | `GET /api/model-usage` | D1 或 AE | `ADMIN_TOKEN` | 模型使用，支持 `provider/endpointHost/model` 筛选 |
@@ -54,6 +55,7 @@
 | 总客户端数 | D1 `stats_totals.total_clients` |
 | 今日/7日新增 | D1 `stats_clients.first_seen_date` |
 | 实时客户端入库 | `/track` 只尝试写当前业务日期或前 1 天创建的客户端，同一 Worker 实例内同一客户端只尝试一次；D1 写入失败不影响 `/track` 返回成功；老客户端活跃由 Cron 批量更新 |
+| 最后访问 IP | Worker 从 `CF-Connecting-IP` 读取公网 IP，AE 写入 `blob13`；D1 `stats_clients.last_access_ip` 由新客户端实时入库和每日 Cron 更新 |
 | 每日统计 | 今天读 AE，前 9 天读 D1 |
 | 最近事件 | 只读 AE，不入 D1 |
 | 留存 | 只读 AE，不入 D1 |
@@ -72,7 +74,7 @@
 | `ai_request` | 模型使用、AI 请求、Token |
 | `resource_click` | 资源点击 |
 
-`config_usage` 使用 `config_key/config_value` 键值对上报，每个配置项一条事件。`ai_request` 只采集请求类型、服务商、endpoint host、模型名和 token 用量，不采集 API Key、Prompt、响应内容或错误详情。
+`config_usage` 使用 `config_key/config_value` 键值对上报，每个配置项一条事件。Worker 从 Cloudflare 请求头 `CF-Connecting-IP` 读取公网 IP 并写入 `blob13`，客户端不自报 IP。`ai_request` 只采集请求类型、服务商、endpoint host、模型名和 token 用量，不采集 API Key、Prompt、响应内容或错误详情。
 
 ## 首次部署
 

@@ -13,7 +13,7 @@ export async function handleTrack(request, env) {
 
   try {
     const body = await request.json();
-    const event = normalizeTrackBody(body);
+    const event = normalizeTrackBody(body, request);
     const validationError = validateTrackEvent(event);
     if (validationError) {
       return json({ code: 400, message: validationError }, { status: 400 });

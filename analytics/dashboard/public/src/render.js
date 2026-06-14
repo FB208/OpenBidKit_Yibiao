@@ -55,6 +55,15 @@ export function updateLatestPager() {
   state.nextLatestPage.disabled = appState.latestPage >= totalPages;
 }
 
+export function updateIpPager() {
+  const totalPages = Math.max(1, Math.ceil(appState.ipTotal / appState.ipPageSize));
+  state.ipPageInfo.textContent = `第 ${appState.ipPage} / ${totalPages} 页，共 ${formatNumber(appState.ipTotal)} 条`;
+  state.ipPageInput.value = String(appState.ipPage);
+  state.ipPageInput.max = String(totalPages);
+  state.prevIpPage.disabled = appState.ipPage <= 1;
+  state.nextIpPage.disabled = appState.ipPage >= totalPages;
+}
+
 export function setNoticeStatus(message, type = '') {
   state.noticeStatus.className = type ? `notice-status ${type}` : 'notice-status';
   state.noticeStatus.textContent = message || '';

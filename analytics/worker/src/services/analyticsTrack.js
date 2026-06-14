@@ -17,6 +17,11 @@ function normalizeBaseUrlHost(value) {
   }
 }
 
+function normalizeClientIp(request) {
+  const value = normalizeText(request?.headers?.get('CF-Connecting-IP'), 80);
+  return value && !/[\s,]/.test(value) ? value : '';
+}
+
 function createMetricBlobs(event) {
   const blob9 = event.event === 'ai_request'
     ? event.aiModelProvider
@@ -46,7 +51,7 @@ function createMetricBlobs(event) {
     blob10,
     blob11,
     blob12,
-    '',
+    event.clientIp,
     '',
     '',
     '',
@@ -57,7 +62,7 @@ function createMetricBlobs(event) {
   ];
 }
 
-export function normalizeTrackBody(body) {
+export function normalizeTrackBody(body, request) {
   const promptTokens = normalizeTokenNumber(body.prompt_tokens ?? body.promptTokens);
   const completionTokens = normalizeTokenNumber(body.completion_tokens ?? body.completionTokens);
   const totalTokens = normalizeTokenNumber(body.total_tokens ?? body.totalTokens) || promptTokens + completionTokens;
@@ -73,6 +78,7 @@ export function normalizeTrackBody(body) {
     arch: normalizeText(body.arch, 50),
     clientId: normalizeText(body.client_id || body.clientId, 120),
     clientCreatedAt: normalizeText(body.client_created_at || body.clientCreatedAt, 20).slice(0, 10),
+    clientIp: normalizeClientIp(request),
     configKey: normalizeText(body.config_key || body.configKey, 80),
     configValue: normalizeMetricValue(body.config_value ?? body.configValue, 200),
     aiRequestType,

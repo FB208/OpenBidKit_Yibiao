@@ -1,6 +1,6 @@
 import { json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
-import { queryStatsClientDetail, queryStatsClients } from '../services/analyticsStatsStore.js';
-import { isValidProjectName, logQueryError, normalizeText } from '../utils.js';
+import { queryStatsClientDetail, queryStatsClients, queryStatsIpStats } from '../services/analyticsStatsStore.js';
+import { isValidProjectName, logQueryError, normalizeText, safePage } from '../utils.js';
 
 function normalizeClientDetailRange(value) {
   const range = normalizeText(value, 20);
@@ -49,6 +49,30 @@ export async function handleClientDetail(request, env, url) {
     return json({ code: 0, projectName, ...(await queryStatsClientDetail(env, projectName, clientId, range)) });
   } catch (error) {
     logQueryError('client-detail', error);
+    return json({ code: 500, message: 'query failed' }, { status: 500 });
+  }
+}
+
+export async function handleIpStats(request, env, url) {
+  if (request.method !== 'GET') {
+    return methodNotAllowed();
+  }
+
+  if (!requireAdmin(request, env)) {
+    return unauthorized();
+  }
+
+  const projectName = normalizeText(url.searchParams.get('projectName'), 80);
+  const page = safePage(url.searchParams.get('page'));
+  const pageSize = 20;
+  if (!isValidProjectName(projectName)) {
+    return json({ code: 400, message: 'invalid projectName' }, { status: 400 });
+  }
+
+  try {
+    return json({ code: 0, projectName, ...(await queryStatsIpStats(env, projectName, page, pageSize)) });
+  } catch (error) {
+    logQueryError('ip-stats', error);
     return json({ code: 500, message: 'query failed' }, { status: 500 });
   }
 }

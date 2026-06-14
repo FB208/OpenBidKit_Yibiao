@@ -174,14 +174,15 @@ export async function recordTrackClient(env, event) {
   const result = await run(db, `
     INSERT INTO stats_clients (
       project_name, client_id, first_seen_at, first_seen_date, active_days,
-      last_active_date, last_active_version, platform, arch, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 0, '', '', ?, ?, ?, ?)
+      last_active_date, last_active_version, last_access_ip, platform, arch, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 0, '', '', ?, ?, ?, ?, ?)
     ON CONFLICT(project_name, client_id) DO NOTHING
   `, [
     event.projectName,
     event.clientId,
     updatedAt,
     event.clientCreatedAt,
+    event.clientIp || '',
     event.platform || '',
     event.arch || '',
     updatedAt,
@@ -304,7 +305,8 @@ export async function queryStatsClients(env, projectName) {
       first_seen_at AS firstSeenAt,
       active_days AS activeDays,
       last_active_date AS lastActiveDate,
-      last_active_version AS lastActiveVersion
+      last_active_version AS lastActiveVersion,
+      last_access_ip AS lastAccessIp
     FROM stats_clients
     WHERE project_name = ?
     ORDER BY last_active_date DESC, first_seen_at DESC, client_id ASC
@@ -316,7 +318,42 @@ export async function queryStatsClients(env, projectName) {
     activeDays: number(row.activeDays),
     lastActiveDate: row.lastActiveDate || '',
     lastActiveVersion: row.lastActiveVersion || '',
+    lastAccessIp: row.lastAccessIp || '',
   }));
+}
+
+export async function queryStatsIpStats(env, projectName, page, pageSize) {
+  const db = requireStatsDb(env);
+  const normalizedPage = Math.max(1, Math.floor(number(page) || 1));
+  const normalizedPageSize = Math.min(100, Math.max(1, Math.floor(number(pageSize) || 20)));
+  const offset = (normalizedPage - 1) * normalizedPageSize;
+  const total = await first(db, `
+    SELECT COUNT(*) AS count
+    FROM (
+      SELECT last_access_ip
+      FROM stats_clients
+      WHERE project_name = ? AND last_access_ip != ''
+      GROUP BY last_access_ip
+    )
+  `, [projectName]);
+  const rows = await all(db, `
+    SELECT last_access_ip AS ip, COUNT(*) AS clientCount
+    FROM stats_clients
+    WHERE project_name = ? AND last_access_ip != ''
+    GROUP BY last_access_ip
+    ORDER BY clientCount DESC, last_access_ip ASC
+    LIMIT ? OFFSET ?
+  `, [projectName, normalizedPageSize, offset]);
+
+  return {
+    page: normalizedPage,
+    pageSize: normalizedPageSize,
+    total: number(total?.count),
+    items: rows.map((row) => ({
+      ip: row.ip || '',
+      clientCount: number(row.clientCount),
+    })),
+  };
 }
 
 export async function queryStatsClientDetail(env, projectName, clientId, range) {
@@ -606,6 +643,7 @@ async function queryRollupData(env, projectName, activityDate, options = {}) {
         ${businessDateTimeSqlExpression('min(timestamp)')} AS firstSeenAt,
         max(timestamp) AS lastSeenAt,
         argMax(${versionExpr}, timestamp) AS lastVersion,
+        argMax(blob13, timestamp) AS lastAccessIp,
         argMax(blob5, timestamp) AS platform,
         argMax(blob6, timestamp) AS arch
       FROM ${DATASET}
@@ -807,12 +845,13 @@ async function upsertRollupData(db, projectName, activityDate, data, options = {
     await run(db, `
       INSERT INTO stats_clients (
         project_name, client_id, first_seen_at, first_seen_date, active_days,
-        last_active_date, last_active_version, platform, arch, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+        last_active_date, last_active_version, last_access_ip, platform, arch, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(project_name, client_id) DO UPDATE SET
         active_days = stats_clients.active_days + 1,
         last_active_date = CASE WHEN excluded.last_active_date >= stats_clients.last_active_date THEN excluded.last_active_date ELSE stats_clients.last_active_date END,
         last_active_version = CASE WHEN excluded.last_active_date >= stats_clients.last_active_date THEN excluded.last_active_version ELSE stats_clients.last_active_version END,
+        last_access_ip = CASE WHEN excluded.last_access_ip != '' AND excluded.last_active_date >= stats_clients.last_active_date THEN excluded.last_access_ip ELSE stats_clients.last_access_ip END,
         platform = CASE WHEN excluded.platform != '' THEN excluded.platform ELSE stats_clients.platform END,
         arch = CASE WHEN excluded.arch != '' THEN excluded.arch ELSE stats_clients.arch END,
         updated_at = excluded.updated_at
@@ -823,6 +862,7 @@ async function upsertRollupData(db, projectName, activityDate, data, options = {
       activityDate,
       activityDate,
       normalizedVersion(row.lastVersion),
+      normalizeText(row.lastAccessIp, 80),
       normalizeText(row.platform, 50),
       normalizeText(row.arch, 50),
       updatedAt,

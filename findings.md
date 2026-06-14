@@ -1,6 +1,7 @@
 # Findings
 
 ## Research Log
+- IP 统计实现边界：公网 IP 只从 Worker 请求头 `CF-Connecting-IP` 获取，不接受客户端自报；AE 使用空闲 `blob13` 保存 `client_ip`；长期聚合写入 `stats_clients.last_access_ip`，Dashboard IP 统计从 D1 分组分页，避免对 AE 做高基数分页查询。
 - 本轮补字段边界已确认：`stats_versions.client_count` 只来自 `stats_clients.last_active_version` 当前分组重算覆盖；`stats_models.total_tokens` 来自 AE `ai_request` 的 `SUM(double4 * _sample_interval)` 并历史累加；页面访问排行不增加客户端数。
 - 当前 `analyticsStatsStore.js` 历史访问查询只返回 `stats_versions.event_count`，近期 AE 版本查询只返回事件数；需要同步返回版本客户端数。当前模型查询和 rollup 只处理 `request_count`，需要同步返回/写入 `total_tokens`。
 - 近期版本客户端数不在事件数查询里依赖 `NULL` 表达式，改为单独 AE 查询 `blob7 != ''` 的 `COUNT(DISTINCT blob7)` 后在 Worker 合并，降低 Analytics Engine SQL 兼容风险。

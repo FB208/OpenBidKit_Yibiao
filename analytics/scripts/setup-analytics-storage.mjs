@@ -259,6 +259,11 @@ function ensureAnalyticsColumns() {
       column: 'total_tokens',
       sql: 'ALTER TABLE stats_models ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0',
     },
+    {
+      table: 'stats_clients',
+      column: 'last_access_ip',
+      sql: 'ALTER TABLE stats_clients ADD COLUMN last_access_ip TEXT NOT NULL DEFAULT \'\'',
+    },
   ];
 
   for (const item of columns) {
@@ -278,7 +283,28 @@ function ensureAnalyticsColumns() {
   }
 }
 
+function ensureAnalyticsIndexes() {
+  const indexes = [
+    {
+      name: 'idx_stats_clients_project_last_access_ip',
+      sql: 'CREATE INDEX IF NOT EXISTS idx_stats_clients_project_last_access_ip ON stats_clients (project_name, last_access_ip)',
+    },
+  ];
+
+  for (const item of indexes) {
+    const result = runWrangler(['d1', 'execute', d1BindingName, '--remote', '--command', item.sql]);
+    if (result.status === 0) {
+      console.log(`ANALYTICS_DB index ensured: ${item.name}`);
+      continue;
+    }
+
+    console.error(result.output);
+    process.exit(result.status || 1);
+  }
+}
+
 ensureD1Database();
 ensureCronTrigger();
 applyAnalyticsMigrations();
 ensureAnalyticsColumns();
+ensureAnalyticsIndexes();

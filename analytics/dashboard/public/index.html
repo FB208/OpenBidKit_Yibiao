@@ -46,6 +46,7 @@
     <nav class="tabs" aria-label="看板标签页">
       <button class="tab-button" type="button" data-tab-button="overview">概览</button>
       <button class="tab-button" type="button" data-tab-button="clients">客户端统计</button>
+      <button class="tab-button" type="button" data-tab-button="ips">IP 统计</button>
       <button class="tab-button" type="button" data-tab-button="traffic">访问分析</button>
       <button class="tab-button" type="button" data-tab-button="config">配置使用</button>
       <button class="tab-button" type="button" data-tab-button="models">模型使用</button>
@@ -94,6 +95,25 @@
           </div>
         </div>
         <div id="clientsTable"></div>
+      </section>
+    </section>
+
+    <section id="tab-ips" class="tab-panel" data-tab-panel="ips">
+      <section class="panel section">
+        <div class="section-head">
+          <div>
+            <h2>IP 统计</h2>
+            <p>按客户端最后访问 IP 汇总，仅展示已记录 IP 的客户端。</p>
+          </div>
+          <div class="pager">
+            <button id="prevIpPage" type="button">上一页</button>
+            <span id="ipPageInfo">第 1 页</span>
+            <input id="ipPageInput" type="number" min="1" value="1" aria-label="跳转 IP 统计页码" />
+            <button id="jumpIpPage" type="button">跳转</button>
+            <button id="nextIpPage" type="button">下一页</button>
+          </div>
+        </div>
+        <div id="ipStatsTable"></div>
       </section>
     </section>
 

@@ -1,5 +1,5 @@
 import { corsHeaders, json } from './http.js';
-import { handleClients, handleClientDetail } from './routes/clients.js';
+import { handleClients, handleClientDetail, handleIpStats } from './routes/clients.js';
 import { handleConfigUsage, handleModelUsage } from './routes/configUsage.js';
 import { handleGitHubRepoStats } from './routes/githubRepoStats.js';
 import { handleHealth } from './routes/health.js';
@@ -25,6 +25,7 @@ const routes = new Map([
   ['/api/overview', handleOverview],
   ['/api/clients', handleClients],
   ['/api/client-detail', handleClientDetail],
+  ['/api/ip-stats', handleIpStats],
   ['/api/traffic', handleTraffic],
   ['/api/latest', handleLatest],
   ['/api/retention', handleRetention],

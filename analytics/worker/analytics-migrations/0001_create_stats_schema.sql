@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS stats_clients (
   active_days INTEGER NOT NULL DEFAULT 0,
   last_active_date TEXT NOT NULL DEFAULT '',
   last_active_version TEXT NOT NULL DEFAULT '',
+  last_access_ip TEXT NOT NULL DEFAULT '',
   platform TEXT NOT NULL DEFAULT '',
   arch TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
@@ -29,6 +30,9 @@ ON stats_clients (project_name, first_seen_date);
 
 CREATE INDEX IF NOT EXISTS idx_stats_clients_project_last_active
 ON stats_clients (project_name, last_active_date);
+
+CREATE INDEX IF NOT EXISTS idx_stats_clients_project_last_access_ip
+ON stats_clients (project_name, last_access_ip);
 
 CREATE TABLE IF NOT EXISTS stats_daily (
   project_name TEXT NOT NULL,
