@@ -264,6 +264,10 @@ button:disabled {
   font-size: 18px;
 }
 
+#tab-traffic > .panel.section {
+  margin-bottom: 20px;
+}
+
 .section-head {
   display: flex;
   align-items: center;
