@@ -1,5 +1,35 @@
 # Task Plan
 
+## Current Task: Analytics config_usage 键值对改造
+
+### Goal
+把 `config_usage` 从“每个配置项占一个 AE blob”改为 `config_key/config_value` 键值对格式，释放 `blob13-blob20`；`ai_request` 和 `resource_click` 字段保持不变；D1 `stats_configs` 历史不清空且继续展示；AE 旧格式不再兼容，但统计接口返回空数据不报错。
+
+### Phases
+- [completed] 1. 客户端 `trackConfigUsage()` 改为每个配置项拆成一条键值对事件。
+- [completed] 2. Worker `/track` 改为写入 `blob9=config_key`、`blob10=config_value`，校验只保留 `client_id/client_created_at/version`。
+- [completed] 3. Worker 配置统计近期查询和 Cron 汇总改为按 `blob9/blob10` 聚合。
+- [completed] 4. Dashboard 配置项补充原方案覆盖审计展示。
+- [completed] 5. 同步 README、逻辑梳理和计划记录。
+- [completed] 6. 运行 Worker、Dashboard、Client 验证。
+
+### Decisions
+- 不清空 D1 `stats_configs`，因为旧历史汇总已经是 `field_key/value/report_count`，可与新键值对逻辑自然合并。
+- 不兼容 AE 旧格式，不做旧 blob 字段 fallback。
+- 旧客户端如果继续旧格式上报配置使用，不进入新的近期配置统计和后续 Cron 配置汇总。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 本轮实现 | 相关语法检查、模块加载、客户端构建和 diff check 通过 |
+
+### Validation
+- `node --check` 通过：`analyticsTrack.js`、`analyticsStatsStore.js`、`routes/track.js`、Dashboard `configUsage.js`。
+- Worker 改动模块动态 import 通过。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- Worker 旧配置 blob 字段残留扫描通过。
+- `git diff --check` 通过，仅有 LF/CRLF 提示。
+
 ## Current Task: Analytics stats 两个字段补齐
 
 ### Goal

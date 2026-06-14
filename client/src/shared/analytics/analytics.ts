@@ -27,6 +27,22 @@ interface ConfigUsagePayload {
   enable_original_plan_coverage_audit?: boolean;
 }
 
+const configUsageFields: Array<[keyof ConfigUsagePayload, string]> = [
+  ['file_parser_provider', 'fileParserProviders'],
+  ['image_provider', 'imageProviders'],
+  ['image_model_status', 'imageModelStatuses'],
+  ['bid_analysis_mode', 'bidAnalysisModes'],
+  ['outline_mode', 'outlineModes'],
+  ['table_requirement', 'tableRequirements'],
+  ['use_mermaid_images', 'useMermaidImages'],
+  ['use_ai_images', 'useAiImages'],
+  ['content_concurrency', 'contentConcurrencies'],
+  ['content_generation_action', 'contentGenerationActions'],
+  ['minimum_words', 'minimumWords'],
+  ['enable_consistency_audit', 'enableConsistencyAudit'],
+  ['enable_original_plan_coverage_audit', 'enableOriginalPlanCoverageAudit'],
+];
+
 let appOpenTracked = false;
 let lastTrackedPage = '';
 let versionPromise: Promise<string> | null = null;
@@ -126,6 +142,10 @@ function normalizeUsagePayload(payload: ConfigUsagePayload) {
   };
 }
 
+function configUsageValueText(value: unknown) {
+  return String(value ?? '').trim();
+}
+
 function sendAnalytics(event: AnalyticsEvent, page = '', payload: Record<string, unknown> = {}) {
   void Promise.all([getVersion(), getAnalyticsIdentity()]).then(([version, identity]) => {
     fetch(ANALYTICS_ENDPOINT, {
@@ -164,10 +184,19 @@ export function trackPageView(page: string) {
 
 export function trackConfigUsage(payload: ConfigUsagePayload = {}, config?: ClientConfig | null) {
   const send = (loadedConfig?: ClientConfig | null) => {
-    sendAnalytics('config_usage', '', normalizeUsagePayload({
+    const usagePayload = normalizeUsagePayload({
       ...buildBaseConfigUsage(loadedConfig),
       ...payload,
-    }));
+    });
+
+    for (const [payloadKey, configKey] of configUsageFields) {
+      const configValue = configUsageValueText(usagePayload[payloadKey]);
+      if (!configValue) continue;
+      sendAnalytics('config_usage', '', {
+        config_key: configKey,
+        config_value: configValue,
+      });
+    }
   };
 
   if (config) {

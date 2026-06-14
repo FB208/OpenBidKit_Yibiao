@@ -88,6 +88,10 @@ function allowedEventsSql() {
   return `(${Array.from(ALLOWED_EVENTS).map((event) => sqlString(event)).join(', ')})`;
 }
 
+function configUsageKeysSql() {
+  return `(${CONFIG_USAGE_FIELDS.map((field) => sqlString(field.key)).join(', ')})`;
+}
+
 function businessDateCondition(activityDate) {
   return `${businessDateSqlExpression()} = ${sqlString(activityDate)}`;
 }
@@ -453,12 +457,13 @@ async function queryConfigAeField(env, projectName, range, field) {
   const project = sqlString(projectName);
   const result = await queryAnalytics(env, `
     SELECT
-      ${field.blob} AS value,
+      blob10 AS value,
       SUM(_sample_interval) AS events
     FROM ${DATASET}
     WHERE blob1 = ${project}
       AND blob2 = 'config_usage'
-      AND ${field.blob} != ''
+      AND blob9 = ${sqlString(field.key)}
+      AND blob10 != ''
       AND ${aeRangeCondition(range)}
     GROUP BY value
     ORDER BY events DESC, value ASC
@@ -572,7 +577,7 @@ async function queryRollupData(env, projectName, activityDate, options = {}) {
     clients,
     pages,
     versions,
-    configResults,
+    configs,
     models,
     resources,
   ] = await Promise.all([
@@ -632,16 +637,17 @@ async function queryRollupData(env, projectName, activityDate, options = {}) {
       GROUP BY version
       LIMIT ${MAX_ANALYTICS_ROWS}
     `),
-    Promise.all(CONFIG_USAGE_FIELDS.map((field) => queryAnalytics(env, `
-      SELECT ${field.blob} AS value, SUM(_sample_interval) AS events
+    queryAnalytics(env, `
+      SELECT blob9 AS fieldKey, blob10 AS value, SUM(_sample_interval) AS events
       FROM ${DATASET}
       WHERE blob1 = ${project}
         AND blob2 = 'config_usage'
-        AND ${field.blob} != ''
+        AND blob9 IN ${configUsageKeysSql()}
+        AND blob10 != ''
         AND ${dateWhere}
-      GROUP BY value
+      GROUP BY fieldKey, value
       LIMIT ${MAX_ANALYTICS_ROWS}
-    `))),
+    `),
     queryAnalytics(env, `
       SELECT
         blob12 AS requestType,
@@ -677,7 +683,7 @@ async function queryRollupData(env, projectName, activityDate, options = {}) {
     clients: clients.data || [],
     pages: pages.data || [],
     versions: versions.data || [],
-    configs: CONFIG_USAGE_FIELDS.flatMap((field, index) => (configResults[index].data || []).map((row) => ({ ...row, fieldKey: field.key }))),
+    configs: configs.data || [],
     models: models.data || [],
     resources: resources.data || [],
   };

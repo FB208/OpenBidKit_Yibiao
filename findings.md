@@ -4,6 +4,7 @@
 - 本轮补字段边界已确认：`stats_versions.client_count` 只来自 `stats_clients.last_active_version` 当前分组重算覆盖；`stats_models.total_tokens` 来自 AE `ai_request` 的 `SUM(double4 * _sample_interval)` 并历史累加；页面访问排行不增加客户端数。
 - 当前 `analyticsStatsStore.js` 历史访问查询只返回 `stats_versions.event_count`，近期 AE 版本查询只返回事件数；需要同步返回版本客户端数。当前模型查询和 rollup 只处理 `request_count`，需要同步返回/写入 `total_tokens`。
 - 近期版本客户端数不在事件数查询里依赖 `NULL` 表达式，改为单独 AE 查询 `blob7 != ''` 的 `COUNT(DISTINCT blob7)` 后在 Worker 合并，降低 Analytics Engine SQL 兼容风险。
+- `config_usage` 改为 AE 键值对格式后，`stats_configs(field_key,value,report_count)` 不需要改表，D1 历史数据可继续展示和累加；旧 AE 格式只会被新查询自然忽略，不需要兼容分支。
 - 当前 `stats_dimension_clients` 只服务页面/版本/配置/模型/资源维度的历史唯一客户端数，但 `client/doc/统计改造计划.md` 对这些模块只要求“页面+数量、版本+数量、配置项累加数、模型项累加数、资源下载量”，因此该交叉明细表和所有 `client_count` 是过度设计，应删除。
 - 资源点击量应从 `ANALYTICS_DB.stats_resource_clicks` 迁出：计划要求 `openbidkit-resources.resources` 新增下载量/点击量列，页面展示 `RESOURCE_DB` 累计量 + AE 今天数据；历史回填应直接设置资源累计点击量，避免重跑脚本重复累加。
 - `/track` 实时写客户端当前窗口为最近 3 天，与计划的“不超过 1 天”不一致；应改为业务日期差 `0` 或 `1` 天内才写入 D1。

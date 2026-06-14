@@ -24,6 +24,7 @@ function labelConfigValue(groupKey, value) {
     useMermaidImages: { true: '开启', false: '关闭' },
     useAiImages: { true: '开启', false: '关闭' },
     enableConsistencyAudit: { true: '开启', false: '关闭' },
+    enableOriginalPlanCoverageAudit: { true: '开启', false: '关闭' },
     contentGenerationActions: {
       start: '首次生成',
       'continue': '继续生成',
@@ -49,9 +50,10 @@ const configUsageGroups = [
   ['tableRequirements', '正文表格需求'],
   ['minimumWords', '最低字数'],
   ['contentConcurrencies', '正文生成并发速度'],
-  ['contentGenerationActions', '正文生成动作'],
-  ['enableConsistencyAudit', '全文一致性审计'],
-  ['useMermaidImages', 'Mermaid 图片'],
+    ['contentGenerationActions', '正文生成动作'],
+    ['enableConsistencyAudit', '全文一致性审计'],
+    ['enableOriginalPlanCoverageAudit', '原方案覆盖审计'],
+    ['useMermaidImages', 'Mermaid 图片'],
   ['useAiImages', 'AI 生图'],
 ];
 

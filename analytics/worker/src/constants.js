@@ -17,18 +17,19 @@ export const GITHUB_REPO_STATS_CACHE_TTL_SECONDS = 1800;
 export const GITHUB_REPO_STATS_STALE_TTL_SECONDS = 604800;
 
 export const CONFIG_USAGE_FIELDS = [
-  { key: 'fileParserProviders', blob: 'blob9' },
-  { key: 'enableConsistencyAudit', blob: 'blob10' },
-  { key: 'imageProviders', blob: 'blob11' },
-  { key: 'imageModelStatuses', blob: 'blob12' },
-  { key: 'bidAnalysisModes', blob: 'blob13' },
-  { key: 'outlineModes', blob: 'blob14' },
-  { key: 'tableRequirements', blob: 'blob15' },
-  { key: 'useMermaidImages', blob: 'blob16' },
-  { key: 'useAiImages', blob: 'blob17' },
-  { key: 'contentConcurrencies', blob: 'blob18' },
-  { key: 'contentGenerationActions', blob: 'blob19' },
-  { key: 'minimumWords', blob: 'blob20' },
+  { key: 'fileParserProviders' },
+  { key: 'imageProviders' },
+  { key: 'imageModelStatuses' },
+  { key: 'bidAnalysisModes' },
+  { key: 'outlineModes' },
+  { key: 'tableRequirements' },
+  { key: 'minimumWords' },
+  { key: 'contentConcurrencies' },
+  { key: 'contentGenerationActions' },
+  { key: 'enableConsistencyAudit' },
+  { key: 'enableOriginalPlanCoverageAudit' },
+  { key: 'useMermaidImages' },
+  { key: 'useAiImages' },
 ];
 
 export const MODEL_USAGE_FIELDS = [
