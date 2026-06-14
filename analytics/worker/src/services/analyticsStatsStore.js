@@ -766,10 +766,13 @@ async function markRollupRunning(db, projectName, activityDate, updatedAt) {
 
 async function markRollupSuccess(db, projectName, activityDate, updatedAt) {
   await run(db, `
-    UPDATE stats_rollup_runs
-    SET status = 'success', completed_at = ?, error = ''
-    WHERE project_name = ? AND activity_date = ?
-  `, [updatedAt, projectName, activityDate]);
+    INSERT INTO stats_rollup_runs (project_name, activity_date, status, started_at, completed_at, error)
+    VALUES (?, ?, 'success', ?, ?, '')
+    ON CONFLICT(project_name, activity_date) DO UPDATE SET
+      status = 'success',
+      completed_at = excluded.completed_at,
+      error = ''
+  `, [projectName, activityDate, updatedAt, updatedAt]);
 }
 
 async function markRollupFailed(db, projectName, activityDate, updatedAt, error) {
@@ -778,6 +781,16 @@ async function markRollupFailed(db, projectName, activityDate, updatedAt, error)
     SET status = 'failed', completed_at = ?, error = ?
     WHERE project_name = ? AND activity_date = ?
   `, [updatedAt, normalizeText(error?.message || String(error), 1000), projectName, activityDate]);
+}
+
+async function hasDailyRollupRow(db, projectName, activityDate) {
+  const row = await first(db, `
+    SELECT 1 AS existsFlag
+    FROM stats_daily
+    WHERE project_name = ? AND activity_date = ?
+    LIMIT 1
+  `, [projectName, activityDate]);
+  return Boolean(row?.existsFlag);
 }
 
 async function incrementResourceClickCounts(env, rows) {
@@ -946,6 +959,11 @@ export async function rollupStatsDay(env, projectName, activityDate, options = {
   if (existing?.status === 'success') {
     return { projectName, activityDate, skipped: true };
   }
+  if (await hasDailyRollupRow(db, projectName, activityDate)) {
+    console.warn(`[analytics] rollup skipped to avoid duplicated counters: ${projectName}/${activityDate} status=${existing?.status || 'missing'}`);
+    await markRollupSuccess(db, projectName, activityDate, nowText());
+    return { projectName, activityDate, skipped: true };
+  }
 
   const startedAt = nowText();
   await markRollupRunning(db, projectName, activityDate, startedAt);
@@ -965,6 +983,11 @@ export async function rollupStatsDay(env, projectName, activityDate, options = {
     }
     return { projectName, activityDate, skipped: false };
   } catch (error) {
+    if (await hasDailyRollupRow(db, projectName, activityDate)) {
+      console.warn(`[analytics] rollup marked success after partial write to avoid duplicated counters: ${projectName}/${activityDate}`, error?.message || String(error));
+      await markRollupSuccess(db, projectName, activityDate, nowText());
+      return { projectName, activityDate, skipped: false, partial: true };
+    }
     await markRollupFailed(db, projectName, activityDate, nowText(), error);
     throw error;
   }
