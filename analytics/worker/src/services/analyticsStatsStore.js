@@ -372,7 +372,7 @@ export async function queryStatsTraffic(env, projectName, range) {
         LIMIT 100
       `, [projectName]),
       all(db, `
-        SELECT version, event_count AS count
+        SELECT version, event_count AS count, client_count AS clients
         FROM stats_versions
         WHERE project_name = ?
       `, [projectName]),
@@ -382,6 +382,7 @@ export async function queryStatsTraffic(env, projectName, range) {
       versions: sortVersionRows(versions.map((row) => ({
         version: normalizedVersion(row.version),
         count: number(row.count),
+        clients: number(row.clients),
       }))),
     };
   }
@@ -389,7 +390,7 @@ export async function queryStatsTraffic(env, projectName, range) {
   const project = sqlString(projectName);
   const rangeWhere = aeRangeCondition(range);
   const versionExpr = `if(blob4 = '', ${sqlString(UNKNOWN_VERSION)}, blob4)`;
-  const [pages, versions] = await Promise.all([
+  const [pages, versions, versionClients] = await Promise.all([
     queryAnalytics(env, `
       SELECT
         blob3 AS page,
@@ -413,13 +414,27 @@ export async function queryStatsTraffic(env, projectName, range) {
       GROUP BY version
       LIMIT 100
     `),
+    queryAnalytics(env, `
+      SELECT
+        ${versionExpr} AS version,
+        COUNT(DISTINCT blob7) AS clients
+      FROM ${DATASET}
+      WHERE blob1 = ${project}
+        AND blob2 IN ${allowedEventsSql()}
+        AND blob7 != ''
+        AND ${rangeWhere}
+      GROUP BY version
+      LIMIT 100
+    `),
   ]);
+  const clientsByVersion = new Map((versionClients.data || []).map((row) => [normalizedVersion(row.version), number(row.clients)]));
 
   return {
     pages: (pages.data || []).map((row) => ({ page: row.page, count: number(row.count) })),
     versions: sortVersionRows((versions.data || []).map((row) => ({
       version: normalizedVersion(row.version),
       count: number(row.count),
+      clients: clientsByVersion.get(normalizedVersion(row.version)) || 0,
     }))),
   };
 }
@@ -472,7 +487,8 @@ async function queryModelHistoryField(db, projectName, field, filters) {
       provider,
       endpoint_host,
       model,
-      request_count AS events
+      request_count AS events,
+      total_tokens AS totalTokens
     FROM stats_models
     WHERE project_name = ? AND request_type = ?${modelFiltersSql(filters)}
     ORDER BY events DESC, model ASC
@@ -487,7 +503,8 @@ async function queryModelAeField(env, projectName, range, field, filters) {
       blob9 AS provider,
       blob10 AS endpoint_host,
       blob11 AS model,
-      SUM(_sample_interval) AS events
+      SUM(_sample_interval) AS events,
+      SUM(double4 * _sample_interval) AS totalTokens
     FROM ${DATASET}
     WHERE blob1 = ${project}
       AND blob2 = 'ai_request'
@@ -516,6 +533,7 @@ export async function queryStatsModelUsage(env, projectName, range, filters) {
       endpoint_host: row.endpoint_host || '',
       model: row.model || '',
       events: number(row.events),
+      totalTokens: number(row.totalTokens),
     }));
   });
   return usage;
@@ -630,7 +648,8 @@ async function queryRollupData(env, projectName, activityDate, options = {}) {
         blob9 AS provider,
         blob10 AS endpointHost,
         blob11 AS model,
-        SUM(_sample_interval) AS requestCount
+        SUM(_sample_interval) AS requestCount,
+        SUM(double4 * _sample_interval) AS totalTokens
       FROM ${DATASET}
       WHERE blob1 = ${project}
         AND blob2 = 'ai_request'
@@ -662,6 +681,31 @@ async function queryRollupData(env, projectName, activityDate, options = {}) {
     models: models.data || [],
     resources: resources.data || [],
   };
+}
+
+async function refreshVersionClientCounts(db, projectName, updatedAt) {
+  await run(db, `
+    UPDATE stats_versions
+    SET client_count = 0, updated_at = ?
+    WHERE project_name = ?
+  `, [updatedAt, projectName]);
+
+  const rows = await all(db, `
+    SELECT last_active_version AS version, COUNT(*) AS clientCount
+    FROM stats_clients
+    WHERE project_name = ? AND last_active_version != ''
+    GROUP BY last_active_version
+  `, [projectName]);
+
+  for (const row of rows) {
+    await run(db, `
+      INSERT INTO stats_versions (project_name, version, event_count, client_count, updated_at)
+      VALUES (?, ?, 0, ?, ?)
+      ON CONFLICT(project_name, version) DO UPDATE SET
+        client_count = excluded.client_count,
+        updated_at = excluded.updated_at
+    `, [projectName, normalizedVersion(row.version), number(row.clientCount), updatedAt]);
+  }
 }
 
 async function markRollupRunning(db, projectName, activityDate, updatedAt) {
@@ -812,10 +856,11 @@ async function upsertRollupData(db, projectName, activityDate, data, options = {
 
   for (const row of data.models) {
     await run(db, `
-      INSERT INTO stats_models (project_name, request_type, provider, endpoint_host, model, request_count, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO stats_models (project_name, request_type, provider, endpoint_host, model, request_count, total_tokens, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(project_name, request_type, provider, endpoint_host, model) DO UPDATE SET
         request_count = stats_models.request_count + excluded.request_count,
+        total_tokens = stats_models.total_tokens + excluded.total_tokens,
         updated_at = excluded.updated_at
     `, [
       projectName,
@@ -824,9 +869,12 @@ async function upsertRollupData(db, projectName, activityDate, data, options = {
       normalizeText(row.endpointHost, 120),
       normalizeText(row.model, 160),
       number(row.requestCount),
+      number(row.totalTokens),
       updatedAt,
     ]);
   }
+
+  await refreshVersionClientCounts(db, projectName, updatedAt);
 
   await run(db, `
     UPDATE stats_totals

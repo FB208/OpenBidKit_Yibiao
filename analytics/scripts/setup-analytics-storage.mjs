@@ -247,6 +247,38 @@ function applyAnalyticsMigrations() {
   }
 }
 
+function ensureAnalyticsColumns() {
+  const columns = [
+    {
+      table: 'stats_versions',
+      column: 'client_count',
+      sql: 'ALTER TABLE stats_versions ADD COLUMN client_count INTEGER NOT NULL DEFAULT 0',
+    },
+    {
+      table: 'stats_models',
+      column: 'total_tokens',
+      sql: 'ALTER TABLE stats_models ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0',
+    },
+  ];
+
+  for (const item of columns) {
+    const result = runWrangler(['d1', 'execute', d1BindingName, '--remote', '--command', item.sql]);
+    if (result.status === 0) {
+      console.log(`ANALYTICS_DB column added: ${item.table}.${item.column}`);
+      continue;
+    }
+
+    if (/duplicate column name|already exists/i.test(result.output)) {
+      console.log(`ANALYTICS_DB column already exists: ${item.table}.${item.column}`);
+      continue;
+    }
+
+    console.error(result.output);
+    process.exit(result.status || 1);
+  }
+}
+
 ensureD1Database();
 ensureCronTrigger();
 applyAnalyticsMigrations();
+ensureAnalyticsColumns();

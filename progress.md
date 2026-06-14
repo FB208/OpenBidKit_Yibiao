@@ -1,6 +1,8 @@
 # Progress
 
 ## Session Log
+- 已完成 Analytics stats 两个字段补齐：schema 和 setup 自动补 `stats_versions.client_count`、`stats_models.total_tokens`；Cron 模型汇总写入 `total_tokens`，版本客户端数在客户端最近版本更新后从 `stats_clients.last_active_version` 分组覆盖；历史/近期查询和 Dashboard 展示已同步；新增 `backfill:analytics-stat-fields`，只补这两个字段。验证通过相关 `node --check`、模块动态 import、package JSON 解析和 `git diff --check`，仅有 LF/CRLF 提示。
+- 继续补 Analytics stats 两个字段：已恢复计划上下文并读取核心实现，确认需要在 `rollupStatsDay()` 写入 `stats_models.total_tokens`，并在更新 `stats_clients.last_active_version` 后按当前最后活跃版本重算覆盖 `stats_versions.client_count`；Dashboard 需展示版本客户端数和模型 Total Tokens。
 - 开始执行 Analytics 统计改造计划收敛实现：用户已手动删除线上 `openbidkit-analytics`，本轮直接按 `client/doc/统计改造计划.md` 简化新版 schema；计划删除 `stats_dimension_clients` 和维度客户端计数，资源累计点击量迁入 `openbidkit-resources.resources.click_count`，客户端资源页改为显示完整累计点击量。
 - 已完成 Analytics 统计改造计划收敛实现：`ANALYTICS_DB` schema 删除维度客户端关系表、资源点击表和所有历史维度 `client_count`；Cron 只累加计划要求的页面/版本/配置/模型数量；`/track` 实时写客户端窗口改为当前业务日或前 1 天；资源点击历史写入 `RESOURCE_DB.resources.click_count`，接口展示 D1 累计 + AE 今天；Dashboard 和 Client 已同步展示完整累计点击量。验证通过 Worker/脚本/Dashboard `node --check`、Worker 模块 import、`cd client; npm run build` 和 `git diff --check`。
 - 已修复 scheduled rollup 资源库异常影响核心统计的问题：核心 `stats_*` 汇总现在不查询资源点击，完成写入并 `markRollupSuccess()` 后才单独尝试资源点击累加；`RESOURCE_DB` 缺失或资源点击更新失败只记录 warning，不会让每日概览/访问/配置/模型统计失败或留下可重试重复累加风险。验证通过 `node --check` 和模块动态 import。

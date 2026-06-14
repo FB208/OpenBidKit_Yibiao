@@ -1,5 +1,35 @@
 # Task Plan
 
+## Current Task: Analytics stats 两个字段补齐
+
+### Goal
+只在现有 `stats_*` 表上补齐 `stats_versions.client_count` 和 `stats_models.total_tokens`：不新增表，不给页面排行增加客户端数；版本客户端数来自 `stats_clients.last_active_version` 当前分组重算，模型 Total Tokens 来自 AE `ai_request.double4`。
+
+### Phases
+- [completed] 1. 更新 schema 和 setup 自动补列。
+- [completed] 2. 更新 Worker rollup 和查询逻辑，写入/返回版本客户端数与模型 Total Tokens。
+- [completed] 3. 更新 Dashboard 展示。
+- [completed] 4. 新增只补两个字段的本地脚本和 npm 命令。
+- [completed] 5. 同步 README、逻辑梳理和计划记录。
+- [completed] 6. 运行语法检查、模块加载和 diff 检查。
+
+### Decisions
+- `stats_versions.client_count` 不从 AE 每日去重累加，统一由 `stats_clients.last_active_version` 分组覆盖。
+- `stats_models.total_tokens` 每日 Cron 继续累计；本地补字段脚本用 AE 历史总量覆盖写入，避免重跑翻倍。
+- 新本地脚本只处理这两个字段，不触碰资源点击量，也不重跑每日统计。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 本轮实现 | 相关语法检查、模块加载和 diff check 通过 |
+
+### Validation
+- `node --check` 通过：`analytics/worker/src/services/analyticsStatsStore.js`、`analytics/scripts/setup-analytics-storage.mjs`、`analytics/scripts/backfill-analytics-stat-fields.mjs`。
+- `node --check` 通过：Dashboard `traffic.js`、`configUsage.js`。
+- `analyticsStatsStore.js` 动态 import 通过。
+- `analytics/worker/package.json` JSON 解析通过。
+- `git diff --check` 通过，仅有 LF/CRLF 提示。
+
 ## Current Task: Analytics 统计改造计划收敛实现
 
 ### Goal

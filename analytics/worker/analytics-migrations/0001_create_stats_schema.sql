@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS stats_versions (
   project_name TEXT NOT NULL,
   version TEXT NOT NULL,
   event_count INTEGER NOT NULL DEFAULT 0,
+  client_count INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (project_name, version)
 );
@@ -74,6 +75,7 @@ CREATE TABLE IF NOT EXISTS stats_models (
   endpoint_host TEXT NOT NULL,
   model TEXT NOT NULL,
   request_count INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (project_name, request_type, provider, endpoint_host, model)
 );
