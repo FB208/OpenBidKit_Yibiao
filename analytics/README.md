@@ -168,7 +168,35 @@ Invoke-RestMethod `
 
 ## 历史回填
 
-当前不提供旧回填脚本。等新版逻辑稳定后，再单独按 `stats_*` 表结构编写统一历史回填脚本。
+新版历史回填脚本会按 Cron 同一套逻辑，把 Analytics Engine 中 `yibiao-client` 在脚本执行当天北京时间之前的所有历史日期汇总到 D1 `stats_*` 表。
+
+本地执行前，在 `analytics/scripts/.env` 中配置：
+
+| 变量 | 说明 |
+| --- | --- |
+| `CLOUDFLARE_ACCOUNT_ID` 或 `ACCOUNT_ID` | Cloudflare Account ID |
+| `CLOUDFLARE_API_TOKEN` | 具备 D1 Query 权限的 Cloudflare API Token |
+| `ANALYTICS_API_TOKEN` | Analytics Engine SQL Read Token |
+| `ANALYTICS_DB_ID` | 可选；不填则按 D1 名称 `openbidkit-analytics` 自动查找 |
+
+执行回填：
+
+```powershell
+cd analytics\worker
+npm run backfill:analytics-stats
+```
+
+注意事项：
+
+| 项 | 说明 |
+| --- | --- |
+| 项目 | 固定回填 `yibiao-client` |
+| 日期 | 自动发现 AE 中北京时间今天之前的所有有数据日期 |
+| 今天 | 脚本不回填今天，今天/7天/30天仍直接读 AE |
+| 重复保护 | `stats_rollup_runs.status = success` 的日期会跳过 |
+| 异常状态 | 已存在 `running/failed` 且没有 `stats_daily` 时会清理状态并重试；如果已有 `stats_daily` 会停止，避免重复累加污染 D1 |
+| 临时错误 | AE/D1 对 `429/500/502/503/504` 会自动重试，并打印 HTTP 状态、返回内容和 SQL 片段 |
+| 参数 | 脚本不接受命令行参数 |
 
 ## 排查
 

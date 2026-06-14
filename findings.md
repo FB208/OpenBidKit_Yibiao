@@ -1,6 +1,7 @@
 # Findings
 
 ## Research Log
+- Analytics stats 回填续跑保护：`stats_rollup_runs.status='success'` 是已完成日期的幂等跳过依据；`failed/running` 不能盲目重跑，因为聚合表是累计写入。安全边界是先查 `stats_daily`：没有当天行说明失败发生在统计数据写入前，可清理状态重试；已有当天行则可能已经部分累计，必须停止人工检查。
 - Analytics stats 历史回填脚本最稳妥的边界是复用 Worker `rollupStatsDay()`，而不是在脚本中复制一套 AE 聚合和 D1 upsert SQL；脚本只负责同目录 `.env`、远程 D1 API bridge、AE 历史日期发现和异常保护。
 - Cloudflare D1 REST Query API 可用于本地脚本直接写远程 D1：`POST /accounts/{account_id}/d1/database/{database_id}/query`，body 为 `{ sql, params }`；D1 database id 可通过 `GET /accounts/{account_id}/d1/database?name=openbidkit-analytics` 自动发现。
 - 历史回填不能静默重跑 `running/failed` 日期：新版聚合表按累计 `+ excluded` 写入，若失败前已经部分提交，直接重跑会重复累加；脚本应在发现非 success 的已有状态时停止，要求人工检查或重建库。

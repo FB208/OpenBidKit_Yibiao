@@ -1,6 +1,7 @@
 # Progress
 
 ## Session Log
+- 已增强 Analytics stats 回填脚本错误处理：AE 查询和 D1 REST 写入对 `429/500/502/503/504` 自动重试，错误日志包含 HTTP status、返回 body 和 SQL 片段；遇到历史 `failed/running` 状态时，如果当天没有 `stats_daily` 会清理状态并重试，如果已有 `stats_daily` 则停止，避免重复累加。`analyticsQuery.js` 同步增加 AE 查询重试和详细错误日志。验证通过脚本与 `analyticsQuery.js` 的 `node --check`，并验证脚本仍拒绝参数。
 - 已新增并按要求简化 Analytics stats 历史回填脚本：`analytics/scripts/backfill-analytics-stats.mjs` 不接受参数，固定读取同目录 `.env`，固定项目 `yibiao-client`，自动发现 AE 中北京时间今天之前的所有有数据日期；脚本用 Cloudflare D1 REST API 封装远程 `ANALYTICS_DB.prepare().bind().run/all/first()`，复用线上 `rollupStatsDay()` 写入新版 `stats_*` 表；跳过 success 日期，遇到 running/failed 状态停止以避免重复累加。新增 `npm run backfill:analytics-stats` 命令并更新 README。验证通过 `node --check` 和参数拒绝检查；本机没有 `analytics/scripts/.env`，未执行真实回填。
 - 已完成 Analytics 北京时间统一修复：客户端新生成 `analytics_created_at` 改为 `Asia/Shanghai` 日期；Worker 公共工具新增北京时间 SQL 表达式和自然日范围；`today/7/30/90` 近期 AE 查询、资源点击、项目兜底、最近事件、留存和 Cron 写入 `first_seen_at` 均统一为北京时间口径。验证通过相关 `node --check`、`cd client; npm run build`、北京时间边界用例和 `git diff --check`，仅有既有 chunk 体积警告与 LF/CRLF 提示。
 - 优化 `/track` D1 热路径：`recordTrackClient()` 现在只对 `client_created_at` 最近 3 天内的客户端尝试实时写 D1；同一 Worker 实例内通过有上限的内存 Set 避免重复尝试；去掉老客户端每条事件的 D1 SELECT；真实插入新客户端后才更新 `stats_totals.total_clients`；D1 写入失败只 warning，`/track` 仍返回成功。验证通过相关 `node --check`、热路径 grep 复扫和 `git diff --check -- analytics`。

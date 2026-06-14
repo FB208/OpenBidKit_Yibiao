@@ -11,12 +11,15 @@
 - [completed] 3. 新增 `analytics/worker` npm 命令 `backfill:analytics-stats`。
 - [completed] 4. 更新 `analytics/README.md` 历史回填说明。
 - [completed] 5. 运行脚本语法检查、帮助命令、dry-run 和 diff 检查。
+- [completed] 6. 增加 AE/D1 临时错误重试、详细错误日志和 `failed/running` 状态安全续跑保护。
 
 ### Decisions
 - 回填脚本不复制 Cron 聚合 SQL，直接 import `rollupStatsDay()`，保证历史回填和每天 02:00 汇总同口径。
 - 通过 Cloudflare D1 REST API 写远程 D1，不依赖本地 wrangler 登录；`analytics/scripts/.env` 提供 `CLOUDFLARE_API_TOKEN` / `ANALYTICS_API_TOKEN`。
 - 脚本不接受命令行参数，固定回填 `yibiao-client`，自动处理北京时间今天之前的 AE 历史日期；今天/7天/30天仍实时读 AE。
 - `stats_rollup_runs.status = success` 的日期跳过；存在 `running/failed` 状态时停止，避免重复累加污染。
+- 对 `429/500/502/503/504` 自动重试，并输出 HTTP 状态、返回内容和 SQL 片段。
+- 遇到 `failed/running` 状态时，只有当天没有 `stats_daily` 才清理状态重试；已有 `stats_daily` 立即停止。
 
 ### Errors Encountered
 | Error | Attempt | Resolution |
@@ -27,6 +30,8 @@
 - `node --check analytics\scripts\backfill-analytics-stats.mjs` 通过。
 - `cd analytics\worker; npm run backfill:analytics-stats -- --help` 已验证会拒绝参数并提示配置 `analytics/scripts/.env` 后零参数执行。
 - 本机当前没有 `analytics/scripts/.env`，未执行真实回填。
+- `node --check analytics\worker\src\services\analyticsQuery.js` 通过。
+- `cd analytics\worker; npm run backfill:analytics-stats -- --no-run` 已验证仍拒绝参数。
 - `git diff --check -- analytics/scripts/backfill-analytics-stats.mjs analytics/worker/package.json analytics/README.md` 通过，仅有 LF/CRLF 提示。
 
 ## Current Task: Analytics 北京时间统一修复

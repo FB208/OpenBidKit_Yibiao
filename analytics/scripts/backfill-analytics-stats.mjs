@@ -10,6 +10,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPath = resolve(__dirname, '.env');
 const d1DatabaseName = 'openbidkit-analytics';
 const projectName = 'yibiao-client';
+const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function compactSql(sql) {
+  return String(sql || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+}
 
 function parseEnvValue(rawValue) {
   let value = String(rawValue || '').trim();
@@ -50,21 +59,48 @@ function loadEnv() {
   }
 }
 
-async function requestCloudflareJson(url, { method = 'GET', apiToken, body } = {}) {
-  const response = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${apiToken}`,
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = await response.json().catch(() => null);
-  if (!response.ok || !data?.success) {
+async function requestCloudflareJson(url, { method = 'GET', apiToken, body, context = {} } = {}) {
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    const response = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await response.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
     const errors = data?.errors?.map((item) => item.message).filter(Boolean).join('; ');
-    throw new Error(errors || `Cloudflare API request failed: ${response.status}`);
+
+    if (response.ok && data?.success) {
+      return data;
+    }
+
+    const retryable = retryableStatuses.has(response.status) && attempt < 4;
+    const details = [
+      `${context.source || 'Cloudflare'} request failed`,
+      `status=${response.status}`,
+      `attempt=${attempt}`,
+      context.sql ? `sql=${compactSql(context.sql)}` : '',
+      context.params ? `params=${context.params.length}` : '',
+      `body=${(errors || text || '').slice(0, 1000)}`,
+    ].filter(Boolean).join('; ');
+
+    if (!retryable) {
+      throw new Error(details);
+    }
+
+    console.warn(`${details}; retrying`);
+    await sleep(500 * attempt);
   }
-  return data;
+
+  throw new Error(`${context.source || 'Cloudflare'} request failed after retries`);
 }
 
 function readRequiredEnv(name) {
@@ -156,11 +192,16 @@ class RemoteD1Database {
         sql,
         params: params.map(normalizeD1Param),
       },
+      context: {
+        source: 'D1',
+        sql,
+        params,
+      },
     });
     const result = Array.isArray(data.result) ? data.result[0] : data.result;
     if (!result) return { results: [], meta: {} };
     if (result.success === false) {
-      throw new Error(`D1 query failed: ${sql.trim().slice(0, 120)}`);
+      throw new Error(`D1 query failed: sql=${compactSql(sql)}; result=${JSON.stringify(result).slice(0, 1000)}`);
     }
     return result;
   }
@@ -193,6 +234,23 @@ async function readRollupStatus(db, activityDate) {
   return String(row?.status || '');
 }
 
+async function hasDailyRow(db, activityDate) {
+  const row = await db.prepare(`
+    SELECT 1 AS existsFlag
+    FROM stats_daily
+    WHERE project_name = ? AND activity_date = ?
+    LIMIT 1
+  `).bind(projectName, activityDate).first();
+  return Boolean(row?.existsFlag);
+}
+
+async function clearRollupStatus(db, activityDate) {
+  await db.prepare(`
+    DELETE FROM stats_rollup_runs
+    WHERE project_name = ? AND activity_date = ?
+  `).bind(projectName, activityDate).run();
+}
+
 async function backfillOne(env, activityDate) {
   const status = await readRollupStatus(env.ANALYTICS_DB, activityDate);
   if (status === 'success') {
@@ -200,7 +258,12 @@ async function backfillOne(env, activityDate) {
     return 'skipped';
   }
   if (status) {
-    throw new Error(`${activityDate} already has rollup status '${status}'. Inspect D1 before retrying to avoid duplicated counters.`);
+    if (await hasDailyRow(env.ANALYTICS_DB, activityDate)) {
+      throw new Error(`${activityDate} already has rollup status '${status}' and stats_daily data. Stop to avoid duplicated counters.`);
+    }
+
+    console.warn(`[retry] ${activityDate} has rollup status '${status}' but no stats_daily row. Clearing rollup status and retrying.`);
+    await clearRollupStatus(env.ANALYTICS_DB, activityDate);
   }
 
   console.log(`[run] ${activityDate}`);
