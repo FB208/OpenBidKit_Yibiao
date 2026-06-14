@@ -58,6 +58,7 @@ export function normalizeResourceRow(row, origin = '') {
     imageKey,
     imageUrl,
     analyticsKey: createResourceAnalyticsKey(id),
+    clickCount: normalizeClickCount(row.click_count),
     sortOrder: normalizeSortOrder(row.sort_order),
     enabled: Number(row.enabled) !== 0,
     createdAt: normalizeText(row.created_at, 40),
@@ -112,7 +113,7 @@ export function createResourceImageKey(resourceId, fileName, contentType) {
 export async function listPublicResources(env, { query = '', origin = '' } = {}) {
   const db = requireResourceDb(env);
   const q = normalizeText(query, 120);
-  const columns = 'id, title, tags, description, modal_content, image_key, image_url, sort_order, enabled, created_at, updated_at';
+  const columns = 'id, title, tags, description, modal_content, image_key, image_url, click_count, sort_order, enabled, created_at, updated_at';
 
   let result;
   if (q) {
@@ -141,7 +142,7 @@ export async function listPublicResources(env, { query = '', origin = '' } = {})
 export async function listAdminResources(env, { origin = '' } = {}) {
   const db = requireResourceDb(env);
   const result = await db.prepare(
-    `SELECT id, title, tags, description, modal_content, image_key, image_url, sort_order, enabled, created_at, updated_at
+    `SELECT id, title, tags, description, modal_content, image_key, image_url, click_count, sort_order, enabled, created_at, updated_at
      FROM resources
      ORDER BY sort_order ASC, updated_at DESC
      LIMIT 500`,
@@ -158,7 +159,7 @@ export async function readResource(env, id, { origin = '' } = {}) {
   }
 
   const row = await db.prepare(
-    `SELECT id, title, tags, description, modal_content, image_key, image_url, sort_order, enabled, created_at, updated_at
+    `SELECT id, title, tags, description, modal_content, image_key, image_url, click_count, sort_order, enabled, created_at, updated_at
      FROM resources
      WHERE id = ?`,
   ).bind(resourceId).first();
@@ -274,6 +275,11 @@ function normalizeSortOrder(value) {
     return 0;
   }
   return Math.max(-999999, Math.min(999999, Math.trunc(number)));
+}
+
+function normalizeClickCount(value) {
+  const count = Number(value || 0);
+  return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
 }
 
 function escapeLike(value) {

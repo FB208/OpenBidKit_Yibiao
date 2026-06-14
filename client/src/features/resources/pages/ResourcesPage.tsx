@@ -17,7 +17,6 @@ interface ResourceItem {
 type ResourceTone = 'blue' | 'violet' | 'cyan' | 'slate';
 
 const RESOURCES_ENDPOINT = 'https://analytics.agnet.top/resources';
-const RESOURCE_CLICK_DAYS = 30;
 const resourceTones: ResourceTone[] = ['blue', 'violet', 'cyan', 'slate'];
 const clickCountFormatter = new Intl.NumberFormat('zh-CN');
 
@@ -41,12 +40,13 @@ function ResourcesPage() {
   const loadResources = async (query: string) => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ days: String(RESOURCE_CLICK_DAYS) });
+      const params = new URLSearchParams();
       if (query.trim()) {
         params.set('q', query.trim());
       }
 
-      const url = `${RESOURCES_ENDPOINT}?${params.toString()}`;
+      const queryString = params.toString();
+      const url = queryString ? `${RESOURCES_ENDPOINT}?${queryString}` : RESOURCES_ENDPOINT;
       const response = await fetch(url);
       const data = await response.json().catch(() => null) as ResourcesResponse | null;
       if (!response.ok || !data || data.code !== 0) {
@@ -107,7 +107,7 @@ function ResourcesPage() {
                   </span>
                   <strong className="resource-book-title">{item.title}</strong>
                   <span className="resource-book-description">{item.description}</span>
-                  <span className="resource-book-stats">近{RESOURCE_CLICK_DAYS}天点击 {formatResourceClickCount(item.clickCount)} 次</span>
+                  <span className="resource-book-stats">累计点击 {formatResourceClickCount(item.clickCount)} 次</span>
                 </span>
               </button>
             ))}

@@ -1,4 +1,4 @@
-import { assertAdminToken, buildRangeQuery, getEncodedProjectAndDays, requestFormData, requestJson, saveSettings } from '../api.js';
+import { assertAdminToken, getEncodedProjectAndDays, requestFormData, requestJson, saveSettings } from '../api.js';
 import { escapeHtml, formatNumber } from '../render.js';
 import { appState, state } from '../state.js';
 
@@ -77,7 +77,7 @@ function renderResourcesTable() {
           <th>图片</th>
           <th>标题</th>
           <th>标签</th>
-          <th>点击量</th>
+          <th>累计点击量</th>
           <th>介绍</th>
           <th>弹窗内容</th>
           <th>操作</th>
@@ -130,9 +130,8 @@ export async function loadResources(options = {}) {
   try {
     assertAdminToken();
     saveSettings();
-    const range = state.resourceClickRange.value;
-    const { projectName, days } = getEncodedProjectAndDays(range === 'history' ? '30' : range);
-    const data = await requestJson(`/api/resources?projectName=${projectName}&${range === 'history' ? buildRangeQuery(range) : `days=${days}`}`);
+    const { projectName } = getEncodedProjectAndDays();
+    const data = await requestJson(`/api/resources?projectName=${projectName}`);
     appState.resources = data.resources || [];
     renderResourcesTable();
     if (isBlankNewResourceForm()) {

@@ -17,7 +17,6 @@ export const state = {
   modelNameOptions: $('modelNameOptions'),
   latestEventFilter: $('latestEventFilter'),
   latestEventOptions: $('latestEventOptions'),
-  resourceClickRange: $('resourceClickRange'),
   refreshButton: $('refreshButton'),
   errorBox: $('errorBox'),
   statusDot: $('statusDot'),

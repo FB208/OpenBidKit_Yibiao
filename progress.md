@@ -1,6 +1,9 @@
 # Progress
 
 ## Session Log
+- 开始执行 Analytics 统计改造计划收敛实现：用户已手动删除线上 `openbidkit-analytics`，本轮直接按 `client/doc/统计改造计划.md` 简化新版 schema；计划删除 `stats_dimension_clients` 和维度客户端计数，资源累计点击量迁入 `openbidkit-resources.resources.click_count`，客户端资源页改为显示完整累计点击量。
+- 已完成 Analytics 统计改造计划收敛实现：`ANALYTICS_DB` schema 删除维度客户端关系表、资源点击表和所有历史维度 `client_count`；Cron 只累加计划要求的页面/版本/配置/模型数量；`/track` 实时写客户端窗口改为当前业务日或前 1 天；资源点击历史写入 `RESOURCE_DB.resources.click_count`，接口展示 D1 累计 + AE 今天；Dashboard 和 Client 已同步展示完整累计点击量。验证通过 Worker/脚本/Dashboard `node --check`、Worker 模块 import、`cd client; npm run build` 和 `git diff --check`。
+- 已修复 scheduled rollup 资源库异常影响核心统计的问题：核心 `stats_*` 汇总现在不查询资源点击，完成写入并 `markRollupSuccess()` 后才单独尝试资源点击累加；`RESOURCE_DB` 缺失或资源点击更新失败只记录 warning，不会让每日概览/访问/配置/模型统计失败或留下可重试重复累加风险。验证通过 `node --check` 和模块动态 import。
 - 已增强 Analytics stats 回填脚本错误处理：AE 查询和 D1 REST 写入对 `429/500/502/503/504` 自动重试，错误日志包含 HTTP status、返回 body 和 SQL 片段；遇到历史 `failed/running` 状态时，如果当天没有 `stats_daily` 会清理状态并重试，如果已有 `stats_daily` 则停止，避免重复累加。`analyticsQuery.js` 同步增加 AE 查询重试和详细错误日志。验证通过脚本与 `analyticsQuery.js` 的 `node --check`，并验证脚本仍拒绝参数。
 - 已新增并按要求简化 Analytics stats 历史回填脚本：`analytics/scripts/backfill-analytics-stats.mjs` 不接受参数，固定读取同目录 `.env`，固定项目 `yibiao-client`，自动发现 AE 中北京时间今天之前的所有有数据日期；脚本用 Cloudflare D1 REST API 封装远程 `ANALYTICS_DB.prepare().bind().run/all/first()`，复用线上 `rollupStatsDay()` 写入新版 `stats_*` 表；跳过 success 日期，遇到 running/failed 状态停止以避免重复累加。新增 `npm run backfill:analytics-stats` 命令并更新 README。验证通过 `node --check` 和参数拒绝检查；本机没有 `analytics/scripts/.env`，未执行真实回填。
 - 已完成 Analytics 北京时间统一修复：客户端新生成 `analytics_created_at` 改为 `Asia/Shanghai` 日期；Worker 公共工具新增北京时间 SQL 表达式和自然日范围；`today/7/30/90` 近期 AE 查询、资源点击、项目兜底、最近事件、留存和 Cron 写入 `first_seen_at` 均统一为北京时间口径。验证通过相关 `node --check`、`cd client; npm run build`、北京时间边界用例和 `git diff --check`，仅有既有 chunk 体积警告与 LF/CRLF 提示。

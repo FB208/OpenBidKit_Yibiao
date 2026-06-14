@@ -26,7 +26,7 @@
 | 接口 | 数据源 | 鉴权 | 用途 |
 | --- | --- | --- | --- |
 | `GET /health` | Worker | 无 | 健康检查 |
-| `POST /track` | AE + D1 | 无 | 写 AE；仅对 `client_created_at` 最近 3 天的新客户端尝试实时写 `stats_clients` |
+| `POST /track` | AE + D1 | 无 | 写 AE；仅对 `client_created_at` 距当前业务日期不超过 1 天的新客户端尝试实时写 `stats_clients` |
 | `GET /api/projects` | D1 优先，AE 兜底 | `ADMIN_TOKEN` | 项目列表 |
 | `GET /api/overview` | D1 + AE + KV | `ADMIN_TOKEN` | 概览总数、新增、今日活跃、每日统计 |
 | `GET /api/clients` | D1 | `ADMIN_TOKEN` | 客户端统计列表 |
@@ -39,8 +39,8 @@
 | `GET /api/github-repo-stats` | GitHub + KV | `ADMIN_TOKEN` | GitHub stats |
 | `GET /notice` | KV | 无 | 客户端公告 |
 | `GET/POST/DELETE /api/notice` | KV | `ADMIN_TOKEN` | 公告后台管理 |
-| `GET /resources` | `RESOURCE_DB` + AE/D1 | 无 | 客户端资源列表 |
-| `GET/POST/DELETE /api/resources` | `RESOURCE_DB` + R2 + AE/D1 | `ADMIN_TOKEN` | 资源管理 |
+| `GET /resources` | `RESOURCE_DB` + AE | 无 | 客户端资源列表，点击量为 D1 累计 + AE 今天 |
+| `GET/POST/DELETE /api/resources` | `RESOURCE_DB` + R2 + AE | `ADMIN_TOKEN` | 资源管理 |
 
 旧 `/api/summary` 已删除。
 
@@ -53,11 +53,11 @@
 | 活跃客户端 | 任意允许事件去重 `client_id` |
 | 总客户端数 | D1 `stats_totals.total_clients` |
 | 今日/7日新增 | D1 `stats_clients.first_seen_date` |
-| 实时客户端入库 | `/track` 只尝试写最近 3 天创建的客户端，同一 Worker 实例内同一客户端只尝试一次；D1 写入失败不影响 `/track` 返回成功；老客户端活跃由 Cron 批量更新 |
-| 历史维度客户端数 | D1 `stats_dimension_clients` 按 `dimension + client_id` 长期去重后重算，不能按每日去重数累加 |
+| 实时客户端入库 | `/track` 只尝试写当前业务日期或前 1 天创建的客户端，同一 Worker 实例内同一客户端只尝试一次；D1 写入失败不影响 `/track` 返回成功；老客户端活跃由 Cron 批量更新 |
 | 每日统计 | 今天读 AE，前 9 天读 D1 |
 | 最近事件 | 只读 AE，不入 D1 |
 | 留存 | 只读 AE，不入 D1 |
+| 资源点击量 | `RESOURCE_DB.resources.click_count` 保存历史累计，页面查询时加上 AE 今天点击量 |
 
 ## 事件类型
 
@@ -155,7 +155,7 @@ Invoke-RestMethod `
   -Body '{"projectName":"yibiao-client","event":"app_open","version":"0.1.0","platform":"win32","arch":"x64","client_id":"test-client","client_created_at":"2026-06-13"}'
 ```
 
-如果要验证 `/track` 实时写入 D1 客户端表，`client_created_at` 需要使用当前业务日期最近 3 天内的日期；否则只写 AE，客户端会由后续 Cron 汇总补入 D1。
+如果要验证 `/track` 实时写入 D1 客户端表，`client_created_at` 需要使用当前业务日期或前 1 天日期；否则只写 AE，客户端会由后续 Cron 汇总补入 D1。
 
 查询概览：
 
@@ -168,7 +168,7 @@ Invoke-RestMethod `
 
 ## 历史回填
 
-新版历史回填脚本会按 Cron 同一套逻辑，把 Analytics Engine 中 `yibiao-client` 在脚本执行当天北京时间之前的所有历史日期汇总到 D1 `stats_*` 表。
+新版历史回填脚本会按 Cron 同一套逻辑，把 Analytics Engine 中 `yibiao-client` 在脚本执行当天北京时间之前的所有历史日期汇总到 D1 `stats_*` 表；资源点击量会按历史总量写入 `openbidkit-resources.resources.click_count`，不会按天重复累加。
 
 本地执行前，在 `analytics/scripts/.env` 中配置：
 
@@ -178,6 +178,7 @@ Invoke-RestMethod `
 | `CLOUDFLARE_API_TOKEN` | 具备 D1 Query 权限的 Cloudflare API Token |
 | `ANALYTICS_API_TOKEN` | Analytics Engine SQL Read Token |
 | `ANALYTICS_DB_ID` | 可选；不填则按 D1 名称 `openbidkit-analytics` 自动查找 |
+| `RESOURCE_DB_ID` | 可选；不填则按 D1 名称 `openbidkit-resources` 自动查找，用于回填资源累计点击量 |
 
 执行回填：
 

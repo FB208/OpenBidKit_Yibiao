@@ -8,7 +8,6 @@ import {
   RESOURCE_TITLE_MAX_LENGTH,
 } from '../constants.js';
 import { corsHeaders, json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
-import { queryStatsResourceClickCounts } from '../services/analyticsStatsStore.js';
 import { queryAnalytics } from '../services/analyticsQuery.js';
 import {
   buildResourceImageUrl,
@@ -21,7 +20,7 @@ import {
   readResource,
   upsertResource,
 } from '../services/resourceStore.js';
-import { businessDateRangeCondition, getBusinessDateDaysAgo, getBusinessToday, isValidProjectName, logQueryError, normalizeText, safeDays, sqlString } from '../utils.js';
+import { businessDateRangeCondition, getBusinessToday, isValidProjectName, logQueryError, normalizeText, sqlString } from '../utils.js';
 
 const allowedImageTypes = new Set(RESOURCE_ALLOWED_IMAGE_TYPES);
 
@@ -102,14 +101,14 @@ async function handleAdminGetResources(env, url) {
 }
 
 async function attachResourceClickStats(env, resources, url) {
-  const clickCounts = await queryResourceClickCounts(env, resources, url);
+  const todayClickCounts = await queryTodayResourceClickCounts(env, resources, url);
   return resources.map((resource) => ({
     ...resource,
-    clickCount: clickCounts.get(resource.analyticsKey) || 0,
+    clickCount: normalizeClickCount(resource.clickCount) + (todayClickCounts.get(resource.analyticsKey) || 0),
   }));
 }
 
-async function queryResourceClickCounts(env, resources, url) {
+async function queryTodayResourceClickCounts(env, resources, url) {
   if (!resources.length) {
     return new Map();
   }
@@ -119,7 +118,6 @@ async function queryResourceClickCounts(env, resources, url) {
     return new Map();
   }
 
-  const days = safeDays(url.searchParams.get('days'));
   const resourceKeys = Array.from(new Set(
     resources.map((resource) => normalizeText(resource.analyticsKey, 80)).filter(Boolean),
   ));
@@ -128,21 +126,12 @@ async function queryResourceClickCounts(env, resources, url) {
     return new Map();
   }
 
-  if (normalizeText(url.searchParams.get('range'), 20) === 'history') {
-    try {
-      const historyCounts = await queryStatsResourceClickCounts(env, projectName, resourceKeys);
-      return new Map(Array.from(historyCounts.entries()).map(([key, value]) => [key, value.clickCount]));
-    } catch (error) {
-      logQueryError('resource clicks history', error);
-      return new Map();
-    }
-  }
-
   if (!env.ACCOUNT_ID || !env.ANALYTICS_API_TOKEN) {
     return new Map();
   }
 
-  const dateWhere = businessDateRangeCondition(getBusinessDateDaysAgo(days - 1), getBusinessToday());
+  const today = getBusinessToday();
+  const dateWhere = businessDateRangeCondition(today, today);
   const sql = `
     SELECT
       blob9 AS resourceKey,
@@ -162,6 +151,11 @@ async function queryResourceClickCounts(env, resources, url) {
     logQueryError('resource clicks', error);
     return new Map();
   }
+}
+
+function normalizeClickCount(value) {
+  const count = Number(value || 0);
+  return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
 }
 
 async function handleAdminSaveResource(request, env, url) {

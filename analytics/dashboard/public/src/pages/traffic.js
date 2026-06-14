@@ -71,12 +71,10 @@ export async function loadTraffic() {
     { key: 'pageLabel', label: '功能名称' },
     { key: 'page', label: '路由', code: true },
     { key: 'count', label: range === 'history' ? '累计访问量' : '访问量' },
-    { key: 'clients', label: range === 'history' ? '累计客户端计数' : '客户端数' },
   ], '暂无页面访问数据');
 
   renderTable(state.versionsTable, summary.versions || [], [
     { key: 'version', label: '版本', code: true },
-    { key: 'clients', label: range === 'history' ? '累计客户端计数' : '触达客户端数' },
     { key: 'count', label: range === 'history' ? '累计事件数' : '事件数' },
   ], '暂无版本数据');
 }

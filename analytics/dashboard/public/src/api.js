@@ -26,7 +26,6 @@ export function saveSettings() {
   localStorage.setItem('analytics_model_endpoint_filter', state.modelEndpointFilter.value);
   localStorage.setItem('analytics_model_name_filter', state.modelNameFilter.value);
   localStorage.setItem('analytics_latest_event_filter', state.latestEventFilter.value);
-  localStorage.setItem('analytics_resource_click_range', state.resourceClickRange.value);
 
   const token = state.adminToken.value.trim();
   sessionStorage.setItem('analytics_admin_token', token);
@@ -52,7 +51,6 @@ export function loadSettings() {
   state.modelEndpointFilter.value = localStorage.getItem('analytics_model_endpoint_filter') || '';
   state.modelNameFilter.value = localStorage.getItem('analytics_model_name_filter') || '';
   state.latestEventFilter.value = localStorage.getItem('analytics_latest_event_filter') || '';
-  state.resourceClickRange.value = localStorage.getItem('analytics_resource_click_range') || '30';
 }
 
 export function getSelectedProjectName() {

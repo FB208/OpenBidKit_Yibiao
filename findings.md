@@ -1,6 +1,9 @@
 # Findings
 
 ## Research Log
+- 当前 `stats_dimension_clients` 只服务页面/版本/配置/模型/资源维度的历史唯一客户端数，但 `client/doc/统计改造计划.md` 对这些模块只要求“页面+数量、版本+数量、配置项累加数、模型项累加数、资源下载量”，因此该交叉明细表和所有 `client_count` 是过度设计，应删除。
+- 资源点击量应从 `ANALYTICS_DB.stats_resource_clicks` 迁出：计划要求 `openbidkit-resources.resources` 新增下载量/点击量列，页面展示 `RESOURCE_DB` 累计量 + AE 今天数据；历史回填应直接设置资源累计点击量，避免重跑脚本重复累加。
+- `/track` 实时写客户端当前窗口为最近 3 天，与计划的“不超过 1 天”不一致；应改为业务日期差 `0` 或 `1` 天内才写入 D1。
 - Analytics stats 回填续跑保护：`stats_rollup_runs.status='success'` 是已完成日期的幂等跳过依据；`failed/running` 不能盲目重跑，因为聚合表是累计写入。安全边界是先查 `stats_daily`：没有当天行说明失败发生在统计数据写入前，可清理状态重试；已有当天行则可能已经部分累计，必须停止人工检查。
 - Analytics stats 历史回填脚本最稳妥的边界是复用 Worker `rollupStatsDay()`，而不是在脚本中复制一套 AE 聚合和 D1 upsert SQL；脚本只负责同目录 `.env`、远程 D1 API bridge、AE 历史日期发现和异常保护。
 - Cloudflare D1 REST Query API 可用于本地脚本直接写远程 D1：`POST /accounts/{account_id}/d1/database/{database_id}/query`，body 为 `{ sql, params }`；D1 database id 可通过 `GET /accounts/{account_id}/d1/database?name=openbidkit-analytics` 自动发现。

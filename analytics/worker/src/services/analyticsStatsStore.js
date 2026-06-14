@@ -10,10 +10,11 @@ import {
   sqlString,
 } from '../utils.js';
 import { queryAnalytics } from './analyticsQuery.js';
+import { listAdminResources } from './resourceStore.js';
 
 const UNKNOWN_VERSION = '未知版本';
 const MAX_ANALYTICS_ROWS = 100000;
-const RECENT_CLIENT_CREATED_DAYS = 3;
+const RECENT_CLIENT_CREATED_MAX_AGE_DAYS = 1;
 const MAX_RECENT_CLIENT_WRITE_ATTEMPTS = 10000;
 const recentClientWriteAttempts = new Set();
 
@@ -22,6 +23,13 @@ function requireStatsDb(env) {
     throw new Error('ANALYTICS_DB is not configured');
   }
   return env.ANALYTICS_DB;
+}
+
+function requireResourceDb(env) {
+  if (!env.RESOURCE_DB) {
+    throw new Error('RESOURCE_DB is not configured');
+  }
+  return env.RESOURCE_DB;
 }
 
 async function all(db, sql, bindings = []) {
@@ -62,7 +70,7 @@ function daysSinceBusinessDate(value) {
 function shouldAttemptRealtimeClientInsert(event) {
   if (!event.clientId || !event.clientCreatedAt) return false;
   const age = daysSinceBusinessDate(event.clientCreatedAt);
-  return Number.isFinite(age) && age >= 0 && age < RECENT_CLIENT_CREATED_DAYS;
+  return Number.isFinite(age) && age >= 0 && age <= RECENT_CLIENT_CREATED_MAX_AGE_DAYS;
 }
 
 function clientAttemptKey(projectName, clientId) {
@@ -74,35 +82,6 @@ function rememberClientAttempt(key) {
     recentClientWriteAttempts.clear();
   }
   recentClientWriteAttempts.add(key);
-}
-
-function dimensionKey(parts) {
-  return JSON.stringify(parts.map((part) => String(part ?? '')));
-}
-
-function pageDimensionKey(page) {
-  return dimensionKey([normalizeText(page, 120)]);
-}
-
-function versionDimensionKey(version) {
-  return dimensionKey([normalizedVersion(version)]);
-}
-
-function configDimensionKey(fieldKey, value) {
-  return dimensionKey([fieldKey, normalizeText(value, 200)]);
-}
-
-function modelDimensionKey(requestType, provider, endpointHost, model) {
-  return dimensionKey([
-    normalizeText(requestType, 20),
-    normalizeText(provider, 80),
-    normalizeText(endpointHost, 120),
-    normalizeText(model, 160),
-  ]);
-}
-
-function resourceDimensionKey(resourceKey) {
-  return dimensionKey([normalizeText(resourceKey, 80)]);
 }
 
 function allowedEventsSql() {
@@ -173,31 +152,6 @@ async function ensureTotals(db, projectName, updatedAt = nowText()) {
     VALUES (?, 0, 0, 0, 0, 0, '', ?)
     ON CONFLICT(project_name) DO NOTHING
   `, [projectName, updatedAt]);
-}
-
-async function upsertDimensionClient(db, projectName, dimensionType, key, clientId, activityDate, updatedAt) {
-  const normalizedClientId = normalizeText(clientId, 120);
-  if (!normalizedClientId || !key) return;
-
-  await run(db, `
-    INSERT INTO stats_dimension_clients (project_name, dimension_type, dimension_key, client_id, first_seen_date, last_seen_date, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(project_name, dimension_type, dimension_key, client_id) DO UPDATE SET
-      last_seen_date = CASE WHEN excluded.last_seen_date > stats_dimension_clients.last_seen_date THEN excluded.last_seen_date ELSE stats_dimension_clients.last_seen_date END,
-      updated_at = excluded.updated_at
-  `, [projectName, dimensionType, key, normalizedClientId, activityDate, activityDate, updatedAt]);
-}
-
-async function updateDimensionClientCount(db, tableName, countColumn, whereSql, bindings, projectName, dimensionType, key) {
-  await run(db, `
-    UPDATE ${tableName}
-    SET ${countColumn} = (
-      SELECT COUNT(*)
-      FROM stats_dimension_clients
-      WHERE project_name = ? AND dimension_type = ? AND dimension_key = ?
-    )
-    WHERE ${whereSql}
-  `, [projectName, dimensionType, key, ...bindings]);
 }
 
 export async function recordTrackClient(env, event) {
@@ -411,37 +365,23 @@ export async function queryStatsTraffic(env, projectName, range) {
     const db = requireStatsDb(env);
     const [pages, versions] = await Promise.all([
       all(db, `
-        SELECT page, view_count AS count, client_count AS clients
+        SELECT page, view_count AS count
         FROM stats_pages
         WHERE project_name = ?
-        ORDER BY view_count DESC, client_count DESC, page ASC
+        ORDER BY view_count DESC, page ASC
         LIMIT 100
       `, [projectName]),
       all(db, `
-        SELECT
-          version,
-          event_count AS count,
-          app_open_count AS appOpenCount,
-          page_view_count AS pageViewCount,
-          config_usage_count AS configUsageCount,
-          ai_request_count AS aiRequestCount,
-          resource_click_count AS resourceClickCount,
-          client_count AS clients
+        SELECT version, event_count AS count
         FROM stats_versions
         WHERE project_name = ?
       `, [projectName]),
     ]);
     return {
-      pages: pages.map((row) => ({ page: row.page, count: number(row.count), clients: number(row.clients) })),
+      pages: pages.map((row) => ({ page: row.page, count: number(row.count) })),
       versions: sortVersionRows(versions.map((row) => ({
         version: normalizedVersion(row.version),
-        clients: number(row.clients),
         count: number(row.count),
-        appOpenCount: number(row.appOpenCount),
-        pageViewCount: number(row.pageViewCount),
-        configUsageCount: number(row.configUsageCount),
-        aiRequestCount: number(row.aiRequestCount),
-        resourceClickCount: number(row.resourceClickCount),
       }))),
     };
   }
@@ -453,8 +393,7 @@ export async function queryStatsTraffic(env, projectName, range) {
     queryAnalytics(env, `
       SELECT
         blob3 AS page,
-        SUM(_sample_interval) AS count,
-        COUNT(DISTINCT blob7) AS clients
+        SUM(_sample_interval) AS count
       FROM ${DATASET}
       WHERE blob1 = ${project}
         AND blob2 = 'page_view'
@@ -466,11 +405,10 @@ export async function queryStatsTraffic(env, projectName, range) {
     queryAnalytics(env, `
       SELECT
         ${versionExpr} AS version,
-        COUNT(DISTINCT blob7) AS clients,
         SUM(_sample_interval) AS count
       FROM ${DATASET}
       WHERE blob1 = ${project}
-        AND blob7 != ''
+        AND blob2 IN ${allowedEventsSql()}
         AND ${rangeWhere}
       GROUP BY version
       LIMIT 100
@@ -478,10 +416,9 @@ export async function queryStatsTraffic(env, projectName, range) {
   ]);
 
   return {
-    pages: (pages.data || []).map((row) => ({ page: row.page, count: number(row.count), clients: number(row.clients) })),
+    pages: (pages.data || []).map((row) => ({ page: row.page, count: number(row.count) })),
     versions: sortVersionRows((versions.data || []).map((row) => ({
       version: normalizedVersion(row.version),
-      clients: number(row.clients),
       count: number(row.count),
     }))),
   };
@@ -489,10 +426,10 @@ export async function queryStatsTraffic(env, projectName, range) {
 
 async function queryConfigHistoryField(db, projectName, field) {
   return all(db, `
-    SELECT value, client_count AS clients, report_count AS events
+    SELECT value, report_count AS events
     FROM stats_configs
     WHERE project_name = ? AND field_key = ?
-    ORDER BY client_count DESC, report_count DESC, value ASC
+    ORDER BY report_count DESC, value ASC
     LIMIT 50
   `, [projectName, field.key]);
 }
@@ -502,7 +439,6 @@ async function queryConfigAeField(env, projectName, range, field) {
   const result = await queryAnalytics(env, `
     SELECT
       ${field.blob} AS value,
-      COUNT(DISTINCT blob7) AS clients,
       SUM(_sample_interval) AS events
     FROM ${DATASET}
     WHERE blob1 = ${project}
@@ -510,7 +446,7 @@ async function queryConfigAeField(env, projectName, range, field) {
       AND ${field.blob} != ''
       AND ${aeRangeCondition(range)}
     GROUP BY value
-    ORDER BY clients DESC, events DESC, value ASC
+    ORDER BY events DESC, value ASC
     LIMIT 50
   `);
   return result.data || [];
@@ -524,7 +460,6 @@ export async function queryStatsConfigUsage(env, projectName, range) {
   CONFIG_USAGE_FIELDS.forEach((field, index) => {
     usage[field.key] = (results[index] || []).map((row) => ({
       value: row.value,
-      clients: number(row.clients),
       events: number(row.events),
     }));
   });
@@ -537,14 +472,10 @@ async function queryModelHistoryField(db, projectName, field, filters) {
       provider,
       endpoint_host,
       model,
-      client_count AS clients,
-      request_count AS events,
-      prompt_tokens,
-      completion_tokens,
-      total_tokens
+      request_count AS events
     FROM stats_models
     WHERE project_name = ? AND request_type = ?${modelFiltersSql(filters)}
-    ORDER BY total_tokens DESC, events DESC, clients DESC, model ASC
+    ORDER BY events DESC, model ASC
     LIMIT 100
   `, [projectName, field.requestType]);
 }
@@ -556,11 +487,7 @@ async function queryModelAeField(env, projectName, range, field, filters) {
       blob9 AS provider,
       blob10 AS endpoint_host,
       blob11 AS model,
-      COUNT(DISTINCT blob7) AS clients,
-      SUM(_sample_interval) AS events,
-      SUM(double2 * _sample_interval) AS prompt_tokens,
-      SUM(double3 * _sample_interval) AS completion_tokens,
-      SUM(double4 * _sample_interval) AS total_tokens
+      SUM(_sample_interval) AS events
     FROM ${DATASET}
     WHERE blob1 = ${project}
       AND blob2 = 'ai_request'
@@ -569,7 +496,7 @@ async function queryModelAeField(env, projectName, range, field, filters) {
       AND ${aeRangeCondition(range)}
       ${modelFiltersAeSql(filters)}
     GROUP BY provider, endpoint_host, model
-    ORDER BY total_tokens DESC, events DESC, clients DESC, model ASC
+    ORDER BY events DESC, model ASC
     LIMIT 100
   `);
   return result.data || [];
@@ -588,28 +515,10 @@ export async function queryStatsModelUsage(env, projectName, range, filters) {
       provider: row.provider || '',
       endpoint_host: row.endpoint_host || '',
       model: row.model || '',
-      clients: number(row.clients),
       events: number(row.events),
-      prompt_tokens: number(row.prompt_tokens),
-      completion_tokens: number(row.completion_tokens),
-      total_tokens: number(row.total_tokens),
     }));
   });
   return usage;
-}
-
-export async function queryStatsResourceClickCounts(env, projectName, resourceKeys = []) {
-  const db = requireStatsDb(env);
-  const keys = Array.from(new Set(resourceKeys.filter(Boolean)));
-  if (!keys.length) return new Map();
-
-  const placeholders = keys.map(() => '?').join(', ');
-  const rows = await all(db, `
-    SELECT resource_key AS resourceKey, click_count AS clickCount, client_count AS clients
-    FROM stats_resource_clicks
-    WHERE project_name = ? AND resource_key IN (${placeholders})
-  `, [projectName, ...keys]);
-  return new Map(rows.map((row) => [row.resourceKey, { clickCount: number(row.clickCount), clients: number(row.clients) }]));
 }
 
 export async function queryStatsProjects(env) {
@@ -634,24 +543,20 @@ async function queryRollupProjects(env, activityDate) {
   return (result.data || []).map((row) => row.projectName).filter(Boolean);
 }
 
-async function queryRollupData(env, projectName, activityDate) {
+async function queryRollupData(env, projectName, activityDate, options = {}) {
   const project = sqlString(projectName);
   const dateWhere = businessDateCondition(activityDate);
   const versionExpr = `if(blob4 = '', ${sqlString(UNKNOWN_VERSION)}, blob4)`;
+  const includeResources = options.includeResources !== false;
   const [
     summary,
     activeClients,
     clients,
     pages,
-    pageClients,
     versions,
-    versionClients,
     configResults,
-    configClientResults,
     models,
-    modelClients,
     resources,
-    resourceClients,
   ] = await Promise.all([
     queryAnalytics(env, `
       SELECT
@@ -689,7 +594,7 @@ async function queryRollupData(env, projectName, activityDate) {
       LIMIT ${MAX_ANALYTICS_ROWS}
     `),
     queryAnalytics(env, `
-      SELECT blob3 AS page, SUM(_sample_interval) AS count, COUNT(DISTINCT blob7) AS clients
+      SELECT blob3 AS page, SUM(_sample_interval) AS count
       FROM ${DATASET}
       WHERE blob1 = ${project}
         AND blob2 = 'page_view'
@@ -699,26 +604,9 @@ async function queryRollupData(env, projectName, activityDate) {
       LIMIT ${MAX_ANALYTICS_ROWS}
     `),
     queryAnalytics(env, `
-      SELECT blob3 AS page, blob7 AS clientId
-      FROM ${DATASET}
-      WHERE blob1 = ${project}
-        AND blob2 = 'page_view'
-        AND blob3 != ''
-        AND blob7 != ''
-        AND ${dateWhere}
-      GROUP BY page, clientId
-      LIMIT ${MAX_ANALYTICS_ROWS}
-    `),
-    queryAnalytics(env, `
       SELECT
         ${versionExpr} AS version,
-        SUM(_sample_interval) AS eventCount,
-        SUM(if(blob2 = 'app_open', _sample_interval, 0)) AS appOpenCount,
-        SUM(if(blob2 = 'page_view', _sample_interval, 0)) AS pageViewCount,
-        SUM(if(blob2 = 'config_usage', _sample_interval, 0)) AS configUsageCount,
-        SUM(if(blob2 = 'ai_request', _sample_interval, 0)) AS aiRequestCount,
-        SUM(if(blob2 = 'resource_click', _sample_interval, 0)) AS resourceClickCount,
-        COUNT(DISTINCT blob7) AS clients
+        SUM(_sample_interval) AS eventCount
       FROM ${DATASET}
       WHERE blob1 = ${project}
         AND blob2 IN ${allowedEventsSql()}
@@ -726,18 +614,8 @@ async function queryRollupData(env, projectName, activityDate) {
       GROUP BY version
       LIMIT ${MAX_ANALYTICS_ROWS}
     `),
-    queryAnalytics(env, `
-      SELECT ${versionExpr} AS version, blob7 AS clientId
-      FROM ${DATASET}
-      WHERE blob1 = ${project}
-        AND blob2 IN ${allowedEventsSql()}
-        AND blob7 != ''
-        AND ${dateWhere}
-      GROUP BY version, clientId
-      LIMIT ${MAX_ANALYTICS_ROWS}
-    `),
     Promise.all(CONFIG_USAGE_FIELDS.map((field) => queryAnalytics(env, `
-      SELECT ${field.blob} AS value, SUM(_sample_interval) AS events, COUNT(DISTINCT blob7) AS clients
+      SELECT ${field.blob} AS value, SUM(_sample_interval) AS events
       FROM ${DATASET}
       WHERE blob1 = ${project}
         AND blob2 = 'config_usage'
@@ -746,28 +624,13 @@ async function queryRollupData(env, projectName, activityDate) {
       GROUP BY value
       LIMIT ${MAX_ANALYTICS_ROWS}
     `))),
-    Promise.all(CONFIG_USAGE_FIELDS.map((field) => queryAnalytics(env, `
-      SELECT ${field.blob} AS value, blob7 AS clientId
-      FROM ${DATASET}
-      WHERE blob1 = ${project}
-        AND blob2 = 'config_usage'
-        AND ${field.blob} != ''
-        AND blob7 != ''
-        AND ${dateWhere}
-      GROUP BY value, clientId
-      LIMIT ${MAX_ANALYTICS_ROWS}
-    `))),
     queryAnalytics(env, `
       SELECT
         blob12 AS requestType,
         blob9 AS provider,
         blob10 AS endpointHost,
         blob11 AS model,
-        SUM(_sample_interval) AS requestCount,
-        SUM(double2 * _sample_interval) AS promptTokens,
-        SUM(double3 * _sample_interval) AS completionTokens,
-        SUM(double4 * _sample_interval) AS totalTokens,
-        COUNT(DISTINCT blob7) AS clients
+        SUM(_sample_interval) AS requestCount
       FROM ${DATASET}
       WHERE blob1 = ${project}
         AND blob2 = 'ai_request'
@@ -777,25 +640,8 @@ async function queryRollupData(env, projectName, activityDate) {
       GROUP BY requestType, provider, endpointHost, model
       LIMIT ${MAX_ANALYTICS_ROWS}
     `),
-    queryAnalytics(env, `
-      SELECT
-        blob12 AS requestType,
-        blob9 AS provider,
-        blob10 AS endpointHost,
-        blob11 AS model,
-        blob7 AS clientId
-      FROM ${DATASET}
-      WHERE blob1 = ${project}
-        AND blob2 = 'ai_request'
-        AND blob12 IN ('text', 'image')
-        AND blob11 != ''
-        AND blob7 != ''
-        AND ${dateWhere}
-      GROUP BY requestType, provider, endpointHost, model, clientId
-      LIMIT ${MAX_ANALYTICS_ROWS}
-    `),
-    queryAnalytics(env, `
-      SELECT blob9 AS resourceKey, SUM(_sample_interval) AS clickCount, COUNT(DISTINCT blob7) AS clients
+    includeResources ? queryAnalytics(env, `
+      SELECT blob9 AS resourceKey, SUM(_sample_interval) AS clickCount
       FROM ${DATASET}
       WHERE blob1 = ${project}
         AND blob2 = 'resource_click'
@@ -803,18 +649,7 @@ async function queryRollupData(env, projectName, activityDate) {
         AND ${dateWhere}
       GROUP BY resourceKey
       LIMIT ${MAX_ANALYTICS_ROWS}
-    `),
-    queryAnalytics(env, `
-      SELECT blob9 AS resourceKey, blob7 AS clientId
-      FROM ${DATASET}
-      WHERE blob1 = ${project}
-        AND blob2 = 'resource_click'
-        AND blob9 != ''
-        AND blob7 != ''
-        AND ${dateWhere}
-      GROUP BY resourceKey, clientId
-      LIMIT ${MAX_ANALYTICS_ROWS}
-    `),
+    `) : Promise.resolve({ data: [] }),
   ]);
 
   return {
@@ -822,15 +657,10 @@ async function queryRollupData(env, projectName, activityDate) {
     activeClients: number(activeClients.data?.[0]?.activeClients),
     clients: clients.data || [],
     pages: pages.data || [],
-    pageClients: pageClients.data || [],
     versions: versions.data || [],
-    versionClients: versionClients.data || [],
     configs: CONFIG_USAGE_FIELDS.flatMap((field, index) => (configResults[index].data || []).map((row) => ({ ...row, fieldKey: field.key }))),
-    configClients: CONFIG_USAGE_FIELDS.flatMap((field, index) => (configClientResults[index].data || []).map((row) => ({ ...row, fieldKey: field.key }))),
     models: models.data || [],
-    modelClients: modelClients.data || [],
     resources: resources.data || [],
-    resourceClients: resourceClients.data || [],
   };
 }
 
@@ -862,7 +692,46 @@ async function markRollupFailed(db, projectName, activityDate, updatedAt, error)
   `, [updatedAt, normalizeText(error?.message || String(error), 1000), projectName, activityDate]);
 }
 
-async function upsertRollupData(db, projectName, activityDate, data) {
+async function incrementResourceClickCounts(env, rows) {
+  const resourceRows = (rows || [])
+    .map((row) => ({ resourceKey: normalizeText(row.resourceKey, 80), clickCount: number(row.clickCount) }))
+    .filter((row) => row.resourceKey && row.clickCount > 0);
+  if (!resourceRows.length) return;
+
+  const resourceDb = requireResourceDb(env);
+  const resources = await listAdminResources(env, { origin: '' });
+  const idByAnalyticsKey = new Map(resources.map((resource) => [resource.analyticsKey, resource.id]));
+  for (const row of resourceRows) {
+    const resourceId = idByAnalyticsKey.get(row.resourceKey);
+    if (!resourceId) continue;
+    await run(resourceDb, `
+      UPDATE resources
+      SET click_count = click_count + ?
+      WHERE id = ?
+    `, [row.clickCount, resourceId]);
+  }
+}
+
+async function rollupResourceClicksDay(env, projectName, activityDate) {
+  if (!env.RESOURCE_DB) {
+    return { skipped: true, reason: 'RESOURCE_DB is not configured' };
+  }
+
+  const result = await queryAnalytics(env, `
+    SELECT blob9 AS resourceKey, SUM(_sample_interval) AS clickCount
+    FROM ${DATASET}
+    WHERE blob1 = ${sqlString(projectName)}
+      AND blob2 = 'resource_click'
+      AND blob9 != ''
+      AND ${businessDateCondition(activityDate)}
+    GROUP BY resourceKey
+    LIMIT ${MAX_ANALYTICS_ROWS}
+  `);
+  await incrementResourceClickCounts(env, result.data || []);
+  return { skipped: false };
+}
+
+async function upsertRollupData(db, projectName, activityDate, data, options = {}) {
   const updatedAt = nowText();
   const eventCount = number(data.summary.eventCount);
   const appOpenCount = number(data.summary.appOpenCount);
@@ -913,84 +782,40 @@ async function upsertRollupData(db, projectName, activityDate, data) {
 
   for (const row of data.pages) {
     await run(db, `
-      INSERT INTO stats_pages (project_name, page, view_count, client_count, updated_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO stats_pages (project_name, page, view_count, updated_at)
+      VALUES (?, ?, ?, ?)
       ON CONFLICT(project_name, page) DO UPDATE SET
         view_count = stats_pages.view_count + excluded.view_count,
         updated_at = excluded.updated_at
-    `, [projectName, normalizeText(row.page, 120), number(row.count), 0, updatedAt]);
-  }
-  for (const row of data.pageClients) {
-    await upsertDimensionClient(db, projectName, 'page', pageDimensionKey(row.page), row.clientId, activityDate, updatedAt);
-  }
-  for (const row of data.pages) {
-    const page = normalizeText(row.page, 120);
-    await updateDimensionClientCount(db, 'stats_pages', 'client_count', 'project_name = ? AND page = ?', [projectName, page], projectName, 'page', pageDimensionKey(page));
+    `, [projectName, normalizeText(row.page, 120), number(row.count), updatedAt]);
   }
 
   for (const row of data.versions) {
     await run(db, `
-      INSERT INTO stats_versions (
-        project_name, version, event_count, app_open_count, page_view_count, config_usage_count,
-        ai_request_count, resource_click_count, client_count, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO stats_versions (project_name, version, event_count, updated_at)
+      VALUES (?, ?, ?, ?)
       ON CONFLICT(project_name, version) DO UPDATE SET
         event_count = stats_versions.event_count + excluded.event_count,
-        app_open_count = stats_versions.app_open_count + excluded.app_open_count,
-        page_view_count = stats_versions.page_view_count + excluded.page_view_count,
-        config_usage_count = stats_versions.config_usage_count + excluded.config_usage_count,
-        ai_request_count = stats_versions.ai_request_count + excluded.ai_request_count,
-        resource_click_count = stats_versions.resource_click_count + excluded.resource_click_count,
         updated_at = excluded.updated_at
-    `, [
-      projectName,
-      normalizedVersion(row.version),
-      number(row.eventCount),
-      number(row.appOpenCount),
-      number(row.pageViewCount),
-      number(row.configUsageCount),
-      number(row.aiRequestCount),
-      number(row.resourceClickCount),
-      0,
-      updatedAt,
-    ]);
-  }
-  for (const row of data.versionClients) {
-    await upsertDimensionClient(db, projectName, 'version', versionDimensionKey(row.version), row.clientId, activityDate, updatedAt);
-  }
-  for (const row of data.versions) {
-    const version = normalizedVersion(row.version);
-    await updateDimensionClientCount(db, 'stats_versions', 'client_count', 'project_name = ? AND version = ?', [projectName, version], projectName, 'version', versionDimensionKey(version));
+    `, [projectName, normalizedVersion(row.version), number(row.eventCount), updatedAt]);
   }
 
   for (const row of data.configs) {
     await run(db, `
-      INSERT INTO stats_configs (project_name, field_key, value, report_count, client_count, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO stats_configs (project_name, field_key, value, report_count, updated_at)
+      VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(project_name, field_key, value) DO UPDATE SET
         report_count = stats_configs.report_count + excluded.report_count,
         updated_at = excluded.updated_at
-    `, [projectName, row.fieldKey, normalizeText(row.value, 200), number(row.events), 0, updatedAt]);
-  }
-  for (const row of data.configClients) {
-    await upsertDimensionClient(db, projectName, 'config', configDimensionKey(row.fieldKey, row.value), row.clientId, activityDate, updatedAt);
-  }
-  for (const row of data.configs) {
-    const value = normalizeText(row.value, 200);
-    await updateDimensionClientCount(db, 'stats_configs', 'client_count', 'project_name = ? AND field_key = ? AND value = ?', [projectName, row.fieldKey, value], projectName, 'config', configDimensionKey(row.fieldKey, value));
+    `, [projectName, row.fieldKey, normalizeText(row.value, 200), number(row.events), updatedAt]);
   }
 
   for (const row of data.models) {
     await run(db, `
-      INSERT INTO stats_models (
-        project_name, request_type, provider, endpoint_host, model,
-        request_count, prompt_tokens, completion_tokens, total_tokens, client_count, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO stats_models (project_name, request_type, provider, endpoint_host, model, request_count, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(project_name, request_type, provider, endpoint_host, model) DO UPDATE SET
         request_count = stats_models.request_count + excluded.request_count,
-        prompt_tokens = stats_models.prompt_tokens + excluded.prompt_tokens,
-        completion_tokens = stats_models.completion_tokens + excluded.completion_tokens,
-        total_tokens = stats_models.total_tokens + excluded.total_tokens,
         updated_at = excluded.updated_at
     `, [
       projectName,
@@ -999,48 +824,8 @@ async function upsertRollupData(db, projectName, activityDate, data) {
       normalizeText(row.endpointHost, 120),
       normalizeText(row.model, 160),
       number(row.requestCount),
-      number(row.promptTokens),
-      number(row.completionTokens),
-      number(row.totalTokens),
-      0,
       updatedAt,
     ]);
-  }
-  for (const row of data.modelClients) {
-    await upsertDimensionClient(db, projectName, 'model', modelDimensionKey(row.requestType, row.provider, row.endpointHost, row.model), row.clientId, activityDate, updatedAt);
-  }
-  for (const row of data.models) {
-    const requestType = normalizeText(row.requestType, 20);
-    const provider = normalizeText(row.provider, 80);
-    const endpointHost = normalizeText(row.endpointHost, 120);
-    const model = normalizeText(row.model, 160);
-    await updateDimensionClientCount(
-      db,
-      'stats_models',
-      'client_count',
-      'project_name = ? AND request_type = ? AND provider = ? AND endpoint_host = ? AND model = ?',
-      [projectName, requestType, provider, endpointHost, model],
-      projectName,
-      'model',
-      modelDimensionKey(requestType, provider, endpointHost, model),
-    );
-  }
-
-  for (const row of data.resources) {
-    await run(db, `
-      INSERT INTO stats_resource_clicks (project_name, resource_key, click_count, client_count, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(project_name, resource_key) DO UPDATE SET
-        click_count = stats_resource_clicks.click_count + excluded.click_count,
-        updated_at = excluded.updated_at
-    `, [projectName, normalizeText(row.resourceKey, 80), number(row.clickCount), 0, updatedAt]);
-  }
-  for (const row of data.resourceClients) {
-    await upsertDimensionClient(db, projectName, 'resource', resourceDimensionKey(row.resourceKey), row.clientId, activityDate, updatedAt);
-  }
-  for (const row of data.resources) {
-    const resourceKey = normalizeText(row.resourceKey, 80);
-    await updateDimensionClientCount(db, 'stats_resource_clicks', 'client_count', 'project_name = ? AND resource_key = ?', [projectName, resourceKey], projectName, 'resource', resourceDimensionKey(resourceKey));
   }
 
   await run(db, `
@@ -1057,7 +842,7 @@ async function upsertRollupData(db, projectName, activityDate, data) {
   `, [appOpenCount, pageViewCount, eventCount, aiRequestCount, projectName, activityDate, activityDate, updatedAt, projectName]);
 }
 
-export async function rollupStatsDay(env, projectName, activityDate) {
+export async function rollupStatsDay(env, projectName, activityDate, options = {}) {
   const db = requireStatsDb(env);
   const existing = await first(db, `
     SELECT status
@@ -1071,9 +856,19 @@ export async function rollupStatsDay(env, projectName, activityDate) {
   const startedAt = nowText();
   await markRollupRunning(db, projectName, activityDate, startedAt);
   try {
-    const data = await queryRollupData(env, projectName, activityDate);
+    const data = await queryRollupData(env, projectName, activityDate, { includeResources: false });
     await upsertRollupData(db, projectName, activityDate, data);
     await markRollupSuccess(db, projectName, activityDate, nowText());
+    if (options.updateResources !== false) {
+      try {
+        const resourceResult = await rollupResourceClicksDay(env, projectName, activityDate);
+        if (resourceResult.skipped) {
+          console.warn(`[analytics] resource click rollup skipped: ${resourceResult.reason}`);
+        }
+      } catch (error) {
+        console.warn('[analytics] resource click rollup failed', error?.message || String(error));
+      }
+    }
     return { projectName, activityDate, skipped: false };
   } catch (error) {
     await markRollupFailed(db, projectName, activityDate, nowText(), error);

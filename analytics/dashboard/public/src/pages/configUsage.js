@@ -64,10 +64,9 @@ function renderUsageGroups(target, usage, groups) {
   target.innerHTML = `<div class="usage-grid">${groups.map(([key, label]) => {
     const rows = usage?.[key] || [];
     const body = rows.length
-      ? `<table><thead><tr><th>取值</th><th>客户端</th><th>次数</th></tr></thead><tbody>${rows.map((row) => `
+      ? `<table><thead><tr><th>取值</th><th>次数</th></tr></thead><tbody>${rows.map((row) => `
           <tr>
             <td><code>${escapeHtml(labelConfigValue(key, row.value))}</code></td>
-            <td>${formatNumber(row.clients)}</td>
             <td>${formatNumber(row.events)}</td>
           </tr>
         `).join('')}</tbody></table>`
@@ -80,16 +79,12 @@ function renderModelUsageGroups(target, usage, groups) {
   target.innerHTML = `<div class="usage-grid">${groups.map(([key, label]) => {
     const rows = usage?.[key] || [];
     const body = rows.length
-      ? `<table><thead><tr><th>服务商</th><th>域名</th><th>模型</th><th>客户端</th><th>次数</th><th>Prompt Tokens</th><th>Completion Tokens</th><th>Total Tokens</th></tr></thead><tbody>${rows.map((row) => `
+      ? `<table><thead><tr><th>服务商</th><th>域名</th><th>模型</th><th>次数</th></tr></thead><tbody>${rows.map((row) => `
           <tr>
             <td><code>${escapeHtml(labelModelProvider(key, row.provider))}</code></td>
             <td><code>${escapeHtml(row.endpoint_host || row.base_url || '-')}</code></td>
             <td><code>${escapeHtml(row.model || '-')}</code></td>
-            <td>${formatNumber(row.clients)}</td>
             <td>${formatNumber(row.events)}</td>
-            <td>${formatNumber(row.prompt_tokens)}</td>
-            <td>${formatNumber(row.completion_tokens)}</td>
-            <td>${formatNumber(row.total_tokens)}</td>
           </tr>
         `).join('')}</tbody></table>`
       : '<div class="empty">暂无数据</div>';

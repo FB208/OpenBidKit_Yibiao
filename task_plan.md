@@ -1,5 +1,41 @@
 # Task Plan
 
+## Current Task: Analytics 统计改造计划收敛实现
+
+### Goal
+按 `client/doc/统计改造计划.md` 的新方案收敛 Analytics 统计实现：删除过度设计的 `stats_dimension_clients` 和维度客户端计数；`openbidkit-analytics` 使用简化 `stats_*` 表重建；`openbidkit-resources.resources` 增加累计点击量列；资源页面显示 D1 累计点击量 + AE 今天点击量；`/track` 新客户端实时入 D1 窗口改为不超过 1 天；同步 Dashboard、Client、回填脚本和文档。
+
+### Phases
+- [completed] 1. 简化 Analytics D1 schema、资源 D1 migration 和 Worker 汇总/查询逻辑。
+- [completed] 2. 改造资源点击量权威来源为 `RESOURCE_DB.resources.click_count` + AE 今天点击量。
+- [completed] 3. 改造 Dashboard，删除维度客户端列和资源点击范围选择。
+- [completed] 4. 改造 Client 资源页，显示完整累计点击量，不再请求近 30 天。
+- [completed] 5. 同步回填脚本和文档说明。
+- [completed] 6. 运行语法检查、客户端构建和 diff 检查。
+- [completed] 7. 修复 scheduled rollup 中资源库异常影响核心统计的问题。
+
+### Decisions
+- 线上 `openbidkit-analytics` 已由用户手动删除，本轮不做旧统计库兼容迁移，直接更新建库 schema。
+- 删除 `stats_dimension_clients`，不再维护历史维度唯一客户端数；计划要求的页面/版本/配置/模型历史统计只保留数量。
+- `openbidkit-resources` 是既有库，不删除，只通过 D1 migration 为 `resources` 表新增 `click_count`。
+- 资源累计点击量以 `resources.click_count` 为历史权威，当天实时部分从 AE 查询并相加展示。
+- 回填资源点击时使用总量 `SET`，不按天累加，避免脚本重跑导致重复累计。
+- scheduled 核心统计 rollup 成功后再单独尝试资源点击累加；缺少或异常的 `RESOURCE_DB` 只 warning，不影响 `stats_*` 成功标记。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 首次写入计划文件补丁因 `findings.md` 上下文匹配失败而未应用 | 追加计划记录 | 改用小范围补丁分段写入，确认首次补丁未产生文件改动 |
+
+### Validation
+- `node --check` 通过：`analytics/worker/src/services/analyticsStatsStore.js`、`routes/resources.js`、`services/resourceStore.js`、`routes/configUsage.js`、`routes/overview.js`、`routes/clients.js`、`routes/traffic.js`、`src/index.js`。
+- `node --check` 通过：`analytics/scripts/backfill-analytics-stats.mjs`。
+- Dashboard 改动模块 `node --check` 通过：`api.js`、`state.js`、`main.js`、`pages/traffic.js`、`pages/configUsage.js`、`pages/resources.js`。
+- Worker 模块动态 import 通过：`analyticsStatsStore.js`、`routes/resources.js`。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- `git diff --check` 通过，仅有 LF/CRLF 提示。
+- 资源 rollup 解耦修复后，`node --check analytics/worker/src/services/analyticsStatsStore.js` 和模块动态 import 通过。
+
 ## Current Task: Analytics stats 历史回填脚本
 
 ### Goal

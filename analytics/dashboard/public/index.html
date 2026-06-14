@@ -132,7 +132,7 @@
         <div class="section-head">
           <div>
             <h2>配置使用情况</h2>
-            <p>历史总数展示累计上报次数和累计客户端数。</p>
+            <p>历史总数展示累计上报次数。</p>
           </div>
           <label class="inline-select">
             范围
@@ -153,7 +153,7 @@
         <div class="section-head">
           <div>
             <h2>模型使用</h2>
-            <p>历史总数展示累计请求数、Tokens 和累计客户端数。</p>
+            <p>历史总数展示累计请求次数。</p>
           </div>
           <label class="inline-select">
             范围
@@ -251,15 +251,6 @@
             <h2>资源管理</h2>
           </div>
           <div class="resource-head-actions">
-            <label class="inline-select">
-              点击统计
-              <select id="resourceClickRange">
-                <option value="7">最近 7 天</option>
-                <option value="30" selected>最近 30 天</option>
-                <option value="90">最近 90 天</option>
-                <option value="history">历史总数</option>
-              </select>
-            </label>
             <button id="loadResourcesButton" type="button">读取资源</button>
             <button id="newResourceButton" type="button">新增资源</button>
           </div>

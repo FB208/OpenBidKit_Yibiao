@@ -4,11 +4,13 @@ import { fileURLToPath } from 'node:url';
 import { ALLOWED_EVENTS, DATASET } from '../worker/src/constants.js';
 import { queryAnalytics } from '../worker/src/services/analyticsQuery.js';
 import { rollupStatsDay } from '../worker/src/services/analyticsStatsStore.js';
+import { listAdminResources } from '../worker/src/services/resourceStore.js';
 import { businessDateSqlExpression, getBusinessToday, sqlString } from '../worker/src/utils.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPath = resolve(__dirname, '.env');
-const d1DatabaseName = 'openbidkit-analytics';
+const analyticsD1DatabaseName = 'openbidkit-analytics';
+const resourceD1DatabaseName = 'openbidkit-resources';
 const projectName = 'yibiao-client';
 const retryableStatuses = new Set([429, 500, 502, 503, 504]);
 
@@ -119,18 +121,19 @@ function readCredentials() {
     accountId,
     d1ApiToken: readRequiredEnv('CLOUDFLARE_API_TOKEN'),
     analyticsApiToken: readRequiredEnv('ANALYTICS_API_TOKEN'),
-    databaseId: String(process.env.ANALYTICS_DB_ID || '').trim(),
+    analyticsDatabaseId: String(process.env.ANALYTICS_DB_ID || '').trim(),
+    resourceDatabaseId: String(process.env.RESOURCE_DB_ID || '').trim(),
   };
 }
 
-async function resolveD1DatabaseId(accountId, apiToken, explicitDatabaseId) {
+async function resolveD1DatabaseId(accountId, apiToken, databaseName, explicitDatabaseId) {
   if (explicitDatabaseId) return explicitDatabaseId;
 
-  const api = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database?name=${encodeURIComponent(d1DatabaseName)}&per_page=50`;
+  const api = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database?name=${encodeURIComponent(databaseName)}&per_page=50`;
   const data = await requestCloudflareJson(api, { apiToken });
-  const match = (data.result || []).find((item) => item.name === d1DatabaseName);
+  const match = (data.result || []).find((item) => item.name === databaseName);
   if (!match?.uuid) {
-    throw new Error(`Unable to find D1 database by name: ${d1DatabaseName}. Set ANALYTICS_DB_ID in ${envPath}.`);
+    throw new Error(`Unable to find D1 database by name: ${databaseName}. Set the corresponding DB id in ${envPath}.`);
   }
   return match.uuid;
 }
@@ -267,9 +270,38 @@ async function backfillOne(env, activityDate) {
   }
 
   console.log(`[run] ${activityDate}`);
-  const result = await rollupStatsDay(env, projectName, activityDate);
+  const result = await rollupStatsDay(env, projectName, activityDate, { updateResources: false });
   console.log(result.skipped ? `[skip] ${activityDate}` : `[done] ${activityDate}`);
   return result.skipped ? 'skipped' : 'completed';
+}
+
+async function backfillResourceClickTotals(env) {
+  const resources = await listAdminResources(env, { origin: '' });
+  if (!resources.length) {
+    console.log('Resource click totals skipped: no resources found.');
+    return;
+  }
+
+  const today = getBusinessToday();
+  const result = await queryAnalytics(env, `
+    SELECT blob9 AS resourceKey, SUM(_sample_interval) AS clickCount
+    FROM ${DATASET}
+    WHERE blob1 = ${sqlString(projectName)}
+      AND blob2 = 'resource_click'
+      AND blob9 != ''
+      AND ${businessDateSqlExpression()} < ${sqlString(today)}
+    GROUP BY resourceKey
+    LIMIT 100000
+  `);
+  const countByKey = new Map((result.data || []).map((row) => [String(row.resourceKey || ''), Number(row.clickCount || 0)]));
+  let updated = 0;
+  for (const resource of resources) {
+    const clickCount = Math.max(0, Math.floor(countByKey.get(resource.analyticsKey) || 0));
+    await env.RESOURCE_DB.prepare('UPDATE resources SET click_count = ? WHERE id = ?').bind(clickCount, resource.id).run();
+    updated += 1;
+  }
+
+  console.log(`Resource click totals set from historical AE data. resources=${updated}, before=${today}`);
 }
 
 async function main() {
@@ -279,13 +311,29 @@ async function main() {
 
   loadEnv();
   const credentials = readCredentials();
-  const databaseId = await resolveD1DatabaseId(credentials.accountId, credentials.d1ApiToken, credentials.databaseId);
+  const analyticsDatabaseId = await resolveD1DatabaseId(
+    credentials.accountId,
+    credentials.d1ApiToken,
+    analyticsD1DatabaseName,
+    credentials.analyticsDatabaseId,
+  );
+  const resourceDatabaseId = await resolveD1DatabaseId(
+    credentials.accountId,
+    credentials.d1ApiToken,
+    resourceD1DatabaseName,
+    credentials.resourceDatabaseId,
+  );
   const env = {
     ACCOUNT_ID: credentials.accountId,
     ANALYTICS_API_TOKEN: credentials.analyticsApiToken,
     ANALYTICS_DB: new RemoteD1Database({
       accountId: credentials.accountId,
-      databaseId,
+      databaseId: analyticsDatabaseId,
+      apiToken: credentials.d1ApiToken,
+    }),
+    RESOURCE_DB: new RemoteD1Database({
+      accountId: credentials.accountId,
+      databaseId: resourceDatabaseId,
       apiToken: credentials.d1ApiToken,
     }),
   };
@@ -294,7 +342,8 @@ async function main() {
   console.log(`Project: ${projectName}`);
   console.log(`Business date upper bound: before ${getBusinessToday()} Asia/Shanghai`);
   console.log(`Loaded .env: ${envPath}`);
-  console.log(`D1 database: ${databaseId}`);
+  console.log(`Analytics D1 database: ${analyticsDatabaseId}`);
+  console.log(`Resource D1 database: ${resourceDatabaseId}`);
 
   const dates = await queryBackfillDates(env);
   if (!dates.length) {
@@ -308,6 +357,8 @@ async function main() {
     const status = await backfillOne(env, activityDate);
     summary[status] += 1;
   }
+
+  await backfillResourceClickTotals(env);
 
   console.log(`Backfill finished. completed=${summary.completed}, skipped=${summary.skipped}`);
 }

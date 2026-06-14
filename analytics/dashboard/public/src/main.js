@@ -94,7 +94,6 @@ function bindEvents() {
   state.latestEventFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
   state.closeClientDetail.addEventListener('click', () => state.clientDetailDialog.close());
   state.clientDetailRange.addEventListener('change', () => loadClientDetail().catch((error) => setError(error?.message || String(error))));
-  state.resourceClickRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
 }
 
 loadSettings();
