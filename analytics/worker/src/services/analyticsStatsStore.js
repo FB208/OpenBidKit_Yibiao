@@ -730,7 +730,14 @@ async function queryRollupData(env, projectName, activityDate, options = {}) {
 async function refreshVersionClientCounts(db, projectName, updatedAt) {
   await run(db, `
     UPDATE stats_versions
-    SET client_count = 0, updated_at = ?
+    SET
+      client_count = (
+        SELECT COUNT(*)
+        FROM stats_clients
+        WHERE stats_clients.project_name = stats_versions.project_name
+          AND stats_clients.last_active_version = stats_versions.version
+      ),
+      updated_at = ?
     WHERE project_name = ?
   `, [updatedAt, projectName]);
 
