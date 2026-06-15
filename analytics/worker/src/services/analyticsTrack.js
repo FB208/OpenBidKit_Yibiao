@@ -17,9 +17,31 @@ function normalizeBaseUrlHost(value) {
   }
 }
 
+function isIpv4(value) {
+  const parts = String(value || '').split('.');
+  return parts.length === 4 && parts.every((part) => {
+    if (!/^\d{1,3}$/.test(part)) return false;
+    const number = Number(part);
+    return number >= 0 && number <= 255;
+  });
+}
+
+function isSingleIp(value) {
+  return Boolean(value) && !/[\s,]/.test(value);
+}
+
 function normalizeClientIp(request) {
-  const value = normalizeText(request?.headers?.get('CF-Connecting-IP'), 80);
-  return value && !/[\s,]/.test(value) ? value : '';
+  const connectingIp = normalizeText(request?.headers?.get('CF-Connecting-IP'), 80);
+  if (isIpv4(connectingIp)) {
+    return connectingIp;
+  }
+
+  const pseudoIpv4 = normalizeText(request?.headers?.get('CF-Pseudo-IPv4'), 80);
+  if (isIpv4(pseudoIpv4)) {
+    return pseudoIpv4;
+  }
+
+  return isSingleIp(connectingIp) ? connectingIp : '';
 }
 
 function createMetricBlobs(event) {

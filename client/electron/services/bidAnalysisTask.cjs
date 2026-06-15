@@ -1,4 +1,6 @@
 const { buildSectionContextHint } = require('../utils/bidSectionDetector.cjs');
+const { mergeSegmentedAiResults } = require('../utils/segmentedAiResultMerger.cjs');
+const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 
 const stableSystemPrompt = `你是专业的招标文件分析助手。请严格基于用户提供的招标文件原文完成提取和总结。
 
@@ -176,12 +178,43 @@ function buildMessages(fileContent, task, sectionHint) {
   return messages;
 }
 
-async function runSingleBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint }) {
+async function runSingleBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint, logTitle }) {
   return aiService.chat({
     messages: buildMessages(fileContent, task, sectionHint),
     temperature: 0.1,
     response_format: task.output === 'json' ? { type: 'json_object' } : undefined,
-    logTitle: `招标解析-${task.label}`,
+    logTitle: logTitle || `招标解析-${task.label}`,
+  });
+}
+
+async function runBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint }) {
+  const currentConfig = typeof aiService.getConfig === 'function' ? aiService.getConfig() : {};
+  const segments = splitUserTextByContextLimit(fileContent, currentConfig);
+  if (segments.length <= 1) {
+    return runSingleBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint });
+  }
+
+  const segmentResults = await Promise.all(segments.map(async (segmentContent, index) => ({
+    segmentIndex: index + 1,
+    totalSegments: segments.length,
+    content: await runSingleBidAnalysisPromptTask({
+      aiService,
+      fileContent: segmentContent,
+      task,
+      sectionHint,
+      logTitle: `招标解析-${task.label}-第${index + 1}段`,
+    }),
+  })));
+
+  return mergeSegmentedAiResults({
+    aiService,
+    segmentResults,
+    taskPrompt: task.prompt(),
+    output: task.output,
+    systemPrompt: stableSystemPrompt,
+    sectionHint,
+    taskLabel: task.label,
+    logTitle: `招标解析合并-${task.label}`,
   });
 }
 
@@ -264,7 +297,7 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
     technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTasks: runningTasks, bidAnalysisProgress: doneProgress(runningTasks) });
     updateTask({ status: 'running', progress: technicalPlan.bidAnalysisProgress || 0 }, technicalPlan);
 
-    const content = await runSingleBidAnalysisPromptTask({
+    const content = await runBidAnalysisPromptTask({
       aiService,
       fileContent,
       task,
@@ -297,5 +330,6 @@ module.exports = {
   getBidAnalysisTasks,
   runInvalidBidAndRejectionItemsExtraction,
   runBidAnalysisTask,
+  runBidAnalysisPromptTask,
   runSingleBidAnalysisPromptTask,
 };

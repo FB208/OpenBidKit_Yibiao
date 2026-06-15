@@ -39,12 +39,14 @@ const aiRequestModeOptions: Array<{ value: AiRequestMode; label: string }> = [
   { value: 'stream', label: '流式请求' },
 ];
 
+const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
+
 const textProviderDefaults: TextModelProfiles = {
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', request_mode: 'stream' },
-  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', request_mode: 'stream' },
-  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', request_mode: 'stream' },
-  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', request_mode: 'stream' },
-  custom: { api_key: '', base_url: '', model_name: '', request_mode: 'stream' },
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, request_mode: 'stream' },
+  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, request_mode: 'stream' },
+  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, request_mode: 'stream' },
+  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, request_mode: 'stream' },
+  custom: { api_key: '', base_url: '', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, request_mode: 'stream' },
 };
 
 const textProviderApiKeyUrls: Partial<Record<TextModelProvider, string>> = {
@@ -65,6 +67,11 @@ function normalizeAiRequestMode(value?: AiRequestMode): AiRequestMode {
   return value === 'normal' ? 'normal' : 'stream';
 }
 
+function normalizeTextContextLengthLimit(value?: number): number {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT;
+}
+
 function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partial<TextModelConfig>): TextModelConfig {
   const defaults = textProviderDefaults[provider];
   const baseUrl = provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url;
@@ -72,6 +79,7 @@ function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partia
     api_key: profile?.api_key ?? defaults.api_key,
     base_url: baseUrl,
     model_name: profile?.model_name ?? defaults.model_name,
+    context_length_limit: normalizeTextContextLengthLimit(profile?.context_length_limit ?? defaults.context_length_limit),
     request_mode: normalizeAiRequestMode(profile?.request_mode ?? defaults.request_mode),
   };
 }
@@ -88,6 +96,7 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
     api_key: textModel.api_key,
     base_url: textModel.provider === 'custom' ? textModel.base_url : textProviderDefaults[textModel.provider].base_url,
     model_name: textModel.model_name,
+    context_length_limit: normalizeTextContextLengthLimit(textModel.context_length_limit),
     request_mode: textModel.request_mode,
   };
 }
@@ -448,6 +457,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       api_key: activeTextProfile.api_key,
       base_url: activeTextProfile.base_url,
       model_name: activeTextProfile.model_name,
+      context_length_limit: activeTextProfile.context_length_limit,
       request_mode: activeTextProfile.request_mode,
       image_model: activeImageProfile,
       image_model_profiles: imageModelProfiles,
@@ -1239,6 +1249,20 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   {testingTextModel ? '测试中' : '测试'}
                 </button>
               </div>
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>上下文长度限制</strong>
+                <span>配置所选模型的上下文长度，在处理长文本时会自动截断，分批处理</span>
+              </div>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={state.textModel.context_length_limit}
+                placeholder="400000"
+                onChange={(event) => updateTextModelConfig({ context_length_limit: normalizeTextContextLengthLimit(Number(event.target.value)) })}
+              />
             </label>
             <label className="settings-row">
               <div className="settings-row-copy">
