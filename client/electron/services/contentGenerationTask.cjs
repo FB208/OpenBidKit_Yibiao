@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const { createNoopDeveloperLogger } = require('../utils/developerLog.cjs');
+const { applyRangeEdits } = require('../utils/textEdit.cjs');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 
 const IMAGE_STYLES = new Set(['engineering_diagram', 'realistic_photo']);
@@ -19,6 +20,8 @@ const CONSISTENCY_AUDIT_GROUP_WORD_LIMIT = 300000;
 const CONSISTENCY_REPAIR_MAX_ATTEMPTS = 2;
 const ORIGINAL_PLAN_SEGMENT_MAX_CHARS = 6000;
 const ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS = 2;
+const TABLE_CLEANUP_CONTEXT_CHARS = 600;
+const TABLE_CLEANUP_BATCH_CHAR_LIMIT = 30000;
 const TABLE_REQUIREMENT_LABELS = {
   none: '不要',
   light: '少量',
@@ -129,6 +132,168 @@ function normalizeGeneratedMarkdown(content) {
       return normalizedLine.replace(/\s*<br \/>\s*/g, '  \n');
     })
     .join('\n');
+}
+
+function splitLinesWithRanges(content) {
+  const text = String(content || '');
+  const lines = [];
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char !== '\r' && char !== '\n') {
+      continue;
+    }
+    const lineEnd = index;
+    const newlineEnd = char === '\r' && text[index + 1] === '\n' ? index + 2 : index + 1;
+    lines.push({ text: text.slice(start, lineEnd), start, end: lineEnd, newlineEnd });
+    start = newlineEnd;
+    if (newlineEnd > index + 1) {
+      index += 1;
+    }
+  }
+  if (start < text.length || !lines.length) {
+    lines.push({ text: text.slice(start), start, end: text.length, newlineEnd: text.length });
+  }
+  return lines;
+}
+
+function collectFencedCodeRanges(content) {
+  const ranges = [];
+  const lines = splitLinesWithRanges(content);
+  let fence = null;
+  let start = 0;
+  for (const line of lines) {
+    const match = /^(?: {0,3})(`{3,}|~{3,})(.*)$/.exec(line.text);
+    if (!match) {
+      continue;
+    }
+    const marker = match[1][0];
+    const length = match[1].length;
+    const rest = match[2] || '';
+    if (!fence) {
+      if (marker === '`' && rest.includes('`')) {
+        continue;
+      }
+      fence = { marker, length };
+      start = line.start;
+      continue;
+    }
+    if (marker === fence.marker && length >= fence.length && /^[ \t]*$/.test(rest)) {
+      ranges.push({ start, end: line.newlineEnd });
+      fence = null;
+    }
+  }
+  if (fence) {
+    ranges.push({ start, end: String(content || '').length });
+  }
+  return ranges;
+}
+
+function rangeOverlaps(start, end, ranges) {
+  return (ranges || []).some((range) => start < range.end && end > range.start);
+}
+
+function isMarkdownTableRow(line) {
+  const trimmed = String(line || '').trim();
+  return trimmed.includes('|') && trimmed.replace(/\\\|/g, '').includes('|');
+}
+
+function isMarkdownTableSeparator(line) {
+  const trimmed = String(line || '').trim();
+  if (!isMarkdownTableRow(trimmed)) return false;
+  const rawCells = trimmed.replace(/^\|/, '').replace(/\|$/, '').split('|');
+  const cells = rawCells.map((cell) => cell.trim()).filter(Boolean);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function extractMarkdownTableBlocks(content, fencedRanges) {
+  const lines = splitLinesWithRanges(content);
+  const tables = [];
+  let index = 0;
+  while (index < lines.length - 1) {
+    const header = lines[index];
+    const separator = lines[index + 1];
+    if (rangeOverlaps(header.start, separator.end, fencedRanges) || !isMarkdownTableRow(header.text) || !isMarkdownTableSeparator(separator.text)) {
+      index += 1;
+      continue;
+    }
+
+    let endLine = index + 1;
+    while (endLine + 1 < lines.length && !rangeOverlaps(lines[endLine + 1].start, lines[endLine + 1].end, fencedRanges) && isMarkdownTableRow(lines[endLine + 1].text)) {
+      endLine += 1;
+    }
+    const start = header.start;
+    const end = lines[endLine].end;
+    tables.push({ type: 'markdown', start, end, text: String(content || '').slice(start, end) });
+    index = endLine + 1;
+  }
+  return tables;
+}
+
+function extractHtmlTableBlocks(content, fencedRanges) {
+  const text = String(content || '');
+  const tables = [];
+  const pattern = /<table\b[\s\S]*?<\/table>/gi;
+  let match;
+  while ((match = pattern.exec(text))) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (rangeOverlaps(start, end, fencedRanges)) {
+      continue;
+    }
+    tables.push({ type: 'html', start, end, text: match[0] });
+  }
+  return tables;
+}
+
+function addTableContext(content, tables) {
+  const text = String(content || '');
+  return (tables || []).map((table, index) => ({
+    id: `T${String(index + 1).padStart(3, '0')}`,
+    ...table,
+    before: text.slice(Math.max(0, table.start - TABLE_CLEANUP_CONTEXT_CHARS), table.start).trim(),
+    after: text.slice(table.end, Math.min(text.length, table.end + TABLE_CLEANUP_CONTEXT_CHARS)).trim(),
+  }));
+}
+
+function extractContentTableBlocks(content) {
+  const fencedRanges = collectFencedCodeRanges(content);
+  const tables = [
+    ...extractMarkdownTableBlocks(content, fencedRanges),
+    ...extractHtmlTableBlocks(content, fencedRanges),
+  ].sort((a, b) => a.start - b.start || a.end - b.end);
+  const nonOverlapping = [];
+  for (const table of tables) {
+    if (nonOverlapping.some((existing) => table.start < existing.end && table.end > existing.start)) {
+      continue;
+    }
+    nonOverlapping.push(table);
+  }
+  return addTableContext(content, nonOverlapping);
+}
+
+function containsContentTable(content) {
+  return extractContentTableBlocks(content).length > 0;
+}
+
+function createTableCleanupBatches(tables) {
+  const batches = [];
+  let current = [];
+  let currentSize = 0;
+  for (const table of tables || []) {
+    const size = String(table.text || '').length + String(table.before || '').length + String(table.after || '').length;
+    if (current.length && currentSize + size > TABLE_CLEANUP_BATCH_CHAR_LIMIT) {
+      batches.push(current);
+      current = [];
+      currentSize = 0;
+    }
+    current.push(table);
+    currentSize += size;
+  }
+  if (current.length) {
+    batches.push(current);
+  }
+  return batches;
 }
 
 function normalizeMermaidCode(value) {
@@ -375,10 +540,12 @@ function normalizeIllustrationType(value) {
   return ['ai', 'mermaid', 'none'].includes(value) ? value : 'none';
 }
 
-function createStoredContentPlan(plan, illustrationType) {
+function createStoredContentPlan(plan, illustrationType, tableRequirement) {
+  const normalizedTableRequirement = tableRequirement ? normalizeTableRequirement(tableRequirement) : '';
   return {
     plan: normalizeContentPlan(plan),
     illustration_type: normalizeIllustrationType(illustrationType),
+    ...(normalizedTableRequirement ? { table_requirement: normalizedTableRequirement } : {}),
     updated_at: now(),
   };
 }
@@ -393,11 +560,24 @@ function normalizeStoredContentPlan(value) {
   }
 
   const plan = normalizeContentPlan(value.plan || value.contentPlan || value);
+  const tableRequirement = value.table_requirement || value.tableRequirement
+    ? normalizeTableRequirement(value.table_requirement || value.tableRequirement)
+    : '';
   return {
     plan,
     illustration_type: normalizeIllustrationType(value.illustration_type || value.illustrationType),
+    ...(tableRequirement ? { table_requirement: tableRequirement } : {}),
     updated_at: value.updated_at || value.updatedAt || now(),
   };
+}
+
+function isStoredContentPlanReusableForTableRequirement(storedContentPlan, tableRequirement) {
+  const currentRequirement = normalizeTableRequirement(tableRequirement);
+  const storedRequirement = storedContentPlan?.table_requirement || '';
+  if (storedRequirement) {
+    return storedRequirement === currentRequirement;
+  }
+  return currentRequirement === 'none';
 }
 
 function originalMaterialFromStoredPlan(value) {
@@ -473,6 +653,85 @@ function formatContentPlanForPrompt(plan) {
     `原方案还原：${plan.original_material?.restored ? `已还原 ${plan.original_material.restored_chars || 0} 字` : '未还原'}`,
   ];
   return lines.join('\n');
+}
+
+function formatTablesForCleanupPrompt(tables) {
+  return (tables || []).map((table) => `<table_block id="${table.id}" type="${table.type}">
+上文片段：
+${table.before || '无'}
+
+待转换表格：
+${table.text || ''}
+
+下文片段：
+${table.after || '无'}
+</table_block>`).join('\n\n');
+}
+
+function buildTableCleanupMessages({ chapter, tables }) {
+  const allowedIds = (tables || []).map((table) => table.id).join('、') || '无';
+  return [
+    {
+      role: 'user',
+      content: `你是投标技术方案正文编辑助手。请把指定小节中的表格转换为普通文字描述。
+
+要求：
+1. 只返回 JSON，不要输出解释、总结或 Markdown 代码围栏。
+2. 必须逐个处理输入中的 table_id；允许按表格内容改写为普通段落或普通列表。
+3. 不改变原文意思，不删除数字、参数、工期、标准、职责、流程、承诺、验收要求、频次和数量。
+4. replacement_text 只写用于替换该表格块的正文片段，不返回完整小节正文。
+5. replacement_text 严禁包含 Markdown 表格、HTML <table>、代码块、章节标题或伪目录标题。
+6. 如表格本身为空或无法理解，也要用一句普通文字概括其表达意图，不要返回空字符串。
+
+返回格式：
+{
+  "replacements": [
+    { "table_id": "T001", "replacement_text": "普通文字描述" }
+  ]
+}
+
+允许的 table_id：${allowedIds}`,
+    },
+    {
+      role: 'user',
+      content: `当前小节：${chapter?.id || 'unknown'} ${chapter?.title || '未命名章节'}
+小节描述：${chapter?.description || '无'}`,
+    },
+    {
+      role: 'user',
+      content: `待转换表格块：
+${formatTablesForCleanupPrompt(tables)}`,
+    },
+  ];
+}
+
+function normalizeTableCleanupResponse(value, allowedTableIds) {
+  const source = value?.result && typeof value.result === 'object' ? value.result : value || {};
+  const rawReplacements = Array.isArray(source)
+    ? source
+    : Array.isArray(source.replacements)
+      ? source.replacements
+      : Array.isArray(source.items)
+        ? source.items
+        : [];
+  const seen = new Set();
+  const replacements = [];
+  for (const item of rawReplacements) {
+    const tableId = String(item?.table_id || item?.tableId || item?.id || '').trim();
+    const replacementText = normalizeGeneratedMarkdown(String(item?.replacement_text || item?.replacementText || item?.text || item?.content || '')).trim();
+    if (!tableId || seen.has(tableId) || (allowedTableIds instanceof Set && !allowedTableIds.has(tableId)) || !replacementText) {
+      continue;
+    }
+    replacements.push({ table_id: tableId, replacement_text: replacementText });
+    seen.add(tableId);
+  }
+  return { replacements };
+}
+
+function validateTableCleanupResponse(value) {
+  if (!value || !Array.isArray(value.replacements)) {
+    throw new Error('表格转换结果缺少 replacements 数组');
+  }
 }
 
 function buildMermaidRepairMessages({ chapter, parentChapters, siblingChapters, projectOverview, selectedFactsText, regenerateRequirement, mermaidPlan, invalidCode, errorMessage, attempt }) {
@@ -675,6 +934,7 @@ function buildChapterContentMessages({ chapter, parentChapters, siblingChapters,
   const chapterId = chapter.id || 'unknown';
   const chapterTitle = chapter.title || '未命名章节';
   const chapterDescription = chapter.description || '';
+  const tableAllowed = Boolean(contentPlan?.table?.needed);
   const messages = [
     {
       role: 'system',
@@ -686,10 +946,10 @@ function buildChapterContentMessages({ chapter, parentChapters, siblingChapters,
 3. 语言要正式、规范，符合标书写作要求，但不要使用奇怪的连接词，不要让人觉得内容像是 AI 生成的。
 4. 内容要详细具体，避免空泛的描述。
 5. 注意避免与同级章节内容重复，保持内容的独特性和互补性。
-6. 可以使用 Markdown 段落、列表和表格；表格必须服务于内容表达，不要为了形式硬插。
-7. 正文只生成文字、列表、表格等内容，配图由系统另行处理。
+6. ${tableAllowed ? '可以使用 Markdown 段落、列表和表格；表格必须服务于内容表达，不要为了形式硬插。' : '只能使用 Markdown 段落、普通列表和加粗引导语，严禁输出 Markdown 表格或 HTML 表格。'}
+7. ${tableAllowed ? '正文只生成文字、列表、表格等内容，配图由系统另行处理。' : '正文只生成文字和普通列表，配图由系统另行处理。'}
 8. 严禁输出 Mermaid、PlantUML、Graphviz、flowchart、graph、sequenceDiagram 等图表代码块、mermaid.ink 链接或图片 Markdown；配图由系统另行处理。
-9. 表格单元格内如有多项内容，优先使用编号、顿号、分号或短句，不要使用 HTML <br> 标签。
+9. ${tableAllowed ? '表格单元格内如有多项内容，优先使用编号、顿号、分号或短句，不要使用 HTML <br> 标签。' : '如需表达多项参数、职责、流程或措施，请改用分段文字或普通列表，不要用表格模拟。'}
 10. 严禁使用 Markdown 标题语法（#、##、###、####、#####、######），也不要生成与当前章节同级或下级的伪目录标题。
 11. 如需在正文中分层表达，只能使用普通段落、列表、表格或加粗引导语，例如 **实施要点：**。
 12. 直接返回章节内容，不生成标题，不要任何额外说明。
@@ -1582,8 +1842,9 @@ ${JSON.stringify(Array.from(allowedSectionIds || []), null, 2)}`,
   ];
 }
 
-function buildConsistencyRepairMessages({ context, conflicts, globalFactsText, bidAnalysisFactsText, currentContent, attempt, failures }) {
+function buildConsistencyRepairMessages({ context, conflicts, globalFactsText, bidAnalysisFactsText, currentContent, attempt, failures, tableRequirement }) {
   const { item } = context;
+  const tableAllowed = normalizeTableRequirement(tableRequirement) !== 'none';
   const failureBlock = (failures || []).length
     ? `\n上次修复应用失败原因：\n${failures.map((failure, index) => `${index + 1}. ${failure}`).join('\n')}\n请重新返回能够在当前正文中唯一定位的 old_text。`
     : '';
@@ -1600,9 +1861,9 @@ function buildConsistencyRepairMessages({ context, conflicts, globalFactsText, b
 4. 目标只修正正文中与事实冲突的内容，不要参照事实重写或扩充正文。
 5. 不要优化文风，不要新增无关事实，不要新增新的承诺。
 6. old_text 必须是当前小节正文中逐字存在的原文块，建议包含足够前后上下文，确保只出现一次。
-7. 如果修改表格，old_text 必须包含完整表格行或完整表格块，不要只返回单元格碎片。
+7. ${tableAllowed ? '如果修改表格，old_text 必须包含完整表格行或完整表格块，不要只返回单元格碎片。' : '本次配置为不要表格；如果冲突位于表格中，new_text 必须把相关内容改为普通文字或普通列表，不得继续返回 Markdown 表格或 HTML 表格。'}
 8. new_text 是替换后的正文块，不要包含章节标题，不要包含行号。
-9. 保留 Markdown 表格、列表、代码块、图片和 Mermaid 块结构。
+9. ${tableAllowed ? '保留 Markdown 表格、列表、代码块、图片和 Mermaid 块结构。' : '保留普通列表、代码块、图片和 Mermaid 块结构；不得新增或保留 Markdown 表格、HTML 表格。'}
 10. start_line/end_line 使用下方带行号正文中的 1-based 行号；如果不确定也必须提供可唯一匹配的 old_text。
 
 返回格式：
@@ -2743,6 +3004,10 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     audit_fix_total: 0,
     audit_fix_completed: 0,
     audit_fix_failed: 0,
+    table_cleanup_total: 0,
+    table_cleanup_completed: 0,
+    table_cleanup_rewritten: 0,
+    table_cleanup_skipped: 0,
     illustration_total: 0,
     illustration_completed: 0,
   };
@@ -3034,8 +3299,24 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     return normalizeStoredContentPlan(storedContentPlans[itemId]);
   }
 
+  function applyCurrentTableRequirementToPlan(plan) {
+    const normalizedPlan = normalizeContentPlan(plan, allowedKnowledgeItemIds, allowedFactTitles);
+    return tableRequirement === 'none' ? clearContentPlanTable(normalizedPlan) : normalizedPlan;
+  }
+
+  function getReusableStoredContentPlan(itemId) {
+    const storedContentPlan = getStoredContentPlan(itemId);
+    if (!storedContentPlan || !isStoredContentPlanReusableForTableRequirement(storedContentPlan, tableRequirement)) {
+      return null;
+    }
+    return {
+      ...storedContentPlan,
+      plan: applyCurrentTableRequirementToPlan(storedContentPlan.plan),
+    };
+  }
+
   function getContentPlanForItem(itemId) {
-    const plan = contentPlans.get(itemId) || getStoredContentPlan(itemId)?.plan || normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
+    const plan = contentPlans.get(itemId) || getReusableStoredContentPlan(itemId)?.plan || normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
     contentPlans.set(itemId, plan);
     return plan;
   }
@@ -3046,7 +3327,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     contentPlans.set(itemId, plan);
     storedContentPlans = pruneContentGenerationPlans({
       ...storedContentPlans,
-      [itemId]: createStoredContentPlan(plan, nextIllustrationType),
+      [itemId]: createStoredContentPlan(plan, nextIllustrationType, tableRequirement),
     }, leaves);
     const saved = workspaceStore.updateTechnicalPlan({ contentGenerationPlans: storedContentPlans, contentGenerationRuntime: syncRuntime() });
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved);
@@ -3123,7 +3404,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     contentPlans.set(item.id, plan);
     storedContentPlans = pruneContentGenerationPlans({
       ...storedContentPlans,
-      [item.id]: createStoredContentPlan(plan, nextIllustrationType),
+      [item.id]: createStoredContentPlan(plan, nextIllustrationType, tableRequirement),
     }, leaves);
     const runtime = syncRuntime();
     const saved = workspaceStore.updateTechnicalPlan({
@@ -3195,7 +3476,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     const nextPlans = { ...storedContentPlans };
     for (const context of targets) {
       const contentPlan = contentPlans.get(context.item.id) || normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
-      nextPlans[context.item.id] = createStoredContentPlan(contentPlan, getIllustrationType(context));
+      nextPlans[context.item.id] = createStoredContentPlan(contentPlan, getIllustrationType(context), tableRequirement);
     }
     storedContentPlans = pruneContentGenerationPlans(nextPlans, leaves);
     const saved = workspaceStore.updateTechnicalPlan({ contentGenerationPlans: storedContentPlans, contentGenerationRuntime: syncRuntime() });
@@ -3245,7 +3526,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     contentPlans.set(item.id, contentPlan);
     storedContentPlans = pruneContentGenerationPlans({
       ...storedContentPlans,
-      [item.id]: createStoredContentPlan(contentPlan, 'none'),
+      [item.id]: createStoredContentPlan(contentPlan, 'none', tableRequirement),
     }, leaves);
     workspaceStore.updateTechnicalPlan({ contentGenerationPlans: storedContentPlans, contentGenerationRuntime: syncRuntime() });
     contentStats.planning_completed += 1;
@@ -3259,7 +3540,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     contentStats.planning_total = tasksToRun.length;
     const planningTargets = [];
     for (const context of tasksToRun) {
-      const storedContentPlan = normalizeStoredContentPlan(storedContentPlans[context.item.id]);
+      const storedContentPlan = getReusableStoredContentPlan(context.item.id);
       if (storedContentPlan?.plan) {
         contentPlans.set(context.item.id, storedContentPlan.plan);
       } else {
@@ -3406,7 +3687,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
 
   async function prepareSingleSectionPlan() {
     const context = tasksToRun[0];
-    const storedContentPlan = normalizeStoredContentPlan(storedContentPlans[context.item.id]);
+    const storedContentPlan = getReusableStoredContentPlan(context.item.id);
     contentStats.phase = 'planning';
     contentStats.planning_total = 1;
     contentStats.planning_completed = 0;
@@ -3419,7 +3700,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       applyIllustrationTargets([context], () => storedContentPlan.illustration_type);
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
     } else {
-      logs = [...logs, `未找到历史编排结果，将仅重新编排当前小节：${context.item.id} ${context.item.title || '未命名章节'}。`];
+      logs = [...logs, `未找到可复用历史编排结果，将仅重新编排当前小节：${context.item.id} ${context.item.title || '未命名章节'}。`];
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
       await planOne(context);
       pauseIfRequested('正文生成已在小节编排后暂停，可导出当前已完成内容，稍后继续。');
@@ -3779,11 +4060,12 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       return section.status === 'success' && String(content || '').trim();
     });
     applyIllustrationTargets(targets, ({ item }) => {
-      const storedContentPlan = normalizeStoredContentPlan(storedContentPlans[item.id]);
-      if (storedContentPlan?.plan) {
-        contentPlans.set(item.id, storedContentPlan.plan);
+      const reusableStoredContentPlan = getReusableStoredContentPlan(item.id);
+      if (!reusableStoredContentPlan?.plan) {
+        return 'none';
       }
-      const illustrationType = storedContentPlan?.illustration_type || 'none';
+      contentPlans.set(item.id, reusableStoredContentPlan.plan);
+      const illustrationType = reusableStoredContentPlan.illustration_type || 'none';
       const content = currentSections[item.id]?.content || item.content || '';
       if (illustrationType !== 'none' && hasExistingIllustration(content, illustrationType)) {
         imageStats[illustrationType].skipped += 1;
@@ -3917,7 +4199,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     const { item, content, words } = context;
     const contentForPrompt = stripIllustrationsForExpansion(content) || content;
     const targetWords = Math.max(words * 2, words + MIN_SECTION_EXPANSION_INCREMENT);
-    const storedContentPlan = normalizeStoredContentPlan(storedContentPlans[item.id]);
+    const storedContentPlan = getReusableStoredContentPlan(item.id);
     const contentPlan = contentPlans.get(item.id) || storedContentPlan?.plan || normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
     const selectedFactsText = resolveSelectedFactsText(contentPlan, globalFacts);
     logs = [...logs, `开始扩写：${item.id} ${item.title || '未命名章节'}（当前 ${words} 字，目标 ${targetWords} 字）。`];
@@ -4057,6 +4339,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
             currentContent,
             attempt,
             failures,
+            tableRequirement,
           }),
           temperature: 0.2,
           logTitle: `原方案覆盖修复-${item.id}-${item.title || '未命名章节'}`,
@@ -4366,6 +4649,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
             currentContent,
             attempt,
             failures,
+            tableRequirement,
           }),
           temperature: 0.1,
           logTitle: `一致性修复-${item.id}-${item.title || '未命名章节'}`,
@@ -4622,6 +4906,183 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     return section.status === 'success' ? String(section.content || '') : '';
   }
 
+  function buildTableCleanupTargets(cleanupTargetItemId = '') {
+    const normalizedTargetId = String(cleanupTargetItemId || '').trim();
+    return leaves
+      .filter(({ item }) => !normalizedTargetId || item.id === normalizedTargetId)
+      .map((context) => {
+        const content = getCurrentSuccessfulContent(context.item);
+        return {
+          ...context,
+          content,
+          tables: extractContentTableBlocks(content),
+        };
+      })
+      .filter(({ content, tables }) => String(content || '').trim() && tables.length);
+  }
+
+  async function cleanupTablesForSection(target) {
+    const { item } = target;
+    let currentContent = target.content;
+    const originalTables = extractContentTableBlocks(currentContent);
+    let rewrittenCount = 0;
+    let skippedCount = 0;
+    if (!originalTables.length) {
+      return { rewrittenCount, skippedCount };
+    }
+
+    const batches = createTableCleanupBatches(originalTables).reverse();
+    writeDeveloperLog('table_cleanup.section.start', {
+      section_id: item.id,
+      title: item.title || '未命名章节',
+      table_count: originalTables.length,
+      batch_count: batches.length,
+      content_metrics: textMetrics(currentContent),
+    });
+
+    for (const batch of batches) {
+      pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
+      const allowedTableIds = new Set(batch.map((table) => table.id));
+      const tableById = new Map(batch.map((table) => [table.id, table]));
+      try {
+        const response = await aiService.collectJsonResponse({
+          messages: buildTableCleanupMessages({ chapter: item, tables: batch }),
+          temperature: 0.2,
+          logTitle: `正文去表格-${item.id}-${item.title || '未命名章节'}`,
+          progressLabel: '正文去表格',
+          failureMessage: '模型返回的表格转换结果格式无效',
+          normalizer: (value) => normalizeTableCleanupResponse(value, allowedTableIds),
+          validator: validateTableCleanupResponse,
+          max_retries: 1,
+        });
+        const edits = [];
+        const returnedIds = new Set();
+        for (const replacement of response.replacements || []) {
+          const table = tableById.get(replacement.table_id);
+          returnedIds.add(replacement.table_id);
+          if (!table) {
+            continue;
+          }
+          if (containsContentTable(replacement.replacement_text)) {
+            skippedCount += 1;
+            writeDeveloperLog('table_cleanup.replacement.skipped', {
+              section_id: item.id,
+              table_id: table.id,
+              reason: 'replacement_still_contains_table',
+              replacement_metrics: textMetrics(replacement.replacement_text),
+            });
+            continue;
+          }
+          edits.push({ start: table.start, end: table.end, newText: replacement.replacement_text });
+        }
+
+        const missingCount = batch.filter((table) => !returnedIds.has(table.id)).length;
+        skippedCount += missingCount;
+        if (!edits.length) {
+          contentStats.table_cleanup_completed += batch.length;
+          updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+          continue;
+        }
+
+        const editResult = applyRangeEdits(currentContent, edits);
+        if (editResult.errors.length) {
+          skippedCount += edits.length;
+          writeDeveloperLog('table_cleanup.apply.failed', {
+            section_id: item.id,
+            errors: editResult.errors,
+            edit_count: edits.length,
+          });
+        } else {
+          currentContent = editResult.content;
+          rewrittenCount += editResult.edits.length;
+          contentStats.table_cleanup_rewritten += editResult.edits.length;
+          rememberTouchedItem(item.id);
+          saveSection(item, { status: 'success', content: currentContent, error: undefined }, currentContent, { logs });
+          writeDeveloperLog('table_cleanup.apply.success', {
+            section_id: item.id,
+            applied_count: editResult.edits.length,
+            edit_results: editResult.edits,
+            content_metrics: textMetrics(currentContent),
+          });
+        }
+        contentStats.table_cleanup_completed += batch.length;
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      } catch (error) {
+        skippedCount += batch.length;
+        contentStats.table_cleanup_completed += batch.length;
+        logs = [...logs, `正文去表格跳过：${item.id} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}。`];
+        writeDeveloperLog('table_cleanup.batch.error', {
+          section_id: item.id,
+          title: item.title || '未命名章节',
+          table_ids: batch.map((table) => table.id),
+          error: error.message || '模型返回无效',
+          stack: error.stack || '',
+        });
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      }
+    }
+
+    const remainingTables = extractContentTableBlocks(currentContent).length;
+    if (remainingTables) {
+      writeDeveloperLog('table_cleanup.section.remaining', {
+        section_id: item.id,
+        title: item.title || '未命名章节',
+        remaining_tables: remainingTables,
+      });
+    }
+    return { rewrittenCount, skippedCount: Math.max(0, originalTables.length - rewrittenCount) };
+  }
+
+  async function removeTablesBeforeIllustration(options = {}) {
+    if (tableRequirement !== 'none') {
+      return { ran: false, rewrittenCount: 0, skippedCount: 0 };
+    }
+
+    const targets = buildTableCleanupTargets(options.targetItemId || targetItemId);
+    const tableTotal = targets.reduce((sum, target) => sum + target.tables.length, 0);
+    contentStats.phase = 'table-cleaning';
+    contentStats.table_cleanup_total = tableTotal;
+    contentStats.table_cleanup_completed = 0;
+    contentStats.table_cleanup_rewritten = 0;
+    contentStats.table_cleanup_skipped = 0;
+    workspaceStore.updateTechnicalPlan({ contentGenerationRuntime: syncRuntime({ phase: 'table-cleaning' }) });
+
+    if (!tableTotal) {
+      logs = [...logs, '正文去表格检查完成：未发现需要转换的表格。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return { ran: true, rewrittenCount: 0, skippedCount: 0 };
+    }
+
+    logs = [...logs, `开始正文去表格：发现 ${targets.length} 个小节、${tableTotal} 个表格，将转换为普通文字描述。`];
+    writeDeveloperLog('table_cleanup.start', {
+      target_item_id: options.targetItemId || targetItemId || '',
+      section_count: targets.length,
+      table_count: tableTotal,
+      sections: targets.map(({ item, tables }) => ({ id: item.id, title: item.title || '未命名章节', table_count: tables.length })),
+    });
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+    let rewrittenCount = 0;
+    let skippedCount = 0;
+    for (const target of targets) {
+      pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
+      const result = await cleanupTablesForSection(target);
+      rewrittenCount += result.rewrittenCount;
+      skippedCount += result.skippedCount;
+      contentStats.table_cleanup_skipped = skippedCount;
+    }
+
+    pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
+    logs = [...logs, `正文去表格完成：成功转换 ${rewrittenCount} 个表格，跳过 ${skippedCount} 个。`];
+    writeDeveloperLog('table_cleanup.done', {
+      table_count: tableTotal,
+      rewritten_count: rewrittenCount,
+      skipped_count: skippedCount,
+    });
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    return { ran: true, rewrittenCount, skippedCount };
+  }
+
   async function runAiIllustration(context) {
     const { item } = context;
     const contentPlan = contentPlans.get(item.id) || normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
@@ -4760,11 +5221,15 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         pauseIfRequested('正文生成已在一致性审计后的最低字数补足阶段暂停，可导出当前已完成内容，稍后继续。');
         await runConsistencyAuditIfEnabled({ reaudit: true });
       }
+      await removeTablesBeforeIllustration();
+      pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
       refreshIllustrationTargetsFromStoredPlans(touchedItemIds);
     } else {
       await runOriginalPlanCoverageAuditIfEnabled({ targetItemId });
       pauseIfRequested('正文生成已在原方案覆盖审计后暂停，可导出当前已完成内容，稍后继续。');
       await runConsistencyAuditIfEnabled({ targetItemId });
+      await removeTablesBeforeIllustration({ targetItemId });
+      pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
       if (!tasksToRun.length) {
         refreshIllustrationTargetsFromStoredPlans(new Set([targetItemId]));
       }
