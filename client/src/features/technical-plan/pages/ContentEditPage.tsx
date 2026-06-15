@@ -398,6 +398,8 @@ function ContentEditPage({
   const expanding = phaseVisible && contentStats?.phase === 'expanding';
   const originalAuditing = phaseVisible && contentStats?.phase === 'original-auditing';
   const auditing = phaseVisible && contentStats?.phase === 'auditing';
+  const tableCleaning = phaseVisible && contentStats?.phase === 'table-cleaning';
+  const contentCorrecting = originalAuditing || auditing || tableCleaning;
   const illustrating = phaseVisible && contentStats?.phase === 'illustrating';
   const outlineMeta = useMemo(() => outlineData?.outline ? buildOutlineMeta(outlineData.outline, sections, planning) : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections]);
   const contentSummary = useMemo(() => leaves.reduce((summary, item) => {
@@ -441,24 +443,38 @@ function ContentEditPage({
     : auditGroupTotal
       ? Math.round((auditGroupCompleted / auditGroupTotal) * 100)
       : 0;
+  const tableCleanupTotal = contentStats?.table_cleanup_total || 0;
+  const tableCleanupCompleted = contentStats?.table_cleanup_completed || 0;
+  const tableCleanupRewritten = contentStats?.table_cleanup_rewritten || 0;
+  const tableCleanupSkipped = contentStats?.table_cleanup_skipped || 0;
+  const tableCleanupProgress = tableCleanupTotal ? Math.round((tableCleanupCompleted / tableCleanupTotal) * 100) : 0;
+  const auditCorrectionCount = auditFixTotal
+    ? `${auditFixCompleted}/${auditFixTotal}`
+    : auditGroupTotal
+      ? `${auditGroupCompleted}/${auditGroupTotal}`
+      : '检查中';
+  const contentCorrectionProgress = tableCleaning ? tableCleanupProgress : auditProgress;
+  const contentCorrectionCount = tableCleaning
+    ? tableCleanupTotal ? `${tableCleanupCompleted}/${tableCleanupTotal}` : '检查中'
+    : auditCorrectionCount;
   const illustrationTotal = contentStats?.illustration_total || 0;
   const illustrationCompleted = contentStats?.illustration_completed || 0;
   const illustrationProgress = illustrationTotal ? Math.round((illustrationCompleted / illustrationTotal) * 100) : 0;
-  const displayProgress = planning ? planningProgress : outlineExpanding ? outlineExpansionProgress : expanding ? wordExpansionProgress : originalAuditing || auditing ? auditProgress : illustrating ? illustrationProgress : progress;
-  const displayProgressLabel = planning ? '编排统计' : restoring ? '原方案还原' : outlineExpanding ? '补目录' : expanding ? '扩写进度' : originalAuditing ? '原方案审计' : auditing ? '一致性审计' : illustrating ? '配图统计' : '生成统计';
+  const displayProgress = planning ? planningProgress : outlineExpanding ? outlineExpansionProgress : expanding ? wordExpansionProgress : contentCorrecting ? contentCorrectionProgress : illustrating ? illustrationProgress : progress;
+  const displayProgressLabel = planning ? '编排统计' : restoring ? '原方案还原' : outlineExpanding ? '补目录' : expanding ? '扩写进度' : contentCorrecting ? '内容矫正' : illustrating ? '配图统计' : '生成统计';
   const displayProgressCount = planning
     ? `${planningCompleted}/${planningTotal}`
     : outlineExpanding
       ? `${outlineExpansionStepCompleted}/${outlineExpansionStepTotal}`
       : expanding
         ? `${wordExpansionProgress}%`
-        : originalAuditing || auditing
-          ? auditFixTotal ? `${auditFixCompleted}/${auditFixTotal}` : `${auditGroupCompleted}/${auditGroupTotal}`
+        : contentCorrecting
+          ? contentCorrectionCount
           : illustrating
             ? `${illustrationCompleted}/${illustrationTotal}`
             : `${completedCount}/${leaves.length}`;
-  const progressPhaseLabel = planning ? '正文编排' : restoring ? '原方案还原' : outlineExpanding ? '正文补目录' : expanding ? '正文扩写' : originalAuditing ? '原方案覆盖审计' : auditing ? '全文一致性审计' : illustrating ? '正文配图' : '正文生成';
-  const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${outlineExpanding ? ' is-outline-expanding' : ''}${originalAuditing || auditing ? ' is-auditing' : ''}${illustrating ? ' is-illustrating' : ''}${taskInFlight && (planning || outlineExpanding || expanding || originalAuditing || auditing || illustrating) ? ' is-active' : ''}`;
+  const progressPhaseLabel = planning ? '正文编排' : restoring ? '原方案还原' : outlineExpanding ? '正文补目录' : expanding ? '正文扩写' : contentCorrecting ? '内容矫正' : illustrating ? '正文配图' : '正文生成';
+  const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${outlineExpanding ? ' is-outline-expanding' : ''}${contentCorrecting ? ' is-auditing' : ''}${illustrating ? ' is-illustrating' : ''}${taskInFlight && (planning || outlineExpanding || expanding || contentCorrecting || illustrating) ? ' is-active' : ''}`;
   const progressDescription = taskFailed
     ? minimumWordsUnmet
       ? `正文扩写失败：当前 ${currentWords}/${minimumWords} 字。${taskErrorMessage}`
@@ -472,28 +488,34 @@ function ContentEditPage({
       : expanding
         ? paused ? `正文生成已暂停在扩写阶段，最低字数达成 ${wordExpansionProgress}%。` : `正在扩写正文，最低字数达成 ${wordExpansionProgress}%。`
         : originalAuditing
-          ? paused
-            ? `正文生成已暂停在原方案覆盖审计阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 个小节，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
-            : auditFixTotal
-              ? `正在补写原方案缺失内容，已完成 ${auditFixCompleted}/${auditFixTotal} 个小节${auditFixFailed ? `，${auditFixFailed} 个需人工核对` : ''}。`
-              : `正在审计原方案覆盖情况，已完成 ${auditGroupCompleted}/${auditGroupTotal} 个小节${auditConflictTotal ? `，发现 ${auditConflictTotal} 个需核对来源段` : ''}。`
+            ? paused
+              ? `内容矫正已暂停在原方案覆盖检查阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 个小节，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
+              : auditFixTotal
+                ? `正在内容矫正：补写原方案缺失内容，已完成 ${auditFixCompleted}/${auditFixTotal} 个小节${auditFixFailed ? `，${auditFixFailed} 个需人工核对` : ''}。`
+                : `正在内容矫正：检查原方案覆盖情况，已完成 ${auditGroupCompleted}/${auditGroupTotal} 个小节${auditConflictTotal ? `，发现 ${auditConflictTotal} 个需核对来源段` : ''}。`
           : auditing
             ? paused
-              ? `正文生成已暂停在一致性审计阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 组，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
+              ? `内容矫正已暂停在全文一致性检查阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 组，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
               : auditFixTotal
-                ? `正在修复一致性冲突，已完成 ${auditFixCompleted}/${auditFixTotal} 个小节${auditFixFailed ? `，${auditFixFailed} 个需人工核对` : ''}。`
-                : `正在审计全文一致性，已完成 ${auditGroupCompleted}/${auditGroupTotal} 组${auditConflictTotal ? `，发现 ${auditConflictTotal} 个冲突小节` : ''}。`
-          : illustrating
-            ? paused ? `正文生成已暂停在配图阶段，已完成 ${illustrationCompleted}/${illustrationTotal} 张。` : `正在生成配图，已完成 ${illustrationCompleted}/${illustrationTotal} 张。`
-            : pausing
-              ? '正在暂停正文生成，已发出的 AI 请求完成后会停止调度新任务。'
-              : running
-                ? latestTaskLog || '正文生成任务正在运行。'
-                : paused
-                  ? '正文生成已暂停，可导出当前已完成内容或点击继续。'
-                  : completedCount
-                    ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。`
-                    : '点击生成正文后，目录会实时显示每个小节状态。';
+                ? `正在内容矫正：修复一致性冲突，已完成 ${auditFixCompleted}/${auditFixTotal} 个小节${auditFixFailed ? `，${auditFixFailed} 个需人工核对` : ''}。`
+                : `正在内容矫正：检查全文一致性，已完成 ${auditGroupCompleted}/${auditGroupTotal} 组${auditConflictTotal ? `，发现 ${auditConflictTotal} 个冲突小节` : ''}。`
+            : tableCleaning
+              ? paused
+                ? `内容矫正已暂停在表格清理阶段，已处理 ${tableCleanupCompleted}/${tableCleanupTotal} 个表格。`
+                : tableCleanupTotal
+                  ? `正在内容矫正：将表格转换为普通文字描述，已处理 ${tableCleanupCompleted}/${tableCleanupTotal} 个表格，已转换 ${tableCleanupRewritten} 个${tableCleanupSkipped ? `，跳过 ${tableCleanupSkipped} 个` : ''}。`
+                  : '正在内容矫正：检查正文中是否存在需要转换的表格。'
+              : illustrating
+                ? paused ? `正文生成已暂停在配图阶段，已完成 ${illustrationCompleted}/${illustrationTotal} 张。` : `正在生成配图，已完成 ${illustrationCompleted}/${illustrationTotal} 张。`
+                : pausing
+                  ? '正在暂停正文生成，已发出的 AI 请求完成后会停止调度新任务。'
+                  : running
+                    ? latestTaskLog || '正文生成任务正在运行。'
+                    : paused
+                      ? '正文生成已暂停，可导出当前已完成内容或点击继续。'
+                      : completedCount
+                        ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。`
+                        : '点击生成正文后，目录会实时显示每个小节状态。';
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
   const generationButtonLabel = pausing
     ? '正在暂停中...'

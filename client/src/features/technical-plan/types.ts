@@ -47,7 +47,7 @@ export interface BackgroundTaskState {
   error?: string;
   stats?: {
     content?: {
-      phase: 'planning' | 'restoring' | 'generating' | 'outline-expanding' | 'expanding' | 'original-auditing' | 'auditing' | 'illustrating' | 'done';
+      phase: 'planning' | 'restoring' | 'generating' | 'outline-expanding' | 'expanding' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'illustrating' | 'done';
       planning_total: number;
       planning_completed: number;
       generation_total: number;
@@ -67,6 +67,10 @@ export interface BackgroundTaskState {
       audit_fix_total?: number;
       audit_fix_completed?: number;
       audit_fix_failed?: number;
+      table_cleanup_total?: number;
+      table_cleanup_completed?: number;
+      table_cleanup_rewritten?: number;
+      table_cleanup_skipped?: number;
       illustration_total?: number;
       illustration_completed?: number;
     };
@@ -149,6 +153,7 @@ export interface ContentGenerationPlanData {
 export interface ContentGenerationPlanState {
   plan: ContentGenerationPlanData;
   illustration_type: ContentIllustrationType;
+  table_requirement?: 'none' | 'light' | 'moderate' | 'heavy';
   updated_at?: string;
 }
 

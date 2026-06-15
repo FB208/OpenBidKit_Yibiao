@@ -172,10 +172,10 @@ function inferContentGenerationPhase(technicalPlan) {
   const taskContent = technicalPlan?.contentGenerationTask?.stats?.content || {};
   const taskPhase = taskContent.phase;
   const runtimePhase = technicalPlan?.contentGenerationRuntime?.phase;
-  if (['restoring', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'illustrating'].includes(taskPhase)) {
+  if (['restoring', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'table-cleaning', 'illustrating'].includes(taskPhase)) {
     return taskPhase;
   }
-  if (['planning', 'restoring', 'generating', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'illustrating'].includes(runtimePhase)) {
+  if (['planning', 'restoring', 'generating', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'table-cleaning', 'illustrating'].includes(runtimePhase)) {
     return runtimePhase;
   }
 
