@@ -5038,14 +5038,17 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       return { ran: false, rewrittenCount: 0, skippedCount: 0 };
     }
 
-    const targets = buildTableCleanupTargets(options.targetItemId || targetItemId);
-    const tableTotal = targets.reduce((sum, target) => sum + target.tables.length, 0);
     contentStats.phase = 'table-cleaning';
-    contentStats.table_cleanup_total = tableTotal;
+    contentStats.table_cleanup_total = 0;
     contentStats.table_cleanup_completed = 0;
     contentStats.table_cleanup_rewritten = 0;
     contentStats.table_cleanup_skipped = 0;
-    workspaceStore.updateTechnicalPlan({ contentGenerationRuntime: syncRuntime({ phase: 'table-cleaning' }) });
+    const phaseSaved = workspaceStore.updateTechnicalPlan({ contentGenerationRuntime: syncRuntime({ phase: 'table-cleaning' }) });
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, phaseSaved);
+
+    const targets = buildTableCleanupTargets(options.targetItemId || targetItemId);
+    const tableTotal = targets.reduce((sum, target) => sum + target.tables.length, 0);
+    contentStats.table_cleanup_total = tableTotal;
 
     if (!tableTotal) {
       logs = [...logs, '正文去表格检查完成：未发现需要转换的表格。'];
