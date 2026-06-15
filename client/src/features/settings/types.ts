@@ -1,7 +1,8 @@
 import type { FileParserConfig, ImageModelConfig, ImageModelProfiles, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../shared/types';
 
 export interface SettingsPageState {
-  textModel: TextModelConfig & {
+  textModel: Omit<TextModelConfig, 'context_length_limit'> & {
+    context_length_limit: number | '';
     provider: TextModelProvider;
   };
   textModelProfiles: TextModelProfiles;

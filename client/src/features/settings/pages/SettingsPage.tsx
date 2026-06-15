@@ -67,9 +67,15 @@ function normalizeAiRequestMode(value?: AiRequestMode): AiRequestMode {
   return value === 'normal' ? 'normal' : 'stream';
 }
 
-function normalizeTextContextLengthLimit(value?: number): number {
+function normalizeTextContextLengthLimit(value?: number | string): number {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT;
+}
+
+function parseTextContextLengthInput(value: string): number | '' {
+  if (value === '') return '';
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(1, Math.floor(number)) : '';
 }
 
 function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partial<TextModelConfig>): TextModelConfig {
@@ -613,7 +619,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }));
   };
 
-  const updateTextModelConfig = (partial: Partial<TextModelConfig>, options: { clearModels?: boolean } = {}) => {
+  const updateTextModelConfig = (partial: Partial<Omit<SettingsPageState['textModel'], 'provider'>>, options: { clearModels?: boolean } = {}) => {
     if (options.clearModels) {
       setTextModels([]);
     }
@@ -1261,7 +1267,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 step={1}
                 value={state.textModel.context_length_limit}
                 placeholder="400000"
-                onChange={(event) => updateTextModelConfig({ context_length_limit: normalizeTextContextLengthLimit(Number(event.target.value)) })}
+                onChange={(event) => updateTextModelConfig({ context_length_limit: parseTextContextLengthInput(event.target.value) })}
               />
             </label>
             <label className="settings-row">

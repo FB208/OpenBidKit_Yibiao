@@ -41,6 +41,11 @@ interface PendingMinimumWordsChoice {
   minimumWords: number;
 }
 
+type NumberInputDraft = number | '';
+type DraftContentGenerationOptions = Omit<ContentGenerationOptions, 'minimumWords'> & {
+  minimumWords: NumberInputDraft;
+};
+
 const statusLabels: Record<TreeStatus, string> = {
   idle: '待生成',
   running: '生成中',
@@ -86,7 +91,7 @@ function buildDefaultGenerationOptions(imageModelAvailable: boolean, leafCount: 
   };
 }
 
-function normalizeGenerationOptions(options: ContentGenerationOptions | undefined, imageModelAvailable: boolean, leafCount: number, isExpansionWorkflow = false): ContentGenerationOptions {
+function normalizeGenerationOptions(options: ContentGenerationOptions | DraftContentGenerationOptions | undefined, imageModelAvailable: boolean, leafCount: number, isExpansionWorkflow = false): ContentGenerationOptions {
   const fallback = buildDefaultGenerationOptions(imageModelAvailable, leafCount);
   const maxAiImagesLimit = Math.max(1, leafCount);
   const requestedMaxAiImages = Number(options?.maxAiImages ?? fallback.maxAiImages);
@@ -104,6 +109,12 @@ function normalizeGenerationOptions(options: ContentGenerationOptions | undefine
     enableConsistencyAudit: Boolean(options?.enableConsistencyAudit ?? fallback.enableConsistencyAudit),
     enableOriginalPlanCoverageAudit: isExpansionWorkflow ? Boolean(options?.enableOriginalPlanCoverageAudit ?? fallback.enableOriginalPlanCoverageAudit) : false,
   };
+}
+
+function parseMinimumWordsInput(value: string): NumberInputDraft {
+  if (value === '') return '';
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.round(number)) : '';
 }
 
 const emptyImageStats: ContentImageStats = { planned: 0, attempted: 0, success: 0, failed: 0, skipped: 0 };
@@ -362,7 +373,7 @@ function ContentEditPage({
   const [developerMode, setDeveloperMode] = useState(false);
   const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
-  const [draftGenerationOptions, setDraftGenerationOptions] = useState<ContentGenerationOptions>(defaultContentGenerationOptions);
+  const [draftGenerationOptions, setDraftGenerationOptions] = useState<DraftContentGenerationOptions>(defaultContentGenerationOptions);
   const [pendingMinimumWordsChoice, setPendingMinimumWordsChoice] = useState<PendingMinimumWordsChoice | null>(null);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [pausePending, setPausePending] = useState(false);
@@ -1125,7 +1136,7 @@ function ContentEditPage({
                   disabled={generationStrategyLocked}
                   onChange={(event) => setDraftGenerationOptions((prev) => ({
                     ...prev,
-                    minimumWords: Math.max(0, Math.round(Number(event.target.value) || 0)),
+                    minimumWords: parseMinimumWordsInput(event.target.value),
                   }))}
                 />
               </label>
