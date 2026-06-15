@@ -1504,6 +1504,10 @@ async function generateImageWithConfig(app, config, request) {
 
 function createAiService({ app, configStore }) {
   return {
+    getConfig() {
+      return configStore.load();
+    },
+
     async chat(request) {
       const config = configStore.load();
       return chatWithConfig(app, config, request);

@@ -7,6 +7,7 @@ const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'longcat', 'cus
 const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'custom'];
 const aiRequestModes = ['normal', 'stream'];
 const updateChannels = ['github', 'cloudflare'];
+const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
 
 const textProviderBaseUrls = {
   jinlong: 'https://jlaudeapi.com/v1',
@@ -21,30 +22,35 @@ const defaultTextModelProfiles = {
     api_key: '',
     base_url: textProviderBaseUrls.jinlong,
     model_name: 'gpt-3.5-turbo',
+    context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     request_mode: 'stream',
   },
   volcengine: {
     api_key: '',
     base_url: textProviderBaseUrls.volcengine,
     model_name: '',
+    context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     request_mode: 'stream',
   },
   deepseek: {
     api_key: '',
     base_url: textProviderBaseUrls.deepseek,
     model_name: '',
+    context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     request_mode: 'stream',
   },
   longcat: {
     api_key: '',
     base_url: textProviderBaseUrls.longcat,
     model_name: '',
+    context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     request_mode: 'stream',
   },
   custom: {
     api_key: '',
     base_url: '',
     model_name: '',
+    context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     request_mode: 'stream',
   },
 };
@@ -133,6 +139,7 @@ const defaultConfig = {
   api_key: '',
   base_url: textProviderBaseUrls.jinlong,
   model_name: 'gpt-3.5-turbo',
+  context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
   request_mode: 'stream',
   image_model: {
     ...defaultImageModelProfiles.jinlong,
@@ -182,6 +189,11 @@ function normalizeUpdateChannel(value, fallback = defaultConfig.update_channel) 
   return updateChannels.includes(value) ? value : fallback;
 }
 
+function normalizeTextContextLengthLimit(value, fallback = DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
+}
+
 function normalizeTextModelProfile(provider, profile) {
   const defaults = defaultTextModelProfiles[provider];
   const source = profile || {};
@@ -192,6 +204,7 @@ function normalizeTextModelProfile(provider, profile) {
     api_key: source.api_key !== undefined ? source.api_key : defaults.api_key,
     base_url: sourceBaseUrl,
     model_name: source.model_name !== undefined ? source.model_name : defaults.model_name,
+    context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit, defaults.context_length_limit),
     request_mode: normalizeAiRequestMode(source.request_mode, defaults.request_mode),
   };
 }
@@ -215,6 +228,7 @@ function textProfileFromFlatConfig(source, fallback, provider) {
     api_key: source.api_key !== undefined ? source.api_key : fallback.api_key,
     base_url: sourceBaseUrl,
     model_name: source.model_name !== undefined ? source.model_name : fallback.model_name,
+    context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit !== undefined ? source.context_length_limit : fallback.context_length_limit, fallback.context_length_limit),
     request_mode: normalizeAiRequestMode(source.request_mode !== undefined ? source.request_mode : fallback.request_mode, fallback.request_mode),
   };
 }
@@ -244,6 +258,7 @@ function textProfileFromUnknownProvider(source, sourceProvider, fallback) {
     api_key: pickTextProfileField(source.api_key, selectedProfile?.api_key, fallback.api_key),
     base_url: pickTextProfileField(source.base_url, selectedProfile?.base_url, fallback.base_url),
     model_name: pickTextProfileField(source.model_name, selectedProfile?.model_name, fallback.model_name),
+    context_length_limit: normalizeTextContextLengthLimit(pickTextProfileField(source.context_length_limit, selectedProfile?.context_length_limit, fallback.context_length_limit), fallback.context_length_limit),
     request_mode: normalizeAiRequestMode(pickTextProfileField(source.request_mode, selectedProfile?.request_mode, fallback.request_mode), fallback.request_mode),
   };
 }
@@ -366,6 +381,7 @@ function normalizeConfig(config) {
     api_key: activeTextProfile.api_key,
     base_url: activeTextProfile.base_url,
     model_name: activeTextProfile.model_name,
+    context_length_limit: activeTextProfile.context_length_limit,
     request_mode: activeTextProfile.request_mode,
     image_model: activeImageProfile,
     image_model_profiles: imageModelProfiles,

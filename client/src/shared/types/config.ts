@@ -6,6 +6,7 @@ export interface TextModelConfig {
   api_key: string;
   base_url: string;
   model_name: string;
+  context_length_limit: number;
   request_mode: AiRequestMode;
 }
 
