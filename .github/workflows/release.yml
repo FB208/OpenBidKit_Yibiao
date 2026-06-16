@@ -415,3 +415,37 @@ jobs:
           RELEASE_ASSETS_DIR: release-assets
           GITHUB_RELEASE_JSON: github-release.json
         run: node .github/scripts/publish-r2-release.mjs
+
+      - name: Sync Git refs to Gitee
+        env:
+          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
+          GITEE_OWNER: ${{ vars.GITEE_OWNER }}
+          GITEE_REPO: ${{ vars.GITEE_REPO }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$GITEE_ACCESS_TOKEN" ] || [ -z "$GITEE_OWNER" ] || [ -z "$GITEE_REPO" ]; then
+            echo "GITEE_ACCESS_TOKEN, GITEE_OWNER and GITEE_REPO are required."
+            exit 1
+          fi
+
+          git fetch --force origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
+
+          git remote add gitee "https://oauth2:${GITEE_ACCESS_TOKEN}@gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
+          git push gitee "refs/remotes/origin/main:refs/heads/main" --force
+          git push gitee "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}" --force
+
+      - name: Publish Gitee Release
+        env:
+          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
+          GITEE_OWNER: ${{ vars.GITEE_OWNER }}
+          GITEE_REPO: ${{ vars.GITEE_REPO }}
+          R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+          R2_RELEASE_PREFIX: ${{ vars.R2_RELEASE_PREFIX || 'release' }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          RELEASE_ASSETS_DIR: release-assets
+          GITHUB_RELEASE_JSON: github-release.json
+        run: node .github/scripts/sync-gitee-release.mjs
