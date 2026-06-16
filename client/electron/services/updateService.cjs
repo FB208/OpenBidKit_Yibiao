@@ -94,8 +94,10 @@ function pickCloudflareDownloadFile(files = []) {
   }
   if (process.platform === 'darwin') {
     const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
-    return validFiles.find((file) => new RegExp(`-mac-${arch}-package\\.zip$`, 'i').test(file.name))
-      || validFiles.find((file) => /-mac-(?:x64|arm64)-package\.zip$/i.test(file.name));
+    return validFiles.find((file) => new RegExp(`-mac-${arch}\\.dmg$`, 'i').test(file.name))
+      || validFiles.find((file) => /-mac-(?:x64|arm64)\.dmg$/i.test(file.name))
+      || validFiles.find((file) => new RegExp(`-mac-${arch}\\.zip$`, 'i').test(file.name))
+      || validFiles.find((file) => /-mac-(?:x64|arm64)\.zip$/i.test(file.name));
   }
   return null;
 }

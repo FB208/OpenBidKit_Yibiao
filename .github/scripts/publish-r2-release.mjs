@@ -50,6 +50,7 @@ function contentTypeFromFileName(fileName) {
   const lower = fileName.toLowerCase();
   if (lower.endsWith('.yml') || lower.endsWith('.yaml')) return 'application/x-yaml; charset=utf-8';
   if (lower.endsWith('.json')) return 'application/json; charset=utf-8';
+  if (lower.endsWith('.dmg')) return 'application/x-apple-diskimage';
   if (lower.endsWith('.zip')) return 'application/zip';
   if (lower.endsWith('.exe')) return 'application/vnd.microsoft.portable-executable';
   if (lower.endsWith('.msi')) return 'application/octet-stream';

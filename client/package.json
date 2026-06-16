@@ -78,6 +78,38 @@
             "x64",
             "arm64"
           ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "background": "assets/macos-dmg/background.png",
+      "iconSize": 88,
+      "iconTextSize": 12,
+      "contents": [
+        {
+          "x": 170,
+          "y": 360,
+          "type": "file"
+        },
+        {
+          "x": 520,
+          "y": 360,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 112,
+          "y": 318,
+          "type": "file",
+          "path": "assets/macos-dmg/macOS使用说明.txt",
+          "name": "macOS使用说明.txt"
         }
       ]
     },

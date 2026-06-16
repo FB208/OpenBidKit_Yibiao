@@ -68,7 +68,7 @@ async function listDownloadFiles(assetsDir) {
   const files = entries
     .filter((entry) => entry.isFile())
     .map((entry) => path.join(assetsDir, entry.name))
-    .filter((filePath) => /\.(?:exe|msi|zip)$/i.test(path.basename(filePath)))
+    .filter((filePath) => /\.(?:exe|msi|dmg|zip)$/i.test(path.basename(filePath)))
     .sort((a, b) => compareAssetNames(path.basename(a), path.basename(b)));
 
   if (files.length === 0) {
@@ -81,8 +81,8 @@ function getAssetRank(fileName) {
   if (/-win-x64\.exe$/i.test(fileName)) return 10;
   if (/-win-x64\.msi$/i.test(fileName)) return 20;
   if (/-win-x64\.zip$/i.test(fileName)) return 30;
-  if (/-mac-x64-package\.zip$/i.test(fileName)) return 40;
-  if (/-mac-arm64-package\.zip$/i.test(fileName)) return 50;
+  if (/-mac-x64\.dmg$/i.test(fileName)) return 40;
+  if (/-mac-arm64\.dmg$/i.test(fileName)) return 50;
   if (/-mac-x64\.zip$/i.test(fileName)) return 60;
   if (/-mac-arm64\.zip$/i.test(fileName)) return 70;
   return 100;
@@ -106,6 +106,8 @@ function getAssetPlatform(fileName) {
 function getAssetKind(fileName) {
   if (/\.exe$/i.test(fileName)) return 'EXE 安装包';
   if (/\.msi$/i.test(fileName)) return 'MSI 安装包';
+  if (/\.dmg$/i.test(fileName)) return 'DMG 安装包';
+  if (/-mac-(?:x64|arm64)\.zip$/i.test(fileName)) return '自动更新包';
   if (/-package\.zip$/i.test(fileName)) return 'ZIP 安装包';
   if (/\.zip$/i.test(fileName)) return 'ZIP 压缩包';
   return '安装包';
@@ -157,7 +159,7 @@ function buildReleaseBody({ githubRelease, assets }) {
   const lines = [
     '## 下载地址',
     '',
-    '安装包托管在 Cloudflare R2，Gitee Release 不直接上传安装包。',
+    '安装包和自动更新包托管在 Cloudflare R2，Gitee Release 不直接上传文件。',
     '',
     '| 平台 | 类型 | 文件 | 大小 | 下载 |',
     '| --- | --- | --- | --- | --- |',
