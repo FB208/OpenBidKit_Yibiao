@@ -199,6 +199,17 @@ button {
     linear-gradient(180deg, #ffffff 0%, var(--yb-bg) 48%, #f1f6ff 100%);
 }
 
+.app-shell.is-mac::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 84px;
+  z-index: 15;
+  height: 28px;
+  -webkit-app-region: drag;
+}
+
 .app-shell.is-mac button,
 .app-shell.is-mac input,
 .app-shell.is-mac select,
