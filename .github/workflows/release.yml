@@ -416,12 +416,11 @@ jobs:
           GITHUB_RELEASE_JSON: github-release.json
         run: node .github/scripts/publish-r2-release.mjs
 
-      - name: Sync Git refs to Gitee
+      - name: Trigger Gitee pull mirror
         env:
           GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
           GITEE_OWNER: ${{ vars.GITEE_OWNER }}
           GITEE_REPO: ${{ vars.GITEE_REPO }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -430,13 +429,11 @@ jobs:
             exit 1
           fi
 
-          git fetch --force origin \
-            "refs/heads/main:refs/remotes/origin/main" \
-            "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
+          response="$(curl --fail --show-error --silent --request POST --retry 3 --retry-all-errors --retry-delay 20 \
+            "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/remote_mirror/pull?access_token=${GITEE_ACCESS_TOKEN}"
+          )"
 
-          git remote add gitee "https://oauth2:${GITEE_ACCESS_TOKEN}@gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
-          git push gitee "refs/remotes/origin/main:refs/heads/main" --force
-          git push gitee "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}" --force
+          echo "Gitee mirror response: ${response}"
 
       - name: Publish Gitee Release
         env:

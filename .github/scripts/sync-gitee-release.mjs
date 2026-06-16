@@ -6,7 +6,7 @@ import path from 'node:path';
 const GITEE_API_BASE_URL = 'https://gitee.com/api/v5';
 const DEFAULT_R2_RELEASE_PREFIX = 'release';
 const GITEE_TARGET_COMMITISH = 'main';
-const TAG_SYNC_TIMEOUT_SECONDS = 180;
+const TAG_SYNC_TIMEOUT_SECONDS = 600;
 const TAG_SYNC_POLL_INTERVAL_SECONDS = 10;
 
 function requireEnv(name) {
