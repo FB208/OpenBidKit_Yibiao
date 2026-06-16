@@ -40,13 +40,14 @@ const aiRequestModeOptions: Array<{ value: AiRequestMode; label: string }> = [
 ];
 
 const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
+const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 
 const textProviderDefaults: TextModelProfiles = {
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, request_mode: 'stream' },
-  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, request_mode: 'stream' },
-  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, request_mode: 'stream' },
-  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, request_mode: 'stream' },
-  custom: { api_key: '', base_url: '', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, request_mode: 'stream' },
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
+  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
+  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
+  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
+  custom: { api_key: '', base_url: '', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
 };
 
 const textProviderApiKeyUrls: Partial<Record<TextModelProvider, string>> = {
@@ -72,10 +73,21 @@ function normalizeTextContextLengthLimit(value?: number | string): number {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT;
 }
 
+function normalizeTextConcurrencyLimit(value?: number | string): number {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : DEFAULT_TEXT_CONCURRENCY_LIMIT;
+}
+
 function parseTextContextLengthInput(value: string): number | '' {
   if (value === '') return '';
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(1, Math.floor(number)) : '';
+}
+
+function parseTextConcurrencyLimitInput(value: string): number | '' {
+  if (value === '') return '';
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(1, Math.round(number)) : '';
 }
 
 function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partial<TextModelConfig>): TextModelConfig {
@@ -86,6 +98,7 @@ function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partia
     base_url: baseUrl,
     model_name: profile?.model_name ?? defaults.model_name,
     context_length_limit: normalizeTextContextLengthLimit(profile?.context_length_limit ?? defaults.context_length_limit),
+    concurrency_limit: normalizeTextConcurrencyLimit(profile?.concurrency_limit ?? defaults.concurrency_limit),
     request_mode: normalizeAiRequestMode(profile?.request_mode ?? defaults.request_mode),
   };
 }
@@ -103,6 +116,7 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
     base_url: textModel.provider === 'custom' ? textModel.base_url : textProviderDefaults[textModel.provider].base_url,
     model_name: textModel.model_name,
     context_length_limit: normalizeTextContextLengthLimit(textModel.context_length_limit),
+    concurrency_limit: normalizeTextConcurrencyLimit(textModel.concurrency_limit),
     request_mode: textModel.request_mode,
   };
 }
@@ -114,6 +128,8 @@ const imageProviders: Array<{ value: ImageModelProvider; label: string }> = [
   { value: 'custom', label: '自定义 OpenAI-like' },
 ];
 
+const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
+
 const imageProviderDefaults: ImageModelProfiles = {
   jinlong: {
     provider: 'jinlong',
@@ -121,6 +137,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     api_key: '',
     model_name: '',
     request_mode: 'stream',
+    concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -131,6 +148,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     api_key: '',
     model_name: '',
     request_mode: 'stream',
+    concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -141,6 +159,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     api_key: '',
     model_name: 'gemini-3.1-flash-image-preview',
     request_mode: 'stream',
+    concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -151,6 +170,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     api_key: '',
     model_name: '',
     request_mode: 'stream',
+    concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -214,10 +234,22 @@ function normalizeImageModelProfile(provider: ImageModelProvider, profile?: Part
     api_key: profile?.api_key ?? defaults.api_key,
     model_name: profile?.model_name ?? defaults.model_name,
     request_mode: normalizeAiRequestMode(profile?.request_mode ?? defaults.request_mode),
+    concurrency_limit: normalizeImageConcurrencyLimit(profile?.concurrency_limit ?? defaults.concurrency_limit),
     status: profile?.status ?? defaults.status,
     tested_at: profile?.tested_at ?? defaults.tested_at,
     last_error: profile?.last_error ?? defaults.last_error,
   };
+}
+
+function normalizeImageConcurrencyLimit(value?: number | string): number {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : DEFAULT_IMAGE_CONCURRENCY_LIMIT;
+}
+
+function parseImageConcurrencyLimitInput(value: string): number | '' {
+  if (value === '') return '';
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(1, Math.round(number)) : '';
 }
 
 function normalizeImageModelProfiles(profiles?: Partial<ImageModelProfiles>): ImageModelProfiles {
@@ -227,13 +259,14 @@ function normalizeImageModelProfiles(profiles?: Partial<ImageModelProfiles>): Im
   }), {} as ImageModelProfiles);
 }
 
-function imageProfileFromState(imageModel: ImageModelConfig): ImageModelConfig {
+function imageProfileFromState(imageModel: SettingsPageState['imageModel']): ImageModelConfig {
   return {
     provider: imageModel.provider,
     base_url: imageModel.provider === 'custom' ? imageModel.base_url || '' : imageProviderDefaults[imageModel.provider].base_url,
     api_key: imageModel.api_key,
     model_name: imageModel.model_name,
     request_mode: imageModel.request_mode,
+    concurrency_limit: normalizeImageConcurrencyLimit(imageModel.concurrency_limit),
     status: imageModel.status || 'untested',
     tested_at: imageModel.tested_at || '',
     last_error: imageModel.last_error || '',
@@ -255,7 +288,7 @@ const imageStatusMeta: Record<ImageModelStatus, { label: string; description: st
   },
 };
 
-function resetImageModelStatus(imageModel: ImageModelConfig): ImageModelConfig {
+function resetImageModelStatus(imageModel: SettingsPageState['imageModel']): SettingsPageState['imageModel'] {
   return {
     ...imageModel,
     status: 'untested',
@@ -464,6 +497,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       base_url: activeTextProfile.base_url,
       model_name: activeTextProfile.model_name,
       context_length_limit: activeTextProfile.context_length_limit,
+      concurrency_limit: activeTextProfile.concurrency_limit,
       request_mode: activeTextProfile.request_mode,
       image_model: activeImageProfile,
       image_model_profiles: imageModelProfiles,
@@ -524,7 +558,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
   };
 
-  const updateImageModelConfig = (partial: Partial<Omit<ImageModelConfig, 'provider'>>, options: { clearModels?: boolean } = {}) => {
+  const updateImageModelConfig = (partial: Partial<Omit<SettingsPageState['imageModel'], 'provider'>>, options: { clearModels?: boolean } = {}) => {
     if (options.clearModels) {
       setImageModels([]);
     }
@@ -1272,6 +1306,20 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             </label>
             <label className="settings-row">
               <div className="settings-row-copy">
+                <strong>并发上限</strong>
+                <span>全局文本 AI 请求同时执行的最大数量，超出后自动排队</span>
+              </div>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={state.textModel.concurrency_limit}
+                placeholder="10"
+                onChange={(event) => updateTextModelConfig({ concurrency_limit: parseTextConcurrencyLimitInput(event.target.value) })}
+              />
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
                 <strong>请求方式</strong>
                 <span>流式请求只影响后端调用方式，应用仍等待完整结果后继续流程</span>
               </div>
@@ -1384,6 +1432,20 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   {testingImageModel ? '测试中' : '测试'}
                 </button>
               </div>
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>并发上限</strong>
+                <span>全局生图 AI 请求同时执行的最大数量，超出后自动排队</span>
+              </div>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={state.imageModel.concurrency_limit}
+                placeholder="2"
+                onChange={(event) => updateImageModelConfig({ concurrency_limit: parseImageConcurrencyLimitInput(event.target.value) })}
+              />
             </label>
             <label className="settings-row">
               <div className="settings-row-copy">

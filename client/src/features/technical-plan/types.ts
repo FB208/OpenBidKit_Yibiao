@@ -23,7 +23,6 @@ export interface ContentGenerationOptions {
   useMermaidImages: boolean;
   tableRequirement: ContentTableRequirement;
   minimumWords: number;
-  contentConcurrency: number;
   enableConsistencyAudit: boolean;
   enableOriginalPlanCoverageAudit: boolean;
 }

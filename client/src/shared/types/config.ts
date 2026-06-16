@@ -7,6 +7,7 @@ export interface TextModelConfig {
   base_url: string;
   model_name: string;
   context_length_limit: number;
+  concurrency_limit: number;
   request_mode: AiRequestMode;
 }
 
@@ -46,6 +47,7 @@ export interface ImageModelConfig {
   api_key: string;
   model_name: string;
   request_mode: AiRequestMode;
+  concurrency_limit: number;
   status?: ImageModelStatus;
   tested_at?: string;
   last_error?: string;

@@ -440,10 +440,12 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
 
     const definition = getTaskDefinition(type);
     const task = createTask(type, payload);
+    const queueScopeId = `${type}:${task.task_id}`;
     activeTasks.set(type, task);
     const taskField = getTaskField(type);
     let currentTask = task;
     const taskControl = {
+      queueScopeId,
       pauseRequested: false,
       isPauseRequested() {
         return this.pauseRequested;
@@ -490,11 +492,15 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
       : definition.stateKey === 'rejectionCheck'
         ? rejectionCheckStore
         : duplicateCheckStore;
-    runner({ aiService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
+    const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId) : aiService;
+    runner({ aiService: runnerAiService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
       const failedTask = updateTask({ status: 'error', error: error.message || '任务执行失败' });
       const nextState = updateWorkspaceState(definition, { [taskField]: failedTask });
       emit(failedTask, buildSnapshot(definition, nextState, failedTask));
     }).finally(() => {
+      if (aiService?.resumeQueueScope) {
+        aiService.resumeQueueScope(queueScopeId);
+      }
       activeTasks.delete(type);
       activeTaskControls.delete(type);
     });
@@ -673,6 +679,9 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
       const task = activeTasks.get('content-generation');
       const control = activeTaskControls.get('content-generation');
       if (task && isActiveTaskStatus(task.status) && control?.requestPause) {
+        if (control.queueScopeId && aiService?.pauseQueueScope) {
+          aiService.pauseQueueScope(control.queueScopeId);
+        }
         return control.requestPause();
       }
 

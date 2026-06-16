@@ -3,6 +3,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { getAiLogsDir, getGeneratedImagesDir } = require('../utils/paths.cjs');
 const { createDeveloperLogger } = require('../utils/developerLog.cjs');
+const { createAiRequestQueue } = require('../utils/aiRequestQueue.cjs');
 
 const AI_REQUEST_TIMEOUT_MS = 300000;
 const MAX_AI_LOG_TITLE_LENGTH = 64;
@@ -338,7 +339,12 @@ async function ensureOk(response, fallbackMessage) {
     detail = await response.text().catch(() => '');
   }
 
-  throw new Error(detail || fallbackMessage);
+  const error = new Error(detail || fallbackMessage);
+  if (response.status) {
+    error.status = response.status;
+    error.statusCode = response.status;
+  }
+  throw error;
 }
 
 async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, fallbackMessage, options = {}) {
@@ -369,7 +375,12 @@ async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, 
     return retryResponse;
   }
 
-  throw new Error(detail || fallbackMessage);
+  const error = new Error(detail || fallbackMessage);
+  if (response.status) {
+    error.status = response.status;
+    error.statusCode = response.status;
+  }
+  throw error;
 }
 
 function extractJsonContent(content) {
@@ -754,8 +765,12 @@ async function fetchChatCompletion(app, config, body, options = {}) {
   }
 }
 
-function createAiHttpError(detail, fallbackMessage) {
+function createAiHttpError(detail, fallbackMessage, status) {
   const error = new Error(detail || fallbackMessage);
+  if (status) {
+    error.status = status;
+    error.statusCode = status;
+  }
   error.responseFormatUnsupported = isResponseFormatUnsupported(detail);
   return error;
 }
@@ -774,7 +789,7 @@ async function ensureTextAiResponseOk(response, fallbackMessage) {
     detail = rawText;
   }
 
-  throw createAiHttpError(detail, fallbackMessage);
+  throw createAiHttpError(detail, fallbackMessage, response.status);
 }
 
 function appendStreamChoiceContent(choice, contentParts) {
@@ -1217,7 +1232,12 @@ async function chatWithConfig(app, config, request) {
       error: errorMessage,
       created_at: new Date().toISOString(),
     });
-    throw new Error(errorMessage || 'AI 请求失败');
+    const wrappedError = new Error(errorMessage || 'AI 请求失败');
+    if (error.status || error.statusCode) {
+      wrappedError.status = error.status || error.statusCode;
+      wrappedError.statusCode = error.status || error.statusCode;
+    }
+    throw wrappedError;
   } finally {
     timeout.clear();
   }
@@ -1503,29 +1523,112 @@ async function generateImageWithConfig(app, config, request) {
 }
 
 function createAiService({ app, configStore }) {
-  return {
+  const textRequestQueue = createAiRequestQueue({
+    defaultLimit: 10,
+    getLimit() {
+      return configStore.load()?.concurrency_limit;
+    },
+  });
+  const imageRequestQueue = createAiRequestQueue({
+    defaultLimit: 2,
+    getLimit() {
+      return configStore.load()?.image_model?.concurrency_limit;
+    },
+  });
+
+  function getQueueScopeId(request) {
+    return String(request?.queueScopeId || request?.queue_scope_id || '').trim();
+  }
+
+  function withQueueScope(request, queueScopeId) {
+    const normalizedScopeId = String(queueScopeId || '').trim();
+    if (!normalizedScopeId || !request || typeof request !== 'object') {
+      return request;
+    }
+
+    return {
+      ...request,
+      queueScopeId: getQueueScopeId(request) || normalizedScopeId,
+    };
+  }
+
+  function enqueueTextRequest(request, runner) {
+    return textRequestQueue.enqueue(runner, { scopeId: getQueueScopeId(request) });
+  }
+
+  function enqueueImageRequest(request, runner) {
+    return imageRequestQueue.enqueue(runner, { scopeId: getQueueScopeId(request) });
+  }
+
+  const service = {
     getConfig() {
       return configStore.load();
     },
 
     async chat(request) {
-      const config = configStore.load();
-      return chatWithConfig(app, config, request);
+      return enqueueTextRequest(request, () => {
+        const config = configStore.load();
+        return chatWithConfig(app, config, request);
+      });
     },
 
     async requestJson(request) {
-      const config = configStore.load();
-      return collectJsonResponseWithConfig(app, config, request);
+      return enqueueTextRequest(request, () => {
+        const config = configStore.load();
+        return collectJsonResponseWithConfig(app, config, request);
+      });
     },
 
     async collectJsonResponse(request) {
-      const config = configStore.load();
-      return collectJsonResponseWithConfig(app, config, request);
+      return enqueueTextRequest(request, () => {
+        const config = configStore.load();
+        return collectJsonResponseWithConfig(app, config, request);
+      });
     },
 
     async parseJsonResponseContent(request, content) {
-      const config = configStore.load();
-      return parseOrRepairJsonResponseWithConfig(app, config, request, content);
+      return enqueueTextRequest(request, () => {
+        const config = configStore.load();
+        return parseOrRepairJsonResponseWithConfig(app, config, request, content);
+      });
+    },
+
+    pauseQueueScope(scopeId) {
+      return textRequestQueue.pauseScope(scopeId) + imageRequestQueue.pauseScope(scopeId);
+    },
+
+    resumeQueueScope(scopeId) {
+      textRequestQueue.resumeScope(scopeId);
+      imageRequestQueue.resumeScope(scopeId);
+    },
+
+    getTextQueueStatus() {
+      return textRequestQueue.getStatus();
+    },
+
+    getImageQueueStatus() {
+      return imageRequestQueue.getStatus();
+    },
+
+    withQueueScope(scopeId) {
+      return {
+        ...service,
+        chat(request) {
+          return service.chat(withQueueScope(request, scopeId));
+        },
+        requestJson(request) {
+          return service.requestJson(withQueueScope(request, scopeId));
+        },
+        collectJsonResponse(request) {
+          return service.collectJsonResponse(withQueueScope(request, scopeId));
+        },
+        parseJsonResponseContent(request, content) {
+          return service.parseJsonResponseContent(withQueueScope(request, scopeId), content);
+        },
+        generateImage(request) {
+          return service.generateImage(withQueueScope(request, scopeId));
+        },
+      };
     },
 
     async testImageModel(config) {
@@ -1566,8 +1669,10 @@ function createAiService({ app, configStore }) {
     },
 
     async generateImage(request) {
-      const config = configStore.load();
-      return generateImageWithConfig(app, config, request);
+      return enqueueImageRequest(request, () => {
+        const config = configStore.load();
+        return generateImageWithConfig(app, config, request);
+      });
     },
 
     async listModels(configOverride) {
@@ -1596,6 +1701,8 @@ function createAiService({ app, configStore }) {
       };
     },
   };
+
+  return service;
 }
 
 module.exports = {

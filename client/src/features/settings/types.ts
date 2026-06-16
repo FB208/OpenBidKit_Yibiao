@@ -1,12 +1,15 @@
 import type { FileParserConfig, ImageModelConfig, ImageModelProfiles, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../shared/types';
 
 export interface SettingsPageState {
-  textModel: Omit<TextModelConfig, 'context_length_limit'> & {
+  textModel: Omit<TextModelConfig, 'context_length_limit' | 'concurrency_limit'> & {
     context_length_limit: number | '';
+    concurrency_limit: number | '';
     provider: TextModelProvider;
   };
   textModelProfiles: TextModelProfiles;
-  imageModel: ImageModelConfig;
+  imageModel: Omit<ImageModelConfig, 'concurrency_limit'> & {
+    concurrency_limit: number | '';
+  };
   imageModelProfiles: ImageModelProfiles;
   fileParser: FileParserConfig;
   general: {

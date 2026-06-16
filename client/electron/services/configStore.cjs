@@ -8,6 +8,8 @@ const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'custo
 const aiRequestModes = ['normal', 'stream'];
 const updateChannels = ['github', 'cloudflare'];
 const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
+const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
+const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
 
 const textProviderBaseUrls = {
   jinlong: 'https://jlaudeapi.com/v1',
@@ -23,6 +25,7 @@ const defaultTextModelProfiles = {
     base_url: textProviderBaseUrls.jinlong,
     model_name: 'gpt-3.5-turbo',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     request_mode: 'stream',
   },
   volcengine: {
@@ -30,6 +33,7 @@ const defaultTextModelProfiles = {
     base_url: textProviderBaseUrls.volcengine,
     model_name: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     request_mode: 'stream',
   },
   deepseek: {
@@ -37,6 +41,7 @@ const defaultTextModelProfiles = {
     base_url: textProviderBaseUrls.deepseek,
     model_name: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     request_mode: 'stream',
   },
   longcat: {
@@ -44,6 +49,7 @@ const defaultTextModelProfiles = {
     base_url: textProviderBaseUrls.longcat,
     model_name: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     request_mode: 'stream',
   },
   custom: {
@@ -51,6 +57,7 @@ const defaultTextModelProfiles = {
     base_url: '',
     model_name: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     request_mode: 'stream',
   },
 };
@@ -62,6 +69,7 @@ const defaultImageModelProfiles = {
     api_key: '',
     model_name: '',
     request_mode: 'stream',
+    concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -72,6 +80,7 @@ const defaultImageModelProfiles = {
     api_key: '',
     model_name: '',
     request_mode: 'stream',
+    concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -82,6 +91,7 @@ const defaultImageModelProfiles = {
     api_key: '',
     model_name: 'gemini-3.1-flash-image-preview',
     request_mode: 'stream',
+    concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -92,6 +102,7 @@ const defaultImageModelProfiles = {
     api_key: '',
     model_name: '',
     request_mode: 'stream',
+    concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
     tested_at: '',
     last_error: '',
@@ -140,6 +151,7 @@ const defaultConfig = {
   base_url: textProviderBaseUrls.jinlong,
   model_name: 'gpt-3.5-turbo',
   context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+  concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
   request_mode: 'stream',
   image_model: {
     ...defaultImageModelProfiles.jinlong,
@@ -194,6 +206,16 @@ function normalizeTextContextLengthLimit(value, fallback = DEFAULT_TEXT_CONTEXT_
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
 }
 
+function normalizeTextConcurrencyLimit(value, fallback = DEFAULT_TEXT_CONCURRENCY_LIMIT) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
+}
+
+function normalizeImageConcurrencyLimit(value, fallback = DEFAULT_IMAGE_CONCURRENCY_LIMIT) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
+}
+
 function normalizeTextModelProfile(provider, profile) {
   const defaults = defaultTextModelProfiles[provider];
   const source = profile || {};
@@ -205,6 +227,7 @@ function normalizeTextModelProfile(provider, profile) {
     base_url: sourceBaseUrl,
     model_name: source.model_name !== undefined ? source.model_name : defaults.model_name,
     context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit, defaults.context_length_limit),
+    concurrency_limit: normalizeTextConcurrencyLimit(source.concurrency_limit, defaults.concurrency_limit),
     request_mode: normalizeAiRequestMode(source.request_mode, defaults.request_mode),
   };
 }
@@ -229,6 +252,7 @@ function textProfileFromFlatConfig(source, fallback, provider) {
     base_url: sourceBaseUrl,
     model_name: source.model_name !== undefined ? source.model_name : fallback.model_name,
     context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit !== undefined ? source.context_length_limit : fallback.context_length_limit, fallback.context_length_limit),
+    concurrency_limit: normalizeTextConcurrencyLimit(source.concurrency_limit !== undefined ? source.concurrency_limit : fallback.concurrency_limit, fallback.concurrency_limit),
     request_mode: normalizeAiRequestMode(source.request_mode !== undefined ? source.request_mode : fallback.request_mode, fallback.request_mode),
   };
 }
@@ -259,6 +283,7 @@ function textProfileFromUnknownProvider(source, sourceProvider, fallback) {
     base_url: pickTextProfileField(source.base_url, selectedProfile?.base_url, fallback.base_url),
     model_name: pickTextProfileField(source.model_name, selectedProfile?.model_name, fallback.model_name),
     context_length_limit: normalizeTextContextLengthLimit(pickTextProfileField(source.context_length_limit, selectedProfile?.context_length_limit, fallback.context_length_limit), fallback.context_length_limit),
+    concurrency_limit: normalizeTextConcurrencyLimit(pickTextProfileField(source.concurrency_limit, selectedProfile?.concurrency_limit, fallback.concurrency_limit), fallback.concurrency_limit),
     request_mode: normalizeAiRequestMode(pickTextProfileField(source.request_mode, selectedProfile?.request_mode, fallback.request_mode), fallback.request_mode),
   };
 }
@@ -274,6 +299,7 @@ function normalizeImageModelProfile(provider, profile) {
     api_key: source.api_key !== undefined ? source.api_key : defaults.api_key,
     model_name: source.model_name !== undefined ? source.model_name : defaults.model_name,
     request_mode: normalizeAiRequestMode(source.request_mode, defaults.request_mode),
+    concurrency_limit: normalizeImageConcurrencyLimit(source.concurrency_limit, defaults.concurrency_limit),
     status: source.status !== undefined ? source.status : defaults.status,
     tested_at: source.tested_at !== undefined ? source.tested_at : defaults.tested_at,
     last_error: source.last_error !== undefined ? source.last_error : defaults.last_error,
@@ -382,6 +408,7 @@ function normalizeConfig(config) {
     base_url: activeTextProfile.base_url,
     model_name: activeTextProfile.model_name,
     context_length_limit: activeTextProfile.context_length_limit,
+    concurrency_limit: activeTextProfile.concurrency_limit,
     request_mode: activeTextProfile.request_mode,
     image_model: activeImageProfile,
     image_model_profiles: imageModelProfiles,

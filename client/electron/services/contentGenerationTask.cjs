@@ -1,14 +1,15 @@
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
+const { AI_QUEUE_SCOPE_PAUSED } = require('../utils/aiRequestQueue.cjs');
 const { createNoopDeveloperLogger } = require('../utils/developerLog.cjs');
 const { applyRangeEdits } = require('../utils/textEdit.cjs');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 
 const IMAGE_STYLES = new Set(['engineering_diagram', 'realistic_photo']);
-const DEFAULT_CONTENT_CONCURRENCY = 5;
+const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
+const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
 const MERMAID_REPAIR_ATTEMPTS = 3;
 const MERMAID_RENDER_TIMEOUT_MS = 15000;
-const AI_IMAGE_CONCURRENCY = 2;
 const MERMAID_IMAGE_CONCURRENCY = 5;
 const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 const MAX_OUTLINE_EXPANSION_ROUNDS = 3;
@@ -22,12 +23,31 @@ const ORIGINAL_PLAN_SEGMENT_MAX_CHARS = 6000;
 const ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS = 2;
 const TABLE_CLEANUP_CONTEXT_CHARS = 600;
 const TABLE_CLEANUP_BATCH_CHAR_LIMIT = 30000;
+const CONTENT_GENERATION_PAUSED = 'CONTENT_GENERATION_PAUSED';
 const TABLE_REQUIREMENT_LABELS = {
   none: '不要',
   light: '少量',
   moderate: '适中',
   heavy: '大量',
 };
+
+function isAiQueueScopePausedError(error) {
+  return error?.code === AI_QUEUE_SCOPE_PAUSED;
+}
+
+function isContentGenerationPausedError(error) {
+  return error?.code === CONTENT_GENERATION_PAUSED;
+}
+
+function isPauseLikeError(error) {
+  return isContentGenerationPausedError(error) || isAiQueueScopePausedError(error);
+}
+
+function createContentGenerationPausedError() {
+  const error = new Error(CONTENT_GENERATION_PAUSED);
+  error.code = CONTENT_GENERATION_PAUSED;
+  return error;
+}
 
 function singleLine(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -398,7 +418,12 @@ function normalizeMinimumWords(value) {
 
 function normalizeContentConcurrency(value) {
   const concurrency = Number(value);
-  return Math.max(1, Number.isFinite(concurrency) ? Math.round(concurrency) : DEFAULT_CONTENT_CONCURRENCY);
+  return Math.max(1, Number.isFinite(concurrency) ? Math.round(concurrency) : DEFAULT_TEXT_CONCURRENCY_LIMIT);
+}
+
+function normalizeImageConcurrency(value) {
+  const concurrency = Number(value);
+  return Math.max(1, Number.isFinite(concurrency) ? Math.round(concurrency) : DEFAULT_IMAGE_CONCURRENCY_LIMIT);
 }
 
 function isDeveloperModeEnabled(aiService) {
@@ -2654,6 +2679,9 @@ async function prepareRenderableMermaidPlan({ aiService, context, projectOvervie
       await validateMermaidRender(currentPlan.code);
       return { ok: true, plan: currentPlan, attempts: attempt };
     } catch (error) {
+      if (isPauseLikeError(error)) {
+        throw error;
+      }
       lastError = error;
     }
   }
@@ -2796,10 +2824,11 @@ function orderExpansionCandidates(candidates) {
 async function runWorkerPool({ limit, getNextItem, worker, shouldStop, onItemStart, onItemComplete }) {
   const workerCount = Math.max(1, Math.floor(Number(limit) || 1));
   let activeCount = 0;
+  let firstError = null;
 
   async function runWorker() {
     while (true) {
-      if (shouldStop?.()) {
+      if (firstError || shouldStop?.()) {
         return;
       }
       const item = getNextItem();
@@ -2815,12 +2844,18 @@ async function runWorkerPool({ limit, getNextItem, worker, shouldStop, onItemSta
         await onItemComplete?.(item, result, activeCount);
       } catch (error) {
         activeCount -= 1;
-        throw error;
+        if (!firstError) {
+          firstError = error;
+        }
+        return;
       }
     }
   }
 
   await Promise.all(Array.from({ length: workerCount }, runWorker));
+  if (firstError) {
+    throw firstError;
+  }
 }
 
 async function runItemsWithWorkerPool(items, limit, worker, shouldStop) {
@@ -2963,9 +2998,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   }
   const regenerateRequirement = resume ? contentRuntime.regenerate_requirement : String(payload.requirement || '').trim();
   const generationOptions = payload.generationOptions || payload.generation_options || storedPlan.contentGenerationOptions || {};
-  const contentConcurrency = normalizeContentConcurrency(
-    generationOptions.contentConcurrency ?? generationOptions.content_concurrency ?? payload.concurrency,
-  );
+  const aiConfig = aiService.getConfig ? aiService.getConfig() : {};
+  const contentConcurrency = normalizeContentConcurrency(aiConfig.concurrency_limit);
+  const imageConcurrency = normalizeImageConcurrency(aiConfig.image_model?.concurrency_limit);
   const developerModeEnabled = isDeveloperModeEnabled(aiService);
   const tableRequirement = normalizeTableRequirement(generationOptions.tableRequirement ?? generationOptions.table_requirement);
   let maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
@@ -3080,7 +3115,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   if (targetItemId) {
     logs = [`准备重新生成正文小节：${targetItemId}。`];
   }
-  logs = [...logs, `正文生成并发速度：${contentConcurrency}。`];
+  logs = [...logs, `文本模型并发上限：${contentConcurrency}。`];
   logs = [...logs, tableRequirement === 'heavy'
     ? '表格需求：大量，保持现有表格编排逻辑。'
     : tableRequirement === 'none'
@@ -3113,7 +3148,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       full_regenerate: fullRegenerate,
       leaf_count: leaves.length,
       task_count: tasksToRun.length,
-      content_concurrency: contentConcurrency,
+      text_concurrency_limit: contentConcurrency,
       table_requirement: tableRequirement,
       minimum_words: minimumWords,
       ai_images_enabled: aiImagesEnabled,
@@ -3195,11 +3230,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     return Boolean(taskControl?.isPauseRequested?.());
   }
 
-  function pauseIfRequested(message = '正文生成已暂停，可导出当前已完成内容，稍后继续。') {
-    if (!isPauseRequested()) {
-      return;
-    }
-
+  function persistPausedContentGeneration(message = '正文生成已暂停，可导出当前已完成内容，稍后继续。') {
     logs = [...logs, message];
     const runtime = syncRuntime();
     const saved = workspaceStore.updateTechnicalPlan({
@@ -3210,9 +3241,15 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       contentGenerationTask: updateTask({ status: 'paused', progress: progressFor(leaves, sections), logs, stats: statsSnapshot(), pause_requested: false }),
     });
     updateTask({ status: 'paused', progress: progressFor(leaves, sections), logs, stats: statsSnapshot(), pause_requested: false }, saved);
-    const pauseError = new Error('CONTENT_GENERATION_PAUSED');
-    pauseError.code = 'CONTENT_GENERATION_PAUSED';
-    throw pauseError;
+  }
+
+  function pauseIfRequested(message = '正文生成已暂停，可导出当前已完成内容，稍后继续。') {
+    if (!isPauseRequested()) {
+      return;
+    }
+
+    persistPausedContentGeneration(message);
+    throw createContentGenerationPausedError();
   }
 
   function rememberTouchedItem(itemId) {
@@ -3515,6 +3552,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         validator: validateContentPlan,
       });
     } catch (error) {
+      if (isPauseLikeError(error)) {
+        throw error;
+      }
       contentPlan = normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
       logs = [...logs, `编排失败：${item.id} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}，将按纯正文生成。`];
     }
@@ -3720,6 +3760,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     const { item, parentChapters, siblingChapters } = context;
     const previousSection = sections[item.id] || {};
     const previousContent = previousSection.content || item.content || '';
+    const previousStatus = previousSection.status && previousSection.status !== 'running'
+      ? previousSection.status
+      : previousContent.trim() ? 'success' : 'idle';
     const isSingleSectionRegeneration = Boolean(targetItemId);
     let contentPlan = getContentPlanForItem(item.id);
     let originalState = getOriginalMaterialRuntimeState(item);
@@ -3771,6 +3814,14 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         saveSection(item, { status: 'success', content, error: undefined }, content, { logs });
       }
     } catch (error) {
+      if (isPauseLikeError(error)) {
+        saveSection(item, {
+          status: previousStatus,
+          content: previousContent,
+          error: previousSection.error,
+        }, previousContent, { logs });
+        throw error;
+      }
       const message = error.message || '正文生成失败';
       logs = [...logs, `生成失败：${item.id} ${item.title || '未命名章节'}，${message}${isSingleSectionRegeneration ? '。已保留原正文。' : ''}`];
       saveSection(item, {
@@ -3975,7 +4026,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         updateOutlineExpansionProgress(round, OUTLINE_EXPANSION_STEPS_PER_ROUND, '本轮补目录已完成，正在检查暂停请求');
         pauseIfRequested('正文生成已在补目录阶段暂停，可导出当前已完成内容，稍后继续。');
       } catch (error) {
-        if (error?.code === 'CONTENT_GENERATION_PAUSED') {
+        if (isPauseLikeError(error)) {
           throw error;
         }
         logs = [...logs, `第 ${round} 轮补目录失败：${error.message || '模型返回无效'}。`];
@@ -4230,6 +4281,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       rememberTouchedItem(item.id);
       saveSection(item, { status: 'success', content: nextContent, error: undefined }, nextContent, { logs });
     } catch (error) {
+      if (isPauseLikeError(error)) {
+        throw error;
+      }
       logs = [...logs, `扩写失败：${item.id} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}。`];
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
     }
@@ -4381,6 +4435,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
           return { appliedCount: appliedTotal, failed: false, paused: false };
         }
       } catch (error) {
+        if (isPauseLikeError(error)) {
+          throw error;
+        }
         failures = [error.message || '模型返回无效'];
         writeDeveloperLog('original_coverage.repair.attempt.error', {
           section_id: item.id,
@@ -4486,6 +4543,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
           conflict_count: conflictItems.length,
         });
       } catch (error) {
+        if (isPauseLikeError(error)) {
+          throw error;
+        }
         logs = [...logs, `原方案覆盖审计失败：${target.item.id} ${target.item.title || '未命名章节'}，${error.message || '模型返回无效'}，已跳过该小节。`];
         writeDeveloperLog('original_coverage.audit.section.error', {
           section_id: target.item.id,
@@ -4540,6 +4600,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
           logs = [...logs, `原方案覆盖修复需人工核对：${item.id} ${item.title || '未命名章节'}，${(result.errors || []).join('；') || '未能应用补写 patch'}。`];
         }
       } catch (error) {
+        if (isPauseLikeError(error)) {
+          throw error;
+        }
         contentStats.audit_fix_failed += 1;
         logs = [...logs, `原方案覆盖修复失败：${item.id} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}。`];
       } finally {
@@ -4710,6 +4773,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
           failures = result.errors;
         }
       } catch (error) {
+        if (isPauseLikeError(error)) {
+          throw error;
+        }
         failures = [error.message || '模型返回无效'];
         writeDeveloperLog('consistency.repair.attempt.error', {
           section_id: item.id,
@@ -4824,6 +4890,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
           conflict_section_count: conflictsBySectionId.size,
         });
       } catch (error) {
+        if (isPauseLikeError(error)) {
+          throw error;
+        }
         logs = [...logs, `一致性审计失败：第 ${group.index}/${group.total} 组，${error.message || '模型返回无效'}，已跳过该组。`];
         writeDeveloperLog('consistency.audit.group.error', {
           index: group.index,
@@ -4879,6 +4948,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
           logs = [...logs, `一致性修复需人工核对：${item.id} ${item.title || '未命名章节'}，${(result.errors || []).join('；') || '未能唯一定位替换内容'}。`];
         }
       } catch (error) {
+        if (isPauseLikeError(error)) {
+          throw error;
+        }
         contentStats.audit_fix_failed += 1;
         logs = [...logs, `一致性修复失败：${item.id} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}。`];
       } finally {
@@ -5008,6 +5080,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         contentStats.table_cleanup_completed += batch.length;
         updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
       } catch (error) {
+        if (isPauseLikeError(error)) {
+          throw error;
+        }
         skippedCount += batch.length;
         contentStats.table_cleanup_completed += batch.length;
         logs = [...logs, `正文去表格跳过：${item.id} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}。`];
@@ -5170,7 +5245,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     contentStats.illustration_total = illustrationTotal;
     contentStats.illustration_completed = 0;
     logs = [...logs, illustrationTotal
-      ? `开始配图：AI 生图 ${aiImageTargets.length} 张（并发 ${AI_IMAGE_CONCURRENCY}），Mermaid 图 ${mermaidImageTargets.length} 张（并发 ${MERMAID_IMAGE_CONCURRENCY}）。`
+      ? `开始配图：AI 生图 ${aiImageTargets.length} 张（并发 ${imageConcurrency}），Mermaid 图 ${mermaidImageTargets.length} 张（并发 ${MERMAID_IMAGE_CONCURRENCY}）。`
       : '本次没有需要执行的配图。'];
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
 
@@ -5179,7 +5254,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     }
 
     await Promise.all([
-      runItemsWithWorkerPool(aiImageTargets, AI_IMAGE_CONCURRENCY, runAiIllustration, isPauseRequested),
+      runItemsWithWorkerPool(aiImageTargets, imageConcurrency, runAiIllustration, isPauseRequested),
       runItemsWithWorkerPool(mermaidImageTargets, MERMAID_IMAGE_CONCURRENCY, runMermaidIllustration, isPauseRequested),
     ]);
 
@@ -5265,7 +5340,16 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     });
     updateTask({ status: finalStatus, progress: finalProgress, logs, stats: statsSnapshot(), pause_requested: false }, technicalPlan);
   } catch (error) {
-    if (error?.code === 'CONTENT_GENERATION_PAUSED') {
+    if (isAiQueueScopePausedError(error)) {
+      persistPausedContentGeneration('正文生成已暂停，未发起的 AI 请求已从队列丢弃，可导出当前已完成内容，稍后继续。');
+      writeDeveloperLog('content.task.paused', {
+        message: error.message || 'queue paused',
+        stats: statsSnapshot(),
+        touched_item_ids: [...touchedItemIds],
+      });
+      return;
+    }
+    if (isContentGenerationPausedError(error)) {
       writeDeveloperLog('content.task.paused', {
         message: error.message || 'paused',
         stats: statsSnapshot(),

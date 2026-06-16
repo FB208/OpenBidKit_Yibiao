@@ -4,7 +4,7 @@ import * as Switch from '@radix-ui/react-switch';
 import { Children, isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { Components } from 'react-markdown';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { DetailHelpLink, MarkdownEditor, MarkdownRenderer, useToast } from '../../../shared/ui';
+import { MarkdownEditor, MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { ClientConfig, ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
 import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement, TechnicalPlanWorkflowKind } from '../types';
@@ -74,7 +74,6 @@ const defaultContentGenerationOptions: ContentGenerationOptions = {
   useMermaidImages: true,
   tableRequirement: 'heavy',
   minimumWords: 0,
-  contentConcurrency: 5,
   enableConsistencyAudit: true,
   enableOriginalPlanCoverageAudit: false,
 };
@@ -96,7 +95,6 @@ function normalizeGenerationOptions(options: ContentGenerationOptions | DraftCon
   const maxAiImagesLimit = Math.max(1, leafCount);
   const requestedMaxAiImages = Number(options?.maxAiImages ?? fallback.maxAiImages);
   const requestedMinimumWords = Number(options?.minimumWords ?? fallback.minimumWords);
-  const requestedContentConcurrency = Number(options?.contentConcurrency ?? fallback.contentConcurrency);
   const tableRequirement = options?.tableRequirement;
 
   return {
@@ -105,7 +103,6 @@ function normalizeGenerationOptions(options: ContentGenerationOptions | DraftCon
     useMermaidImages: Boolean(options?.useMermaidImages ?? fallback.useMermaidImages),
     tableRequirement: isContentTableRequirement(tableRequirement) ? tableRequirement : fallback.tableRequirement,
     minimumWords: Math.max(0, Number.isFinite(requestedMinimumWords) ? Math.round(requestedMinimumWords) : fallback.minimumWords),
-    contentConcurrency: Math.max(1, Number.isFinite(requestedContentConcurrency) ? Math.round(requestedContentConcurrency) : fallback.contentConcurrency),
     enableConsistencyAudit: Boolean(options?.enableConsistencyAudit ?? fallback.enableConsistencyAudit),
     enableOriginalPlanCoverageAudit: isExpansionWorkflow ? Boolean(options?.enableOriginalPlanCoverageAudit ?? fallback.enableOriginalPlanCoverageAudit) : false,
   };
@@ -603,15 +600,13 @@ function ContentEditPage({
     const currentOptions = contentGenerationOptions
       ? { ...defaultContentGenerationOptions, ...contentGenerationOptions }
       : normalizeGenerationOptions(undefined, imageAvailable, leaves.length, isExpansionWorkflow);
-    const nextOptions = paused
-      ? { ...currentOptions, contentConcurrency: normalizedDraftOptions.contentConcurrency }
-      : normalizedDraftOptions;
+    const nextOptions = paused ? currentOptions : normalizedDraftOptions;
     await onContentGenerationOptionsChange(nextOptions);
     setDraftGenerationOptions(normalizeGenerationOptions(nextOptions, imageAvailable, leaves.length, isExpansionWorkflow));
 
     if (showSuccess) {
       setGenerationDialogOpen(false);
-      showToast(paused ? '正文生成并发速度已保存，继续后生效' : '正文生成配置已保存', 'success');
+      showToast('正文生成配置已保存', 'success');
     }
 
     return nextOptions;
@@ -741,7 +736,6 @@ function ContentEditPage({
         useMermaidImages: savedGenerationOptions.useMermaidImages,
         tableRequirement: savedGenerationOptions.tableRequirement,
         minimumWords: savedGenerationOptions.minimumWords,
-        contentConcurrency: savedGenerationOptions.contentConcurrency,
         enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
         enableOriginalPlanCoverageAudit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
       },
@@ -750,7 +744,6 @@ function ContentEditPage({
       table_requirement: savedGenerationOptions.tableRequirement,
       use_mermaid_images: savedGenerationOptions.useMermaidImages,
       use_ai_images: nextImageModelAvailable && savedGenerationOptions.useAiImages,
-      content_concurrency: savedGenerationOptions.contentConcurrency,
       content_generation_action: contentGenerationAction,
       minimum_words: savedGenerationOptions.minimumWords,
       enable_consistency_audit: savedGenerationOptions.enableConsistencyAudit,
@@ -855,7 +848,6 @@ function ContentEditPage({
           maxAiImages: savedGenerationOptions.maxAiImages,
           useMermaidImages: savedGenerationOptions.useMermaidImages,
           tableRequirement: savedGenerationOptions.tableRequirement,
-          contentConcurrency: savedGenerationOptions.contentConcurrency,
           enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
           enableOriginalPlanCoverageAudit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
         },
@@ -864,7 +856,6 @@ function ContentEditPage({
         table_requirement: savedGenerationOptions.tableRequirement,
         use_mermaid_images: savedGenerationOptions.useMermaidImages,
         use_ai_images: nextImageModelAvailable && savedGenerationOptions.useAiImages,
-        content_concurrency: savedGenerationOptions.contentConcurrency,
         content_generation_action: 'regenerate_section',
         minimum_words: savedGenerationOptions.minimumWords,
         enable_consistency_audit: savedGenerationOptions.enableConsistencyAudit,
@@ -1123,7 +1114,7 @@ function ContentEditPage({
               <Dialog.Title>正文生成配置</Dialog.Title>
               <Dialog.Description>
                 {paused
-                  ? '任务已暂停，仅可修改正文生成并发速度，继续后生效。'
+                  ? '任务已暂停，继续后会使用设置中的文本模型并发上限；生成策略需重新开始任务后修改。'
                   : canRetryMinimumWords
                     ? '将保留已生成正文，继续扩写未达标的最低字数。'
                     : completedCount === leaves.length && leaves.length
@@ -1194,29 +1185,6 @@ function ContentEditPage({
                   </Switch.Root>
                 </label>
               )}
-              <div className="content-generation-config-row">
-                <span>
-                  <strong>正文生成并发速度</strong>
-                  <small>
-                    AI接口请求的并发速率
-                    <DetailHelpLink title="正文生成并发速度说明">
-                      同时发起的正文编排、正文生成、字数扩写和一致性审计请求数，不影响配图。<br/>
-                      具体并发上限取决于配置的API接口限制，设置过高会报429错误。
-                    </DetailHelpLink>
-                  </small>
-                </span>
-                <input
-                  aria-label="正文生成并发速度"
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={draftGenerationOptions.contentConcurrency}
-                  onChange={(event) => setDraftGenerationOptions((prev) => ({
-                    ...prev,
-                    contentConcurrency: Math.max(1, Math.round(Number(event.target.value) || 1)),
-                  }))}
-                />
-              </div>
               <label className="content-generation-config-row">
                 <span>
                   <strong>使用 AI 生图</strong>
@@ -1273,8 +1241,8 @@ function ContentEditPage({
             </div>
             <div className="content-regenerate-actions">
               <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
-              <button type="button" className="secondary-action" onClick={saveGenerationOptions} disabled={taskInFlight}>
-                {paused ? '保存并发速度' : '保存配置'}
+              <button type="button" className="secondary-action" onClick={saveGenerationOptions} disabled={taskInFlight || paused}>
+                保存配置
               </button>
               {!paused && <button type="button" className="primary-action" onClick={startGeneration} disabled={taskBlocksGeneration}>{canRetryMinimumWords ? '继续补足字数' : '开始生成'}</button>}
             </div>
