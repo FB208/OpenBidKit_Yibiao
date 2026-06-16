@@ -55,6 +55,11 @@ export interface UpdateCheckResult {
   channel?: UpdateChannel;
 }
 
+export interface UpdateInstallResult {
+  success: boolean;
+  message?: string;
+}
+
 export interface GpuHardwareAccelerationStatus {
   configured: boolean;
   enabled: boolean;
@@ -89,7 +94,7 @@ export interface YibiaoBridge {
   openExternal: (url: string) => Promise<{ success: boolean; message?: string }>;
   checkUpdate: () => Promise<UpdateCheckResult>;
   startUpdate: () => Promise<UpdateCheckResult>;
-  quitAndInstall: () => Promise<void>;
+  quitAndInstall: () => Promise<UpdateInstallResult>;
   onUpdateProgress: (callback: (event: { percent: number }) => void) => () => void;
   onUpdateDownloaded: (callback: (event: { version: string }) => void) => () => void;
   onUpdateError: (callback: (event: { message: string }) => void) => () => void;

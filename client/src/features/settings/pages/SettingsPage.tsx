@@ -558,6 +558,18 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
   };
 
+  const installDownloadedUpdate = async () => {
+    try {
+      const result = await window.yibiao?.quitAndInstall();
+      if (result && !result.success) {
+        showToast(result.message || '安装更新失败', 'error');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '安装更新失败';
+      showToast(message, 'error');
+    }
+  };
+
   const updateImageModelConfig = (partial: Partial<Omit<SettingsPageState['imageModel'], 'provider'>>, options: { clearModels?: boolean } = {}) => {
     if (options.clearModels) {
       setImageModels([]);
@@ -1562,7 +1574,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 disabled={updateBusy}
                 onClick={() => {
                   if (updateStatus === 'downloaded') {
-                    void window.yibiao?.quitAndInstall();
+                    void installDownloadedUpdate();
                     return;
                   }
                   void checkForUpdates();

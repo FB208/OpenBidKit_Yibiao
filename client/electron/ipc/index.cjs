@@ -293,9 +293,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
 
   ipcMain.handle('app:get-latest-version', () => getLatestVersion({ configStore }));
   ipcMain.handle('app:get-update-download-url', () => getUpdateDownloadUrl({ configStore }));
-  ipcMain.handle('app:quit-and-install', () => {
-    quitAndInstall();
-  });
+  ipcMain.handle('app:quit-and-install', () => quitAndInstall({ app }));
 
   ipcMain.handle('app:check-update', (event) => {
     const webContents = event.sender;
