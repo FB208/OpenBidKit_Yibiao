@@ -3,8 +3,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { getConfigFilePath } = require('../utils/paths.cjs');
 
-const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'longcat', 'custom'];
-const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'custom'];
+const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'longcat', 'agnes', 'custom'];
+const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'agnes', 'custom'];
 const aiRequestModes = ['normal', 'stream'];
 const updateChannels = ['github', 'cloudflare'];
 const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
@@ -16,6 +16,7 @@ const textProviderBaseUrls = {
   volcengine: 'https://ark.cn-beijing.volces.com/api/v3',
   deepseek: 'https://api.deepseek.com',
   longcat: 'https://api.longcat.chat/openai/v1',
+  agnes: 'https://apihub.agnes-ai.com/v1',
   custom: '',
 };
 
@@ -47,6 +48,14 @@ const defaultTextModelProfiles = {
   longcat: {
     api_key: '',
     base_url: textProviderBaseUrls.longcat,
+    model_name: '',
+    context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
+    request_mode: 'stream',
+  },
+  agnes: {
+    api_key: '',
+    base_url: textProviderBaseUrls.agnes,
     model_name: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
@@ -90,6 +99,17 @@ const defaultImageModelProfiles = {
     base_url: 'https://generativelanguage.googleapis.com/v1beta',
     api_key: '',
     model_name: 'gemini-3.1-flash-image-preview',
+    request_mode: 'stream',
+    concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  },
+  agnes: {
+    provider: 'agnes',
+    base_url: 'https://apihub.agnes-ai.com/v1',
+    api_key: '',
+    model_name: '',
     request_mode: 'stream',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
