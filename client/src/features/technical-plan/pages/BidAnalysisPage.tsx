@@ -462,7 +462,6 @@ function BidAnalysisPage({
                         className={`bid-analysis-task-item is-${status}${visibleSelectedTaskId === task.id ? ' is-active' : ''}`}
                         key={task.id}
                         onClick={() => setSelectedTaskId(task.id)}
-                        disabled={fullRerunLocked}
                       >
                         <strong>{task.label}</strong>
                         <small>{content ? `${content.length} 字` : task.description}</small>

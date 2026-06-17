@@ -187,11 +187,12 @@ async function runSingleBidAnalysisPromptTask({ aiService, fileContent, task, se
   });
 }
 
-async function runBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint }) {
-  const currentConfig = typeof aiService.getConfig === 'function' ? aiService.getConfig() : {};
-  const segments = splitUserTextByContextLimit(fileContent, currentConfig);
+async function runBidAnalysisPromptTask({ aiService, fileContent, fileSegments, task, sectionHint }) {
+  const segments = Array.isArray(fileSegments) && fileSegments.length
+    ? fileSegments
+    : splitUserTextByContextLimit(fileContent, typeof aiService.getConfig === 'function' ? aiService.getConfig() : {});
   if (segments.length <= 1) {
-    return runSingleBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint });
+    return runSingleBidAnalysisPromptTask({ aiService, fileContent: segments[0] || fileContent, task, sectionHint });
   }
 
   const segmentResults = await Promise.all(segments.map(async (segmentContent, index) => ({
@@ -242,6 +243,8 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
     headLine: storedPlanForHint.tenderFile.selectedSectionHeadLine || '',
   } : null;
   const sectionHint = selectedSection ? buildSectionContextHint(selectedSection) : '';
+  const currentConfig = typeof aiService.getConfig === 'function' ? aiService.getConfig() : {};
+  const fileSegments = splitUserTextByContextLimit(fileContent, currentConfig);
   const forceRerun = payload.force_rerun === true || payload.forceRerun === true;
   const requestedTaskIds = Array.isArray(payload.task_ids)
     ? new Set(payload.task_ids.filter((taskId) => typeof taskId === 'string'))
@@ -300,6 +303,7 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
     const content = await runBidAnalysisPromptTask({
       aiService,
       fileContent,
+      fileSegments,
       task,
       sectionHint,
     });

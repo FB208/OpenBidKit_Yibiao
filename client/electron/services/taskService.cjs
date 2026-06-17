@@ -556,6 +556,50 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
     emit(pausedTask, buildSnapshot(getTaskDefinition('content-generation'), state, pausedTask));
   }
 
+  function recoverInterruptedBidAnalysisTask() {
+    if (activeTasks.has('bid-analysis')) {
+      return;
+    }
+
+    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
+    const bidAnalysisTask = technicalPlan.bidAnalysisTask;
+    if (!isActiveTaskStatus(bidAnalysisTask?.status)) {
+      return;
+    }
+
+    const message = '上次招标文件解析未完成，请重新解析';
+    const nextBidAnalysisTasks = {};
+    let hasInterruptedItem = false;
+    for (const [itemId, item] of Object.entries(technicalPlan.bidAnalysisTasks || {})) {
+      if (item?.status === 'running') {
+        nextBidAnalysisTasks[itemId] = {
+          ...item,
+          status: 'error',
+          error: message,
+        };
+        hasInterruptedItem = true;
+      } else {
+        nextBidAnalysisTasks[itemId] = item;
+      }
+    }
+
+    const logs = Array.isArray(bidAnalysisTask.logs) ? bidAnalysisTask.logs : [];
+    const recoveredTask = {
+      ...bidAnalysisTask,
+      status: 'error',
+      progress: 100,
+      pause_requested: false,
+      error: message,
+      logs: logs.includes(message) ? logs : [...logs, message],
+      updated_at: now(),
+    };
+    const partial = hasInterruptedItem
+      ? { bidAnalysisTask: recoveredTask, bidAnalysisTasks: nextBidAnalysisTasks }
+      : { bidAnalysisTask: recoveredTask };
+    const state = technicalPlanStore.updateTechnicalPlan(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-analysis'), state, recoveredTask));
+  }
+
   function recoverInterruptedGlobalFactsTask() {
     if (activeTasks.has('global-facts-generation')) {
       return;
@@ -706,6 +750,7 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
       return startManagedTask('duplicate-analysis', payload, duplicateCheckService.runAnalysisTask);
     },
     getActiveTasks() {
+      recoverInterruptedBidAnalysisTask();
       recoverInterruptedContentGenerationTask();
       recoverInterruptedGlobalFactsTask();
       recoverInterruptedRejectionCheckTasks();

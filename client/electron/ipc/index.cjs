@@ -1,6 +1,7 @@
 const { ipcMain, shell } = require('electron');
 const { registerAiIpc } = require('./aiIpc.cjs');
 const { registerConfigIpc } = require('./configIpc.cjs');
+const { registerDeveloperIpc } = require('./developerIpc.cjs');
 const { registerDuplicateCheckIpc } = require('./duplicateCheckIpc.cjs');
 const { registerExportIpc } = require('./exportIpc.cjs');
 const { registerFileIpc } = require('./fileIpc.cjs');
@@ -161,7 +162,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, fileSe
   return { sqliteDatabase };
 }
 
-function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [] }) {
+function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow }) {
   const configStore = createConfigStore(app);
   const aiService = createAiService({ app, configStore });
   const fileService = createFileService({ app, configStore });
@@ -202,7 +203,16 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
       .concat('--disable-gpu');
   };
 
-  registerConfigIpc({ configStore, aiService });
+  registerConfigIpc({
+    configStore,
+    aiService,
+    onDeveloperModeChange(developerMode) {
+      if (!developerMode) {
+        closeDeveloperTokenStatsWindow?.();
+      }
+    },
+  });
+  registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsWindow });
   registerAiIpc({ aiService });
   registerFileIpc({ fileService });
   registerExportIpc({ exportService });

@@ -48,6 +48,16 @@ const bridge = {
     requestJson: (request) => ipcRenderer.invoke('ai:request-json', request),
     testImageModel: (config) => ipcRenderer.invoke('ai:test-image-model', config),
   },
+  developerTokenStats: {
+    openWindow: () => ipcRenderer.invoke('developer-token-stats:open-window'),
+    get: () => ipcRenderer.invoke('developer-token-stats:get'),
+    reset: () => ipcRenderer.invoke('developer-token-stats:reset'),
+    onChanged: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('developer-token-stats:changed', listener);
+      return () => ipcRenderer.removeListener('developer-token-stats:changed', listener);
+    },
+  },
   file: {
     selectDuplicateCheckFiles: (options) => ipcRenderer.invoke('file:select-duplicate-check-files', options),
   },

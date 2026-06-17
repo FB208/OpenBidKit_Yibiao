@@ -13,6 +13,7 @@ const GPU_HARDWARE_ACCELERATION_TRIAL_ARG = '--yibiao-trial-hardware-acceleratio
 const FORCE_DISABLE_GPU_ARGS = ['--disable-gpu', '--disable-hardware-acceleration'];
 let appQuitting = false;
 let gpuRecoveryRelaunchStarted = false;
+let developerTokenStatsWindow = null;
 
 function hasProcessArg(name) {
   return process.argv.some((arg) => arg === name || arg.startsWith(`${name}=`));
@@ -340,6 +341,68 @@ function createMainWindow() {
   return mainWindow;
 }
 
+function appendWindowQuery(url, windowName) {
+  return `${url}${url.includes('?') ? '&' : '?'}window=${encodeURIComponent(windowName)}`;
+}
+
+function closeDeveloperTokenStatsWindow() {
+  const window = developerTokenStatsWindow;
+  developerTokenStatsWindow = null;
+  if (window && !window.isDestroyed()) {
+    window.close();
+  }
+}
+
+function openDeveloperTokenStatsWindow() {
+  if (developerTokenStatsWindow && !developerTokenStatsWindow.isDestroyed()) {
+    if (developerTokenStatsWindow.isMinimized()) {
+      developerTokenStatsWindow.restore();
+    }
+    developerTokenStatsWindow.show();
+    developerTokenStatsWindow.focus();
+    return { success: true };
+  }
+
+  const tokenStatsWindow = new BrowserWindow({
+    width: 360,
+    height: 330,
+    minWidth: 320,
+    minHeight: 300,
+    maxWidth: 420,
+    maxHeight: 420,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    title: 'Token 统计',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  developerTokenStatsWindow = tokenStatsWindow;
+  tokenStatsWindow.setMenuBarVisibility(false);
+  tokenStatsWindow.on('closed', () => {
+    if (developerTokenStatsWindow === tokenStatsWindow) {
+      developerTokenStatsWindow = null;
+    }
+  });
+
+  const baseUrl = rendererUrl || packagedIndexUrl;
+  tokenStatsWindow.loadURL(appendWindowQuery(baseUrl, 'token-stats'));
+  return { success: true };
+}
+
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'light';
   registerAssetProtocol();
@@ -356,8 +419,13 @@ app.whenReady().then(() => {
     gpuStartupState,
     gpuTrialArg: GPU_HARDWARE_ACCELERATION_TRIAL_ARG,
     forceDisableGpuArgs: FORCE_DISABLE_GPU_ARGS,
+    openDeveloperTokenStatsWindow,
+    closeDeveloperTokenStatsWindow,
   });
   setupAutoUpdate({ app, mainWindow });
+  mainWindow.on('closed', () => {
+    closeDeveloperTokenStatsWindow();
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

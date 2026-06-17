@@ -1022,6 +1022,28 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     return false;
   };
 
+  const openDeveloperTokenStatsWindow = async () => {
+    const nextConfig = createClientConfig();
+    if (!nextConfig.developer_mode) {
+      showToast('请先开启开发者模式', 'info');
+      return;
+    }
+
+    if (!savedConfig?.developer_mode || isActiveTabDirty()) {
+      const saved = await saveClientConfig(nextConfig);
+      if (!saved) {
+        return;
+      }
+    }
+
+    try {
+      const result = await window.yibiao?.developerTokenStats.openWindow();
+      showToast(result?.success ? '已打开 Token 统计小窗' : '打开 Token 统计小窗失败', result?.success ? 'success' : 'error');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '打开 Token 统计小窗失败', 'error');
+    }
+  };
+
   const saveActiveTabConfig = async () => {
     if (activeTab === 'general') {
       const nextConfig = createClientConfig();
@@ -1221,17 +1243,30 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               </span>
             </label>
             {state.general.developer_mode && (
-              <div className="settings-row">
-                <div className="settings-row-copy">
-                  <strong>配置文件夹</strong>
-                  <span>打开本机配置、工作区缓存和开发者日志所在目录</span>
+              <>
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>Token 统计小窗</strong>
+                    <span>半透明悬浮展示文本模型输入、输出、总量、缓存命中和请求次数</span>
+                  </div>
+                  <div className="settings-action-cell">
+                    <button type="button" className="inline-action" onClick={openDeveloperTokenStatsWindow}>
+                      打开 Token 统计小窗
+                    </button>
+                  </div>
                 </div>
-                <div className="settings-action-cell">
-                  <button type="button" className="inline-action" onClick={openConfigFolder}>
-                    打开配置文件夹
-                  </button>
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>配置文件夹</strong>
+                    <span>打开本机配置、工作区缓存和开发者日志所在目录</span>
+                  </div>
+                  <div className="settings-action-cell">
+                    <button type="button" className="inline-action" onClick={openConfigFolder}>
+                      打开配置文件夹
+                    </button>
+                  </div>
                 </div>
-              </div>
+              </>
             )}
           </div>
         </section>
