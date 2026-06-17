@@ -1,4 +1,4 @@
-export type TextModelProvider = 'jinlong' | 'volcengine' | 'deepseek' | 'longcat' | 'custom';
+export type TextModelProvider = 'jinlong' | 'volcengine' | 'deepseek' | 'longcat' | 'agnes' | 'custom';
 export type AiRequestMode = 'normal' | 'stream';
 export type UpdateChannel = 'github' | 'cloudflare';
 
@@ -38,7 +38,7 @@ export interface ImageModelTestResult {
   mime_type?: string;
 }
 
-export type ImageModelProvider = 'jinlong' | 'volcengine' | 'google-ai-studio' | 'custom';
+export type ImageModelProvider = 'jinlong' | 'volcengine' | 'google-ai-studio' | 'agnes' | 'custom';
 export type ImageModelStatus = 'untested' | 'available' | 'unavailable';
 
 export interface ImageModelConfig {
@@ -71,6 +71,7 @@ export interface ClientConfig extends AiConfig {
   gpu_hardware_acceleration_configured?: boolean;
   export_format?: import('./exportFormat').ExportFormatConfig;
   developer_mode?: boolean;
+  developer_token_stats_auto_open?: boolean;
   analytics_client_id?: string;
   analytics_created_at?: string;
 }

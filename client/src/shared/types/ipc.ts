@@ -35,6 +35,15 @@ export interface WordExportResult {
   warnings?: string[];
 }
 
+export interface DeveloperTextTokenStats {
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cached_tokens: number;
+  cache_ratio: number;
+}
+
 export interface LatestReleaseInfo {
   version: string;
   name: string;
@@ -112,6 +121,12 @@ export interface YibiaoBridge {
     chat: (request: ChatCompletionRequest) => Promise<string>;
     requestJson: <TResult = unknown>(request: JsonCompletionRequest) => Promise<TResult>;
     testImageModel: (config: ClientConfig) => Promise<ImageModelTestResult>;
+  };
+  developerTokenStats: {
+    openWindow: () => Promise<{ success: boolean }>;
+    get: () => Promise<DeveloperTextTokenStats>;
+    reset: () => Promise<DeveloperTextTokenStats>;
+    onChanged: (callback: (stats: DeveloperTextTokenStats) => void) => () => void;
   };
   file: {
     selectDuplicateCheckFiles: (options?: { multiple?: boolean }) => Promise<FileSelectionResult>;

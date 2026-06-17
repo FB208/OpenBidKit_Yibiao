@@ -1,6 +1,7 @@
 const { ipcMain, shell } = require('electron');
 const { registerAiIpc } = require('./aiIpc.cjs');
 const { registerConfigIpc } = require('./configIpc.cjs');
+const { registerDeveloperIpc } = require('./developerIpc.cjs');
 const { registerDuplicateCheckIpc } = require('./duplicateCheckIpc.cjs');
 const { registerExportIpc } = require('./exportIpc.cjs');
 const { registerFileIpc } = require('./fileIpc.cjs');
@@ -161,7 +162,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, fileSe
   return { sqliteDatabase };
 }
 
-function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [] }) {
+function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow }) {
   const configStore = createConfigStore(app);
   const aiService = createAiService({ app, configStore });
   const fileService = createFileService({ app, configStore });
@@ -202,7 +203,27 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
       .concat('--disable-gpu');
   };
 
-  registerConfigIpc({ configStore, aiService });
+  const openDeveloperTokenStatsWindowOnStartup = () => {
+    try {
+      const config = configStore.load();
+      if (config.developer_mode && config.developer_token_stats_auto_open) {
+        openDeveloperTokenStatsWindow?.();
+      }
+    } catch (error) {
+      console.warn('[developer] 自动打开 Token 统计小窗失败', error?.message || String(error));
+    }
+  };
+
+  registerConfigIpc({
+    configStore,
+    aiService,
+    onDeveloperModeChange(developerMode) {
+      if (!developerMode) {
+        closeDeveloperTokenStatsWindow?.();
+      }
+    },
+  });
+  registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsWindow });
   registerAiIpc({ aiService });
   registerFileIpc({ fileService });
   registerExportIpc({ exportService });
@@ -227,9 +248,13 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   };
 
   if (mainWindow.webContents.isLoading()) {
-    mainWindow.webContents.once('did-finish-load', startWorkspaceDatabase);
+    mainWindow.webContents.once('did-finish-load', () => {
+      startWorkspaceDatabase();
+      openDeveloperTokenStatsWindowOnStartup();
+    });
   } else {
     startWorkspaceDatabase();
+    openDeveloperTokenStatsWindowOnStartup();
   }
 
   ipcMain.handle('app:get-version', () => app.getVersion());

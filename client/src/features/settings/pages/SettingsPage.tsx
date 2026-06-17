@@ -31,6 +31,7 @@ const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
   { value: 'volcengine', label: '火山方舟' },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'longcat', label: '龙猫' },
+  { value: 'agnes', label: 'Agnes AI' },
   { value: 'custom', label: '自定义' },
 ];
 
@@ -47,6 +48,7 @@ const textProviderDefaults: TextModelProfiles = {
   volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
   deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
   longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
+  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
   custom: { api_key: '', base_url: '', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
 };
 
@@ -55,6 +57,7 @@ const textProviderApiKeyUrls: Partial<Record<TextModelProvider, string>> = {
   volcengine: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
   deepseek: 'https://platform.deepseek.com/api_keys',
   longcat: 'https://longcat.chat/platform/api_keys',
+  agnes: 'https://platform.agnes-ai.com/settings/apiKeys',
 };
 
 function createDefaultTextModelProfiles(): TextModelProfiles {
@@ -125,6 +128,7 @@ const imageProviders: Array<{ value: ImageModelProvider; label: string }> = [
   { value: 'jinlong', label: '金龙中转站【推荐】' },
   { value: 'volcengine', label: '火山方舟' },
   { value: 'google-ai-studio', label: 'Google AI Studio' },
+  { value: 'agnes', label: 'Agnes AI' },
   { value: 'custom', label: '自定义 OpenAI-like' },
 ];
 
@@ -164,6 +168,17 @@ const imageProviderDefaults: ImageModelProfiles = {
     tested_at: '',
     last_error: '',
   },
+  agnes: {
+    provider: 'agnes',
+    base_url: 'https://apihub.agnes-ai.com/v1',
+    api_key: '',
+    model_name: '',
+    request_mode: 'stream',
+    concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  },
   custom: {
     provider: 'custom',
     base_url: '',
@@ -181,6 +196,7 @@ const imageProviderApiKeyUrls: Record<ImageModelProvider, string> = {
   jinlong: 'https://s.markup.com.cn/jl',
   volcengine: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
   'google-ai-studio': 'https://aistudio.google.com/api-keys',
+  agnes: 'https://platform.agnes-ai.com/settings/apiKeys',
   custom: '',
 };
 
@@ -188,12 +204,14 @@ const imageProviderLabels: Record<ImageModelProvider, string> = {
   jinlong: '金龙中转站',
   volcengine: '火山方舟',
   'google-ai-studio': 'Google AI Studio',
+  agnes: 'Agnes AI',
   custom: '自定义生图服务',
 };
 
 function getImageBaseUrlDescription(provider: ImageModelProvider) {
   if (provider === 'jinlong') return '金龙中转站 OpenAI 兼容接口地址';
   if (provider === 'volcengine') return '火山方舟 OpenAI 兼容接口地址';
+  if (provider === 'agnes') return 'Agnes AI OpenAI 兼容接口地址';
   if (provider === 'custom') return '填写兼容 OpenAI /images/generations 的接口地址';
   return 'Google Gemini API REST 地址';
 }
@@ -201,6 +219,7 @@ function getImageBaseUrlDescription(provider: ImageModelProvider) {
 function getImageApiKeyDescription(provider: ImageModelProvider) {
   if (provider === 'jinlong') return '用于调用金龙中转站图片生成 API';
   if (provider === 'volcengine') return '用于调用火山方舟图片生成 API';
+  if (provider === 'agnes') return '用于调用 Agnes AI 图片生成 API';
   if (provider === 'custom') return '用于调用自定义 OpenAI-like 生图接口';
   return '用于调用 Google AI Studio Gemini API';
 }
@@ -208,6 +227,7 @@ function getImageApiKeyDescription(provider: ImageModelProvider) {
 function getImageModelDescription(provider: ImageModelProvider) {
   if (provider === 'jinlong') return '填写金龙中转站已开通的生图模型名称';
   if (provider === 'volcengine') return '填写火山方舟控制台中已开通的模型或推理接入点 ID';
+  if (provider === 'agnes') return '填写 Agnes AI 已开通的生图模型名称';
   if (provider === 'custom') return '填写自定义接口支持的生图模型名称';
   return '选择或填写支持图片生成的 Gemini 模型';
 }
@@ -215,6 +235,7 @@ function getImageModelDescription(provider: ImageModelProvider) {
 function getImageModelPlaceholder(provider: ImageModelProvider) {
   if (provider === 'jinlong') return '请输入已开通的生图模型名称';
   if (provider === 'volcengine') return '请输入已开通的模型或推理接入点 ID';
+  if (provider === 'agnes') return '请输入 Agnes AI 生图模型名称';
   if (provider === 'custom') return '请输入 OpenAI-like 生图模型名称';
   return 'gemini-3.1-flash-image-preview';
 }
@@ -377,6 +398,7 @@ const initialState: SettingsPageState = {
   },
   general: {
     developer_mode: false,
+    developer_token_stats_auto_open: false,
     update_channel: 'github',
     gpu_hardware_acceleration_enabled: true,
     gpu_hardware_acceleration_configured: true,
@@ -461,6 +483,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         },
         general: {
           developer_mode: Boolean(config.developer_mode),
+          developer_token_stats_auto_open: Boolean(config.developer_token_stats_auto_open),
           update_channel: normalizeUpdateChannel(config.update_channel),
           gpu_hardware_acceleration_enabled: Boolean(config.gpu_hardware_acceleration_enabled),
           gpu_hardware_acceleration_configured: Boolean(config.gpu_hardware_acceleration_configured),
@@ -509,6 +532,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       gpu_hardware_acceleration_enabled: state.general.gpu_hardware_acceleration_enabled,
       gpu_hardware_acceleration_configured: state.general.gpu_hardware_acceleration_configured,
       developer_mode: state.general.developer_mode,
+      developer_token_stats_auto_open: state.general.developer_token_stats_auto_open,
     };
   };
 
@@ -630,6 +654,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       general: { ...prev.general, developer_mode: developerMode },
     }));
     onDeveloperModeChange?.(developerMode);
+  };
+
+  const updateDeveloperTokenStatsAutoOpen = (autoOpen: boolean) => {
+    setState((prev) => ({
+      ...prev,
+      general: { ...prev.general, developer_token_stats_auto_open: autoOpen },
+    }));
   };
 
   const updateUpdateChannel = (updateChannel: UpdateChannel) => {
@@ -868,7 +899,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const fetchImageModels = async () => {
     try {
       setLoadingModels('image');
-      if (state.imageModel.provider === 'jinlong' || state.imageModel.provider === 'custom') {
+      if (state.imageModel.provider === 'jinlong' || state.imageModel.provider === 'agnes' || state.imageModel.provider === 'custom') {
         const providerLabel = imageProviderLabels[state.imageModel.provider];
         const baseUrl = state.imageModel.provider === 'custom'
           ? state.imageModel.base_url || ''
@@ -973,11 +1004,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     if (activeTab === 'general') {
       return JSON.stringify({
         developer_mode: Boolean(state.general.developer_mode),
+        developer_token_stats_auto_open: Boolean(state.general.developer_token_stats_auto_open),
         update_channel: state.general.update_channel,
         gpu_hardware_acceleration_enabled: Boolean(state.general.gpu_hardware_acceleration_enabled),
         gpu_hardware_acceleration_configured: Boolean(state.general.gpu_hardware_acceleration_configured),
       }) !== JSON.stringify({
         developer_mode: Boolean(savedConfig.developer_mode),
+        developer_token_stats_auto_open: Boolean(savedConfig.developer_token_stats_auto_open),
         update_channel: normalizeUpdateChannel(savedConfig.update_channel),
         gpu_hardware_acceleration_enabled: Boolean(savedConfig.gpu_hardware_acceleration_enabled),
         gpu_hardware_acceleration_configured: Boolean(savedConfig.gpu_hardware_acceleration_configured),
@@ -999,6 +1032,28 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
 
     return false;
+  };
+
+  const openDeveloperTokenStatsWindow = async () => {
+    const nextConfig = createClientConfig();
+    if (!nextConfig.developer_mode) {
+      showToast('请先开启开发者模式', 'info');
+      return;
+    }
+
+    if (!savedConfig?.developer_mode || isActiveTabDirty()) {
+      const saved = await saveClientConfig(nextConfig);
+      if (!saved) {
+        return;
+      }
+    }
+
+    try {
+      const result = await window.yibiao?.developerTokenStats.openWindow();
+      showToast(result?.success ? '已打开 Token 统计小窗' : '打开 Token 统计小窗失败', result?.success ? 'success' : 'error');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '打开 Token 统计小窗失败', 'error');
+    }
   };
 
   const saveActiveTabConfig = async () => {
@@ -1200,17 +1255,46 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               </span>
             </label>
             {state.general.developer_mode && (
-              <div className="settings-row">
-                <div className="settings-row-copy">
-                  <strong>配置文件夹</strong>
-                  <span>打开本机配置、工作区缓存和开发者日志所在目录</span>
+              <>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>默认打开 Token 统计小窗</strong>
+                    <span>开启后，应用下次启动时自动打开开发者 Token 统计悬浮窗</span>
+                  </div>
+                  <span className="settings-switch-control">
+                    <input
+                      type="checkbox"
+                      checked={state.general.developer_token_stats_auto_open}
+                      onChange={(event) => updateDeveloperTokenStatsAutoOpen(event.target.checked)}
+                    />
+                    <span className="settings-switch-track" aria-hidden="true">
+                      <span className="settings-switch-thumb" />
+                    </span>
+                  </span>
+                </label>
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>Token 统计小窗</strong>
+                    <span>半透明悬浮展示文本模型输入、输出、总量、缓存命中和请求次数</span>
+                  </div>
+                  <div className="settings-action-cell">
+                    <button type="button" className="inline-action" onClick={openDeveloperTokenStatsWindow}>
+                      打开 Token 统计小窗
+                    </button>
+                  </div>
                 </div>
-                <div className="settings-action-cell">
-                  <button type="button" className="inline-action" onClick={openConfigFolder}>
-                    打开配置文件夹
-                  </button>
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>配置文件夹</strong>
+                    <span>打开本机配置、工作区缓存和开发者日志所在目录</span>
+                  </div>
+                  <div className="settings-action-cell">
+                    <button type="button" className="inline-action" onClick={openConfigFolder}>
+                      打开配置文件夹
+                    </button>
+                  </div>
                 </div>
-              </div>
+              </>
             )}
           </div>
         </section>
