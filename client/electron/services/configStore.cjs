@@ -186,6 +186,7 @@ const defaultConfig = {
   gpu_hardware_acceleration_configured: true,
   export_format: defaultExportFormat,
   developer_mode: false,
+  developer_token_stats_auto_open: false,
   analytics_client_id: '',
   analytics_created_at: '',
 };
@@ -441,6 +442,7 @@ function normalizeConfig(config) {
     gpu_hardware_acceleration_configured: gpuHardwareAccelerationConfigured === false ? true : gpuHardwareAccelerationConfigured,
     export_format: normalizeExportFormat(source.export_format),
     developer_mode: source.developer_mode === undefined ? defaultConfig.developer_mode : Boolean(source.developer_mode),
+    developer_token_stats_auto_open: source.developer_token_stats_auto_open === undefined ? defaultConfig.developer_token_stats_auto_open : Boolean(source.developer_token_stats_auto_open),
     analytics_client_id: source.analytics_client_id || defaultConfig.analytics_client_id,
     analytics_created_at: source.analytics_created_at || defaultConfig.analytics_created_at,
   };

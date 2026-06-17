@@ -227,6 +227,14 @@ function BidAnalysisPage({
   }).length;
   const taskRunning = running || fullRerunLocked || task?.status === 'running';
   const requiredDone = requiredTasks.every((task) => tasks[task.id]?.status === 'success' && tasks[task.id]?.content);
+  const isPromptCacheOptimizing = taskRunning
+    && selectedTasks.length > 1
+    && selectedTasks.some((task) => task.id === 'projectOverview')
+    && tasks.projectOverview?.status === 'running'
+    && doneCount === 0;
+  const progressMessage = isPromptCacheOptimizing
+    ? '正在优化提示词缓存'
+    : requiredDone ? '关键项已解析完成，可以进入下一步。' : '等待项目概述、技术评分、项目信息、甲方信息和交货服务要求解析成功。';
   const configLabel = getModeLabel(mode);
 
   const syncProgressForSelection = (nextTaskIds: string[]) => {
@@ -438,7 +446,7 @@ function BidAnalysisPage({
                 <div className="content-generation-progress-track" aria-label={`解析进度 ${progress}%`}>
                   <span style={{ width: `${progress}%` }} />
                 </div>
-                <p>{requiredDone ? '关键项已解析完成，可以进入下一步。' : '等待项目概述、技术评分、项目信息、甲方信息和交货服务要求解析成功。'}</p>
+                <p>{progressMessage}</p>
               </div>
             )}
           </div>

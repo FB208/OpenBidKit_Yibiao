@@ -398,6 +398,7 @@ const initialState: SettingsPageState = {
   },
   general: {
     developer_mode: false,
+    developer_token_stats_auto_open: false,
     update_channel: 'github',
     gpu_hardware_acceleration_enabled: true,
     gpu_hardware_acceleration_configured: true,
@@ -482,6 +483,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         },
         general: {
           developer_mode: Boolean(config.developer_mode),
+          developer_token_stats_auto_open: Boolean(config.developer_token_stats_auto_open),
           update_channel: normalizeUpdateChannel(config.update_channel),
           gpu_hardware_acceleration_enabled: Boolean(config.gpu_hardware_acceleration_enabled),
           gpu_hardware_acceleration_configured: Boolean(config.gpu_hardware_acceleration_configured),
@@ -530,6 +532,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       gpu_hardware_acceleration_enabled: state.general.gpu_hardware_acceleration_enabled,
       gpu_hardware_acceleration_configured: state.general.gpu_hardware_acceleration_configured,
       developer_mode: state.general.developer_mode,
+      developer_token_stats_auto_open: state.general.developer_token_stats_auto_open,
     };
   };
 
@@ -651,6 +654,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       general: { ...prev.general, developer_mode: developerMode },
     }));
     onDeveloperModeChange?.(developerMode);
+  };
+
+  const updateDeveloperTokenStatsAutoOpen = (autoOpen: boolean) => {
+    setState((prev) => ({
+      ...prev,
+      general: { ...prev.general, developer_token_stats_auto_open: autoOpen },
+    }));
   };
 
   const updateUpdateChannel = (updateChannel: UpdateChannel) => {
@@ -994,11 +1004,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     if (activeTab === 'general') {
       return JSON.stringify({
         developer_mode: Boolean(state.general.developer_mode),
+        developer_token_stats_auto_open: Boolean(state.general.developer_token_stats_auto_open),
         update_channel: state.general.update_channel,
         gpu_hardware_acceleration_enabled: Boolean(state.general.gpu_hardware_acceleration_enabled),
         gpu_hardware_acceleration_configured: Boolean(state.general.gpu_hardware_acceleration_configured),
       }) !== JSON.stringify({
         developer_mode: Boolean(savedConfig.developer_mode),
+        developer_token_stats_auto_open: Boolean(savedConfig.developer_token_stats_auto_open),
         update_channel: normalizeUpdateChannel(savedConfig.update_channel),
         gpu_hardware_acceleration_enabled: Boolean(savedConfig.gpu_hardware_acceleration_enabled),
         gpu_hardware_acceleration_configured: Boolean(savedConfig.gpu_hardware_acceleration_configured),
@@ -1244,6 +1256,22 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             </label>
             {state.general.developer_mode && (
               <>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>默认打开 Token 统计小窗</strong>
+                    <span>开启后，应用下次启动时自动打开开发者 Token 统计悬浮窗</span>
+                  </div>
+                  <span className="settings-switch-control">
+                    <input
+                      type="checkbox"
+                      checked={state.general.developer_token_stats_auto_open}
+                      onChange={(event) => updateDeveloperTokenStatsAutoOpen(event.target.checked)}
+                    />
+                    <span className="settings-switch-track" aria-hidden="true">
+                      <span className="settings-switch-thumb" />
+                    </span>
+                  </span>
+                </label>
                 <div className="settings-row">
                   <div className="settings-row-copy">
                     <strong>Token 统计小窗</strong>

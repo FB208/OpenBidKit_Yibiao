@@ -315,12 +315,27 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
     updateTask({ status: 'running', progress: technicalPlan.bidAnalysisProgress || 0 }, technicalPlan);
   }
 
-  await Promise.all(tasksToRun.map((task) => runOne(task).catch((error) => {
+  function handleTaskError(task, error) {
     const prev = workspaceStore.loadTechnicalPlan() || {};
     const nextTasks = { ...(prev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'error', content: prev.bidAnalysisTasks?.[task.id]?.content || '', error: error.message || '解析失败' } };
     technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTasks: nextTasks, bidAnalysisProgress: doneProgress(nextTasks) });
     updateTask({ status: 'running', progress: technicalPlan.bidAnalysisProgress || 0, logs: [`${task.label}解析失败：${error.message || '未知错误'}`] }, technicalPlan);
-  })));
+  }
+
+  async function runOneSafely(task) {
+    try {
+      await runOne(task);
+    } catch (error) {
+      handleTaskError(task, error);
+    }
+  }
+
+  const projectOverviewTask = tasksToRun.find((task) => task.id === 'projectOverview');
+  const remainingTasks = tasksToRun.filter((task) => task.id !== 'projectOverview');
+  if (projectOverviewTask) {
+    await runOneSafely(projectOverviewTask);
+  }
+  await Promise.all(remainingTasks.map(runOneSafely));
 
   technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTask: updateTask({ status: 'success', progress: 100, logs: ['招标文件解析完成。'] }) });
   updateTask({ status: 'success', progress: 100 }, technicalPlan);
