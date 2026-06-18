@@ -26,19 +26,22 @@ function isIpv4(value) {
   });
 }
 
+function isPseudoIpv4(value) {
+  if (!isIpv4(value)) return false;
+  const first = Number(String(value).split('.')[0]);
+  return first >= 240 && first <= 255;
+}
+
 function isSingleIp(value) {
   return Boolean(value) && !/[\s,]/.test(value);
 }
 
 function normalizeClientIp(request) {
   const connectingIp = normalizeText(request?.headers?.get('CF-Connecting-IP'), 80);
-  if (isIpv4(connectingIp)) {
-    return connectingIp;
-  }
+  const connectingIpv6 = normalizeText(request?.headers?.get('CF-Connecting-IPv6'), 80);
 
-  const pseudoIpv4 = normalizeText(request?.headers?.get('CF-Pseudo-IPv4'), 80);
-  if (isIpv4(pseudoIpv4)) {
-    return pseudoIpv4;
+  if (isPseudoIpv4(connectingIp)) {
+    return isSingleIp(connectingIpv6) ? connectingIpv6 : '';
   }
 
   return isSingleIp(connectingIp) ? connectingIp : '';

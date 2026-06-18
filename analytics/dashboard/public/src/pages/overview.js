@@ -17,7 +17,7 @@ export async function loadOverview() {
   const { projectName } = getEncodedProjectAndDays('30');
   const [summary, retention, githubStats] = await Promise.all([
     requestJson(`/api/overview?projectName=${projectName}`),
-    requestJson(`/api/retention?projectName=${projectName}&days=30`),
+    requestJson(`/api/retention?projectName=${projectName}&days=30`).catch(() => ({ retention: [] })),
     requestJson('/api/github-repo-stats').catch(() => ({ repo: null })),
   ]);
 

@@ -16,6 +16,8 @@ const UNKNOWN_VERSION = '未知版本';
 const MAX_ANALYTICS_ROWS = 100000;
 const RECENT_CLIENT_CREATED_MAX_AGE_DAYS = 1;
 const MAX_RECENT_CLIENT_WRITE_ATTEMPTS = 10000;
+const DEFAULT_RETENTION_RANGE_DAYS = 30;
+const RETENTION_DAYS = [1, 3, 7];
 const recentClientWriteAttempts = new Set();
 
 function requireStatsDb(env) {
@@ -592,15 +594,68 @@ export async function queryStatsProjects(env) {
   return rows.map((row) => row.projectName).filter(Boolean);
 }
 
+export async function queryStatsRetention(env, projectName) {
+  const db = requireStatsDb(env);
+  const normalizedRangeDays = DEFAULT_RETENTION_RANGE_DAYS;
+  const latest = await first(db, `
+    SELECT MAX(snapshot_date) AS snapshotDate
+    FROM stats_retention
+    WHERE project_name = ? AND range_days = ?
+  `, [projectName, normalizedRangeDays]);
+  const snapshotDate = latest?.snapshotDate || '';
+  if (!snapshotDate) {
+    return {
+      code: 0,
+      projectName,
+      days: normalizedRangeDays,
+      snapshotDate: '',
+      source: 'd1',
+      retention: RETENTION_DAYS.map((day) => ({
+        day: `D${day}`,
+        cohortClients: 0,
+        retainedClients: 0,
+        retentionRate: 0,
+      })),
+    };
+  }
+
+  const rows = await all(db, `
+    SELECT retention_day AS retentionDay, cohort_clients AS cohortClients, retained_clients AS retainedClients
+    FROM stats_retention
+    WHERE project_name = ? AND snapshot_date = ? AND range_days = ?
+    ORDER BY retention_day ASC
+  `, [projectName, snapshotDate, normalizedRangeDays]);
+  const rowByDay = new Map(rows.map((row) => [number(row.retentionDay), row]));
+
+  return {
+    code: 0,
+    projectName,
+    days: normalizedRangeDays,
+    snapshotDate,
+    source: 'd1',
+    retention: RETENTION_DAYS.map((day) => {
+      const row = rowByDay.get(day) || {};
+      const cohortClients = number(row.cohortClients);
+      const retainedClients = number(row.retainedClients);
+      return {
+        day: `D${day}`,
+        cohortClients,
+        retainedClients,
+        retentionRate: cohortClients > 0 ? retainedClients / cohortClients : 0,
+      };
+    }),
+  };
+}
+
 export const ROLLUP_CRON_STAGES = [
   { cron: '0 17 * * *', stages: ['discover', 'daily'], beijingTime: '01:00', description: '发现昨日项目，写入每日总量和概览累计值' },
   { cron: '30 17 * * *', stages: ['clients'], beijingTime: '01:30', description: '写入客户端生命周期和最后访问信息' },
   { cron: '0 18 * * *', stages: ['pages', 'versions'], beijingTime: '02:00', description: '写入页面访问累计值，写入版本事件量并刷新版本客户端数' },
   { cron: '30 18 * * *', stages: ['configs', 'models'], beijingTime: '02:30', description: '写入配置使用、模型请求和 Total Tokens 累计值' },
-  { cron: '0 19 * * *', stages: ['resources'], beijingTime: '03:00', description: '重算资源历史点击量并完成整日汇总' },
+  { cron: '0 19 * * *', stages: ['retention', 'resources'], beijingTime: '03:00', description: '写入留存快照，重算资源历史点击量并完成整日汇总' },
 ];
 
-const ROLLUP_STAGE_ORDER = ['discover', 'daily', 'clients', 'pages', 'versions', 'configs', 'models', 'resources'];
+const ROLLUP_STAGE_ORDER = ['discover', 'daily', 'clients', 'pages', 'versions', 'configs', 'models', 'retention', 'resources'];
 const ROLLUP_STAGES_BY_CRON = new Map(ROLLUP_CRON_STAGES.map((item) => [item.cron, item.stages]));
 const BULK_JSON_MAX_LENGTH = 700000;
 
@@ -664,6 +719,14 @@ function completedSetFor(completedByProject, projectName) {
     completedByProject.set(projectName, new Set());
   }
   return completedByProject.get(projectName);
+}
+
+function isRollupStageCompleted(completedByProject, projectName, stage) {
+  const completed = completedSetFor(completedByProject, projectName);
+  if (stage === 'clients') {
+    return completed.has('clients') && completed.has('clients:activity');
+  }
+  return completed.has(stage);
 }
 
 async function batchRun(db, statements) {
@@ -1046,6 +1109,34 @@ async function queryRollupClientRows(env, activityDate, projectNames) {
   })).filter((row) => row.projectName && row.clientId);
 }
 
+async function queryRollupClientActivityRows(env, startDate, endDate, projectNames) {
+  const dateWhere = startDate === endDate
+    ? businessDateCondition(endDate)
+    : businessDateRangeCondition(startDate, endDate);
+  const result = await queryAnalytics(env, `
+    SELECT
+      blob1 AS projectName,
+      ${businessDateSqlExpression()} AS activityDate,
+      blob7 AS clientId,
+      argMin(blob8, timestamp) AS clientCreatedDate
+    FROM ${DATASET}
+    WHERE blob1 IN ${projectsSql(projectNames)}
+      AND blob2 = 'app_open'
+      AND blob7 != ''
+      AND blob8 != ''
+      AND ${dateWhere}
+    GROUP BY projectName, activityDate, clientId
+    ORDER BY projectName ASC, activityDate ASC, clientId ASC
+    LIMIT ${MAX_ANALYTICS_ROWS}
+  `);
+  return (result.data || []).map((row) => ({
+    projectName: normalizeProjectName(row.projectName),
+    activityDate: normalizeText(row.activityDate, 10),
+    clientId: normalizeText(row.clientId, 120),
+    clientCreatedDate: normalizeText(row.clientCreatedDate, 20).slice(0, 10),
+  })).filter((row) => row.projectName && row.activityDate && row.clientId && row.clientCreatedDate);
+}
+
 function prepareClientStatements(db, rows, updatedAt) {
   const json = rowsJson(rows);
   return [db.prepare(`
@@ -1080,18 +1171,40 @@ function prepareClientStatements(db, rows, updatedAt) {
   `).bind(json, updatedAt, updatedAt)];
 }
 
+function prepareClientActivityStatements(db, rows, updatedAt) {
+  const json = rowsJson(rows);
+  return [db.prepare(`
+    WITH rows AS (
+      SELECT
+        json_extract(item.value, '$.projectName') AS project_name,
+        json_extract(item.value, '$.activityDate') AS activity_date,
+        json_extract(item.value, '$.clientId') AS client_id,
+        json_extract(item.value, '$.clientCreatedDate') AS client_created_date
+      FROM json_each(?) AS item
+    )
+    INSERT INTO stats_client_activity (project_name, activity_date, client_id, client_created_date, updated_at)
+    SELECT project_name, activity_date, client_id, client_created_date, ?
+    FROM rows
+    WHERE project_name != '' AND activity_date != '' AND client_id != '' AND client_created_date != ''
+    ON CONFLICT(project_name, activity_date, client_id) DO UPDATE SET
+      client_created_date = excluded.client_created_date,
+      updated_at = excluded.updated_at
+  `).bind(json, updatedAt)];
+}
+
 async function runClientsStage(env, activityDate, projectNames, completedByProject) {
   const db = requireStatsDb(env);
   const grouped = groupRowsByProject(await queryRollupClientRows(env, activityDate, projectNames), projectNames);
+  const activityGrouped = groupRowsByProject(await queryRollupClientActivityRows(env, activityDate, activityDate, projectNames), projectNames);
   const results = [];
   for (const projectName of uniqueProjectNames(projectNames)) {
     const completed = completedSetFor(completedByProject, projectName);
-    if (completed.has('clients')) {
+    if (isRollupStageCompleted(completedByProject, projectName, 'clients')) {
       results.push({ projectName, skipped: true });
       continue;
     }
 
-    const chunks = chunkRows(grouped.get(projectName) || []);
+    const chunks = completed.has('clients') ? [] : chunkRows(grouped.get(projectName) || []);
     let completedChunks = 0;
     for (let index = 0; index < chunks.length; index += 1) {
       const chunkStage = `clients:chunk:${index}`;
@@ -1106,7 +1219,7 @@ async function runClientsStage(env, activityDate, projectNames, completedByProje
     }
 
     const refreshStage = 'clients:refresh-total-clients';
-    if (!completed.has(refreshStage)) {
+    if (!completed.has('clients') && !completed.has(refreshStage)) {
       const updatedAt = nowText();
       await batchRun(db, [
         db.prepare(`
@@ -1119,9 +1232,28 @@ async function runClientsStage(env, activityDate, projectNames, completedByProje
       completed.add(refreshStage);
     }
 
+    const activityChunks = chunkRows(activityGrouped.get(projectName) || []);
+    let completedActivityChunks = 0;
+    for (let index = 0; index < activityChunks.length; index += 1) {
+      const chunkStage = `clients:activity:chunk:${index}`;
+      if (completed.has(chunkStage)) continue;
+      const updatedAt = nowText();
+      await batchRun(db, [
+        ...prepareClientActivityStatements(db, activityChunks[index], updatedAt),
+        prepareProjectStageSuccessStatement(db, projectName, activityDate, chunkStage, updatedAt),
+      ]);
+      completed.add(chunkStage);
+      completedActivityChunks += 1;
+    }
+
+    if (!completed.has('clients:activity')) {
+      await prepareProjectStageSuccessStatement(db, projectName, activityDate, 'clients:activity', nowText()).run();
+      completed.add('clients:activity');
+    }
+
     await prepareProjectStageSuccessStatement(db, projectName, activityDate, 'clients', nowText()).run();
     completed.add('clients');
-    results.push({ projectName, skipped: false, chunks: completedChunks });
+    results.push({ projectName, skipped: false, chunks: completedChunks, activityChunks: completedActivityChunks });
   }
   return results;
 }
@@ -1395,6 +1527,108 @@ async function runModelsStage(env, activityDate, projectNames, completedByProjec
   return results;
 }
 
+function retentionDaysJson() {
+  return rowsJson(RETENTION_DAYS.map((day) => ({ day })));
+}
+
+function prepareRetentionSnapshotStatement(db, projectName, snapshotDate, rangeDays, updatedAt) {
+  return db.prepare(`
+    WITH retention_days AS (
+      SELECT CAST(json_extract(item.value, '$.day') AS INTEGER) AS retention_day
+      FROM json_each(?) AS item
+    ),
+    clients AS (
+      SELECT client_id, MIN(client_created_date) AS client_created_date
+      FROM stats_client_activity
+      WHERE project_name = ?
+        AND client_created_date >= date(?, '-' || ? || ' days')
+        AND client_created_date <= ?
+      GROUP BY client_id
+    ),
+    rows AS (
+      SELECT
+        ? AS project_name,
+        ? AS snapshot_date,
+        ? AS range_days,
+        retention_days.retention_day AS retention_day,
+        COUNT(clients.client_id) AS cohort_clients,
+        SUM(CASE WHEN clients.client_id IS NOT NULL AND EXISTS (
+          SELECT 1
+          FROM stats_client_activity retained
+          WHERE retained.project_name = ?
+            AND retained.client_id = clients.client_id
+            AND retained.activity_date = date(clients.client_created_date, '+' || retention_days.retention_day || ' days')
+          LIMIT 1
+        ) THEN 1 ELSE 0 END) AS retained_clients
+      FROM retention_days
+      LEFT JOIN clients
+        ON clients.client_created_date <= date(?, '-' || retention_days.retention_day || ' days')
+      GROUP BY retention_days.retention_day
+    )
+    INSERT INTO stats_retention (
+      project_name, snapshot_date, range_days, retention_day,
+      cohort_clients, retained_clients, updated_at
+    )
+    SELECT project_name, snapshot_date, range_days, retention_day, cohort_clients, retained_clients, ?
+    FROM rows
+    WHERE project_name != ''
+    ON CONFLICT(project_name, snapshot_date, range_days, retention_day) DO UPDATE SET
+      cohort_clients = excluded.cohort_clients,
+      retained_clients = excluded.retained_clients,
+      updated_at = excluded.updated_at
+  `).bind(
+    retentionDaysJson(),
+    projectName,
+    snapshotDate,
+    rangeDays,
+    snapshotDate,
+    projectName,
+    snapshotDate,
+    rangeDays,
+    projectName,
+    snapshotDate,
+    updatedAt,
+  );
+}
+
+export async function rebuildRetentionSnapshot(env, projectName, snapshotDate, rangeDays = DEFAULT_RETENTION_RANGE_DAYS) {
+  const db = requireStatsDb(env);
+  const normalizedProjectName = normalizeProjectName(projectName);
+  const normalizedRangeDays = Math.max(1, Math.floor(number(rangeDays) || DEFAULT_RETENTION_RANGE_DAYS));
+  await prepareRetentionSnapshotStatement(db, normalizedProjectName, snapshotDate, normalizedRangeDays, nowText()).run();
+  return { projectName: normalizedProjectName, snapshotDate, rangeDays: normalizedRangeDays };
+}
+
+async function runRetentionStage(env, activityDate, projectNames, completedByProject) {
+  const db = requireStatsDb(env);
+  const results = [];
+  for (const projectName of uniqueProjectNames(projectNames)) {
+    const completed = completedSetFor(completedByProject, projectName);
+    if (completed.has('retention')) {
+      results.push({ projectName, skipped: true });
+      continue;
+    }
+
+    const updatedAt = nowText();
+    await batchRun(db, [
+      prepareRetentionSnapshotStatement(db, projectName, activityDate, DEFAULT_RETENTION_RANGE_DAYS, updatedAt),
+      prepareProjectStageSuccessStatement(db, projectName, activityDate, 'retention', updatedAt),
+    ]);
+    completed.add('retention');
+    results.push({ projectName, skipped: false });
+  }
+  return results;
+}
+
+export async function backfillClientActivityWindow(env, projectName, startDate, endDate) {
+  const db = requireStatsDb(env);
+  const rows = await queryRollupClientActivityRows(env, startDate, endDate, [projectName]);
+  for (const chunk of chunkRows(rows)) {
+    await prepareClientActivityStatements(db, chunk, nowText())[0].run();
+  }
+  return { projectName: normalizeProjectName(projectName), startDate, endDate, rows: rows.length };
+}
+
 async function queryHistoricalResourceClickRows(env, activityDate, projectNames) {
   const result = await queryAnalytics(env, `
     SELECT blob9 AS resourceKey, SUM(_sample_interval) AS clickCount
@@ -1463,8 +1697,8 @@ async function runResourcesStage(env, activityDate, projectNames, completedByPro
 
 function projectHasPreviousStages(completedByProject, projectName, stage) {
   const stageIndex = ROLLUP_STAGE_ORDER.indexOf(stage);
-  const completed = completedSetFor(completedByProject, projectName);
-  return ROLLUP_STAGE_ORDER.slice(0, stageIndex).every((previousStage) => completed.has(previousStage));
+  return ROLLUP_STAGE_ORDER.slice(0, stageIndex)
+    .every((previousStage) => isRollupStageCompleted(completedByProject, projectName, previousStage));
 }
 
 async function runRollupStageForDate(env, stage, activityDate, options = {}) {
@@ -1492,7 +1726,7 @@ async function runRollupStageForDate(env, stage, activityDate, options = {}) {
     console.warn(`[analytics] rollup stage skipped until previous stages finish: ${stage}/${activityDate}/${blockedProjects.join(',')}`);
   }
 
-  const pendingProjects = readyProjects.filter((projectName) => !completedSetFor(completedByProject, projectName).has(stage));
+  const pendingProjects = readyProjects.filter((projectName) => !isRollupStageCompleted(completedByProject, projectName, stage));
   if (!pendingProjects.length) {
     return { activityDate, stage, projects: projects.map((projectName) => ({ projectName, skipped: true })) };
   }
@@ -1511,6 +1745,8 @@ async function runRollupStageForDate(env, stage, activityDate, options = {}) {
       results = await runConfigsStage(env, activityDate, pendingProjects, completedByProject);
     } else if (stage === 'models') {
       results = await runModelsStage(env, activityDate, pendingProjects, completedByProject);
+    } else if (stage === 'retention') {
+      results = await runRetentionStage(env, activityDate, pendingProjects, completedByProject);
     } else {
       results = await runResourcesStage(env, activityDate, pendingProjects, completedByProject);
     }
@@ -1546,7 +1782,7 @@ export async function rollupStatsDay(env, projectName, activityDate, options = {
 
   const projects = [normalizedProjectName];
   await runRollupStageForDate(env, 'discover', activityDate, { projectNames: projects });
-  for (const stage of ['daily', 'clients', 'pages', 'versions', 'configs', 'models']) {
+  for (const stage of ['daily', 'clients', 'pages', 'versions', 'configs', 'models', 'retention']) {
     await runRollupStageForDate(env, stage, activityDate, { projectNames: projects });
   }
   if (options.updateResources !== false) {
@@ -1565,11 +1801,13 @@ export async function rollupYesterdayCronStage(env, cron) {
   }
   const activityDate = getBusinessDateDaysAgo(1);
   const results = [];
-  let projectNames = null;
+  let projectNames = stages[0] === 'discover' ? null : await ensureRollupProjects(env, activityDate);
   for (const stage of stages) {
     const result = await runRollupStageForDate(env, stage, activityDate, projectNames ? { projectNames } : {});
     results.push(result);
-    projectNames = uniqueProjectNames(result.projects.map((row) => row.projectName));
+    if (!projectNames) {
+      projectNames = uniqueProjectNames(result.projects.map((row) => row.projectName));
+    }
   }
   return { activityDate, cron, stages: results };
 }

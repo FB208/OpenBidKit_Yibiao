@@ -1391,13 +1391,22 @@ async function generateChildren(aiService, payload, parentItem, suggestions, log
   return response;
 }
 
+async function runParallelAndThrowAfterSettled(tasks) {
+  const results = await Promise.allSettled(tasks);
+  const rejected = results.find((result) => result.status === 'rejected');
+  if (rejected) {
+    throw rejected.reason;
+  }
+  return results.map((result) => result.value);
+}
+
 async function generateFallback(aiService, payload, suggestions, log, progressRange = { start: 30, end: 75 }, topProgress = 25) {
   log('正在分步生成目录，先生成一级目录。', topProgress);
   const top = await generateTopLevel(aiService, payload, suggestions, log);
   const childTotal = top.outline.length;
   let completedChildren = 0;
   log(`正在并发生成 ${childTotal} 个一级目录的二三级目录。`, progressRange.start);
-  const childResults = await Promise.all(top.outline.map(async (item, index) => {
+  const childResults = await runParallelAndThrowAfterSettled(top.outline.map(async (item, index) => {
     const childrenResponse = await generateChildren(aiService, payload, item, suggestions, log, progressRange.start);
     const children = childrenResponse.children || [];
     completedChildren += 1;
@@ -1516,7 +1525,7 @@ async function buildAligned(aiService, payload, groups, suggestions, log, progre
   const childTotal = top.length;
   let completedChildren = 0;
   log(`正在并发生成 ${childTotal} 个评分大类的二三级目录。`, progressRange.start);
-  const childResults = await Promise.all(top.map(async (item, index) => {
+  const childResults = await runParallelAndThrowAfterSettled(top.map(async (item, index) => {
     const childrenResponse = await generateAlignedChildrenForGroup(aiService, payload, item, groups[index], suggestions, log, progressRange.start);
     const children = childrenResponse.children || [];
     completedChildren += 1;
@@ -1625,7 +1634,7 @@ async function enhanceOutlineWithKnowledgeAdditions(aiService, payload, outline,
 
   try {
     let completedSegments = 0;
-    const segmentResults = await Promise.all(knowledgeSegments.map(async (segment) => {
+    const segmentResults = await runParallelAndThrowAfterSettled(knowledgeSegments.map(async (segment) => {
       const patch = await collectJson(aiService, {
         messages: generateKnowledgePatchMessages(sharedMessages, segment),
         temperature: 0.3,
