@@ -253,7 +253,7 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
     }
 
     if (task.type === 'outline-generation') {
-      copyPatchFields(patch, state, ['outlineMode', 'referenceKnowledgeDocumentIds']);
+      copyPatchFields(patch, state, ['outlineMode', 'outlineExpansionMode', 'referenceKnowledgeDocumentIds']);
       if (task.status === 'success' || state.outlineData === null || hasOwn(eventPatch, 'outlineData')) {
         copyPatchFields(patch, state, [
           'outlineData',
@@ -703,7 +703,8 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
     },
     startOutlineGeneration(payload) {
       return startManagedTask('outline-generation', payload, runOutlineGenerationTask, {
-        outlineMode: payload?.mode,
+        outlineMode: 'aligned',
+        outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
         referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
       });
     },

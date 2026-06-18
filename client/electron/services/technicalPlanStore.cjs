@@ -21,6 +21,7 @@ const initialState = {
   bidAnalysisTasks: {},
   bidAnalysisProgress: 0,
   outlineMode: 'aligned',
+  outlineExpansionMode: 'ai-complement',
   referenceKnowledgeDocumentIds: [],
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
@@ -142,7 +143,11 @@ function getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds) {
 }
 
 function isValidOutlineMode(value) {
-  return value === 'free' || value === 'aligned';
+  return value === 'aligned';
+}
+
+function isValidOutlineExpansionMode(value) {
+  return value === 'original-only' || value === 'ai-complement';
 }
 
 function collectLeafItems(items) {
@@ -386,8 +391,8 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     if (existing) return existing;
     const timestamp = now();
     db.prepare(`
-      INSERT INTO technical_plan_meta (id, workflow_kind, step, bid_analysis_mode, outline_mode, created_at, updated_at)
-      VALUES (1, 'technical-plan', 'document-analysis', 'key', 'aligned', @timestamp, @timestamp)
+      INSERT INTO technical_plan_meta (id, workflow_kind, step, bid_analysis_mode, outline_mode, outline_expansion_mode, created_at, updated_at)
+      VALUES (1, 'technical-plan', 'document-analysis', 'key', 'aligned', 'ai-complement', @timestamp, @timestamp)
     `).run({ timestamp });
     return db.prepare('SELECT * FROM technical_plan_meta WHERE id = 1').get();
   }
@@ -854,6 +859,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       bid_analysis_mode: 'key',
       bid_analysis_selected_task_ids_json: null,
       outline_mode: 'aligned',
+      outline_expansion_mode: 'ai-complement',
       outline_project_name: null,
       outline_project_overview: null,
       content_generation_options_json: null,
@@ -908,6 +914,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     updateMeta({
       workflow_kind: normalizeWorkflowKind(workflowKind),
       step: 'document-analysis',
+      outline_expansion_mode: 'ai-complement',
       original_plan_file_name: null,
       original_plan_markdown_path: null,
       original_plan_markdown_hash: null,
@@ -1015,6 +1022,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     if (hasOwn(partial, 'bidAnalysisMode') && isValidBidMode(partial.bidAnalysisMode)) metaUpdates.bid_analysis_mode = partial.bidAnalysisMode;
     if (hasOwn(partial, 'bidAnalysisSelectedTaskIds')) metaUpdates.bid_analysis_selected_task_ids_json = jsonOrNull(normalizeBidAnalysisTaskIds(partial.bidAnalysisSelectedTaskIds));
     if (hasOwn(partial, 'outlineMode') && isValidOutlineMode(partial.outlineMode)) metaUpdates.outline_mode = partial.outlineMode;
+    if (hasOwn(partial, 'outlineExpansionMode') && isValidOutlineExpansionMode(partial.outlineExpansionMode)) metaUpdates.outline_expansion_mode = partial.outlineExpansionMode;
     if (hasOwn(partial, 'contentGenerationOptions')) metaUpdates.content_generation_options_json = jsonOrNull(partial.contentGenerationOptions);
     if (hasOwn(partial, 'contentGenerationRuntime')) metaUpdates.content_generation_runtime_json = jsonOrNull(partial.contentGenerationRuntime);
 
@@ -1092,6 +1100,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       bidAnalysisTasks,
       bidAnalysisProgress: calculateBidProgress(bidAnalysisMode, bidAnalysisTasks, bidAnalysisSelectedTaskIds),
       outlineMode: isValidOutlineMode(meta.outline_mode) ? meta.outline_mode : 'aligned',
+      outlineExpansionMode: isValidOutlineExpansionMode(meta.outline_expansion_mode) ? meta.outline_expansion_mode : 'ai-complement',
       referenceKnowledgeDocumentIds: loadReferenceDocumentIds(),
       ...tasks,
       globalFacts: loadGlobalFacts(),
@@ -1142,8 +1151,12 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     return loadTechnicalPlan();
   }
 
-  function saveOutlineConfig({ outlineMode, referenceKnowledgeDocumentIds } = {}) {
-    return updateTechnicalPlan({ outlineMode, referenceKnowledgeDocumentIds });
+  function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineExpansionMode } = {}) {
+    return updateTechnicalPlan({
+      outlineMode: 'aligned',
+      outlineExpansionMode: isValidOutlineExpansionMode(outlineExpansionMode) ? outlineExpansionMode : 'ai-complement',
+      referenceKnowledgeDocumentIds,
+    });
   }
 
   function saveBidAnalysisConfig({ mode, selectedTaskIds } = {}) {

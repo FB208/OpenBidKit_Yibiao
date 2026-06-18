@@ -9,7 +9,8 @@ export interface OutlineItem {
   content?: string;
 }
 
-export type OutlineMode = 'free' | 'aligned';
+export type OutlineMode = 'aligned';
+export type OutlineExpansionMode = 'original-only' | 'ai-complement';
 
 export interface OutlineData {
   outline: OutlineItem[];

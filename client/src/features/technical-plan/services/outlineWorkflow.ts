@@ -1,14 +1,10 @@
 import {
   buildAlignedChildrenOutlineMessages,
   buildAlignedOutlineReviewMessages,
-  buildChildrenOutlineMessages,
-  buildOutlineMessages,
-  buildOutlineReviewMessages,
   buildRequirementGroupsMessages,
-  buildTopLevelOutlineMessages,
 } from '../../../shared/prompts';
 import { aiClient } from '../../../shared/ai';
-import type { OutlineData, OutlineItem, OutlineMode, TechnicalRequirementGroup } from '../../../shared/types';
+import type { OutlineData, OutlineItem, TechnicalRequirementGroup } from '../../../shared/types';
 
 type ProgressCallback = (message: string) => void;
 
@@ -28,7 +24,6 @@ interface RequirementGroupsResponse {
 export interface GenerateOutlineOptions {
   overview: string;
   requirements: string;
-  mode: OutlineMode;
   oldOutline?: string;
   onProgress?: ProgressCallback;
 }
@@ -70,12 +65,6 @@ function validateOutline(outline: OutlineData) {
   }
 }
 
-function validateTopLevelOutline(outline: OutlineData) {
-  if (!outline.outline?.length) {
-    throw new Error('一级目录不能为空');
-  }
-}
-
 function validateChildren(payload: ChildrenResponse) {
   if (!payload.children?.length) {
     throw new Error('二级目录不能为空');
@@ -110,85 +99,6 @@ function renumberOutline(outline: OutlineData): OutlineData {
 
 async function requestJson<TResult>(messages: Parameters<typeof aiClient.requestJson>[0]['messages'], temperature = 0.7, logTitle = '目录生成') {
   return aiClient.requestJson<TResult>({ messages, temperature, logTitle });
-}
-
-async function generateOutlineFull(options: GenerateOutlineOptions, suggestions?: string[]) {
-  emit(options.onProgress, '正在一次性生成完整目录。');
-  const outline = await requestJson<OutlineData>(buildOutlineMessages({
-    overview: options.overview,
-    requirements: options.requirements,
-    oldOutline: options.oldOutline,
-    suggestions,
-  }), 0.7, '目录生成-完整目录');
-  validateOutline(outline);
-  return outline;
-}
-
-async function generateTopLevelOutline(options: GenerateOutlineOptions, suggestions?: string[]) {
-  const outline = await requestJson<OutlineData>(buildTopLevelOutlineMessages({
-    overview: options.overview,
-    requirements: options.requirements,
-    oldOutline: options.oldOutline,
-    suggestions,
-  }), 0.7, '目录生成-一级目录');
-  validateTopLevelOutline(outline);
-  return outline;
-}
-
-async function generateChildren(options: GenerateOutlineOptions, parentItem: OutlineItem, suggestions?: string[]) {
-  const payload = await requestJson<ChildrenResponse>(buildChildrenOutlineMessages({
-    overview: options.overview,
-    requirements: options.requirements,
-    oldOutline: options.oldOutline,
-    parentItem,
-    suggestions,
-  }), 0.7, `目录生成-${parentItem.title || '未命名章节'}子目录`);
-  validateChildren(payload);
-  return payload.children;
-}
-
-async function generateOutlineFallback(options: GenerateOutlineOptions, suggestions?: string[]) {
-  emit(options.onProgress, '正在分步生成目录，先生成一级目录。');
-  const topLevelOutline = await generateTopLevelOutline(options, suggestions);
-  const assembledItems: OutlineItem[] = [];
-
-  for (const [index, item] of topLevelOutline.outline.entries()) {
-    emit(options.onProgress, `正在生成第 ${index + 1}/${topLevelOutline.outline.length} 个一级目录的二三级目录：${item.title || '未命名章节'}。`);
-    assembledItems.push({
-      ...item,
-      children: await generateChildren(options, item, suggestions),
-    });
-  }
-
-  const outline = renumberOutline({ outline: assembledItems });
-  validateOutline(outline);
-  return outline;
-}
-
-async function generateOutlineByMode(options: GenerateOutlineOptions, mode: 'auto' | 'full' | 'fallback', suggestions?: string[]): Promise<[OutlineData, 'full' | 'fallback']> {
-  if (mode === 'full') {
-    return [await generateOutlineFull(options, suggestions), 'full'];
-  }
-
-  if (mode === 'fallback') {
-    return [await generateOutlineFallback(options, suggestions), 'fallback'];
-  }
-
-  try {
-    return [await generateOutlineFull(options, suggestions), 'full'];
-  } catch (error) {
-    emit(options.onProgress, '一次性生成完整目录失败，切换为分步生成模式。');
-    return [await generateOutlineFallback(options, suggestions), 'fallback'];
-  }
-}
-
-async function reviewOutline(options: GenerateOutlineOptions, outline: OutlineData, stageLabel: string) {
-  emit(options.onProgress, `${stageLabel}中。`);
-  return requestJson<OutlineReviewResult>(buildOutlineReviewMessages({
-    overview: options.overview,
-    requirements: options.requirements,
-    outlineJson: JSON.stringify(outline),
-  }), 0.3, `目录生成-${stageLabel}`);
 }
 
 function buildTopLevelFromGroups(groups: TechnicalRequirementGroup[]): OutlineItem[] {
@@ -253,32 +163,6 @@ async function reviewAlignedOutline(options: GenerateOutlineOptions, groups: Tec
   }), 0.3, `目录生成-${stageLabel}`);
 }
 
-async function generateFreeOutlineWorkflow(options: GenerateOutlineOptions) {
-  emit(options.onProgress, '开始生成目录结构。');
-  const [firstOutline, generationMode] = await generateOutlineByMode(options, 'auto');
-  emit(options.onProgress, '首次目录生成完成，开始审核目录质量。');
-  const firstReview = await reviewOutline(options, firstOutline, '首次审核');
-
-  if (firstReview.passed) {
-    emit(options.onProgress, '目录审核通过，准备返回结果。');
-    return firstOutline;
-  }
-
-  const suggestions = firstReview.suggestions?.length ? firstReview.suggestions : ['请根据项目概述和技术评分要求补全目录覆盖范围，并修正不合理章节。'];
-  emit(options.onProgress, '目录审核未通过，正在根据修改建议重新生成。');
-
-  try {
-    const [secondOutline] = await generateOutlineByMode(options, generationMode, suggestions);
-    emit(options.onProgress, '二次生成完成，开始最终审核。');
-    const secondReview = await reviewOutline(options, secondOutline, '最终审核');
-    emit(options.onProgress, secondReview.passed ? '最终审核通过，准备返回修正后的结果。' : '最终审核未完全通过，已返回修正后的第二次结果。');
-    return secondOutline;
-  } catch {
-    emit(options.onProgress, '根据审核建议重新生成失败，已回退到首次生成结果。');
-    return firstOutline;
-  }
-}
-
 async function generateAlignedOutlineWorkflow(options: GenerateOutlineOptions) {
   emit(options.onProgress, '开始提取技术评分大类。');
   const groups = await extractRequirementGroups(options);
@@ -309,9 +193,7 @@ async function generateAlignedOutlineWorkflow(options: GenerateOutlineOptions) {
 }
 
 export async function requestOutlineGeneration(options: GenerateOutlineOptions) {
-  const outline = options.mode === 'aligned'
-    ? await generateAlignedOutlineWorkflow(options)
-    : await generateFreeOutlineWorkflow(options);
+  const outline = await generateAlignedOutlineWorkflow(options);
 
   return {
     ...outline,

@@ -63,6 +63,7 @@ const resetState = {
   bidAnalysisTasks: {},
   bidAnalysisProgress: 0,
   outlineMode: 'aligned' as const,
+  outlineExpansionMode: 'ai-complement' as const,
   referenceKnowledgeDocumentIds: [] as string[],
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
@@ -479,6 +480,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             ...prev,
             outlineGenerationTask: trimTaskLogs(technicalPlan.outlineGenerationTask) || latestTask,
             outlineMode: technicalPlan.outlineMode ?? prev.outlineMode,
+            outlineExpansionMode: technicalPlan.outlineExpansionMode ?? prev.outlineExpansionMode,
             referenceKnowledgeDocumentIds: Array.isArray(technicalPlan.referenceKnowledgeDocumentIds)
               ? technicalPlan.referenceKnowledgeDocumentIds
               : prev.referenceKnowledgeDocumentIds,
@@ -835,16 +837,17 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
       )}
       {state.step === 'outline-generation' && (
         <OutlineEditPage
+          workflowKind={workflowKind}
           projectOverview={state.projectOverview}
           techRequirements={state.techRequirements}
-          outlineMode={state.outlineMode}
+          outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           outlineData={state.outlineData}
           task={state.outlineGenerationTask}
           contentTaskStatus={state.contentGenerationTask?.status}
-          onOutlineConfigChange={(outlineMode, referenceKnowledgeDocumentIds) => {
-            setState((prev) => ({ ...prev, outlineMode, referenceKnowledgeDocumentIds }));
-            window.yibiao?.technicalPlan.saveOutlineConfig({ outlineMode, referenceKnowledgeDocumentIds }).then((saved) => {
+          onOutlineConfigChange={({ referenceKnowledgeDocumentIds, outlineExpansionMode }) => {
+            setState((prev) => ({ ...prev, outlineMode: 'aligned', outlineExpansionMode, referenceKnowledgeDocumentIds }));
+            window.yibiao?.technicalPlan.saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineExpansionMode }).then((saved) => {
               setState((prev) => ({ ...prev, ...saved }));
             }).catch((error) => {
               showToast(error instanceof Error ? error.message : '保存目录配置失败', 'error');

@@ -58,84 +58,6 @@ function childrenOutlineStructureRules(parentId?: string) {
 ${childrenOutlineJsonExample(id)}`;
 }
 
-function outlineSystemPrompt() {
-  return `你是一个专业的标书编写专家。根据提供的项目概述和技术评分要求，生成投标文件中技术标部分的目录结构。
-如果用户提供了自己编写的目录，你要保证目录满足技术评分要求，并充分结合用户自己编写的目录。
-
-要求：
-1. 目录结构要全面覆盖技术标的所有必要章节。
-2. 章节名称要专业、准确，符合投标文件规范。
-3. 一级目录名称要与技术评分要求中的章节名称一致；如果技术评分要求中没有明确章节名称，则结合内容总结一级目录名称。
-4. 一共包括三级目录。
-5. 返回标准 JSON 格式，包含章节编号、标题、描述和子章节。
-6. 只返回 JSON，不要输出任何其他内容。
-
-JSON 格式要求：
-{
-  "outline": [
-    {
-      "id": "1",
-      "title": "",
-      "description": "",
-      "children": [
-        {
-          "id": "1.1",
-          "title": "",
-          "description": "",
-          "children": [
-            { "id": "1.1.1", "title": "", "description": "" }
-          ]
-        }
-      ]
-    }
-  ]
-}`;
-}
-
-function topLevelSystemPrompt() {
-  return `你是一个专业的标书编写专家。根据提供的项目概述和技术评分要求，生成投标文件中技术标部分的一级目录结构。
-
-要求：
-1. 只生成一级目录，不要生成二级和三级目录。
-2. 一级目录名称要专业、准确，符合投标文件规范。
-3. 一级目录名称要尽量与技术评分要求中的章节名称一致；如果技术评分要求中没有明确章节名称，则结合内容总结一级目录名称。
-4. 返回标准 JSON 格式，使用 outline 字段，每个一级目录必须包含 id、title、description。
-5. 只返回 JSON，不要输出任何其他内容。
-
-JSON 格式要求：
-{ "outline": [{ "id": "1", "title": "", "description": "" }] }`;
-}
-
-export function buildOutlineMessages({ overview, requirements, oldOutline, suggestions }: BuildOutlineMessagesInput): ChatMessage[] {
-  return [
-    { role: 'system', content: outlineSystemPrompt() },
-    { role: 'user', content: `项目概述：\n${overview}` },
-    { role: 'user', content: `技术评分要求：\n${requirements}` },
-    ...(oldOutline ? [{ role: 'user' as const, content: `用户自己编写的目录：\n${oldOutline}` }] : []),
-    {
-      role: 'user',
-      content: oldOutline
-        ? `请在满足技术评分要求的前提下，充分结合用户自己编写的目录，生成完整的技术标目录结构。${formatSuggestions(suggestions)}`
-        : `请生成完整的技术标目录结构，确保覆盖所有技术评分要点。${formatSuggestions(suggestions)}`,
-    },
-  ];
-}
-
-export function buildTopLevelOutlineMessages({ overview, requirements, oldOutline, suggestions }: BuildOutlineMessagesInput): ChatMessage[] {
-  return [
-    { role: 'system', content: topLevelSystemPrompt() },
-    { role: 'user', content: `项目概述：\n${overview}` },
-    { role: 'user', content: `技术评分要求：\n${requirements}` },
-    ...(oldOutline ? [{ role: 'user' as const, content: `用户自己编写的目录：\n${oldOutline}` }] : []),
-    {
-      role: 'user',
-      content: oldOutline
-        ? `请在满足技术评分要求的前提下，充分结合用户自己编写的目录，仅生成一级目录，不要生成二级和三级目录。返回 JSON 使用 outline 字段。${formatSuggestions(suggestions)}`
-        : `请仅生成一级目录列表，不要生成二级和三级目录。返回 JSON 使用 outline 字段。${formatSuggestions(suggestions)}`,
-    },
-  ];
-}
-
 export function buildRequirementGroupsMessages(requirements: string, suggestions?: string[]): ChatMessage[] {
   return [
     {
@@ -154,31 +76,6 @@ JSON 格式要求：
     },
     { role: 'user', content: `技术评分要求：\n${requirements}` },
     { role: 'user', content: `请提取所有适合作为技术标一级目录的技术评分大类，保持顺序稳定，并把每个大类下的评分细项归入 detail_points。${formatSuggestions(suggestions)}` },
-  ];
-}
-
-export function buildChildrenOutlineMessages({ overview, requirements, parentItem, oldOutline, suggestions }: BuildChildrenOutlineMessagesInput): ChatMessage[] {
-  const parentId = parentItem.id || '1';
-  const parentTitle = parentItem.title || '未命名一级目录';
-  const parentDescription = parentItem.description || '';
-
-  return [
-    {
-      role: 'system',
-      content: `你是一个专业的标书编写专家。请围绕指定的一级目录，生成其下属的二级目录和三级目录。
-
-要求：
-1. 只输出当前一级目录下的二级和三级目录，不要重复输出一级目录本身。
-2. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
-3. 只返回 JSON，不要输出其他内容。
-
-${childrenOutlineStructureRules(parentId)}`,
-    },
-    { role: 'user', content: `项目概述：\n${overview}` },
-    { role: 'user', content: `技术评分要求：\n${requirements}` },
-    ...(oldOutline ? [{ role: 'user' as const, content: `用户自己编写的目录：\n${oldOutline}` }] : []),
-    { role: 'user', content: `当前一级目录：\n编号：${parentId}\n标题：${parentTitle}\n描述：${parentDescription}` },
-    { role: 'user', content: `请仅生成该一级目录下的二级、三级目录；每个二级目录必须包含三级目录，返回格式必须是 {"children": [...]}。${formatSuggestions(suggestions)}` },
   ];
 }
 
@@ -205,26 +102,6 @@ ${childrenOutlineStructureRules(parentItem.id)}`,
     { role: 'user', content: `当前固定一级目录：\n编号：${parentItem.id}\n标题：${parentItem.title}\n描述：${parentItem.description}` },
     { role: 'user', content: `当前对应的技术评分大类：\nrequirement_id：${requirementGroup?.requirement_id || ''}\n标题：${requirementGroup?.title || ''}\n描述：${requirementGroup?.description || ''}\n细项：\n${detailPoints}` },
     { role: 'user', content: `请仅生成该一级目录下的二级、三级目录；每个二级目录必须包含三级目录，一级目录标题必须保持为当前给定标题，返回格式必须是 {"children": [...]}。${formatSuggestions(suggestions)}` },
-  ];
-}
-
-export function buildOutlineReviewMessages({ overview, requirements, outlineJson }: BuildOutlineMessagesInput & { outlineJson: string }): ChatMessage[] {
-  return [
-    {
-      role: 'system',
-      content: `你是一个严格的招标文件目录审核专家。请审核目录是否符合项目概述和技术评分要求。
-
-要求：
-1. 重点检查目录是否完整覆盖技术评分要点。
-2. 检查一级目录名称是否专业、准确，是否尽量与评分项原文保持一致。
-3. 检查目录层级是否清晰，是否达到三级目录要求，是否存在明显遗漏、错位、重复或不合理章节。
-4. 只返回 JSON，格式为：{"passed": true, "suggestions": []}。
-5. 若不通过，suggestions 中必须给出具体、可执行的修改建议。`,
-    },
-    { role: 'user', content: `项目概述：\n${overview}` },
-    { role: 'user', content: `技术评分要求：\n${requirements}` },
-    { role: 'user', content: `待审核目录 JSON：\n${outlineJson}` },
-    { role: 'user', content: '请判断该目录是否满足要求。若满足则返回 passed=true；若不满足则返回 passed=false，并给出具体修改建议。' },
   ];
 }
 

@@ -14,6 +14,7 @@ const initialState: TechnicalPlanState = {
   bidAnalysisTasks: {},
   bidAnalysisProgress: 0,
   outlineMode: 'aligned',
+  outlineExpansionMode: 'ai-complement',
   referenceKnowledgeDocumentIds: [],
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
@@ -38,7 +39,7 @@ export function useTechnicalPlanWorkflow() {
       try {
         const cachedState = await technicalPlanStorage.load();
         if (mounted && cachedState) {
-          setState({ ...initialState, ...cachedState });
+          setState({ ...initialState, ...cachedState, outlineExpansionMode: cachedState.outlineExpansionMode || 'ai-complement' });
         }
       } catch (error) {
         console.warn('技术方案缓存读取失败', error);
