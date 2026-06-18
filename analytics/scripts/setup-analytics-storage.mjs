@@ -16,9 +16,6 @@ const dailyRollupCrons = [
   '0 18 * * *',
   '30 18 * * *',
   '0 19 * * *',
-  '30 19 * * *',
-  '0 20 * * *',
-  '30 20 * * *',
 ];
 
 function readConfig() {

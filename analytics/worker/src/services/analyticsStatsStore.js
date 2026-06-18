@@ -593,18 +593,15 @@ export async function queryStatsProjects(env) {
 }
 
 export const ROLLUP_CRON_STAGES = [
-  { cron: '0 17 * * *', stage: 'discover', beijingTime: '01:00', description: '发现昨日有数据的项目并初始化汇总状态' },
-  { cron: '30 17 * * *', stage: 'daily', beijingTime: '01:30', description: '写入每日总量和概览累计值' },
-  { cron: '0 18 * * *', stage: 'clients', beijingTime: '02:00', description: '写入客户端生命周期和最后访问信息' },
-  { cron: '30 18 * * *', stage: 'pages', beijingTime: '02:30', description: '写入页面访问累计值' },
-  { cron: '0 19 * * *', stage: 'versions', beijingTime: '03:00', description: '写入版本事件量并刷新版本客户端数' },
-  { cron: '30 19 * * *', stage: 'configs', beijingTime: '03:30', description: '写入配置使用累计值' },
-  { cron: '0 20 * * *', stage: 'models', beijingTime: '04:00', description: '写入模型请求和 Total Tokens 累计值' },
-  { cron: '30 20 * * *', stage: 'resources', beijingTime: '04:30', description: '重算资源历史点击量并完成整日汇总' },
+  { cron: '0 17 * * *', stages: ['discover', 'daily'], beijingTime: '01:00', description: '发现昨日项目，写入每日总量和概览累计值' },
+  { cron: '30 17 * * *', stages: ['clients'], beijingTime: '01:30', description: '写入客户端生命周期和最后访问信息' },
+  { cron: '0 18 * * *', stages: ['pages', 'versions'], beijingTime: '02:00', description: '写入页面访问累计值，写入版本事件量并刷新版本客户端数' },
+  { cron: '30 18 * * *', stages: ['configs', 'models'], beijingTime: '02:30', description: '写入配置使用、模型请求和 Total Tokens 累计值' },
+  { cron: '0 19 * * *', stages: ['resources'], beijingTime: '03:00', description: '重算资源历史点击量并完成整日汇总' },
 ];
 
-const ROLLUP_STAGE_ORDER = ROLLUP_CRON_STAGES.map((item) => item.stage);
-const ROLLUP_STAGE_BY_CRON = new Map(ROLLUP_CRON_STAGES.map((item) => [item.cron, item.stage]));
+const ROLLUP_STAGE_ORDER = ['discover', 'daily', 'clients', 'pages', 'versions', 'configs', 'models', 'resources'];
+const ROLLUP_STAGES_BY_CRON = new Map(ROLLUP_CRON_STAGES.map((item) => [item.cron, item.stages]));
 const BULK_JSON_MAX_LENGTH = 700000;
 
 function normalizeProjectName(value) {
@@ -1561,12 +1558,20 @@ export async function rollupStatsDay(env, projectName, activityDate, options = {
 }
 
 export async function rollupYesterdayCronStage(env, cron) {
-  const stage = ROLLUP_STAGE_BY_CRON.get(cron);
-  if (!stage) {
+  const stages = ROLLUP_STAGES_BY_CRON.get(cron);
+  if (!stages) {
     console.warn(`[analytics] unknown scheduled cron ignored: ${cron || ''}`);
-    return { activityDate: getBusinessDateDaysAgo(1), stage: '', projects: [] };
+    return { activityDate: getBusinessDateDaysAgo(1), cron, stages: [] };
   }
-  return await runRollupStageForDate(env, stage, getBusinessDateDaysAgo(1));
+  const activityDate = getBusinessDateDaysAgo(1);
+  const results = [];
+  let projectNames = null;
+  for (const stage of stages) {
+    const result = await runRollupStageForDate(env, stage, activityDate, projectNames ? { projectNames } : {});
+    results.push(result);
+    projectNames = uniqueProjectNames(result.projects.map((row) => row.projectName));
+  }
+  return { activityDate, cron, stages: results };
 }
 
 export async function rollupYesterdayForAllProjects(env) {

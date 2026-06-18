@@ -117,7 +117,7 @@ npm run setup:analytics-storage
 | 动作 | 说明 |
 | --- | --- |
 | D1 | 创建或复用 `openbidkit-analytics`，binding 为 `ANALYTICS_DB` |
-| Cron | 确认北京时间 01:00 到 04:30 每 30 分钟一个阶段的 8 个 Cron |
+| Cron | 确认北京时间 01:00 到 03:00 每 30 分钟一个触发点的 5 个 Cron |
 | Migration | 执行 `analytics-migrations/*.sql`，并自动补齐 `stats_versions.client_count`、`stats_models.total_tokens` |
 
 如果刚删除过 `openbidkit-analytics`，脚本会重新创建并更新 `wrangler.jsonc` 的 `database_id`。
