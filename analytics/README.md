@@ -117,8 +117,8 @@ npm run setup:analytics-storage
 | 动作 | 说明 |
 | --- | --- |
 | D1 | 创建或复用 `openbidkit-analytics`，binding 为 `ANALYTICS_DB` |
-| Cron | 确认 `0 18 * * *`，即北京时间每天 02:00 |
-| Migration | 执行 `analytics-migrations/0001_create_stats_schema.sql`，并自动补齐 `stats_versions.client_count`、`stats_models.total_tokens` |
+| Cron | 确认北京时间 01:00 到 04:30 每 30 分钟一个阶段的 8 个 Cron |
+| Migration | 执行 `analytics-migrations/*.sql`，并自动补齐 `stats_versions.client_count`、`stats_models.total_tokens` |
 
 如果刚删除过 `openbidkit-analytics`，脚本会重新创建并更新 `wrangler.jsonc` 的 `database_id`。
 
@@ -192,6 +192,15 @@ cd analytics\worker
 npm run backfill:analytics-stats
 ```
 
+只补指定日期时使用 `BACKFILL_DATE` 环境变量：
+
+```powershell
+cd analytics\worker
+$env:BACKFILL_DATE="2026-06-17"
+npm run backfill:analytics-stats
+Remove-Item Env:\BACKFILL_DATE
+```
+
 如果只需要补齐新增的 `stats_versions.client_count` 和 `stats_models.total_tokens` 两个字段，执行：
 
 ```powershell
@@ -204,12 +213,12 @@ npm run backfill:analytics-stat-fields
 | 项 | 说明 |
 | --- | --- |
 | 项目 | 固定回填 `yibiao-client` |
-| 日期 | 自动发现 AE 中北京时间今天之前的所有有数据日期 |
+| 日期 | 默认自动发现 AE 中北京时间今天之前的所有有数据日期；设置 `BACKFILL_DATE=YYYY-MM-DD` 时只处理指定日期 |
 | 今天 | 脚本不回填今天，今天/7天/30天仍直接读 AE |
 | 重复保护 | `stats_rollup_runs.status = success` 的日期会跳过 |
 | 异常状态 | 已存在 `running/failed` 且没有 `stats_daily` 时会清理状态并重试；如果已有 `stats_daily` 会停止，避免重复累加污染 D1 |
 | 临时错误 | AE/D1 对 `429/500/502/503/504` 会自动重试，并打印 HTTP 状态、返回内容和 SQL 片段 |
-| 参数 | 脚本不接受命令行参数 |
+| 参数 | 脚本不接受命令行参数；指定单日使用环境变量 `BACKFILL_DATE` |
 | 补字段脚本 | 只补 `stats_versions.client_count` 和 `stats_models.total_tokens`，不回填资源点击量，不重跑每日统计 |
 
 ## 排查

@@ -126,6 +126,19 @@ function readCredentials() {
   };
 }
 
+function readBackfillDate() {
+  const value = String(process.env.BACKFILL_DATE || '').trim();
+  if (!value) return '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error('BACKFILL_DATE must be YYYY-MM-DD.');
+  }
+  const today = getBusinessToday();
+  if (value >= today) {
+    throw new Error(`BACKFILL_DATE must be before ${today} Asia/Shanghai.`);
+  }
+  return value;
+}
+
 async function resolveD1DatabaseId(accountId, apiToken, databaseName, explicitDatabaseId) {
   if (explicitDatabaseId) return explicitDatabaseId;
 
@@ -254,6 +267,28 @@ async function clearRollupStatus(db, activityDate) {
   `).bind(projectName, activityDate).run();
 }
 
+async function clearRollupStages(db, activityDate) {
+  await db.prepare(`
+    DELETE FROM stats_rollup_stages
+    WHERE project_name = ? AND activity_date = ?
+  `).bind(projectName, activityDate).run();
+}
+
+async function ensureRollupStageTable(db) {
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS stats_rollup_stages (
+      project_name TEXT NOT NULL,
+      activity_date TEXT NOT NULL,
+      stage TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      completed_at TEXT NOT NULL DEFAULT '',
+      error TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (project_name, activity_date, stage)
+    )
+  `).run();
+}
+
 async function backfillOne(env, activityDate) {
   const status = await readRollupStatus(env.ANALYTICS_DB, activityDate);
   if (status === 'success') {
@@ -267,6 +302,7 @@ async function backfillOne(env, activityDate) {
 
     console.warn(`[retry] ${activityDate} has rollup status '${status}' but no stats_daily row. Clearing rollup status and retrying.`);
     await clearRollupStatus(env.ANALYTICS_DB, activityDate);
+    await clearRollupStages(env.ANALYTICS_DB, activityDate);
   }
 
   console.log(`[run] ${activityDate}`);
@@ -345,13 +381,18 @@ async function main() {
   console.log(`Analytics D1 database: ${analyticsDatabaseId}`);
   console.log(`Resource D1 database: ${resourceDatabaseId}`);
 
-  const dates = await queryBackfillDates(env);
+  await ensureRollupStageTable(env.ANALYTICS_DB);
+
+  const requestedDate = readBackfillDate();
+  const dates = requestedDate ? [requestedDate] : await queryBackfillDates(env);
   if (!dates.length) {
     console.log('No historical Analytics Engine data found.');
     return;
   }
 
-  console.log(`Dates: ${dates[0]}..${dates[dates.length - 1]} (${dates.length} day${dates.length === 1 ? '' : 's'} with data)`);
+  console.log(requestedDate
+    ? `Date: ${requestedDate}`
+    : `Dates: ${dates[0]}..${dates[dates.length - 1]} (${dates.length} day${dates.length === 1 ? '' : 's'} with data)`);
   const summary = { completed: 0, skipped: 0 };
   for (const activityDate of dates) {
     const status = await backfillOne(env, activityDate);
