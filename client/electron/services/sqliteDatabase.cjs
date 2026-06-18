@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 12;
+const schemaVersion = 13;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -32,6 +32,7 @@ function createInitialSchema(db) {
       bid_analysis_mode TEXT NOT NULL DEFAULT 'key',
       bid_analysis_selected_task_ids_json TEXT,
       outline_mode TEXT NOT NULL DEFAULT 'aligned',
+      outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
       outline_project_name TEXT,
       outline_project_overview TEXT,
       content_generation_options_json TEXT,
@@ -209,6 +210,10 @@ function addTechnicalPlanBidAnalysisSelection(db) {
   if (!cols.includes('bid_analysis_selected_task_ids_json')) {
     db.exec('ALTER TABLE technical_plan_meta ADD COLUMN bid_analysis_selected_task_ids_json TEXT');
   }
+}
+
+function addTechnicalPlanOutlineExpansionMode(db) {
+  addColumnIfMissing(db, 'technical_plan_meta', 'outline_expansion_mode', "TEXT NOT NULL DEFAULT 'ai-complement'");
 }
 
 function addKnowledgeDocumentSortOrder(db) {
@@ -1012,6 +1017,13 @@ const schemaHealthColumnGroups = [
       bid_document_id: 'TEXT',
     },
   },
+  {
+    version: 13,
+    table: 'technical_plan_meta',
+    columns: {
+      outline_expansion_mode: "TEXT NOT NULL DEFAULT 'ai-complement'",
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -1132,6 +1144,11 @@ const migrations = [
     version: 12,
     description: '废标项检查支持多份投标文件',
     up: migrateRejectionCheckMultiBidDocuments,
+  },
+  {
+    version: 13,
+    description: '技术方案新增已有方案目录使用方式配置',
+    up: addTechnicalPlanOutlineExpansionMode,
   },
 ];
 

@@ -21,7 +21,6 @@ const sampleTenderContent = `# 易标测试项目招标文件
 const sampleOutlineInput = {
   overview: '易标测试项目，软件服务类采购，预算 100 万元，实施地点北京市海淀区。',
   requirements: '技术方案完整性 30 分；项目实施计划 20 分；运维服务能力 15 分。',
-  mode: 'free' as const,
 };
 
 const textTask = getBidAnalysisTasks('full').find((task) => task.id === 'projectInfo');

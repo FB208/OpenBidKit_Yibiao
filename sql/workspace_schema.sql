@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   -- v10 招标解析项选择配置，JSON 数组，关键项由运行时代码强制并入。
   bid_analysis_selected_task_ids_json TEXT,
   outline_mode TEXT NOT NULL DEFAULT 'aligned',
+  -- v13 已有方案扩写目录使用方式：original-only / ai-complement。
+  outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
   outline_project_name TEXT,
   outline_project_overview TEXT,
   content_generation_options_json TEXT,

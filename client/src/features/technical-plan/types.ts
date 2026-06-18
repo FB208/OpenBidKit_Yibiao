@@ -1,4 +1,4 @@
-import type { OutlineData, OutlineMode } from '../../shared/types';
+import type { OutlineData, OutlineExpansionMode, OutlineMode } from '../../shared/types';
 
 export type TechnicalPlanStep = 'document-analysis' | 'bid-analysis' | 'outline-generation' | 'global-facts' | 'content-edit' | 'expand';
 export type TechnicalPlanWorkflowKind = 'technical-plan' | 'existing-plan-expansion';
@@ -222,6 +222,7 @@ export interface TechnicalPlanState {
   bidAnalysisTasks: BidAnalysisTasks;
   bidAnalysisProgress: number;
   outlineMode: OutlineMode;
+  outlineExpansionMode: OutlineExpansionMode;
   referenceKnowledgeDocumentIds: string[];
   bidAnalysisTask?: BackgroundTaskState;
   outlineGenerationTask?: BackgroundTaskState;

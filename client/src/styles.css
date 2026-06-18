@@ -4451,47 +4451,13 @@ button {
   opacity: 0.5;
 }
 
-.outline-mode-switch {
-  display: inline-flex;
-  gap: 6px;
-  padding: 6px;
-  background: rgba(33, 116, 253, 0.08);
-  border: 1px solid rgba(33, 116, 253, 0.12);
-  border-radius: 999px;
-}
-
-.outline-mode-switch button {
-  min-width: 126px;
-  padding: 10px 14px;
-  color: var(--yb-text-soft);
-  font-weight: 800;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 999px;
-}
-
-.outline-mode-switch button.is-active {
-  color: #ffffff;
-  background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
-  box-shadow: 0 10px 24px rgba(33, 116, 253, 0.22);
-}
-
-.outline-mode-switch button:disabled {
-  cursor: not-allowed;
-  opacity: 0.74;
-}
-
-.outline-mode-switch button:disabled:not(.is-active) {
-  color: #7a8798;
-}
-
 .outline-generation-config-card {
   position: fixed;
   top: 50%;
   left: 50%;
   z-index: 101;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   width: min(860px, calc(100vw - 40px));
   height: min(780px, calc(100vh - 40px));
   transform: translate(-50%, -50%);
@@ -4527,48 +4493,73 @@ button {
   font-size: 13px;
 }
 
-.outline-generation-mode-list {
+.outline-generation-config-body {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 18px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.outline-generation-config-body.has-expansion-mode {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.outline-expansion-mode-section {
+  min-height: 0;
+}
+
+.outline-expansion-mode-switch {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
-.outline-generation-mode-card {
+.outline-expansion-mode-option {
   display: grid;
-  gap: 8px;
-  padding: 16px;
-  text-align: left;
-  background: rgba(248, 250, 253, 0.9);
-  border: 1px solid var(--yb-border-soft);
-  border-radius: 18px;
-}
-
-.outline-generation-mode-card strong {
-  color: var(--yb-text);
-  font-size: 15px;
-}
-
-.outline-generation-mode-card span {
+  gap: 6px;
+  min-height: 92px;
+  padding: 14px;
   color: var(--yb-text-soft);
-  font-size: 13px;
-  line-height: 1.65;
+  text-align: left;
+  background: rgba(248, 250, 253, 0.82);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 16px;
 }
 
-.outline-generation-mode-card.is-active {
-  background: linear-gradient(135deg, rgba(33, 116, 253, 0.12), rgba(124, 58, 237, 0.1));
-  border-color: rgba(33, 116, 253, 0.36);
-  box-shadow: 0 12px 30px rgba(33, 116, 253, 0.14);
+.outline-expansion-mode-option strong {
+  color: var(--yb-text);
+  font-size: 14px;
 }
 
-.outline-generation-mode-card:disabled {
+.outline-expansion-mode-option span {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.outline-expansion-mode-option:hover:not(:disabled),
+.outline-expansion-mode-option.is-selected {
+  background: rgba(33, 116, 253, 0.08);
+  border-color: rgba(33, 116, 253, 0.34);
+}
+
+.outline-expansion-mode-option.is-selected strong {
+  color: var(--yb-primary);
+}
+
+.outline-expansion-mode-option:disabled {
   cursor: not-allowed;
-  opacity: 0.72;
+  opacity: 0.55;
 }
 
 .outline-knowledge-picker {
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
+}
+
+.outline-knowledge-picker.is-disabled-by-mode {
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .outline-generation-config-card .content-regenerate-actions {
@@ -4863,6 +4854,12 @@ button {
 .outline-knowledge-search:focus {
   border-color: rgba(33, 116, 253, 0.5);
   box-shadow: 0 0 0 3px rgba(33, 116, 253, 0.1);
+}
+
+.outline-knowledge-search:disabled {
+  cursor: not-allowed;
+  background: rgba(248, 250, 253, 0.9);
+  opacity: 0.68;
 }
 
 .outline-knowledge-grid {
@@ -10204,7 +10201,6 @@ button {
   }
 
   .outline-command-bar,
-  .outline-generation-mode-list,
   .outline-knowledge-grid {
     grid-template-columns: 1fr;
   }
@@ -10218,6 +10214,10 @@ button {
     height: calc(100vh - 28px);
     gap: 14px;
     padding: 20px;
+  }
+
+  .outline-expansion-mode-switch {
+    grid-template-columns: 1fr;
   }
 
   .outline-knowledge-search-row {

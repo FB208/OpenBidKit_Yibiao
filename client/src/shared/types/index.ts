@@ -65,7 +65,7 @@ export {
   DEFAULT_EXPORT_FORMAT,
   HEADING_LEVEL_LABELS,
 } from './exportFormat';
-export type { OutlineData, OutlineItem, OutlineMode, TechnicalRequirementGroup } from './outline';
+export type { OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, TechnicalRequirementGroup } from './outline';
 export type { GpuHardwareAccelerationStatus, LatestReleaseInfo, UpdateCheckResult, WordExportProgressEvent, WordExportResult, WorkspaceDatabasePhase, WorkspaceDatabaseStatus, YibiaoBridge } from './ipc';
 export type {
   RejectionCheckFinding,
