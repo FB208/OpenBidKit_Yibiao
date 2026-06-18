@@ -11,7 +11,7 @@ import { handleRetention } from './routes/retention.js';
 import { handleAdminResources, handlePublicResources, handleResourceImage } from './routes/resources.js';
 import { handleTrack } from './routes/track.js';
 import { handleTraffic } from './routes/traffic.js';
-import { rollupYesterdayForAllProjects } from './services/analyticsStatsStore.js';
+import { rollupYesterdayCronStage } from './services/analyticsStatsStore.js';
 
 const routes = new Map([
   ['/health', (request, env) => handleHealth(env)],
@@ -49,7 +49,7 @@ export default {
     return json({ code: 404, message: 'not found' }, { status: 404 });
   },
 
-  async scheduled(_event, env) {
-    await rollupYesterdayForAllProjects(env);
+  async scheduled(event, env) {
+    await rollupYesterdayCronStage(env, event?.cron || '');
   },
 };
