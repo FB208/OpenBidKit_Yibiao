@@ -3,6 +3,7 @@ import { getAppMenuItemById } from './menuConfig';
 import BidOpportunityPage from '../features/bid-opportunity/pages/BidOpportunityPage';
 import BusinessBidPage from '../features/business-bid/pages/BusinessBidPage';
 import DeveloperDemoPage, { isDeveloperDemoSection } from '../features/developer/pages/DeveloperDemoPage';
+import OpenCodeAgentTestPage from '../features/developer/pages/OpenCodeAgentTestPage';
 import DeveloperTestPage from '../features/developer/pages/DeveloperTestPage';
 import ExportFormatPage from '../features/export-format/pages/ExportFormatPage';
 import DuplicateCheckPage from '../features/duplicate-check/pages/DuplicateCheckPage';
@@ -55,6 +56,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return null;
     case 'developer-json-test':
       return <DeveloperTestPage />;
+    case 'developer-opencode-agent-test':
+      return <OpenCodeAgentTestPage />;
     case 'settings':
       return <SettingsPage onDeveloperModeChange={onDeveloperModeChange} />;
     default:

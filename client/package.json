@@ -31,6 +31,15 @@
       "assets/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "vendor/opencode",
+        "to": "opencode",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "publish": [
       {
         "provider": "github",

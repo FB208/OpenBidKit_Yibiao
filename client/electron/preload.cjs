@@ -48,6 +48,9 @@ const bridge = {
     requestJson: (request) => ipcRenderer.invoke('ai:request-json', request),
     testImageModel: (config) => ipcRenderer.invoke('ai:test-image-model', config),
   },
+  agent: {
+    run: (payload) => ipcRenderer.invoke('agent:run', payload),
+  },
   developerTokenStats: {
     openWindow: () => ipcRenderer.invoke('developer-token-stats:open-window'),
     get: () => ipcRenderer.invoke('developer-token-stats:get'),
