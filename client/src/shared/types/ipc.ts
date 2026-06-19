@@ -122,6 +122,9 @@ export interface YibiaoBridge {
     requestJson: <TResult = unknown>(request: JsonCompletionRequest) => Promise<TResult>;
     testImageModel: (config: ClientConfig) => Promise<ImageModelTestResult>;
   };
+  agent: {
+    run: (payload: unknown) => Promise<unknown>;
+  };
   developerTokenStats: {
     openWindow: () => Promise<{ success: boolean }>;
     get: () => Promise<DeveloperTextTokenStats>;

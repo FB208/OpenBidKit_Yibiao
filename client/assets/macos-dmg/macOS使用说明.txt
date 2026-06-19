@@ -2,15 +2,22 @@ macOS 使用说明
 
 如果双击 App 提示“已损坏，无法打开”或“无法验证开发者”，这是因为本软件未进行 Apple 官方签名和公证，并不代表文件真的损坏。
 
-使用步骤：
+macOS 未签名版本安装说明
 
-1. 双击 dmg 文件。
-2. 将“易标投标工具箱.app”拖到“应用程序”文件夹。
-3. 打开“终端”App。
-4. 执行下面命令：
+1. 打开 DMG，将“易标投标工具箱.app”拖入“应用程序”。
+2. 打开终端，执行下面命令解除 macOS quarantine：
 
-xattr -dr com.apple.quarantine /Applications/易标投标工具箱.app
+   xattr -dr com.apple.quarantine "/Applications/易标投标工具箱.app"
 
-5. 再从“应用程序”中打开“易标投标工具箱”。
+3. 再从“应用程序”中打开“易标投标工具箱”。
 
-如果仍无法打开，请右键点击 App，选择“打开”，再确认打开。
+说明：
+- 这个命令会递归处理整个 .app，包括内置的 OpenCode Agent 可执行文件。
+- OpenCode Agent 已内置，不需要用户安装系统级 OpenCode。
+- 正常情况下不需要手动 chmod，程序包已经在构建阶段设置好可执行权限。
+- 如果开启开发者模式后运行 OpenCode Agent 测试页，提示 spawn EACCES，再执行下面命令排查：
+
+  chmod +x "/Applications/易标投标工具箱.app/Contents/Resources/opencode/darwin-arm64/opencode"
+  chmod +x "/Applications/易标投标工具箱.app/Contents/Resources/opencode/darwin-x64/opencode"
+
+  Apple Silicon 机器通常使用 darwin-arm64；Intel 机器通常使用 darwin-x64。

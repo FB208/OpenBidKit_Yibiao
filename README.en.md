@@ -122,6 +122,60 @@ Download the latest release from [GitHub Releases](https://github.com/yibiaoai/y
 
 [Watch the usage demo on Bilibili](https://www.bilibili.com/video/BV1sC5i6SE74)
 
+## 🧑‍💻 Local Development
+
+There is no root-level `package.json` in this repository. The desktop client lives under `client/`, so all client development commands must be run from the `client/` directory.
+
+Before debugging OpenCode Agent locally, prepare the OpenCode binary for your current platform. Otherwise the developer test page will fail with `OpenCode binary 不存在`.
+
+Windows x64:
+
+```powershell
+cd client
+npm ci
+$env:OPENCODE_VERSION="v1.17.8"
+node scripts/prepare-opencode-binary.cjs --platform win32 --arch x64
+node scripts/verify-opencode-binary.cjs --platform win32 --arch x64
+npm run dev
+```
+
+macOS Apple Silicon:
+
+```bash
+cd client
+npm ci
+export OPENCODE_VERSION="v1.17.8"
+node scripts/prepare-opencode-binary.cjs --platform darwin --arch arm64
+node scripts/verify-opencode-binary.cjs --platform darwin --arch arm64
+npm run dev
+```
+
+macOS Intel:
+
+```bash
+cd client
+npm ci
+export OPENCODE_VERSION="v1.17.8"
+node scripts/prepare-opencode-binary.cjs --platform darwin --arch x64
+node scripts/verify-opencode-binary.cjs --platform darwin --arch x64
+npm run dev
+```
+
+If you already have a working OpenCode binary, you can point the app to it with an environment variable:
+
+```bash
+YIBIAO_OPENCODE_BIN=/absolute/path/to/opencode npm run dev
+```
+
+End users who install a GitHub Release package do not need to run these scripts. The release workflow downloads and injects the correct OpenCode binary automatically in GitHub Actions. If you build a local installer manually, run the matching `prepare-opencode-binary.cjs` and `verify-opencode-binary.cjs` commands before packaging.
+
+Regular build verification:
+
+```powershell
+cd client
+npm run build
+```
+
 ## 🛠️ Technical Architecture
 
 The current product is an independent desktop client under `client/`. It does not depend on the legacy `frontend/` or `backend/` structure.

@@ -1,4 +1,5 @@
 const { ipcMain, shell } = require('electron');
+const { registerAgentIpc } = require('./agentIpc.cjs');
 const { registerAiIpc } = require('./aiIpc.cjs');
 const { registerConfigIpc } = require('./configIpc.cjs');
 const { registerDeveloperIpc } = require('./developerIpc.cjs');
@@ -9,6 +10,7 @@ const { registerKnowledgeBaseIpc } = require('./knowledgeBaseIpc.cjs');
 const { registerRejectionCheckIpc } = require('./rejectionCheckIpc.cjs');
 const { registerTaskIpc } = require('./taskIpc.cjs');
 const { registerTechnicalPlanIpc } = require('./technicalPlanIpc.cjs');
+const { createAgentService } = require('../services/agentService.cjs');
 const { createAiService } = require('../services/aiService.cjs');
 const { createConfigStore } = require('../services/configStore.cjs');
 const { createDuplicateCheckService } = require('../services/duplicateCheckService.cjs');
@@ -165,6 +167,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, fileSe
 function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow }) {
   const configStore = createConfigStore(app);
   const aiService = createAiService({ app, configStore });
+  const agentService = createAgentService({ app, configStore });
   const fileService = createFileService({ app, configStore });
   const exportService = createExportService({ configStore });
   const databaseStatus = registerWorkspaceDatabaseStatusIpc({ mainWindow });
@@ -225,6 +228,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   });
   registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsWindow });
   registerAiIpc({ aiService });
+  registerAgentIpc({ agentService });
   registerFileIpc({ fileService });
   registerExportIpc({ exportService });
   registerPendingWorkspaceDatabaseIpc(databaseStatus.getStatus);

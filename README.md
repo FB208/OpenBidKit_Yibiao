@@ -124,6 +124,60 @@
 
 [点击前往 Bilibili 观看使用演示视频](https://www.bilibili.com/video/BV1sC5i6SE74)
 
+## 🧑‍💻 本地开发调试
+
+本仓库根目录没有 `package.json`，桌面客户端代码在 `client/`，开发命令都需要在 `client/` 目录下执行。
+
+本地开发调试 OpenCode Agent 相关能力前，需要先准备当前平台的 OpenCode binary。否则开发者测试页会报错：`OpenCode binary 不存在`。
+
+Windows x64：
+
+```powershell
+cd client
+npm ci
+$env:OPENCODE_VERSION="v1.17.8"
+node scripts/prepare-opencode-binary.cjs --platform win32 --arch x64
+node scripts/verify-opencode-binary.cjs --platform win32 --arch x64
+npm run dev
+```
+
+macOS Apple Silicon：
+
+```bash
+cd client
+npm ci
+export OPENCODE_VERSION="v1.17.8"
+node scripts/prepare-opencode-binary.cjs --platform darwin --arch arm64
+node scripts/verify-opencode-binary.cjs --platform darwin --arch arm64
+npm run dev
+```
+
+macOS Intel：
+
+```bash
+cd client
+npm ci
+export OPENCODE_VERSION="v1.17.8"
+node scripts/prepare-opencode-binary.cjs --platform darwin --arch x64
+node scripts/verify-opencode-binary.cjs --platform darwin --arch x64
+npm run dev
+```
+
+如果你已经有可用的 OpenCode binary，也可以通过环境变量指定路径：
+
+```bash
+YIBIAO_OPENCODE_BIN=/absolute/path/to/opencode npm run dev
+```
+
+普通用户下载 GitHub Release 安装包后不需要执行这些脚本；发布流程会在 GitHub Actions 中自动下载并注入对应平台的 OpenCode binary。本地手动打包前也需要先执行对应平台的 `prepare-opencode-binary.cjs` 和 `verify-opencode-binary.cjs`。
+
+常规构建验证：
+
+```powershell
+cd client
+npm run build
+```
+
 ## 🛠️ 技术架构
 
 当前产品主体是 `client/` 下的独立桌面客户端，不依赖旧 `frontend/`、`backend/` 结构。

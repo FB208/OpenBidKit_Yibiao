@@ -127,6 +127,12 @@ const developerMenuItems: AppMenuItem[] = [
         description: '预览 Word、Markdown、Mermaid 图片转换的导出检查路径。',
         icon: 'export',
       },
+      {
+        id: 'developer-opencode-agent-test',
+        label: 'OpenCode Agent测试',
+        description: '验证 OpenCode Server、OpenCode AI proxy、agentService 的完整隔离链路。',
+        icon: 'tool',
+      },
     ],
   },
 ];

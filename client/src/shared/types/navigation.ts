@@ -18,6 +18,7 @@ export type SectionId =
   | 'developer-prompt-lab'
   | 'developer-parser-sandbox'
   | 'developer-export-preview'
+  | 'developer-opencode-agent-test'
   | 'settings';
 
 export interface AppMenuNotice {

@@ -47,6 +47,7 @@ const pageLabels = {
   'developer-prompt-lab': '测试页 - Prompt调试台',
   'developer-parser-sandbox': '测试页 - 文件解析沙盘',
   'developer-export-preview': '测试页 - 导出链路预演',
+  'developer-opencode-agent-test': '测试页 - OpenCode Agent测试',
   settings: '设置',
 };
 
