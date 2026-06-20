@@ -4,6 +4,12 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { getDeveloperLogsDir } = require('../../utils/paths.cjs');
 const {
+  createAiRequestId,
+  getAiErrorLogError,
+  getAiErrorLogResponse,
+  writeAiLog,
+} = require('../../utils/aiLog.cjs');
+const {
   normalizeTokenUsage,
   recordTextTokenStats,
 } = require('../textTokenStatsStore.cjs');
@@ -145,10 +151,6 @@ function assertTextModelConfig(config) {
   if (!trimBaseUrl(config?.base_url)) {
     throw new Error('请先在设置中配置文本模型 Base URL');
   }
-}
-
-function createRequestId() {
-  return `${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID()}`;
 }
 
 function hashText(value) {
@@ -309,7 +311,7 @@ async function createUpstreamError(response) {
   const error = new Error(detail || `AI 请求失败：HTTP ${response.status}`);
   error.status = response.status;
   error.statusCode = response.status;
-  error.raw_response_body = rawText.slice(0, 4000);
+  error.raw_response_body = rawText;
   return error;
 }
 
@@ -375,9 +377,61 @@ function extractUsageFromJsonText(rawText) {
   }
 }
 
-function createSseUsageCollector() {
+function contentPartToText(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(contentPartToText).join('');
+  if (value && typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text;
+    if (typeof value.content === 'string') return value.content;
+  }
+  return '';
+}
+
+function appendChoiceContent(choice, contentParts) {
+  const candidates = [
+    choice?.delta?.content,
+    choice?.message?.content,
+    choice?.text,
+  ];
+
+  for (const candidate of candidates) {
+    const text = contentPartToText(candidate);
+    if (text) {
+      contentParts.push(text);
+      return;
+    }
+  }
+}
+
+function appendPayloadContent(payload, contentParts) {
+  const choices = Array.isArray(payload?.choices) ? payload.choices : [];
+  choices.forEach((choice) => appendChoiceContent(choice, contentParts));
+}
+
+function extractContentFromResponseData(responseData) {
+  const choices = Array.isArray(responseData?.choices) ? responseData.choices : [];
+  return choices
+    .flatMap((choice) => {
+      const parts = [];
+      appendChoiceContent(choice, parts);
+      return parts;
+    })
+    .join('')
+    .trim();
+}
+
+function createStreamResponseData(content, usage) {
+  return {
+    stream: true,
+    choices: [{ message: { content } }],
+    usage,
+  };
+}
+
+function createSseResponseCollector() {
   let buffer = '';
   let usage = null;
+  const contentParts = [];
 
   function processLine(line) {
     const trimmed = String(line || '').trim();
@@ -390,6 +444,7 @@ function createSseUsageCollector() {
       const payload = JSON.parse(data);
       const nextUsage = extractUsageFromPayload(payload);
       if (nextUsage) usage = nextUsage;
+      appendPayloadContent(payload, contentParts);
     } catch {
       // 单行解析失败不影响流式转发。
     }
@@ -407,7 +462,12 @@ function createSseUsageCollector() {
         buffer.split(/\r?\n/).forEach(processLine);
       }
       buffer = '';
-      return usage;
+      const content = contentParts.join('').trim();
+      return {
+        content,
+        responseData: createStreamResponseData(content, usage),
+        usage,
+      };
     },
   };
 }
@@ -417,7 +477,7 @@ function createUsageCapturingStream(source, onDone) {
 
   const reader = source.getReader();
   const decoder = new TextDecoder('utf-8');
-  const collector = createSseUsageCollector();
+  const collector = createSseResponseCollector();
 
   return new ReadableStream({
     async pull(controller) {
@@ -440,9 +500,54 @@ function createUsageCapturingStream(source, onDone) {
   });
 }
 
-function recordOpenCodeAiSuccess({ app, config, requestId, requestBody, response, usage, startedAt, stream, attempt }) {
+function getOpenCodeAiLogTitle(requestBody) {
+  return requestBody?.logTitle || requestBody?.log_title || 'OpenCode Agent';
+}
+
+function getChatCompletionsUrl(config) {
+  return `${trimBaseUrl(config.base_url)}/chat/completions`;
+}
+
+function getRequestMode(requestBody) {
+  return requestBody?.stream ? 'stream' : 'normal';
+}
+
+function safeWriteOpenCodeAiLog(app, config, payload) {
+  try {
+    writeAiLog(app, config, payload);
+  } catch {
+    // OpenCode 代理日志仅用于开发排查，不能影响主请求。
+  }
+}
+
+function writeOpenCodeAiPendingLog({ app, config, requestId, requestBody }) {
+  safeWriteOpenCodeAiLog(app, config, {
+    request_id: requestId,
+    log_title: getOpenCodeAiLogTitle(requestBody),
+    type: 'chat-pending',
+    request_mode: getRequestMode(requestBody),
+    url: getChatCompletionsUrl(config),
+    request: requestBody,
+    status: 'pending',
+    created_at: new Date().toISOString(),
+  });
+}
+
+function recordOpenCodeAiSuccess({ app, config, requestId, requestBody, response, responseData, content, usage, startedAt, stream, attempt }) {
   const normalizedUsage = normalizeTokenUsage(usage);
   recordProxyTextTokenStats(config, usage);
+
+  safeWriteOpenCodeAiLog(app, config, {
+    request_id: requestId,
+    log_title: getOpenCodeAiLogTitle(requestBody),
+    type: 'chat',
+    request_mode: getRequestMode(requestBody),
+    url: getChatCompletionsUrl(config),
+    request: requestBody,
+    response: responseData,
+    content: content || '',
+    created_at: new Date().toISOString(),
+  });
 
   appendProxyDeveloperLog(app, config, {
     request_id: requestId,
@@ -460,8 +565,21 @@ function recordOpenCodeAiSuccess({ app, config, requestId, requestBody, response
   });
 }
 
-function recordOpenCodeAiFailure({ app, config, requestId, requestBody, error, startedAt, attempt }) {
+function recordOpenCodeAiFailure({ app, config, requestId, requestBody, error, responseData, startedAt, attempt }) {
   recordProxyTextTokenStats(config, null);
+
+  const errorMessage = safeErrorMessage(error);
+  safeWriteOpenCodeAiLog(app, config, {
+    request_id: requestId,
+    log_title: getOpenCodeAiLogTitle(requestBody),
+    type: 'chat-error',
+    request_mode: getRequestMode(requestBody),
+    url: getChatCompletionsUrl(config),
+    request: requestBody,
+    response: getAiErrorLogResponse(error, responseData || null),
+    error: getAiErrorLogError(error, errorMessage),
+    created_at: new Date().toISOString(),
+  });
 
   appendProxyDeveloperLog(app, config, {
     request_id: requestId,
@@ -474,7 +592,7 @@ function recordOpenCodeAiFailure({ app, config, requestId, requestBody, error, s
     endpoint_host: normalizeEndpointHost(config.base_url),
     request_hash: createPromptHash(requestBody),
     messages_count: Array.isArray(requestBody.messages) ? requestBody.messages.length : 0,
-    error: safeErrorMessage(error),
+    error: errorMessage,
   });
 }
 
@@ -484,14 +602,16 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
   const isSse = stream || contentType.toLowerCase().includes('text/event-stream');
 
   if (isSse) {
-    const body = createUsageCapturingStream(response.body, (usage) => {
+    const body = createUsageCapturingStream(response.body, (capture) => {
       recordOpenCodeAiSuccess({
         app,
         config,
         requestId,
         requestBody,
         response,
-        usage,
+        responseData: capture.responseData,
+        content: capture.content,
+        usage: capture.usage,
         startedAt,
         stream: true,
         attempt,
@@ -505,13 +625,22 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
   }
 
   const rawText = await response.text();
-  const usage = extractUsageFromJsonText(rawText);
+  let responseData = null;
+  try {
+    responseData = rawText ? JSON.parse(rawText) : null;
+  } catch {
+    responseData = rawText;
+  }
+  const usage = extractUsageFromPayload(responseData) || extractUsageFromJsonText(rawText);
+  const content = responseData && typeof responseData === 'object' ? extractContentFromResponseData(responseData) : '';
   recordOpenCodeAiSuccess({
     app,
     config,
     requestId,
     requestBody,
     response,
+    responseData,
+    content,
     usage,
     startedAt,
     stream: false,
@@ -530,7 +659,7 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
     assertTextModelConfig(config);
 
     const requestBody = normalizeOpenCodeProxyRequestBody(config, openAiBody);
-    const requestId = createRequestId();
+    const requestId = createAiRequestId();
 
     return retryRateLimitedRequest(async ({ attempt }) => {
       const timeout = createTimeoutSignal(signal, UPSTREAM_TIMEOUT_MS);
@@ -548,6 +677,7 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
           request_hash: createPromptHash(requestBody),
           messages_count: Array.isArray(requestBody.messages) ? requestBody.messages.length : 0,
         });
+        writeOpenCodeAiPendingLog({ app, config, requestId, requestBody });
 
         const response = await fetch(`${trimBaseUrl(config.base_url)}/chat/completions`, {
           method: 'POST',

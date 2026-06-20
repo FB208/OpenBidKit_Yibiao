@@ -40,16 +40,6 @@ function outlineDepth(items: OutlineItem[]): number {
   return 1 + Math.max(...items.map((item) => outlineDepth(item.children || [])));
 }
 
-function formatOutlineItemLabel(item: OutlineItem, fallback: string) {
-  return item.id ? `${item.id} ${item.title || fallback}` : item.title || fallback;
-}
-
-function formatMissingOutlineLabels(items: OutlineItem[], limit = 8) {
-  const labels = items.map((item, index) => formatOutlineItemLabel(item, `第 ${index + 1} 个目录`));
-  const visible = labels.slice(0, limit).join('、');
-  return labels.length > limit ? `${visible} 等 ${labels.length} 个目录` : visible;
-}
-
 function validateOutline(outline: OutlineData) {
   if (!outline.outline?.length) {
     throw new Error('目录不能为空');
@@ -58,25 +48,11 @@ function validateOutline(outline: OutlineData) {
   if (outlineDepth(outline.outline) < 3) {
     throw new Error('完整目录至少需要三级结构');
   }
-
-  const shallowItems = outline.outline.filter((item) => outlineDepth([item]) < 3);
-  if (shallowItems.length) {
-    throw new Error(`完整目录至少需要三级结构，以下一级目录缺少三级目录：${formatMissingOutlineLabels(shallowItems)}`);
-  }
 }
 
 function validateChildren(payload: ChildrenResponse) {
   if (!payload.children?.length) {
-    throw new Error('二级目录不能为空');
-  }
-
-  const secondLevelWithoutThird = payload.children.filter((item) => !item.children?.length);
-  if (secondLevelWithoutThird.length) {
-    throw new Error(`二级目录必须包含三级目录，缺失三级目录：${formatMissingOutlineLabels(secondLevelWithoutThird)}`);
-  }
-
-  if (outlineDepth(payload.children) < 2) {
-    throw new Error('二级目录必须包含三级目录');
+    throw new Error('子目录不能为空');
   }
 }
 

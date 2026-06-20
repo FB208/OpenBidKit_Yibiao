@@ -214,7 +214,7 @@ function createTask(type, payload) {
   };
 }
 
-function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService }) {
+function createTaskService({ aiService, agentService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService }) {
   const subscribers = new Set();
   const activeTasks = new Map();
   const activeTaskControls = new Map();
@@ -493,7 +493,7 @@ function createTaskService({ aiService, technicalPlanStore, rejectionCheckStore,
         ? rejectionCheckStore
         : duplicateCheckStore;
     const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId) : aiService;
-    runner({ aiService: runnerAiService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
+    runner({ aiService: runnerAiService, agentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
       const failedTask = updateTask({ status: 'error', error: error.message || '任务执行失败' });
       const nextState = updateWorkspaceState(definition, { [taskField]: failedTask });
       emit(failedTask, buildSnapshot(definition, nextState, failedTask));
