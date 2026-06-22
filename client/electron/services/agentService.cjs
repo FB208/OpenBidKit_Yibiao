@@ -44,7 +44,7 @@ function writeWorkspaceFiles(workspaceDir, files = []) {
 }
 
 function createDefaultAgentPrompt({ task, outputFile }) {
-  return `你是易标投标工具箱中的自主智能体。请只在当前工作目录内工作。
+  return `请只在当前工作目录内工作。
 
 任务：
 ${task}

@@ -1309,7 +1309,7 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
   const logTitle = `AI生图测试-${meta.label}`;
   const requestBody = {
     model: imageConfig.model_name,
-    prompt: 'a simple blue dot on a white background',
+    prompt: '大字报，内容是“易标AI老好了”',
     size: '2048x2048',
     response_format: 'url',
     ...(requestMode === 'stream' ? { stream: true } : {}),
@@ -1419,7 +1419,7 @@ async function testGoogleImageModel(app, config) {
   const timeout = createOperationTimeout(AI_REQUEST_TIMEOUT_MS);
   const requestId = createRequestId();
   const logTitle = 'AI生图测试-Google AI Studio';
-  const requestBody = createGoogleImageRequestBody('Create a simple blue dot on a white background.');
+  const requestBody = createGoogleImageRequestBody('大字报，内容是“易标AI老好了”');
   const url = createGoogleImageUrl(baseUrl, imageConfig.model_name, requestMode);
   let responseData = null;
 

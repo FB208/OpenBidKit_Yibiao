@@ -1,4 +1,3 @@
-const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { getBidAnalysisTasks } = require('./bidAnalysisTask.cjs');
 
 function formatSuggestions(suggestions) {
@@ -66,8 +65,7 @@ ${childrenOutlineParentNumberingRules(parentId)}`;
 }
 
 const DEFAULT_CONTEXT_LENGTH_LIMIT = 400000;
-const KNOWLEDGE_CONTEXT_LIMIT_RATIO = 0.8;
-const MIN_KNOWLEDGE_SEGMENT_CHARS = 1000;
+const KNOWLEDGE_CONTEXT_LIMIT_RATIO = 0.7;
 const MAX_KNOWLEDGE_ADDITIONS = 60;
 const MAX_KNOWLEDGE_UPDATES = 120;
 const FINAL_AGENT_OUTPUT_FILE = 'outline-agent-result.json';
@@ -84,13 +82,12 @@ const RECOVERABLE_ALIGNED_OUTLINE_ERRORS = [
 ];
 const RECOVERABLE_FINAL_REVIEW_ERRORS = ['模型返回的最终目录审核结果格式无效'];
 
-function renderKnowledgeItemsForPrompt(items) {
-  if (!items?.length) return '';
-  return items.map((item, index) => [
+function renderKnowledgeItemForPrompt(item, index) {
+  return [
     `## 知识条目 ${index + 1}`,
     `title: ${String(item.title || '').trim()}`,
     `resume:\n${String(item.resume || '').trim()}`,
-  ].join('\n')).join('\n\n');
+  ].join('\n');
 }
 
 function normalizePositiveInteger(value, fallback) {
@@ -98,22 +95,22 @@ function normalizePositiveInteger(value, fallback) {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
 }
 
+function getMessagesContentLength(messages) {
+  return (messages || []).reduce((sum, message) => sum + String(message?.role || 'user').length + String(message?.content || '').length + 64, 0);
+}
+
 function getKnowledgeSegmentLimit(aiService, sharedMessages) {
   const config = typeof aiService?.getConfig === 'function' ? aiService.getConfig() : {};
   const contextLengthLimit = normalizePositiveInteger(config?.context_length_limit, DEFAULT_CONTEXT_LENGTH_LIMIT);
-  const sharedLength = (sharedMessages || []).reduce((sum, message) => sum + String(message?.content || '').length + 64, 2000);
-  return Math.max(MIN_KNOWLEDGE_SEGMENT_CHARS, Math.floor(contextLengthLimit * KNOWLEDGE_CONTEXT_LIMIT_RATIO) - sharedLength);
-}
-
-function splitOversizedKnowledgeBlock(block, segmentLimit) {
-  const parts = splitUserTextByContextLimit(block, {}, { contextLengthLimit: segmentLimit, limitRatio: 1 });
-  return parts.map((part, index) => `${part}\n\n（该知识条目内容较长，当前为第 ${index + 1}/${parts.length} 部分。）`);
+  const requestBudget = Math.floor(contextLengthLimit * KNOWLEDGE_CONTEXT_LIMIT_RATIO);
+  const fixedMessagesLength = getMessagesContentLength(generateKnowledgePatchMessages(sharedMessages, { index: 999, total: 999, content: '' }));
+  return Math.max(1, requestBudget - fixedMessagesLength);
 }
 
 function buildKnowledgeSegments(knowledgeItems, aiService, sharedMessages) {
   const segmentLimit = getKnowledgeSegmentLimit(aiService, sharedMessages);
   const blocks = (knowledgeItems || [])
-    .map((item, index) => renderKnowledgeItemsForPrompt([item]).replace('## 知识条目 1', `## 知识条目 ${index + 1}`))
+    .map((item, index) => renderKnowledgeItemForPrompt(item, index))
     .filter((block) => block.trim());
   const segments = [];
   let current = [];
@@ -121,17 +118,12 @@ function buildKnowledgeSegments(knowledgeItems, aiService, sharedMessages) {
 
   const flush = () => {
     if (!current.length) return;
-    segments.push(current.join('\n\n'));
+    segments.push({ content: current.join('\n\n'), itemCount: current.length, contentLength: currentLength });
     current = [];
     currentLength = 0;
   };
 
   for (const block of blocks) {
-    if (block.length > segmentLimit) {
-      flush();
-      splitOversizedKnowledgeBlock(block, segmentLimit).forEach((part) => segments.push(part));
-      continue;
-    }
     const nextLength = currentLength + block.length + (current.length ? 2 : 0);
     if (current.length && nextLength > segmentLimit) {
       flush();
@@ -141,7 +133,7 @@ function buildKnowledgeSegments(knowledgeItems, aiService, sharedMessages) {
   }
   flush();
 
-  return segments.map((content, index) => ({ content, index: index + 1, total: segments.length, segmentLimit }));
+  return segments.map((segment, index) => ({ ...segment, index: index + 1, total: segments.length, segmentLimit }));
 }
 
 function formatKnowledgePatchOutlineContext(items) {
@@ -320,7 +312,7 @@ function extractRequirementGroupsMessages({ overview, requirements, oldOutline }
 4. requirement_id 必须唯一，使用 R1、R2、R3 这种格式
 5. description 需要概括该大类关注的核心内容
 6. detail_points 中保留该大类下的关键评分细项，使用简洁短句
-7. 如果提供了原方案目录基础，提取结果用于识别原目录未覆盖的评分项缺口，不要要求重构、删除、重排原目录
+7. 如果提供了“已有目录”，提取结果用于识别原目录未覆盖的评分项缺口，在已有目录上补齐，不要重构、删除、重排原目录
 8. 只返回 JSON，格式必须为 {"groups": [...]}，不要输出任何其他内容
 
 JSON 格式要求：
@@ -437,18 +429,10 @@ function getFinalOutlineConstraintText(context) {
 }
 
 function buildFinalOutlineReviewMessages(context) {
-  const oldOutline = context.originalOutline ? formatOldOutlineForPrompt(context.originalOutline) : context.payload?.oldOutline;
   const messages = [
-    ...buildOutlineSharedContextMessages({ ...context.payload, oldOutline }),
-    { role: 'user', content: `当前目录生成模式：${getFinalOutlineModeLabel(context)}` },
-    { role: 'user', content: getFinalOutlineConstraintText(context) },
+    { role: 'user', content: `项目概述：\n${context.payload?.overview || ''}` },
+    { role: 'user', content: `技术评分要求：\n${context.payload?.requirements || ''}` },
   ];
-  if (context.groups?.length) {
-    messages.push({ role: 'user', content: `技术评分大类 JSON：\n${JSON.stringify({ groups: context.groups }, null, 2)}` });
-  }
-  if (context.originalOutline?.outline?.length) {
-    messages.push({ role: 'user', content: `原方案一级目录清单：\n${formatOriginalTopLevelLockContext(context.originalOutline)}` });
-  }
   messages.push(
     { role: 'user', content: `待最终审核目录 JSON：\n${JSON.stringify(context.outline, null, 2)}` },
     {
@@ -458,8 +442,7 @@ function buildFinalOutlineReviewMessages(context) {
 审核重点：
 1. 是否覆盖技术评分要求中的关键评分项。
 2. 是否存在明显重复、归属错位、遗漏或结构不合理。
-3. 是否满足上述硬性约束。
-4. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议。
+3. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议。
 
 只返回 JSON，格式为 {"passed": true, "suggestions": []}，不要返回完整目录，不要输出解释文字。`,
     },
@@ -489,7 +472,7 @@ function getFinalAgentOutputShape(context) {
 function buildOriginalOutlineExtractionAgentPrompt(context) {
   const outputFile = context.outputFile;
   const reason = String(context.recoveryReason || '').trim();
-  return `你是易标投标工具箱中的目录提取 Agent。请在当前工作目录中读取 original-plan.md，从用户提交的原方案全文中提取旧目录，并把结果写入 ${outputFile}。
+  return `请在当前工作目录中读取 original-plan.md，从用户提交的原方案全文中提取旧目录，并把结果写入 ${outputFile}。
 
 ${reason ? `本次恢复触发原因：${reason}\n` : ''}工作方式：
 1. 只基于 original-plan.md 提取原方案已有目录、章节标题和明显隐含章节，不要改写成新标书目录。
@@ -515,7 +498,7 @@ function buildOutlineAgentRecoveryPrompt(context) {
   const outputFile = context.outputFile;
   const outputShape = getFinalAgentOutputShape(context);
   const reason = String(context.recoveryReason || '').trim();
-  return `你是易标投标工具箱中的目录生成 Agent。请在当前工作目录中读取输入文件，自主修复技术标目录，并把最终结果写入 ${outputFile}。
+  return `请在当前工作目录中读取输入文件，自主修复技术标目录，并把最终结果写入 ${outputFile}。
 
 当前目录生成模式：${getFinalOutlineModeLabel(context)}
 
@@ -855,7 +838,7 @@ function buildExpansionChildPatchMessages(sharedMessages, parentItem, group, sug
 3. parent_id 必须逐字复制这段目录中已有的一级或二级目录 id；不能使用三级目录作为 parent_id。
 4. 新增目录最多到三级；如果 parent_id 是一级目录，可以新增二级目录并可带三级 children；如果 parent_id 是二级目录，只能新增三级目录且不能包含 children。
 5. 优先补齐已有二级目录下缺失的三级响应要点、实施措施、证明材料或验收标准。
-6. 如果这段目录已经充分覆盖评分细项，返回 {"additions":[]}。
+6. 如果这段目录已经充分覆盖当前技术评分大类中的相关细项，返回 {"additions":[]}。
 7. 只返回 JSON，不要输出解释文字。
 
 返回格式：
@@ -2429,7 +2412,7 @@ async function enhanceOutlineWithKnowledgeAdditions(aiService, payload, outline,
   if (knowledgeSegments.length > 1) {
     log(`知识库内容较多，已拆分为 ${knowledgeSegments.length} 段；将先处理第 1 段以优化提示词缓存，再并发处理剩余分段。`, 98);
   }
-  devLog(`知识库补目录：参考知识条目 ${knowledgeItems.length} 条，分段 ${knowledgeSegments.length} 段，每段知识库预算约 ${knowledgeSegments[0]?.segmentLimit || 0} 字符。`);
+  devLog(`知识库补目录：参考知识条目 ${knowledgeItems.length} 条，按完整条目拆分为 ${knowledgeSegments.length} 段，每段知识库预算约 ${knowledgeSegments[0]?.segmentLimit || 0} 字符。`);
 
   try {
     let completedSegments = 0;

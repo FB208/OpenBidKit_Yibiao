@@ -2,11 +2,11 @@ const { buildSectionContextHint } = require('../utils/bidSectionDetector.cjs');
 const { mergeSegmentedAiResults } = require('../utils/segmentedAiResultMerger.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 
-const stableSystemPrompt = `你是专业的招标文件分析助手。请严格基于用户提供的招标文件完成提取和总结。
+const stableSystemPrompt = `你是专业的投标资料分析助手。请严格基于用户提供的上下文完成提取和总结。
 
 通用要求：
-1. 保持信息全面、准确，尽量使用招标文件中的内容，不要自行编造
-2. 如果招标文件没有提及，明确写“没有提及”
+1. 保持信息全面、准确，优先使用用户提供上下文中的内容；除非具体任务明确要求或允许根据经验补充，否则不要自行编造
+2. 如果上下文没有提及，明确写“没有提及”
 3. 只输出最终结果，不输出过程、提示语或客套话
 4. 始终使用简体中文`;
 
@@ -162,15 +162,20 @@ function getBidAnalysisTaskById(taskId) {
   return tasks.find((task) => task.id === taskId);
 }
 
-function buildMessages(fileContent, task, sectionHint) {
+function buildTenderContextMessages(fileContent, sectionHint) {
   const messages = [
     { role: 'system', content: stableSystemPrompt },
   ];
   if (sectionHint) {
     messages.push({ role: 'system', content: sectionHint });
   }
+  messages.push({ role: 'user', content: `以下是完整招标文件。后续任务需要基于这份招标文件完成；如后续消息提供补充上下文，请按具体任务要求综合使用：\n\n${fileContent}` });
+  return messages;
+}
+
+function buildMessages(fileContent, task, sectionHint) {
+  const messages = buildTenderContextMessages(fileContent, sectionHint);
   messages.push(
-    { role: 'user', content: `以下是完整招标文件。后续任务必须仅基于这份招标文件完成：\n\n${fileContent}` },
     { role: 'user', content: task.prompt() },
   );
   return messages;
@@ -343,6 +348,7 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
 
 module.exports = {
   buildInvalidBidAndRejectionItemsPrompt,
+  buildTenderContextMessages,
   getBidAnalysisTaskById,
   getBidAnalysisTasks,
   runInvalidBidAndRejectionItemsExtraction,
