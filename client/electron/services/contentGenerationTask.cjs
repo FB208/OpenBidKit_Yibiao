@@ -24,6 +24,8 @@ const ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS = 2;
 const TABLE_CLEANUP_CONTEXT_CHARS = 600;
 const TABLE_CLEANUP_BATCH_CHAR_LIMIT = 30000;
 const CONTENT_GENERATION_PAUSED = 'CONTENT_GENERATION_PAUSED';
+const CONTENT_PLAN_VERSION = 2;
+const PROMPT_CACHE_WARMUP_DELAY_MS = 5000;
 const TABLE_REQUIREMENT_LABELS = {
   none: '不要',
   light: '少量',
@@ -47,6 +49,10 @@ function createContentGenerationPausedError() {
   const error = new Error(CONTENT_GENERATION_PAUSED);
   error.code = CONTENT_GENERATION_PAUSED;
   return error;
+}
+
+function waitForPromptCacheWarmup() {
+  return new Promise((resolve) => setTimeout(resolve, PROMPT_CACHE_WARMUP_DELAY_MS));
 }
 
 function singleLine(value) {
@@ -102,6 +108,13 @@ function formatBidAnalysisFactsForPrompt(storedPlan) {
     formatBidAnalysisFactForPrompt(storedPlan, 'partAInfo', '甲方信息'),
     formatBidAnalysisFactForPrompt(storedPlan, 'deliveryAndServiceRequirements', '交货和服务要求'),
   ].filter(Boolean).join('\n\n');
+}
+
+function formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText) {
+  return [
+    String(projectOverview || '').trim() ? `## 项目概述\n${String(projectOverview || '').trim()}` : '',
+    String(bidAnalysisFactsText || '').trim(),
+  ].filter(Boolean).join('\n\n') || '未提供';
 }
 
 function normalizeFactTitles(value, allowedFactTitles) {
@@ -411,6 +424,14 @@ function normalizeTableRequirement(value) {
   return 'heavy';
 }
 
+function normalizeConsistencyRepairMode(value) {
+  return String(value || '').trim() === 'normal' ? 'normal' : 'agent';
+}
+
+function normalizeOriginalPlanCoverageRepairMode(value) {
+  return String(value || '').trim() === 'normal' ? 'normal' : 'agent';
+}
+
 function normalizeMinimumWords(value) {
   const words = Number(value);
   return Math.max(0, Number.isFinite(words) ? Math.round(words) : 0);
@@ -509,6 +530,7 @@ function normalizeOriginalMaterial(value) {
 
 function normalizeContentPlan(value, allowedKnowledgeItemIds, allowedFactTitles) {
   const source = value?.plan && typeof value.plan === 'object' ? value.plan : value || {};
+  const writing = source.writing && typeof source.writing === 'object' && !Array.isArray(source.writing) ? source.writing : {};
   const knowledgeSource = source.knowledge;
   const knowledge = knowledgeSource && typeof knowledgeSource === 'object' && !Array.isArray(knowledgeSource) ? knowledgeSource : {};
   const rawKnowledgeItemIds = Array.isArray(knowledgeSource)
@@ -532,6 +554,7 @@ function normalizeContentPlan(value, allowedKnowledgeItemIds, allowedFactTitles)
   const imageNeeded = Boolean(image.needed) && Boolean(imageStyle && imageTitle && imagePrompt);
 
   return {
+    writing_focus: singleLine(source.writing_focus || source.writingFocus || writing.focus || writing.writing_focus || writing.writingFocus),
     knowledge: {
       item_ids: normalizeKnowledgeItemIds(rawKnowledgeItemIds, allowedKnowledgeItemIds),
     },
@@ -568,6 +591,7 @@ function normalizeIllustrationType(value) {
 function createStoredContentPlan(plan, illustrationType, tableRequirement) {
   const normalizedTableRequirement = tableRequirement ? normalizeTableRequirement(tableRequirement) : '';
   return {
+    plan_version: CONTENT_PLAN_VERSION,
     plan: normalizeContentPlan(plan),
     illustration_type: normalizeIllustrationType(illustrationType),
     ...(normalizedTableRequirement ? { table_requirement: normalizedTableRequirement } : {}),
@@ -580,15 +604,23 @@ function normalizeStoredContentPlan(value) {
     return null;
   }
 
+  if (Number(value.plan_version ?? value.planVersion ?? 0) !== CONTENT_PLAN_VERSION) {
+    return null;
+  }
+
   if (!hasFactSelection(value)) {
     return null;
   }
 
   const plan = normalizeContentPlan(value.plan || value.contentPlan || value);
+  if (!plan.writing_focus) {
+    return null;
+  }
   const tableRequirement = value.table_requirement || value.tableRequirement
     ? normalizeTableRequirement(value.table_requirement || value.tableRequirement)
     : '';
   return {
+    plan_version: CONTENT_PLAN_VERSION,
     plan,
     illustration_type: normalizeIllustrationType(value.illustration_type || value.illustrationType),
     ...(tableRequirement ? { table_requirement: tableRequirement } : {}),
@@ -640,6 +672,9 @@ function validateContentPlan(plan) {
   if (!plan.facts || !Array.isArray(plan.facts.titles)) {
     throw new Error('正文编排决策缺少 facts.titles');
   }
+  if (typeof plan.writing_focus !== 'string' || !plan.writing_focus.trim()) {
+    throw new Error('正文编排决策缺少 writing_focus');
+  }
   if (!plan.table || typeof plan.table.needed !== 'boolean') {
     throw new Error('正文编排决策缺少 table.needed');
   }
@@ -672,6 +707,7 @@ function validateMermaidRepairResult(result) {
 
 function formatContentPlanForPrompt(plan) {
   const lines = [
+    `写作重点：${plan.writing_focus || '围绕当前章节标题和描述展开'}`,
     `事实变量：${plan.facts?.titles?.length ? plan.facts.titles.join('；') : '无'}`,
     `表格：${plan.table.needed ? `需要，目的：${plan.table.purpose || '提升正文表达清晰度'}` : '不需要，本小节不要输出 Markdown 表格'}`,
     `AI 生图：${plan.image.needed ? `需要，风格：${plan.image.style}，标题：${plan.image.title}` : '不需要'}`,
@@ -865,7 +901,8 @@ function buildChapterContentPlanMessages({ chapter, parentChapters, siblingChapt
 12. realistic_photo 表示专业实景示意风，适合设备、场地、机房、施工现场、检测工具、运维操作等真实场景表现。
 13. knowledge.item_ids 只能从参考知识库轻量条目的 id 中选择；可以多选，可以为空数组；不要编造 id，不要输出 reason。
 14. facts.titles 只能从全局事实变量标题清单中选择；请选择编写本章节正文时会用到的变量组标题，可以多选，可以为空数组；不要编造标题，不要输出具体变量内容。
-15. 编排判断必须结合 Step02 关键解析结果和全局事实变量标题，不要规划会造成时间、地点、人员、设备、标准或服务承诺前后不一致的表达。`,
+15. writing_focus 用 1-2 句话概括本节正文重点，只围绕当前章节标题和描述，不展开成正文，不编造具体承诺、参数、周期、品牌或型号。
+16. 编排判断必须结合招标文件关键信息和全局事实变量标题，不要规划会造成时间、地点、人员、设备、标准或服务承诺前后不一致的表达。`,
     },
   ];
 
@@ -875,12 +912,7 @@ function buildChapterContentPlanMessages({ chapter, parentChapters, siblingChapt
 ${renderKnowledgeItemsForPrompt(knowledgeItems)}`,
   });
 
-  if (String(projectOverview || '').trim()) {
-    messages.push({ role: 'user', content: `项目概述信息：\n${projectOverview}` });
-  }
-  if (String(bidAnalysisFactsText || '').trim()) {
-    messages.push({ role: 'user', content: `Step02 关键解析结果（用于判断正文需要引用哪些事实）：\n${bidAnalysisFactsText}` });
-  }
+  messages.push({ role: 'user', content: `招标文件关键信息（用于判断正文需要引用哪些事实）：\n${formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText)}` });
   if (String(globalFactTitlesText || '').trim()) {
     messages.push({ role: 'user', content: `Step04 全局事实变量标题清单（编排时只能选择标题，不要输出具体变量内容）：\n${globalFactTitlesText}` });
   }
@@ -918,6 +950,7 @@ ${renderKnowledgeItemsForPrompt(knowledgeItems)}`,
 
 JSON 格式：
 {
+  "writing_focus": "1-2 句话说明本节正文重点展开什么，只聚焦当前章节，不写成正文",
   "knowledge": {
     "item_ids": ["从参考知识库轻量条目中选择的 id；没有合适条目时返回空数组"]
   },
@@ -955,7 +988,7 @@ function formatKnowledgeContentsForPrompt(contents) {
     .join('\n\n');
 }
 
-function buildChapterContentMessages({ chapter, parentChapters, siblingChapters, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents }) {
+function buildChapterContentMessages({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, preSectionInstruction }) {
   const chapterId = chapter.id || 'unknown';
   const chapterTitle = chapter.title || '未命名章节';
   const chapterDescription = chapter.description || '';
@@ -970,7 +1003,7 @@ function buildChapterContentMessages({ chapter, parentChapters, siblingChapters,
 2. 这是技术方案，不是宣传报告，注意朴实无华，不要假大空。
 3. 语言要正式、规范，符合标书写作要求，但不要使用奇怪的连接词，不要让人觉得内容像是 AI 生成的。
 4. 内容要详细具体，避免空泛的描述。
-5. 注意避免与同级章节内容重复，保持内容的独特性和互补性。
+5. 围绕当前章节标题、描述和正文编排重点展开，保持内容聚焦。
 6. ${tableAllowed ? '可以使用 Markdown 段落、列表和表格；表格必须服务于内容表达，不要为了形式硬插。' : '只能使用 Markdown 段落、普通列表和加粗引导语，严禁输出 Markdown 表格或 HTML 表格。'}
 7. ${tableAllowed ? '正文只生成文字、列表、表格等内容，配图由系统另行处理。' : '正文只生成文字和普通列表，配图由系统另行处理。'}
 8. 严禁输出 Mermaid、PlantUML、Graphviz、flowchart、graph、sequenceDiagram 等图表代码块、mermaid.ink 链接或图片 Markdown；配图由系统另行处理。
@@ -978,12 +1011,16 @@ function buildChapterContentMessages({ chapter, parentChapters, siblingChapters,
 10. 严禁使用 Markdown 标题语法（#、##、###、####、#####、######），也不要生成与当前章节同级或下级的伪目录标题。
 11. 如需在正文中分层表达，只能使用普通段落、列表、表格或加粗引导语，例如 **实施要点：**。
 12. 直接返回章节内容，不生成标题，不要任何额外说明。
-13. 如果本章节需要使用的全局事实变量中包含相关内容，必须优先使用变量值，不得前后矛盾。`,
+13. 如果本章节需要使用的全局事实变量中包含相关内容，必须优先使用变量值，不得前后矛盾。
+14. 仅使用本章节提供的全局事实变量；未提供时不要主动编造具体人员、周期、质保、品牌、型号等会影响全文一致性的承诺。`,
     },
   ];
 
   if (String(projectOverview || '').trim()) {
     messages.push({ role: 'user', content: `项目概述信息：\n${projectOverview}` });
+  }
+  if (String(preSectionInstruction || '').trim()) {
+    messages.push({ role: 'user', content: String(preSectionInstruction || '').trim() });
   }
   appendSelectedFactsMessage(messages, selectedFactsText);
 
@@ -996,27 +1033,6 @@ function buildChapterContentMessages({ chapter, parentChapters, siblingChapters,
       role: 'user',
       content: `参考正文素材：\n${formatKnowledgeContentsForPrompt(knowledgeContents)}`,
     });
-  }
-
-  if (parentChapters?.length) {
-    const parentLines = ['上级章节信息：'];
-    for (const parent of parentChapters) {
-      parentLines.push(`- ${parent.id || 'unknown'} ${parent.title || '未命名章节'}\n  ${parent.description || ''}`);
-    }
-    messages.push({ role: 'user', content: parentLines.join('\n') });
-  }
-
-  if (siblingChapters?.length) {
-    const siblingLines = ['同级章节信息（请避免内容重复）：'];
-    for (const sibling of siblingChapters) {
-      if (sibling.id === chapterId) {
-        continue;
-      }
-      siblingLines.push(`- ${sibling.id || 'unknown'} ${sibling.title || '未命名章节'}\n  ${sibling.description || ''}`);
-    }
-    if (siblingLines.length > 1) {
-      messages.push({ role: 'user', content: siblingLines.join('\n') });
-    }
   }
 
   if (String(regenerateRequirement || '').trim()) {
@@ -1042,37 +1058,42 @@ function buildChapterContentMessages({ chapter, parentChapters, siblingChapters,
 章节标题: ${chapterTitle}
 章节描述: ${chapterDescription}
 
-请根据项目概述信息和上述章节层级关系，生成详细的专业内容，确保与上级章节的内容逻辑相承，同时避免与同级章节内容重复，突出本章节的独特性和技术方案优势。
+请结合项目概述信息、本章节全局事实变量、参考正文素材和正文编排决策，围绕当前章节标题、描述和写作重点生成详细的专业内容。
 直接返回编写的正文内容，不要输出标题、Markdown 标题、解释、总结等任何其他内容`,
   });
 
   return messages;
 }
 
-function buildRestoredChapterContentMessages({ chapter, parentChapters, siblingChapters, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent }) {
+function buildRestoredChapterContentMessages({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent }) {
   const messages = buildChapterContentMessages({
     chapter,
-    parentChapters,
-    siblingChapters,
     projectOverview,
     selectedFactsText,
     regenerateRequirement,
     contentPlan,
     knowledgeContents,
-  });
-  messages.splice(1, 0, {
-    role: 'user',
-    content: `当前章节已经从用户原方案中还原出正文底稿。该底稿是用户已经写好的真实技术方案内容，必须作为本章节的基础保留。
+    preSectionInstruction: `当前章节已经从用户原方案中还原出正文底稿。该底稿是用户已经写好的真实技术方案内容，必须作为本章节的基础保留。
 
 处理要求：
 1. 首要遵从正文底稿，不要从零重写成另一套方案。
 2. 必须保留底稿中的实质信息、技术路线、服务承诺、设备参数、人员安排、周期、验收、售后和实施方法。
 3. 可以调整语序、合并重复表达、提升专业性、补充细节、增加过渡和说明，让正文更完整、更适合投标文件。
 4. 不要提到“原方案”“历史文档”“用户原文”或“底稿”。
-5. 输出当前章节完整正文，不输出标题。
-
-已还原正文底稿：
+5. 输出当前章节完整正文，不输出标题。`,
+  });
+  const finalMessage = messages.pop();
+  if (finalMessage) {
+    messages.push(finalMessage);
+  }
+  messages.push({
+    role: 'user',
+    content: `已还原正文底稿：
 ${String(restoredContent || '').trim()}`,
+  });
+  messages.push({
+    role: 'user',
+    content: '请基于已还原正文底稿输出当前章节完整正文。必须保留底稿中的实质内容，可以优化扩写，但不要从零重写，不要输出标题或解释。',
   });
   return messages;
 }
@@ -1195,8 +1216,7 @@ function buildOriginalMaterialRestoreMessages({ targets, originalSegments, proje
   ]
 }`,
     },
-    { role: 'user', content: `项目概述：\n${projectOverview || '未提供'}` },
-    { role: 'user', content: `Step02 关键解析结果：\n${bidAnalysisFactsText || '未提供'}` },
+    { role: 'user', content: `招标文件关键信息：\n${formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText)}` },
     { role: 'user', content: `Step04 全局事实变量标题清单：\n${globalFactTitlesText || '未提供'}` },
     { role: 'user', content: `当前可还原叶子节点：\n${formatRestoreTargetsForPrompt(targets) || '无'}` },
     { role: 'user', content: `原方案段落：\n${formatOriginalSegmentsForPrompt(originalSegments)}` },
@@ -1544,8 +1564,8 @@ function buildContentExpansionMessages({ outlineData, context, projectOverview, 
 }`,
     },
     { role: 'user', content: `项目概述：\n${projectOverview || '未提供'}` },
-    ...(String(selectedFactsText || '').trim() ? [{ role: 'user', content: `本章节需要使用的全局事实变量（扩写涉及这些内容时必须参考）：\n${selectedFactsText}` }] : []),
     { role: 'user', content: `完整目录：\n${formatOutlineForPrompt(outlineData.outline || [])}` },
+    ...(String(selectedFactsText || '').trim() ? [{ role: 'user', content: `本章节需要使用的全局事实变量（扩写涉及这些内容时必须参考）：\n${selectedFactsText}` }] : []),
     { role: 'user', content: `当前章节路径：${chapterPath}\n当前章节描述：${item.description || ''}` },
     { role: 'user', content: `同级章节（扩写时避免重复）：\n${siblingLines || '无'}` },
     { role: 'user', content: `当前章节原正文：\n${currentContent}` },
@@ -1623,6 +1643,60 @@ function formatContentWithLineNumbers(content) {
   return lines
     .map((line, index) => `[${String(index + 1).padStart(width, '0')}] ${line}`)
     .join('\n');
+}
+
+function escapeSectionAttribute(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function parseAgentSectionMarkdown(markdown) {
+  const sections = new Map();
+  const lines = normalizeNewlines(markdown).split('\n');
+  let currentId = '';
+  let buffer = [];
+
+  for (const line of lines) {
+    const startMatch = /^\s*<!--\s*yibiao-section-start\s+id="([^"]+)"[^>]*-->\s*$/.exec(line);
+    if (startMatch) {
+      if (currentId) {
+        throw new Error(`Agent 输出的小节标记嵌套：${currentId} 内出现 ${startMatch[1]}`);
+      }
+      currentId = String(startMatch[1] || '').trim();
+      buffer = [];
+      continue;
+    }
+
+    const endMatch = /^\s*<!--\s*yibiao-section-end\s+id="([^"]+)"\s*-->\s*$/.exec(line);
+    if (endMatch) {
+      const endId = String(endMatch[1] || '').trim();
+      if (!currentId) {
+        throw new Error(`Agent 输出存在未配对的小节结束标记：${endId}`);
+      }
+      if (endId !== currentId) {
+        throw new Error(`Agent 输出小节标记不匹配：${currentId} / ${endId}`);
+      }
+      if (sections.has(currentId)) {
+        throw new Error(`Agent 输出重复小节：${currentId}`);
+      }
+      sections.set(currentId, buffer.join('\n').trim());
+      currentId = '';
+      buffer = [];
+      continue;
+    }
+
+    if (currentId) {
+      buffer.push(line);
+    }
+  }
+
+  if (currentId) {
+    throw new Error(`Agent 输出小节未闭合：${currentId}`);
+  }
+  return sections;
 }
 
 function findExactOccurrences(content, search) {
@@ -1794,9 +1868,9 @@ function buildConsistencyAuditMessages({ group, globalFactsText, bidAnalysisFact
   ]
 }`,
     },
-    { role: 'user', content: `允许返回的目录编号清单：\n${JSON.stringify(allowedIds, null, 2)}` },
     { role: 'user', content: `Step04 全局事实变量：\n${globalFactsText || '未提供'}` },
     { role: 'user', content: `Step02 关键解析结果（项目信息、甲方信息、交货和服务要求）：\n${bidAnalysisFactsText || '未提供'}` },
+    { role: 'user', content: `允许返回的目录编号清单：\n${JSON.stringify(allowedIds, null, 2)}` },
     { role: 'user', content: `待审计正文分组：\n${formatConsistencyAuditGroupContent(group)}` },
   ];
 }
@@ -1895,7 +1969,7 @@ function buildConsistencyRepairMessages({ context, conflicts, globalFactsText, b
 {
   "patches": [
     {
-      "section_id": "${item.id || 'unknown'}",
+      "section_id": "当前小节编号",
       "start_line": 2,
       "end_line": 4,
       "old_text": "当前正文中逐字存在且唯一的原文块，不包含行号",
@@ -1905,12 +1979,12 @@ function buildConsistencyRepairMessages({ context, conflicts, globalFactsText, b
   ]
 }`,
     },
-    { role: 'user', content: `当前小节：${item.id || 'unknown'} ${item.title || '未命名章节'}\n路径：${formatChapterPath(context)}\n描述：${item.description || ''}` },
-    { role: 'user', content: `审计发现的冲突：\n${JSON.stringify(conflicts || [], null, 2)}` },
     { role: 'user', content: `Step04 全局事实变量：\n${globalFactsText || '未提供'}` },
     { role: 'user', content: `Step02 关键解析结果（项目信息、甲方信息、交货和服务要求）：\n${bidAnalysisFactsText || '未提供'}` },
+    { role: 'user', content: `当前小节：${item.id || 'unknown'} ${item.title || '未命名章节'}\n路径：${formatChapterPath(context)}\n描述：${item.description || ''}` },
+    { role: 'user', content: `审计发现的冲突：\n${JSON.stringify(conflicts || [], null, 2)}` },
     { role: 'user', content: `当前小节正文（带行号；patch 的 old_text/new_text 不要包含这些行号）：\n${formatContentWithLineNumbers(currentContent)}` },
-    { role: 'user', content: `修复尝试次数：${attempt}/${CONSISTENCY_REPAIR_MAX_ATTEMPTS}${failureBlock}\n请只返回 JSON。` },
+    { role: 'user', content: `patches[*].section_id 必须是 ${item.id || 'unknown'}。修复尝试次数：${attempt}/${CONSISTENCY_REPAIR_MAX_ATTEMPTS}${failureBlock}\n请只返回 JSON。` },
   ];
 }
 
@@ -1926,7 +2000,8 @@ function normalizeConsistencyRepairResponse(value, expectedSectionId) {
           ? [source]
           : [];
   const patches = rawPatches.map((patch) => {
-    const sectionId = singleLine(patch?.section_id || patch?.sectionId || patch?.id || expectedSectionId);
+    const rawSectionId = singleLine(patch?.section_id || patch?.sectionId || patch?.id || '');
+    const sectionId = rawSectionId && rawSectionId !== '当前小节编号' ? rawSectionId : expectedSectionId;
     return {
       section_id: sectionId,
       start_line: Number(patch?.start_line ?? patch?.startLine ?? patch?.line_start ?? patch?.lineStart ?? 0) || 0,
@@ -2026,7 +2101,7 @@ function buildOriginalCoverageAuditMessages({ target }) {
   "items": [
     {
       "source_id": "P001",
-      "node_id": "${target.item.id || 'unknown'}",
+      "node_id": "当前小节编号",
       "status": "covered",
       "missing_points": [],
       "repair_suggestion": ""
@@ -2073,7 +2148,8 @@ function normalizeOriginalCoverageAuditResponse(value, context = {}) {
       issues.push(`items[${index}].source_id 重复：${sourceId}`);
       return;
     }
-    const nodeId = singleLine(item.node_id || item.nodeId || item.section_id || item.sectionId || expectedNodeId);
+    const rawNodeId = singleLine(item.node_id || item.nodeId || item.section_id || item.sectionId || '');
+    const nodeId = rawNodeId && rawNodeId !== '当前小节编号' ? rawNodeId : expectedNodeId;
     if (!nodeId || (expectedNodeId && nodeId !== expectedNodeId)) {
       issues.push(`items[${index}].node_id 无效：${nodeId || '空'}`);
       return;
@@ -2941,7 +3017,7 @@ function withSection(sections, item, partial) {
   };
 }
 
-async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }) {
+async function runContentGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }) {
   const resume = Boolean(payload.resume);
   const storedPlan = resume ? (previousState || {}) : (workspaceStore.loadTechnicalPlan() || {});
   let outlineData = storedPlan.outlineData;
@@ -2985,8 +3061,12 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     throw new Error('没有可继续的已暂停正文生成任务');
   }
   let contentRuntime = normalizeContentGenerationRuntime(resume ? storedPlan.contentGenerationRuntime : {});
-  const regenerate = !resume && Boolean(payload.regenerate);
+  const retryContentCorrection = !resume && Boolean(payload.retryContentCorrection ?? payload.retry_content_correction);
+  const regenerate = !resume && !retryContentCorrection && Boolean(payload.regenerate);
   const targetItemId = resume ? contentRuntime.target_item_id : String(payload.targetItemId || '').trim();
+  if (retryContentCorrection && targetItemId) {
+    throw new Error('单小节重新生成不支持重试内容矫正');
+  }
   const fullRegenerate = regenerate && !targetItemId;
   if (fullRegenerate) {
     outlineData = { ...outlineData, outline: clearOutlineContent(outlineData.outline) };
@@ -3012,7 +3092,13 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   const aiImagesEnabled = Boolean(generationOptions.useAiImages ?? generationOptions.use_ai_images ?? imageAvailability.available) && imageAvailability.available;
   const mermaidImagesEnabled = Boolean(generationOptions.useMermaidImages ?? generationOptions.use_mermaid_images ?? Boolean(targetItemId));
   const enableConsistencyAudit = Boolean(generationOptions.enableConsistencyAudit ?? generationOptions.enable_consistency_audit ?? true);
+  const requestedConsistencyRepairMode = normalizeConsistencyRepairMode(generationOptions.consistencyRepairMode ?? generationOptions.consistency_repair_mode);
+  const consistencyRepairMode = targetItemId ? 'normal' : requestedConsistencyRepairMode;
   const enableOriginalPlanCoverageAudit = isExpansionWorkflow && Boolean(generationOptions.enableOriginalPlanCoverageAudit ?? generationOptions.enable_original_plan_coverage_audit ?? false);
+  const requestedOriginalPlanCoverageRepairMode = isExpansionWorkflow
+    ? normalizeOriginalPlanCoverageRepairMode(generationOptions.originalPlanCoverageRepairMode ?? generationOptions.original_plan_coverage_repair_mode)
+    : 'agent';
+  const originalPlanCoverageRepairMode = isExpansionWorkflow && !targetItemId ? requestedOriginalPlanCoverageRepairMode : 'normal';
   const requestedMaxImages = Number(generationOptions.maxAiImages ?? generationOptions.max_ai_images);
   const configuredMaxAiImages = aiImagesEnabled
     ? Math.max(0, Math.min(Number.isFinite(requestedMaxImages) ? Math.round(requestedMaxImages) : 6, targetItemId ? 1 : leaves.length))
@@ -3039,6 +3125,12 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     audit_fix_total: 0,
     audit_fix_completed: 0,
     audit_fix_failed: 0,
+    audit_repair_mode: enableConsistencyAudit ? consistencyRepairMode : '',
+    audit_agent_step_total: 0,
+    audit_agent_step_completed: 0,
+    audit_agent_step_label: '',
+    audit_agent_changed_sections: 0,
+    audit_agent_failed_sections: 0,
     table_cleanup_total: 0,
     table_cleanup_completed: 0,
     table_cleanup_rewritten: 0,
@@ -3077,6 +3169,20 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     }
   }
 
+  if (retryContentCorrection) {
+    const successfulIds = leaves
+      .filter(({ item }) => {
+        const section = sections[item.id] || {};
+        return section.status === 'success';
+      })
+      .map(({ item }) => item.id);
+    if (successfulIds.length !== leaves.length) {
+      throw new Error('只有正文全部生成成功后，才能重试内容矫正');
+    }
+    successfulIds.forEach((itemId) => touchedItemIds.add(itemId));
+    tasksToRun = [];
+  }
+
   const retryItemIds = new Set(tasksToRun
     .filter(({ item }) => sections[item.id]?.status === 'error')
     .map(({ item }) => item.id));
@@ -3111,7 +3217,11 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   }
 
   refreshRunLimits(tasksToRun);
-  let logs = [resume ? `继续已暂停的正文生成任务，共 ${leaves.length} 个小节。` : `准备生成正文，共 ${leaves.length} 个小节。`];
+  let logs = [retryContentCorrection
+    ? `准备重试内容矫正，共 ${leaves.length} 个已生成小节。`
+    : resume
+      ? `继续已暂停的正文生成任务，共 ${leaves.length} 个小节。`
+      : `准备生成正文，共 ${leaves.length} 个小节。`];
   if (targetItemId) {
     logs = [`准备重新生成正文小节：${targetItemId}。`];
   }
@@ -3131,11 +3241,15 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     ? 'Mermaid 图片已启用，适合简单图示的小节会优先使用 Mermaid 图。'
     : 'Mermaid 图片未启用。'];
   logs = [...logs, enableConsistencyAudit
-    ? '全文一致性审计已启用，正文扩写完成后将在配图前检查并修复事实冲突。'
+    ? `全文一致性审计已启用，正文扩写完成后将在配图前使用${consistencyRepairMode === 'agent' ? ' Agent 修复' : '普通修复'}检查并修复事实冲突。`
     : '全文一致性审计未启用，本次正文生成将直接进入配图阶段。'];
   if (isExpansionWorkflow) {
     logs = [...logs, `已有方案扩写模式：已读取原方案并拆分为 ${originalPlanSegments.length} 个原文段。`];
-    logs = [...logs, enableOriginalPlanCoverageAudit ? '原方案覆盖审计已启用，将在字数扩充后检查原文保留情况。' : '原方案覆盖审计未启用。'];
+    logs = [...logs, enableOriginalPlanCoverageAudit
+      ? targetItemId
+        ? '原方案覆盖审计已启用，本次将使用普通模式检查并修复当前小节的原文保留情况。'
+        : `原方案覆盖审计已启用，本次将使用${originalPlanCoverageRepairMode === 'agent' ? ' Agent' : '普通模式'}检查并补回原文保留情况。`
+      : '原方案覆盖审计未启用。'];
   }
 
   const developerLogger = createContentDeveloperLogger(aiService, {
@@ -3146,6 +3260,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       resume,
       regenerate,
       full_regenerate: fullRegenerate,
+      retry_content_correction: retryContentCorrection,
       leaf_count: leaves.length,
       task_count: tasksToRun.length,
       text_concurrency_limit: contentConcurrency,
@@ -3154,7 +3269,11 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       ai_images_enabled: aiImagesEnabled,
       mermaid_images_enabled: mermaidImagesEnabled,
       enable_consistency_audit: enableConsistencyAudit,
+      requested_consistency_repair_mode: requestedConsistencyRepairMode,
+      consistency_repair_mode: consistencyRepairMode,
       enable_original_plan_coverage_audit: enableOriginalPlanCoverageAudit,
+      requested_original_plan_coverage_repair_mode: requestedOriginalPlanCoverageRepairMode,
+      original_plan_coverage_repair_mode: originalPlanCoverageRepairMode,
       original_plan_segment_count: originalPlanSegments.length,
       generation_options: generationOptions,
     },
@@ -3168,6 +3287,99 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       developerLogger.write(event, payload);
     } catch {
       // 调试日志不能影响正文生成主流程。
+    }
+  }
+
+  function agentErrorDiagnostics(error) {
+    return {
+      error: error?.message || String(error || '未知错误'),
+      name: error?.name || '',
+      cause: error?.cause?.message || error?.cause?.code || error?.openCodeCause || '',
+      stack: error?.stack || '',
+      agent_task_id: error?.agentTaskId || '',
+      agent_title: error?.agentTitle || '',
+      agent_workspace_dir: error?.agentWorkspaceDir || '',
+      agent_runtime_root: error?.agentRuntimeRoot || '',
+      agent_output_file: error?.agentOutputFile || '',
+      agent_output_path: error?.agentOutputPath || '',
+      agent_partial_output_chars: error?.agentPartialOutputChars || String(error?.agentPartialOutput || '').length,
+      opencode_route: error?.openCodeRoute || '',
+      opencode_method: error?.openCodeMethod || '',
+      opencode_status: error?.openCodeStatus || 0,
+      opencode_duration_ms: error?.openCodeDurationMs || 0,
+      opencode_cause: error?.openCodeCause || '',
+      opencode_request_log: Array.isArray(error?.openCodeRequestLog) ? error.openCodeRequestLog : [],
+      opencode_stderr_tail: error?.openCodeStderrTail || '',
+    };
+  }
+
+  async function runAgentTaskWithRecoveredOutput(payload, eventPrefix) {
+    function normalizeAgentFilePath(value) {
+      return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/^(\.\/)+/, '').toLowerCase();
+    }
+
+    function findSeededOutputContent() {
+      const outputPath = normalizeAgentFilePath(payload.output_file || '');
+      if (!outputPath) {
+        return null;
+      }
+      const seededOutput = (Array.isArray(payload.files) ? payload.files : [])
+        .find((file) => normalizeAgentFilePath(file?.path) === outputPath);
+      return seededOutput ? String(seededOutput.content || '') : null;
+    }
+
+    try {
+      const result = await agentService.runTask(payload);
+      writeDeveloperLog(`${eventPrefix}.opencode.done`, {
+        agent_task_id: result?.task_id || '',
+        agent_session_id: result?.session_id || '',
+        agent_workspace_dir: result?.workspace_dir || '',
+        agent_runtime_root: result?.runtime_root || '',
+        output_file: result?.output_file || '',
+        output_metrics: textMetrics(result?.output_content || ''),
+        opencode_request_log: result?.opencode_request_log || [],
+        opencode_stderr_tail: result?.opencode_stderr_tail || '',
+      });
+      return result;
+    } catch (error) {
+      if (isPauseRequested() || isPauseLikeError(error)) {
+        throw error;
+      }
+      const diagnostics = agentErrorDiagnostics(error);
+      writeDeveloperLog(`${eventPrefix}.opencode.error`, diagnostics);
+      const recoveredOutput = String(error?.agentPartialOutput || '').trim();
+      if (!recoveredOutput) {
+        throw error;
+      }
+      const seededOutputContent = findSeededOutputContent();
+      if (seededOutputContent !== null
+        && normalizeNewlines(recoveredOutput).trim() === normalizeNewlines(seededOutputContent).trim()) {
+        writeDeveloperLog(`${eventPrefix}.output.recovered_rejected`, {
+          ...diagnostics,
+          reason: 'same_as_seeded_output',
+          output_metrics: textMetrics(recoveredOutput),
+        });
+        throw error;
+      }
+      writeDeveloperLog(`${eventPrefix}.output.recovered`, {
+        ...diagnostics,
+        output_metrics: textMetrics(recoveredOutput),
+      });
+      return {
+        success: true,
+        recovered: true,
+        task_id: error?.agentTaskId || '',
+        title: error?.agentTitle || payload.title || 'Agent 任务',
+        workspace_dir: error?.agentWorkspaceDir || '',
+        runtime_root: error?.agentRuntimeRoot || '',
+        output_file: error?.agentOutputFile || payload.output_file || '',
+        output_content: recoveredOutput,
+        assistant_text: '',
+        diff: [],
+        session_id: '',
+        opencode_request_log: diagnostics.opencode_request_log,
+        opencode_stderr_tail: diagnostics.opencode_stderr_tail,
+      };
     }
   }
 
@@ -3252,6 +3464,13 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     throw createContentGenerationPausedError();
   }
 
+  async function waitForPromptCacheWarmupBeforeFanout(message) {
+    logs = [...logs, message];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    await waitForPromptCacheWarmup();
+    pauseIfRequested('正文生成已在提示词缓存预热等待后暂停，可导出当前已完成内容，稍后继续。');
+  }
+
   function rememberTouchedItem(itemId) {
     if (itemId) {
       touchedItemIds.add(itemId);
@@ -3280,7 +3499,9 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   });
 
   if (!tasksToRun.length) {
-    logs = [...logs, '正文已全部生成，将检查最低字数要求。'];
+    logs = [...logs, retryContentCorrection
+      ? '正文已全部生成，将直接重试内容矫正和后续处理。'
+      : '正文已全部生成，将检查最低字数要求。'];
   }
 
   function saveSection(item, partial, contentForOutline, taskPartial = {}) {
@@ -3594,7 +3815,21 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       : `继续整体编排决策，共 ${tasksToRun.length} 个小节，复用 ${tasksToRun.length - planningTargets.length} 个历史编排。`];
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
 
-    await runItemsWithWorkerPool(planningTargets, contentConcurrency, planOne, isPauseRequested);
+    if (planningTargets.length) {
+      const [warmupTarget, ...remainingPlanningTargets] = planningTargets;
+      logs = [...logs, `开始正文编排预热：${warmupTarget.item.id} ${warmupTarget.item.title || '未命名章节'}。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+      await planOne(warmupTarget);
+      pauseIfRequested('正文生成已在编排预热后暂停，可导出当前已完成内容，稍后继续。');
+
+      if (remainingPlanningTargets.length) {
+        await waitForPromptCacheWarmupBeforeFanout(`正文编排预热完成，等待 5 秒后开始并发编排剩余 ${remainingPlanningTargets.length} 个小节。`);
+        logs = [...logs, `开始并发编排剩余 ${remainingPlanningTargets.length} 个小节。`];
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+        await runItemsWithWorkerPool(remainingPlanningTargets, contentConcurrency, planOne, isPauseRequested);
+      }
+    }
     pauseIfRequested('正文生成已在编排阶段暂停，可导出当前已完成内容，稍后继续。');
 
     const tableCandidates = tasksToRun.filter(({ item }) => contentPlans.get(item.id)?.table.needed);
@@ -3757,7 +3992,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
   }
 
   async function runOne(context) {
-    const { item, parentChapters, siblingChapters } = context;
+    const { item } = context;
     const previousSection = sections[item.id] || {};
     const previousContent = previousSection.content || item.content || '';
     const previousStatus = previousSection.status && previousSection.status !== 'running'
@@ -3788,8 +4023,8 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
 
       const generatedContent = await aiService.chat({
         messages: needsRestoredOptimization
-          ? buildRestoredChapterContentMessages({ chapter: item, parentChapters, siblingChapters, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent: previousContent })
-          : buildChapterContentMessages({ chapter: item, parentChapters, siblingChapters, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents }),
+          ? buildRestoredChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent: previousContent })
+          : buildChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents }),
         temperature: 0.7,
         logTitle: `${needsRestoredOptimization ? '原方案优化扩写' : '正文生成'}-${item.id}-${item.title || '未命名章节'}`,
       });
@@ -3829,6 +4064,67 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         content: isSingleSectionRegeneration ? previousContent : content,
         error: message,
       }, isSingleSectionRegeneration ? previousContent : content, { logs });
+    }
+  }
+
+  function getContentPromptWarmupKey(context) {
+    const originalState = getOriginalMaterialRuntimeState(context.item);
+    const contentPlan = getContentPlanForItem(context.item.id);
+    const branch = originalState.needsOptimization ? 'restored' : 'normal';
+    const tableMode = contentPlan?.table?.needed ? 'table' : 'plain';
+    return `${branch}:${tableMode}`;
+  }
+
+  function formatContentPromptWarmupLabel(key) {
+    if (key === 'restored:table') return '已还原优化扩写/允许表格';
+    if (key === 'restored:plain') return '已还原优化扩写/无表格';
+    if (key === 'normal:table') return '普通正文/允许表格';
+    return '普通正文/无表格';
+  }
+
+  async function runContentTargetsWithWarmup(targets, label = '正文生成') {
+    if (!targets.length) {
+      return;
+    }
+
+    const groups = new Map();
+    for (const context of targets) {
+      const key = getContentPromptWarmupKey(context);
+      const group = groups.get(key) || [];
+      group.push(context);
+      groups.set(key, group);
+    }
+
+    const warmupContexts = new Set();
+    const warmups = [];
+    for (const [key, groupTargets] of groups.entries()) {
+      if (groupTargets.length <= 1) {
+        continue;
+      }
+      const context = groupTargets[0];
+      warmups.push({ key, context });
+      warmupContexts.add(context);
+    }
+
+    for (const { key, context } of warmups) {
+      logs = [...logs, `开始${label}预热（${formatContentPromptWarmupLabel(key)}）：${context.item.id} ${context.item.title || '未命名章节'}。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+      await runOne(context);
+      pauseIfRequested(`正文生成已在${label}预热后暂停，可导出当前已完成内容，稍后继续。`);
+    }
+
+    const remainingTargets = targets.filter((context) => !warmupContexts.has(context));
+
+    if (remainingTargets.length) {
+      if (warmups.length) {
+        await waitForPromptCacheWarmupBeforeFanout(`${label}分组预热完成，等待 5 秒后开始并发生成剩余 ${remainingTargets.length} 个小节。`);
+      }
+      logs = [...logs, warmups.length
+        ? `开始并发生成剩余 ${remainingTargets.length} 个小节。`
+        : `${label}无需分组预热，开始并发生成 ${remainingTargets.length} 个小节。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      await runItemsWithWorkerPool(remainingTargets, contentConcurrency, runOne, isPauseRequested);
     }
   }
 
@@ -4058,7 +4354,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
 
     logs = [...logs, `最低字数预估：先生成 ${probeTargets.length} 个样本小节。`];
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
-    await runItemsWithWorkerPool(probeTargets, contentConcurrency, runOne, isPauseRequested);
+    await runContentTargetsWithWarmup(probeTargets, '最低字数采样');
     pauseIfRequested('正文生成已在最低字数采样阶段暂停，可导出当前已完成内容，稍后继续。');
 
     const averageWords = averageGeneratedWords(probeTargets);
@@ -4186,6 +4482,52 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
 
     appendDeveloperLog(`扩写工作池启动：并发 ${contentConcurrency}，候选 ${cycleIds.filter((itemId) => !attemptedIds.has(itemId)).length} 个，当前 ${currentWords}/${minimumWords} 字。`);
 
+    function remainingCandidateCount() {
+      const statsById = new Map(leafWordStats().map((context) => [context.item.id, context]));
+      return cycleIds.filter((itemId) => {
+        const context = statsById.get(itemId);
+        return !attemptedIds.has(itemId) && context && sections[itemId]?.status === 'success' && String(context.content || '').trim();
+      }).length;
+    }
+
+    function takeNextExpansionContext() {
+      const context = selectNextExpansionContext(cycleIds, attemptedIds);
+      if (!context) {
+        return null;
+      }
+
+      attemptedIds.add(context.item.id);
+      persistExpansionAttempted(attemptedIds);
+      launchedCount += 1;
+      return context;
+    }
+
+    if (remainingCandidateCount() > 1 && currentWords < minimumWords && !isPauseRequested()) {
+      const warmupContext = takeNextExpansionContext();
+      if (warmupContext) {
+        logs = [...logs, `开始正文扩写预热：${warmupContext.item.id} ${warmupContext.item.title || '未命名章节'}。`];
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+        appendDeveloperLog(`扩写预热请求发出：${warmupContext.item.id} ${warmupContext.item.title || '未命名章节'}。`);
+        await expandOneSection(warmupContext);
+        currentWords = countTotalContentWords();
+        appendDeveloperLog(`扩写预热请求完成：${warmupContext.item.id} ${warmupContext.item.title || '未命名章节'}，当前 ${currentWords}/${minimumWords} 字。`);
+        pauseIfRequested('正文生成已在扩写预热后暂停，可导出当前已完成内容，稍后继续。');
+        if (currentWords >= minimumWords) {
+          appendDeveloperLog('扩写预热后已达最低字数，跳过后续并发扩写。');
+          return {
+            currentWords,
+            completesCycle: cycleIds.length > 0 && cycleIds.every((itemId) => attemptedIds.has(itemId)),
+            launchedCount,
+          };
+        }
+        if (remainingCandidateCount() > 0) {
+          await waitForPromptCacheWarmupBeforeFanout(`正文扩写预热完成，等待 5 秒后开始并发扩写剩余 ${remainingCandidateCount()} 个候选小节。`);
+          logs = [...logs, `开始并发扩写剩余 ${remainingCandidateCount()} 个候选小节。`];
+          updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+        }
+      }
+    }
+
     await runWorkerPool({
       limit: contentConcurrency,
       shouldStop: () => currentWords >= minimumWords || isPauseRequested(),
@@ -4205,14 +4547,10 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
           return null;
         }
 
-        const context = selectNextExpansionContext(cycleIds, attemptedIds);
+        const context = takeNextExpansionContext();
         if (!context) {
           return null;
         }
-
-        attemptedIds.add(context.item.id);
-        persistExpansionAttempted(attemptedIds);
-        launchedCount += 1;
         return context;
       },
       onItemStart(context, activeCount) {
@@ -4354,6 +4692,56 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       .filter(({ item, originalState, sources }) => sections[item.id]?.status === 'success' && originalState.validRestored && !originalState.needsOptimization && sources.length);
   }
 
+  function buildAgentOriginalCoverageSourcesMarkdown(targets) {
+    const lines = ['# 原方案覆盖来源段', ''];
+    for (const target of targets || []) {
+      const id = target.item?.id || 'unknown';
+      const title = target.item?.title || '未命名章节';
+      lines.push(`## ${id} ${title}`);
+      lines.push(`章节路径：${formatChapterPath(target)}`);
+      lines.push('需要保留的来源段：');
+      lines.push(formatOriginalCoverageSources(target.sources) || '未提供');
+      lines.push('');
+    }
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
+  }
+
+  function buildAgentOriginalCoverageRepairPrompt() {
+    return `请只在当前工作目录内工作。
+
+你会看到两个文件：
+1. original-coverage-sources.md：每个章节对应需要保留的来源段。
+2. technical-plan.md：当前技术方案正文。
+
+任务：
+请自行检查并修复 technical-plan.md，使每个章节正文保留 original-coverage-sources.md 中对应来源段的实质内容。
+
+要求：
+1. 请自主分析、定位和补写缺失内容。
+2. 只修改 technical-plan.md 中 yibiao-section-start 和 yibiao-section-end 标记之间的正文内容。
+3. 不要修改章节编号、章节标题、HTML 注释标记或 section id。
+4. 不要新增、删除、重排章节。
+5. 只补回来源段中的实质信息、技术路线、服务承诺、设备参数、人员安排、周期、验收、售后、实施方法等内容；不追求逐字一致。
+6. 如果来源段与当前正文存在明显冲突，不要强行补写，保留当前正文，后续会由全文一致性审计或人工核对处理。
+7. 不要在正文中提到“原方案”“来源段”“用户原文”或类似过程性表述。
+8. 不要访问当前工作目录外的文件。
+9. 不要联网。
+10. 修复完成后，必须把完整修复结果保存回 technical-plan.md。`;
+  }
+
+  function updateAgentOriginalCoverageProgress(step, label, extra = {}) {
+    contentStats.phase = 'original-auditing';
+    contentStats.audit_repair_mode = 'agent';
+    contentStats.audit_agent_step_total = 5;
+    contentStats.audit_agent_step_completed = Math.max(0, Math.min(5, Number(step) || 0));
+    contentStats.audit_agent_step_label = label || '';
+    Object.assign(contentStats, extra || {});
+    const runtime = syncRuntime({ phase: 'original-auditing' });
+    const saved = workspaceStore.updateTechnicalPlan({ contentGenerationRuntime: runtime });
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved, { contentRuntime: runtime });
+    return saved;
+  }
+
   async function repairOriginalCoverageSection({ target, coverageItems }) {
     const { item } = target;
     let currentContent = sections[item.id]?.content || item.content || '';
@@ -4462,6 +4850,164 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     return { appliedCount: appliedTotal, failed: true, paused: false, errors: failures };
   }
 
+  async function runAgentOriginalCoverageRepairIfEnabled() {
+    if (!isExpansionWorkflow) {
+      return { ran: false, fixedCount: 0, failedCount: 0 };
+    }
+    if (!enableOriginalPlanCoverageAudit) {
+      writeDeveloperLog('original_coverage.agent.skipped', { reason: 'disabled' });
+      logs = [...logs, '原方案覆盖审计未启用，跳过 Agent 覆盖修复阶段。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return { ran: false, fixedCount: 0, failedCount: 0 };
+    }
+
+    const coverageTargets = buildOriginalCoverageAuditTargets('');
+    const sectionIndex = buildAgentConsistencySectionIndex(coverageTargets);
+    if (!sectionIndex.size) {
+      writeDeveloperLog('original_coverage.agent.skipped', { reason: 'no_targets' });
+      logs = [...logs, '原方案覆盖 Agent 修复跳过：没有可检查的已还原成功正文小节。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return { ran: false, fixedCount: 0, failedCount: 0 };
+    }
+
+    contentStats.audit_group_total = 0;
+    contentStats.audit_group_completed = 0;
+    contentStats.audit_conflict_total = 0;
+    contentStats.audit_fix_total = 0;
+    contentStats.audit_fix_completed = 0;
+    contentStats.audit_fix_failed = 0;
+    contentStats.audit_agent_changed_sections = 0;
+    contentStats.audit_agent_failed_sections = 0;
+    logs = [...logs, `开始 Agent 原方案覆盖修复：共 ${sectionIndex.size} 个已还原小节。`];
+    writeDeveloperLog('original_coverage.agent.start', {
+      section_count: sectionIndex.size,
+      sections: coverageTargets.map((target) => ({
+        id: target.item.id,
+        title: target.item.title || '未命名章节',
+        source_ids: target.sources.map((segment) => segment.id),
+        content_metrics: textMetrics(target.content),
+      })),
+    });
+
+    updateAgentOriginalCoverageProgress(1, '准备原方案覆盖 Agent 输入文件');
+    const files = [
+      { path: 'original-coverage-sources.md', content: buildAgentOriginalCoverageSourcesMarkdown(coverageTargets) },
+      { path: 'technical-plan.md', content: buildAgentTechnicalPlanMarkdown(sectionIndex) },
+    ];
+    pauseIfRequested('正文生成已在原方案覆盖 Agent 修复开始前暂停，本次 Agent 未启动；继续后将重新执行。');
+
+    if (!agentService?.runTask) {
+      const failedCount = sectionIndex.size;
+      contentStats.audit_agent_failed_sections = failedCount;
+      logs = [...logs, `原方案覆盖 Agent 修复无法启动：Agent 服务尚未初始化，${failedCount} 个小节需人工核对。`];
+      writeDeveloperLog('original_coverage.agent.unavailable', { failed_count: failedCount });
+      updateAgentOriginalCoverageProgress(5, '原方案覆盖 Agent 不可用', { audit_agent_failed_sections: failedCount });
+      return { ran: true, fixedCount: 0, failedCount };
+    }
+
+    updateAgentOriginalCoverageProgress(2, 'Agent 正在检查并补回原方案内容');
+    const startedAt = Date.now();
+    const agentAbortController = new AbortController();
+    let heartbeat = null;
+    let pauseWatcher = null;
+    let pauseLogged = false;
+    function abortAgentIfPauseRequested() {
+      if (!isPauseRequested()) {
+        return;
+      }
+      if (!pauseLogged) {
+        pauseLogged = true;
+        logs = [...logs, '已请求暂停原方案覆盖 Agent 修复，正在取消本轮 Agent 任务。'];
+        updateAgentOriginalCoverageProgress(0, '正在取消本轮原方案覆盖 Agent 修复，继续后将重新执行');
+      }
+      if (!agentAbortController.signal.aborted) {
+        agentAbortController.abort(createContentGenerationPausedError());
+      }
+    }
+    heartbeat = setInterval(() => {
+      if (isPauseRequested()) {
+        abortAgentIfPauseRequested();
+        return;
+      }
+      const elapsedSeconds = Math.max(30, Math.round((Date.now() - startedAt) / 1000));
+      logs = [...logs, `Agent 正在检查并补回原方案内容，已运行 ${elapsedSeconds} 秒。`];
+      updateAgentOriginalCoverageProgress(2, 'Agent 正在检查并补回原方案内容');
+    }, 30000);
+    pauseWatcher = setInterval(abortAgentIfPauseRequested, 1000);
+
+    try {
+      abortAgentIfPauseRequested();
+      pauseIfRequested('正文生成已在原方案覆盖 Agent 修复开始前暂停，本次 Agent 未启动；继续后将重新执行。');
+      const agentResult = await runAgentTaskWithRecoveredOutput({
+        title: '原方案覆盖 Agent 修复',
+        prompt: buildAgentOriginalCoverageRepairPrompt(),
+        output_file: 'technical-plan.md',
+        files,
+        timeout_ms: 30 * 60 * 1000,
+        signal: agentAbortController.signal,
+      }, 'original_coverage.agent');
+      pauseIfRequested('正文生成已在原方案覆盖 Agent 修复结果回写前暂停，本次 Agent 输出未回写；继续后将重新执行。');
+
+      updateAgentOriginalCoverageProgress(3, '读取 Agent 修复后的正文');
+      const repairedMarkdown = String(agentResult?.output_content || '').trim();
+      if (!repairedMarkdown) {
+        writeDeveloperLog('original_coverage.agent.empty_output', { agent_result: agentResult });
+        throw new Error('Agent 未返回修复后的 technical-plan.md');
+      }
+
+      updateAgentOriginalCoverageProgress(4, '解析并校验 Agent 修复结果');
+      const parsedSections = parseAgentSectionMarkdown(repairedMarkdown);
+      validateAgentConsistencySections(parsedSections, sectionIndex);
+      pauseIfRequested('正文生成已在原方案覆盖 Agent 修复结果回写前暂停，本次 Agent 输出未回写；继续后将重新执行。');
+
+      updateAgentOriginalCoverageProgress(5, '回写 Agent 修改的小节');
+      const applyResult = applyAgentConsistencySections(parsedSections, sectionIndex, new Set(sectionIndex.keys()));
+      contentStats.audit_agent_changed_sections = applyResult.changedCount;
+      logs = [...logs, applyResult.changedCount
+        ? `原方案覆盖 Agent 修复完成：已回写 ${applyResult.changedCount} 个小节（${applyResult.changedIds.join('、')}）。`
+        : '原方案覆盖 Agent 修复完成：未发现需要回写的小节。'];
+      writeDeveloperLog('original_coverage.agent.done', {
+        changed_count: applyResult.changedCount,
+        skipped_count: applyResult.skippedCount,
+        changed_ids: applyResult.changedIds,
+        agent_task_id: agentResult?.task_id || '',
+        agent_session_id: agentResult?.session_id || '',
+      });
+      updateAgentOriginalCoverageProgress(5, '原方案覆盖 Agent 修复完成', { audit_agent_changed_sections: applyResult.changedCount });
+      return { ran: true, fixedCount: applyResult.changedCount, failedCount: 0 };
+    } catch (error) {
+      if (isPauseRequested() || isPauseLikeError(error)) {
+        contentStats.audit_agent_changed_sections = 0;
+        contentStats.audit_agent_failed_sections = 0;
+        logs = [...logs, '原方案覆盖 Agent 修复已暂停：本轮 Agent 已取消并清理，继续后将重新执行。'];
+        writeDeveloperLog('original_coverage.agent.paused', {
+          section_count: sectionIndex.size,
+          error: error.message || String(error),
+        });
+        updateAgentOriginalCoverageProgress(0, '原方案覆盖 Agent 修复已暂停，继续后将重新执行', {
+          audit_agent_changed_sections: 0,
+          audit_agent_failed_sections: 0,
+        });
+        pauseIfRequested('正文生成已在原方案覆盖 Agent 修复阶段暂停，本次 Agent 已取消；继续后将重新执行。');
+      }
+
+      const failedCount = sectionIndex.size;
+      contentStats.audit_agent_failed_sections = failedCount;
+      logs = [...logs, `原方案覆盖 Agent 修复失败：${error.message || '未知错误'}。已保留原正文，${failedCount} 个小节需人工核对，任务将继续进入后续流程。`];
+      writeDeveloperLog('original_coverage.agent.failed', {
+        failed_count: failedCount,
+        ...agentErrorDiagnostics(error),
+      });
+      updateAgentOriginalCoverageProgress(contentStats.audit_agent_step_completed || 2, '原方案覆盖 Agent 修复失败', {
+        audit_agent_failed_sections: failedCount,
+      });
+      return { ran: true, fixedCount: 0, failedCount };
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+      if (pauseWatcher) clearInterval(pauseWatcher);
+    }
+  }
+
   async function runOriginalPlanCoverageAuditIfEnabled(options = {}) {
     if (!isExpansionWorkflow) {
       return { ran: false, fixedCount: 0, failedCount: 0 };
@@ -4485,12 +5031,18 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     let issueCount = 0;
     let conflictCount = 0;
     contentStats.phase = 'original-auditing';
+    contentStats.audit_repair_mode = 'normal';
     contentStats.audit_group_total = auditTargets.length;
     contentStats.audit_group_completed = 0;
     contentStats.audit_conflict_total = 0;
     contentStats.audit_fix_total = 0;
     contentStats.audit_fix_completed = 0;
     contentStats.audit_fix_failed = 0;
+    contentStats.audit_agent_step_total = 0;
+    contentStats.audit_agent_step_completed = 0;
+    contentStats.audit_agent_step_label = '';
+    contentStats.audit_agent_changed_sections = 0;
+    contentStats.audit_agent_failed_sections = 0;
     workspaceStore.updateTechnicalPlan({ contentGenerationRuntime: syncRuntime({ phase: 'original-auditing' }) });
     logs = [...logs, `开始原方案覆盖审计：${auditTargets.length} 个已还原小节，并发 ${contentConcurrency}。`];
     writeDeveloperLog('original_coverage.audit.start', {
@@ -4506,7 +5058,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     });
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
 
-    await runItemsWithWorkerPool(auditTargets, contentConcurrency, async (target) => {
+    async function auditOriginalCoverageTarget(target) {
       const allowedSourceIds = new Set(target.sources.map((segment) => segment.id).filter(Boolean));
       try {
         writeDeveloperLog('original_coverage.audit.section.start', {
@@ -4557,7 +5109,25 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         contentStats.audit_group_completed += 1;
         updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
       }
-    }, isPauseRequested);
+    }
+
+    if (auditTargets.length > 1) {
+      const [warmupTarget, ...remainingTargets] = auditTargets;
+      logs = [...logs, `开始原方案覆盖审计预热：${warmupTarget.item.id} ${warmupTarget.item.title || '未命名章节'}。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+      await auditOriginalCoverageTarget(warmupTarget);
+      pauseIfRequested('正文生成已在原方案覆盖审计预热后暂停，可导出当前已完成内容，稍后继续。');
+
+      if (remainingTargets.length) {
+        await waitForPromptCacheWarmupBeforeFanout(`原方案覆盖审计预热完成，等待 5 秒后开始并发审计剩余 ${remainingTargets.length} 个小节。`);
+        logs = [...logs, `开始并发审计剩余 ${remainingTargets.length} 个小节。`];
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+        await runItemsWithWorkerPool(remainingTargets, contentConcurrency, auditOriginalCoverageTarget, isPauseRequested);
+      }
+    } else {
+      await runItemsWithWorkerPool(auditTargets, contentConcurrency, auditOriginalCoverageTarget, isPauseRequested);
+    }
 
     pauseIfRequested('正文生成已在原方案覆盖审计阶段暂停，可导出当前已完成内容，稍后继续。');
 
@@ -4587,7 +5157,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     }
 
     let fixedCount = 0;
-    await runItemsWithWorkerPool(repairTargets, contentConcurrency, async (target) => {
+    async function repairOriginalCoverageTarget(target) {
       const item = target.target.item;
       try {
         const result = await repairOriginalCoverageSection(target);
@@ -4609,7 +5179,25 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         contentStats.audit_fix_completed += 1;
         updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
       }
-    }, isPauseRequested);
+    }
+
+    if (repairTargets.length > 1) {
+      const [warmupTarget, ...remainingTargets] = repairTargets;
+      logs = [...logs, `开始原方案覆盖修复预热：${warmupTarget.target.item.id} ${warmupTarget.target.item.title || '未命名章节'}。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+      await repairOriginalCoverageTarget(warmupTarget);
+      pauseIfRequested('正文生成已在原方案覆盖修复预热后暂停，可导出当前已完成内容，稍后继续。');
+
+      if (remainingTargets.length) {
+        await waitForPromptCacheWarmupBeforeFanout(`原方案覆盖修复预热完成，等待 5 秒后开始并发修复剩余 ${remainingTargets.length} 个小节。`);
+        logs = [...logs, `开始并发修复剩余 ${remainingTargets.length} 个小节。`];
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+        await runItemsWithWorkerPool(remainingTargets, contentConcurrency, repairOriginalCoverageTarget, isPauseRequested);
+      }
+    } else {
+      await runItemsWithWorkerPool(repairTargets, contentConcurrency, repairOriginalCoverageTarget, isPauseRequested);
+    }
 
     pauseIfRequested('正文生成已在原方案覆盖修复阶段暂停，可导出当前已完成内容，稍后继续。');
 
@@ -4669,6 +5257,293 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
       groups.push(current);
     }
     return groups.map((group, index) => ({ ...group, index: index + 1, total: groups.length, totalWords }));
+  }
+
+  function buildAgentConsistencySectionIndex(targets) {
+    const index = new Map();
+    for (const context of targets || []) {
+      const id = String(context.item?.id || '').trim();
+      const content = String(context.content || '').trim();
+      if (!id || !content) {
+        continue;
+      }
+      index.set(id, {
+        ...context,
+        originalContent: content,
+        originalHash: textHash(content),
+      });
+    }
+    return index;
+  }
+
+  function renderAgentTechnicalPlanOutline(items, sectionIndex, level = 1, lines = []) {
+    for (const item of items || []) {
+      const id = String(item?.id || '').trim();
+      const title = singleLine(item?.title || '未命名章节');
+      const headingLevel = Math.min(level + 1, 6);
+      lines.push(`${'#'.repeat(headingLevel)} ${id ? `${id} ` : ''}${title}`.trim());
+
+      if (item?.children?.length) {
+        renderAgentTechnicalPlanOutline(item.children, sectionIndex, level + 1, lines);
+        continue;
+      }
+
+      const section = sectionIndex.get(id);
+      if (!section) {
+        continue;
+      }
+      lines.push(`<!-- yibiao-section-start id="${escapeSectionAttribute(id)}" title="${escapeSectionAttribute(title)}" -->`);
+      lines.push(section.originalContent);
+      lines.push(`<!-- yibiao-section-end id="${escapeSectionAttribute(id)}" -->`);
+    }
+    return lines;
+  }
+
+  function buildAgentTechnicalPlanMarkdown(sectionIndex) {
+    const lines = ['# 技术方案正文', ''];
+    renderAgentTechnicalPlanOutline(outlineData.outline || [], sectionIndex, 1, lines);
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
+  }
+
+  function buildAgentGlobalFactsMarkdown() {
+    return [
+      '# 全局事实变量',
+      globalFactsText || '未提供',
+      '# Step02 关键解析结果',
+      bidAnalysisFactsText || '未提供',
+    ].join('\n\n');
+  }
+
+  function buildAgentConsistencyRepairPrompt() {
+    return `请只在当前工作目录内工作。
+
+你会看到两个文件：
+1. global-facts.md：全局事实变量和关键项目信息。
+2. technical-plan.md：当前技术方案正文全文。
+
+任务：
+请自行审计并修复 technical-plan.md，使正文不与 global-facts.md 中的全局事实变量冲突，并尽量消除正文前后矛盾。
+
+要求：
+1. 请自主分析、定位和修复问题。
+2. 只修改 technical-plan.md 中 yibiao-section-start 和 yibiao-section-end 标记之间的正文内容。
+3. 不要修改章节编号、章节标题、HTML 注释标记或 section id。
+4. 不要新增、删除、重排章节。
+5. 不要访问当前工作目录外的文件。
+6. 不要联网。
+7. 修复完成后，必须把完整修复结果保存回 technical-plan.md。`;
+  }
+
+  function updateAgentConsistencyProgress(step, label, extra = {}) {
+    contentStats.phase = 'auditing';
+    contentStats.audit_repair_mode = 'agent';
+    contentStats.audit_agent_step_total = 5;
+    contentStats.audit_agent_step_completed = Math.max(0, Math.min(5, Number(step) || 0));
+    contentStats.audit_agent_step_label = label || '';
+    Object.assign(contentStats, extra || {});
+    const runtime = syncRuntime({ phase: 'auditing' });
+    const saved = workspaceStore.updateTechnicalPlan({ contentGenerationRuntime: runtime });
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved, { contentRuntime: runtime });
+    return saved;
+  }
+
+  function validateAgentConsistencySections(parsedSections, sectionIndex) {
+    for (const id of parsedSections.keys()) {
+      if (!sectionIndex.has(id)) {
+        throw new Error(`Agent 输出包含未知小节：${id}`);
+      }
+    }
+    for (const [id, section] of sectionIndex.entries()) {
+      if (!parsedSections.has(id)) {
+        throw new Error(`Agent 输出缺少小节：${id}`);
+      }
+      const nextContent = String(parsedSections.get(id) || '').trim();
+      if (String(section.originalContent || '').trim() && !nextContent) {
+        throw new Error(`Agent 输出把非空小节改为空：${id}`);
+      }
+    }
+  }
+
+  function applyAgentConsistencySections(parsedSections, sectionIndex, writableIds) {
+    let changedCount = 0;
+    let skippedCount = 0;
+    const changedIds = [];
+    for (const [id, section] of sectionIndex.entries()) {
+      if (writableIds instanceof Set && !writableIds.has(id)) {
+        skippedCount += 1;
+        continue;
+      }
+      const nextContent = String(parsedSections.get(id) || '').trim();
+      const currentContent = String(section.originalContent || '').trim();
+      if (normalizeNewlines(nextContent).trim() === normalizeNewlines(currentContent).trim()) {
+        skippedCount += 1;
+        continue;
+      }
+      changedCount += 1;
+      changedIds.push(id);
+      rememberTouchedItem(id);
+      saveSection(section.item, { status: 'success', content: nextContent, error: undefined }, nextContent, { logs });
+    }
+    return { changedCount, skippedCount, changedIds };
+  }
+
+  async function runAgentConsistencyRepairIfEnabled(options = {}) {
+    if (!enableConsistencyAudit) {
+      writeDeveloperLog('consistency.agent.skipped', { reason: 'disabled' });
+      logs = [...logs, '全文一致性审计未启用，跳过 Agent 一致性修复阶段。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return { ran: false, fixedCount: 0, failedCount: 0 };
+    }
+    if (!agentService?.runTask) {
+      throw new Error('Agent 服务尚未初始化，无法执行 Agent 一致性修复');
+    }
+
+    const allTargets = buildConsistencyAuditTargets('');
+    const sectionIndex = buildAgentConsistencySectionIndex(allTargets);
+    if (!sectionIndex.size) {
+      writeDeveloperLog('consistency.agent.skipped', { reason: 'no_targets', target_item_id: options.targetItemId || targetItemId || '' });
+      logs = [...logs, 'Agent 一致性修复跳过：没有可审计的成功正文小节。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return { ran: false, fixedCount: 0, failedCount: 0 };
+    }
+
+    const normalizedTargetId = String(options.targetItemId || targetItemId || '').trim();
+    const writableIds = normalizedTargetId ? new Set([normalizedTargetId]) : new Set(sectionIndex.keys());
+    if (normalizedTargetId && !sectionIndex.has(normalizedTargetId)) {
+      logs = [...logs, `Agent 一致性修复跳过：目标小节 ${normalizedTargetId} 当前没有成功正文。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return { ran: false, fixedCount: 0, failedCount: 0 };
+    }
+
+    contentStats.audit_group_total = 0;
+    contentStats.audit_group_completed = 0;
+    contentStats.audit_conflict_total = 0;
+    contentStats.audit_fix_total = 0;
+    contentStats.audit_fix_completed = 0;
+    contentStats.audit_fix_failed = 0;
+    contentStats.audit_agent_changed_sections = 0;
+    contentStats.audit_agent_failed_sections = 0;
+    logs = [...logs, `开始 Agent 全文一致性修复：共 ${sectionIndex.size} 个正文小节${normalizedTargetId ? `，仅回写目标小节 ${normalizedTargetId}` : ''}。`];
+    writeDeveloperLog('consistency.agent.start', {
+      target_item_id: normalizedTargetId,
+      section_count: sectionIndex.size,
+      writable_ids: [...writableIds],
+      sections: Array.from(sectionIndex.values()).map((section) => ({
+        id: section.item.id,
+        title: section.item.title || '未命名章节',
+        content_metrics: textMetrics(section.originalContent),
+      })),
+    });
+
+    updateAgentConsistencyProgress(1, '准备 Agent 输入文件');
+    const files = [
+      { path: 'global-facts.md', content: buildAgentGlobalFactsMarkdown() },
+      { path: 'technical-plan.md', content: buildAgentTechnicalPlanMarkdown(sectionIndex) },
+    ];
+    pauseIfRequested('正文生成已在 Agent 全文一致性修复开始前暂停，本次 Agent 未启动；继续后将重新执行 Agent 修复。');
+
+    updateAgentConsistencyProgress(2, 'Agent 正在审计并修复全文');
+    const startedAt = Date.now();
+    const agentAbortController = new AbortController();
+    let heartbeat = null;
+    let pauseWatcher = null;
+    let pauseLogged = false;
+    function abortAgentIfPauseRequested() {
+      if (!isPauseRequested()) {
+        return;
+      }
+      if (!pauseLogged) {
+        pauseLogged = true;
+        logs = [...logs, '已请求暂停 Agent 一致性修复，正在取消本轮 Agent 任务。'];
+        updateAgentConsistencyProgress(0, '正在取消本轮 Agent 修复，继续后将重新执行');
+      }
+      if (!agentAbortController.signal.aborted) {
+        agentAbortController.abort(createContentGenerationPausedError());
+      }
+    }
+    heartbeat = setInterval(() => {
+      if (isPauseRequested()) {
+        abortAgentIfPauseRequested();
+        return;
+      }
+      const elapsedSeconds = Math.max(30, Math.round((Date.now() - startedAt) / 1000));
+      logs = [...logs, `Agent 正在审计并修复全文，已运行 ${elapsedSeconds} 秒。`];
+      updateAgentConsistencyProgress(2, 'Agent 正在审计并修复全文');
+    }, 30000);
+    pauseWatcher = setInterval(abortAgentIfPauseRequested, 1000);
+
+    try {
+      abortAgentIfPauseRequested();
+      pauseIfRequested('正文生成已在 Agent 全文一致性修复开始前暂停，本次 Agent 未启动；继续后将重新执行 Agent 修复。');
+      const agentResult = await runAgentTaskWithRecoveredOutput({
+        title: '全文一致性 Agent 修复',
+        prompt: buildAgentConsistencyRepairPrompt(),
+        output_file: 'technical-plan.md',
+        files,
+        timeout_ms: 30 * 60 * 1000,
+        signal: agentAbortController.signal,
+      }, 'consistency.agent');
+      pauseIfRequested('正文生成已在 Agent 全文一致性修复结果回写前暂停，本次 Agent 输出未回写；继续后将重新执行 Agent 修复。');
+
+      updateAgentConsistencyProgress(3, '读取 Agent 修复后的全文');
+      const repairedMarkdown = String(agentResult?.output_content || '').trim();
+      if (!repairedMarkdown) {
+        writeDeveloperLog('consistency.agent.empty_output', { agent_result: agentResult });
+        throw new Error('Agent 未返回修复后的 technical-plan.md');
+      }
+
+      updateAgentConsistencyProgress(4, '解析并校验 Agent 修复结果');
+      const parsedSections = parseAgentSectionMarkdown(repairedMarkdown);
+      validateAgentConsistencySections(parsedSections, sectionIndex);
+      pauseIfRequested('正文生成已在 Agent 全文一致性修复结果回写前暂停，本次 Agent 输出未回写；继续后将重新执行 Agent 修复。');
+
+      updateAgentConsistencyProgress(5, '回写 Agent 修改的小节');
+      const applyResult = applyAgentConsistencySections(parsedSections, sectionIndex, writableIds);
+      contentStats.audit_agent_changed_sections = applyResult.changedCount;
+      logs = [...logs, applyResult.changedCount
+        ? `Agent 一致性修复完成：已回写 ${applyResult.changedCount} 个小节（${applyResult.changedIds.join('、')}）。`
+        : 'Agent 一致性修复完成：未发现需要回写的小节。'];
+      writeDeveloperLog('consistency.agent.done', {
+        changed_count: applyResult.changedCount,
+        skipped_count: applyResult.skippedCount,
+        changed_ids: applyResult.changedIds,
+        agent_task_id: agentResult?.task_id || '',
+        agent_session_id: agentResult?.session_id || '',
+      });
+      updateAgentConsistencyProgress(5, 'Agent 一致性修复完成', { audit_agent_changed_sections: applyResult.changedCount });
+      return { ran: true, fixedCount: applyResult.changedCount, failedCount: 0 };
+    } catch (error) {
+      if (isPauseRequested() || isPauseLikeError(error)) {
+        contentStats.audit_agent_changed_sections = 0;
+        contentStats.audit_agent_failed_sections = 0;
+        logs = [...logs, 'Agent 一致性修复已暂停：本轮 Agent 已取消并清理，继续后将重新执行。'];
+        writeDeveloperLog('consistency.agent.paused', {
+          target_item_id: normalizedTargetId,
+          section_count: sectionIndex.size,
+          error: error.message || String(error),
+        });
+        updateAgentConsistencyProgress(0, 'Agent 修复已暂停，继续后将重新执行', {
+          audit_agent_changed_sections: 0,
+          audit_agent_failed_sections: 0,
+        });
+        pauseIfRequested('正文生成已在 Agent 全文一致性修复阶段暂停，本次 Agent 已取消；继续后将重新执行 Agent 修复。');
+      }
+      const failedCount = normalizedTargetId ? 1 : sectionIndex.size;
+      contentStats.audit_agent_failed_sections = failedCount;
+      logs = [...logs, `Agent 一致性修复失败：${error.message || '未知错误'}。已保留原正文，未回退普通修复。`];
+      writeDeveloperLog('consistency.agent.failed', {
+        target_item_id: normalizedTargetId,
+        failed_count: failedCount,
+        ...agentErrorDiagnostics(error),
+      });
+      updateAgentConsistencyProgress(contentStats.audit_agent_step_completed || 2, 'Agent 一致性修复失败', {
+        audit_agent_failed_sections: failedCount,
+      });
+      throw error;
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+      if (pauseWatcher) clearInterval(pauseWatcher);
+    }
   }
 
   async function repairConsistencySection({ context, conflicts }) {
@@ -4821,18 +5696,21 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     const conflictsBySectionId = new Map();
 
     contentStats.phase = 'auditing';
+    contentStats.audit_repair_mode = 'normal';
     contentStats.audit_group_total = auditGroups.length;
     contentStats.audit_group_completed = 0;
     contentStats.audit_conflict_total = 0;
     contentStats.audit_fix_total = 0;
     contentStats.audit_fix_completed = 0;
     contentStats.audit_fix_failed = 0;
+    contentStats.audit_agent_step_total = 0;
+    contentStats.audit_agent_step_completed = 0;
+    contentStats.audit_agent_step_label = '';
+    contentStats.audit_agent_changed_sections = 0;
+    contentStats.audit_agent_failed_sections = 0;
     workspaceStore.updateTechnicalPlan({ contentGenerationRuntime: syncRuntime({ phase: 'auditing' }) });
-    logs = [...logs, options.reaudit
-      ? `开始一致性复审：${auditTargets.length} 个小节，拆分为 ${auditGroups.length} 组。`
-      : `开始全文一致性审计：${auditTargets.length} 个小节，拆分为 ${auditGroups.length} 组，并发 ${contentConcurrency}。`];
+    logs = [...logs, `开始全文一致性审计：${auditTargets.length} 个小节，拆分为 ${auditGroups.length} 组，并发 ${contentConcurrency}。`];
     writeDeveloperLog('consistency.audit.start', {
-      reaudit: Boolean(options.reaudit),
       target_item_id: options.targetItemId || targetItemId || '',
       target_count: auditTargets.length,
       group_count: auditGroups.length,
@@ -4854,7 +5732,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     });
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
 
-    await runItemsWithWorkerPool(auditGroups, contentConcurrency, async (group) => {
+    async function auditConsistencyGroup(group) {
       const allowedIds = new Set(group.items.map(({ item }) => item.id).filter(Boolean));
       try {
         writeDeveloperLog('consistency.audit.group.start', {
@@ -4904,7 +5782,25 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         contentStats.audit_group_completed += 1;
         updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
       }
-    }, isPauseRequested);
+    }
+
+    if (auditGroups.length > 1) {
+      const [warmupGroup, ...remainingGroups] = auditGroups;
+      logs = [...logs, `开始全文一致性审计预热：第 ${warmupGroup.index}/${warmupGroup.total} 组。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+      await auditConsistencyGroup(warmupGroup);
+      pauseIfRequested('正文生成已在一致性审计预热后暂停，可导出当前已完成内容，稍后继续。');
+
+      if (remainingGroups.length) {
+        await waitForPromptCacheWarmupBeforeFanout(`全文一致性审计预热完成，等待 5 秒后开始并发审计剩余 ${remainingGroups.length} 组。`);
+        logs = [...logs, `开始并发审计剩余 ${remainingGroups.length} 组。`];
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+        await runItemsWithWorkerPool(remainingGroups, contentConcurrency, auditConsistencyGroup, isPauseRequested);
+      }
+    } else {
+      await runItemsWithWorkerPool(auditGroups, contentConcurrency, auditConsistencyGroup, isPauseRequested);
+    }
 
     pauseIfRequested('正文生成已在一致性审计阶段暂停，可导出当前已完成内容，稍后继续。');
 
@@ -4935,7 +5831,7 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
     }
 
     let fixedCount = 0;
-    await runItemsWithWorkerPool(repairTargets, contentConcurrency, async (target) => {
+    async function repairConsistencyTarget(target) {
       const item = target.context.item;
       try {
         const result = await repairConsistencySection(target);
@@ -4957,7 +5853,25 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         contentStats.audit_fix_completed += 1;
         updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
       }
-    }, isPauseRequested);
+    }
+
+    if (repairTargets.length > 1) {
+      const [warmupTarget, ...remainingTargets] = repairTargets;
+      logs = [...logs, `开始一致性修复预热：${warmupTarget.context.item.id} ${warmupTarget.context.item.title || '未命名章节'}。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+      await repairConsistencyTarget(warmupTarget);
+      pauseIfRequested('正文生成已在一致性修复预热后暂停，可导出当前已完成内容，稍后继续。');
+
+      if (remainingTargets.length) {
+        await waitForPromptCacheWarmupBeforeFanout(`一致性修复预热完成，等待 5 秒后开始并发修复剩余 ${remainingTargets.length} 个小节。`);
+        logs = [...logs, `开始并发修复剩余 ${remainingTargets.length} 个小节。`];
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+        await runItemsWithWorkerPool(remainingTargets, contentConcurrency, repairConsistencyTarget, isPauseRequested);
+      }
+    } else {
+      await runItemsWithWorkerPool(repairTargets, contentConcurrency, repairConsistencyTarget, isPauseRequested);
+    }
 
     pauseIfRequested('正文生成已在一致性修复阶段暂停，可导出当前已完成内容，稍后继续。');
 
@@ -5280,24 +6194,30 @@ async function runContentGenerationTask({ aiService, workspaceStore, knowledgeBa
         pauseIfRequested('正文生成已在原方案还原阶段暂停，可导出当前已完成内容，稍后继续。');
         await runEarlyContentProbeIfNeeded();
         if (tasksToRun.length) {
-          await runItemsWithWorkerPool(tasksToRun, contentConcurrency, runOne, isPauseRequested);
+          await runContentTargetsWithWarmup(tasksToRun);
           pauseIfRequested('正文生成已在正文生成阶段暂停，可导出当前已完成内容，稍后继续。');
         }
       }
     }
 
     if (!targetItemId) {
-      await ensureMinimumWords();
-      pauseIfRequested('正文生成已在最低字数检查后暂停，可导出当前已完成内容，稍后继续。');
-      await runOriginalPlanCoverageAuditIfEnabled();
-      pauseIfRequested('正文生成已在原方案覆盖审计后暂停，可导出当前已完成内容，稍后继续。');
-      await runConsistencyAuditIfEnabled();
-      if (minimumWords > 0 && countTotalContentWords() < minimumWords) {
-        logs = [...logs, `一致性修复后总字数低于最低字数，准备重新扩写补足（当前 ${countTotalContentWords()}/${minimumWords} 字）。`];
+      if (retryContentCorrection) {
+        logs = [...logs, '本次为内容矫正重试，跳过正文生成和最低字数扩写，直接进入内容矫正阶段。'];
         updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      } else {
         await ensureMinimumWords();
-        pauseIfRequested('正文生成已在一致性审计后的最低字数补足阶段暂停，可导出当前已完成内容，稍后继续。');
-        await runConsistencyAuditIfEnabled({ reaudit: true });
+        pauseIfRequested('正文生成已在最低字数检查后暂停，可导出当前已完成内容，稍后继续。');
+      }
+      if (originalPlanCoverageRepairMode === 'agent') {
+        await runAgentOriginalCoverageRepairIfEnabled();
+      } else {
+        await runOriginalPlanCoverageAuditIfEnabled();
+      }
+      pauseIfRequested('正文生成已在原方案覆盖审计后暂停，可导出当前已完成内容，稍后继续。');
+      if (consistencyRepairMode === 'agent') {
+        await runAgentConsistencyRepairIfEnabled();
+      } else {
+        await runConsistencyAuditIfEnabled();
       }
       await removeTablesBeforeIllustration();
       pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');

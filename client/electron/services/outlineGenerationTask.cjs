@@ -1,4 +1,3 @@
-const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { getBidAnalysisTasks } = require('./bidAnalysisTask.cjs');
 
 function formatSuggestions(suggestions) {
@@ -42,33 +41,58 @@ function childrenOutlineJsonExample(parentId) {
 }`;
 }
 
-function childrenOutlineStructureRules(parentId) {
-  const id = String(parentId || '1').trim() || '1';
+function childrenOutlineFixedStructureRules() {
   return `结构要求：
 1. 顶层 children 只能放当前一级目录的直接子目录，也就是二级目录。
 2. 每个二级目录都必须包含非空 children 数组，children 内是三级目录。
 3. 不要把评分细项直接作为没有子节点的二级目录；应先归纳二级主题，再在其下展开三级响应要点、实施措施、证明材料或验收标准。
-4. 三级目录只包含 id、title、description，不要继续包含 children。
-5. 编号必须以当前一级目录编号 ${id} 为前缀，例如二级 ${id}.1，三级 ${id}.1.1。
+4. 三级目录只包含 id、title、description，不要继续包含 children。`;
+}
+
+function childrenOutlineParentNumberingRules(parentId) {
+  const id = String(parentId || '1').trim() || '1';
+  return `当前一级目录编号要求：
+1. 编号必须以当前一级目录编号 ${id} 为前缀，例如二级 ${id}.1，三级 ${id}.1.1。
 
 返回示例：
 ${childrenOutlineJsonExample(id)}`;
 }
 
+function childrenOutlineStructureRules(parentId) {
+  return `${childrenOutlineFixedStructureRules()}
+
+${childrenOutlineParentNumberingRules(parentId)}`;
+}
+
 const DEFAULT_CONTEXT_LENGTH_LIMIT = 400000;
-const KNOWLEDGE_CONTEXT_LIMIT_RATIO = 0.8;
-const MIN_KNOWLEDGE_SEGMENT_CHARS = 1000;
+const KNOWLEDGE_CONTEXT_LIMIT_RATIO = 0.7;
 const MAX_KNOWLEDGE_ADDITIONS = 60;
 const MAX_KNOWLEDGE_UPDATES = 120;
-const MAX_EXPANSION_REVIEW_REPAIR_ROUNDS = 2;
+const PROMPT_CACHE_WARMUP_DELAY_MS = 5000;
 
-function renderKnowledgeItemsForPrompt(items) {
-  if (!items?.length) return '';
-  return items.map((item, index) => [
+function waitForPromptCacheWarmup() {
+  return new Promise((resolve) => setTimeout(resolve, PROMPT_CACHE_WARMUP_DELAY_MS));
+}
+const FINAL_AGENT_OUTPUT_FILE = 'outline-agent-result.json';
+const FINAL_AGENT_TIMEOUT_MS = 15 * 60 * 1000;
+const RECOVERABLE_OLD_OUTLINE_ERRORS = ['模型返回的旧方案目录数据格式无效'];
+const RECOVERABLE_REQUIREMENT_GROUP_ERRORS = ['模型返回的技术评分大类格式无效'];
+const RECOVERABLE_ALIGNED_OUTLINE_ERRORS = [
+  '模型返回的目录数据格式无效',
+  '子目录不能为空',
+  '完整目录至少需要三级结构',
+  '一级目录数量必须与技术评分大类数量一致',
+  '一级目录标题必须严格等于技术评分大类标题',
+  '一级目录映射的技术评分大类ID不正确',
+];
+const RECOVERABLE_FINAL_REVIEW_ERRORS = ['模型返回的最终目录审核结果格式无效'];
+
+function renderKnowledgeItemForPrompt(item, index) {
+  return [
     `## 知识条目 ${index + 1}`,
     `title: ${String(item.title || '').trim()}`,
     `resume:\n${String(item.resume || '').trim()}`,
-  ].join('\n')).join('\n\n');
+  ].join('\n');
 }
 
 function normalizePositiveInteger(value, fallback) {
@@ -76,22 +100,22 @@ function normalizePositiveInteger(value, fallback) {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
 }
 
+function getMessagesContentLength(messages) {
+  return (messages || []).reduce((sum, message) => sum + String(message?.role || 'user').length + String(message?.content || '').length + 64, 0);
+}
+
 function getKnowledgeSegmentLimit(aiService, sharedMessages) {
   const config = typeof aiService?.getConfig === 'function' ? aiService.getConfig() : {};
   const contextLengthLimit = normalizePositiveInteger(config?.context_length_limit, DEFAULT_CONTEXT_LENGTH_LIMIT);
-  const sharedLength = (sharedMessages || []).reduce((sum, message) => sum + String(message?.content || '').length + 64, 2000);
-  return Math.max(MIN_KNOWLEDGE_SEGMENT_CHARS, Math.floor(contextLengthLimit * KNOWLEDGE_CONTEXT_LIMIT_RATIO) - sharedLength);
-}
-
-function splitOversizedKnowledgeBlock(block, segmentLimit) {
-  const parts = splitUserTextByContextLimit(block, {}, { contextLengthLimit: segmentLimit, limitRatio: 1 });
-  return parts.map((part, index) => `${part}\n\n（该知识条目内容较长，当前为第 ${index + 1}/${parts.length} 部分。）`);
+  const requestBudget = Math.floor(contextLengthLimit * KNOWLEDGE_CONTEXT_LIMIT_RATIO);
+  const fixedMessagesLength = getMessagesContentLength(generateKnowledgePatchMessages(sharedMessages, { index: 999, total: 999, content: '' }));
+  return Math.max(1, requestBudget - fixedMessagesLength);
 }
 
 function buildKnowledgeSegments(knowledgeItems, aiService, sharedMessages) {
   const segmentLimit = getKnowledgeSegmentLimit(aiService, sharedMessages);
   const blocks = (knowledgeItems || [])
-    .map((item, index) => renderKnowledgeItemsForPrompt([item]).replace('## 知识条目 1', `## 知识条目 ${index + 1}`))
+    .map((item, index) => renderKnowledgeItemForPrompt(item, index))
     .filter((block) => block.trim());
   const segments = [];
   let current = [];
@@ -99,17 +123,12 @@ function buildKnowledgeSegments(knowledgeItems, aiService, sharedMessages) {
 
   const flush = () => {
     if (!current.length) return;
-    segments.push(current.join('\n\n'));
+    segments.push({ content: current.join('\n\n'), itemCount: current.length, contentLength: currentLength });
     current = [];
     currentLength = 0;
   };
 
   for (const block of blocks) {
-    if (block.length > segmentLimit) {
-      flush();
-      splitOversizedKnowledgeBlock(block, segmentLimit).forEach((part) => segments.push(part));
-      continue;
-    }
     const nextLength = currentLength + block.length + (current.length ? 2 : 0);
     if (current.length && nextLength > segmentLimit) {
       flush();
@@ -119,7 +138,7 @@ function buildKnowledgeSegments(knowledgeItems, aiService, sharedMessages) {
   }
   flush();
 
-  return segments.map((content, index) => ({ content, index: index + 1, total: segments.length, segmentLimit }));
+  return segments.map((segment, index) => ({ ...segment, index: index + 1, total: segments.length, segmentLimit }));
 }
 
 function formatKnowledgePatchOutlineContext(items) {
@@ -298,7 +317,7 @@ function extractRequirementGroupsMessages({ overview, requirements, oldOutline }
 4. requirement_id 必须唯一，使用 R1、R2、R3 这种格式
 5. description 需要概括该大类关注的核心内容
 6. detail_points 中保留该大类下的关键评分细项，使用简洁短句
-7. 如果提供了原方案目录基础，提取结果用于识别原目录未覆盖的评分项缺口，不要要求重构、删除、重排原目录
+7. 如果提供了“已有目录”，提取结果用于识别原目录未覆盖的评分项缺口，在已有目录上补齐，不要重构、删除、重排原目录
 8. 只返回 JSON，格式必须为 {"groups": [...]}，不要输出任何其他内容
 
 JSON 格式要求：
@@ -324,6 +343,7 @@ function generateAlignedChildrenMessages({ overview, requirements, parentItem, g
     .map((item) => `- ${item}`)
     .join('\n');
   const detailContent = detailLines || '- 未提供明确细项，请根据评分大类描述合理展开';
+  const suggestionText = formatSuggestions(suggestions).trim();
   const instructionPrompt = `你是一个专业的标书编写专家。请围绕指定的技术评分大类，为已经固定好的一级目录生成二级和三级目录。
 
 要求：
@@ -334,13 +354,18 @@ function generateAlignedChildrenMessages({ overview, requirements, parentItem, g
 5. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description
 6. 除了 JSON 结果外，不要输出任何其他内容
 
-${childrenOutlineStructureRules(parentItem.id)}`;
+${childrenOutlineFixedStructureRules()}`;
   const messages = [
     ...buildOutlineSharedContextMessages({ overview, requirements, oldOutline }),
+    { role: 'user', content: instructionPrompt },
     { role: 'user', content: `当前固定一级目录：\n编号：${parentItem.id}\n标题：${parentItem.title}\n描述：${parentItem.description || ''}` },
     { role: 'user', content: `当前对应的技术评分大类：\nrequirement_id：${group.requirement_id}\n标题：${group.title}\n描述：${group.description}\n细项：\n${detailContent}` },
+    { role: 'user', content: childrenOutlineParentNumberingRules(parentItem.id) },
   ];
-  messages.push({ role: 'user', content: `${instructionPrompt}\n\n请仅生成该一级目录下的二级、三级目录；每个二级目录必须包含三级目录，一级目录标题必须保持为当前给定标题。如提供了原方案目录基础，请在覆盖当前技术评分大类细项的前提下基于原目录补充当前子目录，不要重构原目录。返回格式必须是 {"children": [...]}。${formatSuggestions(suggestions)}` });
+  if (suggestionText) {
+    messages.push({ role: 'user', content: suggestionText });
+  }
+  messages.push({ role: 'user', content: '请基于以上资料，只返回当前一级目录下的 {"children": [...]} JSON。' });
   return messages;
 }
 
@@ -384,24 +409,347 @@ ${String(invalidContent || '').slice(0, 60000)}
   ];
 }
 
-function reviewAlignedOutlineMessages({ overview, requirements, oldOutline, groups, outline }) {
-  const instructionPrompt = `你是一个严格的招标文件目录审核专家。请审核目录是否与技术评分大类一一对应，并判断二三级目录是否覆盖各评分大类的细项。
+function getFinalOutlineModeLabel(context) {
+  if (context.workflowKind !== 'existing-plan-expansion') return '普通技术方案目录生成';
+  return context.outlineExpansionMode === 'original-only' ? '已有方案扩写-仅使用原方案目录' : '已有方案扩写-AI补充目录';
+}
 
-要求：
-1. 一级目录必须与提供的技术评分大类一一对应，数量一致、顺序一致、标题必须完全一致
-2. 不允许缺失技术评分大类，也不允许新增、合并、改写一级目录
-3. 二级和三级目录要围绕各自对应的技术评分大类与细项展开，避免错位、遗漏和明显重复
-4. 检查完整目录是否层级清晰，整体是否达到三级目录要求
-5. 如果提供了原方案目录基础，当前待审核目录是 AI 补充候选目录，最终会由程序保留原目录并合并候选补充项
-6. 只返回 JSON，格式为：{"passed": true, "suggestions": []}
-7. 若不通过，suggestions 中必须给出具体、可执行的修改建议，重点说明哪个评分大类覆盖不足或结构不合理
-8. 除了 JSON 外，不要输出任何其他内容`;
-  return [
-    ...buildOutlineSharedContextMessages({ overview, requirements, oldOutline }),
-    { role: 'user', content: `技术评分大类 JSON：\n${JSON.stringify({ groups })}` },
-    { role: 'user', content: `待审核目录 JSON：\n${JSON.stringify(outline)}` },
-    { role: 'user', content: `${instructionPrompt}\n\n请判断该目录是否满足一一对应要求。若满足则返回 passed=true；若不满足则返回 passed=false，并给出具体修改建议。` },
+function getFinalOutlineConstraintText(context) {
+  if (context.workflowKind !== 'existing-plan-expansion') {
+    return `硬性约束：
+1. 一级目录必须与提供的 groups 数量一致、顺序一致、标题完全一致。
+2. 每个一级目录的 source_requirement_id 必须等于对应 group.requirement_id。
+3. 完整目录整体至少包含三级结构。`;
+  }
+  if (context.outlineExpansionMode === 'original-only') {
+    return `硬性约束：
+1. 完整目录整体至少包含三级结构。
+2. 目录层级不能超过四级。
+3. 优先保留原方案目录结构和表达，但允许为了覆盖评分要求做必要修复。`;
+  }
+  return `硬性约束：
+1. 原方案已有一级目录必须作为最终目录前缀保留，不能删除或重排。
+2. 完整目录整体至少包含三级结构。
+3. 目录层级不能超过四级。`;
+}
+
+function buildFinalOutlineReviewMessages(context) {
+  const messages = [
+    { role: 'user', content: `项目概述：\n${context.payload?.overview || ''}` },
+    { role: 'user', content: `技术评分要求：\n${context.payload?.requirements || ''}` },
   ];
+  messages.push(
+    { role: 'user', content: `待最终审核目录 JSON：\n${JSON.stringify(context.outline, null, 2)}` },
+    {
+      role: 'user',
+      content: `你是严格的技术标目录最终审核专家。请判断待审核目录是否已经可以保存为最终目录。
+
+审核重点：
+1. 是否覆盖技术评分要求中的关键评分项。
+2. 是否存在明显重复、归属错位、遗漏或结构不合理。
+3. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议。
+
+只返回 JSON，格式为 {"passed": true, "suggestions": []}，不要返回完整目录，不要输出解释文字。`,
+    },
+  );
+  return messages;
+}
+
+function getFinalAgentOutputShape(context) {
+  const isAligned = context.workflowKind !== 'existing-plan-expansion';
+  return isAligned
+    ? `{
+  "groups": [
+    {
+      "requirement_id": "R1",
+      "title": "一级目录标题，必须与对应一级目录 title 完全一致",
+      "description": "评分大类说明",
+      "detail_points": ["评分细项"]
+    }
+  ],
+  "outline": []
+}`
+    : `{
+  "outline": []
+}`;
+}
+
+function buildOriginalOutlineExtractionAgentPrompt(context) {
+  const outputFile = context.outputFile;
+  const reason = String(context.recoveryReason || '').trim();
+  return `请在当前工作目录中读取 original-plan.md，从用户提交的原方案全文中提取旧目录，并把结果写入 ${outputFile}。
+
+${reason ? `本次恢复触发原因：${reason}\n` : ''}工作方式：
+1. 只基于 original-plan.md 提取原方案已有目录、章节标题和明显隐含章节，不要改写成新标书目录。
+2. 如果原文存在明确章节编号和标题，优先保留原文表达；如果没有明确编号，可按原文结构归纳章节标题。
+3. 目录最多保留四级，节点只包含 id、title、description 和 children。
+4. 编号可以自行整理，程序会再次统一编号；但层级关系必须正确。
+
+输出要求：
+1. 必须把结果写入 ${outputFile}。
+2. ${outputFile} 必须是纯 JSON，不要包含 Markdown 代码块或解释文字。
+3. JSON 顶层格式必须为：
+{
+  "outline": []
+}
+4. 不要输出 groups、正文 content、图片、表格、Mermaid、审查说明或额外字段。`;
+}
+
+function buildOutlineAgentRecoveryPrompt(context) {
+  if (context.recoveryKind === 'original-outline-extraction') {
+    return buildOriginalOutlineExtractionAgentPrompt(context);
+  }
+
+  const outputFile = context.outputFile;
+  const outputShape = getFinalAgentOutputShape(context);
+  const reason = String(context.recoveryReason || '').trim();
+  return `请在当前工作目录中读取输入文件，自主修复技术标目录，并把最终结果写入 ${outputFile}。
+
+当前目录生成模式：${getFinalOutlineModeLabel(context)}
+
+${reason ? `本次恢复触发原因：${reason}\n` : ''}
+
+最终目标：
+生成一份可以直接保存为技术方案目录的 JSON，目录必须覆盖技术评分要求，并解决 final-review.json 中指出的问题；如果 current-outline.json 为空或不完整，需要直接生成完整目录。
+
+工作方式：
+1. 先阅读 project-overview.md、technical-requirements.md、current-outline.json、final-review.json 和 workflow.json。
+2. 如果存在 requirement-groups.json，必须同时阅读并保持一级目录与 groups 对齐；如果你判断 groups 本身提取错误，可以自行修正 groups 并同步修正一级目录。
+3. 如果不存在 requirement-groups.json，普通技术方案目录生成模式下需要先从 technical-requirements.md 提取 groups，并同步生成与 groups 对齐的一级目录。
+4. 如果存在 original-outline.json，请优先在原目录基础上做必要修复，不要无目的全量重写。
+5. 修复应以定向处理为主，包括删除重复项、迁移错位目录、补充缺失目录、合并明显重复目录和重新编号。
+6. 最终自行复核：目录必须满足 workflow.json 中的 hard_constraints。
+
+输出要求：
+1. 必须把最终结果写入 ${outputFile}。
+2. ${outputFile} 必须是纯 JSON，不要包含 Markdown 代码块或解释文字。
+3. JSON 顶层格式必须为：
+${outputShape}
+4. 不要输出正文 content、图片、表格、Mermaid、审查说明或额外字段。
+5. 编号可以自行整理，程序会再次统一编号；但层级关系必须正确。`;
+}
+
+function buildOutlineAgentRecoveryFiles(context) {
+  const files = [
+    { path: 'project-overview.md', content: String(context.payload?.overview || '') },
+    { path: 'technical-requirements.md', content: String(context.payload?.requirements || '') },
+    {
+      path: 'workflow.json',
+      content: JSON.stringify({
+        mode: getFinalOutlineModeLabel(context),
+        recovery_kind: context.recoveryKind || 'final-outline-repair',
+        workflow_kind: context.workflowKind,
+        outline_expansion_mode: context.outlineExpansionMode,
+        hard_constraints: getFinalOutlineConstraintText(context),
+      }, null, 2),
+    },
+  ];
+  if (context.recoveryKind === 'original-outline-extraction') {
+    files.push({ path: 'original-plan.md', content: String(context.originalPlanMarkdown || '') });
+    if (context.finalReview) {
+      files.push({ path: 'final-review.json', content: JSON.stringify(context.finalReview, null, 2) });
+    }
+    return files;
+  }
+
+  files.push(
+    { path: 'current-outline.json', content: JSON.stringify(context.outline || { outline: [] }, null, 2) },
+    { path: 'final-review.json', content: JSON.stringify(context.finalReview, null, 2) },
+  );
+  if (context.groups?.length) {
+    files.push({ path: 'requirement-groups.json', content: JSON.stringify({ groups: context.groups }, null, 2) });
+  }
+  if (context.originalOutline?.outline?.length) {
+    files.push({ path: 'original-outline.json', content: JSON.stringify(context.originalOutline, null, 2) });
+  }
+  return files;
+}
+
+function createSyntheticFinalReview(reason, error) {
+  const message = error?.message || String(error || reason);
+  return {
+    passed: false,
+    suggestions: [`${reason}：${message}`],
+  };
+}
+
+function getErrorMessage(error) {
+  return error?.message || String(error || '未知错误');
+}
+
+function assertRecoverableOutlineError(error, markers) {
+  const message = getErrorMessage(error);
+  if (!(markers || []).some((marker) => message.includes(marker))) {
+    throw error;
+  }
+}
+
+function extractFencedAgentJsonBlocks(content) {
+  const blocks = [];
+  const pattern = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let match = pattern.exec(content);
+  while (match) {
+    blocks.push(match[1]);
+    match = pattern.exec(content);
+  }
+  return blocks;
+}
+
+function extractBalancedAgentJsonCandidate(content) {
+  const source = String(content || '');
+  const start = source.search(/[\[{]/);
+  if (start < 0) return '';
+
+  const stack = [];
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') {
+      stack.push('}');
+      continue;
+    }
+    if (char === '[') {
+      stack.push(']');
+      continue;
+    }
+    if (char === '}' || char === ']') {
+      if (stack[stack.length - 1] !== char) return '';
+      stack.pop();
+      if (!stack.length) return source.slice(start, index + 1);
+    }
+  }
+
+  return '';
+}
+
+function parseAgentJsonContent(content) {
+  const normalized = String(content || '').replace(/^\uFEFF/, '').trim();
+  const candidates = [
+    normalized,
+    ...extractFencedAgentJsonBlocks(normalized),
+    extractBalancedAgentJsonCandidate(normalized),
+  ].map((item) => String(item || '').trim()).filter(Boolean);
+  const uniqueCandidates = [...new Set(candidates)];
+  let lastError = null;
+
+  for (const candidate of uniqueCandidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(`OpenCode Agent 未返回可解析的目录 JSON：${lastError?.message || '内容为空'}`);
+}
+
+function attachAlignedTopLevelMetadata(outline, groups) {
+  const items = cloneOutlineItems(outline.outline || []).map((item, index) => ({
+    ...item,
+    source_requirement_id: groups[index]?.requirement_id || item.source_requirement_id,
+    source_requirement_title: groups[index]?.title || item.source_requirement_title,
+  }));
+  return normalizeOutlineResponse({ outline: renumber(items) }, new Set());
+}
+
+function normalizeFinalAgentRepairResult(value, context) {
+  const raw = Array.isArray(value) ? { outline: value } : requireObject(value, 'FinalAgentRepairResult');
+  const rawGroups = raw.groups ?? raw.requirement_groups ?? raw.requirementGroups;
+  let groups = context.groups || [];
+  if (rawGroups !== undefined) {
+    groups = normalizeRequirementGroupsResponse({ groups: rawGroups }).groups || [];
+    validateRequirementGroups({ groups });
+  }
+  if (context.workflowKind !== 'existing-plan-expansion' && !groups.length) {
+    throw new Error('OpenCode Agent 修复结果缺少技术评分大类 groups');
+  }
+
+  const outlineSource = raw.outline === undefined || raw.outline === null
+    ? raw
+    : Array.isArray(raw.outline)
+      ? { outline: raw.outline }
+      : raw.outline;
+  const parsedOutline = normalizeOutlineResponse(outlineSource, new Set());
+  const renumberedOutline = normalizeOutlineResponse({ outline: renumber(parsedOutline.outline || []) }, new Set());
+  const outline = context.workflowKind === 'existing-plan-expansion'
+    ? renumberedOutline
+    : attachAlignedTopLevelMetadata(renumberedOutline, groups);
+  validateFinalOutline({ ...context, outline, groups });
+  return { groups, outline };
+}
+
+function normalizeOriginalOutlineAgentResult(value) {
+  const raw = Array.isArray(value) ? { outline: value } : requireObject(value, 'OriginalOutlineAgentResult');
+  const outlineSource = raw.outline === undefined || raw.outline === null
+    ? raw
+    : Array.isArray(raw.outline)
+      ? { outline: raw.outline }
+      : raw.outline;
+  const parsedOutline = normalizeOutlineResponse(outlineSource, new Set());
+  const outline = finalizeOriginalOutline(parsedOutline);
+  validateTopLevelOutline(outline);
+  return { outline };
+}
+
+function normalizeAgentOutlineResult(value, context) {
+  if (context.recoveryKind === 'original-outline-extraction') {
+    return normalizeOriginalOutlineAgentResult(value);
+  }
+  return normalizeFinalAgentRepairResult(value, context);
+}
+
+async function runOutlineAgentRecovery(agentService, context, log) {
+  if (!agentService?.runTask) {
+    throw new Error('OpenCode Agent 服务尚未初始化，无法执行目录自主修复');
+  }
+
+  const outputFile = context.outputFile || FINAL_AGENT_OUTPUT_FILE;
+  const agentContext = { ...context, outputFile };
+  log(agentContext.startLogMessage || '已切换到 OpenCode Agent 自主修复目录。', agentContext.startProgress || 99);
+  const agentResult = await agentService.runTask({
+    title: agentContext.title || '技术方案目录自主修复',
+    prompt: buildOutlineAgentRecoveryPrompt(agentContext),
+    output_file: outputFile,
+    files: buildOutlineAgentRecoveryFiles(agentContext),
+    timeout_ms: FINAL_AGENT_TIMEOUT_MS,
+    keep_runtime: false,
+  });
+
+  const content = String(agentResult?.output_content || agentResult?.assistant_text || '').trim();
+  if (!content) {
+    throw new Error('OpenCode Agent 未返回目录修复结果');
+  }
+
+  log(agentContext.validationLogMessage || 'OpenCode Agent 修复完成，正在进行程序校验。', agentContext.validationProgress || 96);
+  const parsed = parseAgentJsonContent(content);
+  const result = normalizeAgentOutlineResult(parsed, agentContext);
+  log(agentContext.successLogMessage || 'OpenCode Agent 修复结果通过程序校验，准备返回目录。', agentContext.successProgress || 98);
+  return result;
+}
+
+async function repairFinalOutlineWithAgent(agentService, context, log) {
+  return runOutlineAgentRecovery(agentService, {
+    ...context,
+    recoveryKind: context.recoveryKind || 'final-outline-repair',
+    title: context.title || '技术方案目录自主修复',
+    startLogMessage: context.startLogMessage || '最终目录审核未通过，已切换到 OpenCode Agent 自主修复目录。',
+  }, log);
 }
 
 function formatTopLevelOutlineForPrompt(outlineItems) {
@@ -460,6 +808,7 @@ function buildExpansionChildSharedMessages({ overview, requirements }) {
 }
 
 function buildExpansionMissingChildrenMessages(sharedMessages, parentItem, group, suggestions) {
+  const suggestionText = formatSuggestions(suggestions).trim();
   const instructionPrompt = `你是一个专业的标书编写专家。当前一级目录暂无下级目录，请为该一级目录生成完整二级和三级目录。
 
 要求：
@@ -469,16 +818,23 @@ function buildExpansionMissingChildrenMessages(sharedMessages, parentItem, group
 4. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
 5. 除了 JSON 结果外，不要输出任何其他内容。
 
-${childrenOutlineStructureRules(parentItem.id)}`;
-  return [
+${childrenOutlineFixedStructureRules()}`;
+  const messages = [
     ...sharedMessages,
+    { role: 'user', content: instructionPrompt },
     { role: 'user', content: `当前固定一级目录：\n编号：${parentItem.id}\n标题：${parentItem.title}\n描述：${parentItem.description || ''}` },
     { role: 'user', content: `当前对应的技术评分大类：\n${formatRequirementGroupForPrompt(group)}` },
-    { role: 'user', content: `${instructionPrompt}\n\n请生成该一级目录下完整二级、三级目录。返回格式必须是 {"children": [...]}。${formatSuggestions(suggestions)}` },
+    { role: 'user', content: childrenOutlineParentNumberingRules(parentItem.id) },
   ];
+  if (suggestionText) {
+    messages.push({ role: 'user', content: suggestionText });
+  }
+  messages.push({ role: 'user', content: '请基于以上资料，只返回当前一级目录下的 {"children": [...]} JSON。' });
+  return messages;
 }
 
 function buildExpansionChildPatchMessages(sharedMessages, parentItem, group, suggestions) {
+  const suggestionText = formatSuggestions(suggestions).trim();
   const instructionPrompt = `你是一个严格的原方案目录补充专家。下面会提供一段需要补充的目录及其所有下级目录，请只判断是否需要追加缺失下级目录。
 
 要求：
@@ -487,7 +843,7 @@ function buildExpansionChildPatchMessages(sharedMessages, parentItem, group, sug
 3. parent_id 必须逐字复制这段目录中已有的一级或二级目录 id；不能使用三级目录作为 parent_id。
 4. 新增目录最多到三级；如果 parent_id 是一级目录，可以新增二级目录并可带三级 children；如果 parent_id 是二级目录，只能新增三级目录且不能包含 children。
 5. 优先补齐已有二级目录下缺失的三级响应要点、实施措施、证明材料或验收标准。
-6. 如果这段目录已经充分覆盖评分细项，返回 {"additions":[]}。
+6. 如果这段目录已经充分覆盖当前技术评分大类中的相关细项，返回 {"additions":[]}。
 7. 只返回 JSON，不要输出解释文字。
 
 返回格式：
@@ -503,12 +859,17 @@ function buildExpansionChildPatchMessages(sharedMessages, parentItem, group, sug
     }
   ]
 }`;
-  return [
+  const messages = [
     ...sharedMessages,
+    { role: 'user', content: instructionPrompt },
     { role: 'user', content: `你应该基于下面这段目录进行补充：\n${JSON.stringify(parentItem, null, 2)}` },
     { role: 'user', content: `当前对应的技术评分大类：\n${formatRequirementGroupForPrompt(group)}` },
-    { role: 'user', content: `${instructionPrompt}\n\n请只追加这段目录缺失的下级目录，不要改动已有目录。${formatSuggestions(suggestions)}` },
   ];
+  if (suggestionText) {
+    messages.push({ role: 'user', content: suggestionText });
+  }
+  messages.push({ role: 'user', content: '请只返回需要追加的 additions JSON，不要改动已有目录。' });
+  return messages;
 }
 
 function buildExpansionChildPatchRepairMessages({ invalidContent, issues }, parentItem, group) {
@@ -562,66 +923,6 @@ function formatOriginalTopLevelLockContext(originalOutline) {
   )).join('\n');
 }
 
-function buildExpansionReviewRepairMessages({ overview, requirements, originalOutline, outline, round }) {
-  const instructionPrompt = `你是一个严格的技术标目录评审与修复专家。请评审当前目录是否覆盖技术评分要求，并在必要时返回修复后的完整目录。
-
-允许修复：
-1. 补充缺失的一级、二级、三级或四级目录。
-2. 轻微修改目录标题或说明，使其更准确、专业、符合评分项。
-3. 修复 JSON/目录结构问题，例如整体层级不足、必要目录缺少下级展开、children 层级不规范、目录超过四级、说明缺失或明显不合理。
-4. 编号不需要严格连续，程序会统一重新编号。
-
-限制：
-1. 原方案已有一级目录必须作为最终目录前缀保留，不能删除或重排。
-2. 不要把原方案已有一级目录改成完全不同主题。
-3. 不要整体重写为另一套目录；应在当前目录基础上做最小必要修复。
-4. 目录最多到四级，允许部分一级或二级目录作为叶子；不要求每个一级或二级目录都展开到三级，但完整目录整体至少应包含三级结构。
-5. 只返回 JSON，不要输出解释文字。
-
-返回格式：
-{
-  "passed": false,
-  "issues": ["问题说明"],
-  "outline": [
-    {
-      "id": "1",
-      "title": "一级目录",
-      "description": "说明",
-      "children": []
-    }
-  ]
-}`;
-  return [
-    { role: 'user', content: `项目概述：\n${overview}` },
-    { role: 'user', content: `技术评分要求：\n${requirements}` },
-    { role: 'user', content: `原方案一级目录锁定清单（必须作为最终目录前缀保留）：\n${formatOriginalTopLevelLockContext(originalOutline)}` },
-    { role: 'user', content: `当前完整目录 JSON：\n${JSON.stringify(outline, null, 2)}` },
-    { role: 'user', content: `${instructionPrompt}\n\n这是第 ${round}/${MAX_EXPANSION_REVIEW_REPAIR_ROUNDS} 轮评审修复。请评审并返回修复后的完整目录 outline；如果已经合格，passed 返回 true，outline 返回当前目录。` },
-  ];
-}
-
-function buildExpansionReviewRepairJsonRepairMessages({ invalidContent, issues }, originalOutline) {
-  const issueLines = (issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
-  return [
-    {
-      role: 'user',
-      content: `你是一个严格的 JSON 修复器。请把模型输出修复为“目录评审并修复结果”JSON。
-
-必须满足：
-1. 顶层必须包含 passed、issues、outline。
-2. passed 必须是布尔值。
-3. issues 必须是字符串数组。
-4. outline 必须是完整目录数组，节点包含 id、title、description，可包含 children。
-5. 原方案一级目录必须作为最终目录前缀保留。
-6. 目录最多到四级。
-7. 只返回 JSON，不要输出解释文字。`,
-    },
-    { role: 'user', content: `原方案一级目录锁定清单：\n${formatOriginalTopLevelLockContext(originalOutline)}` },
-    { role: 'user', content: `错误列表：\n${issueLines}` },
-    { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
-  ];
-}
-
 function getKnowledgePatchSamples(outlineItems) {
   const entries = Array.from(createOutlineNodeMap(outlineItems || []).entries());
   return {
@@ -667,9 +968,9 @@ function buildKnowledgePatchSharedMessages({ overview, requirements, outline }) 
   return [
     { role: 'user', content: `项目概述：\n${overview}` },
     { role: 'user', content: `技术评分要求：\n${requirements}` },
+    { role: 'user', content: instructionPrompt },
     { role: 'user', content: `当前完整目录 JSON：\n${JSON.stringify(outline, null, 2)}` },
     { role: 'user', content: `可操作目录上下文（每行：id | 层级 | update状态 | add状态 | 标题 | 说明）：\n${formatKnowledgePatchOutlineContext(outlineItems)}` },
-    { role: 'user', content: instructionPrompt },
   ];
 }
 
@@ -793,28 +1094,6 @@ function normalizeReviewResponse(payload) {
     ? []
     : requireArray(raw.suggestions, 'suggestions').map((item) => String(item));
   return { passed, suggestions };
-}
-
-function normalizeExpansionReviewRepairResponse(payload, fallbackOutline) {
-  const raw = requireObject(payload, 'ExpansionReviewRepairResponse');
-  let passed = raw.passed;
-  if (typeof passed === 'string') {
-    passed = passed.toLowerCase() === 'true';
-  }
-  if (typeof passed !== 'boolean') {
-    passed = false;
-  }
-  const issues = raw.issues === undefined || raw.issues === null
-    ? []
-    : requireArray(raw.issues, 'issues').map((item) => String(item));
-  const outlineSource = raw.outline === undefined || raw.outline === null
-    ? fallbackOutline
-    : Array.isArray(raw.outline)
-      ? { outline: raw.outline }
-      : raw.outline;
-  const parsedOutline = normalizeOutlineResponse(outlineSource, new Set());
-  const outline = normalizeOutlineResponse({ outline: renumber(parsedOutline.outline || []) }, new Set());
-  return { passed, issues, outline };
 }
 
 function normalizeRequirementGroupsResponse(payload) {
@@ -1322,12 +1601,7 @@ function validateTopLevelOutline(payload) {
 
 function validateChildrenOutline(payload) {
   const children = payload.children || [];
-  if (!children.length) throw new Error('二级目录不能为空');
-  const secondLevelWithoutThird = children.filter((item) => !(item.children || []).length);
-  if (secondLevelWithoutThird.length) {
-    throw new Error(`二级目录必须包含三级目录，缺失三级目录：${formatMissingOutlineLabels(secondLevelWithoutThird)}`);
-  }
-  if (outlineDepth(children) < 2) throw new Error('二级目录必须包含三级目录');
+  if (!children.length) throw new Error('子目录不能为空');
 }
 
 function validateRequirementGroups(payload) {
@@ -1347,23 +1621,6 @@ function validateRequirementGroups(payload) {
   });
   if (new Set(requirementIds).size !== requirementIds.length) throw new Error('技术评分大类 requirement_id 不能重复');
   if (new Set(titles).size !== titles.length) throw new Error('技术评分大类标题不能重复');
-}
-
-function validateExpansionReviewRepairResult(result, originalOutline) {
-  validateOriginalTopLevelPrefix(originalOutline, result.outline);
-  validateCompleteOutline(result.outline);
-  if (outlineDepth(result.outline?.outline || []) > 4) {
-    throw new Error('评审修复后目录层级不能超过四级');
-  }
-}
-
-function getExpansionReviewValidationIssue(outline, originalOutline) {
-  try {
-    validateExpansionReviewRepairResult({ outline }, originalOutline);
-    return '';
-  } catch (error) {
-    return error.message || String(error);
-  }
 }
 
 function buildTopLevelOutlineFromGroups(groups) {
@@ -1405,6 +1662,22 @@ function validateOriginalTopLevelPrefix(originalOutlinePayload, finalOutlinePayl
       throw new Error(`最终目录必须保留原方案第 ${index + 1} 个一级目录：${expectedTitle}`);
     }
   });
+}
+
+function validateFinalOutline(context) {
+  validateCompleteOutline(context.outline);
+  if (context.workflowKind !== 'existing-plan-expansion') {
+    validateAlignedTopLevelMapping(context.outline.outline || [], context.groups || []);
+    return;
+  }
+
+  if (outlineDepth(context.outline?.outline || []) > 4) {
+    throw new Error('最终目录层级不能超过四级');
+  }
+
+  if (context.outlineExpansionMode !== 'original-only') {
+    validateOriginalTopLevelPrefix(context.originalOutline, context.outline);
+  }
 }
 
 function buildExpansionTopLevelOutlineFromPlan(originalOutlinePayload, plan) {
@@ -1740,17 +2013,42 @@ async function collectJson(aiService, options) {
   return aiService.collectJsonResponse ? aiService.collectJsonResponse(options) : aiService.requestJson(options);
 }
 
-async function extractOriginalOutline(aiService, originalPlanMarkdown, log) {
+async function extractOriginalOutline(aiService, agentService, payload, originalPlanMarkdown, log) {
   log('正在从原方案中提取旧目录。', 8);
-  const outline = await collectJson(aiService, {
-    messages: buildExpandOutlineMessages(originalPlanMarkdown),
-    temperature: 0.7,
-    normalizer: (value) => normalizeOutlineResponse(value, new Set()),
-    validator: validateTopLevelOutline,
-    progressCallback: (message) => log(message, 12),
-    progressLabel: '旧方案目录提取',
-    failureMessage: '模型返回的旧方案目录数据格式无效',
-  });
+  let outline;
+  try {
+    outline = await collectJson(aiService, {
+      messages: buildExpandOutlineMessages(originalPlanMarkdown),
+      temperature: 0.7,
+      normalizer: (value) => normalizeOutlineResponse(value, new Set()),
+      validator: validateTopLevelOutline,
+      progressCallback: (message) => log(message, 12),
+      progressLabel: '旧方案目录提取',
+      failureMessage: '模型返回的旧方案目录数据格式无效',
+    });
+  } catch (error) {
+    assertRecoverableOutlineError(error, RECOVERABLE_OLD_OUTLINE_ERRORS);
+    const finalReview = createSyntheticFinalReview('旧方案目录提取失败', error);
+    const recovered = await runOutlineAgentRecovery(agentService, {
+      recoveryKind: 'original-outline-extraction',
+      title: '原方案目录自主提取',
+      payload,
+      originalPlanMarkdown,
+      outline: { outline: [] },
+      groups: [],
+      finalReview,
+      workflowKind: 'existing-plan-expansion',
+      outlineExpansionMode: payload?.outlineExpansionMode || 'ai-complement',
+      recoveryReason: finalReview.suggestions.join('；'),
+      startLogMessage: `旧方案目录提取失败，已切换到 OpenCode Agent 从原方案提取目录：${getErrorMessage(error)}`,
+      startProgress: 14,
+      validationLogMessage: 'OpenCode Agent 已完成旧目录提取，正在校验目录结构。',
+      validationProgress: 16,
+      successLogMessage: 'OpenCode Agent 旧目录提取结果通过程序校验。',
+      successProgress: 18,
+    }, log);
+    return recovered.outline;
+  }
   log('原方案旧目录提取完成，正在检查目录缺漏。', 14);
 
   let additions = { additions: [] };
@@ -1786,15 +2084,60 @@ async function runParallelAndThrowAfterSettled(tasks) {
   return results.map((result) => result.value);
 }
 
-async function reviewAlignedOutline(aiService, payload, groups, outline, log, progressLabel, progress = 82) {
+async function reviewFinalOutline(aiService, context, log) {
+  log('开始最终目录审核。', 99);
   return collectJson(aiService, {
-    messages: reviewAlignedOutlineMessages({ ...payload, groups, outline }),
+    messages: buildFinalOutlineReviewMessages(context),
     temperature: 0.3,
     normalizer: normalizeReviewResponse,
-    progressCallback: (message) => log(message, progress),
-    progressLabel,
-    failureMessage: '模型返回的审核结果格式无效',
+    progressCallback: (message) => log(message, 99),
+    progressLabel: '最终目录审核',
+    failureMessage: '模型返回的最终目录审核结果格式无效',
   });
+}
+
+async function runFinalOutlineGate({ aiService, agentService, payload, outline, groups, originalOutline, workflowKind, outlineExpansionMode, log }) {
+  const context = {
+    payload,
+    outline,
+    groups: groups || [],
+    originalOutline,
+    workflowKind,
+    outlineExpansionMode,
+  };
+  let finalReview;
+  try {
+    finalReview = await reviewFinalOutline(aiService, context, log);
+  } catch (error) {
+    assertRecoverableOutlineError(error, RECOVERABLE_FINAL_REVIEW_ERRORS);
+    finalReview = createSyntheticFinalReview('最终目录审核结果格式无效，跳过审核 JSON 后由 Agent 自主审查并修复', error);
+    const repaired = await repairFinalOutlineWithAgent(agentService, {
+      ...context,
+      finalReview,
+      recoveryReason: finalReview.suggestions.join('；'),
+      startLogMessage: `最终目录审核结果格式无效，已切换到 OpenCode Agent 自主审查并修复目录：${getErrorMessage(error)}`,
+    }, log);
+    return { outline: repaired.outline, groups: repaired.groups || context.groups };
+  }
+  if (finalReview.passed) {
+    try {
+      validateFinalOutline(context);
+    } catch (error) {
+      const validationReview = createSyntheticFinalReview('最终目录程序校验未通过', error);
+      const repaired = await repairFinalOutlineWithAgent(agentService, {
+        ...context,
+        finalReview: validationReview,
+        recoveryReason: validationReview.suggestions.join('；'),
+        startLogMessage: `最终目录审核通过但程序校验未通过，已切换到 OpenCode Agent 修复目录：${getErrorMessage(error)}`,
+      }, log);
+      return { outline: repaired.outline, groups: repaired.groups || context.groups };
+    }
+    log('最终目录审核通过，准备保存目录。', 99);
+    return { outline, groups: context.groups };
+  }
+
+  const repaired = await repairFinalOutlineWithAgent(agentService, { ...context, finalReview, recoveryReason: finalReview.suggestions.join('；') }, log);
+  return { outline: repaired.outline, groups: repaired.groups || context.groups };
 }
 
 async function extractRequirementGroups(aiService, payload, suggestions, log) {
@@ -1908,6 +2251,10 @@ async function expansionComplementWorkflow(aiService, payload, originalOutline, 
 
   log(`正在先处理第 1/${targets.length} 个一级目录以优化提示词缓存。`, progressRange.start);
   const firstResult = await runTarget(targets[0], 0);
+  if (targets.length > 1) {
+    log('提示词缓存预热完成，等待 5 秒后并发处理剩余一级目录。', progressRange.start);
+    await waitForPromptCacheWarmup();
+  }
   const remainingResults = targets.length > 1
     ? await runParallelAndThrowAfterSettled(targets.slice(1).map((item, offset) => runTarget(item, offset + 1)))
     : [];
@@ -1935,65 +2282,29 @@ async function expansionComplementWorkflow(aiService, payload, originalOutline, 
   return normalized;
 }
 
-async function reviewAndRepairExpansionOutline(aiService, payload, originalOutline, outline, log) {
-  let current = outline;
-  for (let round = 1; round <= MAX_EXPANSION_REVIEW_REPAIR_ROUNDS; round += 1) {
-    log(`开始第 ${round}/${MAX_EXPANSION_REVIEW_REPAIR_ROUNDS} 轮目录评审并修复。`, 99);
-    let result;
-    try {
-      result = await collectJson(aiService, {
-        messages: buildExpansionReviewRepairMessages({
-          ...payload,
-          originalOutline,
-          outline: current,
-          round,
-        }),
-        temperature: 0.3,
-        normalizer: (value) => normalizeExpansionReviewRepairResponse(value, current),
-        repairMessagesBuilder: (context) => buildExpansionReviewRepairJsonRepairMessages(context, originalOutline),
-        progressCallback: (message) => log(message, 99),
-        progressLabel: `目录评审修复 ${round}/${MAX_EXPANSION_REVIEW_REPAIR_ROUNDS}`,
-        failureMessage: '模型返回的目录评审修复结果格式无效',
-      });
-    } catch (error) {
-      log(`目录评审修复失败，已保留当前目录：${error.message || String(error)}`, 99);
-      return current;
-    }
-
-    current = result.outline;
-    const validationIssue = getExpansionReviewValidationIssue(current, originalOutline);
-    if (result.passed && !validationIssue) {
-      log(`第 ${round} 轮目录评审通过。`, 99);
-      return current;
-    }
-
-    const issues = [...(result.issues || [])];
-    if (validationIssue) issues.push(`程序复核：${validationIssue}`);
-    const issueText = issues.length ? `问题：${issues.slice(0, 5).join('；')}` : '模型未返回具体问题';
-    if (round < MAX_EXPANSION_REVIEW_REPAIR_ROUNDS) {
-      log(`第 ${round} 轮目录评审未完全通过，已应用本轮修复结果，准备继续复核。${issueText}`, 99);
-    } else {
-      log(`最终目录评审仍未完全通过，已保留第二轮修复结果。${issueText}`, 99);
-    }
-  }
-
-  return current;
-}
-
 async function buildAligned(aiService, payload, groups, suggestions, log, progressRange = { start: 30, end: 75 }) {
   const top = buildTopLevelOutlineFromGroups(groups);
   validateAlignedTopLevelMapping(top, groups);
   const childTotal = top.length;
   let completedChildren = 0;
-  log(`正在并发生成 ${childTotal} 个评分大类的二三级目录。`, progressRange.start);
-  const childResults = await runParallelAndThrowAfterSettled(top.map(async (item, index) => {
+  const runChild = async (item, index) => {
     const childrenResponse = await generateAlignedChildrenForGroup(aiService, payload, item, groups[index], suggestions, log, progressRange.start);
     const children = childrenResponse.children || [];
     completedChildren += 1;
     const progress = progressRange.start + Math.round((completedChildren / Math.max(childTotal, 1)) * (progressRange.end - progressRange.start));
     log(`已完成第 ${index + 1}/${childTotal} 个评分大类的二三级目录：${item.title || '未命名章节'}。`, progress);
     return { index, item, children };
-  }));
+  };
+  log(`正在先生成第 1/${childTotal} 个评分大类的二三级目录以优化提示词缓存。`, progressRange.start);
+  const firstResult = await runChild(top[0], 0);
+  if (childTotal > 1) {
+    log('提示词缓存预热完成，等待 5 秒后并发生成剩余评分大类目录。', progressRange.start);
+    await waitForPromptCacheWarmup();
+  }
+  const remainingResults = childTotal > 1
+    ? await runParallelAndThrowAfterSettled(top.slice(1).map((item, offset) => runChild(item, offset + 1)))
+    : [];
+  const childResults = [firstResult, ...remainingResults];
   const assembled = childResults
     .sort((left, right) => left.index - right.index)
     .map(({ item, children }) => ({ ...item, ...(children.length ? { children } : {}) }));
@@ -2004,35 +2315,58 @@ async function buildAligned(aiService, payload, groups, suggestions, log, progre
   return outline;
 }
 
-async function alignedWorkflow(aiService, payload, log) {
+async function alignedWorkflow(aiService, agentService, payload, log) {
   log('开始提取技术评分大类。', 10);
-  const groups = await extractRequirementGroups(aiService, payload, undefined, log);
-  log('技术评分大类提取完成，正在构建一级目录。', 24);
-  const first = await buildAligned(aiService, payload, groups, undefined, log, { start: 30, end: 75 });
-  log('目录生成完成，正在审核与技术评分项的对应关系。', 82);
-  const firstReview = await reviewAlignedOutline(aiService, payload, groups, first, log, '首次审核', 82);
-  if (firstReview.passed) {
-    log('目录审核通过，准备返回结果。', 96);
-    return first;
-  }
-
-  const suggestions = firstReview.suggestions?.length ? firstReview.suggestions : ['请保持一级目录与技术评分大类标题完全一致，并补全各大类下遗漏的评分细项。'];
-  log('目录审核未通过，正在根据修改建议重新提取技术评分大类并重新生成目录。', 88);
-  let revisedGroups = groups;
-  let second;
+  let groups;
   try {
-    log('正在根据审核建议重新提取技术评分大类。', 90);
-    revisedGroups = await extractRequirementGroups(aiService, payload, suggestions, log);
-    second = await buildAligned(aiService, payload, revisedGroups, suggestions, log, { start: 91, end: 96 });
-  } catch {
-    log('根据审核建议重新生成失败，已回退到首次生成结果。', 97);
-    return first;
+    groups = await extractRequirementGroups(aiService, payload, undefined, log);
+  } catch (error) {
+    assertRecoverableOutlineError(error, RECOVERABLE_REQUIREMENT_GROUP_ERRORS);
+    const finalReview = createSyntheticFinalReview('技术评分大类提取失败', error);
+    const recovered = await runOutlineAgentRecovery(agentService, {
+      recoveryKind: 'aligned-full-generation',
+      title: '技术方案目录自主生成',
+      payload,
+      outline: { outline: [] },
+      groups: [],
+      finalReview,
+      workflowKind: 'technical-plan',
+      outlineExpansionMode: payload?.outlineExpansionMode || 'ai-complement',
+      recoveryReason: finalReview.suggestions.join('；'),
+      startLogMessage: `技术评分大类提取失败，已切换到 OpenCode Agent 直接生成评分大类和目录：${getErrorMessage(error)}`,
+      startProgress: 24,
+      successLogMessage: 'OpenCode Agent 已完成评分大类和目录生成，准备进入知识库补目录。',
+      successProgress: 82,
+    }, log);
+    return recovered;
   }
-
-  log('二次生成完成，开始最终审核。', 97);
-  const secondReview = await reviewAlignedOutline(aiService, payload, revisedGroups, second, log, '最终审核', 97);
-  log(secondReview.passed ? '最终审核通过，准备返回修正后的结果。' : '最终审核未完全通过，已返回修正后的第二次结果。', 98);
-  return second;
+  log('技术评分大类提取完成，正在构建一级目录。', 24);
+  let outline;
+  try {
+    outline = await buildAligned(aiService, payload, groups, undefined, log, { start: 30, end: 75 });
+  } catch (error) {
+    assertRecoverableOutlineError(error, RECOVERABLE_ALIGNED_OUTLINE_ERRORS);
+    const finalReview = createSyntheticFinalReview('评分项对齐目录生成失败', error);
+    const topLevelOutline = normalizeOutlineResponse({ outline: buildTopLevelOutlineFromGroups(groups) }, new Set());
+    const recovered = await runOutlineAgentRecovery(agentService, {
+      recoveryKind: 'aligned-outline-generation',
+      title: '评分项对齐目录自主生成',
+      payload,
+      outline: topLevelOutline,
+      groups,
+      finalReview,
+      workflowKind: 'technical-plan',
+      outlineExpansionMode: payload?.outlineExpansionMode || 'ai-complement',
+      recoveryReason: finalReview.suggestions.join('；'),
+      startLogMessage: `评分项对齐目录生成失败，已切换到 OpenCode Agent 补齐完整目录：${getErrorMessage(error)}`,
+      startProgress: 82,
+      successLogMessage: 'OpenCode Agent 已完成评分项对齐目录生成，准备进入知识库补目录。',
+      successProgress: 82,
+    }, log);
+    return recovered;
+  }
+  log('目录主结果生成完成，准备进入知识库补目录。', 82);
+  return { outline, groups };
 }
 
 function mergeKnowledgePatches(patches) {
@@ -2091,7 +2425,7 @@ async function enhanceOutlineWithKnowledgeAdditions(aiService, payload, outline,
   if (knowledgeSegments.length > 1) {
     log(`知识库内容较多，已拆分为 ${knowledgeSegments.length} 段；将先处理第 1 段以优化提示词缓存，再并发处理剩余分段。`, 98);
   }
-  devLog(`知识库补目录：参考知识条目 ${knowledgeItems.length} 条，分段 ${knowledgeSegments.length} 段，每段知识库预算约 ${knowledgeSegments[0]?.segmentLimit || 0} 字符。`);
+  devLog(`知识库补目录：参考知识条目 ${knowledgeItems.length} 条，按完整条目拆分为 ${knowledgeSegments.length} 段，每段知识库预算约 ${knowledgeSegments[0]?.segmentLimit || 0} 字符。`);
 
   try {
     let completedSegments = 0;
@@ -2119,6 +2453,10 @@ async function enhanceOutlineWithKnowledgeAdditions(aiService, payload, outline,
       return { index: segment.index, patch };
     };
     const firstResult = await runKnowledgeSegment(knowledgeSegments[0]);
+    if (knowledgeSegments.length > 1) {
+      log('知识库补目录预热完成，等待 5 秒后并发处理剩余分段。', 98);
+      await waitForPromptCacheWarmup();
+    }
     const remainingResults = knowledgeSegments.length > 1
       ? await runParallelAndThrowAfterSettled(knowledgeSegments.slice(1).map((segment) => runKnowledgeSegment(segment)))
       : [];
@@ -2147,7 +2485,7 @@ async function enhanceOutlineWithKnowledgeAdditions(aiService, payload, outline,
   }
 }
 
-async function runOutlineGenerationTask({ aiService, workspaceStore, knowledgeBaseService, updateTask, payload }) {
+async function runOutlineGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask, payload }) {
   let logs = ['开始生成目录。'];
   let currentProgress = 5;
   function log(message, progress = currentProgress) {
@@ -2167,6 +2505,13 @@ async function runOutlineGenerationTask({ aiService, workspaceStore, knowledgeBa
   }
   const isExpansionWorkflow = storedPlan.workflowKind === 'existing-plan-expansion';
   const outlineExpansionMode = isExpansionWorkflow ? normalizeOutlineExpansionMode(payload, storedPlan) : 'ai-complement';
+  const baseTaskPayload = {
+    ...payload,
+    overview,
+    requirements,
+    outlineExpansionMode,
+    reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
+  };
   let technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineMode: 'aligned',
     outlineExpansionMode,
@@ -2187,7 +2532,7 @@ async function runOutlineGenerationTask({ aiService, workspaceStore, knowledgeBa
     if (!String(originalPlanMarkdown || '').trim()) {
       throw new Error('请先上传原方案，再生成目录');
     }
-    oldOutline = await extractOriginalOutline(aiService, originalPlanMarkdown, log);
+    oldOutline = await extractOriginalOutline(aiService, agentService, baseTaskPayload, originalPlanMarkdown, log);
   }
 
   technicalPlan = workspaceStore.updateTechnicalPlan({
@@ -2201,37 +2546,48 @@ async function runOutlineGenerationTask({ aiService, workspaceStore, knowledgeBa
   updateTask({ status: 'running', progress: currentProgress, logs }, technicalPlan);
 
   const taskPayload = {
-    ...payload,
-    overview,
-    requirements,
+    ...baseTaskPayload,
     oldOutline: formatOldOutlineForPrompt(oldOutline),
-    outlineExpansionMode,
-    reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
   };
 
-  if (isExpansionWorkflow && outlineExpansionMode === 'original-only') {
-    log('已选择仅使用原方案目录，跳过AI补充和知识库补目录。', 96);
-    technicalPlan = workspaceStore.updateTechnicalPlan({
-      outlineData: { ...oldOutline, project_overview: overview },
-      contentGenerationTask: undefined,
-      contentGenerationSections: {},
-      contentGenerationPlans: {},
-      contentGenerationRuntime: undefined,
-      outlineGenerationTask: updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }),
-    });
-    updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }, technicalPlan);
-    return;
+  let outline;
+  let groups = [];
+  if (isExpansionWorkflow) {
+    if (outlineExpansionMode === 'original-only') {
+      log('已选择仅使用原方案目录，跳过AI补充和知识库补目录。', 96);
+      technicalPlan = workspaceStore.updateTechnicalPlan({
+        outlineData: { ...oldOutline, project_overview: overview },
+        contentGenerationTask: undefined,
+        contentGenerationSections: {},
+        contentGenerationPlans: {},
+        contentGenerationRuntime: undefined,
+        outlineGenerationTask: updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }),
+      });
+      updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }, technicalPlan);
+      return;
+    } else {
+      outline = await expansionComplementWorkflow(aiService, taskPayload, oldOutline, log);
+    }
+  } else {
+    const alignedResult = await alignedWorkflow(aiService, agentService, taskPayload, log);
+    outline = alignedResult.outline;
+    groups = alignedResult.groups || [];
   }
 
-  let outline = isExpansionWorkflow
-    ? await expansionComplementWorkflow(aiService, taskPayload, oldOutline, log)
-    : await alignedWorkflow(aiService, taskPayload, log);
   const knowledgeItems = loadOutlineKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);
   outline = await enhanceOutlineWithKnowledgeAdditions(aiService, taskPayload, outline, knowledgeItems, log);
-  if (isExpansionWorkflow) {
-    outline = await reviewAndRepairExpansionOutline(aiService, taskPayload, oldOutline, outline, log);
-    validateExpansionReviewRepairResult({ outline }, oldOutline);
-  }
+  const finalResult = await runFinalOutlineGate({
+    aiService,
+    agentService,
+    payload: taskPayload,
+    outline,
+    groups,
+    originalOutline: oldOutline,
+    workflowKind: isExpansionWorkflow ? 'existing-plan-expansion' : 'technical-plan',
+    outlineExpansionMode,
+    log,
+  });
+  outline = finalResult.outline;
   technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineData: { ...outline, project_overview: overview },
     contentGenerationTask: undefined,

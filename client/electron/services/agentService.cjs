@@ -44,7 +44,7 @@ function writeWorkspaceFiles(workspaceDir, files = []) {
 }
 
 function createDefaultAgentPrompt({ task, outputFile }) {
-  return `你是易标投标工具箱中的自主智能体。请只在当前工作目录内工作。
+  return `请只在当前工作目录内工作。
 
 任务：
 ${task}
@@ -58,6 +58,61 @@ ${task}
 6. 最终回复请包含：发现的问题、处理动作、输出文件路径。`;
 }
 
+function createTaskAbortController(parentSignal, timeoutMs) {
+  const controller = new AbortController();
+  const abort = (reason) => {
+    if (!controller.signal.aborted) {
+      controller.abort(reason || new Error('Agent 任务已取消'));
+    }
+  };
+  const onParentAbort = () => abort(parentSignal.reason);
+
+  if (parentSignal?.aborted) {
+    abort(parentSignal.reason);
+  } else if (parentSignal) {
+    parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  }
+
+  const timer = setTimeout(() => abort(new Error('Agent 任务执行超时')), timeoutMs);
+  return {
+    signal: controller.signal,
+    cleanup() {
+      clearTimeout(timer);
+      if (parentSignal) {
+        try { parentSignal.removeEventListener('abort', onParentAbort); } catch {}
+      }
+    },
+  };
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) {
+    throw signal.reason || new Error('Agent 任务已取消');
+  }
+}
+
+function readOutputContent(workspaceDir, outputFile) {
+  const outputPath = path.join(workspaceDir, safeRelativePath(outputFile));
+  return {
+    path: outputPath,
+    content: fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf-8') : '',
+  };
+}
+
+function annotateAgentError(error, meta) {
+  error.agentTaskId = meta.taskId;
+  error.agentTitle = meta.title;
+  error.agentWorkspaceDir = meta.workspaceDir;
+  error.agentRuntimeRoot = meta.runtimeRoot || '';
+  error.agentOutputFile = meta.outputFile;
+  error.agentOutputPath = meta.outputPath || '';
+  error.agentPartialOutput = meta.outputContent || '';
+  error.agentPartialOutputChars = String(meta.outputContent || '').length;
+  error.openCodeRequestLog = Array.isArray(meta.requestLog) ? meta.requestLog : [];
+  error.openCodeStderrTail = meta.stderrTail || '';
+  return error;
+}
+
 function createAgentService({ app, configStore }) {
   async function runTask(payload = {}) {
     const taskId = payload.task_id || crypto.randomUUID();
@@ -66,51 +121,89 @@ function createAgentService({ app, configStore }) {
     const taskRoot = path.join(getAgentRuntimeDir(app), taskId);
     const workspaceDir = path.join(taskRoot, 'workspace');
 
-    writeWorkspaceFiles(workspaceDir, payload.files || []);
-
     const prompt = payload.prompt || createDefaultAgentPrompt({
       task: payload.task || '请分析当前输入文件，并输出可执行结果。',
       outputFile,
     });
 
-    const controller = new AbortController();
     const timeoutMs = Number(payload.timeout_ms || 10 * 60 * 1000);
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const abortController = createTaskAbortController(payload.signal, timeoutMs);
 
-    const server = await startIsolatedOpenCodeServer({
-      app,
-      configStore,
-      workspaceDir,
-      taskId,
-      keepRuntime: Boolean(payload.keep_runtime),
-    });
-
+    let server = null;
     try {
-      const result = await runOpenCodeTask(server, {
-        title,
-        prompt,
-        signal: controller.signal,
-      });
+      throwIfAborted(abortController.signal);
+      writeWorkspaceFiles(workspaceDir, payload.files || []);
 
-      const outputPath = path.join(workspaceDir, safeRelativePath(outputFile));
-      const outputContent = fs.existsSync(outputPath)
-        ? fs.readFileSync(outputPath, 'utf-8')
-        : '';
+      server = await startIsolatedOpenCodeServer({
+        app,
+        configStore,
+        workspaceDir,
+        taskId,
+        keepRuntime: Boolean(payload.keep_runtime),
+        timeoutMs,
+      });
+      throwIfAborted(abortController.signal);
+
+      let result = null;
+      try {
+        result = await runOpenCodeTask(server, {
+          title,
+          prompt,
+          signal: abortController.signal,
+        });
+      } catch (error) {
+        const output = readOutputContent(workspaceDir, outputFile);
+        annotateAgentError(error, {
+          taskId,
+          title,
+          workspaceDir,
+          runtimeRoot: server?.runtimeRoot || taskRoot,
+          outputFile,
+          outputPath: output.path,
+          outputContent: output.content,
+          requestLog: server?.requestLog || [],
+          stderrTail: server?.getStderrTail?.(8000) || '',
+        });
+        throw error;
+      }
+
+      const output = readOutputContent(workspaceDir, outputFile);
 
       return {
         success: true,
         task_id: taskId,
         title,
         workspace_dir: workspaceDir,
+        runtime_root: server?.runtimeRoot || taskRoot,
         output_file: outputFile,
-        output_content: outputContent,
+        output_content: output.content,
         assistant_text: result.text,
         diff: result.diff,
         session_id: result.session?.id || '',
+        opencode_request_log: server?.requestLog || [],
+        opencode_stderr_tail: server?.getStderrTail?.(8000) || '',
       };
+    } catch (error) {
+      if (!error.agentTaskId) {
+        const output = readOutputContent(workspaceDir, outputFile);
+        annotateAgentError(error, {
+          taskId,
+          title,
+          workspaceDir,
+          runtimeRoot: server?.runtimeRoot || taskRoot,
+          outputFile,
+          outputPath: output.path,
+          outputContent: output.content,
+          requestLog: server?.requestLog || [],
+          stderrTail: server?.getStderrTail?.(8000) || '',
+        });
+      }
+      throw error;
     } finally {
-      clearTimeout(timer);
-      await server.close();
+      abortController.cleanup();
+      if (server) {
+        await server.close();
+      }
     }
   }
 
