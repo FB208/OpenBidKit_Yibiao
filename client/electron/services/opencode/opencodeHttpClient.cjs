@@ -33,9 +33,10 @@ async function requestJson(server, routePath, options = {}) {
   return readJsonResponse(response, `OpenCode 请求失败：${routePath}`);
 }
 
-async function createSession(server, title) {
+async function createSession(server, title, options = {}) {
   return requestJson(server, '/session', {
     method: 'POST',
+    signal: options.signal,
     body: { title: title || 'Yibiao Agent Task' },
   });
 }
@@ -60,8 +61,10 @@ async function sendPrompt(server, sessionId, prompt, options = {}) {
   });
 }
 
-async function getSessionDiff(server, sessionId) {
-  return requestJson(server, `/session/${encodeURIComponent(sessionId)}/diff`);
+async function getSessionDiff(server, sessionId, options = {}) {
+  return requestJson(server, `/session/${encodeURIComponent(sessionId)}/diff`, {
+    signal: options.signal,
+  });
 }
 
 function extractTextFromPromptResult(result) {
@@ -74,9 +77,9 @@ function extractTextFromPromptResult(result) {
 }
 
 async function runOpenCodeTask(server, { title, prompt, signal }) {
-  const session = await createSession(server, title);
+  const session = await createSession(server, title, { signal });
   const messageResult = await sendPrompt(server, session.id, prompt, { signal });
-  const diff = await getSessionDiff(server, session.id).catch(() => []);
+  const diff = await getSessionDiff(server, session.id, { signal }).catch(() => []);
 
   return {
     session,

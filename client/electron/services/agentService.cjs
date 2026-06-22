@@ -58,6 +58,39 @@ ${task}
 6. 最终回复请包含：发现的问题、处理动作、输出文件路径。`;
 }
 
+function createTaskAbortController(parentSignal, timeoutMs) {
+  const controller = new AbortController();
+  const abort = (reason) => {
+    if (!controller.signal.aborted) {
+      controller.abort(reason || new Error('Agent 任务已取消'));
+    }
+  };
+  const onParentAbort = () => abort(parentSignal.reason);
+
+  if (parentSignal?.aborted) {
+    abort(parentSignal.reason);
+  } else if (parentSignal) {
+    parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  }
+
+  const timer = setTimeout(() => abort(new Error('Agent 任务执行超时')), timeoutMs);
+  return {
+    signal: controller.signal,
+    cleanup() {
+      clearTimeout(timer);
+      if (parentSignal) {
+        try { parentSignal.removeEventListener('abort', onParentAbort); } catch {}
+      }
+    },
+  };
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) {
+    throw signal.reason || new Error('Agent 任务已取消');
+  }
+}
+
 function createAgentService({ app, configStore }) {
   async function runTask(payload = {}) {
     const taskId = payload.task_id || crypto.randomUUID();
@@ -66,30 +99,32 @@ function createAgentService({ app, configStore }) {
     const taskRoot = path.join(getAgentRuntimeDir(app), taskId);
     const workspaceDir = path.join(taskRoot, 'workspace');
 
-    writeWorkspaceFiles(workspaceDir, payload.files || []);
-
     const prompt = payload.prompt || createDefaultAgentPrompt({
       task: payload.task || '请分析当前输入文件，并输出可执行结果。',
       outputFile,
     });
 
-    const controller = new AbortController();
     const timeoutMs = Number(payload.timeout_ms || 10 * 60 * 1000);
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const abortController = createTaskAbortController(payload.signal, timeoutMs);
 
-    const server = await startIsolatedOpenCodeServer({
-      app,
-      configStore,
-      workspaceDir,
-      taskId,
-      keepRuntime: Boolean(payload.keep_runtime),
-    });
-
+    let server = null;
     try {
+      throwIfAborted(abortController.signal);
+      writeWorkspaceFiles(workspaceDir, payload.files || []);
+
+      server = await startIsolatedOpenCodeServer({
+        app,
+        configStore,
+        workspaceDir,
+        taskId,
+        keepRuntime: Boolean(payload.keep_runtime),
+      });
+      throwIfAborted(abortController.signal);
+
       const result = await runOpenCodeTask(server, {
         title,
         prompt,
-        signal: controller.signal,
+        signal: abortController.signal,
       });
 
       const outputPath = path.join(workspaceDir, safeRelativePath(outputFile));
@@ -109,8 +144,10 @@ function createAgentService({ app, configStore }) {
         session_id: result.session?.id || '',
       };
     } finally {
-      clearTimeout(timer);
-      await server.close();
+      abortController.cleanup();
+      if (server) {
+        await server.close();
+      }
     }
   }
 

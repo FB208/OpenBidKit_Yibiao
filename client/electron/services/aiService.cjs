@@ -20,7 +20,7 @@ const ANALYTICS_PROJECT_NAME = 'yibiao-client';
 const OPENAI_IMAGE_PROVIDER_META = {
   jinlong: {
     label: '金龙中转站',
-    defaultBaseUrl: 'https://jlaudeapi.com/v1',
+    defaultBaseUrl: 'https://img-api.jlaudeapi.com/v1',
     logProvider: 'jinlong',
     modelLabel: '生图模型名称',
   },

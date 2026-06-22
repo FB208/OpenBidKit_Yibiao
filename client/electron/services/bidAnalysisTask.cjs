@@ -2,6 +2,12 @@ const { buildSectionContextHint } = require('../utils/bidSectionDetector.cjs');
 const { mergeSegmentedAiResults } = require('../utils/segmentedAiResultMerger.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 
+const PROMPT_CACHE_WARMUP_DELAY_MS = 5000;
+
+function waitForPromptCacheWarmup() {
+  return new Promise((resolve) => setTimeout(resolve, PROMPT_CACHE_WARMUP_DELAY_MS));
+}
+
 const stableSystemPrompt = `你是专业的投标资料分析助手。请严格基于用户提供的上下文完成提取和总结。
 
 通用要求：
@@ -330,15 +336,21 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
   async function runOneSafely(task) {
     try {
       await runOne(task);
+      return true;
     } catch (error) {
       handleTaskError(task, error);
+      return false;
     }
   }
 
   const projectOverviewTask = tasksToRun.find((task) => task.id === 'projectOverview');
   const remainingTasks = tasksToRun.filter((task) => task.id !== 'projectOverview');
   if (projectOverviewTask) {
-    await runOneSafely(projectOverviewTask);
+    const warmupSucceeded = await runOneSafely(projectOverviewTask);
+    if (warmupSucceeded && remainingTasks.length) {
+      updateTask({ status: 'running', progress: technicalPlan.bidAnalysisProgress || 0, logs: ['提示词缓存预热完成，等待 5 秒后开始并发解析剩余项。'] }, technicalPlan);
+      await waitForPromptCacheWarmup();
+    }
   }
   await Promise.all(remainingTasks.map(runOneSafely));
 

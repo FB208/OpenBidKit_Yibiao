@@ -68,6 +68,11 @@ const DEFAULT_CONTEXT_LENGTH_LIMIT = 400000;
 const KNOWLEDGE_CONTEXT_LIMIT_RATIO = 0.7;
 const MAX_KNOWLEDGE_ADDITIONS = 60;
 const MAX_KNOWLEDGE_UPDATES = 120;
+const PROMPT_CACHE_WARMUP_DELAY_MS = 5000;
+
+function waitForPromptCacheWarmup() {
+  return new Promise((resolve) => setTimeout(resolve, PROMPT_CACHE_WARMUP_DELAY_MS));
+}
 const FINAL_AGENT_OUTPUT_FILE = 'outline-agent-result.json';
 const FINAL_AGENT_TIMEOUT_MS = 15 * 60 * 1000;
 const RECOVERABLE_OLD_OUTLINE_ERRORS = ['模型返回的旧方案目录数据格式无效'];
@@ -2246,6 +2251,10 @@ async function expansionComplementWorkflow(aiService, payload, originalOutline, 
 
   log(`正在先处理第 1/${targets.length} 个一级目录以优化提示词缓存。`, progressRange.start);
   const firstResult = await runTarget(targets[0], 0);
+  if (targets.length > 1) {
+    log('提示词缓存预热完成，等待 5 秒后并发处理剩余一级目录。', progressRange.start);
+    await waitForPromptCacheWarmup();
+  }
   const remainingResults = targets.length > 1
     ? await runParallelAndThrowAfterSettled(targets.slice(1).map((item, offset) => runTarget(item, offset + 1)))
     : [];
@@ -2288,6 +2297,10 @@ async function buildAligned(aiService, payload, groups, suggestions, log, progre
   };
   log(`正在先生成第 1/${childTotal} 个评分大类的二三级目录以优化提示词缓存。`, progressRange.start);
   const firstResult = await runChild(top[0], 0);
+  if (childTotal > 1) {
+    log('提示词缓存预热完成，等待 5 秒后并发生成剩余评分大类目录。', progressRange.start);
+    await waitForPromptCacheWarmup();
+  }
   const remainingResults = childTotal > 1
     ? await runParallelAndThrowAfterSettled(top.slice(1).map((item, offset) => runChild(item, offset + 1)))
     : [];
@@ -2440,6 +2453,10 @@ async function enhanceOutlineWithKnowledgeAdditions(aiService, payload, outline,
       return { index: segment.index, patch };
     };
     const firstResult = await runKnowledgeSegment(knowledgeSegments[0]);
+    if (knowledgeSegments.length > 1) {
+      log('知识库补目录预热完成，等待 5 秒后并发处理剩余分段。', 98);
+      await waitForPromptCacheWarmup();
+    }
     const remainingResults = knowledgeSegments.length > 1
       ? await runParallelAndThrowAfterSettled(knowledgeSegments.slice(1).map((segment) => runKnowledgeSegment(segment)))
       : [];
