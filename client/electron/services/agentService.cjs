@@ -91,6 +91,28 @@ function throwIfAborted(signal) {
   }
 }
 
+function readOutputContent(workspaceDir, outputFile) {
+  const outputPath = path.join(workspaceDir, safeRelativePath(outputFile));
+  return {
+    path: outputPath,
+    content: fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf-8') : '',
+  };
+}
+
+function annotateAgentError(error, meta) {
+  error.agentTaskId = meta.taskId;
+  error.agentTitle = meta.title;
+  error.agentWorkspaceDir = meta.workspaceDir;
+  error.agentRuntimeRoot = meta.runtimeRoot || '';
+  error.agentOutputFile = meta.outputFile;
+  error.agentOutputPath = meta.outputPath || '';
+  error.agentPartialOutput = meta.outputContent || '';
+  error.agentPartialOutputChars = String(meta.outputContent || '').length;
+  error.openCodeRequestLog = Array.isArray(meta.requestLog) ? meta.requestLog : [];
+  error.openCodeStderrTail = meta.stderrTail || '';
+  return error;
+}
+
 function createAgentService({ app, configStore }) {
   async function runTask(payload = {}) {
     const taskId = payload.task_id || crypto.randomUUID();
@@ -118,31 +140,65 @@ function createAgentService({ app, configStore }) {
         workspaceDir,
         taskId,
         keepRuntime: Boolean(payload.keep_runtime),
+        timeoutMs,
       });
       throwIfAborted(abortController.signal);
 
-      const result = await runOpenCodeTask(server, {
-        title,
-        prompt,
-        signal: abortController.signal,
-      });
+      let result = null;
+      try {
+        result = await runOpenCodeTask(server, {
+          title,
+          prompt,
+          signal: abortController.signal,
+        });
+      } catch (error) {
+        const output = readOutputContent(workspaceDir, outputFile);
+        annotateAgentError(error, {
+          taskId,
+          title,
+          workspaceDir,
+          runtimeRoot: server?.runtimeRoot || taskRoot,
+          outputFile,
+          outputPath: output.path,
+          outputContent: output.content,
+          requestLog: server?.requestLog || [],
+          stderrTail: server?.getStderrTail?.(8000) || '',
+        });
+        throw error;
+      }
 
-      const outputPath = path.join(workspaceDir, safeRelativePath(outputFile));
-      const outputContent = fs.existsSync(outputPath)
-        ? fs.readFileSync(outputPath, 'utf-8')
-        : '';
+      const output = readOutputContent(workspaceDir, outputFile);
 
       return {
         success: true,
         task_id: taskId,
         title,
         workspace_dir: workspaceDir,
+        runtime_root: server?.runtimeRoot || taskRoot,
         output_file: outputFile,
-        output_content: outputContent,
+        output_content: output.content,
         assistant_text: result.text,
         diff: result.diff,
         session_id: result.session?.id || '',
+        opencode_request_log: server?.requestLog || [],
+        opencode_stderr_tail: server?.getStderrTail?.(8000) || '',
       };
+    } catch (error) {
+      if (!error.agentTaskId) {
+        const output = readOutputContent(workspaceDir, outputFile);
+        annotateAgentError(error, {
+          taskId,
+          title,
+          workspaceDir,
+          runtimeRoot: server?.runtimeRoot || taskRoot,
+          outputFile,
+          outputPath: output.path,
+          outputContent: output.content,
+          requestLog: server?.requestLog || [],
+          stderrTail: server?.getStderrTail?.(8000) || '',
+        });
+      }
+      throw error;
     } finally {
       abortController.cleanup();
       if (server) {

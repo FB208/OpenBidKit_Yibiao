@@ -15,8 +15,14 @@ const {
 } = require('../textTokenStatsStore.cjs');
 
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
-const UPSTREAM_TIMEOUT_MS = 300000;
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 300000;
+const SERVER_TIMEOUT_BUFFER_MS = 10000;
 const RATE_LIMIT_MAX_RETRIES = 3;
+
+function normalizeTimeoutMs(value, fallback = DEFAULT_UPSTREAM_TIMEOUT_MS) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
+}
 
 function createProxyToken() {
   return crypto.randomBytes(32).toString('base64url');
@@ -276,7 +282,7 @@ function createAbortError() {
   return error;
 }
 
-function createTimeoutSignal(parentSignal, timeoutMs = UPSTREAM_TIMEOUT_MS) {
+function createTimeoutSignal(parentSignal, timeoutMs = DEFAULT_UPSTREAM_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(createAbortError()), timeoutMs);
 
@@ -653,7 +659,7 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
   });
 }
 
-async function requestOpenCodeChatCompletion({ app, configStore, textQueue, openAiBody, signal }) {
+async function requestOpenCodeChatCompletion({ app, configStore, textQueue, openAiBody, signal, timeoutMs }) {
   return textQueue.enqueue(async () => {
     const config = configStore.load();
     assertTextModelConfig(config);
@@ -662,7 +668,7 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
     const requestId = createAiRequestId();
 
     return retryRateLimitedRequest(async ({ attempt }) => {
-      const timeout = createTimeoutSignal(signal, UPSTREAM_TIMEOUT_MS);
+      const timeout = createTimeoutSignal(signal, timeoutMs);
       const startedAt = Date.now();
 
       try {
@@ -761,7 +767,7 @@ function bindAbortToRequestLifecycle({ req, res, controller }) {
   });
 }
 
-async function handleChatCompletions({ req, res, app, configStore, textQueue }) {
+async function handleChatCompletions({ req, res, app, configStore, textQueue, timeoutMs }) {
   const controller = new AbortController();
   bindAbortToRequestLifecycle({ req, res, controller });
 
@@ -772,6 +778,7 @@ async function handleChatCompletions({ req, res, app, configStore, textQueue }) 
     textQueue,
     openAiBody: requestBody,
     signal: controller.signal,
+    timeoutMs,
   });
 
   res.statusCode = upstream.status;
@@ -791,8 +798,9 @@ function handleModels({ res }) {
   });
 }
 
-function createAiServiceOpenAiProxy({ app, configStore }) {
+function createAiServiceOpenAiProxy({ app, configStore, timeoutMs }) {
   const token = createProxyToken();
+  const upstreamTimeoutMs = normalizeTimeoutMs(timeoutMs);
   const textQueue = createOpenCodeTextQueue({
     defaultLimit: 10,
     getLimit() {
@@ -825,7 +833,7 @@ function createAiServiceOpenAiProxy({ app, configStore }) {
       }
 
       if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
-        await handleChatCompletions({ req, res, app, configStore, textQueue });
+        await handleChatCompletions({ req, res, app, configStore, textQueue, timeoutMs: upstreamTimeoutMs });
         return;
       }
 
@@ -850,8 +858,8 @@ function createAiServiceOpenAiProxy({ app, configStore }) {
     }
   });
 
-  server.headersTimeout = 310000;
-  server.requestTimeout = 310000;
+  server.headersTimeout = upstreamTimeoutMs + SERVER_TIMEOUT_BUFFER_MS;
+  server.requestTimeout = upstreamTimeoutMs + SERVER_TIMEOUT_BUFFER_MS;
 
   return {
     token,

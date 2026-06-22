@@ -3061,8 +3061,12 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     throw new Error('没有可继续的已暂停正文生成任务');
   }
   let contentRuntime = normalizeContentGenerationRuntime(resume ? storedPlan.contentGenerationRuntime : {});
-  const regenerate = !resume && Boolean(payload.regenerate);
+  const retryContentCorrection = !resume && Boolean(payload.retryContentCorrection ?? payload.retry_content_correction);
+  const regenerate = !resume && !retryContentCorrection && Boolean(payload.regenerate);
   const targetItemId = resume ? contentRuntime.target_item_id : String(payload.targetItemId || '').trim();
+  if (retryContentCorrection && targetItemId) {
+    throw new Error('单小节重新生成不支持重试内容矫正');
+  }
   const fullRegenerate = regenerate && !targetItemId;
   if (fullRegenerate) {
     outlineData = { ...outlineData, outline: clearOutlineContent(outlineData.outline) };
@@ -3165,6 +3169,20 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     }
   }
 
+  if (retryContentCorrection) {
+    const successfulIds = leaves
+      .filter(({ item }) => {
+        const section = sections[item.id] || {};
+        return section.status === 'success';
+      })
+      .map(({ item }) => item.id);
+    if (successfulIds.length !== leaves.length) {
+      throw new Error('只有正文全部生成成功后，才能重试内容矫正');
+    }
+    successfulIds.forEach((itemId) => touchedItemIds.add(itemId));
+    tasksToRun = [];
+  }
+
   const retryItemIds = new Set(tasksToRun
     .filter(({ item }) => sections[item.id]?.status === 'error')
     .map(({ item }) => item.id));
@@ -3199,7 +3217,11 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   refreshRunLimits(tasksToRun);
-  let logs = [resume ? `继续已暂停的正文生成任务，共 ${leaves.length} 个小节。` : `准备生成正文，共 ${leaves.length} 个小节。`];
+  let logs = [retryContentCorrection
+    ? `准备重试内容矫正，共 ${leaves.length} 个已生成小节。`
+    : resume
+      ? `继续已暂停的正文生成任务，共 ${leaves.length} 个小节。`
+      : `准备生成正文，共 ${leaves.length} 个小节。`];
   if (targetItemId) {
     logs = [`准备重新生成正文小节：${targetItemId}。`];
   }
@@ -3238,6 +3260,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       resume,
       regenerate,
       full_regenerate: fullRegenerate,
+      retry_content_correction: retryContentCorrection,
       leaf_count: leaves.length,
       task_count: tasksToRun.length,
       text_concurrency_limit: contentConcurrency,
@@ -3264,6 +3287,99 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       developerLogger.write(event, payload);
     } catch {
       // 调试日志不能影响正文生成主流程。
+    }
+  }
+
+  function agentErrorDiagnostics(error) {
+    return {
+      error: error?.message || String(error || '未知错误'),
+      name: error?.name || '',
+      cause: error?.cause?.message || error?.cause?.code || error?.openCodeCause || '',
+      stack: error?.stack || '',
+      agent_task_id: error?.agentTaskId || '',
+      agent_title: error?.agentTitle || '',
+      agent_workspace_dir: error?.agentWorkspaceDir || '',
+      agent_runtime_root: error?.agentRuntimeRoot || '',
+      agent_output_file: error?.agentOutputFile || '',
+      agent_output_path: error?.agentOutputPath || '',
+      agent_partial_output_chars: error?.agentPartialOutputChars || String(error?.agentPartialOutput || '').length,
+      opencode_route: error?.openCodeRoute || '',
+      opencode_method: error?.openCodeMethod || '',
+      opencode_status: error?.openCodeStatus || 0,
+      opencode_duration_ms: error?.openCodeDurationMs || 0,
+      opencode_cause: error?.openCodeCause || '',
+      opencode_request_log: Array.isArray(error?.openCodeRequestLog) ? error.openCodeRequestLog : [],
+      opencode_stderr_tail: error?.openCodeStderrTail || '',
+    };
+  }
+
+  async function runAgentTaskWithRecoveredOutput(payload, eventPrefix) {
+    function normalizeAgentFilePath(value) {
+      return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/^(\.\/)+/, '').toLowerCase();
+    }
+
+    function findSeededOutputContent() {
+      const outputPath = normalizeAgentFilePath(payload.output_file || '');
+      if (!outputPath) {
+        return null;
+      }
+      const seededOutput = (Array.isArray(payload.files) ? payload.files : [])
+        .find((file) => normalizeAgentFilePath(file?.path) === outputPath);
+      return seededOutput ? String(seededOutput.content || '') : null;
+    }
+
+    try {
+      const result = await agentService.runTask(payload);
+      writeDeveloperLog(`${eventPrefix}.opencode.done`, {
+        agent_task_id: result?.task_id || '',
+        agent_session_id: result?.session_id || '',
+        agent_workspace_dir: result?.workspace_dir || '',
+        agent_runtime_root: result?.runtime_root || '',
+        output_file: result?.output_file || '',
+        output_metrics: textMetrics(result?.output_content || ''),
+        opencode_request_log: result?.opencode_request_log || [],
+        opencode_stderr_tail: result?.opencode_stderr_tail || '',
+      });
+      return result;
+    } catch (error) {
+      if (isPauseRequested() || isPauseLikeError(error)) {
+        throw error;
+      }
+      const diagnostics = agentErrorDiagnostics(error);
+      writeDeveloperLog(`${eventPrefix}.opencode.error`, diagnostics);
+      const recoveredOutput = String(error?.agentPartialOutput || '').trim();
+      if (!recoveredOutput) {
+        throw error;
+      }
+      const seededOutputContent = findSeededOutputContent();
+      if (seededOutputContent !== null
+        && normalizeNewlines(recoveredOutput).trim() === normalizeNewlines(seededOutputContent).trim()) {
+        writeDeveloperLog(`${eventPrefix}.output.recovered_rejected`, {
+          ...diagnostics,
+          reason: 'same_as_seeded_output',
+          output_metrics: textMetrics(recoveredOutput),
+        });
+        throw error;
+      }
+      writeDeveloperLog(`${eventPrefix}.output.recovered`, {
+        ...diagnostics,
+        output_metrics: textMetrics(recoveredOutput),
+      });
+      return {
+        success: true,
+        recovered: true,
+        task_id: error?.agentTaskId || '',
+        title: error?.agentTitle || payload.title || 'Agent 任务',
+        workspace_dir: error?.agentWorkspaceDir || '',
+        runtime_root: error?.agentRuntimeRoot || '',
+        output_file: error?.agentOutputFile || payload.output_file || '',
+        output_content: recoveredOutput,
+        assistant_text: '',
+        diff: [],
+        session_id: '',
+        opencode_request_log: diagnostics.opencode_request_log,
+        opencode_stderr_tail: diagnostics.opencode_stderr_tail,
+      };
     }
   }
 
@@ -3383,7 +3499,9 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   });
 
   if (!tasksToRun.length) {
-    logs = [...logs, '正文已全部生成，将检查最低字数要求。'];
+    logs = [...logs, retryContentCorrection
+      ? '正文已全部生成，将直接重试内容矫正和后续处理。'
+      : '正文已全部生成，将检查最低字数要求。'];
   }
 
   function saveSection(item, partial, contentForOutline, taskPartial = {}) {
@@ -4820,14 +4938,14 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     try {
       abortAgentIfPauseRequested();
       pauseIfRequested('正文生成已在原方案覆盖 Agent 修复开始前暂停，本次 Agent 未启动；继续后将重新执行。');
-      const agentResult = await agentService.runTask({
+      const agentResult = await runAgentTaskWithRecoveredOutput({
         title: '原方案覆盖 Agent 修复',
         prompt: buildAgentOriginalCoverageRepairPrompt(),
         output_file: 'technical-plan.md',
         files,
         timeout_ms: 30 * 60 * 1000,
         signal: agentAbortController.signal,
-      });
+      }, 'original_coverage.agent');
       pauseIfRequested('正文生成已在原方案覆盖 Agent 修复结果回写前暂停，本次 Agent 输出未回写；继续后将重新执行。');
 
       updateAgentOriginalCoverageProgress(3, '读取 Agent 修复后的正文');
@@ -4878,8 +4996,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       logs = [...logs, `原方案覆盖 Agent 修复失败：${error.message || '未知错误'}。已保留原正文，${failedCount} 个小节需人工核对，任务将继续进入后续流程。`];
       writeDeveloperLog('original_coverage.agent.failed', {
         failed_count: failedCount,
-        error: error.message || String(error),
-        stack: error.stack || '',
+        ...agentErrorDiagnostics(error),
       });
       updateAgentOriginalCoverageProgress(contentStats.audit_agent_step_completed || 2, '原方案覆盖 Agent 修复失败', {
         audit_agent_failed_sections: failedCount,
@@ -5358,14 +5475,14 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     try {
       abortAgentIfPauseRequested();
       pauseIfRequested('正文生成已在 Agent 全文一致性修复开始前暂停，本次 Agent 未启动；继续后将重新执行 Agent 修复。');
-      const agentResult = await agentService.runTask({
+      const agentResult = await runAgentTaskWithRecoveredOutput({
         title: '全文一致性 Agent 修复',
         prompt: buildAgentConsistencyRepairPrompt(),
         output_file: 'technical-plan.md',
         files,
         timeout_ms: 30 * 60 * 1000,
         signal: agentAbortController.signal,
-      });
+      }, 'consistency.agent');
       pauseIfRequested('正文生成已在 Agent 全文一致性修复结果回写前暂停，本次 Agent 输出未回写；继续后将重新执行 Agent 修复。');
 
       updateAgentConsistencyProgress(3, '读取 Agent 修复后的全文');
@@ -5417,7 +5534,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       writeDeveloperLog('consistency.agent.failed', {
         target_item_id: normalizedTargetId,
         failed_count: failedCount,
-        error: error.message || String(error),
+        ...agentErrorDiagnostics(error),
       });
       updateAgentConsistencyProgress(contentStats.audit_agent_step_completed || 2, 'Agent 一致性修复失败', {
         audit_agent_failed_sections: failedCount,
@@ -6084,8 +6201,13 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     }
 
     if (!targetItemId) {
-      await ensureMinimumWords();
-      pauseIfRequested('正文生成已在最低字数检查后暂停，可导出当前已完成内容，稍后继续。');
+      if (retryContentCorrection) {
+        logs = [...logs, '本次为内容矫正重试，跳过正文生成和最低字数扩写，直接进入内容矫正阶段。'];
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      } else {
+        await ensureMinimumWords();
+        pauseIfRequested('正文生成已在最低字数检查后暂停，可导出当前已完成内容，稍后继续。');
+      }
       if (originalPlanCoverageRepairMode === 'agent') {
         await runAgentOriginalCoverageRepairIfEnabled();
       } else {

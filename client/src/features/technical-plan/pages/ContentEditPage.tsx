@@ -448,6 +448,10 @@ function ContentEditPage({
   const currentWords = contentStats?.current_words ?? totalWords;
   const minimumWordsUnmet = minimumWords > 0 && currentWords < minimumWords;
   const canRetryMinimumWords = taskFailed && minimumWordsUnmet && completedCount === leaves.length;
+  const canRetryContentCorrection = taskFailed
+    && leaves.length > 0
+    && completedCount === leaves.length
+    && ['original-auditing', 'auditing', 'table-cleaning'].includes(String(contentStats?.phase || ''));
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
   const wordExpansionProgress = minimumWords ? Math.min(100, Math.round((currentWords / minimumWords) * 100)) : 0;
@@ -566,13 +570,15 @@ function ContentEditPage({
       ? '暂停'
       : paused
         ? '继续'
-        : canRetryMinimumWords
-          ? '继续补足字数'
-          : completedCount === leaves.length && leaves.length
-            ? '重新生成正文'
-            : completedCount > 0
-              ? '继续生成正文'
-              : '生成正文';
+        : canRetryContentCorrection
+          ? '重试内容矫正'
+          : canRetryMinimumWords
+            ? '继续补足字数'
+            : completedCount === leaves.length && leaves.length
+              ? '重新生成正文'
+              : completedCount > 0
+                ? '继续生成正文'
+                : '生成正文';
   const editing = Boolean(selectedItem && selectedIsLeaf && editingItemId === selectedItem.id);
   const imageStats = task?.stats?.images;
   const aiImageStats = normalizeImageStats(imageStats?.ai);
@@ -734,6 +740,19 @@ function ContentEditPage({
     }
   };
 
+  const retryContentCorrection = async () => {
+    if (!canRetryContentCorrection) {
+      return;
+    }
+
+    try {
+      await window.yibiao?.tasks.startContentGeneration({ retryContentCorrection: true });
+      showToast('内容矫正重试任务已在后台启动', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '重试内容矫正失败', 'error');
+    }
+  };
+
   const handleGenerationButtonClick = () => {
     if (running) {
       void pauseGeneration();
@@ -741,6 +760,10 @@ function ContentEditPage({
     }
     if (paused) {
       void resumeGeneration();
+      return;
+    }
+    if (canRetryContentCorrection) {
+      void retryContentCorrection();
       return;
     }
     if (completedCount === leaves.length && leaves.length) {

@@ -5,6 +5,21 @@ function headers(server) {
   };
 }
 
+function errorCauseMessage(error) {
+  return error?.cause?.message || error?.cause?.code || '';
+}
+
+function appendRequestLog(server, payload) {
+  if (!Array.isArray(server?.requestLog)) return;
+  server.requestLog.push({
+    at: new Date().toISOString(),
+    ...payload,
+  });
+  if (server.requestLog.length > 80) {
+    server.requestLog.splice(0, server.requestLog.length - 80);
+  }
+}
+
 async function readJsonResponse(response, fallbackMessage) {
   const raw = await response.text();
   let data = null;
@@ -23,14 +38,44 @@ async function readJsonResponse(response, fallbackMessage) {
 }
 
 async function requestJson(server, routePath, options = {}) {
-  const response = await fetch(`${server.baseUrl}${routePath}`, {
-    method: options.method || 'GET',
-    headers: headers(server),
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    signal: options.signal,
-  });
+  const method = options.method || 'GET';
+  const startedAt = Date.now();
+  let response = null;
+  try {
+    response = await fetch(`${server.baseUrl}${routePath}`, {
+      method,
+      headers: headers(server),
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: options.signal,
+    });
 
-  return readJsonResponse(response, `OpenCode 请求失败：${routePath}`);
+    const data = await readJsonResponse(response, `OpenCode 请求失败：${routePath}`);
+    appendRequestLog(server, {
+      route: routePath,
+      method,
+      status: response.status,
+      duration_ms: Date.now() - startedAt,
+      ok: true,
+    });
+    return data;
+  } catch (error) {
+    error.openCodeRoute = routePath;
+    error.openCodeMethod = method;
+    error.openCodeBaseUrl = server.baseUrl;
+    error.openCodeStatus = response?.status || 0;
+    error.openCodeDurationMs = Date.now() - startedAt;
+    error.openCodeCause = errorCauseMessage(error);
+    appendRequestLog(server, {
+      route: routePath,
+      method,
+      status: response?.status || 0,
+      duration_ms: error.openCodeDurationMs,
+      ok: false,
+      error: error.message || String(error),
+      cause: error.openCodeCause,
+    });
+    throw error;
+  }
 }
 
 async function createSession(server, title, options = {}) {
