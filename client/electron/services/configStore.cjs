@@ -74,7 +74,7 @@ const defaultTextModelProfiles = {
 const defaultImageModelProfiles = {
   jinlong: {
     provider: 'jinlong',
-    base_url: 'https://jlaudeapi.com/v1',
+    base_url: 'https://img-api.jlaudeapi.com/v1',
     api_key: '',
     model_name: '',
     request_mode: 'stream',

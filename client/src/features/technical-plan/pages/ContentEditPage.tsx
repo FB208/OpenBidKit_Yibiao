@@ -7,7 +7,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { MarkdownEditor, MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { ClientConfig, ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
-import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement, TechnicalPlanWorkflowKind } from '../types';
+import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement, OriginalPlanCoverageRepairMode, TechnicalPlanWorkflowKind } from '../types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
@@ -31,7 +31,7 @@ interface OutlineNodeMeta {
   words: number;
 }
 
-type ContentGenerationAction = 'start' | 'continue' | 'retry_minimum_words' | 'regenerate';
+type ContentGenerationAction = 'start' | 'continue' | 'retry_minimum_words' | 'regenerate' | 'regenerate_section';
 
 interface PendingMinimumWordsChoice {
   options: ContentGenerationOptions;
@@ -68,6 +68,16 @@ const tableRequirementOptions: Array<{ value: ContentTableRequirement; label: st
   { value: 'heavy', label: '大量', description: '保持现有编排逻辑' },
 ];
 
+const consistencyRepairModeOptions: Array<{ value: ConsistencyRepairMode; label: string; description: string }> = [
+  { value: 'agent', label: 'Agent 修复（推荐）', description: '交给 Agent 审计并修复全文，质量更高但耗时更久' },
+  { value: 'normal', label: '普通修复', description: '使用现有分组审计和局部替换修复，速度更快' },
+];
+
+const originalPlanCoverageRepairModeOptions: Array<{ value: OriginalPlanCoverageRepairMode; label: string; description: string }> = [
+  { value: 'agent', label: 'Agent 修复（推荐）', description: '全文检查并补回原方案核心内容，质量更高但耗时更久' },
+  { value: 'normal', label: '普通修复', description: '按小节审计和局部补写，速度更快；单章节重写始终使用普通修复' },
+];
+
 const defaultContentGenerationOptions: ContentGenerationOptions = {
   useAiImages: false,
   maxAiImages: 6,
@@ -75,11 +85,21 @@ const defaultContentGenerationOptions: ContentGenerationOptions = {
   tableRequirement: 'heavy',
   minimumWords: 0,
   enableConsistencyAudit: true,
+  consistencyRepairMode: 'agent',
   enableOriginalPlanCoverageAudit: false,
+  originalPlanCoverageRepairMode: 'agent',
 };
 
 function isContentTableRequirement(value: unknown): value is ContentTableRequirement {
   return tableRequirementOptions.some((option) => option.value === value);
+}
+
+function isConsistencyRepairMode(value: unknown): value is ConsistencyRepairMode {
+  return consistencyRepairModeOptions.some((option) => option.value === value);
+}
+
+function isOriginalPlanCoverageRepairMode(value: unknown): value is OriginalPlanCoverageRepairMode {
+  return originalPlanCoverageRepairModeOptions.some((option) => option.value === value);
 }
 
 function buildDefaultGenerationOptions(imageModelAvailable: boolean, leafCount: number): ContentGenerationOptions {
@@ -104,7 +124,9 @@ function normalizeGenerationOptions(options: ContentGenerationOptions | DraftCon
     tableRequirement: isContentTableRequirement(tableRequirement) ? tableRequirement : fallback.tableRequirement,
     minimumWords: Math.max(0, Number.isFinite(requestedMinimumWords) ? Math.round(requestedMinimumWords) : fallback.minimumWords),
     enableConsistencyAudit: Boolean(options?.enableConsistencyAudit ?? fallback.enableConsistencyAudit),
+    consistencyRepairMode: isConsistencyRepairMode(options?.consistencyRepairMode) ? options.consistencyRepairMode : fallback.consistencyRepairMode,
     enableOriginalPlanCoverageAudit: isExpansionWorkflow ? Boolean(options?.enableOriginalPlanCoverageAudit ?? fallback.enableOriginalPlanCoverageAudit) : false,
+    originalPlanCoverageRepairMode: isExpansionWorkflow && isOriginalPlanCoverageRepairMode(options?.originalPlanCoverageRepairMode) ? options.originalPlanCoverageRepairMode : fallback.originalPlanCoverageRepairMode,
   };
 }
 
@@ -426,6 +448,10 @@ function ContentEditPage({
   const currentWords = contentStats?.current_words ?? totalWords;
   const minimumWordsUnmet = minimumWords > 0 && currentWords < minimumWords;
   const canRetryMinimumWords = taskFailed && minimumWordsUnmet && completedCount === leaves.length;
+  const canRetryContentCorrection = taskFailed
+    && leaves.length > 0
+    && completedCount === leaves.length
+    && ['original-auditing', 'auditing', 'table-cleaning'].includes(String(contentStats?.phase || ''));
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
   const wordExpansionProgress = minimumWords ? Math.min(100, Math.round((currentWords / minimumWords) * 100)) : 0;
@@ -435,7 +461,15 @@ function ContentEditPage({
   const auditFixTotal = contentStats?.audit_fix_total || 0;
   const auditFixCompleted = contentStats?.audit_fix_completed || 0;
   const auditFixFailed = contentStats?.audit_fix_failed || 0;
-  const auditProgress = auditFixTotal
+  const auditAgentMode = contentStats?.audit_repair_mode === 'agent';
+  const auditAgentStepTotal = contentStats?.audit_agent_step_total || 0;
+  const auditAgentStepCompleted = contentStats?.audit_agent_step_completed || 0;
+  const auditAgentStepLabel = contentStats?.audit_agent_step_label || '';
+  const auditAgentChangedSections = contentStats?.audit_agent_changed_sections || 0;
+  const auditAgentFailedSections = contentStats?.audit_agent_failed_sections || 0;
+  const auditProgress = auditAgentMode && auditAgentStepTotal
+    ? Math.round((auditAgentStepCompleted / auditAgentStepTotal) * 100)
+    : auditFixTotal
     ? Math.round((auditFixCompleted / auditFixTotal) * 100)
     : auditGroupTotal
       ? Math.round((auditGroupCompleted / auditGroupTotal) * 100)
@@ -447,9 +481,11 @@ function ContentEditPage({
   const tableCleanupProgress = tableCleanupTotal ? Math.round((tableCleanupCompleted / tableCleanupTotal) * 100) : 0;
   const auditCorrectionCount = auditFixTotal
     ? `${auditFixCompleted}/${auditFixTotal}`
-    : auditGroupTotal
-      ? `${auditGroupCompleted}/${auditGroupTotal}`
-      : '检查中';
+    : auditAgentMode && auditAgentStepTotal
+      ? `${auditAgentStepCompleted}/${auditAgentStepTotal}`
+      : auditGroupTotal
+        ? `${auditGroupCompleted}/${auditGroupTotal}`
+        : '检查中';
   const contentCorrectionProgress = tableCleaning ? tableCleanupProgress : auditProgress;
   const contentCorrectionCount = tableCleaning
     ? tableCleanupTotal ? `${tableCleanupCompleted}/${tableCleanupTotal}` : '检查中'
@@ -486,14 +522,28 @@ function ContentEditPage({
         ? paused ? `正文生成已暂停在扩写阶段，最低字数达成 ${wordExpansionProgress}%。` : `正在扩写正文，最低字数达成 ${wordExpansionProgress}%。`
         : originalAuditing
             ? paused
-              ? `内容矫正已暂停在原方案覆盖检查阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 个小节，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
-              : auditFixTotal
+              ? auditAgentMode
+                ? `内容矫正已暂停在原方案覆盖 Agent 修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
+                : `内容矫正已暂停在原方案覆盖检查阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 个小节，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
+              : auditAgentMode
+                ? auditAgentFailedSections
+                  ? `原方案覆盖 Agent 修复未完成：${auditAgentFailedSections} 个小节需人工核对，任务将继续进入后续流程。`
+                  : auditAgentStepCompleted >= auditAgentStepTotal && auditAgentChangedSections
+                    ? `原方案覆盖 Agent 修复完成：已回写 ${auditAgentChangedSections} 个小节。`
+                    : `正在内容矫正：${auditAgentStepLabel || 'Agent 正在检查并补回原方案内容'}，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal || 5}。`
+                : auditFixTotal
                 ? `正在内容矫正：补写原方案缺失内容，已完成 ${auditFixCompleted}/${auditFixTotal} 个小节${auditFixFailed ? `，${auditFixFailed} 个需人工核对` : ''}。`
                 : `正在内容矫正：检查原方案覆盖情况，已完成 ${auditGroupCompleted}/${auditGroupTotal} 个小节${auditConflictTotal ? `，发现 ${auditConflictTotal} 个需核对来源段` : ''}。`
           : auditing
             ? paused
-              ? `内容矫正已暂停在全文一致性检查阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 组，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
-              : auditFixTotal
+              ? auditAgentMode
+                ? `内容矫正已暂停在 Agent 全文一致性修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
+                : `内容矫正已暂停在全文一致性检查阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 组，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
+              : auditAgentMode
+                ? auditAgentStepCompleted >= auditAgentStepTotal && auditAgentChangedSections
+                  ? `Agent 一致性修复完成：已回写 ${auditAgentChangedSections} 个小节。`
+                  : `正在内容矫正：${auditAgentStepLabel || 'Agent 正在审计并修复全文'}，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal || 5}。`
+                : auditFixTotal
                 ? `正在内容矫正：修复一致性冲突，已完成 ${auditFixCompleted}/${auditFixTotal} 个小节${auditFixFailed ? `，${auditFixFailed} 个需人工核对` : ''}。`
                 : `正在内容矫正：检查全文一致性，已完成 ${auditGroupCompleted}/${auditGroupTotal} 组${auditConflictTotal ? `，发现 ${auditConflictTotal} 个冲突小节` : ''}。`
             : tableCleaning
@@ -520,13 +570,15 @@ function ContentEditPage({
       ? '暂停'
       : paused
         ? '继续'
-        : canRetryMinimumWords
-          ? '继续补足字数'
-          : completedCount === leaves.length && leaves.length
-            ? '重新生成正文'
-            : completedCount > 0
-              ? '继续生成正文'
-              : '生成正文';
+        : canRetryContentCorrection
+          ? '重试内容矫正'
+          : canRetryMinimumWords
+            ? '继续补足字数'
+            : completedCount === leaves.length && leaves.length
+              ? '重新生成正文'
+              : completedCount > 0
+                ? '继续生成正文'
+                : '生成正文';
   const editing = Boolean(selectedItem && selectedIsLeaf && editingItemId === selectedItem.id);
   const imageStats = task?.stats?.images;
   const aiImageStats = normalizeImageStats(imageStats?.ai);
@@ -688,6 +740,19 @@ function ContentEditPage({
     }
   };
 
+  const retryContentCorrection = async () => {
+    if (!canRetryContentCorrection) {
+      return;
+    }
+
+    try {
+      await window.yibiao?.tasks.startContentGeneration({ retryContentCorrection: true });
+      showToast('内容矫正重试任务已在后台启动', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '重试内容矫正失败', 'error');
+    }
+  };
+
   const handleGenerationButtonClick = () => {
     if (running) {
       void pauseGeneration();
@@ -695,6 +760,10 @@ function ContentEditPage({
     }
     if (paused) {
       void resumeGeneration();
+      return;
+    }
+    if (canRetryContentCorrection) {
+      void retryContentCorrection();
       return;
     }
     if (completedCount === leaves.length && leaves.length) {
@@ -737,7 +806,9 @@ function ContentEditPage({
         tableRequirement: savedGenerationOptions.tableRequirement,
         minimumWords: savedGenerationOptions.minimumWords,
         enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
+        consistencyRepairMode: savedGenerationOptions.consistencyRepairMode,
         enableOriginalPlanCoverageAudit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
+        originalPlanCoverageRepairMode: isExpansionWorkflow ? savedGenerationOptions.originalPlanCoverageRepairMode : undefined,
       },
     });
     trackConfigUsage({
@@ -747,7 +818,9 @@ function ContentEditPage({
       content_generation_action: contentGenerationAction,
       minimum_words: savedGenerationOptions.minimumWords,
       enable_consistency_audit: savedGenerationOptions.enableConsistencyAudit,
+      consistency_repair_mode: savedGenerationOptions.enableConsistencyAudit ? savedGenerationOptions.consistencyRepairMode : undefined,
       enable_original_plan_coverage_audit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
+      original_plan_coverage_repair_mode: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit ? savedGenerationOptions.originalPlanCoverageRepairMode : undefined,
     }, config);
     setGenerationDialogOpen(false);
     setPendingMinimumWordsChoice(null);
@@ -847,10 +920,12 @@ function ContentEditPage({
           useAiImages: nextImageModelAvailable && savedGenerationOptions.useAiImages,
           maxAiImages: savedGenerationOptions.maxAiImages,
           useMermaidImages: savedGenerationOptions.useMermaidImages,
-          tableRequirement: savedGenerationOptions.tableRequirement,
-          enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
-          enableOriginalPlanCoverageAudit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
-        },
+        tableRequirement: savedGenerationOptions.tableRequirement,
+        enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
+        consistencyRepairMode: savedGenerationOptions.consistencyRepairMode,
+        enableOriginalPlanCoverageAudit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
+        originalPlanCoverageRepairMode: isExpansionWorkflow ? 'normal' : undefined,
+      },
       });
       trackConfigUsage({
         table_requirement: savedGenerationOptions.tableRequirement,
@@ -859,7 +934,9 @@ function ContentEditPage({
         content_generation_action: 'regenerate_section',
         minimum_words: savedGenerationOptions.minimumWords,
         enable_consistency_audit: savedGenerationOptions.enableConsistencyAudit,
+        consistency_repair_mode: savedGenerationOptions.enableConsistencyAudit ? savedGenerationOptions.consistencyRepairMode : undefined,
         enable_original_plan_coverage_audit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
+        original_plan_coverage_repair_mode: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit ? 'normal' : undefined,
       }, config);
       setSelectedItemId(requirementItem.id);
       setRequirementItem(null);
@@ -1168,22 +1245,54 @@ function ContentEditPage({
                   <Switch.Thumb className="content-generation-switch-thumb" />
                 </Switch.Root>
               </label>
-              {isExpansionWorkflow && (
+              {draftGenerationOptions.enableConsistencyAudit && (
                 <label className="content-generation-config-row">
                   <span>
-                    <strong>原方案覆盖审计</strong>
-                    <small>检查原方案中的核心内容是否已经保留到生成正文中；默认关闭，开启后会增加一次审计和修复请求。</small>
+                    <strong>一致性修复方式</strong>
+                    <small>{consistencyRepairModeOptions.find((option) => option.value === draftGenerationOptions.consistencyRepairMode)?.description}</small>
                   </span>
-                  <Switch.Root
-                    className="content-generation-switch"
-                    checked={draftGenerationOptions.enableOriginalPlanCoverageAudit}
+                  <select
+                    value={draftGenerationOptions.consistencyRepairMode}
                     disabled={generationStrategyLocked}
-                    onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, enableOriginalPlanCoverageAudit: checked }))}
-                    aria-label="是否启用原方案覆盖审计"
+                    onChange={(event) => setDraftGenerationOptions((prev) => ({ ...prev, consistencyRepairMode: event.target.value as ConsistencyRepairMode }))}
                   >
-                    <Switch.Thumb className="content-generation-switch-thumb" />
-                  </Switch.Root>
+                    {consistencyRepairModeOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+                  </select>
                 </label>
+              )}
+              {isExpansionWorkflow && (
+                <>
+                  <label className="content-generation-config-row">
+                    <span>
+                      <strong>原方案覆盖审计</strong>
+                      <small>检查原方案中的核心内容是否已经保留到生成正文中；默认关闭，开启后会增加一次审计和修复请求。</small>
+                    </span>
+                    <Switch.Root
+                      className="content-generation-switch"
+                      checked={draftGenerationOptions.enableOriginalPlanCoverageAudit}
+                      disabled={generationStrategyLocked}
+                      onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, enableOriginalPlanCoverageAudit: checked }))}
+                      aria-label="是否启用原方案覆盖审计"
+                    >
+                      <Switch.Thumb className="content-generation-switch-thumb" />
+                    </Switch.Root>
+                  </label>
+                  {draftGenerationOptions.enableOriginalPlanCoverageAudit && (
+                    <label className="content-generation-config-row">
+                      <span>
+                        <strong>原方案覆盖修复方式</strong>
+                        <small>{originalPlanCoverageRepairModeOptions.find((option) => option.value === draftGenerationOptions.originalPlanCoverageRepairMode)?.description}</small>
+                      </span>
+                      <select
+                        value={draftGenerationOptions.originalPlanCoverageRepairMode}
+                        disabled={generationStrategyLocked}
+                        onChange={(event) => setDraftGenerationOptions((prev) => ({ ...prev, originalPlanCoverageRepairMode: event.target.value as OriginalPlanCoverageRepairMode }))}
+                      >
+                        {originalPlanCoverageRepairModeOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+                      </select>
+                    </label>
+                  )}
+                </>
               )}
               <label className="content-generation-config-row">
                 <span>

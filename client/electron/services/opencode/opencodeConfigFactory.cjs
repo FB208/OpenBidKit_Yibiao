@@ -19,7 +19,13 @@ function normalizeContextLimit(value) {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 400000;
 }
 
-function buildOpenCodeConfig({ proxyBaseUrl, contextLengthLimit }) {
+function normalizeTimeoutMs(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 300000;
+}
+
+function buildOpenCodeConfig({ proxyBaseUrl, contextLengthLimit, timeoutMs }) {
+  const providerTimeout = normalizeTimeoutMs(timeoutMs);
   return {
     $schema: 'https://opencode.ai/config.json',
     autoupdate: false,
@@ -34,7 +40,7 @@ function buildOpenCodeConfig({ proxyBaseUrl, contextLengthLimit }) {
         options: {
           baseURL: `${proxyBaseUrl}/v1`,
           apiKey: '{env:YIBIAO_OPENCODE_PROXY_TOKEN}',
-          timeout: 300000,
+          timeout: providerTimeout,
         },
         models: {
           default: {

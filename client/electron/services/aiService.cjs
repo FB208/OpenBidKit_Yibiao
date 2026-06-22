@@ -1,20 +1,26 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { getAiLogsDir, getGeneratedImagesDir } = require('../utils/paths.cjs');
+const { getGeneratedImagesDir } = require('../utils/paths.cjs');
 const { createDeveloperLogger } = require('../utils/developerLog.cjs');
 const { createAiRequestQueue } = require('../utils/aiRequestQueue.cjs');
+const {
+  createAiRequestId: createRequestId,
+  getAiErrorLogError,
+  getAiErrorLogResponse,
+  resolveAiLogTitle,
+  writeAiLog,
+} = require('../utils/aiLog.cjs');
 const textTokenStatsStore = require('./textTokenStatsStore.cjs');
 
 const AI_REQUEST_TIMEOUT_MS = 300000;
-const MAX_AI_LOG_TITLE_LENGTH = 64;
 const IMAGE_MODEL_TEST_TIMEOUT_MESSAGE = '生图模型测试超时，请检查 Base URL、API Key 或模型名称';
 const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const ANALYTICS_PROJECT_NAME = 'yibiao-client';
 const OPENAI_IMAGE_PROVIDER_META = {
   jinlong: {
     label: '金龙中转站',
-    defaultBaseUrl: 'https://jlaudeapi.com/v1',
+    defaultBaseUrl: 'https://img-api.jlaudeapi.com/v1',
     logProvider: 'jinlong',
     modelLabel: '生图模型名称',
   },
@@ -50,37 +56,6 @@ function requireBaseUrl(baseUrl, message) {
   return trimmed;
 }
 
-function createRequestId() {
-  return `${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID()}`;
-}
-
-function sanitizeAiLogTitle(value) {
-  return String(value || '')
-    .replace(/[<>:"/\\|?*\x00-\x1F]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, MAX_AI_LOG_TITLE_LENGTH)
-    .replace(/[. ]+$/g, '');
-}
-
-function resolveAiLogTitle(request, fallback = '') {
-  return sanitizeAiLogTitle(request?.logTitle || request?.log_title || request?.progressLabel || request?.schemaName || fallback);
-}
-
-function buildAiLogFileName(payload) {
-  const requestId = String(payload.request_id || createRequestId()).trim();
-  const logTitle = sanitizeAiLogTitle(payload.log_title);
-  if (!logTitle) {
-    return `${requestId}.json`;
-  }
-
-  const match = /^(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(requestId);
-  if (match) {
-    return `${match[1]}-${logTitle}-${match[2]}.json`;
-  }
-  return `${requestId}-${logTitle}.json`;
-}
-
 function isResponseFormatUnsupported(message) {
   const normalized = String(message || '').toLowerCase();
   return normalized.includes('response_format') && [
@@ -92,19 +67,6 @@ function isResponseFormatUnsupported(message) {
     'invalid parameter',
     'must be',
   ].some((marker) => normalized.includes(marker));
-}
-
-function writeAiLog(app, config, payload) {
-  if (!config.developer_mode) {
-    return;
-  }
-
-  const logsDir = getAiLogsDir(app);
-  fs.mkdirSync(logsDir, { recursive: true });
-  const logTitle = sanitizeAiLogTitle(payload.log_title);
-  const logPayload = logTitle ? { ...payload, log_title: logTitle } : payload;
-  const fileName = buildAiLogFileName(logPayload);
-  fs.writeFileSync(path.join(logsDir, fileName), JSON.stringify(logPayload, null, 2), 'utf-8');
 }
 
 function createModuleDeveloperLogger(app, config, moduleName, request = {}) {
@@ -364,25 +326,6 @@ function copyRawAiErrorResponse(source, target) {
     }
   }
   return target;
-}
-
-function getRawAiErrorResponse(error) {
-  for (const key of ['raw_response_body', 'raw_response_payload', 'raw_response_data']) {
-    if (Object.prototype.hasOwnProperty.call(error || {}, key)) {
-      return error[key];
-    }
-  }
-  return undefined;
-}
-
-function getAiErrorLogResponse(error, fallbackResponse) {
-  const rawResponse = getRawAiErrorResponse(error);
-  return rawResponse === undefined ? fallbackResponse : rawResponse;
-}
-
-function getAiErrorLogError(error, fallbackMessage) {
-  const rawResponse = getRawAiErrorResponse(error);
-  return rawResponse === undefined || rawResponse === '' ? fallbackMessage : rawResponse;
 }
 
 function createAiResponseDataError(message, responseData) {
@@ -1366,7 +1309,7 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
   const logTitle = `AI生图测试-${meta.label}`;
   const requestBody = {
     model: imageConfig.model_name,
-    prompt: 'a simple blue dot on a white background',
+    prompt: '大字报，内容是“易标AI老好了”',
     size: '2048x2048',
     response_format: 'url',
     ...(requestMode === 'stream' ? { stream: true } : {}),
@@ -1476,7 +1419,7 @@ async function testGoogleImageModel(app, config) {
   const timeout = createOperationTimeout(AI_REQUEST_TIMEOUT_MS);
   const requestId = createRequestId();
   const logTitle = 'AI生图测试-Google AI Studio';
-  const requestBody = createGoogleImageRequestBody('Create a simple blue dot on a white background.');
+  const requestBody = createGoogleImageRequestBody('大字报，内容是“易标AI老好了”');
   const url = createGoogleImageUrl(baseUrl, imageConfig.model_name, requestMode);
   let responseData = null;
 

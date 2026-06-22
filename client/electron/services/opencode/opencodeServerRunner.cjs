@@ -84,6 +84,11 @@ function createStderrBuffer(limit = 20000) {
   };
 }
 
+function normalizeTimeoutMs(value, fallback = 10 * 60 * 1000) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
+}
+
 async function waitForOpenCodeHealth({ baseUrl, authHeader, stderrBuffer, timeoutMs = 30000 }) {
   const startedAt = Date.now();
   let lastError = null;
@@ -146,7 +151,9 @@ async function startIsolatedOpenCodeServer({
   workspaceDir,
   taskId = randomId('agent'),
   keepRuntime = false,
+  timeoutMs,
 }) {
+  const agentTimeoutMs = normalizeTimeoutMs(timeoutMs);
   const opencodeBin = getBundledOpencodeBinaryPath(app);
   ensureExecutable(opencodeBin);
 
@@ -168,13 +175,14 @@ async function startIsolatedOpenCodeServer({
   const stderrBuffer = createStderrBuffer();
 
   try {
-    aiProxy = createAiServiceOpenAiProxy({ app, configStore });
+    aiProxy = createAiServiceOpenAiProxy({ app, configStore, timeoutMs: agentTimeoutMs });
     const aiProxyInfo = await aiProxy.start();
 
     const currentConfig = configStore.load();
     const opencodeConfig = writeOpenCodeConfig(opencodeConfigPath, {
       proxyBaseUrl: aiProxyInfo.baseUrl,
       contextLengthLimit: currentConfig.context_length_limit,
+      timeoutMs: agentTimeoutMs,
     });
 
     const port = await findFreePort();
@@ -238,6 +246,10 @@ async function startIsolatedOpenCodeServer({
       workspaceDir,
       runtimeRoot,
       child,
+      requestLog: [],
+      getStderrTail(size = 4000) {
+        return stderrBuffer.tail(size);
+      },
       async close() {
         await killChild(child);
         await closeAiProxy(aiProxy);
