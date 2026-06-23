@@ -218,29 +218,29 @@ npm run build
     <td width="20%" valign="top">
 
 ![](https://oss.agnet.top/keep/2026/06/23/20260623104442168.png)
-<center>Engineer X</center>
+<p align="center">Engineer X</p>
     </td>
     <td width="20%" valign="top">
 
 ![](https://oss.agnet.top/keep/2026/06/23/20260623104455361.png)
-<center>专业标书</center>
+<p align="center">专业标书</p>
     </td>
     <td width="20%" valign="top">
 
 ![](https://oss.agnet.top/keep/2026/06/23/20260623104521954.png)
-<center>Mr.Erick</center>
+<p align="center">Mr.Erick</p>
     </td>
     <td width="20%" valign="top">
 
 ![](https://oss.agnet.top/keep/2026/06/23/20260623104533722.png)
-<center>小麦浪的夏天</center>
+<p align="center">小麦浪的夏天</p>
     </td>
   </tr>
   <tr>
     <td width="20%" valign="top">
 
 ![](https://oss.agnet.top/keep/2026/06/23/20260623105024436.png)
-<center>韩枫（石化安装培训）</center>
+<p align="center">韩枫（石化安装培训）</p>
     </td>
     <td width="20%" valign="top">
     </td>
