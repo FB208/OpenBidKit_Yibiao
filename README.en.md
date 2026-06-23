@@ -22,39 +22,17 @@
   <br>
   Yibiao Bid Toolbox is an intelligent bid document creation tool for tendering and bidding scenarios. It is fully open source and includes AI-generated technical proposals, image-and-text generation, commercial bid support, enterprise knowledge base management, duplicate checking, rejection-risk checks, tender information, and more features under development.
   <br>
-  It supports all OpenAI-like AI APIs. DeepSeek, LongCat, and Volcano Ark are deeply adapted, and local models can also be connected through Ollama, LM Studio, and similar tools.
+  It supports all OpenAI-like AI APIs. GPT, DeepSeek, LongCat, and Volcano Ark are deeply adapted, and local models can also be connected through Ollama, LM Studio, and similar tools.
   <br>
   <br>
   <strong>❓ What problem does it solve?</strong>
   <br>
-  There are many paid AI bid-writing tools today, but they are extremely expensive. A single proposal can cost tens of yuan, and unless a company reimburses it, small-business workers can hardly afford them. Free tools often have very poor quality. OpenBidKit aims to become the OpenClaw of the bidding field by providing an out-of-the-box, high-quality proposal writing tool. In our tests, generating a 200,000-word bid proposal with DeepSeek V4 Flash costs only about 0.8-1 yuan. We are also working hard to support the completely free LongCat-2.0-Preview, so proposal writers no longer need to buy their own feed.
+  There are many paid AI bid-writing tools today, but they are extremely expensive. A single proposal can cost tens of yuan, and unless a company reimburses it, small-business workers can hardly afford them. Free tools often have very poor quality. OpenBidKit aims to become the OpenClaw of the bidding field by providing an out-of-the-box, high-quality proposal writing tool. In our tests, generating a 100,000-word bid proposal with DeepSeek V4 Flash costs only about 1 yuan.
 </p>
 
 ## 🌐 Official Website
 
-**Online Experience**: [https://yibiao.pro](https://yibiao.pro)
-
-Visit the website for more product information, online demos, and technical support.
-
-> **Ad Slot · Jlaude API**
->
-> Focused on the full GPT series, lower cost than DeepSeek V4 PRO, stable and fast for 7 months. Native chat in Yanwuchang plus unlimited-canvas image generation, all in one place, practical and affordable.
->
-> Direct link: https://jlaudeapi.com
-
-## 📢 Statement
-
-Recently, we have received many issue-based attacks that baselessly smear and attack this repository. I hereby state:
-
-1. I will not stop open-sourcing this project. Never!
-2. Even if it becomes commercialized in the future, I will follow excellent open-source projects such as Excalidraw and NocoDB, and only charge for B2B services such as project management, cloud storage, team collaboration, and enterprise services. I give my personal word that the basic features for personal use will remain open source and free forever, and the generation quality will strive to match paid software.
-
-<img src="./screenshots/issue_claim.png" alt="Yibiao issue statement" width="100%">
-
-## 🍉 Acknowledgements
-
-- Thanks to all users for your support and trust.
-- Special thanks to friends from <a href="https://linux.do/" rel="nofollow">linuxdo</a> for your support and encouragement.
+**Online Experience**: [https://yibiao.pro](https://yibiao.pro)  [Get more product information, online demos, and technical support.]
 
 <h2 align="center">✨ Features & Advantages</h2>
 
@@ -212,6 +190,69 @@ Contributions are welcome.
 3. **🔧 Code Contributions**: Fork the repository and submit a pull request.
 4. **📖 Documentation**: Help improve documentation and usage guides.
 
+## 📢 Statement
+
+Recently, we have received many issue-based attacks that baselessly smear and attack this repository. I hereby state:
+
+1. I will not stop open-sourcing this project. Never!
+2. Even if it becomes commercialized in the future, I will follow excellent open-source projects such as Excalidraw and NocoDB, and only charge for B2B services such as project management, cloud storage, team collaboration, and enterprise services. I give my personal word that the basic features for personal use will remain open source and free forever, and the generation quality will strive to match paid software.
+
+<img src="./screenshots/issue_claim.png" alt="Yibiao issue statement" width="100%">
+
+## 🍉 Acknowledgements
+
+- Thanks to all users for your support and trust.
+- Special thanks to friends from <a href="https://linux.do/" rel="nofollow">linuxdo</a> for your support and encouragement.
+
+### 🦞 Non-Developer Contributions
+
+People who provide requirement analysis, technical support, test files, useful feedback, free promotion, and other help for this open-source project may not automatically appear in contributors, but they still deserve to be recorded.
+
+<table>
+  <tr>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/06/23/20260623104254982.png)
+<p align="center">Yunfeng</p>
+    </td>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/06/23/20260623104442168.png)
+<p align="center">Engineer X</p>
+    </td>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/06/23/20260623104455361.png)
+<p align="center">Professional Proposal</p>
+    </td>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/06/23/20260623104521954.png)
+<p align="center">Mr.Erick</p>
+    </td>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/06/23/20260623104533722.png)
+<p align="center">Xiaomailang's Summer</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/06/23/20260623105024436.png)
+<p align="center">Hanfeng (Petrochemical Installation Training)</p>
+    </td>
+    <td width="20%" valign="top">
+    </td>
+    <td width="20%" valign="top">
+    </td>
+    <td width="20%" valign="top">
+    </td>
+    <td width="20%" valign="top">
+    </td>
+  </tr>
+</table>
+
 ## 📄 License
 
 This project is released under the [GNU Affero General Public License v3.0](LICENSE).
@@ -253,6 +294,8 @@ You may use, modify, distribute, and commercialize this project, but modified ve
   ⭐ If this project helps you, please give it a Star.
 </p>
 
-<p align="center">⭐ This project has been open sourced and self recommended for communication in the LINUX DO community. We welcome your supervision, feedback, and contributions.</a></p>
+<p align="center">
+  ⭐ This project has been open sourced and self-recommended in the LINUX DO community. We welcome your supervision, feedback, and contributions.
+</p>
 
 `AI Proposal Writing` `Bid AI` `AI Bid Generation` `Free Bid Proposal Tool`
