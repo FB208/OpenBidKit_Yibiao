@@ -1,7 +1,6 @@
 # AGENTS.md
 
 ## 范围
-- `archive/` 是归档的历史数据，不要读取，完全忽略掉即可。
 - 当前有效产品代码在 `client/`；
 - `analytics/` 是独立 Cloudflare Workers 埋点服务，用于统计、分析、查看`client/`中提交的埋点信息。
 
