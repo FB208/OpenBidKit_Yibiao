@@ -23,41 +23,20 @@
   <br>
   易标投标工具箱是一款面向招投标场景的智能标书制作工具，完全开源，包括AI生成技术方案、图文生成、商务标、企业知识库管理、标书查重、废标项检查、标讯等，更多功能还在开发中。
   <br>
-  支持OpenAI like模式的所有AI api，目前已深度适配DeepSeek、龙猫、火山方舟三个平台，也支持ollama、lm studio等接入本地模型。
+  支持OpenAI like模式的所有AI api，目前已深度适配GPT、DeepSeek、龙猫、火山方舟四个平台，也支持ollama、lm studio等接入本地模型。
   <br>
   <br>
   <strong>❓ 解决什么问题</strong>
   <br>
-  现在AI写标书的付费工具非常多，但是价格都超级高，一份标书几十块，除非企业给报销，小企业的牛马根本用不起。免费的工具质量又非常差，OpenBidkit力争做投标领域的OpenClaw，提供开箱即用的优质标书编写工具，亲测一份20万字的投标标书，用deepseek v4 flash 生成只需要0.8-1元，还努力适配了完全免费的LongCat-2.0-Preview，从此牛马不用自己买草料了。
+  现在AI写标书的付费工具非常多，但是价格都超级高，一份标书几十块，除非企业给报销，小企业的牛马根本用不起。免费的工具质量又非常差，OpenBidkit力争做投标领域的OpenClaw，提供开箱即用的优质标书编写工具，亲测一份10万字的投标标书，用deepseek v4 flash 生成只需要1元。
 </p>
 
 
 ## 🌐 官方网站
 
-**在线体验**: [https://yibiao.pro](https://yibiao.pro)
-
-获取更多产品信息、在线体验和技术支持。
-
-> **广告位 · Jlaude API**
->
-> 专注 GPT 全系列，比 DeepSeek V4 PRO更低成本，7 个月稳定高速！演武场原生对话 + 无限画布生图，一站配齐，好用不贵。
->
-> 链接直达：https://jlaudeapi.com
-
-## 📢 声明
-近期收到大量issue攻击，对本仓库进行无理由诋毁和攻击，特此声明：
-
-1. 我不会停止开源，永不！
-2. 即使以后商业化，也会效仿Excalidraw、NocoDB这样优秀的开源项目，仅针对项目管理、云端存储、团队协作、企业服务等B端业务进行收费。我用人格担保，个人使用基础功能永久开源免费，且生成质量向付费软件看齐。  
-
-<img src="./screenshots/issue_claim.png" alt="易标使用演示视频" width="100%">
-
-## 🍉 鸣谢
-- 感谢所有用户的支持与信任
-- 特别鸣谢 <a href="https://linux.do/" rel="nofollow">linuxdo</a> 佬友们的支持与鼓励
+**在线体验**: [https://yibiao.pro](https://yibiao.pro)  【获取更多产品信息、在线体验和技术支持。】
 
 <h2 align="center">✨ 核心功能与优势</h2>
-
 <p align="center">
   <strong>AI写标书 · 标书AI · AI标书生成 · 技术标编写 · 投标文件生成</strong><br>
   <sub>不止生成标书初稿，更强调开源可控、本地工作区、素材复用、图文表达和流程可恢复。</sub>
@@ -214,6 +193,65 @@ npm run build
 3. **🔧 代码贡献**: Fork项目，提交Pull Request
 4. **📖 文档完善**: 帮助改进文档和使用说明
 
+## 📢 声明
+近期收到大量issue攻击，对本仓库进行无理由诋毁和攻击，特此声明：
+
+1. 我不会停止开源，永不！
+2. 即使以后商业化，也会效仿Excalidraw、NocoDB这样优秀的开源项目，仅针对项目管理、云端存储、团队协作、企业服务等B端业务进行收费。我用人格担保，个人使用基础功能永久开源免费，且生成质量向付费软件看齐。  
+
+<img src="./screenshots/issue_claim.png" alt="易标使用演示视频" width="100%">
+
+## 🍉 鸣谢
+- 感谢所有用户的支持与信任
+- 特别鸣谢 <a href="https://linux.do/" rel="nofollow">linuxdo</a> 佬友们的支持与鼓励
+
+
+### 🦞非开发人员贡献
+为本开源项目提供需求分析、技术支持、测试文件、有效反馈、免费推广等，不会自动加入contributors，但仍然值得被记录~
+<table>
+  <tr>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/06/23/20260623104254982.png)
+<center>云峰</center>
+    </td>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/06/23/20260623104442168.png)
+<center>Engineer X</center>
+    </td>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/06/23/20260623104455361.png)
+<center>专业标书</center>
+    </td>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/06/23/20260623104521954.png)
+<center>Mr.Erick</center>
+    </td>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/06/23/20260623104533722.png)
+<center>小麦浪的夏天</center>
+    </td>
+  </tr>
+  <tr>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/06/23/20260623105024436.png)
+<center>韩枫（石化安装培训）</center>
+    </td>
+    <td width="20%" valign="top">
+    </td>
+    <td width="20%" valign="top">
+    </td>
+    <td width="20%" valign="top">
+    </td>
+    <td width="20%" valign="top">
+    </td>
+  </tr>
+</table>
 
 ## 📄 许可证
 
