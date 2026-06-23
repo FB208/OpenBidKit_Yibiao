@@ -5,6 +5,12 @@ const { getGeneratedImagesDir } = require('../utils/paths.cjs');
 const { createDeveloperLogger } = require('../utils/developerLog.cjs');
 const { createAiRequestQueue } = require('../utils/aiRequestQueue.cjs');
 const {
+  copyAiRequestErrorMeta,
+  isRetryableHttpStatus,
+  markAiRequestError,
+  runWithAiRetry,
+} = require('../utils/aiRetry.cjs');
+const {
   createAiRequestId: createRequestId,
   getAiErrorLogError,
   getAiErrorLogResponse,
@@ -192,7 +198,7 @@ function normalizeImageRequestMode(imageConfig) {
 function createAbortError() {
   const error = new Error('AI 请求超时');
   error.name = 'AbortError';
-  return error;
+  return markAiRequestError(error, { retryable: true });
 }
 
 function createOperationTimeout(timeoutMs) {
@@ -214,6 +220,15 @@ function createOperationTimeout(timeoutMs) {
       controller.abort();
     },
   };
+}
+
+async function runWithOperationTimeout(runner, timeoutMs = AI_REQUEST_TIMEOUT_MS) {
+  const timeout = createOperationTimeout(timeoutMs);
+  try {
+    return await timeout.run(runner(timeout.signal));
+  } finally {
+    timeout.clear();
+  }
 }
 
 function createHeaders(apiKey) {
@@ -335,7 +350,12 @@ function createAiResponseDataError(message, responseData) {
 }
 
 async function downloadImage(url) {
-  const response = await fetch(url);
+  let response = null;
+  try {
+    response = await fetch(url);
+  } catch (error) {
+    throw markAiRequestError(error, { retryable: true });
+  }
   await ensureOk(response, '图片下载失败');
   return {
     buffer: Buffer.from(await response.arrayBuffer()),
@@ -377,16 +397,22 @@ async function ensureOk(response, fallbackMessage) {
     error.statusCode = response.status;
   }
   error.raw_response_body = rawText;
-  throw error;
+  throw markAiRequestError(error, { retryable: isRetryableHttpStatus(response.status) });
 }
 
 async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, fallbackMessage, options = {}) {
-  const sendRequest = (body) => fetch(`${baseUrl}/images/generations`, {
-    method: 'POST',
-    headers: createHeaders(apiKey),
-    body: JSON.stringify(body),
-    signal: options.signal,
-  });
+  const sendRequest = async (body) => {
+    try {
+      return await fetch(`${baseUrl}/images/generations`, {
+        method: 'POST',
+        headers: createHeaders(apiKey),
+        body: JSON.stringify(body),
+        signal: options.signal,
+      });
+    } catch (error) {
+      throw markAiRequestError(error, { retryable: true });
+    }
+  };
   const response = await sendRequest(requestBody);
   if (response.ok) {
     return response;
@@ -415,7 +441,7 @@ async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, 
     error.statusCode = response.status;
   }
   error.raw_response_body = rawText;
-  throw error;
+  throw markAiRequestError(error, { retryable: isRetryableHttpStatus(response.status) });
 }
 
 function extractJsonContent(content) {
@@ -785,14 +811,16 @@ function createChatRequestBody(config, request, options = {}) {
 async function fetchChatCompletion(app, config, body, options = {}) {
   const controller = options.signal ? null : new AbortController();
   const timer = controller ? setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS) : null;
+  const baseUrl = requireBaseUrl(config.base_url, '请先在设置中配置文本模型 Base URL');
   try {
-    const baseUrl = requireBaseUrl(config.base_url, '请先在设置中配置文本模型 Base URL');
     return await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: createHeaders(config.api_key),
       body: JSON.stringify(body),
       signal: options.signal || controller.signal,
     });
+  } catch (error) {
+    throw markAiRequestError(error, { retryable: true });
   } finally {
     if (timer) {
       clearTimeout(timer);
@@ -808,7 +836,7 @@ function createAiHttpError(detail, fallbackMessage, status, rawResponseBody = ''
   }
   error.responseFormatUnsupported = isResponseFormatUnsupported(detail);
   error.raw_response_body = rawResponseBody;
-  return error;
+  return markAiRequestError(error, { retryable: isRetryableHttpStatus(status) });
 }
 
 async function ensureTextAiResponseOk(response, fallbackMessage) {
@@ -882,14 +910,14 @@ async function readSseJsonDataLine(line, state, options) {
   } catch (error) {
     const parseError = new Error(`${options.parseErrorMessage || 'AI 流式响应解析失败'}：${error.message}`);
     parseError.raw_response_body = data;
-    throw parseError;
+    throw markAiRequestError(parseError, { retryable: true });
   }
 
   if (payload?.error && options.throwOnPayloadError !== false) {
     const streamError = new Error(normalizeStreamPayloadError(payload.error, options.failureMessage || 'AI 流式请求失败'));
     streamError.raw_response_payload = payload;
     streamError.raw_sse_data = data;
-    throw streamError;
+    throw markAiRequestError(streamError, { retryable: true });
   }
 
   await Promise.resolve(options.onPayload?.(payload));
@@ -898,7 +926,7 @@ async function readSseJsonDataLine(line, state, options) {
 async function readSseJsonStream(response, options = {}) {
   const reader = response.body?.getReader?.();
   if (!reader) {
-    throw new Error(options.unreadableMessage || 'AI 流式响应不可读');
+    throw markAiRequestError(new Error(options.unreadableMessage || 'AI 流式响应不可读'), { retryable: true });
   }
 
   const decoder = new TextDecoder('utf-8');
@@ -967,7 +995,12 @@ async function readOpenAIChatStream(response) {
 async function requestTextAiNormal(app, config, requestBody, options = {}) {
   const response = await fetchChatCompletion(app, config, requestBody, { signal: options.signal });
   await ensureTextAiResponseOk(response, 'AI 请求失败');
-  const responseData = await response.json();
+  let responseData = null;
+  try {
+    responseData = await response.json();
+  } catch (error) {
+    throw markAiRequestError(error, { retryable: true });
+  }
   return {
     content: responseData.choices?.[0]?.message?.content || '',
     usage: extractOpenAIUsage(responseData),
@@ -1084,7 +1117,11 @@ async function requestOpenAICompatibleImageData(baseUrl, apiKey, requestBody, fa
   if (requestBody.stream) {
     return readOpenAICompatibleImageStream(response);
   }
-  return response.json();
+  try {
+    return await response.json();
+  } catch (error) {
+    throw markAiRequestError(error, { retryable: true });
+  }
 }
 
 async function createImageFromOpenAICompatibleItem(item) {
@@ -1168,18 +1205,27 @@ async function readGoogleImageStream(response) {
 }
 
 async function requestGoogleImageData(baseUrl, imageConfig, requestBody, requestMode, fallbackMessage, options = {}) {
-  const response = await fetch(createGoogleImageUrl(baseUrl, imageConfig.model_name, requestMode), {
-    method: 'POST',
-    headers: createGoogleHeaders(imageConfig.api_key),
-    body: JSON.stringify(requestBody),
-    signal: options.signal,
-  });
+  let response = null;
+  try {
+    response = await fetch(createGoogleImageUrl(baseUrl, imageConfig.model_name, requestMode), {
+      method: 'POST',
+      headers: createGoogleHeaders(imageConfig.api_key),
+      body: JSON.stringify(requestBody),
+      signal: options.signal,
+    });
+  } catch (error) {
+    throw markAiRequestError(error, { retryable: true });
+  }
 
   await ensureOk(response, fallbackMessage);
   if (requestMode === 'stream') {
     return readGoogleImageStream(response);
   }
-  return response.json();
+  try {
+    return await response.json();
+  } catch (error) {
+    throw markAiRequestError(error, { retryable: true });
+  }
 }
 
 function getGoogleImageInlineData(responseData) {
@@ -1282,6 +1328,7 @@ async function chatWithConfig(app, config, request) {
       wrappedError.statusCode = error.status || error.statusCode;
     }
     copyRawAiErrorResponse(error, wrappedError);
+    copyAiRequestErrorMeta(error, wrappedError);
     throw wrappedError;
   } finally {
     timeout.clear();
@@ -1304,7 +1351,6 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
 
   const baseUrl = requireBaseUrl(imageConfig.base_url, `${meta.label} Base URL 缺失，请重新选择服务商后保存配置`);
   const requestMode = normalizeImageRequestMode(imageConfig);
-  const timeout = createOperationTimeout(AI_REQUEST_TIMEOUT_MS);
   const requestId = createRequestId();
   const logTitle = `AI生图测试-${meta.label}`;
   const requestBody = {
@@ -1328,12 +1374,15 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
       created_at: new Date().toISOString(),
     });
     try {
-      responseData = await timeout.run(requestOpenAICompatibleImageData(
-        baseUrl,
-        imageConfig.api_key,
-        requestBody,
-        `${meta.label}生图测试失败`,
-        { signal: timeout.signal },
+      responseData = await runWithAiRetry(() => runWithOperationTimeout(
+        (signal) => requestOpenAICompatibleImageData(
+          baseUrl,
+          imageConfig.api_key,
+          requestBody,
+          `${meta.label}生图测试失败`,
+          { signal },
+        ),
+        AI_REQUEST_TIMEOUT_MS,
       ));
     } catch (error) {
       const message = error.message || '';
@@ -1397,8 +1446,6 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
       created_at: new Date().toISOString(),
     });
     throw new Error(errorMessage);
-  } finally {
-    timeout.clear();
   }
 }
 
@@ -1416,7 +1463,6 @@ async function testGoogleImageModel(app, config) {
 
   const baseUrl = requireBaseUrl(imageConfig.base_url, 'Google AI Studio Base URL 缺失，请重新选择服务商后保存配置');
   const requestMode = normalizeImageRequestMode(imageConfig);
-  const timeout = createOperationTimeout(AI_REQUEST_TIMEOUT_MS);
   const requestId = createRequestId();
   const logTitle = 'AI生图测试-Google AI Studio';
   const requestBody = createGoogleImageRequestBody('大字报，内容是“易标AI老好了”');
@@ -1435,13 +1481,16 @@ async function testGoogleImageModel(app, config) {
       status: 'pending',
       created_at: new Date().toISOString(),
     });
-    responseData = await timeout.run(requestGoogleImageData(
-      baseUrl,
-      imageConfig,
-      requestBody,
-      requestMode,
-      'Google AI Studio 生图测试失败',
-      { signal: timeout.signal },
+    responseData = await runWithAiRetry(() => runWithOperationTimeout(
+      (signal) => requestGoogleImageData(
+        baseUrl,
+        imageConfig,
+        requestBody,
+        requestMode,
+        'Google AI Studio 生图测试失败',
+        { signal },
+      ),
+      AI_REQUEST_TIMEOUT_MS,
     ));
     trackAiRequest(app, config, { ai_request_type: 'image', usage: extractGoogleUsage(responseData) });
     analyticsTracked = true;
@@ -1490,8 +1539,6 @@ async function testGoogleImageModel(app, config) {
       created_at: new Date().toISOString(),
     });
     throw new Error(errorMessage);
-  } finally {
-    timeout.clear();
   }
 }
 
@@ -1829,13 +1876,24 @@ function createAiService({ app, configStore }) {
         return { success: false, message: '请先填写文本模型 Base URL', models: [] };
       }
 
-      const response = await fetch(`${trimBaseUrl(config.base_url)}/models`, {
-        method: 'GET',
-        headers: createHeaders(config.api_key),
-      });
+      const data = await runWithAiRetry(async () => {
+        let response = null;
+        try {
+          response = await fetch(`${trimBaseUrl(config.base_url)}/models`, {
+            method: 'GET',
+            headers: createHeaders(config.api_key),
+          });
+        } catch (error) {
+          throw markAiRequestError(error, { retryable: true });
+        }
 
-      await ensureOk(response, '获取模型列表失败');
-      const data = await response.json();
+        await ensureOk(response, '获取模型列表失败');
+        try {
+          return await response.json();
+        } catch (error) {
+          throw markAiRequestError(error, { retryable: true });
+        }
+      });
 
       return {
         success: true,

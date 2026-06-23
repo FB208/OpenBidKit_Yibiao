@@ -10,6 +10,11 @@ const {
   writeAiLog,
 } = require('../../utils/aiLog.cjs');
 const {
+  isRetryableHttpStatus,
+  markAiRequestError,
+  runWithAiRetry,
+} = require('../../utils/aiRetry.cjs');
+const {
   normalizeTokenUsage,
   recordTextTokenStats,
 } = require('../textTokenStatsStore.cjs');
@@ -17,7 +22,6 @@ const {
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 300000;
 const SERVER_TIMEOUT_BUFFER_MS = 10000;
-const RATE_LIMIT_MAX_RETRIES = 3;
 
 function normalizeTimeoutMs(value, fallback = DEFAULT_UPSTREAM_TIMEOUT_MS) {
   const number = Number(value);
@@ -279,7 +283,7 @@ async function readJson(req) {
 function createAbortError() {
   const error = new Error('AI 请求超时');
   error.name = 'AbortError';
-  return error;
+  return markAiRequestError(error, { retryable: true });
 }
 
 function createTimeoutSignal(parentSignal, timeoutMs = DEFAULT_UPSTREAM_TIMEOUT_MS) {
@@ -318,42 +322,7 @@ async function createUpstreamError(response) {
   error.status = response.status;
   error.statusCode = response.status;
   error.raw_response_body = rawText;
-  return error;
-}
-
-function isRateLimitError(error) {
-  if (error?.status === 429 || error?.statusCode === 429) return true;
-
-  const message = String(error?.message || '').toLowerCase();
-  return message.includes('429')
-    || message.includes('rate limit')
-    || message.includes('too many requests')
-    || message.includes('rate_limit');
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function retryRateLimitedRequest(runner, options = {}) {
-  const maxRetries = options.maxRetries ?? RATE_LIMIT_MAX_RETRIES;
-  let lastError = null;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    try {
-      return await runner({ attempt });
-    } catch (error) {
-      lastError = error;
-
-      if (error?.name === 'AbortError' || !isRateLimitError(error) || attempt >= maxRetries) {
-        throw error;
-      }
-
-      await sleep(800 * Math.pow(2, attempt));
-    }
-  }
-
-  throw lastError || new Error('AI 请求失败');
+  return markAiRequestError(error, { retryable: isRetryableHttpStatus(response.status) });
 }
 
 function responseHeadersFromUpstream(response, fallbackContentType) {
@@ -667,7 +636,7 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
     const requestBody = normalizeOpenCodeProxyRequestBody(config, openAiBody);
     const requestId = createAiRequestId();
 
-    return retryRateLimitedRequest(async ({ attempt }) => {
+    return runWithAiRetry(async ({ attempt }) => {
       const timeout = createTimeoutSignal(signal, timeoutMs);
       const startedAt = Date.now();
 
@@ -722,7 +691,7 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
       } finally {
         timeout.clear();
       }
-    });
+    }, { signal });
   }, { signal });
 }
 

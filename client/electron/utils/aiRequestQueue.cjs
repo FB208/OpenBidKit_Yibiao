@@ -1,19 +1,14 @@
 const AI_QUEUE_SCOPE_PAUSED = 'AI_QUEUE_SCOPE_PAUSED';
-const AI_QUEUE_MAX_RATE_LIMIT_RETRIES = 3;
+const {
+  AI_REQUEST_MAX_ATTEMPTS,
+  getAiRetryDelayMs,
+  isRetryableAiRequestError,
+} = require('./aiRetry.cjs');
 
 function createQueueScopePausedError() {
   const error = new Error('AI 请求队列已暂停');
   error.code = AI_QUEUE_SCOPE_PAUSED;
   return error;
-}
-
-function isRateLimitError(error) {
-  if (error?.status === 429 || error?.statusCode === 429) {
-    return true;
-  }
-
-  const message = String(error?.message || '').toLowerCase();
-  return message.includes('429') || message.includes('rate limit') || message.includes('too many requests');
 }
 
 function normalizeLimit(value, fallback = 10) {
@@ -24,6 +19,7 @@ function normalizeLimit(value, fallback = 10) {
 function createAiRequestQueue(options = {}) {
   let activeCount = 0;
   const queue = [];
+  const retryingJobs = new Set();
   const pausedScopes = new Set();
   const getLimit = typeof options.getLimit === 'function'
     ? options.getLimit
@@ -59,18 +55,30 @@ function createAiRequestQueue(options = {}) {
     }
   }
 
+  function scheduleRetry(job) {
+    retryingJobs.add(job);
+    job.retryTimer = setTimeout(() => {
+      retryingJobs.delete(job);
+      job.retryTimer = null;
+      if (!rejectIfPaused(job)) {
+        queue.push(job);
+        pump();
+      }
+    }, getAiRetryDelayMs(job.attempts - 1));
+  }
+
   async function runJob(job) {
     try {
       if (rejectIfPaused(job)) {
         return;
       }
 
-      const result = await job.runner();
+      const result = await job.runner({ attempt: job.attempts, maxAttempts: AI_REQUEST_MAX_ATTEMPTS });
       job.resolve(result);
     } catch (error) {
-      if (isRateLimitError(error) && job.rateLimitRetries < AI_QUEUE_MAX_RATE_LIMIT_RETRIES) {
-        job.rateLimitRetries += 1;
-        queue.push(job);
+      if (isRetryableAiRequestError(error) && job.attempts < AI_REQUEST_MAX_ATTEMPTS) {
+        job.attempts += 1;
+        scheduleRetry(job);
       } else {
         job.reject(error);
       }
@@ -87,7 +95,8 @@ function createAiRequestQueue(options = {}) {
         resolve,
         reject,
         scopeId: String(options.scopeId || options.queueScopeId || '').trim(),
-        rateLimitRetries: 0,
+        attempts: 1,
+        retryTimer: null,
       };
 
       if (rejectIfPaused(job)) {
@@ -118,6 +127,20 @@ function createAiRequestQueue(options = {}) {
       discarded += 1;
     }
 
+    for (const job of Array.from(retryingJobs)) {
+      if (job.scopeId !== normalizedScopeId) {
+        continue;
+      }
+
+      retryingJobs.delete(job);
+      if (job.retryTimer) {
+        clearTimeout(job.retryTimer);
+        job.retryTimer = null;
+      }
+      job.reject(createQueueScopePausedError());
+      discarded += 1;
+    }
+
     return discarded;
   }
 
@@ -132,6 +155,7 @@ function createAiRequestQueue(options = {}) {
     return {
       active: activeCount,
       queued: queue.length,
+      retrying: retryingJobs.size,
       limit: currentLimit(),
       pausedScopes: [...pausedScopes],
     };
@@ -147,7 +171,7 @@ function createAiRequestQueue(options = {}) {
 
 module.exports = {
   AI_QUEUE_SCOPE_PAUSED,
-  AI_QUEUE_MAX_RATE_LIMIT_RETRIES,
+  AI_REQUEST_MAX_ATTEMPTS,
   createAiRequestQueue,
   createQueueScopePausedError,
 };
