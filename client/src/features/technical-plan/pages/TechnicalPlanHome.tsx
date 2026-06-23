@@ -193,7 +193,9 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const skippedWorkflowSwitchPromptRef = useRef<TechnicalPlanWorkflowKind | null>(null);
   const lastExecutedWorkflowSwitchRef = useRef<TechnicalPlanWorkflowKind | null>(null);
   const activeIndex = steps.indexOf(state.step);
-  const bidAnalysisReady = areRequiredBidAnalysisTasksReady(state.bidAnalysisTasks);
+  const requiredBidAnalysisReady = areRequiredBidAnalysisTasksReady(state.bidAnalysisTasks);
+  const isBidAnalysisTaskRunning = state.bidAnalysisTask?.status === 'running' || state.bidAnalysisTask?.status === 'pausing';
+  const bidAnalysisReady = requiredBidAnalysisReady && !isBidAnalysisTaskRunning;
   const globalFactsReady = state.globalFacts.length > 0 && state.globalFactsTask?.status === 'success';
   const contentTaskStatus = state.contentGenerationTask?.status;
   const isContentGenerating = contentTaskStatus === 'running' || contentTaskStatus === 'pausing';
@@ -212,15 +214,17 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
       ? '上传完招标文件后才能进入下一步'
       : state.step === 'document-analysis' && requiresOriginalPlan && !state.originalPlanFile
         ? '上传完原方案后才能进入下一步'
-        : state.step === 'bid-analysis' && !bidAnalysisReady
-          ? '招标文件解析完成后才能进入目录生成'
-          : state.step === 'outline-generation' && !state.outlineData
-            ? '目录生成完成后才能进入全局事实设定'
-            : state.step === 'global-facts' && !globalFactsReady
-              ? '全局事实设定完成后才能进入正文生成'
-              : activeIndex >= steps.length - 1
-                ? '当前已经是最后一步'
-                : `进入${stepLabels[steps[activeIndex + 1]]}`;
+        : state.step === 'bid-analysis' && isBidAnalysisTaskRunning
+          ? '招标文件解析任务仍在运行，请等待当前任务结束'
+          : state.step === 'bid-analysis' && !requiredBidAnalysisReady
+            ? '招标文件解析完成后才能进入目录生成'
+            : state.step === 'outline-generation' && !state.outlineData
+              ? '目录生成完成后才能进入全局事实设定'
+              : state.step === 'global-facts' && !globalFactsReady
+                ? '全局事实设定完成后才能进入正文生成'
+                : activeIndex >= steps.length - 1
+                  ? '当前已经是最后一步'
+                  : `进入${stepLabels[steps[activeIndex + 1]]}`;
 
   const resolveSortLeave = (allowed: boolean) => {
     sortLeaveResolverRef.current?.(allowed);
