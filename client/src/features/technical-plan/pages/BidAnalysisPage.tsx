@@ -234,7 +234,9 @@ function BidAnalysisPage({
     && doneCount === 0;
   const progressMessage = isPromptCacheOptimizing
     ? '正在优化提示词缓存'
-    : requiredDone ? '关键项已解析完成，可以进入下一步。' : '等待项目概述、技术评分、项目信息、甲方信息和交货服务要求解析成功。';
+    : requiredDone && taskRunning
+      ? '关键项已解析完成，等待当前解析任务结束后进入下一步。'
+      : requiredDone ? '招标文件解析任务已结束，可以进入下一步。' : '等待项目概述、技术评分、项目信息、甲方信息和交货服务要求解析成功。';
   const configLabel = getModeLabel(mode);
 
   const syncProgressForSelection = (nextTaskIds: string[]) => {
@@ -403,7 +405,7 @@ function BidAnalysisPage({
         <div>
           <span className="section-kicker">STEP 02</span>
           <strong>招标文件解析</strong>
-          <p>并发解析招标文件，关键项成功后进入目录生成。</p>
+          <p>并发解析招标文件，全部选中解析项结束后进入目录生成。</p>
         </div>
         <div className="bid-analysis-config-chip" title="当前解析配置">
           <span>{configLabel}</span>
