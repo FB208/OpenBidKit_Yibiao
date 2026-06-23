@@ -213,7 +213,7 @@ npm run build
     <td width="20%" valign="top">
 
 ![](https://oss.agnet.top/keep/2026/06/23/20260623104254982.png)
-<center>云峰</center>
+<p align="center">云峰</p>
     </td>
     <td width="20%" valign="top">
 
