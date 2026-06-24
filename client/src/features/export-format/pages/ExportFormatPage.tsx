@@ -94,7 +94,7 @@ function ExportFormatPage() {
       const clientConfig: Partial<ClientConfig> = { export_format: config };
       await window.yibiao?.config.save(clientConfig as ClientConfig);
       setSavedConfig(config);
-      showToast('导出格式配置已保存', 'success');
+      showToast('导出模版设置已保存', 'success');
     } catch (error) {
       showToast(`保存失败：${error instanceof Error ? error.message : '未知错误'}`, 'error');
     }
@@ -102,7 +102,7 @@ function ExportFormatPage() {
 
   const handleResetDefault = useCallback(() => {
     setConfig(createDefaultExportFormat());
-    showToast('已恢复默认导出格式，保存后生效', 'info');
+    showToast('已恢复默认导出模版设置，保存后生效', 'info');
   }, [showToast]);
 
   // 折叠控制
@@ -119,7 +119,7 @@ function ExportFormatPage() {
   const resetToolbarGroup: FloatingToolbarGroup = {
     id: 'export-format-reset',
     actions: [
-      { id: 'reset-default', label: '重置默认', variant: 'secondary', tooltip: '恢复默认导出格式，保存后生效', onClick: handleResetDefault },
+      { id: 'reset-default', label: '重置默认', variant: 'secondary', tooltip: '恢复默认导出模版设置，保存后生效', onClick: handleResetDefault },
     ],
   };
   const saveToolbarGroups: FloatingToolbarGroup[] = isDirty
@@ -158,8 +158,8 @@ function ExportFormatPage() {
     <div className="settings-page">
       <div className="settings-page-scroll">
         <header className="export-format-header">
-          <span className="section-kicker">导出格式</span>
-          <h2>Word 文档排版与编号格式</h2>
+          <span className="section-kicker">标书生成</span>
+          <h2>导出模版设置</h2>
           <p>配置导出文档的页面布局、各级标题排版参数和编号规则，配置会实时应用到标书正文预览中</p>
         </header>
 
@@ -336,7 +336,7 @@ function ExportFormatPage() {
             </div>
           </section>
         </div>
-      <FloatingToolbar groups={toolbarGroups} label="导出格式保存工具条" />
+      <FloatingToolbar groups={toolbarGroups} label="导出模版设置保存工具条" />
     </div>
   );
 }
