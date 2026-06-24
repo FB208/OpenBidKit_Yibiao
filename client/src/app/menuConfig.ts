@@ -31,6 +31,12 @@ export const appMenuItems: AppMenuItem[] = [
         icon: 'briefcase',
         notice: githubStarNotice,
       },
+      {
+        id: 'export-format',
+        label: '导出模版设置',
+        description: 'Word 文档排版与编号格式设置',
+        icon: 'export',
+      },
     ],
   },
   {
@@ -78,11 +84,6 @@ export const appMenuItems: AppMenuItem[] = [
         notice: githubStarNotice,
       },
     ],
-  },
-  {
-    id: 'export-format',
-    label: '导出格式',
-    description: 'Word 文档排版与编号格式设置',
   },
   {
     id: 'bid-opportunity',
