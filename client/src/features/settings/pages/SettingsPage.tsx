@@ -3,19 +3,28 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, InputWithAction, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AgentSelfCheckResult, AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
-type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'about';
+type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'agent' | 'about';
 type UpdateStatus = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'error' | 'disabled';
+type AgentSelfCheckUiStatus = 'untested' | 'checking' | 'normal' | 'error';
 
 const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
   { id: 'general', label: '通用' },
   { id: 'text-model', label: '文本模型' },
   { id: 'image-model', label: '生图模型' },
   { id: 'file-parser', label: '文件解析' },
+  { id: 'agent', label: '智能体配置' },
   { id: 'about', label: '关于' },
 ];
+
+const agentSelfCheckStatusMeta: Record<AgentSelfCheckUiStatus, { label: string; description: string }> = {
+  untested: { label: '未检测', description: '点击自检后，会验证 OpenCode Server、AI proxy、当前文本模型和智能体输出链路。' },
+  checking: { label: '检测中', description: '正在清理上一轮自检日志，并执行极简智能体任务。' },
+  normal: { label: '正常', description: '智能体链路已通过自检，可以用于目录修复等 Agent 能力。' },
+  error: { label: '异常', description: '智能体链路自检失败，请查看下方错误详情。' },
+};
 
 const updateChannelOptions: Array<{ value: UpdateChannel; label: string; description: string }> = [
   { value: 'github', label: 'GitHub', description: '使用 GitHub Release 检查和下载更新' },
@@ -461,6 +470,9 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [updatePercent, setUpdatePercent] = useState(0);
   const [updateVersion, setUpdateVersion] = useState('');
   const [updateError, setUpdateError] = useState('');
+  const [agentSelfCheckStatus, setAgentSelfCheckStatus] = useState<AgentSelfCheckUiStatus>('untested');
+  const [agentSelfCheckResult, setAgentSelfCheckResult] = useState<AgentSelfCheckResult | null>(null);
+  const [exportingAgentSelfCheckReport, setExportingAgentSelfCheckReport] = useState(false);
   const { showToast } = useToast();
 
   useEffect(() => {
@@ -811,6 +823,79 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
   };
 
+  const runAgentSelfCheck = async () => {
+    if (agentSelfCheckStatus === 'checking') return;
+
+    try {
+      setAgentSelfCheckStatus('checking');
+      setAgentSelfCheckResult(null);
+
+      const config = createClientConfig();
+      const saveResult = await window.yibiao?.config.save(config);
+      if (!saveResult?.success) {
+        throw new Error(saveResult?.message || '保存当前文本模型配置失败，无法执行智能体自检');
+      }
+      setSavedConfig(config);
+      onDeveloperModeChange?.(Boolean(config.developer_mode));
+
+      const result = await window.yibiao?.agent.selfCheck();
+      if (!result) {
+        throw new Error('智能体自检未返回结果');
+      }
+
+      setAgentSelfCheckResult(result);
+      setAgentSelfCheckStatus(result.success ? 'normal' : 'error');
+      showToast(result.success ? '智能体自检正常' : result.message || '智能体自检失败', result.success ? 'success' : 'error');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '智能体自检失败';
+      const failedResult: AgentSelfCheckResult = {
+        success: false,
+        status: 'error',
+        message,
+        checked_at: new Date().toISOString(),
+        duration_ms: 0,
+        log_dir: '',
+        log_file: '',
+        runtime_root: '',
+        workspace_dir: '',
+        output_file: '',
+        output_path: '',
+        opencode_binary_path: '',
+        steps: [],
+        error: { message },
+        diagnostics: { message },
+        detail_text: message,
+      };
+      setAgentSelfCheckResult(failedResult);
+      setAgentSelfCheckStatus('error');
+      showToast(message, 'error');
+    }
+  };
+
+  const exportAgentSelfCheckReport = async () => {
+    if (!agentSelfCheckResult || exportingAgentSelfCheckReport) return;
+
+    try {
+      setExportingAgentSelfCheckReport(true);
+      const result = await window.yibiao?.agent.exportSelfCheckReport(agentSelfCheckResult);
+      if (!result) {
+        throw new Error('导出智能体自检报告失败');
+      }
+      if (result.canceled) {
+        showToast(result.message || '已取消导出', 'info');
+        return;
+      }
+      if (!result.success) {
+        throw new Error(result.message || '导出智能体自检报告失败');
+      }
+      showToast(result.message || '智能体自检报告已导出', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '导出智能体自检报告失败', 'error');
+    } finally {
+      setExportingAgentSelfCheckReport(false);
+    }
+  };
+
   const saveImageConfig = async () => {
     await saveClientConfig(createClientConfig());
   };
@@ -1152,6 +1237,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const currentTextProviderDefault = textProviderDefaults[state.textModel.provider];
   const imageModelStatus: ImageModelStatus = state.imageModel.status || 'untested';
   const currentImageStatus = imageStatusMeta[imageModelStatus];
+  const currentAgentSelfCheckStatus = agentSelfCheckStatusMeta[agentSelfCheckStatus];
   const imageTestTime = formatImageTestTime(state.imageModel.tested_at);
   const settingsToolbarGroups: FloatingToolbarGroup[] = canSaveActiveTab
     ? [
@@ -1688,6 +1774,64 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
           <div className="parser-note">
             招标文件大多数是 Word 或 Word 导出的带文字层 PDF，本地解析可以适应 95% 以上的情况；如果解析失败，再尝试 MinerU 精准解析 API。
           </div>
+        </section>
+      )}
+
+      {activeTab === 'agent' && (
+        <section className="settings-page-section">
+          <div className="settings-section-title">
+            <span />
+            <strong>智能体配置</strong>
+          </div>
+          <div className={`agent-self-check-status is-${agentSelfCheckStatus}`}>
+            <div>
+              <strong>智能体自检</strong>
+              <span>{currentAgentSelfCheckStatus.description}</span>
+            </div>
+            <em>{currentAgentSelfCheckStatus.label}</em>
+          </div>
+          <div className="settings-list">
+            <div className="settings-row">
+              <div className="settings-row-copy">
+                <strong>自检</strong>
+                <span>执行一个极简智能体任务，检测 OpenCode Server、AI proxy、当前文本模型和输出文件校验链路。每次自检前会清空上一轮自检日志。</span>
+              </div>
+              <div className="settings-action-cell">
+                <button type="button" className="inline-action" onClick={runAgentSelfCheck} disabled={agentSelfCheckStatus === 'checking'}>
+                  {agentSelfCheckStatus === 'checking' && <span className="inline-spinner" aria-hidden="true" />}
+                  {agentSelfCheckStatus === 'checking' ? '自检中' : '自检'}
+                </button>
+              </div>
+            </div>
+          </div>
+          {agentSelfCheckResult && (
+            <div className={`agent-self-check-result is-${agentSelfCheckResult.success ? 'normal' : 'error'}`}>
+              <div className="agent-self-check-result-head">
+                <div>
+                  <strong>{agentSelfCheckResult.success ? '自检通过' : '自检失败'}</strong>
+                  <span>{agentSelfCheckResult.message}</span>
+                </div>
+                <div className="agent-self-check-result-actions">
+                  <small>{agentSelfCheckResult.duration_ms ? `${Math.round(agentSelfCheckResult.duration_ms / 1000)} 秒` : agentSelfCheckResult.checked_at}</small>
+                  <button type="button" className="inline-action" onClick={exportAgentSelfCheckReport} disabled={exportingAgentSelfCheckReport}>
+                    {exportingAgentSelfCheckReport && <span className="inline-spinner" aria-hidden="true" />}
+                    {exportingAgentSelfCheckReport ? '导出中' : '导出报告'}
+                  </button>
+                </div>
+              </div>
+              {agentSelfCheckResult.steps.length > 0 && (
+                <div className="agent-self-check-steps">
+                  {agentSelfCheckResult.steps.map((step) => (
+                    <div className={`agent-self-check-step is-${step.status}`} key={step.id}>
+                      <strong>{step.label}</strong>
+                      <span>{step.message || step.status}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <pre>{agentSelfCheckResult.detail_text}</pre>
+            </div>
+          )}
         </section>
       )}
 

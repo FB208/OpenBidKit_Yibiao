@@ -90,6 +90,70 @@ export interface WorkspaceDatabaseStatus {
   migrationDescription?: string;
 }
 
+export type AgentSelfCheckStepStatus = 'pending' | 'running' | 'success' | 'error';
+export type AgentSelfCheckStatus = 'normal' | 'error';
+
+export interface AgentSelfCheckStep {
+  id: string;
+  label: string;
+  status: AgentSelfCheckStepStatus;
+  message?: string;
+  updated_at?: string;
+}
+
+export interface AgentSelfCheckDiagnostics {
+  name?: string;
+  message?: string;
+  stage?: string;
+  stack?: string;
+  agent_task_id?: string;
+  agent_title?: string;
+  agent_workspace_dir?: string;
+  agent_runtime_root?: string;
+  agent_output_file?: string;
+  agent_output_path?: string;
+  agent_partial_output_chars?: number;
+  agent_partial_output?: string;
+  opencode_binary_path?: string;
+  opencode_base_url?: string;
+  opencode_port?: number;
+  opencode_exit_code?: number | null;
+  opencode_exit_signal?: string;
+  opencode_spawn_error?: string;
+  opencode_last_health_error?: string;
+  opencode_last_health_cause?: string;
+  opencode_stdout_tail?: string;
+  opencode_stderr_tail?: string;
+  opencode_request_log?: unknown[];
+}
+
+export interface AgentSelfCheckResult {
+  success: boolean;
+  status: AgentSelfCheckStatus;
+  message: string;
+  checked_at: string;
+  duration_ms: number;
+  log_dir: string;
+  log_file: string;
+  runtime_root: string;
+  workspace_dir: string;
+  output_file: string;
+  output_path: string;
+  output_content?: string;
+  opencode_binary_path: string;
+  steps: AgentSelfCheckStep[];
+  diagnostics?: AgentSelfCheckDiagnostics;
+  error?: AgentSelfCheckDiagnostics;
+  detail_text: string;
+}
+
+export interface AgentSelfCheckReportExportResult {
+  success: boolean;
+  canceled?: boolean;
+  path?: string;
+  message: string;
+}
+
 export interface YibiaoBridge {
   appName: string;
   platform: string;
@@ -124,6 +188,8 @@ export interface YibiaoBridge {
   };
   agent: {
     run: (payload: unknown) => Promise<unknown>;
+    selfCheck: () => Promise<AgentSelfCheckResult>;
+    exportSelfCheckReport: (payload: AgentSelfCheckResult) => Promise<AgentSelfCheckReportExportResult>;
   };
   developerTokenStats: {
     openWindow: () => Promise<{ success: boolean }>;

@@ -84,16 +84,90 @@ function createStderrBuffer(limit = 20000) {
   };
 }
 
+function createOutputBuffer(limit = 20000) {
+  let value = '';
+
+  return {
+    push(chunk) {
+      value += String(chunk || '');
+      if (value.length > limit) {
+        value = value.slice(-limit);
+      }
+    },
+    tail(size = 4000) {
+      return value.slice(-size);
+    },
+  };
+}
+
+function getFetchCauseMessage(error) {
+  const cause = error?.cause;
+  if (!cause) return '';
+  return [cause.code, cause.message].filter(Boolean).join('：');
+}
+
+function attachOpenCodeDiagnostics(error, meta = {}) {
+  if (!error || typeof error !== 'object') return error;
+  const stderrTail = meta.stderrBuffer?.tail?.(8000) || meta.stderrTail || '';
+  const stdoutTail = meta.stdoutBuffer?.tail?.(8000) || meta.stdoutTail || '';
+  error.openCodeBinaryPath = meta.opencodeBin || error.openCodeBinaryPath || '';
+  error.openCodeWorkspaceDir = meta.workspaceDir || error.openCodeWorkspaceDir || '';
+  error.openCodeRuntimeRoot = meta.runtimeRoot || error.openCodeRuntimeRoot || '';
+  error.openCodeBaseUrl = meta.baseUrl || error.openCodeBaseUrl || '';
+  error.openCodePort = meta.port || error.openCodePort || 0;
+  error.openCodeExitCode = meta.exitInfo?.code ?? error.openCodeExitCode;
+  error.openCodeExitSignal = meta.exitInfo?.signal || error.openCodeExitSignal || '';
+  error.openCodeSpawnError = meta.spawnError?.message || error.openCodeSpawnError || '';
+  error.openCodeStderrTail = stderrTail;
+  error.openCodeStdoutTail = stdoutTail;
+  error.openCodeLastHealthError = meta.lastError?.message || error.openCodeLastHealthError || '';
+  error.openCodeLastHealthCause = getFetchCauseMessage(meta.lastError) || error.openCodeLastHealthCause || '';
+  return error;
+}
+
+function createOpenCodeStartError(message, meta = {}) {
+  const stderrTail = meta.stderrBuffer?.tail?.(4000) || '';
+  const stdoutTail = meta.stdoutBuffer?.tail?.(4000) || '';
+  const details = [];
+  const cause = getFetchCauseMessage(meta.lastError);
+  if (meta.lastError?.message) details.push(`lastError: ${meta.lastError.message}${cause ? ` (${cause})` : ''}`);
+  if (meta.exitInfo) details.push(`exit: code=${meta.exitInfo.code ?? 'null'} signal=${meta.exitInfo.signal || 'null'}`);
+  if (meta.spawnError?.message) details.push(`spawnError: ${meta.spawnError.message}`);
+  if (stdoutTail) details.push(`stdout:\n${stdoutTail}`);
+  if (stderrTail) details.push(`stderr:\n${stderrTail}`);
+  const error = new Error(`${message}${details.length ? `\n${details.join('\n')}` : ''}`);
+  return attachOpenCodeDiagnostics(error, meta);
+}
+
 function normalizeTimeoutMs(value, fallback = 10 * 60 * 1000) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
 }
 
-async function waitForOpenCodeHealth({ baseUrl, authHeader, stderrBuffer, timeoutMs = 30000 }) {
+async function waitForOpenCodeHealth({ baseUrl, authHeader, stderrBuffer, stdoutBuffer, childState, timeoutMs = 30000 }) {
   const startedAt = Date.now();
   let lastError = null;
 
   while (Date.now() - startedAt < timeoutMs) {
+    if (childState?.spawnError) {
+      throw createOpenCodeStartError('OpenCode Server 启动失败：无法启动 OpenCode 进程', {
+        ...childState.meta,
+        stderrBuffer,
+        stdoutBuffer,
+        spawnError: childState.spawnError,
+        lastError,
+      });
+    }
+    if (childState?.exitInfo) {
+      throw createOpenCodeStartError('OpenCode Server 启动失败：OpenCode 进程在健康检查通过前退出', {
+        ...childState.meta,
+        stderrBuffer,
+        stdoutBuffer,
+        exitInfo: childState.exitInfo,
+        lastError,
+      });
+    }
+
     try {
       const response = await fetch(`${baseUrl}/global/health`, {
         headers: { Authorization: authHeader },
@@ -107,8 +181,14 @@ async function waitForOpenCodeHealth({ baseUrl, authHeader, stderrBuffer, timeou
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
-  const stderrTail = stderrBuffer?.tail?.(4000) || '';
-  throw new Error(`OpenCode Server 启动超时：${lastError?.message || 'unknown error'}${stderrTail ? `\nstderr:\n${stderrTail}` : ''}`);
+  throw createOpenCodeStartError(`OpenCode Server 启动超时：${lastError?.message || 'unknown error'}`, {
+    ...childState?.meta,
+    stderrBuffer,
+    stdoutBuffer,
+    exitInfo: childState?.exitInfo,
+    spawnError: childState?.spawnError,
+    lastError,
+  });
 }
 
 function killChild(child) {
@@ -173,6 +253,7 @@ async function startIsolatedOpenCodeServer({
   let aiProxy = null;
   let child = null;
   const stderrBuffer = createStderrBuffer();
+  const stdoutBuffer = createOutputBuffer();
 
   try {
     aiProxy = createAiServiceOpenAiProxy({ app, configStore, timeoutMs: agentTimeoutMs });
@@ -190,6 +271,17 @@ async function startIsolatedOpenCodeServer({
     const password = crypto.randomBytes(24).toString('base64url');
     const baseUrl = `http://127.0.0.1:${port}`;
     const authHeader = createBasicAuth(username, password);
+    const childState = {
+      spawnError: null,
+      exitInfo: null,
+      meta: {
+        opencodeBin,
+        workspaceDir,
+        runtimeRoot,
+        baseUrl,
+        port,
+      },
+    };
 
     const env = buildMinimalChildEnv({
       HOME: tempHome,
@@ -219,25 +311,30 @@ async function startIsolatedOpenCodeServer({
       cwd: workspaceDir,
       env,
       windowsHide: true,
-      stdio: ['ignore', 'ignore', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
+    child.stdout.on('data', (chunk) => stdoutBuffer.push(chunk));
     child.stderr.on('data', (chunk) => stderrBuffer.push(chunk));
 
     child.once('error', (error) => {
+      childState.spawnError = error;
       stderrBuffer.push(`\n[spawn error] ${error?.message || String(error)}\n`);
     });
 
-    child.once('exit', (code) => {
+    child.once('exit', (code, signal) => {
+      childState.exitInfo = { code, signal };
       if (code !== 0) {
         console.warn('[opencode] server exited', {
           code,
+          signal,
+          stdout: stdoutBuffer.tail(4000),
           stderr: stderrBuffer.tail(4000),
         });
       }
     });
 
-    await waitForOpenCodeHealth({ baseUrl, authHeader, stderrBuffer, timeoutMs: 30000 });
+    await waitForOpenCodeHealth({ baseUrl, authHeader, stderrBuffer, stdoutBuffer, childState, timeoutMs: 30000 });
 
     return {
       taskId,
@@ -250,6 +347,9 @@ async function startIsolatedOpenCodeServer({
       getStderrTail(size = 4000) {
         return stderrBuffer.tail(size);
       },
+      getStdoutTail(size = 4000) {
+        return stdoutBuffer.tail(size);
+      },
       async close() {
         await killChild(child);
         await closeAiProxy(aiProxy);
@@ -260,7 +360,13 @@ async function startIsolatedOpenCodeServer({
     await killChild(child);
     await closeAiProxy(aiProxy);
     await cleanupRuntime(runtimeRoot, keepRuntime);
-    throw error;
+    throw attachOpenCodeDiagnostics(error, {
+      opencodeBin,
+      workspaceDir,
+      runtimeRoot,
+      stderrBuffer,
+      stdoutBuffer,
+    });
   }
 }
 

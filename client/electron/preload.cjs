@@ -50,6 +50,8 @@ const bridge = {
   },
   agent: {
     run: (payload) => ipcRenderer.invoke('agent:run', payload),
+    selfCheck: () => ipcRenderer.invoke('agent:self-check'),
+    exportSelfCheckReport: (payload) => ipcRenderer.invoke('agent:export-self-check-report', payload),
   },
   developerTokenStats: {
     openWindow: () => ipcRenderer.invoke('developer-token-stats:open-window'),

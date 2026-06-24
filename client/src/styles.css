@@ -8387,6 +8387,171 @@ button {
   background: rgba(200, 50, 32, 0.1);
 }
 
+.agent-self-check-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 36px 18px;
+  padding: 18px 20px;
+  background: #ffffff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 20px;
+  box-shadow: 0 16px 36px rgba(36, 48, 72, 0.06);
+}
+
+.agent-self-check-status div {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.agent-self-check-status strong {
+  color: var(--yb-text);
+  font-size: 16px;
+}
+
+.agent-self-check-status span {
+  color: var(--yb-text-soft);
+  line-height: 1.55;
+}
+
+.agent-self-check-status em {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  font-style: normal;
+  font-weight: 900;
+  border-radius: 999px;
+}
+
+.agent-self-check-status.is-untested em {
+  color: #536176;
+  background: #f2f5f9;
+}
+
+.agent-self-check-status.is-checking em {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.1);
+}
+
+.agent-self-check-status.is-normal em {
+  color: #16834a;
+  background: rgba(28, 168, 100, 0.12);
+}
+
+.agent-self-check-status.is-error em {
+  color: #c83220;
+  background: rgba(200, 50, 32, 0.1);
+}
+
+.agent-self-check-result {
+  display: grid;
+  gap: 16px;
+  margin: 18px 36px 28px;
+  padding: 20px;
+  background: #ffffff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 22px;
+  box-shadow: 0 16px 36px rgba(36, 48, 72, 0.06);
+}
+
+.agent-self-check-result.is-normal {
+  border-color: rgba(28, 168, 100, 0.22);
+}
+
+.agent-self-check-result.is-error {
+  border-color: rgba(200, 50, 32, 0.24);
+}
+
+.agent-self-check-result-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-self-check-result-head div {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.agent-self-check-result-head strong {
+  color: var(--yb-text);
+  font-size: 18px;
+}
+
+.agent-self-check-result-head span,
+.agent-self-check-result-head small {
+  color: var(--yb-text-soft);
+  line-height: 1.55;
+}
+
+.agent-self-check-result-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.agent-self-check-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent-self-check-step {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  background: rgba(248, 250, 253, 0.84);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 16px;
+}
+
+.agent-self-check-step strong {
+  color: var(--yb-text);
+  font-size: 14px;
+}
+
+.agent-self-check-step span {
+  overflow: hidden;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-self-check-step.is-success {
+  border-color: rgba(28, 168, 100, 0.2);
+}
+
+.agent-self-check-step.is-error {
+  border-color: rgba(200, 50, 32, 0.24);
+}
+
+.agent-self-check-step.is-running {
+  border-color: rgba(33, 116, 253, 0.24);
+}
+
+.agent-self-check-result pre {
+  max-height: 360px;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  color: #243047;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f6f8fc;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 16px;
+}
+
 .image-test-preview {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(160px, 260px);
@@ -9821,6 +9986,10 @@ button {
     grid-template-columns: minmax(220px, 1fr) minmax(280px, 380px);
   }
 
+  .agent-self-check-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .hero-panel {
     flex-direction: column;
   }
@@ -9925,6 +10094,22 @@ button {
   .duplicate-dimension-grid,
   .demo-signal-grid,
   .about-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-self-check-status,
+  .agent-self-check-result-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .agent-self-check-status,
+  .agent-self-check-result {
+    margin-right: 20px;
+    margin-left: 20px;
+  }
+
+  .agent-self-check-steps {
     grid-template-columns: 1fr;
   }
 
