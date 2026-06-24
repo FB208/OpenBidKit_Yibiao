@@ -8389,7 +8389,7 @@ button {
 
 .image-test-preview {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 180px;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 260px);
   align-items: center;
   gap: 18px;
   margin: 0 36px 28px;
@@ -8414,9 +8414,12 @@ button {
 }
 
 .image-test-preview img {
-  width: 180px;
-  height: 180px;
-  object-fit: cover;
+  width: auto;
+  height: auto;
+  max-width: 260px;
+  max-height: 220px;
+  justify-self: end;
+  object-fit: contain;
   background: #ffffff;
   border: 1px solid var(--yb-border-soft);
   border-radius: 18px;
@@ -10276,6 +10279,11 @@ button {
     grid-template-columns: 1fr;
     margin-right: 20px;
     margin-left: 20px;
+  }
+
+  .image-test-preview img {
+    max-width: 100%;
+    justify-self: center;
   }
 
   .parser-note {

@@ -3,7 +3,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, InputWithAction, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'about';
@@ -134,12 +134,43 @@ const imageProviders: Array<{ value: ImageModelProvider; label: string }> = [
 
 const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
 
+const openAICompatibleImageSizeOptions: Array<{ value: ImageModelSize; label: string }> = [
+  { value: 'auto', label: '自动' },
+  { value: '1024x1024', label: '1024×1024（1K 方图）' },
+  { value: '1536x1024', label: '1536×1024（1K 横图）' },
+  { value: '1024x1536', label: '1024×1536（1K 竖图）' },
+  { value: '2048x2048', label: '2048×2048（2K 方图）' },
+  { value: '2048x1152', label: '2048×1152（2K 横图）' },
+  { value: '3840x2160', label: '3840×2160（4K 横图）' },
+  { value: '2160x3840', label: '2160×3840（4K 竖图）' },
+];
+
+const googleImageSizeOptions: Array<{ value: ImageModelSize; label: string }> = [
+  { value: '512', label: '512' },
+  { value: '1K', label: '1K' },
+  { value: '2K', label: '2K' },
+  { value: '4K', label: '4K' },
+];
+
+function getImageSizeOptions(provider: ImageModelProvider) {
+  return provider === 'google-ai-studio' ? googleImageSizeOptions : openAICompatibleImageSizeOptions;
+}
+
+function normalizeImageSize(provider: ImageModelProvider, value?: string): ImageModelSize {
+  const options = getImageSizeOptions(provider);
+  const candidate = String(value || '').trim() as ImageModelSize;
+  return options.some((option) => option.value === candidate)
+    ? candidate
+    : provider === 'google-ai-studio' ? '1K' : '1024x1024';
+}
+
 const imageProviderDefaults: ImageModelProfiles = {
   jinlong: {
     provider: 'jinlong',
     base_url: 'https://img-api.jlaudeapi.com/v1',
     api_key: '',
     model_name: '',
+    image_size: '1024x1024',
     request_mode: 'stream',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
@@ -151,6 +182,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     api_key: '',
     model_name: '',
+    image_size: '1024x1024',
     request_mode: 'stream',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
@@ -162,6 +194,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: 'https://generativelanguage.googleapis.com/v1beta',
     api_key: '',
     model_name: 'gemini-3.1-flash-image-preview',
+    image_size: '1K',
     request_mode: 'stream',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
@@ -173,6 +206,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: 'https://apihub.agnes-ai.com/v1',
     api_key: '',
     model_name: '',
+    image_size: '1024x1024',
     request_mode: 'stream',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
@@ -184,6 +218,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     base_url: '',
     api_key: '',
     model_name: '',
+    image_size: '1024x1024',
     request_mode: 'stream',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
@@ -254,6 +289,7 @@ function normalizeImageModelProfile(provider: ImageModelProvider, profile?: Part
     base_url: provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url,
     api_key: profile?.api_key ?? defaults.api_key,
     model_name: profile?.model_name ?? defaults.model_name,
+    image_size: normalizeImageSize(provider, profile?.image_size ?? defaults.image_size),
     request_mode: normalizeAiRequestMode(profile?.request_mode ?? defaults.request_mode),
     concurrency_limit: normalizeImageConcurrencyLimit(profile?.concurrency_limit ?? defaults.concurrency_limit),
     status: profile?.status ?? defaults.status,
@@ -286,6 +322,7 @@ function imageProfileFromState(imageModel: SettingsPageState['imageModel']): Ima
     base_url: imageModel.provider === 'custom' ? imageModel.base_url || '' : imageProviderDefaults[imageModel.provider].base_url,
     api_key: imageModel.api_key,
     model_name: imageModel.model_name,
+    image_size: normalizeImageSize(imageModel.provider, imageModel.image_size),
     request_mode: imageModel.request_mode,
     concurrency_limit: normalizeImageConcurrencyLimit(imageModel.concurrency_limit),
     status: imageModel.status || 'untested',
@@ -1528,6 +1565,20 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   {testingImageModel ? '测试中' : '测试'}
                 </button>
               </div>
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>图片尺寸</strong>
+                <span>{state.imageModel.provider === 'google-ai-studio' ? '使用 Google AI Studio 官方 imageSize 枚举' : '使用 OpenAI Image API 官方常用尺寸枚举'}</span>
+              </div>
+              <select
+                value={normalizeImageSize(state.imageModel.provider, state.imageModel.image_size)}
+                onChange={(event) => updateImageModelConfig({ image_size: event.target.value as ImageModelSize })}
+              >
+                {getImageSizeOptions(state.imageModel.provider).map((option) => (
+                  <option value={option.value} key={option.value}>{option.label}</option>
+                ))}
+              </select>
             </label>
             <label className="settings-row">
               <div className="settings-row-copy">

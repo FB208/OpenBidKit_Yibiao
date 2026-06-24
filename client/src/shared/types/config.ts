@@ -40,12 +40,14 @@ export interface ImageModelTestResult {
 
 export type ImageModelProvider = 'jinlong' | 'volcengine' | 'google-ai-studio' | 'agnes' | 'custom';
 export type ImageModelStatus = 'untested' | 'available' | 'unavailable';
+export type ImageModelSize = 'auto' | '512' | '1K' | '2K' | '4K' | '1024x1024' | '1536x1024' | '1024x1536' | '2048x2048' | '2048x1152' | '3840x2160' | '2160x3840';
 
 export interface ImageModelConfig {
   provider: ImageModelProvider;
   base_url?: string;
   api_key: string;
   model_name: string;
+  image_size: ImageModelSize;
   request_mode: AiRequestMode;
   concurrency_limit: number;
   status?: ImageModelStatus;

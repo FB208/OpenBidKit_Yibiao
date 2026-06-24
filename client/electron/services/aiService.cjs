@@ -195,6 +195,16 @@ function normalizeImageRequestMode(imageConfig) {
   return imageConfig?.request_mode === 'normal' ? 'normal' : 'stream';
 }
 
+function normalizeOpenAICompatibleImageSize(imageConfig, requestSize) {
+  const size = String(requestSize || imageConfig?.image_size || '1024x1024').trim();
+  return size || '1024x1024';
+}
+
+function normalizeGoogleImageSize(imageConfig) {
+  const size = String(imageConfig?.image_size || '1K').trim();
+  return size || '1K';
+}
+
 function createAbortError() {
   const error = new Error('AI 请求超时');
   error.name = 'AbortError';
@@ -1144,7 +1154,15 @@ function getOpenAICompatibleImageFailureMessage(responseData, fallbackMessage) {
   return firstError?.message || fallbackMessage;
 }
 
-function createGoogleImageRequestBody(prompt) {
+function createGoogleImageRequestBody(prompt, imageSize) {
+  const generationConfig = {
+    responseModalities: ['TEXT', 'IMAGE'],
+  };
+  const normalizedImageSize = String(imageSize || '').trim();
+  if (normalizedImageSize) {
+    generationConfig.imageConfig = { imageSize: normalizedImageSize };
+  }
+
   return {
     contents: [
       {
@@ -1152,9 +1170,7 @@ function createGoogleImageRequestBody(prompt) {
         parts: [{ text: prompt }],
       },
     ],
-    generationConfig: {
-      responseModalities: ['TEXT', 'IMAGE'],
-    },
+    generationConfig,
   };
 }
 
@@ -1356,7 +1372,7 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
   const requestBody = {
     model: imageConfig.model_name,
     prompt: '大字报，内容是“易标AI老好了”',
-    size: '2048x2048',
+    size: normalizeOpenAICompatibleImageSize(imageConfig),
     response_format: 'url',
     ...(requestMode === 'stream' ? { stream: true } : {}),
   };
@@ -1465,7 +1481,7 @@ async function testGoogleImageModel(app, config) {
   const requestMode = normalizeImageRequestMode(imageConfig);
   const requestId = createRequestId();
   const logTitle = 'AI生图测试-Google AI Studio';
-  const requestBody = createGoogleImageRequestBody('大字报，内容是“易标AI老好了”');
+  const requestBody = createGoogleImageRequestBody('大字报，内容是“易标AI老好了”', normalizeGoogleImageSize(imageConfig));
   const url = createGoogleImageUrl(baseUrl, imageConfig.model_name, requestMode);
   let responseData = null;
 
@@ -1551,7 +1567,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
   const requestBody = {
     model: imageConfig.model_name,
     prompt: normalizeImagePrompt(request),
-    size: request.size || '2048x2048',
+    size: normalizeOpenAICompatibleImageSize(imageConfig, request.size),
     response_format: 'url',
     ...(requestMode === 'stream' ? { stream: true } : {}),
   };
@@ -1620,7 +1636,7 @@ async function generateGoogleImage(app, config, request) {
   const requestId = createRequestId();
   const logTitle = resolveAiLogTitle(request, request.title ? `AI生图-${request.title}` : 'AI生图');
   const requestMode = normalizeImageRequestMode(imageConfig);
-  const requestBody = createGoogleImageRequestBody(normalizeImagePrompt(request));
+  const requestBody = createGoogleImageRequestBody(normalizeImagePrompt(request), normalizeGoogleImageSize(imageConfig));
   const baseUrl = requireBaseUrl(imageConfig.base_url, 'Google AI Studio Base URL 缺失，请重新选择服务商后保存配置');
   const url = createGoogleImageUrl(baseUrl, imageConfig.model_name, requestMode);
   let responseData = null;

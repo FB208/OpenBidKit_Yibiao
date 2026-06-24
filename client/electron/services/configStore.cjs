@@ -10,6 +10,8 @@ const updateChannels = ['github', 'cloudflare'];
 const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
+const openAICompatibleImageSizes = ['auto', '1024x1024', '1536x1024', '1024x1536', '2048x2048', '2048x1152', '3840x2160', '2160x3840'];
+const googleImageSizes = ['512', '1K', '2K', '4K'];
 
 const textProviderBaseUrls = {
   jinlong: 'https://jlaudeapi.com/v1',
@@ -77,6 +79,7 @@ const defaultImageModelProfiles = {
     base_url: 'https://img-api.jlaudeapi.com/v1',
     api_key: '',
     model_name: '',
+    image_size: '1024x1024',
     request_mode: 'stream',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
@@ -88,6 +91,7 @@ const defaultImageModelProfiles = {
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     api_key: '',
     model_name: '',
+    image_size: '1024x1024',
     request_mode: 'stream',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
@@ -99,6 +103,7 @@ const defaultImageModelProfiles = {
     base_url: 'https://generativelanguage.googleapis.com/v1beta',
     api_key: '',
     model_name: 'gemini-3.1-flash-image-preview',
+    image_size: '1K',
     request_mode: 'stream',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
@@ -110,6 +115,7 @@ const defaultImageModelProfiles = {
     base_url: 'https://apihub.agnes-ai.com/v1',
     api_key: '',
     model_name: '',
+    image_size: '1024x1024',
     request_mode: 'stream',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
@@ -121,6 +127,7 @@ const defaultImageModelProfiles = {
     base_url: '',
     api_key: '',
     model_name: '',
+    image_size: '1024x1024',
     request_mode: 'stream',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
@@ -309,6 +316,25 @@ function textProfileFromUnknownProvider(source, sourceProvider, fallback) {
   };
 }
 
+function getImageSizeOptions(provider) {
+  return provider === 'google-ai-studio' ? googleImageSizes : openAICompatibleImageSizes;
+}
+
+function normalizeImageSize(provider, value, fallback) {
+  const options = getImageSizeOptions(provider);
+  const candidate = typeof value === 'string' ? value.trim() : '';
+  if (options.includes(candidate)) {
+    return candidate;
+  }
+
+  const fallbackCandidate = typeof fallback === 'string' ? fallback.trim() : '';
+  if (options.includes(fallbackCandidate)) {
+    return fallbackCandidate;
+  }
+
+  return provider === 'google-ai-studio' ? '1K' : '1024x1024';
+}
+
 function normalizeImageModelProfile(provider, profile) {
   const defaults = defaultImageModelProfiles[provider];
   const source = profile || {};
@@ -319,6 +345,7 @@ function normalizeImageModelProfile(provider, profile) {
       : defaults.base_url,
     api_key: source.api_key !== undefined ? source.api_key : defaults.api_key,
     model_name: source.model_name !== undefined ? source.model_name : defaults.model_name,
+    image_size: normalizeImageSize(provider, source.image_size, defaults.image_size),
     request_mode: normalizeAiRequestMode(source.request_mode, defaults.request_mode),
     concurrency_limit: normalizeImageConcurrencyLimit(source.concurrency_limit, defaults.concurrency_limit),
     status: source.status !== undefined ? source.status : defaults.status,
