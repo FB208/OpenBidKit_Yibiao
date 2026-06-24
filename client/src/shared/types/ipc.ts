@@ -3,7 +3,7 @@ import type { DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult, UpdateChannel } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMigrationResult, KnowledgeBaseMigrationStatus, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
-import type { BidAnalysisMode, BidAnalysisTaskState, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
+import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
 import type { OutlineData, OutlineExpansionMode } from './outline';
 
 export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDuplicateCheckState = unknown> {
@@ -225,9 +225,6 @@ export interface YibiaoBridge {
       message?: string;
       state?: TechnicalPlanState;
       markdown?: string;
-      needsSectionSelection?: boolean;
-      sections?: DetectedBidSection[];
-      totalDeclared?: number | null;
       fileName?: string;
       parserLabel?: string | null;
     }>;
@@ -237,14 +234,14 @@ export interface YibiaoBridge {
       state?: TechnicalPlanState;
       markdown?: string;
     }>;
+    checkBidSections: () => Promise<{ hasMultiple: boolean; totalDeclared?: number | null }>;
     selectBidSection: (selectedSection: DetectedBidSection) => Promise<{ success: boolean; message?: string; state: TechnicalPlanState; markdown: string }>;
-    cancelBidSectionSelection: () => Promise<{ success: boolean; message?: string; state: TechnicalPlanState }>;
     readTenderMarkdown: () => Promise<string>;
     readOriginalPlanMarkdown: () => Promise<string>;
     updateStep: (step: TechnicalPlanStep) => Promise<TechnicalPlanState>;
     setWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
     switchWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
-    saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[] }) => Promise<TechnicalPlanState>;
+    saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode }) => Promise<TechnicalPlanState>;
     saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; outlineExpansionMode?: OutlineExpansionMode }) => Promise<TechnicalPlanState>;
     saveOutline: (payload: SaveOutlineRequest) => Promise<TechnicalPlanState>;
     saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<TechnicalPlanState>;
@@ -269,6 +266,7 @@ export interface YibiaoBridge {
     clear: () => Promise<{ success: boolean; message?: string; state: RejectionCheckWorkspaceState }>;
   };
   tasks: {
+    startBidSectionExtraction: (payload?: unknown) => Promise<unknown>;
     startBidAnalysis: (payload: unknown) => Promise<unknown>;
     startOutlineGeneration: (payload: unknown) => Promise<unknown>;
     startGlobalFactsGeneration: (payload: unknown) => Promise<unknown>;

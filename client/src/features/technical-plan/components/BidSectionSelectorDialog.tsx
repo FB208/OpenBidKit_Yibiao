@@ -5,7 +5,6 @@ import type { DetectedBidSection } from '../types';
 interface BidSectionSelectorDialogProps {
   open: boolean;
   sections: DetectedBidSection[];
-  totalDeclared?: number | null;
   onSelect: (sectionId: string) => void;
   onCancel: () => void;
   busy?: boolean;
@@ -14,7 +13,6 @@ interface BidSectionSelectorDialogProps {
 function BidSectionSelectorDialog({
   open,
   sections,
-  totalDeclared,
   onSelect,
   onCancel,
   busy,
@@ -25,7 +23,7 @@ function BidSectionSelectorDialog({
     setSelectedId(open ? sections[0]?.id || '' : '');
   }, [open, sections]);
 
-  const declaredLabel = totalDeclared ? `${totalDeclared} 个` : `${sections.length} 个`;
+  const declaredLabel = `${sections.length} 个`;
 
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onCancel(); }}>

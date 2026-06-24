@@ -92,8 +92,8 @@ const bridge = {
     loadState: () => ipcRenderer.invoke('technical-plan:load-state'),
     importTenderDocument: () => ipcRenderer.invoke('technical-plan:import-tender-document'),
     importOriginalPlanDocument: () => ipcRenderer.invoke('technical-plan:import-original-plan-document'),
+    checkBidSections: () => ipcRenderer.invoke('technical-plan:check-bid-sections'),
     selectBidSection: (selectedSection) => ipcRenderer.invoke('technical-plan:select-bid-section', selectedSection),
-    cancelBidSectionSelection: () => ipcRenderer.invoke('technical-plan:cancel-bid-section-selection'),
     readTenderMarkdown: () => ipcRenderer.invoke('technical-plan:read-tender-markdown'),
     readOriginalPlanMarkdown: () => ipcRenderer.invoke('technical-plan:read-original-plan-markdown'),
     updateStep: (step) => ipcRenderer.invoke('technical-plan:update-step', step),
@@ -124,6 +124,7 @@ const bridge = {
     clear: () => ipcRenderer.invoke('rejection-check:clear'),
   },
   tasks: {
+    startBidSectionExtraction: (payload) => ipcRenderer.invoke('tasks:start-bid-section-extraction', payload),
     startBidAnalysis: (payload) => ipcRenderer.invoke('tasks:start-bid-analysis', payload),
     startOutlineGeneration: (payload) => ipcRenderer.invoke('tasks:start-outline-generation', payload),
     startGlobalFactsGeneration: (payload) => ipcRenderer.invoke('tasks:start-global-facts-generation', payload),

@@ -1,4 +1,4 @@
-const { buildSectionContextHint } = require('../utils/bidSectionDetector.cjs');
+const { buildBidSectionContextHint } = require('../utils/bidSectionContext.cjs');
 const { mergeSegmentedAiResults } = require('../utils/segmentedAiResultMerger.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 
@@ -247,11 +247,25 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
     throw new Error('请先上传招标文件，再开始解析');
   }
   const storedPlanForHint = workspaceStore.loadTechnicalPlan() || {};
-  const selectedSection = storedPlanForHint.tenderFile?.selectedSectionTitle ? {
-    title: storedPlanForHint.tenderFile.selectedSectionTitle,
-    headLine: storedPlanForHint.tenderFile.selectedSectionHeadLine || '',
-  } : null;
-  const sectionHint = selectedSection ? buildSectionContextHint(selectedSection) : '';
+  if (storedPlanForHint.bidSectionMode === 'multiple') {
+    if (storedPlanForHint.bidSectionExtractionStatus !== 'success' || !Array.isArray(storedPlanForHint.bidSections) || storedPlanForHint.bidSections.length < 2) {
+      throw new Error('请先完成多标段识别，再开始解析招标文件');
+    }
+    if (!storedPlanForHint.tenderFile?.selectedSectionId || !storedPlanForHint.tenderFile?.selectedSectionTitle) {
+      throw new Error('请先选择本次投标范围，再开始解析招标文件');
+    }
+    const selectedExists = storedPlanForHint.bidSections.some((section) => section.id === storedPlanForHint.tenderFile.selectedSectionId);
+    if (!selectedExists) {
+      throw new Error('当前投标范围已失效，请重新选择标段');
+    }
+  }
+  const selectedSectionId = storedPlanForHint.tenderFile?.selectedSectionId;
+  const selectedSection = selectedSectionId && Array.isArray(storedPlanForHint.bidSections)
+    ? storedPlanForHint.bidSections.find((section) => section.id === selectedSectionId)
+    : null;
+  const sectionHint = buildBidSectionContextHint(selectedSection, {
+    hasSelectedSection: storedPlanForHint.bidSectionMode === 'multiple' && Boolean(selectedSectionId),
+  });
   const currentConfig = typeof aiService.getConfig === 'function' ? aiService.getConfig() : {};
   const fileSegments = splitUserTextByContextLimit(fileContent, currentConfig);
   const forceRerun = payload.force_rerun === true || payload.forceRerun === true;

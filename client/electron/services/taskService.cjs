@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { runBidSectionExtractionTask } = require('./bidSectionExtractionTask.cjs');
 const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
 const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
 const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
@@ -6,6 +7,15 @@ const { runOutlineGenerationTask } = require('./outlineGenerationTask.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
 
 const taskDefinitions = {
+  'bid-section-extraction': {
+    label: '多标段识别',
+    group: 'technical-plan',
+    groupLabel: '技术方案',
+    step: 2,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'technicalPlan',
+    field: 'bidSectionExtractionTask',
+  },
   'bid-analysis': {
     label: '招标文件解析',
     group: 'technical-plan',
@@ -250,6 +260,31 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
           'contentGenerationRuntime',
         ]);
       }
+    }
+
+    if (task.type === 'bid-section-extraction') {
+      copyPatchFields(patch, state, [
+        'bidSectionMode',
+        'bidSections',
+        'bidSectionExtractionStatus',
+        'bidSectionExtractionError',
+        'tenderFile',
+        'bidAnalysisTask',
+        'bidAnalysisTasks',
+        'bidAnalysisProgress',
+        'projectOverview',
+        'techRequirements',
+        'outlineData',
+        'outlineGenerationTask',
+        'referenceKnowledgeDocumentIds',
+        'globalFactsTask',
+        'globalFacts',
+        'contentGenerationTask',
+        'contentGenerationOptions',
+        'contentGenerationSections',
+        'contentGenerationPlans',
+        'contentGenerationRuntime',
+      ]);
     }
 
     if (task.type === 'outline-generation') {
@@ -600,6 +635,35 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-analysis'), state, recoveredTask));
   }
 
+  function recoverInterruptedBidSectionExtractionTask() {
+    if (activeTasks.has('bid-section-extraction')) {
+      return;
+    }
+
+    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
+    const extractionTask = technicalPlan.bidSectionExtractionTask;
+    if (!isActiveTaskStatus(extractionTask?.status)) {
+      return;
+    }
+
+    const message = '上次多标段识别未完成，请重新识别';
+    const recoveredTask = {
+      ...extractionTask,
+      status: 'error',
+      progress: 100,
+      pause_requested: false,
+      error: message,
+      logs: [...(Array.isArray(extractionTask.logs) ? extractionTask.logs : []), message],
+      updated_at: now(),
+    };
+    const state = technicalPlanStore.updateTechnicalPlan({
+      bidSectionExtractionTask: recoveredTask,
+      bidSectionExtractionStatus: 'error',
+      bidSectionExtractionError: message,
+    });
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-section-extraction'), state, recoveredTask));
+  }
+
   function recoverInterruptedGlobalFactsTask() {
     if (activeTasks.has('global-facts-generation')) {
       return;
@@ -698,6 +762,29 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
 
   return {
     subscribe,
+    startBidSectionExtraction(payload) {
+      return startManagedTask('bid-section-extraction', payload, runBidSectionExtractionTask, {
+        bidSectionMode: 'multiple',
+        bidSections: [],
+        bidSectionExtractionStatus: 'running',
+        bidSectionExtractionError: undefined,
+        bidAnalysisTask: undefined,
+        bidAnalysisTasks: {},
+        bidAnalysisProgress: 0,
+        projectOverview: '',
+        techRequirements: '',
+        outlineData: null,
+        outlineGenerationTask: undefined,
+        referenceKnowledgeDocumentIds: [],
+        globalFactsTask: undefined,
+        globalFacts: [],
+        contentGenerationTask: undefined,
+        contentGenerationOptions: undefined,
+        contentGenerationSections: {},
+        contentGenerationPlans: {},
+        contentGenerationRuntime: undefined,
+      });
+    },
     startBidAnalysis(payload) {
       return startManagedTask('bid-analysis', payload, runBidAnalysisTask);
     },
@@ -751,6 +838,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       return startManagedTask('duplicate-analysis', payload, duplicateCheckService.runAnalysisTask);
     },
     getActiveTasks() {
+      recoverInterruptedBidSectionExtractionTask();
       recoverInterruptedBidAnalysisTask();
       recoverInterruptedContentGenerationTask();
       recoverInterruptedGlobalFactsTask();

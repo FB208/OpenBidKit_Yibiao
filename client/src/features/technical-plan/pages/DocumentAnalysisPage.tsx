@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { isLibreOfficeRequiredMessage, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FileParserProvider } from '../../../shared/types';
-import type { PendingSectionSelection, TechnicalPlanOriginalPlanFile, TechnicalPlanState, TechnicalPlanTenderFile, TechnicalPlanWorkflowKind } from '../types';
-import BidSectionSelectorDialog from '../components/BidSectionSelectorDialog';
+import type { TechnicalPlanOriginalPlanFile, TechnicalPlanState, TechnicalPlanTenderFile, TechnicalPlanWorkflowKind } from '../types';
 
 type TechnicalPlanDocumentTab = 'tender' | 'originalPlan';
-type TechnicalPlanUploadBusy = 'tender' | 'originalPlan' | 'section' | null;
+type TechnicalPlanUploadBusy = 'tender' | 'originalPlan' | null;
 
 const parserLabels: Record<FileParserProvider, string> = {
   local: '本地解析',
@@ -38,10 +37,8 @@ interface DocumentAnalysisPageProps {
   tenderMarkdown: string;
   originalPlanFile: TechnicalPlanOriginalPlanFile | null;
   originalPlanMarkdown: string;
-  pendingSectionSelection: PendingSectionSelection | null;
   onFileImported: (state: TechnicalPlanState, markdown: string) => void;
   onOriginalPlanImported: (state: TechnicalPlanState, markdown: string) => void;
-  onStateChanged: (state: TechnicalPlanState) => void;
 }
 
 function DocumentAnalysisPage({
@@ -50,14 +47,11 @@ function DocumentAnalysisPage({
   tenderMarkdown,
   originalPlanFile,
   originalPlanMarkdown,
-  pendingSectionSelection,
   onFileImported,
   onOriginalPlanImported,
-  onStateChanged,
 }: DocumentAnalysisPageProps) {
   const [configuredParserLabel, setConfiguredParserLabel] = useState(parserLabels.local);
   const [busy, setBusy] = useState<TechnicalPlanUploadBusy>(null);
-  const [pendingSelection, setPendingSelection] = useState<PendingSectionSelection | null>(null);
   const [activeDocumentTab, setActiveDocumentTab] = useState<TechnicalPlanDocumentTab>('tender');
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
@@ -90,10 +84,6 @@ function DocumentAnalysisPage({
   }, [showToast]);
 
   useEffect(() => {
-    setPendingSelection(pendingSectionSelection);
-  }, [pendingSectionSelection]);
-
-  useEffect(() => {
     if (!isExpansionWorkflow) {
       setActiveDocumentTab('tender');
     }
@@ -111,20 +101,6 @@ function DocumentAnalysisPage({
           return;
         }
         showToast(message, message === '已取消选择' ? 'info' : 'error');
-        return;
-      }
-
-      if (result.needsSectionSelection && result.sections) {
-        const nextPendingSelection = {
-          fileName: result.fileName || '未命名文件',
-          parserLabel: result.parserLabel || undefined,
-          sections: result.sections,
-          totalDeclared: result.totalDeclared,
-        };
-        setPendingSelection(nextPendingSelection);
-        if (result.state) {
-          onStateChanged(result.state);
-        }
         return;
       }
 
@@ -182,45 +158,7 @@ function DocumentAnalysisPage({
     }
   };
 
-  const handleSectionSelect = async (sectionId: string) => {
-    if (!pendingSelection) return;
-    try {
-      setBusy('section');
-      const selectedSection = pendingSelection.sections.find((section) => section.id === sectionId);
-      if (!selectedSection) {
-        showToast('未找到选择的投标范围', 'error');
-        return;
-      }
-      const result = await window.yibiao?.technicalPlan.selectBidSection(selectedSection);
-      if (!result?.success || !result.state || !result.markdown) {
-        showToast(result?.message || '标段选择失败', 'error');
-        return;
-      }
-      onFileImported(result.state, result.markdown);
-      showToast(result.message || '已选择标段并导入招标文件', 'success');
-      setPendingSelection(null);
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '标段选择失败', 'error');
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handleSectionCancel = async () => {
-    if (!pendingSelection) return;
-    try {
-      const result = await window.yibiao?.technicalPlan.cancelBidSectionSelection();
-      if (result?.state) {
-        onStateChanged(result.state);
-      }
-    } catch {
-      // 忽略取消失败
-    }
-    setPendingSelection(null);
-  };
-
   const selectedSectionTitle = tenderFile?.selectedSectionTitle;
-  const selectedSectionHeadLine = tenderFile?.selectedSectionHeadLine;
   const hasSectionHint = Boolean(selectedSectionTitle);
   const visibleDocumentTab = isExpansionWorkflow ? activeDocumentTab : 'tender';
   const activeFile = visibleDocumentTab === 'originalPlan' ? originalPlanFile : tenderFile;
@@ -293,9 +231,6 @@ function DocumentAnalysisPage({
         <section className="analysis-section-hint">
           <strong>投标范围：</strong>
           <span>{selectedSectionTitle}</span>
-          {selectedSectionHeadLine && (
-            <span className="analysis-section-hint-detail">（{selectedSectionHeadLine.replace(/^.*?(?:标段|标包|分包|包)[：:]\s*/, '')}）</span>
-          )}
         </section>
       )}
 
@@ -345,15 +280,6 @@ function DocumentAnalysisPage({
           </div>
         )}
       </section>
-
-      <BidSectionSelectorDialog
-        open={Boolean(pendingSelection)}
-        sections={pendingSelection?.sections || []}
-        totalDeclared={pendingSelection?.totalDeclared}
-        onSelect={handleSectionSelect}
-        onCancel={handleSectionCancel}
-        busy={isBusy}
-      />
     </div>
   );
 }

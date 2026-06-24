@@ -1,4 +1,4 @@
-const { buildSectionContextHint } = require('../utils/bidSectionDetector.cjs');
+const { buildBidSectionContextHint } = require('../utils/bidSectionContext.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 
 const DEFAULT_CONTEXT_LENGTH_LIMIT = 400000;
@@ -813,11 +813,13 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
   }
   const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);
 
-  const selectedSection = storedPlan.tenderFile?.selectedSectionTitle ? {
-    title: storedPlan.tenderFile.selectedSectionTitle,
-    headLine: storedPlan.tenderFile.selectedSectionHeadLine || '',
-  } : null;
-  const sectionHint = selectedSection ? buildSectionContextHint(selectedSection) : '';
+  const selectedSectionId = storedPlan.tenderFile?.selectedSectionId;
+  const selectedSection = selectedSectionId && Array.isArray(storedPlan.bidSections)
+    ? storedPlan.bidSections.find((section) => section.id === selectedSectionId)
+    : null;
+  const sectionHint = buildBidSectionContextHint(selectedSection, {
+    hasSelectedSection: storedPlan.bidSectionMode === 'multiple' && Boolean(selectedSectionId),
+  });
 
   const baseContext = {
     projectOverview: storedPlan.projectOverview || '',

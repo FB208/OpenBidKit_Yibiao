@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 13;
+const schemaVersion = 14;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -17,6 +17,9 @@ function createInitialSchema(db) {
       tender_markdown_chars INTEGER NOT NULL DEFAULT 0,
       tender_parser_label TEXT,
       tender_imported_at TEXT,
+      tender_original_markdown_path TEXT,
+      tender_original_markdown_hash TEXT,
+      tender_original_markdown_chars INTEGER NOT NULL DEFAULT 0,
       original_plan_file_name TEXT,
       original_plan_markdown_path TEXT,
       original_plan_markdown_hash TEXT,
@@ -31,6 +34,10 @@ function createInitialSchema(db) {
       pending_tender_created_at TEXT,
       bid_analysis_mode TEXT NOT NULL DEFAULT 'key',
       bid_analysis_selected_task_ids_json TEXT,
+      bid_section_mode TEXT NOT NULL DEFAULT 'single',
+      bid_sections_json TEXT,
+      bid_section_extraction_status TEXT NOT NULL DEFAULT 'idle',
+      bid_section_extraction_error TEXT,
       outline_mode TEXT NOT NULL DEFAULT 'aligned',
       outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
       outline_project_name TEXT,
@@ -214,6 +221,16 @@ function addTechnicalPlanBidAnalysisSelection(db) {
 
 function addTechnicalPlanOutlineExpansionMode(db) {
   addColumnIfMissing(db, 'technical_plan_meta', 'outline_expansion_mode', "TEXT NOT NULL DEFAULT 'ai-complement'");
+}
+
+function addTechnicalPlanBidSectionOptimization(db) {
+  addColumnIfMissing(db, 'technical_plan_meta', 'tender_original_markdown_path', 'TEXT');
+  addColumnIfMissing(db, 'technical_plan_meta', 'tender_original_markdown_hash', 'TEXT');
+  addColumnIfMissing(db, 'technical_plan_meta', 'tender_original_markdown_chars', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'technical_plan_meta', 'bid_section_mode', "TEXT NOT NULL DEFAULT 'single'");
+  addColumnIfMissing(db, 'technical_plan_meta', 'bid_sections_json', 'TEXT');
+  addColumnIfMissing(db, 'technical_plan_meta', 'bid_section_extraction_status', "TEXT NOT NULL DEFAULT 'idle'");
+  addColumnIfMissing(db, 'technical_plan_meta', 'bid_section_extraction_error', 'TEXT');
 }
 
 function addKnowledgeDocumentSortOrder(db) {
@@ -1024,6 +1041,19 @@ const schemaHealthColumnGroups = [
       outline_expansion_mode: "TEXT NOT NULL DEFAULT 'ai-complement'",
     },
   },
+  {
+    version: 14,
+    table: 'technical_plan_meta',
+    columns: {
+      tender_original_markdown_path: 'TEXT',
+      tender_original_markdown_hash: 'TEXT',
+      tender_original_markdown_chars: 'INTEGER NOT NULL DEFAULT 0',
+      bid_section_mode: "TEXT NOT NULL DEFAULT 'single'",
+      bid_sections_json: 'TEXT',
+      bid_section_extraction_status: "TEXT NOT NULL DEFAULT 'idle'",
+      bid_section_extraction_error: 'TEXT',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -1149,6 +1179,11 @@ const migrations = [
     version: 13,
     description: '技术方案新增已有方案目录使用方式配置',
     up: addTechnicalPlanOutlineExpansionMode,
+  },
+  {
+    version: 14,
+    description: '技术方案新增多标段优化状态',
+    up: addTechnicalPlanBidSectionOptimization,
   },
 ];
 
