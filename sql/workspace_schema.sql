@@ -4,7 +4,7 @@
 -- 1. 本文件用于开源开发者阅读、评审和排查问题，展示 workspace/yibiao.sqlite 的目标完整表结构。
 -- 2. 用户运行客户端时不需要手动执行本文件。
 -- 3. 客户端运行时建表和升级以 Electron Main 侧 migration 代码为准。
--- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、待选择标段恢复状态 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12 目标结构。
+-- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14 目标结构。
 -- 5. 每次表结构调整后，需要同步更新本文件和 runtime migration 版本。
 -- 6. 本文件不保存历史版本，每次更新都写入最新目标完整结构。
 
@@ -14,17 +14,17 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 12;
+PRAGMA user_version = 14;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
 -- ============================================================================
 
 -- 技术方案单例元数据。
--- 只保留一行 id = 1，用于保存当前步骤、工作流类型、招标文件/原方案 Markdown 元数据、Step 内 pending 子状态、模式配置和正文生成运行时 JSON。
--- 招标文件 Markdown 原文不进入 SQLite，保存到 userData/workspace/technical-plan/tender.md。
+-- 只保留一行 id = 1，用于保存当前步骤、工作流类型、招标文件/原方案 Markdown 元数据、模式配置和正文生成运行时 JSON。
+-- 招标文件 Markdown 原文不进入 SQLite，原始文件保存到 userData/workspace/technical-plan/tender-original.md，当前投标范围工作副本保存到 userData/workspace/technical-plan/tender.md。
 -- 原方案 Markdown 原文不进入 SQLite，保存到 userData/workspace/technical-plan/original-plan.md。
--- 多标段待选择 Markdown 原文同样不进入 SQLite，保存到 userData/workspace/technical-plan/tender-pending-*.tmp.md，并由 pending_tender_* 字段记录恢复状态。
+-- pending_tender_* 为旧版 Step01 标段待选择兼容清理字段，新流程不再写入。
 CREATE TABLE IF NOT EXISTS technical_plan_meta (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   -- v9 工作流类型：technical-plan / existing-plan-expansion
@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   tender_markdown_chars INTEGER NOT NULL DEFAULT 0,
   tender_parser_label TEXT,
   tender_imported_at TEXT,
+  -- v14 多标段优化：原始招标文件 Markdown 状态，tender_markdown_* 继续代表当前工作副本。
+  tender_original_markdown_path TEXT,
+  tender_original_markdown_hash TEXT,
+  tender_original_markdown_chars INTEGER NOT NULL DEFAULT 0,
   -- v9 已有方案扩写的原方案文件状态
   original_plan_file_name TEXT,
   original_plan_markdown_path TEXT,
@@ -43,7 +47,7 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   original_plan_markdown_chars INTEGER NOT NULL DEFAULT 0,
   original_plan_parser_label TEXT,
   original_plan_imported_at TEXT,
-  -- v8 Step01 多标段待选择恢复状态
+  -- v8 旧版 Step01 多标段待选择恢复状态（新流程仅用于兼容清理）
   pending_tender_markdown_path TEXT,
   pending_tender_file_name TEXT,
   pending_tender_parser_label TEXT,
@@ -53,6 +57,11 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   bid_analysis_mode TEXT NOT NULL DEFAULT 'key',
   -- v10 招标解析项选择配置，JSON 数组，关键项由运行时代码强制并入。
   bid_analysis_selected_task_ids_json TEXT,
+  -- v14 投标范围模式：single / multiple；多标段 AI 提取结果保存在 bid_sections_json。
+  bid_section_mode TEXT NOT NULL DEFAULT 'single',
+  bid_sections_json TEXT,
+  bid_section_extraction_status TEXT NOT NULL DEFAULT 'idle',
+  bid_section_extraction_error TEXT,
   outline_mode TEXT NOT NULL DEFAULT 'aligned',
   -- v13 已有方案扩写目录使用方式：original-only / ai-complement。
   outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
@@ -63,7 +72,7 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   -- v6 兼容字段（旧版客户端遗留，新代码不再使用但保留以兼容）
   current_bid_section_id TEXT,
   bid_sections_extracted INTEGER,
-  -- v7 标段选择字段
+  -- v7 标段选择字段；selected_section_head_line 为旧展示字段，新流程从 bid_sections_json 读取 AI 结果。
   selected_section_id TEXT,
   selected_section_title TEXT,
   selected_section_head_line TEXT,

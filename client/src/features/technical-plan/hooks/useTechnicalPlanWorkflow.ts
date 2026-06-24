@@ -13,9 +13,14 @@ const initialState: TechnicalPlanState = {
   bidAnalysisSelectedTaskIds: [],
   bidAnalysisTasks: {},
   bidAnalysisProgress: 0,
+  bidSectionMode: 'single',
+  bidSections: [],
+  bidSectionExtractionStatus: 'idle',
+  bidSectionExtractionError: undefined,
   outlineMode: 'aligned',
   outlineExpansionMode: 'ai-complement',
   referenceKnowledgeDocumentIds: [],
+  bidSectionExtractionTask: undefined,
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
   globalFactsTask: undefined,
@@ -25,7 +30,6 @@ const initialState: TechnicalPlanState = {
   contentGenerationPlans: {},
   contentGenerationRuntime: undefined,
   outlineData: null,
-  pendingSectionSelection: null,
 };
 
 export function useTechnicalPlanWorkflow() {

@@ -62,9 +62,14 @@ const resetState = {
   bidAnalysisSelectedTaskIds: [] as string[],
   bidAnalysisTasks: {},
   bidAnalysisProgress: 0,
+  bidSectionMode: 'single' as const,
+  bidSections: [],
+  bidSectionExtractionStatus: 'idle' as const,
+  bidSectionExtractionError: undefined,
   outlineMode: 'aligned' as const,
   outlineExpansionMode: 'ai-complement' as const,
   referenceKnowledgeDocumentIds: [] as string[],
+  bidSectionExtractionTask: undefined,
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
   globalFactsTask: undefined,
@@ -75,7 +80,6 @@ const resetState = {
   contentGenerationPlans: {},
   contentGenerationRuntime: undefined,
   outlineData: null,
-  pendingSectionSelection: null,
 };
 
 function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
@@ -144,13 +148,16 @@ function workflowLabel(kind: TechnicalPlanWorkflowKind) {
 }
 
 function hasRunningTechnicalPlanTask(state: TechnicalPlanState) {
-  return [state.bidAnalysisTask, state.outlineGenerationTask, state.globalFactsTask, state.contentGenerationTask]
+  return [state.bidSectionExtractionTask, state.bidAnalysisTask, state.outlineGenerationTask, state.globalFactsTask, state.contentGenerationTask]
     .some((task) => task?.status === 'running' || task?.status === 'pausing');
 }
 
 function hasWorkflowSpecificProgress(state: TechnicalPlanState) {
   return Boolean(
     state.originalPlanFile
+    || state.bidSectionMode === 'multiple'
+    || state.bidSections.length > 0
+    || state.bidSectionExtractionTask
     || state.outlineData
     || state.globalFacts.length > 0
     || Object.keys(state.contentGenerationSections || {}).length > 0
@@ -194,37 +201,45 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const lastExecutedWorkflowSwitchRef = useRef<TechnicalPlanWorkflowKind | null>(null);
   const activeIndex = steps.indexOf(state.step);
   const requiredBidAnalysisReady = areRequiredBidAnalysisTasksReady(state.bidAnalysisTasks);
+  const isBidSectionExtractionRunning = state.bidSectionExtractionTask?.status === 'running' || state.bidSectionExtractionTask?.status === 'pausing';
   const isBidAnalysisTaskRunning = state.bidAnalysisTask?.status === 'running' || state.bidAnalysisTask?.status === 'pausing';
-  const bidAnalysisReady = requiredBidAnalysisReady && !isBidAnalysisTaskRunning;
+  const selectedBidSectionValid = state.bidSectionMode !== 'multiple'
+    || Boolean(state.tenderFile?.selectedSectionId && state.bidSections.some((section) => section.id === state.tenderFile?.selectedSectionId));
+  const bidSectionReady = state.bidSectionMode !== 'multiple'
+    || (state.bidSectionExtractionStatus === 'success' && !isBidSectionExtractionRunning && selectedBidSectionValid);
+  const bidAnalysisReady = requiredBidAnalysisReady && !isBidAnalysisTaskRunning && bidSectionReady;
   const globalFactsReady = state.globalFacts.length > 0 && state.globalFactsTask?.status === 'success';
   const contentTaskStatus = state.contentGenerationTask?.status;
   const isContentGenerating = contentTaskStatus === 'running' || contentTaskStatus === 'pausing';
   const isContentPaused = contentTaskStatus === 'paused';
   const isExporting = exportProgress.running;
-  const hasPendingSectionSelection = Boolean(state.pendingSectionSelection);
   const requiresOriginalPlan = workflowKind === 'existing-plan-expansion';
   const isNextDisabled = activeIndex >= steps.length - 1
-    || (state.step === 'document-analysis' && (!state.tenderFile || hasPendingSectionSelection || (requiresOriginalPlan && !state.originalPlanFile)))
+    || (state.step === 'document-analysis' && (!state.tenderFile || (requiresOriginalPlan && !state.originalPlanFile)))
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
     || (state.step === 'outline-generation' && !state.outlineData)
     || (state.step === 'global-facts' && !globalFactsReady);
-  const nextTooltip = state.step === 'document-analysis' && hasPendingSectionSelection
-    ? '请先选择本次投标范围'
-    : state.step === 'document-analysis' && !state.tenderFile
+  const nextTooltip = state.step === 'document-analysis' && !state.tenderFile
       ? '上传完招标文件后才能进入下一步'
       : state.step === 'document-analysis' && requiresOriginalPlan && !state.originalPlanFile
         ? '上传完原方案后才能进入下一步'
-        : state.step === 'bid-analysis' && isBidAnalysisTaskRunning
-          ? '招标文件解析任务仍在运行，请等待当前任务结束'
-          : state.step === 'bid-analysis' && !requiredBidAnalysisReady
-            ? '招标文件解析完成后才能进入目录生成'
-            : state.step === 'outline-generation' && !state.outlineData
-              ? '目录生成完成后才能进入全局事实设定'
-              : state.step === 'global-facts' && !globalFactsReady
-                ? '全局事实设定完成后才能进入正文生成'
-                : activeIndex >= steps.length - 1
-                  ? '当前已经是最后一步'
-                  : `进入${stepLabels[steps[activeIndex + 1]]}`;
+        : state.step === 'bid-analysis' && isBidSectionExtractionRunning
+          ? '多标段识别任务仍在运行，请等待当前任务结束'
+          : state.step === 'bid-analysis' && state.bidSectionMode === 'multiple' && state.bidSectionExtractionStatus === 'error'
+            ? '请重新识别标段或切回单标段'
+            : state.step === 'bid-analysis' && state.bidSectionMode === 'multiple' && !selectedBidSectionValid
+              ? '请先选择本次投标范围'
+              : state.step === 'bid-analysis' && isBidAnalysisTaskRunning
+                ? '招标文件解析任务仍在运行，请等待当前任务结束'
+                : state.step === 'bid-analysis' && !requiredBidAnalysisReady
+                  ? '招标文件解析完成后才能进入目录生成'
+                  : state.step === 'outline-generation' && !state.outlineData
+                    ? '目录生成完成后才能进入全局事实设定'
+                    : state.step === 'global-facts' && !globalFactsReady
+                      ? '全局事实设定完成后才能进入正文生成'
+                      : activeIndex >= steps.length - 1
+                        ? '当前已经是最后一步'
+                        : `进入${stepLabels[steps[activeIndex + 1]]}`;
 
   const resolveSortLeave = (allowed: boolean) => {
     sortLeaveResolverRef.current?.(allowed);
@@ -446,6 +461,33 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
       }
 
       setState((prev) => {
+        if (taskType === 'bid-section-extraction') {
+          return {
+            ...prev,
+            bidSectionExtractionTask: trimTaskLogs(technicalPlan.bidSectionExtractionTask) || latestTask,
+            bidSectionMode: technicalPlan.bidSectionMode ?? prev.bidSectionMode,
+            bidSections: Array.isArray(technicalPlan.bidSections) ? technicalPlan.bidSections : prev.bidSections,
+            bidSectionExtractionStatus: technicalPlan.bidSectionExtractionStatus ?? prev.bidSectionExtractionStatus,
+            bidSectionExtractionError: technicalPlan.bidSectionExtractionError ?? prev.bidSectionExtractionError,
+            tenderFile: technicalPlan.tenderFile ?? prev.tenderFile,
+            bidAnalysisTask: hasOwnField(technicalPlan, 'bidAnalysisTask') ? trimTaskLogs(technicalPlan.bidAnalysisTask) : prev.bidAnalysisTask,
+            bidAnalysisTasks: hasOwnField(technicalPlan, 'bidAnalysisTasks') ? (technicalPlan.bidAnalysisTasks || {}) : prev.bidAnalysisTasks,
+            bidAnalysisProgress: technicalPlan.bidAnalysisProgress ?? prev.bidAnalysisProgress,
+            projectOverview: technicalPlan.projectOverview ?? prev.projectOverview,
+            techRequirements: technicalPlan.techRequirements ?? prev.techRequirements,
+            outlineData: hasOwnField(technicalPlan, 'outlineData') ? (technicalPlan.outlineData || null) : prev.outlineData,
+            outlineGenerationTask: hasOwnField(technicalPlan, 'outlineGenerationTask') ? trimTaskLogs(technicalPlan.outlineGenerationTask) : prev.outlineGenerationTask,
+            referenceKnowledgeDocumentIds: Array.isArray(technicalPlan.referenceKnowledgeDocumentIds) ? technicalPlan.referenceKnowledgeDocumentIds : prev.referenceKnowledgeDocumentIds,
+            globalFactsTask: hasOwnField(technicalPlan, 'globalFactsTask') ? trimTaskLogs(technicalPlan.globalFactsTask) : prev.globalFactsTask,
+            globalFacts: hasOwnField(technicalPlan, 'globalFacts') ? (technicalPlan.globalFacts || []) : prev.globalFacts,
+            contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : prev.contentGenerationTask,
+            contentGenerationOptions: hasOwnField(technicalPlan, 'contentGenerationOptions') ? technicalPlan.contentGenerationOptions : prev.contentGenerationOptions,
+            contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : prev.contentGenerationSections,
+            contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
+            contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
+          };
+        }
+
         if (taskType === 'bid-analysis') {
           const outlineDataReset = hasOwnField(technicalPlan, 'outlineData') && technicalPlan.outlineData === null;
           return {
@@ -814,7 +856,6 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           tenderMarkdown={tenderMarkdown}
           originalPlanFile={state.originalPlanFile}
           originalPlanMarkdown={originalPlanMarkdown}
-          pendingSectionSelection={state.pendingSectionSelection}
           onFileImported={(nextState, markdown) => {
             setState((prev) => ({ ...prev, ...nextState }));
             setTenderMarkdown(markdown);
@@ -823,7 +864,6 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             setState((prev) => ({ ...prev, ...nextState }));
             setOriginalPlanMarkdown(markdown);
           }}
-          onStateChanged={(nextState) => setState((prev) => ({ ...prev, ...nextState }))}
         />
       )}
 
@@ -832,6 +872,12 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           hasTenderFile={Boolean(state.tenderFile)}
           mode={state.bidAnalysisMode}
           selectedTaskIds={state.bidAnalysisSelectedTaskIds}
+          bidSectionMode={state.bidSectionMode}
+          bidSections={state.bidSections}
+          bidSectionExtractionTask={state.bidSectionExtractionTask}
+          bidSectionExtractionStatus={state.bidSectionExtractionStatus}
+          bidSectionExtractionError={state.bidSectionExtractionError}
+          selectedSectionTitle={state.tenderFile?.selectedSectionTitle}
           tasks={state.bidAnalysisTasks}
           task={state.bidAnalysisTask}
           progress={state.bidAnalysisProgress}

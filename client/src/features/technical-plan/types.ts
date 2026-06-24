@@ -4,7 +4,9 @@ export type TechnicalPlanStep = 'document-analysis' | 'bid-analysis' | 'outline-
 export type TechnicalPlanWorkflowKind = 'technical-plan' | 'existing-plan-expansion';
 export type BidAnalysisMode = 'key' | 'full' | 'custom';
 export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
-export type BackgroundTaskType = 'bid-analysis' | 'outline-generation' | 'global-facts-generation' | 'content-generation';
+export type BidSectionMode = 'single' | 'multiple';
+export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error';
+export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'global-facts-generation' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
@@ -186,11 +188,13 @@ export interface TechnicalPlanTenderFile {
   markdownPath: string;
   markdownChars: number;
   contentHash: string;
+  originalMarkdownPath?: string;
+  originalMarkdownChars?: number;
+  originalContentHash?: string;
   parserLabel?: string;
   importedAt?: string;
   selectedSectionId?: string;
   selectedSectionTitle?: string;
-  selectedSectionHeadLine?: string;
   updatedAt: string;
 }
 
@@ -204,6 +208,12 @@ export interface TechnicalPlanOriginalPlanFile {
   updatedAt: string;
 }
 
+export interface BidSectionLineRange {
+  startLine: number;
+  endLine: number;
+  reason?: string;
+}
+
 export interface DetectedBidSection {
   id: string;
   index: number;
@@ -211,14 +221,8 @@ export interface DetectedBidSection {
   title: string;
   headLine: string;
   description: string;
-}
-
-export interface PendingSectionSelection {
-  fileName: string;
-  parserLabel?: string | null;
-  sections: DetectedBidSection[];
-  totalDeclared?: number | null;
-  createdAt?: string;
+  includeRanges?: BidSectionLineRange[];
+  evidence?: string[];
 }
 
 export interface TechnicalPlanState {
@@ -232,9 +236,14 @@ export interface TechnicalPlanState {
   bidAnalysisSelectedTaskIds: string[];
   bidAnalysisTasks: BidAnalysisTasks;
   bidAnalysisProgress: number;
+  bidSectionMode: BidSectionMode;
+  bidSections: DetectedBidSection[];
+  bidSectionExtractionStatus: BidSectionExtractionStatus;
+  bidSectionExtractionError?: string;
   outlineMode: OutlineMode;
   outlineExpansionMode: OutlineExpansionMode;
   referenceKnowledgeDocumentIds: string[];
+  bidSectionExtractionTask?: BackgroundTaskState;
   bidAnalysisTask?: BackgroundTaskState;
   outlineGenerationTask?: BackgroundTaskState;
   globalFactsTask?: BackgroundTaskState;
@@ -245,5 +254,4 @@ export interface TechnicalPlanState {
   contentGenerationPlans: ContentGenerationPlans;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   outlineData: OutlineData | null;
-  pendingSectionSelection: PendingSectionSelection | null;
 }
