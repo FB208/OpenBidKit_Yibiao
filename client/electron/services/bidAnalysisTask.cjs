@@ -234,7 +234,7 @@ function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent, sect
     throw new Error('未找到无效投标与废标项解析任务');
   }
 
-  return runSingleBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint });
+  return runBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint });
 }
 
 async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, payload }) {

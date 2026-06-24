@@ -1,9 +1,17 @@
 const crypto = require('node:crypto');
 const { compactLogError, createNoopDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
+const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { runInvalidBidAndRejectionItemsExtraction } = require('./bidAnalysisTask.cjs');
 
 const checkRunStatus = ['idle', 'running', 'success', 'error'];
 const typoExcerptRadius = 8;
+const fullPromptLimitRatio = 0.6;
+const rollingSegmentLimitRatio = 0.55;
+const typoSegmentLimitRatio = 0.7;
+const rollingSummaryEvidenceLimit = 60;
+const rollingSummaryResolvedLimit = 40;
+const rollingSummaryConfirmedLimit = 60;
+const finalCandidateBatchSize = 20;
 
 function now() {
   return new Date().toISOString();
@@ -252,8 +260,24 @@ function normalizeRejectionCheckFindings(parsed, bidDocuments) {
     .filter((item) => item.bidDocumentId && item.title && item.bidEvidence && item.riskReason);
 }
 
-function findVerifiedTypoPosition(bidContent, wrongText, originalExcerpt) {
+function findVerifiedTypoPosition(bidContent, wrongText, originalExcerpt, options = {}) {
   if (!wrongText) return -1;
+  const segmentStartOffset = Number.isFinite(Number(options.segmentStartOffset))
+    ? Math.max(0, Math.floor(Number(options.segmentStartOffset)))
+    : 0;
+  const segmentEndOffset = Number.isFinite(Number(options.segmentEndOffset))
+    ? Math.min(bidContent.length, Math.max(segmentStartOffset, Math.floor(Number(options.segmentEndOffset))))
+    : bidContent.length;
+  if (segmentStartOffset > 0 || segmentEndOffset < bidContent.length) {
+    const segmentContent = bidContent.slice(segmentStartOffset, segmentEndOffset);
+    if (originalExcerpt) {
+      const excerptIndex = segmentContent.indexOf(originalExcerpt);
+      const wrongIndexInExcerpt = originalExcerpt.indexOf(wrongText);
+      if (excerptIndex >= 0 && wrongIndexInExcerpt >= 0) return segmentStartOffset + excerptIndex + wrongIndexInExcerpt;
+    }
+    const wrongIndexInSegment = segmentContent.indexOf(wrongText);
+    if (wrongIndexInSegment >= 0) return segmentStartOffset + wrongIndexInSegment;
+  }
   if (originalExcerpt) {
     const excerptIndex = bidContent.indexOf(originalExcerpt);
     const wrongIndexInExcerpt = originalExcerpt.indexOf(wrongText);
@@ -285,7 +309,7 @@ function createLineLocationHint(bidContent, position) {
   return `原文第 ${before.split(/\r\n|\r|\n/).length} 行附近`;
 }
 
-function normalizeTypoCheckFindings(parsed, bidDocuments) {
+function normalizeTypoCheckFindings(parsed, bidDocuments, options = {}) {
   const documents = Array.isArray(bidDocuments) ? bidDocuments : [];
   const bidDocumentIds = new Set(documents.map((document) => document.id).filter(Boolean));
   const documentMap = new Map(documents.map((document) => [document.id, document]));
@@ -301,7 +325,7 @@ function normalizeTypoCheckFindings(parsed, bidDocuments) {
     const originalExcerpt = normalizeText(item.originalExcerpt || item.original_excerpt || item.excerpt || item.context);
     const reason = normalizeText(item.reason || item.riskReason || item.detail) || '疑似错别字，请结合原文复核。';
     if (!wrongText || !correctText || wrongText === correctText) continue;
-    const position = findVerifiedTypoPosition(bidDocument.content, wrongText, originalExcerpt);
+    const position = findVerifiedTypoPosition(bidDocument.content, wrongText, originalExcerpt, options);
     if (position < 0) continue;
     const key = `${bidDocumentId}\u0000${wrongText}\u0000${correctText}\u0000${position}`;
     if (seen.has(key)) continue;
@@ -314,6 +338,7 @@ function normalizeTypoCheckFindings(parsed, bidDocuments) {
       originalExcerpt: createVerifiedTypoExcerpt(bidDocument.content, position, wrongText),
       reason,
       locationHint: createLineLocationHint(bidDocument.content, position),
+      position,
     });
   }
   return findings;
@@ -338,6 +363,907 @@ function normalizeLogicCheckFindings(parsed, bidDocuments) {
     findings.push({ id: normalizeText(item.id) || createId('logic_finding'), bidDocumentId, title, originalText, locationHint, fallacyReason, suggestion });
   }
   return findings;
+}
+
+function truncatePromptText(value, maxLength) {
+  const text = normalizeText(value);
+  if (!text || text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...`;
+}
+
+function getCurrentAiConfig(aiService) {
+  try {
+    return typeof aiService?.getConfig === 'function' ? aiService.getConfig() : {};
+  } catch {
+    return {};
+  }
+}
+
+function shouldUseSegmentedPrompt(aiService, promptText, limitRatio = fullPromptLimitRatio) {
+  const config = getCurrentAiConfig(aiService);
+  return splitUserTextByContextLimit(promptText, config, { limitRatio }).length > 1;
+}
+
+function shouldUseSegmentedRejectionFlow(aiService, input) {
+  return shouldUseSegmentedPrompt(
+    aiService,
+    [input.invalidBidAndRejectionItems, input.customCheckItems, formatBidDocumentsForPrompt(input)].join('\n\n'),
+  );
+}
+
+function shouldUseSegmentedBidDocuments(aiService, bidDocuments) {
+  return shouldUseSegmentedPrompt(aiService, formatBidDocumentsForPrompt({ bidDocuments }));
+}
+
+function createBidDocumentSegments(document, config, limitRatio) {
+  const segments = splitUserTextByContextLimit(document.content, config, { limitRatio });
+  let startOffset = 0;
+  return segments.map((content, index) => {
+    const endOffset = startOffset + content.length;
+    const segment = {
+      content,
+      startOffset,
+      endOffset,
+      segmentIndex: index + 1,
+      totalSegments: segments.length,
+    };
+    startOffset = endOffset;
+    return segment;
+  });
+}
+
+function createBidPackageSegments(bidDocuments, config, limitRatio) {
+  const localSegments = [];
+  for (const [documentIndex, document] of bidDocuments.entries()) {
+    const documentLabel = getBidDocumentDisplayName(document, documentIndex);
+    const segments = createBidDocumentSegments(document, config, limitRatio);
+    for (const segment of segments) {
+      localSegments.push({
+        documentId: document.id,
+        documentLabel,
+        content: `【${documentLabel}｜bidDocumentId：${document.id}｜文件名：${document.fileName || document.id}】\n【当前文件片段：第 ${segment.segmentIndex}/${segment.totalSegments} 段】\n${segment.content}`,
+      });
+    }
+  }
+
+  return localSegments.map((segment, index) => ({
+    ...segment,
+    segmentIndex: index + 1,
+    totalSegments: localSegments.length,
+  }));
+}
+
+function createSegmentPromptDocument(document, segment) {
+  return { ...document, content: segment.content };
+}
+
+function getBidDocumentDisplayName(document, documentIndex) {
+  return `投标文件${documentIndex + 1}${document.fileName ? `（${document.fileName}）` : ''}`;
+}
+
+function formatBidDocumentIdList(bidDocuments) {
+  return (Array.isArray(bidDocuments) ? bidDocuments : [])
+    .map((document, index) => `- ${getBidDocumentDisplayName(document, index)}：${document.id}`)
+    .join('\n');
+}
+
+function getPackageBidDocumentId(item, bidDocuments, fallbackBidDocumentId = '') {
+  const bidDocumentIds = new Set((Array.isArray(bidDocuments) ? bidDocuments : []).map((document) => document.id).filter(Boolean));
+  return getBidDocumentIdFromItem(item, bidDocumentIds) || (bidDocumentIds.has(fallbackBidDocumentId) ? fallbackBidDocumentId : '');
+}
+
+function limitDedupeItems(items, maxCount, keyBuilder) {
+  const seen = new Set();
+  const result = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item) continue;
+    const key = normalizeText(keyBuilder(item)) || JSON.stringify(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+    if (result.length >= maxCount) break;
+  }
+  return result;
+}
+
+function dedupeItems(items, keyBuilder) {
+  return limitDedupeItems(items, Number.MAX_SAFE_INTEGER, keyBuilder);
+}
+
+function normalizeRollingEvidenceItem(item, bidDocuments, fallbackBidDocumentId = '') {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+  const bidDocumentId = getPackageBidDocumentId(item, bidDocuments, fallbackBidDocumentId);
+  const name = truncatePromptText(item.name || item.title || item.material || item.item || item.requirement, 80);
+  const evidence = truncatePromptText(item.evidence || item.originalText || item.original_text || item.excerpt || item.content || item.description, 600);
+  const locationHint = truncatePromptText(item.locationHint || item.location_hint || item.location || item.position, 160);
+  const source = truncatePromptText(item.source || item.requirement || item.reason, 240);
+  if (!name && !evidence) return null;
+  return {
+    bidDocumentId,
+    name: name || truncatePromptText(evidence, 80),
+    evidence,
+    locationHint,
+    source,
+  };
+}
+
+function normalizeRollingRejectionRiskItem(item, bidDocuments, fallbackBidDocumentId = '') {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+  const bidDocumentId = getPackageBidDocumentId(item, bidDocuments, fallbackBidDocumentId);
+  const title = truncatePromptText(item.title || item.summary || item.requirement, 80);
+  if (!title) return null;
+  return {
+    bidDocumentId,
+    type: normalizeFindingType(item.type),
+    severity: normalizeSeverity(item.severity),
+    title,
+    summary: truncatePromptText(item.summary || title, 180),
+    requirement: truncatePromptText(item.requirement || item.source, 360),
+    bidEvidence: truncatePromptText(item.bidEvidence || item.evidence || item.bid_evidence, 600),
+    riskReason: truncatePromptText(item.riskReason || item.reason || item.risk_reason, 600),
+    suggestion: truncatePromptText(item.suggestion || item.recommendation, 300),
+    statusReason: truncatePromptText(item.statusReason || item.status_reason || item.pendingReason || item.pending_reason, 360),
+  };
+}
+
+function normalizeResolvedSummaryItem(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+  const title = truncatePromptText(item.title || item.summary || item.name, 100);
+  const reason = truncatePromptText(item.reason || item.resolvedReason || item.resolved_reason || item.evidence, 360);
+  if (!title && !reason) return null;
+  return {
+    title: title || truncatePromptText(reason, 100),
+    reason,
+    locationHint: truncatePromptText(item.locationHint || item.location_hint || item.location, 160),
+  };
+}
+
+function normalizePatchReferenceId(item, keys) {
+  for (const key of keys) {
+    const value = normalizeText(item?.[key]);
+    if (value) return value;
+  }
+  return '';
+}
+
+function createSequentialStateId(prefix, sequence) {
+  return `${prefix}_${String(sequence).padStart(4, '0')}`;
+}
+
+function assignRejectionEvidenceId(state, item) {
+  const id = createSequentialStateId('evidence', state.nextEvidenceSeq);
+  state.nextEvidenceSeq += 1;
+  return { ...item, id };
+}
+
+function assignRejectionRiskId(state, item) {
+  const id = createSequentialStateId('risk', state.nextRiskSeq);
+  state.nextRiskSeq += 1;
+  return { ...item, id };
+}
+
+function assignLogicFactId(state, item) {
+  const id = createSequentialStateId('fact', state.nextFactSeq);
+  state.nextFactSeq += 1;
+  return { ...item, id };
+}
+
+function assignLogicIssueId(state, item) {
+  const id = createSequentialStateId('issue', state.nextIssueSeq);
+  state.nextIssueSeq += 1;
+  return { ...item, id };
+}
+
+function normalizeRollingRejectionRiskUpdate(item, bidDocuments, fallbackBidDocumentId = '') {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+  const id = normalizePatchReferenceId(item, ['id', 'riskId', 'risk_id', 'pendingRiskId', 'pending_risk_id']);
+  if (!id) return null;
+  return {
+    id,
+    bidDocumentId: getPackageBidDocumentId(item, bidDocuments, fallbackBidDocumentId),
+    type: item.type ? normalizeFindingType(item.type) : undefined,
+    severity: item.severity ? normalizeSeverity(item.severity) : undefined,
+    title: truncatePromptText(item.title || item.summary || item.requirement, 80),
+    summary: truncatePromptText(item.summary, 180),
+    requirement: truncatePromptText(item.requirement || item.source, 360),
+    bidEvidence: truncatePromptText(item.bidEvidence || item.evidence || item.bid_evidence, 600),
+    riskReason: truncatePromptText(item.riskReason || item.reason || item.risk_reason, 600),
+    suggestion: truncatePromptText(item.suggestion || item.recommendation, 300),
+    statusReason: truncatePromptText(item.statusReason || item.status_reason || item.pendingReason || item.pending_reason, 360),
+  };
+}
+
+function normalizeRollingRejectionResolve(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+  const id = normalizePatchReferenceId(item, ['id', 'riskId', 'risk_id', 'pendingRiskId', 'pending_risk_id']);
+  if (!id) return null;
+  return {
+    id,
+    title: truncatePromptText(item.title || item.summary || item.name, 100),
+    reason: truncatePromptText(item.reason || item.resolvedReason || item.resolved_reason || item.evidence, 360),
+    locationHint: truncatePromptText(item.locationHint || item.location_hint || item.location, 160),
+  };
+}
+
+function normalizeRollingRejectionPatch(parsed, bidDocuments, fallbackBidDocumentId = '') {
+  const source = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  const evidenceAdds = getArrayPayload(source, ['evidenceAdds', 'evidence_adds', 'submittedEvidenceAdds', 'submitted_evidence_adds', 'submittedEvidence', 'submitted_evidence'])
+    .map((item) => normalizeRollingEvidenceItem(item, bidDocuments, fallbackBidDocumentId))
+    .filter(Boolean);
+  const pendingRiskAdds = getArrayPayload(source, ['pendingRiskAdds', 'pending_risk_adds', 'pendingRisks', 'pending_risks'])
+    .map((item) => normalizeRollingRejectionRiskItem(item, bidDocuments, fallbackBidDocumentId))
+    .filter(Boolean);
+  const pendingRiskUpdates = getArrayPayload(source, ['pendingRiskUpdates', 'pending_risk_updates', 'riskUpdates', 'risk_updates'])
+    .map((item) => normalizeRollingRejectionRiskUpdate(item, bidDocuments, fallbackBidDocumentId))
+    .filter(Boolean);
+  const pendingRiskResolves = getArrayPayload(source, ['pendingRiskResolves', 'pending_risk_resolves', 'riskResolves', 'risk_resolves', 'resolvedRisks', 'resolved_risks'])
+    .map(normalizeRollingRejectionResolve)
+    .filter(Boolean);
+  const confirmedRisks = normalizeRejectionCheckFindings({
+    findings: getArrayPayload(source, ['confirmedRiskAdds', 'confirmed_risk_adds', 'confirmedRisks', 'confirmed_risks', 'confirmedFindings', 'confirmed_findings', 'findings']),
+  }, bidDocuments);
+
+  return { evidenceAdds, pendingRiskAdds, pendingRiskUpdates, pendingRiskResolves, confirmedRiskAdds: confirmedRisks };
+}
+
+function mergeDefinedFields(target, update, fields) {
+  const next = { ...target };
+  for (const field of fields) {
+    if (update[field] !== undefined && update[field] !== '') {
+      next[field] = update[field];
+    }
+  }
+  return next;
+}
+
+function applyRollingRejectionPatch(state, patch) {
+  const next = {
+    ...state,
+    submittedEvidence: [...state.submittedEvidence],
+    pendingRisks: [...state.pendingRisks],
+    resolvedRisks: [...state.resolvedRisks],
+    confirmedRisks: [...state.confirmedRisks],
+  };
+
+  for (const item of patch.evidenceAdds || []) {
+    const key = `${item.bidDocumentId}\u0000${item.name}\u0000${item.evidence}`;
+    const exists = next.submittedEvidence.some((evidence) => `${evidence.bidDocumentId}\u0000${evidence.name}\u0000${evidence.evidence}` === key);
+    if (!exists) next.submittedEvidence.push(assignRejectionEvidenceId(next, item));
+  }
+
+  for (const item of patch.pendingRiskAdds || []) {
+    const key = `${item.bidDocumentId}\u0000${item.type}\u0000${item.title}\u0000${item.requirement}`;
+    const exists = next.pendingRisks.some((risk) => `${risk.bidDocumentId}\u0000${risk.type}\u0000${risk.title}\u0000${risk.requirement}` === key)
+      || next.confirmedRisks.some((risk) => `${risk.bidDocumentId}\u0000${risk.type}\u0000${risk.title}\u0000${risk.requirement}` === key);
+    if (!exists) next.pendingRisks.push(assignRejectionRiskId(next, item));
+  }
+
+  for (const update of patch.pendingRiskUpdates || []) {
+    next.pendingRisks = next.pendingRisks.map((risk) => risk.id === update.id
+      ? mergeDefinedFields(risk, update, ['type', 'severity', 'title', 'summary', 'requirement', 'bidEvidence', 'riskReason', 'suggestion', 'statusReason'])
+      : risk);
+  }
+
+  for (const resolve of patch.pendingRiskResolves || []) {
+    const riskIndex = next.pendingRisks.findIndex((risk) => risk.id === resolve.id);
+    if (riskIndex < 0) continue;
+    const [risk] = next.pendingRisks.splice(riskIndex, 1);
+    next.resolvedRisks.push({
+      id: `resolved_${risk.id}`,
+      riskId: risk.id,
+      title: resolve.title || risk.title,
+      reason: resolve.reason || '后续片段已提供线索，原待确认风险被排除。',
+      locationHint: resolve.locationHint || risk.locationHint,
+    });
+  }
+
+  for (const item of patch.confirmedRiskAdds || []) {
+    const key = `${item.bidDocumentId}\u0000${item.type}\u0000${item.title}\u0000${item.bidEvidence}`;
+    const exists = next.confirmedRisks.some((risk) => `${risk.bidDocumentId}\u0000${risk.type}\u0000${risk.title}\u0000${risk.bidEvidence}` === key);
+    if (!exists) next.confirmedRisks.push(assignRejectionRiskId(next, item));
+  }
+
+  return {
+    ...next,
+    submittedEvidence: dedupeItems(next.submittedEvidence, (item) => `${item.bidDocumentId}\u0000${item.name}\u0000${item.evidence}`),
+    pendingRisks: dedupeItems(next.pendingRisks, (item) => `${item.bidDocumentId}\u0000${item.type}\u0000${item.title}\u0000${item.requirement}`),
+    resolvedRisks: dedupeItems(next.resolvedRisks, (item) => `${item.title}\u0000${item.reason}`),
+    confirmedRisks: dedupeItems(next.confirmedRisks, (item) => `${item.bidDocumentId}\u0000${item.type}\u0000${item.title}\u0000${item.bidEvidence}`),
+  };
+}
+
+function createEmptyRollingRejectionState() {
+  return {
+    nextEvidenceSeq: 1,
+    nextRiskSeq: 1,
+    submittedEvidence: [],
+    pendingRisks: [],
+    resolvedRisks: [],
+    confirmedRisks: [],
+  };
+}
+
+function normalizeLogicFactItem(item, bidDocuments, fallbackBidDocumentId = '') {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+  const bidDocumentId = getPackageBidDocumentId(item, bidDocuments, fallbackBidDocumentId);
+  const category = truncatePromptText(item.category || item.type || item.field || '关键事实', 60);
+  const name = truncatePromptText(item.name || item.title || item.fieldName || item.field_name, 100);
+  const value = truncatePromptText(item.value || item.fact || item.content || item.description, 500);
+  const evidence = truncatePromptText(item.evidence || item.originalText || item.original_text || item.excerpt, 500);
+  const locationHint = truncatePromptText(item.locationHint || item.location_hint || item.location || item.position, 160);
+  if (!name && !value && !evidence) return null;
+  return {
+    bidDocumentId,
+    category,
+    name: name || truncatePromptText(value || evidence, 100),
+    value,
+    evidence,
+    locationHint,
+  };
+}
+
+function normalizeRollingLogicIssueItem(item, bidDocuments, fallbackBidDocumentId = '') {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+  const bidDocumentId = getPackageBidDocumentId(item, bidDocuments, fallbackBidDocumentId);
+  const title = truncatePromptText(item.title || item.summary || item.name, 80);
+  const fallacyReason = truncatePromptText(item.fallacyReason || item.fallacy_reason || item.reason || item.riskReason, 600);
+  if (!title && !fallacyReason) return null;
+  return {
+    bidDocumentId,
+    title: title || truncatePromptText(fallacyReason, 80),
+    originalText: truncatePromptText(item.originalText || item.original_text || item.evidence || item.bidEvidence, 700),
+    locationHint: truncatePromptText(item.locationHint || item.location_hint || item.location || item.position, 180),
+    fallacyReason,
+    suggestion: truncatePromptText(item.suggestion || item.recommendation, 300),
+    statusReason: truncatePromptText(item.statusReason || item.status_reason || item.pendingReason || item.pending_reason, 360),
+  };
+}
+
+function normalizeRollingLogicIssueUpdate(item, bidDocuments, fallbackBidDocumentId = '') {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+  const id = normalizePatchReferenceId(item, ['id', 'issueId', 'issue_id', 'pendingIssueId', 'pending_issue_id']);
+  if (!id) return null;
+  return {
+    id,
+    bidDocumentId: getPackageBidDocumentId(item, bidDocuments, fallbackBidDocumentId),
+    title: truncatePromptText(item.title || item.summary || item.name, 80),
+    originalText: truncatePromptText(item.originalText || item.original_text || item.evidence || item.bidEvidence, 700),
+    locationHint: truncatePromptText(item.locationHint || item.location_hint || item.location || item.position, 180),
+    fallacyReason: truncatePromptText(item.fallacyReason || item.fallacy_reason || item.reason || item.riskReason, 600),
+    suggestion: truncatePromptText(item.suggestion || item.recommendation, 300),
+    statusReason: truncatePromptText(item.statusReason || item.status_reason || item.pendingReason || item.pending_reason, 360),
+  };
+}
+
+function normalizeRollingLogicResolve(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+  const id = normalizePatchReferenceId(item, ['id', 'issueId', 'issue_id', 'pendingIssueId', 'pending_issue_id']);
+  if (!id) return null;
+  return {
+    id,
+    title: truncatePromptText(item.title || item.summary || item.name, 100),
+    reason: truncatePromptText(item.reason || item.resolvedReason || item.resolved_reason || item.evidence, 360),
+    locationHint: truncatePromptText(item.locationHint || item.location_hint || item.location, 160),
+  };
+}
+
+function normalizeRollingLogicPatch(parsed, bidDocuments, fallbackBidDocumentId = '') {
+  const source = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  const factAdds = getArrayPayload(source, ['factAdds', 'fact_adds', 'factRegisterAdds', 'fact_register_adds', 'facts', 'factRegister', 'fact_register'])
+    .map((item) => normalizeLogicFactItem(item, bidDocuments, fallbackBidDocumentId))
+    .filter(Boolean);
+  const pendingIssueAdds = getArrayPayload(source, ['pendingIssueAdds', 'pending_issue_adds', 'pendingIssues', 'pending_issues'])
+    .map((item) => normalizeRollingLogicIssueItem(item, bidDocuments, fallbackBidDocumentId))
+    .filter(Boolean);
+  const pendingIssueUpdates = getArrayPayload(source, ['pendingIssueUpdates', 'pending_issue_updates', 'issueUpdates', 'issue_updates'])
+    .map((item) => normalizeRollingLogicIssueUpdate(item, bidDocuments, fallbackBidDocumentId))
+    .filter(Boolean);
+  const pendingIssueResolves = getArrayPayload(source, ['pendingIssueResolves', 'pending_issue_resolves', 'issueResolves', 'issue_resolves', 'resolvedIssues', 'resolved_issues'])
+    .map(normalizeRollingLogicResolve)
+    .filter(Boolean);
+  const confirmedIssues = normalizeLogicCheckFindings({
+    findings: getArrayPayload(source, ['confirmedIssueAdds', 'confirmed_issue_adds', 'confirmedIssues', 'confirmed_issues', 'confirmedFindings', 'confirmed_findings', 'findings']),
+  }, bidDocuments);
+
+  return { factAdds, pendingIssueAdds, pendingIssueUpdates, pendingIssueResolves, confirmedIssueAdds: confirmedIssues };
+}
+
+function applyRollingLogicPatch(state, patch) {
+  const next = {
+    ...state,
+    factRegister: [...state.factRegister],
+    pendingIssues: [...state.pendingIssues],
+    resolvedIssues: [...state.resolvedIssues],
+    confirmedIssues: [...state.confirmedIssues],
+  };
+
+  for (const item of patch.factAdds || []) {
+    const key = `${item.bidDocumentId}\u0000${item.category}\u0000${item.name}\u0000${item.value}`;
+    const exists = next.factRegister.some((fact) => `${fact.bidDocumentId}\u0000${fact.category}\u0000${fact.name}\u0000${fact.value}` === key);
+    if (!exists) next.factRegister.push(assignLogicFactId(next, item));
+  }
+
+  for (const item of patch.pendingIssueAdds || []) {
+    const key = `${item.bidDocumentId}\u0000${item.title}\u0000${item.fallacyReason}`;
+    const exists = next.pendingIssues.some((issue) => `${issue.bidDocumentId}\u0000${issue.title}\u0000${issue.fallacyReason}` === key)
+      || next.confirmedIssues.some((issue) => `${issue.bidDocumentId}\u0000${issue.title}\u0000${issue.fallacyReason}` === key);
+    if (!exists) next.pendingIssues.push(assignLogicIssueId(next, item));
+  }
+
+  for (const update of patch.pendingIssueUpdates || []) {
+    next.pendingIssues = next.pendingIssues.map((issue) => issue.id === update.id
+      ? mergeDefinedFields(issue, update, ['title', 'originalText', 'locationHint', 'fallacyReason', 'suggestion', 'statusReason'])
+      : issue);
+  }
+
+  for (const resolve of patch.pendingIssueResolves || []) {
+    const issueIndex = next.pendingIssues.findIndex((issue) => issue.id === resolve.id);
+    if (issueIndex < 0) continue;
+    const [issue] = next.pendingIssues.splice(issueIndex, 1);
+    next.resolvedIssues.push({
+      id: `resolved_${issue.id}`,
+      issueId: issue.id,
+      title: resolve.title || issue.title,
+      reason: resolve.reason || '后续片段已解释或修正，原待确认问题被排除。',
+      locationHint: resolve.locationHint || issue.locationHint,
+    });
+  }
+
+  for (const item of patch.confirmedIssueAdds || []) {
+    const key = `${item.bidDocumentId}\u0000${item.title}\u0000${item.fallacyReason}`;
+    const exists = next.confirmedIssues.some((issue) => `${issue.bidDocumentId}\u0000${issue.title}\u0000${issue.fallacyReason}` === key);
+    if (!exists) next.confirmedIssues.push(assignLogicIssueId(next, item));
+  }
+
+  return {
+    ...next,
+    factRegister: dedupeItems(next.factRegister, (item) => `${item.bidDocumentId}\u0000${item.category}\u0000${item.name}\u0000${item.value}`),
+    pendingIssues: dedupeItems(next.pendingIssues, (item) => `${item.bidDocumentId}\u0000${item.title}\u0000${item.fallacyReason}`),
+    resolvedIssues: dedupeItems(next.resolvedIssues, (item) => `${item.title}\u0000${item.reason}`),
+    confirmedIssues: dedupeItems(next.confirmedIssues, (item) => `${item.bidDocumentId}\u0000${item.title}\u0000${item.fallacyReason}`),
+  };
+}
+
+function createEmptyRollingLogicState() {
+  return {
+    nextFactSeq: 1,
+    nextIssueSeq: 1,
+    factRegister: [],
+    pendingIssues: [],
+    resolvedIssues: [],
+    confirmedIssues: [],
+  };
+}
+
+function dedupeRejectionFindings(findings) {
+  return limitDedupeItems(findings, Number.MAX_SAFE_INTEGER, (item) => `${item.bidDocumentId}\u0000${item.type}\u0000${item.title}\u0000${item.bidEvidence}\u0000${item.riskReason}`);
+}
+
+function dedupeTypoFindings(findings) {
+  return limitDedupeItems(findings, Number.MAX_SAFE_INTEGER, (item) => {
+    const position = Number(item.position);
+    const positionKey = Number.isFinite(position) ? String(Math.floor(position)) : `${item.locationHint || ''}\u0000${item.originalExcerpt || ''}`;
+    return `${item.bidDocumentId}\u0000${item.wrongText}\u0000${item.correctText}\u0000${positionKey}`;
+  });
+}
+
+function dedupeLogicFindings(findings) {
+  return limitDedupeItems(findings, Number.MAX_SAFE_INTEGER, (item) => `${item.bidDocumentId}\u0000${item.title}\u0000${item.locationHint}\u0000${item.fallacyReason}`);
+}
+
+function takeRecentItems(items, limit) {
+  const source = Array.isArray(items) ? items : [];
+  return source.slice(Math.max(0, source.length - limit));
+}
+
+function createRollingRejectionStateSummary(state) {
+  return {
+    counts: {
+      submittedEvidence: state.submittedEvidence.length,
+      pendingRisks: state.pendingRisks.length,
+      resolvedRisks: state.resolvedRisks.length,
+      confirmedRisks: state.confirmedRisks.length,
+    },
+    submittedEvidence: takeRecentItems(state.submittedEvidence, rollingSummaryEvidenceLimit).map((item) => ({
+      id: item.id,
+      bidDocumentId: item.bidDocumentId,
+      name: item.name,
+      evidence: truncatePromptText(item.evidence, 220),
+      locationHint: item.locationHint,
+      source: truncatePromptText(item.source, 160),
+    })),
+    pendingRisks: state.pendingRisks.map((item) => ({
+      id: item.id,
+      bidDocumentId: item.bidDocumentId,
+      type: item.type,
+      severity: item.severity,
+      title: item.title,
+      requirement: truncatePromptText(item.requirement, 220),
+      bidEvidence: truncatePromptText(item.bidEvidence, 260),
+      riskReason: truncatePromptText(item.riskReason, 260),
+      statusReason: truncatePromptText(item.statusReason, 180),
+    })),
+    resolvedRisks: takeRecentItems(state.resolvedRisks, rollingSummaryResolvedLimit),
+    confirmedRisks: takeRecentItems(state.confirmedRisks, rollingSummaryConfirmedLimit).map((item) => ({
+      id: item.id,
+      bidDocumentId: item.bidDocumentId,
+      type: item.type,
+      severity: item.severity,
+      title: item.title,
+      bidEvidence: truncatePromptText(item.bidEvidence, 260),
+      riskReason: truncatePromptText(item.riskReason, 260),
+    })),
+  };
+}
+
+function createRollingLogicStateSummary(state) {
+  return {
+    counts: {
+      factRegister: state.factRegister.length,
+      pendingIssues: state.pendingIssues.length,
+      resolvedIssues: state.resolvedIssues.length,
+      confirmedIssues: state.confirmedIssues.length,
+    },
+    factRegister: takeRecentItems(state.factRegister, rollingSummaryEvidenceLimit).map((item) => ({
+      id: item.id,
+      bidDocumentId: item.bidDocumentId,
+      category: item.category,
+      name: item.name,
+      value: truncatePromptText(item.value, 220),
+      evidence: truncatePromptText(item.evidence, 220),
+      locationHint: item.locationHint,
+    })),
+    pendingIssues: state.pendingIssues.map((item) => ({
+      id: item.id,
+      bidDocumentId: item.bidDocumentId,
+      title: item.title,
+      originalText: truncatePromptText(item.originalText, 260),
+      locationHint: item.locationHint,
+      fallacyReason: truncatePromptText(item.fallacyReason, 260),
+      statusReason: truncatePromptText(item.statusReason, 180),
+    })),
+    resolvedIssues: takeRecentItems(state.resolvedIssues, rollingSummaryResolvedLimit),
+    confirmedIssues: takeRecentItems(state.confirmedIssues, rollingSummaryConfirmedLimit).map((item) => ({
+      id: item.id,
+      bidDocumentId: item.bidDocumentId,
+      title: item.title,
+      originalText: truncatePromptText(item.originalText, 260),
+      locationHint: item.locationHint,
+      fallacyReason: truncatePromptText(item.fallacyReason, 260),
+    })),
+  };
+}
+
+function createFinalRejectionStateSummary(state) {
+  return {
+    counts: {
+      submittedEvidence: state.submittedEvidence.length,
+      pendingRisks: state.pendingRisks.length,
+      resolvedRisks: state.resolvedRisks.length,
+      confirmedRisks: state.confirmedRisks.length,
+    },
+    submittedEvidenceIndex: state.submittedEvidence.map((item) => ({
+      id: item.id,
+      bidDocumentId: item.bidDocumentId,
+      name: item.name,
+      evidence: truncatePromptText(item.evidence, 180),
+      locationHint: item.locationHint,
+      source: truncatePromptText(item.source, 120),
+    })),
+    resolvedRisks: state.resolvedRisks.map((item) => ({
+      id: item.id,
+      riskId: item.riskId,
+      title: item.title,
+      reason: truncatePromptText(item.reason, 220),
+      locationHint: item.locationHint,
+    })),
+  };
+}
+
+function createFinalLogicStateSummary(state) {
+  return {
+    counts: {
+      factRegister: state.factRegister.length,
+      pendingIssues: state.pendingIssues.length,
+      resolvedIssues: state.resolvedIssues.length,
+      confirmedIssues: state.confirmedIssues.length,
+    },
+    factRegisterIndex: state.factRegister.map((item) => ({
+      id: item.id,
+      bidDocumentId: item.bidDocumentId,
+      category: item.category,
+      name: item.name,
+      value: truncatePromptText(item.value, 180),
+      evidence: truncatePromptText(item.evidence, 180),
+      locationHint: item.locationHint,
+    })),
+    resolvedIssues: state.resolvedIssues.map((item) => ({
+      id: item.id,
+      issueId: item.issueId,
+      title: item.title,
+      reason: truncatePromptText(item.reason, 220),
+      locationHint: item.locationHint,
+    })),
+  };
+}
+
+function chunkItems(items, batchSize) {
+  const result = [];
+  const source = Array.isArray(items) ? items : [];
+  for (let index = 0; index < source.length; index += batchSize) {
+    result.push(source.slice(index, index + batchSize));
+  }
+  return result;
+}
+
+function createRejectionFinalCandidates(state) {
+  return [
+    ...state.confirmedRisks.map((item) => ({ ...item, candidateStatus: 'confirmed' })),
+    ...state.pendingRisks.map((item) => ({ ...item, candidateStatus: 'pending' })),
+  ];
+}
+
+function createLogicFinalCandidates(state) {
+  return [
+    ...state.confirmedIssues.map((item) => ({ ...item, candidateStatus: 'confirmed' })),
+    ...state.pendingIssues.map((item) => ({ ...item, candidateStatus: 'pending' })),
+  ];
+}
+
+function buildRollingRejectionBaseMessages(input) {
+  const messages = [
+    {
+      role: 'user',
+      content: `【废标项滚动检查输入｜检查依据】
+以下内容来自招标文件“无效投标”和“废标项”解析结果。必须优先基于这些检查口径，不要自行扩大到无法从电子投标文件判断的事项。
+
+${input.invalidBidAndRejectionItems}`,
+    },
+  ];
+
+  if (input.customCheckItems?.trim()) {
+    messages.push({
+      role: 'user',
+      content: `【废标项滚动检查输入｜自定义检查项】
+以下是用户补充的电子投标文件检查关注点。仅在能从电子投标文件正文、目录、附件文本或材料内容中判断时使用；如果涉及签字、盖章、密封、现场递交、纸质正副本等纸质或线下事项，必须忽略。
+
+${input.customCheckItems.trim()}`,
+    });
+  }
+
+  return messages;
+}
+
+function buildRollingRejectionSegmentMessages(input, segment, stateSummary) {
+  const bidDocumentIdList = formatBidDocumentIdList(input.bidDocuments);
+  return [
+    ...buildRollingRejectionBaseMessages(input),
+    {
+      role: 'user',
+      content: `【废标项滚动检查｜当前状态摘要】
+你正在按顺序审阅同一个投标包。完整权威状态由程序维护，你只能基于当前片段返回增量 patch。
+下面是前序片段累计状态的精简摘要；如需更新或排除 pendingRisks，只能引用摘要中已有的 id。
+
+${JSON.stringify(stateSummary, null, 2)}`,
+    },
+    {
+      role: 'user',
+      content: `【废标项滚动检查｜当前投标包片段】
+投标包片段：第 ${segment.segmentIndex}/${segment.totalSegments} 段
+当前片段所属文件：${segment.documentLabel}
+当前片段默认 bidDocumentId：${segment.documentId}
+
+本投标包有效 bidDocumentId：
+${bidDocumentIdList}
+
+重要限制：当前内容只是整个投标包的一段，不是全部投标文件。不得因为当前段或当前文件没有出现某项材料、附件、承诺或响应，就确认该材料缺失；这类问题只能先放入 pendingRisks，后续片段或其他投标文件可能会补充或推翻。
+
+${segment.content}`,
+    },
+    {
+      role: 'user',
+      content: `【废标项滚动检查任务】
+请基于当前片段输出增量 patch，只输出 JSON。不要返回完整累计状态，程序会负责合并和保留历史状态。
+
+Patch 要求：
+1. evidenceAdds 只放当前片段新增的章节标题、目录项、附件标题、材料清单项、表格条目、页码线索、图片占位线索、承诺或响应线索。
+2. pendingRiskAdds 只放当前片段发现、但需要后续片段或其他文件继续确认的问题。
+3. pendingRiskUpdates 只能引用状态摘要中 pendingRisks 的 id，用于补充或修正该待确认项。
+4. pendingRiskResolves 只能引用状态摘要中 pendingRisks 的 id；如果当前片段证明某个“缺失/未响应”不成立，就在这里给出排除原因。
+5. confirmedRiskAdds 只放当前片段或累计摘要已经提供明确投标文件证据，且不依赖纸质、线下或外部事实的风险。
+6. 不检查签字、盖章、密封、纸质正副本、现场递交、纸质原件等事项。
+7. 每条风险、证据和事实必须保留 bidDocumentId，且只能使用上方有效 bidDocumentId；如果当前片段没有明确切换文件，默认使用 ${segment.documentId}。
+
+JSON 格式：
+{
+  "evidenceAdds": [{"bidDocumentId":"有效 bidDocumentId","name":"材料或响应线索名称","evidence":"原文线索或摘要","locationHint":"章节/表格/位置线索","source":"对应检查项或说明"}],
+  "pendingRiskAdds": [{"bidDocumentId":"有效 bidDocumentId","type":"invalidBid","severity":"medium","title":"待确认问题","summary":"摘要","requirement":"检查依据","bidEvidence":"当前证据或缺口","riskReason":"为什么需要继续确认","suggestion":"建议","statusReason":"仍需后续片段确认的原因"}],
+  "pendingRiskUpdates": [{"id":"pendingRisks 中已有 id","bidEvidence":"补充证据或缺口","riskReason":"更新原因","statusReason":"当前仍需确认的原因"}],
+  "pendingRiskResolves": [{"id":"pendingRisks 中已有 id","reason":"被当前片段或累计线索排除的原因","locationHint":"位置线索"}],
+  "confirmedRiskAdds": [{"bidDocumentId":"有效 bidDocumentId","type":"invalidBid","severity":"high","title":"风险标题","summary":"摘要","requirement":"检查依据","bidEvidence":"明确投标文件证据","riskReason":"风险原因","suggestion":"建议"}]
+}`,
+    },
+  ];
+}
+
+function buildRejectionFinalBatchMessages(input, candidates, stateSummary, batchIndex, totalBatches) {
+  const bidDocumentIdList = formatBidDocumentIdList(input.bidDocuments);
+  return [
+    ...buildRollingRejectionBaseMessages(input),
+    {
+      role: 'user',
+      content: `【废标项最终定稿｜状态摘要】
+本投标包有效 bidDocumentId：
+${bidDocumentIdList}
+
+${JSON.stringify(stateSummary, null, 2)}`,
+    },
+    {
+      role: 'user',
+      content: `【废标项最终定稿｜候选批次 ${batchIndex}/${totalBatches}】
+请只基于下面这一批候选输出最终废标项检查结果，只输出 JSON。
+
+候选风险：
+${JSON.stringify(candidates, null, 2)}
+
+定稿规则：
+1. 只保留能从电子投标文件原文或累计状态判断且有明确证据的风险。
+2. candidateStatus 为 pending 且仍未形成完整证据闭环的问题不得输出为最终风险。
+3. 如果某项“缺失/未响应”已经在 submittedEvidenceIndex 中出现章节、目录、附件标题、材料清单、表格条目、页码线索、图片占位线索或其他提交线索，不能定稿为缺失。
+4. 删除签字、盖章、密封、纸质正副本、现场递交、纸质原件、开标现场行为等纸质或线下事项。
+5. 同一问题合并为一条，bidDocumentId 必须来自上方有效 bidDocumentId。
+6. 如果没有符合条件的风险，返回 {"findings":[]}。
+
+JSON 格式：{"findings":[{"bidDocumentId":"有效 bidDocumentId","type":"invalidBid","severity":"high","title":"不超过 28 个中文字符的风险标题","summary":"一句话概括风险","requirement":"对应检查依据或招标要求","bidEvidence":"投标文件中的明确证据、章节、原文摘录或缺失位置说明","riskReason":"为什么该证据可能构成无效标或废标项风险","suggestion":"建议用户如何处理或复核"}]}`,
+    },
+  ];
+}
+
+function buildRejectionGlobalMergeMessages(input, findings, finalSummary) {
+  const bidDocumentIdList = formatBidDocumentIdList(input.bidDocuments);
+  return [
+    ...buildRollingRejectionBaseMessages(input),
+    {
+      role: 'user',
+      content: `【废标项全局合稿｜证据索引】
+本投标包有效 bidDocumentId：
+${bidDocumentIdList}
+
+以下是 Main 侧维护的全量精简状态索引，用于跨批次去重、排除误判和避免早期证据丢失：
+${JSON.stringify(finalSummary, null, 2)}`,
+    },
+    {
+      role: 'user',
+      content: `【废标项全局合稿任务】
+以下 findings 来自多个候选批次的初步定稿结果。请进行全局合稿，只输出最终 JSON。
+
+待合稿 findings：
+${JSON.stringify({ findings }, null, 2)}
+
+合稿规则：
+1. 合并跨批次重复或高度相似的风险，保留证据更明确、表述更完整的一条。
+2. 如果 submittedEvidenceIndex 已经出现对应材料、章节、附件标题、目录、表格、页码线索、图片占位线索或其他提交线索，不得把该材料定稿为缺失。
+3. 删除 resolvedRisks 已排除或证据不足的风险。
+4. 删除签字、盖章、密封、纸质正副本、现场递交、纸质原件、开标现场行为等纸质或线下事项。
+5. bidDocumentId 必须来自上方有效 bidDocumentId。
+6. 如果没有符合条件的风险，返回 {"findings":[]}。
+
+JSON 格式：{"findings":[{"bidDocumentId":"有效 bidDocumentId","type":"invalidBid","severity":"high","title":"不超过 28 个中文字符的风险标题","summary":"一句话概括风险","requirement":"对应检查依据或招标要求","bidEvidence":"投标文件中的明确证据、章节、原文摘录或缺失位置说明","riskReason":"为什么该证据可能构成无效标或废标项风险","suggestion":"建议用户如何处理或复核"}]}`,
+    },
+  ];
+}
+
+function buildRollingLogicSegmentMessages(input, segment, stateSummary) {
+  const bidDocumentIdList = formatBidDocumentIdList(input.bidDocuments);
+  return [
+    {
+      role: 'user',
+      content: `【逻辑谬误滚动检查｜当前累计状态】
+你正在按顺序审阅同一个投标包。完整权威状态由程序维护，你只能基于当前片段返回增量 patch。
+下面是前序片段累计状态的精简摘要；如需更新或排除 pendingIssues，只能引用摘要中已有的 id。
+
+${JSON.stringify(stateSummary, null, 2)}`,
+    },
+    {
+      role: 'user',
+      content: `【逻辑谬误滚动检查｜当前投标包片段】
+投标包片段：第 ${segment.segmentIndex}/${segment.totalSegments} 段
+当前片段所属文件：${segment.documentLabel}
+当前片段默认 bidDocumentId：${segment.documentId}
+
+本投标包有效 bidDocumentId：
+${bidDocumentIdList}
+
+重要限制：当前内容只是整个投标包的一段，不是全部投标文件。前文或其他文件中的疑似矛盾可能会被后续片段解释，当前段也可能修正前文状态。不得仅凭当前段缺少解释就直接定稿为逻辑谬误。
+
+${segment.content}`,
+    },
+    {
+      role: 'user',
+      content: `【逻辑谬误滚动检查任务】
+请基于当前片段输出增量 patch，只输出 JSON。不要返回完整累计状态，程序会负责合并和保留历史状态。
+
+Patch 要求：
+1. factAdds 只放当前片段新增的关键事实，包括人员、设备型号、工期、金额、数量、服务期限、项目名称、技术参数、承诺、资质有效期等。
+2. pendingIssueAdds 只放当前片段与状态摘要比对后发现、但仍需后续确认的疑似前后不一致问题。
+3. pendingIssueUpdates 只能引用状态摘要中 pendingIssues 的 id，用于补充或修正该待确认问题。
+4. pendingIssueResolves 只能引用状态摘要中 pendingIssues 的 id；如果当前片段解释或修正了某个疑似问题，就在这里给出排除原因。
+5. confirmedIssueAdds 只放证据明确、无法由上下文解释或修正的问题。
+6. 每条事实和问题必须保留 bidDocumentId，且只能使用上方有效 bidDocumentId；如果当前片段没有明确切换文件，默认使用 ${segment.documentId}。
+
+JSON 格式：
+{
+  "factAdds": [{"bidDocumentId":"有效 bidDocumentId","category":"事实类型","name":"事实名称","value":"事实值","evidence":"原文摘录或摘要","locationHint":"章节/表格/位置线索"}],
+  "pendingIssueAdds": [{"bidDocumentId":"有效 bidDocumentId","title":"待确认问题","originalText":"相关原文摘录","locationHint":"位置线索","fallacyReason":"疑似矛盾原因","suggestion":"建议","statusReason":"仍需后续片段确认的原因"}],
+  "pendingIssueUpdates": [{"id":"pendingIssues 中已有 id","originalText":"补充原文","fallacyReason":"更新原因","statusReason":"当前仍需确认的原因"}],
+  "pendingIssueResolves": [{"id":"pendingIssues 中已有 id","reason":"被当前片段或累计线索排除的原因","locationHint":"位置线索"}],
+  "confirmedIssueAdds": [{"bidDocumentId":"有效 bidDocumentId","title":"问题标题","originalText":"关键原文摘录","locationHint":"位置线索","fallacyReason":"谬误原因或前后不一致原因","suggestion":"修改建议"}]
+}`,
+    },
+  ];
+}
+
+function buildLogicFinalBatchMessages(input, candidates, stateSummary, batchIndex, totalBatches) {
+  const bidDocumentIdList = formatBidDocumentIdList(input.bidDocuments);
+  return [
+    {
+      role: 'user',
+      content: `【逻辑谬误最终定稿｜状态摘要】
+本投标包有效 bidDocumentId：
+${bidDocumentIdList}
+
+${JSON.stringify(stateSummary, null, 2)}`,
+    },
+    {
+      role: 'user',
+      content: `【逻辑谬误最终定稿｜候选批次 ${batchIndex}/${totalBatches}】
+请只基于下面这一批候选输出最终逻辑谬误检查结果，只输出 JSON。
+
+候选问题：
+${JSON.stringify(candidates, null, 2)}
+
+定稿规则：
+1. 只保留有明确投标文件证据、无法由上下文解释或修正的问题。
+2. candidateStatus 为 pending 且仍未形成完整证据闭环的问题不得输出为最终问题。
+3. 如果 resolvedIssues 或 factRegisterIndex 已经说明疑似矛盾不成立，必须删除。
+4. 同一问题合并为一条，bidDocumentId 必须来自上方有效 bidDocumentId。
+5. 如果没有明确逻辑谬误，返回 {"findings":[]}。
+
+JSON 格式：{"findings":[{"bidDocumentId":"有效 bidDocumentId","title":"不超过 28 个中文字符的简短标题","originalText":"关键原文摘录，可包含同一份文件内多处摘录","locationHint":"大概位置、章节、表格或上下文线索","fallacyReason":"谬误原因或前后不一致原因","suggestion":"修改建议"}]}`,
+    },
+  ];
+}
+
+function buildLogicGlobalMergeMessages(input, findings, finalSummary) {
+  const bidDocumentIdList = formatBidDocumentIdList(input.bidDocuments);
+  return [
+    {
+      role: 'user',
+      content: `【逻辑谬误全局合稿｜事实索引】
+本投标包有效 bidDocumentId：
+${bidDocumentIdList}
+
+以下是 Main 侧维护的全量精简状态索引，用于跨批次去重、排除误判和避免早期事实丢失：
+${JSON.stringify(finalSummary, null, 2)}`,
+    },
+    {
+      role: 'user',
+      content: `【逻辑谬误全局合稿任务】
+以下 findings 来自多个候选批次的初步定稿结果。请进行全局合稿，只输出最终 JSON。
+
+待合稿 findings：
+${JSON.stringify({ findings }, null, 2)}
+
+合稿规则：
+1. 合并跨批次重复或高度相似的逻辑问题，保留证据更明确、表述更完整的一条。
+2. 如果 factRegisterIndex 或 resolvedIssues 已经解释、修正或排除了疑似矛盾，不得保留。
+3. 只保留有明确投标文件证据、无法由上下文解释或修正的问题。
+4. bidDocumentId 必须来自上方有效 bidDocumentId。
+5. 如果没有明确逻辑谬误，返回 {"findings":[]}。
+
+JSON 格式：{"findings":[{"bidDocumentId":"有效 bidDocumentId","title":"不超过 28 个中文字符的简短标题","originalText":"关键原文摘录，可包含同一份文件内多处摘录","locationHint":"大概位置、章节、表格或上下文线索","fallacyReason":"谬误原因或前后不一致原因","suggestion":"修改建议"}]}`,
+    },
+  ];
 }
 
 function createRejectionDeveloperLogger(aiService, name, meta = {}) {
@@ -389,7 +1315,137 @@ async function runJson(aiService, request, onProgress, _label) {
   return aiService.collectJsonResponse ? aiService.collectJsonResponse(jsonRequest) : aiService.requestJson(jsonRequest);
 }
 
+async function runRollingRejectionItemCheck(aiService, input, onProgress) {
+  const config = getCurrentAiConfig(aiService);
+  const segments = createBidPackageSegments(input.bidDocuments, config, rollingSegmentLimitRatio);
+  let state = createEmptyRollingRejectionState();
+  onProgress('正在按上下文长度滚动审阅投标包。');
+
+  for (const segment of segments) {
+    onProgress(`${segment.documentLabel}：正在滚动审阅投标包第 ${segment.segmentIndex}/${segment.totalSegments} 段。`);
+    const stateSummary = createRollingRejectionStateSummary(state);
+    const payload = await runJson(aiService, {
+      messages: buildRollingRejectionSegmentMessages(input, segment, stateSummary),
+      temperature: 0.1,
+      schemaName: 'RollingRejectionCheckPatch',
+      progressLabel: '投标包废标项滚动审阅',
+      failureMessage: '废标项滚动审阅状态格式无效，请重新检查',
+    }, onProgress, '投标包废标项滚动审阅');
+    state = applyRollingRejectionPatch(state, normalizeRollingRejectionPatch(payload, input.bidDocuments, segment.documentId));
+  }
+
+  onProgress('正在基于全投标包状态定稿废标项风险。');
+  const candidates = createRejectionFinalCandidates(state);
+  if (!candidates.length) return [];
+  const batches = chunkItems(candidates, finalCandidateBatchSize);
+  const findings = [];
+  const finalSummary = createFinalRejectionStateSummary(state);
+  for (const [batchIndex, batch] of batches.entries()) {
+    onProgress(`正在定稿废标项风险第 ${batchIndex + 1}/${batches.length} 批。`);
+    const finalPayload = await runJson(aiService, {
+      messages: buildRejectionFinalBatchMessages(input, batch, finalSummary, batchIndex + 1, batches.length),
+      temperature: 0.1,
+      schemaName: 'RejectionCheckFindings',
+      progressLabel: '投标包废标项检查定稿',
+      failureMessage: '废标项检查结果格式无效，请重新检查',
+    }, onProgress, '投标包废标项检查定稿');
+    findings.push(...normalizeRejectionCheckFindings(finalPayload, input.bidDocuments));
+  }
+  const mergedFindings = dedupeRejectionFindings(findings);
+  if (!mergedFindings.length) return [];
+  onProgress('正在全局合并废标项风险。');
+  const mergedPayload = await runJson(aiService, {
+    messages: buildRejectionGlobalMergeMessages(input, mergedFindings, finalSummary),
+    temperature: 0.1,
+    schemaName: 'RejectionCheckGlobalMergeFindings',
+    progressLabel: '废标项风险全局合稿',
+    failureMessage: '废标项风险全局合稿结果格式无效，请重新检查',
+  }, onProgress, '废标项风险全局合稿');
+  return dedupeRejectionFindings(normalizeRejectionCheckFindings(mergedPayload, input.bidDocuments));
+}
+
+async function runSegmentedTypoCheck(aiService, input, onProgress) {
+  const config = getCurrentAiConfig(aiService);
+  const findings = [];
+  onProgress('正在按上下文长度分段识别错别字。');
+
+  for (const [documentIndex, document] of input.bidDocuments.entries()) {
+    const documentLabel = getBidDocumentDisplayName(document, documentIndex);
+    const segments = createBidDocumentSegments(document, config, typoSegmentLimitRatio);
+    for (const segment of segments) {
+      onProgress(`${documentLabel}：正在识别第 ${segment.segmentIndex}/${segment.totalSegments} 段错别字。`);
+      const payload = await runJson(aiService, {
+        messages: buildTypoCheckMessages({ bidDocuments: [createSegmentPromptDocument(document, segment)] }),
+        temperature: 0.1,
+        schemaName: 'TypoCheckFindings',
+        progressLabel: `${documentLabel}错别字检查`,
+        failureMessage: '错别字检查结果格式无效，请重新检查',
+      }, onProgress, `${documentLabel}错别字检查`);
+      findings.push(...normalizeTypoCheckFindings(payload, [document], {
+        segmentStartOffset: segment.startOffset,
+        segmentEndOffset: segment.endOffset,
+      }));
+    }
+  }
+
+  onProgress('正在合并并校验错别字原文位置。');
+  return dedupeTypoFindings(findings);
+}
+
+async function runRollingLogicCheck(aiService, input, onProgress) {
+  const config = getCurrentAiConfig(aiService);
+  const segments = createBidPackageSegments(input.bidDocuments, config, rollingSegmentLimitRatio);
+  let state = createEmptyRollingLogicState();
+  onProgress('正在按上下文长度滚动检查投标包逻辑谬误。');
+
+  for (const segment of segments) {
+    onProgress(`${segment.documentLabel}：正在滚动检查投标包第 ${segment.segmentIndex}/${segment.totalSegments} 段逻辑。`);
+    const stateSummary = createRollingLogicStateSummary(state);
+    const payload = await runJson(aiService, {
+      messages: buildRollingLogicSegmentMessages(input, segment, stateSummary),
+      temperature: 0.1,
+      schemaName: 'RollingLogicCheckPatch',
+      progressLabel: '投标包逻辑滚动检查',
+      failureMessage: '逻辑谬误滚动检查状态格式无效，请重新检查',
+    }, onProgress, '投标包逻辑滚动检查');
+    state = applyRollingLogicPatch(state, normalizeRollingLogicPatch(payload, input.bidDocuments, segment.documentId));
+  }
+
+  onProgress('正在基于全投标包状态定稿逻辑问题。');
+  const candidates = createLogicFinalCandidates(state);
+  if (!candidates.length) return [];
+  const batches = chunkItems(candidates, finalCandidateBatchSize);
+  const findings = [];
+  const finalSummary = createFinalLogicStateSummary(state);
+  for (const [batchIndex, batch] of batches.entries()) {
+    onProgress(`正在定稿逻辑问题第 ${batchIndex + 1}/${batches.length} 批。`);
+    const finalPayload = await runJson(aiService, {
+      messages: buildLogicFinalBatchMessages(input, batch, finalSummary, batchIndex + 1, batches.length),
+      temperature: 0.1,
+      schemaName: 'LogicCheckFindings',
+      progressLabel: '投标包逻辑谬误检查定稿',
+      failureMessage: '逻辑谬误检查结果格式无效，请重新检查',
+    }, onProgress, '投标包逻辑谬误检查定稿');
+    findings.push(...normalizeLogicCheckFindings(finalPayload, input.bidDocuments));
+  }
+  const mergedFindings = dedupeLogicFindings(findings);
+  if (!mergedFindings.length) return [];
+  onProgress('正在全局合并逻辑问题。');
+  const mergedPayload = await runJson(aiService, {
+    messages: buildLogicGlobalMergeMessages(input, mergedFindings, finalSummary),
+    temperature: 0.1,
+    schemaName: 'LogicCheckGlobalMergeFindings',
+    progressLabel: '逻辑问题全局合稿',
+    failureMessage: '逻辑问题全局合稿结果格式无效，请重新检查',
+  }, onProgress, '逻辑问题全局合稿');
+  return dedupeLogicFindings(normalizeLogicCheckFindings(mergedPayload, input.bidDocuments));
+}
+
 async function runRejectionItemCheck(aiService, input, onProgress) {
+  if (shouldUseSegmentedRejectionFlow(aiService, input)) {
+    return runRollingRejectionItemCheck(aiService, input, onProgress);
+  }
+
   onProgress('第一轮：正在分析检查范围。');
   const analysis = await runText(
     aiService,
@@ -416,6 +1472,10 @@ async function runRejectionItemCheck(aiService, input, onProgress) {
 }
 
 async function runTypoCheck(aiService, input, onProgress) {
+  if (shouldUseSegmentedBidDocuments(aiService, input.bidDocuments)) {
+    return runSegmentedTypoCheck(aiService, input, onProgress);
+  }
+
   onProgress('正在识别错别字候选。');
   const payload = await runJson(aiService, {
     messages: buildTypoCheckMessages({ bidDocuments: input.bidDocuments }),
@@ -429,6 +1489,10 @@ async function runTypoCheck(aiService, input, onProgress) {
 }
 
 async function runLogicCheck(aiService, input, onProgress) {
+  if (shouldUseSegmentedBidDocuments(aiService, input.bidDocuments)) {
+    return runRollingLogicCheck(aiService, input, onProgress);
+  }
+
   onProgress('正在检查逻辑谬误。');
   const payload = await runJson(aiService, {
     messages: buildLogicCheckMessages({ bidDocuments: input.bidDocuments }),
