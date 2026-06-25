@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 14;
+const schemaVersion = 15;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -856,6 +856,21 @@ function createKnowledgeBaseSchema(db) {
   `);
 }
 
+function createExportTemplatesSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS export_templates (
+      template_id TEXT PRIMARY KEY,
+      template_name TEXT NOT NULL,
+      config_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_export_templates_updated
+    ON export_templates(updated_at DESC);
+  `);
+}
+
 const schemaHealthTableGroups = [
   {
     version: 1,
@@ -925,6 +940,11 @@ const schemaHealthTableGroups = [
     version: 4,
     tables: ['technical_plan_global_fact_groups'],
     repair: createTechnicalPlanGlobalFactsSchema,
+  },
+  {
+    version: 15,
+    tables: ['export_templates'],
+    repair: createExportTemplatesSchema,
   },
 ];
 
@@ -1184,6 +1204,11 @@ const migrations = [
     version: 14,
     description: '技术方案新增多标段优化状态',
     up: addTechnicalPlanBidSectionOptimization,
+  },
+  {
+    version: 15,
+    description: '新增导出模板库表结构',
+    up: createExportTemplatesSchema,
   },
 ];
 

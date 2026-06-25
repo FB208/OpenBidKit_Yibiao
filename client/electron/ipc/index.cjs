@@ -10,6 +10,7 @@ const { registerKnowledgeBaseIpc } = require('./knowledgeBaseIpc.cjs');
 const { registerRejectionCheckIpc } = require('./rejectionCheckIpc.cjs');
 const { registerTaskIpc } = require('./taskIpc.cjs');
 const { registerTechnicalPlanIpc } = require('./technicalPlanIpc.cjs');
+const { registerTemplateIpc } = require('./templateIpc.cjs');
 const { createAgentService } = require('../services/agentService.cjs');
 const { createAiService } = require('../services/aiService.cjs');
 const { createConfigStore } = require('../services/configStore.cjs');
@@ -23,6 +24,7 @@ const { createRejectionCheckStore } = require('../services/rejectionCheckStore.c
 const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
+const { createTemplateStore } = require('../services/templateStore.cjs');
 
 function normalizeExternalUrl(value) {
   const raw = String(value || '').trim();
@@ -87,6 +89,11 @@ const workspaceDatabaseChannels = [
   'tasks:start-rejection-check',
   'tasks:start-duplicate-analysis',
   'tasks:get-active',
+  'templates:list',
+  'templates:get',
+  'templates:create',
+  'templates:update',
+  'templates:delete',
 ];
 
 function clearWorkspaceDatabaseIpc() {
@@ -152,6 +159,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService });
   const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db });
   const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore });
+  const templateStore = createTemplateStore({ db: sqliteDatabase.db });
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
   const taskService = createTaskService({ aiService, agentService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
 
@@ -160,6 +168,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerTechnicalPlanIpc({ technicalPlanStore });
   registerDuplicateCheckIpc({ duplicateCheckStore });
   registerRejectionCheckIpc({ rejectionCheckStore });
+  registerTemplateIpc({ templateStore });
   registerTaskIpc({ taskService });
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
   return { sqliteDatabase };

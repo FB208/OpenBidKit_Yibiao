@@ -31,10 +31,23 @@ export const appMenuItems: AppMenuItem[] = [
         icon: 'briefcase',
         notice: githubStarNotice,
       },
+    ],
+  },
+  {
+    id: 'template-settings',
+    label: '模版设置',
+    description: '标书导出模板与排版配置',
+    children: [
       {
-        id: 'export-format',
-        label: '导出模版设置',
-        description: 'Word 文档排版与编号格式设置',
+        id: 'my-templates',
+        label: '我的模板',
+        description: '管理已保存的标书导出模板',
+        icon: 'document',
+      },
+      {
+        id: 'new-template',
+        label: '新建模板',
+        description: '配置 Word 文档排版与编号格式',
         icon: 'export',
       },
     ],

@@ -48,9 +48,16 @@ export type {
 export type { AppMenuItem, SectionId } from './navigation';
 export type {
   ExportFormatConfig,
+  ExportTemplateRecord,
   NumberingFormat,
+  HeadingNumberingStyle,
   HeadingStyleConfig,
+  HeadingBorderConfig,
   BodyTextStyleConfig,
+  TableCellStyleConfig,
+  TableStyleConfig,
+  ImageStyleConfig,
+  ListStyle,
   PageSetupConfig,
 } from './exportFormat';
 export {
@@ -61,6 +68,10 @@ export {
   FONT_TO_CSS,
   ALIGNMENT_TO_CSS,
   NUMBERING_FORMATS,
+  HEADING_NUMBERING_STYLE_OPTIONS,
+  HEADING_NUMBERING_STYLE_PRESETS,
+  HEADING_BORDER_STRUCTURE_OPTIONS,
+  LIST_STYLE_OPTIONS,
   PAPER_SIZES,
   PAPER_DIMENSIONS,
   DEFAULT_EXPORT_FORMAT,

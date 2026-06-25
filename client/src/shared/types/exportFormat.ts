@@ -17,16 +17,48 @@ export const NUMBERING_FORMATS = [
 
 export type NumberingFormat = (typeof NUMBERING_FORMATS)[number]['value'];
 
+export const HEADING_NUMBERING_STYLE_OPTIONS = [
+  { value: 'classic', label: '经典章节' },
+  { value: 'chinese', label: '中文序号' },
+  { value: 'arabic', label: '阿拉伯数字' },
+  { value: 'none', label: '无编号' },
+] as const;
+
+export type HeadingNumberingStyle = (typeof HEADING_NUMBERING_STYLE_OPTIONS)[number]['value'];
+
+export const HEADING_NUMBERING_STYLE_PRESETS: Record<HeadingNumberingStyle, NumberingFormat[]> = {
+  classic: ['chinese-chapter', 'chinese-section', 'chinese-dun', 'chinese-paren', 'arabic-dun', 'arabic-paren'],
+  chinese: ['chinese-dun', 'chinese-paren', 'arabic-dun', 'arabic-paren', 'arabic', 'none'],
+  arabic: ['arabic-dot', 'arabic-dot', 'arabic-dot', 'arabic-paren', 'arabic', 'none'],
+  none: ['none', 'none', 'none', 'none', 'none', 'none'],
+};
+
+export const HEADING_BORDER_STRUCTURE_OPTIONS = [
+  { value: '上下结构', label: '上下结构' },
+  { value: '左右结构', label: '左右结构' },
+] as const;
+
+export type HeadingBorderStructure = (typeof HEADING_BORDER_STRUCTURE_OPTIONS)[number]['value'];
+
 // ── 标题级别样式 ──────────────────────────────────
 export interface HeadingStyleConfig {
   font: string;
   size: string;                 // 中文字号名，如 '小二'、'四号'
   alignment: string;            // '居中对齐' | '两端对齐' | '左对齐' | '右对齐'
+  bold: boolean;
+  text_color: string;
   spacing_before_pt: number;
   spacing_after_pt: number;
   first_line_indent_chars: number;
   line_spacing: number;         // 倍数，如 1、1.2、1.5
   numbering_format: NumberingFormat;
+}
+
+export interface HeadingBorderConfig {
+  enabled: boolean;
+  border_color: string;
+  background_color: string;
+  structure: HeadingBorderStructure;
 }
 
 // ── 正文样式 ──────────────────────────────────────
@@ -38,6 +70,34 @@ export interface BodyTextStyleConfig {
   spacing_after_pt: number;
   first_line_indent_chars: number;
   line_spacing_multiple: number;
+  list_style: ListStyle;
+  list_indent_chars: number;
+}
+
+export interface TableCellStyleConfig {
+  font: string;
+  size: string;
+  alignment: string;
+  text_color: string;
+  background_color: string;
+}
+
+export interface TableStyleConfig {
+  border_width: number;
+  border_color: string;
+  cell_padding_pt: number;
+  full_width: boolean;
+  header_row: TableCellStyleConfig;
+  first_column: TableCellStyleConfig;
+  body_cell: TableCellStyleConfig;
+}
+
+export interface ImageStyleConfig {
+  max_width_percent: number;
+  alignment: string;
+  caption_font: string;
+  caption_size: string;
+  caption_alignment: string;
 }
 
 // ── 纸张类型 ──────────────────────────────────────
@@ -70,24 +130,48 @@ export const PAPER_DIMENSIONS: Record<PaperSize, { width: number; height: number
 export interface PageSetupConfig {
   paper_size: PaperSize;
   orientation: 'portrait' | 'landscape';
+  first_page_different: boolean;
   margin_top_cm: number;
   margin_bottom_cm: number;
   margin_left_cm: number;
   margin_right_cm: number;
+  header_enabled: boolean;
+  header_text: string;
+  header_font: string;
+  header_size: string;
+  header_alignment: string;
+  header_color: string;
   footer_enabled: boolean;
+  footer_text: string;
   footer_distance_cm: number;
   footer_font: string;
   footer_size: string;
+  footer_alignment: string;
+  footer_color: string;
   page_number_enabled: boolean;
   page_number_format: string;   // '第{page}页'
-  header_enabled: boolean;
+  page_number_start: number;
 }
 
 // ── 完整导出格式配置 ──────────────────────────────
 export interface ExportFormatConfig {
+  template_name: string;
   page: PageSetupConfig;
+  heading_numbering_style: HeadingNumberingStyle;
+  heading_level1_page_break_before: boolean;
+  heading_border: HeadingBorderConfig;
   headings: HeadingStyleConfig[];  // 索引 0=L1（章），5=L6
   body_text: BodyTextStyleConfig;
+  table: TableStyleConfig;
+  image: ImageStyleConfig;
+}
+
+export interface ExportTemplateRecord {
+  template_id: string;
+  template_name: string;
+  config: ExportFormatConfig;
+  created_at: string;
+  updated_at: string;
 }
 
 // ── 选项常量 ──────────────────────────────────────
@@ -130,6 +214,15 @@ export const ALIGNMENT_OPTIONS = [
 
 export type AlignmentOption = (typeof ALIGNMENT_OPTIONS)[number];
 
+export const LIST_STYLE_OPTIONS = [
+  { value: 'disc', label: '实心圆点' },
+  { value: 'dash', label: '短横线' },
+  { value: 'circle', label: '空心圆点' },
+  { value: 'square', label: '方块' },
+] as const;
+
+export type ListStyle = (typeof LIST_STYLE_OPTIONS)[number]['value'];
+
 // ── 中文字号 → pt 映射 ────────────────────────────
 export const SIZE_TO_PT: Record<string, number> = {
   '初号': 42,
@@ -170,17 +263,27 @@ export const ALIGNMENT_TO_CSS: Record<string, string> = {
 const DEFAULT_PAGE_SETUP: PageSetupConfig = {
   paper_size: 'a4',
   orientation: 'portrait',
+  first_page_different: true,
   margin_top_cm: 2,
   margin_bottom_cm: 2,
   margin_left_cm: 2,
   margin_right_cm: 2,
+  header_enabled: false,
+  header_text: '',
+  header_font: '宋体',
+  header_size: '小五',
+  header_alignment: '居中对齐',
+  header_color: '#536176',
   footer_enabled: true,
+  footer_text: '',
   footer_distance_cm: 1.75,
   footer_font: '宋体',
   footer_size: '小五',
+  footer_alignment: '居中对齐',
+  footer_color: '#536176',
   page_number_enabled: true,
   page_number_format: '第{page}页',
-  header_enabled: false,
+  page_number_start: 1,
 };
 
 const DEFAULT_BODY_TEXT: BodyTextStyleConfig = {
@@ -191,26 +294,87 @@ const DEFAULT_BODY_TEXT: BodyTextStyleConfig = {
   spacing_after_pt: 0,
   first_line_indent_chars: 2,
   line_spacing_multiple: 1.2,
+  list_style: 'disc',
+  list_indent_chars: 2,
+};
+
+const DEFAULT_TABLE_CELL: TableCellStyleConfig = {
+  font: '宋体',
+  size: '小四',
+  alignment: '左对齐',
+  text_color: '#243048',
+  background_color: '#ffffff',
+};
+
+const DEFAULT_TABLE_STYLE: TableStyleConfig = {
+  border_width: 1,
+  border_color: '#dcdff6',
+  cell_padding_pt: 6,
+  full_width: true,
+  header_row: {
+    font: '黑体',
+    size: '小四',
+    alignment: '居中对齐',
+    text_color: '#243048',
+    background_color: '#eef5ff',
+  },
+  first_column: {
+    font: '黑体',
+    size: '小四',
+    alignment: '左对齐',
+    text_color: '#243048',
+    background_color: '#f8fbff',
+  },
+  body_cell: { ...DEFAULT_TABLE_CELL },
+};
+
+const DEFAULT_IMAGE_STYLE: ImageStyleConfig = {
+  max_width_percent: 90,
+  alignment: '居中对齐',
+  caption_font: '宋体',
+  caption_size: '小五',
+  caption_alignment: '居中对齐',
+};
+
+const DEFAULT_HEADING_BORDER: HeadingBorderConfig = {
+  enabled: false,
+  border_color: '#2174fd',
+  background_color: '#eef5ff',
+  structure: '上下结构',
 };
 
 /** 默认导出格式：6 级标题独立编号 */
 export const DEFAULT_EXPORT_FORMAT: ExportFormatConfig = {
+  template_name: '默认模版',
   page: { ...DEFAULT_PAGE_SETUP },
+  heading_numbering_style: 'classic',
+  heading_level1_page_break_before: false,
+  heading_border: { ...DEFAULT_HEADING_BORDER },
   headings: [
     // L1: 第一章 — 黑体 小二 居中
-    { font: '黑体', size: '小二', alignment: '居中对齐', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'chinese-chapter' },
+    { font: '黑体', size: '小二', alignment: '居中对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'chinese-chapter' },
     // L2: 第一节 — 黑体 四号 两端对齐
-    { font: '黑体', size: '四号', alignment: '两端对齐', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 1.5, line_spacing: 1, numbering_format: 'chinese-section' },
+    { font: '黑体', size: '四号', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 1.5, line_spacing: 1, numbering_format: 'chinese-section' },
     // L3: 一、 — 黑体 小四 两端对齐
-    { font: '黑体', size: '小四', alignment: '两端对齐', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'chinese-dun' },
+    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'chinese-dun' },
     // L4: （一） — 楷体 小四
-    { font: '楷体', size: '小四', alignment: '两端对齐', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'chinese-paren' },
+    { font: '楷体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'chinese-paren' },
     // L5: 1、 — 黑体 小四
-    { font: '黑体', size: '小四', alignment: '两端对齐', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'arabic-dun' },
+    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'arabic-dun' },
     // L6: (1) — 宋体 小四
-    { font: '宋体', size: '小四', alignment: '两端对齐', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'arabic-paren' },
+    { font: '宋体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'arabic-paren' },
   ],
   body_text: { ...DEFAULT_BODY_TEXT },
+  table: {
+    border_width: DEFAULT_TABLE_STYLE.border_width,
+    border_color: DEFAULT_TABLE_STYLE.border_color,
+    cell_padding_pt: DEFAULT_TABLE_STYLE.cell_padding_pt,
+    full_width: DEFAULT_TABLE_STYLE.full_width,
+    header_row: { ...DEFAULT_TABLE_STYLE.header_row },
+    first_column: { ...DEFAULT_TABLE_STYLE.first_column },
+    body_cell: { ...DEFAULT_TABLE_STYLE.body_cell },
+  },
+  image: { ...DEFAULT_IMAGE_STYLE },
 };
 
 /** 标题级别中文标签 */

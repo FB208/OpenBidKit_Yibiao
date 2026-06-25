@@ -3,7 +3,7 @@
  * 注入到正文预览容器的 style 上，实现实时 WYSIWYG 预览
  */
 
-import type { ExportFormatConfig, HeadingStyleConfig, PaperSize } from '../types/exportFormat';
+import type { ExportFormatConfig, HeadingStyleConfig, ListStyle, PaperSize } from '../types/exportFormat';
 import { SIZE_TO_PT, FONT_TO_CSS, ALIGNMENT_TO_CSS, PAPER_DIMENSIONS } from '../types/exportFormat';
 
 /**
@@ -38,11 +38,20 @@ function buildHeadingVars(level: number, config: HeadingStyleConfig): Record<str
     [`--ef-h${n}-font`]: chineseFontToCss(config.font),
     [`--ef-h${n}-size`]: `${sizePt}pt`,
     [`--ef-h${n}-align`]: alignmentToCss(config.alignment),
+    [`--ef-h${n}-weight`]: config.bold ? '700' : '400',
+    [`--ef-h${n}-color`]: config.text_color || '#243048',
     [`--ef-h${n}-spacing-before`]: `${config.spacing_before_pt}pt`,
     [`--ef-h${n}-spacing-after`]: `${config.spacing_after_pt}pt`,
     [`--ef-h${n}-indent`]: config.first_line_indent_chars > 0 ? `${config.first_line_indent_chars}em` : '0',
     [`--ef-h${n}-line-height`]: String(config.line_spacing),
   };
+}
+
+function listStyleToCss(style: ListStyle | string | undefined): string {
+  if (style === 'dash') return '"- "';
+  if (style === 'circle') return 'circle';
+  if (style === 'square') return 'square';
+  return 'disc';
 }
 
 /**
@@ -62,6 +71,21 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
   vars['--ef-page-padding-bottom'] = `${config.page.margin_bottom_cm}cm`;
   vars['--ef-page-padding-left'] = `${config.page.margin_left_cm}cm`;
   vars['--ef-page-padding-right'] = `${config.page.margin_right_cm}cm`;
+  vars['--ef-header-font'] = chineseFontToCss(config.page.header_font || '宋体');
+  vars['--ef-header-size'] = `${chineseSizeToPt(config.page.header_size || '小五')}pt`;
+  vars['--ef-header-align'] = alignmentToCss(config.page.header_alignment || '居中对齐');
+  vars['--ef-header-color'] = config.page.header_color || '#536176';
+  vars['--ef-footer-font'] = chineseFontToCss(config.page.footer_font || '宋体');
+  vars['--ef-footer-size'] = `${chineseSizeToPt(config.page.footer_size || '小五')}pt`;
+  vars['--ef-footer-align'] = alignmentToCss(config.page.footer_alignment || '居中对齐');
+  vars['--ef-footer-color'] = config.page.footer_color || '#536176';
+
+  // ── 标题边框 ──
+  const headingBorder = config.heading_border;
+  vars['--ef-heading-border'] = headingBorder?.enabled ? `1px solid ${headingBorder.border_color || '#2174fd'}` : 'none';
+  vars['--ef-heading-background'] = headingBorder?.enabled ? (headingBorder.background_color || '#eef5ff') : 'transparent';
+  vars['--ef-heading-padding'] = headingBorder?.enabled ? '6pt 8pt' : '0';
+  vars['--ef-heading-layout'] = headingBorder?.structure === '左右结构' ? 'inline-flex' : 'block';
 
   // ── 正文 ──
   const bodySizePt = chineseSizeToPt(config.body_text.size);
@@ -74,6 +98,8 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
     ? `${config.body_text.first_line_indent_chars}em`
     : '0';
   vars['--ef-body-line-height'] = String(config.body_text.line_spacing_multiple);
+  vars['--ef-list-style-type'] = listStyleToCss(config.body_text.list_style);
+  vars['--ef-list-indent'] = `${config.body_text.list_indent_chars ?? 2}em`;
 
   // ── 各级标题 h1-h6 ──
   for (let i = 0; i < 6; i++) {
@@ -81,6 +107,38 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
     if (heading) {
       Object.assign(vars, buildHeadingVars(i, heading));
     }
+  }
+
+  // ── 表格 ──
+  const table = config.table;
+  if (table) {
+    vars['--ef-table-border-width'] = `${table.border_width ?? 1}px`;
+    vars['--ef-table-border-color'] = table.border_color || '#dcdff6';
+    vars['--ef-table-cell-padding'] = `${table.cell_padding_pt ?? 6}pt`;
+    vars['--ef-table-width'] = table.full_width ? '100%' : 'auto';
+    const tableAreas = [
+      ['header', table.header_row],
+      ['first-column', table.first_column],
+      ['body-cell', table.body_cell],
+    ] as const;
+    tableAreas.forEach(([key, cell]) => {
+      if (!cell) return;
+      vars[`--ef-table-${key}-font`] = chineseFontToCss(cell.font);
+      vars[`--ef-table-${key}-size`] = `${chineseSizeToPt(cell.size)}pt`;
+      vars[`--ef-table-${key}-align`] = alignmentToCss(cell.alignment);
+      vars[`--ef-table-${key}-color`] = cell.text_color || '#243048';
+      vars[`--ef-table-${key}-background`] = cell.background_color || '#ffffff';
+    });
+  }
+
+  // ── 图片 ──
+  const image = config.image;
+  if (image) {
+    vars['--ef-image-max-width'] = `${image.max_width_percent ?? 90}%`;
+    vars['--ef-image-align'] = alignmentToCss(image.alignment || '居中对齐');
+    vars['--ef-image-caption-font'] = chineseFontToCss(image.caption_font || '宋体');
+    vars['--ef-image-caption-size'] = `${chineseSizeToPt(image.caption_size || '小五')}pt`;
+    vars['--ef-image-caption-align'] = alignmentToCss(image.caption_alignment || '居中对齐');
   }
 
   return vars;
