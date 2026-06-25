@@ -170,6 +170,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
+  const [previewFullscreenOpen, setPreviewFullscreenOpen] = useState(false);
 
   useEffect(() => {
     trackPageView(mode === 'edit' ? 'my-templates/edit' : 'new-template');
@@ -398,6 +399,12 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
       { id: 'export-test', label: '导出测试', variant: 'warning', disabled: exportProgress.running, onClick: () => { void handleExportTest(); } },
     ],
   };
+  const previewToolbarGroup: FloatingToolbarGroup = {
+    id: 'template-preview',
+    actions: [
+      { id: 'fullscreen-preview', label: '全屏预览', variant: 'success', tooltip: '放大右侧模板预览', onClick: () => setPreviewFullscreenOpen(true) },
+    ],
+  };
   const saveToolbarGroups: FloatingToolbarGroup[] = isDirty
     ? [
         {
@@ -431,6 +438,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
     : null;
   const toolbarGroups: FloatingToolbarGroup[] = [
     ...(navigationToolbarGroup ? [navigationToolbarGroup] : []),
+    previewToolbarGroup,
     resetToolbarGroup,
     exportTestToolbarGroup,
     ...saveToolbarGroups,
@@ -958,6 +966,17 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
                 <Dialog.Close className="primary-action" type="button">知道了</Dialog.Close>
               </div>
             )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+      <Dialog.Root open={previewFullscreenOpen} onOpenChange={setPreviewFullscreenOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="export-template-fullscreen-overlay" />
+          <Dialog.Content className="export-template-fullscreen-dialog">
+            <Dialog.Title className="export-template-fullscreen-title">全屏预览</Dialog.Title>
+            <Dialog.Description className="export-template-fullscreen-description">当前模板的全屏排版预览。</Dialog.Description>
+            <Dialog.Close className="export-template-fullscreen-close" type="button">退出全屏</Dialog.Close>
+            <TemplatePreview config={config} previewStyle={previewStyle} />
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

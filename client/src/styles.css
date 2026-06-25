@@ -604,6 +604,16 @@ button {
   border-color: rgba(242, 138, 0, 0.18);
 }
 
+.floating-toolbar-button.is-success {
+  color: #168a4a;
+}
+
+.floating-toolbar-button.is-success:hover:not(:disabled) {
+  color: #168a4a;
+  background: rgba(22, 138, 74, 0.1);
+  border-color: rgba(22, 138, 74, 0.2);
+}
+
 .floating-toolbar-icon {
   display: inline-grid;
   width: 18px;
@@ -10953,6 +10963,73 @@ button {
   align-self: flex-start;
   overflow: hidden;
   transform-origin: top left;
+}
+
+.export-template-fullscreen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(15, 23, 42, 0.36);
+}
+
+.export-template-fullscreen-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 1001;
+  overflow: hidden;
+  padding: 0;
+  background: radial-gradient(circle at 20% 0%, rgba(229, 240, 255, 0.88), #f7fbff 42%, #eef5ff 100%);
+  border: 0;
+  outline: none;
+}
+
+.export-template-fullscreen-title,
+.export-template-fullscreen-description {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  white-space: nowrap;
+  border: 0;
+  clip: rect(0 0 0 0);
+}
+
+.export-template-fullscreen-close {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  z-index: 2;
+  height: 38px;
+  padding: 0 16px;
+  color: #168a4a;
+  font-size: 14px;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(22, 138, 74, 0.22);
+  border-radius: 999px;
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.16);
+  cursor: pointer;
+}
+
+.export-template-fullscreen-close:hover {
+  background: #ffffff;
+  border-color: rgba(22, 138, 74, 0.38);
+}
+
+.export-template-fullscreen-dialog .export-template-preview-panel {
+  position: relative;
+  top: auto;
+  width: 100%;
+  height: 100vh;
+  max-height: none;
+  min-height: 0;
+}
+
+.export-template-fullscreen-dialog .export-template-preview-scroll {
+  width: 100%;
+  height: 100%;
 }
 
 /* ── 标题格式卡片 ── */
