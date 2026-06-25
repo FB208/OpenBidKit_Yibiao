@@ -594,6 +594,16 @@ button {
   border-color: rgba(255, 53, 1, 0.16);
 }
 
+.floating-toolbar-button.is-warning {
+  color: #f28a00;
+}
+
+.floating-toolbar-button.is-warning:hover:not(:disabled) {
+  color: #f28a00;
+  background: rgba(242, 138, 0, 0.09);
+  border-color: rgba(242, 138, 0, 0.18);
+}
+
 .floating-toolbar-icon {
   display: inline-grid;
   width: 18px;
@@ -4043,6 +4053,7 @@ button {
 .export-template-select-preview {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
 }
 
 .export-template-select-preview-head {
@@ -4065,6 +4076,7 @@ button {
 .export-template-select-preview .export-template-preview-panel {
   position: relative;
   top: auto;
+  height: 100%;
   max-height: none;
   min-height: 0;
   border: 0;
@@ -4073,11 +4085,11 @@ button {
 }
 
 .export-template-select-preview .export-template-preview-scroll {
-  padding: 12px;
+  padding: 0;
 }
 
 .export-template-select-preview .export-template-preview-paper {
-  min-height: 520px;
+  min-height: 0;
 }
 
 .export-template-select-actions {
@@ -10906,24 +10918,41 @@ button {
   position: sticky;
   top: 0;
   display: flex;
+  flex-direction: column;
   min-width: 0;
+  height: calc(100vh - 160px);
   max-height: calc(100vh - 160px);
   overflow: hidden;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .export-template-preview-scroll {
   display: flex;
+  flex: 1;
   width: 100%;
   min-height: 0;
+  align-items: center;
   justify-content: center;
-  overflow: auto;
-  padding: 18px;
-  background: linear-gradient(180deg, rgba(243, 247, 253, 0.92), rgba(248, 250, 253, 0.72));
+  overflow: hidden;
+  padding: 0;
+  box-sizing: border-box;
+  background: transparent;
+}
+
+.export-template-preview-scale-box {
+  position: relative;
+  flex: 0 0 auto;
 }
 
 .export-template-preview-paper {
-  min-height: 560px;
+  height: var(--ef-page-height, 297mm);
+  min-height: 0;
   align-self: flex-start;
+  overflow: hidden;
+  transform-origin: top left;
 }
 
 /* ── 标题格式卡片 ── */
@@ -11062,7 +11091,10 @@ button {
 
 .export-format-paper {
   width: var(--ef-page-width, 210mm);
-  max-width: 100%;
+  max-width: none;
+  min-height: var(--ef-page-height, 297mm);
+  aspect-ratio: var(--ef-page-aspect, 210 / 297);
+  box-sizing: border-box;
   padding: var(--ef-page-padding-top, 2cm) var(--ef-page-padding-right, 2cm) var(--ef-page-padding-bottom, 2cm) var(--ef-page-padding-left, 2cm);
   background: var(--yb-surface);
   box-shadow: var(--yb-shadow), 0 0 1px rgba(0, 0, 0, 0.06);
@@ -11461,7 +11493,9 @@ button {
 .template-library-preview-shell .export-template-preview-panel {
   position: relative;
   top: auto;
+  height: 100%;
   max-height: none;
+  min-height: 0;
   border: 0;
   border-radius: 0;
   box-shadow: none;
@@ -11523,11 +11557,12 @@ button {
 
   .export-template-preview-panel {
     position: relative;
+    height: 520px;
     max-height: none;
   }
 
   .export-template-preview-scroll {
-    max-height: 520px;
+    max-height: none;
   }
 
   .export-format-layout {

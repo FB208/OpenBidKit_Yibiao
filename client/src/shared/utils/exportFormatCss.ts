@@ -64,9 +64,12 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
   // ── 页面设置 ──
   const dims = PAPER_DIMENSIONS[config.page.paper_size as PaperSize] || PAPER_DIMENSIONS.a4;
   const landscape = config.page.orientation === 'landscape';
-  const pageWidth = landscape ? `${dims.height}mm` : `${dims.width}mm`;
+  const pageWidth = landscape ? dims.height : dims.width;
+  const pageHeight = landscape ? dims.width : dims.height;
 
-  vars['--ef-page-width'] = pageWidth;
+  vars['--ef-page-width'] = `${pageWidth}mm`;
+  vars['--ef-page-height'] = `${pageHeight}mm`;
+  vars['--ef-page-aspect'] = `${pageWidth} / ${pageHeight}`;
   vars['--ef-page-padding-top'] = `${config.page.margin_top_cm}cm`;
   vars['--ef-page-padding-bottom'] = `${config.page.margin_bottom_cm}cm`;
   vars['--ef-page-padding-left'] = `${config.page.margin_left_cm}cm`;

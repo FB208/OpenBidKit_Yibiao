@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
@@ -26,11 +27,13 @@ import {
   HEADING_NUMBERING_STYLE_PRESETS,
   LIST_STYLE_OPTIONS,
   NUMBERING_FORMATS,
+  PAPER_DIMENSIONS,
   PAPER_SIZES,
   SIZE_OPTIONS,
 } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
 import { formatOutlineNumber } from '../../../shared/utils/outlineNumbering';
+import type { OutlineItem, WordExportProgressEvent } from '../../../shared/types';
 
 type TemplateTab = 'layout' | 'cover' | 'heading' | 'body' | 'table' | 'image';
 type TableCellStyleKey = 'header_row' | 'first_column' | 'body_cell';
@@ -49,6 +52,60 @@ const templateTabs: Array<{ id: TemplateTab; label: string }> = [
   { id: 'table', label: '表格样式' },
   { id: 'image', label: '图片设置' },
 ];
+
+interface ExportProgressState {
+  open: boolean;
+  running: boolean;
+  progress: number;
+  message: string;
+  warnings: string[];
+  mermaidCount: number;
+  error?: string;
+}
+
+const initialExportProgress: ExportProgressState = {
+  open: false,
+  running: false,
+  progress: 0,
+  message: '',
+  warnings: [],
+  mermaidCount: 0,
+};
+
+interface PreviewViewportSize {
+  width: number;
+  height: number;
+}
+
+const CSS_MM_TO_PX = 96 / 25.4;
+
+function getPreviewPaperSize(config: ExportFormatConfig) {
+  const dims = PAPER_DIMENSIONS[config.page.paper_size as PaperSize] || PAPER_DIMENSIONS.a4;
+  const landscape = config.page.orientation === 'landscape';
+
+  return {
+    widthPx: (landscape ? dims.height : dims.width) * CSS_MM_TO_PX,
+    heightPx: (landscape ? dims.width : dims.height) * CSS_MM_TO_PX,
+  };
+}
+
+function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
+  return items.flatMap((item) => item.children?.length ? collectLeafItems(item.children) : [item]);
+}
+
+function countMermaidDiagrams(content: string) {
+  const mermaidBlocks = (String(content || '').match(/```mermaid[\s\S]*?```/gi) || []).length;
+  const mermaidInkImages = (String(content || '').match(/https:\/\/mermaid\.ink\/img\//gi) || []).length;
+  return mermaidBlocks + mermaidInkImages;
+}
+
+function countOutlineMermaidDiagrams(items: OutlineItem[]) {
+  return collectLeafItems(items).reduce((sum, item) => sum + countMermaidDiagrams(item.content || ''), 0);
+}
+
+function hasGeneratedContent(items: OutlineItem[]) {
+  return collectLeafItems(items).some((item) => String(item.content || '').trim());
+}
 
 function headingNumberExample(index: number, fmt: NumberingFormat): string {
   const sampleIds = ['1', '1.1', '1.1.1', '1.1.1.1', '1.1.1.1.1', '1.1.1.1.1.1'];
@@ -112,6 +169,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   const [expandedHeadings, setExpandedHeadings] = useState<Set<number>>(new Set([0, 1]));
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
 
   useEffect(() => {
     trackPageView(mode === 'edit' ? 'my-templates/edit' : 'new-template');
@@ -241,6 +299,84 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
     showToast('已恢复默认模版设置，保存后生效', 'info');
   }, [showToast]);
 
+  const handleExportTest = useCallback(async () => {
+    let unsubscribe: (() => void) | undefined;
+
+    try {
+      const technicalPlan = await window.yibiao?.technicalPlan.loadState();
+      const outlineData = technicalPlan?.outlineData;
+      const outline = outlineData?.outline || [];
+      if (!hasGeneratedContent(outline)) {
+        showToast('无已完成标书', 'info');
+        return;
+      }
+
+      const requestId = `template-export-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const mermaidCount = countOutlineMermaidDiagrams(outline);
+      setExportProgress({
+        open: true,
+        running: true,
+        progress: 2,
+        message: mermaidCount
+          ? `检测到 ${mermaidCount} 张 Mermaid 图，导出时会转换为 Word 图片，可能需要稍等。`
+          : '正在使用当前模板导出测试 Word。',
+        warnings: [],
+        mermaidCount,
+      });
+
+      unsubscribe = window.yibiao?.export.onWordExportProgress((event: WordExportProgressEvent) => {
+        if (event.requestId && event.requestId !== requestId) {
+          return;
+        }
+
+        setExportProgress((prev) => ({
+          ...prev,
+          open: true,
+          running: event.phase === 'running',
+          progress: event.progress,
+          message: event.message,
+          warnings: event.warnings || prev.warnings,
+          error: event.phase === 'error' ? event.message : undefined,
+        }));
+      });
+
+      const result = await window.yibiao?.export.exportWord({
+        requestId,
+        project_name: outlineData?.project_name,
+        outline,
+        export_format: config,
+      });
+      if (result?.canceled) {
+        setExportProgress(initialExportProgress);
+        showToast('已取消导出', 'info');
+        return;
+      }
+
+      setExportProgress((prev) => ({
+        ...prev,
+        open: true,
+        running: false,
+        progress: 100,
+        message: result?.message || 'Word 已导出，请打开文档核对版式。',
+        warnings: result?.warnings || prev.warnings,
+      }));
+      showToast(result?.message || 'Word 已导出', result?.warnings?.length ? 'info' : 'success');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '导出测试失败';
+      setExportProgress((prev) => ({
+        ...prev,
+        open: true,
+        running: false,
+        progress: 100,
+        message,
+        error: message,
+      }));
+      showToast(message, 'error');
+    } finally {
+      unsubscribe?.();
+    }
+  }, [config, showToast]);
+
   const toggleHeading = useCallback((index: number) => {
     setExpandedHeadings((prev) => {
       const next = new Set(prev);
@@ -253,7 +389,13 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   const resetToolbarGroup: FloatingToolbarGroup = {
     id: 'template-reset',
     actions: [
-      { id: 'reset-default', label: '重置默认', variant: 'secondary', tooltip: '恢复默认模版设置，保存后生效', onClick: handleResetDefault },
+      { id: 'reset-default', label: '重置默认', variant: 'danger', tooltip: '恢复默认模版设置，保存后生效', onClick: handleResetDefault },
+    ],
+  };
+  const exportTestToolbarGroup: FloatingToolbarGroup = {
+    id: 'template-export-test',
+    actions: [
+      { id: 'export-test', label: '导出测试', variant: 'warning', disabled: exportProgress.running, onClick: () => { void handleExportTest(); } },
     ],
   };
   const saveToolbarGroups: FloatingToolbarGroup[] = isDirty
@@ -290,6 +432,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   const toolbarGroups: FloatingToolbarGroup[] = [
     ...(navigationToolbarGroup ? [navigationToolbarGroup] : []),
     resetToolbarGroup,
+    exportTestToolbarGroup,
     ...saveToolbarGroups,
   ];
 
@@ -316,13 +459,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
             <option value="portrait">纵向</option>
             <option value="landscape">横向</option>
           </select>
-        </label>
-        <label className="settings-row">
-          <div className="settings-row-copy"><strong>首页不同</strong></div>
-          <label className="settings-switch-control">
-            <input type="checkbox" checked={config.page.first_page_different} onChange={(event) => updatePage({ first_page_different: event.target.checked })} />
-            <span className="settings-switch-track" aria-hidden="true"><span className="settings-switch-thumb" /></span>
-          </label>
         </label>
         <div className="settings-row">
           <div className="settings-row-copy"><strong>页边距</strong><span>上 / 下 / 左 / 右（厘米）</span></div>
@@ -713,13 +849,21 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
     </>
   );
 
-  const renderEmptySettings = (title: string) => (
+  const renderCoverSettings = () => (
     <>
       <div className="settings-section-title">
         <span />
-        <strong>{title}</strong>
+        <strong>封皮</strong>
       </div>
-      <div className="export-template-empty-tab" />
+      <div className="settings-list">
+        <label className="settings-row">
+          <div className="settings-row-copy"><strong>首页不同</strong><span>勾选后首页使用独立页眉页脚，适合封皮不显示页码。</span></div>
+          <label className="settings-switch-control">
+            <input type="checkbox" checked={config.page.first_page_different} onChange={(event) => updatePage({ first_page_different: event.target.checked })} />
+            <span className="settings-switch-track" aria-hidden="true"><span className="settings-switch-thumb" /></span>
+          </label>
+        </label>
+      </div>
     </>
   );
 
@@ -729,7 +873,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
     if (activeTab === 'body') return renderBodySettings();
     if (activeTab === 'table') return renderTableSettings();
     if (activeTab === 'image') return renderImageSettings();
-    if (activeTab === 'cover') return renderEmptySettings('封皮');
+    if (activeTab === 'cover') return renderCoverSettings();
     return null;
   };
 
@@ -776,65 +920,154 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           <TemplatePreview config={config} previewStyle={previewStyle} />
         </div>
       </div>
+      <Dialog.Root
+        open={exportProgress.open}
+        onOpenChange={(open) => {
+          if (!open && !exportProgress.running) {
+            setExportProgress(initialExportProgress);
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="export-progress-card">
+            <div className="content-regenerate-card-head">
+              <span className="section-kicker">导出测试</span>
+              <Dialog.Title>{exportProgress.running ? '正在导出测试' : exportProgress.error ? '导出失败' : '导出完成'}</Dialog.Title>
+              <Dialog.Description>
+                {exportProgress.mermaidCount > 0
+                  ? `本次包含 ${exportProgress.mermaidCount} 张 Mermaid 图，导出时会通过 mermaid.ink 转换成 Word 图片，速度受网络影响。`
+                  : '正在使用当前模板导出已生成的技术方案。'}
+              </Dialog.Description>
+            </div>
+            <div className="export-progress-body">
+              <div className="content-generation-progress-track" aria-label={`导出测试进度 ${exportProgress.progress}%`}>
+                <span style={{ width: `${exportProgress.progress}%` }} />
+              </div>
+              <p>{exportProgress.message || '正在处理导出任务，请稍候。'}</p>
+              {exportProgress.warnings.length > 0 && (
+                <div className="export-warning-list">
+                  <strong>需要核对</strong>
+                  {exportProgress.warnings.slice(0, 4).map((warning) => <small key={warning}>{warning}</small>)}
+                  {exportProgress.warnings.length > 4 && <small>还有 {exportProgress.warnings.length - 4} 条图片提示，请打开导出的 Word 核对。</small>}
+                </div>
+              )}
+            </div>
+            {!exportProgress.running && (
+              <div className="content-regenerate-actions">
+                <Dialog.Close className="primary-action" type="button">知道了</Dialog.Close>
+              </div>
+            )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
       <FloatingToolbar groups={toolbarGroups} label="模版设置保存工具条" />
     </div>
   );
 }
 
 export function TemplatePreview({ config, previewStyle }: { config: ExportFormatConfig; previewStyle: CSSProperties }) {
+  const previewStageRef = useRef<HTMLDivElement | null>(null);
+  const [viewportSize, setViewportSize] = useState<PreviewViewportSize>({ width: 0, height: 0 });
+  const paperSize = useMemo(() => getPreviewPaperSize(config), [config.page.orientation, config.page.paper_size]);
   const pageNumberText = config.page.page_number_format.replace('{page}', String(config.page.page_number_start || 1));
+  const previewScale = useMemo(() => {
+    const ratios = [1];
+    if (viewportSize.width > 0 && paperSize.widthPx > 0) {
+      ratios.push(viewportSize.width / paperSize.widthPx);
+    }
+    if (viewportSize.height > 0 && paperSize.heightPx > 0) {
+      ratios.push(viewportSize.height / paperSize.heightPx);
+    }
+
+    return Math.max(0.01, Math.min(...ratios));
+  }, [paperSize.heightPx, paperSize.widthPx, viewportSize.height, viewportSize.width]);
+  const scaleBoxStyle = useMemo<CSSProperties>(() => ({
+    width: `${paperSize.widthPx * previewScale}px`,
+    height: `${paperSize.heightPx * previewScale}px`,
+  }), [paperSize.heightPx, paperSize.widthPx, previewScale]);
+  const paperStyle = useMemo<CSSProperties>(() => ({
+    ...previewStyle,
+    transform: `scale(${previewScale})`,
+  }), [previewScale, previewStyle]);
+
+  useEffect(() => {
+    const node = previewStageRef.current;
+    if (!node) return;
+
+    const updateSize = (rect: DOMRectReadOnly) => {
+      const nextSize = {
+        width: Math.max(0, Math.floor(rect.width)),
+        height: Math.max(0, Math.floor(rect.height)),
+      };
+      setViewportSize((prev) => (
+        prev.width === nextSize.width && prev.height === nextSize.height ? prev : nextSize
+      ));
+    };
+
+    updateSize(node.getBoundingClientRect());
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) updateSize(entry.contentRect);
+    });
+    observer.observe(node);
+
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <aside className="settings-page-section export-template-preview-panel" aria-label="模板预览">
-      <div className="export-template-preview-scroll">
-        <div className="export-format-paper export-format-preview-content export-template-preview-paper" style={previewStyle}>
-          {config.page.header_enabled && (
-            <div className="export-template-page-header">
-              {config.page.header_text || config.template_name || '页眉示例'}
-            </div>
-          )}
-          <h1>{headingPreviewTitle(config, 1, '1', '项目实施方案')}</h1>
-          <p>本节展示模板设置在导出文档中的基础排版效果，包括页面边距、正文样式、标题层级和表格展示。</p>
-          <h2>{headingPreviewTitle(config, 2, '1.1', '总体目标')}</h2>
-          <p>围绕项目建设目标，结合招标文件要求，形成可执行、可检查、可交付的技术实施方案。</p>
-          <h3>{headingPreviewTitle(config, 3, '1.1.1', '实施安排')}</h3>
-          <p>项目团队将按阶段推进需求确认、方案设计、系统实施、联调测试和验收交付等工作。</p>
-          <ul>
-            <li>建立项目启动、过程检查和验收交付的闭环机制。</li>
-            <li>按周同步风险、进度和资源需求，确保实施节奏可控。</li>
-            <li>保留关键过程记录，便于后续审查和复盘。</li>
-          </ul>
-          <figure className="export-template-image-figure">
-            <div className="export-template-image-placeholder">图片预览</div>
-            <figcaption>图 1 项目实施流程示意</figcaption>
-          </figure>
-          <table>
-            <thead>
-              <tr>
-                <th>阶段</th>
-                <th>内容</th>
-                <th>输出</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>准备</td>
-                <td>资料梳理与计划确认</td>
-                <td>实施计划</td>
-              </tr>
-              <tr>
-                <td>执行</td>
-                <td>方案落地与质量检查</td>
-                <td>交付成果</td>
-              </tr>
-            </tbody>
-          </table>
-          {config.page.footer_enabled && (
-            <div className="export-template-page-footer">
-              <span>{config.page.footer_text}</span>
-              {config.page.page_number_enabled && <span>{pageNumberText}</span>}
-            </div>
-          )}
+      <div className="export-template-preview-scroll" ref={previewStageRef}>
+        <div className="export-template-preview-scale-box" style={scaleBoxStyle}>
+          <div className="export-format-paper export-format-preview-content export-template-preview-paper" style={paperStyle}>
+            {config.page.header_enabled && (
+              <div className="export-template-page-header">
+                {config.page.header_text || config.template_name || '页眉示例'}
+              </div>
+            )}
+            <h1>{headingPreviewTitle(config, 1, '1', '项目实施方案')}</h1>
+            <p>本节展示模板设置在导出文档中的基础排版效果，包括页面边距、正文样式、标题层级和表格展示。</p>
+            <h2>{headingPreviewTitle(config, 2, '1.1', '总体目标')}</h2>
+            <p>围绕项目建设目标，结合招标文件要求，形成可执行、可检查、可交付的技术实施方案。</p>
+            <h3>{headingPreviewTitle(config, 3, '1.1.1', '实施安排')}</h3>
+            <p>项目团队将按阶段推进需求确认、方案设计、系统实施、联调测试和验收交付等工作。</p>
+            <ul>
+              <li>建立项目启动、过程检查和验收交付的闭环机制。</li>
+              <li>按周同步风险、进度和资源需求，确保实施节奏可控。</li>
+              <li>保留关键过程记录，便于后续审查和复盘。</li>
+            </ul>
+            <figure className="export-template-image-figure">
+              <div className="export-template-image-placeholder">图片预览</div>
+              <figcaption>图 1 项目实施流程示意</figcaption>
+            </figure>
+            <table>
+              <thead>
+                <tr>
+                  <th>阶段</th>
+                  <th>内容</th>
+                  <th>输出</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>准备</td>
+                  <td>资料梳理与计划确认</td>
+                  <td>实施计划</td>
+                </tr>
+                <tr>
+                  <td>执行</td>
+                  <td>方案落地与质量检查</td>
+                  <td>交付成果</td>
+                </tr>
+              </tbody>
+            </table>
+            {config.page.footer_enabled && (
+              <div className="export-template-page-footer">
+                <span>{config.page.footer_text}</span>
+                {config.page.page_number_enabled && <span>{pageNumberText}</span>}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </aside>

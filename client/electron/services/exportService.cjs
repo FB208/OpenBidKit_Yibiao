@@ -6,6 +6,7 @@ const { app, dialog, nativeImage } = require('electron');
 const cheerio = require('cheerio');
 const { imageSize } = require('image-size');
 const { compactLogError, createDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
+const { getMermaidCacheEntry, saveMermaidCacheImage } = require('../utils/mermaidCache.cjs');
 const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
 const {
   AlignmentType,
@@ -682,6 +683,36 @@ async function loadImageWithRetry(source, context = {}, options = {}) {
   return null;
 }
 
+async function resolveMermaidImageForExport(code, context = {}, options = {}) {
+  const cacheEntry = options.cacheEntry || getMermaidCacheEntry(app, code);
+  if (cacheEntry.exists) {
+    return {
+      source: cacheEntry.assetUrl,
+      cacheHit: true,
+      cacheHash: cacheEntry.hash,
+    };
+  }
+
+  const loaded = await loadImageWithRetry(mermaidInkUrl(cacheEntry.code), context, options.loadRetry);
+  if (loaded?.buffer?.length) {
+    try {
+      saveMermaidCacheImage(app, cacheEntry.hash, loaded.buffer);
+    } catch (error) {
+      writeExportLog(context, 'export.mermaid.cache_write_failed', {
+        cache_hash: cacheEntry.hash,
+        error: compactLogError(error),
+      });
+    }
+  }
+
+  return {
+    source: cacheEntry.assetUrl,
+    loaded,
+    cacheHit: false,
+    cacheHash: cacheEntry.hash,
+  };
+}
+
 async function imageRunFromNode(node, context, options = {}) {
   let loaded = null;
   const imageLabel = compactText(node.alt || node.url || '未知图片');
@@ -693,7 +724,9 @@ async function imageRunFromNode(node, context, options = {}) {
     source: describeImageSourceForLog(node.url),
   });
   try {
-    loaded = await loadImageWithRetry(node.url, context, options.loadRetry);
+    loaded = Object.prototype.hasOwnProperty.call(options, 'loadedImage')
+      ? options.loadedImage
+      : await loadImageWithRetry(node.url, context, options.loadRetry);
   } catch (error) {
     const message = `图片无法导出：${imageLabel}，${compactText(error.message || '下载失败', 120)}`;
     addWarning(context, message);
@@ -779,6 +812,12 @@ async function imageRunFromNode(node, context, options = {}) {
 
 async function imageParagraphFromSource(source, alt, context, options = {}) {
   return paragraph([await imageRunFromNode({ url: source, alt }, context, options)], { alignment: AlignmentType.CENTER });
+}
+
+async function imageParagraphFromLoadedImage(source, alt, loadedImage, context, options = {}) {
+  return paragraph([
+    await imageRunFromNode({ url: source, alt }, context, { ...options, loadedImage }),
+  ], { alignment: AlignmentType.CENTER });
 }
 
 async function inlineRuns(nodes = [], context = {}, marks = {}) {
@@ -1158,27 +1197,51 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
       if (String(node.lang || '').toLowerCase() === 'mermaid') {
         const nextIndex = (context.convertedMermaidCount || 0) + 1;
         const total = context.stats?.mermaidCount || nextIndex;
+        const cacheEntry = getMermaidCacheEntry(app, node.value);
         writeExportLog(context, 'export.mermaid.started', {
           mermaid_index: nextIndex,
           total,
+          cache_hash: cacheEntry.hash,
+          cache_hit: cacheEntry.exists,
           code_metrics: textMetrics(node.value),
         });
-        reportConversionProgress(context, `正在转换 Mermaid 图 ${nextIndex}/${total}，可能需要联网等待。`);
-        blocks.push(await imageParagraphFromSource(mermaidInkUrl(node.value), 'Mermaid 图', context, {
-          loadRetry: {
-            retryAttempts: MERMAID_EXPORT_RETRY_ATTEMPTS,
-            retryDelayMs: MERMAID_EXPORT_RETRY_DELAY_MS,
-            onRetry: (attempt) => {
-              reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败，3 秒后第 ${attempt} 次重试。`);
-            },
+        reportConversionProgress(context, cacheEntry.exists
+          ? `Mermaid 图 ${nextIndex}/${total} 已命中本地缓存。`
+          : `正在转换 Mermaid 图 ${nextIndex}/${total}，可能需要联网等待。`);
+        const loadRetry = {
+          retryAttempts: MERMAID_EXPORT_RETRY_ATTEMPTS,
+          retryDelayMs: MERMAID_EXPORT_RETRY_DELAY_MS,
+          onRetry: (attempt) => {
+            reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败，3 秒后第 ${attempt} 次重试。`);
           },
-        }));
+        };
+        try {
+          const mermaidImage = await resolveMermaidImageForExport(node.value, context, { cacheEntry, loadRetry });
+          blocks.push(mermaidImage.loaded === undefined
+            ? await imageParagraphFromSource(mermaidImage.source, 'Mermaid 图', context)
+            : await imageParagraphFromLoadedImage(mermaidImage.source, 'Mermaid 图', mermaidImage.loaded, context));
+          writeExportLog(context, 'export.mermaid.completed', {
+            mermaid_index: nextIndex,
+            total,
+            cache_hash: mermaidImage.cacheHash,
+            cache_hit: mermaidImage.cacheHit,
+          });
+          reportConversionProgress(context, mermaidImage.cacheHit
+            ? `Mermaid 图 ${nextIndex}/${total} 已使用本地缓存。`
+            : `Mermaid 图 ${nextIndex}/${total} 已转换并缓存。`);
+        } catch (error) {
+          const message = `Mermaid 图无法导出：${compactText(error.message || '转换失败', 120)}`;
+          addWarning(context, message);
+          writeExportLog(context, 'export.mermaid.error', {
+            mermaid_index: nextIndex,
+            total,
+            cache_hash: cacheEntry.hash,
+            error: compactLogError(error),
+          });
+          blocks.push(paragraph([textRun(`[${message}]`, { color: 'C83220' })], { alignment: AlignmentType.CENTER }));
+          reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败。`);
+        }
         context.convertedMermaidCount = nextIndex;
-        writeExportLog(context, 'export.mermaid.completed', {
-          mermaid_index: nextIndex,
-          total,
-        });
-        reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 已处理。`);
       } else {
         blocks.push(paragraph([new TextRun({ text: cleanText(node.value), font: 'Consolas', size: 21, color: '243048' })], {
           shading: { type: ShadingType.CLEAR, fill: 'F6F9FF' },
@@ -1397,6 +1460,7 @@ async function buildDocxResult(payload, options = {}) {
     right: cmToTwips(pageSetup.margin_right_cm ?? 2),
     footer: cmToTwips(pageSetup.footer_distance_cm ?? 1.75),
   } : { top: 1440, right: 1440, bottom: 1440, left: 1440, footer: cmToTwips(1.75) };
+  const firstPageDifferent = pageSetup ? pageSetup.first_page_different === true : false;
 
   // 纸张尺寸与方向
   const pageSizeConfig = {};
@@ -1405,8 +1469,8 @@ async function buildDocxResult(payload, options = {}) {
     if (dims) {
       const isLandscape = pageSetup.orientation === 'landscape';
       pageSizeConfig.size = {
-        width: mmToTwips(isLandscape ? dims.height : dims.width),
-        height: mmToTwips(isLandscape ? dims.width : dims.height),
+        width: mmToTwips(dims.width),
+        height: mmToTwips(dims.height),
         orientation: isLandscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT,
       };
     }
@@ -1419,6 +1483,7 @@ async function buildDocxResult(payload, options = {}) {
   const footerFont = pageSetup ? (pageSetup.footer_font || '宋体') : '宋体';
   const footerSize = chineseSizeToHalfPt(pageSetup ? (pageSetup.footer_size || '小五') : '小五');
   const pageNumberFormat = pageSetup ? (pageSetup.page_number_format || '第{page}页') : '第{page}页';
+  const pageNumberStart = Math.max(1, Math.floor(Number(pageSetup ? pageSetup.page_number_start : 1) || 1));
   const pageNumParts = (pageNumberFormat || '第{page}页').split('{page}');
 
   let footers = undefined;
@@ -1446,6 +1511,14 @@ async function buildDocxResult(payload, options = {}) {
 
   const numbering = createNumberingConfig(context);
   const headingStyles = buildHeadingParagraphStyles(exportFormat);
+  const sectionProperties = {
+    page: {
+      margin: pageMargin,
+      ...pageSizeConfig,
+      ...(pageNumberEnabled ? { pageNumbers: { start: pageNumberStart } } : {}),
+    },
+    ...(firstPageDifferent ? { titlePage: true } : {}),
+  };
   const doc = new Document({
     ...(numbering ? { numbering } : {}),
     styles: {
@@ -1458,12 +1531,7 @@ async function buildDocxResult(payload, options = {}) {
       paragraphStyles: headingStyles,
     },
     sections: [{
-      properties: {
-        page: {
-          margin: pageMargin,
-          ...pageSizeConfig,
-        },
-      },
+      properties: sectionProperties,
       footers,
       children: sectionChildren,
     }],

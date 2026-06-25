@@ -263,7 +263,7 @@ export const ALIGNMENT_TO_CSS: Record<string, string> = {
 const DEFAULT_PAGE_SETUP: PageSetupConfig = {
   paper_size: 'a4',
   orientation: 'portrait',
-  first_page_different: true,
+  first_page_different: false,
   margin_top_cm: 2,
   margin_bottom_cm: 2,
   margin_left_cm: 2,
