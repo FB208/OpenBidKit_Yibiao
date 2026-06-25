@@ -127,6 +127,14 @@ export interface AgentSelfCheckDiagnostics {
   opencode_request_log?: unknown[];
 }
 
+export interface AgentSelfCheckEnvironmentSnapshot {
+  app?: Record<string, unknown>;
+  process?: Record<string, unknown>;
+  paths?: Record<string, unknown>;
+  opencode?: Record<string, unknown>;
+  text_model?: Record<string, unknown>;
+}
+
 export interface AgentSelfCheckResult {
   success: boolean;
   status: AgentSelfCheckStatus;
@@ -141,6 +149,14 @@ export interface AgentSelfCheckResult {
   output_path: string;
   output_content?: string;
   opencode_binary_path: string;
+  conclusion?: string;
+  model_config?: Record<string, unknown>;
+  environment?: AgentSelfCheckEnvironmentSnapshot | null;
+  direct_model_test?: Record<string, unknown> | null;
+  opencode_request_log?: unknown[];
+  proxy_diagnostics?: { events: unknown[] };
+  workspace_snapshot?: Record<string, unknown> | null;
+  agent_result?: Record<string, unknown>;
   steps: AgentSelfCheckStep[];
   diagnostics?: AgentSelfCheckDiagnostics;
   error?: AgentSelfCheckDiagnostics;

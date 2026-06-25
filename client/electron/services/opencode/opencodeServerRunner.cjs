@@ -139,6 +139,14 @@ function createOpenCodeStartError(message, meta = {}) {
   return attachOpenCodeDiagnostics(error, meta);
 }
 
+function emitStage(onStage, stage, status, message, meta = {}) {
+  try {
+    onStage?.(stage, status, message, meta);
+  } catch {
+    // 自检阶段回调不能影响 OpenCode 启动。
+  }
+}
+
 function normalizeTimeoutMs(value, fallback = 10 * 60 * 1000) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
@@ -232,6 +240,8 @@ async function startIsolatedOpenCodeServer({
   taskId = randomId('agent'),
   keepRuntime = false,
   timeoutMs,
+  diagnostics,
+  onStage,
 }) {
   const agentTimeoutMs = normalizeTimeoutMs(timeoutMs);
   const opencodeBin = getBundledOpencodeBinaryPath(app);
@@ -256,15 +266,19 @@ async function startIsolatedOpenCodeServer({
   const stdoutBuffer = createOutputBuffer();
 
   try {
-    aiProxy = createAiServiceOpenAiProxy({ app, configStore, timeoutMs: agentTimeoutMs });
+    emitStage(onStage, 'ai-proxy-start', 'running', '正在启动 OpenCode AI proxy');
+    aiProxy = createAiServiceOpenAiProxy({ app, configStore, timeoutMs: agentTimeoutMs, diagnostics });
     const aiProxyInfo = await aiProxy.start();
+    emitStage(onStage, 'ai-proxy-start', 'success', aiProxyInfo.baseUrl, { port: aiProxyInfo.port, baseUrl: aiProxyInfo.baseUrl });
 
     const currentConfig = configStore.load();
+    emitStage(onStage, 'opencode-config-write', 'running', '正在写入 OpenCode 临时配置');
     const opencodeConfig = writeOpenCodeConfig(opencodeConfigPath, {
       proxyBaseUrl: aiProxyInfo.baseUrl,
       contextLengthLimit: currentConfig.context_length_limit,
       timeoutMs: agentTimeoutMs,
     });
+    emitStage(onStage, 'opencode-config-write', 'success', opencodeConfigPath);
 
     const port = await findFreePort();
     const username = 'yibiao';
@@ -274,6 +288,7 @@ async function startIsolatedOpenCodeServer({
     const childState = {
       spawnError: null,
       exitInfo: null,
+      healthPassed: false,
       meta: {
         opencodeBin,
         workspaceDir,
@@ -302,6 +317,7 @@ async function startIsolatedOpenCodeServer({
       YIBIAO_OPENCODE_PROXY_TOKEN: aiProxyInfo.token,
     });
 
+    emitStage(onStage, 'opencode-server-start', 'running', `正在启动 OpenCode Server：${baseUrl}`);
     child = spawn(opencodeBin, [
       'serve',
       '--pure',
@@ -319,12 +335,16 @@ async function startIsolatedOpenCodeServer({
 
     child.once('error', (error) => {
       childState.spawnError = error;
+      emitStage(onStage, 'opencode-server-start', 'error', error?.message || String(error));
       stderrBuffer.push(`\n[spawn error] ${error?.message || String(error)}\n`);
     });
 
     child.once('exit', (code, signal) => {
       childState.exitInfo = { code, signal };
-      if (code !== 0) {
+      if (!childState.healthPassed && code !== 0) {
+        emitStage(onStage, 'opencode-server-start', 'error', `OpenCode 进程退出：code=${code ?? 'null'} signal=${signal || 'null'}`);
+      }
+      if (!childState.healthPassed && code !== 0) {
         console.warn('[opencode] server exited', {
           code,
           signal,
@@ -334,12 +354,18 @@ async function startIsolatedOpenCodeServer({
       }
     });
 
+    emitStage(onStage, 'opencode-health', 'running', `正在检查 OpenCode Server 健康状态：${baseUrl}`);
     await waitForOpenCodeHealth({ baseUrl, authHeader, stderrBuffer, stdoutBuffer, childState, timeoutMs: 30000 });
+    childState.healthPassed = true;
+    emitStage(onStage, 'opencode-health', 'success', baseUrl, { port, baseUrl });
 
     return {
       taskId,
       baseUrl,
       authHeader,
+      port,
+      aiProxyBaseUrl: aiProxyInfo.baseUrl,
+      aiProxyPort: aiProxyInfo.port,
       workspaceDir,
       runtimeRoot,
       child,

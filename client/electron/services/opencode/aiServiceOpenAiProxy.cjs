@@ -50,6 +50,23 @@ function normalizeEndpointHost(baseUrl) {
   return '';
 }
 
+function normalizeEndpointSummary(baseUrl) {
+  const rawValue = String(baseUrl || '').trim();
+  if (!rawValue) return { host: '', pathname: '' };
+  const candidate = rawValue.includes('://') ? rawValue : `https://${rawValue}`;
+
+  try {
+    const url = new URL(candidate);
+    return {
+      host: url.hostname.toLowerCase(),
+      pathname: url.pathname || '/',
+      protocol: url.protocol.replace(/:$/, ''),
+    };
+  } catch {
+    return { host: '', pathname: '' };
+  }
+}
+
 function normalizeConcurrencyLimit(value, fallback = 10) {
   const number = Number(value);
   return Math.max(1, Number.isFinite(number) ? Math.round(number) : fallback);
@@ -200,6 +217,75 @@ function appendProxyDeveloperLog(app, config, payload) {
   } catch {
     // 开发日志不能影响主流程。
   }
+}
+
+function appendProxyDiagnostic(diagnostics, event, payload = {}) {
+  try {
+    diagnostics?.record?.(event, payload);
+  } catch {
+    // 自检诊断不能影响主流程。
+  }
+}
+
+function summarizeProxyConfig(config) {
+  return {
+    provider: config?.text_model_provider || '',
+    model_name: config?.model_name || '',
+    endpoint: normalizeEndpointSummary(config?.base_url),
+    has_api_key: Boolean(config?.api_key),
+    request_mode: config?.request_mode || '',
+    context_length_limit: Number(config?.context_length_limit || 0),
+    concurrency_limit: Number(config?.concurrency_limit || 0),
+  };
+}
+
+function summarizeRequestBody(body) {
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  const tools = Array.isArray(body?.tools) ? body.tools : [];
+  return {
+    model: body?.model || '',
+    stream: Boolean(body?.stream),
+    messages_count: messages.length,
+    tools_count: tools.length,
+    tool_choice: typeof body?.tool_choice === 'string'
+      ? body.tool_choice
+      : body?.tool_choice && typeof body.tool_choice === 'object'
+        ? 'object'
+        : body?.tool_choice === undefined ? '' : String(body.tool_choice),
+    response_format_type: body?.response_format?.type || '',
+    prompt_hash: createPromptHash(body),
+  };
+}
+
+function summarizeResponseData(responseData, content = '') {
+  const choices = Array.isArray(responseData?.choices) ? responseData.choices : [];
+  const finishReasons = choices.map((choice) => choice?.finish_reason).filter(Boolean);
+  const toolCallsCount = choices.reduce((count, choice) => {
+    const calls = choice?.message?.tool_calls || choice?.delta?.tool_calls || [];
+    return count + (Array.isArray(calls) ? calls.length : 0);
+  }, 0);
+  return {
+    object: responseData?.object || '',
+    choices_count: choices.length,
+    finish_reasons: finishReasons,
+    tool_calls_count: toolCallsCount,
+    content_chars: String(content || '').length,
+    usage: normalizeTokenUsage(extractUsageFromPayload(responseData)),
+  };
+}
+
+function summarizeProxyError(error) {
+  const cause = error?.cause || null;
+  return {
+    name: error?.name || 'Error',
+    message: String(error?.message || error || 'OpenCode AI proxy failed').slice(0, 1000),
+    status: error?.status || error?.statusCode || 0,
+    code: error?.code || '',
+    cause_name: cause?.name || '',
+    cause_code: cause?.code || '',
+    cause_message: cause?.message || '',
+    retryable: error?.aiRequestRetryable,
+  };
 }
 
 function recordProxyTextTokenStats(config, usage) {
@@ -508,7 +594,7 @@ function writeOpenCodeAiPendingLog({ app, config, requestId, requestBody }) {
   });
 }
 
-function recordOpenCodeAiSuccess({ app, config, requestId, requestBody, response, responseData, content, usage, startedAt, stream, attempt }) {
+function recordOpenCodeAiSuccess({ app, config, requestId, requestBody, response, responseData, content, usage, startedAt, stream, attempt, diagnostics }) {
   const normalizedUsage = normalizeTokenUsage(usage);
   recordProxyTextTokenStats(config, usage);
 
@@ -538,9 +624,21 @@ function recordOpenCodeAiSuccess({ app, config, requestId, requestBody, response
     messages_count: Array.isArray(requestBody.messages) ? requestBody.messages.length : 0,
     usage: normalizedUsage,
   });
+
+  appendProxyDiagnostic(diagnostics, 'proxy.upstream.completed', {
+    request_id: requestId,
+    attempt,
+    duration_ms: Date.now() - startedAt,
+    status: response.status,
+    content_type: response.headers.get('content-type') || '',
+    upstream_request_id: response.headers.get('x-request-id') || '',
+    stream: Boolean(stream),
+    request: summarizeRequestBody(requestBody),
+    response: summarizeResponseData(responseData, content),
+  });
 }
 
-function recordOpenCodeAiFailure({ app, config, requestId, requestBody, error, responseData, startedAt, attempt }) {
+function recordOpenCodeAiFailure({ app, config, requestId, requestBody, error, responseData, startedAt, attempt, diagnostics }) {
   recordProxyTextTokenStats(config, null);
 
   const errorMessage = safeErrorMessage(error);
@@ -569,9 +667,18 @@ function recordOpenCodeAiFailure({ app, config, requestId, requestBody, error, r
     messages_count: Array.isArray(requestBody.messages) ? requestBody.messages.length : 0,
     error: errorMessage,
   });
+
+  appendProxyDiagnostic(diagnostics, 'proxy.upstream.failed', {
+    request_id: requestId,
+    attempt,
+    duration_ms: Date.now() - startedAt,
+    request: summarizeRequestBody(requestBody),
+    error: summarizeProxyError(error),
+    response_excerpt: String(responseData || error?.raw_response_body || '').slice(0, 2000),
+  });
 }
 
-async function prepareProxyResponse({ app, config, requestId, requestBody, response, startedAt, attempt }) {
+async function prepareProxyResponse({ app, config, requestId, requestBody, response, startedAt, attempt, diagnostics }) {
   const stream = Boolean(requestBody.stream);
   const contentType = response.headers.get('content-type') || '';
   const isSse = stream || contentType.toLowerCase().includes('text/event-stream');
@@ -590,6 +697,7 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
         startedAt,
         stream: true,
         attempt,
+        diagnostics,
       });
     });
 
@@ -620,6 +728,7 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
     startedAt,
     stream: false,
     attempt,
+    diagnostics,
   });
 
   return new Response(rawText, {
@@ -628,19 +737,31 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
   });
 }
 
-async function requestOpenCodeChatCompletion({ app, configStore, textQueue, openAiBody, signal, timeoutMs }) {
+async function requestOpenCodeChatCompletion({ app, configStore, textQueue, openAiBody, signal, timeoutMs, diagnostics }) {
   return textQueue.enqueue(async () => {
     const config = configStore.load();
     assertTextModelConfig(config);
 
     const requestBody = normalizeOpenCodeProxyRequestBody(config, openAiBody);
     const requestId = createAiRequestId();
+    appendProxyDiagnostic(diagnostics, 'proxy.chat.queued', {
+      request_id: requestId,
+      config: summarizeProxyConfig(config),
+      request: summarizeRequestBody(requestBody),
+    });
 
     return runWithAiRetry(async ({ attempt }) => {
       const timeout = createTimeoutSignal(signal, timeoutMs);
       const startedAt = Date.now();
 
       try {
+        appendProxyDiagnostic(diagnostics, 'proxy.upstream.started', {
+          request_id: requestId,
+          attempt,
+          timeout_ms: timeoutMs,
+          config: summarizeProxyConfig(config),
+          request: summarizeRequestBody(requestBody),
+        });
         appendProxyDeveloperLog(app, config, {
           request_id: requestId,
           type: 'chat-pending',
@@ -664,6 +785,16 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
           signal: timeout.signal,
         });
 
+        appendProxyDiagnostic(diagnostics, 'proxy.upstream.headers', {
+          request_id: requestId,
+          attempt,
+          duration_ms: Date.now() - startedAt,
+          status: response.status,
+          ok: response.ok,
+          content_type: response.headers.get('content-type') || '',
+          upstream_request_id: response.headers.get('x-request-id') || '',
+        });
+
         if (!response.ok) {
           throw await createUpstreamError(response);
         }
@@ -676,6 +807,7 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
           response,
           startedAt,
           attempt,
+          diagnostics,
         });
       } catch (error) {
         recordOpenCodeAiFailure({
@@ -686,6 +818,7 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
           error,
           startedAt,
           attempt,
+          diagnostics,
         });
         throw error;
       } finally {
@@ -727,20 +860,27 @@ async function pipeWebStreamToNode(webStream, res) {
   }
 }
 
-function bindAbortToRequestLifecycle({ req, res, controller }) {
-  req.on('aborted', () => controller.abort(new Error('客户端请求已中止')));
+function bindAbortToRequestLifecycle({ req, res, controller, diagnostics }) {
+  req.on('aborted', () => {
+    appendProxyDiagnostic(diagnostics, 'proxy.client.aborted', { path: req.url || '' });
+    controller.abort(new Error('客户端请求已中止'));
+  });
   res.on('close', () => {
     if (!res.writableEnded) {
+      appendProxyDiagnostic(diagnostics, 'proxy.client.closed', { path: req.url || '' });
       controller.abort(new Error('客户端连接已关闭'));
     }
   });
 }
 
-async function handleChatCompletions({ req, res, app, configStore, textQueue, timeoutMs }) {
+async function handleChatCompletions({ req, res, app, configStore, textQueue, timeoutMs, diagnostics }) {
   const controller = new AbortController();
-  bindAbortToRequestLifecycle({ req, res, controller });
+  bindAbortToRequestLifecycle({ req, res, controller, diagnostics });
 
   const requestBody = await readJson(req);
+  appendProxyDiagnostic(diagnostics, 'proxy.chat.received', {
+    request: summarizeRequestBody(requestBody),
+  });
   const upstream = await requestOpenCodeChatCompletion({
     app,
     configStore,
@@ -748,6 +888,7 @@ async function handleChatCompletions({ req, res, app, configStore, textQueue, ti
     openAiBody: requestBody,
     signal: controller.signal,
     timeoutMs,
+    diagnostics,
   });
 
   res.statusCode = upstream.status;
@@ -767,7 +908,7 @@ function handleModels({ res }) {
   });
 }
 
-function createAiServiceOpenAiProxy({ app, configStore, timeoutMs }) {
+function createAiServiceOpenAiProxy({ app, configStore, timeoutMs, diagnostics }) {
   const token = createProxyToken();
   const upstreamTimeoutMs = normalizeTimeoutMs(timeoutMs);
   const textQueue = createOpenCodeTextQueue({
@@ -780,6 +921,11 @@ function createAiServiceOpenAiProxy({ app, configStore, timeoutMs }) {
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url || '/', 'http://127.0.0.1');
+      appendProxyDiagnostic(diagnostics, 'proxy.http.received', {
+        method: req.method || '',
+        path: url.pathname,
+        authorized: url.pathname === '/health' ? true : isAuthorized(req, token),
+      });
 
       if (url.pathname === '/health') {
         sendJson(res, 200, { ok: true });
@@ -797,12 +943,13 @@ function createAiServiceOpenAiProxy({ app, configStore, timeoutMs }) {
       }
 
       if (req.method === 'GET' && url.pathname === '/v1/models') {
+        appendProxyDiagnostic(diagnostics, 'proxy.models.returned', {});
         handleModels({ res });
         return;
       }
 
       if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
-        await handleChatCompletions({ req, res, app, configStore, textQueue, timeoutMs: upstreamTimeoutMs });
+        await handleChatCompletions({ req, res, app, configStore, textQueue, timeoutMs: upstreamTimeoutMs, diagnostics });
         return;
       }
 
@@ -813,6 +960,11 @@ function createAiServiceOpenAiProxy({ app, configStore, timeoutMs }) {
         },
       });
     } catch (error) {
+      appendProxyDiagnostic(diagnostics, 'proxy.http.failed', {
+        method: req.method || '',
+        path: req.url || '',
+        error: summarizeProxyError(error),
+      });
       const statusCode = error.statusCode || error.status || 500;
       if (!res.headersSent) {
         sendJson(res, statusCode, {
@@ -846,6 +998,12 @@ function createAiServiceOpenAiProxy({ app, configStore, timeoutMs }) {
       if (!address || typeof address === 'string') {
         throw new Error('OpenCode AI proxy 启动失败：无法获取监听端口');
       }
+
+      appendProxyDiagnostic(diagnostics, 'proxy.started', {
+        port: address.port,
+        base_url: `http://127.0.0.1:${address.port}`,
+        timeout_ms: upstreamTimeoutMs,
+      });
 
       return {
         token,

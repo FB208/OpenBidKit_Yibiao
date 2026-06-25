@@ -20,6 +20,31 @@ function appendRequestLog(server, payload) {
   }
 }
 
+function summarizeRequestBody(body) {
+  if (!body || typeof body !== 'object') return null;
+  return {
+    title: body.title || '',
+    agent: body.agent || '',
+    model: body.model ? `${body.model.providerID || ''}/${body.model.modelID || ''}` : '',
+    parts_count: Array.isArray(body.parts) ? body.parts.length : 0,
+    text_chars: Array.isArray(body.parts)
+      ? body.parts.reduce((total, part) => total + (part?.type === 'text' ? String(part.text || '').length : 0), 0)
+      : 0,
+  };
+}
+
+function summarizeResponseData(data) {
+  const parts = Array.isArray(data?.parts) ? data.parts : [];
+  return {
+    id: data?.id || data?.sessionID || data?.session_id || '',
+    session_id: data?.session?.id || data?.sessionID || data?.session_id || '',
+    parts_count: parts.length,
+    part_types: parts.map((part) => part?.type || '').filter(Boolean),
+    text_chars: parts.reduce((total, part) => total + (part?.type === 'text' ? String(part.text || '').length : 0), 0),
+    info_status: data?.info?.status || '',
+  };
+}
+
 async function readJsonResponse(response, fallbackMessage) {
   const raw = await response.text();
   let data = null;
@@ -31,9 +56,15 @@ async function readJsonResponse(response, fallbackMessage) {
 
   if (!response.ok) {
     const message = data?.error?.message || data?.message || raw || fallbackMessage;
-    throw new Error(message);
+    const error = new Error(message);
+    error.openCodeResponseText = raw;
+    error.openCodeResponseData = data;
+    throw error;
   }
 
+  if (data && typeof data === 'object') {
+    data.__rawLength = raw.length;
+  }
   return data;
 }
 
@@ -41,6 +72,14 @@ async function requestJson(server, routePath, options = {}) {
   const method = options.method || 'GET';
   const startedAt = Date.now();
   let response = null;
+  appendRequestLog(server, {
+    route: routePath,
+    method,
+    status: 0,
+    duration_ms: 0,
+    ok: 'pending',
+    request: summarizeRequestBody(options.body),
+  });
   try {
     response = await fetch(`${server.baseUrl}${routePath}`, {
       method,
@@ -56,6 +95,8 @@ async function requestJson(server, routePath, options = {}) {
       status: response.status,
       duration_ms: Date.now() - startedAt,
       ok: true,
+      response: summarizeResponseData(data),
+      response_raw_chars: data?.__rawLength || 0,
     });
     return data;
   } catch (error) {
@@ -73,6 +114,11 @@ async function requestJson(server, routePath, options = {}) {
       ok: false,
       error: error.message || String(error),
       cause: error.openCodeCause,
+      error_name: error?.name || 'Error',
+      aborted: Boolean(options.signal?.aborted),
+      abort_reason: options.signal?.reason?.message || String(options.signal?.reason || ''),
+      response_excerpt: String(error.openCodeResponseText || '').slice(0, 2000),
+      request: summarizeRequestBody(options.body),
     });
     throw error;
   }
