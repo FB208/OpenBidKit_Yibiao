@@ -49,6 +49,7 @@ export interface BodyTextStyleConfig {
   first_line_indent_chars: number;
   line_spacing_multiple: number;
   list_style: ListStyle;
+  ordered_list_style: OrderedListStyle;
   list_indent_chars: number;
 }
 
@@ -215,13 +216,32 @@ export const ALIGNMENT_OPTIONS = [
 export type AlignmentOption = (typeof ALIGNMENT_OPTIONS)[number];
 
 export const LIST_STYLE_OPTIONS = [
-  { value: 'disc', label: '实心圆点' },
-  { value: 'dash', label: '短横线' },
-  { value: 'circle', label: '空心圆点' },
-  { value: 'square', label: '方块' },
+  { value: 'none', label: '无', icon: '无', font_family: 'inherit' },
+  { value: 'disc', label: '实心圆点', icon: '•', font_family: 'Arial, sans-serif' },
+  { value: 'circle', label: '空心圆点', icon: '○', font_family: 'Arial, sans-serif' },
+  { value: 'square', label: '实心方块', icon: '■', font_family: 'Arial, sans-serif' },
+  { value: 'diamond', label: '实心菱形', icon: '◆', font_family: 'Arial, sans-serif' },
+  { value: 'dash', label: '短横线', icon: '–', font_family: 'Arial, sans-serif' },
+  { value: 'check', label: '对勾', icon: '✓', font_family: 'Segoe UI Symbol, Arial, sans-serif' },
+  { value: 'arrow', label: '箭头', icon: '➢', font_family: 'Segoe UI Symbol, Arial, sans-serif' },
+  { value: 'sparkle', label: '四角星', icon: '✧', font_family: 'Segoe UI Symbol, Arial, sans-serif' },
 ] as const;
 
 export type ListStyle = (typeof LIST_STYLE_OPTIONS)[number]['value'];
+
+export const ORDERED_LIST_STYLE_OPTIONS = [
+  { value: 'decimal-dot', label: '数字编号（1.）' },
+  { value: 'decimal-paren', label: '数字括号（1）' },
+  { value: 'decimal-full-paren', label: '数字全括号（（1））' },
+  { value: 'chinese-dot', label: '中文编号（一、）' },
+  { value: 'chinese-paren', label: '中文括号（（一））' },
+  { value: 'lower-alpha', label: '小写字母（a.）' },
+  { value: 'upper-alpha', label: '大写字母（A.）' },
+  { value: 'lower-roman', label: '小写罗马（i.）' },
+  { value: 'upper-roman', label: '大写罗马（I.）' },
+] as const;
+
+export type OrderedListStyle = (typeof ORDERED_LIST_STYLE_OPTIONS)[number]['value'];
 
 // ── 中文字号 → pt 映射 ────────────────────────────
 export const SIZE_TO_PT: Record<string, number> = {
@@ -312,12 +332,13 @@ const DEFAULT_PAGE_SETUP: PageSetupConfig = {
 const DEFAULT_BODY_TEXT: BodyTextStyleConfig = {
   font: '宋体',
   size: '小四',
-  alignment: '两端对齐',
+  alignment: '左对齐',
   spacing_before_pt: 0,
   spacing_after_pt: 0,
   first_line_indent_chars: 2,
   line_spacing_multiple: 1.2,
   list_style: 'disc',
+  ordered_list_style: 'decimal-dot',
   list_indent_chars: 2,
 };
 

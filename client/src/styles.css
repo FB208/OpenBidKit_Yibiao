@@ -2137,6 +2137,47 @@ button {
 .markdown-viewer.export-format-preview ol {
   margin-top: var(--ef-body-spacing-before, 0);
   margin-bottom: var(--ef-body-spacing-after, 0);
+  font-family: var(--ef-body-font, inherit);
+  font-size: var(--ef-body-size, inherit);
+  line-height: var(--ef-body-line-height, inherit);
+}
+.markdown-viewer.export-format-preview ul {
+  padding-left: var(--ef-unordered-list-indent, var(--ef-list-indent, 2em));
+  list-style: none;
+}
+.markdown-viewer.export-format-preview ol {
+  padding-left: var(--ef-list-indent, 2em);
+  counter-reset: ef-ordered-list;
+  list-style: none;
+}
+.markdown-viewer.export-format-preview li {
+  text-align: var(--ef-body-align, inherit);
+}
+.markdown-viewer.export-format-preview ul > li {
+  position: relative;
+}
+.markdown-viewer.export-format-preview ul > li::before {
+  position: absolute;
+  left: calc(var(--ef-unordered-list-indent, var(--ef-list-indent, 2em)) * -1);
+  display: var(--ef-unordered-list-marker-display, inline-block);
+  width: calc(var(--ef-unordered-list-indent, var(--ef-list-indent, 2em)) - 0.25em);
+  font-family: var(--ef-unordered-list-marker-font, Symbol, Arial, sans-serif);
+  font-size: var(--ef-unordered-list-marker-size, 0.9em);
+  text-align: right;
+  text-indent: 0;
+  content: var(--ef-unordered-list-marker, "•");
+}
+.markdown-viewer.export-format-preview ol > li {
+  position: relative;
+  counter-increment: ef-ordered-list;
+}
+.markdown-viewer.export-format-preview ol > li::before {
+  position: absolute;
+  left: calc(var(--ef-list-indent, 2em) * -1);
+  width: calc(var(--ef-list-indent, 2em) - 0.25em);
+  text-align: right;
+  text-indent: 0;
+  content: var(--ef-ordered-list-prefix, "") counter(ef-ordered-list, var(--ef-ordered-list-counter-style, decimal)) var(--ef-ordered-list-suffix, ". ");
 }
 
 /* ── 导出格式预览 — 标题样式 ──────────────────────── */
@@ -8495,6 +8536,38 @@ button {
   font-size: 13px;
 }
 
+.export-bullet-library {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 44px));
+  gap: 8px;
+  justify-content: end;
+}
+
+.export-bullet-option {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  color: #111827;
+  background: #f8fafc;
+  border: 1px solid #b8c2d1;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease;
+}
+
+.export-bullet-option span {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.export-bullet-option:hover,
+.export-bullet-option.is-active {
+  background: #ffffff;
+  border-color: #155bd7;
+  box-shadow: 0 0 0 3px rgba(33, 116, 253, 0.14);
+}
+
 .settings-row input:focus,
 .settings-row select:focus {
   background-color: #ffffff;
@@ -11451,14 +11524,6 @@ button {
   border-bottom: 0;
 }
 
-.export-template-chapter-content-row > :first-child {
-  margin-top: 0;
-}
-
-.export-template-chapter-content-row > :last-child {
-  margin-bottom: 0;
-}
-
 .export-template-page-header {
   margin-bottom: 18px;
   padding-bottom: 8px;
@@ -11494,19 +11559,55 @@ button {
   line-height: var(--ef-body-line-height, 1.5);
 }
 
-.export-format-preview-content ul {
+.export-format-preview-content ul,
+.export-format-preview-content ol {
   margin-top: var(--ef-body-spacing-before, 0pt);
   margin-bottom: var(--ef-body-spacing-after, 0pt);
-  padding-left: var(--ef-list-indent, 2em);
   font-family: var(--ef-body-font, 'SimSun', serif);
   font-size: var(--ef-body-size, 12pt);
   line-height: var(--ef-body-line-height, 1.5);
-  list-style-type: var(--ef-list-style-type, disc);
+}
+
+.export-format-preview-content ul {
+  padding-left: var(--ef-unordered-list-indent, var(--ef-list-indent, 2em));
+  list-style: none;
+}
+
+.export-format-preview-content ol {
+  padding-left: var(--ef-list-indent, 2em);
+  counter-reset: ef-ordered-list;
+  list-style: none;
 }
 
 .export-format-preview-content li {
+  position: relative;
   margin: 0 0 4pt;
   text-align: var(--ef-body-align, justify);
+}
+
+.export-format-preview-content ol > li {
+  counter-increment: ef-ordered-list;
+}
+
+.export-format-preview-content ul > li::before {
+  position: absolute;
+  left: calc(var(--ef-unordered-list-indent, var(--ef-list-indent, 2em)) * -1);
+  display: var(--ef-unordered-list-marker-display, inline-block);
+  width: calc(var(--ef-unordered-list-indent, var(--ef-list-indent, 2em)) - 0.25em);
+  font-family: var(--ef-unordered-list-marker-font, Symbol, Arial, sans-serif);
+  font-size: var(--ef-unordered-list-marker-size, 0.9em);
+  text-align: right;
+  text-indent: 0;
+  content: var(--ef-unordered-list-marker, "•");
+}
+
+.export-format-preview-content ol > li::before {
+  position: absolute;
+  left: calc(var(--ef-list-indent, 2em) * -1);
+  width: calc(var(--ef-list-indent, 2em) - 0.25em);
+  text-align: right;
+  text-indent: 0;
+  content: var(--ef-ordered-list-prefix, "") counter(ef-ordered-list, var(--ef-ordered-list-counter-style, decimal)) var(--ef-ordered-list-suffix, ". ");
 }
 
 /* 预览内容 — 各级标题 */

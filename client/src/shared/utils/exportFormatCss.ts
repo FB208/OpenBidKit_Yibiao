@@ -3,7 +3,7 @@
  * 注入到正文预览容器的 style 上，实现实时 WYSIWYG 预览
  */
 
-import type { ExportFormatConfig, HeadingStyleConfig, ListStyle, PaperSize } from '../types/exportFormat';
+import type { ExportFormatConfig, HeadingStyleConfig, ListStyle, OrderedListStyle, PaperSize } from '../types/exportFormat';
 import { SIZE_TO_PT, FONT_TO_CSS, ALIGNMENT_TO_CSS, PAPER_DIMENSIONS, DEFAULT_HEADING_BORDER_CELL_COLORS } from '../types/exportFormat';
 
 /**
@@ -47,11 +47,50 @@ function buildHeadingVars(level: number, config: HeadingStyleConfig): Record<str
   };
 }
 
-function listStyleToCss(style: ListStyle | string | undefined): string {
-  if (style === 'dash') return '"- "';
-  if (style === 'circle') return 'circle';
-  if (style === 'square') return 'square';
-  return 'disc';
+function unorderedListStyleToCss(style: ListStyle | string | undefined, listIndent: string) {
+  switch (style) {
+    case 'none':
+      return { marker: '""', font: 'inherit', size: '1em', display: 'none', indent: '0' };
+    case 'circle':
+      return { marker: '"○"', font: 'Arial, sans-serif', size: '0.82em', display: 'inline-block', indent: listIndent };
+    case 'square':
+      return { marker: '"■"', font: 'Arial, sans-serif', size: '0.72em', display: 'inline-block', indent: listIndent };
+    case 'diamond':
+      return { marker: '"◆"', font: 'Arial, sans-serif', size: '0.72em', display: 'inline-block', indent: listIndent };
+    case 'dash':
+      return { marker: '"–"', font: 'Arial, sans-serif', size: '0.9em', display: 'inline-block', indent: listIndent };
+    case 'check':
+      return { marker: '"✓"', font: 'Segoe UI Symbol, Arial, sans-serif', size: '0.85em', display: 'inline-block', indent: listIndent };
+    case 'arrow':
+      return { marker: '"➢"', font: 'Segoe UI Symbol, Arial, sans-serif', size: '0.88em', display: 'inline-block', indent: listIndent };
+    case 'sparkle':
+      return { marker: '"✧"', font: 'Segoe UI Symbol, Arial, sans-serif', size: '0.9em', display: 'inline-block', indent: listIndent };
+    default:
+      return { marker: '"•"', font: 'Arial, sans-serif', size: '0.75em', display: 'inline-block', indent: listIndent };
+  }
+}
+
+function orderedListStyleToCss(style: OrderedListStyle | string | undefined) {
+  switch (style) {
+    case 'decimal-paren':
+      return { counterStyle: 'decimal', prefix: '""', suffix: '"） "' };
+    case 'decimal-full-paren':
+      return { counterStyle: 'decimal', prefix: '"（"', suffix: '"） "' };
+    case 'chinese-dot':
+      return { counterStyle: 'cjk-ideographic', prefix: '""', suffix: '"、 "' };
+    case 'chinese-paren':
+      return { counterStyle: 'cjk-ideographic', prefix: '"（"', suffix: '"） "' };
+    case 'lower-alpha':
+      return { counterStyle: 'lower-alpha', prefix: '""', suffix: '". "' };
+    case 'upper-alpha':
+      return { counterStyle: 'upper-alpha', prefix: '""', suffix: '". "' };
+    case 'lower-roman':
+      return { counterStyle: 'lower-roman', prefix: '""', suffix: '". "' };
+    case 'upper-roman':
+      return { counterStyle: 'upper-roman', prefix: '""', suffix: '". "' };
+    default:
+      return { counterStyle: 'decimal', prefix: '""', suffix: '". "' };
+  }
 }
 
 /**
@@ -106,8 +145,18 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
     ? `${config.body_text.first_line_indent_chars}em`
     : '0';
   vars['--ef-body-line-height'] = String(config.body_text.line_spacing_multiple);
-  vars['--ef-list-style-type'] = listStyleToCss(config.body_text.list_style);
-  vars['--ef-list-indent'] = `${config.body_text.list_indent_chars ?? 2}em`;
+  const listIndent = `${config.body_text.list_indent_chars ?? 2}em`;
+  vars['--ef-list-indent'] = listIndent;
+  const unorderedListStyle = unorderedListStyleToCss(config.body_text.list_style, listIndent);
+  vars['--ef-unordered-list-marker'] = unorderedListStyle.marker;
+  vars['--ef-unordered-list-marker-font'] = unorderedListStyle.font;
+  vars['--ef-unordered-list-marker-size'] = unorderedListStyle.size;
+  vars['--ef-unordered-list-marker-display'] = unorderedListStyle.display;
+  vars['--ef-unordered-list-indent'] = unorderedListStyle.indent;
+  const orderedListStyle = orderedListStyleToCss(config.body_text.ordered_list_style);
+  vars['--ef-ordered-list-counter-style'] = orderedListStyle.counterStyle;
+  vars['--ef-ordered-list-prefix'] = orderedListStyle.prefix;
+  vars['--ef-ordered-list-suffix'] = orderedListStyle.suffix;
 
   // ── 各级标题 h1-h6 ──
   for (let i = 0; i < 6; i++) {

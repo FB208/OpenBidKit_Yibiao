@@ -42,6 +42,27 @@ const DOCX_TABLE_WIDTH_TWIPS = 9000;
 const MERMAID_EXPORT_RETRY_ATTEMPTS = 2;
 const MERMAID_EXPORT_RETRY_DELAY_MS = 3000;
 const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#e0ecff', '#e9f1ff', '#f2f7ff', '#f8fbff', '#ffffff', '#ffffff'];
+const UNORDERED_LIST_MARKERS = {
+  disc: { text: '•', font: 'Arial', sizeScale: 0.75 },
+  circle: { text: '○', font: 'Arial', sizeScale: 0.82 },
+  square: { text: '■', font: 'Arial', sizeScale: 0.72 },
+  diamond: { text: '◆', font: 'Arial', sizeScale: 0.72 },
+  dash: { text: '–', font: 'Arial', sizeScale: 0.9 },
+  check: { text: '✓', font: 'Segoe UI Symbol', sizeScale: 0.85 },
+  arrow: { text: '➢', font: 'Segoe UI Symbol', sizeScale: 0.88 },
+  sparkle: { text: '✧', font: 'Segoe UI Symbol', sizeScale: 0.9 },
+};
+const ORDERED_LIST_WORD_STYLES = {
+  'decimal-dot': { format: LevelFormat.DECIMAL, text: (level) => `%${level + 1}.` },
+  'decimal-paren': { format: LevelFormat.DECIMAL, text: (level) => `%${level + 1}）` },
+  'decimal-full-paren': { format: LevelFormat.DECIMAL, text: (level) => `（%${level + 1}）` },
+  'chinese-dot': { format: LevelFormat.CHINESE_COUNTING, text: (level) => `%${level + 1}、` },
+  'chinese-paren': { format: LevelFormat.CHINESE_COUNTING, text: (level) => `（%${level + 1}）` },
+  'lower-alpha': { format: LevelFormat.LOWER_LETTER, text: (level) => `%${level + 1}.` },
+  'upper-alpha': { format: LevelFormat.UPPER_LETTER, text: (level) => `%${level + 1}.` },
+  'lower-roman': { format: LevelFormat.LOWER_ROMAN, text: (level) => `%${level + 1}.` },
+  'upper-roman': { format: LevelFormat.UPPER_ROMAN, text: (level) => `%${level + 1}.` },
+};
 
 // 纸张尺寸 mm（portrait 模式 width × height），与 Renderer exportFormat.ts 保持一致
 const PAPER_DIMENSIONS_MM = {
@@ -622,14 +643,42 @@ function normalizeMarkdownTablesForDocx(content) {
   return lines.join('\n');
 }
 
-function createOrderedListReference(context) {
+function normalizeMarkdownListMarkersForDocx(content) {
+  return String(content || '').split('\n').map((line) => {
+    const match = line.match(/^(\s*)[•●○◦▪▫■□◆◇‣➢➤✓✔✧–－]\s+(.*)$/u);
+    if (!match) return line;
+    return `${match[1]}- ${match[2]}`;
+  }).join('\n');
+}
+
+function createListReference(context, ordered) {
+  const bodyStyle = context.exportFormat?.body_text || {};
+  if (!ordered && bodyStyle.list_style === 'none') {
+    return null;
+  }
   if (!context.numberingReferences) {
     context.numberingReferences = [];
   }
   context.numberingIndex = (context.numberingIndex || 0) + 1;
   const reference = `${NUMBERING_REFERENCE_PREFIX}-${context.numberingIndex}`;
-  context.numberingReferences.push(reference);
+  context.numberingReferences.push({
+    reference,
+    ordered,
+    unorderedListStyle: bodyStyle.list_style || 'disc',
+    orderedListStyle: bodyStyle.ordered_list_style || 'decimal-dot',
+    listIndentChars: typeof bodyStyle.list_indent_chars === 'number' ? bodyStyle.list_indent_chars : 2,
+    bodyRunFont: context.bodyRunFont || '宋体',
+    bodyRunSize: context.bodyRunSize || 24,
+  });
   return reference;
+}
+
+function createOrderedListReference(context) {
+  return createListReference(context, true);
+}
+
+function createUnorderedListReference(context) {
+  return createListReference(context, false);
 }
 
 function headingLevel(level) {
@@ -651,6 +700,12 @@ const SIZE_TO_HALF_PT = {
 
 function chineseSizeToHalfPt(sizeName) {
   return SIZE_TO_HALF_PT[sizeName] || 24;
+}
+
+function charsToTwips(chars, bodySizeHalfPt = 24) {
+  const safeChars = Math.max(0, Number(chars) || 0);
+  const safeHalfPt = Math.max(1, Number(bodySizeHalfPt) || 24);
+  return Math.round(safeChars * safeHalfPt * 10);
 }
 
 function cmToTwips(cm) {
@@ -1236,19 +1291,30 @@ async function htmlTableToDocx($, tableNode, context) {
   return [createDocxTable(rows, maxColumns)];
 }
 
+function buildListParagraphOptions(context, reference, level, itemIndex, totalItems) {
+  const options = reference ? { numbering: { reference, level } } : {};
+  if (context.bodyLineSpacing) options.line = context.bodyLineSpacing;
+  if (context.bodyAlignment) options.alignment = context.bodyAlignment;
+  if (itemIndex === 0 && context.bodyBeforeSpacing) options.before = context.bodyBeforeSpacing;
+  options.after = itemIndex === totalItems - 1 ? (context.bodyAfterSpacing ?? 0) : 0;
+  return options;
+}
+
 async function htmlListToDocx($, listNode, context, options = {}) {
   const blocks = [];
   const ordered = htmlTagName(listNode) === 'ol';
-  const numberingReference = ordered ? createOrderedListReference(context) : null;
+  const numberingReference = ordered ? createOrderedListReference(context) : createUnorderedListReference(context);
+  const listItems = $(listNode).children('li').toArray();
 
-  for (const itemNode of $(listNode).children('li').toArray()) {
+  for (const [itemIndex, itemNode] of listItems.entries()) {
     const inlineNodes = $(itemNode).contents().toArray().filter((child) => !['ul', 'ol'].includes(htmlTagName(child)));
-    const listOptions = ordered
-      ? { numbering: { reference: numberingReference, level: Math.min(options.listLevel || 0, 2) } }
-      : { bullet: { level: Math.min(options.listLevel || 0, 2) } };
-    // 列表项继承正文行距和段后间距
-    if (context.bodyLineSpacing) listOptions.line = context.bodyLineSpacing;
-    if (context.bodyAfterSpacing != null) listOptions.after = context.bodyAfterSpacing;
+    const listOptions = buildListParagraphOptions(
+      context,
+      numberingReference,
+      Math.min(options.listLevel || 0, 2),
+      itemIndex,
+      listItems.length,
+    );
     blocks.push(paragraph(await htmlInlineRuns($, inlineNodes, context), listOptions));
 
     for (const childList of $(itemNode).children('ul,ol').toArray()) {
@@ -1431,16 +1497,18 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
         blocks.push(paragraph(await inlineRuns(group, context), paraOpts));
       }
     } else if (node.type === 'list') {
-      const numberingReference = node.ordered ? createOrderedListReference(context) : null;
-      for (const item of node.children || []) {
+      const numberingReference = node.ordered ? createOrderedListReference(context) : createUnorderedListReference(context);
+      const listItems = node.children || [];
+      for (const [itemIndex, item] of listItems.entries()) {
         const firstParagraph = (item.children || []).find((child) => child.type === 'paragraph');
         const restChildren = (item.children || []).filter((child) => child !== firstParagraph);
-        const listOptions = node.ordered
-          ? { numbering: { reference: numberingReference, level: Math.min(options.listLevel || 0, 2) } }
-          : { bullet: { level: Math.min(options.listLevel || 0, 2) } };
-        // 列表项继承正文行距和段后间距
-        if (context.bodyLineSpacing) listOptions.line = context.bodyLineSpacing;
-        if (context.bodyAfterSpacing != null) listOptions.after = context.bodyAfterSpacing;
+        const listOptions = buildListParagraphOptions(
+          context,
+          numberingReference,
+          Math.min(options.listLevel || 0, 2),
+          itemIndex,
+          listItems.length,
+        );
         blocks.push(paragraph(await inlineRuns(firstParagraph?.children || [], context), listOptions));
         blocks.push(...await markdownNodesToDocx(restChildren, context, { ...options, listLevel: (options.listLevel || 0) + 1 }));
       }
@@ -1551,7 +1619,7 @@ async function parseMarkdown(content) {
     import('remark-parse'),
     import('remark-gfm'),
   ]);
-  return unified().use(remarkParse.default).use(remarkGfm.default).parse(normalizeMarkdownTablesForDocx(content));
+  return unified().use(remarkParse.default).use(remarkGfm.default).parse(normalizeMarkdownTablesForDocx(normalizeMarkdownListMarkersForDocx(content)));
 }
 
 async function markdownToDocxBlocks(content, context = {}) {
@@ -1668,6 +1736,40 @@ function createHeadingNumberingConfig() {
   };
 }
 
+function getOrderedListWordStyle(style) {
+  return ORDERED_LIST_WORD_STYLES[style] || ORDERED_LIST_WORD_STYLES['decimal-dot'];
+}
+
+function getListLevelIndent(referenceConfig, level) {
+  const baseIndent = charsToTwips(referenceConfig.listIndentChars, referenceConfig.bodyRunSize);
+  const left = Math.round(baseIndent * (level + 1));
+  const hanging = Math.min(left, charsToTwips(1, referenceConfig.bodyRunSize));
+  return { left, hanging };
+}
+
+function createListNumberingLevel(referenceConfig, level) {
+  const ordered = referenceConfig.ordered === true;
+  const orderedStyle = getOrderedListWordStyle(referenceConfig.orderedListStyle);
+  const marker = UNORDERED_LIST_MARKERS[referenceConfig.unorderedListStyle] || UNORDERED_LIST_MARKERS.disc;
+  const markerSize = Math.max(1, Math.round((referenceConfig.bodyRunSize || 24) * (marker.sizeScale || 1)));
+  return {
+    level,
+    format: ordered ? orderedStyle.format : LevelFormat.BULLET,
+    text: ordered ? orderedStyle.text(level) : marker.text,
+    alignment: AlignmentType.START,
+    suffix: LevelSuffix.TAB,
+    style: {
+      run: {
+        font: ordered ? (referenceConfig.bodyRunFont || '宋体') : marker.font,
+        size: ordered ? (referenceConfig.bodyRunSize || 24) : markerSize,
+      },
+      paragraph: {
+        indent: getListLevelIndent(referenceConfig, level),
+      },
+    },
+  };
+}
+
 function createNumberingConfig(context) {
   const references = context.numberingReferences || [];
   if (!references.length && !context.usesHeadingNumbering) {
@@ -1678,19 +1780,9 @@ function createNumberingConfig(context) {
   if (context.usesHeadingNumbering) {
     config.push(createHeadingNumberingConfig());
   }
-  config.push(...references.map((reference) => ({
-    reference,
-    levels: [0, 1, 2].map((level) => ({
-      level,
-      format: LevelFormat.DECIMAL,
-      text: `%${level + 1}.`,
-      alignment: AlignmentType.START,
-      style: {
-        paragraph: {
-          indent: { left: 720 + level * 420, hanging: 260 },
-        },
-      },
-    })),
+  config.push(...references.map((referenceConfig) => ({
+    reference: referenceConfig.reference,
+    levels: [0, 1, 2].map((level) => createListNumberingLevel(referenceConfig, level)),
   })));
 
   return {
@@ -1778,10 +1870,13 @@ async function buildDocxResult(payload, options = {}) {
   context.bodyRunSize = bodySizeHalfPt;
   context.bodyLineSpacing = bodyLineSpacing;
   context.bodyAfterSpacing = bodyAfterSpacing;
+  context.bodyListStyle = bodyStyle ? (bodyStyle.list_style || 'disc') : 'disc';
+  context.bodyOrderedListStyle = bodyStyle ? (bodyStyle.ordered_list_style || 'decimal-dot') : 'decimal-dot';
+  context.bodyListIndentChars = bodyStyle ? (bodyStyle.list_indent_chars ?? 2) : 2;
   if (bodyStyle) {
     context.bodyAlignment = alignmentToWordType(bodyStyle.alignment);
     if (bodyStyle.first_line_indent_chars > 0) {
-      context.bodyIndent = { firstLine: bodyStyle.first_line_indent_chars * 240 };
+      context.bodyIndent = { firstLine: charsToTwips(bodyStyle.first_line_indent_chars, bodySizeHalfPt) };
     }
     if (bodyStyle.spacing_before_pt > 0) {
       context.bodyBeforeSpacing = bodyStyle.spacing_before_pt * 20;

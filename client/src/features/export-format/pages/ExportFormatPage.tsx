@@ -11,6 +11,7 @@ import type {
   HeadingStyleConfig,
   ImageStyleConfig,
   ListStyle,
+  OrderedListStyle,
   PageSetupConfig,
   PaperSize,
   TableCellStyleConfig,
@@ -23,6 +24,7 @@ import {
   HEADING_LEVEL_LABELS,
   HEADING_NUMBERING_FORMAT_OPTIONS,
   LIST_STYLE_OPTIONS,
+  ORDERED_LIST_STYLE_OPTIONS,
   PAPER_DIMENSIONS,
   PAPER_SIZES,
   SIZE_OPTIONS,
@@ -898,9 +900,30 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           <input type="number" min={0.5} max={5} step={0.1} value={config.body_text.line_spacing_multiple} onChange={(event) => updateBodyText({ line_spacing_multiple: Number(event.target.value) })} />
         </label>
         <label className="settings-row">
-          <div className="settings-row-copy"><strong>列表符号</strong><span>Markdown “- 内容”的无序列表</span></div>
-          <select value={config.body_text.list_style} onChange={(event) => updateBodyText({ list_style: event.target.value as ListStyle })}>
-            {LIST_STYLE_OPTIONS.map((style) => <option key={style.value} value={style.value}>{style.label}</option>)}
+          <div className="settings-row-copy"><strong>无序列表符号</strong><span>Markdown “- 内容”的无序列表</span></div>
+          <div className="export-bullet-library" role="radiogroup" aria-label="无序列表符号">
+            {LIST_STYLE_OPTIONS.map((style) => {
+              const selected = config.body_text.list_style === style.value;
+              return (
+                <button
+                  type="button"
+                  className={`export-bullet-option${selected ? ' is-active' : ''}`}
+                  key={style.value}
+                  role="radio"
+                  aria-checked={selected}
+                  title={style.label}
+                  onClick={() => updateBodyText({ list_style: style.value as ListStyle })}
+                >
+                  <span style={{ fontFamily: style.font_family }}>{style.icon}</span>
+                </button>
+              );
+            })}
+          </div>
+        </label>
+        <label className="settings-row">
+          <div className="settings-row-copy"><strong>有序列表序号</strong><span>Markdown “1. 内容”的有序列表</span></div>
+          <select value={config.body_text.ordered_list_style} onChange={(event) => updateBodyText({ ordered_list_style: event.target.value as OrderedListStyle })}>
+            {ORDERED_LIST_STYLE_OPTIONS.map((style) => <option key={style.value} value={style.value}>{style.label}</option>)}
           </select>
         </label>
         <label className="settings-row">
@@ -1281,6 +1304,10 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
                   <li>建立项目启动、过程检查和验收交付的闭环机制。</li>
                   <li>按周同步风险、进度和资源需求，确保实施节奏可控。</li>
                 </ul>
+                <ol>
+                  <li>完成资料接收和范围确认。</li>
+                  <li>完成过程复核和成果归档。</li>
+                </ol>
                 {processFigure}
               </div>
               {renderPreviewHeadingRow(6, '1.1.1.1.1.2', '过程复核')}
@@ -1329,6 +1356,7 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
       { id: 'h6-3', fallbackHeight: 30, content: <h6>{headingPreviewTitle(config, 6, '1.1.1.1.1.3', '资料归档')}</h6> },
       { id: 'p-5-3', fallbackHeight: 54, content: <p>按项目阶段整理归档目录、会议纪要、问题闭环记录和验收支撑材料。</p> },
       { id: 'list-1', fallbackHeight: 110, content: <ul><li>建立项目启动、过程检查和验收交付的闭环机制。</li><li>按周同步风险、进度和资源需求，确保实施节奏可控。</li><li>保留关键过程记录，便于后续审查和复盘。</li></ul> },
+      { id: 'ordered-list-1', fallbackHeight: 82, content: <ol><li>完成资料接收和范围确认。</li><li>完成过程复核和成果归档。</li><li>完成验收支撑材料提交。</li></ol> },
       { id: 'figure-1', fallbackHeight: 150, content: processFigure },
       { id: 'table-1', fallbackHeight: 130, content: serviceTable },
       { id: 'h1-2', startsNewPage: config.heading_level1_page_break_before, fallbackHeight: 64, content: <h1>{headingPreviewTitle(config, 1, '2', '运维保障方案')}</h1> },

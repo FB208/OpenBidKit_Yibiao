@@ -182,12 +182,13 @@ const defaultExportFormat = {
   body_text: {
     font: '宋体',
     size: '小四',
-    alignment: '两端对齐',
+    alignment: '左对齐',
     spacing_before_pt: 0,
     spacing_after_pt: 0,
     first_line_indent_chars: 2,
     line_spacing_multiple: 1.2,
     list_style: 'disc',
+    ordered_list_style: 'decimal-dot',
     list_indent_chars: 2,
   },
   table: {
@@ -404,7 +405,8 @@ function normalizeImageModelProfiles(sourceProfiles) {
 
 const VALID_NUMBERING_FORMATS = ['outline-decimal', 'custom'];
 const VALID_HEADING_BORDER_STRUCTURES = ['上下结构', '左右结构'];
-const VALID_LIST_STYLES = ['disc', 'dash', 'circle', 'square'];
+const VALID_LIST_STYLES = ['none', 'disc', 'circle', 'square', 'diamond', 'dash', 'check', 'arrow', 'sparkle'];
+const VALID_ORDERED_LIST_STYLES = ['decimal-dot', 'decimal-paren', 'decimal-full-paren', 'chinese-dot', 'chinese-paren', 'lower-alpha', 'upper-alpha', 'lower-roman', 'upper-roman'];
 
 function cloneDefaultExportFormat(def = defaultExportFormat) {
   return {
@@ -522,6 +524,7 @@ function normalizeExportFormat(source) {
     first_line_indent_chars: typeof srcBody.first_line_indent_chars === 'number' ? srcBody.first_line_indent_chars : def.body_text.first_line_indent_chars,
     line_spacing_multiple: typeof srcBody.line_spacing_multiple === 'number' ? srcBody.line_spacing_multiple : def.body_text.line_spacing_multiple,
     list_style: typeof srcBody.list_style === 'string' && VALID_LIST_STYLES.includes(srcBody.list_style) ? srcBody.list_style : def.body_text.list_style,
+    ordered_list_style: typeof srcBody.ordered_list_style === 'string' && VALID_ORDERED_LIST_STYLES.includes(srcBody.ordered_list_style) ? srcBody.ordered_list_style : def.body_text.ordered_list_style,
     list_indent_chars: typeof srcBody.list_indent_chars === 'number' ? srcBody.list_indent_chars : def.body_text.list_indent_chars,
   };
 
