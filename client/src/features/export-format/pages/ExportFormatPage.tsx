@@ -708,7 +708,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           </label>
         </label>
         <label className="settings-row">
-          <div className="settings-row-copy"><strong>章节页框</strong><span>为页面和章节标题生成统一的框线版式</span></div>
+          <div className="settings-row-copy"><strong>章节页框</strong><span>会导致导航窗格失效</span></div>
           <label className="settings-switch-control">
             <input type="checkbox" checked={config.heading_border.enabled} onChange={(event) => updateHeadingBorder({ enabled: event.target.checked })} />
             <span className="settings-switch-track" aria-hidden="true"><span className="settings-switch-thumb" /></span>
