@@ -197,7 +197,7 @@ const defaultExportFormat = {
     cell_padding_pt: 6,
     full_width: true,
     header_row: { font: '黑体', size: '小四', alignment: '居中对齐', text_color: '#243048', background_color: '#eef5ff' },
-    first_column: { font: '黑体', size: '小四', alignment: '左对齐', text_color: '#243048', background_color: '#f8fbff' },
+    first_column: { font: '宋体', size: '小四', alignment: '左对齐', text_color: '#243048', background_color: '#ffffff' },
     body_cell: { font: '宋体', size: '小四', alignment: '左对齐', text_color: '#243048', background_color: '#ffffff' },
   },
   image: {

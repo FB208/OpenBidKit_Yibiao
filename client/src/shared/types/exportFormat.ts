@@ -363,11 +363,11 @@ const DEFAULT_TABLE_STYLE: TableStyleConfig = {
     background_color: '#eef5ff',
   },
   first_column: {
-    font: '黑体',
+    font: '宋体',
     size: '小四',
     alignment: '左对齐',
     text_color: '#243048',
-    background_color: '#f8fbff',
+    background_color: '#ffffff',
   },
   body_cell: { ...DEFAULT_TABLE_CELL },
 };

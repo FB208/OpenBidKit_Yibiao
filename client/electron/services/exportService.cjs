@@ -42,6 +42,15 @@ const DOCX_TABLE_WIDTH_TWIPS = 9000;
 const MERMAID_EXPORT_RETRY_ATTEMPTS = 2;
 const MERMAID_EXPORT_RETRY_DELAY_MS = 3000;
 const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#e0ecff', '#e9f1ff', '#f2f7ff', '#f8fbff', '#ffffff', '#ffffff'];
+const DEFAULT_TABLE_STYLE = {
+  border_width: 1,
+  border_color: '#dcdff6',
+  cell_padding_pt: 6,
+  full_width: true,
+  header_row: { font: '黑体', size: '小四', alignment: '居中对齐', text_color: '#243048', background_color: '#eef5ff' },
+  first_column: { font: '宋体', size: '小四', alignment: '左对齐', text_color: '#243048', background_color: '#ffffff' },
+  body_cell: { font: '宋体', size: '小四', alignment: '左对齐', text_color: '#243048', background_color: '#ffffff' },
+};
 const UNORDERED_LIST_MARKERS = {
   disc: { text: '•', font: 'Arial', sizeScale: 0.75 },
   circle: { text: '○', font: 'Arial', sizeScale: 0.82 },
@@ -452,14 +461,70 @@ function buildWordFooters(pageSetup) {
   };
 }
 
-function tableBorders() {
+function getTableStyle(context) {
+  return context?.exportFormat?.table || DEFAULT_TABLE_STYLE;
+}
+
+function getTableCellStyle(context, { isHeader = false, isFirstColumn = false } = {}) {
+  const table = getTableStyle(context);
+  if (isHeader) return table.header_row;
+  if (isFirstColumn) return table.first_column;
+  return table.body_cell;
+}
+
+function tableBorderSize(context) {
+  const width = Number(getTableStyle(context).border_width) || 0;
+  if (width <= 0) return 0;
+  return Math.max(1, Math.round(width * 6));
+}
+
+function tableBorders(context) {
+  const size = tableBorderSize(context);
+  if (size <= 0) {
+    const none = { style: BorderStyle.NIL, size: 0, color: 'FFFFFF' };
+    return {
+      top: none,
+      bottom: none,
+      left: none,
+      right: none,
+      insideHorizontal: none,
+      insideVertical: none,
+    };
+  }
+
+  const border = {
+    style: BorderStyle.SINGLE,
+    size,
+    color: normalizeDocxColor(getTableStyle(context).border_color, 'DCDFF6'),
+  };
   return {
-    top: { style: BorderStyle.SINGLE, size: 1, color: 'DCDFF6' },
-    bottom: { style: BorderStyle.SINGLE, size: 1, color: 'DCDFF6' },
-    left: { style: BorderStyle.SINGLE, size: 1, color: 'DCDFF6' },
-    right: { style: BorderStyle.SINGLE, size: 1, color: 'DCDFF6' },
-    insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: 'E8EDF6' },
-    insideVertical: { style: BorderStyle.SINGLE, size: 1, color: 'E8EDF6' },
+    top: border,
+    bottom: border,
+    left: border,
+    right: border,
+    insideHorizontal: border,
+    insideVertical: border,
+  };
+}
+
+function tableCellMargins(context) {
+  const padding = Math.max(0, Number(getTableStyle(context).cell_padding_pt) || 0);
+  const twips = Math.round(padding * 20);
+  return { top: twips, bottom: twips, left: twips, right: twips };
+}
+
+function tableCellRunMarks(style) {
+  return {
+    font: style?.font || DEFAULT_TABLE_STYLE.body_cell.font,
+    size: chineseSizeToHalfPt(style?.size || DEFAULT_TABLE_STYLE.body_cell.size),
+    color: normalizeDocxColor(style?.text_color || DEFAULT_TABLE_STYLE.body_cell.text_color, '243048'),
+  };
+}
+
+function tableCellParagraphOptions(style) {
+  return {
+    after: 80,
+    alignment: alignmentToWordType(style?.alignment || DEFAULT_TABLE_STYLE.body_cell.alignment),
   };
 }
 
@@ -477,25 +542,33 @@ function tableCellWidth(columnSpan, totalColumns) {
   return Math.round((DOCX_TABLE_WIDTH_TWIPS * safeSpan) / safeTotal);
 }
 
-function createTableCell({ children, isHeader = false, columnSpan = 1, totalColumns = 1 }) {
+function createTableCell({ children, context, isHeader = false, isFirstColumn = false, columnSpan = 1, totalColumns = 1 }) {
   const safeSpan = Math.max(1, columnSpan || 1);
+  const table = getTableStyle(context);
+  const cellStyle = getTableCellStyle(context, { isHeader, isFirstColumn });
+  const fullWidth = table.full_width !== false;
   return new TableCell({
     children,
-    shading: isHeader ? { type: ShadingType.CLEAR, fill: 'F1F6FF' } : undefined,
-    margins: { top: 120, bottom: 120, left: 140, right: 140 },
+    shading: { type: ShadingType.CLEAR, fill: normalizeDocxColor(cellStyle?.background_color, 'FFFFFF') },
+    margins: tableCellMargins(context),
     columnSpan: safeSpan > 1 ? safeSpan : undefined,
-    width: { size: tableCellWidth(safeSpan, totalColumns), type: WidthType.DXA },
+    width: fullWidth ? { size: tableCellWidth(safeSpan, totalColumns), type: WidthType.DXA } : undefined,
   });
 }
 
-function createDocxTable(rows, columnCount) {
-  return new Table({
+function createDocxTable(rows, columnCount, context) {
+  const table = getTableStyle(context);
+  const fullWidth = table.full_width !== false;
+  const options = {
     rows,
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    columnWidths: tableColumnWidths(columnCount),
-    layout: TableLayoutType.FIXED,
-    borders: tableBorders(),
-  });
+    width: fullWidth ? { size: 100, type: WidthType.PERCENTAGE } : { size: 0, type: WidthType.AUTO },
+    layout: fullWidth ? TableLayoutType.FIXED : TableLayoutType.AUTOFIT,
+    borders: tableBorders(context),
+  };
+  if (fullWidth) {
+    options.columnWidths = tableColumnWidths(columnCount);
+  }
+  return new Table(options);
 }
 
 function normalizeColumnSpan(value) {
@@ -1268,15 +1341,22 @@ async function htmlTableToDocx($, tableNode, context) {
   }).filter((row) => row.cells.length);
   const maxColumns = Math.max(1, ...rowDescriptors.map((row) => row.columnCount));
 
-  for (const row of rowDescriptors) {
+  for (const [rowIndex, row] of rowDescriptors.entries()) {
     const cells = [];
     for (const [cellIndex, cell] of row.cells.entries()) {
       const cellNode = cell.node;
-      const isHeader = htmlTagName(cellNode) === 'th';
+      const isHeader = rowIndex === 0 || htmlTagName(cellNode) === 'th';
+      const isFirstColumn = !isHeader && cellIndex === 0;
+      const cellStyle = getTableCellStyle(context, { isHeader, isFirstColumn });
       const remainingSpan = cellIndex === row.cells.length - 1 ? maxColumns - row.columnCount : 0;
       cells.push(createTableCell({
-        children: [paragraph(await htmlInlineRuns($, $(cellNode).contents().toArray(), context, { bold: isHeader }), { after: 80 })],
+        children: [paragraph(
+          await htmlInlineRuns($, $(cellNode).contents().toArray(), context, tableCellRunMarks(cellStyle)),
+          tableCellParagraphOptions(cellStyle),
+        )],
+        context,
         isHeader,
+        isFirstColumn,
         columnSpan: cell.columnSpan + Math.max(0, remainingSpan),
         totalColumns: maxColumns,
       }));
@@ -1288,7 +1368,7 @@ async function htmlTableToDocx($, tableNode, context) {
     return [];
   }
 
-  return [createDocxTable(rows, maxColumns)];
+  return [createDocxTable(rows, maxColumns, context)];
 }
 
 function buildListParagraphOptions(context, reference, level, itemIndex, totalItems) {
@@ -1431,14 +1511,20 @@ async function htmlToDocxBlocks(html, context = {}, options = {}) {
   return blocks;
 }
 
-async function tableCellParagraphs(cell, context, isHeader = false) {
+async function tableCellParagraphs(cell, context, cellStyle) {
+  const runMarks = tableCellRunMarks(cellStyle);
+  const paragraphOptions = tableCellParagraphOptions(cellStyle);
   const phrasingNodes = (cell.children || []).filter((child) => child.type !== 'paragraph');
   if (phrasingNodes.length) {
-    return [paragraph(await inlineRuns(phrasingNodes, context, { bold: isHeader }), { after: 80 })];
+    return [paragraph(await inlineRuns(phrasingNodes, context, runMarks), paragraphOptions)];
   }
 
-  const blocks = await markdownNodesToDocx(cell.children || [], context, { inTable: true });
-  if (!blocks.length) return [paragraph([textRun('')], { after: 80 })];
+  const blocks = await markdownNodesToDocx(cell.children || [], context, {
+    inTable: true,
+    tableCellRunMarks: runMarks,
+    tableCellParagraphOptions: paragraphOptions,
+  });
+  if (!blocks.length) return [paragraph([textRun('', runMarks)], paragraphOptions)];
   return blocks.filter((block) => block instanceof Paragraph);
 }
 
@@ -1472,10 +1558,12 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
       blocks.push(paragraph(await inlineRuns(node.children, context, runMarks), headingOpts));
     } else if (node.type === 'paragraph') {
       const isImagePara = !options.inTable && (isImageOnlyParagraph(node) || isFigureCaptionParagraph(node));
-      const bodyParaOpts = {
-        after: options.inTable ? 80 : (context.bodyAfterSpacing ?? 160),
-        alignment: isImagePara ? AlignmentType.CENTER : (context.bodyAlignment || undefined),
-      };
+      const bodyParaOpts = options.inTable
+        ? { ...(options.tableCellParagraphOptions || { after: 80, alignment: context.bodyAlignment || undefined }) }
+        : {
+            after: context.bodyAfterSpacing ?? 160,
+            alignment: isImagePara ? AlignmentType.CENTER : (context.bodyAlignment || undefined),
+          };
       if (!options.inTable && context.bodyLineSpacing) {
         bodyParaOpts.line = context.bodyLineSpacing;
       }
@@ -1494,7 +1582,7 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
         if (index > 0) {
           delete paraOpts.before;
         }
-        blocks.push(paragraph(await inlineRuns(group, context), paraOpts));
+        blocks.push(paragraph(await inlineRuns(group, context, options.inTable ? (options.tableCellRunMarks || {}) : {}), paraOpts));
       }
     } else if (node.type === 'list') {
       const numberingReference = node.ordered ? createOrderedListReference(context) : createUnorderedListReference(context);
@@ -1519,12 +1607,17 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
         const cells = [];
         const rowCells = row.children || [];
         for (const [cellIndex, cell] of rowCells.entries()) {
+          const isHeader = rowIndex === 0;
+          const isFirstColumn = !isHeader && cellIndex === 0;
+          const cellStyle = getTableCellStyle(context, { isHeader, isFirstColumn });
           const columnSpan = cellIndex === rowCells.length - 1
             ? Math.max(1, maxColumns - rowCells.length + 1)
             : 1;
           cells.push(createTableCell({
-            children: await tableCellParagraphs(cell, context, rowIndex === 0),
-            isHeader: rowIndex === 0,
+            children: await tableCellParagraphs(cell, context, cellStyle),
+            context,
+            isHeader,
+            isFirstColumn,
             columnSpan,
             totalColumns: maxColumns,
           }));
@@ -1532,7 +1625,7 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
         rows.push(new TableRow({ children: cells }));
       }
       if (rows.length) {
-        blocks.push(createDocxTable(rows, maxColumns));
+        blocks.push(createDocxTable(rows, maxColumns, context));
       }
     } else if (node.type === 'blockquote') {
       for (const child of node.children || []) {

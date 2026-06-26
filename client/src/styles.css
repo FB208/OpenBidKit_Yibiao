@@ -11712,7 +11712,7 @@ button {
   color: var(--ef-table-header-color, var(--yb-text));
   text-align: var(--ef-table-header-align, center);
   background: var(--ef-table-header-background, rgba(33, 116, 253, 0.06));
-  font-weight: 600;
+  font-weight: normal;
 }
 
 .export-format-preview-content td {
