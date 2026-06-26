@@ -22,6 +22,7 @@ const {
   LevelSuffix,
   Packer,
   PageNumber,
+  PageBreak,
   PageOrientation,
   Paragraph,
   ShadingType,
@@ -244,6 +245,7 @@ function paragraph(children, options = {}) {
   return new Paragraph({
     children: children?.length ? children : [textRun('')],
     heading: options.heading,
+    pageBreakBefore: options.pageBreakBefore,
     alignment: options.alignment,
     bullet: options.bullet,
     numbering: options.numbering,
@@ -252,6 +254,14 @@ function paragraph(children, options = {}) {
     border: options.border,
     shading: options.shading,
   });
+}
+
+function pageBreakParagraph() {
+  return paragraph([new PageBreak()], { after: 0, line: 0 });
+}
+
+function isLevel1PageBreakEnabled(exportFormat) {
+  return exportFormat?.heading_level1_page_break_before === true;
 }
 
 function isFooterEnabled(pageSetup) {
@@ -277,13 +287,14 @@ function getChapterFrameConfig(exportFormat) {
 }
 
 function chapterHeadingRowStyle(level) {
+  const horizontal = 0;
   const table = [
-    { height: 520, top: 120, bottom: 120, left: 180, right: 180 },
-    { height: 430, top: 100, bottom: 100, left: 260, right: 180 },
-    { height: 360, top: 80, bottom: 80, left: 340, right: 180 },
-    { height: 320, top: 70, bottom: 70, left: 420, right: 180 },
-    { height: 290, top: 60, bottom: 60, left: 500, right: 180 },
-    { height: 270, top: 55, bottom: 55, left: 580, right: 180 },
+    { height: 520, top: 120, bottom: 120, left: horizontal, right: horizontal },
+    { height: 430, top: 100, bottom: 100, left: horizontal, right: horizontal },
+    { height: 360, top: 80, bottom: 80, left: horizontal, right: horizontal },
+    { height: 320, top: 70, bottom: 70, left: horizontal, right: horizontal },
+    { height: 290, top: 60, bottom: 60, left: horizontal, right: horizontal },
+    { height: 270, top: 55, bottom: 55, left: horizontal, right: horizontal },
   ];
   return table[Math.max(0, Math.min(level - 1, table.length - 1))];
 }
@@ -714,7 +725,7 @@ function getHeadingStyle(exportFormat, level) {
 }
 
 function usesNativeHeadingNumbering(headingStyle) {
-  return headingStyle?.numbering_format === 'outline-decimal';
+  return false;
 }
 
 function imageTypeFromMime(mime) {
@@ -1062,6 +1073,74 @@ function isFigureCaptionParagraph(node) {
   return /^图[:：]/.test(nodeText(node).trim());
 }
 
+function isMarkdownHardBreakNode(node) {
+  return node?.type === 'break'
+    || (node?.type === 'html' && /^<br\s*\/?\s*>$/i.test(String(node.value || '').trim()));
+}
+
+function markdownInlineGroupHasContent(nodes = []) {
+  return nodes.some((node) => {
+    if (!node) return false;
+    if (node.type === 'text' || node.type === 'inlineCode') return Boolean(String(node.value || '').trim());
+    if (node.type === 'html') return Boolean(String(node.value || '').trim());
+    if (node.type === 'image') return true;
+    return markdownInlineGroupHasContent(node.children || []);
+  });
+}
+
+function splitMarkdownInlineNodesByBreaks(nodes = []) {
+  const groups = [];
+  let current = [];
+  let hasBreak = false;
+
+  for (const node of nodes) {
+    if (isMarkdownHardBreakNode(node)) {
+      hasBreak = true;
+      groups.push(current);
+      current = [];
+      continue;
+    }
+    current.push(node);
+  }
+  groups.push(current);
+
+  if (!hasBreak) return [nodes];
+  return groups.filter((group) => markdownInlineGroupHasContent(group));
+}
+
+function isHtmlBrNode(node) {
+  return node?.type === 'tag' && htmlTagName(node) === 'br';
+}
+
+function htmlInlineGroupHasContent($, nodes = []) {
+  return nodes.some((node) => {
+    if (!node) return false;
+    if (node.type === 'text') return Boolean(String(node.data || '').trim());
+    if (node.type === 'tag') return htmlTagName(node) !== 'br' || Boolean($(node).text().trim());
+    return false;
+  });
+}
+
+function splitHtmlInlineNodesByBreaks($, nodes = []) {
+  const groups = [];
+  let current = [];
+  let hasBreak = false;
+
+  for (const node of nodes) {
+    if (isHtmlBrNode(node)) {
+      hasBreak = true;
+      groups.push(current);
+      current = [];
+      continue;
+    }
+    current.push(node);
+  }
+  groups.push(current);
+
+  if (!hasBreak) return [nodes];
+  return groups.filter((group) => htmlInlineGroupHasContent($, group));
+}
+
 function htmlTagName(node) {
   return String(node?.name || '').toLowerCase();
 }
@@ -1245,7 +1324,19 @@ async function htmlNodeToDocxBlocks($, node, context, options = {}) {
       htmlParaOpts.alignment = AlignmentType.CENTER;
       delete htmlParaOpts.indent;
     }
-    return [paragraph(await htmlInlineRuns($, $(node).contents().toArray(), context), htmlParaOpts)];
+    const groups = splitHtmlInlineNodesByBreaks($, $(node).contents().toArray());
+    const paragraphs = [];
+    for (const [index, group] of groups.entries()) {
+      const paraOpts = { ...htmlParaOpts };
+      if (groups.length > 1 && index < groups.length - 1) {
+        paraOpts.after = 0;
+      }
+      if (index > 0) {
+        delete paraOpts.before;
+      }
+      paragraphs.push(paragraph(await htmlInlineRuns($, group, context), paraOpts));
+    }
+    return paragraphs;
   }
 
   addUnsupportedHtmlWarning(context, tag);
@@ -1296,14 +1387,12 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
         heading: headingLevel(mdLevel),
         before: style ? style.spacing_before_pt * 20 : (mdLevel === 1 ? 280 : 180),
         after: style ? style.spacing_after_pt * 20 : 120,
+        indent: { left: 0, right: 0, firstLine: 0, hanging: 0 },
       };
       if (style) {
         headingOpts.alignment = alignmentToWordType(style.alignment);
         if (style.line_spacing) {
           headingOpts.line = 240 * style.line_spacing;
-        }
-        if (style.first_line_indent_chars > 0) {
-          headingOpts.indent = { firstLine: style.first_line_indent_chars * 240 };
         }
       }
       const runMarks = {};
@@ -1330,7 +1419,17 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
       if (!options.inTable && context.bodyBeforeSpacing) {
         bodyParaOpts.before = context.bodyBeforeSpacing;
       }
-      blocks.push(paragraph(await inlineRuns(node.children, context), bodyParaOpts));
+      const groups = isImagePara ? [node.children || []] : splitMarkdownInlineNodesByBreaks(node.children || []);
+      for (const [index, group] of groups.entries()) {
+        const paraOpts = { ...bodyParaOpts };
+        if (groups.length > 1 && index < groups.length - 1) {
+          paraOpts.after = 0;
+        }
+        if (index > 0) {
+          delete paraOpts.before;
+        }
+        blocks.push(paragraph(await inlineRuns(group, context), paraOpts));
+      }
     } else if (node.type === 'list') {
       const numberingReference = node.ordered ? createOrderedListReference(context) : null;
       for (const item of node.children || []) {
@@ -1466,7 +1565,7 @@ async function addMarkdownContent(children, content, context) {
 
 function buildOutlineHeadingParagraph(item, context, level, options = {}) {
   const style = getHeadingStyle(context.exportFormat, level);
-  const nativeHeadingNumbering = usesNativeHeadingNumbering(style);
+  const nativeHeadingNumbering = usesNativeHeadingNumbering(style) && !options.manualNumbering;
   const displayTitle = nativeHeadingNumbering
     ? String(item.title || '')
     : formatOutlineTitle(item.id, item.title, style);
@@ -1484,14 +1583,13 @@ function buildOutlineHeadingParagraph(item, context, level, options = {}) {
 
   const paraOptions = {
     heading: headingLevel(level),
+    pageBreakBefore: level === 1 && isLevel1PageBreakEnabled(context.exportFormat) && !options.disablePageBreakBefore,
     alignment: style ? alignmentToWordType(style.alignment) : undefined,
     before: options.compact ? 0 : (style ? style.spacing_before_pt * 20 : (level === 1 ? 320 : 200)),
     after: options.compact ? 0 : (style ? style.spacing_after_pt * 20 : 120),
     line: style ? 240 * (style.line_spacing || 1) : undefined,
   };
-  if (style && style.first_line_indent_chars > 0) {
-    paraOptions.indent = { firstLine: style.first_line_indent_chars * 240 };
-  }
+  paraOptions.indent = { left: 0, right: 0, firstLine: 0, hanging: 0 };
   if (nativeHeadingNumbering) {
     context.usesHeadingNumbering = true;
     paraOptions.numbering = { reference: HEADING_NUMBERING_REFERENCE, level: Math.min(level - 1, 5) };
@@ -1504,7 +1602,7 @@ async function addChapterFrameRows(rows, items, context, level = 1) {
   for (const item of items || []) {
     rows.push(buildChapterHeadingRow(
       context.exportFormat,
-      buildOutlineHeadingParagraph(item, context, level, { compact: true }),
+      buildOutlineHeadingParagraph(item, context, level, { compact: true, disableIndent: true, manualNumbering: true, disablePageBreakBefore: true }),
       level,
     ));
 
@@ -1529,6 +1627,9 @@ async function addOutlineItems(children, items, context, level = 1) {
     if (useChapterFrame) {
       const rows = [];
       await addChapterFrameRows(rows, [item], context, level);
+      if (isLevel1PageBreakEnabled(context.exportFormat)) {
+        children.push(pageBreakParagraph());
+      }
       children.push(buildChapterFrameTable(context.exportFormat, rows));
       continue;
     }
@@ -1617,11 +1718,6 @@ function buildHeadingParagraphStyles(exportFormat) {
 
     const halfPt = chineseSizeToHalfPt(style.size);
     const lineSpacing = 240 * (style.line_spacing || 1);
-    const indentOpts = {};
-    if (style.first_line_indent_chars > 0) {
-      indentOpts.firstLine = style.first_line_indent_chars * 240;
-    }
-
     styles.push({
       id: ids[i],
       name: names[i],
@@ -1638,7 +1734,7 @@ function buildHeadingParagraphStyles(exportFormat) {
           line: lineSpacing,
         },
         alignment: alignmentToWordType(style.alignment),
-        ...(Object.keys(indentOpts).length ? { indent: indentOpts } : {}),
+        indent: { left: 0, right: 0, firstLine: 0, hanging: 0 },
       },
     });
   }

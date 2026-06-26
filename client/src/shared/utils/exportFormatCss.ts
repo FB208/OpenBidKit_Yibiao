@@ -42,7 +42,7 @@ function buildHeadingVars(level: number, config: HeadingStyleConfig): Record<str
     [`--ef-h${n}-color`]: config.text_color || '#243048',
     [`--ef-h${n}-spacing-before`]: `${config.spacing_before_pt}pt`,
     [`--ef-h${n}-spacing-after`]: `${config.spacing_after_pt}pt`,
-    [`--ef-h${n}-indent`]: config.first_line_indent_chars > 0 ? `${config.first_line_indent_chars}em` : '0',
+    [`--ef-h${n}-indent`]: '0',
     [`--ef-h${n}-line-height`]: String(config.line_spacing),
   };
 }
