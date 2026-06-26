@@ -150,6 +150,7 @@ const bridge = {
   },
   export: {
     exportWord: (payload) => ipcRenderer.invoke('export:word', payload),
+    openFile: (filePath) => ipcRenderer.invoke('export:open-file', filePath),
     onWordExportProgress: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('export:word-progress', listener);
