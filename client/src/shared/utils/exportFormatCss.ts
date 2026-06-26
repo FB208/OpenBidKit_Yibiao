@@ -196,6 +196,8 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
     vars['--ef-image-caption-font'] = chineseFontToCss(image.caption_font || '宋体');
     vars['--ef-image-caption-size'] = `${chineseSizeToPt(image.caption_size || '小五')}pt`;
     vars['--ef-image-caption-align'] = alignmentToCss(image.caption_alignment || '居中对齐');
+    vars['--ef-image-caption-weight'] = image.caption_bold ? '700' : '400';
+    vars['--ef-image-caption-style'] = image.caption_italic ? 'italic' : 'normal';
   }
 
   return vars;

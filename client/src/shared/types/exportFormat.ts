@@ -77,6 +77,8 @@ export interface ImageStyleConfig {
   caption_font: string;
   caption_size: string;
   caption_alignment: string;
+  caption_bold: boolean;
+  caption_italic: boolean;
 }
 
 // ── 纸张类型 ──────────────────────────────────────
@@ -378,6 +380,8 @@ const DEFAULT_IMAGE_STYLE: ImageStyleConfig = {
   caption_font: '宋体',
   caption_size: '小五',
   caption_alignment: '居中对齐',
+  caption_bold: false,
+  caption_italic: false,
 };
 
 export const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#eef5ff', '#f3f7ff', '#f8fbff', '#fbfdff', '#ffffff', '#ffffff'] as const;

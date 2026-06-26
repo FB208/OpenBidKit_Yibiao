@@ -1035,6 +1035,20 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
             {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
           </select>
         </label>
+        <label className="settings-row">
+          <div className="settings-row-copy"><strong>图题加粗</strong></div>
+          <label className="settings-switch-control">
+            <input type="checkbox" checked={config.image.caption_bold} onChange={(event) => updateImage({ caption_bold: event.target.checked })} />
+            <span className="settings-switch-track" aria-hidden="true"><span className="settings-switch-thumb" /></span>
+          </label>
+        </label>
+        <label className="settings-row">
+          <div className="settings-row-copy"><strong>图题斜体</strong></div>
+          <label className="settings-switch-control">
+            <input type="checkbox" checked={config.image.caption_italic} onChange={(event) => updateImage({ caption_italic: event.target.checked })} />
+            <span className="settings-switch-track" aria-hidden="true"><span className="settings-switch-thumb" /></span>
+          </label>
+        </label>
       </div>
     </>
   );

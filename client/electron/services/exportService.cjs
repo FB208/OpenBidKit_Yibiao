@@ -51,6 +51,15 @@ const DEFAULT_TABLE_STYLE = {
   first_column: { font: '宋体', size: '小四', alignment: '左对齐', text_color: '#243048', background_color: '#ffffff' },
   body_cell: { font: '宋体', size: '小四', alignment: '左对齐', text_color: '#243048', background_color: '#ffffff' },
 };
+const DEFAULT_IMAGE_STYLE = {
+  max_width_percent: 90,
+  alignment: '居中对齐',
+  caption_font: '宋体',
+  caption_size: '小五',
+  caption_alignment: '居中对齐',
+  caption_bold: false,
+  caption_italic: false,
+};
 const UNORDERED_LIST_MARKERS = {
   disc: { text: '•', font: 'Arial', sizeScale: 0.75 },
   circle: { text: '○', font: 'Arial', sizeScale: 0.82 },
@@ -569,6 +578,57 @@ function createDocxTable(rows, columnCount, context) {
     options.columnWidths = tableColumnWidths(columnCount);
   }
   return new Table(options);
+}
+
+function getImageStyle(context) {
+  return context?.exportFormat?.image || DEFAULT_IMAGE_STYLE;
+}
+
+function getPageContentWidthPx(context) {
+  const pageSetup = context?.exportFormat?.page || {};
+  const dims = PAPER_DIMENSIONS_MM[pageSetup.paper_size] || PAPER_DIMENSIONS_MM.a4;
+  const pageWidthMm = pageSetup.orientation === 'landscape' ? dims.height : dims.width;
+  const pageWidthTwips = mmToTwips(pageWidthMm);
+  const marginLeftTwips = cmToTwips(pageSetup.margin_left_cm ?? 2);
+  const marginRightTwips = cmToTwips(pageSetup.margin_right_cm ?? 2);
+  const contentWidthTwips = Math.max(1, pageWidthTwips - marginLeftTwips - marginRightTwips);
+  return Math.round(contentWidthTwips / 15);
+}
+
+function getImageMaxWidth(context) {
+  const image = getImageStyle(context);
+  const percent = Math.max(1, Math.min(100, Number(image.max_width_percent) || DEFAULT_IMAGE_STYLE.max_width_percent));
+  return Math.max(1, Math.round(getPageContentWidthPx(context) * percent / 100));
+}
+
+function getImageParagraphOptions(context) {
+  const image = getImageStyle(context);
+  return { alignment: alignmentToWordType(image.alignment || DEFAULT_IMAGE_STYLE.alignment) };
+}
+
+function getCaptionRunMarks(context) {
+  const image = getImageStyle(context);
+  const marks = {
+    font: image.caption_font || DEFAULT_IMAGE_STYLE.caption_font,
+    size: chineseSizeToHalfPt(image.caption_size || DEFAULT_IMAGE_STYLE.caption_size),
+  };
+  if (image.caption_bold === true) {
+    marks.bold = true;
+  }
+  if (image.caption_italic === true) {
+    marks.italics = true;
+  }
+  return marks;
+}
+
+function getCaptionParagraphOptions(context) {
+  const image = getImageStyle(context);
+  return {
+    alignment: alignmentToWordType(image.caption_alignment || DEFAULT_IMAGE_STYLE.caption_alignment),
+    after: context?.bodyAfterSpacing ?? 160,
+    line: context?.bodyLineSpacing,
+    indent: { left: 0, right: 0, firstLine: 0, hanging: 0 },
+  };
 }
 
 function normalizeColumnSpan(value) {
@@ -1108,7 +1168,8 @@ async function imageRunFromNode(node, context, options = {}) {
   }
   const sourceWidth = size.width || MAX_IMAGE_WIDTH;
   const sourceHeight = size.height || Math.round(MAX_IMAGE_WIDTH * 0.62);
-  const ratio = Math.min(1, MAX_IMAGE_WIDTH / sourceWidth);
+  const maxWidth = getImageMaxWidth(context);
+  const ratio = Math.min(1, maxWidth / sourceWidth);
   const width = Math.round(sourceWidth * ratio);
   const height = Math.round(sourceHeight * ratio);
   context.imageSuccessCount = (context.imageSuccessCount || 0) + 1;
@@ -1119,6 +1180,7 @@ async function imageRunFromNode(node, context, options = {}) {
     bytes: loaded.buffer.length,
     source_width: sourceWidth,
     source_height: sourceHeight,
+    max_width: maxWidth,
     output_width: width,
     output_height: height,
   });
@@ -1136,13 +1198,13 @@ async function imageRunFromNode(node, context, options = {}) {
 }
 
 async function imageParagraphFromSource(source, alt, context, options = {}) {
-  return paragraph([await imageRunFromNode({ url: source, alt }, context, options)], { alignment: AlignmentType.CENTER });
+  return paragraph([await imageRunFromNode({ url: source, alt }, context, options)], getImageParagraphOptions(context));
 }
 
 async function imageParagraphFromLoadedImage(source, alt, loadedImage, context, options = {}) {
   return paragraph([
     await imageRunFromNode({ url: source, alt }, context, { ...options, loadedImage }),
-  ], { alignment: AlignmentType.CENTER });
+  ], getImageParagraphOptions(context));
 }
 
 async function inlineRuns(nodes = [], context = {}, marks = {}) {
@@ -1465,11 +1527,10 @@ async function htmlNodeToDocxBlocks($, node, context, options = {}) {
   }
   if (['p', 'div', 'section', 'article', 'span', 'strong', 'b', 'em', 'i', 'a', 'code'].includes(tag)) {
     const isFigureCaption = /^图[:：]/.test($(node).text().trim());
-    const htmlParaOpts = buildHtmlBodyParaOpts(context);
     if (isFigureCaption) {
-      htmlParaOpts.alignment = AlignmentType.CENTER;
-      delete htmlParaOpts.indent;
+      return [paragraph([textRun($(node).text().trim(), getCaptionRunMarks(context))], getCaptionParagraphOptions(context))];
     }
+    const htmlParaOpts = buildHtmlBodyParaOpts(context);
     const groups = splitHtmlInlineNodesByBreaks($, $(node).contents().toArray());
     const paragraphs = [];
     for (const [index, group] of groups.entries()) {
@@ -1557,12 +1618,17 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
       }
       blocks.push(paragraph(await inlineRuns(node.children, context, runMarks), headingOpts));
     } else if (node.type === 'paragraph') {
-      const isImagePara = !options.inTable && (isImageOnlyParagraph(node) || isFigureCaptionParagraph(node));
+      const isFigureCaption = !options.inTable && isFigureCaptionParagraph(node);
+      if (isFigureCaption) {
+        blocks.push(paragraph([textRun(nodeText(node).trim(), getCaptionRunMarks(context))], getCaptionParagraphOptions(context)));
+        continue;
+      }
+      const isImagePara = !options.inTable && isImageOnlyParagraph(node);
       const bodyParaOpts = options.inTable
         ? { ...(options.tableCellParagraphOptions || { after: 80, alignment: context.bodyAlignment || undefined }) }
         : {
             after: context.bodyAfterSpacing ?? 160,
-            alignment: isImagePara ? AlignmentType.CENTER : (context.bodyAlignment || undefined),
+            alignment: isImagePara ? getImageParagraphOptions(context).alignment : (context.bodyAlignment || undefined),
           };
       if (!options.inTable && context.bodyLineSpacing) {
         bodyParaOpts.line = context.bodyLineSpacing;

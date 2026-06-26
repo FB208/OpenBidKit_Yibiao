@@ -206,6 +206,8 @@ const defaultExportFormat = {
     caption_font: '宋体',
     caption_size: '小五',
     caption_alignment: '居中对齐',
+    caption_bold: false,
+    caption_italic: false,
   },
 };
 
@@ -451,6 +453,8 @@ function normalizeImageStyle(source, def) {
     caption_font: typeof src.caption_font === 'string' && src.caption_font ? src.caption_font : def.caption_font,
     caption_size: typeof src.caption_size === 'string' && src.caption_size ? src.caption_size : def.caption_size,
     caption_alignment: typeof src.caption_alignment === 'string' && src.caption_alignment ? src.caption_alignment : def.caption_alignment,
+    caption_bold: typeof src.caption_bold === 'boolean' ? src.caption_bold : def.caption_bold,
+    caption_italic: typeof src.caption_italic === 'boolean' ? src.caption_italic : def.caption_italic,
   };
 }
 

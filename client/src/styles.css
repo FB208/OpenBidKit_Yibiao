@@ -2130,8 +2130,29 @@ button {
 .markdown-viewer.export-format-preview p:has(> img:only-child),
 .markdown-viewer.export-format-preview p:has(> em:only-child),
 .markdown-viewer.export-format-preview .markdown-figure-caption {
-  text-align: center;
+  text-align: var(--ef-image-caption-align, center);
   text-indent: 0;
+}
+
+.markdown-viewer.export-format-preview p:has(> img:only-child) {
+  text-align: var(--ef-image-align, center);
+}
+
+.markdown-viewer.export-format-preview p:has(> img:only-child) img {
+  max-width: var(--ef-image-max-width, 90%);
+}
+
+.markdown-viewer.export-format-preview .markdown-figure-caption {
+  font-family: var(--ef-image-caption-font, inherit);
+  font-size: var(--ef-image-caption-size, inherit);
+  font-weight: var(--ef-image-caption-weight, 400);
+  font-style: var(--ef-image-caption-style, normal);
+}
+
+.markdown-viewer.export-format-preview .markdown-figure-caption em,
+.markdown-viewer.export-format-preview .markdown-figure-caption strong {
+  font-weight: inherit;
+  font-style: inherit;
 }
 .markdown-viewer.export-format-preview ul,
 .markdown-viewer.export-format-preview ol {
@@ -11754,6 +11775,8 @@ button {
   font-family: var(--ef-image-caption-font, 'SimSun', serif);
   font-size: var(--ef-image-caption-size, 9pt);
   text-align: var(--ef-image-caption-align, center);
+  font-weight: var(--ef-image-caption-weight, 400);
+  font-style: var(--ef-image-caption-style, normal);
 }
 
 .export-template-error-state {
