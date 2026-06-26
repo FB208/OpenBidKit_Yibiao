@@ -1,4 +1,4 @@
-const { ipcMain } = require('electron');
+const { ipcMain, shell } = require('electron');
 
 function registerExportIpc({ exportService }) {
   ipcMain.handle('export:word', async (event, payload = {}) => {
@@ -17,6 +17,20 @@ function registerExportIpc({ exportService }) {
       });
       throw error;
     }
+  });
+
+  ipcMain.handle('export:open-file', async (_event, filePath) => {
+    const targetPath = String(filePath || '').trim();
+    if (!targetPath) {
+      throw new Error('缺少要打开的文件路径');
+    }
+
+    const errorMessage = await shell.openPath(targetPath);
+    if (errorMessage) {
+      throw new Error(`打开文件失败：${errorMessage}`);
+    }
+
+    return { success: true };
   });
 }
 

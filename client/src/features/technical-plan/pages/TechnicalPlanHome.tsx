@@ -105,6 +105,7 @@ interface ExportProgressState {
   message: string;
   warnings: string[];
   mermaidCount: number;
+  filePath?: string;
   error?: string;
 }
 
@@ -728,6 +729,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         progress: 100,
         message: result?.message || 'Word 已导出，请打开文档核对图片、表格和版式。',
         warnings: result?.warnings || prev.warnings,
+        filePath: result?.path,
       }));
       showToast(result?.message || 'Word 已导出', result?.warnings?.length ? 'info' : 'success');
     } catch (error) {
@@ -743,6 +745,17 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
       showToast(message, 'error');
     } finally {
       unsubscribe?.();
+    }
+  };
+
+  const handleOpenExportedFile = async () => {
+    if (!exportProgress.filePath) return;
+
+    try {
+      await window.yibiao?.export.openFile(exportProgress.filePath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '打开文件失败';
+      showToast(message, 'error');
     }
   };
 
@@ -1140,7 +1153,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             </div>
             {!exportProgress.running && (
               <div className="content-regenerate-actions">
-                <Dialog.Close className="primary-action" type="button">知道了</Dialog.Close>
+                {!exportProgress.error && exportProgress.filePath && <button className="primary-action" type="button" onClick={() => { void handleOpenExportedFile(); }}>打开文件</button>}
+                <Dialog.Close className={exportProgress.filePath && !exportProgress.error ? 'secondary-action' : 'primary-action'} type="button">知道了</Dialog.Close>
               </div>
             )}
           </Dialog.Content>

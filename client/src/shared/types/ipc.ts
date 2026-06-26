@@ -304,6 +304,7 @@ export interface YibiaoBridge {
   };
   export: {
     exportWord: (payload: unknown) => Promise<WordExportResult>;
+    openFile: (filePath: string) => Promise<{ success: boolean }>;
     onWordExportProgress: (callback: (event: WordExportProgressEvent) => void) => () => void;
   };
   systemFonts: {
