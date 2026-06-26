@@ -14,9 +14,12 @@ const {
   Document,
   ExternalHyperlink,
   Footer,
+  Header,
+  HeightRule,
   HeadingLevel,
   ImageRun,
   LevelFormat,
+  LevelSuffix,
   Packer,
   PageNumber,
   PageOrientation,
@@ -33,6 +36,7 @@ const {
 
 const MAX_IMAGE_WIDTH = 520;
 const NUMBERING_REFERENCE_PREFIX = 'technical-plan-numbering';
+const HEADING_NUMBERING_REFERENCE = 'technical-plan-heading-numbering';
 const DOCX_TABLE_WIDTH_TWIPS = 9000;
 const MERMAID_EXPORT_RETRY_ATTEMPTS = 2;
 const MERMAID_EXPORT_RETRY_DELAY_MS = 3000;
@@ -193,6 +197,15 @@ function cleanText(value) {
   return String(value || '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
 }
 
+function normalizeDocxColor(value, fallback = '536176') {
+  const raw = String(value || '').trim().replace(/^#/, '');
+  if (/^[0-9a-f]{6}$/i.test(raw)) return raw.toUpperCase();
+  if (/^[0-9a-f]{3}$/i.test(raw)) {
+    return raw.split('').map((char) => `${char}${char}`).join('').toUpperCase();
+  }
+  return fallback;
+}
+
 function textRun(text, options = {}) {
   return new TextRun({
     text: cleanText(text),
@@ -238,6 +251,185 @@ function paragraph(children, options = {}) {
     border: options.border,
     shading: options.shading,
   });
+}
+
+function isFooterEnabled(pageSetup) {
+  return pageSetup ? pageSetup.footer_enabled !== false : true;
+}
+
+function isPageNumberEnabled(pageSetup) {
+  return pageSetup ? pageSetup.page_number_enabled !== false : true;
+}
+
+function getChapterFrameConfig(exportFormat) {
+  const frame = exportFormat?.heading_border;
+  if (!frame?.enabled) return null;
+  const color = normalizeDocxColor(frame.border_color || '#2174fd', '2174FD');
+  return {
+    color,
+    fills: [14, 10, 6, 3, 0, 0].map((weight) => mixDocxColor(color, 'FFFFFF', weight)),
+  };
+}
+
+function hexToRgb(value) {
+  const hex = normalizeDocxColor(value, '000000');
+  return {
+    r: parseInt(hex.slice(0, 2), 16),
+    g: parseInt(hex.slice(2, 4), 16),
+    b: parseInt(hex.slice(4, 6), 16),
+  };
+}
+
+function mixDocxColor(source, target, sourceWeightPercent) {
+  const from = hexToRgb(source);
+  const to = hexToRgb(target);
+  const weight = Math.max(0, Math.min(Number(sourceWeightPercent) || 0, 100)) / 100;
+  const channel = (a, b) => Math.round(a * weight + b * (1 - weight)).toString(16).padStart(2, '0').toUpperCase();
+  return `${channel(from.r, to.r)}${channel(from.g, to.g)}${channel(from.b, to.b)}`;
+}
+
+function chapterHeadingRowStyle(level) {
+  const table = [
+    { height: 520, top: 120, bottom: 120, left: 180, right: 180 },
+    { height: 430, top: 100, bottom: 100, left: 260, right: 180 },
+    { height: 360, top: 80, bottom: 80, left: 340, right: 180 },
+    { height: 320, top: 70, bottom: 70, left: 420, right: 180 },
+    { height: 290, top: 60, bottom: 60, left: 500, right: 180 },
+    { height: 270, top: 55, bottom: 55, left: 580, right: 180 },
+  ];
+  return table[Math.max(0, Math.min(level - 1, table.length - 1))];
+}
+
+function buildChapterHeadingRow(exportFormat, headingParagraph, level) {
+  const frame = getChapterFrameConfig(exportFormat);
+  if (!frame) return undefined;
+  const border = { style: BorderStyle.SINGLE, size: 6, color: frame.color };
+  const none = { style: BorderStyle.NIL, size: 0, color: 'FFFFFF' };
+  const rowStyle = chapterHeadingRowStyle(level);
+
+  return new TableRow({
+    cantSplit: true,
+    height: { value: rowStyle.height, rule: HeightRule.ATLEAST },
+    children: [new TableCell({
+      children: [headingParagraph],
+      shading: { type: ShadingType.CLEAR, fill: frame.fills[Math.max(0, Math.min(level - 1, 5))] || 'FFFFFF' },
+      margins: { top: rowStyle.top, bottom: rowStyle.bottom, left: rowStyle.left, right: rowStyle.right },
+      width: { size: DOCX_TABLE_WIDTH_TWIPS, type: WidthType.DXA },
+      borders: { top: border, left: border, right: border, bottom: border },
+    })],
+  });
+}
+
+function buildChapterContentRow(exportFormat, bodyChildren) {
+  const frame = getChapterFrameConfig(exportFormat);
+  if (!frame) return undefined;
+  const border = { style: BorderStyle.SINGLE, size: 6, color: frame.color };
+  const none = { style: BorderStyle.NIL, size: 0, color: 'FFFFFF' };
+  const body = bodyChildren?.length ? bodyChildren : [paragraph([textRun('')], { after: 0 })];
+
+  return new TableRow({
+    children: [new TableCell({
+      children: body,
+      margins: { top: 200, bottom: 220, left: 260, right: 260 },
+      width: { size: DOCX_TABLE_WIDTH_TWIPS, type: WidthType.DXA },
+      borders: { top: none, left: border, right: border, bottom: border },
+    })],
+  });
+}
+
+function buildChapterFrameTable(exportFormat, rows) {
+  const frame = getChapterFrameConfig(exportFormat);
+  if (!frame) return undefined;
+  const border = { style: BorderStyle.SINGLE, size: 6, color: frame.color };
+  const none = { style: BorderStyle.NIL, size: 0, color: 'FFFFFF' };
+
+  return new Table({
+    rows,
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    columnWidths: [DOCX_TABLE_WIDTH_TWIPS],
+    layout: TableLayoutType.FIXED,
+    borders: {
+      top: border,
+      bottom: border,
+      left: border,
+      right: border,
+      insideHorizontal: border,
+      insideVertical: none,
+    },
+  });
+}
+
+function createPageNumberRuns(format, runOptions) {
+  const parts = String(format || '第{page}页').split('{page}');
+  const runs = [];
+
+  if (parts[0]) {
+    runs.push(new TextRun({ ...runOptions, text: cleanText(parts[0]) }));
+  }
+  runs.push(new TextRun({ ...runOptions, children: [PageNumber.CURRENT] }));
+  if (parts[1]) {
+    runs.push(new TextRun({ ...runOptions, text: cleanText(parts[1]) }));
+  }
+
+  return runs;
+}
+
+function buildWordHeaders(pageSetup) {
+  const enabled = pageSetup ? pageSetup.header_enabled === true : false;
+  const headerText = cleanText(pageSetup?.header_text || '').trim();
+  if (!enabled || !headerText) return undefined;
+
+  const runOptions = {
+    font: pageSetup?.header_font || '宋体',
+    size: chineseSizeToHalfPt(pageSetup?.header_size || '小五'),
+    color: normalizeDocxColor(pageSetup?.header_color || '#536176'),
+  };
+
+  return {
+    default: new Header({
+      children: [
+        new Paragraph({
+          alignment: alignmentToWordType(pageSetup?.header_alignment || '居中对齐'),
+          children: [new TextRun({ ...runOptions, text: headerText })],
+        }),
+      ],
+    }),
+  };
+}
+
+function buildWordFooters(pageSetup) {
+  const footerEnabled = isFooterEnabled(pageSetup);
+  const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
+  const pageNumberEnabled = isPageNumberEnabled(pageSetup);
+  if (!footerText && !pageNumberEnabled) return undefined;
+
+  const runOptions = {
+    font: pageSetup?.footer_font || '宋体',
+    size: chineseSizeToHalfPt(pageSetup?.footer_size || '小五'),
+    color: normalizeDocxColor(pageSetup?.footer_color || '#536176'),
+  };
+  const footerChildren = [];
+
+  if (footerText) {
+    footerChildren.push(new TextRun({ ...runOptions, text: footerText }));
+  }
+  if (footerText && pageNumberEnabled) {
+    footerChildren.push(new TextRun({ ...runOptions, text: '    ' }));
+  }
+  if (pageNumberEnabled) {
+    footerChildren.push(...createPageNumberRuns(pageSetup?.page_number_format || '第{page}页', runOptions));
+  }
+
+  return {
+    default: new Footer({
+      children: [
+        new Paragraph({
+          alignment: alignmentToWordType(footerEnabled ? (pageSetup?.footer_alignment || '居中对齐') : '居中对齐'),
+          children: footerChildren,
+        }),
+      ],
+    }),
+  };
 }
 
 function tableBorders() {
@@ -497,31 +689,33 @@ function numberToChinese(num) {
   return `${digits[th]}千${r === 0 ? '' : r < 100 ? `零${numberToChinese(r)}` : numberToChinese(r)}`;
 }
 
-function formatOutlineNumber(id, numberingFormat) {
-  const parts = String(id || '').split('.').filter(Boolean);
-  if (!parts.length) return '';
-
-  const lastPart = parseInt(parts[parts.length - 1], 10);
-  if (!Number.isFinite(lastPart) || lastPart <= 0) return '';
-
-  const cn = numberToChinese(lastPart);
-
-  switch (numberingFormat) {
-    case 'chinese-chapter': return `第${cn}章`;
-    case 'chinese-section': return `第${cn}节`;
-    case 'chinese-dun':     return `${cn}、`;
-    case 'chinese-paren':   return `（${cn}）`;
-    case 'arabic-dun':      return `${lastPart}、`;
-    case 'arabic-dot':      return `${lastPart}.`;
-    case 'arabic-paren':    return `(${lastPart})`;
-    case 'arabic':          return `${lastPart}`;
-    case 'none':            return '';
-    default:                return '';
-  }
+function outlineNumberParts(id) {
+  return String(id || '')
+    .split('.')
+    .map((part) => parseInt(part, 10))
+    .filter((part) => Number.isFinite(part) && part > 0);
 }
 
-function formatOutlineTitle(id, title, numberingFormat) {
-  const prefix = formatOutlineNumber(id, numberingFormat);
+function formatOutlineNumber(id, headingStyle) {
+  const parts = outlineNumberParts(id);
+  if (!parts.length) return '';
+
+  if (headingStyle?.numbering_format === 'outline-decimal') {
+    return parts.join('.');
+  }
+
+  if (headingStyle?.numbering_format !== 'custom') return '';
+
+  const lastPart = parts[parts.length - 1];
+  const cn = numberToChinese(lastPart);
+  return String(headingStyle.numbering_template || '')
+    .replace(/\{zh\}/g, cn)
+    .replace(/\{num\}/g, String(lastPart))
+    .trim();
+}
+
+function formatOutlineTitle(id, title, headingStyle) {
+  const prefix = formatOutlineNumber(id, headingStyle);
   return prefix ? `${prefix} ${title || ''}` : String(title || '');
 }
 
@@ -531,9 +725,8 @@ function getHeadingStyle(exportFormat, level) {
   return headings[idx] || null;
 }
 
-function getHeadingNumberingFormat(exportFormat, level) {
-  const style = getHeadingStyle(exportFormat, level);
-  return (style && style.numbering_format) ? style.numbering_format : 'none';
+function usesNativeHeadingNumbering(headingStyle) {
+  return headingStyle?.numbering_format === 'outline-decimal';
 }
 
 function imageTypeFromMime(mime) {
@@ -1283,36 +1476,76 @@ async function addMarkdownContent(children, content, context) {
   children.push(...await markdownToDocxBlocks(content, context));
 }
 
+function buildOutlineHeadingParagraph(item, context, level, options = {}) {
+  const style = getHeadingStyle(context.exportFormat, level);
+  const nativeHeadingNumbering = usesNativeHeadingNumbering(style);
+  const displayTitle = nativeHeadingNumbering
+    ? String(item.title || '')
+    : formatOutlineTitle(item.id, item.title, style);
+
+  const runOptions = { bold: false };
+  if (style) {
+    runOptions.font = style.font || '黑体';
+    runOptions.size = chineseSizeToHalfPt(style.size || '小四');
+    if (style.font === '楷体') {
+      runOptions.bold = false;
+    }
+  } else {
+    runOptions.bold = true;
+  }
+
+  const paraOptions = {
+    heading: headingLevel(level),
+    alignment: style ? alignmentToWordType(style.alignment) : undefined,
+    before: options.compact ? 0 : (style ? style.spacing_before_pt * 20 : (level === 1 ? 320 : 200)),
+    after: options.compact ? 0 : (style ? style.spacing_after_pt * 20 : 120),
+    line: style ? 240 * (style.line_spacing || 1) : undefined,
+  };
+  if (style && style.first_line_indent_chars > 0) {
+    paraOptions.indent = { firstLine: style.first_line_indent_chars * 240 };
+  }
+  if (nativeHeadingNumbering) {
+    context.usesHeadingNumbering = true;
+    paraOptions.numbering = { reference: HEADING_NUMBERING_REFERENCE, level: Math.min(level - 1, 5) };
+  }
+
+  return paragraph([textRun(displayTitle, runOptions)], paraOptions);
+}
+
+async function addChapterFrameRows(rows, items, context, level = 1) {
+  for (const item of items || []) {
+    rows.push(buildChapterHeadingRow(
+      context.exportFormat,
+      buildOutlineHeadingParagraph(item, context, level, { compact: true }),
+      level,
+    ));
+
+    if (!item.children?.length) {
+      if (String(item.content || '').trim()) {
+        const bodyChildren = [];
+        await addMarkdownContent(bodyChildren, item.content, context);
+        rows.push(buildChapterContentRow(context.exportFormat, bodyChildren));
+      }
+      context.convertedLeafCount = (context.convertedLeafCount || 0) + 1;
+      reportConversionProgress(context, `已处理 ${context.convertedLeafCount}/${context.stats?.leafCount || context.convertedLeafCount} 个正文小节。`);
+      continue;
+    }
+
+    await addChapterFrameRows(rows, item.children, context, level + 1);
+  }
+}
+
 async function addOutlineItems(children, items, context, level = 1) {
   for (const item of items || []) {
-    const numberingFormat = getHeadingNumberingFormat(context.exportFormat, level);
-    const title = formatOutlineTitle(item.id, item.title, numberingFormat);
-    const style = getHeadingStyle(context.exportFormat, level);
-    const displayTitle = title;
-
-    const runOptions = { bold: false };
-    if (style) {
-      runOptions.font = style.font || '黑体';
-      runOptions.size = chineseSizeToHalfPt(style.size || '小四');
-      if (style.font === '楷体') {
-        runOptions.bold = false;
-      }
-    } else {
-      runOptions.bold = true;
+    const useChapterFrame = level === 1 && getChapterFrameConfig(context.exportFormat);
+    if (useChapterFrame) {
+      const rows = [];
+      await addChapterFrameRows(rows, [item], context, level);
+      children.push(buildChapterFrameTable(context.exportFormat, rows));
+      continue;
     }
 
-    const paraOptions = {
-      heading: headingLevel(level),
-      alignment: style ? alignmentToWordType(style.alignment) : undefined,
-      before: style ? style.spacing_before_pt * 20 : (level === 1 ? 320 : 200),
-      after: style ? style.spacing_after_pt * 20 : 120,
-      line: style ? 240 * (style.line_spacing || 1) : undefined,
-    };
-    if (style && style.first_line_indent_chars > 0) {
-      paraOptions.indent = { firstLine: style.first_line_indent_chars * 240 };
-    }
-
-    children.push(paragraph([textRun(displayTitle, runOptions)], paraOptions));
+    children.push(buildOutlineHeadingParagraph(item, context, level));
 
     if (!item.children?.length) {
       if (String(item.content || '').trim()) {
@@ -1327,27 +1560,52 @@ async function addOutlineItems(children, items, context, level = 1) {
   }
 }
 
+function createHeadingNumberingConfig() {
+  return {
+    reference: HEADING_NUMBERING_REFERENCE,
+    levels: [0, 1, 2, 3, 4, 5].map((level) => ({
+      level,
+      format: LevelFormat.DECIMAL,
+      start: 1,
+      text: Array.from({ length: level + 1 }, (_, index) => `%${index + 1}`).join('.'),
+      alignment: AlignmentType.START,
+      suffix: LevelSuffix.TAB,
+      style: {
+        paragraph: {
+          indent: { left: 360 + level * 360, hanging: 360 },
+        },
+      },
+    })),
+  };
+}
+
 function createNumberingConfig(context) {
   const references = context.numberingReferences || [];
-  if (!references.length) {
+  if (!references.length && !context.usesHeadingNumbering) {
     return undefined;
   }
 
-  return {
-    config: references.map((reference) => ({
-      reference,
-      levels: [0, 1, 2].map((level) => ({
-        level,
-        format: LevelFormat.DECIMAL,
-        text: `%${level + 1}.`,
-        alignment: AlignmentType.START,
-        style: {
-          paragraph: {
-            indent: { left: 720 + level * 420, hanging: 260 },
-          },
+  const config = [];
+  if (context.usesHeadingNumbering) {
+    config.push(createHeadingNumberingConfig());
+  }
+  config.push(...references.map((reference) => ({
+    reference,
+    levels: [0, 1, 2].map((level) => ({
+      level,
+      format: LevelFormat.DECIMAL,
+      text: `%${level + 1}.`,
+      alignment: AlignmentType.START,
+      style: {
+        paragraph: {
+          indent: { left: 720 + level * 420, hanging: 260 },
         },
-      })),
+      },
     })),
+  })));
+
+  return {
+    config,
   };
 }
 
@@ -1414,6 +1672,7 @@ async function buildDocxResult(payload, options = {}) {
     imageSuccessCount: 0,
     numberingReferences: [],
     numberingIndex: 0,
+    usesHeadingNumbering: false,
     unsupportedHtmlTags: new Set(),
     developerLogger: options.developerLogger,
     exportFormat,
@@ -1481,38 +1740,12 @@ async function buildDocxResult(payload, options = {}) {
     }
   }
 
-  // 页脚 — 页码
+  // 页眉 / 页脚 / 页码
   const sectionChildren = [...children];
-  const footerEnabled = pageSetup ? pageSetup.footer_enabled !== false : true;
-  const pageNumberEnabled = pageSetup ? pageSetup.page_number_enabled !== false : true;
-  const footerFont = pageSetup ? (pageSetup.footer_font || '宋体') : '宋体';
-  const footerSize = chineseSizeToHalfPt(pageSetup ? (pageSetup.footer_size || '小五') : '小五');
-  const pageNumberFormat = pageSetup ? (pageSetup.page_number_format || '第{page}页') : '第{page}页';
+  const pageNumberEnabled = isPageNumberEnabled(pageSetup);
   const pageNumberStart = Math.max(1, Math.floor(Number(pageSetup ? pageSetup.page_number_start : 1) || 1));
-  const pageNumParts = (pageNumberFormat || '第{page}页').split('{page}');
-
-  let footers = undefined;
-  if (footerEnabled && pageNumberEnabled) {
-    const footerChildren = [];
-    if (pageNumParts[0]) {
-      footerChildren.push(new TextRun({ text: pageNumParts[0], font: footerFont, size: footerSize }));
-    }
-    footerChildren.push(new TextRun({ children: [PageNumber.CURRENT], font: footerFont, size: footerSize }));
-    if (pageNumParts[1]) {
-      footerChildren.push(new TextRun({ text: pageNumParts[1], font: footerFont, size: footerSize }));
-    }
-
-    footers = {
-      default: new Footer({
-        children: [
-          new Paragraph({
-            alignment: AlignmentType.CENTER,
-            children: footerChildren,
-          }),
-        ],
-      }),
-    };
-  }
+  const headers = buildWordHeaders(pageSetup);
+  const footers = buildWordFooters(pageSetup);
 
   const numbering = createNumberingConfig(context);
   const headingStyles = buildHeadingParagraphStyles(exportFormat);
@@ -1537,6 +1770,7 @@ async function buildDocxResult(payload, options = {}) {
     },
     sections: [{
       properties: sectionProperties,
+      headers,
       footers,
       children: sectionChildren,
     }],

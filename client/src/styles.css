@@ -8434,6 +8434,67 @@ button {
   padding-right: 42px;
 }
 
+.font-picker-input {
+  font-family: inherit;
+}
+
+.font-picker {
+  position: relative;
+  width: 100%;
+}
+
+.font-picker-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  z-index: 80;
+  display: grid;
+  max-height: 280px;
+  overflow: auto;
+  padding: 6px;
+  background: #ffffff;
+  border: 1px solid #ccd6e3;
+  border-radius: 14px;
+  box-shadow: 0 18px 44px rgba(23, 32, 51, 0.16);
+}
+
+.font-picker-summary {
+  position: sticky;
+  top: -6px;
+  z-index: 1;
+  padding: 8px 10px;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.font-picker-option {
+  width: 100%;
+  min-height: 34px;
+  padding: 8px 10px;
+  color: var(--yb-text);
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.font-picker-option:hover,
+.font-picker-option.is-selected {
+  color: #155bd7;
+  background: rgba(33, 116, 253, 0.1);
+}
+
+.font-picker-empty {
+  padding: 12px 10px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+}
+
 .settings-row input:focus,
 .settings-row select:focus {
   background-color: #ffffff;
@@ -11167,6 +11228,7 @@ button {
 /* ── A4 纸面模拟 ── */
 
 .export-format-paper {
+  position: relative;
   width: var(--ef-page-width, 210mm);
   max-width: none;
   min-height: var(--ef-page-height, 297mm);
@@ -11182,6 +11244,92 @@ button {
   line-height: var(--ef-body-line-height, 1.5);
 }
 
+.export-format-paper > * {
+  position: relative;
+  z-index: 1;
+}
+
+.export-template-chapter-frame {
+  margin: 0 0 16pt;
+  overflow: hidden;
+  background: #fff;
+  border: var(--ef-chapter-frame-border, none);
+}
+
+.export-template-chapter-heading-row {
+  display: grid;
+  align-items: center;
+  box-sizing: border-box;
+  border-bottom: var(--ef-chapter-row-border, none);
+}
+
+.export-template-chapter-heading-row h1,
+.export-template-chapter-heading-row h2,
+.export-template-chapter-heading-row h3,
+.export-template-chapter-heading-row h4,
+.export-template-chapter-heading-row h5,
+.export-template-chapter-heading-row h6 {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  text-indent: 0;
+}
+
+.export-template-chapter-heading-row.is-level-1 {
+  min-height: 36pt;
+  padding: 7pt 12pt;
+  background: var(--ef-chapter-row-1-background, transparent);
+}
+
+.export-template-chapter-heading-row.is-level-2 {
+  min-height: 30pt;
+  padding: 6pt 12pt 6pt 20pt;
+  background: var(--ef-chapter-row-2-background, transparent);
+}
+
+.export-template-chapter-heading-row.is-level-3 {
+  min-height: 26pt;
+  padding: 5pt 12pt 5pt 30pt;
+  background: var(--ef-chapter-row-3-background, transparent);
+}
+
+.export-template-chapter-heading-row.is-level-4 {
+  min-height: 23pt;
+  padding: 4pt 12pt 4pt 40pt;
+  background: var(--ef-chapter-row-4-background, transparent);
+}
+
+.export-template-chapter-heading-row.is-level-5 {
+  min-height: 21pt;
+  padding: 3pt 12pt 3pt 50pt;
+  background: var(--ef-chapter-row-5-background, transparent);
+}
+
+.export-template-chapter-heading-row.is-level-6 {
+  min-height: 20pt;
+  padding: 3pt 12pt 3pt 60pt;
+  background: var(--ef-chapter-row-6-background, transparent);
+}
+
+.export-template-chapter-content-row {
+  padding: 10pt 16pt 12pt;
+  border-bottom: var(--ef-chapter-row-border, none);
+}
+
+.export-template-chapter-content-row:last-child {
+  border-bottom: 0;
+}
+
+.export-template-chapter-content-row > :first-child {
+  margin-top: 0;
+}
+
+.export-template-chapter-content-row > :last-child {
+  margin-bottom: 0;
+}
+
 .export-template-page-header {
   margin-bottom: 18px;
   padding-bottom: 8px;
@@ -11193,9 +11341,6 @@ button {
 }
 
 .export-template-page-footer {
-  display: flex;
-  justify-content: center;
-  gap: 18px;
   margin-top: 24px;
   padding-top: 8px;
   color: var(--ef-footer-color, var(--yb-text-soft));
@@ -11203,6 +11348,10 @@ button {
   font-size: var(--ef-footer-size, 9pt);
   text-align: var(--ef-footer-align, center);
   border-top: 1px solid rgba(220, 223, 246, 0.82);
+}
+
+.export-template-page-footer span + span {
+  margin-left: 18px;
 }
 
 /* 预览内容 — 正文段落 */
@@ -11311,9 +11460,7 @@ button {
 .export-format-preview-content h5,
 .export-format-preview-content h6 {
   display: var(--ef-heading-layout, block);
-  padding: var(--ef-heading-padding, 0);
-  background: var(--ef-heading-background, transparent);
-  border: var(--ef-heading-border, none);
+  position: relative;
 }
 
 /* 预览内容 — 表格 */

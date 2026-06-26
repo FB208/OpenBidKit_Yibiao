@@ -83,12 +83,19 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
   vars['--ef-footer-align'] = alignmentToCss(config.page.footer_alignment || '居中对齐');
   vars['--ef-footer-color'] = config.page.footer_color || '#536176';
 
-  // ── 标题边框 ──
+  // ── 章节页框 ──
   const headingBorder = config.heading_border;
-  vars['--ef-heading-border'] = headingBorder?.enabled ? `1px solid ${headingBorder.border_color || '#2174fd'}` : 'none';
-  vars['--ef-heading-background'] = headingBorder?.enabled ? (headingBorder.background_color || '#eef5ff') : 'transparent';
-  vars['--ef-heading-padding'] = headingBorder?.enabled ? '6pt 8pt' : '0';
-  vars['--ef-heading-layout'] = headingBorder?.structure === '左右结构' ? 'inline-flex' : 'block';
+  const frameEnabled = headingBorder?.enabled === true;
+  const frameColor = headingBorder?.border_color || '#2174fd';
+  vars['--ef-chapter-frame-border'] = frameEnabled ? `0.8pt solid ${frameColor}` : 'none';
+  vars['--ef-chapter-frame-color'] = frameEnabled ? frameColor : 'transparent';
+  vars['--ef-chapter-row-border'] = frameEnabled ? `0.6pt solid color-mix(in srgb, ${frameColor} 55%, white)` : 'none';
+  vars['--ef-chapter-row-1-background'] = frameEnabled ? `color-mix(in srgb, ${frameColor} 15%, white)` : 'transparent';
+  vars['--ef-chapter-row-2-background'] = frameEnabled ? `color-mix(in srgb, ${frameColor} 10%, white)` : 'transparent';
+  vars['--ef-chapter-row-3-background'] = frameEnabled ? `color-mix(in srgb, ${frameColor} 6%, white)` : 'transparent';
+  vars['--ef-chapter-row-4-background'] = frameEnabled ? `color-mix(in srgb, ${frameColor} 3%, white)` : 'transparent';
+  vars['--ef-chapter-row-5-background'] = '#ffffff';
+  vars['--ef-chapter-row-6-background'] = '#ffffff';
 
   // ── 正文 ──
   const bodySizePt = chineseSizeToPt(config.body_text.size);

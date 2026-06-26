@@ -3,35 +3,12 @@
  */
 
 // ── 编号格式 ─────────────────────────────────────
-export const NUMBERING_FORMATS = [
-  { value: 'chinese-chapter', label: '第一章', hint: '第{一}章' },
-  { value: 'chinese-section', label: '第一节', hint: '第{一}节' },
-  { value: 'chinese-dun', label: '一、', hint: '{一}、' },
-  { value: 'chinese-paren', label: '（一）', hint: '（{一}）' },
-  { value: 'arabic-dun', label: '1、', hint: '{1}、' },
-  { value: 'arabic-dot', label: '1.', hint: '{1}.' },
-  { value: 'arabic-paren', label: '(1)', hint: '({1})' },
-  { value: 'arabic', label: '1', hint: '{1}' },
-  { value: 'none', label: '无编号', hint: '无编号前缀' },
+export const HEADING_NUMBERING_FORMAT_OPTIONS = [
+  { value: 'outline-decimal', label: '数字连续多级编号（1.1.1）' },
+  { value: 'custom', label: '自定义' },
 ] as const;
 
-export type NumberingFormat = (typeof NUMBERING_FORMATS)[number]['value'];
-
-export const HEADING_NUMBERING_STYLE_OPTIONS = [
-  { value: 'classic', label: '经典章节' },
-  { value: 'chinese', label: '中文序号' },
-  { value: 'arabic', label: '阿拉伯数字' },
-  { value: 'none', label: '无编号' },
-] as const;
-
-export type HeadingNumberingStyle = (typeof HEADING_NUMBERING_STYLE_OPTIONS)[number]['value'];
-
-export const HEADING_NUMBERING_STYLE_PRESETS: Record<HeadingNumberingStyle, NumberingFormat[]> = {
-  classic: ['chinese-chapter', 'chinese-section', 'chinese-dun', 'chinese-paren', 'arabic-dun', 'arabic-paren'],
-  chinese: ['chinese-dun', 'chinese-paren', 'arabic-dun', 'arabic-paren', 'arabic', 'none'],
-  arabic: ['arabic-dot', 'arabic-dot', 'arabic-dot', 'arabic-paren', 'arabic', 'none'],
-  none: ['none', 'none', 'none', 'none', 'none', 'none'],
-};
+export type HeadingNumberingFormat = (typeof HEADING_NUMBERING_FORMAT_OPTIONS)[number]['value'];
 
 export const HEADING_BORDER_STRUCTURE_OPTIONS = [
   { value: '上下结构', label: '上下结构' },
@@ -51,13 +28,13 @@ export interface HeadingStyleConfig {
   spacing_after_pt: number;
   first_line_indent_chars: number;
   line_spacing: number;         // 倍数，如 1、1.2、1.5
-  numbering_format: NumberingFormat;
+  numbering_format: HeadingNumberingFormat;
+  numbering_template: string;   // 自定义编号模板，支持 {zh} 和 {num}
 }
 
 export interface HeadingBorderConfig {
   enabled: boolean;
   border_color: string;
-  background_color: string;
   structure: HeadingBorderStructure;
 }
 
@@ -157,7 +134,6 @@ export interface PageSetupConfig {
 export interface ExportFormatConfig {
   template_name: string;
   page: PageSetupConfig;
-  heading_numbering_style: HeadingNumberingStyle;
   heading_level1_page_break_before: boolean;
   heading_border: HeadingBorderConfig;
   headings: HeadingStyleConfig[];  // 索引 0=L1（章），5=L6
@@ -178,10 +154,33 @@ export interface ExportTemplateRecord {
 
 export const FONT_OPTIONS = [
   '宋体',
+  '新宋体',
   '黑体',
   '楷体',
   '仿宋',
   '微软雅黑',
+  '微软雅黑 Light',
+  '等线',
+  '等线 Light',
+  '隶书',
+  '幼圆',
+  '华文宋体',
+  '华文黑体',
+  '华文楷体',
+  '华文仿宋',
+  '华文中宋',
+  '华文细黑',
+  '苹方',
+  'PingFang SC',
+  '宋体-简',
+  '黑体-简',
+  '楷体-简',
+  '冬青黑体简体中文',
+  'Hiragino Sans GB',
+  '思源宋体',
+  '思源黑体',
+  'Source Han Serif SC',
+  'Source Han Sans SC',
 ] as const;
 
 export type FontOption = (typeof FONT_OPTIONS)[number];
@@ -244,10 +243,33 @@ export const SIZE_TO_PT: Record<string, number> = {
 // ── 中文字体 → CSS font-family 映射 ───────────────
 export const FONT_TO_CSS: Record<string, string> = {
   '宋体': "'SimSun', 'STSong', serif",
+  '新宋体': "'NSimSun', 'SimSun', serif",
   '黑体': "'SimHei', 'STHeiti', sans-serif",
   '楷体': "'KaiTi', 'STKaiti', 'Kai', serif",
   '仿宋': "'FangSong', 'STFangsong', serif",
   '微软雅黑': "'Microsoft YaHei', sans-serif",
+  '微软雅黑 Light': "'Microsoft YaHei UI Light', 'Microsoft YaHei Light', 'Microsoft YaHei', sans-serif",
+  '等线': "'DengXian', 'Microsoft YaHei', sans-serif",
+  '等线 Light': "'DengXian Light', 'DengXian', sans-serif",
+  '隶书': "'LiSu', 'STLiti', serif",
+  '幼圆': "'YouYuan', sans-serif",
+  '华文宋体': "'华文宋体', 'STSong', serif",
+  '华文黑体': "'华文黑体', 'STHeiti', sans-serif",
+  '华文楷体': "'华文楷体', 'STKaiti', serif",
+  '华文仿宋': "'华文仿宋', 'STFangsong', serif",
+  '华文中宋': "'华文中宋', 'STZhongsong', serif",
+  '华文细黑': "'华文细黑', 'STXihei', sans-serif",
+  '苹方': "'PingFang SC', 'PingFang', sans-serif",
+  'PingFang SC': "'PingFang SC', 'PingFang', sans-serif",
+  '宋体-简': "'Songti SC', 'STSong', serif",
+  '黑体-简': "'Heiti SC', 'STHeiti', sans-serif",
+  '楷体-简': "'Kaiti SC', 'STKaiti', serif",
+  '冬青黑体简体中文': "'Hiragino Sans GB', '冬青黑体简体中文', sans-serif",
+  'Hiragino Sans GB': "'Hiragino Sans GB', sans-serif",
+  '思源宋体': "'Source Han Serif SC', 'Noto Serif CJK SC', serif",
+  '思源黑体': "'Source Han Sans SC', 'Noto Sans CJK SC', sans-serif",
+  'Source Han Serif SC': "'Source Han Serif SC', 'Noto Serif CJK SC', serif",
+  'Source Han Sans SC': "'Source Han Sans SC', 'Noto Sans CJK SC', sans-serif",
 };
 
 // ── 对齐方式 → CSS text-align 映射 ────────────────
@@ -274,14 +296,14 @@ const DEFAULT_PAGE_SETUP: PageSetupConfig = {
   header_size: '小五',
   header_alignment: '居中对齐',
   header_color: '#536176',
-  footer_enabled: true,
+  footer_enabled: false,
   footer_text: '',
   footer_distance_cm: 1.75,
   footer_font: '宋体',
   footer_size: '小五',
   footer_alignment: '居中对齐',
   footer_color: '#536176',
-  page_number_enabled: true,
+  page_number_enabled: false,
   page_number_format: '第{page}页',
   page_number_start: 1,
 };
@@ -339,7 +361,6 @@ const DEFAULT_IMAGE_STYLE: ImageStyleConfig = {
 const DEFAULT_HEADING_BORDER: HeadingBorderConfig = {
   enabled: false,
   border_color: '#2174fd',
-  background_color: '#eef5ff',
   structure: '上下结构',
 };
 
@@ -347,22 +368,21 @@ const DEFAULT_HEADING_BORDER: HeadingBorderConfig = {
 export const DEFAULT_EXPORT_FORMAT: ExportFormatConfig = {
   template_name: '默认模版',
   page: { ...DEFAULT_PAGE_SETUP },
-  heading_numbering_style: 'classic',
   heading_level1_page_break_before: false,
   heading_border: { ...DEFAULT_HEADING_BORDER },
   headings: [
-    // L1: 第一章 — 黑体 小二 居中
-    { font: '黑体', size: '小二', alignment: '居中对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'chinese-chapter' },
-    // L2: 第一节 — 黑体 四号 两端对齐
-    { font: '黑体', size: '四号', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 1.5, line_spacing: 1, numbering_format: 'chinese-section' },
-    // L3: 一、 — 黑体 小四 两端对齐
-    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'chinese-dun' },
-    // L4: （一） — 楷体 小四
-    { font: '楷体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'chinese-paren' },
-    // L5: 1、 — 黑体 小四
-    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'arabic-dun' },
-    // L6: (1) — 宋体 小四
-    { font: '宋体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'arabic-paren' },
+    // L1: 数字连续多级编号 — 黑体 小二 居中
+    { font: '黑体', size: '小二', alignment: '居中对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '第{zh}章' },
+    // L2: 数字连续多级编号 — 黑体 四号 两端对齐
+    { font: '黑体', size: '四号', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 1.5, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '第{zh}节' },
+    // L3: 数字连续多级编号 — 黑体 小四 两端对齐
+    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '{zh}、' },
+    // L4: 数字连续多级编号 — 楷体 小四
+    { font: '楷体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '（{zh}）' },
+    // L5: 数字连续多级编号 — 黑体 小四
+    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '{num}、' },
+    // L6: 数字连续多级编号 — 宋体 小四
+    { font: '宋体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '({num})' },
   ],
   body_text: { ...DEFAULT_BODY_TEXT },
   table: {

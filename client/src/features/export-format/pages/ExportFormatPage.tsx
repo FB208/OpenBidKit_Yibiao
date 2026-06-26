@@ -7,11 +7,10 @@ import type {
   BodyTextStyleConfig,
   ExportFormatConfig,
   HeadingBorderConfig,
-  HeadingNumberingStyle,
+  HeadingNumberingFormat,
   HeadingStyleConfig,
   ImageStyleConfig,
   ListStyle,
-  NumberingFormat,
   PageSetupConfig,
   PaperSize,
   TableCellStyleConfig,
@@ -21,12 +20,9 @@ import {
   ALIGNMENT_OPTIONS,
   DEFAULT_EXPORT_FORMAT,
   FONT_OPTIONS,
-  HEADING_BORDER_STRUCTURE_OPTIONS,
   HEADING_LEVEL_LABELS,
-  HEADING_NUMBERING_STYLE_OPTIONS,
-  HEADING_NUMBERING_STYLE_PRESETS,
+  HEADING_NUMBERING_FORMAT_OPTIONS,
   LIST_STYLE_OPTIONS,
-  NUMBERING_FORMATS,
   PAPER_DIMENSIONS,
   PAPER_SIZES,
   SIZE_OPTIONS,
@@ -107,14 +103,116 @@ function hasGeneratedContent(items: OutlineItem[]) {
   return collectLeafItems(items).some((item) => String(item.content || '').trim());
 }
 
-function headingNumberExample(index: number, fmt: NumberingFormat): string {
+function mergeFontOptions(...groups: Array<readonly string[]>): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+
+  groups.forEach((group) => {
+    group.forEach((font) => {
+      const name = String(font || '').trim();
+      if (!name || seen.has(name)) return;
+      seen.add(name);
+      merged.push(name);
+    });
+  });
+
+  return merged;
+}
+
+function collectConfigFonts(config: ExportFormatConfig): string[] {
+  return [
+    config.page.header_font,
+    config.page.footer_font,
+    ...config.headings.map((heading) => heading.font),
+    config.body_text.font,
+    config.table.header_row.font,
+    config.table.first_column.font,
+    config.table.body_cell.font,
+    config.image.caption_font,
+  ].filter(Boolean);
+}
+
+interface FontPickerProps {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}
+
+function FontPicker({ value, options, onChange }: FontPickerProps) {
+  const [open, setOpen] = useState(false);
+  const [searchDirty, setSearchDirty] = useState(false);
+  const filteredOptions = useMemo(() => {
+    const query = value.trim().toLowerCase();
+    if (!searchDirty || !query) return options;
+    return options.filter((font) => font.toLowerCase().includes(query));
+  }, [options, searchDirty, value]);
+
+  const pickFont = (font: string) => {
+    onChange(font);
+    setSearchDirty(false);
+    setOpen(false);
+  };
+
+  return (
+    <div className="font-picker" onBlur={(event) => {
+      const nextFocus = event.relatedTarget;
+      if (!(nextFocus instanceof Node) || !event.currentTarget.contains(nextFocus)) {
+        setOpen(false);
+        setSearchDirty(false);
+      }
+    }}>
+      <input
+        className="font-picker-input"
+        type="text"
+        value={value}
+        onFocus={() => {
+          setOpen(true);
+          setSearchDirty(false);
+        }}
+        onChange={(event) => {
+          onChange(event.target.value);
+          setOpen(true);
+          setSearchDirty(true);
+        }}
+        placeholder="输入或选择字体"
+        spellCheck={false}
+        role="combobox"
+        aria-expanded={open}
+      />
+      {open && (
+        <div className="font-picker-menu" role="listbox">
+          <div className="font-picker-summary">
+            {searchDirty ? `匹配 ${filteredOptions.length} 个字体` : `共 ${options.length} 个字体，输入可搜索`}
+          </div>
+          {filteredOptions.length > 0 ? filteredOptions.map((font) => (
+            <button
+              key={font}
+              type="button"
+              className={`font-picker-option${font === value ? ' is-selected' : ''}`}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                pickFont(font);
+              }}
+              role="option"
+              aria-selected={font === value}
+            >
+              {font}
+            </button>
+          )) : <div className="font-picker-empty">没有匹配字体</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function headingNumberExample(index: number, heading: HeadingStyleConfig): string {
   const sampleIds = ['1', '1.1', '1.1.1', '1.1.1.1', '1.1.1.1.1', '1.1.1.1.1.1'];
-  return formatOutlineNumber(sampleIds[index] || '1', fmt);
+  return formatOutlineNumber(sampleIds[index] || '1', heading);
 }
 
 function headingPreviewTitle(config: ExportFormatConfig, level: number, id: string, title: string) {
-  const numberingFormat = config.headings[level - 1]?.numbering_format || 'none';
-  const prefix = formatOutlineNumber(id, numberingFormat);
+  const heading = config.headings[level - 1];
+  const prefix = formatOutlineNumber(id, heading);
   return prefix ? `${prefix} ${title}` : title;
 }
 
@@ -122,7 +220,6 @@ function createDefaultExportFormat(): ExportFormatConfig {
   return {
     template_name: DEFAULT_EXPORT_FORMAT.template_name,
     page: { ...DEFAULT_EXPORT_FORMAT.page },
-    heading_numbering_style: DEFAULT_EXPORT_FORMAT.heading_numbering_style,
     heading_level1_page_break_before: DEFAULT_EXPORT_FORMAT.heading_level1_page_break_before,
     heading_border: { ...DEFAULT_EXPORT_FORMAT.heading_border },
     headings: DEFAULT_EXPORT_FORMAT.headings.map((heading) => ({ ...heading })),
@@ -171,6 +268,22 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   const [loadError, setLoadError] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
   const [previewFullscreenOpen, setPreviewFullscreenOpen] = useState(false);
+  const [systemFonts, setSystemFonts] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const fonts = await window.yibiao?.systemFonts?.list?.();
+        if (!cancelled && Array.isArray(fonts)) {
+          setSystemFonts(fonts);
+        }
+      } catch (error) {
+        console.warn('[export-format] 系统字体读取失败', error);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     trackPageView(mode === 'edit' ? 'my-templates/edit' : 'new-template');
@@ -214,6 +327,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const isDirty = useMemo(() => !savedConfig || JSON.stringify(config) !== JSON.stringify(savedConfig), [config, savedConfig]);
   const previewStyle = useMemo<CSSProperties>(() => buildExportFormatCssVars(config), [config]);
+  const fontOptions = useMemo(() => mergeFontOptions(FONT_OPTIONS, collectConfigFonts(config), systemFonts), [config, systemFonts]);
 
   const updateTemplate = useCallback((updates: Partial<ExportFormatConfig>) => {
     setConfig((prev) => ({ ...prev, ...updates }));
@@ -227,18 +341,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
     setConfig((prev) => ({
       ...prev,
       headings: prev.headings.map((heading, headingIndex) => headingIndex === index ? { ...heading, ...updates } : heading),
-    }));
-  }, []);
-
-  const updateHeadingNumberingStyle = useCallback((style: HeadingNumberingStyle) => {
-    const preset = HEADING_NUMBERING_STYLE_PRESETS[style];
-    setConfig((prev) => ({
-      ...prev,
-      heading_numbering_style: style,
-      headings: prev.headings.map((heading, index) => ({
-        ...heading,
-        numbering_format: preset[index] || heading.numbering_format,
-      })),
     }));
   }, []);
 
@@ -478,60 +580,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           </div>
         </div>
         <label className="settings-row">
-          <div className="settings-row-copy"><strong>页脚</strong><span>距底边距离（厘米）</span></div>
-          <div className="export-format-switch-row">
-            <label className="settings-switch-control">
-              <input type="checkbox" checked={config.page.footer_enabled} onChange={(event) => updatePage({ footer_enabled: event.target.checked })} />
-              <span className="settings-switch-track" aria-hidden="true"><span className="settings-switch-thumb" /></span>
-            </label>
-            <input type="number" min={0} max={5} step={0.1} value={config.page.footer_distance_cm} disabled={!config.page.footer_enabled} onChange={(event) => updatePage({ footer_distance_cm: Number(event.target.value) })} style={{ width: 80 }} />
-          </div>
-        </label>
-        {config.page.footer_enabled && (
-          <>
-            <label className="settings-row">
-              <div className="settings-row-copy"><strong>页脚文本</strong></div>
-              <input type="text" value={config.page.footer_text} onChange={(event) => updatePage({ footer_text: event.target.value })} />
-            </label>
-            <label className="settings-row">
-              <div className="settings-row-copy"><strong>页脚字体</strong></div>
-              <select value={config.page.footer_font} onChange={(event) => updatePage({ footer_font: event.target.value })}>
-                {FONT_OPTIONS.map((font) => <option key={font} value={font}>{font}</option>)}
-              </select>
-            </label>
-            <label className="settings-row">
-              <div className="settings-row-copy"><strong>页脚字号</strong></div>
-              <select value={config.page.footer_size} onChange={(event) => updatePage({ footer_size: event.target.value })}>
-                {SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
-              </select>
-            </label>
-            <label className="settings-row">
-              <div className="settings-row-copy"><strong>页脚对齐方式</strong></div>
-              <select value={config.page.footer_alignment} onChange={(event) => updatePage({ footer_alignment: event.target.value })}>
-                {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
-              </select>
-            </label>
-            <label className="settings-row">
-              <div className="settings-row-copy"><strong>页脚颜色</strong></div>
-              <input type="color" value={config.page.footer_color} onChange={(event) => updatePage({ footer_color: event.target.value })} />
-            </label>
-          </>
-        )}
-        <label className="settings-row">
-          <div className="settings-row-copy"><strong>页码格式</strong></div>
-          <div className="export-format-switch-row">
-            <label className="settings-switch-control">
-              <input type="checkbox" checked={config.page.page_number_enabled} onChange={(event) => updatePage({ page_number_enabled: event.target.checked })} />
-              <span className="settings-switch-track" aria-hidden="true"><span className="settings-switch-thumb" /></span>
-            </label>
-            <input type="text" value={config.page.page_number_format} disabled={!config.page.page_number_enabled} onChange={(event) => updatePage({ page_number_format: event.target.value })} style={{ width: 140 }} />
-          </div>
-        </label>
-        <label className="settings-row">
-          <div className="settings-row-copy"><strong>页码起始值</strong></div>
-          <input type="number" min={1} max={9999} step={1} value={config.page.page_number_start} onChange={(event) => updatePage({ page_number_start: Number(event.target.value) })} />
-        </label>
-        <label className="settings-row">
           <div className="settings-row-copy"><strong>页眉</strong></div>
           <label className="settings-switch-control">
             <input type="checkbox" checked={config.page.header_enabled} onChange={(event) => updatePage({ header_enabled: event.target.checked })} />
@@ -546,9 +594,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
             </label>
             <label className="settings-row">
               <div className="settings-row-copy"><strong>页眉字体</strong></div>
-              <select value={config.page.header_font} onChange={(event) => updatePage({ header_font: event.target.value })}>
-                {FONT_OPTIONS.map((font) => <option key={font} value={font}>{font}</option>)}
-              </select>
+              <FontPicker value={config.page.header_font} options={fontOptions} onChange={(font) => updatePage({ header_font: font })} />
             </label>
             <label className="settings-row">
               <div className="settings-row-copy"><strong>页眉字号</strong></div>
@@ -568,6 +614,66 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
             </label>
           </>
         )}
+        <label className="settings-row">
+          <div className="settings-row-copy"><strong>页脚</strong></div>
+          <label className="settings-switch-control">
+            <input type="checkbox" checked={config.page.footer_enabled} onChange={(event) => updatePage({ footer_enabled: event.target.checked })} />
+            <span className="settings-switch-track" aria-hidden="true"><span className="settings-switch-thumb" /></span>
+          </label>
+        </label>
+        {config.page.footer_enabled && (
+          <>
+            <label className="settings-row">
+              <div className="settings-row-copy"><strong>页脚文本</strong></div>
+              <input type="text" value={config.page.footer_text} onChange={(event) => updatePage({ footer_text: event.target.value })} />
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy"><strong>页脚字体</strong></div>
+              <FontPicker value={config.page.footer_font} options={fontOptions} onChange={(font) => updatePage({ footer_font: font })} />
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy"><strong>页脚字号</strong></div>
+              <select value={config.page.footer_size} onChange={(event) => updatePage({ footer_size: event.target.value })}>
+                {SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy"><strong>页脚对齐方式</strong></div>
+              <select value={config.page.footer_alignment} onChange={(event) => updatePage({ footer_alignment: event.target.value })}>
+                {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
+              </select>
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy"><strong>页脚颜色</strong></div>
+              <input type="color" value={config.page.footer_color} onChange={(event) => updatePage({ footer_color: event.target.value })} />
+            </label>
+          </>
+        )}
+        {(config.page.footer_enabled || config.page.page_number_enabled) && (
+          <label className="settings-row">
+            <div className="settings-row-copy"><strong>距底边距离</strong><span>页脚或页码距页面底边，单位：厘米</span></div>
+            <input type="number" min={0} max={5} step={0.1} value={config.page.footer_distance_cm} onChange={(event) => updatePage({ footer_distance_cm: Number(event.target.value) })} />
+          </label>
+        )}
+        <label className="settings-row">
+          <div className="settings-row-copy"><strong>页码</strong><span>是否启用页码显示</span></div>
+          <label className="settings-switch-control">
+            <input type="checkbox" checked={config.page.page_number_enabled} onChange={(event) => updatePage({ page_number_enabled: event.target.checked })} />
+            <span className="settings-switch-track" aria-hidden="true"><span className="settings-switch-thumb" /></span>
+          </label>
+        </label>
+        {config.page.page_number_enabled && (
+          <>
+            <label className="settings-row">
+              <div className="settings-row-copy"><strong>页码格式</strong><span>使用 {'{page}'} 表示当前页码</span></div>
+              <input type="text" value={config.page.page_number_format} onChange={(event) => updatePage({ page_number_format: event.target.value })} />
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy"><strong>页码起始值</strong></div>
+              <input type="number" min={1} max={9999} step={1} value={config.page.page_number_start} onChange={(event) => updatePage({ page_number_start: Number(event.target.value) })} />
+            </label>
+          </>
+        )}
       </div>
     </>
   );
@@ -580,12 +686,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
       </div>
       <div className="settings-list">
         <label className="settings-row">
-          <div className="settings-row-copy"><strong>编号风格</strong></div>
-          <select value={config.heading_numbering_style} onChange={(event) => updateHeadingNumberingStyle(event.target.value as HeadingNumberingStyle)}>
-            {HEADING_NUMBERING_STYLE_OPTIONS.map((style) => <option key={style.value} value={style.value}>{style.label}</option>)}
-          </select>
-        </label>
-        <label className="settings-row">
           <div className="settings-row-copy"><strong>一级标题另起页</strong></div>
           <label className="settings-switch-control">
             <input type="checkbox" checked={config.heading_level1_page_break_before} onChange={(event) => updateTemplate({ heading_level1_page_break_before: event.target.checked })} />
@@ -593,7 +693,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           </label>
         </label>
         <label className="settings-row">
-          <div className="settings-row-copy"><strong>标题边框</strong></div>
+          <div className="settings-row-copy"><strong>章节页框</strong><span>为页面和章节标题生成统一的框线版式</span></div>
           <label className="settings-switch-control">
             <input type="checkbox" checked={config.heading_border.enabled} onChange={(event) => updateHeadingBorder({ enabled: event.target.checked })} />
             <span className="settings-switch-track" aria-hidden="true"><span className="settings-switch-thumb" /></span>
@@ -602,18 +702,8 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         {config.heading_border.enabled && (
           <>
             <label className="settings-row">
-              <div className="settings-row-copy"><strong>边框颜色</strong></div>
+              <div className="settings-row-copy"><strong>页框颜色</strong></div>
               <input type="color" value={config.heading_border.border_color} onChange={(event) => updateHeadingBorder({ border_color: event.target.value })} />
-            </label>
-            <label className="settings-row">
-              <div className="settings-row-copy"><strong>背景颜色</strong></div>
-              <input type="color" value={config.heading_border.background_color} onChange={(event) => updateHeadingBorder({ background_color: event.target.value })} />
-            </label>
-            <label className="settings-row">
-              <div className="settings-row-copy"><strong>结构</strong></div>
-              <select value={config.heading_border.structure} onChange={(event) => updateHeadingBorder({ structure: event.target.value as HeadingBorderConfig['structure'] })}>
-                {HEADING_BORDER_STRUCTURE_OPTIONS.map((structure) => <option key={structure.value} value={structure.value}>{structure.label}</option>)}
-              </select>
             </label>
           </>
         )}
@@ -621,7 +711,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
       <div className="export-format-heading-list">
         {config.headings.map((heading, index) => {
           const isExpanded = expandedHeadings.has(index);
-          const numExample = headingNumberExample(index, heading.numbering_format);
+          const numExample = headingNumberExample(index, heading);
           return (
             <div key={index} className={`export-format-heading-card${isExpanded ? ' is-expanded' : ''}`}>
               <button type="button" className="export-format-heading-header" onClick={() => toggleHeading(index)}>
@@ -634,15 +724,24 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
                   <div className="export-format-heading-grid">
                     <label>
                       <span>编号格式</span>
-                      <select value={heading.numbering_format} onChange={(event) => updateHeading(index, { numbering_format: event.target.value as NumberingFormat })}>
-                        {NUMBERING_FORMATS.map((numberingFormat) => <option key={numberingFormat.value} value={numberingFormat.value}>{numberingFormat.label}</option>)}
+                      <select value={heading.numbering_format} onChange={(event) => updateHeading(index, { numbering_format: event.target.value as HeadingNumberingFormat })}>
+                        {HEADING_NUMBERING_FORMAT_OPTIONS.map((numberingFormat) => <option key={numberingFormat.value} value={numberingFormat.value}>{numberingFormat.label}</option>)}
                       </select>
                     </label>
+                    {heading.numbering_format === 'custom' && (
+                      <label>
+                        <span>自定义格式（{'{zh}'}=中文序号，{'{num}'}=数字序号）</span>
+                        <input
+                          type="text"
+                          value={heading.numbering_template}
+                          placeholder="例如：第{zh}章、第{num}章"
+                          onChange={(event) => updateHeading(index, { numbering_template: event.target.value })}
+                        />
+                      </label>
+                    )}
                     <label>
                       <span>字体</span>
-                      <select value={heading.font} onChange={(event) => updateHeading(index, { font: event.target.value })}>
-                        {FONT_OPTIONS.map((font) => <option key={font} value={font}>{font}</option>)}
-                      </select>
+                      <FontPicker value={heading.font} options={fontOptions} onChange={(font) => updateHeading(index, { font })} />
                     </label>
                     <label>
                       <span>字号</span>
@@ -701,10 +800,8 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
       </div>
       <div className="settings-list">
         <label className="settings-row">
-          <div className="settings-row-copy"><strong>字体</strong></div>
-          <select value={config.body_text.font} onChange={(event) => updateBodyText({ font: event.target.value })}>
-            {FONT_OPTIONS.map((font) => <option key={font} value={font}>{font}</option>)}
-          </select>
+          <div className="settings-row-copy"><strong>字体</strong><span>支持输入搜索系统字体，常用字体已置顶。</span></div>
+          <FontPicker value={config.body_text.font} options={fontOptions} onChange={(font) => updateBodyText({ font })} />
         </label>
         <label className="settings-row">
           <div className="settings-row-copy"><strong>字号</strong></div>
@@ -756,9 +853,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         <div className="export-format-heading-grid">
           <label>
             <span>字体</span>
-            <select value={cell.font} onChange={(event) => updateTableCell(cellKey, { font: event.target.value })}>
-              {FONT_OPTIONS.map((font) => <option key={font} value={font}>{font}</option>)}
-            </select>
+            <FontPicker value={cell.font} options={fontOptions} onChange={(font) => updateTableCell(cellKey, { font })} />
           </label>
           <label>
             <span>字号</span>
@@ -837,9 +932,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         </label>
         <label className="settings-row">
           <div className="settings-row-copy"><strong>图题字体</strong></div>
-          <select value={config.image.caption_font} onChange={(event) => updateImage({ caption_font: event.target.value })}>
-            {FONT_OPTIONS.map((font) => <option key={font} value={font}>{font}</option>)}
-          </select>
+          <FontPicker value={config.image.caption_font} options={fontOptions} onChange={(font) => updateImage({ caption_font: font })} />
         </label>
         <label className="settings-row">
           <div className="settings-row-copy"><strong>图题字号</strong></div>
@@ -920,7 +1013,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
             </button>
           ))}
         </div>
-
         <div className="export-template-workspace">
           <section className="settings-page-section export-template-editor">
             {renderActiveSettings()}
@@ -990,6 +1082,8 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
   const [viewportSize, setViewportSize] = useState<PreviewViewportSize>({ width: 0, height: 0 });
   const paperSize = useMemo(() => getPreviewPaperSize(config), [config.page.orientation, config.page.paper_size]);
   const pageNumberText = config.page.page_number_format.replace('{page}', String(config.page.page_number_start || 1));
+  const footerText = config.page.footer_enabled ? config.page.footer_text.trim() : '';
+  const showFooterArea = Boolean(footerText) || config.page.page_number_enabled;
   const previewScale = useMemo(() => {
     const ratios = [1];
     if (viewportSize.width > 0 && paperSize.widthPx > 0) {
@@ -1034,6 +1128,118 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
     return () => observer.disconnect();
   }, []);
 
+  const previewBodyContent = (
+    <>
+      <p>本节展示模板设置在导出文档中的基础排版效果，包括页面边距、正文样式、标题层级和表格展示。</p>
+      <h2>{headingPreviewTitle(config, 2, '1.1', '总体目标')}</h2>
+      <p>围绕项目建设目标，结合招标文件要求，形成可执行、可检查、可交付的技术实施方案。</p>
+      <h3>{headingPreviewTitle(config, 3, '1.1.1', '实施安排')}</h3>
+      <p>项目团队将按阶段推进需求确认、方案设计、系统实施、联调测试和验收交付等工作。</p>
+      <h4>{headingPreviewTitle(config, 4, '1.1.1.1', '需求确认')}</h4>
+      <p>明确业务边界、交付范围和关键验收指标，形成统一的实施依据。</p>
+      <h5>{headingPreviewTitle(config, 5, '1.1.1.1.1', '资料收集')}</h5>
+      <p>整理招标文件、现状资料和接口清单，支撑后续方案细化。</p>
+      <h6>{headingPreviewTitle(config, 6, '1.1.1.1.1.1', '记录归档')}</h6>
+      <p>对确认过程、会议纪要和问题闭环结果进行留痕归档。</p>
+      <ul>
+        <li>建立项目启动、过程检查和验收交付的闭环机制。</li>
+        <li>按周同步风险、进度和资源需求，确保实施节奏可控。</li>
+        <li>保留关键过程记录，便于后续审查和复盘。</li>
+      </ul>
+      <figure className="export-template-image-figure">
+        <div className="export-template-image-placeholder">图片预览</div>
+        <figcaption>图 1 项目实施流程示意</figcaption>
+      </figure>
+      <table>
+        <thead>
+          <tr>
+            <th>阶段</th>
+            <th>内容</th>
+            <th>输出</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>准备</td>
+            <td>资料梳理与计划确认</td>
+            <td>实施计划</td>
+          </tr>
+          <tr>
+            <td>执行</td>
+            <td>方案落地与质量检查</td>
+            <td>交付成果</td>
+          </tr>
+        </tbody>
+      </table>
+    </>
+  );
+  const renderPreviewHeadingRow = (level: 1 | 2 | 3 | 4 | 5 | 6, id: string, title: string) => {
+    const HeadingTag = `h${level}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
+    return (
+      <div className={`export-template-chapter-heading-row is-level-${level}`}>
+        <HeadingTag>{headingPreviewTitle(config, level, id, title)}</HeadingTag>
+      </div>
+    );
+  };
+  const previewFrameContent = (
+    <section className="export-template-chapter-frame">
+      {renderPreviewHeadingRow(1, '1', '项目实施方案')}
+      <div className="export-template-chapter-content-row">
+        <p>本节展示模板设置在导出文档中的基础排版效果，包括页面边距、正文样式、标题层级和表格展示。</p>
+      </div>
+      {renderPreviewHeadingRow(2, '1.1', '总体目标')}
+      <div className="export-template-chapter-content-row">
+        <p>围绕项目建设目标，结合招标文件要求，形成可执行、可检查、可交付的技术实施方案。</p>
+      </div>
+      {renderPreviewHeadingRow(3, '1.1.1', '实施安排')}
+      <div className="export-template-chapter-content-row">
+        <p>项目团队将按阶段推进需求确认、方案设计、系统实施、联调测试和验收交付等工作。</p>
+      </div>
+      {renderPreviewHeadingRow(4, '1.1.1.1', '需求确认')}
+      <div className="export-template-chapter-content-row">
+        <p>明确业务边界、交付范围和关键验收指标，形成统一的实施依据。</p>
+      </div>
+      {renderPreviewHeadingRow(5, '1.1.1.1.1', '资料收集')}
+      <div className="export-template-chapter-content-row">
+        <p>整理招标文件、现状资料和接口清单，支撑后续方案细化。</p>
+      </div>
+      {renderPreviewHeadingRow(6, '1.1.1.1.1.1', '记录归档')}
+      <div className="export-template-chapter-content-row">
+        <p>对确认过程、会议纪要和问题闭环结果进行留痕归档。</p>
+        <ul>
+          <li>建立项目启动、过程检查和验收交付的闭环机制。</li>
+          <li>按周同步风险、进度和资源需求，确保实施节奏可控。</li>
+          <li>保留关键过程记录，便于后续审查和复盘。</li>
+        </ul>
+        <figure className="export-template-image-figure">
+          <div className="export-template-image-placeholder">图片预览</div>
+          <figcaption>图 1 项目实施流程示意</figcaption>
+        </figure>
+        <table>
+          <thead>
+            <tr>
+              <th>阶段</th>
+              <th>内容</th>
+              <th>输出</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>准备</td>
+              <td>资料梳理与计划确认</td>
+              <td>实施计划</td>
+            </tr>
+            <tr>
+              <td>执行</td>
+              <td>方案落地与质量检查</td>
+              <td>交付成果</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+
   return (
     <aside className="settings-page-section export-template-preview-panel" aria-label="模板预览">
       <div className="export-template-preview-scroll" ref={previewStageRef}>
@@ -1044,45 +1250,15 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
                 {config.page.header_text || config.template_name || '页眉示例'}
               </div>
             )}
-            <h1>{headingPreviewTitle(config, 1, '1', '项目实施方案')}</h1>
-            <p>本节展示模板设置在导出文档中的基础排版效果，包括页面边距、正文样式、标题层级和表格展示。</p>
-            <h2>{headingPreviewTitle(config, 2, '1.1', '总体目标')}</h2>
-            <p>围绕项目建设目标，结合招标文件要求，形成可执行、可检查、可交付的技术实施方案。</p>
-            <h3>{headingPreviewTitle(config, 3, '1.1.1', '实施安排')}</h3>
-            <p>项目团队将按阶段推进需求确认、方案设计、系统实施、联调测试和验收交付等工作。</p>
-            <ul>
-              <li>建立项目启动、过程检查和验收交付的闭环机制。</li>
-              <li>按周同步风险、进度和资源需求，确保实施节奏可控。</li>
-              <li>保留关键过程记录，便于后续审查和复盘。</li>
-            </ul>
-            <figure className="export-template-image-figure">
-              <div className="export-template-image-placeholder">图片预览</div>
-              <figcaption>图 1 项目实施流程示意</figcaption>
-            </figure>
-            <table>
-              <thead>
-                <tr>
-                  <th>阶段</th>
-                  <th>内容</th>
-                  <th>输出</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>准备</td>
-                  <td>资料梳理与计划确认</td>
-                  <td>实施计划</td>
-                </tr>
-                <tr>
-                  <td>执行</td>
-                  <td>方案落地与质量检查</td>
-                  <td>交付成果</td>
-                </tr>
-              </tbody>
-            </table>
-            {config.page.footer_enabled && (
-              <div className="export-template-page-footer">
-                <span>{config.page.footer_text}</span>
+            {config.heading_border.enabled ? previewFrameContent : (
+              <>
+                <h1>{headingPreviewTitle(config, 1, '1', '项目实施方案')}</h1>
+                {previewBodyContent}
+              </>
+            )}
+            {showFooterArea && (
+              <div className="export-template-page-footer" style={config.page.footer_enabled ? undefined : { textAlign: 'center' }}>
+                {footerText && <span>{footerText}</span>}
                 {config.page.page_number_enabled && <span>{pageNumberText}</span>}
               </div>
             )}

@@ -156,6 +156,9 @@ const bridge = {
       return () => ipcRenderer.removeListener('export:word-progress', listener);
     },
   },
+  systemFonts: {
+    list: () => ipcRenderer.invoke('system-fonts:list'),
+  },
 };
 
 contextBridge.exposeInMainWorld('yibiao', bridge);

@@ -1,9 +1,9 @@
 /**
  * 目录编号格式化工具
- * 每个标题级别独立选择编号格式：第一章/第一节/一、/1./（一）/(1) 等
+ * 每个标题级别独立选择编号格式：Word 多级编号或自定义模板
  */
 
-import type { NumberingFormat } from '../types/exportFormat';
+import type { HeadingStyleConfig } from '../types/exportFormat';
 
 /**
  * 阿拉伯数字转中文数字（1~9999）
@@ -35,36 +35,42 @@ export function numberToChinese(num: number): string {
 }
 
 /**
- * 根据 outline id 的最后一段数字 + 编号格式，生成编号前缀
- * id 如 "1" → "第一章", "2.3" → 取决于该级格式
+ * 将 outline id 拆成有效数字层级。
  */
-export function formatOutlineNumber(id: string, format: NumberingFormat): string {
-  const parts = String(id || '').split('.').filter(Boolean);
+export function outlineNumberParts(id: string): number[] {
+  return String(id || '')
+    .split('.')
+    .map((part) => parseInt(part, 10))
+    .filter((part) => Number.isFinite(part) && part > 0);
+}
+
+type HeadingNumberingConfig = Pick<HeadingStyleConfig, 'numbering_format' | 'numbering_template'>;
+
+/**
+ * 根据 outline id 和标题编号配置生成编号前缀。
+ */
+export function formatOutlineNumber(id: string, heading: HeadingNumberingConfig | null | undefined): string {
+  const parts = outlineNumberParts(id);
   if (!parts.length) return '';
 
-  const lastPart = parseInt(parts[parts.length - 1], 10);
-  if (!Number.isFinite(lastPart) || lastPart <= 0) return '';
-
-  const cn = numberToChinese(lastPart);
-
-  switch (format) {
-    case 'chinese-chapter': return `第${cn}章`;
-    case 'chinese-section': return `第${cn}节`;
-    case 'chinese-dun':     return `${cn}、`;
-    case 'chinese-paren':   return `（${cn}）`;
-    case 'arabic-dun':      return `${lastPart}、`;
-    case 'arabic-dot':      return `${lastPart}.`;
-    case 'arabic-paren':    return `(${lastPart})`;
-    case 'arabic':          return `${lastPart}`;
-    case 'none':            return '';
-    default:                return '';
+  if (heading?.numbering_format === 'outline-decimal') {
+    return parts.join('.');
   }
+
+  if (heading?.numbering_format !== 'custom') return '';
+
+  const lastPart = parts[parts.length - 1];
+  const cn = numberToChinese(lastPart);
+  return String(heading.numbering_template || '')
+    .replace(/\{zh\}/g, cn)
+    .replace(/\{num\}/g, String(lastPart))
+    .trim();
 }
 
 /**
- * 将目录项 id + title 按指定编号格式拼接为完整标题文本
+ * 将目录项 id + title 按指定编号格式拼接为完整标题文本。
  */
-export function formatOutlineTitle(id: string, title: string, numberingFormat: NumberingFormat): string {
-  const prefix = formatOutlineNumber(id, numberingFormat);
+export function formatOutlineTitle(id: string, title: string, heading: HeadingNumberingConfig | null | undefined): string {
+  const prefix = formatOutlineNumber(id, heading);
   return prefix ? `${prefix} ${title || ''}` : String(title || '');
 }

@@ -789,7 +789,7 @@ function OutlineEditPage({
             onClick={() => setSelectedItemId(item.id)}
             onDoubleClick={() => hasChildren && toggleExpanded(item.id)}
           >
-            <strong>{formatOutlineTitle(item.id, item.title, exportFormat.headings[Math.min(item.id.split('.').length - 1, 5)].numbering_format)}</strong>
+            <strong>{formatOutlineTitle(item.id, item.title, exportFormat.headings[Math.min(item.id.split('.').length - 1, 5)])}</strong>
             <small>{item.description || '无描述'}</small>
           </button>
         </div>

@@ -152,32 +152,30 @@ const defaultExportFormat = {
     header_size: '小五',
     header_alignment: '居中对齐',
     header_color: '#536176',
-    footer_enabled: true,
+    footer_enabled: false,
     footer_text: '',
     footer_distance_cm: 1.75,
     footer_font: '宋体',
     footer_size: '小五',
     footer_alignment: '居中对齐',
     footer_color: '#536176',
-    page_number_enabled: true,
+    page_number_enabled: false,
     page_number_format: '第{page}页',
     page_number_start: 1,
   },
-  heading_numbering_style: 'classic',
   heading_level1_page_break_before: false,
   heading_border: {
     enabled: false,
     border_color: '#2174fd',
-    background_color: '#eef5ff',
     structure: '上下结构',
   },
   headings: [
-    { font: '黑体', size: '小二', alignment: '居中对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'chinese-chapter' },
-    { font: '黑体', size: '四号', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 1.5, line_spacing: 1, numbering_format: 'chinese-section' },
-    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'chinese-dun' },
-    { font: '楷体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'chinese-paren' },
-    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'arabic-dun' },
-    { font: '宋体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'arabic-paren' },
+    { font: '黑体', size: '小二', alignment: '居中对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '第{zh}章' },
+    { font: '黑体', size: '四号', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 1.5, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '第{zh}节' },
+    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '{zh}、' },
+    { font: '楷体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '（{zh}）' },
+    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '{num}、' },
+    { font: '宋体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 2, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '({num})' },
   ],
   body_text: {
     font: '宋体',
@@ -402,8 +400,7 @@ function normalizeImageModelProfiles(sourceProfiles) {
   return profiles;
 }
 
-const VALID_NUMBERING_FORMATS = ['chinese-chapter','chinese-section','chinese-dun','chinese-paren','arabic-dun','arabic-dot','arabic-paren','arabic','none'];
-const VALID_HEADING_NUMBERING_STYLES = ['classic', 'chinese', 'arabic', 'none'];
+const VALID_NUMBERING_FORMATS = ['outline-decimal', 'custom'];
 const VALID_HEADING_BORDER_STRUCTURES = ['上下结构', '左右结构'];
 const VALID_LIST_STYLES = ['disc', 'dash', 'circle', 'square'];
 
@@ -411,7 +408,6 @@ function cloneDefaultExportFormat(def = defaultExportFormat) {
   return {
     template_name: def.template_name,
     page: { ...def.page },
-    heading_numbering_style: def.heading_numbering_style,
     heading_level1_page_break_before: def.heading_level1_page_break_before,
     heading_border: { ...def.heading_border },
     headings: def.headings.map((heading) => ({ ...heading })),
@@ -486,7 +482,6 @@ function normalizeExportFormat(source) {
   const heading_border = {
     enabled: typeof srcHeadingBorder.enabled === 'boolean' ? srcHeadingBorder.enabled : def.heading_border.enabled,
     border_color: typeof srcHeadingBorder.border_color === 'string' && srcHeadingBorder.border_color ? srcHeadingBorder.border_color : def.heading_border.border_color,
-    background_color: typeof srcHeadingBorder.background_color === 'string' && srcHeadingBorder.background_color ? srcHeadingBorder.background_color : def.heading_border.background_color,
     structure: typeof srcHeadingBorder.structure === 'string' && VALID_HEADING_BORDER_STRUCTURES.includes(srcHeadingBorder.structure) ? srcHeadingBorder.structure : def.heading_border.structure,
   };
 
@@ -505,6 +500,7 @@ function normalizeExportFormat(source) {
       first_line_indent_chars: typeof srcH.first_line_indent_chars === 'number' ? srcH.first_line_indent_chars : defH.first_line_indent_chars,
       line_spacing: typeof srcH.line_spacing === 'number' ? srcH.line_spacing : defH.line_spacing,
       numbering_format: typeof srcH.numbering_format === 'string' && VALID_NUMBERING_FORMATS.includes(srcH.numbering_format) ? srcH.numbering_format : defH.numbering_format,
+      numbering_template: typeof srcH.numbering_template === 'string' ? srcH.numbering_template : defH.numbering_template,
     };
   });
 
@@ -537,7 +533,6 @@ function normalizeExportFormat(source) {
   return {
     template_name: typeof source.template_name === 'string' && source.template_name ? source.template_name : def.template_name,
     page,
-    heading_numbering_style: typeof source.heading_numbering_style === 'string' && VALID_HEADING_NUMBERING_STYLES.includes(source.heading_numbering_style) ? source.heading_numbering_style : def.heading_numbering_style,
     heading_level1_page_break_before: typeof source.heading_level1_page_break_before === 'boolean' ? source.heading_level1_page_break_before : def.heading_level1_page_break_before,
     heading_border,
     headings,
