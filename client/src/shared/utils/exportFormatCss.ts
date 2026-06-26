@@ -4,7 +4,7 @@
  */
 
 import type { ExportFormatConfig, HeadingStyleConfig, ListStyle, PaperSize } from '../types/exportFormat';
-import { SIZE_TO_PT, FONT_TO_CSS, ALIGNMENT_TO_CSS, PAPER_DIMENSIONS } from '../types/exportFormat';
+import { SIZE_TO_PT, FONT_TO_CSS, ALIGNMENT_TO_CSS, PAPER_DIMENSIONS, DEFAULT_HEADING_BORDER_CELL_COLORS } from '../types/exportFormat';
 
 /**
  * 中文字号名 → pt 值
@@ -87,15 +87,13 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
   const headingBorder = config.heading_border;
   const frameEnabled = headingBorder?.enabled === true;
   const frameColor = headingBorder?.border_color || '#2174fd';
+  const frameCellColors = DEFAULT_HEADING_BORDER_CELL_COLORS.map((color, index) => headingBorder?.level_cell_colors?.[index] || color);
   vars['--ef-chapter-frame-border'] = frameEnabled ? `0.8pt solid ${frameColor}` : 'none';
   vars['--ef-chapter-frame-color'] = frameEnabled ? frameColor : 'transparent';
   vars['--ef-chapter-row-border'] = frameEnabled ? `0.6pt solid color-mix(in srgb, ${frameColor} 55%, white)` : 'none';
-  vars['--ef-chapter-row-1-background'] = frameEnabled ? `color-mix(in srgb, ${frameColor} 15%, white)` : 'transparent';
-  vars['--ef-chapter-row-2-background'] = frameEnabled ? `color-mix(in srgb, ${frameColor} 10%, white)` : 'transparent';
-  vars['--ef-chapter-row-3-background'] = frameEnabled ? `color-mix(in srgb, ${frameColor} 6%, white)` : 'transparent';
-  vars['--ef-chapter-row-4-background'] = frameEnabled ? `color-mix(in srgb, ${frameColor} 3%, white)` : 'transparent';
-  vars['--ef-chapter-row-5-background'] = '#ffffff';
-  vars['--ef-chapter-row-6-background'] = '#ffffff';
+  frameCellColors.forEach((color, index) => {
+    vars[`--ef-chapter-row-${index + 1}-background`] = frameEnabled ? color : 'transparent';
+  });
 
   // ── 正文 ──
   const bodySizePt = chineseSizeToPt(config.body_text.size);

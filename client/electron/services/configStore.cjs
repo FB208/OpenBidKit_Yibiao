@@ -10,6 +10,7 @@ const updateChannels = ['github', 'cloudflare'];
 const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
+const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#e0ecff', '#e9f1ff', '#f2f7ff', '#f8fbff', '#ffffff', '#ffffff'];
 const openAICompatibleImageSizes = ['auto', '1024x1024', '1536x1024', '1024x1536', '2048x2048', '2048x1152', '3840x2160', '2160x3840'];
 const googleImageSizes = ['512', '1K', '2K', '4K'];
 
@@ -167,6 +168,7 @@ const defaultExportFormat = {
   heading_border: {
     enabled: false,
     border_color: '#2174fd',
+    level_cell_colors: [...DEFAULT_HEADING_BORDER_CELL_COLORS],
     structure: '上下结构',
   },
   headings: [
@@ -409,7 +411,10 @@ function cloneDefaultExportFormat(def = defaultExportFormat) {
     template_name: def.template_name,
     page: { ...def.page },
     heading_level1_page_break_before: def.heading_level1_page_break_before,
-    heading_border: { ...def.heading_border },
+    heading_border: {
+      ...def.heading_border,
+      level_cell_colors: [...(def.heading_border.level_cell_colors || DEFAULT_HEADING_BORDER_CELL_COLORS)],
+    },
     headings: def.headings.map((heading) => ({ ...heading })),
     body_text: { ...def.body_text },
     table: {
@@ -479,9 +484,12 @@ function normalizeExportFormat(source) {
   };
 
   const srcHeadingBorder = source.heading_border && typeof source.heading_border === 'object' ? source.heading_border : {};
+  const defHeadingCellColors = Array.isArray(def.heading_border.level_cell_colors) ? def.heading_border.level_cell_colors : DEFAULT_HEADING_BORDER_CELL_COLORS;
+  const srcHeadingCellColors = Array.isArray(srcHeadingBorder.level_cell_colors) ? srcHeadingBorder.level_cell_colors : [];
   const heading_border = {
     enabled: typeof srcHeadingBorder.enabled === 'boolean' ? srcHeadingBorder.enabled : def.heading_border.enabled,
     border_color: typeof srcHeadingBorder.border_color === 'string' && srcHeadingBorder.border_color ? srcHeadingBorder.border_color : def.heading_border.border_color,
+    level_cell_colors: defHeadingCellColors.map((color, index) => (typeof srcHeadingCellColors[index] === 'string' && srcHeadingCellColors[index] ? srcHeadingCellColors[index] : color)),
     structure: typeof srcHeadingBorder.structure === 'string' && VALID_HEADING_BORDER_STRUCTURES.includes(srcHeadingBorder.structure) ? srcHeadingBorder.structure : def.heading_border.structure,
   };
 

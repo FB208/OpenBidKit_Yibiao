@@ -11095,11 +11095,102 @@ button {
 
 /* ── 标题格式卡片 ── */
 
+.export-format-heading-cell-colors {
+  display: grid;
+  gap: 14px;
+  padding: 22px 36px 26px;
+  border-top: 1px solid var(--yb-border-soft);
+}
+
+.export-format-heading-cell-colors-title {
+  display: grid;
+  gap: 6px;
+}
+
+.export-format-heading-cell-colors-title strong {
+  color: var(--yb-text);
+  font-size: 16px;
+}
+
+.export-format-heading-cell-colors-title span {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.export-format-heading-cell-color-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.export-format-heading-cell-color-grid label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: rgba(33, 116, 253, 0.035);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 14px;
+}
+
+.export-format-heading-cell-color-grid label > span {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+}
+
+.export-format-heading-cell-color-grid input {
+  flex: 0 0 auto;
+  width: 46px;
+  height: 34px;
+  padding: 4px;
+  background: #eef3fa;
+  border: 1px solid #ccd6e3;
+  border-radius: 12px;
+}
+
 .export-format-heading-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 0 36px 8px;
+}
+
+.export-format-heading-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0 36px 12px;
+  padding: 12px 14px;
+  color: #1c4f9c;
+  background: linear-gradient(135deg, rgba(33, 116, 253, 0.1), rgba(33, 116, 253, 0.035));
+  border: 1px solid rgba(33, 116, 253, 0.24);
+  border-radius: 14px;
+}
+
+.export-format-heading-note strong {
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 700;
+  color: #153f82;
+}
+
+.export-format-heading-note span {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.export-format-heading-note code {
+  padding: 1px 5px;
+  color: #0f4fbf;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(33, 116, 253, 0.18);
+  border-radius: 6px;
+  font-family: var(--yb-font-mono);
+  font-size: 12px;
 }
 
 .export-format-heading-card {

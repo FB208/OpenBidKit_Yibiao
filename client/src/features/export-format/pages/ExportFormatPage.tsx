@@ -221,7 +221,7 @@ function createDefaultExportFormat(): ExportFormatConfig {
     template_name: DEFAULT_EXPORT_FORMAT.template_name,
     page: { ...DEFAULT_EXPORT_FORMAT.page },
     heading_level1_page_break_before: DEFAULT_EXPORT_FORMAT.heading_level1_page_break_before,
-    heading_border: { ...DEFAULT_EXPORT_FORMAT.heading_border },
+    heading_border: { ...DEFAULT_EXPORT_FORMAT.heading_border, level_cell_colors: [...DEFAULT_EXPORT_FORMAT.heading_border.level_cell_colors] },
     headings: DEFAULT_EXPORT_FORMAT.headings.map((heading) => ({ ...heading })),
     body_text: { ...DEFAULT_EXPORT_FORMAT.body_text },
     table: {
@@ -243,7 +243,11 @@ function withExportFormatDefaults(source: ExportFormatConfig): ExportFormatConfi
     ...defaults,
     ...source,
     page: { ...defaults.page, ...source.page },
-    heading_border: { ...defaults.heading_border, ...source.heading_border },
+    heading_border: {
+      ...defaults.heading_border,
+      ...source.heading_border,
+      level_cell_colors: defaults.heading_border.level_cell_colors.map((color, index) => source.heading_border?.level_cell_colors?.[index] || color),
+    },
     headings: defaults.headings.map((heading, index) => ({ ...heading, ...(source.headings?.[index] || {}) })),
     body_text: { ...defaults.body_text, ...source.body_text },
     table: {
@@ -349,6 +353,17 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
       ...prev,
       heading_border: { ...prev.heading_border, ...updates },
     }));
+  }, []);
+
+  const updateHeadingBorderCellColor = useCallback((index: number, value: string) => {
+    setConfig((prev) => {
+      const levelCellColors = DEFAULT_EXPORT_FORMAT.heading_border.level_cell_colors.map((color, colorIndex) => prev.heading_border.level_cell_colors[colorIndex] || color);
+      levelCellColors[index] = value;
+      return {
+        ...prev,
+        heading_border: { ...prev.heading_border, level_cell_colors: levelCellColors },
+      };
+    });
   }, []);
 
   const updateBodyText = useCallback((updates: Partial<BodyTextStyleConfig>) => {
@@ -705,8 +720,32 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
               <div className="settings-row-copy"><strong>页框颜色</strong></div>
               <input type="color" value={config.heading_border.border_color} onChange={(event) => updateHeadingBorder({ border_color: event.target.value })} />
             </label>
+            <div className="export-format-heading-cell-colors">
+              <div className="export-format-heading-cell-colors-title">
+                <strong>标题单元格颜色</strong>
+                <span>仅作用于章节页框内对应级别标题所在的表格单元格。</span>
+              </div>
+              <div className="export-format-heading-cell-color-grid">
+                {HEADING_LEVEL_LABELS.map((label, index) => (
+                  <label key={label}>
+                    <span>{label}</span>
+                    <input
+                      type="color"
+                      value={config.heading_border.level_cell_colors[index] || DEFAULT_EXPORT_FORMAT.heading_border.level_cell_colors[index]}
+                      onChange={(event) => updateHeadingBorderCellColor(index, event.target.value)}
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
           </>
         )}
+      </div>
+      <div className="export-format-heading-note">
+        <strong>自定义编号说明</strong>
+        <span>
+          选择“自定义”后，可在各级标题中使用 <code>{'{zh}'}</code> 表示中文序号，<code>{'{num}'}</code> 表示数字序号，例如：<code>第{'{zh}'}章 = 第一章</code>、<code>第{'{num}'}节 = 第1节</code>。
+        </span>
       </div>
       <div className="export-format-heading-list">
         {config.headings.map((heading, index) => {
@@ -730,7 +769,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
                     </label>
                     {heading.numbering_format === 'custom' && (
                       <label>
-                        <span>自定义格式（{'{zh}'}=中文序号，{'{num}'}=数字序号）</span>
+                        <span>自定义格式</span>
                         <input
                           type="text"
                           value={heading.numbering_template}

@@ -35,6 +35,7 @@ export interface HeadingStyleConfig {
 export interface HeadingBorderConfig {
   enabled: boolean;
   border_color: string;
+  level_cell_colors: string[];
   structure: HeadingBorderStructure;
 }
 
@@ -358,9 +359,12 @@ const DEFAULT_IMAGE_STYLE: ImageStyleConfig = {
   caption_alignment: '居中对齐',
 };
 
+export const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#e0ecff', '#e9f1ff', '#f2f7ff', '#f8fbff', '#ffffff', '#ffffff'] as const;
+
 const DEFAULT_HEADING_BORDER: HeadingBorderConfig = {
   enabled: false,
   border_color: '#2174fd',
+  level_cell_colors: [...DEFAULT_HEADING_BORDER_CELL_COLORS],
   structure: '上下结构',
 };
 

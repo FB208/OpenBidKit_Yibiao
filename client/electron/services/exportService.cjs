@@ -40,6 +40,7 @@ const HEADING_NUMBERING_REFERENCE = 'technical-plan-heading-numbering';
 const DOCX_TABLE_WIDTH_TWIPS = 9000;
 const MERMAID_EXPORT_RETRY_ATTEMPTS = 2;
 const MERMAID_EXPORT_RETRY_DELAY_MS = 3000;
+const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#e0ecff', '#e9f1ff', '#f2f7ff', '#f8fbff', '#ffffff', '#ffffff'];
 
 // 纸张尺寸 mm（portrait 模式 width × height），与 Renderer exportFormat.ts 保持一致
 const PAPER_DIMENSIONS_MM = {
@@ -265,27 +266,14 @@ function getChapterFrameConfig(exportFormat) {
   const frame = exportFormat?.heading_border;
   if (!frame?.enabled) return null;
   const color = normalizeDocxColor(frame.border_color || '#2174fd', '2174FD');
+  const levelCellColors = Array.isArray(frame.level_cell_colors) ? frame.level_cell_colors : [];
   return {
     color,
-    fills: [14, 10, 6, 3, 0, 0].map((weight) => mixDocxColor(color, 'FFFFFF', weight)),
+    fills: DEFAULT_HEADING_BORDER_CELL_COLORS.map((fill, index) => {
+      const fallback = normalizeDocxColor(fill, 'FFFFFF');
+      return normalizeDocxColor(levelCellColors[index] || fill, fallback);
+    }),
   };
-}
-
-function hexToRgb(value) {
-  const hex = normalizeDocxColor(value, '000000');
-  return {
-    r: parseInt(hex.slice(0, 2), 16),
-    g: parseInt(hex.slice(2, 4), 16),
-    b: parseInt(hex.slice(4, 6), 16),
-  };
-}
-
-function mixDocxColor(source, target, sourceWeightPercent) {
-  const from = hexToRgb(source);
-  const to = hexToRgb(target);
-  const weight = Math.max(0, Math.min(Number(sourceWeightPercent) || 0, 100)) / 100;
-  const channel = (a, b) => Math.round(a * weight + b * (1 - weight)).toString(16).padStart(2, '0').toUpperCase();
-  return `${channel(from.r, to.r)}${channel(from.g, to.g)}${channel(from.b, to.b)}`;
 }
 
 function chapterHeadingRowStyle(level) {
