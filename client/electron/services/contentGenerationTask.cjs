@@ -3069,6 +3069,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
   const fullRegenerate = regenerate && !targetItemId;
   if (fullRegenerate) {
+    workspaceStore.clearMermaidCache?.();
     outlineData = { ...outlineData, outline: clearOutlineContent(outlineData.outline) };
   }
 

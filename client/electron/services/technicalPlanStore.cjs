@@ -4,6 +4,7 @@ const path = require('node:path');
 const { getBidAnalysisTasks } = require('./bidAnalysisTask.cjs');
 const { getTechnicalPlanOriginalPlanMarkdownPath, getTechnicalPlanTenderMarkdownPath } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
+const { clearMermaidCache } = require('../utils/mermaidCache.cjs');
 const { detectBidSections } = require('../utils/bidSectionDetector.cjs');
 
 const tenderMarkdownRelativePath = path.join('technical-plan', 'tender.md').replace(/\\/g, '/');
@@ -57,6 +58,10 @@ function now() {
 
 function hasOwn(value, field) {
   return Object.prototype.hasOwnProperty.call(value || {}, field);
+}
+
+function isEmptyObject(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
 }
 
 function safeJsonParse(value, fallback) {
@@ -325,6 +330,25 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   const originalPlanMarkdownPath = getTechnicalPlanOriginalPlanMarkdownPath(app);
   function resolvePendingTenderMarkdownPath(filePath) {
     return path.resolve(resolveMarkdownPath(filePath));
+  }
+
+  function clearTechnicalPlanMermaidCache() {
+    try {
+      clearMermaidCache(app);
+    } catch (error) {
+      console.warn('[technical-plan] clear mermaid cache failed', error);
+    }
+  }
+
+  function shouldClearMermaidCacheForPartial(partial) {
+    if (!partial || typeof partial !== 'object') return false;
+    if (hasOwn(partial, 'outlineData') && (!partial.outlineData || !partial.outlineData?.outline?.length)) {
+      return true;
+    }
+    return hasOwn(partial, 'contentGenerationSections')
+      && hasOwn(partial, 'contentGenerationPlans')
+      && isEmptyObject(partial.contentGenerationSections)
+      && isEmptyObject(partial.contentGenerationPlans);
   }
 
   function isPendingTenderMarkdownPath(filePath) {
@@ -918,6 +942,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    clearTechnicalPlanMermaidCache();
     updateMeta({
       step: 'document-analysis',
       bid_analysis_mode: 'key',
@@ -949,6 +974,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    clearTechnicalPlanMermaidCache();
     updateMeta({
       step: 'bid-analysis',
       content_generation_options_json: null,
@@ -963,6 +989,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
     db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'content-generation'").run();
+    clearTechnicalPlanMermaidCache();
     updateMeta({ content_generation_runtime_json: null });
   }
 
@@ -972,6 +999,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
+    clearTechnicalPlanMermaidCache();
     updateMeta({
       step: 'document-analysis',
       outline_project_name: null,
@@ -993,6 +1021,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_content_plans').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    clearTechnicalPlanMermaidCache();
     updateMeta({
       workflow_kind: normalizeWorkflowKind(workflowKind),
       step: 'document-analysis',
@@ -1216,7 +1245,11 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   });
 
   function updateTechnicalPlan(partial) {
+    const shouldClearMermaidCache = shouldClearMermaidCacheForPartial(partial);
     updateTechnicalPlanTransaction(partial || {});
+    if (shouldClearMermaidCache) {
+      clearTechnicalPlanMermaidCache();
+    }
     return loadTechnicalPlan();
   }
 
@@ -1339,6 +1372,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       restoreMappedContentRows({ snapshot, idMap, affectedIds, nextIds, clearAll });
       if (invalidatesContentTask) {
         db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'content-generation'").run();
+        clearTechnicalPlanMermaidCache();
         updateMeta({ content_generation_runtime_json: null });
       }
     });
@@ -1561,6 +1595,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     if (fs.existsSync(originalPlanMarkdownPath)) {
       fs.rmSync(originalPlanMarkdownPath, { force: true });
     }
+    clearTechnicalPlanMermaidCache();
     deleteImportedImageBatches(app, 'technical-plan');
     return { success: true, message: '技术方案缓存已清空', state: loadTechnicalPlan() };
   }
@@ -1568,6 +1603,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   return {
     loadTechnicalPlan,
     updateTechnicalPlan,
+    clearMermaidCache: clearTechnicalPlanMermaidCache,
     clearTechnicalPlan,
     importTenderDocument,
     importOriginalPlanDocument,

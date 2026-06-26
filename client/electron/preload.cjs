@@ -123,6 +123,13 @@ const bridge = {
     updateState: (partial) => ipcRenderer.invoke('rejection-check:update-state', partial),
     clear: () => ipcRenderer.invoke('rejection-check:clear'),
   },
+  templates: {
+    list: () => ipcRenderer.invoke('templates:list'),
+    get: (templateId) => ipcRenderer.invoke('templates:get', templateId),
+    create: (config) => ipcRenderer.invoke('templates:create', config),
+    update: (templateId, config) => ipcRenderer.invoke('templates:update', templateId, config),
+    delete: (templateId) => ipcRenderer.invoke('templates:delete', templateId),
+  },
   tasks: {
     startBidSectionExtraction: (payload) => ipcRenderer.invoke('tasks:start-bid-section-extraction', payload),
     startBidAnalysis: (payload) => ipcRenderer.invoke('tasks:start-bid-analysis', payload),
@@ -143,11 +150,15 @@ const bridge = {
   },
   export: {
     exportWord: (payload) => ipcRenderer.invoke('export:word', payload),
+    openFile: (filePath) => ipcRenderer.invoke('export:open-file', filePath),
     onWordExportProgress: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('export:word-progress', listener);
       return () => ipcRenderer.removeListener('export:word-progress', listener);
     },
+  },
+  systemFonts: {
+    list: () => ipcRenderer.invoke('system-fonts:list'),
   },
 };
 

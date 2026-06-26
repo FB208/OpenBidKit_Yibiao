@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { SectionId } from '../shared/types/navigation';
 import { getAppMenuItemById } from './menuConfig';
 import BidOpportunityPage from '../features/bid-opportunity/pages/BidOpportunityPage';
@@ -6,6 +7,7 @@ import DeveloperDemoPage, { isDeveloperDemoSection } from '../features/developer
 import OpenCodeAgentTestPage from '../features/developer/pages/OpenCodeAgentTestPage';
 import DeveloperTestPage from '../features/developer/pages/DeveloperTestPage';
 import ExportFormatPage from '../features/export-format/pages/ExportFormatPage';
+import MyTemplatesPage from '../features/export-format/pages/MyTemplatesPage';
 import DuplicateCheckPage from '../features/duplicate-check/pages/DuplicateCheckPage';
 import KnowledgeBasePage from '../features/knowledge-base/pages/KnowledgeBasePage';
 import RejectionCheckPage from '../features/rejection-check/pages/RejectionCheckPage';
@@ -24,6 +26,13 @@ interface AppRouterProps {
 
 function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSectionChange, registerLeaveGuard }: AppRouterProps) {
   const activeMenuItem = getAppMenuItemById(activeSection, developerMode);
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (activeSection !== 'my-templates') {
+      setEditingTemplateId(null);
+    }
+  }, [activeSection]);
 
   if (activeMenuItem?.children?.length) {
     return <SecondaryMenuPage menuItem={activeMenuItem} onNavigate={onSectionChange} />;
@@ -48,8 +57,14 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <DuplicateCheckPage />;
     case 'rejection-check':
       return <RejectionCheckPage />;
+    case 'my-templates':
+      return editingTemplateId
+        ? <ExportFormatPage mode="edit" templateId={editingTemplateId} onBack={() => setEditingTemplateId(null)} />
+        : <MyTemplatesPage onCreateTemplate={() => onSectionChange('new-template')} onEditTemplate={setEditingTemplateId} />;
+    case 'new-template':
+      return <ExportFormatPage mode="create" />;
     case 'export-format':
-      return <ExportFormatPage />;
+      return <ExportFormatPage mode="create" />;
     case 'bid-opportunity':
       return <BidOpportunityPage />;
     case 'developer-test':
