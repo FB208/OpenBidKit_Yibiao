@@ -29,11 +29,12 @@ export interface HeadingStyleConfig {
   first_line_indent_chars: number;
   line_spacing: number;         // 倍数，如 1、1.2、1.5
   numbering_format: HeadingNumberingFormat;
-  numbering_template: string;   // 自定义编号模板，支持 {zh} 和 {num}
+  numbering_template: string;   // 自定义编号模板，支持 {zh}、{num}、{tail}、{full} 等
 }
 
 export interface HeadingBorderConfig {
   enabled: boolean;
+  min_heading_left_enabled: boolean;
   border_color: string;
   level_cell_colors: string[];
   structure: HeadingBorderStructure;
@@ -388,30 +389,31 @@ export const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#eef5ff', '#f3f7ff', '#f8fbf
 
 const DEFAULT_HEADING_BORDER: HeadingBorderConfig = {
   enabled: false,
+  min_heading_left_enabled: false,
   border_color: '#cfd8ee',
   level_cell_colors: [...DEFAULT_HEADING_BORDER_CELL_COLORS],
   structure: '上下结构',
 };
 
-/** 默认导出格式：6 级标题独立编号 */
+/** 默认导出格式：章/节 + 三级起局部连续编号 */
 export const DEFAULT_EXPORT_FORMAT: ExportFormatConfig = {
   template_name: '默认模版',
   page: { ...DEFAULT_PAGE_SETUP },
   heading_level1_page_break_before: false,
   heading_border: { ...DEFAULT_HEADING_BORDER },
   headings: [
-    // L1: 数字连续多级编号 — 黑体 小二 居中
-    { font: '黑体', size: '小二', alignment: '居中对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '第{zh}章' },
-    // L2: 数字连续多级编号 — 黑体 四号 两端对齐
-    { font: '黑体', size: '四号', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '第{zh}节' },
-    // L3: 数字连续多级编号 — 黑体 小四 两端对齐
-    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '{zh}、' },
-    // L4: 数字连续多级编号 — 楷体 小四
-    { font: '楷体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '（{zh}）' },
-    // L5: 数字连续多级编号 — 黑体 小四
-    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '{num}、' },
-    // L6: 数字连续多级编号 — 宋体 小四
-    { font: '宋体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '({num})' },
+    // L1: 第一章 — 黑体 小二 居中
+    { font: '黑体', size: '小二', alignment: '居中对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '第{zh}章' },
+    // L2: 第一节 — 黑体 四号 两端对齐
+    { font: '黑体', size: '四号', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '第{zh}节' },
+    // L3: 1 — 黑体 小四 两端对齐
+    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '{tail}' },
+    // L4: 1.1 — 楷体 小四
+    { font: '楷体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '{tail}' },
+    // L5: 1.1.1 — 黑体 小四
+    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '{tail}' },
+    // L6: 1.1.1.1 — 宋体 小四
+    { font: '宋体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '{tail}' },
   ],
   body_text: { ...DEFAULT_BODY_TEXT },
   table: {

@@ -10997,6 +10997,61 @@ button {
   line-height: 1.5;
 }
 
+.export-format-preset-panel {
+  display: grid;
+  gap: 12px;
+  padding: 22px 0 0;
+  border-top: 1px solid var(--yb-border-soft);
+}
+
+.export-format-preset-panel-head {
+  display: grid;
+  gap: 5px;
+  padding: 0 36px;
+}
+
+.export-format-preset-panel-head strong {
+  color: var(--yb-text);
+  font-size: 16px;
+}
+
+.export-format-preset-panel-head span {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.export-format-preset-list.is-theme {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.export-format-preset-card.is-static {
+  cursor: default;
+}
+
+.export-format-preset-card.is-static:hover {
+  background: rgba(33, 116, 253, 0.04);
+}
+
+.export-format-theme-card {
+  min-height: 132px;
+}
+
+.export-format-theme-swatches {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+}
+
+.export-format-theme-swatches span {
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.62);
+}
+
 /* ── 页边距网格 ── */
 
 .export-format-margin-grid {
@@ -11479,6 +11534,15 @@ button {
   border: var(--ef-chapter-frame-border, none);
 }
 
+.export-template-chapter-frame.is-fragment {
+  margin: 0;
+  overflow: visible;
+}
+
+.export-template-preview-block + .export-template-preview-block .export-template-chapter-frame.is-fragment {
+  border-top: 0;
+}
+
 .export-template-chapter-heading-row {
   display: grid;
   align-items: center;
@@ -11541,8 +11605,81 @@ button {
   border-bottom: var(--ef-chapter-row-border, none);
 }
 
+.export-template-chapter-frame.is-fragment > .export-template-chapter-heading-row,
+.export-template-chapter-frame.is-fragment > .export-template-chapter-content-row,
+.export-template-chapter-frame.is-fragment > .export-template-chapter-leaf-row {
+  border-bottom: 0;
+}
+
 .export-template-chapter-content-row:last-child {
   border-bottom: 0;
+}
+
+.export-template-chapter-leaf-row {
+  display: grid;
+  grid-template-columns: minmax(88pt, 24%) minmax(0, 1fr);
+  align-items: stretch;
+  background: #fff;
+  border-bottom: var(--ef-chapter-row-border, none);
+}
+
+.export-template-chapter-leaf-title {
+  display: grid;
+  align-items: center;
+  min-width: 0;
+  padding: 8pt 10pt;
+  border-right: var(--ef-chapter-row-border, none);
+}
+
+.export-template-chapter-leaf-row.is-level-1 .export-template-chapter-leaf-title {
+  background: var(--ef-chapter-row-1-background, transparent);
+}
+
+.export-template-chapter-leaf-row.is-level-2 .export-template-chapter-leaf-title {
+  background: var(--ef-chapter-row-2-background, transparent);
+}
+
+.export-template-chapter-leaf-row.is-level-3 .export-template-chapter-leaf-title {
+  background: var(--ef-chapter-row-3-background, transparent);
+}
+
+.export-template-chapter-leaf-row.is-level-4 .export-template-chapter-leaf-title {
+  background: var(--ef-chapter-row-4-background, transparent);
+}
+
+.export-template-chapter-leaf-row.is-level-5 .export-template-chapter-leaf-title {
+  background: var(--ef-chapter-row-5-background, transparent);
+}
+
+.export-template-chapter-leaf-row.is-level-6 .export-template-chapter-leaf-title {
+  background: var(--ef-chapter-row-6-background, transparent);
+}
+
+.export-template-chapter-leaf-title h1,
+.export-template-chapter-leaf-title h2,
+.export-template-chapter-leaf-title h3,
+.export-template-chapter-leaf-title h4,
+.export-template-chapter-leaf-title h5,
+.export-template-chapter-leaf-title h6 {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  text-indent: 0;
+}
+
+.export-template-chapter-leaf-content {
+  min-width: 0;
+  padding: 10pt 16pt 12pt;
+}
+
+.export-template-chapter-leaf-content > :first-child {
+  margin-top: 0;
+}
+
+.export-template-chapter-leaf-content > :last-child {
+  margin-bottom: 0;
 }
 
 .export-template-page-header {
@@ -11712,6 +11849,20 @@ button {
 .export-format-preview-content h6 {
   display: var(--ef-heading-layout, block);
   position: relative;
+}
+
+.export-format-preview-content .export-template-chapter-leaf-title h1,
+.export-format-preview-content .export-template-chapter-leaf-title h2,
+.export-format-preview-content .export-template-chapter-leaf-title h3,
+.export-format-preview-content .export-template-chapter-leaf-title h4,
+.export-format-preview-content .export-template-chapter-leaf-title h5,
+.export-format-preview-content .export-template-chapter-leaf-title h6 {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  text-indent: 0;
 }
 
 /* 预览内容 — 表格 */

@@ -167,17 +167,18 @@ const defaultExportFormat = {
   heading_level1_page_break_before: false,
   heading_border: {
     enabled: false,
+    min_heading_left_enabled: false,
     border_color: '#cfd8ee',
     level_cell_colors: [...DEFAULT_HEADING_BORDER_CELL_COLORS],
     structure: '上下结构',
   },
   headings: [
-    { font: '黑体', size: '小二', alignment: '居中对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '第{zh}章' },
-    { font: '黑体', size: '四号', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '第{zh}节' },
-    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '{zh}、' },
-    { font: '楷体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '（{zh}）' },
-    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '{num}、' },
-    { font: '宋体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'outline-decimal', numbering_template: '({num})' },
+    { font: '黑体', size: '小二', alignment: '居中对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '第{zh}章' },
+    { font: '黑体', size: '四号', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '第{zh}节' },
+    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 10, spacing_after_pt: 10, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '{tail}' },
+    { font: '楷体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '{tail}' },
+    { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '{tail}' },
+    { font: '宋体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '{tail}' },
   ],
   body_text: {
     font: '宋体',
@@ -494,6 +495,7 @@ function normalizeExportFormat(source) {
   const srcHeadingCellColors = Array.isArray(srcHeadingBorder.level_cell_colors) ? srcHeadingBorder.level_cell_colors : [];
   const heading_border = {
     enabled: typeof srcHeadingBorder.enabled === 'boolean' ? srcHeadingBorder.enabled : def.heading_border.enabled,
+    min_heading_left_enabled: typeof srcHeadingBorder.min_heading_left_enabled === 'boolean' ? srcHeadingBorder.min_heading_left_enabled : def.heading_border.min_heading_left_enabled,
     border_color: typeof srcHeadingBorder.border_color === 'string' && srcHeadingBorder.border_color ? srcHeadingBorder.border_color : def.heading_border.border_color,
     level_cell_colors: defHeadingCellColors.map((color, index) => (typeof srcHeadingCellColors[index] === 'string' && srcHeadingCellColors[index] ? srcHeadingCellColors[index] : color)),
     structure: typeof srcHeadingBorder.structure === 'string' && VALID_HEADING_BORDER_STRUCTURES.includes(srcHeadingBorder.structure) ? srcHeadingBorder.structure : def.heading_border.structure,

@@ -30,10 +30,16 @@ import {
   SIZE_OPTIONS,
 } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
-import { formatOutlineNumber } from '../../../shared/utils/outlineNumbering';
+import { formatOutlineNumber, formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
 import type { OutlineItem, WordExportProgressEvent } from '../../../shared/types';
+import {
+  EXPORT_LAYOUT_PRESETS,
+  EXPORT_THEME_PRESETS,
+  applyExportLayoutPreset,
+  applyExportThemePreset,
+} from '../exportFormatPresets';
 
-type TemplateTab = 'layout' | 'cover' | 'heading' | 'body' | 'table' | 'image';
+type TemplateTab = 'quick' | 'layout' | 'cover' | 'heading' | 'body' | 'table' | 'image';
 type TableCellStyleKey = 'header_row' | 'first_column' | 'body_cell';
 
 interface ExportFormatPageProps {
@@ -43,6 +49,7 @@ interface ExportFormatPageProps {
 }
 
 const templateTabs: Array<{ id: TemplateTab; label: string }> = [
+  { id: 'quick', label: '快捷设置' },
   { id: 'layout', label: '布局设置' },
   { id: 'cover', label: '封皮' },
   { id: 'heading', label: '标题样式' },
@@ -233,8 +240,7 @@ function headingNumberExample(index: number, heading: HeadingStyleConfig): strin
 
 function headingPreviewTitle(config: ExportFormatConfig, level: number, id: string, title: string) {
   const heading = config.headings[level - 1];
-  const prefix = formatOutlineNumber(id, heading);
-  return prefix ? `${prefix} ${title}` : title;
+  return formatOutlineTitle(id, title, heading);
 }
 
 function createDefaultExportFormat(): ExportFormatConfig {
@@ -284,10 +290,12 @@ function withExportFormatDefaults(source: ExportFormatConfig): ExportFormatConfi
 
 function ExportFormatPage({ mode = 'create', templateId = null, onBack }: ExportFormatPageProps) {
   const { showToast } = useToast();
-  const [activeTab, setActiveTab] = useState<TemplateTab>('layout');
+  const [activeTab, setActiveTab] = useState<TemplateTab>('quick');
   const [config, setConfig] = useState<ExportFormatConfig>(() => createDefaultExportFormat());
   const [savedConfig, setSavedConfig] = useState<ExportFormatConfig | null>(null);
   const [currentTemplateId, setCurrentTemplateId] = useState<string | null>(templateId);
+  const [selectedLayoutPresetId, setSelectedLayoutPresetId] = useState('');
+  const [selectedThemePresetId, setSelectedThemePresetId] = useState('');
   const [expandedHeadings, setExpandedHeadings] = useState<Set<number>>(new Set([0, 1]));
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -330,6 +338,8 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           setCurrentTemplateId(template.template_id);
           setConfig(nextConfig);
           setSavedConfig(nextConfig);
+          setSelectedLayoutPresetId('');
+          setSelectedThemePresetId('');
           return;
         }
 
@@ -338,6 +348,8 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         setCurrentTemplateId(null);
         setConfig(defaultConfig);
         setSavedConfig(null);
+        setSelectedLayoutPresetId('');
+        setSelectedThemePresetId('');
       } catch (error) {
         if (cancelled) return;
         const message = error instanceof Error ? error.message : '未知错误';
@@ -370,11 +382,19 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   }, []);
 
   const updateHeadingBorder = useCallback((updates: Partial<HeadingBorderConfig>) => {
-    setConfig((prev) => ({
-      ...prev,
-      heading_border: { ...prev.heading_border, ...updates },
-    }));
-  }, []);
+    setConfig((prev) => {
+      const next = {
+        ...prev,
+        heading_border: { ...prev.heading_border, ...updates },
+      };
+
+      if (typeof updates.enabled === 'boolean' && selectedThemePresetId) {
+        return applyExportThemePreset(next, selectedThemePresetId);
+      }
+
+      return next;
+    });
+  }, [selectedThemePresetId]);
 
   const updateHeadingBorderCellColor = useCallback((index: number, value: string) => {
     setConfig((prev) => {
@@ -434,8 +454,36 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   }, [config, currentTemplateId, showToast]);
 
   const handleResetDefault = useCallback(() => {
+    if (selectedLayoutPresetId || selectedThemePresetId) {
+      setConfig((prev) => {
+        const withLayout = selectedLayoutPresetId ? applyExportLayoutPreset(prev, selectedLayoutPresetId) : prev;
+        return selectedThemePresetId ? applyExportThemePreset(withLayout, selectedThemePresetId) : withLayout;
+      });
+      showToast('已恢复当前预设样式，保存后生效', 'info');
+      return;
+    }
+
     setConfig(createDefaultExportFormat());
     showToast('已恢复默认模版设置，保存后生效', 'info');
+  }, [selectedLayoutPresetId, selectedThemePresetId, showToast]);
+
+  const handleApplyLayoutPreset = useCallback((presetId: string) => {
+    if (!presetId) return;
+    const preset = EXPORT_LAYOUT_PRESETS.find((item) => item.id === presetId);
+    setSelectedLayoutPresetId(presetId);
+    setConfig((prev) => {
+      const withLayout = applyExportLayoutPreset(prev, presetId);
+      return selectedThemePresetId ? applyExportThemePreset(withLayout, selectedThemePresetId) : withLayout;
+    });
+    showToast(`已应用版面预设：${preset?.label || '未命名预设'}，保存后生效`, 'success');
+  }, [selectedThemePresetId, showToast]);
+
+  const handleApplyThemePreset = useCallback((presetId: string) => {
+    if (!presetId) return;
+    const preset = EXPORT_THEME_PRESETS.find((item) => item.id === presetId);
+    setSelectedThemePresetId(presetId);
+    setConfig((prev) => applyExportThemePreset(prev, presetId));
+    showToast(`已应用主题预设：${preset?.label || '未命名预设'}，保存后生效`, 'success');
   }, [showToast]);
 
   const handleExportTest = useCallback(async () => {
@@ -540,7 +588,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   const resetToolbarGroup: FloatingToolbarGroup = {
     id: 'template-reset',
     actions: [
-      { id: 'reset-default', label: '重置默认', variant: 'danger', tooltip: '恢复默认模版设置，保存后生效', onClick: handleResetDefault },
+      { id: 'reset-default', label: '重置默认', variant: 'danger', tooltip: selectedLayoutPresetId || selectedThemePresetId ? '恢复当前预设样式，保存后生效' : '恢复默认模版设置，保存后生效', onClick: handleResetDefault },
     ],
   };
   const exportTestToolbarGroup: FloatingToolbarGroup = {
@@ -593,6 +641,54 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
     exportTestToolbarGroup,
     ...saveToolbarGroups,
   ];
+
+  const renderQuickSettings = () => (
+    <>
+      <div className="settings-section-title">
+        <span />
+        <strong>快捷设置</strong>
+      </div>
+      <div className="settings-list">
+        <label className="settings-row">
+          <div className="settings-row-copy">
+            <strong>版面预设</strong>
+            <span>快捷设置所有版面包括纸张、边距、标题、正文等</span>
+          </div>
+          <select value={selectedLayoutPresetId} onChange={(event) => handleApplyLayoutPreset(event.target.value)}>
+            <option value="" disabled>选择版面预设</option>
+            {EXPORT_LAYOUT_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+          </select>
+        </label>
+        <label className="settings-row">
+          <div className="settings-row-copy">
+            <strong>主题预设</strong>
+            <span>未开启章节页框时只应用表格颜色；开启章节页框后同步应用标题、页框、页眉页脚和表格颜色。</span>
+          </div>
+          <select value={selectedThemePresetId} onChange={(event) => handleApplyThemePreset(event.target.value)}>
+            <option value="" disabled>选择主题预设</option>
+            {EXPORT_THEME_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="export-format-preset-panel">
+        <div className="export-format-preset-panel-head">
+          <strong>主题色展示</strong>
+          <span>主题只覆盖颜色；章节页框关闭时仅表格使用主题色。</span>
+        </div>
+        <div className="export-format-preset-list is-theme is-static">
+          {EXPORT_THEME_PRESETS.map((preset) => (
+            <div key={preset.id} className="export-format-preset-card export-format-theme-card is-static">
+              <strong>{preset.label}</strong>
+              <span className="export-format-preset-hint">{preset.description}</span>
+              <div className="export-format-theme-swatches" aria-hidden="true">
+                {preset.swatches.map((color) => <span key={color} style={{ background: color }} />)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
 
   const renderLayoutSettings = () => (
     <>
@@ -750,6 +846,13 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         {config.heading_border.enabled && (
           <>
             <label className="settings-row">
+              <div className="settings-row-copy"><strong>最小标题居左</strong><span>最小标题不显示序号，固定在内容左侧</span></div>
+              <label className="settings-switch-control">
+                <input type="checkbox" checked={config.heading_border.min_heading_left_enabled} onChange={(event) => updateHeadingBorder({ min_heading_left_enabled: event.target.checked })} />
+                <span className="settings-switch-track" aria-hidden="true"><span className="settings-switch-thumb" /></span>
+              </label>
+            </label>
+            <label className="settings-row">
               <div className="settings-row-copy"><strong>页框颜色</strong></div>
               <input type="color" value={config.heading_border.border_color} onChange={(event) => updateHeadingBorder({ border_color: event.target.value })} />
             </label>
@@ -777,7 +880,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
       <div className="export-format-heading-note">
         <strong>自定义编号说明</strong>
         <span>
-          选择“自定义”后，可在各级标题中使用 <code>{'{zh}'}</code> 表示中文序号，<code>{'{num}'}</code> 表示数字序号，例如：<code>第{'{zh}'}章 = 第一章</code>、<code>第{'{num}'}节 = 第1节</code>。
+          选择“自定义”后，可使用 <code>{'{zh}'}</code> 中文序号、<code>{'{num}'}</code> 当前级数字、<code>{'{tail}'}</code> 三级起局部编号、<code>{'{full}'}</code> 完整编号，例如：<code>第{'{zh}'}章 = 第一章</code>、<code>{'{tail}'} = 1.1.1</code>。
         </span>
       </div>
       <div className="export-format-heading-list">
@@ -1072,6 +1175,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   );
 
   const renderActiveSettings = () => {
+    if (activeTab === 'quick') return renderQuickSettings();
     if (activeTab === 'layout') return renderLayoutSettings();
     if (activeTab === 'heading') return renderHeadingSettings();
     if (activeTab === 'body') return renderBodySettings();
@@ -1263,6 +1367,31 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
     );
   };
 
+  const renderPreviewContentRow = (content: ReactNode) => (
+    <div className="export-template-chapter-content-row">{content}</div>
+  );
+
+  const renderPreviewLeafRow = (level: 1 | 2 | 3 | 4 | 5 | 6, id: string, title: string, content: ReactNode) => {
+    if (!config.heading_border.min_heading_left_enabled) {
+      return (
+        <>
+          {renderPreviewHeadingRow(level, id, title)}
+          {renderPreviewContentRow(content)}
+        </>
+      );
+    }
+
+    const HeadingTag = `h${level}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
+    return (
+      <div className={`export-template-chapter-leaf-row is-level-${level}`}>
+        <div className="export-template-chapter-leaf-title">
+          <HeadingTag>{title}</HeadingTag>
+        </div>
+        <div className="export-template-chapter-leaf-content">{content}</div>
+      </div>
+    );
+  };
+
   const previewBlocks = useMemo<PreviewBlock[]>(() => {
     const serviceTable = (
       <table>
@@ -1295,24 +1424,25 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
     );
 
     if (config.heading_border.enabled) {
+      const frameBlock = (id: string, content: ReactNode, fallbackHeight: number, startsNewPage = false): PreviewBlock => ({
+        id,
+        fallbackHeight,
+        startsNewPage,
+        content: <section className="export-template-chapter-frame is-fragment">{content}</section>,
+      });
+
       return [
-        {
-          id: 'frame-chapter-1',
-          fallbackHeight: 760,
-          content: (
-            <section className="export-template-chapter-frame">
-              {renderPreviewHeadingRow(1, '1', '项目实施方案')}
-              <div className="export-template-chapter-content-row"><p>本节展示模板设置在导出文档中的基础排版效果，包括页面边距、正文样式、标题层级和表格展示。</p></div>
-              {renderPreviewHeadingRow(2, '1.1', '总体目标')}
-              <div className="export-template-chapter-content-row"><p>围绕项目建设目标，结合招标文件要求，形成可执行、可检查、可交付的技术实施方案。</p></div>
-              {renderPreviewHeadingRow(3, '1.1.1', '实施安排')}
-              <div className="export-template-chapter-content-row"><p>项目团队将按阶段推进需求确认、方案设计、系统实施、联调测试和验收交付等工作。</p></div>
-              {renderPreviewHeadingRow(4, '1.1.1.1', '需求确认')}
-              <div className="export-template-chapter-content-row"><p>明确业务边界、交付范围和关键验收指标，形成统一的实施依据。</p></div>
-              {renderPreviewHeadingRow(5, '1.1.1.1.1', '资料收集')}
-              <div className="export-template-chapter-content-row"><p>整理招标文件、现状资料和接口清单，支撑后续方案细化。</p></div>
-              {renderPreviewHeadingRow(6, '1.1.1.1.1.1', '记录归档')}
-              <div className="export-template-chapter-content-row">
+        frameBlock('frame-1-h1', renderPreviewHeadingRow(1, '1', '项目实施方案'), 58),
+        frameBlock('frame-1-intro', renderPreviewContentRow(<p>本节展示模板设置在导出文档中的基础排版效果，包括页面边距、正文样式、标题层级和表格展示。</p>), 74),
+        frameBlock('frame-1-h2', renderPreviewHeadingRow(2, '1.1', '总体目标'), 46),
+        frameBlock('frame-1-goal', renderPreviewContentRow(<p>围绕项目建设目标，结合招标文件要求，形成可执行、可检查、可交付的技术实施方案。</p>), 74),
+        frameBlock('frame-1-h3', renderPreviewHeadingRow(3, '1.1.1', '实施安排'), 42),
+        frameBlock('frame-1-plan', renderPreviewContentRow(<p>项目团队将按阶段推进需求确认、方案设计、系统实施、联调测试和验收交付等工作。</p>), 74),
+        frameBlock('frame-1-h4', renderPreviewHeadingRow(4, '1.1.1.1', '需求确认'), 38),
+        frameBlock('frame-1-confirm', renderPreviewContentRow(<p>明确业务边界、交付范围和关键验收指标，形成统一的实施依据。</p>), 74),
+        frameBlock('frame-1-h5', renderPreviewHeadingRow(5, '1.1.1.1.1', '资料收集'), 34),
+        frameBlock('frame-1-collect', renderPreviewContentRow(<p>整理招标文件、现状资料和接口清单，支撑后续方案细化。</p>), 74),
+        frameBlock('frame-1-leaf-1', renderPreviewLeafRow(6, '1.1.1.1.1.1', '记录归档', <>
                 <p>对确认过程、会议纪要和问题闭环结果进行留痕归档。</p>
                 <ul>
                   <li>建立项目启动、过程检查和验收交付的闭环机制。</li>
@@ -1323,33 +1453,15 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
                   <li>完成过程复核和成果归档。</li>
                 </ol>
                 {processFigure}
-              </div>
-              {renderPreviewHeadingRow(6, '1.1.1.1.1.2', '过程复核')}
-              <div className="export-template-chapter-content-row"><p>对关键节点的确认材料、实施记录和交付清单进行复核，确保过程资料完整一致。</p></div>
-              {renderPreviewHeadingRow(6, '1.1.1.1.1.3', '资料归档')}
-              <div className="export-template-chapter-content-row"><p>按项目阶段整理归档目录、会议纪要、问题闭环记录和验收支撑材料。</p></div>
-            </section>
-          ),
-        },
-        {
-          id: 'frame-chapter-2',
-          startsNewPage: config.heading_level1_page_break_before,
-          fallbackHeight: 620,
-          content: (
-            <section className="export-template-chapter-frame">
-              {renderPreviewHeadingRow(1, '2', '运维保障方案')}
-              <div className="export-template-chapter-content-row"><p>本章展示第二个一级目录，用于预览一级标题另起页、页眉页脚延续和章节页框跨页排版效果。</p></div>
-              {renderPreviewHeadingRow(2, '2.1', '监控中心值守')}
-              <div className="export-template-chapter-content-row"><p>值守团队按照 7×24 小时轮班机制开展监控、告警确认、事件记录和问题派单。</p></div>
-              {renderPreviewHeadingRow(2, '2.2', '故障响应机制')}
-              <div className="export-template-chapter-content-row"><p>发现系统异常后，按照分级响应流程定位影响范围，组织软件、网络和硬件人员协同处理。</p>{serviceTable}</div>
-              {renderPreviewHeadingRow(2, '2.3', '巡检维护计划')}
-              <div className="export-template-chapter-content-row"><p>定期检查系统运行状态、设备资源和关键链路，形成巡检记录和问题整改清单。</p></div>
-              {renderPreviewHeadingRow(2, '2.4', '质量保障措施')}
-              <div className="export-template-chapter-content-row"><p>通过交付检查、过程复盘和服务评价，持续优化运维质量和响应效率。</p></div>
-            </section>
-          ),
-        },
+              </>), 250),
+        frameBlock('frame-1-leaf-2', renderPreviewLeafRow(6, '1.1.1.1.1.2', '过程复核', <p>对关键节点的确认材料、实施记录和交付清单进行复核，确保过程资料完整一致。</p>), 82),
+        frameBlock('frame-1-leaf-3', renderPreviewLeafRow(6, '1.1.1.1.1.3', '资料归档', <p>按项目阶段整理归档目录、会议纪要、问题闭环记录和验收支撑材料。</p>), 82),
+        frameBlock('frame-2-h1', renderPreviewHeadingRow(1, '2', '运维保障方案'), 58, config.heading_level1_page_break_before),
+        frameBlock('frame-2-intro', renderPreviewContentRow(<p>本章展示第二个一级目录，用于预览一级标题另起页、页眉页脚延续和章节页框跨页排版效果。</p>), 74),
+        frameBlock('frame-2-leaf-1', renderPreviewLeafRow(2, '2.1', '监控中心值守', <p>值守团队按照 7×24 小时轮班机制开展监控、告警确认、事件记录和问题派单。</p>), 82),
+        frameBlock('frame-2-leaf-2', renderPreviewLeafRow(2, '2.2', '故障响应机制', <><p>发现系统异常后，按照分级响应流程定位影响范围，组织软件、网络和硬件人员协同处理。</p>{serviceTable}</>), 210),
+        frameBlock('frame-2-leaf-3', renderPreviewLeafRow(2, '2.3', '巡检维护计划', <p>定期检查系统运行状态、设备资源和关键链路，形成巡检记录和问题整改清单。</p>), 82),
+        frameBlock('frame-2-leaf-4', renderPreviewLeafRow(2, '2.4', '质量保障措施', <p>通过交付检查、过程复盘和服务评价，持续优化运维质量和响应效率。</p>), 82),
       ];
     }
 

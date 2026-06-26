@@ -32,6 +32,7 @@ const {
   TableRow,
   TextRun,
   UnderlineType,
+  VerticalAlignTable,
   WidthType,
 } = require('docx');
 
@@ -39,6 +40,8 @@ const MAX_IMAGE_WIDTH = 520;
 const NUMBERING_REFERENCE_PREFIX = 'technical-plan-numbering';
 const HEADING_NUMBERING_REFERENCE = 'technical-plan-heading-numbering';
 const DOCX_TABLE_WIDTH_TWIPS = 9000;
+const CHAPTER_LEAF_TITLE_WIDTH_TWIPS = 1800;
+const CHAPTER_LEAF_CONTENT_WIDTH_TWIPS = DOCX_TABLE_WIDTH_TWIPS - CHAPTER_LEAF_TITLE_WIDTH_TWIPS;
 const MERMAID_EXPORT_RETRY_ATTEMPTS = 2;
 const MERMAID_EXPORT_RETRY_DELAY_MS = 3000;
 const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#e0ecff', '#e9f1ff', '#f2f7ff', '#f8fbff', '#ffffff', '#ffffff'];
@@ -318,6 +321,7 @@ function getChapterFrameConfig(exportFormat) {
   const levelCellColors = Array.isArray(frame.level_cell_colors) ? frame.level_cell_colors : [];
   return {
     color,
+    minHeadingLeftEnabled: frame.min_heading_left_enabled === true,
     fills: DEFAULT_HEADING_BORDER_CELL_COLORS.map((fill, index) => {
       const fallback = normalizeDocxColor(fill, 'FFFFFF');
       return normalizeDocxColor(levelCellColors[index] || fill, fallback);
@@ -344,6 +348,7 @@ function buildChapterHeadingRow(exportFormat, headingParagraph, level) {
   const border = { style: BorderStyle.SINGLE, size: 6, color: frame.color };
   const none = { style: BorderStyle.NIL, size: 0, color: 'FFFFFF' };
   const rowStyle = chapterHeadingRowStyle(level);
+  const columnSpan = frame.minHeadingLeftEnabled ? 2 : undefined;
 
   return new TableRow({
     cantSplit: true,
@@ -352,6 +357,7 @@ function buildChapterHeadingRow(exportFormat, headingParagraph, level) {
       children: [headingParagraph],
       shading: { type: ShadingType.CLEAR, fill: frame.fills[Math.max(0, Math.min(level - 1, 5))] || 'FFFFFF' },
       margins: { top: rowStyle.top, bottom: rowStyle.bottom, left: rowStyle.left, right: rowStyle.right },
+      columnSpan,
       width: { size: DOCX_TABLE_WIDTH_TWIPS, type: WidthType.DXA },
       borders: { top: border, left: border, right: border, bottom: border },
     })],
@@ -364,14 +370,43 @@ function buildChapterContentRow(exportFormat, bodyChildren) {
   const border = { style: BorderStyle.SINGLE, size: 6, color: frame.color };
   const none = { style: BorderStyle.NIL, size: 0, color: 'FFFFFF' };
   const body = bodyChildren?.length ? bodyChildren : [paragraph([textRun('')], { after: 0 })];
+  const columnSpan = frame.minHeadingLeftEnabled ? 2 : undefined;
 
   return new TableRow({
     children: [new TableCell({
       children: body,
       margins: { top: 200, bottom: 220, left: 260, right: 260 },
+      columnSpan,
       width: { size: DOCX_TABLE_WIDTH_TWIPS, type: WidthType.DXA },
       borders: { top: none, left: border, right: border, bottom: border },
     })],
+  });
+}
+
+function buildChapterLeafRow(exportFormat, titleParagraph, bodyChildren, level) {
+  const frame = getChapterFrameConfig(exportFormat);
+  if (!frame) return undefined;
+  const border = { style: BorderStyle.SINGLE, size: 6, color: frame.color };
+  const body = bodyChildren?.length ? bodyChildren : [paragraph([textRun('')], { after: 0 })];
+  const fill = frame.fills[Math.max(0, Math.min(level - 1, 5))] || 'FFFFFF';
+
+  return new TableRow({
+    children: [
+      new TableCell({
+        children: [titleParagraph],
+        shading: { type: ShadingType.CLEAR, fill },
+        margins: { top: 160, bottom: 160, left: 160, right: 160 },
+        verticalAlign: VerticalAlignTable.CENTER,
+        width: { size: CHAPTER_LEAF_TITLE_WIDTH_TWIPS, type: WidthType.DXA },
+        borders: { top: border, left: border, right: border, bottom: border },
+      }),
+      new TableCell({
+        children: body,
+        margins: { top: 200, bottom: 220, left: 260, right: 260 },
+        width: { size: CHAPTER_LEAF_CONTENT_WIDTH_TWIPS, type: WidthType.DXA },
+        borders: { top: border, left: border, right: border, bottom: border },
+      }),
+    ],
   });
 }
 
@@ -384,7 +419,7 @@ function buildChapterFrameTable(exportFormat, rows) {
   return new Table({
     rows,
     width: { size: 100, type: WidthType.PERCENTAGE },
-    columnWidths: [DOCX_TABLE_WIDTH_TWIPS],
+    columnWidths: frame.minHeadingLeftEnabled ? [CHAPTER_LEAF_TITLE_WIDTH_TWIPS, CHAPTER_LEAF_CONTENT_WIDTH_TWIPS] : [DOCX_TABLE_WIDTH_TWIPS],
     layout: TableLayoutType.FIXED,
     borders: {
       top: border,
@@ -876,6 +911,39 @@ function numberToChinese(num) {
   return `${digits[th]}千${r === 0 ? '' : r < 100 ? `零${numberToChinese(r)}` : numberToChinese(r)}`;
 }
 
+function numberToCircled(num) {
+  const circled = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩', '⑪', '⑫', '⑬', '⑭', '⑮', '⑯', '⑰', '⑱', '⑲', '⑳'];
+  return circled[num - 1] || String(num);
+}
+
+function numberToAlpha(num, upper = false) {
+  let n = Math.max(1, Math.floor(Number(num) || 1));
+  let value = '';
+  while (n > 0) {
+    n -= 1;
+    value = String.fromCharCode(97 + (n % 26)) + value;
+    n = Math.floor(n / 26);
+  }
+  return upper ? value.toUpperCase() : value;
+}
+
+function numberToRoman(num, upper = false) {
+  let n = Math.max(1, Math.min(3999, Math.floor(Number(num) || 1)));
+  const pairs = [
+    [1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'],
+    [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'],
+    [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i'],
+  ];
+  let value = '';
+  pairs.forEach(([amount, symbol]) => {
+    while (n >= amount) {
+      value += symbol;
+      n -= amount;
+    }
+  });
+  return upper ? value.toUpperCase() : value;
+}
+
 function outlineNumberParts(id) {
   return String(id || '')
     .split('.')
@@ -895,15 +963,28 @@ function formatOutlineNumber(id, headingStyle) {
 
   const lastPart = parts[parts.length - 1];
   const cn = numberToChinese(lastPart);
+  const tail = (parts.length >= 3 ? parts.slice(2) : [lastPart]).join('.');
   return String(headingStyle.numbering_template || '')
     .replace(/\{zh\}/g, cn)
     .replace(/\{num\}/g, String(lastPart))
+    .replace(/\{tail\}/g, tail)
+    .replace(/\{full\}/g, parts.join('.'))
+    .replace(/\{circled\}/g, numberToCircled(lastPart))
+    .replace(/\{alpha\}/g, numberToAlpha(lastPart))
+    .replace(/\{ALPHA\}/g, numberToAlpha(lastPart, true))
+    .replace(/\{roman\}/g, numberToRoman(lastPart))
+    .replace(/\{ROMAN\}/g, numberToRoman(lastPart, true))
     .trim();
+}
+
+function shouldInsertSpaceAfterNumber(prefix) {
+  return !/[、，。；：）)】\]》〉]$/.test(prefix);
 }
 
 function formatOutlineTitle(id, title, headingStyle) {
   const prefix = formatOutlineNumber(id, headingStyle);
-  return prefix ? `${prefix} ${title || ''}` : String(title || '');
+  if (!prefix) return String(title || '');
+  return `${prefix}${shouldInsertSpaceAfterNumber(prefix) ? ' ' : ''}${title || ''}`;
 }
 
 function getHeadingStyle(exportFormat, level) {
@@ -1792,18 +1873,17 @@ async function addMarkdownContent(children, content, context) {
 
 function buildOutlineHeadingParagraph(item, context, level, options = {}) {
   const style = getHeadingStyle(context.exportFormat, level);
-  const nativeHeadingNumbering = usesNativeHeadingNumbering(style) && !options.manualNumbering;
-  const displayTitle = nativeHeadingNumbering
+  const nativeHeadingNumbering = usesNativeHeadingNumbering(style) && !options.manualNumbering && !options.omitNumbering;
+  const displayTitle = options.omitNumbering
     ? String(item.title || '')
-    : formatOutlineTitle(item.id, item.title, style);
+    : (nativeHeadingNumbering ? String(item.title || '') : formatOutlineTitle(item.id, item.title, style));
 
   const runOptions = { bold: false };
   if (style) {
     runOptions.font = style.font || '黑体';
     runOptions.size = chineseSizeToHalfPt(style.size || '小四');
-    if (style.font === '楷体') {
-      runOptions.bold = false;
-    }
+    runOptions.bold = style.bold === true;
+    runOptions.color = normalizeDocxColor(style.text_color || '#243048', '243048');
   } else {
     runOptions.bold = true;
   }
@@ -1827,13 +1907,31 @@ function buildOutlineHeadingParagraph(item, context, level, options = {}) {
 
 async function addChapterFrameRows(rows, items, context, level = 1) {
   for (const item of items || []) {
+    const isLeaf = !item.children?.length;
+    const useLeafColumns = isLeaf && context.exportFormat?.heading_border?.min_heading_left_enabled === true;
+    if (useLeafColumns) {
+      const bodyChildren = [];
+      if (String(item.content || '').trim()) {
+        await addMarkdownContent(bodyChildren, item.content, context);
+      }
+      rows.push(buildChapterLeafRow(
+        context.exportFormat,
+        buildOutlineHeadingParagraph(item, context, level, { compact: true, manualNumbering: true, disablePageBreakBefore: true, omitNumbering: true }),
+        bodyChildren,
+        level,
+      ));
+      context.convertedLeafCount = (context.convertedLeafCount || 0) + 1;
+      reportConversionProgress(context, `已处理 ${context.convertedLeafCount}/${context.stats?.leafCount || context.convertedLeafCount} 个正文小节。`);
+      continue;
+    }
+
     rows.push(buildChapterHeadingRow(
       context.exportFormat,
       buildOutlineHeadingParagraph(item, context, level, { compact: true, disableIndent: true, manualNumbering: true, disablePageBreakBefore: true }),
       level,
     ));
 
-    if (!item.children?.length) {
+    if (isLeaf) {
       if (String(item.content || '').trim()) {
         const bodyChildren = [];
         await addMarkdownContent(bodyChildren, item.content, context);

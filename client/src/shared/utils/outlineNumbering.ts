@@ -34,6 +34,39 @@ export function numberToChinese(num: number): string {
   return `${digits[th]}千${numberToChinese(r)}`;
 }
 
+function numberToCircled(num: number): string {
+  const circled = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩', '⑪', '⑫', '⑬', '⑭', '⑮', '⑯', '⑰', '⑱', '⑲', '⑳'];
+  return circled[num - 1] || String(num);
+}
+
+function numberToAlpha(num: number, upper = false): string {
+  let n = Math.max(1, Math.floor(num));
+  let value = '';
+  while (n > 0) {
+    n -= 1;
+    value = String.fromCharCode(97 + (n % 26)) + value;
+    n = Math.floor(n / 26);
+  }
+  return upper ? value.toUpperCase() : value;
+}
+
+function numberToRoman(num: number, upper = false): string {
+  let n = Math.max(1, Math.min(3999, Math.floor(num)));
+  const pairs: Array<[number, string]> = [
+    [1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'],
+    [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'],
+    [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i'],
+  ];
+  let value = '';
+  pairs.forEach(([amount, symbol]) => {
+    while (n >= amount) {
+      value += symbol;
+      n -= amount;
+    }
+  });
+  return upper ? value.toUpperCase() : value;
+}
+
 /**
  * 将 outline id 拆成有效数字层级。
  */
@@ -61,10 +94,22 @@ export function formatOutlineNumber(id: string, heading: HeadingNumberingConfig 
 
   const lastPart = parts[parts.length - 1];
   const cn = numberToChinese(lastPart);
+  const tail = (parts.length >= 3 ? parts.slice(2) : [lastPart]).join('.');
   return String(heading.numbering_template || '')
     .replace(/\{zh\}/g, cn)
     .replace(/\{num\}/g, String(lastPart))
+    .replace(/\{tail\}/g, tail)
+    .replace(/\{full\}/g, parts.join('.'))
+    .replace(/\{circled\}/g, numberToCircled(lastPart))
+    .replace(/\{alpha\}/g, numberToAlpha(lastPart))
+    .replace(/\{ALPHA\}/g, numberToAlpha(lastPart, true))
+    .replace(/\{roman\}/g, numberToRoman(lastPart))
+    .replace(/\{ROMAN\}/g, numberToRoman(lastPart, true))
     .trim();
+}
+
+function shouldInsertSpaceAfterNumber(prefix: string): boolean {
+  return !/[、，。；：）)】\]》〉]$/.test(prefix);
 }
 
 /**
@@ -72,5 +117,6 @@ export function formatOutlineNumber(id: string, heading: HeadingNumberingConfig 
  */
 export function formatOutlineTitle(id: string, title: string, heading: HeadingNumberingConfig | null | undefined): string {
   const prefix = formatOutlineNumber(id, heading);
-  return prefix ? `${prefix} ${title || ''}` : String(title || '');
+  if (!prefix) return String(title || '');
+  return `${prefix}${shouldInsertSpaceAfterNumber(prefix) ? ' ' : ''}${title || ''}`;
 }
