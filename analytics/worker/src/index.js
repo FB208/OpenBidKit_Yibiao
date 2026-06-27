@@ -1,4 +1,5 @@
 import { corsHeaders, json } from './http.js';
+import { handleAgentRuntime } from './routes/agentRuntime.js';
 import { handleClients, handleClientDetail, handleIpStats } from './routes/clients.js';
 import { handleConfigUsage, handleModelUsage } from './routes/configUsage.js';
 import { handleGitHubRepoStats } from './routes/githubRepoStats.js';
@@ -31,6 +32,7 @@ const routes = new Map([
   ['/api/retention', handleRetention],
   ['/api/config-usage', handleConfigUsage],
   ['/api/model-usage', handleModelUsage],
+  ['/api/agent-runtime', handleAgentRuntime],
   ['/api/github-repo-stats', handleGitHubRepoStats],
 ]);
 

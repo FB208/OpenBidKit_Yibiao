@@ -1,5 +1,6 @@
 export const DATASET = 'agnet_analytics';
-export const ALLOWED_EVENTS = new Set(['app_open', 'page_view', 'config_usage', 'ai_request', 'resource_click']);
+export const ALLOWED_EVENTS = new Set(['app_open', 'page_view', 'config_usage', 'ai_request', 'resource_click', 'agent_runtime']);
+export const AGENT_RUNTIME_STATUSES = new Set(['success', 'failed']);
 export const PROJECT_NAME_PATTERN = /^[a-zA-Z0-9._-]{1,80}$/;
 export const NOTICE_KEY_PREFIX = 'project_notice:';
 export const NOTICE_TITLE_MAX_LENGTH = 120;

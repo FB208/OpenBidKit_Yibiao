@@ -1,4 +1,4 @@
-import { ALLOWED_EVENTS, CONFIG_USAGE_FIELDS, DATASET, MODEL_USAGE_FIELDS } from '../constants.js';
+import { AGENT_RUNTIME_STATUSES, ALLOWED_EVENTS, CONFIG_USAGE_FIELDS, DATASET, MODEL_USAGE_FIELDS } from '../constants.js';
 import {
   businessDateRangeCondition,
   businessDateSqlExpression,
@@ -92,6 +92,10 @@ function allowedEventsSql() {
 
 function configUsageKeysSql() {
   return `(${CONFIG_USAGE_FIELDS.map((field) => sqlString(field.key)).join(', ')})`;
+}
+
+function agentRuntimeStatusesSql() {
+  return `(${Array.from(AGENT_RUNTIME_STATUSES).map((status) => sqlString(status)).join(', ')})`;
 }
 
 function businessDateCondition(activityDate) {
@@ -583,6 +587,49 @@ export async function queryStatsModelUsage(env, projectName, range, filters) {
   return usage;
 }
 
+function createAgentRuntimeSummary(rows = []) {
+  const counts = { success: 0, failed: 0 };
+  for (const row of rows || []) {
+    const status = normalizeText(row.status, 20);
+    if (!AGENT_RUNTIME_STATUSES.has(status)) continue;
+    counts[status] += number(row.count ?? row.runCount ?? row.run_count);
+  }
+  const totalCount = counts.success + counts.failed;
+  return {
+    successCount: counts.success,
+    failedCount: counts.failed,
+    totalCount,
+    successRate: totalCount > 0 ? counts.success / totalCount : 0,
+  };
+}
+
+export async function queryStatsAgentRuntime(env, projectName, range) {
+  if (range === 'history') {
+    const rows = await all(requireStatsDb(env), `
+      SELECT status, run_count AS count
+      FROM stats_agent_runtime
+      WHERE project_name = ? AND status IN ('success', 'failed')
+    `, [projectName]);
+    return createAgentRuntimeSummary(rows);
+  }
+
+  const project = sqlString(projectName);
+  const result = await queryAnalytics(env, `
+    SELECT
+      blob9 AS status,
+      SUM(_sample_interval) AS count
+    FROM ${DATASET}
+    WHERE blob1 = ${project}
+      AND blob2 = 'agent_runtime'
+      AND blob9 IN ${agentRuntimeStatusesSql()}
+      AND ${aeRangeCondition(range)}
+    GROUP BY status
+    ORDER BY status ASC
+    LIMIT 10
+  `);
+  return createAgentRuntimeSummary(result.data || []);
+}
+
 export async function queryStatsProjects(env) {
   const db = requireStatsDb(env);
   const rows = await all(db, `
@@ -651,11 +698,11 @@ export const ROLLUP_CRON_STAGES = [
   { cron: '0 17 * * *', stages: ['discover', 'daily'], beijingTime: '01:00', description: '发现昨日项目，写入每日总量和概览累计值' },
   { cron: '30 17 * * *', stages: ['clients'], beijingTime: '01:30', description: '写入客户端生命周期和最后访问信息' },
   { cron: '0 18 * * *', stages: ['pages', 'versions'], beijingTime: '02:00', description: '写入页面访问累计值，写入版本事件量并刷新版本客户端数' },
-  { cron: '30 18 * * *', stages: ['configs', 'models'], beijingTime: '02:30', description: '写入配置使用、模型请求和 Total Tokens 累计值' },
+  { cron: '30 18 * * *', stages: ['configs', 'models', 'agents'], beijingTime: '02:30', description: '写入配置使用、模型请求、Agent 执行和 Total Tokens 累计值' },
   { cron: '0 19 * * *', stages: ['retention', 'resources'], beijingTime: '03:00', description: '写入留存快照，重算资源历史点击量并完成整日汇总' },
 ];
 
-const ROLLUP_STAGE_ORDER = ['discover', 'daily', 'clients', 'pages', 'versions', 'configs', 'models', 'retention', 'resources'];
+const ROLLUP_STAGE_ORDER = ['discover', 'daily', 'clients', 'pages', 'versions', 'configs', 'models', 'agents', 'retention', 'resources'];
 const ROLLUP_STAGES_BY_CRON = new Map(ROLLUP_CRON_STAGES.map((item) => [item.cron, item.stages]));
 const BULK_JSON_MAX_LENGTH = 700000;
 
@@ -1527,6 +1574,58 @@ async function runModelsStage(env, activityDate, projectNames, completedByProjec
   return results;
 }
 
+async function queryRollupAgentRuntimeRows(env, activityDate, projectNames) {
+  const result = await queryAnalytics(env, `
+    SELECT
+      blob1 AS projectName,
+      blob9 AS status,
+      SUM(_sample_interval) AS runCount
+    FROM ${DATASET}
+    WHERE blob1 IN ${projectsSql(projectNames)}
+      AND blob2 = 'agent_runtime'
+      AND blob9 IN ${agentRuntimeStatusesSql()}
+      AND ${businessDateCondition(activityDate)}
+    GROUP BY projectName, status
+    ORDER BY projectName ASC, status ASC
+    LIMIT ${MAX_ANALYTICS_ROWS}
+  `);
+  return (result.data || []).map((row) => ({
+    projectName: normalizeProjectName(row.projectName),
+    status: normalizeText(row.status, 20),
+    runCount: number(row.runCount),
+  })).filter((row) => row.projectName && AGENT_RUNTIME_STATUSES.has(row.status) && row.runCount > 0);
+}
+
+function prepareAgentRuntimeStatements(db, rows, updatedAt) {
+  const json = rowsJson(rows);
+  return [db.prepare(`
+    WITH rows AS (
+      SELECT
+        json_extract(item.value, '$.projectName') AS project_name,
+        json_extract(item.value, '$.status') AS status,
+        CAST(json_extract(item.value, '$.runCount') AS INTEGER) AS run_count
+      FROM json_each(?) AS item
+    )
+    INSERT INTO stats_agent_runtime (project_name, status, run_count, updated_at)
+    SELECT project_name, status, run_count, ?
+    FROM rows
+    WHERE project_name != '' AND status IN ('success', 'failed')
+    ON CONFLICT(project_name, status) DO UPDATE SET
+      run_count = stats_agent_runtime.run_count + excluded.run_count,
+      updated_at = excluded.updated_at
+  `).bind(json, updatedAt)];
+}
+
+async function runAgentRuntimeStage(env, activityDate, projectNames, completedByProject) {
+  const db = requireStatsDb(env);
+  const grouped = groupRowsByProject(await queryRollupAgentRuntimeRows(env, activityDate, projectNames), projectNames);
+  const results = [];
+  for (const projectName of uniqueProjectNames(projectNames)) {
+    results.push(await executeProjectStageChunks(db, completedByProject, projectName, activityDate, 'agents', grouped.get(projectName) || [], prepareAgentRuntimeStatements));
+  }
+  return results;
+}
+
 function retentionDaysJson() {
   return rowsJson(RETENTION_DAYS.map((day) => ({ day })));
 }
@@ -1745,6 +1844,8 @@ async function runRollupStageForDate(env, stage, activityDate, options = {}) {
       results = await runConfigsStage(env, activityDate, pendingProjects, completedByProject);
     } else if (stage === 'models') {
       results = await runModelsStage(env, activityDate, pendingProjects, completedByProject);
+    } else if (stage === 'agents') {
+      results = await runAgentRuntimeStage(env, activityDate, pendingProjects, completedByProject);
     } else if (stage === 'retention') {
       results = await runRetentionStage(env, activityDate, pendingProjects, completedByProject);
     } else {
@@ -1782,7 +1883,7 @@ export async function rollupStatsDay(env, projectName, activityDate, options = {
 
   const projects = [normalizedProjectName];
   await runRollupStageForDate(env, 'discover', activityDate, { projectNames: projects });
-  for (const stage of ['daily', 'clients', 'pages', 'versions', 'configs', 'models', 'retention']) {
+  for (const stage of ['daily', 'clients', 'pages', 'versions', 'configs', 'models', 'agents', 'retention']) {
     await runRollupStageForDate(env, stage, activityDate, { projectNames: projects });
   }
   if (options.updateResources !== false) {

@@ -22,6 +22,7 @@ export function saveSettings() {
   localStorage.setItem('analytics_traffic_range', state.trafficRange.value);
   localStorage.setItem('analytics_config_range', state.configRange.value);
   localStorage.setItem('analytics_model_range', state.modelRange.value);
+  localStorage.setItem('analytics_agent_range', state.agentRange.value);
   localStorage.setItem('analytics_model_provider_filter', state.modelProviderFilter.value);
   localStorage.setItem('analytics_model_endpoint_filter', state.modelEndpointFilter.value);
   localStorage.setItem('analytics_model_name_filter', state.modelNameFilter.value);
@@ -47,6 +48,7 @@ export function loadSettings() {
   state.trafficRange.value = localStorage.getItem('analytics_traffic_range') || 'history';
   state.configRange.value = localStorage.getItem('analytics_config_range') || 'history';
   state.modelRange.value = localStorage.getItem('analytics_model_range') || 'history';
+  state.agentRange.value = localStorage.getItem('analytics_agent_range') || 'history';
   state.modelProviderFilter.value = localStorage.getItem('analytics_model_provider_filter') || '';
   state.modelEndpointFilter.value = localStorage.getItem('analytics_model_endpoint_filter') || '';
   state.modelNameFilter.value = localStorage.getItem('analytics_model_name_filter') || '';

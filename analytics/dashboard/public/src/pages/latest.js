@@ -2,7 +2,7 @@ import { assertReady, getEncodedProjectAndDays, loadProjectOptions, requestJson,
 import { renderTable, updateLatestPager } from '../render.js';
 import { appState, state } from '../state.js';
 
-const allowedEvents = ['app_open', 'page_view', 'config_usage', 'ai_request', 'resource_click'];
+const allowedEvents = ['app_open', 'page_view', 'config_usage', 'ai_request', 'resource_click', 'agent_runtime'];
 
 function ensureEventOptions() {
   if (state.latestEventOptions.children.length) return;

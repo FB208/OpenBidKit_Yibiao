@@ -1,4 +1,5 @@
 import { loadSettings, saveSettings } from './api.js';
+import { loadAgentRuntime } from './pages/agentRuntime.js';
 import { loadClients, loadClientDetail, loadIpStats } from './pages/clients.js';
 import { loadConfigUsage, loadModelUsage } from './pages/configUsage.js';
 import { loadLatest } from './pages/latest.js';
@@ -17,6 +18,7 @@ const tabLoaders = {
   traffic: () => loadTraffic(),
   config: () => loadConfigUsage(),
   models: () => loadModelUsage(),
+  agent: () => loadAgentRuntime(),
   latest: (options = {}) => loadLatest(options),
   notice: () => loadNotice(),
   resources: () => loadResources(),
@@ -118,6 +120,7 @@ function bindEvents() {
   state.trafficRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
   state.configRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
   state.modelRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
+  state.agentRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
   state.modelProviderFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
   state.modelEndpointFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
   state.modelNameFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));

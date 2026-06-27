@@ -50,6 +50,7 @@
       <button class="tab-button" type="button" data-tab-button="traffic">访问分析</button>
       <button class="tab-button" type="button" data-tab-button="config">配置使用</button>
       <button class="tab-button" type="button" data-tab-button="models">模型使用</button>
+      <button class="tab-button" type="button" data-tab-button="agent">Agent分析</button>
       <button class="tab-button" type="button" data-tab-button="latest">最近事件</button>
       <button class="tab-button" type="button" data-tab-button="notice">公告管理</button>
       <button class="tab-button" type="button" data-tab-button="resources">资源管理</button>
@@ -203,6 +204,27 @@
           </label>
         </div>
         <div id="modelUsage"></div>
+      </section>
+    </section>
+
+    <section id="tab-agent" class="tab-panel" data-tab-panel="agent">
+      <section class="panel section">
+        <div class="section-head">
+          <div>
+            <h2>Agent分析</h2>
+            <p>历史来自 D1；今天、7 天、30 天来自 Analytics Engine。</p>
+          </div>
+          <label class="inline-select">
+            范围
+            <select id="agentRange">
+              <option value="history" selected>历史</option>
+              <option value="today">今天</option>
+              <option value="7">7 天</option>
+              <option value="30">30 天</option>
+            </select>
+          </label>
+        </div>
+        <div id="agentRuntime"></div>
       </section>
     </section>
 

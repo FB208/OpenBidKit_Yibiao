@@ -237,6 +237,52 @@ button:disabled {
   letter-spacing: -0.04em;
 }
 
+.agent-runtime-card {
+  display: grid;
+  gap: 16px;
+  max-width: 560px;
+  padding: 18px;
+}
+
+.agent-runtime-card span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.agent-runtime-card h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.agent-runtime-card > strong {
+  color: var(--primary);
+  font-size: 38px;
+  letter-spacing: -0.05em;
+}
+
+.agent-runtime-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+.agent-runtime-metrics div {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel-soft);
+}
+
+.agent-runtime-metrics small {
+  color: var(--muted);
+}
+
+.agent-runtime-metrics b {
+  font-size: 18px;
+}
+
 .card .card-link {
   color: var(--primary);
   font-size: 16px;
@@ -654,6 +700,7 @@ code {
   .controls,
   .cards,
   .grid,
+  .agent-runtime-metrics,
   .usage-grid,
   .filter-row,
   .notice-form,

@@ -1,4 +1,4 @@
-import { ALLOWED_EVENTS } from '../constants.js';
+import { AGENT_RUNTIME_STATUSES, ALLOWED_EVENTS } from '../constants.js';
 import { isValidProjectName, normalizeMetricValue, normalizeText } from '../utils.js';
 
 function normalizeTokenNumber(value) {
@@ -54,7 +54,9 @@ function createMetricBlobs(event) {
       ? event.resourceKey
       : event.event === 'config_usage'
         ? event.configKey
-        : '';
+        : event.event === 'agent_runtime'
+          ? event.agentRuntimeStatus
+          : '';
   const blob10 = event.event === 'ai_request'
     ? event.aiModelEndpointHost
     : event.event === 'config_usage'
@@ -111,6 +113,7 @@ export function normalizeTrackBody(body, request) {
     aiModelEndpointHost: normalizeBaseUrlHost(body.ai_model_base_url || body.aiModelBaseUrl),
     aiModelName,
     resourceKey: normalizeText(body.resource_key || body.resourceKey, 80),
+    agentRuntimeStatus: normalizeText(body.agent_runtime_status || body.agentRuntimeStatus, 20),
     promptTokens,
     completionTokens,
     totalTokens,
@@ -123,6 +126,7 @@ export function normalizeTrackBody(body, request) {
 export function validateTrackEvent(event) {
   if (!isValidProjectName(event.projectName)) return 'invalid projectName';
   if (!ALLOWED_EVENTS.has(event.event)) return 'invalid event';
+  if (event.event === 'agent_runtime' && !AGENT_RUNTIME_STATUSES.has(event.agentRuntimeStatus)) return 'invalid agent_runtime_status';
   if (!event.clientId) return 'missing client_id';
   if (!event.clientCreatedAt) return 'missing client_created_at';
   if (!event.version) return 'missing version';

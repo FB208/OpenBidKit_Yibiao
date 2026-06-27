@@ -17,6 +17,31 @@ const SELF_CHECK_OUTPUT_FILE = 'agent-self-check-result.json';
 const SELF_CHECK_EXPECTED_MESSAGE = 'YIBIAO_AGENT_SELF_CHECK_OK';
 const SELF_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const SELF_CHECK_DIRECT_MODEL_TIMEOUT_MS = 30 * 1000;
+const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
+const ANALYTICS_PROJECT_NAME = 'yibiao-client';
+
+function trackAgentRuntime(app, configStore, status) {
+  const runtimeStatus = status === 'success' ? 'success' : 'failed';
+  void Promise.resolve()
+    .then(() => {
+      const config = configStore.load();
+      return fetch(ANALYTICS_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectName: ANALYTICS_PROJECT_NAME,
+          event: 'agent_runtime',
+          version: typeof app?.getVersion === 'function' ? app.getVersion() : '',
+          platform: process.platform,
+          arch: process.arch,
+          client_id: config.analytics_client_id || '',
+          client_created_at: config.analytics_created_at || '',
+          agent_runtime_status: runtimeStatus,
+        }),
+      });
+    })
+    .catch(() => undefined);
+}
 
 function safeRelativePath(value) {
   const raw = String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
@@ -797,6 +822,7 @@ function createAgentService({ app, configStore }) {
       }
 
       const output = readOutputContent(workspaceDir, outputFile);
+      trackAgentRuntime(app, configStore, 'success');
 
       return {
         success: true,
@@ -814,6 +840,7 @@ function createAgentService({ app, configStore }) {
         opencode_stdout_tail: server?.getStdoutTail?.(8000) || '',
       };
     } catch (error) {
+      trackAgentRuntime(app, configStore, 'failed');
       if (!error.agentTaskId) {
         const output = readOutputContent(workspaceDir, outputFile);
         annotateAgentError(error, {
