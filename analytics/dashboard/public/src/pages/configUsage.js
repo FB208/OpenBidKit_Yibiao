@@ -25,6 +25,7 @@ function labelConfigValue(groupKey, value) {
     useMermaidImages: { true: '开启', false: '关闭' },
     useAiImages: { true: '开启', false: '关闭' },
     enableConsistencyAudit: { true: '开启', false: '关闭' },
+    consistencyRepairModes: { normal: '普通修复', agent: 'Agent 修复' },
     enableOriginalPlanCoverageAudit: { true: '开启', false: '关闭' },
     contentGenerationActions: {
       start: '首次生成',
@@ -53,6 +54,7 @@ const configUsageGroups = [
   ['contentConcurrencies', '正文生成并发速度'],
     ['contentGenerationActions', '正文生成动作'],
     ['enableConsistencyAudit', '全文一致性审计'],
+    ['consistencyRepairModes', '全文一致性修复方式'],
     ['enableOriginalPlanCoverageAudit', '原方案覆盖审计'],
     ['useMermaidImages', 'Mermaid 图片'],
   ['useAiImages', 'AI 生图'],

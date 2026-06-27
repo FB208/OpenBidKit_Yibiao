@@ -27,6 +27,7 @@ export const CONFIG_USAGE_FIELDS = [
   { key: 'contentConcurrencies' },
   { key: 'contentGenerationActions' },
   { key: 'enableConsistencyAudit' },
+  { key: 'consistencyRepairModes' },
   { key: 'enableOriginalPlanCoverageAudit' },
   { key: 'useMermaidImages' },
   { key: 'useAiImages' },
