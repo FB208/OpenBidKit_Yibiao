@@ -1,6 +1,5 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState } from 'react';
-import type { Components } from 'react-markdown';
 import { dismissRemoteNotice, fetchRemoteNotice, hasDismissedRemoteNotice, type RemoteNotice } from '../shared/remoteNotice';
 import { MarkdownRenderer, useToast } from '../shared/ui';
 import { hasPromptedUpdate, showUpdateReadyToast } from '../shared/updateToast';
@@ -20,30 +19,6 @@ function UpdateNotifier() {
   const activeNoticeIdRef = useRef('');
   const [remoteNotice, setRemoteNotice] = useState<RemoteNotice | null>(null);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
-
-  const noticeMarkdownComponents: Components = {
-    img({ src, alt, ...props }) {
-      const imageSrc = String(src || '');
-      const imageAlt = String(alt || '公告图片');
-      return (
-        <img
-          {...props}
-          src={imageSrc}
-          alt={imageAlt}
-          className="remote-notice-image"
-          role="button"
-          tabIndex={0}
-          title="点击放大查看"
-          onClick={() => imageSrc && setPreviewImage({ src: imageSrc, alt: imageAlt })}
-          onKeyDown={(event) => {
-            if (!imageSrc || (event.key !== 'Enter' && event.key !== ' ')) return;
-            event.preventDefault();
-            setPreviewImage({ src: imageSrc, alt: imageAlt });
-          }}
-        />
-      );
-    },
-  };
 
   const closeRemoteNotice = () => {
     if (remoteNotice?.id) {
@@ -153,7 +128,14 @@ function UpdateNotifier() {
           <Dialog.Description className="sr-only">远程公告</Dialog.Description>
           {remoteNotice?.updatedAt ? <div className="remote-notice-time">公告时间：{remoteNotice.updatedAt}</div> : null}
           <div className="remote-notice-content">
-            <MarkdownRenderer allowRawHtml={false} components={noticeMarkdownComponents}>{remoteNotice?.content || ''}</MarkdownRenderer>
+            <MarkdownRenderer
+              allowRawHtml={false}
+              imageMode="preview"
+              imageClassName="remote-notice-image"
+              onPreviewImage={(src, alt) => setPreviewImage({ src, alt: alt || '公告图片' })}
+            >
+              {remoteNotice?.content || ''}
+            </MarkdownRenderer>
           </div>
           <div className="remote-notice-actions">
             <button className="primary-action" type="button" onClick={closeRemoteNotice}>知道了</button>

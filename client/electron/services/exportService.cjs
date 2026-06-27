@@ -8,6 +8,7 @@ const { imageSize } = require('image-size');
 const { compactLogError, createDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
 const { getMermaidCacheEntry, saveMermaidCacheImage } = require('../utils/mermaidCache.cjs');
 const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
+const { renderMarkdownHtml } = require('../utils/renderMarkdownHtml.cjs');
 const {
   AlignmentType,
   BorderStyle,
@@ -1288,97 +1289,6 @@ async function imageParagraphFromLoadedImage(source, alt, loadedImage, context, 
   ], getImageParagraphOptions(context));
 }
 
-async function inlineRuns(nodes = [], context = {}, marks = {}) {
-  // 正文样式作为基础，调用方显式传入的 font/size 覆盖（如标题、代码）
-  if (context.bodyRunFont && !('font' in marks)) {
-    marks = { font: context.bodyRunFont, ...marks };
-  }
-  if (context.bodyRunSize && !('size' in marks)) {
-    marks = { size: context.bodyRunSize, ...marks };
-  }
-  const runs = [];
-
-  for (const node of nodes) {
-    if (node.type === 'text') {
-      runs.push(...textRunsWithBreaks(node.value, marks));
-    } else if (node.type === 'strong') {
-      runs.push(...await inlineRuns(node.children, context, { ...marks, bold: true }));
-    } else if (node.type === 'emphasis') {
-      runs.push(...await inlineRuns(node.children, context, { ...marks, italics: true }));
-    } else if (node.type === 'delete') {
-      runs.push(...await inlineRuns(node.children, context, { ...marks, strike: true }));
-    } else if (node.type === 'inlineCode') {
-      runs.push(new TextRun({ text: cleanText(node.value), font: 'Consolas', size: 22, color: '155BD7' }));
-    } else if (node.type === 'break') {
-      runs.push(lineBreakRun());
-    } else if (node.type === 'html' && /^<br\s*\/?\s*>$/i.test(String(node.value || '').trim())) {
-      runs.push(lineBreakRun());
-    } else if (node.type === 'html') {
-      const $ = cheerio.load(String(node.value || ''), null, false);
-      runs.push(...await htmlInlineRuns($, $.root().contents().toArray(), context, marks));
-    } else if (node.type === 'link') {
-      const children = await inlineRuns(node.children, context, { ...marks, color: '2174FD', underline: true });
-      runs.push(new ExternalHyperlink({ link: node.url, children }));
-    } else if (node.type === 'image') {
-      runs.push(await imageRunFromNode(node, context));
-    } else if (node.children) {
-      runs.push(...await inlineRuns(node.children, context, marks));
-    }
-  }
-
-  return runs;
-}
-
-function nodeText(node) {
-  if (!node) return '';
-  if (node.type === 'text' || node.type === 'inlineCode') return String(node.value || '');
-  return (node.children || []).map(nodeText).join('');
-}
-
-function isImageOnlyParagraph(node) {
-  return (node.children || []).filter((child) => child.type !== 'text' || String(child.value || '').trim()).length === 1
-    && (node.children || []).some((child) => child.type === 'image');
-}
-
-function isFigureCaptionParagraph(node) {
-  return /^图[:：]/.test(nodeText(node).trim());
-}
-
-function isMarkdownHardBreakNode(node) {
-  return node?.type === 'break'
-    || (node?.type === 'html' && /^<br\s*\/?\s*>$/i.test(String(node.value || '').trim()));
-}
-
-function markdownInlineGroupHasContent(nodes = []) {
-  return nodes.some((node) => {
-    if (!node) return false;
-    if (node.type === 'text' || node.type === 'inlineCode') return Boolean(String(node.value || '').trim());
-    if (node.type === 'html') return Boolean(String(node.value || '').trim());
-    if (node.type === 'image') return true;
-    return markdownInlineGroupHasContent(node.children || []);
-  });
-}
-
-function splitMarkdownInlineNodesByBreaks(nodes = []) {
-  const groups = [];
-  let current = [];
-  let hasBreak = false;
-
-  for (const node of nodes) {
-    if (isMarkdownHardBreakNode(node)) {
-      hasBreak = true;
-      groups.push(current);
-      current = [];
-      continue;
-    }
-    current.push(node);
-  }
-  groups.push(current);
-
-  if (!hasBreak) return [nodes];
-  return groups.filter((group) => markdownInlineGroupHasContent(group));
-}
-
 function isHtmlBrNode(node) {
   return node?.type === 'tag' && htmlTagName(node) === 'br';
 }
@@ -1417,7 +1327,7 @@ function htmlTagName(node) {
 }
 
 function hasBlockHtmlChildren($, node) {
-  return $(node).contents().toArray().some((child) => ['table', 'ul', 'ol', 'blockquote', 'pre', 'div', 'section', 'article', 'img'].includes(htmlTagName(child)));
+  return $(node).contents().toArray().some((child) => ['table', 'ul', 'ol', 'blockquote', 'pre', 'div', 'section', 'article', 'img', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(htmlTagName(child)));
 }
 
 async function htmlInlineRuns($, nodes = [], context = {}, marks = {}) {
@@ -1447,6 +1357,8 @@ async function htmlInlineRuns($, nodes = [], context = {}, marks = {}) {
       runs.push(...await htmlInlineRuns($, $(node).contents().toArray(), context, { ...marks, bold: true }));
     } else if (tag === 'em' || tag === 'i') {
       runs.push(...await htmlInlineRuns($, $(node).contents().toArray(), context, { ...marks, italics: true }));
+    } else if (tag === 'del' || tag === 's' || tag === 'strike') {
+      runs.push(...await htmlInlineRuns($, $(node).contents().toArray(), context, { ...marks, strike: true }));
     } else if (tag === 'code') {
       runs.push(new TextRun({ text: cleanText($(node).text()), font: 'Consolas', size: 22, color: '155BD7' }));
     } else if (tag === 'a') {
@@ -1459,8 +1371,10 @@ async function htmlInlineRuns($, nodes = [], context = {}, marks = {}) {
       }
     } else if (tag === 'img') {
       runs.push(await imageRunFromNode({ url: $(node).attr('src'), alt: $(node).attr('alt') || 'HTML 图片' }, context));
+    } else if (tag === 'input' && String($(node).attr('type') || '').toLowerCase() === 'checkbox') {
+      runs.push(textRun($(node).attr('checked') == null ? '☐ ' : '☑ ', { ...marks, font: 'Segoe UI Symbol' }));
     } else {
-      if (!['span', 'small', 'sub', 'sup'].includes(tag)) {
+      if (!['p', 'span', 'label', 'small', 'sub', 'sup', 'mark'].includes(tag)) {
         addUnsupportedHtmlWarning(context, tag);
       }
       runs.push(...await htmlInlineRuns($, $(node).contents().toArray(), context, marks));
@@ -1514,29 +1428,60 @@ async function htmlTableToDocx($, tableNode, context) {
   return [createDocxTable(rows, maxColumns, context)];
 }
 
-function buildListParagraphOptions(context, reference, level, itemIndex, totalItems) {
-  const options = reference ? { numbering: { reference, level } } : {};
-  if (context.bodyLineSpacing) options.line = context.bodyLineSpacing;
-  if (context.bodyAlignment) options.alignment = context.bodyAlignment;
-  if (itemIndex === 0 && context.bodyBeforeSpacing) options.before = context.bodyBeforeSpacing;
-  options.after = itemIndex === totalItems - 1 ? (context.bodyAfterSpacing ?? 0) : 0;
-  return options;
+function buildListParagraphOptions(context, reference, level, itemIndex, totalItems, options = {}) {
+  const paragraphOptions = reference ? { numbering: { reference, level } } : {};
+  if (!reference && options.manualIndent) {
+    const indent = getTaskListLevelIndent(context, level);
+    if (indent) paragraphOptions.indent = indent;
+  }
+  if (context.bodyLineSpacing) paragraphOptions.line = context.bodyLineSpacing;
+  if (context.bodyAlignment) paragraphOptions.alignment = context.bodyAlignment;
+  if (itemIndex === 0 && context.bodyBeforeSpacing) paragraphOptions.before = context.bodyBeforeSpacing;
+  paragraphOptions.after = itemIndex === totalItems - 1 ? (context.bodyAfterSpacing ?? 0) : 0;
+  return paragraphOptions;
+}
+
+function isWhitespaceHtmlTextNode(node) {
+  return node?.type === 'text' && !String(node.data || '').trim();
+}
+
+function isCheckboxInputNode($, node) {
+  return htmlTagName(node) === 'input' && String($(node).attr('type') || '').toLowerCase() === 'checkbox';
+}
+
+function hasClassName($, node, className) {
+  return String($(node).attr('class') || '').split(/\s+/).includes(className);
+}
+
+function isTaskListItem($, itemNode, inlineNodes = []) {
+  if (hasClassName($, itemNode, 'task-list-item')) return true;
+  return inlineNodes.some((node) => {
+    if (isCheckboxInputNode($, node)) return true;
+    return htmlTagName(node) === 'p' && $(node).children('input[type="checkbox"]').length > 0;
+  });
 }
 
 async function htmlListToDocx($, listNode, context, options = {}) {
   const blocks = [];
   const ordered = htmlTagName(listNode) === 'ol';
-  const numberingReference = ordered ? createOrderedListReference(context) : createUnorderedListReference(context);
+  let numberingReference = null;
   const listItems = $(listNode).children('li').toArray();
 
   for (const [itemIndex, itemNode] of listItems.entries()) {
-    const inlineNodes = $(itemNode).contents().toArray().filter((child) => !['ul', 'ol'].includes(htmlTagName(child)));
+    const inlineNodes = $(itemNode).contents().toArray()
+      .filter((child) => !['ul', 'ol'].includes(htmlTagName(child)))
+      .filter((child) => !isWhitespaceHtmlTextNode(child));
+    const isTaskItem = isTaskListItem($, itemNode, inlineNodes);
+    if (!isTaskItem && numberingReference == null) {
+      numberingReference = ordered ? createOrderedListReference(context) : createUnorderedListReference(context);
+    }
     const listOptions = buildListParagraphOptions(
       context,
-      numberingReference,
+      isTaskItem ? null : numberingReference,
       Math.min(options.listLevel || 0, 2),
       itemIndex,
       listItems.length,
+      { manualIndent: isTaskItem },
     );
     blocks.push(paragraph(await htmlInlineRuns($, inlineNodes, context), listOptions));
 
@@ -1559,6 +1504,93 @@ function buildHtmlBodyParaOpts(context) {
   return opts;
 }
 
+async function mermaidCodeToDocxBlocks(code, context) {
+  const value = String(code || '').trim();
+  if (!value) return [];
+
+  const nextIndex = (context.convertedMermaidCount || 0) + 1;
+  const total = context.stats?.mermaidCount || nextIndex;
+  const cacheEntry = getMermaidCacheEntry(app, value);
+  writeExportLog(context, 'export.mermaid.started', {
+    mermaid_index: nextIndex,
+    total,
+    cache_hash: cacheEntry.hash,
+    cache_hit: cacheEntry.exists,
+    code_metrics: textMetrics(value),
+  });
+  reportConversionProgress(context, cacheEntry.exists
+    ? `Mermaid 图 ${nextIndex}/${total} 已命中本地缓存。`
+    : `正在转换 Mermaid 图 ${nextIndex}/${total}，可能需要联网等待。`);
+  const loadRetry = {
+    retryAttempts: MERMAID_EXPORT_RETRY_ATTEMPTS,
+    retryDelayMs: MERMAID_EXPORT_RETRY_DELAY_MS,
+    onRetry: (attempt) => {
+      reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败，3 秒后第 ${attempt} 次重试。`);
+    },
+  };
+
+  try {
+    const mermaidImage = await resolveMermaidImageForExport(value, context, { cacheEntry, loadRetry });
+    const block = mermaidImage.loaded === undefined
+      ? await imageParagraphFromSource(mermaidImage.source, 'Mermaid 图', context)
+      : await imageParagraphFromLoadedImage(mermaidImage.source, 'Mermaid 图', mermaidImage.loaded, context);
+    writeExportLog(context, 'export.mermaid.completed', {
+      mermaid_index: nextIndex,
+      total,
+      cache_hash: mermaidImage.cacheHash,
+      cache_hit: mermaidImage.cacheHit,
+    });
+    reportConversionProgress(context, mermaidImage.cacheHit
+      ? `Mermaid 图 ${nextIndex}/${total} 已使用本地缓存。`
+      : `Mermaid 图 ${nextIndex}/${total} 已转换并缓存。`);
+    return [block];
+  } catch (error) {
+    const message = `Mermaid 图无法导出：${compactText(error.message || '转换失败', 120)}`;
+    addWarning(context, message);
+    writeExportLog(context, 'export.mermaid.error', {
+      mermaid_index: nextIndex,
+      total,
+      cache_hash: cacheEntry.hash,
+      error: compactLogError(error),
+    });
+    reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败。`);
+    return [paragraph([textRun(`[${message}]`, { color: 'C83220' })], { alignment: AlignmentType.CENTER })];
+  } finally {
+    context.convertedMermaidCount = nextIndex;
+  }
+}
+
+function isMermaidCodeElement($, codeNode) {
+  const className = String($(codeNode).attr('class') || '').toLowerCase();
+  return /\blanguage-mermaid\b/.test(className) || /\bmermaid\b/.test(className);
+}
+
+async function htmlHeadingToDocxBlocks($, node, context) {
+  const mdLevel = Math.min(Math.max(parseInt(htmlTagName(node).slice(1), 10) || 1, 1), 6);
+  const style = getHeadingStyle(context.exportFormat, mdLevel);
+  const headingOpts = {
+    heading: headingLevel(mdLevel),
+    before: style ? style.spacing_before_pt * 20 : (mdLevel === 1 ? 280 : 180),
+    after: style ? style.spacing_after_pt * 20 : 120,
+    indent: { left: 0, right: 0, firstLine: 0, hanging: 0 },
+  };
+  if (style) {
+    headingOpts.alignment = alignmentToWordType(style.alignment);
+    if (style.line_spacing) {
+      headingOpts.line = 240 * style.line_spacing;
+    }
+  }
+  const runMarks = {};
+  if (style) {
+    runMarks.font = style.font || '黑体';
+    runMarks.size = chineseSizeToHalfPt(style.size || '小四');
+    runMarks.bold = false;
+  } else {
+    runMarks.bold = true;
+  }
+  return [paragraph(await htmlInlineRuns($, $(node).contents().toArray(), context, runMarks), headingOpts)];
+}
+
 async function htmlNodeToDocxBlocks($, node, context, options = {}) {
   if (node.type === 'text') {
     const text = String(node.data || '').trim();
@@ -1575,6 +1607,9 @@ async function htmlNodeToDocxBlocks($, node, context, options = {}) {
   }
 
   const tag = htmlTagName(node);
+  if (/^h[1-6]$/.test(tag)) {
+    return htmlHeadingToDocxBlocks($, node, context);
+  }
   if (tag === 'table') {
     return htmlTableToDocx($, node, context);
   }
@@ -1592,6 +1627,10 @@ async function htmlNodeToDocxBlocks($, node, context, options = {}) {
     })];
   }
   if (tag === 'pre') {
+    const codeNode = $(node).children('code').first();
+    if (codeNode.length && isMermaidCodeElement($, codeNode[0])) {
+      return mermaidCodeToDocxBlocks(codeNode.text(), context);
+    }
     return [paragraph([new TextRun({ text: cleanText($(node).text()), font: 'Consolas', size: 21, color: '243048' })], {
       shading: { type: ShadingType.CLEAR, fill: 'F6F9FF' },
       indent: { left: 260, right: 260 },
@@ -1600,13 +1639,16 @@ async function htmlNodeToDocxBlocks($, node, context, options = {}) {
   if (tag === 'br') {
     return [paragraph([lineBreakRun()])];
   }
+  if (tag === 'hr') {
+    return [paragraph([textRun('────────────────────────', { color: 'DCDFF6' })], { alignment: AlignmentType.CENTER })];
+  }
   if (['div', 'section', 'article'].includes(tag) && hasBlockHtmlChildren($, node)) {
     return htmlNodesToDocxBlocks($, $(node).contents().toArray(), context, options);
   }
   if (tag === 'p' && hasBlockHtmlChildren($, node)) {
     return htmlNodesToDocxBlocks($, $(node).contents().toArray(), context, options);
   }
-  if (['p', 'div', 'section', 'article', 'span', 'strong', 'b', 'em', 'i', 'a', 'code'].includes(tag)) {
+  if (['p', 'div', 'section', 'article', 'span', 'strong', 'b', 'em', 'i', 'del', 's', 'strike', 'a', 'code', 'label', 'small', 'sub', 'sup', 'mark'].includes(tag)) {
     const isFigureCaption = /^图[:：]/.test($(node).text().trim());
     if (isFigureCaption) {
       return [paragraph([textRun($(node).text().trim(), getCaptionRunMarks(context))], getCaptionParagraphOptions(context))];
@@ -1653,218 +1695,10 @@ async function htmlToDocxBlocks(html, context = {}, options = {}) {
   return blocks;
 }
 
-async function tableCellParagraphs(cell, context, cellStyle) {
-  const runMarks = tableCellRunMarks(cellStyle);
-  const paragraphOptions = tableCellParagraphOptions(cellStyle);
-  const phrasingNodes = (cell.children || []).filter((child) => child.type !== 'paragraph');
-  if (phrasingNodes.length) {
-    return [paragraph(await inlineRuns(phrasingNodes, context, runMarks), paragraphOptions)];
-  }
-
-  const blocks = await markdownNodesToDocx(cell.children || [], context, {
-    inTable: true,
-    tableCellRunMarks: runMarks,
-    tableCellParagraphOptions: paragraphOptions,
-  });
-  if (!blocks.length) return [paragraph([textRun('', runMarks)], paragraphOptions)];
-  return blocks.filter((block) => block instanceof Paragraph);
-}
-
-async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
-  const blocks = [];
-
-  for (const node of nodes) {
-    if (node.type === 'heading') {
-      const mdLevel = Math.min(node.depth || 1, 6);
-      const style = getHeadingStyle(context.exportFormat, mdLevel);
-      const headingOpts = {
-        heading: headingLevel(mdLevel),
-        before: style ? style.spacing_before_pt * 20 : (mdLevel === 1 ? 280 : 180),
-        after: style ? style.spacing_after_pt * 20 : 120,
-        indent: { left: 0, right: 0, firstLine: 0, hanging: 0 },
-      };
-      if (style) {
-        headingOpts.alignment = alignmentToWordType(style.alignment);
-        if (style.line_spacing) {
-          headingOpts.line = 240 * style.line_spacing;
-        }
-      }
-      const runMarks = {};
-      if (style) {
-        runMarks.font = style.font || '黑体';
-        runMarks.size = chineseSizeToHalfPt(style.size || '小四');
-        runMarks.bold = false;
-      } else {
-        runMarks.bold = true;
-      }
-      blocks.push(paragraph(await inlineRuns(node.children, context, runMarks), headingOpts));
-    } else if (node.type === 'paragraph') {
-      const isFigureCaption = !options.inTable && isFigureCaptionParagraph(node);
-      if (isFigureCaption) {
-        blocks.push(paragraph([textRun(nodeText(node).trim(), getCaptionRunMarks(context))], getCaptionParagraphOptions(context)));
-        continue;
-      }
-      const isImagePara = !options.inTable && isImageOnlyParagraph(node);
-      const bodyParaOpts = options.inTable
-        ? { ...(options.tableCellParagraphOptions || { after: 80, alignment: context.bodyAlignment || undefined }) }
-        : {
-            after: context.bodyAfterSpacing ?? 160,
-            alignment: isImagePara ? getImageParagraphOptions(context).alignment : (context.bodyAlignment || undefined),
-          };
-      if (!options.inTable && context.bodyLineSpacing) {
-        bodyParaOpts.line = context.bodyLineSpacing;
-      }
-      if (!options.inTable && !isImagePara && context.bodyIndent) {
-        bodyParaOpts.indent = context.bodyIndent;
-      }
-      if (!options.inTable && context.bodyBeforeSpacing) {
-        bodyParaOpts.before = context.bodyBeforeSpacing;
-      }
-      const groups = isImagePara ? [node.children || []] : splitMarkdownInlineNodesByBreaks(node.children || []);
-      for (const [index, group] of groups.entries()) {
-        const paraOpts = { ...bodyParaOpts };
-        if (groups.length > 1 && index < groups.length - 1) {
-          paraOpts.after = 0;
-        }
-        if (index > 0) {
-          delete paraOpts.before;
-        }
-        blocks.push(paragraph(await inlineRuns(group, context, options.inTable ? (options.tableCellRunMarks || {}) : {}), paraOpts));
-      }
-    } else if (node.type === 'list') {
-      const numberingReference = node.ordered ? createOrderedListReference(context) : createUnorderedListReference(context);
-      const listItems = node.children || [];
-      for (const [itemIndex, item] of listItems.entries()) {
-        const firstParagraph = (item.children || []).find((child) => child.type === 'paragraph');
-        const restChildren = (item.children || []).filter((child) => child !== firstParagraph);
-        const listOptions = buildListParagraphOptions(
-          context,
-          numberingReference,
-          Math.min(options.listLevel || 0, 2),
-          itemIndex,
-          listItems.length,
-        );
-        blocks.push(paragraph(await inlineRuns(firstParagraph?.children || [], context), listOptions));
-        blocks.push(...await markdownNodesToDocx(restChildren, context, { ...options, listLevel: (options.listLevel || 0) + 1 }));
-      }
-    } else if (node.type === 'table') {
-      const rows = [];
-      const maxColumns = Math.max(1, ...(node.children || []).map((row) => row.children?.length || 0));
-      for (const [rowIndex, row] of (node.children || []).entries()) {
-        const cells = [];
-        const rowCells = row.children || [];
-        for (const [cellIndex, cell] of rowCells.entries()) {
-          const isHeader = rowIndex === 0;
-          const isFirstColumn = !isHeader && cellIndex === 0;
-          const cellStyle = getTableCellStyle(context, { isHeader, isFirstColumn });
-          const columnSpan = cellIndex === rowCells.length - 1
-            ? Math.max(1, maxColumns - rowCells.length + 1)
-            : 1;
-          cells.push(createTableCell({
-            children: await tableCellParagraphs(cell, context, cellStyle),
-            context,
-            isHeader,
-            isFirstColumn,
-            columnSpan,
-            totalColumns: maxColumns,
-          }));
-        }
-        rows.push(new TableRow({ children: cells }));
-      }
-      if (rows.length) {
-        blocks.push(createDocxTable(rows, maxColumns, context));
-      }
-    } else if (node.type === 'blockquote') {
-      for (const child of node.children || []) {
-        if (child.type === 'paragraph') {
-          blocks.push(paragraph(await inlineRuns(child.children, context, { color: '536176' }), {
-            indent: { left: 360 },
-            border: { left: { style: BorderStyle.SINGLE, size: 12, color: '2174FD' } },
-            shading: { type: ShadingType.CLEAR, fill: 'F6F9FF' },
-          }));
-        } else {
-          blocks.push(...await markdownNodesToDocx([child], context, options));
-        }
-      }
-    } else if (node.type === 'code') {
-      if (String(node.lang || '').toLowerCase() === 'mermaid') {
-        const nextIndex = (context.convertedMermaidCount || 0) + 1;
-        const total = context.stats?.mermaidCount || nextIndex;
-        const cacheEntry = getMermaidCacheEntry(app, node.value);
-        writeExportLog(context, 'export.mermaid.started', {
-          mermaid_index: nextIndex,
-          total,
-          cache_hash: cacheEntry.hash,
-          cache_hit: cacheEntry.exists,
-          code_metrics: textMetrics(node.value),
-        });
-        reportConversionProgress(context, cacheEntry.exists
-          ? `Mermaid 图 ${nextIndex}/${total} 已命中本地缓存。`
-          : `正在转换 Mermaid 图 ${nextIndex}/${total}，可能需要联网等待。`);
-        const loadRetry = {
-          retryAttempts: MERMAID_EXPORT_RETRY_ATTEMPTS,
-          retryDelayMs: MERMAID_EXPORT_RETRY_DELAY_MS,
-          onRetry: (attempt) => {
-            reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败，3 秒后第 ${attempt} 次重试。`);
-          },
-        };
-        try {
-          const mermaidImage = await resolveMermaidImageForExport(node.value, context, { cacheEntry, loadRetry });
-          blocks.push(mermaidImage.loaded === undefined
-            ? await imageParagraphFromSource(mermaidImage.source, 'Mermaid 图', context)
-            : await imageParagraphFromLoadedImage(mermaidImage.source, 'Mermaid 图', mermaidImage.loaded, context));
-          writeExportLog(context, 'export.mermaid.completed', {
-            mermaid_index: nextIndex,
-            total,
-            cache_hash: mermaidImage.cacheHash,
-            cache_hit: mermaidImage.cacheHit,
-          });
-          reportConversionProgress(context, mermaidImage.cacheHit
-            ? `Mermaid 图 ${nextIndex}/${total} 已使用本地缓存。`
-            : `Mermaid 图 ${nextIndex}/${total} 已转换并缓存。`);
-        } catch (error) {
-          const message = `Mermaid 图无法导出：${compactText(error.message || '转换失败', 120)}`;
-          addWarning(context, message);
-          writeExportLog(context, 'export.mermaid.error', {
-            mermaid_index: nextIndex,
-            total,
-            cache_hash: cacheEntry.hash,
-            error: compactLogError(error),
-          });
-          blocks.push(paragraph([textRun(`[${message}]`, { color: 'C83220' })], { alignment: AlignmentType.CENTER }));
-          reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败。`);
-        }
-        context.convertedMermaidCount = nextIndex;
-      } else {
-        blocks.push(paragraph([new TextRun({ text: cleanText(node.value), font: 'Consolas', size: 21, color: '243048' })], {
-          shading: { type: ShadingType.CLEAR, fill: 'F6F9FF' },
-          indent: { left: 260, right: 260 },
-        }));
-      }
-    } else if (node.type === 'html') {
-      blocks.push(...await htmlToDocxBlocks(node.value, context, options));
-    } else if (node.type === 'thematicBreak') {
-      blocks.push(paragraph([textRun('────────────────────────', { color: 'DCDFF6' })], { alignment: AlignmentType.CENTER }));
-    } else if (node.children) {
-      blocks.push(...await markdownNodesToDocx(node.children, context, options));
-    }
-  }
-
-  return blocks;
-}
-
-async function parseMarkdown(content) {
-  const [{ unified }, remarkParse, remarkGfm] = await Promise.all([
-    import('unified'),
-    import('remark-parse'),
-    import('remark-gfm'),
-  ]);
-  return unified().use(remarkParse.default).use(remarkGfm.default).parse(normalizeMarkdownTablesForDocx(normalizeMarkdownListMarkersForDocx(content)));
-}
-
 async function markdownToDocxBlocks(content, context = {}) {
-  const tree = await parseMarkdown(content);
-  return markdownNodesToDocx(tree.children || [], context);
+  const markdown = normalizeMarkdownTablesForDocx(normalizeMarkdownListMarkersForDocx(content));
+  const html = await renderMarkdownHtml(markdown, { allowRawHtml: true, enableGfm: true });
+  return htmlToDocxBlocks(html, context);
 }
 
 async function addMarkdownContent(children, content, context) {
@@ -1995,6 +1829,14 @@ function createHeadingNumberingConfig() {
 
 function getOrderedListWordStyle(style) {
   return ORDERED_LIST_WORD_STYLES[style] || ORDERED_LIST_WORD_STYLES['decimal-dot'];
+}
+
+function getTaskListLevelIndent(context, level) {
+  const bodyStyle = context.exportFormat?.body_text || {};
+  const safeLevel = Math.max(0, Math.min(Number(level) || 0, 2));
+  if (safeLevel <= 0) return null;
+  const listIndentChars = typeof bodyStyle.list_indent_chars === 'number' ? bodyStyle.list_indent_chars : 2;
+  return { left: Math.round(charsToTwips(listIndentChars, context.bodyRunSize || 24) * safeLevel) };
 }
 
 function getListLevelIndent(referenceConfig, level) {

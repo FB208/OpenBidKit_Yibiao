@@ -1,6 +1,5 @@
 import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import type { Components } from 'react-markdown';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { isLibreOfficeRequiredMessage, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeBaseMigrationStatus, KnowledgeDocument, KnowledgeItem } from '../types';
@@ -14,14 +13,6 @@ declare global {
 const emptyIndex: KnowledgeBaseIndex = { folders: [], documents: [] };
 const emptyDocuments: KnowledgeDocument[] = [];
 const documentRenderBatchSize = 80;
-const knowledgeItemSourceComponents: Components = {
-  a({ children }) {
-    return <span className="knowledge-item-link-text">{children}</span>;
-  },
-  img({ node: _node, ...props }) {
-    return <img {...props} loading="lazy" decoding="async" />;
-  },
-};
 
 const statusLabels: Record<KnowledgeDocument['status'], string> = {
   pending: '等待处理',
@@ -1463,7 +1454,7 @@ function KnowledgeItemSourceDialog({ item, developerMode, rendering, debugTrace,
           developerMode={developerMode}
           profilerId="knowledge-item-source"
         >
-          <MarkdownRenderer enableGfm={false} components={knowledgeItemSourceComponents}>
+          <MarkdownRenderer enableGfm={false} linkMode="text" linkTextClassName="knowledge-item-link-text" imageMode="lazy">
             {item.content || '暂无原文内容'}
           </MarkdownRenderer>
         </DebuggableMarkdownContent>

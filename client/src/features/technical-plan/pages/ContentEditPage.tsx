@@ -1,8 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Popover from '@radix-ui/react-popover';
 import * as Switch from '@radix-ui/react-switch';
-import { Children, isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import type { Components } from 'react-markdown';
+import { memo, useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { MarkdownEditor, MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { ClientConfig, ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
@@ -237,133 +236,14 @@ function buildOutlineMeta(items: OutlineItem[], sections: ContentGenerationSecti
   return meta;
 }
 
-function MermaidBlock({ code }: { code: string }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
-  const [errorMessage, setErrorMessage] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    const container = containerRef.current;
-    const trimmedCode = String(code || '').trim();
-
-    if (!trimmedCode) {
-      setStatus('error');
-      setErrorMessage('Mermaid 图代码为空');
-      if (container) {
-        container.innerHTML = '';
-      }
-      return undefined;
-    }
-
-    setStatus('loading');
-    setErrorMessage('');
-    if (container) {
-      container.innerHTML = '';
-    }
-
-    import('mermaid')
-      .then((module) => {
-        const mermaid = module.default;
-        mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'strict' });
-        return mermaid.render(`mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}`, trimmedCode);
-      })
-      .then(({ svg }) => {
-        if (cancelled || !containerRef.current) {
-          return;
-        }
-        containerRef.current.innerHTML = svg;
-        setStatus('success');
-      })
-      .catch((error) => {
-        if (cancelled) {
-          return;
-        }
-        setStatus('error');
-        setErrorMessage(error instanceof Error ? error.message : 'Mermaid 图渲染失败');
-      });
-
-    return () => {
-      cancelled = true;
-      if (container) {
-        container.innerHTML = '';
-      }
-    };
-  }, [code]);
-
-  return (
-    <figure className={`mermaid-preview-card is-${status}`}>
-      {status === 'loading' && <span>正在渲染 Mermaid 图...</span>}
-      {status === 'error' && (
-        <div className="mermaid-preview-error">
-          <strong>Mermaid 图渲染失败</strong>
-          <small>{errorMessage}</small>
-          <pre>{code}</pre>
-        </div>
-      )}
-      <div ref={containerRef} className="mermaid-preview-canvas" aria-hidden={status !== 'success'} />
-    </figure>
-  );
-}
-
-function reactNodeText(children: ReactNode): string {
-  return Children.toArray(children).map((child) => {
-    if (typeof child === 'string' || typeof child === 'number') {
-      return String(child);
-    }
-    if (isValidElement<{ children?: ReactNode }>(child)) {
-      return reactNodeText(child.props.children);
-    }
-    return '';
-  }).join('');
-}
-
 const MarkdownContent = memo(function MarkdownContent({ content, onPreviewImage }: { content: string; onPreviewImage: (src: string, alt: string) => void }) {
-  const markdownComponents = useMemo<Components>(() => ({
-    p({ children, className, ...props }) {
-      const isFigureCaption = /^图[:：]/.test(reactNodeText(children).trim());
-      const nextClassName = isFigureCaption
-        ? [className, 'markdown-figure-caption'].filter(Boolean).join(' ')
-        : className;
-      return <p {...props} className={nextClassName}>{children}</p>;
-    },
-    pre({ children, ...props }) {
-      const child = Children.count(children) === 1 ? Children.only(children) : null;
-      if (isValidElement(child)) {
-        const childProps = child.props as { className?: string; children?: ReactNode };
-        const className = childProps.className || '';
-        if (/\blanguage-mermaid\b/i.test(className)) {
-          return <MermaidBlock code={String(childProps.children || '').replace(/\n$/, '')} />;
-        }
-      }
-
-      return <pre {...props}>{children}</pre>;
-    },
-    img({ node: _node, src, alt, ...props }) {
-      const imageSrc = String(src || '');
-      const imageAlt = String(alt || '正文图片');
-      return (
-        <img
-          {...props}
-          src={imageSrc}
-          alt={imageAlt}
-          className="markdown-clickable-image"
-          role={imageSrc ? 'button' : undefined}
-          tabIndex={imageSrc ? 0 : undefined}
-          onClick={() => imageSrc && onPreviewImage(imageSrc, imageAlt)}
-          onKeyDown={(event) => {
-            if (imageSrc && (event.key === 'Enter' || event.key === ' ')) {
-              event.preventDefault();
-              onPreviewImage(imageSrc, imageAlt);
-            }
-          }}
-        />
-      );
-    },
-  }), [onPreviewImage]);
-
   return (
-    <MarkdownRenderer components={markdownComponents}>
+    <MarkdownRenderer
+      imageMode="preview"
+      imageClassName="markdown-clickable-image"
+      renderMermaid
+      onPreviewImage={onPreviewImage}
+    >
       {content}
     </MarkdownRenderer>
   );

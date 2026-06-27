@@ -2045,8 +2045,32 @@ button {
   padding-left: 1.6em;
 }
 
+.markdown-viewer ul.contains-task-list {
+  padding-left: 0;
+}
+
+.markdown-viewer ul.contains-task-list ul.contains-task-list {
+  padding-left: 1.6em;
+}
+
+.markdown-viewer ul.contains-task-list > li:not(.task-list-item) {
+  margin-left: 1.6em;
+}
+
 .markdown-viewer li + li {
   margin-top: 6px;
+}
+
+.markdown-viewer li.task-list-item {
+  list-style: none;
+  margin-left: 0;
+}
+
+.markdown-viewer .task-list-item-checkbox {
+  width: 1em;
+  height: 1em;
+  margin: 0 0.5em 0 0;
+  vertical-align: -0.12em;
 }
 
 .markdown-viewer blockquote {
@@ -2166,6 +2190,15 @@ button {
   padding-left: var(--ef-unordered-list-indent, var(--ef-list-indent, 2em));
   list-style: none;
 }
+.markdown-viewer.export-format-preview ul.contains-task-list {
+  padding-left: 0;
+}
+.markdown-viewer.export-format-preview ul.contains-task-list ul.contains-task-list {
+  padding-left: var(--ef-unordered-list-indent, var(--ef-list-indent, 2em));
+}
+.markdown-viewer.export-format-preview ul.contains-task-list > li:not(.task-list-item) {
+  margin-left: var(--ef-unordered-list-indent, var(--ef-list-indent, 2em));
+}
 .markdown-viewer.export-format-preview ol {
   padding-left: var(--ef-list-indent, 2em);
   counter-reset: ef-ordered-list;
@@ -2187,6 +2220,10 @@ button {
   text-align: right;
   text-indent: 0;
   content: var(--ef-unordered-list-marker, "•");
+}
+.markdown-viewer.export-format-preview li.task-list-item::before {
+  display: none;
+  content: none;
 }
 .markdown-viewer.export-format-preview ol > li {
   position: relative;
