@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const Database = require('better-sqlite3');
 const { getAgentRuntimeDir, getBundledOpencodeBinaryPath } = require('../../utils/paths.cjs');
 const { startOpenCodeSidecar, closeOpenCodeSidecar } = require('./opencodeServerRunner.cjs');
 const { runOpenCodeTask } = require('./opencodeHttpClient.cjs');
@@ -30,6 +31,8 @@ const HEALTH_INTERVAL_MS = 30 * 1000;
 const HEALTH_FAILURE_LIMIT = 3;
 const STATUS_TICK_MS = 1000;
 const WORKSPACE_WATCH_INTERVAL_MS = 2000;
+const OPENCODE_EVENT_POLL_INTERVAL_MS = 1000;
+const OPENCODE_EVENT_BATCH_LIMIT = 120;
 const BUSY_MESSAGE = 'Agent 正在处理其他任务，请耐心等待';
 const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const ANALYTICS_PROJECT_NAME = 'yibiao-client';
@@ -186,6 +189,109 @@ function createSelfCheckStageError(stage, message) {
   return error;
 }
 
+function parseJsonObject(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  try {
+    const value = JSON.parse(raw);
+    return value && typeof value === 'object' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function compactActivityText(value, maxLength = 180) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function basenameFromAnyPath(value) {
+  const normalized = String(value || '').replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  return parts[parts.length - 1] || normalized;
+}
+
+function formatTodoDetail(input) {
+  const todos = Array.isArray(input?.todos) ? input.todos : [];
+  const current = todos.find((item) => item?.status === 'in_progress')
+    || todos.find((item) => item?.status === 'pending')
+    || todos.find((item) => item?.status === 'completed')
+    || todos[0];
+  return compactActivityText(current?.content || '', 120);
+}
+
+function formatToolDetail(tool, input) {
+  if (!input || typeof input !== 'object') return '';
+  if (tool === 'read') return basenameFromAnyPath(input.filePath || input.path || input.file || '');
+  if (tool === 'write') return basenameFromAnyPath(input.filePath || input.path || input.file || '');
+  if (tool === 'edit' || tool === 'multiedit') return basenameFromAnyPath(input.filePath || input.path || input.file || '');
+  if (tool === 'glob') return compactActivityText(input.pattern || input.path || '', 120);
+  if (tool === 'grep') return compactActivityText(input.pattern || input.query || input.include || '', 120);
+  if (tool === 'bash') return compactActivityText(input.description || input.command || '', 140);
+  if (tool === 'todowrite') return formatTodoDetail(input);
+  return compactActivityText(input.filePath || input.path || input.pattern || input.query || input.description || '', 120);
+}
+
+function formatToolActivity(part) {
+  const tool = String(part?.tool || '').trim();
+  if (!tool) return '';
+  const state = part?.state && typeof part.state === 'object' ? part.state : {};
+  const status = String(state.status || '').trim();
+  const input = state.input && typeof state.input === 'object' ? state.input : {};
+  const labels = {
+    bash: '执行命令',
+    edit: '编辑文件',
+    glob: '查找文件',
+    grep: '搜索内容',
+    multiedit: '批量编辑文件',
+    read: '读取文件',
+    todowrite: '更新任务清单',
+    write: '写入文件',
+  };
+  const label = labels[tool] || `调用工具 ${tool}`;
+  const detail = formatToolDetail(tool, input);
+  const suffix = detail ? `：${detail}` : '';
+
+  if (status === 'pending' && !detail) return '';
+  if (status === 'completed') return `${label}完成${suffix}`;
+  if (status === 'error') return `${label}失败${suffix}`;
+  if (status === 'running' || status === 'pending') return `${label}中${suffix}`;
+  return `${label}${suffix}`;
+}
+
+function formatOpenCodePartActivity(part) {
+  const type = String(part?.type || '').trim();
+  if (type === 'tool') return formatToolActivity(part);
+  if (type === 'text') return compactActivityText(part?.text || '', 200);
+  return '';
+}
+
+function getOpenCodePartStage(part) {
+  const type = String(part?.type || '').trim();
+  if (type === 'tool') return 'tool';
+  if (type === 'text') return 'assistant_text';
+  if (type === 'step-start') return 'step_start';
+  if (type === 'step-finish') return 'step_finish';
+  return 'opencode_event';
+}
+
+function getMessageRole(db, cache, messageId) {
+  const id = String(messageId || '').trim();
+  if (!id) return '';
+  if (cache.has(id)) return cache.get(id);
+
+  let role = '';
+  try {
+    const row = db.prepare('SELECT data FROM message WHERE id = ?').get(id);
+    const data = parseJsonObject(row?.data || '');
+    role = String(data?.role || '').trim();
+  } catch {
+    role = '';
+  }
+  cache.set(id, role);
+  return role;
+}
+
 function createOpenCodeRuntimeService({ app, configStore }) {
   const runtimeRoot = getAgentRuntimeDir(app);
   const serviceRuntimeRoot = path.join(runtimeRoot, 'service');
@@ -310,7 +416,9 @@ function createOpenCodeRuntimeService({ app, configStore }) {
     }
 
     const now = nowIso();
-    activeTask.last_activity_at = now;
+    if (event.activity === true) {
+      activeTask.last_activity_at = now;
+    }
     if (event.visible !== false) {
       activeTask.stage = event.stage || activeTask.stage;
       activeTask.progress_text = event.message || activeTask.progress_text;
@@ -340,7 +448,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       task_id: taskId,
       title,
       stage: 'starting',
-      progress_text: 'Agent 正在执行任务',
+      progress_text: '',
       started_at: now,
       last_activity_at: now,
       last_progress_at: now,
@@ -475,6 +583,8 @@ function createOpenCodeRuntimeService({ app, configStore }) {
             stage,
             message: stageMessage,
             source: 'opencode-start',
+            visible: false,
+            activity: false,
             meta: { ...meta, status },
           });
         },
@@ -493,7 +603,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       healthRestartAttempted = false;
       lastHealthAt = nowIso();
       lastHealthError = '';
-      setPhase(activeTask ? 'running' : 'idle', activeTask ? 'Agent 正在执行任务' : 'Agent 服务空闲');
+      setPhase(activeTask ? 'running' : 'idle', activeTask ? '等待 Agent 返回真实进度' : 'Agent 服务空闲');
       startIdleHealthTimer();
       startStatusTimer();
       return sidecar;
@@ -545,6 +655,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
           stage: 'stalled',
           message: 'Agent 长时间无进展，正在停止本轮任务',
           source: 'watchdog',
+          activity: false,
         });
         abort(createStallError());
       }
@@ -605,6 +716,94 @@ function createOpenCodeRuntimeService({ app, configStore }) {
     };
   }
 
+  function startOpenCodeEventWatcher(sessionId, taskActivity) {
+    const normalizedSessionId = String(sessionId || '').trim();
+    if (!normalizedSessionId) return () => {};
+
+    const dbPath = path.join(serviceRuntimeRoot, 'home', '.local', 'share', 'opencode', 'opencode.db');
+    const messageRoleCache = new Map();
+    let lastSeq = -1;
+    let stopped = false;
+    let timer = null;
+
+    function handlePart(db, row, part) {
+      if (!part || typeof part !== 'object') return;
+      const partSessionId = part.sessionID || part.session_id || '';
+      if (partSessionId && partSessionId !== normalizedSessionId) return;
+
+      const role = getMessageRole(db, messageRoleCache, part.messageID || part.message_id || '');
+      if (role && role !== 'assistant') return;
+      if (!role && String(part.type || '') === 'text') return;
+
+      const text = formatOpenCodePartActivity(part);
+      taskActivity({
+        stage: getOpenCodePartStage(part),
+        message: text,
+        source: 'opencode.part',
+        visible: Boolean(text),
+        activity: true,
+        meta: {
+          session_id: normalizedSessionId,
+          seq: row.seq,
+          event_type: row.type,
+          part_id: part.id || '',
+          part_type: part.type || '',
+          message_id: part.messageID || part.message_id || '',
+          tool: part.tool || '',
+          tool_status: part.state?.status || '',
+        },
+      });
+    }
+
+    function poll() {
+      if (stopped || !fs.existsSync(dbPath)) return;
+
+      let db = null;
+      try {
+        db = new Database(dbPath, { readonly: true, fileMustExist: true });
+        const rows = db.prepare(`
+          SELECT seq, type, data
+          FROM event
+          WHERE aggregate_id = ? AND seq > ?
+          ORDER BY seq ASC
+          LIMIT ?
+        `).all(normalizedSessionId, lastSeq, OPENCODE_EVENT_BATCH_LIMIT);
+
+        for (const row of rows) {
+          lastSeq = Math.max(lastSeq, Number(row.seq || 0));
+          taskActivity({
+            stage: 'opencode_event',
+            message: '',
+            source: 'opencode.event',
+            visible: false,
+            activity: true,
+            meta: { session_id: normalizedSessionId, seq: row.seq, event_type: row.type },
+          });
+
+          if (String(row.type || '').startsWith('message.part.updated')) {
+            const data = parseJsonObject(row.data || '');
+            handlePart(db, row, data?.part || null);
+          }
+        }
+      } catch (error) {
+        diagnostics.record('opencode.event_watcher.failed', {
+          session_id: normalizedSessionId,
+          message: error?.message || String(error),
+        });
+      } finally {
+        try { db?.close?.(); } catch {}
+      }
+    }
+
+    poll();
+    timer = setInterval(poll, OPENCODE_EVENT_POLL_INTERVAL_MS);
+    return () => {
+      stopped = true;
+      if (timer) clearInterval(timer);
+      timer = null;
+    };
+  }
+
   function startOutputWatcher(outputFile, taskActivity) {
     let previousKey = '';
     const outputPath = ensureInsideRoot(serviceWorkspaceDir, path.join(serviceWorkspaceDir, safeRelativePath(outputFile)), outputFile);
@@ -616,8 +815,9 @@ function createOpenCodeRuntimeService({ app, configStore }) {
         if (previousKey && nextKey !== previousKey) {
           taskActivity({
             stage: 'tool',
-            message: 'Agent 正在写入输出文件',
+            message: `输出文件已更新：${path.basename(outputFile)}（${stat.size} 字节）`,
             source: 'workspace.output',
+            activity: true,
             meta: { size: stat.size },
           });
         }
@@ -637,7 +837,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
 
     activeTask = createActiveTask({ taskId, title, timeoutMs, onActivity: payload.onActivity });
     const taskActivity = createTaskActivity(activeTask);
-    setPhase('running', 'Agent 正在执行任务');
+    setPhase('running', '等待 Agent 返回真实进度');
     emitStatus();
 
     activeTaskAbortController = new AbortController();
@@ -650,6 +850,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       taskActivity,
     });
     let stopOutputWatcher = null;
+    let stopOpenCodeEventWatcher = null;
     let mustRestartAfterTask = false;
     let archivedWorkspaceDir = '';
 
@@ -657,7 +858,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       await ensureStarted();
       if (activeTaskAbortController.signal.aborted) throw activeTaskAbortController.signal.reason;
 
-      taskActivity({ stage: 'workspace', message: '正在准备 Agent 工作目录', source: 'runtime' });
+      taskActivity({ stage: 'workspace', message: '', source: 'runtime', visible: false, activity: false });
       prepareStagingWorkspace(payload);
       stopOutputWatcher = startOutputWatcher(outputFile, taskActivity);
 
@@ -667,12 +868,16 @@ function createOpenCodeRuntimeService({ app, configStore }) {
         signal: activeTaskAbortController.signal,
         agent: payload.agent || 'build',
         onActivity: taskActivity,
+        onSessionCreated: (session) => {
+          stopOpenCodeEventWatcher?.();
+          stopOpenCodeEventWatcher = startOpenCodeEventWatcher(session?.id || session?.sessionID || '', taskActivity);
+        },
       });
 
-      taskActivity({ stage: 'output', message: '正在读取 Agent 输出', source: 'runtime' });
+      taskActivity({ stage: 'output', message: '', source: 'runtime', visible: false, activity: false });
       const output = readOutputContent(serviceWorkspaceDir, outputFile);
 
-      taskActivity({ stage: 'archive', message: '正在保存 Agent 任务现场', source: 'runtime' });
+      taskActivity({ stage: 'archive', message: '', source: 'runtime', visible: false, activity: false });
       archivedWorkspaceDir = archiveTaskWorkspace(taskId);
       const diagnosticsPayload = collectDiagnostics({ taskId, title, outputFile });
       writeTaskDiagnostics(taskId, diagnosticsPayload);
@@ -710,6 +915,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       writeTaskDiagnostics(taskId, diagnosticsPayload);
       throw annotateAgentError(error, diagnosticsPayload);
     } finally {
+      stopOpenCodeEventWatcher?.();
       stopOutputWatcher?.();
       stopWatchdog?.();
       stopParentAbort?.();
@@ -877,8 +1083,8 @@ function createOpenCodeRuntimeService({ app, configStore }) {
         return;
       }
 
-      if (stage === 'tool' || event.source === 'workspace.output') {
-        setStep('message-wait', 'running', messageText || 'Agent 正在写入输出文件');
+      if ((stage === 'tool' || event.source === 'workspace.output') && messageText) {
+        setStep('message-wait', 'running', messageText);
       }
     }
 

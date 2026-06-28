@@ -1,3 +1,11 @@
+const { Agent, fetch: undiciFetch } = require('undici');
+
+const AGENT_MESSAGE_HTTP_TIMEOUT_MS = 30 * 60 * 1000;
+const agentMessageHttpDispatcher = new Agent({
+  headersTimeout: AGENT_MESSAGE_HTTP_TIMEOUT_MS,
+  bodyTimeout: AGENT_MESSAGE_HTTP_TIMEOUT_MS,
+});
+
 function headers(server) {
   return {
     Authorization: server.authHeader,
@@ -45,6 +53,15 @@ function summarizeResponseData(data) {
   };
 }
 
+function emitHttpActivity(onActivity, event = {}) {
+  onActivity?.({
+    ...event,
+    source: 'opencode-http',
+    visible: false,
+    activity: false,
+  });
+}
+
 async function readJsonResponse(response, fallbackMessage) {
   const raw = await response.text();
   let data = null;
@@ -72,10 +89,9 @@ async function requestJson(server, routePath, options = {}) {
   const method = options.method || 'GET';
   const startedAt = Date.now();
   let response = null;
-  options.onActivity?.({
+  emitHttpActivity(options.onActivity, {
     stage: options.stage || 'opencode_request',
-    message: options.progressText || `正在请求 OpenCode：${routePath}`,
-    source: 'opencode-http',
+    message: '',
     meta: { route: routePath, method },
   });
   appendRequestLog(server, {
@@ -87,18 +103,22 @@ async function requestJson(server, routePath, options = {}) {
     request: summarizeRequestBody(options.body),
   });
   try {
-    response = await fetch(`${server.baseUrl}${routePath}`, {
+    const fetchOptions = {
       method,
       headers: headers(server),
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: options.signal,
-    });
+    };
+    if (options.dispatcher) {
+      fetchOptions.dispatcher = options.dispatcher;
+    }
+    const fetchImpl = options.dispatcher ? undiciFetch : fetch;
+    response = await fetchImpl(`${server.baseUrl}${routePath}`, fetchOptions);
 
     const data = await readJsonResponse(response, `OpenCode 请求失败：${routePath}`);
-    options.onActivity?.({
+    emitHttpActivity(options.onActivity, {
       stage: options.successStage || options.stage || 'opencode_request',
-      message: options.successText || `OpenCode 请求完成：${routePath}`,
-      source: 'opencode-http',
+      message: '',
       meta: { route: routePath, method, status: response.status },
     });
     appendRequestLog(server, {
@@ -132,10 +152,9 @@ async function requestJson(server, routePath, options = {}) {
       response_excerpt: String(error.openCodeResponseText || '').slice(0, 2000),
       request: summarizeRequestBody(options.body),
     });
-    options.onActivity?.({
+    emitHttpActivity(options.onActivity, {
       stage: options.errorStage || options.stage || 'opencode_request',
-      message: options.errorText || `OpenCode 请求失败：${routePath}`,
-      source: 'opencode-http',
+      message: error.message || String(error),
       meta: { route: routePath, method, status: response?.status || 0, error: error.message || String(error) },
     });
     throw error;
@@ -148,8 +167,6 @@ async function createSession(server, title, options = {}) {
     signal: options.signal,
     onActivity: options.onActivity,
     stage: 'session',
-    progressText: '正在创建 Agent 会话',
-    successText: 'Agent 会话已创建',
     body: { title: title || 'Yibiao Agent Task' },
   });
 }
@@ -160,8 +177,7 @@ async function sendPrompt(server, sessionId, prompt, options = {}) {
     signal: options.signal,
     onActivity: options.onActivity,
     stage: 'message',
-    progressText: 'Agent 正在执行任务',
-    successText: 'Agent 任务执行完成',
+    dispatcher: agentMessageHttpDispatcher,
     body: {
       model: {
         providerID: 'yibiao',
@@ -183,8 +199,6 @@ async function getSessionDiff(server, sessionId, options = {}) {
     signal: options.signal,
     onActivity: options.onActivity,
     stage: 'output',
-    progressText: '正在读取 Agent 修改结果',
-    successText: 'Agent 修改结果已读取',
   });
 }
 
@@ -197,8 +211,9 @@ function extractTextFromPromptResult(result) {
     .trim();
 }
 
-async function runOpenCodeTask(server, { title, prompt, signal, agent, onActivity }) {
+async function runOpenCodeTask(server, { title, prompt, signal, agent, onActivity, onSessionCreated }) {
   const session = await createSession(server, title, { signal, onActivity });
+  onSessionCreated?.(session);
   const messageResult = await sendPrompt(server, session.id, prompt, { signal, agent, onActivity });
   const diff = await getSessionDiff(server, session.id, { signal, onActivity }).catch(() => []);
 

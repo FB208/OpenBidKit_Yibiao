@@ -245,6 +245,8 @@ function emitProxyActivity(onActivity, activityContext, event = {}) {
   try {
     onActivity?.({
       ...event,
+      visible: event.visible === undefined ? false : event.visible,
+      activity: event.activity === undefined ? false : event.activity,
       task_token: activityContext?.task_token,
       meta: {
         ...(event.meta || {}),
@@ -616,9 +618,11 @@ function createUsageCapturingStream(source, onDone, options = {}) {
           options.onChunk?.(value);
           options.onActivity?.({
             stage: 'model_stream',
-            message: '模型正在生成响应',
+            message: '',
             source: 'proxy.stream.chunk',
-            visible: true,
+            visible: false,
+            activity: true,
+            meta: { bytes: value.byteLength || value.length || 0 },
           });
           collector.push(decoder.decode(value, { stream: true }));
           controller.enqueue(value);
@@ -775,8 +779,9 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
       });
       emitProxyActivity(onActivity, activityContext, {
         stage: 'model_stream',
-        message: '模型响应已完成',
+        message: '',
         source: 'proxy.upstream.completed',
+        activity: true,
         meta: { request_id: requestId, attempt, stream: true },
       });
       streamTimeout?.clear?.();
@@ -784,7 +789,7 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
       onChunk: () => streamTimeout?.touch?.(),
       onActivity: (event) => emitProxyActivity(onActivity, activityContext, {
         ...event,
-        meta: { request_id: requestId, attempt, stream: true },
+        meta: { ...(event.meta || {}), request_id: requestId, attempt, stream: true },
       }),
       onDone: () => streamTimeout?.clear?.(),
       onCancel: () => streamTimeout?.clear?.(),
@@ -792,8 +797,9 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
         streamTimeout?.clear?.();
         emitProxyActivity(onActivity, activityContext, {
           stage: 'model_request',
-          message: '模型流式响应失败',
+          message: safeErrorMessage(error),
           source: 'proxy.upstream.failed',
+          activity: true,
           meta: { request_id: requestId, attempt, error: safeErrorMessage(error) },
         });
       },
@@ -830,8 +836,9 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
   });
   emitProxyActivity(onActivity, activityContext, {
     stage: 'model_request',
-    message: '模型响应已完成',
+    message: '',
     source: 'proxy.upstream.completed',
+    activity: true,
     meta: { request_id: requestId, attempt, stream: false },
   });
 
@@ -852,7 +859,7 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
   });
   emitProxyActivity(onActivity, activityContext, {
     stage: 'model_request',
-    message: 'Agent 模型请求已进入队列',
+    message: '',
     source: 'proxy.chat.queued',
     meta: { request_id: requestId },
   });
@@ -881,8 +888,9 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
         });
         emitProxyActivity(onActivity, activityContext, {
           stage: 'model_request',
-          message: 'Agent 正在调用模型',
+          message: '',
           source: 'proxy.upstream.started',
+          activity: true,
           meta: { request_id: requestId, attempt },
         });
         appendProxyDeveloperLog(app, config, {
@@ -920,8 +928,9 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
         timeout.touch?.();
         emitProxyActivity(onActivity, activityContext, {
           stage: 'model_request',
-          message: '模型服务已响应',
+          message: '',
           source: 'proxy.upstream.headers',
+          activity: true,
           meta: { request_id: requestId, attempt, status: response.status },
         });
 
@@ -957,8 +966,9 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
         });
         emitProxyActivity(onActivity, activityContext, {
           stage: 'model_request',
-          message: '模型请求失败',
+          message: safeErrorMessage(error),
           source: 'proxy.upstream.failed',
+          activity: true,
           meta: { request_id: requestId, attempt, error: safeErrorMessage(error) },
         });
         throw error;
@@ -1013,6 +1023,7 @@ function bindAbortToRequestLifecycle({ req, res, controller, diagnostics, onActi
       stage: 'model_request',
       message: 'Agent 模型请求已中止',
       source: 'proxy.client.aborted',
+      activity: true,
       meta: { path: req.url || '' },
     });
     controller.abort(new Error('客户端请求已中止'));
@@ -1024,6 +1035,7 @@ function bindAbortToRequestLifecycle({ req, res, controller, diagnostics, onActi
         stage: 'model_request',
         message: 'Agent 模型连接已关闭',
         source: 'proxy.client.closed',
+        activity: true,
         meta: { path: req.url || '' },
       });
       controller.abort(new Error('客户端连接已关闭'));
@@ -1041,8 +1053,9 @@ async function handleChatCompletions({ req, res, app, configStore, textQueue, ti
   });
   emitProxyActivity(onActivity, activityContext, {
     stage: 'model_request',
-    message: 'Agent 正在调用模型',
+    message: '',
     source: 'proxy.chat.received',
+    activity: true,
     meta: { request: summarizeRequestBody(requestBody) },
   });
   const upstream = await requestOpenCodeChatCompletion({

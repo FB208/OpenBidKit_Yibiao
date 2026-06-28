@@ -5,7 +5,7 @@ const phaseLabels: Record<string, string> = {
   stopped: 'Agent 已停止',
   starting: 'Agent 正在启动',
   idle: 'Agent 空闲',
-  running: 'Agent 正在执行任务',
+  running: 'Agent 任务运行中',
   aborting: 'Agent 正在停止任务',
   unhealthy: 'Agent 服务异常',
   restarting: 'Agent 正在重启',
@@ -59,7 +59,7 @@ function AgentRuntimeStatusBar() {
 
   const activeTask = status?.active_task || null;
   const title = activeTask?.title || phaseLabels[status?.phase || ''] || 'Agent 状态';
-  const message = activeTask?.progress_text || status?.message || 'Agent 正在处理任务';
+  const message = activeTask?.progress_text || status?.message || '等待 Agent 真实进度';
   const elapsedText = activeTask ? `已运行 ${activeTask.elapsed_seconds}s` : '';
   const idleText = activeTask ? `空闲 ${activeTask.idle_seconds}s` : '';
   const proxyText = status?.proxy ? `模型队列 ${status.proxy.active}/${status.proxy.queued}/${status.proxy.limit}` : '';

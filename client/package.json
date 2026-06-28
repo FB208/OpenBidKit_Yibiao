@@ -151,7 +151,8 @@
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "turndown": "^7.2.4",
-    "turndown-plugin-gfm": "^1.0.2"
+    "turndown-plugin-gfm": "^1.0.2",
+    "undici": "^7.25.0"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
