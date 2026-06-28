@@ -714,6 +714,17 @@ function normalizeAgentOutlineResult(value, context) {
   return normalizeFinalAgentRepairResult(value, context);
 }
 
+function isAgentBusyResult(result) {
+  return result?.status === 'busy' || result?.skipped === true;
+}
+
+function createAgentBusyError() {
+  const error = new Error('Agent 正在处理其他任务，请稍后重新生成或重试目录修复。');
+  error.code = 'AGENT_BUSY';
+  error.userVisible = true;
+  return error;
+}
+
 async function runOutlineAgentRecovery(agentService, context, log) {
   if (!agentService?.runTask) {
     throw new Error('OpenCode Agent 服务尚未初始化，无法执行目录自主修复');
@@ -730,6 +741,9 @@ async function runOutlineAgentRecovery(agentService, context, log) {
     timeout_ms: FINAL_AGENT_TIMEOUT_MS,
     keep_runtime: false,
   });
+  if (isAgentBusyResult(agentResult)) {
+    throw createAgentBusyError();
+  }
 
   const content = String(agentResult?.output_content || agentResult?.assistant_text || '').trim();
   if (!content) {

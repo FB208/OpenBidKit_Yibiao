@@ -9,8 +9,7 @@ const {
   getDeveloperLogsDir,
   getUserDataPath,
 } = require('../utils/paths.cjs');
-const { startIsolatedOpenCodeServer } = require('./opencode/opencodeServerRunner.cjs');
-const { createSession, sendPrompt, getSessionDiff, runOpenCodeTask } = require('./opencode/opencodeHttpClient.cjs');
+const { createOpenCodeRuntimeService } = require('./opencode/opencodeRuntimeService.cjs');
 
 const SELF_CHECK_TASK_ID = 'agent-self-check-latest';
 const SELF_CHECK_OUTPUT_FILE = 'agent-self-check-result.json';
@@ -764,308 +763,8 @@ function annotateAgentError(error, meta) {
   return error;
 }
 
-function createAgentService({ app, configStore }) {
-  async function runTask(payload = {}) {
-    const taskId = payload.task_id || crypto.randomUUID();
-    const title = payload.title || '易标智能体任务';
-    const outputFile = payload.output_file || 'agent-result.md';
-    const taskRoot = path.join(getAgentRuntimeDir(app), taskId);
-    const workspaceDir = path.join(taskRoot, 'workspace');
-
-    const prompt = payload.prompt || createDefaultAgentPrompt({
-      task: payload.task || '请分析当前输入文件，并输出可执行结果。',
-      outputFile,
-    });
-
-    const timeoutMs = Number(payload.timeout_ms || 10 * 60 * 1000);
-    const abortController = createTaskAbortController(payload.signal, timeoutMs);
-
-    let server = null;
-    try {
-      throwIfAborted(abortController.signal);
-      writeWorkspaceFiles(workspaceDir, payload.files || []);
-
-      server = await startIsolatedOpenCodeServer({
-        app,
-        configStore,
-        workspaceDir,
-        taskId,
-        keepRuntime: Boolean(payload.keep_runtime),
-        timeoutMs,
-        diagnostics: payload.diagnostics,
-        onStage: payload.on_stage,
-      });
-      throwIfAborted(abortController.signal);
-
-      let result = null;
-      try {
-        result = await runOpenCodeTask(server, {
-          title,
-          prompt,
-          signal: abortController.signal,
-        });
-      } catch (error) {
-        const output = readOutputContent(workspaceDir, outputFile);
-        annotateAgentError(error, {
-          taskId,
-          title,
-          workspaceDir,
-          runtimeRoot: server?.runtimeRoot || taskRoot,
-          outputFile,
-          outputPath: output.path,
-          outputContent: output.content,
-          requestLog: server?.requestLog || [],
-          stderrTail: server?.getStderrTail?.(8000) || '',
-          stdoutTail: server?.getStdoutTail?.(8000) || '',
-        });
-        throw error;
-      }
-
-      const output = readOutputContent(workspaceDir, outputFile);
-      trackAgentRuntime(app, configStore, 'success');
-
-      return {
-        success: true,
-        task_id: taskId,
-        title,
-        workspace_dir: workspaceDir,
-        runtime_root: server?.runtimeRoot || taskRoot,
-        output_file: outputFile,
-        output_content: output.content,
-        assistant_text: result.text,
-        diff: result.diff,
-        session_id: result.session?.id || '',
-        opencode_request_log: server?.requestLog || [],
-        opencode_stderr_tail: server?.getStderrTail?.(8000) || '',
-        opencode_stdout_tail: server?.getStdoutTail?.(8000) || '',
-      };
-    } catch (error) {
-      trackAgentRuntime(app, configStore, 'failed');
-      if (!error.agentTaskId) {
-        const output = readOutputContent(workspaceDir, outputFile);
-        annotateAgentError(error, {
-          taskId,
-          title,
-          workspaceDir,
-          runtimeRoot: server?.runtimeRoot || taskRoot,
-          outputFile,
-          outputPath: output.path,
-          outputContent: output.content,
-          requestLog: server?.requestLog || [],
-          stderrTail: server?.getStderrTail?.(8000) || '',
-          stdoutTail: server?.getStdoutTail?.(8000) || '',
-        });
-      }
-      throw error;
-    } finally {
-      abortController.cleanup();
-      if (server) {
-        await server.close();
-      }
-    }
-  }
-
-  async function selfCheck() {
-    const checkedAt = nowIso();
-    const startedAt = Date.now();
-    const steps = createSelfCheckSteps();
-    const logger = createSelfCheckLogger(app);
-    const proxyDiagnostics = createSelfCheckCollector();
-    const taskRoot = path.join(getAgentRuntimeDir(app), SELF_CHECK_TASK_ID);
-    const workspaceDir = path.join(taskRoot, 'workspace');
-    const outputPath = path.join(workspaceDir, SELF_CHECK_OUTPUT_FILE);
-    const opencodeBinaryPath = getBundledOpencodeBinaryPath(app);
-
-    let server = null;
-    let config = null;
-    let environmentSnapshot = null;
-    let directModelTest = null;
-    let session = null;
-    let messageResult = null;
-    let diff = [];
-    let workspaceSnapshot = null;
-    let outputContent = '';
-    const abortController = createTaskAbortController(null, SELF_CHECK_TIMEOUT_MS);
-
-    const updateStage = (stage, status, message) => {
-      updateSelfCheckStep(steps, stage, status, message);
-      logger.write('self-check.stage', { stage, status, message });
-    };
-
-    function createResult(success, message, errorDiagnostics = null) {
-      const diagnostics = errorDiagnostics || {
-        opencode_request_log: server?.requestLog || [],
-        opencode_stdout_tail: clipText(server?.getStdoutTail?.(8000) || '', 4000),
-        opencode_stderr_tail: clipText(server?.getStderrTail?.(8000) || '', 4000),
-        opencode_base_url: server?.baseUrl || '',
-        opencode_port: server?.port || parsePortFromUrl(server?.baseUrl),
-      };
-      const result = {
-        success,
-        status: success ? 'normal' : 'error',
-        message,
-        checked_at: checkedAt,
-        duration_ms: Date.now() - startedAt,
-        log_dir: logger.logDir,
-        log_file: logger.logFile,
-        runtime_root: taskRoot,
-        workspace_dir: workspaceDir,
-        output_file: SELF_CHECK_OUTPUT_FILE,
-        output_path: outputPath,
-        output_content: outputContent,
-        opencode_binary_path: opencodeBinaryPath,
-        model_config: summarizeTextModelConfig(config || {}),
-        environment: environmentSnapshot,
-        direct_model_test: directModelTest,
-        opencode_request_log: server?.requestLog || diagnostics.opencode_request_log || [],
-        proxy_diagnostics: { events: proxyDiagnostics.events },
-        workspace_snapshot: workspaceSnapshot,
-        steps,
-        diagnostics,
-        ...(errorDiagnostics ? { error: errorDiagnostics } : {}),
-      };
-      result.conclusion = createSelfCheckConclusion(result);
-      result.detail_text = formatSelfCheckDetails(result);
-      return result;
-    }
-
-    try {
-      updateStage('prepare', 'running', '正在清理旧自检运行目录');
-      fs.rmSync(taskRoot, { recursive: true, force: true });
-      updateStage('prepare', 'success', logger.getSetupError() ? `自检日志初始化失败：${logger.getSetupError()}` : '已清理旧自检日志和运行目录');
-
-      logger.write('self-check.started', {
-        task_id: SELF_CHECK_TASK_ID,
-        opencode_binary_path: opencodeBinaryPath,
-        runtime_root: taskRoot,
-        workspace_dir: workspaceDir,
-      });
-
-      config = configStore.load();
-      updateStage('environment-snapshot', 'running', '正在采集环境和模型配置摘要');
-      environmentSnapshot = createEnvironmentSnapshot(app, opencodeBinaryPath, config);
-      updateStage('environment-snapshot', 'success', `模型：${config?.model_name || '-'}`);
-
-      updateStage('binary-check', 'running', '正在检查 OpenCode 程序文件');
-      if (!fs.existsSync(opencodeBinaryPath)) {
-        throw createStageError('binary-check', `OpenCode binary 不存在：${opencodeBinaryPath}`);
-      }
-      const binaryStat = safeStat(opencodeBinaryPath);
-      updateStage('binary-check', 'success', `${opencodeBinaryPath}${binaryStat?.size ? `（${binaryStat.size} bytes）` : ''}`);
-
-      updateStage('runtime-write-check', 'running', '正在检查自检工作目录写入能力');
-      fs.mkdirSync(workspaceDir, { recursive: true });
-      const writeProbePath = path.join(workspaceDir, 'write-probe.txt');
-      fs.writeFileSync(writeProbePath, 'ok', 'utf-8');
-      fs.rmSync(writeProbePath, { force: true });
-      updateStage('runtime-write-check', 'success', workspaceDir);
-
-      updateStage('direct-model-test', 'running', '正在直接测试当前文本模型');
-      directModelTest = await runDirectModelSelfCheck(config);
-      if (!directModelTest.success) {
-        throw createStageError('direct-model-test', directModelTest.message || '直接模型测试失败');
-      }
-      updateStage('direct-model-test', 'success', `${directModelTest.duration_ms}ms`);
-
-      writeWorkspaceFiles(workspaceDir, [
-        { path: 'self-check-input.txt', content: 'YIBIAO_AGENT_SELF_CHECK_INPUT' },
-      ]);
-
-      server = await startIsolatedOpenCodeServer({
-        app,
-        configStore,
-        workspaceDir,
-        taskId: SELF_CHECK_TASK_ID,
-        keepRuntime: true,
-        timeoutMs: SELF_CHECK_TIMEOUT_MS,
-        diagnostics: proxyDiagnostics,
-        onStage: updateStage,
-      });
-
-      updateStage('session-create', 'running', '正在创建 OpenCode Session');
-      session = await createSession(server, '易标智能体自检', { signal: abortController.signal });
-      updateStage('session-create', 'success', `session_id=${session?.id || '-'}`);
-
-      updateStage('message-wait', 'running', '正在执行极简智能体任务并等待输出');
-      messageResult = await sendPrompt(server, session.id, buildSelfCheckPrompt(), {
-        signal: abortController.signal,
-        agent: 'build',
-      });
-      updateStage('message-wait', 'success', `parts=${Array.isArray(messageResult?.parts) ? messageResult.parts.length : 0}`);
-
-      updateStage('diff-fetch', 'running', '正在读取 OpenCode Diff');
-      diff = await getSessionDiff(server, session.id, { signal: abortController.signal }).catch((error) => {
-        logger.write('self-check.diff.failed', { error: error?.message || String(error) });
-        return [];
-      });
-      updateStage('diff-fetch', 'success', `diff=${Array.isArray(diff) ? diff.length : 0}`);
-
-      updateStage('output-check', 'running', '正在校验智能体输出');
-      outputContent = String(readOutputContent(workspaceDir, SELF_CHECK_OUTPUT_FILE).content || '').trim();
-      validateSelfCheckOutput(outputContent);
-      updateStage('output-check', 'success', '输出内容符合预期');
-
-      updateStage('workspace-snapshot', 'running', '正在采集工作目录文件快照');
-      workspaceSnapshot = snapshotWorkspace(workspaceDir);
-      updateStage('workspace-snapshot', 'success', `${workspaceSnapshot.files?.length || 0} 个条目`);
-
-      const result = createResult(true, '智能体自检正常');
-      result.agent_result = {
-        session_id: session?.id || '',
-        message_parts_count: Array.isArray(messageResult?.parts) ? messageResult.parts.length : 0,
-        message_part_types: Array.isArray(messageResult?.parts) ? messageResult.parts.map((part) => part?.type || '').filter(Boolean) : [],
-        assistant_text_chars: String((messageResult?.parts || []).filter((part) => part?.type === 'text').map((part) => part.text || '').join('\n')).length,
-        diff_count: Array.isArray(diff) ? diff.length : 0,
-      };
-      logger.write('self-check.completed', result);
-      return result;
-    } catch (error) {
-      const stage = error?.selfCheckStage || getCurrentSelfCheckStage(steps);
-      updateStage(stage, 'error', error?.message || String(error || '智能体自检失败'));
-      try {
-        outputContent = outputContent || String(readOutputContent(workspaceDir, SELF_CHECK_OUTPUT_FILE).content || '').trim();
-      } catch {}
-      try {
-        updateStage('workspace-snapshot', 'running', '正在采集失败现场工作目录快照');
-        workspaceSnapshot = snapshotWorkspace(workspaceDir);
-        updateStage('workspace-snapshot', 'success', `${workspaceSnapshot.files?.length || 0} 个条目`);
-      } catch {}
-      if (!error.agentTaskId) {
-        const output = readOutputContent(workspaceDir, SELF_CHECK_OUTPUT_FILE);
-        annotateAgentError(error, {
-          taskId: SELF_CHECK_TASK_ID,
-          title: '易标智能体自检',
-          workspaceDir,
-          runtimeRoot: taskRoot,
-          outputFile: SELF_CHECK_OUTPUT_FILE,
-          outputPath: output.path,
-          outputContent: output.content,
-          requestLog: server?.requestLog || [],
-          stderrTail: server?.getStderrTail?.(8000) || '',
-          stdoutTail: server?.getStdoutTail?.(8000) || '',
-        });
-      }
-      error.selfCheckStage = error.selfCheckStage || stage;
-      const diagnostics = compactSelfCheckError(error);
-      outputContent = outputContent || diagnostics.agent_partial_output || '';
-
-      const result = createResult(false, error?.message || '智能体自检失败', {
-        ...diagnostics,
-        opencode_binary_path: diagnostics.opencode_binary_path || opencodeBinaryPath,
-        opencode_port: diagnostics.opencode_port || parsePortFromUrl(diagnostics.opencode_base_url),
-        opencode_request_log: server?.requestLog || diagnostics.opencode_request_log || [],
-        opencode_stdout_tail: diagnostics.opencode_stdout_tail || clipText(server?.getStdoutTail?.(8000) || '', 4000),
-        opencode_stderr_tail: diagnostics.opencode_stderr_tail || clipText(server?.getStderrTail?.(8000) || '', 4000),
-      });
-      logger.write('self-check.failed', result);
-      return result;
-    } finally {
-      abortController.cleanup();
-      if (server) {
-        await server.close();
-      }
-    }
-  }
+function createAgentService({ app, configStore, mainWindow }) {
+  const runtime = createOpenCodeRuntimeService({ app, configStore, mainWindow });
 
   async function exportSelfCheckReport(result = {}) {
     const markdown = buildSelfCheckReportMarkdown(result);
@@ -1086,9 +785,16 @@ function createAgentService({ app, configStore }) {
   }
 
   return {
-    runTask,
-    selfCheck,
+    warmup: () => runtime.warmup(),
+    runTask: (payload) => runtime.runTask(payload),
+    selfCheck: () => runtime.runSelfCheck(),
+    getStatus: () => runtime.getStatus(),
+    restart: (reason) => runtime.restart(reason || 'manual'),
+    markRestartPending: (reason) => runtime.markRestartPending(reason),
+    handleConfigChanged: (nextConfig, previousConfig) => runtime.handleConfigChanged(nextConfig, previousConfig),
+    onStatus: (listener) => runtime.onStatus(listener),
     exportSelfCheckReport,
+    close: () => runtime.close(),
   };
 }
 

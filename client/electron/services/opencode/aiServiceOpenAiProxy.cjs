@@ -165,6 +165,20 @@ function createOpenCodeTextQueue(options = {}) {
 
   return {
     enqueue,
+    getStatus() {
+      return {
+        active: activeCount,
+        queued: queue.length,
+        limit: currentLimit(),
+      };
+    },
+    clearQueued(reason) {
+      while (queue.length) {
+        const job = queue.shift();
+        job.cleanup?.();
+        job.reject(reason || new Error('Agent proxy 队列已清空'));
+      }
+    },
   };
 }
 
@@ -224,6 +238,21 @@ function appendProxyDiagnostic(diagnostics, event, payload = {}) {
     diagnostics?.record?.(event, payload);
   } catch {
     // 自检诊断不能影响主流程。
+  }
+}
+
+function emitProxyActivity(onActivity, activityContext, event = {}) {
+  try {
+    onActivity?.({
+      ...event,
+      task_token: activityContext?.task_token,
+      meta: {
+        ...(event.meta || {}),
+        task_id: activityContext?.task_id || '',
+      },
+    });
+  } catch {
+    // activity 只影响进度和 watchdog，不能影响代理请求。
   }
 }
 
@@ -393,6 +422,37 @@ function createTimeoutSignal(parentSignal, timeoutMs = DEFAULT_UPSTREAM_TIMEOUT_
   };
 }
 
+function createIdleTimeoutController(parentSignal, timeoutMs = DEFAULT_UPSTREAM_TIMEOUT_MS, message) {
+  const controller = new AbortController();
+  let timer = null;
+
+  function reset() {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      controller.abort(markAiRequestError(new Error(message || 'AI 流式响应长时间无数据'), { retryable: true }));
+    }, timeoutMs);
+  }
+
+  const abortFromParent = () => controller.abort(parentSignal?.reason || new Error('请求已取消'));
+  if (parentSignal) {
+    if (parentSignal.aborted) abortFromParent();
+    else parentSignal.addEventListener('abort', abortFromParent, { once: true });
+  }
+
+  reset();
+
+  return {
+    signal: controller.signal,
+    touch: reset,
+    clear() {
+      clearTimeout(timer);
+      if (parentSignal) {
+        try { parentSignal.removeEventListener('abort', abortFromParent); } catch {}
+      }
+    },
+  };
+}
+
 async function createUpstreamError(response) {
   const rawText = await response.text().catch(() => '');
   let detail = '';
@@ -533,7 +593,7 @@ function createSseResponseCollector() {
   };
 }
 
-function createUsageCapturingStream(source, onDone) {
+function createUsageCapturingStream(source, onDone, options = {}) {
   if (!source?.getReader) return source;
 
   const reader = source.getReader();
@@ -542,20 +602,34 @@ function createUsageCapturingStream(source, onDone) {
 
   return new ReadableStream({
     async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        collector.push(decoder.decode());
-        await Promise.resolve(onDone(collector.flush()));
-        controller.close();
-        return;
-      }
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          collector.push(decoder.decode());
+          await Promise.resolve(onDone(collector.flush()));
+          options.onDone?.();
+          controller.close();
+          return;
+        }
 
-      if (value) {
-        collector.push(decoder.decode(value, { stream: true }));
-        controller.enqueue(value);
+        if (value) {
+          options.onChunk?.(value);
+          options.onActivity?.({
+            stage: 'model_stream',
+            message: '模型正在生成响应',
+            source: 'proxy.stream.chunk',
+            visible: true,
+          });
+          collector.push(decoder.decode(value, { stream: true }));
+          controller.enqueue(value);
+        }
+      } catch (error) {
+        options.onError?.(error);
+        throw error;
       }
     },
     async cancel(reason) {
+      options.onCancel?.(reason);
       try { await reader.cancel(reason); } catch {}
     },
   });
@@ -678,7 +752,7 @@ function recordOpenCodeAiFailure({ app, config, requestId, requestBody, error, r
   });
 }
 
-async function prepareProxyResponse({ app, config, requestId, requestBody, response, startedAt, attempt, diagnostics }) {
+async function prepareProxyResponse({ app, config, requestId, requestBody, response, startedAt, attempt, diagnostics, onActivity, activityContext, streamTimeout }) {
   const stream = Boolean(requestBody.stream);
   const contentType = response.headers.get('content-type') || '';
   const isSse = stream || contentType.toLowerCase().includes('text/event-stream');
@@ -699,6 +773,30 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
         attempt,
         diagnostics,
       });
+      emitProxyActivity(onActivity, activityContext, {
+        stage: 'model_stream',
+        message: '模型响应已完成',
+        source: 'proxy.upstream.completed',
+        meta: { request_id: requestId, attempt, stream: true },
+      });
+      streamTimeout?.clear?.();
+    }, {
+      onChunk: () => streamTimeout?.touch?.(),
+      onActivity: (event) => emitProxyActivity(onActivity, activityContext, {
+        ...event,
+        meta: { request_id: requestId, attempt, stream: true },
+      }),
+      onDone: () => streamTimeout?.clear?.(),
+      onCancel: () => streamTimeout?.clear?.(),
+      onError: (error) => {
+        streamTimeout?.clear?.();
+        emitProxyActivity(onActivity, activityContext, {
+          stage: 'model_request',
+          message: '模型流式响应失败',
+          source: 'proxy.upstream.failed',
+          meta: { request_id: requestId, attempt, error: safeErrorMessage(error) },
+        });
+      },
     });
 
     return new Response(body, {
@@ -730,6 +828,12 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
     attempt,
     diagnostics,
   });
+  emitProxyActivity(onActivity, activityContext, {
+    stage: 'model_request',
+    message: '模型响应已完成',
+    source: 'proxy.upstream.completed',
+    meta: { request_id: requestId, attempt, stream: false },
+  });
 
   return new Response(rawText, {
     status: response.status,
@@ -737,22 +841,35 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
   });
 }
 
-async function requestOpenCodeChatCompletion({ app, configStore, textQueue, openAiBody, signal, timeoutMs, diagnostics }) {
+async function requestOpenCodeChatCompletion({ app, configStore, textQueue, openAiBody, signal, timeoutMs, diagnostics, onActivity, activityContext }) {
+  const requestId = createAiRequestId();
+  let queuedConfig = null;
+  try { queuedConfig = configStore.load(); } catch {}
+  appendProxyDiagnostic(diagnostics, 'proxy.chat.queued', {
+    request_id: requestId,
+    config: summarizeProxyConfig(queuedConfig || {}),
+    request: summarizeRequestBody(openAiBody),
+  });
+  emitProxyActivity(onActivity, activityContext, {
+    stage: 'model_request',
+    message: 'Agent 模型请求已进入队列',
+    source: 'proxy.chat.queued',
+    meta: { request_id: requestId },
+  });
+
   return textQueue.enqueue(async () => {
     const config = configStore.load();
     assertTextModelConfig(config);
 
     const requestBody = normalizeOpenCodeProxyRequestBody(config, openAiBody);
-    const requestId = createAiRequestId();
-    appendProxyDiagnostic(diagnostics, 'proxy.chat.queued', {
-      request_id: requestId,
-      config: summarizeProxyConfig(config),
-      request: summarizeRequestBody(requestBody),
-    });
 
     return runWithAiRetry(async ({ attempt }) => {
-      const timeout = createTimeoutSignal(signal, timeoutMs);
+      const stream = Boolean(requestBody.stream);
+      const timeout = stream
+        ? createIdleTimeoutController(signal, timeoutMs, 'AI 流式响应长时间无数据')
+        : createTimeoutSignal(signal, timeoutMs);
       const startedAt = Date.now();
+      let streamHandedOff = false;
 
       try {
         appendProxyDiagnostic(diagnostics, 'proxy.upstream.started', {
@@ -761,6 +878,12 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
           timeout_ms: timeoutMs,
           config: summarizeProxyConfig(config),
           request: summarizeRequestBody(requestBody),
+        });
+        emitProxyActivity(onActivity, activityContext, {
+          stage: 'model_request',
+          message: 'Agent 正在调用模型',
+          source: 'proxy.upstream.started',
+          meta: { request_id: requestId, attempt },
         });
         appendProxyDeveloperLog(app, config, {
           request_id: requestId,
@@ -794,12 +917,19 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
           content_type: response.headers.get('content-type') || '',
           upstream_request_id: response.headers.get('x-request-id') || '',
         });
+        timeout.touch?.();
+        emitProxyActivity(onActivity, activityContext, {
+          stage: 'model_request',
+          message: '模型服务已响应',
+          source: 'proxy.upstream.headers',
+          meta: { request_id: requestId, attempt, status: response.status },
+        });
 
         if (!response.ok) {
           throw await createUpstreamError(response);
         }
 
-        return prepareProxyResponse({
+        const proxyResponse = await prepareProxyResponse({
           app,
           config,
           requestId,
@@ -808,7 +938,12 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
           startedAt,
           attempt,
           diagnostics,
+          onActivity,
+          activityContext,
+          streamTimeout: stream ? timeout : null,
         });
+        streamHandedOff = stream;
+        return proxyResponse;
       } catch (error) {
         recordOpenCodeAiFailure({
           app,
@@ -820,9 +955,17 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
           attempt,
           diagnostics,
         });
+        emitProxyActivity(onActivity, activityContext, {
+          stage: 'model_request',
+          message: '模型请求失败',
+          source: 'proxy.upstream.failed',
+          meta: { request_id: requestId, attempt, error: safeErrorMessage(error) },
+        });
         throw error;
       } finally {
-        timeout.clear();
+        if (!stream || !streamHandedOff) {
+          timeout.clear();
+        }
       }
     }, { signal });
   }, { signal });
@@ -841,7 +984,7 @@ function copyUpstreamHeaders(upstream, res) {
   }
 }
 
-async function pipeWebStreamToNode(webStream, res) {
+async function pipeWebStreamToNode(webStream, res, options = {}) {
   if (!webStream?.getReader) {
     res.end();
     return;
@@ -852,7 +995,10 @@ async function pipeWebStreamToNode(webStream, res) {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      if (value) res.write(Buffer.from(value));
+      if (value) {
+        options.onChunk?.(value);
+        res.write(Buffer.from(value));
+      }
     }
     res.end();
   } finally {
@@ -860,26 +1006,44 @@ async function pipeWebStreamToNode(webStream, res) {
   }
 }
 
-function bindAbortToRequestLifecycle({ req, res, controller, diagnostics }) {
+function bindAbortToRequestLifecycle({ req, res, controller, diagnostics, onActivity, activityContext }) {
   req.on('aborted', () => {
     appendProxyDiagnostic(diagnostics, 'proxy.client.aborted', { path: req.url || '' });
+    emitProxyActivity(onActivity, activityContext, {
+      stage: 'model_request',
+      message: 'Agent 模型请求已中止',
+      source: 'proxy.client.aborted',
+      meta: { path: req.url || '' },
+    });
     controller.abort(new Error('客户端请求已中止'));
   });
   res.on('close', () => {
     if (!res.writableEnded) {
       appendProxyDiagnostic(diagnostics, 'proxy.client.closed', { path: req.url || '' });
+      emitProxyActivity(onActivity, activityContext, {
+        stage: 'model_request',
+        message: 'Agent 模型连接已关闭',
+        source: 'proxy.client.closed',
+        meta: { path: req.url || '' },
+      });
       controller.abort(new Error('客户端连接已关闭'));
     }
   });
 }
 
-async function handleChatCompletions({ req, res, app, configStore, textQueue, timeoutMs, diagnostics }) {
+async function handleChatCompletions({ req, res, app, configStore, textQueue, timeoutMs, diagnostics, onActivity, getActivityContext }) {
   const controller = new AbortController();
-  bindAbortToRequestLifecycle({ req, res, controller, diagnostics });
-
   const requestBody = await readJson(req);
+  const activityContext = getActivityContext?.() || null;
+  bindAbortToRequestLifecycle({ req, res, controller, diagnostics, onActivity, activityContext });
   appendProxyDiagnostic(diagnostics, 'proxy.chat.received', {
     request: summarizeRequestBody(requestBody),
+  });
+  emitProxyActivity(onActivity, activityContext, {
+    stage: 'model_request',
+    message: 'Agent 正在调用模型',
+    source: 'proxy.chat.received',
+    meta: { request: summarizeRequestBody(requestBody) },
   });
   const upstream = await requestOpenCodeChatCompletion({
     app,
@@ -889,6 +1053,8 @@ async function handleChatCompletions({ req, res, app, configStore, textQueue, ti
     signal: controller.signal,
     timeoutMs,
     diagnostics,
+    onActivity,
+    activityContext,
   });
 
   res.statusCode = upstream.status;
@@ -908,9 +1074,11 @@ function handleModels({ res }) {
   });
 }
 
-function createAiServiceOpenAiProxy({ app, configStore, timeoutMs, diagnostics }) {
+function createAiServiceOpenAiProxy({ app, configStore, timeoutMs, diagnostics, onActivity, getActivityContext }) {
   const token = createProxyToken();
   const upstreamTimeoutMs = normalizeTimeoutMs(timeoutMs);
+  const sockets = new Set();
+  let closing = false;
   const textQueue = createOpenCodeTextQueue({
     defaultLimit: 10,
     getLimit() {
@@ -928,7 +1096,17 @@ function createAiServiceOpenAiProxy({ app, configStore, timeoutMs, diagnostics }
       });
 
       if (url.pathname === '/health') {
-        sendJson(res, 200, { ok: true });
+        sendJson(res, closing ? 503 : 200, { ok: !closing });
+        return;
+      }
+
+      if (closing) {
+        sendJson(res, 503, {
+          error: {
+            message: 'Agent proxy 正在关闭',
+            type: 'closing',
+          },
+        });
         return;
       }
 
@@ -949,7 +1127,17 @@ function createAiServiceOpenAiProxy({ app, configStore, timeoutMs, diagnostics }
       }
 
       if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
-        await handleChatCompletions({ req, res, app, configStore, textQueue, timeoutMs: upstreamTimeoutMs, diagnostics });
+        await handleChatCompletions({
+          req,
+          res,
+          app,
+          configStore,
+          textQueue,
+          timeoutMs: upstreamTimeoutMs,
+          diagnostics,
+          onActivity,
+          getActivityContext,
+        });
         return;
       }
 
@@ -981,6 +1169,10 @@ function createAiServiceOpenAiProxy({ app, configStore, timeoutMs, diagnostics }
 
   server.headersTimeout = upstreamTimeoutMs + SERVER_TIMEOUT_BUFFER_MS;
   server.requestTimeout = upstreamTimeoutMs + SERVER_TIMEOUT_BUFFER_MS;
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
 
   return {
     token,
@@ -1011,8 +1203,25 @@ function createAiServiceOpenAiProxy({ app, configStore, timeoutMs, diagnostics }
         baseUrl: `http://127.0.0.1:${address.port}`,
       };
     },
-    async close() {
-      await new Promise((resolve) => server.close(() => resolve()));
+    getStatus() {
+      return textQueue.getStatus();
+    },
+    async close({ forceAfterMs = 2000 } = {}) {
+      closing = true;
+      textQueue.clearQueued(new Error('Agent proxy 正在关闭'));
+      await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          for (const socket of sockets) {
+            try { socket.destroy(); } catch {}
+          }
+          resolve();
+        }, forceAfterMs);
+
+        server.close(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
     },
   };
 }

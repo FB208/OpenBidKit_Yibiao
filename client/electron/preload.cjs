@@ -52,6 +52,13 @@ const bridge = {
     run: (payload) => ipcRenderer.invoke('agent:run', payload),
     selfCheck: () => ipcRenderer.invoke('agent:self-check'),
     exportSelfCheckReport: (payload) => ipcRenderer.invoke('agent:export-self-check-report', payload),
+    getStatus: () => ipcRenderer.invoke('agent:get-status'),
+    restart: (reason) => ipcRenderer.invoke('agent:restart', reason),
+    onStatus: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('agent:status', listener);
+      return () => ipcRenderer.removeListener('agent:status', listener);
+    },
   },
   developerTokenStats: {
     openWindow: () => ipcRenderer.invoke('developer-token-stats:open-window'),

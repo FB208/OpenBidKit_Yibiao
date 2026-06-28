@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 type TestStepStatus = 'idle' | 'running' | 'success' | 'error';
 
@@ -11,14 +11,47 @@ interface TestStep {
 
 interface AgentRunResult {
   success: boolean;
-  task_id: string;
-  title: string;
-  workspace_dir: string;
-  output_file: string;
-  output_content: string;
-  assistant_text: string;
-  diff: unknown[];
-  session_id: string;
+  status?: string;
+  skipped?: boolean;
+  message?: string;
+  task_id?: string;
+  title?: string;
+  workspace_dir?: string;
+  output_file?: string;
+  output_content?: string;
+  assistant_text?: string;
+  diff?: unknown[];
+  session_id?: string;
+  active_task?: AgentRuntimeStatus['active_task'];
+}
+
+interface AgentRuntimeStatus {
+  phase: string;
+  healthy: boolean;
+  message: string;
+  updated_at: string;
+  last_health_at?: string;
+  last_health_error?: string;
+  restart_pending?: boolean;
+  active_task?: {
+    task_id: string;
+    title: string;
+    stage: string;
+    progress_text: string;
+    elapsed_seconds: number;
+    idle_seconds: number;
+  } | null;
+  proxy?: {
+    active: number;
+    queued: number;
+    limit: number;
+  };
+  opencode?: {
+    pid?: number;
+    port?: number;
+    last_exit_code?: number | null;
+    last_exit_signal?: string;
+  };
 }
 
 interface YibiaoBridgeForAgentTest {
@@ -32,6 +65,9 @@ interface YibiaoBridgeForAgentTest {
   };
   agent?: {
     run: (payload: unknown) => Promise<AgentRunResult>;
+    getStatus?: () => Promise<AgentRuntimeStatus>;
+    restart?: (reason?: string) => Promise<AgentRuntimeStatus>;
+    onStatus?: (callback: (status: AgentRuntimeStatus) => void) => () => void;
   };
 }
 
@@ -89,21 +125,40 @@ function formatJson(value: unknown) {
   }
 }
 
+function isAgentBusyResult(result: AgentRunResult | null) {
+  return result?.status === 'busy' || result?.skipped === true;
+}
+
 function OpenCodeAgentTestPage() {
   const [task, setTask] = useState(DEFAULT_TASK);
   const [keepRuntime, setKeepRuntime] = useState(true);
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<TestStep[]>(() => createInitialSteps());
   const [result, setResult] = useState<AgentRunResult | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<AgentRuntimeStatus | null>(null);
   const [error, setError] = useState('');
+  const [busyMessage, setBusyMessage] = useState('');
 
   const yibiao = useMemo(() => getYibiaoBridge(), []);
+
+  useEffect(() => {
+    let disposed = false;
+    void yibiao?.agent?.getStatus?.().then((status) => {
+      if (!disposed) setRuntimeStatus(status);
+    }).catch(() => undefined);
+    const unsubscribe = yibiao?.agent?.onStatus?.((status) => setRuntimeStatus(status));
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, [yibiao]);
 
   const runTest = async () => {
     if (running) return;
 
     setRunning(true);
     setError('');
+    setBusyMessage('');
     setResult(null);
     setSteps(createInitialSteps());
 
@@ -141,6 +196,15 @@ function OpenCodeAgentTestPage() {
         keep_runtime: keepRuntime,
       });
       setResult(agentResult);
+      if (isAgentBusyResult(agentResult)) {
+        setBusyMessage(agentResult.message || 'Agent 正在处理其他任务，请耐心等待');
+        setSteps((prev) => updateStep(prev, 'agent', {
+          status: 'success',
+          detail: `${agentResult.message || 'Agent 正忙'}，当前任务：${agentResult.active_task?.title || '-'}`,
+        }));
+        setSteps((prev) => updateStep(prev, 'output', { status: 'success', detail: 'busy 跳过，不校验输出' }));
+        return;
+      }
       setSteps((prev) => updateStep(prev, 'agent', {
         status: 'success',
         detail: `task_id=${agentResult.task_id}，session_id=${agentResult.session_id || '-'}`,
@@ -169,6 +233,52 @@ function OpenCodeAgentTestPage() {
     }
   };
 
+  const runBusyTest = async () => {
+    if (running) return;
+    setRunning(true);
+    setError('');
+    setBusyMessage('');
+    setResult(null);
+    try {
+      if (!yibiao?.agent?.run) {
+        throw new Error('当前 preload 未暴露 yibiao.agent.run。');
+      }
+      const payload = {
+        title: 'OpenCode Agent busy 测试',
+        task: `${task}\n\n请尽量完整检查并写入 agent-result.md。`,
+        output_file: 'agent-result.md',
+        files: [
+          { path: 'tender.md', content: SAMPLE_TENDER },
+          { path: 'current-checklist.md', content: SAMPLE_CHECKLIST },
+        ],
+        timeout_ms: 10 * 60 * 1000,
+        keep_runtime: keepRuntime,
+      };
+      const first = yibiao.agent.run(payload);
+      const second = await yibiao.agent.run({ ...payload, title: 'OpenCode Agent busy 测试 - 第二请求' });
+      setResult(second);
+      if (isAgentBusyResult(second)) {
+        setBusyMessage(second.message || 'Agent 正在处理其他任务，请耐心等待');
+      }
+      void first.catch(() => undefined);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'OpenCode Agent busy 测试失败');
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const restartRuntime = async () => {
+    setError('');
+    setBusyMessage('');
+    try {
+      const status = await yibiao?.agent?.restart?.('developer-page');
+      if (status) setRuntimeStatus(status);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Agent 服务重启失败');
+    }
+  };
+
   return (
     <div style={{ padding: 24, maxWidth: 1120, margin: '0 auto' }}>
       <header style={{ marginBottom: 24 }}>
@@ -180,6 +290,27 @@ function OpenCodeAgentTestPage() {
       </header>
 
       <section style={{ display: 'grid', gap: 16 }}>
+        <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, background: '#fff' }}>
+          <h2 style={{ marginTop: 0, fontSize: 18 }}>常驻 Agent 状态</h2>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+            <span>phase：<strong>{runtimeStatus?.phase || '-'}</strong></span>
+            <span>healthy：<strong>{runtimeStatus ? String(runtimeStatus.healthy) : '-'}</strong></span>
+            <span>pid：<strong>{runtimeStatus?.opencode?.pid || '-'}</strong></span>
+            <span>proxy：<strong>{runtimeStatus?.proxy ? `${runtimeStatus.proxy.active}/${runtimeStatus.proxy.queued}/${runtimeStatus.proxy.limit}` : '-'}</strong></span>
+            <span>restartPending：<strong>{String(Boolean(runtimeStatus?.restart_pending))}</strong></span>
+          </div>
+          <p style={{ margin: '10px 0 0', color: '#475569' }}>{runtimeStatus?.message || '尚未收到状态'}</p>
+          {runtimeStatus?.active_task && (
+            <p style={{ margin: '8px 0 0', color: '#475569' }}>
+              当前任务：{runtimeStatus.active_task.title}，{runtimeStatus.active_task.progress_text}，已运行 {runtimeStatus.active_task.elapsed_seconds}s，空闲 {runtimeStatus.active_task.idle_seconds}s
+            </p>
+          )}
+          {runtimeStatus?.last_health_error && <p style={{ color: '#b45309' }}>health：{runtimeStatus.last_health_error}</p>}
+          <button type="button" onClick={() => { void restartRuntime(); }} disabled={running} style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff' }}>
+            手动重启 Agent 服务
+          </button>
+        </div>
+
         <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, background: '#fff' }}>
           <h2 style={{ marginTop: 0, fontSize: 18 }}>测试任务</h2>
           <textarea
@@ -222,6 +353,23 @@ function OpenCodeAgentTestPage() {
           >
             {running ? '测试中...' : '运行完整链路测试'}
           </button>
+          <button
+            type="button"
+            onClick={() => { void runBusyTest(); }}
+            disabled={running}
+            style={{
+              marginTop: 16,
+              marginLeft: 8,
+              padding: '10px 16px',
+              border: '1px solid #f59e0b',
+              borderRadius: 8,
+              background: '#fffbeb',
+              color: '#92400e',
+              cursor: running ? 'not-allowed' : 'pointer',
+            }}
+          >
+            并发 busy 测试
+          </button>
         </div>
 
         <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, background: '#fff' }}>
@@ -237,6 +385,11 @@ function OpenCodeAgentTestPage() {
           {error && (
             <pre style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#fef2f2', color: '#991b1b', whiteSpace: 'pre-wrap' }}>
               {error}
+            </pre>
+          )}
+          {busyMessage && (
+            <pre style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#fffbeb', color: '#92400e', whiteSpace: 'pre-wrap' }}>
+              {busyMessage}
             </pre>
           )}
         </div>

@@ -72,6 +72,12 @@ async function requestJson(server, routePath, options = {}) {
   const method = options.method || 'GET';
   const startedAt = Date.now();
   let response = null;
+  options.onActivity?.({
+    stage: options.stage || 'opencode_request',
+    message: options.progressText || `正在请求 OpenCode：${routePath}`,
+    source: 'opencode-http',
+    meta: { route: routePath, method },
+  });
   appendRequestLog(server, {
     route: routePath,
     method,
@@ -89,6 +95,12 @@ async function requestJson(server, routePath, options = {}) {
     });
 
     const data = await readJsonResponse(response, `OpenCode 请求失败：${routePath}`);
+    options.onActivity?.({
+      stage: options.successStage || options.stage || 'opencode_request',
+      message: options.successText || `OpenCode 请求完成：${routePath}`,
+      source: 'opencode-http',
+      meta: { route: routePath, method, status: response.status },
+    });
     appendRequestLog(server, {
       route: routePath,
       method,
@@ -120,6 +132,12 @@ async function requestJson(server, routePath, options = {}) {
       response_excerpt: String(error.openCodeResponseText || '').slice(0, 2000),
       request: summarizeRequestBody(options.body),
     });
+    options.onActivity?.({
+      stage: options.errorStage || options.stage || 'opencode_request',
+      message: options.errorText || `OpenCode 请求失败：${routePath}`,
+      source: 'opencode-http',
+      meta: { route: routePath, method, status: response?.status || 0, error: error.message || String(error) },
+    });
     throw error;
   }
 }
@@ -128,6 +146,10 @@ async function createSession(server, title, options = {}) {
   return requestJson(server, '/session', {
     method: 'POST',
     signal: options.signal,
+    onActivity: options.onActivity,
+    stage: 'session',
+    progressText: '正在创建 Agent 会话',
+    successText: 'Agent 会话已创建',
     body: { title: title || 'Yibiao Agent Task' },
   });
 }
@@ -136,6 +158,10 @@ async function sendPrompt(server, sessionId, prompt, options = {}) {
   return requestJson(server, `/session/${encodeURIComponent(sessionId)}/message`, {
     method: 'POST',
     signal: options.signal,
+    onActivity: options.onActivity,
+    stage: 'message',
+    progressText: 'Agent 正在执行任务',
+    successText: 'Agent 任务执行完成',
     body: {
       model: {
         providerID: 'yibiao',
@@ -155,6 +181,10 @@ async function sendPrompt(server, sessionId, prompt, options = {}) {
 async function getSessionDiff(server, sessionId, options = {}) {
   return requestJson(server, `/session/${encodeURIComponent(sessionId)}/diff`, {
     signal: options.signal,
+    onActivity: options.onActivity,
+    stage: 'output',
+    progressText: '正在读取 Agent 修改结果',
+    successText: 'Agent 修改结果已读取',
   });
 }
 
@@ -167,10 +197,10 @@ function extractTextFromPromptResult(result) {
     .trim();
 }
 
-async function runOpenCodeTask(server, { title, prompt, signal }) {
-  const session = await createSession(server, title, { signal });
-  const messageResult = await sendPrompt(server, session.id, prompt, { signal });
-  const diff = await getSessionDiff(server, session.id, { signal }).catch(() => []);
+async function runOpenCodeTask(server, { title, prompt, signal, agent, onActivity }) {
+  const session = await createSession(server, title, { signal, onActivity });
+  const messageResult = await sendPrompt(server, session.id, prompt, { signal, agent, onActivity });
+  const diff = await getSessionDiff(server, session.id, { signal, onActivity }).catch(() => []);
 
   return {
     session,

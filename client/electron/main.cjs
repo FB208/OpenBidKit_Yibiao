@@ -14,6 +14,9 @@ const FORCE_DISABLE_GPU_ARGS = ['--disable-gpu', '--disable-hardware-acceleratio
 let appQuitting = false;
 let gpuRecoveryRelaunchStarted = false;
 let developerTokenStatsWindow = null;
+let services = null;
+let closeBeforeQuitStarted = false;
+let quitAfterClose = false;
 
 function hasProcessArg(name) {
   return process.argv.some((arg) => arg === name || arg.startsWith(`${name}=`));
@@ -208,12 +211,22 @@ function withoutGpuControlArgs(args) {
   return args.filter((arg) => !excludedArgs.has(String(arg).split('=')[0]));
 }
 
-function relaunchWithGpuDisabled() {
+async function closeServicesBeforeExit() {
+  try {
+    await services?.closeServices?.();
+  } catch (error) {
+    console.warn('[electron] 关闭后台服务失败', error?.message || String(error));
+  }
+}
+
+async function relaunchWithGpuDisabled() {
   if (gpuRecoveryRelaunchStarted) {
     return;
   }
 
   gpuRecoveryRelaunchStarted = true;
+  appQuitting = true;
+  await closeServicesBeforeExit();
   app.relaunch({ args: withoutGpuControlArgs(process.argv.slice(1)).concat('--disable-gpu') });
   app.exit(0);
 }
@@ -408,7 +421,7 @@ app.whenReady().then(() => {
   registerAssetProtocol();
   const mainWindow = createMainWindow();
   scheduleGpuStartupProbeClear(mainWindow);
-  registerIpcHandlers({
+  services = registerIpcHandlers({
     app,
     mainWindow,
     checkAndDownloadUpdate,
@@ -446,15 +459,34 @@ app.on('child-process-gone', (_event, details) => {
   });
   if (gpuStartupState.hardwareAccelerationEnabled && !gpuStartupState.forcedDisabled && details.reason !== 'clean-exit') {
     disableGpuHardwareAccelerationForNextLaunch('gpu-process-gone');
-    relaunchWithGpuDisabled();
+    void relaunchWithGpuDisabled();
   }
 });
 
-app.on('before-quit', () => {
-  appQuitting = true;
-  if (gpuStartupState.probeStarted && !gpuRecoveryRelaunchStarted) {
-    clearGpuStartupProbe();
+app.on('before-quit', (event) => {
+  if (quitAfterClose) {
+    return;
   }
+  event.preventDefault();
+  if (closeBeforeQuitStarted) {
+    return;
+  }
+  closeBeforeQuitStarted = true;
+  appQuitting = true;
+  void Promise.resolve()
+    .then(async () => {
+      await closeServicesBeforeExit();
+      if (gpuStartupState.probeStarted && !gpuRecoveryRelaunchStarted) {
+        clearGpuStartupProbe();
+      }
+    })
+    .catch((error) => {
+      console.warn('[electron] before-quit 清理失败', error?.message || String(error));
+    })
+    .finally(() => {
+      quitAfterClose = true;
+      app.quit();
+    });
 });
 
 app.on('window-all-closed', () => {

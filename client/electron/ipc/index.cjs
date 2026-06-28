@@ -179,13 +179,25 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
 function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow }) {
   const configStore = createConfigStore(app);
   const aiService = createAiService({ app, configStore });
-  const agentService = createAgentService({ app, configStore });
+  const agentService = createAgentService({ app, configStore, mainWindow });
   const fileService = createFileService({ app, configStore });
   const exportService = createExportService({ configStore });
   const systemFontService = createSystemFontService();
   const databaseStatus = registerWorkspaceDatabaseStatusIpc({ mainWindow });
   let workspaceDatabaseStarted = false;
   let gpuTrialRelaunchStarted = false;
+
+  const closeServices = async () => {
+    await agentService.close?.();
+  };
+
+  const closeServicesBeforeExit = async () => {
+    try {
+      await closeServices();
+    } catch (error) {
+      console.warn('[ipc] 关闭后台服务失败', error?.message || String(error));
+    }
+  };
 
   const saveGpuHardwareAccelerationPreference = (enabled) => {
     const nextEnabled = Boolean(enabled);
@@ -233,6 +245,9 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerConfigIpc({
     configStore,
     aiService,
+    onConfigChanged(nextConfig, previousConfig) {
+      agentService.handleConfigChanged?.(nextConfig, previousConfig);
+    },
     onDeveloperModeChange(developerMode) {
       if (!developerMode) {
         closeDeveloperTokenStatsWindow?.();
@@ -241,11 +256,17 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   });
   registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsWindow });
   registerAiIpc({ aiService });
-  registerAgentIpc({ agentService });
+  registerAgentIpc({ agentService, mainWindow });
   registerFileIpc({ fileService });
   registerExportIpc({ exportService });
   registerSystemFontIpc({ systemFontService });
   registerPendingWorkspaceDatabaseIpc(databaseStatus.getStatus);
+
+  setTimeout(() => {
+    void agentService.warmup?.().catch((error) => {
+      console.warn('[agent] warmup failed', error?.message || String(error));
+    });
+  }, 500);
 
   const startWorkspaceDatabase = () => {
     if (workspaceDatabaseStarted) return;
@@ -290,21 +311,20 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
 
   ipcMain.handle('app:save-gpu-hardware-acceleration-preference', (_event, enabled) => saveGpuHardwareAccelerationPreference(enabled));
 
-  ipcMain.handle('app:start-gpu-hardware-acceleration-trial', () => {
+  ipcMain.handle('app:start-gpu-hardware-acceleration-trial', async () => {
     if (gpuTrialRelaunchStarted) {
       return { success: true };
     }
 
     gpuTrialRelaunchStarted = true;
     const args = buildGpuTrialRelaunchArgs();
-    setTimeout(() => {
-      app.relaunch({ args });
-      app.exit(0);
-    }, 50);
+    await closeServicesBeforeExit();
+    app.relaunch({ args });
+    app.exit(0);
     return { success: true };
   });
 
-  ipcMain.handle('app:relaunch-with-gpu-hardware-acceleration-disabled', () => {
+  ipcMain.handle('app:relaunch-with-gpu-hardware-acceleration-disabled', async () => {
     saveGpuHardwareAccelerationPreference(false);
     if (gpuTrialRelaunchStarted) {
       return { success: true };
@@ -312,10 +332,9 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
 
     gpuTrialRelaunchStarted = true;
     const args = buildGpuDisabledRelaunchArgs();
-    setTimeout(() => {
-      app.relaunch({ args });
-      app.exit(0);
-    }, 50);
+    await closeServicesBeforeExit();
+    app.relaunch({ args });
+    app.exit(0);
     return { success: true };
   });
 
@@ -336,7 +355,10 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
 
   ipcMain.handle('app:get-latest-version', () => getLatestVersion({ configStore }));
   ipcMain.handle('app:get-update-download-url', () => getUpdateDownloadUrl({ configStore }));
-  ipcMain.handle('app:quit-and-install', () => quitAndInstall({ app }));
+  ipcMain.handle('app:quit-and-install', async () => {
+    await closeServicesBeforeExit();
+    return quitAndInstall({ app });
+  });
 
   ipcMain.handle('app:check-update', (event) => {
     const webContents = event.sender;
@@ -373,6 +395,10 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
       },
     });
   });
+
+  return {
+    closeServices,
+  };
 }
 
 module.exports = {

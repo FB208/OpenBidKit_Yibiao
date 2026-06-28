@@ -228,6 +228,15 @@ async function closeAiProxy(aiProxy) {
   try { await aiProxy.close(); } catch {}
 }
 
+async function closeOpenCodeSidecar(sidecar) {
+  if (!sidecar) return;
+  try {
+    if (typeof sidecar.close === 'function') {
+      await sidecar.close();
+    }
+  } catch {}
+}
+
 async function cleanupRuntime(runtimeRoot, keepRuntime) {
   if (keepRuntime || !runtimeRoot) return;
   try { fs.rmSync(runtimeRoot, { recursive: true, force: true }); } catch {}
@@ -396,6 +405,186 @@ async function startIsolatedOpenCodeServer({
   }
 }
 
+async function startOpenCodeSidecar({
+  app,
+  configStore,
+  runtimeRoot,
+  workspaceDir,
+  timeoutMs,
+  diagnostics,
+  onStage,
+  onActivity,
+  getActivityContext,
+  onExit,
+}) {
+  const agentTimeoutMs = normalizeTimeoutMs(timeoutMs);
+  const opencodeBin = getBundledOpencodeBinaryPath(app);
+  ensureExecutable(opencodeBin);
+
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  fs.mkdirSync(workspaceDir, { recursive: true });
+
+  const tempHome = path.join(runtimeRoot, 'home');
+  const configDir = path.join(tempHome, '.config', 'opencode');
+  const dataHome = path.join(tempHome, '.local', 'share');
+  const cacheHome = path.join(getAgentCacheDir(app), 'opencode-cache');
+  const opencodeConfigPath = path.join(runtimeRoot, 'opencode.json');
+
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.mkdirSync(dataHome, { recursive: true });
+  fs.mkdirSync(cacheHome, { recursive: true });
+
+  let aiProxy = null;
+  let child = null;
+  const stderrBuffer = createStderrBuffer();
+  const stdoutBuffer = createOutputBuffer();
+
+  try {
+    emitStage(onStage, 'ai-proxy-start', 'running', '正在启动 OpenCode AI proxy');
+    aiProxy = createAiServiceOpenAiProxy({
+      app,
+      configStore,
+      timeoutMs: agentTimeoutMs,
+      diagnostics,
+      onActivity,
+      getActivityContext,
+    });
+    const aiProxyInfo = await aiProxy.start();
+    emitStage(onStage, 'ai-proxy-start', 'success', aiProxyInfo.baseUrl, { port: aiProxyInfo.port, baseUrl: aiProxyInfo.baseUrl });
+
+    const currentConfig = configStore.load();
+    emitStage(onStage, 'opencode-config-write', 'running', '正在写入 OpenCode 常驻配置');
+    const opencodeConfig = writeOpenCodeConfig(opencodeConfigPath, {
+      proxyBaseUrl: aiProxyInfo.baseUrl,
+      contextLengthLimit: currentConfig.context_length_limit,
+      timeoutMs: agentTimeoutMs,
+    });
+    emitStage(onStage, 'opencode-config-write', 'success', opencodeConfigPath);
+
+    const port = await findFreePort();
+    const username = 'yibiao';
+    const password = crypto.randomBytes(24).toString('base64url');
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const authHeader = createBasicAuth(username, password);
+    const childState = {
+      spawnError: null,
+      exitInfo: null,
+      healthPassed: false,
+      meta: {
+        opencodeBin,
+        workspaceDir,
+        runtimeRoot,
+        baseUrl,
+        port,
+      },
+    };
+
+    const env = buildMinimalChildEnv({
+      HOME: tempHome,
+      USERPROFILE: tempHome,
+      XDG_CONFIG_HOME: path.join(tempHome, '.config'),
+      XDG_DATA_HOME: dataHome,
+      XDG_CACHE_HOME: cacheHome,
+      OPENCODE_CONFIG: opencodeConfigPath,
+      OPENCODE_CONFIG_DIR: configDir,
+      OPENCODE_CONFIG_CONTENT: JSON.stringify(opencodeConfig),
+      OPENCODE_PERMISSION: JSON.stringify(opencodeConfig.permission),
+      OPENCODE_SERVER_USERNAME: username,
+      OPENCODE_SERVER_PASSWORD: password,
+      OPENCODE_DISABLE_AUTOUPDATE: 'true',
+      OPENCODE_DISABLE_DEFAULT_PLUGINS: 'true',
+      OPENCODE_DISABLE_MODELS_FETCH: 'true',
+      OPENCODE_DISABLE_CLAUDE_CODE: 'true',
+      YIBIAO_OPENCODE_PROXY_TOKEN: aiProxyInfo.token,
+    });
+
+    emitStage(onStage, 'opencode-server-start', 'running', `正在启动 OpenCode Server：${baseUrl}`);
+    child = spawn(opencodeBin, [
+      'serve',
+      '--pure',
+      '--hostname', '127.0.0.1',
+      '--port', String(port),
+    ], {
+      cwd: workspaceDir,
+      env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    child.stdout.on('data', (chunk) => stdoutBuffer.push(chunk));
+    child.stderr.on('data', (chunk) => stderrBuffer.push(chunk));
+
+    child.once('error', (error) => {
+      childState.spawnError = error;
+      emitStage(onStage, 'opencode-server-start', 'error', error?.message || String(error));
+      stderrBuffer.push(`\n[spawn error] ${error?.message || String(error)}\n`);
+    });
+
+    child.once('exit', (code, signal) => {
+      childState.exitInfo = { code, signal };
+      if (!childState.healthPassed && code !== 0) {
+        emitStage(onStage, 'opencode-server-start', 'error', `OpenCode 进程退出：code=${code ?? 'null'} signal=${signal || 'null'}`);
+        console.warn('[opencode] server exited', {
+          code,
+          signal,
+          stdout: stdoutBuffer.tail(4000),
+          stderr: stderrBuffer.tail(4000),
+        });
+      }
+      onExit?.({
+        code,
+        signal,
+        stdoutTail: stdoutBuffer.tail(8000),
+        stderrTail: stderrBuffer.tail(8000),
+      });
+    });
+
+    emitStage(onStage, 'opencode-health', 'running', `正在检查 OpenCode Server 健康状态：${baseUrl}`);
+    await waitForOpenCodeHealth({ baseUrl, authHeader, stderrBuffer, stdoutBuffer, childState, timeoutMs: 30000 });
+    childState.healthPassed = true;
+    emitStage(onStage, 'opencode-health', 'success', baseUrl, { port, baseUrl });
+
+    return {
+      baseUrl,
+      authHeader,
+      port,
+      aiProxyBaseUrl: aiProxyInfo.baseUrl,
+      aiProxyPort: aiProxyInfo.port,
+      workspaceDir,
+      runtimeRoot,
+      child,
+      pid: child.pid,
+      requestLog: [],
+      getStderrTail(size = 4000) {
+        return stderrBuffer.tail(size);
+      },
+      getStdoutTail(size = 4000) {
+        return stdoutBuffer.tail(size);
+      },
+      getProxyStatus() {
+        return aiProxy?.getStatus?.() || { active: 0, queued: 0, limit: 0 };
+      },
+      async close() {
+        await killChild(child);
+        await closeAiProxy(aiProxy);
+      },
+    };
+  } catch (error) {
+    await killChild(child);
+    await closeAiProxy(aiProxy);
+    throw attachOpenCodeDiagnostics(error, {
+      opencodeBin,
+      workspaceDir,
+      runtimeRoot,
+      stderrBuffer,
+      stdoutBuffer,
+    });
+  }
+}
+
 module.exports = {
+  closeOpenCodeSidecar,
+  startOpenCodeSidecar,
   startIsolatedOpenCodeServer,
+  waitForOpenCodeHealth,
 };

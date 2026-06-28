@@ -3314,6 +3314,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     };
   }
 
+  function isAgentBusyResult(result) {
+    return result?.status === 'busy' || result?.skipped === true;
+  }
+
   async function runAgentTaskWithRecoveredOutput(payload, eventPrefix) {
     function normalizeAgentFilePath(value) {
       return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/^(\.\/)+/, '').toLowerCase();
@@ -3331,6 +3335,13 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
     try {
       const result = await agentService.runTask(payload);
+      if (isAgentBusyResult(result)) {
+        writeDeveloperLog(`${eventPrefix}.opencode.busy`, {
+          message: result?.message || 'Agent 正在处理其他任务',
+          active_task: result?.active_task || null,
+        });
+        return result;
+      }
       writeDeveloperLog(`${eventPrefix}.opencode.done`, {
         agent_task_id: result?.task_id || '',
         agent_session_id: result?.session_id || '',
@@ -4947,6 +4958,15 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         timeout_ms: 30 * 60 * 1000,
         signal: agentAbortController.signal,
       }, 'original_coverage.agent');
+      if (isAgentBusyResult(agentResult)) {
+        logs = [...logs, 'Agent 正在处理其他任务，本轮跳过原方案覆盖 Agent 修复。'];
+        writeDeveloperLog('original_coverage.agent.busy', { active_task: agentResult?.active_task || null });
+        updateAgentOriginalCoverageProgress(0, 'Agent 正忙，已跳过原方案覆盖 Agent 修复', {
+          audit_agent_changed_sections: 0,
+          audit_agent_failed_sections: 0,
+        });
+        return { ran: false, fixedCount: 0, failedCount: 0, skipped: true, reason: 'busy' };
+      }
       pauseIfRequested('正文生成已在原方案覆盖 Agent 修复结果回写前暂停，本次 Agent 输出未回写；继续后将重新执行。');
 
       updateAgentOriginalCoverageProgress(3, '读取 Agent 修复后的正文');
@@ -5484,6 +5504,15 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         timeout_ms: 30 * 60 * 1000,
         signal: agentAbortController.signal,
       }, 'consistency.agent');
+      if (isAgentBusyResult(agentResult)) {
+        logs = [...logs, 'Agent 正在处理其他任务，本轮跳过 Agent 一致性修复。'];
+        writeDeveloperLog('consistency.agent.busy', { active_task: agentResult?.active_task || null });
+        updateAgentConsistencyProgress(0, 'Agent 正忙，已跳过本轮 Agent 修复', {
+          audit_agent_changed_sections: 0,
+          audit_agent_failed_sections: 0,
+        });
+        return { ran: false, fixedCount: 0, failedCount: 0, skipped: true, reason: 'busy' };
+      }
       pauseIfRequested('正文生成已在 Agent 全文一致性修复结果回写前暂停，本次 Agent 输出未回写；继续后将重新执行 Agent 修复。');
 
       updateAgentConsistencyProgress(3, '读取 Agent 修复后的全文');

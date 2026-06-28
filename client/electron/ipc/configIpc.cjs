@@ -2,11 +2,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { ipcMain, shell } = require('electron');
 
-function registerConfigIpc({ configStore, aiService, onDeveloperModeChange }) {
+function registerConfigIpc({ configStore, aiService, onDeveloperModeChange, onConfigChanged }) {
   ipcMain.handle('config:load', () => configStore.load());
   ipcMain.handle('config:save', (_event, config) => {
+    const previousConfig = configStore.load();
     const result = configStore.save(config);
-    onDeveloperModeChange?.(Boolean(configStore.load()?.developer_mode));
+    const nextConfig = configStore.load();
+    onDeveloperModeChange?.(Boolean(nextConfig?.developer_mode));
+    onConfigChanged?.(nextConfig, previousConfig);
     return result;
   });
   ipcMain.handle('config:list-models', (_event, config) => aiService.listModels(config));

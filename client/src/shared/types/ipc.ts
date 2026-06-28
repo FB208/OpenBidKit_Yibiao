@@ -92,7 +92,66 @@ export interface WorkspaceDatabaseStatus {
 }
 
 export type AgentSelfCheckStepStatus = 'pending' | 'running' | 'success' | 'error';
-export type AgentSelfCheckStatus = 'normal' | 'error';
+export type AgentSelfCheckStatus = 'normal' | 'error' | 'busy';
+
+export type AgentRuntimePhase = 'stopped' | 'starting' | 'idle' | 'running' | 'aborting' | 'unhealthy' | 'restarting' | 'closing';
+
+export interface AgentRuntimeActiveTask {
+  task_id: string;
+  title: string;
+  stage: string;
+  progress_text: string;
+  started_at: string;
+  last_activity_at: string;
+  last_progress_at?: string;
+  elapsed_seconds: number;
+  idle_seconds: number;
+}
+
+export interface AgentRuntimeStatus {
+  phase: AgentRuntimePhase;
+  healthy: boolean;
+  message: string;
+  updated_at: string;
+  last_health_at?: string;
+  last_health_error?: string;
+  restart_pending?: boolean;
+  restart_pending_reason?: string;
+  active_task?: AgentRuntimeActiveTask | null;
+  proxy?: {
+    active: number;
+    queued: number;
+    limit: number;
+  };
+  opencode?: {
+    pid: number;
+    base_url?: string;
+    port?: number;
+    last_exit_code?: number | null;
+    last_exit_signal?: string;
+  };
+}
+
+export interface AgentRunResult {
+  success: boolean;
+  status?: 'busy' | string;
+  skipped?: boolean;
+  message?: string;
+  task_id?: string;
+  title?: string;
+  workspace_dir?: string;
+  runtime_workspace_dir?: string;
+  runtime_root?: string;
+  output_file?: string;
+  output_content?: string;
+  assistant_text?: string;
+  diff?: unknown[];
+  session_id?: string;
+  active_task?: AgentRuntimeActiveTask | null;
+  opencode_request_log?: unknown[];
+  opencode_stderr_tail?: string;
+  opencode_stdout_tail?: string;
+}
 
 export interface AgentSelfCheckStep {
   id: string;
@@ -162,6 +221,7 @@ export interface AgentSelfCheckResult {
   diagnostics?: AgentSelfCheckDiagnostics;
   error?: AgentSelfCheckDiagnostics;
   detail_text: string;
+  runtime_status?: AgentRuntimeStatus;
 }
 
 export interface AgentSelfCheckReportExportResult {
@@ -204,9 +264,12 @@ export interface YibiaoBridge {
     testImageModel: (config: ClientConfig) => Promise<ImageModelTestResult>;
   };
   agent: {
-    run: (payload: unknown) => Promise<unknown>;
+    run: (payload: unknown) => Promise<AgentRunResult>;
     selfCheck: () => Promise<AgentSelfCheckResult>;
     exportSelfCheckReport: (payload: AgentSelfCheckResult) => Promise<AgentSelfCheckReportExportResult>;
+    getStatus: () => Promise<AgentRuntimeStatus>;
+    restart: (reason?: string) => Promise<AgentRuntimeStatus>;
+    onStatus: (callback: (status: AgentRuntimeStatus) => void) => () => void;
   };
   developerTokenStats: {
     openWindow: () => Promise<{ success: boolean }>;
