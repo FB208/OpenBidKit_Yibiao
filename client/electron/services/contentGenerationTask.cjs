@@ -3318,6 +3318,19 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     return result?.status === 'busy' || result?.skipped === true;
   }
 
+  function createAgentActivityProgressHandler(updateProgress, step, fallbackLabel) {
+    let lastKey = '';
+    return (event = {}) => {
+      const message = String(event.message || '').trim();
+      if (!message || event.visible === false) return;
+      const key = `${event.stage || ''}:${message}`;
+      if (key === lastKey) return;
+      lastKey = key;
+      logs = [...logs, `Agent 实时进度：${message}`];
+      updateProgress(step, message || fallbackLabel);
+    };
+  }
+
   async function runAgentTaskWithRecoveredOutput(payload, eventPrefix) {
     function normalizeAgentFilePath(value) {
       return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/^(\.\/)+/, '').toLowerCase();
@@ -4918,9 +4931,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     }
 
     updateAgentOriginalCoverageProgress(2, 'Agent 正在检查并补回原方案内容');
-    const startedAt = Date.now();
     const agentAbortController = new AbortController();
-    let heartbeat = null;
     let pauseWatcher = null;
     let pauseLogged = false;
     function abortAgentIfPauseRequested() {
@@ -4936,15 +4947,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         agentAbortController.abort(createContentGenerationPausedError());
       }
     }
-    heartbeat = setInterval(() => {
-      if (isPauseRequested()) {
-        abortAgentIfPauseRequested();
-        return;
-      }
-      const elapsedSeconds = Math.max(30, Math.round((Date.now() - startedAt) / 1000));
-      logs = [...logs, `Agent 正在检查并补回原方案内容，已运行 ${elapsedSeconds} 秒。`];
-      updateAgentOriginalCoverageProgress(2, 'Agent 正在检查并补回原方案内容');
-    }, 30000);
     pauseWatcher = setInterval(abortAgentIfPauseRequested, 1000);
 
     try {
@@ -4957,6 +4959,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         files,
         timeout_ms: 30 * 60 * 1000,
         signal: agentAbortController.signal,
+        onActivity: createAgentActivityProgressHandler(updateAgentOriginalCoverageProgress, 2, 'Agent 正在检查并补回原方案内容'),
       }, 'original_coverage.agent');
       if (isAgentBusyResult(agentResult)) {
         logs = [...logs, 'Agent 正在处理其他任务，本轮跳过原方案覆盖 Agent 修复。'];
@@ -5024,7 +5027,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       });
       return { ran: true, fixedCount: 0, failedCount };
     } finally {
-      if (heartbeat) clearInterval(heartbeat);
       if (pauseWatcher) clearInterval(pauseWatcher);
     }
   }
@@ -5464,9 +5466,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     pauseIfRequested('正文生成已在 Agent 全文一致性修复开始前暂停，本次 Agent 未启动；继续后将重新执行 Agent 修复。');
 
     updateAgentConsistencyProgress(2, 'Agent 正在审计并修复全文');
-    const startedAt = Date.now();
     const agentAbortController = new AbortController();
-    let heartbeat = null;
     let pauseWatcher = null;
     let pauseLogged = false;
     function abortAgentIfPauseRequested() {
@@ -5482,15 +5482,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         agentAbortController.abort(createContentGenerationPausedError());
       }
     }
-    heartbeat = setInterval(() => {
-      if (isPauseRequested()) {
-        abortAgentIfPauseRequested();
-        return;
-      }
-      const elapsedSeconds = Math.max(30, Math.round((Date.now() - startedAt) / 1000));
-      logs = [...logs, `Agent 正在审计并修复全文，已运行 ${elapsedSeconds} 秒。`];
-      updateAgentConsistencyProgress(2, 'Agent 正在审计并修复全文');
-    }, 30000);
     pauseWatcher = setInterval(abortAgentIfPauseRequested, 1000);
 
     try {
@@ -5503,6 +5494,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         files,
         timeout_ms: 30 * 60 * 1000,
         signal: agentAbortController.signal,
+        onActivity: createAgentActivityProgressHandler(updateAgentConsistencyProgress, 2, 'Agent 正在审计并修复全文'),
       }, 'consistency.agent');
       if (isAgentBusyResult(agentResult)) {
         logs = [...logs, 'Agent 正在处理其他任务，本轮跳过 Agent 一致性修复。'];
@@ -5571,7 +5563,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       });
       throw error;
     } finally {
-      if (heartbeat) clearInterval(heartbeat);
       if (pauseWatcher) clearInterval(pauseWatcher);
     }
   }

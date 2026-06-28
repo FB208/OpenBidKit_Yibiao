@@ -437,6 +437,92 @@ button {
   flex-direction: column;
 }
 
+.agent-runtime-status-bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 42px 0;
+  padding: 12px 16px;
+  color: #243047;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(220, 223, 230, 0.92);
+  border-radius: 18px;
+  box-shadow: 0 16px 34px rgba(36, 48, 72, 0.08);
+}
+
+.agent-runtime-status-dot {
+  width: 10px;
+  height: 10px;
+  background: var(--yb-primary);
+  border-radius: 999px;
+  box-shadow: 0 0 0 6px rgba(33, 116, 253, 0.12);
+}
+
+.agent-runtime-status-bar.is-running .agent-runtime-status-dot {
+  animation: agent-runtime-pulse 1.2s ease-in-out infinite;
+}
+
+.agent-runtime-status-bar.is-warning .agent-runtime-status-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.14);
+}
+
+.agent-runtime-status-bar.is-error .agent-runtime-status-dot {
+  background: #c83220;
+  box-shadow: 0 0 0 6px rgba(200, 50, 32, 0.12);
+}
+
+.agent-runtime-status-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.agent-runtime-status-copy strong {
+  overflow: hidden;
+  color: var(--yb-text);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-runtime-status-copy span {
+  overflow: hidden;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-runtime-status-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.agent-runtime-status-meta em {
+  padding: 5px 8px;
+  color: #536176;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  background: #f2f5f9;
+  border-radius: 999px;
+}
+
+@keyframes agent-runtime-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(0.72);
+    opacity: 0.65;
+  }
+}
+
 .section-kicker {
   display: inline-flex;
   align-items: center;
@@ -8878,6 +8964,11 @@ button {
   background: rgba(28, 168, 100, 0.12);
 }
 
+.agent-self-check-status.is-busy em {
+  color: #a05a00;
+  background: rgba(245, 158, 11, 0.14);
+}
+
 .agent-self-check-status.is-error em {
   color: #c83220;
   background: rgba(200, 50, 32, 0.1);
@@ -8896,6 +8987,10 @@ button {
 
 .agent-self-check-result.is-normal {
   border-color: rgba(28, 168, 100, 0.22);
+}
+
+.agent-self-check-result.is-busy {
+  border-color: rgba(245, 158, 11, 0.24);
 }
 
 .agent-self-check-result.is-error {
@@ -10495,6 +10590,16 @@ button {
   .main-area {
     height: calc(100vh - 68px);
     min-height: 0;
+  }
+
+  .agent-runtime-status-bar {
+    grid-template-columns: auto minmax(0, 1fr);
+    margin: 12px 20px 0;
+  }
+
+  .agent-runtime-status-meta {
+    grid-column: 2;
+    justify-content: flex-start;
   }
 
   .content-shell {

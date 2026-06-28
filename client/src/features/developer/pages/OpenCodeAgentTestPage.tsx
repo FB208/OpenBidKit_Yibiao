@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { AgentRunPayload, AgentRunResult, AgentRuntimeStatus } from '../../../shared/types';
 
 type TestStepStatus = 'idle' | 'running' | 'success' | 'error';
 
@@ -7,51 +8,6 @@ interface TestStep {
   label: string;
   status: TestStepStatus;
   detail?: string;
-}
-
-interface AgentRunResult {
-  success: boolean;
-  status?: string;
-  skipped?: boolean;
-  message?: string;
-  task_id?: string;
-  title?: string;
-  workspace_dir?: string;
-  output_file?: string;
-  output_content?: string;
-  assistant_text?: string;
-  diff?: unknown[];
-  session_id?: string;
-  active_task?: AgentRuntimeStatus['active_task'];
-}
-
-interface AgentRuntimeStatus {
-  phase: string;
-  healthy: boolean;
-  message: string;
-  updated_at: string;
-  last_health_at?: string;
-  last_health_error?: string;
-  restart_pending?: boolean;
-  active_task?: {
-    task_id: string;
-    title: string;
-    stage: string;
-    progress_text: string;
-    elapsed_seconds: number;
-    idle_seconds: number;
-  } | null;
-  proxy?: {
-    active: number;
-    queued: number;
-    limit: number;
-  };
-  opencode?: {
-    pid?: number;
-    port?: number;
-    last_exit_code?: number | null;
-    last_exit_signal?: string;
-  };
 }
 
 interface YibiaoBridgeForAgentTest {
@@ -64,7 +20,7 @@ interface YibiaoBridgeForAgentTest {
     }>;
   };
   agent?: {
-    run: (payload: unknown) => Promise<AgentRunResult>;
+    run: (payload: AgentRunPayload) => Promise<AgentRunResult>;
     getStatus?: () => Promise<AgentRuntimeStatus>;
     restart?: (reason?: string) => Promise<AgentRuntimeStatus>;
     onStatus?: (callback: (status: AgentRuntimeStatus) => void) => () => void;
@@ -131,7 +87,6 @@ function isAgentBusyResult(result: AgentRunResult | null) {
 
 function OpenCodeAgentTestPage() {
   const [task, setTask] = useState(DEFAULT_TASK);
-  const [keepRuntime, setKeepRuntime] = useState(true);
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<TestStep[]>(() => createInitialSteps());
   const [result, setResult] = useState<AgentRunResult | null>(null);
@@ -177,7 +132,7 @@ function OpenCodeAgentTestPage() {
         detail: `${config.text_model_provider || 'unknown'} / ${config.model_name}`,
       }));
 
-      setSteps((prev) => updateStep(prev, 'agent', { status: 'running', detail: '正在启动 OpenCode Server、OpenCode AI proxy 并执行任务' }));
+      setSteps((prev) => updateStep(prev, 'agent', { status: 'running', detail: '正在使用常驻 OpenCode Server、OpenCode AI proxy 执行任务' }));
       const agentResult = await yibiao.agent.run({
         title: 'OpenCode Agent 开发者链路测试',
         task,
@@ -193,7 +148,6 @@ function OpenCodeAgentTestPage() {
           },
         ],
         timeout_ms: 10 * 60 * 1000,
-        keep_runtime: keepRuntime,
       });
       setResult(agentResult);
       if (isAgentBusyResult(agentResult)) {
@@ -243,7 +197,7 @@ function OpenCodeAgentTestPage() {
       if (!yibiao?.agent?.run) {
         throw new Error('当前 preload 未暴露 yibiao.agent.run。');
       }
-      const payload = {
+      const payload: AgentRunPayload = {
         title: 'OpenCode Agent busy 测试',
         task: `${task}\n\n请尽量完整检查并写入 agent-result.md。`,
         output_file: 'agent-result.md',
@@ -252,7 +206,6 @@ function OpenCodeAgentTestPage() {
           { path: 'current-checklist.md', content: SAMPLE_CHECKLIST },
         ],
         timeout_ms: 10 * 60 * 1000,
-        keep_runtime: keepRuntime,
       };
       const first = yibiao.agent.run(payload);
       const second = await yibiao.agent.run({ ...payload, title: 'OpenCode Agent busy 测试 - 第二请求' });
@@ -284,7 +237,7 @@ function OpenCodeAgentTestPage() {
       <header style={{ marginBottom: 24 }}>
         <h1 style={{ margin: 0, fontSize: 26 }}>OpenCode Agent 开发者测试</h1>
         <p style={{ marginTop: 8, color: '#64748b', lineHeight: 1.7 }}>
-          这个页面只用于验证 OpenCode Server + OpenCode AI proxy + agentService 的完整链路。
+          这个页面只用于验证常驻 OpenCode Server + OpenCode AI proxy + agentService 的完整链路。
           它不会写入现有业务数据库，也不会接入技术方案、废标项检查或查重流程。
         </p>
       </header>
@@ -328,15 +281,6 @@ function OpenCodeAgentTestPage() {
               lineHeight: 1.6,
             }}
           />
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, color: '#475569' }}>
-            <input
-              type="checkbox"
-              checked={keepRuntime}
-              disabled={running}
-              onChange={(event) => setKeepRuntime(event.target.checked)}
-            />
-            保留 runtime 目录，方便检查 workspace、临时 opencode.json 和输出文件
-          </label>
           <button
             type="button"
             onClick={() => { void runTest(); }}

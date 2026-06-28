@@ -725,6 +725,18 @@ function createAgentBusyError() {
   return error;
 }
 
+function createAgentActivityLogHandler(log, progress) {
+  let lastKey = '';
+  return (event = {}) => {
+    const message = String(event.message || '').trim();
+    if (!message || event.visible === false) return;
+    const key = `${event.stage || ''}:${message}`;
+    if (key === lastKey) return;
+    lastKey = key;
+    log(`Agent 实时进度：${message}`, progress);
+  };
+}
+
 async function runOutlineAgentRecovery(agentService, context, log) {
   if (!agentService?.runTask) {
     throw new Error('OpenCode Agent 服务尚未初始化，无法执行目录自主修复');
@@ -739,7 +751,7 @@ async function runOutlineAgentRecovery(agentService, context, log) {
     output_file: outputFile,
     files: buildOutlineAgentRecoveryFiles(agentContext),
     timeout_ms: FINAL_AGENT_TIMEOUT_MS,
-    keep_runtime: false,
+    onActivity: createAgentActivityLogHandler(log, agentContext.agentProgress || agentContext.startProgress || 99),
   });
   if (isAgentBusyResult(agentResult)) {
     throw createAgentBusyError();

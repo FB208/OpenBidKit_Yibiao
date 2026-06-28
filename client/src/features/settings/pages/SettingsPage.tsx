@@ -8,7 +8,7 @@ import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'agent' | 'about';
 type UpdateStatus = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'error' | 'disabled';
-type AgentSelfCheckUiStatus = 'untested' | 'checking' | 'normal' | 'error';
+type AgentSelfCheckUiStatus = 'untested' | 'checking' | 'normal' | 'busy' | 'error';
 
 const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
   { id: 'general', label: '通用' },
@@ -23,6 +23,7 @@ const agentSelfCheckStatusMeta: Record<AgentSelfCheckUiStatus, { label: string; 
   untested: { label: '未检测', description: '点击自检后，会验证 OpenCode Server、AI proxy、当前文本模型和智能体输出链路。' },
   checking: { label: '检测中', description: '正在清理上一轮自检日志，并执行极简智能体任务。' },
   normal: { label: '正常', description: '智能体链路已通过自检，可以用于目录修复等 Agent 能力。' },
+  busy: { label: '忙碌', description: 'Agent 正在处理其他任务，本次自检已跳过；这不是 OpenCode 故障。' },
   error: { label: '异常', description: '智能体链路自检失败，请查看下方错误详情。' },
 };
 
@@ -844,8 +845,12 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       }
 
       setAgentSelfCheckResult(result);
-      setAgentSelfCheckStatus(result.success ? 'normal' : 'error');
-      showToast(result.success ? '智能体自检正常' : result.message || '智能体自检失败', result.success ? 'success' : 'error');
+      const nextStatus = result.success ? 'normal' : result.status === 'busy' ? 'busy' : 'error';
+      setAgentSelfCheckStatus(nextStatus);
+      showToast(
+        result.success ? '智能体自检正常' : result.message || '智能体自检失败',
+        result.success ? 'success' : result.status === 'busy' ? 'info' : 'error'
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : '智能体自检失败';
       const failedResult: AgentSelfCheckResult = {
@@ -1805,10 +1810,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             </div>
           </div>
           {agentSelfCheckResult && (
-            <div className={`agent-self-check-result is-${agentSelfCheckResult.success ? 'normal' : 'error'}`}>
+            <div className={`agent-self-check-result is-${agentSelfCheckResult.success ? 'normal' : agentSelfCheckResult.status === 'busy' ? 'busy' : 'error'}`}>
               <div className="agent-self-check-result-head">
                 <div>
-                  <strong>{agentSelfCheckResult.success ? '自检通过' : '自检失败'}</strong>
+                  <strong>{agentSelfCheckResult.success ? '自检通过' : agentSelfCheckResult.status === 'busy' ? '自检跳过' : '自检失败'}</strong>
                   <span>{agentSelfCheckResult.message}</span>
                 </div>
                 <div className="agent-self-check-result-actions">

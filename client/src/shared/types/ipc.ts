@@ -132,6 +132,22 @@ export interface AgentRuntimeStatus {
   };
 }
 
+export interface AgentRunFile {
+  path: string;
+  content: string;
+}
+
+export interface AgentRunPayload {
+  task_id?: string;
+  title?: string;
+  task?: string;
+  prompt?: string;
+  output_file?: string;
+  files?: AgentRunFile[];
+  timeout_ms?: number;
+  agent?: string;
+}
+
 export interface AgentRunResult {
   success: boolean;
   status?: 'busy' | string;
@@ -264,7 +280,7 @@ export interface YibiaoBridge {
     testImageModel: (config: ClientConfig) => Promise<ImageModelTestResult>;
   };
   agent: {
-    run: (payload: unknown) => Promise<AgentRunResult>;
+    run: (payload: AgentRunPayload) => Promise<AgentRunResult>;
     selfCheck: () => Promise<AgentSelfCheckResult>;
     exportSelfCheckReport: (payload: AgentSelfCheckResult) => Promise<AgentSelfCheckReportExportResult>;
     getStatus: () => Promise<AgentRuntimeStatus>;

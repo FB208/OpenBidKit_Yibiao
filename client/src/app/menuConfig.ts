@@ -144,7 +144,7 @@ const developerMenuItems: AppMenuItem[] = [
       {
         id: 'developer-opencode-agent-test',
         label: 'OpenCode Agent测试',
-        description: '验证 OpenCode Server、OpenCode AI proxy、agentService 的完整隔离链路。',
+        description: '验证常驻 OpenCode Server、OpenCode AI proxy、agentService 的完整链路。',
         icon: 'tool',
       },
     ],

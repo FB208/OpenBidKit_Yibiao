@@ -1,9 +1,28 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { getAgentRuntimeDir } = require('../../utils/paths.cjs');
+const { getAgentRuntimeDir, getBundledOpencodeBinaryPath } = require('../../utils/paths.cjs');
 const { startOpenCodeSidecar, closeOpenCodeSidecar } = require('./opencodeServerRunner.cjs');
 const { runOpenCodeTask } = require('./opencodeHttpClient.cjs');
+const {
+  SELF_CHECK_TASK_ID,
+  SELF_CHECK_OUTPUT_FILE,
+  SELF_CHECK_TIMEOUT_MS,
+  buildSelfCheckPrompt,
+  compactSelfCheckError,
+  createEnvironmentSnapshot,
+  createSelfCheckConclusion,
+  createSelfCheckLogger,
+  createSelfCheckSteps,
+  formatSelfCheckDetails,
+  getCurrentSelfCheckStage,
+  runDirectModelSelfCheck,
+  safeStat,
+  snapshotWorkspace,
+  summarizeTextModelConfig,
+  updateSelfCheckStep,
+  validateSelfCheckOutput,
+} = require('./opencodeSelfCheckService.cjs');
 
 const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_PROVIDER_TIMEOUT_MS = 30 * 60 * 1000;
@@ -12,10 +31,6 @@ const HEALTH_FAILURE_LIMIT = 3;
 const STATUS_TICK_MS = 1000;
 const WORKSPACE_WATCH_INTERVAL_MS = 2000;
 const BUSY_MESSAGE = 'Agent 正在处理其他任务，请耐心等待';
-const SELF_CHECK_TASK_ID = 'agent-self-check-latest';
-const SELF_CHECK_OUTPUT_FILE = 'agent-self-check-result.json';
-const SELF_CHECK_EXPECTED_MESSAGE = 'YIBIAO_AGENT_SELF_CHECK_OK';
-const SELF_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const ANALYTICS_PROJECT_NAME = 'yibiao-client';
 
@@ -26,11 +41,6 @@ function nowIso() {
 function normalizeTimeoutMs(value, fallback = DEFAULT_AGENT_IDLE_TIMEOUT_MS) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
-}
-
-function clipText(value, maxLength = 4000) {
-  const text = String(value || '');
-  return text.length > maxLength ? `${text.slice(0, maxLength)}\n...（已截断，原始长度 ${text.length}）` : text;
 }
 
 function trackAgentRuntime(app, configStore, status) {
@@ -124,28 +134,6 @@ ${task}
 6. 最终回复请包含：发现的问题、处理动作、输出文件路径。`;
 }
 
-function buildSelfCheckPrompt() {
-  return `请完成易标智能体自检。
-
-要求：
-1. 阅读 self-check-input.txt。
-2. 必须把以下纯 JSON 写入 ${SELF_CHECK_OUTPUT_FILE}：
-{"ok":true,"message":"${SELF_CHECK_EXPECTED_MESSAGE}"}
-3. 不要写入 Markdown 代码块，不要添加解释文字。`;
-}
-
-function parseSelfCheckOutput(content) {
-  const raw = String(content || '').trim();
-  if (!raw) {
-    throw new Error('智能体自检未生成输出文件内容');
-  }
-  const data = JSON.parse(raw);
-  if (data?.ok !== true || data?.message !== SELF_CHECK_EXPECTED_MESSAGE) {
-    throw new Error(`智能体自检输出不符合预期：${clipText(raw, 1000)}`);
-  }
-  return data;
-}
-
 function readOutputContent(workspaceDir, outputFile) {
   const relativePath = safeRelativePath(outputFile);
   const outputPath = ensureInsideRoot(workspaceDir, path.join(workspaceDir, relativePath), outputFile);
@@ -189,6 +177,12 @@ function isWatchdogStall(error) {
 function createStallError() {
   const error = new Error('Agent 长时间无进展，已停止本轮任务');
   error.code = 'AGENT_STALLED';
+  return error;
+}
+
+function createSelfCheckStageError(stage, message) {
+  const error = new Error(message);
+  error.selfCheckStage = stage;
   return error;
 }
 
@@ -325,6 +319,13 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       updatedAt = now;
     }
     appendRuntimeEvent({ ...event, at: now });
+    if (typeof activeTask.activity_handler === 'function') {
+      try {
+        activeTask.activity_handler({ ...event, at: now });
+      } catch (error) {
+        appendRuntimeEvent({ at: nowIso(), source: 'task-activity-handler', message: error?.message || String(error) });
+      }
+    }
     emitStatusThrottled();
   }
 
@@ -333,7 +334,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
     return (event = {}) => touchActivity({ ...event, task_token: taskToken });
   }
 
-  function createActiveTask({ taskId, title, timeoutMs }) {
+  function createActiveTask({ taskId, title, timeoutMs, onActivity }) {
     const now = nowIso();
     return {
       task_id: taskId,
@@ -345,6 +346,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       last_progress_at: now,
       timeout_ms: timeoutMs,
       activity_token: crypto.randomUUID(),
+      activity_handler: typeof onActivity === 'function' ? onActivity : null,
     };
   }
 
@@ -453,6 +455,29 @@ function createOpenCodeRuntimeService({ app, configStore }) {
         workspaceDir: serviceWorkspaceDir,
         timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
         diagnostics,
+        onStage: (stage, status, stageMessage, meta = {}) => {
+          if (!activeTask) {
+            appendRuntimeEvent({
+              at: nowIso(),
+              source: 'opencode-start',
+              stage,
+              message: stageMessage,
+              meta: { ...meta, status },
+              ignored: true,
+              reason: 'no-active-task',
+            });
+            return;
+          }
+
+          touchActivity({
+            task_token: activeTask.activity_token,
+            task_id: activeTask.task_id,
+            stage,
+            message: stageMessage,
+            source: 'opencode-start',
+            meta: { ...meta, status },
+          });
+        },
         onActivity: touchActivity,
         getActivityContext: () => activeTask
           ? { task_token: activeTask.activity_token, task_id: activeTask.task_id }
@@ -610,7 +635,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
     const outputFile = payload.output_file || 'agent-result.md';
     const timeoutMs = normalizeTimeoutMs(payload.timeout_ms, DEFAULT_AGENT_IDLE_TIMEOUT_MS);
 
-    activeTask = createActiveTask({ taskId, title, timeoutMs });
+    activeTask = createActiveTask({ taskId, title, timeoutMs, onActivity: payload.onActivity });
     const taskActivity = createTaskActivity(activeTask);
     setPhase('running', 'Agent 正在执行任务');
     emitStatus();
@@ -761,7 +786,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
 
   async function runSelfCheck() {
     if (activeTask) {
-      return {
+      const busyResult = {
         success: false,
         status: 'busy',
         message: BUSY_MESSAGE,
@@ -777,117 +802,252 @@ function createOpenCodeRuntimeService({ app, configStore }) {
         opencode_binary_path: '',
         runtime_status: getStatus(),
         steps: [],
-        detail_text: BUSY_MESSAGE,
+        detail_text: '',
       };
+      busyResult.detail_text = formatSelfCheckDetails(busyResult);
+      return busyResult;
     }
 
     const checkedAt = nowIso();
     const startedAt = Date.now();
-    const steps = [
-      { id: 'runtime-status', label: '读取常驻 Agent 状态', status: 'running', updated_at: nowIso() },
-      { id: 'agent-run', label: '执行常驻 Agent 自检任务', status: 'pending' },
-      { id: 'output-check', label: '校验智能体输出', status: 'pending' },
-    ];
+    const steps = createSelfCheckSteps();
+    const logger = createSelfCheckLogger(app);
+    let opencodeBinaryPath = '';
+    let config = null;
+    let modelConfig = null;
+    let environment = null;
+    let directModelTest = null;
+    let agentResult = null;
+    let workspaceSnapshot = null;
+    let agentTaskStarted = false;
 
-    function updateStep(id, status, stepMessage) {
+    function setStep(id, status, stepMessage, meta = {}) {
       const step = steps.find((item) => item.id === id);
       if (!step) return;
-      step.status = status;
-      step.message = stepMessage || '';
-      step.updated_at = nowIso();
+      if (step.status === 'error' && status !== 'error') return;
+      if (step.status === 'success' && status === 'running') return;
+      updateSelfCheckStep(steps, id, status, stepMessage);
+      logger.write('step', { id, status, message: stepMessage || '', ...meta });
+    }
+
+    function completeStep(id, stepMessage) {
+      const step = steps.find((item) => item.id === id);
+      if (!step || step.status === 'success' || step.status === 'error') return;
+      setStep(id, 'success', stepMessage);
+    }
+
+    function completeRuntimeSteps() {
+      if (!sidecar) return;
+      completeStep('ai-proxy-start', sidecar.aiProxyBaseUrl || '常驻 OpenCode AI proxy 可用');
+      completeStep('opencode-config-write', path.join(serviceRuntimeRoot, 'opencode.json'));
+      completeStep('opencode-server-start', sidecar.baseUrl || '常驻 OpenCode Server 可用');
+      completeStep('opencode-health', sidecar.baseUrl || '常驻 OpenCode Server 健康检查通过');
+    }
+
+    function inferActivityStatus(event, successPattern) {
+      const status = event?.meta?.status;
+      if (status === 'success' || status === 'error' || status === 'running') return status;
+      return successPattern.test(String(event?.message || '')) ? 'success' : 'running';
+    }
+
+    function handleInternalActivity(event = {}) {
+      logger.write('activity', event);
+      const stage = String(event.stage || '');
+      const messageText = String(event.message || '');
+      const route = String(event.meta?.route || '');
+
+      if (['ai-proxy-start', 'opencode-config-write', 'opencode-server-start', 'opencode-health'].includes(stage)) {
+        setStep(stage, inferActivityStatus(event, /成功|完成|可用|通过/), messageText);
+        return;
+      }
+
+      if (stage === 'session') {
+        setStep('session-create', inferActivityStatus(event, /已创建|完成/), messageText);
+        return;
+      }
+
+      if (stage === 'message') {
+        setStep('message-wait', inferActivityStatus(event, /完成/), messageText);
+        return;
+      }
+
+      if (stage === 'output' && route.includes('/diff')) {
+        const nextStatus = inferActivityStatus(event, /已读取|完成/);
+        if (nextStatus !== 'error') setStep('diff-fetch', nextStatus, messageText);
+        return;
+      }
+
+      if (stage === 'tool' || event.source === 'workspace.output') {
+        setStep('message-wait', 'running', messageText || 'Agent 正在写入输出文件');
+      }
+    }
+
+    function failCurrentStep(error) {
+      const existingError = steps.find((step) => step.status === 'error');
+      if (existingError) {
+        if (error && typeof error === 'object' && !error.selfCheckStage) error.selfCheckStage = existingError.id;
+        return;
+      }
+      const currentStage = error?.selfCheckStage && steps.some((step) => step.id === error.selfCheckStage)
+        ? error.selfCheckStage
+        : getCurrentSelfCheckStage(steps);
+      const stageId = steps.some((step) => step.id === currentStage) ? currentStage : 'message-wait';
+      if (error && typeof error === 'object' && !error.selfCheckStage) error.selfCheckStage = stageId;
+      setStep(stageId, 'error', error?.message || String(error || '智能体自检失败'));
+    }
+
+    function createBaseResult({ success, status, resultMessage, error }) {
+      const runtimeStatus = getStatus();
+      const diagnosticsPayload = error ? compactSelfCheckError(error) : {
+        opencode_binary_path: opencodeBinaryPath,
+        opencode_base_url: sidecar?.baseUrl || '',
+        opencode_port: sidecar?.port || 0,
+        opencode_exit_code: lastExitCode,
+        opencode_exit_signal: lastExitSignal,
+        opencode_stdout_tail: sidecar?.getStdoutTail?.(8000) || '',
+        opencode_stderr_tail: sidecar?.getStderrTail?.(8000) || '',
+        opencode_request_log: agentResult?.opencode_request_log || sidecar?.requestLog || [],
+      };
+      diagnosticsPayload.opencode_binary_path = diagnosticsPayload.opencode_binary_path || opencodeBinaryPath;
+      diagnosticsPayload.opencode_base_url = diagnosticsPayload.opencode_base_url || sidecar?.baseUrl || '';
+      diagnosticsPayload.opencode_port = diagnosticsPayload.opencode_port || sidecar?.port || 0;
+      diagnosticsPayload.opencode_exit_code = diagnosticsPayload.opencode_exit_code ?? lastExitCode;
+      diagnosticsPayload.opencode_exit_signal = diagnosticsPayload.opencode_exit_signal || lastExitSignal;
+      diagnosticsPayload.opencode_stdout_tail = diagnosticsPayload.opencode_stdout_tail || sidecar?.getStdoutTail?.(8000) || agentResult?.opencode_stdout_tail || '';
+      diagnosticsPayload.opencode_stderr_tail = diagnosticsPayload.opencode_stderr_tail || sidecar?.getStderrTail?.(8000) || agentResult?.opencode_stderr_tail || '';
+      if (!diagnosticsPayload.opencode_request_log?.length) {
+        diagnosticsPayload.opencode_request_log = agentResult?.opencode_request_log || sidecar?.requestLog || [];
+      }
+      diagnosticsPayload.runtime_status = runtimeStatus;
+
+      const workspaceDir = agentResult?.workspace_dir || error?.agentWorkspaceDir || serviceWorkspaceDir;
+      const outputPath = agentResult?.workspace_dir
+        ? path.join(agentResult.workspace_dir, SELF_CHECK_OUTPUT_FILE)
+        : error?.agentOutputPath || path.join(serviceWorkspaceDir, SELF_CHECK_OUTPUT_FILE);
+      return {
+        success,
+        status,
+        message: resultMessage,
+        checked_at: checkedAt,
+        duration_ms: Date.now() - startedAt,
+        log_dir: logger.logDir,
+        log_file: logger.logFile,
+        runtime_root: serviceRuntimeRoot,
+        workspace_dir: workspaceDir,
+        output_file: SELF_CHECK_OUTPUT_FILE,
+        output_path: outputPath,
+        output_content: agentResult?.output_content || error?.agentPartialOutput || '',
+        opencode_binary_path: opencodeBinaryPath,
+        model_config: modelConfig,
+        environment,
+        direct_model_test: directModelTest,
+        opencode_request_log: agentResult?.opencode_request_log || diagnosticsPayload.opencode_request_log || [],
+        proxy_diagnostics: { events: diagnostics.events.slice(-200) },
+        workspace_snapshot: workspaceSnapshot,
+        runtime_status: runtimeStatus,
+        agent_result: agentResult ? {
+          session_id: agentResult.session_id || '',
+          assistant_text_chars: String(agentResult.assistant_text || '').length,
+          diff_count: Array.isArray(agentResult.diff) ? agentResult.diff.length : 0,
+        } : null,
+        steps,
+        diagnostics: diagnosticsPayload,
+        error: error ? diagnosticsPayload : undefined,
+        detail_text: '',
+      };
     }
 
     try {
-      await ensureStarted();
-      updateStep('runtime-status', 'success', '常驻 Agent 服务可用');
-      updateStep('agent-run', 'running', '正在执行极简智能体任务');
-      const agentResult = await runTask({
+      opencodeBinaryPath = getBundledOpencodeBinaryPath(app);
+      config = configStore.load();
+      modelConfig = summarizeTextModelConfig(config);
+
+      setStep('prepare', 'running', '正在清理上一轮自检日志和旧归档');
+      if (logger.getSetupError()) {
+        throw createSelfCheckStageError('prepare', `自检日志目录不可写：${logger.getSetupError()}`);
+      }
+      ensureRuntimeDirs();
+      fs.rmSync(path.join(tasksRoot, safeTaskPathSegment(SELF_CHECK_TASK_ID)), { recursive: true, force: true });
+      setStep('prepare', 'success', '自检日志和旧归档已清理');
+
+      setStep('environment-snapshot', 'running', '正在采集本机环境和模型配置摘要');
+      environment = createEnvironmentSnapshot(app, opencodeBinaryPath, config);
+      setStep('environment-snapshot', 'success', '环境快照已采集');
+
+      setStep('binary-check', 'running', '正在检查 OpenCode 程序文件');
+      const binaryStat = safeStat(opencodeBinaryPath);
+      if (!binaryStat?.exists || !binaryStat.is_file) {
+        throw createSelfCheckStageError('binary-check', `OpenCode binary 不存在或不可访问：${opencodeBinaryPath}`);
+      }
+      setStep('binary-check', 'success', `size=${binaryStat.size}`);
+
+      setStep('runtime-write-check', 'running', '正在检查常驻运行目录写入能力');
+      fs.mkdirSync(serviceRuntimeRoot, { recursive: true });
+      fs.mkdirSync(serviceWorkspaceDir, { recursive: true });
+      const writeCheckPath = path.join(serviceRuntimeRoot, `.self-check-write-${Date.now()}.tmp`);
+      fs.writeFileSync(writeCheckPath, 'ok', 'utf-8');
+      fs.rmSync(writeCheckPath, { force: true });
+      setStep('runtime-write-check', 'success', '运行目录可写');
+
+      setStep('direct-model-test', 'running', '正在直接请求当前文本模型');
+      directModelTest = await runDirectModelSelfCheck(config);
+      if (!directModelTest.success) {
+        throw createSelfCheckStageError('direct-model-test', directModelTest.message || '直接模型测试失败');
+      }
+      setStep('direct-model-test', 'success', directModelTest.message || '直接模型测试成功');
+
+      setStep('ai-proxy-start', 'running', '正在确认常驻 OpenCode AI proxy');
+      agentTaskStarted = true;
+      agentResult = await runTask({
         task_id: SELF_CHECK_TASK_ID,
         title: '易标智能体自检',
         output_file: SELF_CHECK_OUTPUT_FILE,
         files: [{ path: 'self-check-input.txt', content: 'YIBIAO_AGENT_SELF_CHECK_INPUT' }],
         prompt: buildSelfCheckPrompt(),
         timeout_ms: SELF_CHECK_TIMEOUT_MS,
-        keep_runtime: true,
-        internal_self_check: true,
+        onActivity: handleInternalActivity,
       });
-      updateStep('agent-run', 'success', `session_id=${agentResult?.session_id || '-'}`);
-      updateStep('output-check', 'running', '正在校验输出内容');
-      parseSelfCheckOutput(agentResult?.output_content || '');
-      updateStep('output-check', 'success', '输出内容符合预期');
 
-      const runtimeStatus = getStatus();
-      const result = {
-        success: true,
-        status: 'normal',
-        message: '智能体自检正常',
-        checked_at: checkedAt,
-        duration_ms: Date.now() - startedAt,
-        log_dir: '',
-        log_file: '',
-        runtime_root: serviceRuntimeRoot,
-        workspace_dir: agentResult?.workspace_dir || '',
-        output_file: SELF_CHECK_OUTPUT_FILE,
-        output_path: path.join(agentResult?.workspace_dir || '', SELF_CHECK_OUTPUT_FILE),
-        output_content: agentResult?.output_content || '',
-        opencode_binary_path: '',
-        opencode_request_log: agentResult?.opencode_request_log || [],
-        proxy_diagnostics: { events: diagnostics.events.slice(-120) },
-        workspace_snapshot: null,
-        runtime_status: runtimeStatus,
-        agent_result: {
-          session_id: agentResult?.session_id || '',
-          assistant_text_chars: String(agentResult?.assistant_text || '').length,
-          diff_count: Array.isArray(agentResult?.diff) ? agentResult.diff.length : 0,
-        },
-        steps,
-        diagnostics: { runtime_status: runtimeStatus },
-      };
-      result.conclusion = '结论：智能体自检通过，常驻 OpenCode Server、AI proxy 和文件输出链路均正常。';
-      result.detail_text = `${result.conclusion}\n消息：${result.message}`;
+      if (agentResult?.status === 'busy') {
+        const busyResult = createBaseResult({ success: false, status: 'busy', resultMessage: BUSY_MESSAGE });
+        busyResult.conclusion = 'Agent 子服务正在执行任务，自检已跳过；这不是 OpenCode 故障。';
+        busyResult.detail_text = formatSelfCheckDetails(busyResult);
+        logger.write('result', busyResult);
+        return busyResult;
+      }
+
+      completeRuntimeSteps();
+      completeStep('session-create', `session_id=${agentResult?.session_id || '-'}`);
+      completeStep('message-wait', 'Agent 任务执行完成');
+      completeStep('diff-fetch', `diff_count=${Array.isArray(agentResult?.diff) ? agentResult.diff.length : 0}`);
+
+      setStep('output-check', 'running', '正在校验输出内容');
+      validateSelfCheckOutput(agentResult?.output_content || '');
+      setStep('output-check', 'success', '输出内容符合预期');
+
+      setStep('workspace-snapshot', 'running', '正在采集自检工作目录快照');
+      workspaceSnapshot = snapshotWorkspace(agentResult?.workspace_dir || serviceWorkspaceDir);
+      setStep('workspace-snapshot', 'success', `files=${workspaceSnapshot?.files?.length || 0}`);
+
+      const result = createBaseResult({ success: true, status: 'normal', resultMessage: '智能体自检正常' });
+      result.conclusion = createSelfCheckConclusion(result);
+      result.detail_text = formatSelfCheckDetails(result);
+      logger.write('result', result);
       return result;
     } catch (error) {
-      const runningStep = steps.find((step) => step.status === 'running');
-      if (runningStep) updateStep(runningStep.id, 'error', error?.message || String(error));
-      const runtimeStatus = getStatus();
-      const result = {
+      if (agentTaskStarted) completeRuntimeSteps();
+      failCurrentStep(error);
+      const workspaceRoot = agentResult?.workspace_dir || error?.agentWorkspaceDir || serviceWorkspaceDir;
+      workspaceSnapshot = snapshotWorkspace(workspaceRoot);
+      const result = createBaseResult({
         success: false,
         status: 'error',
-        message: error?.message || '智能体自检失败',
-        checked_at: checkedAt,
-        duration_ms: Date.now() - startedAt,
-        log_dir: '',
-        log_file: '',
-        runtime_root: serviceRuntimeRoot,
-        workspace_dir: error?.agentWorkspaceDir || serviceWorkspaceDir,
-        output_file: SELF_CHECK_OUTPUT_FILE,
-        output_path: error?.agentOutputPath || path.join(serviceWorkspaceDir, SELF_CHECK_OUTPUT_FILE),
-        output_content: error?.agentPartialOutput || '',
-        opencode_binary_path: '',
-        opencode_request_log: error?.openCodeRequestLog || [],
-        proxy_diagnostics: { events: diagnostics.events.slice(-120) },
-        workspace_snapshot: null,
-        runtime_status: runtimeStatus,
-        steps,
-        diagnostics: {
-          name: error?.name || 'Error',
-          message: error?.message || String(error),
-          agent_task_id: error?.agentTaskId || '',
-          agent_workspace_dir: error?.agentWorkspaceDir || '',
-          agent_runtime_root: error?.agentRuntimeRoot || serviceRuntimeRoot,
-          agent_output_file: error?.agentOutputFile || SELF_CHECK_OUTPUT_FILE,
-          agent_output_path: error?.agentOutputPath || '',
-          agent_partial_output: error?.agentPartialOutput || '',
-          agent_partial_output_chars: error?.agentPartialOutputChars || 0,
-          opencode_request_log: error?.openCodeRequestLog || [],
-          opencode_stdout_tail: error?.openCodeStdoutTail || '',
-          opencode_stderr_tail: error?.openCodeStderrTail || '',
-          runtime_status: runtimeStatus,
-        },
-      };
-      result.conclusion = `结论：智能体自检失败，问题位于常驻 Agent 链路：${result.message}`;
-      result.detail_text = `${result.conclusion}\n消息：${result.message}`;
-      result.error = result.diagnostics;
+        resultMessage: error?.message || '智能体自检失败',
+        error,
+      });
+      result.conclusion = createSelfCheckConclusion(result);
+      result.detail_text = formatSelfCheckDetails(result);
+      logger.write('result', result);
       return result;
     }
   }
