@@ -3991,10 +3991,13 @@ button {
   top: 50%;
   left: 50%;
   z-index: 121;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: min(480px, calc(100vw - 40px));
+  max-height: min(680px, calc(100vh - 40px));
   gap: 16px;
   padding: 22px;
+  overflow: hidden;
   background: #ffffff;
   border: 1px solid rgba(220, 223, 230, 0.9);
   border-radius: 22px;
@@ -4029,6 +4032,8 @@ button {
 }
 
 .detail-help-body {
+  min-height: 0;
+  overflow: auto;
   color: var(--yb-text-soft);
   font-size: 14px;
   line-height: 1.8;
@@ -4036,7 +4041,23 @@ button {
 
 .detail-help-actions {
   display: flex;
+  flex: 0 0 auto;
   justify-content: flex-end;
+}
+
+.content-regenerate-card > [data-radix-dialog-title],
+.content-regenerate-card > .content-regenerate-title,
+.content-regenerate-card > .content-regenerate-card-head {
+  flex: 0 0 auto;
+}
+
+.content-regenerate-card > [data-radix-dialog-description],
+.content-regenerate-card > .content-regenerate-description,
+.content-regenerate-card > textarea,
+.content-regenerate-card > .gpu-acceleration-copy {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .content-regenerate-card {
@@ -4044,10 +4065,13 @@ button {
   top: 50%;
   left: 50%;
   z-index: 101;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: min(560px, 100%);
+  max-height: min(720px, calc(100vh - 40px));
   gap: 16px;
   padding: 24px;
+  overflow: hidden;
   background: #ffffff;
   border: 1px solid rgba(220, 223, 230, 0.9);
   border-radius: 24px;
@@ -4074,6 +4098,7 @@ button {
 
 .gpu-acceleration-actions {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 12px;
@@ -4085,6 +4110,7 @@ button {
   left: 50%;
   z-index: 101;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(920px, calc(100vw - 40px));
   max-height: min(760px, calc(100vh - 40px));
   transform: translate(-50%, -50%);
@@ -4102,11 +4128,14 @@ button {
   top: 50%;
   left: 50%;
   z-index: 101;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: min(560px, calc(100vw - 40px));
+  max-height: min(680px, calc(100vh - 40px));
   transform: translate(-50%, -50%);
   gap: 18px;
   padding: 24px;
+  overflow: hidden;
   background: #ffffff;
   border: 1px solid rgba(220, 223, 230, 0.9);
   border-radius: 24px;
@@ -4340,7 +4369,8 @@ button {
   top: 50%;
   left: 50%;
   z-index: 131;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: min(640px, calc(100vw - 40px));
   max-height: min(680px, calc(100vh - 56px));
   gap: 18px;
@@ -4366,10 +4396,13 @@ button {
   top: 50%;
   left: 50%;
   z-index: 141;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: min(520px, calc(100vw - 40px));
+  max-height: min(680px, calc(100vh - 40px));
   gap: 18px;
   padding: 24px;
+  overflow: hidden;
   background: #ffffff;
   border: 1px solid rgba(220, 223, 230, 0.92);
   border-radius: 24px;
@@ -4379,6 +4412,7 @@ button {
 
 .document-parse-notice-head {
   display: flex;
+  flex: 0 0 auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
@@ -4423,7 +4457,10 @@ button {
 }
 
 .document-parse-notice-body {
+  flex: 1 1 auto;
+  min-height: 0;
   margin: 0;
+  overflow: auto;
   color: #4b5565;
   font-size: 14px;
   line-height: 1.75;
@@ -4431,12 +4468,14 @@ button {
 
 .document-parse-notice-actions {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
 }
 
 .remote-notice-title {
+  flex: 0 0 auto;
   margin: 0;
   color: var(--yb-text);
   font-size: 20px;
@@ -4446,6 +4485,7 @@ button {
 }
 
 .remote-notice-time {
+  flex: 0 0 auto;
   margin-top: -10px;
   color: var(--yb-text-muted);
   font-size: 12px;
@@ -4454,8 +4494,9 @@ button {
 }
 
 .remote-notice-content {
+  flex: 1 1 auto;
   min-height: 0;
-  max-height: 380px;
+  max-height: none;
   overflow: auto;
   padding: 0 4px 0 0;
   color: #243048;
@@ -4555,6 +4596,8 @@ button {
 
 .remote-notice-actions {
   display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 16px;
@@ -4609,7 +4652,15 @@ button {
 
 .export-progress-body {
   display: grid;
+  flex: 1 1 auto;
   gap: 14px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.export-progress-card > .content-regenerate-card-head,
+.export-progress-card > .content-regenerate-actions {
+  flex: 0 0 auto;
 }
 
 .export-progress-body .content-generation-progress-track {
@@ -4645,6 +4696,7 @@ button {
 
 .content-generation-config-list {
   display: grid;
+  flex: 1 1 auto;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   min-height: 0;
@@ -4765,8 +4817,23 @@ button {
   border-radius: 16px;
 }
 
+.content-generation-config-card > .content-regenerate-card-head,
+.content-generation-config-card > .content-regenerate-actions {
+  flex: 0 0 auto;
+}
+
+.content-generation-config-card > .content-generation-config-list,
+.content-generation-config-card > .content-generation-config-note {
+  min-height: 0;
+}
+
+.content-generation-config-card > .content-generation-config-note {
+  overflow: auto;
+}
+
 .content-regenerate-card-head {
   display: grid;
+  flex: 0 0 auto;
   gap: 8px;
 }
 
@@ -4804,6 +4871,8 @@ button {
 
 .content-regenerate-actions {
   display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
 }
@@ -4990,10 +5059,6 @@ button {
   overflow: hidden;
 }
 
-.outline-knowledge-picker.is-disabled-by-mode {
-  grid-template-rows: auto auto minmax(0, 1fr);
-}
-
 .outline-generation-config-card .content-regenerate-actions {
   align-items: center;
   padding-top: 14px;
@@ -5005,7 +5070,8 @@ button {
   top: 50%;
   left: 50%;
   z-index: 101;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: min(680px, calc(100vw - 40px));
   max-height: min(760px, calc(100vh - 40px));
   transform: translate(-50%, -50%);
@@ -5020,6 +5086,7 @@ button {
 
 .bid-section-selector-head {
   display: grid;
+  flex: 0 0 auto;
   gap: 8px;
 }
 
@@ -5042,9 +5109,10 @@ button {
 
 .bid-section-selector-list {
   display: grid;
+  flex: 1 1 auto;
   gap: 12px;
   min-height: 0;
-  max-height: 420px;
+  max-height: none;
   overflow: auto;
   padding-right: 4px;
   scrollbar-gutter: stable;
@@ -5123,6 +5191,8 @@ button {
 
 .bid-section-selector-actions {
   display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
@@ -9358,12 +9428,13 @@ button {
   top: 50%;
   left: 50%;
   z-index: 101;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: min(680px, calc(100vw - 40px));
   max-height: min(760px, calc(100vh - 40px));
   gap: 18px;
   padding: 26px;
-  overflow: auto;
+  overflow: hidden;
   background:
     radial-gradient(circle at 92% 8%, rgba(33, 116, 253, 0.1), transparent 28%),
     #ffffff;
@@ -9375,6 +9446,7 @@ button {
 
 .knowledge-migration-head {
   display: grid;
+  flex: 0 0 auto;
   gap: 8px;
 }
 
@@ -9393,7 +9465,10 @@ button {
 
 .knowledge-migration-body {
   display: grid;
+  flex: 1 1 auto;
   gap: 12px;
+  min-height: 0;
+  overflow: auto;
 }
 
 .knowledge-migration-lead,
@@ -9470,6 +9545,7 @@ button {
 }
 
 .knowledge-migration-actions {
+  flex: 0 0 auto;
   padding-top: 2px;
 }
 
@@ -12276,10 +12352,13 @@ button {
   top: 50%;
   left: 50%;
   z-index: 1000;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: min(440px, calc(100vw - 32px));
+  max-height: min(640px, calc(100vh - 32px));
   gap: 14px;
   padding: 24px;
+  overflow: hidden;
   background: #ffffff;
   border: 1px solid var(--yb-border-soft);
   border-radius: 24px;
@@ -12289,6 +12368,7 @@ button {
 
 .template-delete-dialog h2,
 .template-delete-dialog [data-radix-dialog-title] {
+  flex: 0 0 auto;
   margin: 0;
   color: var(--yb-text);
   font-size: 22px;
@@ -12296,13 +12376,18 @@ button {
 
 .template-delete-dialog p,
 .template-delete-dialog [data-radix-dialog-description] {
+  flex: 1 1 auto;
+  min-height: 0;
   margin: 0;
+  overflow: auto;
   color: var(--yb-text-soft);
   line-height: 1.7;
 }
 
 .template-delete-actions {
   display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
   margin-top: 6px;

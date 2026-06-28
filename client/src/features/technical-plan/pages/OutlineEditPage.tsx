@@ -56,7 +56,7 @@ const outlineExpansionModeOptions: Array<{ value: OutlineExpansionMode; title: s
   {
     value: 'original-only',
     title: outlineExpansionModeLabels['original-only'],
-    description: '提取并补漏原方案目录后直接作为新目录，不再调用评分项对齐和知识库补目录。',
+    description: '提取并补漏原方案目录后直接作为新目录；知识库不参与目录补充，但会用于后续全局事实和正文生成。',
   },
   {
     value: 'ai-complement',
@@ -261,8 +261,7 @@ function OutlineEditPage({
   const taskFailed = task?.status === 'error';
   const generating = startingOutline || taskRunning;
   const isExpansionWorkflow = workflowKind === 'existing-plan-expansion';
-  const knowledgeDisabledByMode = isExpansionWorkflow && draftOutlineExpansionMode === 'original-only';
-  const knowledgePickingDisabled = generating || knowledgeDisabledByMode;
+  const knowledgePickingDisabled = generating;
   const contentMutationLocked = contentTaskStatus === 'running' || contentTaskStatus === 'pausing' || contentTaskStatus === 'paused';
   const outlineMutationLocked = generating || contentMutationLocked || savingSort;
   const progressLogs = task?.logs || [];
@@ -1110,10 +1109,10 @@ function OutlineEditPage({
 
             <div className={`outline-generation-config-body${isExpansionWorkflow ? ' has-expansion-mode' : ''}`}>
               {renderOutlineExpansionModePicker()}
-              <section className={`outline-generation-config-section outline-knowledge-picker${knowledgeDisabledByMode ? ' is-disabled-by-mode' : ''}`}>
+              <section className="outline-generation-config-section outline-knowledge-picker">
                 <div className="outline-generation-config-head">
                   <strong>参考知识库</strong>
-                  <span>{knowledgeDisabledByMode ? '该模式不使用知识库' : `已选择 ${draftKnowledgeDocumentIds.length} 个文档`}</span>
+                  <span>已选择 {draftKnowledgeDocumentIds.length} 个文档</span>
                 </div>
                 {renderKnowledgePicker()}
               </section>
