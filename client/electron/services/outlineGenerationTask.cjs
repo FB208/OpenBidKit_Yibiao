@@ -656,7 +656,7 @@ function parseAgentJsonContent(content) {
     }
   }
 
-  throw new Error(`OpenCode Agent 未返回可解析的目录 JSON：${lastError?.message || '内容为空'}`);
+  throw new Error(`Agent 未返回可解析的目录 JSON：${lastError?.message || '内容为空'}`);
 }
 
 function attachAlignedTopLevelMetadata(outline, groups) {
@@ -677,7 +677,7 @@ function normalizeFinalAgentRepairResult(value, context) {
     validateRequirementGroups({ groups });
   }
   if (context.workflowKind !== 'existing-plan-expansion' && !groups.length) {
-    throw new Error('OpenCode Agent 修复结果缺少技术评分大类 groups');
+    throw new Error('Agent 修复结果缺少技术评分大类 groups');
   }
 
   const outlineSource = raw.outline === undefined || raw.outline === null
@@ -739,12 +739,12 @@ function createAgentActivityLogHandler(log, progress) {
 
 async function runOutlineAgentRecovery(agentService, context, log) {
   if (!agentService?.runTask) {
-    throw new Error('OpenCode Agent 服务尚未初始化，无法执行目录自主修复');
+    throw new Error('Agent 服务尚未初始化，无法执行目录自主修复');
   }
 
   const outputFile = context.outputFile || FINAL_AGENT_OUTPUT_FILE;
   const agentContext = { ...context, outputFile };
-  log(agentContext.startLogMessage || '已切换到 OpenCode Agent 自主修复目录。', agentContext.startProgress || 99);
+  log(agentContext.startLogMessage || '已切换到 Agent 自主修复目录。', agentContext.startProgress || 99);
   const agentResult = await agentService.runTask({
     title: agentContext.title || '技术方案目录自主修复',
     prompt: buildOutlineAgentRecoveryPrompt(agentContext),
@@ -759,13 +759,13 @@ async function runOutlineAgentRecovery(agentService, context, log) {
 
   const content = String(agentResult?.output_content || agentResult?.assistant_text || '').trim();
   if (!content) {
-    throw new Error('OpenCode Agent 未返回目录修复结果');
+    throw new Error('Agent 未返回目录修复结果');
   }
 
-  log(agentContext.validationLogMessage || 'OpenCode Agent 修复完成，正在进行程序校验。', agentContext.validationProgress || 96);
+  log(agentContext.validationLogMessage || 'Agent 修复完成，正在进行程序校验。', agentContext.validationProgress || 96);
   const parsed = parseAgentJsonContent(content);
   const result = normalizeAgentOutlineResult(parsed, agentContext);
-  log(agentContext.successLogMessage || 'OpenCode Agent 修复结果通过程序校验，准备返回目录。', agentContext.successProgress || 98);
+  log(agentContext.successLogMessage || 'Agent 修复结果通过程序校验，准备返回目录。', agentContext.successProgress || 98);
   return result;
 }
 
@@ -774,7 +774,7 @@ async function repairFinalOutlineWithAgent(agentService, context, log) {
     ...context,
     recoveryKind: context.recoveryKind || 'final-outline-repair',
     title: context.title || '技术方案目录自主修复',
-    startLogMessage: context.startLogMessage || '最终目录审核未通过，已切换到 OpenCode Agent 自主修复目录。',
+    startLogMessage: context.startLogMessage || '最终目录审核未通过，已切换到 Agent 自主修复目录。',
   }, log);
 }
 
@@ -2066,11 +2066,11 @@ async function extractOriginalOutline(aiService, agentService, payload, original
       workflowKind: 'existing-plan-expansion',
       outlineExpansionMode: payload?.outlineExpansionMode || 'ai-complement',
       recoveryReason: finalReview.suggestions.join('；'),
-      startLogMessage: `旧方案目录提取失败，已切换到 OpenCode Agent 从原方案提取目录：${getErrorMessage(error)}`,
+      startLogMessage: `旧方案目录提取失败，已切换到 Agent 从原方案提取目录：${getErrorMessage(error)}`,
       startProgress: 14,
-      validationLogMessage: 'OpenCode Agent 已完成旧目录提取，正在校验目录结构。',
+      validationLogMessage: 'Agent 已完成旧目录提取，正在校验目录结构。',
       validationProgress: 16,
-      successLogMessage: 'OpenCode Agent 旧目录提取结果通过程序校验。',
+      successLogMessage: 'Agent 旧目录提取结果通过程序校验。',
       successProgress: 18,
     }, log);
     return recovered.outline;
@@ -2141,7 +2141,7 @@ async function runFinalOutlineGate({ aiService, agentService, payload, outline, 
       ...context,
       finalReview,
       recoveryReason: finalReview.suggestions.join('；'),
-      startLogMessage: `最终目录审核结果格式无效，已切换到 OpenCode Agent 自主审查并修复目录：${getErrorMessage(error)}`,
+      startLogMessage: `最终目录审核结果格式无效，已切换到 Agent 自主审查并修复目录：${getErrorMessage(error)}`,
     }, log);
     return { outline: repaired.outline, groups: repaired.groups || context.groups };
   }
@@ -2154,7 +2154,7 @@ async function runFinalOutlineGate({ aiService, agentService, payload, outline, 
         ...context,
         finalReview: validationReview,
         recoveryReason: validationReview.suggestions.join('；'),
-        startLogMessage: `最终目录审核通过但程序校验未通过，已切换到 OpenCode Agent 修复目录：${getErrorMessage(error)}`,
+        startLogMessage: `最终目录审核通过但程序校验未通过，已切换到 Agent 修复目录：${getErrorMessage(error)}`,
       }, log);
       return { outline: repaired.outline, groups: repaired.groups || context.groups };
     }
@@ -2359,9 +2359,9 @@ async function alignedWorkflow(aiService, agentService, payload, log) {
       workflowKind: 'technical-plan',
       outlineExpansionMode: payload?.outlineExpansionMode || 'ai-complement',
       recoveryReason: finalReview.suggestions.join('；'),
-      startLogMessage: `技术评分大类提取失败，已切换到 OpenCode Agent 直接生成评分大类和目录：${getErrorMessage(error)}`,
+      startLogMessage: `技术评分大类提取失败，已切换到 Agent 直接生成评分大类和目录：${getErrorMessage(error)}`,
       startProgress: 24,
-      successLogMessage: 'OpenCode Agent 已完成评分大类和目录生成，准备进入知识库补目录。',
+      successLogMessage: 'Agent 已完成评分大类和目录生成，准备进入知识库补目录。',
       successProgress: 82,
     }, log);
     return recovered;
@@ -2384,9 +2384,9 @@ async function alignedWorkflow(aiService, agentService, payload, log) {
       workflowKind: 'technical-plan',
       outlineExpansionMode: payload?.outlineExpansionMode || 'ai-complement',
       recoveryReason: finalReview.suggestions.join('；'),
-      startLogMessage: `评分项对齐目录生成失败，已切换到 OpenCode Agent 补齐完整目录：${getErrorMessage(error)}`,
+      startLogMessage: `评分项对齐目录生成失败，已切换到 Agent 补齐完整目录：${getErrorMessage(error)}`,
       startProgress: 82,
-      successLogMessage: 'OpenCode Agent 已完成评分项对齐目录生成，准备进入知识库补目录。',
+      successLogMessage: 'Agent 已完成评分项对齐目录生成，准备进入知识库补目录。',
       successProgress: 82,
     }, log);
     return recovered;
