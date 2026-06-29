@@ -330,10 +330,17 @@ export interface YibiaoBridge {
       state?: TechnicalPlanState;
       markdown?: string;
     }>;
+    importCustomOutlineDocument: () => Promise<{
+      success: boolean;
+      message?: string;
+      state?: TechnicalPlanState;
+      markdown?: string;
+    }>;
     checkBidSections: () => Promise<{ hasMultiple: boolean; totalDeclared?: number | null }>;
     selectBidSection: (selectedSection: DetectedBidSection) => Promise<{ success: boolean; message?: string; state: TechnicalPlanState; markdown: string }>;
     readTenderMarkdown: () => Promise<string>;
     readOriginalPlanMarkdown: () => Promise<string>;
+    readCustomOutlineMarkdown: () => Promise<string>;
     updateStep: (step: TechnicalPlanStep) => Promise<TechnicalPlanState>;
     setWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
     switchWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
