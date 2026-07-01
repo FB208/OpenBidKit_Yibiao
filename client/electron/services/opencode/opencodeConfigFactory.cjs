@@ -1,22 +1,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const DISABLED_BUILTIN_PROVIDERS = [
-  'anthropic',
-  'openai',
-  'gemini',
-  'google',
-  'openrouter',
-  'github-copilot',
-  'amazon-bedrock',
-  'azure',
-  'deepseek',
-  'xai',
-];
-
 function normalizeContextLimit(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 400000;
+}
+
+function normalizeOutputLimit(contextLengthLimit) {
+  const context = normalizeContextLimit(contextLengthLimit);
+  return Math.max(32768, Math.floor(context * 0.5));
 }
 
 function normalizeTimeoutMs(value) {
@@ -31,8 +23,6 @@ function buildOpenCodeConfig({ proxyBaseUrl, contextLengthLimit, timeoutMs }) {
     autoupdate: false,
     model: 'yibiao/default',
     small_model: 'yibiao/default',
-    enabled_providers: ['yibiao'],
-    disabled_providers: DISABLED_BUILTIN_PROVIDERS,
     provider: {
       yibiao: {
         npm: '@ai-sdk/openai-compatible',
@@ -47,52 +37,11 @@ function buildOpenCodeConfig({ proxyBaseUrl, contextLengthLimit, timeoutMs }) {
             name: 'Yibiao Current Text Model',
             limit: {
               context: normalizeContextLimit(contextLengthLimit),
-              output: 16384,
+              output: normalizeOutputLimit(contextLengthLimit),
             },
           },
         },
       },
-    },
-    permission: {
-      read: {
-        '*': 'allow',
-        '*.env': 'deny',
-        '*.env.*': 'deny',
-        '*.env.example': 'allow',
-      },
-      grep: 'allow',
-      glob: 'allow',
-      edit: 'allow',
-      webfetch: 'deny',
-      websearch: 'deny',
-      external_directory: 'deny',
-      question: 'deny',
-      doom_loop: 'deny',
-      bash: {
-        '*': 'deny',
-        'git status*': 'allow',
-        'git diff*': 'allow',
-        'git ls-files*': 'allow',
-        'ls *': 'allow',
-        'dir *': 'allow',
-        'find *': 'allow',
-        'grep *': 'allow',
-        'rg *': 'allow',
-        'cat *': 'allow',
-        'type *': 'allow',
-      },
-    },
-    formatter: false,
-    lsp: false,
-    mcp: {},
-    instructions: [],
-    watcher: {
-      ignore: [
-        'node_modules/**',
-        'dist/**',
-        'release/**',
-        '.git/**',
-      ],
     },
   };
 }

@@ -4732,26 +4732,24 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   function buildAgentOriginalCoverageRepairPrompt() {
-    return `请只在当前工作目录内工作。
+    return `请在当前工作目录中完成原方案覆盖修复，让 technical-plan.md 成为程序可继续解析和回写的最终正文文件。
 
-你会看到两个文件：
-1. original-coverage-sources.md：每个章节对应需要保留的来源段。
-2. technical-plan.md：当前技术方案正文。
+workspace 文件说明：
+- original-coverage-sources.md：每个章节对应需要保留的来源段，是判断原方案核心内容是否已保留的依据。
+- technical-plan.md：当前技术方案正文，包含章节标题、section id 和 yibiao-section-start / yibiao-section-end 标记。
 
-任务：
-请自行检查并修复 technical-plan.md，使每个章节正文保留 original-coverage-sources.md 中对应来源段的实质内容。
+任务目标：
+检查并修复 technical-plan.md，使各章节正文尽量保留 original-coverage-sources.md 中对应来源段的实质内容。
 
-要求：
-1. 请自主分析、定位和补写缺失内容。
-2. 只修改 technical-plan.md 中 yibiao-section-start 和 yibiao-section-end 标记之间的正文内容。
-3. 不要修改章节编号、章节标题、HTML 注释标记或 section id。
-4. 不要新增、删除、重排章节。
-5. 只补回来源段中的实质信息、技术路线、服务承诺、设备参数、人员安排、周期、验收、售后、实施方法等内容；不追求逐字一致。
-6. 如果来源段与当前正文存在明显冲突，不要强行补写，保留当前正文，后续会由全文一致性审计或人工核对处理。
-7. 不要在正文中提到“原方案”“来源段”“用户原文”或类似过程性表述。
-8. 不要访问当前工作目录外的文件。
-9. 不要联网。
-10. 修复完成后，必须把完整修复结果保存回 technical-plan.md。`;
+工作方式由你自行决定。可以搜索、分段读取、建立索引、创建草稿或中间文件，并多轮编辑 technical-plan.md；不需要按固定顺序读取文件，也不需要在单次模型输出中完成全部修复。
+
+最终 technical-plan.md 需要满足：
+- 保留所有章节编号、章节标题、HTML 注释标记和 section id。
+- 保留原章节结构，不新增、删除或重排章节。
+- 正文修改范围限定在 yibiao-section-start 和 yibiao-section-end 标记之间。
+- 补回来源段中的实质信息、技术路线、服务承诺、设备参数、人员安排、周期、验收、售后、实施方法等内容；不追求逐字一致。
+- 如果来源段与当前正文存在明显冲突，可以保留当前正文，后续会由全文一致性审计或人工核对处理。
+- 用户可见正文中不出现“原方案”“来源段”“用户原文”或类似过程性表述。`;
   }
 
   function updateAgentOriginalCoverageProgress(step, label, extra = {}) {
@@ -5338,23 +5336,23 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   function buildAgentConsistencyRepairPrompt() {
-    return `请只在当前工作目录内工作。
+    return `请在当前工作目录中完成全文一致性修复，让 technical-plan.md 成为程序可继续解析和回写的最终正文文件。
 
-你会看到两个文件：
-1. global-facts.md：全局事实变量和关键项目信息。
-2. technical-plan.md：当前技术方案正文全文。
+workspace 文件说明：
+- global-facts.md：全局事实变量、Step02 关键解析结果和需要保持一致的项目信息。
+- technical-plan.md：当前技术方案正文全文，包含章节标题、section id 和 yibiao-section-start / yibiao-section-end 标记。
 
-任务：
-请自行审计并修复 technical-plan.md，使正文不与 global-facts.md 中的全局事实变量冲突，并尽量消除正文前后矛盾。
+任务目标：
+审计并修复 technical-plan.md，使正文不与 global-facts.md 中的全局事实变量冲突，并尽量消除正文前后矛盾。
 
-要求：
-1. 请自主分析、定位和修复问题。
-2. 只修改 technical-plan.md 中 yibiao-section-start 和 yibiao-section-end 标记之间的正文内容。
-3. 不要修改章节编号、章节标题、HTML 注释标记或 section id。
-4. 不要新增、删除、重排章节。
-5. 不要访问当前工作目录外的文件。
-6. 不要联网。
-7. 修复完成后，必须把完整修复结果保存回 technical-plan.md。`;
+工作方式由你自行决定。可以搜索、分段读取、建立索引、创建草稿或中间文件，并多轮编辑 technical-plan.md；不需要按固定顺序读取文件，也不需要在单次模型输出中完成全部修复。
+
+最终 technical-plan.md 需要满足：
+- 保留所有章节编号、章节标题、HTML 注释标记和 section id。
+- 保留原章节结构，不新增、删除或重排章节。
+- 正文修改范围限定在 yibiao-section-start 和 yibiao-section-end 标记之间。
+- 修复事实冲突、前后矛盾、同一信息多处表达不一致等问题。
+- 优先以 global-facts.md 中的事实变量和关键项目信息为准。`;
   }
 
   function updateAgentConsistencyProgress(step, label, extra = {}) {

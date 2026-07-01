@@ -477,22 +477,25 @@ function getFinalAgentOutputShape(context) {
 function buildOriginalOutlineExtractionAgentPrompt(context) {
   const outputFile = context.outputFile;
   const reason = String(context.recoveryReason || '').trim();
-  return `请在当前工作目录中读取 original-plan.md，从用户提交的原方案全文中提取旧目录，并把结果写入 ${outputFile}。
+  return `请在当前工作目录中完成原方案目录提取，并把可供程序读取的结果保存到 ${outputFile}。
 
-${reason ? `本次恢复触发原因：${reason}\n` : ''}工作方式：
-1. 只基于 original-plan.md 提取原方案已有目录、章节标题和明显隐含章节，不要改写成新标书目录。
-2. 如果原文存在明确章节编号和标题，优先保留原文表达；如果没有明确编号，可按原文结构归纳章节标题。
-3. 目录最多保留四级，节点只包含 id、title、description 和 children。
-4. 编号可以自行整理，程序会再次统一编号；但层级关系必须正确。
+${reason ? `本次恢复触发原因：${reason}\n` : ''}workspace 文件说明：
+- original-plan.md：用户提交的原方案全文，是提取旧目录的主要依据。
+- final-review.json：如果存在，记录本次切换到 Agent 的原因或程序审核意见，可作为排查参考。
 
-输出要求：
-1. 必须把结果写入 ${outputFile}。
-2. ${outputFile} 必须是纯 JSON，不要包含 Markdown 代码块或解释文字。
-3. JSON 顶层格式必须为：
+工作方式由你自行决定。可以按章节标题、编号、目录页、正文层级或关键词逐步定位，也可以创建草稿、索引、中间 JSON 或笔记文件辅助分析；不需要一次性读完或一次性写完。
+
+最终需要的结果：
+- 提取原方案已有目录、章节标题和明显隐含章节，不改写成新标书目录。
+- 如果原文存在明确章节编号和标题，优先保留原文表达；如果没有明确编号，可按原文结构归纳章节标题。
+- 目录最多保留四级，节点只包含 id、title、description 和 children。
+- 编号可以自行整理，程序会再次统一编号；但层级关系需要正确。
+- 任务结束时，${outputFile} 是可被 JSON.parse 直接解析的纯 JSON 文件，不包含 Markdown 代码块或解释文字。
+- JSON 顶层格式为：
 {
   "outline": []
 }
-4. 不要输出 groups、正文 content、图片、表格、Mermaid、审查说明或额外字段。`;
+- 不输出 groups、正文 content、图片、表格、Mermaid、审查说明或额外字段。`;
 }
 
 function buildOutlineAgentRecoveryPrompt(context) {
@@ -503,30 +506,34 @@ function buildOutlineAgentRecoveryPrompt(context) {
   const outputFile = context.outputFile;
   const outputShape = getFinalAgentOutputShape(context);
   const reason = String(context.recoveryReason || '').trim();
-  return `请在当前工作目录中读取输入文件，自主修复技术标目录，并把最终结果写入 ${outputFile}。
+  return `请在当前工作目录中完成技术标目录生成或修复，并把可供程序读取的结果保存到 ${outputFile}。
 
 当前目录生成模式：${getFinalOutlineModeLabel(context)}
 
 ${reason ? `本次恢复触发原因：${reason}\n` : ''}
 
-最终目标：
-生成一份可以直接保存为技术方案目录的 JSON，目录必须覆盖技术评分要求，并解决 final-review.json 中指出的问题；如果 current-outline.json 为空或不完整，需要直接生成完整目录。
+workspace 文件说明：
+- project-overview.md：项目概述、建设背景和投标对象。
+- technical-requirements.md：技术评分要求、招标需求和需要覆盖的响应点。
+- workflow.json：本次目录模式、恢复类型和程序后续校验会使用的 hard_constraints。
+- current-outline.json：当前候选目录，可能为空、不完整或存在审核指出的问题。
+- final-review.json：程序或模型对当前目录的审核结论、问题和修改建议。
+- requirement-groups.json：如果存在，记录技术评分大类及细项，通常用于约束一级目录。
+- original-outline.json：如果存在，记录用户原方案旧目录，已有方案扩写时应尽量承接其结构。
 
-工作方式：
-1. 先阅读 project-overview.md、technical-requirements.md、current-outline.json、final-review.json 和 workflow.json。
-2. 如果存在 requirement-groups.json，必须同时阅读并保持一级目录与 groups 对齐；如果你判断 groups 本身提取错误，可以自行修正 groups 并同步修正一级目录。
-3. 如果不存在 requirement-groups.json，普通技术方案目录生成模式下需要先从 technical-requirements.md 提取 groups，并同步生成与 groups 对齐的一级目录。
-4. 如果存在 original-outline.json，请优先在原目录基础上做必要修复，不要无目的全量重写。
-5. 修复应以定向处理为主，包括删除重复项、迁移错位目录、补充缺失目录、合并明显重复目录和重新编号。
-6. 最终自行复核：目录必须满足 workflow.json 中的 hard_constraints。
+工作方式由你自行决定。可以搜索、分段读取、建立索引、创建草稿或中间 JSON，并逐步编辑 ${outputFile}；不需要按固定顺序读取文件，也不需要在单次模型输出中完成全部目录。
 
-输出要求：
-1. 必须把最终结果写入 ${outputFile}。
-2. ${outputFile} 必须是纯 JSON，不要包含 Markdown 代码块或解释文字。
-3. JSON 顶层格式必须为：
+最终需要的结果：
+- 生成一份可以直接保存为技术方案目录的 JSON，目录覆盖技术评分要求，并处理 final-review.json 中指出的问题。
+- 如果 current-outline.json 为空或不完整，可以直接构建完整目录；如果已有目录可用，优先做定向修复。
+- 如果 requirement-groups.json 存在，最终一级目录和 groups 应保持可校验的一致关系；如果你判断 groups 本身有误，可以同步修正 groups 和目录。
+- 如果 original-outline.json 存在，优先在原目录基础上补充和修复，避免无目的全量重写。
+- 修复可包括删除重复项、迁移错位目录、补充缺失目录、合并明显重复目录和重新编号。
+- 任务结束时，${outputFile} 是可被 JSON.parse 直接解析的纯 JSON 文件，不包含 Markdown 代码块或解释文字。
+- JSON 顶层格式为：
 ${outputShape}
-4. 不要输出正文 content、图片、表格、Mermaid、审查说明或额外字段。
-5. 编号可以自行整理，程序会再次统一编号；但层级关系必须正确。`;
+- 不输出正文 content、图片、表格、Mermaid、审查说明或额外字段。
+- 编号可以自行整理，程序会再次统一编号；但层级关系需要正确，并满足 workflow.json 中的 hard_constraints。`;
 }
 
 function buildOutlineAgentRecoveryFiles(context) {
@@ -575,6 +582,10 @@ function createSyntheticFinalReview(reason, error) {
 
 function getErrorMessage(error) {
   return error?.message || String(error || '未知错误');
+}
+
+function shouldForceOutlineAgentRepair(payload) {
+  return Boolean(payload?.debug_force_outline_agent_repair || payload?.debugForceOutlineAgentRepair);
 }
 
 function assertRecoverableOutlineError(error, markers) {
@@ -2131,6 +2142,17 @@ async function runFinalOutlineGate({ aiService, agentService, payload, outline, 
     workflowKind,
     outlineExpansionMode,
   };
+  if (shouldForceOutlineAgentRepair(payload)) {
+    const finalReview = createSyntheticFinalReview('开发者模式强制触发 Agent 目录修复', new Error('本次目录生成启用了强制 Agent 修复调试开关'));
+    const repaired = await repairFinalOutlineWithAgent(agentService, {
+      ...context,
+      finalReview,
+      recoveryReason: finalReview.suggestions.join('；'),
+      startLogMessage: '开发者模式已强制切换到 Agent 修复目录。',
+    }, log);
+    return { outline: repaired.outline, groups: repaired.groups || context.groups };
+  }
+
   let finalReview;
   try {
     finalReview = await reviewFinalOutline(aiService, context, log);

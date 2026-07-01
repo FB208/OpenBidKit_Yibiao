@@ -5006,6 +5006,14 @@ button {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+.outline-generation-config-body.has-dev-tools {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.outline-generation-config-body.has-expansion-mode.has-dev-tools {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
 .outline-expansion-mode-section {
   min-height: 0;
 }
@@ -5051,6 +5059,38 @@ button {
 .outline-expansion-mode-option:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.outline-agent-debug-section {
+  min-height: 0;
+}
+
+.outline-agent-debug-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px;
+  background: rgba(255, 248, 230, 0.72);
+  border: 1px solid rgba(224, 164, 57, 0.34);
+  border-radius: 16px;
+}
+
+.outline-agent-debug-option > span:first-child {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.outline-agent-debug-option strong {
+  color: #8a4f00;
+  font-size: 14px;
+}
+
+.outline-agent-debug-option small {
+  color: #8b6a31;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .outline-knowledge-picker {

@@ -1,6 +1,5 @@
 const AI_REQUEST_MAX_ATTEMPTS = 3;
-const AI_RETRY_BASE_DELAY_MS = 800;
-const AI_RETRY_MAX_DELAY_MS = 4000;
+const AI_RETRY_DELAY_MS_BY_FAILED_ATTEMPT = [3000, 5000];
 
 const RETRYABLE_HTTP_STATUS_CODES = new Set([408, 429]);
 const RETRYABLE_NETWORK_ERROR_CODES = new Set([
@@ -144,7 +143,9 @@ function isRetryableAiRequestError(error) {
 
 function getAiRetryDelayMs(failedAttempt) {
   const attempt = Math.max(1, Number(failedAttempt) || 1);
-  return Math.min(AI_RETRY_MAX_DELAY_MS, AI_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1));
+  return AI_RETRY_DELAY_MS_BY_FAILED_ATTEMPT[
+    Math.min(attempt, AI_RETRY_DELAY_MS_BY_FAILED_ATTEMPT.length) - 1
+  ];
 }
 
 function getAbortReason(signal) {

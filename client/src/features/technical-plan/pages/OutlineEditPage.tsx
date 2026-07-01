@@ -239,6 +239,8 @@ function OutlineEditPage({
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
   const [draftOutlineExpansionMode, setDraftOutlineExpansionMode] = useState<OutlineExpansionMode>(outlineExpansionMode);
   const [draftKnowledgeDocumentIds, setDraftKnowledgeDocumentIds] = useState<string[]>(referenceKnowledgeDocumentIds);
+  const [developerMode, setDeveloperMode] = useState(false);
+  const [draftForceOutlineAgentRepair, setDraftForceOutlineAgentRepair] = useState(false);
   const [knowledgeSearch, setKnowledgeSearch] = useState('');
   const [expandedKnowledgeFolderIds, setExpandedKnowledgeFolderIds] = useState<Set<string>>(new Set());
   const [knowledgeIndex, setKnowledgeIndex] = useState<KnowledgeBaseIndex>(emptyKnowledgeIndex);
@@ -285,7 +287,12 @@ function OutlineEditPage({
   useEffect(() => {
     let cancelled = false;
     window.yibiao?.config.load().then((cfg) => {
-      if (!cancelled && cfg?.export_format) {
+      if (cancelled) return;
+      setDeveloperMode(Boolean(cfg?.developer_mode));
+      if (!cfg?.developer_mode) {
+        setDraftForceOutlineAgentRepair(false);
+      }
+      if (cfg?.export_format) {
         setExportFormat(cfg.export_format);
       }
     }).catch(() => {});
@@ -338,6 +345,7 @@ function OutlineEditPage({
 
     setDraftOutlineExpansionMode(isExpansionWorkflow ? outlineExpansionMode : 'ai-complement');
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
+    setDraftForceOutlineAgentRepair(false);
     setKnowledgeSearch('');
     void loadKnowledgeIndex();
   }, [generationDialogOpen, isExpansionWorkflow, outlineExpansionMode, referenceKnowledgeDocumentIds]);
@@ -411,6 +419,7 @@ function OutlineEditPage({
       await window.yibiao?.tasks.startOutlineGeneration({
         reference_knowledge_document_ids: draftKnowledgeDocumentIds,
         outline_expansion_mode: nextOutlineExpansionMode,
+        debug_force_outline_agent_repair: developerMode && draftForceOutlineAgentRepair,
       });
       trackConfigUsage({ outline_mode: isExpansionWorkflow ? nextOutlineExpansionMode : 'aligned' });
       showToast('目录生成任务已在后台启动', 'success');
@@ -1107,8 +1116,28 @@ function OutlineEditPage({
             <Dialog.Title className="sr-only">{outlineData ? '重新生成目录' : '生成目录'}</Dialog.Title>
             <Dialog.Description className="sr-only">选择本次目录生成方式和参考知识库。</Dialog.Description>
 
-            <div className={`outline-generation-config-body${isExpansionWorkflow ? ' has-expansion-mode' : ''}`}>
+            <div className={`outline-generation-config-body${isExpansionWorkflow ? ' has-expansion-mode' : ''}${developerMode ? ' has-dev-tools' : ''}`}>
               {renderOutlineExpansionModePicker()}
+              {developerMode && (
+                <section className="outline-generation-config-section outline-agent-debug-section">
+                  <label className="outline-agent-debug-option">
+                    <span>
+                      <strong>强制 Agent 修复目录</strong>
+                      <small>本次目录生成会在最终保存前强制进入 OpenCode Agent 修复链路，用于验证 Agent workspace、结果 JSON 和程序校验。</small>
+                    </span>
+                    <span className="settings-switch-control">
+                      <input
+                        type="checkbox"
+                        checked={draftForceOutlineAgentRepair}
+                        onChange={(event) => setDraftForceOutlineAgentRepair(event.target.checked)}
+                      />
+                      <span className="settings-switch-track" aria-hidden="true">
+                        <span className="settings-switch-thumb" />
+                      </span>
+                    </span>
+                  </label>
+                </section>
+              )}
               <section className="outline-generation-config-section outline-knowledge-picker">
                 <div className="outline-generation-config-head">
                   <strong>参考知识库</strong>
