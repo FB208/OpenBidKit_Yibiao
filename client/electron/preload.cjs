@@ -47,6 +47,11 @@ const bridge = {
     chat: (request) => ipcRenderer.invoke('ai:chat', request),
     requestJson: (request) => ipcRenderer.invoke('ai:request-json', request),
     testImageModel: (config) => ipcRenderer.invoke('ai:test-image-model', config),
+    onHttpError: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('ai:http-error', listener);
+      return () => ipcRenderer.removeListener('ai:http-error', listener);
+    },
   },
   agent: {
     run: (payload) => ipcRenderer.invoke('agent:run', payload),

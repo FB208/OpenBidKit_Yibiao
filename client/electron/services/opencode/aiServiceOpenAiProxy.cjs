@@ -10,10 +10,13 @@ const {
   writeAiLog,
 } = require('../../utils/aiLog.cjs');
 const {
-  isRetryableHttpStatus,
   markAiRequestError,
   runWithAiRetry,
 } = require('../../utils/aiRetry.cjs');
+const {
+  createAiHttpErrorFromResponse,
+  emitAiHttpErrorToWindows,
+} = require('../../utils/aiHttpError.cjs');
 const {
   normalizeTokenUsage,
   recordTextTokenStats,
@@ -456,21 +459,7 @@ function createIdleTimeoutController(parentSignal, timeoutMs = DEFAULT_UPSTREAM_
 }
 
 async function createUpstreamError(response) {
-  const rawText = await response.text().catch(() => '');
-  let detail = '';
-
-  try {
-    const body = rawText ? JSON.parse(rawText) : null;
-    detail = body?.error?.message || body?.message || '';
-  } catch {
-    detail = rawText;
-  }
-
-  const error = new Error(detail || `AI 请求失败：HTTP ${response.status}`);
-  error.status = response.status;
-  error.statusCode = response.status;
-  error.raw_response_body = rawText;
-  return markAiRequestError(error, { retryable: isRetryableHttpStatus(response.status) });
+  return createAiHttpErrorFromResponse(response, `AI 请求失败：HTTP ${response.status}`, { source: 'opencode-agent' });
 }
 
 function responseHeadersFromUpstream(response, fallbackContentType) {
@@ -1161,6 +1150,7 @@ function createAiServiceOpenAiProxy({ app, configStore, timeoutMs, diagnostics, 
         },
       });
     } catch (error) {
+      emitAiHttpErrorToWindows(error);
       appendProxyDiagnostic(diagnostics, 'proxy.http.failed', {
         method: req.method || '',
         path: req.url || '',

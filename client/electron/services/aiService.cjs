@@ -5,8 +5,12 @@ const { getGeneratedImagesDir } = require('../utils/paths.cjs');
 const { createDeveloperLogger } = require('../utils/developerLog.cjs');
 const { createAiRequestQueue } = require('../utils/aiRequestQueue.cjs');
 const {
+  copyAiHttpError,
+  createAiHttpErrorFromResponse,
+  emitAiHttpErrorToWindows,
+} = require('../utils/aiHttpError.cjs');
+const {
   copyAiRequestErrorMeta,
-  isRetryableHttpStatus,
   markAiRequestError,
   runWithAiRetry,
 } = require('../utils/aiRetry.cjs');
@@ -350,7 +354,7 @@ function copyRawAiErrorResponse(source, target) {
       target[key] = source[key];
     }
   }
-  return target;
+  return copyAiHttpError(source, target);
 }
 
 function createAiResponseDataError(message, responseData) {
@@ -387,27 +391,12 @@ function saveGeneratedImage(app, image) {
   };
 }
 
-async function ensureOk(response, fallbackMessage) {
+async function ensureOk(response, fallbackMessage, options = {}) {
   if (response.ok) {
     return;
   }
 
-  let detail = '';
-  const rawText = await response.text().catch(() => '');
-  try {
-    const body = rawText ? JSON.parse(rawText) : null;
-    detail = body?.error?.message || body?.message || '';
-  } catch {
-    detail = rawText;
-  }
-
-  const error = new Error(detail || fallbackMessage);
-  if (response.status) {
-    error.status = response.status;
-    error.statusCode = response.status;
-  }
-  error.raw_response_body = rawText;
-  throw markAiRequestError(error, { retryable: isRetryableHttpStatus(response.status) });
+  throw await createAiHttpErrorFromResponse(response, fallbackMessage, { source: options.source || 'ai-service' });
 }
 
 async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, fallbackMessage, options = {}) {
@@ -428,30 +417,20 @@ async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, 
     return response;
   }
 
-  let detail = '';
-  const rawText = await response.text().catch(() => '');
-  try {
-    const body = rawText ? JSON.parse(rawText) : null;
-    detail = body?.error?.message || body?.message || '';
-  } catch {
-    detail = rawText;
-  }
+  const error = await createAiHttpErrorFromResponse(response, fallbackMessage, {
+    source: options.source || 'openai-compatible-image-model',
+    responseFormatUnsupportedChecker: isResponseFormatUnsupported,
+  });
 
-  if (requestBody.response_format && isResponseFormatUnsupported(detail)) {
+  if (requestBody.response_format && error.responseFormatUnsupported) {
     const retryBody = { ...requestBody };
     delete retryBody.response_format;
     const retryResponse = await sendRequest(retryBody);
-    await ensureOk(retryResponse, fallbackMessage);
+    await ensureOk(retryResponse, fallbackMessage, { source: options.source || 'openai-compatible-image-model' });
     return retryResponse;
   }
 
-  const error = new Error(detail || fallbackMessage);
-  if (response.status) {
-    error.status = response.status;
-    error.statusCode = response.status;
-  }
-  error.raw_response_body = rawText;
-  throw markAiRequestError(error, { retryable: isRetryableHttpStatus(response.status) });
+  throw error;
 }
 
 function extractJsonContent(content) {
@@ -838,32 +817,15 @@ async function fetchChatCompletion(app, config, body, options = {}) {
   }
 }
 
-function createAiHttpError(detail, fallbackMessage, status, rawResponseBody = '') {
-  const error = new Error(detail || fallbackMessage);
-  if (status) {
-    error.status = status;
-    error.statusCode = status;
-  }
-  error.responseFormatUnsupported = isResponseFormatUnsupported(detail);
-  error.raw_response_body = rawResponseBody;
-  return markAiRequestError(error, { retryable: isRetryableHttpStatus(status) });
-}
-
 async function ensureTextAiResponseOk(response, fallbackMessage) {
   if (response.ok) {
     return;
   }
 
-  let detail = '';
-  const rawText = await response.text().catch(() => '');
-  try {
-    const body = rawText ? JSON.parse(rawText) : null;
-    detail = body?.error?.message || body?.message || '';
-  } catch {
-    detail = rawText;
-  }
-
-  throw createAiHttpError(detail, fallbackMessage, response.status, rawText);
+  throw await createAiHttpErrorFromResponse(response, fallbackMessage, {
+    source: 'text-model',
+    responseFormatUnsupportedChecker: isResponseFormatUnsupported,
+  });
 }
 
 function appendStreamChoiceContent(choice, contentParts) {
@@ -1233,7 +1195,7 @@ async function requestGoogleImageData(baseUrl, imageConfig, requestBody, request
     throw markAiRequestError(error, { retryable: true });
   }
 
-  await ensureOk(response, fallbackMessage);
+  await ensureOk(response, fallbackMessage, { source: 'google-image-model' });
   if (requestMode === 'stream') {
     return readGoogleImageStream(response);
   }
@@ -1345,6 +1307,7 @@ async function chatWithConfig(app, config, request) {
     }
     copyRawAiErrorResponse(error, wrappedError);
     copyAiRequestErrorMeta(error, wrappedError);
+    emitAiHttpErrorToWindows(wrappedError);
     throw wrappedError;
   } finally {
     timeout.clear();
@@ -1461,7 +1424,9 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
       error: getAiErrorLogError(error, errorMessage),
       created_at: new Date().toISOString(),
     });
-    throw new Error(errorMessage);
+    const wrappedError = copyRawAiErrorResponse(error, new Error(errorMessage));
+    emitAiHttpErrorToWindows(wrappedError);
+    throw wrappedError;
   }
 }
 
@@ -1554,7 +1519,9 @@ async function testGoogleImageModel(app, config) {
       error: getAiErrorLogError(error, errorMessage),
       created_at: new Date().toISOString(),
     });
-    throw new Error(errorMessage);
+    const wrappedError = copyRawAiErrorResponse(error, new Error(errorMessage));
+    emitAiHttpErrorToWindows(wrappedError);
+    throw wrappedError;
   }
 }
 
@@ -1627,6 +1594,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
       error: getAiErrorLogError(error, error.message),
       created_at: new Date().toISOString(),
     });
+    emitAiHttpErrorToWindows(error);
     throw error;
   }
 }
@@ -1695,6 +1663,7 @@ async function generateGoogleImage(app, config, request) {
       error: getAiErrorLogError(error, error.message),
       created_at: new Date().toISOString(),
     });
+    emitAiHttpErrorToWindows(error);
     throw error;
   }
 }
@@ -1892,24 +1861,30 @@ function createAiService({ app, configStore }) {
         return { success: false, message: '请先填写文本模型 Base URL', models: [] };
       }
 
-      const data = await runWithAiRetry(async () => {
-        let response = null;
-        try {
-          response = await fetch(`${trimBaseUrl(config.base_url)}/models`, {
-            method: 'GET',
-            headers: createHeaders(config.api_key),
-          });
-        } catch (error) {
-          throw markAiRequestError(error, { retryable: true });
-        }
+      let data = null;
+      try {
+        data = await runWithAiRetry(async () => {
+          let response = null;
+          try {
+            response = await fetch(`${trimBaseUrl(config.base_url)}/models`, {
+              method: 'GET',
+              headers: createHeaders(config.api_key),
+            });
+          } catch (error) {
+            throw markAiRequestError(error, { retryable: true });
+          }
 
-        await ensureOk(response, '获取模型列表失败');
-        try {
-          return await response.json();
-        } catch (error) {
-          throw markAiRequestError(error, { retryable: true });
-        }
-      });
+          await ensureOk(response, '获取模型列表失败');
+          try {
+            return await response.json();
+          } catch (error) {
+            throw markAiRequestError(error, { retryable: true });
+          }
+        });
+      } catch (error) {
+        emitAiHttpErrorToWindows(error);
+        throw error;
+      }
 
       return {
         success: true,

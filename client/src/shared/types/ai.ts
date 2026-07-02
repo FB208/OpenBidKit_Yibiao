@@ -26,3 +26,12 @@ export interface JsonCompletionRequest<TInput = unknown> extends ChatRequestOpti
   progressLabel?: string;
   failureMessage?: string;
 }
+
+export interface AiHttpErrorPayload {
+  status: number;
+  statusText?: string;
+  contentType?: string;
+  body: string;
+  source?: string;
+  createdAt?: string;
+}
