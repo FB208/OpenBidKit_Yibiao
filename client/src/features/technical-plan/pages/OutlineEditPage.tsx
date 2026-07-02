@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, SaveOutlineRequest, TechnicalPlanWorkflowKind } from '../types';
+import type { BackgroundTaskState, SaveOutlineRequest, TechnicalPlanCustomOutlineFile, TechnicalPlanState, TechnicalPlanWorkflowKind } from '../types';
 import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
 import type { OutlineData, OutlineExpansionMode, OutlineItem } from '../../../shared/types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
@@ -15,14 +15,18 @@ interface OutlineEditPageProps {
   projectOverview: string;
   techRequirements: string;
   outlineExpansionMode: OutlineExpansionMode;
+  customOutlineFile: TechnicalPlanCustomOutlineFile | null;
   referenceKnowledgeDocumentIds: string[];
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
   contentTaskStatus?: BackgroundTaskState['status'];
   onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; outlineExpansionMode: OutlineExpansionMode }) => void;
+  onCustomOutlineImported: (state: TechnicalPlanState) => void;
   onOutlineSaved: (request: SaveOutlineRequest) => Promise<void>;
   onSortGuardChange?: (guard: OutlineSortGuard | null) => void;
 }
+
+type CustomOutlineGenerationMode = 'none' | 'custom-complement';
 
 interface OutlineSortGuard {
   hasUnsavedSort: () => boolean;
@@ -62,6 +66,24 @@ const outlineExpansionModeOptions: Array<{ value: OutlineExpansionMode; title: s
     value: 'ai-complement',
     title: outlineExpansionModeLabels['ai-complement'],
     description: '保留原方案一级目录，在其基础上补充招标评分项缺口，并可继续使用知识库增强。',
+  },
+];
+const customOutlineModeLabels: Record<CustomOutlineGenerationMode, string> = {
+  none: '招标要求优先',
+  'custom-complement': '自有大纲优先',
+};
+const customOutlineModeOptions: Array<{ value: CustomOutlineGenerationMode; title: string; description: string; requiresFile: boolean }> = [
+  {
+    value: 'none',
+    title: customOutlineModeLabels.none,
+    description: '不使用自有大纲，按招标评分要求重新规划目录。',
+    requiresFile: false,
+  },
+  {
+    value: 'custom-complement',
+    title: customOutlineModeLabels['custom-complement'],
+    description: '保留你上传大纲的一级目录骨架，再补齐招标评分项和下级响应目录。',
+    requiresFile: true,
   },
 ];
 
@@ -221,11 +243,13 @@ function OutlineEditPage({
   projectOverview,
   techRequirements,
   outlineExpansionMode,
+  customOutlineFile,
   referenceKnowledgeDocumentIds,
   outlineData,
   task,
   contentTaskStatus,
   onOutlineConfigChange,
+  onCustomOutlineImported,
   onOutlineSaved,
   onSortGuardChange,
 }: OutlineEditPageProps) {
@@ -238,6 +262,8 @@ function OutlineEditPage({
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
   const [draftOutlineExpansionMode, setDraftOutlineExpansionMode] = useState<OutlineExpansionMode>(outlineExpansionMode);
+  const [draftCustomOutlineMode, setDraftCustomOutlineMode] = useState<CustomOutlineGenerationMode>('none');
+  const [importingCustomOutline, setImportingCustomOutline] = useState(false);
   const [draftKnowledgeDocumentIds, setDraftKnowledgeDocumentIds] = useState<string[]>(referenceKnowledgeDocumentIds);
   const [developerMode, setDeveloperMode] = useState(false);
   const [draftForceOutlineAgentRepair, setDraftForceOutlineAgentRepair] = useState(false);
@@ -344,11 +370,12 @@ function OutlineEditPage({
     }
 
     setDraftOutlineExpansionMode(isExpansionWorkflow ? outlineExpansionMode : 'ai-complement');
+    setDraftCustomOutlineMode(!isExpansionWorkflow && customOutlineFile ? 'custom-complement' : 'none');
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
     setDraftForceOutlineAgentRepair(false);
     setKnowledgeSearch('');
     void loadKnowledgeIndex();
-  }, [generationDialogOpen, isExpansionWorkflow, outlineExpansionMode, referenceKnowledgeDocumentIds]);
+  }, [generationDialogOpen, isExpansionWorkflow, outlineExpansionMode, customOutlineFile, referenceKnowledgeDocumentIds]);
 
   const loadKnowledgeIndex = async () => {
     try {
@@ -381,9 +408,36 @@ function OutlineEditPage({
     }
 
     setDraftOutlineExpansionMode(isExpansionWorkflow ? outlineExpansionMode : 'ai-complement');
+    setDraftCustomOutlineMode(!isExpansionWorkflow && customOutlineFile ? 'custom-complement' : 'none');
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
     setKnowledgeSearch('');
     setGenerationDialogOpen(true);
+  };
+
+  const importCustomOutlineDocument = async () => {
+    if (generating || importingCustomOutline) {
+      return;
+    }
+
+    try {
+      setImportingCustomOutline(true);
+      const result = await window.yibiao?.technicalPlan.importCustomOutlineDocument();
+      if (!result?.success) {
+        showToast(result?.message || '未导入自有大纲', result?.message === '已取消选择' ? 'info' : 'error');
+        return;
+      }
+      if (!result.state) {
+        showToast('自有大纲解析结果为空', 'error');
+        return;
+      }
+      onCustomOutlineImported(result.state);
+      setDraftCustomOutlineMode('custom-complement');
+      showToast(result.message || '自有大纲已导入', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '自有大纲导入失败', 'error');
+    } finally {
+      setImportingCustomOutline(false);
+    }
   };
 
   const saveOutlineConfig = () => {
@@ -404,6 +458,10 @@ function OutlineEditPage({
       showToast('请先完成招标文件解析', 'info');
       return;
     }
+    if (!isExpansionWorkflow && draftCustomOutlineMode === 'custom-complement' && !customOutlineFile) {
+      showToast('请先上传自有大纲', 'info');
+      return;
+    }
 
     try {
       const startedNow = Date.now();
@@ -420,8 +478,9 @@ function OutlineEditPage({
         reference_knowledge_document_ids: draftKnowledgeDocumentIds,
         outline_expansion_mode: nextOutlineExpansionMode,
         debug_force_outline_agent_repair: developerMode && draftForceOutlineAgentRepair,
+        custom_outline_mode: !isExpansionWorkflow ? draftCustomOutlineMode : 'none',
       });
-      trackConfigUsage({ outline_mode: isExpansionWorkflow ? nextOutlineExpansionMode : 'aligned' });
+      trackConfigUsage({ outline_mode: isExpansionWorkflow ? nextOutlineExpansionMode : draftCustomOutlineMode === 'custom-complement' ? 'custom-outline' : 'aligned' });
       showToast('目录生成任务已在后台启动', 'success');
     } catch (error) {
       setStartingOutline(false);
@@ -839,6 +898,64 @@ function OutlineEditPage({
     );
   };
 
+  const renderCustomOutlinePicker = () => {
+    if (isExpansionWorkflow) {
+      return null;
+    }
+
+    return (
+      <section className="outline-generation-config-section custom-outline-section">
+        <div className="outline-generation-config-head">
+          <strong>自有大纲</strong>
+          <span>{customOutlineFile ? `${customOutlineFile.markdownChars} 字` : '未上传'}</span>
+        </div>
+        <div className="custom-outline-upload-card">
+          {customOutlineFile ? (
+            <div className="technical-document-file-pill compact">
+              <div className="technical-document-file-icon">MD</div>
+              <div className="technical-document-file-info">
+                <strong>{customOutlineFile.fileName}</strong>
+                <span>{[customOutlineFile.parserLabel, `${customOutlineFile.markdownChars} 字`].filter(Boolean).join(' · ')}</span>
+              </div>
+            </div>
+          ) : (
+            <div className="custom-outline-empty">
+              <strong>未上传自有大纲</strong>
+              <span>可上传 Word、PDF 或 Markdown 大纲草稿，作为本次目录生成的骨架。</span>
+            </div>
+          )}
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => { void importCustomOutlineDocument(); }}
+            disabled={generating || importingCustomOutline || contentMutationLocked}
+          >
+            {importingCustomOutline ? '解析中...' : customOutlineFile ? '替换大纲' : '上传大纲'}
+          </button>
+        </div>
+        <div className="outline-expansion-mode-switch custom-outline-mode-switch">
+          {customOutlineModeOptions.map((option) => {
+            const selected = draftCustomOutlineMode === option.value;
+            const disabled = generating || (option.requiresFile && !customOutlineFile);
+            return (
+              <button
+                type="button"
+                className={`outline-expansion-mode-option${selected ? ' is-selected' : ''}`}
+                key={option.value}
+                onClick={() => setDraftCustomOutlineMode(option.value)}
+                disabled={disabled}
+                aria-pressed={selected}
+              >
+                <strong>{option.title}</strong>
+                <span>{option.description}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+    );
+  };
+
   const renderKnowledgePicker = () => {
     if (loadingKnowledge) {
       return <div className="outline-knowledge-empty">正在读取知识库...</div>;
@@ -954,7 +1071,7 @@ function OutlineEditPage({
         <div>
           <span className="section-kicker">STEP 03</span>
           <strong>目录生成</strong>
-          <p>{isExpansionWorkflow ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `生成前选择参考知识库；当前参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
+          <p>{isExpansionWorkflow ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `可上传自有大纲作为目录骨架；当前自有大纲：${customOutlineFile ? customOutlineFile.fileName : '未上传'}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
         </div>
         <div className="outline-command-actions">
           <button
@@ -1116,8 +1233,9 @@ function OutlineEditPage({
             <Dialog.Title className="sr-only">{outlineData ? '重新生成目录' : '生成目录'}</Dialog.Title>
             <Dialog.Description className="sr-only">选择本次目录生成方式和参考知识库。</Dialog.Description>
 
-            <div className={`outline-generation-config-body${isExpansionWorkflow ? ' has-expansion-mode' : ''}${developerMode ? ' has-dev-tools' : ''}`}>
+            <div className={`outline-generation-config-body${isExpansionWorkflow ? ' has-expansion-mode' : ' has-custom-outline'}${developerMode ? ' has-dev-tools' : ''}`}>
               {renderOutlineExpansionModePicker()}
+              {renderCustomOutlinePicker()}
               {developerMode && (
                 <section className="outline-generation-config-section outline-agent-debug-section">
                   <label className="outline-agent-debug-option">

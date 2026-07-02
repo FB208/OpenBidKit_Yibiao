@@ -208,6 +208,16 @@ export interface TechnicalPlanOriginalPlanFile {
   updatedAt: string;
 }
 
+export interface TechnicalPlanCustomOutlineFile {
+  fileName: string;
+  markdownPath: string;
+  markdownChars: number;
+  contentHash: string;
+  parserLabel?: string;
+  importedAt?: string;
+  updatedAt: string;
+}
+
 export interface BidSectionLineRange {
   startLine: number;
   endLine: number;
@@ -230,6 +240,7 @@ export interface TechnicalPlanState {
   step: TechnicalPlanStep;
   tenderFile: TechnicalPlanTenderFile | null;
   originalPlanFile: TechnicalPlanOriginalPlanFile | null;
+  customOutlineFile: TechnicalPlanCustomOutlineFile | null;
   projectOverview: string;
   techRequirements: string;
   bidAnalysisMode: BidAnalysisMode;

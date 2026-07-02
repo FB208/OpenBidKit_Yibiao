@@ -5010,7 +5010,12 @@ button {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
-.outline-generation-config-body.has-expansion-mode.has-dev-tools {
+.outline-generation-config-body.has-custom-outline {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.outline-generation-config-body.has-expansion-mode.has-dev-tools,
+.outline-generation-config-body.has-custom-outline.has-dev-tools {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
@@ -5091,6 +5096,42 @@ button {
   color: #8b6a31;
   font-size: 12px;
   line-height: 1.6;
+}
+
+.custom-outline-section {
+  min-height: 0;
+}
+
+.custom-outline-upload-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(248, 250, 253, 0.86);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 16px;
+}
+
+.custom-outline-empty {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.custom-outline-empty strong {
+  color: var(--yb-text);
+  font-size: 14px;
+}
+
+.custom-outline-empty span {
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.custom-outline-mode-switch {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .outline-knowledge-picker {
@@ -11065,6 +11106,10 @@ button {
   }
 
   .outline-expansion-mode-switch {
+    grid-template-columns: 1fr;
+  }
+
+  .custom-outline-upload-card {
     grid-template-columns: 1fr;
   }
 

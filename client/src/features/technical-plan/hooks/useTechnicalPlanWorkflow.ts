@@ -7,6 +7,7 @@ const initialState: TechnicalPlanState = {
   step: 'document-analysis',
   tenderFile: null,
   originalPlanFile: null,
+  customOutlineFile: null,
   projectOverview: '',
   techRequirements: '',
   bidAnalysisMode: 'key',

@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 15;
+const schemaVersion = 16;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -26,6 +26,12 @@ function createInitialSchema(db) {
       original_plan_markdown_chars INTEGER NOT NULL DEFAULT 0,
       original_plan_parser_label TEXT,
       original_plan_imported_at TEXT,
+      custom_outline_file_name TEXT,
+      custom_outline_markdown_path TEXT,
+      custom_outline_markdown_hash TEXT,
+      custom_outline_markdown_chars INTEGER NOT NULL DEFAULT 0,
+      custom_outline_parser_label TEXT,
+      custom_outline_imported_at TEXT,
       pending_tender_markdown_path TEXT,
       pending_tender_file_name TEXT,
       pending_tender_parser_label TEXT,
@@ -231,6 +237,15 @@ function addTechnicalPlanBidSectionOptimization(db) {
   addColumnIfMissing(db, 'technical_plan_meta', 'bid_sections_json', 'TEXT');
   addColumnIfMissing(db, 'technical_plan_meta', 'bid_section_extraction_status', "TEXT NOT NULL DEFAULT 'idle'");
   addColumnIfMissing(db, 'technical_plan_meta', 'bid_section_extraction_error', 'TEXT');
+}
+
+function addTechnicalPlanCustomOutline(db) {
+  addColumnIfMissing(db, 'technical_plan_meta', 'custom_outline_file_name', 'TEXT');
+  addColumnIfMissing(db, 'technical_plan_meta', 'custom_outline_markdown_path', 'TEXT');
+  addColumnIfMissing(db, 'technical_plan_meta', 'custom_outline_markdown_hash', 'TEXT');
+  addColumnIfMissing(db, 'technical_plan_meta', 'custom_outline_markdown_chars', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'technical_plan_meta', 'custom_outline_parser_label', 'TEXT');
+  addColumnIfMissing(db, 'technical_plan_meta', 'custom_outline_imported_at', 'TEXT');
 }
 
 function addKnowledgeDocumentSortOrder(db) {
@@ -1074,6 +1089,18 @@ const schemaHealthColumnGroups = [
       bid_section_extraction_error: 'TEXT',
     },
   },
+  {
+    version: 16,
+    table: 'technical_plan_meta',
+    columns: {
+      custom_outline_file_name: 'TEXT',
+      custom_outline_markdown_path: 'TEXT',
+      custom_outline_markdown_hash: 'TEXT',
+      custom_outline_markdown_chars: 'INTEGER NOT NULL DEFAULT 0',
+      custom_outline_parser_label: 'TEXT',
+      custom_outline_imported_at: 'TEXT',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -1209,6 +1236,11 @@ const migrations = [
     version: 15,
     description: '新增导出模板库表结构',
     up: createExportTemplatesSchema,
+  },
+  {
+    version: 16,
+    description: '技术方案新增自有大纲文件状态',
+    up: addTechnicalPlanCustomOutline,
   },
 ];
 

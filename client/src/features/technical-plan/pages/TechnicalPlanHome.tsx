@@ -58,6 +58,7 @@ const resetState = {
   step: 'document-analysis' as TechnicalPlanStep,
   tenderFile: null,
   originalPlanFile: null,
+  customOutlineFile: null,
   projectOverview: '',
   techRequirements: '',
   bidAnalysisMode: 'key' as const,
@@ -946,6 +947,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           projectOverview={state.projectOverview}
           techRequirements={state.techRequirements}
           outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
+          customOutlineFile={state.customOutlineFile}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           outlineData={state.outlineData}
           task={state.outlineGenerationTask}
@@ -957,6 +959,9 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             }).catch((error) => {
               showToast(error instanceof Error ? error.message : '保存目录配置失败', 'error');
             });
+          }}
+          onCustomOutlineImported={(nextState) => {
+            setState((prev) => ({ ...prev, ...nextState }));
           }}
           onOutlineSaved={saveOutline}
           onSortGuardChange={(guard) => {
