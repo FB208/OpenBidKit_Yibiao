@@ -1,5 +1,120 @@
 # Task Plan
 
+## Current Task: 旧方案目录提取逻辑收敛
+
+### Goal
+按用户明确要求收敛已有方案扩写旧方案目录提取：旧方案目录提取只保留初始分段滚动处理，不做动态长度预算二次拆分，也不在旧目录提取失败时切 Agent；Step05 的“原方案还原映射”和“已还原正文优化扩写”继续按完整 messages 超 `context_length_limit * 0.7` 才切 Agent。
+
+### Phases
+- [completed] 1. 删除旧方案目录提取动态预算二次拆分函数和调用点。
+- [completed] 2. 删除旧目录提取失败后的 Agent 兜底调用。
+- [completed] 3. 保持旧方案目录补漏按初始分段逐段处理，不再二次细分。
+- [completed] 4. 运行 CJS 语法检查、客户端构建和 diff 检查。
+
+### Decisions
+- 信任 `splitOriginalPlanSourceText()` 的初始分段结果。
+- 不检查旧目录滚动 prompt 拼接长度。
+- 不拆 `previousOutline` / `outline` 完整目录 JSON。
+- 旧目录提取失败直接失败；补漏失败仍沿用现有逻辑，记录日志后使用首次提取目录。
+- 不改 Step05 两个正文 Agent 分支。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 本轮实现 | - |
+
+### Validation
+- `cd client; node --check electron\services\outlineGenerationTask.cjs` 通过。
+- `cd client; node --check electron\services\contentGenerationTask.cjs` 通过。
+- `cd client; node --check electron\services\opencode\opencodeRuntimeService.cjs` 通过。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+
+## Current Task: Agent 任务队列评审修复
+
+### Goal
+修复评审指出的并发已还原正文优化扩写问题：当多个超阈值小节同时进入 Agent 路径时，不再因为 OpenCode runtime 只允许一个 active task 而把后续小节标记失败；保持同时只运行一个 Agent 任务，但为所有 Agent 调用提供全局 FIFO 排队。
+
+### Phases
+- [completed] 1. 确认 Agent runtime 的 busy 行为和现有调用方影响范围。
+- [completed] 2. 在 OpenCode runtime 中新增全局 FIFO 队列，保留单 active task 执行约束。
+- [completed] 3. 支持排队任务按 AbortSignal 取消，避免正文生成暂停后队列悬空。
+- [completed] 4. 同步 Agent runtime 状态类型和顶部状态条排队数量展示。
+- [completed] 5. 运行 CJS 语法检查、客户端构建和 diff 检查。
+
+### Decisions
+- 队列放在 `opencodeRuntimeService.cjs`，覆盖正文生成、目录修复、自检外的所有 `agentService.runTask()` 调用。
+- `runTask()` 负责入队，内部 `runTaskNow()` 仍保持一次只执行一个 Agent 任务。
+- 设置自检在已有 active 或 queued 任务时继续返回 busy，不抢占业务队列。
+- 排队任务收到上层 AbortSignal 后从队列移除并沿用原取消/暂停错误。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 首次队列入口把 `stopped` 状态当作拒绝条件 | 复核首个 Agent 任务启动路径 | 已改为只在 `closing` 或已有 close promise 时拒绝，保留首次任务自动启动 Agent 服务的行为 |
+
+### Validation
+- `cd client; node --check electron\services\opencode\opencodeRuntimeService.cjs` 通过。
+- `cd client; node --check electron\services\contentGenerationTask.cjs` 通过。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- `git diff --check -- client/electron/services/opencode/opencodeRuntimeService.cjs client/src/shared/types/ipc.ts client/src/app/AgentRuntimeStatusBar.tsx` 通过，仅有 LF/CRLF 提示。
+
+## Current Task: Step05 超长原方案还原切 Agent
+
+### Goal
+只处理已有方案扩写 Step05 的两个超长风险点：原方案还原映射、已还原正文优化扩写。普通 AI 请求在 messages 估算长度超过文本模型上下文 `context_length_limit * 0.7` 时切换到 Agent 文件模式，由 Agent 分步处理文件并输出结果，程序读取输出后写回 SQLite/目录正文。
+
+### Phases
+- [completed] 1. 更新计划记录并确认本轮只处理两个超长点。
+- [completed] 2. 新增正文任务 messages 长度判断和 Agent JSON/Markdown 输出解析辅助函数。
+- [completed] 3. 实现原方案还原映射超阈值切 Agent，输出 assignments 后复用现有写回逻辑。
+- [completed] 4. 实现已还原正文优化扩写超阈值切 Agent，输出 optimized-section.md 后复用现有写回逻辑。
+- [completed] 5. 运行 `node --check electron\services\contentGenerationTask.cjs`、`npm run build` 和 diff 检查。
+
+### Decisions
+- 触发阈值固定为 `context_length_limit * 0.7`，只在实际构造 messages 后判断。
+- Agent 只处理超阈值请求；短文本继续走现有普通 AI 路径。
+- 原方案还原 Agent 只输出 `assignments`，不生成正文，正文仍由程序拼接真实原文。
+- 优化扩写 Agent 输出当前小节完整正文文件，程序再归一化、去标题并写回。
+- 本轮不处理覆盖审计、覆盖修复、知识库素材和其他中风险点。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 当前执行 | - |
+
+### Validation
+- `cd client; node --check electron\services\contentGenerationTask.cjs` 通过。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- `git diff --check -- client/electron/services/contentGenerationTask.cjs` 通过，仅有 LF/CRLF 提示。
+
+## Current Task: 旧方案目录提取长上下文分段
+
+### Goal
+为“已有方案扩写”的旧方案目录提取增加长上下文分段处理：短原方案保持单次提取；长原方案按段滚动提交“上一轮完整目录 + 当前段原文”，每轮输出截至当前段的完整目录 JSON；旧方案目录补漏同样分段，避免再次一次性提交完整原方案；目录结果不携带正文 content。
+
+### Phases
+- [completed] 1. 更新计划记录并确认 `outlineGenerationTask.cjs` 旧方案目录提取边界。
+- [completed] 2. 引入旧方案目录专用归一化与原文切段预算工具。
+- [completed] 3. 实现滚动分段目录提取，并保持短文本单次提取行为。
+- [completed] 4. 将旧方案目录补漏改为分段 additions 合并。
+- [completed] 5. 运行 `node --check electron\services\outlineGenerationTask.cjs` 和 `cd client; npm run build`。
+
+### Decisions
+- 旧方案目录 JSON 只保留 `id/title/description/children`，不保存正文 `content`。
+- 不新增“上一轮一级目录不能删除或重排”的程序校验，由 AI 按 prompt 尽量保留和修正。
+- 分段提取必须顺序执行，因为每段依赖上一轮完整目录。
+- 补漏阶段不再提交完整原方案全文，改为逐段基于当前完整目录返回 additions。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 当前执行 | - |
+
+### Validation
+- `cd client; node --check electron\services\outlineGenerationTask.cjs` 通过。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- `git diff --check -- client/electron/services/outlineGenerationTask.cjs task_plan.md progress.md findings.md` 通过，仅有 LF/CRLF 提示。
+
 ## Current Task: Analytics IP 统计与垃圾埋点识别
 
 ### Goal

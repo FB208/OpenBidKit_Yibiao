@@ -16,6 +16,7 @@ function shouldShowStatus(status: AgentRuntimeStatus | null) {
   if (!status) return false;
   return Boolean(
     status.active_task
+    || status.queued_count
     || status.restart_pending
     || status.phase === 'starting'
     || status.phase === 'running'
@@ -30,7 +31,7 @@ function shouldShowStatus(status: AgentRuntimeStatus | null) {
 function getTone(status: AgentRuntimeStatus) {
   if (status.phase === 'unhealthy') return 'error';
   if (status.restart_pending || status.last_health_error) return 'warning';
-  if (status.active_task || status.phase === 'running') return 'running';
+  if (status.active_task || status.queued_count || status.phase === 'running') return 'running';
   return 'info';
 }
 
@@ -58,10 +59,12 @@ function AgentRuntimeStatusBar() {
   if (!shouldShowStatus(status)) return null;
 
   const activeTask = status?.active_task || null;
-  const title = activeTask?.title || phaseLabels[status?.phase || ''] || 'Agent 状态';
-  const message = activeTask?.progress_text || status?.message || '等待 Agent 真实进度';
+  const queuedCount = status?.queued_count || 0;
+  const title = activeTask?.title || (queuedCount ? 'Agent 任务排队中' : phaseLabels[status?.phase || ''] || 'Agent 状态');
+  const message = activeTask?.progress_text || (queuedCount ? '已有 Agent 任务等待执行' : status?.message || '等待 Agent 真实进度');
   const elapsedText = activeTask ? `已运行 ${activeTask.elapsed_seconds}s` : '';
   const idleText = activeTask ? `空闲 ${activeTask.idle_seconds}s` : '';
+  const queueText = queuedCount ? `Agent 排队 ${queuedCount} 个` : '';
   const proxyText = status?.proxy ? `模型队列 ${status.proxy.active}/${status.proxy.queued}/${status.proxy.limit}` : '';
   const warningText = status?.last_health_error || (status?.restart_pending ? '配置已变更，Agent 空闲后会自动重启' : '');
 
@@ -75,6 +78,7 @@ function AgentRuntimeStatusBar() {
       <div className="agent-runtime-status-meta">
         {elapsedText && <em>{elapsedText}</em>}
         {idleText && <em>{idleText}</em>}
+        {queueText && <em>{queueText}</em>}
         {proxyText && <em>{proxyText}</em>}
       </div>
     </div>

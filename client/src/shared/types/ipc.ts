@@ -118,6 +118,13 @@ export interface AgentRuntimeStatus {
   restart_pending?: boolean;
   restart_pending_reason?: string;
   active_task?: AgentRuntimeActiveTask | null;
+  queued_count?: number;
+  queued_tasks?: Array<{
+    task_id: string;
+    title: string;
+    queued_at: string;
+    position: number;
+  }>;
   proxy?: {
     active: number;
     queued: number;

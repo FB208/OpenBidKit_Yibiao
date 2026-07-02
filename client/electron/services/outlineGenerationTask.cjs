@@ -1,4 +1,5 @@
 const { getBidAnalysisTasks } = require('./bidAnalysisTask.cjs');
+const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 
 function formatSuggestions(suggestions) {
   if (!suggestions?.length) return '';
@@ -66,6 +67,7 @@ ${childrenOutlineParentNumberingRules(parentId)}`;
 
 const DEFAULT_CONTEXT_LENGTH_LIMIT = 400000;
 const KNOWLEDGE_CONTEXT_LIMIT_RATIO = 0.7;
+const ORIGINAL_OUTLINE_SOURCE_LIMIT_RATIO = 0.55;
 const MAX_KNOWLEDGE_ADDITIONS = 60;
 const MAX_KNOWLEDGE_UPDATES = 120;
 const PROMPT_CACHE_WARMUP_DELAY_MS = 5000;
@@ -75,7 +77,6 @@ function waitForPromptCacheWarmup() {
 }
 const FINAL_AGENT_OUTPUT_FILE = 'outline-agent-result.json';
 const FINAL_AGENT_TIMEOUT_MS = 15 * 60 * 1000;
-const RECOVERABLE_OLD_OUTLINE_ERRORS = ['模型返回的旧方案目录数据格式无效'];
 const RECOVERABLE_REQUIREMENT_GROUP_ERRORS = ['模型返回的技术评分大类格式无效'];
 const RECOVERABLE_ALIGNED_OUTLINE_ERRORS = [
   '模型返回的目录数据格式无效',
@@ -102,6 +103,23 @@ function normalizePositiveInteger(value, fallback) {
 
 function getMessagesContentLength(messages) {
   return (messages || []).reduce((sum, message) => sum + String(message?.role || 'user').length + String(message?.content || '').length + 64, 0);
+}
+
+function getCurrentAiConfig(aiService) {
+  try {
+    return typeof aiService?.getConfig === 'function' ? aiService.getConfig() : {};
+  } catch {
+    return {};
+  }
+}
+
+function splitOriginalPlanSourceText(text, aiService) {
+  const source = String(text || '').trim();
+  if (!source) return [];
+  return splitUserTextByContextLimit(source, getCurrentAiConfig(aiService), {
+    limitRatio: ORIGINAL_OUTLINE_SOURCE_LIMIT_RATIO,
+    maxSegmentLimitRatio: 1,
+  }).map((content) => String(content || '').trim()).filter(Boolean);
 }
 
 function getKnowledgeSegmentLimit(aiService, sharedMessages) {
@@ -258,20 +276,46 @@ function buildExpandOutlineMessages(fileContent) {
   ];
 }
 
-function buildOriginalOutlineAdditionsMessages(originalPlanMarkdown, extractedOutline) {
+function buildOriginalOutlineRollingMessages({ segmentContent, segmentIndex, totalSegments, previousOutline }) {
+  const messages = [];
+  if (previousOutline?.outline?.length) {
+    messages.push({ role: 'user', content: `上一轮已经提取出的完整旧目录 JSON：
+${JSON.stringify(previousOutline, null, 2)}` });
+  }
+
+  messages.push({ role: 'user', content: `原方案正文分段 ${segmentIndex}/${totalSegments}：
+${segmentContent}` });
+  messages.push({
+    role: 'user',
+    content: `${readExpandOutlinePrompt()}
+
+当前正在按顺序分段阅读同一份原方案。请基于“上一轮完整旧目录”和“当前分段原文”，输出截至当前分段为止的完整旧目录 JSON。
+
+分段滚动要求：
+1. 当前段没有提到的上一轮目录，不要仅因为本段未出现就删除。
+2. 当前段如果是前文章节的延续，请把新增下级目录挂到合适的已有父级下。
+3. 当前段发现新的章节、标题或明显隐含章节时，请补充到完整目录中。
+4. 如果当前段能证明上一轮目录的层级、标题或说明不准确，可以合理修正。
+5. 只提取原方案已有目录和章节结构，不要改写成新的投标方案目录。
+6. 只返回完整 {"outline": [...]} JSON；不要返回正文 content、图片、表格、Mermaid、解释文字或 Markdown 代码块。`,
+  });
+  return messages;
+}
+
+function buildOriginalOutlineAdditionsMessages(originalPlanSegment, extractedOutline, segmentIndex = 1, totalSegments = 1) {
   return [
-    buildOriginalPlanSourceMessage(originalPlanMarkdown),
-    { role: 'user', content: `第一次提取出的目录 JSON：\n${JSON.stringify(extractedOutline, null, 2)}` },
+    { role: 'user', content: `当前已提取出的完整旧目录 JSON：\n${JSON.stringify(extractedOutline, null, 2)}` },
+    { role: 'user', content: `原方案正文分段 ${segmentIndex}/${totalSegments}：\n${originalPlanSegment}` },
     {
       role: 'user',
-      content: `你是一个严格的旧方案目录补漏专家。请基于原方案全文和第一次提取出的目录，检查是否遗漏了明显章节。
+      content: `你是一个严格的旧方案目录补漏专家。请基于当前原方案分段和已提取出的完整目录，检查当前分段中是否存在目录遗漏。
 
 本轮只做补漏，不重新生成完整目录。请只返回需要补充的目录项 JSON。
 
 要求：
 1. 只返回补充项，不要返回完整目录。
 2. 不要修改、删除、重命名、重排已有目录。
-3. parent_id 为空字符串表示追加为新的一级目录；parent_id 不为空时必须逐字复制第一次目录 JSON 中已有的 id。
+3. parent_id 为空字符串表示追加为新的一级目录；parent_id 不为空时必须逐字复制当前完整目录 JSON 中已有的 id。
 4. title 必须是目录标题；description 是目录说明，缺失时可用标题含义概括。
 5. children 可选，用于补充下级目录；不要输出超过三级目录深度的内容。
 6. 不要依赖或生成最终编号，程序会在合并后重新编号。
@@ -712,7 +756,7 @@ function normalizeOriginalOutlineAgentResult(value) {
     : Array.isArray(raw.outline)
       ? { outline: raw.outline }
       : raw.outline;
-  const parsedOutline = normalizeOutlineResponse(outlineSource, new Set());
+  const parsedOutline = normalizeOriginalOutlineResponse(outlineSource);
   const outline = finalizeOriginalOutline(parsedOutline);
   validateTopLevelOutline(outline);
   return { outline };
@@ -1112,6 +1156,22 @@ function normalizeOutlineResponse(payload, allowedKnowledgeIds) {
   return { outline: outline.map((item, index) => normalizeOutlineItem(item, `outline[${index}]`, allowedKnowledgeIds)) };
 }
 
+function stripOriginalOutlineItem(item) {
+  const normalized = {
+    id: String(item?.id || '').trim(),
+    title: String(item?.title || '').trim(),
+    description: String(item?.description || item?.title || '').trim(),
+  };
+  const children = (item?.children || []).map(stripOriginalOutlineItem).filter((child) => child.title);
+  if (children.length) normalized.children = children;
+  return normalized;
+}
+
+function normalizeOriginalOutlineResponse(payload) {
+  const normalized = normalizeOutlineResponse(payload, new Set());
+  return { outline: (normalized.outline || []).map(stripOriginalOutlineItem).filter((item) => item.title) };
+}
+
 function normalizeChildrenResponse(payload, allowedKnowledgeIds) {
   const raw = requireObject(payload, 'OutlineChildrenResponse');
   const children = requireArray(raw.children, 'children');
@@ -1352,10 +1412,10 @@ function applyOriginalOutlineAdditions(outlinePayload, additions) {
 }
 
 function finalizeOriginalOutline(outlinePayload) {
-  return normalizeOutlineResponse({
+  return normalizeOriginalOutlineResponse({
     ...outlinePayload,
     outline: renumber(outlinePayload?.outline || []),
-  }, new Set());
+  });
 }
 
 function countNestedArrayEntries(value, fieldName) {
@@ -2050,64 +2110,129 @@ async function collectJson(aiService, options) {
   return aiService.collectJsonResponse ? aiService.collectJsonResponse(options) : aiService.requestJson(options);
 }
 
-async function extractOriginalOutline(aiService, agentService, payload, originalPlanMarkdown, log) {
-  log('正在从原方案中提取旧目录。', 8);
-  let outline;
-  try {
-    outline = await collectJson(aiService, {
-      messages: buildExpandOutlineMessages(originalPlanMarkdown),
+async function extractOriginalOutlineOnce(aiService, originalPlanMarkdown, log) {
+  return collectJson(aiService, {
+    messages: buildExpandOutlineMessages(originalPlanMarkdown),
+    temperature: 0.7,
+    normalizer: normalizeOriginalOutlineResponse,
+    validator: validateTopLevelOutline,
+    progressCallback: (message) => log(message, 12),
+    progressLabel: '旧方案目录提取',
+    failureMessage: '模型返回的旧方案目录数据格式无效',
+  });
+}
+
+async function extractOriginalOutlineBySegments(aiService, originalPlanMarkdown, log) {
+  const sourceSegments = splitOriginalPlanSourceText(originalPlanMarkdown, aiService);
+  const initialSegments = sourceSegments.length ? sourceSegments : [String(originalPlanMarkdown || '').trim()];
+  if (initialSegments.length <= 1) {
+    const outline = await extractOriginalOutlineOnce(aiService, initialSegments[0] || originalPlanMarkdown, log);
+    return { outline, segments: initialSegments };
+  }
+
+  const segments = initialSegments.map((content) => ({ content }));
+  log(`原方案内容较长，已拆分为 ${segments.length} 段，开始滚动提取旧目录。`, 9);
+
+  let currentOutline = null;
+  let index = 0;
+  while (index < segments.length) {
+    const segment = segments[index];
+    const buildMessages = (segmentContent) => buildOriginalOutlineRollingMessages({
+      segmentContent,
+      segmentIndex: index + 1,
+      totalSegments: segments.length,
+      previousOutline: currentOutline,
+    });
+
+    currentOutline = await collectJson(aiService, {
+      messages: buildMessages(segment.content),
       temperature: 0.7,
-      normalizer: (value) => normalizeOutlineResponse(value, new Set()),
+      normalizer: normalizeOriginalOutlineResponse,
       validator: validateTopLevelOutline,
       progressCallback: (message) => log(message, 12),
-      progressLabel: '旧方案目录提取',
+      progressLabel: `旧方案目录提取 ${index + 1}/${segments.length}`,
       failureMessage: '模型返回的旧方案目录数据格式无效',
     });
-  } catch (error) {
-    assertRecoverableOutlineError(error, RECOVERABLE_OLD_OUTLINE_ERRORS);
-    const finalReview = createSyntheticFinalReview('旧方案目录提取失败', error);
-    const recovered = await runOutlineAgentRecovery(agentService, {
-      recoveryKind: 'original-outline-extraction',
-      title: '原方案目录自主提取',
-      payload,
-      originalPlanMarkdown,
-      outline: { outline: [] },
-      groups: [],
-      finalReview,
-      workflowKind: 'existing-plan-expansion',
-      outlineExpansionMode: payload?.outlineExpansionMode || 'ai-complement',
-      recoveryReason: finalReview.suggestions.join('；'),
-      startLogMessage: `旧方案目录提取失败，已切换到 Agent 从原方案提取目录：${getErrorMessage(error)}`,
-      startProgress: 14,
-      validationLogMessage: 'Agent 已完成旧目录提取，正在校验目录结构。',
-      validationProgress: 16,
-      successLogMessage: 'Agent 旧目录提取结果通过程序校验。',
-      successProgress: 18,
-    }, log);
-    return recovered.outline;
-  }
-  log('原方案旧目录提取完成，正在检查目录缺漏。', 14);
 
-  let additions = { additions: [] };
-  try {
-    additions = await collectJson(aiService, {
-      messages: buildOriginalOutlineAdditionsMessages(originalPlanMarkdown, outline),
+    log(
+      `已完成旧目录滚动提取 ${index + 1}/${segments.length}。`,
+      Math.min(14, 9 + Math.round(((index + 1) / Math.max(segments.length, 1)) * 5)),
+    );
+    index += 1;
+  }
+
+  if (!currentOutline?.outline?.length) {
+    throw new Error('模型返回的旧方案目录数据格式无效');
+  }
+  return { outline: currentOutline, segments: segments.map((segment) => segment.content) };
+}
+
+async function collectOriginalOutlineAdditionsBySegments(aiService, outline, originalPlanSegments, log) {
+  const initialSegments = (originalPlanSegments || []).map((content) => String(content || '').trim()).filter(Boolean);
+  if (!initialSegments.length) return { outline, appliedCount: 0 };
+
+  const segments = initialSegments.map((content) => ({ content }));
+  if (segments.length > 1) {
+    log(`原方案旧目录补漏将按 ${segments.length} 段逐段检查。`, 15);
+  }
+
+  let rollingOutline = outline;
+  let appliedCount = 0;
+  let index = 0;
+  while (index < segments.length) {
+    const segment = segments[index];
+    const buildMessages = (segmentContent) => buildOriginalOutlineAdditionsMessages(
+      segmentContent,
+      rollingOutline,
+      index + 1,
+      segments.length,
+    );
+
+    const response = await collectJson(aiService, {
+      messages: buildMessages(segment.content),
       temperature: 0.3,
       normalizer: normalizeOriginalOutlineAdditionsResponse,
       progressCallback: (message) => log(message, 16),
-      progressLabel: '旧方案目录补漏',
+      progressLabel: `旧方案目录补漏 ${index + 1}/${segments.length}`,
       failureMessage: '模型返回的旧方案目录补漏数据格式无效',
     });
+    const mergeResult = response.additions?.length
+      ? applyOriginalOutlineAdditions(rollingOutline, response.additions)
+      : { outline: rollingOutline, appliedCount: 0 };
+    if (mergeResult.appliedCount) {
+      rollingOutline = finalizeOriginalOutline(mergeResult.outline);
+      appliedCount += mergeResult.appliedCount;
+    }
+    if (segments.length > 1) {
+      log(mergeResult.appliedCount
+        ? `已完成旧方案目录补漏分段 ${index + 1}/${segments.length}，新增 ${mergeResult.appliedCount} 个目录项。`
+        : `已完成旧方案目录补漏分段 ${index + 1}/${segments.length}。`, 16);
+    }
+    index += 1;
+  }
+
+  return { outline: rollingOutline, appliedCount };
+}
+
+async function extractOriginalOutline(aiService, originalPlanMarkdown, log) {
+  log('正在从原方案中提取旧目录。', 8);
+  const extracted = await extractOriginalOutlineBySegments(aiService, originalPlanMarkdown, log);
+  const outline = extracted.outline;
+  const originalPlanSegments = extracted.segments;
+  log('原方案旧目录提取完成，正在检查目录缺漏。', 14);
+
+  let finalizedOutline = finalizeOriginalOutline(outline);
+  let appliedCount = 0;
+  try {
+    const additions = await collectOriginalOutlineAdditionsBySegments(aiService, outline, originalPlanSegments, log);
+    finalizedOutline = finalizeOriginalOutline(additions.outline);
+    appliedCount = additions.appliedCount || 0;
   } catch (error) {
     log(`旧方案目录补漏失败，已使用首次提取目录：${error.message || '未知错误'}`, 17);
   }
 
-  const mergeResult = additions.additions.length
-    ? applyOriginalOutlineAdditions(outline, additions.additions)
-    : { outline, appliedCount: 0 };
-  const finalizedOutline = finalizeOriginalOutline(mergeResult.outline);
-  log(mergeResult.appliedCount
-    ? `原方案旧目录补漏完成，新增 ${mergeResult.appliedCount} 个目录项。`
+  log(appliedCount
+    ? `原方案旧目录补漏完成，新增 ${appliedCount} 个目录项。`
     : '未发现旧目录缺漏，已整理目录编号。', 18);
   return finalizedOutline;
 }
@@ -2580,7 +2705,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     if (!String(originalPlanMarkdown || '').trim()) {
       throw new Error('请先上传原方案，再生成目录');
     }
-    oldOutline = await extractOriginalOutline(aiService, agentService, baseTaskPayload, originalPlanMarkdown, log);
+    oldOutline = await extractOriginalOutline(aiService, originalPlanMarkdown, log);
   }
 
   technicalPlan = workspaceStore.updateTechnicalPlan({

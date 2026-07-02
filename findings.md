@@ -1,6 +1,13 @@
 # Findings
 
 ## Research Log
+- 旧方案目录提取最终执行边界已按用户明确要求收敛：只信任 `splitOriginalPlanSourceText()` 初始分段；不再对滚动提取或补漏的拼接 messages 做动态长度预算判断；不再因上一轮目录或完整目录变长而二次细分；旧目录提取失败不再走 Agent 兜底。
+- Agent busy 评审根因确认：`opencodeRuntimeService.cjs` 原 `runTask()` 在 `activeTask` 存在时直接返回 `{ status: 'busy', skipped: true }`；`contentGenerationTask.cjs` 的普通 worker pool 在 `contentConcurrency > 1` 时会并发触发多个超阈值 Agent 小节，后续小节因此进入失败处理，而不是等待前一个 Agent 完成。
+- Agent 队列应放在全局 OpenCode runtime，而不是只在正文任务局部串行化；这样目录修复、正文优化扩写、覆盖修复等所有 `agentService.runTask()` 调用共享同一个单执行队列，保持 OpenCode runtime 一次只跑一个任务的约束。
+- Step05 原方案还原映射和已还原正文优化扩写此前都在 `contentGenerationTask.cjs` 中直接构造完整 messages 后调用 `aiService.collectJsonResponse()` / `aiService.chat()`；`aiService` 不会自动按上下文切割，因此超长原方案或超长还原正文会直接撞模型上下文上限。
+- 本轮 Step05 只处理两个高风险点：还原映射属于结构化归属判断，Agent 输出 `assignments` 后仍由程序拼接真实原文；已还原正文优化扩写属于长正文产出，Agent 输出单个小节正文文件后仍由程序归一化、去标题并写回 Store。
+- 旧方案目录提取当前在 `outlineGenerationTask.cjs` 里直接用 `buildExpandOutlineMessages(originalPlanMarkdown)` 一次性提交完整原方案；旧方案补漏也用 `buildOriginalOutlineAdditionsMessages(originalPlanMarkdown, outline)` 一次性提交全文。`aiService.collectJsonResponse/requestJson` 不会自动切割，因此必须在业务任务内显式分段。
+- 旧方案目录 JSON 设计上只应包含目录结构，不包含正文；本轮应使用旧方案专用归一化剥离模型误返回的 `content`，避免污染后续 `outlineData`。
 - IP 统计实现边界：公网 IP 只从 Worker 请求头 `CF-Connecting-IP` 获取，不接受客户端自报；AE 使用空闲 `blob13` 保存 `client_ip`；长期聚合写入 `stats_clients.last_access_ip`，Dashboard IP 统计从 D1 分组分页，避免对 AE 做高基数分页查询。
 - 本轮补字段边界已确认：`stats_versions.client_count` 只来自 `stats_clients.last_active_version` 当前分组重算覆盖；`stats_models.total_tokens` 来自 AE `ai_request` 的 `SUM(double4 * _sample_interval)` 并历史累加；页面访问排行不增加客户端数。
 - 当前 `analyticsStatsStore.js` 历史访问查询只返回 `stats_versions.event_count`，近期 AE 版本查询只返回事件数；需要同步返回版本客户端数。当前模型查询和 rollup 只处理 `request_count`，需要同步返回/写入 `total_tokens`。

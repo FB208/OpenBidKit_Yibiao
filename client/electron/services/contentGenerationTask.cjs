@@ -6,6 +6,8 @@ const { applyRangeEdits } = require('../utils/textEdit.cjs');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 
 const IMAGE_STYLES = new Set(['engineering_diagram', 'realistic_photo']);
+const DEFAULT_CONTEXT_LENGTH_LIMIT = 400000;
+const AGENT_CONTEXT_THRESHOLD_RATIO = 0.7;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
 const MERMAID_REPAIR_ATTEMPTS = 3;
@@ -435,6 +437,45 @@ function normalizeOriginalPlanCoverageRepairMode(value) {
 function normalizeMinimumWords(value) {
   const words = Number(value);
   return Math.max(0, Number.isFinite(words) ? Math.round(words) : 0);
+}
+
+function normalizePositiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
+}
+
+function getMessageContentLength(content) {
+  if (typeof content === 'string') {
+    return content.length;
+  }
+  if (Array.isArray(content)) {
+    return content.reduce((sum, item) => sum + getMessageContentLength(item?.text ?? item?.content ?? item), 0);
+  }
+  if (content === undefined || content === null) {
+    return 0;
+  }
+  return JSON.stringify(content).length;
+}
+
+function getMessagesContentLength(messages) {
+  return (Array.isArray(messages) ? messages : []).reduce((sum, message) => (
+    sum + String(message?.role || '').length + getMessageContentLength(message?.content)
+  ), 0);
+}
+
+function getTextContextLengthLimit(aiService) {
+  let config = {};
+  try {
+    config = aiService?.getConfig?.() || {};
+  } catch {
+    config = {};
+  }
+  return normalizePositiveInteger(config.context_length_limit, DEFAULT_CONTEXT_LENGTH_LIMIT);
+}
+
+function shouldUseAgentForMessages(aiService, messages) {
+  const contextLengthLimit = getTextContextLengthLimit(aiService);
+  return getMessagesContentLength(messages) > Math.floor(contextLengthLimit * AGENT_CONTEXT_THRESHOLD_RATIO);
 }
 
 function normalizeContentConcurrency(value) {
@@ -1224,6 +1265,108 @@ function buildOriginalMaterialRestoreMessages({ targets, originalSegments, proje
   ];
 }
 
+function buildAgentOriginalMaterialRestorePrompt() {
+  return `你是投标技术方案原文归属判断 Agent。用户提供的原方案是本次已有方案扩写的核心草稿，请基于 workspace 输入文件判断每个原方案段落应该还原到当前目录的哪个叶子小节。
+
+workspace 文件：
+- context.md：招标文件关键信息和全局事实变量标题清单。
+- restore-targets.md：当前可还原叶子节点，包含 node_id、标题、描述、上级章节和同级章节。
+- original-segments.md：原方案段落，包含 source_id、标题路径、字符数和原文。
+
+工作要求：
+1. 你可以分批读取、建立索引和创建临时草稿，但最终只写入 original-restore-result.json。
+2. 只判断归属映射，严禁改写、总结或生成正文。
+3. node_id 必须逐字使用 restore-targets.md 中给出的 ID。
+4. source_ids 必须逐字使用 original-segments.md 中给出的编号。
+5. 每个原方案段默认只分配给一个最匹配的主节点；如果完全不适合当前叶子节点，可以不分配。
+6. 优先按标题语义、章节职责、技术路线和同级章节边界归属，避免把同一内容拆散到无关章节。
+7. 不要修改业务数据库、不要生成 technical-plan.md，程序会读取你的输出文件后自行写回。
+
+最终输出文件 original-restore-result.json 必须是合法 JSON，格式如下：
+{
+  "assignments": [
+    { "node_id": "1.1", "source_ids": ["P001", "P002"] }
+  ]
+}`;
+}
+
+function buildAgentOriginalMaterialRestoreFiles({ targets, originalSegments, projectOverview, bidAnalysisFactsText, globalFactTitlesText }) {
+  return [
+    {
+      path: 'context.md',
+      content: `# 招标文件关键信息
+${formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText)}
+
+# Step04 全局事实变量标题清单
+${globalFactTitlesText || '未提供'}`,
+    },
+    {
+      path: 'restore-targets.md',
+      content: `# 当前可还原叶子节点
+${formatRestoreTargetsForPrompt(targets) || '无'}`,
+    },
+    {
+      path: 'original-segments.md',
+      content: `# 原方案段落
+${formatOriginalSegmentsForPrompt(originalSegments)}`,
+    },
+  ];
+}
+
+function buildAgentRestoredChapterContentPrompt() {
+  return `你是投标技术方案正文优化扩写 Agent。当前章节已经从用户原方案中还原出正文底稿，该底稿是用户已经写好的真实技术方案内容，必须作为本章节的基础保留。
+
+workspace 文件：
+- chapter-context.md：当前章节信息、项目概述、本章节全局事实变量、用户额外要求和正文编排决策。
+- restored-content.md：已还原正文底稿。
+- knowledge-contents.md：可参考的正文素材，如无则为“无”。
+
+工作要求：
+1. 首要遵从 restored-content.md，不要从零重写成另一套方案。
+2. 必须保留底稿中的实质信息、技术路线、服务承诺、设备参数、人员安排、周期、验收、售后和实施方法。
+3. 可以调整语序、合并重复表达、提升专业性、补充细节、增加过渡和说明，让正文更完整、更适合投标文件。
+4. 结合 chapter-context.md 中的项目概述、全局事实变量和正文编排决策；如存在冲突，以全局事实变量为准。
+5. 可以吸收 knowledge-contents.md 中适合当前章节的技术素材，但不要提到“知识库”“历史文档”“参考资料”或素材来源。
+6. 不要提到“原方案”“历史文档”“用户原文”或“底稿”。
+7. 严禁输出 Mermaid、PlantUML、Graphviz、flowchart、graph、sequenceDiagram 等图表代码块、mermaid.ink 链接或图片 Markdown。
+8. 不要输出章节标题、Markdown 标题、解释、总结或过程说明。
+9. 不要修改业务数据库，程序会读取你的输出文件后自行写回。
+
+最终请把当前小节完整正文写入 optimized-section.md。该文件只能包含正文内容，不要包含标题或说明。`;
+}
+
+function buildAgentRestoredChapterContentFiles({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent }) {
+  return [
+    {
+      path: 'chapter-context.md',
+      content: `# 当前章节
+章节ID: ${chapter?.id || 'unknown'}
+章节标题: ${chapter?.title || '未命名章节'}
+章节描述: ${chapter?.description || '无'}
+
+# 项目概述信息
+${projectOverview || '未提供'}
+
+# 本章节需要使用的全局事实变量
+${String(selectedFactsText || '').trim() || '未提供'}
+
+# 用户对本次重新生成的额外要求
+${String(regenerateRequirement || '').trim() || '无'}
+
+# 正文编排决策
+${contentPlan ? formatContentPlanForPrompt(contentPlan) : '无'}`,
+    },
+    {
+      path: 'restored-content.md',
+      content: String(restoredContent || '').trim(),
+    },
+    {
+      path: 'knowledge-contents.md',
+      content: knowledgeContents?.length ? formatKnowledgeContentsForPrompt(knowledgeContents) : '无',
+    },
+  ];
+}
+
 function normalizeOriginalRestoreAssignments(value, context) {
   const source = value?.result && typeof value.result === 'object' ? value.result : value || {};
   const rawAssignments = Array.isArray(source)
@@ -1618,6 +1761,80 @@ function buildContentExpansionRepairMessages({ invalidContent, issues }) {
 
 function normalizeNewlines(text) {
   return String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function extractFencedAgentJsonBlocks(content) {
+  const blocks = [];
+  const pattern = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let match;
+  while ((match = pattern.exec(String(content || '')))) {
+    blocks.push(match[1]);
+  }
+  return blocks;
+}
+
+function extractBalancedAgentJsonCandidate(content) {
+  const source = String(content || '');
+  const start = source.search(/[\[{]/);
+  if (start < 0) return '';
+
+  const stack = [];
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') {
+      stack.push('}');
+      continue;
+    }
+    if (char === '[') {
+      stack.push(']');
+      continue;
+    }
+    if (char === '}' || char === ']') {
+      if (stack[stack.length - 1] !== char) return '';
+      stack.pop();
+      if (!stack.length) return source.slice(start, index + 1);
+    }
+  }
+
+  return '';
+}
+
+function parseAgentJsonContent(content) {
+  const normalized = String(content || '').replace(/^\uFEFF/, '').trim();
+  const candidates = [
+    normalized,
+    ...extractFencedAgentJsonBlocks(normalized),
+    extractBalancedAgentJsonCandidate(normalized),
+  ].map((item) => String(item || '').trim()).filter(Boolean);
+  const uniqueCandidates = [...new Set(candidates)];
+  let lastError = null;
+
+  for (const candidate of uniqueCandidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(`Agent 未返回可解析的 JSON：${lastError?.message || '内容为空'}`);
 }
 
 function stripPromptLineNumbers(text) {
@@ -3489,6 +3706,75 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     throw createContentGenerationPausedError();
   }
 
+  async function runContentAgentTask({ title, prompt, outputFile, files, eventPrefix, activityLabel, timeoutMs, startPauseMessage, resultPauseMessage, pausedLogMessage }) {
+    if (!agentService?.runTask) {
+      writeDeveloperLog(`${eventPrefix}.unavailable`, { title, output_file: outputFile });
+      throw new Error(`Agent 服务尚未初始化，无法执行${title}`);
+    }
+
+    function updateContentAgentProgress(_step, label) {
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    }
+
+    const agentAbortController = new AbortController();
+    let pauseWatcher = null;
+    let pauseLogged = false;
+    function abortAgentIfPauseRequested() {
+      if (!isPauseRequested()) {
+        return;
+      }
+      if (!pauseLogged) {
+        pauseLogged = true;
+        logs = [...logs, `已请求暂停${title}，正在取消本轮 Agent 任务。`];
+        updateContentAgentProgress(0, `正在取消${title}，继续后将重新执行`);
+      }
+      if (!agentAbortController.signal.aborted) {
+        agentAbortController.abort(createContentGenerationPausedError());
+      }
+    }
+    pauseWatcher = setInterval(abortAgentIfPauseRequested, 1000);
+
+    try {
+      abortAgentIfPauseRequested();
+      pauseIfRequested(startPauseMessage || `正文生成已在${title}开始前暂停，本次 Agent 未启动；继续后将重新执行。`);
+      const agentResult = await runAgentTaskWithRecoveredOutput({
+        title,
+        prompt,
+        output_file: outputFile,
+        files,
+        timeout_ms: timeoutMs || 30 * 60 * 1000,
+        signal: agentAbortController.signal,
+        onActivity: createAgentActivityProgressHandler(updateContentAgentProgress, 0, activityLabel || title),
+      }, eventPrefix);
+      if (isAgentBusyResult(agentResult)) {
+        writeDeveloperLog(`${eventPrefix}.busy`, { active_task: agentResult?.active_task || null });
+        throw new Error(`Agent 正在处理其他任务，无法执行${title}`);
+      }
+      pauseIfRequested(resultPauseMessage || `正文生成已在${title}结果回写前暂停，本次 Agent 输出未回写；继续后将重新执行。`);
+
+      const outputContent = String(agentResult?.output_content || '').trim();
+      if (!outputContent) {
+        writeDeveloperLog(`${eventPrefix}.empty_output`, { agent_result: agentResult, output_file: outputFile });
+        throw new Error(`Agent 未返回 ${outputFile}`);
+      }
+      return { agentResult, outputContent };
+    } catch (error) {
+      if (isPauseRequested() || isPauseLikeError(error)) {
+        logs = [...logs, pausedLogMessage || `${title}已暂停：本轮 Agent 已取消并清理，继续后将重新执行。`];
+        writeDeveloperLog(`${eventPrefix}.paused`, {
+          title,
+          output_file: outputFile,
+          error: error.message || String(error),
+        });
+        updateContentAgentProgress(0, `${title}已暂停，继续后将重新执行`);
+        pauseIfRequested(`正文生成已在${title}阶段暂停，本次 Agent 已取消；继续后将重新执行。`);
+      }
+      throw error;
+    } finally {
+      if (pauseWatcher) clearInterval(pauseWatcher);
+    }
+  }
+
   async function waitForPromptCacheWarmupBeforeFanout(message) {
     logs = [...logs, message];
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
@@ -3935,26 +4221,69 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     if (restoreTargets.length) {
       const allowedNodeIds = new Set(restoreTargets.map(({ item }) => item.id).filter(Boolean));
       const allowedSourceIds = new Set(originalPlanSegments.map((segment) => segment.id));
-      const result = await aiService.collectJsonResponse({
-        messages: buildOriginalMaterialRestoreMessages({
-          targets: restoreTargets,
-          originalSegments: originalPlanSegments,
-          projectOverview,
-          bidAnalysisFactsText,
-          globalFactTitlesText,
-        }),
-        temperature: 0.1,
-        logTitle: '原方案正文还原映射',
-        progressLabel: '原方案还原',
-        failureMessage: '模型返回的原方案还原映射格式无效',
-        normalizer: (value) => normalizeOriginalRestoreAssignments(value, { allowedNodeIds, allowedSourceIds }),
-        validator: validateOriginalRestoreAssignments,
-        repairMessagesBuilder: (context) => buildOriginalRestoreRepairMessages(context, restoreTargets, originalPlanSegments),
-        progressCallback: (message) => {
-          logs = [...logs, message || '原方案还原映射格式校验失败，正在修复'];
-          updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
-        },
+      const restoreMessages = buildOriginalMaterialRestoreMessages({
+        targets: restoreTargets,
+        originalSegments: originalPlanSegments,
+        projectOverview,
+        bidAnalysisFactsText,
+        globalFactTitlesText,
       });
+      let result;
+      if (shouldUseAgentForMessages(aiService, restoreMessages)) {
+        const messagesLength = getMessagesContentLength(restoreMessages);
+        const contextLengthLimit = getTextContextLengthLimit(aiService);
+        logs = [...logs, `原方案还原映射提示词 ${messagesLength} 字符，超过上下文阈值 ${Math.floor(contextLengthLimit * AGENT_CONTEXT_THRESHOLD_RATIO)}，切换 Agent 文件模式。`];
+        writeDeveloperLog('original_restore.agent.start', {
+          message_chars: messagesLength,
+          context_length_limit: contextLengthLimit,
+          threshold_ratio: AGENT_CONTEXT_THRESHOLD_RATIO,
+          target_count: restoreTargets.length,
+          original_segment_count: originalPlanSegments.length,
+        });
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+        const { agentResult, outputContent } = await runContentAgentTask({
+          title: '原方案正文还原映射 Agent',
+          prompt: buildAgentOriginalMaterialRestorePrompt(),
+          outputFile: 'original-restore-result.json',
+          files: buildAgentOriginalMaterialRestoreFiles({
+            targets: restoreTargets,
+            originalSegments: originalPlanSegments,
+            projectOverview,
+            bidAnalysisFactsText,
+            globalFactTitlesText,
+          }),
+          eventPrefix: 'original_restore.agent',
+          activityLabel: 'Agent 正在判断原方案段落归属',
+          startPauseMessage: '正文生成已在原方案还原 Agent 映射开始前暂停，本次 Agent 未启动；继续后将重新执行。',
+          resultPauseMessage: '正文生成已在原方案还原 Agent 映射回写前暂停，本次 Agent 输出未回写；继续后将重新执行。',
+          pausedLogMessage: '原方案还原 Agent 映射已暂停：本轮 Agent 已取消并清理，继续后将重新执行。',
+        });
+        const parsed = parseAgentJsonContent(outputContent);
+        result = normalizeOriginalRestoreAssignments(parsed, { allowedNodeIds, allowedSourceIds });
+        validateOriginalRestoreAssignments(result);
+        pauseIfRequested('正文生成已在原方案还原 Agent 映射回写前暂停，本次 Agent 输出未回写；继续后将重新执行。');
+        writeDeveloperLog('original_restore.agent.validated', {
+          assignment_count: result.assignments.length,
+          agent_task_id: agentResult?.task_id || '',
+          agent_session_id: agentResult?.session_id || '',
+          output_metrics: textMetrics(outputContent),
+        });
+      } else {
+        result = await aiService.collectJsonResponse({
+          messages: restoreMessages,
+          temperature: 0.1,
+          logTitle: '原方案正文还原映射',
+          progressLabel: '原方案还原',
+          failureMessage: '模型返回的原方案还原映射格式无效',
+          normalizer: (value) => normalizeOriginalRestoreAssignments(value, { allowedNodeIds, allowedSourceIds }),
+          validator: validateOriginalRestoreAssignments,
+          repairMessagesBuilder: (context) => buildOriginalRestoreRepairMessages(context, restoreTargets, originalPlanSegments),
+          progressCallback: (message) => {
+            logs = [...logs, message || '原方案还原映射格式校验失败，正在修复'];
+            updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+          },
+        });
+      }
 
       const targetById = new Map(restoreTargets.map((context) => [context.item.id, context]));
       for (const assignment of result.assignments || []) {
@@ -4045,14 +4374,60 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       originalMaterial = originalState.originalMaterial;
       const knowledgeContents = resolveKnowledgeContents(contentPlan.knowledge?.item_ids, knowledgeContentMap);
       const selectedFactsText = resolveSelectedFactsText(contentPlan, globalFacts);
+      const contentMessages = needsRestoredOptimization
+        ? buildRestoredChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent: previousContent })
+        : buildChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents });
 
-      const generatedContent = await aiService.chat({
-        messages: needsRestoredOptimization
-          ? buildRestoredChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent: previousContent })
-          : buildChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents }),
-        temperature: 0.7,
-        logTitle: `${needsRestoredOptimization ? '原方案优化扩写' : '正文生成'}-${item.id}-${item.title || '未命名章节'}`,
-      });
+      let generatedContent;
+      if (needsRestoredOptimization && shouldUseAgentForMessages(aiService, contentMessages)) {
+        const messagesLength = getMessagesContentLength(contentMessages);
+        const contextLengthLimit = getTextContextLengthLimit(aiService);
+        logs = [...logs, `已还原正文优化扩写提示词 ${messagesLength} 字符，超过上下文阈值 ${Math.floor(contextLengthLimit * AGENT_CONTEXT_THRESHOLD_RATIO)}，切换 Agent 文件模式：${item.id} ${item.title || '未命名章节'}。`];
+        writeDeveloperLog('restored_optimization.agent.start', {
+          section_id: item.id,
+          title: item.title || '未命名章节',
+          message_chars: messagesLength,
+          context_length_limit: contextLengthLimit,
+          threshold_ratio: AGENT_CONTEXT_THRESHOLD_RATIO,
+          restored_content_metrics: textMetrics(previousContent),
+          knowledge_content_count: knowledgeContents.length,
+        });
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+        const { agentResult, outputContent } = await runContentAgentTask({
+          title: `已还原正文优化扩写 Agent-${item.id}`,
+          prompt: buildAgentRestoredChapterContentPrompt(),
+          outputFile: 'optimized-section.md',
+          files: buildAgentRestoredChapterContentFiles({
+            chapter: item,
+            projectOverview,
+            selectedFactsText,
+            regenerateRequirement,
+            contentPlan,
+            knowledgeContents,
+            restoredContent: previousContent,
+          }),
+          eventPrefix: 'restored_optimization.agent',
+          activityLabel: 'Agent 正在优化扩写已还原正文',
+          startPauseMessage: '正文生成已在已还原正文优化扩写 Agent 开始前暂停，本次 Agent 未启动；继续后将重新执行。',
+          resultPauseMessage: '正文生成已在已还原正文优化扩写 Agent 回写前暂停，本次 Agent 输出未回写；继续后将重新执行。',
+          pausedLogMessage: '已还原正文优化扩写 Agent 已暂停：本轮 Agent 已取消并清理，继续后将重新执行。',
+        });
+        generatedContent = outputContent;
+        pauseIfRequested('正文生成已在已还原正文优化扩写 Agent 回写前暂停，本次 Agent 输出未回写；继续后将重新执行。');
+        writeDeveloperLog('restored_optimization.agent.done', {
+          section_id: item.id,
+          title: item.title || '未命名章节',
+          agent_task_id: agentResult?.task_id || '',
+          agent_session_id: agentResult?.session_id || '',
+          output_metrics: textMetrics(outputContent),
+        });
+      } else {
+        generatedContent = await aiService.chat({
+          messages: contentMessages,
+          temperature: 0.7,
+          logTitle: `${needsRestoredOptimization ? '原方案优化扩写' : '正文生成'}-${item.id}-${item.title || '未命名章节'}`,
+        });
+      }
 
       rawContent = needsRestoredOptimization ? generatedContent || '' : rawContent + (generatedContent || '');
 

@@ -315,6 +315,8 @@ function createOpenCodeRuntimeService({ app, configStore }) {
   let closePromise = null;
   let activeTask = null;
   let activeTaskAbortController = null;
+  const taskQueue = [];
+  let taskQueueDraining = false;
   let healthTimer = null;
   let statusTimer = null;
   let healthFailureCount = 0;
@@ -348,6 +350,15 @@ function createOpenCodeRuntimeService({ app, configStore }) {
     };
   }
 
+  function getQueuedTaskSummaries() {
+    return taskQueue.map((entry, index) => ({
+      task_id: entry.taskId,
+      title: entry.title,
+      queued_at: entry.queuedAt,
+      position: index + 1,
+    }));
+  }
+
   function getStatus() {
     return {
       phase,
@@ -359,6 +370,8 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       restart_pending: restartPending,
       restart_pending_reason: restartPendingReason,
       active_task: getActiveTaskSummary(),
+      queued_count: taskQueue.length,
+      queued_tasks: getQueuedTaskSummaries(),
       proxy: sidecar?.getProxyStatus?.() || { active: 0, queued: 0, limit: 0 },
       opencode: {
         pid: sidecar?.pid || sidecar?.child?.pid || 0,
@@ -466,6 +479,72 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       message: BUSY_MESSAGE,
       active_task: getActiveTaskSummary(),
     };
+  }
+
+  function createAbortReason(signal, fallbackMessage = 'Agent 任务已取消') {
+    const reason = signal?.reason;
+    if (reason instanceof Error) {
+      return reason;
+    }
+    const error = new Error(reason ? String(reason) : fallbackMessage);
+    if (reason && typeof reason === 'object' && reason.code) {
+      error.code = reason.code;
+    }
+    return error;
+  }
+
+  function removeQueuedTask(entry, reason) {
+    const index = taskQueue.indexOf(entry);
+    if (index < 0 || entry.started) {
+      return false;
+    }
+    taskQueue.splice(index, 1);
+    entry.cleanup?.();
+    entry.reject(reason);
+    appendRuntimeEvent({
+      source: 'runtime.queue',
+      message: `Agent 排队任务已取消：${entry.title}`,
+      task_id: entry.taskId,
+      queue_length: taskQueue.length,
+    });
+    emitStatusThrottled();
+    return true;
+  }
+
+  function rejectQueuedTasks(error) {
+    const pending = taskQueue.splice(0, taskQueue.length);
+    for (const entry of pending) {
+      entry.cleanup?.();
+      entry.reject(error);
+    }
+    if (pending.length) {
+      appendRuntimeEvent({
+        source: 'runtime.queue',
+        message: `Agent 排队任务已全部取消：${pending.length} 个`,
+        queue_length: 0,
+      });
+      emitStatusThrottled();
+    }
+  }
+
+  function notifyQueuedTask(entry, position) {
+    if (typeof entry.payload.onActivity !== 'function') {
+      return;
+    }
+    try {
+      entry.payload.onActivity({
+        stage: 'queued',
+        message: position > 1
+          ? `Agent 任务排队中，前方还有 ${position - 1} 个任务。`
+          : 'Agent 任务排队中，等待当前任务结束后执行。',
+        source: 'runtime.queue',
+        visible: true,
+        activity: false,
+        meta: { task_id: entry.taskId, position, queue_length: taskQueue.length },
+      });
+    } catch (error) {
+      appendRuntimeEvent({ at: nowIso(), source: 'queue-activity-handler', message: error?.message || String(error) });
+    }
   }
 
   function onStatus(listener) {
@@ -827,9 +906,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
     return () => clearInterval(timer);
   }
 
-  async function runTask(payload = {}) {
-    if (activeTask) return createBusyResult();
-
+  async function runTaskNow(payload = {}) {
     const taskId = payload.task_id || crypto.randomUUID();
     const title = payload.title || '易标智能体任务';
     const outputFile = payload.output_file || 'agent-result.md';
@@ -943,6 +1020,99 @@ function createOpenCodeRuntimeService({ app, configStore }) {
     }
   }
 
+  function drainAgentTaskQueue() {
+    if (taskQueueDraining || activeTask || closePromise) {
+      return;
+    }
+    taskQueueDraining = true;
+    void (async () => {
+      try {
+        while (!activeTask && taskQueue.length && !closePromise) {
+          if (restartPending && phase === 'idle') {
+            await restart(restartPendingReason || 'config changed');
+          }
+
+          const entry = taskQueue.shift();
+          if (!entry) {
+            continue;
+          }
+          entry.started = true;
+          entry.cleanup?.();
+          emitStatusThrottled();
+
+          if (entry.payload.signal?.aborted) {
+            entry.reject(createAbortReason(entry.payload.signal));
+            continue;
+          }
+
+          appendRuntimeEvent({
+            source: 'runtime.queue',
+            message: `Agent 排队任务开始执行：${entry.title}`,
+            task_id: entry.taskId,
+            queue_length: taskQueue.length,
+          });
+
+          try {
+            const result = await runTaskNow(entry.payload);
+            entry.resolve(result);
+          } catch (error) {
+            entry.reject(error);
+          }
+        }
+      } finally {
+        taskQueueDraining = false;
+        emitStatusThrottled();
+        if (taskQueue.length && !activeTask && !closePromise) {
+          setTimeout(drainAgentTaskQueue, 0);
+        }
+      }
+    })();
+  }
+
+  async function runTask(payload = {}) {
+    if (phase === 'closing' || closePromise) {
+      throw new Error('Agent 服务正在关闭，无法执行任务');
+    }
+    if (payload.signal?.aborted) {
+      throw createAbortReason(payload.signal);
+    }
+
+    const taskId = payload.task_id || crypto.randomUUID();
+    const title = payload.title || '易标智能体任务';
+    const queuedAt = nowIso();
+    return new Promise((resolve, reject) => {
+      const entry = {
+        taskId,
+        title,
+        queuedAt,
+        payload: { ...payload, task_id: taskId },
+        resolve,
+        reject,
+        started: false,
+        cleanup: null,
+      };
+
+      if (payload.signal?.addEventListener) {
+        const onAbort = () => {
+          removeQueuedTask(entry, createAbortReason(payload.signal));
+        };
+        payload.signal.addEventListener('abort', onAbort, { once: true });
+        entry.cleanup = () => payload.signal.removeEventListener('abort', onAbort);
+      }
+
+      taskQueue.push(entry);
+      appendRuntimeEvent({
+        source: 'runtime.queue',
+        message: `Agent 任务已入队：${title}`,
+        task_id: taskId,
+        queue_length: taskQueue.length,
+      });
+      notifyQueuedTask(entry, taskQueue.length);
+      emitStatusThrottled();
+      drainAgentTaskQueue();
+    });
+  }
+
   async function warmup() {
     try {
       await ensureStarted();
@@ -991,7 +1161,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
   }
 
   async function runSelfCheck() {
-    if (activeTask) {
+    if (activeTask || taskQueue.length) {
       const busyResult = {
         success: false,
         status: 'busy',
@@ -1271,6 +1441,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       if (activeTaskAbortController && !activeTaskAbortController.signal.aborted) {
         activeTaskAbortController.abort(new Error('Agent 服务正在关闭'));
       }
+      rejectQueuedTasks(new Error('Agent 服务正在关闭'));
       if (startPromise) {
         await startPromise.catch(() => undefined);
       }
