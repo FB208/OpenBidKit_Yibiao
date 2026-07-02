@@ -1238,7 +1238,6 @@ async function chatWithConfig(app, config, request) {
   let errorMessage = '';
   let analyticsTracked = false;
   const timeoutMs = normalizeRequestTimeoutMs(request);
-  const timeout = createOperationTimeout(timeoutMs);
 
   try {
     writeAiLog(app, config, {
@@ -1252,16 +1251,18 @@ async function chatWithConfig(app, config, request) {
       created_at: new Date().toISOString(),
     });
     let result = null;
-    try {
-      result = await timeout.run(requestTextAi(app, config, requestBody, { signal: timeout.signal, requestMode }));
-    } catch (error) {
-      if (!request.response_format || !error.responseFormatUnsupported) {
-        throw error;
-      }
+    result = await runWithAiRetry(() => runWithOperationTimeout(async (signal) => {
+      try {
+        return await requestTextAi(app, config, requestBody, { signal, requestMode });
+      } catch (error) {
+        if (!request.response_format || !error.responseFormatUnsupported) {
+          throw error;
+        }
 
-      requestBody = createChatRequestBody(config, request, { omitResponseFormat: true, stream: requestMode === 'stream' });
-      result = await timeout.run(requestTextAi(app, config, requestBody, { signal: timeout.signal, requestMode }));
-    }
+        requestBody = createChatRequestBody(config, request, { omitResponseFormat: true, stream: requestMode === 'stream' });
+        return requestTextAi(app, config, requestBody, { signal, requestMode });
+      }
+    }, timeoutMs));
 
     responseData = result.responseData;
     recordTextTokenStats(config, result.usage);
@@ -1307,10 +1308,9 @@ async function chatWithConfig(app, config, request) {
     }
     copyRawAiErrorResponse(error, wrappedError);
     copyAiRequestErrorMeta(error, wrappedError);
+    markAiRequestError(wrappedError, { retryable: false });
     emitAiHttpErrorToWindows(wrappedError);
     throw wrappedError;
-  } finally {
-    timeout.clear();
   }
 }
 
@@ -1554,7 +1554,16 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
       status: 'pending',
       created_at: new Date().toISOString(),
     });
-    responseData = await requestOpenAICompatibleImageData(baseUrl, imageConfig.api_key, requestBody, `${meta.label}生图失败`);
+    responseData = await runWithAiRetry(() => runWithOperationTimeout(
+      (signal) => requestOpenAICompatibleImageData(
+        baseUrl,
+        imageConfig.api_key,
+        requestBody,
+        `${meta.label}生图失败`,
+        { signal, source: `${meta.logProvider}-image-model` },
+      ),
+      AI_REQUEST_TIMEOUT_MS,
+    ));
     trackAiRequest(app, config, { ai_request_type: 'image', usage: extractOpenAIUsage(responseData) });
     analyticsTracked = true;
 
@@ -1594,8 +1603,9 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
       error: getAiErrorLogError(error, error.message),
       created_at: new Date().toISOString(),
     });
-    emitAiHttpErrorToWindows(error);
-    throw error;
+    const finalError = markAiRequestError(error, { retryable: false });
+    emitAiHttpErrorToWindows(finalError);
+    throw finalError;
   }
 }
 
@@ -1622,7 +1632,17 @@ async function generateGoogleImage(app, config, request) {
       status: 'pending',
       created_at: new Date().toISOString(),
     });
-    responseData = await requestGoogleImageData(baseUrl, imageConfig, requestBody, requestMode, 'Google AI Studio 生图失败');
+    responseData = await runWithAiRetry(() => runWithOperationTimeout(
+      (signal) => requestGoogleImageData(
+        baseUrl,
+        imageConfig,
+        requestBody,
+        requestMode,
+        'Google AI Studio 生图失败',
+        { signal },
+      ),
+      AI_REQUEST_TIMEOUT_MS,
+    ));
     trackAiRequest(app, config, { ai_request_type: 'image', usage: extractGoogleUsage(responseData) });
     analyticsTracked = true;
     const inlineData = getGoogleImageInlineData(responseData);
@@ -1663,8 +1683,9 @@ async function generateGoogleImage(app, config, request) {
       error: getAiErrorLogError(error, error.message),
       created_at: new Date().toISOString(),
     });
-    emitAiHttpErrorToWindows(error);
-    throw error;
+    const finalError = markAiRequestError(error, { retryable: false });
+    emitAiHttpErrorToWindows(finalError);
+    throw finalError;
   }
 }
 
