@@ -10,6 +10,7 @@ const { detectBidSections } = require('../utils/bidSectionDetector.cjs');
 const tenderMarkdownRelativePath = path.join('technical-plan', 'tender.md').replace(/\\/g, '/');
 const tenderOriginalMarkdownRelativePath = path.join('technical-plan', 'tender-original.md').replace(/\\/g, '/');
 const originalPlanMarkdownRelativePath = path.join('technical-plan', 'original-plan.md').replace(/\\/g, '/');
+const originalOutlineRuntimeFileName = 'original-outline-runtime.json';
 
 const initialState = {
   workflowKind: 'technical-plan',
@@ -328,6 +329,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   const tenderMarkdownPath = getTechnicalPlanTenderMarkdownPath(app);
   const tenderOriginalMarkdownPath = path.join(path.dirname(tenderMarkdownPath), 'tender-original.md');
   const originalPlanMarkdownPath = getTechnicalPlanOriginalPlanMarkdownPath(app);
+  const originalOutlineRuntimePath = path.join(path.dirname(originalPlanMarkdownPath), originalOutlineRuntimeFileName);
   function resolvePendingTenderMarkdownPath(filePath) {
     return path.resolve(resolveMarkdownPath(filePath));
   }
@@ -509,6 +511,43 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       return '';
     }
     return fs.readFileSync(filePath, 'utf-8');
+  }
+
+  function clearOriginalOutlineRuntime() {
+    if (!fs.existsSync(originalOutlineRuntimePath)) {
+      return;
+    }
+    fs.rmSync(originalOutlineRuntimePath, { force: true });
+  }
+
+  function readOriginalOutlineRuntime() {
+    if (!fs.existsSync(originalOutlineRuntimePath)) {
+      return null;
+    }
+    try {
+      const runtime = safeJsonParse(fs.readFileSync(originalOutlineRuntimePath, 'utf-8'), null);
+      if (!runtime || typeof runtime !== 'object' || Array.isArray(runtime)) {
+        clearOriginalOutlineRuntime();
+        return null;
+      }
+      return runtime;
+    } catch {
+      clearOriginalOutlineRuntime();
+      return null;
+    }
+  }
+
+  function saveOriginalOutlineRuntime(runtime) {
+    const targetDir = path.dirname(originalOutlineRuntimePath);
+    const tempPath = path.join(targetDir, `original-outline-runtime-${Date.now()}.tmp.json`);
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(tempPath, `${JSON.stringify(runtime || {}, null, 2)}\n`, 'utf-8');
+    try {
+      fs.renameSync(tempPath, originalOutlineRuntimePath);
+    } catch (error) {
+      if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
+      throw error;
+    }
   }
 
   function loadReferenceDocumentIds() {
@@ -942,6 +981,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
     updateMeta({
       step: 'document-analysis',
@@ -974,6 +1014,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
     updateMeta({
       step: 'bid-analysis',
@@ -999,6 +1040,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
+    clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
     updateMeta({
       step: 'document-analysis',
@@ -1021,6 +1063,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_content_plans').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
     updateMeta({
       workflow_kind: normalizeWorkflowKind(workflowKind),
@@ -1595,6 +1638,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     if (fs.existsSync(originalPlanMarkdownPath)) {
       fs.rmSync(originalPlanMarkdownPath, { force: true });
     }
+    clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
     deleteImportedImageBatches(app, 'technical-plan');
     return { success: true, message: '技术方案缓存已清空', state: loadTechnicalPlan() };
@@ -1613,6 +1657,9 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     readTenderMarkdown,
     readOriginalTenderMarkdown,
     readOriginalPlanMarkdown,
+    readOriginalOutlineRuntime,
+    saveOriginalOutlineRuntime,
+    clearOriginalOutlineRuntime,
     updateStep,
     setWorkflowKind,
     switchWorkflowKind,

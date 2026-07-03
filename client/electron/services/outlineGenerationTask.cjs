@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const { getBidAnalysisTasks } = require('./bidAnalysisTask.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 
@@ -71,6 +72,8 @@ const ORIGINAL_OUTLINE_SOURCE_LIMIT_RATIO = 0.55;
 const MAX_KNOWLEDGE_ADDITIONS = 60;
 const MAX_KNOWLEDGE_UPDATES = 120;
 const PROMPT_CACHE_WARMUP_DELAY_MS = 5000;
+const ORIGINAL_OUTLINE_RUNTIME_VERSION = 1;
+const ORIGINAL_OUTLINE_RUNTIME_PHASE = 'original-outline-rolling';
 
 function waitForPromptCacheWarmup() {
   return new Promise((resolve) => setTimeout(resolve, PROMPT_CACHE_WARMUP_DELAY_MS));
@@ -120,6 +123,73 @@ function splitOriginalPlanSourceText(text, aiService) {
     limitRatio: ORIGINAL_OUTLINE_SOURCE_LIMIT_RATIO,
     maxSegmentLimitRatio: 1,
   }).map((content) => String(content || '').trim()).filter(Boolean);
+}
+
+function stableContentHash(content) {
+  return crypto.createHash('sha256').update(String(content || ''), 'utf8').digest('hex');
+}
+
+function isSameStringArray(left, right) {
+  return Array.isArray(left)
+    && Array.isArray(right)
+    && left.length === right.length
+    && left.every((item, index) => item === right[index]);
+}
+
+function clearOriginalOutlineRuntime(workspaceStore) {
+  if (typeof workspaceStore?.clearOriginalOutlineRuntime === 'function') {
+    workspaceStore.clearOriginalOutlineRuntime();
+  }
+}
+
+function loadOriginalOutlineRuntime(workspaceStore, identity, log) {
+  if (typeof workspaceStore?.readOriginalOutlineRuntime !== 'function') {
+    return null;
+  }
+
+  const runtime = workspaceStore.readOriginalOutlineRuntime();
+  if (!runtime) return null;
+
+  const nextSegmentIndex = Math.floor(Number(runtime.next_segment_index || 0));
+  const matches = runtime.version === ORIGINAL_OUTLINE_RUNTIME_VERSION
+    && runtime.phase === ORIGINAL_OUTLINE_RUNTIME_PHASE
+    && runtime.original_plan_hash === identity.originalPlanHash
+    && Number(runtime.segment_count) === identity.segmentHashes.length
+    && isSameStringArray(runtime.segment_hashes, identity.segmentHashes)
+    && nextSegmentIndex > 0
+    && nextSegmentIndex <= identity.segmentHashes.length;
+  if (!matches) {
+    clearOriginalOutlineRuntime(workspaceStore);
+    log('旧方案目录提取进度与当前原方案不匹配，已从头重新提取。', 9);
+    return null;
+  }
+
+  try {
+    const currentOutline = normalizeOriginalOutlineResponse(runtime.current_outline);
+    validateTopLevelOutline(currentOutline);
+    return { currentOutline, nextSegmentIndex };
+  } catch {
+    clearOriginalOutlineRuntime(workspaceStore);
+    log('旧方案目录提取进度不可用，已从头重新提取。', 9);
+    return null;
+  }
+}
+
+function saveOriginalOutlineRuntime(workspaceStore, identity, currentOutline, nextSegmentIndex) {
+  if (typeof workspaceStore?.saveOriginalOutlineRuntime !== 'function') {
+    return;
+  }
+
+  workspaceStore.saveOriginalOutlineRuntime({
+    version: ORIGINAL_OUTLINE_RUNTIME_VERSION,
+    phase: ORIGINAL_OUTLINE_RUNTIME_PHASE,
+    original_plan_hash: identity.originalPlanHash,
+    segment_hashes: identity.segmentHashes,
+    segment_count: identity.segmentHashes.length,
+    next_segment_index: nextSegmentIndex,
+    current_outline: currentOutline,
+    updated_at: new Date().toISOString(),
+  });
 }
 
 function getKnowledgeSegmentLimit(aiService, sharedMessages) {
@@ -2122,19 +2192,33 @@ async function extractOriginalOutlineOnce(aiService, originalPlanMarkdown, log) 
   });
 }
 
-async function extractOriginalOutlineBySegments(aiService, originalPlanMarkdown, log) {
+async function extractOriginalOutlineBySegments(aiService, workspaceStore, originalPlanMarkdown, log) {
   const sourceSegments = splitOriginalPlanSourceText(originalPlanMarkdown, aiService);
   const initialSegments = sourceSegments.length ? sourceSegments : [String(originalPlanMarkdown || '').trim()];
   if (initialSegments.length <= 1) {
+    clearOriginalOutlineRuntime(workspaceStore);
     const outline = await extractOriginalOutlineOnce(aiService, initialSegments[0] || originalPlanMarkdown, log);
     return { outline, segments: initialSegments };
   }
 
+  const identity = {
+    originalPlanHash: stableContentHash(originalPlanMarkdown),
+    segmentHashes: initialSegments.map(stableContentHash),
+  };
   const segments = initialSegments.map((content) => ({ content }));
   log(`原方案内容较长，已拆分为 ${segments.length} 段，开始滚动提取旧目录。`, 9);
 
-  let currentOutline = null;
-  let index = 0;
+  const runtime = loadOriginalOutlineRuntime(workspaceStore, identity, log);
+  let currentOutline = runtime?.currentOutline || null;
+  let index = runtime?.nextSegmentIndex || 0;
+  if (runtime && index < segments.length) {
+    log(`检测到旧方案目录提取进度，将从第 ${index + 1}/${segments.length} 段继续。`, 9);
+  }
+  if (runtime && index >= segments.length) {
+    clearOriginalOutlineRuntime(workspaceStore);
+    return { outline: currentOutline, segments: segments.map((segment) => segment.content) };
+  }
+
   while (index < segments.length) {
     const segment = segments[index];
     const buildMessages = (segmentContent) => buildOriginalOutlineRollingMessages({
@@ -2158,12 +2242,14 @@ async function extractOriginalOutlineBySegments(aiService, originalPlanMarkdown,
       `已完成旧目录滚动提取 ${index + 1}/${segments.length}。`,
       Math.min(14, 9 + Math.round(((index + 1) / Math.max(segments.length, 1)) * 5)),
     );
+    saveOriginalOutlineRuntime(workspaceStore, identity, currentOutline, index + 1);
     index += 1;
   }
 
   if (!currentOutline?.outline?.length) {
     throw new Error('模型返回的旧方案目录数据格式无效');
   }
+  clearOriginalOutlineRuntime(workspaceStore);
   return { outline: currentOutline, segments: segments.map((segment) => segment.content) };
 }
 
@@ -2214,9 +2300,9 @@ async function collectOriginalOutlineAdditionsBySegments(aiService, outline, ori
   return { outline: rollingOutline, appliedCount };
 }
 
-async function extractOriginalOutline(aiService, originalPlanMarkdown, log) {
+async function extractOriginalOutline(aiService, workspaceStore, originalPlanMarkdown, log) {
   log('正在从原方案中提取旧目录。', 8);
-  const extracted = await extractOriginalOutlineBySegments(aiService, originalPlanMarkdown, log);
+  const extracted = await extractOriginalOutlineBySegments(aiService, workspaceStore, originalPlanMarkdown, log);
   const outline = extracted.outline;
   const originalPlanSegments = extracted.segments;
   log('原方案旧目录提取完成，正在检查目录缺漏。', 14);
@@ -2705,7 +2791,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     if (!String(originalPlanMarkdown || '').trim()) {
       throw new Error('请先上传原方案，再生成目录');
     }
-    oldOutline = await extractOriginalOutline(aiService, originalPlanMarkdown, log);
+    oldOutline = await extractOriginalOutline(aiService, workspaceStore, originalPlanMarkdown, log);
   }
 
   technicalPlan = workspaceStore.updateTechnicalPlan({

@@ -1,6 +1,8 @@
 # Findings
 
 ## Research Log
+- Step03 旧方案目录滚动提取此前只把 `currentOutline` 保存在内存里，任一分段失败或应用异常关闭后都会丢失已完成分段结果；checkpoint 最小持久化边界是原方案 hash、分段 hash、下一段下标和当前完整旧目录 JSON。
+- Step03 checkpoint 不应复用 Step05 的 `content_generation_runtime_json`：旧方案目录提取发生在目录生成任务内部，独立 JSON 文件能避免改 SQLite schema，并可在替换原方案、切换工作流和清空技术方案时直接按文件清理。
 - 旧方案目录提取最终执行边界已按用户明确要求收敛：只信任 `splitOriginalPlanSourceText()` 初始分段；不再对滚动提取或补漏的拼接 messages 做动态长度预算判断；不再因上一轮目录或完整目录变长而二次细分；旧目录提取失败不再走 Agent 兜底。
 - Agent busy 评审根因确认：`opencodeRuntimeService.cjs` 原 `runTask()` 在 `activeTask` 存在时直接返回 `{ status: 'busy', skipped: true }`；`contentGenerationTask.cjs` 的普通 worker pool 在 `contentConcurrency > 1` 时会并发触发多个超阈值 Agent 小节，后续小节因此进入失败处理，而不是等待前一个 Agent 完成。
 - Agent 队列应放在全局 OpenCode runtime，而不是只在正文任务局部串行化；这样目录修复、正文优化扩写、覆盖修复等所有 `agentService.runTask()` 调用共享同一个单执行队列，保持 OpenCode runtime 一次只跑一个任务的约束。

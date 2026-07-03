@@ -1,5 +1,35 @@
 # Task Plan
 
+## Current Task: Step03 原方案目录 checkpoint 续跑
+
+### Goal
+为已有方案扩写 Step03 的“原方案目录滚动提取”增加 checkpoint：分段提取失败或应用异常关闭后，再次生成目录能按原方案和分段 hash 校验，从已完成分段后的完整旧目录继续。
+
+### Phases
+- [completed] 1. 在技术方案 Store 中新增 `original-outline-runtime.json` 读写清理能力。
+- [completed] 2. 在输入变更和清空流程中清理旧目录提取 runtime。
+- [completed] 3. 在旧方案目录滚动提取中保存 `current_outline` 和 `next_segment_index`，并在重启后校验恢复。
+- [completed] 4. 增加目录生成异常关闭恢复，把 stale `running/pausing` 标记为可重新执行的错误状态。
+- [completed] 5. 运行 CJS 语法检查和客户端构建。
+
+### Decisions
+- checkpoint 文件保存为 `workspace/technical-plan/original-outline-runtime.json`，不新增 SQLite 表。
+- 恢复条件为 runtime 版本、阶段、原方案 hash、分段数量和所有分段 hash 完全一致。
+- 每段成功后保存当前完整旧目录和下一段 0-based 下标；所有分段完成后清理 runtime。
+- 单段原方案仍走原单次提取路径，并清理残留 runtime。
+- 异常关闭后目录任务状态不自动继续执行，只提示重新生成；重新生成时由 checkpoint 接续旧目录提取。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 本轮实现 | - |
+
+### Validation
+- `cd client; node --check electron\services\outlineGenerationTask.cjs` 通过。
+- `cd client; node --check electron\services\technicalPlanStore.cjs` 通过。
+- `cd client; node --check electron\services\taskService.cjs` 通过。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+
 ## Current Task: 旧方案目录提取逻辑收敛
 
 ### Goal

@@ -591,6 +591,31 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     emit(pausedTask, buildSnapshot(getTaskDefinition('content-generation'), state, pausedTask));
   }
 
+  function recoverInterruptedOutlineGenerationTask() {
+    if (activeTasks.has('outline-generation')) {
+      return;
+    }
+
+    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
+    const outlineTask = technicalPlan.outlineGenerationTask;
+    if (!isActiveTaskStatus(outlineTask?.status)) {
+      return;
+    }
+
+    const message = '上次目录生成未完成，请重新生成目录；如旧方案目录提取已有进度，将自动继续。';
+    const recoveredTask = {
+      ...outlineTask,
+      status: 'error',
+      progress: Math.max(0, Math.min(99, Number(outlineTask.progress || 0) || 0)),
+      pause_requested: false,
+      error: message,
+      logs: [...(Array.isArray(outlineTask.logs) ? outlineTask.logs : []), message],
+      updated_at: now(),
+    };
+    const state = technicalPlanStore.updateTechnicalPlan({ outlineGenerationTask: recoveredTask });
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-generation'), state, recoveredTask));
+  }
+
   function recoverInterruptedBidAnalysisTask() {
     if (activeTasks.has('bid-analysis')) {
       return;
@@ -840,6 +865,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     getActiveTasks() {
       recoverInterruptedBidSectionExtractionTask();
       recoverInterruptedBidAnalysisTask();
+      recoverInterruptedOutlineGenerationTask();
       recoverInterruptedContentGenerationTask();
       recoverInterruptedGlobalFactsTask();
       recoverInterruptedRejectionCheckTasks();
