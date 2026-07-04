@@ -271,6 +271,31 @@ function ensureAnalyticsColumns() {
       column: 'last_access_ip',
       sql: 'ALTER TABLE stats_clients ADD COLUMN last_access_ip TEXT NOT NULL DEFAULT \'\'',
     },
+    {
+      table: 'stats_clients',
+      column: 'license_status',
+      sql: 'ALTER TABLE stats_clients ADD COLUMN license_status TEXT NOT NULL DEFAULT \'\'',
+    },
+    {
+      table: 'stats_clients',
+      column: 'license_plan',
+      sql: 'ALTER TABLE stats_clients ADD COLUMN license_plan TEXT NOT NULL DEFAULT \'\'',
+    },
+    {
+      table: 'stats_clients',
+      column: 'license_expires_at',
+      sql: 'ALTER TABLE stats_clients ADD COLUMN license_expires_at TEXT NOT NULL DEFAULT \'\'',
+    },
+    {
+      table: 'stats_clients',
+      column: 'source_trusted',
+      sql: 'ALTER TABLE stats_clients ADD COLUMN source_trusted TEXT NOT NULL DEFAULT \'\'',
+    },
+    {
+      table: 'stats_clients',
+      column: 'untrusted_reason',
+      sql: 'ALTER TABLE stats_clients ADD COLUMN untrusted_reason TEXT NOT NULL DEFAULT \'\'',
+    },
   ];
 
   for (const item of columns) {

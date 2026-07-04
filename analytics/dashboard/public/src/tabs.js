@@ -1,6 +1,6 @@
 import { appState, state } from './state.js';
 
-const validTabs = new Set(['overview', 'clients', 'ips', 'traffic', 'config', 'models', 'agent', 'latest', 'notice', 'resources']);
+const validTabs = new Set(['overview', 'clients', 'ips', 'traffic', 'config', 'models', 'agent', 'latest', 'notice', 'license', 'resources']);
 
 export function getInitialTab() {
   const tab = window.location.hash.replace(/^#/, '');

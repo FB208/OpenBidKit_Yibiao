@@ -53,6 +53,7 @@
       <button class="tab-button" type="button" data-tab-button="agent">Agent分析</button>
       <button class="tab-button" type="button" data-tab-button="latest">最近事件</button>
       <button class="tab-button" type="button" data-tab-button="notice">公告管理</button>
+      <button class="tab-button" type="button" data-tab-button="license">授权管理</button>
       <button class="tab-button" type="button" data-tab-button="resources">资源管理</button>
     </nav>
 
@@ -283,6 +284,43 @@
           <button id="publishNoticeButton" type="button">发布公告</button>
         </div>
         <div id="noticeStatus" class="notice-status"></div>
+      </section>
+    </section>
+
+    <section id="tab-license" class="tab-panel" data-tab-panel="license">
+      <section class="panel section notice-panel">
+        <div class="section-head">
+          <div>
+            <h2>授权管理</h2>
+            <p>当前只配置免费授权策略。客户端会在授权刷新时接收配置，本版客户端不展示授权弹窗、不做功能阻断。</p>
+          </div>
+          <button id="loadLicenseConfigButton" type="button">读取授权配置</button>
+        </div>
+        <div id="licenseMeta" class="notice-meta">当前未读取授权配置。</div>
+        <div class="notice-form">
+          <label>
+            免费授权有效期（天）
+            <input id="licenseFreeDays" type="number" min="1" value="30" />
+          </label>
+          <label>
+            授权过期弹窗
+            <select id="licenseExpirePopupEnabled">
+              <option value="true" selected>开启</option>
+              <option value="false">关闭</option>
+            </select>
+          </label>
+          <label>
+            过期弹窗是否可关闭
+            <select id="licenseExpirePopupDismissible">
+              <option value="false" selected>不可关闭</option>
+              <option value="true">可关闭</option>
+            </select>
+          </label>
+        </div>
+        <div class="notice-actions">
+          <button id="saveLicenseConfigButton" type="button">保存授权配置</button>
+        </div>
+        <div id="licenseStatus" class="notice-status"></div>
       </section>
     </section>
 

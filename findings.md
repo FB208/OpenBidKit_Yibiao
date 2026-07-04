@@ -1,6 +1,12 @@
 # Findings
 
 ## Research Log
+- 客户端授权实现边界：官方构建签名只能覆盖构建时字段，不能覆盖启动时才生成的 `clientId` 和 `machineFingerprintHash`；license 必须由 Worker 运行时签发并绑定 `clientId + machineFingerprintHash`。
+- 同一套 ECDSA P-256/SHA-256 密钥可同时用于构建签名和 license 签名；GitHub Actions 和 Worker 都持有私钥，客户端打包公钥，Worker 也用同一公钥校验客户端提交的构建签名。
+- 授权配置是每个项目一份的低频全局策略，和公告相同适合复用 `NOTICE_STORE` KV；统计字段继续走 Analytics Engine 和 `stats_clients`。
+- 客户端机器指纹应只上传/保存最终哈希和 `fingerprintVersion`；Windows/macOS/Linux 原始机器标识、MAC 信息只在 Main 侧本地参与哈希，不进入埋点。
+- `/track` 的 D1 热路径应区分“新客户端插入计数”和“授权字段覆盖”：新客户端仍只在 `client_created_at` 距当前业务日期不超过 1 天时插入并增加 `stats_totals.total_clients`；授权字段可按快照覆盖既有 `stats_clients`，否则首个启动埋点可能把 `missing/refresh_failed` 保留到每日 Cron。
+- release workflow 必须强制要求 `YIBIAO_LICENSE_PRIVATE_KEY_JWK`，不能沿用本地脚本的未签名开发构建行为，否则正式产物会被客户端记录为不可信安装来源。
 - Step03 旧方案目录滚动提取此前只把 `currentOutline` 保存在内存里，任一分段失败或应用异常关闭后都会丢失已完成分段结果；checkpoint 最小持久化边界是原方案 hash、分段 hash、下一段下标和当前完整旧目录 JSON。
 - Step03 checkpoint 不应复用 Step05 的 `content_generation_runtime_json`：旧方案目录提取发生在目录生成任务内部，独立 JSON 文件能避免改 SQLite schema，并可在替换原方案、切换工作流和清空技术方案时直接按文件清理。
 - 旧方案目录提取最终执行边界已按用户明确要求收敛：只信任 `splitOriginalPlanSourceText()` 初始分段；不再对滚动提取或补漏的拼接 messages 做动态长度预算判断；不再因上一轮目录或完整目录变长而二次细分；旧目录提取失败不再走 Agent 兜底。

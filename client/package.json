@@ -14,6 +14,7 @@
     "dist:mac": "npm run build && electron-builder --mac",
     "postinstall": "electron-builder install-app-deps",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "generate-build-attestation": "node scripts/generate-build-attestation.cjs",
     "smoke:electron-native": "electron scripts/electron-native-smoke.cjs",
     "start": "electron ."
   },

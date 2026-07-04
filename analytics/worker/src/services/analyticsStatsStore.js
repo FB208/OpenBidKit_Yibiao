@@ -79,6 +79,29 @@ function clientAttemptKey(projectName, clientId) {
   return `${projectName}\0${clientId}`;
 }
 
+function clientLicenseAttemptKey(event, shouldInsert) {
+  return [
+    event.projectName,
+    event.clientId,
+    shouldInsert ? event.clientCreatedAt : '',
+    event.licenseStatus || '',
+    event.licensePlan || '',
+    event.licenseExpiresAt || '',
+    event.sourceTrusted || '',
+    event.untrustedReason || '',
+  ].join('\0');
+}
+
+function hasClientLicenseSnapshot(event) {
+  return Boolean(
+    event.licenseStatus
+    || event.licensePlan
+    || event.licenseExpiresAt
+    || event.sourceTrusted
+    || event.untrustedReason,
+  );
+}
+
 function rememberClientAttempt(key) {
   if (recentClientWriteAttempts.size >= MAX_RECENT_CLIENT_WRITE_ATTEMPTS) {
     recentClientWriteAttempts.clear();
@@ -165,11 +188,15 @@ async function ensureTotals(db, projectName, updatedAt = nowText()) {
 }
 
 export async function recordTrackClient(env, event) {
-  if (!shouldAttemptRealtimeClientInsert(event)) {
+  const shouldInsert = shouldAttemptRealtimeClientInsert(event);
+  const shouldUpdateLicense = hasClientLicenseSnapshot(event);
+  if (!shouldInsert && !shouldUpdateLicense) {
     return;
   }
 
-  const cacheKey = clientAttemptKey(event.projectName, event.clientId);
+  const cacheKey = shouldUpdateLicense
+    ? clientLicenseAttemptKey(event, shouldInsert)
+    : clientAttemptKey(event.projectName, event.clientId);
   if (recentClientWriteAttempts.has(cacheKey)) {
     return;
   }
@@ -177,33 +204,72 @@ export async function recordTrackClient(env, event) {
 
   const db = requireStatsDb(env);
   const updatedAt = nowText();
-  const result = await run(db, `
-    INSERT INTO stats_clients (
-      project_name, client_id, first_seen_at, first_seen_date, active_days,
-      last_active_date, last_active_version, last_access_ip, platform, arch, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 0, '', '', ?, ?, ?, ?, ?)
-    ON CONFLICT(project_name, client_id) DO NOTHING
-  `, [
-    event.projectName,
-    event.clientId,
-    updatedAt,
-    event.clientCreatedAt,
-    event.clientIp || '',
-    event.platform || '',
-    event.arch || '',
-    updatedAt,
-    updatedAt,
-  ]);
-  if (!result?.meta?.changes) {
+
+  if (shouldInsert) {
+    const result = await run(db, `
+      INSERT INTO stats_clients (
+        project_name, client_id, first_seen_at, first_seen_date, active_days,
+        last_active_date, last_active_version, last_access_ip, platform, arch,
+        license_status, license_plan, license_expires_at, source_trusted, untrusted_reason,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 0, '', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_name, client_id) DO NOTHING
+    `, [
+      event.projectName,
+      event.clientId,
+      updatedAt,
+      event.clientCreatedAt,
+      event.clientIp || '',
+      event.platform || '',
+      event.arch || '',
+      event.licenseStatus || '',
+      event.licensePlan || '',
+      event.licenseExpiresAt || '',
+      event.sourceTrusted || '',
+      event.untrustedReason || '',
+      updatedAt,
+      updatedAt,
+    ]);
+    if (result?.meta?.changes) {
+      await ensureTotals(db, event.projectName, updatedAt);
+      await run(db, `
+        UPDATE stats_totals
+        SET total_clients = total_clients + 1, updated_at = ?
+        WHERE project_name = ?
+      `, [updatedAt, event.projectName]);
+      return;
+    }
+  }
+
+  if (!shouldUpdateLicense) {
     return;
   }
 
-  await ensureTotals(db, event.projectName, updatedAt);
   await run(db, `
-    UPDATE stats_totals
-    SET total_clients = total_clients + 1, updated_at = ?
-    WHERE project_name = ?
-  `, [updatedAt, event.projectName]);
+    UPDATE stats_clients
+    SET
+      license_status = CASE WHEN ? != '' THEN ? ELSE license_status END,
+      license_plan = CASE WHEN ? != '' THEN ? ELSE license_plan END,
+      license_expires_at = CASE WHEN ? != '' THEN ? ELSE license_expires_at END,
+      source_trusted = CASE WHEN ? != '' THEN ? ELSE source_trusted END,
+      untrusted_reason = CASE WHEN ? != '' THEN ? ELSE untrusted_reason END,
+      updated_at = ?
+    WHERE project_name = ? AND client_id = ?
+  `, [
+    event.licenseStatus || '',
+    event.licenseStatus || '',
+    event.licensePlan || '',
+    event.licensePlan || '',
+    event.licenseExpiresAt || '',
+    event.licenseExpiresAt || '',
+    event.sourceTrusted || '',
+    event.sourceTrusted || '',
+    event.untrustedReason || '',
+    event.untrustedReason || '',
+    updatedAt,
+    event.projectName,
+    event.clientId,
+  ]);
 }
 
 async function queryTodayActiveClients(env, projectName) {
@@ -312,7 +378,12 @@ export async function queryStatsClients(env, projectName) {
       active_days AS activeDays,
       last_active_date AS lastActiveDate,
       last_active_version AS lastActiveVersion,
-      last_access_ip AS lastAccessIp
+      last_access_ip AS lastAccessIp,
+      license_status AS licenseStatus,
+      license_plan AS licensePlan,
+      license_expires_at AS licenseExpiresAt,
+      source_trusted AS sourceTrusted,
+      untrusted_reason AS untrustedReason
     FROM stats_clients
     WHERE project_name = ?
     ORDER BY last_active_date DESC, first_seen_at DESC, client_id ASC
@@ -325,6 +396,11 @@ export async function queryStatsClients(env, projectName) {
     lastActiveDate: row.lastActiveDate || '',
     lastActiveVersion: row.lastActiveVersion || '',
     lastAccessIp: row.lastAccessIp || '',
+    licenseStatus: row.licenseStatus || '',
+    licensePlan: row.licensePlan || '',
+    licenseExpiresAt: row.licenseExpiresAt || '',
+    sourceTrusted: row.sourceTrusted || '',
+    untrustedReason: row.untrustedReason || '',
   }));
 }
 
@@ -1133,7 +1209,12 @@ async function queryRollupClientRows(env, activityDate, projectNames) {
       argMax(${versionExpr}, timestamp) AS lastVersion,
       argMax(blob13, timestamp) AS lastAccessIp,
       argMax(blob5, timestamp) AS platform,
-      argMax(blob6, timestamp) AS arch
+      argMax(blob6, timestamp) AS arch,
+      argMax(blob14, timestamp) AS licenseStatus,
+      argMax(blob15, timestamp) AS licensePlan,
+      argMax(blob16, timestamp) AS licenseExpiresAt,
+      argMax(blob17, timestamp) AS sourceTrusted,
+      argMax(blob18, timestamp) AS untrustedReason
     FROM ${DATASET}
     WHERE blob1 IN ${projectsSql(projectNames)}
       AND blob2 IN ${allowedEventsSql()}
@@ -1153,6 +1234,11 @@ async function queryRollupClientRows(env, activityDate, projectNames) {
     lastAccessIp: normalizeText(row.lastAccessIp, 80),
     platform: normalizeText(row.platform, 50),
     arch: normalizeText(row.arch, 50),
+    licenseStatus: normalizeText(row.licenseStatus, 30),
+    licensePlan: normalizeText(row.licensePlan, 40),
+    licenseExpiresAt: normalizeText(row.licenseExpiresAt, 20).slice(0, 10),
+    sourceTrusted: normalizeText(row.sourceTrusted, 20),
+    untrustedReason: normalizeText(row.untrustedReason, 80),
   })).filter((row) => row.projectName && row.clientId);
 }
 
@@ -1197,14 +1283,22 @@ function prepareClientStatements(db, rows, updatedAt) {
         json_extract(item.value, '$.lastVersion') AS last_active_version,
         json_extract(item.value, '$.lastAccessIp') AS last_access_ip,
         json_extract(item.value, '$.platform') AS platform,
-        json_extract(item.value, '$.arch') AS arch
+        json_extract(item.value, '$.arch') AS arch,
+        json_extract(item.value, '$.licenseStatus') AS license_status,
+        json_extract(item.value, '$.licensePlan') AS license_plan,
+        json_extract(item.value, '$.licenseExpiresAt') AS license_expires_at,
+        json_extract(item.value, '$.sourceTrusted') AS source_trusted,
+        json_extract(item.value, '$.untrustedReason') AS untrusted_reason
       FROM json_each(?) AS item
     )
     INSERT INTO stats_clients (
       project_name, client_id, first_seen_at, first_seen_date, active_days,
-      last_active_date, last_active_version, last_access_ip, platform, arch, created_at, updated_at
+      last_active_date, last_active_version, last_access_ip, platform, arch,
+      license_status, license_plan, license_expires_at, source_trusted, untrusted_reason,
+      created_at, updated_at
     )
-    SELECT project_name, client_id, first_seen_at, first_seen_date, 1, last_active_date, last_active_version, last_access_ip, platform, arch, ?, ?
+    SELECT project_name, client_id, first_seen_at, first_seen_date, 1, last_active_date, last_active_version, last_access_ip, platform, arch,
+      license_status, license_plan, license_expires_at, source_trusted, untrusted_reason, ?, ?
     FROM rows
     WHERE project_name != '' AND client_id != ''
     ON CONFLICT(project_name, client_id) DO UPDATE SET
@@ -1214,6 +1308,11 @@ function prepareClientStatements(db, rows, updatedAt) {
       last_access_ip = CASE WHEN excluded.last_access_ip != '' AND excluded.last_active_date >= stats_clients.last_active_date THEN excluded.last_access_ip ELSE stats_clients.last_access_ip END,
       platform = CASE WHEN excluded.platform != '' THEN excluded.platform ELSE stats_clients.platform END,
       arch = CASE WHEN excluded.arch != '' THEN excluded.arch ELSE stats_clients.arch END,
+      license_status = CASE WHEN excluded.license_status != '' THEN excluded.license_status ELSE stats_clients.license_status END,
+      license_plan = CASE WHEN excluded.license_plan != '' THEN excluded.license_plan ELSE stats_clients.license_plan END,
+      license_expires_at = CASE WHEN excluded.license_expires_at != '' THEN excluded.license_expires_at ELSE stats_clients.license_expires_at END,
+      source_trusted = CASE WHEN excluded.source_trusted != '' THEN excluded.source_trusted ELSE stats_clients.source_trusted END,
+      untrusted_reason = CASE WHEN excluded.untrusted_reason != '' THEN excluded.untrusted_reason ELSE stats_clients.untrusted_reason END,
       updated_at = excluded.updated_at
   `).bind(json, updatedAt, updatedAt)];
 }

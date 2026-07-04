@@ -108,6 +108,31 @@ export interface AgentRuntimeActiveTask {
   idle_seconds: number;
 }
 
+export type LicenseStatusValue = 'missing' | 'active' | 'expired' | 'invalid' | 'invalidated' | 'machine_mismatch' | 'refresh_failed';
+
+export interface LicenseRuntimeStatus {
+  status: LicenseStatusValue | string;
+  plan: 'free' | 'personal_premium' | 'enterprise_premium' | string;
+  expiresAt: string;
+  licenseExpiresAt: string;
+  licenseStatus: string;
+  sourceTrusted: boolean;
+  sourceTrustedText: string;
+  untrustedReason: string;
+  machineFingerprintHash: string;
+  fingerprintVersion: string;
+  buildTrusted: boolean;
+  buildId: string;
+  keyId: string;
+  lastCheckedAt: string;
+  refreshError?: string;
+  config: {
+    freeLicenseDays: number;
+    expirePopupEnabled: boolean;
+    expirePopupDismissible: boolean;
+  };
+}
+
 export interface AgentRuntimeStatus {
   phase: AgentRuntimePhase;
   healthy: boolean;
@@ -280,6 +305,10 @@ export interface YibiaoBridge {
     save: (config: ClientConfig) => Promise<ConfigSaveResult>;
     listModels: (config?: ClientConfig) => Promise<ModelListResult>;
     openConfigFolder: () => Promise<{ success: boolean; path: string }>;
+  };
+  license: {
+    getStatus: () => Promise<LicenseRuntimeStatus>;
+    refresh: () => Promise<LicenseRuntimeStatus>;
   };
   ai: {
     chat: (request: ChatCompletionRequest) => Promise<string>;

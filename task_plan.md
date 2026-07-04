@@ -1,5 +1,38 @@
 # Task Plan
 
+## Current Task: 客户端授权签名校验与统计
+
+### Goal
+实现官方构建签名、客户端本地 license 校验与刷新、Analytics Worker 免费授权签发、Dashboard 授权配置和客户端统计授权字段。当前版本只做免费授权、记录不可信安装来源、接收授权过期弹窗配置，不做客户端授权 UI 和功能阻断。
+
+### Phases
+- [completed] 1. 建立构建签名、license 数据结构和本地存储边界。
+- [completed] 2. 实现客户端 Main 侧 license 服务、IPC/preload/types 和启动刷新。
+- [completed] 3. 扩展客户端埋点携带 license 简单状态。
+- [completed] 4. 实现 Analytics Worker 授权接口、签名工具、授权配置 KV 和统计字段。
+- [completed] 5. 新增 Dashboard 授权标签，并在客户端统计展示授权字段。
+- [completed] 6. 接入 GitHub Actions 构建签名脚本和文档说明。
+- [completed] 7. 运行 CJS/ESM 语法检查、客户端构建和必要 smoke 验证。
+
+### Decisions
+- 构建签名和 license 签发使用同一套 ECDSA P-256/SHA-256 密钥对；私钥分别作为 GitHub Actions Secret 和 Worker Secret，公钥打进客户端。
+- `clientId/clientCreatedAt` 复用现有 `analytics_client_id/analytics_created_at`；删除独立 `installId`，指纹公式中需要安装标识的位置使用 `clientId`。
+- 本地授权单独保存到 `userData/license.json`，不写入 `user_config.json`。
+- 客户端只上传足够校验的设备哈希和低敏构建信息，不上传完整原始设备指纹。
+- 免费授权默认 30 天；授权过期弹窗配置默认开启且不可关闭，但客户端本版只保存配置不展示。
+- “不可信的安装来源”本版只记录和上报，不阻断功能、不在客户端显示。
+- 授权配置复用现有 `NOTICE_STORE` KV，按项目名保存最新一份配置，不新增 Cloudflare 存储资源。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 当前执行 | - |
+
+### Validation
+- `node --check` 已覆盖新增/修改的客户端 license CJS、Worker 授权/统计模块和 Dashboard 授权页面。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- `git diff --check` 通过，仅有 Windows LF/CRLF 换行提示。
+
 ## Current Task: Step03 原方案目录 checkpoint 续跑
 
 ### Goal

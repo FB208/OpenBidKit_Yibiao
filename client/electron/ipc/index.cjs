@@ -7,6 +7,7 @@ const { registerDuplicateCheckIpc } = require('./duplicateCheckIpc.cjs');
 const { registerExportIpc } = require('./exportIpc.cjs');
 const { registerFileIpc } = require('./fileIpc.cjs');
 const { registerKnowledgeBaseIpc } = require('./knowledgeBaseIpc.cjs');
+const { registerLicenseIpc } = require('./licenseIpc.cjs');
 const { registerRejectionCheckIpc } = require('./rejectionCheckIpc.cjs');
 const { registerTaskIpc } = require('./taskIpc.cjs');
 const { registerTechnicalPlanIpc } = require('./technicalPlanIpc.cjs');
@@ -21,6 +22,7 @@ const { createExportService } = require('../services/exportService.cjs');
 const { createFileService } = require('../services/fileService.cjs');
 const { createKnowledgeBaseService } = require('../services/knowledgeBaseService.cjs');
 const { createKnowledgeBaseStore } = require('../services/knowledgeBaseStore.cjs');
+const { createLicenseService } = require('../services/licenseService.cjs');
 const { createRejectionCheckStore } = require('../services/rejectionCheckStore.cjs');
 const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
 const { createSystemFontService } = require('../services/systemFontService.cjs');
@@ -178,6 +180,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
 
 function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow }) {
   const configStore = createConfigStore(app);
+  const licenseService = createLicenseService({ app, configStore });
   const aiService = createAiService({ app, configStore });
   const agentService = createAgentService({ app, configStore, mainWindow });
   const fileService = createFileService({ app, configStore });
@@ -255,6 +258,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     },
   });
   registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsWindow });
+  registerLicenseIpc({ licenseService });
   registerAiIpc({ aiService });
   registerAgentIpc({ agentService, mainWindow });
   registerFileIpc({ fileService });
@@ -267,6 +271,12 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
       console.warn('[agent] warmup failed', error?.message || String(error));
     });
   }, 500);
+
+  setTimeout(() => {
+    void licenseService.refreshOnStartup?.().catch((error) => {
+      console.warn('[license] startup refresh failed', error?.message || String(error));
+    });
+  }, 800);
 
   const startWorkspaceDatabase = () => {
     if (workspaceDatabaseStarted) return;

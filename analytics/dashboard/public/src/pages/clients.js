@@ -6,6 +6,36 @@ function detailButton(clientId) {
   return `<button class="link-button" type="button" data-client-detail="${escapeHtml(clientId)}">详情</button>`;
 }
 
+function licenseStatusText(value) {
+  const status = String(value || '').trim();
+  const map = {
+    active: '有效',
+    expired: '已过期',
+    missing: '无授权',
+    invalid: '签名无效',
+    invalidated: '已失效',
+    machine_mismatch: '设备不匹配',
+    refresh_failed: '刷新失败',
+  };
+  return map[status] || status || '-';
+}
+
+function licensePlanText(value) {
+  const plan = String(value || '').trim();
+  const map = {
+    free: '免费授权',
+    personal_premium: '个人高级版',
+    enterprise_premium: '企业高级版',
+  };
+  return map[plan] || plan || '-';
+}
+
+function sourceTrustedText(value) {
+  if (value === 'true' || value === true) return '可信';
+  if (value === 'false' || value === false) return '不可信';
+  return '-';
+}
+
 function bindClientDetailButtons() {
   state.clientsTable.querySelectorAll('[data-client-detail]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -27,6 +57,9 @@ export async function loadClients() {
   const rows = (data.clients || []).map((client) => ({
     ...client,
     activeDays: formatNumber(client.activeDays),
+    licensePlanText: licensePlanText(client.licensePlan),
+    licenseStatusText: licenseStatusText(client.licenseStatus),
+    sourceTrustedText: sourceTrustedText(client.sourceTrusted),
     action: detailButton(client.clientId),
   }));
 
@@ -36,6 +69,10 @@ export async function loadClients() {
     { key: 'activeDays', label: '访问天数' },
     { key: 'lastActiveDate', label: '最近活跃日期' },
     { key: 'lastActiveVersion', label: '最近活跃版本', code: true },
+    { key: 'licensePlanText', label: '授权类型' },
+    { key: 'licenseStatusText', label: '授权状态' },
+    { key: 'licenseExpiresAt', label: '授权有效期' },
+    { key: 'sourceTrustedText', label: '安装来源' },
     { key: 'lastAccessIp', label: '最后访问 IP', code: true },
     { key: 'action', label: '操作', html: true },
   ], '暂无客户端数据');

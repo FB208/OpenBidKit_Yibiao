@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS stats_clients (
   last_access_ip TEXT NOT NULL DEFAULT '',
   platform TEXT NOT NULL DEFAULT '',
   arch TEXT NOT NULL DEFAULT '',
+  license_status TEXT NOT NULL DEFAULT '',
+  license_plan TEXT NOT NULL DEFAULT '',
+  license_expires_at TEXT NOT NULL DEFAULT '',
+  source_trusted TEXT NOT NULL DEFAULT '',
+  untrusted_reason TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (project_name, client_id)

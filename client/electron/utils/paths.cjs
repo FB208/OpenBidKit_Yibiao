@@ -8,6 +8,10 @@ function getConfigFilePath(app) {
   return path.join(getUserDataPath(app), 'user_config.json');
 }
 
+function getLicenseFilePath(app) {
+  return path.join(getUserDataPath(app), 'license.json');
+}
+
 function getGpuStartupProbePath(app) {
   return path.join(getUserDataPath(app), 'gpu_startup_probe.json');
 }
@@ -116,6 +120,7 @@ module.exports = {
   getGeneratedImagesDir,
   getImportedImagesDir,
   getKnowledgeBaseDir,
+  getLicenseFilePath,
   getRejectionCheckDir,
   getRejectionCheckDocumentMarkdownPath,
   getTechnicalPlanDir,

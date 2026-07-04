@@ -43,6 +43,10 @@ const bridge = {
     listModels: (config) => ipcRenderer.invoke('config:list-models', config),
     openConfigFolder: () => ipcRenderer.invoke('config:open-config-folder'),
   },
+  license: {
+    getStatus: () => ipcRenderer.invoke('license:get-status'),
+    refresh: () => ipcRenderer.invoke('license:refresh'),
+  },
   ai: {
     chat: (request) => ipcRenderer.invoke('ai:chat', request),
     requestJson: (request) => ipcRenderer.invoke('ai:request-json', request),
