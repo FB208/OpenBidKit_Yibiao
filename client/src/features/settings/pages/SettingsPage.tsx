@@ -37,7 +37,7 @@ function normalizeUpdateChannel(value?: string): UpdateChannel {
 }
 
 const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
-  { value: 'jinlong', label: '金龙中转站【推荐】' },
+  { value: 'jinlong', label: '【近期不稳定，先用其他的】' },
   { value: 'volcengine', label: '火山方舟' },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'longcat', label: '龙猫' },
@@ -54,7 +54,7 @@ const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 
 const textProviderDefaults: TextModelProfiles = {
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1/pause', model_name: 'gpt-3.5-turbo', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
   volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
   deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
   longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
@@ -135,7 +135,7 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
 }
 
 const imageProviders: Array<{ value: ImageModelProvider; label: string }> = [
-  { value: 'jinlong', label: '金龙中转站【推荐】' },
+  { value: 'jinlong', label: '【近期不稳定，先用其他的】' },
   { value: 'volcengine', label: '火山方舟' },
   { value: 'google-ai-studio', label: 'Google AI Studio' },
   { value: 'agnes', label: 'Agnes AI' },
@@ -177,7 +177,7 @@ function normalizeImageSize(provider: ImageModelProvider, value?: string): Image
 const imageProviderDefaults: ImageModelProfiles = {
   jinlong: {
     provider: 'jinlong',
-    base_url: 'https://img-api.jlaudeapi.com/v1',
+    base_url: 'https://img-api.jlaudeapi.com/v1/pause',
     api_key: '',
     model_name: '',
     image_size: '1024x1024',
