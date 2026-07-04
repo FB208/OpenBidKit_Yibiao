@@ -423,6 +423,9 @@ button {
 }
 
 .sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   margin-top: auto;
   padding-top: 18px;
   border-top: 1px solid var(--yb-border-soft);
@@ -10822,6 +10825,8 @@ button {
   }
 
   .sidebar-footer {
+    flex-direction: row;
+    gap: 8px;
     margin: 0;
     padding: 0;
     border-top: 0;

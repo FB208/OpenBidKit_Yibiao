@@ -38,6 +38,8 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   settings: GearIcon,
 };
 
+const USER_GUIDE_URL = 'https://wiki.agnet.top/';
+
 function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const { showToast } = useToast();
@@ -113,6 +115,7 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
       </nav>
 
       <div className="sidebar-footer">
+        {collapsed ? wrapTooltip('使用文档', renderUserGuideButton()) : renderUserGuideButton()}
         {collapsed ? wrapTooltip('设置', renderSettingsButton(activeSection, onSectionChange)) : renderSettingsButton(activeSection, onSectionChange)}
       </div>
     </aside>
@@ -147,6 +150,25 @@ function renderSettingsButton(activeSection: SectionId, onSectionChange: (sectio
       <span className="settings-copy">
         <strong>设置</strong>
         <small>模型与解析配置</small>
+      </span>
+    </button>
+  );
+}
+
+function renderUserGuideButton() {
+  return (
+    <button
+      type="button"
+      className="settings-trigger"
+      onClick={() => void openExternalUrl(USER_GUIDE_URL)}
+      aria-label="使用文档"
+    >
+      <span className="nav-icon" aria-hidden="true">
+        <BookIcon />
+      </span>
+      <span className="settings-copy">
+        <strong>使用文档</strong>
+        <small>教程与功能共创</small>
       </span>
     </button>
   );
@@ -284,6 +306,17 @@ function GearIcon(props: SVGProps<SVGSVGElement>) {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
       <path d="M12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Z" />
       <path d="m19.1 13.5.1-1.5-.1-1.5 2-1.5-2-3.4-2.45.95a8.2 8.2 0 0 0-2.55-1.45L13.75 2h-3.5L9.9 5.1a8.2 8.2 0 0 0-2.55 1.45L4.9 5.6l-2 3.4 2 1.5L4.8 12l.1 1.5-2 1.5 2 3.4 2.45-.95A8.2 8.2 0 0 0 9.9 18.9l.35 3.1h3.5l.35-3.1a8.2 8.2 0 0 0 2.55-1.45l2.45.95 2-3.4z" />
+    </svg>
+  );
+}
+
+function BookIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
+      <path d="M5.5 4.5h5.2c1.25 0 2.3 1.05 2.3 2.3v12.7c-.45-.8-1.25-1.3-2.3-1.3H5.5z" />
+      <path d="M18.5 4.5h-5.2C12.05 4.5 11 5.55 11 6.8v12.7c.45-.8 1.25-1.3 2.3-1.3h5.2z" />
+      <path d="M8 8h2" />
+      <path d="M14 8h2" />
     </svg>
   );
 }
