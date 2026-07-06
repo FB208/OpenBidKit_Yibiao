@@ -3,6 +3,7 @@ const zlib = require('node:zlib');
 const { AI_QUEUE_SCOPE_PAUSED } = require('../utils/aiRequestQueue.cjs');
 const { createNoopDeveloperLogger } = require('../utils/developerLog.cjs');
 const { applyRangeEdits } = require('../utils/textEdit.cjs');
+const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 
 const IMAGE_STYLES = new Set(['engineering_diagram', 'realistic_photo']);
@@ -1141,27 +1142,12 @@ ${String(restoredContent || '').trim()}`,
 
 function splitLongOriginalSegment(segment) {
   const content = String(segment.content || '').trim();
-  if (!content || content.length <= ORIGINAL_PLAN_SEGMENT_MAX_CHARS) {
-    return content ? [segment] : [];
-  }
-
-  const paragraphs = content.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
-  const chunks = [];
-  let buffer = [];
-  let size = 0;
-  for (const paragraph of paragraphs.length ? paragraphs : [content]) {
-    if (buffer.length && size + paragraph.length > ORIGINAL_PLAN_SEGMENT_MAX_CHARS) {
-      chunks.push({ ...segment, content: buffer.join('\n\n') });
-      buffer = [];
-      size = 0;
-    }
-    buffer.push(paragraph);
-    size += paragraph.length;
-  }
-  if (buffer.length) {
-    chunks.push({ ...segment, content: buffer.join('\n\n') });
-  }
-  return chunks;
+  if (!content) return [];
+  return splitUserTextByContextLimit(content, {}, {
+    contextLengthLimit: ORIGINAL_PLAN_SEGMENT_MAX_CHARS,
+    limitRatio: 1,
+    maxSegmentLimitRatio: 1,
+  }).map((part) => ({ ...segment, content: part.trim() })).filter((part) => part.content);
 }
 
 function splitOriginalPlanSegments(markdown) {

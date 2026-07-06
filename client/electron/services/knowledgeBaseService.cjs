@@ -5,6 +5,7 @@ const path = require('node:path');
 const { dialog } = require('electron');
 const { getKnowledgeBaseDir } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
+const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { parseDocumentWithConfig } = require('./fileService.cjs');
 
 const supportedExtensions = new Set(['.doc', '.docx', '.wps', '.pdf', '.md', '.markdown']);
@@ -82,21 +83,11 @@ function stripMarkdownFence(content) {
 }
 
 function splitOversizedText(text, limit) {
-  const parts = [];
-  let buffer = '';
-  const sentences = String(text || '').split(/(?<=[。！？!?；;])\s*/);
-  for (const sentence of sentences) {
-    if (!sentence) continue;
-    if (buffer && buffer.length + sentence.length > limit) {
-      parts.push(buffer.trim());
-      buffer = '';
-    }
-    buffer += sentence;
-  }
-  if (buffer.trim()) {
-    parts.push(buffer.trim());
-  }
-  return parts.length ? parts : [String(text || '')];
+  return splitUserTextByContextLimit(String(text || ''), {}, {
+    contextLengthLimit: limit,
+    limitRatio: 1,
+    maxSegmentLimitRatio: 1,
+  }).map((part) => part.trim()).filter(Boolean);
 }
 
 function normalizeRepeatedText(text) {
