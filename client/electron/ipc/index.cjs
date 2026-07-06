@@ -43,6 +43,20 @@ function normalizeExternalUrl(value) {
   }
 }
 
+function sendToWebContents(webContents, channel, payload) {
+  if (!webContents || webContents.isDestroyed?.()) {
+    return false;
+  }
+
+  try {
+    webContents.send(channel, payload);
+    return true;
+  } catch (error) {
+    console.warn('[ipc] 发送渲染进程事件失败', { channel, message: error?.message || String(error) });
+    return false;
+  }
+}
+
 const workspaceDatabaseChannels = [
   'technical-plan:load-state',
   'technical-plan:import-tender-document',
@@ -377,13 +391,13 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
       mainWindow,
       configStore,
       onProgress: (percent) => {
-        webContents.send('app:update-progress', { percent });
+        sendToWebContents(webContents, 'app:update-progress', { percent });
       },
       onDownloaded: (version) => {
-        webContents.send('app:update-downloaded', { version });
+        sendToWebContents(webContents, 'app:update-downloaded', { version });
       },
       onError: (message) => {
-        webContents.send('app:update-error', { message });
+        sendToWebContents(webContents, 'app:update-error', { message });
       },
     });
   });
@@ -395,13 +409,13 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
       mainWindow,
       configStore,
       onProgress: (percent) => {
-        webContents.send('app:update-progress', { percent });
+        sendToWebContents(webContents, 'app:update-progress', { percent });
       },
       onDownloaded: (version) => {
-        webContents.send('app:update-downloaded', { version });
+        sendToWebContents(webContents, 'app:update-downloaded', { version });
       },
       onError: (message) => {
-        webContents.send('app:update-error', { message });
+        sendToWebContents(webContents, 'app:update-error', { message });
       },
     });
   });
