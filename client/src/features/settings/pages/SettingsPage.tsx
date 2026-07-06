@@ -1925,23 +1925,42 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 {updateStatus === 'downloaded' ? '安装并重启' : updateBusy ? '检查中...' : '检查更新'}
               </button>
             </article>
-            <div className="about-card-grid">
-              <a className="about-info-card" href="https://github.com/FB208/OpenBidKit_Yibiao" target="_blank" rel="noreferrer">
-                <span>GitHub 仓库</span>
-                <strong>FB208/OpenBidKit_Yibiao</strong>
-                <p>查看源码、Release 和问题反馈。</p>
-              </a>
-              <a className="about-info-card" href="https://wiki.agnet.top/" target="_blank" rel="noreferrer">
-                <span>使用文档</span>
-                <strong>wiki.agnet.top</strong>
-                <p>查看软件配置、工作流和常见问题。</p>
-              </a>
-              <article className={`about-info-card ${licenseStatus?.sourceTrusted ? 'is-trusted' : 'is-untrusted'}`}>
-                <span>客户端授权</span>
-                <strong>{licenseSourceLabel}</strong>
-                <p>{licenseStatus?.sourceTrusted ? '当前客户端来自官方签名构建。' : '建议从官方渠道下载可信客户端。'}</p>
-              </article>
-            </div>
+            <article className="about-info-card about-links-card">
+              <span>信息与授权</span>
+              <ul className="about-links-list">
+                <li className="about-links-item">
+                  <span className="about-links-label">GitHub 仓库</span>
+                  <a
+                    className="about-links-value is-link"
+                    href="https://github.com/FB208/OpenBidKit_Yibiao"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    FB208/OpenBidKit_Yibiao
+                  </a>
+                </li>
+                <li className="about-links-item">
+                  <span className="about-links-label">使用文档</span>
+                  <a
+                    className="about-links-value is-link"
+                    href="https://wiki.agnet.top/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    wiki.agnet.top
+                  </a>
+                </li>
+                <li className="about-links-item">
+                  <span className="about-links-label">客户端授权状态</span>
+                  <span className={`about-links-value ${licenseStatus?.sourceTrusted ? 'is-trusted' : 'is-untrusted'}`}>
+                    {licenseSourceLabel}
+                  </span>
+                </li>
+              </ul>
+              <button type="button" className="about-links-activate" onClick={() => undefined}>
+                离线激活授权
+              </button>
+            </article>
           </div>
           <div className="privacy-statement">
             <div className="privacy-statement-head">
