@@ -5,7 +5,7 @@ import { handleConfigUsage, handleModelUsage } from './routes/configUsage.js';
 import { handleGitHubRepoStats } from './routes/githubRepoStats.js';
 import { handleHealth } from './routes/health.js';
 import { handleLatest } from './routes/latest.js';
-import { handleLicenseActivate, handleLicenseConfig } from './routes/license.js';
+import { handleLicenseActivate, handleLicenseConfig, handleOfflineLicense } from './routes/license.js';
 import { handleAdminNotice, handlePublicNotice } from './routes/notice.js';
 import { handleOverview } from './routes/overview.js';
 import { handleProjects } from './routes/projects.js';
@@ -32,6 +32,7 @@ const routes = new Map([
   ['/api/traffic', handleTraffic],
   ['/api/latest', handleLatest],
   ['/api/license-config', handleLicenseConfig],
+  ['/api/license/offline', handleOfflineLicense],
   ['/api/retention', handleRetention],
   ['/api/config-usage', handleConfigUsage],
   ['/api/model-usage', handleModelUsage],

@@ -24,6 +24,7 @@ function licensePlanText(value) {
   const plan = String(value || '').trim();
   const map = {
     free: '免费授权',
+    offline: '离线授权',
     personal_premium: '个人高级版',
     enterprise_premium: '企业高级版',
   };

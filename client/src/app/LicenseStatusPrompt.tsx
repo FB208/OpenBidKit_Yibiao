@@ -1,5 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useState } from 'react';
+import { OfflineLicenseActivationDialog } from '../shared/ui';
 import type { LicenseRuntimeStatus } from '../shared/types';
 
 const officialDownloadUrl = 'https://github.com/FB208/OpenBidKit_Yibiao';
@@ -22,6 +23,7 @@ function shouldShowPrompt(status: LicenseRuntimeStatus | null) {
 
 function LicenseStatusPrompt() {
   const [licenseStatus, setLicenseStatus] = useState<LicenseRuntimeStatus | null>(null);
+  const [offlineLicenseDialogOpen, setOfflineLicenseDialogOpen] = useState(false);
 
   useEffect(() => {
     let disposed = false;
@@ -73,13 +75,19 @@ function LicenseStatusPrompt() {
             当前客户端{problem}，请从官方渠道下载可信客户端：
             <a href={officialDownloadUrl} target="_blank" rel="noreferrer">{officialDownloadUrl}</a>
           </Dialog.Description>
-          {dismissible && (
-            <div className="license-status-actions">
+          <div className="license-status-actions">
+            <button type="button" className="secondary-action" onClick={() => setOfflineLicenseDialogOpen(true)}>离线激活授权</button>
+            {dismissible && (
               <button type="button" className="primary-action" onClick={() => setLicenseStatus(null)}>我知道了</button>
-            </div>
-          )}
+            )}
+          </div>
         </Dialog.Content>
       </Dialog.Portal>
+      <OfflineLicenseActivationDialog
+        open={offlineLicenseDialogOpen}
+        onOpenChange={setOfflineLicenseDialogOpen}
+        onActivated={(status) => setLicenseStatus(shouldShowPrompt(status) ? status : null)}
+      />
     </Dialog.Root>
   );
 }

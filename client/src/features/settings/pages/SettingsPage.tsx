@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { FloatingToolbar, InputWithAction, useToast } from '../../../shared/ui';
+import { FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { AgentModeScenariosConfig, AgentSelfCheckResult, AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
@@ -490,6 +490,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [updateVersion, setUpdateVersion] = useState('');
   const [updateError, setUpdateError] = useState('');
   const [licenseStatus, setLicenseStatus] = useState<LicenseRuntimeStatus | null>(null);
+  const [offlineLicenseDialogOpen, setOfflineLicenseDialogOpen] = useState(false);
   const [agentSelfCheckStatus, setAgentSelfCheckStatus] = useState<AgentSelfCheckUiStatus>('untested');
   const [agentSelfCheckResult, setAgentSelfCheckResult] = useState<AgentSelfCheckResult | null>(null);
   const [exportingAgentSelfCheckReport, setExportingAgentSelfCheckReport] = useState(false);
@@ -1957,7 +1958,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   </span>
                 </li>
               </ul>
-              <button type="button" className="about-links-activate" onClick={() => undefined}>
+              <button type="button" className="about-links-activate" onClick={() => setOfflineLicenseDialogOpen(true)}>
                 离线激活授权
               </button>
             </article>
@@ -1989,6 +1990,11 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         </section>
       )}
       </div>
+      <OfflineLicenseActivationDialog
+        open={offlineLicenseDialogOpen}
+        onOpenChange={setOfflineLicenseDialogOpen}
+        onActivated={setLicenseStatus}
+      />
       <FloatingToolbar groups={settingsToolbarGroups} label="设置保存工具条" />
     </div>
   );

@@ -46,6 +46,8 @@ const bridge = {
   license: {
     getStatus: () => ipcRenderer.invoke('license:get-status'),
     refresh: () => ipcRenderer.invoke('license:refresh'),
+    importOfflineFile: () => ipcRenderer.invoke('license:import-offline-file'),
+    activateOfflineCode: (code) => ipcRenderer.invoke('license:activate-offline-code', code),
   },
   ai: {
     chat: (request) => ipcRenderer.invoke('ai:chat', request),

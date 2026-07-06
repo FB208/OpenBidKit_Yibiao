@@ -3,6 +3,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
+const { dialog } = require('electron');
 const { fetch } = require('undici');
 const { getLicenseFilePath } = require('../utils/paths.cjs');
 
@@ -14,6 +15,7 @@ const APP_ID = packageJson.build?.appId || 'com.yibiao.openbidkit';
 const PRODUCT_NAME = packageJson.build?.productName || '易标投标工具箱';
 const FINGERPRINT_VERSION = '2026-01';
 const SIGNATURE_ALGORITHM = 'ECDSA_P256_SHA256';
+const OFFLINE_LICENSE_CODE_PREFIX = 'YB-LICENSE-';
 
 const resourcesDir = path.join(__dirname, '..', 'resources');
 const publicKeyPath = path.join(resourcesDir, 'license-public-key.json');
@@ -33,6 +35,10 @@ function base64UrlDecode(value) {
   const text = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
   const padded = `${text}${'='.repeat((4 - (text.length % 4)) % 4)}`;
   return Buffer.from(padded, 'base64');
+}
+
+function base64UrlDecodeText(value) {
+  return base64UrlDecode(value).toString('utf-8');
 }
 
 function readJsonFile(filePath) {
@@ -208,6 +214,23 @@ function normalizeLicenseEnvelope(value) {
   };
 }
 
+function parseLicenseEnvelopeText(value) {
+  const rawText = String(value || '').trim();
+  if (!rawText) {
+    return null;
+  }
+
+  const jsonText = rawText.startsWith(OFFLINE_LICENSE_CODE_PREFIX)
+    ? base64UrlDecodeText(rawText.slice(OFFLINE_LICENSE_CODE_PREFIX.length))
+    : rawText;
+  const parsed = JSON.parse(jsonText);
+  return normalizeLicenseEnvelope(parsed?.license || parsed);
+}
+
+function isOfflineLicensePayload(payload) {
+  return payload?.activationMode === 'offline' || payload?.plan === 'offline';
+}
+
 function normalizeBuildSnapshot(build) {
   const source = build && typeof build === 'object' ? build : {};
   return {
@@ -234,6 +257,7 @@ function createBaseStatus(partial = {}) {
     expiresAt: '',
     licenseExpiresAt: '',
     licenseStatus: 'missing',
+    activationMode: 'online',
     sourceTrusted: false,
     sourceTrustedText: 'false',
     untrustedReason: partial.untrustedReason || 'license_missing',
@@ -258,6 +282,7 @@ function createDebugDisabledStatus(partial = {}) {
     status: 'debug_disabled',
     plan: 'free',
     licenseStatus: 'debug_disabled',
+    activationMode: 'debug_disabled',
     sourceTrusted: true,
     sourceTrustedText: 'true',
     untrustedReason: '',
@@ -275,6 +300,7 @@ function createDebugDisabledStatus(partial = {}) {
 }
 
 function statusFromPayload(payload, status, extra = {}) {
+  const activationMode = String(payload.activationMode || (payload.plan === 'offline' ? 'offline' : 'online'));
   const buildTrusted = extra.buildTrusted !== undefined ? Boolean(extra.buildTrusted) : payload.sourceTrusted === true;
   const sourceTrusted = extra.forceSourceTrusted !== undefined
     ? Boolean(extra.forceSourceTrusted)
@@ -285,13 +311,14 @@ function statusFromPayload(payload, status, extra = {}) {
     expiresAt: String(payload.expiresAt || ''),
     licenseExpiresAt: normalizeDateText(payload.expiresAt),
     licenseStatus: status,
+    activationMode,
     sourceTrusted,
     sourceTrustedText: sourceTrusted ? 'true' : 'false',
     untrustedReason: sourceTrusted ? '' : String(extra.untrustedReason || payload.untrustedReason || 'build_signature_invalid'),
     machineFingerprintHash: String(payload.machineFingerprintHash || ''),
     fingerprintVersion: String(payload.fingerprintVersion || FINGERPRINT_VERSION),
     buildTrusted,
-    buildChanged: Boolean(extra.buildChanged),
+    buildChanged: activationMode === 'offline' ? false : Boolean(extra.buildChanged),
     buildId: String(payload.build?.buildId || ''),
     keyId: String(payload.keyId || payload.build?.keyId || ''),
     config: {
@@ -367,8 +394,9 @@ function createLicenseService({ app, configStore }) {
     }
 
     const payload = envelope.payload;
-    const buildChanged = !isLicenseBuildCurrent(payload, buildAttestation);
-    if (payload.clientId !== runtimeContext.clientId || payload.machineFingerprintHash !== runtimeContext.machineFingerprintHash) {
+    const offlineLicense = isOfflineLicensePayload(payload);
+    const buildChanged = offlineLicense ? false : !isLicenseBuildCurrent(payload, buildAttestation);
+    if (payload.clientId !== runtimeContext.clientId || (payload.machineFingerprintHash && payload.machineFingerprintHash !== runtimeContext.machineFingerprintHash)) {
       invalidateLocalLicense(envelope, 'license_machine_mismatch');
       currentStatus = statusFromPayload(payload, 'machine_mismatch', {
         ...base,
@@ -410,6 +438,11 @@ function createLicenseService({ app, configStore }) {
     }
 
     const context = buildContext();
+    const localStatus = await evaluateLocalLicense(context);
+    if (localStatus.activationMode === 'offline') {
+      return localStatus;
+    }
+
     const buildAttestation = readBuildAttestation();
     const body = {
       projectName: PROJECT_NAME,
@@ -461,6 +494,9 @@ function createLicenseService({ app, configStore }) {
 
   async function refreshOnStartup() {
     const status = await evaluateLocalLicense();
+    if (status.activationMode === 'offline') {
+      return status;
+    }
     if (status.status === 'active' && status.buildChanged) {
       return refreshLicense();
     }
@@ -468,6 +504,93 @@ function createLicenseService({ app, configStore }) {
       return status;
     }
     return refreshLicense();
+  }
+
+  async function activateOfflineLicenseEnvelope(envelope) {
+    if (debugLicenseDisabled) {
+      return {
+        success: false,
+        message: '开发调试模式不需要离线激活授权',
+        status: await evaluateLocalLicense(),
+      };
+    }
+
+    const normalizedEnvelope = normalizeLicenseEnvelope(envelope);
+    if (!normalizedEnvelope) {
+      throw new Error('离线授权数据格式不完整');
+    }
+
+    const publicJwk = getPublicJwk();
+    const signatureValid = await verifyPayload(publicJwk, normalizedEnvelope.payload, normalizedEnvelope.signature);
+    if (!signatureValid) {
+      throw new Error('离线授权签名无效');
+    }
+
+    const context = buildContext();
+    const payload = normalizedEnvelope.payload;
+    if (payload.clientId !== context.clientId) {
+      throw new Error('离线授权不属于当前客户端');
+    }
+    if (payload.machineFingerprintHash && payload.machineFingerprintHash !== context.machineFingerprintHash) {
+      throw new Error('离线授权不属于当前设备');
+    }
+    if (isExpired(payload.expiresAt)) {
+      throw new Error('离线授权已过期');
+    }
+
+    writeJsonAtomic(licenseFile, {
+      ...normalizedEnvelope,
+      local: {
+        activatedAt: nowIso(),
+        activationMode: 'offline',
+      },
+    });
+    const status = await evaluateLocalLicense(context);
+    return {
+      success: status.status === 'active',
+      message: status.status === 'active' ? '离线授权已激活' : '离线授权已导入，但授权状态异常',
+      status,
+    };
+  }
+
+  async function activateOfflineLicenseText(value) {
+    let envelope;
+    try {
+      envelope = parseLicenseEnvelopeText(value);
+    } catch {
+      throw new Error('离线授权码格式无效');
+    }
+    return activateOfflineLicenseEnvelope(envelope);
+  }
+
+  async function importOfflineLicenseFile() {
+    if (debugLicenseDisabled) {
+      return {
+        success: false,
+        message: '开发调试模式不需要离线激活授权',
+        status: await evaluateLocalLicense(),
+      };
+    }
+
+    const result = await dialog.showOpenDialog({
+      title: '选择离线授权文件',
+      properties: ['openFile'],
+      filters: [
+        { name: '易标离线授权文件', extensions: ['json', 'license', 'txt'] },
+        { name: '所有文件', extensions: ['*'] },
+      ],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return {
+        success: false,
+        canceled: true,
+        message: '已取消选择',
+        status: await evaluateLocalLicense(),
+      };
+    }
+
+    const content = fs.readFileSync(result.filePaths[0], 'utf-8');
+    return activateOfflineLicenseText(content);
   }
 
   return {
@@ -482,6 +605,12 @@ function createLicenseService({ app, configStore }) {
     },
     refresh() {
       return refreshLicense();
+    },
+    importOfflineFile() {
+      return importOfflineLicenseFile();
+    },
+    activateOfflineCode(code) {
+      return activateOfflineLicenseText(code);
     },
     refreshOnStartup,
     getCurrentStatus() {

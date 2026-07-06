@@ -4002,7 +4002,99 @@ button {
 
 .license-status-actions {
   display: flex;
+  gap: 10px;
   justify-content: flex-end;
+}
+
+.offline-license-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 123;
+  display: grid;
+  gap: 16px;
+  width: min(560px, calc(100vw - 40px));
+  max-height: min(720px, calc(100vh - 40px));
+  padding: 24px;
+  overflow: auto;
+  background: #ffffff;
+  border: 1px solid rgba(220, 223, 230, 0.9);
+  border-radius: 22px;
+  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.24);
+  transform: translate(-50%, -50%);
+}
+
+.offline-license-dialog h2 {
+  margin: 0;
+  color: var(--yb-text);
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+
+.offline-license-dialog p {
+  margin: 0;
+  color: var(--yb-text-soft);
+  line-height: 1.8;
+}
+
+.offline-license-client {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  background: rgba(33, 116, 253, 0.06);
+  border: 1px solid rgba(33, 116, 253, 0.12);
+  border-radius: 14px;
+}
+
+.offline-license-client span,
+.offline-license-code-field span {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.offline-license-client code {
+  min-width: 0;
+  color: var(--yb-text);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.offline-license-client .secondary-action,
+.offline-license-actions .secondary-action,
+.offline-license-actions .primary-action,
+.offline-license-import .primary-action {
+  padding: 9px 16px;
+  font-size: 13px;
+}
+
+.offline-license-import {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.offline-license-code-field {
+  display: grid;
+  gap: 8px;
+}
+
+.offline-license-code-field textarea {
+  min-height: 140px;
+  padding: 12px;
+  color: var(--yb-text);
+  font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  resize: vertical;
+  background: var(--yb-bg-soft);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 14px;
+}
+
+.offline-license-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .detail-help-link {

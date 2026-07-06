@@ -292,33 +292,75 @@
         <div class="section-head">
           <div>
             <h2>授权管理</h2>
-            <p>当前只配置免费授权策略。客户端会在授权刷新时接收弹窗配置，不做功能阻断。</p>
+            <p>免费授权和离线授权分别配置弹窗规则；客户端使用相同字段执行过期提醒逻辑。</p>
           </div>
           <button id="loadLicenseConfigButton" type="button">读取授权配置</button>
         </div>
-        <div id="licenseMeta" class="notice-meta">当前未读取授权配置。</div>
-        <div class="notice-form">
-          <label>
-            免费授权有效期（天）
-            <input id="licenseFreeDays" type="number" min="1" value="30" />
-          </label>
-          <label>
-            授权过期弹窗
-            <select id="licenseExpirePopupEnabled">
-              <option value="true" selected>开启</option>
-              <option value="false">关闭</option>
-            </select>
-          </label>
-          <label>
-            过期弹窗是否可关闭
-            <select id="licenseExpirePopupDismissible">
-              <option value="true" selected>可关闭</option>
-              <option value="false">不可关闭</option>
-            </select>
-          </label>
-        </div>
-        <div class="notice-actions">
-          <button id="saveLicenseConfigButton" type="button">保存授权配置</button>
+        <div class="license-management-grid">
+          <div class="license-management-card">
+            <h3>免费授权策略</h3>
+            <div id="licenseMeta" class="notice-meta">当前未读取授权配置。</div>
+            <div class="notice-form">
+              <label>
+                免费授权有效期（天）
+                <input id="licenseFreeDays" type="number" min="1" value="30" />
+              </label>
+              <label>
+                授权过期弹窗
+                <select id="licenseExpirePopupEnabled">
+                  <option value="true" selected>开启</option>
+                  <option value="false">关闭</option>
+                </select>
+              </label>
+              <label>
+                过期弹窗是否可关闭
+                <select id="licenseExpirePopupDismissible">
+                  <option value="true" selected>可关闭</option>
+                  <option value="false">不可关闭</option>
+                </select>
+              </label>
+            </div>
+            <div class="notice-actions">
+              <button id="saveLicenseConfigButton" type="button">保存免费授权配置</button>
+            </div>
+          </div>
+          <div class="license-management-card">
+            <h3>离线授权生成</h3>
+            <div class="notice-meta">录入客户端 Client ID 和授权失效期后生成离线授权文件或授权码。</div>
+            <div class="notice-form">
+              <label>
+                Client ID
+                <input id="licenseOfflineClientId" placeholder="粘贴客户端关于页显示的 Client ID" />
+              </label>
+              <label>
+                授权失效期
+                <input id="licenseOfflineExpiresAt" type="date" />
+              </label>
+              <label>
+                授权过期弹窗
+                <select id="licenseOfflineExpirePopupEnabled">
+                  <option value="true" selected>开启</option>
+                  <option value="false">关闭</option>
+                </select>
+              </label>
+              <label>
+                过期弹窗是否可关闭
+                <select id="licenseOfflineExpirePopupDismissible">
+                  <option value="true" selected>可关闭</option>
+                  <option value="false">不可关闭</option>
+                </select>
+              </label>
+              <label class="notice-field-wide">
+                离线授权码
+                <textarea id="licenseOfflineCode" readonly placeholder="生成后在这里复制授权码，也可以下载授权文件。"></textarea>
+              </label>
+            </div>
+            <div class="notice-actions">
+              <button id="downloadOfflineLicenseButton" type="button" disabled>下载授权文件</button>
+              <button id="generateOfflineLicenseButton" type="button">生成离线授权</button>
+            </div>
+            <div id="offlineLicenseStatus" class="notice-status"></div>
+          </div>
         </div>
         <div id="licenseStatus" class="notice-status"></div>
       </section>

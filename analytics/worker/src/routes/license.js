@@ -5,6 +5,9 @@ import { isValidProjectName, normalizeText } from '../utils.js';
 
 const LICENSE_PLANS = new Set(['free', 'personal_premium', 'enterprise_premium']);
 const FINGERPRINT_VERSION = '2026-01';
+const OFFLINE_LICENSE_CODE_PREFIX = 'YB-LICENSE-';
+const DEFAULT_APP_ID = 'com.yibiao.openbidkit';
+const DEFAULT_PRODUCT_NAME = '易标投标工具箱';
 
 function addDaysIso(days) {
   return new Date(Date.now() + Math.max(1, Number(days || 1)) * 86400000).toISOString();
@@ -12,6 +15,41 @@ function addDaysIso(days) {
 
 function normalizeBooleanText(value) {
   return value === true ? 'true' : 'false';
+}
+
+function normalizeBooleanValue(value, defaultValue = true) {
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  return defaultValue;
+}
+
+function normalizeExpiresAt(value) {
+  const text = normalizeText(value, 40);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const expiresAt = `${text}T23:59:59.999Z`;
+    if (new Date(expiresAt).getTime() <= Date.now()) {
+      throw new Error('invalid expiresAt');
+    }
+    return expiresAt;
+  }
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) {
+    throw new Error('invalid expiresAt');
+  }
+  return date.toISOString();
+}
+
+function base64UrlEncodeText(value) {
+  let binary = '';
+  const bytes = new TextEncoder().encode(value);
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function encodeOfflineLicenseCode(license) {
+  return `${OFFLINE_LICENSE_CODE_PREFIX}${base64UrlEncodeText(JSON.stringify(license))}`;
 }
 
 function normalizeBuildInfo(buildAttestation) {
@@ -115,4 +153,69 @@ export async function handleLicenseConfig(request, env, url) {
   }
 
   return methodNotAllowed();
+}
+
+export async function handleOfflineLicense(request, env) {
+  if (!requireAdmin(request, env)) {
+    return unauthorized();
+  }
+
+  if (request.method !== 'POST') {
+    return methodNotAllowed();
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ code: 400, message: 'invalid json body' }, { status: 400 });
+  }
+
+  const projectName = normalizeText(body.projectName || body.project_name, 80);
+  const clientId = normalizeText(body.clientId || body.client_id, 120);
+  if (!isValidProjectName(projectName) || !clientId) {
+    return json({ code: 400, message: 'invalid params' }, { status: 400 });
+  }
+
+  let expiresAt;
+  try {
+    expiresAt = normalizeExpiresAt(body.expiresAt || body.expires_at);
+  } catch {
+    return json({ code: 400, message: 'invalid expiresAt' }, { status: 400 });
+  }
+
+  const payload = {
+    schemaVersion: 1,
+    activationMode: 'offline',
+    projectName,
+    appId: normalizeText(body.appId || body.app_id, 120) || DEFAULT_APP_ID,
+    productName: normalizeText(body.productName || body.product_name, 120) || DEFAULT_PRODUCT_NAME,
+    clientId,
+    clientCreatedAt: normalizeText(body.clientCreatedAt || body.client_created_at, 20).slice(0, 10),
+    machineFingerprintHash: normalizeText(body.machineFingerprintHash || body.machine_fingerprint_hash, 128),
+    fingerprintVersion: normalizeText(body.fingerprintVersion || body.fingerprint_version, 40) || FINGERPRINT_VERSION,
+    plan: 'offline',
+    status: 'active',
+    issuedAt: new Date().toISOString(),
+    expiresAt,
+    sourceTrusted: true,
+    sourceTrustedText: 'true',
+    untrustedReason: '',
+    keyId: normalizeText(env.LICENSE_KEY_ID || env.YIBIAO_LICENSE_KEY_ID || 'official-build-key-2026-01', 80),
+    build: normalizeBuildInfo(null),
+    config: {
+      freeLicenseDays: 30,
+      expirePopupEnabled: normalizeBooleanValue(body.expirePopupEnabled ?? body.expire_popup_enabled, true),
+      expirePopupDismissible: normalizeBooleanValue(body.expirePopupDismissible ?? body.expire_popup_dismissible, true),
+    },
+  };
+
+  try {
+    const signature = await signPayload(env, payload);
+    const license = { payload, signature };
+    return json({ code: 0, license, licenseCode: encodeOfflineLicenseCode(license) }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    console.error('[license] offline signing failed', error?.message || String(error));
+    return json({ code: 500, message: 'license signing failed' }, { status: 500 });
+  }
 }

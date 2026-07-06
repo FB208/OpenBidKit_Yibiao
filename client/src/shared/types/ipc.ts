@@ -116,6 +116,7 @@ export interface LicenseRuntimeStatus {
   expiresAt: string;
   licenseExpiresAt: string;
   licenseStatus: string;
+  activationMode: 'online' | 'offline' | 'debug_disabled' | string;
   sourceTrusted: boolean;
   sourceTrustedText: string;
   untrustedReason: string;
@@ -132,6 +133,13 @@ export interface LicenseRuntimeStatus {
     expirePopupEnabled: boolean;
     expirePopupDismissible: boolean;
   };
+}
+
+export interface LicenseOfflineActivationResult {
+  success: boolean;
+  canceled?: boolean;
+  message: string;
+  status: LicenseRuntimeStatus;
 }
 
 export interface AgentRuntimeStatus {
@@ -310,6 +318,8 @@ export interface YibiaoBridge {
   license: {
     getStatus: () => Promise<LicenseRuntimeStatus>;
     refresh: () => Promise<LicenseRuntimeStatus>;
+    importOfflineFile: () => Promise<LicenseOfflineActivationResult>;
+    activateOfflineCode: (code: string) => Promise<LicenseOfflineActivationResult>;
   };
   ai: {
     chat: (request: ChatCompletionRequest) => Promise<string>;
