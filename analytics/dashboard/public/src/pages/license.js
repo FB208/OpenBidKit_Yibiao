@@ -10,7 +10,7 @@ function fillLicenseForm(config) {
   const source = config || {};
   state.licenseFreeDays.value = String(source.freeLicenseDays || 30);
   state.licenseExpirePopupEnabled.value = source.expirePopupEnabled === false ? 'false' : 'true';
-  state.licenseExpirePopupDismissible.value = source.expirePopupDismissible === true ? 'true' : 'false';
+  state.licenseExpirePopupDismissible.value = source.expirePopupDismissible === false ? 'false' : 'true';
   state.licenseMeta.textContent = `项目：${source.projectName || getSelectedProjectName() || '-'}\n更新时间：${source.updatedAt || '默认配置'}`;
 }
 

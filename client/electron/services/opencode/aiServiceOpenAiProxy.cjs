@@ -23,7 +23,7 @@ const {
 } = require('../textTokenStatsStore.cjs');
 
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
-const DEFAULT_UPSTREAM_TIMEOUT_MS = 300000;
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 600000;
 const SERVER_TIMEOUT_BUFFER_MS = 10000;
 
 function normalizeTimeoutMs(value, fallback = DEFAULT_UPSTREAM_TIMEOUT_MS) {

@@ -74,7 +74,7 @@ export async function handleLicenseActivate(request, env) {
     config: {
       freeLicenseDays: config.freeLicenseDays,
       expirePopupEnabled: config.expirePopupEnabled !== false,
-      expirePopupDismissible: config.expirePopupDismissible === true,
+      expirePopupDismissible: config.expirePopupDismissible !== false,
     },
   };
 

@@ -208,6 +208,25 @@ function normalizeLicenseEnvelope(value) {
   };
 }
 
+function normalizeBuildSnapshot(build) {
+  const source = build && typeof build === 'object' ? build : {};
+  return {
+    buildId: String(source.buildId || ''),
+    gitCommitSha: String(source.gitCommitSha || ''),
+    builtAt: String(source.builtAt || ''),
+    keyId: String(source.keyId || ''),
+  };
+}
+
+function isLicenseBuildCurrent(payload, buildAttestation) {
+  const licenseBuild = normalizeBuildSnapshot(payload?.build);
+  const currentBuild = normalizeBuildSnapshot(buildAttestation);
+  return licenseBuild.buildId === currentBuild.buildId
+    && licenseBuild.gitCommitSha === currentBuild.gitCommitSha
+    && licenseBuild.builtAt === currentBuild.builtAt
+    && licenseBuild.keyId === currentBuild.keyId;
+}
+
 function createBaseStatus(partial = {}) {
   return {
     status: 'missing',
@@ -221,13 +240,14 @@ function createBaseStatus(partial = {}) {
     machineFingerprintHash: '',
     fingerprintVersion: FINGERPRINT_VERSION,
     buildTrusted: false,
+    buildChanged: false,
     buildId: '',
     keyId: '',
     lastCheckedAt: nowIso(),
     config: {
       freeLicenseDays: 30,
       expirePopupEnabled: true,
-      expirePopupDismissible: false,
+      expirePopupDismissible: true,
     },
     ...partial,
   };
@@ -250,12 +270,13 @@ function statusFromPayload(payload, status, extra = {}) {
     machineFingerprintHash: String(payload.machineFingerprintHash || ''),
     fingerprintVersion: String(payload.fingerprintVersion || FINGERPRINT_VERSION),
     buildTrusted,
+    buildChanged: Boolean(extra.buildChanged),
     buildId: String(payload.build?.buildId || ''),
     keyId: String(payload.keyId || payload.build?.keyId || ''),
     config: {
       freeLicenseDays: Number(payload.config?.freeLicenseDays || 30),
       expirePopupEnabled: payload.config?.expirePopupEnabled !== false,
-      expirePopupDismissible: payload.config?.expirePopupDismissible === true,
+      expirePopupDismissible: payload.config?.expirePopupDismissible !== false,
     },
   });
 }
@@ -318,10 +339,12 @@ function createLicenseService({ app, configStore }) {
     }
 
     const payload = envelope.payload;
+    const buildChanged = !isLicenseBuildCurrent(payload, buildAttestation);
     if (payload.clientId !== context.clientId || payload.machineFingerprintHash !== context.machineFingerprintHash) {
       invalidateLocalLicense(envelope, 'license_machine_mismatch');
       currentStatus = statusFromPayload(payload, 'machine_mismatch', {
         ...base,
+        buildChanged,
         forceSourceTrusted: false,
         untrustedReason: 'license_machine_mismatch',
       });
@@ -329,11 +352,11 @@ function createLicenseService({ app, configStore }) {
     }
 
     if (isExpired(payload.expiresAt)) {
-      currentStatus = statusFromPayload(payload, 'expired', base);
+      currentStatus = statusFromPayload(payload, 'expired', { ...base, buildChanged });
       return currentStatus;
     }
 
-    currentStatus = statusFromPayload(payload, 'active', base);
+    currentStatus = statusFromPayload(payload, 'active', { ...base, buildChanged });
     return currentStatus;
   }
 
@@ -406,6 +429,9 @@ function createLicenseService({ app, configStore }) {
 
   async function refreshOnStartup() {
     const status = await evaluateLocalLicense();
+    if (status.status === 'active' && status.buildChanged) {
+      return refreshLicense();
+    }
     if (status.status === 'active' || status.status === 'machine_mismatch' || status.status === 'invalidated') {
       return status;
     }

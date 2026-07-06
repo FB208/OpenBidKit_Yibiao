@@ -16,7 +16,7 @@ export function normalizeLicenseConfig(config, projectName = '') {
     projectName: normalizeText(source.projectName || projectName, 80),
     freeLicenseDays: normalizeFreeLicenseDays(source.freeLicenseDays ?? source.free_license_days),
     expirePopupEnabled: source.expirePopupEnabled ?? source.expire_popup_enabled ?? true,
-    expirePopupDismissible: source.expirePopupDismissible ?? source.expire_popup_dismissible ?? false,
+    expirePopupDismissible: source.expirePopupDismissible ?? source.expire_popup_dismissible ?? true,
     updatedAt: normalizeText(source.updatedAt || source.updated_at, 40),
   };
 }

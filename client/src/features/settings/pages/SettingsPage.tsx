@@ -3,7 +3,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, InputWithAction, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AgentSelfCheckResult, AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AgentSelfCheckResult, AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'agent' | 'about';
@@ -36,6 +36,11 @@ function normalizeUpdateChannel(value?: string): UpdateChannel {
   return value === 'cloudflare' ? 'cloudflare' : 'github';
 }
 
+function getLicenseSourceLabel(status: LicenseRuntimeStatus | null) {
+  if (!status) return '读取中';
+  return status.sourceTrusted ? '官方发行版' : '不可信的客户端来源';
+}
+
 const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
   { value: 'jinlong', label: '【近期不稳定，先用其他的】' },
   { value: 'volcengine', label: '火山方舟' },
@@ -54,7 +59,7 @@ const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 
 const textProviderDefaults: TextModelProfiles = {
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1/pause', model_name: 'gpt-3.5-turbo', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
   volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
   deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
   longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
@@ -177,7 +182,7 @@ function normalizeImageSize(provider: ImageModelProvider, value?: string): Image
 const imageProviderDefaults: ImageModelProfiles = {
   jinlong: {
     provider: 'jinlong',
-    base_url: 'https://img-api.jlaudeapi.com/v1/pause',
+    base_url: 'https://img-api.jlaudeapi.com/v',
     api_key: '',
     model_name: '',
     image_size: '1024x1024',
@@ -471,6 +476,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [updatePercent, setUpdatePercent] = useState(0);
   const [updateVersion, setUpdateVersion] = useState('');
   const [updateError, setUpdateError] = useState('');
+  const [licenseStatus, setLicenseStatus] = useState<LicenseRuntimeStatus | null>(null);
   const [agentSelfCheckStatus, setAgentSelfCheckStatus] = useState<AgentSelfCheckUiStatus>('untested');
   const [agentSelfCheckResult, setAgentSelfCheckResult] = useState<AgentSelfCheckResult | null>(null);
   const [exportingAgentSelfCheckReport, setExportingAgentSelfCheckReport] = useState(false);
@@ -479,6 +485,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   useEffect(() => {
     void loadTextConfig();
     void window.yibiao?.getVersion().then(setAppVersion);
+    void window.yibiao?.license?.getStatus().then(setLicenseStatus).catch(() => setLicenseStatus(null));
 
     const unsubs: Array<() => void> = [];
     unsubs.push(
@@ -1026,7 +1033,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const fetchImageModels = async () => {
     try {
       setLoadingModels('image');
-      if (state.imageModel.provider === 'jinlong' || state.imageModel.provider === 'agnes' || state.imageModel.provider === 'custom') {
+      if (state.imageModel.provider === 'jinlong' || state.imageModel.provider === 'volcengine' || state.imageModel.provider === 'agnes' || state.imageModel.provider === 'custom') {
         const providerLabel = imageProviderLabels[state.imageModel.provider];
         const baseUrl = state.imageModel.provider === 'custom'
           ? state.imageModel.base_url || ''
@@ -1071,12 +1078,6 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
           }));
         }
         showToast(result?.message || `获取到 ${models.length} 个${providerLabel}模型`, result?.success ? 'success' : 'info');
-        return;
-      }
-
-      if (state.imageModel.provider === 'volcengine') {
-        setImageModels([]);
-        showToast('火山方舟请填写控制台中已开通的模型或推理接入点 ID。');
         return;
       }
 
@@ -1283,6 +1284,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     if (updateStatus === 'disabled') return '开发调试模式不执行自动更新';
     return '启动后自动检查，每 30 分钟轮询';
   })();
+  const licenseSourceLabel = getLicenseSourceLabel(licenseStatus);
 
   return (
     <div className="settings-page">
@@ -1846,13 +1848,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             <span />
             <strong>关于</strong>
           </div>
-          <div className="about-grid">
-            <div><span>当前版本</span><strong>{appVersion || '...'}</strong></div>
-            <div><span>GitHub 仓库</span><a href="https://github.com/FB208/OpenBidKit_Yibiao" target="_blank" rel="noreferrer">FB208/OpenBidKit_Yibiao</a></div>
-            <div><span>使用文档</span><a href="https://wiki.agnet.top/" target="_blank" rel="noreferrer">wiki.agnet.top</a></div>
-            <div>
-              <span>自动更新</span>
-              <strong>{updateStatusText}</strong>
+          <div className="about-overview">
+            <article className="about-update-card">
+              <div className="about-card-head">
+                <span>自动更新</span>
+                <strong>当前版本 {appVersion || '...'}</strong>
+              </div>
+              <p>{updateStatusText}</p>
               <button
                 type="button"
                 className="update-button"
@@ -1867,8 +1869,24 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               >
                 {updateStatus === 'downloaded' ? '安装并重启' : updateBusy ? '检查中...' : '检查更新'}
               </button>
+            </article>
+            <div className="about-card-grid">
+              <a className="about-info-card" href="https://github.com/FB208/OpenBidKit_Yibiao" target="_blank" rel="noreferrer">
+                <span>GitHub 仓库</span>
+                <strong>FB208/OpenBidKit_Yibiao</strong>
+                <p>查看源码、Release 和问题反馈。</p>
+              </a>
+              <a className="about-info-card" href="https://wiki.agnet.top/" target="_blank" rel="noreferrer">
+                <span>使用文档</span>
+                <strong>wiki.agnet.top</strong>
+                <p>查看软件配置、工作流和常见问题。</p>
+              </a>
+              <article className={`about-info-card ${licenseStatus?.sourceTrusted ? 'is-trusted' : 'is-untrusted'}`}>
+                <span>客户端授权</span>
+                <strong>{licenseSourceLabel}</strong>
+                <p>{licenseStatus?.sourceTrusted ? '当前客户端来自官方签名构建。' : '建议从官方渠道下载可信客户端。'}</p>
+              </article>
             </div>
-            <div><span>运行模式</span><strong>独立 Electron 客户端</strong></div>
           </div>
           <div className="privacy-statement">
             <div className="privacy-statement-head">

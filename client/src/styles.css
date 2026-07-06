@@ -3963,6 +3963,48 @@ button {
   backdrop-filter: blur(4px);
 }
 
+.license-status-card {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 121;
+  display: grid;
+  gap: 16px;
+  width: min(460px, calc(100vw - 40px));
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(245, 158, 11, 0.18), transparent 42%),
+    #ffffff;
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  border-radius: 22px;
+  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.24);
+  transform: translate(-50%, -50%);
+}
+
+.license-status-card h2 {
+  margin: 0;
+  color: var(--yb-text);
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+
+.license-status-card p {
+  margin: 0;
+  color: var(--yb-text-soft);
+  line-height: 1.8;
+}
+
+.license-status-card a {
+  color: var(--yb-primary);
+  font-weight: 700;
+  word-break: break-all;
+}
+
+.license-status-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .detail-help-link {
   margin-left: 6px;
   padding: 0;
@@ -9471,49 +9513,110 @@ button {
   border-radius: 18px;
 }
 
-.about-grid {
+.about-overview {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.4fr);
+  gap: 16px;
   padding: 0 36px 36px;
 }
 
-.about-grid div {
+.about-update-card,
+.about-info-card {
   display: grid;
-  gap: 8px;
-  padding: 16px;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px;
+  color: var(--yb-text);
+  text-decoration: none;
   background: var(--yb-bg);
   border: 1px solid var(--yb-border-soft);
-  border-radius: 18px;
+  border-radius: 20px;
+  box-shadow: 0 12px 28px rgba(33, 116, 253, 0.06);
 }
 
-.about-grid span {
-  color: var(--yb-text-muted);
-  font-size: 13px;
+.about-update-card {
+  align-content: start;
+  background:
+    radial-gradient(circle at top right, rgba(33, 116, 253, 0.16), transparent 42%),
+    linear-gradient(135deg, #ffffff, #f7fbff);
 }
 
-.about-grid strong,
-.about-grid a {
+.about-card-head,
+.about-info-card {
+  align-content: start;
+}
+
+.about-card-head {
+  display: grid;
+  gap: 8px;
+}
+
+.about-card-head span,
+.about-info-card span {
+  width: fit-content;
+  padding: 4px 10px;
+  color: var(--yb-primary);
+  font-size: 12px;
+  font-weight: 800;
+  background: rgba(33, 116, 253, 0.08);
+  border: 1px solid rgba(33, 116, 253, 0.12);
+  border-radius: 999px;
+}
+
+.about-card-head strong,
+.about-info-card strong {
   color: var(--yb-text);
-  font-weight: 700;
-  text-decoration: none;
+  font-size: 17px;
+  line-height: 1.35;
 }
 
-.about-grid .update-button {
-  margin-top: 8px;
-  padding: 6px 16px;
+.about-update-card p,
+.about-info-card p {
+  margin: 0;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.about-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.about-info-card.is-trusted {
+  border-color: rgba(16, 185, 129, 0.24);
+  background: linear-gradient(135deg, rgba(240, 253, 244, 0.95), #ffffff);
+}
+
+.about-info-card.is-untrusted {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: linear-gradient(135deg, rgba(255, 251, 235, 0.95), #ffffff);
+}
+
+.about-update-card .update-button {
+  width: fit-content;
+  margin-top: 4px;
+  padding: 8px 18px;
   color: #ffffff;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
   background: var(--yb-primary);
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   cursor: pointer;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s, transform 0.2s;
 }
 
-.about-grid .update-button:hover {
-  opacity: 0.85;
+.about-update-card .update-button:hover {
+  opacity: 0.88;
+  transform: translateY(-1px);
+}
+
+.about-update-card .update-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+  transform: none;
 }
 
 .privacy-statement {
@@ -10586,8 +10689,15 @@ button {
 @media (max-width: 1100px) {
   .stage-grid,
   .category-grid,
-  .workspace-grid,
-  .about-grid {
+  .workspace-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .about-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .about-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -10888,7 +10998,7 @@ button {
   .analysis-result-grid,
   .duplicate-dimension-grid,
   .demo-signal-grid,
-  .about-grid {
+  .about-card-grid {
     grid-template-columns: 1fr;
   }
 
@@ -11276,7 +11386,7 @@ button {
     padding-left: 20px;
   }
 
-  .about-grid {
+  .about-overview {
     padding-right: 20px;
     padding-left: 20px;
   }

@@ -122,6 +122,7 @@ export interface LicenseRuntimeStatus {
   machineFingerprintHash: string;
   fingerprintVersion: string;
   buildTrusted: boolean;
+  buildChanged: boolean;
   buildId: string;
   keyId: string;
   lastCheckedAt: string;
