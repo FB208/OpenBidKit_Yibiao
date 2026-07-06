@@ -15,6 +15,8 @@
     "postinstall": "electron-builder install-app-deps",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "generate-build-attestation": "node scripts/generate-build-attestation.cjs",
+    "prepare-opencode-tools": "node scripts/prepare-opencode-tools.cjs",
+    "verify-opencode-tools": "node scripts/verify-opencode-tools.cjs",
     "smoke:electron-native": "electron scripts/electron-native-smoke.cjs",
     "start": "electron ."
   },
@@ -36,6 +38,13 @@
       {
         "from": "vendor/opencode",
         "to": "opencode",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "vendor/opencode-tools",
+        "to": "opencode-tools",
         "filter": [
           "**/*"
         ]

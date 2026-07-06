@@ -16,6 +16,9 @@ permissions:
 
 env:
   OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || 'v1.17.8' }}
+  RIPGREP_VERSION: ${{ vars.RIPGREP_VERSION || '14.1.1' }}
+  FD_VERSION: ${{ vars.FD_VERSION || 'v10.3.0' }}
+  JQ_VERSION: ${{ vars.JQ_VERSION || 'jq-1.7.1' }}
 
 jobs:
   create-release:
@@ -96,6 +99,17 @@ jobs:
       - name: Verify OpenCode binary
         run: node scripts/verify-opencode-binary.cjs --platform win32 --arch x64
 
+      - name: Prepare OpenCode tools
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RIPGREP_VERSION: ${{ env.RIPGREP_VERSION }}
+          FD_VERSION: ${{ env.FD_VERSION }}
+          JQ_VERSION: ${{ env.JQ_VERSION }}
+        run: node scripts/prepare-opencode-tools.cjs --platform win32 --arch x64
+
+      - name: Verify OpenCode tools
+        run: node scripts/verify-opencode-tools.cjs --platform win32 --arch x64
+
       - name: Install build type dependencies
         run: npm install --no-save @types/plist
 
@@ -134,6 +148,9 @@ jobs:
 
       - name: Verify packaged OpenCode binary
         run: node scripts/verify-packaged-opencode-binary.cjs --platform win32 --arch x64 --release release
+
+      - name: Verify packaged OpenCode tools
+        run: node scripts/verify-packaged-opencode-tools.cjs --platform win32 --arch x64 --release release
 
       - name: Upload release assets
         env:
@@ -208,6 +225,17 @@ jobs:
 
       - name: Verify OpenCode binary
         run: node scripts/verify-opencode-binary.cjs --platform darwin --arch ${{ matrix.arch }}
+
+      - name: Prepare OpenCode tools
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RIPGREP_VERSION: ${{ env.RIPGREP_VERSION }}
+          FD_VERSION: ${{ env.FD_VERSION }}
+          JQ_VERSION: ${{ env.JQ_VERSION }}
+        run: node scripts/prepare-opencode-tools.cjs --platform darwin --arch ${{ matrix.arch }}
+
+      - name: Verify OpenCode tools
+        run: node scripts/verify-opencode-tools.cjs --platform darwin --arch ${{ matrix.arch }}
 
       - name: Install build type dependencies
         run: npm install --no-save @types/plist
@@ -298,6 +326,9 @@ jobs:
 
       - name: Verify packaged OpenCode binary
         run: node scripts/verify-packaged-opencode-binary.cjs --platform darwin --arch ${{ matrix.arch }} --release release
+
+      - name: Verify packaged OpenCode tools
+        run: node scripts/verify-packaged-opencode-tools.cjs --platform darwin --arch ${{ matrix.arch }} --release release
 
       - name: Stage macOS release assets
         uses: actions/upload-artifact@v4

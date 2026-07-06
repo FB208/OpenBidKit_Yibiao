@@ -14,6 +14,10 @@ const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#eef5ff', '#f3f7ff', '#f8fbff', '#f
 const openAICompatibleImageSizes = ['auto', '1024x1024', '1536x1024', '1024x1536', '2048x2048', '2048x1152', '3840x2160', '2160x3840'];
 const googleImageSizes = ['512', '1K', '2K', '4K'];
 
+const defaultAgentModeScenarios = {
+  existing_plan_expansion_original_outline_extraction: true,
+};
+
 const textProviderBaseUrls = {
   jinlong: 'https://jlaudeapi.com/v1',
   volcengine: 'https://ark.cn-beijing.volces.com/api/v3',
@@ -233,6 +237,7 @@ const defaultConfig = {
   gpu_hardware_acceleration_enabled: true,
   gpu_hardware_acceleration_configured: true,
   export_format: defaultExportFormat,
+  agent_mode_scenarios: defaultAgentModeScenarios,
   developer_mode: false,
   developer_token_stats_auto_open: false,
   analytics_client_id: '',
@@ -404,6 +409,15 @@ function normalizeImageModelProfiles(sourceProfiles) {
     );
   });
   return profiles;
+}
+
+function normalizeAgentModeScenarios(source) {
+  const scenarios = source && typeof source === 'object' ? source : {};
+  return {
+    existing_plan_expansion_original_outline_extraction: scenarios.existing_plan_expansion_original_outline_extraction === undefined
+      ? defaultAgentModeScenarios.existing_plan_expansion_original_outline_extraction
+      : Boolean(scenarios.existing_plan_expansion_original_outline_extraction),
+  };
 }
 
 const VALID_NUMBERING_FORMATS = ['outline-decimal', 'custom'];
@@ -609,6 +623,7 @@ function normalizeConfig(config) {
     gpu_hardware_acceleration_enabled: gpuHardwareAccelerationEnabled,
     gpu_hardware_acceleration_configured: gpuHardwareAccelerationConfigured === false ? true : gpuHardwareAccelerationConfigured,
     export_format: normalizeExportFormat(source.export_format),
+    agent_mode_scenarios: normalizeAgentModeScenarios(source.agent_mode_scenarios),
     developer_mode: source.developer_mode === undefined ? defaultConfig.developer_mode : Boolean(source.developer_mode),
     developer_token_stats_auto_open: source.developer_token_stats_auto_open === undefined ? defaultConfig.developer_token_stats_auto_open : Boolean(source.developer_token_stats_auto_open),
     analytics_client_id: source.analytics_client_id || defaultConfig.analytics_client_id,
@@ -687,6 +702,10 @@ function createConfigStore(app) {
           image_model_profiles: {
             ...currentConfig.image_model_profiles,
             ...(config && config.image_model_profiles ? config.image_model_profiles : {}),
+          },
+          agent_mode_scenarios: {
+            ...currentConfig.agent_mode_scenarios,
+            ...(config && config.agent_mode_scenarios ? config.agent_mode_scenarios : {}),
           },
           analytics_client_id: config?.analytics_client_id || currentConfig.analytics_client_id,
           analytics_created_at: config?.analytics_created_at || currentConfig.analytics_created_at,

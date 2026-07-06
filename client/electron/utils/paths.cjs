@@ -107,11 +107,25 @@ function getBundledOpencodeBinaryPath(app) {
   return path.join(__dirname, '..', '..', 'vendor', 'opencode', platformArch, binaryName);
 }
 
+function getBundledOpencodeToolsBinDir(app) {
+  if (process.env.YIBIAO_OPENCODE_TOOLS_BIN_DIR) {
+    return process.env.YIBIAO_OPENCODE_TOOLS_BIN_DIR;
+  }
+
+  const platformArch = getPlatformArchKey();
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'opencode-tools', platformArch, 'bin');
+  }
+
+  return path.join(__dirname, '..', '..', 'vendor', 'opencode-tools', platformArch, 'bin');
+}
+
 module.exports = {
   getAgentCacheDir,
   getAgentRuntimeDir,
   getAiLogsDir,
   getBundledOpencodeBinaryPath,
+  getBundledOpencodeToolsBinDir,
   getDeveloperLogsDir,
   getDuplicateCheckContentDir,
   getDuplicateCheckDir,

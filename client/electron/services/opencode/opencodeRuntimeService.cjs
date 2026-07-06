@@ -5,6 +5,7 @@ const Database = require('better-sqlite3');
 const { getAgentRuntimeDir, getBundledOpencodeBinaryPath } = require('../../utils/paths.cjs');
 const { startOpenCodeSidecar, closeOpenCodeSidecar } = require('./opencodeServerRunner.cjs');
 const { runOpenCodeTask } = require('./opencodeHttpClient.cjs');
+const { writeOpenCodeAgentsFile } = require('./opencodeToolEnvironment.cjs');
 const {
   SELF_CHECK_TASK_ID,
   SELF_CHECK_OUTPUT_FILE,
@@ -745,6 +746,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
   function prepareStagingWorkspace(payload) {
     clearDirectoryContents(serviceWorkspaceDir);
     writeWorkspaceFiles(serviceWorkspaceDir, payload.files || []);
+    writeOpenCodeAgentsFile(serviceWorkspaceDir);
   }
 
   function cleanupStagingWorkspace() {

@@ -1,0 +1,35 @@
+{
+  "platform": "win32",
+  "arch": "x64",
+  "key": "win32-x64",
+  "tools": [
+    {
+      "command": "rg",
+      "version": "14.1.1",
+      "repo": "BurntSushi/ripgrep",
+      "asset": "ripgrep-14.1.1-x86_64-pc-windows-msvc.zip",
+      "platform": "win32",
+      "arch": "x64",
+      "key": "win32-x64"
+    },
+    {
+      "command": "fd",
+      "version": "v10.3.0",
+      "repo": "sharkdp/fd",
+      "asset": "fd-v10.3.0-x86_64-pc-windows-msvc.zip",
+      "platform": "win32",
+      "arch": "x64",
+      "key": "win32-x64"
+    },
+    {
+      "command": "jq",
+      "version": "jq-1.7.1",
+      "repo": "jqlang/jq",
+      "asset": "jq-windows-amd64.exe",
+      "platform": "win32",
+      "arch": "x64",
+      "key": "win32-x64"
+    }
+  ],
+  "prepared_at": "2026-07-06T07:20:52.506Z"
+}

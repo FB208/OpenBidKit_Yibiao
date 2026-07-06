@@ -253,6 +253,27 @@ function createBaseStatus(partial = {}) {
   };
 }
 
+function createDebugDisabledStatus(partial = {}) {
+  return createBaseStatus({
+    status: 'debug_disabled',
+    plan: 'free',
+    licenseStatus: 'debug_disabled',
+    sourceTrusted: true,
+    sourceTrustedText: 'true',
+    untrustedReason: '',
+    buildTrusted: true,
+    buildChanged: false,
+    buildId: 'local-debug',
+    keyId: 'local-debug',
+    config: {
+      freeLicenseDays: 30,
+      expirePopupEnabled: false,
+      expirePopupDismissible: true,
+    },
+    ...partial,
+  });
+}
+
 function statusFromPayload(payload, status, extra = {}) {
   const buildTrusted = extra.buildTrusted !== undefined ? Boolean(extra.buildTrusted) : payload.sourceTrusted === true;
   const sourceTrusted = extra.forceSourceTrusted !== undefined
@@ -283,7 +304,8 @@ function statusFromPayload(payload, status, extra = {}) {
 
 function createLicenseService({ app, configStore }) {
   const licenseFile = getLicenseFilePath(app);
-  let currentStatus = createBaseStatus();
+  const debugLicenseDisabled = !app.isPackaged;
+  let currentStatus = debugLicenseDisabled ? createDebugDisabledStatus() : createBaseStatus();
 
   function buildContext() {
     const config = configStore.load();
@@ -298,14 +320,20 @@ function createLicenseService({ app, configStore }) {
     };
   }
 
-  async function evaluateLocalLicense(context = buildContext()) {
+  async function evaluateLocalLicense(context) {
+    if (debugLicenseDisabled) {
+      currentStatus = createDebugDisabledStatus();
+      return currentStatus;
+    }
+
+    const runtimeContext = context || buildContext();
     const publicJwk = getPublicJwk();
     const buildAttestation = readBuildAttestation();
     const buildTrust = await verifyBuildAttestation(publicJwk, buildAttestation);
     const envelope = normalizeLicenseEnvelope(readJsonFile(licenseFile));
     const buildInfo = buildAttestation || {};
     const base = {
-      machineFingerprintHash: context.machineFingerprintHash,
+      machineFingerprintHash: runtimeContext.machineFingerprintHash,
       buildTrusted: buildTrust.trusted,
       buildId: String(buildInfo.buildId || ''),
       keyId: String(buildInfo.keyId || ''),
@@ -340,7 +368,7 @@ function createLicenseService({ app, configStore }) {
 
     const payload = envelope.payload;
     const buildChanged = !isLicenseBuildCurrent(payload, buildAttestation);
-    if (payload.clientId !== context.clientId || payload.machineFingerprintHash !== context.machineFingerprintHash) {
+    if (payload.clientId !== runtimeContext.clientId || payload.machineFingerprintHash !== runtimeContext.machineFingerprintHash) {
       invalidateLocalLicense(envelope, 'license_machine_mismatch');
       currentStatus = statusFromPayload(payload, 'machine_mismatch', {
         ...base,
@@ -377,6 +405,10 @@ function createLicenseService({ app, configStore }) {
   }
 
   async function refreshLicense() {
+    if (debugLicenseDisabled) {
+      return evaluateLocalLicense();
+    }
+
     const context = buildContext();
     const buildAttestation = readBuildAttestation();
     const body = {

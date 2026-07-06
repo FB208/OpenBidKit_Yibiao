@@ -3,7 +3,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, InputWithAction, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AgentSelfCheckResult, AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AgentModeScenariosConfig, AgentSelfCheckResult, AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'agent' | 'about';
@@ -32,8 +32,20 @@ const updateChannelOptions: Array<{ value: UpdateChannel; label: string; descrip
   { value: 'cloudflare', label: 'Cloudflare', description: '使用 Cloudflare R2 镜像检查和下载更新' },
 ];
 
+const defaultAgentModeScenarios: AgentModeScenariosConfig = {
+  existing_plan_expansion_original_outline_extraction: true,
+};
+
 function normalizeUpdateChannel(value?: string): UpdateChannel {
   return value === 'cloudflare' ? 'cloudflare' : 'github';
+}
+
+function normalizeAgentModeScenarios(value?: Partial<AgentModeScenariosConfig>): AgentModeScenariosConfig {
+  return {
+    existing_plan_expansion_original_outline_extraction: value?.existing_plan_expansion_original_outline_extraction === undefined
+      ? defaultAgentModeScenarios.existing_plan_expansion_original_outline_extraction
+      : Boolean(value.existing_plan_expansion_original_outline_extraction),
+  };
 }
 
 function getLicenseSourceLabel(status: LicenseRuntimeStatus | null) {
@@ -448,6 +460,7 @@ const initialState: SettingsPageState = {
     provider: 'local',
     mineru_token: '',
   },
+  agentModeScenarios: { ...defaultAgentModeScenarios },
   general: {
     developer_mode: false,
     developer_token_stats_auto_open: false,
@@ -538,6 +551,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
           provider: config.file_parser.provider,
           mineru_token: config.file_parser.mineru_token || '',
         },
+        agentModeScenarios: normalizeAgentModeScenarios(config.agent_mode_scenarios),
         general: {
           developer_mode: Boolean(config.developer_mode),
           developer_token_stats_auto_open: Boolean(config.developer_token_stats_auto_open),
@@ -585,6 +599,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         provider: state.fileParser.provider,
         mineru_token: state.fileParser.mineru_token || '',
       },
+      agent_mode_scenarios: state.agentModeScenarios,
       update_channel: state.general.update_channel,
       gpu_hardware_acceleration_enabled: state.general.gpu_hardware_acceleration_enabled,
       gpu_hardware_acceleration_configured: state.general.gpu_hardware_acceleration_configured,
@@ -734,6 +749,16 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         ...prev.general,
         gpu_hardware_acceleration_enabled: enabled,
         gpu_hardware_acceleration_configured: true,
+      },
+    }));
+  };
+
+  const updateAgentModeScenario = (key: keyof AgentModeScenariosConfig, enabled: boolean) => {
+    setState((prev) => ({
+      ...prev,
+      agentModeScenarios: {
+        ...prev.agentModeScenarios,
+        [key]: enabled,
       },
     }));
   };
@@ -1159,6 +1184,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       return JSON.stringify(state.fileParser) !== JSON.stringify(savedConfig.file_parser);
     }
 
+    if (activeTab === 'agent') {
+      return JSON.stringify(state.agentModeScenarios) !== JSON.stringify(normalizeAgentModeScenarios(savedConfig.agent_mode_scenarios));
+    }
+
     return false;
   };
 
@@ -1235,10 +1264,14 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
     if (activeTab === 'file-parser') {
       await saveFileParserConfig();
+      return;
+    }
+    if (activeTab === 'agent') {
+      await saveClientConfig(createClientConfig());
     }
   };
 
-  const canSaveActiveTab = activeTab === 'general' || activeTab === 'text-model' || activeTab === 'image-model' || activeTab === 'file-parser';
+  const canSaveActiveTab = activeTab === 'general' || activeTab === 'text-model' || activeTab === 'image-model' || activeTab === 'file-parser' || activeTab === 'agent';
   const activeTabDirty = isActiveTabDirty();
   const currentTextProviderDefault = textProviderDefaults[state.textModel.provider];
   const imageModelStatus: ImageModelStatus = state.imageModel.status || 'untested';
@@ -1810,6 +1843,28 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 </button>
               </div>
             </div>
+          </div>
+          <div className="settings-section-title">
+            <span />
+            <strong>在以下场景启用智能体模式</strong>
+          </div>
+          <div className="settings-list">
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>已有方案扩写-旧目录提取</strong>
+                <span>开启后，已有方案扩写会把原方案交给智能体完成旧目录提取和补漏；关闭后使用原有分段提取流程。</span>
+              </div>
+              <span className="settings-switch-control">
+                <input
+                  type="checkbox"
+                  checked={state.agentModeScenarios.existing_plan_expansion_original_outline_extraction}
+                  onChange={(event) => updateAgentModeScenario('existing_plan_expansion_original_outline_extraction', event.target.checked)}
+                />
+                <span className="settings-switch-track" aria-hidden="true">
+                  <span className="settings-switch-thumb" />
+                </span>
+              </span>
+            </label>
           </div>
           {agentSelfCheckResult && (
             <div className={`agent-self-check-result is-${agentSelfCheckResult.success ? 'normal' : agentSelfCheckResult.status === 'busy' ? 'busy' : 'error'}`}>

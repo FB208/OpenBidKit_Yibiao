@@ -108,7 +108,7 @@ export interface AgentRuntimeActiveTask {
   idle_seconds: number;
 }
 
-export type LicenseStatusValue = 'missing' | 'active' | 'expired' | 'invalid' | 'invalidated' | 'machine_mismatch' | 'refresh_failed';
+export type LicenseStatusValue = 'missing' | 'active' | 'expired' | 'invalid' | 'invalidated' | 'machine_mismatch' | 'refresh_failed' | 'debug_disabled';
 
 export interface LicenseRuntimeStatus {
   status: LicenseStatusValue | string;

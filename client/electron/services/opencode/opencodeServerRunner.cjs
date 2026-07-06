@@ -9,6 +9,10 @@ const {
 } = require('../../utils/paths.cjs');
 const { createAiServiceOpenAiProxy } = require('./aiServiceOpenAiProxy.cjs');
 const { writeOpenCodeConfig } = require('./opencodeConfigFactory.cjs');
+const {
+  applyOpenCodeToolEnvironment,
+  ensureOpenCodeToolEnvironment,
+} = require('./opencodeToolEnvironment.cjs');
 
 function createBasicAuth(username, password) {
   return `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
@@ -250,6 +254,7 @@ async function startOpenCodeSidecar({
 
   fs.mkdirSync(runtimeRoot, { recursive: true });
   fs.mkdirSync(workspaceDir, { recursive: true });
+  const toolEnvironment = ensureOpenCodeToolEnvironment({ app, workspaceDir });
 
   const tempHome = path.join(runtimeRoot, 'home');
   const configDir = path.join(tempHome, '.config', 'opencode');
@@ -306,7 +311,7 @@ async function startOpenCodeSidecar({
       },
     };
 
-    const env = buildMinimalChildEnv({
+    const env = applyOpenCodeToolEnvironment(buildMinimalChildEnv({
       HOME: tempHome,
       USERPROFILE: tempHome,
       XDG_CONFIG_HOME: path.join(tempHome, '.config'),
@@ -323,7 +328,7 @@ async function startOpenCodeSidecar({
       OPENCODE_DISABLE_MODELS_FETCH: 'true',
       OPENCODE_DISABLE_CLAUDE_CODE: 'true',
       YIBIAO_OPENCODE_PROXY_TOKEN: aiProxyInfo.token,
-    });
+    }), toolEnvironment);
 
     emitStage(onStage, 'opencode-server-start', 'running', `正在启动 OpenCode Server：${baseUrl}`);
     child = spawn(opencodeBin, [

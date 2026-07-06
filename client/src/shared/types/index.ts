@@ -29,6 +29,7 @@ export type {
 export type {
   AiConfig,
   AiRequestMode,
+  AgentModeScenariosConfig,
   ClientConfig,
   ConfigSaveResult,
   FileParserConfig,

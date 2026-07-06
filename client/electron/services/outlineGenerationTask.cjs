@@ -74,6 +74,8 @@ const MAX_KNOWLEDGE_UPDATES = 120;
 const PROMPT_CACHE_WARMUP_DELAY_MS = 5000;
 const ORIGINAL_OUTLINE_RUNTIME_VERSION = 1;
 const ORIGINAL_OUTLINE_RUNTIME_PHASE = 'original-outline-rolling';
+const ORIGINAL_OUTLINE_AGENT_SCENARIO_KEY = 'existing_plan_expansion_original_outline_extraction';
+const ORIGINAL_OUTLINE_AGENT_OUTPUT_FILE = 'original-outline.json';
 
 function waitForPromptCacheWarmup() {
   return new Promise((resolve) => setTimeout(resolve, PROMPT_CACHE_WARMUP_DELAY_MS));
@@ -114,6 +116,12 @@ function getCurrentAiConfig(aiService) {
   } catch {
     return {};
   }
+}
+
+function isOriginalOutlineAgentModeEnabled(aiService) {
+  const scenarios = getCurrentAiConfig(aiService)?.agent_mode_scenarios;
+  if (!scenarios || scenarios[ORIGINAL_OUTLINE_AGENT_SCENARIO_KEY] === undefined) return true;
+  return Boolean(scenarios[ORIGINAL_OUTLINE_AGENT_SCENARIO_KEY]);
 }
 
 function splitOriginalPlanSourceText(text, aiService) {
@@ -591,25 +599,86 @@ function getFinalAgentOutputShape(context) {
 function buildOriginalOutlineExtractionAgentPrompt(context) {
   const outputFile = context.outputFile;
   const reason = String(context.recoveryReason || '').trim();
-  return `请在当前工作目录中完成原方案目录提取，并把可供程序读取的结果保存到 ${outputFile}。
+  return `请读取当前工作目录中的 original-plan.md，从原方案全文中提取已有目录，并把结果写入 ${outputFile}。
 
-${reason ? `本次恢复触发原因：${reason}\n` : ''}workspace 文件说明：
-- original-plan.md：用户提交的原方案全文，是提取旧目录的主要依据。
-- final-review.json：如果存在，记录本次切换到 Agent 的原因或程序审核意见，可作为排查参考。
+${reason ? `本次恢复触发原因：${reason}\n` : ''}程序最终只读取 ${outputFile} 文件内容，请确保该文件是可被 JSON.parse 直接解析的纯 JSON。
 
-工作方式由你自行决定。可以按章节标题、编号、目录页、正文层级或关键词逐步定位，也可以创建草稿、索引、中间 JSON 或笔记文件辅助分析；不需要一次性读完或一次性写完。
+${outputFile} 必须保持以下结构：
 
-最终需要的结果：
-- 提取原方案已有目录、章节标题和明显隐含章节，不改写成新标书目录。
-- 如果原文存在明确章节编号和标题，优先保留原文表达；如果没有明确编号，可按原文结构归纳章节标题。
-- 目录最多保留四级，节点只包含 id、title、description 和 children。
-- 编号可以自行整理，程序会再次统一编号；但层级关系需要正确。
-- 任务结束时，${outputFile} 是可被 JSON.parse 直接解析的纯 JSON 文件，不包含 Markdown 代码块或解释文字。
-- JSON 顶层格式为：
 {
-  "outline": []
+  "outline": [
+    {
+      "id": "1",
+      "title": "一级目录标题",
+      "description": "目录说明",
+      "children": [
+        {
+          "id": "1.1",
+          "title": "二级目录标题",
+          "description": "目录说明",
+          "children": [
+            {
+              "id": "1.1.1",
+              "title": "三级目录标题",
+              "description": "目录说明"
+            }
+          ]
+        }
+      ]
+    }
+  ]
 }
-- 不输出 groups、正文 content、图片、表格、Mermaid、审查说明或额外字段。`;
+
+目录提取要求：
+1. 基于 original-plan.md 中已有章节、标题、编号、目录页和正文层级提取目录。
+2. 原文存在明确章节编号和标题时，优先保留原文表达。
+3. 原文没有明确编号时，可根据正文结构归纳章节标题。
+4. 目录最多保留四级。
+5. 每个节点包含 id、title、description，存在下级目录时包含 children。
+6. 编号可以自行整理，层级关系需要清晰稳定。
+7. 任务结束时，${outputFile} 就是可供程序使用的旧目录 JSON。`;
+}
+
+function buildOriginalOutlineCompletionAgentPrompt(context) {
+  const outputFile = context.outputFile;
+  return `请读取当前工作目录中的 original-plan.md 和 ${outputFile}，根据原方案全文对已提取目录进行查漏补缺，让目录覆盖原方案中的已有章节、标题和明显隐含章节。
+
+请直接修改并覆盖写回 ${outputFile}。程序最终只读取 ${outputFile} 文件内容，请确保该文件是可被 JSON.parse 直接解析的纯 JSON。
+
+${outputFile} 修改后仍保持以下结构：
+
+{
+  "outline": [
+    {
+      "id": "1",
+      "title": "一级目录标题",
+      "description": "目录说明",
+      "children": [
+        {
+          "id": "1.1",
+          "title": "二级目录标题",
+          "description": "目录说明",
+          "children": [
+            {
+              "id": "1.1.1",
+              "title": "三级目录标题",
+              "description": "目录说明"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+
+补漏要求：
+1. 对照 original-plan.md 检查 ${outputFile} 是否遗漏明确章节、标题、目录页条目或正文中明显形成章节的内容。
+2. 在合适层级补充遗漏目录，让旧目录更完整。
+3. 保持已提取目录的主要层级和表达风格。
+4. 目录最多保留四级。
+5. 每个节点包含 id、title、description，存在下级目录时包含 children。
+6. 编号可重新整理，层级关系需要清晰稳定。
+7. 任务结束时，${outputFile} 就是补漏后的最终旧目录 JSON。`;
 }
 
 function buildOutlineAgentRecoveryPrompt(context) {
@@ -651,6 +720,10 @@ ${outputShape}
 }
 
 function buildOutlineAgentRecoveryFiles(context) {
+  if (context.recoveryKind === 'original-outline-extraction') {
+    return [{ path: 'original-plan.md', content: String(context.originalPlanMarkdown || '') }];
+  }
+
   const files = [
     { path: 'project-overview.md', content: String(context.payload?.overview || '') },
     { path: 'technical-requirements.md', content: String(context.payload?.requirements || '') },
@@ -665,14 +738,6 @@ function buildOutlineAgentRecoveryFiles(context) {
       }, null, 2),
     },
   ];
-  if (context.recoveryKind === 'original-outline-extraction') {
-    files.push({ path: 'original-plan.md', content: String(context.originalPlanMarkdown || '') });
-    if (context.finalReview) {
-      files.push({ path: 'final-review.json', content: JSON.stringify(context.finalReview, null, 2) });
-    }
-    return files;
-  }
-
   files.push(
     { path: 'current-outline.json', content: JSON.stringify(context.outline || { outline: [] }, null, 2) },
     { path: 'final-review.json', content: JSON.stringify(context.finalReview, null, 2) },
@@ -901,6 +966,65 @@ async function repairFinalOutlineWithAgent(agentService, context, log) {
     title: context.title || '技术方案目录自主修复',
     startLogMessage: context.startLogMessage || '最终目录审核未通过，已切换到 Agent 自主修复目录。',
   }, log);
+}
+
+async function extractOriginalOutlineFirstPassWithAgent(agentService, payload, originalPlanMarkdown, log) {
+  const result = await runOutlineAgentRecovery(agentService, {
+    recoveryKind: 'original-outline-extraction',
+    title: '原方案旧目录智能提取',
+    payload,
+    originalPlanMarkdown,
+    outputFile: ORIGINAL_OUTLINE_AGENT_OUTPUT_FILE,
+    startLogMessage: '智能体模式已启用，正在交给 Agent 提取原方案旧目录。',
+    startProgress: 8,
+    agentProgress: 12,
+    validationLogMessage: 'Agent 旧目录提取完成，正在校验旧目录 JSON。',
+    validationProgress: 14,
+    successLogMessage: 'Agent 旧目录提取通过程序校验。',
+    successProgress: 14,
+  }, log);
+  return result.outline;
+}
+
+async function completeOriginalOutlineWithAgent(agentService, originalPlanMarkdown, outline, log) {
+  if (!agentService?.runTask) {
+    throw new Error('Agent 服务尚未初始化，无法执行旧目录补漏');
+  }
+
+  const outputFile = ORIGINAL_OUTLINE_AGENT_OUTPUT_FILE;
+  log('正在交给 Agent 检查旧目录缺漏。', 15);
+  const agentResult = await agentService.runTask({
+    title: '原方案旧目录智能补漏',
+    prompt: buildOriginalOutlineCompletionAgentPrompt({ outputFile }),
+    output_file: outputFile,
+    files: [
+      { path: 'original-plan.md', content: String(originalPlanMarkdown || '') },
+      { path: outputFile, content: JSON.stringify(outline || { outline: [] }, null, 2) },
+    ],
+    timeout_ms: FINAL_AGENT_TIMEOUT_MS,
+    onActivity: createAgentActivityLogHandler(log, 16),
+  });
+  if (isAgentBusyResult(agentResult)) {
+    throw createAgentBusyError();
+  }
+
+  const content = String(agentResult?.output_content || agentResult?.assistant_text || '').trim();
+  if (!content) {
+    throw new Error('Agent 未返回旧目录补漏结果');
+  }
+
+  log('Agent 旧目录补漏完成，正在校验补漏 JSON。', 17);
+  const parsed = parseAgentJsonContent(content);
+  const completed = normalizeOriginalOutlineAgentResult(parsed);
+  const itemCount = countOutlineItems(completed.outline.outline || []);
+  log(`Agent 旧目录补漏通过程序校验，最终旧目录共 ${itemCount} 个目录项。`, 18);
+  return completed.outline;
+}
+
+async function extractOriginalOutlineWithAgent(agentService, workspaceStore, payload, originalPlanMarkdown, log) {
+  clearOriginalOutlineRuntime(workspaceStore);
+  const outline = await extractOriginalOutlineFirstPassWithAgent(agentService, payload, originalPlanMarkdown, log);
+  return completeOriginalOutlineWithAgent(agentService, originalPlanMarkdown, outline, log);
 }
 
 function formatTopLevelOutlineForPrompt(outlineItems) {
@@ -2791,7 +2915,9 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     if (!String(originalPlanMarkdown || '').trim()) {
       throw new Error('请先上传原方案，再生成目录');
     }
-    oldOutline = await extractOriginalOutline(aiService, workspaceStore, originalPlanMarkdown, log);
+    oldOutline = isOriginalOutlineAgentModeEnabled(aiService)
+      ? await extractOriginalOutlineWithAgent(agentService, workspaceStore, baseTaskPayload, originalPlanMarkdown, log)
+      : await extractOriginalOutline(aiService, workspaceStore, originalPlanMarkdown, log);
   }
 
   technicalPlan = workspaceStore.updateTechnicalPlan({
