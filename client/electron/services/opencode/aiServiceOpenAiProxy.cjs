@@ -349,12 +349,19 @@ function normalizeOpenCodeProxyRequestBody(config, sourceBody) {
     throw new Error('OpenCode 代理请求缺少 messages');
   }
 
-  return {
+  const normalized = {
     ...source,
     // OpenCode 侧只使用 yibiao/default；真实模型名称以设置页保存的 model_name 为准。
     model: config.model_name,
     messages,
   };
+
+  // 部分 OpenAI 兼容上游会拒绝 OpenCode 注入的输出长度参数。
+  delete normalized.max_tokens;
+  delete normalized.max_output_tokens;
+  delete normalized.max_completion_tokens;
+
+  return normalized;
 }
 
 function isAuthorized(req, token) {

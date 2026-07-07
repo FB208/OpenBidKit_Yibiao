@@ -1123,9 +1123,11 @@ function buildRestoredChapterContentMessages({ chapter, projectOverview, selecte
 1. 首要遵从正文底稿，不要从零重写成另一套方案。
 2. 必须保留底稿中的实质信息、技术路线、服务承诺、设备参数、人员安排、周期、验收、售后和实施方法。
 3. 可以调整语序、合并重复表达、提升专业性、补充细节、增加过渡和说明，让正文更完整、更适合投标文件。
-4. 不要提到“原方案”“历史文档”“用户原文”或“底稿”。
-5. 加粗引导语不得使用任何形式的编号；除连续性非常强的步骤、流程、操作顺序外，不得使用有序编号分段。
-6. 输出当前章节完整正文，不输出标题。`,
+4. 正文底稿中可能包含原方案 Markdown 标题行或编号标题，例如“# 第一章...”“## 第一节...”“### 二、...”“（一）...”，这些只作为章节定位线索，不属于最终正文。
+5. 输出时必须跳过底稿中的章节标题、Markdown 标题和编号标题；当前章节标题会由程序统一渲染，不要在正文中重复。
+6. 不要提到“原方案”“历史文档”“用户原文”或“底稿”。
+7. 加粗引导语不得使用任何形式的编号；除连续性非常强的步骤、流程、操作顺序外，不得使用有序编号分段。
+8. 输出当前章节完整正文，不输出标题。`,
   });
   const finalMessage = messages.pop();
   if (finalMessage) {
@@ -1138,7 +1140,7 @@ ${String(restoredContent || '').trim()}`,
   });
   messages.push({
     role: 'user',
-    content: '请基于已还原正文底稿输出当前章节完整正文。必须保留底稿中的实质内容，可以优化扩写，但不要从零重写，不要输出标题或解释。',
+    content: '请基于已还原正文底稿输出当前章节完整正文。必须保留底稿中的实质内容，可以优化扩写，但不要从零重写；如果底稿开头或中间出现章节标题、Markdown 标题或编号标题，只把它当作定位线索，不要输出这些标题或解释。',
   });
   return messages;
 }
@@ -1238,6 +1240,7 @@ function buildOriginalMaterialRestoreMessages({ targets, originalSegments, proje
 4. source_ids 必须逐字使用“原方案段落”中的编号。
 5. 每个原方案段默认只分配给一个最匹配的主节点；如果完全不适合当前叶子节点，可以不分配。
 6. 优先按标题语义、章节职责、技术路线和同级章节边界归属，避免把同一内容拆散到无关章节。
+7. 如果某个原方案段只有章节标题、Markdown 标题或目录编号，没有实质正文内容，不要把它分配为正文来源；段落开头的标题行只用于判断归属。
 
 返回格式：
 {
@@ -1269,7 +1272,8 @@ workspace 文件：
 4. source_ids 必须逐字使用 original-segments.md 中给出的编号。
 5. 每个原方案段默认只分配给一个最匹配的主节点；如果完全不适合当前叶子节点，可以不分配。
 6. 优先按标题语义、章节职责、技术路线和同级章节边界归属，避免把同一内容拆散到无关章节。
-7. 不要修改业务数据库、不要生成 technical-plan.md，程序会读取你的输出文件后自行写回。
+7. 如果某个原方案段只有章节标题、Markdown 标题或目录编号，没有实质正文内容，不要把它分配为正文来源；段落开头的标题行只用于判断归属。
+8. 不要修改业务数据库、不要生成 technical-plan.md，程序会读取你的输出文件后自行写回。
 
 最终输出文件 original-restore-result.json 必须是合法 JSON，格式如下：
 {
@@ -1318,8 +1322,9 @@ workspace 文件：
 5. 可以吸收 knowledge-contents.md 中适合当前章节的技术素材，但不要提到“知识库”“历史文档”“参考资料”或素材来源。
 6. 不要提到“原方案”“历史文档”“用户原文”或“底稿”。
 7. 严禁输出 Mermaid、PlantUML、Graphviz、flowchart、graph、sequenceDiagram 等图表代码块、mermaid.ink 链接或图片 Markdown。
-8. 不要输出章节标题、Markdown 标题、解释、总结或过程说明。
-9. 不要修改业务数据库，程序会读取你的输出文件后自行写回。
+8. restored-content.md 可能包含原方案 Markdown 标题行或编号标题，例如“# 第一章...”“## 第一节...”“### 二、...”“（一）...”，这些只作为章节定位线索，不属于最终正文。
+9. 不要输出章节标题、Markdown 标题、编号标题、解释、总结或过程说明；当前章节标题会由程序统一渲染。
+10. 不要修改业务数据库，程序会读取你的输出文件后自行写回。
 
 最终请把当前小节完整正文写入 optimized-section.md。该文件只能包含正文内容，不要包含标题或说明。`;
 }
@@ -1332,6 +1337,8 @@ function buildAgentRestoredChapterContentFiles({ chapter, projectOverview, selec
 章节ID: ${chapter?.id || 'unknown'}
 章节标题: ${chapter?.title || '未命名章节'}
 章节描述: ${chapter?.description || '无'}
+
+说明：章节编号和章节标题由程序统一渲染，optimized-section.md 只能写正文，不要重复输出章节标题、Markdown 标题或编号标题。
 
 # 项目概述信息
 ${projectOverview || '未提供'}
@@ -1423,10 +1430,11 @@ function buildOriginalRestoreRepairMessages({ invalidContent, issues }, targets,
 2. 每条 assignment 必须包含 node_id 和 source_ids。
 3. node_id 只能使用当前可还原叶子节点中的 ID。
 4. source_ids 只能使用原方案段落编号。
-5. 严禁输出正文、总结、解释或 Markdown。`,
+5. 如果某个原方案段只有章节标题、Markdown 标题或目录编号，没有实质正文内容，不要把它分配为正文来源；如果待修复内容中包含这类 source_id，请从 source_ids 中移除。
+6. 严禁输出正文、总结、解释或 Markdown。`,
     },
     { role: 'user', content: `当前可还原叶子节点：\n${formatRestoreTargetsForPrompt(targets) || '无'}` },
-    { role: 'user', content: `可用原方案段编号：\n${(originalSegments || []).map((segment) => segment.id).join('、')}` },
+    { role: 'user', content: `原方案段落（用于判断 source_ids 是否只有标题、编号或实质正文）：\n${formatOriginalSegmentsForPrompt(originalSegments) || '无'}` },
     { role: 'user', content: `错误列表：\n${issueLines}` },
     { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
   ];

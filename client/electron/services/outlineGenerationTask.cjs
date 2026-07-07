@@ -303,10 +303,12 @@ function readExpandOutlinePrompt(options = {}) {
 
 要求：
 1. 目录结构要全面覆盖技术标的所有必要目录，包含多级目录
-2. 如果技术方案中有章节名称，则直接使用技术方案中的章节名称
+2. 如果技术方案中有章节名称，则使用技术方案中的标题含义，但不要把原文编号写进 title
 3. 如果技术方案中没有章节名称，则结合全文，总结出章节名称
 4. 返回标准 JSON 格式，包含章节编号、标题、描述和子章节，注意编号要连贯
-5. 除了 JSON 结果外，不要输出任何其他内容
+5. id 字段用于承载目录编号；title 字段只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #
+6. 示例：原文“### 二、 管理层级与指挥协调关系”应返回 {"id":"1.1.2","title":"管理层级与指挥协调关系"}，不要返回 {"title":"二、 管理层级与指挥协调关系"}
+7. 除了 JSON 结果外，不要输出任何其他内容
 
 JSON 格式要求：
 {
@@ -394,7 +396,7 @@ function buildOriginalOutlineAdditionsMessages(originalPlanSegment, extractedOut
 1. 只返回补充项，不要返回完整目录。
 2. 不要修改、删除、重命名、重排已有目录。
 3. parent_id 为空字符串表示追加为新的一级目录；parent_id 不为空时必须逐字复制当前完整目录 JSON 中已有的 id。
-4. title 必须是目录标题；description 是目录说明，缺失时可用标题含义概括。
+4. title 必须是纯目录标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #；description 是目录说明，缺失时可用标题含义概括。
 5. children 可选，用于补充下级目录；不要输出超过三级目录深度的内容。
 6. 不要依赖或生成最终编号，程序会在合并后重新编号。
 7. 如果没有明确遗漏，返回 {"additions":[]}。
@@ -514,7 +516,8 @@ ${detailLines || '- 未提供明确细项'}` : '';
 3. 二级目录的 children 内是三级目录，三级目录只包含 id、title、description，不要继续包含 children
 4. 优先保留原结果中的二级目录标题、说明和顺序，只在每个二级目录下补齐合理三级目录
 5. 不要把评分细项直接作为没有子节点的二级目录
-6. 只返回 JSON，不要输出解释文字
+6. 修复后的 title 只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #
+7. 只返回 JSON，不要输出解释文字
 
 ${childrenOutlineStructureRules(parentItem?.id)}`,
     },
@@ -631,12 +634,14 @@ ${outputFile} 必须保持以下结构：
 
 目录提取要求：
 1. 基于 original-plan.md 中已有章节、标题、编号、目录页和正文层级提取目录。
-2. 原文存在明确章节编号和标题时，优先保留原文表达。
+2. 原文存在明确章节编号和标题时，编号只用于判断层级和生成 id，title 只保留标题含义，不得包含原文编号。
 3. 原文没有明确编号时，可根据正文结构归纳章节标题。
 4. 目录最多保留四级。
 5. 每个节点包含 id、title、description，存在下级目录时包含 children。
 6. 编号可以自行整理，层级关系需要清晰稳定。
-7. 任务结束时，${outputFile} 就是可供程序使用的旧目录 JSON。`;
+7. title 字段只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
+8. 示例：原文“# 第一章 管理人员配备与组织机构”应写为 {"id":"1","title":"管理人员配备与组织机构"}；原文“### 二、 管理层级与指挥协调关系”应写为 {"id":"1.1.2","title":"管理层级与指挥协调关系"}。
+9. 任务结束时，${outputFile} 就是可供程序使用的旧目录 JSON。`;
 }
 
 function buildOriginalOutlineCompletionAgentPrompt(context) {
@@ -678,7 +683,8 @@ ${outputFile} 修改后仍保持以下结构：
 4. 目录最多保留四级。
 5. 每个节点包含 id、title、description，存在下级目录时包含 children。
 6. 编号可重新整理，层级关系需要清晰稳定。
-7. 任务结束时，${outputFile} 就是补漏后的最终旧目录 JSON。`;
+7. title 字段只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #；编号只写在 id 中。
+8. 任务结束时，${outputFile} 就是补漏后的最终旧目录 JSON。`;
 }
 
 function buildOutlineAgentRecoveryPrompt(context) {
@@ -716,7 +722,8 @@ workspace 文件说明：
 - JSON 顶层格式为：
 ${outputShape}
 - 不输出正文 content、图片、表格、Mermaid、审查说明或额外字段。
-- 编号可以自行整理，程序会再次统一编号；但层级关系需要正确，并满足 workflow.json 中的 hard_constraints。`;
+- 编号可以自行整理，程序会再次统一编号；但层级关系需要正确，并满足 workflow.json 中的 hard_constraints。
+- id 字段用于承载目录编号；所有 title 字段只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何原文编号或 Markdown #。`;
 }
 
 function buildOutlineAgentRecoveryFiles(context) {
@@ -1043,7 +1050,8 @@ function buildExpansionTopLevelComplementMessages({ overview, requirements, oldO
 3. 如果某个评分大类无法由已有一级目录承载，请 existing_root_id 返回空字符串，表示需要追加新的一级目录。
 4. 追加的新一级目录标题要专业、简洁，适合作为技术标一级目录。
 5. detail_points 中保留该评分大类下的关键评分细项，使用简洁短句。
-6. 只返回 JSON，格式必须为 {"groups": [...]}，不要输出解释文字。
+6. 新增 title 只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
+7. 只返回 JSON，格式必须为 {"groups": [...]}，不要输出解释文字。
 
 返回格式：
 {
@@ -1091,7 +1099,8 @@ function buildExpansionMissingChildrenMessages(sharedMessages, parentItem, group
 2. 只输出当前一级目录下的二级和三级目录，不要重复输出一级目录本身。
 3. 二级和三级目录要覆盖当前技术评分大类及其细项，不能越界写入其他一级目录内容。
 4. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
-5. 除了 JSON 结果外，不要输出任何其他内容。
+5. id 字段用于承载目录编号；title 字段只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
+6. 除了 JSON 结果外，不要输出任何其他内容。
 
 ${childrenOutlineFixedStructureRules()}`;
   const messages = [
@@ -1119,7 +1128,8 @@ function buildExpansionChildPatchMessages(sharedMessages, parentItem, group, sug
 4. 新增目录最多到三级；如果 parent_id 是一级目录，可以新增二级目录并可带三级 children；如果 parent_id 是二级目录，只能新增三级目录且不能包含 children。
 5. 优先补齐已有二级目录下缺失的三级响应要点、实施措施、证明材料或验收标准。
 6. 如果这段目录已经充分覆盖当前技术评分大类中的相关细项，返回 {"additions":[]}。
-7. 只返回 JSON，不要输出解释文字。
+7. 新增 title 只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
+8. 只返回 JSON，不要输出解释文字。
 
 返回格式：
 {
@@ -1161,10 +1171,11 @@ function buildExpansionChildPatchRepairMessages({ invalidContent, issues }, pare
 2. additions 只能追加下级目录，不能包含已有目录修改。
 3. parent_id 必须来自这段目录中已有的一级或二级目录 id。
 4. 新增目录最多到三级，三级目录不能包含 children。
-5. 优先保留待修复内容中已经出现的 parent_id、title、description，只修复 JSON 结构、截断字符串和层级合法性。
-6. 如果待修复内容里的 parent_id 是三级目录，请改挂到它所属的二级目录；例如 "${secondLevelId}.1" 应改为 "${secondLevelId}"，不要直接丢弃该新增项。
-7. 不要因为 JSON 截断或字符串未闭合就直接返回空 additions；只有待修复内容完全没有可恢复的新增目录信息时，才返回 {"additions":[]}。
-8. 只返回 JSON，不要输出解释文字。
+5. 修复后的 title 只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
+6. 优先保留待修复内容中已经出现的 parent_id、title 含义、description，只修复 JSON 结构、截断字符串、层级合法性和 title 编号问题。
+7. 如果待修复内容里的 parent_id 是三级目录，请改挂到它所属的二级目录；例如 "${secondLevelId}.1" 应改为 "${secondLevelId}"，不要直接丢弃该新增项。
+8. 不要因为 JSON 截断或字符串未闭合就直接返回空 additions；只有待修复内容完全没有可恢复的新增目录信息时，才返回 {"additions":[]}。
+9. 只返回 JSON，不要输出解释文字。
 
 返回格式示例：
 {
