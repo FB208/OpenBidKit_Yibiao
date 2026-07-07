@@ -220,7 +220,7 @@ People who provide requirement analysis, technical support, test files, useful f
     <td width="20%" valign="top">
 
 ![](https://oss.agnet.top/keep/2026/06/23/20260623104254982.png)
-<p align="center">Yunfeng</p>
+<p align="center">云峰</p>
     </td>
     <td width="20%" valign="top">
 
@@ -230,7 +230,7 @@ People who provide requirement analysis, technical support, test files, useful f
     <td width="20%" valign="top">
 
 ![](https://oss.agnet.top/keep/2026/06/23/20260623104455361.png)
-<p align="center">Professional Proposal</p>
+<p align="center">专业标书</p>
     </td>
     <td width="20%" valign="top">
 
@@ -240,16 +240,18 @@ People who provide requirement analysis, technical support, test files, useful f
     <td width="20%" valign="top">
 
 ![](https://oss.agnet.top/keep/2026/06/23/20260623104533722.png)
-<p align="center">Xiaomailang's Summer</p>
+<p align="center">小麦浪的夏天</p>
     </td>
   </tr>
   <tr>
     <td width="20%" valign="top">
 
 ![](https://oss.agnet.top/keep/2026/06/23/20260623105024436.png)
-<p align="center">Hanfeng (Petrochemical Installation Training)</p>
+<p align="center">韩枫（石化安装培训）</p>
     </td>
     <td width="20%" valign="top">
+    ![](https://oss.agnet.top/keep/2026/07/07/20260707150136733.png)
+    <p align="center">﹏陌路°天涯</p>
     </td>
     <td width="20%" valign="top">
     </td>
