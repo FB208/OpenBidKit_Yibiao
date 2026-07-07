@@ -1435,7 +1435,10 @@ async function htmlTableToDocx($, tableNode, context) {
 
 function buildListParagraphOptions(context, reference, level, itemIndex, totalItems, options = {}) {
   const paragraphOptions = reference ? { numbering: { reference, level } } : {};
-  if (!reference && options.manualIndent) {
+  if (!reference && options.manualListIndent) {
+    const indent = getManualUnorderedListLevelIndent(context, level);
+    if (indent) paragraphOptions.indent = indent;
+  } else if (!reference && options.manualIndent) {
     const indent = getTaskListLevelIndent(context, level);
     if (indent) paragraphOptions.indent = indent;
   }
@@ -1469,6 +1472,7 @@ function isTaskListItem($, itemNode, inlineNodes = []) {
 async function htmlListToDocx($, listNode, context, options = {}) {
   const blocks = [];
   const ordered = htmlTagName(listNode) === 'ol';
+  const unorderedListWithoutMarker = !ordered && context.bodyListStyle === 'none';
   let numberingReference = null;
   const listItems = $(listNode).children('li').toArray();
 
@@ -1477,7 +1481,7 @@ async function htmlListToDocx($, listNode, context, options = {}) {
       .filter((child) => !['ul', 'ol'].includes(htmlTagName(child)))
       .filter((child) => !isWhitespaceHtmlTextNode(child));
     const isTaskItem = isTaskListItem($, itemNode, inlineNodes);
-    if (!isTaskItem && numberingReference == null) {
+    if (!isTaskItem && numberingReference == null && !unorderedListWithoutMarker) {
       numberingReference = ordered ? createOrderedListReference(context) : createUnorderedListReference(context);
     }
     const listOptions = buildListParagraphOptions(
@@ -1486,7 +1490,7 @@ async function htmlListToDocx($, listNode, context, options = {}) {
       Math.min(options.listLevel || 0, 2),
       itemIndex,
       listItems.length,
-      { manualIndent: isTaskItem },
+      { manualIndent: isTaskItem, manualListIndent: !isTaskItem && unorderedListWithoutMarker },
     );
     blocks.push(paragraph(await htmlInlineRuns($, inlineNodes, context), listOptions));
 
@@ -1842,6 +1846,13 @@ function getTaskListLevelIndent(context, level) {
   if (safeLevel <= 0) return null;
   const listIndentChars = typeof bodyStyle.list_indent_chars === 'number' ? bodyStyle.list_indent_chars : 2;
   return { left: Math.round(charsToTwips(listIndentChars, context.bodyRunSize || 24) * safeLevel) };
+}
+
+function getManualUnorderedListLevelIndent(context, level) {
+  const safeLevel = Math.max(0, Math.min(Number(level) || 0, 2));
+  const listIndentChars = typeof context.bodyListIndentChars === 'number' ? context.bodyListIndentChars : 2;
+  const left = Math.round(charsToTwips(listIndentChars, context.bodyRunSize || 24) * (safeLevel + 1));
+  return left > 0 ? { left } : null;
 }
 
 function getListLevelIndent(referenceConfig, level) {

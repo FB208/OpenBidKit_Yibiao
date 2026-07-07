@@ -50,7 +50,7 @@ function buildHeadingVars(level: number, config: HeadingStyleConfig): Record<str
 function unorderedListStyleToCss(style: ListStyle | string | undefined, listIndent: string) {
   switch (style) {
     case 'none':
-      return { marker: '""', font: 'inherit', size: '1em', display: 'none', indent: '0' };
+      return { marker: '""', font: 'inherit', size: '1em', display: 'none', indent: listIndent };
     case 'circle':
       return { marker: '"○"', font: 'Arial, sans-serif', size: '0.82em', display: 'inline-block', indent: listIndent };
     case 'square':
