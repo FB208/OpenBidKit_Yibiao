@@ -9448,6 +9448,107 @@ button {
   border-color: rgba(33, 116, 253, 0.24);
 }
 
+.agent-tool-checks {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-tool-checks-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-tool-checks-head strong {
+  color: var(--yb-text);
+  font-size: 15px;
+}
+
+.agent-tool-checks-head span {
+  color: var(--yb-text-soft);
+  font-size: 12px;
+}
+
+.agent-tool-check-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent-tool-check-item {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  background: rgba(248, 250, 253, 0.84);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 16px;
+}
+
+.agent-tool-check-item div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-tool-check-item strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--yb-text);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-tool-check-item em {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  border-radius: 999px;
+}
+
+.agent-tool-check-item span,
+.agent-tool-check-item small {
+  overflow: hidden;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-tool-check-item.is-success {
+  border-color: rgba(28, 168, 100, 0.2);
+}
+
+.agent-tool-check-item.is-success em {
+  color: #16834a;
+  background: rgba(28, 168, 100, 0.12);
+}
+
+.agent-tool-check-item.is-warning {
+  border-color: rgba(245, 158, 11, 0.24);
+}
+
+.agent-tool-check-item.is-warning em {
+  color: #a05a00;
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.agent-tool-check-item.is-error {
+  border-color: rgba(200, 50, 32, 0.24);
+}
+
+.agent-tool-check-item.is-error em {
+  color: #c83220;
+  background: rgba(200, 50, 32, 0.1);
+}
+
 .agent-self-check-result pre {
   max-height: 360px;
   margin: 0;
@@ -11026,6 +11127,10 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .agent-tool-check-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .hero-panel {
     flex-direction: column;
   }
@@ -11154,6 +11259,15 @@ button {
   }
 
   .agent-self-check-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-tool-checks-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .agent-tool-check-grid {
     grid-template-columns: 1fr;
   }
 

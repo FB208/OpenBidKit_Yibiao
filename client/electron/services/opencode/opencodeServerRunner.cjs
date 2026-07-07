@@ -57,6 +57,7 @@ function buildMinimalChildEnv(extra) {
     'LANG',
     'LC_ALL',
     'ComSpec',
+    'PATHEXT',
   ];
 
   const env = {};

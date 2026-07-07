@@ -3,7 +3,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AgentModeScenariosConfig, AgentSelfCheckResult, AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentToolCheckResult, AiRequestMode, ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'agent' | 'about';
@@ -20,11 +20,17 @@ const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
 ];
 
 const agentSelfCheckStatusMeta: Record<AgentSelfCheckUiStatus, { label: string; description: string }> = {
-  untested: { label: '未检测', description: '点击自检后，会验证 OpenCode Server、AI proxy、当前文本模型和智能体输出链路。' },
-  checking: { label: '检测中', description: '正在清理上一轮自检日志，并执行极简智能体任务。' },
-  normal: { label: '正常', description: '智能体链路已通过自检，可以用于目录修复等 Agent 能力。' },
+  untested: { label: '未检测', description: '点击自检后，会验证 OpenCode Server、AI proxy、已集成命令工具、当前文本模型和智能体输出链路。' },
+  checking: { label: '检测中', description: '正在清理上一轮自检日志，并校验工具环境与极简智能体任务。' },
+  normal: { label: '正常', description: '智能体链路和关键集成工具已通过自检，可以用于目录修复等 Agent 能力。' },
   busy: { label: '忙碌', description: 'Agent 正在处理其他任务，本次自检已跳过；这不是 OpenCode 故障。' },
   error: { label: '异常', description: '智能体链路自检失败，请查看下方错误详情。' },
+};
+
+const agentToolCheckStatusMeta: Record<AgentToolCheckResult['status'], { label: string; description: string }> = {
+  success: { label: '可用', description: '命令可以在智能体运行环境中执行。' },
+  warning: { label: '警告', description: '命令可执行，但解析来源或兼容性需要留意。' },
+  error: { label: '失败', description: '命令不可用，可能影响智能体任务。' },
 };
 
 const updateChannelOptions: Array<{ value: UpdateChannel; label: string; description: string }> = [
@@ -1835,7 +1841,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             <div className="settings-row">
               <div className="settings-row-copy">
                 <strong>自检</strong>
-                <span>执行一个极简智能体任务，检测 OpenCode Server、AI proxy、当前文本模型和输出文件校验链路。每次自检前会清空上一轮自检日志。</span>
+                <span>执行一个极简智能体任务，检测 OpenCode Server、AI proxy、已集成命令工具、当前文本模型和输出文件校验链路。每次自检前会清空上一轮自检日志。</span>
               </div>
               <div className="settings-action-cell">
                 <button type="button" className="inline-action" onClick={runAgentSelfCheck} disabled={agentSelfCheckStatus === 'checking'}>
@@ -1890,6 +1896,29 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                       <span>{step.message || step.status}</span>
                     </div>
                   ))}
+                </div>
+              )}
+              {Boolean(agentSelfCheckResult.tool_checks?.length) && (
+                <div className="agent-tool-checks">
+                  <div className="agent-tool-checks-head">
+                    <strong>已集成工具校验</strong>
+                    <span>{agentSelfCheckResult.tool_check_summary || '已完成工具校验'}</span>
+                  </div>
+                  <div className="agent-tool-check-grid">
+                    {(agentSelfCheckResult.tool_checks || []).map((item) => {
+                      const meta = agentToolCheckStatusMeta[item.status];
+                      return (
+                        <div className={`agent-tool-check-item is-${item.status}`} key={item.id} title={[item.message, item.resolved_source, item.expected_path].filter(Boolean).join('\n')}>
+                          <div>
+                            <strong>{item.label || item.command}</strong>
+                            <em>{meta.label}</em>
+                          </div>
+                          <span>{item.message || meta.description}</span>
+                          <small>{item.resolved_type ? `${item.resolved_type}：${item.resolved_source || '-'}` : item.expected_path || '-'}</small>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
               <pre>{agentSelfCheckResult.detail_text}</pre>

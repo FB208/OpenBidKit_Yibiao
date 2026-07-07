@@ -218,6 +218,25 @@ export interface AgentSelfCheckStep {
   updated_at?: string;
 }
 
+export type AgentToolCheckStatus = 'success' | 'warning' | 'error';
+
+export interface AgentToolCheckResult {
+  id: string;
+  label: string;
+  command: string;
+  type: 'bundled' | 'shim' | string;
+  critical?: boolean;
+  status: AgentToolCheckStatus;
+  message: string;
+  expected_path?: string;
+  resolved_type?: string;
+  resolved_source?: string;
+  exit_code?: number;
+  duration_ms?: number;
+  stdout?: string;
+  stderr?: string;
+}
+
 export interface AgentSelfCheckDiagnostics {
   name?: string;
   message?: string;
@@ -270,6 +289,9 @@ export interface AgentSelfCheckResult {
   model_config?: Record<string, unknown>;
   environment?: AgentSelfCheckEnvironmentSnapshot | null;
   direct_model_test?: Record<string, unknown> | null;
+  tool_check_summary?: string;
+  tool_check_environment?: Record<string, unknown> | null;
+  tool_checks?: AgentToolCheckResult[];
   opencode_request_log?: unknown[];
   proxy_diagnostics?: { events: unknown[] };
   workspace_snapshot?: Record<string, unknown> | null;

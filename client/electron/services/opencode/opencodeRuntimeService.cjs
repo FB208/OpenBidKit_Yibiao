@@ -18,6 +18,7 @@ const {
   createSelfCheckSteps,
   formatSelfCheckDetails,
   getCurrentSelfCheckStage,
+  runIntegratedToolSelfCheck,
   runDirectModelSelfCheck,
   safeStat,
   snapshotWorkspace,
@@ -1195,6 +1196,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
     let modelConfig = null;
     let environment = null;
     let directModelTest = null;
+    let toolCheckResult = null;
     let agentResult = null;
     let workspaceSnapshot = null;
     let agentTaskStarted = false;
@@ -1319,6 +1321,13 @@ function createOpenCodeRuntimeService({ app, configStore }) {
         model_config: modelConfig,
         environment,
         direct_model_test: directModelTest,
+        tool_check_summary: toolCheckResult?.summary || '',
+        tool_check_environment: toolCheckResult ? {
+          runtime_tools_bin_dir: toolCheckResult.runtime_tools_bin_dir || '',
+          bundled_tools_bin_dir: toolCheckResult.bundled_tools_bin_dir || '',
+          path_entries: toolCheckResult.path_entries || [],
+        } : null,
+        tool_checks: toolCheckResult?.items || [],
         opencode_request_log: agentResult?.opencode_request_log || diagnosticsPayload.opencode_request_log || [],
         proxy_diagnostics: { events: diagnostics.events.slice(-200) },
         workspace_snapshot: workspaceSnapshot,
@@ -1366,6 +1375,18 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       fs.writeFileSync(writeCheckPath, 'ok', 'utf-8');
       fs.rmSync(writeCheckPath, { force: true });
       setStep('runtime-write-check', 'success', '运行目录可写');
+
+      setStep('tool-check', 'running', '正在校验已集成命令工具');
+      toolCheckResult = runIntegratedToolSelfCheck({
+        app,
+        runtimeRoot: serviceRuntimeRoot,
+        workspaceDir: serviceWorkspaceDir,
+        logger,
+      });
+      if (!toolCheckResult.success) {
+        throw createSelfCheckStageError('tool-check', toolCheckResult.summary || '集成工具校验失败');
+      }
+      setStep('tool-check', 'success', toolCheckResult.summary || '集成工具校验通过');
 
       setStep('direct-model-test', 'running', '正在直接请求当前文本模型');
       directModelTest = await runDirectModelSelfCheck(config);

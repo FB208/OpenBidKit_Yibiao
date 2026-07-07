@@ -582,6 +582,27 @@ function buildFinalOutlineReviewMessages(context) {
 
 function getFinalAgentOutputShape(context) {
   const isAligned = context.workflowKind !== 'existing-plan-expansion';
+  const outlineShape = `[
+    {
+      "id": "1",
+      "title": "一级目录标题",
+      "description": "一级目录说明",
+      "children": [
+        {
+          "id": "1.1",
+          "title": "二级目录标题",
+          "description": "二级目录说明",
+          "children": [
+            {
+              "id": "1.1.1",
+              "title": "三级目录标题",
+              "description": "三级目录说明"
+            }
+          ]
+        }
+      ]
+    }
+  ]`;
   return isAligned
     ? `{
   "groups": [
@@ -592,10 +613,10 @@ function getFinalAgentOutputShape(context) {
       "detail_points": ["评分细项"]
     }
   ],
-  "outline": []
+  "outline": ${outlineShape}
 }`
     : `{
-  "outline": []
+  "outline": ${outlineShape}
 }`;
 }
 
@@ -721,6 +742,9 @@ workspace 文件说明：
 - 任务结束时，${outputFile} 是可被 JSON.parse 直接解析的纯 JSON 文件，不包含 Markdown 代码块或解释文字。
 - JSON 顶层格式为：
 ${outputShape}
+- 程序校验要求：outline 内每一个目录节点（一级、二级、三级、四级）都必须包含非空字符串 id、title、description，不能省略 description。
+- children 只在确实存在下级目录时输出；只要输出 children，children 内每个下级节点也必须包含 id、title、description。
+- 新增、迁移、合并或修改目录时必须同步填写 description；保留 current-outline.json 或 original-outline.json 中已有目录时，优先沿用原有 description。
 - 不输出正文 content、图片、表格、Mermaid、审查说明或额外字段。
 - 编号可以自行整理，程序会再次统一编号；但层级关系需要正确，并满足 workflow.json 中的 hard_constraints。
 - id 字段用于承载目录编号；所有 title 字段只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何原文编号或 Markdown #。`;
