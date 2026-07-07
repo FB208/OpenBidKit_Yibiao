@@ -83,9 +83,9 @@ const defaultImageModelProfiles = {
     provider: 'jinlong',
     base_url: 'https://img-api.jlaudeapi.com/v1',
     api_key: '',
-    model_name: '',
+    model_name: 'gpt-image-2',
     image_size: '1024x1024',
-    request_mode: 'stream',
+    request_mode: 'normal',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
     tested_at: '',
@@ -384,19 +384,20 @@ function normalizeImageSize(provider, value, fallback) {
 function normalizeImageModelProfile(provider, profile) {
   const defaults = defaultImageModelProfiles[provider];
   const source = profile || {};
+  const useProviderDefaultImageModel = provider === 'jinlong' && !String(source.model_name ?? '').trim();
   return {
     provider,
     base_url: provider === 'custom'
       ? source.base_url !== undefined ? source.base_url : defaults.base_url
       : defaults.base_url,
     api_key: source.api_key !== undefined ? source.api_key : defaults.api_key,
-    model_name: source.model_name !== undefined ? source.model_name : defaults.model_name,
-    image_size: normalizeImageSize(provider, source.image_size, defaults.image_size),
-    request_mode: normalizeAiRequestMode(source.request_mode, defaults.request_mode),
+    model_name: useProviderDefaultImageModel ? defaults.model_name : source.model_name !== undefined ? source.model_name : defaults.model_name,
+    image_size: normalizeImageSize(provider, useProviderDefaultImageModel ? defaults.image_size : source.image_size, defaults.image_size),
+    request_mode: normalizeAiRequestMode(useProviderDefaultImageModel ? defaults.request_mode : source.request_mode, defaults.request_mode),
     concurrency_limit: normalizeImageConcurrencyLimit(source.concurrency_limit, defaults.concurrency_limit),
-    status: source.status !== undefined ? source.status : defaults.status,
-    tested_at: source.tested_at !== undefined ? source.tested_at : defaults.tested_at,
-    last_error: source.last_error !== undefined ? source.last_error : defaults.last_error,
+    status: useProviderDefaultImageModel ? defaults.status : source.status !== undefined ? source.status : defaults.status,
+    tested_at: useProviderDefaultImageModel ? defaults.tested_at : source.tested_at !== undefined ? source.tested_at : defaults.tested_at,
+    last_error: useProviderDefaultImageModel ? defaults.last_error : source.last_error !== undefined ? source.last_error : defaults.last_error,
   };
 }
 

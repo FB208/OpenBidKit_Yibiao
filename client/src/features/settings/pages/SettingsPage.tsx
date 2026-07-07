@@ -60,7 +60,7 @@ function getLicenseSourceLabel(status: LicenseRuntimeStatus | null) {
 }
 
 const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
-  { value: 'jinlong', label: '【近期不稳定，先用其他的】' },
+  { value: 'jinlong', label: '金龙中转站【推荐】' },
   { value: 'volcengine', label: '火山方舟' },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'longcat', label: '龙猫' },
@@ -158,7 +158,7 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
 }
 
 const imageProviders: Array<{ value: ImageModelProvider; label: string }> = [
-  { value: 'jinlong', label: '【近期不稳定，先用其他的】' },
+  { value: 'jinlong', label: '金龙中转站【推荐】' },
   { value: 'volcengine', label: '火山方舟' },
   { value: 'google-ai-studio', label: 'Google AI Studio' },
   { value: 'agnes', label: 'Agnes AI' },
@@ -200,11 +200,11 @@ function normalizeImageSize(provider: ImageModelProvider, value?: string): Image
 const imageProviderDefaults: ImageModelProfiles = {
   jinlong: {
     provider: 'jinlong',
-    base_url: 'https://img-api.jlaudeapi.com/v',
+    base_url: 'https://img-api.jlaudeapi.com/v1',
     api_key: '',
-    model_name: '',
+    model_name: 'gpt-image-2',
     image_size: '1024x1024',
-    request_mode: 'stream',
+    request_mode: 'normal',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
     tested_at: '',
@@ -317,17 +317,18 @@ function createDefaultImageModelProfiles(): ImageModelProfiles {
 
 function normalizeImageModelProfile(provider: ImageModelProvider, profile?: Partial<ImageModelConfig>): ImageModelConfig {
   const defaults = imageProviderDefaults[provider];
+  const useProviderDefaultImageModel = provider === 'jinlong' && !String(profile?.model_name ?? '').trim();
   return {
     provider,
     base_url: provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url,
     api_key: profile?.api_key ?? defaults.api_key,
-    model_name: profile?.model_name ?? defaults.model_name,
-    image_size: normalizeImageSize(provider, profile?.image_size ?? defaults.image_size),
-    request_mode: normalizeAiRequestMode(profile?.request_mode ?? defaults.request_mode),
+    model_name: useProviderDefaultImageModel ? defaults.model_name : profile?.model_name ?? defaults.model_name,
+    image_size: normalizeImageSize(provider, useProviderDefaultImageModel ? defaults.image_size : profile?.image_size ?? defaults.image_size),
+    request_mode: normalizeAiRequestMode(useProviderDefaultImageModel ? defaults.request_mode : profile?.request_mode ?? defaults.request_mode),
     concurrency_limit: normalizeImageConcurrencyLimit(profile?.concurrency_limit ?? defaults.concurrency_limit),
-    status: profile?.status ?? defaults.status,
-    tested_at: profile?.tested_at ?? defaults.tested_at,
-    last_error: profile?.last_error ?? defaults.last_error,
+    status: useProviderDefaultImageModel ? defaults.status : profile?.status ?? defaults.status,
+    tested_at: useProviderDefaultImageModel ? defaults.tested_at : profile?.tested_at ?? defaults.tested_at,
+    last_error: useProviderDefaultImageModel ? defaults.last_error : profile?.last_error ?? defaults.last_error,
   };
 }
 
