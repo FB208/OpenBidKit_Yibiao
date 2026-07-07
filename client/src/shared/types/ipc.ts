@@ -186,7 +186,15 @@ export interface AgentRunPayload {
   output_file?: string;
   files?: AgentRunFile[];
   timeout_ms?: number;
+  max_retries?: number;
   agent?: string;
+}
+
+export interface AgentRetryAttempt {
+  attempt: number;
+  at: string;
+  error: string;
+  output_chars: number;
 }
 
 export interface AgentRunResult {
@@ -204,6 +212,9 @@ export interface AgentRunResult {
   assistant_text?: string;
   diff?: unknown[];
   session_id?: string;
+  retry_count?: number;
+  retry_attempts?: AgentRetryAttempt[];
+  validation_result?: unknown;
   active_task?: AgentRuntimeActiveTask | null;
   opencode_request_log?: unknown[];
   opencode_stderr_tail?: string;

@@ -1,4 +1,4 @@
-import { AGENT_RUNTIME_STATUSES, ALLOWED_EVENTS, CONFIG_USAGE_FIELDS, DATASET, MODEL_USAGE_FIELDS } from '../constants.js';
+import { AGENT_RUNTIME_MAX_RETRY_COUNT, AGENT_RUNTIME_STATUSES, ALLOWED_EVENTS, CONFIG_USAGE_FIELDS, DATASET, MODEL_USAGE_FIELDS } from '../constants.js';
 import {
   businessDateRangeCondition,
   businessDateSqlExpression,
@@ -117,8 +117,13 @@ function configUsageKeysSql() {
   return `(${CONFIG_USAGE_FIELDS.map((field) => sqlString(field.key)).join(', ')})`;
 }
 
-function agentRuntimeStatusesSql() {
-  return `(${Array.from(AGENT_RUNTIME_STATUSES).map((status) => sqlString(status)).join(', ')})`;
+function parseAgentRuntimeMetricKey(value) {
+  const match = /^([a-z]+):r(\d+)$/.exec(normalizeText(value, 30));
+  if (!match) return null;
+  const status = match[1];
+  const retryCount = Math.min(AGENT_RUNTIME_MAX_RETRY_COUNT, Math.max(0, Math.floor(Number(match[2]) || 0)));
+  if (!AGENT_RUNTIME_STATUSES.has(status)) return null;
+  return { status, retryCount };
 }
 
 function businessDateCondition(activityDate) {
@@ -663,30 +668,87 @@ export async function queryStatsModelUsage(env, projectName, range, filters) {
   return usage;
 }
 
-function createAgentRuntimeSummary(rows = []) {
-  const counts = { success: 0, failed: 0 };
-  for (const row of rows || []) {
-    const status = normalizeText(row.status, 20);
-    if (!AGENT_RUNTIME_STATUSES.has(status)) continue;
-    counts[status] += number(row.count ?? row.runCount ?? row.run_count);
-  }
-  const totalCount = counts.success + counts.failed;
+function createAgentRuntimeSummary(source = {}) {
+  const successCount = number(source.successCount ?? source.success_count);
+  const failedCount = number(source.failedCount ?? source.failed_count);
+  const totalCount = number(source.totalCount ?? source.total_count) || successCount + failedCount;
+  const retryCount = number(source.retryCount ?? source.retry_count);
+  const retriedRunCount = number(source.retriedRunCount ?? source.retried_run_count);
+  const retrySuccessCount = number(source.retrySuccessCount ?? source.retry_success_count);
   return {
-    successCount: counts.success,
-    failedCount: counts.failed,
+    successCount,
+    failedCount,
     totalCount,
-    successRate: totalCount > 0 ? counts.success / totalCount : 0,
+    retryCount,
+    retriedRunCount,
+    retrySuccessCount,
+    successRate: totalCount > 0 ? successCount / totalCount : 0,
+    retrySuccessRate: retriedRunCount > 0 ? retrySuccessCount / retriedRunCount : 0,
   };
+}
+
+function createAgentRuntimeSummaryFromMetricRows(rows = []) {
+  const summary = {
+    successCount: 0,
+    failedCount: 0,
+    totalCount: 0,
+    retryCount: 0,
+    retriedRunCount: 0,
+    retrySuccessCount: 0,
+  };
+  for (const row of rows || []) {
+    const parsed = parseAgentRuntimeMetricKey(row.metricKey ?? row.metric_key ?? row.status ?? row.blob9);
+    if (!parsed) continue;
+    const count = number(row.count ?? row.runCount ?? row.run_count);
+    if (count <= 0) continue;
+    if (parsed.status === 'success') summary.successCount += count;
+    if (parsed.status === 'failed') summary.failedCount += count;
+    summary.totalCount += count;
+    summary.retryCount += count * parsed.retryCount;
+    if (parsed.retryCount > 0) {
+      summary.retriedRunCount += count;
+      if (parsed.status === 'success') summary.retrySuccessCount += count;
+    }
+  }
+  return createAgentRuntimeSummary(summary);
+}
+
+async function ensureAgentRuntimeStatsTable(db) {
+  const rows = await all(db, 'PRAGMA table_info(stats_agent_runtime)');
+  const columns = new Set(rows.map((row) => row.name));
+  if (rows.length && !columns.has('success_count')) {
+    await run(db, 'DROP TABLE stats_agent_runtime');
+  }
+  await run(db, `
+    CREATE TABLE IF NOT EXISTS stats_agent_runtime (
+      project_name TEXT PRIMARY KEY,
+      success_count INTEGER NOT NULL DEFAULT 0,
+      failed_count INTEGER NOT NULL DEFAULT 0,
+      total_count INTEGER NOT NULL DEFAULT 0,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      retried_run_count INTEGER NOT NULL DEFAULT 0,
+      retry_success_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    )
+  `);
 }
 
 export async function queryStatsAgentRuntime(env, projectName, range) {
   if (range === 'history') {
-    const rows = await all(requireStatsDb(env), `
-      SELECT status, run_count AS count
+    const db = requireStatsDb(env);
+    await ensureAgentRuntimeStatsTable(db);
+    const row = await first(db, `
+      SELECT
+        success_count AS successCount,
+        failed_count AS failedCount,
+        total_count AS totalCount,
+        retry_count AS retryCount,
+        retried_run_count AS retriedRunCount,
+        retry_success_count AS retrySuccessCount
       FROM stats_agent_runtime
-      WHERE project_name = ? AND status IN ('success', 'failed')
+      WHERE project_name = ?
     `, [projectName]);
-    return createAgentRuntimeSummary(rows);
+    return createAgentRuntimeSummary(row || {});
   }
 
   const project = sqlString(projectName);
@@ -697,13 +759,13 @@ export async function queryStatsAgentRuntime(env, projectName, range) {
     FROM ${DATASET}
     WHERE blob1 = ${project}
       AND blob2 = 'agent_runtime'
-      AND blob9 IN ${agentRuntimeStatusesSql()}
+      AND blob9 != ''
       AND ${aeRangeCondition(range)}
     GROUP BY status
     ORDER BY status ASC
-    LIMIT 10
+    LIMIT 100
   `);
-  return createAgentRuntimeSummary(result.data || []);
+  return createAgentRuntimeSummaryFromMetricRows((result.data || []).map((row) => ({ metricKey: row.status, count: row.count })));
 }
 
 export async function queryStatsProjects(env) {
@@ -1677,22 +1739,28 @@ async function queryRollupAgentRuntimeRows(env, activityDate, projectNames) {
   const result = await queryAnalytics(env, `
     SELECT
       blob1 AS projectName,
-      blob9 AS status,
+      blob9 AS metricKey,
       SUM(_sample_interval) AS runCount
     FROM ${DATASET}
     WHERE blob1 IN ${projectsSql(projectNames)}
       AND blob2 = 'agent_runtime'
-      AND blob9 IN ${agentRuntimeStatusesSql()}
+      AND blob9 != ''
       AND ${businessDateCondition(activityDate)}
-    GROUP BY projectName, status
-    ORDER BY projectName ASC, status ASC
+    GROUP BY projectName, metricKey
+    ORDER BY projectName ASC, metricKey ASC
     LIMIT ${MAX_ANALYTICS_ROWS}
   `);
-  return (result.data || []).map((row) => ({
-    projectName: normalizeProjectName(row.projectName),
-    status: normalizeText(row.status, 20),
-    runCount: number(row.runCount),
-  })).filter((row) => row.projectName && AGENT_RUNTIME_STATUSES.has(row.status) && row.runCount > 0);
+  const grouped = new Map();
+  for (const row of result.data || []) {
+    const projectName = normalizeProjectName(row.projectName);
+    if (!projectName) continue;
+    if (!grouped.has(projectName)) grouped.set(projectName, []);
+    grouped.get(projectName).push({ metricKey: row.metricKey, count: row.runCount });
+  }
+  return Array.from(grouped.entries()).map(([projectName, rows]) => ({
+    projectName,
+    ...createAgentRuntimeSummaryFromMetricRows(rows),
+  })).filter((row) => row.projectName && row.totalCount > 0);
 }
 
 function prepareAgentRuntimeStatements(db, rows, updatedAt) {
@@ -1701,22 +1769,37 @@ function prepareAgentRuntimeStatements(db, rows, updatedAt) {
     WITH rows AS (
       SELECT
         json_extract(item.value, '$.projectName') AS project_name,
-        json_extract(item.value, '$.status') AS status,
-        CAST(json_extract(item.value, '$.runCount') AS INTEGER) AS run_count
+        CAST(json_extract(item.value, '$.successCount') AS INTEGER) AS success_count,
+        CAST(json_extract(item.value, '$.failedCount') AS INTEGER) AS failed_count,
+        CAST(json_extract(item.value, '$.totalCount') AS INTEGER) AS total_count,
+        CAST(json_extract(item.value, '$.retryCount') AS INTEGER) AS retry_count,
+        CAST(json_extract(item.value, '$.retriedRunCount') AS INTEGER) AS retried_run_count,
+        CAST(json_extract(item.value, '$.retrySuccessCount') AS INTEGER) AS retry_success_count
       FROM json_each(?) AS item
     )
-    INSERT INTO stats_agent_runtime (project_name, status, run_count, updated_at)
-    SELECT project_name, status, run_count, ?
+    INSERT INTO stats_agent_runtime (
+      project_name, success_count, failed_count, total_count,
+      retry_count, retried_run_count, retry_success_count, updated_at
+    )
+    SELECT
+      project_name, success_count, failed_count, total_count,
+      retry_count, retried_run_count, retry_success_count, ?
     FROM rows
-    WHERE project_name != '' AND status IN ('success', 'failed')
-    ON CONFLICT(project_name, status) DO UPDATE SET
-      run_count = stats_agent_runtime.run_count + excluded.run_count,
+    WHERE project_name != ''
+    ON CONFLICT(project_name) DO UPDATE SET
+      success_count = stats_agent_runtime.success_count + excluded.success_count,
+      failed_count = stats_agent_runtime.failed_count + excluded.failed_count,
+      total_count = stats_agent_runtime.total_count + excluded.total_count,
+      retry_count = stats_agent_runtime.retry_count + excluded.retry_count,
+      retried_run_count = stats_agent_runtime.retried_run_count + excluded.retried_run_count,
+      retry_success_count = stats_agent_runtime.retry_success_count + excluded.retry_success_count,
       updated_at = excluded.updated_at
   `).bind(json, updatedAt)];
 }
 
 async function runAgentRuntimeStage(env, activityDate, projectNames, completedByProject) {
   const db = requireStatsDb(env);
+  await ensureAgentRuntimeStatsTable(db);
   const grouped = groupRowsByProject(await queryRollupAgentRuntimeRows(env, activityDate, projectNames), projectNames);
   const results = [];
   for (const projectName of uniqueProjectNames(projectNames)) {

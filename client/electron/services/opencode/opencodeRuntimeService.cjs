@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const Database = require('better-sqlite3');
 const { getAgentRuntimeDir, getBundledOpencodeBinaryPath } = require('../../utils/paths.cjs');
 const { startOpenCodeSidecar, closeOpenCodeSidecar } = require('./opencodeServerRunner.cjs');
-const { runOpenCodeTask } = require('./opencodeHttpClient.cjs');
+const { createSession, sendPrompt, getSessionDiff } = require('./opencodeHttpClient.cjs');
 const { writeOpenCodeAgentsFile } = require('./opencodeToolEnvironment.cjs');
 const {
   SELF_CHECK_TASK_ID,
@@ -36,6 +36,8 @@ const WORKSPACE_WATCH_INTERVAL_MS = 2000;
 const OPENCODE_EVENT_POLL_INTERVAL_MS = 1000;
 const OPENCODE_EVENT_BATCH_LIMIT = 120;
 const BUSY_MESSAGE = 'Agent 正在处理其他任务，请耐心等待';
+const DEFAULT_AGENT_MAX_RETRIES = 1;
+const MAX_AGENT_MAX_RETRIES = 3;
 const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const ANALYTICS_PROJECT_NAME = 'yibiao-client';
 
@@ -48,8 +50,62 @@ function normalizeTimeoutMs(value, fallback = DEFAULT_AGENT_IDLE_TIMEOUT_MS) {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
 }
 
-function trackAgentRuntime(app, configStore, status) {
+function normalizeMaxRetries(value, fallback = DEFAULT_AGENT_MAX_RETRIES) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.min(MAX_AGENT_MAX_RETRIES, Math.floor(number)));
+}
+
+function extractTextFromPromptResult(result) {
+  const parts = Array.isArray(result?.parts) ? result.parts : [];
+  return parts
+    .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('\n')
+    .trim();
+}
+
+function markAgentValidationError(error) {
+  if (error && typeof error === 'object') {
+    error.agentValidationFailed = true;
+  }
+  return error;
+}
+
+function compactErrorText(error, maxLength = 1200) {
+  const lines = [
+    error?.message || String(error || '未知错误'),
+    error?.cause?.message || error?.cause?.code || error?.openCodeCause || '',
+  ].filter(Boolean);
+  const text = lines.join('\n').trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function buildAgentRetryPrompt({ outputFile, attempt, maxRetries, error }) {
+  return `上一轮 Agent 执行没有通过程序校验或执行过程中失败。
+
+失败信息：
+${compactErrorText(error)}
+
+请继续使用当前会话和当前工作区已有文件，不要重新开始任务，不要清空工作区。
+请先检查 ${outputFile} 和必要的输入文件，定位失败原因，只做必要修复。
+修复后仍然把最终结果写入 ${outputFile}。
+
+这是第 ${attempt}/${maxRetries} 次自动修复机会。`;
+}
+
+function createRetryAttemptSummary({ attempt, error, outputContent }) {
+  return {
+    attempt,
+    at: nowIso(),
+    error: compactErrorText(error, 600),
+    output_chars: String(outputContent || '').length,
+  };
+}
+
+function trackAgentRuntime(app, configStore, status, meta = {}) {
   const runtimeStatus = status === 'success' ? 'success' : 'failed';
+  const retryCount = Math.max(0, Math.min(MAX_AGENT_MAX_RETRIES, Math.floor(Number(meta.retryCount || meta.retry_count || 0) || 0)));
   void Promise.resolve()
     .then(() => {
       const config = configStore.load();
@@ -65,6 +121,7 @@ function trackAgentRuntime(app, configStore, status) {
           client_id: config.analytics_client_id || '',
           client_created_at: config.analytics_created_at || '',
           agent_runtime_status: runtimeStatus,
+          agent_runtime_retry_count: retryCount,
         }),
       });
     })
@@ -158,6 +215,8 @@ function annotateAgentError(error, meta = {}) {
   error.agentOutputPath = meta.outputPath || error.agentOutputPath || '';
   error.agentPartialOutput = meta.outputContent || error.agentPartialOutput || '';
   error.agentPartialOutputChars = String(meta.outputContent || error.agentPartialOutput || '').length;
+  error.agentValidationFailed = Boolean(error.agentValidationFailed);
+  error.agentRetryAttempts = Array.isArray(error.agentRetryAttempts) ? error.agentRetryAttempts : [];
   error.openCodeRequestLog = Array.isArray(meta.requestLog) ? meta.requestLog : error.openCodeRequestLog || [];
   error.openCodeStderrTail = meta.stderrTail || error.openCodeStderrTail || '';
   error.openCodeStdoutTail = meta.stdoutTail || error.openCodeStdoutTail || '';
@@ -798,6 +857,110 @@ function createOpenCodeRuntimeService({ app, configStore }) {
     };
   }
 
+  function moveDiagnosticsToArchivedWorkspace(diagnosticsPayload, archivedWorkspaceDir, outputFile) {
+    if (!diagnosticsPayload || !archivedWorkspaceDir) return diagnosticsPayload;
+    diagnosticsPayload.workspaceDir = archivedWorkspaceDir;
+    try {
+      const relativePath = safeRelativePath(outputFile);
+      diagnosticsPayload.outputPath = ensureInsideRoot(archivedWorkspaceDir, path.join(archivedWorkspaceDir, relativePath), outputFile);
+    } catch {
+      diagnosticsPayload.outputPath = path.join(archivedWorkspaceDir, path.basename(outputFile || 'agent-result.md'));
+    }
+    return diagnosticsPayload;
+  }
+
+  async function runOpenCodeTaskWithRetry({ title, prompt, outputFile, signal, agent, taskActivity, onSessionCreated, validateOutput, maxRetries, retryAttempts }) {
+    const session = await createSession(sidecar, title, { signal, onActivity: taskActivity });
+    const sessionId = session?.id || session?.sessionID || session?.session_id || '';
+    if (!sessionId) {
+      throw new Error('OpenCode session 创建成功但缺少 session id');
+    }
+    onSessionCreated?.(session);
+    let nextPrompt = prompt;
+    let lastMessageResult = null;
+    let lastText = '';
+    let validationResult = null;
+
+    for (let attemptIndex = 0; attemptIndex <= maxRetries; attemptIndex += 1) {
+      const attempt = attemptIndex + 1;
+      try {
+        lastMessageResult = await sendPrompt(sidecar, sessionId, nextPrompt, { signal, agent, onActivity: taskActivity });
+        lastText = extractTextFromPromptResult(lastMessageResult);
+        const output = readOutputContent(serviceWorkspaceDir, outputFile);
+        const candidateResult = {
+          success: true,
+          title,
+          output_file: outputFile,
+          output_content: output.content,
+          assistant_text: lastText,
+          session_id: sessionId,
+          retry_count: attemptIndex,
+          retry_attempts: [...retryAttempts],
+        };
+        if (typeof validateOutput === 'function') {
+          try {
+            validationResult = await validateOutput(candidateResult, {
+              attempt,
+              max_retries: maxRetries,
+              task_id: activeTask?.task_id || '',
+              title,
+              output_file: outputFile,
+              workspace_dir: serviceWorkspaceDir,
+              session_id: sessionId,
+              retry_attempts: [...retryAttempts],
+            });
+          } catch (validationError) {
+            throw markAgentValidationError(validationError);
+          }
+        }
+        const diff = await getSessionDiff(sidecar, sessionId, { signal, onActivity: taskActivity }).catch(() => []);
+        return {
+          session,
+          message: lastMessageResult?.info || null,
+          parts: Array.isArray(lastMessageResult?.parts) ? lastMessageResult.parts : [],
+          text: lastText,
+          diff: Array.isArray(diff) ? diff : [],
+          output,
+          validation_result: validationResult,
+          retry_count: attemptIndex,
+          retry_attempts: [...retryAttempts],
+        };
+      } catch (error) {
+        if (isUserCancelOrPause(error) || signal?.aborted || attemptIndex >= maxRetries) {
+          if (error && typeof error === 'object') {
+            error.agentRetryAttempts = [...retryAttempts];
+          }
+          throw error;
+        }
+
+        let output = { content: '' };
+        try { output = readOutputContent(serviceWorkspaceDir, outputFile); } catch {}
+        retryAttempts.push(createRetryAttemptSummary({ attempt, error, outputContent: output.content }));
+        const retryAttempt = retryAttempts.length;
+        taskActivity({
+          stage: 'retry',
+          message: `Agent 执行未通过，正在同一会话自动修复 ${retryAttempt}/${maxRetries}：${compactErrorText(error, 160)}`,
+          source: 'runtime.retry',
+          activity: true,
+          meta: {
+            attempt,
+            retry_attempt: retryAttempt,
+            max_retries: maxRetries,
+            validation_failed: Boolean(error?.agentValidationFailed),
+          },
+        });
+        nextPrompt = buildAgentRetryPrompt({
+          outputFile,
+          attempt: retryAttempt,
+          maxRetries,
+          error,
+        });
+      }
+    }
+
+    throw new Error('Agent 自动修复流程异常结束');
+  }
+
   function startOpenCodeEventWatcher(sessionId, taskActivity) {
     const normalizedSessionId = String(sessionId || '').trim();
     if (!normalizedSessionId) return () => {};
@@ -914,6 +1077,8 @@ function createOpenCodeRuntimeService({ app, configStore }) {
     const title = payload.title || '易标智能体任务';
     const outputFile = payload.output_file || 'agent-result.md';
     const timeoutMs = normalizeTimeoutMs(payload.timeout_ms, DEFAULT_AGENT_IDLE_TIMEOUT_MS);
+    const maxRetries = normalizeMaxRetries(payload.max_retries);
+    const retryAttempts = [];
 
     activeTask = createActiveTask({ taskId, title, timeoutMs, onActivity: payload.onActivity });
     const taskActivity = createTaskActivity(activeTask);
@@ -942,27 +1107,32 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       prepareStagingWorkspace(payload);
       stopOutputWatcher = startOutputWatcher(outputFile, taskActivity);
 
-      const result = await runOpenCodeTask(sidecar, {
+      const result = await runOpenCodeTaskWithRetry({
         title,
         prompt: payload.prompt || createDefaultAgentPrompt({ task: payload.task || '请分析当前输入文件，并输出可执行结果。', outputFile }),
+        outputFile,
         signal: activeTaskAbortController.signal,
         agent: payload.agent || 'build',
-        onActivity: taskActivity,
+        taskActivity,
+        validateOutput: payload.validateOutput,
+        maxRetries,
+        retryAttempts,
         onSessionCreated: (session) => {
           stopOpenCodeEventWatcher?.();
-          stopOpenCodeEventWatcher = startOpenCodeEventWatcher(session?.id || session?.sessionID || '', taskActivity);
+          stopOpenCodeEventWatcher = startOpenCodeEventWatcher(session?.id || session?.sessionID || session?.session_id || '', taskActivity);
         },
       });
 
       taskActivity({ stage: 'output', message: '', source: 'runtime', visible: false, activity: false });
-      const output = readOutputContent(serviceWorkspaceDir, outputFile);
+      const output = result.output || readOutputContent(serviceWorkspaceDir, outputFile);
 
       taskActivity({ stage: 'archive', message: '', source: 'runtime', visible: false, activity: false });
       archivedWorkspaceDir = archiveTaskWorkspace(taskId);
-      const diagnosticsPayload = collectDiagnostics({ taskId, title, outputFile });
+      const diagnosticsPayload = moveDiagnosticsToArchivedWorkspace(collectDiagnostics({ taskId, title, outputFile }), archivedWorkspaceDir, outputFile);
+      diagnosticsPayload.retryAttempts = [...retryAttempts];
       writeTaskDiagnostics(taskId, diagnosticsPayload);
 
-      trackAgentRuntime(app, configStore, 'success');
+      trackAgentRuntime(app, configStore, 'success', { retryCount: result.retry_count || 0 });
 
       const taskResult = {
         success: true,
@@ -975,7 +1145,10 @@ function createOpenCodeRuntimeService({ app, configStore }) {
         output_content: output.content,
         assistant_text: result.text,
         diff: result.diff,
-        session_id: result.session?.id || '',
+        session_id: result.session?.id || result.session?.sessionID || result.session?.session_id || '',
+        retry_count: result.retry_count || 0,
+        retry_attempts: result.retry_attempts || [],
+        validation_result: result.validation_result,
         opencode_request_log: sidecar?.requestLog || [],
         opencode_stderr_tail: sidecar?.getStderrTail?.(8000) || '',
         opencode_stdout_tail: sidecar?.getStdoutTail?.(8000) || '',
@@ -990,8 +1163,19 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       if (isWatchdogStall(error)) {
         mustRestartAfterTask = true;
       }
-      trackAgentRuntime(app, configStore, 'failed');
+      trackAgentRuntime(app, configStore, 'failed', { retryCount: Array.isArray(error?.agentRetryAttempts) ? error.agentRetryAttempts.length : retryAttempts.length });
       const diagnosticsPayload = collectDiagnostics({ taskId, title, outputFile });
+      if (error && typeof error === 'object') {
+        error.agentRetryAttempts = Array.isArray(error.agentRetryAttempts) ? error.agentRetryAttempts : [...retryAttempts];
+      }
+      diagnosticsPayload.retryAttempts = Array.isArray(error?.agentRetryAttempts) ? error.agentRetryAttempts : [...retryAttempts];
+      diagnosticsPayload.validationFailed = Boolean(error?.agentValidationFailed);
+      try {
+        archivedWorkspaceDir = archiveTaskWorkspace(taskId);
+        moveDiagnosticsToArchivedWorkspace(diagnosticsPayload, archivedWorkspaceDir, outputFile);
+      } catch (archiveError) {
+        diagnosticsPayload.archiveError = archiveError?.message || String(archiveError || '归档失败');
+      }
       writeTaskDiagnostics(taskId, diagnosticsPayload);
       throw annotateAgentError(error, diagnosticsPayload);
     } finally {
@@ -1403,6 +1587,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
         files: [{ path: 'self-check-input.txt', content: 'YIBIAO_AGENT_SELF_CHECK_INPUT' }],
         prompt: buildSelfCheckPrompt(),
         timeout_ms: SELF_CHECK_TIMEOUT_MS,
+        max_retries: 0,
         onActivity: handleInternalActivity,
       });
 

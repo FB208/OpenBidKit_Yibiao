@@ -1,9 +1,20 @@
-import { AGENT_RUNTIME_STATUSES, ALLOWED_EVENTS } from '../constants.js';
+import { AGENT_RUNTIME_MAX_RETRY_COUNT, AGENT_RUNTIME_STATUSES, ALLOWED_EVENTS } from '../constants.js';
 import { isValidProjectName, normalizeMetricValue, normalizeText } from '../utils.js';
 
 function normalizeTokenNumber(value) {
   const number = Number(value || 0);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+}
+
+function normalizeAgentRetryCount(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number > 0
+    ? Math.min(AGENT_RUNTIME_MAX_RETRY_COUNT, Math.floor(number))
+    : 0;
+}
+
+function createAgentRuntimeMetricKey(status, retryCount) {
+  return AGENT_RUNTIME_STATUSES.has(status) ? `${status}:r${normalizeAgentRetryCount(retryCount)}` : '';
 }
 
 function normalizeBaseUrlHost(value) {
@@ -55,7 +66,7 @@ function createMetricBlobs(event) {
       : event.event === 'config_usage'
         ? event.configKey
         : event.event === 'agent_runtime'
-          ? event.agentRuntimeStatus
+          ? event.agentRuntimeMetricKey
           : '';
   const blob10 = event.event === 'ai_request'
     ? event.aiModelEndpointHost
@@ -95,6 +106,8 @@ export function normalizeTrackBody(body, request) {
   const totalTokens = normalizeTokenNumber(body.total_tokens ?? body.totalTokens) || promptTokens + completionTokens;
   const aiRequestType = normalizeText(body.ai_request_type || body.aiRequestType, 20);
   const aiModelName = normalizeText(body.ai_model_name || body.aiModelName, 160);
+  const agentRuntimeStatus = normalizeText(body.agent_runtime_status || body.agentRuntimeStatus, 20);
+  const agentRuntimeRetryCount = normalizeAgentRetryCount(body.agent_runtime_retry_count ?? body.agentRuntimeRetryCount);
 
   const event = {
     projectName: normalizeText(body.projectName || body.project_name, 80),
@@ -113,7 +126,9 @@ export function normalizeTrackBody(body, request) {
     aiModelEndpointHost: normalizeBaseUrlHost(body.ai_model_base_url || body.aiModelBaseUrl),
     aiModelName,
     resourceKey: normalizeText(body.resource_key || body.resourceKey, 80),
-    agentRuntimeStatus: normalizeText(body.agent_runtime_status || body.agentRuntimeStatus, 20),
+    agentRuntimeStatus,
+    agentRuntimeRetryCount,
+    agentRuntimeMetricKey: createAgentRuntimeMetricKey(agentRuntimeStatus, agentRuntimeRetryCount),
     licenseStatus: normalizeText(body.license_status || body.licenseStatus, 30),
     licensePlan: normalizeText(body.license_plan || body.licensePlan, 40),
     licenseExpiresAt: normalizeText(body.license_expires_at || body.licenseExpiresAt, 20).slice(0, 10),

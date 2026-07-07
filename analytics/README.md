@@ -35,7 +35,7 @@
 | `GET /api/traffic` | D1 或 AE | `ADMIN_TOKEN` | 访问分析，`range=history/today/7/30` |
 | `GET /api/config-usage` | D1 或 AE | `ADMIN_TOKEN` | 配置使用，`range=history/today/7/30` |
 | `GET /api/model-usage` | D1 或 AE | `ADMIN_TOKEN` | 模型使用，支持 `provider/endpointHost/model` 筛选 |
-| `GET /api/agent-runtime` | D1 或 AE | `ADMIN_TOKEN` | Agent 执行成功率，`range=history/today/7/30` |
+| `GET /api/agent-runtime` | D1 或 AE | `ADMIN_TOKEN` | Agent 执行、重试和重试后成功率，`range=history/today/7/30` |
 | `GET /api/latest` | AE | `ADMIN_TOKEN` | 最近事件，支持 `event` 筛选 |
 | `GET /api/retention` | D1 | `ADMIN_TOKEN` | 留存概览，读取 Cron 生成的最新 30 天快照 |
 | `GET /api/github-repo-stats` | GitHub + KV | `ADMIN_TOKEN` | GitHub stats |
@@ -65,7 +65,7 @@
 | 资源点击量 | `RESOURCE_DB.resources.click_count` 保存历史累计，页面查询时加上 AE 今天点击量 |
 | 版本客户端数 | D1 历史来自 `stats_clients.last_active_version` 当前分组重算；今天/7天/30天来自 AE 去重客户端数 |
 | 模型 Total Tokens | `ai_request` 的 `double4` 按 `_sample_interval` 聚合，历史写入 `stats_models.total_tokens` |
-| Agent 执行成功率 | `agent_runtime` 的 `agent_runtime_status=success/failed` 聚合；历史读 D1，今天/7天/30天读 AE |
+| Agent 执行统计 | `agent_runtime` 的 `blob9` 单字段复合值聚合，例如 `success:r0`、`failed:r1`；历史读 D1 汇总列，今天/7天/30天读 AE；旧版 `success/failed` Agent 历史不兼容 |
 | 配置使用 | 新版 `config_usage` 使用 `config_key/config_value` 键值对上报；D1 历史保留，AE 旧格式不再兼容 |
 | 授权状态 | 客户端上报 `license_status/license_plan/license_expires_at/source_trusted/untrusted_reason`；AE 写入 `blob14-blob18`，D1 `stats_clients` 保存最新状态 |
 
@@ -78,9 +78,9 @@
 | `config_usage` | 配置使用 |
 | `ai_request` | 模型使用、AI 请求、Token |
 | `resource_click` | 资源点击 |
-| `agent_runtime` | Agent 执行成功率 |
+| `agent_runtime` | Agent 执行成功率、重试次数、重试后成功率 |
 
-`config_usage` 使用 `config_key/config_value` 键值对上报，每个配置项一条事件。Worker 从 Cloudflare 真实客户端 IP 请求头读取公网 IP 并写入 `blob13`，客户端不自报 IP；`CF-Pseudo-IPv4` 不参与统计。授权状态写入 `blob14-blob18`，只包含状态、授权类型、有效期日期和可信来源标记，不上传设备原始指纹。`ai_request` 只采集请求类型、服务商、endpoint host、模型名和 token 用量，不采集 API Key、Prompt、响应内容或错误详情。`agent_runtime` 只采集 `success/failed` 状态，不采集任务内容、错误详情或输出。
+`config_usage` 使用 `config_key/config_value` 键值对上报，每个配置项一条事件。Worker 从 Cloudflare 真实客户端 IP 请求头读取公网 IP 并写入 `blob13`，客户端不自报 IP；`CF-Pseudo-IPv4` 不参与统计。授权状态写入 `blob14-blob18`，只包含状态、授权类型、有效期日期和可信来源标记，不上传设备原始指纹。`ai_request` 只采集请求类型、服务商、endpoint host、模型名和 token 用量，不采集 API Key、Prompt、响应内容或错误详情。`agent_runtime` 只采集执行状态和重试次数，编码到单个低基数字段 `blob9=<success|failed>:r<0-3>`，不采集任务内容、错误详情、Prompt、输出或本地路径。
 
 ## 首次部署
 

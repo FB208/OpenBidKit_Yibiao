@@ -966,12 +966,23 @@ async function runOutlineAgentRecovery(agentService, context, log) {
   const outputFile = context.outputFile || FINAL_AGENT_OUTPUT_FILE;
   const agentContext = { ...context, outputFile };
   log(agentContext.startLogMessage || '已切换到 Agent 自主修复目录。', agentContext.startProgress || 99);
+  let validatedResult = null;
   const agentResult = await agentService.runTask({
     title: agentContext.title || '技术方案目录自主修复',
     prompt: buildOutlineAgentRecoveryPrompt(agentContext),
     output_file: outputFile,
     files: buildOutlineAgentRecoveryFiles(agentContext),
     timeout_ms: FINAL_AGENT_TIMEOUT_MS,
+    max_retries: 1,
+    validateOutput: (resultForValidation) => {
+      const contentForValidation = String(resultForValidation?.output_content || resultForValidation?.assistant_text || '').trim();
+      if (!contentForValidation) {
+        throw new Error('Agent 未返回目录修复结果');
+      }
+      const parsedForValidation = parseAgentJsonContent(contentForValidation);
+      validatedResult = normalizeAgentOutlineResult(parsedForValidation, agentContext);
+      return validatedResult;
+    },
     onActivity: createAgentActivityLogHandler(log, agentContext.agentProgress || agentContext.startProgress || 99),
   });
   if (isAgentBusyResult(agentResult)) {
@@ -984,8 +995,7 @@ async function runOutlineAgentRecovery(agentService, context, log) {
   }
 
   log(agentContext.validationLogMessage || 'Agent 修复完成，正在进行程序校验。', agentContext.validationProgress || 96);
-  const parsed = parseAgentJsonContent(content);
-  const result = normalizeAgentOutlineResult(parsed, agentContext);
+  const result = validatedResult || normalizeAgentOutlineResult(parseAgentJsonContent(content), agentContext);
   log(agentContext.successLogMessage || 'Agent 修复结果通过程序校验，准备返回目录。', agentContext.successProgress || 98);
   return result;
 }
@@ -1024,6 +1034,7 @@ async function completeOriginalOutlineWithAgent(agentService, originalPlanMarkdo
 
   const outputFile = ORIGINAL_OUTLINE_AGENT_OUTPUT_FILE;
   log('正在交给 Agent 检查旧目录缺漏。', 15);
+  let validatedCompleted = null;
   const agentResult = await agentService.runTask({
     title: '原方案旧目录智能补漏',
     prompt: buildOriginalOutlineCompletionAgentPrompt({ outputFile }),
@@ -1033,6 +1044,15 @@ async function completeOriginalOutlineWithAgent(agentService, originalPlanMarkdo
       { path: outputFile, content: JSON.stringify(outline || { outline: [] }, null, 2) },
     ],
     timeout_ms: FINAL_AGENT_TIMEOUT_MS,
+    max_retries: 1,
+    validateOutput: (resultForValidation) => {
+      const contentForValidation = String(resultForValidation?.output_content || resultForValidation?.assistant_text || '').trim();
+      if (!contentForValidation) {
+        throw new Error('Agent 未返回旧目录补漏结果');
+      }
+      validatedCompleted = normalizeOriginalOutlineAgentResult(parseAgentJsonContent(contentForValidation));
+      return validatedCompleted;
+    },
     onActivity: createAgentActivityLogHandler(log, 16),
   });
   if (isAgentBusyResult(agentResult)) {
@@ -1045,8 +1065,7 @@ async function completeOriginalOutlineWithAgent(agentService, originalPlanMarkdo
   }
 
   log('Agent 旧目录补漏完成，正在校验补漏 JSON。', 17);
-  const parsed = parseAgentJsonContent(content);
-  const completed = normalizeOriginalOutlineAgentResult(parsed);
+  const completed = validatedCompleted || normalizeOriginalOutlineAgentResult(parseAgentJsonContent(content));
   const itemCount = countOutlineItems(completed.outline.outline || []);
   log(`Agent 旧目录补漏通过程序校验，最终旧目录共 ${itemCount} 个目录项。`, 18);
   return completed.outline;

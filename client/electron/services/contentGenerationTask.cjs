@@ -3520,6 +3520,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       agent_output_file: error?.agentOutputFile || '',
       agent_output_path: error?.agentOutputPath || '',
       agent_partial_output_chars: error?.agentPartialOutputChars || String(error?.agentPartialOutput || '').length,
+      agent_validation_failed: Boolean(error?.agentValidationFailed),
+      agent_retry_attempts: Array.isArray(error?.agentRetryAttempts) ? error.agentRetryAttempts : [],
       opencode_route: error?.openCodeRoute || '',
       opencode_method: error?.openCodeMethod || '',
       opencode_status: error?.openCodeStatus || 0,
@@ -3588,6 +3590,9 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       }
       const diagnostics = agentErrorDiagnostics(error);
       writeDeveloperLog(`${eventPrefix}.opencode.error`, diagnostics);
+      if (error?.agentValidationFailed) {
+        throw error;
+      }
       const recoveredOutput = String(error?.agentPartialOutput || '').trim();
       if (!recoveredOutput) {
         throw error;
@@ -3618,6 +3623,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         assistant_text: '',
         diff: [],
         session_id: '',
+        retry_count: diagnostics.agent_retry_attempts.length,
+        retry_attempts: diagnostics.agent_retry_attempts,
         opencode_request_log: diagnostics.opencode_request_log,
         opencode_stderr_tail: diagnostics.opencode_stderr_tail,
       };
@@ -3705,7 +3712,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     throw createContentGenerationPausedError();
   }
 
-  async function runContentAgentTask({ title, prompt, outputFile, files, eventPrefix, activityLabel, timeoutMs, startPauseMessage, resultPauseMessage, pausedLogMessage }) {
+  async function runContentAgentTask({ title, prompt, outputFile, files, eventPrefix, activityLabel, timeoutMs, startPauseMessage, resultPauseMessage, pausedLogMessage, validateOutput }) {
     if (!agentService?.runTask) {
       writeDeveloperLog(`${eventPrefix}.unavailable`, { title, output_file: outputFile });
       throw new Error(`Agent 服务尚未初始化，无法执行${title}`);
@@ -3742,7 +3749,18 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         output_file: outputFile,
         files,
         timeout_ms: timeoutMs || 30 * 60 * 1000,
+        max_retries: 1,
         signal: agentAbortController.signal,
+        validateOutput: async (agentResult, context) => {
+          const outputContent = String(agentResult?.output_content || '').trim();
+          if (!outputContent) {
+            throw new Error(`Agent 未返回 ${outputFile}`);
+          }
+          if (typeof validateOutput === 'function') {
+            return validateOutput(agentResult, context);
+          }
+          return null;
+        },
         onActivity: createAgentActivityProgressHandler(updateContentAgentProgress, 0, activityLabel || title),
       }, eventPrefix);
       if (isAgentBusyResult(agentResult)) {
@@ -4240,6 +4258,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           original_segment_count: originalPlanSegments.length,
         });
         updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+        let validatedRestoreResult = null;
         const { agentResult, outputContent } = await runContentAgentTask({
           title: '原方案正文还原映射 Agent',
           prompt: buildAgentOriginalMaterialRestorePrompt(),
@@ -4256,10 +4275,15 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           startPauseMessage: '正文生成已在原方案还原 Agent 映射开始前暂停，本次 Agent 未启动；继续后将重新执行。',
           resultPauseMessage: '正文生成已在原方案还原 Agent 映射回写前暂停，本次 Agent 输出未回写；继续后将重新执行。',
           pausedLogMessage: '原方案还原 Agent 映射已暂停：本轮 Agent 已取消并清理，继续后将重新执行。',
+          validateOutput: (resultForValidation) => {
+            const outputForValidation = String(resultForValidation?.output_content || '').trim();
+            const parsedForValidation = parseAgentJsonContent(outputForValidation);
+            validatedRestoreResult = normalizeOriginalRestoreAssignments(parsedForValidation, { allowedNodeIds, allowedSourceIds });
+            validateOriginalRestoreAssignments(validatedRestoreResult);
+            return validatedRestoreResult;
+          },
         });
-        const parsed = parseAgentJsonContent(outputContent);
-        result = normalizeOriginalRestoreAssignments(parsed, { allowedNodeIds, allowedSourceIds });
-        validateOriginalRestoreAssignments(result);
+        result = validatedRestoreResult || normalizeOriginalRestoreAssignments(parseAgentJsonContent(outputContent), { allowedNodeIds, allowedSourceIds });
         pauseIfRequested('正文生成已在原方案还原 Agent 映射回写前暂停，本次 Agent 输出未回写；继续后将重新执行。');
         writeDeveloperLog('original_restore.agent.validated', {
           assignment_count: result.assignments.length,
@@ -5330,7 +5354,17 @@ workspace 文件说明：
         output_file: 'technical-plan.md',
         files,
         timeout_ms: 30 * 60 * 1000,
+        max_retries: 1,
         signal: agentAbortController.signal,
+        validateOutput: (resultForValidation) => {
+          const repairedMarkdownForValidation = String(resultForValidation?.output_content || '').trim();
+          if (!repairedMarkdownForValidation) {
+            throw new Error('Agent 未返回修复后的 technical-plan.md');
+          }
+          const parsedSectionsForValidation = parseAgentSectionMarkdown(repairedMarkdownForValidation);
+          validateAgentConsistencySections(parsedSectionsForValidation, sectionIndex);
+          return { section_count: parsedSectionsForValidation.size };
+        },
         onActivity: createAgentActivityProgressHandler(updateAgentOriginalCoverageProgress, 2, 'Agent 正在检查并补回原方案内容'),
       }, 'original_coverage.agent');
       if (isAgentBusyResult(agentResult)) {
@@ -5865,7 +5899,17 @@ workspace 文件说明：
         output_file: 'technical-plan.md',
         files,
         timeout_ms: 30 * 60 * 1000,
+        max_retries: 1,
         signal: agentAbortController.signal,
+        validateOutput: (resultForValidation) => {
+          const repairedMarkdownForValidation = String(resultForValidation?.output_content || '').trim();
+          if (!repairedMarkdownForValidation) {
+            throw new Error('Agent 未返回修复后的 technical-plan.md');
+          }
+          const parsedSectionsForValidation = parseAgentSectionMarkdown(repairedMarkdownForValidation);
+          validateAgentConsistencySections(parsedSectionsForValidation, sectionIndex);
+          return { section_count: parsedSectionsForValidation.size };
+        },
         onActivity: createAgentActivityProgressHandler(updateAgentConsistencyProgress, 2, 'Agent 正在审计并修复全文'),
       }, 'consistency.agent');
       if (isAgentBusyResult(agentResult)) {
