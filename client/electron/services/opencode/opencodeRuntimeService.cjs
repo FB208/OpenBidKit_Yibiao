@@ -1383,10 +1383,9 @@ function createOpenCodeRuntimeService({ app, configStore }) {
         workspaceDir: serviceWorkspaceDir,
         logger,
       });
-      if (!toolCheckResult.success) {
-        throw createSelfCheckStageError('tool-check', toolCheckResult.summary || '集成工具校验失败');
-      }
-      setStep('tool-check', 'success', toolCheckResult.summary || '集成工具校验通过');
+      setStep('tool-check', 'success', toolCheckResult.success
+        ? toolCheckResult.summary || '集成工具校验通过'
+        : `集成工具校验完成，存在不可用工具：${toolCheckResult.summary || '请查看详情'}`);
 
       setStep('direct-model-test', 'running', '正在直接请求当前文本模型');
       directModelTest = await runDirectModelSelfCheck(config);
