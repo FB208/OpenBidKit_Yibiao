@@ -12102,38 +12102,177 @@ button {
 }
 
 .export-format-heading-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin: 0 36px 12px;
-  padding: 12px 14px;
+  margin: 0 36px 14px;
   color: #1c4f9c;
-  background: linear-gradient(135deg, rgba(33, 116, 253, 0.1), rgba(33, 116, 253, 0.035));
+  background:
+    radial-gradient(circle at 12% 0%, rgba(33, 116, 253, 0.12), transparent 34%),
+    linear-gradient(135deg, rgba(33, 116, 253, 0.08), rgba(124, 92, 255, 0.04));
   border: 1px solid rgba(33, 116, 253, 0.24);
-  border-radius: 14px;
+  border-radius: 18px;
+  box-shadow: 0 14px 32px rgba(33, 116, 253, 0.08);
+  overflow: hidden;
 }
 
-.export-format-heading-note strong {
-  flex: 0 0 auto;
-  font-size: 13px;
-  font-weight: 700;
-  color: #153f82;
+.export-format-heading-note-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  cursor: pointer;
+  list-style: none;
 }
 
-.export-format-heading-note span {
+.export-format-heading-note-summary::-webkit-details-marker {
+  display: none;
+}
+
+.export-format-heading-note-summary::marker {
+  content: '';
+}
+
+.export-format-heading-note-title {
+  display: grid;
   min-width: 0;
+  gap: 5px;
+}
+
+.export-format-heading-note-title strong {
+  color: #153f82;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.export-format-heading-note-title > span {
+  color: #24599f;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.7;
+}
+
+.export-format-heading-note-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  color: #0f4fbf;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(33, 116, 253, 0.16);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.export-format-heading-note-toggle .is-open {
+  display: none;
+}
+
+.export-format-heading-note[open] .export-format-heading-note-toggle .is-closed {
+  display: none;
+}
+
+.export-format-heading-note[open] .export-format-heading-note-toggle .is-open {
+  display: inline;
+}
+
+.export-format-heading-note-chevron {
+  transition: transform 0.18s ease;
+}
+
+.export-format-heading-note[open] .export-format-heading-note-chevron {
+  transform: rotate(90deg);
+}
+
+.export-format-heading-note-detail {
+  display: grid;
+  gap: 14px;
+  padding: 0 16px 16px;
+  border-top: 1px solid rgba(33, 116, 253, 0.16);
+}
+
+.export-format-heading-note-block {
+  display: grid;
+  gap: 9px;
+  padding-top: 14px;
+}
+
+.export-format-heading-note-label {
+  width: fit-content;
+  padding: 3px 8px;
+  color: #153f82;
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(33, 116, 253, 0.14);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.export-format-heading-note-block p {
+  margin: 0;
+  color: #315f9d;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.export-format-heading-token-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+}
+
+.export-format-heading-example-list {
+  display: grid;
+  gap: 8px;
+}
+
+.export-format-heading-token-grid > span,
+.export-format-heading-example-list > span {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  min-width: 0;
+  gap: 9px;
+  padding: 10px 11px;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(33, 116, 253, 0.13);
+  border-radius: 12px;
+}
+
+.export-format-heading-token-grid small,
+.export-format-heading-example-list small {
+  min-width: 0;
+  color: #40689f;
+  font-size: 12px;
+  line-height: 1.65;
 }
 
 .export-format-heading-note code {
-  padding: 1px 5px;
+  display: inline-block;
+  padding: 2px 6px;
   color: #0f4fbf;
   background: rgba(255, 255, 255, 0.72);
   border: 1px solid rgba(33, 116, 253, 0.18);
   border-radius: 6px;
   font-family: var(--yb-font-mono);
   font-size: 12px;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .export-format-heading-note {
+    margin-right: 20px;
+    margin-left: 20px;
+  }
+
+  .export-format-heading-note-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .export-format-heading-token-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .export-format-heading-card {

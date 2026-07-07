@@ -877,12 +877,59 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           </>
         )}
       </div>
-      <div className="export-format-heading-note">
-        <strong>自定义编号说明</strong>
-        <span>
-          选择“自定义”后，可使用 <code>{'{zh}'}</code> 中文序号、<code>{'{num}'}</code> 当前级数字、<code>{'{tail}'}</code> 三级起局部编号、<code>{'{full}'}</code> 完整编号，例如：<code>第{'{zh}'}章 = 第一章</code>、<code>{'{tail}'} = 1.1.1</code>。
-        </span>
-      </div>
+      <details className="export-format-heading-note">
+        <summary className="export-format-heading-note-summary">
+          <span className="export-format-heading-note-title">
+            <strong>自定义编号说明</strong>
+            <span>选择“自定义”后，可用 <code>{'{zh}'}</code>、<code>{'{num}'}</code>、<code>{'{tail2}'}</code> 等占位符组合标题编号。</span>
+          </span>
+          <span className="export-format-heading-note-toggle">
+            <span className="is-closed">展开用法</span>
+            <span className="is-open">收起说明</span>
+            <span className="export-format-heading-note-chevron">▸</span>
+          </span>
+        </summary>
+        <div className="export-format-heading-note-detail">
+          <div className="export-format-heading-note-block">
+            <span className="export-format-heading-note-label">怎么填写</span>
+            <p>在每个标题卡片中，把“编号格式”设为“自定义”，再在“自定义格式”输入下面这些模板。</p>
+          </div>
+          <div className="export-format-heading-note-block">
+            <span className="export-format-heading-note-label">占位符</span>
+            <div className="export-format-heading-token-grid">
+              <span><code>{'{zh}'}</code><small>当前级中文数字，如 一、二</small></span>
+              <span><code>{'{num}'}</code><small>当前级数字，如 1、2</small></span>
+              <span><code>{'{full}'}</code><small>完整编号，如 1.2.3</small></span>
+              <span><code>{'{tail}'}</code><small>保留旧规则，三级起局部编号</small></span>
+              <span><code>{'{tail1}'}</code><small>从一级开始，等同完整编号</small></span>
+              <span><code>{'{tail2}'}</code><small>从二级开始，到当前级结束</small></span>
+              <span><code>{'{tail3}'}</code><small>从三级开始，到当前级结束</small></span>
+              <span><code>{'{tail4}'}</code><small>从四级开始，到当前级结束</small></span>
+              <span><code>{'{tail5}'}</code><small>从五级开始，到当前级结束</small></span>
+              <span><code>{'{tail6}'}</code><small>从六级开始，只保留六级编号</small></span>
+              <span><code>{'{circled}'}</code><small>当前级圆圈数字，如 ①、②</small></span>
+              <span><code>{'{alpha}'}</code><small>当前级小写字母，如 a、b</small></span>
+              <span><code>{'{ROMAN}'}</code><small>当前级大写罗马数字，如 I、II</small></span>
+            </div>
+          </div>
+          <div className="export-format-heading-note-block">
+            <span className="export-format-heading-note-label">常见配置示例</span>
+            <div className="export-format-heading-example-list">
+              <span><code>（{'{zh}'}）</code><small>一级标题显示 （一）</small></span>
+              <span><code>第{'{zh}'}章</code><small>一级标题显示 第一章</small></span>
+              <span><code>{'{tail2}'}.</code><small>二级标题显示 1.</small></span>
+              <span><code>{'{tail2}'}</code><small>三级标题显示 1.1，四级标题显示 1.1.1</small></span>
+              <span><code>{'{tail3}'}</code><small>三级标题显示 1，四级标题显示 1.1</small></span>
+              <span><code>{'{tail6}'}</code><small>六级标题只显示当前六级数字</small></span>
+              <span><code>{'{num}'}、</code><small>当前级显示 1、</small></span>
+              <span><code>（{'{num}'}）</code><small>当前级显示 （1）</small></span>
+              <span><code>{'{circled}'}</code><small>当前级显示 ①</small></span>
+              <span><code>{'{ALPHA}'}.</code><small>当前级显示 A.</small></span>
+              <span><code>{'{roman}'}.</code><small>当前级显示 i.</small></span>
+            </div>
+          </div>
+        </div>
+      </details>
       <div className="export-format-heading-list">
         {config.headings.map((heading, index) => {
           const isExpanded = expandedHeadings.has(index);
@@ -909,7 +956,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
                         <input
                           type="text"
                           value={heading.numbering_template}
-                          placeholder="例如：第{zh}章、第{num}章"
+                          placeholder="例如：第{zh}章、{tail2}、（{num}）"
                           onChange={(event) => updateHeading(index, { numbering_template: event.target.value })}
                         />
                       </label>

@@ -966,6 +966,11 @@ function formatOutlineNumber(id, headingStyle) {
   const cn = numberToChinese(lastPart);
   const tail = (parts.length >= 3 ? parts.slice(2) : [lastPart]).join('.');
   return String(headingStyle.numbering_template || '')
+    .replace(/\{tail(\d+)\}/g, (_, level) => {
+      const startLevel = Number(level);
+      if (!Number.isFinite(startLevel) || startLevel < 1 || startLevel > 6 || startLevel > parts.length) return '';
+      return parts.slice(startLevel - 1).join('.');
+    })
     .replace(/\{zh\}/g, cn)
     .replace(/\{num\}/g, String(lastPart))
     .replace(/\{tail\}/g, tail)

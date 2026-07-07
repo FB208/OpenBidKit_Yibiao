@@ -29,7 +29,7 @@ export interface HeadingStyleConfig {
   first_line_indent_chars: number;
   line_spacing: number;         // 倍数，如 1、1.2、1.5
   numbering_format: HeadingNumberingFormat;
-  numbering_template: string;   // 自定义编号模板，支持 {zh}、{num}、{tail}、{full} 等
+  numbering_template: string;   // 自定义编号模板，支持 {zh}、{num}、{tail}、{tail1} 至 {tail6}、{full}、{circled} 等
 }
 
 export interface HeadingBorderConfig {
