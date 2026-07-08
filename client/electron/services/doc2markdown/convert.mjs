@@ -15,15 +15,18 @@ import { PDFParse } from 'pdf-parse';
 import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import TurndownService from 'turndown';
 import turndownPluginGfm from 'turndown-plugin-gfm';
+import * as XLSX from 'xlsx';
 
 const MARKDOWN_SUFFIXES = new Set(['.md', '.markdown']);
 const DOCX_SUFFIXES = new Set(['.docx']);
 const PDF_SUFFIXES = new Set(['.pdf']);
 const LEGACY_WORD_SUFFIXES = new Set(['.doc', '.wps']);
+const SPREADSHEET_SUFFIXES = new Set(['.xls', '.xlsx']);
 const PDF_HEADER = Buffer.from('%PDF-');
 const ZIP_LOCAL_FILE_HEADER = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const OLE_COMPOUND_HEADER = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
 const MARKDOWN_IMAGE_PATTERN = /!\[(?<alt>[^\]]*)\]\((?<target><[^>]+>|[^)\s]+)(?<title>\s+"[^"]*")?\)/gi;
+const SPREADSHEET_TABLE_CHUNK_ROWS = 200;
 const PDF_POINT_TOLERANCE = 2.5;
 const PDF_GRID_MIN_LINE_LENGTH = 12;
 const PDF_GRID_MIN_WIDTH = 40;
@@ -112,6 +115,9 @@ export async function convertPathToMarkdown(inputPath, options = {}) {
   if (format === 'legacy_word') {
     return convertLegacyWordFile(resolvedPath, includeImages, imageResolver);
   }
+  if (format === 'spreadsheet') {
+    return convertSpreadsheetFile(resolvedPath);
+  }
 
   throw new ConversionError('unsupported_format', '不支持的文件格式', {
     inputPath: resolvedPath,
@@ -123,6 +129,9 @@ export async function detectFileFormat(inputPath) {
   const suffix = path.extname(inputPath).toLowerCase();
   const header = await readFileHeader(inputPath, 8);
 
+  if (SPREADSHEET_SUFFIXES.has(suffix)) {
+    return 'spreadsheet';
+  }
   if (isPdfHeader(header)) {
     return 'pdf';
   }
@@ -177,6 +186,282 @@ async function convertMarkdownFile(inputPath, includeImages, imageResolver) {
     text = stripMarkdownImages(text);
   }
   return ensureTrailingNewline(text.trimEnd());
+}
+
+async function convertSpreadsheetFile(inputPath) {
+  const workbook = readSpreadsheetWorkbook(inputPath);
+  const sheetNames = Array.isArray(workbook.SheetNames) ? workbook.SheetNames : [];
+  if (sheetNames.length === 0) {
+    throw new ConversionError('spreadsheet_empty', 'Excel 文件未包含工作表', { inputPath });
+  }
+
+  const parts = [`# ${cleanMarkdownHeading(path.basename(inputPath))}`];
+  for (const sheetName of sheetNames) {
+    const worksheet = workbook.Sheets?.[sheetName];
+    const rows = extractSpreadsheetRows(worksheet);
+    parts.push(`## 工作表：${cleanMarkdownHeading(sheetName)}`);
+
+    if (rows.length === 0) {
+      parts.push('> 该工作表为空。');
+      continue;
+    }
+
+    const width = Math.max(...rows.map((row) => row.length));
+    parts.push(`> ${rows.length} 行 x ${width} 列。`);
+    parts.push(renderSpreadsheetRows(rows));
+  }
+
+  return normalizeGeneratedMarkdown(parts.join('\n\n'));
+}
+
+function readSpreadsheetWorkbook(inputPath) {
+  const xlsx = getXlsxModule();
+  return xlsx.readFile(inputPath, {
+    cellDates: true,
+    cellNF: true,
+    cellStyles: false,
+    cellText: true,
+  });
+}
+
+function getXlsxModule() {
+  return XLSX.readFile ? XLSX : XLSX.default;
+}
+
+function extractSpreadsheetRows(worksheet) {
+  if (!worksheet?.['!ref']) {
+    return [];
+  }
+
+  const xlsx = getXlsxModule();
+  let range;
+  try {
+    range = xlsx.utils.decode_range(worksheet['!ref']);
+  } catch {
+    return [];
+  }
+
+  const rows = [];
+  for (let rowIndex = range.s.r; rowIndex <= range.e.r; rowIndex += 1) {
+    const row = [];
+    for (let columnIndex = range.s.c; columnIndex <= range.e.c; columnIndex += 1) {
+      const address = xlsx.utils.encode_cell({ r: rowIndex, c: columnIndex });
+      row.push(getSpreadsheetCellText(worksheet[address]));
+    }
+    rows.push(row);
+  }
+
+  fillSpreadsheetMergedCells(rows, worksheet['!merges'], range);
+  return trimSpreadsheetRows(rows);
+}
+
+function getSpreadsheetCellText(cell) {
+  if (!cell) {
+    return '';
+  }
+  if (cell.w !== undefined && cell.w !== null && String(cell.w).trim()) {
+    return normalizeSpreadsheetCell(cell.w);
+  }
+  if (cell.v === undefined || cell.v === null) {
+    return '';
+  }
+  if (cell.v instanceof Date) {
+    return formatSpreadsheetDate(cell.v);
+  }
+  if (typeof cell.v === 'boolean') {
+    return cell.v ? 'TRUE' : 'FALSE';
+  }
+  return normalizeSpreadsheetCell(cell.v);
+}
+
+function formatSpreadsheetDate(value) {
+  const pad = (item) => String(item).padStart(2, '0');
+  const date = `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+  const time = `${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`;
+  return time === '00:00:00' ? date : `${date} ${time}`;
+}
+
+function normalizeSpreadsheetCell(value) {
+  return normalizeNewlinesOnly(String(value ?? ''))
+    .replace(/\u0000/g, '')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean)
+    .join('<br>')
+    .replace(/\|/g, '\\|')
+    .trim();
+}
+
+function fillSpreadsheetMergedCells(rows, merges, range) {
+  if (!Array.isArray(merges) || rows.length === 0) {
+    return;
+  }
+
+  for (const merge of merges) {
+    const startRow = merge.s.r - range.s.r;
+    const endRow = merge.e.r - range.s.r;
+    const startColumn = merge.s.c - range.s.c;
+    const endColumn = merge.e.c - range.s.c;
+    const value = rows[startRow]?.[startColumn] || '';
+    if (!value) {
+      continue;
+    }
+
+    for (let rowIndex = Math.max(0, startRow); rowIndex <= Math.min(rows.length - 1, endRow); rowIndex += 1) {
+      for (let columnIndex = Math.max(0, startColumn); columnIndex <= Math.min(rows[rowIndex].length - 1, endColumn); columnIndex += 1) {
+        if (!rows[rowIndex][columnIndex]) {
+          rows[rowIndex][columnIndex] = value;
+        }
+      }
+    }
+  }
+}
+
+function trimSpreadsheetRows(rows) {
+  const nonEmptyRowIndexes = [];
+  const nonEmptyColumns = new Set();
+  rows.forEach((row, rowIndex) => {
+    let hasContent = false;
+    row.forEach((cell, columnIndex) => {
+      if (cell) {
+        hasContent = true;
+        nonEmptyColumns.add(columnIndex);
+      }
+    });
+    if (hasContent) {
+      nonEmptyRowIndexes.push(rowIndex);
+    }
+  });
+
+  if (nonEmptyRowIndexes.length === 0 || nonEmptyColumns.size === 0) {
+    return [];
+  }
+
+  const firstRow = nonEmptyRowIndexes[0];
+  const lastRow = nonEmptyRowIndexes[nonEmptyRowIndexes.length - 1];
+  const firstColumn = Math.min(...nonEmptyColumns);
+  const lastColumn = Math.max(...nonEmptyColumns);
+  return rows
+    .slice(firstRow, lastRow + 1)
+    .map((row) => row.slice(firstColumn, lastColumn + 1))
+    .filter((row) => row.some((cell) => cell));
+}
+
+function renderSpreadsheetRows(rows) {
+  const width = Math.max(...rows.map((row) => row.length));
+  const normalizedRows = rows.map((row) => row.concat(Array(Math.max(0, width - row.length)).fill('')));
+  const headerIndex = findSpreadsheetHeaderIndex(normalizedRows);
+  const headerStart = headerIndex >= 0 ? findSpreadsheetHeaderStart(normalizedRows, headerIndex) : -1;
+  const notes = headerStart > 0 ? normalizedRows.slice(0, headerStart).map(renderSpreadsheetNote).filter(Boolean) : [];
+  const headerRows = headerIndex >= 0 ? normalizedRows.slice(headerStart, headerIndex + 1) : [];
+  const header = headerRows.length > 0 ? buildSpreadsheetHeader(headerRows, width) : buildGenericSpreadsheetHeader(width);
+  const bodyRows = headerIndex >= 0 ? normalizedRows.slice(headerIndex + 1) : normalizedRows;
+  const parts = [];
+
+  if (notes.length > 0) {
+    parts.push(notes.map((note) => `> 表格说明：${note}`).join('\n'));
+  }
+  parts.push(renderSpreadsheetTables(header, bodyRows));
+  return parts.filter(Boolean).join('\n\n');
+}
+
+function findSpreadsheetHeaderIndex(rows) {
+  const scanCount = Math.min(rows.length, 20);
+  let bestIndex = -1;
+  let bestScore = 0;
+  for (let index = 0; index < scanCount; index += 1) {
+    const score = countDistinctSpreadsheetValues(rows[index]);
+    if (score > bestScore) {
+      bestIndex = index;
+      bestScore = score;
+    }
+  }
+  return bestScore >= 2 ? bestIndex : -1;
+}
+
+function findSpreadsheetHeaderStart(rows, headerIndex) {
+  let start = headerIndex;
+  const headerCellCount = countNonEmptySpreadsheetCells(rows[headerIndex]);
+  const minRelatedCellCount = Math.max(3, Math.ceil(headerCellCount * 0.75));
+  for (let index = headerIndex - 1; index >= 0 && index >= headerIndex - 2; index -= 1) {
+    if (countDistinctSpreadsheetValues(rows[index]) < 2 || countNonEmptySpreadsheetCells(rows[index]) < minRelatedCellCount) {
+      break;
+    }
+    start = index;
+  }
+  return start;
+}
+
+function countNonEmptySpreadsheetCells(row) {
+  return (row || []).filter((cell) => String(cell || '').trim()).length;
+}
+
+function countDistinctSpreadsheetValues(row) {
+  return dedupeSpreadsheetValues(row).length;
+}
+
+function dedupeSpreadsheetValues(row) {
+  const values = [];
+  const seen = new Set();
+  for (const cell of row || []) {
+    const value = String(cell || '').trim();
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    values.push(value);
+  }
+  return values;
+}
+
+function renderSpreadsheetNote(row) {
+  return dedupeSpreadsheetValues(row).join('；');
+}
+
+function buildSpreadsheetHeader(headerRows, width) {
+  const header = [];
+  for (let columnIndex = 0; columnIndex < width; columnIndex += 1) {
+    const values = [];
+    for (const row of headerRows) {
+      const value = String(row[columnIndex] || '').trim();
+      if (value && values[values.length - 1] !== value) {
+        values.push(value);
+      }
+    }
+    header.push(values.length > 0 ? values.join(' / ') : `列${columnIndex + 1}`);
+  }
+  return header;
+}
+
+function buildGenericSpreadsheetHeader(width) {
+  return Array.from({ length: width }, (_, index) => `列${index + 1}`);
+}
+
+function renderSpreadsheetTables(header, bodyRows) {
+  const totalChunks = Math.max(1, Math.ceil(bodyRows.length / SPREADSHEET_TABLE_CHUNK_ROWS));
+  const chunks = [];
+  for (let index = 0; index < totalChunks; index += 1) {
+    const chunkRows = bodyRows.slice(index * SPREADSHEET_TABLE_CHUNK_ROWS, (index + 1) * SPREADSHEET_TABLE_CHUNK_ROWS);
+    const lines = [];
+    if (totalChunks > 1) {
+      lines.push(`### 表格分段 ${index + 1}/${totalChunks}`);
+      lines.push('');
+    }
+    lines.push(renderMarkdownTableRow(header));
+    lines.push(renderMarkdownTableRow(Array(header.length).fill('---')));
+    for (const row of chunkRows) {
+      lines.push(renderMarkdownTableRow(row));
+    }
+    chunks.push(lines.join('\n'));
+  }
+  return chunks.join('\n\n');
+}
+
+function cleanMarkdownHeading(value) {
+  return String(value || '未命名')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim() || '未命名';
 }
 
 function normalizeEncoding(value) {

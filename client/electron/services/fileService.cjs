@@ -13,14 +13,14 @@ const parserLabels = {
   'mineru-agent-api': 'MinerU-Agent 轻量解析 API',
 };
 
-const localSupportedExtensions = new Set(['.txt', '.md', '.markdown', '.docx', '.pdf', '.doc', '.wps']);
+const localSupportedExtensions = new Set(['.txt', '.md', '.markdown', '.docx', '.pdf', '.doc', '.wps', '.xls', '.xlsx']);
 const mineruAgentSupportedExtensions = new Set([
-  '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.png', '.jpg', '.jpeg', '.jp2', '.webp', '.gif', '.bmp', '.xls', '.xlsx',
+  '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.png', '.jpg', '.jpeg', '.jp2', '.webp', '.gif', '.bmp',
 ]);
 const mineruAccurateSupportedExtensions = new Set([
   '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.png', '.jpg', '.jpeg', '.jp2', '.webp', '.gif', '.bmp', '.html',
 ]);
-const duplicateCheckSupportedExtensions = new Set(['.doc', '.docx', '.wps', '.pdf', '.md', '.markdown']);
+const duplicateCheckSupportedExtensions = new Set(['.doc', '.docx', '.wps', '.pdf', '.md', '.markdown', '.xls', '.xlsx']);
 const remoteImageTimeoutMs = 10000;
 const markdownImagePattern = /!\[(?<alt>[^\]]*)\]\((?<target><[^>]+>|[^)\s]+)(?<title>\s+"[^"]*")?\)/gi;
 const htmlImageSrcPattern = /(<img\b[^>]*?\bsrc=["'])(?<src>[^"']+)(["'][^>]*>)/gi;
@@ -555,14 +555,15 @@ async function parseDocumentWithConfig(app, filePath, config, options = {}) {
 }
 
 function createFileService({ app, configStore } = {}) {
-  async function importTechnicalPlanDocument(documentLabel = '招标文件') {
+  async function importTechnicalPlanDocument(documentLabel = '招标文件', options = {}) {
     const label = String(documentLabel || '招标文件').trim() || '招标文件';
+    const multiple = options?.multiple === true;
     const config = configStore ? configStore.load() : { file_parser: { provider: 'local' } };
     const provider = config.file_parser?.provider || 'local';
     const supportedExtensions = getSelectableExtensions(provider);
     const result = await dialog.showOpenDialog({
       title: `选择${label}`,
-      properties: ['openFile'],
+      properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
       filters: [
         { name: parserLabels[provider] || label, extensions: [...supportedExtensions].map((item) => item.slice(1)) },
         { name: '所有文件', extensions: ['*'] },
@@ -573,44 +574,64 @@ function createFileService({ app, configStore } = {}) {
       return { success: false, message: '已取消选择' };
     }
 
-    const filePath = result.filePaths[0];
-    const ext = path.extname(filePath).toLowerCase();
-    const parser = resolveFileParser(config, filePath);
+    const parsedDocuments = [];
+    const errors = [];
+    for (const filePath of result.filePaths) {
+      const ext = path.extname(filePath).toLowerCase();
+      const parser = resolveFileParser(config, filePath);
+      if (!supportedExtensions.has(ext)) {
+        errors.push(`${path.basename(filePath)}：当前${parserLabels[provider] || '解析方式'}不支持该文件格式`);
+        continue;
+      }
 
-    if (!supportedExtensions.has(ext)) {
-      return { success: false, message: `当前${parserLabels[provider] || '解析方式'}不支持该文件格式` };
-    }
+      let fileContent = '';
+      try {
+        const assetHash = crypto.createHash('sha1').update(filePath).digest('hex').slice(0, 12);
+        fileContent = (await parseDocumentWithConfig(app, filePath, config, { assetScope: `technical-plan-${assetHash}`, preserveImages: false })).trim();
+      } catch (error) {
+        errors.push(`${path.basename(filePath)}：${formatImportError(error, filePath)}`);
+        continue;
+      }
 
-    let fileContent = '';
-    try {
-      fileContent = (await parseDocumentWithConfig(app, filePath, config, { assetScope: 'technical-plan', preserveImages: false })).trim();
-    } catch (error) {
-      return {
-        success: false,
-        message: formatImportError(error, filePath),
+      if (!fileContent) {
+        errors.push(`${path.basename(filePath)}：未提取到有效 Markdown 内容，请检查文件内容`);
+        continue;
+      }
+
+      parsedDocuments.push({
+        file_content: fileContent,
         file_name: path.basename(filePath),
         parser_provider: parser.provider,
         parser_label: parserLabels[parser.provider] || '本地解析',
-      };
+        fallback_to_local: Boolean(parser.fallbackToLocal),
+      });
     }
 
-    if (!fileContent) {
-      return { success: false, message: '未提取到有效 Markdown 内容，请检查文件内容' };
+    if (!parsedDocuments.length) {
+      return { success: false, message: errors[0] || '未提取到有效 Markdown 内容，请检查文件内容', documents: [] };
     }
+
+    const fallbackToLocal = parsedDocuments.some((item) => item.fallback_to_local);
+    const messageParts = [multiple ? `文件解析完成，共 ${parsedDocuments.length} 份` : '文件解析完成'];
+    if (fallbackToLocal) messageParts.push('当前格式已自动使用本地解析');
+    if (errors.length) messageParts.push(`失败 ${errors.length} 份`);
+    const first = parsedDocuments[0];
 
     return {
       success: true,
-      message: parser.fallbackToLocal ? '文件解析完成，当前格式已自动使用本地解析' : '文件解析完成',
-      file_content: fileContent,
-      file_name: path.basename(filePath),
-      parser_provider: parser.provider,
-      parser_label: parserLabels[parser.provider] || '本地解析',
+      message: messageParts.join('，'),
+      file_content: first.file_content,
+      file_name: first.file_name,
+      parser_provider: first.parser_provider,
+      parser_label: first.parser_label,
+      documents: parsedDocuments,
+      errors,
     };
   }
 
   return {
-    async importDocument() {
-      return importTechnicalPlanDocument('招标文件');
+    async importDocument(options = {}) {
+      return importTechnicalPlanDocument('招标文件', options);
     },
 
     importTechnicalPlanDocument,
@@ -621,7 +642,7 @@ function createFileService({ app, configStore } = {}) {
       const config = configStore ? configStore.load() : { file_parser: { provider: 'local' } };
       const provider = config.file_parser?.provider || 'local';
       const supportedExtensions = getSelectableExtensions(provider);
-      const multiple = documentRole === 'bid';
+      const multiple = documentRole === 'bid' || documentRole === 'tender';
       const result = await dialog.showOpenDialog({
         title: `选择${documentLabel}`,
         properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],

@@ -7,6 +7,7 @@ function registerTechnicalPlanIpc({ technicalPlanStore }) {
   ipcMain.handle('technical-plan:check-bid-sections', () => technicalPlanStore.checkBidSections());
   ipcMain.handle('technical-plan:select-bid-section', (_event, selectedSection) => technicalPlanStore.selectBidSection(selectedSection));
   ipcMain.handle('technical-plan:read-tender-markdown', () => technicalPlanStore.readTenderMarkdown());
+  ipcMain.handle('technical-plan:read-tender-source-markdown', (_event, sourceId) => technicalPlanStore.readTenderSourceMarkdown(sourceId));
   ipcMain.handle('technical-plan:read-original-plan-markdown', () => technicalPlanStore.readOriginalPlanMarkdown());
   ipcMain.handle('technical-plan:update-step', (_event, step) => technicalPlanStore.updateStep(step));
   ipcMain.handle('technical-plan:set-workflow-kind', (_event, workflowKind) => technicalPlanStore.setWorkflowKind(workflowKind));

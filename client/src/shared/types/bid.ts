@@ -221,6 +221,7 @@ export interface DuplicateCheckTaskState {
 
 export interface DuplicateCheckWorkspaceState {
   tenderFile: LocalFileSelection | null;
+  tenderFiles: LocalFileSelection[];
   bidFiles: LocalFileSelection[];
   step?: DuplicateCheckStep;
   activeAnalysisTab?: DuplicateAnalysisTabId;

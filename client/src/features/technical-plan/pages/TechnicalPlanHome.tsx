@@ -57,6 +57,7 @@ const resetState = {
   workflowKind: 'technical-plan' as TechnicalPlanWorkflowKind,
   step: 'document-analysis' as TechnicalPlanStep,
   tenderFile: null,
+  tenderFiles: [],
   originalPlanFile: null,
   projectOverview: '',
   techRequirements: '',
@@ -908,6 +909,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         <DocumentAnalysisPage
           workflowKind={workflowKind}
           tenderFile={state.tenderFile}
+          tenderFiles={state.tenderFiles || []}
           tenderMarkdown={tenderMarkdown}
           originalPlanFile={state.originalPlanFile}
           originalPlanMarkdown={originalPlanMarkdown}

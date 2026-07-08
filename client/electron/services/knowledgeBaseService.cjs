@@ -8,7 +8,7 @@ const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { parseDocumentWithConfig } = require('./fileService.cjs');
 
-const supportedExtensions = new Set(['.doc', '.docx', '.wps', '.pdf', '.md', '.markdown']);
+const supportedExtensions = new Set(['.doc', '.docx', '.wps', '.pdf', '.md', '.markdown', '.xls', '.xlsx']);
 const oversizedBlockChars = 8000;
 const semanticMergeTargetChars = 500;
 const recoveryMaxAttempts = 2;
@@ -1379,7 +1379,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         title: '选择知识库文档',
         properties: ['openFile', 'multiSelections'],
         filters: [
-          { name: '知识库文档', extensions: ['doc', 'docx', 'wps', 'pdf', 'md', 'markdown'] },
+          { name: '知识库文档', extensions: ['doc', 'docx', 'wps', 'pdf', 'md', 'markdown', 'xls', 'xlsx'] },
           { name: '所有文件', extensions: ['*'] },
         ],
       });

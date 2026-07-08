@@ -162,7 +162,8 @@
     "react-dom": "^19.1.1",
     "turndown": "^7.2.4",
     "turndown-plugin-gfm": "^1.0.2",
-    "undici": "^7.25.0"
+    "undici": "^7.25.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",

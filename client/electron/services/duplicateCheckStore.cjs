@@ -6,6 +6,7 @@ const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 
 const initialState = {
   tenderFile: null,
+  tenderFiles: [],
   bidFiles: [],
   step: 'upload',
   activeAnalysisTab: 'metadata',
@@ -72,8 +73,13 @@ function stableFileId(file) {
   return file?.id || crypto.createHash('sha1').update(String(file?.file_path || file?.file_name || '')).digest('hex');
 }
 
-function createSignature({ tenderFile, bidFiles } = {}) {
-  const files = [tenderFile, ...(Array.isArray(bidFiles) ? bidFiles : [])]
+function normalizeTenderFiles(tenderFiles, tenderFile) {
+  const files = Array.isArray(tenderFiles) ? tenderFiles : [tenderFile].filter(Boolean);
+  return files.map(normalizeFile).filter(Boolean);
+}
+
+function createSignature({ tenderFile, tenderFiles, bidFiles } = {}) {
+  const files = [...normalizeTenderFiles(tenderFiles, tenderFile), ...(Array.isArray(bidFiles) ? bidFiles : [])]
     .filter(Boolean)
     .map((file) => `${file.file_path}|${file.size}|${file.modified_at}`);
   return crypto.createHash('sha1').update(files.join('\n')).digest('hex');
@@ -255,15 +261,17 @@ function createDuplicateCheckStore({ app, db }) {
 
   function loadFiles() {
     const rows = db.prepare('SELECT * FROM duplicate_check_files ORDER BY role ASC, sort_order ASC').all();
-    const tenderRow = rows.find((row) => row.role === 'tender');
+    const tenderRows = rows.filter((row) => row.role === 'tender').sort((a, b) => a.sort_order - b.sort_order);
     const bidRows = rows.filter((row) => row.role === 'bid').sort((a, b) => a.sort_order - b.sort_order);
+    const tenderFiles = tenderRows.map(fileFromRow);
     return {
-      tenderFile: tenderRow ? fileFromRow(tenderRow) : null,
+      tenderFile: tenderFiles[0] || null,
+      tenderFiles,
       bidFiles: bidRows.map(fileFromRow),
     };
   }
 
-  function replaceFiles(tenderFile, bidFiles) {
+  function replaceFiles(tenderFiles, bidFiles, legacyTenderFile) {
     db.prepare('DELETE FROM duplicate_check_files').run();
     const insert = db.prepare(`
       INSERT INTO duplicate_check_files (
@@ -273,8 +281,8 @@ function createDuplicateCheckStore({ app, db }) {
       )
     `);
     const timestamp = now();
-    const normalizedTender = normalizeFile(tenderFile);
-    if (normalizedTender) {
+    const normalizedTenderFiles = normalizeTenderFiles(tenderFiles, legacyTenderFile);
+    normalizedTenderFiles.forEach((normalizedTender, index) => {
       insert.run({
         file_id: normalizedTender.id,
         role: 'tender',
@@ -283,12 +291,12 @@ function createDuplicateCheckStore({ app, db }) {
         extension: normalizedTender.extension,
         size: normalizedTender.size,
         modified_at: normalizedTender.modified_at,
-        sort_order: 0,
+        sort_order: index,
         content_hash: null,
         created_at: timestamp,
         updated_at: timestamp,
       });
-    }
+    });
     (Array.isArray(bidFiles) ? bidFiles : []).map(normalizeFile).filter(Boolean).forEach((file, index) => {
       insert.run({
         file_id: file.id,
@@ -304,7 +312,7 @@ function createDuplicateCheckStore({ app, db }) {
         updated_at: timestamp,
       });
     });
-    updateMeta({ current_signature: createSignature({ tenderFile: normalizedTender, bidFiles }) });
+    updateMeta({ current_signature: createSignature({ tenderFiles: normalizedTenderFiles, bidFiles }) });
   }
 
   function saveTask(type, task) {
@@ -851,11 +859,12 @@ function createDuplicateCheckStore({ app, db }) {
     if (hasOwn(partial, 'activeAnalysisTab')) metaUpdates.active_analysis_tab = normalizeTab(partial.activeAnalysisTab);
     if (Object.keys(metaUpdates).length) updateMeta(metaUpdates);
 
-    if (hasOwn(partial, 'tenderFile') || hasOwn(partial, 'bidFiles')) {
+    if (hasOwn(partial, 'tenderFile') || hasOwn(partial, 'tenderFiles') || hasOwn(partial, 'bidFiles')) {
       const currentFiles = loadFiles();
       replaceFiles(
-        hasOwn(partial, 'tenderFile') ? partial.tenderFile : currentFiles.tenderFile,
+        hasOwn(partial, 'tenderFiles') ? partial.tenderFiles : currentFiles.tenderFiles,
         hasOwn(partial, 'bidFiles') ? partial.bidFiles : currentFiles.bidFiles,
+        hasOwn(partial, 'tenderFile') ? partial.tenderFile : currentFiles.tenderFile,
       );
     }
 
@@ -887,10 +896,10 @@ function createDuplicateCheckStore({ app, db }) {
     return updateDuplicateCheck(state || {});
   }
 
-  function saveFiles({ tenderFile, bidFiles, step, activeAnalysisTab } = {}) {
+  function saveFiles({ tenderFile, tenderFiles, bidFiles, step, activeAnalysisTab } = {}) {
     const transaction = db.transaction(() => {
       ensureMetaRow();
-      replaceFiles(tenderFile || null, Array.isArray(bidFiles) ? bidFiles : []);
+      replaceFiles(Array.isArray(tenderFiles) ? tenderFiles : [tenderFile].filter(Boolean), Array.isArray(bidFiles) ? bidFiles : [], tenderFile || null);
       clearAnalysisState();
       updateMeta({
         step: normalizeStep(step),

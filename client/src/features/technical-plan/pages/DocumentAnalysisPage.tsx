@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { isLibreOfficeRequiredMessage, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FileParserProvider } from '../../../shared/types';
-import type { TechnicalPlanOriginalPlanFile, TechnicalPlanState, TechnicalPlanTenderFile, TechnicalPlanWorkflowKind } from '../types';
+import type { TechnicalPlanOriginalPlanFile, TechnicalPlanState, TechnicalPlanTenderFile, TechnicalPlanTenderSourceFile, TechnicalPlanWorkflowKind } from '../types';
 
-type TechnicalPlanDocumentTab = 'tender' | 'originalPlan';
 type TechnicalPlanUploadBusy = 'tender' | 'originalPlan' | null;
 
 const parserLabels: Record<FileParserProvider, string> = {
@@ -12,9 +11,7 @@ const parserLabels: Record<FileParserProvider, string> = {
   'mineru-agent-api': 'MinerU-Agent 轻量解析 API',
 };
 
-const documentTabs: TechnicalPlanDocumentTab[] = ['tender', 'originalPlan'];
-
-const documentLabels: Record<TechnicalPlanDocumentTab, string> = {
+const documentLabels = {
   tender: '招标文件',
   originalPlan: '原方案',
 };
@@ -34,6 +31,7 @@ function DocumentFilePill({ file }: { file: TechnicalPlanTenderFile | TechnicalP
 interface DocumentAnalysisPageProps {
   workflowKind: TechnicalPlanWorkflowKind;
   tenderFile: TechnicalPlanTenderFile | null;
+  tenderFiles: TechnicalPlanTenderSourceFile[];
   tenderMarkdown: string;
   originalPlanFile: TechnicalPlanOriginalPlanFile | null;
   originalPlanMarkdown: string;
@@ -44,6 +42,7 @@ interface DocumentAnalysisPageProps {
 function DocumentAnalysisPage({
   workflowKind,
   tenderFile,
+  tenderFiles,
   tenderMarkdown,
   originalPlanFile,
   originalPlanMarkdown,
@@ -52,11 +51,14 @@ function DocumentAnalysisPage({
 }: DocumentAnalysisPageProps) {
   const [configuredParserLabel, setConfiguredParserLabel] = useState(parserLabels.local);
   const [busy, setBusy] = useState<TechnicalPlanUploadBusy>(null);
-  const [activeDocumentTab, setActiveDocumentTab] = useState<TechnicalPlanDocumentTab>('tender');
+  const [activeDocumentTab, setActiveDocumentTab] = useState('tender');
+  const [tenderSourceMarkdowns, setTenderSourceMarkdowns] = useState<Record<string, string>>({});
+  const [loadingTenderSourceId, setLoadingTenderSourceId] = useState('');
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
   const isExpansionWorkflow = workflowKind === 'existing-plan-expansion';
   const isBusy = busy !== null;
+  const firstTenderSourceId = tenderFiles[0]?.id || '';
 
   useEffect(() => {
     let mounted = true;
@@ -84,10 +86,44 @@ function DocumentAnalysisPage({
   }, [showToast]);
 
   useEffect(() => {
-    if (!isExpansionWorkflow) {
+    if (isExpansionWorkflow) return;
+    if (!firstTenderSourceId) {
       setActiveDocumentTab('tender');
+      return;
     }
-  }, [isExpansionWorkflow]);
+    const activeTenderSourceId = activeDocumentTab.startsWith('tender:') ? activeDocumentTab.slice('tender:'.length) : '';
+    if (!activeTenderSourceId || !tenderFiles.some((file) => file.id === activeTenderSourceId)) {
+      setActiveDocumentTab(`tender:${firstTenderSourceId}`);
+    }
+  }, [activeDocumentTab, firstTenderSourceId, isExpansionWorkflow, tenderFiles]);
+
+  useEffect(() => {
+    if (activeDocumentTab.startsWith('tender:')) return;
+    if (activeDocumentTab === 'originalPlan') return;
+    if (firstTenderSourceId) {
+      setActiveDocumentTab(`tender:${firstTenderSourceId}`);
+    }
+  }, [activeDocumentTab, firstTenderSourceId]);
+
+  useEffect(() => {
+    if (!activeDocumentTab.startsWith('tender:')) return;
+    const sourceId = activeDocumentTab.slice('tender:'.length);
+    if (!sourceId || tenderSourceMarkdowns[sourceId] !== undefined) return;
+    let mounted = true;
+    setLoadingTenderSourceId(sourceId);
+    window.yibiao?.technicalPlan.readTenderSourceMarkdown(sourceId).then((markdown) => {
+      if (mounted) {
+        setTenderSourceMarkdowns((prev) => ({ ...prev, [sourceId]: markdown || '' }));
+      }
+    }).catch((error) => {
+      if (mounted) showToast(error instanceof Error ? error.message : '读取招标文件正文失败', 'error');
+    }).finally(() => {
+      if (mounted) setLoadingTenderSourceId((current) => (current === sourceId ? '' : current));
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [activeDocumentTab, showToast, tenderSourceMarkdowns]);
 
   const importTenderDocument = async () => {
     try {
@@ -110,6 +146,11 @@ function DocumentAnalysisPage({
       }
 
       onFileImported(result.state, result.markdown);
+      const firstSource = result.state.tenderFiles?.[0];
+      if (firstSource) {
+        setTenderSourceMarkdowns(result.state.tenderFiles?.length === 1 ? { [firstSource.id]: result.markdown } : {});
+        setActiveDocumentTab(`tender:${firstSource.id}`);
+      }
       showToast(result.message || '招标文件已导入', 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : '文件解析失败';
@@ -160,15 +201,28 @@ function DocumentAnalysisPage({
 
   const selectedSectionTitle = tenderFile?.selectedSectionTitle;
   const hasSectionHint = Boolean(selectedSectionTitle);
-  const visibleDocumentTab = isExpansionWorkflow ? activeDocumentTab : 'tender';
-  const activeFile = visibleDocumentTab === 'originalPlan' ? originalPlanFile : tenderFile;
-  const activeMarkdown = visibleDocumentTab === 'originalPlan' ? originalPlanMarkdown : tenderMarkdown;
+  const activeTenderSource = activeDocumentTab.startsWith('tender:')
+    ? tenderFiles.find((file) => file.id === activeDocumentTab.slice('tender:'.length)) || null
+    : null;
+  const visibleDocumentTab = activeDocumentTab === 'originalPlan' ? 'originalPlan' : 'tender';
+  const activeFile = visibleDocumentTab === 'originalPlan' ? originalPlanFile : activeTenderSource || tenderFile;
+  const activeMarkdown = visibleDocumentTab === 'originalPlan'
+    ? originalPlanMarkdown
+    : activeTenderSource
+      ? tenderSourceMarkdowns[activeTenderSource.id] || ''
+      : tenderMarkdown;
   const readerEmptyText = visibleDocumentTab === 'originalPlan'
     ? '请上传一份已经写好的技术方案，页面会在这里展示解析后的 Markdown 正文。'
     : '当前步骤只负责把招标文件解析成 Markdown。下一步再基于这里的 Markdown 内容进行 AI 标书理解。';
+  const documentTabs = [
+    ...(tenderFiles.length ? tenderFiles.map((file, index) => ({ id: `tender:${file.id}`, label: `招标文件${index + 1}` })) : [{ id: 'tender', label: '招标文件' }]),
+    ...(isExpansionWorkflow ? [{ id: 'originalPlan', label: '原方案' }] : []),
+  ];
+  const hasDocumentTabs = isExpansionWorkflow || tenderFiles.length > 1;
+  const activeTenderSourceLoading = activeTenderSource && loadingTenderSourceId === activeTenderSource.id;
 
   return (
-    <div className={`plan-step-body document-analysis-page technical-document-page${hasSectionHint ? ' has-section-hint' : ''}${isExpansionWorkflow ? ' has-document-tabs' : ''}`}>
+    <div className={`plan-step-body document-analysis-page technical-document-page${hasSectionHint ? ' has-section-hint' : ''}${hasDocumentTabs ? ' has-document-tabs' : ''}`}>
       <section className="technical-document-upload-board">
         <div className="technical-document-page-title">
           <div>
@@ -234,22 +288,22 @@ function DocumentAnalysisPage({
         </section>
       )}
 
-      {isExpansionWorkflow && (
-        <div className="technical-document-tabs" role="tablist" aria-label="技术方案文件正文切换">
+      {hasDocumentTabs && (
+        <div className="document-switch-tabs" role="tablist" aria-label="技术方案文件正文切换">
           {documentTabs.map((tab) => {
-            const isActive = tab === activeDocumentTab;
+            const isActive = tab.id === activeDocumentTab;
             return (
               <button
                 type="button"
-                className={`technical-document-tab${isActive ? ' is-active' : ''}`}
+                className={`document-switch-tab${isActive ? ' is-active' : ''}`}
                 role="tab"
                 aria-selected={isActive}
-                aria-controls={`technical-document-panel-${tab}`}
-                id={`technical-document-tab-${tab}`}
-                key={tab}
-                onClick={() => setActiveDocumentTab(tab)}
+                aria-controls={`technical-document-panel-${tab.id}`}
+                id={`document-switch-tab-${tab.id}`}
+                key={tab.id}
+                onClick={() => setActiveDocumentTab(tab.id)}
               >
-                <strong>{documentLabels[tab]}</strong>
+                <strong>{tab.label}</strong>
               </button>
             );
           })}
@@ -258,16 +312,21 @@ function DocumentAnalysisPage({
 
       <section
         className="technical-document-reader-card analysis-markdown-card"
-        role={isExpansionWorkflow ? 'tabpanel' : undefined}
-        id={isExpansionWorkflow ? `technical-document-panel-${visibleDocumentTab}` : undefined}
-        aria-labelledby={isExpansionWorkflow ? `technical-document-tab-${visibleDocumentTab}` : undefined}
+        role={hasDocumentTabs ? 'tabpanel' : undefined}
+        id={hasDocumentTabs ? `technical-document-panel-${activeDocumentTab}` : undefined}
+        aria-labelledby={hasDocumentTabs ? `document-switch-tab-${activeDocumentTab}` : undefined}
       >
         <div className="analysis-result-head technical-document-reader-head">
           <strong>{documentLabels[visibleDocumentTab]}内容</strong>
           <span>{activeFile ? `${activeFile.fileName} · ${activeFile.markdownChars} 字` : '等待上传'}</span>
         </div>
 
-        {activeMarkdown ? (
+        {activeTenderSourceLoading ? (
+          <div className="markdown-empty-state">
+            <strong>正在读取招标文件正文...</strong>
+            <p>文件较大时需要稍等片刻。</p>
+          </div>
+        ) : activeMarkdown ? (
           <div className="markdown-viewer">
             <MarkdownRenderer>
               {activeMarkdown}

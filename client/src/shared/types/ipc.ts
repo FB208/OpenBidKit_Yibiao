@@ -414,6 +414,7 @@ export interface YibiaoBridge {
     checkBidSections: () => Promise<{ hasMultiple: boolean; totalDeclared?: number | null }>;
     selectBidSection: (selectedSection: DetectedBidSection) => Promise<{ success: boolean; message?: string; state: TechnicalPlanState; markdown: string }>;
     readTenderMarkdown: () => Promise<string>;
+    readTenderSourceMarkdown: (sourceId: string) => Promise<string>;
     readOriginalPlanMarkdown: () => Promise<string>;
     updateStep: (step: TechnicalPlanStep) => Promise<TechnicalPlanState>;
     setWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
@@ -428,7 +429,7 @@ export interface YibiaoBridge {
   };
   duplicateCheck: {
     loadState: () => Promise<DuplicateCheckWorkspaceState>;
-    saveFiles: (payload: Pick<DuplicateCheckWorkspaceState, 'tenderFile' | 'bidFiles'> & Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<DuplicateCheckWorkspaceState>;
+    saveFiles: (payload: Pick<DuplicateCheckWorkspaceState, 'tenderFile' | 'tenderFiles' | 'bidFiles'> & Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<DuplicateCheckWorkspaceState>;
     saveUiState: (payload: Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<DuplicateCheckWorkspaceState>;
     updateState: (partial: Partial<DuplicateCheckWorkspaceState>) => Promise<DuplicateCheckWorkspaceState>;
     clear: () => Promise<{ success: boolean; message?: string; state: DuplicateCheckWorkspaceState }>;

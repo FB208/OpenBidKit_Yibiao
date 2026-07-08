@@ -47,6 +47,7 @@ export interface RejectionDocumentContent {
 
 export interface RejectionCheckWorkspaceState {
   tenderDocument: RejectionDocumentContent | null;
+  tenderDocuments: RejectionDocumentContent[];
   bidDocuments: RejectionDocumentContent[];
   activeDocumentTab: RejectionDocumentTabId;
   step?: RejectionCheckStep;

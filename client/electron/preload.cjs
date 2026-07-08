@@ -113,6 +113,7 @@ const bridge = {
     checkBidSections: () => ipcRenderer.invoke('technical-plan:check-bid-sections'),
     selectBidSection: (selectedSection) => ipcRenderer.invoke('technical-plan:select-bid-section', selectedSection),
     readTenderMarkdown: () => ipcRenderer.invoke('technical-plan:read-tender-markdown'),
+    readTenderSourceMarkdown: (sourceId) => ipcRenderer.invoke('technical-plan:read-tender-source-markdown', sourceId),
     readOriginalPlanMarkdown: () => ipcRenderer.invoke('technical-plan:read-original-plan-markdown'),
     updateStep: (step) => ipcRenderer.invoke('technical-plan:update-step', step),
     setWorkflowKind: (workflowKind) => ipcRenderer.invoke('technical-plan:set-workflow-kind', workflowKind),

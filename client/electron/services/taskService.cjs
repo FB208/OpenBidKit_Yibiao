@@ -95,7 +95,8 @@ function getScopeId(payload) {
 }
 
 function createDuplicateCheckPayloadSignature(payload = {}) {
-  const files = [payload.tenderFile, ...(Array.isArray(payload.bidFiles) ? payload.bidFiles : [])]
+  const tenderFiles = Array.isArray(payload.tenderFiles) ? payload.tenderFiles : [payload.tenderFile].filter(Boolean);
+  const files = [...tenderFiles, ...(Array.isArray(payload.bidFiles) ? payload.bidFiles : [])]
     .filter(Boolean)
     .map((file) => `${file.file_path}|${file.size}|${file.modified_at}`);
   return crypto.createHash('sha1').update(files.join('\n')).digest('hex');

@@ -6,6 +6,7 @@ const initialState: TechnicalPlanState = {
   workflowKind: 'technical-plan',
   step: 'document-analysis',
   tenderFile: null,
+  tenderFiles: [],
   originalPlanFile: null,
   projectOverview: '',
   techRequirements: '',

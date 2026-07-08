@@ -1132,7 +1132,7 @@ function KnowledgeBasePage() {
           ) : (
             <div className="knowledge-empty-box large">
               <strong>当前文件夹暂无文档</strong>
-              <p>支持上传 .doc、.docx、.wps、.pdf、.md 文档。</p>
+              <p>支持上传 .doc、.docx、.wps、.pdf、.md、.xls、.xlsx 文档。</p>
             </div>
           )}
         </main>

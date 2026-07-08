@@ -1960,7 +1960,7 @@ button {
   white-space: nowrap;
 }
 
-.technical-document-tabs {
+.document-switch-tabs {
   display: inline-flex;
   width: max-content;
   max-width: 100%;
@@ -1973,7 +1973,7 @@ button {
   box-shadow: 0 12px 28px rgba(33, 116, 253, 0.08);
 }
 
-.technical-document-tab {
+.document-switch-tab {
   display: inline-flex;
   min-width: 116px;
   min-height: 38px;
@@ -1987,13 +1987,13 @@ button {
   border-radius: 999px;
 }
 
-.technical-document-tab.is-active {
+.document-switch-tab.is-active {
   color: #ffffff;
   background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
   box-shadow: 0 10px 22px rgba(33, 116, 253, 0.22);
 }
 
-.technical-document-tab strong {
+.document-switch-tab strong {
   color: inherit;
   font-size: 15px;
 }
@@ -2124,7 +2124,7 @@ button {
 .markdown-viewer ul,
 .markdown-viewer ol,
 .markdown-viewer blockquote,
-.markdown-viewer table,
+.markdown-viewer .markdown-table-scroll,
 .markdown-viewer pre {
   margin: 0 0 16px;
 }
@@ -2170,25 +2170,70 @@ button {
   border-radius: 0 14px 14px 0;
 }
 
-.markdown-viewer table {
-  display: block;
+.markdown-viewer .markdown-table-scroll {
   width: 100%;
+  max-height: min(72vh, 680px);
   overflow: auto;
-  border-collapse: collapse;
+  background: #ffffff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 14px;
+  scrollbar-gutter: stable;
+}
+
+.markdown-viewer table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
 }
 
 .markdown-viewer th,
 .markdown-viewer td {
-  min-width: 120px;
-  padding: 10px 12px;
+  min-width: 128px;
+  max-width: 420px;
+  padding: 9px 11px;
   text-align: left;
   vertical-align: top;
-  border: 1px solid var(--yb-border-soft);
+  overflow-wrap: anywhere;
+  white-space: normal;
+  background: #ffffff;
+  border-right: 1px solid var(--yb-border-soft);
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.markdown-viewer th:last-child,
+.markdown-viewer td:last-child {
+  border-right: 0;
+}
+
+.markdown-viewer tr:last-child td {
+  border-bottom: 0;
 }
 
 .markdown-viewer th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   color: var(--yb-text);
   background: #f1f6ff;
+}
+
+.markdown-viewer th:first-child,
+.markdown-viewer td:first-child {
+  position: sticky;
+  left: 0;
+  box-shadow: 1px 0 0 var(--yb-border-soft);
+}
+
+.markdown-viewer th:first-child {
+  z-index: 3;
+  background: #eaf2ff;
+}
+
+.markdown-viewer td:first-child {
+  z-index: 1;
+  background: #fbfdff;
 }
 
 .markdown-viewer code {
@@ -6941,6 +6986,38 @@ button {
   padding-right: 4px;
 }
 
+.duplicate-document-tab {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 12px;
+  text-align: left;
+  background: #ffffff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 16px;
+  cursor: pointer;
+}
+
+.duplicate-document-tab.is-active {
+  background: #eef4ff;
+  border-color: rgba(33, 116, 253, 0.38);
+  box-shadow: 0 0 0 3px rgba(33, 116, 253, 0.08);
+}
+
+.duplicate-document-tab span {
+  color: var(--yb-primary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.duplicate-document-tab strong {
+  overflow: hidden;
+  color: var(--yb-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .duplicate-file-pill {
   min-width: 0;
   gap: 12px;
@@ -8025,44 +8102,6 @@ button {
   font-weight: 900;
   background: rgba(33, 116, 253, 0.09);
   border-radius: 999px;
-}
-
-.rejection-document-tabs {
-  display: inline-flex;
-  width: max-content;
-  max-width: 100%;
-  align-items: center;
-  gap: 4px;
-  padding: 4px;
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(27, 50, 92, 0.12);
-  border-radius: 999px;
-  box-shadow: 0 12px 28px rgba(33, 116, 253, 0.08);
-}
-
-.rejection-document-tab {
-  display: inline-flex;
-  min-width: 116px;
-  min-height: 38px;
-  align-items: center;
-  justify-content: center;
-  padding: 9px 18px;
-  color: var(--yb-text-soft);
-  text-align: center;
-  background: transparent;
-  border: 0;
-  border-radius: 999px;
-}
-
-.rejection-document-tab.is-active {
-  color: #ffffff;
-  background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
-  box-shadow: 0 10px 22px rgba(33, 116, 253, 0.22);
-}
-
-.rejection-document-tab strong {
-  color: inherit;
-  font-size: 15px;
 }
 
 .rejection-reader-card {
@@ -11359,22 +11398,14 @@ button {
     flex-direction: column;
   }
 
-  .rejection-document-tabs {
+  .document-switch-tabs {
     width: 100%;
     overflow-x: auto;
   }
 
-  .technical-document-tabs {
-    width: 100%;
-  }
-
-  .rejection-document-tab {
+  .document-switch-tab {
     min-width: 116px;
     flex: 1 0 auto;
-  }
-
-  .technical-document-tab {
-    flex: 1;
   }
 
   .rejection-reader-card {

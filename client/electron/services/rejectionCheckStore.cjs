@@ -6,6 +6,7 @@ const { deleteImportedImageBatches, deleteImportedImageBatchesForExactScope } = 
 
 const initialState = {
   tenderDocument: null,
+  tenderDocuments: [],
   bidDocuments: [],
   activeDocumentTab: 'tender',
   step: 'documents',
@@ -188,10 +189,26 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     return `bid-${hash}`;
   }
 
+  function createTenderSourceDocumentId(fileName, markdown, index) {
+    const hash = stableHash(`${String(fileName || '')}\n${String(markdown || '')}`).slice(0, 12);
+    return `tender-${String(index + 1).padStart(2, '0')}-${hash}`;
+  }
+
+  function combineTenderMarkdown(documents) {
+    return (Array.isArray(documents) ? documents : [])
+      .map((document) => String(document?.file_content || document?.content || '').trim())
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
   function getDocumentMarkdownRelativePath(role, documentId) {
     if (role === 'bid') {
       const safeDocumentId = String(documentId || 'bid').replace(/[^a-zA-Z0-9_-]/g, '_');
       return `rejection-check/bids/${safeDocumentId}.md`;
+    }
+    if (String(documentId || '') && String(documentId) !== tenderDocumentId) {
+      const safeDocumentId = String(documentId).replace(/[^a-zA-Z0-9_-]/g, '_');
+      return `rejection-check/tenders/${safeDocumentId}.md`;
     }
     return 'rejection-check/tender.md';
   }
@@ -240,7 +257,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     const markdown = String(document.content || '').trim();
     if (!markdown) return;
     const documentId = role === 'tender'
-      ? tenderDocumentId
+      ? String(document.id || tenderDocumentId)
       : String(document.id || createBidDocumentId(document.fileName, markdown));
     writeDocumentMarkdown(role, documentId, markdown);
     const timestamp = now();
@@ -269,7 +286,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
       content_hash: stableHash(markdown),
       content_chars: markdown.length,
       parser_label: document.parserLabel ? String(document.parserLabel) : null,
-      sort_order: role === 'bid' ? Number(sortOrder || 0) : 0,
+      sort_order: Number(sortOrder || 0),
       imported_at: document.importedAt || timestamp,
       updated_at: timestamp,
     });
@@ -291,6 +308,10 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
 
   function loadTenderDocument() {
     return documentFromRow(db.prepare("SELECT * FROM rejection_check_documents WHERE role = 'tender' ORDER BY sort_order ASC LIMIT 1").get());
+  }
+
+  function loadTenderDocuments() {
+    return db.prepare("SELECT * FROM rejection_check_documents WHERE role = 'tender' AND document_id != ? ORDER BY sort_order ASC, imported_at ASC").all(tenderDocumentId).map(documentFromRow).filter(Boolean);
   }
 
   function loadBidDocuments() {
@@ -603,6 +624,15 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
       if (partial.tenderDocument) saveDocument(partial.tenderDocument);
       else clearDocument('tender');
     }
+    if (hasOwn(partial, 'tenderDocuments')) {
+      clearDocument('tender');
+      const documents = Array.isArray(partial.tenderDocuments) ? partial.tenderDocuments : [];
+      const combined = combineTenderMarkdown(documents);
+      if (combined) {
+        saveDocument({ id: tenderDocumentId, role: 'tender', fileName: documents.length > 1 ? `${documents.length} 份招标文件` : documents[0]?.fileName || '招标文件', content: combined, source: documents[0]?.source || 'upload', importedAt: now() }, 0);
+      }
+      documents.forEach((document, index) => saveDocument(document, index + 1));
+    }
     if (hasOwn(partial, 'bidDocuments')) {
       clearDocument('bid');
       (Array.isArray(partial.bidDocuments) ? partial.bidDocuments : []).forEach((document, index) => saveDocument(document, index));
@@ -620,9 +650,12 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     const meta = ensureMetaRow();
     const tasks = loadTasks();
     const tenderDocument = loadTenderDocument();
+    const tenderDocuments = loadTenderDocuments();
     const bidDocuments = loadBidDocuments();
     const activeDocumentTab = normalizeDocumentTab(meta.active_document_tab);
-    const validActiveDocumentTab = activeDocumentTab === 'tender' || bidDocuments.some((document) => document.id === activeDocumentTab)
+    const validActiveDocumentTab = activeDocumentTab === 'tender'
+      || tenderDocuments.some((document) => document.id === activeDocumentTab)
+      || bidDocuments.some((document) => document.id === activeDocumentTab)
       ? activeDocumentTab
       : tenderDocument
         ? 'tender'
@@ -630,6 +663,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     return {
       ...initialState,
       tenderDocument,
+      tenderDocuments,
       bidDocuments,
       activeDocumentTab: validActiveDocumentTab,
       step: normalizeStep(meta.step),
@@ -673,20 +707,33 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     let firstAddedBidDocumentId = '';
     const transaction = db.transaction(() => {
       if (documentRole === 'tender') {
-        const first = importedDocuments[0];
-        const document = {
+        clearDocument('tender');
+        const combinedMarkdown = combineTenderMarkdown(importedDocuments);
+        const first = importedDocuments[0] || {};
+        saveDocument({
           id: tenderDocumentId,
           role: documentRole,
-          fileName: first.file_name || '招标文件',
-          content: first.file_content,
+          fileName: importedDocuments.length > 1 ? `${importedDocuments.length} 份招标文件` : first.file_name || '招标文件',
+          content: combinedMarkdown,
           source: 'upload',
-          parserLabel: first.parser_label || undefined,
+          parserLabel: importedDocuments.length > 1 ? undefined : first.parser_label || undefined,
           importedAt: now(),
-        };
-        saveDocument(document);
-        clearExtractionAndCheckResults();
+        }, 0);
+        importedDocuments.forEach((item, index) => {
+          const markdown = String(item.file_content || '').trim();
+          if (!markdown) return;
+          saveDocument({
+            id: createTenderSourceDocumentId(item.file_name || '招标文件', markdown, index),
+            role: 'tender',
+            fileName: item.file_name || '招标文件',
+            content: markdown,
+            source: 'upload',
+            parserLabel: item.parser_label || undefined,
+            importedAt: now(),
+          }, index + 1);
+        });
         updateMeta({ active_document_tab: 'tender' });
-        addedCount = 1;
+        addedCount = importedDocuments.length;
         return;
       }
 
@@ -737,7 +784,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     if (fallbackToLocal) bidMessageParts.push('当前格式已自动使用本地解析');
     if (skippedCount > 0) bidMessageParts.push(`跳过 ${skippedCount} 份重复文件`);
     if (failedCount > 0) bidMessageParts.push(`失败 ${failedCount} 份`);
-    const message = documentRole === 'bid' ? bidMessageParts.join('，') : result.message || '文件解析完成';
+    const message = documentRole === 'bid' ? bidMessageParts.join('，') : result.message || `已解析 ${addedCount} 份招标文件`;
     return { success: true, message, state: loadRejectionCheck() };
   }
 
@@ -750,18 +797,41 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
       return { success: false, message: '技术方案中暂无可读取的招标文件正文', state: loadRejectionCheck() };
     }
     const technicalPlan = technicalPlanStore.loadTechnicalPlan();
+    const sourceFiles = Array.isArray(technicalPlan?.tenderFiles) ? technicalPlan.tenderFiles : [];
+    const sourceDocuments = sourceFiles
+      .map((file, index) => {
+        const content = typeof technicalPlanStore.readTenderSourceMarkdown === 'function'
+          ? String(technicalPlanStore.readTenderSourceMarkdown(file.id) || '').trim()
+          : '';
+        if (!content) return null;
+        return {
+          id: createTenderSourceDocumentId(file.fileName || '技术方案招标文件', content, index),
+          role: 'tender',
+          fileName: file.fileName || '技术方案招标文件',
+          content,
+          source: 'technical-plan',
+          parserLabel: file.parserLabel || undefined,
+          importedAt: file.importedAt || now(),
+        };
+      })
+      .filter(Boolean);
     const document = {
       id: tenderDocumentId,
       role: 'tender',
-      fileName: technicalPlan?.tenderFile?.fileName || '技术方案招标文件',
+      fileName: sourceDocuments.length > 1 ? `${sourceDocuments.length} 份技术方案招标文件` : sourceDocuments[0]?.fileName || technicalPlan?.tenderFile?.fileName || '技术方案招标文件',
       content: markdown,
       source: 'technical-plan',
       importedAt: now(),
     };
+    const documentsToSave = sourceDocuments.length
+      ? sourceDocuments
+      : [{ ...document, id: 'tender-technical-plan', fileName: document.fileName }];
     const discardedBids = getTechnicalPlanDiscardedBids(technicalPlan);
     const tenderSignature = createDocumentSignature(document);
     const transaction = db.transaction(() => {
+      clearDocument('tender');
       saveDocument(document);
+      documentsToSave.forEach((item, index) => saveDocument(item, index + 1));
       clearExtractionAndCheckResults();
       if (discardedBids) {
         saveExtraction({

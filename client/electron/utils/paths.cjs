@@ -53,6 +53,11 @@ function getRejectionCheckDocumentMarkdownPath(app, role, documentId) {
     const safeDocumentId = String(documentId || 'bid').replace(/[^a-zA-Z0-9_-]/g, '_');
     return path.join(getRejectionCheckDir(app), 'bids', `${safeDocumentId}.md`);
   }
+  const tenderDocumentId = String(documentId || '').trim();
+  if (tenderDocumentId && tenderDocumentId !== 'tender') {
+    const safeDocumentId = tenderDocumentId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return path.join(getRejectionCheckDir(app), 'tenders', `${safeDocumentId}.md`);
+  }
   return path.join(getRejectionCheckDir(app), 'tender.md');
 }
 

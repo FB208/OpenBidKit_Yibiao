@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 15;
+const schemaVersion = 16;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -17,6 +17,7 @@ function createInitialSchema(db) {
       tender_markdown_chars INTEGER NOT NULL DEFAULT 0,
       tender_parser_label TEXT,
       tender_imported_at TEXT,
+      tender_files_json TEXT,
       tender_original_markdown_path TEXT,
       tender_original_markdown_hash TEXT,
       tender_original_markdown_chars INTEGER NOT NULL DEFAULT 0,
@@ -231,6 +232,10 @@ function addTechnicalPlanBidSectionOptimization(db) {
   addColumnIfMissing(db, 'technical_plan_meta', 'bid_sections_json', 'TEXT');
   addColumnIfMissing(db, 'technical_plan_meta', 'bid_section_extraction_status', "TEXT NOT NULL DEFAULT 'idle'");
   addColumnIfMissing(db, 'technical_plan_meta', 'bid_section_extraction_error', 'TEXT');
+}
+
+function addTechnicalPlanTenderFiles(db) {
+  addColumnIfMissing(db, 'technical_plan_meta', 'tender_files_json', 'TEXT');
 }
 
 function addKnowledgeDocumentSortOrder(db) {
@@ -1074,6 +1079,13 @@ const schemaHealthColumnGroups = [
       bid_section_extraction_error: 'TEXT',
     },
   },
+  {
+    version: 16,
+    table: 'technical_plan_meta',
+    columns: {
+      tender_files_json: 'TEXT',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -1209,6 +1221,11 @@ const migrations = [
     version: 15,
     description: '新增导出模板库表结构',
     up: createExportTemplatesSchema,
+  },
+  {
+    version: 16,
+    description: '技术方案支持多份招标文件',
+    up: addTechnicalPlanTenderFiles,
   },
 ];
 

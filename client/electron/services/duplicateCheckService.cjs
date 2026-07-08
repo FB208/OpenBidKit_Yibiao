@@ -89,8 +89,12 @@ function stableFileId(file) {
   return file?.id || crypto.createHash('sha1').update(String(file?.file_path || file?.file_name || '')).digest('hex');
 }
 
+function getTenderFilesFromPayload(payload = {}) {
+  return Array.isArray(payload.tenderFiles) ? payload.tenderFiles : [payload.tenderFile].filter(Boolean);
+}
+
 function createSignature(payload = {}) {
-  const files = [payload.tenderFile, ...(Array.isArray(payload.bidFiles) ? payload.bidFiles : [])]
+  const files = [...getTenderFilesFromPayload(payload), ...(Array.isArray(payload.bidFiles) ? payload.bidFiles : [])]
     .filter(Boolean)
     .map((file) => `${file.file_path}|${file.size}|${file.modified_at}`);
   return crypto.createHash('sha1').update(files.join('\n')).digest('hex');
@@ -1801,6 +1805,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     const current = workspaceStore.loadDuplicateCheck() || {};
     const currentSignature = createSignature({
       tenderFile: current.tenderFile || null,
+      tenderFiles: Array.isArray(current.tenderFiles) ? current.tenderFiles : [],
       bidFiles: Array.isArray(current.bidFiles) ? current.bidFiles : [],
     });
     return currentSignature === signature;
@@ -1846,15 +1851,16 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     return next;
   }
 
-  async function runContentExtraction(allFiles, webContents, signature, developerLogger, tenderFile) {
+  async function runContentExtraction(allFiles, webContents, signature, developerLogger, tenderFiles) {
     const config = configStore ? configStore.load() : { file_parser: { provider: 'local' } };
     const dir = getDuplicateCheckContentDir(app);
     await fs.mkdir(dir, { recursive: true });
     const results = [];
+    const tenderFileIds = new Set((Array.isArray(tenderFiles) ? tenderFiles : []).map(stableFileId));
     developerLogger?.write('duplicate.content_extraction.started', {
       signature,
       file_count: allFiles.length,
-      files: allFiles.map((file) => summarizeDuplicateFileForLog(file, file === tenderFile ? 'tender' : 'bid')),
+      files: allFiles.map((file) => summarizeDuplicateFileForLog(file, tenderFileIds.has(stableFileId(file)) ? 'tender' : 'bid')),
     });
     updateAnalysis({ contentExtraction: { status: 'running', completed: 0, total: allFiles.length }, message: '正在提取正文内容' }, webContents, signature);
 
@@ -1869,13 +1875,13 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         await fs.writeFile(contentPath, markdown, 'utf-8');
         results.push({ file_id: fileId, file_name: file.file_name, status: 'success', content_path: contentPath, content_length: markdown.length });
         developerLogger?.write('duplicate.content_extraction.file.completed', {
-          file: summarizeDuplicateFileForLog(file, file === tenderFile ? 'tender' : 'bid'),
+          file: summarizeDuplicateFileForLog(file, tenderFileIds.has(fileId) ? 'tender' : 'bid'),
           markdown_metrics: textMetrics(markdown),
         });
       } catch (error) {
         results.push({ file_id: fileId, file_name: file.file_name, status: 'error', error: error.message || '正文提取失败' });
         developerLogger?.write('duplicate.content_extraction.file.error', {
-          file: summarizeDuplicateFileForLog(file, file === tenderFile ? 'tender' : 'bid'),
+          file: summarizeDuplicateFileForLog(file, tenderFileIds.has(fileId) ? 'tender' : 'bid'),
           error: compactLogError(error),
         });
       }
@@ -1890,6 +1896,15 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       result: summarizeContentExtractionResults(results),
     });
     return results;
+  }
+
+  async function readCombinedTenderMarkdown(contentFiles, tenderFiles) {
+    const parts = [];
+    for (const file of Array.isArray(tenderFiles) ? tenderFiles : []) {
+      const markdown = await readContentMarkdown(contentFiles, file);
+      if (String(markdown || '').trim()) parts.push(String(markdown).trim());
+    }
+    return parts.join('\n\n');
   }
 
   async function runMetadataExtraction(bidFiles, webContents, signature, developerLogger) {
@@ -1939,18 +1954,18 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     return fs.readFile(item.content_path, 'utf-8');
   }
 
-  async function runOutlineAnalysis(tenderFile, bidFiles, contentFiles, signature, webContents, developerLogger) {
+  async function runOutlineAnalysis(tenderFiles, bidFiles, contentFiles, signature, webContents, developerLogger) {
     developerLogger?.write('duplicate.outline_analysis.started', {
       signature,
       bid_file_count: bidFiles.length,
-      tender_file: summarizeDuplicateFileForLog(tenderFile, 'tender'),
+      tender_files: (Array.isArray(tenderFiles) ? tenderFiles : []).map((file) => summarizeDuplicateFileForLog(file, 'tender')),
     });
     updateOutlineAnalysis({ status: 'running', progress: 5, extraction: { status: 'running', completed: 0, total: bidFiles.length }, message: '正在准备目录分析' }, webContents, signature);
     const results = [];
     let tenderSentences = [];
-    if (tenderFile) {
+    if (Array.isArray(tenderFiles) && tenderFiles.length) {
       try {
-        const tenderMarkdown = await readContentMarkdown(contentFiles, tenderFile);
+        const tenderMarkdown = await readCombinedTenderMarkdown(contentFiles, tenderFiles);
         tenderSentences = splitTenderSentences(tenderMarkdown);
       } catch (error) {
         updateOutlineAnalysis({ message: `招标文件句子白名单生成失败，继续对比投标文件目录：${error.message || error}` }, webContents, signature);
@@ -2031,17 +2046,17 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     return results;
   }
 
-  async function runContentDuplicateAnalysis(tenderFile, bidFiles, contentFiles, signature, webContents, developerLogger) {
+  async function runContentDuplicateAnalysis(tenderFiles, bidFiles, contentFiles, signature, webContents, developerLogger) {
     developerLogger?.write('duplicate.content_analysis.started', {
       signature,
       bid_file_count: bidFiles.length,
-      tender_file: summarizeDuplicateFileForLog(tenderFile, 'tender'),
+      tender_files: (Array.isArray(tenderFiles) ? tenderFiles : []).map((file) => summarizeDuplicateFileForLog(file, 'tender')),
     });
     updateContentAnalysis({ status: 'running', progress: 5, extraction: { status: 'running', completed: 0, total: bidFiles.length }, message: '正在准备正文比对' }, webContents, signature);
     let tenderSentenceSet = new Set();
-    if (tenderFile) {
+    if (Array.isArray(tenderFiles) && tenderFiles.length) {
       try {
-        const tenderMarkdown = await readContentMarkdown(contentFiles, tenderFile);
+        const tenderMarkdown = await readCombinedTenderMarkdown(contentFiles, tenderFiles);
         tenderSentenceSet = new Set(splitContentSentences(tenderMarkdown).map((item) => item.normalized));
       } catch (error) {
         updateContentAnalysis({ message: `招标文件句子白名单生成失败，继续比对投标正文：${error.message || error}` }, webContents, signature);
@@ -2213,26 +2228,27 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
   }
 
   async function run(signature, payload, target, developerLogger) {
-    const tenderFile = payload.tenderFile || null;
+    const tenderFiles = getTenderFilesFromPayload(payload);
+    const tenderFile = tenderFiles[0] || null;
     const bidFiles = Array.isArray(payload.bidFiles) ? payload.bidFiles : [];
-    const allFiles = [tenderFile, ...bidFiles].filter(Boolean);
+    const allFiles = [...tenderFiles, ...bidFiles].filter(Boolean);
     developerLogger?.write('duplicate.pipeline.started', {
       signature,
-      tender_file: summarizeDuplicateFileForLog(tenderFile, 'tender'),
+      tender_files: tenderFiles.map((file) => summarizeDuplicateFileForLog(file, 'tender')),
       bid_file_count: bidFiles.length,
       file_count: allFiles.length,
     });
 
     try {
-      const contentPromise = runContentExtraction(allFiles, target, signature, developerLogger, tenderFile);
+      const contentPromise = runContentExtraction(allFiles, target, signature, developerLogger, tenderFiles);
       const metadataFiles = await runMetadataExtraction(bidFiles, target, signature, developerLogger);
       updateOutlineAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于目录分析', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, target, signature);
       updateContentAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于正文比对', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, target, signature);
       updateImageAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于图片比对', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, target, signature);
       const contentFiles = await contentPromise;
       const [outlineFiles, contentResult, imageResult] = await Promise.all([
-        runOutlineAnalysis(tenderFile, bidFiles, contentFiles, signature, target, developerLogger),
-        runContentDuplicateAnalysis(tenderFile, bidFiles, contentFiles, signature, target, developerLogger),
+        runOutlineAnalysis(tenderFiles, bidFiles, contentFiles, signature, target, developerLogger),
+        runContentDuplicateAnalysis(tenderFiles, bidFiles, contentFiles, signature, target, developerLogger),
         runImageDuplicateAnalysis(bidFiles, contentFiles, signature, target, developerLogger),
       ]);
       const failed = contentFiles.some((item) => item.status === 'error')
@@ -2266,6 +2282,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       const signature = createSignature(payload);
       const force = payload.force === true;
       const bidFiles = Array.isArray(payload.bidFiles) ? payload.bidFiles : [];
+      const tenderFiles = getTenderFilesFromPayload(payload);
       const developerLogger = createDeveloperLogger({
         app,
         config: loadDeveloperConfig(configStore),
@@ -2274,14 +2291,14 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         meta: {
           signature,
           force,
-          tender_file: summarizeDuplicateFileForLog(payload.tenderFile || null, 'tender'),
+          tender_files: tenderFiles.map((file) => summarizeDuplicateFileForLog(file, 'tender')),
           bid_file_count: bidFiles.length,
         },
       });
       developerLogger.write('duplicate.task.started', {
         signature,
         force,
-        tender_file: summarizeDuplicateFileForLog(payload.tenderFile || null, 'tender'),
+        tender_files: tenderFiles.map((file) => summarizeDuplicateFileForLog(file, 'tender')),
         bid_files: bidFiles.map((file) => summarizeDuplicateFileForLog(file, 'bid')),
       });
       const current = taskWorkspaceStore.loadDuplicateCheck() || {};
@@ -2305,7 +2322,8 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       const initialLogs = [force ? '开始重新执行标书查重分析。' : '开始执行标书查重分析。'];
       let latestLog = initialLogs[0];
       let state = taskWorkspaceStore.updateDuplicateCheck({
-        tenderFile: payload.tenderFile || null,
+        tenderFile: tenderFiles[0] || null,
+        tenderFiles,
         bidFiles,
         metadataAnalysis,
         outlineAnalysis,

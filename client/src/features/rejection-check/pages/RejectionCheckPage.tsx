@@ -346,6 +346,11 @@ function getBidDocumentLabel(bidDocuments: RejectionDocumentContent[], documentI
   return index >= 0 ? `投标文件${index + 1}` : '投标文件';
 }
 
+function getTenderDocumentLabel(tenderDocuments: RejectionDocumentContent[], documentId: string) {
+  const index = tenderDocuments.findIndex((document) => document.id === documentId);
+  return index >= 0 ? `招标文件${index + 1}` : '招标文件';
+}
+
 function createBidDocumentsSignature(bidDocuments: RejectionDocumentContent[]) {
   return bidDocuments.map(createDocumentSignature).filter(Boolean).join('\n---yibiao-rejection-bid-signature---\n');
 }
@@ -358,7 +363,7 @@ function stripTripleQuoteWrapper(content: string) {
   return content;
 }
 
-function DocumentFilePill({ document, onRemove }: { document: RejectionDocumentContent; onRemove: () => void }) {
+function DocumentFilePill({ document, onRemove }: { document: RejectionDocumentContent; onRemove?: () => void }) {
   return (
     <article className="rejection-file-pill">
       <div className="rejection-file-icon">{getFileBadge(document)}</div>
@@ -366,9 +371,11 @@ function DocumentFilePill({ document, onRemove }: { document: RejectionDocumentC
         <strong title={document.fileName}>{document.fileName}</strong>
         <span>{sourceLabels[document.source]} · {formatContentLength(document.content)} · {formatImportedAt(document.importedAt)}</span>
       </div>
-      <button type="button" onClick={onRemove} aria-label={`移除${documentLabels[document.role]}`}>
-        移除
-      </button>
+      {onRemove && (
+        <button type="button" onClick={onRemove} aria-label={`移除${documentLabels[document.role]}`}>
+          移除
+        </button>
+      )}
     </article>
   );
 }
@@ -549,6 +556,7 @@ function LogicFindingItem({ finding, bidLabel, expanded, onToggle, onDelete }: {
 function RejectionCheckPage() {
   const [step, setStep] = useState<RejectionCheckStep>('documents');
   const [tenderDocument, setTenderDocument] = useState<RejectionDocumentContent | null>(null);
+  const [tenderDocuments, setTenderDocuments] = useState<RejectionDocumentContent[]>([]);
   const [bidDocuments, setBidDocuments] = useState<RejectionDocumentContent[]>([]);
   const [activeDocumentTab, setActiveDocumentTab] = useState<RejectionDocumentTabId>('tender');
   const [activeResultTab, setActiveResultTab] = useState<RejectionResultTab>('analysis');
@@ -572,8 +580,9 @@ function RejectionCheckPage() {
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
 
+  const activeTenderSourceDocument = tenderDocuments.find((document) => document.id === activeDocumentTab) || null;
   const activeBidDocument = bidDocuments.find((document) => document.id === activeDocumentTab) || null;
-  const activeDocument = activeDocumentTab === 'tender' ? tenderDocument : activeBidDocument;
+  const activeDocument = activeDocumentTab === 'tender' ? tenderDocument : activeTenderSourceDocument || activeBidDocument;
   const tenderSignature = useMemo(() => createDocumentSignature(tenderDocument), [tenderDocument]);
   const bidSignature = useMemo(() => createBidDocumentsSignature(bidDocuments), [bidDocuments]);
   const hasAnyDocument = Boolean(tenderDocument || bidDocuments.length);
@@ -661,20 +670,24 @@ function RejectionCheckPage() {
     if (!analyticsReady) return;
 
     const page = step === 'documents'
-      ? `rejection-check/documents/${activeDocumentTab === 'tender' ? 'tender' : 'bid'}`
+      ? `rejection-check/documents/${activeDocumentTab === 'tender' || activeTenderSourceDocument ? 'tender' : 'bid'}`
       : step === 'items'
         ? `rejection-check/items/${activeResultTab}`
         : `rejection-check/results/${activeCheckResultTab}`;
     trackPageView(page);
-  }, [activeCheckResultTab, activeDocumentTab, activeResultTab, analyticsReady, step]);
+  }, [activeCheckResultTab, activeDocumentTab, activeResultTab, activeTenderSourceDocument, analyticsReady, step]);
 
   function applyWorkspaceState(state: RejectionCheckWorkspaceState, options: { syncViewState?: boolean } = {}) {
     const syncViewState = options.syncViewState !== false;
     setTenderDocument(state.tenderDocument || null);
+    const nextTenderDocuments = Array.isArray(state.tenderDocuments) ? state.tenderDocuments : state.tenderDocument ? [state.tenderDocument] : [];
+    setTenderDocuments(nextTenderDocuments);
     const nextBidDocuments = Array.isArray(state.bidDocuments) ? state.bidDocuments : [];
     setBidDocuments(nextBidDocuments);
     if (syncViewState) {
-      const nextActiveDocumentTab = state.activeDocumentTab === 'tender' || nextBidDocuments.some((document) => document.id === state.activeDocumentTab)
+      const nextActiveDocumentTab = state.activeDocumentTab === 'tender'
+        || nextTenderDocuments.some((document) => document.id === state.activeDocumentTab)
+        || nextBidDocuments.some((document) => document.id === state.activeDocumentTab)
         ? state.activeDocumentTab
         : 'tender';
       setActiveDocumentTab(nextActiveDocumentTab);
@@ -940,6 +953,7 @@ function RejectionCheckPage() {
     autoStartedSignatureRef.current = '';
     setStep('documents');
     setTenderDocument(null);
+    setTenderDocuments([]);
     setBidDocuments([]);
     setActiveDocumentTab('tender');
     setActiveResultBidDocumentId('all');
@@ -1616,8 +1630,15 @@ function RejectionCheckPage() {
                   <strong>招标文件</strong>
                 </div>
                 <div className="rejection-upload-content">
-                  {tenderDocument ? (
-                    <DocumentFilePill document={tenderDocument} onRemove={() => removeDocument('tender')} />
+                  {tenderDocuments.length ? (
+                    <div className="duplicate-file-list rejection-bid-file-list">
+                      {tenderDocuments.map((document, index) => (
+                        <div className="rejection-bid-file-entry" key={document.id}>
+                          <span>{`招标文件${index + 1}`}</span>
+                          <DocumentFilePill document={document} />
+                        </div>
+                      ))}
+                    </div>
                   ) : (
                     <div className="rejection-empty-upload">
                       <strong>等待招标文件</strong>
@@ -1630,7 +1651,7 @@ function RejectionCheckPage() {
                     {busy === 'technical-plan' ? '读取中...' : '从技术方案读取'}
                   </button>
                   <button type="button" className="primary-action" onClick={() => void importParsedDocument('tender')} disabled={busy !== null}>
-                    {busy === 'tender-upload' ? '解析中...' : tenderDocument ? '替换' : '上传'}
+                    {busy === 'tender-upload' ? '解析中...' : tenderDocuments.length ? '替换' : '上传'}
                   </button>
                 </div>
               </article>
@@ -1667,17 +1688,21 @@ function RejectionCheckPage() {
             </div>
           </section>
 
-          <div className="rejection-document-tabs" role="tablist" aria-label="废标项检查正文切换">
-            {[{ id: 'tender', label: '招标文件' }, ...bidDocuments.map((document, index) => ({ id: document.id, label: `投标文件${index + 1}` }))].map((tab) => {
+          <div className="document-switch-tabs" role="tablist" aria-label="废标项检查正文切换">
+            {[
+              ...(tenderDocuments.length > 1 ? [{ id: 'tender', label: '招标文件全文' }] : []),
+              ...(tenderDocuments.length > 1 ? tenderDocuments.map((document, index) => ({ id: document.id, label: `招标文件${index + 1}` })) : [{ id: 'tender', label: '招标文件' }]),
+              ...bidDocuments.map((document, index) => ({ id: document.id, label: `投标文件${index + 1}` })),
+            ].map((tab) => {
               const isActive = tab.id === activeDocumentTab;
               return (
                 <button
                   type="button"
-                  className={`rejection-document-tab${isActive ? ' is-active' : ''}`}
+                  className={`document-switch-tab${isActive ? ' is-active' : ''}`}
                   role="tab"
                   aria-selected={isActive}
                   aria-controls={`rejection-document-panel-${tab.id}`}
-                  id={`rejection-document-tab-${tab.id}`}
+                  id={`document-switch-tab-${tab.id}`}
                   key={tab.id}
                   onClick={() => setActiveDocumentTab(tab.id)}
                 >
@@ -1691,10 +1716,10 @@ function RejectionCheckPage() {
             className="rejection-reader-card analysis-markdown-card"
             role="tabpanel"
             id={`rejection-document-panel-${activeDocumentTab}`}
-            aria-labelledby={`rejection-document-tab-${activeDocumentTab}`}
+            aria-labelledby={`document-switch-tab-${activeDocumentTab}`}
           >
             <div className="analysis-result-head rejection-reader-head">
-              <strong>{activeDocumentTab === 'tender' ? '招标文件正文' : `${getBidDocumentLabel(bidDocuments, activeDocumentTab)}正文`}</strong>
+              <strong>{activeDocumentTab === 'tender' ? '招标文件正文' : activeTenderSourceDocument ? `${getTenderDocumentLabel(tenderDocuments, activeDocumentTab)}正文` : `${getBidDocumentLabel(bidDocuments, activeDocumentTab)}正文`}</strong>
               <span>{activeDocument ? `${activeDocument.fileName} · ${sourceLabels[activeDocument.source]}` : '等待上传'}</span>
             </div>
 
@@ -1707,7 +1732,7 @@ function RejectionCheckPage() {
             ) : (
               <div className="markdown-empty-state rejection-empty-reader">
                 <strong>尚未准备{activeDocumentTab === 'tender' ? '招标文件' : '投标文件'}</strong>
-                <p>{activeDocumentTab === 'tender' ? '可从技术方案读取招标文件，也可以直接上传并解析成 Markdown。' : '请上传至少一份投标文件，页面会在这里展示解析后的 Markdown 正文。'}</p>
+                <p>{activeDocumentTab === 'tender' || activeTenderSourceDocument ? '可从技术方案读取招标文件，也可以直接上传并解析成 Markdown。' : '请上传至少一份投标文件，页面会在这里展示解析后的 Markdown 正文。'}</p>
               </div>
             )}
           </section>
@@ -1734,13 +1759,13 @@ function RejectionCheckPage() {
             </button>
           </section>
 
-          <div className="rejection-document-tabs" role="tablist" aria-label="无效与废标项内容切换">
+          <div className="document-switch-tabs" role="tablist" aria-label="无效与废标项内容切换">
             {resultTabs.map((tab) => {
               const isActive = tab.id === activeResultTab;
               return (
                 <button
                   type="button"
-                  className={`rejection-document-tab${isActive ? ' is-active' : ''}`}
+                    className={`document-switch-tab${isActive ? ' is-active' : ''}`}
                   role="tab"
                   aria-selected={isActive}
                   aria-controls={`rejection-result-panel-${tab.id}`}

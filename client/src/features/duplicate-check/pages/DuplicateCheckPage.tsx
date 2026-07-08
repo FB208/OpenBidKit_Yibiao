@@ -596,6 +596,8 @@ function DuplicateAnalysisPane({ activeTab, onTabChange, metadataAnalysis, outli
 
 function DuplicateCheckPage() {
   const [tenderFile, setTenderFile] = useState<LocalFileSelection | null>(null);
+  const [tenderFiles, setTenderFiles] = useState<LocalFileSelection[]>([]);
+  const [activeTenderFileId, setActiveTenderFileId] = useState('');
   const [bidFiles, setBidFiles] = useState<LocalFileSelection[]>([]);
   const [step, setStep] = useState<DuplicateCheckStep>('upload');
   const [activeAnalysisTab, setActiveAnalysisTab] = useState<DuplicateAnalysisTabId>(defaultAnalysisTab);
@@ -615,7 +617,10 @@ function DuplicateCheckPage() {
   const { showDocumentParseNotice } = useDocumentParseNotice();
 
   function applyDuplicateCheckState(state: DuplicateCheckWorkspaceState) {
-    setTenderFile(state.tenderFile || null);
+    const nextTenderFiles = Array.isArray(state.tenderFiles) ? state.tenderFiles : state.tenderFile ? [state.tenderFile] : [];
+    setTenderFile(state.tenderFile || nextTenderFiles[0] || null);
+    setTenderFiles(nextTenderFiles);
+    setActiveTenderFileId((current) => (nextTenderFiles.some((file) => file.id === current) ? current : nextTenderFiles[0]?.id || ''));
     setBidFiles(Array.isArray(state.bidFiles) ? state.bidFiles : []);
     setStep(state.step === 'analysis' ? 'analysis' : 'upload');
     setActiveAnalysisTab(analysisTabs.some((item) => item.id === state.activeAnalysisTab) ? state.activeAnalysisTab as DuplicateAnalysisTabId : defaultAnalysisTab);
@@ -626,7 +631,7 @@ function DuplicateCheckPage() {
     setAnalysisTask(state.analysisTask);
   }
 
-  const totalSize = useMemo(() => bidFiles.reduce((sum, file) => sum + file.size, tenderFile?.size || 0), [bidFiles, tenderFile]);
+  const totalSize = useMemo(() => bidFiles.reduce((sum, file) => sum + file.size, tenderFiles.reduce((tenderSum, file) => tenderSum + file.size, 0)), [bidFiles, tenderFiles]);
   const isAnalysisRunning = startingAnalysis
     || analysisTask?.status === 'running'
     || metadataAnalysis?.status === 'running'
@@ -713,9 +718,9 @@ function DuplicateCheckPage() {
   }, []);
 
   const currentAnalysisSignature = useMemo(() => {
-    const files: LocalFileSelection[] = tenderFile ? [tenderFile, ...bidFiles] : bidFiles;
+    const files: LocalFileSelection[] = [...tenderFiles, ...bidFiles];
     return createDuplicateCheckSignature(files);
-  }, [bidFiles, tenderFile]);
+  }, [bidFiles, tenderFiles]);
 
   useEffect(() => {
     currentAnalysisSignatureRef.current = currentAnalysisSignature;
@@ -731,7 +736,7 @@ function DuplicateCheckPage() {
     }
     startedMetadataSignatureRef.current = currentAnalysisSignature;
     setStartingAnalysis(true);
-    void window.yibiao?.tasks?.startDuplicateAnalysis({ tenderFile, bidFiles, force })
+    void window.yibiao?.tasks?.startDuplicateAnalysis({ tenderFile: tenderFiles[0] || null, tenderFiles, bidFiles, force })
       .then(() => {
         showToast(force ? '标书查重重新分析任务已在后台启动' : '标书查重分析任务已在后台启动', 'success');
       })
@@ -756,7 +761,7 @@ function DuplicateCheckPage() {
       && imageAnalysis?.status === 'success') return;
     if (startedMetadataSignatureRef.current === currentAnalysisSignature) return;
     startDuplicateAnalysis(false);
-  }, [bidFiles, contentAnalysis?.status, currentAnalysisSignature, imageAnalysis?.status, metadataAnalysis?.signature, metadataAnalysis?.status, outlineAnalysis?.status, showToast, step, tenderFile]);
+  }, [bidFiles, contentAnalysis?.status, currentAnalysisSignature, imageAnalysis?.status, metadataAnalysis?.signature, metadataAnalysis?.status, outlineAnalysis?.status, showToast, step, tenderFiles]);
 
   const selectFiles = async (multiple: boolean) => {
     const selector = window.yibiao?.file?.selectDuplicateCheckFiles;
@@ -766,12 +771,12 @@ function DuplicateCheckPage() {
     return selector({ multiple });
   };
 
-  const persistSelectedFiles = async (nextTenderFile: LocalFileSelection | null, nextBidFiles: LocalFileSelection[], nextStep: DuplicateCheckStep = step) => {
+  const persistSelectedFiles = async (nextTenderFiles: LocalFileSelection[], nextBidFiles: LocalFileSelection[], nextStep: DuplicateCheckStep = step) => {
     const saver = window.yibiao?.duplicateCheck?.saveFiles;
     if (typeof saver !== 'function') {
       throw new Error('标书查重缓存接口尚未加载，请重启应用后重试');
     }
-    const state = await saver({ tenderFile: nextTenderFile, bidFiles: nextBidFiles, step: nextStep, activeAnalysisTab });
+    const state = await saver({ tenderFile: nextTenderFiles[0] || null, tenderFiles: nextTenderFiles, bidFiles: nextBidFiles, step: nextStep, activeAnalysisTab });
     applyDuplicateCheckState(state);
     setStartingAnalysis(false);
     startedMetadataSignatureRef.current = null;
@@ -785,7 +790,7 @@ function DuplicateCheckPage() {
     }
     try {
       setBusy('tender');
-      const result = await selectFiles(false);
+      const result = await selectFiles(true);
       if (!result?.success || !result.files?.length) {
         const message = result?.message || '未选择招标文件';
         if (isLibreOfficeRequiredMessage(message)) {
@@ -795,8 +800,8 @@ function DuplicateCheckPage() {
         showToast(message, message === '已取消选择' ? 'info' : 'error');
         return;
       }
-      await persistSelectedFiles(result.files[0], bidFiles);
-      showToast('招标文件已加入，暂不执行解析', 'success');
+      await persistSelectedFiles(result.files, bidFiles);
+      showToast(`已选择 ${result.files.length} 份招标文件，暂不执行解析`, 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : '选择招标文件失败';
       if (isLibreOfficeRequiredMessage(message)) {
@@ -833,7 +838,7 @@ function DuplicateCheckPage() {
         showToast('已跳过重复选择的投标文件', 'info');
       }
       if (nextFiles.length > 0) {
-        await persistSelectedFiles(tenderFile, [...bidFiles, ...nextFiles]);
+        await persistSelectedFiles(tenderFiles, [...bidFiles, ...nextFiles]);
         showToast('投标文件已加入，暂不执行解析', 'success');
       }
     } catch (error) {
@@ -931,7 +936,7 @@ function DuplicateCheckPage() {
                 <h2>选择标书</h2>
               </div>
               <div className="duplicate-upload-summary">
-                <span>{tenderFile ? '1 份招标文件' : '未上传招标文件'}</span>
+                <span>{tenderFiles.length ? `${tenderFiles.length} 份招标文件` : '未上传招标文件'}</span>
                 <strong>{bidFiles.length} 份投标文件</strong>
                 <small>{formatFileSize(totalSize)}</small>
               </div>
@@ -942,20 +947,35 @@ function DuplicateCheckPage() {
                 <div className="duplicate-upload-label">
                   <span>01</span>
                   <strong>招标文件</strong>
-                  <small>可选，仅一份</small>
+                  <small>可选，可多份</small>
                 </div>
                 <div className="duplicate-upload-content">
-                  {tenderFile ? (
-                    <FilePill file={tenderFile} disabled={isAnalysisRunning} onRemove={() => {
-                      void persistSelectedFiles(null, bidFiles)
-                        .catch((error) => showToast(error instanceof Error ? error.message : '移除招标文件失败', 'error'));
-                    }} />
+                  {tenderFiles.length ? (
+                    <div className="duplicate-file-list">
+                      {tenderFiles.map((file, index) => (
+                        <button
+                          key={file.file_path}
+                          type="button"
+                          className={`duplicate-document-tab${activeTenderFileId === file.id ? ' is-active' : ''}`}
+                          onClick={() => setActiveTenderFileId(file.id)}
+                        >
+                          <span>{`招标文件${index + 1}`}</span>
+                          <strong>{file.file_name}</strong>
+                        </button>
+                      ))}
+                      {tenderFiles.map((file) => (
+                        <FilePill key={`pill-${file.file_path}`} file={file} disabled={isAnalysisRunning} onRemove={() => {
+                          void persistSelectedFiles(tenderFiles.filter((item) => item.file_path !== file.file_path), bidFiles)
+                            .catch((error) => showToast(error instanceof Error ? error.message : '移除招标文件失败', 'error'));
+                        }} />
+                      ))}
+                    </div>
                   ) : (
                     <div className="duplicate-empty-upload" />
                   )}
                 </div>
                 <button type="button" className="primary-action duplicate-upload-button" onClick={uploadTenderFile} disabled={busy !== null || isAnalysisRunning}>
-                  {busy === 'tender' ? '选择中...' : tenderFile ? '替换' : '上传'}
+                  {busy === 'tender' ? '选择中...' : tenderFiles.length ? '替换' : '上传'}
                 </button>
               </article>
 
@@ -970,7 +990,7 @@ function DuplicateCheckPage() {
                     <div className="duplicate-file-list">
                       {bidFiles.map((file) => (
                         <FilePill key={file.file_path} file={file} disabled={isAnalysisRunning} onRemove={() => {
-                          void persistSelectedFiles(tenderFile, bidFiles.filter((item) => item.file_path !== file.file_path))
+                          void persistSelectedFiles(tenderFiles, bidFiles.filter((item) => item.file_path !== file.file_path))
                             .catch((error) => showToast(error instanceof Error ? error.message : '移除投标文件失败', 'error'));
                         }} />
                       ))}

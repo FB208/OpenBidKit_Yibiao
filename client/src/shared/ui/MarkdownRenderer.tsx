@@ -232,7 +232,13 @@ function MarkdownRenderer({
       if (tag === 'ul') return <ul {...props}>{renderedChildren}</ul>;
       if (tag === 'ol') return <ol {...props}>{renderedChildren}</ol>;
       if (tag === 'li') return <li {...props}>{renderedChildren}</li>;
-      if (tag === 'table') return <table {...props}>{renderedChildren}</table>;
+      if (tag === 'table') {
+        return (
+          <div key={key} className="markdown-table-scroll">
+            <table className={className}>{renderedChildren}</table>
+          </div>
+        );
+      }
       if (tag === 'thead') return <thead {...props}>{renderedChildren}</thead>;
       if (tag === 'tbody') return <tbody {...props}>{renderedChildren}</tbody>;
       if (tag === 'tr') return <tr {...props}>{renderedChildren}</tr>;

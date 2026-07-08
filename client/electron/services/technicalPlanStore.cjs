@@ -9,6 +9,7 @@ const { detectBidSections } = require('../utils/bidSectionDetector.cjs');
 
 const tenderMarkdownRelativePath = path.join('technical-plan', 'tender.md').replace(/\\/g, '/');
 const tenderOriginalMarkdownRelativePath = path.join('technical-plan', 'tender-original.md').replace(/\\/g, '/');
+const tenderSourceFilesDirRelativePath = path.join('technical-plan', 'tender-files').replace(/\\/g, '/');
 const originalPlanMarkdownRelativePath = path.join('technical-plan', 'original-plan.md').replace(/\\/g, '/');
 const originalOutlineRuntimeFileName = 'original-outline-runtime.json';
 
@@ -16,6 +17,7 @@ const initialState = {
   workflowKind: 'technical-plan',
   step: 'document-analysis',
   tenderFile: null,
+  tenderFiles: [],
   originalPlanFile: null,
   projectOverview: '',
   techRequirements: '',
@@ -80,6 +82,22 @@ function jsonOrNull(value) {
 
 function stableHash(content) {
   return crypto.createHash('sha256').update(String(content || ''), 'utf8').digest('hex');
+}
+
+function safeFileNamePart(value) {
+  return String(value || 'file').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || 'file';
+}
+
+function createTenderSourceId(fileName, markdown, index) {
+  const hash = stableHash(`${fileName}\n${markdown}`).slice(0, 12);
+  return `tender-${String(index + 1).padStart(2, '0')}-${hash}`;
+}
+
+function combineTenderMarkdown(markdowns) {
+  return (Array.isArray(markdowns) ? markdowns : [])
+    .map((markdown) => String(markdown || '').trim())
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 function toDbBool(value) {
@@ -328,6 +346,7 @@ function mapOutlineItems(items, mapper) {
 function createTechnicalPlanStore({ app, db, fileService }) {
   const tenderMarkdownPath = getTechnicalPlanTenderMarkdownPath(app);
   const tenderOriginalMarkdownPath = path.join(path.dirname(tenderMarkdownPath), 'tender-original.md');
+  const tenderSourceFilesDir = path.join(path.dirname(tenderMarkdownPath), 'tender-files');
   const originalPlanMarkdownPath = getTechnicalPlanOriginalPlanMarkdownPath(app);
   const originalOutlineRuntimePath = path.join(path.dirname(originalPlanMarkdownPath), originalOutlineRuntimeFileName);
   function resolvePendingTenderMarkdownPath(filePath) {
@@ -472,6 +491,43 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     return fs.readFileSync(filePath, 'utf-8');
   }
 
+  function loadTenderSourceFiles(meta = ensureMetaRow()) {
+    const sourceFiles = safeJsonParse(meta.tender_files_json, []);
+    if (Array.isArray(sourceFiles) && sourceFiles.length) {
+      return sourceFiles.map((file) => ({
+        id: String(file.id || ''),
+        fileName: String(file.fileName || '招标文件'),
+        markdownPath: String(file.markdownPath || ''),
+        markdownChars: Number(file.markdownChars || 0),
+        contentHash: String(file.contentHash || ''),
+        parserLabel: file.parserLabel ? String(file.parserLabel) : undefined,
+        importedAt: file.importedAt ? String(file.importedAt) : undefined,
+        updatedAt: file.updatedAt ? String(file.updatedAt) : meta.updated_at,
+      })).filter((file) => file.id && file.markdownPath);
+    }
+    if (meta.tender_markdown_path) {
+      return [{
+        id: 'tender-legacy-01',
+        fileName: meta.tender_file_name || '技术方案招标文件',
+        markdownPath: meta.tender_markdown_path,
+        markdownChars: Number(meta.tender_markdown_chars || 0),
+        contentHash: meta.tender_markdown_hash || '',
+        parserLabel: meta.tender_parser_label || undefined,
+        importedAt: meta.tender_imported_at || undefined,
+        updatedAt: meta.updated_at,
+      }];
+    }
+    return [];
+  }
+
+  function readTenderSourceMarkdown(sourceId) {
+    const target = loadTenderSourceFiles().find((file) => file.id === String(sourceId || ''));
+    if (!target) return '';
+    const filePath = resolveMarkdownPath(target.markdownPath);
+    if (!fs.existsSync(filePath)) return '';
+    return fs.readFileSync(filePath, 'utf-8');
+  }
+
   function readOriginalTenderMarkdown() {
     const meta = ensureMetaRow();
     if (!meta.tender_markdown_path) {
@@ -511,6 +567,31 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       return '';
     }
     return fs.readFileSync(filePath, 'utf-8');
+  }
+
+  function writeTenderSourceMarkdown(source, index) {
+    const markdown = String(source?.file_content || '').trim();
+    const fileName = source?.file_name || '招标文件';
+    const id = createTenderSourceId(fileName, markdown, index);
+    const relativePath = path.join(tenderSourceFilesDirRelativePath, `${id}-${safeFileNamePart(fileName)}.md`).replace(/\\/g, '/');
+    const targetPath = resolveMarkdownPath(relativePath);
+    writeMarkdownFile(targetPath, markdown, id);
+    return {
+      id,
+      fileName,
+      markdownPath: relativePath,
+      markdownChars: markdown.length,
+      contentHash: stableHash(markdown),
+      parserLabel: source?.parser_label || undefined,
+      importedAt: now(),
+      updatedAt: now(),
+    };
+  }
+
+  function clearTenderSourceFiles() {
+    if (fs.existsSync(tenderSourceFilesDir)) {
+      fs.rmSync(tenderSourceFilesDir, { recursive: true, force: true });
+    }
   }
 
   function clearOriginalOutlineRuntime() {
@@ -1228,6 +1309,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     const tasks = loadTasks();
     const bidSections = normalizeBidSections(safeJsonParse(meta.bid_sections_json, []));
     const bidSectionExtractionTask = tasks.bidSectionExtractionTask;
+    const tenderFiles = loadTenderSourceFiles(meta);
     const tenderFile = meta.tender_markdown_path ? {
       fileName: meta.tender_file_name || '技术方案招标文件',
       markdownPath: meta.tender_markdown_path,
@@ -1257,6 +1339,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       workflowKind: normalizeWorkflowKind(meta.workflow_kind),
       step: isValidStep(meta.step) ? meta.step : 'document-analysis',
       tenderFile,
+      tenderFiles,
       originalPlanFile,
       projectOverview: bidAnalysisTasks.projectOverview?.status === 'success' ? bidAnalysisTasks.projectOverview.content : '',
       techRequirements: bidAnalysisTasks.techRequirements?.status === 'success' ? bidAnalysisTasks.techRequirements.content : '',
@@ -1468,7 +1551,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       throw new Error('文件导入服务尚未初始化');
     }
 
-    const result = await fileService.importDocument();
+    const result = await fileService.importDocument({ multiple: true });
     if (!result?.success || !result.file_content) {
       return {
         success: false,
@@ -1478,9 +1561,10 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       };
     }
 
-    const markdown = String(result.file_content || '').trim();
-    const fileName = result.file_name || '未命名文件';
-    const parserLabel = result.parser_label || null;
+    const importedDocuments = Array.isArray(result.documents) && result.documents.length ? result.documents : [result];
+    const markdown = combineTenderMarkdown(importedDocuments.map((item) => item.file_content));
+    const fileName = importedDocuments.length > 1 ? `${importedDocuments.length} 份招标文件` : result.file_name || '未命名文件';
+    const parserLabel = importedDocuments.length > 1 ? null : result.parser_label || null;
     cleanupPendingTenderSelection();
 
     return saveTenderMarkdownAndState(markdown, {
@@ -1489,6 +1573,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       message: result.message || '招标文件已导入',
       fallbackToLocal: result.fallbackToLocal === true,
       resetOriginal: true,
+      sourceFiles: importedDocuments,
     });
   }
 
@@ -1546,8 +1631,14 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     }
   }
 
-  function saveTenderMarkdownAndState(markdown, { fileName, parserLabel, message, selectedSection, fallbackToLocal, resetOriginal }) {
+  function saveTenderMarkdownAndState(markdown, { fileName, parserLabel, message, selectedSection, fallbackToLocal, resetOriginal, sourceFiles }) {
     const nextMarkdown = String(markdown || '').trim();
+    if (Array.isArray(sourceFiles)) {
+      clearTenderSourceFiles();
+    }
+    const tenderSourceFiles = Array.isArray(sourceFiles)
+      ? sourceFiles.map(writeTenderSourceMarkdown)
+      : undefined;
     writeMarkdownFile(tenderMarkdownPath, nextMarkdown, 'tender');
     if (resetOriginal) {
       writeMarkdownFile(tenderOriginalMarkdownPath, nextMarkdown, 'tender-original');
@@ -1566,6 +1657,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
         tender_original_markdown_chars: resetOriginal ? nextMarkdown.length : undefined,
         tender_parser_label: parserLabel || null,
         tender_imported_at: timestamp,
+        tender_files_json: tenderSourceFiles ? JSON.stringify(tenderSourceFiles) : undefined,
         selected_section_id: selectedSection?.id || null,
         selected_section_title: selectedSection?.title || null,
       });
@@ -1635,6 +1727,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     if (fs.existsSync(tenderOriginalMarkdownPath)) {
       fs.rmSync(tenderOriginalMarkdownPath, { force: true });
     }
+    clearTenderSourceFiles();
     if (fs.existsSync(originalPlanMarkdownPath)) {
       fs.rmSync(originalPlanMarkdownPath, { force: true });
     }
@@ -1655,6 +1748,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     prepareBidSectionExtraction,
     selectBidSection,
     readTenderMarkdown,
+    readTenderSourceMarkdown,
     readOriginalTenderMarkdown,
     readOriginalPlanMarkdown,
     readOriginalOutlineRuntime,

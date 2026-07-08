@@ -198,6 +198,17 @@ export interface TechnicalPlanTenderFile {
   updatedAt: string;
 }
 
+export interface TechnicalPlanTenderSourceFile {
+  id: string;
+  fileName: string;
+  markdownPath: string;
+  markdownChars: number;
+  contentHash: string;
+  parserLabel?: string;
+  importedAt?: string;
+  updatedAt: string;
+}
+
 export interface TechnicalPlanOriginalPlanFile {
   fileName: string;
   markdownPath: string;
@@ -229,6 +240,7 @@ export interface TechnicalPlanState {
   workflowKind: TechnicalPlanWorkflowKind;
   step: TechnicalPlanStep;
   tenderFile: TechnicalPlanTenderFile | null;
+  tenderFiles: TechnicalPlanTenderSourceFile[];
   originalPlanFile: TechnicalPlanOriginalPlanFile | null;
   projectOverview: string;
   techRequirements: string;
