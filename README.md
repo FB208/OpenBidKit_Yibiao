@@ -200,14 +200,6 @@ npm run build
 3. **🔧 代码贡献**: Fork项目，提交Pull Request
 4. **📖 文档完善**: 帮助改进文档和使用说明
 
-## 📢 声明
-近期收到大量issue攻击，对本仓库进行无理由诋毁和攻击，特此声明：
-
-1. 我不会停止开源，永不！
-2. 即使以后商业化，也会效仿Excalidraw、NocoDB这样优秀的开源项目，仅针对项目管理、云端存储、团队协作、企业服务等B端业务进行收费。我用人格担保，个人使用基础功能永久开源免费，且生成质量向付费软件看齐。  
-
-<img src="./screenshots/issue_claim.png" alt="易标使用演示视频" width="100%">
-
 ## 🍉 鸣谢
 - 感谢所有用户的支持与信任
 - 特别鸣谢 <a href="https://linux.do/" rel="nofollow">linuxdo</a> 佬友们的支持与鼓励
@@ -255,6 +247,8 @@ npm run build
 <p align="center">﹏陌路°天涯</p>
     </td>
     <td width="20%" valign="top">
+![](https://oss.agnet.top/keep/2026/07/08/20260708171203734.png)
+<p align="center">刘梦</p>
     </td>
     <td width="20%" valign="top">
     </td>

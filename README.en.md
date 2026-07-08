@@ -197,15 +197,6 @@ Contributions are welcome.
 3. **🔧 Code Contributions**: Fork the repository and submit a pull request.
 4. **📖 Documentation**: Help improve documentation and usage guides.
 
-## 📢 Statement
-
-Recently, we have received many issue-based attacks that baselessly smear and attack this repository. I hereby state:
-
-1. I will not stop open-sourcing this project. Never!
-2. Even if it becomes commercialized in the future, I will follow excellent open-source projects such as Excalidraw and NocoDB, and only charge for B2B services such as project management, cloud storage, team collaboration, and enterprise services. I give my personal word that the basic features for personal use will remain open source and free forever, and the generation quality will strive to match paid software.
-
-<img src="./screenshots/issue_claim.png" alt="Yibiao issue statement" width="100%">
-
 ## 🍉 Acknowledgements
 
 - Thanks to all users for your support and trust.
@@ -255,6 +246,8 @@ People who provide requirement analysis, technical support, test files, useful f
 <p align="center">﹏陌路°天涯</p>
     </td>
     <td width="20%" valign="top">
+![](https://oss.agnet.top/keep/2026/07/08/20260708171203734.png)
+<p align="center">刘梦</p>
     </td>
     <td width="20%" valign="top">
     </td>
