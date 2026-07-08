@@ -237,6 +237,11 @@ button:disabled {
   letter-spacing: -0.04em;
 }
 
+.agent-runtime-layout {
+  display: grid;
+  gap: 16px;
+}
+
 .agent-runtime-card {
   display: grid;
   gap: 16px;
@@ -280,6 +285,16 @@ button:disabled {
 }
 
 .agent-runtime-metrics b {
+  font-size: 18px;
+}
+
+.agent-runtime-models {
+  padding: 16px;
+  overflow-x: auto;
+}
+
+.agent-runtime-models h3 {
+  margin: 0 0 12px;
   font-size: 18px;
 }
 

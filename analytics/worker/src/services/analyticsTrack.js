@@ -13,19 +13,35 @@ function normalizeAgentRetryCount(value) {
     : 0;
 }
 
-function createAgentRuntimeMetricKey(status, retryCount) {
-  return AGENT_RUNTIME_STATUSES.has(status) ? `${status}:r${normalizeAgentRetryCount(retryCount)}` : '';
+function encodeAgentRuntimeMetricPart(value, maxLength) {
+  return encodeURIComponent(normalizeText(value, maxLength));
+}
+
+function createAgentRuntimeMetricKey(status, retryCount, provider, endpointHost, model) {
+  if (!AGENT_RUNTIME_STATUSES.has(status)) return '';
+  return [
+    'v2',
+    status,
+    `r${normalizeAgentRetryCount(retryCount)}`,
+    encodeAgentRuntimeMetricPart(provider, 80),
+    encodeAgentRuntimeMetricPart(endpointHost, 120),
+    encodeAgentRuntimeMetricPart(model, 160),
+  ].join('|');
 }
 
 function normalizeBaseUrlHost(value) {
   const text = normalizeText(value, 200);
   if (!text) return '';
 
-  try {
-    return normalizeText(new URL(text).hostname.toLowerCase(), 120);
-  } catch {
-    return normalizeText(text.replace(/^https?:\/\//i, '').split('/')[0].toLowerCase(), 120);
+  const candidates = text.includes('://') ? [text] : [`https://${text}`];
+  for (const candidate of candidates) {
+    try {
+      return normalizeText(new URL(candidate).hostname.toLowerCase(), 120);
+    } catch {
+      // 尝试下一个候选格式。
+    }
   }
+  return normalizeText(text.replace(/^https?:\/\//i, '').split('/')[0].toLowerCase(), 120);
 }
 
 function isIpv4(value) {
@@ -128,7 +144,13 @@ export function normalizeTrackBody(body, request) {
     resourceKey: normalizeText(body.resource_key || body.resourceKey, 80),
     agentRuntimeStatus,
     agentRuntimeRetryCount,
-    agentRuntimeMetricKey: createAgentRuntimeMetricKey(agentRuntimeStatus, agentRuntimeRetryCount),
+    agentRuntimeMetricKey: createAgentRuntimeMetricKey(
+      agentRuntimeStatus,
+      agentRuntimeRetryCount,
+      normalizeText(body.ai_model_provider || body.aiModelProvider, 80),
+      normalizeBaseUrlHost(body.ai_model_base_url || body.aiModelBaseUrl),
+      aiModelName,
+    ),
     licenseStatus: normalizeText(body.license_status || body.licenseStatus, 30),
     licensePlan: normalizeText(body.license_plan || body.licensePlan, 40),
     licenseExpiresAt: normalizeText(body.license_expires_at || body.licenseExpiresAt, 20).slice(0, 10),

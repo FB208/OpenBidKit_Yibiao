@@ -103,6 +103,20 @@ function createRetryAttemptSummary({ attempt, error, outputContent }) {
   };
 }
 
+function normalizeAnalyticsEndpointHost(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const candidates = text.includes('://') ? [text] : [`https://${text}`];
+  for (const candidate of candidates) {
+    try {
+      return new URL(candidate).hostname.toLowerCase();
+    } catch {
+      // 尝试下一个候选格式。
+    }
+  }
+  return text.replace(/^https?:\/\//i, '').split('/')[0].toLowerCase();
+}
+
 function trackAgentRuntime(app, configStore, status, meta = {}) {
   const runtimeStatus = status === 'success' ? 'success' : 'failed';
   const retryCount = Math.max(0, Math.min(MAX_AGENT_MAX_RETRIES, Math.floor(Number(meta.retryCount || meta.retry_count || 0) || 0)));
@@ -122,6 +136,9 @@ function trackAgentRuntime(app, configStore, status, meta = {}) {
           client_created_at: config.analytics_created_at || '',
           agent_runtime_status: runtimeStatus,
           agent_runtime_retry_count: retryCount,
+          ai_model_provider: config.text_model_provider || '',
+          ai_model_base_url: normalizeAnalyticsEndpointHost(config.base_url || ''),
+          ai_model_name: config.model_name || '',
         }),
       });
     })

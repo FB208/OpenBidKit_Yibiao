@@ -117,13 +117,30 @@ function configUsageKeysSql() {
   return `(${CONFIG_USAGE_FIELDS.map((field) => sqlString(field.key)).join(', ')})`;
 }
 
+function decodeAgentRuntimeMetricPart(value, maxLength) {
+  const text = String(value || '');
+  try {
+    return normalizeText(decodeURIComponent(text), maxLength);
+  } catch {
+    return normalizeText(text, maxLength);
+  }
+}
+
 function parseAgentRuntimeMetricKey(value) {
-  const match = /^([a-z]+):r(\d+)$/.exec(normalizeText(value, 30));
-  if (!match) return null;
-  const status = match[1];
-  const retryCount = Math.min(AGENT_RUNTIME_MAX_RETRY_COUNT, Math.max(0, Math.floor(Number(match[2]) || 0)));
+  const parts = normalizeText(value, 1000).split('|');
+  if (parts.length < 6 || parts[0] !== 'v2') return null;
+  const status = parts[1];
+  const retryMatch = /^r(\d+)$/.exec(parts[2]);
+  if (!retryMatch) return null;
+  const retryCount = Math.min(AGENT_RUNTIME_MAX_RETRY_COUNT, Math.max(0, Math.floor(Number(retryMatch[1]) || 0)));
   if (!AGENT_RUNTIME_STATUSES.has(status)) return null;
-  return { status, retryCount };
+  return {
+    status,
+    retryCount,
+    provider: decodeAgentRuntimeMetricPart(parts[3], 80),
+    endpointHost: decodeAgentRuntimeMetricPart(parts[4], 120),
+    model: decodeAgentRuntimeMetricPart(parts.slice(5).join('|'), 160),
+  };
 }
 
 function businessDateCondition(activityDate) {
@@ -687,7 +704,68 @@ function createAgentRuntimeSummary(source = {}) {
   };
 }
 
-function createAgentRuntimeSummaryFromMetricRows(rows = []) {
+function createEmptyAgentRuntimeCounters() {
+  return {
+    successCount: 0,
+    failedCount: 0,
+    totalCount: 0,
+    retryCount: 0,
+    retriedRunCount: 0,
+    retrySuccessCount: 0,
+  };
+}
+
+function addAgentRuntimeMetric(counters, parsed, count) {
+  if (parsed.status === 'success') counters.successCount += count;
+  if (parsed.status === 'failed') counters.failedCount += count;
+  counters.totalCount += count;
+  counters.retryCount += count * parsed.retryCount;
+  if (parsed.retryCount > 0) {
+    counters.retriedRunCount += count;
+    if (parsed.status === 'success') counters.retrySuccessCount += count;
+  }
+}
+
+function sortAgentRuntimeModelRows(rows) {
+  return [...rows].sort((left, right) => {
+    const totalDiff = number(right.totalCount) - number(left.totalCount);
+    if (totalDiff) return totalDiff;
+    const providerDiff = String(left.provider || '').localeCompare(String(right.provider || ''), 'zh-CN', { numeric: true });
+    if (providerDiff) return providerDiff;
+    const hostDiff = String(left.endpointHost || '').localeCompare(String(right.endpointHost || ''), 'zh-CN', { numeric: true });
+    if (hostDiff) return hostDiff;
+    return String(left.model || '').localeCompare(String(right.model || ''), 'zh-CN', { numeric: true });
+  });
+}
+
+function createAgentRuntimeRowsFromMetricRows(rows = []) {
+  const grouped = new Map();
+  for (const row of rows || []) {
+    const parsed = parseAgentRuntimeMetricKey(row.metricKey ?? row.metric_key ?? row.status ?? row.blob9);
+    if (!parsed) continue;
+    const count = number(row.count ?? row.runCount ?? row.run_count);
+    if (count <= 0) continue;
+    const key = [parsed.provider, parsed.endpointHost, parsed.model].join('\0');
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        provider: parsed.provider,
+        endpointHost: parsed.endpointHost,
+        model: parsed.model,
+        ...createEmptyAgentRuntimeCounters(),
+      });
+    }
+    addAgentRuntimeMetric(grouped.get(key), parsed, count);
+  }
+
+  return sortAgentRuntimeModelRows(Array.from(grouped.values()).map((row) => ({
+    provider: row.provider,
+    endpointHost: row.endpointHost,
+    model: row.model,
+    ...createAgentRuntimeSummary(row),
+  })));
+}
+
+function createAgentRuntimeSummaryFromRows(rows = []) {
   const summary = {
     successCount: 0,
     failedCount: 0,
@@ -697,39 +775,62 @@ function createAgentRuntimeSummaryFromMetricRows(rows = []) {
     retrySuccessCount: 0,
   };
   for (const row of rows || []) {
-    const parsed = parseAgentRuntimeMetricKey(row.metricKey ?? row.metric_key ?? row.status ?? row.blob9);
-    if (!parsed) continue;
-    const count = number(row.count ?? row.runCount ?? row.run_count);
-    if (count <= 0) continue;
-    if (parsed.status === 'success') summary.successCount += count;
-    if (parsed.status === 'failed') summary.failedCount += count;
-    summary.totalCount += count;
-    summary.retryCount += count * parsed.retryCount;
-    if (parsed.retryCount > 0) {
-      summary.retriedRunCount += count;
-      if (parsed.status === 'success') summary.retrySuccessCount += count;
-    }
+    summary.successCount += number(row.successCount ?? row.success_count);
+    summary.failedCount += number(row.failedCount ?? row.failed_count);
+    summary.totalCount += number(row.totalCount ?? row.total_count);
+    summary.retryCount += number(row.retryCount ?? row.retry_count);
+    summary.retriedRunCount += number(row.retriedRunCount ?? row.retried_run_count);
+    summary.retrySuccessCount += number(row.retrySuccessCount ?? row.retry_success_count);
   }
   return createAgentRuntimeSummary(summary);
+}
+
+function createAgentRuntimeSummaryFromMetricRows(rows = []) {
+  return createAgentRuntimeSummaryFromRows(createAgentRuntimeRowsFromMetricRows(rows));
+}
+
+function normalizeAgentRuntimeModelRow(row = {}) {
+  return {
+    provider: normalizeText(row.provider, 80),
+    endpointHost: normalizeText(row.endpointHost ?? row.endpoint_host, 120),
+    model: normalizeText(row.model, 160),
+    ...createAgentRuntimeSummary(row),
+  };
+}
+
+function createAgentRuntimeResponse(rows = []) {
+  const models = sortAgentRuntimeModelRows(rows.map(normalizeAgentRuntimeModelRow));
+  return {
+    ...createAgentRuntimeSummaryFromRows(models),
+    models,
+  };
 }
 
 async function ensureAgentRuntimeStatsTable(db) {
   const rows = await all(db, 'PRAGMA table_info(stats_agent_runtime)');
   const columns = new Set(rows.map((row) => row.name));
-  if (rows.length && !columns.has('success_count')) {
+  if (rows.length && (!columns.has('provider') || !columns.has('endpoint_host') || !columns.has('model') || !columns.has('success_count'))) {
     await run(db, 'DROP TABLE stats_agent_runtime');
   }
   await run(db, `
     CREATE TABLE IF NOT EXISTS stats_agent_runtime (
-      project_name TEXT PRIMARY KEY,
+      project_name TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      endpoint_host TEXT NOT NULL,
+      model TEXT NOT NULL,
       success_count INTEGER NOT NULL DEFAULT 0,
       failed_count INTEGER NOT NULL DEFAULT 0,
       total_count INTEGER NOT NULL DEFAULT 0,
       retry_count INTEGER NOT NULL DEFAULT 0,
       retried_run_count INTEGER NOT NULL DEFAULT 0,
       retry_success_count INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (project_name, provider, endpoint_host, model)
     )
+  `);
+  await run(db, `
+    CREATE INDEX IF NOT EXISTS idx_stats_agent_runtime_project_total
+    ON stats_agent_runtime (project_name, total_count DESC)
   `);
 }
 
@@ -737,8 +838,11 @@ export async function queryStatsAgentRuntime(env, projectName, range) {
   if (range === 'history') {
     const db = requireStatsDb(env);
     await ensureAgentRuntimeStatsTable(db);
-    const row = await first(db, `
+    const rows = await all(db, `
       SELECT
+        provider,
+        endpoint_host AS endpointHost,
+        model,
         success_count AS successCount,
         failed_count AS failedCount,
         total_count AS totalCount,
@@ -747,25 +851,27 @@ export async function queryStatsAgentRuntime(env, projectName, range) {
         retry_success_count AS retrySuccessCount
       FROM stats_agent_runtime
       WHERE project_name = ?
+      ORDER BY total_count DESC, provider ASC, endpoint_host ASC, model ASC
+      LIMIT 500
     `, [projectName]);
-    return createAgentRuntimeSummary(row || {});
+    return createAgentRuntimeResponse(rows);
   }
 
   const project = sqlString(projectName);
   const result = await queryAnalytics(env, `
     SELECT
-      blob9 AS status,
+      blob9 AS metricKey,
       SUM(_sample_interval) AS count
     FROM ${DATASET}
     WHERE blob1 = ${project}
       AND blob2 = 'agent_runtime'
       AND blob9 != ''
       AND ${aeRangeCondition(range)}
-    GROUP BY status
-    ORDER BY status ASC
-    LIMIT 100
+    GROUP BY metricKey
+    ORDER BY count DESC, metricKey ASC
+    LIMIT ${MAX_ANALYTICS_ROWS}
   `);
-  return createAgentRuntimeSummaryFromMetricRows((result.data || []).map((row) => ({ metricKey: row.status, count: row.count })));
+  return createAgentRuntimeResponse(createAgentRuntimeRowsFromMetricRows(result.data || []));
 }
 
 export async function queryStatsProjects(env) {
@@ -1757,10 +1863,9 @@ async function queryRollupAgentRuntimeRows(env, activityDate, projectNames) {
     if (!grouped.has(projectName)) grouped.set(projectName, []);
     grouped.get(projectName).push({ metricKey: row.metricKey, count: row.runCount });
   }
-  return Array.from(grouped.entries()).map(([projectName, rows]) => ({
-    projectName,
-    ...createAgentRuntimeSummaryFromMetricRows(rows),
-  })).filter((row) => row.projectName && row.totalCount > 0);
+  return Array.from(grouped.entries()).flatMap(([projectName, rows]) => (
+    createAgentRuntimeRowsFromMetricRows(rows).map((summary) => ({ projectName, ...summary }))
+  )).filter((row) => row.projectName && row.totalCount > 0);
 }
 
 function prepareAgentRuntimeStatements(db, rows, updatedAt) {
@@ -1769,6 +1874,9 @@ function prepareAgentRuntimeStatements(db, rows, updatedAt) {
     WITH rows AS (
       SELECT
         json_extract(item.value, '$.projectName') AS project_name,
+        json_extract(item.value, '$.provider') AS provider,
+        json_extract(item.value, '$.endpointHost') AS endpoint_host,
+        json_extract(item.value, '$.model') AS model,
         CAST(json_extract(item.value, '$.successCount') AS INTEGER) AS success_count,
         CAST(json_extract(item.value, '$.failedCount') AS INTEGER) AS failed_count,
         CAST(json_extract(item.value, '$.totalCount') AS INTEGER) AS total_count,
@@ -1778,15 +1886,17 @@ function prepareAgentRuntimeStatements(db, rows, updatedAt) {
       FROM json_each(?) AS item
     )
     INSERT INTO stats_agent_runtime (
-      project_name, success_count, failed_count, total_count,
+      project_name, provider, endpoint_host, model,
+      success_count, failed_count, total_count,
       retry_count, retried_run_count, retry_success_count, updated_at
     )
     SELECT
-      project_name, success_count, failed_count, total_count,
+      project_name, provider, endpoint_host, model,
+      success_count, failed_count, total_count,
       retry_count, retried_run_count, retry_success_count, ?
     FROM rows
     WHERE project_name != ''
-    ON CONFLICT(project_name) DO UPDATE SET
+    ON CONFLICT(project_name, provider, endpoint_host, model) DO UPDATE SET
       success_count = stats_agent_runtime.success_count + excluded.success_count,
       failed_count = stats_agent_runtime.failed_count + excluded.failed_count,
       total_count = stats_agent_runtime.total_count + excluded.total_count,
