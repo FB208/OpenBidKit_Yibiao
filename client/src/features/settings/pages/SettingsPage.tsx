@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
@@ -1398,14 +1398,14 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <strong>GPU 硬件加速</strong>
                 <span>启用后界面可能更流畅；极少数电脑启用后会闪退，关闭后兼容性更好。修改后需重启生效。</span>
               </div>
-              <span className="settings-switch-control">
+              <span className="yb-switch-control">
                 <input
                   type="checkbox"
                   checked={state.general.gpu_hardware_acceleration_enabled}
                   onChange={(event) => updateGpuHardwareAcceleration(event.target.checked)}
                 />
-                <span className="settings-switch-track" aria-hidden="true">
-                  <span className="settings-switch-thumb" />
+                <span className="yb-switch-track" aria-hidden="true">
+                  <span className="yb-switch-thumb" />
                 </span>
               </span>
             </label>
@@ -1414,14 +1414,14 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <strong>开发者模式</strong>
                 <span>会打乱既有工作流，生成大量日志占用磁盘空间，<strong>非专业人士请勿开启</strong></span>
               </div>
-              <span className="settings-switch-control">
+              <span className="yb-switch-control">
                 <input
                   type="checkbox"
                   checked={state.general.developer_mode}
                   onChange={(event) => updateDeveloperMode(event.target.checked)}
                 />
-                <span className="settings-switch-track" aria-hidden="true">
-                  <span className="settings-switch-thumb" />
+                <span className="yb-switch-track" aria-hidden="true">
+                  <span className="yb-switch-thumb" />
                 </span>
               </span>
             </label>
@@ -1432,14 +1432,14 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                     <strong>默认打开 Token 统计小窗</strong>
                     <span>开启后，应用下次启动时自动打开开发者 Token 统计悬浮窗</span>
                   </div>
-                  <span className="settings-switch-control">
+                  <span className="yb-switch-control">
                     <input
                       type="checkbox"
                       checked={state.general.developer_token_stats_auto_open}
                       onChange={(event) => updateDeveloperTokenStatsAutoOpen(event.target.checked)}
                     />
-                    <span className="settings-switch-track" aria-hidden="true">
-                      <span className="settings-switch-thumb" />
+                    <span className="yb-switch-track" aria-hidden="true">
+                      <span className="yb-switch-thumb" />
                     </span>
                   </span>
                 </label>
@@ -1862,14 +1862,14 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <strong>已有方案扩写-旧目录提取</strong>
                 <span>开启后，已有方案扩写会把原方案交给智能体完成旧目录提取和补漏；关闭后使用原有分段提取流程。</span>
               </div>
-              <span className="settings-switch-control">
+              <span className="yb-switch-control">
                 <input
                   type="checkbox"
                   checked={state.agentModeScenarios.existing_plan_expansion_original_outline_extraction}
                   onChange={(event) => updateAgentModeScenario('existing_plan_expansion_original_outline_extraction', event.target.checked)}
                 />
-                <span className="settings-switch-track" aria-hidden="true">
-                  <span className="settings-switch-thumb" />
+                <span className="yb-switch-track" aria-hidden="true">
+                  <span className="yb-switch-thumb" />
                 </span>
               </span>
             </label>

@@ -1,0 +1,563 @@
+/* [2082-2430] markdown-viewer base + export-format-preview variant + comments (MarkdownRenderer.tsx) */
+.markdown-viewer {
+  max-height: none;
+  min-height: 460px;
+  overflow: auto;
+  padding: 28px 32px 36px;
+  color: #243048;
+  line-height: 1.78;
+  background: linear-gradient(180deg, rgba(248, 250, 253, 0.68), #ffffff 22%);
+}
+
+.markdown-viewer > *:first-child {
+  margin-top: 0;
+}
+
+.markdown-viewer > *:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-viewer h1,
+.markdown-viewer h2,
+.markdown-viewer h3,
+.markdown-viewer h4 {
+  margin: 1.4em 0 0.68em;
+  color: var(--yb-text);
+  line-height: 1.35;
+}
+
+.markdown-viewer h1 {
+  font-size: 26px;
+}
+
+.markdown-viewer h2 {
+  padding-bottom: 10px;
+  font-size: 22px;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.markdown-viewer h3 {
+  font-size: 18px;
+}
+
+.markdown-viewer p,
+.markdown-viewer ul,
+.markdown-viewer ol,
+.markdown-viewer blockquote,
+.markdown-viewer .markdown-table-scroll,
+.markdown-viewer pre {
+  margin: 0 0 16px;
+}
+
+.markdown-viewer ul,
+.markdown-viewer ol {
+  padding-left: 1.6em;
+}
+
+.markdown-viewer ul.contains-task-list {
+  padding-left: 0;
+}
+
+.markdown-viewer ul.contains-task-list ul.contains-task-list {
+  padding-left: 1.6em;
+}
+
+.markdown-viewer ul.contains-task-list > li:not(.task-list-item) {
+  margin-left: 1.6em;
+}
+
+.markdown-viewer li + li {
+  margin-top: 6px;
+}
+
+.markdown-viewer li.task-list-item {
+  list-style: none;
+  margin-left: 0;
+}
+
+.markdown-viewer .task-list-item-checkbox {
+  width: 1em;
+  height: 1em;
+  margin: 0 0.5em 0 0;
+  vertical-align: -0.12em;
+}
+
+.markdown-viewer blockquote {
+  padding: 12px 16px;
+  color: var(--yb-text-soft);
+  background: rgba(33, 116, 253, 0.06);
+  border-left: 4px solid var(--yb-primary);
+  border-radius: 0 14px 14px 0;
+}
+
+.markdown-viewer .markdown-table-scroll {
+  width: 100%;
+  max-height: min(72vh, 680px);
+  overflow: auto;
+  background: #ffffff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 14px;
+  scrollbar-gutter: stable;
+}
+
+.markdown-viewer table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+.markdown-viewer th,
+.markdown-viewer td {
+  min-width: 128px;
+  max-width: 420px;
+  padding: 9px 11px;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  background: #ffffff;
+  border-right: 1px solid var(--yb-border-soft);
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.markdown-viewer th:last-child,
+.markdown-viewer td:last-child {
+  border-right: 0;
+}
+
+.markdown-viewer tr:last-child td {
+  border-bottom: 0;
+}
+
+.markdown-viewer th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  color: var(--yb-text);
+  background: #f1f6ff;
+}
+
+.markdown-viewer th:first-child,
+.markdown-viewer td:first-child {
+  position: sticky;
+  left: 0;
+  box-shadow: 1px 0 0 var(--yb-border-soft);
+}
+
+.markdown-viewer th:first-child {
+  z-index: 3;
+  background: #eaf2ff;
+}
+
+.markdown-viewer td:first-child {
+  z-index: 1;
+  background: #fbfdff;
+}
+
+.markdown-viewer code {
+  padding: 2px 6px;
+  color: #155bd7;
+  background: rgba(33, 116, 253, 0.08);
+  border-radius: 8px;
+}
+
+.markdown-viewer pre {
+  overflow: auto;
+  padding: 16px;
+  background: #101828;
+  border-radius: 16px;
+}
+
+.markdown-viewer pre code {
+  padding: 0;
+  color: #e5e7eb;
+  background: transparent;
+}
+
+.markdown-viewer img {
+  max-width: 100%;
+  border-radius: 14px;
+}
+
+.markdown-viewer p:has(> img:only-child),
+.markdown-viewer p:has(> em:only-child) {
+  text-align: center;
+}
+
+/* ── 导出格式预览 — 正文样式 ──────────────────────── */
+.markdown-viewer.export-format-preview {
+  width: min(100%, var(--ef-page-width, 100%));
+  height: 100%;
+  margin: 0 auto;
+  padding: var(--ef-page-padding-top, 2cm) var(--ef-page-padding-right, 2cm) var(--ef-page-padding-bottom, 2cm) var(--ef-page-padding-left, 2cm);
+  font-family: var(--ef-body-font, inherit);
+  font-size: var(--ef-body-size, inherit);
+  text-align: var(--ef-body-align, inherit);
+  line-height: var(--ef-body-line-height, inherit);
+  color: inherit;
+  background: #ffffff;
+  box-shadow: var(--yb-shadow), 0 0 1px rgba(0, 0, 0, 0.06);
+}
+.markdown-viewer.export-format-preview p {
+  margin-top: var(--ef-body-spacing-before, 0);
+  margin-bottom: var(--ef-body-spacing-after, 0);
+  text-indent: var(--ef-body-indent, 0);
+}
+.markdown-viewer.export-format-preview p:has(> img:only-child),
+.markdown-viewer.export-format-preview p:has(> em:only-child),
+.markdown-viewer.export-format-preview .markdown-figure-caption {
+  text-align: var(--ef-image-caption-align, center);
+  text-indent: 0;
+}
+
+.markdown-viewer.export-format-preview p:has(> img:only-child) {
+  text-align: var(--ef-image-align, center);
+}
+
+.markdown-viewer.export-format-preview p:has(> img:only-child) img {
+  max-width: var(--ef-image-max-width, 90%);
+}
+
+.markdown-viewer.export-format-preview .markdown-figure-caption {
+  font-family: var(--ef-image-caption-font, inherit);
+  font-size: var(--ef-image-caption-size, inherit);
+  font-weight: var(--ef-image-caption-weight, 400);
+  font-style: var(--ef-image-caption-style, normal);
+}
+
+.markdown-viewer.export-format-preview .markdown-figure-caption em,
+.markdown-viewer.export-format-preview .markdown-figure-caption strong {
+  font-weight: inherit;
+  font-style: inherit;
+}
+.markdown-viewer.export-format-preview ul,
+.markdown-viewer.export-format-preview ol {
+  margin-top: var(--ef-body-spacing-before, 0);
+  margin-bottom: var(--ef-body-spacing-after, 0);
+  font-family: var(--ef-body-font, inherit);
+  font-size: var(--ef-body-size, inherit);
+  line-height: var(--ef-body-line-height, inherit);
+}
+.markdown-viewer.export-format-preview ul {
+  padding-left: var(--ef-unordered-list-indent, var(--ef-list-indent, 2em));
+  list-style: none;
+}
+.markdown-viewer.export-format-preview ul.contains-task-list {
+  padding-left: 0;
+}
+.markdown-viewer.export-format-preview ul.contains-task-list ul.contains-task-list {
+  padding-left: var(--ef-unordered-list-indent, var(--ef-list-indent, 2em));
+}
+.markdown-viewer.export-format-preview ul.contains-task-list > li:not(.task-list-item) {
+  margin-left: var(--ef-unordered-list-indent, var(--ef-list-indent, 2em));
+}
+.markdown-viewer.export-format-preview ol {
+  padding-left: var(--ef-list-indent, 2em);
+  counter-reset: ef-ordered-list;
+  list-style: none;
+}
+.markdown-viewer.export-format-preview li {
+  text-align: var(--ef-body-align, inherit);
+}
+.markdown-viewer.export-format-preview ul > li {
+  position: relative;
+}
+.markdown-viewer.export-format-preview ul > li::before {
+  position: absolute;
+  left: calc(var(--ef-unordered-list-indent, var(--ef-list-indent, 2em)) * -1);
+  display: var(--ef-unordered-list-marker-display, inline-block);
+  width: calc(var(--ef-unordered-list-indent, var(--ef-list-indent, 2em)) - 0.25em);
+  font-family: var(--ef-unordered-list-marker-font, Symbol, Arial, sans-serif);
+  font-size: var(--ef-unordered-list-marker-size, 0.9em);
+  text-align: right;
+  text-indent: 0;
+  content: var(--ef-unordered-list-marker, "•");
+}
+.markdown-viewer.export-format-preview li.task-list-item::before {
+  display: none;
+  content: none;
+}
+.markdown-viewer.export-format-preview ol > li {
+  position: relative;
+  counter-increment: ef-ordered-list;
+}
+.markdown-viewer.export-format-preview ol > li::before {
+  position: absolute;
+  left: calc(var(--ef-list-indent, 2em) * -1);
+  width: calc(var(--ef-list-indent, 2em) - 0.25em);
+  text-align: right;
+  text-indent: 0;
+  content: var(--ef-ordered-list-prefix, "") counter(ef-ordered-list, var(--ef-ordered-list-counter-style, decimal)) var(--ef-ordered-list-suffix, ". ");
+}
+
+/* ── 导出格式预览 — 标题样式 ──────────────────────── */
+.markdown-viewer.export-format-preview h1 {
+  font-family: var(--ef-h1-font, inherit);
+  font-size: var(--ef-h1-size, inherit);
+  text-align: var(--ef-h1-align, inherit);
+  line-height: var(--ef-h1-line-height, inherit);
+  margin-top: var(--ef-h1-spacing-before, 0);
+  margin-bottom: var(--ef-h1-spacing-after, 0);
+  text-indent: var(--ef-h1-indent, 0);
+}
+.markdown-viewer.export-format-preview h2 {
+  font-family: var(--ef-h2-font, inherit);
+  font-size: var(--ef-h2-size, inherit);
+  text-align: var(--ef-h2-align, inherit);
+  line-height: var(--ef-h2-line-height, inherit);
+  margin-top: var(--ef-h2-spacing-before, 0);
+  margin-bottom: var(--ef-h2-spacing-after, 0);
+  text-indent: var(--ef-h2-indent, 0);
+}
+.markdown-viewer.export-format-preview h3 {
+  font-family: var(--ef-h3-font, inherit);
+  font-size: var(--ef-h3-size, inherit);
+  text-align: var(--ef-h3-align, inherit);
+  line-height: var(--ef-h3-line-height, inherit);
+  margin-top: var(--ef-h3-spacing-before, 0);
+  margin-bottom: var(--ef-h3-spacing-after, 0);
+  text-indent: var(--ef-h3-indent, 0);
+}
+.markdown-viewer.export-format-preview h4 {
+  font-family: var(--ef-h4-font, inherit);
+  font-size: var(--ef-h4-size, inherit);
+  text-align: var(--ef-h4-align, inherit);
+  line-height: var(--ef-h4-line-height, inherit);
+  margin-top: var(--ef-h4-spacing-before, 0);
+  margin-bottom: var(--ef-h4-spacing-after, 0);
+  text-indent: var(--ef-h4-indent, 0);
+}
+.markdown-viewer.export-format-preview h5 {
+  font-family: var(--ef-h5-font, inherit);
+  font-size: var(--ef-h5-size, inherit);
+  text-align: var(--ef-h5-align, inherit);
+  line-height: var(--ef-h5-line-height, inherit);
+  margin-top: var(--ef-h5-spacing-before, 0);
+  margin-bottom: var(--ef-h5-spacing-after, 0);
+  text-indent: var(--ef-h5-indent, 0);
+}
+.markdown-viewer.export-format-preview h6 {
+  font-family: var(--ef-h6-font, inherit);
+  font-size: var(--ef-h6-size, inherit);
+  text-align: var(--ef-h6-align, inherit);
+  line-height: var(--ef-h6-line-height, inherit);
+  margin-top: var(--ef-h6-spacing-before, 0);
+  margin-bottom: var(--ef-h6-spacing-after, 0);
+  text-indent: var(--ef-h6-indent, 0);
+}
+
+
+/* [2431-2566] markdown-clickable-image + mermaid-preview-* + image-preview-* + markdown-empty-state */
+.markdown-clickable-image {
+  cursor: zoom-in;
+}
+
+.mermaid-preview-card {
+  display: grid;
+  margin: 20px 0;
+  place-items: center;
+  padding: 18px;
+  background: linear-gradient(180deg, rgba(248, 250, 253, 0.92), #ffffff);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 18px;
+  box-shadow: 0 14px 34px rgba(33, 116, 253, 0.08);
+}
+
+.mermaid-preview-card > span {
+  color: var(--yb-text-muted);
+  font-size: 13px;
+}
+
+.mermaid-preview-canvas {
+  max-width: 100%;
+  overflow: auto;
+}
+
+.mermaid-preview-canvas svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-preview-error {
+  display: grid;
+  width: 100%;
+  gap: 8px;
+  color: #c83220;
+}
+
+.mermaid-preview-error strong {
+  font-size: 14px;
+}
+
+.mermaid-preview-error small {
+  color: #a84235;
+}
+
+.mermaid-preview-error pre {
+  margin: 0;
+  color: #e5e7eb;
+  background: #101828;
+}
+
+.image-preview-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: rgba(9, 16, 28, 0.68);
+  backdrop-filter: blur(10px);
+}
+
+.image-preview-card {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 121;
+  display: grid;
+  width: min(1120px, calc(100vw - 64px));
+  max-height: calc(100vh - 64px);
+  transform: translate(-50%, -50%);
+  gap: 16px;
+  padding: 20px;
+  background: #ffffff;
+  border: 1px solid rgba(220, 223, 230, 0.88);
+  border-radius: 24px;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.26);
+}
+
+.image-preview-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: var(--yb-text-soft);
+  font-size: 22px;
+  line-height: 1;
+  background: rgba(248, 250, 253, 0.92);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 999px;
+}
+
+.image-preview-close:hover {
+  color: var(--yb-primary);
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.22);
+}
+
+.image-preview-card h2 {
+  padding-right: 44px;
+  margin: 0;
+  color: var(--yb-text);
+  font-size: 18px;
+}
+
+.image-preview-card img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 178px);
+  justify-self: center;
+  object-fit: contain;
+  border-radius: 18px;
+}
+
+.markdown-empty-state {
+  display: grid;
+  min-height: 460px;
+  align-content: center;
+  justify-items: center;
+  padding: 48px;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(248, 250, 253, 0.68), #ffffff 34%);
+}
+
+.markdown-empty-state strong {
+  color: var(--yb-text);
+  font-size: 20px;
+}
+
+.markdown-empty-state p {
+  max-width: 520px;
+  margin: 12px 0 0;
+  color: var(--yb-text-soft);
+  line-height: 1.8;
+}
+
+/* [3929-4001] markdown-editor + toolbar + textarea + content-editor-empty (MarkdownEditor.tsx) */
+.markdown-editor {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(248, 250, 253, 0.68), #ffffff 22%);
+}
+
+.markdown-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 10px 14px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.markdown-editor-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  color: var(--yb-text-soft);
+  font-size: 14px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.markdown-editor-toolbar button:hover:not(:disabled) {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.08);
+}
+
+.markdown-editor-toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.markdown-editor-textarea {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  padding: 18px 20px;
+  color: var(--yb-text);
+  font-family: Consolas, 'Microsoft YaHei UI', monospace;
+  font-size: 14px;
+  line-height: 1.72;
+  background: #ffffff;
+  border: 0;
+  outline: none;
+  resize: none;
+  overflow: auto;
+}
+
+.markdown-editor-textarea::placeholder {
+  color: var(--yb-text-muted);
+}
+
+.markdown-editor-textarea:disabled {
+  color: var(--yb-text-muted);
+  cursor: not-allowed;
+  background: rgba(248, 250, 253, 0.78);
+}
+
+.content-editor-empty {
+  margin: 0;
+  color: var(--yb-text-muted);
+}

@@ -1,0 +1,233 @@
+/* [4003-4009] content-regenerate-modal (global dialog overlay, reused by 13+ features) */
+.content-regenerate-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(15, 23, 42, 0.34);
+  backdrop-filter: blur(4px);
+}
+
+/* [4145-4228] detail-help-link/modal/card/head/close/body/actions (DetailHelpLink.tsx) */
+.detail-help-link {
+  margin-left: 6px;
+  padding: 0;
+  color: var(--yb-primary);
+  font: inherit;
+  font-weight: 700;
+  line-height: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.detail-help-link:hover {
+  color: var(--yb-primary-deep);
+}
+
+.detail-help-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: rgba(15, 23, 42, 0.32);
+  backdrop-filter: blur(4px);
+}
+
+.detail-help-card {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 121;
+  display: flex;
+  flex-direction: column;
+  width: min(480px, calc(100vw - 40px));
+  max-height: min(680px, calc(100vh - 40px));
+  gap: 16px;
+  padding: 22px;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid rgba(220, 223, 230, 0.9);
+  border-radius: 22px;
+  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.24);
+  transform: translate(-50%, -50%);
+}
+
+.detail-help-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.detail-help-head h2 {
+  margin: 0;
+  color: var(--yb-text);
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+
+.detail-help-close {
+  width: 32px;
+  height: 32px;
+  color: var(--yb-text-soft);
+  font-size: 22px;
+  line-height: 1;
+  background: rgba(248, 250, 253, 0.92);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.detail-help-body {
+  min-height: 0;
+  overflow: auto;
+  color: var(--yb-text-soft);
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.detail-help-actions {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+/* [4230-4262] content-regenerate-card base + flex rules for description/textarea */
+.content-regenerate-card > [data-radix-dialog-title],
+.content-regenerate-card > .content-regenerate-title,
+.content-regenerate-card > .content-regenerate-card-head {
+  flex: 0 0 auto;
+}
+
+.content-regenerate-card > [data-radix-dialog-description],
+.content-regenerate-card > .content-regenerate-description,
+.content-regenerate-card > textarea,
+.content-regenerate-card > .gpu-acceleration-copy {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.content-regenerate-card {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(720px, calc(100vh - 40px));
+  gap: 16px;
+  padding: 24px;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid rgba(220, 223, 230, 0.9);
+  border-radius: 24px;
+  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.24);
+  transform: translate(-50%, -50%);
+}
+
+/* [5146-5190] content-regenerate-card-head + textarea + actions (shared dialog inner parts) */
+.content-regenerate-card-head {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.content-regenerate-card-head h2 {
+  margin: 0;
+  color: var(--yb-text);
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.content-regenerate-card-head p {
+  margin: 0;
+  color: var(--yb-text-soft);
+  line-height: 1.7;
+}
+
+.content-regenerate-card textarea {
+  width: 100%;
+  min-height: 150px;
+  padding: 14px 16px;
+  color: var(--yb-text);
+  line-height: 1.7;
+  background: #fbfcff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 16px;
+  outline: none;
+  resize: vertical;
+}
+
+.content-regenerate-card textarea:focus {
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.38);
+  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.08);
+}
+
+.content-regenerate-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* [8731-8785] (rewritten) yb-switch-control (renamed from settings-switch-control, shared by settings/export-format/outline-edit; values unchanged) */
+.yb-switch-control {
+  position: relative;
+  display: inline-flex;
+  width: 58px;
+  height: 34px;
+  justify-self: end;
+  align-items: center;
+}
+
+.yb-switch-control input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.yb-switch-track {
+  display: block;
+  width: 58px;
+  height: 34px;
+  padding: 3px;
+  background: #dfe7f3;
+  border: 1px solid rgba(180, 194, 214, 0.9);
+  border-radius: 999px;
+  box-shadow: inset 0 1px 2px rgba(23, 32, 51, 0.08);
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.yb-switch-thumb {
+  display: block;
+  width: 26px;
+  height: 26px;
+  background: #ffffff;
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(23, 32, 51, 0.18);
+  transition: transform 180ms ease;
+}
+
+.yb-switch-control input:checked + .yb-switch-track {
+  background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
+  border-color: rgba(33, 116, 253, 0.35);
+  box-shadow: 0 10px 24px rgba(33, 116, 253, 0.18);
+}
+
+.yb-switch-control input:checked + .yb-switch-track .yb-switch-thumb {
+  transform: translateX(24px);
+}
+
+.yb-switch-control input:focus-visible + .yb-switch-track {
+  outline: 3px solid rgba(33, 116, 253, 0.18);
+  outline-offset: 3px;
+}

@@ -1125,14 +1125,14 @@ function OutlineEditPage({
                       <strong>强制 Agent 修复目录</strong>
                       <small>本次目录生成会在最终保存前强制进入 OpenCode Agent 修复链路，用于验证 Agent workspace、结果 JSON 和程序校验。</small>
                     </span>
-                    <span className="settings-switch-control">
+                    <span className="yb-switch-control">
                       <input
                         type="checkbox"
                         checked={draftForceOutlineAgentRepair}
                         onChange={(event) => setDraftForceOutlineAgentRepair(event.target.checked)}
                       />
-                      <span className="settings-switch-track" aria-hidden="true">
-                        <span className="settings-switch-thumb" />
+                      <span className="yb-switch-track" aria-hidden="true">
+                        <span className="yb-switch-thumb" />
                       </span>
                     </span>
                   </label>

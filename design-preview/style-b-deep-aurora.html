@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>风格预览 B · 浓郁智能感版</title>
+<style>
+  :root {
+    --yb-primary: #2174fd;
+    --yb-primary-hover: #4098fc;
+    --yb-primary-deep: #155bd7;
+    --yb-violet: #5b54d3;
+    --yb-bg: #f5f8ff;
+    --yb-surface: #ffffff;
+    --yb-border: #dde3f0;
+    --yb-border-soft: #e6ebf7;
+    --yb-text: #141b2e;
+    --yb-text-soft: #5b6478;
+    --yb-text-muted: #8b93a7;
+    --yb-shadow: 0 10px 24px rgba(20, 27, 46, 0.05), 0 30px 64px rgba(33, 116, 253, 0.12);
+    --yb-shadow-sm: 0 6px 16px rgba(20, 27, 46, 0.04), 0 16px 34px rgba(33, 116, 253, 0.09);
+    --yb-radius-lg: 28px;
+    --yb-radius-md: 20px;
+    --yb-radius-sm: 13px;
+    --yb-success: #16a34a;
+    --yb-warning: #d97706;
+    --yb-danger: #e0483a;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; }
+  body {
+    overflow: hidden;
+    font-family: Inter, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    color: var(--yb-text);
+  }
+
+  .app-shell {
+    display: flex;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 88% 2%, rgba(33, 116, 253, 0.16), transparent 32%),
+      radial-gradient(circle at 8% 8%, rgba(91, 84, 211, 0.14), transparent 34%),
+      radial-gradient(circle at 60% 90%, rgba(33, 116, 253, 0.06), transparent 40%),
+      linear-gradient(180deg, #ffffff 0%, var(--yb-bg) 46%, #eef3ff 100%);
+  }
+
+  /* ---------- Sidebar (深色渐变底) ---------- */
+  .sidebar {
+    position: relative;
+    width: 280px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 26px 16px 20px;
+    background: linear-gradient(160deg, #12213f 0%, #17275a 46%, #241f5e 100%);
+    box-shadow: 20px 0 50px rgba(15, 20, 45, 0.28);
+    overflow: hidden;
+  }
+  .sidebar::before {
+    content: "";
+    position: absolute;
+    top: -30%;
+    right: -40%;
+    width: 260px;
+    height: 260px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(91, 84, 211, 0.45), transparent 68%);
+    pointer-events: none;
+  }
+  .sidebar::after {
+    content: "";
+    position: absolute;
+    bottom: -20%;
+    left: -30%;
+    width: 220px;
+    height: 220px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(33, 116, 253, 0.35), transparent 70%);
+    pointer-events: none;
+  }
+
+  .brand-block {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 10px 26px;
+  }
+  .brand-mark {
+    width: 40px;
+    height: 40px;
+    border-radius: 13px;
+    overflow: hidden;
+    background: linear-gradient(135deg, #4c9bff, #8f7bff);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 700;
+    font-size: 16px;
+    box-shadow: 0 10px 24px rgba(76, 155, 255, 0.4);
+  }
+  .brand-copy { display: flex; flex-direction: column; line-height: 1.35; }
+  .brand-copy span { font-size: 12px; color: rgba(255, 255, 255, 0.55); letter-spacing: 0.5px; }
+  .brand-copy strong { font-size: 15px; font-weight: 650; color: #fff; letter-spacing: 0.2px; }
+
+  .sidebar-nav { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 5px; margin-top: 6px; flex: 1; overflow-y: auto; }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 14px;
+    border: none;
+    background: transparent;
+    border-radius: var(--yb-radius-sm);
+    cursor: pointer;
+    text-align: left;
+    transition: background 160ms ease, color 160ms ease;
+    color: rgba(255, 255, 255, 0.68);
+  }
+  .nav-item:hover { background: rgba(255, 255, 255, 0.06); }
+  .nav-item.is-active {
+    background: linear-gradient(135deg, rgba(76, 155, 255, 0.95), rgba(143, 123, 255, 0.95));
+    color: #fff;
+    box-shadow: 0 16px 30px rgba(33, 116, 253, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  }
+  .nav-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.85);
+    flex-shrink: 0;
+  }
+  .nav-item.is-active .nav-icon { background: rgba(255, 255, 255, 0.2); color: #fff; }
+  .nav-icon svg { width: 18px; height: 18px; }
+  .nav-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .nav-copy strong { font-size: 13.5px; font-weight: 560; }
+  .nav-copy small { font-size: 11px; opacity: 0.68; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .sidebar-footer { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 4px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.1); margin-top: 10px; }
+  .settings-trigger {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px; border: none; background: transparent;
+    border-radius: var(--yb-radius-sm); cursor: pointer; text-align: left; color: rgba(255, 255, 255, 0.68);
+  }
+  .settings-trigger:hover { background: rgba(255, 255, 255, 0.06); }
+  .settings-trigger .nav-copy strong { font-size: 13px; }
+  .settings-trigger .nav-copy small { font-size: 10.5px; }
+
+  /* ---------- Main area ---------- */
+  .main-area { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+
+  .status-bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 28px;
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--yb-border-soft);
+    font-size: 12.5px; color: var(--yb-text-soft);
+  }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--yb-success); box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.16); animation: pulse 1.8s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.5;} }
+  .status-bar strong { color: var(--yb-text); font-weight: 600; }
+
+  .content-shell { flex: 1; min-height: 0; overflow-y: auto; padding: 30px 38px 120px; }
+
+  .section-title { font-size: 12px; font-weight: 600; letter-spacing: 1px; color: var(--yb-text-muted); text-transform: uppercase; margin: 30px 0 12px; }
+  .section-title:first-child { margin-top: 0; }
+
+  /* Hero */
+  .hero-panel {
+    position: relative;
+    background: linear-gradient(135deg, #17275a 0%, #241f5e 55%, #2174fd 130%);
+    border-radius: var(--yb-radius-lg);
+    box-shadow: 0 24px 60px rgba(23, 39, 90, 0.32);
+    padding: 32px 36px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 30px;
+    overflow: hidden;
+    color: #fff;
+  }
+  .hero-panel::before {
+    content: "";
+    position: absolute;
+    top: -50%;
+    right: -10%;
+    width: 320px;
+    height: 320px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.14), transparent 70%);
+  }
+  .hero-copy h1 { font-size: 21px; font-weight: 650; margin: 0 0 8px; letter-spacing: 0.2px; position: relative; }
+  .hero-copy p { font-size: 13.5px; color: rgba(255, 255, 255, 0.78); margin: 0; max-width: 480px; line-height: 1.6; position: relative; }
+  .hero-stats { display: flex; gap: 26px; position: relative; }
+  .hero-stat { text-align: right; }
+  .hero-stat strong { display: block; font-size: 25px; font-weight: 700; color: #fff; }
+  .hero-stat span { font-size: 11.5px; color: rgba(255, 255, 255, 0.65); }
+
+  /* Cards row */
+  .card-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .panel {
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid var(--yb-border-soft);
+    border-radius: var(--yb-radius-md);
+    box-shadow: var(--yb-shadow-sm);
+    padding: 20px 22px;
+    transition: transform 160ms ease;
+  }
+  .panel h3 { font-size: 14.5px; font-weight: 600; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+  .panel h3 .dot { width: 8px; height: 8px; border-radius: 50%; background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet)); box-shadow: 0 0 0 4px rgba(33,116,253,0.12); }
+  .panel p { font-size: 12.5px; color: var(--yb-text-soft); line-height: 1.6; margin: 0; }
+
+  /* Pills */
+  .pill-tabs { display: inline-flex; padding: 4px; border-radius: 999px; background: rgba(33, 116, 253, 0.08); gap: 2px; }
+  .pill-tab { padding: 8px 20px; border-radius: 999px; border: none; background: transparent; font-size: 12.5px; color: var(--yb-text-soft); cursor: pointer; font-weight: 500; }
+  .pill-tab.is-active { background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet)); color: #fff; box-shadow: 0 10px 22px rgba(33, 116, 253, 0.28); }
+
+  /* Badges */
+  .badges-row { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+  .badge .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .badge.is-running { background: rgba(33, 116, 253, 0.1); color: var(--yb-primary-deep); }
+  .badge.is-running .dot { background: var(--yb-primary); }
+  .badge.is-success { background: rgba(22, 163, 74, 0.1); color: var(--yb-success); }
+  .badge.is-success .dot { background: var(--yb-success); }
+  .badge.is-warning { background: rgba(217, 119, 6, 0.1); color: var(--yb-warning); }
+  .badge.is-warning .dot { background: var(--yb-warning); }
+  .badge.is-error { background: rgba(224, 72, 58, 0.1); color: var(--yb-danger); }
+  .badge.is-error .dot { background: var(--yb-danger); }
+
+  /* Buttons */
+  .buttons-row { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+  .btn { padding: 11px 20px; border-radius: 999px; font-size: 13px; font-weight: 560; cursor: pointer; border: none; }
+  .btn-primary { color: #fff; background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet)); box-shadow: 0 14px 30px rgba(33, 116, 253, 0.32); }
+  .btn-secondary { color: var(--yb-primary); background: rgba(255, 255, 255, 0.95); border: 1px solid rgba(33, 116, 253, 0.22); }
+  .btn-danger { color: var(--yb-danger); background: rgba(224, 72, 58, 0.08); border: 1px solid rgba(224, 72, 58, 0.18); }
+  .btn-text { color: var(--yb-primary); background: transparent; border: none; padding: 11px 6px; }
+
+  /* Split panel: list + reader */
+  .split-panel {
+    display: grid;
+    grid-template-columns: 230px minmax(0, 1fr);
+    gap: 16px;
+    margin-top: 12px;
+    height: 220px;
+  }
+  .list-pane, .reader-pane {
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid var(--yb-border-soft);
+    border-radius: var(--yb-radius-md);
+    box-shadow: var(--yb-shadow-sm);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .pane-head { padding: 12px 16px; font-size: 12.5px; font-weight: 600; border-bottom: 1px solid var(--yb-border-soft); color: var(--yb-text-soft); }
+  .list-item { padding: 10px 16px; font-size: 12.5px; color: var(--yb-text-soft); border-left: 3px solid transparent; cursor: pointer; }
+  .list-item.is-active { background: linear-gradient(90deg, rgba(33,116,253,0.09), transparent); border-left-color: var(--yb-primary); color: var(--yb-text); font-weight: 550; }
+  .reader-body { padding: 16px 20px; font-size: 12.5px; color: var(--yb-text-soft); line-height: 1.8; overflow: hidden; }
+  .reader-body h4 { font-size: 13.5px; color: var(--yb-text); margin: 0 0 8px; }
+
+  /* Floating toolbar */
+  .floating-toolbar {
+    position: absolute;
+    left: 50%;
+    bottom: 26px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.9);
+    backdrop-filter: blur(18px);
+    box-shadow: 0 22px 54px rgba(20, 27, 46, 0.18), 0 6px 18px rgba(33, 116, 253, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.7);
+  }
+  .ft-btn { padding: 9px 16px; border-radius: 999px; border: none; background: transparent; font-size: 12.5px; color: var(--yb-text-soft); cursor: pointer; font-weight: 500; }
+  .ft-btn.is-primary { background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet)); color: #fff; }
+  .ft-sep { width: 1px; height: 18px; background: var(--yb-border-soft); }
+
+  /* Dialog */
+  .dialog-layer {
+    position: absolute; inset: 0;
+    background: rgba(10, 15, 35, 0.4);
+    backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .dialog-card {
+    width: 360px;
+    background: #fff;
+    border-radius: 22px;
+    box-shadow: 0 34px 80px rgba(15, 20, 45, 0.35);
+    padding: 24px 26px;
+  }
+  .dialog-card h4 { margin: 0 0 8px; font-size: 15px; }
+  .dialog-card p { margin: 0 0 18px; font-size: 12.5px; color: var(--yb-text-soft); line-height: 1.7; }
+  .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+  .variant-tag {
+    position: fixed; top: 16px; right: 20px;
+    background: linear-gradient(135deg, #2174fd, #5b54d3); color: #fff;
+    padding: 6px 14px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    box-shadow: 0 10px 26px rgba(33, 116, 253, 0.4);
+    z-index: 50;
+  }
+
+  svg { display: block; }
+</style>
+</head>
+<body>
+  <div class="variant-tag">方案 B · 浓郁智能感</div>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <div class="brand-mark">易</div>
+        <div class="brand-copy">
+          <span>易标</span>
+          <strong>投标工具箱</strong>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-item is-active">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 5.2h7.2l4.8 4.8v8.8H6z"/><path d="M13 5.5V10h4.5"/><path d="M8.8 13.2h6.4"/><path d="M8.8 16.3h4.5"/></svg>
+          </span>
+          <span class="nav-copy"><strong>标书生成</strong><small>技术方案与商务标编制</small></span>
+        </button>
+        <button class="nav-item">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 3.75h6.7L18 8.05v12.2H7z"/><path d="M13.5 4v4.35h4.25"/><path d="M9.5 12.2h5"/><path d="M9.5 15.7h4"/></svg>
+          </span>
+          <span class="nav-copy"><strong>模版设置</strong><small>标书导出模板与排版配置</small></span>
+        </button>
+        <button class="nav-item">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 7.5h14v12H5z"/><path d="M4 4.5h16v3H4z"/><path d="M9 11.2h6"/></svg>
+          </span>
+          <span class="nav-copy"><strong>知识库</strong><small>素材、模板和案例资产</small></span>
+        </button>
+        <button class="nav-item">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 4.2h10v15.6H7z"/><path d="M9.5 8h5"/><path d="m9.5 12.3 1.5 1.5 3.7-4"/><path d="M9.5 17h5"/></svg>
+          </span>
+          <span class="nav-copy"><strong>标书检查</strong><small>查重、废标项与合规检查</small></span>
+        </button>
+        <button class="nav-item">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20.5a8.5 8.5 0 1 0 0-17 8.5 8.5 0 0 0 0 17Z"/><path d="M12 16.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Z"/><path d="M12 12 18 6"/></svg>
+          </span>
+          <span class="nav-copy"><strong>投标机会</strong><small>机会发现与线索跟踪</small></span>
+        </button>
+        <button class="nav-item">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4.8 6.4h4v12.2h-4z"/><path d="M10.1 4.8h4.2v13.8h-4.2z"/><path d="m15.4 7.1 3.4-.9 2.7 10.8-3.4.85z"/></svg>
+          </span>
+          <span class="nav-copy"><strong>资源下载</strong><small>投标相关资料、工具下载</small></span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button class="settings-trigger">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5.5 4.5h5.2c1.25 0 2.3 1.05 2.3 2.3v12.7c-.45-.8-1.25-1.3-2.3-1.3H5.5z"/><path d="M18.5 4.5h-5.2C12.05 4.5 11 5.55 11 6.8v12.7c.45-.8 1.25-1.3 2.3-1.3h5.2z"/></svg>
+          </span>
+          <span class="nav-copy"><strong>使用文档</strong><small>教程与功能共创</small></span>
+        </button>
+        <button class="settings-trigger">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Z"/><path d="m19.1 13.5.1-1.5-.1-1.5 2-1.5-2-3.4-2.45.95a8.2 8.2 0 0 0-2.55-1.45L13.75 2h-3.5L9.9 5.1a8.2 8.2 0 0 0-2.55 1.45L4.9 5.6l-2 3.4 2 1.5L4.8 12l.1 1.5-2 1.5 2 3.4 2.45-.95A8.2 8.2 0 0 0 9.9 18.9l.35 3.1h3.5l.35-3.1a8.2 8.2 0 0 0 2.55-1.45l2.45.95 2-3.4z"/></svg>
+          </span>
+          <span class="nav-copy"><strong>设置</strong><small>模型与解析配置</small></span>
+        </button>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <div class="status-bar">
+        <span class="status-dot"></span>
+        <span>Agent 运行中 · <strong>技术方案生成</strong></span>
+        <span style="margin-left:auto; color:var(--yb-text-muted);">最近同步 2 分钟前</span>
+      </div>
+
+      <section class="content-shell">
+        <div class="hero-panel">
+          <div class="hero-copy">
+            <h1>欢迎回来，继续完成本次投标准备</h1>
+            <p>已为你保留上次的工作进度，招标文件解析和技术方案目录均已生成，可直接进入正文撰写阶段。</p>
+          </div>
+          <div class="hero-stats">
+            <div class="hero-stat"><strong>128</strong><span>已生成方案</span></div>
+            <div class="hero-stat"><strong>36</strong><span>知识库素材</span></div>
+            <div class="hero-stat"><strong>92%</strong><span>查重通过率</span></div>
+          </div>
+        </div>
+
+        <div class="section-title">功能卡片</div>
+        <div class="card-row">
+          <div class="panel">
+            <h3><span class="dot"></span>技术方案</h3>
+            <p>根据招标文件自动生成目录与正文，支持多标段识别与全局事实设定。</p>
+          </div>
+          <div class="panel">
+            <h3><span class="dot"></span>标书查重</h3>
+            <p>基于历史标书库进行相似度比对，快速定位重复表达与风险段落。</p>
+          </div>
+          <div class="panel">
+            <h3><span class="dot"></span>废标项检查</h3>
+            <p>自动提取硬性条款，逐条核对响应完整性，降低废标风险。</p>
+          </div>
+        </div>
+
+        <div class="section-title">Tab / 状态 / 按钮</div>
+        <div class="pill-tabs">
+          <button class="pill-tab is-active">全部</button>
+          <button class="pill-tab">进行中</button>
+          <button class="pill-tab">已完成</button>
+          <button class="pill-tab">草稿</button>
+        </div>
+        <div class="badges-row">
+          <span class="badge is-running"><span class="dot"></span>处理中</span>
+          <span class="badge is-success"><span class="dot"></span>已完成</span>
+          <span class="badge is-warning"><span class="dot"></span>待确认</span>
+          <span class="badge is-error"><span class="dot"></span>解析失败</span>
+        </div>
+        <div class="buttons-row">
+          <button class="btn btn-primary">生成技术方案</button>
+          <button class="btn btn-secondary">导出 Word</button>
+          <button class="btn btn-danger">删除任务</button>
+          <button class="btn btn-text">查看详情</button>
+        </div>
+
+        <div class="section-title">列表 + 阅读器</div>
+        <div class="split-panel">
+          <div class="list-pane">
+            <div class="pane-head">章节目录</div>
+            <div class="list-item is-active">一、项目概述</div>
+            <div class="list-item">二、总体技术方案</div>
+            <div class="list-item">三、实施计划</div>
+            <div class="list-item">四、质量保证措施</div>
+            <div class="list-item">五、售后服务方案</div>
+          </div>
+          <div class="reader-pane">
+            <div class="pane-head">正文预览</div>
+            <div class="reader-body">
+              <h4>一、项目概述</h4>
+              <p>本项目旨在为招标单位提供整体化、可落地的技术实施方案，充分结合行业最佳实践与既往成功案例，确保项目交付质量与进度可控……</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="floating-toolbar">
+        <button class="ft-btn">上一步</button>
+        <span class="ft-sep"></span>
+        <button class="ft-btn">保存草稿</button>
+        <span class="ft-sep"></span>
+        <button class="ft-btn is-primary">下一步</button>
+      </div>
+    </main>
+
+    <div class="dialog-layer">
+      <div class="dialog-card">
+        <h4>确认重新生成目录？</h4>
+        <p>重新生成将清空当前正文内容和生成缓存，此操作不可撤销，请确认是否继续。</p>
+        <div class="dialog-actions">
+          <button class="btn btn-secondary">取消</button>
+          <button class="btn btn-primary">确认重新生成</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
