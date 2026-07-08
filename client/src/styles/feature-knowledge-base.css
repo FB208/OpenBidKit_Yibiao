@@ -20,9 +20,9 @@
   background:
     radial-gradient(circle at 92% 8%, rgba(33, 116, 253, 0.1), transparent 28%),
     #ffffff;
-  border: 1px solid rgba(220, 223, 230, 0.92);
+  border: 1px solid rgba(228, 233, 240, 0.92);
   border-radius: 24px;
-  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.24);
+  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.16);
   transform: translate(-50%, -50%);
 }
 
@@ -279,6 +279,7 @@
   border: 1px solid var(--yb-border-soft);
   border-radius: 12px;
   cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .knowledge-folder-card.is-dragging,
@@ -315,6 +316,7 @@
   border-radius: 9px;
   cursor: grab;
   user-select: none;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .knowledge-drag-handle:hover {
@@ -348,6 +350,12 @@
   border-color: rgba(33, 116, 253, 0.35);
 }
 
+.knowledge-folder-card:hover:not(.is-active):not(.is-dragging) {
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.18);
+  box-shadow: var(--yb-shadow-sm);
+}
+
 .knowledge-folder-main > span {
   display: grid;
   grid-row: span 2;
@@ -374,6 +382,12 @@
   background: #ffffff;
   border: 1px solid var(--yb-border-soft);
   border-radius: 9px;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease;
+}
+
+.knowledge-folder-actions button:hover:not(:disabled) {
+  background: rgba(33, 116, 253, 0.08);
+  border-color: rgba(33, 116, 253, 0.2);
 }
 
 .knowledge-folder-card strong,
@@ -419,6 +433,14 @@
   background: var(--yb-bg);
   border: 1px solid var(--yb-border-soft);
   border-radius: 14px;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease,
+    box-shadow var(--yb-duration-fast) ease;
+}
+
+.knowledge-document-card:hover:not(.is-dragging) {
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.16);
+  box-shadow: var(--yb-shadow-sm);
 }
 
 .knowledge-document-card.is-drop-before::before,
@@ -518,6 +540,14 @@
   border: 1px solid var(--yb-border-soft);
   border-radius: 10px;
   cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease,
+    color var(--yb-duration-fast) ease;
+}
+
+.knowledge-document-actions button:hover:not(:disabled) {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.06);
+  border-color: rgba(33, 116, 253, 0.2);
 }
 
 .knowledge-document-actions button:disabled {
@@ -559,6 +589,7 @@
   border-radius: 10px;
   cursor: pointer;
   user-select: none;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .knowledge-item-source-action:hover {
@@ -608,7 +639,7 @@
   width: min(1040px, calc(100vw - 48px));
   height: min(820px, calc(100vh - 48px));
   background: #ffffff;
-  border: 1px solid rgba(220, 223, 230, 0.9);
+  border: 1px solid rgba(228, 233, 240, 0.9);
   border-radius: 22px;
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.26);
   transform: translate(-50%, -50%);

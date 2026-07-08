@@ -14,8 +14,8 @@
 .duplicate-upload-board,
 .duplicate-guide-panel {
   background: rgba(255, 255, 255, 0.94);
-  border: 1px solid rgba(220, 223, 230, 0.88);
-  border-radius: 30px;
+  border: 1px solid rgba(228, 233, 240, 0.88);
+  border-radius: 26px;
   box-shadow: var(--yb-shadow);
 }
 
@@ -149,12 +149,18 @@
   border: 1px solid var(--yb-border-soft);
   border-radius: 16px;
   cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .duplicate-document-tab.is-active {
   background: #eef4ff;
   border-color: rgba(33, 116, 253, 0.38);
   box-shadow: 0 0 0 3px rgba(33, 116, 253, 0.08);
+}
+
+.duplicate-document-tab:hover:not(.is-active) {
+  border-color: rgba(33, 116, 253, 0.2);
+  box-shadow: var(--yb-shadow-sm);
 }
 
 .duplicate-document-tab span {
@@ -305,8 +311,8 @@
   gap: 18px;
   padding: 24px;
   background: rgba(255, 255, 255, 0.94);
-  border: 1px solid rgba(220, 223, 230, 0.88);
-  border-radius: 30px;
+  border: 1px solid rgba(228, 233, 240, 0.88);
+  border-radius: 26px;
   box-shadow: var(--yb-shadow);
 }
 
@@ -333,6 +339,7 @@
   border: 0;
   border-right: 1px solid rgba(27, 50, 92, 0.12);
   cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .duplicate-analysis-tab:last-child {
@@ -341,6 +348,10 @@
 
 .duplicate-analysis-tab.is-active {
   background: linear-gradient(180deg, rgba(33, 116, 253, 0.1), rgba(255, 255, 255, 0.95));
+}
+
+.duplicate-analysis-tab:hover:not(.is-active) {
+  background: rgba(33, 116, 253, 0.04);
 }
 
 .duplicate-analysis-tab-main {
@@ -891,6 +902,7 @@
   border: 1px solid rgba(27, 50, 92, 0.14);
   border-radius: 9px;
   box-shadow: 0 6px 14px rgba(27, 50, 92, 0.05);
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .duplicate-sentence-copy:hover {

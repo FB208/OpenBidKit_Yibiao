@@ -355,6 +355,7 @@
   border-radius: 999px;
   box-shadow: 0 12px 34px rgba(15, 23, 42, 0.16);
   cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .export-template-fullscreen-close:hover {
@@ -1175,8 +1176,8 @@
   color: var(--yb-text-soft);
   text-align: center;
   background: rgba(255, 255, 255, 0.94);
-  border: 1px solid rgba(220, 223, 230, 0.88);
-  border-radius: 28px;
+  border: 1px solid rgba(228, 233, 240, 0.88);
+  border-radius: 24px;
   box-shadow: var(--yb-shadow);
 }
 
@@ -1200,8 +1201,8 @@
   min-width: 0;
   min-height: 0;
   background: rgba(255, 255, 255, 0.94);
-  border: 1px solid rgba(220, 223, 230, 0.88);
-  border-radius: 30px;
+  border: 1px solid rgba(228, 233, 240, 0.88);
+  border-radius: 26px;
   box-shadow: var(--yb-shadow);
 }
 
@@ -1260,11 +1261,17 @@
   background: linear-gradient(135deg, rgba(248, 250, 253, 0.9), rgba(255, 255, 255, 0.98));
   border: 1px solid var(--yb-border-soft);
   border-radius: 20px;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .template-library-card.is-active {
   background: linear-gradient(135deg, rgba(33, 116, 253, 0.1), rgba(255, 255, 255, 0.98));
   border-color: rgba(33, 116, 253, 0.34);
+}
+
+.template-library-card:hover:not(.is-active) {
+  border-color: rgba(33, 116, 253, 0.18);
+  box-shadow: var(--yb-shadow-sm);
 }
 
 .template-library-card-main {

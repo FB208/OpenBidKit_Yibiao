@@ -19,8 +19,8 @@
   gap: 22px;
   padding: 30px;
   background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(220, 223, 230, 0.86);
-  border-radius: 30px;
+  border: 1px solid rgba(228, 233, 240, 0.86);
+  border-radius: 26px;
   box-shadow: var(--yb-shadow);
 }
 
@@ -134,7 +134,7 @@
     #ffffff;
   border: 1px solid rgba(245, 158, 11, 0.22);
   border-radius: 22px;
-  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.24);
+  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.16);
   transform: translate(-50%, -50%);
 }
 
@@ -175,9 +175,9 @@
   padding: 24px;
   overflow: auto;
   background: #ffffff;
-  border: 1px solid rgba(220, 223, 230, 0.9);
+  border: 1px solid rgba(228, 233, 240, 0.9);
   border-radius: 22px;
-  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.24);
+  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.16);
   transform: translate(-50%, -50%);
 }
 
@@ -302,9 +302,9 @@
   padding: 24px;
   overflow: hidden;
   background: #ffffff;
-  border: 1px solid rgba(220, 223, 230, 0.9);
+  border: 1px solid rgba(228, 233, 240, 0.9);
   border-radius: 24px;
-  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.24);
+  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.16);
   transform: translate(-50%, -50%);
 }
 
@@ -331,9 +331,9 @@
   padding: 24px;
   overflow: hidden;
   background: #ffffff;
-  border: 1px solid rgba(220, 223, 230, 0.92);
+  border: 1px solid rgba(228, 233, 240, 0.92);
   border-radius: 24px;
-  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.24);
+  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.16);
   transform: translate(-50%, -50%);
 }
 
@@ -423,9 +423,9 @@
   padding: 22px;
   overflow: hidden;
   background: #ffffff;
-  border: 1px solid rgba(220, 223, 230, 0.92);
+  border: 1px solid rgba(228, 233, 240, 0.92);
   border-radius: 24px;
-  box-shadow: 0 32px 86px rgba(23, 32, 51, 0.28);
+  box-shadow: 0 32px 86px rgba(23, 32, 51, 0.18);
   transform: translate(-50%, -50%);
 }
 
@@ -494,7 +494,7 @@
   font-size: 12px;
   font-weight: 800;
   background: rgba(23, 32, 51, 0.05);
-  border: 1px solid rgba(220, 223, 230, 0.72);
+  border: 1px solid rgba(228, 233, 240, 0.72);
   border-radius: 999px;
 }
 
@@ -502,7 +502,7 @@
   min-height: 0;
   overflow: hidden;
   background: #f8fafc;
-  border: 1px solid rgba(220, 223, 230, 0.9);
+  border: 1px solid rgba(228, 233, 240, 0.9);
   border-radius: 18px;
 }
 

@@ -27,9 +27,9 @@
   color: var(--yb-text);
   user-select: text;
   background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(220, 223, 230, 0.92);
+  border: 1px solid rgba(228, 233, 240, 0.92);
   border-radius: 16px;
-  box-shadow: 0 18px 48px rgba(23, 32, 51, 0.18), 0 4px 16px rgba(33, 116, 253, 0.08);
+  box-shadow: 0 18px 48px rgba(23, 32, 51, 0.12), 0 4px 16px rgba(33, 116, 253, 0.08);
   backdrop-filter: blur(14px);
 }
 
@@ -116,7 +116,7 @@
   font-size: 13px;
   font-weight: 700;
   background: rgba(23, 32, 51, 0.05);
-  border: 1px solid rgba(220, 223, 230, 0.9);
+  border: 1px solid rgba(228, 233, 240, 0.9);
   border-radius: 999px;
 }
 

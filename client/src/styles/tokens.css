@@ -4,14 +4,26 @@
   --yb-primary-hover: #4098fc;
   --yb-primary-deep: #155bd7;
   --yb-violet: #5b54d3;
-  --yb-bg: #f8fafd;
+  --yb-bg: #fafcff;
   --yb-surface: #ffffff;
-  --yb-border: #dcdfe6;
-  --yb-border-soft: #e8edf6;
-  --yb-text: #172033;
-  --yb-text-soft: #606266;
-  --yb-text-muted: #909399;
-  --yb-shadow: 0 22px 60px rgba(33, 116, 253, 0.09);
+  --yb-border: #e6e9f0;
+  --yb-border-soft: #eef2f9;
+  --yb-text: #1c2536;
+  --yb-text-soft: #66707f;
+  --yb-text-muted: #98a2b3;
+
+  /* 分层阴影体系：由弱到强，元素层级越高、越需要强调，阴影越重 */
+  --yb-shadow-xs: 0 2px 8px rgba(23, 32, 51, 0.04);
+  --yb-shadow-sm: 0 8px 20px rgba(33, 116, 253, 0.05);
+  --yb-shadow: 0 18px 40px rgba(33, 116, 253, 0.07);
+  --yb-shadow-lg: 0 30px 64px rgba(33, 116, 253, 0.11), 0 10px 26px rgba(23, 32, 51, 0.06);
+  --yb-shadow-hover: 0 22px 46px rgba(33, 116, 253, 0.16), 0 8px 18px rgba(23, 32, 51, 0.08);
+
+  /* 统一过渡节奏：交互反馈用更快的 ease-out，跨状态切换用更柔和的曲线 */
+  --yb-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --yb-duration-fast: 140ms;
+  --yb-duration: 220ms;
+
   color: var(--yb-text);
   background: var(--yb-bg);
   font-family: Inter, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;

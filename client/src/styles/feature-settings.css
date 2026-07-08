@@ -18,8 +18,8 @@
 
 .settings-page-section {
   background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(220, 223, 230, 0.88);
-  border-radius: 28px;
+  border: 1px solid rgba(228, 233, 240, 0.88);
+  border-radius: 24px;
   box-shadow: var(--yb-shadow);
 }
 
@@ -33,9 +33,9 @@
   padding: 10px;
   overflow-x: auto;
   background: rgba(255, 255, 255, 0.86);
-  border: 1px solid rgba(220, 223, 230, 0.8);
+  border: 1px solid rgba(228, 233, 240, 0.8);
   border-radius: 999px;
-  box-shadow: 0 18px 44px rgba(23, 32, 51, 0.08);
+  box-shadow: 0 18px 44px rgba(23, 32, 51, 0.05);
 }
 
 .settings-tab {
@@ -47,11 +47,17 @@
   border: 0;
   border-radius: 22px;
   white-space: nowrap;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .settings-tab.is-active {
   color: var(--yb-primary);
   background: rgba(33, 116, 253, 0.12);
+}
+
+.settings-tab:hover:not(.is-active) {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.06);
 }
 
 /* [8971-8973] (rewritten) settings-page-section second decl (overflow hidden) */
@@ -145,7 +151,7 @@
   background: #ffffff;
   border: 1px solid #ccd6e3;
   border-radius: 14px;
-  box-shadow: 0 18px 44px rgba(23, 32, 51, 0.16);
+  box-shadow: 0 18px 44px rgba(23, 32, 51, 0.1);
 }
 
 .font-picker-summary {
@@ -170,6 +176,7 @@
   border: 0;
   border-radius: 10px;
   cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .font-picker-option:hover,
@@ -547,6 +554,7 @@
   background: rgba(248, 250, 253, 0.84);
   border: 1px solid var(--yb-border-soft);
   border-radius: 16px;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .agent-self-check-step strong {

@@ -15,8 +15,8 @@
 .rejection-reader-card,
 .rejection-result-command-bar {
   background: rgba(255, 255, 255, 0.94);
-  border: 1px solid rgba(220, 223, 230, 0.88);
-  border-radius: 30px;
+  border: 1px solid rgba(228, 233, 240, 0.88);
+  border-radius: 26px;
   box-shadow: var(--yb-shadow);
 }
 
@@ -252,6 +252,7 @@
   background: rgba(248, 250, 253, 0.78);
   border: 1px solid var(--yb-border-soft);
   border-radius: 16px;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .rejection-result-status span {
@@ -310,8 +311,8 @@
   gap: 18px;
   padding: 24px;
   background: rgba(255, 255, 255, 0.94);
-  border: 1px solid rgba(220, 223, 230, 0.88);
-  border-radius: 30px;
+  border: 1px solid rgba(228, 233, 240, 0.88);
+  border-radius: 26px;
   box-shadow: var(--yb-shadow);
 }
 
@@ -344,6 +345,7 @@
   border: 0;
   border-right: 1px solid rgba(27, 50, 92, 0.12);
   cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .rejection-check-result-tab:last-child {
@@ -352,6 +354,10 @@
 
 .rejection-check-result-tab.is-active {
   background: linear-gradient(180deg, rgba(33, 116, 253, 0.1), rgba(255, 255, 255, 0.95));
+}
+
+.rejection-check-result-tab:hover:not(.is-active) {
+  background: rgba(33, 116, 253, 0.04);
 }
 
 .rejection-check-result-tab strong {
@@ -532,6 +538,7 @@
   background: transparent;
   border: 0;
   border-radius: 16px;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .rejection-finding-toggle:hover {
@@ -650,11 +657,13 @@
 .rejection-finding-delete {
   color: #c83220;
   background: rgba(200, 50, 32, 0.08);
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .rejection-finding-copy {
   color: var(--yb-primary);
   background: rgba(33, 116, 253, 0.1);
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .rejection-finding-delete:hover {
