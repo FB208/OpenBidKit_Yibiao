@@ -16,6 +16,7 @@ const metadataLabels = {
   file_name: '文件名',
   extension: '扩展名',
   size: '文件大小',
+  file_sha256: '原始文件 SHA256',
   created_at: '文件创建时间',
   modified_at: '文件修改时间',
   accessed_at: '文件访问时间',
@@ -63,6 +64,30 @@ const metadataLabels = {
   pdf_version: 'PDF 版本',
   pdf_permissions: 'PDF 权限',
   fingerprints: 'PDF 指纹',
+  word_rsid_root: 'Word 编辑会话根 ID',
+  word_rsid_count: 'Word 编辑会话 ID 数量',
+  word_rsid_values: 'Word 编辑会话 ID 列表',
+  word_rsid_fingerprint: 'Word 编辑会话指纹',
+  ole_storage_count: 'OLE 存储数量',
+  ole_stream_count: 'OLE Stream 数量',
+  ole_stream_paths: 'OLE Stream 路径摘要',
+  ole_stream_paths_fingerprint: 'OLE Stream 路径指纹',
+  ole_stream_sizes_fingerprint: 'OLE Stream 大小指纹',
+  ole_has_macro_storage: 'OLE 宏存储',
+  ole_macro_paths: 'OLE 宏存储路径',
+  pdf_header_version: 'PDF 头版本',
+  pdf_object_count: 'PDF 对象数量',
+  pdf_startxref_count: 'PDF startxref 数量',
+  pdf_incremental_update_count: 'PDF 增量保存次数',
+  pdf_linearized: 'PDF 线性化',
+  pdf_xref_type: 'PDF XRef 类型',
+  pdf_trailer_id: 'PDF Trailer ID',
+  pdf_has_acroform: 'PDF 表单',
+  pdf_has_xfa: 'PDF XFA 表单',
+  pdf_signature_count: 'PDF 签名字段数量',
+  pdf_byterange_signature_count: 'PDF ByteRange 签名数量',
+  pdf_embedded_file_count: 'PDF 附件数量',
+  pdf_embedded_file_names: 'PDF 附件文件名',
 };
 
 const comparableKeys = new Set([
@@ -72,6 +97,11 @@ const comparableKeys = new Set([
   'bytes', 'lines', 'paragraphs', 'slides', 'notes', 'hidden_slides', 'multimedia_clips', 'total_time', 'creator',
   'producer', 'pdf_version', 'pdf_permissions', 'fingerprints', 'document_version', 'doc_security', 'shared_doc',
   'links_dirty', 'hlinks_changed',
+  'file_sha256', 'word_rsid_root', 'word_rsid_count', 'word_rsid_values', 'word_rsid_fingerprint',
+  'ole_storage_count', 'ole_stream_count', 'ole_stream_paths', 'ole_stream_paths_fingerprint', 'ole_stream_sizes_fingerprint',
+  'ole_has_macro_storage', 'ole_macro_paths', 'pdf_header_version', 'pdf_object_count', 'pdf_startxref_count',
+  'pdf_incremental_update_count', 'pdf_linearized', 'pdf_xref_type', 'pdf_trailer_id', 'pdf_has_acroform',
+  'pdf_has_xfa', 'pdf_signature_count', 'pdf_byterange_signature_count', 'pdf_embedded_file_count', 'pdf_embedded_file_names',
 ]);
 
 const dateComparableKeys = new Set(['created_at', 'modified_at', 'accessed_at', 'created', 'modified', 'last_printed']);
@@ -202,7 +232,7 @@ function tryDecodeBase64Text(value) {
   if (!text || text.length < 12 || text.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(text)) return '';
   try {
     const decoded = Buffer.from(text, 'base64').toString('utf8').replace(/^\uFEFF/, '').trim();
-    if (!decoded || decoded === text || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(decoded)) return '';
+    if (!decoded || decoded === text || decoded.includes('\uFFFD') || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(decoded)) return '';
     try {
       return JSON.stringify(JSON.parse(decoded));
     } catch {
@@ -213,12 +243,54 @@ function tryDecodeBase64Text(value) {
   }
 }
 
+function shouldSkipBase64Decode(key, value) {
+  const normalizedKey = String(key || '').toLowerCase();
+  if (/(^|[:_])(sha256|sha1|md5|hash|fingerprint)([:_]|$)/.test(normalizedKey)) return true;
+  return /^[0-9a-f]{32}$|^[0-9a-f]{40}$|^[0-9a-f]{64}$|^[0-9a-f]{128}$/i.test(normalizeValue(value));
+}
+
 function addDecodedBase64Fields(fields) {
   for (const [key, value] of Array.from(fields.entries())) {
     if (key.endsWith(':base64_decoded')) continue;
+    if (shouldSkipBase64Decode(key, value)) continue;
     const decoded = tryDecodeBase64Text(value);
     if (decoded) addField(fields, `${key}:base64_decoded`, decoded);
   }
+}
+
+async function hashFileSha256(filePath) {
+  const buffer = await fs.readFile(filePath);
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function hashText(value) {
+  return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
+}
+
+function yesNo(value) {
+  return value ? '是' : '否';
+}
+
+function countMatches(value, pattern) {
+  const text = String(value || '');
+  const regexp = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+  let count = 0;
+  while (regexp.exec(text)) count += 1;
+  return count;
+}
+
+function uniqueSortedValues(values) {
+  return Array.from(new Set((Array.isArray(values) ? values : [])
+    .map((item) => normalizeValue(item))
+    .filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function summarizeValues(values, limit = 80) {
+  const sorted = uniqueSortedValues(values);
+  if (!sorted.length) return '';
+  const visible = sorted.slice(0, limit).join('；');
+  return sorted.length > limit ? `${visible}；...共${sorted.length}项` : visible;
 }
 
 function xmlText(xml, tagName) {
@@ -241,6 +313,37 @@ function decodeXml(value) {
 function readZipText(zip, entryName) {
   const entry = zip.getEntry(entryName);
   return entry ? entry.getData().toString('utf8') : '';
+}
+
+function formatDocxTotalTime(value) {
+  const text = normalizeValue(value);
+  if (!text) return '';
+  return /^\d+$/.test(text) ? `${text} 分钟` : text;
+}
+
+function addDocxRsidFields(fields, zip) {
+  const values = new Set();
+  let root = '';
+  const entries = zip.getEntries().filter((entry) => /^word\/.*\.xml$/i.test(entry.entryName || ''));
+  const rsidPattern = /\b(?:[A-Za-z0-9_]+:)?(rsid[A-Za-z0-9]*)=["']([0-9A-Fa-f]{1,16})["']/g;
+
+  for (const entry of entries) {
+    const xml = entry.getData().toString('utf8');
+    let match;
+    while ((match = rsidPattern.exec(xml))) {
+      const attr = String(match[1] || '').toLowerCase();
+      const value = String(match[2] || '').toUpperCase();
+      if (!value) continue;
+      values.add(value);
+      if (attr === 'rsidroot' && !root) root = value;
+    }
+  }
+
+  const sorted = uniqueSortedValues(Array.from(values));
+  addField(fields, 'word_rsid_root', root);
+  addField(fields, 'word_rsid_count', sorted.length);
+  addField(fields, 'word_rsid_values', summarizeValues(sorted));
+  if (sorted.length) addField(fields, 'word_rsid_fingerprint', hashText(sorted.join('\n')));
 }
 
 const SUMMARY_PROPERTY_MAP = {
@@ -563,6 +666,26 @@ function addOleSignalFields(fields, cfb) {
   }
 }
 
+function addOleStructureFields(fields, cfb) {
+  const entries = cfb.FileIndex.map((entry, index) => ({
+    entry,
+    path: normalizeValue(cfb.FullPaths[index] || entry.name || `stream_${index}`),
+  })).filter((item) => item.path);
+  const streamEntries = entries.filter((item) => item.entry?.type === 2 || item.entry?.content);
+  const storageEntries = entries.filter((item) => item.entry?.type === 1);
+  const streamPaths = streamEntries.map((item) => item.path.replace(/^\/Root Entry\/?/i, ''));
+  const streamSizes = streamEntries.map((item) => `${item.path}:${item.entry?.content?.length || item.entry?.size || 0}`);
+  const macroPaths = streamPaths.filter((item) => /(^|[\/\\])(?:vba|macros?|vbaProject\.bin|dir)([\/\\]|$)/i.test(item));
+
+  addField(fields, 'ole_storage_count', storageEntries.length);
+  addField(fields, 'ole_stream_count', streamEntries.length);
+  addField(fields, 'ole_stream_paths', summarizeValues(streamPaths, 120));
+  if (streamPaths.length) addField(fields, 'ole_stream_paths_fingerprint', hashText(uniqueSortedValues(streamPaths).join('\n')));
+  if (streamSizes.length) addField(fields, 'ole_stream_sizes_fingerprint', hashText(uniqueSortedValues(streamSizes).join('\n')));
+  addField(fields, 'ole_has_macro_storage', yesNo(macroPaths.length > 0));
+  addField(fields, 'ole_macro_paths', summarizeValues(macroPaths, 40));
+}
+
 function isOlePropertySetStreamName(value) {
   return /(?:summaryinformation|documentsummaryinformation)$/i.test(String(value || '').replace(/^.*[\\/]/, '').replace(/^\u0005|^!/, ''));
 }
@@ -604,7 +727,7 @@ async function extractDocxMetadata(filePath) {
   addField(fields, 'characters', xmlText(app, 'Characters'));
   addField(fields, 'lines', xmlText(app, 'Lines'));
   addField(fields, 'paragraphs', xmlText(app, 'Paragraphs'));
-  addField(fields, 'total_time', xmlText(app, 'TotalTime'));
+  addField(fields, 'total_time', formatDocxTotalTime(xmlText(app, 'TotalTime')));
 
   for (const match of custom.matchAll(/<property\b[^>]*\bname="([^"]+)"[^>]*>([\s\S]*?)<\/property>/gi)) {
     const key = `custom:${decodeXml(match[1])}`;
@@ -612,6 +735,7 @@ async function extractDocxMetadata(filePath) {
     addField(fields, key, valueMatch ? decodeXml(valueMatch[1]) : decodeXml(match[2]));
   }
 
+  addDocxRsidFields(fields, zip);
   addWpsSignalFields(fields);
   return fields;
 }
@@ -629,6 +753,7 @@ async function extractOleMetadata(filePath) {
   if (documentSummary) {
     for (const [key, value] of parsePropertySetStream(documentSummary.content, DOC_SUMMARY_PROPERTY_MAP).entries()) addField(fields, key, value);
   }
+  addOleStructureFields(fields, cfb);
   addOleSignalFields(fields, cfb);
   addWpsSignalFields(fields);
   return fields;
@@ -817,6 +942,89 @@ function addPdfRawFields(fields, buffer) {
   for (const snippet of collectBinarySignalSnippets(buffer)) addListField(fields, 'pdf_raw:signals', snippet);
 }
 
+function decodePdfName(value) {
+  return String(value || '').replace(/#([0-9a-fA-F]{2})/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
+function decodePdfTokenString(token) {
+  const value = String(token || '').trim();
+  if (!value) return '';
+  if (value.startsWith('(') && value.endsWith(')')) return decodePdfLiteralString(value.slice(1, -1));
+  if (value.startsWith('<') && value.endsWith('>')) return decodePdfHexString(value.slice(1, -1));
+  if (value.startsWith('/')) return decodePdfName(value.slice(1));
+  return value;
+}
+
+function normalizePdfIdToken(token) {
+  const value = String(token || '').trim();
+  if (value.startsWith('<') && value.endsWith('>')) return `<${value.slice(1, -1).replace(/\s+/g, '').toLowerCase()}>`;
+  return decodePdfTokenString(value);
+}
+
+function extractPdfTrailerIds(text) {
+  const ids = [];
+  const pattern = /\/ID\s*\[\s*(<[^>\r\n]{1,512}>|\((?:\\.|[^\\)]){0,512}\))\s*(<[^>\r\n]{1,512}>|\((?:\\.|[^\\)]){0,512}\))/g;
+  let match;
+  while ((match = pattern.exec(text))) {
+    const first = normalizePdfIdToken(match[1]);
+    const second = normalizePdfIdToken(match[2]);
+    if (first || second) ids.push([first, second].filter(Boolean).join(' / '));
+  }
+  return uniqueSortedValues(ids);
+}
+
+function extractPdfAttachmentNames(text) {
+  const names = [];
+  const filespecPattern = /\/Type\s*\/Filespec\b/g;
+  const stringToken = '(\\((?:\\\\.|[^\\\\)]){0,500}\\)|<[0-9a-fA-F\\s]{2,1000}>|\/[^\\s<>\\[\\]()/]{1,300})';
+  const ufPattern = new RegExp(`/UF\\s*${stringToken}`);
+  const fPattern = new RegExp(`/F\\s*${stringToken}`);
+  let match;
+  while ((match = filespecPattern.exec(text))) {
+    const chunk = text.slice(match.index, Math.min(text.length, match.index + 2200));
+    const nameMatch = chunk.match(ufPattern) || chunk.match(fPattern);
+    const name = decodePdfTokenString(nameMatch?.[1] || '');
+    if (name) names.push(name);
+  }
+  return uniqueSortedValues(names);
+}
+
+function addPdfStructureFields(fields, buffer) {
+  const text = buffer.toString('latin1');
+  const headerVersion = text.slice(0, 1024).match(/%PDF-(\d\.\d)/)?.[1] || '';
+  const objectCount = countMatches(text, /(?:^|[\r\n])\s*\d+\s+\d+\s+obj\b/g);
+  const startxrefCount = countMatches(text, /(?:^|[\r\n])startxref\b/g);
+  const hasClassicXref = /(?:^|[\r\n])xref(?:\s|[\r\n])/.test(text);
+  const xrefStreamCount = countMatches(text, /\/Type\s*\/XRef\b/g);
+  const xrefTypes = [];
+  if (hasClassicXref) xrefTypes.push('传统 xref 表');
+  if (xrefStreamCount) xrefTypes.push('XRef 对象流');
+
+  addField(fields, 'pdf_header_version', headerVersion);
+  addField(fields, 'pdf_object_count', objectCount);
+  addField(fields, 'pdf_startxref_count', startxrefCount);
+  addField(fields, 'pdf_incremental_update_count', Math.max(0, startxrefCount - 1));
+  addField(fields, 'pdf_linearized', yesNo(/\/Linearized\s+\d/.test(text.slice(0, 4096))));
+  addField(fields, 'pdf_xref_type', xrefTypes.join('；') || '未识别');
+  addField(fields, 'pdf_trailer_id', summarizeValues(extractPdfTrailerIds(text), 8));
+}
+
+function addPdfFormSignatureAttachmentFields(fields, buffer) {
+  const text = buffer.toString('latin1');
+  const byteRangeSignatureCount = countMatches(text, /\/ByteRange\s*\[/g);
+  const signatureFieldCount = countMatches(text, /\/FT\s*\/Sig\b/g);
+  const signatureObjectCount = countMatches(text, /\/Type\s*\/Sig\b/g);
+  const embeddedFileCount = countMatches(text, /\/Type\s*\/EmbeddedFile\b/g);
+  const attachmentNames = extractPdfAttachmentNames(text);
+
+  addField(fields, 'pdf_has_acroform', yesNo(/\/AcroForm\b/.test(text)));
+  addField(fields, 'pdf_has_xfa', yesNo(/\/XFA\b/.test(text)));
+  addField(fields, 'pdf_signature_count', Math.max(signatureFieldCount, signatureObjectCount, byteRangeSignatureCount));
+  addField(fields, 'pdf_byterange_signature_count', byteRangeSignatureCount);
+  addField(fields, 'pdf_embedded_file_count', Math.max(embeddedFileCount, attachmentNames.length));
+  addField(fields, 'pdf_embedded_file_names', summarizeValues(attachmentNames, 40));
+}
+
 async function extractPdfMetadata(filePath) {
   const buffer = await fs.readFile(filePath);
   const parser = new PDFParse({ data: buffer });
@@ -840,6 +1048,8 @@ async function extractPdfMetadata(filePath) {
     addField(fields, 'fingerprints', result.fingerprints);
     addField(fields, 'pdf_permissions', result.permission);
     addPdfRawFields(fields, buffer);
+    addPdfStructureFields(fields, buffer);
+    addPdfFormSignatureAttachmentFields(fields, buffer);
     addWpsSignalFields(fields);
   } finally {
     await parser.destroy();
@@ -856,6 +1066,7 @@ async function extractMetadata(file) {
   addField(fields, 'created_at', stats.birthtime.toISOString());
   addField(fields, 'modified_at', stats.mtime.toISOString());
   addField(fields, 'accessed_at', stats.atime.toISOString());
+  addField(fields, 'file_sha256', await hashFileSha256(file.file_path));
 
   try {
     const extension = String(file.extension || '').toLowerCase();
