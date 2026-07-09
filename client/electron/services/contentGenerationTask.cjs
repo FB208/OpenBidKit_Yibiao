@@ -1689,7 +1689,7 @@ function buildContentExpansionMessages({ outlineData, context, projectOverview, 
 2. 不要返回完整正文，只返回一次局部扩写操作。
 3. operation 只能是 "insert" 或 "replace"。
 4. insert 表示新增一个或多个段落，anchor 填写建议插入在哪个原段落之后；如果适合放末尾，anchor 写 "end"。
-5. replace 表示重写并扩写某个原段落，anchor 必须填写要替换的原段落关键摘录。
+5. replace 表示重写并扩写某个完整 Markdown 原文块，target_text 必须逐字复制当前章节原正文中的完整待替换块。
 6. content 只写新增或替换后的正文片段，不要包含章节标题。
 7. 禁止输出图片 Markdown、Mermaid、代码块或其他图表代码。
 8. 扩写内容必须服务当前章节，不要写其他目录应承载的内容。
@@ -1697,11 +1697,14 @@ function buildContentExpansionMessages({ outlineData, context, projectOverview, 
 10. 加粗引导语禁止使用任何形式的编号。
 11. 只有步骤、流程、时间顺序、操作顺序等连续性非常强的内容，才可以使用有序列表；其他分段禁止使用任何形式的编号。
 12. 如果本章节需要使用的全局事实变量中包含相关内容，扩写必须优先使用变量值，不得新增前后不一致的时间、地点、人员、设备、标准或服务承诺。
+13. 使用 replace 时，如果目标块是 Markdown 列表、表格、引用、加粗引导块或连续多行结构，target_text 必须包含完整结构，不得只返回第一项、表头、关键句或摘要。
+14. 使用 replace 时，target_text 不得改写标点、空格、换行、列表符号、表格分隔线或 Markdown 标记，也不得选择图片 Markdown、Mermaid 或代码块作为替换目标。
 
 返回格式：
 {
   "operation": "insert",
   "anchor": "end",
+  "target_text": "replace 时填写逐字复制的完整待替换 Markdown 原文块，insert 时留空",
   "content": "扩写后的新增段落或替换段落"
 }`,
     },
@@ -1720,40 +1723,49 @@ function normalizeContentExpansionPatch(value) {
   const rawPatch = Array.isArray(source.operations) ? source.operations[0] : Array.isArray(source.patches) ? source.patches[0] : source;
   const operation = String(rawPatch.operation || rawPatch.type || '').trim().toLowerCase();
   const anchor = singleLine(rawPatch.anchor || rawPatch.position || rawPatch.after || rawPatch.target || rawPatch.replace_target || 'end') || 'end';
+  const targetText = normalizeNewlines(rawPatch.target_text ?? rawPatch.targetText ?? rawPatch.old_text ?? rawPatch.oldText ?? '').trim();
   const content = normalizeGeneratedMarkdown(String(rawPatch.content || rawPatch.paragraph || rawPatch.text || rawPatch.new_content || ''))
     .replace(/```[\s\S]*?```/g, '')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
     .trim();
-  return { operation, anchor, content };
+  return { operation, anchor, target_text: targetText, content };
 }
 
 function validateContentExpansionPatch(patch) {
   if (!patch || !['insert', 'replace'].includes(patch.operation)) {
     throw new Error(`扩写结果 operation 无效：${patch?.operation || '空'}，只能是 insert 或 replace`);
   }
+  if (patch.operation === 'replace' && !String(patch.target_text || '').trim()) {
+    throw new Error('扩写 replace 结果缺少 target_text');
+  }
   if (!String(patch.content || '').trim()) {
     throw new Error('扩写结果缺少 content');
   }
 }
 
-function buildContentExpansionRepairMessages({ invalidContent, issues }) {
+function buildContentExpansionRepairMessages({ invalidContent, issues }, currentContent = '') {
   const issueLines = (issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
+  const currentContentBlock = String(currentContent || '').trim()
+    ? [{ role: 'user', content: `当前正文，用于 replace 时逐字复制 target_text：\n${String(currentContent || '').slice(0, 60000)}` }]
+    : [];
   return [
     {
       role: 'user',
       content: `你是严格的 JSON 修复器。请把模型输出修复为“正文局部扩写”JSON。
 
 必须满足：
-1. 顶层只能包含 operation、anchor、content。
+1. 顶层只能包含 operation、anchor、target_text、content。
 2. operation 只能是 "insert" 或 "replace"。
 3. 严禁使用 delete、rewrite_full、rewrite、append、update 或其他 operation。
 4. insert 表示新增段落；anchor 写建议插入在哪个原段落之后，无法确定时写 "end"。
-5. replace 表示重写并扩写一个原段落；anchor 必须是要替换的原段落关键摘录。
+5. replace 表示重写并扩写一个完整 Markdown 原文块；target_text 必须逐字复制完整待替换块，不得摘要、改写或只返回其中一句。
 6. content 只能是新增或替换后的正文片段，不要返回完整章节正文。
 7. content 不得包含章节标题、Markdown 标题、图片 Markdown、Mermaid、代码块或解释文字。
-8. 只返回 JSON，不要输出 Markdown 代码围栏或解释。`,
+8. insert 时 target_text 留空；replace 时 anchor 可留空，但 target_text 必须非空。
+9. 只返回 JSON，不要输出 Markdown 代码围栏或解释。`,
     },
     { role: 'user', content: `错误列表：\n${issueLines}` },
+    ...currentContentBlock,
     { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
   ];
 }
@@ -2450,16 +2462,19 @@ function buildOriginalCoverageRepairMessages({ target, coverageItems, currentCon
 2. 不要返回完整正文，只返回一次 insert 或 replace 操作。
 3. operation 只能是 "insert" 或 "replace"。
 4. 优先使用 insert 在合适段落后补充缺失内容；如果正文已有同主题但内容不完整，可使用 replace 扩写该段。
-5. anchor 填写建议插入/替换的当前正文段落关键摘录；适合放末尾时写 "end"。
-6. content 只写新增或替换后的正文片段，不要包含章节标题。
-7. 必须补回审计指出的 partial/missing 核心信息，但不要提到“原方案”“来源段”“用户原文”。
-8. 不要新增图片 Markdown、Mermaid、代码块或伪目录标题。
-9. 保持与当前小节职责一致，不要写其他章节内容。
+5. insert 时 anchor 填写建议插入在哪个当前正文段落之后；适合放末尾时写 "end"。
+6. replace 时 target_text 必须逐字复制当前小节正文中的完整待替换 Markdown 原文块，不得摘要、改写或只返回其中一句。
+7. replace 目标块如为 Markdown 列表、表格、引用、加粗引导块或连续多行结构，target_text 必须包含完整结构。
+8. content 只写新增或替换后的正文片段，不要包含章节标题。
+9. 必须补回审计指出的 partial/missing 核心信息，但不要提到“原方案”“来源段”“用户原文”。
+10. 不要新增图片 Markdown、Mermaid、代码块或伪目录标题，也不要选择图片 Markdown、Mermaid 或代码块作为 replace 的 target_text。
+11. 保持与当前小节职责一致，不要写其他章节内容。
 
 返回格式：
 {
   "operation": "insert",
   "anchor": "end",
+  "target_text": "replace 时填写逐字复制的完整待替换 Markdown 原文块，insert 时留空",
   "content": "补写后的正文片段"
 }`,
     },
@@ -2777,11 +2792,78 @@ function normalizeParagraphs(content) {
   return String(content || '').split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
 }
 
+function findContentExpansionNeedleRanges(content, targetText) {
+  const source = normalizeNewlines(content);
+  const target = normalizeNewlines(targetText).trim();
+  const matches = [];
+  if (!target) {
+    return matches;
+  }
+
+  let index = 0;
+  while ((index = source.indexOf(target, index)) >= 0) {
+    matches.push({ start: index, end: index + target.length, strategy: 'target_text-exact' });
+    index += Math.max(1, target.length);
+  }
+  return matches;
+}
+
+function findContentExpansionTargetTextMatch(content, targetText) {
+  const source = normalizeNewlines(content).trim();
+  const target = normalizeNewlines(targetText).trim();
+  if (!target) {
+    return { found: false, unique: false, count: 0, strategy: '', match: null, error: 'replace patch 缺少 target_text' };
+  }
+
+  const exactMatches = findContentExpansionNeedleRanges(source, target);
+  if (exactMatches.length === 1) {
+    return { found: true, unique: true, count: 1, strategy: exactMatches[0].strategy, match: exactMatches[0], error: '' };
+  }
+  if (exactMatches.length > 1) {
+    return { found: true, unique: false, count: exactMatches.length, strategy: 'target_text-exact', match: null, error: `replace target_text 精确命中 ${exactMatches.length} 处，拒绝替换` };
+  }
+
+  const sourceLines = splitLinesWithRanges(source);
+  const targetLines = target.split('\n').map((line) => line.trim());
+  const lineMatches = [];
+  if (targetLines.length <= sourceLines.length) {
+    for (let startIndex = 0; startIndex <= sourceLines.length - targetLines.length; startIndex += 1) {
+      const matched = targetLines.every((line, offset) => sourceLines[startIndex + offset].text.trim() === line);
+      if (!matched) {
+        continue;
+      }
+      const firstLine = sourceLines[startIndex];
+      const lastLine = sourceLines[startIndex + targetLines.length - 1];
+      lineMatches.push({ start: firstLine.start, end: lastLine.end, strategy: 'target_text-line-trimmed' });
+    }
+  }
+
+  if (lineMatches.length === 1) {
+    return { found: true, unique: true, count: 1, strategy: lineMatches[0].strategy, match: lineMatches[0], error: '' };
+  }
+  if (lineMatches.length > 1) {
+    return { found: true, unique: false, count: lineMatches.length, strategy: 'target_text-line-trimmed', match: null, error: `replace target_text 逐行匹配命中 ${lineMatches.length} 处，拒绝替换` };
+  }
+
+  return { found: false, unique: false, count: 0, strategy: '', match: null, error: 'replace target_text 未在当前章节正文中唯一命中' };
+}
+
 function applyContentExpansionPatch(content, patch) {
-  const normalizedContent = String(content || '').trim();
+  const normalizedContent = normalizeNewlines(String(content || '')).trim();
   const patchContent = normalizeGeneratedMarkdown(patch.content).trim();
   if (!normalizedContent) {
+    if (patch.operation === 'replace') {
+      throw new Error('当前章节正文为空，replace target_text 无法执行替换');
+    }
     return patchContent;
+  }
+
+  if (patch.operation === 'replace') {
+    const targetMatch = findContentExpansionTargetTextMatch(normalizedContent, patch.target_text);
+    if (!targetMatch.unique || !targetMatch.match) {
+      throw new Error(targetMatch.error || 'replace target_text 未命中');
+    }
+    return `${normalizedContent.slice(0, targetMatch.match.start)}${patchContent}${normalizedContent.slice(targetMatch.match.end)}`;
   }
 
   const paragraphs = normalizeParagraphs(normalizedContent);
@@ -2790,12 +2872,6 @@ function applyContentExpansionPatch(content, patch) {
   const anchorIndex = anchorKey && !/^end$/i.test(anchorKey)
     ? paragraphs.findIndex((paragraph) => paragraph.replace(/\s+/g, ' ').includes(anchorKey) || anchorKey.includes(paragraph.replace(/\s+/g, ' ')))
     : -1;
-
-  if (patch.operation === 'replace' && anchorIndex >= 0) {
-    const next = [...paragraphs];
-    next[anchorIndex] = patchContent;
-    return next.join('\n\n');
-  }
 
   if (/^start$/i.test(anchorKey)) {
     return [patchContent, ...paragraphs].join('\n\n');
@@ -5009,7 +5085,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
   async function expandOneSection(context) {
     const { item, content, words } = context;
-    const contentForPrompt = stripIllustrationsForExpansion(content) || content;
     const targetWords = Math.max(words * 2, words + MIN_SECTION_EXPANSION_INCREMENT);
     const storedContentPlan = getReusableStoredContentPlan(item.id);
     const contentPlan = contentPlans.get(item.id) || storedContentPlan?.plan || normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
@@ -5024,7 +5099,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           context,
           projectOverview,
           selectedFactsText,
-          currentContent: contentForPrompt,
+          currentContent: content,
           currentWords: words,
           targetWords,
         }),
@@ -5034,7 +5109,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         failureMessage: '模型返回的正文扩写结果格式无效',
         normalizer: normalizeContentExpansionPatch,
         validator: validateContentExpansionPatch,
-        repairMessagesBuilder: buildContentExpansionRepairMessages,
+        repairMessagesBuilder: (contextForRepair) => buildContentExpansionRepairMessages(contextForRepair, content),
       });
       const nextContent = applyContentExpansionPatch(content, patch);
       const nextWords = countContentWords(nextContent);
@@ -5210,7 +5285,7 @@ workspace 文件说明：
           failureMessage: '模型返回的原方案覆盖修复结果格式无效',
           normalizer: normalizeContentExpansionPatch,
           validator: validateContentExpansionPatch,
-          repairMessagesBuilder: buildContentExpansionRepairMessages,
+          repairMessagesBuilder: (contextForRepair) => buildContentExpansionRepairMessages(contextForRepair, currentContent),
           max_retries: 1,
         });
         writeDeveloperLog('original_coverage.repair.response', {
@@ -6723,4 +6798,14 @@ workspace 文件说明：
   }
 }
 
-module.exports = { runContentGenerationTask, stripRepeatedChapterTitle };
+// 仅供开发者局部测试页复用当前正式正文扩写 patch runtime。
+// 正式业务入口仍然只使用 runContentGenerationTask；测试页不得复制这组逻辑另起实现。
+const __developerContentExpansionPatchRuntime = {
+  normalizeContentExpansionPatch,
+  validateContentExpansionPatch,
+  buildContentExpansionRepairMessages,
+  findContentExpansionTargetTextMatch,
+  applyContentExpansionPatch,
+};
+
+module.exports = { runContentGenerationTask, stripRepeatedChapterTitle, __developerContentExpansionPatchRuntime };

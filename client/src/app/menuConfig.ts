@@ -142,6 +142,12 @@ const developerMenuItems: AppMenuItem[] = [
         icon: 'export',
       },
       {
+        id: 'developer-expansion-replace-test',
+        label: '扩写替换测试',
+        description: '使用真实扩写 patch 应用逻辑，复现 replace 锚点未命中后的追加问题。',
+        icon: 'tool',
+      },
+      {
         id: 'developer-opencode-agent-test',
         label: 'OpenCode Agent测试',
         description: '验证常驻 OpenCode Server、OpenCode AI proxy、agentService 的完整链路。',

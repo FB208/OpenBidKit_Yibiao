@@ -16,6 +16,7 @@ const { registerSystemFontIpc } = require('./systemFontIpc.cjs');
 const { createAgentService } = require('../services/agentService.cjs');
 const { createAiService } = require('../services/aiService.cjs');
 const { createConfigStore } = require('../services/configStore.cjs');
+const { createDeveloperExpansionReplaceTestService } = require('../services/developerExpansionReplaceTest.cjs');
 const { createDuplicateCheckService } = require('../services/duplicateCheckService.cjs');
 const { createDuplicateCheckStore } = require('../services/duplicateCheckStore.cjs');
 const { createExportService } = require('../services/exportService.cjs');
@@ -196,6 +197,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const configStore = createConfigStore(app);
   const licenseService = createLicenseService({ app, configStore });
   const aiService = createAiService({ app, configStore });
+  const developerExpansionReplaceTestService = createDeveloperExpansionReplaceTestService({ aiService });
   const agentService = createAgentService({ app, configStore, mainWindow });
   const fileService = createFileService({ app, configStore });
   const exportService = createExportService({ configStore });
@@ -271,7 +273,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
       }
     },
   });
-  registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsWindow });
+  registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsWindow, developerExpansionReplaceTestService });
   registerLicenseIpc({ licenseService });
   registerAiIpc({ aiService });
   registerAgentIpc({ agentService, mainWindow });

@@ -45,6 +45,54 @@ export interface DeveloperTextTokenStats {
   cache_ratio: number;
 }
 
+export interface DeveloperExpansionReplaceTestPayload {
+  sectionId: string;
+  sectionTitle: string;
+  sectionDescription?: string;
+  content: string;
+  selectedText: string;
+}
+
+export interface DeveloperExpansionReplacePatch {
+  operation: string;
+  anchor?: string;
+  target_text?: string;
+  content: string;
+}
+
+export type DeveloperExpansionReplaceTestStatus = 'replace-success' | 'blocked';
+
+export interface DeveloperExpansionReplaceTestDiagnostics {
+  status: DeveloperExpansionReplaceTestStatus;
+  matchStrategy: string;
+  matchStart: number;
+  matchEnd: number;
+  matchedText: string;
+  targetTextMatched: boolean;
+  targetTextKey: string;
+  candidateCount: number;
+  contentOccurrencesBefore: number;
+  contentOccurrencesAfter: number;
+  charsBefore: number;
+  charsAfter: number;
+  deltaChars: number;
+  error: string;
+}
+
+export interface DeveloperExpansionReplaceTestResult {
+  success: boolean;
+  status: DeveloperExpansionReplaceTestStatus;
+  sectionId: string;
+  sectionTitle: string;
+  rawPatch: DeveloperExpansionReplacePatch;
+  appliedPatch: DeveloperExpansionReplacePatch;
+  diagnostics: DeveloperExpansionReplaceTestDiagnostics;
+  applyError?: string;
+  originalContent: string;
+  selectedText: string;
+  nextContent: string;
+}
+
 export interface LatestReleaseInfo {
   version: string;
   name: string;
@@ -373,6 +421,9 @@ export interface YibiaoBridge {
     get: () => Promise<DeveloperTextTokenStats>;
     reset: () => Promise<DeveloperTextTokenStats>;
     onChanged: (callback: (stats: DeveloperTextTokenStats) => void) => () => void;
+  };
+  developerExpansionReplaceTest: {
+    run: (payload: DeveloperExpansionReplaceTestPayload) => Promise<DeveloperExpansionReplaceTestResult>;
   };
   file: {
     selectDuplicateCheckFiles: (options?: { multiple?: boolean }) => Promise<FileSelectionResult>;

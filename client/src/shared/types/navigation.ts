@@ -21,6 +21,7 @@ export type SectionId =
   | 'developer-prompt-lab'
   | 'developer-parser-sandbox'
   | 'developer-export-preview'
+  | 'developer-expansion-replace-test'
   | 'developer-opencode-agent-test'
   | 'settings';
 

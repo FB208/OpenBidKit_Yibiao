@@ -14,7 +14,7 @@ function broadcastTextTokenStats(stats) {
   });
 }
 
-function registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsWindow }) {
+function registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsWindow, developerExpansionReplaceTestService }) {
   aiService.onTextTokenStatsChanged((stats) => {
     broadcastTextTokenStats(stats);
   });
@@ -32,6 +32,11 @@ function registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsW
   ipcMain.handle('developer-token-stats:reset', () => {
     requireDeveloperMode(configStore);
     return aiService.resetTextTokenStats();
+  });
+
+  ipcMain.handle('developer-expansion-replace-test:run', (_event, payload) => {
+    requireDeveloperMode(configStore);
+    return developerExpansionReplaceTestService.run(payload);
   });
 }
 
