@@ -432,17 +432,20 @@ function buildOutlineSharedContextMessages({ overview, requirements, oldOutline 
 }
 
 function extractRequirementGroupsMessages({ overview, requirements, oldOutline }, suggestions) {
-  const instructionPrompt = `你是一个专业的招标文件分析专家。请从技术评分要求中提取适合作为技术标一级目录的评分大类。
+  const instructionPrompt = `你是一个专业的招标文件分析专家。请从技术评分信息中提取适合作为技术标一级目录的评分项大类。
 
 要求：
-1. 只提取技术评分大类，不要提取商务、报价、资质等非技术类条目
-2. 每个大类都必须适合作为技术标一级目录标题，标题要专业、简洁、完整
-3. 同一大类下的细项、子项、分值说明、评分标准要归入 detail_points，不要拆成多个一级目录
-4. requirement_id 必须唯一，使用 R1、R2、R3 这种格式
-5. description 需要概括该大类关注的核心内容
-6. detail_points 中保留该大类下的关键评分细项，使用简洁短句
-7. 如果提供了“已有目录”，提取结果用于识别原目录未覆盖的评分项缺口，在已有目录上补齐，不要重构、删除、重排原目录
-8. 只返回 JSON，格式必须为 {"groups": [...]}，不要输出任何其他内容
+1. 只基于“技术评分项”提取评分大类；“技术评分要求”只能作为评分约束、扣分口径、判定规则参考，不能提取为 group，也不能作为一级目录标题。
+2. 如果输入中已经包含“## 技术评分项”和“## 技术评分要求”分区，groups 只能来自“## 技术评分项”分区。
+3. 如果输入未明确分区，也必须按语义判断：投标人需要在技术方案中一一响应、展开编写的具体评分内容才是评分项；用于解释评分、约束评分、定义扣分或判定规则的内容是评分要求。
+4. 不要提取商务、报价、资质等非技术类条目。
+5. 每个大类都必须适合作为技术标一级目录标题，标题要专业、简洁、完整。
+6. 同一大类下的细项、子项、分值说明、评分标准要归入 detail_points，不要拆成多个一级目录。
+7. requirement_id 必须唯一，使用 R1、R2、R3 这种格式。
+8. description 需要概括该大类关注的核心内容。
+9. detail_points 中保留该大类下的关键评分细项，并可参考技术评分要求中的通用约束补充响应注意点，但不要把评分要求本身写成独立细项。
+10. 如果提供了“已有目录”，提取结果用于识别原目录未覆盖的评分项缺口，在已有目录上补齐，不要重构、删除、重排原目录。
+11. 只返回 JSON，格式必须为 {"groups": [...]}，不要输出任何其他内容。
 
 JSON 格式要求：
 {
@@ -457,7 +460,7 @@ JSON 格式要求：
 }`;
   return [
     ...buildOutlineSharedContextMessages({ overview, requirements, oldOutline }),
-    { role: 'user', content: `${instructionPrompt}\n\n请提取所有适合作为技术标一级目录的技术评分大类，保持顺序稳定，并把每个大类下的评分细项归入 detail_points。${formatSuggestions(suggestions)}` },
+    { role: 'user', content: `${instructionPrompt}\n\n请提取所有适合作为技术标一级目录的技术评分项大类，保持顺序稳定，并把每个大类下的评分细项归入 detail_points。${formatSuggestions(suggestions)}` },
   ];
 }
 
@@ -466,24 +469,25 @@ function generateAlignedChildrenMessages({ overview, requirements, parentItem, g
     .filter((item) => typeof item === 'string' && item.trim())
     .map((item) => `- ${item}`)
     .join('\n');
-  const detailContent = detailLines || '- 未提供明确细项，请根据评分大类描述合理展开';
+  const detailContent = detailLines || '- 未提供明确细项，请根据评分项大类描述合理展开';
   const suggestionText = formatSuggestions(suggestions).trim();
-  const instructionPrompt = `你是一个专业的标书编写专家。请围绕指定的技术评分大类，为已经固定好的一级目录生成二级和三级目录。
+  const instructionPrompt = `你是一个专业的标书编写专家。请围绕指定的技术评分项大类，为已经固定好的一级目录生成二级和三级目录。
 
 要求：
-1. 一级目录标题和顺序已经固定，不能修改、重命名、合并或删除一级目录
-2. 只输出当前一级目录下的二级和三级目录，不要重复输出一级目录本身
-3. 二级和三级目录要覆盖当前技术评分大类及其细项，不能越界写入其他评分大类内容
-4. 如果提供了原方案目录基础，当前输出是补充候选目录，应尽量复用原目录中相关表达，只补充缺失内容，不要提出删除或重排原目录
-5. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description
-6. 除了 JSON 结果外，不要输出任何其他内容
+1. 一级目录标题和顺序已经固定，不能修改、重命名、合并或删除一级目录。
+2. 只输出当前一级目录下的二级和三级目录，不要重复输出一级目录本身。
+3. 二级和三级目录要覆盖当前技术评分项大类及其细项，不能越界写入其他评分项大类内容。
+4. 技术评分要求只能作为编写约束、扣分口径、判定标准和注意事项参考，用于完善目录说明和响应重点；不得把评分要求扩展成独立一级目录，也不得偏离当前一级目录主题。
+5. 如果提供了原方案目录基础，当前输出是补充候选目录，应尽量复用原目录中相关表达，只补充缺失内容，不要提出删除或重排原目录。
+6. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
+7. 除了 JSON 结果外，不要输出任何其他内容。
 
 ${childrenOutlineFixedStructureRules()}`;
   const messages = [
     ...buildOutlineSharedContextMessages({ overview, requirements, oldOutline }),
     { role: 'user', content: instructionPrompt },
     { role: 'user', content: `当前固定一级目录：\n编号：${parentItem.id}\n标题：${parentItem.title}\n描述：${parentItem.description || ''}` },
-    { role: 'user', content: `当前对应的技术评分大类：\nrequirement_id：${group.requirement_id}\n标题：${group.title}\n描述：${group.description}\n细项：\n${detailContent}` },
+    { role: 'user', content: `当前对应的技术评分项大类：\nrequirement_id：${group.requirement_id}\n标题：${group.title}\n描述：${group.description}\n细项：\n${detailContent}` },
     { role: 'user', content: childrenOutlineParentNumberingRules(parentItem.id) },
   ];
   if (suggestionText) {
@@ -570,9 +574,10 @@ function buildFinalOutlineReviewMessages(context) {
       content: `你是严格的技术标目录最终审核专家。请判断待审核目录是否已经可以保存为最终目录。
 
 审核重点：
-1. 是否覆盖技术评分要求中的关键评分项。
-2. 是否存在明显重复、归属错位、遗漏或结构不合理。
-3. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议。
+1. 一级目录是否只基于技术评分项建立，并覆盖技术评分项中的关键评分内容。
+2. 技术评分要求是否已作为约束、扣分口径、判定标准或注意事项被合理参考；不得因为评分要求本身生成、补充或要求补充一级目录。
+3. 是否存在明显重复、归属错位、遗漏技术评分项、误把评分要求当成目录主题或结构不合理。
+4. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议；建议应围绕技术评分项覆盖和现有目录结构调整，不要要求把评分要求补成一级目录。
 
 只返回 JSON，格式为 {"passed": true, "suggestions": []}，不要返回完整目录，不要输出解释文字。`,
     },
@@ -728,17 +733,19 @@ workspace 文件说明：
 - workflow.json：本次目录模式、恢复类型和程序后续校验会使用的 hard_constraints。
 - current-outline.json：当前候选目录，可能为空、不完整或存在审核指出的问题。
 - final-review.json：程序或模型对当前目录的审核结论、问题和修改建议。
-- requirement-groups.json：如果存在，记录技术评分大类及细项，通常用于约束一级目录。
+- requirement-groups.json：如果存在，记录技术评分项大类及细项，通常用于约束一级目录。
 - original-outline.json：如果存在，记录用户原方案旧目录，已有方案扩写时应尽量承接其结构。
 
 工作方式由你自行决定。可以搜索、分段读取、建立索引、创建草稿或中间 JSON，并逐步编辑 ${outputFile}；不需要按固定顺序读取文件，也不需要在单次模型输出中完成全部目录。
 
 最终需要的结果：
-- 生成一份可以直接保存为技术方案目录的 JSON，目录覆盖技术评分要求，并处理 final-review.json 中指出的问题。
+- 生成一份可以直接保存为技术方案目录的 JSON，目录覆盖技术评分项，并处理 final-review.json 中指出的问题。
+- technical-requirements.md 中如果存在“技术评分项”和“技术评分要求”，一级目录只能基于“技术评分项”生成；“技术评分要求”只能作为评分约束、扣分口径、判定标准或注意事项参考。
+- 如果 technical-requirements.md 未明确分区，也必须按语义区分：要求投标人在技术方案中一一响应、展开编写的具体评分内容才可作为一级目录依据；解释评分、约束评分、定义扣分或判定规则的内容不得作为一级目录。
 - 如果 current-outline.json 为空或不完整，可以直接构建完整目录；如果已有目录可用，优先做定向修复。
-- 如果 requirement-groups.json 存在，最终一级目录和 groups 应保持可校验的一致关系；如果你判断 groups 本身有误，可以同步修正 groups 和目录。
+- 如果 requirement-groups.json 存在，最终一级目录和 groups 应保持可校验的一致关系；如果你判断 groups 本身误把评分要求纳入，应同步修正 groups 和目录。
 - 如果 original-outline.json 存在，优先在原目录基础上补充和修复，避免无目的全量重写。
-- 修复可包括删除重复项、迁移错位目录、补充缺失目录、合并明显重复目录和重新编号。
+- 修复可包括删除重复项、迁移错位目录、补充缺失评分项目录、移除误作为目录主题的评分要求、合并明显重复目录和重新编号。
 - 任务结束时，${outputFile} 是可被 JSON.parse 直接解析的纯 JSON 文件，不包含 Markdown 代码块或解释文字。
 - JSON 顶层格式为：
 ${outputShape}
@@ -1085,24 +1092,27 @@ function formatTopLevelOutlineForPrompt(outlineItems) {
 }
 
 function buildExpansionTopLevelComplementMessages({ overview, requirements, oldOutline }) {
-  const instructionPrompt = `你是一个严格的标书目录规划专家。请基于已有目录，判断原方案一级目录是否已覆盖评分大类，并只补充缺失的一级目录。
+  const instructionPrompt = `你是一个严格的标书目录规划专家。请基于已有目录，判断原方案一级目录是否已覆盖技术评分项大类，并只补充缺失的一级目录。
 
 要求：
 1. 原方案已有一级目录完全锁定，不能删除、重命名、重排或要求修改。
-2. 如果某个评分大类可以由原方案已有一级目录承载，请填写 existing_root_id，必须逐字复制原方案一级目录 id。
-3. 如果某个评分大类无法由已有一级目录承载，请 existing_root_id 返回空字符串，表示需要追加新的一级目录。
-4. 追加的新一级目录标题要专业、简洁，适合作为技术标一级目录。
-5. detail_points 中保留该评分大类下的关键评分细项，使用简洁短句。
-6. 新增 title 只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
-7. 只返回 JSON，格式必须为 {"groups": [...]}，不要输出解释文字。
+2. 只能基于技术评分项判断是否需要补充一级目录；技术评分要求只能作为评分约束、扣分口径、判定标准或注意事项参考，不能作为新增一级目录。
+3. 如果输入中已经包含“## 技术评分项”和“## 技术评分要求”分区，groups 只能来自“## 技术评分项”分区。
+4. 如果输入未明确分区，也必须按语义判断：投标人需要在技术方案中一一响应、展开编写的具体评分内容才是评分项；用于解释评分、约束评分、定义扣分或判定规则的内容是评分要求。
+5. 如果某个技术评分项大类可以由原方案已有一级目录承载，请填写 existing_root_id，必须逐字复制原方案一级目录 id。
+6. 如果某个技术评分项大类无法由已有一级目录承载，请 existing_root_id 返回空字符串，表示需要追加新的一级目录。
+7. 追加的新一级目录标题要专业、简洁，适合作为技术标一级目录。
+8. detail_points 中保留该评分项大类下的关键评分细项，并可参考技术评分要求中的通用约束补充响应注意点，但不要把评分要求本身写成独立细项。
+9. 新增 title 只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
+10. 只返回 JSON，格式必须为 {"groups": [...]}，不要输出解释文字。
 
 返回格式：
 {
   "groups": [
     {
       "requirement_id": "R1",
-      "title": "评分大类或拟追加一级目录标题",
-      "description": "该评分大类关注的核心内容",
+      "title": "技术评分项大类或拟追加一级目录标题",
+      "description": "该评分项大类关注的核心内容",
       "detail_points": ["评分细项"],
       "existing_root_id": "原方案一级目录id，无法承载时为空字符串"
     }
@@ -1110,7 +1120,7 @@ function buildExpansionTopLevelComplementMessages({ overview, requirements, oldO
 }`;
   return [
     ...buildOutlineSharedContextMessages({ overview, requirements, oldOutline }),
-    { role: 'user', content: `${instructionPrompt}\n\n请先完成一级目录补充计划：识别每个技术评分大类由哪个原方案一级目录承载，无法承载的再作为新增一级目录追加。` },
+    { role: 'user', content: `${instructionPrompt}\n\n请先完成一级目录补充计划：识别每个技术评分项大类由哪个原方案一级目录承载，无法承载的再作为新增一级目录追加。` },
   ];
 }
 
