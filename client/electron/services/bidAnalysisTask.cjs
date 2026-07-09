@@ -299,6 +299,10 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
     return Math.round((done / selectedTasks.length) * 100);
   }
 
+  function getMissingRequiredTasks(nextTasks) {
+    return tasks.filter((task) => task.required && !(nextTasks[task.id]?.status === 'success' && String(nextTasks[task.id]?.content || '').trim()));
+  }
+
   const initialMessage = requestedTaskIds
     ? '开始重新解析选中的招标文件解析项。'
     : forceRerun
@@ -346,12 +350,16 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
       task,
       sectionHint,
     });
+    const trimmedContent = String(content || '').trim();
+    if (!trimmedContent) {
+      throw new Error(`${task.label}解析结果为空，请重新解析`);
+    }
 
     const prev = workspaceStore.loadTechnicalPlan() || {};
-    const nextTasks = { ...(prev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'success', content } };
+    const nextTasks = { ...(prev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'success', content: trimmedContent } };
     const partial = { bidAnalysisTasks: nextTasks, bidAnalysisProgress: doneProgress(nextTasks) };
-    if (task.id === 'projectOverview') partial.projectOverview = content;
-    if (task.id === 'techRequirements') partial.techRequirements = content;
+    if (task.id === 'projectOverview') partial.projectOverview = trimmedContent;
+    if (task.id === 'techRequirements') partial.techRequirements = trimmedContent;
     technicalPlan = workspaceStore.updateTechnicalPlan(partial);
     updateTask({ status: 'running', progress: technicalPlan.bidAnalysisProgress || 0 }, technicalPlan);
   }
@@ -384,8 +392,18 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
   }
   await Promise.all(remainingTasks.map(runOneSafely));
 
-  technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTask: updateTask({ status: 'success', progress: 100, logs: ['招标文件解析完成。'] }) });
-  updateTask({ status: 'success', progress: 100 }, technicalPlan);
+  const latestPlan = workspaceStore.loadTechnicalPlan() || {};
+  const missingRequiredTasks = getMissingRequiredTasks(latestPlan.bidAnalysisTasks || {});
+  if (missingRequiredTasks.length) {
+    const missingLabels = missingRequiredTasks.map((task) => task.label).join('、');
+    const message = `必填解析项未完成：${missingLabels}，请重新解析失败项。`;
+    technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTask: updateTask({ status: 'error', progress: 100, error: message, logs: [message] }) });
+    updateTask({ status: 'error', progress: 100, error: message }, technicalPlan);
+    return;
+  }
+
+  technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTask: updateTask({ status: 'success', progress: 100, error: undefined, logs: ['招标文件解析完成。'] }) });
+  updateTask({ status: 'success', progress: 100, error: undefined }, technicalPlan);
 }
 
 module.exports = {

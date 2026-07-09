@@ -249,7 +249,7 @@ function BidAnalysisPage({
   }).length;
   const sectionTaskRunning = bidSectionExtractionTask?.status === 'running' || bidSectionExtractionTask?.status === 'pausing';
   const taskRunning = running || fullRerunLocked || sectionTaskRunning || task?.status === 'running';
-  const requiredDone = requiredTasks.every((task) => tasks[task.id]?.status === 'success' && tasks[task.id]?.content);
+  const requiredDone = requiredTasks.every((task) => tasks[task.id]?.status === 'success' && String(tasks[task.id]?.content || '').trim());
   const isPromptCacheOptimizing = taskRunning
     && selectedTasks.length > 1
     && selectedTasks.some((task) => task.id === 'projectOverview')
