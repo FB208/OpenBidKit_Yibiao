@@ -1,7 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useState, type FormEvent } from 'react';
 import { trackResourceClick } from '../../../shared/analytics/analytics';
-import { MarkdownRenderer, useToast } from '../../../shared/ui';
+import { MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
 
 interface ResourceItem {
   id: string;
@@ -135,11 +135,11 @@ function ResourcesPage() {
             <Dialog.Description asChild>
               <div className="resource-detail-body">
                 {selectedResource ? <ResourceCover item={selectedResource} /> : null}
-                <div className="resource-detail-markdown">
+                <MarkdownFullscreenViewer className="resource-detail-markdown" fullscreenClassName="markdown-viewer" title={`${selectedResource?.title || '资源详情'}全屏查看`}>
                   <MarkdownRenderer allowRawHtml={false}>
                     {selectedResource?.modalContent || '暂无下载说明。'}
                   </MarkdownRenderer>
-                </div>
+                </MarkdownFullscreenViewer>
               </div>
             </Dialog.Description>
             <div className="resource-detail-actions">

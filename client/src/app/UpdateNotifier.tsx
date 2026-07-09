@@ -1,7 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState } from 'react';
 import { dismissRemoteNotice, fetchRemoteNotice, hasDismissedRemoteNotice, type RemoteNotice } from '../shared/remoteNotice';
-import { MarkdownRenderer, useToast } from '../shared/ui';
+import { MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../shared/ui';
 import { hasPromptedUpdate, showUpdateReadyToast } from '../shared/updateToast';
 
 const updatePollIntervalMs = 30 * 60 * 1000;
@@ -127,7 +127,7 @@ function UpdateNotifier() {
           <Dialog.Title className="remote-notice-title">{remoteNotice?.title || '公告'}</Dialog.Title>
           <Dialog.Description className="sr-only">远程公告</Dialog.Description>
           {remoteNotice?.updatedAt ? <div className="remote-notice-time">公告时间：{remoteNotice.updatedAt}</div> : null}
-          <div className="remote-notice-content">
+          <MarkdownFullscreenViewer className="remote-notice-content" fullscreenClassName="markdown-viewer" title={`${remoteNotice?.title || '公告'}全屏查看`}>
             <MarkdownRenderer
               allowRawHtml={false}
               imageMode="preview"
@@ -136,7 +136,7 @@ function UpdateNotifier() {
             >
               {remoteNotice?.content || ''}
             </MarkdownRenderer>
-          </div>
+          </MarkdownFullscreenViewer>
           <div className="remote-notice-actions">
             <button className="primary-action" type="button" onClick={closeRemoteNotice}>知道了</button>
           </div>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { isLibreOfficeRequiredMessage, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FileParserProvider } from '../../../shared/types';
 import type { TechnicalPlanOriginalPlanFile, TechnicalPlanState, TechnicalPlanTenderFile, TechnicalPlanTenderSourceFile, TechnicalPlanWorkflowKind } from '../types';
 
@@ -327,11 +327,11 @@ function DocumentAnalysisPage({
             <p>文件较大时需要稍等片刻。</p>
           </div>
         ) : activeMarkdown ? (
-          <div className="markdown-viewer">
+          <MarkdownFullscreenViewer title={`${documentLabels[visibleDocumentTab]}全屏预览`}>
             <MarkdownRenderer>
               {activeMarkdown}
             </MarkdownRenderer>
-          </div>
+          </MarkdownFullscreenViewer>
         ) : (
           <div className="markdown-empty-state">
             <strong>尚未导入{documentLabels[visibleDocumentTab]}</strong>

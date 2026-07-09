@@ -81,6 +81,9 @@ const bridge = {
       return () => ipcRenderer.removeListener('developer-token-stats:changed', listener);
     },
   },
+  developerExpansionReplaceTest: {
+    run: (payload) => ipcRenderer.invoke('developer-expansion-replace-test:run', payload),
+  },
   file: {
     selectDuplicateCheckFiles: (options) => ipcRenderer.invoke('file:select-duplicate-check-files', options),
   },

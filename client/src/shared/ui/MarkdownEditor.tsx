@@ -1,4 +1,5 @@
-import { useRef } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { useRef, type RefObject } from 'react';
 
 export interface MarkdownEditorProps {
   value: string;
@@ -6,6 +7,8 @@ export interface MarkdownEditorProps {
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  fullscreenTitle?: string;
+  fullscreenDescription?: string;
 }
 
 const toolbarActions = [
@@ -17,11 +20,20 @@ const toolbarActions = [
   { id: 'ordered-list', label: '有序列表', title: '有序列表', prefix: '1. ', suffix: '', content: '1.' },
 ];
 
-function MarkdownEditor({ value, onChange, placeholder = '输入 Markdown 内容...', className, disabled = false }: MarkdownEditorProps) {
+function MarkdownEditor({
+  value,
+  onChange,
+  placeholder = '输入 Markdown 内容...',
+  className,
+  disabled = false,
+  fullscreenTitle = 'Markdown 全屏编辑',
+  fullscreenDescription = '全屏编辑当前 Markdown 内容。',
+}: MarkdownEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fullscreenTextareaRef = useRef<HTMLTextAreaElement>(null);
 
-  function insertMarkdown(prefix: string, suffix = '') {
-    const textarea = textareaRef.current;
+  function insertMarkdown(targetRef: RefObject<HTMLTextAreaElement | null>, prefix: string, suffix = '') {
+    const textarea = targetRef.current;
     if (!textarea || disabled) {
       return;
     }
@@ -41,31 +53,70 @@ function MarkdownEditor({ value, onChange, placeholder = '输入 Markdown 内容
     });
   }
 
-  return (
-    <div className={`markdown-editor${className ? ` ${className}` : ''}`}>
-      <div className="markdown-editor-toolbar" aria-label="Markdown 编辑工具栏">
-        {toolbarActions.map((action) => (
-          <button
-            type="button"
-            title={action.title}
-            aria-label={action.label}
-            disabled={disabled}
-            onClick={() => insertMarkdown(action.prefix, action.suffix)}
-            key={action.id}
-          >
-            {action.content}
-          </button>
-        ))}
-      </div>
-      <textarea
-        ref={textareaRef}
-        className="markdown-editor-textarea"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
+  function renderToolbarButtons(targetRef: RefObject<HTMLTextAreaElement | null>) {
+    return toolbarActions.map((action) => (
+      <button
+        type="button"
+        title={action.title}
+        aria-label={action.label}
         disabled={disabled}
-      />
-    </div>
+        onClick={() => insertMarkdown(targetRef, action.prefix, action.suffix)}
+        key={action.id}
+      >
+        {action.content}
+      </button>
+    ));
+  }
+
+  return (
+    <Dialog.Root>
+      <div className={`markdown-editor${className ? ` ${className}` : ''}`}>
+        <div className="markdown-editor-toolbar" aria-label="Markdown 编辑工具栏">
+          {renderToolbarButtons(textareaRef)}
+          <span className="markdown-editor-toolbar-spacer" />
+          <Dialog.Trigger asChild>
+            <button type="button" className="markdown-editor-fullscreen-trigger" disabled={disabled} aria-label="全屏编辑" title="全屏编辑">
+              全屏
+            </button>
+          </Dialog.Trigger>
+        </div>
+        <textarea
+          ref={textareaRef}
+          className="markdown-editor-textarea"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          disabled={disabled}
+        />
+      </div>
+      <Dialog.Portal>
+        <Dialog.Overlay className="markdown-fullscreen-overlay" />
+        <Dialog.Content
+          className="markdown-editor-fullscreen-dialog"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            requestAnimationFrame(() => fullscreenTextareaRef.current?.focus());
+          }}
+        >
+          <Dialog.Title className="markdown-fullscreen-title">{fullscreenTitle}</Dialog.Title>
+          <Dialog.Description className="markdown-fullscreen-description">{fullscreenDescription}</Dialog.Description>
+          <Dialog.Close className="markdown-fullscreen-close" type="button">退出全屏</Dialog.Close>
+          <div className="markdown-editor markdown-editor-fullscreen-body">
+            <div className="markdown-editor-toolbar" aria-label="Markdown 全屏编辑工具栏">
+              {renderToolbarButtons(fullscreenTextareaRef)}
+            </div>
+            <textarea
+              ref={fullscreenTextareaRef}
+              className="markdown-editor-textarea"
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              placeholder={placeholder}
+              disabled={disabled}
+            />
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 

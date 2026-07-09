@@ -665,7 +665,7 @@
 .remote-notice-preview-modal {
   position: fixed;
   inset: 0;
-  z-index: 140;
+  z-index: 1100;
   background: rgba(9, 14, 28, 0.72);
   backdrop-filter: blur(6px);
 }
@@ -673,7 +673,7 @@
 .remote-notice-preview-card {
   position: fixed;
   inset: 32px;
-  z-index: 141;
+  z-index: 1101;
   display: grid;
   place-items: center;
   padding: 28px;

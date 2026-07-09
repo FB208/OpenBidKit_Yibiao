@@ -2,7 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import * as Switch from '@radix-ui/react-switch';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { FloatingToolbar, isLibreOfficeRequiredMessage, MarkdownEditor, MarkdownRenderer, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import { FloatingToolbar, isLibreOfficeRequiredMessage, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type {
   LogicCheckFinding,
@@ -384,11 +384,11 @@ function FindingDetailBlock({ label, content, allowRawHtml = false }: { label: s
   return (
     <div className="rejection-finding-detail-block">
       <strong>{label}</strong>
-      <div className="markdown-viewer rejection-finding-markdown">
+      <MarkdownFullscreenViewer className="markdown-viewer rejection-finding-markdown" fullscreenClassName="markdown-viewer" title={`${label}全屏查看`}>
         <MarkdownRenderer allowRawHtml={allowRawHtml}>
           {content || '未提供'}
         </MarkdownRenderer>
-      </div>
+      </MarkdownFullscreenViewer>
     </div>
   );
 }
@@ -423,11 +423,11 @@ function TypoOriginalBlock({ excerpt, wrongText }: { excerpt: string; wrongText:
   return (
     <div className="rejection-finding-detail-block">
       <strong>原文内容</strong>
-      <div className="markdown-viewer rejection-finding-markdown typo-original-excerpt">
+      <MarkdownFullscreenViewer className="markdown-viewer rejection-finding-markdown typo-original-excerpt" fullscreenClassName="markdown-viewer" title="原文内容全屏查看">
         <MarkdownRenderer allowRawHtml>
           {highlightedContent}
         </MarkdownRenderer>
-      </div>
+      </MarkdownFullscreenViewer>
     </div>
   );
 }
@@ -1724,11 +1724,11 @@ function RejectionCheckPage() {
             </div>
 
             {activeDocument ? (
-              <div className="markdown-viewer rejection-markdown-viewer">
+              <MarkdownFullscreenViewer className="markdown-viewer rejection-markdown-viewer" title={`${activeDocument.fileName}全屏查看`}>
                 <MarkdownRenderer>
                   {activeDocument.content}
                 </MarkdownRenderer>
-              </div>
+              </MarkdownFullscreenViewer>
             ) : (
               <div className="markdown-empty-state rejection-empty-reader">
                 <strong>尚未准备{activeDocumentTab === 'tender' ? '招标文件' : '投标文件'}</strong>
@@ -1792,11 +1792,11 @@ function RejectionCheckPage() {
 
             {activeResultTab === 'analysis' ? (
               visibleExtractionContent.trim() ? (
-                <div className="markdown-viewer rejection-markdown-viewer rejection-result-viewer">
+                <MarkdownFullscreenViewer className="markdown-viewer rejection-markdown-viewer rejection-result-viewer" title="解析结果全屏查看">
                   <MarkdownRenderer>
                     {visibleExtractionContent}
                   </MarkdownRenderer>
-                </div>
+                </MarkdownFullscreenViewer>
               ) : (
                 <div className="markdown-empty-state rejection-empty-reader">
                   <strong>{visibleExtractionStatus === 'error' ? invalidBidAndRejectionItems.error || '解析失败' : '等待解析无效与废标项'}</strong>

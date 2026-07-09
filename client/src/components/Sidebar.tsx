@@ -34,6 +34,7 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'developer-prompt-lab': FlaskIcon,
   'developer-parser-sandbox': FlaskIcon,
   'developer-export-preview': FlaskIcon,
+  'developer-expansion-replace-test': FlaskIcon,
   'developer-opencode-agent-test': FlaskIcon,
   settings: GearIcon,
 };

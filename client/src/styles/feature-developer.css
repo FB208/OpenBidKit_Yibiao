@@ -47,6 +47,202 @@
   border-radius: 18px;
 }
 
+/* 开发者测试页专用样式：只服务 ContentExpansionReplaceTestPage.tsx，不参与正式扩写页面。 */
+.developer-expansion-replace-test-page {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 18px;
+  overflow: hidden;
+}
+
+.developer-expansion-replace-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 22px;
+  align-items: end;
+  padding: 30px 34px;
+  background:
+    radial-gradient(circle at 88% 18%, rgba(245, 158, 11, 0.18), transparent 34%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(255, 251, 235, 0.9));
+}
+
+.developer-expansion-replace-hero h2 {
+  margin: 10px 0 12px;
+  color: var(--yb-text);
+  font-size: clamp(32px, 4.8vw, 54px);
+  line-height: 1.04;
+  letter-spacing: -0.05em;
+}
+
+.developer-expansion-replace-hero p {
+  max-width: 900px;
+  margin: 0;
+  color: var(--yb-text-soft);
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+.developer-expansion-replace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.developer-expansion-replace-grid {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(340px, 0.95fr) minmax(320px, 1fr);
+  gap: 18px;
+  overflow: auto;
+}
+
+.developer-expansion-replace-panel {
+  min-width: 0;
+  padding: 22px;
+}
+
+.developer-expansion-replace-panel.is-wide {
+  grid-column: 1 / -1;
+}
+
+.developer-expansion-replace-field {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.developer-expansion-replace-field > span,
+.developer-expansion-replace-check,
+.developer-expansion-replace-source-note span,
+.developer-expansion-replace-status span,
+.developer-expansion-replace-metrics span {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+}
+
+.developer-expansion-replace-field select,
+.developer-expansion-replace-field textarea {
+  width: 100%;
+  min-width: 0;
+  color: var(--yb-text);
+  background: #ffffff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 16px;
+  outline: none;
+}
+
+.developer-expansion-replace-field select {
+  height: 42px;
+  padding: 0 12px;
+}
+
+.developer-expansion-replace-field textarea {
+  resize: vertical;
+  min-height: 150px;
+  padding: 12px 14px;
+  line-height: 1.7;
+}
+
+.developer-expansion-replace-field select:focus,
+.developer-expansion-replace-field textarea:focus {
+  border-color: rgba(33, 116, 253, 0.5);
+  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.1);
+}
+
+.developer-expansion-replace-check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 16px;
+}
+
+.developer-expansion-replace-source-note {
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  background: rgba(255, 251, 235, 0.72);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: 18px;
+}
+
+.developer-expansion-replace-source-note strong {
+  color: #92400e;
+}
+
+.developer-expansion-replace-status {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 18px;
+  background: #f8fafc;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 20px;
+}
+
+.developer-expansion-replace-status strong {
+  font-size: 20px;
+  line-height: 1.35;
+}
+
+.developer-expansion-replace-status.is-success strong {
+  color: #047857;
+}
+
+.developer-expansion-replace-status.is-warning strong {
+  color: #b45309;
+}
+
+.developer-expansion-replace-status.is-danger strong {
+  color: #b91c1c;
+}
+
+.developer-expansion-replace-status.is-muted strong {
+  color: var(--yb-text-soft);
+}
+
+.developer-expansion-replace-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.developer-expansion-replace-metrics article {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  background: linear-gradient(135deg, rgba(248, 250, 253, 0.94), rgba(255, 255, 255, 0.98));
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 18px;
+}
+
+.developer-expansion-replace-metrics strong {
+  color: var(--yb-primary);
+  font-size: 20px;
+}
+
+.developer-expansion-replace-panel pre {
+  max-height: 420px;
+  margin: 16px 0 0;
+  overflow: auto;
+  padding: 16px;
+  color: #243047;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f8fafc;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 18px;
+}
+
+.developer-expansion-replace-panel.is-wide pre {
+  max-height: 520px;
+}
+
 /* [1564-1716] developer-secondary-hero/accent-card/grid/panel/metrics/steps/preview (DeveloperDemoPage.tsx) */
 .developer-secondary-hero h2 {
   margin: 10px 0 14px;
