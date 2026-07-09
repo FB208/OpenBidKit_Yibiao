@@ -5,6 +5,8 @@ export { default as InputWithAction } from './InputWithAction';
 export type { InputWithActionProps } from './InputWithAction';
 export { default as MarkdownEditor } from './MarkdownEditor';
 export type { MarkdownEditorProps } from './MarkdownEditor';
+export { default as MarkdownFullscreenViewer } from './MarkdownFullscreenViewer';
+export type { MarkdownFullscreenViewerProps } from './MarkdownFullscreenViewer';
 export type {
   FloatingToolbarAction,
   FloatingToolbarActionVariant,

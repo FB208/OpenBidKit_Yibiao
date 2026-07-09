@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { MarkdownEditor, MarkdownRenderer, useToast } from '../../../shared/ui';
+import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { OutlineData } from '../../../shared/types';
 import type { BackgroundTaskState, GlobalFactGroupState } from '../types';
 
@@ -233,13 +233,13 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
                   placeholder="填写后续正文需要统一使用的事实变量，例如人员、时间、型号、服务承诺等..."
                 />
               </div>
-              <div className="global-facts-preview-pane markdown-viewer">
+              <MarkdownFullscreenViewer className="global-facts-preview-pane markdown-viewer" title={`${activeGroup.title}全屏预览`}>
                 {draftContent.trim() ? (
                   <MarkdownRenderer allowRawHtml={false}>{draftContent}</MarkdownRenderer>
                 ) : (
                   <p className="content-editor-empty">暂无预览内容</p>
                 )}
-              </div>
+              </MarkdownFullscreenViewer>
             </div>
           ) : (
             <div className="markdown-empty-state global-facts-empty">

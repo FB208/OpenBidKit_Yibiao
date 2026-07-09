@@ -3,7 +3,7 @@ import * as Popover from '@radix-ui/react-popover';
 import * as Switch from '@radix-ui/react-switch';
 import { memo, useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { MarkdownEditor, MarkdownRenderer, useToast } from '../../../shared/ui';
+import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { ClientConfig, ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
 import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement, OriginalPlanCoverageRepairMode, TechnicalPlanWorkflowKind } from '../types';
@@ -1034,17 +1034,17 @@ function ContentEditPage({
               placeholder="输入 Markdown 正文..."
             />
           ) : selectedItem && selectedIsLeaf && editing && isPreviewing ? (
-            <div className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle}>
+            <MarkdownFullscreenViewer className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle} title="正文预览全屏查看">
               {draftContent.trim() ? (
                 <MarkdownContent content={draftContent} onPreviewImage={handlePreviewImage} />
               ) : (
                 <p className="content-editor-empty">暂无预览内容</p>
               )}
-            </div>
+            </MarkdownFullscreenViewer>
           ) : selectedItem && selectedIsLeaf && selectedContent.trim() ? (
-            <div className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle}>
+            <MarkdownFullscreenViewer className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle} title={`${selectedItem.id} ${selectedItem.title}全屏查看`}>
               <MarkdownContent content={selectedContent} onPreviewImage={handlePreviewImage} />
-            </div>
+            </MarkdownFullscreenViewer>
           ) : selectedItem && selectedIsLeaf ? (
             <div className="markdown-empty-state content-generation-empty">
               <strong>{getLeafStatus(selectedItem, sections) === 'error' ? sections[selectedItem.id]?.error || '正文生成失败' : '正文待生成'}</strong>

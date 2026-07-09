@@ -405,7 +405,7 @@
 .image-preview-modal {
   position: fixed;
   inset: 0;
-  z-index: 120;
+  z-index: 1100;
   background: rgba(9, 16, 28, 0.68);
   backdrop-filter: blur(10px);
 }
@@ -414,7 +414,7 @@
   position: fixed;
   top: 50%;
   left: 50%;
-  z-index: 121;
+  z-index: 1101;
   display: grid;
   width: min(1120px, calc(100vw - 64px));
   max-height: calc(100vh - 64px);
@@ -487,6 +487,136 @@
   line-height: 1.8;
 }
 
+.markdown-fullscreen-frame {
+  position: relative;
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.markdown-fullscreen-frame > .markdown-viewer,
+.markdown-fullscreen-frame > .remote-notice-content,
+.markdown-fullscreen-frame > .resource-detail-markdown {
+  min-height: 0;
+}
+
+.markdown-fullscreen-trigger {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 5;
+  height: 28px;
+  padding: 0 10px;
+  color: var(--yb-primary);
+  font-size: 12px;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(33, 116, 253, 0.18);
+  border-radius: 999px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+  cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
+}
+
+.markdown-fullscreen-trigger:hover:not(:disabled) {
+  color: #155bd7;
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.34);
+}
+
+.markdown-fullscreen-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.markdown-fullscreen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(4px);
+}
+
+.markdown-fullscreen-dialog,
+.markdown-editor-fullscreen-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 1001;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  background: radial-gradient(circle at 18% 0%, rgba(229, 240, 255, 0.9), #f7fbff 42%, #eef5ff 100%);
+  border: 0;
+  outline: none;
+}
+
+.markdown-fullscreen-title,
+.markdown-fullscreen-description {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  white-space: nowrap;
+  border: 0;
+  clip: rect(0 0 0 0);
+}
+
+.markdown-fullscreen-close {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  z-index: 3;
+  height: 38px;
+  padding: 0 16px;
+  color: var(--yb-primary);
+  font-size: 14px;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(33, 116, 253, 0.22);
+  border-radius: 999px;
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.16);
+  cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease;
+}
+
+.markdown-fullscreen-close:hover {
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.38);
+}
+
+.markdown-fullscreen-content {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  padding: 28px;
+}
+
+.markdown-fullscreen-content > .markdown-viewer,
+.markdown-fullscreen-content > .remote-notice-content,
+.markdown-fullscreen-content > .resource-detail-markdown {
+  width: min(1120px, 100%);
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  justify-self: center;
+  overflow: auto;
+  background: #ffffff;
+  border: 1px solid rgba(228, 233, 240, 0.88);
+  border-radius: 22px;
+  box-shadow: var(--yb-shadow);
+}
+
+.markdown-fullscreen-content > .markdown-viewer.export-format-preview {
+  width: min(100%, var(--ef-page-width, 100%));
+}
+
 /* [3929-4001] markdown-editor + toolbar + textarea + content-editor-empty (MarkdownEditor.tsx) */
 .markdown-editor {
   display: grid;
@@ -499,10 +629,15 @@
 .markdown-editor-toolbar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
   padding: 10px 14px;
   background: #ffffff;
   border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.markdown-editor-toolbar-spacer {
+  flex: 1 1 auto;
 }
 
 .markdown-editor-toolbar button {
@@ -528,6 +663,21 @@
 .markdown-editor-toolbar button:disabled {
   cursor: not-allowed;
   opacity: 0.48;
+}
+
+.markdown-editor-toolbar .markdown-editor-fullscreen-trigger {
+  width: auto;
+  padding: 0 12px;
+  color: var(--yb-primary);
+  font-weight: 800;
+  background: rgba(33, 116, 253, 0.08);
+  border-color: rgba(33, 116, 253, 0.12);
+  border-radius: 999px;
+}
+
+.markdown-editor-toolbar .markdown-editor-fullscreen-trigger:hover:not(:disabled) {
+  color: #155bd7;
+  background: rgba(33, 116, 253, 0.13);
 }
 
 .markdown-editor-textarea {
@@ -557,7 +707,40 @@
   background: rgba(248, 250, 253, 0.78);
 }
 
+.markdown-editor-fullscreen-dialog {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.markdown-editor-fullscreen-body {
+  width: min(1180px, calc(100vw - 56px));
+  height: calc(100vh - 56px);
+  align-self: center;
+  justify-self: center;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid rgba(228, 233, 240, 0.9);
+  border-radius: 24px;
+  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.18);
+}
+
 .content-editor-empty {
   margin: 0;
   color: var(--yb-text-muted);
+}
+
+@media (max-width: 860px) {
+  .markdown-fullscreen-content {
+    padding: 14px;
+  }
+
+  .markdown-fullscreen-close {
+    top: 12px;
+    right: 14px;
+  }
+
+  .markdown-editor-fullscreen-body {
+    width: calc(100vw - 28px);
+    height: calc(100vh - 28px);
+    border-radius: 18px;
+  }
 }

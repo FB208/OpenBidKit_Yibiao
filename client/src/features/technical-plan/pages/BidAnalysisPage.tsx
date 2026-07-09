@@ -2,7 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { bidAnalysisTasks, getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
-import { MarkdownRenderer, useToast } from '../../../shared/ui';
+import { MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
 import BidSectionSelectorDialog from '../components/BidSectionSelectorDialog';
 import type { BackgroundTaskState, BidAnalysisMode, BidAnalysisTasks, BidAnalysisTaskState, BidSectionExtractionStatus, BidSectionMode, DetectedBidSection, TechnicalPlanState } from '../types';
 
@@ -172,11 +172,11 @@ function JsonResultTable({ content }: { content: string }) {
 
   if (!data) {
     return (
-      <div className="markdown-viewer bid-analysis-output">
+      <MarkdownFullscreenViewer className="markdown-viewer bid-analysis-output" title="JSON 内容全屏预览">
         <MarkdownRenderer>
           {`\`\`\`json\n${content}\n\`\`\``}
         </MarkdownRenderer>
-      </div>
+      </MarkdownFullscreenViewer>
     );
   }
 
@@ -670,11 +670,11 @@ function BidAnalysisPage({
             activeTask?.output === 'json' ? (
               <JsonResultTable content={activeTaskContent} />
             ) : (
-              <div className="markdown-viewer bid-analysis-output">
+              <MarkdownFullscreenViewer className="markdown-viewer bid-analysis-output" title={`${activeTask?.label || '解析结果'}全屏预览`}>
                 <MarkdownRenderer>
                   {activeTaskContent}
                 </MarkdownRenderer>
-              </div>
+              </MarkdownFullscreenViewer>
             )
           ) : (
             <div className="markdown-empty-state bid-analysis-empty">

@@ -1,7 +1,7 @@
 import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { isLibreOfficeRequiredMessage, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeBaseMigrationStatus, KnowledgeDocument, KnowledgeItem } from '../types';
 
 declare global {
@@ -1353,7 +1353,18 @@ function KnowledgeDocumentViewer({
             </DebuggableMarkdownContent>
           )
         ) : (
-          <div className="markdown-viewer knowledge-viewer-markdown">
+          <MarkdownFullscreenViewer
+            className="markdown-viewer knowledge-viewer-markdown"
+            title={`${document.file_name}全屏查看`}
+            fullscreenChildren={viewerLoading ? (
+              <div className="knowledge-empty-box large">
+                <strong>正在读取 Markdown...</strong>
+                <p>原文内容较大时需要稍等片刻。</p>
+              </div>
+            ) : (
+              <MarkdownRenderer>{markdownPreview || '暂无 Markdown 内容'}</MarkdownRenderer>
+            )}
+          >
             {viewerLoading ? (
               <div className="knowledge-empty-box large">
                 <strong>正在读取 Markdown...</strong>
@@ -1369,7 +1380,7 @@ function KnowledgeDocumentViewer({
                 <MarkdownRenderer>{markdownPreview || '暂无 Markdown 内容'}</MarkdownRenderer>
               </DebuggableMarkdownContent>
             )}
-          </div>
+          </MarkdownFullscreenViewer>
         )}
       </section>
 
@@ -1448,16 +1459,26 @@ function KnowledgeItemSourceDialog({ item, developerMode, rendering, debugTrace,
           <p>内容较大时需要稍等片刻。</p>
         </div>
       ) : (
-        <DebuggableMarkdownContent
+        <MarkdownFullscreenViewer
           className="markdown-viewer knowledge-source-content"
-          debugTrace={debugTrace}
-          developerMode={developerMode}
-          profilerId="knowledge-item-source"
+          title={`${item.title}原文全屏查看`}
+          fullscreenChildren={(
+            <MarkdownRenderer enableGfm={false} linkMode="text" linkTextClassName="knowledge-item-link-text" imageMode="lazy">
+              {item.content || '暂无原文内容'}
+            </MarkdownRenderer>
+          )}
         >
-          <MarkdownRenderer enableGfm={false} linkMode="text" linkTextClassName="knowledge-item-link-text" imageMode="lazy">
-            {item.content || '暂无原文内容'}
-          </MarkdownRenderer>
-        </DebuggableMarkdownContent>
+          <DebuggableMarkdownContent
+            className="knowledge-source-debug-content"
+            debugTrace={debugTrace}
+            developerMode={developerMode}
+            profilerId="knowledge-item-source"
+          >
+            <MarkdownRenderer enableGfm={false} linkMode="text" linkTextClassName="knowledge-item-link-text" imageMode="lazy">
+              {item.content || '暂无原文内容'}
+            </MarkdownRenderer>
+          </DebuggableMarkdownContent>
+        </MarkdownFullscreenViewer>
       )}
     </Dialog.Content>
   );
