@@ -1751,6 +1751,241 @@ function splitContentSentences(markdown) {
   return sentences;
 }
 
+function normalizeTenderComparableText(value) {
+  let text = normalizeContentSentence(value)
+    .normalize('NFKC')
+    .replace(/\\([\[\]().{}<>#+=\-])/g, '$1')
+    .replace(/[‐‑‒–—―]/g, '-')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/（/g, '(')
+    .replace(/）/g, ')')
+    .replace(/，/g, ',')
+    .replace(/。/g, '.')
+    .replace(/；/g, ';')
+    .replace(/：/g, ':')
+    .replace(/≥|大于等于|不低于|不少于/g, '>=')
+    .replace(/≤|小于等于|不高于|不超过/g, '<=')
+    .replace(/(\d)\s*[xX×]\s*(\d)/g, '$1×$2')
+    .replace(/(\d{4})\s*年\s*0?(\d{1,2})\s*月\s*0?(\d{1,2})\s*日/g, (_match, year, month, day) => `${year}年${Number(month)}月${Number(day)}日`)
+    .replace(/\b(\d{4})[-/.](0?\d{1,2})[-/.](0?\d{1,2})\b/g, (_match, year, month, day) => `${year}年${Number(month)}月${Number(day)}日`)
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  text = stripTenderTablePrefix(text);
+  text = stripTenderDirectoryPageTail(text);
+  return text.trim();
+}
+
+function stripTenderTablePrefix(value) {
+  let text = String(value || '').trim();
+  const prefixes = ['技术要求', '招标要求', '评分标准', '评标标准', '投标应答', '偏离说明'];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const prefix of prefixes) {
+      const pattern = new RegExp(`^${prefix}\\s*[:：]?\\s*(?:\\d+(?:\\.\\d+)*\\s*[.)、．]?\\s*)?`, 'i');
+      const next = text.replace(pattern, '').trim();
+      if (next !== text && next) {
+        text = next;
+        changed = true;
+        break;
+      }
+    }
+  }
+  return text;
+}
+
+function stripTenderDirectoryPageTail(value) {
+  let text = String(value || '').trim();
+  if (!/(目录|页码|检索|评分因素|评标标准|评分标准)/.test(text)) return text;
+  text = text
+    .replace(/\s*(?:第\s*)?\d{1,4}\s*页\s*$/i, '')
+    .replace(/\s*P\s*\d{1,4}(?:\s*[-~至]\s*P?\s*\d{1,4})?\s*$/i, '')
+    .replace(/(?:\.{2,}|…{2,}|·{2,}|\s{2,})\s*\d{1,4}\s*$/g, '')
+    .replace(/\s+\d{1,4}\s*$/g, '');
+  return text.trim();
+}
+
+function buildTenderStrictKey(value) {
+  return normalizeTenderComparableText(value)
+    .replace(/[\s　]+/g, '')
+    .replace(/[.,，。;；:：、!！?？"'“”‘’《》<>〈〉()[\]【】{}]/g, '')
+    .toLowerCase();
+}
+
+function buildTenderLooseText(value) {
+  return normalizeTenderComparableText(value)
+    .replace(/[\s　]+/g, '')
+    .replace(/[.,，。;；:：、!！?？"'“”‘’《》<>〈〉()[\]【】{}]/g, '')
+    .toLowerCase();
+}
+
+function buildTenderSkeletonKey(value) {
+  let text = normalizeTenderComparableText(value)
+    .replace(/\b\d{4}年\d{1,2}月\d{1,2}日\b/g, '{date}')
+    .replace(/\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b/g, '{date}')
+    .replace(/\b[A-Z]{2,}[-A-Z0-9]{4,}\b/gi, '{code}')
+    .replace(/\d+(?:\.\d+)?\s*万元/g, '{money}')
+    .replace(/\d+(?:\.\d+)?\s*元/g, '{money}')
+    .replace(/\d+(?:\.\d+)?\s*%/g, '{percent}')
+    .replace(/\d+(?:\.\d+)?\s*分/g, '{score}')
+    .replace(/P\s*\d+(?:\s*[-~至]\s*P?\s*\d+)?/gi, '{page}')
+    .replace(/\b\d+(?:\.\d+)?\b/g, '{num}');
+  text = text
+    .replace(/[\s　]+/g, '')
+    .replace(/[.,，。;；:：、!！?？"'“”‘’《》<>〈〉()[\]【】{}]/g, '')
+    .toLowerCase();
+  return text;
+}
+
+function isTenderSkeletonAllowed(value, skeletonKey) {
+  const text = normalizeTenderComparableText(value);
+  const compactLength = buildTenderLooseText(text).length;
+  if (!skeletonKey || skeletonKey.length < 8 || !/[{}]/.test(skeletonKey)) return false;
+  if (compactLength >= 18) return true;
+  return /(评分|评标|分值|计分|内容无瑕疵|内容存在|页码检索|合同复印件|技术要求|招标要求)/.test(text);
+}
+
+const tenderFieldDenyPattern = /(供应商名称|供应商地址|法定代表人|供应商代表|授权代表|被授权人|委托代理人|联系人|联系电话|电话|手机|邮政编码|邮箱|电子邮箱|开户|账号|银行|报价|投标报价|投标总价|合同金额|金额|总价)/;
+const tenderFieldAllowPattern = /^(投标日期|日期|项目名称|项目编号|采购人|采购代理机构|评分因素及评标标准页码检索|投标文件总目录|目录|附件\d*|投标书|开标一览表|报价分项一览表|投标产品配置清单|商务要求点对点应答表|技术要求点对点应答表|主要相关业绩一览表|政府采购政策情况表|中小微企业声明函|非残疾人福利性单位声明函)$/;
+
+function normalizeTenderFieldName(value) {
+  return String(value || '')
+    .replace(/[\s　]+/g, '')
+    .replace(/[：:]+$/g, '')
+    .replace(/[()（）【】\[\]《》]/g, '')
+    .trim();
+}
+
+function parseTenderFormatField(value) {
+  const text = normalizeTenderComparableText(value);
+  if (!text) return null;
+  if (/^评分因素及评标标准页码检索(?:\s+\d{1,4}|\s+P?\d{1,4}(?:[-~至]P?\d{1,4})?)?$/i.test(text)) {
+    return { field: '评分因素及评标标准页码检索', tail: text.replace(/^评分因素及评标标准页码检索/i, '').trim() };
+  }
+
+  const colonIndex = text.indexOf(':');
+  if (colonIndex > 0 && colonIndex <= 24) {
+    const field = normalizeTenderFieldName(text.slice(0, colonIndex));
+    const tail = text.slice(colonIndex + 1).trim();
+    return field ? { field, tail } : null;
+  }
+
+  const title = normalizeTenderFieldName(stripTenderDirectoryPageTail(text));
+  return tenderFieldAllowPattern.test(title) ? { field: title, tail: text.slice(title.length).trim() } : null;
+}
+
+function isTenderFieldAllowed(field) {
+  if (!field || tenderFieldDenyPattern.test(field)) return false;
+  return tenderFieldAllowPattern.test(field);
+}
+
+function isSafeTenderFieldTail(value) {
+  const tail = normalizeTenderComparableText(value).trim();
+  if (!tail) return true;
+  if (/^(?:\d{4}年\d{1,2}月\d{1,2}日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2})$/.test(tail)) return true;
+  if (/^(?:第\s*)?\d{1,4}\s*页?$/.test(tail)) return true;
+  if (/^P\s*\d{1,4}(?:\s*[-~至]\s*P?\s*\d{1,4})?$/i.test(tail)) return true;
+  if (/^[A-Z0-9-]{4,}$/i.test(tail)) return true;
+  return tail.length <= 36 && /(天津港保税区消防救援支队|消防装备管理系统项目|天津众信招标咨询有限公司)/.test(tail);
+}
+
+function charBigrams(value) {
+  const text = buildTenderLooseText(value);
+  if (!text) return new Set();
+  if (text.length === 1) return new Set([text]);
+  const grams = new Set();
+  for (let index = 0; index < text.length - 1; index += 1) grams.add(text.slice(index, index + 2));
+  return grams;
+}
+
+function diceSimilarityFromShared(shared, leftSize, rightSize) {
+  return (2 * shared) / Math.max(leftSize + rightSize, 1);
+}
+
+function shouldApplyNearTenderMatch(value) {
+  const text = buildTenderLooseText(value);
+  if (text.length >= 12) return true;
+  return /(评分|评标|页码|投标日期|日期|技术要求|招标要求)/.test(normalizeTenderComparableText(value));
+}
+
+function buildTenderSourceMatcher(tenderSentences) {
+  const exactSet = new Set();
+  const strictSet = new Set();
+  const skeletonSet = new Set();
+  const fieldSet = new Set();
+  const entries = [];
+  const gramIndex = new Map();
+
+  for (const sentence of tenderSentences) {
+    const source = sentence?.sentence || sentence?.normalized || '';
+    const normalized = sentence?.normalized || normalizeContentSentence(source);
+    const strictKey = buildTenderStrictKey(normalized);
+    const skeletonKey = buildTenderSkeletonKey(normalized);
+    const grams = charBigrams(normalized);
+    if (normalized) exactSet.add(normalized);
+    if (strictKey && strictKey.length >= 3) strictSet.add(strictKey);
+    if (isTenderSkeletonAllowed(normalized, skeletonKey)) skeletonSet.add(skeletonKey);
+    const parsedField = parseTenderFormatField(normalized);
+    if (parsedField && isTenderFieldAllowed(parsedField.field)) fieldSet.add(parsedField.field);
+    const entry = { normalized, strictKey, skeletonKey, looseText: buildTenderLooseText(normalized), grams };
+    const entryIndex = entries.length;
+    entries.push(entry);
+    for (const gram of grams) {
+      const list = gramIndex.get(gram) || [];
+      list.push(entryIndex);
+      gramIndex.set(gram, list);
+    }
+  }
+
+  function matchNear(sentence) {
+    if (!shouldApplyNearTenderMatch(sentence.normalized)) return null;
+    const grams = charBigrams(sentence.normalized);
+    if (grams.size < 4) return null;
+    const candidates = new Map();
+    for (const gram of grams) {
+      for (const index of gramIndex.get(gram) || []) candidates.set(index, (candidates.get(index) || 0) + 1);
+    }
+
+    let best = null;
+    for (const [index, shared] of candidates.entries()) {
+      const entry = entries[index];
+      if (!entry?.grams?.size) continue;
+      const shorter = Math.min(grams.size, entry.grams.size);
+      const longer = Math.max(grams.size, entry.grams.size);
+      const containment = shared / Math.max(shorter, 1);
+      const dice = diceSimilarityFromShared(shared, grams.size, entry.grams.size);
+      const lengthRatio = shorter / Math.max(longer, 1);
+      const compactLength = buildTenderLooseText(sentence.normalized).length;
+      const allowed = compactLength >= 30
+        ? containment >= 0.9 && dice >= 0.82 && lengthRatio >= 0.5
+        : containment >= 0.95 && dice >= 0.88 && lengthRatio >= 0.55;
+      if (!allowed) continue;
+      if (!best || dice > best.dice) best = { reason: 'near', dice, containment, tender: entry.normalized };
+    }
+    return best;
+  }
+
+  return {
+    tenderSentenceCount: exactSet.size,
+    match(sentence) {
+      const normalized = sentence?.normalized || '';
+      if (!normalized) return null;
+      if (exactSet.has(normalized)) return { reason: 'exact' };
+      const strictKey = buildTenderStrictKey(normalized);
+      if (strictKey && strictSet.has(strictKey)) return { reason: 'strict' };
+      const parsedField = parseTenderFormatField(normalized);
+      if (parsedField && isTenderFieldAllowed(parsedField.field) && fieldSet.has(parsedField.field) && isSafeTenderFieldTail(parsedField.tail)) {
+        return { reason: 'field' };
+      }
+      const skeletonKey = buildTenderSkeletonKey(normalized);
+      if (isTenderSkeletonAllowed(normalized, skeletonKey) && skeletonSet.has(skeletonKey)) return { reason: 'skeleton' };
+      return matchNear(sentence);
+    },
+  };
+}
+
 function buildDuplicateSentences(globalSentences) {
   return Array.from(globalSentences.values())
     .filter((item) => item.file_ids.length > 1)
@@ -2264,11 +2499,12 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       tender_files: (Array.isArray(tenderFiles) ? tenderFiles : []).map((file) => summarizeDuplicateFileForLog(file, 'tender')),
     });
     updateContentAnalysis({ status: 'running', progress: 5, extraction: { status: 'running', completed: 0, total: bidFiles.length }, message: '正在准备正文比对' }, webContents, signature);
-    let tenderSentenceSet = new Set();
+    let tenderMatcher = buildTenderSourceMatcher([]);
+    const tenderMatchReasonCounts = {};
     if (Array.isArray(tenderFiles) && tenderFiles.length) {
       try {
         const tenderMarkdown = await readCombinedTenderMarkdown(contentFiles, tenderFiles);
-        tenderSentenceSet = new Set(splitContentSentences(tenderMarkdown).map((item) => item.normalized));
+        tenderMatcher = buildTenderSourceMatcher(splitContentSentences(tenderMarkdown));
       } catch (error) {
         updateContentAnalysis({ message: `招标文件句子白名单生成失败，继续比对投标正文：${error.message || error}` }, webContents, signature);
         developerLogger?.write('duplicate.content_analysis.tender_whitelist.error', {
@@ -2277,7 +2513,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       }
     }
     developerLogger?.write('duplicate.content_analysis.tender_whitelist.completed', {
-      tender_sentence_count: tenderSentenceSet.size,
+      tender_sentence_count: tenderMatcher.tenderSentenceCount,
     });
 
     const globalSentences = new Map();
@@ -2293,8 +2529,11 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         totalSentenceCount += sentences.length;
         const local = new Map();
         for (const sentence of sentences) {
-          if (tenderSentenceSet.has(sentence.normalized)) {
+          const tenderMatch = tenderMatcher.match(sentence);
+          if (tenderMatch) {
             tenderMatchedSentenceCount += 1;
+            const reason = tenderMatch.reason || 'unknown';
+            tenderMatchReasonCounts[reason] = (tenderMatchReasonCounts[reason] || 0) + 1;
             continue;
           }
           const current = local.get(sentence.normalized) || { sentence: sentence.sentence, count: 0, order: firstOrder++ };
@@ -2319,7 +2558,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       updateContentAnalysis({
         status: 'running',
         progress: bidFiles.length ? Math.round((globalSentences.size ? 10 : 5) + (bidFiles.indexOf(file) + 1) / bidFiles.length * 80) : 85,
-        tenderSentenceCount: tenderSentenceSet.size,
+        tenderSentenceCount: tenderMatcher.tenderSentenceCount,
         tenderMatchedSentenceCount,
         totalSentenceCount,
         extraction: { status: 'running', completed: bidFiles.indexOf(file) + 1, total: bidFiles.length },
@@ -2333,7 +2572,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       progress: 100,
       message: '正文比对完成',
       signature,
-      tenderSentenceCount: tenderSentenceSet.size,
+      tenderSentenceCount: tenderMatcher.tenderSentenceCount,
       tenderMatchedSentenceCount,
       totalSentenceCount,
       extraction: { status: 'success', completed: bidFiles.length, total: bidFiles.length },
@@ -2342,8 +2581,9 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     developerLogger?.write('duplicate.content_analysis.completed', {
       signature,
       status: 'success',
-      tender_sentence_count: tenderSentenceSet.size,
+      tender_sentence_count: tenderMatcher.tenderSentenceCount,
       tender_matched_sentence_count: tenderMatchedSentenceCount,
+      tender_match_reason_counts: tenderMatchReasonCounts,
       total_sentence_count: totalSentenceCount,
       duplicate_sentence_count: duplicateSentences.length,
     });
