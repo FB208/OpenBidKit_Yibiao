@@ -770,6 +770,16 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     await runExportWord(selectedExportTemplate.config);
   };
 
+  const createExportTemplate = () => {
+    if (!onSectionChange) {
+      showToast('请从左侧菜单进入模板设置新建模板', 'info');
+      return;
+    }
+
+    setExportTemplateDialogOpen(false);
+    onSectionChange('new-template');
+  };
+
   const saveChapterContent = async (item: OutlineItem, content: string) => {
     if (!state.outlineData?.outline?.length) {
       throw new Error('当前没有可保存的目录');
@@ -1075,7 +1085,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
                   {!exportTemplatesLoading && filteredExportTemplates.length === 0 ? (
                     <div className="export-template-select-empty">
                       <strong>{exportTemplates.length ? '没有匹配模板' : '暂无可用模板'}</strong>
-                      <span>{exportTemplates.length ? '请换个关键词搜索。' : '请先在模版设置中保存模板。'}</span>
+                      <span>{exportTemplates.length ? '请换个关键词搜索，或新建一个模板。' : '请先新建并保存模板，保存后再返回导出。'}</span>
+                      <button type="button" className="secondary-action" onClick={createExportTemplate} disabled={isExporting}>新建模板</button>
                     </div>
                   ) : null}
                   {!exportTemplatesLoading && filteredExportTemplates.map((template) => {
@@ -1113,6 +1124,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             </div>
 
             <div className="content-regenerate-actions export-template-select-actions">
+              <button type="button" className="secondary-action" onClick={createExportTemplate} disabled={isExporting}>新建模板</button>
               <Dialog.Close className="secondary-action" type="button" disabled={isExporting}>取消</Dialog.Close>
               <button type="button" className="primary-action" onClick={() => { void confirmExportTemplate(); }} disabled={exportTemplatesLoading || !selectedExportTemplate || isExporting}>继续导出</button>
             </div>
