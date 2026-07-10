@@ -7,6 +7,7 @@ const cheerio = require('cheerio');
 const { imageSize } = require('image-size');
 const { compactLogError, createDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
 const { getMermaidCacheEntry, saveMermaidCacheImage } = require('../utils/mermaidCache.cjs');
+const { assertSupportedMermaidSyntax } = require('../utils/mermaidPolicy.cjs');
 const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
 const { renderMarkdownHtml } = require('../utils/renderMarkdownHtml.cjs');
 const {
@@ -1519,26 +1520,28 @@ async function mermaidCodeToDocxBlocks(code, context) {
 
   const nextIndex = (context.convertedMermaidCount || 0) + 1;
   const total = context.stats?.mermaidCount || nextIndex;
-  const cacheEntry = getMermaidCacheEntry(app, value);
-  writeExportLog(context, 'export.mermaid.started', {
-    mermaid_index: nextIndex,
-    total,
-    cache_hash: cacheEntry.hash,
-    cache_hit: cacheEntry.exists,
-    code_metrics: textMetrics(value),
-  });
-  reportConversionProgress(context, cacheEntry.exists
-    ? `Mermaid 图 ${nextIndex}/${total} 已命中本地缓存。`
-    : `正在转换 Mermaid 图 ${nextIndex}/${total}，可能需要联网等待。`);
-  const loadRetry = {
-    retryAttempts: MERMAID_EXPORT_RETRY_ATTEMPTS,
-    retryDelayMs: MERMAID_EXPORT_RETRY_DELAY_MS,
-    onRetry: (attempt) => {
-      reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败，3 秒后第 ${attempt} 次重试。`);
-    },
-  };
+  let cacheEntry = null;
 
   try {
+    assertSupportedMermaidSyntax(value);
+    cacheEntry = getMermaidCacheEntry(app, value);
+    writeExportLog(context, 'export.mermaid.started', {
+      mermaid_index: nextIndex,
+      total,
+      cache_hash: cacheEntry.hash,
+      cache_hit: cacheEntry.exists,
+      code_metrics: textMetrics(value),
+    });
+    reportConversionProgress(context, cacheEntry.exists
+      ? `Mermaid 图 ${nextIndex}/${total} 已命中本地缓存。`
+      : `正在转换 Mermaid 图 ${nextIndex}/${total}，可能需要联网等待。`);
+    const loadRetry = {
+      retryAttempts: MERMAID_EXPORT_RETRY_ATTEMPTS,
+      retryDelayMs: MERMAID_EXPORT_RETRY_DELAY_MS,
+      onRetry: (attempt) => {
+        reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败，3 秒后第 ${attempt} 次重试。`);
+      },
+    };
     const mermaidImage = await resolveMermaidImageForExport(value, context, { cacheEntry, loadRetry });
     const block = mermaidImage.loaded === undefined
       ? await imageParagraphFromSource(mermaidImage.source, 'Mermaid 图', context)
@@ -1559,7 +1562,7 @@ async function mermaidCodeToDocxBlocks(code, context) {
     writeExportLog(context, 'export.mermaid.error', {
       mermaid_index: nextIndex,
       total,
-      cache_hash: cacheEntry.hash,
+      cache_hash: cacheEntry?.hash || '',
       error: compactLogError(error),
     });
     reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败。`);

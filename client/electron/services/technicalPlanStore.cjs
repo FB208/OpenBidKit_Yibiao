@@ -960,11 +960,13 @@ function createTechnicalPlanStore({ app, db, fileService }) {
 
   function loadContentPlans() {
     return db.prepare('SELECT * FROM technical_plan_content_plans').all().reduce((acc, row) => {
-      const plan = safeJsonParse(row.plan_json, null);
-      if (plan) {
+      const storedPlan = safeJsonParse(row.plan_json, null);
+      if (storedPlan?.plan && Number(storedPlan.plan_version) > 0) {
         acc[row.node_id] = {
-          plan,
+          plan_version: Number(storedPlan.plan_version),
+          plan: storedPlan.plan,
           illustration_type: row.illustration_type || 'none',
+          ...(storedPlan.table_requirement ? { table_requirement: storedPlan.table_requirement } : {}),
           updated_at: row.updated_at || undefined,
         };
       }
@@ -1024,7 +1026,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   }
 
   function saveContentPlans(plans) {
-    const entries = Object.entries(plans || {});
+    const entries = Object.entries(plans || {}).filter(([, value]) => value?.plan && Number(value.plan_version) > 0);
     if (!entries.length) {
       db.prepare('DELETE FROM technical_plan_content_plans').run();
       return;
@@ -1044,7 +1046,11 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       if (!value?.plan) continue;
       upsert.run({
         node_id: nodeId,
-        plan_json: JSON.stringify(value.plan),
+        plan_json: JSON.stringify({
+          plan_version: Number(value.plan_version),
+          plan: value.plan,
+          ...(value.table_requirement ? { table_requirement: value.table_requirement } : {}),
+        }),
         illustration_type: value.illustration_type || 'none',
         updated_at: value.updated_at || timestamp,
       });

@@ -1,6 +1,12 @@
 # Progress
 
 ## Session Log
+- 开始正文生成配置弹窗改版：HTML 生图按用户确认默认开启，但只增加并持久化 UI 配置，不实现生成业务；主配置弹窗删除全部二级说明；Mermaid 新增默认 10 张上限并接入 Main 侧保留数量扣减、候选分布和优先级择优。
+- 正文生成配置弹窗改版主体已完成：配置新增 Mermaid/HTML 上限和 HTML 图片类型；主弹窗删除顶部及配置项说明，三个生图开关按状态显示上限；HTML 高级设置使用第二层 Dialog 和独立草稿；Main 侧 Mermaid 上限已接入保留数量扣减、编排可用性、AI 优先及分布择优。进入语法、构建和交互验证。
+- 正文生成配置弹窗改版验证完成：Main CJS 语法检查和客户端构建通过；浏览器 mock 工作区验证三个开关条件显示、HTML 默认开启/默认 10、Mermaid 默认 10、高级设置取消与确认、保存后重开持久化均正常；1440px 双列和 640px 单列内部滚动无横向溢出。Vite 端口已存在时直接复用，首次 mock unsubscribe 问题已补事件 stub 后解决。
+- 开始 Mermaid 图表类型收敛：按用户确认将其作为当前软件功能修改，不考虑旧数据兼容；目标是只保留流程图、层级图、职责关系图，统一使用 `flowchart` 语法，并在生成、前端预览和 Word 导出三个边界拒绝其他 Mermaid 类型。工作区已有未跟踪的 `client/doc/html图片.md` 和 `图表测试数据/`，本轮不修改。
+- Mermaid 类型收敛主体已完成：新增 `process/hierarchy/responsibility` 业务类型和 Main 共享策略；正文编排提示词、归一化、校验、修复只允许三类图及 `flowchart` 语法；计划升级为 v3 并完整保存版本、计划和表格需求；前端预览和 Word 导出会在调用 Mermaid 引擎或缓存前拒绝其他语法；配置文案和提示词文档已同步。进入语法、构建和定向验证阶段。
+- Mermaid 类型收敛验证完成：4 个相关 CJS 文件 `node --check` 通过；策略 smoke 确认三种业务类型、五种 flowchart 方向可用，graph/sequenceDiagram/timeline/gantt/pie/classDiagram 被拒绝；Word 导出不支持类型 warning smoke 通过；`cd client; npm run build` 通过且仅有既有 chunk 体积警告；`git diff --check` 仅有 LF/CRLF 提示。首次 Word smoke 因命令使用字面量 `\\n` 未形成代码块，修正为真实换行后通过。
 - 开始客户端授权签名校验与统计实现：用户确认同一套签名密钥用于构建签名和 license 签发，当前实现采用 Electron/Node/Cloudflare Worker 都支持的 ECDSA P-256/SHA-256；免费授权默认 30 天、过期弹窗默认开启且不可关闭；客户端本版只记录不可信安装来源、保存授权配置，不做 UI 展示或功能阻断。已恢复文件型计划，session catchup 无输出。
 - 客户端授权签名校验与统计主体已接入：客户端新增构建声明、公钥资源、构建签名脚本、`licenseService`、IPC/preload/types 和埋点授权字段；Worker 新增 `/license/activate`、`/api/license-config`、license 签名/配置服务，并把授权字段写入 AE `blob14-blob18` 与 D1 `stats_clients`；Dashboard 新增“授权管理”标签和客户端授权列；release workflow 会在 Windows/macOS 打包前强制要求 `YIBIAO_LICENSE_PRIVATE_KEY_JWK` 并生成签名。
 - 已修正授权统计收尾问题：客户端上报可信来源必须同时满足 Worker 签发 payload 中 `sourceTrusted=true` 和本地构建验签可信；`recordTrackClient()` 保留新客户端实时入库计数逻辑，同时允许已存在客户端按授权字段快照实时覆盖，避免启动首个“缺授权/刷新中”状态卡住到夜间 Cron。

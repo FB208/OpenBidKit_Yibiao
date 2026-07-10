@@ -25,6 +25,10 @@ export interface ContentGenerationOptions {
   useAiImages: boolean;
   maxAiImages: number;
   useMermaidImages: boolean;
+  maxMermaidImages: number;
+  useHtmlImages: boolean;
+  maxHtmlImages: number;
+  htmlImageTypes: string;
   tableRequirement: ContentTableRequirement;
   minimumWords: number;
   enableConsistencyAudit: boolean;
@@ -122,6 +126,7 @@ export interface ContentGenerationSectionState {
 export type ContentGenerationSections = Record<string, ContentGenerationSectionState>;
 
 export type ContentIllustrationType = 'ai' | 'mermaid' | 'none';
+export type ContentMermaidDiagramType = 'process' | 'hierarchy' | 'responsibility';
 
 export interface ContentGenerationPlanData {
   writing_focus?: string;
@@ -137,6 +142,7 @@ export interface ContentGenerationPlanData {
   };
   mermaid: {
     needed: boolean;
+    type: ContentMermaidDiagramType | '';
     title: string;
     code: string;
     priority: number;
@@ -163,6 +169,7 @@ export interface ContentGenerationPlanData {
 }
 
 export interface ContentGenerationPlanState {
+  plan_version: number;
   plan: ContentGenerationPlanData;
   illustration_type: ContentIllustrationType;
   table_requirement?: 'none' | 'light' | 'moderate' | 'heavy';

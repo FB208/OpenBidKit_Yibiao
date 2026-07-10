@@ -60,27 +60,33 @@ const imageModelStatusLabels: Record<ImageModelStatus, string> = {
   unavailable: '不可用',
 };
 
-const tableRequirementOptions: Array<{ value: ContentTableRequirement; label: string; description: string }> = [
-  { value: 'none', label: '不要', description: '不编排表格' },
-  { value: 'light', label: '少量', description: '不超过小节总数的 20%' },
-  { value: 'moderate', label: '适中', description: '不超过小节总数的 40%' },
-  { value: 'heavy', label: '大量', description: '保持现有编排逻辑' },
+const tableRequirementOptions: Array<{ value: ContentTableRequirement; label: string }> = [
+  { value: 'none', label: '不要' },
+  { value: 'light', label: '少量' },
+  { value: 'moderate', label: '适中' },
+  { value: 'heavy', label: '大量' },
 ];
 
-const consistencyRepairModeOptions: Array<{ value: ConsistencyRepairMode; label: string; description: string }> = [
-  { value: 'agent', label: 'Agent 修复（推荐）', description: '交给 Agent 审计并修复全文，质量更高但耗时更久' },
-  { value: 'normal', label: '普通修复', description: '使用现有分组审计和局部替换修复，速度更快' },
+const consistencyRepairModeOptions: Array<{ value: ConsistencyRepairMode; label: string }> = [
+  { value: 'agent', label: 'Agent 修复（推荐）' },
+  { value: 'normal', label: '普通修复' },
 ];
 
-const originalPlanCoverageRepairModeOptions: Array<{ value: OriginalPlanCoverageRepairMode; label: string; description: string }> = [
-  { value: 'agent', label: 'Agent 修复（推荐）', description: '全文检查并补回原方案核心内容，质量更高但耗时更久' },
-  { value: 'normal', label: '普通修复', description: '按小节审计和局部补写，速度更快；单章节重写始终使用普通修复' },
+const originalPlanCoverageRepairModeOptions: Array<{ value: OriginalPlanCoverageRepairMode; label: string }> = [
+  { value: 'agent', label: 'Agent 修复（推荐）' },
+  { value: 'normal', label: '普通修复' },
 ];
+
+const DEFAULT_HTML_IMAGE_TYPES = '甘特图、进度网络图、组织架构图、泳道图、RACI 职责矩阵、风险矩阵、系统架构与拓扑图、WBS 工作分解结构图、鱼骨图、柱状图、折线图、饼图';
 
 const defaultContentGenerationOptions: ContentGenerationOptions = {
   useAiImages: false,
   maxAiImages: 6,
   useMermaidImages: true,
+  maxMermaidImages: 10,
+  useHtmlImages: true,
+  maxHtmlImages: 10,
+  htmlImageTypes: DEFAULT_HTML_IMAGE_TYPES,
   tableRequirement: 'heavy',
   minimumWords: 0,
   enableConsistencyAudit: true,
@@ -102,10 +108,13 @@ function isOriginalPlanCoverageRepairMode(value: unknown): value is OriginalPlan
 }
 
 function buildDefaultGenerationOptions(imageModelAvailable: boolean, leafCount: number): ContentGenerationOptions {
+  const imageLimit = Math.max(1, leafCount);
   return {
     ...defaultContentGenerationOptions,
     useAiImages: imageModelAvailable,
-    maxAiImages: Math.min(defaultContentGenerationOptions.maxAiImages, Math.max(1, leafCount)),
+    maxAiImages: Math.min(defaultContentGenerationOptions.maxAiImages, imageLimit),
+    maxMermaidImages: Math.min(defaultContentGenerationOptions.maxMermaidImages, imageLimit),
+    maxHtmlImages: Math.min(defaultContentGenerationOptions.maxHtmlImages, imageLimit),
   };
 }
 
@@ -113,6 +122,8 @@ function normalizeGenerationOptions(options: ContentGenerationOptions | DraftCon
   const fallback = buildDefaultGenerationOptions(imageModelAvailable, leafCount);
   const maxAiImagesLimit = Math.max(1, leafCount);
   const requestedMaxAiImages = Number(options?.maxAiImages ?? fallback.maxAiImages);
+  const requestedMaxMermaidImages = Number(options?.maxMermaidImages ?? fallback.maxMermaidImages);
+  const requestedMaxHtmlImages = Number(options?.maxHtmlImages ?? fallback.maxHtmlImages);
   const requestedMinimumWords = Number(options?.minimumWords ?? fallback.minimumWords);
   const tableRequirement = options?.tableRequirement;
 
@@ -120,6 +131,10 @@ function normalizeGenerationOptions(options: ContentGenerationOptions | DraftCon
     useAiImages: Boolean(options?.useAiImages ?? fallback.useAiImages) && imageModelAvailable,
     maxAiImages: Math.max(0, Math.min(Number.isFinite(requestedMaxAiImages) ? Math.round(requestedMaxAiImages) : fallback.maxAiImages, maxAiImagesLimit)),
     useMermaidImages: Boolean(options?.useMermaidImages ?? fallback.useMermaidImages),
+    maxMermaidImages: Math.max(0, Math.min(Number.isFinite(requestedMaxMermaidImages) ? Math.round(requestedMaxMermaidImages) : fallback.maxMermaidImages, maxAiImagesLimit)),
+    useHtmlImages: Boolean(options?.useHtmlImages ?? fallback.useHtmlImages),
+    maxHtmlImages: Math.max(0, Math.min(Number.isFinite(requestedMaxHtmlImages) ? Math.round(requestedMaxHtmlImages) : fallback.maxHtmlImages, maxAiImagesLimit)),
+    htmlImageTypes: String(options?.htmlImageTypes ?? fallback.htmlImageTypes),
     tableRequirement: isContentTableRequirement(tableRequirement) ? tableRequirement : fallback.tableRequirement,
     minimumWords: Math.max(0, Number.isFinite(requestedMinimumWords) ? Math.round(requestedMinimumWords) : fallback.minimumWords),
     enableConsistencyAudit: Boolean(options?.enableConsistencyAudit ?? fallback.enableConsistencyAudit),
@@ -273,6 +288,8 @@ function ContentEditPage({
   const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
   const [draftGenerationOptions, setDraftGenerationOptions] = useState<DraftContentGenerationOptions>(defaultContentGenerationOptions);
+  const [htmlImageTypesDialogOpen, setHtmlImageTypesDialogOpen] = useState(false);
+  const [htmlImageTypesDraft, setHtmlImageTypesDraft] = useState(DEFAULT_HTML_IMAGE_TYPES);
   const [pendingMinimumWordsChoice, setPendingMinimumWordsChoice] = useState<PendingMinimumWordsChoice | null>(null);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [pausePending, setPausePending] = useState(false);
@@ -552,6 +569,18 @@ function ContentEditPage({
     }
   };
 
+  // 打开 HTML 图片类型设置并建立独立草稿。
+  const openHtmlImageTypesDialog = () => {
+    setHtmlImageTypesDraft(draftGenerationOptions.htmlImageTypes);
+    setHtmlImageTypesDialogOpen(true);
+  };
+
+  // 确认 HTML 图片类型设置并写回主配置草稿。
+  const confirmHtmlImageTypes = () => {
+    setDraftGenerationOptions((prev) => ({ ...prev, htmlImageTypes: htmlImageTypesDraft }));
+    setHtmlImageTypesDialogOpen(false);
+  };
+
   const shouldAskMinimumWordsChoice = (options: ContentGenerationOptions) => leaves.length > 0
     && completedCount === leaves.length
     && !canRetryMinimumWords
@@ -683,6 +712,10 @@ function ContentEditPage({
         useAiImages: nextImageModelAvailable && savedGenerationOptions.useAiImages,
         maxAiImages: savedGenerationOptions.maxAiImages,
         useMermaidImages: savedGenerationOptions.useMermaidImages,
+        maxMermaidImages: savedGenerationOptions.maxMermaidImages,
+        useHtmlImages: savedGenerationOptions.useHtmlImages,
+        maxHtmlImages: savedGenerationOptions.maxHtmlImages,
+        htmlImageTypes: savedGenerationOptions.htmlImageTypes,
         tableRequirement: savedGenerationOptions.tableRequirement,
         minimumWords: savedGenerationOptions.minimumWords,
         enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
@@ -800,12 +833,16 @@ function ContentEditPage({
           useAiImages: nextImageModelAvailable && savedGenerationOptions.useAiImages,
           maxAiImages: savedGenerationOptions.maxAiImages,
           useMermaidImages: savedGenerationOptions.useMermaidImages,
-        tableRequirement: savedGenerationOptions.tableRequirement,
-        enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
-        consistencyRepairMode: savedGenerationOptions.consistencyRepairMode,
-        enableOriginalPlanCoverageAudit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
-        originalPlanCoverageRepairMode: isExpansionWorkflow ? 'normal' : undefined,
-      },
+          maxMermaidImages: savedGenerationOptions.maxMermaidImages,
+          useHtmlImages: savedGenerationOptions.useHtmlImages,
+          maxHtmlImages: savedGenerationOptions.maxHtmlImages,
+          htmlImageTypes: savedGenerationOptions.htmlImageTypes,
+          tableRequirement: savedGenerationOptions.tableRequirement,
+          enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
+          consistencyRepairMode: savedGenerationOptions.consistencyRepairMode,
+          enableOriginalPlanCoverageAudit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
+          originalPlanCoverageRepairMode: isExpansionWorkflow ? 'normal' : undefined,
+        },
       });
       trackConfigUsage({
         table_requirement: savedGenerationOptions.tableRequirement,
@@ -1061,29 +1098,21 @@ function ContentEditPage({
 
       <Dialog.Root
         open={generationDialogOpen}
-        onOpenChange={setGenerationDialogOpen}
+        onOpenChange={(open) => {
+          setGenerationDialogOpen(open);
+          if (!open) setHtmlImageTypesDialogOpen(false);
+        }}
       >
         <Dialog.Portal>
           <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="content-generation-config-card">
+          <Dialog.Content className="content-generation-config-card" aria-describedby={undefined}>
             <div className="content-regenerate-card-head">
-              <span className="section-kicker">生成配置</span>
               <Dialog.Title>正文生成配置</Dialog.Title>
-              <Dialog.Description>
-                {paused
-                  ? '任务已暂停，继续后会使用设置中的文本模型并发上限；生成策略需重新开始任务后修改。'
-                  : canRetryMinimumWords
-                    ? '将保留已生成正文，继续扩写未达标的最低字数。'
-                    : completedCount === leaves.length && leaves.length
-                      ? '重新生成会先清空全文正文、章节状态和任务进度，再从头生成。'
-                      : '配置正文生成方式；最低字数为 0 时按模型默认长度生成。'}
-              </Dialog.Description>
             </div>
             <div className="content-generation-config-list">
               <label className="content-generation-config-row">
                 <span>
                   <strong>表格需求</strong>
-                  <small>{tableRequirementOptions.find((option) => option.value === draftGenerationOptions.tableRequirement)?.description}</small>
                 </span>
                 <select
                   value={draftGenerationOptions.tableRequirement}
@@ -1096,7 +1125,6 @@ function ContentEditPage({
               <label className="content-generation-config-row">
                 <span>
                   <strong>最低字数</strong>
-                  <small>低于最低字数时会自动补充目录或扩写正文。</small>
                 </span>
                 <input
                   type="number"
@@ -1113,7 +1141,6 @@ function ContentEditPage({
               <label className="content-generation-config-row">
                 <span>
                   <strong>全文一致性审计</strong>
-                  <small>正文扩写完成后，先检查并修复与全局事实冲突的内容，再进入配图。</small>
                 </span>
                 <Switch.Root
                   className="content-generation-switch"
@@ -1129,7 +1156,6 @@ function ContentEditPage({
                 <label className="content-generation-config-row">
                   <span>
                     <strong>一致性修复方式</strong>
-                    <small>{consistencyRepairModeOptions.find((option) => option.value === draftGenerationOptions.consistencyRepairMode)?.description}</small>
                   </span>
                   <select
                     value={draftGenerationOptions.consistencyRepairMode}
@@ -1145,7 +1171,6 @@ function ContentEditPage({
                   <label className="content-generation-config-row">
                     <span>
                       <strong>原方案覆盖审计</strong>
-                      <small>检查原方案中的核心内容是否已经保留到生成正文中；默认关闭，开启后会增加一次审计和修复请求。</small>
                     </span>
                     <Switch.Root
                       className="content-generation-switch"
@@ -1161,7 +1186,6 @@ function ContentEditPage({
                     <label className="content-generation-config-row">
                       <span>
                         <strong>原方案覆盖修复方式</strong>
-                        <small>{originalPlanCoverageRepairModeOptions.find((option) => option.value === draftGenerationOptions.originalPlanCoverageRepairMode)?.description}</small>
                       </span>
                       <select
                         value={draftGenerationOptions.originalPlanCoverageRepairMode}
@@ -1177,7 +1201,6 @@ function ContentEditPage({
               <label className="content-generation-config-row">
                 <span>
                   <strong>使用 AI 生图</strong>
-                  <small>当前生图模型状态：{imageModelStatusLabels[imageModelStatus]}{!imageModelAvailable ? '，请到设置页面配置生图模型' : ''}</small>
                 </span>
                 <div className="content-generation-config-control">
                   <em className={`content-image-status is-${imageModelStatus}`}>{imageModelStatusLabels[imageModelStatus]}</em>
@@ -1192,40 +1215,83 @@ function ContentEditPage({
                   </Switch.Root>
                 </div>
               </label>
+              {draftGenerationOptions.useAiImages && imageModelAvailable && (
+                <label className="content-generation-config-row">
+                  <span><strong>AI 生图上限</strong></span>
+                  <input
+                    type="number"
+                    min="0"
+                    max={Math.max(1, leaves.length)}
+                    value={draftGenerationOptions.maxAiImages}
+                    disabled={generationStrategyLocked}
+                    onChange={(event) => setDraftGenerationOptions((prev) => ({
+                      ...prev,
+                      maxAiImages: Math.max(0, Math.min(Number(event.target.value) || 0, Math.max(1, leaves.length))),
+                    }))}
+                  />
+                </label>
+              )}
               <label className="content-generation-config-row">
-                <span>
-                  <strong>全文图片最大数量</strong>
-                  <small>AI 生图会在整体决策后择优分布，不再按先后顺序抢占名额。</small>
-                </span>
-                <input
-                  type="number"
-                  min="0"
-                  max={Math.max(1, leaves.length)}
-                  value={draftGenerationOptions.maxAiImages}
-                  disabled={generationStrategyLocked || !draftGenerationOptions.useAiImages || !imageModelAvailable}
-                  onChange={(event) => setDraftGenerationOptions((prev) => ({
-                    ...prev,
-                    maxAiImages: Math.max(0, Math.min(Number(event.target.value) || 0, Math.max(1, leaves.length))),
-                  }))}
-                />
-              </label>
-              <label className="content-generation-config-row">
-                <span>
-                  <strong>生成 Mermaid 图片</strong>
-                  <small>适合简单流程、层级、时间线或关系图；预览在前端渲染，与 AI 生图二选一。</small>
-                </span>
+                <span><strong>使用 Mermaid 生图</strong></span>
                 <Switch.Root
                   className="content-generation-switch"
                   checked={draftGenerationOptions.useMermaidImages}
                   disabled={generationStrategyLocked}
                   onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useMermaidImages: checked }))}
-                  aria-label="是否生成 Mermaid 图片"
+                  aria-label="是否使用 Mermaid 生图"
                 >
                   <Switch.Thumb className="content-generation-switch-thumb" />
                 </Switch.Root>
               </label>
               {draftGenerationOptions.useMermaidImages && (
-                <p className="content-generation-config-note">当前 Mermaid 转图片使用的是 https://mermaid.ink/ 的免费接口，可能不稳定，导出 Word 后请仔细核对。</p>
+                <label className="content-generation-config-row">
+                  <span><strong>Mermaid 生图上限</strong></span>
+                  <input
+                    type="number"
+                    min="0"
+                    max={Math.max(1, leaves.length)}
+                    value={draftGenerationOptions.maxMermaidImages}
+                    disabled={generationStrategyLocked}
+                    onChange={(event) => setDraftGenerationOptions((prev) => ({
+                      ...prev,
+                      maxMermaidImages: Math.max(0, Math.min(Number(event.target.value) || 0, Math.max(1, leaves.length))),
+                    }))}
+                  />
+                </label>
+              )}
+              <label className="content-generation-config-row">
+                <span><strong>生成 HTML 图片</strong></span>
+                <Switch.Root
+                  className="content-generation-switch"
+                  checked={draftGenerationOptions.useHtmlImages}
+                  disabled={generationStrategyLocked}
+                  onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useHtmlImages: checked }))}
+                  aria-label="是否生成 HTML 图片"
+                >
+                  <Switch.Thumb className="content-generation-switch-thumb" />
+                </Switch.Root>
+              </label>
+              {draftGenerationOptions.useHtmlImages && (
+                <>
+                  <label className="content-generation-config-row">
+                    <span><strong>HTML 生图上限</strong></span>
+                    <input
+                      type="number"
+                      min="0"
+                      max={Math.max(1, leaves.length)}
+                      value={draftGenerationOptions.maxHtmlImages}
+                      disabled={generationStrategyLocked}
+                      onChange={(event) => setDraftGenerationOptions((prev) => ({
+                        ...prev,
+                        maxHtmlImages: Math.max(0, Math.min(Number(event.target.value) || 0, Math.max(1, leaves.length))),
+                      }))}
+                    />
+                  </label>
+                  <div className="content-generation-config-row">
+                    <span><strong>高级设置</strong></span>
+                    <button type="button" className="secondary-action" onClick={openHtmlImageTypesDialog} disabled={generationStrategyLocked}>打开</button>
+                  </div>
+                </>
               )}
             </div>
             <div className="content-regenerate-actions">
@@ -1234,6 +1300,26 @@ function ContentEditPage({
                 保存配置
               </button>
               {!paused && <button type="button" className="primary-action" onClick={startGeneration} disabled={taskBlocksGeneration}>{canRetryMinimumWords ? '继续补足字数' : '开始生成'}</button>}
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={htmlImageTypesDialogOpen} onOpenChange={setHtmlImageTypesDialogOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal html-image-types-modal" />
+          <Dialog.Content className="content-regenerate-card html-image-types-card" aria-describedby={undefined}>
+            <div className="content-regenerate-card-head">
+              <Dialog.Title>HTML 可生成的图片类型</Dialog.Title>
+            </div>
+            <textarea
+              value={htmlImageTypesDraft}
+              onChange={(event) => setHtmlImageTypesDraft(event.target.value)}
+              aria-label="HTML 可生成的图片类型"
+            />
+            <div className="content-regenerate-actions">
+              <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
+              <button type="button" className="primary-action" onClick={confirmHtmlImageTypes}>确认</button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>

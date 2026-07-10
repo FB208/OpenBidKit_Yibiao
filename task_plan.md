@@ -1,5 +1,69 @@
 # Task Plan
 
+## Current Task: 正文生成配置弹窗改版
+
+### Goal
+改版正文生成配置弹窗：AI 生图上限按开关条件显示；Mermaid 增加默认 10 张的生图上限并接入与 AI 生图一致的全文择优控制；新增默认开启的 HTML 生图 UI、默认 10 张上限和图片类型高级设置，但暂不实现 HTML 生成业务；删除配置弹窗全部二级说明文字。
+
+### Phases
+- [completed] 1. 扩展正文生成配置类型、默认值、归一化和保存传递链路。
+- [completed] 2. 改造主配置弹窗及 HTML 图片类型高级设置弹窗。
+- [completed] 3. 实现 Mermaid 生图上限的 Main 侧扣减、编排和全局择优控制。
+- [completed] 4. 同步样式和提示词文档。
+- [completed] 5. 运行 CJS 语法检查、客户端构建和交互验证。
+
+### Decisions
+- HTML 生图默认开启，但本轮只保存 `useHtmlImages/maxHtmlImages/htmlImageTypes`，不进入正文编排、配图、统计或导出业务。
+- Mermaid 和 HTML 生图上限默认 10；UI 与 Main 按现有 AI 逻辑限制为 0 到当前叶子小节数。
+- Mermaid 候选继续在 AI 生图候选之后选择，同章 AI 图优先；剩余 Mermaid 候选按章节分布和优先级择优。
+- 删除主配置弹窗的顶部标签、顶部说明、配置项灰色说明和 Mermaid 黄色说明。
+- HTML 高级设置使用独立 Radix Dialog，确认后写回主弹窗草稿，主弹窗保存后持久化。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| Vite `5173` 端口已被占用 | 启动独立 Renderer 验证服务 | 未终止现有进程，直接复用已运行的同项目 Vite 服务。 |
+| 首次浏览器 IPC mock 的事件 API 返回 Promise，Provider 清理时报 `unsubscribe is not a function` | 注入最小 Renderer 验证状态 | 为数据库、AI、Agent、任务和导出事件补充同步 unsubscribe stub，重新加载后页面和弹窗正常。 |
+
+### Validation
+- `node --check electron\services\contentGenerationTask.cjs` 通过。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- 浏览器注入最小本地 IPC 状态验证通过：默认 Mermaid/HTML 上限均为 10，HTML 默认开启；三个开关关闭后对应上限和高级设置立即隐藏。
+- HTML 高级设置默认类型、取消回滚、确认写回、保存配置后重新打开持久化均通过。
+- 1440px 双列布局和 640px 单列内部滚动通过，无横向溢出；第二层 Dialog 在 640px 下保持 20px 边距。
+- `git diff --check` 通过，仅有 Windows LF/CRLF 换行提示。
+
+## Current Task: Mermaid 图表类型收敛
+
+### Goal
+将 Mermaid 图片功能严格收敛为流程图、层级图、职责关系图三种业务类型，三者统一使用 `flowchart` 语法；删除其他 Mermaid 类型在生成、正文预览和 Word 导出中的支持，不迁移或兼容旧计划数据。
+
+### Phases
+- [completed] 1. 增加 Mermaid 业务类型并收敛正文编排提示词、归一化、校验和修复。
+- [completed] 2. 将正文编排计划升级为 v3，并完整持久化计划契约。
+- [completed] 3. 在前端预览和 Word 导出中拒绝非 `flowchart` Mermaid 语法。
+- [completed] 4. 更新配置文案和提示词文档。
+- [completed] 5. 运行 CJS 语法检查、客户端构建和定向功能验证。
+
+### Decisions
+- 业务类型使用 `process/hierarchy/responsibility`，中文分别为流程图、层级图、职责关系图。
+- 三种业务类型只允许 `flowchart TD/TB/LR/RL/BT`，不接受 `graph` 别名和其他 Mermaid 语法族。
+- 不支持类型不自动转换、不降级、不读取缓存；预览显示现有错误卡，Word 导出沿用 warning 和红色占位。
+- 不增加用户类型选择器，由正文编排模型决定业务类型。
+- 不新增 SQLite 列、IPC、preload 或 Analytics 字段。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 首次 Word 导出拒绝 smoke 未产生 warning | `node -e` 构造 Mermaid Markdown | 测试命令把换行写成字面量 `\\n`，Markdown 被解析为行内代码；改为真实换行后通过。 |
+
+### Validation
+- `node --check` 通过：`mermaidPolicy.cjs`、`contentGenerationTask.cjs`、`technicalPlanStore.cjs`、`exportService.cjs`。
+- Mermaid 策略 smoke 通过：三种业务类型和五种 flowchart 方向被接受；graph、sequenceDiagram、timeline、gantt、pie、classDiagram 被拒绝。
+- Word 导出拒绝 smoke 通过：sequenceDiagram 不读取缓存、不请求转换，并写入“不支持类型” warning。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- `git diff --check` 通过，仅有 Windows LF/CRLF 换行提示。
+
 ## Current Task: 客户端授权签名校验与统计
 
 ### Goal

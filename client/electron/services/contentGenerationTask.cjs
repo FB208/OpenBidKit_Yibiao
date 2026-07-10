@@ -2,6 +2,12 @@ const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const { AI_QUEUE_SCOPE_PAUSED } = require('../utils/aiRequestQueue.cjs');
 const { createNoopDeveloperLogger } = require('../utils/developerLog.cjs');
+const {
+  assertSupportedMermaidDiagramType,
+  assertSupportedMermaidSyntax,
+  getMermaidDiagramTypeLabel,
+  normalizeMermaidDiagramType,
+} = require('../utils/mermaidPolicy.cjs');
 const { applyRangeEdits } = require('../utils/textEdit.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { countReadableWords } = require('../utils/wordCount.cjs');
@@ -27,7 +33,7 @@ const ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS = 2;
 const TABLE_CLEANUP_CONTEXT_CHARS = 600;
 const TABLE_CLEANUP_BATCH_CHAR_LIMIT = 30000;
 const CONTENT_GENERATION_PAUSED = 'CONTENT_GENERATION_PAUSED';
-const CONTENT_PLAN_VERSION = 2;
+const CONTENT_PLAN_VERSION = 3;
 const PROMPT_CACHE_WARMUP_DELAY_MS = 5000;
 const TABLE_REQUIREMENT_LABELS = {
   none: '不要',
@@ -361,6 +367,7 @@ function assertMermaidPreviewCompatible(code) {
   if (!normalized) {
     throw new Error('Mermaid 代码为空');
   }
+  assertSupportedMermaidSyntax(normalized);
   if (/[;；]/.test(normalized)) {
     throw new Error('Mermaid 代码包含分号，前端渲染兼容性较差，请改为每行一个语句且不使用分号');
   }
@@ -587,9 +594,10 @@ function normalizeContentPlan(value, allowedKnowledgeItemIds, allowedFactTitles)
   const image = source.image && typeof source.image === 'object' ? source.image : {};
   const mermaid = source.mermaid && typeof source.mermaid === 'object' ? source.mermaid : {};
   const tableNeeded = Boolean(table.needed);
+  const mermaidNeeded = Boolean(mermaid.needed);
+  const mermaidType = normalizeMermaidDiagramType(mermaid.type);
   const mermaidTitle = singleLine(mermaid.title);
   const mermaidCode = normalizeMermaidCode(mermaid.code);
-  const mermaidNeeded = Boolean(mermaid.needed) && Boolean(mermaidTitle && mermaidCode);
   const imageStyle = IMAGE_STYLES.has(image.style) ? image.style : '';
   const imageTitle = singleLine(image.title);
   const imagePrompt = String(image.prompt || '').trim();
@@ -609,6 +617,7 @@ function normalizeContentPlan(value, allowedKnowledgeItemIds, allowedFactTitles)
     },
     mermaid: {
       needed: mermaidNeeded,
+      type: mermaidNeeded ? mermaidType : '',
       title: mermaidNeeded ? mermaidTitle : '',
       code: mermaidNeeded ? mermaidCode : '',
       priority: mermaidNeeded ? normalizePriority(mermaid.priority) : 0,
@@ -656,6 +665,11 @@ function normalizeStoredContentPlan(value) {
 
   const plan = normalizeContentPlan(value.plan || value.contentPlan || value);
   if (!plan.writing_focus) {
+    return null;
+  }
+  try {
+    validateContentPlan(plan);
+  } catch {
     return null;
   }
   const tableRequirement = value.table_requirement || value.tableRequirement
@@ -726,6 +740,16 @@ function validateContentPlan(plan) {
   if (!plan.mermaid || typeof plan.mermaid.needed !== 'boolean') {
     throw new Error('正文编排决策缺少 mermaid.needed');
   }
+  if (plan.mermaid.needed) {
+    assertSupportedMermaidDiagramType(plan.mermaid.type);
+    if (!plan.mermaid.title) {
+      throw new Error('正文编排决策缺少 mermaid.title');
+    }
+    if (!plan.mermaid.code) {
+      throw new Error('正文编排决策缺少 mermaid.code');
+    }
+    assertSupportedMermaidSyntax(plan.mermaid.code);
+  }
   if (plan.image.needed && !IMAGE_STYLES.has(plan.image.style)) {
     throw new Error('正文配图风格无效');
   }
@@ -745,6 +769,7 @@ function validateMermaidRepairResult(result) {
   if (/```/.test(result.code)) {
     throw new Error('Mermaid 修复结果不能包含 Markdown 代码围栏');
   }
+  assertSupportedMermaidSyntax(result.code);
 }
 
 function formatContentPlanForPrompt(plan) {
@@ -840,6 +865,7 @@ function validateTableCleanupResponse(value) {
 function buildMermaidRepairMessages({ chapter, parentChapters, siblingChapters, projectOverview, selectedFactsText, regenerateRequirement, mermaidPlan, invalidCode, errorMessage, attempt }) {
   const chapterId = chapter.id || 'unknown';
   const chapterTitle = chapter.title || '未命名章节';
+  const diagramTypeLabel = getMermaidDiagramTypeLabel(mermaidPlan.type) || '未知类型';
   const messages = [
     {
       role: 'system',
@@ -848,12 +874,13 @@ function buildMermaidRepairMessages({ chapter, parentChapters, siblingChapters, 
 要求：
 1. 只返回 JSON，不要输出解释、总结或 Markdown。
 2. 目标是让 Mermaid 在浏览器前端稳定渲染，优先做最小必要修改。
-3. 优先使用 flowchart TD；节点 ID 只使用 ASCII 字母、数字和下划线。
+3. 必须使用 flowchart TD/TB/LR/RL/BT 语法，不得使用 graph 别名或其他 Mermaid 语法族。
 4. 中文节点标签必须写成 A["中文标签"]，不要写成 A[中文标签]。
 5. 不使用 & 多节点连接简写，必须展开成多条独立连线。
 6. 不使用分号；每行只写一个 Mermaid 语句。
 7. 不要输出 Markdown 代码围栏。
-8. 如果原图结构过于复杂，请简化为可渲染的核心流程图。`,
+8. 必须保持“${diagramTypeLabel}”业务类型，不得改成其他图表类型。
+9. 如果原图结构过于复杂，请在保持业务类型和核心关系的前提下简化。`,
     },
   ];
 
@@ -886,6 +913,7 @@ function buildMermaidRepairMessages({ chapter, parentChapters, siblingChapters, 
     role: 'user',
     content: `当前章节：${chapterId} ${chapterTitle}
 章节描述：${chapter.description || ''}
+Mermaid 图类型：${diagramTypeLabel}
 Mermaid 图标题：${mermaidPlan.title || '流程图'}
 修复轮次：${attempt}/${MERMAID_REPAIR_ATTEMPTS}
 渲染错误：${errorMessage || '未知错误'}
@@ -912,7 +940,7 @@ function renderKnowledgeItemsForPrompt(items) {
   })).filter((item) => item.id && item.title && item.resume), null, 2);
 }
 
-function buildChapterContentPlanMessages({ chapter, parentChapters, siblingChapters, projectOverview, bidAnalysisFactsText, globalFactTitlesText, regenerateRequirement, tableRequirement, maxTables, tableTotalSections, imageGenerationAvailable, mermaidGenerationAvailable, maxAiImages, totalSections, knowledgeItems }) {
+function buildChapterContentPlanMessages({ chapter, parentChapters, siblingChapters, projectOverview, bidAnalysisFactsText, globalFactTitlesText, regenerateRequirement, tableRequirement, maxTables, tableTotalSections, imageGenerationAvailable, mermaidGenerationAvailable, maxAiImages, maxMermaidImages, totalSections, knowledgeItems }) {
   const chapterId = chapter.id || 'unknown';
   const chapterTitle = chapter.title || '未命名章节';
   const chapterDescription = chapter.description || '';
@@ -933,7 +961,7 @@ function buildChapterContentPlanMessages({ chapter, parentChapters, siblingChapt
 2. ${tablePlanningAllowed ? '由你自行判断是否适合使用表格或配图，判断要克制、合情合理，不要为了形式而硬插。' : '本次不编排表格，table.needed 必须为 false；仍可判断是否适合配图。'}
 3. ${tableLimitInstruction}
 4. ${tablePlanningAllowed ? '表格仅在能明显提升表达清晰度时使用，例如归纳职责、步骤、参数、风险、措施、成果等。' : '不要为了满足 JSON 格式而编造表格目的。'}
-5. ${mermaidGenerationAvailable ? '可以自行判断是否需要 Mermaid 图；Mermaid 只适合简单、抽象、文本节点型关系图，例如少量节点的流程、层级、时间线或职责关系，不用于复杂工程场景或实物示意。' : '当前未启用 Mermaid 图，mermaid.needed 必须为 false。'}
+5. ${mermaidGenerationAvailable ? `可以自行判断是否需要 Mermaid 图；mermaid.needed 表示进入 Mermaid 生图候选池，不代表最终一定生成；本次 Mermaid 生图上限为 ${maxMermaidImages || 0} 张，共 ${totalSections || 0} 个小节，系统后续会全局择优。只允许三种业务类型：process（流程图，用于步骤、条件和流转关系）、hierarchy（层级图，用于上下级和父子层级）、responsibility（职责关系图，用于岗位、部门、角色之间的职责归属、协作和汇报关系）。三种类型都必须使用 flowchart TD/TB/LR/RL/BT 语法，禁止 graph 别名及 sequenceDiagram、timeline、gantt、pie、classDiagram、stateDiagram、erDiagram、mindmap 等其他 Mermaid 语法；不用于复杂工程场景或实物示意。` : '当前未启用 Mermaid 图或生图上限已用完，mermaid.needed 必须为 false，mermaid.type、title、code 留空。'}
 6. ${imageGenerationAvailable ? '可以自行判断是否需要 AI 生图；AI 生图适合设备、现场、机柜、电池、系统架构、部署拓扑、施工/运维场景、工程空间关系、实物示意等更具象的图。' : '当前未启用或不可用 AI 生图，image.needed 必须为 false。'}
 7. Mermaid 图和 AI 生图都只是候选判断，可以同时为 true；系统会在配图阶段保证同一个章节最终只执行一种配图。
 8. ${imageGenerationAvailable ? `image.needed 表示进入 AI 生图候选池，不代表最终一定生成；本次 AI 生图上限为 ${maxAiImages || 0} 张，共 ${totalSections || 0} 个小节，系统后续会全局择优。` : '由于 AI 生图不可用，image 字段只需返回不需要。'}
@@ -1005,8 +1033,9 @@ JSON 格式：
   },
   "mermaid": {
     "needed": false,
+    "type": "process、hierarchy、responsibility 之一；不需要时留空",
     "title": "Mermaid 图标题；不需要时留空",
-    "code": "合法 Mermaid 代码，不包含 Markdown 代码围栏；不需要时留空",
+    "code": "必须以 flowchart TD/TB/LR/RL/BT 开头，不包含 Markdown 代码围栏；不需要时留空",
     "priority": 3,
     "reason": "为什么适合或不适合 Mermaid 图"
   },
@@ -3014,6 +3043,14 @@ async function prepareRenderableMermaidPlan({ aiService, context, projectOvervie
   let lastError = null;
 
   try {
+    currentPlan = { ...currentPlan, type: assertSupportedMermaidDiagramType(currentPlan.type) };
+    // 不支持的语法族不是可修复错误，直接拒绝进入 Mermaid 修复流程。
+    assertSupportedMermaidSyntax(currentPlan.code);
+  } catch (error) {
+    return { ok: false, plan: currentPlan, attempts: 0, error: compactError(error?.message || error) };
+  }
+
+  try {
     await validateMermaidRender(currentPlan.code);
     return { ok: true, plan: currentPlan, attempts: 0 };
   } catch (error) {
@@ -3057,7 +3094,7 @@ async function prepareRenderableMermaidPlan({ aiService, context, projectOvervie
   return { ok: false, plan: currentPlan, attempts: MERMAID_REPAIR_ATTEMPTS, error: compactError(lastError?.message || lastError || '渲染失败') };
 }
 
-function pickDistributedImageTargets(plannedItems, limit) {
+function pickDistributedIllustrationTargets(plannedItems, limit, getPriority) {
   if (limit <= 0 || !plannedItems.length) {
     return new Set();
   }
@@ -3066,13 +3103,14 @@ function pickDistributedImageTargets(plannedItems, limit) {
     return new Set(plannedItems.map(({ item }) => item.id));
   }
 
+  const priorityOf = typeof getPriority === 'function' ? getPriority : () => 0;
   const selected = new Map();
   for (let slot = 0; slot < limit; slot += 1) {
     const start = Math.floor((slot * plannedItems.length) / limit);
     const end = Math.floor(((slot + 1) * plannedItems.length) / limit);
     const group = plannedItems.slice(start, Math.max(start + 1, end));
     const best = group.reduce((current, candidate) => (
-      candidate.plan.image.priority > current.plan.image.priority ? candidate : current
+      priorityOf(candidate) > priorityOf(current) ? candidate : current
     ), group[0]);
     selected.set(best.item.id, best);
   }
@@ -3080,7 +3118,7 @@ function pickDistributedImageTargets(plannedItems, limit) {
   if (selected.size < limit) {
     const remaining = plannedItems
       .filter(({ item }) => !selected.has(item.id))
-      .sort((a, b) => b.plan.image.priority - a.plan.image.priority);
+      .sort((a, b) => priorityOf(b) - priorityOf(a));
     for (const candidate of remaining) {
       if (selected.size >= limit) break;
       selected.set(candidate.item.id, candidate);
@@ -3396,6 +3434,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   const configuredMaxAiImages = aiImagesEnabled
     ? Math.max(0, Math.min(Number.isFinite(requestedMaxImages) ? Math.round(requestedMaxImages) : 6, targetItemId ? 1 : leaves.length))
     : 0;
+  const requestedMaxMermaidImages = Number(generationOptions.maxMermaidImages ?? generationOptions.max_mermaid_images);
+  const configuredMaxMermaidImages = mermaidImagesEnabled
+    ? Math.max(0, Math.min(Number.isFinite(requestedMaxMermaidImages) ? Math.round(requestedMaxMermaidImages) : 10, targetItemId ? 1 : leaves.length))
+    : 0;
   const imageStats = { ai: createImageStat(), mermaid: createImageStat() };
   const contentStats = {
     phase: 'planning',
@@ -3493,18 +3535,28 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     };
   }
 
-  let runLimits = { maxTablesForRun: maxTables, maxAiImagesForRun: configuredMaxAiImages, retainedTableCount: 0, retainedAiImageCount: 0 };
+  let runLimits = {
+    maxTablesForRun: maxTables,
+    maxAiImagesForRun: configuredMaxAiImages,
+    maxMermaidImagesForRun: configuredMaxMermaidImages,
+    retainedTableCount: 0,
+    retainedAiImageCount: 0,
+    retainedMermaidImageCount: 0,
+  };
 
   function refreshRunLimits(targets = tasksToRun) {
     const taskItemIds = new Set(targets.map(({ item }) => item.id));
     maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
     const retainedTableCount = maxTables === null ? 0 : countRetainedTablePlans(storedContentPlans, taskItemIds);
     const retainedAiImageCount = countRetainedIllustrationPlans(storedContentPlans, taskItemIds, 'ai');
+    const retainedMermaidImageCount = countRetainedIllustrationPlans(storedContentPlans, taskItemIds, 'mermaid');
     runLimits = {
       maxTablesForRun: maxTables === null ? null : Math.max(0, maxTables - retainedTableCount),
       maxAiImagesForRun: Math.max(0, configuredMaxAiImages - retainedAiImageCount),
+      maxMermaidImagesForRun: Math.max(0, configuredMaxMermaidImages - retainedMermaidImageCount),
       retainedTableCount,
       retainedAiImageCount,
+      retainedMermaidImageCount,
     };
     return runLimits;
   }
@@ -3531,7 +3583,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     logs = [...logs, `最低字数已启用：${minimumWords} 字，将在采样预估后补目录，并在正文生成后扩写补足。`];
   }
   logs = [...logs, mermaidImagesEnabled
-    ? 'Mermaid 图片已启用，适合简单图示的小节会优先使用 Mermaid 图。'
+    ? `Mermaid 生图已启用，将在整体编排后择优生成，全文最多 ${configuredMaxMermaidImages} 张，本轮最多新增 ${runLimits.maxMermaidImagesForRun} 张。`
     : 'Mermaid 图片未启用。'];
   logs = [...logs, enableConsistencyAudit
     ? `全文一致性审计已启用，正文扩写完成后将在配图前使用${consistencyRepairMode === 'agent' ? ' Agent 修复' : '普通修复'}检查并修复事实冲突。`
@@ -4164,8 +4216,9 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           maxTables,
           tableTotalSections: leaves.length,
           imageGenerationAvailable: aiImagesEnabled && runLimits.maxAiImagesForRun > 0,
-          mermaidGenerationAvailable: mermaidImagesEnabled,
+          mermaidGenerationAvailable: mermaidImagesEnabled && runLimits.maxMermaidImagesForRun > 0,
           maxAiImages: runLimits.maxAiImagesForRun,
+          maxMermaidImages: runLimits.maxMermaidImagesForRun,
           totalSections: tasksToRun.length,
           knowledgeItems,
         }),
@@ -4195,7 +4248,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     }, leaves);
     workspaceStore.updateTechnicalPlan({ contentGenerationPlans: storedContentPlans, contentGenerationRuntime: syncRuntime() });
     contentStats.planning_completed += 1;
-    logs = [...logs, `编排完成：${item.id} ${item.title || '未命名章节'}（知识库：${contentPlan.knowledge.item_ids.length} 条，事实变量：${contentPlan.facts.titles.length} 项，表格：${contentPlan.table.needed ? '需要' : '不需要'}，Mermaid：${contentPlan.mermaid.needed ? '需要' : '不需要'}，AI 图：${contentPlan.image.needed ? '需要' : '不需要'}）`];
+    const mermaidLabel = contentPlan.mermaid.needed
+      ? getMermaidDiagramTypeLabel(contentPlan.mermaid.type) || '类型无效'
+      : '不需要';
+    logs = [...logs, `编排完成：${item.id} ${item.title || '未命名章节'}（知识库：${contentPlan.knowledge.item_ids.length} 条，事实变量：${contentPlan.facts.titles.length} 项，表格：${contentPlan.table.needed ? '需要' : '不需要'}，Mermaid：${mermaidLabel}，AI 图：${contentPlan.image.needed ? '需要' : '不需要'}）`];
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
   }
 
@@ -4250,24 +4306,30 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
     const mermaidCandidates = tasksToRun.filter(({ item }) => contentPlans.get(item.id)?.mermaid.needed);
     const aiImageCandidates = tasksToRun.filter(({ item }) => contentPlans.get(item.id)?.image.needed);
-    selectedAiImageIds = pickDistributedImageTargets(
+    selectedAiImageIds = pickDistributedIllustrationTargets(
       aiImageCandidates.map((context) => ({ ...context, plan: contentPlans.get(context.item.id) })),
       runLimits.maxAiImagesForRun,
+      (candidate) => candidate.plan.image.priority,
     );
     aiImageTargets = tasksToRun.filter(({ item }) => selectedAiImageIds.has(item.id));
-    mermaidImageTargets = mermaidCandidates.filter(({ item }) => !selectedAiImageIds.has(item.id));
+    const mermaidCandidatesWithoutAi = mermaidCandidates.filter(({ item }) => !selectedAiImageIds.has(item.id));
+    const selectedMermaidImageIds = pickDistributedIllustrationTargets(
+      mermaidCandidatesWithoutAi.map((context) => ({ ...context, plan: contentPlans.get(context.item.id) })),
+      runLimits.maxMermaidImagesForRun,
+      (candidate) => candidate.plan.mermaid.priority,
+    );
+    mermaidImageTargets = tasksToRun.filter(({ item }) => selectedMermaidImageIds.has(item.id));
     imageStats.mermaid.planned = mermaidImageTargets.length;
     imageStats.mermaid.skipped += Math.max(0, mermaidCandidates.length - mermaidImageTargets.length);
     imageStats.ai.planned = selectedAiImageIds.size;
     imageStats.ai.skipped += Math.max(0, aiImageCandidates.length - selectedAiImageIds.size);
 
     logs = [...logs, `整体编排完成：表格候选 ${tableCandidates.length} 个，${runLimits.maxTablesForRun === null ? '保持现有编排' : `入选 ${selectedTableIds.size} 个`}；AI 生图候选 ${aiImageCandidates.length} 张，入选 ${selectedAiImageIds.size} 张；Mermaid 候选 ${mermaidCandidates.length} 张，执行 ${mermaidImageTargets.length} 张。`];
-    const mermaidImageIds = new Set(mermaidImageTargets.map(({ item }) => item.id));
     persistContentPlans(tasksToRun, ({ item }) => {
       if (selectedAiImageIds.has(item.id)) {
         return 'ai';
       }
-      if (mermaidImageIds.has(item.id)) {
+      if (selectedMermaidImageIds.has(item.id)) {
         return 'mermaid';
       }
       return 'none';
@@ -6638,7 +6700,7 @@ workspace 文件说明：
     }
 
     imageStats.mermaid.attempted += 1;
-    logs = [...logs, `开始校验 Mermaid 配图：${item.id} ${contentPlan.mermaid.title}`];
+    logs = [...logs, `开始校验 Mermaid ${getMermaidDiagramTypeLabel(contentPlan.mermaid.type)}：${item.id} ${contentPlan.mermaid.title}`];
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
 
     const mermaidResult = await prepareRenderableMermaidPlan({
@@ -6660,7 +6722,9 @@ workspace 文件说明：
     } else {
       imageStats.mermaid.failed += 1;
       contentStats.illustration_completed += 1;
-      logs = [...logs, `Mermaid 配图取消：${item.id} ${contentPlan.mermaid.title}，连续修复 ${MERMAID_REPAIR_ATTEMPTS} 轮失败，${mermaidResult.error || '渲染失败'}，已保留正文。`];
+      logs = [...logs, mermaidResult.attempts > 0
+        ? `Mermaid 配图取消：${item.id} ${contentPlan.mermaid.title}，连续修复 ${mermaidResult.attempts} 轮失败，${mermaidResult.error || '渲染失败'}，已保留正文。`
+        : `Mermaid 配图取消：${item.id} ${contentPlan.mermaid.title}，${mermaidResult.error || '图表类型不受支持'}，已保留正文。`];
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
     }
   }
