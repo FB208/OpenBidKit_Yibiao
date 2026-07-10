@@ -3,7 +3,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { getConfigFilePath } = require('../utils/paths.cjs');
 
-const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'longcat', 'agnes', 'custom'];
+const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
+const legacyTextModelProviders = ['longcat'];
 const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'agnes', 'custom'];
 const aiRequestModes = ['normal', 'stream'];
 const updateChannels = ['github', 'cloudflare'];
@@ -22,7 +23,6 @@ const textProviderBaseUrls = {
   jinlong: 'https://jlaudeapi.com/v1',
   volcengine: 'https://ark.cn-beijing.volces.com/api/v3',
   deepseek: 'https://api.deepseek.com',
-  longcat: 'https://api.longcat.chat/openai/v1',
   agnes: 'https://apihub.agnes-ai.com/v1',
   custom: '',
 };
@@ -52,14 +52,6 @@ const defaultTextModelProfiles = {
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     request_mode: 'stream',
   },
-  longcat: {
-    api_key: '',
-    base_url: textProviderBaseUrls.longcat,
-    model_name: '',
-    context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
-    concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
-    request_mode: 'stream',
-  },
   agnes: {
     api_key: '',
     base_url: textProviderBaseUrls.agnes,
@@ -71,6 +63,17 @@ const defaultTextModelProfiles = {
   custom: {
     api_key: '',
     base_url: '',
+    model_name: '',
+    context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
+    request_mode: 'stream',
+  },
+};
+
+const legacyTextModelProfiles = {
+  longcat: {
+    api_key: '',
+    base_url: 'https://api.longcat.chat/openai/v1',
     model_name: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
@@ -263,6 +266,10 @@ function isTextModelProvider(value) {
   return textModelProviders.includes(value);
 }
 
+function isLegacyTextModelProvider(value) {
+  return legacyTextModelProviders.includes(value);
+}
+
 function isImageModelProvider(value) {
   return imageModelProviders.includes(value);
 }
@@ -291,7 +298,7 @@ function normalizeImageConcurrencyLimit(value, fallback = DEFAULT_IMAGE_CONCURRE
 }
 
 function normalizeTextModelProfile(provider, profile) {
-  const defaults = defaultTextModelProfiles[provider];
+  const defaults = defaultTextModelProfiles[provider] || legacyTextModelProfiles[provider];
   const source = profile || {};
   const sourceBaseUrl = provider === 'custom'
     ? source.base_url !== undefined ? source.base_url : defaults.base_url
@@ -313,6 +320,11 @@ function normalizeTextModelProfiles(sourceProfiles) {
       provider,
       sourceProfiles && typeof sourceProfiles === 'object' ? sourceProfiles[provider] : null,
     );
+  });
+  legacyTextModelProviders.forEach((provider) => {
+    if (sourceProfiles && typeof sourceProfiles === 'object' && sourceProfiles[provider]) {
+      profiles[provider] = normalizeTextModelProfile(provider, sourceProfiles[provider]);
+    }
   });
   return profiles;
 }
@@ -579,13 +591,16 @@ function normalizeConfig(config) {
   const fileParser = source.file_parser ? source.file_parser : {};
   const hasTextProvider = Object.prototype.hasOwnProperty.call(source, 'text_model_provider');
   const rawTextProvider = typeof source.text_model_provider === 'string' ? source.text_model_provider : '';
-  const sourceTextProvider = isTextModelProvider(rawTextProvider)
+  const sourceTextProvider = isTextModelProvider(rawTextProvider) || isLegacyTextModelProvider(rawTextProvider)
     ? rawTextProvider
     : '';
   const textModelProvider = sourceTextProvider || (hasTextProvider || config ? 'custom' : defaultConfig.text_model_provider);
   const textModelProfiles = normalizeTextModelProfiles(source.text_model_profiles);
   if (sourceTextProvider) {
-    textModelProfiles[textModelProvider] = textProfileFromFlatConfig(source, textModelProfiles[textModelProvider], textModelProvider);
+    const fallbackProfile = textModelProfiles[textModelProvider]
+      || defaultTextModelProfiles[textModelProvider]
+      || legacyTextModelProfiles[textModelProvider];
+    textModelProfiles[textModelProvider] = textProfileFromFlatConfig(source, fallbackProfile, textModelProvider);
   } else if (textModelProvider === 'custom' && !hasTextModelProfileData(textModelProfiles.custom)) {
     textModelProfiles.custom = textProfileFromUnknownProvider(source, rawTextProvider, textModelProfiles.custom);
   }

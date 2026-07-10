@@ -1,10 +1,10 @@
-import type { AgentModeScenariosConfig, FileParserConfig, ImageModelConfig, ImageModelProfiles, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../shared/types';
+import type { AgentModeScenariosConfig, ConfiguredTextModelProvider, FileParserConfig, ImageModelConfig, ImageModelProfiles, TextModelConfig, TextModelProfiles, UpdateChannel } from '../../shared/types';
 
 export interface SettingsPageState {
   textModel: Omit<TextModelConfig, 'context_length_limit' | 'concurrency_limit'> & {
     context_length_limit: number | '';
     concurrency_limit: number | '';
-    provider: TextModelProvider;
+    provider: ConfiguredTextModelProvider;
   };
   textModelProfiles: TextModelProfiles;
   imageModel: Omit<ImageModelConfig, 'concurrency_limit'> & {

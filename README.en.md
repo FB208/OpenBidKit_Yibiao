@@ -25,7 +25,7 @@
   <br>
   Yibiao Bid Toolbox is an intelligent bid document creation tool for tendering and bidding scenarios. It is fully open source and includes AI-generated technical proposals, image-and-text generation, commercial bid support, enterprise knowledge base management, duplicate checking, rejection-risk checks, tender information, and more features under development.
   <br>
-  It supports all OpenAI-like AI APIs. GPT, DeepSeek, LongCat, and Volcano Ark are deeply adapted, and local models can also be connected through Ollama, LM Studio, and similar tools.
+  It supports all OpenAI-like AI APIs. GPT, DeepSeek, and Volcano Ark are deeply adapted, and local models can also be connected through Ollama, LM Studio, and similar tools.
   <br>
   <br>
   <strong>❓ What problem does it solve?</strong>

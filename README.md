@@ -26,7 +26,7 @@
   <br>
   易标投标工具箱是一款面向招投标场景的智能标书制作工具，完全开源，包括AI生成技术方案、图文生成、商务标、企业知识库管理、标书查重、废标项检查、标讯等，更多功能还在开发中。
   <br>
-  支持OpenAI like模式的所有AI api，目前已深度适配GPT、DeepSeek、龙猫、火山方舟四个平台，也支持ollama、lm studio等接入本地模型。
+  支持OpenAI like模式的所有AI api，目前已深度适配GPT、DeepSeek、火山方舟三个平台，也支持ollama、lm studio等接入本地模型。
   <br>
   <br>
   <strong>❓ 解决什么问题</strong>
