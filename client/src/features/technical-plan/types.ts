@@ -37,14 +37,6 @@ export interface ContentGenerationOptions {
   originalPlanCoverageRepairMode: OriginalPlanCoverageRepairMode;
 }
 
-export interface ContentImageStats {
-  planned: number;
-  attempted: number;
-  success: number;
-  failed: number;
-  skipped: number;
-}
-
 export interface BackgroundTaskState {
   task_id: string;
   type: BackgroundTaskType;
@@ -56,7 +48,7 @@ export interface BackgroundTaskState {
   error?: string;
   stats?: {
     content?: {
-      phase: 'planning' | 'restoring' | 'generating' | 'outline-expanding' | 'expanding' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'illustrating' | 'done';
+      phase: 'planning' | 'restoring' | 'generating' | 'outline-expanding' | 'expanding' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'illustration-planning' | 'done';
       planning_total: number;
       planning_completed: number;
       generation_total: number;
@@ -86,13 +78,15 @@ export interface BackgroundTaskState {
       table_cleanup_completed?: number;
       table_cleanup_rewritten?: number;
       table_cleanup_skipped?: number;
-      illustration_total?: number;
-      illustration_completed?: number;
-    };
-    images?: Partial<ContentImageStats> & {
-      total?: ContentImageStats;
-      ai?: ContentImageStats;
-      mermaid?: ContentImageStats;
+      illustration_planning_step_total?: number;
+      illustration_planning_step_completed?: number;
+      illustration_planning_step_label?: string;
+      illustration_candidate_ai?: number;
+      illustration_candidate_mermaid?: number;
+      illustration_candidate_html?: number;
+      illustration_selected_ai?: number;
+      illustration_selected_mermaid?: number;
+      illustration_selected_html?: number;
     };
   };
 }
@@ -125,8 +119,9 @@ export interface ContentGenerationSectionState {
 
 export type ContentGenerationSections = Record<string, ContentGenerationSectionState>;
 
-export type ContentIllustrationType = 'ai' | 'mermaid' | 'none';
 export type ContentMermaidDiagramType = 'process' | 'hierarchy' | 'responsibility';
+export type ContentIllustrationKind = 'ai' | 'mermaid' | 'html';
+export type ContentIllustrationPlacement = 'before' | 'after';
 
 export interface ContentGenerationPlanData {
   writing_focus?: string;
@@ -139,22 +134,6 @@ export interface ContentGenerationPlanData {
   table: {
     needed: boolean;
     purpose: string;
-  };
-  mermaid: {
-    needed: boolean;
-    type: ContentMermaidDiagramType | '';
-    title: string;
-    code: string;
-    priority: number;
-    reason: string;
-  };
-  image: {
-    needed: boolean;
-    style: 'engineering_diagram' | 'realistic_photo' | '';
-    title: string;
-    prompt: string;
-    priority: number;
-    reason: string;
   };
   original_material?: {
     restored: boolean;
@@ -171,12 +150,25 @@ export interface ContentGenerationPlanData {
 export interface ContentGenerationPlanState {
   plan_version: number;
   plan: ContentGenerationPlanData;
-  illustration_type: ContentIllustrationType;
   table_requirement?: 'none' | 'light' | 'moderate' | 'heavy';
   updated_at?: string;
 }
 
 export type ContentGenerationPlans = Record<string, ContentGenerationPlanState>;
+
+export interface ContentIllustrationPlanItem {
+  kind: ContentIllustrationKind;
+  image_type: string;
+  section_ids: string[];
+  placement: ContentIllustrationPlacement;
+  priority: number;
+}
+
+export interface ContentIllustrationPlanState {
+  plan_version: number;
+  items: ContentIllustrationPlanItem[];
+  updated_at?: string;
+}
 
 export interface ContentGenerationRuntimeState {
   phase?: string;
@@ -271,6 +263,7 @@ export interface TechnicalPlanState {
   contentGenerationOptions?: ContentGenerationOptions;
   contentGenerationSections: ContentGenerationSections;
   contentGenerationPlans: ContentGenerationPlans;
+  contentIllustrationPlan?: ContentIllustrationPlanState;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   outlineData: OutlineData | null;
 }

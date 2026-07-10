@@ -342,7 +342,6 @@ CREATE TABLE technical_plan_content_sections (
 CREATE TABLE technical_plan_content_plans (
   node_id TEXT PRIMARY KEY,
   plan_json TEXT NOT NULL,
-  illustration_type TEXT NOT NULL DEFAULT 'none',
   updated_at TEXT NOT NULL,
   FOREIGN KEY (node_id) REFERENCES technical_plan_outline_nodes(node_id) ON DELETE CASCADE
 );

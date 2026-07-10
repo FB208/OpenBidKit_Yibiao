@@ -1,5 +1,40 @@
 # Task Plan
 
+## Current Task: Agent 全文图片编排重构
+
+### Goal
+彻底移除正文起始编排中的 AI/Mermaid 图片规划和旧实际配图路径；在正文、扩写、审计和表格清理全部完成后，新增 Agent 全文图片编排阶段，读取全文 Markdown、真实目录树和图片配置，输出最小候选结果，由程序按 HTML > Mermaid > AI、类型上限和节点冲突生成文档级最终图片计划。本轮不实现任何实际图片生成。
+
+### Phases
+- [completed] 1. 新增图片计划类型、SQLite v17 字段和 Store 生命周期。
+- [completed] 2. 新增 Agent 图片编排服务、输入投影、输出校验和后处理算法。
+- [completed] 3. 重构正文编排并完整删除旧图片规划、Mermaid 校验修复、图片生成和插图代码。
+- [completed] 4. 接入 `illustration-planning` 阶段、任务恢复、Renderer 状态和进度展示。
+- [completed] 5. 同步开发说明、提示词文档和 SQL 权威结构。
+- [completed] 6. 运行语法、算法、SQLite migration、客户端构建和任务 smoke 验证。
+
+### Decisions
+- 不读取、不迁移、不兼容旧图片计划、旧 `illustration_type` 或执行一半的数据。
+- 新 Agent 输出只包含 `kind/image_type/section_ids/placement/priority`，不输出标题、理由、prompt、Mermaid 代码或 HTML。
+- HTML 多节组必须属于同一直接父目录，并且在该父目录下顺序连续；一组计一张图片并占用组内全部小节。
+- 程序按 priority 降序处理，跨类型固定 HTML > Mermaid > AI；同优先级按目录位置和 Agent 输出顺序稳定处理。
+- 新编排成功后正文任务直接结束，不调用任何旧图片生成逻辑。
+- Agent 失败或暂停时不保存半成品，也不执行降级或旧配图 fallback。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 普通 Node.js 无法加载为 Electron 41 编译的 `better-sqlite3`（ABI 137/145 不匹配） | SQLite v17 migration smoke | 不重编译依赖，改用仓库内 Electron runtime 执行同一迁移 smoke，验证通过。 |
+
+### Validation
+- 5 个相关 CJS 文件 `node --check` 通过。
+- 图片编排算法 smoke 通过：根级 HTML 连续多节组可用，HTML 优先占用会剔除冲突 Mermaid/AI，候选和保留计数正确，多余字段被拒绝。
+- Electron runtime SQLite smoke 通过：模拟 v16 旧库升级到 v17 后，`technical_plan_content_plans` 仅保留 `node_id/plan_json/updated_at`。
+- Store 生命周期 smoke 通过：计划可落盘读取，修改配置、手工正文和目录排序都会清空旧计划。
+- 正文任务 smoke 通过：有效 Agent 输出按冲突规则原子保存且实际生图调用为 0；非法输出使任务失败且不保存半成品。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- 浏览器 1440x900 和 390x844 验证通过：图片编排显示 2/3 步、候选/保留统计，移动端无横向溢出。
+
 ## Current Task: 正文生成配置弹窗改版
 
 ### Goal

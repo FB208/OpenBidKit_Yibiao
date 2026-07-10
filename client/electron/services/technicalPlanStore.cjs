@@ -41,6 +41,7 @@ const initialState = {
   contentGenerationOptions: undefined,
   contentGenerationSections: {},
   contentGenerationPlans: {},
+  contentIllustrationPlan: undefined,
   contentGenerationRuntime: undefined,
   outlineData: null,
 };
@@ -965,7 +966,6 @@ function createTechnicalPlanStore({ app, db, fileService }) {
         acc[row.node_id] = {
           plan_version: Number(storedPlan.plan_version),
           plan: storedPlan.plan,
-          illustration_type: row.illustration_type || 'none',
           ...(storedPlan.table_requirement ? { table_requirement: storedPlan.table_requirement } : {}),
           updated_at: row.updated_at || undefined,
         };
@@ -1034,11 +1034,10 @@ function createTechnicalPlanStore({ app, db, fileService }) {
 
     const nextIds = new Set(entries.map(([nodeId]) => nodeId));
     const upsert = db.prepare(`
-      INSERT INTO technical_plan_content_plans (node_id, plan_json, illustration_type, updated_at)
-      VALUES (@node_id, @plan_json, @illustration_type, @updated_at)
+      INSERT INTO technical_plan_content_plans (node_id, plan_json, updated_at)
+      VALUES (@node_id, @plan_json, @updated_at)
       ON CONFLICT(node_id) DO UPDATE SET
         plan_json = excluded.plan_json,
-        illustration_type = excluded.illustration_type,
         updated_at = excluded.updated_at
     `);
     const timestamp = now();
@@ -1051,7 +1050,6 @@ function createTechnicalPlanStore({ app, db, fileService }) {
           plan: value.plan,
           ...(value.table_requirement ? { table_requirement: value.table_requirement } : {}),
         }),
-        illustration_type: value.illustration_type || 'none',
         updated_at: value.updated_at || timestamp,
       });
     }
@@ -1080,6 +1078,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       outline_project_overview: null,
       content_generation_options_json: null,
       content_generation_runtime_json: null,
+      content_illustration_plan_json: null,
       pending_tender_markdown_path: null,
       pending_tender_file_name: null,
       pending_tender_parser_label: null,
@@ -1107,6 +1106,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       step: 'bid-analysis',
       content_generation_options_json: null,
       content_generation_runtime_json: null,
+      content_illustration_plan_json: null,
       outline_project_name: null,
       outline_project_overview: null,
     });
@@ -1118,7 +1118,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_content_plans').run();
     db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'content-generation'").run();
     clearTechnicalPlanMermaidCache();
-    updateMeta({ content_generation_runtime_json: null });
+    updateMeta({ content_generation_runtime_json: null, content_illustration_plan_json: null });
   }
 
   function clearDownstreamFromOriginalPlan() {
@@ -1134,6 +1134,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       outline_project_name: null,
       outline_project_overview: null,
       content_generation_runtime_json: null,
+      content_illustration_plan_json: null,
     });
   }
 
@@ -1166,6 +1167,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       outline_project_overview: null,
       content_generation_options_json: null,
       content_generation_runtime_json: null,
+      content_illustration_plan_json: null,
     });
   }
 
@@ -1176,7 +1178,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
         return acc;
       }, {}),
       sections: db.prepare('SELECT node_id, status, error, updated_at FROM technical_plan_content_sections').all(),
-      plans: db.prepare('SELECT node_id, plan_json, illustration_type, updated_at FROM technical_plan_content_plans').all(),
+      plans: db.prepare('SELECT node_id, plan_json, updated_at FROM technical_plan_content_plans').all(),
     };
   }
 
@@ -1234,8 +1236,8 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     }
 
     const insertPlan = db.prepare(`
-      INSERT INTO technical_plan_content_plans (node_id, plan_json, illustration_type, updated_at)
-      VALUES (@node_id, @plan_json, @illustration_type, @updated_at)
+      INSERT INTO technical_plan_content_plans (node_id, plan_json, updated_at)
+      VALUES (@node_id, @plan_json, @updated_at)
     `);
     const seenPlans = new Set();
     for (const row of snapshot.plans) {
@@ -1248,7 +1250,6 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       insertPlan.run({
         node_id: newId,
         plan_json: row.plan_json,
-        illustration_type: row.illustration_type || 'none',
         updated_at: row.updated_at || now(),
       });
     }
@@ -1270,6 +1271,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     if (hasOwn(partial, 'outlineExpansionMode') && isValidOutlineExpansionMode(partial.outlineExpansionMode)) metaUpdates.outline_expansion_mode = partial.outlineExpansionMode;
     if (hasOwn(partial, 'contentGenerationOptions')) metaUpdates.content_generation_options_json = jsonOrNull(partial.contentGenerationOptions);
     if (hasOwn(partial, 'contentGenerationRuntime')) metaUpdates.content_generation_runtime_json = jsonOrNull(partial.contentGenerationRuntime);
+    if (hasOwn(partial, 'contentIllustrationPlan')) metaUpdates.content_illustration_plan_json = jsonOrNull(partial.contentIllustrationPlan);
 
     if (Object.keys(metaUpdates).length) updateMeta(metaUpdates);
 
@@ -1366,6 +1368,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       globalFacts: loadGlobalFacts(),
       contentGenerationOptions: safeJsonParse(meta.content_generation_options_json, undefined),
       contentGenerationRuntime: safeJsonParse(meta.content_generation_runtime_json, undefined),
+      contentIllustrationPlan: safeJsonParse(meta.content_illustration_plan_json, undefined),
       contentGenerationSections: loadContentSections(outlineData),
       contentGenerationPlans: loadContentPlans(),
       outlineData,
@@ -1507,6 +1510,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
         clearTechnicalPlanMermaidCache();
         updateMeta({ content_generation_runtime_json: null });
       }
+      updateMeta({ content_illustration_plan_json: null });
     });
     transaction();
     return loadTechnicalPlan();
@@ -1532,7 +1536,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   }
 
   function saveContentGenerationOptions(contentGenerationOptions) {
-    return updateTechnicalPlan({ contentGenerationOptions });
+    return updateTechnicalPlan({ contentGenerationOptions, contentIllustrationPlan: undefined });
   }
 
   function saveChapterContent({ nodeId, content }) {
@@ -1547,6 +1551,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
         VALUES (?, ?, NULL, ?)
         ON CONFLICT(node_id) DO UPDATE SET status = excluded.status, error = NULL, updated_at = excluded.updated_at
       `).run(nodeId, nextContent.trim() ? 'success' : 'idle', timestamp);
+      updateMeta({ content_illustration_plan_json: null });
     });
     transaction();
     return loadTechnicalPlan();

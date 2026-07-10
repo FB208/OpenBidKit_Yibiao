@@ -6,7 +6,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { ClientConfig, ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
-import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats, ContentTableRequirement, OriginalPlanCoverageRepairMode, TechnicalPlanWorkflowKind } from '../types';
+import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentTableRequirement, OriginalPlanCoverageRepairMode, TechnicalPlanWorkflowKind } from '../types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
@@ -150,12 +150,6 @@ function parseMinimumWordsInput(value: string): NumberInputDraft {
   return Number.isFinite(number) ? Math.max(0, Math.round(number)) : '';
 }
 
-const emptyImageStats: ContentImageStats = { planned: 0, attempted: 0, success: 0, failed: 0, skipped: 0 };
-
-function normalizeImageStats(stats?: Partial<ContentImageStats>): ContentImageStats {
-  return { ...emptyImageStats, ...(stats || {}) };
-}
-
 function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
   return items.flatMap((item) => item.children?.length ? collectLeafItems(item.children) : [item]);
 }
@@ -284,7 +278,6 @@ function ContentEditPage({
   const [requirementItem, setRequirementItem] = useState<OutlineItem | null>(null);
   const [regenerateRequirement, setRegenerateRequirement] = useState('');
   const [statsCollapsed, setStatsCollapsed] = useState(false);
-  const [developerMode, setDeveloperMode] = useState(false);
   const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
   const [draftGenerationOptions, setDraftGenerationOptions] = useState<DraftContentGenerationOptions>(defaultContentGenerationOptions);
@@ -316,7 +309,7 @@ function ContentEditPage({
   const auditing = phaseVisible && contentStats?.phase === 'auditing';
   const tableCleaning = phaseVisible && contentStats?.phase === 'table-cleaning';
   const contentCorrecting = originalAuditing || auditing || tableCleaning;
-  const illustrating = phaseVisible && contentStats?.phase === 'illustrating';
+  const illustrationPlanning = phaseVisible && contentStats?.phase === 'illustration-planning';
   const outlineMeta = useMemo(() => outlineData?.outline ? buildOutlineMeta(outlineData.outline, sections, planning) : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections]);
   const contentSummary = useMemo(() => leaves.reduce((summary, item) => {
     const status = getLeafStatus(item, sections);
@@ -348,7 +341,8 @@ function ContentEditPage({
   const canRetryContentCorrection = taskFailed
     && leaves.length > 0
     && completedCount === leaves.length
-    && ['original-auditing', 'auditing', 'table-cleaning'].includes(String(contentStats?.phase || ''));
+    && ['original-auditing', 'auditing', 'table-cleaning', 'illustration-planning'].includes(String(contentStats?.phase || ''));
+  const retryingIllustrationPlanning = canRetryContentCorrection && contentStats?.phase === 'illustration-planning';
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
   const wordExpansionProgress = minimumWords ? Math.min(100, Math.round((currentWords / minimumWords) * 100)) : 0;
@@ -387,11 +381,18 @@ function ContentEditPage({
   const contentCorrectionCount = tableCleaning
     ? tableCleanupTotal ? `${tableCleanupCompleted}/${tableCleanupTotal}` : '检查中'
     : auditCorrectionCount;
-  const illustrationTotal = contentStats?.illustration_total || 0;
-  const illustrationCompleted = contentStats?.illustration_completed || 0;
-  const illustrationProgress = illustrationTotal ? Math.round((illustrationCompleted / illustrationTotal) * 100) : 0;
-  const displayProgress = planning ? planningProgress : outlineExpanding ? outlineExpansionProgress : expanding ? wordExpansionProgress : contentCorrecting ? contentCorrectionProgress : illustrating ? illustrationProgress : progress;
-  const displayProgressLabel = planning ? '编排统计' : restoring ? '原方案还原' : outlineExpanding ? '补目录' : expanding ? '扩写进度' : contentCorrecting ? '内容矫正' : illustrating ? '配图统计' : '生成统计';
+  const illustrationPlanningStepTotal = contentStats?.illustration_planning_step_total || 3;
+  const illustrationPlanningStepCompleted = contentStats?.illustration_planning_step_completed || 0;
+  const illustrationPlanningStepLabel = contentStats?.illustration_planning_step_label || '';
+  const illustrationCandidateTotal = (contentStats?.illustration_candidate_html || 0)
+    + (contentStats?.illustration_candidate_mermaid || 0)
+    + (contentStats?.illustration_candidate_ai || 0);
+  const illustrationSelectedTotal = (contentStats?.illustration_selected_html || 0)
+    + (contentStats?.illustration_selected_mermaid || 0)
+    + (contentStats?.illustration_selected_ai || 0);
+  const illustrationPlanningProgress = Math.round((illustrationPlanningStepCompleted / illustrationPlanningStepTotal) * 100);
+  const displayProgress = planning ? planningProgress : outlineExpanding ? outlineExpansionProgress : expanding ? wordExpansionProgress : contentCorrecting ? contentCorrectionProgress : illustrationPlanning ? illustrationPlanningProgress : progress;
+  const displayProgressLabel = planning ? '编排统计' : restoring ? '原方案还原' : outlineExpanding ? '补目录' : expanding ? '扩写进度' : contentCorrecting ? '内容矫正' : illustrationPlanning ? '图片编排' : '生成统计';
   const displayProgressCount = planning
     ? `${planningCompleted}/${planningTotal}`
     : outlineExpanding
@@ -400,11 +401,11 @@ function ContentEditPage({
         ? `${wordExpansionProgress}%`
         : contentCorrecting
           ? contentCorrectionCount
-          : illustrating
-            ? `${illustrationCompleted}/${illustrationTotal}`
+          : illustrationPlanning
+            ? `${illustrationPlanningStepCompleted}/${illustrationPlanningStepTotal}`
             : `${completedCount}/${leaves.length}`;
-  const progressPhaseLabel = planning ? '正文编排' : restoring ? '原方案还原' : outlineExpanding ? '正文补目录' : expanding ? '正文扩写' : contentCorrecting ? '内容矫正' : illustrating ? '正文配图' : '正文生成';
-  const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${outlineExpanding ? ' is-outline-expanding' : ''}${contentCorrecting ? ' is-auditing' : ''}${illustrating ? ' is-illustrating' : ''}${taskInFlight && (planning || outlineExpanding || expanding || contentCorrecting || illustrating) ? ' is-active' : ''}`;
+  const progressPhaseLabel = planning ? '正文编排' : restoring ? '原方案还原' : outlineExpanding ? '正文补目录' : expanding ? '正文扩写' : contentCorrecting ? '内容矫正' : illustrationPlanning ? '全文图片编排' : '正文生成';
+  const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${outlineExpanding ? ' is-outline-expanding' : ''}${contentCorrecting ? ' is-auditing' : ''}${illustrationPlanning ? ' is-illustration-planning' : ''}${taskInFlight && (planning || outlineExpanding || expanding || contentCorrecting || illustrationPlanning) ? ' is-active' : ''}`;
   const progressDescription = taskFailed
     ? minimumWordsUnmet
       ? `正文扩写失败：当前 ${currentWords}/${minimumWords} 字。${taskErrorMessage}`
@@ -449,8 +450,10 @@ function ContentEditPage({
                 : tableCleanupTotal
                   ? `正在内容矫正：将表格转换为普通文字描述，已处理 ${tableCleanupCompleted}/${tableCleanupTotal} 个表格，已转换 ${tableCleanupRewritten} 个${tableCleanupSkipped ? `，跳过 ${tableCleanupSkipped} 个` : ''}。`
                   : '正在内容矫正：检查正文中是否存在需要转换的表格。'
-              : illustrating
-                ? paused ? `正文生成已暂停在配图阶段，已完成 ${illustrationCompleted}/${illustrationTotal} 张。` : `正在生成配图，已完成 ${illustrationCompleted}/${illustrationTotal} 张。`
+              : illustrationPlanning
+                ? paused
+                  ? `正文生成已暂停在全文图片编排阶段，步骤 ${illustrationPlanningStepCompleted}/${illustrationPlanningStepTotal}。${illustrationPlanningStepLabel}`
+                  : `${illustrationPlanningStepLabel || 'Agent 正在阅读全文并编排图片'}，步骤 ${illustrationPlanningStepCompleted}/${illustrationPlanningStepTotal}${illustrationCandidateTotal ? `，候选 ${illustrationCandidateTotal} 项，保留 ${illustrationSelectedTotal} 项` : ''}。`
                 : pausing
                   ? '正在暂停正文生成，已发出的 AI 请求完成后会停止调度新任务。'
                   : running
@@ -468,7 +471,7 @@ function ContentEditPage({
       : paused
         ? '继续'
         : canRetryContentCorrection
-          ? '重试内容矫正'
+          ? retryingIllustrationPlanning ? '重试图片编排' : '重试内容矫正'
           : canRetryMinimumWords
             ? '继续补足字数'
             : completedCount === leaves.length && leaves.length
@@ -477,9 +480,6 @@ function ContentEditPage({
                 ? '继续生成正文'
                 : '生成正文';
   const editing = Boolean(selectedItem && selectedIsLeaf && editingItemId === selectedItem.id);
-  const imageStats = task?.stats?.images;
-  const aiImageStats = normalizeImageStats(imageStats?.ai);
-  const mermaidImageStats = normalizeImageStats(imageStats?.mermaid);
   const imageModelAvailable = imageModelStatus === 'available';
 
   const handlePreviewImage = useCallback((src: string, alt: string) => setPreviewImage({ src, alt }), []);
@@ -498,7 +498,6 @@ function ContentEditPage({
   useEffect(() => {
     window.yibiao?.config.load()
       .then((config) => {
-        setDeveloperMode(Boolean(config.developer_mode));
         setImageModelStatus(config.image_model?.status || 'untested');
         if (config.export_format) {
           setExportFormat(config.export_format);
@@ -656,9 +655,9 @@ function ContentEditPage({
 
     try {
       await window.yibiao?.tasks.startContentGeneration({ retryContentCorrection: true });
-      showToast('内容矫正重试任务已在后台启动', 'success');
+      showToast(retryingIllustrationPlanning ? '全文图片编排重试任务已在后台启动' : '内容矫正重试任务已在后台启动', 'success');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '重试内容矫正失败', 'error');
+      showToast(error instanceof Error ? error.message : retryingIllustrationPlanning ? '重试全文图片编排失败' : '重试内容矫正失败', 'error');
     }
   };
 
@@ -1005,14 +1004,6 @@ function ContentEditPage({
           </button>
         </div>
       </section>
-
-      {developerMode && imageStats && (
-        <aside className="content-dev-stats-panel" aria-label="开发者生成统计">
-          <strong>配图统计</strong>
-          <span>AI 生图 计划 {aiImageStats.planned} / 尝试 {aiImageStats.attempted} / 成功 {aiImageStats.success} / 失败 {aiImageStats.failed} / 跳过 {aiImageStats.skipped}</span>
-          <span>Mermaid 计划 {mermaidImageStats.planned} / 尝试 {mermaidImageStats.attempted} / 成功 {mermaidImageStats.success} / 失败 {mermaidImageStats.failed}</span>
-        </aside>
-      )}
 
       <section className="content-generation-workspace">
         <aside className="content-outline-panel">

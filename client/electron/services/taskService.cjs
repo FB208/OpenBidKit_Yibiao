@@ -183,10 +183,10 @@ function inferContentGenerationPhase(technicalPlan) {
   const taskContent = technicalPlan?.contentGenerationTask?.stats?.content || {};
   const taskPhase = taskContent.phase;
   const runtimePhase = technicalPlan?.contentGenerationRuntime?.phase;
-  if (['restoring', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'table-cleaning', 'illustrating'].includes(taskPhase)) {
+  if (['restoring', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'table-cleaning', 'illustration-planning'].includes(taskPhase)) {
     return taskPhase;
   }
-  if (['planning', 'restoring', 'generating', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'table-cleaning', 'illustrating'].includes(runtimePhase)) {
+  if (['planning', 'restoring', 'generating', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'table-cleaning', 'illustration-planning'].includes(runtimePhase)) {
     return runtimePhase;
   }
 
@@ -258,6 +258,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
           'contentGenerationOptions',
           'contentGenerationSections',
           'contentGenerationPlans',
+          'contentIllustrationPlan',
           'contentGenerationRuntime',
         ]);
       }
@@ -284,6 +285,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         'contentGenerationOptions',
         'contentGenerationSections',
         'contentGenerationPlans',
+        'contentIllustrationPlan',
         'contentGenerationRuntime',
       ]);
     }
@@ -298,6 +300,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
           'contentGenerationTask',
           'contentGenerationSections',
           'contentGenerationPlans',
+          'contentIllustrationPlan',
           'contentGenerationRuntime',
         ]);
       }
@@ -310,18 +313,20 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
           'contentGenerationTask',
           'contentGenerationSections',
           'contentGenerationPlans',
+          'contentIllustrationPlan',
           'contentGenerationRuntime',
         ]);
       }
     }
 
     if (task.type === 'content-generation') {
-      copyPatchFields(patch, state, ['contentGenerationRuntime']);
+      copyPatchFields(patch, state, ['contentIllustrationPlan', 'contentGenerationRuntime']);
       if (!isActiveTaskStatus(task.status)) {
         copyPatchFields(patch, state, [
           'outlineData',
           'contentGenerationSections',
           'contentGenerationPlans',
+          'contentIllustrationPlan',
           'contentGenerationRuntime',
         ]);
       }

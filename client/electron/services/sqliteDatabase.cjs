@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 16;
+const schemaVersion = 17;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -45,6 +45,7 @@ function createInitialSchema(db) {
       outline_project_overview TEXT,
       content_generation_options_json TEXT,
       content_generation_runtime_json TEXT,
+      content_illustration_plan_json TEXT,
       selected_section_id TEXT,
       selected_section_title TEXT,
       selected_section_head_line TEXT,
@@ -122,7 +123,6 @@ function createInitialSchema(db) {
     CREATE TABLE IF NOT EXISTS technical_plan_content_plans (
       node_id TEXT PRIMARY KEY,
       plan_json TEXT NOT NULL,
-      illustration_type TEXT NOT NULL DEFAULT 'none',
       updated_at TEXT NOT NULL,
       FOREIGN KEY (node_id) REFERENCES technical_plan_outline_nodes(node_id) ON DELETE CASCADE
     );
@@ -236,6 +236,18 @@ function addTechnicalPlanBidSectionOptimization(db) {
 
 function addTechnicalPlanTenderFiles(db) {
   addColumnIfMissing(db, 'technical_plan_meta', 'tender_files_json', 'TEXT');
+}
+
+function addTechnicalPlanIllustrationPlan(db) {
+  addColumnIfMissing(db, 'technical_plan_meta', 'content_illustration_plan_json', 'TEXT');
+  removeLegacyTechnicalPlanIllustrationType(db);
+}
+
+function removeLegacyTechnicalPlanIllustrationType(db) {
+  const columns = getExistingColumns(db, 'technical_plan_content_plans');
+  if (columns.has('illustration_type')) {
+    db.exec('ALTER TABLE technical_plan_content_plans DROP COLUMN illustration_type');
+  }
 }
 
 function addKnowledgeDocumentSortOrder(db) {
@@ -1086,6 +1098,13 @@ const schemaHealthColumnGroups = [
       tender_files_json: 'TEXT',
     },
   },
+  {
+    version: 17,
+    table: 'technical_plan_meta',
+    columns: {
+      content_illustration_plan_json: 'TEXT',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -1143,6 +1162,9 @@ function ensureWorkspaceSchemaHealth(db, targetVersion = schemaVersion, onStatus
       db.exec(`ALTER TABLE ${quoteIdentifier(group.table)} ADD COLUMN ${quoteIdentifier(columnName)} ${columnType}`);
       existingColumns.add(columnName);
     }
+  }
+  if (targetVersion >= 17 && existingTables.has('technical_plan_content_plans')) {
+    removeLegacyTechnicalPlanIllustrationType(db);
   }
 }
 
@@ -1226,6 +1248,11 @@ const migrations = [
     version: 16,
     description: '技术方案支持多份招标文件',
     up: addTechnicalPlanTenderFiles,
+  },
+  {
+    version: 17,
+    description: '技术方案新增全文图片编排结果',
+    up: addTechnicalPlanIllustrationPlan,
   },
 ];
 

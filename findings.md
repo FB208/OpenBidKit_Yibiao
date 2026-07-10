@@ -1,6 +1,14 @@
 # Findings
 
 ## Research Log
+- 当前正文起始编排同时生成写作、知识、事实、表格、AI 图片和 Mermaid 代码，旧实际配图完全依赖每小节 `illustration_type`；新逻辑必须把正文计划升级并移除图片字段，同时让任务在新图片编排后结束，不能继续调用旧配图。
+- 新图片计划天然是文档级结构，因为 HTML 一张图片可以覆盖同一父目录下多个连续叶子节点；最小持久化结构为 `plan_version/items/updated_at`，Agent 原始候选保留在 Agent 归档而不写业务 Store。
+- 图片编排 Agent 可复用正文任务现有 `runContentAgentTask()`，输入 `technical-plan.md`、`outline-tree.json`、`illustration-config.json`，输出 `illustration-plan.json`；程序必须再次校验真实叶子 ID、同父连续范围、允许类型、位置和优先级。
+- 新计划成功前不写 Store；暂停或 Agent 失败后恢复时重新编排，不设计 hash 复用、旧计划迁移或 fallback。
+- 正文任务暂停/异常恢复必须识别 `illustration-planning`；恢复或该阶段失败后重试时应跳过已完成的正文、扩写和审计，直接重跑整轮 Agent，避免重复消耗前序请求。
+- 旧 `technical_plan_content_plans.illustration_type` 已失去业务含义，必须同时从 fresh schema、Store 查询/写入、目录映射恢复和 v17 迁移中删除，不能只让正文任务停止读取。
+- `better-sqlite3` 当前为 Electron 41 的 ABI 145 构建，系统 Node.js 24 使用 ABI 137；SQLite runtime smoke 必须使用仓库内 Electron，不能执行 `npm rebuild` 破坏客户端 native 依赖。
+- TaskService 启动新任务时会先把 Store 中的旧任务替换为 `running`，因此“图片编排失败后重试”的阶段判断必须读取 runner 参数 `previousState`，不能读取已经更新的当前 Store。
 - 正文生成配置当前只有 `useAiImages/maxAiImages/useMermaidImages`；配置整体已保存到 `technical_plan_meta.content_generation_options_json`，因此新增 HTML UI 字段和 Mermaid 上限无需修改 SQLite 表、IPC 或 preload。
 - Main 当前会执行全部未被 AI 生图占用的 Mermaid 候选，没有上限；要实现与 AI 生图一致的控制，需要新增 configured/run Mermaid 上限、扣除保留的 Mermaid 计划，并把候选选择器泛化为按指定优先级字段分布择优。
 - 配置弹窗当前二级说明包括顶部 `section-kicker`、动态 `Dialog.Description`、每项 `<small>` 和 Mermaid 黄色 note；用户已确认全部删除，只保留标题、配置项和操作按钮。
