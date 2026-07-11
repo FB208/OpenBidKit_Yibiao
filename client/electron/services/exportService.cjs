@@ -40,6 +40,7 @@ const {
 } = require('docx');
 
 const MAX_IMAGE_WIDTH = 520;
+const MAX_IMAGE_HEIGHT_PERCENT = 90;
 const NUMBERING_REFERENCE_PREFIX = 'technical-plan-numbering';
 const HEADING_NUMBERING_REFERENCE = 'technical-plan-heading-numbering';
 const DOCX_TABLE_WIDTH_TWIPS = 9000;
@@ -631,10 +632,26 @@ function getPageContentWidthPx(context) {
   return Math.round(contentWidthTwips / 15);
 }
 
+// 按当前纸张、方向和页边距计算 Word 正文区域可用高度。
+function getPageContentHeightPx(context) {
+  const pageSetup = context?.exportFormat?.page || {};
+  const dims = PAPER_DIMENSIONS_MM[pageSetup.paper_size] || PAPER_DIMENSIONS_MM.a4;
+  const pageHeightMm = pageSetup.orientation === 'landscape' ? dims.width : dims.height;
+  const pageHeightTwips = mmToTwips(pageHeightMm);
+  const marginTopTwips = cmToTwips(pageSetup.margin_top_cm ?? 2);
+  const marginBottomTwips = cmToTwips(pageSetup.margin_bottom_cm ?? 2);
+  const contentHeightTwips = Math.max(1, pageHeightTwips - marginTopTwips - marginBottomTwips);
+  return Math.round(contentHeightTwips / 15);
+}
+
 function getImageMaxWidth(context) {
   const image = getImageStyle(context);
   const percent = Math.max(1, Math.min(100, Number(image.max_width_percent) || DEFAULT_IMAGE_STYLE.max_width_percent));
   return Math.max(1, Math.round(getPageContentWidthPx(context) * percent / 100));
+}
+
+function getImageMaxHeight(context) {
+  return Math.max(1, Math.round(getPageContentHeightPx(context) * MAX_IMAGE_HEIGHT_PERCENT / 100));
 }
 
 function getImageParagraphOptions(context) {
@@ -1256,9 +1273,10 @@ async function imageRunFromNode(node, context, options = {}) {
   const sourceWidth = size.width || MAX_IMAGE_WIDTH;
   const sourceHeight = size.height || Math.round(MAX_IMAGE_WIDTH * 0.62);
   const maxWidth = getImageMaxWidth(context);
-  const ratio = Math.min(1, maxWidth / sourceWidth);
-  const width = Math.round(sourceWidth * ratio);
-  const height = Math.round(sourceHeight * ratio);
+  const maxHeight = getImageMaxHeight(context);
+  const ratio = Math.min(1, maxWidth / sourceWidth, maxHeight / sourceHeight);
+  const width = Math.max(1, Math.round(sourceWidth * ratio));
+  const height = Math.max(1, Math.round(sourceHeight * ratio));
   context.imageSuccessCount = (context.imageSuccessCount || 0) + 1;
   writeExportLog(context, 'export.image.completed', {
     image_index: imageIndex,
@@ -1268,6 +1286,8 @@ async function imageRunFromNode(node, context, options = {}) {
     source_width: sourceWidth,
     source_height: sourceHeight,
     max_width: maxWidth,
+    max_height: maxHeight,
+    scale_ratio: ratio,
     output_width: width,
     output_height: height,
   });
