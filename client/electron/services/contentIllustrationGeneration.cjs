@@ -256,12 +256,19 @@ async function generateMermaidIllustration(aiService, execution, isPauseLikeErro
   return prepareRenderableMermaid({ aiService, execution, mermaidPlan: generated, isPauseLikeError });
 }
 
-async function requestHtmlScreenshot(html, onRetry) {
+async function requestHtmlScreenshot(html, onRetry, pauseControl = {}) {
   let requestAttempts = 0;
   const result = await runWithRemoteImageRetry(async (attempt) => {
     requestAttempts = attempt;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), HTML_SCREENSHOT_TIMEOUT_MS);
+    const pauseWatcher = pauseControl.isPauseRequested
+      ? setInterval(() => {
+        if (pauseControl.isPauseRequested() && !controller.signal.aborted) {
+          controller.abort();
+        }
+      }, 100)
+      : null;
     try {
       const response = await fetch(HTML_SCREENSHOT_URL, {
         method: 'POST',
@@ -283,15 +290,25 @@ async function requestHtmlScreenshot(html, onRetry) {
         throw new Error('HTML 转图片服务返回的内容不是有效 PNG');
       }
       return { buffer, width: payload.data.width, height: payload.data.height };
+    } catch (error) {
+      if (pauseControl.isPauseRequested?.()) {
+        throw pauseControl.createPauseError?.() || error;
+      }
+      throw error;
     } finally {
       clearTimeout(timeout);
+      if (pauseWatcher) clearInterval(pauseWatcher);
     }
-  }, { onRetry });
+  }, {
+    onRetry,
+    shouldStop: pauseControl.isPauseRequested,
+    createStopError: pauseControl.createPauseError,
+  });
   return { ...result, attempts: requestAttempts };
 }
 
 // 生成 HTML 源文件并调用远程服务转换为 PNG。
-async function generateHtmlIllustration({ aiService, execution, plan, workspaceStore, runAgentHtml, onRenderRetry }) {
+async function generateHtmlIllustration({ aiService, execution, plan, workspaceStore, runAgentHtml, onRenderRetry, isPauseRequested, createPauseError }) {
   const existingPath = execution.planItem.generation?.source_path;
   let html = existingPath ? workspaceStore.readIllustrationHtml(existingPath) : '';
   const mode = execution.reference.length > HTML_AGENT_THRESHOLD_CHARS ? 'agent' : 'normal';
@@ -318,7 +335,7 @@ async function generateHtmlIllustration({ aiService, execution, plan, workspaceS
   const savedHtml = workspaceStore.saveIllustrationHtml({ revision: plan.revision, itemId: execution.planItem.item_id, content: html });
   let screenshot;
   try {
-    screenshot = await requestHtmlScreenshot(html, onRenderRetry);
+    screenshot = await requestHtmlScreenshot(html, onRenderRetry, { isPauseRequested, createPauseError });
   } catch (error) {
     error.illustrationGeneration = { mode, source_path: savedHtml.relativePath };
     throw error;

@@ -97,7 +97,7 @@ function buildIllustrationPlanningContext({ outlineData, sections, options, aiIm
     },
     mermaid: {
       enabled: Boolean(options?.useMermaidImages),
-      limit: normalizeLimit(options?.maxMermaidImages, 10, eligibleCount),
+      limit: normalizeLimit(options?.maxMermaidImages, 5, eligibleCount),
       allowed_types: [...MERMAID_IMAGE_TYPES],
       type_descriptions: MERMAID_IMAGE_TYPE_DESCRIPTIONS,
     },

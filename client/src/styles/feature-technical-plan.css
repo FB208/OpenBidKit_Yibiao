@@ -1318,6 +1318,13 @@
   border-radius: 999px;
 }
 
+.content-dev-stats-action {
+  min-height: 30px;
+  margin-left: auto;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
 .content-generation-progress-card {
   overflow: hidden;
 }

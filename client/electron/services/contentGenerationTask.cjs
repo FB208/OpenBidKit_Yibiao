@@ -2987,12 +2987,14 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
   let contentRuntime = normalizeContentGenerationRuntime(resume ? storedPlan.contentGenerationRuntime : {});
   const retryContentCorrection = !resume && Boolean(payload.retryContentCorrection ?? payload.retry_content_correction);
-  const runOnlyIllustrationPlanning = (resume && contentRuntime.phase === 'illustration-planning')
+  const rerunIllustrations = !resume && Boolean(payload.rerunIllustrations ?? payload.rerun_illustrations);
+  const runOnlyIllustrationPlanning = rerunIllustrations
+    || (resume && contentRuntime.phase === 'illustration-planning')
     || (retryContentCorrection && previousState?.contentGenerationTask?.stats?.content?.phase === 'illustration-planning');
   const runOnlyIllustrationGeneration = (resume && contentRuntime.phase === 'illustration-generating')
     || (retryContentCorrection && previousState?.contentGenerationTask?.stats?.content?.phase === 'illustration-generating');
   const runOnlyIllustrationStage = runOnlyIllustrationPlanning || runOnlyIllustrationGeneration;
-  const regenerate = !resume && !retryContentCorrection && Boolean(payload.regenerate);
+  const regenerate = !resume && !retryContentCorrection && !rerunIllustrations && Boolean(payload.regenerate);
   const targetItemId = resume ? contentRuntime.target_item_id : String(payload.targetItemId || '').trim();
   if (retryContentCorrection && targetItemId) {
     throw new Error('单小节重新生成不支持重试内容矫正');
@@ -3538,7 +3540,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     },
   });
 
-  if (!tasksToRun.length) {
+  if (!tasksToRun.length && !runOnlyIllustrationStage) {
     logs = [...logs, retryContentCorrection
       ? '正文已全部生成，将直接重试内容矫正和后续处理。'
       : '正文已全部生成，将检查最低字数要求。'];
@@ -6309,6 +6311,8 @@ workspace 文件说明：
               attempt,
               error: compactError(error?.message || error),
             }),
+            isPauseRequested,
+            createPauseError: createContentGenerationPausedError,
           });
         }
         persistIllustrationGeneration(planItem.item_id, { status: 'success', error: undefined, ...result }, '正在汇总已生成图片');
@@ -6426,7 +6430,9 @@ workspace 文件说明：
       await removeTablesBeforeIllustration({ targetItemId });
       pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
     } else if (runOnlyIllustrationPlanning) {
-      logs = [...logs, '继续全文图片编排，跳过已完成的正文生成和内容矫正阶段。'];
+      logs = [...logs, rerunIllustrations
+        ? '开始仅重新配图：清除旧配图后，重新执行全文图片编排和生成阶段。'
+        : '继续全文图片编排，跳过已完成的正文生成和内容矫正阶段。'];
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
     } else {
       logs = [...logs, '继续图片生成，跳过已完成的正文生成、内容矫正和图片编排阶段。'];

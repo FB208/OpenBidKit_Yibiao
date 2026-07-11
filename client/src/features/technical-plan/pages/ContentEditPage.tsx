@@ -92,7 +92,7 @@ const defaultContentGenerationOptions: ContentGenerationOptions = {
   useAiImages: false,
   maxAiImages: 6,
   useMermaidImages: true,
-  maxMermaidImages: 10,
+  maxMermaidImages: 5,
   useHtmlImages: true,
   maxHtmlImages: 10,
   htmlImageTypes: DEFAULT_HTML_IMAGE_TYPES,
@@ -705,6 +705,20 @@ function ContentEditPage({
     }
   };
 
+  const rerunIllustrations = async () => {
+    if (!contentIllustrationPlan || taskBlocksGeneration) {
+      return;
+    }
+
+    try {
+      await window.yibiao?.tasks.startContentGeneration({ rerunIllustrations: true });
+      trackConfigUsage({ content_generation_action: 'rerun_illustrations' });
+      showToast('仅重新配图任务已在后台启动', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '启动仅重新配图任务失败', 'error');
+    }
+  };
+
   const handleGenerationButtonClick = () => {
     if (running) {
       void pauseGeneration();
@@ -1072,6 +1086,12 @@ function ContentEditPage({
               成功 <b>{illustrationStats[kind].success}</b>
             </span>
           ))}
+          <button
+            type="button"
+            className="secondary-action content-dev-stats-action"
+            disabled={taskBlocksGeneration}
+            onClick={() => void rerunIllustrations()}
+          >仅重新配图</button>
         </aside>
       )}
 
