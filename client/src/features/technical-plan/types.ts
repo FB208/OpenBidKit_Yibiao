@@ -169,13 +169,13 @@ export interface ContentIllustrationPlanItem {
   item_id: string;
   kind: ContentIllustrationKind;
   image_type: string;
+  title: string;
   section_ids: string[];
   placement: ContentIllustrationPlacement;
   priority: number;
   generation?: {
     status: 'pending' | 'running' | 'success' | 'error';
     mode?: 'normal' | 'agent';
-    title?: string;
     code?: string;
     source_path?: string;
     asset_url?: string;

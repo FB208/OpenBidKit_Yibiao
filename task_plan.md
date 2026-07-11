@@ -15,7 +15,7 @@
 
 ### Decisions
 - 不读取、不迁移、不兼容旧图片计划、旧 `illustration_type` 或执行一半的数据。
-- 新 Agent 输出只包含 `kind/image_type/section_ids/placement/priority`，不输出标题、理由、prompt、Mermaid 代码或 HTML。
+- （已被“全文配图标题统一编排”v3 方案取代）当时的新 Agent 输出只包含 `kind/image_type/section_ids/placement/priority`，不输出标题、理由、prompt、Mermaid 代码或 HTML。
 - HTML 多节组必须属于同一直接父目录，并且在该父目录下顺序连续；一组计一张图片并占用组内全部小节。
 - 程序按 priority 降序处理，跨类型固定 HTML > Mermaid > AI；同优先级按目录位置和 Agent 输出顺序稳定处理。
 - 新编排成功后正文任务直接结束，不调用任何旧图片生成逻辑。
@@ -2190,3 +2190,33 @@
 
 ### Validation
 - `git diff --check -- client/开发说明.md` 通过，仅有 LF/CRLF 提示。
+
+## Current Task: 全文配图标题统一编排
+
+### Goal
+把每张图片的最终标题提升为全文图片计划的权威字段，由图片编排 Agent 统一设计并校验唯一性；HTML、Mermaid、AI 三类生成阶段只使用并注入该标题，不再自行生成标题，以降低相似正文生成重复图片和相同图注的概率。
+
+### Phases
+- [completed] 1. 升级图片计划版本、Agent 输出契约和标题校验。
+- [completed] 2. 统一三类图片生成提示词、日志和正文图注的标题来源。
+- [completed] 3. 删除全部旧图片计划兼容，不提供迁移、回退或自动重编排。
+- [completed] 4. 更新开发说明并运行定向 smoke、语法检查和客户端构建。
+
+### Decisions
+- `title` 保存最终图注正文，不包含固定前缀“图：”，必须以“图”结尾。
+- 最终计划中的标准化标题必须唯一；不增加文本相似度算法或额外 `visual_focus` 字段。
+- 新版生成阶段不得临时拼接或请求标题，三类提示词都必须注入计划标题。
+- 图片计划升级为 v3，只接受包含有效 `title` 的 v3 计划，不迁移、不回退、不自动重编排旧数据。
+- 不修改 SQLite schema、IPC、preload、统计面板或 Word 导出链路。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 当前执行 | - |
+
+### Validation
+- 3 个相关 CJS 文件 `node --check` 通过。
+- 图片计划 smoke 通过：v3 标题可落盘，缺失/前缀/后缀错误被拒绝，标准化重复标题被拒绝，标题变化会改变 revision 和 item_id。
+- 三类生成 smoke 通过：AI/HTML/Mermaid 提示词均注入计划标题，Mermaid 只返回 code，最终 Markdown 图注精确使用计划标题。
+- 旧数据兼容残留扫描通过：不存在自动重编排、`generation.title` 或 `image_type` 图注回退；v2 计划在生成入口被直接拒绝。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 仅有 LF/CRLF 提示。

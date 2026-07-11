@@ -233,3 +233,5 @@
 - 已将知识库迁移确认从系统 `window.confirm` 替换为项目内 Radix Dialog：页面检测到旧索引后打开统一风格弹窗，排版为标题、旧版不再支持继续处理提示、迁移规则警告和三列统计；文案明确建议未完成文档需回退旧版本解析为“已完成”后再更新。补充移动端单列样式，更新开发说明和知识库迁移方案。验证通过 CJS 语法检查和 `npm run build`，构建仅有既有 chunk 体积警告。
 - 已按用户要求精简 `client/开发说明.md`：保留技术栈、架构边界、目录职责、Main/IPC/Store、数据存储、后台任务、UI 复用、AI/Prompt、埋点、发布和验证标准；删除 preload API 全量清单、过细功能流水账和重复实现说明。验证通过 `git diff --check -- client/开发说明.md`，仅有 LF/CRLF 提示。
 - 已完成 SQLite 重构后埋点排查并按用户取舍优化：不为一次性知识库迁移弹窗/迁移动作新增埋点；确认 Main 侧 `ai_request` 链路仍由 `aiService.chat()` / `generateImage()` 统一上报；修复技术方案页子步骤 `page_view` 在 SQLite 状态异步恢复前误报默认 `technical-plan/document-analysis` 的问题。验证通过 `cd client; npm run build` 和 `git diff --check`，仅有既有 chunk 体积警告与 LF/CRLF 提示。
+- 开始全文配图标题统一编排：用户确认由图片编排 Agent 为每张图生成最终标题，三类生成阶段直接使用并注入该标题；计划升级为 v3，程序校验最终标题唯一，不新增相似度算法、SQLite、IPC 或 UI 链路。
+- 已完成全文配图标题统一编排：Agent 输出新增必填最终图注 `title`，v3 计划校验格式和标准化唯一性；HTML、Mermaid、AI 提示词统一注入标题，Mermaid 只生成 code，正文 alt/图注只使用计划标题；按用户要求删除全部旧图片计划兼容、自动重编排和标题回退。相关 CJS 语法、计划/三类生成/HTML Agent smoke、客户端构建和 diff 检查均通过。

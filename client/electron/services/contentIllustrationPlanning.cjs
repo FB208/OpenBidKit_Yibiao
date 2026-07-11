@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 
-const ILLUSTRATION_PLAN_VERSION = 2;
+const ILLUSTRATION_PLAN_VERSION = 3;
 const ROOT_PARENT_ID = '__root__';
 const ILLUSTRATION_KINDS = ['html', 'mermaid', 'ai'];
 const ILLUSTRATION_KIND_ORDER = new Map(ILLUSTRATION_KINDS.map((kind, index) => [kind, index]));
@@ -18,6 +18,10 @@ const MERMAID_IMAGE_TYPE_DESCRIPTIONS = {
 
 function singleLine(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizedTitleKey(value) {
+  return singleLine(value).toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
 }
 
 function stableHash(value) {
@@ -142,16 +146,17 @@ function buildIllustrationPlanningPrompt() {
 工作要求：
 1. 图片有三类：AI生成图片、mermaid图片、html生成类图网页，具体应用哪种，可以查看illustration-config.json的配置，自行判断。
 2. illustration-config.json中limit是每类图片的配图上限，如果投标文件实在不适合配图，可以低于limit，但绝不能高于limit。
-3. 避免在不同章节编排相同或相似图片。
-4. kind 只能是 html、mermaid、ai；image_type 必须来自对应 allowed_types。遇到英文类型标识时，必须先阅读对应 type_descriptions 的中文含义、适用场景和不适用场景，再决定是否选用，不得仅按英文单词猜测。
-5. AI 图片适合设备、现场、工程空间、实体部署等具象内容；Mermaid 只用于简单流程、层级和职责关系；HTML 用于配置允许的复杂图表类型。html也可以生成流程、层级和职责关系，根据内容判断如果生成内容较复杂，改用html替代mermaid。
-6. AI 和 Mermaid 每项只能引用一个正文叶子小节，placement 必须为 after。
-7. HTML 可以引用一个小节，也可以引用同一直接父目录下顺序连续的多个叶子小节；单节 placement 必须为 after。
-8. HTML 多节说明类图片使用 before，表示插入组内第一节正文前；总结类图片使用 after，表示插入组内最后一节正文后。
-9. priority 只能是 1-5 的整数，5 表示最值得配图。
-10. 同一小节只允许编排一张图片，包含在html多节图组中，也算该小节已编排，三种图片优先级html>AI生成图片>mermaid，如果一个小节同时适配多种图片，按以上优先级执行。
-11. 输出前必须重新读取 outline-tree.json，确认所有 section_ids 真实存在、属于可编排叶子，并确认 HTML 多节组同父且连续。
-12. 只创建 illustration-plan.json，不要修改输入文件，不要输出其他结果文件。
+3. 为每项生成 title，title 是最终写入正文的完整图注文本，建议控制在4-15个字，禁止冗长。
+4. 统一编排 title，标准化后不得重复；相同 image_type 可以使用多次，但每张图的标题、业务对象和视觉重点必须明显不同，避免在不同章节编排相同或相似图片。
+5. kind 只能是 html、mermaid、ai；image_type 必须来自对应 allowed_types。遇到英文类型标识时，必须先阅读对应 type_descriptions 的中文含义、适用场景和不适用场景，再决定是否选用，不得仅按英文单词猜测。
+6. AI 图片适合设备、现场、工程空间、实体部署等具象内容；Mermaid 只用于简单流程、层级和职责关系；HTML 用于配置允许的复杂图表类型。html也可以生成流程、层级和职责关系，根据内容判断如果生成内容较复杂，改用html替代mermaid。
+7. AI 和 Mermaid 每项只能引用一个正文叶子小节，placement 必须为 after。
+8. HTML 可以引用一个小节，也可以引用同一直接父目录下顺序连续的多个叶子小节；单节 placement 必须为 after。
+9. HTML 多节说明类图片使用 before，表示插入组内第一节正文前；总结类图片使用 after，表示插入组内最后一节正文后。
+10. priority 只能是 1-5 的整数，5 表示最值得配图。
+11. 同一小节只允许编排一张图片，包含在html多节图组中，也算该小节已编排，三种图片优先级html>AI生成图片>mermaid，如果一个小节同时适配多种图片，按以上优先级执行。
+12. 输出前必须重新读取 outline-tree.json，确认所有 section_ids 真实存在、属于可编排叶子，并确认 HTML 多节组同父且连续；同时通读全部 title，确认没有重复标题或仅替换章节名称的相似主题。
+13. 只创建 illustration-plan.json，不要修改输入文件，不要输出其他结果文件。
 
 illustration-plan.json 只能使用以下结构：
 {
@@ -159,6 +164,7 @@ illustration-plan.json 只能使用以下结构：
     {
       "kind": "html",
       "image_type": "进度网络图",
+      "title": "核心业务上线实施进度网络图",
       "section_ids": ["3.2.1", "3.2.2"],
       "placement": "before",
       "priority": 5
@@ -204,6 +210,7 @@ function normalizeCandidate(item, index) {
   return {
     kind: String(source.kind || '').trim(),
     image_type: singleLine(source.image_type),
+    title: singleLine(source.title),
     section_ids: Array.isArray(source.section_ids) ? source.section_ids.map((id) => String(id || '').trim()) : [],
     placement: String(source.placement || '').trim(),
     priority: Number(source.priority),
@@ -218,6 +225,15 @@ function validateCandidate(candidate, context) {
   }
   if (!config.allowed_types.includes(candidate.image_type)) {
     throw new Error(`图片候选 image_type 无效：${candidate.image_type || 'empty'}`);
+  }
+  if (!candidate.title) {
+    throw new Error('图片候选 title 不能为空');
+  }
+  if (candidate.title.length > 20) {
+    throw new Error(`图片候选 title 不能超过 20 个字：${candidate.title}`);
+  }
+  if (/^图\s*[:：]/u.test(candidate.title)) {
+    throw new Error(`图片候选 title 不应包含“图：”前缀：${candidate.title}`);
   }
   if (!Number.isInteger(candidate.priority) || candidate.priority < 1 || candidate.priority > 5) {
     throw new Error('图片候选 priority 必须是 1-5 的整数');
@@ -261,7 +277,7 @@ function resolveIllustrationPlan(content, context) {
   const extraRootFields = Object.keys(parsed).filter((key) => key !== 'items');
   if (extraRootFields.length) throw new Error(`Agent 图片编排结果包含多余字段：${extraRootFields.join(', ')}`);
 
-  const allowedFields = new Set(['kind', 'image_type', 'section_ids', 'placement', 'priority']);
+  const allowedFields = new Set(['kind', 'image_type', 'title', 'section_ids', 'placement', 'priority']);
   const candidates = parsed.items.map((item, index) => {
     const extraFields = Object.keys(item || {}).filter((key) => !allowedFields.has(key));
     if (extraFields.length) throw new Error(`图片候选包含多余字段：${extraFields.join(', ')}`);
@@ -290,9 +306,19 @@ function resolveIllustrationPlan(content, context) {
   selected.sort((a, b) => a.firstOrder - b.firstOrder
     || ILLUSTRATION_KIND_ORDER.get(a.kind) - ILLUSTRATION_KIND_ORDER.get(b.kind)
     || a.outputIndex - b.outputIndex);
-  const planItems = selected.map(({ kind, image_type, section_ids, placement, priority }) => ({
+  const titleByKey = new Map();
+  for (const candidate of selected) {
+    const titleKey = normalizedTitleKey(candidate.title);
+    const existingTitle = titleByKey.get(titleKey);
+    if (existingTitle) {
+      throw new Error(`最终图片计划标题重复：${existingTitle} / ${candidate.title}`);
+    }
+    titleByKey.set(titleKey, candidate.title);
+  }
+  const planItems = selected.map(({ kind, image_type, title, section_ids, placement, priority }) => ({
     kind,
     image_type,
+    title,
     section_ids,
     placement,
     priority,

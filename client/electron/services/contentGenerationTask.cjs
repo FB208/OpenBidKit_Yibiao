@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const { AI_QUEUE_SCOPE_PAUSED } = require('../utils/aiRequestQueue.cjs');
 const { createNoopDeveloperLogger } = require('../utils/developerLog.cjs');
 const {
+  ILLUSTRATION_PLAN_VERSION,
   buildIllustrationPlanningContext,
   buildIllustrationPlanningPrompt,
   resolveIllustrationPlan,
@@ -6192,6 +6193,13 @@ workspace 文件说明：
         agent_session_id: agentResult?.session_id || '',
         candidate_stats: resolved.stats.candidate,
         selected_stats: resolved.stats.selected,
+        selected_items: resolved.plan.items.map((item) => ({
+          item_id: item.item_id,
+          kind: item.kind,
+          image_type: item.image_type,
+          title: item.title,
+          section_ids: item.section_ids,
+        })),
       });
     }
 
@@ -6219,6 +6227,9 @@ workspace 文件说明：
 
   async function runIllustrationGeneration(initialPlan) {
     let illustrationPlan = initialPlan;
+    if (Number(illustrationPlan?.plan_version) !== ILLUSTRATION_PLAN_VERSION) {
+      throw new Error('图片计划版本无效');
+    }
     if (!illustrationPlan?.items?.length) {
       logs = [...logs, '全文图片计划为空，跳过图片生成。'];
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
@@ -6279,12 +6290,12 @@ workspace 文件说明：
         let result;
         if (planItem.kind === 'ai') {
           result = await generateAiIllustration(aiService, execution);
-          logs = [...logs, `AI 配图完成：${planItem.section_ids[0]} ${result.title}`];
+          logs = [...logs, `AI 配图完成：${planItem.section_ids[0]} ${planItem.title}`];
         } else if (planItem.kind === 'mermaid') {
           result = await generateMermaidIllustration(aiService, execution, isPauseLikeError);
           logs = [...logs, result.attempts
-            ? `Mermaid 配图已修复并完成：${planItem.section_ids[0]} ${result.title}（修复 ${result.attempts} 轮）`
-            : `Mermaid 配图完成：${planItem.section_ids[0]} ${result.title}`];
+            ? `Mermaid 配图已修复并完成：${planItem.section_ids[0]} ${planItem.title}（修复 ${result.attempts} 轮）`
+            : `Mermaid 配图完成：${planItem.section_ids[0]} ${planItem.title}`];
         } else {
           result = await generateHtmlIllustration({
             aiService,
@@ -6328,6 +6339,7 @@ workspace 文件说明：
           item_id: planItem.item_id,
           section_ids: planItem.section_ids,
           image_type: planItem.image_type,
+          title: planItem.title,
           error: compactError(error?.message || error),
         });
         if (planItem.kind !== 'html') {
