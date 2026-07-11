@@ -9,6 +9,7 @@ export interface MarkdownFullscreenViewerProps {
   description?: string;
   buttonLabel?: string;
   disabled?: boolean;
+  showFullscreen?: boolean;
   fullscreenClassName?: string;
   fullscreenStyle?: CSSProperties;
   fullscreenChildren?: ReactNode;
@@ -22,6 +23,7 @@ function MarkdownFullscreenViewer({
   description = '全屏查看当前 Markdown 内容。',
   buttonLabel = '全屏',
   disabled = false,
+  showFullscreen = true,
   fullscreenClassName,
   fullscreenStyle,
   fullscreenChildren,
@@ -34,23 +36,27 @@ function MarkdownFullscreenViewer({
     <Dialog.Root>
       <div className="markdown-fullscreen-frame">
         <div className={normalClassName} style={style}>{children}</div>
-        <Dialog.Trigger asChild>
-          <button type="button" className="markdown-fullscreen-trigger" disabled={disabled} aria-label={buttonLabel} title={buttonLabel}>
-            {buttonLabel}
-          </button>
-        </Dialog.Trigger>
+        {showFullscreen && (
+          <Dialog.Trigger asChild>
+            <button type="button" className="markdown-fullscreen-trigger" disabled={disabled} aria-label={buttonLabel} title={buttonLabel}>
+              {buttonLabel}
+            </button>
+          </Dialog.Trigger>
+        )}
       </div>
-      <Dialog.Portal>
-        <Dialog.Overlay className="markdown-fullscreen-overlay" />
-        <Dialog.Content className="markdown-fullscreen-dialog">
-          <Dialog.Title className="markdown-fullscreen-title">{title}</Dialog.Title>
-          <Dialog.Description className="markdown-fullscreen-description">{description}</Dialog.Description>
-          <Dialog.Close className="markdown-fullscreen-close" type="button">退出全屏</Dialog.Close>
-          <div className="markdown-fullscreen-content">
-            <div className={dialogContentClassName} style={dialogStyle}>{fullscreenChildren || children}</div>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
+      {showFullscreen && (
+        <Dialog.Portal>
+          <Dialog.Overlay className="markdown-fullscreen-overlay" />
+          <Dialog.Content className="markdown-fullscreen-dialog">
+            <Dialog.Title className="markdown-fullscreen-title">{title}</Dialog.Title>
+            <Dialog.Description className="markdown-fullscreen-description">{description}</Dialog.Description>
+            <Dialog.Close className="markdown-fullscreen-close" type="button">退出全屏</Dialog.Close>
+            <div className="markdown-fullscreen-content">
+              <div className={dialogContentClassName} style={dialogStyle}>{fullscreenChildren || children}</div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      )}
     </Dialog.Root>
   );
 }

@@ -384,7 +384,7 @@ function FindingDetailBlock({ label, content, allowRawHtml = false }: { label: s
   return (
     <div className="rejection-finding-detail-block">
       <strong>{label}</strong>
-      <MarkdownFullscreenViewer className="markdown-viewer rejection-finding-markdown" fullscreenClassName="markdown-viewer" title={`${label}全屏查看`}>
+      <MarkdownFullscreenViewer className="markdown-viewer rejection-finding-markdown" showFullscreen={false}>
         <MarkdownRenderer allowRawHtml={allowRawHtml}>
           {content || '未提供'}
         </MarkdownRenderer>
@@ -423,7 +423,7 @@ function TypoOriginalBlock({ excerpt, wrongText }: { excerpt: string; wrongText:
   return (
     <div className="rejection-finding-detail-block">
       <strong>原文内容</strong>
-      <MarkdownFullscreenViewer className="markdown-viewer rejection-finding-markdown typo-original-excerpt" fullscreenClassName="markdown-viewer" title="原文内容全屏查看">
+      <MarkdownFullscreenViewer className="markdown-viewer rejection-finding-markdown typo-original-excerpt" showFullscreen={false}>
         <MarkdownRenderer allowRawHtml>
           {highlightedContent}
         </MarkdownRenderer>
