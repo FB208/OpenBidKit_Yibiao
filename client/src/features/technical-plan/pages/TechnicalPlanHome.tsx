@@ -997,6 +997,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           outlineData={state.outlineData}
           task={state.contentGenerationTask}
           contentGenerationOptions={state.contentGenerationOptions}
+          contentIllustrationPlan={state.contentIllustrationPlan}
           sections={state.contentGenerationSections}
           onContentGenerationOptionsChange={saveContentGenerationOptions}
           onContentSaved={saveChapterContent}

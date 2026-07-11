@@ -6,7 +6,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
 import type { ClientConfig, ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
-import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentTableRequirement, OriginalPlanCoverageRepairMode, TechnicalPlanWorkflowKind } from '../types';
+import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentIllustrationKind, ContentIllustrationPlanState, ContentTableRequirement, OriginalPlanCoverageRepairMode, TechnicalPlanWorkflowKind } from '../types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
@@ -17,6 +17,7 @@ interface ContentEditPageProps {
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
   contentGenerationOptions?: ContentGenerationOptions;
+  contentIllustrationPlan?: ContentIllustrationPlanState;
   sections: ContentGenerationSections;
   onContentGenerationOptionsChange: (options: ContentGenerationOptions) => Promise<void> | void;
   onContentSaved: (item: OutlineItem, content: string) => Promise<void> | void;
@@ -76,6 +77,14 @@ const originalPlanCoverageRepairModeOptions: Array<{ value: OriginalPlanCoverage
   { value: 'agent', label: 'Agent 修复（推荐）' },
   { value: 'normal', label: '普通修复' },
 ];
+
+const illustrationKindLabels: Record<ContentIllustrationKind, string> = {
+  html: 'HTML 图片',
+  mermaid: 'Mermaid 图片',
+  ai: 'AI 图片',
+};
+
+const illustrationKinds: ContentIllustrationKind[] = ['html', 'mermaid', 'ai'];
 
 const DEFAULT_HTML_IMAGE_TYPES = '甘特图、进度网络图、组织架构图、泳道图、RACI 职责矩阵、风险矩阵、系统架构与拓扑图、WBS 工作分解结构图、鱼骨图、柱状图、折线图、饼图';
 
@@ -263,6 +272,7 @@ function ContentEditPage({
   outlineData,
   task,
   contentGenerationOptions,
+  contentIllustrationPlan,
   sections,
   onContentGenerationOptionsChange,
   onContentSaved,
@@ -287,6 +297,7 @@ function ContentEditPage({
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [pausePending, setPausePending] = useState(false);
   const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
+  const [developerMode, setDeveloperMode] = useState(false);
   const firstLeafId = leaves[0]?.id || '';
   const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
@@ -301,6 +312,25 @@ function ContentEditPage({
   const taskBlocksGeneration = taskInFlight || paused;
   const generationStrategyLocked = paused;
   const contentStats = task?.stats?.content;
+  const illustrationStats = useMemo(() => {
+    const stats: Record<ContentIllustrationKind, { planned: number; success: number }> = {
+      html: { planned: 0, success: 0 },
+      mermaid: { planned: 0, success: 0 },
+      ai: { planned: 0, success: 0 },
+    };
+
+    contentIllustrationPlan?.items.forEach((item) => {
+      stats[item.kind].planned += 1;
+      if (item.generation?.status === 'success') {
+        stats[item.kind].success += 1;
+      }
+    });
+
+    return stats;
+  }, [contentIllustrationPlan]);
+  const illustrationPlannedTotal = illustrationKinds.reduce((sum, kind) => sum + illustrationStats[kind].planned, 0);
+  const illustrationSuccessTotal = illustrationKinds.reduce((sum, kind) => sum + illustrationStats[kind].success, 0);
+  const showIllustrationStats = developerMode && Boolean(contentIllustrationPlan);
   const planning = phaseVisible && contentStats?.phase === 'planning';
   const restoring = phaseVisible && contentStats?.phase === 'restoring';
   const outlineExpanding = phaseVisible && contentStats?.phase === 'outline-expanding';
@@ -511,6 +541,7 @@ function ContentEditPage({
   useEffect(() => {
     window.yibiao?.config.load()
       .then((config) => {
+        setDeveloperMode(Boolean(config.developer_mode));
         setImageModelStatus(config.image_model?.status || 'untested');
         if (config.export_format) {
           setExportFormat(config.export_format);
@@ -996,7 +1027,7 @@ function ContentEditPage({
   }
 
   return (
-    <div className="plan-step-body content-generation-page">
+    <div className={`plan-step-body content-generation-page${showIllustrationStats ? ' has-dev-stats' : ''}`}>
       <section className="content-generation-command-bar">
         <div>
           <span className="section-kicker">STEP 05</span>
@@ -1027,6 +1058,22 @@ function ContentEditPage({
           </button>
         </div>
       </section>
+
+      {showIllustrationStats && (
+        <aside className="content-dev-stats-panel" aria-label="开发者配图统计">
+          <div className="content-dev-stats-summary">
+            <strong>配图统计</strong>
+            <span>共编排 <b>{illustrationPlannedTotal}</b>，成功 <b>{illustrationSuccessTotal}</b></span>
+          </div>
+          {illustrationKinds.map((kind) => (
+            <span className="content-dev-image-stat" key={kind}>
+              <strong>{illustrationKindLabels[kind]}</strong>
+              编排 <b>{illustrationStats[kind].planned}</b>
+              成功 <b>{illustrationStats[kind].success}</b>
+            </span>
+          ))}
+        </aside>
+      )}
 
       <section className="content-generation-workspace">
         <aside className="content-outline-panel">

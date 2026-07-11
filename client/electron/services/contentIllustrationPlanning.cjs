@@ -143,17 +143,17 @@ function buildIllustrationPlanningPrompt() {
 1. 图片有三类：AI生成图片、mermaid图片、html生成类图网页，具体应用哪种，可以查看illustration-config.json的配置，自行判断。
 2. illustration-config.json中limit是每类图片的配图上限，如果投标文件实在不适合配图，可以低于limit，但绝不能高于limit。
 3. 避免在不同章节编排相同或相似图片。
-2. kind 只能是 html、mermaid、ai；image_type 必须来自对应 allowed_types。遇到英文类型标识时，必须先阅读对应 type_descriptions 的中文含义、适用场景和不适用场景，再决定是否选用，不得仅按英文单词猜测。
-3. AI 图片适合设备、现场、工程空间、实体部署等具象内容；Mermaid 只用于简单流程、层级和职责关系；HTML 用于配置允许的复杂图表类型。
-4. AI 和 Mermaid 每项只能引用一个正文叶子小节，placement 必须为 after。
-5. HTML 可以引用一个小节，也可以引用同一直接父目录下顺序连续的多个叶子小节；单节 placement 必须为 after。
-6. HTML 多节说明类图片使用 before，表示插入组内第一节正文前；总结类图片使用 after，表示插入组内最后一节正文后。
-7. priority 只能是 1-5 的整数，5 表示最值得配图。
-8. 同一小节只允许编排一张图片，包含在html多节图都组中，也算已编排。
-9. 输出前必须重新读取 outline-tree.json，确认所有 section_ids 真实存在、属于可编排叶子，并确认 HTML 多节组同父且连续。
-10. 只创建 illustration-plan.json，不要修改输入文件，不要输出其他结果文件。
+4. kind 只能是 html、mermaid、ai；image_type 必须来自对应 allowed_types。遇到英文类型标识时，必须先阅读对应 type_descriptions 的中文含义、适用场景和不适用场景，再决定是否选用，不得仅按英文单词猜测。
+5. AI 图片适合设备、现场、工程空间、实体部署等具象内容；Mermaid 只用于简单流程、层级和职责关系；HTML 用于配置允许的复杂图表类型。html也可以生成流程、层级和职责关系，根据内容判断如果生成内容较复杂，改用html替代mermaid。
+6. AI 和 Mermaid 每项只能引用一个正文叶子小节，placement 必须为 after。
+7. HTML 可以引用一个小节，也可以引用同一直接父目录下顺序连续的多个叶子小节；单节 placement 必须为 after。
+8. HTML 多节说明类图片使用 before，表示插入组内第一节正文前；总结类图片使用 after，表示插入组内最后一节正文后。
+9. priority 只能是 1-5 的整数，5 表示最值得配图。
+10. 同一小节只允许编排一张图片，包含在html多节图组中，也算该小节已编排，三种图片优先级html>AI生成图片>mermaid，如果一个小节同时适配多种图片，按以上优先级执行。
+11. 输出前必须重新读取 outline-tree.json，确认所有 section_ids 真实存在、属于可编排叶子，并确认 HTML 多节组同父且连续。
+12. 只创建 illustration-plan.json，不要修改输入文件，不要输出其他结果文件。
 
-illustration-plan.json 只能使用以下结构，不要增加标题、理由、prompt、代码、scope、id 或其他字段：
+illustration-plan.json 只能使用以下结构：
 {
   "items": [
     {
