@@ -1203,6 +1203,14 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     }
   }
 
+  // 正文任务活动或暂停期间禁止手工保存，避免清空待恢复的图片计划。
+  function assertContentEditingAllowed() {
+    const row = db.prepare("SELECT status FROM technical_plan_tasks WHERE type = 'content-generation' AND status IN ('running', 'pausing', 'paused') LIMIT 1").get();
+    if (row) {
+      throw new Error('当前正文生成任务正在运行或已暂停，请先完成任务再编辑正文');
+    }
+  }
+
   function clearWorkflowSpecificState(workflowKind) {
     db.prepare("DELETE FROM technical_plan_tasks WHERE type IN ('outline-generation', 'global-facts-generation', 'content-generation')").run();
     db.prepare('DELETE FROM technical_plan_content_sections').run();
@@ -1599,6 +1607,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
 
   function saveChapterContent({ nodeId, content }) {
     const transaction = db.transaction(() => {
+      assertContentEditingAllowed();
       const timestamp = now();
       const node = db.prepare('SELECT node_id, title FROM technical_plan_outline_nodes WHERE node_id = ?').get(nodeId);
       if (!node) throw new Error('当前目录中未找到该章节');

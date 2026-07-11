@@ -877,6 +877,11 @@ function ContentEditPage({
   };
 
   const startEditingContent = () => {
+    if (taskBlocksGeneration) {
+      showToast('请先完成当前正文生成任务，再编辑正文', 'info');
+      return;
+    }
+
     if (!selectedItem || !selectedIsLeaf) {
       showToast('请选择一个叶子小节后再编辑正文', 'info');
       return;
@@ -898,6 +903,11 @@ function ContentEditPage({
   };
 
   const saveEditingContent = async () => {
+    if (taskBlocksGeneration) {
+      showToast('当前正文生成任务正在运行或已暂停，暂不能保存正文', 'info');
+      return;
+    }
+
     if (!selectedItem || !selectedIsLeaf || !outlineData?.outline?.length) {
       return;
     }
@@ -1059,11 +1069,11 @@ function ContentEditPage({
                   <button type="button" className={isPreviewing ? 'secondary-action' : 'primary-action'} onClick={togglePreview}>
                     {isPreviewing ? '编辑' : '预览'}
                   </button>
-                  <button type="button" className="primary-action" onClick={saveEditingContent}>保存</button>
+                  <button type="button" className="primary-action" onClick={saveEditingContent} disabled={taskBlocksGeneration}>保存</button>
                   <button type="button" className="secondary-action" onClick={cancelEditingContent}>取消</button>
                 </>
               ) : (
-                <button type="button" className="secondary-action" onClick={startEditingContent} disabled={!selectedItem || !selectedIsLeaf || taskInFlight}>编辑</button>
+                <button type="button" className="secondary-action" onClick={startEditingContent} disabled={!selectedItem || !selectedIsLeaf || taskBlocksGeneration}>编辑</button>
               )}
             </div>
           </div>
@@ -1073,6 +1083,7 @@ function ContentEditPage({
               value={draftContent}
               onChange={setDraftContent}
               placeholder="输入 Markdown 正文..."
+              disabled={taskBlocksGeneration}
             />
           ) : selectedItem && selectedIsLeaf && editing && isPreviewing ? (
             <MarkdownFullscreenViewer className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle} title="正文预览全屏查看">
