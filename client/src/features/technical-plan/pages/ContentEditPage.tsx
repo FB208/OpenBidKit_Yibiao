@@ -11,6 +11,9 @@ import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
+import aiImageExampleUrl from '../../../../assets/generate_img_example/ai.png';
+import mermaidImageExampleUrl from '../../../../assets/generate_img_example/mermaid.png';
+import htmlImageExampleUrl from '../../../../assets/generate_img_example/html.png';
 
 interface ContentEditPageProps {
   workflowKind: TechnicalPlanWorkflowKind;
@@ -85,6 +88,23 @@ const illustrationKindLabels: Record<ContentIllustrationKind, string> = {
 };
 
 const illustrationKinds: ContentIllustrationKind[] = ['html', 'mermaid', 'ai'];
+
+const imageGenerationExamples: Record<ContentIllustrationKind, { src: string; alt: string }> = {
+  ai: { src: aiImageExampleUrl, alt: 'AI 生图示例' },
+  mermaid: { src: mermaidImageExampleUrl, alt: 'Mermaid 生图示例' },
+  html: { src: htmlImageExampleUrl, alt: 'HTML 生图示例' },
+};
+
+// 渲染生图示例入口使用的帮助图标。
+function ImageExampleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.7 9.1a2.5 2.5 0 0 1 4.7 1.2c0 1.8-2.4 2.1-2.4 3.7" />
+      <path d="M12 17h.01" strokeWidth="2.4" />
+    </svg>
+  );
+}
 
 const DEFAULT_HTML_IMAGE_TYPES = '甘特图、进度网络图、组织架构图、泳道图、RACI 职责矩阵、风险矩阵、系统架构与拓扑图、WBS 工作分解结构图、鱼骨图、柱状图、折线图、饼图';
 
@@ -1280,10 +1300,19 @@ function ContentEditPage({
                   )}
                 </>
               )}
-              <label className="content-generation-config-row">
-                <span>
+              <div className="content-generation-config-row">
+                <div className="content-generation-image-option-title">
                   <strong>使用 AI 生图</strong>
-                </span>
+                  <button
+                    type="button"
+                    className="content-generation-example-button"
+                    onClick={() => setPreviewImage(imageGenerationExamples.ai)}
+                    aria-label="查看 AI 生图示例"
+                    title="查看 AI 生图示例"
+                  >
+                    <ImageExampleIcon />
+                  </button>
+                </div>
                 <div className="content-generation-config-control">
                   <em className={`content-image-status is-${imageModelStatus}`}>{imageModelStatusLabels[imageModelStatus]}</em>
                   <Switch.Root
@@ -1296,7 +1325,7 @@ function ContentEditPage({
                     <Switch.Thumb className="content-generation-switch-thumb" />
                   </Switch.Root>
                 </div>
-              </label>
+              </div>
               {draftGenerationOptions.useAiImages && imageModelAvailable && (
                 <label className="content-generation-config-row">
                   <span><strong>AI 生图上限</strong></span>
@@ -1313,8 +1342,19 @@ function ContentEditPage({
                   />
                 </label>
               )}
-              <label className="content-generation-config-row">
-                <span><strong>使用 Mermaid 生图</strong></span>
+              <div className="content-generation-config-row">
+                <div className="content-generation-image-option-title">
+                  <strong>使用 Mermaid 生图</strong>
+                  <button
+                    type="button"
+                    className="content-generation-example-button"
+                    onClick={() => setPreviewImage(imageGenerationExamples.mermaid)}
+                    aria-label="查看 Mermaid 生图示例"
+                    title="查看 Mermaid 生图示例"
+                  >
+                    <ImageExampleIcon />
+                  </button>
+                </div>
                 <Switch.Root
                   className="content-generation-switch"
                   checked={draftGenerationOptions.useMermaidImages}
@@ -1324,7 +1364,7 @@ function ContentEditPage({
                 >
                   <Switch.Thumb className="content-generation-switch-thumb" />
                 </Switch.Root>
-              </label>
+              </div>
               {draftGenerationOptions.useMermaidImages && (
                 <label className="content-generation-config-row">
                   <span><strong>Mermaid 生图上限</strong></span>
@@ -1341,8 +1381,19 @@ function ContentEditPage({
                   />
                 </label>
               )}
-              <label className="content-generation-config-row">
-                <span><strong>生成 HTML 图片</strong></span>
+              <div className="content-generation-config-row">
+                <div className="content-generation-image-option-title">
+                  <strong>生成 HTML 图片</strong>
+                  <button
+                    type="button"
+                    className="content-generation-example-button"
+                    onClick={() => setPreviewImage(imageGenerationExamples.html)}
+                    aria-label="查看 HTML 生图示例"
+                    title="查看 HTML 生图示例"
+                  >
+                    <ImageExampleIcon />
+                  </button>
+                </div>
                 <Switch.Root
                   className="content-generation-switch"
                   checked={draftGenerationOptions.useHtmlImages}
@@ -1352,7 +1403,7 @@ function ContentEditPage({
                 >
                   <Switch.Thumb className="content-generation-switch-thumb" />
                 </Switch.Root>
-              </label>
+              </div>
               {draftGenerationOptions.useHtmlImages && (
                 <>
                   <label className="content-generation-config-row">

@@ -2100,6 +2100,44 @@
   font-size: 15px;
 }
 
+.content-generation-image-option-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.content-generation-example-button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  color: var(--yb-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  transition: color var(--yb-duration-fast) ease, background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
+}
+
+.content-generation-example-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.content-generation-example-button:hover,
+.content-generation-example-button:focus-visible {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.1);
+  transform: scale(1.06);
+}
+
+.content-generation-example-button:focus-visible {
+  outline: 3px solid rgba(33, 116, 253, 0.16);
+  outline-offset: 2px;
+}
+
 .content-generation-config-row small,
 .content-generation-config-note {
   margin: 0;
