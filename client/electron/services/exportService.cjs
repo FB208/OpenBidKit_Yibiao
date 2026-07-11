@@ -9,6 +9,7 @@ const { compactLogError, createDeveloperLogger, textMetrics } = require('../util
 const { getMermaidCacheEntry, saveMermaidCacheImage } = require('../utils/mermaidCache.cjs');
 const { assertSupportedMermaidSyntax } = require('../utils/mermaidPolicy.cjs');
 const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
+const { REMOTE_IMAGE_RETRY_ATTEMPTS, REMOTE_IMAGE_RETRY_DELAY_MS } = require('../utils/remoteImageRetry.cjs');
 const { renderMarkdownHtml } = require('../utils/renderMarkdownHtml.cjs');
 const {
   AlignmentType,
@@ -44,8 +45,6 @@ const HEADING_NUMBERING_REFERENCE = 'technical-plan-heading-numbering';
 const DOCX_TABLE_WIDTH_TWIPS = 9000;
 const CHAPTER_LEAF_TITLE_WIDTH_TWIPS = 1800;
 const CHAPTER_LEAF_CONTENT_WIDTH_TWIPS = DOCX_TABLE_WIDTH_TWIPS - CHAPTER_LEAF_TITLE_WIDTH_TWIPS;
-const MERMAID_EXPORT_RETRY_ATTEMPTS = 2;
-const MERMAID_EXPORT_RETRY_DELAY_MS = 3000;
 const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#e0ecff', '#e9f1ff', '#f2f7ff', '#f8fbff', '#ffffff', '#ffffff'];
 const DEFAULT_TABLE_STYLE = {
   border_width: 1,
@@ -1536,8 +1535,8 @@ async function mermaidCodeToDocxBlocks(code, context) {
       ? `Mermaid 图 ${nextIndex}/${total} 已命中本地缓存。`
       : `正在转换 Mermaid 图 ${nextIndex}/${total}，可能需要联网等待。`);
     const loadRetry = {
-      retryAttempts: MERMAID_EXPORT_RETRY_ATTEMPTS,
-      retryDelayMs: MERMAID_EXPORT_RETRY_DELAY_MS,
+      retryAttempts: REMOTE_IMAGE_RETRY_ATTEMPTS,
+      retryDelayMs: REMOTE_IMAGE_RETRY_DELAY_MS,
       onRetry: (attempt) => {
         reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败，3 秒后第 ${attempt} 次重试。`);
       },

@@ -6,6 +6,15 @@ const {
   buildIllustrationPlanningPrompt,
   resolveIllustrationPlan,
 } = require('./contentIllustrationPlanning.cjs');
+const {
+  HTML_AGENT_THRESHOLD_CHARS,
+  applyGeneratedIllustrationsToDocument,
+  buildIllustrationExecutionContexts,
+  generateAiIllustration,
+  generateHtmlIllustration,
+  generateMermaidIllustration,
+  stripGeneratedIllustrationsFromDocument,
+} = require('./contentIllustrationGeneration.cjs');
 const { applyRangeEdits } = require('../utils/textEdit.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { countReadableWords } = require('../utils/wordCount.cjs');
@@ -13,6 +22,7 @@ const { countReadableWords } = require('../utils/wordCount.cjs');
 const DEFAULT_CONTEXT_LENGTH_LIMIT = 400000;
 const AGENT_CONTEXT_THRESHOLD_RATIO = 0.7;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
+const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
 const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 const MAX_OUTLINE_EXPANSION_ROUNDS = 3;
 const OUTLINE_EXPANSION_STEPS_PER_ROUND = 6;
@@ -405,6 +415,10 @@ function normalizeContentConcurrency(value) {
   return Math.max(1, Number.isFinite(concurrency) ? Math.round(concurrency) : DEFAULT_TEXT_CONCURRENCY_LIMIT);
 }
 
+function normalizeImageConcurrency(value) {
+  const concurrency = Number(value);
+  return Math.max(1, Number.isFinite(concurrency) ? Math.round(concurrency) : DEFAULT_IMAGE_CONCURRENCY_LIMIT);
+}
 
 function isDeveloperModeEnabled(aiService) {
   try {
@@ -2975,6 +2989,9 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   const retryContentCorrection = !resume && Boolean(payload.retryContentCorrection ?? payload.retry_content_correction);
   const runOnlyIllustrationPlanning = (resume && contentRuntime.phase === 'illustration-planning')
     || (retryContentCorrection && previousState?.contentGenerationTask?.stats?.content?.phase === 'illustration-planning');
+  const runOnlyIllustrationGeneration = (resume && contentRuntime.phase === 'illustration-generating')
+    || (retryContentCorrection && previousState?.contentGenerationTask?.stats?.content?.phase === 'illustration-generating');
+  const runOnlyIllustrationStage = runOnlyIllustrationPlanning || runOnlyIllustrationGeneration;
   const regenerate = !resume && !retryContentCorrection && Boolean(payload.regenerate);
   const targetItemId = resume ? contentRuntime.target_item_id : String(payload.targetItemId || '').trim();
   if (retryContentCorrection && targetItemId) {
@@ -2994,6 +3011,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   const generationOptions = payload.generationOptions || payload.generation_options || storedPlan.contentGenerationOptions || {};
   const aiConfig = aiService.getConfig ? aiService.getConfig() : {};
   const contentConcurrency = normalizeContentConcurrency(aiConfig.concurrency_limit);
+  const imageConcurrency = normalizeImageConcurrency(aiConfig.image_model?.concurrency_limit);
   const developerModeEnabled = isDeveloperModeEnabled(aiService);
   const tableRequirement = normalizeTableRequirement(generationOptions.tableRequirement ?? generationOptions.table_requirement);
   let maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
@@ -3047,6 +3065,15 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     illustration_selected_ai: 0,
     illustration_selected_mermaid: 0,
     illustration_selected_html: 0,
+    illustration_generation_total: 0,
+    illustration_generation_completed: 0,
+    illustration_generation_ai_total: 0,
+    illustration_generation_ai_completed: 0,
+    illustration_generation_mermaid_total: 0,
+    illustration_generation_mermaid_completed: 0,
+    illustration_generation_html_total: 0,
+    illustration_generation_html_completed: 0,
+    illustration_generation_step_label: '',
   };
   contentRuntime = normalizeContentGenerationRuntime({
     ...contentRuntime,
@@ -3489,11 +3516,12 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   const initialRuntime = syncRuntime();
+  const initialIllustrationPatch = runOnlyIllustrationGeneration ? {} : { contentIllustrationPlan: undefined };
   let technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineData,
     contentGenerationSections: sections,
     contentGenerationPlans: storedContentPlans,
-    contentIllustrationPlan: undefined,
+    ...initialIllustrationPatch,
     contentGenerationRuntime: initialRuntime,
     referenceKnowledgeDocumentIds,
     contentGenerationTask: updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }),
@@ -3504,7 +3532,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       outlineData,
       contentGenerationSections: sections,
       contentGenerationPlans: storedContentPlans,
-      contentIllustrationPlan: undefined,
+      ...initialIllustrationPatch,
       contentGenerationRuntime: initialRuntime,
       referenceKnowledgeDocumentIds,
     },
@@ -6107,7 +6135,13 @@ workspace 文件说明：
     contentStats.illustration_planning_step_total = 3;
     contentStats.illustration_planning_step_completed = 0;
     contentStats.illustration_planning_step_label = '正在准备全文和目录输入';
+    const strippedDocument = stripGeneratedIllustrationsFromDocument(outlineData, sections);
+    outlineData = strippedDocument.outlineData;
+    sections = strippedDocument.sections;
+    workspaceStore.clearIllustrationFiles?.();
     const phaseSaved = workspaceStore.updateTechnicalPlan({
+      outlineData,
+      contentGenerationSections: sections,
       contentGenerationRuntime: syncRuntime({ phase: 'illustration-planning' }),
     });
     logs = [...logs, '正文后处理完成，开始使用 Agent 编排全文图片计划。'];
@@ -6178,10 +6212,172 @@ workspace 文件说明：
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved, {
       technicalPlanPatch: { contentIllustrationPlan: resolved.plan },
     });
+    return resolved.plan;
+  }
+
+  async function runIllustrationGeneration(initialPlan) {
+    let illustrationPlan = initialPlan;
+    if (!illustrationPlan?.items?.length) {
+      logs = [...logs, '全文图片计划为空，跳过图片生成。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return illustrationPlan;
+    }
+
+    illustrationPlan = {
+      ...illustrationPlan,
+      items: illustrationPlan.items.map((item) => item.generation?.status === 'running'
+        ? { ...item, generation: { ...item.generation, status: 'pending', error: undefined, updated_at: now() } }
+        : item),
+    };
+    const executions = buildIllustrationExecutionContexts(illustrationPlan, leaves, sections);
+    const aiExecutions = executions.filter(({ planItem }) => planItem.kind === 'ai');
+    const normalTextExecutions = executions.filter(({ planItem, reference }) => planItem.kind === 'mermaid'
+      || (planItem.kind === 'html' && reference.length <= HTML_AGENT_THRESHOLD_CHARS));
+    const agentHtmlExecutions = executions.filter(({ planItem, reference }) => planItem.kind === 'html' && reference.length > HTML_AGENT_THRESHOLD_CHARS);
+
+    function countCompleted(kind) {
+      return illustrationPlan.items.filter((item) => item.kind === kind && ['success', 'error'].includes(item.generation?.status)).length;
+    }
+
+    function refreshIllustrationGenerationStats(label) {
+      contentStats.illustration_generation_total = illustrationPlan.items.length;
+      contentStats.illustration_generation_completed = illustrationPlan.items.filter((item) => ['success', 'error'].includes(item.generation?.status)).length;
+      contentStats.illustration_generation_ai_total = aiExecutions.length;
+      contentStats.illustration_generation_ai_completed = countCompleted('ai');
+      contentStats.illustration_generation_mermaid_total = executions.filter(({ planItem }) => planItem.kind === 'mermaid').length;
+      contentStats.illustration_generation_mermaid_completed = countCompleted('mermaid');
+      contentStats.illustration_generation_html_total = executions.filter(({ planItem }) => planItem.kind === 'html').length;
+      contentStats.illustration_generation_html_completed = countCompleted('html');
+      contentStats.illustration_generation_step_label = label || contentStats.illustration_generation_step_label;
+    }
+
+    function persistIllustrationGeneration(itemId, generation, label) {
+      illustrationPlan = {
+        ...illustrationPlan,
+        items: illustrationPlan.items.map((item) => item.item_id === itemId
+          ? { ...item, generation: { ...(item.generation || {}), ...generation, updated_at: now() } }
+          : item),
+        updated_at: now(),
+      };
+      refreshIllustrationGenerationStats(label);
+      const saved = workspaceStore.updateTechnicalPlan({
+        contentIllustrationPlan: illustrationPlan,
+        contentGenerationRuntime: syncRuntime({ phase: 'illustration-generating' }),
+      });
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved, {
+        technicalPlanPatch: { contentIllustrationPlan: illustrationPlan },
+      });
+    }
+
+    async function runExecution(execution) {
+      const { planItem } = execution;
+      if (['success', 'error'].includes(planItem.generation?.status)) return;
+      persistIllustrationGeneration(planItem.item_id, { status: 'running', error: undefined }, `正在生成${planItem.kind === 'ai' ? ' AI' : planItem.kind === 'mermaid' ? ' Mermaid' : ' HTML'} 图片`);
+      try {
+        let result;
+        if (planItem.kind === 'ai') {
+          result = await generateAiIllustration(aiService, execution);
+          logs = [...logs, `AI 配图完成：${planItem.section_ids[0]} ${result.title}`];
+        } else if (planItem.kind === 'mermaid') {
+          result = await generateMermaidIllustration(aiService, execution, isPauseLikeError);
+          logs = [...logs, result.attempts
+            ? `Mermaid 配图已修复并完成：${planItem.section_ids[0]} ${result.title}（修复 ${result.attempts} 轮）`
+            : `Mermaid 配图完成：${planItem.section_ids[0]} ${result.title}`];
+        } else {
+          result = await generateHtmlIllustration({
+            aiService,
+            execution,
+            plan: illustrationPlan,
+            workspaceStore,
+            runAgentHtml: async ({ title, prompt, outputFile, files, validateOutput }) => {
+              const response = await runContentAgentTask({
+                title,
+                prompt,
+                outputFile,
+                files,
+                eventPrefix: 'html_illustration.agent',
+                activityLabel: 'Agent 正在生成 HTML 图片',
+                startPauseMessage: '正文生成已在 HTML 图片 Agent 开始前暂停，本次 Agent 未启动；继续后将重新执行。',
+                resultPauseMessage: '正文生成已在 HTML 图片 Agent 结果保存前暂停，本次输出未保存；继续后将重新执行。',
+                pausedLogMessage: 'HTML 图片 Agent 已暂停：本轮 Agent 已取消并清理，继续后将重新执行。',
+                validateOutput,
+              });
+              return response.outputContent;
+            },
+            onRenderRetry: (attempt, error) => writeDeveloperLog('illustration.html.render.retry', {
+              item_id: planItem.item_id,
+              attempt,
+              error: compactError(error?.message || error),
+            }),
+          });
+        }
+        persistIllustrationGeneration(planItem.item_id, { status: 'success', error: undefined, ...result }, '正在汇总已生成图片');
+      } catch (error) {
+        if (isPauseLikeError(error) || isPauseRequested()) throw error;
+        const partial = error?.illustrationGeneration || {};
+        persistIllustrationGeneration(planItem.item_id, {
+          status: 'error',
+          ...partial,
+          error: compactError(error?.message || error),
+        }, '正在继续生成其他图片');
+        writeDeveloperLog(`illustration.${planItem.kind}.failed`, {
+          item_id: planItem.item_id,
+          section_ids: planItem.section_ids,
+          image_type: planItem.image_type,
+          error: compactError(error?.message || error),
+        });
+        if (planItem.kind !== 'html') {
+          logs = [...logs, `${planItem.kind === 'ai' ? 'AI' : 'Mermaid'} 配图失败：${planItem.section_ids[0]}，${error.message || '生成失败'}，已保留正文。`];
+        }
+      }
+    }
+
+    contentStats.phase = 'illustration-generating';
+    refreshIllustrationGenerationStats('正在启动文本组和生图组');
+    logs = [...logs, `开始生成图片：文本组 ${normalTextExecutions.length} 项（并发 ${contentConcurrency}），超长 HTML Agent ${agentHtmlExecutions.length} 项（串行），AI 生图组 ${aiExecutions.length} 项（并发 ${imageConcurrency}）。`];
+    const started = workspaceStore.updateTechnicalPlan({
+      contentIllustrationPlan: illustrationPlan,
+      contentGenerationRuntime: syncRuntime({ phase: 'illustration-generating' }),
+    });
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, started);
+
+    async function runTextGroup() {
+      await runItemsWithWorkerPool(normalTextExecutions, contentConcurrency, runExecution, isPauseRequested);
+      pauseIfRequested('正文生成已在普通文本图片完成后暂停，超长 HTML Agent 尚未继续执行。');
+      for (const execution of agentHtmlExecutions) {
+        pauseIfRequested('正文生成已在超长 HTML 图片 Agent 开始前暂停，继续后将重新执行。');
+        await runExecution(execution);
+      }
+    }
+
+    const settled = await Promise.allSettled([
+      runTextGroup(),
+      runItemsWithWorkerPool(aiExecutions, imageConcurrency, runExecution, isPauseRequested),
+    ]);
+    const rejected = settled.find((result) => result.status === 'rejected');
+    if (rejected?.reason) throw rejected.reason;
+    pauseIfRequested('正文生成已在图片生成阶段暂停，可导出当前已完成正文，稍后继续。');
+
+    const applied = applyGeneratedIllustrationsToDocument(illustrationPlan, outlineData, sections);
+    outlineData = applied.outlineData;
+    sections = applied.sections;
+    refreshIllustrationGenerationStats('图片生成和正文插入完成');
+    const saved = workspaceStore.updateTechnicalPlan({
+      outlineData,
+      contentGenerationSections: sections,
+      contentIllustrationPlan: illustrationPlan,
+      contentGenerationRuntime: syncRuntime({ phase: 'illustration-generating' }),
+    });
+    logs = [...logs, '图片生成阶段完成。'];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved, {
+      outlineData,
+      technicalPlanPatch: { contentGenerationSections: sections, contentIllustrationPlan: illustrationPlan },
+    });
+    return illustrationPlan;
   }
 
   try {
-    if (!runOnlyIllustrationPlanning && tasksToRun.length) {
+    if (!runOnlyIllustrationStage && tasksToRun.length) {
       if (targetItemId) {
         await prepareSingleSectionPlan();
         pauseIfRequested('正文生成已在正文编排后暂停，可导出当前已完成内容，稍后继续。');
@@ -6202,7 +6398,7 @@ workspace 文件说明：
       }
     }
 
-    if (!runOnlyIllustrationPlanning && !targetItemId) {
+    if (!runOnlyIllustrationStage && !targetItemId) {
       if (retryContentCorrection) {
         logs = [...logs, '本次为内容矫正重试，跳过正文生成和最低字数扩写，直接进入内容矫正阶段。'];
         updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
@@ -6223,19 +6419,27 @@ workspace 文件说明：
       }
       await removeTablesBeforeIllustration();
       pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
-    } else if (!runOnlyIllustrationPlanning) {
+    } else if (!runOnlyIllustrationStage) {
       await runOriginalPlanCoverageAuditIfEnabled({ targetItemId });
       pauseIfRequested('正文生成已在原方案覆盖审计后暂停，可导出当前已完成内容，稍后继续。');
       await runConsistencyAuditIfEnabled({ targetItemId });
       await removeTablesBeforeIllustration({ targetItemId });
       pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
-    } else {
+    } else if (runOnlyIllustrationPlanning) {
       logs = [...logs, '继续全文图片编排，跳过已完成的正文生成和内容矫正阶段。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    } else {
+      logs = [...logs, '继续图片生成，跳过已完成的正文生成、内容矫正和图片编排阶段。'];
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
     }
 
-    pauseIfRequested('正文生成已在全文图片编排前暂停，可导出当前已完成内容，稍后继续。');
-    await runIllustrationPlanning();
+    let illustrationPlan = runOnlyIllustrationGeneration ? storedPlan.contentIllustrationPlan : null;
+    if (!runOnlyIllustrationGeneration) {
+      pauseIfRequested('正文生成已在全文图片编排前暂停，可导出当前已完成内容，稍后继续。');
+      illustrationPlan = await runIllustrationPlanning();
+    }
+    pauseIfRequested('正文生成已在图片生成前暂停，可导出当前已完成内容，稍后继续。');
+    await runIllustrationGeneration(illustrationPlan);
     pauseIfRequested('正文生成已在完成前暂停，可导出当前已完成内容，稍后继续。');
 
     const failedCount = leaves.filter(({ item }) => sections[item.id]?.status === 'error').length;

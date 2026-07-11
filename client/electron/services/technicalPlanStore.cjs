@@ -2,7 +2,12 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { getBidAnalysisTasks } = require('./bidAnalysisTask.cjs');
-const { getTechnicalPlanOriginalPlanMarkdownPath, getTechnicalPlanTenderMarkdownPath } = require('../utils/paths.cjs');
+const {
+  getTechnicalPlanGeneratedIllustrationsDir,
+  getTechnicalPlanIllustrationsDir,
+  getTechnicalPlanOriginalPlanMarkdownPath,
+  getTechnicalPlanTenderMarkdownPath,
+} = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 const { clearMermaidCache } = require('../utils/mermaidCache.cjs');
 const { detectBidSections } = require('../utils/bidSectionDetector.cjs');
@@ -350,6 +355,59 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   const tenderSourceFilesDir = path.join(path.dirname(tenderMarkdownPath), 'tender-files');
   const originalPlanMarkdownPath = getTechnicalPlanOriginalPlanMarkdownPath(app);
   const originalOutlineRuntimePath = path.join(path.dirname(originalPlanMarkdownPath), originalOutlineRuntimeFileName);
+  const illustrationsDir = getTechnicalPlanIllustrationsDir(app);
+  const generatedIllustrationsDir = getTechnicalPlanGeneratedIllustrationsDir(app);
+
+  function normalizeIllustrationFilePart(value) {
+    return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'illustration';
+  }
+
+  function writeIllustrationFile(filePath, content) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
+    if (typeof content === 'string') {
+      fs.writeFileSync(tempPath, content, 'utf-8');
+    } else {
+      fs.writeFileSync(tempPath, content);
+    }
+    fs.renameSync(tempPath, filePath);
+  }
+
+  // 独立保存 HTML 图片源文件，供转图失败或任务恢复时复用。
+  function saveIllustrationHtml({ revision, itemId, content }) {
+    const safeRevision = normalizeIllustrationFilePart(revision);
+    const safeItemId = normalizeIllustrationFilePart(itemId);
+    const relativePath = path.join('illustrations', safeRevision, 'html', `${safeItemId}.html`).replace(/\\/g, '/');
+    const filePath = path.join(path.dirname(originalPlanMarkdownPath), relativePath);
+    writeIllustrationFile(filePath, String(content || ''));
+    return { relativePath, filePath };
+  }
+
+  // 读取此前已生成的 HTML 图片源文件。
+  function readIllustrationHtml(relativePath) {
+    const resolvedPath = path.resolve(path.dirname(originalPlanMarkdownPath), String(relativePath || ''));
+    const root = `${path.resolve(illustrationsDir)}${path.sep}`;
+    if (!resolvedPath.startsWith(root) || !fs.existsSync(resolvedPath)) return '';
+    return fs.readFileSync(resolvedPath, 'utf-8');
+  }
+
+  // 保存 HTML 截图 PNG，并返回 Renderer/导出层均可读取的资产 URL。
+  function saveIllustrationPng({ revision, itemId, buffer }) {
+    const safeRevision = normalizeIllustrationFilePart(revision);
+    const safeItemId = normalizeIllustrationFilePart(itemId);
+    const filePath = path.join(generatedIllustrationsDir, safeRevision, `${safeItemId}.png`);
+    writeIllustrationFile(filePath, buffer);
+    return {
+      filePath,
+      assetUrl: `yibiao-asset://generated-images/technical-plan/illustrations/${encodeURIComponent(safeRevision)}/${encodeURIComponent(`${safeItemId}.png`)}`,
+    };
+  }
+
+  // 清理技术方案专属的图片源文件和生成图片。
+  function clearIllustrationFiles() {
+    fs.rmSync(illustrationsDir, { recursive: true, force: true });
+    fs.rmSync(generatedIllustrationsDir, { recursive: true, force: true });
+  }
   function resolvePendingTenderMarkdownPath(filePath) {
     return path.resolve(resolveMarkdownPath(filePath));
   }
@@ -1744,6 +1802,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     }
     clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
+    clearIllustrationFiles();
     deleteImportedImageBatches(app, 'technical-plan');
     return { success: true, message: '技术方案缓存已清空', state: loadTechnicalPlan() };
   }
@@ -1752,6 +1811,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     loadTechnicalPlan,
     updateTechnicalPlan,
     clearMermaidCache: clearTechnicalPlanMermaidCache,
+    clearIllustrationFiles,
     clearTechnicalPlan,
     importTenderDocument,
     importOriginalPlanDocument,
@@ -1762,6 +1822,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     readTenderSourceMarkdown,
     readOriginalTenderMarkdown,
     readOriginalPlanMarkdown,
+    readIllustrationHtml,
     readOriginalOutlineRuntime,
     saveOriginalOutlineRuntime,
     clearOriginalOutlineRuntime,
@@ -1772,6 +1833,8 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     saveOutlineConfig,
     saveOutline,
     saveGlobalFacts,
+    saveIllustrationHtml,
+    saveIllustrationPng,
     saveContentGenerationOptions,
     saveChapterContent,
   };

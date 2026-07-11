@@ -1,4 +1,6 @@
-const ILLUSTRATION_PLAN_VERSION = 1;
+const crypto = require('node:crypto');
+
+const ILLUSTRATION_PLAN_VERSION = 2;
 const ROOT_PARENT_ID = '__root__';
 const ILLUSTRATION_KINDS = ['html', 'mermaid', 'ai'];
 const ILLUSTRATION_KIND_ORDER = new Map(ILLUSTRATION_KINDS.map((kind, index) => [kind, index]));
@@ -7,6 +9,10 @@ const MERMAID_IMAGE_TYPES = new Set(['process', 'hierarchy', 'responsibility']);
 
 function singleLine(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function stableHash(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex');
 }
 
 // 解析用户允许的 HTML 图片类型。
@@ -271,15 +277,22 @@ function resolveIllustrationPlan(content, context) {
   selected.sort((a, b) => a.firstOrder - b.firstOrder
     || ILLUSTRATION_KIND_ORDER.get(a.kind) - ILLUSTRATION_KIND_ORDER.get(b.kind)
     || a.outputIndex - b.outputIndex);
+  const planItems = selected.map(({ kind, image_type, section_ids, placement, priority }) => ({
+    kind,
+    image_type,
+    section_ids,
+    placement,
+    priority,
+  }));
+  const revision = stableHash(planItems).slice(0, 24);
   return {
     plan: {
       plan_version: ILLUSTRATION_PLAN_VERSION,
-      items: selected.map(({ kind, image_type, section_ids, placement, priority }) => ({
-        kind,
-        image_type,
-        section_ids,
-        placement,
-        priority,
+      revision,
+      items: planItems.map((item) => ({
+        item_id: stableHash(item).slice(0, 24),
+        ...item,
+        generation: { status: 'pending' },
       })),
       updated_at: new Date().toISOString(),
     },

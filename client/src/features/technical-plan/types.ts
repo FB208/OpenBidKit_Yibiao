@@ -48,7 +48,7 @@ export interface BackgroundTaskState {
   error?: string;
   stats?: {
     content?: {
-      phase: 'planning' | 'restoring' | 'generating' | 'outline-expanding' | 'expanding' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'illustration-planning' | 'done';
+      phase: 'planning' | 'restoring' | 'generating' | 'outline-expanding' | 'expanding' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'illustration-planning' | 'illustration-generating' | 'done';
       planning_total: number;
       planning_completed: number;
       generation_total: number;
@@ -87,6 +87,15 @@ export interface BackgroundTaskState {
       illustration_selected_ai?: number;
       illustration_selected_mermaid?: number;
       illustration_selected_html?: number;
+      illustration_generation_total?: number;
+      illustration_generation_completed?: number;
+      illustration_generation_ai_total?: number;
+      illustration_generation_ai_completed?: number;
+      illustration_generation_mermaid_total?: number;
+      illustration_generation_mermaid_completed?: number;
+      illustration_generation_html_total?: number;
+      illustration_generation_html_completed?: number;
+      illustration_generation_step_label?: string;
     };
   };
 }
@@ -157,15 +166,28 @@ export interface ContentGenerationPlanState {
 export type ContentGenerationPlans = Record<string, ContentGenerationPlanState>;
 
 export interface ContentIllustrationPlanItem {
+  item_id: string;
   kind: ContentIllustrationKind;
   image_type: string;
   section_ids: string[];
   placement: ContentIllustrationPlacement;
   priority: number;
+  generation?: {
+    status: 'pending' | 'running' | 'success' | 'error';
+    mode?: 'normal' | 'agent';
+    title?: string;
+    code?: string;
+    source_path?: string;
+    asset_url?: string;
+    attempts?: number;
+    error?: string;
+    updated_at?: string;
+  };
 }
 
 export interface ContentIllustrationPlanState {
   plan_version: number;
+  revision: string;
   items: ContentIllustrationPlanItem[];
   updated_at?: string;
 }
