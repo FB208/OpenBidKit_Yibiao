@@ -1,19 +1,29 @@
 const crypto = require('node:crypto');
-const zlib = require('node:zlib');
 const { AI_QUEUE_SCOPE_PAUSED } = require('../utils/aiRequestQueue.cjs');
 const { createNoopDeveloperLogger } = require('../utils/developerLog.cjs');
+const {
+  ILLUSTRATION_PLAN_VERSION,
+  buildIllustrationPlanningContext,
+  buildIllustrationPlanningPrompt,
+  resolveIllustrationPlan,
+} = require('./contentIllustrationPlanning.cjs');
+const {
+  HTML_AGENT_THRESHOLD_CHARS,
+  applyGeneratedIllustrationsToDocument,
+  buildIllustrationExecutionContexts,
+  generateAiIllustration,
+  generateHtmlIllustration,
+  generateMermaidIllustration,
+  stripGeneratedIllustrationsFromDocument,
+} = require('./contentIllustrationGeneration.cjs');
 const { applyRangeEdits } = require('../utils/textEdit.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 
-const IMAGE_STYLES = new Set(['engineering_diagram', 'realistic_photo']);
 const DEFAULT_CONTEXT_LENGTH_LIMIT = 400000;
 const AGENT_CONTEXT_THRESHOLD_RATIO = 0.7;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
-const MERMAID_REPAIR_ATTEMPTS = 3;
-const MERMAID_RENDER_TIMEOUT_MS = 15000;
-const MERMAID_IMAGE_CONCURRENCY = 5;
 const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 const MAX_OUTLINE_EXPANSION_ROUNDS = 3;
 const OUTLINE_EXPANSION_STEPS_PER_ROUND = 6;
@@ -27,7 +37,7 @@ const ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS = 2;
 const TABLE_CLEANUP_CONTEXT_CHARS = 600;
 const TABLE_CLEANUP_BATCH_CHAR_LIMIT = 30000;
 const CONTENT_GENERATION_PAUSED = 'CONTENT_GENERATION_PAUSED';
-const CONTENT_PLAN_VERSION = 2;
+const CONTENT_PLAN_VERSION = 4;
 const PROMPT_CACHE_WARMUP_DELAY_MS = 5000;
 const TABLE_REQUIREMENT_LABELS = {
   none: '不要',
@@ -332,87 +342,9 @@ function createTableCleanupBatches(tables) {
   return batches;
 }
 
-function normalizeMermaidCode(value) {
-  return String(value || '')
-    .replace(/^```mermaid\s*/i, '')
-    .replace(/```$/i, '')
-    .trim();
-}
-
-function encodeMermaidForInk(code) {
-  const state = JSON.stringify({
-    code: String(code || ''),
-    mermaid: { theme: 'default' },
-  });
-  return `pako:${zlib.deflateSync(Buffer.from(state, 'utf-8')).toString('base64url')}`;
-}
-
-function mermaidInkUrl(code) {
-  return `https://mermaid.ink/img/${encodeMermaidForInk(code)}?type=png&bgColor=!white`;
-}
-
 function compactError(value, maxLength = 220) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
-}
-
-function assertMermaidPreviewCompatible(code) {
-  const normalized = normalizeMermaidCode(code);
-  if (!normalized) {
-    throw new Error('Mermaid 代码为空');
-  }
-  if (/[;；]/.test(normalized)) {
-    throw new Error('Mermaid 代码包含分号，前端渲染兼容性较差，请改为每行一个语句且不使用分号');
-  }
-  if (/\s&\s/.test(normalized) && /-->|---|==>/.test(normalized)) {
-    throw new Error('Mermaid 代码包含多节点 & 连接简写，请展开为多条独立连线');
-  }
-  if (/\[[^\]\n"']*[\u3400-\u9fff][^\]\n"']*\]/u.test(normalized)) {
-    throw new Error('Mermaid 中文节点标签需要使用双引号，例如 A["项目启动"]');
-  }
-  if (/^\s*[\u3400-\u9fff][\w\u3400-\u9fff-]*\s*(?:-->|---|==>)/mu.test(normalized)) {
-    throw new Error('Mermaid 节点 ID 需要使用 ASCII 字母数字，不要直接使用中文作为节点 ID');
-  }
-}
-
-async function readResponseSnippet(response) {
-  try {
-    const text = await response.text();
-    return compactError(text, 240);
-  } catch (_error) {
-    return '';
-  }
-}
-
-async function validateMermaidRender(code) {
-  const normalized = normalizeMermaidCode(code);
-  assertMermaidPreviewCompatible(normalized);
-  if (typeof fetch !== 'function') {
-    throw new Error('当前运行环境不支持 Mermaid 渲染校验');
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), MERMAID_RENDER_TIMEOUT_MS);
-  try {
-    const response = await fetch(mermaidInkUrl(normalized), { signal: controller.signal });
-    const contentType = response.headers?.get?.('content-type') || '';
-    if (!response.ok || !/image\//i.test(contentType)) {
-      const detail = await readResponseSnippet(response);
-      throw new Error(`Mermaid 渲染失败：HTTP ${response.status || 'unknown'}${detail ? `，${detail}` : ''}`);
-    }
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new Error('Mermaid 渲染校验超时');
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function normalizePriority(value) {
-  const priority = Math.round(Number(value) || 0);
-  return Math.max(1, Math.min(priority || 3, 5));
 }
 
 function normalizeTableRequirement(value) {
@@ -584,16 +516,7 @@ function normalizeContentPlan(value, allowedKnowledgeItemIds, allowedFactTitles)
     ? factsSource
     : facts.titles ?? facts.fact_titles ?? facts.factTitles ?? source.fact_titles ?? source.factTitles ?? source.global_fact_titles ?? source.globalFactTitles;
   const table = source.table && typeof source.table === 'object' ? source.table : {};
-  const image = source.image && typeof source.image === 'object' ? source.image : {};
-  const mermaid = source.mermaid && typeof source.mermaid === 'object' ? source.mermaid : {};
   const tableNeeded = Boolean(table.needed);
-  const mermaidTitle = singleLine(mermaid.title);
-  const mermaidCode = normalizeMermaidCode(mermaid.code);
-  const mermaidNeeded = Boolean(mermaid.needed) && Boolean(mermaidTitle && mermaidCode);
-  const imageStyle = IMAGE_STYLES.has(image.style) ? image.style : '';
-  const imageTitle = singleLine(image.title);
-  const imagePrompt = String(image.prompt || '').trim();
-  const imageNeeded = Boolean(image.needed) && Boolean(imageStyle && imageTitle && imagePrompt);
 
   return {
     writing_focus: singleLine(source.writing_focus || source.writingFocus || writing.focus || writing.writing_focus || writing.writingFocus),
@@ -607,35 +530,15 @@ function normalizeContentPlan(value, allowedKnowledgeItemIds, allowedFactTitles)
       needed: tableNeeded,
       purpose: tableNeeded ? singleLine(table.purpose) : '',
     },
-    mermaid: {
-      needed: mermaidNeeded,
-      title: mermaidNeeded ? mermaidTitle : '',
-      code: mermaidNeeded ? mermaidCode : '',
-      priority: mermaidNeeded ? normalizePriority(mermaid.priority) : 0,
-      reason: mermaidNeeded ? singleLine(mermaid.reason) : '',
-    },
-    image: {
-      needed: imageNeeded,
-      style: imageNeeded ? imageStyle : '',
-      title: imageNeeded ? imageTitle : '',
-      prompt: imageNeeded ? imagePrompt : '',
-      priority: imageNeeded ? normalizePriority(image.priority) : 0,
-      reason: imageNeeded ? singleLine(image.reason) : '',
-    },
     original_material: normalizeOriginalMaterial(source.original_material || source.originalMaterial),
   };
 }
 
-function normalizeIllustrationType(value) {
-  return ['ai', 'mermaid', 'none'].includes(value) ? value : 'none';
-}
-
-function createStoredContentPlan(plan, illustrationType, tableRequirement) {
+function createStoredContentPlan(plan, tableRequirement) {
   const normalizedTableRequirement = tableRequirement ? normalizeTableRequirement(tableRequirement) : '';
   return {
     plan_version: CONTENT_PLAN_VERSION,
     plan: normalizeContentPlan(plan),
-    illustration_type: normalizeIllustrationType(illustrationType),
     ...(normalizedTableRequirement ? { table_requirement: normalizedTableRequirement } : {}),
     updated_at: now(),
   };
@@ -658,13 +561,17 @@ function normalizeStoredContentPlan(value) {
   if (!plan.writing_focus) {
     return null;
   }
+  try {
+    validateContentPlan(plan);
+  } catch {
+    return null;
+  }
   const tableRequirement = value.table_requirement || value.tableRequirement
     ? normalizeTableRequirement(value.table_requirement || value.tableRequirement)
     : '';
   return {
     plan_version: CONTENT_PLAN_VERSION,
     plan,
-    illustration_type: normalizeIllustrationType(value.illustration_type || value.illustrationType),
     ...(tableRequirement ? { table_requirement: tableRequirement } : {}),
     updated_at: value.updated_at || value.updatedAt || now(),
   };
@@ -720,31 +627,6 @@ function validateContentPlan(plan) {
   if (!plan.table || typeof plan.table.needed !== 'boolean') {
     throw new Error('正文编排决策缺少 table.needed');
   }
-  if (!plan.image || typeof plan.image.needed !== 'boolean') {
-    throw new Error('正文编排决策缺少 image.needed');
-  }
-  if (!plan.mermaid || typeof plan.mermaid.needed !== 'boolean') {
-    throw new Error('正文编排决策缺少 mermaid.needed');
-  }
-  if (plan.image.needed && !IMAGE_STYLES.has(plan.image.style)) {
-    throw new Error('正文配图风格无效');
-  }
-}
-
-function normalizeMermaidRepairResult(value) {
-  const source = value?.result && typeof value.result === 'object' ? value.result : value || {};
-  return {
-    code: normalizeMermaidCode(source.code || source.fixed_code || source.mermaid_code || source.mermaid?.code || ''),
-  };
-}
-
-function validateMermaidRepairResult(result) {
-  if (!result?.code) {
-    throw new Error('Mermaid 修复结果缺少 code');
-  }
-  if (/```/.test(result.code)) {
-    throw new Error('Mermaid 修复结果不能包含 Markdown 代码围栏');
-  }
 }
 
 function formatContentPlanForPrompt(plan) {
@@ -752,7 +634,6 @@ function formatContentPlanForPrompt(plan) {
     `写作重点：${plan.writing_focus || '围绕当前章节标题和描述展开'}`,
     `事实变量：${plan.facts?.titles?.length ? plan.facts.titles.join('；') : '无'}`,
     `表格：${plan.table.needed ? `需要，目的：${plan.table.purpose || '提升正文表达清晰度'}` : '不需要，本小节不要输出 Markdown 表格'}`,
-    `AI 生图：${plan.image.needed ? `需要，风格：${plan.image.style}，标题：${plan.image.title}` : '不需要'}`,
     `原方案还原：${plan.original_material?.restored ? `已还原 ${plan.original_material.restored_chars || 0} 字` : '未还原'}`,
   ];
   return lines.join('\n');
@@ -837,73 +718,6 @@ function validateTableCleanupResponse(value) {
   }
 }
 
-function buildMermaidRepairMessages({ chapter, parentChapters, siblingChapters, projectOverview, selectedFactsText, regenerateRequirement, mermaidPlan, invalidCode, errorMessage, attempt }) {
-  const chapterId = chapter.id || 'unknown';
-  const chapterTitle = chapter.title || '未命名章节';
-  const messages = [
-    {
-      role: 'system',
-      content: `你是 Mermaid 图代码修复助手。请根据渲染错误修复现有 Mermaid 代码。
-
-要求：
-1. 只返回 JSON，不要输出解释、总结或 Markdown。
-2. 目标是让 Mermaid 在浏览器前端稳定渲染，优先做最小必要修改。
-3. 优先使用 flowchart TD；节点 ID 只使用 ASCII 字母、数字和下划线。
-4. 中文节点标签必须写成 A["中文标签"]，不要写成 A[中文标签]。
-5. 不使用 & 多节点连接简写，必须展开成多条独立连线。
-6. 不使用分号；每行只写一个 Mermaid 语句。
-7. 不要输出 Markdown 代码围栏。
-8. 如果原图结构过于复杂，请简化为可渲染的核心流程图。`,
-    },
-  ];
-
-  if (String(projectOverview || '').trim()) {
-    messages.push({ role: 'user', content: `项目概述信息：\n${projectOverview}` });
-  }
-  appendSelectedFactsMessage(messages, selectedFactsText);
-  if (parentChapters?.length) {
-    messages.push({
-      role: 'user',
-      content: ['上级章节信息：', ...parentChapters.map((parent) => `- ${parent.id || 'unknown'} ${parent.title || '未命名章节'}\n  ${parent.description || ''}`)].join('\n'),
-    });
-  }
-  if (siblingChapters?.length) {
-    const siblingLines = ['同级章节信息：'];
-    for (const sibling of siblingChapters) {
-      if (sibling.id !== chapterId) {
-        siblingLines.push(`- ${sibling.id || 'unknown'} ${sibling.title || '未命名章节'}\n  ${sibling.description || ''}`);
-      }
-    }
-    if (siblingLines.length > 1) {
-      messages.push({ role: 'user', content: siblingLines.join('\n') });
-    }
-  }
-  if (String(regenerateRequirement || '').trim()) {
-    messages.push({ role: 'user', content: `用户对本次重新生成的额外要求：\n${regenerateRequirement}` });
-  }
-
-  messages.push({
-    role: 'user',
-    content: `当前章节：${chapterId} ${chapterTitle}
-章节描述：${chapter.description || ''}
-Mermaid 图标题：${mermaidPlan.title || '流程图'}
-修复轮次：${attempt}/${MERMAID_REPAIR_ATTEMPTS}
-渲染错误：${errorMessage || '未知错误'}
-
-待修复 Mermaid 代码：
-\`\`\`mermaid
-${normalizeMermaidCode(invalidCode)}
-\`\`\`
-
-请返回 JSON：
-{
-  "code": "修复后的 Mermaid 代码，不包含 Markdown 代码围栏"
-}`,
-  });
-
-  return messages;
-}
-
 function renderKnowledgeItemsForPrompt(items) {
   return JSON.stringify((items || []).map((item) => ({
     id: String(item.id || '').trim(),
@@ -912,7 +726,7 @@ function renderKnowledgeItemsForPrompt(items) {
   })).filter((item) => item.id && item.title && item.resume), null, 2);
 }
 
-function buildChapterContentPlanMessages({ chapter, parentChapters, siblingChapters, projectOverview, bidAnalysisFactsText, globalFactTitlesText, regenerateRequirement, tableRequirement, maxTables, tableTotalSections, imageGenerationAvailable, mermaidGenerationAvailable, maxAiImages, totalSections, knowledgeItems }) {
+function buildChapterContentPlanMessages({ chapter, parentChapters, siblingChapters, projectOverview, bidAnalysisFactsText, globalFactTitlesText, regenerateRequirement, tableRequirement, maxTables, tableTotalSections, knowledgeItems }) {
   const chapterId = chapter.id || 'unknown';
   const chapterTitle = chapter.title || '未命名章节';
   const chapterDescription = chapter.description || '';
@@ -930,21 +744,13 @@ function buildChapterContentPlanMessages({ chapter, parentChapters, siblingChapt
 
 要求：
 1. 只返回 JSON，不要输出解释、总结或 Markdown。
-2. ${tablePlanningAllowed ? '由你自行判断是否适合使用表格或配图，判断要克制、合情合理，不要为了形式而硬插。' : '本次不编排表格，table.needed 必须为 false；仍可判断是否适合配图。'}
+2. ${tablePlanningAllowed ? '由你自行判断是否适合使用表格，判断要克制、合情合理，不要为了形式而硬插。' : '本次不编排表格，table.needed 必须为 false。'}
 3. ${tableLimitInstruction}
 4. ${tablePlanningAllowed ? '表格仅在能明显提升表达清晰度时使用，例如归纳职责、步骤、参数、风险、措施、成果等。' : '不要为了满足 JSON 格式而编造表格目的。'}
-5. ${mermaidGenerationAvailable ? '可以自行判断是否需要 Mermaid 图；Mermaid 只适合简单、抽象、文本节点型关系图，例如少量节点的流程、层级、时间线或职责关系，不用于复杂工程场景或实物示意。' : '当前未启用 Mermaid 图，mermaid.needed 必须为 false。'}
-6. ${imageGenerationAvailable ? '可以自行判断是否需要 AI 生图；AI 生图适合设备、现场、机柜、电池、系统架构、部署拓扑、施工/运维场景、工程空间关系、实物示意等更具象的图。' : '当前未启用或不可用 AI 生图，image.needed 必须为 false。'}
-7. Mermaid 图和 AI 生图都只是候选判断，可以同时为 true；系统会在配图阶段保证同一个章节最终只执行一种配图。
-8. ${imageGenerationAvailable ? `image.needed 表示进入 AI 生图候选池，不代表最终一定生成；本次 AI 生图上限为 ${maxAiImages || 0} 张，共 ${totalSections || 0} 个小节，系统后续会全局择优。` : '由于 AI 生图不可用，image 字段只需返回不需要。'}
-9. ${imageGenerationAvailable ? '不要求用满 AI 生图上限；但遇到具象工程对象或现场场景时，不要过度保守，可以适度提名候选。没有具象对象、空间关系或实物场景时仍不要硬插。' : '不要为了满足格式而编造 AI 生图需求。'}
-10. priority 含义：3 表示有价值候选，4 表示推荐，5 表示强推荐；只有达到 3 才将 image.needed 设为 true。
-11. engineering_diagram 表示工程图示风，适合系统架构、部署拓扑、设备连接、机柜布置、电池更换方案、施工组织或运维场景示意等具象工程图。
-12. realistic_photo 表示专业实景示意风，适合设备、场地、机房、施工现场、检测工具、运维操作等真实场景表现。
-13. knowledge.item_ids 只能从参考知识库轻量条目的 id 中选择；可以多选，可以为空数组；不要编造 id，不要输出 reason。
-14. facts.titles 只能从全局事实变量标题清单中选择；请选择编写本章节正文时会用到的变量组标题，可以多选，可以为空数组；不要编造标题，不要输出具体变量内容。
-15. writing_focus 用 1-2 句话概括本节正文重点，只围绕当前章节标题和描述，不展开成正文，不编造具体承诺、参数、周期、品牌或型号。
-16. 编排判断必须结合招标文件关键信息和全局事实变量标题，不要规划会造成时间、地点、人员、设备、标准或服务承诺前后不一致的表达。`,
+5. knowledge.item_ids 只能从参考知识库轻量条目的 id 中选择；可以多选，可以为空数组；不要编造 id，不要输出 reason。
+6. facts.titles 只能从全局事实变量标题清单中选择；请选择编写本章节正文时会用到的变量组标题，可以多选，可以为空数组；不要编造标题，不要输出具体变量内容。
+7. writing_focus 用 1-2 句话概括本节正文重点，只围绕当前章节标题和描述，不展开成正文，不编造具体承诺、参数、周期、品牌或型号。
+8. 编排判断必须结合招标文件关键信息和全局事实变量标题，不要规划会造成时间、地点、人员、设备、标准或服务承诺前后不一致的表达。`,
     },
   ];
 
@@ -1002,21 +808,6 @@ JSON 格式：
   "table": {
     "needed": true,
     "purpose": "说明表格在本小节中要表达什么；不需要表格时留空"
-  },
-  "mermaid": {
-    "needed": false,
-    "title": "Mermaid 图标题；不需要时留空",
-    "code": "合法 Mermaid 代码，不包含 Markdown 代码围栏；不需要时留空",
-    "priority": 3,
-    "reason": "为什么适合或不适合 Mermaid 图"
-  },
-  "image": {
-    "needed": false,
-    "style": "engineering_diagram 或 realistic_photo；不需要配图时留空",
-    "title": "图片标题；不需要配图时留空",
-    "prompt": "用于生图模型的中文提示词；不需要配图时留空",
-    "priority": 3,
-    "reason": "为什么适合或不适合 AI 生图"
   }
 }`,
   });
@@ -2961,135 +2752,6 @@ function normalizeLeafContentForSave(content, chapter) {
   );
 }
 
-function appendGeneratedImageMarkdown(content, imagePlan, generatedImage) {
-  if (!generatedImage?.asset_url) {
-    return content;
-  }
-
-  const title = singleLine(imagePlan.title || generatedImage.title || '技术方案配图');
-  const caption = title.endsWith('示意图') ? title : `${title}示意图`;
-  const normalizedContent = String(content || '').trimEnd();
-  return `${normalizedContent}\n\n![${caption}](${generatedImage.asset_url})\n\n*图：${caption}*`;
-}
-
-function hasExistingIllustration(content, illustrationType) {
-  const text = String(content || '');
-  if (!text.trim()) {
-    return false;
-  }
-
-  const hasMarkdownImage = /!\[[^\]]*\]\([^)]*\)/.test(text) || /<img\b[^>]*>/i.test(text);
-  const hasMermaidBlock = /```\s*mermaid[\s\S]*?```/i.test(text);
-
-  if (illustrationType === 'ai' || illustrationType === 'mermaid') {
-    return hasMarkdownImage || hasMermaidBlock;
-  }
-  return false;
-}
-
-function stripIllustrationsForExpansion(content) {
-  return String(content || '')
-    .replace(/```\s*mermaid[\s\S]*?```/gi, '\n')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
-    .replace(/^\s*\*?图[:：][^\n]*\*?\s*$/gm, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function appendMermaidImageMarkdown(content, mermaidPlan) {
-  if (!mermaidPlan?.code) {
-    return content;
-  }
-
-  const title = singleLine(mermaidPlan.title || '流程图');
-  const caption = title.endsWith('图') ? title : `${title}图`;
-  const code = normalizeMermaidCode(mermaidPlan.code);
-  const normalizedContent = String(content || '').trimEnd();
-  return `${normalizedContent}\n\n\`\`\`mermaid\n${code}\n\`\`\`\n\n*图：${caption}*`;
-}
-
-async function prepareRenderableMermaidPlan({ aiService, context, projectOverview, selectedFactsText, regenerateRequirement, mermaidPlan }) {
-  const { item, parentChapters, siblingChapters } = context;
-  let currentPlan = { ...mermaidPlan, code: normalizeMermaidCode(mermaidPlan.code) };
-  let lastError = null;
-
-  try {
-    await validateMermaidRender(currentPlan.code);
-    return { ok: true, plan: currentPlan, attempts: 0 };
-  } catch (error) {
-    lastError = error;
-  }
-
-  for (let attempt = 1; attempt <= MERMAID_REPAIR_ATTEMPTS; attempt += 1) {
-    try {
-      const repaired = await aiService.collectJsonResponse({
-        messages: buildMermaidRepairMessages({
-          chapter: item,
-          parentChapters,
-          siblingChapters,
-          projectOverview,
-          selectedFactsText,
-          regenerateRequirement,
-          mermaidPlan: currentPlan,
-          invalidCode: currentPlan.code,
-          errorMessage: compactError(lastError?.message || lastError),
-          attempt,
-        }),
-        temperature: 0.1,
-        logTitle: `Mermaid配图修复-${item.id}-${currentPlan.title || item.title || '未命名章节'}`,
-        progressLabel: 'Mermaid 配图修复',
-        failureMessage: '模型返回的 Mermaid 修复结果格式无效',
-        normalizer: normalizeMermaidRepairResult,
-        validator: validateMermaidRepairResult,
-        max_retries: 1,
-      });
-      currentPlan = { ...currentPlan, code: repaired.code };
-      await validateMermaidRender(currentPlan.code);
-      return { ok: true, plan: currentPlan, attempts: attempt };
-    } catch (error) {
-      if (isPauseLikeError(error)) {
-        throw error;
-      }
-      lastError = error;
-    }
-  }
-
-  return { ok: false, plan: currentPlan, attempts: MERMAID_REPAIR_ATTEMPTS, error: compactError(lastError?.message || lastError || '渲染失败') };
-}
-
-function pickDistributedImageTargets(plannedItems, limit) {
-  if (limit <= 0 || !plannedItems.length) {
-    return new Set();
-  }
-
-  if (plannedItems.length <= limit) {
-    return new Set(plannedItems.map(({ item }) => item.id));
-  }
-
-  const selected = new Map();
-  for (let slot = 0; slot < limit; slot += 1) {
-    const start = Math.floor((slot * plannedItems.length) / limit);
-    const end = Math.floor(((slot + 1) * plannedItems.length) / limit);
-    const group = plannedItems.slice(start, Math.max(start + 1, end));
-    const best = group.reduce((current, candidate) => (
-      candidate.plan.image.priority > current.plan.image.priority ? candidate : current
-    ), group[0]);
-    selected.set(best.item.id, best);
-  }
-
-  if (selected.size < limit) {
-    const remaining = plannedItems
-      .filter(({ item }) => !selected.has(item.id))
-      .sort((a, b) => b.plan.image.priority - a.plan.image.priority);
-    for (const candidate of remaining) {
-      if (selected.size >= limit) break;
-      selected.set(candidate.item.id, candidate);
-    }
-  }
-
-  return new Set(selected.keys());
-}
-
 function pickDistributedTableTargets(plannedItems, limit) {
   if (limit <= 0 || !plannedItems.length) {
     return new Set();
@@ -3123,34 +2785,6 @@ function countRetainedTablePlans(plans, excludedItemIds) {
     }
   }
   return count;
-}
-
-function countRetainedIllustrationPlans(plans, excludedItemIds, illustrationType) {
-  let count = 0;
-  for (const [itemId, value] of Object.entries(plans || {})) {
-    if (excludedItemIds?.has(itemId)) {
-      continue;
-    }
-    const storedPlan = normalizeStoredContentPlan(value);
-    if (storedPlan?.illustration_type === illustrationType) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function createImageStat() {
-  return { planned: 0, attempted: 0, success: 0, failed: 0, skipped: 0 };
-}
-
-function sumImageStats(ai, mermaid) {
-  return {
-    planned: ai.planned + mermaid.planned,
-    attempted: ai.attempted + mermaid.attempted,
-    success: ai.success + mermaid.success,
-    failed: ai.failed + mermaid.failed,
-    skipped: ai.skipped + mermaid.skipped,
-  };
 }
 
 function normalizeStringArray(value) {
@@ -3354,7 +2988,14 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
   let contentRuntime = normalizeContentGenerationRuntime(resume ? storedPlan.contentGenerationRuntime : {});
   const retryContentCorrection = !resume && Boolean(payload.retryContentCorrection ?? payload.retry_content_correction);
-  const regenerate = !resume && !retryContentCorrection && Boolean(payload.regenerate);
+  const rerunIllustrations = !resume && Boolean(payload.rerunIllustrations ?? payload.rerun_illustrations);
+  const runOnlyIllustrationPlanning = rerunIllustrations
+    || (resume && contentRuntime.phase === 'illustration-planning')
+    || (retryContentCorrection && previousState?.contentGenerationTask?.stats?.content?.phase === 'illustration-planning');
+  const runOnlyIllustrationGeneration = (resume && contentRuntime.phase === 'illustration-generating')
+    || (retryContentCorrection && previousState?.contentGenerationTask?.stats?.content?.phase === 'illustration-generating');
+  const runOnlyIllustrationStage = runOnlyIllustrationPlanning || runOnlyIllustrationGeneration;
+  const regenerate = !resume && !retryContentCorrection && !rerunIllustrations && Boolean(payload.regenerate);
   const targetItemId = resume ? contentRuntime.target_item_id : String(payload.targetItemId || '').trim();
   if (retryContentCorrection && targetItemId) {
     throw new Error('单小节重新生成不支持重试内容矫正');
@@ -3379,11 +3020,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   let maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
   const minimumWords = targetItemId ? 0 : normalizeMinimumWords(generationOptions.minimumWords ?? generationOptions.minimum_words);
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
-  const imageAvailability = aiService.getImageModelAvailability
-    ? aiService.getImageModelAvailability()
-    : { available: false, message: '生图模型不可用' };
-  const aiImagesEnabled = Boolean(generationOptions.useAiImages ?? generationOptions.use_ai_images ?? imageAvailability.available) && imageAvailability.available;
-  const mermaidImagesEnabled = Boolean(generationOptions.useMermaidImages ?? generationOptions.use_mermaid_images ?? Boolean(targetItemId));
   const enableConsistencyAudit = Boolean(generationOptions.enableConsistencyAudit ?? generationOptions.enable_consistency_audit ?? true);
   const requestedConsistencyRepairMode = normalizeConsistencyRepairMode(generationOptions.consistencyRepairMode ?? generationOptions.consistency_repair_mode);
   const consistencyRepairMode = targetItemId ? 'normal' : requestedConsistencyRepairMode;
@@ -3392,11 +3028,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     ? normalizeOriginalPlanCoverageRepairMode(generationOptions.originalPlanCoverageRepairMode ?? generationOptions.original_plan_coverage_repair_mode)
     : 'agent';
   const originalPlanCoverageRepairMode = isExpansionWorkflow && !targetItemId ? requestedOriginalPlanCoverageRepairMode : 'normal';
-  const requestedMaxImages = Number(generationOptions.maxAiImages ?? generationOptions.max_ai_images);
-  const configuredMaxAiImages = aiImagesEnabled
-    ? Math.max(0, Math.min(Number.isFinite(requestedMaxImages) ? Math.round(requestedMaxImages) : 6, targetItemId ? 1 : leaves.length))
-    : 0;
-  const imageStats = { ai: createImageStat(), mermaid: createImageStat() };
   const contentStats = {
     phase: 'planning',
     planning_total: 0,
@@ -3428,8 +3059,24 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     table_cleanup_completed: 0,
     table_cleanup_rewritten: 0,
     table_cleanup_skipped: 0,
-    illustration_total: 0,
-    illustration_completed: 0,
+    illustration_planning_step_total: 0,
+    illustration_planning_step_completed: 0,
+    illustration_planning_step_label: '',
+    illustration_candidate_ai: 0,
+    illustration_candidate_mermaid: 0,
+    illustration_candidate_html: 0,
+    illustration_selected_ai: 0,
+    illustration_selected_mermaid: 0,
+    illustration_selected_html: 0,
+    illustration_generation_total: 0,
+    illustration_generation_completed: 0,
+    illustration_generation_ai_total: 0,
+    illustration_generation_ai_completed: 0,
+    illustration_generation_mermaid_total: 0,
+    illustration_generation_mermaid_completed: 0,
+    illustration_generation_html_total: 0,
+    illustration_generation_html_completed: 0,
+    illustration_generation_step_label: '',
   };
   contentRuntime = normalizeContentGenerationRuntime({
     ...contentRuntime,
@@ -3441,9 +3088,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   let knowledgeItems = [];
   let allowedKnowledgeItemIds = new Set();
   let knowledgeContentMap = new Map();
-  let selectedAiImageIds = new Set();
-  let aiImageTargets = [];
-  let mermaidImageTargets = [];
   let sections = createInitialSections(leaves, fullRegenerate ? {} : storedPlan.contentGenerationSections);
   const touchedItemIds = new Set(contentRuntime.touched_item_ids);
   let tasksToRun = leaves.filter(({ item }) => {
@@ -3493,18 +3137,18 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     };
   }
 
-  let runLimits = { maxTablesForRun: maxTables, maxAiImagesForRun: configuredMaxAiImages, retainedTableCount: 0, retainedAiImageCount: 0 };
+  let runLimits = {
+    maxTablesForRun: maxTables,
+    retainedTableCount: 0,
+  };
 
   function refreshRunLimits(targets = tasksToRun) {
     const taskItemIds = new Set(targets.map(({ item }) => item.id));
     maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
     const retainedTableCount = maxTables === null ? 0 : countRetainedTablePlans(storedContentPlans, taskItemIds);
-    const retainedAiImageCount = countRetainedIllustrationPlans(storedContentPlans, taskItemIds, 'ai');
     runLimits = {
       maxTablesForRun: maxTables === null ? null : Math.max(0, maxTables - retainedTableCount),
-      maxAiImagesForRun: Math.max(0, configuredMaxAiImages - retainedAiImageCount),
       retainedTableCount,
-      retainedAiImageCount,
     };
     return runLimits;
   }
@@ -3524,18 +3168,12 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     : tableRequirement === 'none'
       ? '表格需求：不要，本次正文编排不会安排表格。'
       : `表格需求：${TABLE_REQUIREMENT_LABELS[tableRequirement]}，全文最多 ${maxTables} 个表格，本轮最多新增 ${runLimits.maxTablesForRun} 个。`];
-  logs = [...logs, aiImagesEnabled
-    ? `AI 生图已启用，将在整体编排后择优生成，全文最多 ${configuredMaxAiImages} 张，本轮最多新增 ${runLimits.maxAiImagesForRun} 张。`
-    : 'AI 生图未启用或不可用，本次不会调用生图接口。'];
   if (minimumWords > 0) {
     logs = [...logs, `最低字数已启用：${minimumWords} 字，将在采样预估后补目录，并在正文生成后扩写补足。`];
   }
-  logs = [...logs, mermaidImagesEnabled
-    ? 'Mermaid 图片已启用，适合简单图示的小节会优先使用 Mermaid 图。'
-    : 'Mermaid 图片未启用。'];
   logs = [...logs, enableConsistencyAudit
-    ? `全文一致性审计已启用，正文扩写完成后将在配图前使用${consistencyRepairMode === 'agent' ? ' Agent 修复' : '普通修复'}检查并修复事实冲突。`
-    : '全文一致性审计未启用，本次正文生成将直接进入配图阶段。'];
+    ? `全文一致性审计已启用，正文扩写完成后将使用${consistencyRepairMode === 'agent' ? ' Agent 修复' : '普通修复'}检查并修复事实冲突。`
+    : '全文一致性审计未启用。'];
   if (isExpansionWorkflow) {
     logs = [...logs, `已有方案扩写模式：已读取原方案并拆分为 ${originalPlanSegments.length} 个原文段。`];
     logs = [...logs, enableOriginalPlanCoverageAudit
@@ -3559,8 +3197,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       text_concurrency_limit: contentConcurrency,
       table_requirement: tableRequirement,
       minimum_words: minimumWords,
-      ai_images_enabled: aiImagesEnabled,
-      mermaid_images_enabled: mermaidImagesEnabled,
       enable_consistency_audit: enableConsistencyAudit,
       requested_consistency_repair_mode: requestedConsistencyRepairMode,
       consistency_repair_mode: consistencyRepairMode,
@@ -3748,7 +3384,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     contentStats.generation_completed = leaves.filter(({ item }) => ['success', 'error'].includes(sections[item.id]?.status)).length;
     contentStats.current_words = countTotalContentWords();
     contentStats.minimum_words = minimumWords;
-    return { images: { total: sumImageStats(imageStats.ai, imageStats.mermaid), ai: { ...imageStats.ai }, mermaid: { ...imageStats.mermaid } }, content: { ...contentStats } };
+    return { content: { ...contentStats } };
   }
 
   function syncRuntime(partial = {}) {
@@ -3883,10 +3519,12 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   const initialRuntime = syncRuntime();
+  const initialIllustrationPatch = runOnlyIllustrationGeneration ? {} : { contentIllustrationPlan: undefined };
   let technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineData,
     contentGenerationSections: sections,
     contentGenerationPlans: storedContentPlans,
+    ...initialIllustrationPatch,
     contentGenerationRuntime: initialRuntime,
     referenceKnowledgeDocumentIds,
     contentGenerationTask: updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }),
@@ -3897,12 +3535,13 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       outlineData,
       contentGenerationSections: sections,
       contentGenerationPlans: storedContentPlans,
+      ...initialIllustrationPatch,
       contentGenerationRuntime: initialRuntime,
       referenceKnowledgeDocumentIds,
     },
   });
 
-  if (!tasksToRun.length) {
+  if (!tasksToRun.length && !runOnlyIllustrationStage) {
     logs = [...logs, retryContentCorrection
       ? '正文已全部生成，将直接重试内容矫正和后续处理。'
       : '正文已全部生成，将检查最低字数要求。'];
@@ -3983,13 +3622,11 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     return plan;
   }
 
-  function saveContentPlanForItem(itemId, plan, illustrationType) {
-    const storedContentPlan = getStoredContentPlan(itemId);
-    const nextIllustrationType = normalizeIllustrationType(illustrationType || storedContentPlan?.illustration_type || 'none');
+  function saveContentPlanForItem(itemId, plan) {
     contentPlans.set(itemId, plan);
     storedContentPlans = pruneContentGenerationPlans({
       ...storedContentPlans,
-      [itemId]: createStoredContentPlan(plan, nextIllustrationType, tableRequirement),
+      [itemId]: createStoredContentPlan(plan, tableRequirement),
     }, leaves);
     const saved = workspaceStore.updateTechnicalPlan({ contentGenerationPlans: storedContentPlans, contentGenerationRuntime: syncRuntime() });
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved);
@@ -4034,7 +3671,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     });
   }
 
-  function saveSectionAndContentPlan(item, partial, contentForOutline, plan, illustrationType, taskPartial = {}) {
+  function saveSectionAndContentPlan(item, partial, contentForOutline, plan, taskPartial = {}) {
     const prev = workspaceStore.loadTechnicalPlan() || {};
     const hasPartialContent = Object.prototype.hasOwnProperty.call(partial || {}, 'content');
     const hasOutlineContent = contentForOutline !== undefined;
@@ -4061,12 +3698,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       outline: updateOutlineItemContent(currentOutlineData.outline || outlineData.outline, item.id, outlineContent),
     };
     outlineData = nextOutlineData;
-    const storedContentPlan = getStoredContentPlan(item.id);
-    const nextIllustrationType = normalizeIllustrationType(illustrationType || storedContentPlan?.illustration_type || 'none');
     contentPlans.set(item.id, plan);
     storedContentPlans = pruneContentGenerationPlans({
       ...storedContentPlans,
-      [item.id]: createStoredContentPlan(plan, nextIllustrationType, tableRequirement),
+      [item.id]: createStoredContentPlan(plan, tableRequirement),
     }, leaves);
     const runtime = syncRuntime();
     const saved = workspaceStore.updateTechnicalPlan({
@@ -4105,40 +3740,11 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     return restoredIds;
   }
 
-  function illustrationTypeForSinglePlan(contentPlan) {
-    if (contentPlan.image.needed) {
-      return 'ai';
-    }
-    if (contentPlan.mermaid.needed) {
-      return 'mermaid';
-    }
-    return 'none';
-  }
-
-  function applyIllustrationTargets(targets, getIllustrationType) {
-    selectedAiImageIds = new Set();
-    aiImageTargets = [];
-    mermaidImageTargets = [];
-
-    for (const context of targets) {
-      const illustrationType = normalizeIllustrationType(getIllustrationType(context));
-      if (illustrationType === 'ai') {
-        selectedAiImageIds.add(context.item.id);
-        aiImageTargets.push(context);
-      } else if (illustrationType === 'mermaid') {
-        mermaidImageTargets.push(context);
-      }
-    }
-
-    imageStats.ai.planned = aiImageTargets.length;
-    imageStats.mermaid.planned = mermaidImageTargets.length;
-  }
-
-  function persistContentPlans(targets, getIllustrationType) {
+  function persistContentPlans(targets) {
     const nextPlans = { ...storedContentPlans };
     for (const context of targets) {
       const contentPlan = contentPlans.get(context.item.id) || normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
-      nextPlans[context.item.id] = createStoredContentPlan(contentPlan, getIllustrationType(context), tableRequirement);
+      nextPlans[context.item.id] = createStoredContentPlan(contentPlan, tableRequirement);
     }
     storedContentPlans = pruneContentGenerationPlans(nextPlans, leaves);
     const saved = workspaceStore.updateTechnicalPlan({ contentGenerationPlans: storedContentPlans, contentGenerationRuntime: syncRuntime() });
@@ -4163,10 +3769,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           tableRequirement,
           maxTables,
           tableTotalSections: leaves.length,
-          imageGenerationAvailable: aiImagesEnabled && runLimits.maxAiImagesForRun > 0,
-          mermaidGenerationAvailable: mermaidImagesEnabled,
-          maxAiImages: runLimits.maxAiImagesForRun,
-          totalSections: tasksToRun.length,
           knowledgeItems,
         }),
         temperature: 0.2,
@@ -4191,11 +3793,11 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     contentPlans.set(item.id, contentPlan);
     storedContentPlans = pruneContentGenerationPlans({
       ...storedContentPlans,
-      [item.id]: createStoredContentPlan(contentPlan, 'none', tableRequirement),
+      [item.id]: createStoredContentPlan(contentPlan, tableRequirement),
     }, leaves);
     workspaceStore.updateTechnicalPlan({ contentGenerationPlans: storedContentPlans, contentGenerationRuntime: syncRuntime() });
     contentStats.planning_completed += 1;
-    logs = [...logs, `编排完成：${item.id} ${item.title || '未命名章节'}（知识库：${contentPlan.knowledge.item_ids.length} 条，事实变量：${contentPlan.facts.titles.length} 项，表格：${contentPlan.table.needed ? '需要' : '不需要'}，Mermaid：${contentPlan.mermaid.needed ? '需要' : '不需要'}，AI 图：${contentPlan.image.needed ? '需要' : '不需要'}）`];
+    logs = [...logs, `编排完成：${item.id} ${item.title || '未命名章节'}（知识库：${contentPlan.knowledge.item_ids.length} 条，事实变量：${contentPlan.facts.titles.length} 项，表格：${contentPlan.table.needed ? '需要' : '不需要'}）`];
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
   }
 
@@ -4248,30 +3850,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       }
     }
 
-    const mermaidCandidates = tasksToRun.filter(({ item }) => contentPlans.get(item.id)?.mermaid.needed);
-    const aiImageCandidates = tasksToRun.filter(({ item }) => contentPlans.get(item.id)?.image.needed);
-    selectedAiImageIds = pickDistributedImageTargets(
-      aiImageCandidates.map((context) => ({ ...context, plan: contentPlans.get(context.item.id) })),
-      runLimits.maxAiImagesForRun,
-    );
-    aiImageTargets = tasksToRun.filter(({ item }) => selectedAiImageIds.has(item.id));
-    mermaidImageTargets = mermaidCandidates.filter(({ item }) => !selectedAiImageIds.has(item.id));
-    imageStats.mermaid.planned = mermaidImageTargets.length;
-    imageStats.mermaid.skipped += Math.max(0, mermaidCandidates.length - mermaidImageTargets.length);
-    imageStats.ai.planned = selectedAiImageIds.size;
-    imageStats.ai.skipped += Math.max(0, aiImageCandidates.length - selectedAiImageIds.size);
-
-    logs = [...logs, `整体编排完成：表格候选 ${tableCandidates.length} 个，${runLimits.maxTablesForRun === null ? '保持现有编排' : `入选 ${selectedTableIds.size} 个`}；AI 生图候选 ${aiImageCandidates.length} 张，入选 ${selectedAiImageIds.size} 张；Mermaid 候选 ${mermaidCandidates.length} 张，执行 ${mermaidImageTargets.length} 张。`];
-    const mermaidImageIds = new Set(mermaidImageTargets.map(({ item }) => item.id));
-    persistContentPlans(tasksToRun, ({ item }) => {
-      if (selectedAiImageIds.has(item.id)) {
-        return 'ai';
-      }
-      if (mermaidImageIds.has(item.id)) {
-        return 'mermaid';
-      }
-      return 'none';
-    });
+    logs = [...logs, `整体编排完成：表格候选 ${tableCandidates.length} 个，${runLimits.maxTablesForRun === null ? '保持现有编排' : `入选 ${selectedTableIds.size} 个`}。`];
+    persistContentPlans(tasksToRun);
     contentStats.phase = 'generating';
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
   }
@@ -4307,7 +3887,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       saveSectionAndContentPlan(context.item, { status: 'idle', content: restoredContent, error: undefined }, restoredContent, {
         ...state.plan,
         original_material: originalMaterial,
-      }, undefined, { logs });
+      }, { logs });
       restoredCount += 1;
     }
 
@@ -4401,7 +3981,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         saveSectionAndContentPlan(context.item, { status: 'idle', content: restoredContent, error: undefined }, restoredContent, {
           ...plan,
           original_material: originalMaterial,
-        }, undefined, { logs });
+        }, { logs });
         restoredCount += 1;
       }
     }
@@ -4424,19 +4004,15 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     if (storedContentPlan) {
       contentPlans.set(context.item.id, storedContentPlan.plan);
       contentStats.planning_completed = 1;
-      logs = [...logs, `复用历史编排：${context.item.id} ${context.item.title || '未命名章节'}（配图：${storedContentPlan.illustration_type}）。`];
-      applyIllustrationTargets([context], () => storedContentPlan.illustration_type);
+      logs = [...logs, `复用历史编排：${context.item.id} ${context.item.title || '未命名章节'}。`];
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
     } else {
       logs = [...logs, `未找到可复用历史编排结果，将仅重新编排当前小节：${context.item.id} ${context.item.title || '未命名章节'}。`];
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
       await planOne(context);
       pauseIfRequested('正文生成已在小节编排后暂停，可导出当前已完成内容，稍后继续。');
-      const contentPlan = contentPlans.get(context.item.id) || normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
-      const illustrationType = illustrationTypeForSinglePlan(contentPlan);
-      applyIllustrationTargets([context], () => illustrationType);
-      persistContentPlans([context], () => illustrationType);
-      logs = [...logs, `当前小节编排已保存：${context.item.id} ${context.item.title || '未命名章节'}（配图：${illustrationType}）。`];
+      persistContentPlans([context]);
+      logs = [...logs, `当前小节编排已保存：${context.item.id} ${context.item.title || '未命名章节'}。`];
     }
 
     pauseIfRequested('正文生成已在小节编排阶段暂停，可导出当前已完成内容，稍后继续。');
@@ -4543,7 +4119,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
             optimized: true,
             optimized_at: now(),
           }),
-        }, undefined, { logs });
+        }, { logs });
       } else {
         saveSection(item, { status: 'success', content, error: undefined }, content, { logs });
       }
@@ -4889,36 +4465,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       : '补目录未新增可用目录，继续生成正文并由后续扩写兜底。'];
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
     return false;
-  }
-
-  function refreshIllustrationTargetsFromStoredPlans(candidateItemIds) {
-    imageStats.ai = createImageStat();
-    imageStats.mermaid = createImageStat();
-    const currentPlan = workspaceStore.loadTechnicalPlan() || {};
-    const currentSections = currentPlan.contentGenerationSections || sections;
-    const candidateIds = candidateItemIds instanceof Set ? candidateItemIds : new Set();
-    const targets = leaves.filter(({ item }) => {
-      if (!candidateIds.has(item.id)) {
-        return false;
-      }
-      const section = currentSections[item.id] || {};
-      const content = section.content || item.content || '';
-      return section.status === 'success' && String(content || '').trim();
-    });
-    applyIllustrationTargets(targets, ({ item }) => {
-      const reusableStoredContentPlan = getReusableStoredContentPlan(item.id);
-      if (!reusableStoredContentPlan?.plan) {
-        return 'none';
-      }
-      contentPlans.set(item.id, reusableStoredContentPlan.plan);
-      const illustrationType = reusableStoredContentPlan.illustration_type || 'none';
-      const content = currentSections[item.id]?.content || item.content || '';
-      if (illustrationType !== 'none' && hasExistingIllustration(content, illustrationType)) {
-        imageStats[illustrationType].skipped += 1;
-        return 'none';
-      }
-      return illustrationType;
-    });
   }
 
   function createExpansionCycle(currentWords) {
@@ -6587,111 +6133,267 @@ workspace 文件说明：
     return { ran: true, rewrittenCount, skippedCount };
   }
 
-  async function runAiIllustration(context) {
-    const { item } = context;
-    const contentPlan = contentPlans.get(item.id) || normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
-    const baseContent = getCurrentSuccessfulContent(item);
-
-    if (!baseContent.trim()) {
-      imageStats.ai.skipped += 1;
-      contentStats.illustration_completed += 1;
-      logs = [...logs, `跳过 AI 配图：${item.id} ${item.title || '未命名章节'}，正文未成功生成。`];
-      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
-      return;
-    }
-
-    imageStats.ai.attempted += 1;
-    logs = [...logs, `开始 AI 配图：${item.id} ${contentPlan.image.title}`];
-    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
-
-    try {
-      const generatedImage = await aiService.generateImage({
-        title: contentPlan.image.title,
-        logTitle: `AI生图-${item.id}-${contentPlan.image.title || item.title || '未命名章节'}`,
-        prompt: contentPlan.image.prompt,
-        style: contentPlan.image.style,
-      });
-      const content = appendGeneratedImageMarkdown(baseContent, contentPlan.image, generatedImage);
-      imageStats.ai.success += 1;
-      contentStats.illustration_completed += 1;
-      logs = [...logs, `AI 配图完成：${item.id} ${contentPlan.image.title}`];
-      saveSection(item, { status: 'success', content, error: undefined }, content, { logs });
-    } catch (imageError) {
-      imageStats.ai.failed += 1;
-      contentStats.illustration_completed += 1;
-      logs = [...logs, `AI 配图失败：${item.id} ${contentPlan.image.title}，${imageError.message || '生图失败'}，已保留正文。`];
-      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
-    }
-  }
-
-  async function runMermaidIllustration(context) {
-    const { item } = context;
-    const contentPlan = contentPlans.get(item.id) || normalizeContentPlan({}, allowedKnowledgeItemIds, allowedFactTitles);
-    const baseContent = getCurrentSuccessfulContent(item);
-
-    if (!baseContent.trim()) {
-      imageStats.mermaid.skipped += 1;
-      contentStats.illustration_completed += 1;
-      logs = [...logs, `跳过 Mermaid 配图：${item.id} ${item.title || '未命名章节'}，正文未成功生成。`];
-      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
-      return;
-    }
-
-    imageStats.mermaid.attempted += 1;
-    logs = [...logs, `开始校验 Mermaid 配图：${item.id} ${contentPlan.mermaid.title}`];
-    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
-
-    const mermaidResult = await prepareRenderableMermaidPlan({
-      aiService,
-      context,
-      projectOverview,
-      selectedFactsText: resolveSelectedFactsText(contentPlan, globalFacts),
-      regenerateRequirement,
-      mermaidPlan: contentPlan.mermaid,
+  async function runIllustrationPlanning() {
+    contentStats.phase = 'illustration-planning';
+    contentStats.illustration_planning_step_total = 3;
+    contentStats.illustration_planning_step_completed = 0;
+    contentStats.illustration_planning_step_label = '正在准备全文和目录输入';
+    const strippedDocument = stripGeneratedIllustrationsFromDocument(outlineData, sections);
+    outlineData = strippedDocument.outlineData;
+    sections = strippedDocument.sections;
+    workspaceStore.clearIllustrationFiles?.();
+    const phaseSaved = workspaceStore.updateTechnicalPlan({
+      outlineData,
+      contentGenerationSections: sections,
+      contentGenerationRuntime: syncRuntime({ phase: 'illustration-planning' }),
     });
-    if (mermaidResult.ok) {
-      const content = appendMermaidImageMarkdown(baseContent, mermaidResult.plan);
-      imageStats.mermaid.success += 1;
-      contentStats.illustration_completed += 1;
-      logs = [...logs, mermaidResult.attempts > 0
-        ? `Mermaid 配图已修复并完成：${item.id} ${mermaidResult.plan.title}（修复 ${mermaidResult.attempts} 轮）`
-        : `Mermaid 配图完成：${item.id} ${mermaidResult.plan.title}`];
-      saveSection(item, { status: 'success', content, error: undefined }, content, { logs });
+    logs = [...logs, '正文后处理完成，开始使用 Agent 编排全文图片计划。'];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, phaseSaved);
+
+    const imageAvailability = aiService.getImageModelAvailability
+      ? aiService.getImageModelAvailability()
+      : { available: false };
+    const planningContext = buildIllustrationPlanningContext({
+      outlineData,
+      sections,
+      options: generationOptions,
+      aiImagesAvailable: imageAvailability.available,
+    });
+    contentStats.illustration_planning_step_completed = 1;
+    contentStats.illustration_planning_step_label = '正在执行全文图片编排 Agent';
+    pauseIfRequested('正文生成已在图片编排输入准备后暂停，本次 Agent 未启动；继续后将重新执行。');
+
+    const enabledKinds = ['html', 'mermaid', 'ai'].filter((kind) => planningContext.config[kind].enabled);
+    let resolved;
+    if (!planningContext.eligibleSectionIds.length || !enabledKinds.length) {
+      resolved = resolveIllustrationPlan({ items: [] }, planningContext);
+      logs = [...logs, planningContext.eligibleSectionIds.length
+        ? '所有图片类型均未启用，已生成空的全文图片计划。'
+        : '没有可编排的成功正文小节，已生成空的全文图片计划。'];
     } else {
-      imageStats.mermaid.failed += 1;
-      contentStats.illustration_completed += 1;
-      logs = [...logs, `Mermaid 配图取消：${item.id} ${contentPlan.mermaid.title}，连续修复 ${MERMAID_REPAIR_ATTEMPTS} 轮失败，${mermaidResult.error || '渲染失败'}，已保留正文。`];
-      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      let validatedPlan = null;
+      const { agentResult, outputContent } = await runContentAgentTask({
+        title: '技术方案全文图片编排 Agent',
+        prompt: buildIllustrationPlanningPrompt(),
+        outputFile: 'illustration-plan.json',
+        files: planningContext.files,
+        eventPrefix: 'illustration_planning.agent',
+        activityLabel: 'Agent 正在阅读全文并编排图片',
+        startPauseMessage: '正文生成已在全文图片编排 Agent 开始前暂停，本次 Agent 未启动；继续后将重新执行。',
+        resultPauseMessage: '正文生成已在全文图片编排结果保存前暂停，本次 Agent 输出未保存；继续后将重新执行。',
+        pausedLogMessage: '全文图片编排 Agent 已暂停：本轮 Agent 已取消并清理，继续后将重新执行。',
+        validateOutput: (resultForValidation) => {
+          validatedPlan = resolveIllustrationPlan(resultForValidation?.output_content || '', planningContext);
+          return validatedPlan;
+        },
+      });
+      resolved = validatedPlan || resolveIllustrationPlan(outputContent, planningContext);
+      writeDeveloperLog('illustration_planning.agent.done', {
+        agent_task_id: agentResult?.task_id || '',
+        agent_session_id: agentResult?.session_id || '',
+        candidate_stats: resolved.stats.candidate,
+        selected_stats: resolved.stats.selected,
+        selected_items: resolved.plan.items.map((item) => ({
+          item_id: item.item_id,
+          kind: item.kind,
+          image_type: item.image_type,
+          title: item.title,
+          section_ids: item.section_ids,
+        })),
+      });
     }
+
+    pauseIfRequested('正文生成已在全文图片编排结果保存前暂停，本次计划未保存；继续后将重新执行。');
+    contentStats.illustration_planning_step_completed = 2;
+    contentStats.illustration_planning_step_label = '正在保存全文图片计划';
+    contentStats.illustration_candidate_ai = resolved.stats.candidate.ai;
+    contentStats.illustration_candidate_mermaid = resolved.stats.candidate.mermaid;
+    contentStats.illustration_candidate_html = resolved.stats.candidate.html;
+    contentStats.illustration_selected_ai = resolved.stats.selected.ai;
+    contentStats.illustration_selected_mermaid = resolved.stats.selected.mermaid;
+    contentStats.illustration_selected_html = resolved.stats.selected.html;
+    const saved = workspaceStore.updateTechnicalPlan({
+      contentIllustrationPlan: resolved.plan,
+      contentGenerationRuntime: syncRuntime({ phase: 'illustration-planning' }),
+    });
+    contentStats.illustration_planning_step_completed = 3;
+    contentStats.illustration_planning_step_label = '全文图片编排完成';
+    logs = [...logs, `全文图片编排完成：候选 ${resolved.stats.candidate.html + resolved.stats.candidate.mermaid + resolved.stats.candidate.ai} 项，最终保留 HTML ${resolved.stats.selected.html} 项、Mermaid ${resolved.stats.selected.mermaid} 项、AI ${resolved.stats.selected.ai} 项。`];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved, {
+      technicalPlanPatch: { contentIllustrationPlan: resolved.plan },
+    });
+    return resolved.plan;
   }
 
-  async function runIllustrations() {
-    const illustrationTotal = aiImageTargets.length + mermaidImageTargets.length;
-    contentStats.phase = 'illustrating';
-    contentStats.illustration_total = illustrationTotal;
-    contentStats.illustration_completed = 0;
-    logs = [...logs, illustrationTotal
-      ? `开始配图：AI 生图 ${aiImageTargets.length} 张（并发 ${imageConcurrency}），Mermaid 图 ${mermaidImageTargets.length} 张（并发 ${MERMAID_IMAGE_CONCURRENCY}）。`
-      : '本次没有需要执行的配图。'];
-    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
-
-    if (!illustrationTotal) {
-      return;
+  async function runIllustrationGeneration(initialPlan) {
+    let illustrationPlan = initialPlan;
+    if (Number(illustrationPlan?.plan_version) !== ILLUSTRATION_PLAN_VERSION) {
+      throw new Error('图片计划版本无效');
+    }
+    if (!illustrationPlan?.items?.length) {
+      logs = [...logs, '全文图片计划为空，跳过图片生成。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      return illustrationPlan;
     }
 
-    await Promise.all([
-      runItemsWithWorkerPool(aiImageTargets, imageConcurrency, runAiIllustration, isPauseRequested),
-      runItemsWithWorkerPool(mermaidImageTargets, MERMAID_IMAGE_CONCURRENCY, runMermaidIllustration, isPauseRequested),
+    illustrationPlan = {
+      ...illustrationPlan,
+      items: illustrationPlan.items.map((item) => item.generation?.status === 'running'
+        ? { ...item, generation: { ...item.generation, status: 'pending', error: undefined, updated_at: now() } }
+        : item),
+    };
+    const executions = buildIllustrationExecutionContexts(illustrationPlan, leaves, sections);
+    const aiExecutions = executions.filter(({ planItem }) => planItem.kind === 'ai');
+    const normalTextExecutions = executions.filter(({ planItem, reference }) => planItem.kind === 'mermaid'
+      || (planItem.kind === 'html' && reference.length <= HTML_AGENT_THRESHOLD_CHARS));
+    const agentHtmlExecutions = executions.filter(({ planItem, reference }) => planItem.kind === 'html' && reference.length > HTML_AGENT_THRESHOLD_CHARS);
+
+    function countCompleted(kind) {
+      return illustrationPlan.items.filter((item) => item.kind === kind && ['success', 'error'].includes(item.generation?.status)).length;
+    }
+
+    function refreshIllustrationGenerationStats(label) {
+      contentStats.illustration_generation_total = illustrationPlan.items.length;
+      contentStats.illustration_generation_completed = illustrationPlan.items.filter((item) => ['success', 'error'].includes(item.generation?.status)).length;
+      contentStats.illustration_generation_ai_total = aiExecutions.length;
+      contentStats.illustration_generation_ai_completed = countCompleted('ai');
+      contentStats.illustration_generation_mermaid_total = executions.filter(({ planItem }) => planItem.kind === 'mermaid').length;
+      contentStats.illustration_generation_mermaid_completed = countCompleted('mermaid');
+      contentStats.illustration_generation_html_total = executions.filter(({ planItem }) => planItem.kind === 'html').length;
+      contentStats.illustration_generation_html_completed = countCompleted('html');
+      contentStats.illustration_generation_step_label = label || contentStats.illustration_generation_step_label;
+    }
+
+    function persistIllustrationGeneration(itemId, generation, label) {
+      illustrationPlan = {
+        ...illustrationPlan,
+        items: illustrationPlan.items.map((item) => item.item_id === itemId
+          ? { ...item, generation: { ...(item.generation || {}), ...generation, updated_at: now() } }
+          : item),
+        updated_at: now(),
+      };
+      refreshIllustrationGenerationStats(label);
+      const saved = workspaceStore.updateTechnicalPlan({
+        contentIllustrationPlan: illustrationPlan,
+        contentGenerationRuntime: syncRuntime({ phase: 'illustration-generating' }),
+      });
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved, {
+        technicalPlanPatch: { contentIllustrationPlan: illustrationPlan },
+      });
+    }
+
+    async function runExecution(execution) {
+      const { planItem } = execution;
+      if (['success', 'error'].includes(planItem.generation?.status)) return;
+      persistIllustrationGeneration(planItem.item_id, { status: 'running', error: undefined }, `正在生成${planItem.kind === 'ai' ? ' AI' : planItem.kind === 'mermaid' ? ' Mermaid' : ' HTML'} 图片`);
+      try {
+        let result;
+        if (planItem.kind === 'ai') {
+          result = await generateAiIllustration(aiService, execution);
+          logs = [...logs, `AI 配图完成：${planItem.section_ids[0]} ${planItem.title}`];
+        } else if (planItem.kind === 'mermaid') {
+          result = await generateMermaidIllustration(aiService, execution, isPauseLikeError);
+          logs = [...logs, result.attempts
+            ? `Mermaid 配图已修复并完成：${planItem.section_ids[0]} ${planItem.title}（修复 ${result.attempts} 轮）`
+            : `Mermaid 配图完成：${planItem.section_ids[0]} ${planItem.title}`];
+        } else {
+          result = await generateHtmlIllustration({
+            aiService,
+            execution,
+            plan: illustrationPlan,
+            workspaceStore,
+            runAgentHtml: async ({ title, prompt, outputFile, files, validateOutput }) => {
+              const response = await runContentAgentTask({
+                title,
+                prompt,
+                outputFile,
+                files,
+                eventPrefix: 'html_illustration.agent',
+                activityLabel: 'Agent 正在生成 HTML 图片',
+                startPauseMessage: '正文生成已在 HTML 图片 Agent 开始前暂停，本次 Agent 未启动；继续后将重新执行。',
+                resultPauseMessage: '正文生成已在 HTML 图片 Agent 结果保存前暂停，本次输出未保存；继续后将重新执行。',
+                pausedLogMessage: 'HTML 图片 Agent 已暂停：本轮 Agent 已取消并清理，继续后将重新执行。',
+                validateOutput,
+              });
+              return response.outputContent;
+            },
+            onRenderRetry: (attempt, error) => writeDeveloperLog('illustration.html.render.retry', {
+              item_id: planItem.item_id,
+              attempt,
+              error: compactError(error?.message || error),
+            }),
+            isPauseRequested,
+            createPauseError: createContentGenerationPausedError,
+          });
+        }
+        persistIllustrationGeneration(planItem.item_id, { status: 'success', error: undefined, ...result }, '正在汇总已生成图片');
+      } catch (error) {
+        if (isPauseLikeError(error) || isPauseRequested()) throw error;
+        const partial = error?.illustrationGeneration || {};
+        persistIllustrationGeneration(planItem.item_id, {
+          status: 'error',
+          ...partial,
+          error: compactError(error?.message || error),
+        }, '正在继续生成其他图片');
+        writeDeveloperLog(`illustration.${planItem.kind}.failed`, {
+          item_id: planItem.item_id,
+          section_ids: planItem.section_ids,
+          image_type: planItem.image_type,
+          title: planItem.title,
+          error: compactError(error?.message || error),
+        });
+        if (planItem.kind !== 'html') {
+          logs = [...logs, `${planItem.kind === 'ai' ? 'AI' : 'Mermaid'} 配图失败：${planItem.section_ids[0]}，${error.message || '生成失败'}，已保留正文。`];
+        }
+      }
+    }
+
+    contentStats.phase = 'illustration-generating';
+    refreshIllustrationGenerationStats('正在启动文本组和生图组');
+    logs = [...logs, `开始生成图片：文本组 ${normalTextExecutions.length} 项（并发 ${contentConcurrency}），超长 HTML Agent ${agentHtmlExecutions.length} 项（串行），AI 生图组 ${aiExecutions.length} 项（并发 ${imageConcurrency}）。`];
+    const started = workspaceStore.updateTechnicalPlan({
+      contentIllustrationPlan: illustrationPlan,
+      contentGenerationRuntime: syncRuntime({ phase: 'illustration-generating' }),
+    });
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, started);
+
+    async function runTextGroup() {
+      await runItemsWithWorkerPool(normalTextExecutions, contentConcurrency, runExecution, isPauseRequested);
+      pauseIfRequested('正文生成已在普通文本图片完成后暂停，超长 HTML Agent 尚未继续执行。');
+      for (const execution of agentHtmlExecutions) {
+        pauseIfRequested('正文生成已在超长 HTML 图片 Agent 开始前暂停，继续后将重新执行。');
+        await runExecution(execution);
+      }
+    }
+
+    const settled = await Promise.allSettled([
+      runTextGroup(),
+      runItemsWithWorkerPool(aiExecutions, imageConcurrency, runExecution, isPauseRequested),
     ]);
+    const rejected = settled.find((result) => result.status === 'rejected');
+    if (rejected?.reason) throw rejected.reason;
+    pauseIfRequested('正文生成已在图片生成阶段暂停，可导出当前已完成正文，稍后继续。');
 
-    pauseIfRequested('正文生成已在配图阶段暂停，可导出当前已完成内容，稍后继续。');
-
-    logs = [...logs, '配图阶段完成。'];
-    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    const applied = applyGeneratedIllustrationsToDocument(illustrationPlan, outlineData, sections);
+    outlineData = applied.outlineData;
+    sections = applied.sections;
+    refreshIllustrationGenerationStats('图片生成和正文插入完成');
+    const saved = workspaceStore.updateTechnicalPlan({
+      outlineData,
+      contentGenerationSections: sections,
+      contentIllustrationPlan: illustrationPlan,
+      contentGenerationRuntime: syncRuntime({ phase: 'illustration-generating' }),
+    });
+    logs = [...logs, '图片生成阶段完成。'];
+    updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, saved, {
+      outlineData,
+      technicalPlanPatch: { contentGenerationSections: sections, contentIllustrationPlan: illustrationPlan },
+    });
+    return illustrationPlan;
   }
 
   try {
-    if (tasksToRun.length) {
+    if (!runOnlyIllustrationStage && tasksToRun.length) {
       if (targetItemId) {
         await prepareSingleSectionPlan();
         pauseIfRequested('正文生成已在正文编排后暂停，可导出当前已完成内容，稍后继续。');
@@ -6712,7 +6414,7 @@ workspace 文件说明：
       }
     }
 
-    if (!targetItemId) {
+    if (!runOnlyIllustrationStage && !targetItemId) {
       if (retryContentCorrection) {
         logs = [...logs, '本次为内容矫正重试，跳过正文生成和最低字数扩写，直接进入内容矫正阶段。'];
         updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
@@ -6733,20 +6435,29 @@ workspace 文件说明：
       }
       await removeTablesBeforeIllustration();
       pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
-      refreshIllustrationTargetsFromStoredPlans(touchedItemIds);
-    } else {
+    } else if (!runOnlyIllustrationStage) {
       await runOriginalPlanCoverageAuditIfEnabled({ targetItemId });
       pauseIfRequested('正文生成已在原方案覆盖审计后暂停，可导出当前已完成内容，稍后继续。');
       await runConsistencyAuditIfEnabled({ targetItemId });
       await removeTablesBeforeIllustration({ targetItemId });
       pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
-      if (!tasksToRun.length) {
-        refreshIllustrationTargetsFromStoredPlans(new Set([targetItemId]));
-      }
+    } else if (runOnlyIllustrationPlanning) {
+      logs = [...logs, rerunIllustrations
+        ? '开始仅重新配图：清除旧配图后，重新执行全文图片编排和生成阶段。'
+        : '继续全文图片编排，跳过已完成的正文生成和内容矫正阶段。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    } else {
+      logs = [...logs, '继续图片生成，跳过已完成的正文生成、内容矫正和图片编排阶段。'];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
     }
 
-    pauseIfRequested('正文生成已在配图前暂停，可导出当前已完成内容，稍后继续。');
-    await runIllustrations();
+    let illustrationPlan = runOnlyIllustrationGeneration ? storedPlan.contentIllustrationPlan : null;
+    if (!runOnlyIllustrationGeneration) {
+      pauseIfRequested('正文生成已在全文图片编排前暂停，可导出当前已完成内容，稍后继续。');
+      illustrationPlan = await runIllustrationPlanning();
+    }
+    pauseIfRequested('正文生成已在图片生成前暂停，可导出当前已完成内容，稍后继续。');
+    await runIllustrationGeneration(illustrationPlan);
     pauseIfRequested('正文生成已在完成前暂停，可导出当前已完成内容，稍后继续。');
 
     const failedCount = leaves.filter(({ item }) => sections[item.id]?.status === 'error').length;

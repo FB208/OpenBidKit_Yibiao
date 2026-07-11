@@ -1,6 +1,26 @@
 # Findings
 
 ## Research Log
+- 当前正文起始编排同时生成写作、知识、事实、表格、AI 图片和 Mermaid 代码，旧实际配图完全依赖每小节 `illustration_type`；新逻辑必须把正文计划升级并移除图片字段，同时让任务在新图片编排后结束，不能继续调用旧配图。
+- 新图片计划天然是文档级结构，因为 HTML 一张图片可以覆盖同一父目录下多个连续叶子节点；最小持久化结构为 `plan_version/items/updated_at`，Agent 原始候选保留在 Agent 归档而不写业务 Store。
+- 图片编排 Agent 可复用正文任务现有 `runContentAgentTask()`，输入 `technical-plan.md`、`outline-tree.json`、`illustration-config.json`，输出 `illustration-plan.json`；程序必须再次校验真实叶子 ID、同父连续范围、允许类型、位置和优先级。
+- 新计划成功前不写 Store；暂停或 Agent 失败后恢复时重新编排，不设计 hash 复用、旧计划迁移或 fallback。
+- 正文任务暂停/异常恢复必须识别 `illustration-planning`；恢复或该阶段失败后重试时应跳过已完成的正文、扩写和审计，直接重跑整轮 Agent，避免重复消耗前序请求。
+- 旧 `technical_plan_content_plans.illustration_type` 已失去业务含义，必须同时从 fresh schema、Store 查询/写入、目录映射恢复和 v17 迁移中删除，不能只让正文任务停止读取。
+- `better-sqlite3` 当前为 Electron 41 的 ABI 145 构建，系统 Node.js 24 使用 ABI 137；SQLite runtime smoke 必须使用仓库内 Electron，不能执行 `npm rebuild` 破坏客户端 native 依赖。
+- TaskService 启动新任务时会先把 Store 中的旧任务替换为 `running`，因此“图片编排失败后重试”的阶段判断必须读取 runner 参数 `previousState`，不能读取已经更新的当前 Store。
+- 正文生成配置当前只有 `useAiImages/maxAiImages/useMermaidImages`；配置整体已保存到 `technical_plan_meta.content_generation_options_json`，因此新增 HTML UI 字段和 Mermaid 上限无需修改 SQLite 表、IPC 或 preload。
+- Main 当前会执行全部未被 AI 生图占用的 Mermaid 候选，没有上限；要实现与 AI 生图一致的控制，需要新增 configured/run Mermaid 上限、扣除保留的 Mermaid 计划，并把候选选择器泛化为按指定优先级字段分布择优。
+- 配置弹窗当前二级说明包括顶部 `section-kicker`、动态 `Dialog.Description`、每项 `<small>` 和 Mermaid 黄色 note；用户已确认全部删除，只保留标题、配置项和操作按钮。
+- HTML 高级设置需要独立草稿，避免用户在第二层弹窗点击取消后仍修改主配置草稿；确认后再写入 `draftGenerationOptions.htmlImageTypes`。
+- Mermaid 上限实现复用了泛化后的 `pickDistributedIllustrationTargets()`：AI 候选按 `image.priority` 先选，剩余 Mermaid 候选按 `mermaid.priority` 再选；两类都按目录顺序分段，保证图片分布而不是只取前 N 个。
+- HTML 配置字段会随全文生成和单章节重新生成 payload 传递，但 `contentGenerationTask.cjs` 不读取这些字段，因此当前不会影响编排、任务统计、正文、缓存或导出。
+- Mermaid 当前只有配图媒介类型 `ai/mermaid/none`，正文编排计划没有流程图、层级图、职责关系图等业务子类型；提示词还明确允许时间线，归一化和校验只检查 `needed/title/code`。
+- 前端 `MarkdownRenderer` 使用完整 Mermaid 库渲染任意 `language-mermaid` 代码块，Word 导出也会把任意 Mermaid 代码交给 `mermaid.ink`；严格删除其他类型支持需要在生成、预览和导出三处共同拒绝非 `flowchart` 语法。
+- 三种目标业务图都可统一用 `flowchart` 表达：流程图使用有向步骤，层级图使用树状布局，职责关系图使用角色/部门节点及职责关系连线；业务类型需要单独保存，不能仅靠 Mermaid 首行推断语义。
+- 正文编排计划当前声明 `CONTENT_PLAN_VERSION = 2`，但 Store 只保存 `value.plan`，会丢失顶层 `plan_version` 和 `table_requirement`；新增 Mermaid 类型后应升级 v3 并保存完整计划对象，不为旧裸 plan JSON 增加兼容分支。
+- Mermaid 收敛已实现为 Main 侧共享策略 `electron/utils/mermaidPolicy.cjs`：业务类型固定为 `process/hierarchy/responsibility`，语法只接受 `flowchart TD/TB/LR/RL/BT`；正文生成与 Word 导出复用该策略，Renderer 在动态加载 Mermaid 前执行等价检查。
+- 不支持类型在正文配图阶段返回取消结果而不是进入 Mermaid 修复或让整个正文任务失败；合法 flowchart 的节点、连线和渲染错误仍沿用最多 3 轮修复。
 - 客户端授权实现边界：官方构建签名只能覆盖构建时字段，不能覆盖启动时才生成的 `clientId` 和 `machineFingerprintHash`；license 必须由 Worker 运行时签发并绑定 `clientId + machineFingerprintHash`。
 - 同一套 ECDSA P-256/SHA-256 密钥可同时用于构建签名和 license 签名；GitHub Actions 和 Worker 都持有私钥，客户端打包公钥，Worker 也用同一公钥校验客户端提交的构建签名。
 - 授权配置是每个项目一份的低频全局策略，和公告相同适合复用 `NOTICE_STORE` KV；统计字段继续走 Analytics Engine 和 `stats_clients`。
@@ -254,3 +274,5 @@
 - 知识库迁移确认弹窗应使用项目内 Radix Dialog，不再使用系统 `window.confirm`；长文案需要拆成可扫描的模块：旧版不再支持继续处理、回退旧版完成解析的建议、只迁移“已完成”文档的规则，以及旧文档总数/可迁移/将跳过三列统计。
 - `client/开发说明.md` 的长期价值在于记录架构边界和协作规则，不适合持续追加功能实现流水账；preload API 清单、具体 Step04 策略、发布排错细节等容易过期，应收敛为原则和权威文件入口。
 - SQLite 重构后埋点排查确认：`ai_request` 主链路未被切断，后台任务仍经 Main 侧 `aiService` 统一上报；技术方案页因状态从 SQLite 异步恢复，会先渲染默认 `document-analysis`，若立即上报会污染首屏子步骤统计，应等待 `technicalPlanStorage.load()` 完成后再上报。
+- 当前相同图注的直接来源已确认：HTML 成功结果把 `image_type` 当标题，AI 按章节标题临时拼接标题，Mermaid 在每张图生成时独立请求标题；三者都没有复用全文图片编排阶段的统一语义主题。新计划必须把顶层 `title` 作为唯一标题来源，生成阶段不再补标题。
+- 全文配图标题统一编排已落地：v3 图片计划把 `title` 纳入 revision/item_id，最终计划按去空白和标点后的标题键拒绝重复；三类生成和 Markdown 图注都只读取 `planItem.title`，不兼容旧图片计划或旧标题字段。

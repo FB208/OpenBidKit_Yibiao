@@ -1,6 +1,14 @@
 # Progress
 
 ## Session Log
+- 开始 Agent 全文图片编排重构：用户再次确认不考虑旧逻辑和旧数据兼容，本轮将完整删除旧正文图片编排和实际配图代码；新阶段只输出并持久化最终图片计划，正文任务随后结束，实际图片生成留待下一阶段重新实现。
+- Agent 全文图片编排重构和验证已完成：正文逐节计划升级 v4 并只保留写作/知识/事实/表格；旧 AI/Mermaid 候选、Mermaid 修复、实际生图、正文插图、图片统计和 `illustration_type` SQLite 路径全部删除；新增全文 Agent 输入投影、严格输出校验、HTML > Mermaid > AI 上限/冲突处理和文档级 `contentIllustrationPlan` 原子保存；暂停/失败重试直接重跑编排；Renderer 显示三步编排进度。5 个 CJS 语法检查、算法、任务原子保存、Store 生命周期、Electron SQLite v16->v17 migration smoke、客户端构建及 1440/390px UI 验证均通过，构建仅有既有 chunk 体积警告。
+- 开始正文生成配置弹窗改版：HTML 生图按用户确认默认开启，但只增加并持久化 UI 配置，不实现生成业务；主配置弹窗删除全部二级说明；Mermaid 新增默认 10 张上限并接入 Main 侧保留数量扣减、候选分布和优先级择优。
+- 正文生成配置弹窗改版主体已完成：配置新增 Mermaid/HTML 上限和 HTML 图片类型；主弹窗删除顶部及配置项说明，三个生图开关按状态显示上限；HTML 高级设置使用第二层 Dialog 和独立草稿；Main 侧 Mermaid 上限已接入保留数量扣减、编排可用性、AI 优先及分布择优。进入语法、构建和交互验证。
+- 正文生成配置弹窗改版验证完成：Main CJS 语法检查和客户端构建通过；浏览器 mock 工作区验证三个开关条件显示、HTML 默认开启/默认 10、Mermaid 默认 10、高级设置取消与确认、保存后重开持久化均正常；1440px 双列和 640px 单列内部滚动无横向溢出。Vite 端口已存在时直接复用，首次 mock unsubscribe 问题已补事件 stub 后解决。
+- 开始 Mermaid 图表类型收敛：按用户确认将其作为当前软件功能修改，不考虑旧数据兼容；目标是只保留流程图、层级图、职责关系图，统一使用 `flowchart` 语法，并在生成、前端预览和 Word 导出三个边界拒绝其他 Mermaid 类型。工作区已有未跟踪的 `client/doc/html图片.md` 和 `图表测试数据/`，本轮不修改。
+- Mermaid 类型收敛主体已完成：新增 `process/hierarchy/responsibility` 业务类型和 Main 共享策略；正文编排提示词、归一化、校验、修复只允许三类图及 `flowchart` 语法；计划升级为 v3 并完整保存版本、计划和表格需求；前端预览和 Word 导出会在调用 Mermaid 引擎或缓存前拒绝其他语法；配置文案和提示词文档已同步。进入语法、构建和定向验证阶段。
+- Mermaid 类型收敛验证完成：4 个相关 CJS 文件 `node --check` 通过；策略 smoke 确认三种业务类型、五种 flowchart 方向可用，graph/sequenceDiagram/timeline/gantt/pie/classDiagram 被拒绝；Word 导出不支持类型 warning smoke 通过；`cd client; npm run build` 通过且仅有既有 chunk 体积警告；`git diff --check` 仅有 LF/CRLF 提示。首次 Word smoke 因命令使用字面量 `\\n` 未形成代码块，修正为真实换行后通过。
 - 开始客户端授权签名校验与统计实现：用户确认同一套签名密钥用于构建签名和 license 签发，当前实现采用 Electron/Node/Cloudflare Worker 都支持的 ECDSA P-256/SHA-256；免费授权默认 30 天、过期弹窗默认开启且不可关闭；客户端本版只记录不可信安装来源、保存授权配置，不做 UI 展示或功能阻断。已恢复文件型计划，session catchup 无输出。
 - 客户端授权签名校验与统计主体已接入：客户端新增构建声明、公钥资源、构建签名脚本、`licenseService`、IPC/preload/types 和埋点授权字段；Worker 新增 `/license/activate`、`/api/license-config`、license 签名/配置服务，并把授权字段写入 AE `blob14-blob18` 与 D1 `stats_clients`；Dashboard 新增“授权管理”标签和客户端授权列；release workflow 会在 Windows/macOS 打包前强制要求 `YIBIAO_LICENSE_PRIVATE_KEY_JWK` 并生成签名。
 - 已修正授权统计收尾问题：客户端上报可信来源必须同时满足 Worker 签发 payload 中 `sourceTrusted=true` 和本地构建验签可信；`recordTrackClient()` 保留新客户端实时入库计数逻辑，同时允许已存在客户端按授权字段快照实时覆盖，避免启动首个“缺授权/刷新中”状态卡住到夜间 Cron。
@@ -225,3 +233,5 @@
 - 已将知识库迁移确认从系统 `window.confirm` 替换为项目内 Radix Dialog：页面检测到旧索引后打开统一风格弹窗，排版为标题、旧版不再支持继续处理提示、迁移规则警告和三列统计；文案明确建议未完成文档需回退旧版本解析为“已完成”后再更新。补充移动端单列样式，更新开发说明和知识库迁移方案。验证通过 CJS 语法检查和 `npm run build`，构建仅有既有 chunk 体积警告。
 - 已按用户要求精简 `client/开发说明.md`：保留技术栈、架构边界、目录职责、Main/IPC/Store、数据存储、后台任务、UI 复用、AI/Prompt、埋点、发布和验证标准；删除 preload API 全量清单、过细功能流水账和重复实现说明。验证通过 `git diff --check -- client/开发说明.md`，仅有 LF/CRLF 提示。
 - 已完成 SQLite 重构后埋点排查并按用户取舍优化：不为一次性知识库迁移弹窗/迁移动作新增埋点；确认 Main 侧 `ai_request` 链路仍由 `aiService.chat()` / `generateImage()` 统一上报；修复技术方案页子步骤 `page_view` 在 SQLite 状态异步恢复前误报默认 `technical-plan/document-analysis` 的问题。验证通过 `cd client; npm run build` 和 `git diff --check`，仅有既有 chunk 体积警告与 LF/CRLF 提示。
+- 开始全文配图标题统一编排：用户确认由图片编排 Agent 为每张图生成最终标题，三类生成阶段直接使用并注入该标题；计划升级为 v3，程序校验最终标题唯一，不新增相似度算法、SQLite、IPC 或 UI 链路。
+- 已完成全文配图标题统一编排：Agent 输出新增必填最终图注 `title`，v3 计划校验格式和标准化唯一性；HTML、Mermaid、AI 提示词统一注入标题，Mermaid 只生成 code，正文 alt/图注只使用计划标题；按用户要求删除全部旧图片计划兼容、自动重编排和标题回退。相关 CJS 语法、计划/三类生成/HTML Agent smoke、客户端构建和 diff 检查均通过。

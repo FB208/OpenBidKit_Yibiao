@@ -1,5 +1,104 @@
 # Task Plan
 
+## Current Task: Agent 全文图片编排重构
+
+### Goal
+彻底移除正文起始编排中的 AI/Mermaid 图片规划和旧实际配图路径；在正文、扩写、审计和表格清理全部完成后，新增 Agent 全文图片编排阶段，读取全文 Markdown、真实目录树和图片配置，输出最小候选结果，由程序按 HTML > Mermaid > AI、类型上限和节点冲突生成文档级最终图片计划。本轮不实现任何实际图片生成。
+
+### Phases
+- [completed] 1. 新增图片计划类型、SQLite v17 字段和 Store 生命周期。
+- [completed] 2. 新增 Agent 图片编排服务、输入投影、输出校验和后处理算法。
+- [completed] 3. 重构正文编排并完整删除旧图片规划、Mermaid 校验修复、图片生成和插图代码。
+- [completed] 4. 接入 `illustration-planning` 阶段、任务恢复、Renderer 状态和进度展示。
+- [completed] 5. 同步开发说明、提示词文档和 SQL 权威结构。
+- [completed] 6. 运行语法、算法、SQLite migration、客户端构建和任务 smoke 验证。
+
+### Decisions
+- 不读取、不迁移、不兼容旧图片计划、旧 `illustration_type` 或执行一半的数据。
+- （已被“全文配图标题统一编排”v3 方案取代）当时的新 Agent 输出只包含 `kind/image_type/section_ids/placement/priority`，不输出标题、理由、prompt、Mermaid 代码或 HTML。
+- HTML 多节组必须属于同一直接父目录，并且在该父目录下顺序连续；一组计一张图片并占用组内全部小节。
+- 程序按 priority 降序处理，跨类型固定 HTML > Mermaid > AI；同优先级按目录位置和 Agent 输出顺序稳定处理。
+- 新编排成功后正文任务直接结束，不调用任何旧图片生成逻辑。
+- Agent 失败或暂停时不保存半成品，也不执行降级或旧配图 fallback。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 普通 Node.js 无法加载为 Electron 41 编译的 `better-sqlite3`（ABI 137/145 不匹配） | SQLite v17 migration smoke | 不重编译依赖，改用仓库内 Electron runtime 执行同一迁移 smoke，验证通过。 |
+
+### Validation
+- 5 个相关 CJS 文件 `node --check` 通过。
+- 图片编排算法 smoke 通过：根级 HTML 连续多节组可用，HTML 优先占用会剔除冲突 Mermaid/AI，候选和保留计数正确，多余字段被拒绝。
+- Electron runtime SQLite smoke 通过：模拟 v16 旧库升级到 v17 后，`technical_plan_content_plans` 仅保留 `node_id/plan_json/updated_at`。
+- Store 生命周期 smoke 通过：计划可落盘读取，修改配置、手工正文和目录排序都会清空旧计划。
+- 正文任务 smoke 通过：有效 Agent 输出按冲突规则原子保存且实际生图调用为 0；非法输出使任务失败且不保存半成品。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- 浏览器 1440x900 和 390x844 验证通过：图片编排显示 2/3 步、候选/保留统计，移动端无横向溢出。
+
+## Current Task: 正文生成配置弹窗改版
+
+### Goal
+改版正文生成配置弹窗：AI 生图上限按开关条件显示；Mermaid 增加默认 10 张的生图上限并接入与 AI 生图一致的全文择优控制；新增默认开启的 HTML 生图 UI、默认 10 张上限和图片类型高级设置，但暂不实现 HTML 生成业务；删除配置弹窗全部二级说明文字。
+
+### Phases
+- [completed] 1. 扩展正文生成配置类型、默认值、归一化和保存传递链路。
+- [completed] 2. 改造主配置弹窗及 HTML 图片类型高级设置弹窗。
+- [completed] 3. 实现 Mermaid 生图上限的 Main 侧扣减、编排和全局择优控制。
+- [completed] 4. 同步样式和提示词文档。
+- [completed] 5. 运行 CJS 语法检查、客户端构建和交互验证。
+
+### Decisions
+- HTML 生图默认开启，但本轮只保存 `useHtmlImages/maxHtmlImages/htmlImageTypes`，不进入正文编排、配图、统计或导出业务。
+- Mermaid 和 HTML 生图上限默认 10；UI 与 Main 按现有 AI 逻辑限制为 0 到当前叶子小节数。
+- Mermaid 候选继续在 AI 生图候选之后选择，同章 AI 图优先；剩余 Mermaid 候选按章节分布和优先级择优。
+- 删除主配置弹窗的顶部标签、顶部说明、配置项灰色说明和 Mermaid 黄色说明。
+- HTML 高级设置使用独立 Radix Dialog，确认后写回主弹窗草稿，主弹窗保存后持久化。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| Vite `5173` 端口已被占用 | 启动独立 Renderer 验证服务 | 未终止现有进程，直接复用已运行的同项目 Vite 服务。 |
+| 首次浏览器 IPC mock 的事件 API 返回 Promise，Provider 清理时报 `unsubscribe is not a function` | 注入最小 Renderer 验证状态 | 为数据库、AI、Agent、任务和导出事件补充同步 unsubscribe stub，重新加载后页面和弹窗正常。 |
+
+### Validation
+- `node --check electron\services\contentGenerationTask.cjs` 通过。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- 浏览器注入最小本地 IPC 状态验证通过：默认 Mermaid/HTML 上限均为 10，HTML 默认开启；三个开关关闭后对应上限和高级设置立即隐藏。
+- HTML 高级设置默认类型、取消回滚、确认写回、保存配置后重新打开持久化均通过。
+- 1440px 双列布局和 640px 单列内部滚动通过，无横向溢出；第二层 Dialog 在 640px 下保持 20px 边距。
+- `git diff --check` 通过，仅有 Windows LF/CRLF 换行提示。
+
+## Current Task: Mermaid 图表类型收敛
+
+### Goal
+将 Mermaid 图片功能严格收敛为流程图、层级图、职责关系图三种业务类型，三者统一使用 `flowchart` 语法；删除其他 Mermaid 类型在生成、正文预览和 Word 导出中的支持，不迁移或兼容旧计划数据。
+
+### Phases
+- [completed] 1. 增加 Mermaid 业务类型并收敛正文编排提示词、归一化、校验和修复。
+- [completed] 2. 将正文编排计划升级为 v3，并完整持久化计划契约。
+- [completed] 3. 在前端预览和 Word 导出中拒绝非 `flowchart` Mermaid 语法。
+- [completed] 4. 更新配置文案和提示词文档。
+- [completed] 5. 运行 CJS 语法检查、客户端构建和定向功能验证。
+
+### Decisions
+- 业务类型使用 `process/hierarchy/responsibility`，中文分别为流程图、层级图、职责关系图。
+- 三种业务类型只允许 `flowchart TD/TB/LR/RL/BT`，不接受 `graph` 别名和其他 Mermaid 语法族。
+- 不支持类型不自动转换、不降级、不读取缓存；预览显示现有错误卡，Word 导出沿用 warning 和红色占位。
+- 不增加用户类型选择器，由正文编排模型决定业务类型。
+- 不新增 SQLite 列、IPC、preload 或 Analytics 字段。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 首次 Word 导出拒绝 smoke 未产生 warning | `node -e` 构造 Mermaid Markdown | 测试命令把换行写成字面量 `\\n`，Markdown 被解析为行内代码；改为真实换行后通过。 |
+
+### Validation
+- `node --check` 通过：`mermaidPolicy.cjs`、`contentGenerationTask.cjs`、`technicalPlanStore.cjs`、`exportService.cjs`。
+- Mermaid 策略 smoke 通过：三种业务类型和五种 flowchart 方向被接受；graph、sequenceDiagram、timeline、gantt、pie、classDiagram 被拒绝。
+- Word 导出拒绝 smoke 通过：sequenceDiagram 不读取缓存、不请求转换，并写入“不支持类型” warning。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告。
+- `git diff --check` 通过，仅有 Windows LF/CRLF 换行提示。
+
 ## Current Task: 客户端授权签名校验与统计
 
 ### Goal
@@ -2091,3 +2190,33 @@
 
 ### Validation
 - `git diff --check -- client/开发说明.md` 通过，仅有 LF/CRLF 提示。
+
+## Current Task: 全文配图标题统一编排
+
+### Goal
+把每张图片的最终标题提升为全文图片计划的权威字段，由图片编排 Agent 统一设计并校验唯一性；HTML、Mermaid、AI 三类生成阶段只使用并注入该标题，不再自行生成标题，以降低相似正文生成重复图片和相同图注的概率。
+
+### Phases
+- [completed] 1. 升级图片计划版本、Agent 输出契约和标题校验。
+- [completed] 2. 统一三类图片生成提示词、日志和正文图注的标题来源。
+- [completed] 3. 删除全部旧图片计划兼容，不提供迁移、回退或自动重编排。
+- [completed] 4. 更新开发说明并运行定向 smoke、语法检查和客户端构建。
+
+### Decisions
+- `title` 保存最终图注正文，不包含固定前缀“图：”，必须以“图”结尾。
+- 最终计划中的标准化标题必须唯一；不增加文本相似度算法或额外 `visual_focus` 字段。
+- 新版生成阶段不得临时拼接或请求标题，三类提示词都必须注入计划标题。
+- 图片计划升级为 v3，只接受包含有效 `title` 的 v3 计划，不迁移、不回退、不自动重编排旧数据。
+- 不修改 SQLite schema、IPC、preload、统计面板或 Word 导出链路。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 无 | 当前执行 | - |
+
+### Validation
+- 3 个相关 CJS 文件 `node --check` 通过。
+- 图片计划 smoke 通过：v3 标题可落盘，缺失/前缀/后缀错误被拒绝，标准化重复标题被拒绝，标题变化会改变 revision 和 item_id。
+- 三类生成 smoke 通过：AI/HTML/Mermaid 提示词均注入计划标题，Mermaid 只返回 code，最终 Markdown 图注精确使用计划标题。
+- 旧数据兼容残留扫描通过：不存在自动重编排、`generation.title` 或 `image_type` 图注回退；v2 计划在生成入口被直接拒绝。
+- `cd client; npm run build` 通过，仅有既有 chunk 体积警告；`git diff --check` 仅有 LF/CRLF 提示。

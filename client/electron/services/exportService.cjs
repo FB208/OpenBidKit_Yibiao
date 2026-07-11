@@ -7,7 +7,9 @@ const cheerio = require('cheerio');
 const { imageSize } = require('image-size');
 const { compactLogError, createDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
 const { getMermaidCacheEntry, saveMermaidCacheImage } = require('../utils/mermaidCache.cjs');
+const { assertSupportedMermaidSyntax } = require('../utils/mermaidPolicy.cjs');
 const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
+const { REMOTE_IMAGE_RETRY_ATTEMPTS, REMOTE_IMAGE_RETRY_DELAY_MS } = require('../utils/remoteImageRetry.cjs');
 const { renderMarkdownHtml } = require('../utils/renderMarkdownHtml.cjs');
 const {
   AlignmentType,
@@ -38,13 +40,12 @@ const {
 } = require('docx');
 
 const MAX_IMAGE_WIDTH = 520;
+const MAX_IMAGE_HEIGHT_PERCENT = 90;
 const NUMBERING_REFERENCE_PREFIX = 'technical-plan-numbering';
 const HEADING_NUMBERING_REFERENCE = 'technical-plan-heading-numbering';
 const DOCX_TABLE_WIDTH_TWIPS = 9000;
 const CHAPTER_LEAF_TITLE_WIDTH_TWIPS = 1800;
 const CHAPTER_LEAF_CONTENT_WIDTH_TWIPS = DOCX_TABLE_WIDTH_TWIPS - CHAPTER_LEAF_TITLE_WIDTH_TWIPS;
-const MERMAID_EXPORT_RETRY_ATTEMPTS = 2;
-const MERMAID_EXPORT_RETRY_DELAY_MS = 3000;
 const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#e0ecff', '#e9f1ff', '#f2f7ff', '#f8fbff', '#ffffff', '#ffffff'];
 const DEFAULT_TABLE_STYLE = {
   border_width: 1,
@@ -631,10 +632,26 @@ function getPageContentWidthPx(context) {
   return Math.round(contentWidthTwips / 15);
 }
 
+// 按当前纸张、方向和页边距计算 Word 正文区域可用高度。
+function getPageContentHeightPx(context) {
+  const pageSetup = context?.exportFormat?.page || {};
+  const dims = PAPER_DIMENSIONS_MM[pageSetup.paper_size] || PAPER_DIMENSIONS_MM.a4;
+  const pageHeightMm = pageSetup.orientation === 'landscape' ? dims.width : dims.height;
+  const pageHeightTwips = mmToTwips(pageHeightMm);
+  const marginTopTwips = cmToTwips(pageSetup.margin_top_cm ?? 2);
+  const marginBottomTwips = cmToTwips(pageSetup.margin_bottom_cm ?? 2);
+  const contentHeightTwips = Math.max(1, pageHeightTwips - marginTopTwips - marginBottomTwips);
+  return Math.round(contentHeightTwips / 15);
+}
+
 function getImageMaxWidth(context) {
   const image = getImageStyle(context);
   const percent = Math.max(1, Math.min(100, Number(image.max_width_percent) || DEFAULT_IMAGE_STYLE.max_width_percent));
   return Math.max(1, Math.round(getPageContentWidthPx(context) * percent / 100));
+}
+
+function getImageMaxHeight(context) {
+  return Math.max(1, Math.round(getPageContentHeightPx(context) * MAX_IMAGE_HEIGHT_PERCENT / 100));
 }
 
 function getImageParagraphOptions(context) {
@@ -1256,9 +1273,10 @@ async function imageRunFromNode(node, context, options = {}) {
   const sourceWidth = size.width || MAX_IMAGE_WIDTH;
   const sourceHeight = size.height || Math.round(MAX_IMAGE_WIDTH * 0.62);
   const maxWidth = getImageMaxWidth(context);
-  const ratio = Math.min(1, maxWidth / sourceWidth);
-  const width = Math.round(sourceWidth * ratio);
-  const height = Math.round(sourceHeight * ratio);
+  const maxHeight = getImageMaxHeight(context);
+  const ratio = Math.min(1, maxWidth / sourceWidth, maxHeight / sourceHeight);
+  const width = Math.max(1, Math.round(sourceWidth * ratio));
+  const height = Math.max(1, Math.round(sourceHeight * ratio));
   context.imageSuccessCount = (context.imageSuccessCount || 0) + 1;
   writeExportLog(context, 'export.image.completed', {
     image_index: imageIndex,
@@ -1268,6 +1286,8 @@ async function imageRunFromNode(node, context, options = {}) {
     source_width: sourceWidth,
     source_height: sourceHeight,
     max_width: maxWidth,
+    max_height: maxHeight,
+    scale_ratio: ratio,
     output_width: width,
     output_height: height,
   });
@@ -1519,26 +1539,28 @@ async function mermaidCodeToDocxBlocks(code, context) {
 
   const nextIndex = (context.convertedMermaidCount || 0) + 1;
   const total = context.stats?.mermaidCount || nextIndex;
-  const cacheEntry = getMermaidCacheEntry(app, value);
-  writeExportLog(context, 'export.mermaid.started', {
-    mermaid_index: nextIndex,
-    total,
-    cache_hash: cacheEntry.hash,
-    cache_hit: cacheEntry.exists,
-    code_metrics: textMetrics(value),
-  });
-  reportConversionProgress(context, cacheEntry.exists
-    ? `Mermaid 图 ${nextIndex}/${total} 已命中本地缓存。`
-    : `正在转换 Mermaid 图 ${nextIndex}/${total}，可能需要联网等待。`);
-  const loadRetry = {
-    retryAttempts: MERMAID_EXPORT_RETRY_ATTEMPTS,
-    retryDelayMs: MERMAID_EXPORT_RETRY_DELAY_MS,
-    onRetry: (attempt) => {
-      reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败，3 秒后第 ${attempt} 次重试。`);
-    },
-  };
+  let cacheEntry = null;
 
   try {
+    assertSupportedMermaidSyntax(value);
+    cacheEntry = getMermaidCacheEntry(app, value);
+    writeExportLog(context, 'export.mermaid.started', {
+      mermaid_index: nextIndex,
+      total,
+      cache_hash: cacheEntry.hash,
+      cache_hit: cacheEntry.exists,
+      code_metrics: textMetrics(value),
+    });
+    reportConversionProgress(context, cacheEntry.exists
+      ? `Mermaid 图 ${nextIndex}/${total} 已命中本地缓存。`
+      : `正在转换 Mermaid 图 ${nextIndex}/${total}，可能需要联网等待。`);
+    const loadRetry = {
+      retryAttempts: REMOTE_IMAGE_RETRY_ATTEMPTS,
+      retryDelayMs: REMOTE_IMAGE_RETRY_DELAY_MS,
+      onRetry: (attempt) => {
+        reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败，3 秒后第 ${attempt} 次重试。`);
+      },
+    };
     const mermaidImage = await resolveMermaidImageForExport(value, context, { cacheEntry, loadRetry });
     const block = mermaidImage.loaded === undefined
       ? await imageParagraphFromSource(mermaidImage.source, 'Mermaid 图', context)
@@ -1559,7 +1581,7 @@ async function mermaidCodeToDocxBlocks(code, context) {
     writeExportLog(context, 'export.mermaid.error', {
       mermaid_index: nextIndex,
       total,
-      cache_hash: cacheEntry.hash,
+      cache_hash: cacheEntry?.hash || '',
       error: compactLogError(error),
     });
     reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败。`);

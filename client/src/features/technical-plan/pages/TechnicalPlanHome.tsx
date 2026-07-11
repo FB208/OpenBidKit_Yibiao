@@ -81,6 +81,7 @@ const resetState = {
   contentGenerationOptions: undefined,
   contentGenerationSections: {},
   contentGenerationPlans: {},
+  contentIllustrationPlan: undefined,
   contentGenerationRuntime: undefined,
   outlineData: null,
 };
@@ -166,6 +167,7 @@ function hasWorkflowSpecificProgress(state: TechnicalPlanState) {
     || state.globalFacts.length > 0
     || Object.keys(state.contentGenerationSections || {}).length > 0
     || Object.keys(state.contentGenerationPlans || {}).length > 0
+    || state.contentIllustrationPlan
     || state.contentGenerationRuntime
     || state.contentGenerationOptions
     || state.outlineGenerationTask
@@ -500,6 +502,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             contentGenerationOptions: hasOwnField(technicalPlan, 'contentGenerationOptions') ? technicalPlan.contentGenerationOptions : prev.contentGenerationOptions,
             contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : prev.contentGenerationSections,
             contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
+            contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : prev.contentIllustrationPlan,
             contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
           };
         }
@@ -528,6 +531,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             contentGenerationOptions: outlineDataReset ? undefined : prev.contentGenerationOptions,
             contentGenerationSections: outlineDataReset ? {} : prev.contentGenerationSections,
             contentGenerationPlans: outlineDataReset ? {} : prev.contentGenerationPlans,
+            contentIllustrationPlan: outlineDataReset ? undefined : prev.contentIllustrationPlan,
             contentGenerationRuntime: outlineDataReset ? undefined : prev.contentGenerationRuntime,
             outlineData: hasOwnField(technicalPlan, 'outlineData') ? (technicalPlan.outlineData || null) : prev.outlineData,
           };
@@ -552,6 +556,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : (outlineDataChanged ? undefined : prev.contentGenerationTask),
             contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : (outlineDataChanged ? {} : prev.contentGenerationSections),
             contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : (outlineDataChanged ? {} : prev.contentGenerationPlans),
+            contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : (outlineDataChanged ? undefined : prev.contentIllustrationPlan),
             contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : (outlineDataChanged ? undefined : prev.contentGenerationRuntime),
           };
         }
@@ -566,6 +571,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             contentGenerationTask: globalFactsChanged ? undefined : prev.contentGenerationTask,
             contentGenerationSections: globalFactsChanged ? {} : prev.contentGenerationSections,
             contentGenerationPlans: globalFactsChanged ? {} : prev.contentGenerationPlans,
+            contentIllustrationPlan: globalFactsChanged ? undefined : prev.contentIllustrationPlan,
             contentGenerationRuntime: globalFactsChanged ? undefined : prev.contentGenerationRuntime,
           };
         }
@@ -593,6 +599,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
               : prev.referenceKnowledgeDocumentIds,
             contentGenerationSections: nextSections,
             contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
+            contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : prev.contentIllustrationPlan,
             contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
             outlineData: nextOutlineData,
           };
@@ -990,6 +997,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           outlineData={state.outlineData}
           task={state.contentGenerationTask}
           contentGenerationOptions={state.contentGenerationOptions}
+          contentIllustrationPlan={state.contentIllustrationPlan}
           sections={state.contentGenerationSections}
           onContentGenerationOptionsChange={saveContentGenerationOptions}
           onContentSaved={saveChapterContent}

@@ -265,3 +265,5 @@ __marimo__/
 tools/测试文件/
 tools/对比结果/
 donotsync/
+testfiles/
+doc/
