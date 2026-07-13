@@ -35,7 +35,7 @@ function RequiredOnlineServicesPrompt() {
           <div className="content-regenerate-card-head">
             <Dialog.Title>联网服务不可用</Dialog.Title>
             <Dialog.Description>
-              以下服务当前无法连接，相关功能在本次软件运行期间将自动跳过，不会等待超时。
+              以下服务链接失败，相关功能将自动跳过。
             </Dialog.Description>
           </div>
           <ul className="required-online-services-list">
@@ -46,6 +46,9 @@ function RequiredOnlineServicesPrompt() {
               </li>
             ))}
           </ul>
+          <p className="required-online-services-offline-note">
+            如需内网使用，请联系作者购买离线包
+          </p>
           <div className="content-regenerate-actions">
             <button type="button" className="primary-action" onClick={() => setUnavailableServices([])}>我知道了</button>
           </div>

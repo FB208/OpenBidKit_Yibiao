@@ -741,3 +741,14 @@
   font-size: 12px;
 }
 
+.required-online-services-offline-note {
+  margin: 0;
+  padding: 12px 14px;
+  color: #b45309;
+  font-weight: 700;
+  text-align: center;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  border-radius: 14px;
+}
+

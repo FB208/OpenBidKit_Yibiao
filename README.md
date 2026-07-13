@@ -164,6 +164,16 @@ cd client
 npm run build
 ```
 
+### Windows 本地打包
+
+完成上述 Windows OpenCode binary 准备和依赖安装后，在 `client/` 目录执行：
+
+```powershell
+npm run dist:win
+```
+
+打包生成的 x64 安装包和免安装 ZIP 位于 `client/release/`。
+
 ## 🛠️ 技术架构
 
 当前产品主体是 `client/` 下的独立桌面客户端，不依赖旧 `frontend/`、`backend/` 结构。
