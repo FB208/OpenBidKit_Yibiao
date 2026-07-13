@@ -183,6 +183,8 @@ celerybeat.pid
 *.sage.py
 
 # Environments
+.agents/skills/*/.env.local
+/.sync-user-manual-state.local.json
 .env
 .envrc
 .env_cf.secrets

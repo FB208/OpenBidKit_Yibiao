@@ -1,4 +1,4 @@
 interface:
   display_name: "易标用户手册"
-  short_description: "独立更新易标使用说明或基于正式标签编写专业版本日志"
-  default_prompt: "使用 $yibiao-user-manual 询问我本次要更新易标使用说明、v2 版本日志，还是两项都执行。"
+  short_description: "按范围更新易标手册或版本日志，比较后确认发布"
+  default_prompt: "使用 $yibiao-user-manual：任务不明确时先询问；按固定非沙箱流程生成目标文档，直接登录服务器生成只读变更清单，只在实际发布前让我确认。不要运行额外规划、测试或校验。"
