@@ -2,7 +2,7 @@ const crypto = require('node:crypto');
 
 const ILLUSTRATION_PLAN_VERSION = 3;
 const ROOT_PARENT_ID = '__root__';
-const ILLUSTRATION_KINDS = ['html', 'mermaid', 'ai'];
+const ILLUSTRATION_KINDS = ['html', 'ai', 'mermaid'];
 const ILLUSTRATION_KIND_ORDER = new Map(ILLUSTRATION_KINDS.map((kind, index) => [kind, index]));
 const AI_IMAGE_TYPES = new Set(['engineering_diagram', 'realistic_photo']);
 const MERMAID_IMAGE_TYPES = new Set(['process', 'hierarchy', 'responsibility']);
@@ -268,7 +268,7 @@ function validateCandidate(candidate, context) {
   return { ...candidate, firstOrder: sections[0].order };
 }
 
-// 解析、严格校验并按 HTML > Mermaid > AI 处理上限和冲突。
+// 解析、严格校验并按 HTML > AI > Mermaid 处理上限和冲突。
 function resolveIllustrationPlan(content, context) {
   const parsed = typeof content === 'string' ? extractJsonObject(content) : content;
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.items)) {

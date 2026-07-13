@@ -6163,7 +6163,7 @@ workspace 文件说明：
     contentStats.illustration_planning_step_label = '正在执行全文图片编排 Agent';
     pauseIfRequested('正文生成已在图片编排输入准备后暂停，本次 Agent 未启动；继续后将重新执行。');
 
-    const enabledKinds = ['html', 'mermaid', 'ai'].filter((kind) => planningContext.config[kind].enabled);
+    const enabledKinds = ['html', 'ai', 'mermaid'].filter((kind) => planningContext.config[kind].enabled);
     let resolved;
     if (!planningContext.eligibleSectionIds.length || !enabledKinds.length) {
       resolved = resolveIllustrationPlan({ items: [] }, planningContext);
@@ -6302,6 +6302,11 @@ workspace 文件说明：
             execution,
             plan: illustrationPlan,
             workspaceStore,
+            onSourceSaved: (source) => persistIllustrationGeneration(
+              planItem.item_id,
+              { status: 'running', error: undefined, ...source },
+              'HTML 源文件已保存，正在转换图片',
+            ),
             runAgentHtml: async ({ title, prompt, outputFile, files, validateOutput }) => {
               const response = await runContentAgentTask({
                 title,

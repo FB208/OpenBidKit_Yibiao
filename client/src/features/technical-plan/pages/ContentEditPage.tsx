@@ -395,6 +395,11 @@ function ContentEditPage({
     && ['original-auditing', 'auditing', 'table-cleaning', 'illustration-planning', 'illustration-generating'].includes(String(contentStats?.phase || ''));
   const retryingIllustrationPlanning = canRetryContentCorrection && contentStats?.phase === 'illustration-planning';
   const retryingIllustrationGeneration = canRetryContentCorrection && contentStats?.phase === 'illustration-generating';
+  const contentRetryTargetLabel = retryingIllustrationGeneration
+    ? '图片生成'
+    : retryingIllustrationPlanning
+      ? '全文图片编排'
+      : '内容矫正';
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
   const wordExpansionProgress = minimumWords ? Math.min(100, Math.round((currentWords / minimumWords) * 100)) : 0;
@@ -534,7 +539,7 @@ function ContentEditPage({
       : paused
         ? '继续'
         : canRetryContentCorrection
-          ? retryingIllustrationGeneration ? '重试图片生成' : retryingIllustrationPlanning ? '重试图片编排' : '重试内容矫正'
+          ? `重试${contentRetryTargetLabel}`
           : canRetryMinimumWords
             ? '继续补足字数'
             : completedCount === leaves.length && leaves.length
@@ -719,9 +724,9 @@ function ContentEditPage({
 
     try {
       await window.yibiao?.tasks.startContentGeneration({ retryContentCorrection: true });
-      showToast(retryingIllustrationPlanning ? '全文图片编排重试任务已在后台启动' : '内容矫正重试任务已在后台启动', 'success');
+      showToast(`${contentRetryTargetLabel}重试任务已在后台启动`, 'success');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : retryingIllustrationPlanning ? '重试全文图片编排失败' : '重试内容矫正失败', 'error');
+      showToast(error instanceof Error ? error.message : `重试${contentRetryTargetLabel}失败`, 'error');
     }
   };
 

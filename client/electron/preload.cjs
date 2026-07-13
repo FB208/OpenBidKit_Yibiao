@@ -8,6 +8,9 @@ const bridge = {
   saveGpuHardwareAccelerationPreference: (enabled) => ipcRenderer.invoke('app:save-gpu-hardware-acceleration-preference', enabled),
   startGpuHardwareAccelerationTrial: () => ipcRenderer.invoke('app:start-gpu-hardware-acceleration-trial'),
   relaunchWithGpuHardwareAccelerationDisabled: () => ipcRenderer.invoke('app:relaunch-with-gpu-hardware-acceleration-disabled'),
+  requiredOnlineServices: {
+    getStatus: () => ipcRenderer.invoke('required-online-services:get-status'),
+  },
   getLatestVersion: () => ipcRenderer.invoke('app:get-latest-version'),
   getUpdateDownloadUrl: () => ipcRenderer.invoke('app:get-update-download-url'),
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),

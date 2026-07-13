@@ -11,6 +11,7 @@ const { assertSupportedMermaidSyntax } = require('../utils/mermaidPolicy.cjs');
 const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
 const { REMOTE_IMAGE_RETRY_ATTEMPTS, REMOTE_IMAGE_RETRY_DELAY_MS } = require('../utils/remoteImageRetry.cjs');
 const { renderMarkdownHtml } = require('../utils/renderMarkdownHtml.cjs');
+const { executeRequiredOnlineService } = require('./requiredOnlineServices.cjs');
 const {
   AlignmentType,
   BorderStyle,
@@ -1182,7 +1183,10 @@ async function resolveMermaidImageForExport(code, context = {}, options = {}) {
     };
   }
 
-  const loaded = await loadImageWithRetry(mermaidInkUrl(cacheEntry.code), context, options.loadRetry);
+  const loaded = await executeRequiredOnlineService(
+    'mermaid-to-image',
+    () => loadImageWithRetry(mermaidInkUrl(cacheEntry.code), context, options.loadRetry),
+  );
   if (loaded?.buffer?.length) {
     try {
       saveMermaidCacheImage(app, cacheEntry.hash, loaded.buffer);

@@ -30,6 +30,7 @@ const { createSystemFontService } = require('../services/systemFontService.cjs')
 const { createTaskService } = require('../services/taskService.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
 const { createTemplateStore } = require('../services/templateStore.cjs');
+const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
 
 function normalizeExternalUrl(value) {
   const raw = String(value || '').trim();
@@ -194,6 +195,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
 }
 
 function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow }) {
+  void checkRequiredOnlineServices();
   const configStore = createConfigStore(app);
   const licenseService = createLicenseService({ app, configStore });
   const aiService = createAiService({ app, configStore });
@@ -323,6 +325,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   }
 
   ipcMain.handle('app:get-version', () => app.getVersion());
+  ipcMain.handle('required-online-services:get-status', () => getRequiredOnlineServiceStatus());
 
   ipcMain.handle('app:get-gpu-hardware-acceleration-status', () => {
     const config = configStore.load();

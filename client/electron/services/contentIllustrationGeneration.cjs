@@ -5,6 +5,7 @@ const {
   getMermaidDiagramTypeLabel,
 } = require('../utils/mermaidPolicy.cjs');
 const { runWithRemoteImageRetry } = require('../utils/remoteImageRetry.cjs');
+const { executeRequiredOnlineService } = require('./requiredOnlineServices.cjs');
 
 const HTML_AGENT_THRESHOLD_CHARS = 50000;
 const HTML_SCREENSHOT_URL = 'https://mt.agnet.top/image/url2png';
@@ -261,7 +262,7 @@ async function generateAiIllustration(aiService, execution) {
 }
 
 // 使用文本模型基于最终正文生成并校验 Mermaid。
-async function generateMermaidIllustration(aiService, execution, isPauseLikeError) {
+async function generateMermaidIllustrationInternal(aiService, execution, isPauseLikeError) {
   const generated = await aiService.collectJsonResponse({
     messages: buildMermaidGenerationMessages(execution),
     temperature: 0.2,
@@ -272,6 +273,14 @@ async function generateMermaidIllustration(aiService, execution, isPauseLikeErro
     validator: validateMermaidGenerationResult,
   });
   return prepareRenderableMermaid({ aiService, execution, mermaidPlan: generated, isPauseLikeError });
+}
+
+// 仅在 Mermaid 转图片服务可用时执行完整生成流程。
+async function generateMermaidIllustration(aiService, execution, isPauseLikeError) {
+  return executeRequiredOnlineService(
+    'mermaid-to-image',
+    () => generateMermaidIllustrationInternal(aiService, execution, isPauseLikeError),
+  );
 }
 
 async function requestHtmlScreenshot(html, onRetry, pauseControl = {}) {
@@ -326,10 +335,19 @@ async function requestHtmlScreenshot(html, onRetry, pauseControl = {}) {
 }
 
 // 生成 HTML 源文件并调用远程服务转换为 PNG。
-async function generateHtmlIllustration({ aiService, execution, plan, workspaceStore, runAgentHtml, onRenderRetry, isPauseRequested, createPauseError }) {
-  const existingPath = execution.planItem.generation?.source_path;
-  let html = existingPath ? workspaceStore.readIllustrationHtml(existingPath) : '';
+async function generateHtmlIllustrationInternal({ aiService, execution, plan, workspaceStore, runAgentHtml, onSourceSaved, onRenderRetry, isPauseRequested, createPauseError }) {
+  const recordedPath = execution.planItem.generation?.source_path;
+  let sourcePath = recordedPath;
+  let html = sourcePath ? workspaceStore.readIllustrationHtml(sourcePath) : '';
+  if (!html) {
+    const recovered = workspaceStore.findIllustrationHtml?.({ revision: plan.revision, itemId: execution.planItem.item_id });
+    if (recovered?.content) {
+      sourcePath = recovered.relativePath;
+      html = recovered.content;
+    }
+  }
   const mode = execution.reference.length > HTML_AGENT_THRESHOLD_CHARS ? 'agent' : 'normal';
+  const sourceAlreadyPersisted = Boolean(html && sourcePath && sourcePath === recordedPath);
   if (!html) {
     if (mode === 'agent') {
       html = await runAgentHtml({
@@ -351,6 +369,9 @@ async function generateHtmlIllustration({ aiService, execution, plan, workspaceS
   }
 
   const savedHtml = workspaceStore.saveIllustrationHtml({ revision: plan.revision, itemId: execution.planItem.item_id, content: html });
+  if (!sourceAlreadyPersisted) {
+    onSourceSaved?.({ mode, source_path: savedHtml.relativePath });
+  }
   let screenshot;
   try {
     screenshot = await requestHtmlScreenshot(html, onRenderRetry, { isPauseRequested, createPauseError });
@@ -365,6 +386,14 @@ async function generateHtmlIllustration({ aiService, execution, plan, workspaceS
     asset_url: savedPng.assetUrl,
     attempts: screenshot.attempts,
   };
+}
+
+// 仅在 HTML 转图片服务可用时执行完整生成流程。
+async function generateHtmlIllustration(options) {
+  return executeRequiredOnlineService(
+    'html-to-image',
+    () => generateHtmlIllustrationInternal(options),
+  );
 }
 
 function stripGeneratedIllustrations(content) {

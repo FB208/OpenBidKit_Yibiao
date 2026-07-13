@@ -36,6 +36,20 @@ export interface WordExportResult {
   warnings?: string[];
 }
 
+export interface RequiredOnlineServiceStatus {
+  id: 'html-to-image' | 'mermaid-to-image';
+  label: string;
+  domain: string;
+  available: boolean;
+  checked: boolean;
+}
+
+export interface RequiredOnlineServicesStatus {
+  checked: boolean;
+  services: RequiredOnlineServiceStatus[];
+  unavailableServices: RequiredOnlineServiceStatus[];
+}
+
 export interface DeveloperTextTokenStats {
   request_count: number;
   input_tokens: number;
@@ -377,6 +391,9 @@ export interface YibiaoBridge {
   saveGpuHardwareAccelerationPreference: (enabled: boolean) => Promise<ConfigSaveResult & { enabled: boolean; configured: boolean; restartRequired: boolean }>;
   startGpuHardwareAccelerationTrial: () => Promise<{ success: boolean }>;
   relaunchWithGpuHardwareAccelerationDisabled: () => Promise<{ success: boolean }>;
+  requiredOnlineServices: {
+    getStatus: () => Promise<RequiredOnlineServicesStatus>;
+  };
   getLatestVersion: () => Promise<LatestReleaseInfo>;
   getUpdateDownloadUrl: () => Promise<string>;
   openExternal: (url: string) => Promise<{ success: boolean; message?: string }>;

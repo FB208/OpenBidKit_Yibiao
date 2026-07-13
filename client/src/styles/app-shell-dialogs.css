@@ -709,3 +709,35 @@
   background: rgba(15, 23, 42, 0.82);
 }
 
+.required-online-services-card {
+  width: min(500px, calc(100vw - 40px));
+}
+
+.required-online-services-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.required-online-services-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  border-radius: 14px;
+}
+
+.required-online-services-list strong {
+  color: var(--yb-text);
+}
+
+.required-online-services-list span {
+  color: var(--yb-text-muted);
+  font-size: 12px;
+}
+

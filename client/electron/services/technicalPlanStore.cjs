@@ -373,12 +373,20 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     fs.renameSync(tempPath, filePath);
   }
 
-  // 独立保存 HTML 图片源文件，供转图失败或任务恢复时复用。
-  function saveIllustrationHtml({ revision, itemId, content }) {
+  // 根据计划版本和图片项 ID 计算 HTML 源文件的确定性路径。
+  function getIllustrationHtmlFile({ revision, itemId }) {
     const safeRevision = normalizeIllustrationFilePart(revision);
     const safeItemId = normalizeIllustrationFilePart(itemId);
     const relativePath = path.join('illustrations', safeRevision, 'html', `${safeItemId}.html`).replace(/\\/g, '/');
-    const filePath = path.join(path.dirname(originalPlanMarkdownPath), relativePath);
+    return {
+      relativePath,
+      filePath: path.join(path.dirname(originalPlanMarkdownPath), relativePath),
+    };
+  }
+
+  // 独立保存 HTML 图片源文件，供转图失败或任务恢复时复用。
+  function saveIllustrationHtml({ revision, itemId, content }) {
+    const { relativePath, filePath } = getIllustrationHtmlFile({ revision, itemId });
     writeIllustrationFile(filePath, String(content || ''));
     return { relativePath, filePath };
   }
@@ -389,6 +397,13 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     const root = `${path.resolve(illustrationsDir)}${path.sep}`;
     if (!resolvedPath.startsWith(root) || !fs.existsSync(resolvedPath)) return '';
     return fs.readFileSync(resolvedPath, 'utf-8');
+  }
+
+  // 在计划尚未记录 source_path 时按确定性路径探测已落盘的 HTML。
+  function findIllustrationHtml({ revision, itemId }) {
+    const entry = getIllustrationHtmlFile({ revision, itemId });
+    if (!fs.existsSync(entry.filePath)) return null;
+    return { ...entry, content: fs.readFileSync(entry.filePath, 'utf-8') };
   }
 
   // 保存 HTML 截图 PNG，并返回 Renderer/导出层均可读取的资产 URL。
@@ -1832,6 +1847,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     readOriginalTenderMarkdown,
     readOriginalPlanMarkdown,
     readIllustrationHtml,
+    findIllustrationHtml,
     readOriginalOutlineRuntime,
     saveOriginalOutlineRuntime,
     clearOriginalOutlineRuntime,
