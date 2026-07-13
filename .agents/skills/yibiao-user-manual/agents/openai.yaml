@@ -1,4 +1,4 @@
 interface:
   display_name: "易标用户手册"
-  short_description: "根据项目代码和真实发行版界面创建、截图并更新易标新手手册"
-  default_prompt: "使用 $yibiao-user-manual 为易标项目创建或更新带高清标注截图的 Markdown 用户手册。"
+  short_description: "独立更新易标使用说明或基于正式标签编写专业版本日志"
+  default_prompt: "使用 $yibiao-user-manual 询问我本次要更新易标使用说明、v2 版本日志，还是两项都执行。"
