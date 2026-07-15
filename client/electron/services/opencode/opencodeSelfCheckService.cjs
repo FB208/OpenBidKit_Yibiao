@@ -11,9 +11,8 @@ const {
 const {
   BUNDLED_COMMANDS,
   SHIM_COMMANDS,
-  applyOpenCodeToolEnvironment,
-  ensureOpenCodeToolEnvironment,
 } = require('./opencodeToolEnvironment.cjs');
+const { prepareOpenCodeEnvironment } = require('./opencodeEnvironment.cjs');
 
 const SELF_CHECK_TASK_ID = 'agent-self-check-latest';
 const SELF_CHECK_OUTPUT_FILE = 'agent-self-check-result.json';
@@ -58,38 +57,29 @@ function getExpectedToolPath(toolEnvironment, descriptor) {
   return path.join(toolEnvironment.runtimeToolsBinDir, process.platform === 'win32' ? `${descriptor.command}.cmd` : descriptor.command);
 }
 
-function buildMinimalToolCheckEnv(extra = {}) {
-  const keepKeys = [
-    'PATH',
-    'Path',
-    'SystemRoot',
-    'WINDIR',
-    'TEMP',
-    'TMP',
-    'TMPDIR',
-    'LANG',
-    'LC_ALL',
-    'ComSpec',
-    'PATHEXT',
-  ];
-  const env = {};
-  keepKeys.forEach((key) => {
-    if (process.env[key]) env[key] = process.env[key];
-  });
-  return { ...env, ...extra };
-}
-
 function shellCommand(command, cwd, env, timeoutMs = TOOL_CHECK_TIMEOUT_MS) {
   const startedAt = Date.now();
+  const powershellUtf8Prefix = [
+    '[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)',
+    '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+    '$OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+  ].join('; ');
   const child = process.platform === 'win32'
-    ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command], {
+    ? spawnSync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      `${powershellUtf8Prefix}; ${command}`,
+    ], {
       cwd,
       env,
       encoding: 'utf-8',
       timeout: timeoutMs,
       windowsHide: true,
     })
-    : spawnSync('/bin/sh', ['-lc', command], {
+    : spawnSync('/bin/sh', ['-c', command], {
       cwd,
       env,
       encoding: 'utf-8',
@@ -227,22 +217,15 @@ function summarizeToolChecks(items) {
 
 function runIntegratedToolSelfCheck({ app, runtimeRoot, workspaceDir, logger } = {}) {
   const checkDir = path.join(workspaceDir, `.agent-tool-check-${Date.now()}`);
-  const homeDir = path.join(runtimeRoot, 'home');
-  const dataHome = path.join(homeDir, '.local', 'share');
-  const cacheHome = path.join(getAgentCacheDir(app), 'opencode-cache');
   let toolEnvironment = null;
 
   try {
     fs.mkdirSync(checkDir, { recursive: true });
     fs.writeFileSync(path.join(checkDir, 'tool-check-input.txt'), `${TOOL_CHECK_INPUT}\n`, 'utf-8');
 
-    toolEnvironment = ensureOpenCodeToolEnvironment({ app, workspaceDir });
-    const env = applyOpenCodeToolEnvironment(buildMinimalToolCheckEnv({
-      HOME: homeDir,
-      USERPROFILE: homeDir,
-      XDG_DATA_HOME: dataHome,
-      XDG_CACHE_HOME: cacheHome,
-    }), toolEnvironment);
+    const environmentInfo = prepareOpenCodeEnvironment({ app, runtimeRoot, workspaceDir });
+    toolEnvironment = environmentInfo.toolEnvironment;
+    const env = environmentInfo.env;
 
     const items = TOOL_CHECK_DESCRIPTORS.map((descriptor) => {
       const expectedPath = getExpectedToolPath(toolEnvironment, descriptor);
@@ -555,7 +538,7 @@ function createSelfCheckConclusion(result) {
   const lastProxySuccess = findLastProxyEvent(proxyEvents, 'proxy.upstream.completed');
   const lastHeaders = findLastProxyEvent(proxyEvents, 'proxy.upstream.headers');
 
-  if (result.success) return '结论：智能体自检通过，OpenCode Server、AI proxy、上游模型和文件输出链路均正常。';
+  if (result.success) return '结论：智能体自检通过，OpenCode 逻辑隔离、Server、AI proxy、上游模型和文件输出链路均正常。';
   if (failedStep?.id === 'binary-check') return '结论：OpenCode 程序文件缺失或不可访问，属于安装包资源问题。';
   if (failedStep?.id === 'runtime-write-check') return '结论：自检运行目录无法写入，属于本机用户目录权限或磁盘问题。';
   if (failedStep?.id === 'direct-model-test' || direct?.success === false) {
@@ -567,6 +550,9 @@ function createSelfCheckConclusion(result) {
   }
   if (failedStep?.id === 'tool-check') {
     return '结论：智能体集成命令工具存在不可用项，优先检查 OpenCode 工具目录、PATH 注入和 node shim。';
+  }
+  if (failedStep?.id === 'isolation-check') {
+    return '结论：OpenCode 逻辑隔离验证失败，Agent 任务已停止；请根据越界路径检查运行目录和外部配置来源。';
   }
   if (requestLog.some((item) => item.route === '/session' && item.ok === true) && failedStep?.id === 'message-wait') {
     if (!hasProxyEvent(proxyEvents, 'proxy.chat.received')) {
@@ -604,11 +590,12 @@ function createSelfCheckSteps() {
     { id: 'binary-check', label: '检查 OpenCode 程序文件', status: 'pending', message: '' },
     { id: 'runtime-write-check', label: '检查运行目录写入能力', status: 'pending', message: '' },
     { id: 'tool-check', label: '校验已集成命令工具', status: 'pending', message: '' },
-    { id: 'direct-model-test', label: '直接测试文本模型', status: 'pending', message: '' },
     { id: 'ai-proxy-start', label: '确认常驻 OpenCode AI proxy', status: 'pending', message: '' },
     { id: 'opencode-config-write', label: '确认 OpenCode 常驻配置', status: 'pending', message: '' },
     { id: 'opencode-server-start', label: '确认常驻 OpenCode Server', status: 'pending', message: '' },
     { id: 'opencode-health', label: '检查 OpenCode Server 健康状态', status: 'pending', message: '' },
+    { id: 'isolation-check', label: '检查 OpenCode 逻辑隔离', status: 'pending', message: '' },
+    { id: 'direct-model-test', label: '直接测试文本模型', status: 'pending', message: '' },
     { id: 'session-create', label: '创建 OpenCode Session', status: 'pending', message: '' },
     { id: 'message-wait', label: '执行极简智能体任务', status: 'pending', message: '' },
     { id: 'diff-fetch', label: '读取 OpenCode Diff', status: 'pending', message: '' },
@@ -684,6 +671,7 @@ function compactSelfCheckError(error) {
     opencode_stdout_tail: clipText(error?.openCodeStdoutTail || '', 4000),
     opencode_stderr_tail: clipText(error?.openCodeStderrTail || '', 4000),
     opencode_request_log: Array.isArray(error?.openCodeRequestLog) ? error.openCodeRequestLog : [],
+    isolation_check: error?.isolationCheck || null,
   };
 }
 
@@ -752,6 +740,12 @@ function formatSelfCheckDetails(result) {
     lines.push('');
     lines.push('直接模型测试：');
     lines.push(JSON.stringify(result.direct_model_test, null, 2));
+  }
+
+  if (result.isolation_check) {
+    lines.push('');
+    lines.push('OpenCode 逻辑隔离：');
+    lines.push(JSON.stringify(result.isolation_check, null, 2));
   }
 
   if (Array.isArray(result.tool_checks) && result.tool_checks.length) {
@@ -903,6 +897,7 @@ function buildSelfCheckReportMarkdown(input = {}) {
   }
 
   lines.push('', '## 环境快照', '', markdownFence(result.environment || {}, 'json'));
+  lines.push('', '## OpenCode 逻辑隔离', '', markdownFence(result.isolation_check || {}, 'json'));
   lines.push('', '## 模型配置摘要', '', markdownFence(result.model_config || {}, 'json'));
   lines.push('', '## 直接模型测试', '', markdownFence(result.direct_model_test || {}, 'json'));
   lines.push('', '## 集成工具校验', '');

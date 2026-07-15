@@ -344,6 +344,22 @@ export interface AgentSelfCheckEnvironmentSnapshot {
   text_model?: Record<string, unknown>;
 }
 
+export interface AgentIsolationCheckResult {
+  success: boolean;
+  workspace_dir: string;
+  home_dir: string;
+  config_dir: string;
+  temp_dir: string;
+  allowed_roots: string[];
+  effective_permission: string;
+  external_read_denied: boolean;
+  loaded_skills: Array<{
+    name: string;
+    location?: string;
+  }>;
+  violations: string[];
+}
+
 export interface AgentSelfCheckResult {
   success: boolean;
   status: AgentSelfCheckStatus;
@@ -361,6 +377,7 @@ export interface AgentSelfCheckResult {
   conclusion?: string;
   model_config?: Record<string, unknown>;
   environment?: AgentSelfCheckEnvironmentSnapshot | null;
+  isolation_check: AgentIsolationCheckResult | null;
   direct_model_test?: Record<string, unknown> | null;
   tool_check_summary?: string;
   tool_check_environment?: Record<string, unknown> | null;

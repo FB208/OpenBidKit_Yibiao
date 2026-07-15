@@ -16,11 +16,23 @@ function normalizeTimeoutMs(value) {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 300000;
 }
 
-function buildOpenCodeConfig({ proxyBaseUrl, contextLengthLimit, timeoutMs }) {
+// 生成仅允许易标工作区配置来源的 OpenCode 固定配置。
+function buildOpenCodeConfig({ proxyBaseUrl, contextLengthLimit, timeoutMs, instructions = [], shell }) {
   const providerTimeout = normalizeTimeoutMs(timeoutMs);
   return {
     $schema: 'https://opencode.ai/config.json',
     autoupdate: false,
+    shell,
+    instructions: instructions.filter(Boolean),
+    plugin: [],
+    mcp: {},
+    skills: {
+      paths: [],
+      urls: [],
+    },
+    permission: {
+      external_directory: 'deny',
+    },
     model: 'yibiao/default',
     small_model: 'yibiao/default',
     provider: {

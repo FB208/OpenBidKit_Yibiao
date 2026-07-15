@@ -1380,6 +1380,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
         output_file: SELF_CHECK_OUTPUT_FILE,
         output_path: path.join(serviceWorkspaceDir, SELF_CHECK_OUTPUT_FILE),
         opencode_binary_path: '',
+        isolation_check: null,
         runtime_status: getStatus(),
         steps: [],
         detail_text: '',
@@ -1396,6 +1397,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
     let config = null;
     let modelConfig = null;
     let environment = null;
+    let isolationCheck = null;
     let directModelTest = null;
     let toolCheckResult = null;
     let agentResult = null;
@@ -1521,6 +1523,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
         opencode_binary_path: opencodeBinaryPath,
         model_config: modelConfig,
         environment,
+        isolation_check: isolationCheck || error?.isolationCheck || sidecar?.isolationCheck || null,
         direct_model_test: directModelTest,
         tool_check_summary: toolCheckResult?.summary || '',
         tool_check_environment: toolCheckResult ? {
@@ -1584,9 +1587,35 @@ function createOpenCodeRuntimeService({ app, configStore }) {
         workspaceDir: serviceWorkspaceDir,
         logger,
       });
-      setStep('tool-check', 'success', toolCheckResult.success
-        ? toolCheckResult.summary || '集成工具校验通过'
-        : `集成工具校验完成，存在不可用工具：${toolCheckResult.summary || '请查看详情'}`);
+      if (!toolCheckResult.success) {
+        const toolCheckMessage = `集成工具校验失败：${toolCheckResult.summary || '存在不可用的关键工具'}`;
+        setStep('tool-check', 'error', toolCheckMessage);
+        throw createSelfCheckStageError('tool-check', toolCheckMessage);
+      }
+      setStep('tool-check', 'success', toolCheckResult.summary || '集成工具校验通过');
+
+      setStep('ai-proxy-start', 'running', '正在确认常驻 OpenCode AI proxy');
+      const runningSidecar = await ensureStarted();
+      completeRuntimeSteps();
+
+      setStep('isolation-check', 'running', '正在检查 OpenCode 逻辑隔离');
+      isolationCheck = runningSidecar?.isolationCheck || null;
+      if (!isolationCheck?.success) {
+        const violations = Array.isArray(isolationCheck?.violations)
+          ? isolationCheck.violations.filter(Boolean).join('；')
+          : '';
+        const isolationError = createSelfCheckStageError(
+          'isolation-check',
+          violations ? `OpenCode 逻辑隔离检查失败：${violations}` : 'OpenCode 逻辑隔离未返回有效结果'
+        );
+        isolationError.isolationCheck = isolationCheck;
+        throw isolationError;
+      }
+      setStep(
+        'isolation-check',
+        'success',
+        `外部目录规则已拒绝，已加载 ${isolationCheck.loaded_skills?.length || 0} 个 Skill`
+      );
 
       setStep('direct-model-test', 'running', '正在直接请求当前文本模型');
       directModelTest = await runDirectModelSelfCheck(config);
@@ -1595,7 +1624,6 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       }
       setStep('direct-model-test', 'success', directModelTest.message || '直接模型测试成功');
 
-      setStep('ai-proxy-start', 'running', '正在确认常驻 OpenCode AI proxy');
       agentTaskStarted = true;
       agentResult = await runTask({
         task_id: SELF_CHECK_TASK_ID,

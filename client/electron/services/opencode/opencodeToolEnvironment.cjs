@@ -121,7 +121,7 @@ function writeCommandShim(binDir, command, runnerPath) {
       'setlocal',
       'if "%YIBIAO_ELECTRON_NODE%"=="" set "YIBIAO_ELECTRON_NODE=node"',
       'set "ELECTRON_RUN_AS_NODE=1"',
-      `"%YIBIAO_ELECTRON_NODE%" "${runnerPath}" "${command}" %*`,
+      `"%YIBIAO_ELECTRON_NODE%" "%~dp0yibiao-tool-runner.cjs" "${command}" %*`,
       'exit /b %ERRORLEVEL%',
       '',
     ].join('\r\n'));
