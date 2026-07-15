@@ -1,12 +1,12 @@
 ﻿import { useEffect, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useToast } from '../../../shared/ui';
+import { DetailHelpLink, FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentToolCheckResult, AiRequestMode, ClientConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentToolCheckResult, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
-type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'agent' | 'about';
+type SettingsTab = 'general' | 'text-model' | 'image-model' | 'components' | 'agent' | 'about';
 type UpdateStatus = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'error' | 'disabled';
 type AgentSelfCheckUiStatus = 'untested' | 'checking' | 'normal' | 'busy' | 'error';
 
@@ -14,7 +14,7 @@ const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
   { id: 'general', label: '通用' },
   { id: 'text-model', label: '文本模型' },
   { id: 'image-model', label: '生图模型' },
-  { id: 'file-parser', label: '文件解析' },
+  { id: 'components', label: '组件设置' },
   { id: 'agent', label: '智能体配置' },
   { id: 'about', label: '关于' },
 ];
@@ -350,6 +350,49 @@ function parseImageConcurrencyLimitInput(value: string): number | '' {
   return Number.isFinite(number) ? Math.max(1, Math.round(number)) : '';
 }
 
+const DEFAULT_COMPONENT_CONCURRENCY_LIMIT = 5;
+const MIN_COMPONENT_CONCURRENCY_LIMIT = 1;
+const MAX_COMPONENT_CONCURRENCY_LIMIT = 20;
+
+// 归一化组件转换并发量。
+function normalizeComponentConcurrencyLimit(value?: number | string): number {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return DEFAULT_COMPONENT_CONCURRENCY_LIMIT;
+  return Math.min(MAX_COMPONENT_CONCURRENCY_LIMIT, Math.max(MIN_COMPONENT_CONCURRENCY_LIMIT, Math.round(number)));
+}
+
+// 解析组件并发输入。
+function parseComponentConcurrencyLimitInput(value: string): number | '' {
+  if (value === '') return '';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '';
+  return Math.min(MAX_COMPONENT_CONCURRENCY_LIMIT, Math.max(MIN_COMPONENT_CONCURRENCY_LIMIT, Math.round(number)));
+}
+
+// 归一化组件设置状态。
+function normalizeComponentsState(components?: Partial<ComponentsConfig>): SettingsPageState['components'] {
+  return {
+    file_parser: {
+      provider: components?.file_parser?.provider || 'local',
+      mineru_token: components?.file_parser?.mineru_token || '',
+    },
+    mermaid_concurrency_limit: normalizeComponentConcurrencyLimit(components?.mermaid_concurrency_limit),
+    html_concurrency_limit: normalizeComponentConcurrencyLimit(components?.html_concurrency_limit),
+  };
+}
+
+// 从设置状态生成可保存的组件配置。
+function componentsFromState(components: SettingsPageState['components']): ComponentsConfig {
+  return {
+    file_parser: {
+      provider: components.file_parser.provider,
+      mineru_token: components.file_parser.mineru_token || '',
+    },
+    mermaid_concurrency_limit: normalizeComponentConcurrencyLimit(components.mermaid_concurrency_limit),
+    html_concurrency_limit: normalizeComponentConcurrencyLimit(components.html_concurrency_limit),
+  };
+}
+
 function normalizeImageModelProfiles(profiles?: Partial<ImageModelProfiles>): ImageModelProfiles {
   return imageProviders.reduce((nextProfiles, provider) => ({
     ...nextProfiles,
@@ -470,9 +513,13 @@ const initialState: SettingsPageState = {
     ...imageProviderDefaults.jinlong,
   },
   imageModelProfiles: createDefaultImageModelProfiles(),
-  fileParser: {
-    provider: 'local',
-    mineru_token: '',
+  components: {
+    file_parser: {
+      provider: 'local',
+      mineru_token: '',
+    },
+    mermaid_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
+    html_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
   },
   agentModeScenarios: { ...defaultAgentModeScenarios },
   general: {
@@ -562,10 +609,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         textModelProfiles,
         imageModel: activeImageProfile,
         imageModelProfiles,
-        fileParser: {
-          provider: config.file_parser.provider,
-          mineru_token: config.file_parser.mineru_token || '',
-        },
+        components: normalizeComponentsState(config.components),
         agentModeScenarios: normalizeAgentModeScenarios(config.agent_mode_scenarios),
         general: {
           developer_mode: Boolean(config.developer_mode),
@@ -611,10 +655,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       request_mode: activeTextProfile.request_mode,
       image_model: activeImageProfile,
       image_model_profiles: imageModelProfiles,
-      file_parser: {
-        provider: state.fileParser.provider,
-        mineru_token: state.fileParser.mineru_token || '',
-      },
+      components: componentsFromState(state.components),
       agent_mode_scenarios: state.agentModeScenarios,
       update_channel: state.general.update_channel,
       gpu_hardware_acceleration_enabled: state.general.gpu_hardware_acceleration_enabled,
@@ -1027,7 +1068,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
   };
 
-  const saveFileParserConfig = async () => {
+  const saveComponentsConfig = async () => {
     await saveClientConfig(createClientConfig());
   };
 
@@ -1196,8 +1237,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       });
     }
 
-    if (activeTab === 'file-parser') {
-      return JSON.stringify(state.fileParser) !== JSON.stringify(savedConfig.file_parser);
+    if (activeTab === 'components') {
+      return JSON.stringify(componentsFromState(state.components)) !== JSON.stringify(normalizeComponentsState(savedConfig.components));
     }
 
     if (activeTab === 'agent') {
@@ -1278,8 +1319,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       await saveImageConfig();
       return;
     }
-    if (activeTab === 'file-parser') {
-      await saveFileParserConfig();
+    if (activeTab === 'components') {
+      await saveComponentsConfig();
       return;
     }
     if (activeTab === 'agent') {
@@ -1287,7 +1328,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
   };
 
-  const canSaveActiveTab = activeTab === 'general' || activeTab === 'text-model' || activeTab === 'image-model' || activeTab === 'file-parser' || activeTab === 'agent';
+  const canSaveActiveTab = activeTab === 'general' || activeTab === 'text-model' || activeTab === 'image-model' || activeTab === 'components' || activeTab === 'agent';
   const activeTabDirty = isActiveTabDirty();
   const currentTextProviderDefault = textProviderDefaults[state.textModel.provider];
   const imageModelStatus: ImageModelStatus = state.imageModel.status || 'untested';
@@ -1766,31 +1807,82 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         </section>
       )}
 
-      {activeTab === 'file-parser' && (
+      {activeTab === 'components' && (
         <section className="settings-page-section">
           <div className="settings-section-title">
             <span />
-            <strong>文件解析配置</strong>
+            <strong>组件设置</strong>
+          </div>
+
+          <div className="settings-section-title">
+            <span />
+            <strong>文件解析</strong>
           </div>
           <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>文件解析方式</strong>
-                <span>优先使用本地解析，复杂扫描件可尝试 MinerU 精准解析 API</span>
+                <span>
+                  优先使用本地解析，复杂扫描件可尝试 MinerU 精准解析 API
+                  <DetailHelpLink title="文件解析方式说明" label="查看介绍">
+                    <div className="parser-help-dialog">
+                      <p className="parser-help-note">
+                        招标文件大多数是 Word 或 Word 导出的带文字层 PDF，本地解析可以适应 95% 以上的情况；如果解析失败，再尝试 MinerU 精准解析 API。
+                      </p>
+                      <div className="parser-help-table-wrap">
+                        <table className="parser-help-table">
+                          <thead>
+                            <tr>
+                              <th scope="col">对比项</th>
+                              {parserOptions.map((option) => (
+                                <th scope="col" className={`parser-help-col-${option.tone}`} key={option.title}>
+                                  <strong>{option.title}</strong>
+                                  <span>{option.badge}</span>
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <th scope="row">说明</th>
+                              {parserOptions.map((option) => (
+                                <td key={`${option.title}-summary`}>{option.summary}</td>
+                              ))}
+                            </tr>
+                            {parserOptions[0].items.map(([label], rowIndex) => (
+                              <tr key={label}>
+                                <th scope="row">{label}</th>
+                                {parserOptions.map((option) => (
+                                  <td key={`${option.title}-${label}`}>{option.items[rowIndex][1]}</td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </DetailHelpLink>
+                </span>
               </div>
               <select
-                value={state.fileParser.provider}
+                value={state.components.file_parser.provider}
                 onChange={(event) => setState((prev) => ({
-                ...prev,
-                fileParser: { ...prev.fileParser, provider: event.target.value as FileParserProvider },
-              }))}
-            >
-              {fileParserProviders.map((provider) => (
+                  ...prev,
+                  components: {
+                    ...prev.components,
+                    file_parser: {
+                      ...prev.components.file_parser,
+                      provider: event.target.value as FileParserProvider,
+                    },
+                  },
+                }))}
+              >
+                {fileParserProviders.map((provider) => (
                   <option value={provider.value} key={provider.value}>{provider.label}</option>
                 ))}
               </select>
             </label>
-            {state.fileParser.provider === 'mineru-accurate-api' && (
+            {state.components.file_parser.provider === 'mineru-accurate-api' && (
               <label className="settings-row">
                 <div className="settings-row-copy">
                   <strong>MinerU Token</strong>
@@ -1798,40 +1890,66 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 </div>
                 <input
                   type="password"
-                  value={state.fileParser.mineru_token || ''}
+                  value={state.components.file_parser.mineru_token || ''}
                   placeholder="请输入 MinerU Token"
                   onChange={(event) => setState((prev) => ({
                     ...prev,
-                    fileParser: { ...prev.fileParser, mineru_token: event.target.value },
+                    components: {
+                      ...prev.components,
+                      file_parser: {
+                        ...prev.components.file_parser,
+                        mineru_token: event.target.value,
+                      },
+                    },
                   }))}
                 />
               </label>
             )}
           </div>
 
-          <div className="parser-compare">
-            {parserOptions.map((option) => (
-              <article className={`parser-card parser-card-${option.tone}`} key={option.title}>
-                <div className="parser-card-head">
-                  <div>
-                    <strong>{option.title}</strong>
-                    <p>{option.summary}</p>
-                  </div>
-                  <span>{option.badge}</span>
-                </div>
-                <dl className="parser-metrics">
-                  {option.items.map(([label, value]) => (
-                    <div key={`${option.title}-${label}`}>
-                      <dt>{label}</dt>
-                      <dd>{value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </article>
-            ))}
+          <div className="settings-section-title" style={{ marginTop: 28 }}>
+            <span />
+            <strong>本地转图组件</strong>
           </div>
-          <div className="parser-note">
-            招标文件大多数是 Word 或 Word 导出的带文字层 PDF，本地解析可以适应 95% 以上的情况；如果解析失败，再尝试 MinerU 精准解析 API。
+          <div className="settings-list">
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>Mermaid 转换并发量</strong>
+                <span>同时本地渲染 Mermaid 图的最大任务数，默认 5</span>
+              </div>
+              <input
+                type="number"
+                min={MIN_COMPONENT_CONCURRENCY_LIMIT}
+                max={MAX_COMPONENT_CONCURRENCY_LIMIT}
+                value={state.components.mermaid_concurrency_limit}
+                onChange={(event) => setState((prev) => ({
+                  ...prev,
+                  components: {
+                    ...prev.components,
+                    mermaid_concurrency_limit: parseComponentConcurrencyLimitInput(event.target.value),
+                  },
+                }))}
+              />
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>HTML 转换并发量</strong>
+                <span>同时本地截取 HTML 配图的最大任务数，默认 5</span>
+              </div>
+              <input
+                type="number"
+                min={MIN_COMPONENT_CONCURRENCY_LIMIT}
+                max={MAX_COMPONENT_CONCURRENCY_LIMIT}
+                value={state.components.html_concurrency_limit}
+                onChange={(event) => setState((prev) => ({
+                  ...prev,
+                  components: {
+                    ...prev.components,
+                    html_concurrency_limit: parseComponentConcurrencyLimitInput(event.target.value),
+                  },
+                }))}
+              />
+            </label>
           </div>
         </section>
       )}

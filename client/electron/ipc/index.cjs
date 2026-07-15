@@ -31,6 +31,7 @@ const { createTaskService } = require('../services/taskService.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
 const { createTemplateStore } = require('../services/templateStore.cjs');
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
+const { initLocalImageRenderService } = require('../services/localImageRenderService.cjs');
 
 function normalizeExternalUrl(value) {
   const raw = String(value || '').trim();
@@ -197,6 +198,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
 function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow }) {
   void checkRequiredOnlineServices();
   const configStore = createConfigStore(app);
+  initLocalImageRenderService({ configStore });
   const licenseService = createLicenseService({ app, configStore });
   const aiService = createAiService({ app, configStore });
   const developerExpansionReplaceTestService = createDeveloperExpansionReplaceTestService({ aiService });

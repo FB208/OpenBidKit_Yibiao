@@ -2,18 +2,8 @@ const { execFile } = require('node:child_process');
 
 const PING_TIMEOUT_MS = 5000;
 
-const REQUIRED_ONLINE_SERVICES = Object.freeze({
-  'html-to-image': Object.freeze({
-    id: 'html-to-image',
-    label: 'HTML 转图片服务',
-    domain: 'mt.agnet.top',
-  }),
-  'mermaid-to-image': Object.freeze({
-    id: 'mermaid-to-image',
-    label: 'Mermaid 转图片服务',
-    domain: 'mermaid.ink',
-  }),
-});
+// 当前无必须联网服务；保留注册表结构便于后续扩展。
+const REQUIRED_ONLINE_SERVICES = Object.freeze({});
 
 const serviceStatuses = new Map(Object.values(REQUIRED_ONLINE_SERVICES).map((service) => [service.id, {
   ...service,

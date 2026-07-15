@@ -11,6 +11,9 @@ const updateChannels = ['github', 'cloudflare'];
 const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
+const DEFAULT_COMPONENT_CONCURRENCY_LIMIT = 5;
+const MIN_COMPONENT_CONCURRENCY_LIMIT = 1;
+const MAX_COMPONENT_CONCURRENCY_LIMIT = 20;
 const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#eef5ff', '#f3f7ff', '#f8fbff', '#fbfdff', '#ffffff', '#ffffff'];
 const openAICompatibleImageSizes = ['auto', '1024x1024', '1536x1024', '1024x1536', '2048x2048', '2048x1152', '3840x2160', '2160x3840'];
 const googleImageSizes = ['512', '1K', '2K', '4K'];
@@ -232,9 +235,13 @@ const defaultConfig = {
     ...defaultImageModelProfiles.jinlong,
   },
   image_model_profiles: defaultImageModelProfiles,
-  file_parser: {
-    provider: 'local',
-    mineru_token: '',
+  components: {
+    file_parser: {
+      provider: 'local',
+      mineru_token: '',
+    },
+    mermaid_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
+    html_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
   },
   update_channel: 'github',
   gpu_hardware_acceleration_enabled: true,
@@ -295,6 +302,35 @@ function normalizeTextConcurrencyLimit(value, fallback = DEFAULT_TEXT_CONCURRENC
 function normalizeImageConcurrencyLimit(value, fallback = DEFAULT_IMAGE_CONCURRENCY_LIMIT) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
+}
+
+// 归一化组件转换并发量，限制在 1-20。
+function normalizeComponentConcurrencyLimit(value, fallback = DEFAULT_COMPONENT_CONCURRENCY_LIMIT) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(MAX_COMPONENT_CONCURRENCY_LIMIT, Math.max(MIN_COMPONENT_CONCURRENCY_LIMIT, Math.round(number)));
+}
+
+// 归一化组件设置（文件解析 + Mermaid/HTML 转换并发）。
+function normalizeComponentsConfig(source) {
+  const components = source && typeof source === 'object' ? source : {};
+  const fileParser = components.file_parser && typeof components.file_parser === 'object'
+    ? components.file_parser
+    : {};
+  return {
+    file_parser: {
+      provider: fileParser.provider || defaultConfig.components.file_parser.provider,
+      mineru_token: fileParser.mineru_token || defaultConfig.components.file_parser.mineru_token,
+    },
+    mermaid_concurrency_limit: normalizeComponentConcurrencyLimit(
+      components.mermaid_concurrency_limit,
+      defaultConfig.components.mermaid_concurrency_limit,
+    ),
+    html_concurrency_limit: normalizeComponentConcurrencyLimit(
+      components.html_concurrency_limit,
+      defaultConfig.components.html_concurrency_limit,
+    ),
+  };
 }
 
 function normalizeTextModelProfile(provider, profile) {
@@ -588,7 +624,6 @@ function normalizeExportFormat(source) {
 
 function normalizeConfig(config) {
   const source = config || {};
-  const fileParser = source.file_parser ? source.file_parser : {};
   const hasTextProvider = Object.prototype.hasOwnProperty.call(source, 'text_model_provider');
   const rawTextProvider = typeof source.text_model_provider === 'string' ? source.text_model_provider : '';
   const sourceTextProvider = isTextModelProvider(rawTextProvider) || isLegacyTextModelProvider(rawTextProvider)
@@ -631,10 +666,7 @@ function normalizeConfig(config) {
     request_mode: activeTextProfile.request_mode,
     image_model: activeImageProfile,
     image_model_profiles: imageModelProfiles,
-    file_parser: {
-      provider: fileParser.provider || defaultConfig.file_parser.provider,
-      mineru_token: fileParser.mineru_token || defaultConfig.file_parser.mineru_token,
-    },
+    components: normalizeComponentsConfig(source.components),
     update_channel: normalizeUpdateChannel(source.update_channel),
     gpu_hardware_acceleration_enabled: gpuHardwareAccelerationEnabled,
     gpu_hardware_acceleration_configured: gpuHardwareAccelerationConfigured === false ? true : gpuHardwareAccelerationConfigured,

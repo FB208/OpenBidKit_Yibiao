@@ -30,7 +30,7 @@
 - Renderer 只用 `localStorage` 存轻量 UI 偏好；大文本、草稿、API Key、流程状态都走 Main 侧存储/IPC。
 - 技术方案 Step01 只导入/展示 Markdown；Step02/Step03/Step04 的耗时任务都在 Electron Main 后台任务中跑，并持续写入 `workspaceStore`。
 - 正文展示和导出以 `outlineData.outline[*].content` 为权威来源；目录重新生成、编辑、添加或删除后必须清空旧正文内容和生成缓存。
-- Mermaid 图以 Markdown `mermaid` 代码块保存；Renderer 本地渲染预览，Word 导出由 Main 转图片并通过 `window.yibiao.export.onWordExportProgress()` 报进度。
+- Mermaid 图以 Markdown `mermaid` 代码块保存；Renderer 本地渲染预览，Word 导出由 Main 本地转图片（不依赖外网）并通过 `window.yibiao.export.onWordExportProgress()` 报进度。
 - AI 生成 Markdown 默认不启用 `rehypeRaw`；只有明确需要渲染可信 HTML 时才局部开启并说明原因。
 
 ## 聚焦验证

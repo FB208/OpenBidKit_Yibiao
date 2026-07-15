@@ -1156,7 +1156,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
               <Dialog.Title>{exportProgress.running ? '正在导出 Word' : exportProgress.error ? '导出失败' : '导出完成'}</Dialog.Title>
               <Dialog.Description>
                 {exportProgress.mermaidCount > 0
-                  ? `本次包含 ${exportProgress.mermaidCount} 张 Mermaid 图，导出时会通过 mermaid.ink 转换成 Word 图片，速度受网络影响。`
+                  ? `本次包含 ${exportProgress.mermaidCount} 张 Mermaid 图，导出时会在本地转换成 Word 图片。`
                   : '正在将正文、表格和图片写入 Word 文档。'}
               </Dialog.Description>
             </div>

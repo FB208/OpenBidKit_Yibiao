@@ -1,17 +1,13 @@
-const zlib = require('node:zlib');
 const {
   assertSupportedMermaidDiagramType,
   assertSupportedMermaidSyntax,
   getMermaidDiagramTypeLabel,
 } = require('../utils/mermaidPolicy.cjs');
 const { runWithRemoteImageRetry } = require('../utils/remoteImageRetry.cjs');
-const { executeRequiredOnlineService } = require('./requiredOnlineServices.cjs');
+const { HTML_DESIGN_WIDTH, getLocalImageRenderService } = require('./localImageRenderService.cjs');
 
 const HTML_AGENT_THRESHOLD_CHARS = 50000;
-const HTML_SCREENSHOT_URL = 'https://mt.agnet.top/image/url2png';
-const HTML_SCREENSHOT_TIMEOUT_MS = 120000;
 const MERMAID_REPAIR_ATTEMPTS = 3;
-const MERMAID_RENDER_TIMEOUT_MS = 15000;
 const GENERATED_ILLUSTRATION_PATTERN = /<!-- yibiao-illustration:start\b[^>]*-->[\s\S]*?<!-- yibiao-illustration:end -->/gi;
 
 function singleLine(value) {
@@ -88,7 +84,7 @@ function buildHtmlImagePrompt(execution) {
   return `阅读并理解以下内容，用html绘制一张${execution.planItem.image_type}。
 最终图题：${title}
 必须围绕最终图题限定的对象、范围和关系重点设计图形，不要生成泛化的章节概览。
-不要有太多文字描述，专业商务风格。这是一个类图片的html，所以注意仔细检查显示效果、文字换行、拥挤等问题。宽度固定1240px，高度自适应。参考内容如下：
+不要有太多文字描述，专业商务风格。这是一个类图片的html，所以注意仔细检查显示效果、文字换行、拥挤等问题。宽度固定${HTML_DESIGN_WIDTH}px，高度自适应。参考内容如下：
 
 ${execution.reference}`;
 }
@@ -103,7 +99,7 @@ function buildHtmlAgentPrompt(execution) {
 1. 必须围绕最终图题限定的对象、范围和关系重点设计图形，不要生成泛化的章节概览。
 2. 不要有太多文字描述，使用专业商务风格。
 3. 这是一个类图片的 HTML，必须仔细检查显示效果、文字换行和内容拥挤问题。
-4. 页面宽度固定为 1240px，高度自适应。
+  4. 页面宽度固定为 ${HTML_DESIGN_WIDTH}px，高度自适应。
 5. 生成完整 HTML 文档，包含 html、head、body，不依赖本地文件。
 6. 只创建 illustration.html，不要修改 reference.md，不要创建其他结果文件。`;
 }
@@ -157,27 +153,13 @@ function assertMermaidPreviewCompatible(code) {
   if (/^\s*[\u3400-\u9fff][\w\u3400-\u9fff-]*\s*(?:-->|---|==>)/mu.test(normalized)) throw new Error('Mermaid 节点 ID 不能直接使用中文');
 }
 
-function mermaidInkUrl(code) {
-  const state = JSON.stringify({ code: String(code || ''), mermaid: { theme: 'default' } });
-  const payload = zlib.deflateSync(Buffer.from(state, 'utf-8')).toString('base64url');
-  return `https://mermaid.ink/img/pako:${payload}?type=png&bgColor=!white`;
-}
-
+// 通过本地渲染校验 Mermaid 是否可出图。
 async function validateMermaidRender(code) {
   const normalized = normalizeMermaidCode(code);
   assertMermaidPreviewCompatible(normalized);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), MERMAID_RENDER_TIMEOUT_MS);
-  try {
-    const response = await fetch(mermaidInkUrl(normalized), { signal: controller.signal });
-    if (!response.ok || !/image\//i.test(response.headers.get('content-type') || '')) {
-      throw new Error(`Mermaid 渲染失败：HTTP ${response.status || 'unknown'}`);
-    }
-  } catch (error) {
-    if (error?.name === 'AbortError') throw new Error('Mermaid 渲染校验超时');
-    throw error;
-  } finally {
-    clearTimeout(timeout);
+  const rendered = await getLocalImageRenderService().renderMermaidToPng(normalized);
+  if (!rendered?.buffer?.length) {
+    throw new Error('Mermaid 本地渲染失败：未生成有效图片');
   }
 }
 
@@ -275,57 +257,27 @@ async function generateMermaidIllustrationInternal(aiService, execution, isPause
   return prepareRenderableMermaid({ aiService, execution, mermaidPlan: generated, isPauseLikeError });
 }
 
-// 仅在 Mermaid 转图片服务可用时执行完整生成流程。
+// 生成并校验可本地渲染的 Mermaid 配图。
 async function generateMermaidIllustration(aiService, execution, isPauseLikeError) {
-  return executeRequiredOnlineService(
-    'mermaid-to-image',
-    () => generateMermaidIllustrationInternal(aiService, execution, isPauseLikeError),
-  );
+  return generateMermaidIllustrationInternal(aiService, execution, isPauseLikeError);
 }
 
+// 本地将 HTML 截取为 PNG，失败按统一策略重试。
 async function requestHtmlScreenshot(html, onRetry, pauseControl = {}) {
   let requestAttempts = 0;
   const result = await runWithRemoteImageRetry(async (attempt) => {
     requestAttempts = attempt;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), HTML_SCREENSHOT_TIMEOUT_MS);
-    const pauseWatcher = pauseControl.isPauseRequested
-      ? setInterval(() => {
-        if (pauseControl.isPauseRequested() && !controller.signal.aborted) {
-          controller.abort();
-        }
-      }, 100)
-      : null;
-    try {
-      const response = await fetch(HTML_SCREENSHOT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          html_base64: Buffer.from(html, 'utf-8').toString('base64'),
-          capture_mode: 'full_page',
-          response_type: 'base64',
-        }),
-        signal: controller.signal,
-      });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok || payload?.success !== true || !payload?.data?.image_base64) {
-        throw new Error(payload?.message || `HTML 转图片失败：HTTP ${response.status || 'unknown'}`);
-      }
-      const imageBase64 = String(payload.data.image_base64).replace(/^data:image\/png;base64,/i, '').replace(/\s+/g, '');
-      const buffer = Buffer.from(imageBase64, 'base64');
-      if (buffer.length < 8 || buffer.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') {
-        throw new Error('HTML 转图片服务返回的内容不是有效 PNG');
-      }
-      return { buffer, width: payload.data.width, height: payload.data.height };
-    } catch (error) {
-      if (pauseControl.isPauseRequested?.()) {
-        throw pauseControl.createPauseError?.() || error;
-      }
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-      if (pauseWatcher) clearInterval(pauseWatcher);
+    if (pauseControl.isPauseRequested?.()) {
+      throw pauseControl.createPauseError?.() || new Error('HTML 转图已暂停');
     }
+    const rendered = await getLocalImageRenderService().renderHtmlToPng(html, {
+      isPauseRequested: pauseControl.isPauseRequested,
+      createPauseError: pauseControl.createPauseError,
+    });
+    if (!rendered?.buffer?.length || rendered.buffer.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') {
+      throw new Error('HTML 本地转图片失败：未生成有效 PNG');
+    }
+    return { buffer: rendered.buffer, width: rendered.width, height: rendered.height };
   }, {
     onRetry,
     shouldStop: pauseControl.isPauseRequested,
@@ -334,7 +286,7 @@ async function requestHtmlScreenshot(html, onRetry, pauseControl = {}) {
   return { ...result, attempts: requestAttempts };
 }
 
-// 生成 HTML 源文件并调用远程服务转换为 PNG。
+// 生成 HTML 源文件并本地转换为 PNG。
 async function generateHtmlIllustrationInternal({ aiService, execution, plan, workspaceStore, runAgentHtml, onSourceSaved, onRenderRetry, isPauseRequested, createPauseError }) {
   const recordedPath = execution.planItem.generation?.source_path;
   let sourcePath = recordedPath;
@@ -388,12 +340,9 @@ async function generateHtmlIllustrationInternal({ aiService, execution, plan, wo
   };
 }
 
-// 仅在 HTML 转图片服务可用时执行完整生成流程。
+// 生成 HTML 配图（源码 + 本地截图）。
 async function generateHtmlIllustration(options) {
-  return executeRequiredOnlineService(
-    'html-to-image',
-    () => generateHtmlIllustrationInternal(options),
-  );
+  return generateHtmlIllustrationInternal(options);
 }
 
 function stripGeneratedIllustrations(content) {

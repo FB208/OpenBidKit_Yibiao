@@ -37,7 +37,7 @@ export interface WordExportResult {
 }
 
 export interface RequiredOnlineServiceStatus {
-  id: 'html-to-image' | 'mermaid-to-image';
+  id: string;
   label: string;
   domain: string;
   available: boolean;

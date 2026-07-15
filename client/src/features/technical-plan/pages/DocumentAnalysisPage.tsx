@@ -71,7 +71,7 @@ function DocumentAnalysisPage({
       try {
         const config = await window.yibiao.config.load();
         if (mounted) {
-          setConfiguredParserLabel(parserLabels[config.file_parser.provider] || parserLabels.local);
+          setConfiguredParserLabel(parserLabels[config.components?.file_parser?.provider] || parserLabels.local);
         }
       } catch (error) {
         showToast(error instanceof Error ? error.message : '读取文件解析配置失败', 'error');

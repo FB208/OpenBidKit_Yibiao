@@ -1,4 +1,4 @@
-import type { AgentModeScenariosConfig, ConfiguredTextModelProvider, FileParserConfig, ImageModelConfig, ImageModelProfiles, TextModelConfig, TextModelProfiles, UpdateChannel } from '../../shared/types';
+import type { AgentModeScenariosConfig, ComponentsConfig, ConfiguredTextModelProvider, ImageModelConfig, ImageModelProfiles, TextModelConfig, TextModelProfiles, UpdateChannel } from '../../shared/types';
 
 export interface SettingsPageState {
   textModel: Omit<TextModelConfig, 'context_length_limit' | 'concurrency_limit'> & {
@@ -11,7 +11,10 @@ export interface SettingsPageState {
     concurrency_limit: number | '';
   };
   imageModelProfiles: ImageModelProfiles;
-  fileParser: FileParserConfig;
+  components: Omit<ComponentsConfig, 'mermaid_concurrency_limit' | 'html_concurrency_limit'> & {
+    mermaid_concurrency_limit: number | '';
+    html_concurrency_limit: number | '';
+  };
   agentModeScenarios: AgentModeScenariosConfig;
   general: {
     developer_mode: boolean;

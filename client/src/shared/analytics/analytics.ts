@@ -169,7 +169,7 @@ function booleanText(value: boolean | undefined) {
 
 function buildBaseConfigUsage(config?: ClientConfig | null): ConfigUsagePayload {
   return {
-    file_parser_provider: config?.file_parser?.provider,
+    file_parser_provider: config?.components?.file_parser?.provider,
     image_provider: config?.image_model?.provider,
     image_model_status: config?.image_model?.status || undefined,
   };

@@ -1,6 +1,5 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const zlib = require('node:zlib');
 const { fileURLToPath } = require('node:url');
 const { app, dialog, nativeImage } = require('electron');
 const cheerio = require('cheerio');
@@ -11,7 +10,7 @@ const { assertSupportedMermaidSyntax } = require('../utils/mermaidPolicy.cjs');
 const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
 const { REMOTE_IMAGE_RETRY_ATTEMPTS, REMOTE_IMAGE_RETRY_DELAY_MS } = require('../utils/remoteImageRetry.cjs');
 const { renderMarkdownHtml } = require('../utils/renderMarkdownHtml.cjs');
-const { executeRequiredOnlineService } = require('./requiredOnlineServices.cjs');
+const { getLocalImageRenderService } = require('./localImageRenderService.cjs');
 const {
   AlignmentType,
   BorderStyle,
@@ -102,18 +101,6 @@ const PAPER_DIMENSIONS_MM = {
 
 function mmToTwips(mm) {
   return Math.round(mm * 56.6929); // 1mm = 1440 twips ÷ 25.4 mm/inch
-}
-
-function encodeMermaidForInk(code) {
-  const state = JSON.stringify({
-    code: String(code || ''),
-    mermaid: { theme: 'default' },
-  });
-  return `pako:${zlib.deflateSync(Buffer.from(state, 'utf-8')).toString('base64url')}`;
-}
-
-function mermaidInkUrl(code) {
-  return `https://mermaid.ink/img/${encodeMermaidForInk(code)}?type=png&bgColor=!white`;
 }
 
 function delay(ms) {
@@ -1183,19 +1170,48 @@ async function resolveMermaidImageForExport(code, context = {}, options = {}) {
     };
   }
 
-  const loaded = await executeRequiredOnlineService(
-    'mermaid-to-image',
-    () => loadImageWithRetry(mermaidInkUrl(cacheEntry.code), context, options.loadRetry),
-  );
-  if (loaded?.buffer?.length) {
+  const retryAttempts = Math.max(0, Number(options.loadRetry?.retryAttempts ?? REMOTE_IMAGE_RETRY_ATTEMPTS) || 0);
+  const retryDelayMs = Math.max(0, Number(options.loadRetry?.retryDelayMs ?? REMOTE_IMAGE_RETRY_DELAY_MS) || 0);
+  let attempt = 0;
+  let lastError = null;
+  let loaded = null;
+
+  while (attempt <= retryAttempts) {
     try {
-      saveMermaidCacheImage(app, cacheEntry.hash, loaded.buffer);
+      const rendered = await getLocalImageRenderService().renderMermaidToPng(cacheEntry.code);
+      if (!rendered?.buffer?.length) {
+        throw new Error('Mermaid 本地转换未生成有效图片');
+      }
+      loaded = {
+        buffer: rendered.buffer,
+        type: 'png',
+        width: rendered.width,
+        height: rendered.height,
+      };
+      lastError = null;
+      break;
     } catch (error) {
-      writeExportLog(context, 'export.mermaid.cache_write_failed', {
-        cache_hash: cacheEntry.hash,
-        error: compactLogError(error),
-      });
+      lastError = error;
+      attempt += 1;
+      if (attempt > retryAttempts) break;
+      if (typeof options.loadRetry?.onRetry === 'function') {
+        options.loadRetry.onRetry(attempt, error);
+      }
+      if (retryDelayMs > 0) await delay(retryDelayMs);
     }
+  }
+
+  if (!loaded?.buffer?.length) {
+    throw lastError || new Error('Mermaid 本地转换失败');
+  }
+
+  try {
+    saveMermaidCacheImage(app, cacheEntry.hash, loaded.buffer);
+  } catch (error) {
+    writeExportLog(context, 'export.mermaid.cache_write_failed', {
+      cache_hash: cacheEntry.hash,
+      error: compactLogError(error),
+    });
   }
 
   return {
@@ -1557,7 +1573,7 @@ async function mermaidCodeToDocxBlocks(code, context) {
     });
     reportConversionProgress(context, cacheEntry.exists
       ? `Mermaid 图 ${nextIndex}/${total} 已命中本地缓存。`
-      : `正在转换 Mermaid 图 ${nextIndex}/${total}，可能需要联网等待。`);
+      : `正在本地转换 Mermaid 图 ${nextIndex}/${total}。`);
     const loadRetry = {
       retryAttempts: REMOTE_IMAGE_RETRY_ATTEMPTS,
       retryDelayMs: REMOTE_IMAGE_RETRY_DELAY_MS,

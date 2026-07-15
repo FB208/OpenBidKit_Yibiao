@@ -803,7 +803,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
 
     try {
       const document = getDocument(documentId);
-      const config = configStore ? configStore.load() : { file_parser: { provider: 'local' } };
+      const config = configStore ? configStore.load() : { components: { file_parser: { provider: 'local' } } };
       const documentDir = fromRelative(baseDir, document.document_dir);
       const sourcePath = fromRelative(baseDir, document.source_path);
       const markdownPath = fromRelative(baseDir, document.markdown_path);

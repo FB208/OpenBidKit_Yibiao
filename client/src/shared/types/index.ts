@@ -33,6 +33,7 @@ export type {
   ClientConfig,
   ConfiguredTextModelProvider,
   ConfigSaveResult,
+  ComponentsConfig,
   FileParserConfig,
   FileParserProvider,
   ImageModelTestResult,

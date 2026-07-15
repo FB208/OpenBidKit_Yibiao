@@ -66,6 +66,12 @@ export interface FileParserConfig {
   mineru_token?: string;
 }
 
+export interface ComponentsConfig {
+  file_parser: FileParserConfig;
+  mermaid_concurrency_limit: number;
+  html_concurrency_limit: number;
+}
+
 export interface AgentModeScenariosConfig {
   existing_plan_expansion_original_outline_extraction: boolean;
 }
@@ -73,7 +79,7 @@ export interface AgentModeScenariosConfig {
 export interface ClientConfig extends AiConfig {
   image_model: ImageModelConfig;
   image_model_profiles: ImageModelProfiles;
-  file_parser: FileParserConfig;
+  components: ComponentsConfig;
   agent_mode_scenarios: AgentModeScenariosConfig;
   update_channel?: UpdateChannel;
   gpu_hardware_acceleration_enabled?: boolean;

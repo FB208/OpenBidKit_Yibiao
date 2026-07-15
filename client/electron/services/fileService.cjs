@@ -47,7 +47,7 @@ function getSelectableExtensions(provider) {
 }
 
 function resolveFileParser(config, filePath) {
-  const requestedProvider = config.file_parser?.provider || 'local';
+  const requestedProvider = config.components?.file_parser?.provider || 'local';
   const ext = path.extname(filePath).toLowerCase();
   const requestedSupported = getSupportedExtensions(requestedProvider).has(ext);
   if (requestedSupported) {
@@ -529,7 +529,7 @@ async function parseDocumentWithConfig(app, filePath, config, options = {}) {
     if (provider === 'mineru-agent-api') {
       markdown = await parseWithMineruAgent(filePath, parseOptions);
     } else if (provider === 'mineru-accurate-api') {
-      markdown = await parseWithMineruAccurate(filePath, config.file_parser?.mineru_token || '', parseOptions);
+      markdown = await parseWithMineruAccurate(filePath, config.components?.file_parser?.mineru_token || '', parseOptions);
     } else {
       markdown = await parseLocalDocument(filePath, parseOptions);
       markdown = preserveImages ? await rewriteMarkdownImages(markdown, assets, { localBaseDir: path.dirname(filePath) }) : stripMarkdownImages(markdown);
@@ -558,8 +558,8 @@ function createFileService({ app, configStore } = {}) {
   async function importTechnicalPlanDocument(documentLabel = '招标文件', options = {}) {
     const label = String(documentLabel || '招标文件').trim() || '招标文件';
     const multiple = options?.multiple === true;
-    const config = configStore ? configStore.load() : { file_parser: { provider: 'local' } };
-    const provider = config.file_parser?.provider || 'local';
+const config = configStore ? configStore.load() : { components: { file_parser: { provider: 'local' } } };
+    const provider = config.components?.file_parser?.provider || 'local';
     const supportedExtensions = getSelectableExtensions(provider);
     const result = await dialog.showOpenDialog({
       title: `选择${label}`,
@@ -639,8 +639,8 @@ function createFileService({ app, configStore } = {}) {
     async importRejectionCheckDocument(role = 'tender') {
       const documentRole = role === 'bid' ? 'bid' : 'tender';
       const documentLabel = documentRole === 'bid' ? '投标文件' : '招标文件';
-      const config = configStore ? configStore.load() : { file_parser: { provider: 'local' } };
-      const provider = config.file_parser?.provider || 'local';
+      const config = configStore ? configStore.load() : { components: { file_parser: { provider: 'local' } } };
+      const provider = config.components?.file_parser?.provider || 'local';
       const supportedExtensions = getSelectableExtensions(provider);
       const multiple = documentRole === 'bid' || documentRole === 'tender';
       const result = await dialog.showOpenDialog({

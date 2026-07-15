@@ -737,108 +737,116 @@
   border-radius: 18px;
 }
 
-.parser-compare {
+/* 文件解析方式介绍弹窗：横向对比表 */
+.detail-help-card:has(.parser-help-table) {
+  width: min(880px, calc(100vw - 40px));
+}
+
+.parser-help-dialog {
   display: grid;
-  grid-template-columns: 1.12fr 1fr 1fr;
-  gap: 16px;
-  padding: 28px 36px 0;
+  gap: 12px;
 }
 
-.parser-card {
-  display: flex;
-  min-height: 100%;
-  flex-direction: column;
-  gap: 20px;
-  padding: 22px;
-  background: #ffffff;
-  border: 1px solid var(--yb-border-soft);
-  border-radius: 24px;
-}
-
-.parser-card-primary {
-  background: linear-gradient(180deg, rgba(33, 116, 253, 0.1) 0%, #ffffff 62%);
-  border-color: rgba(33, 116, 253, 0.28);
-  box-shadow: 0 18px 48px rgba(33, 116, 253, 0.12);
-}
-
-.parser-card-accent {
-  background: linear-gradient(180deg, rgba(91, 84, 211, 0.08) 0%, #ffffff 62%);
-}
-
-.parser-card-muted {
-  background: #fbfcff;
-}
-
-.parser-card-head {
-  display: grid;
-  gap: 14px;
-}
-
-.parser-card-head strong {
-  display: block;
-  color: var(--yb-text);
-  font-size: 20px;
-  letter-spacing: -0.02em;
-}
-
-.parser-card-head p {
-  margin: 8px 0 0;
+.parser-help-note {
+  margin: 0;
+  padding: 10px 12px;
   color: var(--yb-text-soft);
-  line-height: 1.65;
+  font-size: 13px;
+  line-height: 1.55;
+  background: rgba(33, 116, 253, 0.06);
+  border: 1px solid rgba(33, 116, 253, 0.12);
+  border-radius: 12px;
 }
 
-.parser-card-head > span {
-  width: max-content;
-  padding: 6px 10px;
-  color: var(--yb-primary);
+.parser-help-table-wrap {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 14px;
+}
+
+.parser-help-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.parser-help-table th,
+.parser-help-table td {
+  padding: 8px 10px;
+  vertical-align: top;
+  text-align: left;
   font-size: 12px;
+  line-height: 1.45;
+  border-bottom: 1px solid var(--yb-border-soft);
+  border-right: 1px solid var(--yb-border-soft);
+}
+
+.parser-help-table th:last-child,
+.parser-help-table td:last-child {
+  border-right: 0;
+}
+
+.parser-help-table thead th {
+  background: rgba(248, 250, 253, 0.95);
+  color: var(--yb-text);
+  font-weight: 700;
+}
+
+.parser-help-table thead th:first-child,
+.parser-help-table tbody th {
+  width: 72px;
+  color: var(--yb-text-muted);
+  font-weight: 700;
+  background: rgba(248, 250, 253, 0.7);
+  white-space: nowrap;
+}
+
+.parser-help-table thead th strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--yb-text);
+  font-size: 13px;
+  letter-spacing: -0.01em;
+}
+
+.parser-help-table thead th span {
+  display: inline-block;
+  padding: 2px 7px;
+  color: var(--yb-primary);
+  font-size: 11px;
   font-weight: 800;
   background: rgba(33, 116, 253, 0.1);
   border: 1px solid rgba(33, 116, 253, 0.14);
   border-radius: 999px;
 }
 
-.parser-metrics {
-  display: grid;
-  gap: 0;
-  margin: 0;
-  overflow: hidden;
-  border: 1px solid var(--yb-border-soft);
-  border-radius: 18px;
+.parser-help-table thead .parser-help-col-primary {
+  background: linear-gradient(180deg, rgba(33, 116, 253, 0.12) 0%, rgba(248, 250, 253, 0.95) 100%);
 }
 
-.parser-metrics div {
-  display: grid;
-  grid-template-columns: 86px 1fr;
-  gap: 12px;
-  padding: 12px 14px;
-  background: rgba(248, 250, 253, 0.7);
+.parser-help-table thead .parser-help-col-accent {
+  background: linear-gradient(180deg, rgba(91, 84, 211, 0.1) 0%, rgba(248, 250, 253, 0.95) 100%);
 }
 
-.parser-metrics div + div {
-  border-top: 1px solid var(--yb-border-soft);
+.parser-help-table thead .parser-help-col-muted {
+  background: #fbfcff;
 }
 
-.parser-metrics dt {
-  color: var(--yb-text-muted);
-  font-size: 13px;
-}
-
-.parser-metrics dd {
-  margin: 0;
+.parser-help-table tbody td {
   color: var(--yb-text);
-  font-weight: 700;
-  line-height: 1.45;
+  font-weight: 600;
+  word-break: break-word;
 }
 
-.parser-note {
-  margin: 18px 36px 0;
-  padding: 14px 16px;
-  color: var(--yb-text-soft);
-  line-height: 1.7;
-  background: rgba(33, 116, 253, 0.06);
-  border: 1px solid rgba(33, 116, 253, 0.12);
-  border-radius: 18px;
+.parser-help-table tbody tr:last-child th,
+.parser-help-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.parser-help-table tbody tr:nth-child(even) td {
+  background: rgba(248, 250, 253, 0.45);
 }
 
 /* [9748-9981] about-*-/privacy-* (关于/隐私声明) */
@@ -1090,10 +1098,6 @@
     grid-template-columns: 1fr;
   }
 
-  .parser-compare {
-    grid-template-columns: 1fr;
-  }
-
   .privacy-list {
     grid-template-columns: 1fr;
   }
@@ -1174,16 +1178,6 @@
   .image-test-preview img {
     max-width: 100%;
     justify-self: center;
-  }
-
-  .parser-note {
-    margin-right: 20px;
-    margin-left: 20px;
-  }
-
-  .parser-compare {
-    padding-right: 20px;
-    padding-left: 20px;
   }
 
   .about-overview {

@@ -4,7 +4,7 @@ const path = require('node:path');
 const { getGeneratedImagesDir } = require('./paths.cjs');
 
 const MERMAID_CACHE_DIR_NAME = 'mermaid-cache';
-const MERMAID_CACHE_VERSION = 1;
+const MERMAID_CACHE_VERSION = 4;
 const MERMAID_CACHE_OUTPUT_TYPE = 'png';
 const MERMAID_CACHE_THEME = 'default';
 const MERMAID_CACHE_BG_COLOR = '!white';

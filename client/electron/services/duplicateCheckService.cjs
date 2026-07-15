@@ -2298,7 +2298,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
   }
 
   async function runContentExtraction(allFiles, webContents, signature, developerLogger, tenderFiles) {
-    const config = configStore ? configStore.load() : { file_parser: { provider: 'local' } };
+    const config = configStore ? configStore.load() : { components: { file_parser: { provider: 'local' } } };
     const dir = getDuplicateCheckContentDir(app);
     await fs.mkdir(dir, { recursive: true });
     const results = [];
