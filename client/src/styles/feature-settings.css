@@ -583,6 +583,137 @@
   border-color: rgba(33, 116, 253, 0.24);
 }
 
+.agent-isolation-check {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: rgba(248, 250, 253, 0.84);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 16px;
+}
+
+.agent-isolation-check.is-success {
+  border-color: rgba(28, 168, 100, 0.2);
+}
+
+.agent-isolation-check.is-error {
+  border-color: rgba(200, 50, 32, 0.24);
+}
+
+.agent-isolation-check-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-isolation-check-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-isolation-check-head strong {
+  color: var(--yb-text);
+  font-size: 15px;
+}
+
+.agent-isolation-check-head span {
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-isolation-check-head em {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  border-radius: 999px;
+}
+
+.agent-isolation-check.is-success .agent-isolation-check-head em {
+  color: #16834a;
+  background: rgba(28, 168, 100, 0.12);
+}
+
+.agent-isolation-check.is-error .agent-isolation-check-head em {
+  color: #c83220;
+  background: rgba(200, 50, 32, 0.1);
+}
+
+.agent-isolation-check-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.agent-isolation-check-grid > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 10px;
+  background: #ffffff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 12px;
+}
+
+.agent-isolation-check-grid span,
+.agent-isolation-skill-sources > span,
+.agent-isolation-violations > span {
+  color: var(--yb-text-soft);
+  font-size: 11px;
+}
+
+.agent-isolation-check-grid strong {
+  overflow: hidden;
+  color: var(--yb-text);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-isolation-skill-sources,
+.agent-isolation-violations {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-isolation-skill-sources > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-isolation-skill-sources code {
+  max-width: 100%;
+  padding: 4px 7px;
+  overflow: hidden;
+  color: #31415f;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(33, 116, 253, 0.06);
+  border-radius: 8px;
+}
+
+.agent-isolation-skill-sources small {
+  color: var(--yb-text-soft);
+  font-size: 12px;
+}
+
+.agent-isolation-violations ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+  color: #c83220;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .agent-tool-checks {
   display: grid;
   gap: 12px;
@@ -1110,6 +1241,10 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .agent-isolation-check-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .agent-tool-check-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1118,7 +1253,8 @@
 /* [11182-11691] (rewritten, shared-range) settings responsive rules extracted from mixed media(860px) block */
 @media (max-width: 860px) {
   .agent-self-check-status,
-  .agent-self-check-result-head {
+  .agent-self-check-result-head,
+  .agent-isolation-check-head {
     align-items: stretch;
     flex-direction: column;
   }
@@ -1130,6 +1266,10 @@
   }
 
   .agent-self-check-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-isolation-check-grid {
     grid-template-columns: 1fr;
   }
 

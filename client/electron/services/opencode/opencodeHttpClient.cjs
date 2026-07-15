@@ -202,6 +202,26 @@ async function getSessionDiff(server, sessionId, options = {}) {
   });
 }
 
+// 读取实际 Server 实例的路径信息，用于验证工作目录边界。
+async function getOpenCodePath(server, options = {}) {
+  return requestJson(server, '/path', { signal: options.signal });
+}
+
+// 读取实际 Server 合并后的配置，检测系统级配置污染。
+async function getOpenCodeConfig(server, options = {}) {
+  return requestJson(server, '/config', { signal: options.signal });
+}
+
+// 读取实际 Server 已发现的 Skill，而不是推测配置文件内容。
+async function getOpenCodeSkills(server, options = {}) {
+  return requestJson(server, '/skill', { signal: options.signal });
+}
+
+// 读取 Agent 合并后的权限规则，用于确认最终拒绝外部目录。
+async function getOpenCodeAgents(server, options = {}) {
+  return requestJson(server, '/agent', { signal: options.signal });
+}
+
 function extractTextFromPromptResult(result) {
   const parts = Array.isArray(result?.parts) ? result.parts : [];
   return parts
@@ -228,6 +248,10 @@ async function runOpenCodeTask(server, { title, prompt, signal, agent, onActivit
 
 module.exports = {
   createSession,
+  getOpenCodeAgents,
+  getOpenCodeConfig,
+  getOpenCodePath,
+  getOpenCodeSkills,
   sendPrompt,
   getSessionDiff,
   runOpenCodeTask,

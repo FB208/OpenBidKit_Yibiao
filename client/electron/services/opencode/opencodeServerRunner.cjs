@@ -1,18 +1,20 @@
 const fs = require('node:fs');
 const net = require('node:net');
-const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const {
-  getAgentCacheDir,
   getBundledOpencodeBinaryPath,
 } = require('../../utils/paths.cjs');
 const { createAiServiceOpenAiProxy } = require('./aiServiceOpenAiProxy.cjs');
 const { writeOpenCodeConfig } = require('./opencodeConfigFactory.cjs');
 const {
-  applyOpenCodeToolEnvironment,
-  ensureOpenCodeToolEnvironment,
-} = require('./opencodeToolEnvironment.cjs');
+  getOpenCodeShellPath,
+  prepareOpenCodeEnvironment,
+} = require('./opencodeEnvironment.cjs');
+const {
+  runOpenCodeCliIsolationPreflight,
+  verifyOpenCodeServerIsolation,
+} = require('./opencodeIsolationService.cjs');
 
 function createBasicAuth(username, password) {
   return `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
@@ -43,29 +45,6 @@ function findFreePort() {
       });
     });
   });
-}
-
-function buildMinimalChildEnv(extra) {
-  const keepKeys = [
-    'PATH',
-    'Path',
-    'SystemRoot',
-    'WINDIR',
-    'TEMP',
-    'TMP',
-    'TMPDIR',
-    'LANG',
-    'LC_ALL',
-    'ComSpec',
-    'PATHEXT',
-  ];
-
-  const env = {};
-  keepKeys.forEach((key) => {
-    if (process.env[key]) env[key] = process.env[key];
-  });
-
-  return { ...env, ...extra };
 }
 
 function createStderrBuffer(limit = 20000) {
@@ -122,6 +101,7 @@ function attachOpenCodeDiagnostics(error, meta = {}) {
   error.openCodeStdoutTail = stdoutTail;
   error.openCodeLastHealthError = meta.lastError?.message || error.openCodeLastHealthError || '';
   error.openCodeLastHealthCause = getFetchCauseMessage(meta.lastError) || error.openCodeLastHealthCause || '';
+  error.isolationCheck = meta.isolationCheck || error.isolationCheck || null;
   return error;
 }
 
@@ -252,20 +232,9 @@ async function startOpenCodeSidecar({
   const agentTimeoutMs = normalizeTimeoutMs(timeoutMs);
   const opencodeBin = getBundledOpencodeBinaryPath(app);
   ensureExecutable(opencodeBin);
-
-  fs.mkdirSync(runtimeRoot, { recursive: true });
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  const toolEnvironment = ensureOpenCodeToolEnvironment({ app, workspaceDir });
-
-  const tempHome = path.join(runtimeRoot, 'home');
-  const configDir = path.join(tempHome, '.config', 'opencode');
-  const dataHome = path.join(tempHome, '.local', 'share');
-  const cacheHome = path.join(getAgentCacheDir(app), 'opencode-cache');
-  const opencodeConfigPath = path.join(runtimeRoot, 'opencode.json');
-
-  fs.mkdirSync(configDir, { recursive: true });
-  fs.mkdirSync(dataHome, { recursive: true });
-  fs.mkdirSync(cacheHome, { recursive: true });
+  const environmentInfo = prepareOpenCodeEnvironment({ app, runtimeRoot, workspaceDir });
+  environmentInfo.shellPath = getOpenCodeShellPath();
+  const { layout, toolEnvironment } = environmentInfo;
 
   let aiProxy = null;
   let child = null;
@@ -287,12 +256,14 @@ async function startOpenCodeSidecar({
 
     const currentConfig = configStore.load();
     emitStage(onStage, 'opencode-config-write', 'running', '正在写入 OpenCode 常驻配置');
-    const opencodeConfig = writeOpenCodeConfig(opencodeConfigPath, {
+    const opencodeConfig = writeOpenCodeConfig(layout.opencodeConfigPath, {
       proxyBaseUrl: aiProxyInfo.baseUrl,
       contextLengthLimit: currentConfig.context_length_limit,
       timeoutMs: agentTimeoutMs,
+      instructions: [toolEnvironment.agentsPath],
+      shell: environmentInfo.shellPath,
     });
-    emitStage(onStage, 'opencode-config-write', 'success', opencodeConfigPath);
+    emitStage(onStage, 'opencode-config-write', 'success', layout.opencodeConfigPath);
 
     const port = await findFreePort();
     const username = 'yibiao';
@@ -312,24 +283,29 @@ async function startOpenCodeSidecar({
       },
     };
 
-    const env = applyOpenCodeToolEnvironment(buildMinimalChildEnv({
-      HOME: tempHome,
-      USERPROFILE: tempHome,
-      XDG_CONFIG_HOME: path.join(tempHome, '.config'),
-      XDG_DATA_HOME: dataHome,
-      XDG_CACHE_HOME: cacheHome,
-      OPENCODE_CONFIG: opencodeConfigPath,
-      OPENCODE_CONFIG_DIR: configDir,
+    const env = {
+      ...environmentInfo.env,
       OPENCODE_CONFIG_CONTENT: JSON.stringify(opencodeConfig),
       OPENCODE_PERMISSION: JSON.stringify(opencodeConfig.permission),
       OPENCODE_SERVER_USERNAME: username,
       OPENCODE_SERVER_PASSWORD: password,
-      OPENCODE_DISABLE_AUTOUPDATE: 'true',
-      OPENCODE_DISABLE_DEFAULT_PLUGINS: 'true',
-      OPENCODE_DISABLE_MODELS_FETCH: 'true',
-      OPENCODE_DISABLE_CLAUDE_CODE: 'true',
       YIBIAO_OPENCODE_PROXY_TOKEN: aiProxyInfo.token,
-    }), toolEnvironment);
+    };
+
+    emitStage(onStage, 'isolation-check', 'running', '正在预检 OpenCode 逻辑隔离目录和 Skill 来源');
+    try {
+      await runOpenCodeCliIsolationPreflight({
+        opencodeBin,
+        workspaceDir,
+        env,
+        environmentInfo,
+      });
+    } catch (error) {
+      emitStage(onStage, 'isolation-check', 'error', error?.message || String(error), {
+        isolationCheck: error?.isolationCheck || null,
+      });
+      throw error;
+    }
 
     emitStage(onStage, 'opencode-server-start', 'running', `正在启动 OpenCode Server：${baseUrl}`);
     child = spawn(opencodeBin, [
@@ -377,6 +353,20 @@ async function startOpenCodeSidecar({
     childState.healthPassed = true;
     emitStage(onStage, 'opencode-health', 'success', baseUrl, { port, baseUrl });
 
+    let isolationCheck = null;
+    try {
+      isolationCheck = await verifyOpenCodeServerIsolation({
+        server: { baseUrl, authHeader, workspaceDir, requestLog: [] },
+        environmentInfo,
+      });
+    } catch (error) {
+      emitStage(onStage, 'isolation-check', 'error', error?.message || String(error), {
+        isolationCheck: error?.isolationCheck || null,
+      });
+      throw error;
+    }
+    emitStage(onStage, 'isolation-check', 'success', 'OpenCode 逻辑隔离验证通过', { isolationCheck });
+
     return {
       baseUrl,
       authHeader,
@@ -385,6 +375,11 @@ async function startOpenCodeSidecar({
       aiProxyPort: aiProxyInfo.port,
       workspaceDir,
       runtimeRoot,
+      isolationCheck,
+      openCodeEnvironment: {
+        layout,
+        allowedRoots: environmentInfo.allowedRoots,
+      },
       child,
       pid: child.pid,
       requestLog: [],
