@@ -36,11 +36,7 @@ function openExternal(url: string) {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-// 判断 Mermaid 代码是否属于当前支持的 flowchart 语法。
-function isSupportedMermaidSyntax(code: string) {
-  return /^flowchart\s+(?:TD|TB|LR|RL|BT)\b/i.test(String(code || '').trim());
-}
-
+// 预览阶段直接渲染 Mermaid，不做语法白名单拦截。
 function MermaidPreview({ code }: { code: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
@@ -54,12 +50,6 @@ function MermaidPreview({ code }: { code: string }) {
     if (!trimmedCode) {
       setStatus('error');
       setErrorMessage('Mermaid 图代码为空');
-      if (container) container.innerHTML = '';
-      return undefined;
-    }
-    if (!isSupportedMermaidSyntax(trimmedCode)) {
-      setStatus('error');
-      setErrorMessage('仅支持流程图、层级图和职责关系图，且必须使用 flowchart TD/TB/LR/RL/BT 语法');
       if (container) container.innerHTML = '';
       return undefined;
     }

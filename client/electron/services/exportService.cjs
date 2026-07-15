@@ -6,7 +6,6 @@ const cheerio = require('cheerio');
 const { imageSize } = require('image-size');
 const { compactLogError, createDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
 const { getMermaidCacheEntry, saveMermaidCacheImage } = require('../utils/mermaidCache.cjs');
-const { assertSupportedMermaidSyntax } = require('../utils/mermaidPolicy.cjs');
 const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
 const { REMOTE_IMAGE_RETRY_ATTEMPTS, REMOTE_IMAGE_RETRY_DELAY_MS } = require('../utils/remoteImageRetry.cjs');
 const { renderMarkdownHtml } = require('../utils/renderMarkdownHtml.cjs');
@@ -1562,7 +1561,7 @@ async function mermaidCodeToDocxBlocks(code, context) {
   let cacheEntry = null;
 
   try {
-    assertSupportedMermaidSyntax(value);
+    // 导出阶段不拦截语法：正文已有代码块则直接尝试本地渲染。
     cacheEntry = getMermaidCacheEntry(app, value);
     writeExportLog(context, 'export.mermaid.started', {
       mermaid_index: nextIndex,
