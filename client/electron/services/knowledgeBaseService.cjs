@@ -14,6 +14,8 @@ const semanticMergeTargetChars = 500;
 const recoveryMaxAttempts = 2;
 const DEFAULT_CONTEXT_LENGTH_LIMIT = 400000;
 const KNOWLEDGE_CONTEXT_LIMIT_RATIO = 0.8;
+/** 统一 block 分段时预留给任务说明+条目等 L2 后缀的预算比例（策略 B） */
+const TASK_AND_ITEMS_RESERVE_RATIO = 0.2;
 const PROMPT_CACHE_WARMUP_DELAY_MS = 5000;
 
 function now() {
@@ -672,15 +674,20 @@ function mergeCandidateItems(firstItems, supplementItems) {
   return merged;
 }
 
-/** 本段可变 block 后缀（段号只放此处，便于前缀缓存） */
-function buildDocumentBlocksUserMessage(blockText, segmentMeta = null) {
-  const segmentHint = segmentMeta?.total > 1
-    ? `当前是第 ${segmentMeta.index}/${segmentMeta.total} 段 block 列表。只能基于本段内容处理，只能使用本段出现的 block id。`
-    : '以下是当前需要处理的 block 列表。只能基于这些 block 处理，只能使用其中出现的 block id。';
+/**
+ * L1：本段 block 前缀（跨提取/补充/匹配必须字节级一致，才能吃到 block 缓存）
+ * 引导句固定，段号写入 L1 时三步共用同一 segmentMeta
+ */
+function buildDocumentBlocksPrefixMessage(blockText, segmentMeta = null) {
+  const segmentLine = segmentMeta?.total > 1
+    ? `当前是第 ${segmentMeta.index}/${segmentMeta.total} 段。`
+    : '当前文档仅此一段。';
   return {
     role: 'user',
     content: [
-      segmentHint,
+      '以下是接下来要处理的主要内容 block 列表，请先完整阅读理解。',
+      '只能使用本段出现的 block id；不要假设未见过的其它段内容。',
+      segmentLine,
       '<document_blocks>',
       blockText,
       '</document_blocks>',
@@ -688,15 +695,17 @@ function buildDocumentBlocksUserMessage(blockText, segmentMeta = null) {
   };
 }
 
-/** 本段可变遗漏 block 后缀 */
-function buildMissingBlocksUserMessage(missingBlocks, segmentMeta = null) {
-  const segmentHint = segmentMeta?.total > 1
-    ? `当前是第 ${segmentMeta.index}/${segmentMeta.total} 段遗漏 block。必须覆盖本段收到的全部遗漏 block。`
-    : '必须覆盖本段收到的全部遗漏 block。';
+/** L1'：遗漏 block 前缀（补漏独立 pack，不与全文段混用） */
+function buildMissingBlocksPrefixMessage(missingBlocks, segmentMeta = null) {
+  const segmentLine = segmentMeta?.total > 1
+    ? `当前是第 ${segmentMeta.index}/${segmentMeta.total} 段遗漏 block。`
+    : '以下是当前需要处理的遗漏 block。';
   return {
     role: 'user',
     content: [
-      segmentHint,
+      '以下是接下来要处理的遗漏 block 列表，请先完整阅读理解。',
+      '必须覆盖本段收到的全部遗漏 block；只能使用本段出现的 block id。',
+      segmentLine,
       '<missing_blocks>',
       renderBlocksForPrompt(missingBlocks),
       '</missing_blocks>',
@@ -704,125 +713,92 @@ function buildMissingBlocksUserMessage(missingBlocks, segmentMeta = null) {
   };
 }
 
-/** 首次提取：固定任务说明（跨段共享前缀） */
-function buildInitialItemSharedMessages(documentName) {
-  return [{
+/** L2：首次提取任务 */
+function buildInitialItemTaskMessage(documentName) {
+  return {
     role: 'user',
     content: [
       `文档名：${documentName}`,
       '你是投标资料知识库分析助手。你只负责从历史投标资料中提取对后续编写标书有复用价值的知识条目。',
-      '任务：从后面给出的本段 block 中提取有意义的知识条目数组。条目应覆盖技术方案、项目管理、质量、安全、进度、服务、应急、人员设备、类似业绩等可复用内容。',
+      '任务：基于上文已给出的本段 block，提取有意义的知识条目数组。条目应覆盖技术方案、项目管理、质量、安全、进度、服务、应急、人员设备、类似业绩等可复用内容。',
       '本段没有可复用知识时必须返回 {"items":[]}。',
       '只返回 JSON：{"items":[{"title":"","summary":""}]}',
       '要求：title 简洁明确；summary 说明该条目可如何用于编写投标文件；不要输出 id、content、段落编号、Markdown 或解释文字。',
-      '不要假设未见过的其它段内容；只能使用本段出现的 block id。',
     ].join('\n'),
-  }];
+  };
 }
 
 function buildInitialItemMessages(documentName, blockText, segmentMeta = null) {
   return [
-    ...buildInitialItemSharedMessages(documentName),
-    buildDocumentBlocksUserMessage(blockText, segmentMeta),
+    buildDocumentBlocksPrefixMessage(blockText, segmentMeta),
+    buildInitialItemTaskMessage(documentName),
   ];
 }
 
-function buildInitialItemFixedMessages(documentName) {
-  return buildInitialItemSharedMessages(documentName);
-}
-
-/** 补充遗漏：固定任务 + 完整首轮条目（跨段共享） */
-function buildSupplementItemSharedMessages(documentName, firstItems) {
-  return [{
+/** L2：补充遗漏任务 + 完整首轮条目 */
+function buildSupplementItemTaskMessage(documentName, firstItems) {
+  return {
     role: 'user',
     content: [
       `文档名：${documentName}`,
       '你是投标资料知识库补漏助手。你只判断已有知识条目是否遗漏了重要主题，并补充缺失条目。',
       'first_round_items 是全文已有结果，不要重复首轮已有条目。',
-      '任务：只输出后面本段 block 可见、且首轮未覆盖的新增条目；如果没有遗漏，返回空 items 数组。',
+      '任务：基于上文本段 block，只输出本段可见且首轮未覆盖的新增条目；如果没有遗漏，返回空 items 数组。',
       '只返回 JSON：{"items":[{"title":"","summary":""}]}',
       '如果没有新增条目，必须返回 {"items":[]}，这属于正常结果。',
       '不要重复已有条目，不要输出 id、content、段落编号、Markdown 或解释文字。',
-      '只能使用本段出现的 block id。',
       '',
       '<first_round_items>',
       renderCandidateItemsJson(firstItems),
       '</first_round_items>',
     ].join('\n'),
-  }];
+  };
 }
 
 function buildSupplementItemMessages(documentName, blockText, firstItems, segmentMeta = null) {
   return [
-    ...buildSupplementItemSharedMessages(documentName, firstItems),
-    buildDocumentBlocksUserMessage(blockText, segmentMeta),
+    buildDocumentBlocksPrefixMessage(blockText, segmentMeta),
+    buildSupplementItemTaskMessage(documentName, firstItems),
   ];
 }
 
-function buildSupplementItemFixedMessages(documentName, firstItems) {
-  return buildSupplementItemSharedMessages(documentName, firstItems);
-}
-
-/** 匹配：纯规则（跨请求稳定） */
-function buildMatchRuleMessages(documentName) {
-  return [{
+/** L2：匹配任务 + 条目 */
+function buildMatchTaskMessage(documentName, batchItems) {
+  return {
     role: 'user',
     content: [
       `文档名：${documentName}`,
       '你是投标知识库段落匹配助手。你只根据知识条目的标题和摘要，为其匹配强相关 block 范围。',
       '规则：',
       '1. 只处理本次给出的知识条目。',
-      '2. 只匹配与条目强相关、可直接支撑该条目的 block。',
+      '2. 只匹配与条目强相关、可直接支撑该条目的 block（基于上文本段 block）。',
       '3. 如果某些 block 更可能属于其他主题或条目，不要强行匹配。',
       '4. 只返回 id 和 ranges，不要输出正文，不要解释。',
       '5. ranges 使用闭区间：["P000001","P000003"] 表示连续 block；单个 block 写成 ["P000001","P000001"]。',
       '6. 只允许使用本段存在的 block 编号和本次条目 id。',
       '输出 JSON：{"matches":[{"id":"K000001","ranges":[["P000001","P000003"]]}]}',
-    ].join('\n'),
-  }];
-}
-
-function buildMatchItemsUserMessage(batchItems) {
-  return {
-    role: 'user',
-    content: [
+      '',
       '以下是本次需要匹配的知识条目。只处理这些条目：',
       renderKnowledgeItemsJson(batchItems),
     ].join('\n'),
   };
 }
 
-/**
- * 匹配 messages
- * - 整包条目：规则 → 条目 → 本段 block（跨段共享规则+条目）
- * - 条目子批：规则 → 本段 block → 子批条目（同段共享规则+block）
- */
-function buildMatchMessages(documentName, blockText, batchItems, segmentMeta = null, options = {}) {
-  const itemSplit = Boolean(options.itemSplit);
-  const ruleMessages = buildMatchRuleMessages(documentName);
-  const itemsMessage = buildMatchItemsUserMessage(batchItems);
-  const blocksMessage = buildDocumentBlocksUserMessage(blockText, segmentMeta);
-  if (itemSplit) {
-    return [...ruleMessages, blocksMessage, itemsMessage];
-  }
-  return [...ruleMessages, itemsMessage, blocksMessage];
-}
-
-/** 匹配预算用 fixed：规则 + 整包条目（不含 block 后缀） */
-function buildMatchFixedMessages(documentName, items) {
+/** 匹配：block 前缀在前，任务+条目在后（item-split 仅改 L2 条目，L1 不变） */
+function buildMatchMessages(documentName, blockText, batchItems, segmentMeta = null) {
   return [
-    ...buildMatchRuleMessages(documentName),
-    buildMatchItemsUserMessage(items),
+    buildDocumentBlocksPrefixMessage(blockText, segmentMeta),
+    buildMatchTaskMessage(documentName, batchItems),
   ];
 }
 
-/** 补漏：纯规则 */
-function buildRecoveryRuleMessages(documentName) {
-  return [{
+/** L2：补漏任务 + 条目 */
+function buildRecoveryTaskMessage(documentName, items) {
+  return {
     role: 'user',
     content: [
       `文档名：${documentName}`,
-      '你是投标知识库遗漏段落补漏助手。必须把所有收到的遗漏 block 明确归入已有条目、新增条目或舍弃段落。',
+      '你是投标知识库遗漏段落补漏助手。必须把上文收到的遗漏 block 明确归入已有条目、新增条目或舍弃段落。',
       '任务：必须覆盖所有遗漏 block。每个遗漏 block 只能进入以下三类之一：',
       '1. matches：归入已有知识条目，只返回已有 id 和 ranges。',
       '2. new_items：如果没有合适的已有条目但内容有复用价值，则新增知识条目，并给出 title、summary、ranges。',
@@ -830,14 +806,7 @@ function buildRecoveryRuleMessages(documentName) {
       '输出 JSON：{"matches":[{"id":"K000001","ranges":[["P000001","P000003"]]}],"new_items":[{"title":"","summary":"","ranges":[["P000004","P000005"]]}],"discarded":[{"ranges":[["P000006","P000006"]],"reason":""}]}',
       '不要输出正文、Markdown 或解释文字。',
       '只能使用本段存在的 block 编号和本次给出的条目 id。',
-    ].join('\n'),
-  }];
-}
-
-function buildRecoveryItemsUserMessage(items) {
-  return {
-    role: 'user',
-    content: [
+      '',
       '<knowledge_items>',
       renderKnowledgeItemsJson(items),
       '</knowledge_items>',
@@ -845,27 +814,11 @@ function buildRecoveryItemsUserMessage(items) {
   };
 }
 
-/**
- * 补漏 messages
- * - 整包条目：规则 → 条目 → missing
- * - 条目子批：规则 → missing → 子批条目
- */
-function buildRecoveryMessages(documentName, items, missingBlocks, segmentMeta = null, options = {}) {
-  const itemSplit = Boolean(options.itemSplit);
-  const ruleMessages = buildRecoveryRuleMessages(documentName);
-  const itemsMessage = buildRecoveryItemsUserMessage(items);
-  const missingMessage = buildMissingBlocksUserMessage(missingBlocks, segmentMeta);
-  if (itemSplit) {
-    return [...ruleMessages, missingMessage, itemsMessage];
-  }
-  return [...ruleMessages, itemsMessage, missingMessage];
-}
-
-/** 补漏预算用 fixed：规则 + 全部条目（不含 missing 后缀） */
-function buildRecoveryFixedMessages(documentName, items) {
+/** 补漏：missing 前缀在前，任务+条目在后 */
+function buildRecoveryMessages(documentName, items, missingBlocks, segmentMeta = null) {
   return [
-    ...buildRecoveryRuleMessages(documentName),
-    buildRecoveryItemsUserMessage(items),
+    buildMissingBlocksPrefixMessage(missingBlocks, segmentMeta),
+    buildRecoveryTaskMessage(documentName, items),
   ];
 }
 
@@ -876,6 +829,29 @@ function getRequestBudget(aiService) {
     ? Math.floor(rawLimit)
     : DEFAULT_CONTEXT_LENGTH_LIMIT;
   return Math.floor(contextLengthLimit * KNOWLEDGE_CONTEXT_LIMIT_RATIO);
+}
+
+/**
+ * 统一 block 分段（策略 B）：提取前按保守预留切一次，提取/补充/匹配共用同一段表
+ * blockBudget = requestBudget * (1 - TASK_AND_ITEMS_RESERVE_RATIO)
+ */
+function buildUnifiedBlockSegments(blocks, aiService) {
+  const requestBudget = getRequestBudget(aiService);
+  const reserve = Math.max(1, Math.floor(requestBudget * TASK_AND_ITEMS_RESERVE_RATIO));
+  const blockSegmentLimit = Math.max(1, requestBudget - reserve);
+  const segments = packBlocksIntoSegments(blocks, blockSegmentLimit);
+  return {
+    segments,
+    blockSegmentLimit,
+    requestBudget,
+    reserve,
+  };
+}
+
+/** 用真实 L2 任务消息估算条目侧可用预算（L1 已定，不重切 block） */
+function getItemSplitBudget(aiService, prefixMessages) {
+  const requestBudget = getRequestBudget(aiService);
+  return Math.max(1, requestBudget - getMessagesContentLength(prefixMessages));
 }
 
 function getBlockOrder(blocks) {
@@ -1284,6 +1260,20 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         updateDocument(documentId, { block_count: result.block_count, filtered_block_count: result.filtered_block_count }, webContents);
       }
 
+      // 统一 block 分段：提取/补充/匹配共用同一段表，L1 block 前缀跨任务字节级一致
+      const unifiedPack = buildUnifiedBlockSegments(blocks, aiService);
+      const unifiedSegments = unifiedPack.segments;
+      if (!unifiedSegments.length) {
+        throw new Error('筛选后没有可分析的正文内容');
+      }
+      debugLog(documentId, 'prepare:unified-segments', {
+        segment_total: unifiedSegments.length,
+        block_segment_limit: unifiedPack.blockSegmentLimit,
+        request_budget: unifiedPack.requestBudget,
+        reserve: unifiedPack.reserve,
+        reserve_ratio: TASK_AND_ITEMS_RESERVE_RATIO,
+      });
+
       if (candidateItems.length > 0
         && !getStep(documentId, 'extract_first_items')
         && !getStep(documentId, 'extract_supplement_items')
@@ -1313,28 +1303,27 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
           error: null,
         }, webContents);
         const result = await runDocumentStep(documentId, 'extract_first_items', async () => {
-          const fixedShell = buildInitialItemFixedMessages(document.file_name);
-          const segmentLimit = getKnowledgeBaseSegmentLimit(aiService, fixedShell);
-          const segments = packBlocksIntoSegments(blocks, segmentLimit);
+          const segments = unifiedSegments;
           debugLog(documentId, 'ai:first-items:plan', {
             segment_total: segments.length,
-            segment_limit: segmentLimit,
+            segment_limit: unifiedPack.blockSegmentLimit,
             block_count: blocks.length,
             execution_mode: segments.length > 1 ? 'warmup_parallel' : 'serial',
-            prefix_chars: getMessagesContentLength(fixedShell),
+            layout: 'block_prefix',
           });
 
           let completedSegments = 0;
           const runSegment = async (segment) => {
             const firstMessages = buildInitialItemMessages(document.file_name, segment.text, segment);
+            const prefixMessage = firstMessages[0];
+            const taskMessage = firstMessages[1];
             debugLog(documentId, 'ai:first-items:start', {
               segment_index: segment.index,
               segment_total: segment.total,
               segment_chars: segment.chars,
-              segment_limit: segmentLimit,
               block_ids: segment.blockIds,
-              prefix_chars: getMessagesContentLength(fixedShell),
-              suffix_chars: getMessagesContentLength([firstMessages[firstMessages.length - 1]]),
+              prefix_chars: String(prefixMessage?.content || '').length,
+              suffix_chars: String(taskMessage?.content || '').length,
               prompt: getPromptSummary(firstMessages),
             });
             const first = await aiService.collectJsonResponse({
@@ -1399,15 +1388,14 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         candidateItems = [];
         updateDocument(documentId, { status: 'extracting', progress: 55, message: 'AI 正在补充遗漏知识条目', error: null }, webContents);
         const result = await runDocumentStep(documentId, 'extract_supplement_items', async () => {
-          const fixedShell = buildSupplementItemFixedMessages(document.file_name, firstItems);
-          const segmentLimit = getKnowledgeBaseSegmentLimit(aiService, fixedShell);
-          const segments = packBlocksIntoSegments(blocks, segmentLimit);
+          // 与提取共用 unifiedSegments，保证 L1 block 前缀跨任务一致
+          const segments = unifiedSegments;
           debugLog(documentId, 'ai:supplement-items:plan', {
             first_item_count: firstItems.length,
             segment_total: segments.length,
-            segment_limit: segmentLimit,
+            segment_limit: unifiedPack.blockSegmentLimit,
             execution_mode: segments.length > 1 ? 'warmup_parallel' : 'serial',
-            prefix_chars: getMessagesContentLength(fixedShell),
+            layout: 'block_prefix',
           });
 
           let completedSegments = 0;
@@ -1417,11 +1405,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
               segment_index: segment.index,
               segment_total: segment.total,
               segment_chars: segment.chars,
-              segment_limit: segmentLimit,
               first_item_count: firstItems.length,
               block_ids: segment.blockIds,
-              prefix_chars: getMessagesContentLength(fixedShell),
-              suffix_chars: getMessagesContentLength([supplementMessages[supplementMessages.length - 1]]),
+              prefix_chars: String(supplementMessages[0]?.content || '').length,
+              suffix_chars: String(supplementMessages[1]?.content || '').length,
               prompt: getPromptSummary(supplementMessages),
             });
             const supplement = await aiService.collectJsonResponse({
@@ -1543,19 +1530,20 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       const blockOrder = getBlockOrder(blocks);
       const candidateItemIds = new Set(initialItems.map((item) => item.id));
       const allItemIds = initialItems.map((item) => item.id);
-      const matchFixedMessages = buildMatchFixedMessages(document.file_name, initialItems);
-      const blockSegmentLimit = getKnowledgeBaseSegmentLimit(aiService, matchFixedMessages);
-      const blockSegments = packBlocksIntoSegments(blocks, blockSegmentLimit);
-      const requestBudget = getRequestBudget(aiService);
+      // 与 prepare 相同的统一 pack，保证匹配 L1 与提取/补充一致
+      const unifiedPack = buildUnifiedBlockSegments(blocks, aiService);
+      const blockSegments = unifiedPack.segments;
+      const requestBudget = unifiedPack.requestBudget;
 
       debugLog(documentId, 'match:inputs-ready', {
         block_count: blocks.length,
         filtered_block_count: filteredBlocks.length,
         initial_item_count: initialItems.length,
         segment_total: blockSegments.length,
-        segment_limit: blockSegmentLimit,
+        segment_limit: unifiedPack.blockSegmentLimit,
+        reserve: unifiedPack.reserve,
         execution_mode: 'serial',
-        prefix_chars: getMessagesContentLength(matchFixedMessages),
+        layout: 'block_prefix',
       });
 
       // 指纹：本段 block_ids + 全部候选条目 id；任一已存段不一致则清空整步重跑
@@ -1653,9 +1641,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         });
 
         try {
-          // 整包：规则+条目+block；超预算则同段 item-split：规则+block+子批条目
+          // L1=block 前缀，L2=任务+条目；超预算只拆 L2 条目，不重切 L1
           const fullItemMessages = buildMatchMessages(document.file_name, segment.text, initialItems, segment);
           const fullItemLength = getMessagesContentLength(fullItemMessages);
+          const blockPrefixMessage = buildDocumentBlocksPrefixMessage(segment.text, segment);
           let segmentMatches = [];
 
           if (fullItemLength <= requestBudget) {
@@ -1665,7 +1654,8 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
               segment_chars: segment.chars,
               item_count: initialItems.length,
               item_mode: 'full',
-              prefix_chars: getMessagesContentLength(matchFixedMessages),
+              prefix_chars: String(blockPrefixMessage.content || '').length,
+              suffix_chars: String(fullItemMessages[1]?.content || '').length,
               prompt: getPromptSummary(fullItemMessages),
             });
             const parsed = await aiService.collectJsonResponse({
@@ -1682,11 +1672,11 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
             });
             segmentMatches = parsed.matches;
           } else {
-            const itemSplitPrefix = [
-              ...buildMatchRuleMessages(document.file_name),
-              buildDocumentBlocksUserMessage(segment.text, segment),
-            ];
-            const itemSegmentLimit = Math.max(1, requestBudget - getMessagesContentLength(itemSplitPrefix));
+            // 条目子批：L1 固定为 block，仅拆分任务中的条目列表
+            const itemSegmentLimit = getItemSplitBudget(aiService, [
+              blockPrefixMessage,
+              buildMatchTaskMessage(document.file_name, []),
+            ]);
             const itemSegments = packItemsIntoSegments(initialItems, itemSegmentLimit);
             debugLog(documentId, 'ai:match-segment:item-split', {
               segment_index: segmentIndex,
@@ -1701,7 +1691,6 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
                 segment.text,
                 itemSegment.items,
                 segment,
-                { itemSplit: true },
               );
               debugLog(documentId, 'ai:match-segment:start', {
                 segment_index: segmentIndex,
@@ -1711,7 +1700,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
                 item_mode: 'sub_batch',
                 item_segment_index: itemSegment.index,
                 item_segment_total: itemSegment.total,
-                prefix_chars: getMessagesContentLength(itemSplitPrefix),
+                prefix_chars: String(blockPrefixMessage.content || '').length,
                 prompt: getPromptSummary(matchMessages),
               });
               const parsed = await aiService.collectJsonResponse({
@@ -1815,10 +1804,12 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
             }, webContents);
 
             const currentItemIds = new Set(items.map((item) => item.id));
-            const recoveryFixed = buildRecoveryFixedMessages(document.file_name, items);
-            const missingSegmentLimit = getKnowledgeBaseSegmentLimit(aiService, recoveryFixed);
-            const missingSegments = packBlocksIntoSegments(missingBlocks, missingSegmentLimit);
+            // missing 在前：用 L2 任务+条目壳扣预算后切 missing 段
+            const recoveryTaskShell = [buildRecoveryTaskMessage(document.file_name, items)];
             const recoveryRequestBudget = getRequestBudget(aiService);
+            const missingSegmentLimit = Math.max(1, recoveryRequestBudget - getMessagesContentLength(recoveryTaskShell));
+            const missingSegments = packBlocksIntoSegments(missingBlocks, missingSegmentLimit);
+            if (!missingSegments.length) break;
 
             debugLog(documentId, 'ai:recovery:plan', {
               attempt: attempt + 1,
@@ -1827,7 +1818,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
               segment_limit: missingSegmentLimit,
               item_count: items.length,
               execution_mode: missingSegments.length > 1 ? 'warmup_parallel' : 'serial',
-              prefix_chars: getMessagesContentLength(recoveryFixed),
+              layout: 'missing_prefix',
             });
 
             const runMissingSegment = async (missingSegment) => {
@@ -1835,6 +1826,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
               const segmentBlockOrder = getBlockOrder(segmentBlocks);
               const fullMessages = buildRecoveryMessages(document.file_name, items, segmentBlocks, missingSegment);
               const fullLength = getMessagesContentLength(fullMessages);
+              const missingPrefixMessage = buildMissingBlocksPrefixMessage(segmentBlocks, missingSegment);
               let segmentParsed;
 
               if (fullLength <= recoveryRequestBudget) {
@@ -1846,7 +1838,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
                   missing_block_count: segmentBlocks.length,
                   item_count: items.length,
                   item_mode: 'full',
-                  prefix_chars: getMessagesContentLength(recoveryFixed),
+                  prefix_chars: String(missingPrefixMessage.content || '').length,
                   prompt: getPromptSummary(fullMessages),
                 });
                 segmentParsed = await aiService.collectJsonResponse({
@@ -1862,11 +1854,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
                   progressLabel: '知识库遗漏补漏',
                 });
               } else {
-                const itemSplitPrefix = [
-                  ...buildRecoveryRuleMessages(document.file_name),
-                  buildMissingBlocksUserMessage(segmentBlocks, missingSegment),
-                ];
-                const itemSegmentLimit = Math.max(1, recoveryRequestBudget - getMessagesContentLength(itemSplitPrefix));
+                const itemSegmentLimit = getItemSplitBudget(aiService, [
+                  missingPrefixMessage,
+                  buildRecoveryTaskMessage(document.file_name, []),
+                ]);
                 const itemSegments = packItemsIntoSegments(items, itemSegmentLimit);
                 const subParsedList = [];
                 debugLog(documentId, 'ai:recovery:item-split', {
@@ -1882,7 +1873,6 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
                     itemSegment.items,
                     segmentBlocks,
                     missingSegment,
-                    { itemSplit: true },
                   );
                   debugLog(documentId, 'ai:recovery:start', {
                     attempt: attempt + 1,
@@ -1892,7 +1882,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
                     item_segment_total: itemSegment.total,
                     item_count: itemSegment.items.length,
                     item_mode: 'sub_batch',
-                    prefix_chars: getMessagesContentLength(itemSplitPrefix),
+                    prefix_chars: String(missingPrefixMessage.content || '').length,
                     prompt: getPromptSummary(recoveryMessages),
                   });
                   const subParsed = await aiService.collectJsonResponse({
@@ -2318,6 +2308,11 @@ module.exports = {
     packBlocksIntoSegments,
     packItemsIntoSegments,
     getKnowledgeBaseSegmentLimit,
+    buildUnifiedBlockSegments,
+    buildInitialItemMessages,
+    buildSupplementItemMessages,
+    buildMatchMessages,
+    buildRecoveryMessages,
     mergeTitleSummaryItems,
     mergeMatchResults,
     normalizeCandidateItems,
