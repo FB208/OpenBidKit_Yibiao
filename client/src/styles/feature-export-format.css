@@ -93,6 +93,19 @@
   line-height: 1.5;
 }
 
+.export-template-name-card {
+  margin: 22px 36px;
+  padding: 20px 22px;
+  background: linear-gradient(135deg, rgba(33, 116, 253, 0.08), rgba(255, 255, 255, 0.98));
+  border: 1px solid rgba(33, 116, 253, 0.18);
+  border-radius: 18px;
+  box-shadow: var(--yb-shadow-sm);
+}
+
+.export-template-name-card .input-with-action {
+  background: #ffffff;
+}
+
 .export-format-preset-panel {
   display: grid;
   gap: 12px;
@@ -1420,6 +1433,13 @@
 /* [13103-13145] export-format/export-template responsive media(1100px) 收尾 */
 
 /* ── 响应式 ── */
+
+@media (max-width: 860px) {
+  .export-template-name-card {
+    margin-right: 20px;
+    margin-left: 20px;
+  }
+}
 
 @media (max-width: 1100px) {
   .template-library-page {

@@ -243,6 +243,13 @@ function headingPreviewTitle(config: ExportFormatConfig, level: number, id: stri
   return formatOutlineTitle(id, title, heading);
 }
 
+function createDefaultTemplateName(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `yibao-${year}-${month}-${day}`;
+}
+
 function createDefaultExportFormat(): ExportFormatConfig {
   return {
     template_name: DEFAULT_EXPORT_FORMAT.template_name,
@@ -261,6 +268,13 @@ function createDefaultExportFormat(): ExportFormatConfig {
       body_cell: { ...DEFAULT_EXPORT_FORMAT.table.body_cell },
     },
     image: { ...DEFAULT_EXPORT_FORMAT.image },
+  };
+}
+
+function createNewTemplateExportFormat(): ExportFormatConfig {
+  return {
+    ...createDefaultExportFormat(),
+    template_name: createDefaultTemplateName(),
   };
 }
 
@@ -291,7 +305,9 @@ function withExportFormatDefaults(source: ExportFormatConfig): ExportFormatConfi
 function ExportFormatPage({ mode = 'create', templateId = null, onBack }: ExportFormatPageProps) {
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<TemplateTab>('quick');
-  const [config, setConfig] = useState<ExportFormatConfig>(() => createDefaultExportFormat());
+  const [config, setConfig] = useState<ExportFormatConfig>(
+    () => mode === 'create' ? createNewTemplateExportFormat() : createDefaultExportFormat(),
+  );
   const [savedConfig, setSavedConfig] = useState<ExportFormatConfig | null>(null);
   const [currentTemplateId, setCurrentTemplateId] = useState<string | null>(templateId);
   const [selectedLayoutPresetId, setSelectedLayoutPresetId] = useState('');
@@ -343,7 +359,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           return;
         }
 
-        const defaultConfig = createDefaultExportFormat();
+        const defaultConfig = createNewTemplateExportFormat();
         if (cancelled) return;
         setCurrentTemplateId(null);
         setConfig(defaultConfig);
@@ -369,6 +385,19 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   const updateTemplate = useCallback((updates: Partial<ExportFormatConfig>) => {
     setConfig((prev) => ({ ...prev, ...updates }));
   }, []);
+
+  const handleConfirmTemplateName = useCallback(() => {
+    const templateName = config.template_name.trim();
+    if (!templateName) {
+      showToast('请填写模板名称', 'info');
+      return;
+    }
+
+    if (templateName !== config.template_name) {
+      updateTemplate({ template_name: templateName });
+    }
+    showToast('模板名称已设置，保存配置后生效', 'success');
+  }, [config.template_name, showToast, updateTemplate]);
 
   const updatePage = useCallback((updates: Partial<PageSetupConfig>) => {
     setConfig((prev) => ({ ...prev, page: { ...prev.page, ...updates } }));
@@ -463,9 +492,9 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
       return;
     }
 
-    setConfig(createDefaultExportFormat());
+    setConfig(mode === 'create' ? createNewTemplateExportFormat() : createDefaultExportFormat());
     showToast('已恢复默认模版设置，保存后生效', 'info');
-  }, [selectedLayoutPresetId, selectedThemePresetId, showToast]);
+  }, [mode, selectedLayoutPresetId, selectedThemePresetId, showToast]);
 
   const handleApplyLayoutPreset = useCallback((presetId: string) => {
     if (!presetId) return;
@@ -670,6 +699,31 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           </select>
         </label>
       </div>
+      {mode === 'create' ? (
+        <form
+          className="settings-row export-template-name-card"
+          onSubmit={(event) => {
+            event.preventDefault();
+            handleConfirmTemplateName();
+          }}
+        >
+          <div className="settings-row-copy">
+            <strong>设置模板名称</strong>
+            <span>默认按 yibao-YYYY-MM-DD 格式生成，保存后显示在“我的模板”中。</span>
+          </div>
+          <div className="input-with-action">
+            <input
+              type="text"
+              value={config.template_name}
+              onChange={(event) => updateTemplate({ template_name: event.target.value })}
+              placeholder="请输入模板名称"
+              aria-label="模板名称"
+              spellCheck={false}
+            />
+            <button type="submit" className="input-with-action-button">确定</button>
+          </div>
+        </form>
+      ) : null}
       <div className="export-format-preset-panel">
         <div className="export-format-preset-panel-head">
           <strong>主题色展示</strong>
