@@ -247,7 +247,11 @@ function createDefaultTemplateName(date = new Date()): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
-  return `yibao-${year}-${month}-${day}`;
+  const hour = String(date.getHours()).padStart(2, '0');
+  const minute = String(date.getMinutes()).padStart(2, '0');
+  const second = String(date.getSeconds()).padStart(2, '0');
+
+  return `yibiao-${year}-${month}-${day}-${hour}${minute}${second}`;
 }
 
 function createDefaultExportFormat(): ExportFormatConfig {
@@ -389,14 +393,14 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   const handleConfirmTemplateName = useCallback(() => {
     const templateName = config.template_name.trim();
     if (!templateName) {
-      showToast('请填写模板名称', 'info');
+      showToast('请输入模板名称', 'info');
       return;
     }
 
     if (templateName !== config.template_name) {
       updateTemplate({ template_name: templateName });
     }
-    showToast('模板名称已设置，保存配置后生效', 'success');
+    showToast('模板名称已确认，保存配置后生效', 'success');
   }, [config.template_name, showToast, updateTemplate]);
 
   const updatePage = useCallback((updates: Partial<PageSetupConfig>) => {
@@ -492,7 +496,13 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
       return;
     }
 
-    setConfig(mode === 'create' ? createNewTemplateExportFormat() : createDefaultExportFormat());
+    setConfig((prev) => {
+      if (mode === 'create') {
+        return createNewTemplateExportFormat();
+      }
+
+      return { ...createDefaultExportFormat(), template_name: prev.template_name };
+    });
     showToast('已恢复默认模版设置，保存后生效', 'info');
   }, [mode, selectedLayoutPresetId, selectedThemePresetId, showToast]);
 
@@ -698,32 +708,32 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
             {EXPORT_THEME_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
           </select>
         </label>
+        {mode === 'create' ? (
+          <form
+            className="settings-row export-template-name-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleConfirmTemplateName();
+            }}
+          >
+            <div className="settings-row-copy">
+              <strong>设置模板名称</strong>
+              <span>默认按 yibiao-YYYY-MM-DD-HHmmss 格式生成，保存后显示在“我的模板”中。</span>
+            </div>
+            <div className="input-with-action export-template-name-control">
+              <input
+                type="text"
+                value={config.template_name}
+                onChange={(event) => updateTemplate({ template_name: event.target.value })}
+                placeholder="请输入模板名称"
+                aria-label="模板名称"
+                spellCheck={false}
+              />
+              <button type="submit" className="input-with-action-button">确定</button>
+            </div>
+          </form>
+        ) : null}
       </div>
-      {mode === 'create' ? (
-        <form
-          className="settings-row export-template-name-card"
-          onSubmit={(event) => {
-            event.preventDefault();
-            handleConfirmTemplateName();
-          }}
-        >
-          <div className="settings-row-copy">
-            <strong>设置模板名称</strong>
-            <span>默认按 yibao-YYYY-MM-DD 格式生成，保存后显示在“我的模板”中。</span>
-          </div>
-          <div className="input-with-action">
-            <input
-              type="text"
-              value={config.template_name}
-              onChange={(event) => updateTemplate({ template_name: event.target.value })}
-              placeholder="请输入模板名称"
-              aria-label="模板名称"
-              spellCheck={false}
-            />
-            <button type="submit" className="input-with-action-button">确定</button>
-          </div>
-        </form>
-      ) : null}
       <div className="export-format-preset-panel">
         <div className="export-format-preset-panel-head">
           <strong>主题色展示</strong>
