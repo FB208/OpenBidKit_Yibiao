@@ -474,7 +474,7 @@ export interface YibiaoBridge {
     moveDocument: (documentId: string, targetFolderId: string, targetDocumentId?: string | null, position?: 'before' | 'after') => Promise<KnowledgeBaseIndexMutationResult>;
     uploadDocuments: (folderId: string) => Promise<KnowledgeBaseUploadResult>;
     retryDocument: (documentId: string) => Promise<KnowledgeBaseRetryDocumentResult>;
-    startMatching: (documentId: string, batchSize: number) => Promise<KnowledgeBaseStartMatchingResult>;
+    startMatching: (documentId: string, batchSize?: number) => Promise<KnowledgeBaseStartMatchingResult>;
     readMarkdown: (documentId: string) => Promise<string>;
     readItems: (documentId: string) => Promise<KnowledgeItem[]>;
     readAnalysis: (documentId: string) => Promise<KnowledgeAnalysisSnapshot>;
