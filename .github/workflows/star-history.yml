@@ -24,6 +24,7 @@ jobs:
         uses: narayann7/star-history-action@c2061675dacbf6f35d116e556015b8905843387f # v1.0.4
         with:
           repos: ${{ github.repository }}
+          token: ${{ secrets.STAR_HISTORY_TOKEN }}
           output-dir: assets/star-history
           type: Timeline
           update-readme: 'false'
