@@ -1,0 +1,30 @@
+name: 更新 Star History
+
+on:
+  schedule:
+    # 每周日北京时间 10:23（UTC 02:23）执行，避开整点高峰。
+    - cron: '23 2 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-history
+  cancel-in-progress: true
+
+jobs:
+  update-star-history:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 生成 Star History 图表
+        uses: narayann7/star-history-action@c2061675dacbf6f35d116e556015b8905843387f # v1.0.4
+        with:
+          repos: ${{ github.repository }}
+          output-dir: assets/star-history
+          type: Timeline
+          update-readme: 'false'
+          commit-message: 'chore: update star history [skip ci]'
