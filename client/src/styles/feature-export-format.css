@@ -93,6 +93,16 @@
   line-height: 1.5;
 }
 
+.export-template-name-row,
+.export-template-name-control,
+.export-template-name-control input {
+  min-width: 0;
+}
+
+.export-template-name-control {
+  width: 100%;
+}
+
 .export-format-preset-panel {
   display: grid;
   gap: 12px;
