@@ -299,9 +299,9 @@ npm run dist:win
 
 <a href="https://www.star-history.com/?repos=FB208%2FOpenBidKit_Yibiao&type=timeline&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&theme=dark&legend=top-left&sealed_token=tywN8WJaGk4dr-7ohVuQB1qivwt7XheZZ1f83EWzkFS7bR3idk8QWkJisIo5IMsuWzTjJse24YQs6ExelRxKOOCLwa4TqH-cD_QH6F0DcBAIrw1hOPvg1dExEGDQQcTme9WQ_Ipmp3aiyxQEnbd013DhdpqqNpVTb9hgVfE4PrZLl4GZmir32QGFGmvi" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&legend=top-left&sealed_token=tywN8WJaGk4dr-7ohVuQB1qivwt7XheZZ1f83EWzkFS7bR3idk8QWkJisIo5IMsuWzTjJse24YQs6ExelRxKOOCLwa4TqH-cD_QH6F0DcBAIrw1hOPvg1dExEGDQQcTme9WQ_Ipmp3aiyxQEnbd013DhdpqqNpVTb9hgVfE4PrZLl4GZmir32QGFGmvi" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&legend=top-left&sealed_token=tywN8WJaGk4dr-7ohVuQB1qivwt7XheZZ1f83EWzkFS7bR3idk8QWkJisIo5IMsuWzTjJse24YQs6ExelRxKOOCLwa4TqH-cD_QH6F0DcBAIrw1hOPvg1dExEGDQQcTme9WQ_Ipmp3aiyxQEnbd013DhdpqqNpVTb9hgVfE4PrZLl4GZmir32QGFGmvi" />
  </picture>
 </a>
 
