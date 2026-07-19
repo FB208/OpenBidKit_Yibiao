@@ -20,6 +20,11 @@
   </a>
 </p>
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/45446?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-45446" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/45446" alt="FB208%2FOpenBidKit_Yibiao | Trendshift" width="250" height="55"></a>
+  <a href="https://trendshift.io/repositories/45446?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-45446" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/45446/daily?language=JavaScript" alt="FB208%2FOpenBidKit_Yibiao | Trendshift" width="250" height="55"></a>
+</p>
+
 
 <p align="left">
   <strong>🚀 开箱即用-开源免费AI标书编写工具</strong>
