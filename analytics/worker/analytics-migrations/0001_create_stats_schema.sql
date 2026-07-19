@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS stats_totals (
   total_page_views INTEGER NOT NULL DEFAULT 0,
   total_events INTEGER NOT NULL DEFAULT 0,
   total_ai_requests INTEGER NOT NULL DEFAULT 0,
+  total_text_tokens INTEGER NOT NULL DEFAULT 0,
+  total_generated_images INTEGER NOT NULL DEFAULT 0,
   last_rollup_date TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL
 );

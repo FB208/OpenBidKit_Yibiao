@@ -34,6 +34,8 @@ export async function loadOverview() {
   state.totalView.textContent = formatNumber(totalView);
   state.totalEvents.textContent = formatNumber(summary.totalEvents);
   state.totalAiRequests.textContent = formatNumber(summary.totalAiRequests);
+  state.totalTextTokens.textContent = formatNumber(summary.totalTextTokens);
+  state.totalGeneratedImages.textContent = formatNumber(summary.totalGeneratedImages);
   state.totalClients.textContent = formatNumber(summary.totalClients);
   state.todayActiveClients.textContent = formatNumber(summary.todayActiveClients);
   state.todayNewClients.textContent = formatNumber(summary.todayNewClients);

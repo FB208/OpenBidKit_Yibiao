@@ -10,7 +10,8 @@
     "setup:resources": "node ../scripts/setup-resource-storage.mjs",
     "setup:analytics-storage": "node ../scripts/setup-analytics-storage.mjs",
     "backfill:analytics-stats": "node ../scripts/backfill-analytics-stats.mjs",
-    "backfill:analytics-stat-fields": "node ../scripts/backfill-analytics-stat-fields.mjs"
+    "backfill:analytics-stat-fields": "node ../scripts/backfill-analytics-stat-fields.mjs",
+    "backfill:overview-ai-totals": "node ../scripts/backfill-overview-ai-totals.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.13.2"

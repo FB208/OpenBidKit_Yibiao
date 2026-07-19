@@ -28,7 +28,7 @@
 | `GET /health` | Worker | 无 | 健康检查 |
 | `POST /track` | AE + D1 | 无 | 写 AE；从 Cloudflare 真实客户端 IP 请求头记录客户端 IP；新客户端按 `client_created_at` 窗口实时入库，授权字段按快照覆盖既有 `stats_clients` |
 | `GET /api/projects` | D1 优先，AE 兜底 | `ADMIN_TOKEN` | 项目列表 |
-| `GET /api/overview` | D1 + AE + KV | `ADMIN_TOKEN` | 概览总数、新增、今日活跃、每日统计 |
+| `GET /api/overview` | D1 + AE + KV | `ADMIN_TOKEN` | 概览总数、文本 Token、生图次数、新增、今日活跃、每日统计 |
 | `GET /api/clients` | D1 | `ADMIN_TOKEN` | 客户端统计列表 |
 | `GET /api/client-detail` | AE | `ADMIN_TOKEN` | 单客户端 7天/30天/全部事件明细 |
 | `GET /api/ip-stats` | D1 | `ADMIN_TOKEN` | 按最后访问 IP 汇总客户端数，分页返回 |
@@ -65,6 +65,7 @@
 | 资源点击量 | `RESOURCE_DB.resources.click_count` 保存历史累计，页面查询时加上 AE 今天点击量 |
 | 版本客户端数 | D1 历史来自 `stats_clients.last_active_version` 当前分组重算；今天/7天/30天来自 AE 去重客户端数 |
 | 模型 Total Tokens | `ai_request` 的 `double4` 按 `_sample_interval` 聚合，历史写入 `stats_models.total_tokens` |
+| 概览 AI 指标 | 北京时间 02:30 模型汇总完成后，从 D1 `stats_models` 覆盖刷新 `stats_totals.total_text_tokens` 和 `stats_totals.total_generated_images`；生成图片数沿用生图模型请求次数口径 |
 | Agent 执行统计 | `agent_runtime` 的 `blob9` 单字段 v2 复合值聚合，包含最终状态、重试次数、文本模型服务商、endpoint host 和模型名；历史读 D1 按模型维度的汇总列，今天/7天/30天读 AE；旧版 Agent 历史不兼容 |
 | 配置使用 | 新版 `config_usage` 使用 `config_key/config_value` 键值对上报；D1 历史保留，AE 旧格式不再兼容 |
 | 授权状态 | 客户端上报 `license_status/license_plan/license_expires_at/source_trusted/untrusted_reason`；AE 写入 `blob14-blob18`，D1 `stats_clients` 保存最新状态 |
@@ -134,7 +135,7 @@ npm run setup:analytics-storage
 | --- | --- |
 | D1 | 创建或复用 `openbidkit-analytics`，binding 为 `ANALYTICS_DB` |
 | Cron | 确认北京时间 01:00 到 03:00 每 30 分钟一个触发点的 5 个 Cron |
-| Migration | 执行 `analytics-migrations/*.sql`，并自动补齐 `stats_clients` 授权字段、`stats_versions.client_count`、`stats_models.total_tokens` |
+| Migration | 执行 `analytics-migrations/*.sql`，并自动补齐 `stats_clients` 授权字段、`stats_versions.client_count`、`stats_models.total_tokens` 和概览 AI 指标字段 |
 
 如果刚删除过 `openbidkit-analytics`，脚本会重新创建并更新 `wrangler.jsonc` 的 `database_id`。
 
@@ -222,6 +223,13 @@ Remove-Item Env:\BACKFILL_DATE
 ```powershell
 cd analytics\worker
 npm run backfill:analytics-stat-fields
+```
+
+只根据 D1 已有模型历史统计回填概览 Token 消耗量和生成图片数时，执行独立脚本：
+
+```powershell
+cd analytics\worker
+npm run backfill:overview-ai-totals
 ```
 
 注意事项：

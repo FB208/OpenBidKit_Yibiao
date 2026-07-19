@@ -341,7 +341,15 @@ export async function queryStatsOverview(env, projectName) {
 
   const [totals, todayNew, last7New, dailyRows, todayActiveClients, todayDaily] = await Promise.all([
     first(db, `
-      SELECT total_clients, total_open, total_page_views, total_events, total_ai_requests, last_rollup_date
+      SELECT
+        total_clients,
+        total_open,
+        total_page_views,
+        total_events,
+        total_ai_requests,
+        total_text_tokens,
+        total_generated_images,
+        last_rollup_date
       FROM stats_totals
       WHERE project_name = ?
     `, [projectName]),
@@ -383,6 +391,8 @@ export async function queryStatsOverview(env, projectName) {
     totalView: number(totals?.total_page_views),
     totalEvents: number(totals?.total_events),
     totalAiRequests: number(totals?.total_ai_requests),
+    totalTextTokens: number(totals?.total_text_tokens),
+    totalGeneratedImages: number(totals?.total_generated_images),
     todayNewClients: number(todayNew?.count),
     last7NewClients: number(last7New?.count),
     todayActiveClients,
@@ -945,6 +955,8 @@ export const ROLLUP_CRON_STAGES = [
   { cron: '30 18 * * *', stages: ['configs', 'models', 'agents'], beijingTime: '02:30', description: '写入配置使用、模型请求、Agent 执行和 Total Tokens 累计值' },
   { cron: '0 19 * * *', stages: ['retention', 'resources'], beijingTime: '03:00', description: '写入留存快照，重算资源历史点击量并完成整日汇总' },
 ];
+
+export const OVERVIEW_AI_TOTALS_CRON = '30 18 * * *';
 
 const ROLLUP_STAGE_ORDER = ['discover', 'daily', 'clients', 'pages', 'versions', 'configs', 'models', 'agents', 'retention', 'resources'];
 const ROLLUP_STAGES_BY_CRON = new Map(ROLLUP_CRON_STAGES.map((item) => [item.cron, item.stages]));
@@ -2203,6 +2215,41 @@ export async function rollupYesterdayCronStage(env, cron) {
     }
   }
   return { activityDate, cron, stages: results };
+}
+
+// 从模型历史汇总刷新概览 AI 指标，覆盖写入以保证任务可重复执行。
+export async function refreshOverviewAiTotals(env, projectNames) {
+  const db = requireStatsDb(env);
+  const projects = projectNames
+    ? uniqueProjectNames(projectNames)
+    : uniqueProjectNames((await all(db, `
+      SELECT project_name AS projectName FROM stats_totals
+      UNION
+      SELECT project_name AS projectName FROM stats_models
+    `)).map((row) => row.projectName));
+  const updatedAt = nowText();
+
+  for (const projectName of projects) {
+    await ensureTotals(db, projectName, updatedAt);
+    await run(db, `
+      UPDATE stats_totals
+      SET
+        total_text_tokens = COALESCE((
+          SELECT SUM(total_tokens)
+          FROM stats_models
+          WHERE project_name = ? AND request_type = 'text'
+        ), 0),
+        total_generated_images = COALESCE((
+          SELECT SUM(request_count)
+          FROM stats_models
+          WHERE project_name = ? AND request_type = 'image'
+        ), 0),
+        updated_at = ?
+      WHERE project_name = ?
+    `, [projectName, projectName, updatedAt, projectName]);
+  }
+
+  return { projects, updatedAt };
 }
 
 export async function rollupYesterdayForAllProjects(env) {

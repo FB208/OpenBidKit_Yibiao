@@ -267,6 +267,16 @@ function ensureAnalyticsColumns() {
       sql: 'ALTER TABLE stats_models ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0',
     },
     {
+      table: 'stats_totals',
+      column: 'total_text_tokens',
+      sql: 'ALTER TABLE stats_totals ADD COLUMN total_text_tokens INTEGER NOT NULL DEFAULT 0',
+    },
+    {
+      table: 'stats_totals',
+      column: 'total_generated_images',
+      sql: 'ALTER TABLE stats_totals ADD COLUMN total_generated_images INTEGER NOT NULL DEFAULT 0',
+    },
+    {
       table: 'stats_clients',
       column: 'last_access_ip',
       sql: 'ALTER TABLE stats_clients ADD COLUMN last_access_ip TEXT NOT NULL DEFAULT \'\'',

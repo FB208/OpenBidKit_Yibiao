@@ -13,7 +13,11 @@ import { handleRetention } from './routes/retention.js';
 import { handleAdminResources, handlePublicResources, handleResourceImage } from './routes/resources.js';
 import { handleTrack } from './routes/track.js';
 import { handleTraffic } from './routes/traffic.js';
-import { rollupYesterdayCronStage } from './services/analyticsStatsStore.js';
+import {
+  OVERVIEW_AI_TOTALS_CRON,
+  refreshOverviewAiTotals,
+  rollupYesterdayCronStage,
+} from './services/analyticsStatsStore.js';
 
 const routes = new Map([
   ['/health', (request, env) => handleHealth(env)],
@@ -56,6 +60,14 @@ export default {
   },
 
   async scheduled(event, env) {
-    await rollupYesterdayCronStage(env, event?.cron || '');
+    const cron = event?.cron || '';
+    await rollupYesterdayCronStage(env, cron);
+    if (cron === OVERVIEW_AI_TOTALS_CRON) {
+      try {
+        await refreshOverviewAiTotals(env);
+      } catch (error) {
+        console.error('[analytics] overview AI totals refresh failed', error?.message || String(error));
+      }
+    }
   },
 };

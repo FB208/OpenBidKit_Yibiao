@@ -28,6 +28,8 @@ export const state = {
   totalView: $('totalView'),
   totalEvents: $('totalEvents'),
   totalAiRequests: $('totalAiRequests'),
+  totalTextTokens: $('totalTextTokens'),
+  totalGeneratedImages: $('totalGeneratedImages'),
   totalClients: $('totalClients'),
   todayActiveClients: $('todayActiveClients'),
   todayNewClients: $('todayNewClients'),
