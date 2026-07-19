@@ -534,7 +534,8 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         ? rejectionCheckStore
         : duplicateCheckStore;
     const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId) : aiService;
-    runner({ aiService: runnerAiService, agentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
+    const runnerAgentService = agentService.bindSelectedRuntime();
+    runner({ aiService: runnerAiService, agentService: runnerAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
       const failedTask = updateTask({ status: 'error', error: error.message || '任务执行失败' });
       const nextState = updateWorkspaceState(definition, { [taskField]: failedTask });
       emit(failedTask, buildSnapshot(definition, nextState, failedTask));

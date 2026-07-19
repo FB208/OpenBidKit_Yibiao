@@ -35,7 +35,7 @@
 | `GET /api/traffic` | D1 或 AE | `ADMIN_TOKEN` | 访问分析，`range=history/today/7/30` |
 | `GET /api/config-usage` | D1 或 AE | `ADMIN_TOKEN` | 配置使用，`range=history/today/7/30` |
 | `GET /api/model-usage` | D1 或 AE | `ADMIN_TOKEN` | 模型使用，支持 `provider/endpointHost/model` 筛选 |
-| `GET /api/agent-runtime` | D1 或 AE | `ADMIN_TOKEN` | Agent 执行、重试和重试后成功率，`range=history/today/7/30` |
+| `GET /api/agent-runtime` | D1 或 AE | `ADMIN_TOKEN` | Agent 总体、运行时、模型维度的成功率、失败率、重试率和重试后成功率，`range=history/today/7/30` |
 | `GET /api/latest` | AE | `ADMIN_TOKEN` | 最近事件，支持 `event` 筛选 |
 | `GET /api/retention` | D1 | `ADMIN_TOKEN` | 留存概览，读取 Cron 生成的最新 30 天快照 |
 | `GET /api/github-repo-stats` | GitHub + KV | `ADMIN_TOKEN` | GitHub stats |
@@ -66,7 +66,7 @@
 | 版本客户端数 | D1 历史来自 `stats_clients.last_active_version` 当前分组重算；今天/7天/30天来自 AE 去重客户端数 |
 | 模型 Total Tokens | `ai_request` 的 `double4` 按 `_sample_interval` 聚合，历史写入 `stats_models.total_tokens` |
 | 概览 AI 指标 | 北京时间 02:30 模型汇总完成后，从 D1 `stats_models` 覆盖刷新 `stats_totals.total_text_tokens` 和 `stats_totals.total_generated_images`；生成图片数沿用生图模型请求次数口径 |
-| Agent 执行统计 | `agent_runtime` 的 `blob9` 单字段 v2 复合值聚合，包含最终状态、重试次数、文本模型服务商、endpoint host 和模型名；历史读 D1 按模型维度的汇总列，今天/7天/30天读 AE；旧版 Agent 历史不兼容 |
+| Agent 执行统计 | `agent_runtime` 的 `blob9` 单字段 v3 复合值聚合，包含运行时、最终状态、重试次数、文本模型服务商、endpoint host 和模型名；历史读 D1，今天/7天/30天读 AE；已有 v2 AE 指标和迁移前 D1 汇总统一归为 `opencode` |
 | 配置使用 | 新版 `config_usage` 使用 `config_key/config_value` 键值对上报；D1 历史保留，AE 旧格式不再兼容 |
 | 授权状态 | 客户端上报 `license_status/license_plan/license_expires_at/source_trusted/untrusted_reason`；AE 写入 `blob14-blob18`，D1 `stats_clients` 保存最新状态 |
 
@@ -79,9 +79,11 @@
 | `config_usage` | 配置使用 |
 | `ai_request` | 模型使用、AI 请求、Token |
 | `resource_click` | 资源点击 |
-| `agent_runtime` | Agent 执行成功率、重试次数、重试后成功率 |
+| `agent_runtime` | Agent 执行成功率、失败率、重试率和重试后成功率 |
 
-`config_usage` 使用 `config_key/config_value` 键值对上报，每个配置项一条事件。Worker 从 Cloudflare 真实客户端 IP 请求头读取公网 IP 并写入 `blob13`，客户端不自报 IP；`CF-Pseudo-IPv4` 不参与统计。授权状态写入 `blob14-blob18`，只包含状态、授权类型、有效期日期和可信来源标记，不上传设备原始指纹。`ai_request` 只采集请求类型、服务商、endpoint host、模型名和 token 用量，不采集 API Key、Prompt、响应内容或错误详情。`agent_runtime` 只采集执行状态、重试次数、文本模型服务商、endpoint host 和模型名，编码到单个字段 `blob9=v2|<success|failed>|r<0-3>|<provider>|<host>|<model>`，不采集 API Key、任务内容、错误详情、Prompt、输出或本地路径。
+`config_usage` 使用 `config_key/config_value` 键值对上报，每个配置项一条事件。Worker 从 Cloudflare 真实客户端 IP 请求头读取公网 IP 并写入 `blob13`，客户端不自报 IP；`CF-Pseudo-IPv4` 不参与统计。授权状态写入 `blob14-blob18`，只包含状态、授权类型、有效期日期和可信来源标记，不上传设备原始指纹。`ai_request` 只采集请求类型、服务商、endpoint host、模型名和 token 用量，不采集 API Key、Prompt、响应内容或错误详情。`agent_runtime` 额外接收运行时注册表 ID 字段 `agent_runtime_kind`，使用 `^[a-z0-9][a-z0-9._-]{0,39}$` 通用低基数字符格式校验，不限定具体运行时白名单；执行统计编码到 `blob9=v3|<runtime>|<success|failed>|r<0-3>|<provider>|<host>|<model>`，不采集 API Key、任务内容、错误详情、Prompt、输出或本地路径。
+
+`GET /api/agent-runtime` 的 `agentRuntime` 保留总体计数，并返回 `successRate/failureRate/retryRate/retrySuccessRate`；`runtimes[]` 按运行时返回同口径指标；`models[]` 模型明细包含 `runtime`，并继续返回服务商、endpoint host、模型及全部执行指标。
 
 ## 首次部署
 
@@ -135,7 +137,7 @@ npm run setup:analytics-storage
 | --- | --- |
 | D1 | 创建或复用 `openbidkit-analytics`，binding 为 `ANALYTICS_DB` |
 | Cron | 确认北京时间 01:00 到 03:00 每 30 分钟一个触发点的 5 个 Cron |
-| Migration | 执行 `analytics-migrations/*.sql`，并自动补齐 `stats_clients` 授权字段、`stats_versions.client_count`、`stats_models.total_tokens` 和概览 AI 指标字段 |
+| Migration | 通过 Wrangler D1 migrations 执行 `analytics-migrations/*.sql` 并记录已应用版本；Agent 运行时迁移会重建 `stats_agent_runtime` 联合主键并将既有汇总归为 `opencode`；同时自动补齐 `stats_clients` 授权字段、`stats_versions.client_count`、`stats_models.total_tokens` 和概览 AI 指标字段 |
 
 如果刚删除过 `openbidkit-analytics`，脚本会重新创建并更新 `wrangler.jsonc` 的 `database_id`。
 

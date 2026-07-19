@@ -5,9 +5,9 @@ const {
   getBundledOpencodeBinaryPath,
 } = require('../../utils/paths.cjs');
 const {
-  applyOpenCodeToolEnvironment,
-  ensureOpenCodeToolEnvironment,
-} = require('./opencodeToolEnvironment.cjs');
+  applyAgentToolEnvironment,
+  ensureAgentToolEnvironment,
+} = require('../agent/agentToolEnvironment.cjs');
 
 // 统一生成 OpenCode 使用的目录，避免 Server 与自检各自拼装 HOME/XDG。
 function createOpenCodeEnvironmentLayout({ app, runtimeRoot, workspaceDir }) {
@@ -135,8 +135,8 @@ function buildOpenCodeBaseEnv(layout) {
 function prepareOpenCodeEnvironment({ app, runtimeRoot, workspaceDir }) {
   const layout = createOpenCodeEnvironmentLayout({ app, runtimeRoot, workspaceDir });
   ensureOpenCodeEnvironmentDirectories(layout);
-  const toolEnvironment = ensureOpenCodeToolEnvironment({ app, workspaceDir });
-  const env = applyOpenCodeToolEnvironment(buildOpenCodeBaseEnv(layout), toolEnvironment);
+  const toolEnvironment = ensureAgentToolEnvironment({ app, runtimeRoot, workspaceDir, writeInstructions: true });
+  const env = applyAgentToolEnvironment(buildOpenCodeBaseEnv(layout), toolEnvironment);
   const opencodeBinaryPath = getBundledOpencodeBinaryPath(app);
   const skillRoots = Array.from(new Set([
     path.resolve(runtimeRoot),

@@ -1122,7 +1122,7 @@ function OutlineEditPage({
                   <label className="outline-agent-debug-option">
                     <span>
                       <strong>强制 Agent 修复目录</strong>
-                      <small>本次目录生成会在最终保存前强制进入 OpenCode Agent 修复链路，用于验证 Agent workspace、结果 JSON 和程序校验。</small>
+                      <small>本次目录生成会在最终保存前强制进入智能体修复链路，用于验证 Agent workspace、结果 JSON 和程序校验。</small>
                     </span>
                     <span className="yb-switch-control">
                       <input

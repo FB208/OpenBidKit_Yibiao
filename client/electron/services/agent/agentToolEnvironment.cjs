@@ -1,8 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  getAgentRuntimeDir,
-  getBundledOpencodeToolsBinDir,
+  getBundledAgentToolsBinDir,
 } = require('../../utils/paths.cjs');
 
 const SHIM_COMMANDS = [
@@ -33,22 +32,14 @@ const SHIM_COMMANDS = [
 
 const BUNDLED_COMMANDS = ['rg', 'fd', 'jq'];
 
-const AGENTS_MD_CONTENT = `# 易标 OpenCode 智能体工作区
+const INSTRUCTIONS_PATH = path.join(__dirname, '..', '..', 'resources', 'agent-workspace.md');
 
-你在易标客户端创建的临时工作区内工作。
+function getAgentWorkspaceInstructions() {
+  return fs.readFileSync(INSTRUCTIONS_PATH, 'utf-8');
+}
 
-可用命令：rg、fd、jq、node、ls、cat、pwd、head、tail、wc、sort、uniq、mkdir、cp、mv、rm、touch、basename、dirname、realpath、cut、tr、du、stat、grep、find、sed。
-
-约定：
-- 只读写当前工作区内的文件。
-- 不要访问当前工作区外的路径。
-- 不要联网。
-- 复杂文本处理或 JSON 处理优先使用 node 小脚本，避免依赖不同平台 shell 行为。
-- 需要输出结果时，严格写入任务要求的输出文件。
-`;
-
-function getRuntimeToolsBinDir(app) {
-  return path.join(getAgentRuntimeDir(app), 'service', 'tools', 'bin');
+function getRuntimeToolsBinDir(runtimeRoot) {
+  return path.join(runtimeRoot, 'tools', 'bin');
 }
 
 function quoteSh(value) {
@@ -78,13 +69,13 @@ function getExecutableName(command) {
 
 function verifyBundledTools(bundledToolsBinDir) {
   if (!fs.existsSync(bundledToolsBinDir)) {
-    throw new Error(`OpenCode 常用命令目录不存在：${bundledToolsBinDir}`);
+    throw new Error(`智能体常用命令目录不存在：${bundledToolsBinDir}`);
   }
 
   BUNDLED_COMMANDS.forEach((command) => {
     const executablePath = path.join(bundledToolsBinDir, getExecutableName(command));
     if (!fs.existsSync(executablePath)) {
-      throw new Error(`OpenCode 常用命令缺失：${executablePath}`);
+      throw new Error(`智能体常用命令缺失：${executablePath}`);
     }
     if (process.platform !== 'win32') {
       try { fs.chmodSync(executablePath, 0o755); } catch {}
@@ -928,10 +919,10 @@ function ensureRuntimeShims(binDir) {
   return runnerPath;
 }
 
-function writeOpenCodeAgentsFile(workspaceDir) {
+function writeAgentInstructionsFile(workspaceDir) {
   if (!workspaceDir) return '';
   const targetPath = path.join(workspaceDir, 'AGENTS.md');
-  writeFileIfChanged(targetPath, AGENTS_MD_CONTENT);
+  writeFileIfChanged(targetPath, getAgentWorkspaceInstructions());
   return targetPath;
 }
 
@@ -945,12 +936,12 @@ function prependPathEntries(env, entries) {
   return env;
 }
 
-function ensureOpenCodeToolEnvironment({ app, workspaceDir } = {}) {
-  const runtimeToolsBinDir = getRuntimeToolsBinDir(app);
-  const bundledToolsBinDir = getBundledOpencodeToolsBinDir(app);
+function ensureAgentToolEnvironment({ app, runtimeRoot, workspaceDir, writeInstructions = false } = {}) {
+  const runtimeToolsBinDir = getRuntimeToolsBinDir(runtimeRoot);
+  const bundledToolsBinDir = getBundledAgentToolsBinDir(app);
   ensureRuntimeShims(runtimeToolsBinDir);
   verifyBundledTools(bundledToolsBinDir);
-  const agentsPath = writeOpenCodeAgentsFile(workspaceDir);
+  const agentsPath = writeInstructions ? writeAgentInstructionsFile(workspaceDir) : '';
   return {
     runtimeToolsBinDir,
     bundledToolsBinDir,
@@ -959,16 +950,16 @@ function ensureOpenCodeToolEnvironment({ app, workspaceDir } = {}) {
   };
 }
 
-function applyOpenCodeToolEnvironment(env, toolEnvironment) {
+function applyAgentToolEnvironment(env, toolEnvironment) {
   return prependPathEntries(env, toolEnvironment?.pathEntries || []);
 }
 
 module.exports = {
-  AGENTS_MD_CONTENT,
   BUNDLED_COMMANDS,
   SHIM_COMMANDS,
-  applyOpenCodeToolEnvironment,
-  ensureOpenCodeToolEnvironment,
+  applyAgentToolEnvironment,
+  ensureAgentToolEnvironment,
+  getAgentWorkspaceInstructions,
   getRuntimeToolsBinDir,
-  writeOpenCodeAgentsFile,
+  writeAgentInstructionsFile,
 };

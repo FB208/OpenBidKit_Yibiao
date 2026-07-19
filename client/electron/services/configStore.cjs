@@ -2,6 +2,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { getConfigFilePath } = require('../utils/paths.cjs');
+const {
+  getDefaultAgentRuntimeId,
+  normalizeAgentRuntimeId,
+} = require('./agent/agentRuntimeRegistry.cjs');
 
 const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
 const legacyTextModelProviders = ['longcat'];
@@ -247,6 +251,7 @@ const defaultConfig = {
   gpu_hardware_acceleration_enabled: true,
   gpu_hardware_acceleration_configured: true,
   export_format: defaultExportFormat,
+  agent_runtime: getDefaultAgentRuntimeId(),
   agent_mode_scenarios: defaultAgentModeScenarios,
   developer_mode: false,
   developer_token_stats_auto_open: false,
@@ -671,6 +676,7 @@ function normalizeConfig(config) {
     gpu_hardware_acceleration_enabled: gpuHardwareAccelerationEnabled,
     gpu_hardware_acceleration_configured: gpuHardwareAccelerationConfigured === false ? true : gpuHardwareAccelerationConfigured,
     export_format: normalizeExportFormat(source.export_format),
+    agent_runtime: normalizeAgentRuntimeId(source.agent_runtime),
     agent_mode_scenarios: normalizeAgentModeScenarios(source.agent_mode_scenarios),
     developer_mode: source.developer_mode === undefined ? defaultConfig.developer_mode : Boolean(source.developer_mode),
     developer_token_stats_auto_open: source.developer_token_stats_auto_open === undefined ? defaultConfig.developer_token_stats_auto_open : Boolean(source.developer_token_stats_auto_open),

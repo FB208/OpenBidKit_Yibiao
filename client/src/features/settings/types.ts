@@ -15,6 +15,7 @@ export interface SettingsPageState {
     mermaid_concurrency_limit: number | '';
     html_concurrency_limit: number | '';
   };
+  agentRuntime: string;
   agentModeScenarios: AgentModeScenariosConfig;
   general: {
     developer_mode: boolean;

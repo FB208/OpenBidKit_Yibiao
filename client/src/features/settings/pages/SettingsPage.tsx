@@ -3,7 +3,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { DetailHelpLink, FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentToolCheckResult, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AgentModeScenariosConfig, AgentRuntimeDescriptor, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'components' | 'agent' | 'about';
@@ -20,17 +20,19 @@ const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
 ];
 
 const agentSelfCheckStatusMeta: Record<AgentSelfCheckUiStatus, { label: string; description: string }> = {
-  untested: { label: '未检测', description: '点击自检后，会验证 OpenCode 逻辑隔离、Server、AI proxy、已集成命令工具、当前文本模型和智能体输出链路。' },
-  checking: { label: '检测中', description: '正在清理上一轮自检日志，并校验逻辑隔离、工具环境与极简智能体任务。' },
-  normal: { label: '正常', description: 'OpenCode 逻辑隔离、智能体链路和关键集成工具已通过自检。' },
-  busy: { label: '忙碌', description: 'Agent 正在处理其他任务，本次自检已跳过；这不是 OpenCode 故障。' },
+  untested: { label: '未检测', description: '点击自检后，会验证当前已保存运行时的环境、工具、文本模型和输出链路。' },
+  checking: { label: '检测中', description: '正在检查运行环境、工具链与极简智能体任务。' },
+  normal: { label: '正常', description: '当前智能体运行时和关键集成能力已通过自检。' },
+  busy: { label: '忙碌', description: '智能体正在处理其他任务，本次自检已跳过。' },
   error: { label: '异常', description: '智能体链路自检失败，请查看下方错误详情。' },
 };
 
-const agentToolCheckStatusMeta: Record<AgentToolCheckResult['status'], { label: string; description: string }> = {
-  success: { label: '可用', description: '命令可以在智能体运行环境中执行。' },
-  warning: { label: '警告', description: '命令可执行，但解析来源或兼容性需要留意。' },
-  error: { label: '失败', description: '命令不可用，可能影响智能体任务。' },
+const agentDiagnosticStatusMeta: Record<AgentSelfCheckStepStatus | 'warning', { label: string; description: string }> = {
+  pending: { label: '待检查', description: '尚未执行检查。' },
+  running: { label: '检查中', description: '正在执行检查。' },
+  success: { label: '正常', description: '检查已通过。' },
+  warning: { label: '警告', description: '检查完成，但存在需要留意的信息。' },
+  error: { label: '异常', description: '检查未通过。' },
 };
 
 const updateChannelOptions: Array<{ value: UpdateChannel; label: string; description: string }> = [
@@ -521,6 +523,7 @@ const initialState: SettingsPageState = {
     mermaid_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
     html_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
   },
+  agentRuntime: '',
   agentModeScenarios: { ...defaultAgentModeScenarios },
   general: {
     developer_mode: false,
@@ -552,6 +555,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [updateError, setUpdateError] = useState('');
   const [licenseStatus, setLicenseStatus] = useState<LicenseRuntimeStatus | null>(null);
   const [offlineLicenseDialogOpen, setOfflineLicenseDialogOpen] = useState(false);
+  const [agentRuntimes, setAgentRuntimes] = useState<AgentRuntimeDescriptor[]>([]);
   const [agentSelfCheckStatus, setAgentSelfCheckStatus] = useState<AgentSelfCheckUiStatus>('untested');
   const [agentSelfCheckResult, setAgentSelfCheckResult] = useState<AgentSelfCheckResult | null>(null);
   const [exportingAgentSelfCheckReport, setExportingAgentSelfCheckReport] = useState(false);
@@ -559,6 +563,9 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
   useEffect(() => {
     void loadTextConfig();
+    void window.yibiao?.agent.listRuntimes()
+      .then((runtimes) => setAgentRuntimes(runtimes || []))
+      .catch(() => setAgentRuntimes([]));
     void window.yibiao?.getVersion().then(setAppVersion);
     void window.yibiao?.license?.getStatus().then(setLicenseStatus).catch(() => setLicenseStatus(null));
 
@@ -610,6 +617,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         imageModel: activeImageProfile,
         imageModelProfiles,
         components: normalizeComponentsState(config.components),
+        agentRuntime: config.agent_runtime,
         agentModeScenarios: normalizeAgentModeScenarios(config.agent_mode_scenarios),
         general: {
           developer_mode: Boolean(config.developer_mode),
@@ -637,12 +645,19 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     [state.imageModel.provider]: imageProfileFromState(state.imageModel),
   });
 
-  const createClientConfig = (): ClientConfig => {
+  const createClientConfig = (options: { includeAgentState?: boolean } = {}): ClientConfig => {
     const textModelProfiles = getCurrentTextModelProfiles();
     const activeTextProfile = textModelProfiles[state.textModel.provider]
       || normalizeTextModelProfile(state.textModel.provider);
     const imageModelProfiles = getCurrentImageModelProfiles();
     const activeImageProfile = imageModelProfiles[state.imageModel.provider];
+    const persistedAgentRuntime = savedConfig?.agent_runtime
+      || state.agentRuntime
+      || agentRuntimes.find((runtime) => runtime.is_default)?.id
+      || '';
+    const persistedAgentModeScenarios = savedConfig
+      ? normalizeAgentModeScenarios(savedConfig.agent_mode_scenarios)
+      : state.agentModeScenarios;
 
     return {
       text_model_provider: state.textModel.provider,
@@ -656,7 +671,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       image_model: activeImageProfile,
       image_model_profiles: imageModelProfiles,
       components: componentsFromState(state.components),
-      agent_mode_scenarios: state.agentModeScenarios,
+      agent_runtime: options.includeAgentState ? state.agentRuntime : persistedAgentRuntime,
+      agent_mode_scenarios: options.includeAgentState ? state.agentModeScenarios : persistedAgentModeScenarios,
       update_channel: state.general.update_channel,
       gpu_hardware_acceleration_enabled: state.general.gpu_hardware_acceleration_enabled,
       gpu_hardware_acceleration_configured: state.general.gpu_hardware_acceleration_configured,
@@ -820,6 +836,12 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }));
   };
 
+  const updateAgentRuntime = (runtimeId: string) => {
+    setState((prev) => ({ ...prev, agentRuntime: runtimeId }));
+    setAgentSelfCheckStatus('untested');
+    setAgentSelfCheckResult(null);
+  };
+
   const updateTextModelProvider = (provider: TextModelProvider) => {
     setTextModels([]);
     setState((prev) => ({
@@ -920,15 +942,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       setAgentSelfCheckStatus('checking');
       setAgentSelfCheckResult(null);
 
-      const config = createClientConfig();
-      const saveResult = await window.yibiao?.config.save(config);
-      if (!saveResult?.success) {
-        throw new Error(saveResult?.message || '保存当前文本模型配置失败，无法执行智能体自检');
+      if (!savedConfig?.agent_runtime) {
+        throw new Error('尚未读取到已保存的智能体运行时');
       }
-      setSavedConfig(config);
-      onDeveloperModeChange?.(Boolean(config.developer_mode));
-
-      const result = await window.yibiao?.agent.selfCheck();
+      const result = await window.yibiao?.agent.selfCheck(savedConfig.agent_runtime);
       if (!result) {
         throw new Error('智能体自检未返回结果');
       }
@@ -944,6 +961,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       const message = error instanceof Error ? error.message : '智能体自检失败';
       const failedResult: AgentSelfCheckResult = {
         success: false,
+        runtime_id: savedConfig?.agent_runtime || state.agentRuntime,
+        runtime_name: agentRuntimes.find((runtime) => runtime.id === (savedConfig?.agent_runtime || state.agentRuntime))?.display_name || '智能体',
         status: 'error',
         message,
         checked_at: new Date().toISOString(),
@@ -954,9 +973,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         workspace_dir: '',
         output_file: '',
         output_path: '',
-        opencode_binary_path: '',
-        isolation_check: null,
         steps: [],
+        sections: [],
         error: { message },
         diagnostics: { message },
         detail_text: message,
@@ -1243,7 +1261,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
 
     if (activeTab === 'agent') {
-      return JSON.stringify(state.agentModeScenarios) !== JSON.stringify(normalizeAgentModeScenarios(savedConfig.agent_mode_scenarios));
+      return JSON.stringify({ runtime: state.agentRuntime, scenarios: state.agentModeScenarios }) !== JSON.stringify({
+        runtime: savedConfig.agent_runtime,
+        scenarios: normalizeAgentModeScenarios(savedConfig.agent_mode_scenarios),
+      });
     }
 
     return false;
@@ -1325,7 +1346,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       return;
     }
     if (activeTab === 'agent') {
-      await saveClientConfig(createClientConfig());
+      await saveClientConfig(createClientConfig({ includeAgentState: true }));
     }
   };
 
@@ -1335,6 +1356,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const imageModelStatus: ImageModelStatus = state.imageModel.status || 'untested';
   const currentImageStatus = imageStatusMeta[imageModelStatus];
   const currentAgentSelfCheckStatus = agentSelfCheckStatusMeta[agentSelfCheckStatus];
+  const savedAgentRuntime = agentRuntimes.find((runtime) => runtime.id === savedConfig?.agent_runtime);
   const imageTestTime = formatImageTestTime(state.imageModel.tested_at);
   const settingsToolbarGroups: FloatingToolbarGroup[] = canSaveActiveTab
     ? [
@@ -1961,6 +1983,27 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             <span />
             <strong>智能体配置</strong>
           </div>
+          <div className="settings-list">
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>智能体运行时</strong>
+                <span>选择后点击保存生效；运行中的任务继续使用启动时绑定的运行时。</span>
+              </div>
+              <select value={state.agentRuntime} onChange={(event) => updateAgentRuntime(event.target.value)}>
+                {agentRuntimes.map((runtime) => (
+                  <option value={runtime.id} key={runtime.id}>{runtime.display_name}</option>
+                ))}
+              </select>
+            </label>
+            {state.agentRuntime && (
+              <div className="settings-row">
+                <div className="settings-row-copy">
+                  <strong>运行时说明</strong>
+                  <span>{agentRuntimes.find((runtime) => runtime.id === state.agentRuntime)?.description || '正在读取运行时信息'}</span>
+                </div>
+              </div>
+            )}
+          </div>
           <div className={`agent-self-check-status is-${agentSelfCheckStatus}`}>
             <div>
               <strong>智能体自检</strong>
@@ -1972,7 +2015,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             <div className="settings-row">
               <div className="settings-row-copy">
                 <strong>自检</strong>
-                <span>先检查 OpenCode 逻辑隔离，再执行极简智能体任务，检测 Server、AI proxy、已集成命令工具、当前文本模型和输出文件校验链路。每次自检前会清空上一轮自检日志。</span>
+                <span>检查当前已保存的 {savedAgentRuntime?.display_name || '智能体运行时'}，覆盖运行环境、AI Proxy、工具、当前文本模型和输出文件链路。</span>
               </div>
               <div className="settings-action-cell">
                 <button type="button" className="inline-action" onClick={runAgentSelfCheck} disabled={agentSelfCheckStatus === 'checking'}>
@@ -2008,7 +2051,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             <div className={`agent-self-check-result is-${agentSelfCheckResult.success ? 'normal' : agentSelfCheckResult.status === 'busy' ? 'busy' : 'error'}`}>
               <div className="agent-self-check-result-head">
                 <div>
-                  <strong>{agentSelfCheckResult.success ? '自检通过' : agentSelfCheckResult.status === 'busy' ? '自检跳过' : '自检失败'}</strong>
+                  <strong>{agentSelfCheckResult.runtime_name}：{agentSelfCheckResult.success ? '自检通过' : agentSelfCheckResult.status === 'busy' ? '自检跳过' : '自检失败'}</strong>
                   <span>{agentSelfCheckResult.message}</span>
                 </div>
                 <div className="agent-self-check-result-actions">
@@ -2029,85 +2072,47 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   ))}
                 </div>
               )}
-              {agentSelfCheckResult.isolation_check && (
-                <div className={`agent-isolation-check is-${agentSelfCheckResult.isolation_check.success ? 'success' : 'error'}`}>
-                  <div className="agent-isolation-check-head">
-                    <div>
-                      <strong>OpenCode 逻辑隔离</strong>
-                      <span>{agentSelfCheckResult.isolation_check.success ? '运行路径、权限和 Skill 来源均符合预期' : '发现隔离配置或路径越界'}</span>
-                    </div>
-                    <em>{agentSelfCheckResult.isolation_check.success ? '通过' : '异常'}</em>
-                  </div>
-                  <div className="agent-isolation-check-grid">
-                    <div>
-                      <span>Agent 工作区</span>
-                      <strong title={agentSelfCheckResult.isolation_check.workspace_dir}>{agentSelfCheckResult.isolation_check.workspace_dir || '-'}</strong>
-                    </div>
-                    <div>
-                      <span>隔离 HOME</span>
-                      <strong title={agentSelfCheckResult.isolation_check.home_dir}>{agentSelfCheckResult.isolation_check.home_dir || '-'}</strong>
-                    </div>
-                    <div>
-                      <span>外部目录规则</span>
-                      <strong>{agentSelfCheckResult.isolation_check.external_read_denied && agentSelfCheckResult.isolation_check.effective_permission === 'deny' ? '已拒绝' : '未通过'}</strong>
-                    </div>
-                    <div>
-                      <span>已加载 Skill</span>
-                      <strong>{agentSelfCheckResult.isolation_check.loaded_skills.length} 个</strong>
-                    </div>
-                  </div>
-                  <div className="agent-isolation-skill-sources">
-                    <span>Skill 来源</span>
-                    {agentSelfCheckResult.isolation_check.loaded_skills.length > 0 ? (
+              {agentSelfCheckResult.sections.map((section) => {
+                const sectionMeta = agentDiagnosticStatusMeta[section.status];
+                return (
+                  <div className={`agent-isolation-check is-${section.status}`} key={section.id}>
+                    <div className="agent-isolation-check-head">
                       <div>
-                        {agentSelfCheckResult.isolation_check.loaded_skills.map((skill, index) => (
-                          <code
-                            key={`${skill.name}-${skill.location || 'builtin'}-${index}`}
-                            title={skill.location && skill.location !== '<built-in>' ? skill.location : 'OpenCode 内建'}
-                          >
-                            {skill.name} · {skill.location && skill.location !== '<built-in>' ? skill.location : 'OpenCode 内建'}
-                          </code>
+                        <strong>{section.title}</strong>
+                        <span>{section.summary || sectionMeta.description}</span>
+                      </div>
+                      <em>{sectionMeta.label}</em>
+                    </div>
+                    {Boolean(section.details?.length) && (
+                      <div className="agent-isolation-check-grid">
+                        {section.details?.map((item) => (
+                          <div key={`${section.id}-${item.label}`}>
+                            <span>{item.label}</span>
+                            <strong title={item.value}>{item.value || '-'}</strong>
+                          </div>
                         ))}
                       </div>
-                    ) : (
-                      <small>未加载 Skill</small>
+                    )}
+                    {Boolean(section.items?.length) && (
+                      <div className="agent-tool-check-grid">
+                        {section.items?.map((item) => {
+                          const itemMeta = agentDiagnosticStatusMeta[item.status];
+                          return (
+                            <div className={`agent-tool-check-item is-${item.status}`} key={item.id} title={item.detail || item.message}>
+                              <div>
+                                <strong>{item.label}</strong>
+                                <em>{itemMeta.label}</em>
+                              </div>
+                              <span>{item.message || itemMeta.description}</span>
+                              {item.detail && <small>{item.detail}</small>}
+                            </div>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
-                  {agentSelfCheckResult.isolation_check.violations.length > 0 && (
-                    <div className="agent-isolation-violations">
-                      <span>越界项</span>
-                      <ul>
-                        {agentSelfCheckResult.isolation_check.violations.map((violation, index) => (
-                          <li key={`${violation}-${index}`}>{violation}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              )}
-              {Boolean(agentSelfCheckResult.tool_checks?.length) && (
-                <div className="agent-tool-checks">
-                  <div className="agent-tool-checks-head">
-                    <strong>已集成工具校验</strong>
-                    <span>{agentSelfCheckResult.tool_check_summary || '已完成工具校验'}</span>
-                  </div>
-                  <div className="agent-tool-check-grid">
-                    {(agentSelfCheckResult.tool_checks || []).map((item) => {
-                      const meta = agentToolCheckStatusMeta[item.status];
-                      return (
-                        <div className={`agent-tool-check-item is-${item.status}`} key={item.id} title={[item.message, item.resolved_source, item.expected_path].filter(Boolean).join('\n')}>
-                          <div>
-                            <strong>{item.label || item.command}</strong>
-                            <em>{meta.label}</em>
-                          </div>
-                          <span>{item.message || meta.description}</span>
-                          <small>{item.resolved_type ? `${item.resolved_type}：${item.resolved_source || '-'}` : item.expected_path || '-'}</small>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+                );
+              })}
               <pre>{agentSelfCheckResult.detail_text}</pre>
             </div>
           )}

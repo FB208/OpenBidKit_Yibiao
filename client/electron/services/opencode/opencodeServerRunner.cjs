@@ -5,7 +5,7 @@ const { spawn } = require('node:child_process');
 const {
   getBundledOpencodeBinaryPath,
 } = require('../../utils/paths.cjs');
-const { createAiServiceOpenAiProxy } = require('./aiServiceOpenAiProxy.cjs');
+const { createAgentOpenAiProxy } = require('../agent/agentOpenAiProxy.cjs');
 const { writeOpenCodeConfig } = require('./opencodeConfigFactory.cjs');
 const {
   getOpenCodeShellPath,
@@ -220,6 +220,7 @@ async function closeOpenCodeSidecar(sidecar) {
 async function startOpenCodeSidecar({
   app,
   configStore,
+  runtime,
   runtimeRoot,
   workspaceDir,
   timeoutMs,
@@ -243,9 +244,10 @@ async function startOpenCodeSidecar({
 
   try {
     emitStage(onStage, 'ai-proxy-start', 'running', '正在启动 OpenCode AI proxy');
-    aiProxy = createAiServiceOpenAiProxy({
+    aiProxy = createAgentOpenAiProxy({
       app,
       configStore,
+      runtime,
       timeoutMs: agentTimeoutMs,
       diagnostics,
       onActivity,

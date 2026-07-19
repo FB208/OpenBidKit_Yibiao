@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const workerDir = resolve(__dirname, '../worker');
 const workerConfigPath = resolve(workerDir, 'wrangler.jsonc');
-const migrationsDir = resolve(workerDir, 'analytics-migrations');
+const migrationsDirName = 'analytics-migrations';
 
 const d1BindingName = 'ANALYTICS_DB';
 const d1DatabaseName = 'openbidkit-analytics';
@@ -127,14 +127,22 @@ function updateD1Config(databaseId) {
   const bindingObjectPattern = new RegExp(`(\\{[\\s\\S]*?"binding"\\s*:\\s*"${escapedBinding}"[\\s\\S]*?"database_id"\\s*:\\s*")[^"]*("[\\s\\S]*?\\})`);
 
   if (bindingObjectPattern.test(source)) {
-    writeConfig(source.replace(bindingObjectPattern, `$1${databaseId}$2`));
+    const updatedSource = source.replace(bindingObjectPattern, `$1${databaseId}$2`);
+    const analyticsBindingPattern = new RegExp(`\\{[^{}]*?"binding"\\s*:\\s*"${escapedBinding}"[^{}]*?\\}`);
+    writeConfig(updatedSource.replace(analyticsBindingPattern, (bindingBlock) => {
+      if (/"migrations_dir"\s*:/.test(bindingBlock)) {
+        return bindingBlock.replace(/("migrations_dir"\s*:\s*")[^"]*(")/, `$1${migrationsDirName}$2`);
+      }
+      return bindingBlock.replace(/\n(\s*)\}$/, `,\n      "migrations_dir": "${migrationsDirName}"\n$1}`);
+    }));
     return;
   }
 
   const objectBlock = `{
       "binding": "${d1BindingName}",
       "database_name": "${d1DatabaseName}",
-      "database_id": "${databaseId}"
+      "database_id": "${databaseId}",
+      "migrations_dir": "${migrationsDirName}"
     }`;
   writeConfig(insertConfigArrayBlock(source, 'd1_databases', objectBlock));
 }
@@ -239,19 +247,13 @@ function ensureD1Database() {
 }
 
 function applyAnalyticsMigrations() {
-  const files = readdirSync(migrationsDir)
-    .filter((fileName) => fileName.endsWith('.sql'))
-    .sort();
-
-  for (const fileName of files) {
-    const filePath = resolve(migrationsDir, fileName);
-    const result = runWrangler(['d1', 'execute', d1BindingName, '--remote', '--file', filePath]);
-    if (result.status !== 0) {
-      console.error(result.output);
-      process.exit(result.status || 1);
-    }
-    console.log(`ANALYTICS_DB migration applied: ${fileName}`);
+  const result = runWrangler(['d1', 'migrations', 'apply', d1BindingName, '--remote']);
+  if (result.status !== 0) {
+    console.error(result.output);
+    process.exit(result.status || 1);
   }
+
+  console.log('ANALYTICS_DB D1 migrations applied.');
 }
 
 function ensureAnalyticsColumns() {
@@ -345,7 +347,8 @@ function ensureAnalyticsIndexes() {
   }
 }
 
-ensureD1Database();
+const analyticsDatabaseId = ensureD1Database();
+updateD1Config(analyticsDatabaseId);
 ensureCronTrigger();
 applyAnalyticsMigrations();
 ensureAnalyticsColumns();

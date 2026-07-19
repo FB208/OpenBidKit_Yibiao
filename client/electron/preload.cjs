@@ -63,11 +63,12 @@ const bridge = {
     },
   },
   agent: {
-    run: (payload) => ipcRenderer.invoke('agent:run', payload),
-    selfCheck: () => ipcRenderer.invoke('agent:self-check'),
+    listRuntimes: () => ipcRenderer.invoke('agent:list-runtimes'),
+    run: (payload, runtimeId) => ipcRenderer.invoke('agent:run', payload, runtimeId),
+    selfCheck: (runtimeId) => ipcRenderer.invoke('agent:self-check', runtimeId),
     exportSelfCheckReport: (payload) => ipcRenderer.invoke('agent:export-self-check-report', payload),
-    getStatus: () => ipcRenderer.invoke('agent:get-status'),
-    restart: (reason) => ipcRenderer.invoke('agent:restart', reason),
+    getStatus: (runtimeId) => ipcRenderer.invoke('agent:get-status', runtimeId),
+    restart: (reason, runtimeId) => ipcRenderer.invoke('agent:restart', reason, runtimeId),
     onStatus: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('agent:status', listener);

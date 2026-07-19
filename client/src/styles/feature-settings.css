@@ -596,6 +596,14 @@
   border-color: rgba(28, 168, 100, 0.2);
 }
 
+.agent-isolation-check.is-warning {
+  border-color: rgba(245, 158, 11, 0.24);
+}
+
+.agent-isolation-check.is-running {
+  border-color: rgba(33, 116, 253, 0.24);
+}
+
 .agent-isolation-check.is-error {
   border-color: rgba(200, 50, 32, 0.24);
 }
@@ -635,6 +643,16 @@
 .agent-isolation-check.is-success .agent-isolation-check-head em {
   color: #16834a;
   background: rgba(28, 168, 100, 0.12);
+}
+
+.agent-isolation-check.is-warning .agent-isolation-check-head em {
+  color: #a05a00;
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.agent-isolation-check.is-running .agent-isolation-check-head em {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.1);
 }
 
 .agent-isolation-check.is-error .agent-isolation-check-head em {
@@ -795,6 +813,12 @@
 .agent-tool-check-item.is-success em {
   color: #16834a;
   background: rgba(28, 168, 100, 0.12);
+}
+
+.agent-tool-check-item.is-pending em,
+.agent-tool-check-item.is-running em {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.1);
 }
 
 .agent-tool-check-item.is-warning {

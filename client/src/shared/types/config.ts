@@ -3,6 +3,7 @@ export type LegacyTextModelProvider = 'longcat';
 export type ConfiguredTextModelProvider = TextModelProvider | LegacyTextModelProvider;
 export type AiRequestMode = 'normal' | 'stream';
 export type UpdateChannel = 'github' | 'cloudflare';
+export type AgentRuntimeId = string;
 
 export interface TextModelConfig {
   api_key: string;
@@ -80,6 +81,7 @@ export interface ClientConfig extends AiConfig {
   image_model: ImageModelConfig;
   image_model_profiles: ImageModelProfiles;
   components: ComponentsConfig;
+  agent_runtime: AgentRuntimeId;
   agent_mode_scenarios: AgentModeScenariosConfig;
   update_channel?: UpdateChannel;
   gpu_hardware_acceleration_enabled?: boolean;

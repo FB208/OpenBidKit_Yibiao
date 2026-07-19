@@ -135,6 +135,8 @@
     "artifactName": "Yibiao-${version}-${os}-${arch}.${ext}"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "0.80.10",
+    "@earendil-works/pi-coding-agent": "0.80.10",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-popover": "^1.1.15",
     "@radix-ui/react-separator": "^1.1.7",

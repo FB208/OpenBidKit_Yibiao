@@ -11,7 +11,7 @@ const {
 const {
   BUNDLED_COMMANDS,
   SHIM_COMMANDS,
-} = require('./opencodeToolEnvironment.cjs');
+} = require('../agent/agentToolEnvironment.cjs');
 const { prepareOpenCodeEnvironment } = require('./opencodeEnvironment.cjs');
 
 const SELF_CHECK_TASK_ID = 'agent-self-check-latest';
@@ -327,6 +327,74 @@ function summarizeTextModelConfig(config = {}) {
   };
 }
 
+function normalizeDiagnosticDetails(value) {
+  return Object.entries(value || {})
+    .filter(([, item]) => item !== undefined && item !== null && item !== '' && typeof item !== 'object')
+    .map(([label, item]) => ({ label, value: String(item) }));
+}
+
+// 将 OpenCode 专属检查结果转换为公共诊断区。
+function createOpenCodeDiagnosticSections(result = {}) {
+  const sections = [];
+  const isolation = result.isolation_check;
+  if (isolation) {
+    sections.push({
+      id: 'runtime-environment',
+      title: 'OpenCode 运行环境',
+      status: isolation.success ? 'success' : 'error',
+      summary: isolation.success ? '运行路径、权限和 Skill 来源符合配置' : '运行环境检查失败',
+      details: [
+        { label: 'Agent 工作区', value: isolation.workspace_dir || '-' },
+        { label: '隔离 HOME', value: isolation.home_dir || '-' },
+        { label: '外部目录规则', value: isolation.external_read_denied ? '已拒绝' : '未通过' },
+        { label: '已加载 Skill', value: String(isolation.loaded_skills?.length || 0) },
+      ],
+      items: [
+        ...(isolation.loaded_skills || []).map((skill, index) => ({
+          id: `skill-${index}`,
+          label: skill.name || '未命名 Skill',
+          status: 'success',
+          detail: skill.location || '<built-in>',
+        })),
+        ...(isolation.violations || []).map((message, index) => ({
+          id: `violation-${index}`,
+          label: '配置异常',
+          status: 'error',
+          message,
+        })),
+      ],
+    });
+  }
+  if (Array.isArray(result.tool_checks) && result.tool_checks.length) {
+    const toolStatus = result.tool_checks.some((item) => item.status === 'error')
+      ? 'error'
+      : result.tool_checks.some((item) => item.status === 'warning') ? 'warning' : 'success';
+    sections.push({
+      id: 'tools',
+      title: '已集成工具',
+      status: toolStatus,
+      summary: result.tool_check_summary || '工具检查完成',
+      items: result.tool_checks.map((item) => ({
+        id: item.id,
+        label: item.label || item.command,
+        status: item.status,
+        message: item.message,
+        detail: item.resolved_source || item.expected_path || '',
+      })),
+    });
+  }
+  if (result.direct_model_test) {
+    sections.push({
+      id: 'model',
+      title: '当前文本模型',
+      status: result.direct_model_test.success ? 'success' : 'error',
+      summary: result.direct_model_test.message || '',
+      details: normalizeDiagnosticDetails(result.model_config),
+    });
+  }
+  return sections;
+}
+
 function createTimeoutSignal(timeoutMs, message) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error(message || '请求超时')), timeoutMs);
@@ -616,8 +684,8 @@ function getCurrentSelfCheckStage(steps) {
   return steps.find((step) => step.status === 'running')?.id || 'agent-run';
 }
 
-function createSelfCheckLogger(app) {
-  const logDir = getDeveloperLogsDir(app, 'agent-self-check');
+function createSelfCheckLogger(app, moduleName) {
+  const logDir = getDeveloperLogsDir(app, moduleName);
   const logFile = path.join(logDir, 'latest.jsonl');
   let setupError = '';
 
@@ -932,6 +1000,7 @@ module.exports = {
   buildSelfCheckPrompt,
   buildSelfCheckReportMarkdown,
   compactSelfCheckError,
+  createOpenCodeDiagnosticSections,
   createEnvironmentSnapshot,
   createSelfCheckConclusion,
   createSelfCheckLogger,

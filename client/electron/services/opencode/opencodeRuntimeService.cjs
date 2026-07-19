@@ -3,15 +3,17 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const Database = require('better-sqlite3');
 const { getAgentRuntimeDir, getBundledOpencodeBinaryPath } = require('../../utils/paths.cjs');
+const { trackAgentRuntime } = require('../agent/agentRuntimeAnalytics.cjs');
 const { startOpenCodeSidecar, closeOpenCodeSidecar } = require('./opencodeServerRunner.cjs');
 const { createSession, sendPrompt, getSessionDiff } = require('./opencodeHttpClient.cjs');
-const { writeOpenCodeAgentsFile } = require('./opencodeToolEnvironment.cjs');
+const { writeAgentInstructionsFile } = require('../agent/agentToolEnvironment.cjs');
 const {
   SELF_CHECK_TASK_ID,
   SELF_CHECK_OUTPUT_FILE,
   SELF_CHECK_TIMEOUT_MS,
   buildSelfCheckPrompt,
   compactSelfCheckError,
+  createOpenCodeDiagnosticSections,
   createEnvironmentSnapshot,
   createSelfCheckConclusion,
   createSelfCheckLogger,
@@ -38,8 +40,6 @@ const OPENCODE_EVENT_BATCH_LIMIT = 120;
 const BUSY_MESSAGE = 'Agent 正在处理其他任务，请耐心等待';
 const DEFAULT_AGENT_MAX_RETRIES = 1;
 const MAX_AGENT_MAX_RETRIES = 3;
-const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
-const ANALYTICS_PROJECT_NAME = 'yibiao-client';
 
 function nowIso() {
   return new Date().toISOString();
@@ -101,48 +101,6 @@ function createRetryAttemptSummary({ attempt, error, outputContent }) {
     error: compactErrorText(error, 600),
     output_chars: String(outputContent || '').length,
   };
-}
-
-function normalizeAnalyticsEndpointHost(value) {
-  const text = String(value || '').trim();
-  if (!text) return '';
-  const candidates = text.includes('://') ? [text] : [`https://${text}`];
-  for (const candidate of candidates) {
-    try {
-      return new URL(candidate).hostname.toLowerCase();
-    } catch {
-      // 尝试下一个候选格式。
-    }
-  }
-  return text.replace(/^https?:\/\//i, '').split('/')[0].toLowerCase();
-}
-
-function trackAgentRuntime(app, configStore, status, meta = {}) {
-  const runtimeStatus = status === 'success' ? 'success' : 'failed';
-  const retryCount = Math.max(0, Math.min(MAX_AGENT_MAX_RETRIES, Math.floor(Number(meta.retryCount || meta.retry_count || 0) || 0)));
-  void Promise.resolve()
-    .then(() => {
-      const config = configStore.load();
-      return fetch(ANALYTICS_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectName: ANALYTICS_PROJECT_NAME,
-          event: 'agent_runtime',
-          version: typeof app?.getVersion === 'function' ? app.getVersion() : '',
-          platform: process.platform,
-          arch: process.arch,
-          client_id: config.analytics_client_id || '',
-          client_created_at: config.analytics_created_at || '',
-          agent_runtime_status: runtimeStatus,
-          agent_runtime_retry_count: retryCount,
-          ai_model_provider: config.text_model_provider || '',
-          ai_model_base_url: normalizeAnalyticsEndpointHost(config.base_url || ''),
-          ai_model_name: config.model_name || '',
-        }),
-      });
-    })
-    .catch(() => undefined);
 }
 
 function safeRelativePath(value) {
@@ -370,8 +328,8 @@ function getMessageRole(db, cache, messageId) {
   return role;
 }
 
-function createOpenCodeRuntimeService({ app, configStore }) {
-  const runtimeRoot = getAgentRuntimeDir(app);
+function createOpenCodeRuntimeService({ app, configStore, runtime }) {
+  const runtimeRoot = path.join(getAgentRuntimeDir(app), runtime.id);
   const serviceRuntimeRoot = path.join(runtimeRoot, 'service');
   const serviceWorkspaceDir = path.join(serviceRuntimeRoot, 'workspace');
   const tasksRoot = path.join(runtimeRoot, 'tasks');
@@ -716,6 +674,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       sidecar = await startOpenCodeSidecar({
         app,
         configStore,
+        runtime,
         runtimeRoot: serviceRuntimeRoot,
         workspaceDir: serviceWorkspaceDir,
         timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
@@ -823,7 +782,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
   function prepareStagingWorkspace(payload) {
     clearDirectoryContents(serviceWorkspaceDir);
     writeWorkspaceFiles(serviceWorkspaceDir, payload.files || []);
-    writeOpenCodeAgentsFile(serviceWorkspaceDir);
+    writeAgentInstructionsFile(serviceWorkspaceDir);
   }
 
   function cleanupStagingWorkspace() {
@@ -1149,7 +1108,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       diagnosticsPayload.retryAttempts = [...retryAttempts];
       writeTaskDiagnostics(taskId, diagnosticsPayload);
 
-      trackAgentRuntime(app, configStore, 'success', { retryCount: result.retry_count || 0 });
+      trackAgentRuntime(app, configStore, runtime.id, 'success', { retryCount: result.retry_count || 0 });
 
       const taskResult = {
         success: true,
@@ -1180,7 +1139,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       if (isWatchdogStall(error)) {
         mustRestartAfterTask = true;
       }
-      trackAgentRuntime(app, configStore, 'failed', { retryCount: Array.isArray(error?.agentRetryAttempts) ? error.agentRetryAttempts.length : retryAttempts.length });
+      trackAgentRuntime(app, configStore, runtime.id, 'failed', { retryCount: Array.isArray(error?.agentRetryAttempts) ? error.agentRetryAttempts.length : retryAttempts.length });
       const diagnosticsPayload = collectDiagnostics({ taskId, title, outputFile });
       if (error && typeof error === 'object') {
         error.agentRetryAttempts = Array.isArray(error.agentRetryAttempts) ? error.agentRetryAttempts : [...retryAttempts];
@@ -1392,7 +1351,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
     const checkedAt = nowIso();
     const startedAt = Date.now();
     const steps = createSelfCheckSteps();
-    const logger = createSelfCheckLogger(app);
+    const logger = createSelfCheckLogger(app, `${runtime.id}-self-check`);
     let opencodeBinaryPath = '';
     let config = null;
     let modelConfig = null;
@@ -1507,7 +1466,7 @@ function createOpenCodeRuntimeService({ app, configStore }) {
       const outputPath = agentResult?.workspace_dir
         ? path.join(agentResult.workspace_dir, SELF_CHECK_OUTPUT_FILE)
         : error?.agentOutputPath || path.join(serviceWorkspaceDir, SELF_CHECK_OUTPUT_FILE);
-      return {
+      const result = {
         success,
         status,
         message: resultMessage,
@@ -1546,6 +1505,8 @@ function createOpenCodeRuntimeService({ app, configStore }) {
         error: error ? diagnosticsPayload : undefined,
         detail_text: '',
       };
+      result.sections = createOpenCodeDiagnosticSections(result);
+      return result;
     }
 
     try {

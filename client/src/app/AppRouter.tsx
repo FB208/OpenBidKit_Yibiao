@@ -5,7 +5,7 @@ import BidOpportunityPage from '../features/bid-opportunity/pages/BidOpportunity
 import BusinessBidPage from '../features/business-bid/pages/BusinessBidPage';
 import ContentExpansionReplaceTestPage from '../features/developer/pages/ContentExpansionReplaceTestPage';
 import DeveloperDemoPage, { isDeveloperDemoSection } from '../features/developer/pages/DeveloperDemoPage';
-import OpenCodeAgentTestPage from '../features/developer/pages/OpenCodeAgentTestPage';
+import AgentTestPage from '../features/developer/pages/AgentTestPage';
 import DeveloperTestPage from '../features/developer/pages/DeveloperTestPage';
 import ExportFormatPage from '../features/export-format/pages/ExportFormatPage';
 import MyTemplatesPage from '../features/export-format/pages/MyTemplatesPage';
@@ -74,8 +74,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <DeveloperTestPage />;
     case 'developer-expansion-replace-test':
       return <ContentExpansionReplaceTestPage />;
-    case 'developer-opencode-agent-test':
-      return <OpenCodeAgentTestPage />;
+    case 'developer-agent-test':
+      return <AgentTestPage />;
     case 'settings':
       return <SettingsPage onDeveloperModeChange={onDeveloperModeChange} />;
     default:

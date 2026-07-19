@@ -120,7 +120,7 @@ function getBundledOpencodeBinaryPath(app) {
   return path.join(__dirname, '..', '..', 'vendor', 'opencode', platformArch, binaryName);
 }
 
-function getBundledOpencodeToolsBinDir(app) {
+function getBundledAgentToolsBinDir(app) {
   if (process.env.YIBIAO_OPENCODE_TOOLS_BIN_DIR) {
     return process.env.YIBIAO_OPENCODE_TOOLS_BIN_DIR;
   }
@@ -138,7 +138,7 @@ module.exports = {
   getAgentRuntimeDir,
   getAiLogsDir,
   getBundledOpencodeBinaryPath,
-  getBundledOpencodeToolsBinDir,
+  getBundledAgentToolsBinDir,
   getDeveloperLogsDir,
   getDuplicateCheckContentDir,
   getDuplicateCheckDir,

@@ -288,11 +288,13 @@ button:disabled {
   font-size: 18px;
 }
 
+.agent-runtime-breakdown,
 .agent-runtime-models {
   padding: 16px;
   overflow-x: auto;
 }
 
+.agent-runtime-breakdown h3,
 .agent-runtime-models h3 {
   margin: 0 0 12px;
   font-size: 18px;

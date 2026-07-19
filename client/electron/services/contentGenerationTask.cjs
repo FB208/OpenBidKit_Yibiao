@@ -3223,8 +3223,9 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     return {
       error: error?.message || String(error || '未知错误'),
       name: error?.name || '',
-      cause: error?.cause?.message || error?.cause?.code || error?.openCodeCause || '',
+      cause: error?.cause?.message || error?.cause?.code || '',
       stack: error?.stack || '',
+      agent_runtime: error?.agentRuntimeId || '',
       agent_task_id: error?.agentTaskId || '',
       agent_title: error?.agentTitle || '',
       agent_workspace_dir: error?.agentWorkspaceDir || '',
@@ -3234,13 +3235,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       agent_partial_output_chars: error?.agentPartialOutputChars || String(error?.agentPartialOutput || '').length,
       agent_validation_failed: Boolean(error?.agentValidationFailed),
       agent_retry_attempts: Array.isArray(error?.agentRetryAttempts) ? error.agentRetryAttempts : [],
-      opencode_route: error?.openCodeRoute || '',
-      opencode_method: error?.openCodeMethod || '',
-      opencode_status: error?.openCodeStatus || 0,
-      opencode_duration_ms: error?.openCodeDurationMs || 0,
-      opencode_cause: error?.openCodeCause || '',
-      opencode_request_log: Array.isArray(error?.openCodeRequestLog) ? error.openCodeRequestLog : [],
-      opencode_stderr_tail: error?.openCodeStderrTail || '',
+      agent_diagnostics: error?.agentDiagnostics || {},
     };
   }
 
@@ -3279,21 +3274,21 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     try {
       const result = await agentService.runTask(payload);
       if (isAgentBusyResult(result)) {
-        writeDeveloperLog(`${eventPrefix}.opencode.busy`, {
+        writeDeveloperLog(`${eventPrefix}.agent.busy`, {
           message: result?.message || 'Agent 正在处理其他任务',
           active_task: result?.active_task || null,
         });
         return result;
       }
-      writeDeveloperLog(`${eventPrefix}.opencode.done`, {
+      writeDeveloperLog(`${eventPrefix}.agent.done`, {
+        agent_runtime: result?.runtime_id || '',
         agent_task_id: result?.task_id || '',
         agent_session_id: result?.session_id || '',
         agent_workspace_dir: result?.workspace_dir || '',
         agent_runtime_root: result?.runtime_root || '',
         output_file: result?.output_file || '',
         output_metrics: textMetrics(result?.output_content || ''),
-        opencode_request_log: result?.opencode_request_log || [],
-        opencode_stderr_tail: result?.opencode_stderr_tail || '',
+        agent_diagnostics: result?.diagnostics || {},
       });
       return result;
     } catch (error) {
@@ -3301,7 +3296,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         throw error;
       }
       const diagnostics = agentErrorDiagnostics(error);
-      writeDeveloperLog(`${eventPrefix}.opencode.error`, diagnostics);
+      writeDeveloperLog(`${eventPrefix}.agent.error`, diagnostics);
       if (error?.agentValidationFailed) {
         throw error;
       }
@@ -3326,6 +3321,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       return {
         success: true,
         recovered: true,
+        runtime_id: error?.agentRuntimeId || '',
         task_id: error?.agentTaskId || '',
         title: error?.agentTitle || payload.title || 'Agent 任务',
         workspace_dir: error?.agentWorkspaceDir || '',
@@ -3337,8 +3333,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         session_id: '',
         retry_count: diagnostics.agent_retry_attempts.length,
         retry_attempts: diagnostics.agent_retry_attempts,
-        opencode_request_log: diagnostics.opencode_request_log,
-        opencode_stderr_tail: diagnostics.opencode_stderr_tail,
+        diagnostics: diagnostics.agent_diagnostics,
       };
     }
   }

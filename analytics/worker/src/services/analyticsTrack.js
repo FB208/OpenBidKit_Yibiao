@@ -1,4 +1,9 @@
-import { AGENT_RUNTIME_MAX_RETRY_COUNT, AGENT_RUNTIME_STATUSES, ALLOWED_EVENTS } from '../constants.js';
+import {
+  AGENT_RUNTIME_KIND_PATTERN,
+  AGENT_RUNTIME_MAX_RETRY_COUNT,
+  AGENT_RUNTIME_STATUSES,
+  ALLOWED_EVENTS,
+} from '../constants.js';
 import { isValidProjectName, normalizeMetricValue, normalizeText } from '../utils.js';
 
 function normalizeTokenNumber(value) {
@@ -17,10 +22,11 @@ function encodeAgentRuntimeMetricPart(value, maxLength) {
   return encodeURIComponent(normalizeText(value, maxLength));
 }
 
-function createAgentRuntimeMetricKey(status, retryCount, provider, endpointHost, model) {
-  if (!AGENT_RUNTIME_STATUSES.has(status)) return '';
+function createAgentRuntimeMetricKey(runtime, status, retryCount, provider, endpointHost, model) {
+  if (!AGENT_RUNTIME_KIND_PATTERN.test(runtime) || !AGENT_RUNTIME_STATUSES.has(status)) return '';
   return [
-    'v2',
+    'v3',
+    runtime,
     status,
     `r${normalizeAgentRetryCount(retryCount)}`,
     encodeAgentRuntimeMetricPart(provider, 80),
@@ -122,6 +128,7 @@ export function normalizeTrackBody(body, request) {
   const totalTokens = normalizeTokenNumber(body.total_tokens ?? body.totalTokens) || promptTokens + completionTokens;
   const aiRequestType = normalizeText(body.ai_request_type || body.aiRequestType, 20);
   const aiModelName = normalizeText(body.ai_model_name || body.aiModelName, 160);
+  const agentRuntimeKind = normalizeText(body.agent_runtime_kind || body.agentRuntimeKind, 40);
   const agentRuntimeStatus = normalizeText(body.agent_runtime_status || body.agentRuntimeStatus, 20);
   const agentRuntimeRetryCount = normalizeAgentRetryCount(body.agent_runtime_retry_count ?? body.agentRuntimeRetryCount);
 
@@ -142,9 +149,11 @@ export function normalizeTrackBody(body, request) {
     aiModelEndpointHost: normalizeBaseUrlHost(body.ai_model_base_url || body.aiModelBaseUrl),
     aiModelName,
     resourceKey: normalizeText(body.resource_key || body.resourceKey, 80),
+    agentRuntimeKind,
     agentRuntimeStatus,
     agentRuntimeRetryCount,
     agentRuntimeMetricKey: createAgentRuntimeMetricKey(
+      agentRuntimeKind,
       agentRuntimeStatus,
       agentRuntimeRetryCount,
       normalizeText(body.ai_model_provider || body.aiModelProvider, 80),
@@ -168,6 +177,7 @@ export function normalizeTrackBody(body, request) {
 export function validateTrackEvent(event) {
   if (!isValidProjectName(event.projectName)) return 'invalid projectName';
   if (!ALLOWED_EVENTS.has(event.event)) return 'invalid event';
+  if (event.event === 'agent_runtime' && !AGENT_RUNTIME_KIND_PATTERN.test(event.agentRuntimeKind)) return 'invalid agent_runtime_kind';
   if (event.event === 'agent_runtime' && !AGENT_RUNTIME_STATUSES.has(event.agentRuntimeStatus)) return 'invalid agent_runtime_status';
   if (!event.clientId) return 'missing client_id';
   if (!event.clientCreatedAt) return 'missing client_created_at';

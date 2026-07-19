@@ -75,7 +75,7 @@ function normalizeConcurrencyLimit(value, fallback = 10) {
   return Math.max(1, Number.isFinite(number) ? Math.round(number) : fallback);
 }
 
-function createOpenCodeTextQueue(options = {}) {
+function createAgentTextQueue(options = {}) {
   let activeCount = 0;
   const queue = [];
   const getLimit = typeof options.getLimit === 'function'
@@ -101,7 +101,7 @@ function createOpenCodeTextQueue(options = {}) {
   }
 
   function getAbortReason(signal) {
-    return signal?.reason || new Error('OpenCode AI proxy 请求已取消');
+    return signal?.reason || new Error('Agent AI proxy 请求已取消');
   }
 
   function pump() {
@@ -202,7 +202,7 @@ function hashText(value) {
 }
 
 function safeErrorMessage(error) {
-  return String(error?.message || error || 'OpenCode AI proxy failed').slice(0, 1000);
+  return String(error?.message || error || 'Agent AI proxy failed').slice(0, 1000);
 }
 
 function createPromptHash(body) {
@@ -216,11 +216,11 @@ function createPromptHash(body) {
   }));
 }
 
-function appendProxyDeveloperLog(app, config, payload) {
+function appendProxyDeveloperLog(app, config, runtimeMeta, payload) {
   if (!config?.developer_mode) return;
 
   try {
-    const logDir = getDeveloperLogsDir(app, 'opencode-ai-proxy');
+    const logDir = getDeveloperLogsDir(app, runtimeMeta.logModule);
     fs.mkdirSync(logDir, { recursive: true });
     const fileName = `${new Date().toISOString().slice(0, 10)}.jsonl`;
     fs.appendFileSync(
@@ -312,7 +312,7 @@ function summarizeProxyError(error) {
   const cause = error?.cause || null;
   return {
     name: error?.name || 'Error',
-    message: String(error?.message || error || 'OpenCode AI proxy failed').slice(0, 1000),
+    message: String(error?.message || error || 'Agent AI proxy failed').slice(0, 1000),
     status: error?.status || error?.statusCode || 0,
     code: error?.code || '',
     cause_name: cause?.name || '',
@@ -332,7 +332,7 @@ function recordProxyTextTokenStats(config, usage) {
   }
 }
 
-function createOpenCodeProxyModelInfo() {
+function createAgentProxyModelInfo() {
   return {
     id: 'default',
     object: 'model',
@@ -341,22 +341,22 @@ function createOpenCodeProxyModelInfo() {
   };
 }
 
-function normalizeOpenCodeProxyRequestBody(config, sourceBody) {
+function normalizeAgentProxyRequestBody(config, sourceBody) {
   const source = sourceBody && typeof sourceBody === 'object' ? sourceBody : {};
   const messages = Array.isArray(source.messages) ? source.messages : [];
 
   if (!messages.length) {
-    throw new Error('OpenCode 代理请求缺少 messages');
+    throw new Error('Agent 代理请求缺少 messages');
   }
 
   const normalized = {
     ...source,
-    // OpenCode 侧只使用 yibiao/default；真实模型名称以设置页保存的 model_name 为准。
+    // Agent 侧只使用 yibiao/default；真实模型名称以设置页保存的 model_name 为准。
     model: config.model_name,
     messages,
   };
 
-  // 部分 OpenAI 兼容上游会拒绝 OpenCode 注入的输出长度参数。
+  // 部分 OpenAI 兼容上游会拒绝 Agent 注入的输出长度参数。
   delete normalized.max_tokens;
   delete normalized.max_output_tokens;
   delete normalized.max_completion_tokens;
@@ -465,8 +465,8 @@ function createIdleTimeoutController(parentSignal, timeoutMs = DEFAULT_UPSTREAM_
   };
 }
 
-async function createUpstreamError(response) {
-  return createAiHttpErrorFromResponse(response, `AI 请求失败：HTTP ${response.status}`, { source: 'opencode-agent' });
+async function createUpstreamError(response, runtimeMeta) {
+  return createAiHttpErrorFromResponse(response, `AI 请求失败：HTTP ${response.status}`, { source: runtimeMeta.errorSource });
 }
 
 function responseHeadersFromUpstream(response, fallbackContentType) {
@@ -635,8 +635,8 @@ function createUsageCapturingStream(source, onDone, options = {}) {
   });
 }
 
-function getOpenCodeAiLogTitle(requestBody) {
-  return requestBody?.logTitle || requestBody?.log_title || 'OpenCode Agent';
+function getAgentAiLogTitle(requestBody, runtimeMeta) {
+  return requestBody?.logTitle || requestBody?.log_title || runtimeMeta.displayName;
 }
 
 function getChatCompletionsUrl(config) {
@@ -647,18 +647,18 @@ function getRequestMode(requestBody) {
   return requestBody?.stream ? 'stream' : 'normal';
 }
 
-function safeWriteOpenCodeAiLog(app, config, payload) {
+function safeWriteAgentAiLog(app, config, payload) {
   try {
     writeAiLog(app, config, payload);
   } catch {
-    // OpenCode 代理日志仅用于开发排查，不能影响主请求。
+    // Agent 代理日志仅用于开发排查，不能影响主请求。
   }
 }
 
-function writeOpenCodeAiPendingLog({ app, config, requestId, requestBody }) {
-  safeWriteOpenCodeAiLog(app, config, {
+function writeAgentAiPendingLog({ app, config, runtimeMeta, requestId, requestBody }) {
+  safeWriteAgentAiLog(app, config, {
     request_id: requestId,
-    log_title: getOpenCodeAiLogTitle(requestBody),
+    log_title: getAgentAiLogTitle(requestBody, runtimeMeta),
     type: 'chat-pending',
     request_mode: getRequestMode(requestBody),
     url: getChatCompletionsUrl(config),
@@ -668,13 +668,13 @@ function writeOpenCodeAiPendingLog({ app, config, requestId, requestBody }) {
   });
 }
 
-function recordOpenCodeAiSuccess({ app, config, requestId, requestBody, response, responseData, content, usage, startedAt, stream, attempt, diagnostics }) {
+function recordAgentAiSuccess({ app, config, runtimeMeta, requestId, requestBody, response, responseData, content, usage, startedAt, stream, attempt, diagnostics }) {
   const normalizedUsage = normalizeTokenUsage(usage);
   recordProxyTextTokenStats(config, usage);
 
-  safeWriteOpenCodeAiLog(app, config, {
+  safeWriteAgentAiLog(app, config, {
     request_id: requestId,
-    log_title: getOpenCodeAiLogTitle(requestBody),
+    log_title: getAgentAiLogTitle(requestBody, runtimeMeta),
     type: 'chat',
     request_mode: getRequestMode(requestBody),
     url: getChatCompletionsUrl(config),
@@ -684,7 +684,7 @@ function recordOpenCodeAiSuccess({ app, config, requestId, requestBody, response
     created_at: new Date().toISOString(),
   });
 
-  appendProxyDeveloperLog(app, config, {
+  appendProxyDeveloperLog(app, config, runtimeMeta, {
     request_id: requestId,
     type: 'chat',
     stream: Boolean(stream),
@@ -712,13 +712,13 @@ function recordOpenCodeAiSuccess({ app, config, requestId, requestBody, response
   });
 }
 
-function recordOpenCodeAiFailure({ app, config, requestId, requestBody, error, responseData, startedAt, attempt, diagnostics }) {
+function recordAgentAiFailure({ app, config, runtimeMeta, requestId, requestBody, error, responseData, startedAt, attempt, diagnostics }) {
   recordProxyTextTokenStats(config, null);
 
   const errorMessage = safeErrorMessage(error);
-  safeWriteOpenCodeAiLog(app, config, {
+  safeWriteAgentAiLog(app, config, {
     request_id: requestId,
-    log_title: getOpenCodeAiLogTitle(requestBody),
+    log_title: getAgentAiLogTitle(requestBody, runtimeMeta),
     type: 'chat-error',
     request_mode: getRequestMode(requestBody),
     url: getChatCompletionsUrl(config),
@@ -728,7 +728,7 @@ function recordOpenCodeAiFailure({ app, config, requestId, requestBody, error, r
     created_at: new Date().toISOString(),
   });
 
-  appendProxyDeveloperLog(app, config, {
+  appendProxyDeveloperLog(app, config, runtimeMeta, {
     request_id: requestId,
     type: 'chat-error',
     attempt,
@@ -752,16 +752,17 @@ function recordOpenCodeAiFailure({ app, config, requestId, requestBody, error, r
   });
 }
 
-async function prepareProxyResponse({ app, config, requestId, requestBody, response, startedAt, attempt, diagnostics, onActivity, activityContext, streamTimeout }) {
+async function prepareProxyResponse({ app, config, runtimeMeta, requestId, requestBody, response, startedAt, attempt, diagnostics, onActivity, activityContext, streamTimeout }) {
   const stream = Boolean(requestBody.stream);
   const contentType = response.headers.get('content-type') || '';
   const isSse = stream || contentType.toLowerCase().includes('text/event-stream');
 
   if (isSse) {
     const body = createUsageCapturingStream(response.body, (capture) => {
-      recordOpenCodeAiSuccess({
+      recordAgentAiSuccess({
         app,
         config,
+        runtimeMeta,
         requestId,
         requestBody,
         response,
@@ -816,9 +817,10 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
   }
   const usage = extractUsageFromPayload(responseData) || extractUsageFromJsonText(rawText);
   const content = responseData && typeof responseData === 'object' ? extractContentFromResponseData(responseData) : '';
-  recordOpenCodeAiSuccess({
+  recordAgentAiSuccess({
     app,
     config,
+    runtimeMeta,
     requestId,
     requestBody,
     response,
@@ -844,7 +846,7 @@ async function prepareProxyResponse({ app, config, requestId, requestBody, respo
   });
 }
 
-async function requestOpenCodeChatCompletion({ app, configStore, textQueue, openAiBody, signal, timeoutMs, diagnostics, onActivity, activityContext }) {
+async function requestAgentChatCompletion({ app, configStore, runtimeMeta, textQueue, openAiBody, signal, timeoutMs, diagnostics, onActivity, activityContext }) {
   const requestId = createAiRequestId();
   let queuedConfig = null;
   try { queuedConfig = configStore.load(); } catch {}
@@ -864,7 +866,7 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
     const config = configStore.load();
     assertTextModelConfig(config);
 
-    const requestBody = normalizeOpenCodeProxyRequestBody(config, openAiBody);
+    const requestBody = normalizeAgentProxyRequestBody(config, openAiBody);
 
     return runWithAiRetry(async ({ attempt }) => {
       const stream = Boolean(requestBody.stream);
@@ -889,7 +891,7 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
           activity: true,
           meta: { request_id: requestId, attempt },
         });
-        appendProxyDeveloperLog(app, config, {
+        appendProxyDeveloperLog(app, config, runtimeMeta, {
           request_id: requestId,
           type: 'chat-pending',
           stream: Boolean(requestBody.stream),
@@ -900,7 +902,7 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
           request_hash: createPromptHash(requestBody),
           messages_count: Array.isArray(requestBody.messages) ? requestBody.messages.length : 0,
         });
-        writeOpenCodeAiPendingLog({ app, config, requestId, requestBody });
+        writeAgentAiPendingLog({ app, config, runtimeMeta, requestId, requestBody });
 
         const response = await fetch(`${trimBaseUrl(config.base_url)}/chat/completions`, {
           method: 'POST',
@@ -931,12 +933,13 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
         });
 
         if (!response.ok) {
-          throw await createUpstreamError(response);
+          throw await createUpstreamError(response, runtimeMeta);
         }
 
         const proxyResponse = await prepareProxyResponse({
           app,
           config,
+          runtimeMeta,
           requestId,
           requestBody,
           response,
@@ -950,9 +953,10 @@ async function requestOpenCodeChatCompletion({ app, configStore, textQueue, open
         streamHandedOff = stream;
         return proxyResponse;
       } catch (error) {
-        recordOpenCodeAiFailure({
+        recordAgentAiFailure({
           app,
           config,
+          runtimeMeta,
           requestId,
           requestBody,
           error,
@@ -1039,7 +1043,7 @@ function bindAbortToRequestLifecycle({ req, res, controller, diagnostics, onActi
   });
 }
 
-async function handleChatCompletions({ req, res, app, configStore, textQueue, timeoutMs, diagnostics, onActivity, getActivityContext }) {
+async function handleChatCompletions({ req, res, app, configStore, runtimeMeta, textQueue, timeoutMs, diagnostics, onActivity, getActivityContext }) {
   const controller = new AbortController();
   const requestBody = await readJson(req);
   const activityContext = getActivityContext?.() || null;
@@ -1054,9 +1058,10 @@ async function handleChatCompletions({ req, res, app, configStore, textQueue, ti
     activity: true,
     meta: { request: summarizeRequestBody(requestBody) },
   });
-  const upstream = await requestOpenCodeChatCompletion({
+  const upstream = await requestAgentChatCompletion({
     app,
     configStore,
+    runtimeMeta,
     textQueue,
     openAiBody: requestBody,
     signal: controller.signal,
@@ -1079,16 +1084,22 @@ async function handleChatCompletions({ req, res, app, configStore, textQueue, ti
 function handleModels({ res }) {
   sendJson(res, 200, {
     object: 'list',
-    data: [createOpenCodeProxyModelInfo()],
+    data: [createAgentProxyModelInfo()],
   });
 }
 
-function createAiServiceOpenAiProxy({ app, configStore, timeoutMs, diagnostics, onActivity, getActivityContext }) {
+function createAgentOpenAiProxy({ app, configStore, runtime, timeoutMs, diagnostics, onActivity, getActivityContext }) {
+  const runtimeMeta = {
+    id: runtime.id,
+    displayName: runtime.displayName,
+    errorSource: runtime.displayName,
+    logModule: `${runtime.id}-ai-proxy`,
+  };
   const token = createProxyToken();
   const upstreamTimeoutMs = normalizeTimeoutMs(timeoutMs);
   const sockets = new Set();
   let closing = false;
-  const textQueue = createOpenCodeTextQueue({
+  const textQueue = createAgentTextQueue({
     defaultLimit: 10,
     getLimit() {
       return configStore.load()?.concurrency_limit;
@@ -1141,6 +1152,7 @@ function createAiServiceOpenAiProxy({ app, configStore, timeoutMs, diagnostics, 
           res,
           app,
           configStore,
+          runtimeMeta,
           textQueue,
           timeoutMs: upstreamTimeoutMs,
           diagnostics,
@@ -1167,7 +1179,7 @@ function createAiServiceOpenAiProxy({ app, configStore, timeoutMs, diagnostics, 
       if (!res.headersSent) {
         sendJson(res, statusCode, {
           error: {
-            message: error.message || 'OpenCode AI proxy failed',
+            message: error.message || `${runtimeMeta.displayName} AI proxy failed`,
             type: 'proxy_error',
           },
         });
@@ -1198,7 +1210,7 @@ function createAiServiceOpenAiProxy({ app, configStore, timeoutMs, diagnostics, 
 
       const address = server.address();
       if (!address || typeof address === 'string') {
-        throw new Error('OpenCode AI proxy 启动失败：无法获取监听端口');
+        throw new Error(`${runtimeMeta.displayName} AI proxy 启动失败：无法获取监听端口`);
       }
 
       appendProxyDiagnostic(diagnostics, 'proxy.started', {
@@ -1237,5 +1249,5 @@ function createAiServiceOpenAiProxy({ app, configStore, timeoutMs, diagnostics, 
 }
 
 module.exports = {
-  createAiServiceOpenAiProxy,
+  createAgentOpenAiProxy,
 };
