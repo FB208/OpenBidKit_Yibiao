@@ -103,14 +103,18 @@ function compactText(value, maxLength = 300) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
-function extractAssistantText(messages = []) {
-  const assistant = [...messages].reverse().find((message) => message?.role === 'assistant');
-  if (!assistant) return '';
-  return (Array.isArray(assistant.content) ? assistant.content : [])
+// 提取一条 Agent 消息中的完整文本内容。
+function extractMessageText(message) {
+  return (Array.isArray(message?.content) ? message.content : [])
     .filter((part) => part?.type === 'text')
     .map((part) => part.text || '')
     .join('\n')
     .trim();
+}
+
+function extractAssistantText(messages = []) {
+  const assistant = [...messages].reverse().find((message) => message?.role === 'assistant');
+  return extractMessageText(assistant);
 }
 
 function getAssistantError(messages = []) {
@@ -294,14 +298,22 @@ function createPiRuntimeService({ app, configStore, runtime }) {
   function subscribeSession(session, taskToken, diffEntries) {
     let streamedText = '';
     return session.subscribe((event) => {
+      if (event.type === 'message_start' && event.message?.role === 'assistant') {
+        streamedText = '';
+      }
       if (event.type === 'message_update' && event.assistantMessageEvent?.type === 'text_delta') {
         streamedText += event.assistantMessageEvent.delta || '';
+        return;
+      }
+      if (event.type === 'message_end' && event.message?.role === 'assistant') {
+        const completedText = extractMessageText(event.message) || streamedText.trim();
+        streamedText = '';
         touchActivity({
           task_token: taskToken,
           stage: 'assistant_text',
-          message: compactText(streamedText.slice(-500), 200),
+          message: compactText(completedText, 200),
           source: 'pi.message',
-          visible: true,
+          visible: Boolean(completedText),
           activity: true,
         });
         return;
