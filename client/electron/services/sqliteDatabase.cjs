@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 17;
+const schemaVersion = 18;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -41,6 +41,8 @@ function createInitialSchema(db) {
       bid_section_extraction_error TEXT,
       outline_mode TEXT NOT NULL DEFAULT 'aligned',
       outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
+      outline_word_control_options_json TEXT,
+      outline_word_control_snapshot_json TEXT,
       outline_project_name TEXT,
       outline_project_overview TEXT,
       content_generation_options_json TEXT,
@@ -241,6 +243,12 @@ function addTechnicalPlanTenderFiles(db) {
 function addTechnicalPlanIllustrationPlan(db) {
   addColumnIfMissing(db, 'technical_plan_meta', 'content_illustration_plan_json', 'TEXT');
   removeLegacyTechnicalPlanIllustrationType(db);
+}
+
+// 为 Step03 当前设置和目录生效快照分别增加存储字段。
+function addTechnicalPlanOutlineWordControl(db) {
+  addColumnIfMissing(db, 'technical_plan_meta', 'outline_word_control_options_json', 'TEXT');
+  addColumnIfMissing(db, 'technical_plan_meta', 'outline_word_control_snapshot_json', 'TEXT');
 }
 
 function removeLegacyTechnicalPlanIllustrationType(db) {
@@ -1105,6 +1113,14 @@ const schemaHealthColumnGroups = [
       content_illustration_plan_json: 'TEXT',
     },
   },
+  {
+    version: 18,
+    table: 'technical_plan_meta',
+    columns: {
+      outline_word_control_options_json: 'TEXT',
+      outline_word_control_snapshot_json: 'TEXT',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -1253,6 +1269,11 @@ const migrations = [
     version: 17,
     description: '技术方案新增全文图片编排结果',
     up: addTechnicalPlanIllustrationPlan,
+  },
+  {
+    version: 18,
+    description: '技术方案新增目录字数控制设置和生效快照',
+    up: addTechnicalPlanOutlineWordControl,
   },
 ];
 

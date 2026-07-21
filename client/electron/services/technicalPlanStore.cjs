@@ -17,6 +17,13 @@ const tenderOriginalMarkdownRelativePath = path.join('technical-plan', 'tender-o
 const tenderSourceFilesDirRelativePath = path.join('technical-plan', 'tender-files').replace(/\\/g, '/');
 const originalPlanMarkdownRelativePath = path.join('technical-plan', 'original-plan.md').replace(/\\/g, '/');
 const originalOutlineRuntimeFileName = 'original-outline-runtime.json';
+const defaultOutlineWordControlOptions = Object.freeze({
+  enabled: false,
+  minimumWords: 0,
+  maximumWords: 0,
+  sectionWords: 0,
+  strictSectionWords: false,
+});
 
 const initialState = {
   workflowKind: 'technical-plan',
@@ -36,6 +43,8 @@ const initialState = {
   bidSectionExtractionError: undefined,
   outlineMode: 'aligned',
   outlineExpansionMode: 'ai-complement',
+  outlineWordControlOptions: { ...defaultOutlineWordControlOptions },
+  outlineWordControlSnapshot: undefined,
   referenceKnowledgeDocumentIds: [],
   bidSectionExtractionTask: undefined,
   bidAnalysisTask: undefined,
@@ -120,6 +129,23 @@ function normalizeStatus(value, allowed, fallback) {
 
 function normalizeWorkflowKind(value) {
   return value === 'existing-plan-expansion' ? 'existing-plan-expansion' : 'technical-plan';
+}
+
+function normalizeNonNegativeInteger(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.floor(number) : 0;
+}
+
+// 统一 Step03 当前设置和目录快照的字段语义。
+function normalizeOutlineWordControlOptions(value) {
+  const sectionWords = normalizeNonNegativeInteger(value?.sectionWords);
+  return {
+    enabled: Boolean(value?.enabled),
+    minimumWords: normalizeNonNegativeInteger(value?.minimumWords),
+    maximumWords: normalizeNonNegativeInteger(value?.maximumWords),
+    sectionWords,
+    strictSectionWords: sectionWords > 0 && Boolean(value?.strictSectionWords),
+  };
 }
 
 function isValidStep(value) {
@@ -1133,6 +1159,54 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     }
   }
 
+  const updateGeneratedContent = db.prepare('UPDATE technical_plan_outline_nodes SET content = ?, updated_at = ? WHERE node_id = ?');
+  const upsertGeneratedSection = db.prepare(`
+    INSERT INTO technical_plan_content_sections (node_id, status, error, updated_at)
+    VALUES (@node_id, @status, @error, @updated_at)
+    ON CONFLICT(node_id) DO UPDATE SET
+      status = excluded.status,
+      error = excluded.error,
+      updated_at = excluded.updated_at
+  `);
+  const upsertGeneratedPlan = db.prepare(`
+    INSERT INTO technical_plan_content_plans (node_id, plan_json, updated_at)
+    VALUES (@node_id, @plan_json, @updated_at)
+    ON CONFLICT(node_id) DO UPDATE SET
+      plan_json = excluded.plan_json,
+      updated_at = excluded.updated_at
+  `);
+  const saveContentGenerationItemTransaction = db.transaction(({ nodeId, section, storedPlan, runtime }) => {
+    const timestamp = now();
+    if (section) {
+      updateGeneratedContent.run(String(section.content || ''), timestamp, nodeId);
+      upsertGeneratedSection.run({
+        node_id: nodeId,
+        status: normalizeStatus(section.status, ['idle', 'running', 'success', 'error'], 'idle'),
+        error: section.error ? String(section.error) : null,
+        updated_at: section.updated_at || timestamp,
+      });
+    }
+    if (storedPlan) {
+      upsertGeneratedPlan.run({
+        node_id: nodeId,
+        plan_json: JSON.stringify({
+          plan_version: Number(storedPlan.plan_version),
+          plan: storedPlan.plan,
+          ...(storedPlan.table_requirement ? { table_requirement: storedPlan.table_requirement } : {}),
+        }),
+        updated_at: storedPlan.updated_at || timestamp,
+      });
+    }
+    if (runtime !== undefined) {
+      updateMeta({ content_generation_runtime_json: jsonOrNull(runtime) });
+    }
+  });
+
+  // 定向保存正文任务中的单个小节、对应编排计划和运行状态。
+  function saveContentGenerationItem(partial = {}) {
+    saveContentGenerationItemTransaction(partial);
+  }
+
   function clearDownstreamFromTender() {
     db.prepare('DELETE FROM technical_plan_tasks').run();
     db.prepare('DELETE FROM technical_plan_bid_items').run();
@@ -1147,6 +1221,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       bid_analysis_selected_task_ids_json: null,
       outline_mode: 'aligned',
       outline_expansion_mode: 'ai-complement',
+      outline_word_control_snapshot_json: null,
       outline_project_name: null,
       outline_project_overview: null,
       content_generation_options_json: null,
@@ -1180,6 +1255,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       content_generation_options_json: null,
       content_generation_runtime_json: null,
       content_illustration_plan_json: null,
+      outline_word_control_snapshot_json: null,
       outline_project_name: null,
       outline_project_overview: null,
     });
@@ -1208,6 +1284,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       outline_project_overview: null,
       content_generation_runtime_json: null,
       content_illustration_plan_json: null,
+      outline_word_control_snapshot_json: null,
     });
   }
 
@@ -1246,6 +1323,8 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       original_plan_imported_at: null,
       outline_project_name: null,
       outline_project_overview: null,
+      outline_word_control_options_json: null,
+      outline_word_control_snapshot_json: null,
       content_generation_options_json: null,
       content_generation_runtime_json: null,
       content_illustration_plan_json: null,
@@ -1350,6 +1429,12 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     if (hasOwn(partial, 'bidSectionExtractionError')) metaUpdates.bid_section_extraction_error = partial.bidSectionExtractionError ? String(partial.bidSectionExtractionError) : null;
     if (hasOwn(partial, 'outlineMode') && isValidOutlineMode(partial.outlineMode)) metaUpdates.outline_mode = partial.outlineMode;
     if (hasOwn(partial, 'outlineExpansionMode') && isValidOutlineExpansionMode(partial.outlineExpansionMode)) metaUpdates.outline_expansion_mode = partial.outlineExpansionMode;
+    if (hasOwn(partial, 'outlineWordControlOptions')) metaUpdates.outline_word_control_options_json = jsonOrNull(normalizeOutlineWordControlOptions(partial.outlineWordControlOptions));
+    if (hasOwn(partial, 'outlineWordControlSnapshot')) {
+      metaUpdates.outline_word_control_snapshot_json = partial.outlineWordControlSnapshot === undefined || partial.outlineWordControlSnapshot === null
+        ? null
+        : JSON.stringify(normalizeOutlineWordControlOptions(partial.outlineWordControlSnapshot));
+    }
     if (hasOwn(partial, 'contentGenerationOptions')) metaUpdates.content_generation_options_json = jsonOrNull(partial.contentGenerationOptions);
     if (hasOwn(partial, 'contentGenerationRuntime')) metaUpdates.content_generation_runtime_json = jsonOrNull(partial.contentGenerationRuntime);
     if (hasOwn(partial, 'contentIllustrationPlan')) metaUpdates.content_illustration_plan_json = jsonOrNull(partial.contentIllustrationPlan);
@@ -1373,9 +1458,16 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     if (hasOwn(partial, 'outlineData')) {
       if (partial.outlineData === null) {
         db.prepare('DELETE FROM technical_plan_outline_nodes').run();
-        updateMeta({ outline_project_name: null, outline_project_overview: null });
+        updateMeta({
+          outline_project_name: null,
+          outline_project_overview: null,
+          outline_word_control_snapshot_json: null,
+        });
       } else {
         saveOutlineData(partial.outlineData);
+        if (!partial.outlineData?.outline?.length) {
+          updateMeta({ outline_word_control_snapshot_json: null });
+        }
       }
     }
 
@@ -1444,6 +1536,10 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       bidSectionExtractionError: bidSectionExtractionTask?.error || meta.bid_section_extraction_error || undefined,
       outlineMode: isValidOutlineMode(meta.outline_mode) ? meta.outline_mode : 'aligned',
       outlineExpansionMode: isValidOutlineExpansionMode(meta.outline_expansion_mode) ? meta.outline_expansion_mode : 'ai-complement',
+      outlineWordControlOptions: normalizeOutlineWordControlOptions(safeJsonParse(meta.outline_word_control_options_json, defaultOutlineWordControlOptions)),
+      outlineWordControlSnapshot: meta.outline_word_control_snapshot_json
+        ? normalizeOutlineWordControlOptions(safeJsonParse(meta.outline_word_control_snapshot_json, defaultOutlineWordControlOptions))
+        : undefined,
       referenceKnowledgeDocumentIds: loadReferenceDocumentIds(),
       ...tasks,
       globalFacts: loadGlobalFacts(),
@@ -1460,12 +1556,17 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     applyPartial(partial || {});
   });
 
-  function updateTechnicalPlan(partial) {
+  // 应用技术方案局部更新，但不重新加载完整工作区状态。
+  function updateTechnicalPlanWithoutReload(partial) {
     const shouldClearMermaidCache = shouldClearMermaidCacheForPartial(partial);
     updateTechnicalPlanTransaction(partial || {});
     if (shouldClearMermaidCache) {
       clearTechnicalPlanMermaidCache();
     }
+  }
+
+  function updateTechnicalPlan(partial) {
+    updateTechnicalPlanWithoutReload(partial);
     return loadTechnicalPlan();
   }
 
@@ -1498,10 +1599,11 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     return loadTechnicalPlan();
   }
 
-  function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineExpansionMode } = {}) {
+  function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineExpansionMode, wordControlOptions } = {}) {
     return updateTechnicalPlan({
       outlineMode: 'aligned',
       outlineExpansionMode: isValidOutlineExpansionMode(outlineExpansionMode) ? outlineExpansionMode : 'ai-complement',
+      outlineWordControlOptions: normalizeOutlineWordControlOptions(wordControlOptions),
       referenceKnowledgeDocumentIds,
     });
   }
@@ -1583,6 +1685,9 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       const snapshot = loadOutlinePersistenceSnapshot();
       const outlineToSave = buildOutlineWithPersistedContent(outlineData, { snapshot, reverseMap, affectedIds, clearAll });
       saveOutlineData(outlineToSave);
+      if (!outlineToSave?.outline?.length) {
+        updateMeta({ outline_word_control_snapshot_json: null });
+      }
       const rows = flattenOutlineItems(outlineToSave?.outline || []);
       const nextIds = new Set(rows.map((row) => row.node_id));
       restoreMappedContentRows({ snapshot, idMap, affectedIds, nextIds, clearAll });
@@ -1834,6 +1939,8 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   return {
     loadTechnicalPlan,
     updateTechnicalPlan,
+    updateTechnicalPlanWithoutReload,
+    saveContentGenerationItem,
     clearMermaidCache: clearTechnicalPlanMermaidCache,
     clearIllustrationFiles,
     clearTechnicalPlan,

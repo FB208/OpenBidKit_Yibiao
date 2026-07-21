@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
 import { technicalPlanStorage } from '../services/technicalPlanStorage';
 import type { TechnicalPlanState } from '../types';
 
@@ -20,6 +21,8 @@ const initialState: TechnicalPlanState = {
   bidSectionExtractionError: undefined,
   outlineMode: 'aligned',
   outlineExpansionMode: 'ai-complement',
+  outlineWordControlOptions: { ...DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS },
+  outlineWordControlSnapshot: undefined,
   referenceKnowledgeDocumentIds: [],
   bidSectionExtractionTask: undefined,
   bidAnalysisTask: undefined,
