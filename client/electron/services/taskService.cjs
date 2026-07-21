@@ -488,7 +488,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     };
     activeTaskControls.set(type, taskControl);
 
-    const updateTask = (partial, workspaceState, eventPatch) => {
+    const updateTask = (partial, workspaceState, eventPatch, options = {}) => {
       const nextStatus = currentTask.status === 'pausing' && partial.status === 'running'
         ? 'pausing'
         : partial.status || currentTask.status;
@@ -502,7 +502,14 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       };
       activeTasks.set(type, currentTask);
       if (workspaceState) {
-        const persistedState = taskField ? updateWorkspaceState(definition, { [taskField]: currentTask }) : workspaceState;
+        let persistedState = workspaceState;
+        if (taskField) {
+          if (options.skipWorkspaceReload && definition.stateKey === 'technicalPlan') {
+            technicalPlanStore.updateTechnicalPlanWithoutReload({ [taskField]: currentTask });
+          } else {
+            persistedState = updateWorkspaceState(definition, { [taskField]: currentTask });
+          }
+        }
         emit(currentTask, buildSnapshot(definition, persistedState, currentTask, eventPatch));
       }
       return currentTask;

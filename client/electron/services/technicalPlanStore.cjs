@@ -1159,6 +1159,54 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     }
   }
 
+  const updateGeneratedContent = db.prepare('UPDATE technical_plan_outline_nodes SET content = ?, updated_at = ? WHERE node_id = ?');
+  const upsertGeneratedSection = db.prepare(`
+    INSERT INTO technical_plan_content_sections (node_id, status, error, updated_at)
+    VALUES (@node_id, @status, @error, @updated_at)
+    ON CONFLICT(node_id) DO UPDATE SET
+      status = excluded.status,
+      error = excluded.error,
+      updated_at = excluded.updated_at
+  `);
+  const upsertGeneratedPlan = db.prepare(`
+    INSERT INTO technical_plan_content_plans (node_id, plan_json, updated_at)
+    VALUES (@node_id, @plan_json, @updated_at)
+    ON CONFLICT(node_id) DO UPDATE SET
+      plan_json = excluded.plan_json,
+      updated_at = excluded.updated_at
+  `);
+  const saveContentGenerationItemTransaction = db.transaction(({ nodeId, section, storedPlan, runtime }) => {
+    const timestamp = now();
+    if (section) {
+      updateGeneratedContent.run(String(section.content || ''), timestamp, nodeId);
+      upsertGeneratedSection.run({
+        node_id: nodeId,
+        status: normalizeStatus(section.status, ['idle', 'running', 'success', 'error'], 'idle'),
+        error: section.error ? String(section.error) : null,
+        updated_at: section.updated_at || timestamp,
+      });
+    }
+    if (storedPlan) {
+      upsertGeneratedPlan.run({
+        node_id: nodeId,
+        plan_json: JSON.stringify({
+          plan_version: Number(storedPlan.plan_version),
+          plan: storedPlan.plan,
+          ...(storedPlan.table_requirement ? { table_requirement: storedPlan.table_requirement } : {}),
+        }),
+        updated_at: storedPlan.updated_at || timestamp,
+      });
+    }
+    if (runtime !== undefined) {
+      updateMeta({ content_generation_runtime_json: jsonOrNull(runtime) });
+    }
+  });
+
+  // 定向保存正文任务中的单个小节、对应编排计划和运行状态。
+  function saveContentGenerationItem(partial = {}) {
+    saveContentGenerationItemTransaction(partial);
+  }
+
   function clearDownstreamFromTender() {
     db.prepare('DELETE FROM technical_plan_tasks').run();
     db.prepare('DELETE FROM technical_plan_bid_items').run();
@@ -1508,12 +1556,17 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     applyPartial(partial || {});
   });
 
-  function updateTechnicalPlan(partial) {
+  // 应用技术方案局部更新，但不重新加载完整工作区状态。
+  function updateTechnicalPlanWithoutReload(partial) {
     const shouldClearMermaidCache = shouldClearMermaidCacheForPartial(partial);
     updateTechnicalPlanTransaction(partial || {});
     if (shouldClearMermaidCache) {
       clearTechnicalPlanMermaidCache();
     }
+  }
+
+  function updateTechnicalPlan(partial) {
+    updateTechnicalPlanWithoutReload(partial);
     return loadTechnicalPlan();
   }
 
@@ -1886,6 +1939,8 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   return {
     loadTechnicalPlan,
     updateTechnicalPlan,
+    updateTechnicalPlanWithoutReload,
+    saveContentGenerationItem,
     clearMermaidCache: clearTechnicalPlanMermaidCache,
     clearIllustrationFiles,
     clearTechnicalPlan,
