@@ -180,14 +180,21 @@ function formatCountRange(minimum: number, maximum: number, unit: string) {
 function buildWordControlWarningDialog(task: BackgroundTaskState, state: TechnicalPlanState): WordControlWarningDialogState | null {
   const outlineStats = task.stats?.outline;
   if (outlineStats?.word_adjustment_warning) {
+    // 叶子数量已落在预期区间时，说明字数约束已满足，无需再以“未达预期”打扰用户。
+    const minimumLeafCount = outlineStats.minimum_leaf_count || 0;
+    const maximumLeafCount = outlineStats.maximum_leaf_count || 0;
+    const currentLeafCount = outlineStats.current_leaf_count || 0;
+    const belowMinimum = minimumLeafCount > 0 && currentLeafCount < minimumLeafCount;
+    const aboveMaximum = maximumLeafCount > 0 && currentLeafCount > maximumLeafCount;
+    if (!belowMinimum && !aboveMaximum) return null;
     return {
       taskId: task.task_id,
       title: '目录叶子数量未达到预期',
       message: outlineStats.word_adjustment_warning,
       metrics: [{
         label: '目录叶子小节',
-        expected: formatCountRange(outlineStats.minimum_leaf_count || 0, outlineStats.maximum_leaf_count || 0, '个'),
-        actual: `${outlineStats.current_leaf_count.toLocaleString('zh-CN')} 个`,
+        expected: formatCountRange(minimumLeafCount, maximumLeafCount, '个'),
+        actual: `${currentLeafCount.toLocaleString('zh-CN')} 个`,
       }],
       sections: [],
     };

@@ -3185,7 +3185,7 @@ function buildSecondOutlineReviewMessages(context) {
     { role: 'user', content: `待二审目录 JSON：\n${JSON.stringify(context.outline, null, 2)}` },
     {
       role: 'user',
-      content: `你是严格的技术标目录二审专家。请检查评分项覆盖、目录结构、一级目录是否保持不变、最大四级限制和叶子节点范围。只返回 JSON：{"passed": true, "suggestions": []}。不通过时 suggestions 必须给出具体可执行的局部修复建议。`,
+      content: `你是严格的技术标目录二审专家。请检查评分项覆盖、目录结构、最大四级限制和叶子节点范围。只返回 JSON：{"passed": true, "suggestions": []}。不通过时 suggestions 必须给出具体可执行的局部修复建议。`,
     },
   ];
 }
