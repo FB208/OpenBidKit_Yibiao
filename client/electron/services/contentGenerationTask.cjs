@@ -5599,7 +5599,7 @@ workspace 文件说明：
       return { ran: true, rewrittenCount: 0, skippedCount: 0 };
     }
 
-    logs = [...logs, `开始正文去表格：发现 ${targets.length} 个小节、${tableTotal} 个表格，将转换为普通文字描述。`];
+    logs = [...logs, `开始正文去表格：发现 ${targets.length} 个小节、${tableTotal} 个表格，将按小节并发转换为普通文字描述。`];
     writeDeveloperLog('table_cleanup.start', {
       target_item_id: options.targetItemId || targetItemId || '',
       section_count: targets.length,
@@ -5610,13 +5610,16 @@ workspace 文件说明：
 
     let rewrittenCount = 0;
     let skippedCount = 0;
-    for (const target of targets) {
-      pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
+    pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
+    const settled = await Promise.allSettled(targets.map(async (target) => {
       const result = await cleanupTablesForSection(target);
       rewrittenCount += result.rewrittenCount;
       skippedCount += result.skippedCount;
       contentStats.table_cleanup_skipped = skippedCount;
-    }
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    }));
+    const rejected = settled.find((result) => result.status === 'rejected');
+    if (rejected) throw rejected.reason;
 
     pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
     logs = [...logs, `正文去表格完成：成功转换 ${rewrittenCount} 个表格，跳过 ${skippedCount} 个。`];
