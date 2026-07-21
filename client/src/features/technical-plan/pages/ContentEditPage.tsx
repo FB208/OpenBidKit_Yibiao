@@ -1119,48 +1119,52 @@ function ContentEditPage({
               <Dialog.Title>正文生成配置</Dialog.Title>
             </div>
             <div className="content-generation-config-list">
-              <label className="content-generation-config-row">
-                <span>
-                  <strong>表格需求</strong>
-                </span>
-                <select
-                  value={draftGenerationOptions.tableRequirement}
-                  disabled={generationStrategyLocked}
-                  onChange={(event) => setDraftGenerationOptions((prev) => ({ ...prev, tableRequirement: event.target.value as ContentTableRequirement }))}
-                >
-                  {tableRequirementOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
-                </select>
-              </label>
-              <label className="content-generation-config-row">
-                <span>
-                  <strong>全文一致性审计</strong>
-                </span>
-                <Switch.Root
-                  className="content-generation-switch"
-                  checked={draftGenerationOptions.enableConsistencyAudit}
-                  disabled={generationStrategyLocked}
-                  onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, enableConsistencyAudit: checked }))}
-                  aria-label="是否启用全文一致性审计"
-                >
-                  <Switch.Thumb className="content-generation-switch-thumb" />
-                </Switch.Root>
-              </label>
-              {draftGenerationOptions.enableConsistencyAudit && (
+              <div className="content-generation-config-group">
                 <label className="content-generation-config-row">
                   <span>
-                    <strong>一致性修复方式</strong>
+                    <strong>表格需求</strong>
                   </span>
                   <select
-                    value={draftGenerationOptions.consistencyRepairMode}
+                    value={draftGenerationOptions.tableRequirement}
                     disabled={generationStrategyLocked}
-                    onChange={(event) => setDraftGenerationOptions((prev) => ({ ...prev, consistencyRepairMode: event.target.value as ConsistencyRepairMode }))}
+                    onChange={(event) => setDraftGenerationOptions((prev) => ({ ...prev, tableRequirement: event.target.value as ContentTableRequirement }))}
                   >
-                    {consistencyRepairModeOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+                    {tableRequirementOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
                   </select>
                 </label>
-              )}
+              </div>
+              <div className="content-generation-config-group">
+                <label className="content-generation-config-row">
+                  <span>
+                    <strong>全文一致性审计</strong>
+                  </span>
+                  <Switch.Root
+                    className="content-generation-switch"
+                    checked={draftGenerationOptions.enableConsistencyAudit}
+                    disabled={generationStrategyLocked}
+                    onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, enableConsistencyAudit: checked }))}
+                    aria-label="是否启用全文一致性审计"
+                  >
+                    <Switch.Thumb className="content-generation-switch-thumb" />
+                  </Switch.Root>
+                </label>
+                {draftGenerationOptions.enableConsistencyAudit && (
+                  <label className="content-generation-config-row">
+                    <span>
+                      <strong>一致性修复方式</strong>
+                    </span>
+                    <select
+                      value={draftGenerationOptions.consistencyRepairMode}
+                      disabled={generationStrategyLocked}
+                      onChange={(event) => setDraftGenerationOptions((prev) => ({ ...prev, consistencyRepairMode: event.target.value as ConsistencyRepairMode }))}
+                    >
+                      {consistencyRepairModeOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                )}
+              </div>
               {isExpansionWorkflow && (
-                <>
+                <div className="content-generation-config-group">
                   <label className="content-generation-config-row">
                     <span>
                       <strong>原方案覆盖审计</strong>
@@ -1189,114 +1193,118 @@ function ContentEditPage({
                       </select>
                     </label>
                   )}
-                </>
-              )}
-              <div className="content-generation-config-row">
-                <div className="content-generation-image-option-title">
-                  <strong>使用 AI 生图</strong>
-                  <button
-                    type="button"
-                    className="content-generation-example-button"
-                    onClick={() => setPreviewImage(imageGenerationExamples.ai)}
-                    aria-label="查看 AI 生图示例"
-                    title="查看 AI 生图示例"
-                  >
-                    <ImageExampleIcon />
-                  </button>
                 </div>
-                <div className="content-generation-config-control">
-                  <em className={`content-image-status is-${imageModelStatus}`}>{imageModelStatusLabels[imageModelStatus]}</em>
+              )}
+              <div className="content-generation-config-group">
+                <div className="content-generation-config-row">
+                  <div className="content-generation-image-option-title">
+                    <strong>使用 AI 生图</strong>
+                    <button
+                      type="button"
+                      className="content-generation-example-button"
+                      onClick={() => setPreviewImage(imageGenerationExamples.ai)}
+                      aria-label="查看 AI 生图示例"
+                      title="查看 AI 生图示例"
+                    >
+                      <ImageExampleIcon />
+                    </button>
+                  </div>
+                  <div className="content-generation-config-control">
+                    <em className={`content-image-status is-${imageModelStatus}`}>{imageModelStatusLabels[imageModelStatus]}</em>
+                    <Switch.Root
+                      className="content-generation-switch"
+                      checked={draftGenerationOptions.useAiImages && imageModelAvailable}
+                      disabled={generationStrategyLocked || !imageModelAvailable}
+                      onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useAiImages: checked }))}
+                      aria-label="是否使用 AI 生图"
+                    >
+                      <Switch.Thumb className="content-generation-switch-thumb" />
+                    </Switch.Root>
+                  </div>
+                </div>
+                {draftGenerationOptions.useAiImages && imageModelAvailable && (
+                  <label className="content-generation-config-row">
+                    <span><strong>AI 生图上限</strong></span>
+                    <input
+                      type="number"
+                      min="0"
+                      max={Math.max(1, leaves.length)}
+                      value={draftGenerationOptions.maxAiImages}
+                      disabled={generationStrategyLocked}
+                      onChange={(event) => setDraftGenerationOptions((prev) => ({
+                        ...prev,
+                        maxAiImages: Math.max(0, Math.min(Number(event.target.value) || 0, Math.max(1, leaves.length))),
+                      }))}
+                    />
+                  </label>
+                )}
+              </div>
+              <div className="content-generation-config-group">
+                <div className="content-generation-config-row">
+                  <div className="content-generation-image-option-title">
+                    <strong>使用 Mermaid 生图</strong>
+                    <button
+                      type="button"
+                      className="content-generation-example-button"
+                      onClick={() => setPreviewImage(imageGenerationExamples.mermaid)}
+                      aria-label="查看 Mermaid 生图示例"
+                      title="查看 Mermaid 生图示例"
+                    >
+                      <ImageExampleIcon />
+                    </button>
+                  </div>
                   <Switch.Root
                     className="content-generation-switch"
-                    checked={draftGenerationOptions.useAiImages && imageModelAvailable}
-                    disabled={generationStrategyLocked || !imageModelAvailable}
-                    onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useAiImages: checked }))}
-                    aria-label="是否使用 AI 生图"
+                    checked={draftGenerationOptions.useMermaidImages}
+                    disabled={generationStrategyLocked}
+                    onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useMermaidImages: checked }))}
+                    aria-label="是否使用 Mermaid 生图"
                   >
                     <Switch.Thumb className="content-generation-switch-thumb" />
                   </Switch.Root>
                 </div>
+                {draftGenerationOptions.useMermaidImages && (
+                  <label className="content-generation-config-row">
+                    <span><strong>Mermaid 生图上限</strong></span>
+                    <input
+                      type="number"
+                      min="0"
+                      max={Math.max(1, leaves.length)}
+                      value={draftGenerationOptions.maxMermaidImages}
+                      disabled={generationStrategyLocked}
+                      onChange={(event) => setDraftGenerationOptions((prev) => ({
+                        ...prev,
+                        maxMermaidImages: Math.max(0, Math.min(Number(event.target.value) || 0, Math.max(1, leaves.length))),
+                      }))}
+                    />
+                  </label>
+                )}
               </div>
-              {draftGenerationOptions.useAiImages && imageModelAvailable && (
-                <label className="content-generation-config-row">
-                  <span><strong>AI 生图上限</strong></span>
-                  <input
-                    type="number"
-                    min="0"
-                    max={Math.max(1, leaves.length)}
-                    value={draftGenerationOptions.maxAiImages}
+              <div className="content-generation-config-group">
+                <div className="content-generation-config-row">
+                  <div className="content-generation-image-option-title">
+                    <strong>生成 HTML 图片</strong>
+                    <button
+                      type="button"
+                      className="content-generation-example-button"
+                      onClick={() => setPreviewImage(imageGenerationExamples.html)}
+                      aria-label="查看 HTML 生图示例"
+                      title="查看 HTML 生图示例"
+                    >
+                      <ImageExampleIcon />
+                    </button>
+                  </div>
+                  <Switch.Root
+                    className="content-generation-switch"
+                    checked={draftGenerationOptions.useHtmlImages}
                     disabled={generationStrategyLocked}
-                    onChange={(event) => setDraftGenerationOptions((prev) => ({
-                      ...prev,
-                      maxAiImages: Math.max(0, Math.min(Number(event.target.value) || 0, Math.max(1, leaves.length))),
-                    }))}
-                  />
-                </label>
-              )}
-              <div className="content-generation-config-row">
-                <div className="content-generation-image-option-title">
-                  <strong>使用 Mermaid 生图</strong>
-                  <button
-                    type="button"
-                    className="content-generation-example-button"
-                    onClick={() => setPreviewImage(imageGenerationExamples.mermaid)}
-                    aria-label="查看 Mermaid 生图示例"
-                    title="查看 Mermaid 生图示例"
+                    onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useHtmlImages: checked }))}
+                    aria-label="是否生成 HTML 图片"
                   >
-                    <ImageExampleIcon />
-                  </button>
+                    <Switch.Thumb className="content-generation-switch-thumb" />
+                  </Switch.Root>
                 </div>
-                <Switch.Root
-                  className="content-generation-switch"
-                  checked={draftGenerationOptions.useMermaidImages}
-                  disabled={generationStrategyLocked}
-                  onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useMermaidImages: checked }))}
-                  aria-label="是否使用 Mermaid 生图"
-                >
-                  <Switch.Thumb className="content-generation-switch-thumb" />
-                </Switch.Root>
-              </div>
-              {draftGenerationOptions.useMermaidImages && (
-                <label className="content-generation-config-row">
-                  <span><strong>Mermaid 生图上限</strong></span>
-                  <input
-                    type="number"
-                    min="0"
-                    max={Math.max(1, leaves.length)}
-                    value={draftGenerationOptions.maxMermaidImages}
-                    disabled={generationStrategyLocked}
-                    onChange={(event) => setDraftGenerationOptions((prev) => ({
-                      ...prev,
-                      maxMermaidImages: Math.max(0, Math.min(Number(event.target.value) || 0, Math.max(1, leaves.length))),
-                    }))}
-                  />
-                </label>
-              )}
-              <div className="content-generation-config-row">
-                <div className="content-generation-image-option-title">
-                  <strong>生成 HTML 图片</strong>
-                  <button
-                    type="button"
-                    className="content-generation-example-button"
-                    onClick={() => setPreviewImage(imageGenerationExamples.html)}
-                    aria-label="查看 HTML 生图示例"
-                    title="查看 HTML 生图示例"
-                  >
-                    <ImageExampleIcon />
-                  </button>
-                </div>
-                <Switch.Root
-                  className="content-generation-switch"
-                  checked={draftGenerationOptions.useHtmlImages}
-                  disabled={generationStrategyLocked}
-                  onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useHtmlImages: checked }))}
-                  aria-label="是否生成 HTML 图片"
-                >
-                  <Switch.Thumb className="content-generation-switch-thumb" />
-                </Switch.Root>
-              </div>
-              {draftGenerationOptions.useHtmlImages && (
-                <>
+                {draftGenerationOptions.useHtmlImages && (
                   <label className="content-generation-config-row">
                     <span><strong>HTML 生图上限</strong></span>
                     <input
@@ -1311,11 +1319,15 @@ function ContentEditPage({
                       }))}
                     />
                   </label>
+                )}
+              </div>
+              {draftGenerationOptions.useHtmlImages && (
+                <div className="content-generation-config-group">
                   <div className="content-generation-config-row">
                     <span><strong>高级设置</strong></span>
                     <button type="button" className="secondary-action" onClick={openHtmlImageTypesDialog} disabled={generationStrategyLocked}>打开</button>
                   </div>
-                </>
+                </div>
               )}
             </div>
             <div className="content-regenerate-actions">

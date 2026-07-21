@@ -2079,6 +2079,13 @@
   scrollbar-gutter: stable;
 }
 
+.content-generation-config-group {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .content-generation-config-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3701,7 +3708,8 @@
 
 /* [11182-11691] (rewritten, shared-range) technical-plan responsive rules extracted from mixed media(860px) block */
 @media (max-width: 860px) {
-  .content-generation-config-list {
+  .content-generation-config-list,
+  .content-generation-config-group {
     grid-template-columns: 1fr;
   }
 
