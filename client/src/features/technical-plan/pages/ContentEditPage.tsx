@@ -370,6 +370,12 @@ function ContentEditPage({
   const sectionAdjustmentCurrentWords = sectionAdjustmentItemId ? outlineMeta.get(sectionAdjustmentItemId)?.words || 0 : 0;
   const totalAdjustmentRound = contentStats?.total_adjustment_round || 0;
   const totalAdjustmentRoundTotal = contentStats?.total_adjustment_round_total || 3;
+  const totalAdjustmentBatchTotal = contentStats?.total_adjustment_batch_total || 0;
+  const totalAdjustmentBatchCompleted = contentStats?.total_adjustment_batch_completed || 0;
+  const totalAdjustmentBatchFailed = contentStats?.total_adjustment_batch_failed || 0;
+  const totalAdjustmentActiveCount = contentStats?.total_adjustment_active_count || 0;
+  const totalAdjustmentItemId = contentStats?.total_adjustment_item_id || '';
+  const totalAdjustmentRemainingWords = contentStats?.total_adjustment_remaining_words || 0;
   const wordControlWarning = contentStats?.word_control_warning;
   const canRetryContentCorrection = taskFailed
     && leaves.length > 0
@@ -437,7 +443,8 @@ function ContentEditPage({
   const wordTargetText = minimumWords > 0 && maximumWords > 0 ? `${minimumWords} 至 ${maximumWords} 字` : minimumWords > 0 ? `不少于 ${minimumWords} 字` : maximumWords > 0 ? `不超过 ${maximumWords} 字` : '未限制';
   const wordAdjusting = sectionWordAdjusting || finalSectionWordAdjusting || totalWordAdjusting;
   const sectionAdjustmentProgress = sectionAdjustmentTotal ? Math.round((sectionAdjustmentCompleted / sectionAdjustmentTotal) * 100) : 0;
-  const displayProgress = planning ? planningProgress : sectionWordAdjusting || finalSectionWordAdjusting ? sectionAdjustmentProgress : totalWordAdjusting ? Math.min(100, Math.round((totalAdjustmentRound / totalAdjustmentRoundTotal) * 100)) : contentCorrecting ? contentCorrectionProgress : illustrationPlanning ? illustrationPlanningProgress : illustrationGenerating ? illustrationGenerationProgress : progress;
+  const totalAdjustmentProgress = Math.min(100, Math.round((((Math.max(1, totalAdjustmentRound) - 1) + (totalAdjustmentBatchTotal ? totalAdjustmentBatchCompleted / totalAdjustmentBatchTotal : 0)) / totalAdjustmentRoundTotal) * 100));
+  const displayProgress = planning ? planningProgress : sectionWordAdjusting || finalSectionWordAdjusting ? sectionAdjustmentProgress : totalWordAdjusting ? totalAdjustmentProgress : contentCorrecting ? contentCorrectionProgress : illustrationPlanning ? illustrationPlanningProgress : illustrationGenerating ? illustrationGenerationProgress : progress;
   const displayProgressLabel = planning ? '编排统计' : restoring ? '原方案还原' : sectionWordAdjusting ? '小节字数调整' : finalSectionWordAdjusting ? '最终小节复核' : totalWordAdjusting ? '全文字数调整' : contentCorrecting ? '内容矫正' : illustrationPlanning ? '图片编排' : illustrationGenerating ? '图片生成' : '生成统计';
   const displayProgressCount = planning
     ? `${planningCompleted}/${planningTotal}`
@@ -471,7 +478,9 @@ function ContentEditPage({
             ? `正在并发进行最终小节复核，当前处理 ${sectionAdjustmentActiveCount} 个，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
             : `正在进行最终小节复核：${sectionAdjustmentItemId || '当前小节'}，第 ${sectionAdjustmentRound}/${sectionAdjustmentRoundTotal} 轮。`
         : totalWordAdjusting
-          ? `${paused ? '已暂停在' : '正在进行'}全文字数调整，当前 ${currentWords} 字，目标 ${wordTargetText}，第 ${totalAdjustmentRound}/${totalAdjustmentRoundTotal} 轮。`
+          ? paused
+            ? `全文字数调整已暂停，当前 ${currentWords} 字，目标 ${wordTargetText}，第 ${totalAdjustmentRound}/${totalAdjustmentRoundTotal} 轮已完成 ${totalAdjustmentBatchCompleted}/${totalAdjustmentBatchTotal} 个小节。`
+            : `正在进行全文字数调整，当前 ${currentWords} 字，目标 ${wordTargetText}，第 ${totalAdjustmentRound}/${totalAdjustmentRoundTotal} 轮已完成 ${totalAdjustmentBatchCompleted}/${totalAdjustmentBatchTotal} 个小节，正在处理 ${totalAdjustmentActiveCount} 个${totalAdjustmentItemId ? `（最近：${totalAdjustmentItemId}）` : ''}${totalAdjustmentBatchFailed ? `，失败 ${totalAdjustmentBatchFailed} 个` : ''}${totalAdjustmentRemainingWords ? `，仍需调整约 ${totalAdjustmentRemainingWords} 字` : ''}。`
         : originalAuditing
             ? paused
               ? auditAgentMode

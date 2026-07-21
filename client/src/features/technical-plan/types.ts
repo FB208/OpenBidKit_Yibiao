@@ -73,6 +73,12 @@ export interface BackgroundTaskState {
       section_adjustment_round_total?: number;
       total_adjustment_round?: number;
       total_adjustment_round_total?: number;
+      total_adjustment_batch_total?: number;
+      total_adjustment_batch_completed?: number;
+      total_adjustment_batch_failed?: number;
+      total_adjustment_active_count?: number;
+      total_adjustment_item_id?: string;
+      total_adjustment_remaining_words?: number;
       word_control_warning?: string;
       audit_group_total?: number;
       audit_group_completed?: number;
