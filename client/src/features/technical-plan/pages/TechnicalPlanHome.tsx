@@ -17,6 +17,7 @@ import type { ExportFormatConfig, ExportTemplateRecord } from '../../../shared/t
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import type { SectionId } from '../../../shared/types/navigation';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
+import { countReadableWords } from '../../../shared/utils/wordCount';
 
 interface TechnicalPlanHomeProps {
   workflowKind: TechnicalPlanWorkflowKind;
@@ -34,6 +35,26 @@ interface WorkflowSwitchRequest {
   from: TechnicalPlanWorkflowKind;
   to: TechnicalPlanWorkflowKind;
   navigateBackOnCancel: boolean;
+}
+
+interface WordControlWarningMetric {
+  label: string;
+  expected: string;
+  actual: string;
+}
+
+interface WordControlWarningSection {
+  id: string;
+  title: string;
+  words: number;
+}
+
+interface WordControlWarningDialogState {
+  taskId: string;
+  title: string;
+  message: string;
+  metrics: WordControlWarningMetric[];
+  sections: WordControlWarningSection[];
 }
 
 const steps: TechnicalPlanStep[] = [
@@ -148,6 +169,79 @@ function trimTaskLogs(task?: BackgroundTaskState): BackgroundTaskState | undefin
   return { ...task, logs: task.logs.slice(-MAX_UI_TASK_LOGS) };
 }
 
+function formatCountRange(minimum: number, maximum: number, unit: string) {
+  if (minimum > 0 && maximum > 0) return `${minimum.toLocaleString('zh-CN')} 至 ${maximum.toLocaleString('zh-CN')} ${unit}`;
+  if (minimum > 0) return `不少于 ${minimum.toLocaleString('zh-CN')} ${unit}`;
+  if (maximum > 0) return `不超过 ${maximum.toLocaleString('zh-CN')} ${unit}`;
+  return '未限制';
+}
+
+// 根据任务最终统计构建需要用户处理的字数警告弹窗。
+function buildWordControlWarningDialog(task: BackgroundTaskState, state: TechnicalPlanState): WordControlWarningDialogState | null {
+  const outlineStats = task.stats?.outline;
+  if (outlineStats?.word_adjustment_warning) {
+    return {
+      taskId: task.task_id,
+      title: '目录叶子数量未达到预期',
+      message: outlineStats.word_adjustment_warning,
+      metrics: [{
+        label: '目录叶子小节',
+        expected: formatCountRange(outlineStats.minimum_leaf_count || 0, outlineStats.maximum_leaf_count || 0, '个'),
+        actual: `${outlineStats.current_leaf_count.toLocaleString('zh-CN')} 个`,
+      }],
+      sections: [],
+    };
+  }
+
+  const contentStats = task.stats?.content;
+  if (!contentStats?.word_control_warning) return null;
+
+  const minimumWords = contentStats.minimum_words || 0;
+  const maximumWords = contentStats.maximum_words || 0;
+  const sectionWords = contentStats.section_words || 0;
+  const sectionMinimumWords = sectionWords > 0 ? Math.ceil(sectionWords * 0.8) : 0;
+  const sectionMaximumWords = sectionWords > 0 ? Math.floor(sectionWords * 1.2) : 0;
+  const orderedLeaves = state.outlineData?.outline?.length ? collectLeafItems(state.outlineData.outline) : [];
+  const sectionSources = orderedLeaves.length
+    ? orderedLeaves.map((item) => ({
+        id: item.id,
+        title: item.title || state.contentGenerationSections[item.id]?.title || '未命名章节',
+        status: state.contentGenerationSections[item.id]?.status,
+        content: state.contentGenerationSections[item.id]?.content ?? item.content ?? '',
+      }))
+    : Object.values(state.contentGenerationSections);
+  const sections = contentStats.strict_section_words && sectionWords > 0
+    ? sectionSources
+        .filter((section) => section.status === 'success')
+        .map((section) => ({ ...section, words: countReadableWords(section.content) }))
+        .filter((section) => section.words < sectionMinimumWords || section.words > sectionMaximumWords)
+        .map(({ id, title, words }) => ({ id, title, words }))
+    : [];
+  const metrics: WordControlWarningMetric[] = [];
+  if (minimumWords > 0 || maximumWords > 0) {
+    metrics.push({
+      label: '全文字数',
+      expected: formatCountRange(minimumWords, maximumWords, '字'),
+      actual: `${(contentStats.current_words || 0).toLocaleString('zh-CN')} 字`,
+    });
+  }
+  if (contentStats.strict_section_words && sectionWords > 0) {
+    metrics.push({
+      label: '单个小节',
+      expected: `${sectionMinimumWords.toLocaleString('zh-CN')} 至 ${sectionMaximumWords.toLocaleString('zh-CN')} 字（目标 ${sectionWords.toLocaleString('zh-CN')} 字）`,
+      actual: `${sections.length.toLocaleString('zh-CN')} 个小节未达标`,
+    });
+  }
+
+  return {
+    taskId: task.task_id,
+    title: '正文字数未达到预期',
+    message: contentStats.word_control_warning,
+    metrics,
+    sections,
+  };
+}
+
 function areRequiredBidAnalysisTasksReady(tasks: BidAnalysisTasks) {
   return requiredBidAnalysisTasks.every((task) => {
     const state = tasks[task.id];
@@ -216,6 +310,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const [selectedExportTemplateId, setSelectedExportTemplateId] = useState('');
   const [sortLeaveDialogOpen, setSortLeaveDialogOpen] = useState(false);
   const [outlineWordControlLeaveDialogOpen, setOutlineWordControlLeaveDialogOpen] = useState(false);
+  const [wordControlWarningDialog, setWordControlWarningDialog] = useState<WordControlWarningDialogState | null>(null);
+  const [pendingWordControlWarningTaskId, setPendingWordControlWarningTaskId] = useState<string | null>(null);
   const [savingSortBeforeLeave, setSavingSortBeforeLeave] = useState(false);
   const [workflowSwitchRequest, setWorkflowSwitchRequest] = useState<WorkflowSwitchRequest | null>(null);
   const [switchingWorkflow, setSwitchingWorkflow] = useState(false);
@@ -458,6 +554,25 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   }, [state.workflowKind, workflowKind]);
 
   useEffect(() => {
+    if (!hydrated || wordControlWarningDialog) return;
+    const currentStepTask = state.step === 'outline-generation'
+      ? state.outlineGenerationTask
+      : state.step === 'content-edit'
+        ? state.contentGenerationTask
+        : undefined;
+    const task = pendingWordControlWarningTaskId
+      ? [state.outlineGenerationTask, state.contentGenerationTask]
+          .find((candidate) => candidate?.task_id === pendingWordControlWarningTaskId)
+      : currentStepTask;
+    if (!task || task.status !== 'success' || shownWordControlWarningTaskIdsRef.current.has(task.task_id)) return;
+    const dialog = buildWordControlWarningDialog(task, state);
+    if (!dialog) return;
+    shownWordControlWarningTaskIdsRef.current.add(task.task_id);
+    setPendingWordControlWarningTaskId(null);
+    setWordControlWarningDialog(dialog);
+  }, [hydrated, pendingWordControlWarningTaskId, state, wordControlWarningDialog]);
+
+  useEffect(() => {
     let cancelled = false;
     window.yibiao?.config.load().then((cfg) => {
       if (!cancelled && cfg?.export_format) {
@@ -527,8 +642,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
       if (latestTask?.status === 'success' && !shownWordControlWarningTaskIdsRef.current.has(latestTask.task_id)) {
         const warning = latestTask.stats?.outline?.word_adjustment_warning || latestTask.stats?.content?.word_control_warning;
         if (warning) {
-          shownWordControlWarningTaskIdsRef.current.add(latestTask.task_id);
-          showToast(warning, 'info');
+          setPendingWordControlWarningTaskId(latestTask.task_id);
         }
       }
 
@@ -1103,6 +1217,57 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
               <button type="button" className="primary-action" onClick={() => { void saveSortAndLeave(); }} disabled={savingSortBeforeLeave}>
                 {savingSortBeforeLeave ? '正在保存...' : '保存排序'}
               </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={Boolean(wordControlWarningDialog)} onOpenChange={(open) => !open && setWordControlWarningDialog(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="content-regenerate-card word-control-result-card">
+            <div className="content-regenerate-card-head">
+              <span className="section-kicker">结果提醒</span>
+              <Dialog.Title>{wordControlWarningDialog?.title}</Dialog.Title>
+              <Dialog.Description>{wordControlWarningDialog?.message}</Dialog.Description>
+            </div>
+            <div className="word-control-result-body">
+              <div className="word-control-result-metrics">
+                {wordControlWarningDialog?.metrics.map((metric) => (
+                  <section className="word-control-result-metric" key={metric.label}>
+                    <strong>{metric.label}</strong>
+                    <dl>
+                      <div>
+                        <dt>预期</dt>
+                        <dd>{metric.expected}</dd>
+                      </div>
+                      <div>
+                        <dt>实际</dt>
+                        <dd>{metric.actual}</dd>
+                      </div>
+                    </dl>
+                  </section>
+                ))}
+              </div>
+              {wordControlWarningDialog?.sections.length ? (
+                <section className="word-control-result-sections">
+                  <div className="word-control-result-sections-head">
+                    <strong>未达标小节</strong>
+                    <span>{wordControlWarningDialog.sections.length} 个</span>
+                  </div>
+                  <div className="word-control-result-section-list">
+                    {wordControlWarningDialog.sections.map((section) => (
+                      <div className="word-control-result-section" key={section.id}>
+                        <span>{section.id} {section.title}</span>
+                        <strong>{section.words.toLocaleString('zh-CN')} 字</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+            </div>
+            <div className="content-regenerate-actions">
+              <Dialog.Close className="primary-action" type="button">知道了</Dialog.Close>
             </div>
           </Dialog.Content>
         </Dialog.Portal>

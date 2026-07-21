@@ -365,7 +365,6 @@ function OutlineEditPage({
     strictSectionWords: parsedDraftSectionWords > 0 && draftStrictSectionWords,
   };
   const configurationRequiresRegeneration = Boolean(outlineData && !areWordControlOptionsEqual(normalizedDraftOptions, outlineWordControlSnapshot));
-  const wordControlWarning = task?.stats?.outline?.word_adjustment_warning;
 
   const initializeWordControlDraft = () => {
     setDraftWordControlEnabled(outlineWordControlOptions.enabled);
@@ -1132,7 +1131,6 @@ function OutlineEditPage({
               </div>
             )}
           </div>
-          {wordControlWarning && <div className="technical-word-control-warning" role="status">{wordControlWarning}</div>}
           <div className="outline-progress-log" ref={logListRef}>
             {progressLogs.length ? progressLogs.map((item, index) => (
               <p className={index === progressLogs.length - 1 ? 'is-latest' : ''} key={`${item}-${index}`}>{item}</p>

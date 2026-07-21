@@ -376,7 +376,6 @@ function ContentEditPage({
   const totalAdjustmentActiveCount = contentStats?.total_adjustment_active_count || 0;
   const totalAdjustmentItemId = contentStats?.total_adjustment_item_id || '';
   const totalAdjustmentRemainingWords = contentStats?.total_adjustment_remaining_words || 0;
-  const wordControlWarning = contentStats?.word_control_warning;
   const canRetryContentCorrection = taskFailed
     && leaves.length > 0
     && completedCount === leaves.length
@@ -1045,7 +1044,6 @@ function ContentEditPage({
               </div>
             )}
           </div>
-          {wordControlWarning && <div className="technical-word-control-warning" role="status">{wordControlWarning}</div>}
           <div className="content-outline-list">
             {renderTree(outlineData.outline)}
           </div>
