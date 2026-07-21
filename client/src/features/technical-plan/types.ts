@@ -67,6 +67,7 @@ export interface BackgroundTaskState {
       current_words?: number;
       section_adjustment_total?: number;
       section_adjustment_completed?: number;
+      section_adjustment_active_count?: number;
       section_adjustment_item_id?: string;
       section_adjustment_round?: number;
       section_adjustment_round_total?: number;
@@ -210,6 +211,7 @@ export interface ContentGenerationRuntimeState {
   word_adjustment_stage?: 'section' | 'final-section' | 'total';
   word_adjustment_item_id?: string;
   word_adjustment_round?: number;
+  word_adjustment_item_rounds?: Record<string, number>;
   word_adjustment_completed_item_ids?: string[];
   target_item_id?: string;
   regenerate_requirement?: string;

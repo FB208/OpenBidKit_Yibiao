@@ -363,6 +363,7 @@ function ContentEditPage({
   const currentWords = contentStats?.current_words ?? totalWords;
   const sectionAdjustmentTotal = contentStats?.section_adjustment_total || 0;
   const sectionAdjustmentCompleted = contentStats?.section_adjustment_completed || 0;
+  const sectionAdjustmentActiveCount = contentStats?.section_adjustment_active_count || 0;
   const sectionAdjustmentItemId = contentStats?.section_adjustment_item_id || '';
   const sectionAdjustmentRound = contentStats?.section_adjustment_round || 0;
   const sectionAdjustmentRoundTotal = contentStats?.section_adjustment_round_total || 3;
@@ -458,9 +459,17 @@ function ContentEditPage({
     : planning
     ? paused ? `正文生成已暂停在编排阶段，已完成 ${planningCompleted}/${planningTotal} 个小节。` : `正在编排正文结构，已完成 ${planningCompleted}/${planningTotal} 个小节。`
     : sectionWordAdjusting
-      ? `${paused ? '已暂停在' : '正在进行'}小节字数调整：${sectionAdjustmentItemId || '当前小节'}，第 ${sectionAdjustmentRound}/${sectionAdjustmentRoundTotal} 轮，当前约 ${sectionAdjustmentCurrentWords} 字。`
+      ? paused
+        ? `小节字数调整已暂停，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
+        : sectionAdjustmentActiveCount > 1
+          ? `正在并发调整 ${sectionAdjustmentActiveCount} 个小节，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
+          : `正在进行小节字数调整：${sectionAdjustmentItemId || '当前小节'}，第 ${sectionAdjustmentRound}/${sectionAdjustmentRoundTotal} 轮，当前约 ${sectionAdjustmentCurrentWords} 字。`
       : finalSectionWordAdjusting
-        ? `${paused ? '已暂停在' : '正在进行'}最终小节复核，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
+        ? paused
+          ? `最终小节复核已暂停，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
+          : sectionAdjustmentActiveCount > 1
+            ? `正在并发进行最终小节复核，当前处理 ${sectionAdjustmentActiveCount} 个，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
+            : `正在进行最终小节复核：${sectionAdjustmentItemId || '当前小节'}，第 ${sectionAdjustmentRound}/${sectionAdjustmentRoundTotal} 轮。`
         : totalWordAdjusting
           ? `${paused ? '已暂停在' : '正在进行'}全文字数调整，当前 ${currentWords} 字，目标 ${wordTargetText}，第 ${totalAdjustmentRound}/${totalAdjustmentRoundTotal} 轮。`
         : originalAuditing

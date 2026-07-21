@@ -2488,6 +2488,7 @@ function normalizeContentGenerationRuntime(value) {
     word_adjustment_stage: ['section', 'final-section', 'total'].includes(source.word_adjustment_stage) ? source.word_adjustment_stage : undefined,
     word_adjustment_item_id: String(source.word_adjustment_item_id || '').trim(),
     word_adjustment_round: Math.max(0, Math.round(Number(source.word_adjustment_round) || 0)),
+    word_adjustment_item_rounds: { ...(source.word_adjustment_item_rounds || {}) },
     word_adjustment_completed_item_ids: normalizeStringArray(source.word_adjustment_completed_item_ids),
     target_item_id: String(source.target_item_id || '').trim(),
     regenerate_requirement: String(source.regenerate_requirement || '').trim(),
@@ -2730,6 +2731,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     current_words: 0,
     section_adjustment_total: 0,
     section_adjustment_completed: 0,
+    section_adjustment_active_count: 0,
     section_adjustment_item_id: '',
     section_adjustment_round: 0,
     section_adjustment_round_total: MAX_WORD_ADJUSTMENT_ROUNDS,
@@ -3919,11 +3921,12 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     }
   }
 
-  function setWordAdjustmentRuntime(stage, itemId = '', round = 0, completedItemIds = []) {
+  function setWordAdjustmentRuntime(stage, itemId = '', round = 0, completedItemIds = [], itemRounds = {}) {
     const runtime = syncRuntime({
       word_adjustment_stage: stage,
       word_adjustment_item_id: itemId,
       word_adjustment_round: round,
+      word_adjustment_item_rounds: itemRounds,
       word_adjustment_completed_item_ids: completedItemIds,
     });
     workspaceStore.updateTechnicalPlan({ contentGenerationRuntime: runtime });
@@ -3999,9 +4002,9 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       && (words < wordControl.sectionMinimumWords || words > wordControl.sectionMaximumWords);
   }
 
-  async function adjustSectionToRange(context, stage, initialRounds = 0, completedItemIds = []) {
+  async function adjustSectionToRange(context, stage, itemRounds, completedItemIds) {
     const { item } = context;
-    let rounds = Math.min(MAX_WORD_ADJUSTMENT_ROUNDS, Math.max(0, Number(initialRounds) || 0));
+    let rounds = Math.min(MAX_WORD_ADJUSTMENT_ROUNDS, Math.max(0, Number(itemRounds[item.id]) || 0));
     while (rounds < MAX_WORD_ADJUSTMENT_ROUNDS) {
       const currentWords = countContentWords(getLeafContentForWords(item));
       if (!isSectionWordsOutsideRange(currentWords)) return true;
@@ -4011,7 +4014,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       const granularity = differenceRatio > 0.2 ? 'paragraph' : 'sentence';
       contentStats.section_adjustment_item_id = item.id;
       contentStats.section_adjustment_round = rounds;
-      setWordAdjustmentRuntime(stage, item.id, rounds - 1, completedItemIds);
+      itemRounds[item.id] = rounds - 1;
+      setWordAdjustmentRuntime(stage, item.id, rounds - 1, completedItemIds, itemRounds);
       logs = [...logs, `调整小节字数：${item.id} ${item.title || '未命名章节'}，第 ${rounds}/${MAX_WORD_ADJUSTMENT_ROUNDS} 轮，当前 ${currentWords} 字。`];
       updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
       try {
@@ -4027,7 +4031,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         if (isPauseLikeError(error)) throw error;
         logs = [...logs, `小节字数第 ${rounds} 轮调整未应用：${item.id}，${error.message || String(error)}。`];
       }
-      setWordAdjustmentRuntime(stage, item.id, rounds, completedItemIds);
+      itemRounds[item.id] = rounds;
+      setWordAdjustmentRuntime(stage, item.id, rounds, completedItemIds, itemRounds);
       pauseIfRequested('正文生成已在字数调整结果处理后暂停，可稍后继续。');
     }
     return !isSectionWordsOutsideRange(countContentWords(getLeafContentForWords(item)));
@@ -4040,25 +4045,38 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     const resumingStage = resume && contentRuntime.word_adjustment_stage === stage;
     const completedItemIds = resumingStage ? [...contentRuntime.word_adjustment_completed_item_ids] : [];
     const completedItemIdSet = new Set(completedItemIds);
+    const itemRounds = resumingStage ? { ...contentRuntime.word_adjustment_item_rounds } : {};
+    const activeItemIds = new Set();
     const pendingViolations = violations.filter(({ item }) => !completedItemIdSet.has(item.id));
     contentStats.phase = stage === 'final-section' ? 'final-section-word-adjusting' : 'section-word-adjusting';
     contentStats.section_adjustment_total = completedItemIds.length + pendingViolations.length;
     contentStats.section_adjustment_completed = completedItemIds.length;
-    if (!resumingStage) setWordAdjustmentRuntime(stage, '', 0, completedItemIds);
-    const unresolved = violations.filter(({ item }) => completedItemIdSet.has(item.id)).map(({ item }) => item.id);
-    for (const context of pendingViolations) {
-      const initialRounds = resumingStage && contentRuntime.word_adjustment_item_id === context.item.id
-        ? contentRuntime.word_adjustment_round
-        : 0;
-      if (!await adjustSectionToRange(context, stage, initialRounds, completedItemIds)) unresolved.push(context.item.id);
+    contentStats.section_adjustment_active_count = 0;
+    if (!resumingStage) setWordAdjustmentRuntime(stage, '', 0, completedItemIds, itemRounds);
+    const unresolved = new Set(violations.filter(({ item }) => completedItemIdSet.has(item.id)).map(({ item }) => item.id));
+    await runItemsWithWorkerPool(pendingViolations, contentConcurrency, async (context) => {
+      activeItemIds.add(context.item.id);
+      contentStats.section_adjustment_active_count = activeItemIds.size;
+      contentStats.section_adjustment_item_id = context.item.id;
+      contentStats.section_adjustment_round = Number(itemRounds[context.item.id]) || 0;
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+
+      if (!await adjustSectionToRange(context, stage, itemRounds, completedItemIds)) unresolved.add(context.item.id);
       completedItemIds.push(context.item.id);
       completedItemIdSet.add(context.item.id);
-      contentStats.section_adjustment_completed += 1;
-      setWordAdjustmentRuntime(stage, '', 0, completedItemIds);
-    }
+      activeItemIds.delete(context.item.id);
+      const nextActiveItemId = activeItemIds.values().next().value || '';
+      contentStats.section_adjustment_active_count = activeItemIds.size;
+      contentStats.section_adjustment_completed = completedItemIds.length;
+      contentStats.section_adjustment_item_id = nextActiveItemId;
+      contentStats.section_adjustment_round = nextActiveItemId ? Number(itemRounds[nextActiveItemId]) || 0 : 0;
+      setWordAdjustmentRuntime(stage, nextActiveItemId, contentStats.section_adjustment_round, completedItemIds, itemRounds);
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+    }, isPauseRequested);
     contentStats.section_adjustment_item_id = '';
     contentStats.section_adjustment_round = 0;
-    return unresolved;
+    contentStats.section_adjustment_active_count = 0;
+    return [...unresolved];
   }
 
   function getTotalWordDirection() {
@@ -5911,16 +5929,24 @@ workspace 文件说明：
         contentStats.phase = 'section-word-adjusting';
         contentStats.section_adjustment_total = 1;
         contentStats.section_adjustment_completed = 0;
+        contentStats.section_adjustment_active_count = 1;
         const resumingSectionAdjustment = resume
-          && contentRuntime.word_adjustment_stage === 'section'
-          && contentRuntime.word_adjustment_item_id === targetItemId;
+          && contentRuntime.word_adjustment_stage === 'section';
+        const itemRounds = resumingSectionAdjustment ? { ...contentRuntime.word_adjustment_item_rounds } : {};
+        const completedItemIds = resumingSectionAdjustment ? [...contentRuntime.word_adjustment_completed_item_ids] : [];
+        if (!resumingSectionAdjustment) setWordAdjustmentRuntime('section', targetItemId, 0, completedItemIds, itemRounds);
         const resolved = await adjustSectionToRange(
           targetContext,
           'section',
-          resumingSectionAdjustment ? contentRuntime.word_adjustment_round : 0,
-          contentRuntime.word_adjustment_completed_item_ids,
+          itemRounds,
+          completedItemIds,
         );
+        if (!completedItemIds.includes(targetItemId)) completedItemIds.push(targetItemId);
         contentStats.section_adjustment_completed = 1;
+        contentStats.section_adjustment_active_count = 0;
+        contentStats.section_adjustment_item_id = '';
+        contentStats.section_adjustment_round = 0;
+        setWordAdjustmentRuntime('section', '', 0, completedItemIds, itemRounds);
         markStageCompleted('section-word-adjusting');
         if (!resolved) contentStats.word_control_warning = SECTION_WORD_CONTROL_WARNING;
       } else if (targetContext && wordControl.enabled && wordControl.strictSectionWords && isSectionWordsOutsideRange(countContentWords(getLeafContentForWords(targetContext.item)))) {
