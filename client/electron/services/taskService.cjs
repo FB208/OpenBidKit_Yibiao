@@ -127,10 +127,6 @@ function copyPatchFields(target, source, fields) {
 
 const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 
-function collectLeafItems(items) {
-  return (items || []).flatMap((item) => item?.children?.length ? collectLeafItems(item.children) : [item]);
-}
-
 function clearOutlineContentByIds(items, interruptedIds) {
   if (!(interruptedIds instanceof Set) || !interruptedIds.size) {
     return items;
@@ -180,29 +176,9 @@ function normalizeInterruptedContentSections(technicalPlan) {
 }
 
 function inferContentGenerationPhase(technicalPlan) {
-  const taskContent = technicalPlan?.contentGenerationTask?.stats?.content || {};
-  const taskPhase = taskContent.phase;
-  const runtimePhase = technicalPlan?.contentGenerationRuntime?.phase;
-  if (['restoring', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'table-cleaning', 'illustration-planning', 'illustration-generating'].includes(taskPhase)) {
-    return taskPhase;
-  }
-  if (['planning', 'restoring', 'generating', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'table-cleaning', 'illustration-planning', 'illustration-generating'].includes(runtimePhase)) {
-    return runtimePhase;
-  }
-
-  const leaves = collectLeafItems(technicalPlan?.outlineData?.outline || []);
-  const sections = technicalPlan?.contentGenerationSections || {};
-  const completed = leaves.filter((item) => sections[item.id]?.status === 'success').length;
-  const minimumWords = Number(taskContent.minimum_words ?? technicalPlan?.contentGenerationOptions?.minimumWords ?? 0) || 0;
-  const currentWords = Number(taskContent.current_words ?? 0) || 0;
-
-  if (leaves.length && completed >= leaves.length && minimumWords > 0 && currentWords < minimumWords) {
-    return 'expanding';
-  }
-  if (leaves.length && completed > 0) {
-    return 'generating';
-  }
-  return taskPhase || 'planning';
+  return technicalPlan?.contentGenerationTask?.stats?.content?.phase
+    || technicalPlan?.contentGenerationRuntime?.phase
+    || 'planning';
 }
 
 function createTask(type, payload) {
@@ -251,6 +227,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       if (state.outlineData === null) {
         copyPatchFields(patch, state, [
           'outlineData',
+          'outlineWordControlSnapshot',
           'outlineGenerationTask',
           'globalFactsTask',
           'globalFacts',
@@ -277,6 +254,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         'projectOverview',
         'techRequirements',
         'outlineData',
+        'outlineWordControlSnapshot',
         'outlineGenerationTask',
         'referenceKnowledgeDocumentIds',
         'globalFactsTask',
@@ -291,7 +269,13 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     }
 
     if (task.type === 'outline-generation') {
-      copyPatchFields(patch, state, ['outlineMode', 'outlineExpansionMode', 'referenceKnowledgeDocumentIds']);
+      copyPatchFields(patch, state, [
+        'outlineMode',
+        'outlineExpansionMode',
+        'outlineWordControlOptions',
+        'outlineWordControlSnapshot',
+        'referenceKnowledgeDocumentIds',
+      ]);
       if (task.status === 'success' || state.outlineData === null || hasOwn(eventPatch, 'outlineData')) {
         copyPatchFields(patch, state, [
           'outlineData',
@@ -320,7 +304,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     }
 
     if (task.type === 'content-generation') {
-      copyPatchFields(patch, state, ['contentIllustrationPlan', 'contentGenerationRuntime']);
+      copyPatchFields(patch, state, ['outlineWordControlSnapshot', 'contentIllustrationPlan', 'contentGenerationRuntime']);
       if (!isActiveTaskStatus(task.status)) {
         copyPatchFields(patch, state, [
           'outlineData',
@@ -806,6 +790,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         projectOverview: '',
         techRequirements: '',
         outlineData: null,
+        outlineWordControlSnapshot: undefined,
         outlineGenerationTask: undefined,
         referenceKnowledgeDocumentIds: [],
         globalFactsTask: undefined,
@@ -814,6 +799,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         contentGenerationOptions: undefined,
         contentGenerationSections: {},
         contentGenerationPlans: {},
+        contentIllustrationPlan: undefined,
         contentGenerationRuntime: undefined,
       });
     },
@@ -824,6 +810,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       return startManagedTask('outline-generation', payload, runOutlineGenerationTask, {
         outlineMode: 'aligned',
         outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
+        outlineWordControlOptions: payload?.word_control_options,
         referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
       });
     },
@@ -833,10 +820,15 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         contentGenerationTask: undefined,
         contentGenerationSections: {},
         contentGenerationPlans: {},
+        contentIllustrationPlan: undefined,
         contentGenerationRuntime: undefined,
       });
     },
     startContentGeneration(payload) {
+      const technicalPlan = technicalPlanStore.loadTechnicalPlan();
+      if (!technicalPlan.outlineWordControlSnapshot) {
+        throw new Error('当前目录没有字数控制生效快照，请重新生成目录');
+      }
       return startManagedTask('content-generation', payload, runContentGenerationTask);
     },
     pauseContentGeneration() {

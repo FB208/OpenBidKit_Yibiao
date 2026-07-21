@@ -30,7 +30,11 @@ interface ConfigUsagePayload {
   use_ai_images?: boolean;
   content_concurrency?: number;
   content_generation_action?: string;
+  word_control_enabled?: boolean;
   minimum_words?: number;
+  maximum_words?: number;
+  section_words?: number;
+  strict_section_words?: boolean;
   enable_consistency_audit?: boolean;
   consistency_repair_mode?: string;
   enable_original_plan_coverage_audit?: boolean;
@@ -48,7 +52,11 @@ const configUsageFields: Array<[keyof ConfigUsagePayload, string]> = [
   ['use_ai_images', 'useAiImages'],
   ['content_concurrency', 'contentConcurrencies'],
   ['content_generation_action', 'contentGenerationActions'],
+  ['word_control_enabled', 'wordControlEnabled'],
   ['minimum_words', 'minimumWords'],
+  ['maximum_words', 'maximumWords'],
+  ['section_words', 'sectionWords'],
+  ['strict_section_words', 'strictSectionWords'],
   ['enable_consistency_audit', 'enableConsistencyAudit'],
   ['consistency_repair_mode', 'consistencyRepairModes'],
   ['enable_original_plan_coverage_audit', 'enableOriginalPlanCoverageAudit'],
@@ -180,6 +188,8 @@ function normalizeUsagePayload(payload: ConfigUsagePayload) {
     ...payload,
     use_mermaid_images: booleanText(payload.use_mermaid_images),
     use_ai_images: booleanText(payload.use_ai_images),
+    word_control_enabled: booleanText(payload.word_control_enabled),
+    strict_section_words: booleanText(payload.strict_section_words),
     enable_consistency_audit: booleanText(payload.enable_consistency_audit),
     enable_original_plan_coverage_audit: booleanText(payload.enable_original_plan_coverage_audit),
   };

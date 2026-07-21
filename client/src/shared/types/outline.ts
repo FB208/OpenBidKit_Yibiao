@@ -12,6 +12,22 @@ export interface OutlineItem {
 export type OutlineMode = 'aligned';
 export type OutlineExpansionMode = 'original-only' | 'ai-complement';
 
+export interface OutlineWordControlOptions {
+  enabled: boolean;
+  minimumWords: number;
+  maximumWords: number;
+  sectionWords: number;
+  strictSectionWords: boolean;
+}
+
+export const DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS: OutlineWordControlOptions = {
+  enabled: false,
+  minimumWords: 0,
+  maximumWords: 0,
+  sectionWords: 0,
+  strictSectionWords: false,
+};
+
 export interface OutlineData {
   outline: OutlineItem[];
   project_name?: string;

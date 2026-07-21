@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const { getBidAnalysisTasks } = require('./bidAnalysisTask.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
+const { countReadableWords } = require('../utils/wordCount.cjs');
 
 function formatSuggestions(suggestions) {
   if (!suggestions?.length) return '';
@@ -76,6 +77,10 @@ const ORIGINAL_OUTLINE_RUNTIME_VERSION = 1;
 const ORIGINAL_OUTLINE_RUNTIME_PHASE = 'original-outline-rolling';
 const ORIGINAL_OUTLINE_AGENT_SCENARIO_KEY = 'existing_plan_expansion_original_outline_extraction';
 const ORIGINAL_OUTLINE_AGENT_OUTPUT_FILE = 'original-outline.json';
+const DEFAULT_EFFECTIVE_SECTION_WORDS = 3000;
+const MAX_WORD_ADJUSTMENT_ATTEMPTS = 3;
+const WORD_ADJUSTMENT_AGENT_OUTPUT_FILE = 'adjusted-outline.json';
+const OUTLINE_WORD_CONTROL_WARNING = '经多次优化仍达不到预期效果，请自行核对并手动修改目录';
 
 function waitForPromptCacheWarmup() {
   return new Promise((resolve) => setTimeout(resolve, PROMPT_CACHE_WARMUP_DELAY_MS));
@@ -548,7 +553,8 @@ function getFinalOutlineConstraintText(context) {
     return `硬性约束：
 1. 一级目录必须与提供的 groups 数量一致、顺序一致、标题完全一致。
 2. 每个一级目录的 source_requirement_id 必须等于对应 group.requirement_id。
-3. 完整目录整体至少包含三级结构。`;
+3. 完整目录整体至少包含三级结构。
+4. 目录层级不能超过四级。`;
   }
   if (context.outlineExpansionMode === 'original-only') {
     return `硬性约束：
@@ -2021,13 +2027,12 @@ function validateOriginalTopLevelPrefix(originalOutlinePayload, finalOutlinePayl
 
 function validateFinalOutline(context) {
   validateCompleteOutline(context.outline);
+  if (outlineDepth(context.outline?.outline || []) > 4) {
+    throw new Error('最终目录层级不能超过四级');
+  }
   if (context.workflowKind !== 'existing-plan-expansion') {
     validateAlignedTopLevelMapping(context.outline.outline || [], context.groups || []);
     return;
-  }
-
-  if (outlineDepth(context.outline?.outline || []) > 4) {
-    throw new Error('最终目录层级不能超过四级');
   }
 
   if (context.outlineExpansionMode !== 'original-only') {
@@ -2932,14 +2937,329 @@ async function enhanceOutlineWithKnowledgeAdditions(aiService, payload, outline,
   }
 }
 
+function normalizeOutlineWordControlOptions(value) {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const normalizeInteger = (input) => {
+    const number = Number(input);
+    return Number.isFinite(number) && number >= 0 ? Math.floor(number) : 0;
+  };
+  const sectionWords = normalizeInteger(raw.sectionWords);
+  return {
+    enabled: Boolean(raw.enabled),
+    minimumWords: normalizeInteger(raw.minimumWords),
+    maximumWords: normalizeInteger(raw.maximumWords),
+    sectionWords,
+    strictSectionWords: sectionWords > 0 && Boolean(raw.strictSectionWords),
+  };
+}
+
+function deriveOutlineWordControl(options) {
+  const effectiveSectionWords = options.sectionWords > 0 ? options.sectionWords : DEFAULT_EFFECTIVE_SECTION_WORDS;
+  const minimumLeafCount = options.enabled && options.minimumWords > 0
+    ? Math.ceil(options.minimumWords / effectiveSectionWords)
+    : null;
+  const maximumLeafCount = options.enabled && options.maximumWords > 0
+    ? Math.floor(options.maximumWords / effectiveSectionWords)
+    : null;
+  return { effectiveSectionWords, minimumLeafCount, maximumLeafCount };
+}
+
+function countOutlineLeafItems(items) {
+  return (items || []).reduce((sum, item) => (
+    item?.children?.length
+      ? sum + countOutlineLeafItems(item.children)
+      : sum + 1
+  ), 0);
+}
+
+function getLeafCountDistance(count, minimum, maximum) {
+  if (minimum !== null && count < minimum) return minimum - count;
+  if (maximum !== null && count > maximum) return count - maximum;
+  return 0;
+}
+
+function assertOutlineFields(items, path = 'outline') {
+  (items || []).forEach((item, index) => {
+    const currentPath = `${path}[${index}]`;
+    if (!String(item?.id || '').trim()) throw new Error(`${currentPath}.id 不能为空`);
+    if (!String(item?.title || '').trim()) throw new Error(`${currentPath}.title 不能为空`);
+    if (!String(item?.description || '').trim()) throw new Error(`${currentPath}.description 不能为空`);
+    if (item?.children?.length) assertOutlineFields(item.children, `${currentPath}.children`);
+  });
+}
+
+function hasOutlineContentField(items) {
+  return (items || []).some((item) => (
+    Object.prototype.hasOwnProperty.call(item || {}, 'content')
+    || hasOutlineContentField(item?.children || [])
+  ));
+}
+
+function captureLockedTopLevelItems(outline) {
+  return (outline?.outline || []).map((item) => ({
+    title: String(item?.title || ''),
+    description: String(item?.description || ''),
+    source_requirement_id: item?.source_requirement_id === undefined ? undefined : String(item.source_requirement_id),
+    source_requirement_title: item?.source_requirement_title === undefined ? undefined : String(item.source_requirement_title),
+  }));
+}
+
+// 保留一级目录的身份和顺序，并恢复不允许由字数删补修改的元数据。
+function restoreLockedTopLevelItems(items, lockedItems) {
+  if ((items || []).length !== lockedItems.length) {
+    throw new Error('字数调整不能改变一级目录数量');
+  }
+  return (items || []).map((item, index) => {
+    const locked = lockedItems[index];
+    if (String(item?.title || '') !== locked.title) {
+      throw new Error(`字数调整不能修改或调换第 ${index + 1} 个一级目录标题`);
+    }
+    const restored = {
+      ...item,
+      title: locked.title,
+      description: locked.description,
+    };
+    if (locked.source_requirement_id === undefined) delete restored.source_requirement_id;
+    else restored.source_requirement_id = locked.source_requirement_id;
+    if (locked.source_requirement_title === undefined) delete restored.source_requirement_title;
+    else restored.source_requirement_title = locked.source_requirement_title;
+    return restored;
+  });
+}
+
+function flattenOutlineStructure(items, parentId = '', rows = []) {
+  (items || []).forEach((item) => {
+    const id = String(item?.id || '');
+    rows.push({
+      id,
+      parentId,
+      title: String(item?.title || ''),
+      description: String(item?.description || ''),
+    });
+    flattenOutlineStructure(item?.children || [], id, rows);
+  });
+  return rows;
+}
+
+function countOutlineStructuralChanges(baseOutline, candidateOutline) {
+  const base = new Map(flattenOutlineStructure(baseOutline?.outline || []).map((item) => [item.id, item]));
+  const candidate = new Map(flattenOutlineStructure(candidateOutline?.outline || []).map((item) => [item.id, item]));
+  const ids = new Set([...base.keys(), ...candidate.keys()]);
+  let changes = 0;
+  for (const id of ids) {
+    if (JSON.stringify(base.get(id)) !== JSON.stringify(candidate.get(id))) changes += 1;
+  }
+  return changes;
+}
+
+function normalizeWordAdjustedOutlineResult(value, context) {
+  const raw = Array.isArray(value) ? { outline: value } : requireObject(value, 'WordAdjustedOutlineResult');
+  const outlineSource = Array.isArray(raw.outline) ? { outline: raw.outline } : raw.outline;
+  if (!outlineSource || hasOutlineContentField(outlineSource.outline || [])) {
+    throw new Error('字数调整结果不能包含正文 content');
+  }
+  const parsed = normalizeOutlineResponse(outlineSource, new Set());
+  const restoredTopLevelItems = restoreLockedTopLevelItems(parsed.outline || [], context.lockedTopLevelItems);
+  const outline = normalizeOutlineResponse({ outline: renumber(restoredTopLevelItems) }, new Set());
+  assertOutlineFields(outline.outline || []);
+  validateFinalOutline({ ...context, outline });
+  return outline;
+}
+
+function buildWordAdjustmentAgentPrompt(context) {
+  return `请读取 current-outline.json、tender.md、bid.md 和 word-control.json，调整当前技术方案目录的叶子节点数量，并把完整结果写入 ${WORD_ADJUSTMENT_AGENT_OUTPUT_FILE}。
+
+硬性要求：
+1. 一级目录数量、顺序、标题、描述和评分来源信息必须完全保持不变；一级目录原有的 source_requirement_id、source_requirement_title 必须原样输出。
+2. 二级、三级和四级目录可以新增、删除、合并、拆分、重命名或调整层级。
+3. 完整目录整体至少包含三级结构，最大不能超过四级。
+4. 调整后的叶子节点数量必须进入 word-control.json 给出的范围。
+5. 不能通过重复、空泛或近义标题机械凑数，不能破坏技术评分项覆盖和目录专业性。
+6. 不得输出正文 content、图片、表格、Mermaid、代码块或解释文字。
+7. 所有节点必须包含非空 id、title、description，title 只写纯标题。
+8. 输出文件必须是可由 JSON.parse 直接解析的纯 JSON，格式为 {"outline": [...]}。
+${context.secondReviewSuggestions?.length ? `\n二审修复要求：\n${context.secondReviewSuggestions.map((item, index) => `${index + 1}. ${item}`).join('\n')}` : ''}`;
+}
+
+function buildWordAdjustmentAgentFiles(context) {
+  return [
+    { path: 'current-outline.json', content: JSON.stringify(context.outline, null, 2) },
+    { path: 'tender.md', content: String(context.tenderMarkdown || '') },
+    { path: 'bid.md', content: `# 项目概况\n\n${context.payload?.overview || ''}\n\n# 技术评分要求\n\n${context.payload?.requirements || ''}` },
+    {
+      path: 'word-control.json',
+      content: JSON.stringify({
+        minimum_words: context.wordControlOptions.minimumWords,
+        maximum_words: context.wordControlOptions.maximumWords,
+        effective_section_words: context.wordControl.effectiveSectionWords,
+        minimum_leaf_count: context.wordControl.minimumLeafCount,
+        maximum_leaf_count: context.wordControl.maximumLeafCount,
+        current_leaf_count: countOutlineLeafItems(context.outline?.outline || []),
+        remaining_attempts: MAX_WORD_ADJUSTMENT_ATTEMPTS - context.attempt,
+      }, null, 2),
+    },
+  ];
+}
+
+async function runWordAdjustmentAgent(agentService, context, log) {
+  let validatedOutline = null;
+  const result = await agentService.runTask({
+    title: `目录叶子数量调整 ${context.attempt}/${MAX_WORD_ADJUSTMENT_ATTEMPTS}`,
+    prompt: buildWordAdjustmentAgentPrompt(context),
+    output_file: WORD_ADJUSTMENT_AGENT_OUTPUT_FILE,
+    files: buildWordAdjustmentAgentFiles(context),
+    timeout_ms: FINAL_AGENT_TIMEOUT_MS,
+    max_retries: 0,
+    validateOutput: (agentResult) => {
+      const content = String(agentResult?.output_content || '').trim();
+      if (!content) throw new Error(`Agent 未写入 ${WORD_ADJUSTMENT_AGENT_OUTPUT_FILE}`);
+      validatedOutline = normalizeWordAdjustedOutlineResult(parseAgentJsonContent(content), context);
+      return validatedOutline;
+    },
+    onActivity: createAgentActivityLogHandler(log, 99),
+  });
+  if (isAgentBusyResult(result)) throw createAgentBusyError();
+  return validatedOutline;
+}
+
+function buildSecondOutlineReviewMessages(context) {
+  return [
+    { role: 'user', content: `项目概况：\n${context.payload?.overview || ''}` },
+    { role: 'user', content: `技术评分要求：\n${context.payload?.requirements || ''}` },
+    { role: 'user', content: `目录字数范围：最少叶子 ${context.wordControl.minimumLeafCount ?? '不限制'}，最多叶子 ${context.wordControl.maximumLeafCount ?? '不限制'}，当前叶子 ${countOutlineLeafItems(context.outline?.outline || [])}` },
+    { role: 'user', content: `待二审目录 JSON：\n${JSON.stringify(context.outline, null, 2)}` },
+    {
+      role: 'user',
+      content: `你是严格的技术标目录二审专家。请检查评分项覆盖、目录结构、一级目录是否保持不变、最大四级限制和叶子节点范围。只返回 JSON：{"passed": true, "suggestions": []}。不通过时 suggestions 必须给出具体可执行的局部修复建议。`,
+    },
+  ];
+}
+
+async function reviewWordAdjustedOutline(aiService, context, log) {
+  log('开始目录二审。', 99);
+  return collectJson(aiService, {
+    messages: buildSecondOutlineReviewMessages(context),
+    temperature: 0.3,
+    normalizer: normalizeReviewResponse,
+    progressCallback: (message) => log(message, 99),
+    progressLabel: '目录二审',
+    failureMessage: '模型返回的目录二审结果格式无效',
+  });
+}
+
+function isBetterOutlineCandidate(candidate, best) {
+  return candidate.distance < best.distance
+    || (candidate.distance === best.distance && candidate.changeCount < best.changeCount);
+}
+
+async function adjustOutlineForWordControl({ aiService, agentService, workspaceStore, payload, outline, groups, originalOutline, workflowKind, outlineExpansionMode, wordControlOptions, wordControl, log, onStats }) {
+  const lockedTopLevelItems = captureLockedTopLevelItems(outline);
+  const baselineOutline = outline;
+  const createCandidate = (candidateOutline) => {
+    const leafCount = countOutlineLeafItems(candidateOutline?.outline || []);
+    return {
+      outline: candidateOutline,
+      leafCount,
+      distance: getLeafCountDistance(leafCount, wordControl.minimumLeafCount, wordControl.maximumLeafCount),
+      changeCount: countOutlineStructuralChanges(baselineOutline, candidateOutline),
+    };
+  };
+  let best = createCandidate(outline);
+  let attempts = 0;
+  let secondReviewNeedsWarning = false;
+  const tenderMarkdown = workspaceStore.readTenderMarkdown?.() || '';
+
+  const runAttempt = async (secondReviewSuggestions = []) => {
+    attempts += 1;
+    onStats({ phase: secondReviewSuggestions.length ? 'second-review' : 'word-adjusting', attempts, leafCount: best.leafCount });
+    log(`开始第 ${attempts}/${MAX_WORD_ADJUSTMENT_ATTEMPTS} 次目录叶子数量调整。`, 99);
+    try {
+      const candidateOutline = await runWordAdjustmentAgent(agentService, {
+        payload,
+        outline: best.outline,
+        groups,
+        originalOutline,
+        workflowKind,
+        outlineExpansionMode,
+        lockedTopLevelItems,
+        wordControlOptions,
+        wordControl,
+        tenderMarkdown,
+        attempt: attempts,
+        secondReviewSuggestions,
+      }, log);
+      const candidate = createCandidate(candidateOutline);
+      const adopted = isBetterOutlineCandidate(candidate, best);
+      if (adopted) best = candidate;
+      onStats({ phase: secondReviewSuggestions.length ? 'second-review' : 'word-adjusting', attempts, leafCount: best.leafCount });
+      log(`第 ${attempts} 次调整完成，当前最佳目录有 ${best.leafCount} 个叶子节点。`, 99);
+      return adopted;
+    } catch (error) {
+      log(`第 ${attempts} 次目录叶子数量调整未产生有效结果：${getErrorMessage(error)}`, 99);
+      return false;
+    }
+  };
+
+  while (best.distance > 0 && attempts < MAX_WORD_ADJUSTMENT_ATTEMPTS) {
+    await runAttempt();
+  }
+
+  if (attempts > 0) {
+    onStats({ phase: 'second-review', attempts, leafCount: best.leafCount });
+    let secondReview;
+    try {
+      secondReview = await reviewWordAdjustedOutline(aiService, {
+        payload,
+        outline: best.outline,
+        wordControl,
+      }, log);
+    } catch (error) {
+      secondReview = createSyntheticFinalReview('目录二审结果格式无效', error);
+    }
+    try {
+      validateFinalOutline({ outline: best.outline, groups, originalOutline, workflowKind, outlineExpansionMode });
+      if (best.distance > 0) throw new Error('叶子节点数量仍未进入目标范围');
+    } catch (error) {
+      secondReview = createSyntheticFinalReview('目录二审程序校验未通过', error);
+    }
+    if (!secondReview.passed) {
+      if (attempts < MAX_WORD_ADJUSTMENT_ATTEMPTS) {
+        const repaired = await runAttempt(secondReview.suggestions || []);
+        secondReviewNeedsWarning = !repaired || best.distance > 0;
+      } else {
+        secondReviewNeedsWarning = true;
+        log('目录二审发现问题，但目录字数调整次数已用完。', 99);
+      }
+    }
+  }
+
+  return {
+    outline: best.outline,
+    leafCount: best.leafCount,
+    attempts,
+    warning: best.distance > 0 || secondReviewNeedsWarning ? OUTLINE_WORD_CONTROL_WARNING : '',
+  };
+}
+
 async function runOutlineGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask, payload }) {
   let logs = ['开始生成目录。'];
   let currentProgress = 5;
+  const wordControlOptions = normalizeOutlineWordControlOptions(payload?.word_control_options);
+  const wordControl = deriveOutlineWordControl(wordControlOptions);
+  let outlineStats = {
+    phase: 'generating',
+    current_leaf_count: 0,
+    ...(wordControl.minimumLeafCount === null ? {} : { minimum_leaf_count: wordControl.minimumLeafCount }),
+    ...(wordControl.maximumLeafCount === null ? {} : { maximum_leaf_count: wordControl.maximumLeafCount }),
+    word_adjustment_attempts: 0,
+  };
+  const taskStats = () => ({ outline: { ...outlineStats } });
   function log(message, progress = currentProgress) {
     currentProgress = Math.max(currentProgress, Math.min(progress, 99));
     logs = [...logs, message];
-    const technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: updateTask({ status: 'running', progress: currentProgress, logs }) });
-    updateTask({ status: 'running', progress: currentProgress, logs }, technicalPlan);
+    const task = updateTask({ status: 'running', progress: currentProgress, logs, stats: taskStats() });
+    const technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
+    updateTask(task, technicalPlan);
   }
 
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(payload);
@@ -2957,15 +3277,17 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     overview,
     requirements,
     outlineExpansionMode,
+    wordControlOptions,
     reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
   };
   let technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineMode: 'aligned',
     outlineExpansionMode,
+    outlineWordControlOptions: wordControlOptions,
     referenceKnowledgeDocumentIds,
-    outlineGenerationTask: updateTask({ status: 'running', progress: 5, logs }),
+    outlineGenerationTask: updateTask({ status: 'running', progress: 5, logs, stats: taskStats() }),
   });
-  updateTask({ status: 'running', progress: 5, logs }, technicalPlan);
+  updateTask({ status: 'running', progress: 5, logs, stats: taskStats() }, technicalPlan);
 
   let oldOutline = null;
   if (isExpansionWorkflow) {
@@ -2979,6 +3301,12 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     if (!String(originalPlanMarkdown || '').trim()) {
       throw new Error('请先上传原方案，再生成目录');
     }
+    if (wordControlOptions.enabled && wordControlOptions.maximumWords > 0) {
+      const originalWords = countReadableWords(originalPlanMarkdown);
+      if (originalWords > wordControlOptions.maximumWords) {
+        throw new Error(`原方案当前约 ${originalWords} 字，已超过设置的最多 ${wordControlOptions.maximumWords} 字，无法继续生成目录。`);
+      }
+    }
     oldOutline = isOriginalOutlineAgentModeEnabled(aiService)
       ? await extractOriginalOutlineWithAgent(agentService, workspaceStore, baseTaskPayload, originalPlanMarkdown, log)
       : await extractOriginalOutline(aiService, workspaceStore, originalPlanMarkdown, log);
@@ -2990,9 +3318,11 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     contentGenerationSections: {},
     contentGenerationPlans: {},
     contentGenerationRuntime: undefined,
-    outlineGenerationTask: updateTask({ status: 'running', progress: currentProgress, logs }),
+    contentIllustrationPlan: undefined,
+    outlineWordControlSnapshot: undefined,
+    outlineGenerationTask: updateTask({ status: 'running', progress: currentProgress, logs, stats: taskStats() }),
   });
-  updateTask({ status: 'running', progress: currentProgress, logs }, technicalPlan);
+  updateTask({ status: 'running', progress: currentProgress, logs, stats: taskStats() }, technicalPlan);
 
   const taskPayload = {
     ...baseTaskPayload,
@@ -3004,15 +3334,24 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
   if (isExpansionWorkflow) {
     if (outlineExpansionMode === 'original-only') {
       log('已选择仅使用原方案目录，跳过AI补充和知识库补目录。', 96);
+      outlineStats = {
+        ...outlineStats,
+        phase: 'done',
+        current_leaf_count: countOutlineLeafItems(oldOutline?.outline || []),
+      };
+      const finalLogs = [...logs, '目录生成完成。'];
+      const finalTask = updateTask({ status: 'success', progress: 100, logs: finalLogs, stats: taskStats() });
       technicalPlan = workspaceStore.updateTechnicalPlan({
         outlineData: { ...oldOutline, project_overview: overview },
+        outlineWordControlSnapshot: wordControlOptions,
         contentGenerationTask: undefined,
         contentGenerationSections: {},
         contentGenerationPlans: {},
         contentGenerationRuntime: undefined,
-        outlineGenerationTask: updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }),
+        contentIllustrationPlan: undefined,
+        outlineGenerationTask: finalTask,
       });
-      updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }, technicalPlan);
+      updateTask(finalTask, technicalPlan);
       return;
     } else {
       outline = await expansionComplementWorkflow(aiService, taskPayload, oldOutline, log);
@@ -3025,6 +3364,11 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
 
   const knowledgeItems = loadOutlineKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);
   outline = await enhanceOutlineWithKnowledgeAdditions(aiService, taskPayload, outline, knowledgeItems, log);
+  outlineStats = {
+    ...outlineStats,
+    phase: 'reviewing',
+    current_leaf_count: countOutlineLeafItems(outline?.outline || []),
+  };
   const finalResult = await runFinalOutlineGate({
     aiService,
     agentService,
@@ -3037,15 +3381,66 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     log,
   });
   outline = finalResult.outline;
+  groups = finalResult.groups || groups;
+  outlineStats = {
+    ...outlineStats,
+    phase: 'reviewing',
+    current_leaf_count: countOutlineLeafItems(outline?.outline || []),
+  };
+  let wordControlWarning = '';
+  if (wordControlOptions.enabled && (wordControl.minimumLeafCount !== null || wordControl.maximumLeafCount !== null)) {
+    const initialDistance = getLeafCountDistance(outlineStats.current_leaf_count, wordControl.minimumLeafCount, wordControl.maximumLeafCount);
+    if (initialDistance > 0) {
+      const adjusted = await adjustOutlineForWordControl({
+        aiService,
+        agentService,
+        workspaceStore,
+        payload: taskPayload,
+        outline,
+        groups,
+        originalOutline: oldOutline,
+        workflowKind: isExpansionWorkflow ? 'existing-plan-expansion' : 'technical-plan',
+        outlineExpansionMode,
+        wordControlOptions,
+        wordControl,
+        log,
+        onStats: ({ phase, attempts, leafCount }) => {
+          outlineStats = {
+            ...outlineStats,
+            phase,
+            current_leaf_count: leafCount,
+            word_adjustment_attempts: attempts,
+          };
+        },
+      });
+      outline = adjusted.outline;
+      wordControlWarning = adjusted.warning;
+      outlineStats = {
+        ...outlineStats,
+        current_leaf_count: adjusted.leafCount,
+        word_adjustment_attempts: adjusted.attempts,
+      };
+    }
+  }
+  outlineStats = {
+    ...outlineStats,
+    phase: 'done',
+    current_leaf_count: countOutlineLeafItems(outline?.outline || []),
+    ...(wordControlWarning ? { word_adjustment_warning: wordControlWarning } : {}),
+  };
+  const finalLogs = [...logs, '目录生成完成。', ...(wordControlWarning ? [wordControlWarning] : [])];
+  const finalTask = updateTask({ status: 'success', progress: 100, logs: finalLogs, stats: taskStats() });
   technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineData: { ...outline, project_overview: overview },
+    outlineWordControlSnapshot: wordControlOptions,
     contentGenerationTask: undefined,
     contentGenerationSections: {},
     contentGenerationPlans: {},
     contentGenerationRuntime: undefined,
-    outlineGenerationTask: updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }),
+    contentIllustrationPlan: undefined,
+    outlineGenerationTask: finalTask,
   });
-  updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }, technicalPlan);
+  updateTask(finalTask, technicalPlan);
 }
 
 module.exports = { runOutlineGenerationTask };

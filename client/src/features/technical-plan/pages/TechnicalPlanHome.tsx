@@ -11,7 +11,8 @@ import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
-import type { OutlineData, OutlineItem, WordExportProgressEvent } from '../../../shared/types';
+import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
+import type { OutlineData, OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import type { SectionId } from '../../../shared/types/navigation';
@@ -71,6 +72,8 @@ const resetState = {
   bidSectionExtractionError: undefined,
   outlineMode: 'aligned' as const,
   outlineExpansionMode: 'ai-complement' as const,
+  outlineWordControlOptions: { ...DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS },
+  outlineWordControlSnapshot: undefined,
   referenceKnowledgeDocumentIds: [] as string[],
   bidSectionExtractionTask: undefined,
   bidAnalysisTask: undefined,
@@ -88,6 +91,16 @@ const resetState = {
 
 function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
   return items.flatMap((item) => item.children?.length ? collectLeafItems(item.children) : [item]);
+}
+
+function isOutlineLeafCountOutsideRange(outlineData: OutlineData, options: OutlineWordControlOptions) {
+  if (!options.enabled || (options.minimumWords === 0 && options.maximumWords === 0)) return false;
+  const effectiveSectionWords = options.sectionWords > 0 ? options.sectionWords : 3000;
+  const leafCount = collectLeafItems(outlineData.outline || []).length;
+  const minimumLeafCount = options.minimumWords > 0 ? Math.ceil(options.minimumWords / effectiveSectionWords) : null;
+  const maximumLeafCount = options.maximumWords > 0 ? Math.floor(options.maximumWords / effectiveSectionWords) : null;
+  return (minimumLeafCount !== null && leafCount < minimumLeafCount)
+    || (maximumLeafCount !== null && leafCount > maximumLeafCount);
 }
 
 function countMermaidDiagrams(content: string) {
@@ -202,11 +215,14 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const [exportTemplateSearch, setExportTemplateSearch] = useState('');
   const [selectedExportTemplateId, setSelectedExportTemplateId] = useState('');
   const [sortLeaveDialogOpen, setSortLeaveDialogOpen] = useState(false);
+  const [outlineWordControlLeaveDialogOpen, setOutlineWordControlLeaveDialogOpen] = useState(false);
   const [savingSortBeforeLeave, setSavingSortBeforeLeave] = useState(false);
   const [workflowSwitchRequest, setWorkflowSwitchRequest] = useState<WorkflowSwitchRequest | null>(null);
   const [switchingWorkflow, setSwitchingWorkflow] = useState(false);
   const sortGuardRef = useRef<OutlineSortGuard | null>(null);
   const sortLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
+  const outlineWordControlLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
+  const shownWordControlWarningTaskIdsRef = useRef(new Set<string>());
   const workflowSwitchResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const skippedWorkflowSwitchPromptRef = useRef<TechnicalPlanWorkflowKind | null>(null);
   const lastExecutedWorkflowSwitchRef = useRef<TechnicalPlanWorkflowKind | null>(null);
@@ -235,7 +251,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const isNextDisabled = activeIndex >= steps.length - 1
     || (state.step === 'document-analysis' && (!state.tenderFile || (requiresOriginalPlan && !state.originalPlanFile)))
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
-    || (state.step === 'outline-generation' && !state.outlineData)
+    || (state.step === 'outline-generation' && (!state.outlineData || !state.outlineWordControlSnapshot))
     || (state.step === 'global-facts' && !globalFactsReady);
   const nextTooltip = state.step === 'document-analysis' && !state.tenderFile
       ? '上传完招标文件后才能进入下一步'
@@ -253,16 +269,31 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
                   ? '招标文件解析完成后才能进入目录生成'
                   : state.step === 'outline-generation' && !state.outlineData
                     ? '目录生成完成后才能进入全局事实设定'
-                    : state.step === 'global-facts' && !globalFactsReady
-                      ? '全局事实设定完成后才能进入正文生成'
-                      : activeIndex >= steps.length - 1
-                        ? '当前已经是最后一步'
-                        : `进入${stepLabels[steps[activeIndex + 1]]}`;
+                    : state.step === 'outline-generation' && !state.outlineWordControlSnapshot
+                      ? '当前目录缺少字数控制生效配置，请重新生成目录'
+                      : state.step === 'global-facts' && !globalFactsReady
+                        ? '全局事实设定完成后才能进入正文生成'
+                        : activeIndex >= steps.length - 1
+                          ? '当前已经是最后一步'
+                          : `进入${stepLabels[steps[activeIndex + 1]]}`;
 
   const resolveSortLeave = (allowed: boolean) => {
     sortLeaveResolverRef.current?.(allowed);
     sortLeaveResolverRef.current = null;
     setSortLeaveDialogOpen(false);
+  };
+
+  const resolveOutlineWordControlLeave = (allowed: boolean) => {
+    outlineWordControlLeaveResolverRef.current?.(allowed);
+    outlineWordControlLeaveResolverRef.current = null;
+    setOutlineWordControlLeaveDialogOpen(false);
+  };
+
+  const confirmOutlineWordControlLeave = () => {
+    setOutlineWordControlLeaveDialogOpen(true);
+    return new Promise<boolean>((resolve) => {
+      outlineWordControlLeaveResolverRef.current = resolve;
+    });
   };
 
   const executeWorkflowSwitch = useCallback(async (targetWorkflowKind: TechnicalPlanWorkflowKind) => {
@@ -451,6 +482,21 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
       return;
     }
 
+    if (state.step === 'outline-generation' && step === 'global-facts') {
+      const latestState = await window.yibiao!.technicalPlan.loadState();
+      setState((prev) => ({ ...prev, ...latestState }));
+      const finalOutlineData = latestState.outlineData;
+      const snapshot = latestState.outlineWordControlSnapshot;
+      if (finalOutlineData && !snapshot) {
+        showToast('当前目录缺少字数控制生效配置，请重新生成目录后再进入下一步', 'info');
+        return;
+      }
+      if (finalOutlineData && snapshot && isOutlineLeafCountOutsideRange(finalOutlineData, snapshot)) {
+        const continueAnyway = await confirmOutlineWordControlLeave();
+        if (!continueAnyway) return;
+      }
+    }
+
     setState((prev) => ({ ...prev, step }));
     window.yibiao?.technicalPlan.updateStep(step).catch((error) => {
       showToast(error instanceof Error ? error.message : '保存技术方案步骤失败', 'error');
@@ -478,6 +524,14 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         return;
       }
 
+      if (latestTask?.status === 'success' && !shownWordControlWarningTaskIdsRef.current.has(latestTask.task_id)) {
+        const warning = latestTask.stats?.outline?.word_adjustment_warning || latestTask.stats?.content?.word_control_warning;
+        if (warning) {
+          shownWordControlWarningTaskIdsRef.current.add(latestTask.task_id);
+          showToast(warning, 'info');
+        }
+      }
+
       setState((prev) => {
         if (taskType === 'bid-section-extraction') {
           return {
@@ -494,6 +548,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             projectOverview: technicalPlan.projectOverview ?? prev.projectOverview,
             techRequirements: technicalPlan.techRequirements ?? prev.techRequirements,
             outlineData: hasOwnField(technicalPlan, 'outlineData') ? (technicalPlan.outlineData || null) : prev.outlineData,
+            outlineWordControlSnapshot: hasOwnField(technicalPlan, 'outlineWordControlSnapshot') ? technicalPlan.outlineWordControlSnapshot : prev.outlineWordControlSnapshot,
             outlineGenerationTask: hasOwnField(technicalPlan, 'outlineGenerationTask') ? trimTaskLogs(technicalPlan.outlineGenerationTask) : prev.outlineGenerationTask,
             referenceKnowledgeDocumentIds: Array.isArray(technicalPlan.referenceKnowledgeDocumentIds) ? technicalPlan.referenceKnowledgeDocumentIds : prev.referenceKnowledgeDocumentIds,
             globalFactsTask: hasOwnField(technicalPlan, 'globalFactsTask') ? trimTaskLogs(technicalPlan.globalFactsTask) : prev.globalFactsTask,
@@ -533,6 +588,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             contentGenerationPlans: outlineDataReset ? {} : prev.contentGenerationPlans,
             contentIllustrationPlan: outlineDataReset ? undefined : prev.contentIllustrationPlan,
             contentGenerationRuntime: outlineDataReset ? undefined : prev.contentGenerationRuntime,
+            outlineWordControlSnapshot: outlineDataReset ? undefined : prev.outlineWordControlSnapshot,
             outlineData: hasOwnField(technicalPlan, 'outlineData') ? (technicalPlan.outlineData || null) : prev.outlineData,
           };
         }
@@ -547,6 +603,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             outlineGenerationTask: trimTaskLogs(technicalPlan.outlineGenerationTask) || latestTask,
             outlineMode: technicalPlan.outlineMode ?? prev.outlineMode,
             outlineExpansionMode: technicalPlan.outlineExpansionMode ?? prev.outlineExpansionMode,
+            outlineWordControlOptions: technicalPlan.outlineWordControlOptions ?? prev.outlineWordControlOptions,
+            outlineWordControlSnapshot: hasOwnField(technicalPlan, 'outlineWordControlSnapshot') ? technicalPlan.outlineWordControlSnapshot : prev.outlineWordControlSnapshot,
             referenceKnowledgeDocumentIds: Array.isArray(technicalPlan.referenceKnowledgeDocumentIds)
               ? technicalPlan.referenceKnowledgeDocumentIds
               : prev.referenceKnowledgeDocumentIds,
@@ -593,6 +651,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           return {
             ...prev,
             contentGenerationTask: latestTask || trimTaskLogs(technicalPlan.contentGenerationTask),
+            outlineWordControlSnapshot: hasOwnField(technicalPlan, 'outlineWordControlSnapshot') ? technicalPlan.outlineWordControlSnapshot : prev.outlineWordControlSnapshot,
             outlineMode: technicalPlan.outlineMode ?? prev.outlineMode,
             referenceKnowledgeDocumentIds: Array.isArray(technicalPlan.referenceKnowledgeDocumentIds)
               ? technicalPlan.referenceKnowledgeDocumentIds
@@ -613,7 +672,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     });
 
     return unsubscribe;
-  }, [setState]);
+  }, [setState, showToast]);
 
   useEffect(() => {
     if (state.step !== 'document-analysis') {
@@ -847,6 +906,22 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     setState((prev) => ({ ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData }));
   };
 
+  const saveOutlineConfig = async (config: {
+    referenceKnowledgeDocumentIds: string[];
+    outlineExpansionMode: TechnicalPlanState['outlineExpansionMode'];
+    wordControlOptions: OutlineWordControlOptions;
+  }) => {
+    const saved = await window.yibiao!.technicalPlan.saveOutlineConfig(config);
+    setState((prev) => ({
+      ...prev,
+      ...saved,
+      outlineMode: 'aligned',
+      outlineExpansionMode: config.outlineExpansionMode,
+      outlineWordControlOptions: config.wordControlOptions,
+      referenceKnowledgeDocumentIds: config.referenceKnowledgeDocumentIds,
+    }));
+  };
+
   const generatedContentCount = state.outlineData?.outline
     ? collectLeafItems(state.outlineData.outline).filter((item) => item.content?.trim()).length
     : 0;
@@ -965,18 +1040,13 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           projectOverview={state.projectOverview}
           techRequirements={state.techRequirements}
           outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
+          outlineWordControlOptions={state.outlineWordControlOptions}
+          outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           outlineData={state.outlineData}
           task={state.outlineGenerationTask}
           contentTaskStatus={state.contentGenerationTask?.status}
-          onOutlineConfigChange={({ referenceKnowledgeDocumentIds, outlineExpansionMode }) => {
-            setState((prev) => ({ ...prev, outlineMode: 'aligned', outlineExpansionMode, referenceKnowledgeDocumentIds }));
-            window.yibiao?.technicalPlan.saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineExpansionMode }).then((saved) => {
-              setState((prev) => ({ ...prev, ...saved }));
-            }).catch((error) => {
-              showToast(error instanceof Error ? error.message : '保存目录配置失败', 'error');
-            });
-          }}
+          onOutlineConfigChange={saveOutlineConfig}
           onOutlineSaved={saveOutline}
           onSortGuardChange={(guard) => {
             sortGuardRef.current = guard;
@@ -994,6 +1064,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
       {state.step === 'content-edit' && (
         <ContentEditPage
           workflowKind={workflowKind}
+          outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           outlineData={state.outlineData}
           task={state.contentGenerationTask}
           contentGenerationOptions={state.contentGenerationOptions}
@@ -1032,6 +1103,23 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
               <button type="button" className="primary-action" onClick={() => { void saveSortAndLeave(); }} disabled={savingSortBeforeLeave}>
                 {savingSortBeforeLeave ? '正在保存...' : '保存排序'}
               </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={outlineWordControlLeaveDialogOpen} onOpenChange={(open) => !open && resolveOutlineWordControlLeave(false)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="content-regenerate-card">
+            <div className="content-regenerate-card-head">
+              <span className="section-kicker">字数检查</span>
+              <Dialog.Title>目录叶子数量未达预期</Dialog.Title>
+              <Dialog.Description>您手动修改的目录可能导致生成正文字数不符合预期</Dialog.Description>
+            </div>
+            <div className="content-regenerate-actions">
+              <button type="button" className="secondary-action" onClick={() => resolveOutlineWordControlLeave(false)}>再修改目录</button>
+              <button type="button" className="primary-action" onClick={() => resolveOutlineWordControlLeave(true)}>仍然继续</button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>

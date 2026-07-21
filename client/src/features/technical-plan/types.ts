@@ -1,4 +1,4 @@
-import type { OutlineData, OutlineExpansionMode, OutlineMode } from '../../shared/types';
+import type { OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../shared/types';
 
 export type TechnicalPlanStep = 'document-analysis' | 'bid-analysis' | 'outline-generation' | 'global-facts' | 'content-edit' | 'expand';
 export type TechnicalPlanWorkflowKind = 'technical-plan' | 'existing-plan-expansion';
@@ -30,7 +30,6 @@ export interface ContentGenerationOptions {
   maxHtmlImages: number;
   htmlImageTypes: string;
   tableRequirement: ContentTableRequirement;
-  minimumWords: number;
   enableConsistencyAudit: boolean;
   consistencyRepairMode: ConsistencyRepairMode;
   enableOriginalPlanCoverageAudit: boolean;
@@ -47,21 +46,33 @@ export interface BackgroundTaskState {
   updated_at: string;
   error?: string;
   stats?: {
+    outline?: {
+      phase: 'generating' | 'reviewing' | 'word-adjusting' | 'second-review' | 'done';
+      current_leaf_count: number;
+      minimum_leaf_count?: number;
+      maximum_leaf_count?: number;
+      word_adjustment_attempts: number;
+      word_adjustment_warning?: string;
+    };
     content?: {
-      phase: 'planning' | 'restoring' | 'generating' | 'outline-expanding' | 'expanding' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'illustration-planning' | 'illustration-generating' | 'done';
+      phase: 'planning' | 'restoring' | 'generating' | 'section-word-adjusting' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'final-section-word-adjusting' | 'total-word-adjusting' | 'illustration-planning' | 'illustration-generating' | 'done';
       planning_total: number;
       planning_completed: number;
       generation_total: number;
       generation_completed: number;
-      outline_expansion_total?: number;
-      outline_expansion_completed?: number;
-      outline_expansion_step_total?: number;
-      outline_expansion_step_completed?: number;
-      outline_expansion_round?: number;
-      outline_expansion_round_total?: number;
-      outline_expansion_step_label?: string;
       minimum_words?: number;
+      maximum_words?: number;
+      section_words?: number;
+      strict_section_words?: boolean;
       current_words?: number;
+      section_adjustment_total?: number;
+      section_adjustment_completed?: number;
+      section_adjustment_item_id?: string;
+      section_adjustment_round?: number;
+      section_adjustment_round_total?: number;
+      total_adjustment_round?: number;
+      total_adjustment_round_total?: number;
+      word_control_warning?: string;
       audit_group_total?: number;
       audit_group_completed?: number;
       audit_conflict_total?: number;
@@ -195,10 +206,11 @@ export interface ContentIllustrationPlanState {
 export interface ContentGenerationRuntimeState {
   phase?: string;
   touched_item_ids?: string[];
-  outline_expansion_completed?: number;
-  expansion_cycle_item_ids?: string[];
-  expansion_attempted_item_ids?: string[];
-  expansion_cycle_start_words?: number;
+  completed_stages?: string[];
+  word_adjustment_stage?: 'section' | 'final-section' | 'total';
+  word_adjustment_item_id?: string;
+  word_adjustment_round?: number;
+  word_adjustment_completed_item_ids?: string[];
   target_item_id?: string;
   regenerate_requirement?: string;
   updated_at?: string;
@@ -275,6 +287,8 @@ export interface TechnicalPlanState {
   bidSectionExtractionError?: string;
   outlineMode: OutlineMode;
   outlineExpansionMode: OutlineExpansionMode;
+  outlineWordControlOptions: OutlineWordControlOptions;
+  outlineWordControlSnapshot?: OutlineWordControlOptions;
   referenceKnowledgeDocumentIds: string[];
   bidSectionExtractionTask?: BackgroundTaskState;
   bidAnalysisTask?: BackgroundTaskState;
