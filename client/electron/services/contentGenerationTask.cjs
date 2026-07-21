@@ -26,6 +26,8 @@ const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
 const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 const MAX_WORD_ADJUSTMENT_ROUNDS = 3;
+const TOTAL_WORD_ADJUSTMENT_BATCH_SIZE = 8;
+const TOTAL_WORD_ADJUSTMENT_SECTION_RATIO = 0.25;
 const CONTENT_WORD_CONTROL_WARNING = '经多轮修复，字数仍未达预期，请您人工核对';
 const SECTION_WORD_CONTROL_WARNING = '字数未达预期，请您人工核对';
 const CONSISTENCY_AUDIT_GROUP_WORD_LIMIT = 300000;
@@ -2737,6 +2739,12 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     section_adjustment_round_total: MAX_WORD_ADJUSTMENT_ROUNDS,
     total_adjustment_round: 0,
     total_adjustment_round_total: MAX_WORD_ADJUSTMENT_ROUNDS,
+    total_adjustment_batch_total: 0,
+    total_adjustment_batch_completed: 0,
+    total_adjustment_batch_failed: 0,
+    total_adjustment_active_count: 0,
+    total_adjustment_item_id: '',
+    total_adjustment_remaining_words: 0,
     word_control_warning: rerunIllustrations || resume
       ? storedPlan.contentGenerationTask?.stats?.content?.word_control_warning
       : undefined,
@@ -3957,6 +3965,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       logTitle: `正文${options.mode === 'expand' ? '扩写' : '缩写'}-${item.id}-${item.title || '未命名章节'}`,
       progressLabel: '正文字数调整',
       failureMessage: '模型返回的正文字数调整结果格式无效',
+      max_retries: 0,
       normalizer: normalizeWordAdjustmentResponse,
       validator: (value) => {
         validateWordAdjustmentResponse(value);
@@ -4091,6 +4100,30 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     return null;
   }
 
+  // 每轮最多选择八个小节，预分配的总预算不超过当前全文差额。
+  function buildTotalWordAdjustmentBatch(candidates, direction, slotCount) {
+    const selected = candidates.slice(0, slotCount);
+    let unallocatedWords = Math.abs(direction.currentWords - direction.targetWords);
+    const batch = [];
+    for (let index = 0; index < selected.length && unallocatedWords > 0; index += 1) {
+      const candidate = selected[index];
+      const remainingSlots = selected.length - index;
+      const fairShare = Math.ceil(unallocatedWords / remainingSlots);
+      const ratioCapacity = Math.max(1, Math.floor(candidate.words * TOTAL_WORD_ADJUSTMENT_SECTION_RATIO));
+      const readableCapacity = direction.mode === 'shrink' ? Math.max(0, candidate.words - 1) : ratioCapacity;
+      const sectionCapacity = wordControl.strictSectionWords
+        ? direction.mode === 'expand'
+          ? Math.min(ratioCapacity, wordControl.sectionMaximumWords - candidate.words)
+          : Math.min(ratioCapacity, candidate.words - wordControl.sectionMinimumWords, readableCapacity)
+        : readableCapacity;
+      const budget = Math.max(0, Math.min(unallocatedWords, fairShare, sectionCapacity));
+      if (budget <= 0) continue;
+      batch.push({ context: candidate, budget });
+      unallocatedWords -= budget;
+    }
+    return batch;
+  }
+
   async function runTotalWordAdjustments() {
     if (!wordControl.enabled || (!wordControl.minimumWords && !wordControl.maximumWords) || targetItemId || runOnlyIllustrationStage) return;
     contentStats.phase = 'total-word-adjusting';
@@ -4118,39 +4151,62 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         return direction.mode === 'expand' ? words < wordControl.sectionMaximumWords : words > wordControl.sectionMinimumWords;
       }).sort((left, right) => direction.mode === 'expand' ? left.words - right.words : right.words - left.words);
       if (candidates.length > 1 && candidates[0].item.id === lastItemId) candidates = [...candidates.slice(1), candidates[0]];
-      for (let index = 0; index < candidates.length; index += 1) {
-        direction = getTotalWordDirection();
-        if (!direction) return;
-        const candidate = candidates[index];
-        const remaining = Math.abs(direction.currentWords - direction.targetWords);
-        const share = Math.ceil(remaining / Math.max(1, candidates.length - index));
-        const sectionCapacity = wordControl.strictSectionWords
-          ? direction.mode === 'expand'
-            ? wordControl.sectionMaximumWords - candidate.words
-            : candidate.words - wordControl.sectionMinimumWords
-          : share;
-        const budget = Math.max(1, Math.min(remaining, share, sectionCapacity));
-        if (budget <= 0) continue;
+      const remainingSlots = Math.max(0, TOTAL_WORD_ADJUSTMENT_BATCH_SIZE - completedItemIds.length);
+      const batch = buildTotalWordAdjustmentBatch(candidates, direction, remainingSlots);
+      const previousContentStats = storedPlan.contentGenerationTask?.stats?.content;
+      contentStats.total_adjustment_batch_total = completedItemIds.length + batch.length;
+      contentStats.total_adjustment_batch_completed = completedItemIds.length;
+      contentStats.total_adjustment_batch_failed = resumingStage && round === initialRound
+        ? Number(previousContentStats?.total_adjustment_batch_failed) || 0
+        : 0;
+      contentStats.total_adjustment_active_count = 0;
+      contentStats.total_adjustment_item_id = '';
+      contentStats.total_adjustment_remaining_words = Math.abs(direction.currentWords - direction.targetWords);
+      if (!batch.length) continue;
+
+      logs = [...logs, `全文字数调整第 ${round}/${MAX_WORD_ADJUSTMENT_ROUNDS} 轮：提交 ${batch.length} 个小节，当前还需${direction.mode === 'expand' ? '增加' : '减少'} ${contentStats.total_adjustment_remaining_words} 字。`];
+      updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+      const activeItemIds = new Set();
+      const batchResults = await Promise.allSettled(batch.map(async ({ context: candidate, budget }) => {
+        activeItemIds.add(candidate.item.id);
+        contentStats.total_adjustment_active_count = activeItemIds.size;
+        contentStats.total_adjustment_item_id = candidate.item.id;
+        logs = [...logs, `全文字数调整已提交：${candidate.item.id} ${candidate.item.title || '未命名章节'}，本次预算 ${budget} 字。`];
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
+        let failed = false;
         try {
           await requestWordAdjustment(candidate, {
             mode: direction.mode,
             granularity,
             targetWords: direction.mode === 'expand' ? candidate.words + budget : Math.max(1, candidate.words - budget),
             maximumChangeWords: budget,
-            totalRemainingWords: remaining,
+            totalRemainingWords: contentStats.total_adjustment_remaining_words,
             enforceSectionBounds: wordControl.strictSectionWords,
           });
           lastItemId = candidate.item.id;
         } catch (error) {
           if (isPauseLikeError(error)) throw error;
+          failed = true;
           logs = [...logs, `全文字数调整未应用：${candidate.item.id}，${error.message || String(error)}。`];
         }
         completedItemIds.push(candidate.item.id);
         completedItemIdSet.add(candidate.item.id);
+        activeItemIds.delete(candidate.item.id);
+        const nextActiveItemId = activeItemIds.values().next().value || '';
+        const nextDirection = getTotalWordDirection();
+        contentStats.total_adjustment_batch_completed = completedItemIds.length;
+        if (failed) contentStats.total_adjustment_batch_failed += 1;
+        contentStats.total_adjustment_active_count = activeItemIds.size;
+        contentStats.total_adjustment_item_id = nextActiveItemId;
+        contentStats.total_adjustment_remaining_words = nextDirection
+          ? Math.abs(nextDirection.currentWords - nextDirection.targetWords)
+          : 0;
         setWordAdjustmentRuntime('total', candidate.item.id, round, completedItemIds);
+        updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
         pauseIfRequested('正文生成已在全文字数调整后暂停，可稍后继续。');
-        if (!getTotalWordDirection()) return;
-      }
+      }));
+      const rejected = batchResults.find((result) => result.status === 'rejected');
+      if (rejected) throw rejected.reason;
     }
   }
 
