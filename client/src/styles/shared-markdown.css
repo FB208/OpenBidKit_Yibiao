@@ -728,19 +728,3 @@
   color: var(--yb-text-muted);
 }
 
-@media (max-width: 860px) {
-  .markdown-fullscreen-content {
-    padding: 14px;
-  }
-
-  .markdown-fullscreen-close {
-    top: 12px;
-    right: 14px;
-  }
-
-  .markdown-editor-fullscreen-body {
-    width: calc(100vw - 28px);
-    height: calc(100vh - 28px);
-    border-radius: 18px;
-  }
-}
