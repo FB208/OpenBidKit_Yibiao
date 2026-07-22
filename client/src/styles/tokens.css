@@ -81,10 +81,3 @@ select {
 button {
   cursor: pointer;
 }
-
-/* [11182-11691] (rewritten, shared-range) body responsive rule extracted from mixed media(860px) block */
-@media (max-width: 860px) {
-  body {
-    overflow: hidden;
-  }
-}

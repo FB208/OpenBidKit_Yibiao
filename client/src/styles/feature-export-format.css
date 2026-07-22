@@ -610,22 +610,6 @@
   white-space: nowrap;
 }
 
-@media (max-width: 860px) {
-  .export-format-heading-note {
-    margin-right: 20px;
-    margin-left: 20px;
-  }
-
-  .export-format-heading-note-summary {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .export-format-heading-token-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
 .export-format-heading-card {
   background: rgba(33, 116, 253, 0.02);
   border: 1px solid var(--yb-border-soft);
@@ -1425,49 +1409,5 @@
   justify-content: flex-end;
   gap: 10px;
   margin-top: 6px;
-}
-
-/* [13103-13145] export-format/export-template responsive media(1100px) 收尾 */
-
-/* ── 响应式 ── */
-
-@media (max-width: 1100px) {
-  .template-library-page {
-    grid-template-columns: 1fr;
-    overflow: auto;
-  }
-
-  .template-library-panel,
-  .template-library-preview-shell {
-    min-height: 520px;
-  }
-
-  .export-template-workspace {
-    grid-template-columns: 1fr;
-  }
-
-  .export-template-preview-panel {
-    position: relative;
-    height: 520px;
-    max-height: none;
-  }
-
-  .export-template-preview-scroll {
-    max-height: none;
-  }
-
-  .export-format-layout {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 400px;
-  }
-
-  .export-format-preview-panel {
-    border-left: none;
-    border-top: 1px solid var(--yb-border-soft);
-  }
-
-  .export-format-preset-list {
-    grid-template-columns: 1fr;
-  }
 }
 

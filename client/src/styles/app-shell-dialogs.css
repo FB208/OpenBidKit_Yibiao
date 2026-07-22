@@ -106,19 +106,6 @@
   }
 }
 
-@media (max-width: 640px) {
-  .workspace-database-card {
-    align-items: flex-start;
-    flex-direction: column;
-    padding: 24px;
-  }
-
-  .workspace-database-actions {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-}
-
 /* [4011-4143] license-status-card + offline-license-dialog/client/import/code-field/actions */
 .license-status-card {
   position: fixed;
