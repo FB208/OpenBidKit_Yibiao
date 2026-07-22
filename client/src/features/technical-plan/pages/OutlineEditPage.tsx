@@ -1269,7 +1269,7 @@ function OutlineEditPage({
                 <div className="content-generation-config-row">
                   <span>
                     <strong>控制字数</strong>
-                    <small>在目录阶段控制叶子小节数量，在正文阶段控制小节和全文字数。</small>
+                    <small>在目录生成阶段，就要预设好全文生成的字数</small>
                   </span>
                   <Switch.Root className="content-generation-switch" checked={draftWordControlEnabled} onCheckedChange={setDraftWordControlEnabled} aria-label="控制字数">
                     <Switch.Thumb className="content-generation-switch-thumb" />
@@ -1320,7 +1320,7 @@ function OutlineEditPage({
                 )}
                 {configurationRequiresRegeneration && (
                   <div className="outline-word-control-notice">
-                    {outlineWordControlSnapshot ? '新设置需要重新生成目录后，才会应用于正文生成。' : '当前目录缺少字数控制生效配置，请重新生成目录。'}
+                    {outlineWordControlSnapshot ? '生成目录后若修改了字数设置，需要重新生成目录才能生效！' : '当前目录缺少字数控制生效配置，请重新生成目录。'}
                   </div>
                 )}
               </section>
