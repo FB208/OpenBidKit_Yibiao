@@ -852,7 +852,7 @@ def state_path() -> Path:
 
 
 def manual_scope_paths(source_root: Path) -> list[str]:
-    """Return all manual chapters while excluding the root version log."""
+    """Return all manual chapters while excluding the version-log folder."""
     paths = [
         path.relative_to(source_root).as_posix()
         for folder_name in ("配置", "使用")
@@ -878,7 +878,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--manual-only",
         action="store_true",
-        help="同步配置和使用目录的全部章节，但不包含根目录版本日志",
+        help="同步配置和使用目录的全部章节，但不包含更新日志目录",
     )
     parser.add_argument("--json", action="store_true", help="输出结构化 JSON 结果")
     parser.add_argument(

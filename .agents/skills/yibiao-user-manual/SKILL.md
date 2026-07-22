@@ -42,7 +42,7 @@ description: 为易标投标工具箱按用户指定范围创建或更新 Markdo
 
 ## 四、版本日志任务
 
-1. 完整阅读 [changelog-standard.md](references/changelog-standard.md)，只处理 `使用说明/v2版本更新日志.md`。
+1. 完整阅读 [changelog-standard.md](references/changelog-standard.md)，只处理 `使用说明/更新日志/v2版本更新日志.md`。
 2. 运行一次：
    `python .agents/skills/yibiao-user-manual/scripts/changelog_tool.py inspect --json`
 3. 没有新标签时报告“没有新的正式版本”，随后仍进入服务器比较。
