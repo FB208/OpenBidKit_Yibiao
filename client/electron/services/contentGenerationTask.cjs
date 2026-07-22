@@ -28,6 +28,10 @@ const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 const MAX_WORD_ADJUSTMENT_ROUNDS = 3;
 const TOTAL_WORD_ADJUSTMENT_BATCH_SIZE = 8;
 const TOTAL_WORD_ADJUSTMENT_SECTION_RATIO = 0.25;
+// 生成阶段按全文上限倒推每小节目标字数时使用的折扣系数，预留 AI 系统性偏高的缓冲，降低初稿超量概率。
+const GENERATION_WORD_TARGET_RATIO = 0.8;
+// 全文缩写阶段筛选候选小节时，可缩空间至少要达到本轮单节平均预算的比例，低于此值的小节直接跳过以免空占批次名额。
+const TOTAL_WORD_SHRINK_MIN_CAPACITY_RATIO = 0.3;
 const CONTENT_WORD_CONTROL_WARNING = '经多轮修复，字数仍未达预期，请您人工核对';
 const SECTION_WORD_CONTROL_WARNING = '字数未达预期，请您人工核对';
 const CONSISTENCY_AUDIT_GROUP_WORD_LIMIT = 300000;
@@ -380,11 +384,23 @@ function normalizeOutlineWordControlSnapshot(value) {
   });
 }
 
-function buildSectionWordRequirement(wordControl, preserveOriginalMaterial = false) {
+// 按全文上限倒推每小节生成目标：留出折扣缓冲，避免所有小节都顶着预设字数生成导致初稿总量系统性超上限。
+// 仅在启用强控小节字数且设置了全文上限时生效，其余情况返回 0 表示沿用预设字数。
+function computeGenerationWordTarget(wordControl, leafCount) {
+  if (!wordControl.enabled || !wordControl.strictSectionWords) return 0;
+  if (!(wordControl.maximumWords > 0) || !(leafCount > 0)) return 0;
+  const derived = Math.floor((wordControl.maximumWords * GENERATION_WORD_TARGET_RATIO) / leafCount);
+  // 不低于小节下限，避免倒推目标把 AI 引导到强控范围之外。
+  return Math.max(wordControl.sectionMinimumWords, derived);
+}
+
+function buildSectionWordRequirement(wordControl, preserveOriginalMaterial = false, generationTarget = 0) {
   if (!wordControl.enabled || wordControl.sectionWords <= 0) return '';
+  // 传入 generationTarget（按全文上限倒推的折后目标）时用它替代预设字数，允许范围展示保持不变，从源头压低初稿总量。
+  const targetWords = generationTarget > 0 ? generationTarget : wordControl.sectionWords;
   const base = wordControl.strictSectionWords
-    ? `本小节预设字数为 ${wordControl.sectionWords} 字，允许范围为 ${wordControl.sectionMinimumWords} 至 ${wordControl.sectionMaximumWords} 字。请尽量一次生成在该范围内。`
-    : `本小节预设字数约为 ${wordControl.sectionWords} 字。请在内容完整、专业且不重复的前提下尽量接近该字数；本要求属于生成目标，最终由全文字数流程统一调整。`;
+    ? `本小节目标字数约 ${targetWords} 字，硬性上限 ${wordControl.sectionMaximumWords} 字，绝对不得超过上限；超出上限属于不合格输出。请在信息完整、专业、不重复的前提下贴近目标字数，宁可略短也不要为凑字数扩写、堆砌或重复表达。`
+    : `本小节建议字数 ${wordControl.sectionMinimumWords} 至 ${wordControl.sectionMaximumWords} 字（目标约 ${targetWords} 字）。请在内容完整、专业、不重复的前提下控制篇幅，避免明显超出该范围；如确有必要可略有出入，最终由全文字数流程统一调整。`;
   return preserveOriginalMaterial
     ? `${base}\n字数要求不能覆盖保留原方案实质内容的要求；可以消除重复和冗余，但不得删除技术路线、参数、周期、人员、验收、售后和承诺。`
     : base;
@@ -839,7 +855,7 @@ function formatKnowledgeContentsForPrompt(contents) {
     .join('\n\n');
 }
 
-function buildChapterContentMessages({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, preSectionInstruction, wordControl }) {
+function buildChapterContentMessages({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, preSectionInstruction, wordControl, generationTarget = 0 }) {
   const chapterId = chapter.id || 'unknown';
   const chapterTitle = chapter.title || '未命名章节';
   const chapterDescription = chapter.description || '';
@@ -914,13 +930,13 @@ function buildChapterContentMessages({ chapter, projectOverview, selectedFactsTe
 请结合项目概述信息、本章节全局事实变量、参考正文素材和正文编排决策，围绕当前章节标题、描述和写作重点生成详细的专业内容。
 直接返回编写的正文内容，不要输出标题、Markdown 标题、带任何形式编号的加粗引导语、伪目录标题、解释、总结等任何其他内容`,
   });
-  const sectionWordRequirement = buildSectionWordRequirement(wordControl);
+  const sectionWordRequirement = buildSectionWordRequirement(wordControl, false, generationTarget);
   if (sectionWordRequirement) messages.push({ role: 'user', content: sectionWordRequirement });
 
   return messages;
 }
 
-function buildRestoredChapterContentMessages({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent, wordControl }) {
+function buildRestoredChapterContentMessages({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent, wordControl, generationTarget = 0 }) {
   const messages = buildChapterContentMessages({
     chapter,
     projectOverview,
@@ -954,7 +970,7 @@ ${String(restoredContent || '').trim()}`,
     role: 'user',
     content: '请基于已还原正文底稿输出当前章节完整正文。必须保留底稿中的实质内容，可以优化扩写，但不要从零重写；如果底稿开头或中间出现章节标题、Markdown 标题或编号标题，只把它当作定位线索，不要输出这些标题或解释。',
   });
-  const sectionWordRequirement = buildSectionWordRequirement(wordControl, true);
+  const sectionWordRequirement = buildSectionWordRequirement(wordControl, true, generationTarget);
   if (sectionWordRequirement) messages.push({ role: 'user', content: sectionWordRequirement });
   return messages;
 }
@@ -1144,7 +1160,7 @@ workspace 文件：
 最终请把当前小节完整正文写入 optimized-section.md。该文件只能包含正文内容，不要包含标题或说明。`;
 }
 
-function buildAgentRestoredChapterContentFiles({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent, wordControl }) {
+function buildAgentRestoredChapterContentFiles({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent, wordControl, generationTarget = 0 }) {
   return [
     {
       path: 'chapter-context.md',
@@ -1168,7 +1184,7 @@ ${String(regenerateRequirement || '').trim() || '无'}
 ${contentPlan ? formatContentPlanForPrompt(contentPlan) : '无'}
 
 # 本小节字数目标
-${buildSectionWordRequirement(wordControl, true) || '不控制小节字数'}`,
+${buildSectionWordRequirement(wordControl, true, generationTarget) || '不控制小节字数'}`,
     },
     {
       path: 'restored-content.md',
@@ -3799,9 +3815,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       originalMaterial = originalState.originalMaterial;
       const knowledgeContents = resolveKnowledgeContents(contentPlan.knowledge?.item_ids, knowledgeContentMap);
       const selectedFactsText = resolveSelectedFactsText(contentPlan, globalFacts);
+      const generationTarget = computeGenerationWordTarget(wordControl, leaves.length);
       const contentMessages = needsRestoredOptimization
-        ? buildRestoredChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent: previousContent, wordControl })
-        : buildChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, wordControl });
+        ? buildRestoredChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent: previousContent, wordControl, generationTarget })
+        : buildChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, wordControl, generationTarget });
 
       let generatedContent;
       if (needsRestoredOptimization && shouldUseAgentForMessages(aiService, contentMessages)) {
@@ -3831,6 +3848,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
             knowledgeContents,
             restoredContent: previousContent,
             wordControl,
+            generationTarget,
           }),
           eventPrefix: 'restored_optimization.agent',
           activityLabel: 'Agent 正在优化扩写已还原正文',
@@ -4180,11 +4198,16 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       setWordAdjustmentRuntime('total', lastItemId, round, completedItemIds);
       const differenceRatio = Math.abs(direction.currentWords - direction.targetWords) / direction.targetWords;
       const granularity = differenceRatio > 0.2 ? 'paragraph' : 'sentence';
+      // 本轮单节平均预算，用于缩写时过滤可缩空间过小的小节，避免它们占用批次名额却几乎缩不动。
+      const averageBudget = Math.abs(direction.currentWords - direction.targetWords) / TOTAL_WORD_ADJUSTMENT_BATCH_SIZE;
       let candidates = leafWordStats().filter(({ item, words }) => {
         if (sections[item.id]?.status !== 'success' || words <= 0) return false;
         if (completedItemIdSet.has(item.id)) return false;
         if (!wordControl.strictSectionWords) return true;
-        return direction.mode === 'expand' ? words < wordControl.sectionMaximumWords : words > wordControl.sectionMinimumWords;
+        if (direction.mode === 'expand') return words < wordControl.sectionMaximumWords;
+        // 缩写：仅保留可缩空间不小于平均预算 30% 的小节，集中资源到真正缩得动的小节上。
+        const shrinkableWords = words - wordControl.sectionMinimumWords;
+        return shrinkableWords >= averageBudget * TOTAL_WORD_SHRINK_MIN_CAPACITY_RATIO;
       }).sort((left, right) => direction.mode === 'expand' ? left.words - right.words : right.words - left.words);
       if (candidates.length > 1 && candidates[0].item.id === lastItemId) candidates = [...candidates.slice(1), candidates[0]];
       const remainingSlots = Math.max(0, TOTAL_WORD_ADJUSTMENT_BATCH_SIZE - completedItemIds.length);
