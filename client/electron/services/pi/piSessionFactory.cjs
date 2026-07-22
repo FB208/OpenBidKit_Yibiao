@@ -110,6 +110,20 @@ async function createPiSession({ workspaceDir, environment, proxyInfo, config, t
     session,
     snapshot: {
       sdk_version: codingAgent.VERSION || '',
+      model: {
+        provider: model.provider || '',
+        id: model.id || '',
+        api: model.api || '',
+        base_url: model.baseUrl || '',
+        context_window: Number(model.contextWindow || 0),
+        max_tokens: Number(model.maxTokens || 0),
+      },
+      transport: {
+        proxy_base_url: proxyInfo.baseUrl,
+        proxy_port: Number(proxyInfo.port || 0),
+        provider_timeout_ms: Number(timeoutMs || 0),
+        http_idle_timeout_ms: Number(timeoutMs || 0),
+      },
       context_files: resourceLoader.getAgentsFiles().agentsFiles.map((item) => item.path),
       skills: resourceLoader.getSkills().skills.map((item) => item.name),
       prompts: resourceLoader.getPrompts().prompts.map((item) => item.name),

@@ -579,6 +579,14 @@
   border-color: rgba(200, 50, 32, 0.24);
 }
 
+.agent-self-check-step.is-warning {
+  border-color: rgba(245, 158, 11, 0.24);
+}
+
+.agent-self-check-step.is-skipped {
+  opacity: 0.72;
+}
+
 .agent-self-check-step.is-running {
   border-color: rgba(33, 116, 253, 0.24);
 }
@@ -606,6 +614,10 @@
 
 .agent-isolation-check.is-error {
   border-color: rgba(200, 50, 32, 0.24);
+}
+
+.agent-isolation-check.is-skipped {
+  opacity: 0.72;
 }
 
 .agent-isolation-check-head {
@@ -658,6 +670,11 @@
 .agent-isolation-check.is-error .agent-isolation-check-head em {
   color: #c83220;
   background: rgba(200, 50, 32, 0.1);
+}
+
+.agent-isolation-check.is-skipped .agent-isolation-check-head em {
+  color: var(--yb-text-soft);
+  background: rgba(132, 145, 164, 0.12);
 }
 
 .agent-isolation-check-grid {

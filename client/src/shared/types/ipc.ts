@@ -153,7 +153,7 @@ export interface WorkspaceDatabaseStatus {
   migrationDescription?: string;
 }
 
-export type AgentSelfCheckStepStatus = 'pending' | 'running' | 'success' | 'error';
+export type AgentSelfCheckStepStatus = 'pending' | 'running' | 'success' | 'warning' | 'error' | 'skipped';
 export type AgentSelfCheckStatus = 'normal' | 'error' | 'busy';
 
 export type AgentRuntimePhase = 'stopped' | 'starting' | 'idle' | 'running' | 'aborting' | 'unhealthy' | 'restarting' | 'closing';
@@ -294,6 +294,9 @@ export interface AgentSelfCheckStep {
   status: AgentSelfCheckStepStatus;
   message?: string;
   updated_at?: string;
+  started_at?: string;
+  completed_at?: string;
+  duration_ms?: number;
 }
 
 export interface AgentDiagnosticSection {
@@ -315,7 +318,10 @@ export interface AgentDiagnosticSection {
 }
 
 export interface AgentSelfCheckResult {
+  report_version?: number;
+  check_id?: string;
   success: boolean;
+  repaired?: boolean;
   runtime_id: string;
   runtime_name: string;
   status: AgentSelfCheckStatus;
@@ -334,6 +340,15 @@ export interface AgentSelfCheckResult {
   sections: AgentDiagnosticSection[];
   diagnostics?: Record<string, unknown>;
   error?: Record<string, unknown>;
+  model_config?: Record<string, unknown>;
+  model_check?: Record<string, unknown>;
+  environment?: Record<string, unknown>;
+  loopback_check?: Record<string, unknown>;
+  tool_check?: Record<string, unknown>;
+  agent_check?: Record<string, unknown>;
+  session_snapshot?: Record<string, unknown>;
+  diagnosis?: Record<string, unknown>;
+  repair?: Record<string, unknown>;
   detail_text: string;
   runtime_status?: AgentRuntimeStatus;
 }

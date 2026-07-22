@@ -7,6 +7,7 @@ const {
   listAgentRuntimeDescriptors,
   normalizeAgentRuntimeId,
 } = require('./agent/agentRuntimeRegistry.cjs');
+const { buildPiSelfCheckReportMarkdown } = require('./pi/piSelfCheckService.cjs');
 
 function nowIso() {
   return new Date().toISOString();
@@ -118,6 +119,7 @@ function normalizeRunError(runtimeId, error) {
 function normalizeSelfCheckResult(runtimeId, rawResult = {}) {
   const definition = getAgentRuntimeDefinition(runtimeId);
   return {
+    ...rawResult,
     success: Boolean(rawResult.success),
     runtime_id: runtimeId,
     runtime_name: definition.displayName,
@@ -174,7 +176,7 @@ function buildSelfCheckReportMarkdown(result = {}) {
   return lines.join('\n');
 }
 
-function createAgentService({ app, configStore, mainWindow }) {
+function createAgentService({ app, configStore, mainWindow, aiService }) {
   const runtimes = new Map();
   const runtimeUnsubscribers = new Map();
   const listeners = new Set();
@@ -197,7 +199,7 @@ function createAgentService({ app, configStore, mainWindow }) {
   function ensureRuntime(runtimeId) {
     const normalizedId = normalizeAgentRuntimeId(runtimeId);
     if (runtimes.has(normalizedId)) return runtimes.get(normalizedId);
-    const runtime = createAgentRuntime(normalizedId, { app, configStore, mainWindow });
+    const runtime = createAgentRuntime(normalizedId, { app, configStore, mainWindow, aiService });
     runtimes.set(normalizedId, runtime);
     const unsubscribe = runtime.onStatus?.(() => emitStatus());
     if (unsubscribe) runtimeUnsubscribers.set(normalizedId, unsubscribe);
@@ -416,7 +418,9 @@ function createAgentService({ app, configStore, mainWindow }) {
   }
 
   async function exportSelfCheckReport(result = {}) {
-    const markdown = buildSelfCheckReportMarkdown(result);
+    const markdown = result.runtime_id === 'pi'
+      ? buildPiSelfCheckReportMarkdown(result)
+      : buildSelfCheckReportMarkdown(result);
     const defaultDir = app?.getPath ? app.getPath('documents') : process.env.USERPROFILE || process.cwd();
     const defaultName = `${sanitizeReportFilename(`${result.runtime_name || '智能体'}自检报告`)}-${formatTimestampForFilename(result.checked_at)}.md`;
     const saveResult = await dialog.showSaveDialog({

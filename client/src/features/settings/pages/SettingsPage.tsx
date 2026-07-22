@@ -27,12 +27,13 @@ const agentSelfCheckStatusMeta: Record<AgentSelfCheckUiStatus, { label: string; 
   error: { label: '异常', description: '智能体链路自检失败，请查看下方错误详情。' },
 };
 
-const agentDiagnosticStatusMeta: Record<AgentSelfCheckStepStatus | 'warning', { label: string; description: string }> = {
+const agentDiagnosticStatusMeta: Record<AgentSelfCheckStepStatus, { label: string; description: string }> = {
   pending: { label: '待检查', description: '尚未执行检查。' },
   running: { label: '检查中', description: '正在执行检查。' },
   success: { label: '正常', description: '检查已通过。' },
   warning: { label: '警告', description: '检查完成，但存在需要留意的信息。' },
   error: { label: '异常', description: '检查未通过。' },
+  skipped: { label: '已跳过', description: '因前置条件不足或无需执行而跳过。' },
 };
 
 const updateChannelOptions: Array<{ value: UpdateChannel; label: string; description: string }> = [
@@ -2015,7 +2016,9 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             <div className="settings-row">
               <div className="settings-row-copy">
                 <strong>自检</strong>
-                <span>检查当前已保存的 {savedAgentRuntime?.display_name || '智能体运行时'}，覆盖运行环境、AI Proxy、工具、当前文本模型和输出文件链路。</span>
+                <span>{savedConfig?.agent_runtime === 'pi'
+                  ? '检查 Pi Agent 的模型普通/流式/工具调用、本地 AI Proxy、运行环境、工具和输出链路；失败时自动诊断并尝试安全修复。'
+                  : `检查当前已保存的 ${savedAgentRuntime?.display_name || '智能体运行时'}，覆盖运行环境、AI Proxy、工具、当前文本模型和输出文件链路。`}</span>
               </div>
               <div className="settings-action-cell">
                 <button type="button" className="inline-action" onClick={runAgentSelfCheck} disabled={agentSelfCheckStatus === 'checking'}>
@@ -2051,7 +2054,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             <div className={`agent-self-check-result is-${agentSelfCheckResult.success ? 'normal' : agentSelfCheckResult.status === 'busy' ? 'busy' : 'error'}`}>
               <div className="agent-self-check-result-head">
                 <div>
-                  <strong>{agentSelfCheckResult.runtime_name}：{agentSelfCheckResult.success ? '自检通过' : agentSelfCheckResult.status === 'busy' ? '自检跳过' : '自检失败'}</strong>
+                  <strong>{agentSelfCheckResult.runtime_name}：{agentSelfCheckResult.success ? agentSelfCheckResult.repaired ? '自检通过（已自动修复）' : '自检通过' : agentSelfCheckResult.status === 'busy' ? '自检跳过' : '自检失败'}</strong>
                   <span>{agentSelfCheckResult.message}</span>
                 </div>
                 <div className="agent-self-check-result-actions">

@@ -7,9 +7,18 @@ const { trackAgentRuntime } = require('../agent/agentRuntimeAnalytics.cjs');
 const { preparePiEnvironment } = require('./piEnvironment.cjs');
 const { createPiSession, loadPiModules } = require('./piSessionFactory.cjs');
 const {
+  SAFE_REPAIR_ACTIONS,
+  analyzePiSelfCheckWithModel,
+  createPiEnvironmentSnapshot,
   createPiDiagnosticSections,
   createPiSelfCheckSteps,
+  diagnosePiSelfCheck,
+  ensureLoopbackNoProxy,
+  runPiLoopbackSelfCheck,
+  runPiTextModelSelfCheck,
   runPiToolEnvironmentSelfCheck,
+  serializeDiagnosticError,
+  summarizeTextModelConfig,
   validatePiSessionSnapshot,
 } = require('./piSelfCheckService.cjs');
 
@@ -122,6 +131,19 @@ function getAssistantError(messages = []) {
   return assistant?.stopReason === 'error' ? assistant.errorMessage || 'Pi Agent 模型请求失败' : '';
 }
 
+function getAssistantErrorDetails(messages = []) {
+  const assistant = [...messages].reverse().find((message) => message?.role === 'assistant');
+  if (!assistant || assistant.stopReason !== 'error') return null;
+  return {
+    stop_reason: assistant.stopReason,
+    error_message: assistant.errorMessage || 'Pi Agent 模型请求失败',
+    api: assistant.api || '',
+    provider: assistant.provider || '',
+    model: assistant.model || '',
+    timestamp: assistant.timestamp || 0,
+  };
+}
+
 function buildRetryPrompt(outputFile, error, attempt, maxRetries) {
   return `上一轮执行未通过程序校验或执行失败：${compactText(error?.message || error, 800)}
 
@@ -149,12 +171,12 @@ function createRuntimeDiagnostics(limit = 500) {
   };
 }
 
-function createPiRuntimeService({ app, configStore, runtime }) {
+function createPiRuntimeService({ app, configStore, runtime, aiService }) {
   const runtimeId = runtime.id;
   const runtimeName = runtime.displayName;
-  const environment = preparePiEnvironment(app, runtimeId);
+  let environment = preparePiEnvironment(app, runtimeId);
   const { layout } = environment;
-  const diagnostics = createRuntimeDiagnostics();
+  const diagnostics = createRuntimeDiagnostics(2000);
   const listeners = new Set();
   let phase = 'stopped';
   let healthy = false;
@@ -438,7 +460,11 @@ function createPiRuntimeService({ app, configStore, runtime }) {
           await session.prompt(prompt, { expandPromptTemplates: false });
           if (activeController.signal.aborted) throw activeController.signal.reason;
           const assistantError = getAssistantError(session.messages);
-          if (assistantError) throw new Error(assistantError);
+          if (assistantError) {
+            const error = new Error(assistantError);
+            error.piAssistantError = getAssistantErrorDetails(session.messages);
+            throw error;
+          }
           assistantText = extractAssistantText(session.messages);
           const output = readOutput(layout.workspaceDir, outputFile);
           const candidate = {
@@ -536,6 +562,8 @@ function createPiRuntimeService({ app, configStore, runtime }) {
         error.agentDiagnostics = {
           session: sessionSnapshot,
           events: diagnostics.events.slice(-160),
+          assistant_error: error.piAssistantError || null,
+          error: serializeDiagnosticError(error),
         };
       }
       trackAgentRuntime(app, configStore, runtimeId, 'failed', { retryCount: retryAttempts.length });
@@ -561,36 +589,10 @@ function createPiRuntimeService({ app, configStore, runtime }) {
     }
   }
 
-  // 执行 Pi SDK、资源、工具、模型和输出文件的完整链路自检。
-  async function runSelfCheck() {
-    const checkedAt = nowIso();
-    const startedAt = Date.now();
-    const steps = createPiSelfCheckSteps();
-    const logDir = getDeveloperLogsDir(app, `${runtimeId}-self-check`);
-    const logFile = path.join(logDir, 'latest.json');
-    let sessionSnapshot = {};
-    let toolCheck = null;
-    const setStep = (id, status, stepMessage) => {
-      const step = steps.find((item) => item.id === id);
-      if (step) Object.assign(step, { status, message: stepMessage, updated_at: nowIso() });
-    };
+  async function runAgentLinkSelfCheck() {
+    const taskCheckedAt = nowIso();
+    const taskStartedAt = Date.now();
     try {
-      fs.mkdirSync(logDir, { recursive: true });
-      setStep('sdk', 'running', '正在加载 Pi SDK');
-      const { codingAgent } = await loadPiModules();
-      sdkVersion = sdkVersion || codingAgent.VERSION || '';
-      setStep('sdk', 'success', sdkVersion ? `Pi SDK ${sdkVersion}` : 'Pi SDK 已加载');
-
-      setStep('runtime', 'running', `正在启动 ${runtimeName} AI Proxy`);
-      await ensureStarted();
-      setStep('runtime', 'success', layout.runtimeRoot);
-
-      setStep('tools', 'running', '正在检查共享命令环境');
-      toolCheck = runPiToolEnvironmentSelfCheck(environment);
-      if (!toolCheck.success) throw new Error(`Pi 共享命令环境检查失败：${toolCheck.summary}`);
-      setStep('tools', 'success', toolCheck.summary);
-
-      setStep('agent', 'running', `正在执行 ${runtimeName} 自检任务`);
       const result = await runTask({
         task_id: `${runtimeId}-agent-self-check-latest`,
         title: `${runtimeName} 自检`,
@@ -604,55 +606,436 @@ function createPiRuntimeService({ app, configStore, runtime }) {
         timeout_ms: 5 * 60 * 1000,
         max_retries: 0,
       });
-      setStep('agent', 'success', `session_id=${result.session_id}`);
-      sessionSnapshot = result.diagnostics?.session || {};
+      const sessionSnapshot = result.diagnostics?.session || {};
       const snapshotValidation = validatePiSessionSnapshot(sessionSnapshot);
-      setStep('resources', snapshotValidation.resourcesValid ? 'success' : 'error', snapshotValidation.resourcesValid ? '仅加载易标内置工作区指令' : 'Pi 资源加载结果不符合配置');
-      if (!snapshotValidation.resourcesValid) throw new Error('Pi Agent 加载了未授权资源');
-      setStep('tools', snapshotValidation.toolsValid ? 'success' : 'error', snapshotValidation.toolsValid ? toolCheck.summary : 'Pi 工具注册结果不符合配置');
-      if (!snapshotValidation.toolsValid) throw new Error('Pi Agent 工具注册结果不符合配置');
-
-      setStep('output', 'running', '正在校验自检输出');
-      const output = JSON.parse(result.output_content || '{}');
-      if (
-        output.message !== 'YIBIAO_PI_AGENT_SELF_CHECK_OK'
-        || output.input !== 'YIBIAO_PI_AGENT_SELF_CHECK_INPUT'
-        || output.node !== 'YIBIAO_PI_NODE_OK'
-      ) {
-        throw new Error('Pi Agent 自检输出不符合预期');
+      let output = null;
+      let outputValid = false;
+      let outputMessage = '';
+      try {
+        output = JSON.parse(result.output_content || '{}');
+        outputValid = output.message === 'YIBIAO_PI_AGENT_SELF_CHECK_OK'
+          && output.input === 'YIBIAO_PI_AGENT_SELF_CHECK_INPUT'
+          && output.node === 'YIBIAO_PI_NODE_OK';
+        outputMessage = outputValid ? '输出内容符合预期' : 'Pi Agent 自检输出不符合预期';
+      } catch (error) {
+        outputMessage = `Pi Agent 自检输出不是合法 JSON：${error?.message || String(error)}`;
       }
-      setStep('output', 'success', '输出内容符合预期');
-      const selfCheckResult = {
-        success: true,
-        status: 'normal',
-        message: `${runtimeName} 自检正常`,
+      const success = snapshotValidation.resourcesValid && snapshotValidation.toolsValid && outputValid;
+      return {
+        success,
+        task_completed: true,
+        checked_at: taskCheckedAt,
+        duration_ms: Date.now() - taskStartedAt,
+        message: success ? 'Pi Agent 极简任务执行成功' : outputMessage || 'Pi Agent 极简任务未通过校验',
+        session_id: result.session_id || '',
+        workspace_dir: result.workspace_dir || layout.workspaceDir,
+        output_file: SELF_CHECK_OUTPUT_FILE,
+        output_content: result.output_content || '',
+        output_valid: outputValid,
+        output_message: outputMessage,
+        parsed_output: output,
+        session_snapshot: sessionSnapshot,
+        snapshot_validation: snapshotValidation,
+        retry_count: result.retry_count || 0,
+        retry_attempts: result.retry_attempts || [],
+        diagnostics: {
+          ...(result.diagnostics || {}),
+          events: (result.diagnostics?.events || []).filter((event) => String(event.at || '') >= taskCheckedAt),
+        },
+        error: null,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        task_completed: false,
+        checked_at: taskCheckedAt,
+        duration_ms: Date.now() - taskStartedAt,
+        message: error?.message || `${runtimeName} 自检任务失败`,
+        session_id: '',
+        workspace_dir: error?.agentWorkspaceDir || layout.workspaceDir,
+        output_file: SELF_CHECK_OUTPUT_FILE,
+        output_content: error?.agentPartialOutput || '',
+        output_valid: false,
+        output_message: '智能体任务失败，未执行输出校验',
+        parsed_output: null,
+        session_snapshot: error?.agentDiagnostics?.session || {},
+        snapshot_validation: validatePiSessionSnapshot(error?.agentDiagnostics?.session || {}),
+        retry_count: error?.agentRetryAttempts?.length || 0,
+        retry_attempts: error?.agentRetryAttempts || [],
+        diagnostics: {
+          ...(error?.agentDiagnostics || {}),
+          events: (error?.agentDiagnostics?.events || []).filter((event) => String(event.at || '') >= taskCheckedAt),
+        },
+        error: serializeDiagnosticError(error),
+      };
+    }
+  }
+
+  async function executeSafeRepairActions(actionIds) {
+    const allowed = new Map(SAFE_REPAIR_ACTIONS.map((item) => [item.id, item]));
+    const requested = new Set((actionIds || []).filter((id) => allowed.has(id)));
+    const order = [
+      'apply-loopback-no-proxy',
+      'rebuild-pi-tool-environment',
+      'reset-pi-self-check-workspace',
+      'restart-pi-runtime',
+      'retry-pi-session',
+    ];
+    const actions = [];
+    for (const id of order) {
+      if (!requested.has(id)) continue;
+      const meta = allowed.get(id);
+      const startedAt = Date.now();
+      try {
+        let detail = null;
+        if (id === 'apply-loopback-no-proxy') {
+          detail = {
+            process: ensureLoopbackNoProxy(process.env),
+            pi_environment: ensureLoopbackNoProxy(environment.env),
+          };
+        } else if (id === 'rebuild-pi-tool-environment') {
+          environment = preparePiEnvironment(app, runtimeId);
+          detail = { runtime_root: environment.layout.runtimeRoot };
+        } else if (id === 'reset-pi-self-check-workspace') {
+          clearDirectory(layout.workspaceDir);
+          detail = { workspace_dir: layout.workspaceDir };
+        } else if (id === 'restart-pi-runtime') {
+          await restart('Pi 自检安全自动修复');
+          detail = { proxy_base_url: proxyInfo?.baseUrl || '' };
+        } else if (id === 'retry-pi-session') {
+          detail = { message: '将在修复动作完成后重新创建 Session' };
+        }
+        actions.push({
+          id,
+          label: meta.label,
+          success: true,
+          message: '执行成功',
+          duration_ms: Date.now() - startedAt,
+          detail,
+        });
+      } catch (error) {
+        actions.push({
+          id,
+          label: meta.label,
+          success: false,
+          message: error?.message || String(error),
+          duration_ms: Date.now() - startedAt,
+          error: serializeDiagnosticError(error),
+        });
+      }
+    }
+    return actions;
+  }
+
+  // 执行环境、模型、loopback、Pi SDK、工具和输出文件的完整自检，并尝试安全修复。
+  async function runSelfCheck() {
+    const checkedAt = nowIso();
+    const startedAt = Date.now();
+    const checkId = crypto.randomUUID();
+    const steps = createPiSelfCheckSteps();
+    const logDir = getDeveloperLogsDir(app, `${runtimeId}-self-check`);
+    const logFile = path.join(logDir, 'latest.json');
+    let config = {};
+    let environmentSnapshot = null;
+    let modelCheck = null;
+    let loopbackCheck = null;
+    let toolCheck = null;
+    let agentCheck = null;
+    let diagnosis = null;
+    let repair = null;
+    let runtimeStarted = false;
+    let topLevelError = null;
+
+    const setStep = (id, status, stepMessage) => {
+      const step = steps.find((item) => item.id === id);
+      if (!step) return;
+      const timestamp = nowIso();
+      if (status === 'running') {
+        step.started_at = timestamp;
+        step.started_ms = Date.now();
+      } else {
+        step.completed_at = timestamp;
+        if (step.started_ms) step.duration_ms = Date.now() - step.started_ms;
+      }
+      step.status = status;
+      step.message = stepMessage || '';
+      step.updated_at = timestamp;
+    };
+    const skipPendingSteps = () => {
+      steps.filter((step) => step.status === 'pending').forEach((step) => setStep(step.id, 'skipped', '因前置条件不足未执行'));
+    };
+
+    try {
+      fs.mkdirSync(logDir, { recursive: true });
+      diagnostics.record('self_check.start', { check_id: checkId });
+
+      setStep('environment', 'running', '正在采集应用、系统、代理和模型配置');
+      config = configStore.load();
+      environmentSnapshot = createPiEnvironmentSnapshot(app, layout, config);
+      setStep('environment', 'success', '环境快照已采集');
+
+      setStep('sdk', 'running', '正在加载 Pi SDK');
+      try {
+        const { codingAgent } = await loadPiModules();
+        sdkVersion = sdkVersion || codingAgent.VERSION || '';
+        setStep('sdk', 'success', sdkVersion ? `Pi SDK ${sdkVersion}` : 'Pi SDK 已加载');
+      } catch (error) {
+        topLevelError = error;
+        setStep('sdk', 'error', error?.message || String(error));
+      }
+
+      setStep('runtime', 'running', `正在启动 ${runtimeName} AI Proxy`);
+      try {
+        await ensureStarted();
+        runtimeStarted = true;
+        setStep('runtime', 'success', `${layout.runtimeRoot}，Proxy=${proxyInfo?.baseUrl || '-'}`);
+      } catch (error) {
+        topLevelError = topLevelError || error;
+        setStep('runtime', 'error', error?.message || String(error));
+      }
+
+      setStep('tools', 'running', '正在检查共享命令环境');
+      try {
+        toolCheck = runPiToolEnvironmentSelfCheck(environment);
+        setStep('tools', toolCheck.success ? 'success' : 'error', toolCheck.summary);
+      } catch (error) {
+        topLevelError = topLevelError || error;
+        toolCheck = { success: false, summary: error?.message || String(error), items: [], error: serializeDiagnosticError(error) };
+        setStep('tools', 'error', toolCheck.summary);
+      }
+
+      modelCheck = await runPiTextModelSelfCheck(config, (probeId, status, probe) => {
+        const stepId = `model-${probeId}`;
+        const message = status === 'running'
+          ? `正在执行${probe.label || '文本模型检测'}`
+          : `${probe.message}，${probe.duration_ms} ms${probe.status ? `，HTTP ${probe.status}` : ''}`;
+        setStep(stepId, status, message);
+      });
+
+      if (runtimeStarted) {
+        setStep('loopback', 'running', '正在检测 TCP、原生 HTTP、全局 fetch 和认证模型路由');
+        loopbackCheck = await runPiLoopbackSelfCheck(proxyInfo);
+        setStep('loopback', loopbackCheck.success ? 'success' : 'error', loopbackCheck.message);
+      } else {
+        loopbackCheck = { success: false, message: 'Pi Runtime 未启动，无法执行 loopback 检测', probes: {} };
+        setStep('loopback', 'skipped', loopbackCheck.message);
+      }
+
+      if (runtimeStarted) {
+        setStep('agent', 'running', `正在执行 ${runtimeName} 极简自检任务`);
+        agentCheck = await runAgentLinkSelfCheck();
+        setStep('agent', agentCheck.success ? 'success' : 'error', `${agentCheck.message}${agentCheck.session_id ? `，session_id=${agentCheck.session_id}` : ''}`);
+      } else {
+        agentCheck = { success: false, message: 'Pi Runtime 未启动，智能体任务未执行', session_snapshot: {}, output_valid: false, error: serializeDiagnosticError(topLevelError) };
+        setStep('agent', 'skipped', agentCheck.message);
+      }
+
+      const sessionSnapshot = agentCheck.session_snapshot || {};
+      const snapshotValidation = agentCheck.snapshot_validation || validatePiSessionSnapshot(sessionSnapshot);
+      if (Object.keys(sessionSnapshot).length) {
+        setStep('resources', snapshotValidation.resourcesValid ? 'success' : 'error', snapshotValidation.resourcesValid ? '仅加载易标内置工作区指令' : 'Pi 资源加载结果不符合配置');
+      } else {
+        setStep('resources', 'skipped', 'Session 未创建，无法校验资源加载');
+      }
+      if (agentCheck.output_valid) {
+        setStep('output', 'success', agentCheck.output_message);
+      } else {
+        setStep('output', agentCheck.task_completed ? 'error' : 'skipped', agentCheck.output_message || '智能体任务失败，未执行输出校验');
+      }
+
+      const eventsBeforeDiagnosis = diagnostics.events.filter((event) => String(event.at || '') >= String(agentCheck?.checked_at || checkedAt));
+      const initialSuccess = Boolean(
+        runtimeStarted
+        && toolCheck?.success
+        && modelCheck?.success
+        && modelCheck?.agent_compatible
+        && loopbackCheck?.success
+        && agentCheck?.success
+      );
+
+      setStep('diagnosis', 'running', initialSuccess ? '正在生成自检结论' : '正在执行规则诊断和文本模型分析');
+      if (initialSuccess) {
+        diagnosis = {
+          resolved: true,
+          final_summary: 'Pi SDK、当前文本模型、loopback、工具、资源和输出链路均正常。',
+          rules: { source: 'rules', category: 'normal', summary: '未发现异常', confidence: 'high', evidence: [], recommended_action_ids: [] },
+          ai: null,
+        };
+      } else {
+        const rules = diagnosePiSelfCheck({
+          modelCheck,
+          loopbackCheck,
+          toolCheck,
+          agentCheck,
+          events: eventsBeforeDiagnosis,
+          error: agentCheck?.error || topLevelError,
+        });
+        const configuredProbe = modelCheck?.probes?.[modelCheck?.configured_mode];
+        const ai = configuredProbe?.success
+          ? await analyzePiSelfCheckWithModel(aiService, {
+            rules,
+            model_check: modelCheck,
+            loopback_check: loopbackCheck,
+            tool_check: { success: toolCheck?.success, summary: toolCheck?.summary },
+            agent_check: {
+              success: agentCheck?.success,
+              message: agentCheck?.message,
+              output_valid: agentCheck?.output_valid,
+              snapshot_validation: agentCheck?.snapshot_validation,
+              error: agentCheck?.error,
+            },
+            events: eventsBeforeDiagnosis,
+          })
+          : null;
+        diagnosis = {
+          resolved: false,
+          rules,
+          ai,
+          final_summary: ai?.success && ai.result?.summary ? ai.result.summary : rules.summary,
+        };
+      }
+      setStep('diagnosis', 'success', diagnosis.final_summary);
+
+      if (initialSuccess) {
+        setStep('repair', 'skipped', '自检正常，无需修复');
+        setStep('recheck', 'skipped', '未执行修复，无需复检');
+        repair = { attempted: false, success: true, actions: [], recheck: null };
+      } else {
+        const configuredProbe = modelCheck?.probes?.[modelCheck?.configured_mode];
+        const repairableCategory = !['text-model', 'text-model-stream', 'tool-calling'].includes(diagnosis.rules?.category);
+        const requestedActions = configuredProbe?.success && repairableCategory
+          ? [...new Set([
+            ...(diagnosis.rules?.recommended_action_ids || []),
+            ...(diagnosis.ai?.result?.recommended_action_ids || []),
+          ])]
+          : [];
+        if (!requestedActions.length) {
+          repair = { attempted: false, success: false, actions: [], recheck: null };
+          setStep('repair', 'skipped', configuredProbe?.success ? '没有匹配到可执行的安全修复动作' : '文本模型检测未通过，不执行自动修复');
+          setStep('recheck', 'skipped', '未执行自动修复');
+        } else {
+          setStep('repair', 'running', `准备执行 ${requestedActions.length} 个内置安全修复动作`);
+          const actions = await executeSafeRepairActions(requestedActions);
+          const actionSuccess = actions.every((action) => action.success);
+          setStep('repair', actionSuccess ? 'success' : 'error', actionSuccess ? '安全修复动作执行完成' : '部分安全修复动作执行失败');
+
+          setStep('recheck', 'running', '正在重新检测工具、loopback 和 Pi Agent');
+          const recheckTool = requestedActions.includes('rebuild-pi-tool-environment')
+            ? runPiToolEnvironmentSelfCheck(environment)
+            : toolCheck;
+          const recheckLoopback = proxyInfo ? await runPiLoopbackSelfCheck(proxyInfo) : loopbackCheck;
+          const recheckAgent = proxyInfo ? await runAgentLinkSelfCheck() : agentCheck;
+          const recheckSuccess = Boolean(
+            actionSuccess
+            && recheckTool?.success
+            && modelCheck?.success
+            && modelCheck?.agent_compatible
+            && recheckLoopback?.success
+            && recheckAgent?.success
+          );
+          repair = {
+            attempted: true,
+            success: recheckSuccess,
+            requested_action_ids: requestedActions,
+            actions,
+            before: {
+              tool_check: toolCheck,
+              loopback_check: loopbackCheck,
+              agent_check: agentCheck,
+            },
+            recheck: {
+              success: recheckSuccess,
+              tool_check: recheckTool,
+              loopback_check: recheckLoopback,
+              agent_check: recheckAgent,
+            },
+          };
+          setStep('recheck', recheckSuccess ? 'success' : 'error', recheckSuccess ? '自动修复后复检通过' : '自动修复后复检仍未通过');
+          if (recheckSuccess) {
+            diagnosis.resolved = true;
+            diagnosis.final_summary = `已定位并自动修复：${diagnosis.final_summary}`;
+          } else {
+            const postRepairRules = diagnosePiSelfCheck({
+              modelCheck,
+              loopbackCheck: recheckLoopback,
+              toolCheck: recheckTool,
+              agentCheck: recheckAgent,
+              events: diagnostics.events.filter((event) => String(event.at || '') >= String(recheckAgent?.checked_at || checkedAt)),
+              error: recheckAgent?.error,
+            });
+            diagnosis.post_repair_rules = postRepairRules;
+            diagnosis.final_summary = postRepairRules.summary;
+          }
+        }
+      }
+
+      const finalAgentCheck = repair?.recheck?.agent_check || agentCheck;
+      const finalSessionSnapshot = finalAgentCheck?.session_snapshot || agentCheck?.session_snapshot || {};
+      const finalSuccess = initialSuccess || Boolean(repair?.success);
+      diagnostics.record('self_check.end', { check_id: checkId, success: finalSuccess, repaired: Boolean(repair?.attempted && repair?.success) });
+      const currentEvents = diagnostics.events.filter((event) => String(event.at || '') >= checkedAt);
+      const conclusion = finalSuccess
+        ? repair?.attempted ? diagnosis.final_summary : 'Pi SDK、当前文本模型、loopback、工具、资源和输出链路均正常。'
+        : diagnosis?.final_summary || 'Pi Agent 自检失败。';
+      const result = {
+        report_version: 2,
+        check_id: checkId,
+        success: finalSuccess,
+        repaired: Boolean(repair?.attempted && repair?.success),
+        status: finalSuccess ? 'normal' : 'error',
+        message: finalSuccess ? repair?.attempted ? `${runtimeName} 已自动修复并通过自检` : `${runtimeName} 自检正常` : finalAgentCheck?.message || topLevelError?.message || `${runtimeName} 自检失败`,
         checked_at: checkedAt,
         duration_ms: Date.now() - startedAt,
         log_dir: logDir,
         log_file: logFile,
         runtime_root: layout.runtimeRoot,
-        workspace_dir: result.workspace_dir,
+        workspace_dir: finalAgentCheck?.workspace_dir || layout.workspaceDir,
         output_file: SELF_CHECK_OUTPUT_FILE,
-        output_path: path.join(result.workspace_dir, SELF_CHECK_OUTPUT_FILE),
-        output_content: result.output_content,
-        conclusion: 'Pi SDK、资源加载、共享工具、当前文本模型和输出链路均正常。',
-        steps,
-        sections: createPiDiagnosticSections({ layout, sdkVersion, sessionSnapshot, toolCheck }),
-        diagnostics: { ...result.diagnostics, tool_check: toolCheck },
-        detail_text: JSON.stringify({ sdk_version: sdkVersion, session: sessionSnapshot, tool_check: toolCheck, runtime_status: getStatus() }, null, 2),
+        output_path: path.join(finalAgentCheck?.workspace_dir || layout.workspaceDir, SELF_CHECK_OUTPUT_FILE),
+        output_content: finalAgentCheck?.output_content || '',
+        conclusion,
+        sdk_version: sdkVersion,
+        model_config: summarizeTextModelConfig(config),
+        model_check: modelCheck,
+        environment: environmentSnapshot,
+        loopback_check: repair?.recheck?.loopback_check || loopbackCheck,
+        tool_check: repair?.recheck?.tool_check || toolCheck,
+        agent_check: finalAgentCheck,
+        session_snapshot: finalSessionSnapshot,
+        diagnosis,
+        repair,
+        steps: steps.map(({ started_ms: _startedMs, ...step }) => step),
+        diagnostics: {
+          events: currentEvents,
+          error: finalSuccess ? null : finalAgentCheck?.error || serializeDiagnosticError(topLevelError),
+          assistant_error: finalAgentCheck?.diagnostics?.assistant_error || null,
+        },
+        error: finalSuccess ? undefined : finalAgentCheck?.error || serializeDiagnosticError(topLevelError),
+        detail_text: conclusion,
         runtime_status: getStatus(),
       };
-      writeJson(logFile, selfCheckResult);
-      return selfCheckResult;
+      result.sections = createPiDiagnosticSections({
+        layout,
+        sdkVersion,
+        sessionSnapshot: finalSessionSnapshot,
+        toolCheck: result.tool_check,
+        modelCheck,
+        loopbackCheck: result.loopback_check,
+        diagnosis,
+        repair,
+      });
+      writeJson(logFile, result);
+      return result;
     } catch (error) {
-      sessionSnapshot = Object.keys(sessionSnapshot).length
-        ? sessionSnapshot
-        : error?.agentDiagnostics?.session || {};
-      const current = steps.find((step) => step.status === 'running')
-        || (!steps.some((step) => step.status === 'error') ? steps.find((step) => step.status === 'pending') : null);
+      topLevelError = error;
+      const current = steps.find((step) => step.status === 'running');
       if (current) setStep(current.id, 'error', error?.message || String(error));
+      skipPendingSteps();
       const result = {
+        report_version: 2,
+        check_id: checkId,
         success: false,
+        repaired: false,
         status: 'error',
         message: error?.message || `${runtimeName} 自检失败`,
         checked_at: checkedAt,
@@ -663,18 +1046,36 @@ function createPiRuntimeService({ app, configStore, runtime }) {
         workspace_dir: layout.workspaceDir,
         output_file: SELF_CHECK_OUTPUT_FILE,
         output_path: path.join(layout.workspaceDir, SELF_CHECK_OUTPUT_FILE),
-        steps,
-        sections: createPiDiagnosticSections({ layout, sdkVersion, sessionSnapshot, toolCheck }),
+        conclusion: 'Pi 自检编排发生异常，完整错误链已写入报告。',
+        sdk_version: sdkVersion,
+        model_config: summarizeTextModelConfig(config),
+        model_check: modelCheck,
+        environment: environmentSnapshot,
+        loopback_check: loopbackCheck,
+        tool_check: toolCheck,
+        agent_check: agentCheck,
+        session_snapshot: agentCheck?.session_snapshot || {},
+        diagnosis,
+        repair,
+        steps: steps.map(({ started_ms: _startedMs, ...step }) => step),
         diagnostics: {
-          ...(error?.agentDiagnostics || {}),
-          message: error?.message || String(error),
-          stack: error?.stack || '',
-          tool_check: toolCheck,
+          events: diagnostics.events.filter((event) => String(event.at || '') >= checkedAt),
+          error: serializeDiagnosticError(error),
         },
-        error: { message: error?.message || String(error) },
+        error: serializeDiagnosticError(error),
         detail_text: error?.stack || error?.message || String(error),
         runtime_status: getStatus(),
       };
+      result.sections = createPiDiagnosticSections({
+        layout,
+        sdkVersion,
+        sessionSnapshot: result.session_snapshot,
+        toolCheck,
+        modelCheck,
+        loopbackCheck,
+        diagnosis,
+        repair,
+      });
       try { writeJson(logFile, result); } catch {}
       return result;
     }
