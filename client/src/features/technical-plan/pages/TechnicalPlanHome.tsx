@@ -180,13 +180,20 @@ function formatCountRange(minimum: number, maximum: number, unit: string) {
 function buildWordControlWarningDialog(task: BackgroundTaskState, state: TechnicalPlanState): WordControlWarningDialogState | null {
   const outlineStats = task.stats?.outline;
   if (outlineStats?.word_adjustment_warning) {
-    // 叶子数量已落在预期区间时，说明字数约束已满足，无需再以“未达预期”打扰用户。
+    // 质量类：叶子数量已达标，仅二审发现可优化点，不展示会误导的叶子数对比。
+    if (outlineStats.word_adjustment_warning_kind === 'quality') {
+      return {
+        taskId: task.task_id,
+        title: '目录已生成，建议人工核对',
+        message: outlineStats.word_adjustment_warning,
+        metrics: [],
+        sections: [],
+      };
+    }
+    // 数量类：叶子数量未进入区间，展示预期与实际对比。
     const minimumLeafCount = outlineStats.minimum_leaf_count || 0;
     const maximumLeafCount = outlineStats.maximum_leaf_count || 0;
     const currentLeafCount = outlineStats.current_leaf_count || 0;
-    const belowMinimum = minimumLeafCount > 0 && currentLeafCount < minimumLeafCount;
-    const aboveMaximum = maximumLeafCount > 0 && currentLeafCount > maximumLeafCount;
-    if (!belowMinimum && !aboveMaximum) return null;
     return {
       taskId: task.task_id,
       title: '目录叶子数量未达到预期',

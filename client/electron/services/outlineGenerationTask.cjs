@@ -80,7 +80,14 @@ const ORIGINAL_OUTLINE_AGENT_OUTPUT_FILE = 'original-outline.json';
 const DEFAULT_EFFECTIVE_SECTION_WORDS = 3000;
 const MAX_WORD_ADJUSTMENT_ATTEMPTS = 3;
 const WORD_ADJUSTMENT_AGENT_OUTPUT_FILE = 'adjusted-outline.json';
-const OUTLINE_WORD_CONTROL_WARNING = '经多次优化仍达不到预期效果，请自行核对并手动修改目录';
+// 二审（审核+微调）循环最多执行的轮次。
+const MAX_SECOND_REVIEW_ROUNDS = 3;
+// 二审 agent 编辑目录后写回的文件，以及独立的审核结论文件。
+const SECOND_REVIEW_OUTLINE_FILE = 'reviewed-outline.json';
+const SECOND_REVIEW_RESULT_FILE = 'review-result.json';
+// warning 文案按原因区分：叶子数量未进入区间 vs 目录结构/内容仍有可优化点。
+const OUTLINE_LEAF_COUNT_WARNING = '目录叶子数量未达到预期，请核对字数设置或手动调整目录';
+const OUTLINE_QUALITY_WARNING = '目录已生成，但智能审核发现可优化点（如个别小节内容相近），建议人工核对';
 const OUTLINE_PROGRESS = Object.freeze({
   start: 5,
   originalExtractionStart: 8,
@@ -3177,31 +3184,90 @@ async function runWordAdjustmentAgent(agentService, context, log) {
   return validatedOutline;
 }
 
-function buildSecondOutlineReviewMessages(context) {
+function buildSecondReviewAgentPrompt(context) {
+  const hasLeafRange = context.wordControl.minimumLeafCount !== null || context.wordControl.maximumLeafCount !== null;
+  const leafRangeRequirement = hasLeafRange
+    ? `\n8. 已设置字数限制：微调后叶子节点数量必须继续保持在 review-context.json 给出的区间内（最少 ${context.wordControl.minimumLeafCount ?? '不限制'}，最多 ${context.wordControl.maximumLeafCount ?? '不限制'}），不得因微调把叶子数量改出区间。`
+    : '';
+  return `你是严格的技术标目录二审专家。请读取 ${SECOND_REVIEW_OUTLINE_FILE}、tender.md、bid.md 和 review-context.json，审核当前目录并在需要时直接编辑 ${SECOND_REVIEW_OUTLINE_FILE} 完成微调，最后把审核结论写入 ${SECOND_REVIEW_RESULT_FILE}。
+
+审核维度：
+- 技术评分项是否被目录充分覆盖。
+- 目录结构是否合理、层级是否清晰。
+- 是否存在内容重复、近义或含义重叠的小节标题。
+- 完整目录整体至少三级、最大不超过四级。
+
+硬性要求：
+1. 一级目录数量、顺序、标题、描述和评分来源信息必须完全保持不变；一级目录原有的 source_requirement_id、source_requirement_title 必须原样输出。
+2. 只允许调整二级、三级、四级目录（重命名、合并、拆分、删除重复项、调整归属）。
+3. 若审核认为目录已无问题：不要改动 ${SECOND_REVIEW_OUTLINE_FILE}，并在 ${SECOND_REVIEW_RESULT_FILE} 写 {"passed": true, "notes": "通过原因"}。
+4. 若发现问题：直接编辑 ${SECOND_REVIEW_OUTLINE_FILE} 做局部微调，并在 ${SECOND_REVIEW_RESULT_FILE} 写 {"passed": false, "notes": "改了什么、为什么"}。
+5. ${SECOND_REVIEW_OUTLINE_FILE} 必须始终是可由 JSON.parse 直接解析的纯 JSON，格式为 {"outline": [...]}；不得包含正文 content、图片、表格、Mermaid、代码块或解释文字。
+6. 所有节点必须包含非空 id、title、description，title 只写纯标题。
+7. ${SECOND_REVIEW_RESULT_FILE} 必须是可由 JSON.parse 直接解析的纯 JSON，格式为 {"passed": true|false, "notes": "..."}。${leafRangeRequirement}`;
+}
+
+function buildSecondReviewAgentFiles(context) {
   return [
-    { role: 'user', content: `项目概况：\n${context.payload?.overview || ''}` },
-    { role: 'user', content: `技术评分要求：\n${context.payload?.requirements || ''}` },
-    { role: 'user', content: `目录字数范围：最少叶子 ${context.wordControl.minimumLeafCount ?? '不限制'}，最多叶子 ${context.wordControl.maximumLeafCount ?? '不限制'}，当前叶子 ${countOutlineLeafItems(context.outline?.outline || [])}` },
-    { role: 'user', content: `待二审目录 JSON：\n${JSON.stringify(context.outline, null, 2)}` },
+    { path: SECOND_REVIEW_OUTLINE_FILE, content: JSON.stringify(context.outline, null, 2) },
+    { path: 'tender.md', content: String(context.tenderMarkdown || '') },
+    { path: 'bid.md', content: `# 项目概况\n\n${context.payload?.overview || ''}\n\n# 技术评分要求\n\n${context.payload?.requirements || ''}` },
     {
-      role: 'user',
-      content: `你是严格的技术标目录二审专家。请检查评分项覆盖、目录结构、最大四级限制和叶子节点范围。只返回 JSON：{"passed": true, "suggestions": []}。不通过时 suggestions 必须给出具体可执行的局部修复建议。`,
+      path: 'review-context.json',
+      content: JSON.stringify({
+        minimum_leaf_count: context.wordControl.minimumLeafCount,
+        maximum_leaf_count: context.wordControl.maximumLeafCount,
+        current_leaf_count: countOutlineLeafItems(context.outline?.outline || []),
+        review_round: context.round,
+        max_review_rounds: MAX_SECOND_REVIEW_ROUNDS,
+        previous_issues: context.previousIssues || [],
+      }, null, 2),
     },
   ];
 }
 
-async function reviewWordAdjustedOutline(aiService, context, log) {
-  log('开始目录二审。', OUTLINE_PROGRESS.secondReviewStart);
-  const result = await collectJson(aiService, {
-    messages: buildSecondOutlineReviewMessages(context),
-    temperature: 0.3,
-    normalizer: normalizeReviewResponse,
-    progressCallback: (message) => log(message, OUTLINE_PROGRESS.secondReviewActivity),
-    progressLabel: '目录二审',
-    failureMessage: '模型返回的目录二审结果格式无效',
+// 解析二审结论文件，容错为“未通过”。
+function parseSecondReviewResult(rawContent) {
+  try {
+    const parsed = JSON.parse(String(rawContent || '').trim());
+    return {
+      passed: parsed?.passed === true,
+      notes: String(parsed?.notes || '').trim(),
+    };
+  } catch {
+    return { passed: false, notes: '二审结论文件解析失败' };
+  }
+}
+
+// 二审 agent：审核并按需编辑目录文件，返回微调后的目录和审核结论。
+async function runSecondReviewAgent(agentService, context, log) {
+  let validatedOutline = null;
+  let reviewResult = { passed: false, notes: '' };
+  const result = await agentService.runTask({
+    title: `目录二审 ${context.round}/${MAX_SECOND_REVIEW_ROUNDS}`,
+    prompt: buildSecondReviewAgentPrompt(context),
+    output_file: SECOND_REVIEW_OUTLINE_FILE,
+    files: buildSecondReviewAgentFiles(context),
+    timeout_ms: FINAL_AGENT_TIMEOUT_MS,
+    max_retries: 0,
+    validateOutput: (agentResult, meta) => {
+      const content = String(agentResult?.output_content || '').trim();
+      if (!content) throw new Error(`Agent 未写入 ${SECOND_REVIEW_OUTLINE_FILE}`);
+      validatedOutline = normalizeWordAdjustedOutlineResult(parseAgentJsonContent(content), context);
+      // 结论文件与目录文件分离，从 agent 工作区读取。
+      let resultContent = '';
+      const workspaceDir = meta?.workspace_dir;
+      if (workspaceDir) {
+        const resultPath = require('node:path').join(workspaceDir, SECOND_REVIEW_RESULT_FILE);
+        try { resultContent = require('node:fs').readFileSync(resultPath, 'utf-8'); } catch { resultContent = ''; }
+      }
+      reviewResult = parseSecondReviewResult(resultContent);
+      return validatedOutline;
+    },
+    onActivity: createAgentActivityLogHandler(log, context.activityProgress),
   });
-  log('目录二审完成，正在校验审核结果。', OUTLINE_PROGRESS.secondReviewEnd);
-  return result;
+  if (isAgentBusyResult(result)) throw createAgentBusyError();
+  return { outline: validatedOutline, review: reviewResult };
 }
 
 function isBetterOutlineCandidate(candidate, best) {
@@ -3229,6 +3295,19 @@ function getWordAdjustmentAttemptProgress(attempt, secondReviewRepair) {
   };
 }
 
+// 二审循环各轮在 secondReview 进度区间内均分。
+function getSecondReviewRoundProgress(round) {
+  const rangeStart = OUTLINE_PROGRESS.secondReviewStart;
+  const rangeEnd = OUTLINE_PROGRESS.finalizing;
+  const slotSize = (rangeEnd - rangeStart) / MAX_SECOND_REVIEW_ROUNDS;
+  const start = rangeStart + Math.round((round - 1) * slotSize);
+  return {
+    start,
+    activity: Math.min(rangeEnd, start + 1),
+    complete: rangeStart + Math.round(round * slotSize),
+  };
+}
+
 async function adjustOutlineForWordControl({ aiService, agentService, workspaceStore, payload, outline, groups, originalOutline, workflowKind, outlineExpansionMode, wordControlOptions, wordControl, log, onStats }) {
   const lockedTopLevelItems = captureLockedTopLevelItems(outline);
   const baselineOutline = outline;
@@ -3243,7 +3322,6 @@ async function adjustOutlineForWordControl({ aiService, agentService, workspaceS
   };
   let best = createCandidate(outline);
   let attempts = 0;
-  let secondReviewNeedsWarning = false;
   const tenderMarkdown = workspaceStore.readTenderMarkdown?.() || '';
 
   const runAttempt = async (secondReviewSuggestions = [], secondReviewRepair = false) => {
@@ -3274,6 +3352,8 @@ async function adjustOutlineForWordControl({ aiService, agentService, workspaceS
       log(`第 ${attempts} 次调整完成，当前最佳目录有 ${best.leafCount} 个叶子节点。`, progress.complete);
       return adopted;
     } catch (error) {
+      // 繁忙错误属于运行态问题，需向外抛出让任务转为 error，避免误报调整成功。
+      if (error?.code === 'AGENT_BUSY') throw error;
       log(`第 ${attempts} 次目录叶子数量调整未产生有效结果：${getErrorMessage(error)}`, progress.complete);
       return false;
     }
@@ -3283,40 +3363,79 @@ async function adjustOutlineForWordControl({ aiService, agentService, workspaceS
     await runAttempt();
   }
 
-  if (attempts > 0) {
+  // 二审：一个 agent 审核并按需微调，最多 MAX_SECOND_REVIEW_ROUNDS 轮；agent 满意且校验通过即提前结束。
+  const previousIssues = [];
+  let secondReviewConverged = false;
+  for (let round = 1; round <= MAX_SECOND_REVIEW_ROUNDS; round += 1) {
+    const progress = getSecondReviewRoundProgress(round);
     onStats({ phase: 'second-review', attempts, leafCount: best.leafCount });
-    let secondReview;
+    log(`开始第 ${round}/${MAX_SECOND_REVIEW_ROUNDS} 轮目录二审。`, progress.start);
+    let reviewedOutline = null;
+    let review = { passed: false, notes: '' };
     try {
-      secondReview = await reviewWordAdjustedOutline(aiService, {
+      const outcome = await runSecondReviewAgent(agentService, {
         payload,
         outline: best.outline,
+        groups,
+        originalOutline,
+        workflowKind,
+        outlineExpansionMode,
+        lockedTopLevelItems,
+        wordControlOptions,
         wordControl,
+        tenderMarkdown,
+        round,
+        previousIssues: [...previousIssues],
+        activityProgress: progress.activity,
       }, log);
+      reviewedOutline = outcome.outline;
+      review = outcome.review;
     } catch (error) {
-      secondReview = createSyntheticFinalReview('目录二审结果格式无效', error);
+      // 繁忙错误属于运行态问题，需向外抛出让任务转为 error，避免误报二审成功。
+      if (error?.code === 'AGENT_BUSY') throw error;
+      log(`第 ${round} 轮目录二审未产生有效结果：${getErrorMessage(error)}`, progress.complete);
+      previousIssues.push(`第 ${round} 轮二审执行失败：${getErrorMessage(error)}`);
+      continue;
     }
-    try {
-      validateFinalOutline({ outline: best.outline, groups, originalOutline, workflowKind, outlineExpansionMode });
-      if (best.distance > 0) throw new Error('叶子节点数量仍未进入目标范围');
-    } catch (error) {
-      secondReview = createSyntheticFinalReview('目录二审程序校验未通过', error);
+
+    const candidate = createCandidate(reviewedOutline);
+    // 微调后若叶子数被改出区间，视为本轮不合格，把问题回传下一轮。
+    if (candidate.distance > 0) {
+      previousIssues.push(`第 ${round} 轮微调后叶子数量为 ${candidate.leafCount}，超出目标区间，请在保持叶子数量达标的前提下微调。`);
+      log(`第 ${round} 轮二审微调后叶子数量 ${candidate.leafCount} 超出区间，进入下一轮。`, progress.complete);
+      continue;
     }
-    if (!secondReview.passed) {
-      if (attempts < MAX_WORD_ADJUSTMENT_ATTEMPTS) {
-        const repaired = await runAttempt(secondReview.suggestions || [], true);
-        secondReviewNeedsWarning = !repaired || best.distance > 0;
-      } else {
-        secondReviewNeedsWarning = true;
-        log('目录二审发现问题，但目录字数调整次数已用完。', OUTLINE_PROGRESS.finalizing);
-      }
+    // 校验通过，择优采纳。
+    if (isBetterOutlineCandidate(candidate, best) || candidate.distance <= best.distance) {
+      best = candidate;
     }
+    if (review.passed) {
+      secondReviewConverged = true;
+      log(`第 ${round} 轮目录二审通过：${review.notes || '目录无需进一步调整'}。`, progress.complete);
+      break;
+    }
+    previousIssues.push(review.notes ? `第 ${round} 轮微调：${review.notes}` : `第 ${round} 轮进行了微调但未标记通过。`);
+    log(`第 ${round} 轮目录二审完成微调，将再次复审。当前 ${best.leafCount} 个叶子节点。`, progress.complete);
+  }
+
+  // 区分 warning 原因：叶子数量未进区间 vs 结构/内容质量仍有可优化点。
+  let warning = '';
+  let warningKind = '';
+  if (best.distance > 0) {
+    warning = OUTLINE_LEAF_COUNT_WARNING;
+    warningKind = 'leaf-count';
+  } else if (!secondReviewConverged) {
+    warning = OUTLINE_QUALITY_WARNING;
+    warningKind = 'quality';
+    log('目录二审已达最大轮次，仍存在可优化点，建议人工核对。', OUTLINE_PROGRESS.finalizing);
   }
 
   return {
     outline: best.outline,
     leafCount: best.leafCount,
     attempts,
-    warning: best.distance > 0 || secondReviewNeedsWarning ? OUTLINE_WORD_CONTROL_WARNING : '',
+    warning,
+    warningKind,
   };
 }
 
@@ -3467,6 +3586,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     current_leaf_count: countOutlineLeafItems(outline?.outline || []),
   };
   let wordControlWarning = '';
+  let wordControlWarningKind = '';
   if (wordControlOptions.enabled && (wordControl.minimumLeafCount !== null || wordControl.maximumLeafCount !== null)) {
     const initialDistance = getLeafCountDistance(outlineStats.current_leaf_count, wordControl.minimumLeafCount, wordControl.maximumLeafCount);
     if (initialDistance > 0) {
@@ -3494,6 +3614,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
       });
       outline = adjusted.outline;
       wordControlWarning = adjusted.warning;
+      wordControlWarningKind = adjusted.warningKind || '';
       outlineStats = {
         ...outlineStats,
         current_leaf_count: adjusted.leafCount,
@@ -3505,7 +3626,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     ...outlineStats,
     phase: 'done',
     current_leaf_count: countOutlineLeafItems(outline?.outline || []),
-    ...(wordControlWarning ? { word_adjustment_warning: wordControlWarning } : {}),
+    ...(wordControlWarning ? { word_adjustment_warning: wordControlWarning, word_adjustment_warning_kind: wordControlWarningKind } : {}),
   };
   const finalLogs = [...logs, '目录生成完成。', ...(wordControlWarning ? [wordControlWarning] : [])];
   const finalTask = updateTask({ status: 'success', progress: OUTLINE_PROGRESS.complete, logs: finalLogs, stats: taskStats() });

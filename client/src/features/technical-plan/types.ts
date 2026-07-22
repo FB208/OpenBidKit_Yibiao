@@ -53,6 +53,7 @@ export interface BackgroundTaskState {
       maximum_leaf_count?: number;
       word_adjustment_attempts: number;
       word_adjustment_warning?: string;
+      word_adjustment_warning_kind?: 'leaf-count' | 'quality';
     };
     content?: {
       phase: 'planning' | 'restoring' | 'generating' | 'section-word-adjusting' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'final-section-word-adjusting' | 'total-word-adjusting' | 'illustration-planning' | 'illustration-generating' | 'done';
