@@ -281,6 +281,8 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
         diagnostics,
         onActivity: touchActivity,
         getActivityContext: () => activeTask ? { task_token: activeTask.task_token, task_id: activeTask.task_id } : null,
+        verifyLoopback: true,
+        loopbackHosts: ['127.0.0.1', '::1', 'localhost'],
       });
       proxyInfo = await proxy.start();
       lastHealthAt = nowIso();
@@ -744,6 +746,7 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
     let diagnosis = null;
     let repair = null;
     let runtimeStarted = false;
+    let runtimeStartError = null;
     let topLevelError = null;
 
     const setStep = (id, status, stepMessage) => {
@@ -790,6 +793,7 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
         runtimeStarted = true;
         setStep('runtime', 'success', `${layout.runtimeRoot}，Proxy=${proxyInfo?.baseUrl || '-'}`);
       } catch (error) {
+        runtimeStartError = error;
         topLevelError = topLevelError || error;
         setStep('runtime', 'error', error?.message || String(error));
       }
@@ -817,8 +821,15 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
         loopbackCheck = await runPiLoopbackSelfCheck(proxyInfo);
         setStep('loopback', loopbackCheck.success ? 'success' : 'error', loopbackCheck.message);
       } else {
-        loopbackCheck = { success: false, message: 'Pi Runtime 未启动，无法执行 loopback 检测', probes: {} };
-        setStep('loopback', 'skipped', loopbackCheck.message);
+        loopbackCheck = {
+          success: false,
+          message: runtimeStartError?.message || 'Pi Runtime 未启动，无法执行 loopback 检测',
+          blocked_by_system: runtimeStartError?.code === 'AGENT_PROXY_LOOPBACK_BLOCKED',
+          startup_attempts: runtimeStartError?.loopbackAttempts || [],
+          probes: {},
+          error: serializeDiagnosticError(runtimeStartError),
+        };
+        setStep('loopback', loopbackCheck.blocked_by_system ? 'error' : 'skipped', loopbackCheck.message);
       }
 
       if (runtimeStarted) {
@@ -891,7 +902,9 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
           resolved: false,
           rules,
           ai,
-          final_summary: ai?.success && ai.result?.summary ? ai.result.summary : rules.summary,
+          final_summary: rules.category === 'loopback-blocked'
+            ? rules.summary
+            : ai?.success && ai.result?.summary ? ai.result.summary : rules.summary,
         };
       }
       setStep('diagnosis', 'success', diagnosis.final_summary);
@@ -902,7 +915,7 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
         repair = { attempted: false, success: true, actions: [], recheck: null };
       } else {
         const configuredProbe = modelCheck?.probes?.[modelCheck?.configured_mode];
-        const repairableCategory = !['text-model', 'text-model-stream', 'tool-calling'].includes(diagnosis.rules?.category);
+        const repairableCategory = !['text-model', 'text-model-stream', 'tool-calling', 'loopback-blocked'].includes(diagnosis.rules?.category);
         const requestedActions = configuredProbe?.success && repairableCategory
           ? [...new Set([
             ...(diagnosis.rules?.recommended_action_ids || []),
@@ -911,7 +924,9 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
           : [];
         if (!requestedActions.length) {
           repair = { attempted: false, success: false, actions: [], recheck: null };
-          setStep('repair', 'skipped', configuredProbe?.success ? '没有匹配到可执行的安全修复动作' : '文本模型检测未通过，不执行自动修复');
+          setStep('repair', 'skipped', diagnosis.rules?.category === 'loopback-blocked'
+            ? '系统层 loopback 被阻断，安全自动修复不会修改系统网络策略'
+            : configuredProbe?.success ? '没有匹配到可执行的安全修复动作' : '文本模型检测未通过，不执行自动修复');
           setStep('recheck', 'skipped', '未执行自动修复');
         } else {
           setStep('repair', 'running', `准备执行 ${requestedActions.length} 个内置安全修复动作`);
@@ -978,12 +993,12 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
         ? repair?.attempted ? diagnosis.final_summary : 'Pi SDK、当前文本模型、loopback、工具、资源和输出链路均正常。'
         : diagnosis?.final_summary || 'Pi Agent 自检失败。';
       const result = {
-        report_version: 2,
+        report_version: 3,
         check_id: checkId,
         success: finalSuccess,
         repaired: Boolean(repair?.attempted && repair?.success),
         status: finalSuccess ? 'normal' : 'error',
-        message: finalSuccess ? repair?.attempted ? `${runtimeName} 已自动修复并通过自检` : `${runtimeName} 自检正常` : finalAgentCheck?.message || topLevelError?.message || `${runtimeName} 自检失败`,
+        message: finalSuccess ? repair?.attempted ? `${runtimeName} 已自动修复并通过自检` : `${runtimeName} 自检正常` : runtimeStartError?.message || finalAgentCheck?.message || topLevelError?.message || `${runtimeName} 自检失败`,
         checked_at: checkedAt,
         duration_ms: Date.now() - startedAt,
         log_dir: logDir,
@@ -1032,7 +1047,7 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
       if (current) setStep(current.id, 'error', error?.message || String(error));
       skipPendingSteps();
       const result = {
-        report_version: 2,
+        report_version: 3,
         check_id: checkId,
         success: false,
         repaired: false,

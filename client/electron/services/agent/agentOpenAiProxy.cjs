@@ -1,4 +1,5 @@
 const http = require('node:http');
+const net = require('node:net');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -25,6 +26,7 @@ const {
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 600000;
 const SERVER_TIMEOUT_BUFFER_MS = 10000;
+const DEFAULT_LOOPBACK_PROBE_TIMEOUT_MS = 1500;
 
 function normalizeTimeoutMs(value, fallback = DEFAULT_UPSTREAM_TIMEOUT_MS) {
   const number = Number(value);
@@ -372,6 +374,43 @@ function isAuthorized(req, token) {
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(payload));
+}
+
+function createLoopbackBaseUrl(host, port) {
+  const urlHost = net.isIP(host) === 6 ? `[${host}]` : host;
+  return `http://${urlHost}:${port}`;
+}
+
+// 从当前进程实际访问监听地址，避免仅凭 listen 回调误判本地 Proxy 可用。
+function probeLoopbackHealth(baseUrl, timeoutMs = DEFAULT_LOOPBACK_PROBE_TIMEOUT_MS) {
+  const startedAt = Date.now();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (success, message, error = null, status = 0) => {
+      if (settled) return;
+      settled = true;
+      resolve({
+        success,
+        message,
+        status,
+        duration_ms: Date.now() - startedAt,
+        error: error ? summarizeProxyError(error) : null,
+      });
+    };
+    const request = http.get(`${baseUrl}/health`, (response) => {
+      response.resume();
+      response.once('end', () => {
+        const status = Number(response.statusCode || 0);
+        finish(status >= 200 && status < 300, `HTTP ${status}`, null, status);
+      });
+    });
+    request.setTimeout(timeoutMs, () => {
+      const error = new Error('本地 Proxy 回连超时');
+      error.code = 'LOOPBACK_PROBE_TIMEOUT';
+      request.destroy(error);
+    });
+    request.once('error', (error) => finish(false, error?.message || '本地 Proxy 回连失败', error));
+  });
 }
 
 function readRequestBody(req, limit = MAX_BODY_BYTES) {
@@ -1088,7 +1127,17 @@ function handleModels({ res }) {
   });
 }
 
-function createAgentOpenAiProxy({ app, configStore, runtime, timeoutMs, diagnostics, onActivity, getActivityContext }) {
+function createAgentOpenAiProxy({
+  app,
+  configStore,
+  runtime,
+  timeoutMs,
+  diagnostics,
+  onActivity,
+  getActivityContext,
+  verifyLoopback = false,
+  loopbackHosts = ['127.0.0.1'],
+}) {
   const runtimeMeta = {
     id: runtime.id,
     displayName: runtime.displayName,
@@ -1196,33 +1245,117 @@ function createAgentOpenAiProxy({ app, configStore, runtime, timeoutMs, diagnost
     socket.on('close', () => sockets.delete(socket));
   });
 
+  async function closeListeningServer({ forceAfterMs = 2000, destroySockets = false } = {}) {
+    if (destroySockets) {
+      for (const socket of sockets) {
+        try { socket.destroy(); } catch {}
+      }
+    }
+    if (!server.listening) return;
+    await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        for (const socket of sockets) {
+          try { socket.destroy(); } catch {}
+        }
+        resolve();
+      }, forceAfterMs);
+      server.close(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+
+  async function listenOnHost(host) {
+    await new Promise((resolve, reject) => {
+      const onError = (error) => reject(error);
+      server.once('error', onError);
+      server.listen(0, host, () => {
+        server.off('error', onError);
+        resolve();
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error(`${runtimeMeta.displayName} AI proxy 启动失败：无法获取监听端口`);
+    }
+    return address;
+  }
+
   return {
     token,
     server,
     async start() {
-      await new Promise((resolve, reject) => {
-        server.once('error', reject);
-        server.listen(0, '127.0.0.1', () => {
-          server.off('error', reject);
-          resolve();
-        });
-      });
+      const candidates = verifyLoopback
+        ? [...new Set((loopbackHosts || []).map((item) => String(item || '').trim()).filter(Boolean))]
+        : ['127.0.0.1'];
+      const attempts = [];
+      let selected = null;
 
-      const address = server.address();
-      if (!address || typeof address === 'string') {
-        throw new Error(`${runtimeMeta.displayName} AI proxy 启动失败：无法获取监听端口`);
+      for (const host of candidates.length ? candidates : ['127.0.0.1']) {
+        let address = null;
+        try {
+          address = await listenOnHost(host);
+          const baseUrl = createLoopbackBaseUrl(host, address.port);
+          const probe = verifyLoopback
+            ? await probeLoopbackHealth(baseUrl)
+            : { success: true, message: '未启用启动回连检测', status: 0, duration_ms: 0, error: null };
+          const attempt = {
+            host,
+            family: address.family || '',
+            port: address.port,
+            base_url: baseUrl,
+            listen_success: true,
+            probe,
+          };
+          attempts.push(attempt);
+          appendProxyDiagnostic(diagnostics, 'proxy.loopback.probed', attempt);
+          if (probe.success) {
+            selected = { host, address, baseUrl };
+            break;
+          }
+        } catch (error) {
+          const attempt = {
+            host,
+            family: address?.family || '',
+            port: Number(address?.port || 0),
+            base_url: address ? createLoopbackBaseUrl(host, address.port) : '',
+            listen_success: false,
+            probe: null,
+            error: summarizeProxyError(error),
+          };
+          attempts.push(attempt);
+          appendProxyDiagnostic(diagnostics, 'proxy.loopback.probed', attempt);
+        }
+
+        await closeListeningServer({ forceAfterMs: 500, destroySockets: true });
       }
 
+      if (!selected) {
+        const error = new Error('本地 AI Proxy 已依次尝试 IPv4、IPv6 和 localhost，但均未形成可用回连；可能被本机安全软件、企业终端管控、VPN/网络过滤驱动或 Windows TCP/IP loopback 异常阻断');
+        error.code = 'AGENT_PROXY_LOOPBACK_BLOCKED';
+        error.loopbackAttempts = attempts;
+        appendProxyDiagnostic(diagnostics, 'proxy.loopback.blocked', { attempts });
+        throw error;
+      }
+
+      const { host, address, baseUrl } = selected;
       appendProxyDiagnostic(diagnostics, 'proxy.started', {
+        host,
+        family: address.family || '',
         port: address.port,
-        base_url: `http://127.0.0.1:${address.port}`,
+        base_url: baseUrl,
         timeout_ms: upstreamTimeoutMs,
+        loopback_attempts: attempts,
       });
 
       return {
         token,
+        host,
+        family: address.family || '',
         port: address.port,
-        baseUrl: `http://127.0.0.1:${address.port}`,
+        baseUrl,
+        loopbackAttempts: attempts,
       };
     },
     getStatus() {
@@ -1231,19 +1364,7 @@ function createAgentOpenAiProxy({ app, configStore, runtime, timeoutMs, diagnost
     async close({ forceAfterMs = 2000 } = {}) {
       closing = true;
       textQueue.clearQueued(new Error('Agent proxy 正在关闭'));
-      await new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          for (const socket of sockets) {
-            try { socket.destroy(); } catch {}
-          }
-          resolve();
-        }, forceAfterMs);
-
-        server.close(() => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
+      await closeListeningServer({ forceAfterMs });
     },
   };
 }

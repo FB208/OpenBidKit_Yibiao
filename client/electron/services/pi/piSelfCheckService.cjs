@@ -14,7 +14,7 @@ const CRITICAL_COMMANDS = new Set(['node', ...BUNDLED_COMMANDS]);
 const COMMANDS = ['node', ...BUNDLED_COMMANDS, ...SHIM_COMMANDS];
 const MODEL_CHECK_TIMEOUT_MS = 30000;
 const LOOPBACK_CHECK_TIMEOUT_MS = 5000;
-const REPORT_VERSION = 2;
+const REPORT_VERSION = 3;
 
 const SAFE_REPAIR_ACTIONS = [
   { id: 'apply-loopback-no-proxy', label: '为当前进程补充 loopback NO_PROXY', changes: '仅修改当前客户端进程环境变量' },
@@ -101,6 +101,9 @@ function serializeDiagnosticError(error, seen = new Set(), depth = 0) {
   if (error.cause) result.cause = serializeDiagnosticError(error.cause, seen, depth + 1);
   if (Array.isArray(error.errors)) {
     result.errors = error.errors.slice(0, 10).map((item) => serializeDiagnosticError(item, seen, depth + 1));
+  }
+  if (Array.isArray(error.loopbackAttempts)) {
+    result.loopback_attempts = error.loopbackAttempts.slice(0, 10);
   }
   return result;
 }
@@ -610,7 +613,8 @@ async function runPiLoopbackSelfCheck(proxyInfo) {
   }
   const healthUrl = `${proxyInfo.baseUrl}/health`;
   const modelsUrl = `${proxyInfo.baseUrl}/v1/models`;
-  const tcp = await runTcpProbe('127.0.0.1', proxyInfo.port);
+  const selectedHost = proxyInfo.host || '127.0.0.1';
+  const tcp = await runTcpProbe(selectedHost, proxyInfo.port);
   const nativeHealth = await runNativeHttpProbe(healthUrl);
   const fetchHealth = await runFetchProbe(healthUrl);
   const fetchModels = await runFetchProbe(modelsUrl, { Authorization: `Bearer ${proxyInfo.token}` });
@@ -618,7 +622,10 @@ async function runPiLoopbackSelfCheck(proxyInfo) {
     success: tcp.success && nativeHealth.success && fetchHealth.success && fetchModels.success,
     message: tcp.success && nativeHealth.success && fetchHealth.success && fetchModels.success ? '本地 AI Proxy loopback 链路正常' : '本地 AI Proxy loopback 链路存在异常',
     base_url: proxyInfo.baseUrl,
+    selected_host: selectedHost,
+    address_family: proxyInfo.family || '',
     port: proxyInfo.port,
+    startup_attempts: proxyInfo.loopbackAttempts || [],
     checked_at: nowIso(),
     probes: {
       tcp,
@@ -661,6 +668,16 @@ function diagnosePiSelfCheck({ modelCheck, loopbackCheck, toolCheck, agentCheck,
     summary = '文本模型基础请求可用，但未通过 Pi Agent 必需的流式工具调用检测。';
     confidence = 'high';
     evidence.push(modelCheck.probes.tools.message || '工具调用检测失败');
+  } else if (loopbackCheck?.blocked_by_system || loopbackCheck?.error?.code === 'AGENT_PROXY_LOOPBACK_BLOCKED' || error?.code === 'AGENT_PROXY_LOOPBACK_BLOCKED') {
+    category = 'loopback-blocked';
+    summary = '本机系统层阻断了应用对自身 AI Proxy 的 loopback 回连。';
+    confidence = 'high';
+    const attempts = loopbackCheck?.startup_attempts || loopbackCheck?.error?.loopback_attempts || error?.loopback_attempts || [];
+    attempts.forEach((attempt) => {
+      const probe = attempt?.probe;
+      evidence.push(`${attempt?.host || '未知地址'}：${probe?.message || attempt?.error?.message || '监听或回连失败'}`);
+    });
+    evidence.push('可能来源：本机安全软件、企业终端管控、VPN/网络过滤驱动或 Windows TCP/IP loopback 异常');
   } else if (loopbackCheck?.success === false) {
     category = 'loopback';
     summary = '应用内部 AI Proxy 已启动，但本机 loopback 访问存在异常。';
@@ -901,14 +918,24 @@ function createPiDiagnosticSections({ layout, sdkVersion, sessionSnapshot = {}, 
       summary: loopbackCheck.message || '',
       details: [
         { label: '监听地址', value: loopbackCheck.base_url || '-' },
+        { label: '选中主机', value: loopbackCheck.selected_host || '-' },
+        { label: '地址族', value: loopbackCheck.address_family || '-' },
         { label: '端口', value: String(loopbackCheck.port || 0) },
       ],
-      items: Object.entries(loopbackCheck.probes || {}).map(([id, probe]) => ({
-        id: `loopback-${id}`,
-        label: id,
-        status: probe.success ? 'success' : 'error',
-        message: `${probe.message || (probe.success ? '成功' : '失败')}，${probe.duration_ms || 0} ms`,
-      })),
+      items: [
+        ...(loopbackCheck.startup_attempts || []).map((attempt, index) => ({
+          id: `loopback-startup-${index}`,
+          label: `启动回连 ${attempt.host || index + 1}`,
+          status: attempt.probe?.success ? 'success' : loopbackCheck.success ? 'warning' : 'error',
+          message: attempt.probe?.message || attempt.error?.message || '监听或回连失败',
+        })),
+        ...Object.entries(loopbackCheck.probes || {}).map(([id, probe]) => ({
+          id: `loopback-${id}`,
+          label: id,
+          status: probe.success ? 'success' : 'error',
+          message: `${probe.message || (probe.success ? '成功' : '失败')}，${probe.duration_ms || 0} ms`,
+        })),
+      ],
     });
   }
   if (diagnosis) {
@@ -947,20 +974,24 @@ function createPiDiagnosticSections({ layout, sdkVersion, sessionSnapshot = {}, 
   return sections;
 }
 
-function redactSensitiveResult(value, seen = new WeakSet()) {
-  if (Array.isArray(value)) return value.map((item) => redactSensitiveResult(item, seen));
+function redactSensitiveResult(value, ancestors = new WeakSet()) {
   if (!value || typeof value !== 'object') return value;
-  if (seen.has(value)) return '[Circular]';
-  seen.add(value);
-  const result = {};
-  Object.entries(value).forEach(([key, item]) => {
-    if (/api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|password|secret|cookie/i.test(key)) {
-      result[key] = item ? '[REDACTED]' : item;
-      return;
-    }
-    result[key] = redactSensitiveResult(item, seen);
-  });
-  return result;
+  if (ancestors.has(value)) return '[Circular]';
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) return value.map((item) => redactSensitiveResult(item, ancestors));
+    const result = {};
+    Object.entries(value).forEach(([key, item]) => {
+      if (/api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|password|secret|cookie/i.test(key)) {
+        result[key] = item ? '[REDACTED]' : item;
+        return;
+      }
+      result[key] = redactSensitiveResult(item, ancestors);
+    });
+    return result;
+  } finally {
+    ancestors.delete(value);
+  }
 }
 
 function markdownFence(value, language = '') {
