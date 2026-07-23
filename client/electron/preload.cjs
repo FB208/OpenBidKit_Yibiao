@@ -186,6 +186,16 @@ const bridge = {
   systemFonts: {
     list: () => ipcRenderer.invoke('system-fonts:list'),
   },
+  plugins: {
+    getAvailablePlugins: () => ipcRenderer.invoke('plugins:getAvailablePlugins'),
+    install: (pluginId) => ipcRenderer.invoke('plugins:install', pluginId),
+    uninstall: (pluginId) => ipcRenderer.invoke('plugins:uninstall', pluginId),
+    enable: (pluginId) => ipcRenderer.invoke('plugins:enable', pluginId),
+    disable: (pluginId) => ipcRenderer.invoke('plugins:disable', pluginId),
+    update: (pluginId) => ipcRenderer.invoke('plugins:update', pluginId),
+    openConfig: (pluginId) => ipcRenderer.invoke('plugins:openConfig', pluginId),
+    refreshMarket: () => ipcRenderer.invoke('plugins:refreshMarket'),
+  },
 };
 
 contextBridge.exposeInMainWorld('yibiao', bridge);
