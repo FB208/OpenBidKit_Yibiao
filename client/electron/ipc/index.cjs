@@ -13,6 +13,8 @@ const { registerTaskIpc } = require('./taskIpc.cjs');
 const { registerTechnicalPlanIpc } = require('./technicalPlanIpc.cjs');
 const { registerTemplateIpc } = require('./templateIpc.cjs');
 const { registerSystemFontIpc } = require('./systemFontIpc.cjs');
+const { registerPluginIpc } = require('./pluginIpc.cjs');
+const pluginService = require('../services/pluginService.cjs');
 const { createAgentService } = require('../services/agentService.cjs');
 const { createAiService } = require('../services/aiService.cjs');
 const { createConfigStore } = require('../services/configStore.cjs');
@@ -192,6 +194,20 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerTemplateIpc({ templateStore });
   registerTaskIpc({ taskService });
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
+  
+  // 更新 pluginService 的服务引用
+  pluginService.updateServices({
+    taskService,
+    technicalPlanStore,
+    duplicateCheckStore,
+    rejectionCheckStore,
+  });
+  
+  // 在服务就绪后启用已启用的插件
+  pluginService.activateEnabledPlugins().catch((error) => {
+    console.error('[plugin-service] 启用插件失败:', error);
+  });
+  
   return { sqliteDatabase };
 }
 
@@ -284,6 +300,12 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerFileIpc({ fileService });
   registerExportIpc({ exportService });
   registerSystemFontIpc({ systemFontService });
+  registerPluginIpc(ipcMain, app, {
+    taskService: null,
+    technicalPlanStore: null,
+    duplicateCheckStore: null,
+    rejectionCheckStore: null,
+  });
   registerPendingWorkspaceDatabaseIpc(databaseStatus.getStatus);
 
   setTimeout(() => {

@@ -7,6 +7,7 @@ import { downloadOfflineLicense, generateOfflineLicense, loadLicenseConfig, save
 import { disableNotice, loadNotice, publishNotice } from './pages/notice.js';
 import { loadOverview } from './pages/overview.js';
 import { bindResourceEvents, loadResources } from './pages/resources.js';
+import { loadPlugins, setupPluginsPage } from './pages/plugins.js';
 import { loadTraffic } from './pages/traffic.js';
 import { setError, setStatus, updateIpPager, updateLatestPager } from './render.js';
 import { appState, state } from './state.js';
@@ -24,6 +25,7 @@ const tabLoaders = {
   notice: () => loadNotice(),
   license: () => loadLicenseConfig(),
   resources: () => loadResources(),
+  plugins: () => loadPlugins(),
 };
 
 function getLatestTotalPages() {
@@ -83,6 +85,7 @@ function bindEvents() {
   state.generateOfflineLicenseButton.addEventListener('click', generateOfflineLicense);
   state.downloadOfflineLicenseButton.addEventListener('click', downloadOfflineLicense);
   bindResourceEvents();
+  setupPluginsPage();
   state.prevLatestPage.addEventListener('click', () => {
     appState.latestPage = Math.max(1, appState.latestPage - 1);
     void refreshActiveTab();

@@ -203,6 +203,7 @@ function createTask(type, payload) {
 
 function createTaskService({ aiService, agentService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService }) {
   const subscribers = new Set();
+  const callbackSubscribers = new Set();
   const activeTasks = new Map();
   const activeTaskControls = new Map();
 
@@ -212,6 +213,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       if (!webContents.isDestroyed()) {
         webContents.send('tasks:event', event);
       }
+    }
+    for (const callback of callbackSubscribers) {
+      callback(event);
     }
   }
 
@@ -367,6 +371,17 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       }
     }
     webContents.once('destroyed', () => subscribers.delete(webContents));
+  }
+
+  /**
+   * 订阅 Main 进程中的任务事件，并返回取消订阅函数
+   */
+  function subscribeCallback(callback) {
+    callbackSubscribers.add(callback);
+    for (const task of activeTasks.values()) {
+      callback({ task, ...getSnapshotForTask(task) });
+    }
+    return () => callbackSubscribers.delete(callback);
   }
 
   function getTaskField(type) {
@@ -785,6 +800,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
 
   return {
     subscribe,
+    subscribeCallback,
     startBidSectionExtraction(payload) {
       return startManagedTask('bid-section-extraction', payload, runBidSectionExtractionTask, {
         bidSectionMode: 'multiple',
