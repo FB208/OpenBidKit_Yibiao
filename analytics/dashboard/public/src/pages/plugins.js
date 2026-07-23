@@ -153,7 +153,7 @@ export async function savePlugin(event) {
     setPluginsStatus('正在读取 manifest.json 和最新正式 Release...', '');
     const data = await requestJson('/api/plugins', {
       method: 'POST',
-      body: JSON.stringify(body),
+      body,
     });
 
     await loadPlugins({ quiet: true });
