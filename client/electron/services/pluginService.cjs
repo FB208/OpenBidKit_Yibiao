@@ -334,6 +334,89 @@ class PluginService {
   }
 
   /**
+   * 从本地 ZIP 安装插件，同 ID 插件直接覆盖升级
+   */
+  async installOfflinePlugin(zipPath) {
+    if (path.extname(zipPath).toLowerCase() !== '.zip') {
+      throw new Error('请选择 ZIP 格式的插件安装包');
+    }
+
+    const tempRoot = path.join(this.app.getPath('temp'), 'yibiao-plugins');
+    fs.mkdirSync(tempRoot, { recursive: true });
+    let stagingDir = fs.mkdtempSync(path.join(tempRoot, 'offline-'));
+
+    try {
+      await this.extractPlugin(zipPath, stagingDir);
+
+      const manifest = this.readManifest(stagingDir);
+      if (!manifest) {
+        throw new Error('ZIP 根目录缺少有效的 manifest.json');
+      }
+
+      const pluginId = String(manifest.id || '');
+      const pluginName = String(manifest.name || '').trim();
+      const pluginVersion = String(manifest.version || '').trim();
+      const hasMain = fs.existsSync(path.join(stagingDir, 'main.cjs'));
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(pluginId)) {
+        throw new Error('manifest.json 中的插件 ID 缺失或格式不正确');
+      }
+      if (!pluginName) {
+        throw new Error('manifest.json 中缺少插件名称');
+      }
+      if (!pluginVersion) {
+        throw new Error('manifest.json 中缺少插件版本');
+      }
+
+      const pluginDir = path.join(this.getPluginsDir(), pluginId);
+      const previousManifest = this.readManifest(pluginDir);
+      const previousState = { ...(this.pluginStates[pluginId] || {}) };
+      const wasEnabled = Boolean(previousManifest) && previousState.enabled === true;
+      const shouldRestoreEnabledState = wasEnabled && hasMain;
+      if (this.plugins.has(pluginId)) {
+        await this.disablePlugin(pluginId);
+      }
+      this.clearPluginModuleCache(pluginDir);
+      if (fs.existsSync(pluginDir)) {
+        fs.rmSync(pluginDir, { recursive: true, force: true });
+      }
+
+      fs.renameSync(stagingDir, pluginDir);
+      stagingDir = null;
+
+      this.pluginStates[pluginId] = {
+        ...previousState,
+        installed: true,
+        enabled: false,
+        version: pluginVersion,
+        installedAt: previousState.installedAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      this.savePluginStates();
+
+      if (shouldRestoreEnabledState) {
+        await this.enablePlugin(pluginId);
+      }
+
+      console.log('[plugin-service] 离线插件安装成功:', pluginId, pluginVersion);
+      return {
+        id: pluginId,
+        name: pluginName,
+        version: pluginVersion,
+        previousVersion: previousManifest?.version || null,
+        updated: Boolean(previousManifest),
+        enabled: shouldRestoreEnabledState,
+      };
+    } catch (error) {
+      console.error('[plugin-service] 离线安装插件失败:', error);
+      throw error;
+    } finally {
+      if (stagingDir && fs.existsSync(stagingDir)) {
+        fs.rmSync(stagingDir, { recursive: true, force: true });
+      }
+    }
+  }
+
+  /**
    * 卸载插件
    */
   async uninstallPlugin(pluginId) {

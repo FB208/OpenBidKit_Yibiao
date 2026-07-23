@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { dialog } = require('electron');
 const pluginService = require('../services/pluginService.cjs');
 const { openPluginConfigWindow } = require('../services/pluginConfigWindow.cjs');
 
@@ -83,6 +84,21 @@ function registerPluginIpc(ipcMain, app, services) {
         return [];
       }
     }
+  });
+
+  // 从本地 ZIP 安装或覆盖升级插件
+  ipcMain.handle('plugins:installOffline', async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择插件安装包',
+      properties: ['openFile'],
+      filters: [{ name: '插件安装包', extensions: ['zip'] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+
+    const installed = await pluginService.installOfflinePlugin(result.filePaths[0]);
+    return { canceled: false, ...installed };
   });
 
   // 安装插件

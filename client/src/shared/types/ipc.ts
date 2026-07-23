@@ -520,6 +520,7 @@ export interface YibiaoBridge {
   plugins: {
     getAvailablePlugins: () => Promise<AvailablePlugin[]>;
     install: (pluginId: string) => Promise<void>;
+    installOffline: () => Promise<OfflinePluginInstallResult>;
     uninstall: (pluginId: string) => Promise<void>;
     enable: (pluginId: string) => Promise<void>;
     disable: (pluginId: string) => Promise<void>;
@@ -528,6 +529,18 @@ export interface YibiaoBridge {
     refreshMarket: () => Promise<void>;
   };
 }
+
+export type OfflinePluginInstallResult =
+  | { canceled: true }
+  | {
+      canceled: false;
+      id: string;
+      name: string;
+      version: string;
+      previousVersion: string | null;
+      updated: boolean;
+      enabled: boolean;
+    };
 
 export interface AvailablePlugin {
   id: string;
