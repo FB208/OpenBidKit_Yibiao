@@ -6,6 +6,7 @@ import {
   listPublicPlugins,
   normalizePluginRow,
   readPlugin,
+  syncPluginsIfDue,
   upsertPlugin,
 } from '../services/pluginStore.js';
 import { normalizeText } from '../utils.js';
@@ -16,6 +17,7 @@ export async function handlePublicPlugins(request, env, url) {
   }
 
   try {
+    await syncPluginsIfDue(env);
     const plugins = await listPublicPlugins(env, {
       query: url.searchParams.get('q') || url.searchParams.get('query') || '',
     });
