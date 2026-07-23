@@ -105,6 +105,11 @@ export const appMenuItems: AppMenuItem[] = [
     notice: githubStarNotice,
   },
   {
+    id: 'plugin-manager',
+    label: '插件管理',
+    description: '安装和管理插件，扩展软件功能',
+  },
+  {
     id: 'resources',
     label: '资源下载',
     description: '投标相关资料、工具下载',

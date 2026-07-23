@@ -104,6 +104,23 @@ export const state = {
   saveResourceButton: $('saveResourceButton'),
   resourcesStatus: $('resourcesStatus'),
   resourcesTable: $('resourcesTable'),
+  loadPluginsButton: $('loadPluginsButton'),
+  newPluginButton: $('newPluginButton'),
+  pluginForm: $('pluginForm'),
+  pluginId: $('pluginId'),
+  pluginName: $('pluginName'),
+  pluginVersion: $('pluginVersion'),
+  pluginAuthor: $('pluginAuthor'),
+  pluginRepository: $('pluginRepository'),
+  pluginReleaseUrl: $('pluginReleaseUrl'),
+  pluginTags: $('pluginTags'),
+  pluginDescription: $('pluginDescription'),
+  pluginEnabled: $('pluginEnabled'),
+  pluginSortOrder: $('pluginSortOrder'),
+  resetPluginButton: $('resetPluginButton'),
+  savePluginButton: $('savePluginButton'),
+  pluginsStatus: $('pluginsStatus'),
+  pluginsTable: $('pluginsTable'),
 };
 
 export const appState = {
@@ -116,4 +133,5 @@ export const appState = {
   ipPageSize: 20,
   selectedClientId: '',
   resources: [],
+  plugins: [],
 };

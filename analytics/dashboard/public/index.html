@@ -55,6 +55,7 @@
       <button class="tab-button" type="button" data-tab-button="notice">公告管理</button>
       <button class="tab-button" type="button" data-tab-button="license">授权管理</button>
       <button class="tab-button" type="button" data-tab-button="resources">资源管理</button>
+      <button class="tab-button" type="button" data-tab-button="plugins">插件管理</button>
     </nav>
 
     <section id="tab-overview" class="tab-panel" data-tab-panel="overview">
@@ -428,6 +429,72 @@
 
         <div id="resourcesStatus" class="notice-status"></div>
         <div id="resourcesTable" class="resource-table-wrap"></div>
+      </section>
+    </section>
+
+    <section id="tab-plugins" class="tab-panel" data-tab-panel="plugins">
+      <section class="panel section">
+        <div class="section-head">
+          <h2>插件管理</h2>
+          <div class="section-actions">
+            <button id="loadPluginsButton" class="secondary-button" type="button" onclick="window.location.reload()">刷新插件列表</button>
+            <button id="newPluginButton" class="secondary-button" type="button" onclick="document.getElementById('pluginForm').scrollIntoView({ behavior: 'smooth' })">新增插件</button>
+          </div>
+        </div>
+
+        <form id="pluginForm" class="plugin-form" autocomplete="off">
+          <label>
+            插件 ID *
+            <input id="pluginId" maxlength="80" placeholder="必须与 manifest.json 中的 id 完全一致" required />
+          </label>
+          <label>
+            插件名称 *
+            <input id="pluginName" maxlength="120" placeholder="例如：桌面宠物" required />
+          </label>
+          <label>
+            版本号 *
+            <input id="pluginVersion" maxlength="40" placeholder="例如：1.0.0" required />
+          </label>
+          <label>
+            作者
+            <input id="pluginAuthor" maxlength="120" placeholder="例如：官方团队" />
+          </label>
+          <label>
+            GitHub 仓库地址 *
+            <input id="pluginRepository" maxlength="300" placeholder="例如：https://github.com/xxx/yibiao-plugin-desktop-pet" required />
+          </label>
+          <label>
+            Release 下载地址 *
+            <input id="pluginReleaseUrl" maxlength="500" placeholder="例如：https://github.com/xxx/yibiao-plugin-desktop-pet/releases/download/v1.0.0/yibiao-plugin-desktop-pet-v1.0.0.zip" required />
+          </label>
+          <label>
+            标签
+            <input id="pluginTags" maxlength="200" placeholder="多个标签用逗号分隔，例如：官方,效率工具" />
+          </label>
+          <label>
+            状态
+            <select id="pluginEnabled">
+              <option value="true" selected>启用</option>
+              <option value="false">停用</option>
+            </select>
+          </label>
+          <label>
+            排序
+            <input id="pluginSortOrder" type="number" value="1" />
+          </label>
+          <label class="plugin-field-wide">
+            描述
+            <textarea id="pluginDescription" maxlength="500" placeholder="插件功能描述，客户端插件卡片上展示。"></textarea>
+          </label>
+
+          <div class="plugin-actions">
+            <button id="resetPluginButton" class="secondary-button" type="button">清空表单</button>
+            <button id="savePluginButton" type="submit">保存插件</button>
+          </div>
+        </form>
+
+        <div id="pluginsStatus" class="notice-status"></div>
+        <div id="pluginsTable" class="plugin-table-wrap"></div>
       </section>
     </section>
 

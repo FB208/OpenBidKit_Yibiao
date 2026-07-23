@@ -23,7 +23,8 @@ export type SectionId =
   | 'developer-export-preview'
   | 'developer-expansion-replace-test'
   | 'developer-agent-test'
-  | 'settings';
+  | 'settings'
+  | 'plugin-manager';
 
 export interface AppMenuNotice {
   message: string;

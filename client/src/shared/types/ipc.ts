@@ -517,4 +517,34 @@ export interface YibiaoBridge {
   systemFonts: {
     list: () => Promise<string[]>;
   };
+  plugins: {
+    getAvailablePlugins: () => Promise<AvailablePlugin[]>;
+    install: (pluginId: string) => Promise<void>;
+    uninstall: (pluginId: string) => Promise<void>;
+    enable: (pluginId: string) => Promise<void>;
+    disable: (pluginId: string) => Promise<void>;
+    update: (pluginId: string) => Promise<void>;
+    openConfig: (pluginId: string) => Promise<void>;
+    refreshMarket: () => Promise<void>;
+  };
 }
+
+export interface AvailablePlugin {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  author?: string;
+  repository: string;
+  releaseUrl: string;
+  tags: string[];
+  iconUrl: string;
+  downloadCount: number;
+  installed: boolean;
+  installedVersion?: string;
+  enabled: boolean;
+  hasConfig: boolean;
+  hasUpdate?: boolean;
+}
+
+
