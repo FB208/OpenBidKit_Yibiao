@@ -104,6 +104,26 @@ function PluginsPage() {
     }
   };
 
+  // 从本地 ZIP 安装插件，同 ID 时覆盖升级
+  const handleOfflineInstall = async () => {
+    setLoading(true);
+    try {
+      const result = await window.yibiao?.plugins?.installOffline();
+      if (!result || result.canceled) return;
+
+      await loadPlugins();
+      showToast(
+        result.updated
+          ? `插件“${result.name}”已覆盖升级至 v${result.version}`
+          : `插件“${result.name}”已离线安装`,
+        'success',
+      );
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '离线安装失败', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
   const handleRefresh = async () => {
     setLoading(true);
     try {
@@ -128,14 +148,19 @@ function PluginsPage() {
     <div className="plugins-page">
       <section className="plugins-panel" aria-label="插件管理">
         <div className="plugins-head">
-          <div>
+          <div className="plugins-head-copy">
             <span className="section-kicker">插件管理</span>
             <h2>插件市场</h2>
             <p>安装和管理插件，按需扩展软件功能。</p>
           </div>
-          <button type="button" className="secondary-action" onClick={handleRefresh} disabled={controlsDisabled}>
-            刷新市场
-          </button>
+          <div className="plugins-head-actions">
+            <button type="button" className="primary-action" onClick={handleOfflineInstall} disabled={controlsDisabled}>
+              离线安装
+            </button>
+            <button type="button" className="secondary-action" onClick={handleRefresh} disabled={controlsDisabled}>
+              刷新市场
+            </button>
+          </div>
         </div>
 
         <div className="plugins-list">

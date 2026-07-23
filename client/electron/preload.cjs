@@ -189,6 +189,7 @@ const bridge = {
   plugins: {
     getAvailablePlugins: () => ipcRenderer.invoke('plugins:getAvailablePlugins'),
     install: (pluginId) => ipcRenderer.invoke('plugins:install', pluginId),
+    installOffline: () => ipcRenderer.invoke('plugins:installOffline'),
     uninstall: (pluginId) => ipcRenderer.invoke('plugins:uninstall', pluginId),
     enable: (pluginId) => ipcRenderer.invoke('plugins:enable', pluginId),
     disable: (pluginId) => ipcRenderer.invoke('plugins:disable', pluginId),

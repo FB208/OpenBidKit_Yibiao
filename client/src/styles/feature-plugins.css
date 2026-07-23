@@ -30,10 +30,17 @@
   padding: 2px 4px 0;
 }
 
-.plugins-head > div {
+.plugins-head-copy {
   display: grid;
   gap: 7px;
   min-width: 0;
+}
+
+.plugins-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .plugins-head h2 {
