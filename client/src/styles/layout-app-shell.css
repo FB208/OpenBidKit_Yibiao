@@ -74,6 +74,7 @@
 
 .brand-block {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 12px;
   min-height: 52px;
@@ -160,10 +161,33 @@
 
 .sidebar-nav {
   display: flex;
+  min-height: 0;
   flex: 1;
   flex-direction: column;
   gap: 5px;
   margin-top: 20px;
+  padding-right: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: rgba(102, 112, 127, 0.36) transparent;
+  scrollbar-width: thin;
+}
+
+.sidebar-nav::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-nav::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-nav::-webkit-scrollbar-thumb {
+  background: rgba(102, 112, 127, 0.28);
+  border-radius: 999px;
+}
+
+.sidebar-nav::-webkit-scrollbar-thumb:hover {
+  background: rgba(102, 112, 127, 0.46);
 }
 
 /* [346-432] nav-item/settings-trigger + nav-icon + nav-copy + sidebar-footer */
@@ -258,6 +282,7 @@
 
 .sidebar-footer {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 5px;
   margin-top: auto;
