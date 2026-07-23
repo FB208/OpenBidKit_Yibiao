@@ -19,6 +19,9 @@ import {
   refreshOverviewAiTotals,
   rollupYesterdayCronStage,
 } from './services/analyticsStatsStore.js';
+import { syncAllPlugins } from './services/pluginStore.js';
+
+const PLUGIN_SYNC_CRON = '*/15 * * * *';
 
 const routes = new Map([
   ['/health', (request, env) => handleHealth(env)],
@@ -65,6 +68,11 @@ export default {
 
   async scheduled(event, env) {
     const cron = event?.cron || '';
+    if (cron === PLUGIN_SYNC_CRON) {
+      await syncAllPlugins(env);
+      return;
+    }
+
     await rollupYesterdayCronStage(env, cron);
     if (cron === OVERVIEW_AI_TOTALS_CRON) {
       try {
