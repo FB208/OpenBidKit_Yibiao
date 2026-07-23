@@ -103,7 +103,8 @@ async function handleAdminSavePlugin(request, env) {
     return json({ code: 0, plugin });
   } catch (error) {
     console.error('[analytics] save plugin failed', error?.message || String(error));
-    return json({ code: 500, message: error?.message || 'plugin save failed' }, { status: 500 });
+    const status = Number(error?.statusCode) || 500;
+    return json({ code: status, message: error?.message || 'plugin save failed' }, { status });
   }
 }
 

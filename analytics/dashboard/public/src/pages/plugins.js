@@ -38,7 +38,7 @@ function getNextPluginSortOrder() {
 }
 
 function isBlankNewPluginForm() {
-  return !state.pluginId.value.trim() && !state.pluginName.value.trim();
+  return !state.pluginId.value.trim() && !state.pluginRepository.value.trim();
 }
 
 function splitTags(value) {
@@ -97,7 +97,6 @@ function renderPluginsTable() {
 export function resetPluginForm() {
   state.pluginForm.reset();
   state.pluginId.value = '';
-  state.pluginId.readOnly = false;
   state.pluginEnabled.value = 'true';
   state.pluginSortOrder.value = String(getNextPluginSortOrder());
   setPluginsStatus('已清空表单，可新增插件。', 'ok');
@@ -105,14 +104,7 @@ export function resetPluginForm() {
 
 function fillPluginForm(plugin) {
   state.pluginId.value = plugin?.id || '';
-  state.pluginId.readOnly = Boolean(plugin?.id);
-  state.pluginName.value = plugin?.name || '';
-  state.pluginVersion.value = plugin?.version || '';
-  state.pluginAuthor.value = plugin?.author || '';
   state.pluginRepository.value = plugin?.repository || '';
-  state.pluginReleaseUrl.value = plugin?.releaseUrl || '';
-  state.pluginTags.value = plugin?.tagsText || (plugin?.tags || []).join(', ');
-  state.pluginDescription.value = plugin?.description || '';
   state.pluginEnabled.value = plugin?.enabled === false ? 'false' : 'true';
   state.pluginSortOrder.value = String(plugin?.sortOrder ?? 0);
 }
@@ -145,51 +137,20 @@ export async function savePlugin(event) {
     assertAdminToken();
     saveSettings();
 
-    const id = state.pluginId.value.trim();
-    const name = state.pluginName.value.trim();
-    const version = state.pluginVersion.value.trim();
     const repository = state.pluginRepository.value.trim();
-    const releaseUrl = state.pluginReleaseUrl.value.trim();
-
-    if (!id) {
-      setPluginsStatus('请填写与 manifest.json 一致的插件 ID。', 'error');
-      return;
-    }
-
-    if (!name) {
-      setPluginsStatus('请填写插件名称。', 'error');
-      return;
-    }
-
-    if (!version) {
-      setPluginsStatus('请填写版本号。', 'error');
-      return;
-    }
-
     if (!repository) {
       setPluginsStatus('请填写 GitHub 仓库地址。', 'error');
       return;
     }
 
-    if (!releaseUrl) {
-      setPluginsStatus('请填写 Release 下载地址。', 'error');
-      return;
-    }
-
     const body = {
-      id,
-      name,
-      version,
-      author: state.pluginAuthor.value.trim(),
+      id: state.pluginId.value.trim(),
       repository,
-      releaseUrl,
-      tags: state.pluginTags.value.trim(),
-      description: state.pluginDescription.value.trim(),
       enabled: state.pluginEnabled.value !== 'false',
       sortOrder: Number(state.pluginSortOrder.value || 0),
     };
 
-    setPluginsStatus('保存中...', '');
+    setPluginsStatus('正在读取 manifest.json 和最新正式 Release...', '');
     const data = await requestJson('/api/plugins', {
       method: 'POST',
       body: JSON.stringify(body),
@@ -197,7 +158,7 @@ export async function savePlugin(event) {
 
     await loadPlugins({ quiet: true });
     fillPluginForm(data.plugin);
-    setPluginsStatus(`插件「${data.plugin.name}」已保存。`, 'ok');
+    setPluginsStatus(`插件「${data.plugin.name}」已同步并保存。`, 'ok');
   } catch (error) {
     setPluginsStatus(error?.message || String(error), 'error');
   }
