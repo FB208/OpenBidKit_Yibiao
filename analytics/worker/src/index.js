@@ -11,7 +11,7 @@ import { handleOverview } from './routes/overview.js';
 import { handleProjects } from './routes/projects.js';
 import { handleRetention } from './routes/retention.js';
 import { handleAdminResources, handlePublicResources, handleResourceImage } from './routes/resources.js';
-import { handleAdminPlugins, handlePublicPluginDownload, handlePublicPlugins } from './routes/plugins.js';
+import { handleAdminPluginSync, handleAdminPlugins, handlePublicPluginDownload, handlePublicPlugins } from './routes/plugins.js';
 import { handleTrack } from './routes/track.js';
 import { handleTraffic } from './routes/traffic.js';
 import {
@@ -33,6 +33,7 @@ const routes = new Map([
   ['/api/notice', handleAdminNotice],
   ['/api/resources', handleAdminResources],
   ['/api/plugins', handleAdminPlugins],
+  ['/api/plugins/sync', handleAdminPluginSync],
   ['/api/overview', handleOverview],
   ['/api/clients', handleClients],
   ['/api/client-detail', handleClientDetail],

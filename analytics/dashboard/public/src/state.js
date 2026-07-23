@@ -105,6 +105,7 @@ export const state = {
   resourcesStatus: $('resourcesStatus'),
   resourcesTable: $('resourcesTable'),
   loadPluginsButton: $('loadPluginsButton'),
+  syncPluginsButton: $('syncPluginsButton'),
   newPluginButton: $('newPluginButton'),
   pluginForm: $('pluginForm'),
   pluginId: $('pluginId'),

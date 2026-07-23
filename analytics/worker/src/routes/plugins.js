@@ -6,7 +6,7 @@ import {
   listPublicPlugins,
   normalizePluginRow,
   readPlugin,
-  syncPluginsIfDue,
+  syncAllPlugins,
   upsertPlugin,
 } from '../services/pluginStore.js';
 import { normalizeText } from '../utils.js';
@@ -17,7 +17,6 @@ export async function handlePublicPlugins(request, env, url) {
   }
 
   try {
-    await syncPluginsIfDue(env);
     const plugins = await listPublicPlugins(env, {
       query: url.searchParams.get('q') || url.searchParams.get('query') || '',
     });
@@ -58,6 +57,28 @@ export async function handlePublicPluginDownload(request, env) {
   }
 }
 
+/** 由管理后台显式同步全部插件的最新正式 Release */
+export async function handleAdminPluginSync(request, env) {
+  if (!requireAdmin(request, env)) {
+    return unauthorized();
+  }
+
+  if (request.method !== 'POST') {
+    return methodNotAllowed();
+  }
+
+  if (!env.RESOURCE_DB) {
+    return json({ code: 500, message: 'RESOURCE_DB is not configured' }, { status: 500 });
+  }
+
+  try {
+    const plugins = await syncAllPlugins(env);
+    return json({ code: 0, syncedCount: plugins.length, plugins }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    console.error('[analytics] admin sync plugins failed', error?.message || String(error));
+    return json({ code: 500, message: error?.message || 'plugins sync failed' }, { status: 500 });
+  }
+}
 export async function handleAdminPlugins(request, env, url) {
   if (!requireAdmin(request, env)) {
     return unauthorized();

@@ -131,6 +131,24 @@ export async function loadPlugins(options = {}) {
   }
 }
 
+/** 手动同步市场中全部插件的最新正式 Release */
+export async function syncPlugins() {
+  try {
+    assertAdminToken();
+    saveSettings();
+    state.syncPluginsButton.disabled = true;
+    setPluginsStatus('正在同步所有插件的最新正式 Release...', '');
+
+    const data = await requestJson('/api/plugins/sync', { method: 'POST' });
+    await loadPlugins({ quiet: true });
+    setPluginsStatus(`同步完成，已同步 ${data.syncedCount || 0} 个插件。`, 'ok');
+  } catch (error) {
+    setPluginsStatus(error?.message || String(error), 'error');
+  } finally {
+    state.syncPluginsButton.disabled = false;
+  }
+}
+
 export async function savePlugin(event) {
   event?.preventDefault?.();
   try {
@@ -203,6 +221,7 @@ export function setupPluginsPage() {
     }
   });
 
+  state.syncPluginsButton.addEventListener('click', syncPlugins);
   state.pluginForm.addEventListener('submit', savePlugin);
   state.resetPluginButton.addEventListener('click', resetPluginForm);
 }
