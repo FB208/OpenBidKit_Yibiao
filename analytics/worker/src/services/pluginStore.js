@@ -10,6 +10,8 @@ const PLUGIN_RELEASE_URL_MAX_LENGTH = 500;
 const PLUGIN_TAGS_MAX_LENGTH = 200;
 const GITHUB_API_VERSION = '2022-11-28';
 const SEMVER_TAG_PATTERN = /^v((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/;
+const PLUGIN_SYNC_CACHE_KEY = 'plugin-market:last-github-sync';
+const PLUGIN_SYNC_INTERVAL_MS = 15 * 60 * 1000;
 
 /** 创建可被接口映射为指定状态码的插件错误 */
 function createPluginError(message, statusCode = 400) {
@@ -401,6 +403,27 @@ export async function syncAllPlugins(env) {
   }
 
   return synced;
+}
+
+/** 市场被访问时最多每 15 分钟触发一次 GitHub 同步 */
+export async function syncPluginsIfDue(env) {
+  try {
+    const now = Date.now();
+    if (env.NOTICE_STORE) {
+      const lastSyncAt = Number(await env.NOTICE_STORE.get(PLUGIN_SYNC_CACHE_KEY) || 0);
+      if (Number.isFinite(lastSyncAt) && now - lastSyncAt < PLUGIN_SYNC_INTERVAL_MS) {
+        return [];
+      }
+
+      // 先写入同步时间，避免并发市场请求重复访问 GitHub。
+      await env.NOTICE_STORE.put(PLUGIN_SYNC_CACHE_KEY, String(now));
+    }
+
+    return await syncAllPlugins(env);
+  } catch (error) {
+    console.error('[analytics] plugin market sync failed', error?.message || String(error));
+    return [];
+  }
 }
 
 export async function deletePlugin(env, id) {
