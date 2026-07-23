@@ -94,6 +94,12 @@ function renderPluginsTable() {
   `;
 }
 
+/** 使用同步接口返回的最新数据更新当前列表，保留本次同步失败的插件 */
+function applySyncedPlugins(syncedPlugins) {
+  const syncedById = new Map((syncedPlugins || []).map((plugin) => [plugin.id, plugin]));
+  appState.plugins = (appState.plugins || []).map((plugin) => syncedById.get(plugin.id) || plugin);
+  renderPluginsTable();
+}
 export function resetPluginForm() {
   state.pluginForm.reset();
   state.pluginId.value = '';
@@ -140,7 +146,11 @@ export async function syncPlugins() {
     setPluginsStatus('正在同步所有插件的最新正式 Release...', '');
 
     const data = await requestJson('/api/plugins/sync', { method: 'POST' });
-    await loadPlugins({ quiet: true });
+    applySyncedPlugins(data.plugins);
+    console.info('[analytics] 插件同步完成', {
+      syncedCount: data.syncedCount || 0,
+      versions: (data.plugins || []).map((plugin) => plugin.id + '@' + plugin.version),
+    });
     setPluginsStatus(`同步完成，已同步 ${data.syncedCount || 0} 个插件。`, 'ok');
   } catch (error) {
     setPluginsStatus(error?.message || String(error), 'error');
