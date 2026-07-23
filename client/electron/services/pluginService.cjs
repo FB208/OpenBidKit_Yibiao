@@ -526,21 +526,25 @@ class PluginService {
    * 更新插件
    */
   async updatePlugin(pluginId) {
+    let stage = '读取插件状态';
+
     try {
       const wasEnabled = this.pluginStates[pluginId]?.enabled === true;
 
-      // 先卸载旧版本（会自动禁用）
+      stage = '卸载旧版本';
       await this.uninstallPlugin(pluginId);
-      
-      // 重新安装
+
+      stage = '下载、解压并安装新版本';
       await this.installPlugin(pluginId);
 
       if (wasEnabled) {
+        stage = '恢复插件启用状态';
         await this.enablePlugin(pluginId);
       }
     } catch (error) {
-      console.error('[plugin-service] 更新插件失败:', error);
-      throw error;
+      const message = error?.message || String(error);
+      console.error(`[plugin-service] 更新插件失败，阶段：${stage}`, error);
+      throw new Error(`更新阶段“${stage}”失败：${message}`);
     }
   }
 

@@ -5,6 +5,13 @@ import type { AvailablePlugin } from '../../../shared/types/ipc';
 
 const downloadCountFormatter = new Intl.NumberFormat('zh-CN');
 
+/** 将 Electron IPC 错误转换为明确的插件操作提示 */
+function formatPluginOperationError(action: string, error: unknown) {
+  const rawMessage = error instanceof Error ? error.message : String(error || '未知错误');
+  const message = rawMessage.replace(/^Error invoking remote method '[^']+': Error:\s*/, '');
+  return `${action}失败：${message}`;
+}
+
 function PluginsPage() {
   const [plugins, setPlugins] = useState<AvailablePlugin[]>([]);
   const [loading, setLoading] = useState(false);
@@ -63,7 +70,7 @@ function PluginsPage() {
       showToast('插件已启用', 'success');
       await loadPlugins();
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '启用失败', 'error');
+      showToast(formatPluginOperationError('启用', error), 'error');
     } finally {
       setOperatingPluginId(null);
     }
@@ -90,7 +97,7 @@ function PluginsPage() {
       showToast('插件更新成功', 'success');
       await loadPlugins();
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '更新失败', 'error');
+      showToast(formatPluginOperationError('更新', error), 'error');
     } finally {
       setOperatingPluginId(null);
     }
