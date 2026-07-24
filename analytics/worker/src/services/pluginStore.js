@@ -10,6 +10,9 @@ const PLUGIN_RELEASE_URL_MAX_LENGTH = 500;
 const PLUGIN_TAGS_MAX_LENGTH = 200;
 const GITHUB_API_VERSION = '2022-11-28';
 const SEMVER_TAG_PATTERN = /^v((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/;
+const GITHUB_REQUEST_MAX_ATTEMPTS = 3;
+const RELEASE_RESOLVE_MAX_ATTEMPTS = 4;
+const GITHUB_RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
 /** 创建可被接口映射为指定状态码的插件错误 */
 function createPluginError(message, statusCode = 400) {
@@ -81,28 +84,52 @@ function buildGitHubHeaders(env) {
   };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** 请求 GitHub JSON 接口并转换为管理端可读错误 */
 async function fetchGitHubJson(env, url, resourceName) {
-  let response;
-  try {
-    response = await fetch(url, { headers: buildGitHubHeaders(env) });
-  } catch (error) {
-    throw createPluginError(`无法连接 GitHub 读取${resourceName}：${error?.message || String(error)}`, 502);
-  }
+  let lastError = null;
 
-  let data = null;
-  try {
-    data = await response.json();
-  } catch {
-    // 非 JSON 响应统一由下面的状态处理。
-  }
+  for (let attempt = 1; attempt <= GITHUB_REQUEST_MAX_ATTEMPTS; attempt += 1) {
+    let response;
+    try {
+      response = await fetch(url, {
+        headers: buildGitHubHeaders(env),
+        cache: 'no-store',
+      });
+    } catch (error) {
+      lastError = createPluginError(`无法连接 GitHub 读取${resourceName}：${error?.message || String(error)}`, 502);
+      if (attempt < GITHUB_REQUEST_MAX_ATTEMPTS) {
+        await sleep(500 * attempt);
+        continue;
+      }
+      throw lastError;
+    }
 
-  if (!response.ok) {
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      // 非 JSON 响应统一由下面的状态处理。
+    }
+
+    if (response.ok) {
+      return data;
+    }
+
     const detail = normalizeText(data?.message, 160);
-    throw createPluginError(`无法读取 GitHub ${resourceName}（${response.status}）${detail ? `：${detail}` : ''}`, 502);
+    lastError = createPluginError(`无法读取 GitHub ${resourceName}（${response.status}）${detail ? `：${detail}` : ''}`, 502);
+    const retryable = GITHUB_RETRYABLE_STATUSES.has(response.status)
+      || (resourceName === 'manifest.json' && response.status === 404);
+    if (!retryable || attempt >= GITHUB_REQUEST_MAX_ATTEMPTS) {
+      throw lastError;
+    }
+    await sleep(500 * attempt);
   }
 
-  return data;
+  throw lastError || createPluginError(`无法读取 GitHub ${resourceName}`, 502);
 }
 
 /** 从指定 Git Tag 读取仓库根目录 manifest.json */
@@ -126,8 +153,8 @@ async function readReleaseManifest(env, repository, tagName) {
   }
 }
 
-/** 根据仓库最新正式 Release 解析客户端所需的完整插件信息 */
-export async function resolveGitHubPlugin(env, repositoryUrl) {
+/** 单次解析仓库最新正式 Release 中的完整插件信息 */
+async function resolveGitHubPluginOnce(env, repositoryUrl) {
   const repository = normalizeGitHubRepository(repositoryUrl);
   const apiBase = `https://api.github.com/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
   const release = await fetchGitHubJson(env, `${apiBase}/releases/latest`, '最新正式 Release');
@@ -163,7 +190,9 @@ export async function resolveGitHubPlugin(env, repositoryUrl) {
     : null;
 
   if (!asset?.browser_download_url) {
-    throw createPluginError(`最新 Release 缺少安装包：${expectedAssetName}`);
+    const error = createPluginError(`最新 Release 缺少安装包：${expectedAssetName}`, 502);
+    error.releaseNotReady = true;
+    throw error;
   }
 
   const authorValue = typeof manifest?.author === 'string' ? manifest.author : manifest?.author?.name;
@@ -177,6 +206,22 @@ export async function resolveGitHubPlugin(env, repositoryUrl) {
     releaseUrl: normalizeText(asset.browser_download_url, PLUGIN_RELEASE_URL_MAX_LENGTH),
     tags: normalizeTagsText(manifest?.tags),
   };
+}
+
+/** 根据仓库最新正式 Release 解析客户端所需的完整插件信息 */
+export async function resolveGitHubPlugin(env, repositoryUrl) {
+  for (let attempt = 1; attempt <= RELEASE_RESOLVE_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await resolveGitHubPluginOnce(env, repositoryUrl);
+    } catch (error) {
+      if (!error?.releaseNotReady || attempt >= RELEASE_RESOLVE_MAX_ATTEMPTS) {
+        throw error;
+      }
+      await sleep(750 * attempt);
+    }
+  }
+
+  throw createPluginError('最新 Release 尚未准备完成', 502);
 }
 
 export function normalizePluginInput(input) {
@@ -377,11 +422,12 @@ export async function upsertPlugin(env, input) {
 /** 定时同步全部市场插件的最新正式 Release */
 export async function syncAllPlugins(env) {
   if (!env.RESOURCE_DB) {
-    return [];
+    return { totalCount: 0, plugins: [], failures: [] };
   }
 
   const result = await env.RESOURCE_DB.prepare('SELECT * FROM plugins ORDER BY id ASC').all();
   const synced = [];
+  const failures = [];
 
   for (const row of result.results || []) {
     const current = normalizePluginRow(row);
@@ -396,11 +442,17 @@ export async function syncAllPlugins(env) {
       });
       synced.push(plugin);
     } catch (error) {
-      console.error(`[analytics] sync plugin failed: ${current.id}`, error?.message || String(error));
+      const message = normalizeText(error?.message || String(error), 300) || '未知错误';
+      failures.push({ id: current.id, message });
+      console.error(`[analytics] sync plugin failed: ${current.id}`, message);
     }
   }
 
-  return synced;
+  return {
+    totalCount: (result.results || []).length,
+    plugins: synced,
+    failures,
+  };
 }
 
 export async function deletePlugin(env, id) {

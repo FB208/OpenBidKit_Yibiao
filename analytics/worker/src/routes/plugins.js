@@ -72,8 +72,15 @@ export async function handleAdminPluginSync(request, env) {
   }
 
   try {
-    const plugins = await syncAllPlugins(env);
-    return json({ code: 0, syncedCount: plugins.length, plugins }, { headers: { 'Cache-Control': 'no-store' } });
+    const result = await syncAllPlugins(env);
+    return json({
+      code: 0,
+      totalCount: result.totalCount,
+      syncedCount: result.plugins.length,
+      failedCount: result.failures.length,
+      plugins: result.plugins,
+      failures: result.failures,
+    }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('[analytics] admin sync plugins failed', error?.message || String(error));
     return json({ code: 500, message: error?.message || 'plugins sync failed' }, { status: 500 });
