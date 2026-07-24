@@ -16,6 +16,8 @@ class PluginService {
     this.services = {};
     this.marketCache = [];
     this.marketCacheTime = 0;
+    this.updatingPlugins = new Set();
+    this.failedUpdates = new Map();
   }
 
   /**
@@ -29,6 +31,7 @@ class PluginService {
     fs.mkdirSync(pluginsDir, { recursive: true });
     
     this.loadPluginStates();
+    this.failedUpdates.clear();
     
     console.log('[plugin-service] 插件服务已初始化');
   }
@@ -201,6 +204,7 @@ class PluginService {
         installPath: pluginDir,
         hasConfig: manifest.hasConfig || false,
         manifest,
+        updating: this.updatingPlugins.has(pluginId),
       });
     }
     
@@ -326,6 +330,9 @@ class PluginService {
 
       this.recordPluginDownload(pluginId);
       
+      // 清除更新失败标记
+      this.failedUpdates.delete(pluginId);
+      
       console.log('[plugin-service] 插件安装成功:', pluginId);
     } catch (error) {
       console.error('[plugin-service] 安装插件失败:', error);
@@ -396,6 +403,9 @@ class PluginService {
       if (shouldRestoreEnabledState) {
         await this.enablePlugin(pluginId);
       }
+
+      // 清除更新失败标记
+      this.failedUpdates.delete(pluginId);
 
       console.log('[plugin-service] 离线插件安装成功:', pluginId, pluginVersion);
       return {
@@ -523,10 +533,12 @@ class PluginService {
   }
 
   /**
-   * 更新插件
+   * 更新插件（删除重装）
    */
   async updatePlugin(pluginId) {
     let stage = '读取插件状态';
+    this.updatingPlugins.add(pluginId);
+    this.failedUpdates.delete(pluginId);
 
     try {
       const wasEnabled = this.pluginStates[pluginId]?.enabled === true;
@@ -534,17 +546,28 @@ class PluginService {
       stage = '卸载旧版本';
       await this.uninstallPlugin(pluginId);
 
-      stage = '下载、解压并安装新版本';
+      stage = '下载并安装新版本';
       await this.installPlugin(pluginId);
 
       if (wasEnabled) {
         stage = '恢复插件启用状态';
         await this.enablePlugin(pluginId);
       }
+
+      console.log('[plugin-service] 插件更新成功:', pluginId);
     } catch (error) {
       const message = error?.message || String(error);
       console.error(`[plugin-service] 更新插件失败，阶段：${stage}`, error);
-      throw new Error(`更新阶段“${stage}”失败：${message}`);
+      
+      this.failedUpdates.set(pluginId, {
+        stage,
+        message,
+        timestamp: Date.now(),
+      });
+      
+      throw new Error(`更新阶段"${stage}"失败：${message}`);
+    } finally {
+      this.updatingPlugins.delete(pluginId);
     }
   }
 
