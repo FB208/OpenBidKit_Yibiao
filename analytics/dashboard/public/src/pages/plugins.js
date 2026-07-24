@@ -147,11 +147,30 @@ export async function syncPlugins() {
 
     const data = await requestJson('/api/plugins/sync', { method: 'POST' });
     applySyncedPlugins(data.plugins);
+    await loadPlugins({ quiet: true });
+    const totalCount = Number(data.totalCount) || 0;
+    const syncedCount = Number(data.syncedCount) || 0;
+    const failedCount = Number(data.failedCount) || 0;
+    const failureSummary = (data.failures || [])
+      .map((failure) => `${failure.id || '未知插件'}：${truncate(failure.message, 120) || '未知错误'}`)
+      .join('；');
     console.info('[analytics] 插件同步完成', {
-      syncedCount: data.syncedCount || 0,
+      totalCount,
+      syncedCount,
+      failedCount,
       versions: (data.plugins || []).map((plugin) => plugin.id + '@' + plugin.version),
+      failures: data.failures || [],
     });
-    setPluginsStatus(`同步完成，已同步 ${data.syncedCount || 0} 个插件。`, 'ok');
+    if (failedCount > 0) {
+      const prefix = syncedCount > 0
+        ? `同步完成：成功 ${syncedCount} 个，失败 ${failedCount} 个。`
+        : `同步失败：${failedCount} 个插件均未同步。`;
+      setPluginsStatus(`${prefix}${failureSummary ? ` ${failureSummary}` : ''}`, 'error');
+    } else if (totalCount === 0) {
+      setPluginsStatus('当前没有可同步的插件。', 'ok');
+    } else {
+      setPluginsStatus(`同步完成，已同步 ${syncedCount} 个插件。`, 'ok');
+    }
   } catch (error) {
     setPluginsStatus(error?.message || String(error), 'error');
   } finally {
