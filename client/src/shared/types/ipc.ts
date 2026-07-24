@@ -527,6 +527,7 @@ export interface YibiaoBridge {
     update: (pluginId: string) => Promise<void>;
     openConfig: (pluginId: string) => Promise<void>;
     refreshMarket: () => Promise<void>;
+    clearUpdateFailedState: (pluginId: string) => Promise<boolean>;
   };
 }
 
@@ -558,6 +559,11 @@ export interface AvailablePlugin {
   enabled: boolean;
   hasConfig: boolean;
   hasUpdate?: boolean;
+  updating?: boolean;
+  updateFailed?: {
+    stage: string;
+    message: string;
+  };
 }
 
 

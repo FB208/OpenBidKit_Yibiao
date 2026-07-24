@@ -17,11 +17,25 @@ function PluginsPage() {
   const [loading, setLoading] = useState(false);
   const [operatingPluginId, setOperatingPluginId] = useState<string | null>(null);
   const [uninstallTarget, setUninstallTarget] = useState<AvailablePlugin | null>(null);
-  const { showToast } = useToast();
+  const [errorDialogPlugin, setErrorDialogPlugin] = useState<AvailablePlugin | null>(null);
+  const { showToast, dismissToast } = useToast();
   const controlsDisabled = loading || operatingPluginId !== null;
 
   useEffect(() => {
     void loadPlugins();
+
+    // 监听页面可见性变化，切换回来时刷新插件列表
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        void loadPlugins();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   const loadPlugins = async () => {
@@ -45,6 +59,7 @@ function PluginsPage() {
       await loadPlugins();
     } catch (error) {
       showToast(error instanceof Error ? error.message : '安装失败', 'error');
+      await loadPlugins();
     } finally {
       setOperatingPluginId(null);
     }
@@ -58,6 +73,7 @@ function PluginsPage() {
       await loadPlugins();
     } catch (error) {
       showToast(error instanceof Error ? error.message : '卸载失败', 'error');
+      await loadPlugins();
     } finally {
       setOperatingPluginId(null);
     }
@@ -91,13 +107,17 @@ function PluginsPage() {
 
   const handleUpdate = async (pluginId: string) => {
     setOperatingPluginId(pluginId);
+    const toastId = showToast('正在更新插件...', 'info', { persistent: true });
+
     try {
-      showToast('正在更新插件...', 'info');
       await window.yibiao?.plugins?.update(pluginId);
+      dismissToast(toastId);
       showToast('插件更新成功', 'success');
       await loadPlugins();
     } catch (error) {
+      dismissToast(toastId);
       showToast(formatPluginOperationError('更新', error), 'error');
+      await loadPlugins();
     } finally {
       setOperatingPluginId(null);
     }
@@ -108,6 +128,15 @@ function PluginsPage() {
       await window.yibiao?.plugins?.openConfig(pluginId);
     } catch (error) {
       showToast(error instanceof Error ? error.message : '打开配置失败', 'error');
+    }
+  };
+
+  const clearUpdateFailedState = async (pluginId: string) => {
+    try {
+      await window.yibiao?.plugins?.clearUpdateFailedState(pluginId);
+      await loadPlugins();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '清除失败', 'error');
     }
   };
 
@@ -210,7 +239,11 @@ function PluginsPage() {
 
                     <div className="plugin-card-footer">
                       <div className="plugin-card-status">
-                        {plugin.installed ? (
+                        {plugin.updating ? (
+                          <span className="plugin-status-pill is-updating">更新中...</span>
+                        ) : plugin.updateFailed ? (
+                          <span className="plugin-status-pill is-error">更新失败</span>
+                        ) : plugin.installed ? (
                           <>
                             <span className="plugin-status-pill is-installed">已安装 v{plugin.installedVersion}</span>
                             {plugin.enabled ? <span className="plugin-status-pill is-enabled">已启用</span> : null}
@@ -222,7 +255,38 @@ function PluginsPage() {
                       </div>
 
                       <div className="plugin-card-actions">
-                        {!plugin.installed ? (
+                        {plugin.updating ? (
+                          <button type="button" className="secondary-action" disabled>
+                            更新中
+                          </button>
+                        ) : plugin.updateFailed ? (
+                          <>
+                            <button 
+                              type="button" 
+                              className="primary-action" 
+                              onClick={() => handleInstall(plugin.id)} 
+                              disabled={controlsDisabled}
+                            >
+                              重新安装
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-action"
+                              onClick={() => setErrorDialogPlugin(plugin)}
+                              disabled={controlsDisabled}
+                            >
+                              查看错误
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-action"
+                              onClick={() => clearUpdateFailedState(plugin.id)}
+                              disabled={controlsDisabled}
+                            >
+                              忽略
+                            </button>
+                          </>
+                        ) : !plugin.installed ? (
                           <button type="button" className="primary-action" onClick={() => handleInstall(plugin.id)} disabled={controlsDisabled}>
                             {busy ? '安装中' : '安装'}
                           </button>
@@ -268,11 +332,46 @@ function PluginsPage() {
           <Dialog.Content className="plugin-uninstall-dialog">
             <Dialog.Title>卸载插件</Dialog.Title>
             <Dialog.Description>
-              确定卸载“{uninstallTarget?.name || '该插件'}”吗？卸载后其配置和本地文件都会被删除。
+              确定卸载"{uninstallTarget?.name || '该插件'}"吗？卸载后其配置和本地文件都会被删除。
             </Dialog.Description>
             <div className="plugin-uninstall-actions">
               <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
               <button type="button" className="danger-action" onClick={() => void confirmUninstall()}>确认卸载</button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={Boolean(errorDialogPlugin)} onOpenChange={(open) => !open && setErrorDialogPlugin(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="plugin-uninstall-dialog">
+            <Dialog.Title>更新失败详情</Dialog.Title>
+            <Dialog.Description>
+              插件"{errorDialogPlugin?.name || ''}"更新失败。
+            </Dialog.Description>
+            {errorDialogPlugin?.updateFailed && (
+              <div style={{ marginTop: '16px', padding: '12px', background: '#f5f5f5', borderRadius: '4px' }}>
+                <div><strong>失败阶段：</strong>{errorDialogPlugin.updateFailed.stage}</div>
+                <div style={{ marginTop: '8px' }}><strong>错误信息：</strong></div>
+                <div style={{ marginTop: '4px', color: '#666', fontSize: '14px', wordBreak: 'break-word' }}>
+                  {errorDialogPlugin.updateFailed.message}
+                </div>
+              </div>
+            )}
+            <div className="plugin-uninstall-actions">
+              <Dialog.Close className="secondary-action" type="button">关闭</Dialog.Close>
+              <button 
+                type="button" 
+                className="primary-action" 
+                onClick={() => {
+                  const pluginId = errorDialogPlugin!.id;
+                  setErrorDialogPlugin(null);
+                  void handleInstall(pluginId);
+                }}
+              >
+                重新安装
+              </button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>

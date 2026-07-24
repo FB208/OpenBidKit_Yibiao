@@ -217,6 +217,28 @@
   border-color: rgba(242, 138, 0, 0.2);
 }
 
+.plugin-status-pill.is-updating {
+  color: #f28a00;
+  background: rgba(242, 138, 0, 0.1);
+  border-color: rgba(242, 138, 0, 0.2);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.plugin-status-pill.is-error {
+  color: #d92d20;
+  background: rgba(217, 45, 32, 0.1);
+  border-color: rgba(217, 45, 32, 0.2);
+}
+
 .plugin-card-actions {
   display: flex;
   flex-wrap: wrap;

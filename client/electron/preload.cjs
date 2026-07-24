@@ -196,6 +196,7 @@ const bridge = {
     update: (pluginId) => ipcRenderer.invoke('plugins:update', pluginId),
     openConfig: (pluginId) => ipcRenderer.invoke('plugins:openConfig', pluginId),
     refreshMarket: () => ipcRenderer.invoke('plugins:refreshMarket'),
+    clearUpdateFailedState: (pluginId) => ipcRenderer.invoke('plugins:clearUpdateFailedState', pluginId),
   },
 };
 

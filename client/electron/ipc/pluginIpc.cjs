@@ -21,18 +21,31 @@ function registerPluginIpc(ipcMain, app, services) {
       const installedMap = new Map(installedPlugins.map(p => [p.id, p]));
 
       // 先处理市场插件，标记已安装状态
-      const result = marketPlugins.map(plugin => ({
-        ...plugin,
-        installed: installedMap.has(plugin.id),
-        installedVersion: installedMap.get(plugin.id)?.version,
-        enabled: installedMap.get(plugin.id)?.enabled || false,
-        hasConfig: installedMap.get(plugin.id)?.hasConfig || false,
-        hasUpdate: installedMap.has(plugin.id) && installedMap.get(plugin.id).version !== plugin.version,
-      }));
+      const result = marketPlugins.map(plugin => {
+        const installedPlugin = installedMap.get(plugin.id);
+        const isUpdating = pluginService.updatingPlugins.has(plugin.id);
+        const updateFailed = pluginService.failedUpdates.get(plugin.id);
+        
+        return {
+          ...plugin,
+          installed: installedMap.has(plugin.id) || isUpdating,
+          installedVersion: installedPlugin?.version,
+          enabled: installedPlugin?.enabled || false,
+          hasConfig: installedPlugin?.hasConfig || false,
+          hasUpdate: installedMap.has(plugin.id) && !isUpdating && installedPlugin.version !== plugin.version,
+          updating: isUpdating,
+          updateFailed: updateFailed ? {
+            stage: updateFailed.stage,
+            message: updateFailed.message,
+          } : undefined,
+        };
+      });
 
       // 合并本地已安装但市场不存在的插件
       for (const installed of installedPlugins) {
         if (!marketPlugins.find(p => p.id === installed.id)) {
+          const updateFailed = pluginService.failedUpdates.get(installed.id);
+          
           // 从本地 manifest 构造插件信息
           result.push({
             id: installed.id,
@@ -52,6 +65,11 @@ function registerPluginIpc(ipcMain, app, services) {
             enabled: installed.enabled,
             hasConfig: installed.hasConfig,
             hasUpdate: false,
+            updating: installed.updating || false,
+            updateFailed: updateFailed ? {
+              stage: updateFailed.stage,
+              message: updateFailed.message,
+            } : undefined,
           });
         }
       }
@@ -134,6 +152,12 @@ function registerPluginIpc(ipcMain, app, services) {
   // 刷新插件市场
   ipcMain.handle('plugins:refreshMarket', async () => {
     return await pluginService.refreshMarket();
+  });
+
+  // 清除更新失败状态
+  ipcMain.handle('plugins:clearUpdateFailedState', async (event, pluginId) => {
+    pluginService.failedUpdates.delete(pluginId);
+    return true;
   });
 
   // 插件配置读取（供配置窗口使用）
