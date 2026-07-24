@@ -9,6 +9,7 @@ export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error
 export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'global-facts-generation' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
+export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'section-word-adjusting' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'final-section-word-adjusting' | 'total-word-adjusting' | 'illustration-planning' | 'illustration-generating' | 'done';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 export type ConsistencyRepairMode = 'agent' | 'normal';
 export type OriginalPlanCoverageRepairMode = 'agent' | 'normal';
@@ -36,11 +37,23 @@ export interface ContentGenerationOptions {
   originalPlanCoverageRepairMode: OriginalPlanCoverageRepairMode;
 }
 
+export interface ContentGenerationProgressDetail {
+  mode: 'full' | 'single' | 'correction' | 'illustration' | 'illustration-generation';
+  phase: ContentGenerationPhase;
+  phase_label: string;
+  phase_progress: number;
+  completed: number;
+  total: number;
+  step: string;
+  step_label: string;
+}
+
 export interface BackgroundTaskState {
   task_id: string;
   type: BackgroundTaskType;
   status: BackgroundTaskStatus;
   progress: number;
+  progress_detail?: ContentGenerationProgressDetail;
   logs: string[];
   started_at: string;
   updated_at: string;
@@ -56,9 +69,11 @@ export interface BackgroundTaskState {
       word_adjustment_warning_kind?: 'leaf-count' | 'quality';
     };
     content?: {
-      phase: 'planning' | 'restoring' | 'generating' | 'section-word-adjusting' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'final-section-word-adjusting' | 'total-word-adjusting' | 'illustration-planning' | 'illustration-generating' | 'done';
+      phase: ContentGenerationPhase;
       planning_total: number;
       planning_completed: number;
+      restoration_total?: number;
+      restoration_completed?: number;
       generation_total: number;
       generation_completed: number;
       minimum_words?: number;
@@ -83,6 +98,7 @@ export interface BackgroundTaskState {
       word_control_warning?: string;
       audit_group_total?: number;
       audit_group_completed?: number;
+      audit_step?: '' | 'checking' | 'fixing' | 'agent' | 'done';
       audit_conflict_total?: number;
       audit_fix_total?: number;
       audit_fix_completed?: number;

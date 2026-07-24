@@ -2619,6 +2619,186 @@ function progressFor(leaves, sections) {
   return Math.round((done / leaves.length) * 100);
 }
 
+const CONTENT_PHASE_LABELS = {
+  planning: '正文编排',
+  restoring: '原方案还原',
+  generating: '正文生成',
+  'section-word-adjusting': '小节字数调整',
+  'original-auditing': '原方案覆盖检查',
+  auditing: '全文一致性检查',
+  'table-cleaning': '表格清理',
+  'final-section-word-adjusting': '最终小节复核',
+  'total-word-adjusting': '全文字数调整',
+  'illustration-planning': '全文图片编排',
+  'illustration-generating': '全文图片生成',
+  done: '已完成',
+};
+
+const CONTENT_PROGRESS_PROFILES = {
+  full: {
+    planning: [0, 12],
+    restoring: [12, 18],
+    generating: [18, 58],
+    'section-word-adjusting': [58, 66],
+    'original-auditing': [66, 73],
+    auditing: [73, 81],
+    'table-cleaning': [81, 85],
+    'final-section-word-adjusting': [85, 90],
+    'total-word-adjusting': [90, 95],
+    'illustration-planning': [95, 98],
+    'illustration-generating': [98, 99],
+    done: [100, 100],
+  },
+  single: {
+    planning: [0, 15],
+    restoring: [15, 25],
+    generating: [25, 65],
+    'original-auditing': [65, 75],
+    auditing: [75, 85],
+    'table-cleaning': [85, 90],
+    'section-word-adjusting': [90, 99],
+    done: [100, 100],
+  },
+  correction: {
+    'original-auditing': [0, 18],
+    auditing: [18, 42],
+    'table-cleaning': [42, 50],
+    'final-section-word-adjusting': [50, 68],
+    'total-word-adjusting': [68, 85],
+    'illustration-planning': [85, 94],
+    'illustration-generating': [94, 99],
+    done: [100, 100],
+  },
+  illustration: {
+    'illustration-planning': [0, 65],
+    'illustration-generating': [65, 99],
+    done: [100, 100],
+  },
+  'illustration-generation': {
+    'illustration-generating': [0, 99],
+    done: [100, 100],
+  },
+};
+
+function clampPercentage(value) {
+  return Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+}
+
+function percentageFor(completed, total) {
+  const normalizedTotal = Math.max(0, Number(total) || 0);
+  if (!normalizedTotal) return 0;
+  return clampPercentage((Math.max(0, Number(completed) || 0) / normalizedTotal) * 100);
+}
+
+// 将当前正文子阶段的计数统一为插件和 Renderer 可直接消费的进度明细。
+function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 'full') {
+  const stats = contentStats || {};
+  const phase = stats.phase || 'planning';
+  const phaseLabel = CONTENT_PHASE_LABELS[phase] || '正文生成';
+  let step = phase;
+  let stepLabel = latestLog || phaseLabel;
+  let completed = 0;
+  let total = 0;
+  let phaseProgress = 0;
+
+  if (phase === 'planning') {
+    completed = stats.planning_completed;
+    total = stats.planning_total;
+    phaseProgress = percentageFor(completed, total);
+  } else if (phase === 'restoring') {
+    completed = stats.restoration_completed;
+    total = stats.restoration_total;
+    phaseProgress = percentageFor(completed, total);
+  } else if (phase === 'generating') {
+    completed = stats.generation_completed;
+    total = stats.generation_total;
+    phaseProgress = percentageFor(completed, total);
+  } else if (phase === 'section-word-adjusting' || phase === 'final-section-word-adjusting') {
+    completed = Math.max(0, Number(stats.section_adjustment_completed) || 0);
+    total = Math.max(0, Number(stats.section_adjustment_total) || 0);
+    const activeCount = Math.min(Math.max(0, total - completed), Math.max(0, Number(stats.section_adjustment_active_count) || 0));
+    const roundProgress = percentageFor(stats.section_adjustment_round, stats.section_adjustment_round_total) / 100;
+    phaseProgress = total ? percentageFor(completed + activeCount * roundProgress, total) : 0;
+    step = 'adjusting';
+  } else if (phase === 'original-auditing' || phase === 'auditing') {
+    const agentTotal = Math.max(0, Number(stats.audit_agent_step_total) || 0);
+    const fixTotal = Math.max(0, Number(stats.audit_fix_total) || 0);
+    if (stats.audit_step === 'done') {
+      completed = 1;
+      total = 1;
+      phaseProgress = 100;
+      step = 'done';
+    } else if (agentTotal || stats.audit_step === 'agent') {
+      completed = stats.audit_agent_step_completed;
+      total = agentTotal;
+      phaseProgress = percentageFor(completed, total);
+      step = 'agent';
+      stepLabel = stats.audit_agent_step_label || stepLabel;
+    } else if (stats.audit_step === 'fixing') {
+      completed = stats.audit_fix_completed;
+      total = fixTotal;
+      phaseProgress = fixTotal ? clampPercentage(45 + percentageFor(completed, total) * 0.55) : 100;
+      step = 'fixing';
+    } else {
+      completed = stats.audit_group_completed;
+      total = stats.audit_group_total;
+      phaseProgress = clampPercentage(percentageFor(completed, total) * 0.45);
+      step = 'checking';
+    }
+  } else if (phase === 'table-cleaning') {
+    completed = stats.table_cleanup_completed;
+    total = stats.table_cleanup_total;
+    phaseProgress = percentageFor(completed, total);
+    step = 'cleaning';
+  } else if (phase === 'total-word-adjusting') {
+    const round = Math.max(1, Number(stats.total_adjustment_round) || 1);
+    const roundTotal = Math.max(1, Number(stats.total_adjustment_round_total) || 1);
+    completed = stats.total_adjustment_batch_completed;
+    total = stats.total_adjustment_batch_total;
+    const batchProgress = total ? Math.max(0, Number(completed) || 0) / Math.max(1, Number(total) || 1) : 0;
+    phaseProgress = clampPercentage((((round - 1) + batchProgress) / roundTotal) * 100);
+    step = 'adjusting';
+  } else if (phase === 'illustration-planning') {
+    completed = stats.illustration_planning_step_completed;
+    total = stats.illustration_planning_step_total;
+    phaseProgress = percentageFor(completed, total);
+    step = 'planning';
+    stepLabel = stats.illustration_planning_step_label || stepLabel;
+  } else if (phase === 'illustration-generating') {
+    completed = stats.illustration_generation_completed;
+    total = stats.illustration_generation_total;
+    phaseProgress = percentageFor(completed, total);
+    step = 'generating';
+    stepLabel = stats.illustration_generation_step_label || stepLabel;
+  } else if (phase === 'done') {
+    completed = 1;
+    total = 1;
+    phaseProgress = 100;
+    step = 'done';
+  }
+
+  return {
+    mode: progressMode,
+    phase,
+    phase_label: phaseLabel,
+    phase_progress: phaseProgress,
+    completed: Math.max(0, Number(completed) || 0),
+    total: Math.max(0, Number(total) || 0),
+    step,
+    step_label: stepLabel,
+  };
+}
+
+// 按当前任务模式把阶段内进度映射为单调递增的 Step05 累计进度。
+function buildContentOverallProgress(progressMode, detail, status) {
+  if (status === 'success' || detail.phase === 'done') return 100;
+  const profile = CONTENT_PROGRESS_PROFILES[progressMode] || CONTENT_PROGRESS_PROFILES.full;
+  const range = profile[detail.phase];
+  if (!range) return 0;
+  const [start, end] = range;
+  return Math.min(99, Math.round(start + ((end - start) * detail.phase_progress) / 100));
+}
+
 function taskStatusFor(leaves, sections) {
   if (leaves.some(({ item }) => sections[item.id]?.status === 'error')) {
     return 'error';
@@ -2646,7 +2826,7 @@ function withSection(sections, item, partial) {
   };
 }
 
-async function runContentGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }) {
+async function runContentGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask: updateManagedTask, payload, taskControl, previousState }) {
   const resume = Boolean(payload.resume);
   const storedPlan = resume ? (previousState || {}) : (workspaceStore.loadTechnicalPlan() || {});
   const wordControl = normalizeOutlineWordControlSnapshot(storedPlan.outlineWordControlSnapshot);
@@ -2735,6 +2915,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     phase: 'planning',
     planning_total: 0,
     planning_completed: 0,
+    restoration_total: 0,
+    restoration_completed: 0,
     generation_total: 0,
     generation_completed: 0,
     minimum_words: wordControl.minimumWords,
@@ -2761,6 +2943,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       : undefined,
     audit_group_total: 0,
     audit_group_completed: 0,
+    audit_step: '',
     audit_conflict_total: 0,
     audit_fix_total: 0,
     audit_fix_completed: 0,
@@ -2898,6 +3081,34 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         ? '原方案覆盖审计已启用，本次将使用普通模式检查并修复当前小节的原文保留情况。'
         : `原方案覆盖审计已启用，本次将使用${originalPlanCoverageRepairMode === 'agent' ? ' Agent' : '普通模式'}检查并补回原文保留情况。`
       : '原方案覆盖审计未启用。'];
+  }
+
+  const progressMode = resume && storedPlan.contentGenerationTask?.progress_detail?.mode
+    ? storedPlan.contentGenerationTask.progress_detail.mode
+    : runOnlyIllustrationGeneration
+      ? 'illustration-generation'
+      : runOnlyIllustrationPlanning
+        ? 'illustration'
+        : retryContentCorrection
+          ? 'correction'
+          : targetItemId
+            ? 'single'
+            : 'full';
+  let lastTaskProgress = resume ? Math.max(0, Number(storedPlan.contentGenerationTask?.progress) || 0) : 0;
+
+  // 所有正文任务更新都在这里补充累计进度和当前阶段明细。
+  function updateTask(partial = {}, workspaceState, eventPatch, options) {
+    const latestLog = (partial.logs || logs || []).at(-1) || '';
+    const progressDetail = buildContentPhaseProgress(contentStats, latestLog, progressMode);
+    const calculatedProgress = buildContentOverallProgress(progressMode, progressDetail, partial.status);
+    lastTaskProgress = partial.status === 'success'
+      ? 100
+      : Math.max(lastTaskProgress, calculatedProgress);
+    return updateManagedTask({
+      ...partial,
+      progress: lastTaskProgress,
+      progress_detail: progressDetail,
+    }, workspaceState, eventPatch, options);
   }
 
   const developerLogger = createContentDeveloperLogger(aiService, {
@@ -3094,6 +3305,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   const contentWordCounts = new Map();
+  const generationCompletedItemIds = new Set();
   let totalContentWords = 0;
 
   // 更新单个小节字数及全文累计字数。
@@ -3133,13 +3345,18 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   function statsSnapshot() {
-    contentStats.generation_completed = leaves.filter(({ item }) => ['success', 'error'].includes(sections[item.id]?.status)).length;
+    contentStats.generation_completed = generationCompletedItemIds.size;
     contentStats.current_words = countTotalContentWords();
     contentStats.minimum_words = wordControl.minimumWords;
     contentStats.maximum_words = wordControl.maximumWords;
     contentStats.section_words = wordControl.sectionWords;
     contentStats.strict_section_words = wordControl.strictSectionWords;
     return { content: { ...contentStats } };
+  }
+
+  function markGenerationCompleted(itemId) {
+    if (itemId) generationCompletedItemIds.add(itemId);
+    contentStats.generation_completed = generationCompletedItemIds.size;
   }
 
   function syncRuntime(partial = {}) {
@@ -3634,17 +3851,22 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     }
 
     contentStats.phase = 'restoring';
+    contentStats.restoration_total = rebuildTargets.length + restoreTargets.length;
+    contentStats.restoration_completed = 0;
     workspaceStore.updateTechnicalPlanWithoutReload({ contentGenerationRuntime: syncRuntime({ phase: 'restoring' }) });
     logs = [...logs, `开始原方案还原：${originalPlanSegments.length} 个原文段，${restoreTargets.length} 个候选叶子小节，${rebuildTargets.length} 个小节可直接重建原文。`];
     publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
 
     const assignedSourceIds = new Set();
+    const completedRestoreTargetIds = new Set();
     let restoredCount = 0;
     for (const { context, state } of rebuildTargets) {
       const segments = state.sourceSegments;
       segments.forEach((segment) => assignedSourceIds.add(segment.id));
       const restoredContent = segments.map((segment) => segment.content).join('\n\n').trim();
       const originalMaterial = buildOriginalMaterialFromSegments(segments, state.originalMaterial);
+      completedRestoreTargetIds.add(context.item.id);
+      contentStats.restoration_completed = completedRestoreTargetIds.size;
       saveSectionAndContentPlan(context.item, { status: 'idle', content: restoredContent, error: undefined }, restoredContent, {
         ...state.plan,
         original_material: originalMaterial,
@@ -3739,6 +3961,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         const restoredContent = segments.map((segment) => segment.content).join('\n\n').trim();
         const plan = getContentPlanForItem(context.item.id);
         const originalMaterial = buildOriginalMaterialFromSegments(segments);
+        completedRestoreTargetIds.add(context.item.id);
+        contentStats.restoration_completed = completedRestoreTargetIds.size;
         saveSectionAndContentPlan(context.item, { status: 'idle', content: restoredContent, error: undefined }, restoredContent, {
           ...plan,
           original_material: originalMaterial,
@@ -3747,8 +3971,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       }
     }
 
+    contentStats.restoration_completed = contentStats.restoration_total;
     const unassignedCount = originalPlanSegments.filter((segment) => !assignedSourceIds.has(segment.id)).length;
     logs = [...logs, `原方案还原完成：已还原 ${restoredCount} 个小节，未分配原文段 ${unassignedCount} 个。`];
+    publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
     contentStats.phase = 'generating';
     workspaceStore.updateTechnicalPlanWithoutReload({ contentGenerationRuntime: syncRuntime({ phase: 'generating' }) });
     publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
@@ -3883,6 +4109,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         ? `原方案优化扩写完成：${item.id} ${item.title || '未命名章节'}`
         : `生成完成：${item.id} ${item.title || '未命名章节'}`];
       rememberTouchedItem(item.id);
+      markGenerationCompleted(item.id);
       if (needsRestoredOptimization) {
         saveSectionAndContentPlan(item, { status: 'success', content, error: undefined }, content, {
           ...contentPlan,
@@ -3914,6 +4141,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       logs = [...logs, hasReadableFallback
         ? `生成请求未产生可用新内容：${item.id} ${item.title || '未命名章节'}，${message}。已保留当前有效正文。`
         : `生成失败：${item.id} ${item.title || '未命名章节'}，${message}${isSingleSectionRegeneration ? '。已保留原正文。' : ''}`];
+      markGenerationCompleted(item.id);
       saveSection(item, {
         status: hasReadableFallback ? 'success' : 'error',
         content: fallbackContent,
@@ -4328,6 +4556,7 @@ workspace 文件说明：
 
   function updateAgentOriginalCoverageProgress(step, label, extra = {}) {
     contentStats.phase = 'original-auditing';
+    contentStats.audit_step = 'agent';
     contentStats.audit_repair_mode = 'agent';
     contentStats.audit_agent_step_total = 5;
     contentStats.audit_agent_step_completed = Math.max(0, Math.min(5, Number(step) || 0));
@@ -4636,6 +4865,7 @@ workspace 文件说明：
     let issueCount = 0;
     let conflictCount = 0;
     contentStats.phase = 'original-auditing';
+    contentStats.audit_step = 'checking';
     contentStats.audit_repair_mode = 'normal';
     contentStats.audit_group_total = auditTargets.length;
     contentStats.audit_group_completed = 0;
@@ -4737,6 +4967,7 @@ workspace 文件说明：
     pauseIfRequested('正文生成已在原方案覆盖审计阶段暂停，可导出当前已完成内容，稍后继续。');
 
     const repairTargets = Array.from(coverageIssuesBySectionId.values());
+    contentStats.audit_step = 'fixing';
     contentStats.audit_fix_total = repairTargets.length;
     contentStats.audit_fix_completed = 0;
     contentStats.audit_fix_failed = 0;
@@ -4807,6 +5038,7 @@ workspace 文件说明：
     pauseIfRequested('正文生成已在原方案覆盖修复阶段暂停，可导出当前已完成内容，稍后继续。');
 
     logs = [...logs, `原方案覆盖审计完成：发现 ${repairTargets.length} 个需补写小节，成功修复 ${fixedCount} 个，${contentStats.audit_fix_failed} 个需人工核对。`];
+    contentStats.audit_step = 'done';
     writeDeveloperLog('original_coverage.audit.done', {
       repair_target_count: repairTargets.length,
       fixed_count: fixedCount,
@@ -4941,6 +5173,7 @@ workspace 文件说明：
 
   function updateAgentConsistencyProgress(step, label, extra = {}) {
     contentStats.phase = 'auditing';
+    contentStats.audit_step = 'agent';
     contentStats.audit_repair_mode = 'agent';
     contentStats.audit_agent_step_total = 5;
     contentStats.audit_agent_step_completed = Math.max(0, Math.min(5, Number(step) || 0));
@@ -5309,6 +5542,7 @@ workspace 文件说明：
     const conflictsBySectionId = new Map();
 
     contentStats.phase = 'auditing';
+    contentStats.audit_step = 'checking';
     contentStats.audit_repair_mode = 'normal';
     contentStats.audit_group_total = auditGroups.length;
     contentStats.audit_group_completed = 0;
@@ -5420,6 +5654,7 @@ workspace 文件说明：
     const repairTargets = Array.from(conflictsBySectionId.entries())
       .map(([sectionId, conflicts]) => ({ context: targetById.get(sectionId), conflicts }))
       .filter((target) => target.context);
+    contentStats.audit_step = 'fixing';
     contentStats.audit_fix_total = repairTargets.length;
     contentStats.audit_fix_completed = 0;
     contentStats.audit_fix_failed = 0;
@@ -5489,6 +5724,7 @@ workspace 文件说明：
     pauseIfRequested('正文生成已在一致性修复阶段暂停，可导出当前已完成内容，稍后继续。');
 
     logs = [...logs, `一致性审计完成：发现 ${repairTargets.length} 个冲突小节，成功修复 ${fixedCount} 个，${contentStats.audit_fix_failed} 个需人工核对。`];
+    contentStats.audit_step = 'done';
     writeDeveloperLog('consistency.audit.done', {
       repair_target_count: repairTargets.length,
       fixed_count: fixedCount,
