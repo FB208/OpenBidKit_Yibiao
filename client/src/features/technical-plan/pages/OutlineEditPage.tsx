@@ -68,11 +68,18 @@ const outlineExpansionModeOptions: Array<{ value: OutlineExpansionMode; title: s
   },
 ];
 
+const WORD_COUNT_INPUT_UNIT = 10000;
+
 function parseWordCountDraft(value: string) {
   if (!value) return 0;
-  if (!/^\d+$/.test(value)) return null;
+  if (!/^\d*(?:\.\d{0,4})?$/.test(value)) return null;
   const number = Number(value);
-  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+  const words = Math.round(number * WORD_COUNT_INPUT_UNIT);
+  return Number.isSafeInteger(words) && words >= 0 ? words : null;
+}
+
+function formatWordCountDraft(words: number) {
+  return String(Math.max(0, Math.round(Number(words) || 0)) / WORD_COUNT_INPUT_UNIT);
 }
 
 function normalizeWordControlDraft(values: {
@@ -304,9 +311,9 @@ function OutlineEditPage({
   const [draftOutlineExpansionMode, setDraftOutlineExpansionMode] = useState<OutlineExpansionMode>(outlineExpansionMode);
   const [draftKnowledgeDocumentIds, setDraftKnowledgeDocumentIds] = useState<string[]>(referenceKnowledgeDocumentIds);
   const [draftWordControlEnabled, setDraftWordControlEnabled] = useState(outlineWordControlOptions.enabled);
-  const [draftMinimumWords, setDraftMinimumWords] = useState(String(outlineWordControlOptions.minimumWords));
-  const [draftMaximumWords, setDraftMaximumWords] = useState(String(outlineWordControlOptions.maximumWords));
-  const [draftSectionWords, setDraftSectionWords] = useState(String(outlineWordControlOptions.sectionWords));
+  const [draftMinimumWords, setDraftMinimumWords] = useState(formatWordCountDraft(outlineWordControlOptions.minimumWords));
+  const [draftMaximumWords, setDraftMaximumWords] = useState(formatWordCountDraft(outlineWordControlOptions.maximumWords));
+  const [draftSectionWords, setDraftSectionWords] = useState(formatWordCountDraft(outlineWordControlOptions.sectionWords));
   const [draftStrictSectionWords, setDraftStrictSectionWords] = useState(outlineWordControlOptions.strictSectionWords);
   const [savingOutlineConfig, setSavingOutlineConfig] = useState(false);
   const [developerMode, setDeveloperMode] = useState(false);
@@ -368,9 +375,9 @@ function OutlineEditPage({
 
   const initializeWordControlDraft = () => {
     setDraftWordControlEnabled(outlineWordControlOptions.enabled);
-    setDraftMinimumWords(String(outlineWordControlOptions.minimumWords));
-    setDraftMaximumWords(String(outlineWordControlOptions.maximumWords));
-    setDraftSectionWords(String(outlineWordControlOptions.sectionWords));
+    setDraftMinimumWords(formatWordCountDraft(outlineWordControlOptions.minimumWords));
+    setDraftMaximumWords(formatWordCountDraft(outlineWordControlOptions.maximumWords));
+    setDraftSectionWords(formatWordCountDraft(outlineWordControlOptions.sectionWords));
     setDraftStrictSectionWords(outlineWordControlOptions.strictSectionWords);
   };
 
@@ -488,9 +495,9 @@ function OutlineEditPage({
 
   const applyNormalizedWordControlDraft = (options: OutlineWordControlOptions) => {
     setDraftWordControlEnabled(options.enabled);
-    setDraftMinimumWords(String(options.minimumWords));
-    setDraftMaximumWords(String(options.maximumWords));
-    setDraftSectionWords(String(options.sectionWords));
+    setDraftMinimumWords(formatWordCountDraft(options.minimumWords));
+    setDraftMaximumWords(formatWordCountDraft(options.maximumWords));
+    setDraftSectionWords(formatWordCountDraft(options.sectionWords));
     setDraftStrictSectionWords(options.strictSectionWords);
   };
 
@@ -1279,27 +1286,26 @@ function OutlineEditPage({
                   <div className="outline-word-control-options">
                     <div className="outline-word-control-grid">
                       <label>
-                        <span>最少字数</span>
-                        <input inputMode="numeric" value={draftMinimumWords} onChange={(event) => /^\d*$/.test(event.target.value) && setDraftMinimumWords(event.target.value)} onBlur={() => setDraftMinimumWords(String(parseWordCountDraft(draftMinimumWords) ?? 0))} />
-                        <small>0 代表不限制</small>
+                        <span>最少字数（万）</span>
+                        <input inputMode="decimal" value={draftMinimumWords} onChange={(event) => /^\d*(?:\.\d{0,4})?$/.test(event.target.value) && setDraftMinimumWords(event.target.value)} onBlur={() => setDraftMinimumWords(formatWordCountDraft(parseWordCountDraft(draftMinimumWords) ?? 0))} />
+                        <small>填写 2 表示 2 万字；0 代表不限制</small>
                       </label>
                       <label>
-                        <span>最多字数</span>
-                        <input inputMode="numeric" value={draftMaximumWords} onChange={(event) => /^\d*$/.test(event.target.value) && setDraftMaximumWords(event.target.value)} onBlur={() => setDraftMaximumWords(String(parseWordCountDraft(draftMaximumWords) ?? 0))} />
-                        <small>0 代表不限制</small>
+                        <span>最多字数（万）</span>
+                        <input inputMode="decimal" value={draftMaximumWords} onChange={(event) => /^\d*(?:\.\d{0,4})?$/.test(event.target.value) && setDraftMaximumWords(event.target.value)} onBlur={() => setDraftMaximumWords(formatWordCountDraft(parseWordCountDraft(draftMaximumWords) ?? 0))} />
+                        <small>填写 2 表示 2 万字；0 代表不限制</small>
                       </label>
                       <label>
-                        <span>每小节字数</span>
-                        <input inputMode="numeric" value={draftSectionWords} onChange={(event) => {
-                          if (!/^\d*$/.test(event.target.value)) return;
+                        <span>每小节字数（万）</span>
+                        <input inputMode="decimal" value={draftSectionWords} onChange={(event) => {
+                          if (!/^\d*(?:\.\d{0,4})?$/.test(event.target.value)) return;
                           setDraftSectionWords(event.target.value);
-                          if (!event.target.value || Number(event.target.value) === 0) setDraftStrictSectionWords(false);
                         }} onBlur={() => {
                           const sectionWords = parseWordCountDraft(draftSectionWords) ?? 0;
-                          setDraftSectionWords(String(sectionWords));
+                          setDraftSectionWords(formatWordCountDraft(sectionWords));
                           if (sectionWords === 0) setDraftStrictSectionWords(false);
                         }} />
-                        <small>0 代表不控制小节字数</small>
+                        <small>填写 0.15 表示 1500 字；0 代表不控制小节字数</small>
                       </label>
                     </div>
                     <div className="content-generation-config-row">
