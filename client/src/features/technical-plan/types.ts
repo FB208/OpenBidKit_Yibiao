@@ -89,6 +89,7 @@ export interface BackgroundTaskState {
       section_adjustment_round_total?: number;
       total_adjustment_round?: number;
       total_adjustment_round_total?: number;
+      total_adjustment_mode?: 'expand' | 'shrink' | '';
       total_adjustment_batch_total?: number;
       total_adjustment_batch_completed?: number;
       total_adjustment_batch_failed?: number;
@@ -236,6 +237,8 @@ export interface ContentGenerationRuntimeState {
   word_adjustment_round?: number;
   word_adjustment_item_rounds?: Record<string, number>;
   word_adjustment_completed_item_ids?: string[];
+  word_adjustment_no_progress_rounds?: number;
+  word_adjustment_round_start_words?: number;
   target_item_id?: string;
   regenerate_requirement?: string;
   updated_at?: string;

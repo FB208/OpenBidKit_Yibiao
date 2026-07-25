@@ -371,6 +371,9 @@ function ContentEditPage({
   const sectionAdjustmentCurrentWords = sectionAdjustmentItemId ? outlineMeta.get(sectionAdjustmentItemId)?.words || 0 : 0;
   const totalAdjustmentRound = contentStats?.total_adjustment_round || 0;
   const totalAdjustmentRoundTotal = contentStats?.total_adjustment_round_total || 3;
+  const totalAdjustmentRoundText = contentStats?.total_adjustment_mode === 'expand'
+    ? `第 ${totalAdjustmentRound} 轮`
+    : `第 ${totalAdjustmentRound}/${totalAdjustmentRoundTotal} 轮`;
   const totalAdjustmentBatchTotal = contentStats?.total_adjustment_batch_total || 0;
   const totalAdjustmentBatchCompleted = contentStats?.total_adjustment_batch_completed || 0;
   const totalAdjustmentBatchFailed = contentStats?.total_adjustment_batch_failed || 0;
@@ -486,8 +489,8 @@ function ContentEditPage({
             : `正在进行最终小节复核：${sectionAdjustmentItemId || '当前小节'}，第 ${sectionAdjustmentRound}/${sectionAdjustmentRoundTotal} 轮。`
         : totalWordAdjusting
           ? paused
-            ? `全文字数调整已暂停，当前 ${currentWords} 字，目标 ${wordTargetText}，第 ${totalAdjustmentRound}/${totalAdjustmentRoundTotal} 轮已完成 ${totalAdjustmentBatchCompleted}/${totalAdjustmentBatchTotal} 个小节。`
-            : `正在进行全文字数调整，当前 ${currentWords} 字，目标 ${wordTargetText}，第 ${totalAdjustmentRound}/${totalAdjustmentRoundTotal} 轮已完成 ${totalAdjustmentBatchCompleted}/${totalAdjustmentBatchTotal} 个小节，正在处理 ${totalAdjustmentActiveCount} 个${totalAdjustmentItemId ? `（最近：${totalAdjustmentItemId}）` : ''}${totalAdjustmentBatchFailed ? `，失败 ${totalAdjustmentBatchFailed} 个` : ''}${totalAdjustmentRemainingWords ? `，仍需调整约 ${totalAdjustmentRemainingWords} 字` : ''}。`
+            ? `全文字数调整已暂停，当前 ${currentWords} 字，目标 ${wordTargetText}，${totalAdjustmentRoundText}已完成 ${totalAdjustmentBatchCompleted}/${totalAdjustmentBatchTotal} 个小节。`
+            : `正在进行全文字数调整，当前 ${currentWords} 字，目标 ${wordTargetText}，${totalAdjustmentRoundText}已完成 ${totalAdjustmentBatchCompleted}/${totalAdjustmentBatchTotal} 个小节，正在处理 ${totalAdjustmentActiveCount} 个${totalAdjustmentItemId ? `（最近：${totalAdjustmentItemId}）` : ''}${totalAdjustmentBatchFailed ? `，失败 ${totalAdjustmentBatchFailed} 个` : ''}${totalAdjustmentRemainingWords ? `，仍需调整约 ${totalAdjustmentRemainingWords} 字` : ''}。`
         : originalAuditing
             ? paused
               ? auditAgentMode
