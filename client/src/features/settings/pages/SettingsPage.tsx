@@ -928,7 +928,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         logTitle: '文本模型测试',
       });
       const reply = (content || '').trim();
-      showToast(reply ? `测试成功：${reply.slice(0, 160)}` : '测试成功', 'success');
+      if (!reply) {
+        throw new Error('文本模型测试失败：模型未返回有效内容');
+      }
+      showToast(`测试成功：${reply.slice(0, 160)}`, 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '测试失败', 'error');
     } finally {
