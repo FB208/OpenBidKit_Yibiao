@@ -456,6 +456,15 @@ class PluginService {
   }
 
   /**
+   * 将配置变化通知给当前运行中的对应插件。
+   */
+  async notifyPluginConfigChange(pluginId, change) {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin || typeof plugin.module.onConfigChange !== 'function') return;
+    await plugin.module.onConfigChange(change);
+  }
+
+  /**
    * 启用插件
    */
   async enablePlugin(pluginId) {

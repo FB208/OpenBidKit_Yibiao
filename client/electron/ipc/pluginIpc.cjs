@@ -192,6 +192,7 @@ function registerPluginIpc(ipcMain, app, services) {
       config[key] = value;
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+      await pluginService.notifyPluginConfigChange(pluginId, { key, value });
       
       return true;
     } catch (error) {
