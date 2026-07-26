@@ -486,7 +486,8 @@ class PluginService {
         throw new Error('插件 main.cjs 不存在');
       }
       
-      // 加载插件模块
+      // 每次启用都从磁盘重新加载，避免停用后仍复用旧版 CommonJS 模块。
+      this.clearPluginModuleCache(pluginDir);
       const pluginModule = require(mainPath);
       
       if (typeof pluginModule.activate !== 'function') {
