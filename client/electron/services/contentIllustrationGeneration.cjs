@@ -8,6 +8,7 @@ const { HTML_DESIGN_WIDTH, getLocalImageRenderService } = require('./localImageR
 
 const HTML_AGENT_THRESHOLD_CHARS = 50000;
 const MERMAID_REPAIR_ATTEMPTS = 3;
+const HTML_LAYOUT_REPAIR_ATTEMPTS = 2;
 const GENERATED_ILLUSTRATION_PATTERN = /<!-- yibiao-illustration:start\b[^>]*-->[\s\S]*?<!-- yibiao-illustration:end -->/gi;
 
 function singleLine(value) {
@@ -84,7 +85,7 @@ function buildHtmlImagePrompt(execution) {
   return `阅读并理解以下内容，用html绘制一张${execution.planItem.image_type}。
 最终图题：${title}
 必须围绕最终图题限定的对象、范围和关系重点设计图形，不要生成泛化的章节概览。
-不要有太多文字描述，专业商务风格。这是一个类图片的html，所以注意仔细检查显示效果、文字换行、拥挤等问题。宽度固定${HTML_DESIGN_WIDTH}px，高度自适应。参考内容如下：
+不要有太多文字描述，专业商务风格。这是一个类图片的html，所以注意仔细检查显示效果、文字换行、拥挤等问题。文字不得旋转、倒置、镜像或缩放变形，不得相互重叠、被前景元素遮挡或被容器裁切。不要使用固定或粘性文字布局，文字容器应随内容增长。宽度固定${HTML_DESIGN_WIDTH}px，高度自适应，不依赖在线字体或外部资源。参考内容如下：
 
 ${execution.reference}`;
 }
@@ -98,10 +99,11 @@ function buildHtmlAgentPrompt(execution) {
 要求：
 1. 必须围绕最终图题限定的对象、范围和关系重点设计图形，不要生成泛化的章节概览。
 2. 不要有太多文字描述，使用专业商务风格。
-3. 这是一个类图片的 HTML，必须仔细检查显示效果、文字换行和内容拥挤问题。
-  4. 页面宽度固定为 ${HTML_DESIGN_WIDTH}px，高度自适应。
-5. 生成完整 HTML 文档，包含 html、head、body，不依赖本地文件。
-6. 只创建 illustration.html，不要修改 reference.md，不要创建其他结果文件。`;
+3. 这是一个类图片的 HTML，必须仔细检查显示效果、文字换行和内容拥挤问题；文字不得旋转、倒置、镜像或缩放变形，不得相互重叠、被前景元素遮挡或被容器裁切。
+4. 不要使用固定或粘性文字布局，文字容器应随内容增长；不依赖在线字体或外部资源。
+5. 页面宽度固定为 ${HTML_DESIGN_WIDTH}px，高度自适应。
+6. 生成完整 HTML 文档，包含 html、head、body，不依赖本地文件。
+7. 只创建 illustration.html，不要修改 reference.md，不要创建其他结果文件。`;
 }
 
 function buildMermaidGenerationMessages(execution) {
@@ -263,21 +265,26 @@ async function generateMermaidIllustration(aiService, execution, isPauseLikeErro
 }
 
 // 本地将 HTML 截取为 PNG，失败按统一策略重试。
-async function requestHtmlScreenshot(html, onRetry, pauseControl = {}) {
+async function requestHtmlScreenshot(html, onRetry, pauseControl = {}, localImageRenderService = getLocalImageRenderService()) {
   let requestAttempts = 0;
   const result = await runWithRemoteImageRetry(async (attempt) => {
     requestAttempts = attempt;
     if (pauseControl.isPauseRequested?.()) {
       throw pauseControl.createPauseError?.() || new Error('HTML 转图已暂停');
     }
-    const rendered = await getLocalImageRenderService().renderHtmlToPng(html, {
+    const rendered = await localImageRenderService.renderHtmlToPng(html, {
       isPauseRequested: pauseControl.isPauseRequested,
       createPauseError: pauseControl.createPauseError,
     });
     if (!rendered?.buffer?.length || rendered.buffer.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') {
       throw new Error('HTML 本地转图片失败：未生成有效 PNG');
     }
-    return { buffer: rendered.buffer, width: rendered.width, height: rendered.height };
+    return {
+      buffer: rendered.buffer,
+      width: rendered.width,
+      height: rendered.height,
+      layout_issues: Array.isArray(rendered.layout_issues) ? rendered.layout_issues : [],
+    };
   }, {
     onRetry,
     shouldStop: pauseControl.isPauseRequested,
@@ -286,8 +293,43 @@ async function requestHtmlScreenshot(html, onRetry, pauseControl = {}) {
   return { ...result, attempts: requestAttempts };
 }
 
+function getHtmlLayoutIssues(screenshot) {
+  const width = Number(screenshot?.width) || 0;
+  const height = Number(screenshot?.height) || 0;
+  const issues = Array.isArray(screenshot?.layout_issues)
+    ? screenshot.layout_issues.map((issue) => String(issue || '').trim()).filter(Boolean)
+    : [];
+  if (width > HTML_DESIGN_WIDTH + 4) issues.push(`出现横向溢出：实际宽度 ${width}px，设计宽度 ${HTML_DESIGN_WIDTH}px`);
+  if (height <= 0) issues.push('截图高度无效');
+  return [...new Set(issues)];
+}
+
+function buildHtmlLayoutRepairPrompt(execution, html, issues, attempt) {
+  return `请修复以下用于投标文件的 HTML 图片布局。\n最终图题：${getPlannedTitle(execution)}\n修复轮次：${attempt}/${HTML_LAYOUT_REPAIR_ATTEMPTS}\n渲染诊断：${issues.join('；')}\n\n要求：保持图题和正文事实不变；宽度固定 ${HTML_DESIGN_WIDTH}px；禁止横向溢出、文字拥挤、重叠、遮挡和截断；文字不得旋转、倒置、镜像或缩放变形；不要使用固定或粘性文字布局，文字容器应随内容增长；保留专业商务风格；输出完整 HTML 文档且不依赖网络、本地文件、在线字体或外部资源。\n\n当前 HTML：\n${String(html || '').slice(0, 60000)}`;
+}
+
+async function repairHtmlLayout({ aiService, execution, html, issues, attempt, mode, runAgentHtml }) {
+  const prompt = buildHtmlLayoutRepairPrompt(execution, html, issues, attempt);
+  if (mode === 'agent') {
+    const repaired = await runAgentHtml({
+      title: `HTML配图布局修复-${execution.planItem.item_id}-${getPlannedTitle(execution)}`,
+      prompt,
+      outputFile: 'illustration.html',
+      files: [{ path: 'reference.md', content: execution.reference }],
+      validateOutput: (result) => validateHtmlCode(result?.output_content || ''),
+    });
+    return validateHtmlCode(repaired);
+  }
+  const response = await aiService.chat({
+    messages: [{ role: 'user', content: `${prompt}\n\n仅返回 html 代码，不要返回其他内容。` }],
+    temperature: 0.1,
+    logTitle: `HTML配图布局修复-${execution.planItem.item_id}-${getPlannedTitle(execution)}`,
+  });
+  return validateHtmlCode(response);
+}
+
 // 生成 HTML 源文件并本地转换为 PNG。
-async function generateHtmlIllustrationInternal({ aiService, execution, plan, workspaceStore, runAgentHtml, onSourceSaved, onRenderRetry, isPauseRequested, createPauseError }) {
+async function generateHtmlIllustrationInternal({ aiService, execution, plan, workspaceStore, localImageRenderService, runAgentHtml, onSourceSaved, onRenderRetry, isPauseRequested, createPauseError }) {
   const recordedPath = execution.planItem.generation?.source_path;
   let sourcePath = recordedPath;
   let html = sourcePath ? workspaceStore.readIllustrationHtml(sourcePath) : '';
@@ -299,7 +341,7 @@ async function generateHtmlIllustrationInternal({ aiService, execution, plan, wo
     }
   }
   const mode = execution.reference.length > HTML_AGENT_THRESHOLD_CHARS ? 'agent' : 'normal';
-  const sourceAlreadyPersisted = Boolean(html && sourcePath && sourcePath === recordedPath);
+  let sourceAlreadyPersisted = Boolean(html && sourcePath && sourcePath === recordedPath);
   if (!html) {
     if (mode === 'agent') {
       html = await runAgentHtml({
@@ -320,23 +362,45 @@ async function generateHtmlIllustrationInternal({ aiService, execution, plan, wo
     html = validateHtmlCode(html);
   }
 
-  const savedHtml = workspaceStore.saveIllustrationHtml({ revision: plan.revision, itemId: execution.planItem.item_id, content: html });
-  if (!sourceAlreadyPersisted) {
-    onSourceSaved?.({ mode, source_path: savedHtml.relativePath });
-  }
+  let savedHtml;
   let screenshot;
-  try {
-    screenshot = await requestHtmlScreenshot(html, onRenderRetry, { isPauseRequested, createPauseError });
-  } catch (error) {
-    error.illustrationGeneration = { mode, source_path: savedHtml.relativePath };
-    throw error;
+  let layoutIssues = [];
+  let layoutRepairAttempts = 0;
+  while (layoutRepairAttempts <= HTML_LAYOUT_REPAIR_ATTEMPTS) {
+    savedHtml = workspaceStore.saveIllustrationHtml({ revision: plan.revision, itemId: execution.planItem.item_id, content: html });
+    if (!sourceAlreadyPersisted || layoutRepairAttempts > 0) {
+      onSourceSaved?.({ mode, source_path: savedHtml.relativePath });
+    }
+    try {
+      screenshot = await requestHtmlScreenshot(html, onRenderRetry, { isPauseRequested, createPauseError }, localImageRenderService);
+    } catch (error) {
+      error.illustrationGeneration = { mode, source_path: savedHtml.relativePath };
+      throw error;
+    }
+    layoutIssues = getHtmlLayoutIssues(screenshot);
+    if (!layoutIssues.length) break;
+    if (layoutRepairAttempts >= HTML_LAYOUT_REPAIR_ATTEMPTS) {
+      const error = new Error(`HTML 图片布局质检未通过：${layoutIssues.join('；')}`);
+      error.illustrationGeneration = { mode, source_path: savedHtml.relativePath };
+      throw error;
+    }
+    layoutRepairAttempts += 1;
+    html = await repairHtmlLayout({ aiService, execution, html, issues: layoutIssues, attempt: layoutRepairAttempts, mode, runAgentHtml });
+    sourceAlreadyPersisted = false;
   }
   const savedPng = workspaceStore.saveIllustrationPng({ revision: plan.revision, itemId: execution.planItem.item_id, buffer: screenshot.buffer });
   return {
     mode,
     source_path: savedHtml.relativePath,
     asset_url: savedPng.assetUrl,
-    attempts: screenshot.attempts,
+    attempts: screenshot.attempts + layoutRepairAttempts,
+    visual_qa: {
+      status: 'needs-manual-review',
+      reason: '已完成完整 HTML、PNG、画布溢出、文字变形、文字重叠、前景遮挡和裁切检查；请人工核对图题与正文事实一致性。',
+      width: screenshot.width,
+      height: screenshot.height,
+      layout_repair_attempts: layoutRepairAttempts,
+    },
   };
 }
 
@@ -417,6 +481,7 @@ function applyGeneratedIllustrationsToDocument(plan, outlineData, sections) {
 
 module.exports = {
   HTML_AGENT_THRESHOLD_CHARS,
+  HTML_LAYOUT_REPAIR_ATTEMPTS,
   applyGeneratedIllustrationsToDocument,
   buildAiImagePrompt,
   buildHtmlImagePrompt,
