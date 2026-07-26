@@ -363,31 +363,66 @@ async function generateHtmlIllustrationInternal({ aiService, execution, plan, wo
   }
 
   let savedHtml;
-  let screenshot;
   let layoutIssues = [];
   let layoutRepairAttempts = 0;
+  let probeResult;
+  
+  // 修复循环：只做质检，不截图
   while (layoutRepairAttempts <= HTML_LAYOUT_REPAIR_ATTEMPTS) {
     savedHtml = workspaceStore.saveIllustrationHtml({ revision: plan.revision, itemId: execution.planItem.item_id, content: html });
     if (!sourceAlreadyPersisted || layoutRepairAttempts > 0) {
       onSourceSaved?.({ mode, source_path: savedHtml.relativePath });
     }
+    
+    // 只做质检，不生成 PNG
     try {
-      screenshot = await requestHtmlScreenshot(html, onRenderRetry, { isPauseRequested, createPauseError }, localImageRenderService);
+      probeResult = await localImageRenderService.probeHtmlLayoutOnly(html, {
+        isPauseRequested,
+        createPauseError,
+      });
     } catch (error) {
       error.illustrationGeneration = { mode, source_path: savedHtml.relativePath };
       throw error;
     }
-    layoutIssues = getHtmlLayoutIssues(screenshot);
+    
+    // 提取质检结果（包括宽度检查）
+    layoutIssues = [];
+    if (Array.isArray(probeResult.layout_issues)) {
+      layoutIssues.push(...probeResult.layout_issues.map(issue => String(issue || '').trim()).filter(Boolean));
+    }
+    if (probeResult.width > HTML_DESIGN_WIDTH + 4) {
+      layoutIssues.push(`出现横向溢出：实际宽度 ${probeResult.width}px，设计宽度 ${HTML_DESIGN_WIDTH}px`);
+    }
+    if (probeResult.height <= 0) {
+      layoutIssues.push('截图高度无效');
+    }
+    layoutIssues = [...new Set(layoutIssues)];
+    
+    // 质检通过，退出循环
     if (!layoutIssues.length) break;
+    
+    // 达到最大修复次数，抛出错误
     if (layoutRepairAttempts >= HTML_LAYOUT_REPAIR_ATTEMPTS) {
       const error = new Error(`HTML 图片布局质检未通过：${layoutIssues.join('；')}`);
       error.illustrationGeneration = { mode, source_path: savedHtml.relativePath };
       throw error;
     }
+    
+    // 修复 HTML
     layoutRepairAttempts += 1;
     html = await repairHtmlLayout({ aiService, execution, html, issues: layoutIssues, attempt: layoutRepairAttempts, mode, runAgentHtml });
     sourceAlreadyPersisted = false;
   }
+  
+  // 质检通过后，生成最终 PNG（只截一次图）
+  let screenshot;
+  try {
+    screenshot = await requestHtmlScreenshot(html, onRenderRetry, { isPauseRequested, createPauseError }, localImageRenderService);
+  } catch (error) {
+    error.illustrationGeneration = { mode, source_path: savedHtml.relativePath };
+    throw error;
+  }
+  
   const savedPng = workspaceStore.saveIllustrationPng({ revision: plan.revision, itemId: execution.planItem.item_id, buffer: screenshot.buffer });
   return {
     mode,

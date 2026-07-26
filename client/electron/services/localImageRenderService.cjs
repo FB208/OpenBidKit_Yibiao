@@ -705,6 +705,35 @@ function createLocalImageRenderService({ configStore } = {}) {
     });
   }
 
+  // 只做 HTML 渲染和布局质检，不生成 PNG
+  async function probeHtmlLayoutOnly(html, options = {}) {
+    return runHtml(async () => {
+      throwIfPaused(options, 'HTML 质检已暂停');
+      const documentHtml = buildHtmlDocument(html);
+      const win = createRenderWindow(HTML_DESIGN_WIDTH, 900);
+      try {
+        await withTimeout(
+          loadHtmlDocument(win, documentHtml, HTML_RENDER_TIMEOUT_MS, options),
+          HTML_RENDER_TIMEOUT_MS,
+          'HTML 页面加载超时',
+        );
+        throwIfPaused(options, 'HTML 质检已暂停');
+        await setDeviceMetrics(win.webContents, HTML_DESIGN_WIDTH, 900);
+        const metrics = await withTimeout(
+          waitForLayoutReady(win.webContents, HTML_RENDER_TIMEOUT_MS, HTML_DESIGN_WIDTH, options),
+          HTML_RENDER_TIMEOUT_MS,
+          'HTML 布局等待超时',
+        );
+        const width = Math.max(HTML_DESIGN_WIDTH, Math.ceil(metrics.width || 0));
+        const height = Math.max(1, Math.ceil(metrics.height || 0));
+        const layoutIssues = await probeHtmlLayoutIssues(win.webContents);
+        return { width, height, layout_issues: layoutIssues };
+      } finally {
+        destroyWindow(win);
+      }
+    });
+  }
+
   // 本地将 HTML 按设计宽度完整截取为 PNG（导出 Word 时再缩放）。
   async function renderHtmlToPng(html, options = {}) {
     return runHtml(async () => {
@@ -740,6 +769,7 @@ function createLocalImageRenderService({ configStore } = {}) {
   return {
     renderMermaidToPng,
     renderHtmlToPng,
+    probeHtmlLayoutOnly,
     wordFriendlyRenderWidth: WORD_FRIENDLY_RENDER_WIDTH,
     htmlDesignWidth: HTML_DESIGN_WIDTH,
   };
