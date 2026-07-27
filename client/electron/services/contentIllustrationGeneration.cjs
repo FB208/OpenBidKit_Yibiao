@@ -363,17 +363,19 @@ async function generateHtmlIllustrationInternal({ aiService, execution, plan, wo
   }
 
   let savedHtml;
-  let layoutIssues = [];
   let layoutRepairAttempts = 0;
   let probeResult;
-  
-  // 修复循环：只做质检，不截图
-  while (layoutRepairAttempts <= HTML_LAYOUT_REPAIR_ATTEMPTS) {
+
+  // 修复循环：最多质检 HTML_LAYOUT_REPAIR_ATTEMPTS 次并修复；达到上限后直接截图按成功处理
+  while (true) {
     savedHtml = workspaceStore.saveIllustrationHtml({ revision: plan.revision, itemId: execution.planItem.item_id, content: html });
     if (!sourceAlreadyPersisted || layoutRepairAttempts > 0) {
       onSourceSaved?.({ mode, source_path: savedHtml.relativePath });
     }
-    
+
+    // 已达最大修复次数，跳过质检直接截图
+    if (layoutRepairAttempts >= HTML_LAYOUT_REPAIR_ATTEMPTS) break;
+
     // 只做质检，不生成 PNG
     try {
       probeResult = await localImageRenderService.probeHtmlLayoutOnly(html, {
@@ -384,33 +386,25 @@ async function generateHtmlIllustrationInternal({ aiService, execution, plan, wo
       error.illustrationGeneration = { mode, source_path: savedHtml.relativePath };
       throw error;
     }
-    
+
     // 提取质检结果（包括宽度检查）
-    layoutIssues = [];
+    const layoutIssues = [];
     if (Array.isArray(probeResult.layout_issues)) {
       layoutIssues.push(...probeResult.layout_issues.map(issue => String(issue || '').trim()).filter(Boolean));
     }
-    if (probeResult.width > HTML_DESIGN_WIDTH + 4) {
+    if (probeResult.width > HTML_DESIGN_WIDTH + 1) {
       layoutIssues.push(`出现横向溢出：实际宽度 ${probeResult.width}px，设计宽度 ${HTML_DESIGN_WIDTH}px`);
     }
     if (probeResult.height <= 0) {
       layoutIssues.push('截图高度无效');
     }
-    layoutIssues = [...new Set(layoutIssues)];
-    
+
     // 质检通过，退出循环
     if (!layoutIssues.length) break;
-    
-    // 达到最大修复次数，抛出错误
-    if (layoutRepairAttempts >= HTML_LAYOUT_REPAIR_ATTEMPTS) {
-      const error = new Error(`HTML 图片布局质检未通过：${layoutIssues.join('；')}`);
-      error.illustrationGeneration = { mode, source_path: savedHtml.relativePath };
-      throw error;
-    }
-    
+
     // 修复 HTML
     layoutRepairAttempts += 1;
-    html = await repairHtmlLayout({ aiService, execution, html, issues: layoutIssues, attempt: layoutRepairAttempts, mode, runAgentHtml });
+    html = await repairHtmlLayout({ aiService, execution, html, issues: [...new Set(layoutIssues)], attempt: layoutRepairAttempts, mode, runAgentHtml });
     sourceAlreadyPersisted = false;
   }
   

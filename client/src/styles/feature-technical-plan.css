@@ -2624,10 +2624,23 @@
   border-radius: 12px;
 }
 
-.outline-word-control-grid small,
+.outline-word-control-help,
 .outline-word-control-estimate small {
   color: var(--yb-text-muted);
   font-size: 12px;
+}
+
+.outline-word-control-help {
+  display: grid;
+  gap: 3px;
+  line-height: 1.55;
+}
+
+.outline-word-control-highlight {
+  padding: 1px 4px;
+  color: #9a4c00;
+  background: rgba(255, 190, 92, 0.22);
+  border-radius: 4px;
 }
 
 .outline-word-control-estimate {

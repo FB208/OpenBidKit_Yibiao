@@ -1288,12 +1288,10 @@ function OutlineEditPage({
                       <label>
                         <span>最少字数（万）</span>
                         <input inputMode="decimal" value={draftMinimumWords} onChange={(event) => /^\d*(?:\.\d{0,4})?$/.test(event.target.value) && setDraftMinimumWords(event.target.value)} onBlur={() => setDraftMinimumWords(formatWordCountDraft(parseWordCountDraft(draftMinimumWords) ?? 0))} />
-                        <small>填写 2 表示 2 万字；0 代表不限制</small>
                       </label>
                       <label>
                         <span>最多字数（万）</span>
                         <input inputMode="decimal" value={draftMaximumWords} onChange={(event) => /^\d*(?:\.\d{0,4})?$/.test(event.target.value) && setDraftMaximumWords(event.target.value)} onBlur={() => setDraftMaximumWords(formatWordCountDraft(parseWordCountDraft(draftMaximumWords) ?? 0))} />
-                        <small>填写 2 表示 2 万字；0 代表不限制</small>
                       </label>
                       <label>
                         <span>每小节字数（万）</span>
@@ -1303,11 +1301,14 @@ function OutlineEditPage({
                         }} onBlur={() => {
                           const sectionWords = parseWordCountDraft(draftSectionWords) ?? 0;
                           setDraftSectionWords(formatWordCountDraft(sectionWords));
-                          if (sectionWords === 0) setDraftStrictSectionWords(false);
-                        }} />
-                        <small>填写 0.15 表示 1500 字；0 代表不控制小节字数</small>
+                           if (sectionWords === 0) setDraftStrictSectionWords(false);
+                         }} />
                       </label>
                     </div>
+                    <small className="outline-word-control-help">
+                      <span>填2代表20000字，0.15代表1500字，默认0表示不控制，AI默认生成多少就是多少。</span>
+                      <span>如果<strong className="outline-word-control-highlight">您使用的不是gpt-5.6-sol</strong>，推荐按照您模型的能力上限填写每小节字数，否则扩写过程会非常漫长。</span>
+                    </small>
                     <div className="content-generation-config-row">
                       <span>
                         <strong>强控小节字数</strong>
