@@ -24,6 +24,12 @@ const {
 const textTokenStatsStore = require('./textTokenStatsStore.cjs');
 
 const AI_REQUEST_TIMEOUT_MS = 600000;
+
+// 金龙中转站废弃模型映射：使用这些模型时自动切换到替代模型
+const JINLONG_DEPRECATED_MODEL_MAP = {
+  'codex-auto-review': 'gpt-5.6-terra',
+  'gpt-5.6-luna': 'gpt-5.6-terra',
+};
 const IMAGE_MODEL_TEST_TIMEOUT_MESSAGE = '生图模型测试超时，请检查 Base URL、API Key 或模型名称';
 const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const ANALYTICS_PROJECT_NAME = 'yibiao-client';
@@ -781,8 +787,9 @@ async function collectJsonResponseWithConfig(app, config, request) {
 }
 
 function createChatRequestBody(config, request, options = {}) {
+  const modelName = JINLONG_DEPRECATED_MODEL_MAP[config.model_name] || config.model_name;
   const body = {
-    model: config.model_name,
+    model: modelName,
     messages: request.messages,
   };
 
@@ -1910,7 +1917,9 @@ function createAiService({ app, configStore }) {
       return {
         success: true,
         message: '模型列表已更新',
-        models: Array.isArray(data.data) ? data.data.map((item) => item.id).filter(Boolean) : [],
+        models: Array.isArray(data.data) 
+          ? data.data.map((item) => item.id).filter(Boolean).filter(id => !Object.keys(JINLONG_DEPRECATED_MODEL_MAP).includes(id))
+          : [],
       };
     },
   };
