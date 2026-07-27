@@ -1,6 +1,9 @@
 import { state } from './state.js';
 
 const productionApiBase = 'https://analytics.agnet.top';
+const projectOptionsCacheTtl = 60_000;
+let projectOptionsLoadedAt = 0;
+let projectOptionsRequest = null;
 
 function isLocalDashboard() {
   return ['localhost', '127.0.0.1', ''].includes(window.location.hostname) || window.location.protocol === 'file:';
@@ -124,16 +127,30 @@ export async function requestFormData(path, formData, options = {}) {
 }
 
 export async function loadProjectOptions() {
-  try {
-    const data = await requestJson('/api/projects');
-    state.projectOptions.innerHTML = '';
-
-    for (const project of data.projects || []) {
-      const option = document.createElement('option');
-      option.value = project;
-      state.projectOptions.appendChild(option);
-    }
-  } catch {
-    // 项目列表只是输入提示，失败不影响按项目名查询。
+  if (Date.now() - projectOptionsLoadedAt < projectOptionsCacheTtl) {
+    return;
   }
+  if (projectOptionsRequest) {
+    return projectOptionsRequest;
+  }
+
+  projectOptionsRequest = (async () => {
+    try {
+      const data = await requestJson('/api/projects');
+      state.projectOptions.innerHTML = '';
+
+      for (const project of data.projects || []) {
+        const option = document.createElement('option');
+        option.value = project;
+        state.projectOptions.appendChild(option);
+      }
+      projectOptionsLoadedAt = Date.now();
+    } catch {
+      // 项目列表只是输入提示，失败不影响按项目名查询。
+    } finally {
+      projectOptionsRequest = null;
+    }
+  })();
+
+  return projectOptionsRequest;
 }

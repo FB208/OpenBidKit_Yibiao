@@ -28,6 +28,21 @@ const tabLoaders = {
   plugins: () => loadPlugins(),
 };
 
+const dataTabCacheTtl = 60_000;
+const cacheableTabs = new Set(['overview', 'clients', 'ips', 'traffic', 'config', 'models', 'agent', 'latest']);
+const tabLoadedAt = new Map();
+
+// 判断统计页现有内容是否仍可直接复用。
+function isTabCacheFresh(tab) {
+  return cacheableTabs.has(tab) && Date.now() - (tabLoadedAt.get(tab) || 0) < dataTabCacheTtl;
+}
+
+// 数据源变化后清空统计页缓存，避免展示上一项目或上一凭据的数据。
+function saveSettingsAndClearCache() {
+  saveSettings();
+  tabLoadedAt.clear();
+}
+
 function getLatestTotalPages() {
   return Math.max(1, Math.ceil(appState.latestTotal / appState.latestPageSize));
 }
@@ -43,7 +58,7 @@ function jumpLatestPage() {
   }
 
   appState.latestPage = Math.min(Math.max(1, Math.floor(value)), getLatestTotalPages());
-  void refreshActiveTab();
+  void refreshActiveTab({ forceRefresh: true });
 }
 
 function jumpIpPage() {
@@ -53,17 +68,28 @@ function jumpIpPage() {
   }
 
   appState.ipPage = Math.min(Math.max(1, Math.floor(value)), getIpTotalPages());
-  void refreshActiveTab();
+  void refreshActiveTab({ forceRefresh: true });
 }
 
 async function refreshActiveTab(options = {}) {
   setError('');
+  const activeTab = appState.activeTab;
+  if (!options.forceRefresh && isTabCacheFresh(activeTab)) {
+    setStatus('ok', '已连接');
+    updateLatestPager();
+    updateIpPager();
+    return;
+  }
+
   setStatus('', '加载中');
   state.refreshButton.disabled = true;
 
   try {
-    const loader = tabLoaders[appState.activeTab] || tabLoaders.overview;
+    const loader = tabLoaders[activeTab] || tabLoaders.overview;
     await loader(options);
+    if (cacheableTabs.has(activeTab)) {
+      tabLoadedAt.set(activeTab, Date.now());
+    }
     setStatus('ok', '已连接');
   } catch (error) {
     setStatus('error', '连接失败');
@@ -76,7 +102,7 @@ async function refreshActiveTab(options = {}) {
 }
 
 function bindEvents() {
-  state.refreshButton.addEventListener('click', () => refreshActiveTab({ resetLatestPage: true, resetIpPage: true }));
+  state.refreshButton.addEventListener('click', () => refreshActiveTab({ resetLatestPage: true, resetIpPage: true, forceRefresh: true }));
   state.loadNoticeButton.addEventListener('click', () => loadNotice().catch(() => undefined));
   state.publishNoticeButton.addEventListener('click', publishNotice);
   state.disableNoticeButton.addEventListener('click', disableNotice);
@@ -88,11 +114,11 @@ function bindEvents() {
   setupPluginsPage();
   state.prevLatestPage.addEventListener('click', () => {
     appState.latestPage = Math.max(1, appState.latestPage - 1);
-    void refreshActiveTab();
+    void refreshActiveTab({ forceRefresh: true });
   });
   state.nextLatestPage.addEventListener('click', () => {
     appState.latestPage += 1;
-    void refreshActiveTab();
+    void refreshActiveTab({ forceRefresh: true });
   });
   state.jumpLatestPage.addEventListener('click', jumpLatestPage);
   state.latestPageInput.addEventListener('keydown', (event) => {
@@ -102,11 +128,11 @@ function bindEvents() {
   });
   state.prevIpPage.addEventListener('click', () => {
     appState.ipPage = Math.max(1, appState.ipPage - 1);
-    void refreshActiveTab();
+    void refreshActiveTab({ forceRefresh: true });
   });
   state.nextIpPage.addEventListener('click', () => {
     appState.ipPage += 1;
-    void refreshActiveTab();
+    void refreshActiveTab({ forceRefresh: true });
   });
   state.jumpIpPage.addEventListener('click', jumpIpPage);
   state.ipPageInput.addEventListener('keydown', (event) => {
@@ -122,18 +148,18 @@ function bindEvents() {
     });
   }
 
-  state.apiBase.addEventListener('change', saveSettings);
-  state.adminToken.addEventListener('change', saveSettings);
+  state.apiBase.addEventListener('change', saveSettingsAndClearCache);
+  state.adminToken.addEventListener('change', saveSettingsAndClearCache);
   state.rememberToken.addEventListener('change', saveSettings);
-  state.projectName.addEventListener('change', saveSettings);
-  state.trafficRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
-  state.configRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
-  state.modelRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
-  state.agentRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
-  state.modelProviderFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
-  state.modelEndpointFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
-  state.modelNameFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
-  state.latestEventFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true }));
+  state.projectName.addEventListener('change', saveSettingsAndClearCache);
+  state.trafficRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
+  state.configRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
+  state.modelRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
+  state.agentRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
+  state.modelProviderFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
+  state.modelEndpointFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
+  state.modelNameFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
+  state.latestEventFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
   state.closeClientDetail.addEventListener('click', () => state.clientDetailDialog.close());
   state.clientDetailRange.addEventListener('change', () => loadClientDetail().catch((error) => setError(error?.message || String(error))));
 }
