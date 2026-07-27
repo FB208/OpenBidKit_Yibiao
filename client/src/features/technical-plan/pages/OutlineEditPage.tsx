@@ -83,7 +83,6 @@ function formatWordCountDraft(words: number) {
 }
 
 function normalizeWordControlDraft(values: {
-  enabled: boolean;
   minimumWords: string;
   maximumWords: string;
   sectionWords: string;
@@ -96,13 +95,11 @@ function normalizeWordControlDraft(values: {
     throw new Error('字数设置只允许填写非负整数');
   }
   const options: OutlineWordControlOptions = {
-    enabled: values.enabled,
     minimumWords,
     maximumWords,
     sectionWords,
     strictSectionWords: sectionWords > 0 && values.strictSectionWords,
   };
-  if (!options.enabled) return options;
   if (minimumWords > 0 && maximumWords > 0 && maximumWords < minimumWords) {
     throw new Error('最多字数不能低于最少字数');
   }
@@ -127,7 +124,6 @@ function getEstimatedPages(minimumWords: number, maximumWords: number) {
 
 function areWordControlOptionsEqual(left?: OutlineWordControlOptions, right?: OutlineWordControlOptions) {
   return Boolean(left && right
-    && left.enabled === right.enabled
     && left.minimumWords === right.minimumWords
     && left.maximumWords === right.maximumWords
     && left.sectionWords === right.sectionWords
@@ -310,7 +306,6 @@ function OutlineEditPage({
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
   const [draftOutlineExpansionMode, setDraftOutlineExpansionMode] = useState<OutlineExpansionMode>(outlineExpansionMode);
   const [draftKnowledgeDocumentIds, setDraftKnowledgeDocumentIds] = useState<string[]>(referenceKnowledgeDocumentIds);
-  const [draftWordControlEnabled, setDraftWordControlEnabled] = useState(outlineWordControlOptions.enabled);
   const [draftMinimumWords, setDraftMinimumWords] = useState(formatWordCountDraft(outlineWordControlOptions.minimumWords));
   const [draftMaximumWords, setDraftMaximumWords] = useState(formatWordCountDraft(outlineWordControlOptions.maximumWords));
   const [draftSectionWords, setDraftSectionWords] = useState(formatWordCountDraft(outlineWordControlOptions.sectionWords));
@@ -363,9 +358,8 @@ function OutlineEditPage({
   const parsedDraftMinimumWords = parseWordCountDraft(draftMinimumWords) ?? 0;
   const parsedDraftMaximumWords = parseWordCountDraft(draftMaximumWords) ?? 0;
   const parsedDraftSectionWords = parseWordCountDraft(draftSectionWords) ?? 0;
-  const estimatedPages = draftWordControlEnabled ? getEstimatedPages(parsedDraftMinimumWords, parsedDraftMaximumWords) : null;
+  const estimatedPages = getEstimatedPages(parsedDraftMinimumWords, parsedDraftMaximumWords);
   const normalizedDraftOptions: OutlineWordControlOptions = {
-    enabled: draftWordControlEnabled,
     minimumWords: parsedDraftMinimumWords,
     maximumWords: parsedDraftMaximumWords,
     sectionWords: parsedDraftSectionWords,
@@ -374,7 +368,6 @@ function OutlineEditPage({
   const configurationRequiresRegeneration = Boolean(outlineData && !areWordControlOptionsEqual(normalizedDraftOptions, outlineWordControlSnapshot));
 
   const initializeWordControlDraft = () => {
-    setDraftWordControlEnabled(outlineWordControlOptions.enabled);
     setDraftMinimumWords(formatWordCountDraft(outlineWordControlOptions.minimumWords));
     setDraftMaximumWords(formatWordCountDraft(outlineWordControlOptions.maximumWords));
     setDraftSectionWords(formatWordCountDraft(outlineWordControlOptions.sectionWords));
@@ -486,7 +479,6 @@ function OutlineEditPage({
   };
 
   const getNormalizedWordControlOptions = () => normalizeWordControlDraft({
-    enabled: draftWordControlEnabled,
     minimumWords: draftMinimumWords,
     maximumWords: draftMaximumWords,
     sectionWords: draftSectionWords,
@@ -494,7 +486,6 @@ function OutlineEditPage({
   });
 
   const applyNormalizedWordControlDraft = (options: OutlineWordControlOptions) => {
-    setDraftWordControlEnabled(options.enabled);
     setDraftMinimumWords(formatWordCountDraft(options.minimumWords));
     setDraftMaximumWords(formatWordCountDraft(options.maximumWords));
     setDraftSectionWords(formatWordCountDraft(options.sectionWords));
@@ -551,7 +542,7 @@ function OutlineEditPage({
       });
       trackConfigUsage({
         outline_mode: isExpansionWorkflow ? nextOutlineExpansionMode : 'aligned',
-        word_control_enabled: wordControlOptions.enabled,
+        word_control_enabled: wordControlOptions.minimumWords > 0 || wordControlOptions.maximumWords > 0 || wordControlOptions.sectionWords > 0,
         minimum_words: wordControlOptions.minimumWords,
         maximum_words: wordControlOptions.maximumWords,
         section_words: wordControlOptions.sectionWords,
@@ -1250,39 +1241,37 @@ function OutlineEditPage({
             <Dialog.Title className="sr-only">{outlineData ? '重新生成目录' : '生成目录'}</Dialog.Title>
             <Dialog.Description className="sr-only">选择本次目录生成方式、字数控制和参考知识库。</Dialog.Description>
 
-            <div className={`outline-generation-config-body${isExpansionWorkflow ? ' has-expansion-mode' : ''}${developerMode ? ' has-dev-tools' : ''}`}>
-              {renderOutlineExpansionModePicker()}
-              {developerMode && (
-                <section className="outline-generation-config-section outline-agent-debug-section">
-                  <label className="outline-agent-debug-option">
-                    <span>
-                      <strong>强制 Agent 修复目录</strong>
-                      <small>本次目录生成会在最终保存前强制进入智能体修复链路，用于验证 Agent workspace、结果 JSON 和程序校验。</small>
-                    </span>
-                    <span className="yb-switch-control">
-                      <input
-                        type="checkbox"
-                        checked={draftForceOutlineAgentRepair}
-                        onChange={(event) => setDraftForceOutlineAgentRepair(event.target.checked)}
-                      />
-                      <span className="yb-switch-track" aria-hidden="true">
-                        <span className="yb-switch-thumb" />
+            <div className="outline-generation-config-body">
+              {/* 左栏：所有配置项 */}
+              <div className="outline-generation-config-left">
+                {renderOutlineExpansionModePicker()}
+                {developerMode && (
+                  <section className="outline-generation-config-section outline-agent-debug-section">
+                    <label className="outline-agent-debug-option">
+                      <span>
+                        <strong>强制 Agent 修复目录</strong>
+                        <small>本次目录生成会在最终保存前强制进入智能体修复链路，用于验证 Agent workspace、结果 JSON 和程序校验。</small>
                       </span>
+                      <span className="yb-switch-control">
+                        <input
+                          type="checkbox"
+                          checked={draftForceOutlineAgentRepair}
+                          onChange={(event) => setDraftForceOutlineAgentRepair(event.target.checked)}
+                        />
+                        <span className="yb-switch-track" aria-hidden="true">
+                          <span className="yb-switch-thumb" />
+                        </span>
+                      </span>
+                    </label>
+                  </section>
+                )}
+                <section className="outline-generation-config-section outline-word-control-section">
+                  <div className="content-generation-config-row">
+                    <span>
+                      <strong>全文字数/页数预设</strong>
+                      <small>在目录生成阶段，就要预设好全文生成的字数，默认0表示不控制</small>
                     </span>
-                  </label>
-                </section>
-              )}
-              <section className="outline-generation-config-section outline-word-control-section">
-                <div className="content-generation-config-row">
-                  <span>
-                    <strong>控制字数</strong>
-                    <small>在目录生成阶段，就要预设好全文生成的字数</small>
-                  </span>
-                  <Switch.Root className="content-generation-switch" checked={draftWordControlEnabled} onCheckedChange={setDraftWordControlEnabled} aria-label="控制字数">
-                    <Switch.Thumb className="content-generation-switch-thumb" />
-                  </Switch.Root>
-                </div>
-                {draftWordControlEnabled && (
+                  </div>
                   <div className="outline-word-control-options">
                     <div className="outline-word-control-grid">
                       <label>
@@ -1301,8 +1290,8 @@ function OutlineEditPage({
                         }} onBlur={() => {
                           const sectionWords = parseWordCountDraft(draftSectionWords) ?? 0;
                           setDraftSectionWords(formatWordCountDraft(sectionWords));
-                           if (sectionWords === 0) setDraftStrictSectionWords(false);
-                         }} />
+                          if (sectionWords === 0) setDraftStrictSectionWords(false);
+                        }} />
                       </label>
                     </div>
                     <small className="outline-word-control-help">
@@ -1319,18 +1308,30 @@ function OutlineEditPage({
                       </Switch.Root>
                     </div>
                     <div className="outline-word-control-estimate">
-                      <strong>预估页数</strong>
-                      <span>{estimatedPages === null ? '未设置总字数范围，无法预估' : `约 ${estimatedPages} 页`}</span>
-                      <small>页数和排版有关，无法精确预估。</small>
+                        <div className="outline-word-control-estimate-label">预估页数</div>
+                        <div className="outline-word-control-estimate-value">
+                          {estimatedPages === null ? (
+                            <span className="outline-word-control-estimate-empty">--</span>
+                          ) : (
+                            <>
+                              <span className="outline-word-control-estimate-number">{estimatedPages}</span>
+                              <span className="outline-word-control-estimate-unit">页</span>
+                            </>
+                          )}
+                        </div>
+                        <div className="outline-word-control-estimate-hint">
+                          {estimatedPages === null ? '请先设置总字数范围' : '页数和排版有关，无法精确预估'}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                )}
-                {configurationRequiresRegeneration && (
-                  <div className="outline-word-control-notice">
-                    {outlineWordControlSnapshot ? '生成目录后若修改了字数设置，需要重新生成目录才能生效！' : '当前目录缺少字数控制生效配置，请重新生成目录。'}
-                  </div>
-                )}
-              </section>
+                  {configurationRequiresRegeneration && (
+                    <div className="outline-word-control-notice">
+                      {outlineWordControlSnapshot ? '生成目录后若修改了字数设置，需要重新生成目录才能生效！' : '当前目录缺少字数控制生效配置，请重新生成目录。'}
+                    </div>
+                  )}
+                </section>
+              </div>
+              {/* 右栏：知识库选择器 */}
               <section className="outline-generation-config-section outline-knowledge-picker">
                 <div className="outline-generation-config-head">
                   <strong>参考知识库</strong>

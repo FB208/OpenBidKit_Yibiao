@@ -140,7 +140,6 @@ function normalizeNonNegativeInteger(value) {
 function normalizeOutlineWordControlOptions(value) {
   const sectionWords = normalizeNonNegativeInteger(value?.sectionWords);
   return {
-    enabled: Boolean(value?.enabled),
     minimumWords: normalizeNonNegativeInteger(value?.minimumWords),
     maximumWords: normalizeNonNegativeInteger(value?.maximumWords),
     sectionWords,

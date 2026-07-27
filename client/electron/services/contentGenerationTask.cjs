@@ -389,7 +389,7 @@ function normalizeOutlineWordControlSnapshot(value) {
 // 按全文上限倒推每小节生成目标：留出折扣缓冲，避免所有小节都顶着预设字数生成导致初稿总量系统性超上限。
 // 仅在启用强控小节字数且设置了全文上限时生效，其余情况返回 0 表示沿用预设字数。
 function computeGenerationWordTarget(wordControl, leafCount) {
-  if (!wordControl.enabled || !wordControl.strictSectionWords) return 0;
+  if (!wordControl.strictSectionWords) return 0;
   if (!(wordControl.maximumWords > 0) || !(leafCount > 0)) return 0;
   const derived = Math.floor((wordControl.maximumWords * GENERATION_WORD_TARGET_RATIO) / leafCount);
   // 不低于小节下限，避免倒推目标把 AI 引导到强控范围之外。
@@ -397,7 +397,7 @@ function computeGenerationWordTarget(wordControl, leafCount) {
 }
 
 function buildSectionWordRequirement(wordControl, preserveOriginalMaterial = false, generationTarget = 0) {
-  if (!wordControl.enabled || wordControl.sectionWords <= 0) return '';
+  if (wordControl.sectionWords <= 0) return '';
   // 传入 generationTarget（按全文上限倒推的折后目标）时用它替代预设字数，允许范围展示保持不变，从源头压低初稿总量。
   const targetWords = generationTarget > 0 ? generationTarget : wordControl.sectionWords;
   const base = wordControl.strictSectionWords
@@ -946,7 +946,7 @@ function buildRestoredChapterContentMessages({ chapter, projectOverview, selecte
     regenerateRequirement,
     contentPlan,
     knowledgeContents,
-    wordControl: { ...wordControl, enabled: false },
+    wordControl: { ...wordControl, minimumWords: 0, maximumWords: 0, sectionWords: 0, strictSectionWords: false },
     preSectionInstruction: `当前章节已经从用户原方案中还原出正文底稿。该底稿是用户已经写好的真实技术方案内容，必须作为本章节的基础保留。
 
 处理要求：
@@ -3081,7 +3081,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     : tableRequirement === 'none'
       ? '表格需求：不要，本次正文编排不会安排表格。'
       : `表格需求：${TABLE_REQUIREMENT_LABELS[tableRequirement]}，全文最多 ${maxTables} 个表格，本轮最多新增 ${runLimits.maxTablesForRun} 个。`];
-  if (wordControl.enabled) {
+  if (wordControl.minimumWords > 0 || wordControl.maximumWords > 0 || wordControl.sectionWords > 0) {
     logs = [...logs, `目录生效字数配置：最少 ${wordControl.minimumWords || '不限制'} 字，最多 ${wordControl.maximumWords || '不限制'} 字，每小节 ${wordControl.sectionWords || '不控制'} 字。`];
   }
   logs = [...logs, enableConsistencyAudit
@@ -4304,7 +4304,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   function isSectionWordsOutsideRange(words) {
-    return wordControl.enabled && wordControl.strictSectionWords
+    return wordControl.strictSectionWords
       && (words < wordControl.sectionMinimumWords || words > wordControl.sectionMaximumWords);
   }
 
@@ -4345,7 +4345,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   async function runSectionWordAdjustments(targets, stage) {
-    if (!wordControl.enabled || !wordControl.strictSectionWords) return [];
+    if (!wordControl.strictSectionWords) return [];
     const candidates = (targets || []).filter(({ item }) => sections[item.id]?.status === 'success' && getLeafWordCount(item) > 0);
     const violations = candidates.filter(({ item }) => isSectionWordsOutsideRange(getLeafWordCount(item)));
     const resumingStage = resume && contentRuntime.word_adjustment_stage === stage;
@@ -4386,7 +4386,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   function getTotalWordDirection() {
-    if (!wordControl.enabled) return null;
+    if (!wordControl.minimumWords && !wordControl.maximumWords) return null;
     const currentWords = countTotalContentWords();
     if (wordControl.minimumWords > 0 && currentWords < wordControl.minimumWords) {
       return { mode: 'expand', currentWords, targetWords: wordControl.minimumWords };
@@ -4422,7 +4422,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   async function runTotalWordAdjustments() {
-    if (!wordControl.enabled || (!wordControl.minimumWords && !wordControl.maximumWords) || targetItemId || runOnlyIllustrationStage) return;
+    if (!wordControl.minimumWords && !wordControl.maximumWords || targetItemId || runOnlyIllustrationStage) return;
     contentStats.phase = 'total-word-adjusting';
     const resumingStage = resume && contentRuntime.word_adjustment_stage === 'total';
     const initialRound = resumingStage
@@ -6356,7 +6356,7 @@ workspace 文件说明：
       }
       pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
       const targetContext = leaves.find(({ item }) => item.id === targetItemId);
-      if (targetContext && wordControl.enabled && wordControl.strictSectionWords && !completedStages.has('section-word-adjusting')) {
+      if (targetContext && wordControl.strictSectionWords && !completedStages.has('section-word-adjusting')) {
         contentStats.phase = 'section-word-adjusting';
         contentStats.section_adjustment_total = 1;
         contentStats.section_adjustment_completed = 0;
@@ -6380,7 +6380,7 @@ workspace 文件说明：
         setWordAdjustmentRuntime('section', '', 0, completedItemIds, itemRounds);
         markStageCompleted('section-word-adjusting');
         if (!resolved) contentStats.word_control_warning = SECTION_WORD_CONTROL_WARNING;
-      } else if (targetContext && wordControl.enabled && wordControl.strictSectionWords && isSectionWordsOutsideRange(getLeafWordCount(targetContext.item))) {
+      } else if (targetContext && wordControl.strictSectionWords && isSectionWordsOutsideRange(getLeafWordCount(targetContext.item))) {
         contentStats.word_control_warning = SECTION_WORD_CONTROL_WARNING;
       }
     } else if (runOnlyIllustrationPlanning) {

@@ -3007,7 +3007,6 @@ function normalizeOutlineWordControlOptions(value) {
   };
   const sectionWords = normalizeInteger(raw.sectionWords);
   return {
-    enabled: Boolean(raw.enabled),
     minimumWords: normalizeInteger(raw.minimumWords),
     maximumWords: normalizeInteger(raw.maximumWords),
     sectionWords,
@@ -3017,10 +3016,10 @@ function normalizeOutlineWordControlOptions(value) {
 
 function deriveOutlineWordControl(options) {
   const effectiveSectionWords = options.sectionWords > 0 ? options.sectionWords : DEFAULT_EFFECTIVE_SECTION_WORDS;
-  const minimumLeafCount = options.enabled && options.minimumWords > 0
+  const minimumLeafCount = options.minimumWords > 0
     ? Math.ceil(options.minimumWords / effectiveSectionWords)
     : null;
-  const maximumLeafCount = options.enabled && options.maximumWords > 0
+  const maximumLeafCount = options.maximumWords > 0
     ? Math.floor(options.maximumWords / effectiveSectionWords)
     : null;
   return { effectiveSectionWords, minimumLeafCount, maximumLeafCount };
@@ -3499,7 +3498,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     if (!String(originalPlanMarkdown || '').trim()) {
       throw new Error('请先上传原方案，再生成目录');
     }
-    if (wordControlOptions.enabled && wordControlOptions.maximumWords > 0) {
+    if (wordControlOptions.maximumWords > 0) {
       const originalWords = countReadableWords(originalPlanMarkdown);
       if (originalWords > wordControlOptions.maximumWords) {
         throw new Error(`原方案当前约 ${originalWords} 字，已超过设置的最多 ${wordControlOptions.maximumWords} 字，无法继续生成目录。`);
@@ -3587,7 +3586,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
   };
   let wordControlWarning = '';
   let wordControlWarningKind = '';
-  if (wordControlOptions.enabled && (wordControl.minimumLeafCount !== null || wordControl.maximumLeafCount !== null)) {
+  if (wordControl.minimumLeafCount !== null || wordControl.maximumLeafCount !== null) {
     const initialDistance = getLeafCountDistance(outlineStats.current_leaf_count, wordControl.minimumLeafCount, wordControl.maximumLeafCount);
     if (initialDistance > 0) {
       const adjusted = await adjustOutlineForWordControl({
