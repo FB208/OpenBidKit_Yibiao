@@ -7,501 +7,593 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <main>
-    <header class="hero">
-      <div>
-        <h1>埋点统计看板</h1>
-        <p>Cloudflare Workers + Analytics Engine + Workers Static Assets</p>
+  <div class="app-layout">
+
+    <!-- 侧边栏 -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-logo">统计看板</span>
+        <button class="sidebar-toggle" id="sidebarToggle" type="button" title="折叠侧边栏">
+          <span class="toggle-icon">◀</span>
+        </button>
       </div>
-      <div class="status">
-        <span id="statusDot" class="dot"></span>
-        <span id="statusText">未连接</span>
+
+      <nav class="sidebar-nav" aria-label="看板导航">
+        <div class="nav-group">
+          <span class="nav-group-label">数据统计</span>
+          <button class="nav-item" type="button" data-tab-button="overview">概览</button>
+          <button class="nav-item" type="button" data-tab-button="clients">客户端统计</button>
+          <button class="nav-item" type="button" data-tab-button="ips">IP 统计</button>
+          <button class="nav-item" type="button" data-tab-button="traffic">访问分析</button>
+          <button class="nav-item" type="button" data-tab-button="config">配置使用</button>
+          <button class="nav-item" type="button" data-tab-button="models">模型使用</button>
+          <button class="nav-item" type="button" data-tab-button="agent">Agent 分析</button>
+          <button class="nav-item" type="button" data-tab-button="latest">最近事件</button>
+        </div>
+        <div class="nav-group">
+          <span class="nav-group-label">系统管理</span>
+          <button class="nav-item" type="button" data-tab-button="notice">公告管理</button>
+          <button class="nav-item" type="button" data-tab-button="license">授权管理</button>
+          <button class="nav-item" type="button" data-tab-button="resources">资源管理</button>
+          <button class="nav-item" type="button" data-tab-button="plugins">插件管理</button>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="status-indicator">
+          <span id="statusDot" class="dot"></span>
+          <span id="statusText" class="status-label">未连接</span>
+        </div>
       </div>
-    </header>
+    </aside>
 
-    <section class="panel controls">
-      <label>
-        API 地址
-        <input id="apiBase" value="https://analytics.agnet.top" />
-      </label>
-      <label>
-        ADMIN_TOKEN
-        <input id="adminToken" type="password" placeholder="输入 Worker Secret 中的 ADMIN_TOKEN" />
-      </label>
-      <label class="checkbox-label">
-        <input id="rememberToken" type="checkbox" />
-        记住 Token
-      </label>
-      <label>
-        项目
-        <input id="projectName" value="yibiao-client" placeholder="输入项目名，例如 yibiao-client" list="projectOptions" />
-        <datalist id="projectOptions"></datalist>
-      </label>
-      <button id="refreshButton">刷新当前页</button>
-    </section>
+    <!-- 主内容区 -->
+    <div class="content-area">
 
-    <div class="panel hint">Token 默认仅保存在当前会话 sessionStorage；勾选“记住 Token”后才写入 localStorage。历史统计来自 D1，今天/7天/30天分析来自 Analytics Engine。</div>
-    <div id="errorBox" class="error"></div>
-
-    <nav class="tabs" aria-label="看板标签页">
-      <button class="tab-button" type="button" data-tab-button="overview">概览</button>
-      <button class="tab-button" type="button" data-tab-button="clients">客户端统计</button>
-      <button class="tab-button" type="button" data-tab-button="ips">IP 统计</button>
-      <button class="tab-button" type="button" data-tab-button="traffic">访问分析</button>
-      <button class="tab-button" type="button" data-tab-button="config">配置使用</button>
-      <button class="tab-button" type="button" data-tab-button="models">模型使用</button>
-      <button class="tab-button" type="button" data-tab-button="agent">Agent分析</button>
-      <button class="tab-button" type="button" data-tab-button="latest">最近事件</button>
-      <button class="tab-button" type="button" data-tab-button="notice">公告管理</button>
-      <button class="tab-button" type="button" data-tab-button="license">授权管理</button>
-      <button class="tab-button" type="button" data-tab-button="resources">资源管理</button>
-      <button class="tab-button" type="button" data-tab-button="plugins">插件管理</button>
-    </nav>
-
-    <section id="tab-overview" class="tab-panel" data-tab-panel="overview">
-      <section class="cards">
-        <div class="panel card"><span>累计打开量</span><strong id="totalOpen">0</strong></div>
-        <div class="panel card"><span>累计页面访问量</span><strong id="totalView">0</strong></div>
-        <div class="panel card"><span>累计事件数</span><strong id="totalEvents">0</strong></div>
-        <div class="panel card"><span>累计 AI 请求</span><strong id="totalAiRequests">0</strong></div>
-        <div class="panel card"><span>Token 消耗量</span><strong id="totalTextTokens">0</strong></div>
-        <div class="panel card"><span>生成图片数</span><strong id="totalGeneratedImages">0</strong></div>
-        <div class="panel card"><span>总客户端数</span><strong id="totalClients">0</strong></div>
-        <div class="panel card"><span>今日活跃客户端</span><strong id="todayActiveClients">0</strong></div>
-        <div class="panel card"><span>今日新增客户端</span><strong id="todayNewClients">0</strong></div>
-        <div class="panel card"><span>7 日新增客户端</span><strong id="last7NewClients">0</strong></div>
-      </section>
-
-      <section class="cards">
-        <div class="panel card"><span>GitHub Stars</span><strong id="githubStars">-</strong></div>
-        <div class="panel card"><span>GitHub Forks</span><strong id="githubForks">-</strong></div>
-        <div class="panel card"><span>Issues / PRs</span><strong id="githubOpenIssues">-</strong></div>
-        <div class="panel card"><span>GitHub 仓库</span><strong><a id="githubRepoUrl" class="card-link" href="https://github.com/FB208/OpenBidKit_Yibiao" target="_blank" rel="noopener noreferrer">打开仓库</a></strong></div>
-      </section>
-
-      <section class="grid">
-        <div class="panel section">
-          <h2>每日统计</h2>
-          <div id="dailyTable"></div>
-        </div>
-        <div class="panel section">
-          <h2>留存概览</h2>
-          <div id="retentionTable"></div>
-        </div>
-      </section>
-    </section>
-
-    <section id="tab-clients" class="tab-panel" data-tab-panel="clients">
-      <section class="panel section">
-        <div class="section-head">
-          <div>
-            <h2>客户端统计</h2>
-            <p>客户端列表来自 D1；详情弹窗实时查询 Analytics Engine。</p>
-          </div>
-        </div>
-        <div id="clientsTable"></div>
-      </section>
-    </section>
-
-    <section id="tab-ips" class="tab-panel" data-tab-panel="ips">
-      <section class="panel section">
-        <div class="section-head">
-          <div>
-            <h2>IP 统计</h2>
-            <p>按客户端最后访问 IP 汇总，仅展示已记录 IP 的客户端。</p>
-          </div>
-          <div class="pager">
-            <button id="prevIpPage" type="button">上一页</button>
-            <span id="ipPageInfo">第 1 页</span>
-            <input id="ipPageInput" type="number" min="1" value="1" aria-label="跳转 IP 统计页码" />
-            <button id="jumpIpPage" type="button">跳转</button>
-            <button id="nextIpPage" type="button">下一页</button>
-          </div>
-        </div>
-        <div id="ipStatsTable"></div>
-      </section>
-    </section>
-
-    <section id="tab-traffic" class="tab-panel" data-tab-panel="traffic">
-      <section class="panel section">
-        <div class="section-head">
-          <div>
-            <h2>访问分析范围</h2>
-            <p>历史来自 D1；今天、7 天、30 天来自 Analytics Engine。</p>
-          </div>
-          <label class="inline-select">
-            范围
-            <select id="trafficRange">
-              <option value="history" selected>历史</option>
-              <option value="today">今天</option>
-              <option value="7">7 天</option>
-              <option value="30">30 天</option>
-            </select>
+      <!-- 顶部栏：连接配置 -->
+      <header class="topbar">
+        <button class="topbar-menu" id="topbarMenuButton" type="button" title="打开导航">&#9776;</button>
+        <div class="topbar-fields">
+          <label class="topbar-field">
+            <span>API 地址</span>
+            <input id="apiBase" value="https://analytics.agnet.top" />
+          </label>
+          <label class="topbar-field">
+            <span>ADMIN_TOKEN</span>
+            <input id="adminToken" type="password" placeholder="输入 Worker Secret 中的 ADMIN_TOKEN" />
+          </label>
+          <label class="topbar-field topbar-checkbox">
+            <input id="rememberToken" type="checkbox" />
+            <span>记住 Token</span>
+          </label>
+          <label class="topbar-field">
+            <span>项目</span>
+            <input id="projectName" value="yibiao-client" placeholder="输入项目名" list="projectOptions" />
+            <datalist id="projectOptions"></datalist>
           </label>
         </div>
-      </section>
-      <section class="grid">
-        <div class="panel section">
-          <h2>页面访问排行</h2>
-          <div id="pagesTable"></div>
-        </div>
-        <div class="panel section">
-          <h2>版本分布</h2>
-          <div id="versionsTable"></div>
-        </div>
-      </section>
-    </section>
+        <button id="refreshButton" class="topbar-refresh">刷新当前页</button>
+      </header>
 
-    <section id="tab-config" class="tab-panel" data-tab-panel="config">
-      <section class="panel section">
-        <div class="section-head">
-          <div>
-            <h2>配置使用情况</h2>
-            <p>历史总数展示累计上报次数。</p>
-          </div>
-          <label class="inline-select">
-            范围
-            <select id="configRange">
-              <option value="history" selected>历史</option>
-              <option value="today">今天</option>
-              <option value="7">7 天</option>
-              <option value="30">30 天</option>
-            </select>
-          </label>
-        </div>
-        <div id="configUsage"></div>
-      </section>
-    </section>
+      <div class="content-inner">
+        <div class="panel hint">Token 默认仅保存在当前会话 sessionStorage；勾选"记住 Token"后才写入 localStorage。历史统计来自 D1，今天/7天/30天分析来自 Analytics Engine。</div>
+        <div id="errorBox" class="error"></div>
 
-    <section id="tab-models" class="tab-panel" data-tab-panel="models">
-      <section class="panel section">
-        <div class="section-head">
-          <div>
-            <h2>模型使用</h2>
-            <p>历史总数展示累计请求次数。</p>
-          </div>
-          <label class="inline-select">
-            范围
-            <select id="modelRange">
-              <option value="history" selected>历史</option>
-              <option value="today">今天</option>
-              <option value="7">7 天</option>
-              <option value="30">30 天</option>
-            </select>
-          </label>
-        </div>
-        <div class="filter-row">
-          <label>
-            服务商
-            <input id="modelProviderFilter" list="modelProviderOptions" placeholder="全部" />
-            <datalist id="modelProviderOptions"></datalist>
-          </label>
-          <label>
-            域名
-            <input id="modelEndpointFilter" list="modelEndpointOptions" placeholder="全部" />
-            <datalist id="modelEndpointOptions"></datalist>
-          </label>
-          <label>
-            模型
-            <input id="modelNameFilter" list="modelNameOptions" placeholder="全部" />
-            <datalist id="modelNameOptions"></datalist>
-          </label>
-        </div>
-        <div id="modelUsage"></div>
-      </section>
-    </section>
+        <!-- 概览 -->
+        <section id="tab-overview" class="tab-panel" data-tab-panel="overview">
+          <section class="cards">
+            <div class="panel card"><span>累计打开量</span><strong id="totalOpen">0</strong></div>
+            <div class="panel card"><span>累计页面访问量</span><strong id="totalView">0</strong></div>
+            <div class="panel card"><span>累计事件数</span><strong id="totalEvents">0</strong></div>
+            <div class="panel card"><span>累计 AI 请求</span><strong id="totalAiRequests">0</strong></div>
+            <div class="panel card"><span>Token 消耗量</span><strong id="totalTextTokens">0</strong></div>
+            <div class="panel card"><span>生成图片数</span><strong id="totalGeneratedImages">0</strong></div>
+            <div class="panel card"><span>总客户端数</span><strong id="totalClients">0</strong></div>
+            <div class="panel card"><span>今日活跃客户端</span><strong id="todayActiveClients">0</strong></div>
+            <div class="panel card"><span>今日新增客户端</span><strong id="todayNewClients">0</strong></div>
+            <div class="panel card"><span>7 日新增客户端</span><strong id="last7NewClients">0</strong></div>
+          </section>
 
-    <section id="tab-agent" class="tab-panel" data-tab-panel="agent">
-      <section class="panel section">
-        <div class="section-head">
-          <div>
-            <h2>Agent分析</h2>
-            <p>历史来自 D1；今天、7 天、30 天来自 Analytics Engine。</p>
-          </div>
-          <label class="inline-select">
-            范围
-            <select id="agentRange">
-              <option value="history" selected>历史</option>
-              <option value="today">今天</option>
-              <option value="7">7 天</option>
-              <option value="30">30 天</option>
-            </select>
-          </label>
-        </div>
-        <div id="agentRuntime"></div>
-      </section>
-    </section>
+          <section class="cards">
+            <div class="panel card"><span>GitHub Stars</span><strong id="githubStars">-</strong></div>
+            <div class="panel card"><span>GitHub Forks</span><strong id="githubForks">-</strong></div>
+            <div class="panel card"><span>Issues / PRs</span><strong id="githubOpenIssues">-</strong></div>
+            <div class="panel card"><span>GitHub 仓库</span><strong><a id="githubRepoUrl" class="card-link" href="https://github.com/FB208/OpenBidKit_Yibiao" target="_blank" rel="noopener noreferrer">打开仓库</a></strong></div>
+          </section>
 
-    <section id="tab-latest" class="tab-panel" data-tab-panel="latest">
-      <section class="panel section">
-        <div class="section-head">
-          <div>
-            <h2>最近事件</h2>
-            <label class="inline-select">
-              事件
-              <input id="latestEventFilter" list="latestEventOptions" placeholder="全部事件" />
-              <datalist id="latestEventOptions"></datalist>
-            </label>
-          </div>
-          <div class="pager">
-            <button id="prevLatestPage" type="button">上一页</button>
-            <span id="latestPageInfo">第 1 页</span>
-            <input id="latestPageInput" type="number" min="1" value="1" aria-label="跳转页码" />
-            <button id="jumpLatestPage" type="button">跳转</button>
-            <button id="nextLatestPage" type="button">下一页</button>
-          </div>
-        </div>
-        <div id="latestTable"></div>
-      </section>
-    </section>
+          <section class="grid">
+            <div class="panel section">
+              <h2>每日统计</h2>
+              <div id="dailyTable"></div>
+            </div>
+            <div class="panel section">
+              <h2>留存概览</h2>
+              <div id="retentionTable"></div>
+            </div>
+          </section>
+        </section>
 
-    <section id="tab-notice" class="tab-panel" data-tab-panel="notice">
-      <section class="panel section notice-panel">
-        <div class="section-head">
-          <div>
-            <h2>公告管理</h2>
-            <p>发布后客户端会在启动和每 30 分钟轮询时拉取最新 Markdown 公告。同一公告关闭后不再显示，重新发布会生成新的公告 ID。</p>
-          </div>
-          <button id="loadNoticeButton" type="button">读取公告</button>
-        </div>
-        <div id="noticeMeta" class="notice-meta">当前未读取公告。</div>
-        <div class="notice-form">
-          <label>
-            公告标题
-            <input id="noticeTitle" maxlength="120" placeholder="例如：开源许可证提醒" />
-          </label>
-          <label>
-            状态
-            <select id="noticeEnabled">
-              <option value="true" selected>启用</option>
-              <option value="false">保存但不展示</option>
-            </select>
-          </label>
-          <label class="notice-field-wide">
-            Markdown 内容
-            <textarea id="noticeContent" maxlength="20000" placeholder="输入 Markdown 公告内容。支持标题、列表、链接、加粗等语法。"></textarea>
-          </label>
-        </div>
-        <div class="notice-actions">
-          <button id="disableNoticeButton" class="danger-button" type="button">停用公告</button>
-          <button id="publishNoticeButton" type="button">发布公告</button>
-        </div>
-        <div id="noticeStatus" class="notice-status"></div>
-      </section>
-    </section>
+        <!-- 客户端统计 -->
+        <section id="tab-clients" class="tab-panel" data-tab-panel="clients">
+          <section class="panel section">
+            <div class="section-head">
+              <div>
+                <h2>客户端统计</h2>
+                <p>客户端列表来自 D1；详情弹窗实时查询 Analytics Engine。</p>
+              </div>
+            </div>
+            <div id="clientsTable"></div>
+          </section>
+        </section>
 
-    <section id="tab-license" class="tab-panel" data-tab-panel="license">
-      <section class="panel section notice-panel">
-        <div class="section-head">
-          <div>
-            <h2>授权管理</h2>
-            <p>免费授权和离线授权分别配置弹窗规则；客户端使用相同字段执行过期提醒逻辑。</p>
-          </div>
-          <button id="loadLicenseConfigButton" type="button">读取授权配置</button>
-        </div>
-        <div class="license-management-grid">
-          <div class="license-management-card">
-            <h3>免费授权策略</h3>
-            <div id="licenseMeta" class="notice-meta">当前未读取授权配置。</div>
-            <div class="notice-form">
-              <label>
-                免费授权有效期（天）
-                <input id="licenseFreeDays" type="number" min="1" value="30" />
-              </label>
-              <label>
-                授权过期弹窗
-                <select id="licenseExpirePopupEnabled">
-                  <option value="true" selected>开启</option>
-                  <option value="false">关闭</option>
-                </select>
-              </label>
-              <label>
-                过期弹窗是否可关闭
-                <select id="licenseExpirePopupDismissible">
-                  <option value="true" selected>可关闭</option>
-                  <option value="false">不可关闭</option>
+        <!-- IP 统计 -->
+        <section id="tab-ips" class="tab-panel" data-tab-panel="ips">
+          <section class="panel section">
+            <div class="section-head">
+              <div>
+                <h2>IP 统计</h2>
+                <p>按客户端最后访问 IP 汇总，仅展示已记录 IP 的客户端。</p>
+              </div>
+              <div class="pager">
+                <button id="prevIpPage" type="button">上一页</button>
+                <span id="ipPageInfo">第 1 页</span>
+                <input id="ipPageInput" type="number" min="1" value="1" aria-label="跳转 IP 统计页码" />
+                <button id="jumpIpPage" type="button">跳转</button>
+                <button id="nextIpPage" type="button">下一页</button>
+              </div>
+            </div>
+            <div id="ipStatsTable"></div>
+          </section>
+        </section>
+
+        <!-- 访问分析 -->
+        <section id="tab-traffic" class="tab-panel" data-tab-panel="traffic">
+          <section class="panel section">
+            <div class="section-head">
+              <div>
+                <h2>访问分析范围</h2>
+                <p>历史来自 D1；今天、7 天、30 天来自 Analytics Engine。</p>
+              </div>
+              <label class="inline-select">
+                范围
+                <select id="trafficRange">
+                  <option value="history" selected>历史</option>
+                  <option value="today">今天</option>
+                  <option value="7">7 天</option>
+                  <option value="30">30 天</option>
                 </select>
               </label>
             </div>
-            <div class="notice-actions">
-              <button id="saveLicenseConfigButton" type="button">保存免费授权配置</button>
+          </section>
+          <section class="grid">
+            <div class="panel section">
+              <h2>页面访问排行</h2>
+              <div id="pagesTable"></div>
             </div>
-          </div>
-          <div class="license-management-card">
-            <h3>离线授权生成</h3>
-            <div class="notice-meta">录入客户端 Client ID 和授权失效期后生成离线授权文件或授权码。</div>
-            <div class="notice-form">
-              <label>
-                Client ID
-                <input id="licenseOfflineClientId" placeholder="粘贴客户端关于页显示的 Client ID" />
-              </label>
-              <label>
-                授权失效期
-                <input id="licenseOfflineExpiresAt" type="date" />
-              </label>
-              <label>
-                授权过期弹窗
-                <select id="licenseOfflineExpirePopupEnabled">
-                  <option value="true" selected>开启</option>
-                  <option value="false">关闭</option>
+            <div class="panel section">
+              <h2>版本分布</h2>
+              <div id="versionsTable"></div>
+            </div>
+          </section>
+        </section>
+
+        <!-- 配置使用 -->
+        <section id="tab-config" class="tab-panel" data-tab-panel="config">
+          <section class="panel section">
+            <div class="section-head">
+              <div>
+                <h2>配置使用情况</h2>
+                <p>历史总数展示累计上报次数。</p>
+              </div>
+              <label class="inline-select">
+                范围
+                <select id="configRange">
+                  <option value="history" selected>历史</option>
+                  <option value="today">今天</option>
+                  <option value="7">7 天</option>
+                  <option value="30">30 天</option>
                 </select>
               </label>
+            </div>
+            <div id="configUsage"></div>
+          </section>
+        </section>
+
+        <!-- 模型使用 -->
+        <section id="tab-models" class="tab-panel" data-tab-panel="models">
+          <section class="panel section">
+            <div class="section-head">
+              <div>
+                <h2>模型使用</h2>
+                <p>历史总数展示累计请求次数。</p>
+              </div>
+              <label class="inline-select">
+                范围
+                <select id="modelRange">
+                  <option value="history" selected>历史</option>
+                  <option value="today">今天</option>
+                  <option value="7">7 天</option>
+                  <option value="30">30 天</option>
+                </select>
+              </label>
+            </div>
+            <div class="filter-row">
               <label>
-                过期弹窗是否可关闭
-                <select id="licenseOfflineExpirePopupDismissible">
-                  <option value="true" selected>可关闭</option>
-                  <option value="false">不可关闭</option>
+                服务商
+                <input id="modelProviderFilter" list="modelProviderOptions" placeholder="全部" />
+                <datalist id="modelProviderOptions"></datalist>
+              </label>
+              <label>
+                域名
+                <input id="modelEndpointFilter" list="modelEndpointOptions" placeholder="全部" />
+                <datalist id="modelEndpointOptions"></datalist>
+              </label>
+              <label>
+                模型
+                <input id="modelNameFilter" list="modelNameOptions" placeholder="全部" />
+                <datalist id="modelNameOptions"></datalist>
+              </label>
+            </div>
+            <div id="modelUsage"></div>
+          </section>
+        </section>
+
+        <!-- Agent 分析 -->
+        <section id="tab-agent" class="tab-panel" data-tab-panel="agent">
+          <section class="panel section">
+            <div class="section-head">
+              <div>
+                <h2>Agent 分析</h2>
+                <p>历史来自 D1；今天、7 天、30 天来自 Analytics Engine。</p>
+              </div>
+              <label class="inline-select">
+                范围
+                <select id="agentRange">
+                  <option value="history" selected>历史</option>
+                  <option value="today">今天</option>
+                  <option value="7">7 天</option>
+                  <option value="30">30 天</option>
+                </select>
+              </label>
+            </div>
+            <div id="agentRuntime"></div>
+          </section>
+        </section>
+
+        <!-- 最近事件 -->
+        <section id="tab-latest" class="tab-panel" data-tab-panel="latest">
+          <section class="panel section">
+            <div class="section-head">
+              <div>
+                <h2>最近事件</h2>
+                <label class="inline-select">
+                  事件
+                  <input id="latestEventFilter" list="latestEventOptions" placeholder="全部事件" />
+                  <datalist id="latestEventOptions"></datalist>
+                </label>
+              </div>
+              <div class="pager">
+                <button id="prevLatestPage" type="button">上一页</button>
+                <span id="latestPageInfo">第 1 页</span>
+                <input id="latestPageInput" type="number" min="1" value="1" aria-label="跳转页码" />
+                <button id="jumpLatestPage" type="button">跳转</button>
+                <button id="nextLatestPage" type="button">下一页</button>
+              </div>
+            </div>
+            <div id="latestTable"></div>
+          </section>
+        </section>
+
+        <!-- 公告管理 -->
+        <section id="tab-notice" class="tab-panel" data-tab-panel="notice">
+          <section class="panel section notice-panel">
+            <div class="section-head">
+              <div>
+                <h2>公告管理</h2>
+                <p>发布后客户端会在启动和每 30 分钟轮询时拉取最新 Markdown 公告。同一公告关闭后不再显示，重新发布会生成新的公告 ID。</p>
+              </div>
+              <button id="loadNoticeButton" type="button">读取公告</button>
+            </div>
+            <div id="noticeMeta" class="notice-meta">当前未读取公告。</div>
+            <div class="notice-form">
+              <label>
+                公告标题
+                <input id="noticeTitle" maxlength="120" placeholder="例如：开源许可证提醒" />
+              </label>
+              <label>
+                状态
+                <select id="noticeEnabled">
+                  <option value="true" selected>启用</option>
+                  <option value="false">保存但不展示</option>
                 </select>
               </label>
               <label class="notice-field-wide">
-                离线授权码
-                <textarea id="licenseOfflineCode" readonly placeholder="生成后在这里复制授权码，也可以下载授权文件。"></textarea>
+                Markdown 内容
+                <textarea id="noticeContent" maxlength="20000" placeholder="输入 Markdown 公告内容。支持标题、列表、链接、加粗等语法。"></textarea>
               </label>
             </div>
             <div class="notice-actions">
-              <button id="downloadOfflineLicenseButton" type="button" disabled>下载授权文件</button>
-              <button id="generateOfflineLicenseButton" type="button">生成离线授权</button>
+              <button id="disableNoticeButton" class="danger-button" type="button">停用公告</button>
+              <button id="publishNoticeButton" type="button">发布公告</button>
             </div>
-            <div id="offlineLicenseStatus" class="notice-status"></div>
-          </div>
-        </div>
-        <div id="licenseStatus" class="notice-status"></div>
-      </section>
-    </section>
+            <div id="noticeStatus" class="notice-status"></div>
+          </section>
+        </section>
 
-    <section id="tab-resources" class="tab-panel" data-tab-panel="resources">
-      <section class="panel section resource-panel">
-        <div class="section-head">
-          <div>
-            <h2>资源管理</h2>
-          </div>
-          <div class="resource-head-actions">
-            <button id="loadResourcesButton" type="button">读取资源</button>
-            <button id="newResourceButton" type="button">新增资源</button>
-          </div>
-        </div>
+        <!-- 授权管理 -->
+        <section id="tab-license" class="tab-panel" data-tab-panel="license">
+          <section class="panel section notice-panel">
+            <div class="section-head">
+              <div>
+                <h2>授权管理</h2>
+                <p>免费授权和离线授权分别配置弹窗规则；客户端使用相同字段执行过期提醒逻辑。</p>
+              </div>
+              <button id="loadLicenseConfigButton" type="button">读取授权配置</button>
+            </div>
+            <div class="license-management-grid">
+              <div class="license-management-card">
+                <h3>免费授权策略</h3>
+                <div id="licenseMeta" class="notice-meta">当前未读取授权配置。</div>
+                <div class="notice-form">
+                  <label>
+                    免费授权有效期（天）
+                    <input id="licenseFreeDays" type="number" min="1" value="30" />
+                  </label>
+                  <label>
+                    授权过期弹窗
+                    <select id="licenseExpirePopupEnabled">
+                      <option value="true" selected>开启</option>
+                      <option value="false">关闭</option>
+                    </select>
+                  </label>
+                  <label>
+                    过期弹窗是否可关闭
+                    <select id="licenseExpirePopupDismissible">
+                      <option value="true" selected>可关闭</option>
+                      <option value="false">不可关闭</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="notice-actions">
+                  <button id="saveLicenseConfigButton" type="button">保存免费授权配置</button>
+                </div>
+              </div>
+              <div class="license-management-card">
+                <h3>离线授权生成</h3>
+                <div class="notice-meta">录入客户端 Client ID 和授权失效期后生成离线授权文件或授权码。</div>
+                <div class="notice-form">
+                  <label>
+                    Client ID
+                    <input id="licenseOfflineClientId" placeholder="粘贴客户端关于页显示的 Client ID" />
+                  </label>
+                  <label>
+                    授权失效期
+                    <input id="licenseOfflineExpiresAt" type="date" />
+                  </label>
+                  <label>
+                    授权过期弹窗
+                    <select id="licenseOfflineExpirePopupEnabled">
+                      <option value="true" selected>开启</option>
+                      <option value="false">关闭</option>
+                    </select>
+                  </label>
+                  <label>
+                    过期弹窗是否可关闭
+                    <select id="licenseOfflineExpirePopupDismissible">
+                      <option value="true" selected>可关闭</option>
+                      <option value="false">不可关闭</option>
+                    </select>
+                  </label>
+                  <label class="notice-field-wide">
+                    离线授权码
+                    <textarea id="licenseOfflineCode" readonly placeholder="生成后在这里复制授权码，也可以下载授权文件。"></textarea>
+                  </label>
+                </div>
+                <div class="notice-actions">
+                  <button id="downloadOfflineLicenseButton" type="button" disabled>下载授权文件</button>
+                  <button id="generateOfflineLicenseButton" type="button">生成离线授权</button>
+                </div>
+                <div id="offlineLicenseStatus" class="notice-status"></div>
+              </div>
+            </div>
+            <div id="licenseStatus" class="notice-status"></div>
+          </section>
+        </section>
 
-        <form id="resourceForm" class="resource-form">
-          <input id="resourceId" type="hidden" />
-          <div class="resource-image-editor">
-            <span>图片</span>
-            <div id="resourceImagePreview" class="resource-image-preview">无图片</div>
-            <input id="resourceImage" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
-            <label class="resource-checkbox-row">
-              <input id="resourceRemoveImage" type="checkbox" />
-              清空已有图片
-            </label>
-          </div>
+        <!-- 资源管理 -->
+        <section id="tab-resources" class="tab-panel" data-tab-panel="resources">
+          <section class="panel section resource-panel">
+            <div class="section-head">
+              <div>
+                <h2>资源管理</h2>
+              </div>
+              <div class="resource-head-actions">
+                <button id="loadResourcesButton" type="button">读取资源</button>
+                <button id="newResourceButton" type="button">新增资源</button>
+              </div>
+            </div>
 
-          <label>
-            标题
-            <input id="resourceTitle" maxlength="160" placeholder="例如：投标文件结构拆解模板" />
-          </label>
-          <label>
-            标签
-            <input id="resourceTags" maxlength="500" placeholder="多个标签用逗号分隔" />
-          </label>
-          <label>
-            状态
-            <select id="resourceEnabled">
-              <option value="true" selected>启用</option>
-              <option value="false">停用</option>
-            </select>
-          </label>
-          <label>
-            排序
-            <input id="resourceSortOrder" type="number" value="1" />
-          </label>
-          <label class="resource-field-wide">
-            介绍
-            <textarea id="resourceDescription" maxlength="1200" placeholder="客户端资源卡片上展示的简短介绍。"></textarea>
-          </label>
-          <label class="resource-field-wide">
-            弹窗内容 Markdown
-            <textarea id="resourceModalContent" maxlength="50000" placeholder="可填写下载链接、下载方式和使用说明等。客户端会按 Markdown 渲染。"></textarea>
-          </label>
+            <form id="resourceForm" class="resource-form">
+              <input id="resourceId" type="hidden" />
+              <div class="resource-image-editor">
+                <span>图片</span>
+                <div id="resourceImagePreview" class="resource-image-preview">无图片</div>
+                <input id="resourceImage" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
+                <label class="resource-checkbox-row">
+                  <input id="resourceRemoveImage" type="checkbox" />
+                  清空已有图片
+                </label>
+              </div>
 
-          <div class="resource-actions">
-            <button id="resetResourceButton" class="secondary-button" type="button">清空表单</button>
-            <button id="saveResourceButton" type="submit">保存资源</button>
-          </div>
-        </form>
+              <label>
+                标题
+                <input id="resourceTitle" maxlength="160" placeholder="例如：投标文件结构拆解模板" />
+              </label>
+              <label>
+                标签
+                <input id="resourceTags" maxlength="500" placeholder="多个标签用逗号分隔" />
+              </label>
+              <label>
+                状态
+                <select id="resourceEnabled">
+                  <option value="true" selected>启用</option>
+                  <option value="false">停用</option>
+                </select>
+              </label>
+              <label>
+                排序
+                <input id="resourceSortOrder" type="number" value="1" />
+              </label>
+              <label class="resource-field-wide">
+                介绍
+                <textarea id="resourceDescription" maxlength="1200" placeholder="客户端资源卡片上展示的简短介绍。"></textarea>
+              </label>
+              <label class="resource-field-wide">
+                弹窗内容 Markdown
+                <textarea id="resourceModalContent" maxlength="50000" placeholder="可填写下载链接、下载方式和使用说明等。客户端会按 Markdown 渲染。"></textarea>
+              </label>
 
-        <div id="resourcesStatus" class="notice-status"></div>
-        <div id="resourcesTable" class="resource-table-wrap"></div>
-      </section>
-    </section>
+              <div class="resource-actions">
+                <button id="resetResourceButton" class="secondary-button" type="button">清空表单</button>
+                <button id="saveResourceButton" type="submit">保存资源</button>
+              </div>
+            </form>
 
-    <section id="tab-plugins" class="tab-panel" data-tab-panel="plugins">
-      <section class="panel section">
-        <div class="section-head">
-          <h2>插件管理</h2>
-          <div class="section-actions">
-            <button id="loadPluginsButton" class="secondary-button" type="button" onclick="window.location.reload()">刷新插件列表</button>
-            <button id="syncPluginsButton" type="button">同步所有插件最新版本</button>
-            <button id="newPluginButton" class="secondary-button" type="button" onclick="document.getElementById('pluginForm').scrollIntoView({ behavior: 'smooth' })">新增插件</button>
-          </div>
-        </div>
+            <div id="resourcesStatus" class="notice-status"></div>
+            <div id="resourcesTable" class="resource-table-wrap"></div>
+          </section>
+        </section>
 
-        <form id="pluginForm" class="plugin-form" autocomplete="off">
-          <input id="pluginId" type="hidden" />
-          <label class="plugin-field-wide">
-            GitHub 仓库地址 *
-            <input id="pluginRepository" maxlength="300" placeholder="例如：https://github.com/FB208/OpenBidKit-plugin-pet" required />
-            <small>自动读取 Tag 对应的 manifest.json、最新正式 Release 和安装包地址。</small>
-          </label>
-          <label>
-            状态
-            <select id="pluginEnabled">
-              <option value="true" selected>启用</option>
-              <option value="false">停用</option>
-            </select>
-          </label>
-          <label>
-            排序
-            <input id="pluginSortOrder" type="number" value="1" />
-          </label>
+        <!-- 插件管理 -->
+        <section id="tab-plugins" class="tab-panel" data-tab-panel="plugins">
+          <section class="panel section">
+            <div class="section-head">
+              <h2>插件管理</h2>
+              <div class="section-actions">
+                <button id="loadPluginsButton" class="secondary-button" type="button" onclick="window.location.reload()">刷新插件列表</button>
+                <button id="syncPluginsButton" type="button">同步所有插件最新版本</button>
+                <button id="newPluginButton" class="secondary-button" type="button" onclick="document.getElementById('pluginForm').scrollIntoView({ behavior: 'smooth' })">新增插件</button>
+              </div>
+            </div>
 
-          <div class="plugin-actions">
-            <button id="resetPluginButton" class="secondary-button" type="button">清空表单</button>
-            <button id="savePluginButton" type="submit">保存并同步</button>
-          </div>
-        </form>
+            <form id="pluginForm" class="plugin-form" autocomplete="off">
+              <input id="pluginId" type="hidden" />
+              <label class="plugin-field-wide">
+                GitHub 仓库地址 *
+                <input id="pluginRepository" maxlength="300" placeholder="例如：https://github.com/FB208/OpenBidKit-plugin-pet" required />
+                <small>自动读取 Tag 对应的 manifest.json、最新正式 Release 和安装包地址。</small>
+              </label>
+              <label>
+                状态
+                <select id="pluginEnabled">
+                  <option value="true" selected>启用</option>
+                  <option value="false">停用</option>
+                </select>
+              </label>
+              <label>
+                排序
+                <input id="pluginSortOrder" type="number" value="1" />
+              </label>
 
-        <div id="pluginsStatus" class="notice-status"></div>
-        <div id="pluginsTable" class="plugin-table-wrap"></div>
-      </section>
-    </section>
+              <div class="plugin-actions">
+                <button id="resetPluginButton" class="secondary-button" type="button">清空表单</button>
+                <button id="savePluginButton" type="submit">保存并同步</button>
+              </div>
+            </form>
 
-    <dialog id="clientDetailDialog" class="client-dialog">
-      <div class="dialog-head">
-        <div>
-          <h2>客户端详情</h2>
-          <p id="clientDetailTitle">未选择客户端</p>
-        </div>
-        <button id="closeClientDetail" type="button">关闭</button>
+            <div id="pluginsStatus" class="notice-status"></div>
+            <div id="pluginsTable" class="plugin-table-wrap"></div>
+          </section>
+        </section>
+
+      </div><!-- .content-inner -->
+    </div><!-- .content-area -->
+  </div><!-- .app-layout -->
+
+  <dialog id="clientDetailDialog" class="client-dialog">
+    <div class="dialog-head">
+      <div>
+        <h2>客户端详情</h2>
+        <p id="clientDetailTitle">未选择客户端</p>
       </div>
-      <label class="inline-select">
-        时间维度
-        <select id="clientDetailRange">
-          <option value="7" selected>7 天</option>
-          <option value="30">30 天</option>
-          <option value="all">全部</option>
-        </select>
-      </label>
-      <div class="grid">
-        <div class="panel section">
-          <h3>每日事件</h3>
-          <div id="clientDetailDaily"></div>
-        </div>
-        <div class="panel section">
-          <h3>事件汇总</h3>
-          <div id="clientDetailEvents"></div>
-        </div>
+      <button id="closeClientDetail" type="button">关闭</button>
+    </div>
+    <label class="inline-select">
+      时间维度
+      <select id="clientDetailRange">
+        <option value="7" selected>7 天</option>
+        <option value="30">30 天</option>
+        <option value="all">全部</option>
+      </select>
+    </label>
+    <div class="grid">
+      <div class="panel section">
+        <h3>每日事件</h3>
+        <div id="clientDetailDaily"></div>
       </div>
-    </dialog>
-  </main>
+      <div class="panel section">
+        <h3>事件汇总</h3>
+        <div id="clientDetailEvents"></div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 窄屏遮罩 -->
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
   <script type="module" src="./src/main.js"></script>
+  <script>
+    // 侧边栏逻辑：宽屏折叠 / 窄屏抽屉
+    (function () {
+      const toggle = document.getElementById('sidebarToggle');
+      const menuBtn = document.getElementById('topbarMenuButton');
+      const overlay = document.getElementById('sidebarOverlay');
+      const STORAGE_KEY = 'analytics_sidebar_collapsed';
+      const NARROW = 900;
+
+      function isNarrow() { return window.innerWidth <= NARROW; }
+
+      // 宽屏：切换折叠
+      function setCollapsed(collapsed) {
+        document.body.classList.toggle('sidebar-collapsed', collapsed);
+        try { localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0'); } catch (_) {}
+      }
+
+      // 窄屏：打开/关闭抽屉
+      function setDrawerOpen(open) {
+        document.body.classList.toggle('sidebar-drawer-open', open);
+      }
+
+      // 恢复宽屏折叠状态
+      try {
+        if (!isNarrow() && localStorage.getItem(STORAGE_KEY) === '1') {
+          document.body.classList.add('sidebar-collapsed');
+        }
+      } catch (_) {}
+
+      toggle.addEventListener('click', function () {
+        if (isNarrow()) {
+          setDrawerOpen(false);
+        } else {
+          setCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+        }
+      });
+
+      menuBtn && menuBtn.addEventListener('click', function () {
+        setDrawerOpen(true);
+      });
+
+      overlay.addEventListener('click', function () {
+        setDrawerOpen(false);
+      });
+
+      // 窗口调整时清理抽屉状态
+      window.addEventListener('resize', function () {
+        if (!isNarrow()) {
+          setDrawerOpen(false);
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
