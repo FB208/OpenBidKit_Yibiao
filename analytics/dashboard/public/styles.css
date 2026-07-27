@@ -194,12 +194,15 @@ body {
   width: var(--sidebar-collapsed-width);
 }
 
+/* P9：折叠后 header 改为居中，避免 toggle 偏右 */
+.sidebar-collapsed .sidebar-header {
+  justify-content: center;
+}
+
 .sidebar-collapsed .sidebar-logo,
 .sidebar-collapsed .nav-group-label,
 .sidebar-collapsed .status-label {
-  opacity: 0;
-  width: 0;
-  overflow: hidden;
+  display: none;
 }
 
 .sidebar-collapsed .nav-item {
@@ -219,6 +222,7 @@ body {
 /* ===== 主内容区 ===== */
 .content-area {
   flex: 1;
+  width: 100%; /* P6：确保充满剩余空间（Safari 兼容） */
   margin-left: var(--sidebar-width);
   min-width: 0;
   display: flex;
@@ -273,11 +277,12 @@ body {
   width: auto;
 }
 
-.topbar-field:nth-child(2) input {
+/* P4：用具体类名替代脆弱的 nth-child 选择器 */
+.topbar-field.topbar-token input {
   width: 220px;
 }
 
-.topbar-field:nth-child(4) input {
+.topbar-field.topbar-project input {
   width: 160px;
 }
 
@@ -916,8 +921,18 @@ button:disabled {
   object-fit: contain;
 }
 
-.resource-title-cell strong,
-.resource-title-cell small,
+/* P8：资源标题列去掉 nowrap，改为截断省略 */
+.resource-title-cell strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-title-cell small {
+  white-space: nowrap;
+}
+
 .resource-tag-list span {
   white-space: nowrap;
 }
@@ -931,6 +946,8 @@ button:disabled {
 .resource-description-cell,
 .resource-modal-cell {
   line-height: 1.65;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .resource-row-actions button {
@@ -1018,6 +1035,8 @@ button:disabled {
 
 .plugin-description-cell {
   line-height: 1.55;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .plugin-repository-cell {
@@ -1076,8 +1095,13 @@ th {
   font-size: 12px;
 }
 
-tbody tr:hover td {
+/* P7：hover 背景加在 tr 上而非 td，避免 border-collapse 下分割线消失 */
+tbody tr:hover {
   background: #f8fafc;
+}
+
+tbody tr:hover td {
+  background: transparent;
 }
 
 code {
@@ -1122,7 +1146,7 @@ code {
   display: block;
 }
 
-/* ===== 顶栏汉堡按钮（宽屏隐藏） ===== */
+/* P3：去掉 display:none 状态下无效的 flex 属性，改为 display:inline-flex 直接切换 */
 .topbar-menu {
   display: none;
   flex-shrink: 0;
@@ -1135,8 +1159,6 @@ code {
   color: var(--text);
   font-size: 16px;
   cursor: pointer;
-  align-items: center;
-  justify-content: center;
 }
 
 /* ===== 响应式 ===== */
@@ -1145,7 +1167,7 @@ code {
   .sidebar {
     width: var(--sidebar-width);
     transform: translateX(-100%);
-    transition: transform 0.22s ease, width 0.2s ease;
+    transition: transform 0.2s ease; /* P5：统一过渡时长 */
     box-shadow: none;
   }
 
@@ -1167,8 +1189,11 @@ code {
     margin-left: 0;
   }
 
+  /* P3：窄屏显示汉堡按钮 */
   .topbar-menu {
     display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .topbar-fields {
@@ -1211,7 +1236,13 @@ code {
     grid-column: auto;
   }
 
-  button {
+  /* P1：只对表单操作区按钮应用全宽，排除表格/分页/顶栏/导航等控件按钮 */
+  .notice-actions button,
+  .resource-actions button,
+  .resource-head-actions button,
+  .plugin-actions button,
+  .section-actions button,
+  .license-management-card .notice-actions button {
     width: 100%;
   }
 }
