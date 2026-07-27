@@ -16,7 +16,7 @@ const {
   generateMermaidIllustration,
   stripGeneratedIllustrationsFromDocument,
 } = require('./contentIllustrationGeneration.cjs');
-const { applyRangeEdits, applyTextEdits, findTextMatches } = require('../utils/textEdit.cjs');
+const { applyRangeEdits, findTextMatches } = require('../utils/textEdit.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 
@@ -28,8 +28,9 @@ const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 const MAX_WORD_ADJUSTMENT_ROUNDS = 3;
 // 全文扩写不限制有效轮数，仅在连续多轮没有增加字数时退出。
 const MAX_EXPANSION_NO_PROGRESS_ROUNDS = 3;
-const TOTAL_WORD_ADJUSTMENT_BATCH_SIZE = 8;
-const TOTAL_WORD_ADJUSTMENT_SECTION_RATIO = 0.25;
+const TOTAL_WORD_ADJUSTMENT_BATCH_SIZE = 10;
+const DEFAULT_SECTION_WORD_GUIDANCE = 3000;
+const TOTAL_WORD_SHRINK_SECTION_RATIO = 0.25;
 // 生成阶段按全文上限倒推每小节目标字数时使用的折扣系数，预留 AI 系统性偏高的缓冲，降低初稿超量概率。
 const GENERATION_WORD_TARGET_RATIO = 0.8;
 // 全文缩写阶段筛选候选小节时，可缩空间至少要达到本轮单节平均预算的比例，低于此值的小节直接跳过以免空占批次名额。
@@ -2344,7 +2345,8 @@ function normalizeWordAdjustmentResponse(value) {
   const mode = String(source.mode || '').trim();
   const granularity = String(source.granularity || '').trim();
   const operations = (Array.isArray(source.operations) ? source.operations : []).map((operation) => ({
-    operation: String(operation?.operation || '').trim(),
+    operation: String(operation?.operation || '').trim().toLowerCase(),
+    anchor: normalizeNewlines(operation?.anchor || '').trim(),
     target_text: normalizeNewlines(operation?.target_text || '').trim(),
     content: normalizeGeneratedMarkdown(operation?.content || '').trim(),
   }));
@@ -2356,9 +2358,10 @@ function validateWordAdjustmentResponse(value) {
   if (!['paragraph', 'sentence'].includes(value?.granularity)) throw new Error('字数调整 granularity 只能是 paragraph 或 sentence');
   if (!Array.isArray(value?.operations) || !value.operations.length) throw new Error('字数调整 operations 不能为空');
   for (const operation of value.operations) {
-    const allowed = value.mode === 'expand' ? ['insert_after', 'replace'] : ['replace', 'delete'];
+    const allowed = value.mode === 'expand' ? ['insert', 'replace'] : ['replace', 'delete'];
     if (!allowed.includes(operation.operation)) throw new Error(`当前调整方向不允许 ${operation.operation || '空'} 操作`);
-    if (!operation.target_text) throw new Error('字数调整 target_text 不能为空');
+    if (operation.operation === 'insert' && !operation.anchor) throw new Error('字数调整 insert anchor 不能为空');
+    if (operation.operation !== 'insert' && !operation.target_text) throw new Error('字数调整 target_text 不能为空');
     if (operation.operation !== 'delete' && !operation.content) throw new Error('字数调整 content 不能为空');
     if (/^\s{0,3}#{1,6}\s/m.test(operation.content)
       || /!\[[^\]]*\]\([^)]*\)/.test(operation.content)
@@ -2371,8 +2374,14 @@ function validateWordAdjustmentResponse(value) {
 }
 
 function buildWordAdjustmentRepairMessages({ invalidContent, issues }, expectedMode, expectedGranularity, currentContent) {
+  const operationRule = expectedMode === 'expand'
+    ? '扩写只允许 insert/replace。insert 的 anchor 必须逐字复制当前正文中的唯一完整原文块，或使用 start/end；replace 的 target_text 必须逐字复制当前正文中的唯一完整目标。'
+    : '缩写只允许 replace/delete，target_text 必须逐字复制当前正文中的唯一完整目标。';
+  const responseFormat = expectedMode === 'expand'
+    ? `{"mode":"expand","granularity":"${expectedGranularity}","operations":[{"operation":"insert","anchor":"完整唯一原文块或 start/end","target_text":"","content":"新增正文"}]}`
+    : `{"mode":"shrink","granularity":"${expectedGranularity}","operations":[{"operation":"replace","target_text":"完整唯一原文块","content":"缩写后的正文"}]}`;
   return [
-    { role: 'user', content: `请把待修复内容整理为正文局部字数调整 JSON。mode 必须是 ${expectedMode}，granularity 必须是 ${expectedGranularity}，operations 至少一项。扩写只允许 insert_after/replace，缩写只允许 replace/delete。target_text 必须逐字复制当前正文中的唯一完整目标。content 不得包含标题、图片、Mermaid、代码块或表格，不得破坏列表层级、事实参数和服务承诺。只返回 JSON。` },
+    { role: 'user', content: `请把待修复内容整理为正文局部字数调整 JSON。mode 必须是 ${expectedMode}，granularity 必须是 ${expectedGranularity}，operations 至少一项。${operationRule} content 不得包含标题、图片、Mermaid、代码块或表格，不得破坏列表层级、事实参数和服务承诺。返回格式：${responseFormat}。只返回 JSON。` },
     { role: 'user', content: `错误列表：\n${(issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n')}` },
     { role: 'user', content: `当前正文：\n${String(currentContent || '').slice(0, 60000)}` },
     { role: 'user', content: `待修复内容：\n${String(invalidContent || '').slice(0, 60000)}` },
@@ -2391,22 +2400,32 @@ function buildWordAdjustmentMessages({ context, currentContent, currentWords, ta
   const totalWordText = totalWords === undefined
     ? ''
     : `当前全文 ${totalWords} 字，最少 ${minimumWords || '不限制'} 字，最多 ${maximumWords || '不限制'} 字。`;
+  const responseFormat = mode === 'expand'
+    ? `{"mode":"expand","granularity":"${granularity}","operations":[{"operation":"insert","anchor":"逐字复制当前正文中的唯一完整段落，或 start/end","target_text":"","content":"需要插入的新增正文"},{"operation":"replace","anchor":"","target_text":"逐字复制当前正文中的唯一完整原文块","content":"替换并扩写后的正文块"}]}`
+    : `{"mode":"shrink","granularity":"${granularity}","operations":[{"operation":"replace","target_text":"逐字复制当前正文中的唯一完整${granularity === 'paragraph' ? '段落' : '句子'}","content":"缩写后的正文"}]}`;
+  const operationRules = mode === 'expand'
+    ? `2. 扩写只允许 insert、replace，优先使用 insert；可以返回多个操作，把新增内容按不同技术主题插入最相关的位置。
+3. insert 的 anchor 必须逐字复制当前正文中的唯一完整原文段落或 Markdown 块；仅需插入开头或末尾时可写 start/end。锚点未命中时不会自动追加到末尾。
+4. replace 的 target_text 必须逐字复制当前正文中的唯一完整原文块；多个操作的锚点和替换范围不能重复或重叠。
+5. 新增正文的实际总字数应尽量接近但不得超过本次允许增加的字数；额度较大时应拆成多个 insert，禁止返回完整重写正文。`
+    : `2. 缩写只允许 replace、delete。
+3. target_text 必须逐字复制当前正文中的唯一完整目标，多项操作不能重叠。
+4. 缩写优先删除重复、空泛、同义反复和不影响事实的修饰表达。
+5. 不得返回完整重写正文。`;
   return [
     {
       role: 'user',
       content: `你是投标技术方案正文局部编辑助手。请对当前小节执行${mode === 'expand' ? '扩写' : '缩写'}，只返回 JSON，不返回完整重写正文。
 
-JSON 格式：{"mode":"${mode}","granularity":"${granularity}","operations":[{"operation":"${mode === 'expand' ? 'insert_after' : 'replace'}","target_text":"逐字复制当前正文中的唯一完整${granularity === 'paragraph' ? '段落' : '句子'}","content":"局部编辑内容"}]}
+JSON 格式：${responseFormat}
 
 要求：
 1. mode 和 granularity 必须与给定值一致。
-2. 扩写只允许 insert_after、replace；缩写只允许 replace、delete。
-3. target_text 必须逐字复制当前正文中的唯一完整目标，多项操作不能重叠。
-4. 不改变核心意思，不修改参数、数量、日期、周期和标准，不删除技术路线、职责、流程、风险措施、人员安排、验收要求、售后和服务承诺。
-5. 不新增未提供的品牌、型号、人员、承诺和服务期限。
-6. 不修改图片、Mermaid、代码块、表格结构、列表编号层级和资源路径，不生成 Markdown 标题或伪目录标题。
-7. 缩写优先删除重复、空泛、同义反复和不影响事实的修饰表达。
-8. 不把其他目录应承载的内容移动到当前小节。`,
+${operationRules}
+6. 不改变核心意思，不修改参数、数量、日期、周期和标准，不删除技术路线、职责、流程、风险措施、人员安排、验收要求、售后和服务承诺。
+7. 不新增未提供的品牌、型号、人员、承诺和服务期限。
+8. 不修改图片、Mermaid、代码块、表格结构、列表编号层级和资源路径，不生成 Markdown 标题或伪目录标题。
+9. 不把其他目录应承载的内容移动到当前小节。`,
     },
     { role: 'user', content: `当前章节路径：${chapterPath}\n章节描述：${item.description || ''}\n同级章节：${siblings}` },
     ...(String(selectedFactsText || '').trim() ? [{ role: 'user', content: `本章节全局事实变量：\n${selectedFactsText}` }] : []),
@@ -2432,7 +2451,33 @@ function collectProtectedContentRanges(content) {
 function applyWordAdjustmentOperations(content, adjustment) {
   const source = String(content || '');
   const protectedRanges = collectProtectedContentRanges(source);
+  const usedRanges = new Set();
   const edits = adjustment.operations.map((operation) => {
+    if (operation.operation === 'insert') {
+      const anchorKey = operation.anchor.trim().toLowerCase();
+      let position;
+      if (anchorKey === 'start') {
+        position = 0;
+      } else if (anchorKey === 'end') {
+        position = source.length;
+      } else {
+        const anchorResult = findTextMatches(source, operation.anchor);
+        if (!anchorResult.unique || anchorResult.strategy !== 'exact') {
+          throw new Error('字数调整 insert anchor 未在当前正文中精确唯一命中');
+        }
+        const anchorMatch = anchorResult.matches[0];
+        if (rangeOverlaps(anchorMatch.start, anchorMatch.end, protectedRanges)) {
+          throw new Error('字数调整不能在图片、Mermaid、代码块或表格内部插入内容');
+        }
+        position = anchorMatch.end;
+      }
+      const rangeKey = `${position}:${position}`;
+      if (usedRanges.has(rangeKey)) throw new Error('字数调整 insert anchor 重复');
+      usedRanges.add(rangeKey);
+      const newText = position === 0 ? `${operation.content}\n\n` : `\n\n${operation.content}`;
+      return { start: position, end: position, newText };
+    }
+
     const matchResult = findTextMatches(source, operation.target_text);
     if (!matchResult.unique || matchResult.strategy !== 'exact') {
       throw new Error('字数调整 target_text 未在当前正文中精确唯一命中');
@@ -2441,14 +2486,16 @@ function applyWordAdjustmentOperations(content, adjustment) {
     if (rangeOverlaps(match.start, match.end, protectedRanges)) {
       throw new Error('字数调整不能修改图片、Mermaid、代码块或表格');
     }
-    const newText = operation.operation === 'delete'
-      ? ''
-      : operation.operation === 'insert_after'
-        ? `${operation.target_text}\n\n${operation.content}`
-        : operation.content;
-    return { oldText: operation.target_text, newText };
+    const rangeKey = `${match.start}:${match.end}`;
+    if (usedRanges.has(rangeKey)) throw new Error('字数调整 target_text 范围重复');
+    usedRanges.add(rangeKey);
+    return {
+      start: match.start,
+      end: match.end,
+      newText: operation.operation === 'delete' ? '' : operation.content,
+    };
   });
-  const result = applyTextEdits(source, edits);
+  const result = applyRangeEdits(source, edits);
   if (!result.changed || result.errors.length) {
     throw new Error(result.errors[0] || '字数调整没有产生有效修改');
   }
@@ -4397,28 +4444,102 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     return null;
   }
 
-  // 每轮最多选择八个小节，预分配的总预算不超过当前全文差额。
-  function buildTotalWordAdjustmentBatch(candidates, direction, slotCount) {
-    const selected = candidates.slice(0, slotCount);
+  // 扩写先按小节指导缺口分配，剩余额度再均摊；3000 仅是 sectionWords 为 0 时的内部指导值，不构成小节上限。
+  function buildTotalWordExpansionBatch(selected, direction) {
+    const guidanceWords = wordControl.sectionWords > 0 ? wordControl.sectionWords : DEFAULT_SECTION_WORD_GUIDANCE;
+    const entries = selected.map((candidate, index) => {
+      const capacity = wordControl.strictSectionWords
+        ? Math.max(0, wordControl.sectionMaximumWords - candidate.words)
+        : Number.POSITIVE_INFINITY;
+      return {
+        context: candidate,
+        index,
+        guidanceWords,
+        guidanceGap: Math.min(Math.max(0, guidanceWords - candidate.words), capacity),
+        capacity,
+        budget: 0,
+      };
+    });
+    let unallocatedWords = Math.abs(direction.currentWords - direction.targetWords);
+    const totalGuidanceGap = entries.reduce((sum, entry) => sum + entry.guidanceGap, 0);
+    const guidanceBudget = Math.min(unallocatedWords, totalGuidanceGap);
+
+    if (guidanceBudget > 0 && totalGuidanceGap > 0) {
+      const allocations = entries.map((entry) => {
+        const rawBudget = (guidanceBudget * entry.guidanceGap) / totalGuidanceGap;
+        return {
+          entry,
+          budget: Math.floor(rawBudget),
+          remainder: rawBudget - Math.floor(rawBudget),
+        };
+      });
+      let remainderWords = guidanceBudget - allocations.reduce((sum, allocation) => sum + allocation.budget, 0);
+      const remainderOrder = [...allocations]
+        .filter((allocation) => allocation.budget < allocation.entry.guidanceGap)
+        .sort((left, right) => right.remainder - left.remainder || left.entry.index - right.entry.index);
+      for (const allocation of remainderOrder) {
+        if (remainderWords <= 0) break;
+        allocation.budget += 1;
+        remainderWords -= 1;
+      }
+      for (const allocation of allocations) {
+        allocation.entry.budget = allocation.budget;
+      }
+      unallocatedWords -= guidanceBudget;
+    }
+
+    while (unallocatedWords > 0) {
+      const available = entries.filter((entry) => entry.budget < entry.capacity);
+      if (!available.length) break;
+      const fairShare = Math.ceil(unallocatedWords / available.length);
+      let allocatedThisPass = 0;
+      for (const entry of available) {
+        const capacity = entry.capacity - entry.budget;
+        const addition = Math.max(0, Math.min(unallocatedWords, fairShare, capacity));
+        if (addition <= 0) continue;
+        entry.budget += addition;
+        unallocatedWords -= addition;
+        allocatedThisPass += addition;
+      }
+      if (!allocatedThisPass) break;
+    }
+
+    return entries
+      .filter((entry) => entry.budget > 0)
+      .map(({ context, budget, guidanceWords: itemGuidanceWords }) => ({
+        context,
+        budget,
+        guidanceWords: itemGuidanceWords,
+      }));
+  }
+
+  // 强控缩写限制单次最多减少 25%；非强控只受全文差额和正文可读空间限制。
+  function buildTotalWordShrinkBatch(selected, direction) {
     let unallocatedWords = Math.abs(direction.currentWords - direction.targetWords);
     const batch = [];
     for (let index = 0; index < selected.length && unallocatedWords > 0; index += 1) {
       const candidate = selected[index];
       const remainingSlots = selected.length - index;
       const fairShare = Math.ceil(unallocatedWords / remainingSlots);
-      const ratioCapacity = Math.max(1, Math.floor(candidate.words * TOTAL_WORD_ADJUSTMENT_SECTION_RATIO));
-      const readableCapacity = direction.mode === 'shrink' ? Math.max(0, candidate.words - 1) : ratioCapacity;
+      const ratioCapacity = Math.max(1, Math.floor(candidate.words * TOTAL_WORD_SHRINK_SECTION_RATIO));
+      const readableCapacity = Math.max(0, candidate.words - 1);
       const sectionCapacity = wordControl.strictSectionWords
-        ? direction.mode === 'expand'
-          ? Math.min(ratioCapacity, wordControl.sectionMaximumWords - candidate.words)
-          : Math.min(ratioCapacity, candidate.words - wordControl.sectionMinimumWords, readableCapacity)
+        ? Math.min(ratioCapacity, candidate.words - wordControl.sectionMinimumWords, readableCapacity)
         : readableCapacity;
       const budget = Math.max(0, Math.min(unallocatedWords, fairShare, sectionCapacity));
       if (budget <= 0) continue;
-      batch.push({ context: candidate, budget });
+      batch.push({ context: candidate, budget, guidanceWords: 0 });
       unallocatedWords -= budget;
     }
     return batch;
+  }
+
+  // 每轮最多选择十个小节，批次总预算不超过当前全文差额。
+  function buildTotalWordAdjustmentBatch(candidates, direction, slotCount) {
+    const selected = candidates.slice(0, slotCount);
+    return direction.mode === 'expand'
+      ? buildTotalWordExpansionBatch(selected, direction)
+      : buildTotalWordShrinkBatch(selected, direction);
   }
 
   async function runTotalWordAdjustments() {
@@ -4493,11 +4614,13 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         logs = [...logs, `全文字数调整${roundLabel}：提交 ${batch.length} 个小节，当前还需${direction.mode === 'expand' ? '增加' : '减少'} ${contentStats.total_adjustment_remaining_words} 字。`];
         publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
         const activeItemIds = new Set();
-        const batchResults = await Promise.allSettled(batch.map(async ({ context: candidate, budget }) => {
+        const batchResults = await Promise.allSettled(batch.map(async ({ context: candidate, budget, guidanceWords }) => {
           activeItemIds.add(candidate.item.id);
           contentStats.total_adjustment_active_count = activeItemIds.size;
           contentStats.total_adjustment_item_id = candidate.item.id;
-          logs = [...logs, `全文字数调整已提交：${candidate.item.id} ${candidate.item.title || '未命名章节'}，本次预算 ${budget} 字。`];
+          logs = [...logs, direction.mode === 'expand'
+            ? `全文扩写已提交：${candidate.item.id} ${candidate.item.title || '未命名章节'}，当前 ${candidate.words} 字，内部指导 ${guidanceWords} 字，本次预算 ${budget} 字。`
+            : `全文缩写已提交：${candidate.item.id} ${candidate.item.title || '未命名章节'}，本次预算 ${budget} 字。`];
           publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
           let failed = false;
           try {
