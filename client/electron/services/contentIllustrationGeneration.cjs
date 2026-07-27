@@ -329,7 +329,7 @@ async function repairHtmlLayout({ aiService, execution, html, issues, attempt, m
 }
 
 // 生成 HTML 源文件并本地转换为 PNG。
-async function generateHtmlIllustrationInternal({ aiService, execution, plan, workspaceStore, localImageRenderService, runAgentHtml, onSourceSaved, onRenderRetry, isPauseRequested, createPauseError }) {
+async function generateHtmlIllustrationInternal({ aiService, execution, plan, workspaceStore, localImageRenderService = getLocalImageRenderService(), runAgentHtml, onSourceSaved, onRenderRetry, isPauseRequested, createPauseError }) {
   const recordedPath = execution.planItem.generation?.source_path;
   let sourcePath = recordedPath;
   let html = sourcePath ? workspaceStore.readIllustrationHtml(sourcePath) : '';

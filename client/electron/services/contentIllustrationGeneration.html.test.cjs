@@ -37,6 +37,7 @@ function createWorkspaceStore(overrides = {}) {
 
 test('HTML 生图提示词禁止文字变形，并将布局诊断反馈给修复请求', async () => {
   const prompts = [];
+  let probeCount = 0;
   let renderCount = 0;
   const result = await generateHtmlIllustration({
     aiService: {
@@ -49,13 +50,21 @@ test('HTML 生图提示词禁止文字变形，并将布局诊断反馈给修复
     plan: { revision: 'revision' },
     workspaceStore: createWorkspaceStore(),
     localImageRenderService: {
+      probeHtmlLayoutOnly: async () => {
+        probeCount += 1;
+        return {
+          width: 1240,
+          height: 600,
+          layout_issues: probeCount === 1 ? ['文字存在旋转、倒置、镜像或缩放变形：div.label'] : [],
+        };
+      },
       renderHtmlToPng: async () => {
         renderCount += 1;
         return {
           buffer: png,
           width: 1240,
           height: 600,
-          layout_issues: renderCount === 1 ? ['文字存在旋转、倒置、镜像或缩放变形：div.label'] : [],
+          layout_issues: [],
         };
       },
     },
@@ -63,22 +72,29 @@ test('HTML 生图提示词禁止文字变形，并将布局诊断反馈给修复
   });
 
   assert.match(prompts[0], /文字不得旋转、倒置、镜像或缩放变形/);
-  assert.equal(renderCount, 2);
+  assert.equal(probeCount, 2);
+  assert.equal(renderCount, 1);
   assert.match(prompts[1], /文字存在旋转、倒置、镜像或缩放变形/);
   assert.equal(result.visual_qa.layout_repair_attempts, 1);
 });
 
-test('HTML 布局问题连续两轮修复失败时不保存 PNG', async () => {
-  let pngSaved = false;
+test('HTML 布局问题连续两轮修复后直接生成一次 PNG', async () => {
+  let probeCount = 0;
   let renderCount = 0;
-  await assert.rejects(async () => generateHtmlIllustration({
+  const result = await generateHtmlIllustration({
     aiService: { chat: async () => '<!doctype html><html><head></head><body>待修复图</body></html>' },
     execution: createExecution(),
     plan: { revision: 'revision' },
-    workspaceStore: createWorkspaceStore({
-      saveIllustrationPng: () => { pngSaved = true; throw new Error('不应保存 PNG'); },
-    }),
+    workspaceStore: createWorkspaceStore(),
     localImageRenderService: {
+      probeHtmlLayoutOnly: async () => {
+        probeCount += 1;
+        return {
+          width: 1240,
+          height: 600,
+          layout_issues: ['文字被前景元素遮挡：div.card 被 div.core 覆盖'],
+        };
+      },
       renderHtmlToPng: async () => {
         renderCount += 1;
         return {
@@ -90,8 +106,9 @@ test('HTML 布局问题连续两轮修复失败时不保存 PNG', async () => {
       },
     },
     runAgentHtml: async () => { throw new Error('普通 HTML 生图不应启动 Agent'); },
-  }), /HTML 图片布局质检未通过：文字被前景元素遮挡/);
+  });
 
-  assert.equal(renderCount, 3);
-  assert.equal(pngSaved, false);
+  assert.equal(probeCount, 2);
+  assert.equal(renderCount, 1);
+  assert.equal(result.visual_qa.layout_repair_attempts, 2);
 });
