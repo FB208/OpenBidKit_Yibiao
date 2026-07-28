@@ -131,6 +131,7 @@ fieldset.settings-list {
   min-height: 36px;
   padding: 8px 12px;
   color: var(--yb-text);
+  font-size: 13px;
   background-color: #eef3fa;
   border: 1px solid #ccd6e3;
   border-radius: 12px;
