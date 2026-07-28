@@ -6,7 +6,7 @@ import { handleGitHubRepoStats } from './routes/githubRepoStats.js';
 import { handleHealth } from './routes/health.js';
 import { handleLatest } from './routes/latest.js';
 import { handleLicenseActivate, handleLicenseConfig, handleOfflineLicense } from './routes/license.js';
-import { handleAdminModelInfoCache, handlePublicModelInfo } from './routes/modelInfo.js';
+import { handleAdminModelInfoCache, handleAdminModelInfoOverride, handlePublicModelInfo } from './routes/modelInfo.js';
 import { handleAdminNotice, handlePublicNotice } from './routes/notice.js';
 import { handleOverview } from './routes/overview.js';
 import { handleProjects } from './routes/projects.js';
@@ -36,6 +36,7 @@ const routes = new Map([
   ['/api/projects', handleProjects],
   ['/api/notice', handleAdminNotice],
   ['/api/model-info-cache', handleAdminModelInfoCache],
+  ['/api/model-info-cache/override', handleAdminModelInfoOverride],
   ['/api/resources', handleAdminResources],
   ['/api/plugins', handleAdminPlugins],
   ['/api/plugins/sync', handleAdminPluginSync],

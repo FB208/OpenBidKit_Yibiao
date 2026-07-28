@@ -42,9 +42,10 @@
 | `GET /api/retention` | D1 | `ADMIN_TOKEN` | 留存概览，读取 Cron 生成的最新 30 天快照 |
 | `GET /api/github-repo-stats` | GitHub + KV | `ADMIN_TOKEN` | GitHub stats |
 | `GET /notice` | KV | 无 | 客户端公告 |
-| `GET /model-info` | KV | 无 | 按 `modelName` 返回思考强度、最大 context/output 和缓存时间 |
+| `GET /model-info` | KV | 无 | 按 `modelName` 返回最终生效的思考强度、最大 context/output 和缓存时间，人工覆盖优先 |
 | `GET/POST/DELETE /api/notice` | KV | `ADMIN_TOKEN` | 公告后台管理 |
-| `GET/POST /api/model-info-cache` | KV + models.dev | `ADMIN_TOKEN` | 查看模型信息缓存状态或手动同步 |
+| `GET/POST /api/model-info-cache` | KV + models.dev | `ADMIN_TOKEN` | 分页查看模型详细索引或手动同步，GET 支持 `q/scope/page/pageSize` |
+| `POST/DELETE /api/model-info-cache/override` | KV | `ADMIN_TOKEN` | 保存单条模型人工覆盖，或按 `modelName` 恢复自动同步值 |
 | `POST /license/activate` | KV + Worker Secret | 无 | 客户端免费授权签发，返回带签名 license |
 | `GET/POST /api/license-config` | KV | `ADMIN_TOKEN` | 授权配置后台管理 |
 | `GET /resources` | `RESOURCE_DB` + AE | 无 | 客户端资源列表，点击量为 D1 累计 + AE 今天 |
@@ -145,7 +146,7 @@ npm run setup:analytics-storage
 
 如果刚删除过 `openbidkit-analytics`，脚本会重新创建并更新 `wrangler.jsonc` 的 `database_id`。
 
-模型信息同步使用独立 Cron `0 20 * * *`（北京时间每天 04:00），从 `models.dev/api.json` 提取按模型 ID 聚合的精简索引。思考强度取同名模型明确档位的交集，`context` 和 `output` 分别取同名记录最大值；同步失败不会覆盖最后一次成功索引。管理员也可以在 Dashboard 的“模型信息缓存”页面手动同步。
+模型信息同步使用独立 Cron `0 20 * * *`（北京时间每天 04:00），从 `models.dev/api.json` 提取按模型 ID 聚合的精简索引。思考强度取同名模型明确档位的交集，`context` 和 `output` 分别取同名记录最大值；同步失败不会覆盖最后一次成功索引。Dashboard 的“模型信息缓存”页面支持查看详细索引、手动同步和人工修改。人工修改按完整模型记录独立保存在 KV 中，公共查询优先使用人工值，定时或手动同步不会覆盖；点击“恢复默认”后立即删除人工覆盖并重新使用最近一次自动同步值。
 
 ### 3. 部署 Worker
 

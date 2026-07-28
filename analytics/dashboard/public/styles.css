@@ -1069,6 +1069,184 @@ button:disabled {
   align-items: center;
 }
 
+/* ===== 模型信息索引 ===== */
+.model-info-index-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.model-info-index-head h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.model-info-index-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.model-info-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) 150px;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.model-info-table-wrap {
+  overflow-x: auto;
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.model-info-table {
+  min-width: 1080px;
+  table-layout: fixed;
+}
+
+.model-info-table th:first-child,
+.model-info-name-cell {
+  width: 280px;
+}
+
+.model-info-table th:nth-child(2) {
+  width: 230px;
+}
+
+.model-info-table th:nth-child(3),
+.model-info-table th:nth-child(4),
+.model-info-number-cell {
+  width: 120px;
+  font-variant-numeric: tabular-nums;
+}
+
+.model-info-table th:nth-child(5) {
+  width: 100px;
+}
+
+.model-info-table th:nth-child(6),
+.model-info-time-cell {
+  width: 170px;
+}
+
+.model-info-table th:last-child,
+.model-info-row-actions {
+  width: 170px;
+}
+
+.model-info-name-cell code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-info-table tr.is-overridden td:first-child {
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.model-info-efforts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.model-info-efforts span,
+.model-info-source {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  color: #344054;
+  background: #eef2f7;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.model-info-source.is-overridden {
+  color: #1d4ed8;
+  background: var(--primary-soft);
+  font-weight: 600;
+}
+
+.model-info-empty-value,
+.model-info-time-cell {
+  color: var(--muted);
+}
+
+.model-info-row-actions button {
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.model-info-row-actions button + button {
+  margin-left: 4px;
+}
+
+.model-info-pager {
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.model-info-edit-dialog {
+  width: min(620px, calc(100vw - 32px));
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-md);
+}
+
+.model-info-edit-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.28);
+}
+
+.model-info-edit-dialog .dialog-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.model-info-edit-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.model-info-edit-fields label:first-child,
+.model-info-edit-fields label:nth-child(2) {
+  grid-column: 1 / -1;
+}
+
+.model-info-edit-fields small {
+  font-size: 12px;
+}
+
+.model-info-edit-fields input[readonly] {
+  color: var(--muted);
+  background: var(--panel-soft);
+}
+
+.model-info-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.model-info-edit-actions button {
+  align-self: auto;
+}
+
 /* ===== 表格通用 ===== */
 td small {
   color: var(--muted);
@@ -1218,6 +1396,21 @@ code {
   .resource-form,
   .plugin-form {
     grid-template-columns: 1fr;
+  }
+
+  .model-info-index-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .model-info-filters,
+  .model-info-edit-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .model-info-edit-fields label:first-child,
+  .model-info-edit-fields label:nth-child(2) {
+    grid-column: auto;
   }
 
   .notice-actions,

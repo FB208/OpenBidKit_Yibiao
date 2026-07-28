@@ -1,5 +1,6 @@
 import {
   MODEL_INFO_CACHE_INDEX_KEY,
+  MODEL_INFO_CACHE_OVERRIDES_KEY,
   MODEL_INFO_CACHE_STATUS_KEY,
   MODEL_INFO_SOURCE_URL,
 } from '../constants.js';
@@ -44,6 +45,17 @@ function sortReasoningEfforts(efforts) {
     if (rightIndex === -1) return -1;
     return leftIndex - rightIndex;
   });
+}
+
+// 统一模型能力记录格式，供自动索引和人工覆盖共同使用。
+function normalizeModelInfoRecord(model) {
+  return {
+    reasoningEfforts: Array.isArray(model?.reasoningEfforts)
+      ? [...new Set(model.reasoningEfforts.map((value) => String(value || '').trim()).filter(Boolean))]
+      : [],
+    context: Math.max(0, Math.floor(Number(model?.context) || 0)),
+    output: Math.max(0, Math.floor(Number(model?.output) || 0)),
+  };
 }
 
 // 把 models.dev 完整目录转换为客户端查询所需的精简能力索引。
@@ -101,21 +113,117 @@ export async function readModelInfoCacheStatus(env) {
   }
 }
 
+// 读取自动同步生成的模型能力索引。
+export async function readModelInfoCacheIndex(env) {
+  if (!env.NOTICE_STORE) return null;
+  const raw = await env.NOTICE_STORE.get(MODEL_INFO_CACHE_INDEX_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+// 读取管理员人工覆盖记录；该数据不会被自动同步任务修改。
+export async function readModelInfoOverrides(env) {
+  if (!env.NOTICE_STORE) return { version: CACHE_VERSION, models: {} };
+  const raw = await env.NOTICE_STORE.get(MODEL_INFO_CACHE_OVERRIDES_KEY);
+  if (!raw) return { version: CACHE_VERSION, models: {} };
+  try {
+    const overrides = JSON.parse(raw);
+    return {
+      version: CACHE_VERSION,
+      models: overrides?.models && typeof overrides.models === 'object' ? overrides.models : {},
+    };
+  } catch {
+    return { version: CACHE_VERSION, models: {} };
+  }
+}
+
 // 读取指定模型的精简能力信息。
 export async function readCachedModelInfo(env, modelName) {
   if (!env.NOTICE_STORE) return { available: false, index: null, model: null };
-  const raw = await env.NOTICE_STORE.get(MODEL_INFO_CACHE_INDEX_KEY);
-  if (!raw) return { available: false, index: null, model: null };
-  try {
-    const index = JSON.parse(raw);
+  const normalizedName = String(modelName || '').trim();
+  const [index, overrides] = await Promise.all([
+    readModelInfoCacheIndex(env),
+    readModelInfoOverrides(env),
+  ]);
+  const override = overrides.models[normalizedName] || null;
+  const sourceModel = index?.models?.[normalizedName] || null;
+  return {
+    available: Boolean(index || override),
+    index,
+    model: override ? normalizeModelInfoRecord(override) : sourceModel,
+  };
+}
+
+// 返回管理端分页表格使用的最终索引，人工覆盖记录优先于自动同步值。
+export async function listAdminModelInfo(env, options = {}) {
+  const [index, overrides] = await Promise.all([
+    readModelInfoCacheIndex(env),
+    readModelInfoOverrides(env),
+  ]);
+  const sourceModels = index?.models && typeof index.models === 'object' ? index.models : {};
+  const overrideModels = overrides.models;
+  const query = String(options.query || '').trim().toLocaleLowerCase();
+  const overriddenOnly = options.scope === 'overridden';
+  const pageSize = Math.max(1, Math.min(100, Math.floor(Number(options.pageSize) || 50)));
+  const requestedPage = Math.max(1, Math.floor(Number(options.page) || 1));
+
+  const modelNames = [...new Set([...Object.keys(sourceModels), ...Object.keys(overrideModels)])]
+    .filter((modelName) => !query || modelName.toLocaleLowerCase().includes(query))
+    .filter((modelName) => !overriddenOnly || Boolean(overrideModels[modelName]))
+    .sort((left, right) => left.localeCompare(right, 'en', { numeric: true, sensitivity: 'base' }));
+  const total = modelNames.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(requestedPage, totalPages);
+  const models = modelNames.slice((page - 1) * pageSize, page * pageSize).map((modelName) => {
+    const override = overrideModels[modelName] || null;
+    const model = normalizeModelInfoRecord(override || sourceModels[modelName]);
     return {
-      available: true,
-      index,
-      model: index?.models?.[String(modelName || '').trim()] || null,
+      modelName,
+      ...model,
+      overridden: Boolean(override),
+      updatedAt: override?.updatedAt || index?.syncedAt || '',
     };
-  } catch {
-    return { available: false, index: null, model: null };
+  });
+
+  return {
+    available: Boolean(index),
+    models,
+    total,
+    page,
+    pageSize,
+    overrideCount: Object.keys(overrideModels).length,
+  };
+}
+
+// 保存一条完整的管理员人工覆盖记录。
+export async function saveModelInfoOverride(env, modelName, model) {
+  const overrides = await readModelInfoOverrides(env);
+  const record = normalizeModelInfoRecord(model);
+  overrides.models[modelName] = {
+    ...record,
+    reasoningEfforts: sortReasoningEfforts(record.reasoningEfforts),
+    updatedAt: new Date().toISOString(),
+  };
+  await env.NOTICE_STORE.put(MODEL_INFO_CACHE_OVERRIDES_KEY, JSON.stringify(overrides));
+  return overrides.models[modelName];
+}
+
+// 删除人工覆盖，使该模型立即恢复最近一次自动同步值。
+export async function deleteModelInfoOverride(env, modelName) {
+  const overrides = await readModelInfoOverrides(env);
+  const existed = Boolean(overrides.models[modelName]);
+  if (!existed) return false;
+  delete overrides.models[modelName];
+  if (Object.keys(overrides.models).length) {
+    await env.NOTICE_STORE.put(MODEL_INFO_CACHE_OVERRIDES_KEY, JSON.stringify(overrides));
+  } else {
+    await env.NOTICE_STORE.delete(MODEL_INFO_CACHE_OVERRIDES_KEY);
   }
+  return true;
 }
 
 // 从 models.dev 同步模型信息并原子替换客户端使用的精简索引。

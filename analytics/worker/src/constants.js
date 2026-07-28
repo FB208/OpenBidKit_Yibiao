@@ -22,6 +22,7 @@ export const GITHUB_REPO_STATS_STALE_TTL_SECONDS = 604800;
 export const MODEL_INFO_SOURCE_URL = 'https://models.dev/api.json';
 export const MODEL_INFO_CACHE_INDEX_KEY = 'model_info_cache:index';
 export const MODEL_INFO_CACHE_STATUS_KEY = 'model_info_cache:status';
+export const MODEL_INFO_CACHE_OVERRIDES_KEY = 'model_info_cache:overrides';
 export const MODEL_INFO_SYNC_CRON = '0 20 * * *';
 export const DEFAULT_FREE_LICENSE_DAYS = 30;
 
