@@ -364,6 +364,12 @@ function normalizeAgentProxyRequestBody(config, sourceBody) {
     delete normalized.temperature;
   }
 
+  if (config.reasoning_effort) {
+    normalized.reasoning_effort = config.reasoning_effort;
+  } else {
+    delete normalized.reasoning_effort;
+  }
+
   // 部分 OpenAI 兼容上游会拒绝 Agent 注入的输出长度参数。
   delete normalized.max_tokens;
   delete normalized.max_output_tokens;

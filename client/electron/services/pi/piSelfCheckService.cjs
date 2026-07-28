@@ -417,6 +417,9 @@ async function runTextModelProbe(config, options) {
     if (config.temperature_enabled) {
       body.temperature = config.temperature;
     }
+    if (config.reasoning_effort) {
+      body.reasoning_effort = config.reasoning_effort;
+    }
     if (options.requireToolCall) {
       body.tools = [{
         type: 'function',

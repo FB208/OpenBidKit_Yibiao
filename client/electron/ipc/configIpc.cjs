@@ -13,6 +13,7 @@ function registerConfigIpc({ configStore, aiService, onDeveloperModeChange, onCo
     return result;
   });
   ipcMain.handle('config:list-models', (_event, config) => aiService.listModels(config));
+  ipcMain.handle('config:get-model-info', (_event, modelName) => aiService.getModelInfo(modelName));
   ipcMain.handle('config:open-config-folder', async () => {
     const configFolder = path.dirname(configStore.getConfigFilePath());
     fs.mkdirSync(configFolder, { recursive: true });

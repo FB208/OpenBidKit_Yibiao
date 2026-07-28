@@ -86,6 +86,15 @@
   border-top: 1px solid var(--yb-border-soft);
 }
 
+fieldset.settings-list {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+}
+
 .settings-row {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(320px, 420px);
@@ -371,6 +380,10 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
+}
+
+.settings-control-with-action.is-single-action {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .settings-action-cell {

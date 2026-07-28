@@ -3,6 +3,7 @@ import { loadAgentRuntime } from './pages/agentRuntime.js';
 import { loadClients, loadClientDetail, loadIpStats } from './pages/clients.js';
 import { loadConfigUsage, loadModelUsage } from './pages/configUsage.js';
 import { loadLatest } from './pages/latest.js';
+import { loadModelInfoCache, syncModelInfoCache } from './pages/modelInfoCache.js';
 import { downloadOfflineLicense, generateOfflineLicense, loadLicenseConfig, saveLicenseConfig } from './pages/license.js';
 import { disableNotice, loadNotice, publishNotice } from './pages/notice.js';
 import { loadOverview } from './pages/overview.js';
@@ -26,6 +27,7 @@ const tabLoaders = {
   license: () => loadLicenseConfig(),
   resources: () => loadResources(),
   plugins: () => loadPlugins(),
+  'model-info-cache': () => loadModelInfoCache(),
 };
 
 const dataTabCacheTtl = 60_000;
@@ -112,6 +114,7 @@ function bindEvents() {
   state.downloadOfflineLicenseButton.addEventListener('click', downloadOfflineLicense);
   bindResourceEvents();
   setupPluginsPage();
+  state.syncModelInfoCacheButton.addEventListener('click', syncModelInfoCache);
   state.prevLatestPage.addEventListener('click', () => {
     appState.latestPage = Math.max(1, appState.latestPage - 1);
     void refreshActiveTab({ forceRefresh: true });

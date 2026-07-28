@@ -9,6 +9,7 @@ export interface TextModelConfig {
   api_key: string;
   base_url: string;
   model_name: string;
+  reasoning_effort: string;
   context_length_limit: number;
   concurrency_limit: number;
   temperature_enabled: boolean;
@@ -93,4 +94,18 @@ export interface ClientConfig extends AiConfig {
   developer_token_stats_auto_open?: boolean;
   analytics_client_id?: string;
   analytics_created_at?: string;
+}
+
+export interface ModelInfoCacheEntry {
+  reasoningEfforts: string[];
+  context: number;
+  output: number;
+}
+
+export interface ModelInfoResult {
+  success: boolean;
+  message: string;
+  modelName: string;
+  model: ModelInfoCacheEntry | null;
+  syncedAt: string;
 }

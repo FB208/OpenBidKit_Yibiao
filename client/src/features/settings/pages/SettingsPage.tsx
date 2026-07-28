@@ -80,12 +80,12 @@ const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_TEXT_TEMPERATURE = 0.7;
 
 const textProviderDefaults: Record<ConfiguredTextModelProvider, TextModelConfig> = {
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  custom: { api_key: '', base_url: '', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  custom: { api_key: '', base_url: '', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
 };
 
 const textProviderApiKeyUrls: Partial<Record<ConfiguredTextModelProvider, string>> = {
@@ -147,6 +147,7 @@ function normalizeTextModelProfile(provider: ConfiguredTextModelProvider, profil
     api_key: profile?.api_key ?? defaults.api_key,
     base_url: baseUrl,
     model_name: profile?.model_name ?? defaults.model_name,
+    reasoning_effort: profile?.reasoning_effort?.trim() ?? defaults.reasoning_effort,
     context_length_limit: normalizeTextContextLengthLimit(profile?.context_length_limit ?? defaults.context_length_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(profile?.concurrency_limit ?? defaults.concurrency_limit),
     temperature_enabled: profile?.temperature_enabled ?? defaults.temperature_enabled,
@@ -176,6 +177,7 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
     api_key: textModel.api_key,
     base_url: textModel.provider === 'custom' ? textModel.base_url : textProviderDefaults[textModel.provider].base_url,
     model_name: textModel.model_name,
+    reasoning_effort: textModel.reasoning_effort.trim(),
     context_length_limit: normalizeTextContextLengthLimit(textModel.context_length_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(textModel.concurrency_limit),
     temperature_enabled: textModel.temperature_enabled,
@@ -561,10 +563,14 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [savedConfig, setSavedConfig] = useState<ClientConfig | null>(null);
   const [textModels, setTextModels] = useState<string[]>([]);
+  const [reasoningEfforts, setReasoningEfforts] = useState<string[]>([]);
   const [imageModels, setImageModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState<'text' | 'image' | null>(null);
+  const [loadingReasoningEfforts, setLoadingReasoningEfforts] = useState(false);
+  const [loadingContextLength, setLoadingContextLength] = useState(false);
   const [testingTextModel, setTestingTextModel] = useState(false);
   const [testingImageModel, setTestingImageModel] = useState(false);
+  const textModelBusy = loadingModels === 'text' || loadingReasoningEfforts || loadingContextLength || testingTextModel;
   const [imageTestPreview, setImageTestPreview] = useState<{ src: string; title: string } | null>(null);
   const [appVersion, setAppVersion] = useState('');
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
@@ -683,6 +689,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       api_key: activeTextProfile.api_key,
       base_url: activeTextProfile.base_url,
       model_name: activeTextProfile.model_name,
+      reasoning_effort: activeTextProfile.reasoning_effort,
       context_length_limit: activeTextProfile.context_length_limit,
       concurrency_limit: activeTextProfile.concurrency_limit,
       temperature_enabled: activeTextProfile.temperature_enabled,
@@ -864,6 +871,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
   const updateTextModelProvider = (provider: TextModelProvider) => {
     setTextModels([]);
+    setReasoningEfforts([]);
     setState((prev) => ({
       ...prev,
       textModelProfiles: {
@@ -895,6 +903,24 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         };
       })(),
     }));
+  };
+
+  // 更新模型名称，并清空不再适用于新模型的思考强度。
+  const updateTextModelName = (modelName: string) => {
+    setReasoningEfforts([]);
+    setState((prev) => {
+      const textModel = prev.textModel.model_name === modelName
+        ? prev.textModel
+        : { ...prev.textModel, model_name: modelName, reasoning_effort: '' };
+      return {
+        ...prev,
+        textModel,
+        textModelProfiles: {
+          ...prev.textModelProfiles,
+          [prev.textModel.provider]: textProfileFromState(textModel),
+        },
+      };
+    });
   };
 
   const openTextProviderApiKeyPage = async () => {
@@ -1125,6 +1151,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const fetchTextModels = async () => {
     try {
       setLoadingModels('text');
+      setReasoningEfforts([]);
       const result = await window.yibiao?.config.listModels(createClientConfig());
       const models = result?.models || [];
       setTextModels(models);
@@ -1134,7 +1161,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
           ...(() => {
             const textModel = models.includes(prev.textModel.model_name)
               ? prev.textModel
-              : { ...prev.textModel, model_name: models[0] };
+              : { ...prev.textModel, model_name: models[0], reasoning_effort: '' };
             return {
               textModel,
               textModelProfiles: {
@@ -1150,6 +1177,68 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       showToast(error instanceof Error ? error.message : '获取文本模型失败', 'error');
     } finally {
       setLoadingModels(null);
+    }
+  };
+
+  // 从云端模型信息缓存获取当前模型明确支持的思考强度。
+  const fetchReasoningEfforts = async () => {
+    const modelName = state.textModel.model_name.trim();
+    if (!modelName) {
+      showToast('请先填写文本模型名称', 'info');
+      return;
+    }
+
+    try {
+      setLoadingReasoningEfforts(true);
+      const result = await window.yibiao?.config.getModelInfo(modelName);
+      const efforts = result?.model?.reasoningEfforts || [];
+      setReasoningEfforts(efforts);
+      if (efforts.length) {
+        updateTextModelConfig({
+          reasoning_effort: !state.textModel.reasoning_effort || efforts.includes(state.textModel.reasoning_effort)
+            ? state.textModel.reasoning_effort
+            : '',
+        });
+      }
+      showToast(
+        efforts.length
+          ? `获取到 ${efforts.length} 个可用思考强度`
+          : result?.success ? '该模型没有明确的思考强度信息，请手动录入' : result?.message || '未获取到模型信息',
+        efforts.length ? 'success' : 'info',
+      );
+    } catch (error) {
+      setReasoningEfforts([]);
+      showToast(error instanceof Error ? error.message : '获取模型思考强度失败', 'error');
+    } finally {
+      setLoadingReasoningEfforts(false);
+    }
+  };
+
+  // 从云端模型信息缓存获取当前模型的最大上下文长度。
+  const fetchContextLength = async () => {
+    const modelName = state.textModel.model_name.trim();
+    if (!modelName) {
+      showToast('请先填写文本模型名称', 'info');
+      return;
+    }
+
+    try {
+      setLoadingContextLength(true);
+      const result = await window.yibiao?.config.getModelInfo(modelName);
+      const contextLength = Number(result?.model?.context || 0);
+      if (!result?.success || contextLength <= 0) {
+        showToast(
+          result?.success ? '该模型没有明确的上下文长度信息，请手动录入' : result?.message || '未获取到模型信息',
+          'info',
+        );
+        return;
+      }
+      updateTextModelConfig({ context_length_limit: contextLength });
+      showToast(`已获取上下文长度：${contextLength}`, 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '获取模型上下文长度失败', 'error');
+    } finally {
+      setLoadingContextLength(false);
     }
   };
 
@@ -1571,7 +1660,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             <span />
             <strong>文本模型配置</strong>
           </div>
-          <div className="settings-list">
+          <fieldset className="settings-list" disabled={textModelBusy} aria-busy={textModelBusy}>
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>服务提供商</strong>
@@ -1627,7 +1716,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 {textModels.length > 0 ? (
                   <select
                     value={state.textModel.model_name}
-                    onChange={(event) => updateTextModelConfig({ model_name: event.target.value })}
+                    onChange={(event) => updateTextModelName(event.target.value)}
                   >
                     {textModels.map((model) => <option value={model} key={model}>{model}</option>)}
                   </select>
@@ -1636,7 +1725,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                     type="text"
                     value={state.textModel.model_name}
                     placeholder="例如 deepseek-chat"
-                    onChange={(event) => updateTextModelConfig({ model_name: event.target.value })}
+                    onChange={(event) => updateTextModelName(event.target.value)}
                   />
                 )}
                 <button
@@ -1656,17 +1745,61 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             </label>
             <label className="settings-row">
               <div className="settings-row-copy">
-                <strong>上下文长度限制</strong>
-                <span>配置所选模型的上下文长度，在处理长文本时会自动截断，分批处理</span>
+                <strong>模型思考强度</strong>
+                <span>可手动录入，也可从云端模型信息缓存获取明确支持的档位；选择默认时不发送参数</span>
               </div>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={state.textModel.context_length_limit}
-                placeholder="400000"
-                onChange={(event) => updateTextModelConfig({ context_length_limit: parseTextContextLengthInput(event.target.value) })}
-              />
+              <div className="settings-control-with-action is-single-action">
+                {reasoningEfforts.length > 0 ? (
+                  <select
+                    value={state.textModel.reasoning_effort}
+                    onChange={(event) => updateTextModelConfig({ reasoning_effort: event.target.value })}
+                  >
+                    <option value="">默认</option>
+                    {reasoningEfforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={state.textModel.reasoning_effort}
+                    placeholder="例如 medium；留空则使用默认"
+                    onChange={(event) => updateTextModelConfig({ reasoning_effort: event.target.value })}
+                  />
+                )}
+                <button
+                  type="button"
+                  className="inline-action"
+                  onClick={fetchReasoningEfforts}
+                  disabled={loadingReasoningEfforts}
+                >
+                  {loadingReasoningEfforts && <span className="inline-spinner" aria-hidden="true" />}
+                  {loadingReasoningEfforts ? '获取中' : '获取'}
+                </button>
+              </div>
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>上下文长度限制</strong>
+                <span>可手动录入，也可从云端模型信息缓存获取；处理长文本时会自动截断并分批处理</span>
+              </div>
+              <div className="settings-control-with-action is-single-action">
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={state.textModel.context_length_limit}
+                  placeholder="400000"
+                  onChange={(event) => updateTextModelConfig({ context_length_limit: parseTextContextLengthInput(event.target.value) })}
+                />
+                <button
+                  type="button"
+                  className="inline-action"
+                  onClick={fetchContextLength}
+                  disabled={loadingContextLength}
+                >
+                  {loadingContextLength && <span className="inline-spinner" aria-hidden="true" />}
+                  {loadingContextLength ? '获取中' : '获取'}
+                </button>
+              </div>
             </label>
             <label className="settings-row">
               <div className="settings-row-copy">
@@ -1727,7 +1860,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 ))}
               </select>
             </label>
-          </div>
+          </fieldset>
         </section>
       )}
 

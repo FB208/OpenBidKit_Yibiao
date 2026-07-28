@@ -10,6 +10,7 @@ const migrationsDirName = 'analytics-migrations';
 
 const d1BindingName = 'ANALYTICS_DB';
 const d1DatabaseName = 'openbidkit-analytics';
+// 这里只维护 5 个埋点汇总 Cron；付费计划下的模型信息同步 Cron 独立配置在 wrangler.jsonc。
 const dailyRollupCrons = [
   '0 17 * * *',
   '30 17 * * *',

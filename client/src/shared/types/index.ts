@@ -44,6 +44,8 @@ export type {
   ImageModelSize,
   ImageModelStatus,
   LegacyTextModelProvider,
+  ModelInfoCacheEntry,
+  ModelInfoResult,
   ModelListResult,
   TextModelConfig,
   TextModelProvider,

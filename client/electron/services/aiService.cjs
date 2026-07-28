@@ -33,6 +33,7 @@ const JINLONG_DEPRECATED_MODEL_MAP = {
 const IMAGE_MODEL_TEST_TIMEOUT_MESSAGE = '生图模型测试超时，请检查 Base URL、API Key 或模型名称';
 const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const ANALYTICS_PROJECT_NAME = 'yibiao-client';
+const MODEL_INFO_ENDPOINT = 'https://analytics.agnet.top/model-info';
 const OPENAI_IMAGE_PROVIDER_META = {
   jinlong: {
     label: '金龙中转站',
@@ -789,6 +790,10 @@ function createChatRequestBody(config, request, options = {}) {
 
   if (config.temperature_enabled) {
     body.temperature = config.temperature;
+  }
+
+  if (config.reasoning_effort) {
+    body.reasoning_effort = config.reasoning_effort;
   }
 
   if (options.stream) {
@@ -1918,6 +1923,41 @@ function createAiService({ app, configStore }) {
         models: Array.isArray(data.data) 
           ? data.data.map((item) => item.id).filter(Boolean).filter(id => !Object.keys(JINLONG_DEPRECATED_MODEL_MAP).includes(id))
           : [],
+      };
+    },
+
+    async getModelInfo(modelName) {
+      const normalizedModelName = String(modelName || '').trim();
+      if (!normalizedModelName) {
+        return { success: false, message: '请先填写文本模型名称', modelName: '', model: null, syncedAt: '' };
+      }
+
+      const response = await fetch(`${MODEL_INFO_ENDPOINT}?modelName=${encodeURIComponent(normalizedModelName)}`);
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data || data.code !== 0) {
+        throw new Error(data?.message || `获取模型信息失败：HTTP ${response.status}`);
+      }
+      if (!data.model) {
+        return {
+          success: false,
+          message: `模型信息缓存中未找到 ${normalizedModelName}，请手动录入`,
+          modelName: normalizedModelName,
+          model: null,
+          syncedAt: data.syncedAt || '',
+        };
+      }
+      return {
+        success: true,
+        message: '模型信息已获取',
+        modelName: normalizedModelName,
+        model: {
+          reasoningEfforts: Array.isArray(data.model.reasoningEfforts)
+            ? data.model.reasoningEfforts.map((value) => String(value || '').trim()).filter(Boolean)
+            : [],
+          context: Math.max(0, Math.floor(Number(data.model.context) || 0)),
+          output: Math.max(0, Math.floor(Number(data.model.output) || 0)),
+        },
+        syncedAt: data.syncedAt || '',
       };
     },
   };

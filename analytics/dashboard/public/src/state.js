@@ -116,6 +116,17 @@ export const state = {
   savePluginButton: $('savePluginButton'),
   pluginsStatus: $('pluginsStatus'),
   pluginsTable: $('pluginsTable'),
+  syncModelInfoCacheButton: $('syncModelInfoCacheButton'),
+  modelInfoCacheState: $('modelInfoCacheState'),
+  modelInfoCacheLastSuccess: $('modelInfoCacheLastSuccess'),
+  modelInfoCacheProviders: $('modelInfoCacheProviders'),
+  modelInfoCacheSourceModels: $('modelInfoCacheSourceModels'),
+  modelInfoCacheModels: $('modelInfoCacheModels'),
+  modelInfoCacheReasoningModels: $('modelInfoCacheReasoningModels'),
+  modelInfoCacheBytes: $('modelInfoCacheBytes'),
+  modelInfoCacheTrigger: $('modelInfoCacheTrigger'),
+  modelInfoCacheMeta: $('modelInfoCacheMeta'),
+  modelInfoCacheStatus: $('modelInfoCacheStatus'),
 };
 
 export const appState = {

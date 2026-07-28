@@ -448,6 +448,9 @@ async function runDirectModelSelfCheck(config) {
     if (config.temperature_enabled) {
       body.temperature = config.temperature;
     }
+    if (config.reasoning_effort) {
+      body.reasoning_effort = config.reasoning_effort;
+    }
     const response = await fetch(`${trimBaseUrl(config.base_url)}/chat/completions`, {
       method: 'POST',
       headers: {

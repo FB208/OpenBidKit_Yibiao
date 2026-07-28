@@ -48,6 +48,7 @@
 - Worker：`cd analytics\worker; npm install; npm run dev` 或 `npm run deploy`。
 - Dashboard：`cd analytics\dashboard; npm install; npm run dev` 或 `npm run deploy`。
 - `analytics/scripts/deploy-if-changed.mjs` 在 Cloudflare Workers CI 下只部署对应目录变化；强制部署用 `FORCE_DEPLOY=1 npm run deploy`。
+- 生产 API Worker 所在 Cloudflare 账户已启用 Workers Paid Plan；当前允许使用 5 个统计 Cron 和独立的模型信息同步 Cron，不要再按免费计划 5 个 Cron 上限要求合并任务。
 - 不把 `ACCOUNT_ID`、`ADMIN_TOKEN`、`ANALYTICS_API_TOKEN` 等密钥写入仓库；Worker 配置保留 `keep_vars: true`，不要在 `wrangler.jsonc` 增加 `secrets.required`。
 - 禁止删除、绕过或弱化任何埋点、统计、Analytics Dashboard 展示和 Worker 聚合逻辑；如确需调整，必须等价保留统计能力并说明影响。
 

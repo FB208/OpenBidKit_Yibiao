@@ -36,6 +36,7 @@
           <button class="nav-item" type="button" data-tab-button="license">授权管理</button>
           <button class="nav-item" type="button" data-tab-button="resources">资源管理</button>
           <button class="nav-item" type="button" data-tab-button="plugins">插件管理</button>
+          <button class="nav-item" type="button" data-tab-button="model-info-cache">模型信息缓存</button>
         </div>
       </nav>
 
@@ -503,6 +504,35 @@
 
             <div id="pluginsStatus" class="notice-status"></div>
             <div id="pluginsTable" class="plugin-table-wrap"></div>
+          </section>
+        </section>
+
+        <!-- 模型信息缓存 -->
+        <section id="tab-model-info-cache" class="tab-panel" data-tab-panel="model-info-cache">
+          <section class="panel section">
+            <div class="section-head">
+              <div>
+                <h2>模型信息缓存</h2>
+                <p>每天北京时间 04:00 自动从 models.dev 同步，也可以由管理员立即同步。</p>
+              </div>
+              <div class="section-actions">
+                <button id="syncModelInfoCacheButton" type="button">立即同步</button>
+              </div>
+            </div>
+
+            <section class="cards">
+              <div class="panel card"><span>同步状态</span><strong id="modelInfoCacheState">未同步</strong></div>
+              <div class="panel card"><span>最近成功</span><strong id="modelInfoCacheLastSuccess">-</strong></div>
+              <div class="panel card"><span>服务商数</span><strong id="modelInfoCacheProviders">0</strong></div>
+              <div class="panel card"><span>源模型记录</span><strong id="modelInfoCacheSourceModels">0</strong></div>
+              <div class="panel card"><span>索引模型数</span><strong id="modelInfoCacheModels">0</strong></div>
+              <div class="panel card"><span>含思考强度模型</span><strong id="modelInfoCacheReasoningModels">0</strong></div>
+              <div class="panel card"><span>源数据大小</span><strong id="modelInfoCacheBytes">0 B</strong></div>
+              <div class="panel card"><span>触发方式</span><strong id="modelInfoCacheTrigger">-</strong></div>
+            </section>
+
+            <div id="modelInfoCacheMeta" class="notice-meta">当前未读取模型信息缓存状态。</div>
+            <div id="modelInfoCacheStatus" class="notice-status"></div>
           </section>
         </section>
 

@@ -1,6 +1,6 @@
 # 埋点统计部署手册
 
-本目录维护 `Cloudflare Workers + Analytics Engine + D1 + Cron Triggers + Workers Static Assets` 埋点统计服务。公开仓库不保存 `ACCOUNT_ID`、`ADMIN_TOKEN`、`ANALYTICS_API_TOKEN` 等密钥。
+本目录维护 `Cloudflare Workers + Analytics Engine + D1 + KV + Cron Triggers + Workers Static Assets` 埋点统计、模型信息缓存和管理服务。公开仓库不保存 `ACCOUNT_ID`、`ADMIN_TOKEN`、`ANALYTICS_API_TOKEN` 等密钥。
 
 ## 地址
 
@@ -8,6 +8,8 @@
 | --- | --- |
 | API | `https://analytics.agnet.top` |
 | Dashboard | `https://static.analytics.agnet.top` |
+
+生产 API Worker 所在 Cloudflare 账户已启用 Workers Paid Plan。当前共配置 6 个 Cron Trigger：5 个埋点统计触发器和 1 个独立模型信息同步触发器。付费套餐在 Cloudflare 账户侧生效，`wrangler.jsonc` 不存在需要声明的套餐字段，不要再按免费计划 5 个 Cron 上限合并这些任务。
 
 ## 数据源
 
@@ -17,7 +19,7 @@
 | D1 `openbidkit-analytics` | `ANALYTICS_DB` | 新版 `stats_*` 长期统计表 |
 | D1 `openbidkit-resources` | `RESOURCE_DB` | 资源管理元数据 |
 | R2 `openbidkit` | `RESOURCE_BUCKET` | 资源图片 |
-| KV | `NOTICE_STORE` | 公告、授权配置和 GitHub stats 缓存 |
+| KV | `NOTICE_STORE` | 公告、授权配置、GitHub stats 缓存和模型信息精简索引 |
 
 `openbidkit-analytics` 可以在改版时直接删除并由 `setup:analytics-storage` 重建；不要删除 `openbidkit-resources`。
 
@@ -40,7 +42,9 @@
 | `GET /api/retention` | D1 | `ADMIN_TOKEN` | 留存概览，读取 Cron 生成的最新 30 天快照 |
 | `GET /api/github-repo-stats` | GitHub + KV | `ADMIN_TOKEN` | GitHub stats |
 | `GET /notice` | KV | 无 | 客户端公告 |
+| `GET /model-info` | KV | 无 | 按 `modelName` 返回思考强度、最大 context/output 和缓存时间 |
 | `GET/POST/DELETE /api/notice` | KV | `ADMIN_TOKEN` | 公告后台管理 |
+| `GET/POST /api/model-info-cache` | KV + models.dev | `ADMIN_TOKEN` | 查看模型信息缓存状态或手动同步 |
 | `POST /license/activate` | KV + Worker Secret | 无 | 客户端免费授权签发，返回带签名 license |
 | `GET/POST /api/license-config` | KV | `ADMIN_TOKEN` | 授权配置后台管理 |
 | `GET /resources` | `RESOURCE_DB` + AE | 无 | 客户端资源列表，点击量为 D1 累计 + AE 今天 |
@@ -136,10 +140,12 @@ npm run setup:analytics-storage
 | 动作 | 说明 |
 | --- | --- |
 | D1 | 创建或复用 `openbidkit-analytics`，binding 为 `ANALYTICS_DB` |
-| Cron | 确认北京时间 01:00 到 03:00 每 30 分钟一个触发点的 5 个 Cron |
+| Cron | 生产账户使用 Workers Paid Plan；确认北京时间 01:00 到 03:00 的 5 个统计 Cron，以及北京时间 04:00 的独立模型信息同步 Cron |
 | Migration | 通过 Wrangler D1 migrations 执行 `analytics-migrations/*.sql` 并记录已应用版本；Agent 运行时迁移会重建 `stats_agent_runtime` 联合主键并将既有汇总归为 `opencode`；同时自动补齐 `stats_clients` 授权字段、`stats_versions.client_count`、`stats_models.total_tokens` 和概览 AI 指标字段 |
 
 如果刚删除过 `openbidkit-analytics`，脚本会重新创建并更新 `wrangler.jsonc` 的 `database_id`。
+
+模型信息同步使用独立 Cron `0 20 * * *`（北京时间每天 04:00），从 `models.dev/api.json` 提取按模型 ID 聚合的精简索引。思考强度取同名模型明确档位的交集，`context` 和 `output` 分别取同名记录最大值；同步失败不会覆盖最后一次成功索引。管理员也可以在 Dashboard 的“模型信息缓存”页面手动同步。
 
 ### 3. 部署 Worker
 

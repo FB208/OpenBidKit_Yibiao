@@ -6,6 +6,7 @@ import { handleGitHubRepoStats } from './routes/githubRepoStats.js';
 import { handleHealth } from './routes/health.js';
 import { handleLatest } from './routes/latest.js';
 import { handleLicenseActivate, handleLicenseConfig, handleOfflineLicense } from './routes/license.js';
+import { handleAdminModelInfoCache, handlePublicModelInfo } from './routes/modelInfo.js';
 import { handleAdminNotice, handlePublicNotice } from './routes/notice.js';
 import { handleOverview } from './routes/overview.js';
 import { handleProjects } from './routes/projects.js';
@@ -14,6 +15,8 @@ import { handleAdminResources, handlePublicResources, handleResourceImage } from
 import { handleAdminPluginSync, handleAdminPlugins, handlePublicPluginDownload, handlePublicPlugins } from './routes/plugins.js';
 import { handleTrack } from './routes/track.js';
 import { handleTraffic } from './routes/traffic.js';
+import { MODEL_INFO_SYNC_CRON } from './constants.js';
+import { syncModelInfoCache } from './services/modelInfoCache.js';
 import {
   OVERVIEW_AI_TOTALS_CRON,
   refreshOverviewAiTotals,
@@ -25,12 +28,14 @@ const routes = new Map([
   ['/track', handleTrack],
   ['/license/activate', handleLicenseActivate],
   ['/notice', handlePublicNotice],
+  ['/model-info', handlePublicModelInfo],
   ['/resources', handlePublicResources],
   ['/resource-image', handleResourceImage],
   ['/plugins', handlePublicPlugins],
   ['/plugins/download', handlePublicPluginDownload],
   ['/api/projects', handleProjects],
   ['/api/notice', handleAdminNotice],
+  ['/api/model-info-cache', handleAdminModelInfoCache],
   ['/api/resources', handleAdminResources],
   ['/api/plugins', handleAdminPlugins],
   ['/api/plugins/sync', handleAdminPluginSync],
@@ -66,6 +71,10 @@ export default {
 
   async scheduled(event, env) {
     const cron = event?.cron || '';
+    if (cron === MODEL_INFO_SYNC_CRON) {
+      await syncModelInfoCache(env, 'cron');
+      return;
+    }
     await rollupYesterdayCronStage(env, cron);
     if (cron === OVERVIEW_AI_TOTALS_CRON) {
       try {
