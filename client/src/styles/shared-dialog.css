@@ -179,8 +179,8 @@
 .yb-switch-control {
   position: relative;
   display: inline-flex;
-  width: 58px;
-  height: 34px;
+  width: 46px;
+  height: 26px;
   justify-self: end;
   align-items: center;
 }
@@ -197,8 +197,8 @@
 
 .yb-switch-track {
   display: block;
-  width: 58px;
-  height: 34px;
+  width: 46px;
+  height: 26px;
   padding: 3px;
   background: #dfe7f3;
   border: 1px solid rgba(180, 194, 214, 0.9);
@@ -209,22 +209,22 @@
 
 .yb-switch-thumb {
   display: block;
-  width: 26px;
-  height: 26px;
+  width: 18px;
+  height: 18px;
   background: #ffffff;
   border-radius: 999px;
-  box-shadow: 0 4px 12px rgba(23, 32, 51, 0.12);
+  box-shadow: 0 2px 8px rgba(23, 32, 51, 0.12);
   transition: transform 180ms ease;
 }
 
 .yb-switch-control input:checked + .yb-switch-track {
   background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
   border-color: rgba(33, 116, 253, 0.35);
-  box-shadow: 0 10px 24px rgba(33, 116, 253, 0.18);
+  box-shadow: 0 6px 16px rgba(33, 116, 253, 0.18);
 }
 
 .yb-switch-control input:checked + .yb-switch-track .yb-switch-thumb {
-  transform: translateX(24px);
+  transform: translateX(20px);
 }
 
 .yb-switch-control input:focus-visible + .yb-switch-track {

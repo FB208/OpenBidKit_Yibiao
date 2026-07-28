@@ -10,7 +10,7 @@
 .settings-page-scroll {
   display: grid;
   align-content: start;
-  gap: 18px;
+  gap: 12px;
   width: 100%;
   overflow: visible;
   padding-bottom: 128px;
@@ -66,20 +66,21 @@
 }
 
 /* [8975-9746] settings-section-title/list/row + font-picker + export-bullet-library + input-with-action + inline-action/spinner + image-model-status + agent-self-check-*-/agent-tool-check-* + image-test-preview + parser-* */
-.settings-section-title {
+/* tab 内部分组小标题 */
+.settings-group-title {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 24px 36px;
-  color: var(--yb-text);
-  font-size: 22px;
+  gap: 8px;
+  padding: 10px 24px 6px;
+  color: var(--yb-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.settings-section-title span {
-  width: 5px;
-  height: 24px;
-  background: var(--yb-primary);
-  border-radius: 999px;
+.settings-group-title + .settings-list {
+  border-top: none;
 }
 
 .settings-list {
@@ -99,8 +100,8 @@ fieldset.settings-list {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(320px, 420px);
   align-items: center;
-  gap: 24px;
-  padding: 28px 36px;
+  gap: 20px;
+  padding: 14px 24px;
 }
 
 .settings-row + .settings-row {
@@ -109,28 +110,30 @@ fieldset.settings-list {
 
 .settings-row-copy {
   display: grid;
-  gap: 8px;
+  gap: 4px;
 }
 
 .settings-row-copy strong {
   color: var(--yb-text);
-  font-size: 18px;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .settings-row-copy span {
   color: var(--yb-text-soft);
-  line-height: 1.65;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .settings-row input,
 .settings-row select {
   width: 100%;
-  min-height: 44px;
-  padding: 10px 14px;
+  min-height: 36px;
+  padding: 8px 12px;
   color: var(--yb-text);
   background-color: #eef3fa;
   border: 1px solid #ccd6e3;
-  border-radius: 14px;
+  border-radius: 12px;
   outline: none;
 }
 
@@ -284,12 +287,12 @@ fieldset.settings-list {
 .input-with-action {
   display: grid;
   width: 100%;
-  min-height: 44px;
+  min-height: 36px;
   grid-template-columns: minmax(0, 1fr) auto;
   overflow: hidden;
   background: #eef3fa;
   border: 1px solid #ccd6e3;
-  border-radius: 14px;
+  border-radius: 12px;
 }
 
 .input-with-action.has-password-reveal {
@@ -303,7 +306,7 @@ fieldset.settings-list {
 }
 
 .settings-row .input-with-action input {
-  min-height: 42px;
+  min-height: 34px;
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -317,8 +320,8 @@ fieldset.settings-list {
 }
 
 .input-with-action-button {
-  min-height: 42px;
-  padding: 0 18px;
+  min-height: 34px;
+  padding: 0 14px;
   color: var(--yb-primary);
   font-weight: 800;
   white-space: nowrap;
@@ -329,8 +332,8 @@ fieldset.settings-list {
 
 .input-with-action-icon-button {
   display: inline-flex;
-  width: 44px;
-  min-height: 42px;
+  width: 36px;
+  min-height: 34px;
   align-items: center;
   justify-content: center;
   padding: 0;
@@ -393,16 +396,17 @@ fieldset.settings-list {
 
 .inline-action {
   display: inline-flex;
-  min-height: 44px;
+  min-height: 36px;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 0 16px;
+  gap: 6px;
+  padding: 0 14px;
   color: var(--yb-primary);
+  font-size: 13px;
   font-weight: 800;
   background: rgba(33, 116, 253, 0.1);
   border: 1px solid rgba(33, 116, 253, 0.16);
-  border-radius: 14px;
+  border-radius: 12px;
 }
 
 .inline-action:disabled {
@@ -429,13 +433,13 @@ fieldset.settings-list {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  margin: 0 36px 18px;
-  padding: 18px 20px;
+  gap: 14px;
+  margin: 0 24px 12px;
+  padding: 12px 16px;
   background: #ffffff;
   border: 1px solid var(--yb-border-soft);
-  border-radius: 20px;
-  box-shadow: 0 16px 36px rgba(36, 48, 72, 0.06);
+  border-radius: 16px;
+  box-shadow: 0 8px 20px rgba(36, 48, 72, 0.05);
 }
 
 .image-model-status div {
@@ -482,13 +486,13 @@ fieldset.settings-list {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  margin: 0 36px 18px;
-  padding: 18px 20px;
+  gap: 14px;
+  margin: 0 24px 12px;
+  padding: 12px 16px;
   background: #ffffff;
   border: 1px solid var(--yb-border-soft);
-  border-radius: 20px;
-  box-shadow: 0 16px 36px rgba(36, 48, 72, 0.06);
+  border-radius: 16px;
+  box-shadow: 0 8px 20px rgba(36, 48, 72, 0.05);
 }
 
 .agent-self-check-status div {
@@ -542,13 +546,13 @@ fieldset.settings-list {
 
 .agent-self-check-result {
   display: grid;
-  gap: 16px;
-  margin: 18px 36px 28px;
-  padding: 20px;
+  gap: 14px;
+  margin: 12px 24px 20px;
+  padding: 16px;
   background: #ffffff;
   border: 1px solid var(--yb-border-soft);
-  border-radius: 22px;
-  box-shadow: 0 16px 36px rgba(36, 48, 72, 0.06);
+  border-radius: 18px;
+  box-shadow: 0 8px 20px rgba(36, 48, 72, 0.05);
 }
 
 .agent-self-check-result.is-normal {
@@ -930,12 +934,12 @@ fieldset.settings-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(160px, 260px);
   align-items: center;
-  gap: 18px;
-  margin: 0 36px 28px;
-  padding: 18px;
+  gap: 14px;
+  margin: 0 24px 20px;
+  padding: 14px;
   background: rgba(248, 250, 253, 0.86);
   border: 1px solid var(--yb-border-soft);
-  border-radius: 22px;
+  border-radius: 18px;
 }
 
 .image-test-preview div {
@@ -1080,8 +1084,8 @@ fieldset.settings-list {
 .about-overview {
   display: grid;
   grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.4fr);
-  gap: 16px;
-  padding: 0 36px 36px;
+  gap: 14px;
+  padding: 0 24px 24px;
 }
 
 .about-update-card,
@@ -1240,16 +1244,16 @@ fieldset.settings-list {
 
 .privacy-statement {
   display: grid;
-  gap: 18px;
-  margin: 0 36px 36px;
-  padding: 22px;
+  gap: 14px;
+  margin: 0 24px 24px;
+  padding: 18px;
   color: var(--yb-text-soft);
   background:
     radial-gradient(circle at top left, rgba(33, 116, 253, 0.14), transparent 36%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(248, 251, 255, 0.92));
   border: 1px solid rgba(33, 116, 253, 0.16);
-  border-radius: 22px;
-  box-shadow: 0 18px 42px rgba(33, 116, 253, 0.08);
+  border-radius: 18px;
+  box-shadow: 0 12px 28px rgba(33, 116, 253, 0.07);
 }
 
 .privacy-statement-head {

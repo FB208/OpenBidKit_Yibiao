@@ -1530,10 +1530,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
       {activeTab === 'general' && (
         <section className="settings-page-section">
-          <div className="settings-section-title">
-            <span />
-            <strong>通用</strong>
-          </div>
+          <div className="settings-group-title">外观</div>
           <div className="settings-list">
             <div className="settings-row">
               <div className="settings-row-copy">
@@ -1562,6 +1559,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <option value="classic">经典布局</option>
               </select>
             </div>
+          </div>
+
+          <div className="settings-group-title">更新与系统</div>
+          <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>自动更新渠道</strong>
@@ -1592,6 +1593,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 </span>
               </span>
             </label>
+          </div>
+
+          <div className="settings-group-title">开发者</div>
+          <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>开发者模式</strong>
@@ -1656,11 +1661,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
       {activeTab === 'text-model' && (
         <section className="settings-page-section">
-          <div className="settings-section-title">
-            <span />
-            <strong>文本模型配置</strong>
-          </div>
-          <fieldset className="settings-list" disabled={textModelBusy} aria-busy={textModelBusy}>
+          <div className="settings-group-title">服务商配置</div>
+          <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>服务提供商</strong>
@@ -1743,6 +1745,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 </button>
               </div>
             </label>
+          </div>
+
+          <div className="settings-group-title">高级参数</div>
+          <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>模型思考强度</strong>
@@ -1860,16 +1866,12 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 ))}
               </select>
             </label>
-          </fieldset>
+          </div>
         </section>
       )}
 
       {activeTab === 'image-model' && (
         <section className="settings-page-section">
-          <div className="settings-section-title">
-            <span />
-            <strong>生图模型配置</strong>
-          </div>
           <div className={`image-model-status is-${imageModelStatus}`}>
             <div>
               <strong>接口状态：{currentImageStatus.label}</strong>
@@ -1879,6 +1881,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             </div>
             <em>{currentImageStatus.label}</em>
           </div>
+          <div className="settings-group-title">服务商配置</div>
           <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
@@ -1961,6 +1964,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 </button>
               </div>
             </label>
+          </div>
+
+          <div className="settings-group-title">高级参数</div>
+          <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>图片尺寸</strong>
@@ -2018,15 +2025,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
       {activeTab === 'components' && (
         <section className="settings-page-section">
-          <div className="settings-section-title">
-            <span />
-            <strong>组件设置</strong>
-          </div>
-
-          <div className="settings-section-title">
-            <span />
-            <strong>文件解析</strong>
-          </div>
+          <div className="settings-group-title">文件解析</div>
           <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
@@ -2116,10 +2115,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             )}
           </div>
 
-          <div className="settings-section-title" style={{ marginTop: 28 }}>
-            <span />
-            <strong>本地转图组件</strong>
-          </div>
+          <div className="settings-group-title">本地转图组件</div>
           <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
@@ -2165,10 +2161,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
       {activeTab === 'agent' && (
         <section className="settings-page-section">
-          <div className="settings-section-title">
-            <span />
-            <strong>智能体配置</strong>
-          </div>
+          <div className="settings-group-title">运行时</div>
           <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
@@ -2190,33 +2183,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               </div>
             )}
           </div>
-          <div className={`agent-self-check-status is-${agentSelfCheckStatus}`}>
-            <div>
-              <strong>智能体自检</strong>
-              <span>{currentAgentSelfCheckStatus.description}</span>
-            </div>
-            <em>{currentAgentSelfCheckStatus.label}</em>
-          </div>
-          <div className="settings-list">
-            <div className="settings-row">
-              <div className="settings-row-copy">
-                <strong>自检</strong>
-                <span>{savedConfig?.agent_runtime === 'pi'
-                  ? '检查 Pi Agent 的模型普通/流式/工具调用、本地 AI Proxy、运行环境、工具和输出链路；失败时自动诊断并尝试安全修复。'
-                  : `检查当前已保存的 ${savedAgentRuntime?.display_name || '智能体运行时'}，覆盖运行环境、AI Proxy、工具、当前文本模型和输出文件链路。`}</span>
-              </div>
-              <div className="settings-action-cell">
-                <button type="button" className="inline-action" onClick={runAgentSelfCheck} disabled={agentSelfCheckStatus === 'checking'}>
-                  {agentSelfCheckStatus === 'checking' && <span className="inline-spinner" aria-hidden="true" />}
-                  {agentSelfCheckStatus === 'checking' ? '自检中' : '自检'}
-                </button>
-              </div>
-            </div>
-          </div>
-          <div className="settings-section-title">
-            <span />
-            <strong>在以下场景启用智能体模式</strong>
-          </div>
+
+          <div className="settings-group-title">在以下场景启用智能体模式</div>
           <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
@@ -2234,6 +2202,31 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 </span>
               </span>
             </label>
+          </div>
+
+          <div className="settings-group-title">智能体自检</div>
+          <div className={`agent-self-check-status is-${agentSelfCheckStatus}`}>
+            <div>
+              <strong>自检状态</strong>
+              <span>{currentAgentSelfCheckStatus.description}</span>
+            </div>
+            <em>{currentAgentSelfCheckStatus.label}</em>
+          </div>
+          <div className="settings-list">
+            <div className="settings-row">
+              <div className="settings-row-copy">
+                <strong>运行自检</strong>
+                <span>{savedConfig?.agent_runtime === 'pi'
+                  ? '检查 Pi Agent 的模型普通/流式/工具调用、本地 AI Proxy、运行环境、工具和输出链路；失败时自动诊断并尝试安全修复。'
+                  : `检查当前已保存的 ${savedAgentRuntime?.display_name || '智能体运行时'}，覆盖运行环境、AI Proxy、工具、当前文本模型和输出文件链路。`}</span>
+              </div>
+              <div className="settings-action-cell">
+                <button type="button" className="inline-action" onClick={runAgentSelfCheck} disabled={agentSelfCheckStatus === 'checking'}>
+                  {agentSelfCheckStatus === 'checking' && <span className="inline-spinner" aria-hidden="true" />}
+                  {agentSelfCheckStatus === 'checking' ? '自检中' : '自检'}
+                </button>
+              </div>
+            </div>
           </div>
           {agentSelfCheckResult && (
             <div className={`agent-self-check-result is-${agentSelfCheckResult.success ? 'normal' : agentSelfCheckResult.status === 'busy' ? 'busy' : 'error'}`}>
@@ -2309,10 +2302,6 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
       {activeTab === 'about' && (
         <section className="settings-page-section about-section">
-          <div className="settings-section-title">
-            <span />
-            <strong>关于</strong>
-          </div>
           <div className="about-overview">
             <article className="about-update-card">
               <div className="about-card-head">
