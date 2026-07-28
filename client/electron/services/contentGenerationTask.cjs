@@ -2998,9 +2998,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     total_adjustment_active_count: 0,
     total_adjustment_item_id: '',
     total_adjustment_remaining_words: 0,
-    word_control_warning: rerunIllustrations || resume
-      ? storedPlan.contentGenerationTask?.stats?.content?.word_control_warning
-      : undefined,
+    word_control_warning: undefined,
     audit_group_total: 0,
     audit_group_completed: 0,
     audit_step: '',
@@ -6444,15 +6442,11 @@ workspace 文件说明：
         await runTotalWordAdjustments();
         markStageCompleted('total-word-adjusting');
       }
-      const totalDirection = getTotalWordDirection();
-      const finalSectionViolations = wordControl.strictSectionWords
+      const postAdjustmentSectionViolations = wordControl.strictSectionWords
         ? leaves.filter(({ item }) => sections[item.id]?.status === 'success' && isSectionWordsOutsideRange(getLeafWordCount(item)))
         : [];
-      if (unresolvedSections.length && !finalSectionViolations.length) {
+      if (unresolvedSections.length && !postAdjustmentSectionViolations.length) {
         logs = [...logs, '全文调整已同时修复此前未达标的小节字数。'];
-      }
-      if (finalSectionViolations.length || totalDirection) {
-        contentStats.word_control_warning = CONTENT_WORD_CONTROL_WARNING;
       }
     } else if (!runOnlyIllustrationStage) {
       if (!completedStages.has('original-auditing')) {
@@ -6480,7 +6474,7 @@ workspace 文件说明：
         const itemRounds = resumingSectionAdjustment ? { ...contentRuntime.word_adjustment_item_rounds } : {};
         const completedItemIds = resumingSectionAdjustment ? [...contentRuntime.word_adjustment_completed_item_ids] : [];
         if (!resumingSectionAdjustment) setWordAdjustmentRuntime('section', targetItemId, 0, completedItemIds, itemRounds);
-        const resolved = await adjustSectionToRange(
+        await adjustSectionToRange(
           targetContext,
           'section',
           itemRounds,
@@ -6493,9 +6487,6 @@ workspace 文件说明：
         contentStats.section_adjustment_round = 0;
         setWordAdjustmentRuntime('section', '', 0, completedItemIds, itemRounds);
         markStageCompleted('section-word-adjusting');
-        if (!resolved) contentStats.word_control_warning = SECTION_WORD_CONTROL_WARNING;
-      } else if (targetContext && wordControl.strictSectionWords && isSectionWordsOutsideRange(getLeafWordCount(targetContext.item))) {
-        contentStats.word_control_warning = SECTION_WORD_CONTROL_WARNING;
       }
     } else if (runOnlyIllustrationPlanning) {
       logs = [...logs, rerunIllustrations
@@ -6533,6 +6524,14 @@ workspace 文件说明：
       logs = [...logs, `正文有效性检查失败：${item.id} ${item.title || '未命名章节'}，${message}。`];
       saveSection(item, { status: 'error', content, error: message }, content, { logs });
     }
+    rebuildContentWordCounts();
+    const finalSectionViolations = wordControl.strictSectionWords
+      ? statusLeaves.filter(({ item }) => sections[item.id]?.status === 'success' && isSectionWordsOutsideRange(getLeafWordCount(item)))
+      : [];
+    const finalTotalDirection = targetItemId ? null : getTotalWordDirection();
+    contentStats.word_control_warning = finalSectionViolations.length || finalTotalDirection
+      ? (targetItemId ? SECTION_WORD_CONTROL_WARNING : CONTENT_WORD_CONTROL_WARNING)
+      : undefined;
     const failedCount = statusLeaves.filter(({ item }) => sections[item.id]?.status === 'error').length;
     const finalProgress = progressFor(leaves, sections);
     const finalStatus = taskStatusFor(statusLeaves, sections);
