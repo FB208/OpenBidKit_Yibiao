@@ -3802,7 +3802,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           tableTotalSections: leaves.length,
           knowledgeItems,
         }),
-        temperature: 0.2,
         logTitle: `正文编排-${item.id}-${item.title || '未命名章节'}`,
         progressLabel: '正文编排决策',
         failureMessage: '模型返回的正文编排决策格式无效',
@@ -3993,7 +3992,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       } else {
         result = await aiService.collectJsonResponse({
           messages: restoreMessages,
-          temperature: 0.1,
           logTitle: '原方案正文还原映射',
           progressLabel: '原方案还原',
           failureMessage: '模型返回的原方案还原映射格式无效',
@@ -4154,7 +4152,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       } else {
         generatedContent = await aiService.chat({
           messages: contentMessages,
-          temperature: 0.7,
           logTitle: `${needsRestoredOptimization ? '原方案优化扩写' : '正文生成'}-${item.id}-${item.title || '未命名章节'}`,
         });
       }
@@ -4305,7 +4302,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         minimumWords: targetItemId ? 0 : wordControl.minimumWords,
         maximumWords: targetItemId ? 0 : wordControl.maximumWords,
       }),
-      temperature: 0.4,
       logTitle: `正文${options.mode === 'expand' ? '扩写' : '缩写'}-${item.id}-${item.title || '未命名章节'}`,
       progressLabel: '正文字数调整',
       failureMessage: '模型返回的正文字数调整结果格式无效',
@@ -4793,7 +4789,6 @@ workspace 文件说明：
             failures,
             tableRequirement,
           }),
-          temperature: 0.2,
           logTitle: `原方案覆盖修复-${item.id}-${item.title || '未命名章节'}`,
           progressLabel: '原方案覆盖修复',
           failureMessage: '模型返回的原方案覆盖修复结果格式无效',
@@ -5087,7 +5082,6 @@ workspace 文件说明：
         });
         const response = await aiService.collectJsonResponse({
           messages: buildOriginalCoverageAuditMessages({ target }),
-          temperature: 0.1,
           logTitle: `原方案覆盖审计-${target.item.id}-${target.item.title || '未命名章节'}`,
           progressLabel: '原方案覆盖审计',
           failureMessage: '模型返回的原方案覆盖审计结果格式无效',
@@ -5619,7 +5613,6 @@ workspace 文件说明：
             failures,
             tableRequirement,
           }),
-          temperature: 0.1,
           logTitle: `一致性修复-${item.id}-${item.title || '未命名章节'}`,
           progressLabel: '正文一致性修复',
           failureMessage: '模型返回的正文一致性修复结果格式无效',
@@ -5774,7 +5767,6 @@ workspace 文件说明：
         });
         const response = await aiService.collectJsonResponse({
           messages: buildConsistencyAuditMessages({ group, globalFactsText, bidAnalysisFactsText }),
-          temperature: 0.1,
           logTitle: `一致性审计-${group.index}-${group.total}`,
           progressLabel: '全文一致性审计',
           failureMessage: '模型返回的一致性审计结果格式无效',
@@ -5964,7 +5956,6 @@ workspace 文件说明：
       try {
         const response = await aiService.collectJsonResponse({
           messages: buildTableCleanupMessages({ chapter: item, tables: batch }),
-          temperature: 0.2,
           logTitle: `正文去表格-${item.id}-${item.title || '未命名章节'}`,
           progressLabel: '正文去表格',
           failureMessage: '模型返回的表格转换结果格式无效',

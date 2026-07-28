@@ -412,9 +412,11 @@ async function runTextModelProbe(config, options) {
     const body = {
       model: config.model_name,
       messages: [{ role: 'user', content: options.prompt || '只回复 OK' }],
-      temperature: 0,
       stream: Boolean(options.stream),
     };
+    if (config.temperature_enabled) {
+      body.temperature = config.temperature;
+    }
     if (options.requireToolCall) {
       body.tools = [{
         type: 'function',

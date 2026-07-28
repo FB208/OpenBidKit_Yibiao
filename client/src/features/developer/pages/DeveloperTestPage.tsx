@@ -66,7 +66,6 @@ function DeveloperTestPage() {
           { role: 'user', content: `以下是完整招标文件 Markdown 原文。后续任务必须仅基于这份原文完成：\n\n${sampleTenderContent}` },
           { role: 'user', content: textTask.buildTaskPrompt() },
         ],
-        temperature: 0.1,
         response_format: textTask.output === 'json' ? { type: 'json_object' } : undefined,
         logTitle: `开发者测试-${textTask.label}`,
       });

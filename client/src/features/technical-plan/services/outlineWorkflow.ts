@@ -73,8 +73,8 @@ function renumberOutline(outline: OutlineData): OutlineData {
   return { ...outline, outline: renumberItems(outline.outline || []) };
 }
 
-async function requestJson<TResult>(messages: Parameters<typeof aiClient.requestJson>[0]['messages'], temperature = 0.7, logTitle = '目录生成') {
-  return aiClient.requestJson<TResult>({ messages, temperature, logTitle });
+async function requestJson<TResult>(messages: Parameters<typeof aiClient.requestJson>[0]['messages'], logTitle = '目录生成') {
+  return aiClient.requestJson<TResult>({ messages, logTitle });
 }
 
 function buildTopLevelFromGroups(groups: TechnicalRequirementGroup[]): OutlineItem[] {
@@ -90,7 +90,6 @@ function buildTopLevelFromGroups(groups: TechnicalRequirementGroup[]): OutlineIt
 async function extractRequirementGroups(options: GenerateOutlineOptions, suggestions?: string[]) {
   const payload = await requestJson<RequirementGroupsResponse>(
     buildRequirementGroupsMessages(options.requirements, suggestions),
-    0.3,
     '目录生成-技术评分大类'
   );
   if (!payload.groups?.length) {
@@ -107,7 +106,7 @@ async function generateAlignedChildren(options: GenerateOutlineOptions, parentIt
     parentItem,
     requirementGroup,
     suggestions,
-  }), 0.7, `目录生成-${parentItem.title || '未命名章节'}子目录`);
+  }), `目录生成-${parentItem.title || '未命名章节'}子目录`);
   validateChildren(payload);
   return payload.children;
 }
@@ -136,7 +135,7 @@ async function reviewAlignedOutline(options: GenerateOutlineOptions, groups: Tec
     requirements: options.requirements,
     groupsJson: JSON.stringify({ groups }),
     outlineJson: JSON.stringify(outline),
-  }), 0.3, `目录生成-${stageLabel}`);
+  }), `目录生成-${stageLabel}`);
 }
 
 async function generateAlignedOutlineWorkflow(options: GenerateOutlineOptions) {

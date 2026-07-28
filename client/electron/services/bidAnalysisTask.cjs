@@ -206,7 +206,6 @@ function buildMessages(fileContent, task, sectionHint) {
 async function runSingleBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint, logTitle }) {
   return aiService.chat({
     messages: buildMessages(fileContent, task, sectionHint),
-    temperature: 0.1,
     response_format: task.output === 'json' ? { type: 'json_object' } : undefined,
     logTitle: logTitle || `招标解析-${task.label}`,
   });

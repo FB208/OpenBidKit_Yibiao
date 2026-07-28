@@ -1328,7 +1328,6 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
             });
             const first = await aiService.collectJsonResponse({
               messages: firstMessages,
-              temperature: 0.2,
               response_format: { type: 'json_object' },
               logTitle: segments.length > 1
                 ? `知识库条目提取-${document.file_name}-第${segment.index}段`
@@ -1413,7 +1412,6 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
             });
             const supplement = await aiService.collectJsonResponse({
               messages: supplementMessages,
-              temperature: 0.2,
               response_format: { type: 'json_object' },
               logTitle: segments.length > 1
                 ? `知识库条目补充-${document.file_name}-第${segment.index}段`
@@ -1660,7 +1658,6 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
             });
             const parsed = await aiService.collectJsonResponse({
               messages: fullItemMessages,
-              temperature: 0.1,
               response_format: { type: 'json_object' },
               logTitle: blockSegments.length > 1
                 ? `知识库段落匹配-${document.file_name}-第${segmentIndex}段`
@@ -1705,7 +1702,6 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
               });
               const parsed = await aiService.collectJsonResponse({
                 messages: matchMessages,
-                temperature: 0.1,
                 response_format: { type: 'json_object' },
                 logTitle: `知识库段落匹配-${document.file_name}-第${segmentIndex}段-条目${itemSegment.index}`,
                 normalizer: (value) => normalizeMatchResult(value, itemIds, segmentBlocks, segmentBlockOrder),
@@ -1843,7 +1839,6 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
                 });
                 segmentParsed = await aiService.collectJsonResponse({
                   messages: fullMessages,
-                  temperature: 0.1,
                   response_format: { type: 'json_object' },
                   logTitle: missingSegments.length > 1
                     ? `知识库遗漏补漏-${document.file_name}-第${attempt + 1}轮-第${missingSegment.index}段`
@@ -1887,7 +1882,6 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
                   });
                   const subParsed = await aiService.collectJsonResponse({
                     messages: recoveryMessages,
-                    temperature: 0.1,
                     response_format: { type: 'json_object' },
                     logTitle: `知识库遗漏补漏-${document.file_name}-第${attempt + 1}轮-第${missingSegment.index}段-条目${itemSegment.index}`,
                     normalizer: (value) => normalizeRecoveryResult(value, itemIds, segmentBlocks, segmentBlockOrder),

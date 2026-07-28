@@ -77,14 +77,15 @@ const aiRequestModeOptions: Array<{ value: AiRequestMode; label: string }> = [
 
 const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
+const DEFAULT_TEXT_TEMPERATURE = 0.7;
 
 const textProviderDefaults: Record<ConfiguredTextModelProvider, TextModelConfig> = {
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
-  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
-  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
-  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
-  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
-  custom: { api_key: '', base_url: '', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, request_mode: 'stream' },
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  custom: { api_key: '', base_url: '', model_name: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
 };
 
 const textProviderApiKeyUrls: Partial<Record<ConfiguredTextModelProvider, string>> = {
@@ -115,6 +116,13 @@ function normalizeTextConcurrencyLimit(value?: number | string): number {
   return Number.isFinite(number) && number > 0 ? Math.round(number) : DEFAULT_TEXT_CONCURRENCY_LIMIT;
 }
 
+// 归一化文本模型温度。
+function normalizeTextTemperature(value?: number | string): number {
+  if (value === '' || value === undefined) return DEFAULT_TEXT_TEMPERATURE;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 && number <= 2 ? number : DEFAULT_TEXT_TEMPERATURE;
+}
+
 function parseTextContextLengthInput(value: string): number | '' {
   if (value === '') return '';
   const number = Number(value);
@@ -127,6 +135,11 @@ function parseTextConcurrencyLimitInput(value: string): number | '' {
   return Number.isFinite(number) ? Math.max(1, Math.round(number)) : '';
 }
 
+// 解析温度滑动条输入。
+function parseTextTemperatureInput(value: string): number {
+  return normalizeTextTemperature(value);
+}
+
 function normalizeTextModelProfile(provider: ConfiguredTextModelProvider, profile?: Partial<TextModelConfig>): TextModelConfig {
   const defaults = textProviderDefaults[provider];
   const baseUrl = provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url;
@@ -136,6 +149,8 @@ function normalizeTextModelProfile(provider: ConfiguredTextModelProvider, profil
     model_name: profile?.model_name ?? defaults.model_name,
     context_length_limit: normalizeTextContextLengthLimit(profile?.context_length_limit ?? defaults.context_length_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(profile?.concurrency_limit ?? defaults.concurrency_limit),
+    temperature_enabled: profile?.temperature_enabled ?? defaults.temperature_enabled,
+    temperature: normalizeTextTemperature(profile?.temperature ?? defaults.temperature),
     request_mode: normalizeAiRequestMode(profile?.request_mode ?? defaults.request_mode),
   };
 }
@@ -163,6 +178,8 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
     model_name: textModel.model_name,
     context_length_limit: normalizeTextContextLengthLimit(textModel.context_length_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(textModel.concurrency_limit),
+    temperature_enabled: textModel.temperature_enabled,
+    temperature: normalizeTextTemperature(textModel.temperature),
     request_mode: textModel.request_mode,
   };
 }
@@ -668,6 +685,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       model_name: activeTextProfile.model_name,
       context_length_limit: activeTextProfile.context_length_limit,
       concurrency_limit: activeTextProfile.concurrency_limit,
+      temperature_enabled: activeTextProfile.temperature_enabled,
+      temperature: activeTextProfile.temperature,
       request_mode: activeTextProfile.request_mode,
       image_model: activeImageProfile,
       image_model_profiles: imageModelProfiles,
@@ -922,7 +941,6 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       }
       const content = await window.yibiao?.ai.chat({
         messages: [{ role: 'user', content: 'hi' }],
-        temperature: 0,
         timeout_ms: 30000,
         timeout_message: '文本模型测试超时，请检查 Base URL、API Key 或模型名称',
         logTitle: '文本模型测试',
@@ -1664,6 +1682,37 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 onChange={(event) => updateTextModelConfig({ concurrency_limit: parseTextConcurrencyLimitInput(event.target.value) })}
               />
             </label>
+            <div className="settings-row">
+              <div className="settings-row-copy">
+                <strong>模型温度</strong>
+                <span>默认关闭以兼容不支持温度参数的模型；开启后数值越低输出越稳定</span>
+              </div>
+              <div className={`settings-temperature-control ${state.textModel.temperature_enabled ? '' : 'is-disabled'}`}>
+                <span className="yb-switch-control">
+                  <input
+                    type="checkbox"
+                    aria-label="启用模型温度"
+                    checked={state.textModel.temperature_enabled}
+                    onChange={(event) => updateTextModelConfig({ temperature_enabled: event.target.checked })}
+                  />
+                  <span className="yb-switch-track" aria-hidden="true">
+                    <span className="yb-switch-thumb" />
+                  </span>
+                </span>
+                <input
+                  className="settings-temperature-slider"
+                  type="range"
+                  aria-label="模型温度"
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  value={state.textModel.temperature}
+                  disabled={!state.textModel.temperature_enabled}
+                  onChange={(event) => updateTextModelConfig({ temperature: parseTextTemperatureInput(event.target.value) })}
+                />
+                <output>{state.textModel.temperature.toFixed(1)}</output>
+              </div>
+            </div>
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>请求方式</strong>

@@ -129,6 +129,48 @@
   padding-right: 42px;
 }
 
+.settings-temperature-control {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 52px;
+  align-items: center;
+  gap: 16px;
+}
+
+.settings-row .settings-temperature-slider {
+  min-height: 24px;
+  padding: 0;
+  accent-color: var(--yb-primary);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.settings-row .settings-temperature-slider:focus {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.settings-row .settings-temperature-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.settings-temperature-control output {
+  color: var(--yb-primary);
+  font-size: 16px;
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-temperature-control.is-disabled output {
+  color: var(--yb-text-soft);
+  opacity: 0.7;
+}
+
 .font-picker-input {
   font-family: inherit;
 }

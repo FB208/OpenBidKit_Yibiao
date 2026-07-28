@@ -11,6 +11,8 @@ export interface TextModelConfig {
   model_name: string;
   context_length_limit: number;
   concurrency_limit: number;
+  temperature_enabled: boolean;
+  temperature: number;
   request_mode: AiRequestMode;
 }
 

@@ -2417,7 +2417,6 @@ async function collectJson(aiService, options) {
 async function extractOriginalOutlineOnce(aiService, originalPlanMarkdown, log) {
   return collectJson(aiService, {
     messages: buildExpandOutlineMessages(originalPlanMarkdown),
-    temperature: 0.7,
     normalizer: normalizeOriginalOutlineResponse,
     validator: validateTopLevelOutline,
     progressCallback: (message) => log(message, 12),
@@ -2464,7 +2463,6 @@ async function extractOriginalOutlineBySegments(aiService, workspaceStore, origi
 
     currentOutline = await collectJson(aiService, {
       messages: buildMessages(segment.content),
-      temperature: 0.7,
       normalizer: normalizeOriginalOutlineResponse,
       validator: validateTopLevelOutline,
       progressCallback: (message) => log(message, 12),
@@ -2510,7 +2508,6 @@ async function collectOriginalOutlineAdditionsBySegments(aiService, outline, ori
 
     const response = await collectJson(aiService, {
       messages: buildMessages(segment.content),
-      temperature: 0.3,
       normalizer: normalizeOriginalOutlineAdditionsResponse,
       progressCallback: (message) => log(message, 16),
       progressLabel: `旧方案目录补漏 ${index + 1}/${segments.length}`,
@@ -2570,7 +2567,6 @@ async function reviewFinalOutline(aiService, context, log) {
   log('开始最终目录审核。', OUTLINE_PROGRESS.finalReviewStart);
   return collectJson(aiService, {
     messages: buildFinalOutlineReviewMessages(context),
-    temperature: 0.3,
     normalizer: normalizeReviewResponse,
     progressCallback: (message) => log(message, OUTLINE_PROGRESS.finalReviewStart),
     progressLabel: '最终目录审核',
@@ -2650,7 +2646,6 @@ async function runFinalOutlineGate({ aiService, agentService, payload, outline, 
 async function extractRequirementGroups(aiService, payload, suggestions, log) {
   const response = await collectJson(aiService, {
     messages: extractRequirementGroupsMessages(payload, suggestions),
-    temperature: 0.3,
     normalizer: normalizeRequirementGroupsResponse,
     validator: validateRequirementGroups,
     progressCallback: (message) => log(message, OUTLINE_PROGRESS.requirementExtractionStart),
@@ -2663,7 +2658,6 @@ async function extractRequirementGroups(aiService, payload, suggestions, log) {
 async function generateAlignedChildrenForGroup(aiService, payload, parentItem, group, suggestions, log, progress) {
   const response = await collectJson(aiService, {
     messages: generateAlignedChildrenMessages({ ...payload, parentItem, group, suggestions }),
-    temperature: 0.7,
     normalizer: (value) => normalizeChildrenResponse(value, new Set()),
     validator: validateChildrenOutline,
     repairMessagesBuilder: (context) => generateChildrenStructureRepairMessages(context, parentItem, group),
@@ -2677,7 +2671,6 @@ async function generateAlignedChildrenForGroup(aiService, payload, parentItem, g
 async function generateExpansionTopLevelPlan(aiService, payload, log) {
   const response = await collectJson(aiService, {
     messages: buildExpansionTopLevelComplementMessages(payload),
-    temperature: 0.3,
     normalizer: normalizeExpansionTopLevelPlanResponse,
     validator: validateRequirementGroups,
     progressCallback: (message) => log(message, OUTLINE_PROGRESS.mainPlanActivity),
@@ -2691,7 +2684,6 @@ async function generateExpansionChildrenForRoot(aiService, sharedMessages, paren
   if (parentItem.children?.length) {
     const patch = await collectJson(aiService, {
       messages: buildExpansionChildPatchMessages(sharedMessages, parentItem, group),
-      temperature: 0.3,
       normalizer: normalizeExpansionChildPatchResponse,
       validator: validateExpansionChildPatchResponse,
       repairMessagesBuilder: (context) => buildExpansionChildPatchRepairMessages(context, parentItem, group),
@@ -2704,7 +2696,6 @@ async function generateExpansionChildrenForRoot(aiService, sharedMessages, paren
 
   const response = await collectJson(aiService, {
     messages: buildExpansionMissingChildrenMessages(sharedMessages, parentItem, group),
-    temperature: 0.7,
     normalizer: (value) => normalizeChildrenResponse(value, new Set()),
     validator: validateChildrenOutline,
     repairMessagesBuilder: (context) => generateChildrenStructureRepairMessages(context, parentItem, group),
@@ -2943,7 +2934,6 @@ async function enhanceOutlineWithKnowledgeAdditions(aiService, payload, outline,
     const runKnowledgeSegment = async (segment) => {
       const patch = await collectJson(aiService, {
         messages: generateKnowledgePatchMessages(sharedMessages, segment),
-        temperature: 0.3,
         normalizer: (value) => normalizeKnowledgeAdditionsResponse(value, {
           outline: outline.outline || [],
           outlineNodeMap,

@@ -111,7 +111,6 @@ function createDeveloperExpansionReplaceTestService({ aiService }) {
 
     const rawPatch = await aiService.collectJsonResponse({
       messages: developerReplaceTestBuildMessages(payload),
-      temperature: 0.7,
       logTitle: `开发者正式扩写替换测试-${payload?.sectionId || 'unknown'}-${payload?.sectionTitle || '未命名章节'}`,
       progressLabel: '开发者正式扩写替换测试',
       failureMessage: '模型返回的正式扩写替换测试 JSON 无效',

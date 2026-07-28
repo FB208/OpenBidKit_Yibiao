@@ -218,7 +218,6 @@ async function prepareRenderableMermaid({ aiService, execution, mermaidPlan, isP
     try {
       const repaired = await aiService.collectJsonResponse({
         messages: buildMermaidRepairMessages(execution, currentPlan, compactError(lastError?.message || lastError), attempt),
-        temperature: 0.1,
         logTitle: `Mermaid配图修复-${execution.planItem.item_id}-${title}`,
         progressLabel: 'Mermaid 配图修复',
         failureMessage: '模型返回的 Mermaid 修复结果格式无效',
@@ -254,7 +253,6 @@ async function generateAiIllustration(aiService, execution) {
 async function generateMermaidIllustrationInternal(aiService, execution, isPauseLikeError) {
   const generated = await aiService.collectJsonResponse({
     messages: buildMermaidGenerationMessages(execution),
-    temperature: 0.2,
     logTitle: `Mermaid配图-${execution.planItem.item_id}-${getPlannedTitle(execution)}`,
     progressLabel: 'Mermaid 配图生成',
     failureMessage: '模型返回的 Mermaid 配图格式无效',
@@ -328,7 +326,6 @@ async function repairHtmlLayout({ aiService, execution, html, issues, attempt, m
   }
   const response = await aiService.chat({
     messages: [{ role: 'user', content: `${prompt}\n\n仅返回 html 代码，不要返回其他内容。` }],
-    temperature: 0.1,
     logTitle: `HTML配图布局修复-${execution.planItem.item_id}-${getPlannedTitle(execution)}`,
   });
   return validateHtmlCode(response);
@@ -360,7 +357,6 @@ async function generateHtmlIllustrationInternal({ aiService, execution, plan, wo
     } else {
       const response = await aiService.chat({
         messages: [{ role: 'user', content: `${buildHtmlImagePrompt(execution)}\n\n仅返回html代码，不要返回任何其他内容。` }],
-        temperature: 0.2,
         logTitle: `HTML配图-${execution.planItem.item_id}-${getPlannedTitle(execution)}`,
       });
       html = validateHtmlCode(response);

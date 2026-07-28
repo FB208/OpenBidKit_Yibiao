@@ -230,7 +230,6 @@ async function runBidSectionExtractionTask({ aiService, workspaceStore, updateTa
     for (let index = 0; index < sourceSegments.length; index += 1) {
       const raw = await collectJson(aiService, {
         messages: buildExtractMessages(sourceSegments[index], index + 1, sourceSegments.length),
-        temperature: 0.1,
         response_format: { type: 'json_object' },
         logTitle: `多标段识别-第${index + 1}段`,
         progressLabel: `多标段识别第${index + 1}段`,
@@ -242,7 +241,6 @@ async function runBidSectionExtractionTask({ aiService, workspaceStore, updateTa
     const mergedRaw = sourceSegments.length > 1
       ? await collectJson(aiService, {
         messages: buildMergeMessages(segmentResults),
-        temperature: 0.1,
         response_format: { type: 'json_object' },
         logTitle: '多标段识别-候选合并',
         progressLabel: '多标段识别候选合并',

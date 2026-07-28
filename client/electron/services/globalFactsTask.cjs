@@ -566,7 +566,6 @@ function batchRenderedItems(items, renderItem, limit) {
 async function collectGroupMerge(aiService, context, segmentResults, mergeMessagesBuilder, sourceLabel, log, progress, labelSuffix = '') {
   return collectJson(aiService, {
     messages: mergeMessagesBuilder({ ...context, segmentResults }),
-    temperature: 0.2,
     logTitle: `全局事实变量-${sourceLabel}-合并${labelSuffix}`,
     progressLabel: `${sourceLabel}全局事实合并${labelSuffix}`,
     failureMessage: `模型返回的${sourceLabel}全局事实合并结果格式无效`,
@@ -605,7 +604,6 @@ async function mergeGroupResultsInBatches({ aiService, context, segmentResults, 
 async function collectPatchMerge(aiService, context, patchResults, sourceLabel, log, progress, labelSuffix = '') {
   return collectJson(aiService, {
     messages: buildSegmentPatchMergeMessages({ ...context, patchResults, sourceLabel }),
-    temperature: 0.2,
     logTitle: `全局事实变量-${sourceLabel}-补充合并${labelSuffix}`,
     progressLabel: `${sourceLabel}全局事实补充合并${labelSuffix}`,
     failureMessage: `模型返回的${sourceLabel}全局事实补充合并结果格式无效`,
@@ -653,7 +651,6 @@ async function runSegmentedGroupExtraction({ aiService, context, sourceText, bui
   const runSegment = async (segment) => {
     const response = await collectJson(aiService, {
       messages: buildMessages({ ...context, segment }),
-      temperature: 0.2,
       logTitle: `全局事实变量-${sourceLabel}-第${segment.index}段`,
       progressLabel: `${sourceLabel}全局事实 ${segment.index}/${segment.total}`,
       failureMessage: `模型返回的${sourceLabel}全局事实分段结果格式无效`,
@@ -701,7 +698,6 @@ async function runSegmentedPatchExtraction({ aiService, context, segments, build
   const runSegment = async (segment) => {
     const response = await collectJson(aiService, {
       messages: buildMessages({ ...context, segment }),
-      temperature: 0.2,
       logTitle: `全局事实变量-${mergeSourceLabel}-第${segment.index}段`,
       progressLabel: `${mergeSourceLabel}全局事实补充 ${segment.index}/${segment.total}`,
       failureMessage: `模型返回的${mergeSourceLabel}全局事实补充结果格式无效`,
@@ -765,7 +761,6 @@ async function finalizeGlobalFacts(aiService, context, log) {
   log('正在最终整理全局事实变量。', 90);
   return collectJson(aiService, {
     messages: buildFinalGlobalFactsReviewMessages(context),
-    temperature: 0.2,
     logTitle: '全局事实变量-最终整理',
     progressLabel: '全局事实变量最终整理',
     failureMessage: '模型返回的全局事实变量最终结果格式无效',

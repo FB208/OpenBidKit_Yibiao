@@ -443,9 +443,11 @@ async function runDirectModelSelfCheck(config) {
     const body = {
       model: config.model_name,
       messages: [{ role: 'user', content: '只回复 OK' }],
-      temperature: 0,
       stream: false,
     };
+    if (config.temperature_enabled) {
+      body.temperature = config.temperature;
+    }
     const response = await fetch(`${trimBaseUrl(config.base_url)}/chat/completions`, {
       method: 'POST',
       headers: {

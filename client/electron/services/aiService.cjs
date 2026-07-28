@@ -685,20 +685,18 @@ function normalizeJsonPayload(request, parsed) {
   return normalized;
 }
 
-async function repairJsonResponse(app, config, invalidContent, issues, temperature, responseFormat, progressCallback, progressLabel, repairMessagesBuilder, logTitle) {
+async function repairJsonResponse(app, config, invalidContent, issues, responseFormat, progressCallback, progressLabel, repairMessagesBuilder, logTitle) {
   await emitProgress(progressCallback, `${progressLabel}格式校验失败，正在基于当前结果进行修复。`);
   return chatWithConfig(app, config, {
     messages: repairMessagesBuilder
       ? repairMessagesBuilder({ invalidContent, issues, progressLabel })
       : buildJsonRepairMessages(invalidContent, issues, progressLabel),
-    temperature,
     response_format: responseFormat,
     logTitle: logTitle ? `${logTitle}修复` : `${progressLabel}修复`,
   });
 }
 
 async function parseOrRepairJsonResponseWithConfig(app, config, request, content) {
-  const temperature = request.temperature ?? 0.7;
   const responseFormat = request.response_format || { type: 'json_object' };
   const progressLabel = request.progressLabel || 'JSON结果';
   const failureMessage = request.failureMessage || '模型返回的 JSON 数据格式无效';
@@ -714,7 +712,6 @@ async function parseOrRepairJsonResponseWithConfig(app, config, request, content
         config,
         content,
         issues,
-        temperature,
         responseFormat,
         request.progressCallback,
         progressLabel,
@@ -731,7 +728,6 @@ async function parseOrRepairJsonResponseWithConfig(app, config, request, content
 async function collectJsonResponseWithConfig(app, config, request) {
   const maxRetries = request.max_retries ?? 2;
   const totalAttempts = maxRetries + 1;
-  const temperature = request.temperature ?? 0.7;
   const responseFormat = request.response_format || { type: 'json_object' };
   const progressLabel = request.progressLabel || 'JSON结果';
   const failureMessage = request.failureMessage || '模型返回的 JSON 数据格式无效';
@@ -741,7 +737,6 @@ async function collectJsonResponseWithConfig(app, config, request) {
   for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
     const content = await chatWithConfig(app, config, {
       messages: request.messages,
-      temperature,
       response_format: responseFormat,
       timeout_ms: request.timeout_ms,
       timeout_message: request.timeout_message,
@@ -761,7 +756,6 @@ async function collectJsonResponseWithConfig(app, config, request) {
           config,
           content,
           issues,
-          temperature,
           responseFormat,
           request.progressCallback,
           progressLabel,
@@ -792,6 +786,10 @@ function createChatRequestBody(config, request, options = {}) {
     model: modelName,
     messages: request.messages,
   };
+
+  if (config.temperature_enabled) {
+    body.temperature = config.temperature;
+  }
 
   if (options.stream) {
     body.stream = true;

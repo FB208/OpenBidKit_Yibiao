@@ -1326,7 +1326,6 @@ async function runRollingRejectionItemCheck(aiService, input, onProgress) {
     const stateSummary = createRollingRejectionStateSummary(state);
     const payload = await runJson(aiService, {
       messages: buildRollingRejectionSegmentMessages(input, segment, stateSummary),
-      temperature: 0.1,
       schemaName: 'RollingRejectionCheckPatch',
       progressLabel: '投标包废标项滚动审阅',
       failureMessage: '废标项滚动审阅状态格式无效，请重新检查',
@@ -1344,7 +1343,6 @@ async function runRollingRejectionItemCheck(aiService, input, onProgress) {
     onProgress(`正在定稿废标项风险第 ${batchIndex + 1}/${batches.length} 批。`);
     const finalPayload = await runJson(aiService, {
       messages: buildRejectionFinalBatchMessages(input, batch, finalSummary, batchIndex + 1, batches.length),
-      temperature: 0.1,
       schemaName: 'RejectionCheckFindings',
       progressLabel: '投标包废标项检查定稿',
       failureMessage: '废标项检查结果格式无效，请重新检查',
@@ -1356,7 +1354,6 @@ async function runRollingRejectionItemCheck(aiService, input, onProgress) {
   onProgress('正在全局合并废标项风险。');
   const mergedPayload = await runJson(aiService, {
     messages: buildRejectionGlobalMergeMessages(input, mergedFindings, finalSummary),
-    temperature: 0.1,
     schemaName: 'RejectionCheckGlobalMergeFindings',
     progressLabel: '废标项风险全局合稿',
     failureMessage: '废标项风险全局合稿结果格式无效，请重新检查',
@@ -1376,7 +1373,6 @@ async function runSegmentedTypoCheck(aiService, input, onProgress) {
       onProgress(`${documentLabel}：正在识别第 ${segment.segmentIndex}/${segment.totalSegments} 段错别字。`);
       const payload = await runJson(aiService, {
         messages: buildTypoCheckMessages({ bidDocuments: [createSegmentPromptDocument(document, segment)] }),
-        temperature: 0.1,
         schemaName: 'TypoCheckFindings',
         progressLabel: `${documentLabel}错别字检查`,
         failureMessage: '错别字检查结果格式无效，请重新检查',
@@ -1403,7 +1399,6 @@ async function runRollingLogicCheck(aiService, input, onProgress) {
     const stateSummary = createRollingLogicStateSummary(state);
     const payload = await runJson(aiService, {
       messages: buildRollingLogicSegmentMessages(input, segment, stateSummary),
-      temperature: 0.1,
       schemaName: 'RollingLogicCheckPatch',
       progressLabel: '投标包逻辑滚动检查',
       failureMessage: '逻辑谬误滚动检查状态格式无效，请重新检查',
@@ -1421,7 +1416,6 @@ async function runRollingLogicCheck(aiService, input, onProgress) {
     onProgress(`正在定稿逻辑问题第 ${batchIndex + 1}/${batches.length} 批。`);
     const finalPayload = await runJson(aiService, {
       messages: buildLogicFinalBatchMessages(input, batch, finalSummary, batchIndex + 1, batches.length),
-      temperature: 0.1,
       schemaName: 'LogicCheckFindings',
       progressLabel: '投标包逻辑谬误检查定稿',
       failureMessage: '逻辑谬误检查结果格式无效，请重新检查',
@@ -1433,7 +1427,6 @@ async function runRollingLogicCheck(aiService, input, onProgress) {
   onProgress('正在全局合并逻辑问题。');
   const mergedPayload = await runJson(aiService, {
     messages: buildLogicGlobalMergeMessages(input, mergedFindings, finalSummary),
-    temperature: 0.1,
     schemaName: 'LogicCheckGlobalMergeFindings',
     progressLabel: '逻辑问题全局合稿',
     failureMessage: '逻辑问题全局合稿结果格式无效，请重新检查',
@@ -1449,21 +1442,20 @@ async function runRejectionItemCheck(aiService, input, onProgress) {
   onProgress('第一轮：正在分析检查范围。');
   const analysis = await runText(
     aiService,
-    { messages: buildRejectionCheckAnalysisMessages(input), temperature: 0.1 },
+    { messages: buildRejectionCheckAnalysisMessages(input) },
     onProgress,
     '第一轮分析',
   );
   onProgress('第二轮：正在逐项检查投标文件。');
   const draftFindings = await runText(
     aiService,
-    { messages: buildRejectionCheckInspectionMessages(input, analysis), temperature: 0.1 },
+    { messages: buildRejectionCheckInspectionMessages(input, analysis) },
     onProgress,
     '第二轮检查',
   );
   onProgress('第三轮：正在补充、去重并生成结果。');
   const payload = await runJson(aiService, {
     messages: buildRejectionCheckFinalMessages(input, analysis, draftFindings),
-    temperature: 0.1,
     schemaName: 'RejectionCheckFindings',
     progressLabel: '废标项检查结果',
     failureMessage: '废标项检查结果格式无效，请重新检查',
@@ -1479,7 +1471,6 @@ async function runTypoCheck(aiService, input, onProgress) {
   onProgress('正在识别错别字候选。');
   const payload = await runJson(aiService, {
     messages: buildTypoCheckMessages({ bidDocuments: input.bidDocuments }),
-    temperature: 0.1,
     schemaName: 'TypoCheckFindings',
     progressLabel: '错别字检查结果',
     failureMessage: '错别字检查结果格式无效，请重新检查',
@@ -1496,7 +1487,6 @@ async function runLogicCheck(aiService, input, onProgress) {
   onProgress('正在检查逻辑谬误。');
   const payload = await runJson(aiService, {
     messages: buildLogicCheckMessages({ bidDocuments: input.bidDocuments }),
-    temperature: 0.1,
     schemaName: 'LogicCheckFindings',
     progressLabel: '逻辑谬误检查结果',
     failureMessage: '逻辑谬误检查结果格式无效，请重新检查',
