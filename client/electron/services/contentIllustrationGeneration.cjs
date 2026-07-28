@@ -4,7 +4,12 @@ const {
   getMermaidDiagramTypeLabel,
 } = require('../utils/mermaidPolicy.cjs');
 const { runWithRemoteImageRetry } = require('../utils/remoteImageRetry.cjs');
-const { HTML_DESIGN_WIDTH, getLocalImageRenderService } = require('./localImageRenderService.cjs');
+const {
+  HTML_CAPTURE_SCALE,
+  HTML_DESIGN_WIDTH,
+  HTML_MAX_DESIGN_HEIGHT,
+  getLocalImageRenderService,
+} = require('./localImageRenderService.cjs');
 
 const HTML_AGENT_THRESHOLD_CHARS = 50000;
 const MERMAID_REPAIR_ATTEMPTS = 3;
@@ -85,7 +90,7 @@ function buildHtmlImagePrompt(execution) {
   return `阅读并理解以下内容，用html绘制一张${execution.planItem.image_type}。
 最终图题：${title}
 必须围绕最终图题限定的对象、范围和关系重点设计图形，不要生成泛化的章节概览。
-不要有太多文字描述，专业商务风格。这是一个类图片的html，所以注意仔细检查显示效果、文字换行、拥挤等问题。文字不得旋转、倒置、镜像或缩放变形，不得相互重叠、被前景元素遮挡或被容器裁切。不要使用固定或粘性文字布局，文字容器应随内容增长。宽度固定${HTML_DESIGN_WIDTH}px，高度自适应，不依赖在线字体或外部资源。参考内容如下：
+不要有太多文字描述，专业商务风格。这是一个类图片的html，所以注意仔细检查显示效果、文字换行、拥挤等问题。正文和节点文字不得小于24px，优先控制在12个主要信息节点以内，不得通过缩小字号强塞复杂内容。文字不得旋转、倒置、镜像或缩放变形，不得相互重叠、被前景元素遮挡或被容器裁切。不要使用固定或粘性文字布局，文字容器应随内容增长。宽度固定${HTML_DESIGN_WIDTH}px，高度自适应且原则上不超过${HTML_MAX_DESIGN_HEIGHT}px，不依赖在线字体或外部资源。参考内容如下：
 
 ${execution.reference}`;
 }
@@ -99,9 +104,9 @@ function buildHtmlAgentPrompt(execution) {
 要求：
 1. 必须围绕最终图题限定的对象、范围和关系重点设计图形，不要生成泛化的章节概览。
 2. 不要有太多文字描述，使用专业商务风格。
-3. 这是一个类图片的 HTML，必须仔细检查显示效果、文字换行和内容拥挤问题；文字不得旋转、倒置、镜像或缩放变形，不得相互重叠、被前景元素遮挡或被容器裁切。
+3. 这是一个类图片的 HTML，必须仔细检查显示效果、文字换行和内容拥挤问题；正文和节点文字不得小于 24px，优先控制在 12 个主要信息节点以内，不得通过缩小字号强塞复杂内容；文字不得旋转、倒置、镜像或缩放变形，不得相互重叠、被前景元素遮挡或被容器裁切。
 4. 不要使用固定或粘性文字布局，文字容器应随内容增长；不依赖在线字体或外部资源。
-5. 页面宽度固定为 ${HTML_DESIGN_WIDTH}px，高度自适应。
+5. 页面宽度固定为 ${HTML_DESIGN_WIDTH}px，高度自适应且原则上不超过 ${HTML_MAX_DESIGN_HEIGHT}px。
 6. 生成完整 HTML 文档，包含 html、head、body，不依赖本地文件。
 7. 只创建 illustration.html，不要修改 reference.md，不要创建其他结果文件。`;
 }
@@ -122,7 +127,7 @@ function buildMermaidGenerationMessages(execution) {
 4. 不使用 & 多节点连接简写，不使用分号，每行只写一个 Mermaid 语句。
 5. 必须围绕指定图题“${title}”限定的对象、范围和关系重点组织节点，不要生成泛化的章节概览。
 6. 图表必须忠实于正文，不编造正文中没有的流程、层级、角色或职责。
-7. 控制节点数量和文字长度，保证浏览器预览和 Word 导出清晰。
+7. 图中节点不得超过 12 个，单个节点文字不得超过 16 个汉字；复杂内容必须提炼，不得通过缩小字号强塞，保证浏览器预览和 Word 导出清晰。
 8. code 不包含 Markdown 代码围栏。`,
     },
     {
@@ -300,12 +305,13 @@ function getHtmlLayoutIssues(screenshot) {
     ? screenshot.layout_issues.map((issue) => String(issue || '').trim()).filter(Boolean)
     : [];
   if (width > HTML_DESIGN_WIDTH + 4) issues.push(`出现横向溢出：实际宽度 ${width}px，设计宽度 ${HTML_DESIGN_WIDTH}px`);
+  if (height > HTML_MAX_DESIGN_HEIGHT) issues.push(`画布过高：实际高度 ${height}px，建议不超过 ${HTML_MAX_DESIGN_HEIGHT}px`);
   if (height <= 0) issues.push('截图高度无效');
   return [...new Set(issues)];
 }
 
 function buildHtmlLayoutRepairPrompt(execution, html, issues, attempt) {
-  return `请修复以下用于投标文件的 HTML 图片布局。\n最终图题：${getPlannedTitle(execution)}\n修复轮次：${attempt}/${HTML_LAYOUT_REPAIR_ATTEMPTS}\n渲染诊断：${issues.join('；')}\n\n要求：保持图题和正文事实不变；宽度固定 ${HTML_DESIGN_WIDTH}px；禁止横向溢出、文字拥挤、重叠、遮挡和截断；文字不得旋转、倒置、镜像或缩放变形；不要使用固定或粘性文字布局，文字容器应随内容增长；保留专业商务风格；输出完整 HTML 文档且不依赖网络、本地文件、在线字体或外部资源。\n\n当前 HTML：\n${String(html || '').slice(0, 60000)}`;
+  return `请修复以下用于投标文件的 HTML 图片布局。\n最终图题：${getPlannedTitle(execution)}\n修复轮次：${attempt}/${HTML_LAYOUT_REPAIR_ATTEMPTS}\n渲染诊断：${issues.join('；')}\n\n要求：保持图题和正文事实不变；宽度固定 ${HTML_DESIGN_WIDTH}px，高度原则上不超过 ${HTML_MAX_DESIGN_HEIGHT}px；正文和节点文字不得小于 24px，优先控制在 12 个主要信息节点以内，不得通过缩小字号强塞复杂内容；禁止横向溢出、文字拥挤、重叠、遮挡和截断；文字不得旋转、倒置、镜像或缩放变形；不要使用固定或粘性文字布局，文字容器应随内容增长；保留专业商务风格；输出完整 HTML 文档且不依赖网络、本地文件、在线字体或外部资源。\n\n当前 HTML：\n${String(html || '').slice(0, 60000)}`;
 }
 
 async function repairHtmlLayout({ aiService, execution, html, issues, attempt, mode, runAgentHtml }) {
@@ -395,6 +401,9 @@ async function generateHtmlIllustrationInternal({ aiService, execution, plan, wo
     if (probeResult.width > HTML_DESIGN_WIDTH + 1) {
       layoutIssues.push(`出现横向溢出：实际宽度 ${probeResult.width}px，设计宽度 ${HTML_DESIGN_WIDTH}px`);
     }
+    if (probeResult.height > HTML_MAX_DESIGN_HEIGHT) {
+      layoutIssues.push(`画布过高：实际高度 ${probeResult.height}px，建议不超过 ${HTML_MAX_DESIGN_HEIGHT}px`);
+    }
     if (probeResult.height <= 0) {
       layoutIssues.push('截图高度无效');
     }
@@ -421,7 +430,7 @@ async function generateHtmlIllustrationInternal({ aiService, execution, plan, wo
   return {
     mode,
     source_path: savedHtml.relativePath,
-    asset_url: savedPng.assetUrl,
+    asset_url: `${savedPng.assetUrl}?pixel-density=${HTML_CAPTURE_SCALE}`,
     attempts: screenshot.attempts + layoutRepairAttempts,
     visual_qa: {
       status: 'needs-manual-review',
