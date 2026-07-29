@@ -44,7 +44,7 @@ export interface ImageModelTestResult {
   mime_type?: string;
 }
 
-export type ImageModelProvider = 'jinlong' | 'volcengine' | 'google-ai-studio' | 'agnes' | 'custom';
+export type ImageModelProvider = 'jinlong' | 'volcengine' | 'google-ai-studio' | 'agnes' | 'minimax' | 'custom';
 export type ImageModelStatus = 'untested' | 'available' | 'unavailable';
 export type ImageModelSize = 'auto' | '512' | '1K' | '2K' | '4K' | '1024x1024' | '1536x1024' | '1024x1536' | '2048x2048' | '2048x1152' | '3840x2160' | '2160x3840';
 

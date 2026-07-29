@@ -61,6 +61,25 @@ const OPENAI_IMAGE_PROVIDER_META = {
   },
 };
 
+// MiniMax 生图使用独立的 /image_generation 接口，请求字段与响应结构均不同于 OpenAI 兼容协议。
+const MINIMAX_IMAGE_PROVIDER_META = {
+  label: 'MiniMax',
+  defaultBaseUrl: 'https://api.minimaxi.com/v1',
+  logProvider: 'minimax',
+  modelLabel: '生图模型名称',
+};
+
+// 图片尺寸枚举到 MiniMax 官方 aspect_ratio 的映射；'auto' 不下发比例，交由服务端默认处理。
+const MINIMAX_IMAGE_ASPECT_RATIOS = {
+  '1024x1024': '1:1',
+  '2048x2048': '1:1',
+  '1536x1024': '3:2',
+  '1024x1536': '2:3',
+  '2048x1152': '16:9',
+  '3840x2160': '16:9',
+  '2160x3840': '9:16',
+};
+
 function trimBaseUrl(baseUrl) {
   return String(baseUrl || '').trim().replace(/\/+$/, '');
 }
@@ -1699,6 +1718,287 @@ async function generateGoogleImage(app, config, request) {
   }
 }
 
+function normalizeMiniMaxAspectRatio(imageConfig, requestSize) {
+  const size = String(requestSize || imageConfig?.image_size || '').trim();
+  if (!size || size === 'auto') {
+    return '';
+  }
+  return MINIMAX_IMAGE_ASPECT_RATIOS[size] || '1:1';
+}
+
+function createMiniMaxImageRequestBody(imageConfig, prompt, requestSize) {
+  const body = {
+    model: imageConfig.model_name,
+    prompt,
+    response_format: 'url',
+    n: 1,
+    prompt_optimizer: true,
+  };
+  const aspectRatio = normalizeMiniMaxAspectRatio(imageConfig, requestSize);
+  if (aspectRatio) {
+    body.aspect_ratio = aspectRatio;
+  }
+  return body;
+}
+
+function safeMiniMaxImageResponse(data) {
+  const payload = data && typeof data === 'object' ? data.data : null;
+  if (!payload || typeof payload !== 'object') {
+    return data;
+  }
+  return {
+    ...data,
+    data: {
+      ...payload,
+      image_base64: Array.isArray(payload.image_base64) ? '[base64 omitted]' : payload.image_base64,
+    },
+  };
+}
+
+function getMiniMaxImageStatusError(responseData, fallbackMessage) {
+  const baseResp = responseData?.base_resp || {};
+  const code = Number(baseResp.status_code);
+  if (Number.isFinite(code) && code !== 0) {
+    return baseResp.status_msg || fallbackMessage;
+  }
+  return '';
+}
+
+function extractMiniMaxImageUrls(responseData) {
+  const list = responseData?.data?.image_urls;
+  return Array.isArray(list) ? list.filter((url) => typeof url === 'string' && url) : [];
+}
+
+function extractMiniMaxImageBase64(responseData) {
+  const list = responseData?.data?.image_base64;
+  return Array.isArray(list) ? list.filter((item) => typeof item === 'string' && item) : [];
+}
+
+function getMiniMaxImageFailureMessage(responseData, fallbackMessage) {
+  return getMiniMaxImageStatusError(responseData, '') || fallbackMessage;
+}
+
+async function requestMiniMaxImageData(baseUrl, apiKey, requestBody, fallbackMessage, options = {}) {
+  let response = null;
+  try {
+    response = await fetch(`${baseUrl}/image_generation`, {
+      method: 'POST',
+      headers: createHeaders(apiKey),
+      body: JSON.stringify(requestBody),
+      signal: options.signal,
+    });
+  } catch (error) {
+    throw markAiRequestError(error, { retryable: true });
+  }
+  await ensureOk(response, fallbackMessage, { source: options.source || 'minimax-image-model' });
+  try {
+    return await response.json();
+  } catch (error) {
+    throw markAiRequestError(error, { retryable: true });
+  }
+}
+
+async function createImageFromMiniMaxResponse(responseData) {
+  const urls = extractMiniMaxImageUrls(responseData);
+  if (urls.length) {
+    return downloadImage(urls[0]);
+  }
+
+  const base64List = extractMiniMaxImageBase64(responseData);
+  if (base64List.length) {
+    return {
+      buffer: Buffer.from(base64List[0], 'base64'),
+      mime_type: 'image/png',
+    };
+  }
+
+  return null;
+}
+
+async function testMiniMaxImageModel(app, config) {
+  const imageConfig = config.image_model || {};
+  const meta = MINIMAX_IMAGE_PROVIDER_META;
+  let responseData = null;
+  let analyticsTracked = false;
+
+  if (!imageConfig.api_key) {
+    throw new Error(`请先填写${meta.label} API Key`);
+  }
+
+  if (!imageConfig.model_name) {
+    throw new Error(`请先填写${meta.label}${meta.modelLabel}`);
+  }
+
+  const baseUrl = requireBaseUrl(imageConfig.base_url, `${meta.label} Base URL 缺失，请重新选择服务商后保存配置`);
+  const requestMode = normalizeImageRequestMode(imageConfig);
+  const requestId = createRequestId();
+  const logTitle = `AI生图测试-${meta.label}`;
+  const requestBody = createMiniMaxImageRequestBody(imageConfig, '大字报，内容是“易标AI老好了”');
+
+  try {
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: 'image-test-pending',
+      provider: meta.logProvider,
+      request_mode: requestMode,
+      url: `${baseUrl}/image_generation`,
+      request: requestBody,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    });
+    responseData = await runWithAiRetry(() => runWithOperationTimeout(
+      (signal) => requestMiniMaxImageData(
+        baseUrl,
+        imageConfig.api_key,
+        requestBody,
+        `${meta.label}生图测试失败`,
+        { signal },
+      ),
+      AI_REQUEST_TIMEOUT_MS,
+    ));
+
+    trackAiRequest(app, config, { ai_request_type: 'image' });
+    analyticsTracked = true;
+
+    const statusError = getMiniMaxImageStatusError(responseData, `${meta.label}生图测试失败`);
+    if (statusError) {
+      throw createAiResponseDataError(statusError, responseData);
+    }
+
+    const imageUrl = extractMiniMaxImageUrls(responseData)[0] || '';
+    const imageData = imageUrl ? '' : (extractMiniMaxImageBase64(responseData)[0] || '');
+
+    if (!imageUrl && !imageData) {
+      throw createAiResponseDataError(getMiniMaxImageFailureMessage(responseData, `${meta.label}生图测试未返回图片数据`), responseData);
+    }
+
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: 'image-test',
+      provider: meta.logProvider,
+      request_mode: requestMode,
+      request: requestBody,
+      response: safeMiniMaxImageResponse(responseData),
+      result: {
+        image_url: imageUrl,
+        image_data: imageData ? '[base64 omitted]' : '',
+        mime_type: 'image/png',
+      },
+      created_at: new Date().toISOString(),
+    });
+
+    return {
+      success: true,
+      message: imageUrl ? `测试成功：已生成图片 ${imageUrl}` : '测试成功：已返回生图结果',
+      image_url: imageUrl,
+      image_data: imageData,
+      mime_type: 'image/png',
+    };
+  } catch (error) {
+    if (!analyticsTracked) {
+      trackAiRequest(app, config, { ai_request_type: 'image' });
+    }
+    const errorMessage = error?.name === 'AbortError' ? IMAGE_MODEL_TEST_TIMEOUT_MESSAGE : error?.message || '生图模型测试失败';
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: 'image-test-error',
+      provider: meta.logProvider,
+      request_mode: requestMode,
+      request: requestBody,
+      response: getAiErrorLogResponse(error, responseData ? safeMiniMaxImageResponse(responseData) : null),
+      error: getAiErrorLogError(error, errorMessage),
+      created_at: new Date().toISOString(),
+    });
+    const wrappedError = copyRawAiErrorResponse(error, new Error(errorMessage));
+    emitAiHttpErrorToWindows(wrappedError);
+    throw wrappedError;
+  }
+}
+
+async function generateMiniMaxImage(app, config, request) {
+  const imageConfig = config.image_model || {};
+  const meta = MINIMAX_IMAGE_PROVIDER_META;
+  const requestId = createRequestId();
+  const logTitle = resolveAiLogTitle(request, request.title ? `AI生图-${request.title}` : 'AI生图');
+  const requestMode = normalizeImageRequestMode(imageConfig);
+  const baseUrl = requireBaseUrl(imageConfig.base_url, `${meta.label} Base URL 缺失，请重新选择服务商后保存配置`);
+  const requestBody = createMiniMaxImageRequestBody(imageConfig, normalizeImagePrompt(request), request.size);
+  let responseData = null;
+  let analyticsTracked = false;
+
+  try {
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: 'image-pending',
+      provider: meta.logProvider,
+      request_mode: requestMode,
+      url: `${baseUrl}/image_generation`,
+      request: requestBody,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    });
+    responseData = await runWithAiRetry(() => runWithOperationTimeout(
+      (signal) => requestMiniMaxImageData(
+        baseUrl,
+        imageConfig.api_key,
+        requestBody,
+        `${meta.label}生图失败`,
+        { signal, source: `${meta.logProvider}-image-model` },
+      ),
+      AI_REQUEST_TIMEOUT_MS,
+    ));
+    trackAiRequest(app, config, { ai_request_type: 'image' });
+    analyticsTracked = true;
+
+    const statusError = getMiniMaxImageStatusError(responseData, `${meta.label}生图失败`);
+    if (statusError) {
+      throw createAiResponseDataError(statusError, responseData);
+    }
+
+    const image = await createImageFromMiniMaxResponse(responseData);
+    if (!image) {
+      throw createAiResponseDataError(getMiniMaxImageFailureMessage(responseData, `${meta.label}生图未返回图片数据`), responseData);
+    }
+
+    const saved = saveGeneratedImage(app, image);
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: 'image',
+      provider: meta.logProvider,
+      request_mode: requestMode,
+      request: requestBody,
+      response: safeMiniMaxImageResponse(responseData),
+      result: saved,
+      created_at: new Date().toISOString(),
+    });
+    return { success: true, title: request.title || '', ...saved };
+  } catch (error) {
+    if (!analyticsTracked) {
+      trackAiRequest(app, config, { ai_request_type: 'image' });
+      analyticsTracked = true;
+    }
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: 'image-error',
+      provider: meta.logProvider,
+      request_mode: requestMode,
+      request: requestBody,
+      response: getAiErrorLogResponse(error, responseData ? safeMiniMaxImageResponse(responseData) : null),
+      error: getAiErrorLogError(error, error.message),
+      created_at: new Date().toISOString(),
+    });
+    const finalError = markAiRequestError(error, { retryable: false });
+    emitAiHttpErrorToWindows(finalError);
+    throw finalError;
+  }
+}
+
 async function generateImageWithConfig(app, config, request) {
   const availability = getImageModelAvailability(config);
   if (!availability.available) {
@@ -1711,6 +2011,10 @@ async function generateImageWithConfig(app, config, request) {
 
   if (config.image_model?.provider === 'google-ai-studio') {
     return generateGoogleImage(app, config, request);
+  }
+
+  if (config.image_model?.provider === 'minimax') {
+    return generateMiniMaxImage(app, config, request);
   }
 
   throw new Error('当前生图服务商暂不支持正文配图');
@@ -1853,6 +2157,10 @@ function createAiService({ app, configStore }) {
         return testGoogleImageModel(app, trackedConfig);
       }
 
+      if (trackedConfig.image_model?.provider === 'minimax') {
+        return testMiniMaxImageModel(app, trackedConfig);
+      }
+
       throw new Error('当前服务商暂不支持测试');
     },
 
@@ -1967,4 +2275,12 @@ function createAiService({ app, configStore }) {
 
 module.exports = {
   createAiService,
+  __test__: {
+    createMiniMaxImageRequestBody,
+    normalizeMiniMaxAspectRatio,
+    extractMiniMaxImageUrls,
+    extractMiniMaxImageBase64,
+    getMiniMaxImageStatusError,
+    safeMiniMaxImageResponse,
+  },
 };

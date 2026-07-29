@@ -9,7 +9,7 @@ const {
 
 const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
 const legacyTextModelProviders = ['longcat'];
-const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'agnes', 'custom'];
+const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'agnes', 'minimax', 'custom'];
 const aiRequestModes = ['normal', 'stream'];
 const updateChannels = ['github', 'cloudflare'];
 const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
@@ -151,6 +151,18 @@ const defaultImageModelProfiles = {
     model_name: '',
     image_size: '1024x1024',
     request_mode: 'stream',
+    concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  },
+  minimax: {
+    provider: 'minimax',
+    base_url: 'https://api.minimaxi.com/v1',
+    api_key: '',
+    model_name: 'image-01',
+    image_size: '1024x1024',
+    request_mode: 'normal',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
     tested_at: '',
@@ -488,7 +500,7 @@ function normalizeImageModelProfile(provider, profile) {
   const useProviderDefaultImageModel = provider === 'jinlong' && !String(source.model_name ?? '').trim();
   return {
     provider,
-    base_url: provider === 'custom'
+    base_url: provider === 'custom' || provider === 'minimax'
       ? source.base_url !== undefined ? source.base_url : defaults.base_url
       : defaults.base_url,
     api_key: source.api_key !== undefined ? source.api_key : defaults.api_key,

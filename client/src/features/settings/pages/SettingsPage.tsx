@@ -191,6 +191,7 @@ const imageProviders: Array<{ value: ImageModelProvider; label: string }> = [
   { value: 'volcengine', label: '火山方舟' },
   { value: 'google-ai-studio', label: 'Google AI Studio' },
   { value: 'agnes', label: 'Agnes AI' },
+  { value: 'minimax', label: 'MiniMax' },
   { value: 'custom', label: '自定义 OpenAI-like' },
 ];
 
@@ -275,6 +276,18 @@ const imageProviderDefaults: ImageModelProfiles = {
     tested_at: '',
     last_error: '',
   },
+  minimax: {
+    provider: 'minimax',
+    base_url: 'https://api.minimaxi.com/v1',
+    api_key: '',
+    model_name: 'image-01',
+    image_size: '1024x1024',
+    request_mode: 'normal',
+    concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  },
   custom: {
     provider: 'custom',
     base_url: '',
@@ -294,6 +307,7 @@ const imageProviderApiKeyUrls: Record<ImageModelProvider, string> = {
   volcengine: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
   'google-ai-studio': 'https://aistudio.google.com/api-keys',
   agnes: 'https://platform.agnes-ai.com/settings/apiKeys',
+  minimax: 'https://platform.minimaxi.com/',
   custom: '',
 };
 
@@ -302,6 +316,7 @@ const imageProviderLabels: Record<ImageModelProvider, string> = {
   volcengine: '火山方舟',
   'google-ai-studio': 'Google AI Studio',
   agnes: 'Agnes AI',
+  minimax: 'MiniMax',
   custom: '自定义生图服务',
 };
 
@@ -310,6 +325,7 @@ function getImageBaseUrlDescription(provider: ImageModelProvider) {
   if (provider === 'volcengine') return '火山方舟 OpenAI 兼容接口地址';
   if (provider === 'agnes') return 'Agnes AI OpenAI 兼容接口地址';
   if (provider === 'custom') return '填写兼容 OpenAI /images/generations 的接口地址';
+  if (provider === 'minimax') return 'MiniMax 图片生成接口地址，国际版为 https://api.minimax.io/v1，国内版为 https://api.minimaxi.com/v1';
   return 'Google Gemini API REST 地址';
 }
 
@@ -318,6 +334,7 @@ function getImageApiKeyDescription(provider: ImageModelProvider) {
   if (provider === 'volcengine') return '用于调用火山方舟图片生成 API';
   if (provider === 'agnes') return '用于调用 Agnes AI 图片生成 API';
   if (provider === 'custom') return '用于调用自定义 OpenAI-like 生图接口';
+  if (provider === 'minimax') return '用于调用 MiniMax 图片生成 API';
   return '用于调用 Google AI Studio Gemini API';
 }
 
@@ -326,6 +343,7 @@ function getImageModelDescription(provider: ImageModelProvider) {
   if (provider === 'volcengine') return '填写火山方舟控制台中已开通的模型或推理接入点 ID';
   if (provider === 'agnes') return '填写 Agnes AI 已开通的生图模型名称';
   if (provider === 'custom') return '填写自定义接口支持的生图模型名称';
+  if (provider === 'minimax') return '填写 MiniMax 已开通的生图模型名称';
   return '选择或填写支持图片生成的 Gemini 模型';
 }
 
@@ -334,6 +352,7 @@ function getImageModelPlaceholder(provider: ImageModelProvider) {
   if (provider === 'volcengine') return '请输入已开通的模型或推理接入点 ID';
   if (provider === 'agnes') return '请输入 Agnes AI 生图模型名称';
   if (provider === 'custom') return '请输入 OpenAI-like 生图模型名称';
+  if (provider === 'minimax') return 'image-01';
   return 'gemini-3.1-flash-image-preview';
 }
 
@@ -349,7 +368,7 @@ function normalizeImageModelProfile(provider: ImageModelProvider, profile?: Part
   const useProviderDefaultImageModel = provider === 'jinlong' && !String(profile?.model_name ?? '').trim();
   return {
     provider,
-    base_url: provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url,
+    base_url: provider === 'custom' || provider === 'minimax' ? profile?.base_url ?? defaults.base_url : defaults.base_url,
     api_key: profile?.api_key ?? defaults.api_key,
     model_name: useProviderDefaultImageModel ? defaults.model_name : profile?.model_name ?? defaults.model_name,
     image_size: normalizeImageSize(provider, useProviderDefaultImageModel ? defaults.image_size : profile?.image_size ?? defaults.image_size),
@@ -1910,7 +1929,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 value={state.imageModel.base_url || ''}
                 placeholder={state.imageModel.provider === 'custom' ? 'https://api.example.com/v1' : imageProviderDefaults[state.imageModel.provider].base_url}
                 onChange={(event) => updateImageModelConfig({ base_url: event.target.value }, { clearModels: true })}
-                disabled={state.imageModel.provider !== 'custom'}
+                disabled={state.imageModel.provider !== 'custom' && state.imageModel.provider !== 'minimax'}
               />
             </label>
             <label className="settings-row">
