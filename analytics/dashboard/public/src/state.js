@@ -58,6 +58,7 @@ export const state = {
   configUsage: $('configUsage'),
   modelUsage: $('modelUsage'),
   agentRuntime: $('agentRuntime'),
+  agentRuntimeModels: $('agentRuntimeModels'),
   agentErrorReceiveEnabled: $('agentErrorReceiveEnabled'),
   agentErrorVersionInput: $('agentErrorVersionInput'),
   addAgentErrorVersionButton: $('addAgentErrorVersionButton'),

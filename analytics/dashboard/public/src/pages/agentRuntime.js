@@ -119,12 +119,9 @@ function renderAgentRuntime(stats = {}) {
         <h3>运行时维度</h3>
         ${renderRuntimeRows(runtimes)}
       </div>
-      <div class="agent-runtime-models panel">
-        <h3>模型维度</h3>
-        ${renderModelRows(models)}
-      </div>
     </div>
   `;
+  state.agentRuntimeModels.innerHTML = renderModelRows(models);
 }
 
 export async function loadAgentRuntime() {
