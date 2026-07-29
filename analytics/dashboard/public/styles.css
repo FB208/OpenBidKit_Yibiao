@@ -668,7 +668,7 @@ button:disabled {
 }
 
 .agent-error-table {
-  min-width: 1120px;
+  min-width: 1280px;
   table-layout: fixed;
 }
 
@@ -688,10 +688,16 @@ button:disabled {
 }
 
 .agent-error-table th:nth-child(5),
+.agent-error-model-cell {
+  width: 160px;
+}
+
+.agent-error-table th:nth-child(6),
 .agent-error-client-cell {
   width: 150px;
 }
 
+.agent-error-model-cell code,
 .agent-error-client-cell code {
   display: block;
   overflow: hidden;
@@ -704,7 +710,7 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
-.agent-error-table th:nth-child(7) {
+.agent-error-table th:nth-child(8) {
   width: 110px;
 }
 

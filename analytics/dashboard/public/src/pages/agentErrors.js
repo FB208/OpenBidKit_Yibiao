@@ -68,6 +68,7 @@ function renderLogs() {
       <td class="agent-error-time-cell">${escapeHtml(log.receivedAt || log.occurredAt || '-')}</td>
       <td><code>${escapeHtml(log.version || '-')}</code></td>
       <td><code>${escapeHtml(log.runtime || '-')}</code></td>
+      <td class="agent-error-model-cell"><code title="${escapeHtml(log.model || '')}">${escapeHtml(log.model || '-')}</code></td>
       <td class="agent-error-client-cell"><code title="${escapeHtml(log.clientId || '')}">${escapeHtml(log.clientId || '-')}</code></td>
       <td class="agent-error-summary-cell" title="${escapeHtml(log.errorSummary || '')}">${escapeHtml(truncate(log.errorSummary, 150) || '-')}</td>
       <td>${escapeHtml(formatBytes(log.compressedBytes))}<br /><small>原始 ${escapeHtml(formatBytes(log.originalBytes))}</small></td>
@@ -79,7 +80,7 @@ function renderLogs() {
   `).join('');
   state.agentErrorTable.innerHTML = `
     <table class="agent-error-table">
-      <thead><tr><th></th><th>接收时间</th><th>版本</th><th>运行时</th><th>Client ID</th><th>错误摘要</th><th>大小</th><th>操作</th></tr></thead>
+      <thead><tr><th></th><th>接收时间</th><th>版本</th><th>运行时</th><th>使用模型</th><th>Client ID</th><th>错误摘要</th><th>大小</th><th>操作</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;

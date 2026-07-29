@@ -173,6 +173,7 @@ export function normalizeAgentErrorMeta(input = {}) {
     clientId: normalizeText(input.clientId, 120),
     clientCreatedAt: normalizeText(input.clientCreatedAt, 20).slice(0, 10),
     runtime: normalizeText(input.runtime, 40),
+    model: normalizeText(input.model, 160),
     errorName: normalizeText(input.errorName, 120),
     errorCode: normalizeText(input.errorCode, 120),
     errorSummary: normalizeText(input.errorSummary, 1000),
@@ -237,10 +238,10 @@ export async function storeAgentError(env, meta, compressedBody, retentionDays =
     });
     await db.prepare(`
       INSERT INTO agent_error_logs (
-        id, project_name, client_id, client_created_at, version, runtime, platform, arch,
+        id, project_name, client_id, client_created_at, version, runtime, model, platform, arch,
         occurred_at, received_at, expires_at, error_name, error_code, error_summary,
         original_bytes, compressed_bytes, object_key, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready')
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready')
     `).bind(
       meta.reportId,
       meta.projectName,
@@ -248,6 +249,7 @@ export async function storeAgentError(env, meta, compressedBody, retentionDays =
       meta.clientCreatedAt,
       meta.version,
       meta.runtime,
+      meta.model,
       meta.platform,
       meta.arch,
       meta.occurredAt,
@@ -284,6 +286,7 @@ export async function listAgentErrors(env, projectName, pageValue, pageSizeValue
       client_id AS clientId,
       version,
       runtime,
+      model,
       platform,
       arch,
       occurred_at AS occurredAt,

@@ -173,6 +173,7 @@ function createReportMeta(job, error, originalBytes, compressedBytes, configured
     clientId: job.client.clientId,
     clientCreatedAt: job.client.clientCreatedAt,
     runtime: job.runtimeId,
+    model: redactText(job.config?.model_name || '', configuredSecrets).slice(0, 160),
     errorName: redactText(error?.name || 'Error', configuredSecrets).slice(0, 120),
     errorCode: redactText(error?.code || error?.cause?.code || '', configuredSecrets).slice(0, 120),
     errorSummary: redactText(error?.message || 'Agent 执行失败', configuredSecrets).slice(0, 1000),
