@@ -79,6 +79,7 @@ const ORIGINAL_OUTLINE_AGENT_SCENARIO_KEY = 'existing_plan_expansion_original_ou
 const ORIGINAL_OUTLINE_AGENT_OUTPUT_FILE = 'original-outline.json';
 const DEFAULT_EFFECTIVE_SECTION_WORDS = 3000;
 const MAX_WORD_ADJUSTMENT_ATTEMPTS = 3;
+const LEAF_BRANCH_REQUIREMENT = '无论叶子目录实际位于二级、三级还是四级，任何包含下级目录的父目录，其下最终展开的叶子目录不得只有一个，至少应有两个；如果只能形成一个叶子目录，应合并冗余层级或调整目录归属。';
 const WORD_ADJUSTMENT_AGENT_OUTPUT_FILE = 'adjusted-outline.json';
 // 二审（审核+微调）循环最多执行的轮次。
 const MAX_SECOND_REVIEW_ROUNDS = 3;
@@ -525,8 +526,9 @@ function generateAlignedChildrenMessages({ overview, requirements, parentItem, g
 3. 二级和三级目录要覆盖当前技术评分项大类及其细项，不能越界写入其他评分项大类内容。
 4. 技术评分要求只能作为编写约束、扣分口径、判定标准和注意事项参考，用于完善目录说明和响应重点；不得把评分要求扩展成独立一级目录，也不得偏离当前一级目录主题。
 5. 如果提供了原方案目录基础，当前输出是补充候选目录，应尽量复用原目录中相关表达，只补充缺失内容，不要提出删除或重排原目录。
-6. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
-7. 除了 JSON 结果外，不要输出任何其他内容。
+6. 一个二级目录下至少有两个三级目录。
+7. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
+8. 除了 JSON 结果外，不要输出任何其他内容。
 
 ${childrenOutlineFixedStructureRules()}`;
   const messages = [
@@ -624,7 +626,8 @@ function buildFinalOutlineReviewMessages(context) {
 1. 一级目录是否只基于技术评分项建立，并覆盖技术评分项中的关键评分内容。
 2. 技术评分要求是否已作为约束、扣分口径、判定标准或注意事项被合理参考；不得因为评分要求本身生成、补充或要求补充一级目录。
 3. 是否存在明显重复、归属错位、遗漏技术评分项、误把评分要求当成目录主题或结构不合理。
-4. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议；建议应围绕技术评分项覆盖和现有目录结构调整，不要要求把评分要求补成一级目录。
+4. 检查是否存在某个父目录下最终只有一个叶子目录；存在时必须返回 passed=false，并提出合并层级或调整归属的建议。
+5. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议；建议应围绕技术评分项覆盖和现有目录结构调整，不要要求把评分要求补成一级目录。
 
 只返回 JSON，格式为 {"passed": true, "suggestions": []}，不要返回完整目录，不要输出解释文字。`,
     },
@@ -647,6 +650,11 @@ function getFinalAgentOutputShape(context) {
           "children": [
             {
               "id": "1.1.1",
+              "title": "三级目录标题",
+              "description": "三级目录说明"
+            },
+            {
+              "id": "1.1.2",
               "title": "三级目录标题",
               "description": "三级目录说明"
             }
@@ -793,6 +801,7 @@ workspace 文件说明：
 - 如果 requirement-groups.json 存在，最终一级目录和 groups 应保持可校验的一致关系；如果你判断 groups 本身误把评分要求纳入，应同步修正 groups 和目录。
 - 如果 original-outline.json 存在，优先在原目录基础上补充和修复，避免无目的全量重写。
 - 修复可包括删除重复项、迁移错位目录、补充缺失评分项目录、移除误作为目录主题的评分要求、合并明显重复目录和重新编号。
+- ${LEAF_BRANCH_REQUIREMENT}
 - 任务结束时，${outputFile} 是可被 JSON.parse 直接解析的纯 JSON 文件，不包含 Markdown 代码块或解释文字。
 - JSON 顶层格式为：
 ${outputShape}
@@ -1198,9 +1207,10 @@ function buildExpansionMissingChildrenMessages(sharedMessages, parentItem, group
 1. 一级目录标题和顺序已经固定，不能修改、重命名、合并或删除一级目录。
 2. 只输出当前一级目录下的二级和三级目录，不要重复输出一级目录本身。
 3. 二级和三级目录要覆盖当前技术评分大类及其细项，不能越界写入其他一级目录内容。
-4. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
-5. id 字段用于承载目录编号；title 字段只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
-6. 除了 JSON 结果外，不要输出任何其他内容。
+4. 一个二级目录下至少有两个三级目录。
+5. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
+6. id 字段用于承载目录编号；title 字段只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
+7. 除了 JSON 结果外，不要输出任何其他内容。
 
 ${childrenOutlineFixedStructureRules()}`;
   const messages = [
@@ -1227,19 +1237,21 @@ function buildExpansionChildPatchMessages(sharedMessages, parentItem, group, sug
 3. parent_id 必须逐字复制这段目录中已有的一级或二级目录 id；不能使用三级目录作为 parent_id。
 4. 新增目录最多到三级；如果 parent_id 是一级目录，可以新增二级目录并可带三级 children；如果 parent_id 是二级目录，只能新增三级目录且不能包含 children。
 5. 优先补齐已有二级目录下缺失的三级响应要点、实施措施、证明材料或验收标准。
-6. 如果这段目录已经充分覆盖当前技术评分大类中的相关细项，返回 {"additions":[]}。
-7. 新增 title 只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
-8. 只返回 JSON，不要输出解释文字。
+6. 新增或补充后，同一父目录下最终展开的叶子目录至少有两个；不要新增只承载一个叶子目录的父目录。
+7. 如果这段目录已经充分覆盖当前技术评分大类中的相关细项，返回 {"additions":[]}。
+8. 新增 title 只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
+9. 只返回 JSON，不要输出解释文字。
 
 返回格式：
 {
   "additions": [
     {
-      "parent_id": "1.1",
+      "parent_id": "1",
       "title": "新增目录标题",
       "description": "新增目录说明",
       "children": [
-        { "title": "可选三级目录标题", "description": "可选三级目录说明" }
+        { "title": "新增三级目录标题一", "description": "新增三级目录说明一" },
+        { "title": "新增三级目录标题二", "description": "新增三级目录说明二" }
       ]
     }
   ]
@@ -1271,11 +1283,12 @@ function buildExpansionChildPatchRepairMessages({ invalidContent, issues }, pare
 2. additions 只能追加下级目录，不能包含已有目录修改。
 3. parent_id 必须来自这段目录中已有的一级或二级目录 id。
 4. 新增目录最多到三级，三级目录不能包含 children。
-5. 修复后的 title 只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
-6. 优先保留待修复内容中已经出现的 parent_id、title 含义、description，只修复 JSON 结构、截断字符串、层级合法性和 title 编号问题。
-7. 如果待修复内容里的 parent_id 是三级目录，请改挂到它所属的二级目录；例如 "${secondLevelId}.1" 应改为 "${secondLevelId}"，不要直接丢弃该新增项。
-8. 不要因为 JSON 截断或字符串未闭合就直接返回空 additions；只有待修复内容完全没有可恢复的新增目录信息时，才返回 {"additions":[]}。
-9. 只返回 JSON，不要输出解释文字。
+5. 新增或补充后，同一父目录下最终展开的叶子目录至少有两个；不要新增只承载一个叶子目录的父目录。
+6. 修复后的 title 只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
+7. 优先保留待修复内容中已经出现的 parent_id、title 含义、description，只修复 JSON 结构、截断字符串、层级合法性和 title 编号问题。
+8. 如果待修复内容里的 parent_id 是三级目录，请改挂到它所属的二级目录；例如 "${secondLevelId}.1" 应改为 "${secondLevelId}"，不要直接丢弃该新增项。
+9. 不要因为 JSON 截断或字符串未闭合就直接返回空 additions；只有待修复内容完全没有可恢复的新增目录信息时，才返回 {"additions":[]}。
+10. 只返回 JSON，不要输出解释文字。
 
 返回格式示例：
 {
@@ -1290,7 +1303,8 @@ function buildExpansionChildPatchRepairMessages({ invalidContent, issues }, pare
       "title": "新增二级目录标题",
       "description": "新增二级目录说明",
       "children": [
-        { "title": "新增三级目录标题", "description": "新增三级目录说明" }
+        { "title": "新增三级目录标题一", "description": "新增三级目录说明一" },
+        { "title": "新增三级目录标题二", "description": "新增三级目录说明二" }
       ]
     }
   ]
@@ -3023,6 +3037,20 @@ function countOutlineLeafItems(items) {
   ), 0);
 }
 
+// 查找子树中最终只有一个叶子目录的父目录。
+function findSingleLeafParentItems(items) {
+  const parents = [];
+  const countLeaves = (item) => {
+    const children = Array.isArray(item?.children) ? item.children : [];
+    if (!children.length) return 1;
+    const leafCount = children.reduce((sum, child) => sum + countLeaves(child), 0);
+    if (leafCount === 1) parents.push(item);
+    return leafCount;
+  };
+  (items || []).forEach(countLeaves);
+  return parents;
+}
+
 function getLeafCountDistance(count, minimum, maximum) {
   if (minimum !== null && count < minimum) return minimum - count;
   if (maximum !== null && count > maximum) return count - maximum;
@@ -3126,9 +3154,10 @@ function buildWordAdjustmentAgentPrompt(context) {
 3. 完整目录整体至少包含三级结构，最大不能超过四级。
 4. 调整后的叶子节点数量必须进入 word-control.json 给出的范围。
 5. 不能通过重复、空泛或近义标题机械凑数，不能破坏技术评分项覆盖和目录专业性。
-6. 不得输出正文 content、图片、表格、Mermaid、代码块或解释文字。
-7. 所有节点必须包含非空 id、title、description，title 只写纯标题。
-8. 输出文件必须是可由 JSON.parse 直接解析的纯 JSON，格式为 {"outline": [...]}。
+6. ${LEAF_BRANCH_REQUIREMENT}调整叶子数量时不得产生单叶子分支。
+7. 不得输出正文 content、图片、表格、Mermaid、代码块或解释文字。
+8. 所有节点必须包含非空 id、title、description，title 只写纯标题。
+9. 输出文件必须是可由 JSON.parse 直接解析的纯 JSON，格式为 {"outline": [...]}。
 ${context.secondReviewSuggestions?.length ? `\n二审修复要求：\n${context.secondReviewSuggestions.map((item, index) => `${index + 1}. ${item}`).join('\n')}` : ''}`;
 }
 
@@ -3176,7 +3205,7 @@ async function runWordAdjustmentAgent(agentService, context, log) {
 function buildSecondReviewAgentPrompt(context) {
   const hasLeafRange = context.wordControl.minimumLeafCount !== null || context.wordControl.maximumLeafCount !== null;
   const leafRangeRequirement = hasLeafRange
-    ? `\n8. 已设置字数限制：微调后叶子节点数量必须继续保持在 review-context.json 给出的区间内（最少 ${context.wordControl.minimumLeafCount ?? '不限制'}，最多 ${context.wordControl.maximumLeafCount ?? '不限制'}），不得因微调把叶子数量改出区间。`
+    ? `\n9. 已设置字数限制：微调后叶子节点数量必须继续保持在 review-context.json 给出的区间内（最少 ${context.wordControl.minimumLeafCount ?? '不限制'}，最多 ${context.wordControl.maximumLeafCount ?? '不限制'}），不得因微调把叶子数量改出区间。`
     : '';
   return `你是严格的技术标目录二审专家。请读取 ${SECOND_REVIEW_OUTLINE_FILE}、tender.md、bid.md 和 review-context.json，审核当前目录并在需要时直接编辑 ${SECOND_REVIEW_OUTLINE_FILE} 完成微调，最后把审核结论写入 ${SECOND_REVIEW_RESULT_FILE}。
 
@@ -3185,6 +3214,7 @@ function buildSecondReviewAgentPrompt(context) {
 - 目录结构是否合理、层级是否清晰。
 - 是否存在内容重复、近义或含义重叠的小节标题。
 - 完整目录整体至少三级、最大不超过四级。
+- 是否存在某个父目录下最终只有一个叶子目录。
 
 硬性要求：
 1. 一级目录数量、顺序、标题、描述和评分来源信息必须完全保持不变；一级目录原有的 source_requirement_id、source_requirement_title 必须原样输出。
@@ -3193,7 +3223,8 @@ function buildSecondReviewAgentPrompt(context) {
 4. 若发现问题：直接编辑 ${SECOND_REVIEW_OUTLINE_FILE} 做局部微调，并在 ${SECOND_REVIEW_RESULT_FILE} 写 {"passed": false, "notes": "改了什么、为什么"}。
 5. ${SECOND_REVIEW_OUTLINE_FILE} 必须始终是可由 JSON.parse 直接解析的纯 JSON，格式为 {"outline": [...]}；不得包含正文 content、图片、表格、Mermaid、代码块或解释文字。
 6. 所有节点必须包含非空 id、title、description，title 只写纯标题。
-7. ${SECOND_REVIEW_RESULT_FILE} 必须是可由 JSON.parse 直接解析的纯 JSON，格式为 {"passed": true|false, "notes": "..."}。${leafRangeRequirement}`;
+7. ${SECOND_REVIEW_RESULT_FILE} 必须是可由 JSON.parse 直接解析的纯 JSON，格式为 {"passed": true|false, "notes": "..."}。
+8. ${LEAF_BRANCH_REQUIREMENT}${leafRangeRequirement}`;
 }
 
 function buildSecondReviewAgentFiles(context) {
@@ -3388,6 +3419,13 @@ async function adjustOutlineForWordControl({ aiService, agentService, workspaceS
     }
 
     const candidate = createCandidate(reviewedOutline);
+    const singleLeafParents = findSingleLeafParentItems(reviewedOutline?.outline || []);
+    if (singleLeafParents.length) {
+      const labels = singleLeafParents.map((item) => formatOutlineItemLabel(item)).join('、');
+      previousIssues.push(`第 ${round} 轮微调后仍存在单叶子分支：${labels}。请合并冗余层级或调整目录归属。`);
+      log(`第 ${round} 轮二审微调后仍有父目录下仅一个叶子目录，进入下一轮。`, progress.complete);
+      continue;
+    }
     // 微调后若叶子数被改出区间，视为本轮不合格，把问题回传下一轮。
     if (candidate.distance > 0) {
       previousIssues.push(`第 ${round} 轮微调后叶子数量为 ${candidate.leafCount}，超出目标区间，请在保持叶子数量达标的前提下微调。`);
