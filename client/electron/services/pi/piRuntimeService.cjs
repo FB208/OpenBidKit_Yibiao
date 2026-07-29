@@ -76,20 +76,31 @@ function clearDirectory(dir) {
   });
 }
 
-function writeWorkspaceFiles(workspaceDir, files = []) {
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  files.forEach((file) => {
-    const relative = safeRelativePath(file.path);
-    const target = ensureInsideRoot(workspaceDir, path.join(workspaceDir, relative), file.path);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, String(file.content || ''), 'utf-8');
-  });
+async function clearDirectoryAsync(dir) {
+  await fs.promises.mkdir(dir, { recursive: true });
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  await Promise.all(entries.map((entry) => fs.promises.rm(path.join(dir, entry.name), { recursive: true, force: true })));
 }
 
-function readOutput(workspaceDir, outputFile) {
+async function writeWorkspaceFilesAsync(workspaceDir, files = []) {
+  await fs.promises.mkdir(workspaceDir, { recursive: true });
+  for (const file of files) {
+    const relative = safeRelativePath(file.path);
+    const target = ensureInsideRoot(workspaceDir, path.join(workspaceDir, relative), file.path);
+    await fs.promises.mkdir(path.dirname(target), { recursive: true });
+    await fs.promises.writeFile(target, String(file.content || ''), 'utf-8');
+  }
+}
+
+async function readOutputAsync(workspaceDir, outputFile) {
   const relative = safeRelativePath(outputFile);
   const target = ensureInsideRoot(workspaceDir, path.join(workspaceDir, relative), outputFile);
-  return { path: target, content: fs.existsSync(target) ? fs.readFileSync(target, 'utf-8') : '' };
+  try {
+    return { path: target, content: await fs.promises.readFile(target, 'utf-8') };
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { path: target, content: '' };
+    throw error;
+  }
 }
 
 function createDefaultPrompt(task, outputFile) {
@@ -305,18 +316,23 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
     }
   }
 
-  function archiveWorkspace(taskId) {
+  async function archiveWorkspace(taskId) {
     const taskDir = path.join(layout.tasksRoot, safeTaskSegment(taskId));
     const archivedWorkspace = path.join(taskDir, 'workspace');
-    fs.rmSync(taskDir, { recursive: true, force: true });
-    fs.mkdirSync(taskDir, { recursive: true });
-    fs.cpSync(layout.workspaceDir, archivedWorkspace, { recursive: true });
+    await fs.promises.rm(taskDir, { recursive: true, force: true });
+    await fs.promises.mkdir(taskDir, { recursive: true });
+    await fs.promises.cp(layout.workspaceDir, archivedWorkspace, { recursive: true });
     return { taskDir, archivedWorkspace };
   }
 
   function writeJson(filePath, value) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf-8');
+  }
+
+  async function writeJsonAsync(filePath, value) {
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.promises.writeFile(filePath, JSON.stringify(value, null, 2), 'utf-8');
   }
 
   function subscribeSession(session, taskToken, diffEntries) {
@@ -438,9 +454,9 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
     const watchdog = startWatchdog(activeController, timeoutMs, taskToken);
 
     try {
+      await clearDirectoryAsync(layout.workspaceDir);
+      await writeWorkspaceFilesAsync(layout.workspaceDir, payload.files || []);
       await ensureStarted();
-      clearDirectory(layout.workspaceDir);
-      writeWorkspaceFiles(layout.workspaceDir, payload.files || []);
       const created = await createPiSession({
         workspaceDir: layout.workspaceDir,
         environment,
@@ -468,7 +484,7 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
             throw error;
           }
           assistantText = extractAssistantText(session.messages);
-          const output = readOutput(layout.workspaceDir, outputFile);
+          const output = await readOutputAsync(layout.workspaceDir, outputFile);
           const candidate = {
             success: true,
             runtime_id: runtimeId,
@@ -504,7 +520,7 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
           break;
         } catch (error) {
           if (activeController.signal.aborted || attemptIndex >= maxRetries) throw error;
-          const output = readOutput(layout.workspaceDir, outputFile);
+          const output = await readOutputAsync(layout.workspaceDir, outputFile);
           retryAttempts.push(createRetrySummary(attemptIndex + 1, error, output.content));
           retryCount = retryAttempts.length;
           touchActivity({
@@ -519,8 +535,8 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
         }
       }
 
-      const output = readOutput(layout.workspaceDir, outputFile);
-      const archive = archiveWorkspace(taskId);
+      const output = await readOutputAsync(layout.workspaceDir, outputFile);
+      const archive = await archiveWorkspace(taskId);
       archivedWorkspace = archive.archivedWorkspace;
       const result = {
         success: true,
@@ -540,16 +556,16 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
         validation_result: validationResult,
         diagnostics: {
           session: sessionSnapshot,
-          events: diagnostics.events.slice(-160),
+          events: diagnostics.events.filter((event) => String(event.at || '') >= startedAt),
         },
       };
-      writeJson(path.join(archive.taskDir, 'result.json'), result);
+      await writeJsonAsync(path.join(archive.taskDir, 'result.json'), result);
       trackAgentRuntime(app, configStore, runtimeId, 'success', { retryCount });
       return result;
     } catch (error) {
       let output = { path: '', content: '' };
-      try { output = readOutput(layout.workspaceDir, outputFile); } catch {}
-      try { archivedWorkspace = archiveWorkspace(taskId).archivedWorkspace; } catch {}
+      try { output = await readOutputAsync(layout.workspaceDir, outputFile); } catch {}
+      try { archivedWorkspace = (await archiveWorkspace(taskId)).archivedWorkspace; } catch {}
       if (error && typeof error === 'object') {
         error.agentRuntimeId = runtimeId;
         error.agentTaskId = taskId;
@@ -563,7 +579,9 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
         error.agentRetryAttempts = retryAttempts;
         error.agentDiagnostics = {
           session: sessionSnapshot,
-          events: diagnostics.events.slice(-160),
+          session_messages: Array.isArray(session?.messages) ? [...session.messages] : [],
+          diff: [...diffEntries],
+          events: diagnostics.events.filter((event) => String(event.at || '') >= startedAt),
           assistant_error: error.piAssistantError || null,
           error: serializeDiagnosticError(error),
         };
@@ -577,7 +595,7 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
       clearInterval(watchdog);
       activeTask = null;
       activeController = null;
-      try { clearDirectory(layout.workspaceDir); } catch {}
+      try { await clearDirectoryAsync(layout.workspaceDir); } catch {}
       if (phase !== 'closing' && phase !== 'stopped') {
         if (restartPending) {
           await restart(restartPendingReason || 'config changed').catch((error) => {

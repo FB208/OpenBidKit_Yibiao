@@ -126,6 +126,29 @@ export async function requestFormData(path, formData, options = {}) {
   return data;
 }
 
+// 下载管理员接口返回的二进制文件。
+export async function requestDownload(path, fallbackFileName) {
+  const apiBase = normalizeApiBase(state.apiBase.value);
+  const response = await fetch(`${apiBase}${path}`, {
+    headers: { Authorization: `Bearer ${state.adminToken.value.trim()}` },
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(data?.message || `下载失败：${response.status}`);
+  }
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const fileName = disposition.match(/filename="([^"]+)"/i)?.[1] || fallbackFileName;
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
 export async function loadProjectOptions() {
   if (Date.now() - projectOptionsLoadedAt < projectOptionsCacheTtl) {
     return;

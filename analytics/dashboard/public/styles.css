@@ -561,6 +561,191 @@ button:disabled {
   font-size: 15px;
 }
 
+/* ===== Agent 异常日志 ===== */
+.agent-error-panel {
+  margin-top: 14px;
+}
+
+.agent-error-config {
+  display: grid;
+  grid-template-columns: 140px minmax(280px, 1fr) 140px;
+  align-items: end;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 14px;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.agent-error-switch,
+.agent-error-select-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-error-switch {
+  height: 36px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.agent-error-switch input,
+.agent-error-select-all input,
+.agent-error-check-cell input {
+  width: auto;
+  height: auto;
+}
+
+.agent-error-version-input {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.agent-error-version-input button,
+.agent-error-config > button {
+  align-self: auto;
+  white-space: nowrap;
+}
+
+.agent-error-versions {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+}
+
+.agent-error-version-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 5px 4px 9px;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-radius: 999px;
+}
+
+.agent-error-version-chip button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--primary);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+}
+
+.agent-error-version-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agent-error-cards {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.agent-error-cards .card strong {
+  font-size: 20px;
+}
+
+.agent-error-select-all {
+  width: fit-content;
+  margin: 14px 0 8px;
+}
+
+.agent-error-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.agent-error-table {
+  min-width: 1120px;
+  table-layout: fixed;
+}
+
+.agent-error-table th:first-child,
+.agent-error-check-cell {
+  width: 44px;
+}
+
+.agent-error-table th:nth-child(2),
+.agent-error-time-cell {
+  width: 170px;
+}
+
+.agent-error-table th:nth-child(3),
+.agent-error-table th:nth-child(4) {
+  width: 90px;
+}
+
+.agent-error-table th:nth-child(5),
+.agent-error-client-cell {
+  width: 150px;
+}
+
+.agent-error-client-cell code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-error-summary-cell {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.agent-error-table th:nth-child(7) {
+  width: 110px;
+}
+
+.agent-error-table th:last-child,
+.agent-error-row-actions {
+  width: 150px;
+}
+
+.agent-error-row-actions button {
+  height: 28px;
+  padding: 0 9px;
+}
+
+.agent-error-row-actions button + button {
+  margin-left: 5px;
+}
+
+.agent-error-pager {
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.agent-error-delete-dialog {
+  width: min(460px, calc(100vw - 32px));
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md);
+}
+
+.agent-error-delete-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.agent-error-delete-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.agent-error-delete-actions button {
+  align-self: auto;
+}
+
 /* ===== section 头部 ===== */
 #tab-traffic > .panel.section {
   margin-bottom: 14px;
@@ -1390,12 +1575,17 @@ code {
 
   .grid,
   .agent-runtime-metrics,
+  .agent-error-config,
   .usage-grid,
   .filter-row,
   .notice-form,
   .resource-form,
   .plugin-form {
     grid-template-columns: 1fr;
+  }
+
+  .agent-error-versions {
+    grid-column: auto;
   }
 
   .model-info-index-head {

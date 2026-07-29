@@ -8,6 +8,7 @@ const {
   normalizeAgentRuntimeId,
 } = require('./agent/agentRuntimeRegistry.cjs');
 const { buildPiSelfCheckReportMarkdown } = require('./pi/piSelfCheckService.cjs');
+const { createAgentErrorReporter } = require('./agent/agentErrorReporter.cjs');
 
 function nowIso() {
   return new Date().toISOString();
@@ -176,7 +177,8 @@ function buildSelfCheckReportMarkdown(result = {}) {
   return lines.join('\n');
 }
 
-function createAgentService({ app, configStore, mainWindow, aiService }) {
+function createAgentService({ app, configStore, mainWindow, aiService, licenseService }) {
+  const agentErrorReporter = createAgentErrorReporter({ app, configStore, licenseService });
   const runtimes = new Map();
   const runtimeUnsubscribers = new Map();
   const listeners = new Set();
@@ -282,7 +284,13 @@ function createAgentService({ app, configStore, mainWindow, aiService }) {
             const rawResult = await runtime.runTask(entry.payload);
             entry.resolve(normalizeRunResult(entry.runtimeId, rawResult));
           } catch (error) {
-            entry.reject(normalizeRunError(entry.runtimeId, error));
+            const normalizedError = normalizeRunError(entry.runtimeId, error);
+            agentErrorReporter.reportFailure({
+              runtimeId: entry.runtimeId,
+              payload: entry.payload,
+              error: normalizedError,
+            });
+            entry.reject(normalizedError);
           } finally {
             activeEntry = null;
             emitStatus();
@@ -435,6 +443,7 @@ function createAgentService({ app, configStore, mainWindow, aiService }) {
 
   async function close() {
     closing = true;
+    agentErrorReporter.close();
     const error = new Error('Agent 服务正在关闭');
     while (queue.length) {
       const entry = queue.shift();

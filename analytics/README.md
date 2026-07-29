@@ -1,6 +1,6 @@
 # 埋点统计部署手册
 
-本目录维护 `Cloudflare Workers + Analytics Engine + D1 + KV + Cron Triggers + Workers Static Assets` 埋点统计、模型信息缓存和管理服务。公开仓库不保存 `ACCOUNT_ID`、`ADMIN_TOKEN`、`ANALYTICS_API_TOKEN` 等密钥。
+本目录维护 `Cloudflare Workers + Analytics Engine + D1 + KV + R2 + Cron Triggers + Workers Static Assets` 埋点统计、Agent 异常日志、模型信息缓存和管理服务。公开仓库不保存 `ACCOUNT_ID`、`ADMIN_TOKEN`、`ANALYTICS_API_TOKEN` 等密钥。
 
 ## 地址
 
@@ -19,9 +19,10 @@
 | D1 `openbidkit-analytics` | `ANALYTICS_DB` | 新版 `stats_*` 长期统计表 |
 | D1 `openbidkit-resources` | `RESOURCE_DB` | 资源管理元数据 |
 | R2 `openbidkit` | `RESOURCE_BUCKET` | 资源图片 |
+| R2 `openbidkit-agent-errors` | `AGENT_ERROR_BUCKET` | gzip Agent 完整失败诊断包，保留 7 天 |
 | KV | `NOTICE_STORE` | 公告、授权配置、GitHub stats 缓存和模型信息精简索引 |
 
-`openbidkit-analytics` 可以在改版时直接删除并由 `setup:analytics-storage` 重建；不要删除 `openbidkit-resources`。
+`openbidkit-analytics` 可以在改版时直接删除并由 `setup:analytics-storage` 重建；删除后异常日志元数据会丢失，R2 孤立对象仍由 7 天生命周期自动清理。不要删除 `openbidkit-resources`。
 
 ## 接口
 
@@ -29,6 +30,7 @@
 | --- | --- | --- | --- |
 | `GET /health` | Worker | 无 | 健康检查 |
 | `POST /track` | AE + D1 | 无 | 写 AE；从 Cloudflare 真实客户端 IP 请求头记录客户端 IP；新客户端按 `client_created_at` 窗口实时入库，授权字段按快照覆盖既有 `stats_clients` |
+| `GET/POST /agent-errors` | D1 + R2 | GET 无；POST 有效可信 license | GET 供客户端预检开关、版本和容量；POST 仅在预检条件仍满足时保存 gzip Agent 失败诊断包 |
 | `GET /api/projects` | D1 优先，AE 兜底 | `ADMIN_TOKEN` | 项目列表 |
 | `GET /api/overview` | D1 + AE + KV | `ADMIN_TOKEN` | 概览总数、文本 Token、生图次数、新增、今日活跃、每日统计 |
 | `GET /api/clients` | D1 | `ADMIN_TOKEN` | 客户端统计列表 |
@@ -38,6 +40,9 @@
 | `GET /api/config-usage` | D1 或 AE | `ADMIN_TOKEN` | 配置使用，`range=history/today/7/30` |
 | `GET /api/model-usage` | D1 或 AE | `ADMIN_TOKEN` | 模型使用，支持 `provider/endpointHost/model` 筛选 |
 | `GET /api/agent-runtime` | D1 或 AE | `ADMIN_TOKEN` | Agent 总体、运行时、模型维度的成功率、失败率、重试率和重试后成功率，`range=history/today/7/30` |
+| `GET/DELETE /api/agent-errors` | D1 + R2 | `ADMIN_TOKEN` | 分页读取异常元数据，或单条/批量删除日志 |
+| `GET/POST /api/agent-errors/config` | D1 | `ADMIN_TOKEN` | 管理接收开关和精确版本号列表，查看 2 GiB 容量使用情况 |
+| `GET /api/agent-errors/download` | D1 + R2 | `ADMIN_TOKEN` | 下载单份 `.json.gz` 完整诊断包 |
 | `GET /api/latest` | AE | `ADMIN_TOKEN` | 最近事件，支持 `event` 筛选 |
 | `GET /api/retention` | D1 | `ADMIN_TOKEN` | 留存概览，读取 Cron 生成的最新 30 天快照 |
 | `GET /api/github-repo-stats` | GitHub + KV | `ADMIN_TOKEN` | GitHub stats |
@@ -90,6 +95,8 @@
 
 `GET /api/agent-runtime` 的 `agentRuntime` 保留总体计数，并返回 `successRate/failureRate/retryRate/retrySuccessRate`；`runtimes[]` 按运行时返回同口径指标；`models[]` 模型明细包含 `runtime`，并继续返回服务商、endpoint host、模型及全部执行指标。
 
+Agent 异常日志与 `agent_runtime` 埋点完全分离。接收默认关闭；开启后仍必须配置至少一个精确版本号，空列表表示不接收。Worker 在读取正文前检查开关、版本和剩余容量；日志压缩后总占用上限为 2 GiB，达到上限直接丢弃。正文只保存到 `AGENT_ERROR_BUCKET`，D1 只保存元数据和容量计数；日志到期、单条删除或批量删除都会释放容量。上传必须携带 Worker 已签发、来源可信且未过期的 license。
+
 ## 首次部署
 
 ### 1. Cloudflare 凭据
@@ -131,6 +138,7 @@ node -e "const { webcrypto } = require('node:crypto'); (async () => { const key 
 ```powershell
 npm run setup:notice-kv
 npm run setup:resources
+npm run setup:agent-errors
 npm run setup:analytics-storage
 ```
 
@@ -141,6 +149,7 @@ npm run setup:analytics-storage
 | 动作 | 说明 |
 | --- | --- |
 | D1 | 创建或复用 `openbidkit-analytics`，binding 为 `ANALYTICS_DB` |
+| R2 | 创建或复用 `openbidkit-agent-errors`，binding 为 `AGENT_ERROR_BUCKET`，配置 7 天删除生命周期 |
 | Cron | 生产账户使用 Workers Paid Plan；确认北京时间 01:00 到 03:00 的 5 个统计 Cron，以及北京时间 04:00 的独立模型信息同步 Cron |
 | Migration | 通过 Wrangler D1 migrations 执行 `analytics-migrations/*.sql` 并记录已应用版本；Agent 运行时迁移会重建 `stats_agent_runtime` 联合主键并将既有汇总归为 `opencode`；同时自动补齐 `stats_clients` 授权字段、`stats_versions.client_count`、`stats_models.total_tokens` 和概览 AI 指标字段 |
 

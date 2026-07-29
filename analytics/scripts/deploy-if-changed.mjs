@@ -67,6 +67,17 @@ function runPreDeploySetupIfNeeded() {
     process.exit(resourceResult.status ?? 1);
   }
 
+  console.log('Ensuring agent error R2 bucket and lifecycle.');
+  const agentErrorSetupScript = resolve(__dirname, 'setup-agent-error-storage.mjs');
+  const agentErrorResult = spawnSync(process.execPath, [agentErrorSetupScript], {
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
+
+  if (agentErrorResult.status !== 0) {
+    process.exit(agentErrorResult.status ?? 1);
+  }
+
   console.log('Ensuring analytics D1 database and stats schema.');
   const analyticsSetupScript = resolve(__dirname, 'setup-analytics-storage.mjs');
   const analyticsResult = spawnSync(process.execPath, [analyticsSetupScript], {

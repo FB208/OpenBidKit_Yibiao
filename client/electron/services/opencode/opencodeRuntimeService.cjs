@@ -139,21 +139,20 @@ function ensureInsideRoot(rootDir, targetPath, sourcePath) {
   return resolvedTarget;
 }
 
-function writeWorkspaceFiles(workspaceDir, files = []) {
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  files.forEach((file) => {
+async function writeWorkspaceFilesAsync(workspaceDir, files = []) {
+  await fs.promises.mkdir(workspaceDir, { recursive: true });
+  for (const file of files) {
     const relativePath = safeRelativePath(file.path);
     const targetPath = ensureInsideRoot(workspaceDir, path.join(workspaceDir, relativePath), file.path);
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-    fs.writeFileSync(targetPath, String(file.content || ''), 'utf-8');
-  });
+    await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.promises.writeFile(targetPath, String(file.content || ''), 'utf-8');
+  }
 }
 
-function clearDirectoryContents(dir) {
-  fs.mkdirSync(dir, { recursive: true });
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    fs.rmSync(path.join(dir, entry.name), { recursive: true, force: true });
-  }
+async function clearDirectoryContentsAsync(dir) {
+  await fs.promises.mkdir(dir, { recursive: true });
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  await Promise.all(entries.map((entry) => fs.promises.rm(path.join(dir, entry.name), { recursive: true, force: true })));
 }
 
 function createDefaultAgentPrompt({ task, outputFile }) {
@@ -171,13 +170,15 @@ ${task}
 6. 最终回复请包含：发现的问题、处理动作、输出文件路径。`;
 }
 
-function readOutputContent(workspaceDir, outputFile) {
+async function readOutputContentAsync(workspaceDir, outputFile) {
   const relativePath = safeRelativePath(outputFile);
   const outputPath = ensureInsideRoot(workspaceDir, path.join(workspaceDir, relativePath), outputFile);
-  return {
-    path: outputPath,
-    content: fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf-8') : '',
-  };
+  try {
+    return { path: outputPath, content: await fs.promises.readFile(outputPath, 'utf-8') };
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { path: outputPath, content: '' };
+    throw error;
+  }
 }
 
 function annotateAgentError(error, meta = {}) {
@@ -195,6 +196,14 @@ function annotateAgentError(error, meta = {}) {
   error.openCodeRequestLog = Array.isArray(meta.requestLog) ? meta.requestLog : error.openCodeRequestLog || [];
   error.openCodeStderrTail = meta.stderrTail || error.openCodeStderrTail || '';
   error.openCodeStdoutTail = meta.stdoutTail || error.openCodeStdoutTail || '';
+  error.agentDiagnostics = {
+    ...(error.agentDiagnostics && typeof error.agentDiagnostics === 'object' ? error.agentDiagnostics : {}),
+    status: meta.status || null,
+    events: Array.isArray(meta.events) ? meta.events : [],
+    session: meta.session || null,
+    validation_failed: Boolean(meta.validationFailed || error.agentValidationFailed),
+    retry_attempts: Array.isArray(meta.retryAttempts) ? meta.retryAttempts : error.agentRetryAttempts,
+  };
   return error;
 }
 
@@ -779,44 +788,47 @@ function createOpenCodeRuntimeService({ app, configStore, runtime }) {
     return () => clearInterval(timer);
   }
 
-  function prepareStagingWorkspace(payload) {
-    clearDirectoryContents(serviceWorkspaceDir);
-    writeWorkspaceFiles(serviceWorkspaceDir, payload.files || []);
+  async function prepareStagingWorkspace(payload) {
+    await clearDirectoryContentsAsync(serviceWorkspaceDir);
+    await writeWorkspaceFilesAsync(serviceWorkspaceDir, payload.files || []);
     writeAgentInstructionsFile(serviceWorkspaceDir);
   }
 
-  function cleanupStagingWorkspace() {
-    clearDirectoryContents(serviceWorkspaceDir);
+  async function cleanupStagingWorkspace() {
+    await clearDirectoryContentsAsync(serviceWorkspaceDir);
   }
 
-  function archiveTaskWorkspace(taskId) {
+  async function archiveTaskWorkspace(taskId) {
     const taskDir = path.join(tasksRoot, safeTaskPathSegment(taskId));
     const archiveWorkspaceDir = path.join(taskDir, 'workspace');
-    fs.rmSync(taskDir, { recursive: true, force: true });
-    fs.mkdirSync(taskDir, { recursive: true });
-    fs.cpSync(serviceWorkspaceDir, archiveWorkspaceDir, { recursive: true });
+    await fs.promises.rm(taskDir, { recursive: true, force: true });
+    await fs.promises.mkdir(taskDir, { recursive: true });
+    await fs.promises.cp(serviceWorkspaceDir, archiveWorkspaceDir, { recursive: true });
     return archiveWorkspaceDir;
   }
 
-  function writeTaskDiagnostics(taskId, payload = {}) {
+  async function writeTaskDiagnostics(taskId, payload = {}) {
     try {
       const taskDir = path.join(tasksRoot, safeTaskPathSegment(taskId));
-      fs.mkdirSync(taskDir, { recursive: true });
-      fs.writeFileSync(path.join(taskDir, 'diagnostics.json'), JSON.stringify(payload, null, 2), 'utf-8');
+      const { outputContent: _outputContent, ...storedPayload } = payload;
+      storedPayload.outputContentChars = String(payload.outputContent || '').length;
+      await fs.promises.mkdir(taskDir, { recursive: true });
+      await fs.promises.writeFile(path.join(taskDir, 'diagnostics.json'), JSON.stringify(storedPayload, null, 2), 'utf-8');
     } catch {}
   }
 
-  function writeTaskResult(taskId, payload = {}) {
+  async function writeTaskResult(taskId, payload = {}) {
     try {
       const taskDir = path.join(tasksRoot, safeTaskPathSegment(taskId));
-      fs.mkdirSync(taskDir, { recursive: true });
-      fs.writeFileSync(path.join(taskDir, 'result.json'), JSON.stringify(payload, null, 2), 'utf-8');
+      await fs.promises.mkdir(taskDir, { recursive: true });
+      await fs.promises.writeFile(path.join(taskDir, 'result.json'), JSON.stringify(payload, null, 2), 'utf-8');
     } catch {}
   }
 
-  function collectDiagnostics({ taskId, title, outputFile }) {
+  async function collectDiagnostics({ taskId, title, outputFile }) {
     let output = { path: '', content: '' };
-    try { output = readOutputContent(serviceWorkspaceDir, outputFile); } catch {}
+    try { output = await readOutputContentAsync(serviceWorkspaceDir, outputFile); } catch {}
+    const sessionId = activeTask?.session_id || '';
     return {
       taskId,
       title,
@@ -829,7 +841,11 @@ function createOpenCodeRuntimeService({ app, configStore, runtime }) {
       stderrTail: sidecar?.getStderrTail?.(8000) || '',
       stdoutTail: sidecar?.getStdoutTail?.(8000) || '',
       status: getStatus(),
-      events: diagnostics.events.slice(-120),
+      events: diagnostics.events.filter((event) => String(event.at || '') >= String(activeTask?.started_at || '')),
+      session: sessionId ? {
+        session_id: sessionId,
+        database_path: path.join(serviceRuntimeRoot, 'home', '.local', 'share', 'opencode', 'opencode.db'),
+      } : null,
     };
   }
 
@@ -862,7 +878,7 @@ function createOpenCodeRuntimeService({ app, configStore, runtime }) {
       try {
         lastMessageResult = await sendPrompt(sidecar, sessionId, nextPrompt, { signal, agent, onActivity: taskActivity });
         lastText = extractTextFromPromptResult(lastMessageResult);
-        const output = readOutputContent(serviceWorkspaceDir, outputFile);
+        const output = await readOutputContentAsync(serviceWorkspaceDir, outputFile);
         const candidateResult = {
           success: true,
           title,
@@ -910,7 +926,7 @@ function createOpenCodeRuntimeService({ app, configStore, runtime }) {
         }
 
         let output = { content: '' };
-        try { output = readOutputContent(serviceWorkspaceDir, outputFile); } catch {}
+        try { output = await readOutputContentAsync(serviceWorkspaceDir, outputFile); } catch {}
         retryAttempts.push(createRetryAttemptSummary({ attempt, error, outputContent: output.content }));
         const retryAttempt = retryAttempts.length;
         taskActivity({
@@ -1076,11 +1092,11 @@ function createOpenCodeRuntimeService({ app, configStore, runtime }) {
     let archivedWorkspaceDir = '';
 
     try {
+      taskActivity({ stage: 'workspace', message: '', source: 'runtime', visible: false, activity: false });
+      await prepareStagingWorkspace(payload);
       await ensureStarted();
       if (activeTaskAbortController.signal.aborted) throw activeTaskAbortController.signal.reason;
 
-      taskActivity({ stage: 'workspace', message: '', source: 'runtime', visible: false, activity: false });
-      prepareStagingWorkspace(payload);
       stopOutputWatcher = startOutputWatcher(outputFile, taskActivity);
 
       const result = await runOpenCodeTaskWithRetry({
@@ -1094,19 +1110,20 @@ function createOpenCodeRuntimeService({ app, configStore, runtime }) {
         maxRetries,
         retryAttempts,
         onSessionCreated: (session) => {
+          if (activeTask) activeTask.session_id = session?.id || session?.sessionID || session?.session_id || '';
           stopOpenCodeEventWatcher?.();
           stopOpenCodeEventWatcher = startOpenCodeEventWatcher(session?.id || session?.sessionID || session?.session_id || '', taskActivity);
         },
       });
 
       taskActivity({ stage: 'output', message: '', source: 'runtime', visible: false, activity: false });
-      const output = result.output || readOutputContent(serviceWorkspaceDir, outputFile);
+      const output = result.output || await readOutputContentAsync(serviceWorkspaceDir, outputFile);
 
       taskActivity({ stage: 'archive', message: '', source: 'runtime', visible: false, activity: false });
-      archivedWorkspaceDir = archiveTaskWorkspace(taskId);
-      const diagnosticsPayload = moveDiagnosticsToArchivedWorkspace(collectDiagnostics({ taskId, title, outputFile }), archivedWorkspaceDir, outputFile);
+      archivedWorkspaceDir = await archiveTaskWorkspace(taskId);
+      const diagnosticsPayload = moveDiagnosticsToArchivedWorkspace(await collectDiagnostics({ taskId, title, outputFile }), archivedWorkspaceDir, outputFile);
       diagnosticsPayload.retryAttempts = [...retryAttempts];
-      writeTaskDiagnostics(taskId, diagnosticsPayload);
+      await writeTaskDiagnostics(taskId, diagnosticsPayload);
 
       trackAgentRuntime(app, configStore, runtime.id, 'success', { retryCount: result.retry_count || 0 });
 
@@ -1129,30 +1146,30 @@ function createOpenCodeRuntimeService({ app, configStore, runtime }) {
         opencode_stderr_tail: sidecar?.getStderrTail?.(8000) || '',
         opencode_stdout_tail: sidecar?.getStdoutTail?.(8000) || '',
       };
-      writeTaskResult(taskId, taskResult);
+      await writeTaskResult(taskId, taskResult);
       return taskResult;
     } catch (error) {
       if (isUserCancelOrPause(error)) {
         mustRestartAfterTask = true;
-        throw annotateAgentError(error, collectDiagnostics({ taskId, title, outputFile }));
+        throw annotateAgentError(error, await collectDiagnostics({ taskId, title, outputFile }));
       }
       if (isWatchdogStall(error)) {
         mustRestartAfterTask = true;
       }
       trackAgentRuntime(app, configStore, runtime.id, 'failed', { retryCount: Array.isArray(error?.agentRetryAttempts) ? error.agentRetryAttempts.length : retryAttempts.length });
-      const diagnosticsPayload = collectDiagnostics({ taskId, title, outputFile });
+      const diagnosticsPayload = await collectDiagnostics({ taskId, title, outputFile });
       if (error && typeof error === 'object') {
         error.agentRetryAttempts = Array.isArray(error.agentRetryAttempts) ? error.agentRetryAttempts : [...retryAttempts];
       }
       diagnosticsPayload.retryAttempts = Array.isArray(error?.agentRetryAttempts) ? error.agentRetryAttempts : [...retryAttempts];
       diagnosticsPayload.validationFailed = Boolean(error?.agentValidationFailed);
       try {
-        archivedWorkspaceDir = archiveTaskWorkspace(taskId);
+        archivedWorkspaceDir = await archiveTaskWorkspace(taskId);
         moveDiagnosticsToArchivedWorkspace(diagnosticsPayload, archivedWorkspaceDir, outputFile);
       } catch (archiveError) {
         diagnosticsPayload.archiveError = archiveError?.message || String(archiveError || '归档失败');
       }
-      writeTaskDiagnostics(taskId, diagnosticsPayload);
+      await writeTaskDiagnostics(taskId, diagnosticsPayload);
       throw annotateAgentError(error, diagnosticsPayload);
     } finally {
       stopOpenCodeEventWatcher?.();
@@ -1162,7 +1179,7 @@ function createOpenCodeRuntimeService({ app, configStore, runtime }) {
       const shouldRestart = mustRestartAfterTask || phase === 'unhealthy';
       activeTask = null;
       activeTaskAbortController = null;
-      try { cleanupStagingWorkspace(); } catch (error) { lastHealthError = error?.message || String(error); }
+      try { await cleanupStagingWorkspace(); } catch (error) { lastHealthError = error?.message || String(error); }
 
       if (phase !== 'closing' && phase !== 'stopped') {
         if (shouldRestart) {
@@ -1300,7 +1317,7 @@ function createOpenCodeRuntimeService({ app, configStore, runtime }) {
     setPhase('restarting', '正在重启 Agent 服务');
     await closeOpenCodeSidecar(sidecar);
     sidecar = null;
-    try { cleanupStagingWorkspace(); } catch {}
+    try { await cleanupStagingWorkspace(); } catch {}
     await ensureStarted();
     return getStatus();
   }
@@ -1662,7 +1679,7 @@ function createOpenCodeRuntimeService({ app, configStore, runtime }) {
       activeTaskAbortController = null;
       await closeOpenCodeSidecar(sidecar);
       sidecar = null;
-      try { cleanupStagingWorkspace(); } catch {}
+      try { await cleanupStagingWorkspace(); } catch {}
       setPhase('stopped', 'Agent 服务已停止');
       healthy = false;
       emitStatus();

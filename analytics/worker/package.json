@@ -8,6 +8,7 @@
     "deploy": "node ../scripts/deploy-if-changed.mjs analytics/worker",
     "setup:notice-kv": "node ../scripts/setup-notice-kv.mjs",
     "setup:resources": "node ../scripts/setup-resource-storage.mjs",
+    "setup:agent-errors": "node ../scripts/setup-agent-error-storage.mjs",
     "setup:analytics-storage": "node ../scripts/setup-analytics-storage.mjs",
     "backfill:analytics-stats": "node ../scripts/backfill-analytics-stats.mjs",
     "backfill:analytics-stat-fields": "node ../scripts/backfill-analytics-stat-fields.mjs",

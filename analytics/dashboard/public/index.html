@@ -259,6 +259,54 @@
             </div>
             <div id="agentRuntime"></div>
           </section>
+          <section class="panel section agent-error-panel">
+            <div class="section-head">
+              <div>
+                <h2>异常日志</h2>
+                <p>正文仅保存至 R2 并提供下载，页面只展示元数据；日志保留 7 天，总容量上限 2 GiB。</p>
+              </div>
+              <div class="section-actions">
+                <button id="deleteSelectedAgentErrorsButton" class="danger-button" type="button" disabled>批量删除</button>
+              </div>
+            </div>
+
+            <div class="agent-error-config">
+              <label class="agent-error-switch">
+                <input id="agentErrorReceiveEnabled" type="checkbox" />
+                <span>接收异常</span>
+              </label>
+              <label class="agent-error-version-field">
+                接收日志版本号
+                <div class="agent-error-version-input">
+                  <input id="agentErrorVersionInput" maxlength="50" placeholder="例如 2.8.0" />
+                  <button id="addAgentErrorVersionButton" class="secondary-button" type="button">添加</button>
+                </div>
+              </label>
+              <button id="saveAgentErrorConfigButton" type="button">保存接收设置</button>
+              <div id="agentErrorVersions" class="agent-error-versions"></div>
+            </div>
+
+            <section class="cards agent-error-cards">
+              <div class="panel card"><span>已用容量</span><strong id="agentErrorStorageUsed">0 B</strong></div>
+              <div class="panel card"><span>容量上限</span><strong id="agentErrorStorageLimit">2 GiB</strong></div>
+              <div class="panel card"><span>剩余容量</span><strong id="agentErrorStorageRemaining">2 GiB</strong></div>
+              <div class="panel card"><span>日志数量</span><strong id="agentErrorLogCount">0</strong></div>
+            </section>
+
+            <div id="agentErrorStatus" class="notice-status"></div>
+            <label class="agent-error-select-all">
+              <input id="selectAllAgentErrors" type="checkbox" />
+              全选当前页
+            </label>
+            <div id="agentErrorTable" class="agent-error-table-wrap"></div>
+            <div class="pager agent-error-pager">
+              <button id="prevAgentErrorPage" type="button">上一页</button>
+              <span id="agentErrorPageInfo">第 1 页</span>
+              <input id="agentErrorPageInput" type="number" min="1" value="1" aria-label="跳转异常日志页码" />
+              <button id="jumpAgentErrorPage" type="button">跳转</button>
+              <button id="nextAgentErrorPage" type="button">下一页</button>
+            </div>
+          </section>
         </section>
 
         <!-- 最近事件 -->
@@ -630,6 +678,19 @@
         <button id="saveModelInfoEdit" type="submit">保存人工修改</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="agentErrorDeleteDialog" class="agent-error-delete-dialog">
+    <div class="dialog-head">
+      <div>
+        <h2>删除异常日志</h2>
+        <p id="agentErrorDeleteMessage">确认删除所选异常日志？</p>
+      </div>
+    </div>
+    <div class="agent-error-delete-actions">
+      <button id="cancelAgentErrorDelete" class="secondary-button" type="button">取消</button>
+      <button id="confirmAgentErrorDelete" class="danger-button" type="button">确认删除</button>
+    </div>
   </dialog>
 
   <!-- 窄屏遮罩 -->

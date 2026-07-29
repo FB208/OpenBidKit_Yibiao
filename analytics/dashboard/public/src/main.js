@@ -1,5 +1,6 @@
 import { loadSettings, saveSettings } from './api.js';
 import { loadAgentRuntime } from './pages/agentRuntime.js';
+import { loadAgentErrors, setupAgentErrorsPage } from './pages/agentErrors.js';
 import { loadClients, loadClientDetail, loadIpStats } from './pages/clients.js';
 import { loadConfigUsage, loadModelUsage } from './pages/configUsage.js';
 import { loadLatest } from './pages/latest.js';
@@ -21,7 +22,7 @@ const tabLoaders = {
   traffic: () => loadTraffic(),
   config: () => loadConfigUsage(),
   models: () => loadModelUsage(),
-  agent: () => loadAgentRuntime(),
+  agent: (options = {}) => Promise.all([loadAgentRuntime(), loadAgentErrors({ resetPage: options.resetAgentErrorPage })]),
   latest: (options = {}) => loadLatest(options),
   notice: () => loadNotice(),
   license: () => loadLicenseConfig(),
@@ -43,6 +44,7 @@ function isTabCacheFresh(tab) {
 function saveSettingsAndClearCache() {
   saveSettings();
   tabLoadedAt.clear();
+  appState.agentErrorPage = 1;
 }
 
 function getLatestTotalPages() {
@@ -115,6 +117,7 @@ function bindEvents() {
   bindResourceEvents();
   setupPluginsPage();
   setupModelInfoCachePage();
+  setupAgentErrorsPage();
   state.syncModelInfoCacheButton.addEventListener('click', syncModelInfoCache);
   state.prevLatestPage.addEventListener('click', () => {
     appState.latestPage = Math.max(1, appState.latestPage - 1);
@@ -148,7 +151,7 @@ function bindEvents() {
   for (const button of state.tabButtons) {
     button.addEventListener('click', () => {
       activateTab(button.dataset.tabButton);
-      void refreshActiveTab({ resetLatestPage: true, resetIpPage: true });
+      void refreshActiveTab({ resetLatestPage: true, resetIpPage: true, resetAgentErrorPage: true });
     });
   }
 

@@ -1,5 +1,6 @@
 import { corsHeaders, json } from './http.js';
 import { handleAgentRuntime } from './routes/agentRuntime.js';
+import { handleAdminAgentErrorConfig, handleAdminAgentErrorDownload, handleAdminAgentErrors, handleAgentErrorIngest } from './routes/agentErrors.js';
 import { handleClients, handleClientDetail, handleIpStats } from './routes/clients.js';
 import { handleConfigUsage, handleModelUsage } from './routes/configUsage.js';
 import { handleGitHubRepoStats } from './routes/githubRepoStats.js';
@@ -17,6 +18,7 @@ import { handleTrack } from './routes/track.js';
 import { handleTraffic } from './routes/traffic.js';
 import { MODEL_INFO_SYNC_CRON } from './constants.js';
 import { syncModelInfoCache } from './services/modelInfoCache.js';
+import { cleanupExpiredAgentErrors } from './services/agentErrorStore.js';
 import {
   OVERVIEW_AI_TOTALS_CRON,
   refreshOverviewAiTotals,
@@ -26,6 +28,7 @@ import {
 const routes = new Map([
   ['/health', (request, env) => handleHealth(env)],
   ['/track', handleTrack],
+  ['/agent-errors', handleAgentErrorIngest],
   ['/license/activate', handleLicenseActivate],
   ['/notice', handlePublicNotice],
   ['/model-info', handlePublicModelInfo],
@@ -52,6 +55,9 @@ const routes = new Map([
   ['/api/config-usage', handleConfigUsage],
   ['/api/model-usage', handleModelUsage],
   ['/api/agent-runtime', handleAgentRuntime],
+  ['/api/agent-errors/config', handleAdminAgentErrorConfig],
+  ['/api/agent-errors/download', handleAdminAgentErrorDownload],
+  ['/api/agent-errors', handleAdminAgentErrors],
   ['/api/github-repo-stats', handleGitHubRepoStats],
 ]);
 
@@ -77,6 +83,13 @@ export default {
       return;
     }
     await rollupYesterdayCronStage(env, cron);
+    if (cron === '0 19 * * *') {
+      try {
+        await cleanupExpiredAgentErrors(env);
+      } catch (error) {
+        console.error('[analytics] agent error cleanup failed', error?.message || String(error));
+      }
+    }
     if (cron === OVERVIEW_AI_TOTALS_CRON) {
       try {
         await refreshOverviewAiTotals(env);
