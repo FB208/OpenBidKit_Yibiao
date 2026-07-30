@@ -158,7 +158,7 @@ function createAgentErrorReporter({ app, configStore, licenseService }) {
     child.once('exit', () => processes.delete(child));
   }
 
-  async function dispatch({ runtimeId, payload, error }) {
+  async function dispatch({ runtimeId, payload, error, userTaskContext }) {
     const config = configStore.load();
     const license = normalizeLicenseEnvelope(licenseService?.getLicenseEnvelope?.());
     const version = typeof app?.getVersion === 'function' ? app.getVersion() : '';
@@ -201,6 +201,7 @@ function createAgentErrorReporter({ app, configStore, licenseService }) {
       config,
       license,
       task: createTaskSnapshot(payload),
+      userTaskContext: userTaskContext && typeof userTaskContext === 'object' ? userTaskContext : {},
       error: createErrorSnapshot(error),
       workspaceDir: error?.agentWorkspaceDir || '',
     });

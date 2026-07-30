@@ -125,6 +125,28 @@ function copyPatchFields(target, source, fields) {
   }
 }
 
+// 提取技术方案流程中由用户选择或填写的任务参数，不包含生成结果和正文缓存。
+function createTechnicalPlanUserSettings(state = {}) {
+  const settings = {};
+  copyPatchFields(settings, state, [
+    'workflowKind',
+    'step',
+    'tenderFile',
+    'tenderFiles',
+    'originalPlanFile',
+    'bidAnalysisMode',
+    'bidAnalysisSelectedTaskIds',
+    'bidSectionMode',
+    'outlineMode',
+    'outlineExpansionMode',
+    'outlineWordControlOptions',
+    'outlineWordControlSnapshot',
+    'referenceKnowledgeDocumentIds',
+    'contentGenerationOptions',
+  ]);
+  return settings;
+}
+
 const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 
 function clearOutlineContentByIds(items, interruptedIds) {
@@ -464,6 +486,26 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     return technicalPlanStore.loadTechnicalPlan();
   }
 
+  // 在 Agent 失败时采集父任务及其前置步骤的用户参数快照。
+  function createAgentUserTaskContext(type, definition, payload, currentTask) {
+    const workspaceState = loadWorkspaceState(definition) || {};
+    return {
+      managed_task: {
+        type,
+        label: definition.label || type,
+        group: definition.group || '',
+        group_label: definition.groupLabel || '',
+        step: definition.step,
+        state_key: definition.stateKey || '',
+        payload,
+        state: currentTask,
+      },
+      workflow_settings: definition.stateKey === 'technicalPlan'
+        ? createTechnicalPlanUserSettings(workspaceState)
+        : {},
+    };
+  }
+
   function startManagedTask(type, payload, runner, initialPartial = {}) {
     const existingTask = activeTasks.get(type);
     if (existingTask && isActiveTaskStatus(existingTask.status)) {
@@ -540,7 +582,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         ? rejectionCheckStore
         : duplicateCheckStore;
     const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId) : aiService;
-    const runnerAgentService = agentService.bindSelectedRuntime();
+    const runnerAgentService = agentService.bindSelectedRuntime(
+      () => createAgentUserTaskContext(type, definition, payload, currentTask),
+    );
     runner({ aiService: runnerAiService, agentService: runnerAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
       const failedTask = updateTask({ status: 'error', error: error.message || '任务执行失败' });
       const nextState = updateWorkspaceState(definition, { [taskField]: failedTask });

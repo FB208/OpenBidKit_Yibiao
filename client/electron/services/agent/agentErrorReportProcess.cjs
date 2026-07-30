@@ -215,6 +215,7 @@ async function runReport(job) {
     },
     runtime: job.runtimeId,
     task: sanitizeValue(job.task, configuredSecrets),
+    user_task_context: sanitizeValue(job.userTaskContext || {}, configuredSecrets),
     error: sanitizeValue(error, configuredSecrets),
     config: sanitizeValue(job.config, configuredSecrets),
     workspace: {

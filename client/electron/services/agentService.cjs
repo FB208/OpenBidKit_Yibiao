@@ -117,6 +117,17 @@ function normalizeRunError(runtimeId, error) {
   return error;
 }
 
+// 读取后台父任务提供的最新诊断上下文，采集失败不影响原始异常上报。
+function resolveUserTaskContext(provider) {
+  if (typeof provider !== 'function') return provider && typeof provider === 'object' ? provider : null;
+  try {
+    const context = provider();
+    return context && typeof context === 'object' ? context : null;
+  } catch (error) {
+    return { capture_error: error?.message || String(error) };
+  }
+}
+
 function normalizeSelfCheckResult(runtimeId, rawResult = {}) {
   const definition = getAgentRuntimeDefinition(runtimeId);
   return {
@@ -289,6 +300,7 @@ function createAgentService({ app, configStore, mainWindow, aiService, licenseSe
               runtimeId: entry.runtimeId,
               payload: entry.payload,
               error: normalizedError,
+              userTaskContext: resolveUserTaskContext(entry.userTaskContextProvider),
             });
             entry.reject(normalizedError);
           } finally {
@@ -303,7 +315,7 @@ function createAgentService({ app, configStore, mainWindow, aiService, licenseSe
     })();
   }
 
-  function runTask(payload = {}, runtimeId) {
+  function runTask(payload = {}, runtimeId, userTaskContextProvider) {
     if (closing) return Promise.reject(new Error('Agent 服务正在关闭'));
     const targetRuntimeId = normalizeAgentRuntimeId(runtimeId || getSelectedRuntimeId());
     if (payload.signal?.aborted) return Promise.reject(createAbortError(payload.signal));
@@ -316,6 +328,7 @@ function createAgentService({ app, configStore, mainWindow, aiService, licenseSe
         title,
         queuedAt: nowIso(),
         payload: { ...payload, task_id: taskId },
+        userTaskContextProvider,
         resolve,
         reject,
         cleanup: null,
@@ -341,11 +354,11 @@ function createAgentService({ app, configStore, mainWindow, aiService, licenseSe
     });
   }
 
-  function bindSelectedRuntime() {
+  function bindSelectedRuntime(userTaskContextProvider) {
     const runtimeId = getSelectedRuntimeId();
     return {
       runtimeId,
-      runTask: (payload) => runTask(payload, runtimeId),
+      runTask: (payload) => runTask(payload, runtimeId, userTaskContextProvider),
       getStatus: () => getStatus(runtimeId),
     };
   }
