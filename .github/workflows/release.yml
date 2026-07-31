@@ -495,21 +495,15 @@ jobs:
       - name: Trigger AtomGit pull mirror
         env:
           ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
-          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
-          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
+          ATOMGIT_PROJECT_ID: '10496882'
         run: |
           set -euo pipefail
-
-          project_json="$(curl --fail --show-error --silent \
-            "https://web-api.atomgit.com/api/v2/projects/${ATOMGIT_OWNER}%2F${ATOMGIT_REPO}/simple"
-          )"
-          project_id="$(jq -er '.id' <<<"$project_json")"
 
           response="$(curl --fail --show-error --silent --request POST \
             --header "Authorization: Bearer ${ATOMGIT_ACCESS_TOKEN}" \
             --header "Content-Type: application/json" \
             --data '{}' \
-            "https://web-api.atomgit.com/api/v2/projects/${project_id}/sync_remote_mirror"
+            "https://web-api.atomgit.com/api/v2/projects/${ATOMGIT_PROJECT_ID}/sync_remote_mirror"
           )"
           echo "AtomGit mirror response: ${response}"
 
