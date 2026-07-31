@@ -276,6 +276,8 @@ function paragraph(children, options = {}) {
   return new Paragraph({
     children: children?.length ? children : [textRun('')],
     heading: options.heading,
+    style: options.style,
+    outlineLevel: options.outlineLevel,
     pageBreakBefore: options.pageBreakBefore,
     alignment: options.alignment,
     bullet: options.bullet,
@@ -344,7 +346,7 @@ function buildChapterHeadingRow(exportFormat, headingParagraph, level) {
     height: { value: rowStyle.height, rule: HeightRule.ATLEAST },
     children: [new TableCell({
       children: [headingParagraph],
-      shading: { type: ShadingType.CLEAR, fill: frame.fills[Math.max(0, Math.min(level - 1, 5))] || 'FFFFFF' },
+      shading: { type: ShadingType.CLEAR, fill: frame.fills[Math.max(0, Math.min(level - 1, 8))] || 'FFFFFF' },
       margins: { top: rowStyle.top, bottom: rowStyle.bottom, left: rowStyle.left, right: rowStyle.right },
       columnSpan,
       width: { size: DOCX_TABLE_WIDTH_TWIPS, type: WidthType.DXA },
@@ -377,7 +379,7 @@ function buildChapterLeafRow(exportFormat, titleParagraph, bodyChildren, level) 
   if (!frame) return undefined;
   const border = { style: BorderStyle.SINGLE, size: 6, color: frame.color };
   const body = bodyChildren?.length ? bodyChildren : [paragraph([textRun('')], { after: 0 })];
-  const fill = frame.fills[Math.max(0, Math.min(level - 1, 5))] || 'FFFFFF';
+  const fill = frame.fills[Math.max(0, Math.min(level - 1, 8))] || 'FFFFFF';
 
   return new TableRow({
     children: [
@@ -972,7 +974,7 @@ function formatOutlineNumber(id, headingStyle) {
   return String(headingStyle.numbering_template || '')
     .replace(/\{tail(\d+)\}/g, (_, level) => {
       const startLevel = Number(level);
-      if (!Number.isFinite(startLevel) || startLevel < 1 || startLevel > 6 || startLevel > parts.length) return '';
+      if (!Number.isFinite(startLevel) || startLevel < 1 || startLevel > 9 || startLevel > parts.length) return '';
       return parts.slice(startLevel - 1).join('.');
     })
     .replace(/\{zh\}/g, cn)
@@ -999,7 +1001,7 @@ function formatOutlineTitle(id, title, headingStyle) {
 
 function getHeadingStyle(exportFormat, level) {
   const headings = (exportFormat && Array.isArray(exportFormat.headings)) ? exportFormat.headings : [];
-  const idx = Math.min(level - 1, 5);
+  const idx = Math.min(level - 1, 8);
   return headings[idx] || null;
 }
 
@@ -1791,7 +1793,7 @@ function buildOutlineHeadingParagraph(item, context, level, options = {}) {
   }
 
   const paraOptions = {
-    heading: headingLevel(level),
+    heading: level <= 6 ? headingLevel(level) : undefined,
     pageBreakBefore: level === 1 && isLevel1PageBreakEnabled(context.exportFormat) && !options.disablePageBreakBefore,
     alignment: style ? alignmentToWordType(style.alignment) : undefined,
     before: options.compact ? 0 : (style ? style.spacing_before_pt * 20 : (level === 1 ? 320 : 200)),
@@ -1799,9 +1801,14 @@ function buildOutlineHeadingParagraph(item, context, level, options = {}) {
     line: style ? 240 * (style.line_spacing || 1) : undefined,
   };
   paraOptions.indent = { left: 0, right: 0, firstLine: 0, hanging: 0 };
+  if (level > 6) {
+    // docx 内置 HeadingLevel 仅到 6 级，7-9 级改用自定义段落样式 + 大纲级别，保证导航窗格可识别
+    paraOptions.style = `Heading${Math.min(level, 9)}`;
+    paraOptions.outlineLevel = Math.min(level, 9) - 1;
+  }
   if (nativeHeadingNumbering) {
     context.usesHeadingNumbering = true;
-    paraOptions.numbering = { reference: HEADING_NUMBERING_REFERENCE, level: Math.min(level - 1, 5) };
+    paraOptions.numbering = { reference: HEADING_NUMBERING_REFERENCE, level: Math.min(level - 1, 8) };
   }
 
   return paragraph([textRun(displayTitle, runOptions)], paraOptions);
@@ -1879,7 +1886,7 @@ async function addOutlineItems(children, items, context, level = 1) {
 function createHeadingNumberingConfig() {
   return {
     reference: HEADING_NUMBERING_REFERENCE,
-    levels: [0, 1, 2, 3, 4, 5].map((level) => ({
+    levels: [0, 1, 2, 3, 4, 5, 6, 7, 8].map((level) => ({
       level,
       format: LevelFormat.DECIMAL,
       start: 1,
@@ -1966,10 +1973,10 @@ function createNumberingConfig(context) {
 
 function buildHeadingParagraphStyles(exportFormat) {
   const styles = [];
-  const names = ['Heading 1', 'Heading 2', 'Heading 3', 'Heading 4', 'Heading 5', 'Heading 6'];
-  const ids = ['Heading1', 'Heading2', 'Heading3', 'Heading4', 'Heading5', 'Heading6'];
+  const names = ['Heading 1', 'Heading 2', 'Heading 3', 'Heading 4', 'Heading 5', 'Heading 6', 'Heading 7', 'Heading 8', 'Heading 9'];
+  const ids = ['Heading1', 'Heading2', 'Heading3', 'Heading4', 'Heading5', 'Heading6', 'Heading7', 'Heading8', 'Heading9'];
 
-  for (let i = 0; i < 6; i += 1) {
+  for (let i = 0; i < 9; i += 1) {
     const style = getHeadingStyle(exportFormat, i + 1);
     if (!style) {
       styles.push({
@@ -1977,7 +1984,7 @@ function buildHeadingParagraphStyles(exportFormat) {
         name: names[i],
         basedOn: 'Normal',
         run: { bold: false },
-        paragraph: { spacing: { before: 200, after: 120 } },
+        paragraph: { spacing: { before: 200, after: 120 }, outlineLevel: i },
       });
       continue;
     }
@@ -2001,6 +2008,7 @@ function buildHeadingParagraphStyles(exportFormat) {
         },
         alignment: alignmentToWordType(style.alignment),
         indent: { left: 0, right: 0, firstLine: 0, hanging: 0 },
+        outlineLevel: i,
       },
     });
   }
