@@ -2,7 +2,7 @@ export type TextModelProvider = 'jinlong' | 'volcengine' | 'deepseek' | 'agnes' 
 export type LegacyTextModelProvider = 'longcat';
 export type ConfiguredTextModelProvider = TextModelProvider | LegacyTextModelProvider;
 export type AiRequestMode = 'normal' | 'stream';
-export type UpdateChannel = 'github' | 'cloudflare';
+export type UpdateChannel = 'github' | 'cloudflare' | 'atomgit';
 export type AgentRuntimeId = string;
 
 export interface TextModelConfig {

@@ -13,6 +13,9 @@ const GITHUB_PROVIDER_OPTIONS = {
 };
 const CLOUDFLARE_RELEASE_BASE_URL = 'https://openbidkit-oss.agnet.top/release';
 const CLOUDFLARE_LATEST_JSON_URL = `${CLOUDFLARE_RELEASE_BASE_URL}/latest.json`;
+const ATOMGIT_REPOSITORY_URL = 'https://atomgit.com/FB208/OpenBidKit_Yibiao';
+const ATOMGIT_RELEASE_API_BASE_URL = 'https://api.atomgit.com/api/v5/repos/FB208/OpenBidKit_Yibiao/releases';
+const ATOMGIT_LATEST_RELEASE_API = `${ATOMGIT_RELEASE_API_BASE_URL}/latest`;
 
 let autoUpdaterInstance = null;
 let downloadedUpdateVersion = '';
@@ -33,7 +36,10 @@ function compareVersions(a, b) {
 }
 
 function normalizeUpdateChannel(value) {
-  return value === 'cloudflare' ? 'cloudflare' : 'github';
+  if (value === 'cloudflare' || value === 'atomgit') {
+    return value;
+  }
+  return 'github';
 }
 
 function getUpdateChannel(configStore) {
@@ -127,6 +133,19 @@ function pickPlatformDownloadFile(files = []) {
   return null;
 }
 
+// 选择下载后可直接启动的系统安装程序。
+function pickPlatformInstallerFile(files = []) {
+  const validFiles = Array.isArray(files) ? files.filter((file) => file?.url && file?.name) : [];
+  if (process.platform === 'win32') {
+    return validFiles.find((file) => /-win-x64\.exe$/i.test(file.name))
+      || validFiles.find((file) => /-win-x64\.msi$/i.test(file.name));
+  }
+  if (process.platform === 'darwin') {
+    return pickMacDmgFile(validFiles);
+  }
+  return null;
+}
+
 async function fetchCloudflareLatestRelease() {
   const release = await requestJson(CLOUDFLARE_LATEST_JSON_URL, 'Cloudflare 更新源 ');
   const files = Array.isArray(release.files)
@@ -150,8 +169,43 @@ async function fetchCloudflareLatestRelease() {
   };
 }
 
+// 将 AtomGit 附件名转换为无需客户端令牌的公开下载地址。
+function createAtomGitAssetDownloadUrl(tagName, fileName) {
+  return `${ATOMGIT_RELEASE_API_BASE_URL}/${encodeURIComponent(tagName)}/attach_files/${encodeURIComponent(fileName)}/download`;
+}
+
+async function fetchAtomGitLatestRelease() {
+  const release = await requestJson(ATOMGIT_LATEST_RELEASE_API, 'AtomGit API ');
+  const tagName = String(release.tag_name || '');
+  const files = Array.isArray(release.assets)
+    ? release.assets.map((asset) => {
+      const name = String(asset.name || '');
+      return {
+        name,
+        url: tagName && name
+          ? createAtomGitAssetDownloadUrl(tagName, name)
+          : String(asset.browser_download_url || ''),
+        size: Number(asset.size || 0),
+      };
+    })
+    : [];
+  const downloadFile = pickPlatformDownloadFile(files);
+  return {
+    channel: 'atomgit',
+    version: tagName.replace(/^v/i, ''),
+    name: release.name || tagName,
+    body: release.body || '',
+    published_at: release.created_at || '',
+    html_url: ATOMGIT_REPOSITORY_URL,
+    download_url: downloadFile?.url || ATOMGIT_REPOSITORY_URL,
+    files,
+  };
+}
+
 function fetchLatestRelease(channel) {
-  return channel === 'cloudflare' ? fetchCloudflareLatestRelease() : fetchGithubLatestRelease();
+  if (channel === 'cloudflare') return fetchCloudflareLatestRelease();
+  if (channel === 'atomgit') return fetchAtomGitLatestRelease();
+  return fetchGithubLatestRelease();
 }
 
 async function getLatestVersion(options = {}) {
@@ -161,17 +215,25 @@ async function getLatestVersion(options = {}) {
 
 async function getUpdateDownloadUrl(options = {}) {
   const channel = getUpdateChannel(options.configStore);
-  if (channel !== 'cloudflare') {
-    return GITHUB_RELEASE_DOWNLOAD_URL;
+  if (channel === 'cloudflare') {
+    try {
+      const release = await fetchCloudflareLatestRelease();
+      return release.download_url || CLOUDFLARE_RELEASE_BASE_URL;
+    } catch (error) {
+      console.warn('[update] Cloudflare 下载地址获取失败，回退到 GitHub Release', error);
+      return GITHUB_RELEASE_DOWNLOAD_URL;
+    }
   }
-
-  try {
-    const release = await fetchCloudflareLatestRelease();
-    return release.download_url || CLOUDFLARE_RELEASE_BASE_URL;
-  } catch (error) {
-    console.warn('[update] Cloudflare 下载地址获取失败，回退到 GitHub Release', error);
-    return GITHUB_RELEASE_DOWNLOAD_URL;
+  if (channel === 'atomgit') {
+    try {
+      const release = await fetchAtomGitLatestRelease();
+      return release.download_url || ATOMGIT_REPOSITORY_URL;
+    } catch (error) {
+      console.warn('[update] AtomGit 下载地址获取失败', error);
+      return ATOMGIT_REPOSITORY_URL;
+    }
   }
+  return GITHUB_RELEASE_DOWNLOAD_URL;
 }
 
 function configureAutoUpdater(channel) {
@@ -206,8 +268,9 @@ function sanitizeDownloadFileName(fileName, fallback) {
   return baseName && baseName !== '.' && baseName !== '..' ? baseName : fallback;
 }
 
-function getMacDmgDownloadPath(app, release, file) {
-  const fallbackName = `Yibiao-${release.version || 'update'}-mac-${getMacUpdateArch()}.dmg`;
+function getManualUpdateDownloadPath(app, release, file) {
+  const platformSuffix = process.platform === 'win32' ? 'win-x64.exe' : `mac-${getMacUpdateArch()}.dmg`;
+  const fallbackName = `Yibiao-${release.version || 'update'}-${platformSuffix}`;
   const fileName = sanitizeDownloadFileName(file?.name, fallbackName);
   return path.join(app.getPath('userData'), 'updates', fileName);
 }
@@ -321,17 +384,18 @@ function downloadFile(url, destinationPath, options = {}, redirectCount = 0) {
   });
 }
 
-async function runMacDmgUpdateCheck(options, release, channel) {
+async function runManualInstallerUpdateCheck(options, release, channel) {
   const { app, mainWindow, onProgress, onDownloaded, onError } = options;
-  const dmgFile = pickMacDmgFile(release.files);
-  if (!dmgFile) {
-    const message = '未找到适用于 macOS 的 DMG 更新包';
+  const installerFile = pickPlatformInstallerFile(release.files);
+  if (!installerFile) {
+    const platformLabel = process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : '当前系统';
+    const message = `未找到适用于 ${platformLabel} 的更新安装包`;
     onError?.(message);
     return { enabled: true, updateAvailable: true, version: release.version, failed: true, message, channel };
   }
 
-  const destinationPath = getMacDmgDownloadPath(app, release, dmgFile);
-  const expectedSize = Number(dmgFile.size || 0);
+  const destinationPath = getManualUpdateDownloadPath(app, release, installerFile);
+  const expectedSize = Number(installerFile.size || 0);
 
   try {
     if (isDownloadedFileReady(destinationPath, expectedSize)) {
@@ -343,7 +407,7 @@ async function runMacDmgUpdateCheck(options, release, channel) {
     }
 
     setProgressBar(mainWindow, 0);
-    await downloadFile(dmgFile.url, destinationPath, {
+    await downloadFile(installerFile.url, destinationPath, {
       expectedSize,
       onProgress: (percent) => {
         setProgressBar(mainWindow, Math.max(0, Math.min(1, percent / 100)));
@@ -372,10 +436,11 @@ async function runUpdateCheck(options = {}) {
   if (!release.version || compareVersions(release.version, app.getVersion()) <= 0) {
     return { enabled: true, updateAvailable: false, channel };
   }
-  if (process.platform === 'darwin') {
-    return runMacDmgUpdateCheck(options, release, channel);
+  if (process.platform === 'darwin' || channel === 'atomgit') {
+    return runManualInstallerUpdateCheck(options, release, channel);
   }
   configureAutoUpdater(channel);
+  downloadedUpdateFilePath = '';
   if (!autoUpdaterInstance) {
     return { enabled: true, updateAvailable: false, failed: true, message: '自动更新未初始化', channel };
   }
@@ -401,6 +466,7 @@ async function runUpdateCheck(options = {}) {
     downloadedVersion = info?.version || release.version;
     downloadedUpdateVersion = downloadedVersion;
     downloadedUpdateChannel = channel;
+    downloadedUpdateFilePath = '';
     downloadedNotified = true;
     setProgressBar(mainWindow, -1);
     onDownloaded?.(downloadedVersion);
@@ -424,6 +490,7 @@ async function runUpdateCheck(options = {}) {
     await autoUpdaterInstance.downloadUpdate();
     downloadedUpdateVersion = downloadedVersion;
     downloadedUpdateChannel = channel;
+    downloadedUpdateFilePath = '';
     setProgressBar(mainWindow, -1);
     if (!downloadedNotified) {
       onDownloaded?.(downloadedVersion);
@@ -451,7 +518,7 @@ async function checkAndDownloadUpdate(options = {}) {
     return { enabled: true, updateAvailable: false, failed: true, message: '自动更新未初始化', channel };
   }
   if (downloadedUpdateVersion && downloadedUpdateChannel === channel) {
-    if (process.platform !== 'darwin' || isDownloadedFileReady(downloadedUpdateFilePath)) {
+    if (!downloadedUpdateFilePath || isDownloadedFileReady(downloadedUpdateFilePath)) {
       return { enabled: true, updateAvailable: true, version: downloadedUpdateVersion, downloaded: true, channel };
     }
     downloadedUpdateVersion = '';
@@ -479,7 +546,7 @@ function triggerUpdateDownload(options) {
 }
 
 async function quitAndInstall(options = {}) {
-  if (process.platform === 'darwin') {
+  if (downloadedUpdateFilePath) {
     if (!isDownloadedFileReady(downloadedUpdateFilePath)) {
       return { success: false, message: '更新安装包尚未下载完成，请先检查更新' };
     }
@@ -528,6 +595,7 @@ function setupAutoUpdate({ app, mainWindow }) {
 
   autoUpdater.on('update-downloaded', (info) => {
     downloadedUpdateVersion = info?.version || downloadedUpdateVersion;
+    downloadedUpdateFilePath = '';
     setProgressBar(mainWindow, -1);
   });
 
