@@ -492,22 +492,26 @@ jobs:
           GITHUB_RELEASE_JSON: github-release.json
         run: node .github/scripts/sync-gitee-release.mjs
 
-      - name: Push release tag to AtomGit
+      - name: Trigger AtomGit pull mirror
         env:
           ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
           ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
           ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
-          GIT_TERMINAL_PROMPT: '0'
         run: |
           set -euo pipefail
-          git fetch --force origin "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
-          git \
-            -c credential.helper= \
-            -c credential.helper='!f() { printf "%s\n" "username=$ATOMGIT_OWNER" "password=$ATOMGIT_ACCESS_TOKEN"; }; f' \
-            push --force \
-            "https://atomgit.com/${ATOMGIT_OWNER}/${ATOMGIT_REPO}.git" \
-            "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
+
+          project_json="$(curl --fail --show-error --silent \
+            "https://web-api.atomgit.com/api/v2/projects/${ATOMGIT_OWNER}%2F${ATOMGIT_REPO}/simple"
+          )"
+          project_id="$(jq -er '.id' <<<"$project_json")"
+
+          response="$(curl --fail --show-error --silent --request POST \
+            --header "Authorization: Bearer ${ATOMGIT_ACCESS_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data '{}' \
+            "https://web-api.atomgit.com/api/v2/projects/${project_id}/sync_remote_mirror"
+          )"
+          echo "AtomGit mirror response: ${response}"
 
       - name: Publish AtomGit Release
         env:
