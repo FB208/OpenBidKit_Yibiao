@@ -492,6 +492,23 @@ jobs:
           GITHUB_RELEASE_JSON: github-release.json
         run: node .github/scripts/sync-gitee-release.mjs
 
+      - name: Push release tag to AtomGit
+        env:
+          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
+          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
+          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
+          git \
+            -c credential.helper= \
+            -c credential.helper='!f() { printf "%s\n" "username=$ATOMGIT_OWNER" "password=$ATOMGIT_ACCESS_TOKEN"; }; f' \
+            push --force \
+            "https://atomgit.com/${ATOMGIT_OWNER}/${ATOMGIT_REPO}.git" \
+            "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
+
       - name: Publish AtomGit Release
         env:
           ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
