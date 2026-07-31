@@ -1,9 +1,13 @@
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { request as httpsRequest } from 'node:https';
 import path from 'node:path';
 
 const ATOMGIT_API_BASE_URL = 'https://api.atomgit.com/api/v5';
 const TAG_SYNC_TIMEOUT_SECONDS = 600;
 const TAG_SYNC_POLL_INTERVAL_SECONDS = 10;
+const ASSET_UPLOAD_MAX_ATTEMPTS = 3;
+const ASSET_UPLOAD_RETRY_DELAY_SECONDS = 10;
 
 /** 读取必填环境变量。 */
 function requireEnv(name) {
@@ -24,6 +28,24 @@ function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+/** 将字节数格式化为便于阅读的 MiB。 */
+function formatFileSize(bytes) {
+  return `${(Number(bytes) / 1024 / 1024).toFixed(1)} MiB`;
+}
+
+/** 展开错误及其 cause，便于定位底层网络错误。 */
+function formatError(error) {
+  const messages = [];
+  let current = error;
+  while (current) {
+    const message = current?.message || String(current);
+    const code = current?.code ? ` (${current.code})` : '';
+    messages.push(`${message}${code}`);
+    current = current?.cause;
+  }
+  return messages.join(' <- ');
 }
 
 /** 读取 GitHub Release 元数据。 */
@@ -221,39 +243,89 @@ async function deleteReplacedAssets({ owner, repo, token, tagName, existingRelea
   }
 }
 
+/** 通过原生 HTTPS 流式上传文件，避免 fetch 的 300 秒响应头超时。 */
+function uploadFileByHttps({ uploadUrl, uploadHeaders, filePath, fileSize }) {
+  const target = new URL(uploadUrl);
+  if (target.protocol !== 'https:') {
+    throw new Error(`Unsupported AtomGit upload protocol: ${target.protocol}`);
+  }
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(uploadHeaders || {})) {
+    headers.set(name, Array.isArray(value) ? value.join(',') : String(value));
+  }
+  headers.set('Content-Length', String(fileSize));
+
+  return new Promise((resolve, reject) => {
+    const request = httpsRequest(target, {
+      method: 'PUT',
+      headers: Object.fromEntries(headers.entries()),
+    }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on('error', reject);
+      response.on('end', () => {
+        resolve({
+          status: response.statusCode || 0,
+          statusText: response.statusMessage || '',
+          text: Buffer.concat(chunks).toString('utf8'),
+        });
+      });
+    });
+
+    request.on('error', reject);
+    const fileStream = createReadStream(filePath);
+    fileStream.on('error', (error) => request.destroy(error));
+    fileStream.pipe(request);
+  });
+}
+
 /** 使用 AtomGit 返回的预签名地址上传单个附件。 */
 async function uploadAsset({ owner, repo, token, tagName, filePath }) {
   const fileName = path.basename(filePath);
-  const upload = await atomGitRequest({
-    owner,
-    repo,
-    token,
-    apiPath: `/releases/${encodePathSegment(tagName)}/upload_url`,
-    query: { file_name: fileName },
-  });
+  const { size: fileSize } = await fs.stat(filePath);
 
-  if (!upload?.url) {
-    throw new Error(`AtomGit did not return an upload URL for ${fileName}.`);
-  }
-
-  const headers = new Headers();
-  for (const [name, value] of Object.entries(upload.headers || {})) {
-    headers.set(name, Array.isArray(value) ? value.join(',') : String(value));
-  }
-
-  const content = await fs.readFile(filePath);
-  const response = await fetch(upload.url, {
-    method: 'PUT',
-    headers,
-    body: content,
-  });
-  const responseText = await response.text();
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(
-      `AtomGit attachment upload failed for ${fileName}: ${response.status} ${responseText || response.statusText}`,
+  for (let attempt = 1; attempt <= ASSET_UPLOAD_MAX_ATTEMPTS; attempt += 1) {
+    console.log(
+      `Uploading AtomGit attachment: ${fileName} (${formatFileSize(fileSize)}), attempt ${attempt}/${ASSET_UPLOAD_MAX_ATTEMPTS}.`,
     );
+
+    try {
+      const upload = await atomGitRequest({
+        owner,
+        repo,
+        token,
+        apiPath: `/releases/${encodePathSegment(tagName)}/upload_url`,
+        query: { file_name: fileName },
+      });
+
+      if (!upload?.url) {
+        throw new Error(`AtomGit did not return an upload URL for ${fileName}.`);
+      }
+
+      const response = await uploadFileByHttps({
+        uploadUrl: upload.url,
+        uploadHeaders: upload.headers,
+        filePath,
+        fileSize,
+      });
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(
+          `AtomGit attachment upload failed: ${response.status} ${response.text || response.statusText}`,
+        );
+      }
+
+      console.log(`Uploaded AtomGit attachment: ${fileName}`);
+      return;
+    } catch (error) {
+      console.error(`AtomGit attachment upload error for ${fileName}: ${formatError(error)}`);
+      if (attempt === ASSET_UPLOAD_MAX_ATTEMPTS) {
+        throw new Error(`Failed to upload AtomGit attachment after ${attempt} attempts: ${fileName}`, {
+          cause: error,
+        });
+      }
+      await sleep(ASSET_UPLOAD_RETRY_DELAY_SECONDS * attempt * 1000);
+    }
   }
-  console.log(`Uploaded AtomGit attachment: ${fileName}`);
 }
 
 /** 执行完整的 AtomGit Release 同步。 */
@@ -292,6 +364,9 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error?.stack || error?.message || String(error));
+  console.error(error?.stack || formatError(error));
+  if (error?.cause) {
+    console.error(`Caused by: ${formatError(error.cause)}`);
+  }
   process.exit(1);
 });
