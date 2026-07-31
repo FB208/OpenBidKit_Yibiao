@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'AtomGit 已存在的 tag'
+        description: '要创建并同步的预发布 tag'
         required: true
-        default: 'v2.23.6'
+        default: 'v2.23.8-alpha'
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test-atomgit-release:
@@ -20,11 +20,46 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Create GitHub prerelease and small test asset
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p atomgit-test-assets
+          asset_file="atomgit-test-assets/atomgit-link-test.txt"
+          printf 'GitHub and AtomGit Release upload test\ntag=%s\nrun_id=%s\n' "$TAG_NAME" "$GITHUB_RUN_ID" \
+            > "$asset_file"
+
+          if ! git rev-parse --verify --quiet "refs/tags/${TAG_NAME}" >/dev/null; then
+            git tag -a "$TAG_NAME" -m "$TAG_NAME"
+          fi
+          git push origin "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" --title "$TAG_NAME" --prerelease
+            gh release upload "$TAG_NAME" "$asset_file" --clobber
+          else
+            gh release create "$TAG_NAME" "$asset_file" \
+              --title "$TAG_NAME" \
+              --notes "AtomGit tag 与 Release 附件同步链路测试。" \
+              --prerelease
+          fi
+
+          gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url \
+            > atomgit-test-release.json
+          ls -lah atomgit-test-assets
 
       - name: Trigger AtomGit pull mirror
         id: atomgit_mirror
@@ -64,19 +99,6 @@ jobs:
           if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
             exit 1
           fi
-
-      - name: Prepare small test asset
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ inputs.tag_name }}
-        run: |
-          set -euo pipefail
-          mkdir -p atomgit-test-assets
-          printf 'AtomGit Release upload test\ntag=%s\nrun_id=%s\n' "$TAG_NAME" "$GITHUB_RUN_ID" \
-            > atomgit-test-assets/atomgit-link-test.txt
-          gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url \
-            > atomgit-test-release.json
-          ls -lah atomgit-test-assets
 
       - name: Publish small test asset to AtomGit Release
         env:
