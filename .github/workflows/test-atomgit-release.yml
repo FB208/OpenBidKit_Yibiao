@@ -1,0 +1,101 @@
+name: Test AtomGit Release Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'AtomGit 已存在的 tag'
+        required: true
+        default: 'v2.23.6'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test-atomgit-release:
+    name: Test AtomGit Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Trigger AtomGit pull mirror
+        id: atomgit_mirror
+        continue-on-error: true
+        env:
+          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
+          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
+          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
+        run: |
+          set -euo pipefail
+
+          project_json="$(curl --fail --show-error --silent \
+            "https://web-api.atomgit.com/api/v2/projects/${ATOMGIT_OWNER}%2F${ATOMGIT_REPO}/simple"
+          )"
+          project_id="$(jq -er '.id' <<<"$project_json")"
+          echo "AtomGit project ID: ${project_id}"
+
+          status="$(curl --show-error --silent --request POST \
+            --output atomgit-mirror-response.txt \
+            --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${ATOMGIT_ACCESS_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --header "Accept: application/json, text/plain, */*" \
+            --header "Origin: https://atomgit.com" \
+            --header "Referer: https://atomgit.com/" \
+            --header "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36" \
+            --header "X-App-Version: 0" \
+            --header "X-Platform: web" \
+            --header "X-Device-Type: Linux" \
+            --header "X-App-Channel: gitcode-fe" \
+            --header "X-Network-Type: 4g" \
+            --header "X-OS-Version: Linux" \
+            --header "X-Device-ID: github-actions-${GITHUB_RUN_ID}" \
+            --data '{}' \
+            "https://web-api.atomgit.com/api/v2/projects/${project_id}/sync_remote_mirror"
+          )"
+
+          echo "AtomGit mirror HTTP status: ${status}"
+          echo "AtomGit mirror response:"
+          cat atomgit-mirror-response.txt
+          echo
+
+          if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
+            exit 1
+          fi
+
+      - name: Prepare small test asset
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p atomgit-test-assets
+          printf 'AtomGit Release upload test\ntag=%s\nrun_id=%s\n' "$TAG_NAME" "$GITHUB_RUN_ID" \
+            > atomgit-test-assets/atomgit-link-test.txt
+          gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url \
+            > atomgit-test-release.json
+          ls -lah atomgit-test-assets
+
+      - name: Publish small test asset to AtomGit Release
+        env:
+          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
+          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
+          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
+          TAG_NAME: ${{ inputs.tag_name }}
+          RELEASE_ASSETS_DIR: atomgit-test-assets
+          GITHUB_RELEASE_JSON: atomgit-test-release.json
+        run: node .github/scripts/sync-atomgit-release.mjs
+
+      - name: Report mirror trigger failure
+        if: always() && steps.atomgit_mirror.outcome == 'failure'
+        run: |
+          echo "AtomGit Release 上传链路已执行，但镜像立即同步接口调用失败。"
+          exit 1
