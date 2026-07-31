@@ -491,3 +491,13 @@ jobs:
           RELEASE_ASSETS_DIR: release-assets
           GITHUB_RELEASE_JSON: github-release.json
         run: node .github/scripts/sync-gitee-release.mjs
+
+      - name: Publish AtomGit Release
+        env:
+          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
+          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
+          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          RELEASE_ASSETS_DIR: release-assets
+          GITHUB_RELEASE_JSON: github-release.json
+        run: node .github/scripts/sync-atomgit-release.mjs
