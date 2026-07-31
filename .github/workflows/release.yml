@@ -64,6 +64,34 @@ jobs:
             gh release create "$TAG_NAME" --title "$TAG_NAME" --notes-file release_notes.md
           fi
 
+  sync-atomgit-code:
+    name: Sync Code to AtomGit
+    needs: create-release
+    runs-on: ubuntu-latest
+    concurrency:
+      group: atomgit-code-sync
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag_name || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Sync main and release tags to AtomGit
+        env:
+          ATOMGIT_USERNAME: ${{ vars.ATOMGIT_USERNAME || vars.ATOMGIT_OWNER }}
+          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
+          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
+          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
+        run: node .github/scripts/sync-atomgit-git.mjs
+
   build-windows:
     name: Build Windows
     needs: create-release
@@ -422,6 +450,7 @@ jobs:
     needs:
       - build-windows
       - publish-macos
+      - sync-atomgit-code
     runs-on: ubuntu-latest
 
     steps:
@@ -491,21 +520,6 @@ jobs:
           RELEASE_ASSETS_DIR: release-assets
           GITHUB_RELEASE_JSON: github-release.json
         run: node .github/scripts/sync-gitee-release.mjs
-
-      - name: Trigger AtomGit pull mirror
-        env:
-          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
-          ATOMGIT_PROJECT_ID: '10496882'
-        run: |
-          set -euo pipefail
-
-          response="$(curl --fail --show-error --silent --request POST \
-            --header "Authorization: Bearer ${ATOMGIT_ACCESS_TOKEN}" \
-            --header "Content-Type: application/json" \
-            --data '{}' \
-            "https://web-api.atomgit.com/api/v2/projects/${ATOMGIT_PROJECT_ID}/sync_remote_mirror"
-          )"
-          echo "AtomGit mirror response: ${response}"
 
       - name: Publish AtomGit Release
         env:

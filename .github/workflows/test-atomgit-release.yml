@@ -61,44 +61,13 @@ jobs:
             > atomgit-test-release.json
           ls -lah atomgit-test-assets
 
-      - name: Trigger AtomGit pull mirror
-        id: atomgit_mirror
-        continue-on-error: true
+      - name: Sync code to AtomGit
         env:
+          ATOMGIT_USERNAME: ${{ vars.ATOMGIT_USERNAME || vars.ATOMGIT_OWNER }}
           ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
-          ATOMGIT_PROJECT_ID: '10496882'
-        run: |
-          set -euo pipefail
-          echo "AtomGit project ID: ${ATOMGIT_PROJECT_ID}"
-
-          status="$(curl --show-error --silent --request POST \
-            --output atomgit-mirror-response.txt \
-            --write-out '%{http_code}' \
-            --header "Authorization: Bearer ${ATOMGIT_ACCESS_TOKEN}" \
-            --header "Content-Type: application/json" \
-            --header "Accept: application/json, text/plain, */*" \
-            --header "Origin: https://atomgit.com" \
-            --header "Referer: https://atomgit.com/" \
-            --header "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36" \
-            --header "X-App-Version: 0" \
-            --header "X-Platform: web" \
-            --header "X-Device-Type: Linux" \
-            --header "X-App-Channel: gitcode-fe" \
-            --header "X-Network-Type: 4g" \
-            --header "X-OS-Version: Linux" \
-            --header "X-Device-ID: github-actions-${GITHUB_RUN_ID}" \
-            --data '{}' \
-            "https://web-api.atomgit.com/api/v2/projects/${ATOMGIT_PROJECT_ID}/sync_remote_mirror"
-          )"
-
-          echo "AtomGit mirror HTTP status: ${status}"
-          echo "AtomGit mirror response:"
-          cat atomgit-mirror-response.txt
-          echo
-
-          if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
-            exit 1
-          fi
+          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
+          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
+        run: node .github/scripts/sync-atomgit-git.mjs
 
       - name: Publish small test asset to AtomGit Release
         env:
@@ -109,9 +78,3 @@ jobs:
           RELEASE_ASSETS_DIR: atomgit-test-assets
           GITHUB_RELEASE_JSON: atomgit-test-release.json
         run: node .github/scripts/sync-atomgit-release.mjs
-
-      - name: Report mirror trigger failure
-        if: always() && steps.atomgit_mirror.outcome == 'failure'
-        run: |
-          echo "AtomGit Release 上传链路已执行，但镜像立即同步接口调用失败。"
-          exit 1
