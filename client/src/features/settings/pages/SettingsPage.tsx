@@ -39,7 +39,6 @@ const agentDiagnosticStatusMeta: Record<AgentSelfCheckStepStatus, { label: strin
 const updateChannelOptions: Array<{ value: UpdateChannel; label: string; description: string }> = [
   { value: 'github', label: 'GitHub', description: '使用 GitHub Release 检查和下载更新' },
   { value: 'cloudflare', label: 'Cloudflare', description: '使用 Cloudflare R2 镜像检查和下载更新' },
-  { value: 'atomgit', label: 'AtomGit', description: '使用 AtomGit Release 检查和下载更新' },
 ];
 
 const defaultAgentModeScenarios: AgentModeScenariosConfig = {
@@ -47,10 +46,7 @@ const defaultAgentModeScenarios: AgentModeScenariosConfig = {
 };
 
 function normalizeUpdateChannel(value?: string): UpdateChannel {
-  if (value === 'cloudflare' || value === 'atomgit') {
-    return value;
-  }
-  return 'github';
+  return value === 'cloudflare' ? 'cloudflare' : 'github';
 }
 
 function normalizeAgentModeScenarios(value?: Partial<AgentModeScenariosConfig>): AgentModeScenariosConfig {
