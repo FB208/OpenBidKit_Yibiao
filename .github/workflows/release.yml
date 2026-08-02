@@ -417,6 +417,55 @@ jobs:
           )
           gh release upload "$TAG_NAME" "${files[@]}" --clobber
 
+  publish-atomgit-release:
+    name: Publish AtomGit Release
+    needs:
+      - build-windows
+      - publish-macos
+    runs-on: ubuntu-latest
+    concurrency:
+      group: atomgit-release-${{ inputs.tag_name || github.ref_name }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag_name || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Sync code and release tags to AtomGit
+        env:
+          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
+          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
+          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
+        run: node .github/scripts/sync-atomgit-git.mjs
+
+      - name: Download GitHub Release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+        run: |
+          mkdir -p atomgit-release-assets
+          gh release download "$TAG_NAME" --dir atomgit-release-assets --clobber
+          gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url > atomgit-release.json
+          ls -lah atomgit-release-assets
+
+      - name: Publish AtomGit Release
+        env:
+          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
+          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
+          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          RELEASE_ASSETS_DIR: atomgit-release-assets
+          GITHUB_RELEASE_JSON: atomgit-release.json
+        run: node .github/scripts/sync-atomgit-release.mjs
+
   publish-r2-release:
     name: Publish R2 Release
     needs:
