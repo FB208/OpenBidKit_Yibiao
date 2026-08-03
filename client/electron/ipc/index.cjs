@@ -1,4 +1,4 @@
-const { ipcMain, shell } = require('electron');
+const { clipboard, ipcMain, shell } = require('electron');
 const { registerAgentIpc } = require('./agentIpc.cjs');
 const { registerAiIpc } = require('./aiIpc.cjs');
 const { registerConfigIpc } = require('./configIpc.cjs');
@@ -402,7 +402,8 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     } catch (error) {
       const preview = externalUrl.length > 300 ? `${externalUrl.slice(0, 300)}...` : externalUrl;
       console.warn('[app] 打开外部链接失败', { url: preview, message: error.message || String(error) });
-      return { success: false, message: '外部链接打开失败' };
+      clipboard.writeText(externalUrl);
+      return { success: false, message: '系统无法启动默认浏览器，链接已复制，请手动粘贴到浏览器访问' };
     }
   });
 
