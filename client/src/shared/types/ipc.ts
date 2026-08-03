@@ -5,7 +5,7 @@ import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex,
 import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
-import type { OutlineData, OutlineExpansionMode, OutlineWordControlOptions } from './outline';
+import type { OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from './outline';
 
 export interface TaskEventTask {
   task_id: string;
@@ -480,7 +480,7 @@ export interface YibiaoBridge {
     setWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
     switchWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
     saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode }) => Promise<TechnicalPlanState>;
-    saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; outlineExpansionMode?: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<TechnicalPlanState>;
+    saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; outlineMode?: OutlineMode; outlineExpansionMode?: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<TechnicalPlanState>;
     saveOutline: (payload: SaveOutlineRequest) => Promise<TechnicalPlanState>;
     saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<TechnicalPlanState>;
     saveContentGenerationOptions: (options: ContentGenerationOptions) => Promise<TechnicalPlanState>;

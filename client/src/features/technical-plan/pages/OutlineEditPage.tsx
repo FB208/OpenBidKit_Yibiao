@@ -6,7 +6,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, SaveOutlineRequest, TechnicalPlanWorkflowKind } from '../types';
 import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
-import type { OutlineData, OutlineExpansionMode, OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
+import type { OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
@@ -15,6 +15,7 @@ interface OutlineEditPageProps {
   workflowKind: TechnicalPlanWorkflowKind;
   projectOverview: string;
   techRequirements: string;
+  outlineMode: OutlineMode;
   outlineExpansionMode: OutlineExpansionMode;
   outlineWordControlOptions: OutlineWordControlOptions;
   outlineWordControlSnapshot?: OutlineWordControlOptions;
@@ -22,7 +23,7 @@ interface OutlineEditPageProps {
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
   contentTaskStatus?: BackgroundTaskState['status'];
-  onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; outlineExpansionMode: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<void>;
+  onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; outlineMode: OutlineMode; outlineExpansionMode: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<void>;
   onOutlineSaved: (request: SaveOutlineRequest) => Promise<void>;
   onSortGuardChange?: (guard: OutlineSortGuard | null) => void;
 }
@@ -67,6 +68,11 @@ const outlineExpansionModeOptions: Array<{ value: OutlineExpansionMode; title: s
     description: '保留原方案一级目录，在其基础上补充招标评分项缺口，并可继续使用知识库增强。',
   },
 ];
+
+const outlineModeLabels: Record<OutlineMode, string> = {
+  aligned: '按技术评分项生成一级目录',
+  'response-file': '按响应文件要求生成一级目录',
+};
 
 const WORD_COUNT_INPUT_UNIT = 10000;
 
@@ -285,6 +291,7 @@ function OutlineEditPage({
   workflowKind,
   projectOverview,
   techRequirements,
+  outlineMode,
   outlineExpansionMode,
   outlineWordControlOptions,
   outlineWordControlSnapshot,
@@ -304,6 +311,7 @@ function OutlineEditPage({
   const [startingOutline, setStartingOutline] = useState(false);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
+  const [draftOutlineMode, setDraftOutlineMode] = useState<OutlineMode>(outlineMode);
   const [draftOutlineExpansionMode, setDraftOutlineExpansionMode] = useState<OutlineExpansionMode>(outlineExpansionMode);
   const [draftKnowledgeDocumentIds, setDraftKnowledgeDocumentIds] = useState<string[]>(referenceKnowledgeDocumentIds);
   const [draftMinimumWords, setDraftMinimumWords] = useState(formatWordCountDraft(outlineWordControlOptions.minimumWords));
@@ -365,7 +373,9 @@ function OutlineEditPage({
     sectionWords: parsedDraftSectionWords,
     strictSectionWords: parsedDraftSectionWords > 0 && draftStrictSectionWords,
   };
-  const configurationRequiresRegeneration = Boolean(outlineData && !areWordControlOptionsEqual(normalizedDraftOptions, outlineWordControlSnapshot));
+  const wordControlRequiresRegeneration = Boolean(outlineData && !areWordControlOptionsEqual(normalizedDraftOptions, outlineWordControlSnapshot));
+  const outlineModeRequiresRegeneration = Boolean(outlineData && !isExpansionWorkflow && draftOutlineMode !== outlineMode);
+  const configurationRequiresRegeneration = wordControlRequiresRegeneration || outlineModeRequiresRegeneration;
 
   const initializeWordControlDraft = () => {
     setDraftMinimumWords(formatWordCountDraft(outlineWordControlOptions.minimumWords));
@@ -433,13 +443,14 @@ function OutlineEditPage({
       return;
     }
 
+    setDraftOutlineMode(isExpansionWorkflow ? 'aligned' : outlineMode);
     setDraftOutlineExpansionMode(isExpansionWorkflow ? outlineExpansionMode : 'ai-complement');
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
     initializeWordControlDraft();
     setDraftForceOutlineAgentRepair(false);
     setKnowledgeSearch('');
     void loadKnowledgeIndex();
-  }, [generationDialogOpen, isExpansionWorkflow, outlineExpansionMode, outlineWordControlOptions, referenceKnowledgeDocumentIds]);
+  }, [generationDialogOpen, isExpansionWorkflow, outlineMode, outlineExpansionMode, outlineWordControlOptions, referenceKnowledgeDocumentIds]);
 
   const loadKnowledgeIndex = async () => {
     try {
@@ -471,6 +482,7 @@ function OutlineEditPage({
       return;
     }
 
+    setDraftOutlineMode(isExpansionWorkflow ? 'aligned' : outlineMode);
     setDraftOutlineExpansionMode(isExpansionWorkflow ? outlineExpansionMode : 'ai-complement');
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
     initializeWordControlDraft();
@@ -498,6 +510,7 @@ function OutlineEditPage({
       setSavingOutlineConfig(true);
       await onOutlineConfigChange({
         referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
+        outlineMode: isExpansionWorkflow ? 'aligned' : draftOutlineMode,
         outlineExpansionMode: isExpansionWorkflow ? draftOutlineExpansionMode : 'ai-complement',
         wordControlOptions,
       });
@@ -527,21 +540,24 @@ function OutlineEditPage({
       setStartingOutline(true);
       setLocalStartAt(startedNow);
       setNowTick(startedNow);
+      const nextOutlineMode = isExpansionWorkflow ? 'aligned' : draftOutlineMode;
       const nextOutlineExpansionMode = isExpansionWorkflow ? draftOutlineExpansionMode : 'ai-complement';
       await onOutlineConfigChange({
         referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
+        outlineMode: nextOutlineMode,
         outlineExpansionMode: nextOutlineExpansionMode,
         wordControlOptions,
       });
       setGenerationDialogOpen(false);
       await window.yibiao?.tasks.startOutlineGeneration({
         reference_knowledge_document_ids: draftKnowledgeDocumentIds,
+        outline_mode: nextOutlineMode,
         outline_expansion_mode: nextOutlineExpansionMode,
         word_control_options: wordControlOptions,
         debug_force_outline_agent_repair: developerMode && draftForceOutlineAgentRepair,
       });
       trackConfigUsage({
-        outline_mode: isExpansionWorkflow ? nextOutlineExpansionMode : 'aligned',
+        outline_mode: isExpansionWorkflow ? nextOutlineExpansionMode : nextOutlineMode,
         word_control_enabled: wordControlOptions.minimumWords > 0 || wordControlOptions.maximumWords > 0 || wordControlOptions.sectionWords > 0,
         minimum_words: wordControlOptions.minimumWords,
         maximum_words: wordControlOptions.maximumWords,
@@ -964,6 +980,40 @@ function OutlineEditPage({
     );
   };
 
+  const renderOutlineModePicker = () => {
+    if (isExpansionWorkflow) {
+      return null;
+    }
+
+    const useResponseFile = draftOutlineMode === 'response-file';
+    return (
+      <section className="outline-generation-config-section outline-mode-section">
+        <div className="outline-generation-config-head">
+          <strong>一级目录生成方式</strong>
+          <span>{outlineModeLabels[draftOutlineMode]}</span>
+        </div>
+        <label className="content-generation-config-row outline-mode-option">
+          <span>
+            <strong>按响应文件要求生成一级目录</strong>
+            <small>{useResponseFile ? '开启后读取 Step02 响应文件要求中的技术文件目录' : '默认关闭，保持现有评分项目录链路'}</small>
+          </span>
+          <Switch.Root
+            className="content-generation-switch"
+            checked={useResponseFile}
+            onCheckedChange={(checked) => setDraftOutlineMode(checked ? 'response-file' : 'aligned')}
+            disabled={generating}
+            aria-label="按响应文件要求生成一级目录"
+          >
+            <Switch.Thumb className="content-generation-switch-thumb" />
+          </Switch.Root>
+        </label>
+        <div className="outline-word-control-notice">
+          开启前需先在招标文件解析中勾选并完成“响应文件要求”。
+        </div>
+      </section>
+    );
+  };
+
   const renderKnowledgePicker = () => {
     if (loadingKnowledge) {
       return <div className="outline-knowledge-empty">正在读取知识库...</div>;
@@ -1079,7 +1129,7 @@ function OutlineEditPage({
         <div>
           <span className="section-kicker">STEP 03</span>
           <strong>目录生成</strong>
-          <p>{isExpansionWorkflow ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `生成前选择参考知识库；当前参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
+          <p>{isExpansionWorkflow ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `当前一级目录生成方式：${outlineModeLabels[outlineMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
         </div>
         <div className="outline-command-actions">
           <button
@@ -1326,10 +1376,13 @@ function OutlineEditPage({
                     </div>
                   {configurationRequiresRegeneration && (
                     <div className="outline-word-control-notice">
-                      {outlineWordControlSnapshot ? '生成目录后若修改了字数设置，需要重新生成目录才能生效！' : '当前目录缺少字数控制生效配置，请重新生成目录。'}
+                      {outlineModeRequiresRegeneration
+                        ? '生成目录后若修改了一级目录生成方式，需要重新生成目录才能生效！'
+                        : outlineWordControlSnapshot ? '生成目录后若修改了字数设置，需要重新生成目录才能生效！' : '当前目录缺少字数控制生效配置，请重新生成目录。'}
                     </div>
                   )}
                 </section>
+                {renderOutlineModePicker()}
               </div>
               {/* 右栏：知识库选择器 */}
               <section className="outline-generation-config-section outline-knowledge-picker">

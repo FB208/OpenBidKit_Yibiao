@@ -323,6 +323,20 @@ function normalizeOutlineExpansionMode(payload, storedPlan) {
   return value === 'original-only' ? 'original-only' : 'ai-complement';
 }
 
+function normalizeOutlineMode(payload, storedPlan) {
+  const value = payload?.outline_mode || payload?.outlineMode || storedPlan?.outlineMode;
+  return value === 'response-file' ? 'response-file' : 'aligned';
+}
+
+function isResponseFileOutlineMode(context = {}) {
+  return context.workflowKind !== 'existing-plan-expansion'
+    && (context.outlineMode === 'response-file' || context.payload?.outlineMode === 'response-file');
+}
+
+function getTopLevelSourceLabel(context = {}) {
+  return isResponseFileOutlineMode(context) ? '响应文件技术目录' : '技术评分项大类';
+}
+
 function loadOutlineKnowledgeItems(knowledgeBaseService, documentIds, log) {
   if (!documentIds.length) return [];
   if (!knowledgeBaseService?.getOutlineReferences) {
@@ -466,11 +480,14 @@ function buildOriginalOutlineAdditionsMessages(originalPlanSegment, extractedOut
   ];
 }
 
-function buildOutlineSharedContextMessages({ overview, requirements, oldOutline }) {
+function buildOutlineSharedContextMessages({ overview, requirements, responseFileRequirements, oldOutline }) {
   const messages = [
     { role: 'user', content: `项目概述：\n${overview}` },
     { role: 'user', content: `技术评分要求：\n${requirements}` },
   ];
+  if (responseFileRequirements) {
+    messages.push({ role: 'user', content: `响应文件要求：\n${responseFileRequirements}` });
+  }
   const formattedOldOutline = formatOldOutlineForPrompt(oldOutline);
   if (formattedOldOutline) {
     messages.push({ role: 'user', content: `已有目录：\n${formattedOldOutline}` });
@@ -511,20 +528,54 @@ JSON 格式要求：
   ];
 }
 
-function generateAlignedChildrenMessages({ overview, requirements, parentItem, group, oldOutline, suggestions }) {
+function extractResponseFileOutlineGroupsMessages({ overview, requirements, responseFileRequirements }, suggestions) {
+  const instructionPrompt = `你是一个专业的招标文件分析专家。请从“响应文件要求”中提取适合作为技术标一级目录的“技术文件目录”。
+
+要求：
+1. 只基于响应文件要求中明确属于“技术文件”“技术响应文件”“技术部分”“技术方案”或同义表述的组成目录提取一级目录。
+2. 不要提取报价文件、商务文件、资格证明、授权委托书、承诺函、偏离表、分项报价表等非技术文件目录。
+3. 如果响应文件要求中列出了技术文件的章节、目录、附件或格式模板，应保持原顺序。
+4. 每个目录必须适合作为技术标一级目录标题，标题要专业、简洁、完整，不要包含原文编号。
+5. detail_points 中保留该一级目录下明确要求响应、编写或提供的关键内容；可参考技术评分要求补充响应重点，但不能把技术评分项改造成一级目录。
+6. requirement_id 必须唯一，使用 R1、R2、R3 这种格式。
+7. description 需要概括该技术文件目录关注的核心内容。
+8. 如果没有找到明确技术文件目录，返回 {"groups": []}，不要自行编造。
+9. 只返回 JSON，格式必须为 {"groups": [...]}，不要输出任何其他内容。
+
+JSON 格式要求：
+{
+  "groups": [
+    {
+      "requirement_id": "R1",
+      "title": "",
+      "description": "",
+      "detail_points": ["", ""]
+    }
+  ]
+}`;
+  return [
+    { role: 'user', content: `项目概述：\n${overview}` },
+    { role: 'user', content: `技术评分要求：\n${requirements}` },
+    { role: 'user', content: `响应文件要求：\n${responseFileRequirements}` },
+    { role: 'user', content: `${instructionPrompt}\n\n请提取所有适合作为技术标一级目录的技术文件目录，保持顺序稳定。${formatSuggestions(suggestions)}` },
+  ];
+}
+
+function generateAlignedChildrenMessages({ overview, requirements, responseFileRequirements, outlineMode, parentItem, group, oldOutline, suggestions }) {
   const detailLines = (group.detail_points || [])
     .filter((item) => typeof item === 'string' && item.trim())
     .map((item) => `- ${item}`)
     .join('\n');
-  const detailContent = detailLines || '- 未提供明确细项，请根据评分项大类描述合理展开';
+  const sourceLabel = getTopLevelSourceLabel({ outlineMode });
+  const detailContent = detailLines || `- 未提供明确细项，请根据${sourceLabel}描述合理展开`;
   const suggestionText = formatSuggestions(suggestions).trim();
-  const instructionPrompt = `你是一个专业的标书编写专家。请围绕指定的技术评分项大类，为已经固定好的一级目录生成二级和三级目录。
+  const instructionPrompt = `你是一个专业的标书编写专家。请围绕指定的${sourceLabel}，为已经固定好的一级目录生成二级和三级目录。
 
 要求：
 1. 一级目录标题和顺序已经固定，不能修改、重命名、合并或删除一级目录。
 2. 只输出当前一级目录下的二级和三级目录，不要重复输出一级目录本身。
-3. 二级和三级目录要覆盖当前技术评分项大类及其细项，不能越界写入其他评分项大类内容。
-4. 技术评分要求只能作为编写约束、扣分口径、判定标准和注意事项参考，用于完善目录说明和响应重点；不得把评分要求扩展成独立一级目录，也不得偏离当前一级目录主题。
+3. 二级和三级目录要覆盖当前${sourceLabel}及其细项，不能越界写入其他一级目录内容。
+4. 技术评分要求和响应文件要求只能作为编写约束、扣分口径、判定标准和注意事项参考，用于完善目录说明和响应重点；不得偏离当前一级目录主题。
 5. 如果提供了原方案目录基础，当前输出是补充候选目录，应尽量复用原目录中相关表达，只补充缺失内容，不要提出删除或重排原目录。
 6. 一个二级目录下至少有两个三级目录。
 7. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
@@ -532,10 +583,10 @@ function generateAlignedChildrenMessages({ overview, requirements, parentItem, g
 
 ${childrenOutlineFixedStructureRules()}`;
   const messages = [
-    ...buildOutlineSharedContextMessages({ overview, requirements, oldOutline }),
+    ...buildOutlineSharedContextMessages({ overview, requirements, responseFileRequirements, oldOutline }),
     { role: 'user', content: instructionPrompt },
     { role: 'user', content: `当前固定一级目录：\n编号：${parentItem.id}\n标题：${parentItem.title}\n描述：${parentItem.description || ''}` },
-    { role: 'user', content: `当前对应的技术评分项大类：\nrequirement_id：${group.requirement_id}\n标题：${group.title}\n描述：${group.description}\n细项：\n${detailContent}` },
+    { role: 'user', content: `当前对应的${sourceLabel}：\nrequirement_id：${group.requirement_id}\n标题：${group.title}\n描述：${group.description}\n细项：\n${detailContent}` },
     { role: 'user', content: childrenOutlineParentNumberingRules(parentItem.id) },
   ];
   if (suggestionText) {
@@ -587,14 +638,17 @@ ${String(invalidContent || '').slice(0, 60000)}
 }
 
 function getFinalOutlineModeLabel(context) {
-  if (context.workflowKind !== 'existing-plan-expansion') return '普通技术方案目录生成';
+  if (context.workflowKind !== 'existing-plan-expansion') {
+    return isResponseFileOutlineMode(context) ? '普通技术方案目录生成-响应文件要求一级目录' : '普通技术方案目录生成-评分项一级目录';
+  }
   return context.outlineExpansionMode === 'original-only' ? '已有方案扩写-仅使用原方案目录' : '已有方案扩写-AI补充目录';
 }
 
 function getFinalOutlineConstraintText(context) {
   if (context.workflowKind !== 'existing-plan-expansion') {
+    const sourceLabel = getTopLevelSourceLabel(context);
     return `硬性约束：
-1. 一级目录必须与提供的 groups 数量一致、顺序一致、标题完全一致。
+1. 一级目录必须与提供的 ${sourceLabel} groups 数量一致、顺序一致、标题完全一致。
 2. 每个一级目录的 source_requirement_id 必须等于对应 group.requirement_id。
 3. 完整目录整体至少包含三级结构。
 4. 目录层级不能超过四级。`;
@@ -612,10 +666,15 @@ function getFinalOutlineConstraintText(context) {
 }
 
 function buildFinalOutlineReviewMessages(context) {
+  const responseFileMode = isResponseFileOutlineMode(context);
+  const sourceLabel = getTopLevelSourceLabel(context);
   const messages = [
     { role: 'user', content: `项目概述：\n${context.payload?.overview || ''}` },
     { role: 'user', content: `技术评分要求：\n${context.payload?.requirements || ''}` },
   ];
+  if (context.payload?.responseFileRequirements) {
+    messages.push({ role: 'user', content: `响应文件要求：\n${context.payload.responseFileRequirements}` });
+  }
   messages.push(
     { role: 'user', content: `待最终审核目录 JSON：\n${JSON.stringify(context.outline, null, 2)}` },
     {
@@ -623,11 +682,11 @@ function buildFinalOutlineReviewMessages(context) {
       content: `你是严格的技术标目录最终审核专家。请判断待审核目录是否已经可以保存为最终目录。
 
 审核重点：
-1. 一级目录是否只基于技术评分项建立，并覆盖技术评分项中的关键评分内容。
-2. 技术评分要求是否已作为约束、扣分口径、判定标准或注意事项被合理参考；不得因为评分要求本身生成、补充或要求补充一级目录。
-3. 是否存在明显重复、归属错位、遗漏技术评分项、误把评分要求当成目录主题或结构不合理。
+1. 一级目录是否严格基于${sourceLabel}建立，并覆盖其中关键响应内容。
+2. ${responseFileMode ? '技术评分要求是否已作为写作约束、判定标准或注意事项被合理参考；不得把技术评分项改造成一级目录。' : '技术评分要求是否已作为约束、扣分口径、判定标准或注意事项被合理参考；不得因为评分要求本身生成、补充或要求补充一级目录。'}
+3. 是否存在明显重复、归属错位、遗漏${sourceLabel}、误把非技术文件内容当成目录主题或结构不合理。
 4. 检查是否存在某个父目录下最终只有一个叶子目录；存在时必须返回 passed=false，并提出合并层级或调整归属的建议。
-5. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议；建议应围绕技术评分项覆盖和现有目录结构调整，不要要求把评分要求补成一级目录。
+5. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议；建议应围绕${sourceLabel}覆盖和现有目录结构调整，不要要求修改已锁定的一级目录来源。
 
 只返回 JSON，格式为 {"passed": true, "suggestions": []}，不要返回完整目录，不要输出解释文字。`,
     },
@@ -776,6 +835,8 @@ function buildOutlineAgentRecoveryPrompt(context) {
   const outputFile = context.outputFile;
   const outputShape = getFinalAgentOutputShape(context);
   const reason = String(context.recoveryReason || '').trim();
+  const responseFileMode = isResponseFileOutlineMode(context);
+  const sourceLabel = getTopLevelSourceLabel(context);
   return `请在当前工作目录中完成技术标目录生成或修复，并把可供程序读取的结果保存到 ${outputFile}。
 
 当前目录生成模式：${getFinalOutlineModeLabel(context)}
@@ -785,6 +846,7 @@ ${reason ? `本次恢复触发原因：${reason}\n` : ''}
 workspace 文件说明：
 - project-overview.md：项目概述、建设背景和投标对象。
 - technical-requirements.md：技术评分要求、招标需求和需要覆盖的响应点。
+- response-file-requirements.md：如果存在，记录响应文件组成、技术文件目录和投标文件编制要求。
 - workflow.json：本次目录模式、恢复类型和程序后续校验会使用的 hard_constraints。
 - current-outline.json：当前候选目录，可能为空、不完整或存在审核指出的问题。
 - final-review.json：程序或模型对当前目录的审核结论、问题和修改建议。
@@ -794,9 +856,9 @@ workspace 文件说明：
 工作方式由你自行决定。可以搜索、分段读取、建立索引、创建草稿或中间 JSON，并逐步编辑 ${outputFile}；不需要按固定顺序读取文件，也不需要在单次模型输出中完成全部目录。
 
 最终需要的结果：
-- 生成一份可以直接保存为技术方案目录的 JSON，目录覆盖技术评分项，并处理 final-review.json 中指出的问题。
-- technical-requirements.md 中如果存在“技术评分项”和“技术评分要求”，一级目录只能基于“技术评分项”生成；“技术评分要求”只能作为评分约束、扣分口径、判定标准或注意事项参考。
-- 如果 technical-requirements.md 未明确分区，也必须按语义区分：要求投标人在技术方案中一一响应、展开编写的具体评分内容才可作为一级目录依据；解释评分、约束评分、定义扣分或判定规则的内容不得作为一级目录。
+- 生成一份可以直接保存为技术方案目录的 JSON，目录覆盖${sourceLabel}，并处理 final-review.json 中指出的问题。
+- ${responseFileMode ? '一级目录只能基于 response-file-requirements.md 中明确属于技术文件、技术响应文件、技术部分或技术方案的目录生成；商务、报价、资格、授权、承诺、偏离表等非技术文件内容不得作为一级目录。' : 'technical-requirements.md 中如果存在“技术评分项”和“技术评分要求”，一级目录只能基于“技术评分项”生成；“技术评分要求”只能作为评分约束、扣分口径、判定标准或注意事项参考。'}
+- ${responseFileMode ? 'technical-requirements.md 只能作为二级及以下目录展开、响应重点和写作约束参考，不得改写已锁定的响应文件技术一级目录。' : '如果 technical-requirements.md 未明确分区，也必须按语义区分：要求投标人在技术方案中一一响应、展开编写的具体评分内容才可作为一级目录依据；解释评分、约束评分、定义扣分或判定规则的内容不得作为一级目录。'}
 - 如果 current-outline.json 为空或不完整，可以直接构建完整目录；如果已有目录可用，优先做定向修复。
 - 如果 requirement-groups.json 存在，最终一级目录和 groups 应保持可校验的一致关系；如果你判断 groups 本身误把评分要求纳入，应同步修正 groups 和目录。
 - 如果 original-outline.json 存在，优先在原目录基础上补充和修复，避免无目的全量重写。
@@ -832,6 +894,9 @@ function buildOutlineAgentRecoveryFiles(context) {
       }, null, 2),
     },
   ];
+  if (context.payload?.responseFileRequirements) {
+    files.push({ path: 'response-file-requirements.md', content: String(context.payload.responseFileRequirements || '') });
+  }
   files.push(
     { path: 'current-outline.json', content: JSON.stringify(context.outline || { outline: [] }, null, 2) },
     { path: 'final-review.json', content: JSON.stringify(context.finalReview, null, 2) },
@@ -1331,7 +1396,7 @@ function getKnowledgePatchSamples(outlineItems) {
   };
 }
 
-function buildKnowledgePatchSharedMessages({ overview, requirements, outline }) {
+function buildKnowledgePatchSharedMessages({ overview, requirements, responseFileRequirements, outline }) {
   const outlineItems = outline?.outline || [];
   const samples = getKnowledgePatchSamples(outlineItems);
   const instructionPrompt = `你是一个严格的标书目录增强专家。请根据参考知识库判断当前技术标目录的非一级目录是否需要优化。
@@ -1346,7 +1411,7 @@ function buildKnowledgePatchSharedMessages({ overview, requirements, outline }) 
 7. 新增目录最多到四级，四级目录不能包含 children。
 8. 不允许输出 bindings、knowledge_item_ids、outline、完整目录、正文、图片、表格或编排计划。
 9. 不要把知识库条目绑定到目录；知识库只作为判断目录是否需要优化的参考材料。
-10. 只处理与项目概述、技术评分要求、现有目录主题强相关且当前目录确实缺失或表述明显不佳的内容。
+10. 只处理与项目概述、技术评分要求、响应文件要求、现有目录主题强相关且当前目录确实缺失或表述明显不佳的内容。
 11. 如果没有确实需要修改或补充的目录，返回 {"updates":[],"additions":[]}。
 
 返回格式：
@@ -1368,6 +1433,7 @@ function buildKnowledgePatchSharedMessages({ overview, requirements, outline }) 
   return [
     { role: 'user', content: `项目概述：\n${overview}` },
     { role: 'user', content: `技术评分要求：\n${requirements}` },
+    ...(responseFileRequirements ? [{ role: 'user', content: `响应文件要求：\n${responseFileRequirements}` }] : []),
     { role: 'user', content: instructionPrompt },
     { role: 'user', content: `当前完整目录 JSON：\n${JSON.stringify(outline, null, 2)}` },
     { role: 'user', content: `可操作目录上下文（每行：id | 层级 | update状态 | add状态 | 标题 | 说明）：\n${formatKnowledgePatchOutlineContext(outlineItems)}` },
@@ -2588,13 +2654,14 @@ async function reviewFinalOutline(aiService, context, log) {
   });
 }
 
-async function runFinalOutlineGate({ aiService, agentService, payload, outline, groups, originalOutline, workflowKind, outlineExpansionMode, log }) {
+async function runFinalOutlineGate({ aiService, agentService, payload, outline, groups, originalOutline, workflowKind, outlineMode, outlineExpansionMode, log }) {
   const context = {
     payload,
     outline,
     groups: groups || [],
     originalOutline,
     workflowKind,
+    outlineMode,
     outlineExpansionMode,
   };
   const repairProgress = {
@@ -2666,6 +2733,21 @@ async function extractRequirementGroups(aiService, payload, suggestions, log) {
     progressLabel: '技术评分大类',
     failureMessage: '模型返回的技术评分大类格式无效',
   });
+  return response.groups || [];
+}
+
+async function extractResponseFileOutlineGroups(aiService, payload, suggestions, log) {
+  const response = await collectJson(aiService, {
+    messages: extractResponseFileOutlineGroupsMessages(payload, suggestions),
+    normalizer: normalizeRequirementGroupsResponse,
+    validator: validateRequirementGroups,
+    progressCallback: (message) => log(message, OUTLINE_PROGRESS.requirementExtractionStart),
+    progressLabel: '响应文件技术目录',
+    failureMessage: '模型返回的响应文件技术目录格式无效',
+  });
+  if (!response.groups?.length) {
+    throw new Error('响应文件要求中未找到明确的技术文件目录，请先核对“响应文件要求”解析结果或关闭该选项。');
+  }
   return response.groups || [];
 }
 
@@ -2795,6 +2877,7 @@ async function expansionComplementWorkflow(aiService, payload, originalOutline, 
 }
 
 async function buildAligned(aiService, payload, groups, suggestions, log, progressRange = { start: OUTLINE_PROGRESS.mainChildrenStart, end: OUTLINE_PROGRESS.mainChildrenEnd }) {
+  const sourceLabel = getTopLevelSourceLabel({ outlineMode: payload?.outlineMode });
   const top = buildTopLevelOutlineFromGroups(groups);
   validateAlignedTopLevelMapping(top, groups);
   const childTotal = top.length;
@@ -2804,10 +2887,10 @@ async function buildAligned(aiService, payload, groups, suggestions, log, progre
     const children = childrenResponse.children || [];
     completedChildren += 1;
     const progress = progressRange.start + Math.round((completedChildren / Math.max(childTotal, 1)) * (progressRange.end - progressRange.start));
-    log(`已完成第 ${index + 1}/${childTotal} 个评分大类的二三级目录：${item.title || '未命名章节'}。`, progress);
+    log(`已完成第 ${index + 1}/${childTotal} 个${sourceLabel}的二三级目录：${item.title || '未命名章节'}。`, progress);
     return { index, item, children };
   };
-  log(`正在先生成第 1/${childTotal} 个评分大类的二三级目录以优化提示词缓存。`, progressRange.start);
+  log(`正在先生成第 1/${childTotal} 个${sourceLabel}的二三级目录以优化提示词缓存。`, progressRange.start);
   const firstResult = await runChild(top[0], 0);
   if (childTotal > 1) {
     log('提示词缓存预热完成，等待 5 秒后并发生成剩余评分大类目录。', progressRange.start);
@@ -2820,11 +2903,46 @@ async function buildAligned(aiService, payload, groups, suggestions, log, progre
   const assembled = childResults
     .sort((left, right) => left.index - right.index)
     .map(({ item, children }) => ({ ...item, ...(children.length ? { children } : {}) }));
-  log('评分项对齐目录生成完成，正在整理目录编号。', progressRange.end);
+  log(`${sourceLabel}对齐目录生成完成，正在整理目录编号。`, progressRange.end);
   const outline = normalizeOutlineResponse({ outline: renumber(assembled) }, new Set());
   validateCompleteOutline(outline);
   validateAlignedTopLevelMapping(outline.outline || [], groups);
   return outline;
+}
+
+async function responseFileWorkflow(aiService, agentService, payload, log) {
+  log('开始提取响应文件要求中的技术文件目录。', OUTLINE_PROGRESS.requirementExtractionStart);
+  const groups = await extractResponseFileOutlineGroups(aiService, payload, undefined, log);
+  log('响应文件技术目录提取完成，正在构建一级目录。', OUTLINE_PROGRESS.requirementExtractionEnd);
+  let outline;
+  try {
+    outline = await buildAligned(aiService, payload, groups, undefined, log);
+  } catch (error) {
+    assertRecoverableOutlineError(error, RECOVERABLE_ALIGNED_OUTLINE_ERRORS);
+    const finalReview = createSyntheticFinalReview('响应文件技术目录生成失败', error);
+    const topLevelOutline = normalizeOutlineResponse({ outline: buildTopLevelOutlineFromGroups(groups) }, new Set());
+    const recovered = await runOutlineAgentRecovery(agentService, {
+      recoveryKind: 'response-file-outline-generation',
+      title: '响应文件技术目录自主生成',
+      payload,
+      outline: topLevelOutline,
+      groups,
+      finalReview,
+      workflowKind: 'technical-plan',
+      outlineMode: 'response-file',
+      outlineExpansionMode: payload?.outlineExpansionMode || 'ai-complement',
+      recoveryReason: finalReview.suggestions.join('；'),
+      startLogMessage: `响应文件技术目录生成失败，已切换到 Agent 补齐完整目录：${getErrorMessage(error)}`,
+      startProgress: OUTLINE_PROGRESS.mainRecoveryStart,
+      agentProgress: OUTLINE_PROGRESS.mainRecoveryStart,
+      validationProgress: OUTLINE_PROGRESS.mainRecoveryValidation,
+      successLogMessage: 'Agent 已完成响应文件技术目录生成，准备进入知识库补目录。',
+      successProgress: OUTLINE_PROGRESS.mainComplete,
+    }, log);
+    return recovered;
+  }
+  log('目录主结果生成完成，准备进入知识库补目录。', OUTLINE_PROGRESS.mainComplete);
+  return { outline, groups };
 }
 
 async function alignedWorkflow(aiService, agentService, payload, log) {
@@ -3146,6 +3264,7 @@ function normalizeWordAdjustedOutlineResult(value, context) {
 }
 
 function buildWordAdjustmentAgentPrompt(context) {
+  const sourceLabel = getTopLevelSourceLabel(context);
   return `请读取 current-outline.json、tender.md、bid.md 和 word-control.json，调整当前技术方案目录的叶子节点数量，并把完整结果写入 ${WORD_ADJUSTMENT_AGENT_OUTPUT_FILE}。
 
 硬性要求：
@@ -3153,7 +3272,7 @@ function buildWordAdjustmentAgentPrompt(context) {
 2. 二级、三级和四级目录可以新增、删除、合并、拆分、重命名或调整层级。
 3. 完整目录整体至少包含三级结构，最大不能超过四级。
 4. 调整后的叶子节点数量必须进入 word-control.json 给出的范围。
-5. 不能通过重复、空泛或近义标题机械凑数，不能破坏技术评分项覆盖和目录专业性。
+5. 不能通过重复、空泛或近义标题机械凑数，不能破坏${sourceLabel}覆盖和目录专业性。
 6. ${LEAF_BRANCH_REQUIREMENT}调整叶子数量时不得产生单叶子分支。
 7. 不得输出正文 content、图片、表格、Mermaid、代码块或解释文字。
 8. 所有节点必须包含非空 id、title、description，title 只写纯标题。
@@ -3165,7 +3284,7 @@ function buildWordAdjustmentAgentFiles(context) {
   return [
     { path: 'current-outline.json', content: JSON.stringify(context.outline, null, 2) },
     { path: 'tender.md', content: String(context.tenderMarkdown || '') },
-    { path: 'bid.md', content: `# 项目概况\n\n${context.payload?.overview || ''}\n\n# 技术评分要求\n\n${context.payload?.requirements || ''}` },
+    { path: 'bid.md', content: `# 项目概况\n\n${context.payload?.overview || ''}\n\n# 技术评分要求\n\n${context.payload?.requirements || ''}\n\n# 响应文件要求\n\n${context.payload?.responseFileRequirements || ''}` },
     {
       path: 'word-control.json',
       content: JSON.stringify({
@@ -3204,13 +3323,14 @@ async function runWordAdjustmentAgent(agentService, context, log) {
 
 function buildSecondReviewAgentPrompt(context) {
   const hasLeafRange = context.wordControl.minimumLeafCount !== null || context.wordControl.maximumLeafCount !== null;
+  const sourceLabel = getTopLevelSourceLabel(context);
   const leafRangeRequirement = hasLeafRange
     ? `\n9. 已设置字数限制：微调后叶子节点数量必须继续保持在 review-context.json 给出的区间内（最少 ${context.wordControl.minimumLeafCount ?? '不限制'}，最多 ${context.wordControl.maximumLeafCount ?? '不限制'}），不得因微调把叶子数量改出区间。`
     : '';
   return `你是严格的技术标目录二审专家。请读取 ${SECOND_REVIEW_OUTLINE_FILE}、tender.md、bid.md 和 review-context.json，审核当前目录并在需要时直接编辑 ${SECOND_REVIEW_OUTLINE_FILE} 完成微调，最后把审核结论写入 ${SECOND_REVIEW_RESULT_FILE}。
 
 审核维度：
-- 技术评分项是否被目录充分覆盖。
+- ${sourceLabel}是否被目录充分覆盖。
 - 目录结构是否合理、层级是否清晰。
 - 是否存在内容重复、近义或含义重叠的小节标题。
 - 完整目录整体至少三级、最大不超过四级。
@@ -3231,7 +3351,7 @@ function buildSecondReviewAgentFiles(context) {
   return [
     { path: SECOND_REVIEW_OUTLINE_FILE, content: JSON.stringify(context.outline, null, 2) },
     { path: 'tender.md', content: String(context.tenderMarkdown || '') },
-    { path: 'bid.md', content: `# 项目概况\n\n${context.payload?.overview || ''}\n\n# 技术评分要求\n\n${context.payload?.requirements || ''}` },
+    { path: 'bid.md', content: `# 项目概况\n\n${context.payload?.overview || ''}\n\n# 技术评分要求\n\n${context.payload?.requirements || ''}\n\n# 响应文件要求\n\n${context.payload?.responseFileRequirements || ''}` },
     {
       path: 'review-context.json',
       content: JSON.stringify({
@@ -3328,7 +3448,7 @@ function getSecondReviewRoundProgress(round) {
   };
 }
 
-async function adjustOutlineForWordControl({ aiService, agentService, workspaceStore, payload, outline, groups, originalOutline, workflowKind, outlineExpansionMode, wordControlOptions, wordControl, log, onStats }) {
+async function adjustOutlineForWordControl({ aiService, agentService, workspaceStore, payload, outline, groups, originalOutline, workflowKind, outlineMode, outlineExpansionMode, wordControlOptions, wordControl, log, onStats }) {
   const lockedTopLevelItems = captureLockedTopLevelItems(outline);
   const baselineOutline = outline;
   const createCandidate = (candidateOutline) => {
@@ -3356,6 +3476,7 @@ async function adjustOutlineForWordControl({ aiService, agentService, workspaceS
         groups,
         originalOutline,
         workflowKind,
+        outlineMode,
         outlineExpansionMode,
         lockedTopLevelItems,
         wordControlOptions,
@@ -3399,6 +3520,7 @@ async function adjustOutlineForWordControl({ aiService, agentService, workspaceS
         groups,
         originalOutline,
         workflowKind,
+        outlineMode,
         outlineExpansionMode,
         lockedTopLevelItems,
         wordControlOptions,
@@ -3496,17 +3618,25 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     throw new Error(`请先完成关键招标文件解析项：${missingRequiredBidAnalysisLabels.join('、')}`);
   }
   const isExpansionWorkflow = storedPlan.workflowKind === 'existing-plan-expansion';
+  const outlineMode = isExpansionWorkflow ? 'aligned' : normalizeOutlineMode(payload, storedPlan);
+  const responseFileTask = storedPlan.bidAnalysisTasks?.responseFileRequirements;
+  const responseFileRequirements = responseFileTask?.status === 'success' ? String(responseFileTask.content || '').trim() : '';
+  if (outlineMode === 'response-file' && !responseFileRequirements) {
+    throw new Error('请先在招标文件解析中勾选并完成“响应文件要求”，再按响应文件要求生成一级目录。');
+  }
   const outlineExpansionMode = isExpansionWorkflow ? normalizeOutlineExpansionMode(payload, storedPlan) : 'ai-complement';
   const baseTaskPayload = {
     ...payload,
     overview,
     requirements,
+    responseFileRequirements,
+    outlineMode,
     outlineExpansionMode,
     wordControlOptions,
     reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
   };
   let technicalPlan = workspaceStore.updateTechnicalPlan({
-    outlineMode: 'aligned',
+    outlineMode,
     outlineExpansionMode,
     outlineWordControlOptions: wordControlOptions,
     referenceKnowledgeDocumentIds,
@@ -3582,7 +3712,9 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
       outline = await expansionComplementWorkflow(aiService, taskPayload, oldOutline, log);
     }
   } else {
-    const alignedResult = await alignedWorkflow(aiService, agentService, taskPayload, log);
+    const alignedResult = outlineMode === 'response-file'
+      ? await responseFileWorkflow(aiService, agentService, taskPayload, log)
+      : await alignedWorkflow(aiService, agentService, taskPayload, log);
     outline = alignedResult.outline;
     groups = alignedResult.groups || [];
   }
@@ -3602,6 +3734,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     groups,
     originalOutline: oldOutline,
     workflowKind: isExpansionWorkflow ? 'existing-plan-expansion' : 'technical-plan',
+    outlineMode,
     outlineExpansionMode,
     log,
   });
@@ -3626,6 +3759,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
         groups,
         originalOutline: oldOutline,
         workflowKind: isExpansionWorkflow ? 'existing-plan-expansion' : 'technical-plan',
+        outlineMode,
         outlineExpansionMode,
         wordControlOptions,
         wordControl,
