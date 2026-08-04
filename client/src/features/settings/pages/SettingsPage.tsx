@@ -50,7 +50,7 @@ function normalizeUpdateChannel(value?: string): UpdateChannel {
   if (value === 'cloudflare' || value === 'atomgit') {
     return value;
   }
-  return 'github';
+  return 'atomgit';
 }
 
 function normalizeAgentModeScenarios(value?: Partial<AgentModeScenariosConfig>): AgentModeScenariosConfig {
@@ -552,7 +552,7 @@ const initialState: SettingsPageState = {
   general: {
     developer_mode: false,
     developer_token_stats_auto_open: false,
-    update_channel: 'github',
+    update_channel: 'atomgit',
     gpu_hardware_acceleration_enabled: true,
     gpu_hardware_acceleration_configured: true,
   },

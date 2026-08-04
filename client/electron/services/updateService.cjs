@@ -39,12 +39,12 @@ function normalizeUpdateChannel(value) {
   if (value === 'cloudflare' || value === 'atomgit') {
     return value;
   }
-  return 'github';
+  return 'atomgit';
 }
 
 function getUpdateChannel(configStore) {
   if (!configStore) {
-    return 'github';
+    return 'atomgit';
   }
   const config = configStore.load();
   return normalizeUpdateChannel(config.update_channel);
