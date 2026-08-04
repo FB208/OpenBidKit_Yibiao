@@ -1266,7 +1266,9 @@ function OutlineEditPage({
                 <>
                   <h3>{selectedItem.title}</h3>
                   <p>{selectedItem.description || '无描述'}</p>
-                  {selectedItem.source_requirement_title && <small>来源评分项：{selectedItem.source_requirement_title}</small>}
+                  {selectedItem.source_requirement_title && (
+                    <small>{outlineMode === 'response-file' ? '来源响应文件目录' : '来源评分项'}：{selectedItem.source_requirement_title}</small>
+                  )}
                   <div className="outline-detail-actions">
                     <button type="button" className="primary-action" onClick={() => startEditing(selectedItem)} disabled={outlineMutationLocked || sorting}>编辑</button>
                     <button type="button" className="secondary-action" onClick={() => { void addChildItem(selectedItem.id); }} disabled={outlineMutationLocked || sorting}>添加子目录</button>

@@ -874,10 +874,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       return startManagedTask('bid-analysis', payload, runBidAnalysisTask);
     },
     startOutlineGeneration(payload) {
-      const outlineMode = payload?.outline_mode === 'response-file' || payload?.outlineMode === 'response-file'
-        ? 'response-file'
-        : 'aligned';
-      return startManagedTask('outline-generation', payload, runOutlineGenerationTask, {
+      const outlineMode = payload?.outline_mode === 'response-file' ? 'response-file' : 'aligned';
+      const taskPayload = { ...payload, outline_mode: outlineMode };
+      return startManagedTask('outline-generation', taskPayload, runOutlineGenerationTask, {
         outlineMode,
         outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
         outlineWordControlOptions: payload?.word_control_options,
