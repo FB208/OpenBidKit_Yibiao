@@ -1,5 +1,5 @@
 import * as Toast from '@radix-ui/react-toast';
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useReducer, type ReactNode } from 'react';
 
 export type ToastType = 'success' | 'error' | 'info';
 
@@ -31,6 +31,15 @@ interface ToastContextValue {
   dismissToast: (id: number) => void;
 }
 
+interface ToastState {
+  items: ToastItem[];
+  sessionId: number;
+}
+
+type ToastStateAction =
+  | { type: 'add'; item: ToastItem }
+  | { type: 'dismiss'; id: number };
+
 const ToastContext = createContext<ToastContextValue | null>(null);
 
 let toastId = 0;
@@ -44,18 +53,36 @@ const toastTitleMap: Record<ToastType, string> = {
 const getToastDuration = (type: ToastType) => (type === 'error' ? 5000 : 2000);
 const persistentToastDuration = 2147483647;
 
+const initialToastState: ToastState = {
+  items: [],
+  sessionId: 0,
+};
+
+// 管理提示列表，并在新一批提示开始时刷新 Radix 提示层，清除上一批遗留的暂停状态。
+function toastReducer(state: ToastState, action: ToastStateAction): ToastState {
+  if (action.type === 'add') {
+    return {
+      items: [...state.items, action.item],
+      sessionId: state.items.length === 0 ? state.sessionId + 1 : state.sessionId,
+    };
+  }
+
+  const items = state.items.filter((item) => item.id !== action.id);
+  return items.length === state.items.length ? state : { ...state, items };
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [{ items: toasts, sessionId }, dispatch] = useReducer(toastReducer, initialToastState);
 
   const dismissToast = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+    dispatch({ type: 'dismiss', id });
   }, []);
 
   const showToast = useCallback((message: string, type: ToastType = 'info', options: ToastOptions = {}) => {
     const id = ++toastId;
-    setToasts((prev) => [
-      ...prev,
-      {
+    dispatch({
+      type: 'add',
+      item: {
         id,
         title: options.title,
         message,
@@ -63,7 +90,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         duration: options.persistent ? persistentToastDuration : options.duration || getToastDuration(type),
         actions: options.actions,
       },
-    ]);
+    });
     return id;
   }, []);
 
@@ -94,8 +121,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   return (
     <ToastContext.Provider value={value}>
-      <Toast.Provider swipeDirection="right">
-        {children}
+      {children}
+      <Toast.Provider key={sessionId} swipeDirection="right">
         {toasts.map((item) => (
           <Toast.Root
             className={`app-toast is-${item.type}${item.actions?.length ? ' has-actions' : ''}`}
