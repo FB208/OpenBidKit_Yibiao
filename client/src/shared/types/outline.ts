@@ -9,7 +9,7 @@ export interface OutlineItem {
   content?: string;
 }
 
-export type OutlineMode = 'aligned';
+export type OutlineMode = 'aligned' | 'response-file';
 export type OutlineExpansionMode = 'original-only' | 'ai-complement';
 
 export interface OutlineWordControlOptions {

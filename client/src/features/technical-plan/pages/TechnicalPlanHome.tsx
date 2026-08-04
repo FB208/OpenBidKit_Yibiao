@@ -1036,6 +1036,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
   const saveOutlineConfig = async (config: {
     referenceKnowledgeDocumentIds: string[];
+    outlineMode: TechnicalPlanState['outlineMode'];
     outlineExpansionMode: TechnicalPlanState['outlineExpansionMode'];
     wordControlOptions: OutlineWordControlOptions;
   }) => {
@@ -1043,7 +1044,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     setState((prev) => ({
       ...prev,
       ...saved,
-      outlineMode: 'aligned',
+      outlineMode: config.outlineMode,
       outlineExpansionMode: config.outlineExpansionMode,
       outlineWordControlOptions: config.wordControlOptions,
       referenceKnowledgeDocumentIds: config.referenceKnowledgeDocumentIds,
@@ -1167,6 +1168,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           workflowKind={workflowKind}
           projectOverview={state.projectOverview}
           techRequirements={state.techRequirements}
+          outlineMode={state.outlineMode || 'aligned'}
           outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
           outlineWordControlOptions={state.outlineWordControlOptions}
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
