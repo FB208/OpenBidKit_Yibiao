@@ -98,7 +98,7 @@ export function formatOutlineNumber(id: string, heading: HeadingNumberingConfig 
   return String(heading.numbering_template || '')
     .replace(/\{tail(\d+)\}/g, (_, level: string) => {
       const startLevel = Number(level);
-      if (!Number.isFinite(startLevel) || startLevel < 1 || startLevel > 9 || startLevel > parts.length) return '';
+      if (!Number.isFinite(startLevel) || startLevel < 1 || startLevel > 6 || startLevel > parts.length) return '';
       return parts.slice(startLevel - 1).join('.');
     })
     .replace(/\{zh\}/g, cn)

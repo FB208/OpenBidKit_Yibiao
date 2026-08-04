@@ -141,7 +141,7 @@ export interface ExportFormatConfig {
   page: PageSetupConfig;
   heading_level1_page_break_before: boolean;
   heading_border: HeadingBorderConfig;
-  headings: HeadingStyleConfig[];  // 索引 0=L1（章），8=L9
+  headings: HeadingStyleConfig[];  // 索引 0=L1（章），5=L6
   body_text: BodyTextStyleConfig;
   table: TableStyleConfig;
   image: ImageStyleConfig;
@@ -385,7 +385,7 @@ const DEFAULT_IMAGE_STYLE: ImageStyleConfig = {
   caption_italic: false,
 };
 
-export const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#eef5ff', '#f3f7ff', '#f8fbff', '#fbfdff', '#ffffff', '#ffffff', '#ffffff', '#ffffff', '#ffffff'] as const;
+export const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#eef5ff', '#f3f7ff', '#f8fbff', '#fbfdff', '#ffffff', '#ffffff'] as const;
 
 const DEFAULT_HEADING_BORDER: HeadingBorderConfig = {
   enabled: false,
@@ -414,12 +414,6 @@ export const DEFAULT_EXPORT_FORMAT: ExportFormatConfig = {
     { font: '黑体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 5, spacing_after_pt: 5, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '{tail}' },
     // L6: 1.1.1.1 — 宋体 小四
     { font: '宋体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '{tail}' },
-    // L7: 1.1.1.1.1 — 宋体 小四
-    { font: '宋体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '{tail}' },
-    // L8: 1.1.1.1.1.1 — 宋体 小四
-    { font: '宋体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '{tail}' },
-    // L9: 1.1.1.1.1.1.1 — 宋体 小四
-    { font: '宋体', size: '小四', alignment: '两端对齐', bold: false, text_color: '#243048', spacing_before_pt: 0, spacing_after_pt: 0, first_line_indent_chars: 0, line_spacing: 1, numbering_format: 'custom', numbering_template: '{tail}' },
   ],
   body_text: { ...DEFAULT_BODY_TEXT },
   table: {
@@ -442,7 +436,4 @@ export const HEADING_LEVEL_LABELS = [
   '四级标题',
   '五级标题',
   '六级标题',
-  '七级标题',
-  '八级标题',
-  '九级标题',
 ];

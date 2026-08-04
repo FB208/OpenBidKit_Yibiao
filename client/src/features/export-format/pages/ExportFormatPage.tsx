@@ -234,7 +234,7 @@ function FontPicker({ value, options, onChange }: FontPickerProps) {
 }
 
 function headingNumberExample(index: number, heading: HeadingStyleConfig): string {
-  const sampleIds = ['1', '1.1', '1.1.1', '1.1.1.1', '1.1.1.1.1', '1.1.1.1.1.1', '1.1.1.1.1.1.1', '1.1.1.1.1.1.1.1', '1.1.1.1.1.1.1.1.1'];
+  const sampleIds = ['1', '1.1', '1.1.1', '1.1.1.1', '1.1.1.1.1', '1.1.1.1.1.1'];
   return formatOutlineNumber(sampleIds[index] || '1', heading);
 }
 
