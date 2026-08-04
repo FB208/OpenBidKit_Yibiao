@@ -270,3 +270,4 @@ donotsync/
 testfiles/
 doc/
 logs/
+client/package-lock.json
