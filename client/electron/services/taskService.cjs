@@ -582,7 +582,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         ? rejectionCheckStore
         : duplicateCheckStore;
     const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId) : aiService;
-    const runnerAgentService = agentService.bindSelectedRuntime(
+    const runnerAgentService = agentService.bindTaskContext(
       () => createAgentUserTaskContext(type, definition, payload, currentTask),
     );
     runner({ aiService: runnerAiService, agentService: runnerAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {

@@ -22,10 +22,8 @@ frontend/build/
 backend/static/
 client/release/
 
-# OpenCode binary 由本地脚本或 GitHub Actions 下载生成，只保留版本文件
-client/.tmp-opencode-download/
-client/vendor/opencode/*
-!client/vendor/opencode/VERSION
+# 智能体命令工具下载临时目录
+client/.tmp-agent-tools-download/
 
 # 临时和缓存文件
 *.tmp

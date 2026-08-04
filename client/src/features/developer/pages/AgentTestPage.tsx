@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AgentRunResult, AgentRuntimeDescriptor, AgentRuntimeStatus, AgentSelfCheckResult } from '../../../shared/types';
+import type { AgentRunResult, AgentRuntimeStatus, AgentSelfCheckResult } from '../../../shared/types';
 
 type TestStepStatus = 'idle' | 'running' | 'success' | 'error';
 
@@ -43,7 +43,7 @@ const SAMPLE_CHECKLIST = `# 当前固定检查清单
 function createInitialSteps(): TestStep[] {
   return [
     { id: 'config', label: '读取当前文本模型配置', status: 'idle' },
-    { id: 'agent', label: '调用目标智能体运行时', status: 'idle' },
+    { id: 'agent', label: '调用 Pi Agent', status: 'idle' },
     { id: 'output', label: '校验 agent-result.md 输出', status: 'idle' },
   ];
 }
@@ -66,8 +66,6 @@ function getBridge() {
 }
 
 function AgentTestPage() {
-  const [runtimes, setRuntimes] = useState<AgentRuntimeDescriptor[]>([]);
-  const [runtimeId, setRuntimeId] = useState('');
   const [runtimeStatus, setRuntimeStatus] = useState<AgentRuntimeStatus | null>(null);
   const [selfCheckResult, setSelfCheckResult] = useState<AgentSelfCheckResult | null>(null);
   const [task, setTask] = useState(DEFAULT_TASK);
@@ -82,33 +80,11 @@ function AgentTestPage() {
     try {
       bridge = getBridge();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '读取智能体运行时失败');
-      return () => { disposed = true; };
-    }
-    void bridge.agent.listRuntimes()
-      .then((items) => {
-        if (disposed) return;
-        setRuntimes(items);
-        setRuntimeId((current) => current || items.find((item) => item.is_default)?.id || items[0]?.id || '');
-      })
-      .catch((caught) => {
-        if (!disposed) setError(caught instanceof Error ? caught.message : '读取智能体运行时失败');
-      });
-    return () => { disposed = true; };
-  }, []);
-
-  useEffect(() => {
-    if (!runtimeId) return undefined;
-    let disposed = false;
-    let bridge: ReturnType<typeof getBridge>;
-    try {
-      bridge = getBridge();
-    } catch (caught) {
       setError(caught instanceof Error ? caught.message : '读取智能体状态失败');
       return () => { disposed = true; };
     }
     const refreshStatus = () => {
-      void bridge.agent.getStatus(runtimeId)
+      void bridge.agent.getStatus()
         .then((status) => {
           if (!disposed) setRuntimeStatus(status);
         })
@@ -116,26 +92,16 @@ function AgentTestPage() {
     };
     refreshStatus();
     const unsubscribe = bridge.agent.onStatus((status) => {
-      if (status.runtime_id === runtimeId) setRuntimeStatus(status);
-      else refreshStatus();
+      setRuntimeStatus(status);
     });
     return () => {
       disposed = true;
       unsubscribe();
     };
-  }, [runtimeId]);
-
-  const selectRuntime = (nextRuntimeId: string) => {
-    setRuntimeId(nextRuntimeId);
-    setRuntimeStatus(null);
-    setSelfCheckResult(null);
-    setResult(null);
-    setError('');
-    setSteps(createInitialSteps());
-  };
+  }, []);
 
   const runTest = async () => {
-    if (runningAction || !runtimeId) return;
+    if (runningAction) return;
     setRunningAction('test');
     setError('');
     setResult(null);
@@ -153,7 +119,7 @@ function AgentTestPage() {
         detail: `${config.text_model_provider} / ${config.model_name}`,
       }));
 
-      const runtimeName = runtimes.find((runtime) => runtime.id === runtimeId)?.display_name || runtimeId;
+      const runtimeName = 'Pi Agent';
       setSteps((previous) => updateStep(previous, 'agent', { status: 'running', detail: `正在使用 ${runtimeName} 执行任务` }));
       const agentResult = await bridge.agent.run({
         title: `${runtimeName} 开发者链路测试`,
@@ -164,7 +130,7 @@ function AgentTestPage() {
           { path: 'current-checklist.md', content: SAMPLE_CHECKLIST },
         ],
         timeout_ms: 10 * 60 * 1000,
-      }, runtimeId);
+      });
       setResult(agentResult);
       setSteps((previous) => updateStep(previous, 'agent', {
         status: 'success',
@@ -193,12 +159,12 @@ function AgentTestPage() {
   };
 
   const runSelfCheck = async () => {
-    if (runningAction || !runtimeId) return;
+    if (runningAction) return;
     setRunningAction('self-check');
     setError('');
     setSelfCheckResult(null);
     try {
-      setSelfCheckResult(await getBridge().agent.selfCheck(runtimeId));
+      setSelfCheckResult(await getBridge().agent.selfCheck());
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '智能体自检失败');
     } finally {
@@ -207,11 +173,11 @@ function AgentTestPage() {
   };
 
   const restartRuntime = async () => {
-    if (runningAction || !runtimeId) return;
+    if (runningAction) return;
     setRunningAction('restart');
     setError('');
     try {
-      setRuntimeStatus(await getBridge().agent.restart('developer-page', runtimeId));
+      setRuntimeStatus(await getBridge().agent.restart('developer-page'));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '智能体运行时重启失败');
     } finally {
@@ -219,32 +185,29 @@ function AgentTestPage() {
     }
   };
 
-  const selectedRuntime = runtimes.find((runtime) => runtime.id === runtimeId);
   const busy = Boolean(runningAction);
 
   return (
     <div style={{ height: '100%', minHeight: 0, overflow: 'auto' }}>
       <div style={{ padding: 24, maxWidth: 1120, margin: '0 auto' }}>
         <header style={{ marginBottom: 24 }}>
-          <h1 style={{ margin: 0, fontSize: 26 }}>智能体链路测试</h1>
+          <h1 style={{ margin: 0, fontSize: 26 }}>Pi Agent 链路测试</h1>
           <p style={{ marginTop: 8, color: '#64748b', lineHeight: 1.7 }}>
-            使用相同输入检查不同智能体运行时的状态、自检、任务输出和诊断，不写入业务数据库。
+            检查 Pi Agent 的运行状态、自检、任务输出和诊断，不写入业务数据库。
           </p>
         </header>
 
         <section style={{ display: 'grid', gap: 16 }}>
           <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, background: '#fff' }}>
-            <h2 style={{ marginTop: 0, fontSize: 18 }}>目标运行时</h2>
-            <select value={runtimeId} onChange={(event) => selectRuntime(event.target.value)} disabled={busy} style={{ minWidth: 260, padding: '9px 12px', border: '1px solid #cbd5e1', borderRadius: 8 }}>
-              {runtimes.map((runtime) => <option value={runtime.id} key={runtime.id}>{runtime.display_name}</option>)}
-            </select>
-            <p style={{ margin: '10px 0 0', color: '#64748b' }}>{selectedRuntime?.description || '正在读取运行时信息'}</p>
+            <h2 style={{ marginTop: 0, fontSize: 18 }}>目标智能体</h2>
+            <strong>Pi Agent</strong>
+            <p style={{ margin: '10px 0 0', color: '#64748b' }}>客户端唯一的智能体执行引擎。</p>
           </div>
 
           <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, background: '#fff' }}>
             <h2 style={{ marginTop: 0, fontSize: 18 }}>运行状态</h2>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-              <span>运行时：<strong>{runtimeStatus?.runtime_name || selectedRuntime?.display_name || '-'}</strong></span>
+              <span>智能体：<strong>{runtimeStatus?.runtime_name || 'Pi Agent'}</strong></span>
               <span>阶段：<strong>{runtimeStatus?.phase || '-'}</strong></span>
               <span>健康：<strong>{runtimeStatus ? String(runtimeStatus.healthy) : '-'}</strong></span>
               <span>模型队列：<strong>{runtimeStatus?.proxy ? `${runtimeStatus.proxy.active}/${runtimeStatus.proxy.queued}/${runtimeStatus.proxy.limit}` : '-'}</strong></span>
@@ -257,10 +220,10 @@ function AgentTestPage() {
               </p>
             )}
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-              <button type="button" onClick={() => { void runSelfCheck(); }} disabled={busy || !runtimeId} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff' }}>
+              <button type="button" onClick={() => { void runSelfCheck(); }} disabled={busy} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff' }}>
                 {runningAction === 'self-check' ? '自检中...' : '运行自检'}
               </button>
-              <button type="button" onClick={() => { void restartRuntime(); }} disabled={busy || !runtimeId} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff' }}>
+              <button type="button" onClick={() => { void restartRuntime(); }} disabled={busy} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff' }}>
                 {runningAction === 'restart' ? '重启中...' : '手动重启'}
               </button>
             </div>
@@ -277,7 +240,7 @@ function AgentTestPage() {
           <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, background: '#fff' }}>
             <h2 style={{ marginTop: 0, fontSize: 18 }}>测试任务</h2>
             <textarea value={task} onChange={(event) => setTask(event.target.value)} disabled={busy} style={{ width: '100%', minHeight: 180, resize: 'vertical', border: '1px solid #cbd5e1', borderRadius: 8, padding: 12, fontFamily: 'monospace', lineHeight: 1.6 }} />
-            <button type="button" onClick={() => { void runTest(); }} disabled={busy || !runtimeId} style={{ marginTop: 16, padding: '10px 16px', border: 0, borderRadius: 8, background: busy ? '#94a3b8' : '#2563eb', color: '#fff' }}>
+            <button type="button" onClick={() => { void runTest(); }} disabled={busy} style={{ marginTop: 16, padding: '10px 16px', border: 0, borderRadius: 8, background: busy ? '#94a3b8' : '#2563eb', color: '#fff' }}>
               {runningAction === 'test' ? '测试中...' : '运行完整链路测试'}
             </button>
           </div>

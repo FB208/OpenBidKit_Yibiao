@@ -27,6 +27,13 @@ const DEFAULT_PROVIDER_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_RETRIES = 3;
 const STATUS_TICK_MS = 1000;
 const SELF_CHECK_OUTPUT_FILE = 'agent-self-check-result.json';
+const PI_RUNTIME_ID = 'pi';
+const PI_RUNTIME_NAME = 'Pi Agent';
+const PI_RUNTIME = Object.freeze({
+  id: PI_RUNTIME_ID,
+  displayName: PI_RUNTIME_NAME,
+  description: '使用内嵌 Pi SDK 智能体链路。',
+});
 
 function nowIso() {
   return new Date().toISOString();
@@ -182,10 +189,11 @@ function createRuntimeDiagnostics(limit = 500) {
   };
 }
 
-function createPiRuntimeService({ app, configStore, runtime, aiService }) {
-  const runtimeId = runtime.id;
-  const runtimeName = runtime.displayName;
-  let environment = preparePiEnvironment(app, runtimeId);
+function createPiRuntimeService({ app, configStore, aiService }) {
+  const runtime = PI_RUNTIME;
+  const runtimeId = PI_RUNTIME_ID;
+  const runtimeName = PI_RUNTIME_NAME;
+  let environment = preparePiEnvironment(app);
   const { layout } = environment;
   const diagnostics = createRuntimeDiagnostics(2000);
   const listeners = new Set();
@@ -560,7 +568,7 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
         },
       };
       await writeJsonAsync(path.join(archive.taskDir, 'result.json'), result);
-      trackAgentRuntime(app, configStore, runtimeId, 'success', { retryCount });
+      trackAgentRuntime(app, configStore, 'success', { retryCount });
       return result;
     } catch (error) {
       let output = { path: '', content: '' };
@@ -586,7 +594,7 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
           error: serializeDiagnosticError(error),
         };
       }
-      trackAgentRuntime(app, configStore, runtimeId, 'failed', { retryCount: retryAttempts.length });
+      trackAgentRuntime(app, configStore, 'failed', { retryCount: retryAttempts.length });
       throw error;
     } finally {
       unsubscribe?.();
@@ -714,7 +722,7 @@ function createPiRuntimeService({ app, configStore, runtime, aiService }) {
             pi_environment: ensureLoopbackNoProxy(environment.env),
           };
         } else if (id === 'rebuild-pi-tool-environment') {
-          environment = preparePiEnvironment(app, runtimeId);
+          environment = preparePiEnvironment(app);
           detail = { runtime_root: environment.layout.runtimeRoot };
         } else if (id === 'reset-pi-self-check-workspace') {
           clearDirectory(layout.workspaceDir);

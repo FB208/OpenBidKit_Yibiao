@@ -5,7 +5,7 @@ const { execFileSync } = require('node:child_process');
 const AdmZip = require('adm-zip');
 
 const ROOT = path.resolve(__dirname, '..');
-const VENDOR_ROOT = path.join(ROOT, 'vendor', 'opencode-tools');
+const VENDOR_ROOT = path.join(ROOT, 'vendor', 'agent-tools');
 
 const TOOL_SOURCES = {
   rg: {
@@ -56,7 +56,7 @@ function readArg(name, fallback = '') {
 
 function requestJson(url) {
   return new Promise((resolve, reject) => {
-    const headers = { 'User-Agent': 'yibiao-opencode-tools-preparer', Accept: 'application/vnd.github+json' };
+    const headers = { 'User-Agent': 'yibiao-agent-tools-preparer', Accept: 'application/vnd.github+json' };
     if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
     https.get(url, { headers }, (res) => {
       let body = '';
@@ -78,14 +78,14 @@ function downloadFile(url, targetPath) {
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     const file = fs.createWriteStream(targetPath);
     const request = (currentUrl, redirectCount = 0) => {
-      https.get(currentUrl, { headers: { 'User-Agent': 'yibiao-opencode-tools-preparer' } }, (res) => {
+      https.get(currentUrl, { headers: { 'User-Agent': 'yibiao-agent-tools-preparer' } }, (res) => {
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
-          if (redirectCount > 5) return reject(new Error('下载 OpenCode tools 重定向过多'));
+          if (redirectCount > 5) return reject(new Error('下载智能体命令工具重定向过多'));
           request(new URL(res.headers.location, currentUrl).toString(), redirectCount + 1);
           return;
         }
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          reject(new Error(`下载 OpenCode tools 失败：HTTP ${res.statusCode}`));
+          reject(new Error(`下载智能体命令工具失败：HTTP ${res.statusCode}`));
           return;
         }
         res.pipe(file);
@@ -171,7 +171,7 @@ async function main() {
     throw new Error(`第一版只支持 win32-x64、darwin-x64、darwin-arm64，当前为 ${key}`);
   }
 
-  const tmpRoot = path.join(ROOT, '.tmp-opencode-tools-download', key);
+  const tmpRoot = path.join(ROOT, '.tmp-agent-tools-download', key);
   const binDir = path.join(VENDOR_ROOT, key, 'bin');
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   fs.rmSync(VENDOR_ROOT, { recursive: true, force: true });
@@ -191,7 +191,7 @@ async function main() {
   }, null, 2), 'utf-8');
   fs.writeFileSync(path.join(VENDOR_ROOT, 'VERSION'), tools.map((item) => `${item.command}=${item.version}`).join('\n') + '\n', 'utf-8');
   fs.rmSync(tmpRoot, { recursive: true, force: true });
-  console.log(`Prepared OpenCode tools: ${binDir}`);
+  console.log(`Prepared Agent tools: ${binDir}`);
 }
 
 main().catch((error) => { console.error(error?.stack || error?.message || String(error)); process.exit(1); });

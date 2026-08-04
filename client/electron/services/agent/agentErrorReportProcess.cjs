@@ -114,49 +114,6 @@ function collectWorkspaceFiles(rootDir, configuredSecrets) {
   return files;
 }
 
-function parseJsonObject(raw) {
-  try {
-    const value = JSON.parse(String(raw || ''));
-    return value && typeof value === 'object' ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-// OpenCode 会话数据库只在独立进程读取，避免主进程同步扫描历史消息。
-function readOpenCodeSession(reference = {}) {
-  const sessionId = String(reference.session_id || '').trim();
-  const databasePath = String(reference.database_path || '').trim();
-  if (!sessionId || !databasePath || !fs.existsSync(databasePath)) return reference;
-  let db = null;
-  try {
-    const Database = require('better-sqlite3');
-    db = new Database(databasePath, { readonly: true, fileMustExist: true });
-    const messages = db.prepare('SELECT id, data FROM message ORDER BY id ASC').all()
-      .map((row) => ({ id: row.id, data: parseJsonObject(row.data) || row.data }))
-      .filter((row) => [row.data?.sessionID, row.data?.session_id].includes(sessionId));
-    const events = db.prepare(`
-      SELECT seq, type, data
-      FROM event
-      WHERE aggregate_id = ?
-      ORDER BY seq ASC
-    `).all(sessionId).map((row) => ({ seq: row.seq, type: row.type, data: parseJsonObject(row.data) || row.data }));
-    return { session_id: sessionId, database_path: databasePath, messages, events };
-  } catch (error) {
-    return { ...reference, error: error?.message || String(error) };
-  } finally {
-    try { db?.close?.(); } catch {}
-  }
-}
-
-function enrichRuntimeDiagnostics(job) {
-  const diagnostics = job.error?.agentDiagnostics && typeof job.error.agentDiagnostics === 'object'
-    ? { ...job.error.agentDiagnostics }
-    : {};
-  if (job.runtimeId === 'opencode' && diagnostics.session) diagnostics.session = readOpenCodeSession(diagnostics.session);
-  return { ...job.error, agentDiagnostics: diagnostics };
-}
-
 function base64UrlJson(value) {
   return Buffer.from(JSON.stringify(value), 'utf-8').toString('base64url');
 }
@@ -185,7 +142,7 @@ function createReportMeta(job, error, originalBytes, compressedBytes, configured
 // 独立进程完成完整诊断包构造、压缩和上传。
 async function runReport(job) {
   const configuredSecrets = [...collectConfiguredSecrets(job.config)].filter(Boolean).sort((left, right) => right.length - left.length);
-  const error = enrichRuntimeDiagnostics(job);
+  const error = job.error;
   const report = {
     schema_version: job.schemaVersion,
     report_id: job.reportId,

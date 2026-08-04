@@ -3,7 +3,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { DetailHelpLink, FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AgentModeScenariosConfig, AgentRuntimeDescriptor, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'components' | 'agent' | 'about';
@@ -20,11 +20,11 @@ const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
 ];
 
 const agentSelfCheckStatusMeta: Record<AgentSelfCheckUiStatus, { label: string; description: string }> = {
-  untested: { label: '未检测', description: '点击自检后，会验证当前已保存运行时的环境、工具、文本模型和输出链路。' },
-  checking: { label: '检测中', description: '正在检查运行环境、工具链与极简智能体任务。' },
-  normal: { label: '正常', description: '当前智能体运行时和关键集成能力已通过自检。' },
-  busy: { label: '忙碌', description: '智能体正在处理其他任务，本次自检已跳过。' },
-  error: { label: '异常', description: '智能体链路自检失败，请查看下方错误详情。' },
+  untested: { label: '未检测', description: '点击自检后，会验证 Pi Agent 的环境、工具、文本模型和输出链路。' },
+  checking: { label: '检测中', description: '正在检查 Pi Agent 运行环境、工具链与极简任务。' },
+  normal: { label: '正常', description: 'Pi Agent 和关键集成能力已通过自检。' },
+  busy: { label: '忙碌', description: 'Pi Agent 正在处理其他任务，本次自检已跳过。' },
+  error: { label: '异常', description: 'Pi Agent 链路自检失败，请查看下方错误详情。' },
 };
 
 const agentDiagnosticStatusMeta: Record<AgentSelfCheckStepStatus, { label: string; description: string }> = {
@@ -547,7 +547,6 @@ const initialState: SettingsPageState = {
     mermaid_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
     html_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
   },
-  agentRuntime: '',
   agentModeScenarios: { ...defaultAgentModeScenarios },
   general: {
     developer_mode: false,
@@ -583,7 +582,6 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [updateError, setUpdateError] = useState('');
   const [licenseStatus, setLicenseStatus] = useState<LicenseRuntimeStatus | null>(null);
   const [offlineLicenseDialogOpen, setOfflineLicenseDialogOpen] = useState(false);
-  const [agentRuntimes, setAgentRuntimes] = useState<AgentRuntimeDescriptor[]>([]);
   const [agentSelfCheckStatus, setAgentSelfCheckStatus] = useState<AgentSelfCheckUiStatus>('untested');
   const [agentSelfCheckResult, setAgentSelfCheckResult] = useState<AgentSelfCheckResult | null>(null);
   const [exportingAgentSelfCheckReport, setExportingAgentSelfCheckReport] = useState(false);
@@ -591,9 +589,6 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
   useEffect(() => {
     void loadTextConfig();
-    void window.yibiao?.agent.listRuntimes()
-      .then((runtimes) => setAgentRuntimes(runtimes || []))
-      .catch(() => setAgentRuntimes([]));
     void window.yibiao?.getVersion().then(setAppVersion);
     void window.yibiao?.license?.getStatus().then(setLicenseStatus).catch(() => setLicenseStatus(null));
 
@@ -645,7 +640,6 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         imageModel: activeImageProfile,
         imageModelProfiles,
         components: normalizeComponentsState(config.components),
-        agentRuntime: config.agent_runtime,
         agentModeScenarios: normalizeAgentModeScenarios(config.agent_mode_scenarios),
         general: {
           developer_mode: Boolean(config.developer_mode),
@@ -673,16 +667,12 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     [state.imageModel.provider]: imageProfileFromState(state.imageModel),
   });
 
-  const createClientConfig = (options: { includeAgentState?: boolean } = {}): ClientConfig => {
+  const createClientConfig = (options: { includeAgentScenarios?: boolean } = {}): ClientConfig => {
     const textModelProfiles = getCurrentTextModelProfiles();
     const activeTextProfile = textModelProfiles[state.textModel.provider]
       || normalizeTextModelProfile(state.textModel.provider);
     const imageModelProfiles = getCurrentImageModelProfiles();
     const activeImageProfile = imageModelProfiles[state.imageModel.provider];
-    const persistedAgentRuntime = savedConfig?.agent_runtime
-      || state.agentRuntime
-      || agentRuntimes.find((runtime) => runtime.is_default)?.id
-      || '';
     const persistedAgentModeScenarios = savedConfig
       ? normalizeAgentModeScenarios(savedConfig.agent_mode_scenarios)
       : state.agentModeScenarios;
@@ -702,8 +692,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       image_model: activeImageProfile,
       image_model_profiles: imageModelProfiles,
       components: componentsFromState(state.components),
-      agent_runtime: options.includeAgentState ? state.agentRuntime : persistedAgentRuntime,
-      agent_mode_scenarios: options.includeAgentState ? state.agentModeScenarios : persistedAgentModeScenarios,
+      agent_mode_scenarios: options.includeAgentScenarios ? state.agentModeScenarios : persistedAgentModeScenarios,
       update_channel: state.general.update_channel,
       gpu_hardware_acceleration_enabled: state.general.gpu_hardware_acceleration_enabled,
       gpu_hardware_acceleration_configured: state.general.gpu_hardware_acceleration_configured,
@@ -867,12 +856,6 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }));
   };
 
-  const updateAgentRuntime = (runtimeId: string) => {
-    setState((prev) => ({ ...prev, agentRuntime: runtimeId }));
-    setAgentSelfCheckStatus('untested');
-    setAgentSelfCheckResult(null);
-  };
-
   const updateTextModelProvider = (provider: TextModelProvider) => {
     setTextModels([]);
     setReasoningEfforts([]);
@@ -994,10 +977,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       setAgentSelfCheckStatus('checking');
       setAgentSelfCheckResult(null);
 
-      if (!savedConfig?.agent_runtime) {
-        throw new Error('尚未读取到已保存的智能体运行时');
-      }
-      const result = await window.yibiao?.agent.selfCheck(savedConfig.agent_runtime);
+      const result = await window.yibiao?.agent.selfCheck();
       if (!result) {
         throw new Error('智能体自检未返回结果');
       }
@@ -1013,8 +993,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       const message = error instanceof Error ? error.message : '智能体自检失败';
       const failedResult: AgentSelfCheckResult = {
         success: false,
-        runtime_id: savedConfig?.agent_runtime || state.agentRuntime,
-        runtime_name: agentRuntimes.find((runtime) => runtime.id === (savedConfig?.agent_runtime || state.agentRuntime))?.display_name || '智能体',
+        runtime_id: 'pi',
+        runtime_name: 'Pi Agent',
         status: 'error',
         message,
         checked_at: new Date().toISOString(),
@@ -1376,10 +1356,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
 
     if (activeTab === 'agent') {
-      return JSON.stringify({ runtime: state.agentRuntime, scenarios: state.agentModeScenarios }) !== JSON.stringify({
-        runtime: savedConfig.agent_runtime,
-        scenarios: normalizeAgentModeScenarios(savedConfig.agent_mode_scenarios),
-      });
+      return JSON.stringify(state.agentModeScenarios) !== JSON.stringify(normalizeAgentModeScenarios(savedConfig.agent_mode_scenarios));
     }
 
     return false;
@@ -1461,7 +1438,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       return;
     }
     if (activeTab === 'agent') {
-      await saveClientConfig(createClientConfig({ includeAgentState: true }));
+      await saveClientConfig(createClientConfig({ includeAgentScenarios: true }));
     }
   };
 
@@ -1471,7 +1448,6 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const imageModelStatus: ImageModelStatus = state.imageModel.status || 'untested';
   const currentImageStatus = imageStatusMeta[imageModelStatus];
   const currentAgentSelfCheckStatus = agentSelfCheckStatusMeta[agentSelfCheckStatus];
-  const savedAgentRuntime = agentRuntimes.find((runtime) => runtime.id === savedConfig?.agent_runtime);
   const imageTestTime = formatImageTestTime(state.imageModel.tested_at);
   const settingsToolbarGroups: FloatingToolbarGroup[] = canSaveActiveTab
     ? [
@@ -2165,27 +2141,15 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
       {activeTab === 'agent' && (
         <section className="settings-page-section">
-          <div className="settings-group-title">运行时</div>
+          <div className="settings-group-title">智能体</div>
           <div className="settings-list">
-            <label className="settings-row">
+            <div className="settings-row">
               <div className="settings-row-copy">
-                <strong>智能体运行时</strong>
-                <span>选择后点击保存生效；运行中的任务继续使用启动时绑定的运行时。</span>
+                <strong>当前智能体</strong>
+                <span>客户端所有智能体任务固定由 Pi Agent 执行。</span>
               </div>
-              <select value={state.agentRuntime} onChange={(event) => updateAgentRuntime(event.target.value)}>
-                {agentRuntimes.map((runtime) => (
-                  <option value={runtime.id} key={runtime.id}>{runtime.display_name}</option>
-                ))}
-              </select>
-            </label>
-            {state.agentRuntime && (
-              <div className="settings-row">
-                <div className="settings-row-copy">
-                  <strong>运行时说明</strong>
-                  <span>{agentRuntimes.find((runtime) => runtime.id === state.agentRuntime)?.description || '正在读取运行时信息'}</span>
-                </div>
-              </div>
-            )}
+              <span className="settings-readonly-value">Pi Agent</span>
+            </div>
           </div>
 
           <div className="settings-group-title">在以下场景启用智能体模式</div>
@@ -2220,9 +2184,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             <div className="settings-row">
               <div className="settings-row-copy">
                 <strong>运行自检</strong>
-                <span>{savedConfig?.agent_runtime === 'pi'
-                  ? '检查 Pi Agent 的模型普通/流式/工具调用、本地 AI Proxy、运行环境、工具和输出链路；失败时自动诊断并尝试安全修复。'
-                  : `检查当前已保存的 ${savedAgentRuntime?.display_name || '智能体运行时'}，覆盖运行环境、AI Proxy、工具、当前文本模型和输出文件链路。`}</span>
+                <span>检查 Pi Agent 的模型普通/流式/工具调用、本地 AI Proxy、运行环境、工具和输出链路；失败时自动诊断并尝试安全修复。</span>
               </div>
               <div className="settings-action-cell">
                 <button type="button" className="inline-action" onClick={runAgentSelfCheck} disabled={agentSelfCheckStatus === 'checking'}>
@@ -2260,8 +2222,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               {agentSelfCheckResult.sections.map((section) => {
                 const sectionMeta = agentDiagnosticStatusMeta[section.status];
                 return (
-                  <div className={`agent-isolation-check is-${section.status}`} key={section.id}>
-                    <div className="agent-isolation-check-head">
+                  <div className={`agent-diagnostic-section is-${section.status}`} key={section.id}>
+                    <div className="agent-diagnostic-section-head">
                       <div>
                         <strong>{section.title}</strong>
                         <span>{section.summary || sectionMeta.description}</span>
@@ -2269,7 +2231,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                       <em>{sectionMeta.label}</em>
                     </div>
                     {Boolean(section.details?.length) && (
-                      <div className="agent-isolation-check-grid">
+                      <div className="agent-diagnostic-detail-grid">
                         {section.details?.map((item) => (
                           <div key={`${section.id}-${item.label}`}>
                             <span>{item.label}</span>

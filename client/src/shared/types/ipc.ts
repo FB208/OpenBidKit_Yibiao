@@ -171,13 +171,6 @@ export type AgentSelfCheckStatus = 'normal' | 'error' | 'busy';
 
 export type AgentRuntimePhase = 'stopped' | 'starting' | 'idle' | 'running' | 'aborting' | 'unhealthy' | 'restarting' | 'closing';
 
-export interface AgentRuntimeDescriptor {
-  id: string;
-  display_name: string;
-  description: string;
-  is_default: boolean;
-}
-
 export interface AgentRuntimeActiveTask {
   task_id: string;
   title: string;
@@ -225,10 +218,8 @@ export interface LicenseOfflineActivationResult {
 }
 
 export interface AgentRuntimeStatus {
-  runtime_id: string;
+  runtime_id: 'pi';
   runtime_name: string;
-  selected_runtime_id?: string;
-  active_runtime_id?: string;
   phase: AgentRuntimePhase;
   healthy: boolean;
   message: string;
@@ -244,7 +235,6 @@ export interface AgentRuntimeStatus {
     title: string;
     queued_at: string;
     position: number;
-    runtime_id: string;
   }>;
   proxy?: {
     active: number;
@@ -268,7 +258,6 @@ export interface AgentRunPayload {
   files?: AgentRunFile[];
   timeout_ms?: number;
   max_retries?: number;
-  agent?: string;
 }
 
 export interface AgentRetryAttempt {
@@ -280,7 +269,7 @@ export interface AgentRetryAttempt {
 
 export interface AgentRunResult {
   success: boolean;
-  runtime_id: string;
+  runtime_id: 'pi';
   status?: 'busy' | string;
   skipped?: boolean;
   message?: string;
@@ -335,7 +324,7 @@ export interface AgentSelfCheckResult {
   check_id?: string;
   success: boolean;
   repaired?: boolean;
-  runtime_id: string;
+  runtime_id: 'pi';
   runtime_name: string;
   status: AgentSelfCheckStatus;
   message: string;
@@ -417,12 +406,11 @@ export interface YibiaoBridge {
     onHttpError: (callback: (event: AiHttpErrorPayload) => void) => () => void;
   };
   agent: {
-    listRuntimes: () => Promise<AgentRuntimeDescriptor[]>;
-    run: (payload: AgentRunPayload, runtimeId?: string) => Promise<AgentRunResult>;
-    selfCheck: (runtimeId?: string) => Promise<AgentSelfCheckResult>;
+    run: (payload: AgentRunPayload) => Promise<AgentRunResult>;
+    selfCheck: () => Promise<AgentSelfCheckResult>;
     exportSelfCheckReport: (payload: AgentSelfCheckResult) => Promise<AgentSelfCheckReportExportResult>;
-    getStatus: (runtimeId?: string) => Promise<AgentRuntimeStatus>;
-    restart: (reason?: string, runtimeId?: string) => Promise<AgentRuntimeStatus>;
+    getStatus: () => Promise<AgentRuntimeStatus>;
+    restart: (reason?: string) => Promise<AgentRuntimeStatus>;
     onStatus: (callback: (status: AgentRuntimeStatus) => void) => () => void;
   };
   developerTokenStats: {
@@ -579,5 +567,4 @@ export interface AvailablePlugin {
     message: string;
   };
 }
-
 

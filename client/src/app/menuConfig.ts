@@ -154,8 +154,8 @@ const developerMenuItems: AppMenuItem[] = [
       },
       {
         id: 'developer-agent-test',
-        label: '智能体链路测试',
-        description: '并列验证各智能体运行时的状态、自检、任务输出和诊断。',
+        label: 'Pi Agent 链路测试',
+        description: '验证 Pi Agent 的状态、自检、任务输出和诊断。',
         icon: 'tool',
       },
     ],

@@ -126,7 +126,8 @@ fieldset.settings-list {
 }
 
 .settings-row input,
-.settings-row select {
+.settings-row select,
+.settings-row .settings-readonly-value {
   width: 100%;
   min-height: 36px;
   padding: 8px 12px;
@@ -136,6 +137,12 @@ fieldset.settings-list {
   border: 1px solid #ccd6e3;
   border-radius: 12px;
   outline: none;
+}
+
+.settings-row .settings-readonly-value {
+  display: flex;
+  align-items: center;
+  font-weight: 700;
 }
 
 .settings-row select {
@@ -651,7 +658,7 @@ fieldset.settings-list {
   border-color: rgba(33, 116, 253, 0.24);
 }
 
-.agent-isolation-check {
+.agent-diagnostic-section {
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -660,50 +667,50 @@ fieldset.settings-list {
   border-radius: 16px;
 }
 
-.agent-isolation-check.is-success {
+.agent-diagnostic-section.is-success {
   border-color: rgba(28, 168, 100, 0.2);
 }
 
-.agent-isolation-check.is-warning {
+.agent-diagnostic-section.is-warning {
   border-color: rgba(245, 158, 11, 0.24);
 }
 
-.agent-isolation-check.is-running {
+.agent-diagnostic-section.is-running {
   border-color: rgba(33, 116, 253, 0.24);
 }
 
-.agent-isolation-check.is-error {
+.agent-diagnostic-section.is-error {
   border-color: rgba(200, 50, 32, 0.24);
 }
 
-.agent-isolation-check.is-skipped {
+.agent-diagnostic-section.is-skipped {
   opacity: 0.72;
 }
 
-.agent-isolation-check-head {
+.agent-diagnostic-section-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
 
-.agent-isolation-check-head > div {
+.agent-diagnostic-section-head > div {
   display: grid;
   gap: 4px;
 }
 
-.agent-isolation-check-head strong {
+.agent-diagnostic-section-head strong {
   color: var(--yb-text);
   font-size: 15px;
 }
 
-.agent-isolation-check-head span {
+.agent-diagnostic-section-head span {
   color: var(--yb-text-soft);
   font-size: 12px;
   line-height: 1.45;
 }
 
-.agent-isolation-check-head em {
+.agent-diagnostic-section-head em {
   flex: 0 0 auto;
   padding: 3px 8px;
   font-size: 11px;
@@ -712,38 +719,38 @@ fieldset.settings-list {
   border-radius: 999px;
 }
 
-.agent-isolation-check.is-success .agent-isolation-check-head em {
+.agent-diagnostic-section.is-success .agent-diagnostic-section-head em {
   color: #16834a;
   background: rgba(28, 168, 100, 0.12);
 }
 
-.agent-isolation-check.is-warning .agent-isolation-check-head em {
+.agent-diagnostic-section.is-warning .agent-diagnostic-section-head em {
   color: #a05a00;
   background: rgba(245, 158, 11, 0.14);
 }
 
-.agent-isolation-check.is-running .agent-isolation-check-head em {
+.agent-diagnostic-section.is-running .agent-diagnostic-section-head em {
   color: var(--yb-primary);
   background: rgba(33, 116, 253, 0.1);
 }
 
-.agent-isolation-check.is-error .agent-isolation-check-head em {
+.agent-diagnostic-section.is-error .agent-diagnostic-section-head em {
   color: #c83220;
   background: rgba(200, 50, 32, 0.1);
 }
 
-.agent-isolation-check.is-skipped .agent-isolation-check-head em {
+.agent-diagnostic-section.is-skipped .agent-diagnostic-section-head em {
   color: var(--yb-text-soft);
   background: rgba(132, 145, 164, 0.12);
 }
 
-.agent-isolation-check-grid {
+.agent-diagnostic-detail-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
-.agent-isolation-check-grid > div {
+.agent-diagnostic-detail-grid > div {
   display: grid;
   min-width: 0;
   gap: 4px;
@@ -753,82 +760,18 @@ fieldset.settings-list {
   border-radius: 12px;
 }
 
-.agent-isolation-check-grid span,
-.agent-isolation-skill-sources > span,
-.agent-isolation-violations > span {
+.agent-diagnostic-detail-grid span {
   color: var(--yb-text-soft);
   font-size: 11px;
 }
 
-.agent-isolation-check-grid strong {
+.agent-diagnostic-detail-grid strong {
   overflow: hidden;
   color: var(--yb-text);
   font-size: 12px;
   line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.agent-isolation-skill-sources,
-.agent-isolation-violations {
-  display: grid;
-  gap: 6px;
-}
-
-.agent-isolation-skill-sources > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.agent-isolation-skill-sources code {
-  max-width: 100%;
-  padding: 4px 7px;
-  overflow: hidden;
-  color: #31415f;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: rgba(33, 116, 253, 0.06);
-  border-radius: 8px;
-}
-
-.agent-isolation-skill-sources small {
-  color: var(--yb-text-soft);
-  font-size: 12px;
-}
-
-.agent-isolation-violations ul {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding-left: 20px;
-  color: #c83220;
-  font-size: 12px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.agent-tool-checks {
-  display: grid;
-  gap: 12px;
-}
-
-.agent-tool-checks-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.agent-tool-checks-head strong {
-  color: var(--yb-text);
-  font-size: 15px;
-}
-
-.agent-tool-checks-head span {
-  color: var(--yb-text-soft);
-  font-size: 12px;
 }
 
 .agent-tool-check-grid {
@@ -1316,4 +1259,3 @@ fieldset.settings-list {
   color: var(--yb-text);
   font-size: 15px;
 }
-

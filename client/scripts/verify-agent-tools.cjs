@@ -3,7 +3,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const VENDOR_ROOT = path.join(ROOT, 'vendor', 'opencode-tools');
+const VENDOR_ROOT = path.join(ROOT, 'vendor', 'agent-tools');
 
 function readArg(name, fallback = '') {
   const index = process.argv.indexOf(name);
@@ -13,7 +13,7 @@ function readArg(name, fallback = '') {
 }
 
 function verifyExecutable(filePath, command) {
-  if (!fs.existsSync(filePath)) throw new Error(`缺少 OpenCode 常用命令：${filePath}`);
+  if (!fs.existsSync(filePath)) throw new Error(`缺少智能体常用命令：${filePath}`);
   if (process.platform !== 'win32') fs.accessSync(filePath, fs.constants.X_OK);
   execFileSync(filePath, ['--version'], { stdio: 'pipe', timeout: 15000 });
   if (command === 'jq') execFileSync(filePath, ['-n', '1+1'], { stdio: 'pipe', timeout: 15000 });
@@ -32,7 +32,7 @@ function main() {
     throw new Error(`本次构建只能包含 ${key}，实际包含：${platformDirs.join(', ') || '(empty)'}`);
   }
   ['rg', 'fd', 'jq'].forEach((command) => verifyExecutable(path.join(binDir, `${command}${extension}`), command));
-  console.log(`OpenCode tools verified: ${binDir}`);
+  console.log(`Agent tools verified: ${binDir}`);
 }
 
 try { main(); } catch (error) { console.error(error?.stack || error?.message || String(error)); process.exit(1); }

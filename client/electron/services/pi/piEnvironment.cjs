@@ -7,9 +7,11 @@ const {
   getAgentWorkspaceInstructions,
 } = require('../agent/agentToolEnvironment.cjs');
 
+const PI_RUNTIME_ID = 'pi';
+
 // 创建 Pi 独立运行目录，避免读取用户的 Pi 配置目录。
-function createPiEnvironmentLayout(app, runtimeId) {
-  const runtimeRoot = path.join(getAgentRuntimeDir(app), runtimeId);
+function createPiEnvironmentLayout(app) {
+  const runtimeRoot = path.join(getAgentRuntimeDir(app), PI_RUNTIME_ID);
   const serviceRoot = path.join(runtimeRoot, 'service');
   const homeDir = path.join(serviceRoot, 'home');
   return {
@@ -24,8 +26,8 @@ function createPiEnvironmentLayout(app, runtimeId) {
 }
 
 // 创建 Pi 运行所需目录和共享命令环境。
-function preparePiEnvironment(app, runtimeId) {
-  const layout = createPiEnvironmentLayout(app, runtimeId);
+function preparePiEnvironment(app) {
+  const layout = createPiEnvironmentLayout(app);
   Object.values(layout).forEach((directory) => fs.mkdirSync(directory, { recursive: true }));
   const toolEnvironment = ensureAgentToolEnvironment({
     app,

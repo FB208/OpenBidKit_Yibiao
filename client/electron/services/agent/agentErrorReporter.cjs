@@ -9,6 +9,7 @@ const MAX_COMPRESSED_BYTES = 95 * 1024 * 1024;
 const UPLOAD_TIMEOUT_MS = 30 * 1000;
 const PREFLIGHT_TIMEOUT_MS = 5 * 1000;
 const PROCESS_ENTRY = path.join(__dirname, 'agentErrorReportProcess.cjs');
+const PI_RUNTIME_ID = 'pi';
 
 function isExpectedInterruption(error) {
   const code = String(error?.code || error?.cause?.code || '');
@@ -52,7 +53,6 @@ function createTaskSnapshot(payload = {}) {
     output_file: payload.output_file || '',
     timeout_ms: Number(payload.timeout_ms || 0),
     max_retries: Number(payload.max_retries || 0),
-    agent: payload.agent || '',
     files: (Array.isArray(payload.files) ? payload.files : []).map((file) => ({
       path: String(file?.path || ''),
       content_source: 'workspace',
@@ -101,32 +101,11 @@ function createErrorSnapshot(error) {
     agentRetryAttempts: Array.isArray(error?.agentRetryAttempts) ? error.agentRetryAttempts : [],
     agentDiagnostics: error?.agentDiagnostics && typeof error.agentDiagnostics === 'object' ? error.agentDiagnostics : {},
     piAssistantError: error?.piAssistantError || null,
-    openCodeBinaryPath: error?.openCodeBinaryPath || '',
-    openCodeWorkspaceDir: error?.openCodeWorkspaceDir || '',
-    openCodeRuntimeRoot: error?.openCodeRuntimeRoot || '',
-    openCodeBaseUrl: error?.openCodeBaseUrl || '',
-    openCodePort: Number(error?.openCodePort || 0),
-    openCodeExitCode: error?.openCodeExitCode,
-    openCodeExitSignal: error?.openCodeExitSignal || '',
-    openCodeSpawnError: error?.openCodeSpawnError || '',
-    openCodeLastHealthError: error?.openCodeLastHealthError || '',
-    openCodeLastHealthCause: error?.openCodeLastHealthCause || '',
-    openCodeRoute: error?.openCodeRoute || '',
-    openCodeMethod: error?.openCodeMethod || '',
-    openCodeStatus: Number(error?.openCodeStatus || 0),
-    openCodeDurationMs: Number(error?.openCodeDurationMs || 0),
-    openCodeCause: error?.openCodeCause || '',
-    openCodeResponseText: error?.openCodeResponseText || '',
-    openCodeResponseData: error?.openCodeResponseData || null,
-    openCodeRequestLog: Array.isArray(error?.openCodeRequestLog) ? error.openCodeRequestLog : [],
-    openCodeStderrTail: error?.openCodeStderrTail || '',
-    openCodeStdoutTail: error?.openCodeStdoutTail || '',
     raw_response_body: error?.raw_response_body,
     raw_response_payload: error?.raw_response_payload,
     raw_response_data: error?.raw_response_data,
     raw_sse_data: error?.raw_sse_data,
     loopbackAttempts: Array.isArray(error?.loopbackAttempts) ? error.loopbackAttempts : [],
-    isolationCheck: error?.isolationCheck || null,
     illustrationGeneration: error?.illustrationGeneration || null,
   };
 }
@@ -158,7 +137,7 @@ function createAgentErrorReporter({ app, configStore, licenseService }) {
     child.once('exit', () => processes.delete(child));
   }
 
-  async function dispatch({ runtimeId, payload, error, userTaskContext }) {
+  async function dispatch({ payload, error, userTaskContext }) {
     const config = configStore.load();
     const license = normalizeLicenseEnvelope(licenseService?.getLicenseEnvelope?.());
     const version = typeof app?.getVersion === 'function' ? app.getVersion() : '';
@@ -173,7 +152,7 @@ function createAgentErrorReporter({ app, configStore, licenseService }) {
       endpoint: ANALYTICS_ENDPOINT,
       maxCompressedBytes: MAX_COMPRESSED_BYTES,
       uploadTimeoutMs: UPLOAD_TIMEOUT_MS,
-      runtimeId,
+      runtimeId: PI_RUNTIME_ID,
       app: {
         project_name: PROJECT_NAME,
         version,

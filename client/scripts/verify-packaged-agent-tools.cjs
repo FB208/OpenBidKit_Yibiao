@@ -33,7 +33,7 @@ function findResourceRoot(releaseDir, platform) {
 }
 
 function verifyExecutable(filePath, command, platform) {
-  if (!fs.existsSync(filePath)) throw new Error(`打包产物缺少 OpenCode 常用命令：${filePath}`);
+  if (!fs.existsSync(filePath)) throw new Error(`打包产物缺少智能体常用命令：${filePath}`);
   if (platform !== 'win32') fs.accessSync(filePath, fs.constants.X_OK);
   execFileSync(filePath, ['--version'], { stdio: 'pipe', timeout: 15000 });
   if (command === 'jq') execFileSync(filePath, ['-n', '1+1'], { stdio: 'pipe', timeout: 15000 });
@@ -45,9 +45,9 @@ function main() {
   const releaseDir = path.resolve(readArg('--release', 'release'));
   const key = `${platform}-${arch}`;
   const extension = platform === 'win32' ? '.exe' : '';
-  const binDir = path.join(findResourceRoot(releaseDir, platform), 'opencode-tools', key, 'bin');
+  const binDir = path.join(findResourceRoot(releaseDir, platform), 'agent-tools', key, 'bin');
   ['rg', 'fd', 'jq'].forEach((command) => verifyExecutable(path.join(binDir, `${command}${extension}`), command, platform));
-  console.log(`Packaged OpenCode tools verified: ${binDir}`);
+  console.log(`Packaged Agent tools verified: ${binDir}`);
 }
 
 try { main(); } catch (error) { console.error(error?.stack || error?.message || String(error)); process.exit(1); }

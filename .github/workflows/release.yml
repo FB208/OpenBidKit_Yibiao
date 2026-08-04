@@ -15,7 +15,6 @@ permissions:
   contents: write
 
 env:
-  OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || 'v1.17.8' }}
   RIPGREP_VERSION: ${{ vars.RIPGREP_VERSION || '14.1.1' }}
   FD_VERSION: ${{ vars.FD_VERSION || 'v10.3.0' }}
   JQ_VERSION: ${{ vars.JQ_VERSION || 'jq-1.7.1' }}
@@ -90,25 +89,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Prepare OpenCode binary
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENCODE_VERSION: ${{ env.OPENCODE_VERSION }}
-        run: node scripts/prepare-opencode-binary.cjs --platform win32 --arch x64
-
-      - name: Verify OpenCode binary
-        run: node scripts/verify-opencode-binary.cjs --platform win32 --arch x64
-
-      - name: Prepare OpenCode tools
+      - name: Prepare Agent tools
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RIPGREP_VERSION: ${{ env.RIPGREP_VERSION }}
           FD_VERSION: ${{ env.FD_VERSION }}
           JQ_VERSION: ${{ env.JQ_VERSION }}
-        run: node scripts/prepare-opencode-tools.cjs --platform win32 --arch x64
+        run: node scripts/prepare-agent-tools.cjs --platform win32 --arch x64
 
-      - name: Verify OpenCode tools
-        run: node scripts/verify-opencode-tools.cjs --platform win32 --arch x64
+      - name: Verify Agent tools
+        run: node scripts/verify-agent-tools.cjs --platform win32 --arch x64
 
       - name: Install build type dependencies
         run: npm install --no-save @types/plist
@@ -146,11 +136,8 @@ jobs:
       - name: Build Windows MSI artifact
         run: npx electron-builder --win msi --publish never -c.productName=OpenBidKit_Yibiao -c.extraMetadata.author=mark -c.copyright="Copyright (c) 2026 mark"
 
-      - name: Verify packaged OpenCode binary
-        run: node scripts/verify-packaged-opencode-binary.cjs --platform win32 --arch x64 --release release
-
-      - name: Verify packaged OpenCode tools
-        run: node scripts/verify-packaged-opencode-tools.cjs --platform win32 --arch x64 --release release
+      - name: Verify packaged Agent tools
+        run: node scripts/verify-packaged-agent-tools.cjs --platform win32 --arch x64 --release release
 
       - name: Upload release assets
         env:
@@ -217,25 +204,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Prepare OpenCode binary
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENCODE_VERSION: ${{ env.OPENCODE_VERSION }}
-        run: node scripts/prepare-opencode-binary.cjs --platform darwin --arch ${{ matrix.arch }}
-
-      - name: Verify OpenCode binary
-        run: node scripts/verify-opencode-binary.cjs --platform darwin --arch ${{ matrix.arch }}
-
-      - name: Prepare OpenCode tools
+      - name: Prepare Agent tools
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RIPGREP_VERSION: ${{ env.RIPGREP_VERSION }}
           FD_VERSION: ${{ env.FD_VERSION }}
           JQ_VERSION: ${{ env.JQ_VERSION }}
-        run: node scripts/prepare-opencode-tools.cjs --platform darwin --arch ${{ matrix.arch }}
+        run: node scripts/prepare-agent-tools.cjs --platform darwin --arch ${{ matrix.arch }}
 
-      - name: Verify OpenCode tools
-        run: node scripts/verify-opencode-tools.cjs --platform darwin --arch ${{ matrix.arch }}
+      - name: Verify Agent tools
+        run: node scripts/verify-agent-tools.cjs --platform darwin --arch ${{ matrix.arch }}
 
       - name: Install build type dependencies
         run: npm install --no-save @types/plist
@@ -324,11 +302,8 @@ jobs:
       - name: Verify packaged native architectures
         run: node scripts/verify-macos-native-arch.cjs "${{ matrix.arch }}" release
 
-      - name: Verify packaged OpenCode binary
-        run: node scripts/verify-packaged-opencode-binary.cjs --platform darwin --arch ${{ matrix.arch }} --release release
-
-      - name: Verify packaged OpenCode tools
-        run: node scripts/verify-packaged-opencode-tools.cjs --platform darwin --arch ${{ matrix.arch }} --release release
+      - name: Verify packaged Agent tools
+        run: node scripts/verify-packaged-agent-tools.cjs --platform darwin --arch ${{ matrix.arch }} --release release
 
       - name: Stage macOS release assets
         uses: actions/upload-artifact@v4
