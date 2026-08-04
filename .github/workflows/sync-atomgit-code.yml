@@ -1,9 +1,6 @@
 name: Sync Code to AtomGit
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
