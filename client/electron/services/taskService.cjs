@@ -3,7 +3,7 @@ const { runBidSectionExtractionTask } = require('./bidSectionExtractionTask.cjs'
 const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
 const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
 const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
-const { runOutlineGenerationTask } = require('./outlineGenerationTask.cjs');
+const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
 
 const taskDefinitions = {
@@ -876,7 +876,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     startOutlineGeneration(payload) {
       const outlineMode = payload?.outline_mode === 'response-file' ? 'response-file' : 'aligned';
       const taskPayload = { ...payload, outline_mode: outlineMode };
-      return startManagedTask('outline-generation', taskPayload, runOutlineGenerationTask, {
+      return startManagedTask('outline-generation', taskPayload, runOutlineGenerationTaskV2, {
         outlineMode,
         outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
         outlineWordControlOptions: payload?.word_control_options,
