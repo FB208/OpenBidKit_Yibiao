@@ -1,4 +1,4 @@
-const { BrowserWindow, ipcMain } = require('electron');
+const { BrowserWindow, ipcMain, shell } = require('electron');
 
 function requireDeveloperMode(configStore) {
   if (!configStore.load()?.developer_mode) {
@@ -68,6 +68,15 @@ function registerDeveloperIpc({ configStore, aiService, agentService, openDevelo
   ipcMain.handle('developer-agent-monitor:detach', (event) => {
     detachMonitor(event.sender.id);
     return { success: true };
+  });
+
+  ipcMain.handle('developer-agent-monitor:open-workspace', async (_event, workspaceDir) => {
+    requireDeveloperMode(configStore);
+    const errorMessage = await shell.openPath(workspaceDir);
+    if (errorMessage) {
+      throw new Error(`打开当前工作空间失败：${errorMessage}`);
+    }
+    return { success: true, path: workspaceDir };
   });
 
   ipcMain.handle('developer-expansion-replace-test:run', (_event, payload) => {

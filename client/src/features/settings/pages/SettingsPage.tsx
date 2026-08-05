@@ -551,6 +551,7 @@ const initialState: SettingsPageState = {
   general: {
     developer_mode: false,
     developer_token_stats_auto_open: false,
+    developer_agent_monitor_auto_open: false,
     update_channel: 'atomgit',
     gpu_hardware_acceleration_enabled: true,
     gpu_hardware_acceleration_configured: true,
@@ -644,6 +645,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         general: {
           developer_mode: Boolean(config.developer_mode),
           developer_token_stats_auto_open: Boolean(config.developer_token_stats_auto_open),
+          developer_agent_monitor_auto_open: Boolean(config.developer_agent_monitor_auto_open),
           update_channel: normalizeUpdateChannel(config.update_channel),
           gpu_hardware_acceleration_enabled: Boolean(config.gpu_hardware_acceleration_enabled),
           gpu_hardware_acceleration_configured: Boolean(config.gpu_hardware_acceleration_configured),
@@ -698,6 +700,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       gpu_hardware_acceleration_configured: state.general.gpu_hardware_acceleration_configured,
       developer_mode: state.general.developer_mode,
       developer_token_stats_auto_open: state.general.developer_token_stats_auto_open,
+      developer_agent_monitor_auto_open: state.general.developer_agent_monitor_auto_open,
     };
   };
 
@@ -825,6 +828,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     setState((prev) => ({
       ...prev,
       general: { ...prev.general, developer_token_stats_auto_open: autoOpen },
+    }));
+  };
+
+  const updateDeveloperAgentMonitorAutoOpen = (autoOpen: boolean) => {
+    setState((prev) => ({
+      ...prev,
+      general: { ...prev.general, developer_agent_monitor_auto_open: autoOpen },
     }));
   };
 
@@ -1329,12 +1339,14 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       return JSON.stringify({
         developer_mode: Boolean(state.general.developer_mode),
         developer_token_stats_auto_open: Boolean(state.general.developer_token_stats_auto_open),
+        developer_agent_monitor_auto_open: Boolean(state.general.developer_agent_monitor_auto_open),
         update_channel: state.general.update_channel,
         gpu_hardware_acceleration_enabled: Boolean(state.general.gpu_hardware_acceleration_enabled),
         gpu_hardware_acceleration_configured: Boolean(state.general.gpu_hardware_acceleration_configured),
       }) !== JSON.stringify({
         developer_mode: Boolean(savedConfig.developer_mode),
         developer_token_stats_auto_open: Boolean(savedConfig.developer_token_stats_auto_open),
+        developer_agent_monitor_auto_open: Boolean(savedConfig.developer_agent_monitor_auto_open),
         update_channel: normalizeUpdateChannel(savedConfig.update_channel),
         gpu_hardware_acceleration_enabled: Boolean(savedConfig.gpu_hardware_acceleration_enabled),
         gpu_hardware_acceleration_configured: Boolean(savedConfig.gpu_hardware_acceleration_configured),
@@ -1628,6 +1640,22 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                       type="checkbox"
                       checked={state.general.developer_token_stats_auto_open}
                       onChange={(event) => updateDeveloperTokenStatsAutoOpen(event.target.checked)}
+                    />
+                    <span className="yb-switch-track" aria-hidden="true">
+                      <span className="yb-switch-thumb" />
+                    </span>
+                  </span>
+                </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>默认打开 Pi Agent 执行监视器</strong>
+                    <span>开启后，应用下次启动时自动打开 Pi Agent 执行监视器</span>
+                  </div>
+                  <span className="yb-switch-control">
+                    <input
+                      type="checkbox"
+                      checked={state.general.developer_agent_monitor_auto_open}
+                      onChange={(event) => updateDeveloperAgentMonitorAutoOpen(event.target.checked)}
                     />
                     <span className="yb-switch-track" aria-hidden="true">
                       <span className="yb-switch-thumb" />

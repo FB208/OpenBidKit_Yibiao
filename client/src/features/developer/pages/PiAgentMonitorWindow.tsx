@@ -27,6 +27,7 @@ interface MonitorTask {
   endedAt?: string;
   prompt: string;
   outputFile: string;
+  workspaceDir: string;
   files: AgentRunFile[];
   entries: MonitorTimelineEntry[];
   turnCount: number;
@@ -51,6 +52,7 @@ function createTask(id: string, title = 'Pi Agent 任务', startedAt = new Date(
     startedAt,
     prompt: '',
     outputFile: '',
+    workspaceDir: '',
     files: [],
     entries: [],
     turnCount: 0,
@@ -84,6 +86,7 @@ function applyMonitorEvent(tasks: MonitorTask[], event: AgentMonitorEvent) {
   const nextTasks = [...tasks];
   const { index, task } = ensureTask(nextTasks, event);
   if (event.title) task.title = event.title;
+  if (event.workspace_dir) task.workspaceDir = event.workspace_dir;
 
   if (event.type === 'task_start') {
     task.status = 'running';
@@ -91,6 +94,7 @@ function applyMonitorEvent(tasks: MonitorTask[], event: AgentMonitorEvent) {
     delete task.endedAt;
     task.prompt = event.prompt || '';
     task.outputFile = event.output_file || '';
+    task.workspaceDir = event.workspace_dir || '';
     task.files = event.files || [];
     task.entries = [{
       id: `start-${event.sequence}`,
@@ -225,6 +229,7 @@ function applySnapshot(tasks: MonitorTask[], snapshot: AgentMonitorSnapshot) {
   const activeTask = snapshot.active_task;
   if (!activeTask || tasks.some((task) => task.id === activeTask.task_id)) return tasks;
   const task = createTask(activeTask.task_id, activeTask.title, activeTask.started_at || snapshot.attached_at);
+  task.workspaceDir = snapshot.workspace_dir || '';
   task.entries.push(createMidstreamEntry(task.id, snapshot.attached_at));
   return [...tasks, task];
 }
@@ -304,6 +309,8 @@ function PiAgentMonitorWindow() {
   const [attached, setAttached] = useState(false);
   const [error, setError] = useState('');
   const [autoFollow, setAutoFollow] = useState(true);
+  const [workspaceOpening, setWorkspaceOpening] = useState(false);
+  const [workspaceOpenError, setWorkspaceOpenError] = useState('');
   const [now, setNow] = useState(Date.now());
   const timelineRef = useRef<HTMLDivElement>(null);
 
@@ -359,6 +366,10 @@ function PiAgentMonitorWindow() {
   const timelineSignal = selectedTask ? `${selectedTask.id}:${selectedTask.entries.length}:${lastTimelineEntry?.text?.length || 0}:${lastTimelineEntry?.complete}` : '';
 
   useEffect(() => {
+    setWorkspaceOpenError('');
+  }, [selectedTaskId]);
+
+  useEffect(() => {
     if (!autoFollow || activeTab !== 'timeline') return;
     const container = timelineRef.current;
     if (!container) return;
@@ -367,6 +378,20 @@ function PiAgentMonitorWindow() {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [timelineSignal, autoFollow, activeTab]);
+
+  // 打开当前选中任务对应的实时或归档工作空间。
+  const openSelectedWorkspace = async () => {
+    if (!selectedTask?.workspaceDir || workspaceOpening) return;
+    try {
+      setWorkspaceOpening(true);
+      setWorkspaceOpenError('');
+      await window.yibiao?.developerAgentMonitor.openWorkspace(selectedTask.workspaceDir);
+    } catch (caught) {
+      setWorkspaceOpenError(caught instanceof Error ? caught.message : '打开当前工作空间失败');
+    } finally {
+      setWorkspaceOpening(false);
+    }
+  };
 
   const renderTimeline = () => {
     if (!selectedTask?.entries.length) {
@@ -505,11 +530,23 @@ function PiAgentMonitorWindow() {
                   <button type="button" className={`document-switch-tab ${activeTab === tab.id ? 'is-active' : ''}`} onClick={() => setActiveTab(tab.id)} key={tab.id}>{tab.label}</button>
                 ))}
               </div>
-              {activeTab === 'timeline' && (
-                <button type="button" className={`inline-action agent-monitor-follow${autoFollow ? ' is-active' : ''}`} onClick={() => setAutoFollow((value) => !value)}>
-                  {autoFollow ? '自动跟随' : '已暂停跟随'}
+              <div className="agent-monitor-tab-actions">
+                {workspaceOpenError && <span className="agent-monitor-workspace-error" role="alert" title={workspaceOpenError}>{workspaceOpenError}</span>}
+                <button
+                  type="button"
+                  className="inline-action agent-monitor-open-workspace"
+                  onClick={() => void openSelectedWorkspace()}
+                  disabled={!selectedTask?.workspaceDir || workspaceOpening}
+                  title={selectedTask?.workspaceDir || '当前任务尚无可打开的工作空间'}
+                >
+                  {workspaceOpening ? '正在打开' : '打开当前工作空间'}
                 </button>
-              )}
+                {activeTab === 'timeline' && (
+                  <button type="button" className={`inline-action agent-monitor-follow${autoFollow ? ' is-active' : ''}`} onClick={() => setAutoFollow((value) => !value)}>
+                    {autoFollow ? '自动跟随' : '已暂停跟随'}
+                  </button>
+                )}
+              </div>
             </nav>
 
             <div className="agent-monitor-content">

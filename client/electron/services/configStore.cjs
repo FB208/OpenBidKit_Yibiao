@@ -272,6 +272,7 @@ const defaultConfig = {
   agent_mode_scenarios: defaultAgentModeScenarios,
   developer_mode: false,
   developer_token_stats_auto_open: false,
+  developer_agent_monitor_auto_open: false,
   analytics_client_id: '',
   analytics_created_at: '',
 };
@@ -725,6 +726,7 @@ function normalizeConfig(config) {
     agent_mode_scenarios: normalizeAgentModeScenarios(source.agent_mode_scenarios),
     developer_mode: source.developer_mode === undefined ? defaultConfig.developer_mode : Boolean(source.developer_mode),
     developer_token_stats_auto_open: source.developer_token_stats_auto_open === undefined ? defaultConfig.developer_token_stats_auto_open : Boolean(source.developer_token_stats_auto_open),
+    developer_agent_monitor_auto_open: source.developer_agent_monitor_auto_open === undefined ? defaultConfig.developer_agent_monitor_auto_open : Boolean(source.developer_agent_monitor_auto_open),
     analytics_client_id: source.analytics_client_id || defaultConfig.analytics_client_id,
     analytics_created_at: source.analytics_created_at || defaultConfig.analytics_created_at,
   };
