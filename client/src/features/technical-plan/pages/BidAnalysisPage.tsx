@@ -73,8 +73,8 @@ function getModeLabel(mode: BidAnalysisMode) {
 }
 
 const taskGroups = [
-  { title: '关键项', ids: ['projectOverview', 'techRequirements', 'projectInfo', 'partAInfo', 'deliveryAndServiceRequirements'] },
-  { title: '采购与响应', ids: ['procurementList', 'responseFileRequirements'] },
+  { title: '关键项', ids: ['projectOverview', 'techRequirements', 'projectInfo', 'partAInfo', 'deliveryAndServiceRequirements', 'responseFileRequirements'] },
+  { title: '采购项', ids: ['procurementList'] },
   { title: '投标流程', ids: ['keyInfo', 'marginInfo', 'openBid'] },
   { title: '评审要求', ids: ['qualificationReview', 'complianceCheck', 'evaluationBid', 'businessScoring'] },
   { title: '主体与合同', ids: ['agentInfo', 'discardedBids', 'signingProcess', 'terminationCondition'] },
@@ -259,7 +259,7 @@ function BidAnalysisPage({
     ? '正在优化提示词缓存'
     : requiredDone && taskRunning
       ? '关键项已解析完成，等待当前解析任务结束后进入下一步。'
-      : requiredDone ? '招标文件解析任务已结束，可以进入下一步。' : '等待项目概述、技术评分、项目信息、甲方信息和交货服务要求解析成功。';
+      : requiredDone ? '招标文件解析任务已结束，可以进入下一步。' : '等待关键解析项完成';
   const bidSectionConfigLabel = bidSectionMode === 'multiple'
     ? selectedSectionTitle ? `多标段 · ${selectedSectionTitle}` : '多标段 · 待选择'
     : '单标段';

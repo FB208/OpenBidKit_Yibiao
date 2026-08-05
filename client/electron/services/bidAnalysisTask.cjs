@@ -124,7 +124,7 @@ const tasks = [
 6. 只输出整理结果，不要输出分析过程。`,
   },
   {
-    id: 'responseFileRequirements', label: '响应文件要求', required: false, output: 'markdown', description: '响应文件组成、格式模板、签章、递交和偏离表要求。',
+    id: 'responseFileRequirements', label: '响应文件要求', required: true, output: 'markdown', description: '响应文件组成、格式模板、签章、递交和偏离表要求。',
     prompt: () => `任务：提取招标文件、询比文件或采购文件中关于响应文件/投标文件编制与提交的要求。
 
 请识别与“响应文件、投标文件、报价文件、资格证明文件、商务响应、技术响应、偏离表、响应文件格式、投标文件格式、递交要求、签字盖章、密封上传”等含义相近的内容。

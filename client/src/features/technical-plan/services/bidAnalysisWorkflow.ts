@@ -142,7 +142,7 @@ export const bidAnalysisTasks: BidAnalysisTaskDefinition[] = [
     id: 'responseFileRequirements',
     label: '响应文件要求',
     description: '响应文件组成、格式模板、签章、递交和偏离表要求。',
-    required: false,
+    required: true,
     output: 'markdown',
     buildTaskPrompt: () => `任务：提取招标文件、询比文件或采购文件中关于响应文件/投标文件编制与提交的要求。
 

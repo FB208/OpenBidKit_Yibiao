@@ -3627,7 +3627,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     ? String(responseFileTask.content || '').trim()
     : '';
   if (outlineMode === 'response-file' && !responseFileRequirements) {
-    throw new Error('请先在招标文件解析中勾选并完成“响应文件要求”，再按响应文件要求生成一级目录。');
+    throw new Error('请先在招标文件解析中完成“响应文件要求”，再按响应文件要求生成一级目录。');
   }
   const outlineExpansionMode = isExpansionWorkflow ? normalizeOutlineExpansionMode(payload, storedPlan) : 'ai-complement';
   const baseTaskPayload = {
