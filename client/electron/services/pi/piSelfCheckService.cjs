@@ -420,6 +420,7 @@ async function runTextModelProbe(config, options) {
     if (config.reasoning_effort) {
       body.reasoning_effort = config.reasoning_effort;
     }
+    // 与真实 Pi Agent 请求保持一致，仅提供工具定义，不通过 tool_choice 强制调用。
     if (options.requireToolCall) {
       body.tools = [{
         type: 'function',
@@ -434,7 +435,6 @@ async function runTextModelProbe(config, options) {
           },
         },
       }];
-      body.tool_choice = { type: 'function', function: { name: 'diagnostic_echo' } };
     }
 
     const response = await fetch(`${trimBaseUrl(config.base_url)}/chat/completions`, {
@@ -839,7 +839,7 @@ function validatePiSessionSnapshot(snapshot = {}) {
 }
 
 // 将 Pi 自检信息转换为 Renderer 使用的公共诊断区。
-function createPiDiagnosticSections({ layout, sdkVersion, sessionSnapshot = {}, toolCheck, modelCheck, loopbackCheck, diagnosis, repair } = {}) {
+function createPiDiagnosticSections({ layout, sdkVersion, sessionSnapshot = {}, toolCheck, modelCheck, agentCheck, loopbackCheck, diagnosis, repair } = {}) {
   const validation = validatePiSessionSnapshot(sessionSnapshot);
   const toolStatus = !toolCheck?.success || !validation.toolsValid
     ? 'error'
@@ -893,11 +893,19 @@ function createPiDiagnosticSections({ layout, sdkVersion, sessionSnapshot = {}, 
   ];
   if (modelCheck) {
     const allModelProbesPassed = Object.values(modelCheck.probes || {}).every((probe) => probe?.success);
+    const agentSucceeded = agentCheck?.success === true;
+    const modelCapabilityPassed = modelCheck.agent_compatible && modelCheck.success;
     sections.push({
       id: 'pi-text-model',
       title: '当前文本模型',
-      status: allModelProbesPassed ? 'success' : modelCheck.agent_compatible && modelCheck.success ? 'warning' : 'error',
-      summary: allModelProbesPassed ? '普通、流式和工具调用能力均已通过' : modelCheck.agent_compatible && modelCheck.success ? 'Pi Agent 所需能力正常，但存在非关键探针警告' : '文本模型未完全满足 Pi Agent 能力要求',
+      status: allModelProbesPassed ? 'success' : agentSucceeded || modelCapabilityPassed ? 'warning' : 'error',
+      summary: allModelProbesPassed
+        ? '普通、流式和工具调用能力均已通过'
+        : agentSucceeded
+          ? '真实 Pi Agent 工具链路已通过，但存在非关键模型探针警告'
+          : modelCapabilityPassed
+            ? 'Pi Agent 所需能力正常，但存在非关键探针警告'
+            : '文本模型未完全满足 Pi Agent 能力要求',
       details: [
         { label: '服务商', value: modelCheck.config?.provider || '-' },
         { label: '模型', value: modelCheck.config?.model_name || '-' },
@@ -910,7 +918,7 @@ function createPiDiagnosticSections({ layout, sdkVersion, sessionSnapshot = {}, 
       items: Object.values(modelCheck.probes || {}).map((probe) => ({
         id: `model-${probe.id}`,
         label: probe.label,
-        status: probe.success ? 'success' : 'error',
+        status: probe.success ? 'success' : agentSucceeded ? 'warning' : 'error',
         message: `${probe.message || (probe.success ? '成功' : '失败')}，${probe.duration_ms || 0} ms${probe.status ? `，HTTP ${probe.status}` : ''}`,
       })),
     });
