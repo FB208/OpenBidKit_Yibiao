@@ -270,14 +270,18 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
       .concat('--disable-gpu');
   };
 
-  const openDeveloperTokenStatsWindowOnStartup = () => {
+  // 按开发者配置打开启动辅助窗口。
+  const openDeveloperWindowsOnStartup = () => {
     try {
       const config = configStore.load();
       if (config.developer_mode && config.developer_token_stats_auto_open) {
         openDeveloperTokenStatsWindow?.();
       }
+      if (config.developer_mode && config.developer_agent_monitor_auto_open) {
+        openDeveloperAgentMonitorWindow?.();
+      }
     } catch (error) {
-      console.warn('[developer] 自动打开 Token 统计小窗失败', error?.message || String(error));
+      console.warn('[developer] 自动打开开发者辅助窗口失败', error?.message || String(error));
     }
   };
 
@@ -349,11 +353,11 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   if (mainWindow.webContents.isLoading()) {
     mainWindow.webContents.once('did-finish-load', () => {
       startWorkspaceDatabase();
-      openDeveloperTokenStatsWindowOnStartup();
+      openDeveloperWindowsOnStartup();
     });
   } else {
     startWorkspaceDatabase();
-    openDeveloperTokenStatsWindowOnStartup();
+    openDeveloperWindowsOnStartup();
   }
 
   ipcMain.handle('app:get-version', () => app.getVersion());

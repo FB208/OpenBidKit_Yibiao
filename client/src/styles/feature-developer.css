@@ -1214,8 +1214,29 @@ body.agent-monitor-root #root {
 
 .agent-monitor-tabs .agent-monitor-follow {
   min-height: 34px;
-  margin-left: auto;
   font-size: 11px;
+}
+
+.agent-monitor-tab-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.agent-monitor-tabs .agent-monitor-open-workspace {
+  min-height: 34px;
+  font-size: 11px;
+}
+
+.agent-monitor-workspace-error {
+  max-width: 260px;
+  overflow: hidden;
+  color: #c83220;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-monitor-tabs .agent-monitor-follow.is-active {

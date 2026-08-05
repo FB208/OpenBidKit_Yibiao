@@ -425,9 +425,11 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
   }
 
   function getMonitorSnapshot() {
+    const runtimeStatus = getRuntimeStatus();
     return {
       attached_at: nowIso(),
-      active_task: getRuntimeStatus().active_task || null,
+      active_task: runtimeStatus.active_task || null,
+      workspace_dir: runtimeStatus.active_task ? safeText(runtimeStatus.runtime_details?.workspace_dir) : '',
     };
   }
 

@@ -87,6 +87,7 @@ const bridge = {
   },
   developerAgentMonitor: {
     openWindow: () => ipcRenderer.invoke('developer-agent-monitor:open-window'),
+    openWorkspace: (workspaceDir) => ipcRenderer.invoke('developer-agent-monitor:open-workspace', workspaceDir),
     attach: () => ipcRenderer.invoke('developer-agent-monitor:attach'),
     detach: () => ipcRenderer.invoke('developer-agent-monitor:detach'),
     onEvent: (callback) => {

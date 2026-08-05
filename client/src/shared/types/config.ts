@@ -90,6 +90,7 @@ export interface ClientConfig extends AiConfig {
   export_format?: import('./exportFormat').ExportFormatConfig;
   developer_mode?: boolean;
   developer_token_stats_auto_open?: boolean;
+  developer_agent_monitor_auto_open?: boolean;
   analytics_client_id?: string;
   analytics_created_at?: string;
 }
