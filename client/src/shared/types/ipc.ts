@@ -290,6 +290,54 @@ export interface AgentRunResult {
   diagnostics?: Record<string, unknown>;
 }
 
+export type AgentMonitorEventType =
+  | 'task_start'
+  | 'assistant_delta'
+  | 'assistant_end'
+  | 'tool_start'
+  | 'tool_update'
+  | 'tool_end'
+  | 'agent_start'
+  | 'agent_end'
+  | 'agent_settled'
+  | 'turn_start'
+  | 'turn_end'
+  | 'compaction_start'
+  | 'compaction_end'
+  | 'retry'
+  | 'task_end'
+  | 'task_error';
+
+export interface AgentMonitorEvent {
+  sequence: number;
+  at: string;
+  type: AgentMonitorEventType;
+  task_id: string;
+  title?: string;
+  prompt?: string;
+  output_file?: string;
+  files?: AgentRunFile[];
+  delta?: string;
+  text?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  args?: unknown;
+  partial_result?: unknown;
+  result?: unknown;
+  is_error?: boolean;
+  attempt?: number;
+  maximum?: number;
+  message?: string;
+  output_content?: string;
+  assistant_text?: string;
+  retry_count?: number;
+}
+
+export interface AgentMonitorSnapshot {
+  attached_at: string;
+  active_task?: AgentRuntimeActiveTask | null;
+}
+
 export interface AgentSelfCheckStep {
   id: string;
   label: string;
@@ -418,6 +466,12 @@ export interface YibiaoBridge {
     get: () => Promise<DeveloperTextTokenStats>;
     reset: () => Promise<DeveloperTextTokenStats>;
     onChanged: (callback: (stats: DeveloperTextTokenStats) => void) => () => void;
+  };
+  developerAgentMonitor: {
+    openWindow: () => Promise<{ success: boolean }>;
+    attach: () => Promise<AgentMonitorSnapshot>;
+    detach: () => Promise<{ success: boolean }>;
+    onEvent: (callback: (event: AgentMonitorEvent) => void) => () => void;
   };
   developerExpansionReplaceTest: {
     run: (payload: DeveloperExpansionReplaceTestPayload) => Promise<DeveloperExpansionReplaceTestResult>;
@@ -567,4 +621,3 @@ export interface AvailablePlugin {
     message: string;
   };
 }
-

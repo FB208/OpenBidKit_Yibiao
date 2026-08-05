@@ -85,6 +85,16 @@ const bridge = {
       return () => ipcRenderer.removeListener('developer-token-stats:changed', listener);
     },
   },
+  developerAgentMonitor: {
+    openWindow: () => ipcRenderer.invoke('developer-agent-monitor:open-window'),
+    attach: () => ipcRenderer.invoke('developer-agent-monitor:attach'),
+    detach: () => ipcRenderer.invoke('developer-agent-monitor:detach'),
+    onEvent: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('developer-agent-monitor:event', listener);
+      return () => ipcRenderer.removeListener('developer-agent-monitor:event', listener);
+    },
+  },
   developerExpansionReplaceTest: {
     run: (payload) => ipcRenderer.invoke('developer-expansion-replace-test:run', payload),
   },

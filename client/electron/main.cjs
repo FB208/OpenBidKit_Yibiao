@@ -14,6 +14,7 @@ const FORCE_DISABLE_GPU_ARGS = ['--disable-gpu', '--disable-hardware-acceleratio
 let appQuitting = false;
 let gpuRecoveryRelaunchStarted = false;
 let developerTokenStatsWindow = null;
+let developerAgentMonitorWindow = null;
 let services = null;
 let closeBeforeQuitStarted = false;
 let quitAfterClose = false;
@@ -416,6 +417,53 @@ function openDeveloperTokenStatsWindow() {
   return { success: true };
 }
 
+function closeDeveloperAgentMonitorWindow() {
+  const window = developerAgentMonitorWindow;
+  developerAgentMonitorWindow = null;
+  if (window && !window.isDestroyed()) {
+    window.close();
+  }
+}
+
+function openDeveloperAgentMonitorWindow() {
+  if (developerAgentMonitorWindow && !developerAgentMonitorWindow.isDestroyed()) {
+    if (developerAgentMonitorWindow.isMinimized()) {
+      developerAgentMonitorWindow.restore();
+    }
+    developerAgentMonitorWindow.show();
+    developerAgentMonitorWindow.focus();
+    return { success: true };
+  }
+
+  const monitorWindow = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    minWidth: 900,
+    minHeight: 600,
+    backgroundColor: '#fafcff',
+    title: 'Pi Agent 执行监视器',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  developerAgentMonitorWindow = monitorWindow;
+  monitorWindow.setMenuBarVisibility(false);
+  monitorWindow.on('closed', () => {
+    if (developerAgentMonitorWindow === monitorWindow) {
+      developerAgentMonitorWindow = null;
+    }
+  });
+
+  const baseUrl = rendererUrl || packagedIndexUrl;
+  monitorWindow.loadURL(appendWindowQuery(baseUrl, 'agent-monitor'));
+  return { success: true };
+}
+
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'light';
   registerAssetProtocol();
@@ -434,10 +482,13 @@ app.whenReady().then(() => {
     forceDisableGpuArgs: FORCE_DISABLE_GPU_ARGS,
     openDeveloperTokenStatsWindow,
     closeDeveloperTokenStatsWindow,
+    openDeveloperAgentMonitorWindow,
+    closeDeveloperAgentMonitorWindow,
   });
   setupAutoUpdate({ app, mainWindow });
   mainWindow.on('closed', () => {
     closeDeveloperTokenStatsWindow();
+    closeDeveloperAgentMonitorWindow();
   });
 
   app.on('activate', () => {

@@ -1384,6 +1384,29 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
   };
 
+  // 保存当前开发者配置后打开独立的 Pi Agent 只读执行监视器。
+  const openDeveloperAgentMonitorWindow = async () => {
+    const nextConfig = createClientConfig();
+    if (!nextConfig.developer_mode) {
+      showToast('请先开启开发者模式', 'info');
+      return;
+    }
+
+    if (!savedConfig?.developer_mode || isActiveTabDirty()) {
+      const saved = await saveClientConfig(nextConfig);
+      if (!saved) {
+        return;
+      }
+    }
+
+    try {
+      const result = await window.yibiao?.developerAgentMonitor.openWindow();
+      showToast(result?.success ? '已打开 Pi Agent 执行监视器' : '打开 Pi Agent 执行监视器失败', result?.success ? 'success' : 'error');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '打开 Pi Agent 执行监视器失败', 'error');
+    }
+  };
+
   const saveActiveTabConfig = async () => {
     if (activeTab === 'general') {
       const nextConfig = createClientConfig();
@@ -1619,6 +1642,17 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   <div className="settings-action-cell">
                     <button type="button" className="inline-action" onClick={openDeveloperTokenStatsWindow}>
                       打开 Token 统计小窗
+                    </button>
+                  </div>
+                </div>
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>Pi Agent 执行监视器</strong>
+                    <span>只读查看窗口打开后的任务输入、助手输出、工具调用和最终结果；关闭后立即停止采集</span>
+                  </div>
+                  <div className="settings-action-cell">
+                    <button type="button" className="inline-action" onClick={openDeveloperAgentMonitorWindow}>
+                      打开 Pi Agent 执行监视器
                     </button>
                   </div>
                 </div>

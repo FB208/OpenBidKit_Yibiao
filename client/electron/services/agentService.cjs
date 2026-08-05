@@ -128,12 +128,78 @@ function normalizeSelfCheckResult(rawResult = {}) {
 function createAgentService({ app, configStore, aiService, licenseService }) {
   const agentErrorReporter = createAgentErrorReporter({ app, configStore, licenseService });
   const listeners = new Set();
+  const monitorListeners = new Set();
   const queue = [];
   let runtime = null;
   let runtimeUnsubscribe = null;
   let activeEntry = null;
   let queueDraining = false;
   let closing = false;
+  let monitorSequence = 0;
+  let monitorFlushTimer = null;
+  const pendingAssistantDeltas = new Map();
+  const pendingToolUpdates = new Map();
+
+  function clearPendingMonitorEvents() {
+    if (monitorFlushTimer) clearTimeout(monitorFlushTimer);
+    monitorFlushTimer = null;
+    pendingAssistantDeltas.clear();
+    pendingToolUpdates.clear();
+  }
+
+  function dispatchMonitorEvent(event = {}) {
+    if (!monitorListeners.size) return;
+    const normalized = {
+      ...event,
+      sequence: ++monitorSequence,
+      at: event.at || nowIso(),
+    };
+    monitorListeners.forEach((listener) => {
+      try { listener(normalized); } catch {}
+    });
+  }
+
+  function flushPendingMonitorEvents() {
+    if (monitorFlushTimer) clearTimeout(monitorFlushTimer);
+    monitorFlushTimer = null;
+    if (!monitorListeners.size) {
+      clearPendingMonitorEvents();
+      return;
+    }
+    pendingAssistantDeltas.forEach((event) => dispatchMonitorEvent(event));
+    pendingAssistantDeltas.clear();
+    pendingToolUpdates.forEach((event) => dispatchMonitorEvent(event));
+    pendingToolUpdates.clear();
+  }
+
+  function scheduleMonitorFlush() {
+    if (!monitorFlushTimer) {
+      monitorFlushTimer = setTimeout(flushPendingMonitorEvents, 50);
+    }
+  }
+
+  // 监视器未打开时不序列化、不缓存，只保留一次空监听判断。
+  function emitMonitorEvent(event = {}) {
+    if (!monitorListeners.size) return;
+    if (event.type === 'assistant_delta') {
+      const key = String(event.task_id || 'active');
+      const previous = pendingAssistantDeltas.get(key);
+      pendingAssistantDeltas.set(key, {
+        ...event,
+        delta: `${previous?.delta || ''}${event.delta || ''}`,
+      });
+      scheduleMonitorFlush();
+      return;
+    }
+    if (event.type === 'tool_update') {
+      const key = `${event.task_id || 'active'}:${event.tool_call_id || event.tool_name || 'tool'}`;
+      pendingToolUpdates.set(key, event);
+      scheduleMonitorFlush();
+      return;
+    }
+    flushPendingMonitorEvents();
+    dispatchMonitorEvent(event);
+  }
 
   function emitStatus() {
     const status = getStatus();
@@ -144,7 +210,13 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
 
   function ensureRuntime() {
     if (runtime) return runtime;
-    runtime = createPiRuntimeService({ app, configStore, aiService });
+    runtime = createPiRuntimeService({
+      app,
+      configStore,
+      aiService,
+      isMonitorActive: () => monitorListeners.size > 0,
+      onMonitorEvent: emitMonitorEvent,
+    });
     runtimeUnsubscribe = runtime.onStatus?.(() => emitStatus()) || null;
     return runtime;
   }
@@ -342,6 +414,23 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     return () => listeners.delete(listener);
   }
 
+  // 注册只读执行监视器；最后一个监听关闭后立即丢弃待推送增量。
+  function onMonitorEvent(listener) {
+    if (typeof listener !== 'function') return () => {};
+    monitorListeners.add(listener);
+    return () => {
+      monitorListeners.delete(listener);
+      if (!monitorListeners.size) clearPendingMonitorEvents();
+    };
+  }
+
+  function getMonitorSnapshot() {
+    return {
+      attached_at: nowIso(),
+      active_task: getRuntimeStatus().active_task || null,
+    };
+  }
+
   async function exportSelfCheckReport(result = {}) {
     const markdown = buildPiSelfCheckReportMarkdown(result);
     const defaultDir = app?.getPath ? app.getPath('documents') : process.env.USERPROFILE || process.cwd();
@@ -358,6 +447,8 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
 
   async function close() {
     closing = true;
+    monitorListeners.clear();
+    clearPendingMonitorEvents();
     agentErrorReporter.close();
     const error = new Error('Agent 服务正在关闭');
     while (queue.length) {
@@ -381,6 +472,8 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     restart,
     handleConfigChanged,
     onStatus,
+    onMonitorEvent,
+    getMonitorSnapshot,
     exportSelfCheckReport,
     close,
   };
