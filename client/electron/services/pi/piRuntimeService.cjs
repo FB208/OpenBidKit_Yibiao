@@ -880,22 +880,38 @@ function createPiRuntimeService({ app, configStore, aiService }) {
         setStep('output', agentCheck.task_completed ? 'error' : 'skipped', agentCheck.output_message || '智能体任务失败，未执行输出校验');
       }
 
+      const failedModelProbes = Object.values(modelCheck?.probes || {}).filter((probe) => probe?.success === false);
+      if (agentCheck?.success && failedModelProbes.length) {
+        failedModelProbes.forEach((probe) => {
+          setStep(`model-${probe.id}`, 'warning', `${probe.message}，${probe.duration_ms} ms${probe.status ? `，HTTP ${probe.status}` : ''}；真实 Pi Agent 工具链路已通过`);
+        });
+      }
+
       const eventsBeforeDiagnosis = diagnostics.events.filter((event) => String(event.at || '') >= String(agentCheck?.checked_at || checkedAt));
+      // 真实 Agent 端到端结果优先，独立模型探针只负责提供诊断信息。
       const initialSuccess = Boolean(
         runtimeStarted
         && toolCheck?.success
-        && modelCheck?.success
-        && modelCheck?.agent_compatible
         && loopbackCheck?.success
         && agentCheck?.success
       );
 
       setStep('diagnosis', 'running', initialSuccess ? '正在生成自检结论' : '正在执行规则诊断和文本模型分析');
       if (initialSuccess) {
+        const hasModelProbeWarning = failedModelProbes.length > 0;
         diagnosis = {
           resolved: true,
-          final_summary: 'Pi SDK、当前文本模型、loopback、工具、资源和输出链路均正常。',
-          rules: { source: 'rules', category: 'normal', summary: '未发现异常', confidence: 'high', evidence: [], recommended_action_ids: [] },
+          final_summary: hasModelProbeWarning
+            ? 'Pi Agent 端到端链路正常，但独立文本模型探针存在非关键警告。'
+            : 'Pi SDK、当前文本模型、loopback、工具、资源和输出链路均正常。',
+          rules: {
+            source: 'rules',
+            category: hasModelProbeWarning ? 'model-probe-warning' : 'normal',
+            summary: hasModelProbeWarning ? '真实 Pi Agent 工具链路已通过，模型探针警告不影响使用' : '未发现异常',
+            confidence: 'high',
+            evidence: hasModelProbeWarning ? failedModelProbes.map((probe) => probe.message || `${probe.label}失败`) : [],
+            recommended_action_ids: [],
+          },
           ai: null,
         };
       } else {
@@ -969,8 +985,6 @@ function createPiRuntimeService({ app, configStore, aiService }) {
           const recheckSuccess = Boolean(
             actionSuccess
             && recheckTool?.success
-            && modelCheck?.success
-            && modelCheck?.agent_compatible
             && recheckLoopback?.success
             && recheckAgent?.success
           );
@@ -1016,7 +1030,7 @@ function createPiRuntimeService({ app, configStore, aiService }) {
       diagnostics.record('self_check.end', { check_id: checkId, success: finalSuccess, repaired: Boolean(repair?.attempted && repair?.success) });
       const currentEvents = diagnostics.events.filter((event) => String(event.at || '') >= checkedAt);
       const conclusion = finalSuccess
-        ? repair?.attempted ? diagnosis.final_summary : 'Pi SDK、当前文本模型、loopback、工具、资源和输出链路均正常。'
+        ? diagnosis?.final_summary || 'Pi SDK、当前文本模型、loopback、工具、资源和输出链路均正常。'
         : diagnosis?.final_summary || 'Pi Agent 自检失败。';
       const result = {
         report_version: 3,
@@ -1061,6 +1075,7 @@ function createPiRuntimeService({ app, configStore, aiService }) {
         sessionSnapshot: finalSessionSnapshot,
         toolCheck: result.tool_check,
         modelCheck,
+        agentCheck: finalAgentCheck,
         loopbackCheck: result.loopback_check,
         diagnosis,
         repair,
@@ -1113,6 +1128,7 @@ function createPiRuntimeService({ app, configStore, aiService }) {
         sessionSnapshot: result.session_snapshot,
         toolCheck,
         modelCheck,
+        agentCheck,
         loopbackCheck,
         diagnosis,
         repair,
