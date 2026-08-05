@@ -4,3 +4,6 @@
 # Windows 批处理脚本保留 CRLF
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Pi Agent 多平台命令工具以原始二进制形式跟踪
+client/vendor/agent-tools/**/bin/* binary

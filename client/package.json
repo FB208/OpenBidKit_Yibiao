@@ -34,15 +34,6 @@
       "assets/**/*",
       "package.json"
     ],
-    "extraResources": [
-      {
-        "from": "vendor/agent-tools",
-        "to": "agent-tools",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
     "publish": [
       {
         "provider": "github",
@@ -53,6 +44,15 @@
     ],
     "win": {
       "icon": "assets/icon.ico",
+      "extraResources": [
+        {
+          "from": "vendor/agent-tools/win32-${arch}",
+          "to": "agent-tools/win32-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
       "target": [
         {
           "target": "nsis",
@@ -83,6 +83,15 @@
       "icon": "assets/icon.icns",
       "identity": null,
       "category": "public.app-category.business",
+      "extraResources": [
+        {
+          "from": "vendor/agent-tools/darwin-${arch}",
+          "to": "agent-tools/darwin-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
       "target": [
         {
           "target": "dmg",

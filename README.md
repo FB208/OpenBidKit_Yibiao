@@ -121,39 +121,25 @@
 
 本仓库根目录没有 `package.json`，桌面客户端代码在 `client/`，开发命令都需要在 `client/` 目录下执行。
 
-客户端统一使用 Pi Agent，运行时随 `npm ci` 安装。Pi 的命令工具环境依赖当前平台的 `rg`、`fd`、`jq`；本地调试前按当前平台准备并校验这些工具。
-
-Windows x64：
+客户端统一使用 Pi Agent，SDK 随 `npm ci` 安装。Pi 使用的 `rg`、`fd`、`jq` 已按 Windows x64、macOS Apple Silicon 和 macOS Intel 分别保存在仓库中，日常开发和打包无需下载工具。三个平台的开发命令一致：
 
 ```powershell
 cd client
 npm ci
+npm run dev
+```
+
+普通用户下载 GitHub Release 安装包后不需要额外准备；发布流程只校验仓库中对应平台的工具，并将该平台目录注入安装包。
+
+升级内置命令工具时，维护者在 `client/` 目录按目标平台执行：
+
+```powershell
 node scripts/prepare-agent-tools.cjs --platform win32 --arch x64
-node scripts/verify-agent-tools.cjs --platform win32 --arch x64
-npm run dev
-```
-
-macOS Apple Silicon：
-
-```bash
-cd client
-npm ci
-node scripts/prepare-agent-tools.cjs --platform darwin --arch arm64
-node scripts/verify-agent-tools.cjs --platform darwin --arch arm64
-npm run dev
-```
-
-macOS Intel：
-
-```bash
-cd client
-npm ci
 node scripts/prepare-agent-tools.cjs --platform darwin --arch x64
-node scripts/verify-agent-tools.cjs --platform darwin --arch x64
-npm run dev
+node scripts/prepare-agent-tools.cjs --platform darwin --arch arm64
 ```
 
-普通用户下载 GitHub Release 安装包后不需要执行这些脚本；发布流程会在 GitHub Actions 中自动准备并注入对应平台的智能体命令工具。本地手动打包前也需要先执行对应平台的 `prepare-agent-tools.cjs` 和 `verify-agent-tools.cjs`。
+脚本每次只替换指定平台目录，其他平台资源保持不变；完成三套资源升级后统一提交。
 
 常规构建验证：
 
@@ -164,7 +150,7 @@ npm run build
 
 ### Windows 本地打包
 
-完成上述 Windows 智能体命令工具准备和依赖安装后，在 `client/` 目录执行：
+完成依赖安装后，在 `client/` 目录执行：
 
 ```powershell
 npm run dist:win

@@ -14,11 +14,6 @@ on:
 permissions:
   contents: write
 
-env:
-  RIPGREP_VERSION: ${{ vars.RIPGREP_VERSION || '14.1.1' }}
-  FD_VERSION: ${{ vars.FD_VERSION || 'v10.3.0' }}
-  JQ_VERSION: ${{ vars.JQ_VERSION || 'jq-1.7.1' }}
-
 jobs:
   create-release:
     name: Create GitHub Release
@@ -88,14 +83,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Prepare Agent tools
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RIPGREP_VERSION: ${{ env.RIPGREP_VERSION }}
-          FD_VERSION: ${{ env.FD_VERSION }}
-          JQ_VERSION: ${{ env.JQ_VERSION }}
-        run: node scripts/prepare-agent-tools.cjs --platform win32 --arch x64
 
       - name: Verify Agent tools
         run: node scripts/verify-agent-tools.cjs --platform win32 --arch x64
@@ -203,14 +190,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Prepare Agent tools
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RIPGREP_VERSION: ${{ env.RIPGREP_VERSION }}
-          FD_VERSION: ${{ env.FD_VERSION }}
-          JQ_VERSION: ${{ env.JQ_VERSION }}
-        run: node scripts/prepare-agent-tools.cjs --platform darwin --arch ${{ matrix.arch }}
 
       - name: Verify Agent tools
         run: node scripts/verify-agent-tools.cjs --platform darwin --arch ${{ matrix.arch }}
