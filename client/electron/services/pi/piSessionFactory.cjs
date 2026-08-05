@@ -1,3 +1,7 @@
+const {
+  createPiJsonValidationTool,
+} = require('./piJsonValidationTool.cjs');
+
 let piModulesPromise = null;
 
 // 延迟加载 ESM Pi SDK，供 CommonJS Electron Main 复用。
@@ -6,7 +10,8 @@ function loadPiModules() {
     piModulesPromise = Promise.all([
       import('@earendil-works/pi-coding-agent'),
       import('@earendil-works/pi-ai'),
-    ]).then(([codingAgent, piAi]) => ({ codingAgent, piAi }));
+      import('typebox'),
+    ]).then(([codingAgent, piAi, typebox]) => ({ codingAgent, piAi, typebox }));
   }
   return piModulesPromise;
 }
@@ -23,7 +28,7 @@ function normalizeOutputLimit(contextLength) {
 
 // 创建完全内存化的 Pi Session，不读取外部配置、上下文或扩展。
 async function createPiSession({ workspaceDir, environment, proxyInfo, config, timeoutMs }) {
-  const { codingAgent, piAi } = await loadPiModules();
+  const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
   const modelRuntime = await codingAgent.ModelRuntime.create({
@@ -94,14 +99,18 @@ async function createPiSession({ workspaceDir, environment, proxyInfo, config, t
       env: { ...env, ...environment.env },
     }),
   });
+  const jsonValidationTool = codingAgent.defineTool(createPiJsonValidationTool({
+    workspaceDir,
+    Type: typebox.Type,
+  }));
   const { session } = await codingAgent.createAgentSession({
     cwd: workspaceDir,
     agentDir: environment.layout.agentDir,
     model,
     modelRuntime,
     thinkingLevel: 'off',
-    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls'],
-    customTools: [bashTool],
+    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation'],
+    customTools: [bashTool, jsonValidationTool],
     resourceLoader,
     settingsManager,
     sessionManager: codingAgent.SessionManager.inMemory(workspaceDir),

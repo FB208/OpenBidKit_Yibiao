@@ -724,12 +724,18 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
 1. 使用 read 工具读取 self-check-input.txt。
 2. 使用 bash 工具执行 node -e "console.log('YIBIAO_PI_NODE_OK')"。
 3. 使用 write 工具将 JSON 写入 ${SELF_CHECK_OUTPUT_FILE}，格式为 {"message":"YIBIAO_PI_AGENT_SELF_CHECK_OK","input":"YIBIAO_PI_AGENT_SELF_CHECK_INPUT","node":"YIBIAO_PI_NODE_OK"}。
-4. 不要访问当前工作区以外的文件。`,
+4. 使用 json-validation 工具校验 ${SELF_CHECK_OUTPUT_FILE}，Schema 必须要求三个字段都是指定字符串、三个字段全部必填且禁止额外字段。
+5. 不要访问当前工作区以外的文件。`,
         timeout_ms: 5 * 60 * 1000,
         max_retries: 0,
       });
       const sessionSnapshot = result.diagnostics?.session || {};
       const snapshotValidation = validatePiSessionSnapshot(sessionSnapshot);
+      const validationToolSucceeded = (result.diagnostics?.events || []).some((event) => (
+        event.source === 'pi.tool.end'
+        && event.meta?.tool === 'json-validation'
+        && event.meta?.is_error === false
+      ));
       let output = null;
       let outputValid = false;
       let outputMessage = '';
@@ -742,13 +748,20 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       } catch (error) {
         outputMessage = `Pi Agent 自检输出不是合法 JSON：${error?.message || String(error)}`;
       }
-      const success = snapshotValidation.resourcesValid && snapshotValidation.toolsValid && outputValid;
+      const success = snapshotValidation.resourcesValid
+        && snapshotValidation.toolsValid
+        && validationToolSucceeded
+        && outputValid;
       return {
         success,
         task_completed: true,
         checked_at: taskCheckedAt,
         duration_ms: Date.now() - taskStartedAt,
-        message: success ? 'Pi Agent 极简任务执行成功' : outputMessage || 'Pi Agent 极简任务未通过校验',
+        message: success
+          ? 'Pi Agent 极简任务执行成功'
+          : !validationToolSucceeded
+            ? 'Pi Agent 未成功执行 json-validation 工具'
+            : outputMessage || 'Pi Agent 极简任务未通过校验',
         session_id: result.session_id || '',
         workspace_dir: result.workspace_dir || layout.workspaceDir,
         output_file: SELF_CHECK_OUTPUT_FILE,
@@ -756,6 +769,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         output_valid: outputValid,
         output_message: outputMessage,
         parsed_output: output,
+        validation_tool_succeeded: validationToolSucceeded,
         session_snapshot: sessionSnapshot,
         snapshot_validation: snapshotValidation,
         retry_count: result.retry_count || 0,
@@ -780,6 +794,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         output_valid: false,
         output_message: '智能体任务失败，未执行输出校验',
         parsed_output: null,
+        validation_tool_succeeded: false,
         session_snapshot: error?.agentDiagnostics?.session || {},
         snapshot_validation: validatePiSessionSnapshot(error?.agentDiagnostics?.session || {}),
         retry_count: error?.agentRetryAttempts?.length || 0,
