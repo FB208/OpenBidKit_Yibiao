@@ -23,14 +23,50 @@ let downloadedUpdateChannel = '';
 let downloadedUpdateFilePath = '';
 let activeUpdateCheckPromise = null;
 
+// 将版本号拆分为核心版本和 SemVer 预发布标识。
+function parseVersion(value) {
+  const normalized = String(value || '').trim().replace(/^v/i, '').split('+')[0];
+  const separatorIndex = normalized.indexOf('-');
+  const core = separatorIndex === -1 ? normalized : normalized.slice(0, separatorIndex);
+  const prerelease = separatorIndex === -1 ? [] : normalized.slice(separatorIndex + 1).split('.');
+  return {
+    core: core.split('.').map((part) => Number(part) || 0),
+    prerelease,
+  };
+}
+
+// 按 SemVer 规则比较单个预发布标识。
+function comparePrereleaseIdentifier(a, b) {
+  const aNumeric = /^\d+$/.test(a);
+  const bNumeric = /^\d+$/.test(b);
+  if (aNumeric && bNumeric) return Number(a) - Number(b);
+  if (aNumeric) return -1;
+  if (bNumeric) return 1;
+  return a.localeCompare(b);
+}
+
+// 比较两个版本号，正式版高于相同核心版本的测试版。
 function compareVersions(a, b) {
-  const pa = String(a || '').replace(/^v/, '').split('.').map(Number);
-  const pb = String(b || '').replace(/^v/, '').split('.').map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
-    const na = Number.isFinite(pa[i]) ? pa[i] : 0;
-    const nb = Number.isFinite(pb[i]) ? pb[i] : 0;
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
+  for (let i = 0; i < Math.max(pa.core.length, pb.core.length); i += 1) {
+    const na = pa.core[i] || 0;
+    const nb = pb.core[i] || 0;
     if (na > nb) return 1;
     if (na < nb) return -1;
+  }
+
+  if (pa.prerelease.length === 0 && pb.prerelease.length === 0) return 0;
+  if (pa.prerelease.length === 0) return 1;
+  if (pb.prerelease.length === 0) return -1;
+
+  for (let i = 0; i < Math.max(pa.prerelease.length, pb.prerelease.length); i += 1) {
+    const partA = pa.prerelease[i];
+    const partB = pb.prerelease[i];
+    if (partA === undefined) return -1;
+    if (partB === undefined) return 1;
+    const result = comparePrereleaseIdentifier(partA, partB);
+    if (result !== 0) return result;
   }
   return 0;
 }
@@ -588,6 +624,7 @@ function setupAutoUpdate({ app, mainWindow }) {
   autoUpdaterInstance = autoUpdater;
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.allowPrerelease = false;
   configureAutoUpdater('github');
 
   autoUpdater.on('download-progress', (progress) => {

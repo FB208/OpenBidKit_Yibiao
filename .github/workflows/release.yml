@@ -18,12 +18,26 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
+    outputs:
+      is_prerelease: ${{ steps.release_type.outputs.is_prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ inputs.tag_name || github.ref }}
+
+      - name: Detect release type
+        id: release_type
+        env:
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create release notes from commits
         env:
@@ -51,11 +65,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          IS_PRERELEASE: ${{ steps.release_type.outputs.is_prerelease }}
         run: |
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release edit "$TAG_NAME" --title "$TAG_NAME" --notes-file release_notes.md
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            release_flags=(--prerelease --latest=false)
           else
-            gh release create "$TAG_NAME" --title "$TAG_NAME" --notes-file release_notes.md
+            release_flags=(--prerelease=false --latest)
+          fi
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" --title "$TAG_NAME" --notes-file release_notes.md "${release_flags[@]}"
+          else
+            gh release create "$TAG_NAME" --title "$TAG_NAME" --notes-file release_notes.md "${release_flags[@]}"
           fi
 
   build-windows:
@@ -132,7 +153,7 @@ jobs:
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
         run: |
           shopt -s nullglob
-          files=(release/*.exe release/*.msi release/*.zip release/*.blockmap release/latest*.yml)
+          files=(release/*.exe release/*.msi release/*.zip release/*.blockmap release/*.yml)
           if [ ${#files[@]} -eq 0 ]; then
             echo "No release assets found."
             exit 1
@@ -292,7 +313,7 @@ jobs:
             client/release/*.dmg
             client/release/*.zip
             client/release/*.blockmap
-            client/release/latest-mac.yml
+            client/release/*-mac.yml
           if-no-files-found: error
 
   publish-macos:
@@ -333,10 +354,25 @@ jobs:
 
       - name: Merge macOS update manifests
         run: |
+          shopt -s nullglob
+          x64_manifests=(artifacts/x64/*-mac.yml)
+          arm64_manifests=(artifacts/arm64/*-mac.yml)
+
+          if [ ${#x64_manifests[@]} -ne 1 ] || [ ${#arm64_manifests[@]} -ne 1 ]; then
+            echo "Expected exactly one macOS update manifest for each architecture."
+            exit 1
+          fi
+
+          manifest_name="$(basename "${x64_manifests[0]}")"
+          if [ "$manifest_name" != "$(basename "${arm64_manifests[0]}")" ]; then
+            echo "macOS update manifest names do not match."
+            exit 1
+          fi
+
           node client/scripts/merge-mac-update-manifests.cjs \
-            artifacts/x64/latest-mac.yml \
-            artifacts/arm64/latest-mac.yml \
-            artifacts/latest-mac.yml
+            "${x64_manifests[0]}" \
+            "${arm64_manifests[0]}" \
+            "artifacts/$manifest_name"
 
       - name: Upload macOS release assets
         env:
@@ -358,7 +394,7 @@ jobs:
           require_single_asset "macOS x64 update ZIP" artifacts/x64/*-mac-x64.zip
           require_single_asset "macOS arm64 DMG" artifacts/arm64/*-mac-arm64.dmg
           require_single_asset "macOS arm64 update ZIP" artifacts/arm64/*-mac-arm64.zip
-          require_single_asset "merged macOS update manifest" artifacts/latest-mac.yml
+          require_single_asset "merged macOS update manifest" artifacts/*-mac.yml
 
           files=(
             artifacts/x64/*.dmg
@@ -367,7 +403,7 @@ jobs:
             artifacts/arm64/*.dmg
             artifacts/arm64/*.zip
             artifacts/arm64/*.blockmap
-            artifacts/latest-mac.yml
+            artifacts/*-mac.yml
           )
           gh release upload "$TAG_NAME" "${files[@]}" --clobber
 
@@ -419,6 +455,7 @@ jobs:
   publish-r2-release:
     name: Publish R2 Release
     needs:
+      - create-release
       - build-windows
       - publish-macos
     runs-on: ubuntu-latest
@@ -435,19 +472,27 @@ jobs:
           node-version: 22
 
       - name: Install R2 publish tooling
+        if: needs.create-release.outputs.is_prerelease != 'true'
         run: npm install --no-save --package-lock=false @aws-sdk/client-s3
 
+      - name: Read GitHub Release metadata
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+        run: gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url > github-release.json
+
       - name: Download GitHub Release assets
+        if: needs.create-release.outputs.is_prerelease != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
         run: |
           mkdir -p release-assets
           gh release download "$TAG_NAME" --dir release-assets --clobber
-          gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url > github-release.json
           ls -lah release-assets
 
       - name: Publish release assets to Cloudflare R2
+        if: needs.create-release.outputs.is_prerelease != 'true'
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
