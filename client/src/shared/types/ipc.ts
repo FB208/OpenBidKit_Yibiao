@@ -181,6 +181,34 @@ export interface AgentRuntimeActiveTask {
   last_progress_at?: string;
   elapsed_seconds: number;
   idle_seconds: number;
+  waiting_for_user?: boolean;
+}
+
+export interface AgentQuestionOption {
+  id: string;
+  label: string;
+  description: string;
+  recommended: boolean;
+  custom: boolean;
+}
+
+export interface AgentQuestion {
+  question_id: string;
+  task_id: string;
+  task_title: string;
+  question: string;
+  options: AgentQuestionOption[];
+  asked_at: string;
+}
+
+export interface AgentQuestionAnswerPayload {
+  question_id: string;
+  option_id: string;
+  custom_answer?: string;
+}
+
+export interface AgentQuestionAnswerResult {
+  success: boolean;
 }
 
 export type LicenseStatusValue = 'missing' | 'active' | 'expired' | 'invalid' | 'invalidated' | 'machine_mismatch' | 'refresh_failed' | 'debug_disabled';
@@ -461,7 +489,10 @@ export interface YibiaoBridge {
     exportSelfCheckReport: (payload: AgentSelfCheckResult) => Promise<AgentSelfCheckReportExportResult>;
     getStatus: () => Promise<AgentRuntimeStatus>;
     restart: (reason?: string) => Promise<AgentRuntimeStatus>;
+    getPendingQuestion: () => Promise<AgentQuestion | null>;
+    answerQuestion: (payload: AgentQuestionAnswerPayload) => Promise<AgentQuestionAnswerResult>;
     onStatus: (callback: (status: AgentRuntimeStatus) => void) => () => void;
+    onQuestion: (callback: (question: AgentQuestion | null) => void) => () => void;
   };
   developerTokenStats: {
     openWindow: () => Promise<{ success: boolean }>;

@@ -212,7 +212,7 @@ function normalizeMonitorValue(value) {
   }
 }
 
-function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, onMonitorEvent }) {
+function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, onMonitorEvent, requestUserQuestion }) {
   const runtime = PI_RUNTIME;
   const runtimeId = PI_RUNTIME_ID;
   const runtimeName = PI_RUNTIME_NAME;
@@ -264,6 +264,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       last_progress_at: activeTask.last_progress_at,
       elapsed_seconds: Math.max(0, Math.floor((Date.now() - started) / 1000)),
       idle_seconds: Math.max(0, Math.floor((Date.now() - lastActivity) / 1000)),
+      waiting_for_user: Boolean(activeTask.waiting_for_user),
     };
   }
 
@@ -484,7 +485,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
 
   function startWatchdog(controller, timeoutMs, taskToken) {
     return setInterval(() => {
-      if (!activeTask) return;
+      if (!activeTask || activeTask.waiting_for_user) return;
       const idleMs = Date.now() - new Date(activeTask.last_activity_at).getTime();
       if (idleMs < timeoutMs || controller.signal.aborted) return;
       const error = new Error('Pi Agent 长时间无进展，已停止本轮任务');
@@ -492,6 +493,44 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       touchActivity({ task_token: taskToken, stage: 'stalled', message: error.message, source: 'pi.watchdog', visible: true, activity: false });
       controller.abort(error);
     }, 2000);
+  }
+
+  // 暂停当前工具调用并等待 Renderer 返回用户答案。
+  async function waitForUserQuestion(request, signal, taskToken) {
+    if (!activeTask || activeTask.task_token !== taskToken) {
+      throw new Error('当前 Agent 任务已结束，无法继续提问');
+    }
+    activeTask.waiting_for_user = true;
+    touchActivity({
+      task_token: taskToken,
+      stage: 'waiting_for_user',
+      message: 'Agent 正在等待您的回答',
+      source: 'pi.user-question.waiting',
+      visible: true,
+      activity: true,
+    });
+    let answered = false;
+    try {
+      const result = await requestUserQuestion({
+        ...request,
+        task_id: activeTask.task_id,
+        task_title: activeTask.title,
+      }, signal);
+      answered = true;
+      return result;
+    } finally {
+      if (activeTask?.task_token === taskToken) {
+        activeTask.waiting_for_user = false;
+        touchActivity({
+          task_token: taskToken,
+          stage: answered ? 'running' : activeTask.stage,
+          message: answered ? '已收到回答，Agent 正在继续执行' : '',
+          source: 'pi.user-question.settled',
+          visible: answered,
+          activity: true,
+        });
+      }
+    }
   }
 
   // 执行单个 Pi Agent 任务，并保持业务输出协议一致。
@@ -515,6 +554,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       last_progress_at: startedAt,
       task_token: taskToken,
       onActivity: payload.onActivity,
+      waiting_for_user: false,
     };
     let prompt = payload.prompt || createDefaultPrompt(payload.task || '请分析当前输入文件并输出结果。', outputFile);
     if (isMonitorActive?.()) {
@@ -549,6 +589,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         config: configStore.load(),
         timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
         jsonValidationSchemas: payload.json_validation_schemas,
+        requestUserQuestion: (request, signal) => waitForUserQuestion(request, signal, taskToken),
       });
       session = created.session;
       sessionSnapshot = created.snapshot;

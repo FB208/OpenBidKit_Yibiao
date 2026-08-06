@@ -308,7 +308,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   });
   registerLicenseIpc({ licenseService });
   registerAiIpc({ aiService });
-  registerAgentIpc({ agentService, mainWindow });
+  registerAgentIpc({ agentService });
   registerFileIpc({ fileService });
   registerExportIpc({ exportService });
   registerSystemFontIpc({ systemFontService });

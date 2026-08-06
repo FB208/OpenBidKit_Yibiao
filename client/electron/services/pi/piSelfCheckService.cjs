@@ -9,7 +9,7 @@ const {
   SHIM_COMMANDS,
 } = require('../agent/agentToolEnvironment.cjs');
 
-const EXPECTED_PI_TOOLS = ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation'];
+const EXPECTED_PI_TOOLS = ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user'];
 const CRITICAL_COMMANDS = new Set(['node', ...BUNDLED_COMMANDS]);
 const COMMANDS = ['node', ...BUNDLED_COMMANDS, ...SHIM_COMMANDS];
 const MODEL_CHECK_TIMEOUT_MS = 30000;

@@ -1,6 +1,9 @@
 const {
   createPiJsonValidationTool,
 } = require('./piJsonValidationTool.cjs');
+const {
+  createPiUserQuestionTool,
+} = require('./piUserQuestionTool.cjs');
 
 let piModulesPromise = null;
 
@@ -27,7 +30,7 @@ function normalizeOutputLimit(contextLength) {
 }
 
 // 创建完全内存化的 Pi Session，不读取外部配置、上下文或扩展。
-async function createPiSession({ workspaceDir, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas }) {
+async function createPiSession({ workspaceDir, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion }) {
   const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
@@ -104,14 +107,18 @@ async function createPiSession({ workspaceDir, environment, proxyInfo, config, t
     Type: typebox.Type,
     validationSchemas: jsonValidationSchemas,
   }));
+  const userQuestionTool = codingAgent.defineTool(createPiUserQuestionTool({
+    Type: typebox.Type,
+    requestUserQuestion,
+  }));
   const { session } = await codingAgent.createAgentSession({
     cwd: workspaceDir,
     agentDir: environment.layout.agentDir,
     model,
     modelRuntime,
     thinkingLevel: 'off',
-    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation'],
-    customTools: [bashTool, jsonValidationTool],
+    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user'],
+    customTools: [bashTool, jsonValidationTool, userQuestionTool],
     resourceLoader,
     settingsManager,
     sessionManager: codingAgent.SessionManager.inMemory(workspaceDir),

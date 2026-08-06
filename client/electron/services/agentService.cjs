@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { dialog } = require('electron');
 const { createPiRuntimeService } = require('./pi/piRuntimeService.cjs');
 const { buildPiSelfCheckReportMarkdown } = require('./pi/piSelfCheckService.cjs');
@@ -129,6 +130,7 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
   const agentErrorReporter = createAgentErrorReporter({ app, configStore, licenseService });
   const listeners = new Set();
   const monitorListeners = new Set();
+  const questionListeners = new Set();
   const queue = [];
   let runtime = null;
   let runtimeUnsubscribe = null;
@@ -137,6 +139,7 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
   let closing = false;
   let monitorSequence = 0;
   let monitorFlushTimer = null;
+  let pendingQuestion = null;
   const pendingAssistantDeltas = new Map();
   const pendingToolUpdates = new Map();
 
@@ -208,6 +211,101 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     });
   }
 
+  function getPendingQuestion() {
+    return pendingQuestion?.question || null;
+  }
+
+  function emitQuestionState() {
+    const question = getPendingQuestion();
+    questionListeners.forEach((listener) => {
+      try { listener(question); } catch {}
+    });
+  }
+
+  function clearPendingQuestion(entry) {
+    if (!entry || pendingQuestion !== entry) return;
+    entry.signal?.removeEventListener?.('abort', entry.onAbort);
+    pendingQuestion = null;
+    emitQuestionState();
+  }
+
+  function rejectPendingQuestion(error) {
+    const entry = pendingQuestion;
+    if (!entry) return;
+    clearPendingQuestion(entry);
+    entry.reject(error);
+  }
+
+  // 建立一次 Agent 到用户的提问，并在收到答案前保持工具调用等待。
+  function requestUserQuestion(request = {}, signal) {
+    if (closing) return Promise.reject(new Error('Agent 服务正在关闭'));
+    if (signal?.aborted) return Promise.reject(createAbortError(signal));
+    if (pendingQuestion) return Promise.reject(new Error('已有 Agent 问题正在等待用户回答'));
+
+    const questionId = crypto.randomUUID();
+    const sourceOptions = Array.isArray(request.options) ? request.options : [];
+    const options = sourceOptions.map((option, index) => ({
+      id: `option-${index + 1}`,
+      label: safeText(option?.label),
+      description: safeText(option?.description),
+      recommended: index === 0,
+      custom: false,
+    }));
+    options.push({
+      id: 'other',
+      label: '其他',
+      description: '自行输入其他答案',
+      recommended: false,
+      custom: true,
+    });
+    const question = {
+      question_id: questionId,
+      task_id: safeText(request.task_id),
+      task_title: safeText(request.task_title) || '易标智能体任务',
+      question: safeText(request.question),
+      options,
+      asked_at: nowIso(),
+    };
+
+    return new Promise((resolve, reject) => {
+      const entry = {
+        question,
+        resolve,
+        reject,
+        signal,
+        onAbort: null,
+      };
+      entry.onAbort = () => {
+        if (pendingQuestion !== entry) return;
+        clearPendingQuestion(entry);
+        reject(createAbortError(signal));
+      };
+      pendingQuestion = entry;
+      signal?.addEventListener?.('abort', entry.onAbort, { once: true });
+      emitQuestionState();
+    });
+  }
+
+  // 提交用户选择并恢复正在等待的 Agent 工具调用。
+  function answerQuestion(payload = {}) {
+    const entry = pendingQuestion;
+    if (!entry || payload.question_id !== entry.question.question_id) {
+      throw new Error('当前 Agent 问题已失效');
+    }
+    const option = entry.question.options.find((item) => item.id === payload.option_id);
+    if (!option) throw new Error('请选择一个有效选项');
+    const answer = option.custom ? safeText(payload.custom_answer) : option.label;
+    if (!answer) throw new Error('请输入其他答案');
+    const result = {
+      answer,
+      selected_option: option.label,
+      is_custom: option.custom,
+    };
+    clearPendingQuestion(entry);
+    entry.resolve(result);
+    return { success: true };
+  }
+
   function ensureRuntime() {
     if (runtime) return runtime;
     runtime = createPiRuntimeService({
@@ -216,6 +314,7 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
       aiService,
       isMonitorActive: () => monitorListeners.size > 0,
       onMonitorEvent: emitMonitorEvent,
+      requestUserQuestion,
     });
     runtimeUnsubscribe = runtime.onStatus?.(() => emitStatus()) || null;
     return runtime;
@@ -424,6 +523,12 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     };
   }
 
+  function onQuestion(listener) {
+    if (typeof listener !== 'function') return () => {};
+    questionListeners.add(listener);
+    return () => questionListeners.delete(listener);
+  }
+
   function getMonitorSnapshot() {
     const runtimeStatus = getRuntimeStatus();
     return {
@@ -449,6 +554,8 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
 
   async function close() {
     closing = true;
+    rejectPendingQuestion(new Error('Agent 服务正在关闭'));
+    questionListeners.clear();
     monitorListeners.clear();
     clearPendingMonitorEvents();
     agentErrorReporter.close();
@@ -476,6 +583,9 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     onStatus,
     onMonitorEvent,
     getMonitorSnapshot,
+    getPendingQuestion,
+    answerQuestion,
+    onQuestion,
     exportSelfCheckReport,
     close,
   };
