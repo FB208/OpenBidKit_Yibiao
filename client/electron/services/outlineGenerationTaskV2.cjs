@@ -21,6 +21,11 @@ const OUTLINE_JSON_SCHEMA = {
   },
 };
 
+const DEFAULT_SELECTED_ATTRIBUTES_BY_WORKFLOW = {
+  'technical-plan': ['技术'],
+  'existing-plan-expansion': ['技术'],
+};
+
 // 将 Agent 活动消息整理成页面使用的短标题。
 function formatProgressTitle(value) {
   const title = String(value || '').replace(/\s+/g, ' ').trim();
@@ -46,14 +51,13 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, update
     taskInstruction = '只根据原方案材料提取一级目录。';
   } else {
     files = [
-      { path: '项目概述.md', content: storedPlan.projectOverview || '' },
-      { path: '技术评分信息.md', content: storedPlan.techRequirements || '' },
       { path: '响应文件要求.md', content: responseFileRequirements },
+      { path: '项目概述.md', content: storedPlan.projectOverview || '' },
       ...(hasOriginalPlan ? [{ path: '原方案.md', content: originalPlan }] : []),
     ];
     taskInstruction = hasOriginalPlan
-      ? '以原方案为主，结合响应文件要求生成一级目录，并使用项目概述和技术评分信息完善结果。'
-      : '基于响应文件要求生成一级目录，并使用项目概述和技术评分信息完善结果。';
+      ? '严格按照响应文件要求.md 组织一级目录，它是目录结构和标题来源的唯一依据。项目概述.md 仅用于理解项目背景和术语，不得从中提取或擅自补充任何一级目录；原方案.md 仅用于在响应文件要求明确的范围内参考标题表达，不得据此新增目录。'
+      : '严格按照响应文件要求.md 组织一级目录，它是目录结构和标题来源的唯一依据。项目概述.md 仅用于理解项目背景和术语，不得从中提取或擅自补充任何一级目录。';
   }
 
   const outputFile = 'outline.json';
@@ -80,7 +84,7 @@ JSON 格式：
 字段要求：
 1. outline 中只包含一级目录，不要生成 children 或其他层级。
 2. id 是从 1 开始且不重复的连续序号字符串。
-3. title 是目录标题。
+3. title 必须是可直接用于投标文件目录的正式标题。不得使用“附件1”“附件一”“附件X”等形式，也不得将其作为标题前缀；材料中出现“附件X：正式标题”时，只保留后面的正式标题。
 4. description 是目录说明。
 5. attr 是目录属性，必须根据工作空间材料从“通用”“商务”“资信”“技术”“其他”中选择一个填写。其中封面、总目录、编制说明、总体说明等跨部分内容归为“通用”；确实无法归入其他类别的内容才归为“其他”。
 6. ${outputFile} 必须是可被 JSON.parse 直接解析的纯 JSON，不要包含 Markdown 代码块、解释文字或其他内容。
@@ -107,7 +111,7 @@ JSON 格式：
     updateTask(task, technicalPlan);
   }
 
-  await agentService.runTask({
+  const agentResult = await agentService.runTask({
     title: '技术方案一级目录生成 V2',
     prompt,
     output_file: outputFile,
@@ -116,8 +120,25 @@ JSON 格式：
     onActivity: publishAgentActivity,
   });
 
+  const generatedOutline = JSON.parse(agentResult.output_content);
+  const defaultSelectedAttributes = DEFAULT_SELECTED_ATTRIBUTES_BY_WORKFLOW[storedPlan.workflowKind]
+    || DEFAULT_SELECTED_ATTRIBUTES_BY_WORKFLOW['technical-plan'];
+  const outlineSelection = {
+    items: generatedOutline.outline,
+    selected_ids: generatedOutline.outline
+      .filter((item) => defaultSelectedAttributes.includes(item.attr))
+      .map((item) => item.id),
+    confirmed: false,
+  };
+
   logs = [...logs, '一级目录生成完成'];
-  task = updateTask({ status: 'success', progress: 100, error: undefined, logs });
+  task = updateTask({
+    status: 'success',
+    progress: 100,
+    error: undefined,
+    logs,
+    stats: { outline_selection: outlineSelection },
+  });
   technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
   updateTask(task, technicalPlan);
 }

@@ -1607,6 +1607,29 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     });
   }
 
+  // 保存用户确认后的一级目录待扩展选择，不写入正式目录树。
+  function saveOutlineSelection({ taskId, items, selectedIds } = {}) {
+    const task = loadTechnicalPlan().outlineGenerationTask;
+    if (!task || task.task_id !== taskId || task.status !== 'success') {
+      throw new Error('一级目录生成结果已变化，请重新打开后再选择');
+    }
+
+    return updateTechnicalPlan({
+      outlineGenerationTask: {
+        ...task,
+        updated_at: now(),
+        stats: {
+          ...(task.stats || {}),
+          outline_selection: {
+            items,
+            selected_ids: selectedIds,
+            confirmed: true,
+          },
+        },
+      },
+    });
+  }
+
   function resetTenderWorkingCopyToOriginal() {
     const originalMarkdown = readOriginalTenderMarkdown().trim();
     if (!originalMarkdown) {
@@ -1962,6 +1985,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     switchWorkflowKind,
     saveBidAnalysisConfig,
     saveOutlineConfig,
+    saveOutlineSelection,
     saveOutline,
     saveGlobalFacts,
     saveIllustrationHtml,

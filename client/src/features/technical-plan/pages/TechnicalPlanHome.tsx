@@ -10,7 +10,7 @@ import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
+import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
 import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
 import type { OutlineData, OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from '../../../shared/types/exportFormat';
@@ -1034,6 +1034,11 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     setState((prev) => ({ ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData }));
   };
 
+  const saveOutlineSelection = async (request: SaveOutlineSelectionRequest) => {
+    const saved = await window.yibiao?.technicalPlan.saveOutlineSelection(request);
+    setState((prev) => ({ ...prev, ...(saved || {}) }));
+  };
+
   const saveOutlineConfig = async (config: {
     referenceKnowledgeDocumentIds: string[];
     outlineMode: TechnicalPlanState['outlineMode'];
@@ -1167,7 +1172,6 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         <OutlineEditPage
           workflowKind={workflowKind}
           projectOverview={state.projectOverview}
-          techRequirements={state.techRequirements}
           outlineMode={state.outlineMode || 'aligned'}
           outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
           outlineWordControlOptions={state.outlineWordControlOptions}
@@ -1178,6 +1182,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           contentTaskStatus={state.contentGenerationTask?.status}
           onOutlineConfigChange={saveOutlineConfig}
           onOutlineSaved={saveOutline}
+          onOutlineSelectionSaved={saveOutlineSelection}
           onSortGuardChange={(guard) => {
             sortGuardRef.current = guard;
           }}

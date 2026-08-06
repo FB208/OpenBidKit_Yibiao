@@ -4,17 +4,17 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, SaveOutlineRequest, TechnicalPlanWorkflowKind } from '../types';
+import type { BackgroundTaskState, OutlineSelectionItem, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanWorkflowKind } from '../types';
 import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
 import type { OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
+import OutlineSelectionDialog from '../components/OutlineSelectionDialog';
 
 interface OutlineEditPageProps {
   workflowKind: TechnicalPlanWorkflowKind;
   projectOverview: string;
-  techRequirements: string;
   outlineMode: OutlineMode;
   outlineExpansionMode: OutlineExpansionMode;
   outlineWordControlOptions: OutlineWordControlOptions;
@@ -25,6 +25,7 @@ interface OutlineEditPageProps {
   contentTaskStatus?: BackgroundTaskState['status'];
   onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; outlineMode: OutlineMode; outlineExpansionMode: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<void>;
   onOutlineSaved: (request: SaveOutlineRequest) => Promise<void>;
+  onOutlineSelectionSaved: (request: SaveOutlineSelectionRequest) => Promise<void>;
   onSortGuardChange?: (guard: OutlineSortGuard | null) => void;
 }
 
@@ -290,7 +291,6 @@ function includesKeyword(value: string, keyword: string) {
 function OutlineEditPage({
   workflowKind,
   projectOverview,
-  techRequirements,
   outlineMode,
   outlineExpansionMode,
   outlineWordControlOptions,
@@ -301,6 +301,7 @@ function OutlineEditPage({
   contentTaskStatus,
   onOutlineConfigChange,
   onOutlineSaved,
+  onOutlineSelectionSaved,
   onSortGuardChange,
 }: OutlineEditPageProps) {
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
@@ -332,6 +333,8 @@ function OutlineEditPage({
   const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const [sortDirty, setSortDirty] = useState(false);
   const [savingSort, setSavingSort] = useState(false);
+  const [selectionDialogOpen, setSelectionDialogOpen] = useState(false);
+  const [savingOutlineSelection, setSavingOutlineSelection] = useState(false);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTargetState | null>(null);
   const logListRef = useRef<HTMLDivElement | null>(null);
@@ -341,6 +344,8 @@ function OutlineEditPage({
   const selectedItem = activeOutlineData && selectedItemId ? findOutlineItem(activeOutlineData.outline, selectedItemId) : null;
   const taskRunning = task?.status === 'running';
   const taskFailed = task?.status === 'error';
+  const outlineSelection = task?.stats?.outline_selection;
+  const hasOutlineSelection = Boolean(outlineSelection?.items?.length);
   const generating = startingOutline || taskRunning;
   const isExpansionWorkflow = workflowKind === 'existing-plan-expansion';
   const knowledgePickingDisabled = generating;
@@ -355,7 +360,15 @@ function OutlineEditPage({
       : outlineData || task?.status === 'success'
         ? 100
         : 0;
-  const statusText = generating ? '运行中' : taskFailed ? '失败' : outlineData ? '已完成' : '未开始';
+  const statusText = generating
+    ? '运行中'
+    : taskFailed
+      ? '失败'
+      : outlineData
+        ? '已完成'
+        : hasOutlineSelection
+          ? outlineSelection?.confirmed ? '已确认' : '待确认'
+          : '未开始';
   const aiStatusTitle = generating ? 'AI 正在工作' : taskFailed ? '生成失败' : outlineData ? '目录已生成' : '等待生成';
   const statusMessage = taskFailed ? task?.error || latestLog || '目录生成失败，请查看开发者日志。' : latestLog || '点击生成目录后，这里会显示目录生成、审核和修正过程。';
   const startedAt = task?.started_at ? Date.parse(task.started_at) : NaN;
@@ -424,6 +437,16 @@ function OutlineEditPage({
   }, [task?.status]);
 
   useEffect(() => {
+    if (task?.status !== 'success' || !hasOutlineSelection) {
+      setSelectionDialogOpen(false);
+      return;
+    }
+    if (!outlineSelection?.confirmed) {
+      setSelectionDialogOpen(true);
+    }
+  }, [hasOutlineSelection, outlineSelection?.confirmed, task?.status, task?.task_id]);
+
+  useEffect(() => {
     if (!generating) {
       return;
     }
@@ -477,7 +500,7 @@ function OutlineEditPage({
       showToast(lockMessage, 'info');
       return;
     }
-    if (!projectOverview || !techRequirements) {
+    if (!projectOverview) {
       showToast('请先完成招标文件解析', 'info');
       return;
     }
@@ -529,7 +552,7 @@ function OutlineEditPage({
     if (lockMessage) {
       throw new Error(lockMessage);
     }
-    if (!projectOverview || !techRequirements) {
+    if (!projectOverview) {
       showToast('请先完成招标文件解析', 'info');
       return;
     }
@@ -569,6 +592,20 @@ function OutlineEditPage({
       setStartingOutline(false);
       setLocalStartAt(null);
       showToast(error instanceof Error ? error.message : '启动目录生成任务失败', 'error');
+    }
+  };
+
+  const confirmOutlineSelection = async (items: OutlineSelectionItem[], selectedIds: string[]) => {
+    if (!task?.task_id) return;
+    try {
+      setSavingOutlineSelection(true);
+      await onOutlineSelectionSaved({ taskId: task.task_id, items, selectedIds });
+      setSelectionDialogOpen(false);
+      showToast(`已确认 ${selectedIds.length} 个一级目录`, 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存一级目录选择失败', 'error');
+    } finally {
+      setSavingOutlineSelection(false);
     }
   };
 
@@ -1132,11 +1169,16 @@ function OutlineEditPage({
           <p>{isExpansionWorkflow ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `当前一级目录生成方式：${outlineModeLabels[outlineMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
         </div>
         <div className="outline-command-actions">
+          {hasOutlineSelection && (
+            <button type="button" className="secondary-action" onClick={() => setSelectionDialogOpen(true)} disabled={generating}>
+              查看一级目录
+            </button>
+          )}
           <button
             type="button"
             className="outline-config-action"
             onClick={openGenerationDialog}
-            disabled={generating || sorting || contentMutationLocked || !projectOverview || !techRequirements}
+            disabled={generating || sorting || contentMutationLocked || !projectOverview}
             aria-label="打开目录生成配置"
             title="目录生成配置"
           >
@@ -1145,7 +1187,7 @@ function OutlineEditPage({
               <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
             </svg>
           </button>
-          <button type="button" className="primary-action" onClick={openGenerationDialog} disabled={generating || sorting || contentMutationLocked || !projectOverview || !techRequirements}>
+          <button type="button" className="primary-action" onClick={openGenerationDialog} disabled={generating || sorting || contentMutationLocked || !projectOverview}>
             {generating ? 'AI 正在生成目录' : outlineData ? '重新生成目录' : '生成目录'}
           </button>
         </div>
@@ -1223,8 +1265,10 @@ function OutlineEditPage({
             </div>
           ) : (
             <div className="markdown-empty-state outline-empty-state">
-              <strong>尚未生成目录</strong>
-              <p>先完成招标文件解析，再生成技术方案目录。</p>
+              <strong>{hasOutlineSelection ? '一级目录已生成' : '尚未生成目录'}</strong>
+              <p>{hasOutlineSelection
+                ? outlineSelection?.confirmed ? '已保存待扩展目录选择，等待后续目录生成。' : '请查看并确认需要继续使用的一级目录。'
+                : '先完成招标文件解析，再生成技术方案目录。'}</p>
             </div>
           )}
         </section>
@@ -1285,6 +1329,16 @@ function OutlineEditPage({
           )}
         </aside>
       </section>
+
+      {outlineSelection && (
+        <OutlineSelectionDialog
+          open={selectionDialogOpen}
+          selection={outlineSelection}
+          saving={savingOutlineSelection}
+          onDismiss={() => setSelectionDialogOpen(false)}
+          onConfirm={(items, selectedIds) => { void confirmOutlineSelection(items, selectedIds); }}
+        />
+      )}
 
       <Dialog.Root open={generationDialogOpen} onOpenChange={setGenerationDialogOpen}>
         <Dialog.Portal>
@@ -1401,7 +1455,7 @@ function OutlineEditPage({
               <button type="button" className="secondary-action" onClick={() => { void saveOutlineConfig(); }} disabled={generating || contentMutationLocked || savingOutlineConfig}>
                 {savingOutlineConfig ? '正在保存...' : '保存配置'}
               </button>
-              <button type="button" className="primary-action" onClick={generateOutline} disabled={generating || contentMutationLocked || savingOutlineConfig || !projectOverview || !techRequirements}>
+              <button type="button" className="primary-action" onClick={generateOutline} disabled={generating || contentMutationLocked || savingOutlineConfig || !projectOverview}>
                 {outlineData ? '重新生成目录' : '开始生成'}
               </button>
             </div>

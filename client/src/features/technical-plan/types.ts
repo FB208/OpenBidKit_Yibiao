@@ -14,12 +14,32 @@ export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 export type ConsistencyRepairMode = 'agent' | 'normal';
 export type OriginalPlanCoverageRepairMode = 'agent' | 'normal';
 export type SaveOutlineReason = 'sort' | 'edit' | 'delete' | 'add-root' | 'add-child' | 'replace';
+export type OutlineAttribute = '通用' | '商务' | '资信' | '技术' | '其他';
 
 export interface SaveOutlineRequest {
   outlineData: OutlineData;
   reason: SaveOutlineReason;
   idMap?: Record<string, string>;
   affectedNodeIds?: string[];
+}
+
+export interface OutlineSelectionItem {
+  id: string;
+  title: string;
+  description: string;
+  attr: OutlineAttribute;
+}
+
+export interface OutlineSelectionState {
+  items: OutlineSelectionItem[];
+  selected_ids: string[];
+  confirmed: boolean;
+}
+
+export interface SaveOutlineSelectionRequest {
+  taskId: string;
+  items: OutlineSelectionItem[];
+  selectedIds: string[];
 }
 
 export interface ContentGenerationOptions {
@@ -59,6 +79,7 @@ export interface BackgroundTaskState {
   updated_at: string;
   error?: string;
   stats?: {
+    outline_selection?: OutlineSelectionState;
     outline?: {
       phase: 'generating' | 'reviewing' | 'word-adjusting' | 'second-review' | 'done';
       current_leaf_count: number;

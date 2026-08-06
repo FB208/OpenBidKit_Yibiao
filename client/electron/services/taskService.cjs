@@ -881,6 +881,13 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
         outlineWordControlOptions: payload?.word_control_options,
         referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
+        outlineData: null,
+        outlineWordControlSnapshot: undefined,
+        contentGenerationTask: undefined,
+        contentGenerationSections: {},
+        contentGenerationPlans: {},
+        contentIllustrationPlan: undefined,
+        contentGenerationRuntime: undefined,
       });
     },
     startGlobalFactsGeneration(payload) {
