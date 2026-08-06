@@ -1,3 +1,26 @@
+const OUTLINE_JSON_SCHEMA = {
+  type: 'object',
+  required: ['outline'],
+  additionalProperties: false,
+  properties: {
+    outline: {
+      type: 'array',
+      minItems: 1,
+      items: {
+        type: 'object',
+        required: ['id', 'title', 'description', 'attr'],
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string', pattern: '^[1-9]\\d*$' },
+          title: { type: 'string', minLength: 1 },
+          description: { type: 'string', minLength: 1 },
+          attr: { type: 'string', enum: ['通用', '商务', '资信', '技术', '其他'] },
+        },
+      },
+    },
+  },
+};
+
 // 将 Agent 活动消息整理成页面使用的短标题。
 function formatProgressTitle(value) {
   const title = String(value || '').replace(/\s+/g, ' ').trim();
@@ -15,14 +38,11 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, update
   const responseFileRequirements = storedPlan.bidAnalysisTasks?.responseFileRequirements?.content || '';
 
   let files;
-  let materialInstructions;
   let taskInstruction;
   if (originalOnly) {
     files = [
       { path: '原方案.md', content: originalPlan },
     ];
-    materialInstructions = `工作区材料职责：
-- 原方案.md：本次任务的唯一依据。完整读取后，从中提取一级目录并判断目录属性，不参考工作区外的其他材料。`;
     taskInstruction = '只根据原方案材料提取一级目录。';
   } else {
     files = [
@@ -31,16 +51,6 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, update
       { path: '响应文件要求.md', content: responseFileRequirements },
       ...(hasOriginalPlan ? [{ path: '原方案.md', content: originalPlan }] : []),
     ];
-    materialInstructions = hasOriginalPlan
-      ? `工作区材料职责：
-- 原方案.md：核心依据，首先完整读取，用于确定一级目录主体、顺序和表达；与其他材料冲突时以原方案为准。
-- 响应文件要求.md：读取原方案后使用，用于检查响应文件组成和一级目录缺项；只补充不与原方案冲突的内容。
-- 项目概述.md：理解项目背景、范围以及编写目录标题和说明时参考。
-- 技术评分信息.md：检查评分内容覆盖、完善目录说明和判断目录属性时参考。`
-      : `工作区材料职责：
-- 响应文件要求.md：核心依据，首先完整读取，用于确定一级目录。
-- 项目概述.md：理解项目背景、范围以及编写目录标题和说明时参考。
-- 技术评分信息.md：检查评分内容覆盖、完善目录说明和判断目录属性时参考。`;
     taskInstruction = hasOriginalPlan
       ? '以原方案为主，结合响应文件要求生成一级目录，并使用项目概述和技术评分信息完善结果。'
       : '基于响应文件要求生成一级目录，并使用项目概述和技术评分信息完善结果。';
@@ -48,10 +58,6 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, update
 
   const outputFile = 'outline.json';
   const prompt = `请只在当前工作目录内工作。
-
-请完整阅读工作区内的全部输入材料；遇到长文件时分段处理，确保不遗漏与一级目录有关的内容。
-
-${materialInstructions}
 
 任务：
 我们的目标是为编写响应文件/投标文件，准备一级目录。
@@ -77,7 +83,8 @@ JSON 格式：
 3. title 是目录标题。
 4. description 是目录说明。
 5. attr 是目录属性，必须根据工作空间材料从“通用”“商务”“资信”“技术”“其他”中选择一个填写。其中封面、总目录、编制说明、总体说明等跨部分内容归为“通用”；确实无法归入其他类别的内容才归为“其他”。
-6. ${outputFile} 必须是可被 JSON.parse 直接解析的纯 JSON，不要包含 Markdown 代码块、解释文字或其他内容。`;
+6. ${outputFile} 必须是可被 JSON.parse 直接解析的纯 JSON，不要包含 Markdown 代码块、解释文字或其他内容。
+7. 程序已为 ${outputFile} 预置校验 Schema。写入完成后必须调用 json-validation 校验，调用参数只填写 {"file_path":"${outputFile}"}，不要自行构造或传入 schema；校验失败时修复文件并重新校验。`;
 
   let logs = ['开始生成一级目录'];
   let currentProgress = 10;
@@ -105,6 +112,7 @@ JSON 格式：
     prompt,
     output_file: outputFile,
     files,
+    json_validation_schemas: { [outputFile]: OUTLINE_JSON_SCHEMA },
     onActivity: publishAgentActivity,
   });
 

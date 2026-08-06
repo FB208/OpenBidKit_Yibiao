@@ -27,7 +27,7 @@ function normalizeOutputLimit(contextLength) {
 }
 
 // 创建完全内存化的 Pi Session，不读取外部配置、上下文或扩展。
-async function createPiSession({ workspaceDir, environment, proxyInfo, config, timeoutMs }) {
+async function createPiSession({ workspaceDir, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas }) {
   const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
@@ -102,6 +102,7 @@ async function createPiSession({ workspaceDir, environment, proxyInfo, config, t
   const jsonValidationTool = codingAgent.defineTool(createPiJsonValidationTool({
     workspaceDir,
     Type: typebox.Type,
+    validationSchemas: jsonValidationSchemas,
   }));
   const { session } = await codingAgent.createAgentSession({
     cwd: workspaceDir,
