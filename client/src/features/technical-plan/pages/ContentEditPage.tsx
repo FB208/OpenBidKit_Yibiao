@@ -4,7 +4,8 @@ import * as Switch from '@radix-ui/react-switch';
 import { memo, useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
-import type { ClientConfig, ImageModelStatus, OutlineData, OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
+import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
+import type { ClientConfig, ImageModelStatus, OutlineContentMode, OutlineData, OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
 import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentIllustrationKind, ContentIllustrationPlanState, ContentTableRequirement, OriginalPlanCoverageRepairMode, TechnicalPlanWorkflowKind } from '../types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
@@ -27,7 +28,7 @@ interface ContentEditPageProps {
   onContentSaved: (item: OutlineItem, content: string) => Promise<void> | void;
 }
 
-type TreeStatus = ContentGenerationSectionStatus | 'partial' | 'planning';
+type TreeStatus = ContentGenerationSectionStatus | 'partial' | 'planning' | 'pending';
 
 interface OutlineNodeMeta {
   status: TreeStatus;
@@ -44,6 +45,13 @@ const statusLabels: Record<TreeStatus, string> = {
   error: '失败',
   partial: '部分生成',
   planning: '编排中',
+  pending: '待处理',
+};
+
+const pendingModeDescriptions: Record<Exclude<OutlineContentMode, 'ai-generate'>, string> = {
+  'template-fill': '该小节已标记为模板填写，后续将从招标文件提取并填充内容。',
+  'point-to-point': '该小节已标记为点对点应答表，后续将在正文完成并确定 Word 页码后回填。',
+  other: '该小节采用其他处理模式，暂不进入 AI 正文生成流程。',
 };
 
 const imageModelStatusLabels: Record<ImageModelStatus, string> = {
@@ -190,13 +198,14 @@ function getLeafContent(item: OutlineItem, sections: ContentGenerationSections) 
     : item.content || '';
 }
 
-function getLeafStatus(item: OutlineItem, sections: ContentGenerationSections): ContentGenerationSectionStatus {
+function getLeafStatus(item: OutlineItem, sections: ContentGenerationSections): TreeStatus {
   const section = sections[item.id];
   if (section?.status) {
     return section.status;
   }
 
-  return getLeafContent(item, sections).trim() ? 'success' : 'idle';
+  if (getLeafContent(item, sections).trim()) return 'success';
+  return item.content_mode === 'ai-generate' ? 'idle' : 'pending';
 }
 
 function getTreeStatus(item: OutlineItem, sections: ContentGenerationSections): TreeStatus {
@@ -211,10 +220,13 @@ function getTreeStatus(item: OutlineItem, sections: ContentGenerationSections): 
   if (childStatuses.every((status) => status === 'success')) {
     return 'success';
   }
+  if (childStatuses.every((status) => status === 'pending')) {
+    return 'pending';
+  }
   if (childStatuses.some((status) => status === 'error')) {
     return 'error';
   }
-  if (childStatuses.some((status) => status === 'success' || status === 'partial')) {
+  if (childStatuses.some((status) => status === 'success' || status === 'partial' || status === 'pending')) {
     return 'partial';
   }
 
@@ -224,8 +236,9 @@ function getTreeStatus(item: OutlineItem, sections: ContentGenerationSections): 
 function getParentStatus(childStatuses: TreeStatus[]): TreeStatus {
   if (childStatuses.some((status) => status === 'running')) return 'running';
   if (childStatuses.every((status) => status === 'success')) return 'success';
+  if (childStatuses.every((status) => status === 'pending')) return 'pending';
   if (childStatuses.some((status) => status === 'error')) return 'error';
-  if (childStatuses.some((status) => status === 'success' || status === 'partial')) return 'partial';
+  if (childStatuses.some((status) => status === 'success' || status === 'partial' || status === 'pending')) return 'partial';
   if (childStatuses.some((status) => status === 'planning')) return 'planning';
   return 'idle';
 }
@@ -236,7 +249,7 @@ function buildOutlineMeta(items: OutlineItem[], sections: ContentGenerationSecti
   function visit(item: OutlineItem): OutlineNodeMeta {
     if (!item.children?.length) {
       const baseStatus = getLeafStatus(item, sections);
-      const status: TreeStatus = planning && baseStatus === 'idle' ? 'planning' : baseStatus;
+      const status: TreeStatus = planning && item.content_mode === 'ai-generate' && baseStatus === 'idle' ? 'planning' : baseStatus;
       const nodeMeta: OutlineNodeMeta = { status, leafCount: 1, words: countWords(getLeafContent(item, sections)) };
       meta.set(item.id, nodeMeta);
       return nodeMeta;
@@ -282,7 +295,8 @@ function ContentEditPage({
 }: ContentEditPageProps) {
   const { showToast } = useToast();
   const isExpansionWorkflow = workflowKind === 'existing-plan-expansion';
-  const leaves = useMemo(() => outlineData?.outline ? collectLeafItems(outlineData.outline) : [], [outlineData]);
+  const allLeaves = useMemo(() => outlineData?.outline ? collectLeafItems(outlineData.outline) : [], [outlineData]);
+  const leaves = useMemo(() => allLeaves.filter((item) => item.content_mode === 'ai-generate'), [allLeaves]);
   const [selectedItemId, setSelectedItemId] = useState('');
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [isPreviewing, setIsPreviewing] = useState(false);
@@ -300,7 +314,7 @@ function ContentEditPage({
   const [pausePending, setPausePending] = useState(false);
   const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const [developerMode, setDeveloperMode] = useState(false);
-  const firstLeafId = leaves[0]?.id || '';
+  const firstLeafId = allLeaves[0]?.id || '';
   const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
   const selectedContent = selectedItem && selectedIsLeaf ? getLeafContent(selectedItem, sections) : '';
@@ -355,6 +369,11 @@ function ContentEditPage({
     };
   }, { completedCount: 0, failedCount: 0, totalWords: 0 }), [leaves, outlineMeta, sections]);
   const { completedCount, failedCount, totalWords } = contentSummary;
+  const modeCounts = allLeaves.reduce<Record<OutlineContentMode, number>>((counts, item) => {
+    if (item.content_mode) counts[item.content_mode] += 1;
+    return counts;
+  }, { 'ai-generate': 0, 'template-fill': 0, 'point-to-point': 0, other: 0 });
+  const pendingCount = modeCounts['template-fill'] + modeCounts['point-to-point'] + modeCounts.other;
   const progress = leaves.length ? Math.round((completedCount / leaves.length) * 100) : 0;
   const planningTotal = contentStats?.planning_total || leaves.length;
   const planningCompleted = contentStats?.planning_completed || 0;
@@ -911,6 +930,7 @@ function ContentEditPage({
     const isLeaf = !item.children?.length;
     const leafCount = meta?.leafCount || 0;
     const words = meta?.words || 0;
+    const modeLabel = isLeaf && item.content_mode ? OUTLINE_CONTENT_MODE_LABELS[item.content_mode] : '';
 
     return (
       <div className="content-outline-node" key={item.id} style={{ '--content-level': level } as CSSProperties}>
@@ -922,9 +942,9 @@ function ContentEditPage({
           <span className="content-outline-dot" aria-hidden="true" />
           <span className="content-outline-text">
             <strong>{formatOutlineTitle(item.id, item.title, exportFormat.headings[Math.min(item.id.split('.').length - 1, 5)])}</strong>
-            <small>{isLeaf ? `${statusLabels[status]} · ${words} 字` : `${statusLabels[status]} · ${leafCount} 个小节 · ${words} 字`}</small>
+            <small>{isLeaf ? `${modeLabel || '未标记'} · ${statusLabels[status]} · ${words} 字` : `${statusLabels[status]} · ${leafCount} 个小节 · ${words} 字`}</small>
           </span>
-          {isLeaf && (status === 'success' || status === 'error') ? (
+          {isLeaf && item.content_mode === 'ai-generate' && (status === 'success' || status === 'error') ? (
             <Popover.Root
               open={confirmRegenerateItem?.id === item.id}
               onOpenChange={(open) => setConfirmRegenerateItem(open ? item : null)}
@@ -984,11 +1004,12 @@ function ContentEditPage({
         <div>
           <span className="section-kicker">STEP 05</span>
           <strong>正文生成</strong>
-          <p>按目录叶子小节并发生成技术方案正文，页面切换不会中断后台任务。</p>
+          <p>只对标记为“AI生成”的叶子小节生成正文，其他模式保留为待处理。</p>
         </div>
         <div className="content-generation-stats" aria-label="正文生成统计">
-          <span><strong>{leaves.length}</strong> 个小节</span>
+          <span><strong>{leaves.length}</strong> 个 AI 小节</span>
           <span><strong>{completedCount}</strong> 已生成</span>
+          <span title={`模板填写 ${modeCounts['template-fill']}，点对点应答表 ${modeCounts['point-to-point']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
           <span><strong>{totalWords}</strong> 字</span>
         </div>
         <div className="content-generation-actions">
@@ -1104,8 +1125,12 @@ function ContentEditPage({
             </MarkdownFullscreenViewer>
           ) : selectedItem && selectedIsLeaf ? (
             <div className="markdown-empty-state content-generation-empty">
-              <strong>{getLeafStatus(selectedItem, sections) === 'error' ? sections[selectedItem.id]?.error || '正文生成失败' : '正文待生成'}</strong>
-              <p>{taskInFlight ? '如果该小节正在生成，模型返回内容后会实时显示在这里。' : paused ? '任务已暂停，可先导出当前内容或点击继续。' : '点击生成正文后，后台会按目录小节生成内容。'}</p>
+              <strong>{getLeafStatus(selectedItem, sections) === 'error'
+                ? sections[selectedItem.id]?.error || '正文生成失败'
+                : selectedItem.content_mode === 'ai-generate' ? '正文待生成' : '该小节等待后续处理'}</strong>
+              <p>{selectedItem.content_mode && selectedItem.content_mode !== 'ai-generate'
+                ? `${pendingModeDescriptions[selectedItem.content_mode]}${selectedItem.content_mode === 'other' && selectedItem.content_mode_note ? ` ${selectedItem.content_mode_note}` : ''}`
+                : taskInFlight ? '如果该小节正在生成，模型返回内容后会实时显示在这里。' : paused ? '任务已暂停，可先导出当前内容或点击继续。' : '点击生成正文后，后台会按 AI 生成小节生成内容。'}</p>
             </div>
           ) : (
             <div className="markdown-empty-state content-generation-empty">

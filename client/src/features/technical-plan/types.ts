@@ -1,4 +1,4 @@
-import type { OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../shared/types';
+import type { OutlineContentMode, OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../shared/types';
 
 export type TechnicalPlanStep = 'document-analysis' | 'bid-analysis' | 'outline-generation' | 'global-facts' | 'content-edit' | 'expand';
 export type TechnicalPlanWorkflowKind = 'technical-plan' | 'existing-plan-expansion';
@@ -28,6 +28,8 @@ export interface OutlineSelectionItem {
   title: string;
   description: string;
   attr: OutlineAttribute;
+  content_mode: OutlineContentMode;
+  content_mode_note?: string;
 }
 
 export interface OutlineSelectionState {
@@ -83,6 +85,8 @@ export interface BackgroundTaskState {
     outline?: {
       phase: 'generating' | 'reviewing' | 'word-adjusting' | 'second-review' | 'done';
       current_leaf_count: number;
+      target_leaf_count?: number | null;
+      leaf_counts_by_mode?: Partial<Record<OutlineContentMode, number>>;
       minimum_leaf_count?: number;
       maximum_leaf_count?: number;
       word_adjustment_attempts: number;

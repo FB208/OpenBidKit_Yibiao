@@ -2949,9 +2949,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     outlineData = { ...outlineData, outline: clearOutlineContent(outlineData.outline) };
   }
 
-  let leaves = collectLeafContexts(outlineData.outline);
+  let leaves = collectLeafContexts(outlineData.outline)
+    .filter(({ item }) => item?.content_mode === 'ai-generate');
   if (!leaves.length) {
-    throw new Error('当前目录没有可生成正文的小节');
+    throw new Error('当前目录没有标记为“AI生成”的正文小节');
   }
   const regenerateRequirement = resume ? contentRuntime.regenerate_requirement : String(payload.requirement || '').trim();
   const generationOptions = payload.generationOptions || payload.generation_options || storedPlan.contentGenerationOptions || {};

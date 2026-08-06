@@ -1,6 +1,6 @@
 const { ipcMain } = require('electron');
 
-function registerTechnicalPlanIpc({ technicalPlanStore }) {
+function registerTechnicalPlanIpc({ technicalPlanStore, taskService }) {
   ipcMain.handle('technical-plan:load-state', () => technicalPlanStore.loadTechnicalPlan());
   ipcMain.handle('technical-plan:import-tender-document', () => technicalPlanStore.importTenderDocument());
   ipcMain.handle('technical-plan:import-original-plan-document', () => technicalPlanStore.importOriginalPlanDocument());
@@ -19,7 +19,7 @@ function registerTechnicalPlanIpc({ technicalPlanStore }) {
   ipcMain.handle('technical-plan:save-global-facts', (_event, globalFacts) => technicalPlanStore.saveGlobalFacts(globalFacts));
   ipcMain.handle('technical-plan:save-content-generation-options', (_event, options) => technicalPlanStore.saveContentGenerationOptions(options));
   ipcMain.handle('technical-plan:save-chapter-content', (_event, payload) => technicalPlanStore.saveChapterContent(payload));
-  ipcMain.handle('technical-plan:clear', () => technicalPlanStore.clearTechnicalPlan());
+  ipcMain.handle('technical-plan:clear', () => taskService.resetTechnicalPlan());
 }
 
 module.exports = {

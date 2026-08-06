@@ -185,6 +185,21 @@ function countOutlineStats(items = []) {
   return { leafCount, mermaidCount };
 }
 
+function buildPendingContentModeParagraph(item) {
+  if (String(item?.content || '').trim()) return null;
+  let message = '';
+  if (item?.content_mode === 'template-fill') {
+    message = '待模板填写：后续将从招标文件提取并填充内容。';
+  } else if (item?.content_mode === 'point-to-point') {
+    message = '待点对点应答表回填：将在正文完成并确定 Word 页码后处理。';
+  } else if (item?.content_mode === 'other') {
+    message = `待处理：${String(item?.content_mode_note || '').trim() || '该小节采用其他特殊处理模式。'}`;
+  }
+  return message
+    ? paragraph([textRun(`[${message}]`, { color: '8A650B', italics: true })], { after: 120 })
+    : null;
+}
+
 function collectOutlineContents(items = []) {
   const contents = [];
   for (const item of items || []) {
@@ -1815,6 +1830,9 @@ async function addChapterFrameRows(rows, items, context, level = 1) {
       const bodyChildren = [];
       if (String(item.content || '').trim()) {
         await addMarkdownContent(bodyChildren, item.content, context);
+      } else {
+        const pendingParagraph = buildPendingContentModeParagraph(item);
+        if (pendingParagraph) bodyChildren.push(pendingParagraph);
       }
       rows.push(buildChapterLeafRow(
         context.exportFormat,
@@ -1838,6 +1856,9 @@ async function addChapterFrameRows(rows, items, context, level = 1) {
         const bodyChildren = [];
         await addMarkdownContent(bodyChildren, item.content, context);
         rows.push(buildChapterContentRow(context.exportFormat, bodyChildren));
+      } else {
+        const pendingParagraph = buildPendingContentModeParagraph(item);
+        if (pendingParagraph) rows.push(buildChapterContentRow(context.exportFormat, [pendingParagraph]));
       }
       context.convertedLeafCount = (context.convertedLeafCount || 0) + 1;
       reportConversionProgress(context, `已处理 ${context.convertedLeafCount}/${context.stats?.leafCount || context.convertedLeafCount} 个正文小节。`);
@@ -1866,6 +1887,9 @@ async function addOutlineItems(children, items, context, level = 1) {
     if (!item.children?.length) {
       if (String(item.content || '').trim()) {
         await addMarkdownContent(children, item.content, context);
+      } else {
+        const pendingParagraph = buildPendingContentModeParagraph(item);
+        if (pendingParagraph) children.push(pendingParagraph);
       }
       context.convertedLeafCount = (context.convertedLeafCount || 0) + 1;
       reportConversionProgress(context, `已处理 ${context.convertedLeafCount}/${context.stats?.leafCount || context.convertedLeafCount} 个正文小节。`);

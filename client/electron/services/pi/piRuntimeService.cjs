@@ -533,6 +533,49 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     }
   }
 
+  // 在多阶段工作流中等待业务侧用户操作，期间不计入 Agent 无进展超时。
+  async function waitForExternalUser(waiter, waitMessage, taskToken) {
+    if (!activeTask || activeTask.task_token !== taskToken) {
+      throw new Error('当前 Agent 任务已结束，无法继续等待用户操作');
+    }
+    activeTask.waiting_for_user = true;
+    touchActivity({
+      task_token: taskToken,
+      stage: 'waiting_for_user',
+      message: waitMessage || 'Agent 正在等待您的操作',
+      source: 'pi.workflow.waiting',
+      visible: true,
+      activity: true,
+    });
+    const signal = activeController?.signal;
+    let onAbort;
+    try {
+      const result = await new Promise((resolve, reject) => {
+        onAbort = () => reject(signal?.reason || new Error('Agent 任务已取消'));
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        signal?.addEventListener?.('abort', onAbort, { once: true });
+        Promise.resolve(waiter).then(resolve, reject);
+      });
+      return result;
+    } finally {
+      signal?.removeEventListener?.('abort', onAbort);
+      if (activeTask?.task_token === taskToken) {
+        activeTask.waiting_for_user = false;
+        touchActivity({
+          task_token: taskToken,
+          stage: 'running',
+          message: '已收到用户操作，Agent 正在继续执行',
+          source: 'pi.workflow.resumed',
+          visible: true,
+          activity: true,
+        });
+      }
+    }
+  }
+
   // 执行单个 Pi Agent 任务，并保持业务输出协议一致。
   async function runTask(payload = {}) {
     if (activeTask) throw new Error(`${runtimeName} 正在执行其他任务`);
@@ -597,77 +640,110 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       let assistantText = '';
       let validationResult = null;
       let retryCount = 0;
+      let stageIndex = 0;
+      let stagePrompt = prompt;
 
-      for (let attemptIndex = 0; attemptIndex <= maxRetries; attemptIndex += 1) {
-        try {
-          if (activeController.signal.aborted) throw activeController.signal.reason;
-          await session.prompt(prompt, { expandPromptTemplates: false });
-          if (activeController.signal.aborted) throw activeController.signal.reason;
-          const assistantError = getAssistantError(session.messages);
-          if (assistantError) {
-            const error = new Error(assistantError);
-            error.piAssistantError = getAssistantErrorDetails(session.messages);
-            throw error;
-          }
-          assistantText = extractAssistantText(session.messages);
-          const output = await readOutputAsync(layout.workspaceDir, outputFile);
-          const candidate = {
-            success: true,
-            runtime_id: runtimeId,
-            task_id: taskId,
-            title,
-            output_file: outputFile,
-            output_content: output.content,
-            assistant_text: assistantText,
-            session_id: session.sessionId,
-            retry_count: attemptIndex,
-            retry_attempts: [...retryAttempts],
-          };
-          if (typeof payload.validateOutput === 'function') {
-            try {
-              validationResult = await payload.validateOutput(candidate, {
-                attempt: attemptIndex + 1,
-                max_retries: maxRetries,
-                task_id: taskId,
-                title,
-                output_file: outputFile,
-                workspace_dir: layout.workspaceDir,
-                session_id: session.sessionId,
-                retry_attempts: [...retryAttempts],
-              });
-            } catch (validationError) {
-              if (validationError && typeof validationError === 'object') {
-                validationError.agentValidationFailed = true;
-              }
-              throw validationError;
+      while (true) {
+        let candidate = null;
+        for (let attemptIndex = 0; attemptIndex <= maxRetries; attemptIndex += 1) {
+          try {
+            if (activeController.signal.aborted) throw activeController.signal.reason;
+            await session.prompt(stagePrompt, { expandPromptTemplates: false });
+            if (activeController.signal.aborted) throw activeController.signal.reason;
+            const assistantError = getAssistantError(session.messages);
+            if (assistantError) {
+              const error = new Error(assistantError);
+              error.piAssistantError = getAssistantErrorDetails(session.messages);
+              throw error;
             }
+            assistantText = extractAssistantText(session.messages);
+            const output = await readOutputAsync(layout.workspaceDir, outputFile);
+            candidate = {
+              success: true,
+              runtime_id: runtimeId,
+              task_id: taskId,
+              title,
+              output_file: outputFile,
+              output_content: output.content,
+              assistant_text: assistantText,
+              session_id: session.sessionId,
+              retry_count: retryAttempts.length,
+              retry_attempts: [...retryAttempts],
+            };
+            if (typeof payload.validateOutput === 'function') {
+              try {
+                validationResult = await payload.validateOutput(candidate, {
+                  attempt: attemptIndex + 1,
+                  stage: stageIndex,
+                  max_retries: maxRetries,
+                  task_id: taskId,
+                  title,
+                  output_file: outputFile,
+                  workspace_dir: layout.workspaceDir,
+                  session_id: session.sessionId,
+                  retry_attempts: [...retryAttempts],
+                });
+              } catch (validationError) {
+                if (validationError && typeof validationError === 'object') {
+                  validationError.agentValidationFailed = true;
+                }
+                throw validationError;
+              }
+            }
+            retryCount = retryAttempts.length;
+            break;
+          } catch (error) {
+            if (activeController.signal.aborted || attemptIndex >= maxRetries) throw error;
+            const output = await readOutputAsync(layout.workspaceDir, outputFile);
+            retryAttempts.push(createRetrySummary(retryAttempts.length + 1, error, output.content));
+            retryCount = retryAttempts.length;
+            touchActivity({
+              task_token: taskToken,
+              stage: 'retry',
+              message: `${runtimeName} 正在自动修复：${compactText(error?.message || error, 160)}`,
+              source: 'pi.retry',
+              visible: true,
+              activity: true,
+            });
+            stagePrompt = buildRetryPrompt(outputFile, error, attemptIndex + 1, maxRetries);
+            emitMonitorEvent({
+              type: 'retry',
+              task_id: taskId,
+              title,
+              attempt: retryCount,
+              maximum: maxRetries,
+              message: compactText(error?.message || error, 600),
+              prompt: stagePrompt,
+            });
           }
-          retryCount = attemptIndex;
-          break;
-        } catch (error) {
-          if (activeController.signal.aborted || attemptIndex >= maxRetries) throw error;
-          const output = await readOutputAsync(layout.workspaceDir, outputFile);
-          retryAttempts.push(createRetrySummary(attemptIndex + 1, error, output.content));
-          retryCount = retryAttempts.length;
-          touchActivity({
-            task_token: taskToken,
-            stage: 'retry',
-            message: `${runtimeName} 正在自动修复 ${retryCount}/${maxRetries}：${compactText(error?.message || error, 160)}`,
-            source: 'pi.retry',
-            visible: true,
-            activity: true,
-          });
-          prompt = buildRetryPrompt(outputFile, error, retryCount, maxRetries);
-          emitMonitorEvent({
-            type: 'retry',
-            task_id: taskId,
-            title,
-            attempt: retryCount,
-            maximum: maxRetries,
-            message: compactText(error?.message || error, 600),
-            prompt,
-          });
         }
+
+        if (typeof payload.continueTask !== 'function') break;
+        const continuation = await payload.continueTask(candidate, {
+          stage: stageIndex,
+          task_id: taskId,
+          title,
+          output_file: outputFile,
+          workspace_dir: layout.workspaceDir,
+          session_id: session.sessionId,
+          readFile: async (filePath) => (await readOutputAsync(layout.workspaceDir, filePath)).content,
+          writeFiles: async (files) => writeWorkspaceFilesAsync(layout.workspaceDir, files),
+          waitForUser: (waiter, waitMessage) => waitForExternalUser(waiter, waitMessage, taskToken),
+        });
+        if (!continuation || continuation.complete === true || !continuation.prompt) break;
+        if (Array.isArray(continuation.files) && continuation.files.length) {
+          await writeWorkspaceFilesAsync(layout.workspaceDir, continuation.files);
+        }
+        stageIndex += 1;
+        stagePrompt = continuation.prompt;
+        touchActivity({
+          task_token: taskToken,
+          stage: continuation.stage || `workflow_stage_${stageIndex}`,
+          message: continuation.message || 'Agent 正在继续目录生成流程',
+          source: 'pi.workflow.continue',
+          visible: Boolean(continuation.message),
+          activity: true,
+        });
       }
 
       const output = await readOutputAsync(layout.workspaceDir, outputFile);

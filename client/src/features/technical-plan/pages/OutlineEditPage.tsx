@@ -6,7 +6,8 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, OutlineSelectionItem, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanWorkflowKind } from '../types';
 import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
-import type { OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
+import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
+import type { OutlineContentMode, OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
@@ -57,6 +58,7 @@ const outlineExpansionModeLabels: Record<OutlineExpansionMode, string> = {
   'original-only': '仅使用原方案目录',
   'ai-complement': 'AI基于原方案补充',
 };
+const contentModeOptions = Object.keys(OUTLINE_CONTENT_MODE_LABELS) as OutlineContentMode[];
 const outlineExpansionModeOptions: Array<{ value: OutlineExpansionMode; title: string; description: string }> = [
   {
     value: 'original-only',
@@ -177,6 +179,38 @@ function renumberOutlineItemsWithIdMap(items: OutlineItem[], parentPrefix = ''):
   return { outline, idMap };
 }
 
+// 父节点不保存处理模式，叶子保留已经明确选择的处理模式。
+function normalizeOutlineContentModes(items: OutlineItem[]): OutlineItem[] {
+  return items.map((item) => {
+    if (item.children?.length) {
+      const branch = { ...item };
+      delete branch.content_mode;
+      delete branch.content_mode_note;
+      return { ...branch, children: normalizeOutlineContentModes(item.children) };
+    }
+    const leaf = { ...item };
+    delete leaf.children;
+    const contentMode = item.content_mode;
+    return {
+      ...leaf,
+      content_mode: contentMode,
+      ...(contentMode === 'other' && item.content_mode_note?.trim()
+        ? { content_mode_note: item.content_mode_note.trim() }
+        : { content_mode_note: undefined }),
+    };
+  });
+}
+
+function assertLeafContentModes(items: OutlineItem[]) {
+  items.forEach((item) => {
+    if (item.children?.length) {
+      assertLeafContentModes(item.children);
+    } else if (!item.content_mode) {
+      throw new Error(`目录“${item.title}”缺少内容处理模式，请重新生成目录`);
+    }
+  });
+}
+
 function createIdentityIdMap(items: OutlineItem[], idMap: Record<string, string> = {}) {
   items.forEach((item) => {
     idMap[item.id] = item.id;
@@ -257,9 +291,11 @@ function deleteOutlineItem(items: OutlineItem[], itemId: string): OutlineItem[] 
       return [];
     }
 
+    const children = item.children ? deleteOutlineItem(item.children, itemId) : undefined;
     return [{
       ...item,
-      children: item.children ? deleteOutlineItem(item.children, itemId) : undefined,
+      children: children?.length ? children : undefined,
+      ...(!children?.length && item.children?.length ? { content_mode: 'ai-generate' as const } : {}),
     }];
   });
 }
@@ -309,6 +345,8 @@ function OutlineEditPage({
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [editContentMode, setEditContentMode] = useState<OutlineContentMode>('ai-generate');
+  const [editContentModeNote, setEditContentModeNote] = useState('');
   const [startingOutline, setStartingOutline] = useState(false);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
@@ -339,6 +377,7 @@ function OutlineEditPage({
   const [dropTarget, setDropTarget] = useState<DropTargetState | null>(null);
   const logListRef = useRef<HTMLDivElement | null>(null);
   const sortIdMapRef = useRef<Record<string, string>>({});
+  const shownTaskErrorIdRef = useRef<string | null>(null);
   const { showToast } = useToast();
   const activeOutlineData = sorting ? draftOutlineData : outlineData;
   const selectedItem = activeOutlineData && selectedItemId ? findOutlineItem(activeOutlineData.outline, selectedItemId) : null;
@@ -346,6 +385,7 @@ function OutlineEditPage({
   const taskFailed = task?.status === 'error';
   const outlineSelection = task?.stats?.outline_selection;
   const hasOutlineSelection = Boolean(outlineSelection?.items?.length);
+  const awaitingOutlineSelection = Boolean(taskRunning && hasOutlineSelection && !outlineSelection?.confirmed);
   const generating = startingOutline || taskRunning;
   const isExpansionWorkflow = workflowKind === 'existing-plan-expansion';
   const knowledgePickingDisabled = generating;
@@ -360,8 +400,10 @@ function OutlineEditPage({
       : outlineData || task?.status === 'success'
         ? 100
         : 0;
-  const statusText = generating
-    ? '运行中'
+  const statusText = awaitingOutlineSelection
+    ? '待确认'
+    : generating
+      ? '运行中'
     : taskFailed
       ? '失败'
       : outlineData
@@ -369,7 +411,7 @@ function OutlineEditPage({
         : hasOutlineSelection
           ? outlineSelection?.confirmed ? '已确认' : '待确认'
           : '未开始';
-  const aiStatusTitle = generating ? 'AI 正在工作' : taskFailed ? '生成失败' : outlineData ? '目录已生成' : '等待生成';
+  const aiStatusTitle = awaitingOutlineSelection ? '等待确认一级目录' : generating ? 'AI 正在工作' : taskFailed ? '生成失败' : outlineData ? '目录已生成' : '等待生成';
   const statusMessage = taskFailed ? task?.error || latestLog || '目录生成失败，请查看开发者日志。' : latestLog || '点击生成目录后，这里会显示目录生成、审核和修正过程。';
   const startedAt = task?.started_at ? Date.parse(task.started_at) : NaN;
   const updatedAt = task?.updated_at ? Date.parse(task.updated_at) : NaN;
@@ -437,14 +479,18 @@ function OutlineEditPage({
   }, [task?.status]);
 
   useEffect(() => {
-    if (task?.status !== 'success' || !hasOutlineSelection) {
+    if (task?.status !== 'error' || !task.task_id || shownTaskErrorIdRef.current === task.task_id) return;
+    shownTaskErrorIdRef.current = task.task_id;
+    showToast(task.error || '目录生成失败，请调整设置后重新生成目录', 'error');
+  }, [showToast, task?.error, task?.status, task?.task_id]);
+
+  useEffect(() => {
+    if (!awaitingOutlineSelection) {
       setSelectionDialogOpen(false);
       return;
     }
-    if (!outlineSelection?.confirmed) {
-      setSelectionDialogOpen(true);
-    }
-  }, [hasOutlineSelection, outlineSelection?.confirmed, task?.status, task?.task_id]);
+    setSelectionDialogOpen(true);
+  }, [awaitingOutlineSelection, task?.task_id]);
 
   useEffect(() => {
     if (!generating) {
@@ -671,7 +717,9 @@ function OutlineEditPage({
       return;
     }
 
-    const renumbered = renumberOutlineItemsWithIdMap(outline);
+    const normalizedOutline = normalizeOutlineContentModes(outline);
+    assertLeafContentModes(normalizedOutline);
+    const renumbered = renumberOutlineItemsWithIdMap(normalizedOutline);
     await onOutlineSaved({
       outlineData: { ...outlineData, outline: renumbered.outline },
       reason,
@@ -688,6 +736,8 @@ function OutlineEditPage({
     setEditingItemId(item.id);
     setEditTitle(item.title);
     setEditDescription(item.description);
+    setEditContentMode(item.content_mode || 'ai-generate');
+    setEditContentModeNote(item.content_mode_note || '');
   };
 
   const saveEditing = async () => {
@@ -700,6 +750,10 @@ function OutlineEditPage({
         ...item,
         title: editTitle.trim() || item.title,
         description: editDescription.trim(),
+        ...(!item.children?.length ? {
+          content_mode: editContentMode,
+          content_mode_note: editContentMode === 'other' ? editContentModeNote.trim() || undefined : undefined,
+        } : {}),
       })), 'edit', [editingItemId]);
       setEditingItemId(null);
       showToast('目录项已更新，相关正文已清空', 'success');
@@ -717,6 +771,7 @@ function OutlineEditPage({
       id: `${outlineData.outline.length + 1}`,
       title: '新目录项',
       description: '请编辑描述',
+      content_mode: 'ai-generate',
     };
     try {
       await saveOutlineChange([...outlineData.outline, newItem], 'add-root');
@@ -724,6 +779,8 @@ function OutlineEditPage({
       setEditingItemId(newItem.id);
       setEditTitle(newItem.title);
       setEditDescription(newItem.description);
+      setEditContentMode(newItem.content_mode || 'ai-generate');
+      setEditContentModeNote(newItem.content_mode_note || '');
       showToast('一级目录已添加', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '添加一级目录失败', 'error');
@@ -741,6 +798,7 @@ function OutlineEditPage({
       id: `${parentId}.${nextIndex}`,
       title: '新目录项',
       description: '请编辑描述',
+      content_mode: 'ai-generate',
     };
 
     try {
@@ -753,6 +811,8 @@ function OutlineEditPage({
       setEditingItemId(newItem.id);
       setEditTitle(newItem.title);
       setEditDescription(newItem.description);
+      setEditContentMode(newItem.content_mode || 'ai-generate');
+      setEditContentModeNote(newItem.content_mode_note || '');
       showToast('子目录已添加，父目录正文已清空', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '添加子目录失败', 'error');
@@ -977,6 +1037,9 @@ function OutlineEditPage({
             onDoubleClick={() => hasChildren && toggleExpanded(item.id)}
           >
             <strong>{formatOutlineTitle(item.id, item.title, exportFormat.headings[Math.min(item.id.split('.').length - 1, 5)])}</strong>
+            {!hasChildren && item.content_mode && (
+              <span className={`outline-content-mode-badge is-${item.content_mode}`}>{OUTLINE_CONTENT_MODE_LABELS[item.content_mode]}</span>
+            )}
           </button>
         </div>
         {hasChildren && isExpanded && item.children?.map((child) => renderItem(child, level + 1))}
@@ -1169,9 +1232,9 @@ function OutlineEditPage({
           <p>{isExpansionWorkflow ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `当前一级目录生成方式：${outlineModeLabels[outlineMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
         </div>
         <div className="outline-command-actions">
-          {hasOutlineSelection && (
-            <button type="button" className="secondary-action" onClick={() => setSelectionDialogOpen(true)} disabled={generating}>
-              查看一级目录
+          {awaitingOutlineSelection && (
+            <button type="button" className="secondary-action" onClick={() => setSelectionDialogOpen(true)}>
+              确认一级目录
             </button>
           )}
           <button
@@ -1265,10 +1328,10 @@ function OutlineEditPage({
             </div>
           ) : (
             <div className="markdown-empty-state outline-empty-state">
-              <strong>{hasOutlineSelection ? '一级目录已生成' : '尚未生成目录'}</strong>
-              <p>{hasOutlineSelection
-                ? outlineSelection?.confirmed ? '已保存待扩展目录选择，等待后续目录生成。' : '请查看并确认需要继续使用的一级目录。'
-                : '先完成招标文件解析，再生成技术方案目录。'}</p>
+              <strong>{awaitingOutlineSelection ? '一级目录已生成' : '尚未生成目录'}</strong>
+              <p>{awaitingOutlineSelection
+                ? '请查看并确认需要继续使用的一级目录。'
+                : taskFailed ? '上次目录生成未完成，请重新生成目录。' : '先完成招标文件解析，再生成技术方案目录。'}</p>
             </div>
           )}
         </section>
@@ -1301,6 +1364,20 @@ function OutlineEditPage({
                     <span>描述</span>
                     <textarea value={editDescription} onChange={(event) => setEditDescription(event.target.value)} disabled={outlineMutationLocked || sorting} />
                   </label>
+                  {!selectedItem.children?.length && (
+                    <label>
+                      <span>内容处理模式</span>
+                      <select value={editContentMode} onChange={(event) => setEditContentMode(event.target.value as OutlineContentMode)} disabled={outlineMutationLocked || sorting}>
+                        {contentModeOptions.map((mode) => <option value={mode} key={mode}>{OUTLINE_CONTENT_MODE_LABELS[mode]}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  {!selectedItem.children?.length && editContentMode === 'other' && (
+                    <label>
+                      <span>其他模式说明</span>
+                      <textarea value={editContentModeNote} onChange={(event) => setEditContentModeNote(event.target.value)} disabled={outlineMutationLocked || sorting} />
+                    </label>
+                  )}
                   <div className="outline-detail-actions">
                     <button type="button" className="primary-action" onClick={() => { void saveEditing(); }} disabled={outlineMutationLocked || sorting}>保存</button>
                     <button type="button" className="secondary-action" onClick={() => setEditingItemId(null)}>取消</button>
@@ -1310,6 +1387,12 @@ function OutlineEditPage({
                 <>
                   <h3>{selectedItem.title}</h3>
                   <p>{selectedItem.description || '无描述'}</p>
+                  {!selectedItem.children?.length && selectedItem.content_mode && (
+                    <span className={`outline-content-mode-badge is-${selectedItem.content_mode}`}>{OUTLINE_CONTENT_MODE_LABELS[selectedItem.content_mode]}</span>
+                  )}
+                  {!selectedItem.children?.length && selectedItem.content_mode === 'other' && selectedItem.content_mode_note && (
+                    <small>{selectedItem.content_mode_note}</small>
+                  )}
                   {selectedItem.source_requirement_title && (
                     <small>{outlineMode === 'response-file' ? '来源响应文件目录' : '来源评分项'}：{selectedItem.source_requirement_title}</small>
                   )}

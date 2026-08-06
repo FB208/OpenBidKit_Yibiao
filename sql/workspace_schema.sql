@@ -133,6 +133,8 @@ CREATE TABLE IF NOT EXISTS technical_plan_outline_nodes (
   level INTEGER NOT NULL,
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
+  content_mode TEXT,
+  content_mode_note TEXT,
   source_requirement_id TEXT,
   source_requirement_title TEXT,
   knowledge_item_ids_json TEXT,

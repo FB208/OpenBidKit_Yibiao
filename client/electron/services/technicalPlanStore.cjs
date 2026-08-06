@@ -308,6 +308,8 @@ function flattenOutlineItems(items, parentNodeId = null, level = 1, rows = []) {
       level,
       title: String(item?.title || '未命名章节').trim() || '未命名章节',
       description: String(item?.description || '').trim(),
+      content_mode: item?.children?.length ? null : String(item?.content_mode || '').trim() || null,
+      content_mode_note: item?.children?.length || item?.content_mode !== 'other' ? null : String(item?.content_mode_note || '').trim() || null,
       source_requirement_id: item?.source_requirement_id ? String(item.source_requirement_id) : null,
       source_requirement_title: item?.source_requirement_title ? String(item.source_requirement_title) : null,
       knowledge_item_ids_json: Array.isArray(item?.knowledge_item_ids) && item.knowledge_item_ids.length ? JSON.stringify(item.knowledge_item_ids) : null,
@@ -907,6 +909,8 @@ function createTechnicalPlanStore({ app, db, fileService }) {
         id: row.node_id,
         title: row.title,
         description: row.description || '',
+        content_mode: row.content_mode || undefined,
+        content_mode_note: row.content_mode_note || undefined,
         source_requirement_id: row.source_requirement_id || undefined,
         source_requirement_title: row.source_requirement_title || undefined,
         knowledge_item_ids: safeJsonParse(row.knowledge_item_ids_json, undefined),
@@ -955,10 +959,10 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     const nextIds = new Set(rows.map((row) => row.node_id));
     const upsert = db.prepare(`
       INSERT INTO technical_plan_outline_nodes (
-        node_id, parent_node_id, sort_order, level, title, description, source_requirement_id,
+        node_id, parent_node_id, sort_order, level, title, description, content_mode, content_mode_note, source_requirement_id,
         source_requirement_title, knowledge_item_ids_json, content, created_at, updated_at
       ) VALUES (
-        @node_id, @parent_node_id, @sort_order, @level, @title, @description, @source_requirement_id,
+        @node_id, @parent_node_id, @sort_order, @level, @title, @description, @content_mode, @content_mode_note, @source_requirement_id,
         @source_requirement_title, @knowledge_item_ids_json, @content, @created_at, @updated_at
       ) ON CONFLICT(node_id) DO UPDATE SET
         parent_node_id = excluded.parent_node_id,
@@ -966,6 +970,8 @@ function createTechnicalPlanStore({ app, db, fileService }) {
         level = excluded.level,
         title = excluded.title,
         description = excluded.description,
+        content_mode = excluded.content_mode,
+        content_mode_note = excluded.content_mode_note,
         source_requirement_id = excluded.source_requirement_id,
         source_requirement_title = excluded.source_requirement_title,
         knowledge_item_ids_json = excluded.knowledge_item_ids_json,
