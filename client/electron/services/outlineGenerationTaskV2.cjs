@@ -1,3 +1,9 @@
+// 将 Agent 活动消息整理成页面使用的短标题。
+function formatProgressTitle(value) {
+  const title = String(value || '').replace(/\s+/g, ' ').trim();
+  return Array.from(title).slice(0, 20).join('');
+}
+
 /**
  * 运行 V2 目录生成工作流。
  */
@@ -73,19 +79,36 @@ JSON 格式：
 5. attr 是目录属性，必须根据工作空间材料从“通用”“商务”“资信”“技术”“其他”中选择一个填写。其中封面、总目录、编制说明、总体说明等跨部分内容归为“通用”；确实无法归入其他类别的内容才归为“其他”。
 6. ${outputFile} 必须是可被 JSON.parse 直接解析的纯 JSON，不要包含 Markdown 代码块、解释文字或其他内容。`;
 
-  let logs = ['开始调用 Agent 生成一级目录。'];
-  let task = updateTask({ status: 'running', progress: 10, logs });
+  let logs = ['开始生成一级目录'];
+  let currentProgress = 10;
+  let task = updateTask({ status: 'running', progress: currentProgress, logs });
   let technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
   updateTask(task, technicalPlan);
+
+  // 将 Agent 可见活动同步到目录生成过程，不保存活动详情。
+  function publishAgentActivity(event = {}) {
+    const title = formatProgressTitle(event.message);
+    if (!title || event.visible === false) return;
+
+    const latestTitle = logs[logs.length - 1];
+    if (title === latestTitle) return;
+
+    currentProgress = Math.max(currentProgress, 50);
+    logs = [...logs, title];
+    task = updateTask({ status: 'running', progress: currentProgress, logs });
+    technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
+    updateTask(task, technicalPlan);
+  }
 
   await agentService.runTask({
     title: '技术方案一级目录生成 V2',
     prompt,
     output_file: outputFile,
     files,
+    onActivity: publishAgentActivity,
   });
 
-  logs = [...logs, 'Agent 一级目录生成完成，可在 Agent 监视器中查看 outline.json。'];
+  logs = [...logs, '一级目录生成完成'];
   task = updateTask({ status: 'success', progress: 100, error: undefined, logs });
   technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
   updateTask(task, technicalPlan);
