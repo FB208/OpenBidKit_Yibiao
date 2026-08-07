@@ -590,30 +590,54 @@ function extractContentFromResponseData(responseData) {
     .trim();
 }
 
-function createStreamResponseData(content, usage) {
+function createStreamResponseData(content, usage, streamMeta) {
   return {
     stream: true,
-    choices: [{ message: { content } }],
+    choices: [{
+      finish_reason: streamMeta.finish_reasons[streamMeta.finish_reasons.length - 1] || null,
+      message: { content },
+    }],
     usage,
+    stream_meta: streamMeta,
   };
 }
 
 function createSseResponseCollector() {
   let buffer = '';
   let usage = null;
+  let parsedEventCount = 0;
+  let sawDone = false;
+  let streamError = null;
   const contentParts = [];
+  const finishReasons = [];
 
   function processLine(line) {
     const trimmed = String(line || '').trim();
     if (!trimmed.startsWith('data:')) return;
 
     const data = trimmed.slice(5).trim();
-    if (!data || data === '[DONE]') return;
+    if (!data) return;
+    if (data === '[DONE]') {
+      sawDone = true;
+      return;
+    }
 
     try {
       const payload = JSON.parse(data);
+      parsedEventCount += 1;
       const nextUsage = extractUsageFromPayload(payload);
       if (nextUsage) usage = nextUsage;
+      const choices = Array.isArray(payload?.choices) ? payload.choices : [];
+      choices.forEach((choice) => {
+        if (choice?.finish_reason) finishReasons.push(String(choice.finish_reason));
+      });
+      if (payload?.error) {
+        const source = payload.error;
+        streamError = {
+          type: String(source?.type || source?.code || payload?.type || 'stream_error'),
+          message: String(source?.message || payload?.message || (typeof source === 'string' ? source : JSON.stringify(source))),
+        };
+      }
       appendPayloadContent(payload, contentParts);
     } catch {
       // 单行解析失败不影响流式转发。
@@ -633,10 +657,18 @@ function createSseResponseCollector() {
       }
       buffer = '';
       const content = contentParts.join('').trim();
+      const streamMeta = {
+        parsed_event_count: parsedEventCount,
+        saw_done: sawDone,
+        finish_reasons: [...finishReasons],
+        error: streamError,
+      };
       return {
         content,
-        responseData: createStreamResponseData(content, usage),
+        responseData: createStreamResponseData(content, usage, streamMeta),
         usage,
+        streamError,
+        streamMeta,
       };
     },
   };
@@ -675,12 +707,14 @@ function createUsageCapturingStream(source, onDone, options = {}) {
           controller.enqueue(value);
         }
       } catch (error) {
-        options.onError?.(error);
+        collector.push(decoder.decode());
+        options.onError?.(error, collector.flush());
         throw error;
       }
     },
     async cancel(reason) {
-      options.onCancel?.(reason);
+      collector.push(decoder.decode());
+      options.onCancel?.(reason, collector.flush());
       try { await reader.cancel(reason); } catch {}
     },
   });
@@ -763,8 +797,8 @@ function recordAgentAiSuccess({ app, config, runtimeMeta, requestId, requestBody
   });
 }
 
-function recordAgentAiFailure({ app, config, runtimeMeta, requestId, requestBody, error, responseData, startedAt, attempt, diagnostics }) {
-  recordProxyTextTokenStats(config, null);
+function recordAgentAiFailure({ app, config, runtimeMeta, requestId, requestBody, error, response, responseData, usage, startedAt, attempt, diagnostics }) {
+  recordProxyTextTokenStats(config, usage || null);
 
   const errorMessage = safeErrorMessage(error);
   safeWriteAgentAiLog(app, config, {
@@ -776,6 +810,7 @@ function recordAgentAiFailure({ app, config, runtimeMeta, requestId, requestBody
     request: requestBody,
     response: getAiErrorLogResponse(error, responseData || null),
     error: getAiErrorLogError(error, errorMessage),
+    upstream_request_id: response?.headers?.get?.('x-request-id') || '',
     created_at: new Date().toISOString(),
   });
 
@@ -790,6 +825,8 @@ function recordAgentAiFailure({ app, config, runtimeMeta, requestId, requestBody
     endpoint_host: normalizeEndpointHost(config.base_url),
     request_hash: createPromptHash(requestBody),
     messages_count: Array.isArray(requestBody.messages) ? requestBody.messages.length : 0,
+    upstream_status: Number(response?.status || 0),
+    upstream_request_id: response?.headers?.get?.('x-request-id') || '',
     error: errorMessage,
   });
 
@@ -797,6 +834,8 @@ function recordAgentAiFailure({ app, config, runtimeMeta, requestId, requestBody
     request_id: requestId,
     attempt,
     duration_ms: Date.now() - startedAt,
+    upstream_status: Number(response?.status || 0),
+    upstream_request_id: response?.headers?.get?.('x-request-id') || '',
     request: summarizeRequestBody(requestBody),
     error: summarizeProxyError(error),
     response_excerpt: String(responseData || error?.raw_response_body || '').slice(0, 2000),
@@ -809,7 +848,45 @@ async function prepareProxyResponse({ app, config, runtimeMeta, requestId, reque
   const isSse = stream || contentType.toLowerCase().includes('text/event-stream');
 
   if (isSse) {
+    let streamFinalized = false;
+    const finalizeStreamFailure = (error, capture) => {
+      if (streamFinalized) return;
+      streamFinalized = true;
+      streamTimeout?.clear?.();
+      recordAgentAiFailure({
+        app,
+        config,
+        runtimeMeta,
+        requestId,
+        requestBody,
+        response,
+        error,
+        responseData: capture?.responseData || null,
+        usage: capture?.usage || null,
+        startedAt,
+        attempt,
+        diagnostics,
+      });
+      emitProxyActivity(onActivity, activityContext, {
+        stage: 'model_request',
+        message: safeErrorMessage(error),
+        source: 'proxy.upstream.failed',
+        activity: true,
+        meta: { request_id: requestId, attempt, error: safeErrorMessage(error), stream: true },
+      });
+    };
+    const createStreamFailure = (capture, fallbackMessage) => {
+      const error = markAiRequestError(new Error(capture?.streamError?.message || fallbackMessage), { retryable: true });
+      error.code = capture?.streamError?.type || 'AI_STREAM_INCOMPLETE';
+      return error;
+    };
     const body = createUsageCapturingStream(response.body, (capture) => {
+      if (capture.streamError) {
+        finalizeStreamFailure(createStreamFailure(capture, 'AI 流式响应返回错误'), capture);
+        return;
+      }
+      if (streamFinalized) return;
+      streamFinalized = true;
       recordAgentAiSuccess({
         app,
         config,
@@ -840,17 +917,11 @@ async function prepareProxyResponse({ app, config, runtimeMeta, requestId, reque
         meta: { ...(event.meta || {}), request_id: requestId, attempt, stream: true },
       }),
       onDone: () => streamTimeout?.clear?.(),
-      onCancel: () => streamTimeout?.clear?.(),
-      onError: (error) => {
-        streamTimeout?.clear?.();
-        emitProxyActivity(onActivity, activityContext, {
-          stage: 'model_request',
-          message: safeErrorMessage(error),
-          source: 'proxy.upstream.failed',
-          activity: true,
-          meta: { request_id: requestId, attempt, error: safeErrorMessage(error) },
-        });
-      },
+      onCancel: (reason, capture) => finalizeStreamFailure(
+        createStreamFailure(capture, safeErrorMessage(reason || 'AI 流式响应在完成前被取消')),
+        capture,
+      ),
+      onError: (error, capture) => finalizeStreamFailure(error, capture),
     });
 
     return new Response(body, {

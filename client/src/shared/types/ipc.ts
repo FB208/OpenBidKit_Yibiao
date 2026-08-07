@@ -321,6 +321,7 @@ export interface AgentRunResult {
 export type AgentMonitorEventType =
   | 'task_start'
   | 'task_input'
+  | 'task_output'
   | 'assistant_delta'
   | 'assistant_end'
   | 'tool_start'
@@ -333,6 +334,8 @@ export type AgentMonitorEventType =
   | 'turn_end'
   | 'compaction_start'
   | 'compaction_end'
+  | 'auto_retry_start'
+  | 'auto_retry_end'
   | 'retry'
   | 'task_end'
   | 'task_error';
@@ -359,6 +362,9 @@ export interface AgentMonitorEvent {
   is_error?: boolean;
   attempt?: number;
   maximum?: number;
+  delay_ms?: number;
+  success?: boolean;
+  final_error?: string;
   message?: string;
   output_content?: string;
   assistant_text?: string;

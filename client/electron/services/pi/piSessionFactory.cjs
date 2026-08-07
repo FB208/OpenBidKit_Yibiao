@@ -4,6 +4,9 @@ const {
 const {
   createPiUserQuestionTool,
 } = require('./piUserQuestionTool.cjs');
+const {
+  createPiRetryErrorNormalizer,
+} = require('./piRetryErrorNormalizer.cjs');
 
 let piModulesPromise = null;
 
@@ -81,6 +84,7 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     cwd: workspaceDir,
     agentDir: environment.layout.agentDir,
     settingsManager,
+    extensionFactories: [createPiRetryErrorNormalizer()],
     noContextFiles: true,
     noExtensions: true,
     noSkills: true,

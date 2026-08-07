@@ -5,6 +5,7 @@ const { getDeveloperLogsDir } = require('../../utils/paths.cjs');
 const { createAgentOpenAiProxy } = require('../agent/agentOpenAiProxy.cjs');
 const { trackAgentRuntime } = require('../agent/agentRuntimeAnalytics.cjs');
 const { preparePiEnvironment } = require('./piEnvironment.cjs');
+const { restorePiErrorMessage } = require('./piRetryErrorNormalizer.cjs');
 const { createPiSession, loadPiModules } = require('./piSessionFactory.cjs');
 const {
   createPersistentAgentTask,
@@ -168,7 +169,9 @@ function extractAssistantText(messages = []) {
 
 function getAssistantError(messages = []) {
   const assistant = [...messages].reverse().find((message) => message?.role === 'assistant');
-  return assistant?.stopReason === 'error' ? assistant.errorMessage || 'Pi Agent 模型请求失败' : '';
+  return assistant?.stopReason === 'error'
+    ? restorePiErrorMessage(assistant.errorMessage || 'Pi Agent 模型请求失败')
+    : '';
 }
 
 function getAssistantErrorDetails(messages = []) {
@@ -176,7 +179,7 @@ function getAssistantErrorDetails(messages = []) {
   if (!assistant || assistant.stopReason !== 'error') return null;
   return {
     stop_reason: assistant.stopReason,
-    error_message: assistant.errorMessage || 'Pi Agent 模型请求失败',
+    error_message: restorePiErrorMessage(assistant.errorMessage || 'Pi Agent 模型请求失败'),
     api: assistant.api || '',
     provider: assistant.provider || '',
     model: assistant.model || '',
@@ -478,6 +481,55 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           visible: true,
           activity: true,
           meta: { tool: event.toolName, is_error: Boolean(event.isError) },
+        });
+        return;
+      }
+      if (event.type === 'auto_retry_start') {
+        const errorMessage = restorePiErrorMessage(event.errorMessage || '模型服务暂时不可用');
+        const delaySeconds = Math.max(0, Math.round(Number(event.delayMs || 0) / 1000));
+        const retryMessage = `模型请求遇到临时错误，${delaySeconds} 秒后进行第 ${event.attempt}/${event.maxAttempts} 次重试：${compactText(errorMessage, 160)}`;
+        if (isMonitorActive?.()) {
+          emitMonitorEvent({
+            type: 'auto_retry_start',
+            attempt: event.attempt,
+            maximum: event.maxAttempts,
+            delay_ms: event.delayMs,
+            message: errorMessage,
+          });
+        }
+        touchActivity({
+          task_token: taskToken,
+          stage: 'model_retry',
+          message: retryMessage,
+          source: 'pi.auto-retry.start',
+          visible: true,
+          activity: true,
+          meta: { attempt: event.attempt, maximum: event.maxAttempts, delay_ms: event.delayMs, error: errorMessage },
+        });
+        return;
+      }
+      if (event.type === 'auto_retry_end') {
+        const finalError = restorePiErrorMessage(event.finalError || '');
+        const retryMessage = event.success
+          ? `模型请求已恢复，第 ${event.attempt} 次重试成功`
+          : `模型请求重试 ${event.attempt} 次后仍失败${finalError ? `：${compactText(finalError, 160)}` : ''}`;
+        if (isMonitorActive?.()) {
+          emitMonitorEvent({
+            type: 'auto_retry_end',
+            attempt: event.attempt,
+            success: Boolean(event.success),
+            final_error: finalError,
+            message: retryMessage,
+          });
+        }
+        touchActivity({
+          task_token: taskToken,
+          stage: 'model_retry',
+          message: retryMessage,
+          source: 'pi.auto-retry.end',
+          visible: true,
+          activity: true,
+          meta: { attempt: event.attempt, success: Boolean(event.success), error: finalError },
         });
         return;
       }
@@ -824,8 +876,20 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         }
 
         if (typeof payload.continueTask !== 'function') break;
+        const completedStageIndex = stageIndex;
+        const completedWorkflowStage = activeTask.workflow_stage;
         const continuation = await payload.continueTask(candidate, createWorkflowMeta());
         if (!continuation || continuation.complete === true || !continuation.prompt) break;
+        emitMonitorEvent({
+          type: 'task_output',
+          task_id: taskId,
+          title,
+          workspace_dir: workspaceDir,
+          stage_index: completedStageIndex,
+          workflow_stage: completedWorkflowStage,
+          output_file: candidate.output_file || outputFile,
+          output_content: candidate.output_content || '',
+        });
         const continuationFiles = Array.isArray(continuation.files) ? continuation.files : [];
         if (continuationFiles.length) {
           await writeWorkspaceFilesAsync(workspaceDir, continuationFiles);
@@ -943,6 +1007,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         task_id: taskId,
         title,
         workspace_dir: archivedWorkspace,
+        stage_index: activeTask.stage_index,
+        workflow_stage: activeTask.workflow_stage,
         output_file: outputFile,
         output_content: output.content,
         assistant_text: assistantText,
@@ -991,6 +1057,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         task_id: taskId,
         title,
         workspace_dir: archivedWorkspace || workspaceDir,
+        stage_index: activeTask.stage_index,
+        workflow_stage: activeTask.workflow_stage,
         output_file: outputFile,
         output_content: output.content,
         message: error?.message || String(error),

@@ -1438,19 +1438,40 @@ body.agent-monitor-root #root {
   font-size: 11px;
 }
 
-.agent-monitor-input-round > header > div {
+.agent-monitor-input-round > header > div,
+.agent-monitor-output-round > header > div {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 3px;
 }
 
-.agent-monitor-input-round > header small {
+.agent-monitor-input-round > header small,
+.agent-monitor-output-round > header small {
   overflow: hidden;
   color: var(--yb-text-muted);
   font: 10px "Cascadia Mono", Consolas, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-monitor-output-file-meta {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 14px;
+  color: var(--yb-text-soft);
+  background: #fbfcfe;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.agent-monitor-output-file-meta strong { font-size: 11px; }
+
+.agent-monitor-output-file-meta span {
+  color: var(--yb-text-muted);
+  font-size: 10px;
 }
 
 .agent-monitor-input-block + .agent-monitor-input-block {

@@ -8,6 +8,7 @@ const {
   BUNDLED_COMMANDS,
   SHIM_COMMANDS,
 } = require('../agent/agentToolEnvironment.cjs');
+const { PI_RETRY_ERROR_NORMALIZER_PATH } = require('./piRetryErrorNormalizer.cjs');
 
 const EXPECTED_PI_TOOLS = ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user'];
 const CRITICAL_COMMANDS = new Set(['node', ...BUNDLED_COMMANDS]);
@@ -828,11 +829,13 @@ function ensureLoopbackNoProxy(env = process.env) {
 // 校验 Pi 只加载内置上下文，并精确启用方案指定工具。
 function validatePiSessionSnapshot(snapshot = {}) {
   const activeTools = Array.isArray(snapshot.active_tools) ? snapshot.active_tools : [];
+  const extensions = Array.isArray(snapshot.extensions) ? snapshot.extensions : [];
   const resourcesValid = snapshot.context_files?.length === 1
     && snapshot.context_files[0] === '<yibiao-agent-workspace>'
     && !snapshot.skills?.length
     && !snapshot.prompts?.length
-    && !snapshot.extensions?.length;
+    && extensions.length === 1
+    && extensions[0] === PI_RETRY_ERROR_NORMALIZER_PATH;
   const toolsValid = activeTools.length === EXPECTED_PI_TOOLS.length
     && EXPECTED_PI_TOOLS.every((tool) => activeTools.includes(tool));
   return { resourcesValid, toolsValid };
@@ -861,7 +864,7 @@ function createPiDiagnosticSections({ layout, sdkVersion, sessionSnapshot = {}, 
       id: 'pi-resources',
       title: '资源加载',
       status: validation.resourcesValid ? 'success' : 'error',
-      summary: validation.resourcesValid ? '仅加载易标内置工作区指令' : '资源加载结果不符合配置',
+      summary: validation.resourcesValid ? '仅加载易标内置工作区指令和错误规范化扩展' : '资源加载结果不符合配置',
       details: [
         { label: '上下文文件', value: sessionSnapshot.context_files?.join('、') || '-' },
         { label: 'Skill', value: String(sessionSnapshot.skills?.length || 0) },

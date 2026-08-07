@@ -261,15 +261,8 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
       label: safeText(option?.label),
       description: safeText(option?.description),
       recommended: index === 0,
-      custom: false,
+      custom: option?.custom === true,
     }));
-    options.push({
-      id: 'other',
-      label: '其他',
-      description: '自行输入其他答案',
-      recommended: false,
-      custom: true,
-    });
     const question = {
       question_id: questionId,
       task_id: safeText(request.task_id),
@@ -307,7 +300,7 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     const option = entry.question.options.find((item) => item.id === payload.option_id);
     if (!option) throw new Error('请选择一个有效选项');
     const answer = option.custom ? safeText(payload.custom_answer) : option.label;
-    if (!answer) throw new Error('请输入其他答案');
+    if (!answer) throw new Error('请输入具体要求');
     const result = {
       answer,
       selected_option: option.label,
