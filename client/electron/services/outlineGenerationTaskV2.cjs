@@ -7,6 +7,7 @@ const SCORE_DIRECTORY_PLAN_FILE = 'score-directory-plan.json';
 const LEAF_ALLOCATION_FILE = 'leaf-allocation.json';
 const LEAF_ALLOCATION_CONTEXT_FILE = 'leaf-allocation-context.json';
 const LEAF_DECISION_FILE = 'leaf-count-decision.json';
+const OUTLINE_REVIEW_FILE = 'outline-review.json';
 const AI_CONTENT_MODE = 'ai-generate';
 const CONTENT_MODES = ['ai-generate', 'template-fill', 'point-to-point', 'other'];
 
@@ -150,6 +151,34 @@ const LEAF_DECISION_SCHEMA = {
   additionalProperties: false,
   properties: {
     status: { type: 'string', enum: ['accepted', 'cancelled'] },
+  },
+};
+
+const OUTLINE_REVIEW_SCHEMA = {
+  type: 'object',
+  required: ['status', 'issues', 'user_feedback', 'summary'],
+  additionalProperties: false,
+  properties: {
+    status: { type: 'string', enum: ['passed', 'simple_fix', 'user_feedback', 'user_refuse'] },
+    issues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['category', 'problem', 'repair', 'confirmation_required'],
+        additionalProperties: false,
+        properties: {
+          category: {
+            type: 'string',
+            enum: ['leaf-count', 'score-coverage', 'duplicate-directory', 'professional-structure'],
+          },
+          problem: { type: 'string', minLength: 1 },
+          repair: { type: 'string', minLength: 1 },
+          confirmation_required: { type: 'boolean' },
+        },
+      },
+    },
+    user_feedback: { type: 'string' },
+    summary: { type: 'string', minLength: 1 },
   },
 };
 
@@ -312,6 +341,62 @@ function readJson(content, label) {
     return JSON.parse(String(content || '').trim());
   } catch (error) {
     throw new Error(`${label}不是合法 JSON：${error?.message || String(error)}`);
+  }
+}
+
+// 校验审核状态、真实用户回答和目录改动是否一致，决定最终目录能否写入业务 Store。
+function validateOutlineReviewOutcome({ review, baselineOutline, reviewedOutline, answers, targetLeafCount }) {
+  const status = String(review?.status || '');
+  const issues = Array.isArray(review?.issues) ? review.issues : [];
+  const reviewAnswers = (answers || []).filter((item) => item?.workflow_stage === 'outline_review');
+  const changed = JSON.stringify(baselineOutline) !== JSON.stringify(reviewedOutline);
+  const feedback = String(review?.user_feedback || '').trim();
+  const simpleCategories = new Set(['duplicate-directory', 'professional-structure']);
+  const hasConfirmationIssue = issues.some((item) => item?.confirmation_required === true);
+  const hasInvalidSimpleIssue = issues.some((item) => (
+    item?.confirmation_required !== false || !simpleCategories.has(String(item?.category || ''))
+  ));
+  const validateChangedLeafCountRange = () => {
+    if (targetLeafCount === null) return;
+    const leafCount = countAiLeaves(reviewedOutline.outline);
+    const minimum = Math.max(1, targetLeafCount - 2);
+    const maximum = targetLeafCount + 2;
+    if (leafCount < minimum || leafCount > maximum) {
+      throw new Error(`目录审核修改后的 AI 生成叶子数量必须保持在 ${minimum} 至 ${maximum} 个`);
+    }
+  };
+
+  if (status === 'passed') {
+    if (issues.length || reviewAnswers.length || changed || feedback) {
+      throw new Error('目录审核状态为 passed，但问题、提问记录或目录改动与通过状态不一致');
+    }
+    return;
+  }
+
+  if (status === 'simple_fix') {
+    if (!issues.length || hasInvalidSimpleIssue || reviewAnswers.length || !changed || feedback) {
+      throw new Error('目录审核状态为 simple_fix，但问题类型、提问记录或目录改动不符合静默微调规则');
+    }
+    validateChangedLeafCountRange();
+    return;
+  }
+
+  if (status !== 'user_feedback' && status !== 'user_refuse') {
+    throw new Error(`未知的目录审核状态：${status || '空'}`);
+  }
+  if (!issues.length || !hasConfirmationIssue || reviewAnswers.length !== 1) {
+    throw new Error(`目录审核状态为 ${status}，但待确认问题或真实用户回答记录不完整`);
+  }
+  const actualAnswer = String(reviewAnswers[0].answer || '').trim();
+  if (!feedback || feedback !== actualAnswer) {
+    throw new Error('目录审核文件中的用户反馈与本轮真实 ask-user 回答不一致');
+  }
+  if (status === 'user_feedback' && !changed) {
+    throw new Error('用户已确认修改方案，但 Agent 未实际修改目录');
+  }
+  if (status === 'user_feedback') validateChangedLeafCountRange();
+  if (status === 'user_refuse' && changed) {
+    throw new Error('用户已拒绝修改，但 Agent 改动了审核前目录');
   }
 }
 
@@ -531,6 +616,46 @@ function createFinalLeafDecisionPrompt(targetLeafCount, actualLeafCount) {
 用户接受时写入 ${LEAF_DECISION_FILE}：{"status":"accepted"}；用户取消时写入：{"status":"cancelled"}。写入后调用 json-validation 校验该文件。`;
 }
 
+function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRootChanges }) {
+  const leafCountReview = targetLeafCount === null
+    ? ''
+    : `\n- “AI生成”叶子数量：程序计算目标为 ${targetLeafCount} 个，当前为 ${actualLeafCount} 个，可接受范围为 ${Math.max(1, targetLeafCount - 2)} 至 ${targetLeafCount + 2} 个。只统计 content_mode=ai-generate 的最终叶子节点；修复后仍须保持在此范围内。`;
+  const rootRequirement = allowRootChanges
+    ? `一级目录只能保持用户已批准的 ${SCORE_DIRECTORY_PLAN_FILE} 规划，不得提出规划之外的新调整。`
+    : '一级目录已经由用户确认，数量、顺序、标题、描述和属性不得修改。';
+  return `请对当前完整技术方案目录执行最终审核，并在用户确认后完成必要修复。
+
+请先阅读：
+- ${OUTLINE_OUTPUT_FILE}
+- 技术评分信息.md
+- ${TECHNICAL_SCORE_GROUPS_FILE}
+- ${SCORE_DIRECTORY_PLAN_FILE}
+- 当前工作区中已有的原方案和参考知识库材料
+
+审核维度：${leafCountReview}
+- 评分覆盖：直接以技术评分信息.md 为原始依据，逐项检查其中适合技术方案响应的评分大项是否被目录准确覆盖；结构化评分项和目录规划用于核对已确认的映射，但不能掩盖原始评分信息中的遗漏。
+- 重复目录：检查全部子目录中是否存在重复、近义、含义重叠或仅换一种说法的节点；不同专业分支下确有独立含义的同名标题不应机械判重。
+- 专业合理性：评估目录层级、颗粒度、逻辑顺序、标题表达、节点归属以及内容处理模式是否适合正式技术投标文件。
+
+审核与修复流程：
+1. 必须先完整审核并形成问题清单，不得边审核边修改。
+2. 如果没有问题，不要修改 ${OUTLINE_OUTPUT_FILE}；写入 ${OUTLINE_REVIEW_FILE}，status=passed、issues=[]、user_feedback=""，summary 说明通过原因。
+3. 如果发现问题，先为每个问题记录 category、problem、推荐 repair 和 confirmation_required，不得提前修改目录。
+4. 只有以下问题可设 confirmation_required=false：标题或说明的专业化优化；不涉及评分项映射节点、目标层级和一级目录的明显重复或近义子目录合并。评分覆盖缺失、叶子数量超出合理范围、评分项目标层级调整、一级目录调整、增加或拆分目录、跨分支移动以及明显结构重排均必须设为 true。
+5. 如果全部问题都不需要确认，可以直接执行文案优化或轻微去重，不得调用 ask-user；完成后设置 status=simple_fix、user_feedback=""。静默修复不得改变评分项映射、评分项目标层级和一级目录，且不得使 AI 生成叶子数量超出程序给出的合理范围。
+6. 只要存在一个 confirmation_required=true 的问题，本轮所有问题都不得提前修改。集中调用一次 ask-user，question 使用多行文本完整列出问题及推荐修复方案；提供 2 至 5 个互斥选项，第一项是推荐修复方案，并提供保留当前目录的选项。程序会自动追加“其他”，不要自行添加。
+7. 根据 ask-user 返回的 answer 执行最终处理：用户要求全部或部分修改时更新 ${OUTLINE_OUTPUT_FILE} 并设置 status=user_feedback；用户明确拒绝修改或要求保留现状时不得修改目录并设置 status=user_refuse。将 answer 原文完整写入 user_feedback，修改完成后不得再次询问用户。
+8. ${rootRequirement}
+9. 修复必须继续遵守 ${SCORE_DIRECTORY_PLAN_FILE} 中用户确认的评分项映射、目标层级和一级目录调整边界。补回遗漏映射、合并重复目录或优化层级时，不得引入未经用户批准的评分大项规划变更。
+10. 每个最终叶子节点必须保留合法 content_mode，父节点不得包含 content_mode 或 content_mode_note；任意父节点至少有两个 children，目录最多六级。
+11. 最终将完整问题清单和处理结果写入 ${OUTLINE_REVIEW_FILE}，summary 简要说明最终结论。
+12. 分别调用 json-validation 校验 ${OUTLINE_OUTPUT_FILE} 和 ${OUTLINE_REVIEW_FILE}，只传 file_path；校验失败必须修复并重新校验。`;
+}
+
+function createOutlineReviewCompactionInstructions() {
+  return `保留继续完成技术方案目录审核所需的全部关键上下文：用户确认的一级目录、技术评分项与目录映射、叶子数量决定、原方案和知识库使用边界、已经生成的 outline.json，以及所有 ask-user 用户答复。下一步需要读取工作区文件执行最终目录审核。`;
+}
+
 // 运行 V2 目录业务任务；完整 Agent 执行之间通过程序确认衔接并复用同一持久 Session。
 async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowledgeBaseService, updateTask, taskControl, payload }) {
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
@@ -549,6 +674,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     [SCORE_DIRECTORY_PLAN_FILE]: SCORE_DIRECTORY_PLAN_SCHEMA,
     [LEAF_ALLOCATION_FILE]: LEAF_ALLOCATION_SCHEMA,
     [LEAF_DECISION_FILE]: LEAF_DECISION_SCHEMA,
+    [OUTLINE_REVIEW_FILE]: OUTLINE_REVIEW_SCHEMA,
   };
 
   let initialFiles;
@@ -584,6 +710,8 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   let finalOutline = null;
   let actualLeafCount = 0;
   let leafWarning = '';
+  let outlineReview = null;
+  let outlineReviewBaseline = null;
 
   function updateAgentState(partial = {}) {
     task = updateTask({
@@ -682,6 +810,29 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     };
   }
 
+  function continueWithOutlineReview() {
+    outlineReviewBaseline = JSON.parse(JSON.stringify(finalOutline));
+    publish('子目录生成完成，正在压缩上下文并准备审核', 88, {
+      outline: {
+        phase: 'reviewing',
+        current_leaf_count: actualLeafCount,
+        target_leaf_count: targetLeafCount,
+        word_adjustment_attempts: targetLeafCount !== null && actualLeafCount !== targetLeafCount ? 1 : 0,
+      },
+    });
+    return {
+      stage: 'outline_review',
+      message: 'Agent 正在审核并修复目录',
+      prompt: createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRootChanges }),
+      files: [{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) }],
+      compact_before_prompt: true,
+      compaction_stage: 'outline_review_compaction',
+      compaction_message: 'Agent 正在压缩目录生成上下文',
+      compaction_complete_message: '目录生成上下文压缩完成',
+      compaction_instructions: createOutlineReviewCompactionInstructions(),
+    };
+  }
+
   if (!restoringOutlineSelection) {
     updateAgentState({ status: 'running', phase: 'initial-outline', agent_connection: 'running', session_file: '' });
     const initialResult = await agentService.runTask({
@@ -748,6 +899,46 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     onActivity: publishAgentActivity,
     onCheckpoint: syncAgentCheckpoint,
     continueTask: async (candidate, meta) => {
+      if (meta.workflow_stage === 'outline_review') {
+        const reviewedOutline = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
+        const normalizedReviewedOutline = buildFinalOutline(reviewedOutline, lockedRoots, technicalRootIds, allowRootChanges);
+        outlineReview = readJson(await meta.readFile(OUTLINE_REVIEW_FILE), OUTLINE_REVIEW_FILE);
+        if (!outlineReviewBaseline) throw new Error('目录审核前快照不存在');
+        validateOutlineReviewOutcome({
+          review: outlineReview,
+          baselineOutline: outlineReviewBaseline,
+          reviewedOutline: normalizedReviewedOutline,
+          answers: meta.user_question_answers,
+          targetLeafCount,
+        });
+        finalOutline = normalizedReviewedOutline;
+        actualLeafCount = countAiLeaves(finalOutline.outline);
+        await meta.writeFiles([{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) }]);
+        if (targetLeafCount !== null) {
+          if (actualLeafCount === targetLeafCount) {
+            leafWarning = '';
+          } else if (leafWarning) {
+            leafWarning = `AI 生成小节目标为 ${targetLeafCount}，用户已确认最终保留当前 ${actualLeafCount} 个。`;
+          }
+        }
+        const reviewMessage = outlineReview.status === 'passed'
+          ? '目录审核通过'
+          : outlineReview.status === 'simple_fix'
+            ? '目录审核完成，Agent 已自动微调简单问题'
+            : outlineReview.status === 'user_feedback'
+              ? '目录审核完成，已按用户反馈修复'
+              : '目录审核完成，用户选择保留当前目录';
+        publish(reviewMessage, 95, {
+          outline: {
+            phase: 'reviewing',
+            current_leaf_count: actualLeafCount,
+            target_leaf_count: targetLeafCount,
+            word_adjustment_attempts: targetLeafCount !== null && actualLeafCount !== targetLeafCount ? 1 : 0,
+          },
+        });
+        return { complete: true };
+      }
+
       if (meta.stage === 1) {
         const groupsPayload = readJson(await meta.readFile(TECHNICAL_SCORE_GROUPS_FILE), TECHNICAL_SCORE_GROUPS_FILE);
         scoreDirectoryPlan = readJson(await meta.readFile(SCORE_DIRECTORY_PLAN_FILE), SCORE_DIRECTORY_PLAN_FILE);
@@ -797,14 +988,14 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
       const candidateOutline = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
       finalOutline = buildFinalOutline(candidateOutline, lockedRoots, technicalRootIds, allowRootChanges);
       actualLeafCount = countAiLeaves(finalOutline.outline);
-      if (targetLeafCount === null || actualLeafCount === targetLeafCount) return { complete: true };
+      if (targetLeafCount === null || actualLeafCount === targetLeafCount) return continueWithOutlineReview();
 
       const decisionContent = await meta.readFile(LEAF_DECISION_FILE);
       if (decisionContent.trim()) {
         const decision = readJson(decisionContent, LEAF_DECISION_FILE);
         if (decision.status === 'accepted') {
           leafWarning = `AI 生成小节目标为 ${targetLeafCount}，用户已接受当前 ${actualLeafCount} 个。`;
-          return { complete: true };
+          return continueWithOutlineReview();
         }
         if (decision.status === 'cancelled') throw new Error('用户取消了本次目录生成');
       }
@@ -851,7 +1042,8 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     finalOutline = buildFinalOutline(candidateOutline, lockedRoots, technicalRootIds, allowRootChanges);
     actualLeafCount = countAiLeaves(finalOutline.outline);
   }
-  const finalLogs = [...logs, '目录生成完成', ...(leafWarning ? [leafWarning] : [])];
+  if (!outlineReview) throw new Error('目录审核结果不存在');
+  const finalLogs = [...logs, '目录生成与审核完成', ...(leafWarning ? [leafWarning] : [])];
   const finalTask = updateTask({
     status: 'success',
     progress: 100,

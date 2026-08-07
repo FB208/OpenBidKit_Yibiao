@@ -146,6 +146,12 @@ function compactText(value, maxLength = 300) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
+// 识别 Pi 手动压缩在当前上下文无需处理时返回的正常结果。
+function isCompactionNoopError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('nothing to compact') || message.includes('already compacted');
+}
+
 // 提取一条 Agent 消息中的完整文本内容。
 function extractMessageText(message) {
   return (Array.isArray(message?.content) ? message.content : [])
@@ -483,13 +489,18 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
   }
 
   function bindAbort(parentSignal, controller, getSession) {
+    const abortSession = () => {
+      const session = getSession();
+      try { session?.abortCompaction?.(); } catch {}
+      void session?.abort?.().catch(() => undefined);
+    };
     const abort = () => {
       if (!controller.signal.aborted) controller.abort(parentSignal?.reason || new Error('Agent 任务已取消'));
-      void getSession()?.abort?.().catch(() => undefined);
+      abortSession();
     };
     if (parentSignal?.aborted) abort();
     else parentSignal?.addEventListener?.('abort', abort, { once: true });
-    const sessionAbort = () => { void getSession()?.abort?.().catch(() => undefined); };
+    const sessionAbort = () => abortSession();
     controller.signal.addEventListener('abort', sessionAbort, { once: true });
     return () => {
       parentSignal?.removeEventListener?.('abort', abort);
@@ -514,6 +525,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     if (!activeTask || activeTask.task_token !== taskToken) {
       throw new Error('当前 Agent 任务已结束，无法继续提问');
     }
+    const workflowStage = activeTask.workflow_stage;
     activeTask.waiting_for_user = true;
     touchActivity({
       task_token: taskToken,
@@ -530,6 +542,16 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         task_id: activeTask.task_id,
         task_title: activeTask.title,
       }, signal);
+      if (activeTask?.task_token === taskToken) {
+        activeTask.user_question_answers.push({
+          workflow_stage: workflowStage,
+          question: String(request.question || ''),
+          answer: String(result.answer || ''),
+          selected_option: String(result.selected_option || ''),
+          is_custom: Boolean(result.is_custom),
+          answered_at: nowIso(),
+        });
+      }
       answered = true;
       return result;
     } finally {
@@ -638,6 +660,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       onActivity: payload.onActivity,
       onCheckpoint: payload.onCheckpoint,
       waiting_for_user: false,
+      user_question_answers: [],
       workspace_dir: workspaceDir,
       persistent_task_key: persistentConfig?.task_key || '',
       stage_index: Number(payload.initial_stage_index || persistentTask?.state.stage_index || 0),
@@ -699,11 +722,13 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
 
       const createWorkflowMeta = () => ({
         stage: stageIndex,
+        workflow_stage: activeTask.workflow_stage,
         task_id: taskId,
         title,
         output_file: outputFile,
         workspace_dir: workspaceDir,
         session_id: session.sessionId,
+        user_question_answers: activeTask.user_question_answers.map((item) => ({ ...item })),
         readFile: async (filePath) => (await readOutputAsync(workspaceDir, filePath)).content,
         writeFiles: async (files) => writeWorkspaceFilesAsync(workspaceDir, files),
         waitForUser: (waiter, waitMessage, waitState) => waitForExternalUser(waiter, waitMessage, taskToken, waitState),
@@ -806,11 +831,58 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           ? Number(continuation.stage_index)
           : stageIndex + 1;
         activeTask.stage_index = stageIndex;
-        activeTask.workflow_stage = continuation.stage || `workflow_stage_${stageIndex}`;
+        const continuationStage = continuation.stage || `workflow_stage_${stageIndex}`;
+        activeTask.workflow_stage = continuationStage;
         stagePrompt = continuation.prompt;
+        if (continuation.compact_before_prompt === true) {
+          const compactionStage = continuation.compaction_stage || `${continuationStage}_compaction`;
+          activeTask.workflow_stage = compactionStage;
+          checkpointPersistentTask({
+            status: 'running',
+            phase: compactionStage,
+            agent_connection: 'running',
+          });
+          touchActivity({
+            task_token: taskToken,
+            stage: compactionStage,
+            message: continuation.compaction_message || 'Agent 正在压缩上下文',
+            source: 'pi.workflow.compaction',
+            visible: true,
+            activity: true,
+          });
+          try {
+            await session.compact(continuation.compaction_instructions);
+            if (activeController.signal.aborted) throw activeController.signal.reason;
+            touchActivity({
+              task_token: taskToken,
+              stage: compactionStage,
+              message: continuation.compaction_complete_message || 'Agent 上下文压缩完成',
+              source: 'pi.workflow.compaction.completed',
+              visible: true,
+              activity: true,
+            });
+          } catch (error) {
+            if (activeController.signal.aborted) throw activeController.signal.reason;
+            if (!isCompactionNoopError(error)) throw error;
+            touchActivity({
+              task_token: taskToken,
+              stage: compactionStage,
+              message: '当前上下文无需压缩，继续执行目录审核',
+              source: 'pi.workflow.compaction.skipped',
+              visible: true,
+              activity: true,
+            });
+          }
+          activeTask.workflow_stage = continuationStage;
+          checkpointPersistentTask({
+            status: 'running',
+            phase: continuationStage,
+            agent_connection: 'running',
+          });
+        }
         touchActivity({
           task_token: taskToken,
-          stage: continuation.stage || `workflow_stage_${stageIndex}`,
+          stage: continuationStage,
           message: continuation.message || 'Agent 正在继续目录生成流程',
           source: 'pi.workflow.continue',
           visible: Boolean(continuation.message),

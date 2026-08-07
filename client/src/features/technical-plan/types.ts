@@ -85,7 +85,7 @@ export interface BackgroundTaskState {
       task_key: string;
       run_id: string;
       status: 'created' | 'running' | 'waiting-outline-selection' | 'success' | 'interrupted' | 'error';
-      phase?: 'initial-outline' | 'outline-selection' | 'score-planning' | 'leaf_allocation' | 'children_generation' | 'leaf_adjustment' | 'leaf_final_decision' | 'completed' | string;
+      phase?: 'initial-outline' | 'outline-selection' | 'score-planning' | 'leaf_allocation' | 'children_generation' | 'leaf_adjustment' | 'leaf_final_decision' | 'outline_review_compaction' | 'outline_review' | 'completed' | string;
       agent_connection?: 'idle' | 'running';
       session_file?: string;
       resume_payload?: {
