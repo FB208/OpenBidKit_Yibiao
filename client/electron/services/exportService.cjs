@@ -2183,67 +2183,63 @@ function buildFeasibilityAppendixParagraphs(payload) {
     rows: [t1Header, ...t1Data.map(makeDataRow)],
   });
 
-  const t2Header = makeHeaderRow(['费用类别', '估算金额（万元）', '占总投资比例', '主要依据']);
-  const t2Data = inv && evalData ? [
-    ['1. 建筑工程费', inv.buildingCost.toFixed(2), `${((inv.buildingCost / evalData.totalInvestment) * 100).toFixed(2)}%`, '指标估算与同类对比'],
-    ['2. 设备及工器具购置费', inv.equipmentCost.toFixed(2), `${((inv.equipmentCost / evalData.totalInvestment) * 100).toFixed(2)}%`, '厂商询价及采购方案'],
-    ['3. 安装工程费', (inv.installationCost || 0).toFixed(2), `${(((inv.installationCost || 0) / evalData.totalInvestment) * 100).toFixed(2)}%`, '行业定率算定'],
-    ['4. 工程建设其他费用', inv.otherCost.toFixed(2), `${((inv.otherCost / evalData.totalInvestment) * 100).toFixed(2)}%`, '国家及地方收费标准'],
-    ['5. 基本预备费', evalData.basicReserve.toFixed(2), `${((evalData.basicReserve / evalData.totalInvestment) * 100).toFixed(2)}%`, `基本预备费按 ${inv.reserveRate}% 计取`],
-    ['6. 建设期利息与铺底资金', (inv.constructionInterest + inv.workingCapital).toFixed(2), `${(((inv.constructionInterest + inv.workingCapital) / evalData.totalInvestment) * 100).toFixed(2)}%`, '铺底流动资金与利息'],
-    ['合计估算总投资', evalData.totalInvestment.toFixed(2), '100.00%', '全面测算结果'],
-  ] : [
-    ['1. 建筑工程费', '1800.00', '36.00%', '指标估算与同类对比'],
-    ['2. 设备及工器具购置费', '2200.00', '44.00%', '厂商询价及采购方案'],
-    ['3. 安装工程费', '300.00', '6.00%', '行业定率算定'],
-    ['4. 工程建设其他费用', '450.00', '9.00%', '国家及地方收费标准'],
-    ['5. 预备费与流动资金', '250.00', '5.00%', '基本预备费按 5% 计取'],
-    ['合计估算总投资', info.totalInvestment || '5000.00 万元', '100.00%', '全面测算结果'],
-  ];
-
-  const table2 = new Table({
-    width: { size: 9000, type: WidthType.DXA },
-    rows: [t2Header, ...t2Data.map(makeDataRow)],
-  });
-
-  const t3Header = makeHeaderRow(['评价指标', '数值', '单位', '基准/行业参考值']);
-  const t3Data = oper && evalData ? [
-    ['年均营业收入', oper.annualRevenue.toFixed(2), '万元/年', '达产期年均收入'],
-    ['年均净利润', evalData.annualProfit.toFixed(2), '万元/年', '扣除税费与折旧后'],
-    ['财务内部收益率 (IRR)', `${evalData.irr.toFixed(1)}%`, '%', `行业基准: ${oper.discountRate}% (可行)`],
-    ['财务净现值 (NPV)', evalData.npv.toFixed(2), '万元', `折现率: ${oper.discountRate}% (可行)`],
-    ['静态投资回收期', `${evalData.staticPayback.toFixed(1)}`, '年', `含建设期 ${info.constructionPeriod || 2} 年`],
-    ['盈亏平衡点 (BEP)', `${evalData.bep.toFixed(1)}%`, '%', '按生产能力利用率'],
-  ] : [
-    ['年均营业收入', '1500.00', '万元/年', '达产期年均'],
-    ['年均净利润', '380.00', '万元/年', '扣除税费后'],
-    ['财务内部收益率 (IRR)', '15.8%', '%', '行业基准: 10.0%'],
-    ['财务净现值 (NPV)', '1250.00', '万元', '折现率: 8.0%'],
-    ['静态投资回收期', '5.4', '年', '含建设期'],
-    ['盈亏平衡点 (BEP)', '42.5%', '%', '按生产能力利用率'],
-  ];
-
-  const table3 = new Table({
-    width: { size: 9000, type: WidthType.DXA },
-    rows: [t3Header, ...t3Data.map(makeDataRow)],
-  });
-
-  return [
+  const elems = [
     pageBreakParagraph(),
     paragraph([textRun('可研报告附表汇总', { bold: true, size: 30, color: '1A5F7A' })], { after: 300 }),
 
     paragraph([textRun('附表 1：项目基本情况汇总表', { bold: true, size: 24, color: '333333' })], { after: 150 }),
     table1,
     paragraph([textRun('', { size: 18 })], { after: 300 }),
-
-    paragraph([textRun('附表 2：项目投资估算与资金筹措表', { bold: true, size: 24, color: '333333' })], { after: 150 }),
-    table2,
-    paragraph([textRun('', { size: 18 })], { after: 300 }),
-
-    paragraph([textRun('附表 3：主要技术经济指标汇总表', { bold: true, size: 24, color: '333333' })], { after: 150 }),
-    table3,
-    paragraph([textRun('', { size: 18 })], { after: 300 }),
   ];
+
+  if (inv && evalData) {
+    const t2Header = makeHeaderRow(['费用类别', '估算金额（万元）', '占总投资比例', '主要依据']);
+    const t2Data = [
+      ['1. 建筑工程费', inv.buildingCost.toFixed(2), `${((inv.buildingCost / evalData.totalInvestment) * 100).toFixed(2)}%`, '指标估算与同类对比'],
+      ['2. 设备及工器具购置费', inv.equipmentCost.toFixed(2), `${((inv.equipmentCost / evalData.totalInvestment) * 100).toFixed(2)}%`, '厂商询价及采购方案'],
+      ['3. 安装工程费', (inv.installationCost || 0).toFixed(2), `${(((inv.installationCost || 0) / evalData.totalInvestment) * 100).toFixed(2)}%`, '行业定率算定'],
+      ['4. 工程建设其他费用', inv.otherCost.toFixed(2), `${((inv.otherCost / evalData.totalInvestment) * 100).toFixed(2)}%`, '国家及地方收费标准'],
+      ['5. 基本预备费', evalData.basicReserve.toFixed(2), `${((evalData.basicReserve / evalData.totalInvestment) * 100).toFixed(2)}%`, `基本预备费按 ${inv.reserveRate}% 计取`],
+      ['6. 建设期利息与铺底资金', (inv.constructionInterest + inv.workingCapital).toFixed(2), `${(((inv.constructionInterest + inv.workingCapital) / evalData.totalInvestment) * 100).toFixed(2)}%`, '铺底流动资金与利息'],
+      ['合计估算总投资', evalData.totalInvestment.toFixed(2), '100.00%', '全面测算结果'],
+    ];
+
+    const table2 = new Table({
+      width: { size: 9000, type: WidthType.DXA },
+      rows: [t2Header, ...t2Data.map(makeDataRow)],
+    });
+
+    elems.push(
+      paragraph([textRun('附表 2：项目投资估算与资金筹措表', { bold: true, size: 24, color: '333333' })], { after: 150 }),
+      table2,
+      paragraph([textRun('', { size: 18 })], { after: 300 })
+    );
+  }
+
+  if (oper && evalData) {
+    const t3Header = makeHeaderRow(['评价指标', '数值', '单位', '基准/行业参考值']);
+    const t3Data = [
+      ['年均营业收入', oper.annualRevenue.toFixed(2), '万元/年', '达产期年均收入'],
+      ['年均净利润', evalData.annualProfit.toFixed(2), '万元/年', '扣除税费与折旧后'],
+      ['财务内部收益率 (IRR)', `${evalData.irr.toFixed(1)}%`, '%', `行业基准: ${oper.discountRate}% (可行)`],
+      ['财务净现值 (NPV)', evalData.npv.toFixed(2), '万元', `折现率: ${oper.discountRate}% (可行)`],
+      ['静态投资回收期', `${evalData.staticPayback.toFixed(1)}`, '年', `含建设期 ${info.constructionPeriod || 2} 年`],
+      ['盈亏平衡点 (BEP)', `${evalData.bep.toFixed(1)}%`, '%', '按生产能力利用率'],
+    ];
+
+    const table3 = new Table({
+      width: { size: 9000, type: WidthType.DXA },
+      rows: [t3Header, ...t3Data.map(makeDataRow)],
+    });
+
+    elems.push(
+      paragraph([textRun('附表 3：主要技术经济指标汇总表', { bold: true, size: 24, color: '333333' })], { after: 150 }),
+      table3,
+      paragraph([textRun('', { size: 18 })], { after: 300 })
+    );
+  }
+
+  return elems;
 }
 
 async function buildDocxResult(payload, options = {}) {
@@ -2373,48 +2369,12 @@ function buildFeasibilityAppendixParagraphs(payload) {
     rows: [t1Header, ...t1Data.map(makeDataRow)],
   });
 
-  const t2Header = makeHeaderRow(['费用类别', '估算金额（万元）', '占总投资比例', '主要依据']);
-  const t2Data = [
-    ['1. 建筑工程费', '1800.00', '36.00%', '指标估算与同类对比'],
-    ['2. 设备及工器具购置费', '2200.00', '44.00%', '厂商询价及采购方案'],
-    ['3. 安装工程费', '300.00', '6.00%', '行业定率算定'],
-    ['4. 工程建设其他费用', '450.00', '9.00%', '国家及地方收费标准'],
-    ['5. 预备费与流动资金', '250.00', '5.00%', '基本预备费按 5% 计取'],
-    ['合计估算总投资', info.totalInvestment || '5000.00 万元', '100.00%', '全面测算结果'],
-  ];
-  const table2 = new Table({
-    width: { size: 9000, type: WidthType.DXA },
-    rows: [t2Header, ...t2Data.map(makeDataRow)],
-  });
-
-  const t3Header = makeHeaderRow(['评价指标', '数值', '单位', '基准/行业参考值']);
-  const t3Data = [
-    ['年均营业收入', '1500.00', '万元/年', '达产期年均'],
-    ['年均净利润', '380.00', '万元/年', '扣除税费后'],
-    ['财务内部收益率 (IRR)', '15.8%', '%', '行业基准: 10.0%'],
-    ['财务净现值 (NPV)', '1250.00', '万元', '折现率: 8.0%'],
-    ['静态投资回收期', '5.4', '年', '含建设期'],
-    ['盈亏平衡点 (BEP)', '42.5%', '%', '按生产能力利用率'],
-  ];
-  const table3 = new Table({
-    width: { size: 9000, type: WidthType.DXA },
-    rows: [t3Header, ...t3Data.map(makeDataRow)],
-  });
-
   return [
     pageBreakParagraph(),
     paragraph([textRun('可研报告附表汇总', { bold: true, size: 30, color: '1A5F7A' })], { after: 300 }),
 
     paragraph([textRun('附表 1：项目基本情况汇总表', { bold: true, size: 24, color: '333333' })], { after: 150 }),
     table1,
-    paragraph([textRun('', { size: 18 })], { after: 300 }),
-
-    paragraph([textRun('附表 2：项目投资估算与资金筹措表', { bold: true, size: 24, color: '333333' })], { after: 150 }),
-    table2,
-    paragraph([textRun('', { size: 18 })], { after: 300 }),
-
-    paragraph([textRun('附表 3：主要技术经济指标汇总表', { bold: true, size: 24, color: '333333' })], { after: 150 }),
-    table3,
     paragraph([textRun('', { size: 18 })], { after: 300 }),
   ];
 }

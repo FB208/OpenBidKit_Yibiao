@@ -1,4 +1,6 @@
-import type { OutlineData, SourceReferenceTag } from '../../shared/types';
+import type { OutlineData, SourceReferenceTag } from '../../shared/types/outline';
+
+export type { SourceReferenceTag };
 
 export type FeasibilityReportStep = 'materials' | 'analysis' | 'outline' | 'parameters' | 'content' | 'financial';
 

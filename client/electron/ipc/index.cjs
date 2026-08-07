@@ -5,6 +5,7 @@ const { registerConfigIpc } = require('./configIpc.cjs');
 const { registerDeveloperIpc } = require('./developerIpc.cjs');
 const { registerDuplicateCheckIpc } = require('./duplicateCheckIpc.cjs');
 const { registerExportIpc } = require('./exportIpc.cjs');
+const { registerFeasibilityReportIpc } = require('./feasibilityReportIpc.cjs');
 const { registerFileIpc } = require('./fileIpc.cjs');
 const { registerKnowledgeBaseIpc } = require('./knowledgeBaseIpc.cjs');
 const { registerLicenseIpc } = require('./licenseIpc.cjs');
@@ -23,6 +24,7 @@ const { createDuplicateCheckService } = require('../services/duplicateCheckServi
 const { createDuplicateCheckStore } = require('../services/duplicateCheckStore.cjs');
 const { createExportService } = require('../services/exportService.cjs');
 const { createFileService } = require('../services/fileService.cjs');
+const { createFeasibilityReportStore } = require('../services/feasibilityReportStore.cjs');
 const { createKnowledgeBaseService } = require('../services/knowledgeBaseService.cjs');
 const { createKnowledgeBaseStore } = require('../services/knowledgeBaseStore.cjs');
 const { createLicenseService } = require('../services/licenseService.cjs');
@@ -78,6 +80,18 @@ const workspaceDatabaseChannels = [
   'technical-plan:save-content-generation-options',
   'technical-plan:save-chapter-content',
   'technical-plan:clear',
+  'feasibility-report:load-state',
+  'feasibility-report:import-source-documents',
+  'feasibility-report:read-source-markdown',
+  'feasibility-report:read-combined-source-markdown',
+  'feasibility-report:update-step',
+  'feasibility-report:save-project-info',
+  'feasibility-report:save-analysis',
+  'feasibility-report:save-outline-config',
+  'feasibility-report:save-outline',
+  'feasibility-report:save-key-parameters',
+  'feasibility-report:save-chapter-content',
+  'feasibility-report:clear',
   'duplicate-check:load-state',
   'duplicate-check:save-files',
   'duplicate-check:save-ui-state',
@@ -107,6 +121,11 @@ const workspaceDatabaseChannels = [
   'tasks:start-outline-generation',
   'tasks:start-global-facts-generation',
   'tasks:start-content-generation',
+  'tasks:start-feasibility-analysis',
+  'tasks:start-feasibility-outline',
+  'tasks:start-feasibility-parameters',
+  'tasks:start-feasibility-content',
+  'tasks:start-feasibility-human-writing',
   'tasks:pause-content-generation',
   'tasks:start-rejection-items-extraction',
   'tasks:start-rejection-check',
@@ -180,15 +199,17 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
   const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService });
+  const feasibilityReportStore = createFeasibilityReportStore({ app, db: sqliteDatabase.db, fileService });
   const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db });
   const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore });
   const templateStore = createTemplateStore({ db: sqliteDatabase.db });
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
-  const taskService = createTaskService({ aiService, agentService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
+  const taskService = createTaskService({ aiService, agentService, technicalPlanStore, feasibilityReportStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
 
   clearWorkspaceDatabaseIpc();
   registerKnowledgeBaseIpc({ knowledgeBaseService });
   registerTechnicalPlanIpc({ technicalPlanStore });
+  registerFeasibilityReportIpc({ feasibilityReportStore });
   registerDuplicateCheckIpc({ duplicateCheckStore });
   registerRejectionCheckIpc({ rejectionCheckStore });
   registerTemplateIpc({ templateStore });
@@ -211,7 +232,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   return { sqliteDatabase };
 }
 
-function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow, openDeveloperAgentMonitorWindow, closeDeveloperAgentMonitorWindow }) {
+function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow }) {
   void checkRequiredOnlineServices();
   const configStore = createConfigStore(app);
   initLocalImageRenderService({ configStore });
@@ -270,18 +291,14 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
       .concat('--disable-gpu');
   };
 
-  // 按开发者配置打开启动辅助窗口。
-  const openDeveloperWindowsOnStartup = () => {
+  const openDeveloperTokenStatsWindowOnStartup = () => {
     try {
       const config = configStore.load();
       if (config.developer_mode && config.developer_token_stats_auto_open) {
         openDeveloperTokenStatsWindow?.();
       }
-      if (config.developer_mode && config.developer_agent_monitor_auto_open) {
-        openDeveloperAgentMonitorWindow?.();
-      }
     } catch (error) {
-      console.warn('[developer] 自动打开开发者辅助窗口失败', error?.message || String(error));
+      console.warn('[developer] 自动打开 Token 统计小窗失败', error?.message || String(error));
     }
   };
 
@@ -294,18 +311,10 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     onDeveloperModeChange(developerMode) {
       if (!developerMode) {
         closeDeveloperTokenStatsWindow?.();
-        closeDeveloperAgentMonitorWindow?.();
       }
     },
   });
-  registerDeveloperIpc({
-    configStore,
-    aiService,
-    agentService,
-    openDeveloperTokenStatsWindow,
-    openDeveloperAgentMonitorWindow,
-    developerExpansionReplaceTestService,
-  });
+  registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsWindow, developerExpansionReplaceTestService });
   registerLicenseIpc({ licenseService });
   registerAiIpc({ aiService });
   registerAgentIpc({ agentService, mainWindow });
@@ -353,11 +362,11 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   if (mainWindow.webContents.isLoading()) {
     mainWindow.webContents.once('did-finish-load', () => {
       startWorkspaceDatabase();
-      openDeveloperWindowsOnStartup();
+      openDeveloperTokenStatsWindowOnStartup();
     });
   } else {
     startWorkspaceDatabase();
-    openDeveloperWindowsOnStartup();
+    openDeveloperTokenStatsWindowOnStartup();
   }
 
   ipcMain.handle('app:get-version', () => app.getVersion());

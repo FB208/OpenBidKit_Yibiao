@@ -1,5 +1,10 @@
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
-const { feasibilityReportAgents } = require('./feasibilityReportAgents.cjs');
+const feasibilityReportAgents = {
+  humanWriting: {
+    name: '正文撰写智能体',
+    description: '负责根据项目资料与选定章节格式编制研究报告正文',
+  },
+};
 
 const analysisFields = [
   ['project_overview', '项目概况'],
@@ -765,111 +770,6 @@ function runFeasibilityConsistencyCheck(state) {
   };
 }
 
-const { calculateFinancials } = require('./financialCalculator.cjs');
-
-function syncFinancialsToOutlineAndContent(workspaceStore) {
-  const state = workspaceStore.loadFeasibilityReport();
-  const fin = calculateFinancials(state.financialData?.investment, state.financialData?.operating, state.projectInfo);
-
-  // 更新总投资字段
-  const updatedProjectInfo = {
-    ...state.projectInfo,
-    totalInvestment: `${fin.evaluation.totalInvestment} 万元`,
-  };
-
-  // 生成 Markdown 财务统计段落
-  const invTableMd = `
-### 项目投资估算汇总表
-
-| 费用类别 | 估算金额 (万元) | 占总投资比例 | 备注说明 |
-| :--- | :---: | :---: | :--- |
-| **1. 建筑工程费** | ${fin.investment.buildingCost.toFixed(2)} | ${((fin.investment.buildingCost / fin.evaluation.totalInvestment) * 100).toFixed(2)}% | 主体建筑与配套 |
-| **2. 设备及工器具购置费** | ${fin.investment.equipmentCost.toFixed(2)} | ${((fin.investment.equipmentCost / fin.evaluation.totalInvestment) * 100).toFixed(2)}% | 生产/IT/研发设备 |
-| **3. 安装工程费** | ${fin.installationCost ? fin.installationCost.toFixed(2) : (fin.investment.installationCost || 0).toFixed(2)} | ${(((fin.investment.installationCost || 0) / fin.evaluation.totalInvestment) * 100).toFixed(2)}% | 设备安装调试 |
-| **4. 工程建设其他费用** | ${fin.investment.otherCost.toFixed(2)} | ${((fin.investment.otherCost / fin.evaluation.totalInvestment) * 100).toFixed(2)}% | 前期与管理费 |
-| **5. 基本预备费** | ${fin.evaluation.basicReserve.toFixed(2)} | ${((fin.evaluation.basicReserve / fin.evaluation.totalInvestment) * 100).toFixed(2)}% | 预备费率 ${fin.investment.reserveRate}% |
-| **6. 建设期利息与铺底资金** | ${(fin.investment.constructionInterest + fin.investment.workingCapital).toFixed(2)} | ${(((fin.investment.constructionInterest + fin.investment.workingCapital) / fin.evaluation.totalInvestment) * 100).toFixed(2)}% | 含铺底流动资金 |
-| **合计估算总投资** | **${fin.evaluation.totalInvestment.toFixed(2)}** | **100.00%** | **项目建设总资金** |
-`;
-
-  const evalTableMd = `
-### 主要技术经济指标汇总表
-
-| 评价指标名称 | 测算数值 | 单位 | 基准 / 判定评价 |
-| :--- | :---: | :---: | :--- |
-| **年均营业收入** | ${fin.operating.annualRevenue.toFixed(2)} | 万元/年 | 达产期年均收入 |
-| **年均经营成本** | ${fin.evaluation.annualOperatingCost.toFixed(2)} | 万元/年 | 材料/人工/修理/其他 |
-| **年均净利润** | ${fin.evaluation.annualProfit.toFixed(2)} | 万元/年 | 扣除税费与折旧后 |
-| **财务内部收益率 (IRR)** | **${fin.evaluation.irr.toFixed(1)}%** | % | 基准收益率: ${fin.operating.discountRate}% (满足可行) |
-| **财务净现值 (NPV)** | **${fin.evaluation.npv.toFixed(2)}** | 万元 | 折现率: ${fin.operating.discountRate}% (大于0可行) |
-| **静态投资回收期** | ${fin.evaluation.staticPayback.toFixed(1)} | 年 | 含建设期 ${state.projectInfo.constructionPeriod || 2} 年 |
-| **动态投资回收期** | ${fin.evaluation.dynamicPayback.toFixed(1)} | 年 | 含建设期 ${state.projectInfo.constructionPeriod || 2} 年 |
-| **盈亏平衡点 (BEP)** | **${fin.evaluation.bep.toFixed(1)}%** | % | 按生产能力利用率 |
-`;
-
-  const sensTableMd = `
-### 敏感性分析及结论表
-
-| 变动因素 | -20% (IRR / NPV) | -10% (IRR / NPV) | 0% 基准值 | +10% (IRR / NPV) | +20% (IRR / NPV) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **建设投资变动** | ${fin.evaluation.sensitivity[0].investmentIrr}% / ${fin.evaluation.sensitivity[0].investmentNpv}万元 | ${fin.evaluation.sensitivity[1].investmentIrr}% / ${fin.evaluation.sensitivity[1].investmentNpv}万元 | ${fin.evaluation.irr}% / ${fin.evaluation.npv}万元 | ${fin.evaluation.sensitivity[3].investmentIrr}% / ${fin.evaluation.sensitivity[3].investmentNpv}万元 | ${fin.evaluation.sensitivity[4].investmentIrr}% / ${fin.evaluation.sensitivity[4].investmentNpv}万元 |
-| **营业收入变动** | ${fin.evaluation.sensitivity[0].revenueIrr}% / ${fin.evaluation.sensitivity[0].revenueNpv}万元 | ${fin.evaluation.sensitivity[1].revenueIrr}% / ${fin.evaluation.sensitivity[1].revenueNpv}万元 | ${fin.evaluation.irr}% / ${fin.evaluation.npv}万元 | ${fin.evaluation.sensitivity[3].revenueIrr}% / ${fin.evaluation.sensitivity[3].revenueNpv}万元 | ${fin.evaluation.sensitivity[4].revenueIrr}% / ${fin.evaluation.sensitivity[4].revenueNpv}万元 |
-| **经营成本变动** | ${fin.evaluation.sensitivity[0].costIrr}% / ${fin.evaluation.sensitivity[0].costNpv}万元 | ${fin.evaluation.sensitivity[1].costIrr}% / ${fin.evaluation.sensitivity[1].costNpv}万元 | ${fin.evaluation.irr}% / ${fin.evaluation.npv}万元 | ${fin.evaluation.sensitivity[3].costIrr}% / ${fin.evaluation.sensitivity[3].costNpv}万元 | ${fin.evaluation.sensitivity[4].costIrr}% / ${fin.evaluation.sensitivity[4].costNpv}万元 |
-
-*敏感性分析结论：项目对“营业收入”指标敏感度最高，当营业收入下降 10% 时，IRR 仍保持在 ${fin.evaluation.sensitivity[1].revenueIrr}%，表明项目具备良好的抗风险能力与财务可行性。*
-`;
-
-  // 递归修改 Outline Markdown 正文
-  function updateOutlineContent(nodes) {
-    if (!Array.isArray(nodes)) return nodes;
-    return nodes.map((node) => {
-      let content = String(node.content || '');
-      const title = String(node.title || '');
-
-      if (title.includes('投资估算') || title.includes('资金筹措') || title.includes('投资构成')) {
-        if (!content.includes('项目投资估算汇总表')) {
-          content = `${content.trim()}\n\n${invTableMd.trim()}`;
-        } else {
-          content = content.replace(/### 项目投资估算汇总表[\s\S]*?(?=\n#|$)/, invTableMd.trim());
-        }
-      }
-
-      if (title.includes('财务评价') || title.includes('经济效益') || title.includes('财务效益') || title.includes('盈利能力')) {
-        if (!content.includes('主要技术经济指标汇总表')) {
-          content = `${content.trim()}\n\n${evalTableMd.trim()}`;
-        } else {
-          content = content.replace(/### 主要技术经济指标汇总表[\s\S]*?(?=\n#|$)/, evalTableMd.trim());
-        }
-      }
-
-      if (title.includes('敏感性分析') || title.includes('不确定性分析') || title.includes('风险分析')) {
-        if (!content.includes('敏感性分析及结论表')) {
-          content = `${content.trim()}\n\n${sensTableMd.trim()}`;
-        } else {
-          content = content.replace(/### 敏感性分析及结论表[\s\S]*?(?=\n#|$)/, sensTableMd.trim());
-        }
-      }
-
-      return {
-        ...node,
-        content,
-        children: updateOutlineContent(node.children),
-      };
-    });
-  }
-
-  const updatedOutline = state.outlineData?.outline ? updateOutlineContent(state.outlineData.outline) : null;
-  const updatedOutlineData = updatedOutline ? { ...state.outlineData, outline: updatedOutline } : state.outlineData;
-
-  const saved = workspaceStore.updateFeasibilityReport({
-    projectInfo: updatedProjectInfo,
-    financialData: fin,
-    outlineData: updatedOutlineData,
-  });
-
-  return saved;
-}
-
 module.exports = {
   runFeasibilityAnalysisTask,
   runFeasibilityOutlineTask,
@@ -878,6 +778,5 @@ module.exports = {
   runFeasibilityHumanWritingTask,
   runFeasibilityValidationCheck,
   runFeasibilityConsistencyCheck,
-  syncFinancialsToOutlineAndContent,
 };
 
