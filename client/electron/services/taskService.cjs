@@ -1078,7 +1078,6 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     },
     async resetTechnicalPlan() {
       await cancelOutlineGenerationForReset();
-      agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY);
       return technicalPlanStore.clearTechnicalPlan();
     },
     getActiveTasks() {

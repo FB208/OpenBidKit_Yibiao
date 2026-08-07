@@ -69,7 +69,7 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     defaultModel: 'default',
     defaultThinkingLevel: 'off',
     defaultProjectTrust: 'never',
-    retry: { enabled: false, provider: { maxRetries: 0, timeoutMs } },
+    retry: { enabled: true, provider: { maxRetries: 0, timeoutMs } },
     compaction: { enabled: true },
     images: { autoResize: false, blockImages: true },
     enableInstallTelemetry: false,

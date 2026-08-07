@@ -4,6 +4,8 @@ const { createPiEnvironmentLayout } = require('./piEnvironment.cjs');
 
 const OUTLINE_AGENT_TASK_KEY = 'technical-plan-outline-generation';
 const TASK_STATE_FILE = 'task-state.json';
+const DELETE_MAX_RETRIES = 5;
+const DELETE_RETRY_DELAY_MS = 100;
 
 function nowIso() {
   return new Date().toISOString();
@@ -37,10 +39,20 @@ function getPersistentAgentSessionPath(app, taskKey, sessionFile) {
   return path.join(getPersistentAgentTaskPaths(app, taskKey).sessionsDir, fileName);
 }
 
+// 删除持久任务目录；Windows 文件句柄释放存在短暂延迟，需要由 Node 原生重试处理。
+function removePersistentAgentTaskRoot(taskRoot) {
+  fs.rmSync(taskRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: DELETE_MAX_RETRIES,
+    retryDelay: DELETE_RETRY_DELAY_MS,
+  });
+}
+
 // 创建全新的持久任务目录；同一业务任务重新生成时会清空旧现场。
 function createPersistentAgentTask(app, taskKey, state = {}) {
   const paths = getPersistentAgentTaskPaths(app, taskKey);
-  fs.rmSync(paths.taskRoot, { recursive: true, force: true });
+  removePersistentAgentTaskRoot(paths.taskRoot);
   fs.mkdirSync(paths.workspaceDir, { recursive: true });
   fs.mkdirSync(paths.sessionsDir, { recursive: true });
   const nextState = {
@@ -83,7 +95,7 @@ function updatePersistentAgentTask(app, taskKey, partial = {}) {
 // 删除业务内容对应的完整 Agent 工作区、Session 和检查点。
 function deletePersistentAgentTask(app, taskKey) {
   const paths = getPersistentAgentTaskPaths(app, taskKey);
-  fs.rmSync(paths.taskRoot, { recursive: true, force: true });
+  removePersistentAgentTaskRoot(paths.taskRoot);
 }
 
 module.exports = {
