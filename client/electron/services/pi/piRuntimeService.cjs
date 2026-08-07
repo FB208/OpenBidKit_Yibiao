@@ -673,6 +673,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         task_id: taskId,
         title,
         workspace_dir: workspaceDir,
+        stage_index: activeTask.stage_index,
+        workflow_stage: activeTask.workflow_stage,
         prompt,
         output_file: outputFile,
         files: (payload.files || []).map((file) => ({ path: String(file.path || ''), content: String(file.content || '') })),
@@ -824,8 +826,9 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         if (typeof payload.continueTask !== 'function') break;
         const continuation = await payload.continueTask(candidate, createWorkflowMeta());
         if (!continuation || continuation.complete === true || !continuation.prompt) break;
-        if (Array.isArray(continuation.files) && continuation.files.length) {
-          await writeWorkspaceFilesAsync(workspaceDir, continuation.files);
+        const continuationFiles = Array.isArray(continuation.files) ? continuation.files : [];
+        if (continuationFiles.length) {
+          await writeWorkspaceFilesAsync(workspaceDir, continuationFiles);
         }
         stageIndex = Number.isFinite(Number(continuation.stage_index))
           ? Number(continuation.stage_index)
@@ -880,6 +883,16 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
             agent_connection: 'running',
           });
         }
+        emitMonitorEvent({
+          type: 'task_input',
+          task_id: taskId,
+          title,
+          workspace_dir: workspaceDir,
+          stage_index: stageIndex,
+          workflow_stage: continuationStage,
+          prompt: stagePrompt,
+          files: continuationFiles.map((file) => ({ path: String(file.path || ''), content: String(file.content || '') })),
+        });
         touchActivity({
           task_token: taskToken,
           stage: continuationStage,

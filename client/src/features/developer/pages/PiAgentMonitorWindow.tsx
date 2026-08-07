@@ -19,16 +19,24 @@ interface MonitorTimelineEntry {
   isError?: boolean;
 }
 
+interface MonitorTaskInput {
+  id: string;
+  at: string;
+  stageIndex?: number;
+  workflowStage: string;
+  prompt: string;
+  files: AgentRunFile[];
+}
+
 interface MonitorTask {
   id: string;
   title: string;
   status: MonitorTaskStatus;
   startedAt: string;
   endedAt?: string;
-  prompt: string;
   outputFile: string;
   workspaceDir: string;
-  files: AgentRunFile[];
+  inputs: MonitorTaskInput[];
   entries: MonitorTimelineEntry[];
   turnCount: number;
   retryCount: number;
@@ -50,10 +58,9 @@ function createTask(id: string, title = 'Pi Agent 任务', startedAt = new Date(
     title,
     status: 'running',
     startedAt,
-    prompt: '',
     outputFile: '',
     workspaceDir: '',
-    files: [],
+    inputs: [],
     entries: [],
     turnCount: 0,
     retryCount: 0,
@@ -75,39 +82,77 @@ function createMidstreamEntry(taskId: string, at: string): MonitorTimelineEntry 
 
 function ensureTask(tasks: MonitorTask[], event: AgentMonitorEvent) {
   const index = tasks.findIndex((task) => task.id === event.task_id);
-  if (index >= 0) return { index, task: { ...tasks[index], entries: [...tasks[index].entries] } };
+  if (index >= 0) {
+    return {
+      index,
+      existed: true,
+      task: { ...tasks[index], inputs: [...tasks[index].inputs], entries: [...tasks[index].entries] },
+    };
+  }
   const task = createTask(event.task_id || `unknown-${event.sequence}`, event.title, event.at);
   task.entries.push(createMidstreamEntry(task.id, event.at));
-  return { index: tasks.length, task };
+  return { index: tasks.length, existed: false, task };
+}
+
+function createTaskInput(event: AgentMonitorEvent): MonitorTaskInput {
+  return {
+    id: `input-${event.sequence}`,
+    at: event.at,
+    stageIndex: event.stage_index,
+    workflowStage: event.workflow_stage || '',
+    prompt: event.prompt || '',
+    files: event.files || [],
+  };
+}
+
+function describeTaskInput(input: MonitorTaskInput, round: number) {
+  const stage = input.workflowStage ? `：${input.workflowStage}` : '';
+  const fileLabel = round === 1 ? '输入文件' : '新增/更新文件';
+  return `第 ${round} 轮任务输入已提交${stage}，Prompt ${input.prompt.length.toLocaleString('zh-CN')} 字符，${fileLabel} ${input.files.length} 个。`;
 }
 
 // 将 Pi 实时事件归并为适合阅读的任务时间线。
 function applyMonitorEvent(tasks: MonitorTask[], event: AgentMonitorEvent) {
   const nextTasks = [...tasks];
-  const { index, task } = ensureTask(nextTasks, event);
+  const { index, existed, task } = ensureTask(nextTasks, event);
   if (event.title) task.title = event.title;
   if (event.workspace_dir) task.workspaceDir = event.workspace_dir;
 
   if (event.type === 'task_start') {
+    if (!existed) {
+      task.startedAt = event.at;
+      task.entries = [];
+      task.inputs = [];
+      task.turnCount = 0;
+      task.retryCount = 0;
+    }
     task.status = 'running';
-    task.startedAt = event.at;
     delete task.endedAt;
-    task.prompt = event.prompt || '';
     task.outputFile = event.output_file || '';
     task.workspaceDir = event.workspace_dir || '';
-    task.files = event.files || [];
-    task.entries = [{
-      id: `start-${event.sequence}`,
-      kind: 'system',
-      at: event.at,
-      text: '任务输入已交给 Pi Agent，开始执行。',
-      tone: 'normal',
-      complete: true,
-    }];
-    task.turnCount = 0;
-    task.retryCount = 0;
     task.outputContent = '';
     task.error = '';
+    const input = createTaskInput(event);
+    task.inputs.push(input);
+    task.entries.push({
+      id: `input-notice-${event.sequence}`,
+      kind: 'system',
+      at: event.at,
+      text: describeTaskInput(input, task.inputs.length),
+      tone: 'normal',
+      complete: true,
+    });
+  } else if (event.type === 'task_input') {
+    const input = createTaskInput(event);
+    task.inputs.push(input);
+    task.entries.push({
+      id: `input-notice-${event.sequence}`,
+      kind: 'system',
+      at: event.at,
+      text: describeTaskInput(input, task.inputs.length),
+      tone: 'normal',
+      complete: true,
+    });
   } else if (event.type === 'assistant_delta') {
     const lastEntry = task.entries[task.entries.length - 1];
     if (lastEntry?.kind === 'assistant' && !lastEntry.complete) {
@@ -192,7 +237,7 @@ function applyMonitorEvent(tasks: MonitorTask[], event: AgentMonitorEvent) {
       id: `success-${event.sequence}`,
       kind: 'system',
       at: event.at,
-      text: '任务完成，最终输出已写回。',
+      text: '本轮 Pi Agent 执行完成，输出已写回。',
       tone: 'success',
       complete: true,
     });
@@ -428,23 +473,36 @@ function PiAgentMonitorWindow() {
   };
 
   const renderInput = () => {
-    if (!selectedTask?.prompt && !selectedTask?.files.length) {
+    if (!selectedTask?.inputs.length) {
       return <div className="markdown-empty-state agent-monitor-empty"><strong>未采集任务输入</strong><p>任务可能在监视器打开前已经开始。</p></div>;
     }
     return (
       <div className="agent-monitor-document-view">
-        <section>
-          <header><strong>任务 Prompt</strong><span>{selectedTask.prompt.length.toLocaleString('zh-CN')} 字符</span></header>
-          <pre>{selectedTask.prompt || '(空)'}</pre>
-        </section>
-        <section>
-          <header><strong>工作区输入文件</strong><span>{selectedTask.files.length} 个</span></header>
-          <div className="agent-monitor-file-list">
-            {selectedTask.files.map((file) => (
-              <MonitorInputFile file={file} key={file.path} />
-            ))}
-          </div>
-        </section>
+        {selectedTask.inputs.map((input, index) => (
+          <section className="agent-monitor-input-round" key={input.id}>
+            <header>
+              <div>
+                <strong>第 {index + 1} 轮任务输入</strong>
+                <small>{input.workflowStage || '未命名阶段'}{input.stageIndex === undefined ? '' : ` · stage ${input.stageIndex}`}</small>
+              </div>
+              <span>{formatClock(input.at)}</span>
+            </header>
+            <div className="agent-monitor-input-block">
+              <header><strong>任务 Prompt</strong><span>{input.prompt.length.toLocaleString('zh-CN')} 字符</span></header>
+              <pre>{input.prompt || '(空)'}</pre>
+            </div>
+            <div className="agent-monitor-input-block">
+              <header><strong>{index === 0 ? '工作区输入文件' : '本轮新增或更新文件'}</strong><span>{input.files.length} 个</span></header>
+              {input.files.length ? (
+                <div className="agent-monitor-file-list">
+                  {input.files.map((file) => (
+                    <MonitorInputFile file={file} key={`${input.id}:${file.path}`} />
+                  ))}
+                </div>
+              ) : <p className="agent-monitor-input-empty">本轮没有新增或更新工作区文件。</p>}
+            </div>
+          </section>
+        ))}
       </div>
     );
   };
@@ -524,7 +582,7 @@ function PiAgentMonitorWindow() {
               <div className="document-switch-tabs">
                 {([
                   { id: 'timeline', label: '执行过程' },
-                  { id: 'input', label: '任务输入' },
+                  { id: 'input', label: selectedTask?.inputs.length ? `任务输入（${selectedTask.inputs.length} 轮）` : '任务输入' },
                   { id: 'output', label: '最终输出' },
                 ] as Array<{ id: MonitorTab; label: string }>).map((tab) => (
                   <button type="button" className={`document-switch-tab ${activeTab === tab.id ? 'is-active' : ''}`} onClick={() => setActiveTab(tab.id)} key={tab.id}>{tab.label}</button>

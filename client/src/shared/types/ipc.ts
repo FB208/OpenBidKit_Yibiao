@@ -320,6 +320,7 @@ export interface AgentRunResult {
 
 export type AgentMonitorEventType =
   | 'task_start'
+  | 'task_input'
   | 'assistant_delta'
   | 'assistant_end'
   | 'tool_start'
@@ -343,6 +344,8 @@ export interface AgentMonitorEvent {
   task_id: string;
   title?: string;
   workspace_dir?: string;
+  stage_index?: number;
+  workflow_stage?: string;
   prompt?: string;
   output_file?: string;
   files?: AgentRunFile[];
