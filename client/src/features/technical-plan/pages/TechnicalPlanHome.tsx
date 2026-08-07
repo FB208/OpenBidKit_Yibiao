@@ -1174,11 +1174,10 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         />
       )}
       {state.step === 'outline-generation' && (
-        <OutlineEditPage
-          workflowKind={workflowKind}
-          projectOverview={state.projectOverview}
-          outlineMode={state.outlineMode || 'aligned'}
-          outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
+          <OutlineEditPage
+            workflowKind={workflowKind}
+            projectOverview={state.projectOverview}
+            outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
           outlineWordControlOptions={state.outlineWordControlOptions}
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
