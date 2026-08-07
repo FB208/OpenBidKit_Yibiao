@@ -16,6 +16,8 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'technical-plan': DocumentIcon,
   'existing-plan-expansion': DocumentIcon,
   'business-bid': BriefcaseIcon,
+  'report-generation': DocumentIcon,
+  'feasibility-report': DocumentIcon,
   'knowledge-base': ArchiveIcon,
   'document-knowledge-base': ArchiveIcon,
   'image-knowledge-base': ArchiveIcon,
@@ -106,7 +108,21 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
                 <Icon />
               </span>
               <span className="nav-copy">
-                <strong>{item.label}</strong>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <strong>{item.label}</strong>
+                  {item.badge && (
+                    <span style={{
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      lineHeight: '1',
+                      padding: '2px 5px',
+                      borderRadius: '10px',
+                      background: '#2f6fed',
+                      color: '#ffffff',
+                      textTransform: 'uppercase',
+                    }}>{item.badge}</span>
+                  )}
+                </div>
                 <small>{item.description}</small>
               </span>
             </button>
