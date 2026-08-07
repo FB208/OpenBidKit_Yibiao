@@ -105,6 +105,7 @@ const workspaceDatabaseChannels = [
   'tasks:start-bid-section-extraction',
   'tasks:start-bid-analysis',
   'tasks:start-outline-generation',
+  'tasks:confirm-outline-selection',
   'tasks:start-global-facts-generation',
   'tasks:start-content-generation',
   'tasks:pause-content-generation',
@@ -188,7 +189,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
 
   clearWorkspaceDatabaseIpc();
   registerKnowledgeBaseIpc({ knowledgeBaseService });
-  registerTechnicalPlanIpc({ technicalPlanStore });
+  registerTechnicalPlanIpc({ technicalPlanStore, taskService });
   registerDuplicateCheckIpc({ duplicateCheckStore });
   registerRejectionCheckIpc({ rejectionCheckStore });
   registerTemplateIpc({ templateStore });
@@ -308,7 +309,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   });
   registerLicenseIpc({ licenseService });
   registerAiIpc({ aiService });
-  registerAgentIpc({ agentService, mainWindow });
+  registerAgentIpc({ agentService });
   registerFileIpc({ fileService });
   registerExportIpc({ exportService });
   registerSystemFontIpc({ systemFontService });

@@ -1,4 +1,4 @@
-import type { OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../shared/types';
+import type { OutlineContentMode, OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../shared/types';
 
 export type TechnicalPlanStep = 'document-analysis' | 'bid-analysis' | 'outline-generation' | 'global-facts' | 'content-edit' | 'expand';
 export type TechnicalPlanWorkflowKind = 'technical-plan' | 'existing-plan-expansion';
@@ -14,12 +14,34 @@ export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 export type ConsistencyRepairMode = 'agent' | 'normal';
 export type OriginalPlanCoverageRepairMode = 'agent' | 'normal';
 export type SaveOutlineReason = 'sort' | 'edit' | 'delete' | 'add-root' | 'add-child' | 'replace';
+export type OutlineAttribute = '通用' | '商务' | '资信' | '技术' | '其他';
 
 export interface SaveOutlineRequest {
   outlineData: OutlineData;
   reason: SaveOutlineReason;
   idMap?: Record<string, string>;
   affectedNodeIds?: string[];
+}
+
+export interface OutlineSelectionItem {
+  id: string;
+  title: string;
+  description: string;
+  attr: OutlineAttribute;
+  content_mode: OutlineContentMode;
+  content_mode_note?: string;
+}
+
+export interface OutlineSelectionState {
+  items: OutlineSelectionItem[];
+  selected_ids: string[];
+  confirmed: boolean;
+}
+
+export interface SaveOutlineSelectionRequest {
+  taskId: string;
+  items: OutlineSelectionItem[];
+  selectedIds: string[];
 }
 
 export interface ContentGenerationOptions {
@@ -59,9 +81,26 @@ export interface BackgroundTaskState {
   updated_at: string;
   error?: string;
   stats?: {
+    agent?: {
+      task_key: string;
+      run_id: string;
+      status: 'created' | 'running' | 'waiting-outline-selection' | 'success' | 'interrupted' | 'error';
+      phase?: 'initial-outline' | 'outline-selection' | 'score-planning' | 'leaf_allocation' | 'children_generation' | 'leaf_adjustment' | 'leaf_final_decision' | 'outline_review_compaction' | 'outline_review' | 'completed' | string;
+      agent_connection?: 'idle' | 'running';
+      session_file?: string;
+      resume_payload?: {
+        reference_knowledge_document_ids?: string[];
+        outline_mode?: OutlineMode;
+        outline_expansion_mode?: OutlineExpansionMode;
+        word_control_options?: OutlineWordControlOptions;
+      };
+    };
+    outline_selection?: OutlineSelectionState;
     outline?: {
       phase: 'generating' | 'reviewing' | 'word-adjusting' | 'second-review' | 'done';
       current_leaf_count: number;
+      target_leaf_count?: number | null;
+      leaf_counts_by_mode?: Partial<Record<OutlineContentMode, number>>;
       minimum_leaf_count?: number;
       maximum_leaf_count?: number;
       word_adjustment_attempts: number;

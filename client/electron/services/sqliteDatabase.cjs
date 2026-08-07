@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 18;
+const schemaVersion = 19;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -96,6 +96,8 @@ function createInitialSchema(db) {
       level INTEGER NOT NULL,
       title TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
+      content_mode TEXT,
+      content_mode_note TEXT,
       source_requirement_id TEXT,
       source_requirement_title TEXT,
       knowledge_item_ids_json TEXT,
@@ -249,6 +251,12 @@ function addTechnicalPlanIllustrationPlan(db) {
 function addTechnicalPlanOutlineWordControl(db) {
   addColumnIfMissing(db, 'technical_plan_meta', 'outline_word_control_options_json', 'TEXT');
   addColumnIfMissing(db, 'technical_plan_meta', 'outline_word_control_snapshot_json', 'TEXT');
+}
+
+// 目录叶子内容处理模式；父节点保持为空，旧测试目录不补默认值。
+function addTechnicalPlanOutlineContentMode(db) {
+  addColumnIfMissing(db, 'technical_plan_outline_nodes', 'content_mode', 'TEXT');
+  addColumnIfMissing(db, 'technical_plan_outline_nodes', 'content_mode_note', 'TEXT');
 }
 
 function removeLegacyTechnicalPlanIllustrationType(db) {
@@ -1121,6 +1129,14 @@ const schemaHealthColumnGroups = [
       outline_word_control_snapshot_json: 'TEXT',
     },
   },
+  {
+    version: 19,
+    table: 'technical_plan_outline_nodes',
+    columns: {
+      content_mode: 'TEXT',
+      content_mode_note: 'TEXT',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -1274,6 +1290,11 @@ const migrations = [
     version: 18,
     description: '技术方案新增目录字数控制设置和生效快照',
     up: addTechnicalPlanOutlineWordControl,
+  },
+  {
+    version: 19,
+    description: '技术方案目录叶子新增内容处理模式',
+    up: addTechnicalPlanOutlineContentMode,
   },
 ];
 

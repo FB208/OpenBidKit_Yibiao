@@ -69,10 +69,19 @@ const bridge = {
     exportSelfCheckReport: (payload) => ipcRenderer.invoke('agent:export-self-check-report', payload),
     getStatus: () => ipcRenderer.invoke('agent:get-status'),
     restart: (reason) => ipcRenderer.invoke('agent:restart', reason),
+    getPendingQuestion: () => ipcRenderer.invoke('agent:get-pending-question'),
+    answerQuestion: (payload) => ipcRenderer.invoke('agent:answer-question', payload),
     onStatus: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('agent:status', listener);
+      ipcRenderer.send('agent:subscribe');
       return () => ipcRenderer.removeListener('agent:status', listener);
+    },
+    onQuestion: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('agent:question-state', listener);
+      ipcRenderer.send('agent:subscribe');
+      return () => ipcRenderer.removeListener('agent:question-state', listener);
     },
   },
   developerTokenStats: {
@@ -138,6 +147,7 @@ const bridge = {
     switchWorkflowKind: (workflowKind) => ipcRenderer.invoke('technical-plan:switch-workflow-kind', workflowKind),
     saveBidAnalysisConfig: (payload) => ipcRenderer.invoke('technical-plan:save-bid-analysis-config', payload),
     saveOutlineConfig: (payload) => ipcRenderer.invoke('technical-plan:save-outline-config', payload),
+    saveOutlineSelection: (payload) => ipcRenderer.invoke('tasks:confirm-outline-selection', payload),
     saveOutline: (outlineData) => ipcRenderer.invoke('technical-plan:save-outline', outlineData),
     saveGlobalFacts: (globalFacts) => ipcRenderer.invoke('technical-plan:save-global-facts', globalFacts),
     saveContentGenerationOptions: (options) => ipcRenderer.invoke('technical-plan:save-content-generation-options', options),

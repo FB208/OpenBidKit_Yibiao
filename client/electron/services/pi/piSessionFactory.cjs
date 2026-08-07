@@ -1,3 +1,13 @@
+const {
+  createPiJsonValidationTool,
+} = require('./piJsonValidationTool.cjs');
+const {
+  createPiUserQuestionTool,
+} = require('./piUserQuestionTool.cjs');
+const {
+  createPiRetryErrorNormalizer,
+} = require('./piRetryErrorNormalizer.cjs');
+
 let piModulesPromise = null;
 
 // 延迟加载 ESM Pi SDK，供 CommonJS Electron Main 复用。
@@ -6,7 +16,8 @@ function loadPiModules() {
     piModulesPromise = Promise.all([
       import('@earendil-works/pi-coding-agent'),
       import('@earendil-works/pi-ai'),
-    ]).then(([codingAgent, piAi]) => ({ codingAgent, piAi }));
+      import('typebox'),
+    ]).then(([codingAgent, piAi, typebox]) => ({ codingAgent, piAi, typebox }));
   }
   return piModulesPromise;
 }
@@ -21,9 +32,9 @@ function normalizeOutputLimit(contextLength) {
   return Math.min(32768, normalizedContextLength);
 }
 
-// 创建完全内存化的 Pi Session，不读取外部配置、上下文或扩展。
-async function createPiSession({ workspaceDir, environment, proxyInfo, config, timeoutMs }) {
-  const { codingAgent, piAi } = await loadPiModules();
+// 创建隔离的 Pi Session；目录任务可在后续完整执行中重新打开原 Session。
+async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion }) {
+  const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
   const modelRuntime = await codingAgent.ModelRuntime.create({
@@ -61,7 +72,7 @@ async function createPiSession({ workspaceDir, environment, proxyInfo, config, t
     defaultModel: 'default',
     defaultThinkingLevel: 'off',
     defaultProjectTrust: 'never',
-    retry: { enabled: false, provider: { maxRetries: 0, timeoutMs } },
+    retry: { enabled: true, provider: { maxRetries: 0, timeoutMs } },
     compaction: { enabled: true },
     images: { autoResize: false, blockImages: true },
     enableInstallTelemetry: false,
@@ -73,6 +84,7 @@ async function createPiSession({ workspaceDir, environment, proxyInfo, config, t
     cwd: workspaceDir,
     agentDir: environment.layout.agentDir,
     settingsManager,
+    extensionFactories: [createPiRetryErrorNormalizer()],
     noContextFiles: true,
     noExtensions: true,
     noSkills: true,
@@ -94,20 +106,35 @@ async function createPiSession({ workspaceDir, environment, proxyInfo, config, t
       env: { ...env, ...environment.env },
     }),
   });
+  const jsonValidationTool = codingAgent.defineTool(createPiJsonValidationTool({
+    workspaceDir,
+    Type: typebox.Type,
+    validationSchemas: jsonValidationSchemas,
+  }));
+  const userQuestionTool = codingAgent.defineTool(createPiUserQuestionTool({
+    Type: typebox.Type,
+    requestUserQuestion,
+  }));
+  const sessionManager = sessionFile
+    ? codingAgent.SessionManager.open(sessionFile, sessionsDir, workspaceDir)
+    : sessionsDir
+      ? codingAgent.SessionManager.create(workspaceDir, sessionsDir)
+      : codingAgent.SessionManager.inMemory(workspaceDir);
   const { session } = await codingAgent.createAgentSession({
     cwd: workspaceDir,
     agentDir: environment.layout.agentDir,
     model,
     modelRuntime,
     thinkingLevel: 'off',
-    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls'],
-    customTools: [bashTool],
+    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user'],
+    customTools: [bashTool, jsonValidationTool, userQuestionTool],
     resourceLoader,
     settingsManager,
-    sessionManager: codingAgent.SessionManager.inMemory(workspaceDir),
+    sessionManager,
   });
   return {
     session,
+    sessionFile: session.sessionFile || sessionManager.getSessionFile() || '',
     snapshot: {
       sdk_version: codingAgent.VERSION || '',
       model: {

@@ -5,7 +5,14 @@ const { getDeveloperLogsDir } = require('../../utils/paths.cjs');
 const { createAgentOpenAiProxy } = require('../agent/agentOpenAiProxy.cjs');
 const { trackAgentRuntime } = require('../agent/agentRuntimeAnalytics.cjs');
 const { preparePiEnvironment } = require('./piEnvironment.cjs');
+const { restorePiErrorMessage } = require('./piRetryErrorNormalizer.cjs');
 const { createPiSession, loadPiModules } = require('./piSessionFactory.cjs');
+const {
+  createPersistentAgentTask,
+  getPersistentAgentSessionPath,
+  loadPersistentAgentTask,
+  updatePersistentAgentTask,
+} = require('./piPersistentTaskStore.cjs');
 const {
   SAFE_REPAIR_ACTIONS,
   analyzePiSelfCheckWithModel,
@@ -27,6 +34,16 @@ const DEFAULT_PROVIDER_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_RETRIES = 3;
 const STATUS_TICK_MS = 1000;
 const SELF_CHECK_OUTPUT_FILE = 'agent-self-check-result.json';
+const SELF_CHECK_OUTPUT_SCHEMA = {
+  type: 'object',
+  required: ['message', 'input', 'node'],
+  additionalProperties: false,
+  properties: {
+    message: { const: 'YIBIAO_PI_AGENT_SELF_CHECK_OK' },
+    input: { const: 'YIBIAO_PI_AGENT_SELF_CHECK_INPUT' },
+    node: { const: 'YIBIAO_PI_NODE_OK' },
+  },
+};
 const PI_RUNTIME_ID = 'pi';
 const PI_RUNTIME_NAME = 'Pi Agent';
 const PI_RUNTIME = Object.freeze({
@@ -130,6 +147,12 @@ function compactText(value, maxLength = 300) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
+// 识别 Pi 手动压缩在当前上下文无需处理时返回的正常结果。
+function isCompactionNoopError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('nothing to compact') || message.includes('already compacted');
+}
+
 // 提取一条 Agent 消息中的完整文本内容。
 function extractMessageText(message) {
   return (Array.isArray(message?.content) ? message.content : [])
@@ -146,7 +169,9 @@ function extractAssistantText(messages = []) {
 
 function getAssistantError(messages = []) {
   const assistant = [...messages].reverse().find((message) => message?.role === 'assistant');
-  return assistant?.stopReason === 'error' ? assistant.errorMessage || 'Pi Agent 模型请求失败' : '';
+  return assistant?.stopReason === 'error'
+    ? restorePiErrorMessage(assistant.errorMessage || 'Pi Agent 模型请求失败')
+    : '';
 }
 
 function getAssistantErrorDetails(messages = []) {
@@ -154,7 +179,7 @@ function getAssistantErrorDetails(messages = []) {
   if (!assistant || assistant.stopReason !== 'error') return null;
   return {
     stop_reason: assistant.stopReason,
-    error_message: assistant.errorMessage || 'Pi Agent 模型请求失败',
+    error_message: restorePiErrorMessage(assistant.errorMessage || 'Pi Agent 模型请求失败'),
     api: assistant.api || '',
     provider: assistant.provider || '',
     model: assistant.model || '',
@@ -202,7 +227,7 @@ function normalizeMonitorValue(value) {
   }
 }
 
-function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, onMonitorEvent }) {
+function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, onMonitorEvent, requestUserQuestion }) {
   const runtime = PI_RUNTIME;
   const runtimeId = PI_RUNTIME_ID;
   const runtimeName = PI_RUNTIME_NAME;
@@ -254,6 +279,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       last_progress_at: activeTask.last_progress_at,
       elapsed_seconds: Math.max(0, Math.floor((Date.now() - started) / 1000)),
       idle_seconds: Math.max(0, Math.floor((Date.now() - lastActivity) / 1000)),
+      waiting_for_user: Boolean(activeTask.waiting_for_user),
     };
   }
 
@@ -274,7 +300,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       runtime_details: {
         sdk_version: sdkVersion,
         runtime_root: layout.runtimeRoot,
-        workspace_dir: layout.workspaceDir,
+        workspace_dir: activeTask?.workspace_dir || layout.workspaceDir,
       },
     };
   }
@@ -308,6 +334,14 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     diagnostics.record(event.source || 'runtime.activity', event);
     try { activeTask.onActivity?.({ ...event, at: now }); } catch {}
     emitStatus();
+  }
+
+  // 同步持久 Agent 任务检查点，并通知所属业务任务落盘必要状态。
+  function checkpointPersistentTask(partial = {}) {
+    if (!activeTask?.persistent_task_key) return null;
+    const updated = updatePersistentAgentTask(app, activeTask.persistent_task_key, partial);
+    try { activeTask.onCheckpoint?.(updated.state); } catch {}
+    return updated;
   }
 
   // 加载 Pi SDK 并启动本地 AI Proxy。
@@ -450,6 +484,55 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         });
         return;
       }
+      if (event.type === 'auto_retry_start') {
+        const errorMessage = restorePiErrorMessage(event.errorMessage || '模型服务暂时不可用');
+        const delaySeconds = Math.max(0, Math.round(Number(event.delayMs || 0) / 1000));
+        const retryMessage = `模型请求遇到临时错误，${delaySeconds} 秒后进行第 ${event.attempt}/${event.maxAttempts} 次重试：${compactText(errorMessage, 160)}`;
+        if (isMonitorActive?.()) {
+          emitMonitorEvent({
+            type: 'auto_retry_start',
+            attempt: event.attempt,
+            maximum: event.maxAttempts,
+            delay_ms: event.delayMs,
+            message: errorMessage,
+          });
+        }
+        touchActivity({
+          task_token: taskToken,
+          stage: 'model_retry',
+          message: retryMessage,
+          source: 'pi.auto-retry.start',
+          visible: true,
+          activity: true,
+          meta: { attempt: event.attempt, maximum: event.maxAttempts, delay_ms: event.delayMs, error: errorMessage },
+        });
+        return;
+      }
+      if (event.type === 'auto_retry_end') {
+        const finalError = restorePiErrorMessage(event.finalError || '');
+        const retryMessage = event.success
+          ? `模型请求已恢复，第 ${event.attempt} 次重试成功`
+          : `模型请求重试 ${event.attempt} 次后仍失败${finalError ? `：${compactText(finalError, 160)}` : ''}`;
+        if (isMonitorActive?.()) {
+          emitMonitorEvent({
+            type: 'auto_retry_end',
+            attempt: event.attempt,
+            success: Boolean(event.success),
+            final_error: finalError,
+            message: retryMessage,
+          });
+        }
+        touchActivity({
+          task_token: taskToken,
+          stage: 'model_retry',
+          message: retryMessage,
+          source: 'pi.auto-retry.end',
+          visible: true,
+          activity: true,
+          meta: { attempt: event.attempt, success: Boolean(event.success), error: finalError },
+        });
+        return;
+      }
       if (['agent_start', 'agent_end', 'agent_settled', 'turn_start', 'turn_end', 'compaction_start', 'compaction_end'].includes(event.type)) {
         if (isMonitorActive?.()) emitMonitorEvent({ type: event.type });
         touchActivity({ task_token: taskToken, stage: event.type, message: '', source: `pi.${event.type}`, visible: false, activity: true });
@@ -458,13 +541,18 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
   }
 
   function bindAbort(parentSignal, controller, getSession) {
+    const abortSession = () => {
+      const session = getSession();
+      try { session?.abortCompaction?.(); } catch {}
+      void session?.abort?.().catch(() => undefined);
+    };
     const abort = () => {
       if (!controller.signal.aborted) controller.abort(parentSignal?.reason || new Error('Agent 任务已取消'));
-      void getSession()?.abort?.().catch(() => undefined);
+      abortSession();
     };
     if (parentSignal?.aborted) abort();
     else parentSignal?.addEventListener?.('abort', abort, { once: true });
-    const sessionAbort = () => { void getSession()?.abort?.().catch(() => undefined); };
+    const sessionAbort = () => abortSession();
     controller.signal.addEventListener('abort', sessionAbort, { once: true });
     return () => {
       parentSignal?.removeEventListener?.('abort', abort);
@@ -474,7 +562,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
 
   function startWatchdog(controller, timeoutMs, taskToken) {
     return setInterval(() => {
-      if (!activeTask) return;
+      if (!activeTask || activeTask.waiting_for_user) return;
       const idleMs = Date.now() - new Date(activeTask.last_activity_at).getTime();
       if (idleMs < timeoutMs || controller.signal.aborted) return;
       const error = new Error('Pi Agent 长时间无进展，已停止本轮任务');
@@ -482,6 +570,98 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       touchActivity({ task_token: taskToken, stage: 'stalled', message: error.message, source: 'pi.watchdog', visible: true, activity: false });
       controller.abort(error);
     }, 2000);
+  }
+
+  // 暂停当前工具调用并等待 Renderer 返回用户答案。
+  async function waitForUserQuestion(request, signal, taskToken) {
+    if (!activeTask || activeTask.task_token !== taskToken) {
+      throw new Error('当前 Agent 任务已结束，无法继续提问');
+    }
+    const workflowStage = activeTask.workflow_stage;
+    activeTask.waiting_for_user = true;
+    touchActivity({
+      task_token: taskToken,
+      stage: 'waiting_for_user',
+      message: 'Agent 正在等待您的回答',
+      source: 'pi.user-question.waiting',
+      visible: true,
+      activity: true,
+    });
+    let answered = false;
+    try {
+      const result = await requestUserQuestion({
+        ...request,
+        task_id: activeTask.task_id,
+        task_title: activeTask.title,
+      }, signal);
+      if (activeTask?.task_token === taskToken) {
+        activeTask.user_question_answers.push({
+          workflow_stage: workflowStage,
+          question: String(request.question || ''),
+          answer: String(result.answer || ''),
+          selected_option: String(result.selected_option || ''),
+          is_custom: Boolean(result.is_custom),
+          answered_at: nowIso(),
+        });
+      }
+      answered = true;
+      return result;
+    } finally {
+      if (activeTask?.task_token === taskToken) {
+        activeTask.waiting_for_user = false;
+        touchActivity({
+          task_token: taskToken,
+          stage: answered ? 'running' : activeTask.stage,
+          message: answered ? '已收到回答，Agent 正在继续执行' : '',
+          source: 'pi.user-question.settled',
+          visible: answered,
+          activity: true,
+        });
+      }
+    }
+  }
+
+  // 在多阶段工作流中等待业务侧用户操作，期间不计入 Agent 无进展超时。
+  async function waitForExternalUser(waiter, waitMessage, taskToken, waitState = {}) {
+    if (!activeTask || activeTask.task_token !== taskToken) {
+      throw new Error('当前 Agent 任务已结束，无法继续等待用户操作');
+    }
+    activeTask.waiting_for_user = true;
+    touchActivity({
+      task_token: taskToken,
+      stage: 'waiting_for_user',
+      message: waitMessage || 'Agent 正在等待您的操作',
+      source: 'pi.workflow.waiting',
+      visible: true,
+      activity: true,
+    });
+    const signal = activeController?.signal;
+    let onAbort;
+    try {
+      const result = await new Promise((resolve, reject) => {
+        onAbort = () => reject(signal?.reason || new Error('Agent 任务已取消'));
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        signal?.addEventListener?.('abort', onAbort, { once: true });
+        Promise.resolve(waiter).then(resolve, reject);
+      });
+      return result;
+    } finally {
+      signal?.removeEventListener?.('abort', onAbort);
+      if (activeTask?.task_token === taskToken) {
+        activeTask.waiting_for_user = false;
+        touchActivity({
+          task_token: taskToken,
+          stage: 'running',
+          message: '已收到用户操作，Agent 正在继续执行',
+          source: 'pi.workflow.resumed',
+          visible: true,
+          activity: true,
+        });
+      }
+    }
   }
 
   // 执行单个 Pi Agent 任务，并保持业务输出协议一致。
@@ -495,16 +675,48 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     const retryAttempts = [];
     const taskToken = crypto.randomUUID();
     const startedAt = nowIso();
+    const persistentConfig = payload.persistent_task && typeof payload.persistent_task === 'object'
+      ? payload.persistent_task
+      : null;
+    let persistentTask = null;
+    if (persistentConfig?.task_key) {
+      persistentTask = persistentConfig.mode === 'resume'
+        ? loadPersistentAgentTask(app, persistentConfig.task_key)
+        : createPersistentAgentTask(app, persistentConfig.task_key, {
+          run_id: taskId,
+          title,
+          status: 'running',
+          phase: payload.initial_stage || 'initial',
+          agent_connection: 'running',
+          session_file: '',
+        });
+      if (!persistentTask) throw new Error('目录 Agent 持久任务不存在，请重新生成目录');
+      if (persistentTask.state.run_id !== taskId) throw new Error('目录 Agent 持久任务与当前业务任务不匹配，请重新生成目录');
+      if (persistentConfig.mode === 'resume' && !persistentTask.state.session_file) {
+        throw new Error('目录 Agent Session 不存在，请重新生成目录');
+      }
+    }
+    const workspaceDir = persistentTask?.paths.workspaceDir || layout.workspaceDir;
+    const persistentSessionFile = persistentConfig?.mode === 'resume'
+      ? getPersistentAgentSessionPath(app, persistentConfig.task_key, persistentTask.state.session_file)
+      : '';
     activeTask = {
       task_id: taskId,
       title,
-      stage: 'starting',
+      stage: payload.initial_stage || persistentTask?.state.phase || 'starting',
       progress_text: `正在启动 ${runtimeName}`,
       started_at: startedAt,
       last_activity_at: startedAt,
       last_progress_at: startedAt,
       task_token: taskToken,
       onActivity: payload.onActivity,
+      onCheckpoint: payload.onCheckpoint,
+      waiting_for_user: false,
+      user_question_answers: [],
+      workspace_dir: workspaceDir,
+      persistent_task_key: persistentConfig?.task_key || '',
+      stage_index: Number(payload.initial_stage_index || persistentTask?.state.stage_index || 0),
+      workflow_stage: payload.initial_stage || persistentTask?.state.phase || 'starting',
     };
     let prompt = payload.prompt || createDefaultPrompt(payload.task || '请分析当前输入文件并输出结果。', outputFile);
     if (isMonitorActive?.()) {
@@ -512,7 +724,9 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         type: 'task_start',
         task_id: taskId,
         title,
-        workspace_dir: layout.workspaceDir,
+        workspace_dir: workspaceDir,
+        stage_index: activeTask.stage_index,
+        workflow_stage: activeTask.workflow_stage,
         prompt,
         output_file: outputFile,
         files: (payload.files || []).map((file) => ({ path: String(file.path || ''), content: String(file.content || '') })),
@@ -529,105 +743,240 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     const watchdog = startWatchdog(activeController, timeoutMs, taskToken);
 
     try {
-      await clearDirectoryAsync(layout.workspaceDir);
-      await writeWorkspaceFilesAsync(layout.workspaceDir, payload.files || []);
+      if (!persistentTask) await clearDirectoryAsync(workspaceDir);
+      await writeWorkspaceFilesAsync(workspaceDir, payload.files || []);
       await ensureStarted();
       const created = await createPiSession({
-        workspaceDir: layout.workspaceDir,
+        workspaceDir,
+        sessionsDir: persistentTask?.paths.sessionsDir,
+        sessionFile: persistentSessionFile,
         environment,
         proxyInfo,
         config: configStore.load(),
         timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
+        jsonValidationSchemas: payload.json_validation_schemas,
+        requestUserQuestion: (request, signal) => waitForUserQuestion(request, signal, taskToken),
       });
       session = created.session;
       sessionSnapshot = created.snapshot;
+      if (persistentTask) {
+        persistentTask = checkpointPersistentTask({
+          status: 'running',
+          phase: activeTask.workflow_stage,
+          agent_connection: 'running',
+          session_file: created.sessionFile ? path.basename(created.sessionFile) : persistentTask.state.session_file || '',
+        });
+      }
       unsubscribe = subscribeSession(session, taskToken, diffEntries);
       let assistantText = '';
       let validationResult = null;
       let retryCount = 0;
+      let stageIndex = Number(payload.initial_stage_index || persistentTask?.state.stage_index || 0);
+      let stagePrompt = prompt;
 
-      for (let attemptIndex = 0; attemptIndex <= maxRetries; attemptIndex += 1) {
-        try {
-          if (activeController.signal.aborted) throw activeController.signal.reason;
-          await session.prompt(prompt, { expandPromptTemplates: false });
-          if (activeController.signal.aborted) throw activeController.signal.reason;
-          const assistantError = getAssistantError(session.messages);
-          if (assistantError) {
-            const error = new Error(assistantError);
-            error.piAssistantError = getAssistantErrorDetails(session.messages);
-            throw error;
-          }
-          assistantText = extractAssistantText(session.messages);
-          const output = await readOutputAsync(layout.workspaceDir, outputFile);
-          const candidate = {
-            success: true,
-            runtime_id: runtimeId,
-            task_id: taskId,
-            title,
-            output_file: outputFile,
-            output_content: output.content,
-            assistant_text: assistantText,
-            session_id: session.sessionId,
-            retry_count: attemptIndex,
-            retry_attempts: [...retryAttempts],
-          };
-          if (typeof payload.validateOutput === 'function') {
-            try {
-              validationResult = await payload.validateOutput(candidate, {
-                attempt: attemptIndex + 1,
-                max_retries: maxRetries,
-                task_id: taskId,
-                title,
-                output_file: outputFile,
-                workspace_dir: layout.workspaceDir,
-                session_id: session.sessionId,
-                retry_attempts: [...retryAttempts],
-              });
-            } catch (validationError) {
-              if (validationError && typeof validationError === 'object') {
-                validationError.agentValidationFailed = true;
-              }
-              throw validationError;
+      const createWorkflowMeta = () => ({
+        stage: stageIndex,
+        workflow_stage: activeTask.workflow_stage,
+        task_id: taskId,
+        title,
+        output_file: outputFile,
+        workspace_dir: workspaceDir,
+        session_id: session.sessionId,
+        user_question_answers: activeTask.user_question_answers.map((item) => ({ ...item })),
+        readFile: async (filePath) => (await readOutputAsync(workspaceDir, filePath)).content,
+        writeFiles: async (files) => writeWorkspaceFilesAsync(workspaceDir, files),
+        waitForUser: (waiter, waitMessage, waitState) => waitForExternalUser(waiter, waitMessage, taskToken, waitState),
+      });
+
+      while (true) {
+        let candidate = null;
+        for (let attemptIndex = 0; attemptIndex <= maxRetries; attemptIndex += 1) {
+          try {
+            if (activeController.signal.aborted) throw activeController.signal.reason;
+            activeTask.stage_index = stageIndex;
+            checkpointPersistentTask({
+              status: 'running',
+              phase: activeTask.workflow_stage,
+              agent_connection: 'running',
+            });
+            await session.prompt(stagePrompt, { expandPromptTemplates: false });
+            if (activeController.signal.aborted) throw activeController.signal.reason;
+            const assistantError = getAssistantError(session.messages);
+            if (assistantError) {
+              const error = new Error(assistantError);
+              error.piAssistantError = getAssistantErrorDetails(session.messages);
+              throw error;
             }
+            assistantText = extractAssistantText(session.messages);
+            const output = await readOutputAsync(workspaceDir, outputFile);
+            checkpointPersistentTask({
+              status: 'running',
+              phase: activeTask.workflow_stage,
+              agent_connection: 'running',
+              session_file: session.sessionFile ? path.basename(session.sessionFile) : persistentTask?.state.session_file || '',
+            });
+            candidate = {
+              success: true,
+              runtime_id: runtimeId,
+              task_id: taskId,
+              title,
+              output_file: outputFile,
+              output_content: output.content,
+              assistant_text: assistantText,
+              session_id: session.sessionId,
+              retry_count: retryAttempts.length,
+              retry_attempts: [...retryAttempts],
+            };
+            if (typeof payload.validateOutput === 'function') {
+              try {
+                validationResult = await payload.validateOutput(candidate, {
+                  attempt: attemptIndex + 1,
+                  stage: stageIndex,
+                  max_retries: maxRetries,
+                  task_id: taskId,
+                  title,
+                  output_file: outputFile,
+                  workspace_dir: workspaceDir,
+                  session_id: session.sessionId,
+                  retry_attempts: [...retryAttempts],
+                });
+              } catch (validationError) {
+                if (validationError && typeof validationError === 'object') {
+                  validationError.agentValidationFailed = true;
+                }
+                throw validationError;
+              }
+            }
+            retryCount = retryAttempts.length;
+            break;
+          } catch (error) {
+            if (activeController.signal.aborted || attemptIndex >= maxRetries) throw error;
+            const output = await readOutputAsync(workspaceDir, outputFile);
+            retryAttempts.push(createRetrySummary(retryAttempts.length + 1, error, output.content));
+            retryCount = retryAttempts.length;
+            touchActivity({
+              task_token: taskToken,
+              stage: 'retry',
+              message: `${runtimeName} 正在自动修复：${compactText(error?.message || error, 160)}`,
+              source: 'pi.retry',
+              visible: true,
+              activity: true,
+            });
+            stagePrompt = buildRetryPrompt(outputFile, error, attemptIndex + 1, maxRetries);
+            emitMonitorEvent({
+              type: 'retry',
+              task_id: taskId,
+              title,
+              attempt: retryCount,
+              maximum: maxRetries,
+              message: compactText(error?.message || error, 600),
+              prompt: stagePrompt,
+            });
           }
-          retryCount = attemptIndex;
-          break;
-        } catch (error) {
-          if (activeController.signal.aborted || attemptIndex >= maxRetries) throw error;
-          const output = await readOutputAsync(layout.workspaceDir, outputFile);
-          retryAttempts.push(createRetrySummary(attemptIndex + 1, error, output.content));
-          retryCount = retryAttempts.length;
+        }
+
+        if (typeof payload.continueTask !== 'function') break;
+        const completedStageIndex = stageIndex;
+        const completedWorkflowStage = activeTask.workflow_stage;
+        const continuation = await payload.continueTask(candidate, createWorkflowMeta());
+        if (!continuation || continuation.complete === true || !continuation.prompt) break;
+        emitMonitorEvent({
+          type: 'task_output',
+          task_id: taskId,
+          title,
+          workspace_dir: workspaceDir,
+          stage_index: completedStageIndex,
+          workflow_stage: completedWorkflowStage,
+          output_file: candidate.output_file || outputFile,
+          output_content: candidate.output_content || '',
+        });
+        const continuationFiles = Array.isArray(continuation.files) ? continuation.files : [];
+        if (continuationFiles.length) {
+          await writeWorkspaceFilesAsync(workspaceDir, continuationFiles);
+        }
+        stageIndex = Number.isFinite(Number(continuation.stage_index))
+          ? Number(continuation.stage_index)
+          : stageIndex + 1;
+        activeTask.stage_index = stageIndex;
+        const continuationStage = continuation.stage || `workflow_stage_${stageIndex}`;
+        activeTask.workflow_stage = continuationStage;
+        stagePrompt = continuation.prompt;
+        if (continuation.compact_before_prompt === true) {
+          const compactionStage = continuation.compaction_stage || `${continuationStage}_compaction`;
+          activeTask.workflow_stage = compactionStage;
+          checkpointPersistentTask({
+            status: 'running',
+            phase: compactionStage,
+            agent_connection: 'running',
+          });
           touchActivity({
             task_token: taskToken,
-            stage: 'retry',
-            message: `${runtimeName} 正在自动修复 ${retryCount}/${maxRetries}：${compactText(error?.message || error, 160)}`,
-            source: 'pi.retry',
+            stage: compactionStage,
+            message: continuation.compaction_message || 'Agent 正在压缩上下文',
+            source: 'pi.workflow.compaction',
             visible: true,
             activity: true,
           });
-          prompt = buildRetryPrompt(outputFile, error, retryCount, maxRetries);
-          emitMonitorEvent({
-            type: 'retry',
-            task_id: taskId,
-            title,
-            attempt: retryCount,
-            maximum: maxRetries,
-            message: compactText(error?.message || error, 600),
-            prompt,
+          try {
+            await session.compact(continuation.compaction_instructions);
+            if (activeController.signal.aborted) throw activeController.signal.reason;
+            touchActivity({
+              task_token: taskToken,
+              stage: compactionStage,
+              message: continuation.compaction_complete_message || 'Agent 上下文压缩完成',
+              source: 'pi.workflow.compaction.completed',
+              visible: true,
+              activity: true,
+            });
+          } catch (error) {
+            if (activeController.signal.aborted) throw activeController.signal.reason;
+            if (!isCompactionNoopError(error)) throw error;
+            touchActivity({
+              task_token: taskToken,
+              stage: compactionStage,
+              message: '当前上下文无需压缩，继续执行目录审核',
+              source: 'pi.workflow.compaction.skipped',
+              visible: true,
+              activity: true,
+            });
+          }
+          activeTask.workflow_stage = continuationStage;
+          checkpointPersistentTask({
+            status: 'running',
+            phase: continuationStage,
+            agent_connection: 'running',
           });
         }
+        emitMonitorEvent({
+          type: 'task_input',
+          task_id: taskId,
+          title,
+          workspace_dir: workspaceDir,
+          stage_index: stageIndex,
+          workflow_stage: continuationStage,
+          prompt: stagePrompt,
+          files: continuationFiles.map((file) => ({ path: String(file.path || ''), content: String(file.content || '') })),
+        });
+        touchActivity({
+          task_token: taskToken,
+          stage: continuationStage,
+          message: continuation.message || 'Agent 正在继续目录生成流程',
+          source: 'pi.workflow.continue',
+          visible: Boolean(continuation.message),
+          activity: true,
+        });
       }
 
-      const output = await readOutputAsync(layout.workspaceDir, outputFile);
-      const archive = await archiveWorkspace(taskId);
-      archivedWorkspace = archive.archivedWorkspace;
+      const output = await readOutputAsync(workspaceDir, outputFile);
+      const archive = persistentTask ? null : await archiveWorkspace(taskId);
+      archivedWorkspace = persistentTask ? workspaceDir : archive.archivedWorkspace;
       const result = {
         success: true,
         runtime_id: runtimeId,
         task_id: taskId,
         title,
         workspace_dir: archivedWorkspace,
-        runtime_workspace_dir: layout.workspaceDir,
+        runtime_workspace_dir: workspaceDir,
         runtime_root: layout.runtimeRoot,
         output_file: outputFile,
         output_content: output.content,
@@ -642,12 +991,24 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           events: diagnostics.events.filter((event) => String(event.at || '') >= startedAt),
         },
       };
-      await writeJsonAsync(path.join(archive.taskDir, 'result.json'), result);
+      if (persistentTask) {
+        await writeJsonAsync(persistentTask.paths.resultFile, result);
+        checkpointPersistentTask({
+          status: 'running',
+          phase: activeTask.workflow_stage,
+          agent_connection: 'idle',
+          session_file: session.sessionFile ? path.basename(session.sessionFile) : persistentTask.state.session_file || '',
+        });
+      } else {
+        await writeJsonAsync(path.join(archive.taskDir, 'result.json'), result);
+      }
       emitMonitorEvent({
         type: 'task_end',
         task_id: taskId,
         title,
         workspace_dir: archivedWorkspace,
+        stage_index: activeTask.stage_index,
+        workflow_stage: activeTask.workflow_stage,
         output_file: outputFile,
         output_content: output.content,
         assistant_text: assistantText,
@@ -657,13 +1018,25 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       return result;
     } catch (error) {
       let output = { path: '', content: '' };
-      try { output = await readOutputAsync(layout.workspaceDir, outputFile); } catch {}
-      try { archivedWorkspace = (await archiveWorkspace(taskId)).archivedWorkspace; } catch {}
+      try { output = await readOutputAsync(workspaceDir, outputFile); } catch {}
+      if (persistentTask) {
+        archivedWorkspace = workspaceDir;
+        const current = loadPersistentAgentTask(app, persistentConfig.task_key);
+        checkpointPersistentTask({
+          status: error?.code === 'AGENT_DISCONNECTED' ? 'interrupted' : 'error',
+          phase: activeTask.workflow_stage,
+          agent_connection: 'idle',
+          error: error?.message || String(error),
+          session_file: session?.sessionFile ? path.basename(session.sessionFile) : current?.state?.session_file || '',
+        });
+      } else {
+        try { archivedWorkspace = (await archiveWorkspace(taskId)).archivedWorkspace; } catch {}
+      }
       if (error && typeof error === 'object') {
         error.agentRuntimeId = runtimeId;
         error.agentTaskId = taskId;
         error.agentTitle = title;
-        error.agentWorkspaceDir = archivedWorkspace || layout.workspaceDir;
+        error.agentWorkspaceDir = archivedWorkspace || workspaceDir;
         error.agentRuntimeRoot = layout.runtimeRoot;
         error.agentOutputFile = outputFile;
         error.agentOutputPath = archivedWorkspace ? path.join(archivedWorkspace, outputFile) : output.path;
@@ -683,12 +1056,16 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         type: 'task_error',
         task_id: taskId,
         title,
-        workspace_dir: archivedWorkspace || layout.workspaceDir,
+        workspace_dir: archivedWorkspace || workspaceDir,
+        stage_index: activeTask.stage_index,
+        workflow_stage: activeTask.workflow_stage,
         output_file: outputFile,
         output_content: output.content,
         message: error?.message || String(error),
       });
-      trackAgentRuntime(app, configStore, 'failed', { retryCount: retryAttempts.length });
+      if (error?.code !== 'AGENT_DISCONNECTED') {
+        trackAgentRuntime(app, configStore, 'failed', { retryCount: retryAttempts.length });
+      }
       throw error;
     } finally {
       unsubscribe?.();
@@ -697,7 +1074,9 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       clearInterval(watchdog);
       activeTask = null;
       activeController = null;
-      try { await clearDirectoryAsync(layout.workspaceDir); } catch {}
+      if (!persistentTask) {
+        try { await clearDirectoryAsync(workspaceDir); } catch {}
+      }
       if (phase !== 'closing' && phase !== 'stopped') {
         if (restartPending) {
           await restart(restartPendingReason || 'config changed').catch((error) => {
@@ -724,12 +1103,19 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
 1. 使用 read 工具读取 self-check-input.txt。
 2. 使用 bash 工具执行 node -e "console.log('YIBIAO_PI_NODE_OK')"。
 3. 使用 write 工具将 JSON 写入 ${SELF_CHECK_OUTPUT_FILE}，格式为 {"message":"YIBIAO_PI_AGENT_SELF_CHECK_OK","input":"YIBIAO_PI_AGENT_SELF_CHECK_INPUT","node":"YIBIAO_PI_NODE_OK"}。
-4. 不要访问当前工作区以外的文件。`,
+4. 使用 json-validation 工具校验 ${SELF_CHECK_OUTPUT_FILE}。程序已预置 Schema，只传 file_path，不要传入 schema。
+5. 不要访问当前工作区以外的文件。`,
+        json_validation_schemas: { [SELF_CHECK_OUTPUT_FILE]: SELF_CHECK_OUTPUT_SCHEMA },
         timeout_ms: 5 * 60 * 1000,
         max_retries: 0,
       });
       const sessionSnapshot = result.diagnostics?.session || {};
       const snapshotValidation = validatePiSessionSnapshot(sessionSnapshot);
+      const validationToolSucceeded = (result.diagnostics?.events || []).some((event) => (
+        event.source === 'pi.tool.end'
+        && event.meta?.tool === 'json-validation'
+        && event.meta?.is_error === false
+      ));
       let output = null;
       let outputValid = false;
       let outputMessage = '';
@@ -742,13 +1128,20 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       } catch (error) {
         outputMessage = `Pi Agent 自检输出不是合法 JSON：${error?.message || String(error)}`;
       }
-      const success = snapshotValidation.resourcesValid && snapshotValidation.toolsValid && outputValid;
+      const success = snapshotValidation.resourcesValid
+        && snapshotValidation.toolsValid
+        && validationToolSucceeded
+        && outputValid;
       return {
         success,
         task_completed: true,
         checked_at: taskCheckedAt,
         duration_ms: Date.now() - taskStartedAt,
-        message: success ? 'Pi Agent 极简任务执行成功' : outputMessage || 'Pi Agent 极简任务未通过校验',
+        message: success
+          ? 'Pi Agent 极简任务执行成功'
+          : !validationToolSucceeded
+            ? 'Pi Agent 未成功执行 json-validation 工具'
+            : outputMessage || 'Pi Agent 极简任务未通过校验',
         session_id: result.session_id || '',
         workspace_dir: result.workspace_dir || layout.workspaceDir,
         output_file: SELF_CHECK_OUTPUT_FILE,
@@ -756,6 +1149,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         output_valid: outputValid,
         output_message: outputMessage,
         parsed_output: output,
+        validation_tool_succeeded: validationToolSucceeded,
         session_snapshot: sessionSnapshot,
         snapshot_validation: snapshotValidation,
         retry_count: result.retry_count || 0,
@@ -780,6 +1174,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         output_valid: false,
         output_message: '智能体任务失败，未执行输出校验',
         parsed_output: null,
+        validation_tool_succeeded: false,
         session_snapshot: error?.agentDiagnostics?.session || {},
         snapshot_validation: validatePiSessionSnapshot(error?.agentDiagnostics?.session || {}),
         retry_count: error?.agentRetryAttempts?.length || 0,
@@ -1279,7 +1674,11 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     if (closePromise) return closePromise;
     closePromise = (async () => {
       setPhase('closing', `正在关闭 ${runtimeName}`);
-      if (activeController && !activeController.signal.aborted) activeController.abort(new Error('Agent 服务正在关闭'));
+      if (activeController && !activeController.signal.aborted) {
+        const error = new Error('Agent 服务正在关闭');
+        error.code = 'AGENT_DISCONNECTED';
+        activeController.abort(error);
+      }
       if (startPromise) await startPromise.catch(() => undefined);
       await proxy?.close?.();
       proxy = null;

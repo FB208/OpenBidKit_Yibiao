@@ -3,7 +3,7 @@
   position: fixed;
   right: 28px;
   top: 28px;
-  z-index: 80;
+  z-index: var(--yb-z-toast);
   display: grid;
   gap: 12px;
   width: min(560px, calc(100vw - 40px));
@@ -12,6 +12,7 @@
   padding: 0;
   list-style: none;
   outline: none;
+  pointer-events: auto;
 }
 
 .app-toast {

@@ -19,20 +19,40 @@ interface MonitorTimelineEntry {
   isError?: boolean;
 }
 
+interface MonitorTaskInput {
+  id: string;
+  at: string;
+  stageIndex?: number;
+  workflowStage: string;
+  prompt: string;
+  files: AgentRunFile[];
+}
+
+interface MonitorTaskOutput {
+  id: string;
+  at: string;
+  stageIndex?: number;
+  workflowStage: string;
+  outputFile: string;
+  outputContent: string;
+  status: 'success' | 'error';
+  error: string;
+}
+
 interface MonitorTask {
   id: string;
   title: string;
   status: MonitorTaskStatus;
   startedAt: string;
   endedAt?: string;
-  prompt: string;
   outputFile: string;
   workspaceDir: string;
-  files: AgentRunFile[];
+  inputs: MonitorTaskInput[];
+  outputs: MonitorTaskOutput[];
   entries: MonitorTimelineEntry[];
   turnCount: number;
-  retryCount: number;
-  outputContent: string;
+  modelRetryCount: number;
+  repairCount: number;
   error: string;
 }
 
@@ -50,14 +70,14 @@ function createTask(id: string, title = 'Pi Agent 任务', startedAt = new Date(
     title,
     status: 'running',
     startedAt,
-    prompt: '',
     outputFile: '',
     workspaceDir: '',
-    files: [],
+    inputs: [],
+    outputs: [],
     entries: [],
     turnCount: 0,
-    retryCount: 0,
-    outputContent: '',
+    modelRetryCount: 0,
+    repairCount: 0,
     error: '',
   };
 }
@@ -75,39 +95,99 @@ function createMidstreamEntry(taskId: string, at: string): MonitorTimelineEntry 
 
 function ensureTask(tasks: MonitorTask[], event: AgentMonitorEvent) {
   const index = tasks.findIndex((task) => task.id === event.task_id);
-  if (index >= 0) return { index, task: { ...tasks[index], entries: [...tasks[index].entries] } };
+  if (index >= 0) {
+    return {
+      index,
+      existed: true,
+      task: {
+        ...tasks[index],
+        inputs: [...tasks[index].inputs],
+        outputs: [...tasks[index].outputs],
+        entries: [...tasks[index].entries],
+      },
+    };
+  }
   const task = createTask(event.task_id || `unknown-${event.sequence}`, event.title, event.at);
   task.entries.push(createMidstreamEntry(task.id, event.at));
-  return { index: tasks.length, task };
+  return { index: tasks.length, existed: false, task };
+}
+
+function createTaskInput(event: AgentMonitorEvent): MonitorTaskInput {
+  return {
+    id: `input-${event.sequence}`,
+    at: event.at,
+    stageIndex: event.stage_index,
+    workflowStage: event.workflow_stage || '',
+    prompt: event.prompt || '',
+    files: event.files || [],
+  };
+}
+
+// 将阶段输出转换为监视器中的单轮输出记录。
+function createTaskOutput(event: AgentMonitorEvent, status: MonitorTaskOutput['status']): MonitorTaskOutput {
+  return {
+    id: `output-${event.sequence}`,
+    at: event.at,
+    stageIndex: event.stage_index,
+    workflowStage: event.workflow_stage || '',
+    outputFile: event.output_file || '',
+    outputContent: event.output_content || '',
+    status,
+    error: status === 'error' ? event.message || 'Pi Agent 执行失败' : '',
+  };
+}
+
+function describeTaskInput(input: MonitorTaskInput, round: number) {
+  const stage = input.workflowStage ? `：${input.workflowStage}` : '';
+  const fileLabel = round === 1 ? '输入文件' : '新增/更新文件';
+  return `第 ${round} 轮任务输入已提交${stage}，Prompt ${input.prompt.length.toLocaleString('zh-CN')} 字符，${fileLabel} ${input.files.length} 个。`;
 }
 
 // 将 Pi 实时事件归并为适合阅读的任务时间线。
 function applyMonitorEvent(tasks: MonitorTask[], event: AgentMonitorEvent) {
   const nextTasks = [...tasks];
-  const { index, task } = ensureTask(nextTasks, event);
+  const { index, existed, task } = ensureTask(nextTasks, event);
   if (event.title) task.title = event.title;
   if (event.workspace_dir) task.workspaceDir = event.workspace_dir;
 
   if (event.type === 'task_start') {
+    if (!existed) {
+      task.startedAt = event.at;
+      task.entries = [];
+      task.inputs = [];
+      task.outputs = [];
+      task.turnCount = 0;
+      task.modelRetryCount = 0;
+      task.repairCount = 0;
+    }
     task.status = 'running';
-    task.startedAt = event.at;
     delete task.endedAt;
-    task.prompt = event.prompt || '';
     task.outputFile = event.output_file || '';
     task.workspaceDir = event.workspace_dir || '';
-    task.files = event.files || [];
-    task.entries = [{
-      id: `start-${event.sequence}`,
+    task.error = '';
+    const input = createTaskInput(event);
+    task.inputs.push(input);
+    task.entries.push({
+      id: `input-notice-${event.sequence}`,
       kind: 'system',
       at: event.at,
-      text: '任务输入已交给 Pi Agent，开始执行。',
+      text: describeTaskInput(input, task.inputs.length),
       tone: 'normal',
       complete: true,
-    }];
-    task.turnCount = 0;
-    task.retryCount = 0;
-    task.outputContent = '';
-    task.error = '';
+    });
+  } else if (event.type === 'task_input') {
+    const input = createTaskInput(event);
+    task.inputs.push(input);
+    task.entries.push({
+      id: `input-notice-${event.sequence}`,
+      kind: 'system',
+      at: event.at,
+      text: describeTaskInput(input, task.inputs.length),
+      tone: 'normal',
+      complete: true,
+    });
+  } else if (event.type === 'task_output') {
+    task.outputs.push(createTaskOutput(event, 'success'));
   } else if (event.type === 'assistant_delta') {
     const lastEntry = task.entries[task.entries.length - 1];
     if (lastEntry?.kind === 'assistant' && !lastEntry.complete) {
@@ -172,8 +252,30 @@ function applyMonitorEvent(tasks: MonitorTask[], event: AgentMonitorEvent) {
     else task.entries.push(updated);
   } else if (event.type === 'turn_start') {
     task.turnCount += 1;
+  } else if (event.type === 'auto_retry_start') {
+    task.modelRetryCount += 1;
+    const delaySeconds = Math.max(0, Math.round(Number(event.delay_ms || 0) / 1000));
+    task.entries.push({
+      id: `model-retry-start-${event.sequence}`,
+      kind: 'system',
+      at: event.at,
+      text: `模型请求遇到临时错误，${delaySeconds} 秒后进行第 ${event.attempt || 0}/${event.maximum || 0} 次重试：${event.message || '模型服务暂时不可用'}`,
+      tone: 'warning',
+      complete: true,
+    });
+  } else if (event.type === 'auto_retry_end') {
+    task.entries.push({
+      id: `model-retry-end-${event.sequence}`,
+      kind: 'system',
+      at: event.at,
+      text: event.message || (event.success
+        ? `模型请求已恢复，第 ${event.attempt || 0} 次重试成功`
+        : `模型请求重试 ${event.attempt || 0} 次后仍失败${event.final_error ? `：${event.final_error}` : ''}`),
+      tone: event.success ? 'success' : 'error',
+      complete: true,
+    });
   } else if (event.type === 'retry') {
-    task.retryCount = Math.max(task.retryCount, event.attempt || 0);
+    task.repairCount = Math.max(task.repairCount, event.attempt || 0);
     task.entries.push({
       id: `retry-${event.sequence}`,
       kind: 'system',
@@ -186,13 +288,13 @@ function applyMonitorEvent(tasks: MonitorTask[], event: AgentMonitorEvent) {
     task.status = 'success';
     task.endedAt = event.at;
     task.outputFile = event.output_file || task.outputFile;
-    task.outputContent = event.output_content || '';
-    task.retryCount = Math.max(task.retryCount, event.retry_count || 0);
+    task.outputs.push(createTaskOutput(event, 'success'));
+    task.repairCount = Math.max(task.repairCount, event.retry_count || 0);
     task.entries.push({
       id: `success-${event.sequence}`,
       kind: 'system',
       at: event.at,
-      text: '任务完成，最终输出已写回。',
+      text: '本轮 Pi Agent 执行完成，输出已写回。',
       tone: 'success',
       complete: true,
     });
@@ -200,8 +302,8 @@ function applyMonitorEvent(tasks: MonitorTask[], event: AgentMonitorEvent) {
     task.status = 'error';
     task.endedAt = event.at;
     task.outputFile = event.output_file || task.outputFile;
-    task.outputContent = event.output_content || '';
     task.error = event.message || 'Pi Agent 执行失败';
+    task.outputs.push(createTaskOutput(event, 'error'));
     task.entries.push({
       id: `error-${event.sequence}`,
       kind: 'system',
@@ -428,39 +530,69 @@ function PiAgentMonitorWindow() {
   };
 
   const renderInput = () => {
-    if (!selectedTask?.prompt && !selectedTask?.files.length) {
+    if (!selectedTask?.inputs.length) {
       return <div className="markdown-empty-state agent-monitor-empty"><strong>未采集任务输入</strong><p>任务可能在监视器打开前已经开始。</p></div>;
     }
     return (
       <div className="agent-monitor-document-view">
-        <section>
-          <header><strong>任务 Prompt</strong><span>{selectedTask.prompt.length.toLocaleString('zh-CN')} 字符</span></header>
-          <pre>{selectedTask.prompt || '(空)'}</pre>
-        </section>
-        <section>
-          <header><strong>工作区输入文件</strong><span>{selectedTask.files.length} 个</span></header>
-          <div className="agent-monitor-file-list">
-            {selectedTask.files.map((file) => (
-              <MonitorInputFile file={file} key={file.path} />
-            ))}
-          </div>
-        </section>
+        {selectedTask.inputs.map((input, index) => (
+          <section className="agent-monitor-input-round" key={input.id}>
+            <header>
+              <div>
+                <strong>第 {index + 1} 轮任务输入</strong>
+                <small>{input.workflowStage || '未命名阶段'}{input.stageIndex === undefined ? '' : ` · stage ${input.stageIndex}`}</small>
+              </div>
+              <span>{formatClock(input.at)}</span>
+            </header>
+            <div className="agent-monitor-input-block">
+              <header><strong>任务 Prompt</strong><span>{input.prompt.length.toLocaleString('zh-CN')} 字符</span></header>
+              <pre>{input.prompt || '(空)'}</pre>
+            </div>
+            <div className="agent-monitor-input-block">
+              <header><strong>{index === 0 ? '工作区输入文件' : '本轮新增或更新文件'}</strong><span>{input.files.length} 个</span></header>
+              {input.files.length ? (
+                <div className="agent-monitor-file-list">
+                  {input.files.map((file) => (
+                    <MonitorInputFile file={file} key={`${input.id}:${file.path}`} />
+                  ))}
+                </div>
+              ) : <p className="agent-monitor-input-empty">本轮没有新增或更新工作区文件。</p>}
+            </div>
+          </section>
+        ))}
       </div>
     );
   };
 
   const renderOutput = () => {
     if (!selectedTask) return null;
+    if (!selectedTask.outputs.length) {
+      return (
+        <div className="markdown-empty-state agent-monitor-empty">
+          <strong>未采集任务输出</strong>
+          <p>{selectedTask.status === 'running' ? '任务正在执行，等待本轮输出文件写回。' : '任务可能在监视器打开前已经完成。'}</p>
+        </div>
+      );
+    }
     return (
       <div className="agent-monitor-document-view">
-        <section>
-          <header>
-            <strong>{selectedTask.outputFile || '最终输出文件'}</strong>
-            <span>{selectedTask.outputContent.length.toLocaleString('zh-CN')} 字符</span>
-          </header>
-          {selectedTask.error && <div className="agent-monitor-output-error">{selectedTask.error}</div>}
-          <pre>{selectedTask.outputContent || (selectedTask.status === 'running' ? '任务执行中，等待最终输出文件写回。' : '(无输出)')}</pre>
-        </section>
+        {selectedTask.outputs.map((output, index) => (
+          <section className="agent-monitor-output-round" key={output.id}>
+            <header>
+              <div>
+                <strong>第 {index + 1} 轮任务输出</strong>
+                <small>{output.workflowStage || '未命名阶段'}{output.stageIndex === undefined ? '' : ` · stage ${output.stageIndex}`}</small>
+              </div>
+              <span>{formatClock(output.at)}</span>
+            </header>
+            <div className="agent-monitor-output-file-meta">
+              <strong>{output.outputFile || selectedTask.outputFile || '输出文件'}</strong>
+              <span>{output.outputContent.length.toLocaleString('zh-CN')} 字符</span>
+            </div>
+            {output.status === 'error' && <div className="agent-monitor-output-error">{output.error}</div>}
+            <pre>{output.outputContent || '(无输出)'}</pre>
+          </section>
+        ))}
       </div>
     );
   };
@@ -514,7 +646,8 @@ function PiAgentMonitorWindow() {
                 <div className="agent-monitor-task-stats">
                   <span><small>状态</small><strong className={`is-${selectedTask.status}`}>{statusLabel(selectedTask.status)}</strong></span>
                   <span><small>轮次</small><strong>{selectedTask.turnCount}</strong></span>
-                  <span><small>重试</small><strong>{selectedTask.retryCount}</strong></span>
+                  <span><small>模型重试</small><strong>{selectedTask.modelRetryCount}</strong></span>
+                  <span><small>结果修复</small><strong>{selectedTask.repairCount}</strong></span>
                   <span><small>耗时</small><strong>{formatElapsed(selectedTask.startedAt, selectedTask.endedAt, now)}</strong></span>
                 </div>
               )}
@@ -524,8 +657,8 @@ function PiAgentMonitorWindow() {
               <div className="document-switch-tabs">
                 {([
                   { id: 'timeline', label: '执行过程' },
-                  { id: 'input', label: '任务输入' },
-                  { id: 'output', label: '最终输出' },
+                  { id: 'input', label: selectedTask?.inputs.length ? `任务输入（${selectedTask.inputs.length} 轮）` : '任务输入' },
+                  { id: 'output', label: selectedTask?.outputs.length ? `任务输出（${selectedTask.outputs.length} 轮）` : '任务输出' },
                 ] as Array<{ id: MonitorTab; label: string }>).map((tab) => (
                   <button type="button" className={`document-switch-tab ${activeTab === tab.id ? 'is-active' : ''}`} onClick={() => setActiveTab(tab.id)} key={tab.id}>{tab.label}</button>
                 ))}
