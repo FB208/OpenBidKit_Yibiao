@@ -4,7 +4,7 @@ import type { YibiaoBridge } from './shared/types';
 
 declare global {
   interface Window {
-    yibiao?: YibiaoBridge;
+    yibiao: YibiaoBridge;
     yibiaoClient?: {
       appName: string;
       platform: string;
