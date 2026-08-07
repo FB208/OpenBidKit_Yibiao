@@ -11,6 +11,10 @@ const {
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 const { clearMermaidCache } = require('../utils/mermaidCache.cjs');
 const { detectBidSections } = require('../utils/bidSectionDetector.cjs');
+const {
+  OUTLINE_AGENT_TASK_KEY,
+  deletePersistentAgentTask,
+} = require('./pi/piPersistentTaskStore.cjs');
 
 const tenderMarkdownRelativePath = path.join('technical-plan', 'tender.md').replace(/\\/g, '/');
 const tenderOriginalMarkdownRelativePath = path.join('technical-plan', 'tender-original.md').replace(/\\/g, '/');
@@ -1213,6 +1217,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   }
 
   function clearDownstreamFromTender() {
+    deletePersistentAgentTask(app, OUTLINE_AGENT_TASK_KEY);
     db.prepare('DELETE FROM technical_plan_tasks').run();
     db.prepare('DELETE FROM technical_plan_bid_items').run();
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
@@ -1248,6 +1253,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   }
 
   function clearDownstreamFromBidSectionChange() {
+    deletePersistentAgentTask(app, OUTLINE_AGENT_TASK_KEY);
     db.prepare('DELETE FROM technical_plan_tasks').run();
     db.prepare('DELETE FROM technical_plan_bid_items').run();
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
@@ -1276,6 +1282,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   }
 
   function clearDownstreamFromOriginalPlan() {
+    deletePersistentAgentTask(app, OUTLINE_AGENT_TASK_KEY);
     db.prepare("DELETE FROM technical_plan_tasks WHERE type IN ('outline-generation', 'global-facts-generation', 'content-generation')").run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
@@ -1309,6 +1316,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   }
 
   function clearWorkflowSpecificState(workflowKind) {
+    deletePersistentAgentTask(app, OUTLINE_AGENT_TASK_KEY);
     db.prepare("DELETE FROM technical_plan_tasks WHERE type IN ('outline-generation', 'global-facts-generation', 'content-generation')").run();
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
@@ -1565,6 +1573,9 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   function updateTechnicalPlanWithoutReload(partial) {
     const shouldClearMermaidCache = shouldClearMermaidCacheForPartial(partial);
     updateTechnicalPlanTransaction(partial || {});
+    if (hasOwn(partial, 'outlineData') && partial.outlineData === null) {
+      deletePersistentAgentTask(app, OUTLINE_AGENT_TASK_KEY);
+    }
     if (shouldClearMermaidCache) {
       clearTechnicalPlanMermaidCache();
     }
@@ -1934,6 +1945,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   }
 
   function clearTechnicalPlan() {
+    deletePersistentAgentTask(app, OUTLINE_AGENT_TASK_KEY);
     cleanupPendingTenderSelection();
     const workflowKind = normalizeWorkflowKind(ensureMetaRow().workflow_kind);
     const transaction = db.transaction(() => {

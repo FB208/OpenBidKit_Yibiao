@@ -1,3 +1,5 @@
+const { OUTLINE_AGENT_TASK_KEY } = require('./pi/piPersistentTaskStore.cjs');
+
 const DEFAULT_ESTIMATED_SECTION_WORDS = 3000;
 const OUTLINE_OUTPUT_FILE = 'outline.json';
 const TECHNICAL_SCORE_GROUPS_FILE = 'technical-score-groups.json';
@@ -529,9 +531,10 @@ function createFinalLeafDecisionPrompt(targetLeafCount, actualLeafCount) {
 用户接受时写入 ${LEAF_DECISION_FILE}：{"status":"accepted"}；用户取消时写入：{"status":"cancelled"}。写入后调用 json-validation 校验该文件。`;
 }
 
-// 运行 V2 多阶段目录生成工作流，整个流程共用同一个 Pi Session 和 workspace。
+// 运行 V2 目录业务任务；完整 Agent 执行之间通过程序确认衔接并复用同一持久 Session。
 async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowledgeBaseService, updateTask, taskControl, payload }) {
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
+  const restoringOutlineSelection = payload?.agent_resume?.phase === 'outline-selection';
   const hasOriginalPlan = Boolean(storedPlan.originalPlanFile);
   const originalOnly = hasOriginalPlan && storedPlan.outlineExpansionMode === 'original-only';
   const originalPlan = hasOriginalPlan ? workspaceStore.readOriginalPlanMarkdown() : '';
@@ -540,14 +543,21 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   const targetLeafCount = deriveTargetLeafCount(wordControlOptions);
   const referenceDocumentIds = normalizeReferenceDocumentIds(storedPlan);
   const knowledgeFiles = buildKnowledgeFiles(knowledgeBaseService, referenceDocumentIds);
+  const jsonValidationSchemas = {
+    [OUTLINE_OUTPUT_FILE]: OUTLINE_JSON_SCHEMA,
+    [TECHNICAL_SCORE_GROUPS_FILE]: TECHNICAL_SCORE_GROUPS_SCHEMA,
+    [SCORE_DIRECTORY_PLAN_FILE]: SCORE_DIRECTORY_PLAN_SCHEMA,
+    [LEAF_ALLOCATION_FILE]: LEAF_ALLOCATION_SCHEMA,
+    [LEAF_DECISION_FILE]: LEAF_DECISION_SCHEMA,
+  };
 
-  let files;
+  let initialFiles;
   let taskInstruction;
   if (originalOnly) {
-    files = [{ path: '原方案.md', content: originalPlan }];
+    initialFiles = [{ path: '原方案.md', content: originalPlan }];
     taskInstruction = '只根据原方案材料提取一级目录。';
   } else {
-    files = [
+    initialFiles = [
       { path: '响应文件要求.md', content: responseFileRequirements },
       { path: '项目概述.md', content: storedPlan.projectOverview || '' },
       ...(hasOriginalPlan ? [{ path: '原方案.md', content: originalPlan }] : []),
@@ -557,8 +567,10 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
       : '严格按照响应文件要求.md 组织一级目录，它是目录结构和标题来源的唯一依据。项目概述.md 仅用于理解背景和术语，不得据此新增一级目录。';
   }
 
-  let logs = ['开始生成一级目录'];
-  let currentProgress = 10;
+  let logs = restoringOutlineSelection
+    ? [...(Array.isArray(storedPlan.outlineGenerationTask?.logs) ? storedPlan.outlineGenerationTask.logs : []), '已恢复一级目录确认状态']
+    : ['开始生成一级目录'];
+  let currentProgress = restoringOutlineSelection ? Number(storedPlan.outlineGenerationTask?.progress || 30) : 10;
   let task = updateTask({ status: 'running', progress: currentProgress, logs });
   let technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
   updateTask(task, technicalPlan);
@@ -572,6 +584,28 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   let finalOutline = null;
   let actualLeafCount = 0;
   let leafWarning = '';
+
+  function updateAgentState(partial = {}) {
+    task = updateTask({
+      stats: {
+        ...(task.stats || {}),
+        agent: {
+          ...(task.stats?.agent || {}),
+          task_key: OUTLINE_AGENT_TASK_KEY,
+          run_id: task.task_id,
+          resume_payload: {
+            reference_knowledge_document_ids: referenceDocumentIds,
+            outline_mode: storedPlan.outlineMode,
+            outline_expansion_mode: storedPlan.outlineExpansionMode,
+            word_control_options: wordControlOptions,
+          },
+          ...partial,
+        },
+      },
+    });
+    technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
+    updateTask(task, technicalPlan);
+  }
 
   function publish(message, progress, statsPatch = {}) {
     const text = String(message || '').trim();
@@ -591,6 +625,32 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     const title = formatProgressTitle(event.message);
     if (!title || event.visible === false) return;
     publish(title, Math.max(currentProgress, 20));
+  }
+
+  function syncAgentCheckpoint(checkpoint) {
+    updateAgentState({
+      status: checkpoint.status,
+      phase: checkpoint.phase,
+      agent_connection: checkpoint.agent_connection,
+      session_file: checkpoint.session_file,
+    });
+  }
+
+  function applyConfirmedSelection(confirmed) {
+    const selectedIdSet = new Set(confirmed.selectedIds);
+    lockedRoots = renumberOutline(confirmed.items.filter((item) => selectedIdSet.has(item.id)));
+    task = updateTask({
+      stats: {
+        ...(task.stats || {}),
+        outline_selection: {
+          items: confirmed.items,
+          selected_ids: confirmed.selectedIds,
+          confirmed: true,
+        },
+      },
+    });
+    technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
+    updateTask(task, technicalPlan);
   }
 
   function continueWithChildrenGeneration(allocations) {
@@ -622,59 +682,72 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     };
   }
 
+  if (!restoringOutlineSelection) {
+    updateAgentState({ status: 'running', phase: 'initial-outline', agent_connection: 'running', session_file: '' });
+    const initialResult = await agentService.runTask({
+      task_id: task.task_id,
+      title: '技术方案一级目录生成',
+      prompt: createInitialPrompt(taskInstruction),
+      output_file: OUTLINE_OUTPUT_FILE,
+      files: initialFiles,
+      signal: taskControl.signal,
+      persistent_task: {
+        task_key: OUTLINE_AGENT_TASK_KEY,
+        mode: 'create',
+      },
+      initial_stage: 'initial-outline',
+      initial_stage_index: 0,
+      json_validation_schemas: jsonValidationSchemas,
+      max_retries: 0,
+      onActivity: publishAgentActivity,
+      onCheckpoint: syncAgentCheckpoint,
+    });
+    const generated = readJson(initialResult.output_content, OUTLINE_OUTPUT_FILE);
+    const items = generated.outline || [];
+    const defaultSelectedIds = items.filter((item) => item.attr === '技术').map((item) => item.id);
+    const selection = { items, selected_ids: defaultSelectedIds, confirmed: false };
+    publish('一级目录已生成，等待用户确认', 30, { outline_selection: selection });
+    agentService.updatePersistentTask(OUTLINE_AGENT_TASK_KEY, {
+      status: 'waiting-outline-selection',
+      phase: 'outline-selection',
+      agent_connection: 'idle',
+      error: null,
+    });
+    updateAgentState({ status: 'waiting-outline-selection', phase: 'outline-selection', agent_connection: 'idle' });
+  }
+
+  const confirmed = await taskControl.waitForOutlineSelection();
+  applyConfirmedSelection(confirmed);
+  publish('一级目录已确认，正在识别技术方案目录', 40);
+  agentService.updatePersistentTask(OUTLINE_AGENT_TASK_KEY, {
+    status: 'running',
+    phase: 'score-planning',
+    agent_connection: 'idle',
+  });
+  updateAgentState({ status: 'running', phase: 'score-planning', agent_connection: 'idle' });
+
   const agentResult = await agentService.runTask({
+    task_id: task.task_id,
     title: '技术方案目录生成 V2',
-    prompt: createInitialPrompt(taskInstruction),
+    prompt: createScorePlanningPrompt(),
     output_file: OUTLINE_OUTPUT_FILE,
-    files,
+    files: [
+      { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify({ outline: lockedRoots }, null, 2) },
+      { path: '技术评分信息.md', content: storedPlan.techRequirements || '' },
+      ...knowledgeFiles,
+    ],
     signal: taskControl.signal,
-    json_validation_schemas: {
-      [OUTLINE_OUTPUT_FILE]: OUTLINE_JSON_SCHEMA,
-      [TECHNICAL_SCORE_GROUPS_FILE]: TECHNICAL_SCORE_GROUPS_SCHEMA,
-      [SCORE_DIRECTORY_PLAN_FILE]: SCORE_DIRECTORY_PLAN_SCHEMA,
-      [LEAF_ALLOCATION_FILE]: LEAF_ALLOCATION_SCHEMA,
-      [LEAF_DECISION_FILE]: LEAF_DECISION_SCHEMA,
+    persistent_task: {
+      task_key: OUTLINE_AGENT_TASK_KEY,
+      mode: 'resume',
     },
+    initial_stage: 'score-planning',
+    initial_stage_index: 1,
+    json_validation_schemas: jsonValidationSchemas,
     max_retries: 0,
     onActivity: publishAgentActivity,
+    onCheckpoint: syncAgentCheckpoint,
     continueTask: async (candidate, meta) => {
-      if (meta.stage === 0) {
-        const generated = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
-        const items = generated.outline || [];
-        const defaultSelectedIds = items.filter((item) => item.attr === '技术').map((item) => item.id);
-        const selection = { items, selected_ids: defaultSelectedIds, confirmed: false };
-        publish('一级目录已生成，等待用户确认', 30, { outline_selection: selection });
-        const confirmed = await meta.waitForUser(
-          taskControl.waitForOutlineSelection(),
-          '一级目录已生成，正在等待您的确认',
-        );
-        const selectedIdSet = new Set(confirmed.selectedIds);
-        lockedRoots = renumberOutline(confirmed.items.filter((item) => selectedIdSet.has(item.id)));
-        task = updateTask({
-          stats: {
-            ...(task.stats || {}),
-            outline_selection: {
-              items: confirmed.items,
-              selected_ids: confirmed.selectedIds,
-              confirmed: true,
-            },
-          },
-        });
-        technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
-        updateTask(task, technicalPlan);
-        publish('一级目录已确认，正在识别技术方案目录', 40);
-        return {
-          stage: 'score_directory_planning',
-          message: 'Agent 正在规划技术评分项目录',
-          prompt: createScorePlanningPrompt(),
-          files: [
-            { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify({ outline: lockedRoots }, null, 2) },
-            { path: '技术评分信息.md', content: storedPlan.techRequirements || '' },
-            ...knowledgeFiles,
-          ],
-        };
-      }
-
       if (meta.stage === 1) {
         const groupsPayload = readJson(await meta.readFile(TECHNICAL_SCORE_GROUPS_FILE), TECHNICAL_SCORE_GROUPS_FILE);
         scoreDirectoryPlan = readJson(await meta.readFile(SCORE_DIRECTORY_PLAN_FILE), SCORE_DIRECTORY_PLAN_FILE);
@@ -724,10 +797,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
       const candidateOutline = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
       finalOutline = buildFinalOutline(candidateOutline, lockedRoots, technicalRootIds, allowRootChanges);
       actualLeafCount = countAiLeaves(finalOutline.outline);
-
-      if (targetLeafCount === null || actualLeafCount === targetLeafCount) {
-        return { complete: true };
-      }
+      if (targetLeafCount === null || actualLeafCount === targetLeafCount) return { complete: true };
 
       const decisionContent = await meta.readFile(LEAF_DECISION_FILE);
       if (decisionContent.trim()) {
@@ -772,7 +842,6 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
           files: [{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) }],
         };
       }
-
       throw new Error('AI 生成小节数量确认结果无效');
     },
   });
@@ -811,6 +880,13 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     contentIllustrationPlan: undefined,
   });
   updateTask(finalTask, technicalPlan);
+  agentService.updatePersistentTask(OUTLINE_AGENT_TASK_KEY, {
+    status: 'success',
+    phase: 'completed',
+    agent_connection: 'idle',
+    error: null,
+    completed_at: new Date().toISOString(),
+  });
 }
 
 module.exports = { runOutlineGenerationTaskV2 };

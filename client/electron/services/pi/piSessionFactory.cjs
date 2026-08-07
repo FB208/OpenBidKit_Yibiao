@@ -29,8 +29,8 @@ function normalizeOutputLimit(contextLength) {
   return Math.min(32768, normalizedContextLength);
 }
 
-// 创建完全内存化的 Pi Session，不读取外部配置、上下文或扩展。
-async function createPiSession({ workspaceDir, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion }) {
+// 创建隔离的 Pi Session；目录任务可在后续完整执行中重新打开原 Session。
+async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion }) {
   const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
@@ -111,6 +111,11 @@ async function createPiSession({ workspaceDir, environment, proxyInfo, config, t
     Type: typebox.Type,
     requestUserQuestion,
   }));
+  const sessionManager = sessionFile
+    ? codingAgent.SessionManager.open(sessionFile, sessionsDir, workspaceDir)
+    : sessionsDir
+      ? codingAgent.SessionManager.create(workspaceDir, sessionsDir)
+      : codingAgent.SessionManager.inMemory(workspaceDir);
   const { session } = await codingAgent.createAgentSession({
     cwd: workspaceDir,
     agentDir: environment.layout.agentDir,
@@ -121,10 +126,11 @@ async function createPiSession({ workspaceDir, environment, proxyInfo, config, t
     customTools: [bashTool, jsonValidationTool, userQuestionTool],
     resourceLoader,
     settingsManager,
-    sessionManager: codingAgent.SessionManager.inMemory(workspaceDir),
+    sessionManager,
   });
   return {
     session,
+    sessionFile: session.sessionFile || sessionManager.getSessionFile() || '',
     snapshot: {
       sdk_version: codingAgent.VERSION || '',
       model: {

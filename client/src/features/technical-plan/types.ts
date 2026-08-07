@@ -81,6 +81,20 @@ export interface BackgroundTaskState {
   updated_at: string;
   error?: string;
   stats?: {
+    agent?: {
+      task_key: string;
+      run_id: string;
+      status: 'created' | 'running' | 'waiting-outline-selection' | 'success' | 'interrupted' | 'error';
+      phase?: 'initial-outline' | 'outline-selection' | 'score-planning' | 'leaf_allocation' | 'children_generation' | 'leaf_adjustment' | 'leaf_final_decision' | 'completed' | string;
+      agent_connection?: 'idle' | 'running';
+      session_file?: string;
+      resume_payload?: {
+        reference_knowledge_document_ids?: string[];
+        outline_mode?: OutlineMode;
+        outline_expansion_mode?: OutlineExpansionMode;
+        word_control_options?: OutlineWordControlOptions;
+      };
+    };
     outline_selection?: OutlineSelectionState;
     outline?: {
       phase: 'generating' | 'reviewing' | 'word-adjusting' | 'second-review' | 'done';

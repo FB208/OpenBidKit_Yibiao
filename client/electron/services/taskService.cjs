@@ -5,6 +5,7 @@ const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
 const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
 const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
+const { OUTLINE_AGENT_TASK_KEY } = require('./pi/piPersistentTaskStore.cjs');
 
 const taskDefinitions = {
   'bid-section-extraction': {
@@ -508,7 +509,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     };
   }
 
-  function startManagedTask(type, payload, runner, initialPartial = {}) {
+  function startManagedTask(type, payload, runner, initialPartial = {}, startOptions = {}) {
     const existingTask = activeTasks.get(type);
     if (existingTask && isActiveTaskStatus(existingTask.status)) {
       const nextPayloadSignature = getPayloadSignature(type, payload);
@@ -521,9 +522,10 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     }
 
     assertTaskCanStart(type, payload);
+    startOptions.beforeStart?.();
 
     const definition = getTaskDefinition(type);
-    const task = createTask(type, payload);
+    const task = startOptions.existingTask || createTask(type, payload);
     const queueScopeId = `${type}:${task.task_id}`;
     activeTasks.set(type, task);
     const taskField = getTaskField(type);
@@ -538,6 +540,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       signal: abortController.signal,
       pauseRequested: false,
       outlineSelectionWaiter: null,
+      outlineSelectionResult: null,
       isPauseRequested() {
         return this.pauseRequested;
       },
@@ -555,6 +558,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         if (abortController.signal.aborted) {
           throw abortController.signal.reason || new Error('目录生成任务已取消');
         }
+        if (this.outlineSelectionResult) return Promise.resolve(this.outlineSelectionResult);
         if (this.outlineSelectionWaiter) return this.outlineSelectionWaiter.promise;
         let resolve;
         let reject;
@@ -562,6 +566,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
           resolve = resolvePromise;
           reject = rejectPromise;
         });
+        promise.catch(() => undefined);
         this.outlineSelectionWaiter = { promise, resolve, reject };
         return promise;
       },
@@ -581,6 +586,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       },
     };
     activeTaskControls.set(type, taskControl);
+    if (startOptions.restoreOutlineSelectionWaiter) {
+      taskControl.waitForOutlineSelection();
+    }
 
     const updateTask = (partial, workspaceState, eventPatch, options = {}) => {
       const nextStatus = currentTask.status === 'pausing' && partial.status === 'running'
@@ -630,12 +638,15 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       const confirmedState = updateWorkspaceState(definition, { [taskField]: currentTask });
       emit(currentTask, buildSnapshot(definition, confirmedState, currentTask));
       taskControl.outlineSelectionWaiter = null;
-      waiter.resolve({ items, selectedIds });
+      taskControl.outlineSelectionResult = { items, selectedIds };
+      waiter.resolve(taskControl.outlineSelectionResult);
       return confirmedState;
     };
 
     const previousState = loadWorkspaceState(definition) || {};
-    const state = updateWorkspaceState(definition, { ...initialPartial, [taskField]: currentTask });
+    const state = startOptions.skipInitialStateUpdate
+      ? previousState
+      : updateWorkspaceState(definition, { ...initialPartial, [taskField]: currentTask });
     emit(currentTask, buildSnapshot(definition, state, currentTask));
 
     const runnerWorkspaceStore = definition.stateKey === 'technicalPlan'
@@ -732,9 +743,52 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       return;
     }
 
+    const agentState = outlineTask.stats?.agent || {};
+    let persistentTask = null;
+    try {
+      persistentTask = agentService.loadPersistentTask(OUTLINE_AGENT_TASK_KEY);
+    } catch {}
+    const recoverableWaiting = persistentTask?.state?.run_id === outlineTask.task_id
+      && persistentTask.state.status === 'waiting-outline-selection'
+      && persistentTask.state.phase === 'outline-selection'
+      && persistentTask.state.agent_connection === 'idle'
+      && Boolean(persistentTask.state.session_file)
+      && agentService.hasPersistentTaskSession(OUTLINE_AGENT_TASK_KEY)
+      && Boolean(outlineTask.stats?.outline_selection?.items?.length)
+      && outlineTask.stats.outline_selection.confirmed !== true;
+    if (recoverableWaiting) {
+      startManagedTask('outline-generation', {
+        ...(agentState.resume_payload || {}),
+        agent_resume: {
+          phase: 'outline-selection',
+        },
+      }, runOutlineGenerationTaskV2, {}, {
+        existingTask: outlineTask,
+        skipInitialStateUpdate: true,
+        restoreOutlineSelectionWaiter: true,
+      });
+      return;
+    }
+
     const message = '上次目录生成未完成，请重新生成目录。';
+    if (persistentTask) {
+      try {
+        agentService.updatePersistentTask(OUTLINE_AGENT_TASK_KEY, {
+          status: 'interrupted',
+          agent_connection: 'idle',
+          error: message,
+        });
+      } catch {}
+    }
     const recoveredStats = { ...(outlineTask.stats || {}) };
     delete recoveredStats.outline_selection;
+    if (recoveredStats.agent) {
+      recoveredStats.agent = {
+        ...recoveredStats.agent,
+        status: 'interrupted',
+        agent_connection: 'idle',
+      };
+    }
     const recoveredTask = {
       ...outlineTask,
       status: 'error',
@@ -966,6 +1020,8 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         contentGenerationPlans: {},
         contentIllustrationPlan: undefined,
         contentGenerationRuntime: undefined,
+      }, {
+        beforeStart: () => agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY),
       });
     },
     startGlobalFactsGeneration(payload) {
@@ -1022,6 +1078,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     },
     async resetTechnicalPlan() {
       await cancelOutlineGenerationForReset();
+      agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY);
       return technicalPlanStore.clearTechnicalPlan();
     },
     getActiveTasks() {

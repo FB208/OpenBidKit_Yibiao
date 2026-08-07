@@ -7,6 +7,12 @@ const { trackAgentRuntime } = require('../agent/agentRuntimeAnalytics.cjs');
 const { preparePiEnvironment } = require('./piEnvironment.cjs');
 const { createPiSession, loadPiModules } = require('./piSessionFactory.cjs');
 const {
+  createPersistentAgentTask,
+  getPersistentAgentSessionPath,
+  loadPersistentAgentTask,
+  updatePersistentAgentTask,
+} = require('./piPersistentTaskStore.cjs');
+const {
   SAFE_REPAIR_ACTIONS,
   analyzePiSelfCheckWithModel,
   createPiEnvironmentSnapshot,
@@ -285,7 +291,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       runtime_details: {
         sdk_version: sdkVersion,
         runtime_root: layout.runtimeRoot,
-        workspace_dir: layout.workspaceDir,
+        workspace_dir: activeTask?.workspace_dir || layout.workspaceDir,
       },
     };
   }
@@ -319,6 +325,14 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     diagnostics.record(event.source || 'runtime.activity', event);
     try { activeTask.onActivity?.({ ...event, at: now }); } catch {}
     emitStatus();
+  }
+
+  // 同步持久 Agent 任务检查点，并通知所属业务任务落盘必要状态。
+  function checkpointPersistentTask(partial = {}) {
+    if (!activeTask?.persistent_task_key) return null;
+    const updated = updatePersistentAgentTask(app, activeTask.persistent_task_key, partial);
+    try { activeTask.onCheckpoint?.(updated.state); } catch {}
+    return updated;
   }
 
   // 加载 Pi SDK 并启动本地 AI Proxy。
@@ -534,7 +548,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
   }
 
   // 在多阶段工作流中等待业务侧用户操作，期间不计入 Agent 无进展超时。
-  async function waitForExternalUser(waiter, waitMessage, taskToken) {
+  async function waitForExternalUser(waiter, waitMessage, taskToken, waitState = {}) {
     if (!activeTask || activeTask.task_token !== taskToken) {
       throw new Error('当前 Agent 任务已结束，无法继续等待用户操作');
     }
@@ -587,17 +601,47 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     const retryAttempts = [];
     const taskToken = crypto.randomUUID();
     const startedAt = nowIso();
+    const persistentConfig = payload.persistent_task && typeof payload.persistent_task === 'object'
+      ? payload.persistent_task
+      : null;
+    let persistentTask = null;
+    if (persistentConfig?.task_key) {
+      persistentTask = persistentConfig.mode === 'resume'
+        ? loadPersistentAgentTask(app, persistentConfig.task_key)
+        : createPersistentAgentTask(app, persistentConfig.task_key, {
+          run_id: taskId,
+          title,
+          status: 'running',
+          phase: payload.initial_stage || 'initial',
+          agent_connection: 'running',
+          session_file: '',
+        });
+      if (!persistentTask) throw new Error('目录 Agent 持久任务不存在，请重新生成目录');
+      if (persistentTask.state.run_id !== taskId) throw new Error('目录 Agent 持久任务与当前业务任务不匹配，请重新生成目录');
+      if (persistentConfig.mode === 'resume' && !persistentTask.state.session_file) {
+        throw new Error('目录 Agent Session 不存在，请重新生成目录');
+      }
+    }
+    const workspaceDir = persistentTask?.paths.workspaceDir || layout.workspaceDir;
+    const persistentSessionFile = persistentConfig?.mode === 'resume'
+      ? getPersistentAgentSessionPath(app, persistentConfig.task_key, persistentTask.state.session_file)
+      : '';
     activeTask = {
       task_id: taskId,
       title,
-      stage: 'starting',
+      stage: payload.initial_stage || persistentTask?.state.phase || 'starting',
       progress_text: `正在启动 ${runtimeName}`,
       started_at: startedAt,
       last_activity_at: startedAt,
       last_progress_at: startedAt,
       task_token: taskToken,
       onActivity: payload.onActivity,
+      onCheckpoint: payload.onCheckpoint,
       waiting_for_user: false,
+      workspace_dir: workspaceDir,
+      persistent_task_key: persistentConfig?.task_key || '',
+      stage_index: Number(payload.initial_stage_index || persistentTask?.state.stage_index || 0),
+      workflow_stage: payload.initial_stage || persistentTask?.state.phase || 'starting',
     };
     let prompt = payload.prompt || createDefaultPrompt(payload.task || '请分析当前输入文件并输出结果。', outputFile);
     if (isMonitorActive?.()) {
@@ -605,7 +649,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         type: 'task_start',
         task_id: taskId,
         title,
-        workspace_dir: layout.workspaceDir,
+        workspace_dir: workspaceDir,
         prompt,
         output_file: outputFile,
         files: (payload.files || []).map((file) => ({ path: String(file.path || ''), content: String(file.content || '') })),
@@ -622,11 +666,13 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     const watchdog = startWatchdog(activeController, timeoutMs, taskToken);
 
     try {
-      await clearDirectoryAsync(layout.workspaceDir);
-      await writeWorkspaceFilesAsync(layout.workspaceDir, payload.files || []);
+      if (!persistentTask) await clearDirectoryAsync(workspaceDir);
+      await writeWorkspaceFilesAsync(workspaceDir, payload.files || []);
       await ensureStarted();
       const created = await createPiSession({
-        workspaceDir: layout.workspaceDir,
+        workspaceDir,
+        sessionsDir: persistentTask?.paths.sessionsDir,
+        sessionFile: persistentSessionFile,
         environment,
         proxyInfo,
         config: configStore.load(),
@@ -636,18 +682,44 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       });
       session = created.session;
       sessionSnapshot = created.snapshot;
+      if (persistentTask) {
+        persistentTask = checkpointPersistentTask({
+          status: 'running',
+          phase: activeTask.workflow_stage,
+          agent_connection: 'running',
+          session_file: created.sessionFile ? path.basename(created.sessionFile) : persistentTask.state.session_file || '',
+        });
+      }
       unsubscribe = subscribeSession(session, taskToken, diffEntries);
       let assistantText = '';
       let validationResult = null;
       let retryCount = 0;
-      let stageIndex = 0;
+      let stageIndex = Number(payload.initial_stage_index || persistentTask?.state.stage_index || 0);
       let stagePrompt = prompt;
+
+      const createWorkflowMeta = () => ({
+        stage: stageIndex,
+        task_id: taskId,
+        title,
+        output_file: outputFile,
+        workspace_dir: workspaceDir,
+        session_id: session.sessionId,
+        readFile: async (filePath) => (await readOutputAsync(workspaceDir, filePath)).content,
+        writeFiles: async (files) => writeWorkspaceFilesAsync(workspaceDir, files),
+        waitForUser: (waiter, waitMessage, waitState) => waitForExternalUser(waiter, waitMessage, taskToken, waitState),
+      });
 
       while (true) {
         let candidate = null;
         for (let attemptIndex = 0; attemptIndex <= maxRetries; attemptIndex += 1) {
           try {
             if (activeController.signal.aborted) throw activeController.signal.reason;
+            activeTask.stage_index = stageIndex;
+            checkpointPersistentTask({
+              status: 'running',
+              phase: activeTask.workflow_stage,
+              agent_connection: 'running',
+            });
             await session.prompt(stagePrompt, { expandPromptTemplates: false });
             if (activeController.signal.aborted) throw activeController.signal.reason;
             const assistantError = getAssistantError(session.messages);
@@ -657,7 +729,13 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
               throw error;
             }
             assistantText = extractAssistantText(session.messages);
-            const output = await readOutputAsync(layout.workspaceDir, outputFile);
+            const output = await readOutputAsync(workspaceDir, outputFile);
+            checkpointPersistentTask({
+              status: 'running',
+              phase: activeTask.workflow_stage,
+              agent_connection: 'running',
+              session_file: session.sessionFile ? path.basename(session.sessionFile) : persistentTask?.state.session_file || '',
+            });
             candidate = {
               success: true,
               runtime_id: runtimeId,
@@ -679,7 +757,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
                   task_id: taskId,
                   title,
                   output_file: outputFile,
-                  workspace_dir: layout.workspaceDir,
+                  workspace_dir: workspaceDir,
                   session_id: session.sessionId,
                   retry_attempts: [...retryAttempts],
                 });
@@ -694,7 +772,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
             break;
           } catch (error) {
             if (activeController.signal.aborted || attemptIndex >= maxRetries) throw error;
-            const output = await readOutputAsync(layout.workspaceDir, outputFile);
+            const output = await readOutputAsync(workspaceDir, outputFile);
             retryAttempts.push(createRetrySummary(retryAttempts.length + 1, error, output.content));
             retryCount = retryAttempts.length;
             touchActivity({
@@ -719,22 +797,16 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         }
 
         if (typeof payload.continueTask !== 'function') break;
-        const continuation = await payload.continueTask(candidate, {
-          stage: stageIndex,
-          task_id: taskId,
-          title,
-          output_file: outputFile,
-          workspace_dir: layout.workspaceDir,
-          session_id: session.sessionId,
-          readFile: async (filePath) => (await readOutputAsync(layout.workspaceDir, filePath)).content,
-          writeFiles: async (files) => writeWorkspaceFilesAsync(layout.workspaceDir, files),
-          waitForUser: (waiter, waitMessage) => waitForExternalUser(waiter, waitMessage, taskToken),
-        });
+        const continuation = await payload.continueTask(candidate, createWorkflowMeta());
         if (!continuation || continuation.complete === true || !continuation.prompt) break;
         if (Array.isArray(continuation.files) && continuation.files.length) {
-          await writeWorkspaceFilesAsync(layout.workspaceDir, continuation.files);
+          await writeWorkspaceFilesAsync(workspaceDir, continuation.files);
         }
-        stageIndex += 1;
+        stageIndex = Number.isFinite(Number(continuation.stage_index))
+          ? Number(continuation.stage_index)
+          : stageIndex + 1;
+        activeTask.stage_index = stageIndex;
+        activeTask.workflow_stage = continuation.stage || `workflow_stage_${stageIndex}`;
         stagePrompt = continuation.prompt;
         touchActivity({
           task_token: taskToken,
@@ -746,16 +818,16 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         });
       }
 
-      const output = await readOutputAsync(layout.workspaceDir, outputFile);
-      const archive = await archiveWorkspace(taskId);
-      archivedWorkspace = archive.archivedWorkspace;
+      const output = await readOutputAsync(workspaceDir, outputFile);
+      const archive = persistentTask ? null : await archiveWorkspace(taskId);
+      archivedWorkspace = persistentTask ? workspaceDir : archive.archivedWorkspace;
       const result = {
         success: true,
         runtime_id: runtimeId,
         task_id: taskId,
         title,
         workspace_dir: archivedWorkspace,
-        runtime_workspace_dir: layout.workspaceDir,
+        runtime_workspace_dir: workspaceDir,
         runtime_root: layout.runtimeRoot,
         output_file: outputFile,
         output_content: output.content,
@@ -770,7 +842,17 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           events: diagnostics.events.filter((event) => String(event.at || '') >= startedAt),
         },
       };
-      await writeJsonAsync(path.join(archive.taskDir, 'result.json'), result);
+      if (persistentTask) {
+        await writeJsonAsync(persistentTask.paths.resultFile, result);
+        checkpointPersistentTask({
+          status: 'running',
+          phase: activeTask.workflow_stage,
+          agent_connection: 'idle',
+          session_file: session.sessionFile ? path.basename(session.sessionFile) : persistentTask.state.session_file || '',
+        });
+      } else {
+        await writeJsonAsync(path.join(archive.taskDir, 'result.json'), result);
+      }
       emitMonitorEvent({
         type: 'task_end',
         task_id: taskId,
@@ -785,13 +867,25 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       return result;
     } catch (error) {
       let output = { path: '', content: '' };
-      try { output = await readOutputAsync(layout.workspaceDir, outputFile); } catch {}
-      try { archivedWorkspace = (await archiveWorkspace(taskId)).archivedWorkspace; } catch {}
+      try { output = await readOutputAsync(workspaceDir, outputFile); } catch {}
+      if (persistentTask) {
+        archivedWorkspace = workspaceDir;
+        const current = loadPersistentAgentTask(app, persistentConfig.task_key);
+        checkpointPersistentTask({
+          status: error?.code === 'AGENT_DISCONNECTED' ? 'interrupted' : 'error',
+          phase: activeTask.workflow_stage,
+          agent_connection: 'idle',
+          error: error?.message || String(error),
+          session_file: session?.sessionFile ? path.basename(session.sessionFile) : current?.state?.session_file || '',
+        });
+      } else {
+        try { archivedWorkspace = (await archiveWorkspace(taskId)).archivedWorkspace; } catch {}
+      }
       if (error && typeof error === 'object') {
         error.agentRuntimeId = runtimeId;
         error.agentTaskId = taskId;
         error.agentTitle = title;
-        error.agentWorkspaceDir = archivedWorkspace || layout.workspaceDir;
+        error.agentWorkspaceDir = archivedWorkspace || workspaceDir;
         error.agentRuntimeRoot = layout.runtimeRoot;
         error.agentOutputFile = outputFile;
         error.agentOutputPath = archivedWorkspace ? path.join(archivedWorkspace, outputFile) : output.path;
@@ -811,12 +905,14 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         type: 'task_error',
         task_id: taskId,
         title,
-        workspace_dir: archivedWorkspace || layout.workspaceDir,
+        workspace_dir: archivedWorkspace || workspaceDir,
         output_file: outputFile,
         output_content: output.content,
         message: error?.message || String(error),
       });
-      trackAgentRuntime(app, configStore, 'failed', { retryCount: retryAttempts.length });
+      if (error?.code !== 'AGENT_DISCONNECTED') {
+        trackAgentRuntime(app, configStore, 'failed', { retryCount: retryAttempts.length });
+      }
       throw error;
     } finally {
       unsubscribe?.();
@@ -825,7 +921,9 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       clearInterval(watchdog);
       activeTask = null;
       activeController = null;
-      try { await clearDirectoryAsync(layout.workspaceDir); } catch {}
+      if (!persistentTask) {
+        try { await clearDirectoryAsync(workspaceDir); } catch {}
+      }
       if (phase !== 'closing' && phase !== 'stopped') {
         if (restartPending) {
           await restart(restartPendingReason || 'config changed').catch((error) => {
@@ -1423,7 +1521,11 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     if (closePromise) return closePromise;
     closePromise = (async () => {
       setPhase('closing', `正在关闭 ${runtimeName}`);
-      if (activeController && !activeController.signal.aborted) activeController.abort(new Error('Agent 服务正在关闭'));
+      if (activeController && !activeController.signal.aborted) {
+        const error = new Error('Agent 服务正在关闭');
+        error.code = 'AGENT_DISCONNECTED';
+        activeController.abort(error);
+      }
       if (startPromise) await startPromise.catch(() => undefined);
       await proxy?.close?.();
       proxy = null;

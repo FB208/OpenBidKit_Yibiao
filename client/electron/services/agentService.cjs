@@ -5,12 +5,24 @@ const { dialog } = require('electron');
 const { createPiRuntimeService } = require('./pi/piRuntimeService.cjs');
 const { buildPiSelfCheckReportMarkdown } = require('./pi/piSelfCheckService.cjs');
 const { createAgentErrorReporter } = require('./agent/agentErrorReporter.cjs');
+const {
+  deletePersistentAgentTask,
+  getPersistentAgentSessionPath,
+  loadPersistentAgentTask,
+  updatePersistentAgentTask,
+} = require('./pi/piPersistentTaskStore.cjs');
 
 const PI_RUNTIME_ID = 'pi';
 const PI_RUNTIME_NAME = 'Pi Agent';
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function createAgentDisconnectedError() {
+  const error = new Error('Agent 服务正在关闭');
+  error.code = 'AGENT_DISCONNECTED';
+  return error;
 }
 
 function safeText(value) {
@@ -385,11 +397,13 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
             entry.resolve(normalizeRunResult(rawResult));
           } catch (error) {
             const normalizedError = normalizeRunError(error);
-            agentErrorReporter.reportFailure({
-              payload: entry.payload,
-              error: normalizedError,
-              userTaskContext: resolveUserTaskContext(entry.userTaskContextProvider),
-            });
+            if (normalizedError?.code !== 'AGENT_DISCONNECTED') {
+              agentErrorReporter.reportFailure({
+                payload: entry.payload,
+                error: normalizedError,
+                userTaskContext: resolveUserTaskContext(entry.userTaskContextProvider),
+              });
+            }
             entry.reject(normalizedError);
           } finally {
             activeEntry = null;
@@ -444,11 +458,36 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     return enqueueTask(payload, null);
   }
 
+  function loadPersistentTask(taskKey) {
+    return loadPersistentAgentTask(app, taskKey);
+  }
+
+  function deletePersistentTask(taskKey) {
+    deletePersistentAgentTask(app, taskKey);
+  }
+
+  function updatePersistentTask(taskKey, partial) {
+    return updatePersistentAgentTask(app, taskKey, partial);
+  }
+
+  function hasPersistentTaskSession(taskKey) {
+    const task = loadPersistentAgentTask(app, taskKey);
+    if (!task?.state?.session_file) return false;
+    try {
+      return fs.existsSync(getPersistentAgentSessionPath(app, taskKey, task.state.session_file));
+    } catch {
+      return false;
+    }
+  }
+
   // 为后台父任务绑定最新诊断上下文，不再绑定或选择运行时。
   function bindTaskContext(userTaskContextProvider) {
     return {
       runTask: (payload) => enqueueTask(payload, userTaskContextProvider),
       getStatus,
+      hasPersistentTaskSession,
+      loadPersistentTask,
+      updatePersistentTask,
     };
   }
 
@@ -554,12 +593,12 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
 
   async function close() {
     closing = true;
-    rejectPendingQuestion(new Error('Agent 服务正在关闭'));
+    rejectPendingQuestion(createAgentDisconnectedError());
     questionListeners.clear();
     monitorListeners.clear();
     clearPendingMonitorEvents();
     agentErrorReporter.close();
-    const error = new Error('Agent 服务正在关闭');
+    const error = createAgentDisconnectedError();
     while (queue.length) {
       const entry = queue.shift();
       entry.cleanup?.();
@@ -574,10 +613,14 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
 
   return {
     bindTaskContext,
+    deletePersistentTask,
+    loadPersistentTask,
+    updatePersistentTask,
     warmup,
     runTask,
     selfCheck,
     getStatus,
+    hasPersistentTaskSession,
     restart,
     handleConfigChanged,
     onStatus,
