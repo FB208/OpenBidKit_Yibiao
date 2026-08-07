@@ -1305,10 +1305,7 @@ function backupDatabaseFiles(db, databasePath, onStatus) {
 
 function applyMigrations(db, databasePath, onStatus) {
   const currentVersion = Number(db.pragma('user_version', { simple: true }) || 0);
-  if (currentVersion > schemaVersion) {
-    throw new Error(`本地数据库版本 ${currentVersion} 高于当前客户端支持版本 ${schemaVersion}，请升级客户端后再使用技术方案功能。`);
-  }
-  if (currentVersion === schemaVersion) {
+  if (currentVersion >= schemaVersion) {
     ensureWorkspaceSchemaHealth(db, schemaVersion, onStatus);
     return;
   }
