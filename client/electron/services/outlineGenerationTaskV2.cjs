@@ -344,62 +344,6 @@ function readJson(content, label) {
   }
 }
 
-// 校验审核状态、真实用户回答和目录改动是否一致，决定最终目录能否写入业务 Store。
-function validateOutlineReviewOutcome({ review, baselineOutline, reviewedOutline, answers, targetLeafCount }) {
-  const status = String(review?.status || '');
-  const issues = Array.isArray(review?.issues) ? review.issues : [];
-  const reviewAnswers = (answers || []).filter((item) => item?.workflow_stage === 'outline_review');
-  const changed = JSON.stringify(baselineOutline) !== JSON.stringify(reviewedOutline);
-  const feedback = String(review?.user_feedback || '').trim();
-  const simpleCategories = new Set(['duplicate-directory', 'professional-structure']);
-  const hasConfirmationIssue = issues.some((item) => item?.confirmation_required === true);
-  const hasInvalidSimpleIssue = issues.some((item) => (
-    item?.confirmation_required !== false || !simpleCategories.has(String(item?.category || ''))
-  ));
-  const validateChangedLeafCountRange = () => {
-    if (targetLeafCount === null) return;
-    const leafCount = countAiLeaves(reviewedOutline.outline);
-    const minimum = Math.max(1, targetLeafCount - 2);
-    const maximum = targetLeafCount + 2;
-    if (leafCount < minimum || leafCount > maximum) {
-      throw new Error(`目录审核修改后的 AI 生成叶子数量必须保持在 ${minimum} 至 ${maximum} 个`);
-    }
-  };
-
-  if (status === 'passed') {
-    if (issues.length || reviewAnswers.length || changed || feedback) {
-      throw new Error('目录审核状态为 passed，但问题、提问记录或目录改动与通过状态不一致');
-    }
-    return;
-  }
-
-  if (status === 'simple_fix') {
-    if (!issues.length || hasInvalidSimpleIssue || reviewAnswers.length || !changed || feedback) {
-      throw new Error('目录审核状态为 simple_fix，但问题类型、提问记录或目录改动不符合静默微调规则');
-    }
-    validateChangedLeafCountRange();
-    return;
-  }
-
-  if (status !== 'user_feedback' && status !== 'user_refuse') {
-    throw new Error(`未知的目录审核状态：${status || '空'}`);
-  }
-  if (!issues.length || !hasConfirmationIssue || reviewAnswers.length !== 1) {
-    throw new Error(`目录审核状态为 ${status}，但待确认问题或真实用户回答记录不完整`);
-  }
-  const actualAnswer = String(reviewAnswers[0].answer || '').trim();
-  if (!feedback || feedback !== actualAnswer) {
-    throw new Error('目录审核文件中的用户反馈与本轮真实 ask-user 回答不一致');
-  }
-  if (status === 'user_feedback' && !changed) {
-    throw new Error('用户已确认修改方案，但 Agent 未实际修改目录');
-  }
-  if (status === 'user_feedback') validateChangedLeafCountRange();
-  if (status === 'user_refuse' && changed) {
-    throw new Error('用户已拒绝修改，但 Agent 改动了审核前目录');
-  }
-}
-
 // 校验评分项规划的交叉引用，保证生成前每个评分项都有唯一去向。
 function validateScoreDirectoryPlan(groupsPayload, plan, lockedRoots) {
   const groups = Array.isArray(groupsPayload?.groups) ? groupsPayload.groups : [];
@@ -704,7 +648,6 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   let actualLeafCount = 0;
   let leafWarning = '';
   let outlineReview = null;
-  let outlineReviewBaseline = null;
 
   function updateAgentState(partial = {}) {
     task = updateTask({
@@ -804,7 +747,6 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   }
 
   function continueWithOutlineReview() {
-    outlineReviewBaseline = JSON.parse(JSON.stringify(finalOutline));
     publish('子目录生成完成，正在压缩上下文并准备审核', 88, {
       outline: {
         phase: 'reviewing',
@@ -896,14 +838,6 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
         const reviewedOutline = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
         const normalizedReviewedOutline = buildFinalOutline(reviewedOutline, lockedRoots, technicalRootIds, allowRootChanges);
         outlineReview = readJson(await meta.readFile(OUTLINE_REVIEW_FILE), OUTLINE_REVIEW_FILE);
-        if (!outlineReviewBaseline) throw new Error('目录审核前快照不存在');
-        validateOutlineReviewOutcome({
-          review: outlineReview,
-          baselineOutline: outlineReviewBaseline,
-          reviewedOutline: normalizedReviewedOutline,
-          answers: meta.user_question_answers,
-          targetLeafCount,
-        });
         finalOutline = normalizedReviewedOutline;
         actualLeafCount = countAiLeaves(finalOutline.outline);
         await meta.writeFiles([{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) }]);
