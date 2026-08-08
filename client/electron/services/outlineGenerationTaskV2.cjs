@@ -359,44 +359,6 @@ function buildKnowledgeFiles(knowledgeBaseService, documentIds) {
   return files;
 }
 
-function normalizeAllocationResult(value, technicalRootIds) {
-  const allowedIds = new Set(technicalRootIds);
-  const allocations = Array.isArray(value?.allocations) ? value.allocations : [];
-  const counts = new Map();
-  allocations.forEach((item) => {
-    const id = String(item?.root_id || '').trim();
-    const count = Math.floor(Number(item?.leaf_count));
-    if (allowedIds.has(id) && Number.isFinite(count) && count >= 2) counts.set(id, count);
-  });
-  return {
-    allocations: technicalRootIds.map((rootId) => ({
-      root_id: rootId,
-      leaf_count: counts.get(rootId) || 2,
-    })),
-  };
-}
-
-function correctAllocationTotal(allocations, targetLeafCount, outlineOrder) {
-  const order = new Map(outlineOrder.map((id, index) => [id, index]));
-  const next = allocations.map((item) => ({ ...item }));
-  let total = next.reduce((sum, item) => sum + item.leaf_count, 0);
-  while (total > targetLeafCount) {
-    const candidate = [...next]
-      .filter((item) => item.leaf_count > 2)
-      .sort((left, right) => right.leaf_count - left.leaf_count || order.get(left.root_id) - order.get(right.root_id))[0];
-    if (!candidate) break;
-    candidate.leaf_count -= 1;
-    total -= 1;
-  }
-  while (total < targetLeafCount) {
-    const candidate = [...next]
-      .sort((left, right) => left.leaf_count - right.leaf_count || order.get(left.root_id) - order.get(right.root_id))[0];
-    candidate.leaf_count += 1;
-    total += 1;
-  }
-  return next;
-}
-
 function createInitialPrompt(taskInstruction) {
   return `请只在当前工作目录内工作。
 
@@ -810,14 +772,10 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
         scoreDirectoryPlan = readJson(await meta.readFile(SCORE_DIRECTORY_PLAN_FILE), SCORE_DIRECTORY_PLAN_FILE);
         technicalRootIds = [...new Set(scoreDirectoryPlan.branches.map((branch) => branch.root_id.split('.')[0]))];
         allowRootChanges = scoreDirectoryPlan.allow_root_changes === true;
-        if (!technicalRootIds.length) throw new Error('请至少确认一个需要生成子目录的技术方案一级目录');
         const technicalRootIdSet = new Set(technicalRootIds);
         fixedAiLeafCount = lockedRoots
           .filter((root) => !technicalRootIdSet.has(root.id) && root.content_mode === AI_CONTENT_MODE).length;
         allocatedAiLeafCount = targetLeafCount === null ? null : targetLeafCount - fixedAiLeafCount;
-        if (allocatedAiLeafCount !== null && allocatedAiLeafCount < technicalRootIds.length * 2) {
-          throw new Error('所设置总字数太少或每小节字数太多，无法为技术目录分配足够的 AI 生成小节');
-        }
         if (allocatedAiLeafCount !== null && technicalRootIds.length > 1) {
           childrenGenerationResultStage = 3;
           publish('技术方案目录已确认，Agent 正在分配 AI 生成小节', 50);
@@ -845,9 +803,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
 
       if (meta.stage === 2 && childrenGenerationResultStage === 3) {
         const allocationPayload = readJson(await meta.readFile(LEAF_ALLOCATION_FILE), LEAF_ALLOCATION_FILE);
-        const normalized = normalizeAllocationResult(allocationPayload, technicalRootIds);
-        const allocations = correctAllocationTotal(normalized.allocations, allocatedAiLeafCount, technicalRootIds);
-        return continueWithChildrenGeneration(allocations);
+        return continueWithChildrenGeneration(allocationPayload.allocations);
       }
 
       const candidateOutline = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
