@@ -6,7 +6,6 @@ const TECHNICAL_SCORE_GROUPS_FILE = 'technical-score-groups.json';
 const SCORE_DIRECTORY_PLAN_FILE = 'score-directory-plan.json';
 const LEAF_ALLOCATION_FILE = 'leaf-allocation.json';
 const LEAF_ALLOCATION_CONTEXT_FILE = 'leaf-allocation-context.json';
-const LEAF_DECISION_FILE = 'leaf-count-decision.json';
 const OUTLINE_REVIEW_FILE = 'outline-review.json';
 const AI_CONTENT_MODE = 'ai-generate';
 const CONTENT_MODES = ['ai-generate', 'template-fill', 'point-to-point', 'other'];
@@ -145,15 +144,6 @@ const SCORE_DIRECTORY_PLAN_SCHEMA = {
   },
 };
 
-const LEAF_DECISION_SCHEMA = {
-  type: 'object',
-  required: ['status'],
-  additionalProperties: false,
-  properties: {
-    status: { type: 'string', enum: ['accepted', 'cancelled'] },
-  },
-};
-
 const OUTLINE_REVIEW_SCHEMA = {
   type: 'object',
   required: ['status', 'issues', 'user_feedback', 'summary'],
@@ -267,6 +257,7 @@ function deriveTargetLeafCount(options) {
   return null;
 }
 
+// 统一目录层级编号，并按父子节点形态整理目录字段。
 function renumberOutline(items, prefix = '') {
   return (items || []).map((item, index) => {
     const id = prefix ? `${prefix}.${index + 1}` : String(index + 1);
@@ -290,31 +281,9 @@ function renumberOutline(items, prefix = '') {
   });
 }
 
-function buildFinalOutline(candidate, lockedRoots, technicalRootIds, allowRootChanges) {
-  if (allowRootChanges) {
-    return { outline: renumberOutline(candidate?.outline || []) };
-  }
-  const candidateById = new Map((candidate?.outline || []).map((item) => [String(item?.id || ''), item]));
-  const technicalIds = new Set(technicalRootIds);
-  const outline = lockedRoots.map((root) => {
-    const locked = {
-      id: root.id,
-      title: root.title,
-      description: root.description,
-      attr: root.attr,
-      content_mode: root.content_mode,
-      ...(root.content_mode === 'other' && String(root.content_mode_note || '').trim()
-        ? { content_mode_note: String(root.content_mode_note).trim() }
-        : {}),
-    };
-    if (!technicalIds.has(root.id)) return locked;
-    const generated = candidateById.get(root.id);
-    if (!Array.isArray(generated?.children) || generated.children.length < 2) {
-      throw new Error(`技术方案一级目录“${root.title}”至少需要两个子目录`);
-    }
-    return { ...locked, children: generated.children };
-  });
-  return { outline: renumberOutline(outline) };
+// 接受 Agent 的完整目录结果，并统一整理层级编号和节点字段。
+function buildFinalOutline(candidate) {
+  return { outline: renumberOutline(candidate?.outline || []) };
 }
 
 function countAiLeaves(items) {
@@ -445,21 +414,16 @@ function createChildrenPrompt({ hasOriginalPlan, originalOnly, targetLeafCount, 
 function createLeafAdjustmentPrompt(targetLeafCount, actualLeafCount) {
   return `程序计算当前完整目录共有 ${actualLeafCount} 个“AI生成”叶子节点，目标是 ${targetLeafCount} 个。
 
-请结合目录质量、技术评分覆盖情况和数量差距综合判断：
-1. 调整时必须继续遵循 ${SCORE_DIRECTORY_PLAN_FILE}：不得删除、移动或改变评分项对应节点的目标层级，不得新增未经批准的同层级大项；优先调整评分项节点下面的更深层目录。
-2. 只通过合理调整 ai-generate 叶子的目录结构满足数量目标，不得为了凑数把 template-fill、point-to-point 或 other 改成 ai-generate，也不得改变非 AI 叶子的处理模式。
-3. 如果通过一次合理调整可以接近或达到目标，直接修改 ${OUTLINE_OUTPUT_FILE}，不要机械增加重复、空泛或近义目录。
-4. 如果精确达到目标会破坏目录质量，而当前结果已经足够接近，请调用 ask-user，说明目标数、当前数、差距和影响，询问用户“接受当前结果”或“继续调整”。
-5. 用户接受时保持当前目录，并写入 ${LEAF_DECISION_FILE}：{"status":"accepted"}。
-6. 用户要求继续时，只再进行这一轮调整，不要反复修改，也不要写入决定文件。
-7. 修改目录后重新调用 json-validation 校验 ${OUTLINE_OUTPUT_FILE}。`;
-}
+请先调用一次 ask-user，说明目标数、当前数、差距及目录质量影响，只能按以下顺序提供三个固定选项，不得改名、增删或调整顺序：
+1. “接受当前结果”，custom=false：保持当前目录并进入最终审核。
+2. “允许 Agent 自行调整”，custom=false：由你在不破坏目录质量的前提下合理调整一次。
+3. “自定义需求”，custom=true：按用户填写的具体要求调整。
 
-function createFinalLeafDecisionPrompt(targetLeafCount, actualLeafCount) {
-  return `经过最后一轮合理调整，当前完整目录有 ${actualLeafCount} 个“AI生成”叶子节点，目标是 ${targetLeafCount} 个，仍未精确满足。
-
-不要再修改目录。请调用 ask-user，说明数量差距及当前目录质量，最终询问用户“接受当前结果”或“取消本次生成”。
-用户接受时写入 ${LEAF_DECISION_FILE}：{"status":"accepted"}；用户取消时写入：{"status":"cancelled"}。写入后调用 json-validation 校验该文件。`;
+根据本轮 ask-user 回答处理：
+1. 用户选择“接受当前结果”时，不要修改 ${OUTLINE_OUTPUT_FILE}。
+2. 用户选择“允许 Agent 自行调整”或“自定义需求”时，必须继续遵循 ${SCORE_DIRECTORY_PLAN_FILE}：不得删除、移动或改变评分项对应节点的目标层级，不得新增未经批准的同层级大项；优先调整评分项节点下面的更深层目录。
+3. 只通过合理调整 ai-generate 叶子的目录结构满足数量目标，不得为了凑数把 template-fill、point-to-point 或 other 改成 ai-generate，也不得改变非 AI 叶子的处理模式。
+4. 不要机械增加重复、空泛或近义目录。完成调整后覆盖写回 ${OUTLINE_OUTPUT_FILE}，并调用 json-validation 校验，只传 file_path。`;
 }
 
 function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRootChanges }) {
@@ -492,7 +456,7 @@ function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRoot
 }
 
 function createOutlineReviewCompactionInstructions() {
-  return `保留继续完成技术方案目录审核所需的全部关键上下文：用户确认的一级目录、技术评分项与目录映射、叶子数量决定、原方案和知识库使用边界、已经生成的 outline.json，以及所有 ask-user 用户答复。下一步需要读取工作区文件执行最终目录审核。`;
+  return `保留继续完成技术方案目录审核所需的全部关键上下文：用户确认的一级目录、技术评分项与目录映射、叶子数量处理过程、原方案和知识库使用边界、已经生成的 outline.json，以及所有 ask-user 用户答复。下一步需要读取工作区文件执行最终目录审核。`;
 }
 
 // 运行 V2 目录业务任务；完整 Agent 执行之间通过程序确认衔接并复用同一持久 Session。
@@ -512,7 +476,6 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     [TECHNICAL_SCORE_GROUPS_FILE]: TECHNICAL_SCORE_GROUPS_SCHEMA,
     [SCORE_DIRECTORY_PLAN_FILE]: SCORE_DIRECTORY_PLAN_SCHEMA,
     [LEAF_ALLOCATION_FILE]: LEAF_ALLOCATION_SCHEMA,
-    [LEAF_DECISION_FILE]: LEAF_DECISION_SCHEMA,
     [OUTLINE_REVIEW_FILE]: OUTLINE_REVIEW_SCHEMA,
   };
 
@@ -545,10 +508,10 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   let allowRootChanges = false;
   let fixedAiLeafCount = 0;
   let allocatedAiLeafCount = null;
-  let childrenGenerationResultStage = 2;
   let finalOutline = null;
   let actualLeafCount = 0;
   let leafWarning = '';
+  let wordAdjustmentAttempts = 0;
   let outlineReview = null;
 
   function updateAgentState(partial = {}) {
@@ -654,7 +617,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
         phase: 'reviewing',
         current_leaf_count: actualLeafCount,
         target_leaf_count: targetLeafCount,
-        word_adjustment_attempts: targetLeafCount !== null && actualLeafCount !== targetLeafCount ? 1 : 0,
+        word_adjustment_attempts: wordAdjustmentAttempts,
       },
     });
     return {
@@ -738,7 +701,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     continueTask: async (candidate, meta) => {
       if (meta.workflow_stage === 'outline_review') {
         const reviewedOutline = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
-        const normalizedReviewedOutline = buildFinalOutline(reviewedOutline, lockedRoots, technicalRootIds, allowRootChanges);
+        const normalizedReviewedOutline = buildFinalOutline(reviewedOutline);
         outlineReview = readJson(await meta.readFile(OUTLINE_REVIEW_FILE), OUTLINE_REVIEW_FILE);
         finalOutline = normalizedReviewedOutline;
         actualLeafCount = countAiLeaves(finalOutline.outline);
@@ -762,7 +725,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
             phase: 'reviewing',
             current_leaf_count: actualLeafCount,
             target_leaf_count: targetLeafCount,
-            word_adjustment_attempts: targetLeafCount !== null && actualLeafCount !== targetLeafCount ? 1 : 0,
+            word_adjustment_attempts: wordAdjustmentAttempts,
           },
         });
         return { complete: true };
@@ -777,7 +740,6 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
           .filter((root) => !technicalRootIdSet.has(root.id) && root.content_mode === AI_CONTENT_MODE).length;
         allocatedAiLeafCount = targetLeafCount === null ? null : targetLeafCount - fixedAiLeafCount;
         if (allocatedAiLeafCount !== null && technicalRootIds.length > 1) {
-          childrenGenerationResultStage = 3;
           publish('技术方案目录已确认，Agent 正在分配 AI 生成小节', 50);
           return {
             stage: 'leaf_allocation',
@@ -801,69 +763,49 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
         return continueWithChildrenGeneration(allocations);
       }
 
-      if (meta.stage === 2 && childrenGenerationResultStage === 3) {
+      if (meta.workflow_stage === 'leaf_allocation') {
         const allocationPayload = readJson(await meta.readFile(LEAF_ALLOCATION_FILE), LEAF_ALLOCATION_FILE);
         return continueWithChildrenGeneration(allocationPayload.allocations);
       }
 
       const candidateOutline = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
-      finalOutline = buildFinalOutline(candidateOutline, lockedRoots, technicalRootIds, allowRootChanges);
+      finalOutline = buildFinalOutline(candidateOutline);
       actualLeafCount = countAiLeaves(finalOutline.outline);
+      const latestLeafAnswer = meta.workflow_stage === 'leaf_adjustment'
+        ? [...meta.user_question_answers].reverse().find((item) => item.workflow_stage === 'leaf_adjustment')
+        : null;
+      if (latestLeafAnswer && latestLeafAnswer.selected_option !== '接受当前结果') {
+        wordAdjustmentAttempts += 1;
+      }
       if (targetLeafCount === null || actualLeafCount === targetLeafCount) return continueWithOutlineReview();
 
-      const decisionContent = await meta.readFile(LEAF_DECISION_FILE);
-      if (decisionContent.trim()) {
-        const decision = readJson(decisionContent, LEAF_DECISION_FILE);
-        if (decision.status === 'accepted') {
-          leafWarning = `AI 生成小节目标为 ${targetLeafCount}，用户已接受当前 ${actualLeafCount} 个。`;
-          return continueWithOutlineReview();
-        }
-        if (decision.status === 'cancelled') throw new Error('用户取消了本次目录生成');
+      if (latestLeafAnswer?.selected_option === '接受当前结果') {
+        leafWarning = `AI 生成小节目标为 ${targetLeafCount}，用户已接受当前 ${actualLeafCount} 个。`;
+        return continueWithOutlineReview();
       }
 
-      if (meta.stage === childrenGenerationResultStage) {
-        publish('AI 生成小节数量存在差异，Agent 正在合理调整', 75, {
-          outline: {
-            phase: 'word-adjusting',
-            current_leaf_count: actualLeafCount,
-            target_leaf_count: targetLeafCount,
-            word_adjustment_attempts: 1,
-          },
-        });
-        return {
-          stage: 'leaf_adjustment',
-          message: 'Agent 正在核对 AI 生成小节数量',
-          prompt: createLeafAdjustmentPrompt(targetLeafCount, actualLeafCount),
-          files: [{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) }],
-        };
-      }
-
-      if (meta.stage === childrenGenerationResultStage + 1) {
-        publish('最后一轮调整仍有差异，等待用户决定', 85, {
-          outline: {
-            phase: 'word-adjusting',
-            current_leaf_count: actualLeafCount,
-            target_leaf_count: targetLeafCount,
-            word_adjustment_attempts: 1,
-          },
-        });
-        return {
-          stage: 'leaf_final_decision',
-          message: 'Agent 正在询问是否接受当前目录',
-          prompt: createFinalLeafDecisionPrompt(targetLeafCount, actualLeafCount),
-          files: [{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) }],
-        };
-      }
-      throw new Error('AI 生成小节数量确认结果无效');
+      publish('AI 生成小节数量存在差异，等待用户决定', 75, {
+        outline: {
+          phase: 'word-adjusting',
+          current_leaf_count: actualLeafCount,
+          target_leaf_count: targetLeafCount,
+          word_adjustment_attempts: wordAdjustmentAttempts,
+        },
+      });
+      return {
+        stage: 'leaf_adjustment',
+        message: 'Agent 正在询问如何处理小节数量差异',
+        prompt: createLeafAdjustmentPrompt(targetLeafCount, actualLeafCount),
+        files: [{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) }],
+      };
     },
   });
 
   if (!finalOutline) {
     const candidateOutline = readJson(agentResult.output_content, OUTLINE_OUTPUT_FILE);
-    finalOutline = buildFinalOutline(candidateOutline, lockedRoots, technicalRootIds, allowRootChanges);
+    finalOutline = buildFinalOutline(candidateOutline);
     actualLeafCount = countAiLeaves(finalOutline.outline);
   }
-  if (!outlineReview) throw new Error('目录审核结果不存在');
   const finalLogs = [...logs, '目录生成与审核完成', ...(leafWarning ? [leafWarning] : [])];
   const finalTask = updateTask({
     status: 'success',
@@ -877,7 +819,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
         current_leaf_count: actualLeafCount,
         target_leaf_count: targetLeafCount,
         leaf_counts_by_mode: countLeavesByMode(finalOutline.outline),
-        word_adjustment_attempts: targetLeafCount !== null && actualLeafCount !== targetLeafCount ? 1 : 0,
+        word_adjustment_attempts: wordAdjustmentAttempts,
         ...(leafWarning ? { word_adjustment_warning: leafWarning, word_adjustment_warning_kind: 'leaf-count' } : {}),
       },
     },
