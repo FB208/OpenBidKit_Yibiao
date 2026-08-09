@@ -39,28 +39,69 @@ function createAiRequestQueue(options = {}) {
       return false;
     }
 
-    job.reject(createQueueScopePausedError());
+    settleJob(job, 'reject', createQueueScopePausedError());
     return true;
+  }
+
+  function cleanupJob(job) {
+    if (job.retryTimer) {
+      clearTimeout(job.retryTimer);
+      job.retryTimer = null;
+    }
+    job.signal?.removeEventListener?.('abort', job.onAbort);
+  }
+
+  function settleJob(job, method, value) {
+    if (job.settled) return;
+    job.settled = true;
+    job.state = 'settled';
+    cleanupJob(job);
+    job[method](value);
+  }
+
+  function removeQueuedJob(job) {
+    const index = queue.indexOf(job);
+    if (index < 0) return false;
+    queue.splice(index, 1);
+    return true;
+  }
+
+  function cancelPendingJob(job) {
+    if (job.state === 'queued') {
+      removeQueuedJob(job);
+    } else if (job.state === 'retrying') {
+      retryingJobs.delete(job);
+    } else {
+      return;
+    }
+    settleJob(job, 'reject', job.signal?.reason || new Error('AI 请求已取消'));
   }
 
   function pump() {
     while (activeCount < currentLimit() && queue.length) {
       const job = queue.shift();
+      if (job.signal?.aborted) {
+        settleJob(job, 'reject', job.signal.reason || new Error('AI 请求已取消'));
+        continue;
+      }
       if (rejectIfPaused(job)) {
         continue;
       }
 
+      job.state = 'active';
       activeCount += 1;
       void runJob(job);
     }
   }
 
   function scheduleRetry(job) {
+    job.state = 'retrying';
     retryingJobs.add(job);
     job.retryTimer = setTimeout(() => {
       retryingJobs.delete(job);
       job.retryTimer = null;
       if (!rejectIfPaused(job)) {
+        job.state = 'queued';
         queue.push(job);
         pump();
       }
@@ -73,14 +114,14 @@ function createAiRequestQueue(options = {}) {
         return;
       }
 
-      const result = await job.runner({ attempt: job.attempts, maxAttempts: AI_REQUEST_MAX_ATTEMPTS });
-      job.resolve(result);
+      const result = await job.runner({ attempt: job.attempts, maxAttempts: job.maxAttempts });
+      settleJob(job, 'resolve', result);
     } catch (error) {
-      if (isRetryableAiRequestError(error) && job.attempts < AI_REQUEST_MAX_ATTEMPTS) {
+      if (isRetryableAiRequestError(error) && job.attempts < job.maxAttempts) {
         job.attempts += 1;
         scheduleRetry(job);
       } else {
-        job.reject(error);
+        settleJob(job, 'reject', error);
       }
     } finally {
       activeCount = Math.max(0, activeCount - 1);
@@ -95,9 +136,21 @@ function createAiRequestQueue(options = {}) {
         resolve,
         reject,
         scopeId: String(options.scopeId || options.queueScopeId || '').trim(),
+        signal: options.signal,
+        onAbort: null,
         attempts: 1,
+        maxAttempts: Math.max(1, Math.floor(Number(options.maxAttempts) || AI_REQUEST_MAX_ATTEMPTS)),
         retryTimer: null,
+        state: 'queued',
+        settled: false,
       };
+
+      job.onAbort = () => cancelPendingJob(job);
+      if (job.signal?.aborted) {
+        settleJob(job, 'reject', job.signal.reason || new Error('AI 请求已取消'));
+        return;
+      }
+      job.signal?.addEventListener?.('abort', job.onAbort, { once: true });
 
       if (rejectIfPaused(job)) {
         return;
@@ -123,7 +176,7 @@ function createAiRequestQueue(options = {}) {
       }
 
       queue.splice(index, 1);
-      job.reject(createQueueScopePausedError());
+      settleJob(job, 'reject', createQueueScopePausedError());
       discarded += 1;
     }
 
@@ -137,7 +190,7 @@ function createAiRequestQueue(options = {}) {
         clearTimeout(job.retryTimer);
         job.retryTimer = null;
       }
-      job.reject(createQueueScopePausedError());
+      settleJob(job, 'reject', createQueueScopePausedError());
       discarded += 1;
     }
 

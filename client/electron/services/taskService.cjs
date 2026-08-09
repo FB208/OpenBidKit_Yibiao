@@ -4,8 +4,8 @@ const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
 const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
 const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
 const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
+const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
-const { OUTLINE_AGENT_TASK_KEY } = require('./pi/piPersistentTaskStore.cjs');
 
 const taskDefinitions = {
   'bid-section-extraction': {
@@ -657,6 +657,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId) : aiService;
     const runnerAgentService = agentService.bindTaskContext(
       () => createAgentUserTaskContext(type, definition, payload, currentTask),
+      { queueScopeId },
     );
     runner({ aiService: runnerAiService, agentService: runnerAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
       const failedTask = updateTask({ status: 'error', error: error.message || '任务执行失败' });

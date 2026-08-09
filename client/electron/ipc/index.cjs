@@ -180,7 +180,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
-  const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService });
+  const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService, agentService });
   const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db });
   const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore });
   const templateStore = createTemplateStore({ db: sqliteDatabase.db });

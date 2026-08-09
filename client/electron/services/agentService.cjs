@@ -5,6 +5,7 @@ const { dialog } = require('electron');
 const { createPiRuntimeService } = require('./pi/piRuntimeService.cjs');
 const { buildPiSelfCheckReportMarkdown } = require('./pi/piSelfCheckService.cjs');
 const { createAgentErrorReporter } = require('./agent/agentErrorReporter.cjs');
+const { resolveAgentAbortReason } = require('./agent/agentInterruption.cjs');
 const {
   deletePersistentAgentTask,
   getPersistentAgentSessionPath,
@@ -358,7 +359,7 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
   }
 
   function createAbortError(signal) {
-    return signal?.reason instanceof Error ? signal.reason : new Error(safeText(signal?.reason) || 'Agent 任务已取消');
+    return resolveAgentAbortReason(signal);
   }
 
   function removeQueuedEntry(entry, error) {
@@ -473,14 +474,19 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     }
   }
 
-  // 为后台父任务绑定最新诊断上下文，不再绑定或选择运行时。
-  function bindTaskContext(userTaskContextProvider) {
+  // 为后台父任务绑定最新诊断上下文和统一 AI 队列作用域。
+  function bindTaskContext(userTaskContextProvider, options = {}) {
+    const queueScopeId = safeText(options.queueScopeId || options.queue_scope_id);
     return {
-      runTask: (payload) => enqueueTask(payload, userTaskContextProvider),
+      runTask: (payload = {}) => enqueueTask({
+        ...payload,
+        ...(queueScopeId && !payload.queueScopeId && !payload.queue_scope_id ? { queue_scope_id: queueScopeId } : {}),
+      }, userTaskContextProvider),
       getStatus,
       hasPersistentTaskSession,
       loadPersistentTask,
       updatePersistentTask,
+      deletePersistentTask,
     };
   }
 

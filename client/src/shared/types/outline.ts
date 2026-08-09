@@ -43,10 +43,3 @@ export interface OutlineData {
   project_name?: string;
   project_overview?: string;
 }
-
-export interface TechnicalRequirementGroup {
-  requirement_id: string;
-  title: string;
-  description: string;
-  detail_points: string[];
-}

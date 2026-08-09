@@ -2,7 +2,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createPiEnvironmentLayout } = require('./piEnvironment.cjs');
 
-const OUTLINE_AGENT_TASK_KEY = 'technical-plan-outline-generation';
 const TASK_STATE_FILE = 'task-state.json';
 const DELETE_MAX_RETRIES = 5;
 const DELETE_RETRY_DELAY_MS = 100;
@@ -34,7 +33,7 @@ function getPersistentAgentTaskPaths(app, taskKey) {
 function getPersistentAgentSessionPath(app, taskKey, sessionFile) {
   const fileName = String(sessionFile || '').trim();
   if (!fileName || path.basename(fileName) !== fileName || !fileName.endsWith('.jsonl')) {
-    throw new Error('目录 Agent Session 文件名无效，请重新生成目录');
+    throw new Error('持久 Agent Session 文件名无效，请重新执行当前业务任务');
   }
   return path.join(getPersistentAgentTaskPaths(app, taskKey).sessionsDir, fileName);
 }
@@ -74,14 +73,14 @@ function loadPersistentAgentTask(app, taskKey) {
     const state = JSON.parse(fs.readFileSync(paths.stateFile, 'utf-8'));
     return { paths, state };
   } catch (error) {
-    throw new Error(`目录 Agent 任务状态损坏：${error?.message || String(error)}`);
+    throw new Error(`持久 Agent 任务状态损坏：${error?.message || String(error)}`);
   }
 }
 
 // 更新持久任务检查点，并保留任务创建时间。
 function updatePersistentAgentTask(app, taskKey, partial = {}) {
   const current = loadPersistentAgentTask(app, taskKey);
-  if (!current) throw new Error('目录 Agent 持久任务不存在，请重新生成目录');
+  if (!current) throw new Error('持久 Agent 任务不存在，请重新执行当前业务任务');
   const nextState = {
     ...current.state,
     ...partial,
@@ -99,7 +98,6 @@ function deletePersistentAgentTask(app, taskKey) {
 }
 
 module.exports = {
-  OUTLINE_AGENT_TASK_KEY,
   createPersistentAgentTask,
   deletePersistentAgentTask,
   getPersistentAgentSessionPath,

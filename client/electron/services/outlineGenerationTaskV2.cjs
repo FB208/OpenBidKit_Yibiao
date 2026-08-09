@@ -1,4 +1,4 @@
-const { OUTLINE_AGENT_TASK_KEY } = require('./pi/piPersistentTaskStore.cjs');
+const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
 
 const DEFAULT_ESTIMATED_SECTION_WORDS = 3000;
 const OUTLINE_OUTPUT_FILE = 'outline.json';

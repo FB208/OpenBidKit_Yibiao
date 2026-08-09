@@ -5,40 +5,28 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { getDeveloperLogsDir } = require('../../utils/paths.cjs');
 const {
-  createAiRequestId,
-  getAiErrorLogError,
-  getAiErrorLogResponse,
-  writeAiLog,
-} = require('../../utils/aiLog.cjs');
-const {
   markAiRequestError,
-  runWithAiRetry,
 } = require('../../utils/aiRetry.cjs');
 const {
-  createAiHttpErrorFromResponse,
   emitAiHttpErrorToWindows,
 } = require('../../utils/aiHttpError.cjs');
-const {
-  normalizeTokenUsage,
-  recordTextTokenStats,
-} = require('../textTokenStatsStore.cjs');
+const { normalizeTokenUsage } = require('../textTokenStatsStore.cjs');
 
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
-const DEFAULT_UPSTREAM_TIMEOUT_MS = 600000;
+const DEFAULT_NORMAL_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const SERVER_TIMEOUT_BUFFER_MS = 10000;
 const DEFAULT_LOOPBACK_PROBE_TIMEOUT_MS = 1500;
+const QUEUE_WAITING_ACTIVITY_INTERVAL_MS = 15000;
+const NORMAL_REQUEST_ACTIVITY_INTERVAL_MS = 15000;
 
-function normalizeTimeoutMs(value, fallback = DEFAULT_UPSTREAM_TIMEOUT_MS) {
+function normalizeTimeoutMs(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
 }
 
 function createProxyToken() {
   return crypto.randomBytes(32).toString('base64url');
-}
-
-function trimBaseUrl(baseUrl) {
-  return String(baseUrl || '').trim().replace(/\/+$/, '');
 }
 
 function normalizeEndpointHost(baseUrl) {
@@ -69,133 +57,6 @@ function normalizeEndpointSummary(baseUrl) {
     };
   } catch {
     return { host: '', pathname: '' };
-  }
-}
-
-function normalizeConcurrencyLimit(value, fallback = 10) {
-  const number = Number(value);
-  return Math.max(1, Number.isFinite(number) ? Math.round(number) : fallback);
-}
-
-function createAgentTextQueue(options = {}) {
-  let activeCount = 0;
-  const queue = [];
-  const getLimit = typeof options.getLimit === 'function'
-    ? options.getLimit
-    : () => options.limit || 10;
-  const fallbackLimit = normalizeConcurrencyLimit(options.defaultLimit, 10);
-
-  function currentLimit() {
-    try {
-      return normalizeConcurrencyLimit(getLimit(), fallbackLimit);
-    } catch {
-      return fallbackLimit;
-    }
-  }
-
-  function removeQueuedJob(job) {
-    const index = queue.indexOf(job);
-    if (index >= 0) {
-      queue.splice(index, 1);
-      return true;
-    }
-    return false;
-  }
-
-  function getAbortReason(signal) {
-    return signal?.reason || new Error('Agent AI proxy 请求已取消');
-  }
-
-  function pump() {
-    while (activeCount < currentLimit() && queue.length) {
-      const job = queue.shift();
-      if (job.signal?.aborted) {
-        job.cleanup?.();
-        job.reject(getAbortReason(job.signal));
-        continue;
-      }
-
-      job.started = true;
-      activeCount += 1;
-      void runJob(job);
-    }
-  }
-
-  async function runJob(job) {
-    try {
-      job.cleanup?.();
-      job.resolve(await job.runner());
-    } catch (error) {
-      job.reject(error);
-    } finally {
-      activeCount = Math.max(0, activeCount - 1);
-      pump();
-    }
-  }
-
-  function enqueue(runner, options = {}) {
-    return new Promise((resolve, reject) => {
-      const signal = options.signal;
-      if (signal?.aborted) {
-        reject(getAbortReason(signal));
-        return;
-      }
-
-      const job = {
-        runner,
-        resolve,
-        reject,
-        signal,
-        started: false,
-        cleanup: null,
-      };
-
-      if (signal) {
-        const onAbort = () => {
-          if (!job.started && removeQueuedJob(job)) {
-            job.cleanup?.();
-            reject(getAbortReason(signal));
-          }
-        };
-        signal.addEventListener('abort', onAbort, { once: true });
-        job.cleanup = () => {
-          try { signal.removeEventListener('abort', onAbort); } catch {}
-        };
-      }
-
-      queue.push(job);
-      pump();
-    });
-  }
-
-  return {
-    enqueue,
-    getStatus() {
-      return {
-        active: activeCount,
-        queued: queue.length,
-        limit: currentLimit(),
-      };
-    },
-    clearQueued(reason) {
-      while (queue.length) {
-        const job = queue.shift();
-        job.cleanup?.();
-        job.reject(reason || new Error('Agent proxy 队列已清空'));
-      }
-    },
-  };
-}
-
-function assertTextModelConfig(config) {
-  if (!config?.api_key) {
-    throw new Error('请先在设置中配置文本模型 API Key');
-  }
-  if (!config?.model_name) {
-    throw new Error('请先在设置中配置文本模型名称');
-  }
-  if (!trimBaseUrl(config?.base_url)) {
-    throw new Error('请先在设置中配置文本模型 Base URL');
   }
 }
 
@@ -324,16 +185,6 @@ function summarizeProxyError(error) {
   };
 }
 
-function recordProxyTextTokenStats(config, usage) {
-  if (!config?.developer_mode) return;
-
-  try {
-    recordTextTokenStats(usage);
-  } catch {
-    // Token 统计不能影响主流程。
-  }
-}
-
 function createAgentProxyModelInfo() {
   return {
     id: 'default',
@@ -341,41 +192,6 @@ function createAgentProxyModelInfo() {
     created: 0,
     owned_by: 'yibiao',
   };
-}
-
-function normalizeAgentProxyRequestBody(config, sourceBody) {
-  const source = sourceBody && typeof sourceBody === 'object' ? sourceBody : {};
-  const messages = Array.isArray(source.messages) ? source.messages : [];
-
-  if (!messages.length) {
-    throw new Error('Agent 代理请求缺少 messages');
-  }
-
-  const normalized = {
-    ...source,
-    // Agent 侧只使用 yibiao/default；真实模型名称以设置页保存的 model_name 为准。
-    model: config.model_name,
-    messages,
-  };
-
-  if (config.temperature_enabled) {
-    normalized.temperature = config.temperature;
-  } else {
-    delete normalized.temperature;
-  }
-
-  if (config.reasoning_effort) {
-    normalized.reasoning_effort = config.reasoning_effort;
-  } else {
-    delete normalized.reasoning_effort;
-  }
-
-  // 部分 OpenAI 兼容上游会拒绝 Agent 注入的输出长度参数。
-  delete normalized.max_tokens;
-  delete normalized.max_output_tokens;
-  delete normalized.max_completion_tokens;
-
-  return normalized;
 }
 
 function isAuthorized(req, token) {
@@ -464,36 +280,21 @@ function createAbortError() {
   return markAiRequestError(error, { retryable: true });
 }
 
-function createTimeoutSignal(parentSignal, timeoutMs = DEFAULT_UPSTREAM_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(createAbortError()), timeoutMs);
-
-  const abortFromParent = () => controller.abort(parentSignal?.reason || new Error('请求已取消'));
-  if (parentSignal) {
-    if (parentSignal.aborted) abortFromParent();
-    else parentSignal.addEventListener('abort', abortFromParent, { once: true });
-  }
-
-  return {
-    signal: controller.signal,
-    clear() {
-      clearTimeout(timer);
-      if (parentSignal) {
-        try { parentSignal.removeEventListener('abort', abortFromParent); } catch {}
-      }
-    },
-  };
-}
-
-function createIdleTimeoutController(parentSignal, timeoutMs = DEFAULT_UPSTREAM_TIMEOUT_MS, message) {
+// 排队期间只响应父级取消，拿到并发 slot 后才启动上游响应计时。
+function createDeferredUpstreamTimeout(parentSignal, normalRequestTimeoutMs, streamIdleTimeoutMs) {
   const controller = new AbortController();
   let timer = null;
+  let started = false;
+  let stream = false;
 
   function reset() {
     clearTimeout(timer);
     timer = setTimeout(() => {
-      controller.abort(markAiRequestError(new Error(message || 'AI 流式响应长时间无数据'), { retryable: true }));
-    }, timeoutMs);
+      const error = stream
+        ? markAiRequestError(new Error('AI 流式响应长时间无数据'), { retryable: true })
+        : createAbortError();
+      controller.abort(error);
+    }, stream ? streamIdleTimeoutMs : normalRequestTimeoutMs);
   }
 
   const abortFromParent = () => controller.abort(parentSignal?.reason || new Error('请求已取消'));
@@ -502,11 +303,17 @@ function createIdleTimeoutController(parentSignal, timeoutMs = DEFAULT_UPSTREAM_
     else parentSignal.addEventListener('abort', abortFromParent, { once: true });
   }
 
-  reset();
-
   return {
     signal: controller.signal,
-    touch: reset,
+    start(isStream) {
+      if (started || controller.signal.aborted) return;
+      started = true;
+      stream = Boolean(isStream);
+      reset();
+    },
+    touch() {
+      if (started && stream && !controller.signal.aborted) reset();
+    },
     clear() {
       clearTimeout(timer);
       if (parentSignal) {
@@ -514,10 +321,6 @@ function createIdleTimeoutController(parentSignal, timeoutMs = DEFAULT_UPSTREAM_
       }
     },
   };
-}
-
-async function createUpstreamError(response, runtimeMeta) {
-  return createAiHttpErrorFromResponse(response, `AI 请求失败：HTTP ${response.status}`, { source: runtimeMeta.errorSource });
 }
 
 function responseHeadersFromUpstream(response, fallbackContentType) {
@@ -588,6 +391,137 @@ function extractContentFromResponseData(responseData) {
     })
     .join('')
     .trim();
+}
+
+function createInvalidNormalCompletionError(message, responseData) {
+  const error = markAiRequestError(new Error(`AI 普通响应无法转换为 Pi 流：${message}`), { retryable: true });
+  error.raw_response_data = responseData;
+  return error;
+}
+
+// 将普通响应中的完整工具调用转换为 Pi 可消费的单次流式增量。
+function normalizeNormalToolCalls(toolCalls, responseData) {
+  if (toolCalls === undefined) return undefined;
+  if (!Array.isArray(toolCalls)) {
+    throw createInvalidNormalCompletionError('tool_calls 不是数组', responseData);
+  }
+  return toolCalls.map((toolCall, index) => {
+    if (!toolCall || typeof toolCall !== 'object') {
+      throw createInvalidNormalCompletionError(`第 ${index + 1} 个工具调用不是对象`, responseData);
+    }
+    if (typeof toolCall.id !== 'string' || !toolCall.id) {
+      throw createInvalidNormalCompletionError(`第 ${index + 1} 个工具调用缺少 id`, responseData);
+    }
+    if (toolCall.type === 'function') {
+      if (typeof toolCall.function?.name !== 'string' || !toolCall.function.name) {
+        throw createInvalidNormalCompletionError(`第 ${index + 1} 个工具调用缺少函数名称`, responseData);
+      }
+      if (typeof toolCall.function?.arguments !== 'string') {
+        throw createInvalidNormalCompletionError(`第 ${index + 1} 个工具调用参数不是 JSON 字符串`, responseData);
+      }
+      try {
+        const parsedArguments = JSON.parse(toolCall.function.arguments);
+        if (!parsedArguments || typeof parsedArguments !== 'object' || Array.isArray(parsedArguments)) {
+          throw new Error('工具参数根节点不是对象');
+        }
+      } catch (error) {
+        throw createInvalidNormalCompletionError(`第 ${index + 1} 个工具调用参数不是合法 JSON 对象：${error.message}`, responseData);
+      }
+      return {
+        index,
+        id: toolCall.id,
+        type: 'function',
+        function: {
+          name: toolCall.function.name,
+          arguments: toolCall.function.arguments,
+        },
+      };
+    }
+    if (toolCall.type === 'custom') {
+      if (typeof toolCall.custom?.name !== 'string' || !toolCall.custom.name || typeof toolCall.custom?.input !== 'string') {
+        throw createInvalidNormalCompletionError(`第 ${index + 1} 个自定义工具调用格式无效`, responseData);
+      }
+      return {
+        index,
+        id: toolCall.id,
+        type: 'custom',
+        custom: {
+          name: toolCall.custom.name,
+          input: toolCall.custom.input,
+        },
+      };
+    }
+    throw createInvalidNormalCompletionError(`第 ${index + 1} 个工具调用类型无效`, responseData);
+  });
+}
+
+// 将标准非流式 Chat Completion 确定性编码为 OpenAI SSE Chunk。
+function createPiSseFromNormalCompletion(responseData) {
+  if (!responseData || typeof responseData !== 'object' || Array.isArray(responseData)) {
+    throw createInvalidNormalCompletionError('响应根节点不是对象', responseData);
+  }
+  const choice = Array.isArray(responseData.choices) ? responseData.choices[0] : null;
+  if (!choice || typeof choice !== 'object') {
+    throw createInvalidNormalCompletionError('缺少 choices[0]', responseData);
+  }
+  const message = choice.message;
+  if (!message || typeof message !== 'object' || Array.isArray(message)) {
+    throw createInvalidNormalCompletionError('缺少 choices[0].message', responseData);
+  }
+  if (typeof choice.finish_reason !== 'string' || !choice.finish_reason) {
+    throw createInvalidNormalCompletionError('缺少 finish_reason', responseData);
+  }
+  if (message.content !== null && message.content !== undefined && typeof message.content !== 'string') {
+    throw createInvalidNormalCompletionError('message.content 不是字符串', responseData);
+  }
+  if (message.function_call !== undefined) {
+    throw createInvalidNormalCompletionError('响应使用旧版 function_call，缺少标准 tool_calls', responseData);
+  }
+
+  const delta = { role: typeof message.role === 'string' && message.role ? message.role : 'assistant' };
+  if (typeof message.content === 'string' && message.content) delta.content = message.content;
+  for (const field of ['reasoning_content', 'reasoning', 'reasoning_text']) {
+    const value = message[field];
+    if (value !== undefined && value !== null && typeof value !== 'string') {
+      throw createInvalidNormalCompletionError(`message.${field} 不是字符串`, responseData);
+    }
+    if (typeof value === 'string' && value) delta[field] = value;
+  }
+  if (message.reasoning_details !== undefined) delta.reasoning_details = message.reasoning_details;
+  const toolCalls = normalizeNormalToolCalls(message.tool_calls, responseData);
+  if (toolCalls?.length) delta.tool_calls = toolCalls;
+  const toolFinish = choice.finish_reason === 'tool_calls' || choice.finish_reason === 'function_call';
+  if (toolFinish !== Boolean(toolCalls?.length)) {
+    throw createInvalidNormalCompletionError('finish_reason 与 tool_calls 不一致', responseData);
+  }
+  if (responseData.usage !== undefined && responseData.usage !== null && (typeof responseData.usage !== 'object' || Array.isArray(responseData.usage))) {
+    throw createInvalidNormalCompletionError('usage 不是对象', responseData);
+  }
+
+  const base = {
+    id: typeof responseData.id === 'string' ? responseData.id : '',
+    object: 'chat.completion.chunk',
+    created: Number.isFinite(Number(responseData.created)) ? Number(responseData.created) : 0,
+    model: typeof responseData.model === 'string' ? responseData.model : '',
+  };
+  if (responseData.system_fingerprint !== undefined) base.system_fingerprint = responseData.system_fingerprint;
+  if (responseData.service_tier !== undefined) base.service_tier = responseData.service_tier;
+
+  const chunks = [
+    {
+      ...base,
+      choices: [{ index: Number.isFinite(Number(choice.index)) ? Number(choice.index) : 0, delta, finish_reason: null }],
+    },
+    {
+      ...base,
+      choices: [{ index: Number.isFinite(Number(choice.index)) ? Number(choice.index) : 0, delta: {}, finish_reason: choice.finish_reason }],
+    },
+  ];
+  if (responseData.usage && typeof responseData.usage === 'object') {
+    chunks.push({ ...base, choices: [], usage: responseData.usage });
+  }
+
+  return `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('')}data: [DONE]\n\n`;
 }
 
 function createStreamResponseData(content, usage, streamMeta) {
@@ -720,54 +654,8 @@ function createUsageCapturingStream(source, onDone, options = {}) {
   });
 }
 
-function getAgentAiLogTitle(requestBody, runtimeMeta) {
-  return requestBody?.logTitle || requestBody?.log_title || runtimeMeta.displayName;
-}
-
-function getChatCompletionsUrl(config) {
-  return `${trimBaseUrl(config.base_url)}/chat/completions`;
-}
-
-function getRequestMode(requestBody) {
-  return requestBody?.stream ? 'stream' : 'normal';
-}
-
-function safeWriteAgentAiLog(app, config, payload) {
-  try {
-    writeAiLog(app, config, payload);
-  } catch {
-    // Agent 代理日志仅用于开发排查，不能影响主请求。
-  }
-}
-
-function writeAgentAiPendingLog({ app, config, runtimeMeta, requestId, requestBody }) {
-  safeWriteAgentAiLog(app, config, {
-    request_id: requestId,
-    log_title: getAgentAiLogTitle(requestBody, runtimeMeta),
-    type: 'chat-pending',
-    request_mode: getRequestMode(requestBody),
-    url: getChatCompletionsUrl(config),
-    request: requestBody,
-    status: 'pending',
-    created_at: new Date().toISOString(),
-  });
-}
-
 function recordAgentAiSuccess({ app, config, runtimeMeta, requestId, requestBody, response, responseData, content, usage, startedAt, stream, attempt, diagnostics }) {
   const normalizedUsage = normalizeTokenUsage(usage);
-  recordProxyTextTokenStats(config, usage);
-
-  safeWriteAgentAiLog(app, config, {
-    request_id: requestId,
-    log_title: getAgentAiLogTitle(requestBody, runtimeMeta),
-    type: 'chat',
-    request_mode: getRequestMode(requestBody),
-    url: getChatCompletionsUrl(config),
-    request: requestBody,
-    response: responseData,
-    content: content || '',
-    created_at: new Date().toISOString(),
-  });
 
   appendProxyDeveloperLog(app, config, runtimeMeta, {
     request_id: requestId,
@@ -798,22 +686,7 @@ function recordAgentAiSuccess({ app, config, runtimeMeta, requestId, requestBody
 }
 
 function recordAgentAiFailure({ app, config, runtimeMeta, requestId, requestBody, error, response, responseData, usage, startedAt, attempt, diagnostics }) {
-  recordProxyTextTokenStats(config, usage || null);
-
   const errorMessage = safeErrorMessage(error);
-  safeWriteAgentAiLog(app, config, {
-    request_id: requestId,
-    log_title: getAgentAiLogTitle(requestBody, runtimeMeta),
-    type: 'chat-error',
-    request_mode: getRequestMode(requestBody),
-    url: getChatCompletionsUrl(config),
-    request: requestBody,
-    response: getAiErrorLogResponse(error, responseData || null),
-    error: getAiErrorLogError(error, errorMessage),
-    upstream_request_id: response?.headers?.get?.('x-request-id') || '',
-    created_at: new Date().toISOString(),
-  });
-
   appendProxyDeveloperLog(app, config, runtimeMeta, {
     request_id: requestId,
     type: 'chat-error',
@@ -842,13 +715,23 @@ function recordAgentAiFailure({ app, config, runtimeMeta, requestId, requestBody
   });
 }
 
-async function prepareProxyResponse({ app, config, runtimeMeta, requestId, requestBody, response, startedAt, attempt, diagnostics, onActivity, activityContext, streamTimeout }) {
+async function prepareProxyResponse({ app, config, runtimeMeta, requestId, requestBody, downstreamWantsStream, response, startedAt, attempt, diagnostics, onActivity, activityContext, streamTimeout }) {
   const stream = Boolean(requestBody.stream);
-  const contentType = response.headers.get('content-type') || '';
-  const isSse = stream || contentType.toLowerCase().includes('text/event-stream');
 
-  if (isSse) {
+  if (stream) {
+    if (!response.body?.getReader) {
+      const error = markAiRequestError(new Error('AI 流式响应缺少可读取的响应体'), { retryable: true });
+      error.code = 'AI_STREAM_BODY_MISSING';
+      throw error;
+    }
+
     let streamFinalized = false;
+    let resolveCompletion;
+    let rejectCompletion;
+    const completion = new Promise((resolve, reject) => {
+      resolveCompletion = resolve;
+      rejectCompletion = reject;
+    });
     const finalizeStreamFailure = (error, capture) => {
       if (streamFinalized) return;
       streamFinalized = true;
@@ -867,6 +750,7 @@ async function prepareProxyResponse({ app, config, runtimeMeta, requestId, reque
         attempt,
         diagnostics,
       });
+      if (error && typeof error === 'object') error.agentProxyFailureRecorded = true;
       emitProxyActivity(onActivity, activityContext, {
         stage: 'model_request',
         message: safeErrorMessage(error),
@@ -874,6 +758,7 @@ async function prepareProxyResponse({ app, config, runtimeMeta, requestId, reque
         activity: true,
         meta: { request_id: requestId, attempt, error: safeErrorMessage(error), stream: true },
       });
+      rejectCompletion(error);
     };
     const createStreamFailure = (capture, fallbackMessage) => {
       const error = markAiRequestError(new Error(capture?.streamError?.message || fallbackMessage), { retryable: true });
@@ -910,6 +795,7 @@ async function prepareProxyResponse({ app, config, runtimeMeta, requestId, reque
         meta: { request_id: requestId, attempt, stream: true },
       });
       streamTimeout?.clear?.();
+      resolveCompletion(capture);
     }, {
       onChunk: () => streamTimeout?.touch?.(),
       onActivity: (event) => emitProxyActivity(onActivity, activityContext, {
@@ -924,21 +810,28 @@ async function prepareProxyResponse({ app, config, runtimeMeta, requestId, reque
       onError: (error, capture) => finalizeStreamFailure(error, capture),
     });
 
-    return new Response(body, {
-      status: response.status,
-      headers: responseHeadersFromUpstream(response, 'text/event-stream; charset=utf-8'),
-    });
+    return {
+      response: new Response(body, {
+        status: response.status,
+        headers: responseHeadersFromUpstream(response, 'text/event-stream; charset=utf-8'),
+      }),
+      completion,
+    };
   }
 
   const rawText = await response.text();
   let responseData = null;
   try {
     responseData = rawText ? JSON.parse(rawText) : null;
-  } catch {
+  } catch (error) {
+    if (downstreamWantsStream) {
+      throw createInvalidNormalCompletionError(`响应不是合法 JSON：${error.message}`, rawText);
+    }
     responseData = rawText;
   }
   const usage = extractUsageFromPayload(responseData) || extractUsageFromJsonText(rawText);
   const content = responseData && typeof responseData === 'object' ? extractContentFromResponseData(responseData) : '';
+  const downstreamBody = downstreamWantsStream ? createPiSseFromNormalCompletion(responseData) : rawText;
   recordAgentAiSuccess({
     app,
     config,
@@ -959,21 +852,30 @@ async function prepareProxyResponse({ app, config, runtimeMeta, requestId, reque
     message: '',
     source: 'proxy.upstream.completed',
     activity: true,
-    meta: { request_id: requestId, attempt, stream: false },
+    meta: { request_id: requestId, attempt, stream: false, adapted_to_sse: Boolean(downstreamWantsStream) },
   });
 
-  return new Response(rawText, {
-    status: response.status,
-    headers: responseHeadersFromUpstream(response, 'application/json; charset=utf-8'),
-  });
+  const downstreamHeaders = responseHeadersFromUpstream(
+    response,
+    downstreamWantsStream ? 'text/event-stream; charset=utf-8' : 'application/json; charset=utf-8',
+  );
+  if (downstreamWantsStream) downstreamHeaders.set('content-type', 'text/event-stream; charset=utf-8');
+
+  return {
+    response: new Response(downstreamBody, {
+      status: response.status,
+      headers: downstreamHeaders,
+    }),
+    completion: Promise.resolve({ responseData, content, usage }),
+  };
 }
 
-async function requestAgentChatCompletion({ app, configStore, runtimeMeta, textQueue, openAiBody, signal, timeoutMs, diagnostics, onActivity, activityContext }) {
-  const requestId = createAiRequestId();
+async function requestAgentChatCompletion({ app, aiService, runtimeMeta, openAiBody, signal, normalRequestTimeoutMs, streamIdleTimeoutMs, diagnostics, onActivity, activityContext, consumeResponse }) {
+  const proxyRequestId = crypto.randomUUID();
   let queuedConfig = null;
-  try { queuedConfig = configStore.load(); } catch {}
+  try { queuedConfig = aiService.getConfig(); } catch {}
   appendProxyDiagnostic(diagnostics, 'proxy.chat.queued', {
-    request_id: requestId,
+    request_id: proxyRequestId,
     config: summarizeProxyConfig(queuedConfig || {}),
     request: summarizeRequestBody(openAiBody),
   });
@@ -981,106 +883,149 @@ async function requestAgentChatCompletion({ app, configStore, runtimeMeta, textQ
     stage: 'model_request',
     message: '',
     source: 'proxy.chat.queued',
-    meta: { request_id: requestId },
+    activity: true,
+    meta: { request_id: proxyRequestId },
   });
 
-  return textQueue.enqueue(async () => {
-    const config = configStore.load();
-    assertTextModelConfig(config);
+  const runSingleAttempt = async (attempt) => {
+    const queuedAt = Date.now();
+    let startedAt = queuedAt;
+    const timeout = createDeferredUpstreamTimeout(signal, normalRequestTimeoutMs, streamIdleTimeoutMs);
+    let requestContext = null;
+    let upstreamResponse = null;
+    let queueWaitingActivityTimer = null;
+    let normalRequestActivityTimer = null;
+    const stopQueueWaitingActivity = () => {
+      if (queueWaitingActivityTimer) clearInterval(queueWaitingActivityTimer);
+      queueWaitingActivityTimer = null;
+    };
+    const stopNormalRequestActivity = () => {
+      if (normalRequestActivityTimer) clearInterval(normalRequestActivityTimer);
+      normalRequestActivityTimer = null;
+    };
+    queueWaitingActivityTimer = setInterval(() => {
+      emitProxyActivity(onActivity, activityContext, {
+        stage: 'model_request',
+        message: '',
+        source: 'proxy.queue.waiting',
+        visible: false,
+        activity: true,
+        meta: { request_id: proxyRequestId, attempt, queue_wait_ms: Date.now() - queuedAt },
+      });
+    }, QUEUE_WAITING_ACTIVITY_INTERVAL_MS);
 
-    const requestBody = normalizeAgentProxyRequestBody(config, openAiBody);
+    try {
+      return await aiService.runAgentChatCompletion({
+        body: openAiBody,
+        signal: timeout.signal,
+        queueScopeId: activityContext?.queue_scope_id || '',
+        logTitle: runtimeMeta.displayName,
+        onRequestStart(context) {
+          stopQueueWaitingActivity();
+          startedAt = Date.now();
+          requestContext = context;
+          const { config, requestBody, requestId } = context;
+          const queueWaitMs = startedAt - queuedAt;
+          const stream = Boolean(requestBody.stream);
+          timeout.start(stream);
+          appendProxyDiagnostic(diagnostics, 'proxy.upstream.started', {
+            request_id: requestId,
+            attempt,
+            queue_wait_ms: queueWaitMs,
+            timeout_ms: stream ? streamIdleTimeoutMs : normalRequestTimeoutMs,
+            timeout_type: stream ? 'stream_idle' : 'normal_request',
+            config: summarizeProxyConfig(config),
+            request: summarizeRequestBody(requestBody),
+          });
+          emitProxyActivity(onActivity, activityContext, {
+            stage: 'model_request',
+            message: '',
+            source: 'proxy.upstream.started',
+            activity: true,
+            meta: { request_id: requestId, attempt, queue_wait_ms: queueWaitMs },
+          });
+          appendProxyDeveloperLog(app, config, runtimeMeta, {
+            request_id: requestId,
+            type: 'chat-pending',
+            stream: Boolean(requestBody.stream),
+            attempt,
+            queue_wait_ms: queueWaitMs,
+            provider: config.text_model_provider || '',
+            model_name: config.model_name || '',
+            endpoint_host: normalizeEndpointHost(config.base_url),
+            request_hash: createPromptHash(requestBody),
+            messages_count: Array.isArray(requestBody.messages) ? requestBody.messages.length : 0,
+          });
+          if (!requestBody.stream) {
+            normalRequestActivityTimer = setInterval(() => {
+              emitProxyActivity(onActivity, activityContext, {
+                stage: 'model_request',
+                message: '',
+                source: 'proxy.normal.waiting',
+                visible: false,
+                activity: true,
+                meta: { request_id: requestId, attempt, stream: false },
+              });
+            }, NORMAL_REQUEST_ACTIVITY_INTERVAL_MS);
+          }
+        },
+        async consumeResponse(response, context) {
+          stopNormalRequestActivity();
+          requestContext = context;
+          upstreamResponse = response;
+          const { config, requestBody, requestId } = context;
+          appendProxyDiagnostic(diagnostics, 'proxy.upstream.headers', {
+            request_id: requestId,
+            attempt,
+            duration_ms: Date.now() - startedAt,
+            status: response.status,
+            ok: response.ok,
+            content_type: response.headers.get('content-type') || '',
+            upstream_request_id: response.headers.get('x-request-id') || '',
+          });
+          timeout.touch?.();
+          emitProxyActivity(onActivity, activityContext, {
+            stage: 'model_request',
+            message: '',
+            source: 'proxy.upstream.headers',
+            activity: true,
+            meta: { request_id: requestId, attempt, status: response.status },
+          });
 
-    return runWithAiRetry(async ({ attempt }) => {
-      const stream = Boolean(requestBody.stream);
-      const timeout = stream
-        ? createIdleTimeoutController(signal, timeoutMs, 'AI 流式响应长时间无数据')
-        : createTimeoutSignal(signal, timeoutMs);
-      const startedAt = Date.now();
-      let streamHandedOff = false;
-
-      try {
-        appendProxyDiagnostic(diagnostics, 'proxy.upstream.started', {
-          request_id: requestId,
-          attempt,
-          timeout_ms: timeoutMs,
-          config: summarizeProxyConfig(config),
-          request: summarizeRequestBody(requestBody),
-        });
-        emitProxyActivity(onActivity, activityContext, {
-          stage: 'model_request',
-          message: '',
-          source: 'proxy.upstream.started',
-          activity: true,
-          meta: { request_id: requestId, attempt },
-        });
-        appendProxyDeveloperLog(app, config, runtimeMeta, {
-          request_id: requestId,
-          type: 'chat-pending',
-          stream: Boolean(requestBody.stream),
-          attempt,
-          provider: config.text_model_provider || '',
-          model_name: config.model_name || '',
-          endpoint_host: normalizeEndpointHost(config.base_url),
-          request_hash: createPromptHash(requestBody),
-          messages_count: Array.isArray(requestBody.messages) ? requestBody.messages.length : 0,
-        });
-        writeAgentAiPendingLog({ app, config, runtimeMeta, requestId, requestBody });
-
-        const response = await fetch(`${trimBaseUrl(config.base_url)}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${config.api_key}`,
-          },
-          body: JSON.stringify(requestBody),
-          signal: timeout.signal,
-        });
-
-        appendProxyDiagnostic(diagnostics, 'proxy.upstream.headers', {
-          request_id: requestId,
-          attempt,
-          duration_ms: Date.now() - startedAt,
-          status: response.status,
-          ok: response.ok,
-          content_type: response.headers.get('content-type') || '',
-          upstream_request_id: response.headers.get('x-request-id') || '',
-        });
-        timeout.touch?.();
-        emitProxyActivity(onActivity, activityContext, {
-          stage: 'model_request',
-          message: '',
-          source: 'proxy.upstream.headers',
-          activity: true,
-          meta: { request_id: requestId, attempt, status: response.status },
-        });
-
-        if (!response.ok) {
-          throw await createUpstreamError(response, runtimeMeta);
-        }
-
-        const proxyResponse = await prepareProxyResponse({
-          app,
-          config,
-          runtimeMeta,
-          requestId,
-          requestBody,
-          response,
-          startedAt,
-          attempt,
-          diagnostics,
-          onActivity,
-          activityContext,
-          streamTimeout: stream ? timeout : null,
-        });
-        streamHandedOff = stream;
-        return proxyResponse;
-      } catch (error) {
+          const prepared = await prepareProxyResponse({
+            app,
+            config,
+            runtimeMeta,
+            requestId,
+            requestBody,
+            downstreamWantsStream: Boolean(openAiBody.stream),
+            response,
+            startedAt,
+            attempt,
+            diagnostics,
+            onActivity,
+            activityContext,
+            streamTimeout: requestBody.stream ? timeout : null,
+          });
+          const [, capture] = await Promise.all([
+            consumeResponse(prepared.response),
+            prepared.completion,
+          ]);
+          return capture;
+        },
+      });
+    } catch (error) {
+      if (!error?.agentProxyFailureRecorded) {
+        const config = requestContext?.config || queuedConfig || {};
+        const requestBody = requestContext?.requestBody || openAiBody;
+        const requestId = requestContext?.requestId || proxyRequestId;
         recordAgentAiFailure({
           app,
           config,
           runtimeMeta,
           requestId,
           requestBody,
+          response: upstreamResponse,
           error,
           startedAt,
           attempt,
@@ -1093,14 +1038,15 @@ async function requestAgentChatCompletion({ app, configStore, runtimeMeta, textQ
           activity: true,
           meta: { request_id: requestId, attempt, error: safeErrorMessage(error) },
         });
-        throw error;
-      } finally {
-        if (!stream || !streamHandedOff) {
-          timeout.clear();
-        }
       }
-    }, { signal });
-  }, { signal });
+      throw error;
+    } finally {
+      stopQueueWaitingActivity();
+      stopNormalRequestActivity();
+      timeout.clear();
+    }
+  };
+  return runSingleAttempt(1);
 }
 
 function copyUpstreamHeaders(upstream, res) {
@@ -1165,7 +1111,7 @@ function bindAbortToRequestLifecycle({ req, res, controller, diagnostics, onActi
   });
 }
 
-async function handleChatCompletions({ req, res, app, configStore, runtimeMeta, textQueue, timeoutMs, diagnostics, onActivity, getActivityContext }) {
+async function handleChatCompletions({ req, res, app, aiService, runtimeMeta, normalRequestTimeoutMs, streamIdleTimeoutMs, diagnostics, onActivity, getActivityContext }) {
   const controller = new AbortController();
   const requestBody = await readJson(req);
   const activityContext = getActivityContext?.() || null;
@@ -1180,27 +1126,26 @@ async function handleChatCompletions({ req, res, app, configStore, runtimeMeta, 
     activity: true,
     meta: { request: summarizeRequestBody(requestBody) },
   });
-  const upstream = await requestAgentChatCompletion({
+  await requestAgentChatCompletion({
     app,
-    configStore,
+    aiService,
     runtimeMeta,
-    textQueue,
     openAiBody: requestBody,
     signal: controller.signal,
-    timeoutMs,
+    normalRequestTimeoutMs,
+    streamIdleTimeoutMs,
     diagnostics,
     onActivity,
     activityContext,
+    async consumeResponse(upstream) {
+      res.statusCode = upstream.status;
+      copyUpstreamHeaders(upstream, res);
+      if (!res.getHeader('Content-Type')) {
+        res.setHeader('Content-Type', requestBody.stream ? 'text/event-stream; charset=utf-8' : 'application/json; charset=utf-8');
+      }
+      await pipeWebStreamToNode(upstream.body, res);
+    },
   });
-
-  res.statusCode = upstream.status;
-  copyUpstreamHeaders(upstream, res);
-
-  if (!res.getHeader('Content-Type')) {
-    res.setHeader('Content-Type', requestBody.stream ? 'text/event-stream; charset=utf-8' : 'application/json; charset=utf-8');
-  }
-
-  await pipeWebStreamToNode(upstream.body, res);
 }
 
 function handleModels({ res }) {
@@ -1212,9 +1157,10 @@ function handleModels({ res }) {
 
 function createAgentOpenAiProxy({
   app,
-  configStore,
+  aiService,
   runtime,
-  timeoutMs,
+  normalRequestTimeoutMs,
+  streamIdleTimeoutMs,
   diagnostics,
   onActivity,
   getActivityContext,
@@ -1224,19 +1170,14 @@ function createAgentOpenAiProxy({
   const runtimeMeta = {
     id: runtime.id,
     displayName: runtime.displayName,
-    errorSource: runtime.displayName,
     logModule: `${runtime.id}-ai-proxy`,
   };
   const token = createProxyToken();
-  const upstreamTimeoutMs = normalizeTimeoutMs(timeoutMs);
+  const normalizedNormalRequestTimeoutMs = normalizeTimeoutMs(normalRequestTimeoutMs, DEFAULT_NORMAL_REQUEST_TIMEOUT_MS);
+  const normalizedStreamIdleTimeoutMs = normalizeTimeoutMs(streamIdleTimeoutMs, DEFAULT_STREAM_IDLE_TIMEOUT_MS);
+  const serverTimeoutMs = Math.max(normalizedNormalRequestTimeoutMs, normalizedStreamIdleTimeoutMs);
   const sockets = new Set();
   let closing = false;
-  const textQueue = createAgentTextQueue({
-    defaultLimit: 10,
-    getLimit() {
-      return configStore.load()?.concurrency_limit;
-    },
-  });
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -1283,10 +1224,10 @@ function createAgentOpenAiProxy({
           req,
           res,
           app,
-          configStore,
+          aiService,
           runtimeMeta,
-          textQueue,
-          timeoutMs: upstreamTimeoutMs,
+          normalRequestTimeoutMs: normalizedNormalRequestTimeoutMs,
+          streamIdleTimeoutMs: normalizedStreamIdleTimeoutMs,
           diagnostics,
           onActivity,
           getActivityContext,
@@ -1321,8 +1262,8 @@ function createAgentOpenAiProxy({
     }
   });
 
-  server.headersTimeout = upstreamTimeoutMs + SERVER_TIMEOUT_BUFFER_MS;
-  server.requestTimeout = upstreamTimeoutMs + SERVER_TIMEOUT_BUFFER_MS;
+  server.headersTimeout = serverTimeoutMs + SERVER_TIMEOUT_BUFFER_MS;
+  server.requestTimeout = serverTimeoutMs + SERVER_TIMEOUT_BUFFER_MS;
   server.on('connection', (socket) => {
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
@@ -1428,7 +1369,8 @@ function createAgentOpenAiProxy({
         family: address.family || '',
         port: address.port,
         base_url: baseUrl,
-        timeout_ms: upstreamTimeoutMs,
+        normal_request_timeout_ms: normalizedNormalRequestTimeoutMs,
+        stream_idle_timeout_ms: normalizedStreamIdleTimeoutMs,
         loopback_attempts: attempts,
       });
 
@@ -1442,11 +1384,10 @@ function createAgentOpenAiProxy({
       };
     },
     getStatus() {
-      return textQueue.getStatus();
+      return aiService.getTextQueueStatus();
     },
     async close({ forceAfterMs = 2000 } = {}) {
       closing = true;
-      textQueue.clearQueued(new Error('Agent proxy 正在关闭'));
       await closeListeningServer({ forceAfterMs });
     },
   };

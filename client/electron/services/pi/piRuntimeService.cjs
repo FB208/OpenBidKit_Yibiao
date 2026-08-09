@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { getDeveloperLogsDir } = require('../../utils/paths.cjs');
 const { createAgentOpenAiProxy } = require('../agent/agentOpenAiProxy.cjs');
+const { isExpectedAgentInterruption, resolveAgentAbortReason } = require('../agent/agentInterruption.cjs');
 const { trackAgentRuntime } = require('../agent/agentRuntimeAnalytics.cjs');
 const { preparePiEnvironment } = require('./piEnvironment.cjs');
 const { restorePiErrorMessage } = require('./piRetryErrorNormalizer.cjs');
@@ -29,8 +30,10 @@ const {
   validatePiSessionSnapshot,
 } = require('./piSelfCheckService.cjs');
 
-const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
-const DEFAULT_PROVIDER_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_IDLE_TIMEOUT_MS = 8 * 60 * 1000;
+const DEFAULT_NORMAL_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_PI_HTTP_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_RETRIES = 3;
 const STATUS_TICK_MS = 1000;
 const SELF_CHECK_OUTPUT_FILE = 'agent-self-check-result.json';
@@ -354,12 +357,17 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       sdkVersion = codingAgent.VERSION || '';
       proxy = createAgentOpenAiProxy({
         app,
-        configStore,
+        aiService,
         runtime,
-        timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
+        normalRequestTimeoutMs: DEFAULT_NORMAL_REQUEST_TIMEOUT_MS,
+        streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
         diagnostics,
         onActivity: touchActivity,
-        getActivityContext: () => activeTask ? { task_token: activeTask.task_token, task_id: activeTask.task_id } : null,
+        getActivityContext: () => activeTask ? {
+          task_token: activeTask.task_token,
+          task_id: activeTask.task_id,
+          queue_scope_id: activeTask.queue_scope_id,
+        } : null,
         verifyLoopback: true,
         loopbackHosts: ['127.0.0.1', '::1', 'localhost'],
       });
@@ -403,7 +411,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     await fs.promises.writeFile(filePath, JSON.stringify(value, null, 2), 'utf-8');
   }
 
-  function subscribeSession(session, taskToken, diffEntries) {
+  function subscribeSession(session, taskToken, diffEntries, modelRetryStats) {
     let streamedText = '';
     return session.subscribe((event) => {
       if (event.type === 'message_start' && event.message?.role === 'assistant') {
@@ -485,6 +493,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         return;
       }
       if (event.type === 'auto_retry_start') {
+        modelRetryStats.count += 1;
         const errorMessage = restorePiErrorMessage(event.errorMessage || '模型服务暂时不可用');
         const delaySeconds = Math.max(0, Math.round(Number(event.delayMs || 0) / 1000));
         const retryMessage = `模型请求遇到临时错误，${delaySeconds} 秒后进行第 ${event.attempt}/${event.maxAttempts} 次重试：${compactText(errorMessage, 160)}`;
@@ -495,6 +504,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
             maximum: event.maxAttempts,
             delay_ms: event.delayMs,
             message: errorMessage,
+            model_retry_count: modelRetryStats.count,
           });
         }
         touchActivity({
@@ -504,7 +514,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           source: 'pi.auto-retry.start',
           visible: true,
           activity: true,
-          meta: { attempt: event.attempt, maximum: event.maxAttempts, delay_ms: event.delayMs, error: errorMessage },
+          meta: { attempt: event.attempt, maximum: event.maxAttempts, delay_ms: event.delayMs, error: errorMessage, model_retry_count: modelRetryStats.count },
         });
         return;
       }
@@ -520,6 +530,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
             success: Boolean(event.success),
             final_error: finalError,
             message: retryMessage,
+            model_retry_count: modelRetryStats.count,
           });
         }
         touchActivity({
@@ -529,7 +540,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           source: 'pi.auto-retry.end',
           visible: true,
           activity: true,
-          meta: { attempt: event.attempt, success: Boolean(event.success), error: finalError },
+          meta: { attempt: event.attempt, success: Boolean(event.success), error: finalError, model_retry_count: modelRetryStats.count },
         });
         return;
       }
@@ -547,7 +558,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       void session?.abort?.().catch(() => undefined);
     };
     const abort = () => {
-      if (!controller.signal.aborted) controller.abort(parentSignal?.reason || new Error('Agent 任务已取消'));
+      if (!controller.signal.aborted) controller.abort(resolveAgentAbortReason(parentSignal));
       abortSession();
     };
     if (parentSignal?.aborted) abort();
@@ -673,6 +684,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     const timeoutMs = normalizeTimeoutMs(payload.timeout_ms);
     const maxRetries = normalizeMaxRetries(payload.max_retries);
     const retryAttempts = [];
+    const modelRetryStats = { count: 0 };
     const taskToken = crypto.randomUUID();
     const startedAt = nowIso();
     const persistentConfig = payload.persistent_task && typeof payload.persistent_task === 'object'
@@ -690,10 +702,10 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           agent_connection: 'running',
           session_file: '',
         });
-      if (!persistentTask) throw new Error('目录 Agent 持久任务不存在，请重新生成目录');
-      if (persistentTask.state.run_id !== taskId) throw new Error('目录 Agent 持久任务与当前业务任务不匹配，请重新生成目录');
+      if (!persistentTask) throw new Error('持久 Agent 任务不存在，请重新执行当前业务任务');
+      if (persistentTask.state.run_id !== taskId) throw new Error('持久 Agent 任务与当前业务任务不匹配，请重新执行当前业务任务');
       if (persistentConfig.mode === 'resume' && !persistentTask.state.session_file) {
-        throw new Error('目录 Agent Session 不存在，请重新生成目录');
+        throw new Error('持久 Agent Session 不存在，请重新执行当前业务任务');
       }
     }
     const workspaceDir = persistentTask?.paths.workspaceDir || layout.workspaceDir;
@@ -715,6 +727,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       user_question_answers: [],
       workspace_dir: workspaceDir,
       persistent_task_key: persistentConfig?.task_key || '',
+      queue_scope_id: String(payload.queue_scope_id || payload.queueScopeId || '').trim(),
       stage_index: Number(payload.initial_stage_index || persistentTask?.state.stage_index || 0),
       workflow_stage: payload.initial_stage || persistentTask?.state.phase || 'starting',
     };
@@ -753,7 +766,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         environment,
         proxyInfo,
         config: configStore.load(),
-        timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
+        timeoutMs: DEFAULT_PI_HTTP_IDLE_TIMEOUT_MS,
         jsonValidationSchemas: payload.json_validation_schemas,
         requestUserQuestion: (request, signal) => waitForUserQuestion(request, signal, taskToken),
       });
@@ -767,7 +780,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           session_file: created.sessionFile ? path.basename(created.sessionFile) : persistentTask.state.session_file || '',
         });
       }
-      unsubscribe = subscribeSession(session, taskToken, diffEntries);
+      unsubscribe = subscribeSession(session, taskToken, diffEntries, modelRetryStats);
       let assistantText = '';
       let validationResult = null;
       let retryCount = 0;
@@ -826,6 +839,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
               session_id: session.sessionId,
               retry_count: retryAttempts.length,
               retry_attempts: [...retryAttempts],
+              model_retry_count: modelRetryStats.count,
             };
             if (typeof payload.validateOutput === 'function') {
               try {
@@ -850,7 +864,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
             retryCount = retryAttempts.length;
             break;
           } catch (error) {
-            if (activeController.signal.aborted || attemptIndex >= maxRetries) throw error;
+            if (activeController.signal.aborted) throw activeController.signal.reason || error;
+            if (attemptIndex >= maxRetries) throw error;
             const output = await readOutputAsync(workspaceDir, outputFile);
             retryAttempts.push(createRetrySummary(retryAttempts.length + 1, error, output.content));
             retryCount = retryAttempts.length;
@@ -934,7 +949,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
             touchActivity({
               task_token: taskToken,
               stage: compactionStage,
-              message: '当前上下文无需压缩，继续执行目录审核',
+              message: '当前上下文无需压缩，继续执行下一阶段',
               source: 'pi.workflow.compaction.skipped',
               visible: true,
               activity: true,
@@ -960,7 +975,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         touchActivity({
           task_token: taskToken,
           stage: continuationStage,
-          message: continuation.message || 'Agent 正在继续目录生成流程',
+          message: continuation.message || 'Agent 正在继续执行下一阶段',
           source: 'pi.workflow.continue',
           visible: Boolean(continuation.message),
           activity: true,
@@ -985,6 +1000,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         session_id: session.sessionId,
         retry_count: retryCount,
         retry_attempts: retryAttempts,
+        model_retry_count: modelRetryStats.count,
         validation_result: validationResult,
         diagnostics: {
           session: sessionSnapshot,
@@ -1013,10 +1029,14 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         output_content: output.content,
         assistant_text: assistantText,
         retry_count: retryCount,
+        model_retry_count: modelRetryStats.count,
       });
-      trackAgentRuntime(app, configStore, 'success', { retryCount });
+      trackAgentRuntime(app, configStore, 'success', { modelRetryCount: modelRetryStats.count });
       return result;
     } catch (error) {
+      if (activeController.signal.aborted && activeController.signal.reason instanceof Error) {
+        error = activeController.signal.reason;
+      }
       let output = { path: '', content: '' };
       try { output = await readOutputAsync(workspaceDir, outputFile); } catch {}
       if (persistentTask) {
@@ -1043,6 +1063,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         error.agentPartialOutput = output.content;
         error.agentPartialOutputChars = output.content.length;
         error.agentRetryAttempts = retryAttempts;
+        error.agentModelRetryCount = modelRetryStats.count;
         error.agentDiagnostics = {
           session: sessionSnapshot,
           session_messages: Array.isArray(session?.messages) ? [...session.messages] : [],
@@ -1063,8 +1084,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         output_content: output.content,
         message: error?.message || String(error),
       });
-      if (error?.code !== 'AGENT_DISCONNECTED') {
-        trackAgentRuntime(app, configStore, 'failed', { retryCount: retryAttempts.length });
+      if (!isExpectedAgentInterruption(error)) {
+        trackAgentRuntime(app, configStore, 'failed', { modelRetryCount: modelRetryStats.count });
       }
       throw error;
     } finally {
@@ -1154,6 +1175,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         snapshot_validation: snapshotValidation,
         retry_count: result.retry_count || 0,
         retry_attempts: result.retry_attempts || [],
+        model_retry_count: result.model_retry_count || 0,
         diagnostics: {
           ...(result.diagnostics || {}),
           events: (result.diagnostics?.events || []).filter((event) => String(event.at || '') >= taskCheckedAt),
@@ -1179,6 +1201,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         snapshot_validation: validatePiSessionSnapshot(error?.agentDiagnostics?.session || {}),
         retry_count: error?.agentRetryAttempts?.length || 0,
         retry_attempts: error?.agentRetryAttempts || [],
+        model_retry_count: error?.agentModelRetryCount || 0,
         diagnostics: {
           ...(error?.agentDiagnostics || {}),
           events: (error?.agentDiagnostics?.events || []).filter((event) => String(event.at || '') >= taskCheckedAt),
@@ -1446,7 +1469,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         repair = { attempted: false, success: true, actions: [], recheck: null };
       } else {
         const configuredProbe = modelCheck?.probes?.[modelCheck?.configured_mode];
-        const repairableCategory = !['text-model', 'text-model-stream', 'tool-calling', 'loopback-blocked'].includes(diagnosis.rules?.category);
+        const repairableCategory = !['text-model', 'tool-calling', 'loopback-blocked'].includes(diagnosis.rules?.category);
         const requestedActions = configuredProbe?.success && repairableCategory
           ? [...new Set([
             ...(diagnosis.rules?.recommended_action_ids || []),
