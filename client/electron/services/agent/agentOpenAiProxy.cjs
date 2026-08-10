@@ -1,9 +1,9 @@
 const http = require('node:http');
 const net = require('node:net');
-const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { getDeveloperLogsDir } = require('../../utils/paths.cjs');
+const { enqueueJsonLine } = require('../../utils/silentFileLog.cjs');
 const {
   markAiRequestError,
 } = require('../../utils/aiRetry.cjs');
@@ -84,16 +84,11 @@ function appendProxyDeveloperLog(app, config, runtimeMeta, payload) {
 
   try {
     const logDir = getDeveloperLogsDir(app, runtimeMeta.logModule);
-    fs.mkdirSync(logDir, { recursive: true });
     const fileName = `${new Date().toISOString().slice(0, 10)}.jsonl`;
-    fs.appendFileSync(
-      path.join(logDir, fileName),
-      `${JSON.stringify({
-        created_at: new Date().toISOString(),
-        ...payload,
-      })}\n`,
-      'utf-8',
-    );
+    enqueueJsonLine(path.join(logDir, fileName), {
+      created_at: new Date().toISOString(),
+      ...payload,
+    });
   } catch {
     // 开发日志不能影响主流程。
   }

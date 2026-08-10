@@ -1,7 +1,7 @@
-const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { getDeveloperLogsDir } = require('./paths.cjs');
+const { enqueueJsonLine } = require('./silentFileLog.cjs');
 
 const MAX_LOG_TITLE_LENGTH = 64;
 
@@ -68,10 +68,8 @@ function createDeveloperLogger({ app, config, moduleName, name, meta } = {}) {
   let filePath = '';
   try {
     const logsDir = getDeveloperLogsDir(app, scope);
-    fs.mkdirSync(logsDir, { recursive: true });
     filePath = path.join(logsDir, buildDeveloperLogFileName({ log_id: logId, log_title: logName }));
-  } catch (error) {
-    console.warn(`[${scope}] 创建开发者日志失败`, error);
+  } catch {
     return createNoopDeveloperLogger();
   }
 
@@ -84,9 +82,9 @@ function createDeveloperLogger({ app, config, moduleName, name, meta } = {}) {
         event: String(event || 'event'),
         ...payload,
       };
-      fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, 'utf-8');
-    } catch (error) {
-      console.warn(`[${scope}] 写入开发者日志失败`, compactErrorMessage(error));
+      enqueueJsonLine(filePath, entry);
+    } catch {
+      // 开发者日志不能影响主流程。
     }
   }
 
