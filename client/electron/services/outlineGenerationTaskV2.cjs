@@ -7,6 +7,7 @@ const SCORE_DIRECTORY_PLAN_FILE = 'score-directory-plan.json';
 const LEAF_ALLOCATION_FILE = 'leaf-allocation.json';
 const LEAF_ALLOCATION_CONTEXT_FILE = 'leaf-allocation-context.json';
 const OUTLINE_REVIEW_FILE = 'outline-review.json';
+const OUTLINE_REVIEW_CONTEXT_FILE = 'outline-review-context.json';
 const AI_CONTENT_MODE = 'ai-generate';
 const CONTENT_MODES = ['ai-generate', 'template-fill', 'point-to-point', 'other'];
 
@@ -15,7 +16,10 @@ function createDirectoryNodeSchema(level, root = false) {
     id: { type: 'string', pattern: `^[1-9]\\d*(?:\\.[1-9]\\d*){${level - 1}}$` },
     title: { type: 'string', minLength: 1 },
     description: { type: 'string', minLength: 1 },
-    ...(root ? { attr: { type: 'string', enum: ['通用', '商务', '资信', '技术', '其他'] } } : {}),
+    ...(root ? {
+      attr: { type: 'string', enum: ['通用', '商务', '资信', '技术', '其他'] },
+      branch_id: { type: 'string', minLength: 1 },
+    } : {}),
   };
   const baseRequired = ['id', 'title', 'description', ...(root ? ['attr'] : [])];
   const leafSchema = {
@@ -100,11 +104,12 @@ const SCORE_DIRECTORY_PLAN_SCHEMA = {
       minItems: 1,
       items: {
         type: 'object',
-        required: ['branch_id', 'root_id', 'score_item_level', 'mappings'],
+        required: ['branch_id', 'root_id', 'root_title', 'score_item_level', 'mappings'],
         additionalProperties: false,
         properties: {
           branch_id: { type: 'string', minLength: 1 },
           root_id: { type: 'string', pattern: '^[1-9]\\d*(?:\\.[1-9]\\d*)*$' },
+          root_title: { type: 'string', minLength: 1 },
           score_item_level: { type: 'integer', minimum: 1, maximum: 6 },
           mappings: {
             type: 'array',
@@ -188,10 +193,10 @@ const LEAF_ALLOCATION_SCHEMA = {
           minItems: 1,
           items: {
             type: 'object',
-            required: ['root_id', 'leaf_count'],
+            required: ['branch_id', 'leaf_count'],
             additionalProperties: false,
             properties: {
-              root_id: { type: 'string', pattern: '^[1-9]\\d*$' },
+              branch_id: { type: 'string', minLength: 1 },
               leaf_count: { type: 'integer', minimum: 2 },
             },
           },
@@ -212,10 +217,10 @@ const LEAF_ALLOCATION_SCHEMA = {
           minItems: 1,
           items: {
             type: 'object',
-            required: ['root_id'],
+            required: ['branch_id'],
             additionalProperties: false,
             properties: {
-              root_id: { type: 'string', pattern: '^[1-9]\\d*$' },
+              branch_id: { type: 'string', minLength: 1 },
             },
           },
         },
@@ -267,6 +272,7 @@ function renumberOutline(items, prefix = '') {
       title: String(item?.title || '').trim(),
       description: String(item?.description || '').trim(),
       ...(prefix ? {} : { attr: item?.attr }),
+      ...(!prefix && String(item?.branch_id || '').trim() ? { branch_id: String(item.branch_id).trim() } : {}),
       ...(!hasChildren ? {
         content_mode: item?.content_mode,
         ...(item?.content_mode === 'other' && String(item?.content_mode_note || '').trim()
@@ -286,6 +292,46 @@ function buildFinalOutline(candidate) {
   return { outline: renumberOutline(candidate?.outline || []) };
 }
 
+// 移除仅供 Agent 工作流关联分支的内部字段，再写入正式业务目录。
+function stripOutlineInternalFields(candidate) {
+  const strip = (items) => (items || []).map((item) => {
+    const { branch_id: _branchId, children, ...rest } = item || {};
+    return Array.isArray(children) && children.length
+      ? { ...rest, children: strip(children) }
+      : rest;
+  });
+  return { outline: strip(candidate?.outline || []) };
+}
+
+// 在子目录生成前，把规划分支标识附加到当前可对应的一级目录。
+function attachBranchIdsToRoots(items, scoreDirectoryPlan) {
+  const branchesByRootId = new Map();
+  (scoreDirectoryPlan?.branches || []).forEach((branch) => {
+    const rootId = String(branch.root_id || '').split('.')[0];
+    if (!branchesByRootId.has(rootId)) branchesByRootId.set(rootId, branch);
+  });
+  return (items || []).map((item) => {
+    const branch = branchesByRootId.get(item.id);
+    return branch?.root_title === item.title ? { ...item, branch_id: branch.branch_id } : item;
+  });
+}
+
+// 按最终目录中的稳定分支标识同步规划所记录的当前编号和标题。
+function synchronizeScoreDirectoryPlan(scoreDirectoryPlan, items) {
+  const rootsByBranchId = new Map(
+    (items || [])
+      .filter((item) => String(item?.branch_id || '').trim())
+      .map((item) => [String(item.branch_id).trim(), item]),
+  );
+  return {
+    ...scoreDirectoryPlan,
+    branches: (scoreDirectoryPlan?.branches || []).map((branch) => {
+      const root = rootsByBranchId.get(branch.branch_id);
+      return root ? { ...branch, root_id: root.id, root_title: root.title } : branch;
+    }),
+  };
+}
+
 function countAiLeaves(items) {
   return (items || []).reduce((total, item) => (
     Array.isArray(item?.children) && item.children.length
@@ -303,6 +349,118 @@ function countLeavesByMode(items, counts = Object.fromEntries(CONTENT_MODES.map(
     }
   });
   return counts;
+}
+
+// 汇总目录层级、父节点和内容模式等确定性结构信息。
+function collectOutlineStructure(items) {
+  const result = {
+    max_depth: 0,
+    parent_count: 0,
+    single_child_nodes: [],
+    invalid_leaf_content_modes: [],
+  };
+  const visit = (nodes, depth) => {
+    (nodes || []).forEach((item) => {
+      result.max_depth = Math.max(result.max_depth, depth);
+      const children = Array.isArray(item?.children) ? item.children : [];
+      if (children.length) {
+        result.parent_count += 1;
+        if (children.length < 2) {
+          result.single_child_nodes.push({ id: item.id, title: item.title, child_count: children.length });
+        }
+        visit(children, depth + 1);
+      } else if (!CONTENT_MODES.includes(item?.content_mode)) {
+        result.invalid_leaf_content_modes.push({ id: item.id, title: item.title, content_mode: item?.content_mode || '' });
+      }
+    });
+  };
+  visit(items, 1);
+  return result;
+}
+
+function collectNodesAtLevel(item, currentDepth, targetDepth, result = []) {
+  if (!item) return result;
+  if (currentDepth === targetDepth) {
+    result.push(item);
+    return result;
+  }
+  if (currentDepth < targetDepth) {
+    (item.children || []).forEach((child) => collectNodesAtLevel(child, currentDepth + 1, targetDepth, result));
+  }
+  return result;
+}
+
+// 对照用户确认的评分规划，机械检查目标标题是否位于指定分支和层级。
+function collectScoreMappingCoverage(items, scoreDirectoryPlan) {
+  const extraTitles = Array.isArray(scoreDirectoryPlan?.extra_titles) ? scoreDirectoryPlan.extra_titles : [];
+  const branches = (scoreDirectoryPlan?.branches || []).map((branch) => {
+    const root = (items || []).find((item) => item?.branch_id === branch.branch_id);
+    const expectedTitles = [
+      ...(branch.mappings || []).flatMap((mapping) => [mapping.target_title, ...(mapping.additional_titles || [])]),
+      ...extraTitles.filter((item) => item.branch_id === branch.branch_id).map((item) => item.title),
+    ].filter(Boolean);
+    const uniqueExpectedTitles = [...new Set(expectedTitles)];
+    const actualNodes = root ? collectNodesAtLevel(root, 1, branch.score_item_level) : [];
+    const actualTitles = actualNodes.map((item) => item.title);
+    const actualTitleSet = new Set(actualTitles);
+    const expectedTitleSet = new Set(uniqueExpectedTitles);
+    return {
+      branch_id: branch.branch_id,
+      planned_root_id: branch.root_id,
+      current_root_id: root?.id || '',
+      root_title: root?.title || branch.root_title,
+      score_item_level: branch.score_item_level,
+      root_found: Boolean(root),
+      expected_titles: uniqueExpectedTitles,
+      actual_titles: actualTitles,
+      missing_titles: uniqueExpectedTitles.filter((title) => !actualTitleSet.has(title)),
+      unexpected_titles: actualTitles.filter((title) => !expectedTitleSet.has(title)),
+      mappings: (branch.mappings || []).map((mapping) => {
+        const titles = [mapping.target_title, ...(mapping.additional_titles || [])].filter(Boolean);
+        return {
+          requirement_id: mapping.requirement_id,
+          expected_titles: titles,
+          matched_titles: titles.filter((title) => actualTitleSet.has(title)),
+        };
+      }),
+    };
+  });
+  return {
+    valid: branches.every((branch) => (
+      branch.root_found
+      && branch.missing_titles.length === 0
+      && branch.unexpected_titles.length === 0
+    )),
+    branches,
+  };
+}
+
+// 生成供最终 Agent 审核直接采用的宿主程序确定性检查结果。
+function buildOutlineReviewContext({ outline, scoreDirectoryPlan, targetLeafCount }) {
+  const items = outline?.outline || [];
+  const leafCounts = countLeavesByMode(items);
+  const structure = collectOutlineStructure(items);
+  const acceptableMin = targetLeafCount === null ? null : Math.max(1, targetLeafCount - 2);
+  const acceptableMax = targetLeafCount === null ? null : targetLeafCount + 2;
+  return {
+    leaf_count: {
+      target: targetLeafCount,
+      current_ai_generate: leafCounts[AI_CONTENT_MODE],
+      acceptable_min: acceptableMin,
+      acceptable_max: acceptableMax,
+      within_acceptable_range: targetLeafCount === null
+        ? true
+        : leafCounts[AI_CONTENT_MODE] >= acceptableMin && leafCounts[AI_CONTENT_MODE] <= acceptableMax,
+      by_content_mode: leafCounts,
+    },
+    structure: {
+      ...structure,
+      valid: structure.max_depth <= 6
+        && structure.single_child_nodes.length === 0
+        && structure.invalid_leaf_content_modes.length === 0,
+    },
+    score_mapping: collectScoreMappingCoverage(items, scoreDirectoryPlan),
+  };
 }
 
 function readJson(content, label) {
@@ -338,14 +496,15 @@ ${taskInstruction}
 请生成一级目录 JSON，并将结果写入 ${OUTLINE_OUTPUT_FILE}。
 
 字段要求：
-1. 此阶段 outline 中只包含一级目录，暂时不要生成 children。
-2. id 是从 1 开始且不重复的连续序号字符串。
+1. 顶层必须是对象，唯一字段 outline 是一级目录数组；此阶段暂时不要生成 children。
+2. 一级目录 id 是从 1 开始且不重复的连续序号字符串。
 3. title 必须是可直接用于投标文件目录的正式标题，不得包含“附件1”“附件一”“第一章”等编号或前缀。
 4. description 是目录说明。
 5. attr 必须从“通用”“商务”“资信”“技术”“其他”中选择。
 6. 每个一级目录当前都是叶子节点，必须根据它后续应采用的内容处理方式填写 content_mode：技术方案正文使用 ai-generate；需要从招标文件提取并套用表格或格式的商务、资信材料使用 template-fill；需要在全部正文完成并确定 Word 页码后回填的点对点应答表使用 point-to-point；无法归类的特殊内容使用 other，并在 content_mode_note 说明原因。
 7. ${OUTLINE_OUTPUT_FILE} 必须是纯 JSON，不包含 Markdown 代码块或解释文字。
-8. 程序已预置 Schema。写入后调用 json-validation，只传 {"file_path":"${OUTLINE_OUTPUT_FILE}"}，校验失败时修复并重新校验。`;
+8. 完整结构示例：{"outline":[{"id":"1","title":"技术方案","description":"技术方案目录说明","attr":"技术","content_mode":"ai-generate"},{"id":"2","title":"特殊资料","description":"特殊资料目录说明","attr":"其他","content_mode":"other","content_mode_note":"说明特殊处理原因"}]}。content_mode_note 只在 content_mode=other 且确有说明时填写。
+9. 程序已预置 Schema。写入后调用 json-validation，只传 {"file_path":"${OUTLINE_OUTPUT_FILE}"}；校验失败后必须先修改文件，再重新校验。`;
 }
 
 function createLeafAllocationPrompt() {
@@ -354,11 +513,11 @@ function createLeafAllocationPrompt() {
 要求：
 1. 阅读 ${OUTLINE_OUTPUT_FILE}、${TECHNICAL_SCORE_GROUPS_FILE}、${SCORE_DIRECTORY_PLAN_FILE} 和 ${LEAF_ALLOCATION_CONTEXT_FILE}。
 2. 综合各一级目录负责的评分项数量、评分细项数量、内容复杂度以及已读取的参考资料，合理分配 allocatable_ai_leaf_count。
-3. allocations 必须恰好覆盖 context 中的全部 technical_root_ids，每个 root_id 只出现一次，每个目录至少分配 2 个。
+3. allocations 必须恰好覆盖 context 中 technical_branches 的全部 branch_id，每个 branch_id 只出现一次，每个目录至少分配 2 个。branch_id 是不会因目录重新编号而变化的内部稳定标识。
 4. 所有 leaf_count 之和必须等于 allocatable_ai_leaf_count。
 5. 将结果写入 ${LEAF_ALLOCATION_FILE}，保留 context 中的 mode、target_ai_leaf_count、fixed_ai_leaf_count 和 allocatable_ai_leaf_count。
 6. 不要修改 ${OUTLINE_OUTPUT_FILE}、${TECHNICAL_SCORE_GROUPS_FILE} 或 ${SCORE_DIRECTORY_PLAN_FILE}。
-7. 输出格式为 {"mode":"allocated","target_ai_leaf_count":20,"fixed_ai_leaf_count":1,"allocatable_ai_leaf_count":19,"allocations":[{"root_id":"1","leaf_count":10},{"root_id":"2","leaf_count":9}]}。
+7. 输出格式为 {"mode":"allocated","target_ai_leaf_count":20,"fixed_ai_leaf_count":1,"allocatable_ai_leaf_count":19,"allocations":[{"branch_id":"B1","leaf_count":10},{"branch_id":"B2","leaf_count":9}]}。
 8. 完成后调用 json-validation 校验 ${LEAF_ALLOCATION_FILE}，只传 file_path。`;
 }
 
@@ -368,14 +527,14 @@ function createScorePlanningPrompt() {
 请完成技术评分项结构化和目录规划：
 1. 阅读 ${OUTLINE_OUTPUT_FILE}、技术评分信息.md，以及存在的原方案.md 和参考知识库目录。
 2. 只从技术评分信息.md 的“技术评分项”中提取适合在技术方案中一一响应、展开编写的评分大项。“技术评分要求”只能作为评分标准、扣分规则和编写约束，不得提取为评分项。
-3. 将评分大项写入 ${TECHNICAL_SCORE_GROUPS_FILE}，格式为 {"groups":[{"requirement_id":"R1","title":"评分大项","description":"关注内容","detail_points":["关键评分细项"]}]}。保持原顺序、专业术语和关键评分细项，requirement_id 使用连续的 R1、R2 格式。
+3. 将评分大项写入 ${TECHNICAL_SCORE_GROUPS_FILE}，完整结构为 {"groups":[{"requirement_id":"R1","title":"评分大项","description":"关注内容","detail_points":["关键评分细项"]}]}。根对象只能包含 groups；保持原顺序、专业术语和关键评分细项，requirement_id 使用连续的 R1、R2 格式。
 4. 判断技术方案位于哪些目录分支，以及每个分支内评分项对应节点应统一处于哪个层级。不同分支可以使用不同层级，不预设必须是二级目录。优先选择 attr=技术且 content_mode=ai-generate 的一级目录；template-fill、point-to-point 和 other 是特殊处理叶子，不得作为普通技术方案分支展开，除非先向用户说明并取得调整批准。
 5. 默认每个评分项对应一个独立同层级节点，节点标题与评分大项基本一一对应；detail_points 用于后续生成更下级目录。
 6. 只有以下偏离需要用户批准：合并或拆分评分项、遗漏评分项对应节点、增加评分项中不存在的同层级大项、改变分支评分项目标层级，以及新增、删除、合并或调整用户已确认的一级目录。普通标题规范化和评分项下级目录扩展不需要询问。
 7. 无论是否存在偏离，都必须调用一次 ask-user 让用户确认。没有偏离时，question 只说明你分析得出的技术方案所在目录和评分项所在层级，最多使用两句话且不要使用列表；存在偏离时，只补充实际需要用户批准的偏离及影响，存在多个实际确认事项时才使用简单 Markdown 分行列出。question、选项名称和选项说明不得复述、概括或改写本任务 Prompt 中的要求，只呈现你分析后确实需要用户确认的结论或不确定事项。第一项给出推荐方案；另提供一个名为“调整目录安排”等明确业务名称的选项并设置 custom=true，让用户说明希望调整的位置或层级，其他选项均设置 custom=false。
-8. 根据用户回答写入 ${SCORE_DIRECTORY_PLAN_FILE}。branches 中每个分支填写唯一 branch_id、所在 root_id、统一 score_item_level，并让每个 requirement_id 在 mappings 中恰好出现一次。默认一一对应；经用户批准合并时，多个 mapping 可以使用相同 target_title；经批准拆分时，在 mapping.additional_titles 中记录额外同级标题；两种情况都必须填写 adjustment_note。经批准增加的非评分项同层级大项写入 extra_titles。
+8. 根据用户回答写入 ${SCORE_DIRECTORY_PLAN_FILE}。完整字段层级示例：{"branches":[{"branch_id":"B1","root_id":"2","root_title":"技术方案","score_item_level":2,"mappings":[{"requirement_id":"R1","target_title":"评分大项目录标题","additional_titles":["经批准拆分出的同级标题"],"adjustment_note":"用户批准的调整说明"}]}],"extra_titles":[{"branch_id":"B1","title":"经批准增加的同层级标题","reason":"增加原因"}],"allow_root_changes":false}。branches 中每个分支填写唯一且后续保持不变的 branch_id，并用当前 ${OUTLINE_OUTPUT_FILE} 中尚未调整的一级目录编号和标题填写 root_id、root_title；统一填写 score_item_level，并让每个 requirement_id 在 mappings 中恰好出现一次。后续新增、重排或改名一级目录时，branch_id 仍用于稳定关联同一技术分支，不能随 root_id 改变；程序会在完整目录重新编号后同步 root_id 和 root_title。默认一一对应；经用户批准合并时，多个 mapping 可以使用相同 target_title；经用户批准拆分时才填写 mapping.additional_titles；合并或拆分时才填写 adjustment_note。extra_titles 必须位于根对象，经批准增加同层级大项时才写入条目，否则使用空数组。
 9. 默认锁定一级目录，allow_root_changes=false；只有用户明确批准一级目录调整时才设为 true。
-10. 分别调用 json-validation 校验 ${TECHNICAL_SCORE_GROUPS_FILE} 和 ${SCORE_DIRECTORY_PLAN_FILE}，调用时只传 file_path。
+10. 分别调用 json-validation 校验 ${TECHNICAL_SCORE_GROUPS_FILE} 和 ${SCORE_DIRECTORY_PLAN_FILE}，调用时只传 file_path；校验失败后必须先修改对应文件，再重新校验。
 11. 此阶段不要修改 ${OUTLINE_OUTPUT_FILE}。`;
 }
 
@@ -396,19 +555,20 @@ function createChildrenPrompt({ hasOriginalPlan, originalOnly, targetLeafCount, 
 要求：
 1. ${branchInstruction}
 2. 以 ${TECHNICAL_SCORE_GROUPS_FILE} 为技术评分项权威清单，以 ${SCORE_DIRECTORY_PLAN_FILE} 为评分项与目录位置的权威规划。
-3. 每个 branch 的 mappings 必须在该分支的 score_item_level 层级生成对应节点。默认每个评分项形成一个独立节点；多个 mapping 使用相同 target_title 表示用户已批准合并，additional_titles 表示用户已批准将该评分项拆成多个同级节点。
+3. 每个 branch 的 mappings 必须在该分支的 score_item_level 层级生成对应节点。branch_id 是技术分支稳定标识：对应的最终一级目录必须保留同名 branch_id，即使一级目录新增、删除、改名、重排或重新编号也不得改变；非技术分支一级目录不要填写 branch_id。默认每个评分项形成一个独立节点；多个 mapping 使用相同 target_title 表示用户已批准合并，additional_titles 表示用户已批准将该评分项拆成多个同级节点。
 4. mappings 中的 target_title 是评分项对应节点标题，必须基本保持评分大项的专业表述；detail_points 主要用于生成其下级目录。
 5. extra_titles 是用户已批准增加的同层级大项；除此之外不得自行增加技术评分项中不存在的同层级标题。
 6. “技术评分要求”只能作为评分标准、扣分口径、判定规则和目录说明约束，不能生成独立评分项节点。
 7. ${rootInstruction}
 8. 未纳入评分项目录规划的一级目录和分支保持原样，不得增加子目录。
 9. 如果存在参考知识库或原方案，只能用于完善评分项对应节点的下级结构，不得改变评分项映射或引入未经批准的同层级大项。
-10. ${leafInstruction}评分项完整对应和目录质量优先于数量目标。
+10. ${leafInstruction}${LEAF_ALLOCATION_FILE} 中 allocations 使用 branch_id 指向技术分支，不使用可能变化的 root_id。评分项完整对应和目录质量优先于数量目标。
 11. 每个最终叶子节点必须填写 content_mode：技术方案正文为 ai-generate；从招标文件提取后按模板填写为 template-fill；需要在 Word 页码确定后回填为 point-to-point；其他特殊内容为 other，并用 content_mode_note 说明。父节点不得包含 content_mode 或 content_mode_note。
 12. 任意非叶子节点的 children 至少包含两个节点，不要创建只有一个子节点的冗余层级。
-13. 目录层级可变，但最多六级；一级目录包含 attr，子目录不包含 attr。
+13. 目录层级可变，但最多六级；一级目录包含 attr，子目录不包含 attr。所有 id 必须使用层级点号编号：一级为 1、2，二级为 2.1、2.2，三级为 2.1.1、2.1.2，后续层级依此类推，并与实际父子位置一致。
 14. title 只写纯标题，不包含章节编号或 Markdown 标记。
-15. 直接覆盖写回 ${OUTLINE_OUTPUT_FILE}，完成后调用 json-validation 校验，只传 file_path。`;
+15. ${OUTLINE_OUTPUT_FILE} 的完整结构示例：{"outline":[{"id":"1","title":"技术应答表","description":"应答表说明","attr":"技术","content_mode":"point-to-point"},{"id":"2","title":"技术方案","description":"技术方案说明","attr":"技术","branch_id":"B1","children":[{"id":"2.1","title":"评分大项","description":"评分大项说明","children":[{"id":"2.1.1","title":"具体方案一","description":"具体方案说明","content_mode":"ai-generate"},{"id":"2.1.2","title":"具体方案二","description":"具体方案说明","content_mode":"ai-generate"}]},{"id":"2.2","title":"另一评分大项","description":"评分大项说明","content_mode":"ai-generate"}]}]}。branch_id 只写在评分规划对应的技术一级目录上；示例只说明字段位置和编号方式，实际层级与标题必须按任务材料生成。
+16. 直接覆盖写回 ${OUTLINE_OUTPUT_FILE}，完成后调用 json-validation 校验，只传 file_path；校验失败后必须先修改文件，再重新校验。`;
 }
 
 function createLeafAdjustmentPrompt(targetLeafCount, actualLeafCount) {
@@ -423,7 +583,8 @@ function createLeafAdjustmentPrompt(targetLeafCount, actualLeafCount) {
 1. 用户选择“接受当前结果”时，不要修改 ${OUTLINE_OUTPUT_FILE}。
 2. 用户选择“允许 Agent 自行调整”或“自定义需求”时，必须继续遵循 ${SCORE_DIRECTORY_PLAN_FILE}：不得删除、移动或改变评分项对应节点的目标层级，不得新增未经批准的同层级大项；优先调整评分项节点下面的更深层目录。
 3. 只通过合理调整 ai-generate 叶子的目录结构满足数量目标，不得为了凑数把 template-fill、point-to-point 或 other 改成 ai-generate，也不得改变非 AI 叶子的处理模式。
-4. 不要机械增加重复、空泛或近义目录。完成调整后覆盖写回 ${OUTLINE_OUTPUT_FILE}，并调用 json-validation 校验，只传 file_path。`;
+4. 调整后仍须保持完整根结构 {"outline":[一级目录节点]}，id 必须使用与父子位置一致的层级点号编号；技术一级目录必须保留 ${SCORE_DIRECTORY_PLAN_FILE} 中对应的 branch_id，不能因增删、移动或重新编号而改变；父节点只含 children，不含 content_mode，叶子节点只含 content_mode，不含 children。
+5. 不要机械增加重复、空泛或近义目录。完成调整后覆盖写回 ${OUTLINE_OUTPUT_FILE}，并调用 json-validation 校验，只传 file_path；校验失败后必须先修改文件，再重新校验。`;
 }
 
 function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRootChanges }) {
@@ -434,6 +595,8 @@ function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRoot
     ? `一级目录只能保持用户已批准的 ${SCORE_DIRECTORY_PLAN_FILE} 规划，不得提出规划之外的新调整。`
     : '一级目录已经由用户确认，数量、顺序、标题、描述和属性不得修改。';
   return `请对当前完整技术方案目录执行最终审核，并在用户确认后完成必要修复。
+
+开始审核时一次性并行读取 ${OUTLINE_REVIEW_CONTEXT_FILE}、${OUTLINE_OUTPUT_FILE}、技术评分信息.md 和 ${SCORE_DIRECTORY_PLAN_FILE}，不要探索工作区或读取其他文件。${OUTLINE_REVIEW_CONTEXT_FILE} 是宿主程序计算的确定性审核结果，叶子数量、内容模式数量、最大层级、父节点数量、单子节点和评分节点机械映射均直接采用其中结果，不要重新统计、编写脚本或执行额外结构检查；你只负责评分语义覆盖、近义重复和专业合理性审核。
 
 审核维度：${leafCountReview}
 - 评分覆盖：直接以技术评分信息.md 为原始依据，逐项检查其中适合技术方案响应的评分大项是否被目录准确覆盖；结构化评分项和目录规划用于核对已确认的映射，但不能掩盖原始评分信息中的遗漏。
@@ -450,13 +613,9 @@ function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRoot
 7. 根据 ask-user 返回的 answer 执行最终处理：用户要求全部或部分修改时更新 ${OUTLINE_OUTPUT_FILE} 并设置 status=user_feedback；用户明确拒绝修改或要求保留现状时不得修改目录并设置 status=user_refuse。将 answer 原文完整写入 user_feedback，修改完成后不得再次询问用户。
 8. ${rootRequirement}
 9. 修复必须继续遵守 ${SCORE_DIRECTORY_PLAN_FILE} 中用户确认的评分项映射、目标层级和一级目录调整边界。补回遗漏映射、合并重复目录或优化层级时，不得引入未经用户批准的评分大项规划变更。
-10. 每个最终叶子节点必须保留合法 content_mode，父节点不得包含 content_mode 或 content_mode_note；任意父节点至少有两个 children，目录最多六级。
-11. 最终将完整问题清单和处理结果写入 ${OUTLINE_REVIEW_FILE}，summary 简要说明最终结论。
-12. 分别调用 json-validation 校验 ${OUTLINE_OUTPUT_FILE} 和 ${OUTLINE_REVIEW_FILE}，只传 file_path；校验失败必须修复并重新校验。`;
-}
-
-function createOutlineReviewCompactionInstructions() {
-  return `保留继续完成技术方案目录审核所需的全部关键上下文：用户确认的一级目录、技术评分项与目录映射、叶子数量处理过程、原方案和知识库使用边界、已经生成的 outline.json，以及所有 ask-user 用户答复。下一步需要读取工作区文件执行最终目录审核。`;
+10. 技术一级目录必须保留 ${SCORE_DIRECTORY_PLAN_FILE} 中对应的 branch_id；调整一级目录顺序或编号时不得修改 branch_id。结构事实以 ${OUTLINE_REVIEW_CONTEXT_FILE} 为准；如果其中确定性检查不通过，直接依据列出的节点和缺失项形成问题并修复，不要重新统计。任何语义修复仍必须保证叶子保留合法 content_mode、父节点不包含 content_mode 或 content_mode_note、父节点至少有两个 children 且目录最多六级。
+11. 最终将完整问题清单和处理结果写入 ${OUTLINE_REVIEW_FILE}。无问题时完整格式为 {"status":"passed","issues":[],"user_feedback":"","summary":"审核通过原因"}；有问题时完整格式为 {"status":"user_feedback","issues":[{"category":"score-coverage","problem":"问题说明","repair":"修复方案","confirmation_required":true}],"user_feedback":"用户回答原文","summary":"处理结果"}。category 只能是 leaf-count、score-coverage、duplicate-directory、professional-structure；status 按本流程选择 passed、simple_fix、user_feedback 或 user_refuse。
+12. 分别调用 json-validation 校验 ${OUTLINE_OUTPUT_FILE} 和 ${OUTLINE_REVIEW_FILE}，只传 file_path；校验失败后必须先修改对应文件，再重新校验。`;
 }
 
 // 运行 V2 目录业务任务；完整 Agent 执行之间通过程序确认衔接并复用同一持久 Session。
@@ -503,7 +662,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   let technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
   updateTask(task, technicalPlan);
   let lockedRoots = [];
-  let technicalRootIds = [];
+  let technicalBranches = [];
   let scoreDirectoryPlan = null;
   let allowRootChanges = false;
   let fixedAiLeafCount = 0;
@@ -612,7 +771,12 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   }
 
   function continueWithOutlineReview() {
-    publish('子目录生成完成，正在压缩上下文并准备审核', 88, {
+    const reviewContext = buildOutlineReviewContext({
+      outline: finalOutline,
+      scoreDirectoryPlan,
+      targetLeafCount,
+    });
+    publish('子目录生成完成，正在准备最终审核', 88, {
       outline: {
         phase: 'reviewing',
         current_leaf_count: actualLeafCount,
@@ -624,12 +788,11 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
       stage: 'outline_review',
       message: 'Agent 正在审核并修复目录',
       prompt: createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRootChanges }),
-      files: [{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) }],
-      compact_before_prompt: true,
-      compaction_stage: 'outline_review_compaction',
-      compaction_message: 'Agent 正在压缩目录生成上下文',
-      compaction_complete_message: '目录生成上下文压缩完成',
-      compaction_instructions: createOutlineReviewCompactionInstructions(),
+      files: [
+        { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) },
+        { path: SCORE_DIRECTORY_PLAN_FILE, content: JSON.stringify(scoreDirectoryPlan, null, 2) },
+        { path: OUTLINE_REVIEW_CONTEXT_FILE, content: JSON.stringify(reviewContext, null, 2) },
+      ],
     };
   }
 
@@ -704,8 +867,12 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
         const normalizedReviewedOutline = buildFinalOutline(reviewedOutline);
         outlineReview = readJson(await meta.readFile(OUTLINE_REVIEW_FILE), OUTLINE_REVIEW_FILE);
         finalOutline = normalizedReviewedOutline;
+        scoreDirectoryPlan = synchronizeScoreDirectoryPlan(scoreDirectoryPlan, finalOutline.outline);
         actualLeafCount = countAiLeaves(finalOutline.outline);
-        await meta.writeFiles([{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) }]);
+        await meta.writeFiles([
+          { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) },
+          { path: SCORE_DIRECTORY_PLAN_FILE, content: JSON.stringify(scoreDirectoryPlan, null, 2) },
+        ]);
         if (targetLeafCount !== null) {
           if (actualLeafCount === targetLeafCount) {
             leafWarning = '';
@@ -733,13 +900,17 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
 
       if (meta.stage === 1) {
         scoreDirectoryPlan = readJson(await meta.readFile(SCORE_DIRECTORY_PLAN_FILE), SCORE_DIRECTORY_PLAN_FILE);
-        technicalRootIds = [...new Set(scoreDirectoryPlan.branches.map((branch) => branch.root_id.split('.')[0]))];
+        lockedRoots = attachBranchIdsToRoots(lockedRoots, scoreDirectoryPlan);
+        technicalBranches = scoreDirectoryPlan.branches.map((branch) => ({
+          branch_id: branch.branch_id,
+          root_id: branch.root_id.split('.')[0],
+          root_title: branch.root_title,
+        }));
         allowRootChanges = scoreDirectoryPlan.allow_root_changes === true;
-        const technicalRootIdSet = new Set(technicalRootIds);
         fixedAiLeafCount = lockedRoots
-          .filter((root) => !technicalRootIdSet.has(root.id) && root.content_mode === AI_CONTENT_MODE).length;
+          .filter((root) => !root.branch_id && root.content_mode === AI_CONTENT_MODE).length;
         allocatedAiLeafCount = targetLeafCount === null ? null : targetLeafCount - fixedAiLeafCount;
-        if (allocatedAiLeafCount !== null && technicalRootIds.length > 1) {
+        if (allocatedAiLeafCount !== null && technicalBranches.length > 1) {
           publish('技术方案目录已确认，Agent 正在分配 AI 生成小节', 50);
           return {
             stage: 'leaf_allocation',
@@ -752,14 +923,14 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
                 target_ai_leaf_count: targetLeafCount,
                 fixed_ai_leaf_count: fixedAiLeafCount,
                 allocatable_ai_leaf_count: allocatedAiLeafCount,
-                technical_root_ids: technicalRootIds,
+                technical_branches: technicalBranches,
               }, null, 2),
             }],
           };
         }
         const allocations = allocatedAiLeafCount === null
-          ? technicalRootIds.map((rootId) => ({ root_id: rootId }))
-          : [{ root_id: technicalRootIds[0], leaf_count: allocatedAiLeafCount }];
+          ? technicalBranches.map((branch) => ({ branch_id: branch.branch_id }))
+          : [{ branch_id: technicalBranches[0].branch_id, leaf_count: allocatedAiLeafCount }];
         return continueWithChildrenGeneration(allocations);
       }
 
@@ -770,6 +941,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
 
       const candidateOutline = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
       finalOutline = buildFinalOutline(candidateOutline);
+      scoreDirectoryPlan = synchronizeScoreDirectoryPlan(scoreDirectoryPlan, finalOutline.outline);
       actualLeafCount = countAiLeaves(finalOutline.outline);
       const latestLeafAnswer = meta.workflow_stage === 'leaf_adjustment'
         ? [...meta.user_question_answers].reverse().find((item) => item.workflow_stage === 'leaf_adjustment')
@@ -796,7 +968,10 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
         stage: 'leaf_adjustment',
         message: 'Agent 正在询问如何处理小节数量差异',
         prompt: createLeafAdjustmentPrompt(targetLeafCount, actualLeafCount),
-        files: [{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) }],
+        files: [
+          { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) },
+          { path: SCORE_DIRECTORY_PLAN_FILE, content: JSON.stringify(scoreDirectoryPlan, null, 2) },
+        ],
       };
     },
   });
@@ -804,8 +979,10 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   if (!finalOutline) {
     const candidateOutline = readJson(agentResult.output_content, OUTLINE_OUTPUT_FILE);
     finalOutline = buildFinalOutline(candidateOutline);
+    scoreDirectoryPlan = synchronizeScoreDirectoryPlan(scoreDirectoryPlan, finalOutline.outline);
     actualLeafCount = countAiLeaves(finalOutline.outline);
   }
+  const persistedFinalOutline = stripOutlineInternalFields(finalOutline);
   const finalLogs = [...logs, '目录生成与审核完成', ...(leafWarning ? [leafWarning] : [])];
   const finalTask = updateTask({
     status: 'success',
@@ -825,7 +1002,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     },
   });
   technicalPlan = workspaceStore.updateTechnicalPlan({
-    outlineData: { ...finalOutline, project_overview: storedPlan.projectOverview || '' },
+    outlineData: { ...persistedFinalOutline, project_overview: storedPlan.projectOverview || '' },
     outlineWordControlSnapshot: wordControlOptions,
     outlineGenerationTask: finalTask,
     contentGenerationTask: undefined,

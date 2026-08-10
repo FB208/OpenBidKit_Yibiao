@@ -34,8 +34,29 @@ const BUNDLED_COMMANDS = ['rg', 'fd', 'jq'];
 
 const INSTRUCTIONS_PATH = path.join(__dirname, '..', '..', 'resources', 'agent-workspace.md');
 
-function getAgentWorkspaceInstructions() {
-  return fs.readFileSync(INSTRUCTIONS_PATH, 'utf-8');
+function getPlatformAgentInstructions(platform = process.platform) {
+  if (platform === 'win32') {
+    return `## 当前运行环境
+
+- 当前操作系统为 Windows，bash 工具实际使用 Windows PowerShell 5.1。
+- 不要使用 PowerShell 5.1 不支持的 && 或 || 连接命令；优先一次执行一条命令，确需顺序执行时使用分号。
+- 路径可能包含中文和空格，命令参数中的路径必须使用双引号；文本文件统一按 UTF-8 处理。`;
+  }
+  if (platform === 'darwin') {
+    return `## 当前运行环境
+
+- 当前操作系统为 macOS，bash 工具使用 /bin/sh。
+- 使用 POSIX Shell 语法，并为包含空格或中文的路径加引号；文本文件统一按 UTF-8 处理。`;
+  }
+  return `## 当前运行环境
+
+- 当前操作系统为类 Unix 环境，bash 工具使用 /bin/sh。
+- 使用 POSIX Shell 语法，并为包含空格或中文的路径加引号；文本文件统一按 UTF-8 处理。`;
+}
+
+function getAgentWorkspaceInstructions(platform = process.platform) {
+  const commonInstructions = fs.readFileSync(INSTRUCTIONS_PATH, 'utf-8').trim();
+  return `${commonInstructions}\n\n${getPlatformAgentInstructions(platform)}\n`;
 }
 
 function getRuntimeToolsBinDir(runtimeRoot) {

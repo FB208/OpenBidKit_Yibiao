@@ -60,7 +60,7 @@ function preparePiEnvironment(app) {
     shellPath,
     shellCommandPrefix,
     toolEnvironment,
-    instructions: getAgentWorkspaceInstructions(),
+    instructions: getAgentWorkspaceInstructions(process.platform),
   };
 }
 
