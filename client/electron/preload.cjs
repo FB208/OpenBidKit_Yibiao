@@ -71,6 +71,8 @@ const bridge = {
     restart: (reason) => ipcRenderer.invoke('agent:restart', reason),
     getPendingQuestion: () => ipcRenderer.invoke('agent:get-pending-question'),
     answerQuestion: (payload) => ipcRenderer.invoke('agent:answer-question', payload),
+    getAutoAnswerState: () => ipcRenderer.invoke('agent:get-auto-answer-state'),
+    setAutoAnswerEnabled: (enabled) => ipcRenderer.invoke('agent:set-auto-answer-enabled', enabled),
     onStatus: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('agent:status', listener);
@@ -82,6 +84,12 @@ const bridge = {
       ipcRenderer.on('agent:question-state', listener);
       ipcRenderer.send('agent:subscribe');
       return () => ipcRenderer.removeListener('agent:question-state', listener);
+    },
+    onAutoAnswerChanged: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('agent:auto-answer-state', listener);
+      ipcRenderer.send('agent:subscribe');
+      return () => ipcRenderer.removeListener('agent:auto-answer-state', listener);
     },
   },
   developerTokenStats: {

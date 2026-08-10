@@ -15,6 +15,7 @@ const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
 const DEFAULT_COMPONENT_CONCURRENCY_LIMIT = 5;
 const MIN_COMPONENT_CONCURRENCY_LIMIT = 1;
 const MAX_COMPONENT_CONCURRENCY_LIMIT = 20;
+const DEFAULT_AGENT_AUTO_ANSWER_ENABLED = false;
 const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#eef5ff', '#f3f7ff', '#f8fbff', '#fbfdff', '#ffffff', '#ffffff'];
 const openAICompatibleImageSizes = ['auto', '1024x1024', '1536x1024', '1024x1536', '2048x2048', '2048x1152', '3840x2160', '2160x3840'];
 const googleImageSizes = ['512', '1K', '2K', '4K'];
@@ -270,6 +271,7 @@ const defaultConfig = {
   gpu_hardware_acceleration_configured: true,
   export_format: defaultExportFormat,
   agent_mode_scenarios: defaultAgentModeScenarios,
+  agent_auto_answer_enabled: DEFAULT_AGENT_AUTO_ANSWER_ENABLED,
   developer_mode: false,
   developer_token_stats_auto_open: false,
   developer_agent_monitor_auto_open: false,
@@ -724,6 +726,9 @@ function normalizeConfig(config) {
     gpu_hardware_acceleration_configured: gpuHardwareAccelerationConfigured === false ? true : gpuHardwareAccelerationConfigured,
     export_format: normalizeExportFormat(source.export_format),
     agent_mode_scenarios: normalizeAgentModeScenarios(source.agent_mode_scenarios),
+    agent_auto_answer_enabled: source.agent_auto_answer_enabled === undefined
+      ? defaultConfig.agent_auto_answer_enabled
+      : Boolean(source.agent_auto_answer_enabled),
     developer_mode: source.developer_mode === undefined ? defaultConfig.developer_mode : Boolean(source.developer_mode),
     developer_token_stats_auto_open: source.developer_token_stats_auto_open === undefined ? defaultConfig.developer_token_stats_auto_open : Boolean(source.developer_token_stats_auto_open),
     developer_agent_monitor_auto_open: source.developer_agent_monitor_auto_open === undefined ? defaultConfig.developer_agent_monitor_auto_open : Boolean(source.developer_agent_monitor_auto_open),

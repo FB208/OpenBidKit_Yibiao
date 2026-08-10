@@ -437,6 +437,34 @@
   gap: 16px;
 }
 
+.agent-question-auto-answer {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-question-auto-answer label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  color: var(--yb-text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.agent-question-auto-answer .yb-switch-control {
+  justify-self: auto;
+}
+
+.agent-question-auto-answer small {
+  color: var(--yb-primary-deep);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 @media (max-width: 640px) {
   .agent-question-card {
     width: calc(100vw - 24px);
@@ -453,6 +481,10 @@
   .agent-question-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .agent-question-auto-answer {
+    width: 100%;
   }
 
 }

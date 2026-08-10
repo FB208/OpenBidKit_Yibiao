@@ -15,6 +15,7 @@ const {
 
 const PI_RUNTIME_ID = 'pi';
 const PI_RUNTIME_NAME = 'Pi Agent';
+const AUTO_ANSWER_DELAY_MS = 8_000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -144,6 +145,7 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
   const listeners = new Set();
   const monitorListeners = new Set();
   const questionListeners = new Set();
+  const autoAnswerListeners = new Set();
   const queue = [];
   let runtime = null;
   let runtimeUnsubscribe = null;
@@ -228,6 +230,17 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     return pendingQuestion?.question || null;
   }
 
+  function getAutoAnswerState() {
+    return { enabled: Boolean(configStore.load().agent_auto_answer_enabled) };
+  }
+
+  function emitAutoAnswerState() {
+    const state = getAutoAnswerState();
+    autoAnswerListeners.forEach((listener) => {
+      try { listener(state); } catch {}
+    });
+  }
+
   function emitQuestionState() {
     const question = getPendingQuestion();
     questionListeners.forEach((listener) => {
@@ -237,8 +250,34 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
 
   function clearPendingQuestion(entry) {
     if (!entry || pendingQuestion !== entry) return;
+    if (entry.autoAnswerTimer) clearTimeout(entry.autoAnswerTimer);
+    entry.autoAnswerTimer = null;
     entry.signal?.removeEventListener?.('abort', entry.onAbort);
     pendingQuestion = null;
+    emitQuestionState();
+  }
+
+  // 根据常驻设置为当前问题创建或取消自动回答计时。
+  function refreshPendingQuestionAutoAnswer() {
+    const entry = pendingQuestion;
+    if (!entry) return;
+    if (entry.autoAnswerTimer) clearTimeout(entry.autoAnswerTimer);
+    entry.autoAnswerTimer = null;
+    delete entry.question.auto_answer_at;
+
+    if (getAutoAnswerState().enabled) {
+      const recommendedOption = entry.question.options.find((option) => option.recommended && !option.custom);
+      if (recommendedOption) {
+        entry.question.auto_answer_at = new Date(Date.now() + AUTO_ANSWER_DELAY_MS).toISOString();
+        entry.autoAnswerTimer = setTimeout(() => {
+          if (pendingQuestion !== entry) return;
+          answerQuestion({
+            question_id: entry.question.question_id,
+            option_id: recommendedOption.id,
+          });
+        }, AUTO_ANSWER_DELAY_MS);
+      }
+    }
     emitQuestionState();
   }
 
@@ -280,6 +319,7 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
         reject,
         signal,
         onAbort: null,
+        autoAnswerTimer: null,
       };
       entry.onAbort = () => {
         if (pendingQuestion !== entry) return;
@@ -288,7 +328,7 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
       };
       pendingQuestion = entry;
       signal?.addEventListener?.('abort', entry.onAbort, { once: true });
-      emitQuestionState();
+      refreshPendingQuestionAutoAnswer();
     });
   }
 
@@ -543,6 +583,19 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
 
   function handleConfigChanged(nextConfig = {}, previousConfig = {}) {
     runtime?.handleConfigChanged?.(nextConfig, previousConfig);
+    if (Boolean(nextConfig.agent_auto_answer_enabled) !== Boolean(previousConfig.agent_auto_answer_enabled)) {
+      refreshPendingQuestionAutoAnswer();
+      emitAutoAnswerState();
+    }
+  }
+
+  // 即时保存自动回答授权，并同步正在显示的提问。
+  function setAutoAnswerEnabled(enabled) {
+    const previousConfig = configStore.load();
+    const result = configStore.save({ agent_auto_answer_enabled: Boolean(enabled) });
+    const nextConfig = configStore.load();
+    handleConfigChanged(nextConfig, previousConfig);
+    return { ...result, enabled: Boolean(nextConfig.agent_auto_answer_enabled) };
   }
 
   function onStatus(listener) {
@@ -565,6 +618,12 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     if (typeof listener !== 'function') return () => {};
     questionListeners.add(listener);
     return () => questionListeners.delete(listener);
+  }
+
+  function onAutoAnswerChanged(listener) {
+    if (typeof listener !== 'function') return () => {};
+    autoAnswerListeners.add(listener);
+    return () => autoAnswerListeners.delete(listener);
   }
 
   function getMonitorSnapshot() {
@@ -594,6 +653,7 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     closing = true;
     rejectPendingQuestion(createAgentDisconnectedError());
     questionListeners.clear();
+    autoAnswerListeners.clear();
     monitorListeners.clear();
     clearPendingMonitorEvents();
     agentErrorReporter.close();
@@ -628,6 +688,9 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     getPendingQuestion,
     answerQuestion,
     onQuestion,
+    getAutoAnswerState,
+    setAutoAnswerEnabled,
+    onAutoAnswerChanged,
     exportSelfCheckReport,
     close,
   };

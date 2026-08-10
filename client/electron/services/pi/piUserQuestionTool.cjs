@@ -9,7 +9,7 @@ function createPiUserQuestionTool({ Type, requestUserQuestion }) {
     promptSnippet: '在关键事项无法从材料中确定时，使用普通用户能理解的自然中文提问并等待回答。',
     promptGuidelines: [
       '已有材料足以判断时自主执行，不要调用 ask-user。',
-      '只有不确定事项会实质影响结果时才调用 ask-user；每次只问一个问题，提供 2 至 5 个互斥选项，并将推荐选项放在第一项。每个选项都必须填写 custom。',
+      '只有不确定事项会实质影响结果时才调用 ask-user；每次只问一个问题，提供 2 至 5 个互斥选项，并将无需用户补充输入的推荐选项放在第一项。每个选项都必须填写 custom。',
       '问题、选项名称和选项说明必须面向不懂软件开发的普通用户，只说明业务对象、推荐结果、实际影响和可选操作，语言简单、自然且容易决策。',
       '禁止向用户展示变量名、字段名、文件名、JSON 属性、英文状态、内部编号或其他软件实现术语；必须把内部信息转换为具体名称、数量、层级和调整效果等业务表述。',
       '问题、选项名称和选项说明不得复述、概括或改写当前任务 Prompt 中的要求，只呈现分析后确实需要用户确认的结论或不确定事项。',
@@ -37,7 +37,7 @@ function createPiUserQuestionTool({ Type, requestUserQuestion }) {
       }, { additionalProperties: false }), {
         minItems: 2,
         maxItems: 5,
-        description: '候选选项，第一项必须是推荐选项；自定义输入选项计入总数。',
+        description: '候选选项，第一项必须是 custom=false 的推荐选项；自定义输入选项计入总数。',
       }),
     }, { additionalProperties: false }),
     execute: async (toolCallId, params, signal) => {
@@ -47,6 +47,9 @@ function createPiUserQuestionTool({ Type, requestUserQuestion }) {
       const customOptionCount = params.options.filter((option) => option.custom === true).length;
       if (customOptionCount > 1) {
         throw new Error('自定义输入选项最多只能有一个，请调整选项后重新提问');
+      }
+      if (params.options[0]?.custom === true) {
+        throw new Error('推荐选项不能要求用户补充输入，请调整选项后重新提问');
       }
       const answer = await requestUserQuestion({
         tool_call_id: toolCallId,

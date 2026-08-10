@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { DetailHelpLink, FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useToast } from '../../../shared/ui';
+import { DetailHelpLink, FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useAgentAutoAnswer, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
@@ -587,6 +587,11 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [agentSelfCheckResult, setAgentSelfCheckResult] = useState<AgentSelfCheckResult | null>(null);
   const [exportingAgentSelfCheckReport, setExportingAgentSelfCheckReport] = useState(false);
   const { showToast } = useToast();
+  const {
+    enabled: agentAutoAnswerEnabled,
+    saving: agentAutoAnswerSaving,
+    setEnabled: setAgentAutoAnswerEnabled,
+  } = useAgentAutoAnswer();
 
   useEffect(() => {
     void loadTextConfig();
@@ -2212,6 +2217,27 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               </div>
               <span className="settings-readonly-value">Pi Agent</span>
             </div>
+          </div>
+
+          <div className="settings-group-title">提问处理</div>
+          <div className="settings-list">
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>自动回答 Agent 的提问</strong>
+                <span>开启后，提问弹窗会倒计时 8 秒；期间未手动提交时，自动执行 Agent 的推荐方案。</span>
+              </div>
+              <span className="yb-switch-control">
+                <input
+                  type="checkbox"
+                  checked={agentAutoAnswerEnabled}
+                  disabled={agentAutoAnswerSaving}
+                  onChange={(event) => void setAgentAutoAnswerEnabled(event.target.checked)}
+                />
+                <span className="yb-switch-track" aria-hidden="true">
+                  <span className="yb-switch-thumb" />
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="settings-group-title">在以下场景启用智能体模式</div>

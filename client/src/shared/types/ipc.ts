@@ -199,6 +199,11 @@ export interface AgentQuestion {
   question: string;
   options: AgentQuestionOption[];
   asked_at: string;
+  auto_answer_at?: string;
+}
+
+export interface AgentAutoAnswerState {
+  enabled: boolean;
 }
 
 export interface AgentQuestionAnswerPayload {
@@ -502,8 +507,11 @@ export interface YibiaoBridge {
     restart: (reason?: string) => Promise<AgentRuntimeStatus>;
     getPendingQuestion: () => Promise<AgentQuestion | null>;
     answerQuestion: (payload: AgentQuestionAnswerPayload) => Promise<AgentQuestionAnswerResult>;
+    getAutoAnswerState: () => Promise<AgentAutoAnswerState>;
+    setAutoAnswerEnabled: (enabled: boolean) => Promise<ConfigSaveResult & AgentAutoAnswerState>;
     onStatus: (callback: (status: AgentRuntimeStatus) => void) => () => void;
     onQuestion: (callback: (question: AgentQuestion | null) => void) => () => void;
+    onAutoAnswerChanged: (callback: (state: AgentAutoAnswerState) => void) => () => void;
   };
   developerTokenStats: {
     openWindow: () => Promise<{ success: boolean }>;
