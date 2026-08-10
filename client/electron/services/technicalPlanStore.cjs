@@ -11,6 +11,7 @@ const {
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 const { clearMermaidCache } = require('../utils/mermaidCache.cjs');
 const { detectBidSections } = require('../utils/bidSectionDetector.cjs');
+const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
 
 const tenderMarkdownRelativePath = path.join('technical-plan', 'tender.md').replace(/\\/g, '/');
 const tenderOriginalMarkdownRelativePath = path.join('technical-plan', 'tender-original.md').replace(/\\/g, '/');
@@ -308,6 +309,8 @@ function flattenOutlineItems(items, parentNodeId = null, level = 1, rows = []) {
       level,
       title: String(item?.title || '未命名章节').trim() || '未命名章节',
       description: String(item?.description || '').trim(),
+      content_mode: item?.children?.length ? null : String(item?.content_mode || '').trim() || null,
+      content_mode_note: item?.children?.length || item?.content_mode !== 'other' ? null : String(item?.content_mode_note || '').trim() || null,
       source_requirement_id: item?.source_requirement_id ? String(item.source_requirement_id) : null,
       source_requirement_title: item?.source_requirement_title ? String(item.source_requirement_title) : null,
       knowledge_item_ids_json: Array.isArray(item?.knowledge_item_ids) && item.knowledge_item_ids.length ? JSON.stringify(item.knowledge_item_ids) : null,
@@ -374,7 +377,10 @@ function mapOutlineItems(items, mapper) {
   });
 }
 
-function createTechnicalPlanStore({ app, db, fileService }) {
+function createTechnicalPlanStore({ app, db, fileService, agentService }) {
+  function deleteOutlineAgentTask() {
+    agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY);
+  }
   const tenderMarkdownPath = getTechnicalPlanTenderMarkdownPath(app);
   const tenderOriginalMarkdownPath = path.join(path.dirname(tenderMarkdownPath), 'tender-original.md');
   const tenderSourceFilesDir = path.join(path.dirname(tenderMarkdownPath), 'tender-files');
@@ -907,6 +913,8 @@ function createTechnicalPlanStore({ app, db, fileService }) {
         id: row.node_id,
         title: row.title,
         description: row.description || '',
+        content_mode: row.content_mode || undefined,
+        content_mode_note: row.content_mode_note || undefined,
         source_requirement_id: row.source_requirement_id || undefined,
         source_requirement_title: row.source_requirement_title || undefined,
         knowledge_item_ids: safeJsonParse(row.knowledge_item_ids_json, undefined),
@@ -955,10 +963,10 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     const nextIds = new Set(rows.map((row) => row.node_id));
     const upsert = db.prepare(`
       INSERT INTO technical_plan_outline_nodes (
-        node_id, parent_node_id, sort_order, level, title, description, source_requirement_id,
+        node_id, parent_node_id, sort_order, level, title, description, content_mode, content_mode_note, source_requirement_id,
         source_requirement_title, knowledge_item_ids_json, content, created_at, updated_at
       ) VALUES (
-        @node_id, @parent_node_id, @sort_order, @level, @title, @description, @source_requirement_id,
+        @node_id, @parent_node_id, @sort_order, @level, @title, @description, @content_mode, @content_mode_note, @source_requirement_id,
         @source_requirement_title, @knowledge_item_ids_json, @content, @created_at, @updated_at
       ) ON CONFLICT(node_id) DO UPDATE SET
         parent_node_id = excluded.parent_node_id,
@@ -966,6 +974,8 @@ function createTechnicalPlanStore({ app, db, fileService }) {
         level = excluded.level,
         title = excluded.title,
         description = excluded.description,
+        content_mode = excluded.content_mode,
+        content_mode_note = excluded.content_mode_note,
         source_requirement_id = excluded.source_requirement_id,
         source_requirement_title = excluded.source_requirement_title,
         knowledge_item_ids_json = excluded.knowledge_item_ids_json,
@@ -1207,6 +1217,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   }
 
   function clearDownstreamFromTender() {
+    deleteOutlineAgentTask();
     db.prepare('DELETE FROM technical_plan_tasks').run();
     db.prepare('DELETE FROM technical_plan_bid_items').run();
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
@@ -1242,6 +1253,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   }
 
   function clearDownstreamFromBidSectionChange() {
+    deleteOutlineAgentTask();
     db.prepare('DELETE FROM technical_plan_tasks').run();
     db.prepare('DELETE FROM technical_plan_bid_items').run();
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
@@ -1270,6 +1282,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   }
 
   function clearDownstreamFromOriginalPlan() {
+    deleteOutlineAgentTask();
     db.prepare("DELETE FROM technical_plan_tasks WHERE type IN ('outline-generation', 'global-facts-generation', 'content-generation')").run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
@@ -1303,6 +1316,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   }
 
   function clearWorkflowSpecificState(workflowKind) {
+    deleteOutlineAgentTask();
     db.prepare("DELETE FROM technical_plan_tasks WHERE type IN ('outline-generation', 'global-facts-generation', 'content-generation')").run();
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
@@ -1559,6 +1573,9 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   function updateTechnicalPlanWithoutReload(partial) {
     const shouldClearMermaidCache = shouldClearMermaidCacheForPartial(partial);
     updateTechnicalPlanTransaction(partial || {});
+    if (hasOwn(partial, 'outlineData') && partial.outlineData === null) {
+      deleteOutlineAgentTask();
+    }
     if (shouldClearMermaidCache) {
       clearTechnicalPlanMermaidCache();
     }
@@ -1604,6 +1621,29 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       outlineExpansionMode: isValidOutlineExpansionMode(outlineExpansionMode) ? outlineExpansionMode : 'ai-complement',
       outlineWordControlOptions: normalizeOutlineWordControlOptions(wordControlOptions),
       referenceKnowledgeDocumentIds,
+    });
+  }
+
+  // 保存用户确认后的一级目录待扩展选择，不写入正式目录树。
+  function saveOutlineSelection({ taskId, items, selectedIds } = {}) {
+    const task = loadTechnicalPlan().outlineGenerationTask;
+    if (!task || task.task_id !== taskId || task.status !== 'success') {
+      throw new Error('一级目录生成结果已变化，请重新打开后再选择');
+    }
+
+    return updateTechnicalPlan({
+      outlineGenerationTask: {
+        ...task,
+        updated_at: now(),
+        stats: {
+          ...(task.stats || {}),
+          outline_selection: {
+            items,
+            selected_ids: selectedIds,
+            confirmed: true,
+          },
+        },
+      },
     });
   }
 
@@ -1905,6 +1945,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   }
 
   function clearTechnicalPlan() {
+    deleteOutlineAgentTask();
     cleanupPendingTenderSelection();
     const workflowKind = normalizeWorkflowKind(ensureMetaRow().workflow_kind);
     const transaction = db.transaction(() => {
@@ -1962,6 +2003,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     switchWorkflowKind,
     saveBidAnalysisConfig,
     saveOutlineConfig,
+    saveOutlineSelection,
     saveOutline,
     saveGlobalFacts,
     saveIllustrationHtml,

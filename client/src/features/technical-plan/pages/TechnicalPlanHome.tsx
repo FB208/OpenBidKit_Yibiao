@@ -10,7 +10,7 @@ import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
+import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
 import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
 import type { OutlineData, OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from '../../../shared/types/exportFormat';
@@ -117,7 +117,7 @@ function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
 function isOutlineLeafCountOutsideRange(outlineData: OutlineData, options: OutlineWordControlOptions) {
   if (options.minimumWords === 0 && options.maximumWords === 0) return false;
   const effectiveSectionWords = options.sectionWords > 0 ? options.sectionWords : 3000;
-  const leafCount = collectLeafItems(outlineData.outline || []).length;
+  const leafCount = collectLeafItems(outlineData.outline || []).filter((item) => item.content_mode === 'ai-generate').length;
   const minimumLeafCount = options.minimumWords > 0 ? Math.ceil(options.minimumWords / effectiveSectionWords) : null;
   const maximumLeafCount = options.maximumWords > 0 ? Math.floor(options.maximumWords / effectiveSectionWords) : null;
   return (minimumLeafCount !== null && leafCount < minimumLeafCount)
@@ -193,14 +193,17 @@ function buildWordControlWarningDialog(task: BackgroundTaskState, state: Technic
     // 数量类：叶子数量未进入区间，展示预期与实际对比。
     const minimumLeafCount = outlineStats.minimum_leaf_count || 0;
     const maximumLeafCount = outlineStats.maximum_leaf_count || 0;
+    const targetLeafCount = outlineStats.target_leaf_count;
     const currentLeafCount = outlineStats.current_leaf_count || 0;
     return {
       taskId: task.task_id,
-      title: '目录叶子数量未达到预期',
+      title: 'AI生成小节数量未达到预期',
       message: outlineStats.word_adjustment_warning,
       metrics: [{
-        label: '目录叶子小节',
-        expected: formatCountRange(minimumLeafCount, maximumLeafCount, '个'),
+        label: 'AI生成小节',
+        expected: typeof targetLeafCount === 'number'
+          ? `${targetLeafCount.toLocaleString('zh-CN')} 个`
+          : formatCountRange(minimumLeafCount, maximumLeafCount, '个'),
         actual: `${currentLeafCount.toLocaleString('zh-CN')} 个`,
       }],
       sections: [],
@@ -215,7 +218,9 @@ function buildWordControlWarningDialog(task: BackgroundTaskState, state: Technic
   const sectionWords = contentStats.section_words || 0;
   const sectionMinimumWords = sectionWords > 0 ? Math.ceil(sectionWords * 0.8) : 0;
   const sectionMaximumWords = sectionWords > 0 ? Math.floor(sectionWords * 1.2) : 0;
-  const orderedLeaves = state.outlineData?.outline?.length ? collectLeafItems(state.outlineData.outline) : [];
+  const orderedLeaves = state.outlineData?.outline?.length
+    ? collectLeafItems(state.outlineData.outline).filter((item) => item.content_mode === 'ai-generate')
+    : [];
   const sectionSources = orderedLeaves.length
     ? orderedLeaves.map((item) => ({
         id: item.id,
@@ -1034,6 +1039,11 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     setState((prev) => ({ ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData }));
   };
 
+  const saveOutlineSelection = async (request: SaveOutlineSelectionRequest) => {
+    const saved = await window.yibiao?.technicalPlan.saveOutlineSelection(request);
+    setState((prev) => ({ ...prev, ...(saved || {}) }));
+  };
+
   const saveOutlineConfig = async (config: {
     referenceKnowledgeDocumentIds: string[];
     outlineMode: TechnicalPlanState['outlineMode'];
@@ -1164,12 +1174,10 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         />
       )}
       {state.step === 'outline-generation' && (
-        <OutlineEditPage
-          workflowKind={workflowKind}
-          projectOverview={state.projectOverview}
-          techRequirements={state.techRequirements}
-          outlineMode={state.outlineMode || 'aligned'}
-          outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
+          <OutlineEditPage
+            workflowKind={workflowKind}
+            projectOverview={state.projectOverview}
+            outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
           outlineWordControlOptions={state.outlineWordControlOptions}
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
@@ -1178,6 +1186,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           contentTaskStatus={state.contentGenerationTask?.status}
           onOutlineConfigChange={saveOutlineConfig}
           onOutlineSaved={saveOutline}
+          onOutlineSelectionSaved={saveOutlineSelection}
           onSortGuardChange={(guard) => {
             sortGuardRef.current = guard;
           }}
@@ -1295,7 +1304,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           <Dialog.Content className="content-regenerate-card">
             <div className="content-regenerate-card-head">
               <span className="section-kicker">字数检查</span>
-              <Dialog.Title>目录叶子数量未达预期</Dialog.Title>
+              <Dialog.Title>AI生成小节数量未达预期</Dialog.Title>
               <Dialog.Description>您手动修改的目录可能导致生成正文字数不符合预期</Dialog.Description>
             </div>
             <div className="content-regenerate-actions">

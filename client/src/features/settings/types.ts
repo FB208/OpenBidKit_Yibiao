@@ -19,6 +19,7 @@ export interface SettingsPageState {
   general: {
     developer_mode: boolean;
     developer_token_stats_auto_open: boolean;
+    developer_agent_monitor_auto_open: boolean;
     update_channel: UpdateChannel;
     gpu_hardware_acceleration_enabled: boolean;
     gpu_hardware_acceleration_configured: boolean;

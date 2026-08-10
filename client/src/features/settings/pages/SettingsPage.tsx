@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { DetailHelpLink, FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useToast } from '../../../shared/ui';
+import { DetailHelpLink, FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useAutoAnswer, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
@@ -551,6 +551,7 @@ const initialState: SettingsPageState = {
   general: {
     developer_mode: false,
     developer_token_stats_auto_open: false,
+    developer_agent_monitor_auto_open: false,
     update_channel: 'atomgit',
     gpu_hardware_acceleration_enabled: true,
     gpu_hardware_acceleration_configured: true,
@@ -586,6 +587,11 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [agentSelfCheckResult, setAgentSelfCheckResult] = useState<AgentSelfCheckResult | null>(null);
   const [exportingAgentSelfCheckReport, setExportingAgentSelfCheckReport] = useState(false);
   const { showToast } = useToast();
+  const {
+    enabled: agentAutoAnswerEnabled,
+    saving: agentAutoAnswerSaving,
+    setEnabled: setAgentAutoAnswerEnabled,
+  } = useAutoAnswer();
 
   useEffect(() => {
     void loadTextConfig();
@@ -644,6 +650,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         general: {
           developer_mode: Boolean(config.developer_mode),
           developer_token_stats_auto_open: Boolean(config.developer_token_stats_auto_open),
+          developer_agent_monitor_auto_open: Boolean(config.developer_agent_monitor_auto_open),
           update_channel: normalizeUpdateChannel(config.update_channel),
           gpu_hardware_acceleration_enabled: Boolean(config.gpu_hardware_acceleration_enabled),
           gpu_hardware_acceleration_configured: Boolean(config.gpu_hardware_acceleration_configured),
@@ -698,6 +705,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       gpu_hardware_acceleration_configured: state.general.gpu_hardware_acceleration_configured,
       developer_mode: state.general.developer_mode,
       developer_token_stats_auto_open: state.general.developer_token_stats_auto_open,
+      developer_agent_monitor_auto_open: state.general.developer_agent_monitor_auto_open,
     };
   };
 
@@ -825,6 +833,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     setState((prev) => ({
       ...prev,
       general: { ...prev.general, developer_token_stats_auto_open: autoOpen },
+    }));
+  };
+
+  const updateDeveloperAgentMonitorAutoOpen = (autoOpen: boolean) => {
+    setState((prev) => ({
+      ...prev,
+      general: { ...prev.general, developer_agent_monitor_auto_open: autoOpen },
     }));
   };
 
@@ -1329,12 +1344,14 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       return JSON.stringify({
         developer_mode: Boolean(state.general.developer_mode),
         developer_token_stats_auto_open: Boolean(state.general.developer_token_stats_auto_open),
+        developer_agent_monitor_auto_open: Boolean(state.general.developer_agent_monitor_auto_open),
         update_channel: state.general.update_channel,
         gpu_hardware_acceleration_enabled: Boolean(state.general.gpu_hardware_acceleration_enabled),
         gpu_hardware_acceleration_configured: Boolean(state.general.gpu_hardware_acceleration_configured),
       }) !== JSON.stringify({
         developer_mode: Boolean(savedConfig.developer_mode),
         developer_token_stats_auto_open: Boolean(savedConfig.developer_token_stats_auto_open),
+        developer_agent_monitor_auto_open: Boolean(savedConfig.developer_agent_monitor_auto_open),
         update_channel: normalizeUpdateChannel(savedConfig.update_channel),
         gpu_hardware_acceleration_enabled: Boolean(savedConfig.gpu_hardware_acceleration_enabled),
         gpu_hardware_acceleration_configured: Boolean(savedConfig.gpu_hardware_acceleration_configured),
@@ -1628,6 +1645,22 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                       type="checkbox"
                       checked={state.general.developer_token_stats_auto_open}
                       onChange={(event) => updateDeveloperTokenStatsAutoOpen(event.target.checked)}
+                    />
+                    <span className="yb-switch-track" aria-hidden="true">
+                      <span className="yb-switch-thumb" />
+                    </span>
+                  </span>
+                </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>默认打开 Pi Agent 执行监视器</strong>
+                    <span>开启后，应用下次启动时自动打开 Pi Agent 执行监视器</span>
+                  </div>
+                  <span className="yb-switch-control">
+                    <input
+                      type="checkbox"
+                      checked={state.general.developer_agent_monitor_auto_open}
+                      onChange={(event) => updateDeveloperAgentMonitorAutoOpen(event.target.checked)}
                     />
                     <span className="yb-switch-track" aria-hidden="true">
                       <span className="yb-switch-thumb" />
@@ -2184,6 +2217,27 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               </div>
               <span className="settings-readonly-value">Pi Agent</span>
             </div>
+          </div>
+
+          <div className="settings-group-title">自动确认</div>
+          <div className="settings-list">
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>自动采用推荐方案</strong>
+                <span>开启后，需要确认的弹窗会倒计时 8 秒；期间未修改选项或手动提交时，自动执行默认方案。</span>
+              </div>
+              <span className="yb-switch-control">
+                <input
+                  type="checkbox"
+                  checked={agentAutoAnswerEnabled}
+                  disabled={agentAutoAnswerSaving}
+                  onChange={(event) => void setAgentAutoAnswerEnabled(event.target.checked)}
+                />
+                <span className="yb-switch-track" aria-hidden="true">
+                  <span className="yb-switch-thumb" />
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="settings-group-title">在以下场景启用智能体模式</div>

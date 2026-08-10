@@ -24,6 +24,10 @@
   --yb-duration-fast: 140ms;
   --yb-duration: 220ms;
 
+  /* Toast 始终位于应用内所有弹窗、遮罩和全屏预览之上。 */
+  --yb-z-toast: 2147483647;
+  --yb-z-agent-question: 2000;
+
   color: var(--yb-text);
   background: var(--yb-bg);
   font-family: Inter, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;

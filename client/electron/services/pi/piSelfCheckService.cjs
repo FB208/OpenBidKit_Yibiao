@@ -8,8 +8,9 @@ const {
   BUNDLED_COMMANDS,
   SHIM_COMMANDS,
 } = require('../agent/agentToolEnvironment.cjs');
+const { PI_RETRY_ERROR_NORMALIZER_PATH } = require('./piRetryErrorNormalizer.cjs');
 
-const EXPECTED_PI_TOOLS = ['read', 'bash', 'edit', 'write', 'find', 'ls'];
+const EXPECTED_PI_TOOLS = ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user'];
 const CRITICAL_COMMANDS = new Set(['node', ...BUNDLED_COMMANDS]);
 const COMMANDS = ['node', ...BUNDLED_COMMANDS, ...SHIM_COMMANDS];
 const MODEL_CHECK_TIMEOUT_MS = 30000;
@@ -491,8 +492,9 @@ async function runTextModelProbe(config, options) {
   }
 }
 
-// 分别检测普通响应、流式响应和 Agent 必需的工具调用能力。
+// 分别检测两种响应模式，并按当前配置验证 Agent 必需的工具调用能力。
 async function runPiTextModelSelfCheck(config, onProbe) {
+  const configuredStream = config?.request_mode !== 'normal';
   const reportProbe = (probe, status) => {
     try { onProbe?.(probe.id, status, probe); } catch {}
   };
@@ -509,21 +511,22 @@ async function runPiTextModelSelfCheck(config, onProbe) {
     label: '流式文本请求',
     stream: true,
   });
-  reportProbe(stream, stream.success ? 'success' : 'error');
-  reportProbe({ id: 'tools', label: '流式工具调用' }, 'running');
+  reportProbe(stream, stream.success ? 'success' : configuredStream ? 'error' : 'warning');
+  const toolsLabel = configuredStream ? '流式工具调用' : '普通工具调用';
+  reportProbe({ id: 'tools', label: toolsLabel }, 'running');
   const tools = await runTextModelProbe(config, {
     id: 'tools',
-    label: '流式工具调用',
-    stream: true,
+    label: toolsLabel,
+    stream: configuredStream,
     requireToolCall: true,
     prompt: '必须调用 diagnostic_echo 工具，参数 value 必须为 YIBIAO_PI_TOOL_OK，不要直接回答。',
   });
   reportProbe(tools, tools.success ? 'success' : 'error');
-  const configuredMode = config?.request_mode === 'normal' ? normal : stream;
+  const configuredMode = configuredStream ? stream : normal;
   return {
-    success: configuredMode.success,
-    agent_compatible: stream.success && tools.success,
-    configured_mode: config?.request_mode === 'normal' ? 'normal' : 'stream',
+    success: configuredMode.success && tools.success,
+    agent_compatible: configuredMode.success && tools.success,
+    configured_mode: configuredStream ? 'stream' : 'normal',
     config: summarizeTextModelConfig(config),
     probes: { normal, stream, tools },
     checked_at: nowIso(),
@@ -663,14 +666,9 @@ function diagnosePiSelfCheck({ modelCheck, loopbackCheck, toolCheck, agentCheck,
     summary = `当前文本模型的${configuredProbe.label || '配置模式请求'}失败，智能体无法稳定工作。`;
     confidence = 'high';
     evidence.push(configuredProbe.message || '文本模型检测失败');
-  } else if (modelCheck?.probes?.stream?.success === false) {
-    category = 'text-model-stream';
-    summary = '当前文本模型普通请求可用，但流式响应检测失败；Pi Agent 固定依赖流式响应。';
-    confidence = 'high';
-    evidence.push(modelCheck.probes.stream.message || '流式文本请求失败');
   } else if (modelCheck?.probes?.tools?.success === false) {
     category = 'tool-calling';
-    summary = '文本模型基础请求可用，但未通过 Pi Agent 必需的流式工具调用检测。';
+    summary = `文本模型基础请求可用，但未通过 Pi Agent 必需的${modelCheck.probes.tools.stream ? '流式' : '普通'}工具调用检测。`;
     confidence = 'high';
     evidence.push(modelCheck.probes.tools.message || '工具调用检测失败');
   } else if (loopbackCheck?.blocked_by_system || loopbackCheck?.error?.code === 'AGENT_PROXY_LOOPBACK_BLOCKED' || error?.code === 'AGENT_PROXY_LOOPBACK_BLOCKED') {
@@ -828,11 +826,13 @@ function ensureLoopbackNoProxy(env = process.env) {
 // 校验 Pi 只加载内置上下文，并精确启用方案指定工具。
 function validatePiSessionSnapshot(snapshot = {}) {
   const activeTools = Array.isArray(snapshot.active_tools) ? snapshot.active_tools : [];
+  const extensions = Array.isArray(snapshot.extensions) ? snapshot.extensions : [];
   const resourcesValid = snapshot.context_files?.length === 1
     && snapshot.context_files[0] === '<yibiao-agent-workspace>'
     && !snapshot.skills?.length
     && !snapshot.prompts?.length
-    && !snapshot.extensions?.length;
+    && extensions.length === 1
+    && extensions[0] === PI_RETRY_ERROR_NORMALIZER_PATH;
   const toolsValid = activeTools.length === EXPECTED_PI_TOOLS.length
     && EXPECTED_PI_TOOLS.every((tool) => activeTools.includes(tool));
   return { resourcesValid, toolsValid };
@@ -861,7 +861,7 @@ function createPiDiagnosticSections({ layout, sdkVersion, sessionSnapshot = {}, 
       id: 'pi-resources',
       title: '资源加载',
       status: validation.resourcesValid ? 'success' : 'error',
-      summary: validation.resourcesValid ? '仅加载易标内置工作区指令' : '资源加载结果不符合配置',
+      summary: validation.resourcesValid ? '仅加载易标内置工作区指令和错误规范化扩展' : '资源加载结果不符合配置',
       details: [
         { label: '上下文文件', value: sessionSnapshot.context_files?.join('、') || '-' },
         { label: 'Skill', value: String(sessionSnapshot.skills?.length || 0) },
@@ -918,7 +918,11 @@ function createPiDiagnosticSections({ layout, sdkVersion, sessionSnapshot = {}, 
       items: Object.values(modelCheck.probes || {}).map((probe) => ({
         id: `model-${probe.id}`,
         label: probe.label,
-        status: probe.success ? 'success' : agentSucceeded ? 'warning' : 'error',
+        status: probe.success
+          ? 'success'
+          : probe.id === modelCheck.configured_mode || probe.id === 'tools'
+            ? 'error'
+            : 'warning',
         message: `${probe.message || (probe.success ? '成功' : '失败')}，${probe.duration_ms || 0} ms${probe.status ? `，HTTP ${probe.status}` : ''}`,
       })),
     });

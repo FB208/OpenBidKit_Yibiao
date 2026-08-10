@@ -22,6 +22,7 @@ const {
   writeAiLog,
 } = require('../utils/aiLog.cjs');
 const textTokenStatsStore = require('./textTokenStatsStore.cjs');
+const { normalizeTokenUsage } = textTokenStatsStore;
 
 const AI_REQUEST_TIMEOUT_MS = 600000;
 
@@ -94,57 +95,6 @@ function createModuleDeveloperLogger(app, config, moduleName, request = {}) {
     name: request.name || request.logTitle || moduleName,
     meta: request.meta || {},
   });
-}
-
-function normalizeTokenNumber(value) {
-  const number = Number(value || 0);
-  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
-}
-
-function normalizeCachedTokenNumber(source) {
-  const promptDetails = source.prompt_tokens_details
-    || source.promptTokensDetails
-    || source.input_token_details
-    || source.inputTokenDetails
-    || {};
-  return normalizeTokenNumber(
-    source.cached_tokens
-    ?? source.cachedTokens
-    ?? source.prompt_cached_tokens
-    ?? source.promptCachedTokens
-    ?? source.prompt_cache_hit_tokens
-    ?? source.promptCacheHitTokens
-    ?? source.cache_read_input_tokens
-    ?? source.cacheReadInputTokens
-    ?? source.cached_content_token_count
-    ?? source.cachedContentTokenCount
-    ?? promptDetails.cached_tokens
-    ?? promptDetails.cachedTokens
-    ?? promptDetails.cache_read
-    ?? promptDetails.cacheRead
-    ?? promptDetails.cache_read_input_tokens
-    ?? promptDetails.cacheReadInputTokens
-  );
-}
-
-function normalizeTokenUsage(usage) {
-  const source = usage || {};
-  const promptTokens = normalizeTokenNumber(source.prompt_tokens ?? source.promptTokens ?? source.promptTokenCount);
-  const completionTokens = normalizeTokenNumber(
-    source.completion_tokens
-    ?? source.completionTokens
-    ?? source.completionTokenCount
-    ?? source.candidatesTokenCount,
-  );
-  const totalTokens = normalizeTokenNumber(source.total_tokens ?? source.totalTokens ?? source.totalTokenCount)
-    || promptTokens + completionTokens;
-
-  return {
-    prompt_tokens: promptTokens,
-    completion_tokens: completionTokens,
-    total_tokens: totalTokens,
-    cached_tokens: normalizeCachedTokenNumber(source),
-  };
 }
 
 function getTextTokenStatsSnapshot() {
@@ -807,6 +757,39 @@ function createChatRequestBody(config, request, options = {}) {
   return body;
 }
 
+// 保留 Pi 工具调用协议字段，并统一应用当前文本模型配置。
+function createAgentChatRequestBody(config, sourceBody) {
+  const source = sourceBody && typeof sourceBody === 'object' ? sourceBody : {};
+  const messages = Array.isArray(source.messages) ? source.messages : [];
+  if (!messages.length) {
+    throw new Error('Agent 代理请求缺少 messages');
+  }
+
+  const body = {
+    ...source,
+    model: config.model_name,
+    messages,
+    stream: normalizeTextRequestMode(config) === 'stream',
+  };
+  if (!body.stream) delete body.stream_options;
+  if (config.temperature_enabled) {
+    body.temperature = config.temperature;
+  } else {
+    delete body.temperature;
+  }
+  if (config.reasoning_effort) {
+    body.reasoning_effort = config.reasoning_effort;
+  } else {
+    delete body.reasoning_effort;
+  }
+
+  // 部分 OpenAI 兼容上游会拒绝 Agent SDK 注入的输出长度参数。
+  delete body.max_tokens;
+  delete body.max_output_tokens;
+  delete body.max_completion_tokens;
+  return body;
+}
+
 async function fetchChatCompletion(app, config, body, options = {}) {
   const controller = options.signal ? null : new AbortController();
   const timer = controller ? setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS) : null;
@@ -1324,6 +1307,81 @@ async function chatWithConfig(app, config, request) {
   }
 }
 
+// 通过统一文本出口执行一次 Agent Chat Completions 请求，响应消费完成后才释放队列槽。
+async function runAgentChatCompletionWithConfig(app, config, request) {
+  if (!config.api_key) {
+    throw new Error('请先在设置中配置文本模型 API Key');
+  }
+  if (!config.model_name) {
+    throw new Error('请先在设置中配置文本模型名称');
+  }
+  requireBaseUrl(config.base_url, '请先在设置中配置文本模型 Base URL');
+  if (typeof request.consumeResponse !== 'function') {
+    throw new Error('Agent 代理请求缺少响应消费函数');
+  }
+
+  const requestId = createRequestId();
+  const requestBody = createAgentChatRequestBody(config, request.body);
+  const requestMode = requestBody.stream ? 'stream' : 'normal';
+  const logTitle = resolveAiLogTitle(request, 'Pi Agent');
+  let responseData = null;
+  let analyticsTracked = false;
+
+  try {
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: 'chat-pending',
+      request_mode: requestMode,
+      url: `${trimBaseUrl(config.base_url)}/chat/completions`,
+      request: requestBody,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    });
+    await Promise.resolve(request.onRequestStart?.({ config, requestBody, requestId }));
+    const response = await fetchChatCompletion(app, config, requestBody, { signal: request.signal });
+    await ensureTextAiResponseOk(response, 'AI 请求失败');
+    const result = await request.consumeResponse(response, {
+      config,
+      requestBody,
+      requestId,
+    });
+    responseData = result?.responseData ?? null;
+    recordTextTokenStats(config, result?.usage);
+    trackAiRequest(app, config, { ai_request_type: 'text', usage: result?.usage });
+    analyticsTracked = true;
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: 'chat',
+      request_mode: requestMode,
+      url: `${trimBaseUrl(config.base_url)}/chat/completions`,
+      request: requestBody,
+      response: responseData,
+      content: result?.content || '',
+      created_at: new Date().toISOString(),
+    });
+    return result;
+  } catch (error) {
+    if (!analyticsTracked) {
+      recordTextTokenStats(config, null);
+      trackAiRequest(app, config, { ai_request_type: 'text' });
+    }
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: 'chat-error',
+      request_mode: requestMode,
+      url: `${trimBaseUrl(config.base_url)}/chat/completions`,
+      request: requestBody,
+      response: getAiErrorLogResponse(error, responseData),
+      error: getAiErrorLogError(error, error?.message || 'AI 请求失败'),
+      created_at: new Date().toISOString(),
+    });
+    throw error;
+  }
+}
+
 async function testOpenAICompatibleImageModel(app, config, provider) {
   const imageConfig = config.image_model || {};
   const meta = OPENAI_IMAGE_PROVIDER_META[provider] || OPENAI_IMAGE_PROVIDER_META.volcengine;
@@ -1746,8 +1804,12 @@ function createAiService({ app, configStore }) {
     };
   }
 
-  function enqueueTextRequest(request, runner) {
-    return textRequestQueue.enqueue(runner, { scopeId: getQueueScopeId(request) });
+  function enqueueTextRequest(request, runner, options = {}) {
+    return textRequestQueue.enqueue(runner, {
+      scopeId: getQueueScopeId(request),
+      signal: options.signal,
+      maxAttempts: options.maxAttempts,
+    });
   }
 
   function enqueueImageRequest(request, runner) {
@@ -1763,6 +1825,17 @@ function createAiService({ app, configStore }) {
       return enqueueTextRequest(request, () => {
         const config = configStore.load();
         return chatWithConfig(app, config, request);
+      });
+    },
+
+    async runAgentChatCompletion(request) {
+      return enqueueTextRequest(request, () => {
+        const config = configStore.load();
+        return runAgentChatCompletionWithConfig(app, config, request);
+      }, {
+        signal: request?.signal,
+        // Pi Session 保留回合级原生重试，本队列只负责统一调度和并发控制。
+        maxAttempts: 1,
       });
     },
 
@@ -1830,6 +1903,9 @@ function createAiService({ app, configStore }) {
         },
         parseJsonResponseContent(request, content) {
           return service.parseJsonResponseContent(withQueueScope(request, scopeId), content);
+        },
+        runAgentChatCompletion(request) {
+          return service.runAgentChatCompletion(withQueueScope(request, scopeId));
         },
         generateImage(request) {
           return service.generateImage(withQueueScope(request, scopeId));

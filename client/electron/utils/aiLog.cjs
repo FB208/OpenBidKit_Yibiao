@@ -1,7 +1,7 @@
-const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { getAiLogsDir } = require('./paths.cjs');
+const { enqueueJsonReplace } = require('./silentFileLog.cjs');
 
 const MAX_AI_LOG_TITLE_LENGTH = 64;
 
@@ -37,16 +37,25 @@ function buildAiLogFileName(payload) {
 }
 
 function writeAiLog(app, config, payload) {
-  if (!config?.developer_mode) {
-    return;
-  }
+  try {
+    if (!config?.developer_mode) {
+      return;
+    }
 
-  const logsDir = getAiLogsDir(app);
-  fs.mkdirSync(logsDir, { recursive: true });
-  const logTitle = sanitizeAiLogTitle(payload.log_title);
-  const logPayload = logTitle ? { ...payload, log_title: logTitle } : payload;
-  const fileName = buildAiLogFileName(logPayload);
-  fs.writeFileSync(path.join(logsDir, fileName), JSON.stringify(logPayload, null, 2), 'utf-8');
+    const logsDir = getAiLogsDir(app);
+    const logTitle = sanitizeAiLogTitle(payload.log_title);
+    const logPayload = {
+      ...payload,
+      ...(logTitle ? { log_title: logTitle } : {}),
+    };
+    const fileName = buildAiLogFileName(logPayload);
+    enqueueJsonReplace(path.join(logsDir, fileName), logPayload, {
+      space: 2,
+      removeOnFailure: logPayload.status !== 'pending',
+    });
+  } catch {
+    // AI 请求日志不能影响模型调用。
+  }
 }
 
 function getRawAiErrorResponse(error) {

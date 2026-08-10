@@ -1214,8 +1214,29 @@ body.agent-monitor-root #root {
 
 .agent-monitor-tabs .agent-monitor-follow {
   min-height: 34px;
-  margin-left: auto;
   font-size: 11px;
+}
+
+.agent-monitor-tab-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.agent-monitor-tabs .agent-monitor-open-workspace {
+  min-height: 34px;
+  font-size: 11px;
+}
+
+.agent-monitor-workspace-error {
+  max-width: 260px;
+  overflow: hidden;
+  color: #c83220;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-monitor-tabs .agent-monitor-follow.is-active {
@@ -1417,6 +1438,78 @@ body.agent-monitor-root #root {
   font-size: 11px;
 }
 
+.agent-monitor-input-round > header > div,
+.agent-monitor-output-round > header > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.agent-monitor-input-round > header small,
+.agent-monitor-output-round > header small {
+  overflow: hidden;
+  color: var(--yb-text-muted);
+  font: 10px "Cascadia Mono", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-monitor-output-file-meta {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 14px;
+  color: var(--yb-text-soft);
+  background: #fbfcfe;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.agent-monitor-output-file-meta strong { font-size: 11px; }
+
+.agent-monitor-output-file-meta span {
+  color: var(--yb-text-muted);
+  font-size: 10px;
+}
+
+.agent-monitor-input-block + .agent-monitor-input-block {
+  border-top: 1px solid var(--yb-border-soft);
+}
+
+.agent-monitor-input-block > header {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 14px;
+  color: var(--yb-text-soft);
+  background: #fbfcfe;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.agent-monitor-input-block > header span {
+  color: var(--yb-text-muted);
+  font-size: 10px;
+}
+
+.agent-monitor-input-block > pre {
+  max-height: 540px;
+  padding: 16px;
+  overflow: auto;
+  background: #f8fafd;
+}
+
+.agent-monitor-input-empty {
+  margin: 0;
+  padding: 14px;
+  color: var(--yb-text-muted);
+  font-size: 11px;
+  background: #f8fafd;
+}
+
 .agent-monitor-document-view > section > pre,
 .agent-monitor-file-list details > pre {
   max-height: 540px;
@@ -1496,4 +1589,3 @@ body.agent-monitor-root #root {
     gap: 12px;
   }
 }
-

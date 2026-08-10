@@ -63,16 +63,36 @@ const bridge = {
       return () => ipcRenderer.removeListener('ai:http-error', listener);
     },
   },
+  autoConfirmation: {
+    getState: () => ipcRenderer.invoke('auto-confirmation:get-state'),
+    setEnabled: (enabled) => ipcRenderer.invoke('auto-confirmation:set-enabled', enabled),
+    onChanged: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('auto-confirmation:state', listener);
+      ipcRenderer.send('auto-confirmation:subscribe');
+      return () => ipcRenderer.removeListener('auto-confirmation:state', listener);
+    },
+  },
   agent: {
     run: (payload) => ipcRenderer.invoke('agent:run', payload),
     selfCheck: () => ipcRenderer.invoke('agent:self-check'),
     exportSelfCheckReport: (payload) => ipcRenderer.invoke('agent:export-self-check-report', payload),
     getStatus: () => ipcRenderer.invoke('agent:get-status'),
     restart: (reason) => ipcRenderer.invoke('agent:restart', reason),
+    getPendingQuestion: () => ipcRenderer.invoke('agent:get-pending-question'),
+    answerQuestion: (payload) => ipcRenderer.invoke('agent:answer-question', payload),
+    suppressQuestionAutoAnswer: (payload) => ipcRenderer.invoke('agent:suppress-question-auto-answer', payload),
     onStatus: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('agent:status', listener);
+      ipcRenderer.send('agent:subscribe');
       return () => ipcRenderer.removeListener('agent:status', listener);
+    },
+    onQuestion: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('agent:question-state', listener);
+      ipcRenderer.send('agent:subscribe');
+      return () => ipcRenderer.removeListener('agent:question-state', listener);
     },
   },
   developerTokenStats: {
@@ -87,6 +107,7 @@ const bridge = {
   },
   developerAgentMonitor: {
     openWindow: () => ipcRenderer.invoke('developer-agent-monitor:open-window'),
+    openWorkspace: (workspaceDir) => ipcRenderer.invoke('developer-agent-monitor:open-workspace', workspaceDir),
     attach: () => ipcRenderer.invoke('developer-agent-monitor:attach'),
     detach: () => ipcRenderer.invoke('developer-agent-monitor:detach'),
     onEvent: (callback) => {
@@ -137,6 +158,7 @@ const bridge = {
     switchWorkflowKind: (workflowKind) => ipcRenderer.invoke('technical-plan:switch-workflow-kind', workflowKind),
     saveBidAnalysisConfig: (payload) => ipcRenderer.invoke('technical-plan:save-bid-analysis-config', payload),
     saveOutlineConfig: (payload) => ipcRenderer.invoke('technical-plan:save-outline-config', payload),
+    saveOutlineSelection: (payload) => ipcRenderer.invoke('tasks:confirm-outline-selection', payload),
     saveOutline: (outlineData) => ipcRenderer.invoke('technical-plan:save-outline', outlineData),
     saveGlobalFacts: (globalFacts) => ipcRenderer.invoke('technical-plan:save-global-facts', globalFacts),
     saveContentGenerationOptions: (options) => ipcRenderer.invoke('technical-plan:save-content-generation-options', options),
@@ -170,6 +192,7 @@ const bridge = {
     startBidSectionExtraction: (payload) => ipcRenderer.invoke('tasks:start-bid-section-extraction', payload),
     startBidAnalysis: (payload) => ipcRenderer.invoke('tasks:start-bid-analysis', payload),
     startOutlineGeneration: (payload) => ipcRenderer.invoke('tasks:start-outline-generation', payload),
+    suppressOutlineSelectionAutoConfirmation: (payload) => ipcRenderer.invoke('tasks:suppress-outline-selection-auto-confirmation', payload),
     startGlobalFactsGeneration: (payload) => ipcRenderer.invoke('tasks:start-global-facts-generation', payload),
     startContentGeneration: (payload) => ipcRenderer.invoke('tasks:start-content-generation', payload),
     pauseContentGeneration: () => ipcRenderer.invoke('tasks:pause-content-generation'),
