@@ -202,7 +202,7 @@ export interface AgentQuestion {
   auto_answer_at?: string;
 }
 
-export interface AgentAutoAnswerState {
+export interface AutoConfirmationState {
   enabled: boolean;
 }
 
@@ -499,6 +499,11 @@ export interface YibiaoBridge {
     testImageModel: (config: ClientConfig) => Promise<ImageModelTestResult>;
     onHttpError: (callback: (event: AiHttpErrorPayload) => void) => () => void;
   };
+  autoConfirmation: {
+    getState: () => Promise<AutoConfirmationState>;
+    setEnabled: (enabled: boolean) => Promise<ConfigSaveResult & AutoConfirmationState>;
+    onChanged: (callback: (state: AutoConfirmationState) => void) => () => void;
+  };
   agent: {
     run: (payload: AgentRunPayload) => Promise<AgentRunResult>;
     selfCheck: () => Promise<AgentSelfCheckResult>;
@@ -507,11 +512,9 @@ export interface YibiaoBridge {
     restart: (reason?: string) => Promise<AgentRuntimeStatus>;
     getPendingQuestion: () => Promise<AgentQuestion | null>;
     answerQuestion: (payload: AgentQuestionAnswerPayload) => Promise<AgentQuestionAnswerResult>;
-    getAutoAnswerState: () => Promise<AgentAutoAnswerState>;
-    setAutoAnswerEnabled: (enabled: boolean) => Promise<ConfigSaveResult & AgentAutoAnswerState>;
+    suppressQuestionAutoAnswer: (payload: { question_id: string }) => Promise<{ success: boolean }>;
     onStatus: (callback: (status: AgentRuntimeStatus) => void) => () => void;
     onQuestion: (callback: (question: AgentQuestion | null) => void) => () => void;
-    onAutoAnswerChanged: (callback: (state: AgentAutoAnswerState) => void) => () => void;
   };
   developerTokenStats: {
     openWindow: () => Promise<{ success: boolean }>;
@@ -610,6 +613,7 @@ export interface YibiaoBridge {
     startBidSectionExtraction: (payload?: unknown) => Promise<unknown>;
     startBidAnalysis: (payload: unknown) => Promise<unknown>;
     startOutlineGeneration: (payload: unknown) => Promise<unknown>;
+    suppressOutlineSelectionAutoConfirmation: (payload: { taskId: string }) => Promise<{ success: boolean }>;
     startGlobalFactsGeneration: (payload: unknown) => Promise<unknown>;
     startContentGeneration: (payload: unknown) => Promise<unknown>;
     pauseContentGeneration: () => Promise<unknown>;

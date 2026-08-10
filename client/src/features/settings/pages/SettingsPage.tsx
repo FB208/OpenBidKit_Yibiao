@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { DetailHelpLink, FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useAgentAutoAnswer, useToast } from '../../../shared/ui';
+import { DetailHelpLink, FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useAutoAnswer, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
@@ -591,7 +591,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     enabled: agentAutoAnswerEnabled,
     saving: agentAutoAnswerSaving,
     setEnabled: setAgentAutoAnswerEnabled,
-  } = useAgentAutoAnswer();
+  } = useAutoAnswer();
 
   useEffect(() => {
     void loadTextConfig();
@@ -2219,12 +2219,12 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             </div>
           </div>
 
-          <div className="settings-group-title">提问处理</div>
+          <div className="settings-group-title">自动确认</div>
           <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
-                <strong>自动回答 Agent 的提问</strong>
-                <span>开启后，提问弹窗会倒计时 8 秒；期间未手动提交时，自动执行 Agent 的推荐方案。</span>
+                <strong>自动采用推荐方案</strong>
+                <span>开启后，需要确认的弹窗会倒计时 8 秒；期间未修改选项或手动提交时，自动执行默认方案。</span>
               </div>
               <span className="yb-switch-control">
                 <input

@@ -22,7 +22,7 @@ export { ToastProvider, useToast } from './ToastProvider';
 export type { ToastAction, ToastOptions, ToastType } from './ToastProvider';
 export { default as OfflineLicenseActivationDialog } from './OfflineLicenseActivationDialog';
 export { AiHttpErrorDialogProvider } from './AiHttpErrorDialogProvider';
-export { AgentQuestionDialogProvider, useAgentAutoAnswer } from './AgentQuestionDialogProvider';
+export { AgentQuestionDialogProvider, useAutoAnswer } from './AgentQuestionDialogProvider';
 export {
   DocumentParseNoticeProvider,
   isLibreOfficeRequiredMessage,

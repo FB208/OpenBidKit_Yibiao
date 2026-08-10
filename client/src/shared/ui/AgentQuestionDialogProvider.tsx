@@ -4,18 +4,18 @@ import type { AgentQuestion } from '../types';
 import MarkdownRenderer from './MarkdownRenderer';
 import { useToast } from './ToastProvider';
 
-interface AgentAutoAnswerContextValue {
+interface AutoAnswerContextValue {
   enabled: boolean;
   saving: boolean;
   setEnabled: (enabled: boolean) => Promise<void>;
 }
 
-const AgentAutoAnswerContext = createContext<AgentAutoAnswerContextValue | null>(null);
+const AutoAnswerContext = createContext<AutoAnswerContextValue | null>(null);
 
-// 读取并修改全局共用的 Agent 自动回答设置。
-export function useAgentAutoAnswer() {
-  const context = useContext(AgentAutoAnswerContext);
-  if (!context) throw new Error('useAgentAutoAnswer 必须在 AgentQuestionDialogProvider 内使用');
+// 读取并修改所有确认弹窗共用的自动回答设置。
+export function useAutoAnswer() {
+  const context = useContext(AutoAnswerContext);
+  if (!context) throw new Error('useAutoAnswer 必须在 AgentQuestionDialogProvider 内使用');
   return context;
 }
 
@@ -51,11 +51,11 @@ export function AgentQuestionDialogProvider({ children }: { children: ReactNode 
   useEffect(() => {
     let active = true;
     let receivedEvent = false;
-    const unsubscribe = window.yibiao.agent.onAutoAnswerChanged((state) => {
+    const unsubscribe = window.yibiao.autoConfirmation.onChanged((state) => {
       receivedEvent = true;
       if (active) setAutoAnswerEnabledState(state.enabled);
     });
-    void window.yibiao.agent.getAutoAnswerState()
+    void window.yibiao.autoConfirmation.getState()
       .then((state) => {
         if (active && !receivedEvent) setAutoAnswerEnabledState(state.enabled);
       })
@@ -99,7 +99,7 @@ export function AgentQuestionDialogProvider({ children }: { children: ReactNode 
     if (autoAnswerSaving) return;
     setAutoAnswerSaving(true);
     try {
-      const result = await window.yibiao.agent.setAutoAnswerEnabled(enabled);
+      const result = await window.yibiao.autoConfirmation.setEnabled(enabled);
       setAutoAnswerEnabledState(result.enabled);
     } catch (error) {
       showToast(error instanceof Error ? error.message : '自动回答设置保存失败', 'error');
@@ -132,8 +132,16 @@ export function AgentQuestionDialogProvider({ children }: { children: ReactNode 
     }
   };
 
+  // 用户主动切换选项时停止当前问题的自动回答计时。
+  const selectOption = (optionId: string) => {
+    setSelectedOptionId(optionId);
+    if (question) {
+      void window.yibiao.agent.suppressQuestionAutoAnswer({ question_id: question.question_id }).catch(() => undefined);
+    }
+  };
+
   return (
-    <AgentAutoAnswerContext.Provider value={{
+    <AutoAnswerContext.Provider value={{
       enabled: autoAnswerEnabled,
       saving: autoAnswerSaving,
       setEnabled: setAutoAnswerEnabled,
@@ -170,7 +178,7 @@ export function AgentQuestionDialogProvider({ children }: { children: ReactNode 
                       value={option.id}
                       checked={selectedOptionId === option.id}
                       disabled={submitting}
-                      onChange={() => setSelectedOptionId(option.id)}
+                      onChange={() => selectOption(option.id)}
                     />
                     <span className="agent-question-radio" aria-hidden="true" />
                     <span className="agent-question-option-copy">
@@ -229,7 +237,7 @@ export function AgentQuestionDialogProvider({ children }: { children: ReactNode 
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
-    </AgentAutoAnswerContext.Provider>
+    </AutoAnswerContext.Provider>
   );
 }
 

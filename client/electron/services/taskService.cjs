@@ -224,7 +224,7 @@ function createTask(type, payload) {
   };
 }
 
-function createTaskService({ aiService, agentService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService }) {
+function createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService }) {
   const subscribers = new Set();
   const callbackSubscribers = new Set();
   const activeTasks = new Map();
@@ -541,6 +541,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       pauseRequested: false,
       outlineSelectionWaiter: null,
       outlineSelectionResult: null,
+      outlineSelectionAutoConfirmationId: null,
       isPauseRequested() {
         return this.pauseRequested;
       },
@@ -559,7 +560,10 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
           throw abortController.signal.reason || new Error('目录生成任务已取消');
         }
         if (this.outlineSelectionResult) return Promise.resolve(this.outlineSelectionResult);
-        if (this.outlineSelectionWaiter) return this.outlineSelectionWaiter.promise;
+        if (this.outlineSelectionWaiter) {
+          this.registerOutlineSelectionAutoConfirmation?.();
+          return this.outlineSelectionWaiter.promise;
+        }
         let resolve;
         let reject;
         const promise = new Promise((resolvePromise, rejectPromise) => {
@@ -568,6 +572,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         });
         promise.catch(() => undefined);
         this.outlineSelectionWaiter = { promise, resolve, reject };
+        this.registerOutlineSelectionAutoConfirmation?.();
         return promise;
       },
       cancel(reason = '后台任务已取消') {
@@ -575,6 +580,8 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         error.code = 'TASK_CANCELLED';
         this.outlineSelectionWaiter?.reject?.(error);
         this.outlineSelectionWaiter = null;
+        autoConfirmationService.unregister(this.outlineSelectionAutoConfirmationId);
+        this.outlineSelectionAutoConfirmationId = null;
         if (!abortController.signal.aborted) abortController.abort(error);
       },
       waitForSettlement() {
@@ -583,12 +590,11 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       dispose() {
         this.outlineSelectionWaiter?.reject?.(new Error('目录生成任务已结束'));
         this.outlineSelectionWaiter = null;
+        autoConfirmationService.unregister(this.outlineSelectionAutoConfirmationId);
+        this.outlineSelectionAutoConfirmationId = null;
       },
     };
     activeTaskControls.set(type, taskControl);
-    if (startOptions.restoreOutlineSelectionWaiter) {
-      taskControl.waitForOutlineSelection();
-    }
 
     const updateTask = (partial, workspaceState, eventPatch, options = {}) => {
       const nextStatus = currentTask.status === 'pausing' && partial.status === 'running'
@@ -617,6 +623,40 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       return currentTask;
     };
 
+    // 为一级目录默认选择注册自动确认，并把截止时间同步到任务状态。
+    taskControl.registerOutlineSelectionAutoConfirmation = () => {
+      if (type !== 'outline-generation' || taskControl.outlineSelectionAutoConfirmationId) return;
+      const selection = currentTask.stats?.outline_selection;
+      if (!selection?.items?.length || !selection.selected_ids?.length || selection.confirmed) return;
+      const confirmationId = `outline-selection:${currentTask.task_id}`;
+      const defaultItems = selection.items;
+      const defaultSelectedIds = selection.selected_ids;
+      taskControl.outlineSelectionAutoConfirmationId = confirmationId;
+      autoConfirmationService.register({
+        id: confirmationId,
+        submit: () => taskControl.confirmOutlineSelection({
+          taskId: currentTask.task_id,
+          items: defaultItems,
+          selectedIds: defaultSelectedIds,
+        }),
+        onStateChange: ({ auto_answer_at: autoAnswerAt }) => {
+          const currentSelection = currentTask.stats?.outline_selection;
+          if (!currentSelection || currentSelection.confirmed) return;
+          const nextSelection = { ...currentSelection };
+          if (autoAnswerAt) nextSelection.auto_answer_at = autoAnswerAt;
+          else delete nextSelection.auto_answer_at;
+          currentTask = updateTask({
+            stats: {
+              ...(currentTask.stats || {}),
+              outline_selection: nextSelection,
+            },
+          });
+          const nextState = updateWorkspaceState(definition, { [taskField]: currentTask });
+          emit(currentTask, buildSnapshot(definition, nextState, currentTask));
+        },
+      });
+    };
+
     taskControl.confirmOutlineSelection = (request = {}) => {
       if (type !== 'outline-generation' || request.taskId !== currentTask.task_id) {
         throw new Error('一级目录生成结果已变化，请重新打开后再选择');
@@ -625,6 +665,8 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       if (!waiter) throw new Error('当前目录任务不在一级目录确认阶段');
       const items = Array.isArray(request.items) ? request.items : [];
       const selectedIds = Array.isArray(request.selectedIds) ? request.selectedIds : [];
+      autoConfirmationService.unregister(taskControl.outlineSelectionAutoConfirmationId);
+      taskControl.outlineSelectionAutoConfirmationId = null;
       currentTask = updateTask({
         stats: {
           ...(currentTask.stats || {}),
@@ -643,11 +685,23 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       return confirmedState;
     };
 
+    // 用户修改一级目录草稿后停止当前确认项的自动提交。
+    taskControl.suppressOutlineSelectionAutoConfirmation = (request = {}) => {
+      if (type !== 'outline-generation' || request.taskId !== currentTask.task_id) {
+        return { success: true };
+      }
+      autoConfirmationService.suppress(taskControl.outlineSelectionAutoConfirmationId);
+      return { success: true };
+    };
+
     const previousState = loadWorkspaceState(definition) || {};
     const state = startOptions.skipInitialStateUpdate
       ? previousState
       : updateWorkspaceState(definition, { ...initialPartial, [taskField]: currentTask });
     emit(currentTask, buildSnapshot(definition, state, currentTask));
+    if (startOptions.restoreOutlineSelectionWaiter) {
+      taskControl.waitForOutlineSelection();
+    }
 
     const runnerWorkspaceStore = definition.stateKey === 'technicalPlan'
       ? technicalPlanStore
@@ -1076,6 +1130,11 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       const control = activeTaskControls.get('outline-generation');
       if (!control?.confirmOutlineSelection) throw new Error('当前没有等待确认的一级目录任务');
       return control.confirmOutlineSelection(payload);
+    },
+    suppressOutlineSelectionAutoConfirmation(payload) {
+      const control = activeTaskControls.get('outline-generation');
+      if (!control?.suppressOutlineSelectionAutoConfirmation) return { success: true };
+      return control.suppressOutlineSelectionAutoConfirmation(payload);
     },
     async resetTechnicalPlan() {
       await cancelOutlineGenerationForReset();

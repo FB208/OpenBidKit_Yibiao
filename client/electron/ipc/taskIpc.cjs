@@ -17,6 +17,10 @@ function registerTaskIpc({ taskService }) {
     taskService.subscribe(event.sender);
     return taskService.confirmOutlineSelection(payload);
   });
+  ipcMain.handle('tasks:suppress-outline-selection-auto-confirmation', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.suppressOutlineSelectionAutoConfirmation(payload);
+  });
   ipcMain.handle('tasks:start-global-facts-generation', (event, payload) => {
     taskService.subscribe(event.sender);
     return taskService.startGlobalFactsGeneration(payload);

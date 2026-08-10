@@ -3029,12 +3029,38 @@
   border-top: 1px solid rgba(228, 233, 240, 0.74);
 }
 
-.outline-selection-actions > span {
+.outline-selection-summary {
+  display: grid;
+  gap: 5px;
+}
+
+.outline-selection-summary > span {
   color: var(--yb-text-muted);
   font-size: 12px;
 }
 
-.outline-selection-actions > div {
+.outline-selection-auto-answer {
+  display: grid;
+  gap: 3px;
+}
+
+.outline-selection-auto-answer label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  color: var(--yb-text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.outline-selection-auto-answer small {
+  color: var(--yb-primary-deep);
+  font-size: 12px;
+}
+
+.outline-selection-buttons {
   display: flex;
   gap: 10px;
 }
@@ -3100,7 +3126,7 @@
     display: grid;
   }
 
-  .outline-selection-actions > div {
+  .outline-selection-buttons {
     justify-content: flex-end;
   }
 }

@@ -1,6 +1,7 @@
 const { clipboard, ipcMain, shell } = require('electron');
 const { registerAgentIpc } = require('./agentIpc.cjs');
 const { registerAiIpc } = require('./aiIpc.cjs');
+const { registerAutoConfirmationIpc } = require('./autoConfirmationIpc.cjs');
 const { registerConfigIpc } = require('./configIpc.cjs');
 const { registerDeveloperIpc } = require('./developerIpc.cjs');
 const { registerDuplicateCheckIpc } = require('./duplicateCheckIpc.cjs');
@@ -17,6 +18,7 @@ const { registerPluginIpc } = require('./pluginIpc.cjs');
 const pluginService = require('../services/pluginService.cjs');
 const { createAgentService } = require('../services/agentService.cjs');
 const { createAiService } = require('../services/aiService.cjs');
+const { createAutoConfirmationService } = require('../services/autoConfirmationService.cjs');
 const { createConfigStore } = require('../services/configStore.cjs');
 const { createDeveloperExpansionReplaceTestService } = require('../services/developerExpansionReplaceTest.cjs');
 const { createDuplicateCheckService } = require('../services/duplicateCheckService.cjs');
@@ -106,6 +108,7 @@ const workspaceDatabaseChannels = [
   'tasks:start-bid-analysis',
   'tasks:start-outline-generation',
   'tasks:confirm-outline-selection',
+  'tasks:suppress-outline-selection-auto-confirmation',
   'tasks:start-global-facts-generation',
   'tasks:start-content-generation',
   'tasks:pause-content-generation',
@@ -176,7 +179,7 @@ function registerWorkspaceDatabaseStatusIpc({ mainWindow }) {
   };
 }
 
-function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, updateStatus }) {
+function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, updateStatus }) {
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
@@ -185,7 +188,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore });
   const templateStore = createTemplateStore({ db: sqliteDatabase.db });
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
-  const taskService = createTaskService({ aiService, agentService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
+  const taskService = createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
 
   clearWorkspaceDatabaseIpc();
   registerKnowledgeBaseIpc({ knowledgeBaseService });
@@ -219,7 +222,8 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const licenseService = createLicenseService({ app, configStore });
   const aiService = createAiService({ app, configStore });
   const developerExpansionReplaceTestService = createDeveloperExpansionReplaceTestService({ aiService });
-  const agentService = createAgentService({ app, configStore, aiService, licenseService });
+  const autoConfirmationService = createAutoConfirmationService({ configStore });
+  const agentService = createAgentService({ app, configStore, aiService, licenseService, autoConfirmationService });
   const fileService = createFileService({ app, configStore });
   const exportService = createExportService({ configStore });
   const systemFontService = createSystemFontService();
@@ -229,6 +233,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
 
   const closeServices = async () => {
     await agentService.close?.();
+    autoConfirmationService.close?.();
   };
 
   const closeServicesBeforeExit = async () => {
@@ -291,6 +296,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     aiService,
     onConfigChanged(nextConfig, previousConfig) {
       agentService.handleConfigChanged?.(nextConfig, previousConfig);
+      autoConfirmationService.handleConfigChanged?.(nextConfig, previousConfig);
     },
     onDeveloperModeChange(developerMode) {
       if (!developerMode) {
@@ -310,6 +316,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerLicenseIpc({ licenseService });
   registerAiIpc({ aiService });
   registerAgentIpc({ agentService });
+  registerAutoConfirmationIpc({ autoConfirmationService });
   registerFileIpc({ fileService });
   registerExportIpc({ exportService });
   registerSystemFontIpc({ systemFontService });
@@ -339,7 +346,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     databaseStatus.updateStatus({ phase: 'checking', ready: false, message: '正在检查本地数据库' });
     setTimeout(() => {
       try {
-        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, updateStatus: databaseStatus.updateStatus });
+        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, updateStatus: databaseStatus.updateStatus });
       } catch (error) {
         databaseStatus.updateStatus({
           phase: 'error',

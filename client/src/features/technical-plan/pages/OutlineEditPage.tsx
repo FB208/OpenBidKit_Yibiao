@@ -635,6 +635,12 @@ function OutlineEditPage({
     }
   };
 
+  // 用户修改一级目录选择时停止当前弹窗的自动确认计时。
+  const suppressOutlineSelectionAutoConfirmation = () => {
+    if (!task?.task_id) return;
+    void window.yibiao.tasks.suppressOutlineSelectionAutoConfirmation({ taskId: task.task_id }).catch(() => undefined);
+  };
+
   const toggleDraftKnowledgeDocument = (document: KnowledgeDocument) => {
     if (document.status !== 'success' || knowledgePickingDisabled) {
       return;
@@ -1365,6 +1371,7 @@ function OutlineEditPage({
           selection={outlineSelection}
           saving={savingOutlineSelection}
           onDismiss={() => setSelectionDialogOpen(false)}
+          onInteraction={suppressOutlineSelectionAutoConfirmation}
           onConfirm={(items, selectedIds) => { void confirmOutlineSelection(items, selectedIds); }}
         />
       )}
