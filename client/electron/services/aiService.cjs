@@ -22,6 +22,7 @@ const {
   writeAiLog,
 } = require('../utils/aiLog.cjs');
 const textTokenStatsStore = require('./textTokenStatsStore.cjs');
+const { normalizeTokenUsage } = textTokenStatsStore;
 
 const AI_REQUEST_TIMEOUT_MS = 600000;
 
@@ -94,57 +95,6 @@ function createModuleDeveloperLogger(app, config, moduleName, request = {}) {
     name: request.name || request.logTitle || moduleName,
     meta: request.meta || {},
   });
-}
-
-function normalizeTokenNumber(value) {
-  const number = Number(value || 0);
-  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
-}
-
-function normalizeCachedTokenNumber(source) {
-  const promptDetails = source.prompt_tokens_details
-    || source.promptTokensDetails
-    || source.input_token_details
-    || source.inputTokenDetails
-    || {};
-  return normalizeTokenNumber(
-    source.cached_tokens
-    ?? source.cachedTokens
-    ?? source.prompt_cached_tokens
-    ?? source.promptCachedTokens
-    ?? source.prompt_cache_hit_tokens
-    ?? source.promptCacheHitTokens
-    ?? source.cache_read_input_tokens
-    ?? source.cacheReadInputTokens
-    ?? source.cached_content_token_count
-    ?? source.cachedContentTokenCount
-    ?? promptDetails.cached_tokens
-    ?? promptDetails.cachedTokens
-    ?? promptDetails.cache_read
-    ?? promptDetails.cacheRead
-    ?? promptDetails.cache_read_input_tokens
-    ?? promptDetails.cacheReadInputTokens
-  );
-}
-
-function normalizeTokenUsage(usage) {
-  const source = usage || {};
-  const promptTokens = normalizeTokenNumber(source.prompt_tokens ?? source.promptTokens ?? source.promptTokenCount);
-  const completionTokens = normalizeTokenNumber(
-    source.completion_tokens
-    ?? source.completionTokens
-    ?? source.completionTokenCount
-    ?? source.candidatesTokenCount,
-  );
-  const totalTokens = normalizeTokenNumber(source.total_tokens ?? source.totalTokens ?? source.totalTokenCount)
-    || promptTokens + completionTokens;
-
-  return {
-    prompt_tokens: promptTokens,
-    completion_tokens: completionTokens,
-    total_tokens: totalTokens,
-    cached_tokens: normalizeCachedTokenNumber(source),
-  };
 }
 
 function getTextTokenStatsSnapshot() {
