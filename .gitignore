@@ -6,6 +6,10 @@ user_config.json
 config.json
 *.private.md
 
+
+# asset目录下的所有文件（保留源码，忽略构建产物）
+asset/
+
 # 上传文件目录
 uploads/
 *.docx
@@ -43,6 +47,7 @@ package-lock.json.backup
 # IDE和编辑器文件（根据需要调整）
 .vscode/settings.json
 .vscode/extensions.json
+.codebuddy/
 # 保留launch.json和tasks.json用于项目配置
 
 # 原有的gitignore内容保持不变
@@ -269,3 +274,4 @@ tools/对比结果/
 donotsync/
 testfiles/
 doc/
+docs/

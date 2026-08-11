@@ -21,6 +21,7 @@ const initialState: TechnicalPlanState = {
   outlineMode: 'aligned',
   outlineExpansionMode: 'ai-complement',
   referenceKnowledgeDocumentIds: [],
+  referenceKnowledgeSnippetIds: [],
   bidSectionExtractionTask: undefined,
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
@@ -31,6 +32,7 @@ const initialState: TechnicalPlanState = {
   contentGenerationPlans: {},
   contentGenerationRuntime: undefined,
   outlineData: null,
+  tenderStarredSections: {},
 };
 
 export function useTechnicalPlanWorkflow() {

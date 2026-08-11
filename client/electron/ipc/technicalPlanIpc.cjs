@@ -18,6 +18,7 @@ function registerTechnicalPlanIpc({ technicalPlanStore }) {
   ipcMain.handle('technical-plan:save-global-facts', (_event, globalFacts) => technicalPlanStore.saveGlobalFacts(globalFacts));
   ipcMain.handle('technical-plan:save-content-generation-options', (_event, options) => technicalPlanStore.saveContentGenerationOptions(options));
   ipcMain.handle('technical-plan:save-chapter-content', (_event, payload) => technicalPlanStore.saveChapterContent(payload));
+  ipcMain.handle('technical-plan:save-tender-starred-sections', (_event, starredSections) => technicalPlanStore.saveTenderStarredSections(starredSections));
   ipcMain.handle('technical-plan:clear', () => technicalPlanStore.clearTechnicalPlan());
 }
 

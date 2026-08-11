@@ -15,6 +15,7 @@ interface MarkdownRendererProps {
   renderMermaid?: boolean;
   previewImageTitle?: string;
   onPreviewImage?: (src: string, alt: string) => void;
+  resolveImage?: (src: string) => string | Promise<string | null> | null;
 }
 
 function normalizeExternalUrl(value: string | undefined) {
@@ -100,6 +101,67 @@ function getElementClassName(element: Element) {
   return element.getAttribute('class') || undefined;
 }
 
+interface ResolvedImageProps {
+  src: string;
+  alt: string;
+  className?: string;
+  imageMode?: MarkdownImageMode;
+  previewEnabled?: boolean;
+  previewImageTitle?: string;
+  onPreviewImage?: (src: string, alt: string) => void;
+  resolveImage: (src: string) => string | Promise<string | null> | null;
+}
+
+function ResolvedImage({ src, alt, className, imageMode, previewEnabled, previewImageTitle, onPreviewImage, resolveImage }: ResolvedImageProps) {
+  const [resolved, setResolved] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setFailed(false);
+    setResolved(null);
+    try {
+      const result = resolveImage(src);
+      if (result && typeof result === 'object' && typeof (result as { then?: unknown }).then === 'function') {
+        (result as Promise<string | null>).then((value) => {
+          if (!cancelled) setResolved(typeof value === 'string' ? value : null);
+        }).catch(() => {
+          if (!cancelled) setFailed(true);
+        });
+      } else {
+        setResolved(typeof result === 'string' ? result : null);
+      }
+    } catch {
+      setFailed(true);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [src, resolveImage]);
+
+  if (failed || !resolved) {
+    return <span className="markdown-image-missing" title={alt}>图片缺失</span>;
+  }
+
+  const handlePreview = () => {
+    if (previewEnabled && onPreviewImage) onPreviewImage(resolved, alt);
+  };
+
+  return (
+    <img
+      src={resolved}
+      alt={alt}
+      className={className}
+      loading={imageMode === 'lazy' ? 'lazy' : undefined}
+      decoding={imageMode === 'lazy' ? 'async' : undefined}
+      role={previewEnabled ? 'button' : undefined}
+      tabIndex={previewEnabled ? 0 : undefined}
+      title={previewEnabled ? previewImageTitle : undefined}
+      onClick={previewEnabled ? handlePreview : undefined}
+    />
+  );
+}
+
 function childrenFromDom(nodes: ChildNode[], renderNode: (node: ChildNode, index: number) => ReactNode) {
   return nodes.map((node, index) => renderNode(node, index));
 }
@@ -115,6 +177,7 @@ function MarkdownRenderer({
   renderMermaid = false,
   previewImageTitle = '点击放大查看',
   onPreviewImage,
+  resolveImage,
 }: MarkdownRendererProps) {
   const html = useMemo(() => renderMarkdownHtml(children, { allowRawHtml, enableGfm }), [allowRawHtml, children, enableGfm]);
 
@@ -164,6 +227,21 @@ function MarkdownRenderer({
       if (tag === 'img') {
         const src = element.getAttribute('src') || '';
         const alt = element.getAttribute('alt') || '正文图片';
+        if (resolveImage && /^kbimg:/i.test(src)) {
+          return (
+            <ResolvedImage
+              key={key}
+              src={src}
+              alt={alt}
+              className={imageClassName || className}
+              imageMode={imageMode}
+              previewEnabled={imageMode === 'preview' && Boolean(onPreviewImage)}
+              onPreviewImage={onPreviewImage}
+              previewImageTitle={previewImageTitle}
+              resolveImage={resolveImage}
+            />
+          );
+        }
         const previewEnabled = imageMode === 'preview' && Boolean(src) && Boolean(onPreviewImage);
         const handlePreview = () => {
           if (previewEnabled) onPreviewImage?.(src, alt);

@@ -3622,3 +3622,117 @@
     flex-direction: column;
   }
 }
+
+/* ── Bid Analysis: Tender Reader with Star Marks ─────────── */
+.bid-analysis-tender-reader {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tender-starred-reader {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 24px 24px;
+}
+
+.tender-blocks-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.tender-block {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(228, 233, 240, 0.6);
+  transition: background 0.15s;
+}
+
+.tender-block:last-child {
+  border-bottom: none;
+}
+
+.tender-block.is-starred {
+  background: rgba(255, 193, 7, 0.06);
+  margin: 0 -12px;
+  padding: 12px 12px;
+  border-radius: 8px;
+  border-bottom-color: rgba(255, 193, 7, 0.15);
+}
+
+.tender-block-star {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  padding: 0;
+  font-size: 16px;
+  color: #c0c5cc;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.12s;
+  line-height: 1;
+}
+
+.tender-block-star:hover {
+  color: #f5a623;
+  background: rgba(255, 193, 7, 0.1);
+  border-color: rgba(255, 193, 7, 0.25);
+}
+
+.tender-block-star.is-starred {
+  color: #f5a623;
+}
+
+.tender-block-content {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tender-block-content .markdown-viewer {
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.tender-starred-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #b8860b;
+  background: rgba(255, 193, 7, 0.12);
+  border: 1px solid rgba(255, 193, 7, 0.25);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* — Tender reader in task list sidebar — */
+.bid-analysis-task-item.is-tender-reader {
+  border-left: 3px solid #667eea;
+}
+
+.bid-analysis-task-item.is-tender-reader.is-active {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.06));
+}
+
+@media (max-width: 860px) {
+  .bid-analysis-reader-actions {
+    flex-wrap: wrap;
+  }
+  .tender-starred-reader {
+    padding: 0 16px 16px;
+  }
+}

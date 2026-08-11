@@ -1,10 +1,55 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { bidAnalysisTasks, getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
 import BidSectionSelectorDialog from '../components/BidSectionSelectorDialog';
 import type { BackgroundTaskState, BidAnalysisMode, BidAnalysisTasks, BidAnalysisTaskState, BidSectionExtractionStatus, BidSectionMode, DetectedBidSection, TechnicalPlanState } from '../types';
+
+interface TenderBlock {
+  hash: string;
+  heading: string;
+  content: string;
+}
+
+/** 将 Markdown 按 ## / ### 标题切分为命名块 */
+function splitMarkdownIntoBlocks(markdown: string): TenderBlock[] {
+  const lines = String(markdown || '').split('\n');
+  const blocks: TenderBlock[] = [];
+  let currentHeading = '';
+  let currentLines: string[] = [];
+
+  function flush() {
+    const content = currentLines.join('\n').trim();
+    if (!content) return;
+    const hash = hashCode(`${currentHeading}\n${content}`);
+    blocks.push({ hash, heading: currentHeading, content });
+  }
+
+  for (const line of lines) {
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flush();
+      currentHeading = headingMatch[2].trim();
+      currentLines = [line];
+    } else {
+      currentLines.push(line);
+    }
+  }
+  flush();
+  return blocks;
+}
+
+/** 简单哈希（返回无符号正数的 base36 字符串） */
+function hashCode(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return `h${Math.abs(hash >>> 0).toString(36)}`;
+}
 
 interface BidAnalysisPageProps {
   hasTenderFile: boolean;
@@ -19,8 +64,11 @@ interface BidAnalysisPageProps {
   tasks: BidAnalysisTasks;
   task?: BackgroundTaskState;
   progress: number;
+  tenderMarkdown?: string;
+  tenderStarredSections?: Record<string, boolean>;
   onProgressChange: (progress: number) => void;
   onConfigSaved: (state: TechnicalPlanState) => void;
+  onTenderStarredSectionsChange?: (starredSections: Record<string, boolean>) => void;
 }
 
 const modeOptions: Array<{ id: 'key' | 'full'; title: string; badge: string }> = [
@@ -209,8 +257,11 @@ function BidAnalysisPage({
   tasks,
   task,
   progress,
+  tenderMarkdown = '',
+  tenderStarredSections = {},
   onProgressChange,
   onConfigSaved,
+  onTenderStarredSectionsChange,
 }: BidAnalysisPageProps) {
   const [running, setRunning] = useState(false);
   const [fullRerunLocked, setFullRerunLocked] = useState(false);
@@ -228,6 +279,8 @@ function BidAnalysisPage({
     nextTaskIds: string[];
   } | null>(null);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
+  const [showTenderReader, setShowTenderReader] = useState(false);
+  const [exportingWord, setExportingWord] = useState(false);
   const { showToast } = useToast();
   const effectiveSelectedTaskIds = useMemo(() => getSelectedTaskIdsForMode(mode, selectedTaskIds), [mode, selectedTaskIds]);
   const selectedTasks = useMemo(() => {
@@ -535,6 +588,53 @@ function BidAnalysisPage({
     showToast('解析结果已复制', 'success');
   };
 
+  // ── 招标原文标星与导出 ───────────────────────────────
+  const tenderBlocks = useMemo(
+    () => (tenderMarkdown ? splitMarkdownIntoBlocks(tenderMarkdown) : []),
+    [tenderMarkdown],
+  );
+  const starredCount = useMemo(
+    () => Object.values(tenderStarredSections).filter(Boolean).length,
+    [tenderStarredSections],
+  );
+
+  const toggleStar = useCallback((hash: string) => {
+    if (!onTenderStarredSectionsChange) return;
+    const next = { ...tenderStarredSections, [hash]: !tenderStarredSections[hash] };
+    onTenderStarredSectionsChange(next);
+  }, [tenderStarredSections, onTenderStarredSectionsChange]);
+
+  const handleExportWord = useCallback(async () => {
+    if (!tenderMarkdown.trim()) {
+      showToast('暂无招标文件内容可导出', 'info');
+      return;
+    }
+    try {
+      setExportingWord(true);
+      const result = await window.yibiao?.export.exportWord({
+        requestId: `tender-export-${Date.now()}`,
+        project_name: '招标文件原文',
+        outline: [
+          {
+            id: 'tender-root',
+            title: '招标文件原文',
+            description: '招标文件解析后的 Markdown 原文',
+            content: tenderMarkdown,
+          },
+        ],
+      });
+      if (result?.canceled) {
+        showToast('已取消导出', 'info');
+        return;
+      }
+      showToast(result?.message || 'Word 已导出', result?.warnings?.length ? 'info' : 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '导出 Word 失败', 'error');
+    } finally {
+      setExportingWord(false);
+    }
+  }, [tenderMarkdown, showToast]);
+
   const renderConfigTask = (definition: typeof bidAnalysisTasks[number]) => {
     const selected = normalizeSelectedTaskIds(draftSelectedTaskIds).includes(definition.id);
     const required = definition.required;
@@ -618,6 +718,16 @@ function BidAnalysisPage({
             )}
           </div>
           <div className="bid-analysis-task-list">
+            {tenderMarkdown && (
+              <button
+                type="button"
+                className={`bid-analysis-task-item is-tender-reader${showTenderReader ? ' is-active' : ''}`}
+                onClick={() => setShowTenderReader(true)}
+              >
+                <strong>招标文件原文</strong>
+                <small>{tenderMarkdown.length} 字{starredCount > 0 ? ` · ${starredCount} 项标星` : ''}</small>
+              </button>
+            )}
             {taskGroups.map((group) => {
               const groupTasks = selectedTasks.filter((task) => group.ids.includes(task.id));
               if (!groupTasks.length) {
@@ -636,7 +746,7 @@ function BidAnalysisPage({
                         type="button"
                         className={`bid-analysis-task-item is-${status}${visibleSelectedTaskId === task.id ? ' is-active' : ''}`}
                         key={task.id}
-                        onClick={() => setSelectedTaskId(task.id)}
+                        onClick={() => { setSelectedTaskId(task.id); setShowTenderReader(false); }}
                       >
                         <strong>{task.label}</strong>
                         <small>{content ? `${content.length} 字` : task.description}</small>
@@ -651,35 +761,90 @@ function BidAnalysisPage({
         </aside>
 
         <article className="bid-analysis-reader">
-          <div className="bid-analysis-reader-head">
-            <div>
-              <span className="section-kicker">解析结果</span>
-              <strong>{activeTask?.label || '解析结果'}</strong>
-              <p>{activeTask?.description || '选择左侧任务查看解析结果。'}</p>
+          {showTenderReader ? (
+            <div className="bid-analysis-tender-reader">
+              <div className="bid-analysis-reader-head">
+                <div>
+                  <span className="section-kicker">招标文件原文</span>
+                  <strong>招标文件原文</strong>
+                  <p>可标记重要段落，标记后可导出 Word。</p>
+                </div>
+                <div className="bid-analysis-reader-actions">
+                  {starredCount > 0 && (
+                    <span className="tender-starred-count">{starredCount} 项标星</span>
+                  )}
+                  <button
+                    type="button"
+                    className="primary-action"
+                    onClick={() => void handleExportWord()}
+                    disabled={exportingWord}
+                  >
+                    {exportingWord ? '导出中...' : '导出 Word'}
+                  </button>
+                </div>
+              </div>
+              <div className="tender-starred-reader">
+                <div className="tender-blocks-container">
+                  {tenderBlocks.map((block) => {
+                    const isStarred = Boolean(tenderStarredSections[block.hash]);
+                    return (
+                      <div
+                        key={block.hash}
+                        className={`tender-block${isStarred ? ' is-starred' : ''}`}
+                        id={`block-${block.hash}`}
+                      >
+                        <button
+                          type="button"
+                          className={`tender-block-star${isStarred ? ' is-starred' : ''}`}
+                          onClick={() => toggleStar(block.hash)}
+                          title={isStarred ? '取消标星' : '标星此段落'}
+                          aria-label={isStarred ? '取消标星' : '标星此段落'}
+                        >
+                          {isStarred ? '★' : '☆'}
+                        </button>
+                        <div className="tender-block-content">
+                          <MarkdownRenderer>
+                            {block.content}
+                          </MarkdownRenderer>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
-            <div className="bid-analysis-reader-actions">
-              <span className={`bid-analysis-status is-${activeTaskStatus}`}>{statusLabel[activeTaskStatus]}</span>
-              {activeTaskStatus === 'error' && (
-                <button type="button" className="secondary-action" onClick={retryActiveTask} disabled={taskRunning || !hasTenderFile}>重新解析此项</button>
-              )}
-              <button type="button" className="secondary-action" onClick={copyActiveResult} disabled={!activeTaskContent}>复制</button>
-            </div>
-          </div>
-
-          {activeTaskContent ? (
-            activeTask?.output === 'json' ? (
-              <JsonResultTable content={activeTaskContent} />
-            ) : (
-              <MarkdownFullscreenViewer className="markdown-viewer bid-analysis-output" title={`${activeTask?.label || '解析结果'}全屏预览`}>
-                <MarkdownRenderer>
-                  {activeTaskContent}
-                </MarkdownRenderer>
-              </MarkdownFullscreenViewer>
-            )
           ) : (
-            <div className="markdown-empty-state bid-analysis-empty">
-              <strong>{activeTaskStatus === 'error' ? activeTaskState?.error || '解析失败' : '等待解析结果'}</strong>
-              <p>{activeTaskStatus === 'idle' ? '点击开始解析后，左侧任务会并发运行；选择任一任务查看实时输出。' : '正在等待模型返回内容。'}</p>
+            <div className="bid-analysis-default-reader">
+              <div className="bid-analysis-reader-head">
+                <div>
+                  <span className="section-kicker">解析结果</span>
+                  <strong>{activeTask?.label || '解析结果'}</strong>
+                  <p>{activeTask?.description || '选择左侧任务查看解析结果。'}</p>
+                </div>
+                <div className="bid-analysis-reader-actions">
+                  <span className={`bid-analysis-status is-${activeTaskStatus}`}>{statusLabel[activeTaskStatus]}</span>
+                  {activeTaskStatus === 'error' && (
+                    <button type="button" className="secondary-action" onClick={retryActiveTask} disabled={taskRunning || !hasTenderFile}>重新解析此项</button>
+                  )}
+                  <button type="button" className="secondary-action" onClick={copyActiveResult} disabled={!activeTaskContent}>复制</button>
+                </div>
+              </div>
+              {activeTaskContent ? (
+                activeTask?.output === 'json' ? (
+                  <JsonResultTable content={activeTaskContent} />
+                ) : (
+                  <MarkdownFullscreenViewer className="markdown-viewer bid-analysis-output" title={`${activeTask?.label || '解析结果'}全屏预览`}>
+                    <MarkdownRenderer>
+                      {activeTaskContent}
+                    </MarkdownRenderer>
+                  </MarkdownFullscreenViewer>
+                )
+              ) : (
+                <div className="markdown-empty-state bid-analysis-empty">
+                  <strong>{activeTaskStatus === 'error' ? activeTaskState?.error || '解析失败' : '等待解析结果'}</strong>
+                  <p>{activeTaskStatus === 'idle' ? '点击开始解析后，左侧任务会并发运行；选择任一任务查看实时输出。' : '正在等待模型返回内容。'}</p>
+                </div>
+              )}
             </div>
           )}
         </article>

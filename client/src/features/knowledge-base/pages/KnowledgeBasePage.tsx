@@ -1,8 +1,10 @@
 import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
-import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeBaseMigrationStatus, KnowledgeDocument, KnowledgeItem } from '../types';
+import { isLibreOfficeRequiredMessage, MarkdownEditor, MarkdownEditorHandle, MarkdownFullscreenViewer, MarkdownRenderer, TableEditorDialog, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import ImagePickerDialog from '../components/ImagePickerDialog';
+import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeBaseMigrationStatus, KnowledgeDocument, KnowledgeFolder, KnowledgeItem, KnowledgeSnippet } from '../types';
+import type { SectionId } from '../../../shared/types/navigation';
 
 declare global {
   interface Window {
@@ -76,6 +78,21 @@ function nowMs() {
 
 function roundMs(value: number) {
   return Math.round(value * 10) / 10;
+}
+
+/** 将树形文件夹列表展开为平级 Map，value 为 parent_id */
+function flattenFolderTree(folders: KnowledgeFolder[]): Map<string, string | null> {
+  const result = new Map<string, string | null>();
+  function walk(list: KnowledgeFolder[], parentId: string | null) {
+    for (const folder of list) {
+      result.set(folder.id, parentId);
+      if (folder.children?.length) {
+        walk(folder.children, folder.id);
+      }
+    }
+  }
+  walk(folders, null);
+  return result;
 }
 
 function countMatches(text: string, pattern: RegExp) {
@@ -295,7 +312,7 @@ type KnowledgeViewer = {
   mode: 'analysis' | 'items' | 'markdown';
 };
 
-function KnowledgeBasePage() {
+function KnowledgeBasePage({ onSectionChange }: { onSectionChange: (section: SectionId) => void }) {
   const [index, setIndex] = useState<KnowledgeBaseIndex>(emptyIndex);
   const [activeFolderId, setActiveFolderId] = useState('');
   const [listLoading, setListLoading] = useState(true);
@@ -314,13 +331,18 @@ function KnowledgeBasePage() {
   const [developerMode, setDeveloperMode] = useState(false);
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+  const [newFolderParentId, setNewFolderParentId] = useState<string | undefined>(undefined);
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(() => new Set());
   const [retryingDocumentIds, setRetryingDocumentIds] = useState<Set<string>>(() => new Set());
   const [visibleDocumentCount, setVisibleDocumentCount] = useState(documentRenderBatchSize);
   const [dragPayload, setDragPayload] = useState<KnowledgeDragPayload | null>(null);
   const [folderDropTargetId, setFolderDropTargetId] = useState<string | null>(null);
   const [documentDropTarget, setDocumentDropTarget] = useState<KnowledgeDocumentDropTarget | null>(null);
   const [dragSaving, setDragSaving] = useState(false);
+  const [snippets, setSnippets] = useState<KnowledgeSnippet[]>([]);
+  const [snippetEditor, setSnippetEditor] = useState<{ mode: 'create' } | { mode: 'edit'; snippet: KnowledgeSnippet } | null>(null);
+  const [snippetEditorSaving, setSnippetEditorSaving] = useState(false);
   const autoMatchingIdsRef = useRef(new Set<string>());
   const documentParseNoticeIdsRef = useRef(new Set<string>());
   const viewerRequestIdRef = useRef(0);
@@ -391,6 +413,35 @@ function KnowledgeBasePage() {
   }, [documents.length, visibleDocumentCount]);
 
   useEffect(() => {
+    if (viewer) return;
+    if (!activeFolderId) {
+      setSnippets([]);
+      return undefined;
+    }
+    let cancelled = false;
+    window.yibiao?.knowledgeBase.listSnippets(activeFolderId)
+      .then((result) => {
+        if (!cancelled) setSnippets(Array.isArray(result) ? result : []);
+      })
+      .catch(() => {
+        if (!cancelled) setSnippets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeFolderId, viewer]);
+
+  const reloadSnippets = async (folderId: string = activeFolderId) => {
+    if (!folderId) return;
+    try {
+      const result = await window.yibiao?.knowledgeBase.listSnippets(folderId);
+      setSnippets(Array.isArray(result) ? result : []);
+    } catch {
+      // 忽略片段读取失败，保留当前列表。
+    }
+  };
+
+  useEffect(() => {
     if (developerMode) return;
     const pendingDocuments = index.documents.filter((document) => document.status === 'ready_for_matching' && !autoMatchingIdsRef.current.has(document.id));
     pendingDocuments.forEach((document) => {
@@ -430,9 +481,9 @@ function KnowledgeBasePage() {
       if (migrationStatus?.needsMigration) {
         setPendingMigrationStatus(migrationStatus);
         setMigrationDialogOpen(true);
-        data = await window.yibiao?.knowledgeBase.list();
+        data = await window.yibiao?.knowledgeBase.list('document');
       } else {
-        data = await window.yibiao?.knowledgeBase.list();
+        data = await window.yibiao?.knowledgeBase.list('document');
         if (migrationStatus?.cleanupPending) {
           showToast(migrationStatus.message || '旧知识库 JSON 清理未完成，将在下次进入时继续处理', 'info');
         }
@@ -508,9 +559,14 @@ function KnowledgeBasePage() {
     const position = getDropPosition(event);
     setDragSaving(true);
     try {
-      const result = payload.kind === 'folder'
-        ? await window.yibiao?.knowledgeBase.reorderFolder(payload.folderId, folderId, position)
-        : await window.yibiao?.knowledgeBase.moveDocument(payload.documentId, folderId, null, 'after');
+      let result;
+      if (payload.kind === 'folder') {
+        const parentMap = flattenFolderTree(index.folders);
+        const parentId = parentMap.get(payload.folderId) ?? undefined;
+        result = await window.yibiao?.knowledgeBase.reorderFolder(payload.folderId, folderId, position, parentId);
+      } else {
+        result = await window.yibiao?.knowledgeBase.moveDocument(payload.documentId, folderId, null, 'after');
+      }
       if (!result?.success || !result.index) {
         throw new Error(result?.message || '拖拽操作失败');
       }
@@ -569,7 +625,7 @@ function KnowledgeBasePage() {
       if (!result?.success) {
         throw new Error(result?.message || '知识库迁移失败');
       }
-      const data = result.index || await window.yibiao?.knowledgeBase.list();
+      const data = result.index || await window.yibiao?.knowledgeBase.list('document');
       if (!data) {
         throw new Error('知识库迁移完成，但读取迁移结果失败');
       }
@@ -619,11 +675,17 @@ function KnowledgeBasePage() {
 
     try {
       setCreatingFolder(true);
-      const folder = await window.yibiao?.knowledgeBase.createFolder(name.trim());
+      const folder = await window.yibiao?.knowledgeBase.createFolder(name.trim(), 'document', newFolderParentId);
       if (!folder) return;
-      setIndex((prev) => ({ ...prev, folders: [...prev.folders, folder] }));
-      setActiveFolderId(folder.id);
+      // 重新加载以获取正确的树形结构
+      const data = await window.yibiao?.knowledgeBase.list('document');
+      if (data) applyKnowledgeIndex(data);
+      // 如果是子文件夹，展开父文件夹
+      if (newFolderParentId) {
+        setExpandedFolderIds((prev) => new Set([...prev, newFolderParentId]));
+      }
       setNewFolderName('');
+      setNewFolderParentId(undefined);
       setShowCreateFolder(false);
       showToast('文件夹已创建', 'success');
     } catch (error) {
@@ -671,6 +733,100 @@ function KnowledgeBasePage() {
     }
   };
 
+  const reloadItemsPreview = async () => {
+    if (!viewer) return;
+    try {
+      const items = await window.yibiao?.knowledgeBase.readItems(viewer.document.id);
+      setItemsPreview(Array.isArray(items) ? items : []);
+    } catch {
+      // 保留当前条目列表，避免刷新失败清空界面。
+    }
+  };
+
+  const handleCreateItem = async (documentId: string, payload: { title: string; resume: string; content: string }) => {
+    if (!payload.title.trim() || !payload.content.trim()) {
+      showToast('标题和内容不能为空', 'error');
+      return;
+    }
+    try {
+      await window.yibiao?.knowledgeBase.createItem(documentId, payload);
+      showToast('已手工新增知识条目', 'success');
+      await reloadItemsPreview();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '新增条目失败', 'error');
+    }
+  };
+
+  const handleUpdateItem = async (documentId: string, itemId: string, payload: { title: string; resume: string; content: string }) => {
+    if (!payload.title.trim() || !payload.content.trim()) {
+      showToast('标题和内容不能为空', 'error');
+      return;
+    }
+    try {
+      await window.yibiao?.knowledgeBase.updateItem(documentId, itemId, payload);
+      showToast('已保存知识条目', 'success');
+      await reloadItemsPreview();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存条目失败', 'error');
+    }
+  };
+
+  const handleDeleteItem = async (documentId: string, itemId: string) => {
+    try {
+      const result = await window.yibiao?.knowledgeBase.deleteItem(documentId, itemId);
+      showToast(result?.message || '已删除知识条目', 'success');
+      await reloadItemsPreview();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '删除条目失败', 'error');
+    }
+  };
+
+  const handleCreateSnippet = async (payload: { title: string; content: string; folder_id: string }) => {
+    if (!payload.title.trim() || !payload.content.trim()) {
+      showToast('标题和内容不能为空', 'error');
+      return;
+    }
+    setSnippetEditorSaving(true);
+    try {
+      await window.yibiao?.knowledgeBase.createSnippet(payload.folder_id, { title: payload.title, content: payload.content });
+      showToast('已新建知识片段', 'success');
+      setSnippetEditor(null);
+      await reloadSnippets(payload.folder_id);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '新建片段失败', 'error');
+    } finally {
+      setSnippetEditorSaving(false);
+    }
+  };
+
+  const handleUpdateSnippet = async (snippetId: string, folderId: string, payload: { title: string; content: string; folder_id: string }) => {
+    if (!payload.title.trim() || !payload.content.trim()) {
+      showToast('标题和内容不能为空', 'error');
+      return;
+    }
+    setSnippetEditorSaving(true);
+    try {
+      await window.yibiao?.knowledgeBase.updateSnippet(snippetId, { title: payload.title, content: payload.content, folder_id: payload.folder_id });
+      showToast('已保存知识片段', 'success');
+      setSnippetEditor(null);
+      await reloadSnippets(folderId);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存片段失败', 'error');
+    } finally {
+      setSnippetEditorSaving(false);
+    }
+  };
+
+  const handleDeleteSnippet = async (snippet: KnowledgeSnippet) => {
+    try {
+      const result = await window.yibiao?.knowledgeBase.deleteSnippet(snippet.id);
+      showToast(result?.message || '已删除知识片段', 'success');
+      await reloadSnippets(snippet.folder_id);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '删除片段失败', 'error');
+    }
+  };
+
   const renameFolder = async (folderId: string, currentName: string) => {
     if (migrationRunning) {
       showToast('知识库迁移中，请稍候', 'info');
@@ -702,11 +858,10 @@ function KnowledgeBasePage() {
 
     try {
       const result = await window.yibiao?.knowledgeBase.deleteFolder(folderId);
-      const folders = index.folders.filter((item) => item.id !== folderId);
-      const documents = index.documents.filter((document) => document.folder_id !== folderId);
-      setIndex({ folders, documents });
-      if (activeFolderId === folderId) {
-        setActiveFolderId(folders[0]?.id || '');
+      // 重新加载索引以获取正确的删除后状态（含级联删除）
+      const data = await window.yibiao?.knowledgeBase.list('document');
+      if (data) {
+        applyKnowledgeIndex(data);
       }
       setViewer((prev) => (prev?.document.folder_id === folderId ? null : prev));
       showToast(result?.message || '文件夹已删除', 'success');
@@ -950,11 +1105,83 @@ function KnowledgeBasePage() {
           onModeChange={(mode) => void openDocument(viewer.document, mode)}
           onStartMatching={() => void startMatching()}
           onRefreshAnalysis={() => void loadAnalysis(viewer.document.id)}
+          onItemCreate={handleCreateItem}
+          onItemUpdate={handleUpdateItem}
+          onItemDelete={handleDeleteItem}
         />
         {migrationDialog}
       </>
     );
   }
+
+  /** 递归渲染文件夹树 */
+  const renderFolderTree = (folders: KnowledgeFolder[], depth: number): ReactNode[] => {
+    return folders.map((folder) => {
+      const isExpanded = expandedFolderIds.has(folder.id);
+      const isLeaf = !folder.hasChildren;
+      const count = documentsByFolder.get(folder.id)?.length || 0;
+      const dragging = dragPayload?.kind === 'folder' && dragPayload.folderId === folder.id;
+      const dropTarget = folderDropTargetId === folder.id;
+      const childCount = (folder.children || []).length;
+
+      const toggleExpand = () => {
+        setExpandedFolderIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(folder.id)) next.delete(folder.id);
+          else next.add(folder.id);
+          return next;
+        });
+      };
+
+      const startSubfolder = () => {
+        setNewFolderParentId(folder.id);
+        setNewFolderName('');
+        setShowCreateFolder(true);
+      };
+
+      return (
+        <div key={folder.id} style={{ marginLeft: depth * 16 }}>
+          <article
+            className={`knowledge-folder-card ${folder.id === activeFolder?.id ? 'is-active' : ''}${dragging ? ' is-dragging' : ''}${dropTarget ? ' is-drop-target' : ''}`}
+            onDragOver={(event) => handleFolderDragOver(event, folder.id)}
+            onDrop={(event) => { void handleFolderDrop(event, folder.id); }}
+          >
+            <div className="knowledge-folder-row">
+              {!isLeaf && (
+                <button type="button" className="knowledge-folder-toggle" onClick={toggleExpand} aria-label={isExpanded ? '折叠' : '展开'}>
+                  {isExpanded ? '▼' : '▶'}
+                </button>
+              )}
+              {isLeaf && <span className="knowledge-folder-toggle" />}
+              <span
+                className="knowledge-drag-handle"
+                draggable={!migrationRunning && !dragSaving}
+                onDragStart={(event) => startFolderDrag(event, folder.id)}
+                onDragEnd={clearDragState}
+                title="拖拽排序"
+                aria-hidden="true"
+              >⋮⋮</span>
+              <button type="button" className="knowledge-folder-main" onClick={() => { if (isLeaf) startTransition(() => setActiveFolderId(folder.id)); }} disabled={migrationRunning || !isLeaf}>
+                <span aria-hidden="true">{isLeaf ? 'F' : '📁'}</span>
+                <strong>{folder.name}</strong>
+                <small>
+                  {dropTarget && dragPayload?.kind === 'document' ? '松开移动到此文件夹'
+                    : isLeaf ? `${count} 个文档`
+                    : `${childCount} 个子文件夹`}
+                </small>
+              </button>
+            </div>
+            <div className="knowledge-folder-actions">
+              <button type="button" onClick={startSubfolder} disabled={migrationRunning}>新建子文件夹</button>
+              <button type="button" onClick={() => void renameFolder(folder.id, folder.name)} disabled={migrationRunning}>重命名</button>
+              <button type="button" className="is-danger" onClick={() => void deleteFolder(folder.id, folder.name)} disabled={migrationRunning}>删除</button>
+            </div>
+          </article>
+          {isExpanded && folder.children && folder.children.length > 0 && renderFolderTree(folder.children, depth + 1)}
+        </div>
+      );
+    });
+  };
 
   return (
     <>
@@ -966,6 +1193,7 @@ function KnowledgeBasePage() {
           <small>{index.folders.length} 个文件夹 / {index.documents.length} 个文档</small>
         </div>
         <div className="knowledge-toolbar-actions">
+          <button type="button" className="secondary-action" onClick={() => onSectionChange('knowledge-base')}>返回知识库</button>
           <button type="button" className="secondary-action" onClick={() => setShowCreateFolder((value) => !value)} disabled={migrationRunning || listLoading}>新建文件夹</button>
           <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || migrationRunning || !activeFolder}>
             {migrationRunning ? '迁移中...' : loading ? '处理中...' : '上传文档'}
@@ -1015,39 +1243,7 @@ function KnowledgeBasePage() {
             </div>
           ) : index.folders.length ? (
             <div className="knowledge-folder-list">
-              {index.folders.map((folder) => {
-                const count = documentsByFolder.get(folder.id)?.length || 0;
-                const dragging = dragPayload?.kind === 'folder' && dragPayload.folderId === folder.id;
-                const dropTarget = folderDropTargetId === folder.id;
-                return (
-                  <article
-                    key={folder.id}
-                    className={`knowledge-folder-card ${folder.id === activeFolder?.id ? 'is-active' : ''}${dragging ? ' is-dragging' : ''}${dropTarget ? ' is-drop-target' : ''}`}
-                    onDragOver={(event) => handleFolderDragOver(event, folder.id)}
-                    onDrop={(event) => { void handleFolderDrop(event, folder.id); }}
-                  >
-                    <div className="knowledge-folder-row">
-                      <span
-                        className="knowledge-drag-handle"
-                        draggable={!migrationRunning && !dragSaving}
-                        onDragStart={(event) => startFolderDrag(event, folder.id)}
-                        onDragEnd={clearDragState}
-                        title="拖拽排序"
-                        aria-hidden="true"
-                      >⋮⋮</span>
-                      <button type="button" className="knowledge-folder-main" onClick={() => startTransition(() => setActiveFolderId(folder.id))} disabled={migrationRunning}>
-                        <span aria-hidden="true">F</span>
-                        <strong>{folder.name}</strong>
-                        <small>{dropTarget && dragPayload?.kind === 'document' ? '松开移动到此文件夹' : `${count} 个文档`}</small>
-                      </button>
-                    </div>
-                    <div className="knowledge-folder-actions">
-                      <button type="button" onClick={() => void renameFolder(folder.id, folder.name)} disabled={migrationRunning}>重命名</button>
-                      <button type="button" className="is-danger" onClick={() => void deleteFolder(folder.id, folder.name)} disabled={migrationRunning}>删除</button>
-                    </div>
-                  </article>
-                );
-              })}
+              {renderFolderTree(index.folders, 0)}
             </div>
           ) : (
             <div className="knowledge-empty-box">
@@ -1135,9 +1331,60 @@ function KnowledgeBasePage() {
               <p>支持上传 .doc、.docx、.wps、.pdf、.md、.xls、.xlsx 文档。</p>
             </div>
           )}
+
+          <div className="knowledge-panel-head knowledge-snippet-head">
+            <strong>片段</strong>
+            <span>{snippets.length} 个</span>
+            <button type="button" className="primary-action" onClick={() => setSnippetEditor({ mode: 'create' })} disabled={!activeFolder || migrationRunning}>
+              新建片段
+            </button>
+          </div>
+
+          {listLoading ? (
+            <div className="knowledge-empty-box">
+              <strong>正在读取片段...</strong>
+            </div>
+          ) : snippets.length ? (
+            <div className="knowledge-snippet-list">
+              {snippets.map((snippet) => (
+                <article key={snippet.id} className="knowledge-snippet-card">
+                  {developerMode && <code className="knowledge-entity-id">片段ID：{snippet.id}</code>}
+                  <strong>{snippet.title}</strong>
+                  <p>{snippet.content.replace(/[#>*`\-\s]+/g, ' ').trim().slice(0, 80) || '（空内容）'}</p>
+                  <div className="knowledge-item-actions">
+                    <button type="button" className="knowledge-item-edit-action" onClick={() => setSnippetEditor({ mode: 'edit', snippet })} disabled={migrationRunning}>编辑</button>
+                    <button type="button" className="knowledge-item-delete-action is-danger" onClick={() => void handleDeleteSnippet(snippet)} disabled={migrationRunning}>删除</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="knowledge-empty-box">
+              <strong>该文件夹暂无片段</strong>
+              <p>点击「新建片段」添加可复用的内容，生成标书时可被引用。</p>
+            </div>
+          )}
         </main>
         </section>
       </div>
+
+      <Dialog.Root open={Boolean(snippetEditor)} onOpenChange={(open) => !open && setSnippetEditor(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="knowledge-source-modal" />
+          {snippetEditor && (
+            <KnowledgeSnippetEditorDialog
+              snippet={snippetEditor.mode === 'edit' ? snippetEditor.snippet : null}
+              folders={index.folders}
+              defaultFolderId={activeFolder?.id || ''}
+              saving={snippetEditorSaving}
+              onCancel={() => setSnippetEditor(null)}
+              onCreate={(payload) => void handleCreateSnippet(payload)}
+              onUpdate={(snippetId, payload) => void handleUpdateSnippet(snippetId, snippetEditor.mode === 'edit' ? snippetEditor.snippet.folder_id : payload.folder_id, payload)}
+            />
+          )}
+        </Dialog.Portal>
+      </Dialog.Root>
+
       {migrationDialog}
     </>
   );
@@ -1221,7 +1468,15 @@ interface KnowledgeDocumentViewerProps {
   onModeChange: (mode: KnowledgeViewer['mode']) => void;
   onStartMatching: () => void;
   onRefreshAnalysis: () => void;
+  onItemCreate: (documentId: string, payload: { title: string; resume: string; content: string }) => Promise<void>;
+  onItemUpdate: (documentId: string, itemId: string, payload: { title: string; resume: string; content: string }) => Promise<void>;
+  onItemDelete: (documentId: string, itemId: string) => Promise<void>;
 }
+
+type KnowledgeItemEditorState =
+  | { mode: 'create' }
+  | { mode: 'edit'; item: KnowledgeItem }
+  | null;
 
 function KnowledgeDocumentViewer({
   document,
@@ -1239,8 +1494,13 @@ function KnowledgeDocumentViewer({
   onModeChange,
   onStartMatching,
   onRefreshAnalysis,
+  onItemCreate,
+  onItemUpdate,
+  onItemDelete,
 }: KnowledgeDocumentViewerProps) {
   const { showToast } = useToast();
+  const [itemEditor, setItemEditor] = useState<KnowledgeItemEditorState>(null);
+  const [itemEditorSaving, setItemEditorSaving] = useState(false);
   const [sourceItem, setSourceItem] = useState<KnowledgeItem | null>(null);
   const [sourceRendering, setSourceRendering] = useState(false);
   const [sourceTrace, setSourceTrace] = useState<RenderDebugTrace | null>(null);
@@ -1315,6 +1575,11 @@ function KnowledgeDocumentViewer({
           {developerMode && <button type="button" className={`secondary-action ${mode === 'analysis' ? 'is-active' : ''}`} onClick={() => onModeChange('analysis')}>分析调试</button>}
           <button type="button" className={`secondary-action ${mode === 'items' ? 'is-active' : ''}`} onClick={() => onModeChange('items')} disabled={document.status !== 'success'}>知识条目</button>
           <button type="button" className={`secondary-action ${mode === 'markdown' ? 'is-active' : ''}`} onClick={() => onModeChange('markdown')} disabled={!canOpenMarkdown(document)}>Markdown</button>
+          {mode === 'items' && (
+            <button type="button" className="primary-action" onClick={() => setItemEditor({ mode: 'create' })} disabled={document.status !== 'success'}>
+              手工新增条目
+            </button>
+          )}
         </div>
       </section>
 
@@ -1348,8 +1613,10 @@ function KnowledgeDocumentViewer({
                   item={item}
                   developerMode={developerMode}
                   onOpenSource={() => openSourceItem(item)}
+                  onEdit={() => setItemEditor({ mode: 'edit', item })}
+                  onDelete={() => void onItemDelete(document.id, item.id)}
                 />
-              )) : <div className="knowledge-empty-box"><strong>暂无知识条目</strong><p>文档完成整理后会显示结果。</p></div>}
+              )) : <div className="knowledge-empty-box"><strong>暂无知识条目</strong><p>文档完成整理后会显示结果，也可点击「手工新增条目」补充。</p></div>}
             </DebuggableMarkdownContent>
           )
         ) : (
@@ -1398,6 +1665,38 @@ function KnowledgeDocumentViewer({
           )}
         </Dialog.Portal>
       </Dialog.Root>
+
+      <Dialog.Root open={Boolean(itemEditor)} onOpenChange={(open) => !open && setItemEditor(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="knowledge-source-modal" />
+          {itemEditor && (
+            <KnowledgeItemEditorDialog
+              documentId={document.id}
+              item={itemEditor.mode === 'edit' ? itemEditor.item : null}
+              saving={itemEditorSaving}
+              onCancel={() => setItemEditor(null)}
+              onCreate={(payload) => void (async () => {
+                setItemEditorSaving(true);
+                try {
+                  await onItemCreate(document.id, payload);
+                  setItemEditor(null);
+                } finally {
+                  setItemEditorSaving(false);
+                }
+              })()}
+              onUpdate={(itemId, payload) => void (async () => {
+                setItemEditorSaving(true);
+                try {
+                  await onItemUpdate(document.id, itemId, payload);
+                  setItemEditor(null);
+                } finally {
+                  setItemEditorSaving(false);
+                }
+              })()}
+            />
+          )}
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }
@@ -1406,15 +1705,25 @@ interface KnowledgeItemCardProps {
   item: KnowledgeItem;
   developerMode: boolean;
   onOpenSource: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
 }
 
-function KnowledgeItemCard({ item, developerMode, onOpenSource }: KnowledgeItemCardProps) {
+function KnowledgeItemCard({ item, developerMode, onOpenSource, onEdit, onDelete }: KnowledgeItemCardProps) {
+  const isManual = item.source === 'manual';
   return (
-    <article className="knowledge-item-card">
+    <article className={`knowledge-item-card${isManual ? ' is-manual' : ''}`}>
       {developerMode && <code className="knowledge-entity-id">条目ID：{item.id}</code>}
-      <strong>{item.title}</strong>
+      <div className="knowledge-item-head">
+        <strong>{item.title}</strong>
+        {isManual && <span className="knowledge-item-tag">手工</span>}
+      </div>
       <p>{item.resume}</p>
-      <button type="button" className="knowledge-item-source-action" onClick={onOpenSource}>查看原文</button>
+      <div className="knowledge-item-actions">
+        <button type="button" className="knowledge-item-source-action" onClick={onOpenSource}>查看原文</button>
+        <button type="button" className="knowledge-item-edit-action" onClick={onEdit}>编辑</button>
+        <button type="button" className="knowledge-item-delete-action is-danger" onClick={onDelete}>删除</button>
+      </div>
     </article>
   );
 }
@@ -1480,6 +1789,175 @@ function KnowledgeItemSourceDialog({ item, developerMode, rendering, debugTrace,
           </DebuggableMarkdownContent>
         </MarkdownFullscreenViewer>
       )}
+    </Dialog.Content>
+  );
+}
+
+interface KnowledgeItemEditorDialogProps {
+  documentId: string;
+  item: KnowledgeItem | null;
+  saving: boolean;
+  onCancel: () => void;
+  onCreate: (payload: { title: string; resume: string; content: string }) => void;
+  onUpdate: (itemId: string, payload: { title: string; resume: string; content: string }) => void;
+}
+
+function KnowledgeItemEditorDialog({ item, saving, onCancel, onCreate, onUpdate }: KnowledgeItemEditorDialogProps) {
+  const isEdit = Boolean(item);
+  const [title, setTitle] = useState(item?.title || '');
+  const [resume, setResume] = useState(item?.resume || '');
+  const [content, setContent] = useState(item?.content || '');
+  const [tableEditorOpen, setTableEditorOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const editorRef = useRef<MarkdownEditorHandle>(null);
+
+  const handleInsertImage = (markdown: string) => {
+    editorRef.current?.insertAtCursor(markdown);
+    setPickerOpen(false);
+  };
+
+  const submit = () => {
+    const payload = { title: title.trim(), resume: resume.trim(), content };
+    if (!payload.title || !payload.content) return;
+    if (isEdit && item) {
+      onUpdate(item.id, payload);
+    } else {
+      onCreate(payload);
+    }
+  };
+
+  return (
+    <Dialog.Content className="knowledge-source-dialog-card knowledge-editor-dialog">
+      <div className="knowledge-source-head">
+        <div>
+          <span>知识条目</span>
+          <Dialog.Title>{isEdit ? '编辑知识条目' : '手工新增知识条目'}</Dialog.Title>
+          <Dialog.Description>标题、摘要与正文均支持手工编辑，正文使用 Markdown。</Dialog.Description>
+        </div>
+        <button type="button" className="secondary-action" onClick={onCancel} disabled={saving}>取消</button>
+      </div>
+      <div className="knowledge-editor-body">
+        <label className="knowledge-field">
+          <span>标题</span>
+          <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="输入知识条目标题" disabled={saving} />
+        </label>
+        <label className="knowledge-field">
+          <span>摘要</span>
+          <textarea value={resume} onChange={(event) => setResume(event.target.value)} placeholder="输入一句话摘要" rows={2} disabled={saving} />
+        </label>
+        <label className="knowledge-field">
+          <span>正文（Markdown）</span>
+          <div className="knowledge-editor-tools">
+            <button type="button" className="secondary-action" onClick={() => setTableEditorOpen(true)} disabled={saving}>
+              可视化表格编辑
+            </button>
+            <button type="button" className="secondary-action" onClick={() => setPickerOpen(true)} disabled={saving}>
+              插入图片
+            </button>
+          </div>
+          <MarkdownEditor ref={editorRef} value={content} onChange={setContent} placeholder="输入知识条目正文，支持 Markdown" disabled={saving} />
+        </label>
+        <TableEditorDialog
+          open={tableEditorOpen}
+          value={content}
+          onCancel={() => setTableEditorOpen(false)}
+          onConfirm={(next) => { setContent(next); setTableEditorOpen(false); }}
+        />
+        <ImagePickerDialog open={pickerOpen} onCancel={() => setPickerOpen(false)} onSelect={handleInsertImage} />
+      </div>
+      <div className="knowledge-editor-actions">
+        <button type="button" className="secondary-action" onClick={onCancel} disabled={saving}>取消</button>
+        <button type="button" className="primary-action" onClick={submit} disabled={saving || !title.trim() || !content.trim()}>
+          {saving ? '保存中...' : '保存'}
+        </button>
+      </div>
+    </Dialog.Content>
+  );
+}
+
+interface KnowledgeSnippetEditorDialogProps {
+  snippet: KnowledgeSnippet | null;
+  folders: KnowledgeFolder[];
+  defaultFolderId: string;
+  saving: boolean;
+  onCancel: () => void;
+  onCreate: (payload: { title: string; content: string; folder_id: string }) => void;
+  onUpdate: (snippetId: string, payload: { title: string; content: string; folder_id: string }) => void;
+}
+
+function KnowledgeSnippetEditorDialog({ snippet, folders, defaultFolderId, saving, onCancel, onCreate, onUpdate }: KnowledgeSnippetEditorDialogProps) {
+  const isEdit = Boolean(snippet);
+  const [title, setTitle] = useState(snippet?.title || '');
+  const [content, setContent] = useState(snippet?.content || '');
+  const [folderId, setFolderId] = useState(snippet?.folder_id || defaultFolderId);
+  const [tableEditorOpen, setTableEditorOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const editorRef = useRef<MarkdownEditorHandle>(null);
+
+  const handleInsertImage = (markdown: string) => {
+    editorRef.current?.insertAtCursor(markdown);
+    setPickerOpen(false);
+  };
+
+  const submit = () => {
+    const payload = { title: title.trim(), content, folder_id: folderId };
+    if (!payload.title || !payload.content) return;
+    if (isEdit && snippet) {
+      onUpdate(snippet.id, payload);
+    } else {
+      onCreate(payload);
+    }
+  };
+
+  return (
+    <Dialog.Content className="knowledge-source-dialog-card knowledge-editor-dialog">
+      <div className="knowledge-source-head">
+        <div>
+          <span>知识片段</span>
+          <Dialog.Title>{isEdit ? '编辑知识片段' : '新建知识片段'}</Dialog.Title>
+          <Dialog.Description>片段是归入文件夹的可复用内容，可在技术方案引用时勾选。</Dialog.Description>
+        </div>
+        <button type="button" className="secondary-action" onClick={onCancel} disabled={saving}>取消</button>
+      </div>
+      <div className="knowledge-editor-body">
+        <label className="knowledge-field">
+          <span>标题</span>
+          <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="输入片段标题" disabled={saving} />
+        </label>
+        <label className="knowledge-field">
+          <span>所属文件夹</span>
+          <select value={folderId} onChange={(event) => setFolderId(event.target.value)} disabled={saving || !folders.length}>
+            {folders.map((folder) => (
+              <option key={folder.id} value={folder.id}>{folder.name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="knowledge-field">
+          <span>内容（Markdown）</span>
+          <div className="knowledge-editor-tools">
+            <button type="button" className="secondary-action" onClick={() => setTableEditorOpen(true)} disabled={saving}>
+              可视化表格编辑
+            </button>
+            <button type="button" className="secondary-action" onClick={() => setPickerOpen(true)} disabled={saving}>
+              插入图片
+            </button>
+          </div>
+          <MarkdownEditor ref={editorRef} value={content} onChange={setContent} placeholder="输入片段内容，支持 Markdown" disabled={saving} />
+        </label>
+        <TableEditorDialog
+          open={tableEditorOpen}
+          value={content}
+          onCancel={() => setTableEditorOpen(false)}
+          onConfirm={(next) => { setContent(next); setTableEditorOpen(false); }}
+        />
+        <ImagePickerDialog open={pickerOpen} onCancel={() => setPickerOpen(false)} onSelect={handleInsertImage} />
+      </div>
+      <div className="knowledge-editor-actions">
+        <button type="button" className="secondary-action" onClick={onCancel} disabled={saving}>取消</button>
+        <button type="button" className="primary-action" onClick={submit} disabled={saving || !title.trim() || !content.trim() || !folderId}>
+          {saving ? '保存中...' : '保存'}
+        </button>
+      </div>
     </Dialog.Content>
   );
 }

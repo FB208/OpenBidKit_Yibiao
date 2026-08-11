@@ -1,9 +1,10 @@
 import type { AiHttpErrorPayload, ChatCompletionRequest, JsonCompletionRequest } from './ai';
 import type { DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult, UpdateChannel } from './config';
-import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMigrationResult, KnowledgeBaseMigrationStatus, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
+import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMigrationResult, KnowledgeBaseMigrationStatus, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeFolderType, KnowledgeImage, KnowledgeItem, KnowledgeSnippet } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
+import type { BusinessBidState, BusinessBidStep, BusinessBidClauseItem } from '../../features/business-bid/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
 import type { OutlineData, OutlineExpansionMode } from './outline';
 
@@ -11,6 +12,8 @@ export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDu
   task: unknown;
   technicalPlan?: TState;
   technicalPlanPatch?: Partial<TechnicalPlanState>;
+  businessBid?: TState;
+  businessBidPatch?: Partial<BusinessBidState>;
   bidItem?: BidAnalysisTaskState;
   outlineData?: OutlineData | null;
   contentSection?: ContentGenerationSectionState;
@@ -465,11 +468,12 @@ export interface YibiaoBridge {
   knowledgeBase: {
     getMigrationStatus: () => Promise<KnowledgeBaseMigrationStatus>;
     migrateLegacy: () => Promise<KnowledgeBaseMigrationResult>;
-    list: () => Promise<KnowledgeBaseIndex>;
-    createFolder: (name: string) => Promise<KnowledgeFolder>;
+    list: (type?: KnowledgeFolderType) => Promise<KnowledgeBaseIndex>;
+    createFolder: (name: string, type: KnowledgeFolderType, parentId?: string) => Promise<KnowledgeFolder>;
     renameFolder: (folderId: string, name: string) => Promise<KnowledgeFolder>;
-    reorderFolder: (draggedFolderId: string, targetFolderId: string, position: 'before' | 'after') => Promise<KnowledgeBaseIndexMutationResult>;
+    reorderFolder: (draggedFolderId: string, targetFolderId: string, position: 'before' | 'after', parentId?: string) => Promise<KnowledgeBaseIndexMutationResult>;
     deleteFolder: (folderId: string) => Promise<KnowledgeBaseMutationResult>;
+    moveFolder: (folderId: string, targetParentId: string) => Promise<KnowledgeBaseIndexMutationResult>;
     deleteDocument: (documentId: string) => Promise<KnowledgeBaseMutationResult>;
     moveDocument: (documentId: string, targetFolderId: string, targetDocumentId?: string | null, position?: 'before' | 'after') => Promise<KnowledgeBaseIndexMutationResult>;
     uploadDocuments: (folderId: string) => Promise<KnowledgeBaseUploadResult>;
@@ -478,6 +482,21 @@ export interface YibiaoBridge {
     readMarkdown: (documentId: string) => Promise<string>;
     readItems: (documentId: string) => Promise<KnowledgeItem[]>;
     readAnalysis: (documentId: string) => Promise<KnowledgeAnalysisSnapshot>;
+    createItem: (documentId: string, payload: { title: string; resume: string; content: string; source_file?: string }) => Promise<KnowledgeItem>;
+    updateItem: (documentId: string, itemId: string, partial: Partial<Pick<KnowledgeItem, 'title' | 'resume' | 'content' | 'source_file'>>) => Promise<KnowledgeItem>;
+    deleteItem: (documentId: string, itemId: string) => Promise<KnowledgeBaseMutationResult>;
+    listSnippets: (folderId?: string) => Promise<KnowledgeSnippet[]>;
+    createSnippet: (folderId: string, payload: { title: string; content: string }) => Promise<KnowledgeSnippet>;
+    updateSnippet: (snippetId: string, partial: Partial<Pick<KnowledgeSnippet, 'title' | 'content' | 'folder_id'>>) => Promise<KnowledgeSnippet>;
+    deleteSnippet: (snippetId: string) => Promise<KnowledgeBaseMutationResult>;
+    images: {
+      list: (folderId?: string) => Promise<KnowledgeImage[]>;
+      create: (folderId: string, payload: { name?: string; description?: string; tags?: string[]; fileName?: string; mimeType?: string; base64: string }) => Promise<KnowledgeImage>;
+      update: (imageId: string, partial: Partial<Pick<KnowledgeImage, 'name' | 'description' | 'tags' | 'folder_id'>>) => Promise<KnowledgeImage>;
+      delete: (imageId: string) => Promise<KnowledgeBaseMutationResult>;
+      getFile: (imageId: string) => Promise<string>;
+      createFromClipboard: (folderId: string, payload?: { name?: string; description?: string; tags?: string[]; fileName?: string }) => Promise<KnowledgeImage>;
+    };
     onEvent: (callback: (event: KnowledgeBaseEvent) => void) => () => void;
   };
   technicalPlan: {
@@ -505,12 +524,37 @@ export interface YibiaoBridge {
     setWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
     switchWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
     saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode }) => Promise<TechnicalPlanState>;
-    saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; outlineExpansionMode?: OutlineExpansionMode }) => Promise<TechnicalPlanState>;
+    saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; referenceKnowledgeSnippetIds?: string[]; outlineExpansionMode?: OutlineExpansionMode }) => Promise<TechnicalPlanState>;
     saveOutline: (payload: SaveOutlineRequest) => Promise<TechnicalPlanState>;
     saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<TechnicalPlanState>;
     saveContentGenerationOptions: (options: ContentGenerationOptions) => Promise<TechnicalPlanState>;
     saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<TechnicalPlanState>;
+    saveTenderStarredSections: (starredSections: Record<string, boolean>) => Promise<TechnicalPlanState>;
     clear: () => Promise<{ success: boolean; message?: string; state: TechnicalPlanState }>;
+  };
+  businessBid: {
+    loadState: () => Promise<BusinessBidState>;
+    importTenderDocument: () => Promise<{
+      success: boolean;
+      message?: string;
+      state?: BusinessBidState;
+      markdown?: string;
+      fileName?: string;
+      parserLabel?: string | null;
+    }>;
+    readTenderMarkdown: () => Promise<string>;
+    associateTechnicalPlan: () => Promise<BusinessBidState>;
+    disassociateTechnicalPlan: () => Promise<BusinessBidState>;
+    hasTechnicalPlan: () => Promise<boolean>;
+    updateStep: (step: BusinessBidStep) => Promise<BusinessBidState>;
+    saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; referenceKnowledgeSnippetIds?: string[] }) => Promise<BusinessBidState>;
+    saveOutline: (payload: { outlineData?: OutlineData }) => Promise<BusinessBidState>;
+    saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<BusinessBidState>;
+    saveClauseItems: (clauseItems: BusinessBidClauseItem[]) => Promise<BusinessBidState>;
+    saveContentGenerationOptions: (options: { minimumWords: number }) => Promise<BusinessBidState>;
+    saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<BusinessBidState>;
+    clear: () => Promise<{ success: boolean; message?: string; state: BusinessBidState }>;
+    exportPdf: (clauseItems: BusinessBidClauseItem[]) => Promise<{ success: boolean; canceled?: boolean; path?: string; message?: string }>;
   };
   duplicateCheck: {
     loadState: () => Promise<DuplicateCheckWorkspaceState>;
@@ -542,6 +586,12 @@ export interface YibiaoBridge {
     startGlobalFactsGeneration: (payload: unknown) => Promise<unknown>;
     startContentGeneration: (payload: unknown) => Promise<unknown>;
     pauseContentGeneration: () => Promise<unknown>;
+    startBusinessClauseAnalysis: (payload: unknown) => Promise<unknown>;
+    startBusinessClauseRegeneration: (payload: { templateItemIds: string[] }) => Promise<unknown>;
+    startBusinessOutlineGeneration: (payload: unknown) => Promise<unknown>;
+    startBusinessGlobalFactsGeneration: (payload: unknown) => Promise<unknown>;
+    startBusinessContentGeneration: (payload: unknown) => Promise<unknown>;
+    pauseBusinessContentGeneration: () => Promise<unknown>;
     startRejectionItemsExtraction: (payload: unknown) => Promise<unknown>;
     startRejectionCheck: (payload: unknown) => Promise<unknown>;
     startDuplicateAnalysis: (payload: unknown) => Promise<unknown>;

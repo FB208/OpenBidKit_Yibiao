@@ -128,6 +128,8 @@ function normalizeIndex(index) {
   const folders = Array.isArray(index?.folders) ? index.folders.map((folder, index) => ({
     id: String(folder?.id || folder?.folder_id || createId('folder')),
     name: safeName(folder?.name),
+    type: (folder?.type === 'image' ? 'image' : 'document'),
+    parent_id: folder?.parent_id || folder?.parentId || null,
     sort_order: Number(folder?.sort_order ?? index),
     created_at: folder?.created_at || now(),
     updated_at: folder?.updated_at || now(),
@@ -203,6 +205,8 @@ function createKnowledgeBaseStore({ app, db }) {
     return {
       id: row.folder_id,
       name: row.name,
+      type: row.type || 'document',
+      parent_id: row.parent_id || null,
       sort_order: Number(row.sort_order || 0),
       created_at: row.created_at,
       updated_at: row.updated_at,
@@ -211,15 +215,19 @@ function createKnowledgeBaseStore({ app, db }) {
 
   function insertOrUpdateFolder(folder) {
     db.prepare(`
-      INSERT INTO knowledge_folders (folder_id, name, sort_order, created_at, updated_at)
-      VALUES (@folder_id, @name, @sort_order, @created_at, @updated_at)
+      INSERT INTO knowledge_folders (folder_id, name, type, parent_id, sort_order, created_at, updated_at)
+      VALUES (@folder_id, @name, @type, @parent_id, @sort_order, @created_at, @updated_at)
       ON CONFLICT(folder_id) DO UPDATE SET
         name = excluded.name,
+        type = excluded.type,
+        parent_id = excluded.parent_id,
         sort_order = excluded.sort_order,
         updated_at = excluded.updated_at
     `).run({
       folder_id: folder.id,
       name: safeName(folder.name),
+      type: folder.type === 'image' ? 'image' : 'document',
+      parent_id: folder.parent_id || null,
       sort_order: Number(folder.sort_order || 0),
       created_at: folder.created_at || now(),
       updated_at: folder.updated_at || now(),
@@ -298,15 +306,26 @@ function createKnowledgeBaseStore({ app, db }) {
     return getDocument(normalized.id);
   }
 
-  function list() {
+  function list(type) {
     ensureBaseDir();
-    const folders = db.prepare('SELECT * FROM knowledge_folders ORDER BY sort_order ASC, created_at ASC').all().map(folderFromRow);
-    const documents = db.prepare(`
-      SELECT d.*
-      FROM knowledge_documents d
-      LEFT JOIN knowledge_folders f ON f.folder_id = d.folder_id
-      ORDER BY COALESCE(f.sort_order, 0) ASC, d.folder_id ASC, d.sort_order ASC, d.created_at DESC, d.document_id ASC
-    `).all().map(documentFromRow);
+    let folders;
+    if (type) {
+      const safeType = type === 'image' ? 'image' : 'document';
+      folders = db.prepare('SELECT * FROM knowledge_folders WHERE type = ? ORDER BY sort_order ASC, created_at ASC').all(safeType).map(folderFromRow);
+    } else {
+      folders = db.prepare('SELECT * FROM knowledge_folders ORDER BY type ASC, sort_order ASC, created_at ASC').all().map(folderFromRow);
+    }
+    const folderIds = folders.map((f) => f.id);
+    let documents = [];
+    if (folderIds.length) {
+      const placeholders = folderIds.map(() => '?').join(', ');
+      documents = db.prepare(`
+        SELECT d.*
+        FROM knowledge_documents d
+        WHERE d.folder_id IN (${placeholders})
+        ORDER BY d.folder_id ASC, d.sort_order ASC, d.created_at DESC, d.document_id ASC
+      `).all(...folderIds).map(documentFromRow);
+    }
     return { folders, documents };
   }
 
@@ -357,10 +376,12 @@ function createKnowledgeBaseStore({ app, db }) {
     return documentFromRow(row);
   }
 
-  function createFolder(name) {
+  function createFolder(name, type, parentId) {
     const timestamp = now();
-    const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS value FROM knowledge_folders').get()?.value ?? -1;
-    const folder = { id: createId('folder'), name: safeName(name), sort_order: Number(maxOrder) + 1, created_at: timestamp, updated_at: timestamp };
+    const safeType = type === 'image' ? 'image' : 'document';
+    const safeParentId = parentId || null;
+    const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS value FROM knowledge_folders WHERE type = ? AND parent_id IS ?').get(safeType, safeParentId)?.value ?? -1;
+    const folder = { id: createId('folder'), name: safeName(name), type: safeType, parent_id: safeParentId, sort_order: Number(maxOrder) + 1, created_at: timestamp, updated_at: timestamp };
     insertOrUpdateFolder(folder);
     return folderFromRow(db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folder.id));
   }
@@ -372,11 +393,61 @@ function createKnowledgeBaseStore({ app, db }) {
     return folderFromRow(db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folderId));
   }
 
+  function getChildFolders(parentId) {
+    const safeParentId = parentId || null;
+    return db.prepare('SELECT * FROM knowledge_folders WHERE parent_id IS ? ORDER BY sort_order ASC, created_at ASC').all(safeParentId).map(folderFromRow);
+  }
+
+  function getDescendantFolderIds(folderId) {
+    const ids = [folderId];
+    const queue = [folderId];
+    while (queue.length) {
+      const current = queue.shift();
+      const children = db.prepare('SELECT folder_id FROM knowledge_folders WHERE parent_id = ?').all(current);
+      for (const child of children) {
+        ids.push(child.folder_id);
+        queue.push(child.folder_id);
+      }
+    }
+    return ids;
+  }
+
+  function isLeafFolder(folderId) {
+    const count = db.prepare('SELECT COUNT(*) AS c FROM knowledge_folders WHERE parent_id = ?').get(folderId)?.c || 0;
+    return count === 0;
+  }
+
   function deleteFolder(folderId) {
     const folder = db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folderId);
     if (!folder) throw new Error('知识库文件夹不存在');
-    db.prepare('DELETE FROM knowledge_folders WHERE folder_id = ?').run(folderId);
+    const descendantIds = getDescendantFolderIds(folderId);
+    // 先删除所有子孙文件夹（逆序，从叶子开始）
+    for (let i = descendantIds.length - 1; i >= 0; i -= 1) {
+      db.prepare('DELETE FROM knowledge_folders WHERE folder_id = ?').run(descendantIds[i]);
+    }
     return folderFromRow(folder);
+  }
+
+  function moveFolder(folderId, targetParentId) {
+    const folder = db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folderId);
+    if (!folder) throw new Error('知识库文件夹不存在');
+    const safeTargetParentId = targetParentId || null;
+    // 不能移动到自己或自己的子孙
+    const descendantIds = getDescendantFolderIds(folderId);
+    if (descendantIds.includes(safeTargetParentId)) {
+      throw new Error('不能将文件夹移动到自己或子文件夹下');
+    }
+    // 不能移动到不同 type 的父文件夹下（除非目标是 null）
+    if (safeTargetParentId) {
+      const targetFolder = db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(safeTargetParentId);
+      if (!targetFolder) throw new Error('目标文件夹不存在');
+      if (targetFolder.type !== folder.type) {
+        throw new Error('不能将文件夹移动到不同类型的知识库');
+      }
+    }
+    const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS value FROM knowledge_folders WHERE type = ? AND parent_id IS ?').get(folder.type, safeTargetParentId)?.value ?? -1;
+    db.prepare('UPDATE knowledge_folders SET parent_id = ?, sort_order = ?, updated_at = ? WHERE folder_id = ?').run(safeTargetParentId, Number(maxOrder) + 1, now(), folderId);
+    return list(folder.type);
   }
 
   function deleteDocument(documentId) {
@@ -428,15 +499,18 @@ function createKnowledgeBaseStore({ app, db }) {
     return insertOrUpdateDocument(withOrder);
   }
 
-  function reorderFolders(draggedFolderId, targetFolderId, position) {
+  function reorderFolders(draggedFolderId, targetFolderId, position, parentId) {
     const normalizedPosition = normalizeDropPosition(position);
-    const folderIds = db.prepare('SELECT folder_id FROM knowledge_folders ORDER BY sort_order ASC, created_at ASC').all().map((row) => row.folder_id);
+    const safeParentId = parentId || null;
+    const draggedFolder = db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(draggedFolderId);
+    if (!draggedFolder) throw new Error('知识库文件夹不存在');
+    const folderIds = db.prepare('SELECT folder_id FROM knowledge_folders WHERE type = ? AND parent_id IS ? ORDER BY sort_order ASC, created_at ASC').all(draggedFolder.type, safeParentId).map((row) => row.folder_id);
     if (!folderIds.includes(draggedFolderId) || !folderIds.includes(targetFolderId)) {
       throw new Error('知识库文件夹不存在');
     }
-    if (draggedFolderId === targetFolderId) return list();
+    if (draggedFolderId === targetFolderId) return list(draggedFolder.type);
     db.transaction(() => resequenceFolderIds(reorderIds(folderIds, draggedFolderId, targetFolderId, normalizedPosition)))();
-    return list();
+    return list(draggedFolder.type);
   }
 
   function moveDocument(documentId, targetFolderId, options = {}) {
@@ -642,12 +716,23 @@ function createKnowledgeBaseStore({ app, db }) {
   }
 
   function replaceFinalItems(documentId, finalItems) {
-    db.prepare('DELETE FROM knowledge_item_blocks WHERE document_id = ?').run(documentId);
-    db.prepare('DELETE FROM knowledge_items WHERE document_id = ?').run(documentId);
+    getDocument(documentId);
     const timestamp = now();
+    // 保留用户手工条目（source='manual'），仅清理 AI 自动提取部分及其来源 block。
+    const manualRows = db.prepare("SELECT item_id FROM knowledge_items WHERE document_id = ? AND source = 'manual'").all(documentId);
+    const manualIds = new Set(manualRows.map((row) => row.item_id));
+    if (manualIds.size) {
+      const placeholders = Array.from(manualIds, () => '?').join(',');
+      db.prepare(`DELETE FROM knowledge_item_blocks WHERE document_id = ? AND item_id NOT IN (${placeholders})`).run(documentId, ...manualIds);
+      db.prepare("DELETE FROM knowledge_items WHERE document_id = ? AND source = 'ai'").run(documentId);
+    } else {
+      db.prepare('DELETE FROM knowledge_item_blocks WHERE document_id = ?').run(documentId);
+      db.prepare("DELETE FROM knowledge_items WHERE document_id = ?").run(documentId);
+    }
+    const manualCount = manualIds.size;
     const itemInsert = db.prepare(`
-      INSERT INTO knowledge_items (document_id, item_id, title, resume, content, source_file, content_chars, sort_order, created_at, updated_at)
-      VALUES (@document_id, @item_id, @title, @resume, @content, @source_file, @content_chars, @sort_order, @created_at, @updated_at)
+      INSERT INTO knowledge_items (document_id, item_id, title, resume, content, source_file, source, content_chars, sort_order, created_at, updated_at)
+      VALUES (@document_id, @item_id, @title, @resume, @content, @source_file, @source, @content_chars, @sort_order, @created_at, @updated_at)
     `);
     const blockInsert = db.prepare(`
       INSERT OR IGNORE INTO knowledge_item_blocks (document_id, item_id, block_id, sort_order)
@@ -663,8 +748,9 @@ function createKnowledgeBaseStore({ app, db }) {
         resume: String(item.resume || item.summary || ''),
         content,
         source_file: item.source_file ? String(item.source_file) : null,
+        source: item.source ? String(item.source) : 'ai',
         content_chars: getContentCharCount(content),
-        sort_order: index,
+        sort_order: manualCount + index,
         created_at: timestamp,
         updated_at: timestamp,
       });
@@ -672,7 +758,8 @@ function createKnowledgeBaseStore({ app, db }) {
         blockInsert.run({ document_id: documentId, item_id: String(item.id), block_id: String(blockId), sort_order: blockIndex });
       });
     });
-    updateDocument(documentId, { item_count: Array.isArray(finalItems) ? finalItems.length : 0 });
+    const itemCount = Number(db.prepare('SELECT COUNT(*) AS c FROM knowledge_items WHERE document_id = ?').get(documentId).c);
+    updateDocument(documentId, { item_count: itemCount });
   }
 
   function replaceDiscardedGroups(documentId, matchResult) {
@@ -1006,6 +1093,7 @@ function createKnowledgeBaseStore({ app, db }) {
       content: row.content,
       source_block_ids: blocksByItem.get(row.item_id) || [],
       source_file: row.source_file || undefined,
+      source: row.source === 'manual' ? 'manual' : 'ai',
     }));
   }
 
@@ -1086,6 +1174,317 @@ function createKnowledgeBaseStore({ app, db }) {
       }
     }
     return { items };
+  }
+
+  function createItem(documentId, payload) {
+    getDocument(documentId);
+    const title = String(payload?.title || '').trim();
+    const resume = String(payload?.resume || '').trim();
+    const content = String(payload?.content || '');
+    const timestamp = now();
+    const maxRow = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM knowledge_items WHERE document_id = ?').get(documentId);
+    const nextOrder = Number(maxRow?.m || -1) + 1;
+    const itemId = createId('M');
+    db.prepare(`
+      INSERT INTO knowledge_items (document_id, item_id, title, resume, content, source_file, source, content_chars, sort_order, created_at, updated_at)
+      VALUES (@document_id, @item_id, @title, @resume, @content, @source_file, 'manual', @content_chars, @sort_order, @created_at, @updated_at)
+    `).run({
+      document_id: documentId,
+      item_id: itemId,
+      title,
+      resume,
+      content,
+      source_file: payload?.source_file ? String(payload.source_file) : null,
+      content_chars: getContentCharCount(content),
+      sort_order: nextOrder,
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+    updateDocument(documentId, { item_count: Number(db.prepare('SELECT COUNT(*) AS c FROM knowledge_items WHERE document_id = ?').get(documentId).c) });
+    return readItems(documentId).find((item) => item.id === itemId);
+  }
+
+  function updateItem(documentId, itemId, partial) {
+    getDocument(documentId);
+    const existing = db.prepare('SELECT * FROM knowledge_items WHERE document_id = ? AND item_id = ?').get(documentId, String(itemId));
+    if (!existing) throw new Error('知识条目不存在');
+    const title = partial.title !== undefined ? String(partial.title).trim() : existing.title;
+    const resume = partial.resume !== undefined ? String(partial.resume).trim() : existing.resume;
+    const content = partial.content !== undefined ? String(partial.content) : existing.content;
+    const sourceFile = partial.source_file !== undefined ? (partial.source_file ? String(partial.source_file) : null) : existing.source_file;
+    db.prepare(`
+      UPDATE knowledge_items
+      SET title = @title, resume = @resume, content = @content, source_file = @source_file, content_chars = @content_chars, updated_at = @updated_at
+      WHERE document_id = ? AND item_id = ?
+    `).run({
+      title,
+      resume,
+      content,
+      source_file: sourceFile,
+      content_chars: getContentCharCount(content),
+      updated_at: now(),
+    }, documentId, String(itemId));
+    return readItems(documentId).find((item) => item.id === itemId);
+  }
+
+  function deleteItem(documentId, itemId) {
+    getDocument(documentId);
+    db.prepare('DELETE FROM knowledge_item_blocks WHERE document_id = ? AND item_id = ?').run(documentId, String(itemId));
+    db.prepare("DELETE FROM knowledge_items WHERE document_id = ? AND item_id = ?").run(documentId, String(itemId));
+    updateDocument(documentId, { item_count: Number(db.prepare('SELECT COUNT(*) AS c FROM knowledge_items WHERE document_id = ?').get(documentId).c) });
+    return { success: true, message: '已删除知识条目' };
+  }
+
+  function listSnippets(folderId) {
+    const sql = folderId
+      ? 'SELECT * FROM knowledge_snippets WHERE folder_id = ? ORDER BY sort_order ASC, created_at DESC'
+      : 'SELECT * FROM knowledge_snippets ORDER BY folder_id ASC, sort_order ASC, created_at DESC';
+    const rows = folderId ? db.prepare(sql).all(String(folderId)) : db.prepare(sql).all();
+    return rows.map((row) => ({
+      id: row.snippet_id,
+      folder_id: row.folder_id,
+      title: row.title,
+      content: row.content,
+      sort_order: Number(row.sort_order || 0),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    }));
+  }
+
+  function createSnippet(folderId, payload) {
+    if (!folderId) throw new Error('缺少所属文件夹');
+    const folderRow = db.prepare('SELECT 1 FROM knowledge_folders WHERE folder_id = ?').get(String(folderId));
+    if (!folderRow) throw new Error('知识库文件夹不存在');
+    const title = String(payload?.title || '').trim();
+    const content = String(payload?.content || '');
+    const timestamp = now();
+    const maxRow = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM knowledge_snippets WHERE folder_id = ?').get(String(folderId));
+    const nextOrder = Number(maxRow?.m || -1) + 1;
+    const snippetId = createId('SN');
+    db.prepare(`
+      INSERT INTO knowledge_snippets (snippet_id, folder_id, title, content, sort_order, created_at, updated_at)
+      VALUES (@snippet_id, @folder_id, @title, @content, @sort_order, @created_at, @updated_at)
+    `).run({
+      snippet_id: snippetId,
+      folder_id: String(folderId),
+      title,
+      content,
+      sort_order: nextOrder,
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+    return listSnippets(String(folderId)).find((snippet) => snippet.id === snippetId);
+  }
+
+  function updateSnippet(snippetId, partial) {
+    const existing = db.prepare('SELECT * FROM knowledge_snippets WHERE snippet_id = ?').get(String(snippetId));
+    if (!existing) throw new Error('知识片段不存在');
+    const title = partial.title !== undefined ? String(partial.title).trim() : existing.title;
+    const content = partial.content !== undefined ? String(partial.content) : existing.content;
+    let folderId = existing.folder_id;
+    let sortOrder = Number(existing.sort_order || 0);
+    if (partial.folder_id !== undefined && partial.folder_id && partial.folder_id !== existing.folder_id) {
+      folderId = String(partial.folder_id);
+      const maxRow = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM knowledge_snippets WHERE folder_id = ?').get(folderId);
+      sortOrder = Number(maxRow?.m || -1) + 1;
+    }
+    db.prepare(`
+      UPDATE knowledge_snippets
+      SET folder_id = @folder_id, title = @title, content = @content, sort_order = @sort_order, updated_at = @updated_at
+      WHERE snippet_id = ?
+    `).run({
+      folder_id: folderId,
+      title,
+      content,
+      sort_order: sortOrder,
+      updated_at: now(),
+    }, String(snippetId));
+    return listSnippets(folderId).find((snippet) => snippet.id === snippetId);
+  }
+
+  function deleteSnippet(snippetId) {
+    db.prepare('DELETE FROM knowledge_snippets WHERE snippet_id = ?').run(String(snippetId));
+    return { success: true, message: '已删除知识片段' };
+  }
+
+  function getSnippetReferences(snippetIds) {
+    const ids = Array.isArray(snippetIds) ? snippetIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
+    if (!ids.length) return { items: [] };
+    const placeholders = ids.map(() => '?').join(',');
+    const rows = db.prepare(`SELECT * FROM knowledge_snippets WHERE snippet_id IN (${placeholders})`).all(...ids);
+    const seen = new Set();
+    const items = [];
+    for (const row of rows) {
+      const title = String(row.title || '').trim();
+      if (!title) continue;
+      const referenceId = `snippet::${row.snippet_id}`;
+      if (seen.has(referenceId)) continue;
+      seen.add(referenceId);
+      items.push({ id: referenceId, title, resume: String(row.content || '') });
+    }
+    return { items };
+  }
+
+
+  function imagesDir(folderId) {
+    return path.join(baseDir, 'images', folderId || 'unknown');
+  }
+
+  function ensureImagesDir(folderId) {
+    fs.mkdirSync(imagesDir(folderId), { recursive: true });
+  }
+
+  function mimeFromExt(ext) {
+    const value = String(ext || '').toLowerCase().replace('.', '');
+    if (value === 'jpg' || value === 'jpeg') return 'image/jpeg';
+    if (value === 'png') return 'image/png';
+    if (value === 'gif') return 'image/gif';
+    if (value === 'webp') return 'image/webp';
+    if (value === 'bmp') return 'image/bmp';
+    if (value === 'svg') return 'image/svg+xml';
+    return 'image/png';
+  }
+
+  function imageFromRow(row, options = {}) {
+    if (!row) return null;
+    const image = {
+      id: row.image_id,
+      folder_id: row.folder_id,
+      name: row.name,
+      description: row.description || '',
+      tags: safeJsonParse(row.tags_json, []),
+      file_name: row.file_name,
+      mime_type: row.mime_type,
+      size: Number(row.size || 0),
+      sort_order: Number(row.sort_order || 0),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+    if (options.thumbnail) {
+      try {
+        const thumbPath = path.resolve(baseDir, row.thumbnail_path);
+        if (fs.existsSync(thumbPath)) {
+          const thumbExt = path.extname(row.thumbnail_path);
+          image.thumbnail = `data:${mimeFromExt(thumbExt)};base64,${fs.readFileSync(thumbPath).toString('base64')}`;
+        }
+      } catch {
+        // 缩略图读取失败不影响列表返回。
+      }
+    }
+    return image;
+  }
+
+  function listImages(folderId) {
+    const sql = folderId
+      ? 'SELECT * FROM knowledge_images WHERE folder_id = ? ORDER BY sort_order ASC, created_at DESC'
+      : 'SELECT * FROM knowledge_images ORDER BY folder_id ASC, sort_order ASC, created_at DESC';
+    const rows = folderId ? db.prepare(sql).all(String(folderId)) : db.prepare(sql).all();
+    return rows.map((row) => imageFromRow(row, { thumbnail: true }));
+  }
+
+  function createImage(folderId, fields) {
+    if (!folderId) throw new Error('缺少所属文件夹');
+    const folderRow = db.prepare('SELECT 1 FROM knowledge_folders WHERE folder_id = ?').get(String(folderId));
+    if (!folderRow) throw new Error('知识库文件夹不存在');
+    const timestamp = now();
+    const maxRow = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM knowledge_images WHERE folder_id = ?').get(String(folderId));
+    const nextOrder = Number(maxRow?.m || -1) + 1;
+    db.prepare(`
+      INSERT INTO knowledge_images (
+        image_id, folder_id, name, description, tags_json, file_name, mime_type, size, file_path, thumbnail_path, sort_order, created_at, updated_at
+      ) VALUES (
+        @image_id, @folder_id, @name, @description, @tags_json, @file_name, @mime_type, @size, @file_path, @thumbnail_path, @sort_order, @created_at, @updated_at
+      )
+    `).run({
+      image_id: fields.imageId,
+      folder_id: String(folderId),
+      name: safeName(fields.name),
+      description: String(fields.description || ''),
+      tags_json: jsonOrNull(fields.tags || []),
+      file_name: String(fields.fileName || ''),
+      mime_type: String(fields.mimeType || 'image/png'),
+      size: Number(fields.size || 0),
+      file_path: normalizeRelativePath(fields.filePath),
+      thumbnail_path: normalizeRelativePath(fields.thumbnailPath),
+      sort_order: nextOrder,
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+    return imageFromRow(db.prepare('SELECT * FROM knowledge_images WHERE image_id = ?').get(fields.imageId), { thumbnail: true });
+  }
+
+  function updateImageRow(imageId, partial) {
+    const existing = db.prepare('SELECT * FROM knowledge_images WHERE image_id = ?').get(String(imageId));
+    if (!existing) throw new Error('知识库图片不存在');
+    const name = partial.name !== undefined ? safeName(partial.name) : existing.name;
+    const description = partial.description !== undefined ? String(partial.description) : existing.description;
+    const tags = partial.tags !== undefined ? (partial.tags || []) : safeJsonParse(existing.tags_json, []);
+    let folderId = existing.folder_id;
+    let filePath = existing.file_path;
+    let thumbnailPath = existing.thumbnail_path;
+    if (partial.folder_id !== undefined && partial.folder_id && partial.folder_id !== existing.folder_id) {
+      folderId = String(partial.folder_id);
+      const newImagesDir = imagesDir(folderId);
+      fs.mkdirSync(newImagesDir, { recursive: true });
+      const oldAbs = path.resolve(baseDir, existing.file_path);
+      const oldThumbAbs = path.resolve(baseDir, existing.thumbnail_path);
+      const ext = path.extname(existing.file_path) || '.png';
+      const thumbExt = path.extname(existing.thumbnail_path) || '.png';
+      const newRel = path.join('images', folderId, `${existing.image_id}${ext}`).replace(/\\/g, '/');
+      const newThumbRel = path.join('images', folderId, `${existing.image_id}_thumb${thumbExt}`).replace(/\\/g, '/');
+      const newAbs = path.resolve(baseDir, newRel);
+      const newThumbAbs = path.resolve(baseDir, newThumbRel);
+      try {
+        if (fs.existsSync(oldAbs)) fs.renameSync(oldAbs, newAbs);
+        if (fs.existsSync(oldThumbAbs)) fs.renameSync(oldThumbAbs, newThumbAbs);
+        filePath = newRel;
+        thumbnailPath = newThumbRel;
+      } catch (error) {
+        console.warn('[knowledge-base] 移动图片文件失败', error);
+      }
+    }
+    db.prepare(`
+      UPDATE knowledge_images
+      SET folder_id = @folder_id, name = @name, description = @description, tags_json = @tags_json, file_path = @file_path, thumbnail_path = @thumbnail_path, updated_at = @updated_at
+      WHERE image_id = ?
+    `).run({
+      folder_id: folderId,
+      name,
+      description,
+      tags_json: jsonOrNull(tags),
+      file_path: normalizeRelativePath(filePath),
+      thumbnail_path: normalizeRelativePath(thumbnailPath),
+      updated_at: now(),
+    }, String(imageId));
+    return imageFromRow(db.prepare('SELECT * FROM knowledge_images WHERE image_id = ?').get(String(imageId)), { thumbnail: true });
+  }
+
+  function deleteImageRow(imageId) {
+    const row = db.prepare('SELECT * FROM knowledge_images WHERE image_id = ?').get(String(imageId));
+    if (!row) return { success: true, message: '图片不存在' };
+    try {
+      fs.rmSync(path.resolve(baseDir, row.file_path), { force: true });
+      fs.rmSync(path.resolve(baseDir, row.thumbnail_path), { force: true });
+    } catch {
+      // 文件删除失败不影响数据库清理。
+    }
+    db.prepare('DELETE FROM knowledge_images WHERE image_id = ?').run(String(imageId));
+    return { success: true, message: '已删除图片' };
+  }
+
+  function getImageAbsolutePath(imageId) {
+    const row = db.prepare('SELECT * FROM knowledge_images WHERE image_id = ?').get(String(imageId));
+    if (!row) throw new Error('知识库图片不存在');
+    return path.resolve(baseDir, row.file_path);
+  }
+
+  function readImageFileAsDataUrl(imageId) {
+    const row = db.prepare('SELECT * FROM knowledge_images WHERE image_id = ?').get(String(imageId));
+    if (!row) throw new Error('知识库图片不存在');
+    const absolutePath = path.resolve(baseDir, row.file_path);
+    if (!fs.existsSync(absolutePath)) throw new Error('图片文件不存在');
+    const buffer = fs.readFileSync(absolutePath);
+    return `data:${row.mime_type};base64,${buffer.toString('base64')}`;
   }
 
   function getMigrationMeta() {
@@ -1375,6 +1774,10 @@ function createKnowledgeBaseStore({ app, db }) {
     reorderFolders,
     renameFolder,
     deleteFolder,
+    getChildFolders,
+    getDescendantFolderIds,
+    isLeafFolder,
+    moveFolder,
     deleteDocument,
     createDocument,
     moveDocument,
@@ -1399,6 +1802,22 @@ function createKnowledgeBaseStore({ app, db }) {
     readItems,
     readAnalysis,
     getOutlineReferences,
+    createItem,
+    updateItem,
+    deleteItem,
+    listSnippets,
+    createSnippet,
+    updateSnippet,
+    deleteSnippet,
+    getSnippetReferences,
+    imagesDir,
+    ensureImagesDir,
+    listImages,
+    createImage,
+    updateImageRow,
+    deleteImageRow,
+    getImageAbsolutePath,
+    readImageFileAsDataUrl,
     getMigrationStatus,
     migrateLegacy,
     resolvePath,

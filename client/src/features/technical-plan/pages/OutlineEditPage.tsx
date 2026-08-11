@@ -4,7 +4,7 @@ import type { CSSProperties, DragEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, SaveOutlineRequest, TechnicalPlanWorkflowKind } from '../types';
-import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
+import type { KnowledgeBaseIndex, KnowledgeDocument, KnowledgeSnippet } from '../../knowledge-base/types';
 import type { OutlineData, OutlineExpansionMode, OutlineItem } from '../../../shared/types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
@@ -16,10 +16,11 @@ interface OutlineEditPageProps {
   techRequirements: string;
   outlineExpansionMode: OutlineExpansionMode;
   referenceKnowledgeDocumentIds: string[];
+  referenceKnowledgeSnippetIds: string[];
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
   contentTaskStatus?: BackgroundTaskState['status'];
-  onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; outlineExpansionMode: OutlineExpansionMode }) => void;
+  onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; referenceKnowledgeSnippetIds?: string[]; outlineExpansionMode: OutlineExpansionMode }) => void;
   onOutlineSaved: (request: SaveOutlineRequest) => Promise<void>;
   onSortGuardChange?: (guard: OutlineSortGuard | null) => void;
 }
@@ -222,6 +223,7 @@ function OutlineEditPage({
   techRequirements,
   outlineExpansionMode,
   referenceKnowledgeDocumentIds,
+  referenceKnowledgeSnippetIds,
   outlineData,
   task,
   contentTaskStatus,
@@ -239,6 +241,8 @@ function OutlineEditPage({
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
   const [draftOutlineExpansionMode, setDraftOutlineExpansionMode] = useState<OutlineExpansionMode>(outlineExpansionMode);
   const [draftKnowledgeDocumentIds, setDraftKnowledgeDocumentIds] = useState<string[]>(referenceKnowledgeDocumentIds);
+  const [draftKnowledgeSnippetIds, setDraftKnowledgeSnippetIds] = useState<string[]>(referenceKnowledgeSnippetIds);
+  const [knowledgeSnippets, setKnowledgeSnippets] = useState<KnowledgeSnippet[]>([]);
   const [developerMode, setDeveloperMode] = useState(false);
   const [draftForceOutlineAgentRepair, setDraftForceOutlineAgentRepair] = useState(false);
   const [knowledgeSearch, setKnowledgeSearch] = useState('');
@@ -345,21 +349,25 @@ function OutlineEditPage({
 
     setDraftOutlineExpansionMode(isExpansionWorkflow ? outlineExpansionMode : 'ai-complement');
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
+    setDraftKnowledgeSnippetIds(referenceKnowledgeSnippetIds);
     setDraftForceOutlineAgentRepair(false);
     setKnowledgeSearch('');
     void loadKnowledgeIndex();
-  }, [generationDialogOpen, isExpansionWorkflow, outlineExpansionMode, referenceKnowledgeDocumentIds]);
+  }, [generationDialogOpen, isExpansionWorkflow, outlineExpansionMode, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds]);
 
   const loadKnowledgeIndex = async () => {
     try {
       setLoadingKnowledge(true);
-      const data = await window.yibiao?.knowledgeBase.list();
+      const data = await window.yibiao?.knowledgeBase.list('document');
       setKnowledgeIndex(data || emptyKnowledgeIndex);
       setExpandedKnowledgeFolderIds(getInitialExpandedKnowledgeFolders(data || emptyKnowledgeIndex));
+      const snippets = await window.yibiao?.knowledgeBase.listSnippets();
+      setKnowledgeSnippets(Array.isArray(snippets) ? snippets : []);
     } catch (error) {
       showToast(error instanceof Error ? error.message : '读取知识库失败', 'error');
       setKnowledgeIndex(emptyKnowledgeIndex);
       setExpandedKnowledgeFolderIds(new Set());
+      setKnowledgeSnippets([]);
     } finally {
       setLoadingKnowledge(false);
     }
@@ -382,6 +390,7 @@ function OutlineEditPage({
 
     setDraftOutlineExpansionMode(isExpansionWorkflow ? outlineExpansionMode : 'ai-complement');
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
+    setDraftKnowledgeSnippetIds(referenceKnowledgeSnippetIds);
     setKnowledgeSearch('');
     setGenerationDialogOpen(true);
   };
@@ -389,6 +398,7 @@ function OutlineEditPage({
   const saveOutlineConfig = () => {
     onOutlineConfigChange({
       referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
+      referenceKnowledgeSnippetIds: draftKnowledgeSnippetIds,
       outlineExpansionMode: isExpansionWorkflow ? draftOutlineExpansionMode : 'ai-complement',
     });
     setGenerationDialogOpen(false);
@@ -413,11 +423,13 @@ function OutlineEditPage({
       const nextOutlineExpansionMode = isExpansionWorkflow ? draftOutlineExpansionMode : 'ai-complement';
       onOutlineConfigChange({
         referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
+        referenceKnowledgeSnippetIds: draftKnowledgeSnippetIds,
         outlineExpansionMode: nextOutlineExpansionMode,
       });
       setGenerationDialogOpen(false);
       await window.yibiao?.tasks.startOutlineGeneration({
         reference_knowledge_document_ids: draftKnowledgeDocumentIds,
+        reference_knowledge_snippet_ids: draftKnowledgeSnippetIds,
         outline_expansion_mode: nextOutlineExpansionMode,
         debug_force_outline_agent_repair: developerMode && draftForceOutlineAgentRepair,
       });
@@ -474,6 +486,31 @@ function OutlineEditPage({
       return;
     }
     setDraftKnowledgeDocumentIds([]);
+  };
+
+  const toggleDraftKnowledgeSnippet = (snippet: KnowledgeSnippet) => {
+    if (knowledgePickingDisabled) {
+      return;
+    }
+    setDraftKnowledgeSnippetIds((prev) => (
+      prev.includes(snippet.id)
+        ? prev.filter((id) => id !== snippet.id)
+        : [...prev, snippet.id]
+    ));
+  };
+
+  const removeDraftKnowledgeSnippet = (snippetId: string) => {
+    if (knowledgePickingDisabled) {
+      return;
+    }
+    setDraftKnowledgeSnippetIds((prev) => prev.filter((id) => id !== snippetId));
+  };
+
+  const clearDraftKnowledgeSnippets = () => {
+    if (knowledgePickingDisabled) {
+      return;
+    }
+    setDraftKnowledgeSnippetIds([]);
   };
 
   const getMutationLockMessage = () => {
@@ -848,6 +885,9 @@ function OutlineEditPage({
     const selectedDocuments = draftKnowledgeDocumentIds
       .map((documentId) => knowledgeIndex.documents.find((document) => document.id === documentId))
       .filter((document): document is KnowledgeDocument => Boolean(document));
+    const selectedSnippets = draftKnowledgeSnippetIds
+      .map((snippetId) => knowledgeSnippets.find((snippet) => snippet.id === snippetId))
+      .filter((snippet): snippet is KnowledgeSnippet => Boolean(snippet));
     const visibleFolders = knowledgeIndex.folders.flatMap((folder) => {
       const folderDocuments = availableDocuments.filter((document) => document.folder_id === folder.id);
       const folderMatched = keyword ? includesKeyword(folder.name, keyword) : false;
@@ -886,6 +926,10 @@ function OutlineEditPage({
                 const expanded = keyword ? true : expandedKnowledgeFolderIds.has(folder.id);
                 const selectedCount = documents.filter((document) => draftKnowledgeDocumentIds.includes(document.id)).length;
 
+                const folderSnippets = keyword
+                  ? knowledgeSnippets.filter((snippet) => snippet.folder_id === folder.id && (includesKeyword(folder.name, keyword) || includesKeyword(snippet.title, keyword)))
+                  : knowledgeSnippets.filter((snippet) => snippet.folder_id === folder.id);
+
                 return (
                   <section className="outline-knowledge-folder compact" key={folder.id}>
                     <div className="outline-knowledge-folder-head compact">
@@ -919,6 +963,29 @@ function OutlineEditPage({
                         })}
                       </div>
                     )}
+                    {expanded && Boolean(folderSnippets.length) && (
+                      <div className="outline-knowledge-snippet-block compact">
+                        <div className="outline-knowledge-subhead compact">片段</div>
+                        <div className="outline-knowledge-snippet-list compact">
+                          {folderSnippets.map((snippet) => {
+                            const selected = draftKnowledgeSnippetIds.includes(snippet.id);
+
+                            return (
+                              <label className={`outline-knowledge-snippet compact${selected ? ' is-selected' : ''}`} key={snippet.id}>
+                                <input
+                                  type="checkbox"
+                                  checked={selected}
+                                  disabled={knowledgePickingDisabled}
+                                  onChange={() => toggleDraftKnowledgeSnippet(snippet)}
+                                />
+                                <strong title={snippet.title}>{snippet.title}</strong>
+                                <small>{snippet.content.replace(/[#>*`\-\s]+/g, ' ').trim().slice(0, 40) || '（空内容）'}</small>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </section>
                 );
               }) : <div className="outline-knowledge-empty compact">没有匹配的知识库文档</div>}
@@ -927,8 +994,13 @@ function OutlineEditPage({
           <aside className="outline-knowledge-selected-pane">
             <div className="outline-knowledge-pane-head">
               <strong>本次已选</strong>
-              <button type="button" onClick={clearDraftKnowledgeDocuments} disabled={knowledgePickingDisabled || !draftKnowledgeDocumentIds.length}>清空</button>
+              <button
+                type="button"
+                onClick={() => { clearDraftKnowledgeDocuments(); clearDraftKnowledgeSnippets(); }}
+                disabled={knowledgePickingDisabled || (!draftKnowledgeDocumentIds.length && !draftKnowledgeSnippetIds.length)}
+              >清空</button>
             </div>
+            <div className="outline-knowledge-subhead compact">文档</div>
             {selectedDocuments.length ? (
               <div className="outline-knowledge-selected-list">
                 {selectedDocuments.map((document) => (
@@ -940,6 +1012,19 @@ function OutlineEditPage({
               </div>
             ) : (
               <div className="outline-knowledge-empty compact">未选择知识库文档</div>
+            )}
+            <div className="outline-knowledge-subhead compact">片段</div>
+            {selectedSnippets.length ? (
+              <div className="outline-knowledge-selected-list">
+                {selectedSnippets.map((snippet) => (
+                  <div className="outline-knowledge-selected-item" key={snippet.id}>
+                    <strong title={snippet.title}>{snippet.title}</strong>
+                    <button type="button" onClick={() => removeDraftKnowledgeSnippet(snippet.id)} disabled={knowledgePickingDisabled}>移除</button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="outline-knowledge-empty compact">未选择知识库片段</div>
             )}
           </aside>
         </div>

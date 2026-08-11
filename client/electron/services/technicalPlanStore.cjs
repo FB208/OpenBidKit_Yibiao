@@ -712,9 +712,22 @@ function createTechnicalPlanStore({ app, db, fileService }) {
 
   function replaceReferenceDocumentIds(documentIds) {
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
+    db.prepare('DELETE FROM technical_plan_reference_snippets').run();
     const insert = db.prepare('INSERT INTO technical_plan_reference_docs (document_id, sort_order) VALUES (@document_id, @sort_order)');
     [...new Set((Array.isArray(documentIds) ? documentIds : []).map((id) => String(id || '').trim()).filter(Boolean))]
       .forEach((documentId, index) => insert.run({ document_id: documentId, sort_order: index }));
+  }
+
+  function loadReferenceSnippetIds() {
+    return db.prepare('SELECT snippet_id FROM technical_plan_reference_snippets ORDER BY sort_order ASC').all()
+      .map((row) => row.snippet_id);
+  }
+
+  function replaceReferenceSnippetIds(snippetIds) {
+    db.prepare('DELETE FROM technical_plan_reference_snippets').run();
+    const insert = db.prepare('INSERT INTO technical_plan_reference_snippets (snippet_id, sort_order) VALUES (@snippet_id, @sort_order)');
+    [...new Set((Array.isArray(snippetIds) ? snippetIds : []).map((id) => String(id || '').trim()).filter(Boolean))]
+      .forEach((snippetId, index) => insert.run({ snippet_id: snippetId, sort_order: index }));
   }
 
   function taskFromRow(row) {
@@ -1137,6 +1150,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_tasks').run();
     db.prepare('DELETE FROM technical_plan_bid_items').run();
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
+    db.prepare('DELETE FROM technical_plan_reference_snippets').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     clearOriginalOutlineRuntime();
@@ -1171,6 +1185,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_tasks').run();
     db.prepare('DELETE FROM technical_plan_bid_items').run();
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
+    db.prepare('DELETE FROM technical_plan_reference_snippets').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     clearOriginalOutlineRuntime();
@@ -1353,11 +1368,13 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     if (hasOwn(partial, 'contentGenerationOptions')) metaUpdates.content_generation_options_json = jsonOrNull(partial.contentGenerationOptions);
     if (hasOwn(partial, 'contentGenerationRuntime')) metaUpdates.content_generation_runtime_json = jsonOrNull(partial.contentGenerationRuntime);
     if (hasOwn(partial, 'contentIllustrationPlan')) metaUpdates.content_illustration_plan_json = jsonOrNull(partial.contentIllustrationPlan);
+    if (hasOwn(partial, 'tenderStarredSections')) metaUpdates.tender_starred_sections_json = jsonOrNull(partial.tenderStarredSections);
 
     if (Object.keys(metaUpdates).length) updateMeta(metaUpdates);
 
     const nextBidMode = isValidBidMode(partial.bidAnalysisMode) ? partial.bidAnalysisMode : meta.bid_analysis_mode;
     if (hasOwn(partial, 'referenceKnowledgeDocumentIds')) replaceReferenceDocumentIds(partial.referenceKnowledgeDocumentIds);
+    if (hasOwn(partial, 'referenceKnowledgeSnippetIds')) replaceReferenceSnippetIds(partial.referenceKnowledgeSnippetIds);
     if (hasOwn(partial, 'bidAnalysisTasks')) saveBidItems(partial.bidAnalysisTasks, nextBidMode);
     if (hasOwn(partial, 'projectOverview')) upsertDerivedBidItem('projectOverview', partial.projectOverview, nextBidMode);
     if (hasOwn(partial, 'techRequirements')) upsertDerivedBidItem('techRequirements', partial.techRequirements, nextBidMode);
@@ -1445,11 +1462,13 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       outlineMode: isValidOutlineMode(meta.outline_mode) ? meta.outline_mode : 'aligned',
       outlineExpansionMode: isValidOutlineExpansionMode(meta.outline_expansion_mode) ? meta.outline_expansion_mode : 'ai-complement',
       referenceKnowledgeDocumentIds: loadReferenceDocumentIds(),
+      referenceKnowledgeSnippetIds: loadReferenceSnippetIds(),
       ...tasks,
       globalFacts: loadGlobalFacts(),
       contentGenerationOptions: safeJsonParse(meta.content_generation_options_json, undefined),
       contentGenerationRuntime: safeJsonParse(meta.content_generation_runtime_json, undefined),
       contentIllustrationPlan: safeJsonParse(meta.content_illustration_plan_json, undefined),
+      tenderStarredSections: safeJsonParse(meta.tender_starred_sections_json, {}),
       contentGenerationSections: loadContentSections(outlineData),
       contentGenerationPlans: loadContentPlans(),
       outlineData,
@@ -1498,11 +1517,12 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     return loadTechnicalPlan();
   }
 
-  function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineExpansionMode } = {}) {
+  function saveOutlineConfig({ referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, outlineExpansionMode } = {}) {
     return updateTechnicalPlan({
       outlineMode: 'aligned',
       outlineExpansionMode: isValidOutlineExpansionMode(outlineExpansionMode) ? outlineExpansionMode : 'ai-complement',
       referenceKnowledgeDocumentIds,
+      referenceKnowledgeSnippetIds,
     });
   }
 
@@ -1637,6 +1657,10 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     });
     transaction();
     return loadTechnicalPlan();
+  }
+
+  function saveTenderStarredSections(starredSections) {
+    return updateTechnicalPlan({ tenderStarredSections: starredSections || {} });
   }
 
   async function importTenderDocument() {
@@ -1807,6 +1831,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       db.prepare('DELETE FROM technical_plan_tasks').run();
       db.prepare('DELETE FROM technical_plan_bid_items').run();
       db.prepare('DELETE FROM technical_plan_reference_docs').run();
+    db.prepare('DELETE FROM technical_plan_reference_snippets').run();
       db.prepare('DELETE FROM technical_plan_outline_nodes').run();
       db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
       db.prepare('DELETE FROM technical_plan_meta').run();
@@ -1862,6 +1887,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     saveIllustrationPng,
     saveContentGenerationOptions,
     saveChapterContent,
+    saveTenderStarredSections,
   };
 }
 

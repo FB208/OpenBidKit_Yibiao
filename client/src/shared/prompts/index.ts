@@ -12,3 +12,9 @@ export {
   buildLogicCheckMessages,
   buildTypoCheckMessages,
 } from './rejectionPrompts';
+export {
+  buildBusinessClauseAnalysisMessages,
+  buildBusinessOutlineMessages,
+  buildBusinessGlobalFactsMessages,
+  buildBusinessContentMessages,
+} from './businessBidPrompts';

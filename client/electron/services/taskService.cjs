@@ -5,6 +5,13 @@ const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
 const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
 const { runOutlineGenerationTask } = require('./outlineGenerationTask.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
+const {
+  runBusinessClauseAnalysisTask,
+  runBusinessClauseRegenerationTask,
+  runBusinessOutlineGenerationTask,
+  runBusinessGlobalFactsTask,
+  runBusinessContentGenerationTask,
+} = require('./businessBidGeneration.cjs');
 
 const taskDefinitions = {
   'bid-section-extraction': {
@@ -50,6 +57,51 @@ const taskDefinitions = {
     step: 5,
     lockPolicy: 'group-exclusive',
     stateKey: 'technicalPlan',
+    field: 'contentGenerationTask',
+  },
+  'business-clause-regeneration': {
+    label: '商务条款解析（模板重生成）',
+    group: 'business-bid',
+    groupLabel: '商务标',
+    step: 2,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'businessBid',
+    field: 'clauseAnalysisTask',
+  },
+  'business-clause-analysis': {
+    label: '商务条款解析',
+    group: 'business-bid',
+    groupLabel: '商务标',
+    step: 2,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'businessBid',
+    field: 'clauseAnalysisTask',
+  },
+  'business-outline-generation': {
+    label: '商务目录生成',
+    group: 'business-bid',
+    groupLabel: '商务标',
+    step: 3,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'businessBid',
+    field: 'outlineGenerationTask',
+  },
+  'business-global-facts-generation': {
+    label: '商务全局事实设定',
+    group: 'business-bid',
+    groupLabel: '商务标',
+    step: 4,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'businessBid',
+    field: 'globalFactsTask',
+  },
+  'business-content-generation': {
+    label: '商务正文生成',
+    group: 'business-bid',
+    groupLabel: '商务标',
+    step: 5,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'businessBid',
     field: 'contentGenerationTask',
   },
   'rejection-items-extraction': {
@@ -225,7 +277,7 @@ function createTask(type, payload) {
   };
 }
 
-function createTaskService({ aiService, agentService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService }) {
+function createTaskService({ aiService, agentService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService, businessBidStore }) {
   const subscribers = new Set();
   const activeTasks = new Map();
   const activeTaskControls = new Map();
@@ -279,6 +331,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         'outlineData',
         'outlineGenerationTask',
         'referenceKnowledgeDocumentIds',
+        'referenceKnowledgeSnippetIds',
         'globalFactsTask',
         'globalFacts',
         'contentGenerationTask',
@@ -291,7 +344,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     }
 
     if (task.type === 'outline-generation') {
-      copyPatchFields(patch, state, ['outlineMode', 'outlineExpansionMode', 'referenceKnowledgeDocumentIds']);
+      copyPatchFields(patch, state, ['outlineMode', 'outlineExpansionMode', 'referenceKnowledgeDocumentIds', 'referenceKnowledgeSnippetIds']);
       if (task.status === 'success' || state.outlineData === null || hasOwn(eventPatch, 'outlineData')) {
         copyPatchFields(patch, state, [
           'outlineData',
@@ -348,9 +401,70 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     return event;
   }
 
+  function buildBusinessBidSnapshot(task, state = {}, eventPatch = {}) {
+    const patch = { ...(eventPatch.businessBidPatch || {}) };
+    const taskField = getTaskField(task.type);
+    if (taskField) {
+      patch[taskField] = state?.[taskField] || task;
+    }
+
+    if (task.type === 'business-clause-analysis' || task.type === 'business-clause-regeneration') {
+      copyPatchFields(patch, state, ['clauseAnalysisTasks', 'clauseAnalysisProgress', 'clauseItems', 'hasExplicitContentList', 'requiredBusinessContents', 'selectedTemplateItemIds', 'templateApplied', 'referenceKnowledgeDocumentIds', 'referenceKnowledgeSnippetIds']);
+    }
+
+    if (task.type === 'business-outline-generation') {
+      copyPatchFields(patch, state, ['outlineMode', 'referenceKnowledgeDocumentIds', 'referenceKnowledgeSnippetIds']);
+      if (task.status === 'success' || state.outlineData === null || hasOwn(eventPatch, 'outlineData')) {
+        copyPatchFields(patch, state, [
+          'outlineData',
+          'globalFactsTask',
+          'globalFacts',
+          'contentGenerationTask',
+          'contentGenerationSections',
+        ]);
+      }
+    }
+
+    if (task.type === 'business-global-facts-generation') {
+      copyPatchFields(patch, state, ['globalFacts']);
+      if (!isActiveTaskStatus(task.status)) {
+        copyPatchFields(patch, state, [
+          'contentGenerationTask',
+          'contentGenerationSections',
+        ]);
+      }
+    }
+
+    if (task.type === 'business-content-generation') {
+      copyPatchFields(patch, state, [
+        'outlineData',
+        'contentGenerationSections',
+      ]);
+    }
+
+    if (hasOwn(eventPatch, 'outlineData')) {
+      patch.outlineData = eventPatch.outlineData;
+    }
+    if (hasOwn(eventPatch, 'contentSection')) {
+      patch.contentSection = eventPatch.contentSection;
+    }
+    if (hasOwn(eventPatch, 'clauseItems')) {
+      patch.clauseItems = eventPatch.clauseItems;
+    }
+
+    const event = { businessBidPatch: patch };
+    if (hasOwn(eventPatch, 'outlineData')) event.outlineData = eventPatch.outlineData;
+    if (hasOwn(eventPatch, 'contentSection')) event.contentSection = eventPatch.contentSection;
+    if (hasOwn(eventPatch, 'clauseItems')) event.clauseItems = eventPatch.clauseItems;
+    return event;
+  }
+
   function buildSnapshot(definition, state, task, eventPatch) {
     if (definition.stateKey === 'technicalPlan') {
       return buildTechnicalPlanSnapshot(task, state, eventPatch);
+    }
+    if (definition.stateKey === 'businessBid') {
+      return buildBusinessBidSnapshot(task, state, eventPatch);
     }
     if (definition.stateKey === 'rejectionCheck') {
       return { rejectionCheck: state };
@@ -365,6 +479,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     const definition = getTaskDefinition(task.type);
     if (definition.stateKey === 'technicalPlan') {
       return buildSnapshot(definition, technicalPlanStore.loadTechnicalPlan(), task);
+    }
+    if (definition.stateKey === 'businessBid') {
+      return buildSnapshot(definition, businessBidStore.loadBusinessBid(), task);
     }
     if (definition.stateKey === 'rejectionCheck') {
       return { rejectionCheck: rejectionCheckStore.loadRejectionCheck() };
@@ -443,6 +560,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     if (definition.stateKey === 'technicalPlan') {
       return technicalPlanStore.updateTechnicalPlan(partial);
     }
+    if (definition.stateKey === 'businessBid') {
+      return businessBidStore.updateBusinessBid(partial);
+    }
     if (definition.stateKey === 'rejectionCheck') {
       return rejectionCheckStore.updateRejectionCheck(partial);
     }
@@ -455,6 +575,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   function loadWorkspaceState(definition) {
     if (definition.stateKey === 'technicalPlan') {
       return technicalPlanStore.loadTechnicalPlan();
+    }
+    if (definition.stateKey === 'businessBid') {
+      return businessBidStore.loadBusinessBid();
     }
     if (definition.stateKey === 'rejectionCheck') {
       return rejectionCheckStore.loadRejectionCheck();
@@ -530,9 +653,11 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
 
     const runnerWorkspaceStore = definition.stateKey === 'technicalPlan'
       ? technicalPlanStore
-      : definition.stateKey === 'rejectionCheck'
-        ? rejectionCheckStore
-        : duplicateCheckStore;
+      : definition.stateKey === 'businessBid'
+        ? businessBidStore
+        : definition.stateKey === 'rejectionCheck'
+          ? rejectionCheckStore
+          : duplicateCheckStore;
     const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId) : aiService;
     runner({ aiService: runnerAiService, agentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
       const failedTask = updateTask({ status: 'error', error: error.message || '任务执行失败' });
@@ -807,6 +932,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         outlineData: null,
         outlineGenerationTask: undefined,
         referenceKnowledgeDocumentIds: [],
+        referenceKnowledgeSnippetIds: [],
         globalFactsTask: undefined,
         globalFacts: [],
         contentGenerationTask: undefined,
@@ -824,6 +950,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         outlineMode: 'aligned',
         outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
         referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
+        referenceKnowledgeSnippetIds: Array.isArray(payload?.reference_knowledge_snippet_ids) ? payload.reference_knowledge_snippet_ids : [],
       });
     },
     startGlobalFactsGeneration(payload) {
@@ -837,6 +964,77 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     },
     startContentGeneration(payload) {
       return startManagedTask('content-generation', payload, runContentGenerationTask);
+    },
+    startBusinessClauseAnalysis(payload) {
+      return startManagedTask('business-clause-analysis', payload, runBusinessClauseAnalysisTask, {
+        clauseAnalysisTasks: {},
+        clauseAnalysisProgress: 0,
+        clauseItems: [],
+        hasExplicitContentList: undefined,
+        requiredBusinessContents: undefined,
+        selectedTemplateItemIds: undefined,
+        templateApplied: undefined,
+        outlineData: null,
+        outlineGenerationTask: undefined,
+        globalFactsTask: undefined,
+        globalFacts: [],
+        contentGenerationTask: undefined,
+        contentGenerationSections: {},
+      });
+    },
+    startBusinessClauseRegeneration(payload) {
+      return startManagedTask('business-clause-regeneration', payload, runBusinessClauseRegenerationTask, {
+        clauseAnalysisTasks: {},
+        clauseAnalysisProgress: 0,
+        clauseItems: [],
+        selectedTemplateItemIds: Array.isArray(payload?.templateItemIds) ? payload.templateItemIds : [],
+        templateApplied: true,
+        outlineData: null,
+        outlineGenerationTask: undefined,
+        globalFactsTask: undefined,
+        globalFacts: [],
+        contentGenerationTask: undefined,
+        contentGenerationSections: {},
+      });
+    },
+    startBusinessOutlineGeneration(payload) {
+      return startManagedTask('business-outline-generation', payload, runBusinessOutlineGenerationTask, {
+        referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
+        referenceKnowledgeSnippetIds: Array.isArray(payload?.reference_knowledge_snippet_ids) ? payload.reference_knowledge_snippet_ids : [],
+        outlineData: null,
+        globalFactsTask: undefined,
+        globalFacts: [],
+        contentGenerationTask: undefined,
+        contentGenerationSections: {},
+      });
+    },
+    startBusinessGlobalFactsGeneration(payload) {
+      return startManagedTask('business-global-facts-generation', payload, runBusinessGlobalFactsTask, {
+        globalFacts: [],
+        contentGenerationTask: undefined,
+        contentGenerationSections: {},
+      });
+    },
+    startBusinessContentGeneration(payload) {
+      return startManagedTask('business-content-generation', payload, runBusinessContentGenerationTask);
+    },
+    pauseBusinessContentGeneration() {
+      const task = activeTasks.get('business-content-generation');
+      const control = activeTaskControls.get('business-content-generation');
+      if (task && isActiveTaskStatus(task.status) && control?.requestPause) {
+        if (control.queueScopeId && aiService?.pauseQueueScope) {
+          aiService.pauseQueueScope(control.queueScopeId);
+        }
+        return control.requestPause();
+      }
+
+      const businessBid = businessBidStore.loadBusinessBid() || {};
+      const contentTask = businessBid.contentGenerationTask;
+      if (contentTask?.status === 'paused' || contentTask?.status === 'pausing') {
+        return contentTask;
+      }
+
+      throw new Error('当前没有正在生成的商务正文任务。');
     },
     pauseContentGeneration() {
       const task = activeTasks.get('content-generation');

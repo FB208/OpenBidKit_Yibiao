@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { SectionId } from '../shared/types/navigation';
 import { getAppMenuItemById } from './menuConfig';
 import BidOpportunityPage from '../features/bid-opportunity/pages/BidOpportunityPage';
-import BusinessBidPage from '../features/business-bid/pages/BusinessBidPage';
+import BusinessBidHome from '../features/business-bid/pages/BusinessBidHome';
 import ContentExpansionReplaceTestPage from '../features/developer/pages/ContentExpansionReplaceTestPage';
 import DeveloperDemoPage, { isDeveloperDemoSection } from '../features/developer/pages/DeveloperDemoPage';
 import OpenCodeAgentTestPage from '../features/developer/pages/OpenCodeAgentTestPage';
@@ -11,6 +11,7 @@ import ExportFormatPage from '../features/export-format/pages/ExportFormatPage';
 import MyTemplatesPage from '../features/export-format/pages/MyTemplatesPage';
 import DuplicateCheckPage from '../features/duplicate-check/pages/DuplicateCheckPage';
 import KnowledgeBasePage from '../features/knowledge-base/pages/KnowledgeBasePage';
+import ImageKnowledgeBasePage from '../features/knowledge-base/pages/ImageKnowledgeBasePage';
 import RejectionCheckPage from '../features/rejection-check/pages/RejectionCheckPage';
 import ResourcesPage from '../features/resources/pages/ResourcesPage';
 import SettingsPage from '../features/settings/pages/SettingsPage';
@@ -49,9 +50,11 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
     case 'existing-plan-expansion':
       return <TechnicalPlanHome workflowKind="existing-plan-expansion" registerLeaveGuard={registerLeaveGuard} onSectionChange={onSectionChange} />;
     case 'business-bid':
-      return <BusinessBidPage />;
+      return <BusinessBidHome />;
     case 'document-knowledge-base':
-      return <KnowledgeBasePage />;
+      return <KnowledgeBasePage onSectionChange={onSectionChange} />;
+    case 'image-knowledge-base':
+      return <ImageKnowledgeBasePage onSectionChange={onSectionChange} />;
     case 'resources':
       return <ResourcesPage />;
     case 'duplicate-check':

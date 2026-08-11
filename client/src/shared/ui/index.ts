@@ -4,7 +4,7 @@ export type { DetailHelpLinkProps } from './DetailHelpLink';
 export { default as InputWithAction } from './InputWithAction';
 export type { InputWithActionProps } from './InputWithAction';
 export { default as MarkdownEditor } from './MarkdownEditor';
-export type { MarkdownEditorProps } from './MarkdownEditor';
+export type { MarkdownEditorProps, MarkdownEditorHandle } from './MarkdownEditor';
 export { default as MarkdownFullscreenViewer } from './MarkdownFullscreenViewer';
 export type { MarkdownFullscreenViewerProps } from './MarkdownFullscreenViewer';
 export type {
@@ -30,3 +30,4 @@ export {
   useDocumentParseNotice,
 } from './DocumentParseNoticeProvider';
 export { default as MarkdownRenderer } from './MarkdownRenderer';
+export { default as TableEditorDialog } from './TableEditorDialog';

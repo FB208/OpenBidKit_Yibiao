@@ -202,8 +202,13 @@ function normalizeReferenceDocumentIds(storedPlan) {
   return Array.isArray(raw) ? [...new Set(raw.map((id) => String(id || '').trim()).filter(Boolean))] : [];
 }
 
-function loadKnowledgeItems(knowledgeBaseService, documentIds, log) {
-  if (!documentIds.length) {
+function normalizeReferenceSnippetIds(storedPlan) {
+  const raw = storedPlan?.referenceKnowledgeSnippetIds || [];
+  return Array.isArray(raw) ? [...new Set(raw.map((id) => String(id || '').trim()).filter(Boolean))] : [];
+}
+
+function loadKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, log) {
+  if (!documentIds.length && !snippetIds.length) {
     log('未选择参考知识库，本次只基于招标文件、Step02 解析结果和目录预设关键信息。', 12);
     return [];
   }
@@ -229,6 +234,24 @@ function loadKnowledgeItems(knowledgeBaseService, documentIds, log) {
       }
     } catch (error) {
       log(`读取知识库条目失败，已跳过文档 ${documentId}：${error.message || String(error)}`, 12);
+    }
+  }
+  if (snippetIds.length && knowledgeBaseService?.getSnippetReferences) {
+    try {
+      const snippetResult = knowledgeBaseService.getSnippetReferences(snippetIds);
+      for (const item of Array.isArray(snippetResult?.items) ? snippetResult.items : []) {
+        const title = singleLine(item?.title);
+        const content = String(item?.resume || '').trim();
+        if (!title || !content) continue;
+        items.push({
+          id: singleLine(item?.id),
+          title,
+          resume: singleLine(content),
+          content,
+        });
+      }
+    } catch (error) {
+      log(`读取知识库片段失败，已跳过：${error.message || String(error)}`, 12);
     }
   }
   log(items.length ? `已读取 ${items.length} 条知识库完整条目。` : '未读取到可用知识库完整条目。', 14);
@@ -820,12 +843,13 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
   updateTask({ status: 'running', progress: 5, logs }, technicalPlan);
 
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
+  const referenceKnowledgeSnippetIds = normalizeReferenceSnippetIds(storedPlan);
   const bidAnalysisFactsText = formatBidAnalysisFactsForPrompt(storedPlan);
   log('正在读取招标文件、Step02 解析结果、目录和参考知识库。', 10);
   if (isExpansionWorkflow) {
     log('已读取原方案，本次将优先从原方案抽取全局事实变量。', 18);
   }
-  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);
+  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, log);
 
   const selectedSectionId = storedPlan.tenderFile?.selectedSectionId;
   const selectedSection = selectedSectionId && Array.isArray(storedPlan.bidSections)

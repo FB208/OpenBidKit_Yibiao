@@ -271,28 +271,52 @@ function normalizeReferenceDocumentIds(payload) {
     : [];
 }
 
+function normalizeReferenceSnippetIds(payload) {
+  return Array.isArray(payload?.reference_knowledge_snippet_ids)
+    ? [...new Set(payload.reference_knowledge_snippet_ids.map((id) => String(id || '').trim()).filter(Boolean))]
+    : [];
+}
+
 function normalizeOutlineExpansionMode(payload, storedPlan) {
   const value = payload?.outline_expansion_mode || payload?.outlineExpansionMode || storedPlan?.outlineExpansionMode;
   return value === 'original-only' ? 'original-only' : 'ai-complement';
 }
 
-function loadOutlineKnowledgeItems(knowledgeBaseService, documentIds, log) {
-  if (!documentIds.length) return [];
-  if (!knowledgeBaseService?.getOutlineReferences) {
-    log('未找到知识库读取服务，跳过参考知识库。', 6);
-    return [];
+function loadOutlineKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, log) {
+  const items = [];
+  const seen = new Set();
+  if (documentIds.length && knowledgeBaseService?.getOutlineReferences) {
+    try {
+      log(`正在读取 ${documentIds.length} 个参考知识库文档。`, 6);
+      const result = knowledgeBaseService.getOutlineReferences(documentIds);
+      for (const item of Array.isArray(result?.items) ? result.items : []) {
+        if (!item?.id || seen.has(item.id)) continue;
+        seen.add(item.id);
+        items.push(item);
+      }
+    } catch (error) {
+      log(`读取参考知识库失败，将按普通目录生成：${error.message || String(error)}`, 7);
+    }
   }
-
-  try {
-    log(`正在读取 ${documentIds.length} 个参考知识库文档。`, 6);
-    const result = knowledgeBaseService.getOutlineReferences(documentIds);
-    const items = Array.isArray(result?.items) ? result.items : [];
-    log(items.length ? `已读取 ${items.length} 条轻量知识条目。` : '未读取到可用知识库条目，将按普通目录生成。', 7);
-    return items;
-  } catch (error) {
-    log(`读取参考知识库失败，将按普通目录生成：${error.message || String(error)}`, 7);
-    return [];
+  if (snippetIds.length && knowledgeBaseService?.getSnippetReferences) {
+    try {
+      log(`正在读取 ${snippetIds.length} 个参考知识库片段。`, 6);
+      const result = knowledgeBaseService.getSnippetReferences(snippetIds);
+      for (const item of Array.isArray(result?.items) ? result.items : []) {
+        if (!item?.id || seen.has(item.id)) continue;
+        seen.add(item.id);
+        items.push(item);
+      }
+    } catch (error) {
+      log(`读取参考知识库片段失败，将按普通目录生成：${error.message || String(error)}`, 7);
+    }
   }
+  if (!items.length) {
+    log('未读取到可用知识库条目，将按普通目录生成。', 7);
+  } else {
+    log(`已读取 ${items.length} 条轻量知识条目（含片段）。`, 7);
+  }
+  return items;
 }
 
 function readExpandOutlinePrompt(options = {}) {
@@ -2943,6 +2967,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
   }
 
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(payload);
+  const referenceKnowledgeSnippetIds = normalizeReferenceSnippetIds(payload);
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
   const overview = storedPlan.projectOverview || '';
   const requirements = storedPlan.techRequirements || '';
@@ -2958,11 +2983,13 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     requirements,
     outlineExpansionMode,
     reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
+    reference_knowledge_snippet_ids: referenceKnowledgeSnippetIds,
   };
   let technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineMode: 'aligned',
     outlineExpansionMode,
     referenceKnowledgeDocumentIds,
+    referenceKnowledgeSnippetIds,
     outlineGenerationTask: updateTask({ status: 'running', progress: 5, logs }),
   });
   updateTask({ status: 'running', progress: 5, logs }, technicalPlan);
@@ -3023,7 +3050,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     groups = alignedResult.groups || [];
   }
 
-  const knowledgeItems = loadOutlineKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);
+  const knowledgeItems = loadOutlineKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, log);
   outline = await enhanceOutlineWithKnowledgeAdditions(aiService, taskPayload, outline, knowledgeItems, log);
   const finalResult = await runFinalOutlineGate({
     aiService,

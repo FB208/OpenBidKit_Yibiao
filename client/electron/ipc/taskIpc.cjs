@@ -25,6 +25,30 @@ function registerTaskIpc({ taskService }) {
     taskService.subscribe(event.sender);
     return taskService.pauseContentGeneration();
   });
+  ipcMain.handle('tasks:start-business-clause-analysis', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.startBusinessClauseAnalysis(payload);
+  });
+  ipcMain.handle('tasks:start-business-clause-regeneration', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.startBusinessClauseRegeneration(payload);
+  });
+  ipcMain.handle('tasks:start-business-outline-generation', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.startBusinessOutlineGeneration(payload);
+  });
+  ipcMain.handle('tasks:start-business-global-facts-generation', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.startBusinessGlobalFactsGeneration(payload);
+  });
+  ipcMain.handle('tasks:start-business-content-generation', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.startBusinessContentGeneration(payload);
+  });
+  ipcMain.handle('tasks:pause-business-content-generation', (event) => {
+    taskService.subscribe(event.sender);
+    return taskService.pauseBusinessContentGeneration();
+  });
   ipcMain.handle('tasks:start-rejection-items-extraction', (event, payload) => {
     taskService.subscribe(event.sender);
     return taskService.startRejectionItemsExtraction(payload);

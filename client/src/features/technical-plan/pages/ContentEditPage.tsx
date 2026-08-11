@@ -10,6 +10,7 @@ import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptio
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
+import type { KnowledgeImage } from '../../knowledge-base/types';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
 import aiImageExampleUrl from '../../../../assets/generate_img_example/ai.png';
 import mermaidImageExampleUrl from '../../../../assets/generate_img_example/mermaid.png';
@@ -274,13 +275,14 @@ function buildOutlineMeta(items: OutlineItem[], sections: ContentGenerationSecti
   return meta;
 }
 
-const MarkdownContent = memo(function MarkdownContent({ content, onPreviewImage }: { content: string; onPreviewImage: (src: string, alt: string) => void }) {
+const MarkdownContent = memo(function MarkdownContent({ content, onPreviewImage, resolveImage }: { content: string; onPreviewImage: (src: string, alt: string) => void; resolveImage: (src: string) => string | Promise<string | null> | null }) {
   return (
     <MarkdownRenderer
       imageMode="preview"
       imageClassName="markdown-clickable-image"
       renderMermaid
       onPreviewImage={onPreviewImage}
+      resolveImage={resolveImage}
     >
       {content}
     </MarkdownRenderer>
@@ -304,6 +306,9 @@ function ContentEditPage({
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [draftContent, setDraftContent] = useState('');
+  const [imagePickerOpen, setImagePickerOpen] = useState(false);
+  const [imagePickerList, setImagePickerList] = useState<KnowledgeImage[]>([]);
+  const [imagePickerLoading, setImagePickerLoading] = useState(false);
   const [confirmRegenerateItem, setConfirmRegenerateItem] = useState<OutlineItem | null>(null);
   const [requirementItem, setRequirementItem] = useState<OutlineItem | null>(null);
   const [regenerateRequirement, setRegenerateRequirement] = useState('');
@@ -551,6 +556,39 @@ function ContentEditPage({
   const imageModelAvailable = imageModelStatus === 'available';
 
   const handlePreviewImage = useCallback((src: string, alt: string) => setPreviewImage({ src, alt }), []);
+
+  const resolveKnowledgeImage = useCallback(async (src: string): Promise<string | null> => {
+    if (!/^kbimg:/i.test(src)) return null;
+    const imageId = src.slice('kbimg:'.length).trim();
+    if (!imageId) return null;
+    try {
+      const dataUrl = await window.yibiao?.knowledgeBase.images.getFile(imageId);
+      return typeof dataUrl === 'string' ? dataUrl : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const openImagePicker = useCallback(async () => {
+    setImagePickerOpen(true);
+    setImagePickerLoading(true);
+    try {
+      const list = await window.yibiao?.knowledgeBase.images.list();
+      setImagePickerList(Array.isArray(list) ? list : []);
+    } catch {
+      setImagePickerList([]);
+    } finally {
+      setImagePickerLoading(false);
+    }
+  }, []);
+
+  const insertImageReference = useCallback((image: KnowledgeImage) => {
+    const alt = (image.name || '图片').replace(/[[\]()]/g, '');
+    const reference = `![${alt}](kbimg:${image.id})`;
+    setDraftContent((prev) => `${prev}${prev && !prev.endsWith('\n') ? '\n' : ''}${reference}\n`);
+    setImagePickerOpen(false);
+    showToast('已插入知识库图片引用', 'success');
+  }, [showToast]);
 
   useEffect(() => {
     if (!outlineData?.outline?.length) {
@@ -1158,6 +1196,9 @@ function ContentEditPage({
               <span className={`content-status-badge is-${selectedStatus}`}>{statusLabels[selectedStatus]}</span>
               {editing ? (
                 <>
+                  <button type="button" className="secondary-action" onClick={() => void openImagePicker()} disabled={taskBlocksGeneration}>
+                    插入知识库图片
+                  </button>
                   <button type="button" className={isPreviewing ? 'secondary-action' : 'primary-action'} onClick={togglePreview}>
                     {isPreviewing ? '编辑' : '预览'}
                   </button>
@@ -1180,14 +1221,14 @@ function ContentEditPage({
           ) : selectedItem && selectedIsLeaf && editing && isPreviewing ? (
             <MarkdownFullscreenViewer className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle} title="正文预览全屏查看">
               {draftContent.trim() ? (
-                <MarkdownContent content={draftContent} onPreviewImage={handlePreviewImage} />
+                <MarkdownContent content={draftContent} onPreviewImage={handlePreviewImage} resolveImage={resolveKnowledgeImage} />
               ) : (
                 <p className="content-editor-empty">暂无预览内容</p>
               )}
             </MarkdownFullscreenViewer>
           ) : selectedItem && selectedIsLeaf && selectedContent.trim() ? (
             <MarkdownFullscreenViewer className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle} title={`${selectedItem.id} ${selectedItem.title}全屏查看`}>
-              <MarkdownContent content={selectedContent} onPreviewImage={handlePreviewImage} />
+              <MarkdownContent content={selectedContent} onPreviewImage={handlePreviewImage} resolveImage={resolveKnowledgeImage} />
             </MarkdownFullscreenViewer>
           ) : selectedItem && selectedIsLeaf ? (
             <div className="markdown-empty-state content-generation-empty">
@@ -1529,6 +1570,40 @@ function ContentEditPage({
             <Dialog.Close className="image-preview-close" type="button" aria-label="关闭图片预览">×</Dialog.Close>
             <Dialog.Title>{previewImage?.alt || '图片预览'}</Dialog.Title>
             {previewImage && <img src={previewImage.src} alt={previewImage.alt} />}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={imagePickerOpen} onOpenChange={(open) => setImagePickerOpen(open)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="knowledge-source-modal" />
+          <Dialog.Content className="knowledge-source-dialog-card knowledge-image-picker">
+            <div className="knowledge-source-head">
+              <div>
+                <span>插入知识库图片</span>
+                <Dialog.Title>选择图片素材</Dialog.Title>
+                <Dialog.Description>点击图片即可将其 Markdown 引用插入到当前正文之后。</Dialog.Description>
+              </div>
+              <button type="button" className="secondary-action" onClick={() => setImagePickerOpen(false)}>关闭</button>
+            </div>
+            <div className="knowledge-image-picker-body">
+              {imagePickerLoading ? (
+                <div className="knowledge-empty-box"><strong>正在读取知识库图片...</strong></div>
+              ) : imagePickerList.length ? (
+                <div className="knowledge-image-grid">
+                  {imagePickerList.map((image) => (
+                    <button type="button" key={image.id} className="knowledge-image-pick-card" onClick={() => insertImageReference(image)} title={image.name}>
+                      <div className="knowledge-image-thumb">
+                        {image.thumbnail ? <img src={image.thumbnail} alt={image.name} loading="lazy" /> : <span className="knowledge-image-placeholder">无预览</span>}
+                      </div>
+                      <strong>{image.name}</strong>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="knowledge-empty-box"><strong>知识库暂无图片</strong><p>请先到知识库上传图片素材。</p></div>
+              )}
+            </div>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

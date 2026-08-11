@@ -2301,8 +2301,15 @@ function normalizeReferenceDocumentIds(storedPlan) {
     : [];
 }
 
-function loadContentKnowledgeItems(knowledgeBaseService, documentIds, log) {
-  if (!documentIds.length) {
+function normalizeReferenceSnippetIds(storedPlan) {
+  const raw = storedPlan?.referenceKnowledgeSnippetIds ?? [];
+  return Array.isArray(raw)
+    ? [...new Set(raw.map((id) => String(id || '').trim()).filter(Boolean))]
+    : [];
+}
+
+function loadContentKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, log) {
+  if (!documentIds.length && !snippetIds.length) {
     log('本次正文编排未选择参考知识库。');
     return [];
   }
@@ -2312,12 +2319,26 @@ function loadContentKnowledgeItems(knowledgeBaseService, documentIds, log) {
   }
 
   try {
-    const result = knowledgeBaseService.getOutlineReferences(documentIds);
-    const items = Array.isArray(result?.items) ? result.items.map((item) => ({
-      id: String(item?.id || '').trim(),
-      title: String(item?.title || '').trim(),
-      resume: String(item?.resume || '').trim(),
-    })).filter((item) => item.id && item.title && item.resume) : [];
+    const items = [];
+    const seen = new Set();
+    const pushItem = (raw) => {
+      const id = String(raw?.id || '').trim();
+      const title = String(raw?.title || '').trim();
+      const resume = String(raw?.resume || '').trim();
+      if (!id || !title || !resume || seen.has(id)) {
+        return;
+      }
+      seen.add(id);
+      items.push({ id, title, resume });
+    };
+    if (documentIds.length) {
+      const result = knowledgeBaseService.getOutlineReferences(documentIds);
+      (Array.isArray(result?.items) ? result.items : []).forEach(pushItem);
+    }
+    if (snippetIds.length && knowledgeBaseService?.getSnippetReferences) {
+      const snippetResult = knowledgeBaseService.getSnippetReferences(snippetIds);
+      (Array.isArray(snippetResult?.items) ? snippetResult.items : []).forEach(pushItem);
+    }
     log(items.length ? `正文编排已读取 ${items.length} 条知识库轻量条目。` : '未读取到可用知识库轻量条目，正文编排不使用知识库。');
     return items;
   } catch (error) {
@@ -2326,9 +2347,9 @@ function loadContentKnowledgeItems(knowledgeBaseService, documentIds, log) {
   }
 }
 
-function loadContentKnowledgeContentMap(knowledgeBaseService, documentIds, log) {
+function loadContentKnowledgeContentMap(knowledgeBaseService, documentIds, snippetIds, log) {
   const map = new Map();
-  if (!documentIds.length || !knowledgeBaseService?.readItems) {
+  if ((!documentIds.length && !snippetIds.length) || !knowledgeBaseService?.readItems) {
     return map;
   }
 
@@ -2345,6 +2366,22 @@ function loadContentKnowledgeContentMap(knowledgeBaseService, documentIds, log) 
       }
     } catch (error) {
       log(`读取知识库正文素材失败，已跳过文档 ${documentId}：${error.message || String(error)}`);
+    }
+  }
+
+  if (snippetIds.length && knowledgeBaseService?.getSnippetReferences) {
+    try {
+      const snippetResult = knowledgeBaseService.getSnippetReferences(snippetIds);
+      for (const item of Array.isArray(snippetResult?.items) ? snippetResult.items : []) {
+        const itemId = String(item?.id || '').trim();
+        const content = String(item?.resume || '').trim();
+        if (!itemId || !content) {
+          continue;
+        }
+        map.set(itemId, { content });
+      }
+    } catch (error) {
+      log(`读取知识库片段正文素材失败，已跳过：${error.message || String(error)}`);
     }
   }
 
@@ -3020,6 +3057,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   let maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
   const minimumWords = targetItemId ? 0 : normalizeMinimumWords(generationOptions.minimumWords ?? generationOptions.minimum_words);
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
+  const referenceKnowledgeSnippetIds = normalizeReferenceSnippetIds(storedPlan);
   const enableConsistencyAudit = Boolean(generationOptions.enableConsistencyAudit ?? generationOptions.enable_consistency_audit ?? true);
   const requestedConsistencyRepairMode = normalizeConsistencyRepairMode(generationOptions.consistencyRepairMode ?? generationOptions.consistency_repair_mode);
   const consistencyRepairMode = targetItemId ? 'normal' : requestedConsistencyRepairMode;
@@ -3356,11 +3394,11 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
   }
 
-  knowledgeItems = loadContentKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, (message) => {
+  knowledgeItems = loadContentKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, (message) => {
     logs = [...logs, message];
   });
   allowedKnowledgeItemIds = new Set(knowledgeItems.map((item) => item.id));
-  knowledgeContentMap = loadContentKnowledgeContentMap(knowledgeBaseService, referenceKnowledgeDocumentIds, (message) => {
+  knowledgeContentMap = loadContentKnowledgeContentMap(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, (message) => {
     logs = [...logs, message];
   });
 
@@ -3527,6 +3565,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     ...initialIllustrationPatch,
     contentGenerationRuntime: initialRuntime,
     referenceKnowledgeDocumentIds,
+    referenceKnowledgeSnippetIds,
     contentGenerationTask: updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }),
   });
   updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, technicalPlan, {

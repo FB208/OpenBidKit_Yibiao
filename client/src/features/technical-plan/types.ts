@@ -276,6 +276,7 @@ export interface TechnicalPlanState {
   outlineMode: OutlineMode;
   outlineExpansionMode: OutlineExpansionMode;
   referenceKnowledgeDocumentIds: string[];
+  referenceKnowledgeSnippetIds: string[];
   bidSectionExtractionTask?: BackgroundTaskState;
   bidAnalysisTask?: BackgroundTaskState;
   outlineGenerationTask?: BackgroundTaskState;
@@ -288,4 +289,6 @@ export interface TechnicalPlanState {
   contentIllustrationPlan?: ContentIllustrationPlanState;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   outlineData: OutlineData | null;
+  /** 招标文件 Markdown 中用户标记的星标段落，key 为段落 hash */
+  tenderStarredSections?: Record<string, boolean>;
 }

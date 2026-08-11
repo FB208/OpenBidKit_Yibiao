@@ -5,6 +5,32 @@ export interface KnowledgeItem {
   content: string;
   source_block_ids?: string[];
   source_file?: string;
+  source?: 'ai' | 'manual';
+}
+
+export interface KnowledgeSnippet {
+  id: string;
+  folder_id: string;
+  title: string;
+  content: string;
+  sort_order?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeImage {
+  id: string;
+  folder_id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  file_name: string;
+  mime_type: string;
+  size: number;
+  thumbnail?: string;
+  sort_order?: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface KnowledgeCandidateItem {
@@ -95,12 +121,20 @@ export interface KnowledgeBaseIndexMutationResult extends KnowledgeBaseMutationR
 
 export type KnowledgeDocumentStatus = 'pending' | 'copying' | 'converting' | 'extracting' | 'ready_for_matching' | 'matching' | 'recovering' | 'analyzing' | 'saving' | 'success' | 'error';
 
+export type KnowledgeFolderType = 'document' | 'image';
+
 export interface KnowledgeFolder {
   id: string;
   name: string;
+  type: KnowledgeFolderType;
+  parent_id: string | null;
   sort_order?: number;
   created_at: string;
   updated_at: string;
+  /** 仅 UI 使用，由 service 层计算 */
+  children?: KnowledgeFolder[];
+  /** 仅 UI 使用，是否有子文件夹（用于判断是否叶子节点） */
+  hasChildren?: boolean;
 }
 
 export interface KnowledgeDocument {

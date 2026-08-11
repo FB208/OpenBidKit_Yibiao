@@ -4,7 +4,7 @@
 -- 1. 本文件用于开源开发者阅读、评审和排查问题，展示 workspace/yibiao.sqlite 的目标完整表结构。
 -- 2. 用户运行客户端时不需要手动执行本文件。
 -- 3. 客户端运行时建表和升级以 Electron Main 侧 migration 代码为准。
--- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17 目标结构。
+-- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17、知识库条目来源标记与片段表 v18、技术方案参考知识库片段选择表 v19 目标结构。
 -- 5. 每次表结构调整后，需要同步更新本文件和 runtime migration 版本。
 -- 6. 本文件不保存历史版本，每次更新都写入最新目标完整结构。
 
@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 17;
+PRAGMA user_version = 19;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   content_generation_runtime_json TEXT,
   -- v17 Agent 全文图片编排的最终结果 JSON。
   content_illustration_plan_json TEXT,
+  -- 招标文件 Markdown 中用户标记的星标段落，JSON 对象 { hash: boolean }
+  tender_starred_sections_json TEXT,
   -- v6 兼容字段（旧版客户端遗留，新代码不再使用但保留以兼容）
   current_bid_section_id TEXT,
   bid_sections_extracted INTEGER,
@@ -120,6 +122,16 @@ CREATE TABLE IF NOT EXISTS technical_plan_reference_docs (
 
 CREATE INDEX IF NOT EXISTS idx_technical_plan_reference_docs_order
 ON technical_plan_reference_docs(sort_order);
+
+-- 技术方案选中的参考知识库片段。
+-- snippet_id 为 knowledge_snippets.snippet_id，用于生成标书时注入片段内容。
+CREATE TABLE IF NOT EXISTS technical_plan_reference_snippets (
+  snippet_id TEXT PRIMARY KEY,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_technical_plan_reference_snippets_order
+ON technical_plan_reference_snippets(sort_order);
 
 -- 技术方案目录树节点。
 -- 目录结构和正文内容的权威来源。
@@ -646,6 +658,7 @@ ON knowledge_candidate_items(document_id, sort_order);
 
 -- 知识库最终条目。
 -- item_id 仍保持单文档内 K000001 形式；跨文档引用由服务层返回 documentId::itemId。
+-- source: ai（AI 自动提取）/ manual（用户手工新增或修改），重匹配段落时只刷新 ai 条目，保留 manual 条目。
 CREATE TABLE IF NOT EXISTS knowledge_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   document_id TEXT NOT NULL,
@@ -654,6 +667,7 @@ CREATE TABLE IF NOT EXISTS knowledge_items (
   resume TEXT NOT NULL,
   content TEXT NOT NULL,
   source_file TEXT,
+  source TEXT NOT NULL DEFAULT 'ai',
   content_chars INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
@@ -753,6 +767,22 @@ CREATE TABLE IF NOT EXISTS knowledge_match_batches (
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_match_batches_status
 ON knowledge_match_batches(document_id, status, batch_index);
+
+-- 知识库片段。
+-- 用户手工录入的可复用内容（标题 + 内容），归属某个文件夹，独立于文档，参与技术方案 AI 自动引用。
+CREATE TABLE IF NOT EXISTS knowledge_snippets (
+  snippet_id TEXT PRIMARY KEY,
+  folder_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (folder_id) REFERENCES knowledge_folders(folder_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_snippets_folder_order
+ON knowledge_snippets(folder_id, sort_order, created_at DESC);
 
 -- ============================================================================
 -- 导出模板 export_templates（v15 目标设计）

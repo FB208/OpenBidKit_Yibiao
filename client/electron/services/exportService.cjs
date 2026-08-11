@@ -10,6 +10,8 @@ const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.
 const { REMOTE_IMAGE_RETRY_ATTEMPTS, REMOTE_IMAGE_RETRY_DELAY_MS } = require('../utils/remoteImageRetry.cjs');
 const { renderMarkdownHtml } = require('../utils/renderMarkdownHtml.cjs');
 const { getLocalImageRenderService } = require('./localImageRenderService.cjs');
+
+let activeKnowledgeBaseService = null;
 const {
   AlignmentType,
   BorderStyle,
@@ -1096,6 +1098,21 @@ async function loadImage(source, context = {}) {
     };
   }
 
+  if (/^kbimg:/i.test(url)) {
+    const imageId = url.slice('kbimg:'.length).trim();
+    if (activeKnowledgeBaseService && imageId) {
+      try {
+        const imagePath = activeKnowledgeBaseService.resolveKnowledgeImageUrl(imageId);
+        if (imagePath && fs.existsSync(imagePath)) {
+          return { buffer: fs.readFileSync(imagePath), type: imageTypeFromPath(imagePath) };
+        }
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
   if (/^yibiao-asset:\/\//i.test(url)) {
     const assetPath = resolveAssetImagePath(url);
     if (!assetPath || !fs.existsSync(assetPath)) {
@@ -2130,7 +2147,8 @@ async function buildDocxBuffer(payload, options = {}) {
   return result.buffer;
 }
 
-function createExportService({ configStore } = {}) {
+function createExportService({ configStore, knowledgeBaseService } = {}) {
+  activeKnowledgeBaseService = knowledgeBaseService || null;
   return {
     async exportWord(payload = {}, onProgress) {
       const stats = countOutlineStats(Array.isArray(payload.outline) ? payload.outline : []);
@@ -2203,6 +2221,9 @@ function createExportService({ configStore } = {}) {
         });
         throw error;
       }
+    },
+    setKnowledgeBaseService(service) {
+      activeKnowledgeBaseService = service || null;
     },
   };
 }

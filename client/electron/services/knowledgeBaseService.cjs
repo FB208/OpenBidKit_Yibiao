@@ -2,7 +2,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const { dialog } = require('electron');
+const { dialog, clipboard, nativeImage } = require('electron');
 const { getKnowledgeBaseDir } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
@@ -27,6 +27,28 @@ function safeName(name) {
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
+}
+
+function extFromMime(mime) {
+  const value = String(mime || '').toLowerCase();
+  if (value.includes('png')) return '.png';
+  if (value.includes('jpeg') || value.includes('jpg')) return '.jpg';
+  if (value.includes('gif')) return '.gif';
+  if (value.includes('webp')) return '.webp';
+  if (value.includes('bmp')) return '.bmp';
+  if (value.includes('svg')) return '.svg';
+  return '.png';
+}
+
+function mimeFromExt(ext) {
+  const value = String(ext || '').toLowerCase().replace('.', '');
+  if (value === 'jpg' || value === 'jpeg') return 'image/jpeg';
+  if (value === 'png') return 'image/png';
+  if (value === 'gif') return 'image/gif';
+  if (value === 'webp') return 'image/webp';
+  if (value === 'bmp') return 'image/bmp';
+  if (value === 'svg') return 'image/svg+xml';
+  return 'image/png';
 }
 
 function getDebugLogsDir(app) {
@@ -1268,21 +1290,48 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       return { ...result, index: knowledgeBaseStore.list() };
     },
 
-    list() {
+    list(type) {
       recoverInterruptedDocuments();
-      return knowledgeBaseStore.list();
+      const index = knowledgeBaseStore.list(type || 'document');
+      // 组装树形结构
+      const folderMap = new Map();
+      const rootFolders = [];
+      for (const folder of index.folders) {
+        folder.children = [];
+        folder.hasChildren = false;
+        folderMap.set(folder.id, folder);
+      }
+      for (const folder of index.folders) {
+        if (folder.parent_id && folderMap.has(folder.parent_id)) {
+          const parent = folderMap.get(folder.parent_id);
+          parent.children.push(folder);
+          parent.hasChildren = true;
+        } else {
+          rootFolders.push(folder);
+        }
+      }
+      index.folders = rootFolders;
+      return index;
     },
 
-    createFolder(name) {
-      return knowledgeBaseStore.createFolder(name);
+    createFolder(name, type, parentId) {
+      const safeType = type || 'document';
+      // 如果指定了 parentId，验证父文件夹存在且 type 一致
+      if (parentId) {
+        const allFolders = knowledgeBaseStore.list(safeType).folders;
+        const parentFolder = allFolders.find((f) => f.id === parentId);
+        if (!parentFolder) throw new Error('父文件夹不存在');
+        if (parentFolder.type !== safeType) throw new Error('知识库类型不一致');
+      }
+      return knowledgeBaseStore.createFolder(name, safeType, parentId);
     },
 
     renameFolder(folderId, name) {
       return knowledgeBaseStore.renameFolder(folderId, name);
     },
 
-    reorderFolder(draggedFolderId, targetFolderId, position) {
-      return { success: true, message: '文件夹排序已保存', index: knowledgeBaseStore.reorderFolders(draggedFolderId, targetFolderId, position) };
+    reorderFolder(draggedFolderId, targetFolderId, position, parentId) {
+      return { success: true, message: '文件夹排序已保存', index: knowledgeBaseStore.reorderFolders(draggedFolderId, targetFolderId, position, parentId) };
     },
 
     deleteFolder(folderId) {
@@ -1290,10 +1339,12 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       const folder = index.folders.find((item) => item.id === folderId);
       if (!folder) throw new Error('知识库文件夹不存在');
 
-      const documentsToDelete = index.documents.filter((document) => document.folder_id === folderId);
+      // 收集该文件夹及其所有子文件夹的文档
+      const descendantIds = knowledgeBaseStore.getDescendantFolderIds(folderId);
+      const documentsToDelete = index.documents.filter((document) => descendantIds.includes(document.folder_id));
       const runningDocument = documentsToDelete.find((document) => activePreparations.has(document.id) || activeMatches.has(document.id));
       if (runningDocument) {
-        throw new Error(`文档“${runningDocument.file_name}”正在处理中，请完成后再删除文件夹`);
+        throw new Error(`文档"${runningDocument.file_name}"正在处理中，请完成后再删除文件夹`);
       }
 
       for (const document of documentsToDelete) {
@@ -1301,9 +1352,20 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         fs.rmSync(fromRelative(baseDir, document.document_dir), { recursive: true, force: true });
         fs.rmSync(getDebugLogPath(app, document.id), { force: true });
       }
-      fs.rmSync(fromRelative(baseDir, path.join('folders', folderId)), { recursive: true, force: true });
+      // 删除所有相关文件夹的文件系统目录和图片
+      for (const descendantId of descendantIds) {
+        fs.rmSync(fromRelative(baseDir, path.join('folders', descendantId)), { recursive: true, force: true });
+        for (const image of knowledgeBaseStore.listImages(descendantId)) {
+          knowledgeBaseStore.deleteImageRow(image.id);
+        }
+      }
       knowledgeBaseStore.deleteFolder(folderId);
-      return { success: true, message: `已删除文件夹“${folder.name}”及 ${documentsToDelete.length} 个文档` };
+      return { success: true, message: `已删除文件夹"${folder.name}"及 ${documentsToDelete.length} 个文档` };
+    },
+
+    moveFolder(folderId, targetParentId) {
+      const result = knowledgeBaseStore.moveFolder(folderId, targetParentId);
+      return { success: true, message: '已移动文件夹', index: result };
     },
 
     deleteDocument(documentId) {
@@ -1316,7 +1378,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       fs.rmSync(fromRelative(baseDir, document.document_dir), { recursive: true, force: true });
       fs.rmSync(getDebugLogPath(app, documentId), { force: true });
       knowledgeBaseStore.deleteDocument(documentId);
-      return { success: true, message: `已删除文档“${document.file_name}”` };
+      return { success: true, message: `已删除文档"${document.file_name}"` };
     },
 
     moveDocument(documentId, targetFolderId, targetDocumentId, position) {
@@ -1357,7 +1419,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
 
       try {
         const result = knowledgeBaseStore.moveDocument(documentId, targetFolderId, moveOptions);
-        return { success: true, message: `已移动文档“${document.file_name}”`, index: result.index, document: result.document };
+        return { success: true, message: `已移动文档"${document.file_name}"`, index: result.index, document: result.document };
       } catch (error) {
         if (oldDir && newDir && fs.existsSync(newDir) && !fs.existsSync(oldDir)) {
           try {
@@ -1469,6 +1531,142 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
 
     readAnalysis(documentId) {
       return knowledgeBaseStore.readAnalysis(documentId, { debugLogPath: isDeveloperMode() ? getDebugLogPath(app, documentId) : '' });
+    },
+
+    createItem(documentId, payload) {
+      return knowledgeBaseStore.createItem(documentId, payload);
+    },
+
+    updateItem(documentId, itemId, partial) {
+      return knowledgeBaseStore.updateItem(documentId, itemId, partial);
+    },
+
+    deleteItem(documentId, itemId) {
+      return knowledgeBaseStore.deleteItem(documentId, itemId);
+    },
+
+    listSnippets(folderId) {
+      return knowledgeBaseStore.listSnippets(folderId);
+    },
+
+    createSnippet(folderId, payload) {
+      return knowledgeBaseStore.createSnippet(folderId, payload);
+    },
+
+    updateSnippet(snippetId, partial) {
+      return knowledgeBaseStore.updateSnippet(snippetId, partial);
+    },
+
+    deleteSnippet(snippetId) {
+      return knowledgeBaseStore.deleteSnippet(snippetId);
+    },
+
+    getSnippetReferences(snippetIds) {
+      return knowledgeBaseStore.getSnippetReferences(snippetIds);
+    },
+
+    listImages(folderId) {
+      return knowledgeBaseStore.listImages(folderId);
+    },
+
+    async createImage(folderId, payload = {}) {
+      if (!folderId) throw new Error('缺少所属文件夹');
+      const base64 = String(payload?.base64 || '').trim();
+      if (!base64) throw new Error('图片内容为空');
+      const buffer = Buffer.from(base64, 'base64');
+      if (!buffer.length) throw new Error('图片内容为空');
+      const ext = extFromMime(payload?.mimeType);
+      const imageId = createId('IMG');
+      knowledgeBaseStore.ensureImagesDir(folderId);
+      const filePath = `images/${folderId}/${imageId}${ext}`;
+      const absolutePath = fromRelative(baseDir, filePath);
+      ensureDir(path.dirname(absolutePath));
+      fs.writeFileSync(absolutePath, buffer);
+
+      let thumbnailBuffer = buffer;
+      let thumbnailExt = ext;
+      try {
+        const source = nativeImage.createFromBuffer(buffer);
+        if (!source.isEmpty()) {
+          const resized = source.resize({ width: 240 });
+          if (!resized.isEmpty()) {
+            thumbnailBuffer = resized.toPNG();
+            thumbnailExt = '.png';
+          }
+        }
+      } catch (error) {
+        console.warn('[knowledge-base] 生成图片缩略图失败，使用原图', error);
+      }
+      const thumbnailPath = `images/${folderId}/${imageId}_thumb${thumbnailExt}`;
+      fs.writeFileSync(fromRelative(baseDir, thumbnailPath), thumbnailBuffer);
+
+      return knowledgeBaseStore.createImage(folderId, {
+        imageId,
+        name: String(payload?.name || payload?.fileName || '未命名图片'),
+        description: String(payload?.description || ''),
+        tags: Array.isArray(payload?.tags) ? payload.tags : [],
+        fileName: String(payload?.fileName || '未命名图片'),
+        mimeType: String(payload?.mimeType || mimeFromExt(ext)),
+        size: buffer.length,
+        filePath,
+        thumbnailPath,
+      });
+    },
+
+    async createImageFromClipboard(folderId, payload = {}) {
+      if (!folderId) throw new Error('缺少所属文件夹');
+      const source = clipboard.readImage();
+      if (!source || source.isEmpty()) {
+        throw new Error('剪贴板中没有图片');
+      }
+      const buffer = source.toPNG();
+      if (!buffer || !buffer.length) throw new Error('剪贴板图片读取失败');
+      const imageId = createId('IMG');
+      knowledgeBaseStore.ensureImagesDir(folderId);
+      const filePath = `images/${folderId}/${imageId}.png`;
+      const absolutePath = fromRelative(baseDir, filePath);
+      ensureDir(path.dirname(absolutePath));
+      fs.writeFileSync(absolutePath, buffer);
+
+      let thumbnailBuffer = buffer;
+      try {
+        const resized = source.resize({ width: 240 });
+        if (!resized.isEmpty()) {
+          thumbnailBuffer = resized.toPNG();
+        }
+      } catch (error) {
+        console.warn('[knowledge-base] 生成剪贴板图片缩略图失败', error);
+      }
+      const thumbnailPath = `images/${folderId}/${imageId}_thumb.png`;
+      fs.writeFileSync(fromRelative(baseDir, thumbnailPath), thumbnailBuffer);
+
+      return knowledgeBaseStore.createImage(folderId, {
+        imageId,
+        name: String(payload?.name || '粘贴的图片'),
+        description: String(payload?.description || ''),
+        tags: Array.isArray(payload?.tags) ? payload.tags : [],
+        fileName: String(payload?.fileName || '粘贴的图片.png'),
+        mimeType: 'image/png',
+        size: buffer.length,
+        filePath,
+        thumbnailPath,
+      });
+    },
+
+    updateImage(imageId, partial) {
+      return knowledgeBaseStore.updateImageRow(imageId, partial || {});
+    },
+
+    deleteImage(imageId) {
+      return knowledgeBaseStore.deleteImageRow(imageId);
+    },
+
+    getImageFileDataUrl(imageId) {
+      return knowledgeBaseStore.readImageFileAsDataUrl(imageId);
+    },
+
+    resolveKnowledgeImageUrl(imageId) {
+      return knowledgeBaseStore.getImageAbsolutePath(imageId);
     },
   };
 }

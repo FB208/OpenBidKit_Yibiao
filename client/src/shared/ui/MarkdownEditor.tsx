@@ -1,5 +1,9 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { useRef, type RefObject } from 'react';
+import { forwardRef, useCallback, useImperativeHandle, useRef, type RefObject } from 'react';
+
+export interface MarkdownEditorHandle {
+  insertAtCursor: (text: string) => void;
+}
 
 export interface MarkdownEditorProps {
   value: string;
@@ -20,17 +24,57 @@ const toolbarActions = [
   { id: 'ordered-list', label: '有序列表', title: '有序列表', prefix: '1. ', suffix: '', content: '1.' },
 ];
 
-function MarkdownEditor({
-  value,
-  onChange,
-  placeholder = '输入 Markdown 内容...',
-  className,
-  disabled = false,
-  fullscreenTitle = 'Markdown 全屏编辑',
-  fullscreenDescription = '全屏编辑当前 Markdown 内容。',
-}: MarkdownEditorProps) {
+const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(function MarkdownEditor(
+  {
+    value,
+    onChange,
+    placeholder = '输入 Markdown 内容...',
+    className,
+    disabled = false,
+    fullscreenTitle = 'Markdown 全屏编辑',
+    fullscreenDescription = '全屏编辑当前 Markdown 内容。',
+  },
+  ref,
+) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fullscreenTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const activeTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const insertInto = useCallback(
+    (targetRef: RefObject<HTMLTextAreaElement | null>, text: string) => {
+      const textarea = targetRef.current;
+      if (!textarea || disabled) {
+        return;
+      }
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const scrollTop = textarea.scrollTop;
+      const next = value.slice(0, start) + text + value.slice(end);
+      onChange(next);
+      requestAnimationFrame(() => {
+        textarea.focus();
+        textarea.scrollTop = scrollTop;
+        textarea.selectionStart = start + text.length;
+        textarea.selectionEnd = start + text.length;
+      });
+    },
+    [value, onChange, disabled],
+  );
+
+  const insertAtCursor = useCallback(
+    (text: string) => {
+      const target = activeTextareaRef.current ?? textareaRef.current ?? fullscreenTextareaRef.current;
+      if (target) {
+        insertInto({ current: target }, text);
+        return;
+      }
+      // 没有可聚焦的文本框时，追加到末尾。
+      onChange(value + text);
+    },
+    [insertInto, onChange, value],
+  );
+
+  useImperativeHandle(ref, () => ({ insertAtCursor }), [insertAtCursor]);
 
   function insertMarkdown(targetRef: RefObject<HTMLTextAreaElement | null>, prefix: string, suffix = '') {
     const textarea = targetRef.current;
@@ -81,10 +125,16 @@ function MarkdownEditor({
           </Dialog.Trigger>
         </div>
         <textarea
-          ref={textareaRef}
+          ref={(node) => {
+            textareaRef.current = node;
+            activeTextareaRef.current = node;
+          }}
           className="markdown-editor-textarea"
           value={value}
           onChange={(event) => onChange(event.target.value)}
+          onFocus={() => {
+            activeTextareaRef.current = textareaRef.current;
+          }}
           placeholder={placeholder}
           disabled={disabled}
         />
@@ -106,10 +156,16 @@ function MarkdownEditor({
               {renderToolbarButtons(fullscreenTextareaRef)}
             </div>
             <textarea
-              ref={fullscreenTextareaRef}
+              ref={(node) => {
+                fullscreenTextareaRef.current = node;
+                activeTextareaRef.current = node;
+              }}
               className="markdown-editor-textarea"
               value={value}
               onChange={(event) => onChange(event.target.value)}
+              onFocus={() => {
+                activeTextareaRef.current = fullscreenTextareaRef.current;
+              }}
               placeholder={placeholder}
               disabled={disabled}
             />
@@ -118,6 +174,6 @@ function MarkdownEditor({
       </Dialog.Portal>
     </Dialog.Root>
   );
-}
+});
 
 export default MarkdownEditor;

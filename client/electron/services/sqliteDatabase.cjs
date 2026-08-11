@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 17;
+const schemaVersion = 20;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -157,6 +157,18 @@ function createTechnicalPlanGlobalFactsSchema(db) {
   `);
 }
 
+function createTechnicalPlanReferenceSnippetsSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS technical_plan_reference_snippets (
+      snippet_id TEXT PRIMARY KEY,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_technical_plan_reference_snippets_order
+    ON technical_plan_reference_snippets(sort_order);
+  `);
+}
+
 function addTechnicalPlanBidSectionV6Compat(db) {
   // v6 兼容：部分旧版本客户端可能已添加 current_bid_section_id 和 bid_sections_extracted，
   // 此处做幂等处理，如果列已存在则 ALTER TABLE 会抛错，用 try/catch 忽略。
@@ -241,6 +253,27 @@ function addTechnicalPlanTenderFiles(db) {
 function addTechnicalPlanIllustrationPlan(db) {
   addColumnIfMissing(db, 'technical_plan_meta', 'content_illustration_plan_json', 'TEXT');
   removeLegacyTechnicalPlanIllustrationType(db);
+}
+
+function addKnowledgeItemSourceAndSnippets(db) {
+  addColumnIfMissing(db, 'knowledge_items', 'source', "TEXT NOT NULL DEFAULT 'ai'");
+  const existingTables = getExistingTables(db);
+  if (!existingTables.has('knowledge_snippets')) {
+    createKnowledgeBaseSchema(db);
+  }
+}
+
+function addKnowledgeFolderTypeAndParent(db) {
+  addColumnIfMissing(db, 'knowledge_folders', 'type', "TEXT NOT NULL DEFAULT 'document'");
+  addColumnIfMissing(db, 'knowledge_folders', 'parent_id', 'TEXT');
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_knowledge_folders_type
+    ON knowledge_folders(type);
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_knowledge_folders_parent
+    ON knowledge_folders(parent_id);
+  `);
 }
 
 function removeLegacyTechnicalPlanIllustrationType(db) {
@@ -689,13 +722,22 @@ function createKnowledgeBaseSchema(db) {
     CREATE TABLE IF NOT EXISTS knowledge_folders (
       folder_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'document',
+      parent_id TEXT,
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (parent_id) REFERENCES knowledge_folders(folder_id) ON DELETE CASCADE
     );
 
     CREATE INDEX IF NOT EXISTS idx_knowledge_folders_order
     ON knowledge_folders(sort_order, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_knowledge_folders_type
+    ON knowledge_folders(type);
+
+    CREATE INDEX IF NOT EXISTS idx_knowledge_folders_parent
+    ON knowledge_folders(parent_id);
 
     CREATE TABLE IF NOT EXISTS knowledge_documents (
       document_id TEXT PRIMARY KEY,
@@ -870,6 +912,41 @@ function createKnowledgeBaseSchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_knowledge_match_batches_status
     ON knowledge_match_batches(document_id, status, batch_index);
+
+    CREATE TABLE IF NOT EXISTS knowledge_snippets (
+      snippet_id TEXT PRIMARY KEY,
+      folder_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (folder_id) REFERENCES knowledge_folders(folder_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_knowledge_snippets_folder_order
+    ON knowledge_snippets(folder_id, sort_order, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS knowledge_images (
+      image_id TEXT PRIMARY KEY,
+      folder_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      file_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size INTEGER NOT NULL DEFAULT 0,
+      file_path TEXT NOT NULL,
+      thumbnail_path TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (folder_id) REFERENCES knowledge_folders(folder_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_knowledge_images_folder_order
+    ON knowledge_images(folder_id, sort_order, created_at DESC);
+
   `);
 }
 
@@ -950,6 +1027,8 @@ const schemaHealthTableGroups = [
       'knowledge_reports',
       'knowledge_document_steps',
       'knowledge_match_batches',
+      'knowledge_snippets',
+      'knowledge_images',
     ],
     repair: createKnowledgeBaseSchema,
   },
@@ -962,6 +1041,11 @@ const schemaHealthTableGroups = [
     version: 15,
     tables: ['export_templates'],
     repair: createExportTemplatesSchema,
+  },
+  {
+    version: 19,
+    tables: ['technical_plan_reference_snippets'],
+    repair: createTechnicalPlanReferenceSnippetsSchema,
   },
 ];
 
@@ -1103,6 +1187,20 @@ const schemaHealthColumnGroups = [
     table: 'technical_plan_meta',
     columns: {
       content_illustration_plan_json: 'TEXT',
+    },
+  },
+  {
+    version: 18,
+    table: 'knowledge_items',
+    columns: {
+      source: "TEXT NOT NULL DEFAULT 'ai'",
+    },
+  },
+  {
+    version: 20,
+    table: 'technical_plan_meta',
+    columns: {
+      tender_starred_sections_json: 'TEXT',
     },
   },
 ];
@@ -1253,6 +1351,21 @@ const migrations = [
     version: 17,
     description: '技术方案新增全文图片编排结果',
     up: addTechnicalPlanIllustrationPlan,
+  },
+  {
+    version: 18,
+    description: '知识库条目新增来源标记并新增片段表',
+    up: addKnowledgeItemSourceAndSnippets,
+  },
+  {
+    version: 19,
+    description: '技术方案新增参考知识库片段选择表',
+    up: createTechnicalPlanReferenceSnippetsSchema,
+  },
+  {
+    version: 20,
+    description: '知识库文件夹新增类型归属和层级嵌套字段',
+    up: addKnowledgeFolderTypeAndParent,
   },
 ];
 

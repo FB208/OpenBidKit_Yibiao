@@ -1,0 +1,184 @@
+{
+  "name": "yibiao-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "易标投标工具箱独立桌面客户端",
+  "author": "mark",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n vite,electron -c blue,magenta \"node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 node_modules/electron/dist/electron.exe .\"",
+    "build": "tsc --noEmit && vite build",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "postinstall": "electron-builder install-app-deps",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "generate-build-attestation": "node scripts/generate-build-attestation.cjs",
+    "prepare-opencode-tools": "node scripts/prepare-opencode-tools.cjs",
+    "verify-opencode-tools": "node scripts/verify-opencode-tools.cjs",
+    "smoke:electron-native": "electron scripts/electron-native-smoke.cjs",
+    "start": "electron ."
+  },
+  "build": {
+    "appId": "com.yibiao.openbidkit",
+    "productName": "易标投标工具箱",
+    "copyright": "Copyright © 2026 mark",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/opencode",
+        "to": "opencode",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "vendor/opencode-tools",
+        "to": "opencode-tools",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "FB208",
+        "repo": "OpenBidKit_Yibiao",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "msi": {
+      "oneClick": false,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "mac": {
+      "icon": "assets/icon.icns",
+      "identity": null,
+      "category": "public.app-category.business",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "background": "assets/macos-dmg/background.png",
+      "iconSize": 88,
+      "iconTextSize": 12,
+      "contents": [
+        {
+          "x": 170,
+          "y": 360,
+          "type": "file"
+        },
+        {
+          "x": 520,
+          "y": 360,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 112,
+          "y": 318,
+          "type": "file",
+          "path": "assets/macos-dmg/macOS使用说明.txt",
+          "name": "macOS使用说明.txt"
+        }
+      ]
+    },
+    "artifactName": "Yibiao-${version}-${os}-${arch}.${ext}"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-popover": "^1.1.15",
+    "@radix-ui/react-separator": "^1.1.7",
+    "@radix-ui/react-switch": "^1.2.6",
+    "@radix-ui/react-toast": "^1.2.15",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "adm-zip": "^0.5.17",
+    "better-sqlite3": "^12.10.0",
+    "cfb": "^1.2.2",
+    "chardet": "^2.1.1",
+    "cheerio": "^1.2.0",
+    "docx": "^9.6.1",
+    "electron-updater": "^6.8.3",
+    "iconv-lite": "^0.7.2",
+    "image-size": "^2.0.2",
+    "mammoth": "^1.12.0",
+    "markdown-it": "^14.2.0",
+    "markdown-it-cjk-friendly": "^2.0.2",
+    "markdown-it-task-lists": "^2.1.1",
+    "mermaid": "^11.14.0",
+    "mime-types": "^3.0.2",
+    "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^5.7.284",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
+    "undici": "^7.25.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^24.10.0",
+    "@types/plist": "^3.0.5",
+    "@types/react": "^19.1.11",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.0.0",
+    "electron": "^41.5.0",
+    "electron-builder": "^26.8.1",
+    "js-yaml": "^4.1.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.7",
+    "wait-on": "^8.0.4"
+  }
+}
