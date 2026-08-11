@@ -425,17 +425,19 @@ function KnowledgeBasePage() {
       const config = await window.yibiao?.config.load();
       setDeveloperMode(Boolean(config?.developer_mode));
       const migrationStatus = await window.yibiao?.knowledgeBase.getMigrationStatus();
-      let data: KnowledgeBaseIndex | undefined;
       if (migrationStatus?.needsMigration) {
         setPendingMigrationStatus(migrationStatus);
         setMigrationDialogOpen(true);
-        data = await window.yibiao?.knowledgeBase.list();
-      } else {
-        data = await window.yibiao?.knowledgeBase.list();
-        if (migrationStatus?.cleanupPending) {
-          showToast(migrationStatus.message || '旧知识库 JSON 清理未完成，将在下次进入时继续处理', 'info');
+      } else if (migrationStatus?.cleanupPending) {
+        const cleanupResult = await window.yibiao?.knowledgeBase.migrateLegacy();
+        if (!cleanupResult?.success) {
+          throw new Error(cleanupResult?.message || '旧知识库 JSON 清理失败');
+        }
+        if (cleanupResult.cleanupPending) {
+          showToast(cleanupResult.message || '旧知识库 JSON 清理未完成，将在下次进入时继续处理', 'info');
         }
       }
+      const data = await window.yibiao?.knowledgeBase.list();
       if (data) {
         setIndex(data);
         setActiveFolderId((currentId) => (
@@ -510,10 +512,12 @@ function KnowledgeBasePage() {
       const result = payload.kind === 'folder'
         ? await window.yibiao?.knowledgeBase.reorderFolder(payload.folderId, folderId, position)
         : await window.yibiao?.knowledgeBase.moveDocument(payload.documentId, folderId, null, 'after');
-      if (!result?.success || !result.index) {
+      if (!result?.success) {
         throw new Error(result?.message || '拖拽操作失败');
       }
-      applyKnowledgeIndex(result.index);
+      const data = await window.yibiao?.knowledgeBase.list();
+      if (!data) throw new Error('拖拽操作已保存，但读取知识库列表失败');
+      applyKnowledgeIndex(data);
       showToast(result.message, 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '拖拽操作失败', 'error');
@@ -538,10 +542,12 @@ function KnowledgeBasePage() {
     setDragSaving(true);
     try {
       const result = await window.yibiao?.knowledgeBase.moveDocument(dragPayload.documentId, document.folder_id, document.id, position);
-      if (!result?.success || !result.index) {
+      if (!result?.success) {
         throw new Error(result?.message || '文档排序失败');
       }
-      applyKnowledgeIndex(result.index);
+      const data = await window.yibiao?.knowledgeBase.list();
+      if (!data) throw new Error('文档排序已保存，但读取知识库列表失败');
+      applyKnowledgeIndex(data);
       setActiveFolderId(document.folder_id);
       showToast(result.message, 'success');
     } catch (error) {
@@ -568,7 +574,7 @@ function KnowledgeBasePage() {
       if (!result?.success) {
         throw new Error(result?.message || '知识库迁移失败');
       }
-      const data = result.index || await window.yibiao?.knowledgeBase.list();
+      const data = await window.yibiao?.knowledgeBase.list();
       if (!data) {
         throw new Error('知识库迁移完成，但读取迁移结果失败');
       }

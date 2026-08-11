@@ -1494,11 +1494,12 @@ async function runLogicCheck(aiService, input, onProgress) {
   return normalizeLogicCheckFindings(payload, input.bidDocuments);
 }
 
-function updateExtractionState(workspaceStore, checkpointTask, taskPartial, extractionPartial) {
-  const prev = workspaceStore.loadRejectionCheck() || {};
-  return checkpointTask(taskPartial, {
-    invalidBidAndRejectionItems: { ...(prev.invalidBidAndRejectionItems || {}), ...extractionPartial },
-  }).workspaceState;
+function updateExtractionState(checkpointTask, currentExtraction, taskPartial, extractionPartial) {
+  const nextExtraction = { ...(currentExtraction || {}), ...extractionPartial };
+  checkpointTask(taskPartial, {
+    invalidBidAndRejectionItems: nextExtraction,
+  });
+  return nextExtraction;
 }
 
 async function runRejectionItemsExtractionTask({ aiService, workspaceStore, checkpointTask, payload }) {
@@ -1519,7 +1520,7 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, chec
   });
 
   const logs = ['开始解析无效与废标项。'];
-  updateExtractionState(workspaceStore, checkpointTask, { status: 'running', progress: 5, logs }, {
+  let extractionState = updateExtractionState(checkpointTask, state.invalidBidAndRejectionItems, { status: 'running', progress: 5, logs }, {
     status: 'running',
     content: '',
     source: 'ai',
@@ -1540,7 +1541,7 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, chec
       tender_signature: tenderSignature,
       error: compactLogError(error),
     });
-    updateExtractionState(workspaceStore, checkpointTask, {
+    extractionState = updateExtractionState(checkpointTask, extractionState, {
       status: 'error',
       progress: 100,
       logs: [`无效与废标项解析失败：${message}`],
@@ -1564,7 +1565,7 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, chec
     output_metrics: textMetrics(finalContent),
     error: success ? undefined : '模型未返回解析内容',
   });
-  updateExtractionState(workspaceStore, checkpointTask, {
+  extractionState = updateExtractionState(checkpointTask, extractionState, {
     status: success ? 'success' : 'error',
     progress: 100,
     logs: success ? ['无效与废标项解析完成。'] : ['无效与废标项解析失败：模型未返回解析内容。'],
@@ -1584,7 +1585,7 @@ function createRunningResult(inputSignature, progressMessage) {
 }
 
 function updateCheckWorkspace(checkpointTask, taskPartial, partial) {
-  return checkpointTask(taskPartial, partial).workspaceState;
+  checkpointTask(taskPartial, partial);
 }
 
 async function runRejectionCheckTask({ aiService, workspaceStore, checkpointTask, payload }) {

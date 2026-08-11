@@ -2252,14 +2252,23 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
   }
 
   function updateAnalysisField(field, partial, persist, signature) {
-    if (!isCurrentDuplicateCheckSignature(signature)) return null;
-    const prev = workspaceStore.loadDuplicateCheck() || {};
-    const analysis = { ...(prev[field] || {}), ...partial, updated_at: now() };
-    const workspacePartial = { [field]: analysis };
+    const analysisPartial = { ...partial, updated_at: now() };
     if (typeof persist === 'function') {
-      return persist(workspacePartial, { ...prev, ...workspacePartial });
+      return persist(field, analysisPartial);
     }
-    return workspaceStore.updateDuplicateCheck(workspacePartial);
+    const prev = workspaceStore.loadDuplicateCheck() || {};
+    if (signature) {
+      const currentSignature = createSignature({
+        tenderFile: prev.tenderFile || null,
+        tenderFiles: Array.isArray(prev.tenderFiles) ? prev.tenderFiles : [],
+        bidFiles: Array.isArray(prev.bidFiles) ? prev.bidFiles : [],
+      });
+      if (currentSignature !== signature) return null;
+    }
+    const analysis = { ...(prev[field] || {}), ...analysisPartial };
+    const workspacePartial = { [field]: analysis };
+    workspaceStore.updateDuplicateCheckWithoutReload(workspacePartial);
+    return undefined;
   }
 
   function updateAnalysis(partial, persist, signature) {
@@ -2748,6 +2757,12 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       const outlineAnalysis = createInitialOutlineAnalysis(signature, bidFiles);
       const contentAnalysis = createInitialContentAnalysis(signature, bidFiles);
       const imageAnalysis = createInitialImageAnalysis(signature, bidFiles);
+      let analysisState = {
+        metadataAnalysis,
+        outlineAnalysis,
+        contentAnalysis,
+        imageAnalysis,
+      };
       const initialLogs = [force ? '开始重新执行标书查重分析。' : '开始执行标书查重分析。'];
       let latestLog = initialLogs[0];
       checkpointTask({ status: 'running', progress: 0, logs: initialLogs }, {
@@ -2758,16 +2773,20 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         outlineAnalysis,
         contentAnalysis,
         imageAnalysis,
-      }).workspaceState;
+      });
 
-      const notifyTask = (workspacePartial, projectedState) => {
-        const message = latestAnalysisMessage(projectedState);
-        const partial = { status: 'running', progress: overallProgress(projectedState) };
+      const notifyTask = (field, analysisPartial) => {
+        analysisState = {
+          ...analysisState,
+          [field]: { ...(analysisState[field] || {}), ...analysisPartial },
+        };
+        const message = latestAnalysisMessage(analysisState);
+        const partial = { status: 'running', progress: overallProgress(analysisState) };
         if (message && message !== latestLog) {
           latestLog = message;
           partial.logs = [message];
         }
-        return checkpointTask(partial, workspacePartial).workspaceState;
+        checkpointTask(partial, { [field]: analysisState[field] });
       };
 
       const finalStatus = await run(signature, payload, notifyTask, developerLogger);

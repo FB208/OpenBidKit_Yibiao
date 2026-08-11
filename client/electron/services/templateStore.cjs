@@ -58,30 +58,38 @@ function createTemplateStore({ db }) {
       updated_at: timestamp,
     });
 
-    return getTemplate(templateId);
+    return {
+      template_id: templateId,
+      template_name: templateName,
+      config: nextConfig,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
   }
 
   function updateTemplate(templateId, config) {
     const templateName = resolveTemplateName(config);
     const nextConfig = { ...config, template_name: templateName };
-    const result = db.prepare(`
+    const updatedAt = now();
+    const row = db.prepare(`
       UPDATE export_templates
       SET template_name = @template_name,
           config_json = @config_json,
           updated_at = @updated_at
       WHERE template_id = @template_id
-    `).run({
+      RETURNING template_id, template_name, config_json, created_at, updated_at
+    `).get({
       template_id: templateId,
       template_name: templateName,
       config_json: JSON.stringify(nextConfig),
-      updated_at: now(),
+      updated_at: updatedAt,
     });
 
-    if (!result.changes) {
+    if (!row) {
       throw new Error('模板不存在或已被删除');
     }
 
-    return getTemplate(templateId);
+    return templateFromRow(row);
   }
 
   function deleteTemplate(templateId) {

@@ -875,7 +875,8 @@ function createDuplicateCheckStore({ app, db }) {
   });
 
   function loadDuplicateCheck() {
-    const meta = ensureMetaRow();
+    const meta = db.prepare('SELECT * FROM duplicate_check_meta WHERE id = 1').get();
+    if (!meta) throw new Error('标书查重数据库尚未初始化');
     const files = loadFiles();
     return {
       ...initialState,
@@ -887,9 +888,12 @@ function createDuplicateCheckStore({ app, db }) {
     };
   }
 
-  function updateDuplicateCheck(partial) {
+  function updateDuplicateCheckWithoutReload(partial) {
     updateDuplicateCheckTransaction(partial || {});
-    return loadDuplicateCheck();
+  }
+
+  function updateDuplicateCheck(partial) {
+    updateDuplicateCheckWithoutReload(partial);
   }
 
   function saveDuplicateCheck(state) {
@@ -908,11 +912,10 @@ function createDuplicateCheckStore({ app, db }) {
     });
     transaction();
     clearDuplicateContentArtifacts();
-    return loadDuplicateCheck();
   }
 
   function saveUiState({ step, activeAnalysisTab } = {}) {
-    return updateDuplicateCheck({ step, activeAnalysisTab });
+    updateDuplicateCheckWithoutReload({ step, activeAnalysisTab });
   }
 
   function clearDuplicateCheck() {
@@ -939,7 +942,7 @@ function createDuplicateCheckStore({ app, db }) {
     }
     deleteImportedImageBatches(app, 'duplicate-check-content');
     ensureDirectories();
-    return { success: true, message: '标书查重缓存已清空', state: loadDuplicateCheck() };
+    return { success: true, message: '标书查重缓存已清空' };
   }
 
   function clearDuplicateContentArtifacts() {
@@ -956,11 +959,13 @@ function createDuplicateCheckStore({ app, db }) {
   }
 
   ensureDirectories();
+  ensureMetaRow();
 
   return {
     loadDuplicateCheck,
     saveDuplicateCheck,
     updateDuplicateCheck,
+    updateDuplicateCheckWithoutReload,
     clearDuplicateCheck,
     saveFiles,
     saveUiState,

@@ -140,15 +140,16 @@ function DocumentAnalysisPage({
         return;
       }
 
-      if (!result.state || !result.markdown) {
+      if (!result.markdown) {
         showToast('招标文件解析结果为空', 'error');
         return;
       }
 
-      onFileImported(result.state, result.markdown);
-      const firstSource = result.state.tenderFiles?.[0];
+      const state = await window.yibiao.technicalPlan.loadState();
+      onFileImported(state, result.markdown);
+      const firstSource = state.tenderFiles?.[0];
       if (firstSource) {
-        setTenderSourceMarkdowns(result.state.tenderFiles?.length === 1 ? { [firstSource.id]: result.markdown } : {});
+        setTenderSourceMarkdowns(state.tenderFiles?.length === 1 ? { [firstSource.id]: result.markdown } : {});
         setActiveDocumentTab(`tender:${firstSource.id}`);
       }
       showToast(result.message || '招标文件已导入', 'success');
@@ -179,12 +180,13 @@ function DocumentAnalysisPage({
         return;
       }
 
-      if (!result.state || !result.markdown) {
+      if (!result.markdown) {
         showToast('原方案解析结果为空', 'error');
         return;
       }
 
-      onOriginalPlanImported(result.state, result.markdown);
+      const state = await window.yibiao.technicalPlan.loadState();
+      onOriginalPlanImported(state, result.markdown);
       setActiveDocumentTab('originalPlan');
       showToast(result.message || '原方案已导入', 'success');
     } catch (error) {

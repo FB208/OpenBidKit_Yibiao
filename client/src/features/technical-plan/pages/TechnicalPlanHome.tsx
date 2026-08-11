@@ -419,7 +419,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
     try {
       setSwitchingWorkflow(true);
-      const saved = await window.yibiao.technicalPlan.switchWorkflowKind(targetWorkflowKind);
+      await window.yibiao.technicalPlan.switchWorkflowKind(targetWorkflowKind);
+      const saved = await window.yibiao.technicalPlan.loadState();
       lastExecutedWorkflowSwitchRef.current = targetWorkflowKind;
       setState((prev) => ({ ...prev, ...saved, workflowKind: targetWorkflowKind }));
       setOriginalPlanMarkdown('');
@@ -1015,7 +1016,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
     try {
       const result = await window.yibiao?.technicalPlan.clear();
-      setState(result?.state || { ...resetState, workflowKind });
+      setState({ ...resetState, workflowKind });
       setTenderMarkdown('');
       setOriginalPlanMarkdown('');
       showToast(result?.message || '技术方案已重置', 'success');
@@ -1040,8 +1041,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   };
 
   const saveOutlineSelection = async (request: SaveOutlineSelectionRequest) => {
-    const saved = await window.yibiao?.technicalPlan.saveOutlineSelection(request);
-    setState((prev) => ({ ...prev, ...(saved || {}) }));
+    await window.yibiao?.technicalPlan.saveOutlineSelection(request);
   };
 
   const saveOutlineConfig = async (config: {
@@ -1050,10 +1050,9 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     outlineExpansionMode: TechnicalPlanState['outlineExpansionMode'];
     wordControlOptions: OutlineWordControlOptions;
   }) => {
-    const saved = await window.yibiao!.technicalPlan.saveOutlineConfig(config);
+    await window.yibiao!.technicalPlan.saveOutlineConfig(config);
     setState((prev) => ({
       ...prev,
-      ...saved,
       outlineMode: config.outlineMode,
       outlineExpansionMode: config.outlineExpansionMode,
       outlineWordControlOptions: config.wordControlOptions,

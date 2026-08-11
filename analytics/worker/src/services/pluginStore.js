@@ -328,13 +328,10 @@ export async function incrementPluginDownload(env, id) {
     UPDATE plugins
     SET download_count = COALESCE(download_count, 0) + 1
     WHERE id = ? AND enabled = 1
+    RETURNING download_count AS downloadCount
   `;
-  const result = await env.RESOURCE_DB.prepare(sql).bind(pluginId).run();
-  if (!Number(result.meta?.changes || 0)) {
-    return null;
-  }
-
-  return readPlugin(env, pluginId);
+  const change = await env.RESOURCE_DB.prepare(sql).bind(pluginId).first();
+  return change ? { downloadCount: normalizeDownloadCount(change.downloadCount) } : null;
 }
 
 /** 保存已经从 GitHub 解析完成的插件信息 */
@@ -351,53 +348,40 @@ async function persistResolvedPlugin(env, resolved, options = {}) {
     sortOrder: options.sortOrder,
   });
   const now = formatNoticeTime(new Date());
-  const existing = await readPlugin(env, id);
+  const sql = `
+    INSERT INTO plugins (
+      id, name, description, version, author, repository, release_url,
+      tags, enabled, sort_order, download_count, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      description = excluded.description,
+      version = excluded.version,
+      author = excluded.author,
+      repository = excluded.repository,
+      release_url = excluded.release_url,
+      tags = excluded.tags,
+      enabled = excluded.enabled,
+      sort_order = excluded.sort_order,
+      updated_at = excluded.updated_at
+    RETURNING *
+  `;
+  const row = await env.RESOURCE_DB.prepare(sql).bind(
+    id,
+    normalized.name,
+    normalized.description,
+    normalized.version,
+    normalized.author,
+    normalized.repository,
+    normalized.releaseUrl,
+    normalized.tags,
+    normalized.enabled ? 1 : 0,
+    normalized.sortOrder,
+    now,
+    now,
+  ).first();
 
-  if (existing) {
-    const sql = `
-      UPDATE plugins
-      SET name = ?, description = ?, version = ?, author = ?,
-          repository = ?, release_url = ?, tags = ?, enabled = ?,
-          sort_order = ?, updated_at = ?
-      WHERE id = ?
-    `;
-    await env.RESOURCE_DB.prepare(sql).bind(
-      normalized.name,
-      normalized.description,
-      normalized.version,
-      normalized.author,
-      normalized.repository,
-      normalized.releaseUrl,
-      normalized.tags,
-      normalized.enabled ? 1 : 0,
-      normalized.sortOrder,
-      now,
-      id,
-    ).run();
-  } else {
-    const sql = `
-      INSERT INTO plugins (
-        id, name, description, version, author, repository, release_url,
-        tags, enabled, sort_order, download_count, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-    `;
-    await env.RESOURCE_DB.prepare(sql).bind(
-      id,
-      normalized.name,
-      normalized.description,
-      normalized.version,
-      normalized.author,
-      normalized.repository,
-      normalized.releaseUrl,
-      normalized.tags,
-      normalized.enabled ? 1 : 0,
-      normalized.sortOrder,
-      now,
-      now,
-    ).run();
-  }
-
-  return readPlugin(env, id);
+  return normalizePluginRow(row);
 }
 
 /** 根据仓库地址自动解析并保存插件 */
@@ -422,25 +406,34 @@ export async function upsertPlugin(env, input) {
 /** 定时同步全部市场插件的最新正式 Release */
 export async function syncAllPlugins(env) {
   if (!env.RESOURCE_DB) {
-    return { totalCount: 0, plugins: [], failures: [] };
+    return { totalCount: 0, syncedCount: 0, failedCount: 0, failures: [] };
   }
 
-  const result = await env.RESOURCE_DB.prepare('SELECT * FROM plugins ORDER BY id ASC').all();
-  const synced = [];
+  const result = await env.RESOURCE_DB.prepare(`
+    SELECT id, repository, enabled, sort_order
+    FROM plugins
+    ORDER BY id ASC
+  `).all();
+  let syncedCount = 0;
   const failures = [];
 
   for (const row of result.results || []) {
-    const current = normalizePluginRow(row);
-    if (!current) continue;
+    const current = {
+      id: normalizeText(row.id, PLUGIN_ID_MAX_LENGTH),
+      repository: normalizeText(row.repository, PLUGIN_REPOSITORY_MAX_LENGTH),
+      enabled: Number(row.enabled) !== 0,
+      sortOrder: normalizeSortOrder(row.sort_order),
+    };
+    if (!current.id || !current.repository) continue;
 
     try {
       const resolved = await resolveGitHubPlugin(env, current.repository);
-      const plugin = await persistResolvedPlugin(env, resolved, {
+      await persistResolvedPlugin(env, resolved, {
         id: current.id,
         enabled: current.enabled,
         sortOrder: current.sortOrder,
       });
-      synced.push(plugin);
+      syncedCount += 1;
     } catch (error) {
       const message = normalizeText(error?.message || String(error), 300) || '未知错误';
       failures.push({ id: current.id, message });
@@ -450,7 +443,8 @@ export async function syncAllPlugins(env) {
 
   return {
     totalCount: (result.results || []).length,
-    plugins: synced,
+    syncedCount,
+    failedCount: failures.length,
     failures,
   };
 }

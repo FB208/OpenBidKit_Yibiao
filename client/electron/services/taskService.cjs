@@ -366,10 +366,10 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       return buildTechnicalPlanSnapshot(task, state, eventPatch);
     }
     if (definition.stateKey === 'rejectionCheck') {
-      return { rejectionCheck: state };
+      return { rejectionCheckPatch: state };
     }
     if (definition.stateKey === 'duplicateCheck') {
-      return { duplicateCheck: state };
+      return { duplicateCheckPatch: state };
     }
     return {};
   }
@@ -463,17 +463,20 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     throw new Error(`当前${definition.groupLabel || '任务组'}正在执行“${conflict.definition.label || conflict.task.type}”，请完成后再启动“${definition.label || type}”。`);
   }
 
-  function updateWorkspaceState(definition, partial) {
+  function updateWorkspaceStateWithoutReload(definition, partial) {
     if (definition.stateKey === 'technicalPlan') {
-      return technicalPlanStore.updateTechnicalPlan(partial);
+      technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+      return;
     }
     if (definition.stateKey === 'rejectionCheck') {
-      return rejectionCheckStore.updateRejectionCheck(partial);
+      rejectionCheckStore.updateRejectionCheckWithoutReload(partial);
+      return;
     }
     if (definition.stateKey === 'duplicateCheck') {
-      return duplicateCheckStore.updateDuplicateCheck(partial);
+      duplicateCheckStore.updateDuplicateCheckWithoutReload(partial);
+      return;
     }
-    return technicalPlanStore.updateTechnicalPlan(partial);
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
   }
 
   function loadWorkspaceState(definition) {
@@ -607,15 +610,10 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       };
       activeTasks.set(type, currentTask);
       if (workspaceState) {
-        let persistedState = workspaceState;
         if (taskField) {
-          if (options.skipWorkspaceReload && definition.stateKey === 'technicalPlan') {
-            technicalPlanStore.updateTechnicalPlanWithoutReload({ [taskField]: currentTask });
-          } else {
-            persistedState = updateWorkspaceState(definition, { [taskField]: currentTask });
-          }
+          updateWorkspaceStateWithoutReload(definition, { [taskField]: currentTask });
         }
-        emit(currentTask, buildSnapshot(definition, persistedState, currentTask, eventPatch));
+        emit(currentTask, buildSnapshot(definition, { ...workspaceState, [taskField]: currentTask }, currentTask, eventPatch));
       }
       return currentTask;
     };
@@ -623,12 +621,13 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     // 将业务状态和任务状态作为同一个 checkpoint 落库，并在提交后统一推送事件。
     const checkpointTask = (taskPartial, workspacePartial = {}, eventPatch) => {
       const nextTask = updateTask(taskPartial);
-      const persistedState = updateWorkspaceState(definition, {
+      const persistedPatch = {
         ...(workspacePartial || {}),
         [taskField]: nextTask,
-      });
-      emit(nextTask, buildSnapshot(definition, persistedState, nextTask, eventPatch));
-      return { task: nextTask, workspaceState: persistedState };
+      };
+      updateWorkspaceStateWithoutReload(definition, persistedPatch);
+      emit(nextTask, buildSnapshot(definition, persistedPatch, nextTask, eventPatch));
+      return { task: nextTask };
     };
 
     // 为一级目录默认选择注册自动确认，并把截止时间同步到任务状态。
@@ -687,7 +686,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       taskControl.outlineSelectionWaiter = null;
       taskControl.outlineSelectionResult = { items, selectedIds };
       waiter.resolve(taskControl.outlineSelectionResult);
-      return checkpoint.workspaceState;
+      return { success: true };
     };
 
     // 用户修改一级目录草稿后停止当前确认项的自动提交。
@@ -700,10 +699,13 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     };
 
     const previousState = loadWorkspaceState(definition) || {};
-    const state = startOptions.skipInitialStateUpdate
+    const initialState = startOptions.skipInitialStateUpdate
       ? previousState
-      : updateWorkspaceState(definition, { ...initialPartial, [taskField]: currentTask });
-    emit(currentTask, buildSnapshot(definition, state, currentTask));
+      : { ...initialPartial, [taskField]: currentTask };
+    if (!startOptions.skipInitialStateUpdate) {
+      updateWorkspaceStateWithoutReload(definition, initialState);
+    }
+    emit(currentTask, buildSnapshot(definition, initialState, currentTask));
     if (startOptions.restoreOutlineSelectionWaiter) {
       taskControl.waitForOutlineSelection();
     }
@@ -777,7 +779,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       stats: nextStats,
       updated_at: now(),
     };
-    const state = technicalPlanStore.updateTechnicalPlan({
+    const partial = {
       outlineData,
       contentGenerationSections: sections,
       contentGenerationTask: pausedTask,
@@ -786,8 +788,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         phase,
         updated_at: now(),
       },
-    });
-    emit(pausedTask, buildSnapshot(getTaskDefinition('content-generation'), state, pausedTask));
+    };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(pausedTask, buildSnapshot(getTaskDefinition('content-generation'), partial, pausedTask));
   }
 
   function recoverInterruptedOutlineGenerationTask() {
@@ -857,8 +860,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       stats: recoveredStats,
       updated_at: now(),
     };
-    const state = technicalPlanStore.updateTechnicalPlan({ outlineGenerationTask: recoveredTask });
-    emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-generation'), state, recoveredTask));
+    const partial = { outlineGenerationTask: recoveredTask };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-generation'), partial, recoveredTask));
   }
 
   function recoverInterruptedBidAnalysisTask() {
@@ -901,8 +905,8 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     const partial = hasInterruptedItem
       ? { bidAnalysisTask: recoveredTask, bidAnalysisTasks: nextBidAnalysisTasks }
       : { bidAnalysisTask: recoveredTask };
-    const state = technicalPlanStore.updateTechnicalPlan(partial);
-    emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-analysis'), state, recoveredTask));
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-analysis'), partial, recoveredTask));
   }
 
   function recoverInterruptedBidSectionExtractionTask() {
@@ -926,12 +930,13 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       logs: [...(Array.isArray(extractionTask.logs) ? extractionTask.logs : []), message],
       updated_at: now(),
     };
-    const state = technicalPlanStore.updateTechnicalPlan({
+    const partial = {
       bidSectionExtractionTask: recoveredTask,
       bidSectionExtractionStatus: 'error',
       bidSectionExtractionError: message,
-    });
-    emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-section-extraction'), state, recoveredTask));
+    };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-section-extraction'), partial, recoveredTask));
   }
 
   function recoverInterruptedGlobalFactsTask() {
@@ -954,8 +959,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       logs: [...(Array.isArray(globalFactsTask.logs) ? globalFactsTask.logs : []), message],
       updated_at: now(),
     };
-    const state = technicalPlanStore.updateTechnicalPlan({ globalFactsTask: recoveredTask });
-    emit(recoveredTask, buildSnapshot(getTaskDefinition('global-facts-generation'), state, recoveredTask));
+    const partial = { globalFactsTask: recoveredTask };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('global-facts-generation'), partial, recoveredTask));
   }
 
   function recoverInterruptedRejectionCheckTasks() {
@@ -996,7 +1002,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     }
 
     if (Object.keys(partial).length) {
-      rejectionCheckStore.updateRejectionCheck(partial);
+      rejectionCheckStore.updateRejectionCheckWithoutReload(partial);
     }
   }
 
@@ -1020,15 +1026,24 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       error: message,
       updated_at: now(),
     };
-    const nextState = duplicateCheckStore.updateDuplicateCheck({
+    const partial = {
       analysisTask: recoveredTask,
       metadataAnalysis: markAnalysis(state.metadataAnalysis),
       outlineAnalysis: markAnalysis(state.outlineAnalysis),
       contentAnalysis: markAnalysis(state.contentAnalysis),
       imageAnalysis: markAnalysis(state.imageAnalysis),
-    });
-    emit(nextState.analysisTask || recoveredTask, { duplicateCheck: nextState });
+    };
+    duplicateCheckStore.updateDuplicateCheckWithoutReload(partial);
+    emit(recoveredTask, { duplicateCheckPatch: partial });
   }
+
+  recoverInterruptedBidSectionExtractionTask();
+  recoverInterruptedBidAnalysisTask();
+  recoverInterruptedOutlineGenerationTask();
+  recoverInterruptedContentGenerationTask();
+  recoverInterruptedGlobalFactsTask();
+  recoverInterruptedRejectionCheckTasks();
+  recoverInterruptedDuplicateCheckTask();
 
   return {
     subscribe,
@@ -1144,13 +1159,6 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       return technicalPlanStore.clearTechnicalPlan();
     },
     getActiveTasks() {
-      recoverInterruptedBidSectionExtractionTask();
-      recoverInterruptedBidAnalysisTask();
-      recoverInterruptedOutlineGenerationTask();
-      recoverInterruptedContentGenerationTask();
-      recoverInterruptedGlobalFactsTask();
-      recoverInterruptedRejectionCheckTasks();
-      recoverInterruptedDuplicateCheckTask();
       return Array.from(activeTasks.values());
     },
   };

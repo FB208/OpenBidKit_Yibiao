@@ -570,6 +570,12 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     return db.prepare('SELECT * FROM technical_plan_meta WHERE id = 1').get();
   }
 
+  function readMetaRow() {
+    const meta = db.prepare('SELECT * FROM technical_plan_meta WHERE id = 1').get();
+    if (!meta) throw new Error('技术方案数据库尚未初始化');
+    return meta;
+  }
+
   function updateMeta(fields) {
     ensureMetaRow();
     const entries = Object.entries(fields || {}).filter(([, value]) => value !== undefined);
@@ -588,7 +594,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
   }
 
   function readTenderMarkdown() {
-    const meta = ensureMetaRow();
+    const meta = readMetaRow();
     const filePath = resolveMarkdownPath(meta.tender_markdown_path || tenderMarkdownRelativePath);
     if (!meta.tender_markdown_path || !fs.existsSync(filePath)) {
       return '';
@@ -596,7 +602,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     return fs.readFileSync(filePath, 'utf-8');
   }
 
-  function loadTenderSourceFiles(meta = ensureMetaRow()) {
+  function loadTenderSourceFiles(meta = readMetaRow()) {
     const sourceFiles = safeJsonParse(meta.tender_files_json, []);
     if (Array.isArray(sourceFiles) && sourceFiles.length) {
       return sourceFiles.map((file) => ({
@@ -634,7 +640,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
   }
 
   function readOriginalTenderMarkdown() {
-    const meta = ensureMetaRow();
+    const meta = readMetaRow();
     if (!meta.tender_markdown_path) {
       return '';
     }
@@ -666,7 +672,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
   }
 
   function readOriginalPlanMarkdown() {
-    const meta = ensureMetaRow();
+    const meta = readMetaRow();
     const filePath = resolveMarkdownPath(meta.original_plan_markdown_path || originalPlanMarkdownRelativePath);
     if (!meta.original_plan_markdown_path || !fs.existsSync(filePath)) {
       return '';
@@ -814,6 +820,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       if (field) tasks[field] = taskFromRow(row);
     }
     return tasks;
+  }
+
+  function loadTask(type) {
+    return taskFromRow(db.prepare('SELECT * FROM technical_plan_tasks WHERE type = ?').get(type));
   }
 
   function loadBidItems() {
@@ -1489,10 +1499,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
   }
 
   function loadTechnicalPlan() {
-    let meta = ensureMetaRow();
-    if (cleanupLegacyPendingTenderState(meta)) {
-      meta = ensureMetaRow();
-    }
+    const meta = readMetaRow();
     const bidAnalysisMode = isValidBidMode(meta.bid_analysis_mode) ? meta.bid_analysis_mode : 'key';
     const bidAnalysisSelectedTaskIds = getBidAnalysisTaskIdsForConfig(
       bidAnalysisMode,
@@ -1583,7 +1590,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
 
   function updateTechnicalPlan(partial) {
     updateTechnicalPlanWithoutReload(partial);
-    return loadTechnicalPlan();
   }
 
   function updateStep(step) {
@@ -1598,7 +1604,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     const nextWorkflowKind = normalizeWorkflowKind(workflowKind);
     const meta = ensureMetaRow();
     if (normalizeWorkflowKind(meta.workflow_kind) === nextWorkflowKind) {
-      return loadTechnicalPlan();
+      return;
     }
 
     const originalPlanFilePath = meta.original_plan_markdown_path
@@ -1612,11 +1618,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     if (fs.existsSync(originalPlanFilePath)) {
       fs.rmSync(originalPlanFilePath, { force: true });
     }
-    return loadTechnicalPlan();
   }
 
   function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineMode, outlineExpansionMode, wordControlOptions } = {}) {
-    return updateTechnicalPlan({
+    updateTechnicalPlan({
       outlineMode: isValidOutlineMode(outlineMode) ? outlineMode : 'aligned',
       outlineExpansionMode: isValidOutlineExpansionMode(outlineExpansionMode) ? outlineExpansionMode : 'ai-complement',
       outlineWordControlOptions: normalizeOutlineWordControlOptions(wordControlOptions),
@@ -1626,12 +1631,12 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
 
   // 保存用户确认后的一级目录待扩展选择，不写入正式目录树。
   function saveOutlineSelection({ taskId, items, selectedIds } = {}) {
-    const task = loadTechnicalPlan().outlineGenerationTask;
+    const task = loadTask('outline-generation');
     if (!task || task.task_id !== taskId || task.status !== 'success') {
       throw new Error('一级目录生成结果已变化，请重新打开后再选择');
     }
 
-    return updateTechnicalPlan({
+    updateTechnicalPlan({
       outlineGenerationTask: {
         ...task,
         updated_at: now(),
@@ -1666,10 +1671,11 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     const meta = ensureMetaRow();
     const shouldChangeSectionMode = nextSectionMode && nextSectionMode !== normalizeBidSectionMode(meta.bid_section_mode);
     if (!shouldChangeSectionMode) {
-      return updateTechnicalPlan({
+      updateTechnicalPlan({
         bidAnalysisMode: config.mode,
         bidAnalysisSelectedTaskIds: config.selectedTaskIds,
       });
+      return;
     }
 
     const transaction = db.transaction(() => {
@@ -1689,7 +1695,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       });
     });
     transaction();
-    return loadTechnicalPlan();
   }
 
   function prepareBidSectionExtraction() {
@@ -1706,7 +1711,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       });
     });
     transaction();
-    return loadTechnicalPlan();
   }
 
   function saveOutline(payload) {
@@ -1719,10 +1723,12 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     const clearAll = reason === 'replace';
     const invalidatesContentTask = reason !== 'sort';
 
+    let savedOutlineData = outlineData;
     const transaction = db.transaction(() => {
       assertOutlineMutationAllowed();
       const snapshot = loadOutlinePersistenceSnapshot();
       const outlineToSave = buildOutlineWithPersistedContent(outlineData, { snapshot, reverseMap, affectedIds, clearAll });
+      savedOutlineData = outlineToSave;
       saveOutlineData(outlineToSave);
       if (!outlineToSave?.outline?.length) {
         updateMeta({ outline_word_control_snapshot_json: null });
@@ -1738,15 +1744,24 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       updateMeta({ content_illustration_plan_json: null });
     });
     transaction();
-    return loadTechnicalPlan();
+    return {
+      outlineData: savedOutlineData,
+      contentIllustrationPlan: undefined,
+      ...(invalidatesContentTask ? {
+        contentGenerationTask: undefined,
+        contentGenerationRuntime: undefined,
+      } : {}),
+    };
   }
 
   function saveGlobalFacts(globalFacts) {
+    const normalizedGlobalFacts = normalizeGlobalFactGroups(globalFacts);
+    let savedTask;
     const transaction = db.transaction(() => {
-      replaceGlobalFacts(globalFacts);
+      replaceGlobalFacts(normalizedGlobalFacts);
       clearContentGenerationState();
       const timestamp = now();
-      saveTask('global-facts-generation', {
+      savedTask = {
         task_id: `manual-global-facts-${Date.now()}`,
         type: 'global-facts-generation',
         status: 'success',
@@ -1754,14 +1769,24 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
         logs: ['全局事实已保存。'],
         started_at: timestamp,
         updated_at: timestamp,
-      });
+      };
+      saveTask('global-facts-generation', savedTask);
     });
     transaction();
-    return loadTechnicalPlan();
+    return {
+      globalFacts: normalizedGlobalFacts,
+      globalFactsTask: savedTask,
+      contentGenerationTask: undefined,
+      contentGenerationSections: {},
+      contentGenerationPlans: {},
+      contentIllustrationPlan: undefined,
+      contentGenerationRuntime: undefined,
+    };
   }
 
   function saveContentGenerationOptions(contentGenerationOptions) {
-    return updateTechnicalPlan({ contentGenerationOptions, contentIllustrationPlan: undefined });
+    updateTechnicalPlan({ contentGenerationOptions, contentIllustrationPlan: undefined });
+    return { contentGenerationOptions, contentIllustrationPlan: undefined };
   }
 
   function saveChapterContent({ nodeId, content }) {
@@ -1780,7 +1805,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       updateMeta({ content_illustration_plan_json: null });
     });
     transaction();
-    return loadTechnicalPlan();
+    return { contentIllustrationPlan: undefined };
   }
 
   async function importTenderDocument() {
@@ -1793,7 +1818,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       return {
         success: false,
         message: result?.message || '未导入文件',
-        state: loadTechnicalPlan(),
         markdown: '',
       };
     }
@@ -1827,7 +1851,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       return {
         success: false,
         message: result?.message || '未导入文件',
-        state: loadTechnicalPlan(),
         markdown: '',
       };
     }
@@ -1859,7 +1882,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       return {
         success: true,
         message: result.message || '原方案已导入',
-        state: loadTechnicalPlan(),
         markdown,
       };
     } catch (error) {
@@ -1903,7 +1925,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     return {
       success: true,
       message: message || (fallbackToLocal ? '文件解析完成，当前格式已自动使用本地解析' : '招标文件已导入'),
-      state: loadTechnicalPlan(),
       markdown: nextMarkdown,
     };
   }
@@ -1936,7 +1957,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       return {
         success: true,
         message: `已选择【${matched.title || '投标范围'}】，招标文件解析将仅使用当前投标范围`,
-        state: loadTechnicalPlan(),
         markdown: workingMarkdown,
       };
     }
@@ -1973,8 +1993,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     clearTechnicalPlanMermaidCache();
     clearIllustrationFiles();
     deleteImportedImageBatches(app, 'technical-plan');
-    return { success: true, message: '技术方案缓存已清空', state: loadTechnicalPlan() };
+    return { success: true, message: '技术方案缓存已清空' };
   }
+
+  cleanupLegacyPendingTenderState(ensureMetaRow());
 
   return {
     loadTechnicalPlan,

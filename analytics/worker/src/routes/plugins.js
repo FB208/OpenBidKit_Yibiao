@@ -46,11 +46,11 @@ export async function handlePublicPluginDownload(request, env) {
   }
 
   try {
-    const plugin = await incrementPluginDownload(env, id);
-    if (!plugin) {
+    const change = await incrementPluginDownload(env, id);
+    if (!change) {
       return json({ code: 404, message: 'plugin not found' }, { status: 404 });
     }
-    return json({ code: 0, downloadCount: plugin.downloadCount });
+    return json({ code: 0, downloadCount: change.downloadCount });
   } catch (error) {
     console.error('[analytics] record plugin download failed', error?.message || String(error));
     return json({ code: 500, message: 'plugin download record failed' }, { status: 500 });
@@ -76,9 +76,8 @@ export async function handleAdminPluginSync(request, env) {
     return json({
       code: 0,
       totalCount: result.totalCount,
-      syncedCount: result.plugins.length,
-      failedCount: result.failures.length,
-      plugins: result.plugins,
+      syncedCount: result.syncedCount,
+      failedCount: result.failedCount,
       failures: result.failures,
     }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {

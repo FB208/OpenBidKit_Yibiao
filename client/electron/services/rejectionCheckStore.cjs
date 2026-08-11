@@ -647,7 +647,8 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
   });
 
   function loadRejectionCheck() {
-    const meta = ensureMetaRow();
+    const meta = db.prepare('SELECT * FROM rejection_check_meta WHERE id = 1').get();
+    if (!meta) throw new Error('废标项检查数据库尚未初始化');
     const tasks = loadTasks();
     const tenderDocument = loadTenderDocument();
     const tenderDocuments = loadTenderDocuments();
@@ -679,9 +680,12 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     };
   }
 
-  function updateRejectionCheck(partial) {
+  function updateRejectionCheckWithoutReload(partial) {
     updateRejectionCheckTransaction(partial || {});
-    return loadRejectionCheck();
+  }
+
+  function updateRejectionCheck(partial) {
+    updateRejectionCheckWithoutReload(partial);
   }
 
   function saveRejectionCheck(state) {
@@ -700,7 +704,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
         ? [result]
         : [];
     if (!result?.success || !importedDocuments.length) {
-      return { success: false, message: result?.message || '未导入文件', state: loadRejectionCheck() };
+      return { success: false, message: result?.message || '未导入文件' };
     }
     let addedCount = 0;
     let skippedCount = 0;
@@ -778,14 +782,14 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
       if (skippedCount > 0) messageParts.push(`已跳过 ${skippedCount} 份重复文件`);
       if (failedCount > 0) messageParts.push(`失败 ${failedCount} 份`);
       const message = messageParts.length ? messageParts.join('，') : result.message || '未导入文件';
-      return { success: false, message, state: loadRejectionCheck() };
+      return { success: false, message };
     }
     const bidMessageParts = [`已解析 ${addedCount} 份投标文件`];
     if (fallbackToLocal) bidMessageParts.push('当前格式已自动使用本地解析');
     if (skippedCount > 0) bidMessageParts.push(`跳过 ${skippedCount} 份重复文件`);
     if (failedCount > 0) bidMessageParts.push(`失败 ${failedCount} 份`);
     const message = documentRole === 'bid' ? bidMessageParts.join('，') : result.message || `已解析 ${addedCount} 份招标文件`;
-    return { success: true, message, state: loadRejectionCheck() };
+    return { success: true, message };
   }
 
   async function importTenderFromTechnicalPlan() {
@@ -794,7 +798,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     }
     const markdown = technicalPlanStore.readTenderMarkdown();
     if (!markdown.trim()) {
-      return { success: false, message: '技术方案中暂无可读取的招标文件正文', state: loadRejectionCheck() };
+      return { success: false, message: '技术方案中暂无可读取的招标文件正文' };
     }
     const technicalPlan = technicalPlanStore.loadTechnicalPlan();
     const sourceFiles = Array.isArray(technicalPlan?.tenderFiles) ? technicalPlan.tenderFiles : [];
@@ -845,7 +849,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
       updateMeta({ active_document_tab: 'tender' });
     });
     transaction();
-    return { success: true, message: '已从技术方案读取招标文件', state: loadRejectionCheck() };
+    return { success: true, message: '已从技术方案读取招标文件' };
   }
 
   function removeDocument(role, documentId) {
@@ -859,7 +863,6 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
       }
     });
     transaction();
-    return loadRejectionCheck();
   }
 
   function saveUiState(partial = {}) {
@@ -869,7 +872,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
         uiState[field] = partial[field];
       }
     }
-    return updateRejectionCheck(uiState);
+    updateRejectionCheckWithoutReload(uiState);
   }
 
   function clearRejectionCheck() {
@@ -889,15 +892,17 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
       fs.rmSync(rejectionCheckDir, { recursive: true, force: true });
     }
     deleteImportedImageBatches(app, 'rejection-check');
-    return { success: true, message: '废标项检查缓存已清空', state: loadRejectionCheck() };
+    return { success: true, message: '废标项检查缓存已清空' };
   }
 
   fs.mkdirSync(rejectionCheckDir, { recursive: true });
+  ensureMetaRow();
 
   return {
     loadRejectionCheck,
     saveRejectionCheck,
     updateRejectionCheck,
+    updateRejectionCheckWithoutReload,
     clearRejectionCheck,
     importDocument,
     importTenderFromTechnicalPlan,

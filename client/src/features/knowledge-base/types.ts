@@ -76,7 +76,6 @@ export interface KnowledgeBaseMigrationStatus {
 export interface KnowledgeBaseMigrationResult {
   success: boolean;
   message: string;
-  index?: KnowledgeBaseIndex;
   migratedFolderCount?: number;
   migratedDocumentCount?: number;
   skippedDocumentCount?: number;
@@ -89,7 +88,6 @@ export interface KnowledgeBaseMutationResult {
 }
 
 export interface KnowledgeBaseIndexMutationResult extends KnowledgeBaseMutationResult {
-  index: KnowledgeBaseIndex;
   document?: KnowledgeDocument;
 }
 

@@ -689,14 +689,21 @@ function DuplicateCheckPage() {
 
   useEffect(() => {
     const unsubscribe = window.yibiao?.tasks?.onTaskEvent<unknown, unknown, DuplicateCheckWorkspaceState>((event) => {
-      if (!event?.duplicateCheck) return;
-      const eventSignature = event.duplicateCheck.metadataAnalysis?.signature
-        || event.duplicateCheck.outlineAnalysis?.signature
-        || event.duplicateCheck.contentAnalysis?.signature
-        || event.duplicateCheck.imageAnalysis?.signature;
+      const state = event?.duplicateCheck;
+      const patch = event?.duplicateCheckPatch;
+      if (!state && !patch) return;
+      const eventSignature = state?.metadataAnalysis?.signature
+        || state?.outlineAnalysis?.signature
+        || state?.contentAnalysis?.signature
+        || state?.imageAnalysis?.signature
+        || patch?.metadataAnalysis?.signature
+        || patch?.outlineAnalysis?.signature
+        || patch?.contentAnalysis?.signature
+        || patch?.imageAnalysis?.signature;
       if (eventSignature && eventSignature !== currentAnalysisSignatureRef.current) return;
       setStartingAnalysis(false);
-      event.duplicateCheck.metadataAnalysis?.contentFiles?.forEach((file) => {
+      const metadata = state?.metadataAnalysis || patch?.metadataAnalysis;
+      metadata?.contentFiles?.forEach((file) => {
         const noticeId = `content:${file.file_id}`;
         if (file.status === 'error'
           && isLibreOfficeRequiredMessage(file.error)
@@ -705,11 +712,12 @@ function DuplicateCheckPage() {
           showDocumentParseNotice(file.error);
         }
       });
-      setMetadataAnalysis(event.duplicateCheck.metadataAnalysis);
-      setOutlineAnalysis(event.duplicateCheck.outlineAnalysis);
-      setContentAnalysis(event.duplicateCheck.contentAnalysis);
-      setImageAnalysis(event.duplicateCheck.imageAnalysis);
-      setAnalysisTask(event.duplicateCheck.analysisTask);
+      if (state) applyDuplicateCheckState(state);
+      if (patch && Object.prototype.hasOwnProperty.call(patch, 'metadataAnalysis')) setMetadataAnalysis(patch.metadataAnalysis);
+      if (patch && Object.prototype.hasOwnProperty.call(patch, 'outlineAnalysis')) setOutlineAnalysis(patch.outlineAnalysis);
+      if (patch && Object.prototype.hasOwnProperty.call(patch, 'contentAnalysis')) setContentAnalysis(patch.contentAnalysis);
+      if (patch && Object.prototype.hasOwnProperty.call(patch, 'imageAnalysis')) setImageAnalysis(patch.imageAnalysis);
+      if (patch && Object.prototype.hasOwnProperty.call(patch, 'analysisTask')) setAnalysisTask(patch.analysisTask);
     });
     window.yibiao?.tasks?.getActiveTasks().catch((error) => {
       console.warn('获取标书查重后台任务状态失败', error);
@@ -776,7 +784,8 @@ function DuplicateCheckPage() {
     if (typeof saver !== 'function') {
       throw new Error('标书查重缓存接口尚未加载，请重启应用后重试');
     }
-    const state = await saver({ tenderFile: nextTenderFiles[0] || null, tenderFiles: nextTenderFiles, bidFiles: nextBidFiles, step: nextStep, activeAnalysisTab });
+    await saver({ tenderFile: nextTenderFiles[0] || null, tenderFiles: nextTenderFiles, bidFiles: nextBidFiles, step: nextStep, activeAnalysisTab });
+    const state = await window.yibiao.duplicateCheck.loadState();
     applyDuplicateCheckState(state);
     setStartingAnalysis(false);
     startedMetadataSignatureRef.current = null;
@@ -859,8 +868,14 @@ function DuplicateCheckPage() {
       return;
     }
     void window.yibiao?.duplicateCheck.clear()
-      .then((result) => {
-        if (result?.state) applyDuplicateCheckState(result.state);
+      .then(() => {
+        applyDuplicateCheckState({
+          tenderFile: null,
+          tenderFiles: [],
+          bidFiles: [],
+          step: 'upload',
+          activeAnalysisTab: defaultAnalysisTab,
+        });
         setStartingAnalysis(false);
         startedMetadataSignatureRef.current = null;
         showToast('已重置上传列表', 'success');

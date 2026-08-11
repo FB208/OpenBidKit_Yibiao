@@ -710,6 +710,30 @@ function RejectionCheckPage() {
     setDraftCheckOptions(nextOptions);
   }
 
+  function applyWorkspacePatch(patch: Partial<RejectionCheckWorkspaceState>) {
+    const has = (field: keyof RejectionCheckWorkspaceState) => Object.prototype.hasOwnProperty.call(patch, field);
+    if (has('tenderDocument')) setTenderDocument(patch.tenderDocument || null);
+    if (has('tenderDocuments')) setTenderDocuments(Array.isArray(patch.tenderDocuments) ? patch.tenderDocuments : []);
+    if (has('bidDocuments')) setBidDocuments(Array.isArray(patch.bidDocuments) ? patch.bidDocuments : []);
+    if (has('invalidBidAndRejectionItems')) {
+      setInvalidBidAndRejectionItems(normalizeExtractionState({
+        ...(patch.invalidBidAndRejectionItems || {}),
+        content: stripTripleQuoteWrapper(patch.invalidBidAndRejectionItems?.content || ''),
+      }));
+    }
+    if (has('rejectionCheckResult')) setRejectionCheckResult(normalizeRejectionCheckResultState(patch.rejectionCheckResult));
+    if (has('typoCheckResult')) setTypoCheckResult(normalizeTypoCheckResultState(patch.typoCheckResult));
+    if (has('logicCheckResult')) setLogicCheckResult(normalizeLogicCheckResultState(patch.logicCheckResult));
+    if (has('extractionTask')) setExtractionTask(normalizeBackgroundTaskState(patch.extractionTask));
+    if (has('checkTask')) setCheckTask(normalizeBackgroundTaskState(patch.checkTask));
+    if (has('customCheckItems')) setCustomCheckItems(typeof patch.customCheckItems === 'string' ? patch.customCheckItems : '');
+    if (has('checkOptions')) {
+      const nextOptions = normalizeCheckOptions(patch.checkOptions);
+      setCheckOptions(nextOptions);
+      setDraftCheckOptions(nextOptions);
+    }
+  }
+
   function persistRejectionState(partial: Partial<RejectionCheckWorkspaceState>, fallbackMessage: string) {
     void window.yibiao?.rejectionCheck.updateState(partial)
       .catch((error) => {
@@ -767,6 +791,9 @@ function RejectionCheckPage() {
     const unsubscribe = window.yibiao.tasks.onTaskEvent<unknown, RejectionCheckWorkspaceState>((event) => {
       if (event.rejectionCheck) {
         applyWorkspaceState(event.rejectionCheck, { syncViewState: false });
+      }
+      if (event.rejectionCheckPatch) {
+        applyWorkspacePatch(event.rejectionCheckPatch);
       }
     });
 
@@ -828,7 +855,7 @@ function RejectionCheckPage() {
         return;
       }
 
-      applyWorkspaceState(result.state);
+      applyWorkspaceState(await window.yibiao.rejectionCheck.loadState());
       showToast(result.message || `${documentLabel}已解析`, 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : `${documentLabel}解析失败`;
@@ -856,7 +883,7 @@ function RejectionCheckPage() {
         return;
       }
 
-      applyWorkspaceState(result.state);
+      applyWorkspaceState(await window.yibiao.rejectionCheck.loadState());
       showToast(result.message || '已从技术方案读取招标文件', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '读取技术方案招标文件失败', 'error');
@@ -867,6 +894,7 @@ function RejectionCheckPage() {
 
   function removeDocument(role: RejectionDocumentRole, documentId?: string) {
     void window.yibiao?.rejectionCheck.removeDocument(role, documentId)
+      .then(() => window.yibiao.rejectionCheck.loadState())
       .then((state) => {
         applyWorkspaceState({ ...state, step: role === 'tender' && step === 'items' ? 'documents' : state.step });
       })
@@ -970,8 +998,7 @@ function RejectionCheckPage() {
     setDraftCheckOptions(defaultCheckOptions);
     setCheckConfigDialogOpen(false);
     void window.yibiao?.rejectionCheck.clear()
-      .then((result) => {
-        if (result?.state) applyWorkspaceState(result.state);
+      .then(() => {
         showToast('已重置废标项检查文件', 'success');
       })
       .catch((error) => {

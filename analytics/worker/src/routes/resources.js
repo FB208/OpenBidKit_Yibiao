@@ -212,7 +212,7 @@ async function handleAdminSaveResource(request, env, url) {
       imageKey = '';
     }
 
-    const resource = await upsertResource(env, { ...body, imageKey }, { origin: url.origin });
+    const resource = await upsertResource(env, { ...body, imageKey }, { origin: url.origin, existing });
     if ((removeImage || imageFile) && oldImageKey && oldImageKey !== imageKey) {
       await deleteStoredImage(env, oldImageKey);
     }

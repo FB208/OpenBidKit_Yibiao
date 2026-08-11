@@ -167,12 +167,11 @@ export async function readResource(env, id, { origin = '' } = {}) {
   return normalizeResourceRow(row, origin);
 }
 
-export async function upsertResource(env, input, { origin = '' } = {}) {
+export async function upsertResource(env, input, { origin = '', existing = null } = {}) {
   const db = requireResourceDb(env);
   const now = formatNoticeTime();
   const requestedId = normalizeText(input.id, 120);
   const id = requestedId || createResourceId();
-  const existing = requestedId ? await readResource(env, requestedId, { origin }) : null;
   const normalized = normalizeResourceInput(input);
 
   if (!normalized.title) {
@@ -181,13 +180,12 @@ export async function upsertResource(env, input, { origin = '' } = {}) {
 
   const imageKey = normalizeImageKey(input.imageKey ?? input.image_key);
   const imageUrl = imageKey ? buildResourceImageUrl(origin, imageKey) : '';
-  const createdAt = existing?.createdAt || now;
 
   if (!existing) {
     await shiftSortOrderForInsert(db, normalized.sortOrder);
   }
 
-  await db.prepare(
+  const row = await db.prepare(
     `INSERT INTO resources (id, title, tags, description, modal_content, image_key, image_url, sort_order, enabled, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
@@ -195,11 +193,13 @@ export async function upsertResource(env, input, { origin = '' } = {}) {
        tags = excluded.tags,
        description = excluded.description,
        modal_content = excluded.modal_content,
-       image_key = excluded.image_key,
-       image_url = excluded.image_url,
-       sort_order = excluded.sort_order,
-       enabled = excluded.enabled,
-       updated_at = excluded.updated_at`,
+        image_key = excluded.image_key,
+        image_url = excluded.image_url,
+        sort_order = excluded.sort_order,
+        enabled = excluded.enabled,
+        updated_at = excluded.updated_at
+      RETURNING id, title, tags, description, modal_content, image_key, image_url,
+        click_count, sort_order, enabled, created_at, updated_at`,
   ).bind(
     id,
     normalized.title,
@@ -210,11 +210,11 @@ export async function upsertResource(env, input, { origin = '' } = {}) {
     imageUrl,
     normalized.sortOrder,
     normalized.enabled ? 1 : 0,
-    createdAt,
     now,
-  ).run();
+    now,
+  ).first();
 
-  return readResource(env, id, { origin });
+  return normalizeResourceRow(row, origin);
 }
 
 export async function deleteResource(env, id) {

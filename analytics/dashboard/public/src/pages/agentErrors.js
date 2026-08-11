@@ -44,6 +44,12 @@ function fillConfig(config = {}) {
   renderVersions();
 }
 
+function fillSavedConfig(config = {}) {
+  state.agentErrorReceiveEnabled.checked = config.receiveEnabled === true;
+  appState.agentErrorVersions = Array.isArray(config.versions) ? [...config.versions] : [];
+  renderVersions();
+}
+
 function updateSelectionControls() {
   const pageIds = (appState.agentErrorLogs || []).map((log) => log.id);
   const selectedCount = pageIds.filter((id) => appState.selectedAgentErrorIds.has(id)).length;
@@ -154,7 +160,7 @@ async function saveConfig() {
         versions: appState.agentErrorVersions,
       },
     });
-    fillConfig(data.config || {});
+    fillSavedConfig(data.config || {});
     setAgentErrorStatus('异常日志接收设置已保存。', 'ok');
   } catch (error) {
     setAgentErrorStatus(error?.message || String(error), 'error');

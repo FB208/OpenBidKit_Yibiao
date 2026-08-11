@@ -330,10 +330,9 @@ function BidAnalysisPage({
   const saveConfig = async (nextTaskIds = draftSelectedTaskIds, closeDialog = true, nextBidSectionMode = draftBidSectionMode) => {
     const normalizedTaskIds = normalizeSelectedTaskIds(nextTaskIds);
     const nextMode = getModeForSelection(normalizedTaskIds);
-    const saved = await window.yibiao?.technicalPlan.saveBidAnalysisConfig({ mode: nextMode, selectedTaskIds: normalizedTaskIds, bidSectionMode: nextBidSectionMode });
-    if (saved) {
-      onConfigSaved(saved);
-    }
+    await window.yibiao?.technicalPlan.saveBidAnalysisConfig({ mode: nextMode, selectedTaskIds: normalizedTaskIds, bidSectionMode: nextBidSectionMode });
+    const saved = await window.yibiao?.technicalPlan.loadState();
+    if (saved) onConfigSaved(saved);
     syncProgressForSelection(normalizedTaskIds);
     if (closeDialog) {
       setSettingsOpen(false);
@@ -471,11 +470,11 @@ function BidAnalysisPage({
     try {
       setSelectingSection(true);
       const result = await window.yibiao?.technicalPlan.selectBidSection(selectedSection);
-      if (!result?.success || !result.state) {
+      if (!result?.success) {
         showToast(result?.message || '投标范围选择失败', 'error');
         return;
       }
-      onConfigSaved(result.state);
+      onConfigSaved(await window.yibiao.technicalPlan.loadState());
       setSectionSelectorOpen(false);
       showToast(result.message || '已选择投标范围', 'success');
       if (pendingAnalysisAfterSection) {

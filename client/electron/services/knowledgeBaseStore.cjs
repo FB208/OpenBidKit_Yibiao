@@ -235,6 +235,32 @@ function createKnowledgeBaseStore({ app, db }) {
       : fs.existsSync(markdownPath)
         ? fs.readFileSync(markdownPath, 'utf-8').length
         : 0;
+    const values = {
+      document_id: normalized.id,
+      folder_id: normalized.folder_id,
+      file_name: normalized.file_name,
+      document_dir: normalized.document_dir,
+      source_path: normalized.source_path,
+      markdown_path: normalized.markdown_path,
+      markdown_hash: markdownHash,
+      markdown_chars: markdownChars,
+      source_extension: normalized.source_extension,
+      status: normalized.status,
+      progress: normalized.progress,
+      message: normalized.message,
+      error: normalized.error || null,
+      item_count: normalized.item_count,
+      block_count: normalized.block_count,
+      filtered_block_count: normalized.filtered_block_count,
+      candidate_item_count: normalized.candidate_item_count,
+      discarded_block_count: normalized.discarded_block_count,
+      system_discarded_after_retry_count: normalized.system_discarded_after_retry_count,
+      last_batch_size: normalized.last_batch_size === undefined ? null : normalized.last_batch_size,
+      parser_label: normalized.parser_label || null,
+      sort_order: Number(normalized.sort_order || 0),
+      created_at: normalized.created_at,
+      updated_at: normalized.updated_at,
+    };
     db.prepare(`
       INSERT INTO knowledge_documents (
         document_id, folder_id, file_name, document_dir, source_path, markdown_path, markdown_hash, markdown_chars,
@@ -269,37 +295,11 @@ function createKnowledgeBaseStore({ app, db }) {
         parser_label = excluded.parser_label,
         sort_order = excluded.sort_order,
         updated_at = excluded.updated_at
-    `).run({
-      document_id: normalized.id,
-      folder_id: normalized.folder_id,
-      file_name: normalized.file_name,
-      document_dir: normalized.document_dir,
-      source_path: normalized.source_path,
-      markdown_path: normalized.markdown_path,
-      markdown_hash: markdownHash,
-      markdown_chars: markdownChars,
-      source_extension: normalized.source_extension,
-      status: normalized.status,
-      progress: normalized.progress,
-      message: normalized.message,
-      error: normalized.error || null,
-      item_count: normalized.item_count,
-      block_count: normalized.block_count,
-      filtered_block_count: normalized.filtered_block_count,
-      candidate_item_count: normalized.candidate_item_count,
-      discarded_block_count: normalized.discarded_block_count,
-      system_discarded_after_retry_count: normalized.system_discarded_after_retry_count,
-      last_batch_size: normalized.last_batch_size === undefined ? null : normalized.last_batch_size,
-      parser_label: normalized.parser_label || null,
-      sort_order: Number(normalized.sort_order || 0),
-      created_at: normalized.created_at,
-      updated_at: normalized.updated_at,
-    });
-    return getDocument(normalized.id);
+    `).run(values);
+    return documentFromRow(values);
   }
 
   function list() {
-    ensureBaseDir();
     const folders = db.prepare('SELECT * FROM knowledge_folders ORDER BY sort_order ASC, created_at ASC').all().map(folderFromRow);
     const documents = db.prepare(`
       SELECT d.*
@@ -348,7 +348,10 @@ function createKnowledgeBaseStore({ app, db }) {
     const interruptedMessage = '上次任务中断，请点击重试继续处理';
     legacyIds.forEach((documentId) => updateLegacy.run({ document_id: documentId, message: legacyMessage, updated_at: timestamp }));
     interruptedIds.forEach((documentId) => updateInterrupted.run({ document_id: documentId, message: interruptedMessage, updated_at: timestamp }));
-    return [...new Set([...legacyIds, ...interruptedIds])].map((documentId) => getDocument(documentId));
+    return [
+      ...legacyIds.map((id) => ({ id, status: 'error', message: legacyMessage })),
+      ...interruptedIds.map((id) => ({ id, status: 'error', message: interruptedMessage })),
+    ];
   }
 
   function getDocument(documentId) {
@@ -362,14 +365,16 @@ function createKnowledgeBaseStore({ app, db }) {
     const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS value FROM knowledge_folders').get()?.value ?? -1;
     const folder = { id: createId('folder'), name: safeName(name), sort_order: Number(maxOrder) + 1, created_at: timestamp, updated_at: timestamp };
     insertOrUpdateFolder(folder);
-    return folderFromRow(db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folder.id));
+    return folder;
   }
 
   function renameFolder(folderId, name) {
     const folder = db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folderId);
     if (!folder) throw new Error('知识库文件夹不存在');
-    db.prepare('UPDATE knowledge_folders SET name = ?, updated_at = ? WHERE folder_id = ?').run(safeName(name), now(), folderId);
-    return folderFromRow(db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folderId));
+    const nextName = safeName(name);
+    const updatedAt = now();
+    db.prepare('UPDATE knowledge_folders SET name = ?, updated_at = ? WHERE folder_id = ?').run(nextName, updatedAt, folderId);
+    return folderFromRow({ ...folder, name: nextName, updated_at: updatedAt });
   }
 
   function deleteFolder(folderId) {
@@ -434,9 +439,8 @@ function createKnowledgeBaseStore({ app, db }) {
     if (!folderIds.includes(draggedFolderId) || !folderIds.includes(targetFolderId)) {
       throw new Error('知识库文件夹不存在');
     }
-    if (draggedFolderId === targetFolderId) return list();
+    if (draggedFolderId === targetFolderId) return;
     db.transaction(() => resequenceFolderIds(reorderIds(folderIds, draggedFolderId, targetFolderId, normalizedPosition)))();
-    return list();
   }
 
   function moveDocument(documentId, targetFolderId, options = {}) {
@@ -488,11 +492,18 @@ function createKnowledgeBaseStore({ app, db }) {
       resequenceDocumentIds(targetFolderId, nextTargetIds, timestamp);
     });
     transaction();
-    return { index: list(), document: getDocument(documentId) };
+    return {
+      ...document,
+      folder_id: targetFolderId,
+      document_dir: options.documentDir || document.document_dir,
+      source_path: options.sourcePath || document.source_path,
+      markdown_path: options.markdownPath || document.markdown_path,
+      sort_order: insertIndex,
+      updated_at: timestamp,
+    };
   }
 
-  function updateDocument(documentId, partial = {}) {
-    getDocument(documentId);
+  function buildDocumentUpdate(documentId, partial = {}) {
     const columnByField = {
       file_name: 'file_name',
       status: 'status',
@@ -523,9 +534,27 @@ function createKnowledgeBaseStore({ app, db }) {
       values[column] = value;
       assignments.push(`${column} = @${column}`);
     }
-    if (!assignments.length) return getDocument(documentId);
+    return { assignments, values };
+  }
+
+  /** 内部状态落库只执行写入，不读取文档快照。 */
+  function writeDocumentUpdate(documentId, partial = {}) {
+    const { assignments, values } = buildDocumentUpdate(documentId, partial);
+    if (!assignments.length) return;
     db.prepare(`UPDATE knowledge_documents SET ${assignments.join(', ')}, updated_at = @updated_at WHERE document_id = @document_id`).run(values);
-    return getDocument(documentId);
+  }
+
+  function updateDocument(documentId, partial = {}) {
+    const { assignments, values } = buildDocumentUpdate(documentId, partial);
+    if (!assignments.length) return getDocument(documentId);
+    const row = db.prepare(`
+      UPDATE knowledge_documents
+      SET ${assignments.join(', ')}, updated_at = @updated_at
+      WHERE document_id = @document_id
+      RETURNING *
+    `).get(values);
+    if (!row) throw new Error('知识库文档不存在');
+    return documentFromRow(row);
   }
 
   function updateMarkdownMetadata(documentId, markdown, parserLabel) {
@@ -541,7 +570,6 @@ function createKnowledgeBaseStore({ app, db }) {
       parser_label: parserLabel ? String(parserLabel) : null,
       updated_at: now(),
     });
-    return getDocument(documentId);
   }
 
   function replaceBlocks(documentId, blocks, filteredBlocks) {
@@ -581,7 +609,7 @@ function createKnowledgeBaseStore({ app, db }) {
         sort_order: index,
       });
     });
-    updateDocument(documentId, { block_count: Array.isArray(blocks) ? blocks.length : 0, filtered_block_count: Array.isArray(filteredBlocks) ? filteredBlocks.length : 0 });
+    writeDocumentUpdate(documentId, { block_count: Array.isArray(blocks) ? blocks.length : 0, filtered_block_count: Array.isArray(filteredBlocks) ? filteredBlocks.length : 0 });
   }
 
   const saveBlocksTransaction = db.transaction(replaceBlocks);
@@ -627,7 +655,7 @@ function createKnowledgeBaseStore({ app, db }) {
         updated_at: timestamp,
       });
     });
-    updateDocument(documentId, { candidate_item_count: Array.isArray(items) ? items.length : 0 });
+    writeDocumentUpdate(documentId, { candidate_item_count: Array.isArray(items) ? items.length : 0 });
   }
 
   const saveCandidateItemsTransaction = db.transaction(replaceCandidateItems);
@@ -672,7 +700,7 @@ function createKnowledgeBaseStore({ app, db }) {
         blockInsert.run({ document_id: documentId, item_id: String(item.id), block_id: String(blockId), sort_order: blockIndex });
       });
     });
-    updateDocument(documentId, { item_count: Array.isArray(finalItems) ? finalItems.length : 0 });
+    writeDocumentUpdate(documentId, { item_count: Array.isArray(finalItems) ? finalItems.length : 0 });
   }
 
   function replaceDiscardedGroups(documentId, matchResult) {
@@ -756,7 +784,7 @@ function createKnowledgeBaseStore({ app, db }) {
       replaceFinalItems(documentId, Array.isArray(finalItems) ? finalItems : []);
       replaceDiscardedGroups(documentId, matchResult || {});
       saveReport(documentId, report || matchResult?.report || null);
-      updateDocument(documentId, {
+      writeDocumentUpdate(documentId, {
         item_count: Array.isArray(finalItems) ? finalItems.length : 0,
         candidate_item_count: Array.isArray(candidateItems) ? candidateItems.length : 0,
         discarded_block_count: Number((report || matchResult?.report)?.discarded_blocks_count || 0),
@@ -793,7 +821,6 @@ function createKnowledgeBaseStore({ app, db }) {
   }
 
   function saveDocumentStep(documentId, stepKey, fields = {}) {
-    getDocument(documentId);
     assertDocumentStepKey(stepKey);
     const timestamp = now();
     const current = db.prepare('SELECT * FROM knowledge_document_steps WHERE document_id = ? AND step_key = ?').get(documentId, stepKey);
@@ -841,7 +868,6 @@ function createKnowledgeBaseStore({ app, db }) {
       completed_at: completedAt,
       updated_at: timestamp,
     });
-    return getDocumentStep(documentId, stepKey);
   }
 
   function batchFromRow(row) {
@@ -870,7 +896,6 @@ function createKnowledgeBaseStore({ app, db }) {
   }
 
   function saveMatchBatch(documentId, batchIndex, fields = {}) {
-    getDocument(documentId);
     const index = Number(batchIndex || 0);
     const timestamp = now();
     const current = db.prepare('SELECT * FROM knowledge_match_batches WHERE document_id = ? AND batch_index = ?').get(documentId, index);
@@ -921,7 +946,6 @@ function createKnowledgeBaseStore({ app, db }) {
       completed_at: completedAt,
       updated_at: timestamp,
     });
-    return getMatchBatch(documentId, index);
   }
 
   function deleteDocumentStepsFrom(documentId, stepKey) {
@@ -941,12 +965,10 @@ function createKnowledgeBaseStore({ app, db }) {
   }
 
   function clearMatchBatches(documentId) {
-    getDocument(documentId);
     db.prepare('DELETE FROM knowledge_match_batches WHERE document_id = ?').run(documentId);
   }
 
   function clearDocumentProcessingFromStep(documentId, stepKey) {
-    getDocument(documentId);
     assertDocumentStepKey(stepKey);
     const startIndex = documentStepKeys.indexOf(stepKey);
     const transaction = db.transaction(() => {
@@ -984,10 +1006,9 @@ function createKnowledgeBaseStore({ app, db }) {
       if (startIndex <= documentStepKeys.indexOf('save_result')) {
         Object.assign(resetFields, { item_count: 0, discarded_block_count: 0, system_discarded_after_retry_count: 0 });
       }
-      updateDocument(documentId, resetFields);
+      writeDocumentUpdate(documentId, resetFields);
     });
     transaction();
-    return getDocument(documentId);
   }
 
   function readItems(documentId) {
@@ -1194,13 +1215,9 @@ function createKnowledgeBaseStore({ app, db }) {
   }
 
   function getMigrationStatus() {
-    ensureBaseDir();
     const meta = getMigrationMeta();
     const legacyExists = fs.existsSync(legacyIndexPath);
     if (!legacyExists) {
-      if (meta?.status === 'success' && !meta.cleanup_completed_at) {
-        updateMigrationMeta({ cleanup_completed_at: now() });
-      }
       return {
         needsMigration: false,
         legacyFolderCount: 0,
@@ -1230,30 +1247,16 @@ function createKnowledgeBaseStore({ app, db }) {
 
     const counts = getLegacyMigrationCounts(legacy);
     if (meta?.status === 'success') {
-      try {
-        cleanupLegacyJson(legacy);
-        return {
-          needsMigration: false,
-          legacyFolderCount: 0,
-          legacyDocumentCount: 0,
-          legacyCompletedDocumentCount: 0,
-          legacySkippedDocumentCount: 0,
-          migrationCompleted: true,
-          cleanupPending: false,
-        };
-      } catch (error) {
-        updateMigrationMeta({ error: error.message || String(error) });
-        return {
-          needsMigration: false,
-          legacyFolderCount: legacy.folders.length,
-          legacyDocumentCount: legacy.documents.length,
-          legacyCompletedDocumentCount: counts.success,
-          legacySkippedDocumentCount: counts.skipped,
-          migrationCompleted: true,
-          cleanupPending: true,
-          message: `旧知识库 JSON 清理未完成：${error.message || String(error)}`,
-        };
-      }
+      return {
+        needsMigration: false,
+        legacyFolderCount: legacy.folders.length,
+        legacyDocumentCount: legacy.documents.length,
+        legacyCompletedDocumentCount: counts.success,
+        legacySkippedDocumentCount: counts.skipped,
+        migrationCompleted: true,
+        cleanupPending: true,
+        message: meta.error ? `旧知识库 JSON 清理未完成：${meta.error}` : '旧知识库 JSON 等待清理',
+      };
     }
 
     return {
@@ -1270,7 +1273,11 @@ function createKnowledgeBaseStore({ app, db }) {
   function migrateLegacy() {
     ensureBaseDir();
     if (!fs.existsSync(legacyIndexPath)) {
-      return { success: true, message: '未发现需要迁移的旧知识库数据', index: list(), migratedFolderCount: 0, migratedDocumentCount: 0, skippedDocumentCount: 0 };
+      const meta = getMigrationMeta();
+      if (meta?.status === 'success' && !meta.cleanup_completed_at) {
+        updateMigrationMeta({ cleanup_completed_at: now(), error: null });
+      }
+      return { success: true, message: '未发现需要迁移的旧知识库数据', migratedFolderCount: 0, migratedDocumentCount: 0, skippedDocumentCount: 0 };
     }
     const startedAt = now();
 
@@ -1280,6 +1287,26 @@ function createKnowledgeBaseStore({ app, db }) {
       const legacy = normalizeIndex(JSON.parse(rawIndexContent || '{}'));
       const successfulDocuments = getSuccessfulLegacyDocuments(legacy);
       const skippedDocumentCount = legacy.documents.length - successfulDocuments.length;
+      const migrationMeta = getMigrationMeta();
+      if (migrationMeta?.status === 'success') {
+        let cleanupPending = false;
+        let cleanupError = '';
+        try {
+          cleanupLegacyJson(legacy);
+        } catch (error) {
+          cleanupPending = true;
+          cleanupError = error.message || String(error);
+          updateMigrationMeta({ error: cleanupError });
+        }
+        return {
+          success: true,
+          message: cleanupPending ? `旧知识库 JSON 清理未完成：${cleanupError}` : '旧知识库 JSON 清理完成',
+          migratedFolderCount: Number(migrationMeta.migrated_folder_count || legacy.folders.length),
+          migratedDocumentCount: Number(migrationMeta.migrated_document_count || successfulDocuments.length),
+          skippedDocumentCount,
+          cleanupPending,
+        };
+      }
       const migrationLegacy = { folders: legacy.folders, documents: successfulDocuments };
       const expectedByDocumentId = new Map();
       const migrateTransaction = db.transaction(() => {
@@ -1355,7 +1382,6 @@ function createKnowledgeBaseStore({ app, db }) {
       return {
         success: true,
         message: cleanupPending ? `${summary}；旧 JSON 清理将在下次进入时继续` : summary,
-        index: list(),
         migratedFolderCount: legacy.folders.length,
         migratedDocumentCount: successfulDocuments.length,
         skippedDocumentCount,

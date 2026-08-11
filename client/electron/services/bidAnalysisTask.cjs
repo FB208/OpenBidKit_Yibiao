@@ -310,17 +310,16 @@ async function runBidAnalysisTask({ aiService, workspaceStore, checkpointTask, p
       : '开始解析招标文件。';
   const initialLogs = [initialMessage];
   let initialPartial = { bidAnalysisMode: mode, bidAnalysisSelectedTaskIds: config.taskIds };
+  let currentTasks = { ...(storedPlanForHint.bidAnalysisTasks || {}) };
   if (forceRerun && !requestedTaskIds) {
-    const prev = workspaceStore.loadTechnicalPlan() || {};
-    const resetTasks = { ...(prev.bidAnalysisTasks || {}) };
     for (const task of selectedTasks) {
-      resetTasks[task.id] = { id: task.id, label: task.label, status: 'idle', content: '' };
+      currentTasks[task.id] = { id: task.id, label: task.label, status: 'idle', content: '' };
     }
     initialPartial = {
       ...initialPartial,
       projectOverview: '',
       techRequirements: '',
-      bidAnalysisTasks: resetTasks,
+      bidAnalysisTasks: currentTasks,
       bidAnalysisProgress: 0,
       outlineGenerationTask: undefined,
       globalFactsTask: undefined,
@@ -333,21 +332,19 @@ async function runBidAnalysisTask({ aiService, workspaceStore, checkpointTask, p
       outlineData: null,
     };
   }
-  let technicalPlan = checkpointTask(
+  checkpointTask(
     { status: 'running', progress: 0, logs: initialLogs },
     initialPartial,
-  ).workspaceState;
-  const currentTasks = technicalPlan.bidAnalysisTasks || {};
+  );
   const tasksToRun = requestedTaskIds || forceRerun ? scopedTasks : scopedTasks.filter((task) => currentTasks[task.id]?.status !== 'success');
 
   async function runOne(task) {
-    const runningPrev = workspaceStore.loadTechnicalPlan() || {};
-    const runningTasks = { ...(runningPrev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'running', content: '' } };
-    const runningProgress = doneProgress(runningTasks);
-    technicalPlan = checkpointTask(
+    currentTasks = { ...currentTasks, [task.id]: { id: task.id, label: task.label, status: 'running', content: '' } };
+    const runningProgress = doneProgress(currentTasks);
+    checkpointTask(
       { status: 'running', progress: runningProgress },
-      { bidAnalysisTasks: runningTasks, bidAnalysisProgress: runningProgress },
-    ).workspaceState;
+      { bidAnalysisTasks: currentTasks, bidAnalysisProgress: runningProgress },
+    );
 
     const content = await runBidAnalysisPromptTask({
       aiService,
@@ -361,25 +358,23 @@ async function runBidAnalysisTask({ aiService, workspaceStore, checkpointTask, p
       throw new Error(`${task.label}解析结果为空，请重新解析`);
     }
 
-    const prev = workspaceStore.loadTechnicalPlan() || {};
-    const nextTasks = { ...(prev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'success', content: trimmedContent } };
-    const partial = { bidAnalysisTasks: nextTasks, bidAnalysisProgress: doneProgress(nextTasks) };
+    currentTasks = { ...currentTasks, [task.id]: { id: task.id, label: task.label, status: 'success', content: trimmedContent } };
+    const partial = { bidAnalysisTasks: currentTasks, bidAnalysisProgress: doneProgress(currentTasks) };
     if (task.id === 'projectOverview') partial.projectOverview = trimmedContent;
     if (task.id === 'techRequirements') partial.techRequirements = trimmedContent;
-    technicalPlan = checkpointTask(
+    checkpointTask(
       { status: 'running', progress: partial.bidAnalysisProgress },
       partial,
-    ).workspaceState;
+    );
   }
 
   function handleTaskError(task, error) {
-    const prev = workspaceStore.loadTechnicalPlan() || {};
-    const nextTasks = { ...(prev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'error', content: prev.bidAnalysisTasks?.[task.id]?.content || '', error: error.message || '解析失败' } };
-    const progress = doneProgress(nextTasks);
-    technicalPlan = checkpointTask(
+    currentTasks = { ...currentTasks, [task.id]: { id: task.id, label: task.label, status: 'error', content: currentTasks[task.id]?.content || '', error: error.message || '解析失败' } };
+    const progress = doneProgress(currentTasks);
+    checkpointTask(
       { status: 'running', progress, logs: [`${task.label}解析失败：${error.message || '未知错误'}`] },
-      { bidAnalysisTasks: nextTasks, bidAnalysisProgress: progress },
-    ).workspaceState;
+      { bidAnalysisTasks: currentTasks, bidAnalysisProgress: progress },
+    );
   }
 
   async function runOneSafely(task) {
@@ -397,18 +392,17 @@ async function runBidAnalysisTask({ aiService, workspaceStore, checkpointTask, p
   if (projectOverviewTask) {
     const warmupSucceeded = await runOneSafely(projectOverviewTask);
     if (warmupSucceeded && remainingTasks.length) {
-      technicalPlan = checkpointTask({
+      checkpointTask({
         status: 'running',
-        progress: technicalPlan.bidAnalysisProgress || 0,
+        progress: doneProgress(currentTasks),
         logs: ['提示词缓存预热完成，等待 5 秒后开始并发解析剩余项。'],
-      }).workspaceState;
+      });
       await waitForPromptCacheWarmup();
     }
   }
   await Promise.all(remainingTasks.map(runOneSafely));
 
-  const latestPlan = workspaceStore.loadTechnicalPlan() || {};
-  const missingRequiredTasks = getMissingRequiredTasks(latestPlan.bidAnalysisTasks || {});
+  const missingRequiredTasks = getMissingRequiredTasks(currentTasks);
   if (missingRequiredTasks.length) {
     const missingLabels = missingRequiredTasks.map((task) => task.label).join('、');
     const message = `必填解析项未完成：${missingLabels}，请重新解析失败项。`;

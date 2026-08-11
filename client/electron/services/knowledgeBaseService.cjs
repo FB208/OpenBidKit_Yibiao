@@ -2074,20 +2074,18 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     }
   }
 
+  recoverInterruptedDocuments();
+
   return {
     getMigrationStatus() {
-      recoverInterruptedDocuments();
       return knowledgeBaseStore.getMigrationStatus();
     },
 
     migrateLegacy() {
-      const result = knowledgeBaseStore.migrateLegacy();
-      recoverInterruptedDocuments();
-      return { ...result, index: knowledgeBaseStore.list() };
+      return knowledgeBaseStore.migrateLegacy();
     },
 
     list() {
-      recoverInterruptedDocuments();
       return knowledgeBaseStore.list();
     },
 
@@ -2100,7 +2098,8 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     },
 
     reorderFolder(draggedFolderId, targetFolderId, position) {
-      return { success: true, message: '文件夹排序已保存', index: knowledgeBaseStore.reorderFolders(draggedFolderId, targetFolderId, position) };
+      knowledgeBaseStore.reorderFolders(draggedFolderId, targetFolderId, position);
+      return { success: true, message: '文件夹排序已保存' };
     },
 
     deleteFolder(folderId) {
@@ -2174,8 +2173,8 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       }
 
       try {
-        const result = knowledgeBaseStore.moveDocument(documentId, targetFolderId, moveOptions);
-        return { success: true, message: `已移动文档“${document.file_name}”`, index: result.index, document: result.document };
+        const movedDocument = knowledgeBaseStore.moveDocument(documentId, targetFolderId, moveOptions);
+        return { success: true, message: `已移动文档“${document.file_name}”`, document: movedDocument };
       } catch (error) {
         if (oldDir && newDir && fs.existsSync(newDir) && !fs.existsSync(oldDir)) {
           try {
