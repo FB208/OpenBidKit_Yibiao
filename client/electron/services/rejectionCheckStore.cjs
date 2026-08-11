@@ -436,11 +436,13 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
   }
 
   function saveResult(resultType, result) {
-    clearFindingRows(resultType);
     if (!result) {
+      clearFindingRows(resultType);
       db.prepare('DELETE FROM rejection_check_results WHERE result_type = ?').run(resultType);
       return;
     }
+    const existing = db.prepare('SELECT * FROM rejection_check_results WHERE result_type = ?').get(resultType);
+    const timestamp = now();
     db.prepare(`
       INSERT INTO rejection_check_results (result_type, status, input_signature, active_finding_id, progress_message, error, updated_at)
       VALUES (@result_type, @status, @input_signature, @active_finding_id, @progress_message, @error, @updated_at)
@@ -453,14 +455,27 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
         updated_at = excluded.updated_at
     `).run({
       result_type: resultType,
-      status: normalizeStatus(result.status, ['idle', 'running', 'success', 'error'], 'idle'),
-      input_signature: result.inputSignature ? String(result.inputSignature) : null,
-      active_finding_id: result.activeFindingId ? String(result.activeFindingId) : null,
-      progress_message: result.progressMessage ? String(result.progressMessage) : null,
-      error: result.error ? String(result.error) : null,
-      updated_at: result.updatedAt || now(),
+      status: hasOwn(result, 'status')
+        ? normalizeStatus(result.status, ['idle', 'running', 'success', 'error'], 'idle')
+        : existing?.status || 'idle',
+      input_signature: hasOwn(result, 'inputSignature')
+        ? result.inputSignature ? String(result.inputSignature) : null
+        : existing?.input_signature || null,
+      active_finding_id: hasOwn(result, 'activeFindingId')
+        ? result.activeFindingId ? String(result.activeFindingId) : null
+        : existing?.active_finding_id || null,
+      progress_message: hasOwn(result, 'progressMessage')
+        ? result.progressMessage ? String(result.progressMessage) : null
+        : existing?.progress_message || null,
+      error: hasOwn(result, 'error')
+        ? result.error ? String(result.error) : null
+        : existing?.error || null,
+      updated_at: result.updatedAt || timestamp,
     });
-    saveFindingRows(resultType, result.findings || []);
+    if (hasOwn(result, 'findings')) {
+      clearFindingRows(resultType);
+      saveFindingRows(resultType, result.findings || []);
+    }
   }
 
   function clearFindingRows(resultType) {

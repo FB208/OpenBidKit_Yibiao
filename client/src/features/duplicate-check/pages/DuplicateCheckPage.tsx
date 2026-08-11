@@ -713,10 +713,26 @@ function DuplicateCheckPage() {
         }
       });
       if (state) applyDuplicateCheckState(state);
-      if (patch && Object.prototype.hasOwnProperty.call(patch, 'metadataAnalysis')) setMetadataAnalysis(patch.metadataAnalysis);
-      if (patch && Object.prototype.hasOwnProperty.call(patch, 'outlineAnalysis')) setOutlineAnalysis(patch.outlineAnalysis);
-      if (patch && Object.prototype.hasOwnProperty.call(patch, 'contentAnalysis')) setContentAnalysis(patch.contentAnalysis);
-      if (patch && Object.prototype.hasOwnProperty.call(patch, 'imageAnalysis')) setImageAnalysis(patch.imageAnalysis);
+      if (patch && Object.prototype.hasOwnProperty.call(patch, 'metadataAnalysis')) {
+        setMetadataAnalysis((prev) => patch.metadataAnalysis === undefined
+          ? undefined
+          : { ...(prev || ({} as DuplicateMetadataAnalysisState)), ...patch.metadataAnalysis } as DuplicateMetadataAnalysisState);
+      }
+      if (patch && Object.prototype.hasOwnProperty.call(patch, 'outlineAnalysis')) {
+        setOutlineAnalysis((prev) => patch.outlineAnalysis === undefined
+          ? undefined
+          : { ...(prev || ({} as DuplicateOutlineAnalysisState)), ...patch.outlineAnalysis } as DuplicateOutlineAnalysisState);
+      }
+      if (patch && Object.prototype.hasOwnProperty.call(patch, 'contentAnalysis')) {
+        setContentAnalysis((prev) => patch.contentAnalysis === undefined
+          ? undefined
+          : { ...(prev || ({} as DuplicateContentAnalysisState)), ...patch.contentAnalysis } as DuplicateContentAnalysisState);
+      }
+      if (patch && Object.prototype.hasOwnProperty.call(patch, 'imageAnalysis')) {
+        setImageAnalysis((prev) => patch.imageAnalysis === undefined
+          ? undefined
+          : { ...(prev || ({} as DuplicateImageAnalysisState)), ...patch.imageAnalysis } as DuplicateImageAnalysisState);
+      }
       if (patch && Object.prototype.hasOwnProperty.call(patch, 'analysisTask')) setAnalysisTask(patch.analysisTask);
     });
     window.yibiao?.tasks?.getActiveTasks().catch((error) => {

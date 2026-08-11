@@ -2252,7 +2252,11 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
   }
 
   function updateAnalysisField(field, partial, persist, signature) {
-    const analysisPartial = { ...partial, updated_at: now() };
+    const analysisPartial = {
+      ...partial,
+      ...(signature ? { signature } : {}),
+      updated_at: now(),
+    };
     if (typeof persist === 'function') {
       return persist(field, analysisPartial);
     }
@@ -2265,9 +2269,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       });
       if (currentSignature !== signature) return null;
     }
-    const analysis = { ...(prev[field] || {}), ...analysisPartial };
-    const workspacePartial = { [field]: analysis };
-    workspaceStore.updateDuplicateCheckWithoutReload(workspacePartial);
+    workspaceStore.updateDuplicateCheckWithoutReload({ [field]: analysisPartial });
     return undefined;
   }
 
@@ -2786,7 +2788,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
           latestLog = message;
           partial.logs = [message];
         }
-        checkpointTask(partial, { [field]: analysisState[field] });
+        checkpointTask(partial, { [field]: analysisPartial });
       };
 
       const finalStatus = await run(signature, payload, notifyTask, developerLogger);

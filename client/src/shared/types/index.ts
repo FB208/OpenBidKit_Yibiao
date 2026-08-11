@@ -4,6 +4,7 @@ export type {
   DuplicateAnalysisStatus,
   DuplicateCheckStep,
   DuplicateCheckTaskState,
+  DuplicateCheckWorkspacePatch,
   DuplicateCheckWorkspaceState,
   DuplicateContentAnalysisState,
   DuplicateContentExtractionItem,

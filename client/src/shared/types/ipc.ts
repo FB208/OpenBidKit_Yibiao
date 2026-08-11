@@ -1,8 +1,8 @@
 import type { AiHttpErrorPayload, ChatCompletionRequest, JsonCompletionRequest } from './ai';
-import type { DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
+import type { DuplicateCheckWorkspacePatch, DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelInfoResult, ModelListResult, UpdateChannel } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMigrationResult, KnowledgeBaseMigrationStatus, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
-import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
+import type { RejectionCheckWorkspacePatch, RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
 import type { OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from './outline';
@@ -30,9 +30,9 @@ export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDu
   contentPlan?: { nodeId: string; value: ContentGenerationPlanState | null };
   contentRuntime?: ContentGenerationRuntimeState;
   rejectionCheck?: TRejectionCheckState;
-  rejectionCheckPatch?: Partial<RejectionCheckWorkspaceState>;
+  rejectionCheckPatch?: RejectionCheckWorkspacePatch;
   duplicateCheck?: TDuplicateCheckState;
-  duplicateCheckPatch?: Partial<DuplicateCheckWorkspaceState>;
+  duplicateCheckPatch?: DuplicateCheckWorkspacePatch;
 }
 
 export interface WordExportProgressEvent {
@@ -590,7 +590,7 @@ export interface YibiaoBridge {
     loadState: () => Promise<DuplicateCheckWorkspaceState>;
     saveFiles: (payload: Pick<DuplicateCheckWorkspaceState, 'tenderFile' | 'tenderFiles' | 'bidFiles'> & Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<void>;
     saveUiState: (payload: Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<void>;
-    updateState: (partial: Partial<DuplicateCheckWorkspaceState>) => Promise<void>;
+    updateState: (partial: DuplicateCheckWorkspacePatch) => Promise<void>;
     clear: () => Promise<{ success: boolean; message?: string }>;
   };
   rejectionCheck: {
@@ -599,7 +599,7 @@ export interface YibiaoBridge {
     importTenderFromTechnicalPlan: () => Promise<{ success: boolean; message?: string }>;
     removeDocument: (role: RejectionDocumentRole, documentId?: string) => Promise<void>;
     saveUiState: (payload: Partial<Pick<RejectionCheckWorkspaceState, 'step' | 'activeDocumentTab' | 'activeResultTab' | 'activeCheckResultTab' | 'customCheckItems' | 'checkOptions'>>) => Promise<void>;
-    updateState: (partial: Partial<RejectionCheckWorkspaceState>) => Promise<void>;
+    updateState: (partial: RejectionCheckWorkspacePatch) => Promise<void>;
     clear: () => Promise<{ success: boolean; message?: string }>;
   };
   templates: {

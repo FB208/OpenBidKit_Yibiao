@@ -1581,7 +1581,7 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, chec
 }
 
 function createRunningResult(inputSignature, progressMessage) {
-  return { status: 'running', findings: [], inputSignature, progressMessage, updatedAt: now() };
+  return { status: 'running', inputSignature, progressMessage, error: undefined, updatedAt: now() };
 }
 
 function updateCheckWorkspace(checkpointTask, taskPartial, partial) {
@@ -1635,9 +1635,9 @@ async function runRejectionCheckTask({ aiService, workspaceStore, checkpointTask
   let completed = 0;
   const logs = ['开始检查投标文件。'];
   const initialPartial = { checkOptions: options };
-  if (runOptions.rejectionCheck) initialPartial.rejectionCheckResult = createRunningResult(rejectionInputSignature, '第一轮：正在分析检查范围。');
-  if (runOptions.typoCheck) initialPartial.typoCheckResult = createRunningResult(bidSignature, '正在识别错别字候选。');
-  if (runOptions.logicCheck) initialPartial.logicCheckResult = createRunningResult(bidSignature, '正在检查逻辑谬误。');
+  if (runOptions.rejectionCheck) initialPartial.rejectionCheckResult = { ...createRunningResult(rejectionInputSignature, '第一轮：正在分析检查范围。'), findings: [], activeFindingId: undefined };
+  if (runOptions.typoCheck) initialPartial.typoCheckResult = { ...createRunningResult(bidSignature, '正在识别错别字候选。'), findings: [], activeFindingId: undefined };
+  if (runOptions.logicCheck) initialPartial.logicCheckResult = { ...createRunningResult(bidSignature, '正在检查逻辑谬误。'), findings: [], activeFindingId: undefined };
   updateCheckWorkspace(checkpointTask, { status: 'running', progress: 5, logs }, initialPartial);
 
   function updateOverall(label, partial) {
@@ -1683,7 +1683,7 @@ async function runRejectionCheckTask({ aiService, workspaceStore, checkpointTask
         error: compactLogError(error),
       });
       updateOverall(`${label}失败：${message}`, {
-        [resultKey]: { status: 'error', findings: [], inputSignature, error: message, progressMessage: message, updatedAt: now() },
+          [resultKey]: { status: 'error', findings: [], inputSignature, activeFindingId: undefined, error: message, progressMessage: message, updatedAt: now() },
       });
       return { kind, status: 'error', error: message };
     }

@@ -63,6 +63,13 @@ export interface RejectionCheckWorkspaceState {
   checkTask?: RejectionBackgroundTaskState;
 }
 
+export type RejectionCheckWorkspacePatch = Omit<Partial<RejectionCheckWorkspaceState>,
+  'rejectionCheckResult' | 'typoCheckResult' | 'logicCheckResult'> & {
+  rejectionCheckResult?: Partial<RejectionCheckResultState>;
+  typoCheckResult?: Partial<TypoCheckResultState>;
+  logicCheckResult?: Partial<LogicCheckResultState>;
+};
+
 export interface RejectionCheckOptions {
   rejectionCheck: boolean;
   typoCheck: boolean;

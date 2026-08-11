@@ -14,6 +14,7 @@ import type {
   RejectionCheckResultState,
   RejectionCheckResultTab,
   RejectionCheckRunStatus,
+  RejectionCheckWorkspacePatch,
   RejectionCheckWorkspaceState,
   RejectionDocumentContent,
   RejectionDocumentRole,
@@ -710,7 +711,7 @@ function RejectionCheckPage() {
     setDraftCheckOptions(nextOptions);
   }
 
-  function applyWorkspacePatch(patch: Partial<RejectionCheckWorkspaceState>) {
+  function applyWorkspacePatch(patch: RejectionCheckWorkspacePatch) {
     const has = (field: keyof RejectionCheckWorkspaceState) => Object.prototype.hasOwnProperty.call(patch, field);
     if (has('tenderDocument')) setTenderDocument(patch.tenderDocument || null);
     if (has('tenderDocuments')) setTenderDocuments(Array.isArray(patch.tenderDocuments) ? patch.tenderDocuments : []);
@@ -721,9 +722,21 @@ function RejectionCheckPage() {
         content: stripTripleQuoteWrapper(patch.invalidBidAndRejectionItems?.content || ''),
       }));
     }
-    if (has('rejectionCheckResult')) setRejectionCheckResult(normalizeRejectionCheckResultState(patch.rejectionCheckResult));
-    if (has('typoCheckResult')) setTypoCheckResult(normalizeTypoCheckResultState(patch.typoCheckResult));
-    if (has('logicCheckResult')) setLogicCheckResult(normalizeLogicCheckResultState(patch.logicCheckResult));
+    if (has('rejectionCheckResult')) {
+      setRejectionCheckResult((prev) => patch.rejectionCheckResult === undefined
+        ? createEmptyRejectionCheckResultState()
+        : normalizeRejectionCheckResultState({ ...prev, ...patch.rejectionCheckResult }));
+    }
+    if (has('typoCheckResult')) {
+      setTypoCheckResult((prev) => patch.typoCheckResult === undefined
+        ? createEmptyTypoCheckResultState()
+        : normalizeTypoCheckResultState({ ...prev, ...patch.typoCheckResult }));
+    }
+    if (has('logicCheckResult')) {
+      setLogicCheckResult((prev) => patch.logicCheckResult === undefined
+        ? createEmptyLogicCheckResultState()
+        : normalizeLogicCheckResultState({ ...prev, ...patch.logicCheckResult }));
+    }
     if (has('extractionTask')) setExtractionTask(normalizeBackgroundTaskState(patch.extractionTask));
     if (has('checkTask')) setCheckTask(normalizeBackgroundTaskState(patch.checkTask));
     if (has('customCheckItems')) setCustomCheckItems(typeof patch.customCheckItems === 'string' ? patch.customCheckItems : '');
@@ -734,7 +747,7 @@ function RejectionCheckPage() {
     }
   }
 
-  function persistRejectionState(partial: Partial<RejectionCheckWorkspaceState>, fallbackMessage: string) {
+  function persistRejectionState(partial: RejectionCheckWorkspacePatch, fallbackMessage: string) {
     void window.yibiao?.rejectionCheck.updateState(partial)
       .catch((error) => {
         showToast(error instanceof Error ? error.message : fallbackMessage, 'error');
@@ -1168,7 +1181,9 @@ function RejectionCheckPage() {
       updatedAt: new Date().toISOString(),
     };
     setRejectionCheckResult(next);
-    persistRejectionState({ rejectionCheckResult: next }, '保存废标项结果状态失败');
+    persistRejectionState({
+      rejectionCheckResult: { activeFindingId: next.activeFindingId, updatedAt: next.updatedAt },
+    }, '保存废标项结果状态失败');
   }
 
   function deleteFinding(findingId: string) {
@@ -1181,7 +1196,14 @@ function RejectionCheckPage() {
       updatedAt: new Date().toISOString(),
     };
     setRejectionCheckResult(next);
-    persistRejectionState({ rejectionCheckResult: next }, '保存废标项结果状态失败');
+    persistRejectionState({
+      rejectionCheckResult: {
+        findings,
+        activeFindingId: next.activeFindingId,
+        progressMessage: next.progressMessage,
+        updatedAt: next.updatedAt,
+      },
+    }, '保存废标项结果状态失败');
   }
 
   function toggleTypoFinding(findingId: string) {
@@ -1191,7 +1213,9 @@ function RejectionCheckPage() {
       updatedAt: new Date().toISOString(),
     };
     setTypoCheckResult(next);
-    persistRejectionState({ typoCheckResult: next }, '保存错别字结果状态失败');
+    persistRejectionState({
+      typoCheckResult: { activeFindingId: next.activeFindingId, updatedAt: next.updatedAt },
+    }, '保存错别字结果状态失败');
   }
 
   function deleteTypoFinding(findingId: string) {
@@ -1204,7 +1228,14 @@ function RejectionCheckPage() {
       updatedAt: new Date().toISOString(),
     };
     setTypoCheckResult(next);
-    persistRejectionState({ typoCheckResult: next }, '保存错别字结果状态失败');
+    persistRejectionState({
+      typoCheckResult: {
+        findings,
+        activeFindingId: next.activeFindingId,
+        progressMessage: next.progressMessage,
+        updatedAt: next.updatedAt,
+      },
+    }, '保存错别字结果状态失败');
   }
 
   async function copyTypoOriginal(finding: TypoCheckFinding) {
@@ -1232,7 +1263,9 @@ function RejectionCheckPage() {
       updatedAt: new Date().toISOString(),
     };
     setLogicCheckResult(next);
-    persistRejectionState({ logicCheckResult: next }, '保存逻辑谬误结果状态失败');
+    persistRejectionState({
+      logicCheckResult: { activeFindingId: next.activeFindingId, updatedAt: next.updatedAt },
+    }, '保存逻辑谬误结果状态失败');
   }
 
   function deleteLogicFinding(findingId: string) {
@@ -1245,7 +1278,14 @@ function RejectionCheckPage() {
       updatedAt: new Date().toISOString(),
     };
     setLogicCheckResult(next);
-    persistRejectionState({ logicCheckResult: next }, '保存逻辑谬误结果状态失败');
+    persistRejectionState({
+      logicCheckResult: {
+        findings,
+        activeFindingId: next.activeFindingId,
+        progressMessage: next.progressMessage,
+        updatedAt: next.updatedAt,
+      },
+    }, '保存逻辑谬误结果状态失败');
   }
 
   function markStaleTasksWithoutActive(activeTypes: Set<string>) {
