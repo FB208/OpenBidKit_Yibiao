@@ -1556,6 +1556,11 @@
   box-shadow: 0 0 0 5px rgba(200, 50, 32, 0.1);
 }
 
+.content-outline-item.is-ignored .content-outline-dot {
+  background: #7b8492;
+  box-shadow: 0 0 0 5px rgba(123, 132, 146, 0.12);
+}
+
 .content-outline-item.is-partial .content-outline-dot {
   background: #be9123;
   box-shadow: 0 0 0 5px rgba(190, 145, 35, 0.1);
@@ -1667,6 +1672,11 @@
   background: rgba(200, 50, 32, 0.1);
 }
 
+.content-outline-item.is-ignored em {
+  color: #667080;
+  background: rgba(123, 132, 146, 0.12);
+}
+
 .content-outline-item.is-partial em {
   color: #8a650b;
   background: rgba(255, 209, 102, 0.16);
@@ -1741,6 +1751,11 @@
 .content-status-badge.is-error {
   color: #c83220;
   background: rgba(200, 50, 32, 0.1);
+}
+
+.content-status-badge.is-ignored {
+  color: #667080;
+  background: rgba(123, 132, 146, 0.12);
 }
 
 .content-status-badge.is-partial {
@@ -2068,6 +2083,58 @@
   color: #755110;
   font-size: 12px;
   line-height: 1.55;
+}
+
+/* 正文未完成小节确认弹窗：拆分影响项，避免长段落难以阅读。 */
+.content-incomplete-decision-card {
+  width: min(600px, calc(100vw - 28px));
+}
+
+.content-incomplete-decision-copy {
+  display: grid;
+  gap: 12px;
+  color: var(--yb-text-soft);
+  line-height: 1.65;
+}
+
+.content-incomplete-decision-copy p {
+  margin: 0;
+}
+
+.content-incomplete-decision-summary strong {
+  color: var(--yb-text);
+  font-weight: 700;
+}
+
+.content-incomplete-decision-impact {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  background: #f7f9fc;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 14px;
+}
+
+.content-incomplete-decision-impact > strong {
+  color: var(--yb-text);
+  font-size: 14px;
+}
+
+.content-incomplete-decision-impact ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.content-incomplete-decision-warning {
+  padding: 10px 12px;
+  color: #8a5b04;
+  font-size: 13px;
+  font-weight: 600;
+  background: rgba(255, 209, 102, 0.14);
+  border: 1px solid rgba(190, 145, 35, 0.18);
+  border-radius: 12px;
 }
 
 /* [5009-5144] content-generation-config-list/row/control + content-image-status + content-generation-switch/-thumb */

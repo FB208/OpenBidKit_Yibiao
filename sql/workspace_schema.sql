@@ -152,6 +152,7 @@ ON technical_plan_outline_nodes(level);
 
 -- 技术方案正文生成小节状态。
 -- 不重复保存正文内容，正文内容在 technical_plan_outline_nodes.content。
+-- status: idle / running / success / error / ignored。
 CREATE TABLE IF NOT EXISTS technical_plan_content_sections (
   node_id TEXT PRIMARY KEY,
   status TEXT NOT NULL DEFAULT 'idle',

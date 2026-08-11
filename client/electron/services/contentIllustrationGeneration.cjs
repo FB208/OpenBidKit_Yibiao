@@ -501,9 +501,10 @@ function applyGeneratedIllustrationsToDocument(plan, outlineData, sections) {
     const targetId = planItem.kind === 'html' && planItem.placement === 'before'
       ? planItem.section_ids[0]
       : planItem.section_ids[planItem.section_ids.length - 1];
+    if (nextSections[targetId]?.status !== 'success') continue;
     const current = String(nextSections[targetId]?.content || '').trim();
     const content = planItem.placement === 'before' ? `${block}\n\n${current}`.trim() : `${current}\n\n${block}`.trim();
-    nextSections[targetId] = { ...nextSections[targetId], content, status: 'success', error: undefined, updated_at: new Date().toISOString() };
+    nextSections[targetId] = { ...nextSections[targetId], content, updated_at: new Date().toISOString() };
     contentById.set(targetId, content);
   }
 

@@ -2541,6 +2541,16 @@ function normalizeStringArray(value) {
   return Array.isArray(value) ? [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))] : [];
 }
 
+// 从待生成小节中无放回随机选取开发者模拟失败目标。
+function selectRandomItemIds(itemIds, count) {
+  const candidates = [...itemIds];
+  for (let index = candidates.length - 1; index > 0; index -= 1) {
+    const targetIndex = crypto.randomInt(index + 1);
+    [candidates[index], candidates[targetIndex]] = [candidates[targetIndex], candidates[index]];
+  }
+  return candidates.slice(0, count);
+}
+
 function normalizeContentGenerationRuntime(value) {
   const source = value && typeof value === 'object' ? value : {};
   return {
@@ -2556,6 +2566,7 @@ function normalizeContentGenerationRuntime(value) {
     word_adjustment_round_start_words: Math.max(0, Math.round(Number(source.word_adjustment_round_start_words) || 0)),
     target_item_id: String(source.target_item_id || '').trim(),
     regenerate_requirement: String(source.regenerate_requirement || '').trim(),
+    awaiting_content_decision: Boolean(source.awaiting_content_decision),
     updated_at: source.updated_at || now(),
   };
 }
@@ -2666,7 +2677,7 @@ function progressFor(leaves, sections) {
     return 0;
   }
 
-  const done = leaves.filter(({ item }) => ['success', 'error'].includes(sections[item.id]?.status)).length;
+  const done = leaves.filter(({ item }) => ['success', 'error', 'ignored'].includes(sections[item.id]?.status)).length;
   return Math.round((done / leaves.length) * 100);
 }
 
@@ -2859,11 +2870,16 @@ function buildContentOverallProgress(progressMode, detail, status) {
 }
 
 function taskStatusFor(leaves, sections) {
-  if (leaves.some(({ item }) => sections[item.id]?.status === 'error')) {
+  if (leaves.some(({ item }) => isUnresolvedContentSection(sections[item.id]))) {
     return 'error';
   }
 
   return 'success';
+}
+
+// 后续流程开始前，正文小节只能是已成功或用户明确忽略。
+function isUnresolvedContentSection(section) {
+  return section?.status !== 'success' && section?.status !== 'ignored';
 }
 
 function now() {
@@ -2929,16 +2945,20 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   if (resume && storedPlan.contentGenerationTask?.status !== 'paused') {
     throw new Error('没有可继续的已暂停正文生成任务');
   }
-  let contentRuntime = normalizeContentGenerationRuntime(resume ? storedPlan.contentGenerationRuntime : {});
   const retryContentCorrection = !resume && Boolean(payload.retryContentCorrection ?? payload.retry_content_correction);
   const rerunIllustrations = !resume && Boolean(payload.rerunIllustrations ?? payload.rerun_illustrations);
+  const retryFailedSections = !resume && Boolean(payload.retryFailedSections ?? payload.retry_failed_sections);
+  const continuePostProcessing = !resume && Boolean(payload.continuePostProcessing ?? payload.continue_post_processing);
+  let contentRuntime = normalizeContentGenerationRuntime(resume || retryContentCorrection || retryFailedSections || continuePostProcessing
+    ? (storedPlan.contentGenerationRuntime || previousState?.contentGenerationRuntime)
+    : {});
   const runOnlyIllustrationPlanning = rerunIllustrations
     || (resume && contentRuntime.phase === 'illustration-planning')
     || (retryContentCorrection && previousState?.contentGenerationTask?.stats?.content?.phase === 'illustration-planning');
   const runOnlyIllustrationGeneration = (resume && contentRuntime.phase === 'illustration-generating')
     || (retryContentCorrection && previousState?.contentGenerationTask?.stats?.content?.phase === 'illustration-generating');
   const runOnlyIllustrationStage = runOnlyIllustrationPlanning || runOnlyIllustrationGeneration;
-  const regenerate = !resume && !retryContentCorrection && !rerunIllustrations && Boolean(payload.regenerate);
+  const regenerate = !resume && !retryContentCorrection && !rerunIllustrations && !retryFailedSections && !continuePostProcessing && Boolean(payload.regenerate);
   const targetItemId = resume ? contentRuntime.target_item_id : String(payload.targetItemId || '').trim();
   if (retryContentCorrection && targetItemId) {
     throw new Error('单小节重新生成不支持重试内容矫正');
@@ -2955,7 +2975,9 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     throw new Error('当前目录没有标记为“AI生成”的正文小节');
   }
   const regenerateRequirement = resume ? contentRuntime.regenerate_requirement : String(payload.requirement || '').trim();
-  const generationOptions = payload.generationOptions || payload.generation_options || storedPlan.contentGenerationOptions || {};
+  const generationOptions = retryFailedSections || continuePostProcessing
+    ? storedPlan.contentGenerationOptions || {}
+    : payload.generationOptions || payload.generation_options || storedPlan.contentGenerationOptions || {};
   const aiConfig = aiService.getConfig ? aiService.getConfig() : {};
   const contentConcurrency = normalizeContentConcurrency(aiConfig.concurrency_limit);
   const imageConcurrency = normalizeImageConcurrency(aiConfig.image_model?.concurrency_limit);
@@ -3035,6 +3057,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     illustration_generation_html_total: 0,
     illustration_generation_html_completed: 0,
     illustration_generation_step_label: '',
+    awaiting_content_decision: false,
+    ignored_section_count: leaves.filter(({ item }) => storedPlan.contentGenerationSections?.[item.id]?.status === 'ignored').length,
   };
   contentRuntime = normalizeContentGenerationRuntime({
     ...contentRuntime,
@@ -3053,7 +3077,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     const section = sections[item.id];
     const content = section?.content || item.content || '';
     const originalState = getOriginalMaterialRuntimeState(item);
-    return regenerate || section?.status === 'error' || !String(content).trim() || originalState.needsOptimization || originalState.needsRestoreRepair;
+    return regenerate || section?.status !== 'ignored'
+      && (section?.status === 'error' || !String(content).trim() || originalState.needsOptimization || originalState.needsRestoreRepair);
   });
   if (targetItemId) {
     const targetSection = sections[targetItemId];
@@ -3072,15 +3097,43 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         return section.status === 'success';
       })
       .map(({ item }) => item.id);
-    if (successfulIds.length !== leaves.length) {
-      throw new Error('只有正文全部生成成功后，才能重试内容矫正');
+    const ignoredCount = leaves.filter(({ item }) => sections[item.id]?.status === 'ignored').length;
+    if (successfulIds.length + ignoredCount !== leaves.length) {
+      throw new Error('只有正文小节全部生成成功或已忽略后，才能重试内容矫正');
     }
     successfulIds.forEach((itemId) => touchedItemIds.add(itemId));
     tasksToRun = [];
   }
 
+  if (retryFailedSections) {
+    tasksToRun = leaves.filter(({ item }) => isUnresolvedContentSection(sections[item.id]));
+  } else if (continuePostProcessing) {
+    tasksToRun = [];
+  }
+
+  const simulatePartialFailures = !resume
+    && !retryContentCorrection
+    && !rerunIllustrations
+    && !retryFailedSections
+    && !continuePostProcessing
+    && developerModeEnabled
+    && Boolean(payload.simulatePartialFailures ?? payload.simulate_partial_failures)
+    && tasksToRun.length > 1;
+  const simulatedFailureCount = simulatePartialFailures
+    ? Math.min(5, tasksToRun.length - 1, Math.max(1, Math.round(tasksToRun.length * 0.2)))
+    : 0;
+  const simulatedFailureItemIds = new Set(selectRandomItemIds(
+    tasksToRun.map(({ item }) => item.id),
+    simulatedFailureCount,
+  ));
+  contentRuntime = normalizeContentGenerationRuntime({
+    ...contentRuntime,
+    target_item_id: targetItemId,
+    regenerate_requirement: regenerateRequirement,
+  });
+
   const retryItemIds = new Set(tasksToRun
-    .filter(({ item }) => sections[item.id]?.status === 'error')
+    .filter(({ item }) => isUnresolvedContentSection(sections[item.id]))
     .map(({ item }) => item.id));
 
   for (const { item } of tasksToRun) {
@@ -3120,6 +3173,13 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       : `准备生成正文，共 ${leaves.length} 个小节。`];
   if (targetItemId) {
     logs = [`准备重新生成正文小节：${targetItemId}。`];
+  } else if (retryFailedSections) {
+    logs = [...logs, `开始重试 ${tasksToRun.length} 个失败或未完成正文小节。`];
+  } else if (continuePostProcessing) {
+    logs = [...logs, '用户已确认忽略失败或未完成小节，准备直接继续后续流程。'];
+  }
+  if (simulatedFailureItemIds.size) {
+    logs = [...logs, `开发者随机失败模式已启用：本轮将模拟 ${simulatedFailureItemIds.size} 个小节生成失败（${[...simulatedFailureItemIds].join('、')}）。`];
   }
   logs = [...logs, `文本模型并发上限：${contentConcurrency}。`];
   logs = [...logs, tableRequirement === 'heavy'
@@ -3179,6 +3239,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       regenerate,
       full_regenerate: fullRegenerate,
       retry_content_correction: retryContentCorrection,
+      retry_failed_sections: retryFailedSections,
+      continue_post_processing: continuePostProcessing,
       leaf_count: leaves.length,
       task_count: tasksToRun.length,
       text_concurrency_limit: contentConcurrency,
@@ -3358,6 +3420,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
   function getLeafContentForWords(item) {
     const section = sections[item.id];
+    if (section?.status === 'ignored') return '';
     return section && Object.prototype.hasOwnProperty.call(section, 'content')
       ? section.content || ''
       : item.content || '';
@@ -3410,6 +3473,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     contentStats.maximum_words = wordControl.maximumWords;
     contentStats.section_words = wordControl.sectionWords;
     contentStats.strict_section_words = wordControl.strictSectionWords;
+    contentStats.ignored_section_count = leaves.filter(({ item }) => sections[item.id]?.status === 'ignored').length;
     return { content: { ...contentStats } };
   }
 
@@ -3450,6 +3514,33 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       contentGenerationTask: updateTask({ status: 'paused', progress: progressFor(leaves, sections), logs, stats: statsSnapshot(), pause_requested: false }),
     });
     updateTask({ status: 'paused', progress: progressFor(leaves, sections), logs, stats: statsSnapshot(), pause_requested: false }, saved);
+  }
+
+  // 所有正文请求结束后存在失败时，保存等待用户重试或忽略的稳定状态。
+  function persistContentDecisionWait(unresolvedContexts) {
+    const unresolvedIds = unresolvedContexts.map(({ item }) => item.id);
+    const message = `正文小节生成结束，${unresolvedIds.length} 个小节失败或未完成。请重试失败小节，或确认忽略后继续后续流程。`;
+    logs = [...logs, message, `失败或未完成小节：${unresolvedIds.join('、')}。`];
+    contentStats.phase = 'generating';
+    contentStats.awaiting_content_decision = true;
+    contentStats.ignored_section_count = leaves.filter(({ item }) => sections[item.id]?.status === 'ignored').length;
+    const runtime = syncRuntime({ phase: 'generating', awaiting_content_decision: true });
+    const taskPatch = {
+      status: 'error',
+      error: message,
+      progress: progressFor(leaves, sections),
+      logs,
+      stats: statsSnapshot(),
+      pause_requested: false,
+    };
+    const saved = workspaceStore.updateTechnicalPlan({
+      outlineData,
+      contentGenerationSections: sections,
+      contentGenerationPlans: storedContentPlans,
+      contentGenerationRuntime: runtime,
+      contentGenerationTask: updateTask(taskPatch),
+    });
+    updateTask(taskPatch, saved);
   }
 
   function pauseIfRequested(message = '正文生成已暂停，可导出当前已完成内容，稍后继续。') {
@@ -4093,6 +4184,9 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     }, isSingleSectionRegeneration ? previousContent : content, { logs });
 
     try {
+      if (simulatedFailureItemIds.has(item.id)) {
+        throw new Error('开发者模式：随机模拟正文生成失败');
+      }
       contentPlan = getContentPlanForItem(item.id);
       originalState = getOriginalMaterialRuntimeState(item);
       originalMaterial = originalState.originalMaterial;
@@ -6320,9 +6414,8 @@ workspace 文件说明：
           title: planItem.title,
           error: compactError(error?.message || error),
         });
-        if (planItem.kind !== 'html') {
-          logs = [...logs, `${planItem.kind === 'ai' ? 'AI' : 'Mermaid'} 配图失败：${planItem.section_ids[0]}，${error.message || '生成失败'}，已保留正文。`];
-        }
+        const kindLabel = planItem.kind === 'ai' ? 'AI' : planItem.kind === 'mermaid' ? 'Mermaid' : 'HTML';
+        logs = [...logs, `${kindLabel} 配图失败：${planItem.section_ids[0]}，${error.message || '生成失败'}，已保留正文。`];
       }
     }
 
@@ -6382,6 +6475,24 @@ workspace 文件说明：
   }
 
   try {
+    if (continuePostProcessing) {
+      const ignoredContexts = leaves.filter(({ item }) => isUnresolvedContentSection(sections[item.id]));
+      for (const { item } of ignoredContexts) {
+        const content = String(sections[item.id]?.content || item.content || '');
+        saveSection(item, {
+          status: 'ignored',
+          content,
+          error: undefined,
+        }, content, { logs });
+      }
+      contentStats.ignored_section_count = ignoredContexts.length;
+      contentStats.awaiting_content_decision = false;
+      contentRuntime = syncRuntime({ awaiting_content_decision: false });
+      workspaceStore.updateTechnicalPlanWithoutReload({ contentGenerationRuntime: contentRuntime });
+      logs = [...logs, `已按用户确认忽略 ${ignoredContexts.length} 个失败或未完成小节，开始执行后续流程。`];
+      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
+    }
+
     if (!runOnlyIllustrationStage && tasksToRun.length) {
       if (targetItemId) {
         await prepareSingleSectionPlan();
@@ -6400,6 +6511,17 @@ workspace 文件说明：
           pauseIfRequested('正文生成已在正文生成阶段暂停，可导出当前已完成内容，稍后继续。');
         }
       }
+    }
+
+    if (!runOnlyIllustrationStage && !targetItemId && !retryContentCorrection && !continuePostProcessing) {
+      const unresolvedContexts = leaves.filter(({ item }) => isUnresolvedContentSection(sections[item.id]));
+      if (unresolvedContexts.length) {
+        persistContentDecisionWait(unresolvedContexts);
+        return;
+      }
+      contentStats.awaiting_content_decision = false;
+      contentRuntime = syncRuntime({ awaiting_content_decision: false });
+      workspaceStore.updateTechnicalPlanWithoutReload({ contentGenerationRuntime: contentRuntime });
     }
 
     if (!runOnlyIllustrationStage && !targetItemId && !retryContentCorrection && !completedStages.has('section-word-adjusting')) {
@@ -6436,7 +6558,7 @@ workspace 文件说明：
       }
       pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
       const unresolvedSections = completedStages.has('final-section-word-adjusting')
-        ? leaves.filter(({ item }) => isSectionWordsOutsideRange(getLeafWordCount(item))).map(({ item }) => item.id)
+        ? leaves.filter(({ item }) => sections[item.id]?.status === 'success' && isSectionWordsOutsideRange(getLeafWordCount(item))).map(({ item }) => item.id)
         : await runSectionWordAdjustments(leaves, 'final-section');
       markStageCompleted('final-section-word-adjusting');
       if (!completedStages.has('total-word-adjusting')) {
@@ -6513,7 +6635,7 @@ workspace 文件说明：
     const statusLeaves = targetItemId ? leaves.filter(({ item }) => item.id === targetItemId) : leaves;
     for (const { item } of statusLeaves) {
       const status = sections[item.id]?.status;
-      if (status === 'error') continue;
+      if (status === 'error' || status === 'ignored') continue;
       const content = getLeafContentForWords(item);
       if (countContentWords(content) > 0) {
         if (status !== 'success') {

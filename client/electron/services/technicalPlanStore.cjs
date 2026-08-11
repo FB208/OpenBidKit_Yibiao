@@ -1009,7 +1009,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       acc[row.node_id] = {
         id: row.node_id,
         title: row.title || '未命名章节',
-        status: normalizeStatus(row.status, ['idle', 'running', 'success', 'error'], 'idle'),
+        status: normalizeStatus(row.status, ['idle', 'running', 'success', 'error', 'ignored'], 'idle'),
         content: row.content || '',
         error: row.error || undefined,
         updated_at: row.updated_at || undefined,
@@ -1052,7 +1052,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     for (const [nodeId, section] of entries) {
       upsert.run({
         node_id: nodeId,
-        status: normalizeStatus(section?.status, ['idle', 'running', 'success', 'error'], 'idle'),
+        status: normalizeStatus(section?.status, ['idle', 'running', 'success', 'error', 'ignored'], 'idle'),
         error: section?.error ? String(section.error) : null,
         updated_at: section?.updated_at || timestamp,
       });
@@ -1190,7 +1190,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       updateGeneratedContent.run(String(section.content || ''), timestamp, nodeId);
       upsertGeneratedSection.run({
         node_id: nodeId,
-        status: normalizeStatus(section.status, ['idle', 'running', 'success', 'error'], 'idle'),
+        status: normalizeStatus(section.status, ['idle', 'running', 'success', 'error', 'ignored'], 'idle'),
         error: section.error ? String(section.error) : null,
         updated_at: section.updated_at || timestamp,
       });
@@ -1402,7 +1402,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       seenSections.add(newId);
       insertSection.run({
         node_id: newId,
-        status: normalizeStatus(row.status, ['idle', 'running', 'success', 'error'], 'idle'),
+        status: normalizeStatus(row.status, ['idle', 'running', 'success', 'error', 'ignored'], 'idle'),
         error: row.error || null,
         updated_at: row.updated_at || now(),
       });

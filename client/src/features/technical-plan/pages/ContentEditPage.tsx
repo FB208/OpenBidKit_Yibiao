@@ -43,6 +43,7 @@ const statusLabels: Record<TreeStatus, string> = {
   running: '生成中',
   success: '已生成',
   error: '失败',
+  ignored: '已忽略',
   partial: '部分生成',
   planning: '编排中',
   pending: '待处理',
@@ -220,13 +221,16 @@ function getTreeStatus(item: OutlineItem, sections: ContentGenerationSections): 
   if (childStatuses.every((status) => status === 'success')) {
     return 'success';
   }
+  if (childStatuses.every((status) => status === 'ignored')) {
+    return 'ignored';
+  }
   if (childStatuses.every((status) => status === 'pending')) {
     return 'pending';
   }
   if (childStatuses.some((status) => status === 'error')) {
     return 'error';
   }
-  if (childStatuses.some((status) => status === 'success' || status === 'partial' || status === 'pending')) {
+  if (childStatuses.some((status) => status === 'success' || status === 'ignored' || status === 'partial' || status === 'pending')) {
     return 'partial';
   }
 
@@ -236,9 +240,10 @@ function getTreeStatus(item: OutlineItem, sections: ContentGenerationSections): 
 function getParentStatus(childStatuses: TreeStatus[]): TreeStatus {
   if (childStatuses.some((status) => status === 'running')) return 'running';
   if (childStatuses.every((status) => status === 'success')) return 'success';
+  if (childStatuses.every((status) => status === 'ignored')) return 'ignored';
   if (childStatuses.every((status) => status === 'pending')) return 'pending';
   if (childStatuses.some((status) => status === 'error')) return 'error';
-  if (childStatuses.some((status) => status === 'success' || status === 'partial' || status === 'pending')) return 'partial';
+  if (childStatuses.some((status) => status === 'success' || status === 'ignored' || status === 'partial' || status === 'pending')) return 'partial';
   if (childStatuses.some((status) => status === 'planning')) return 'planning';
   return 'idle';
 }
@@ -307,6 +312,7 @@ function ContentEditPage({
   const [statsCollapsed, setStatsCollapsed] = useState(false);
   const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
+  const [continuePostProcessingDialogOpen, setContinuePostProcessingDialogOpen] = useState(false);
   const [draftGenerationOptions, setDraftGenerationOptions] = useState<ContentGenerationOptions>(defaultContentGenerationOptions);
   const [htmlImageTypesDialogOpen, setHtmlImageTypesDialogOpen] = useState(false);
   const [htmlImageTypesDraft, setHtmlImageTypesDraft] = useState(DEFAULT_HTML_IMAGE_TYPES);
@@ -326,7 +332,6 @@ function ContentEditPage({
   const taskInFlight = running || pausing;
   const phaseVisible = taskInFlight || paused || taskFailed;
   const taskBlocksGeneration = taskInFlight || paused;
-  const generationStrategyLocked = paused;
   const contentStats = task?.stats?.content;
   const progressDetail = task?.progress_detail;
   const illustrationStats = useMemo(() => {
@@ -365,16 +370,19 @@ function ContentEditPage({
     return {
       completedCount: summary.completedCount + (status === 'success' ? 1 : 0),
       failedCount: summary.failedCount + (status === 'error' ? 1 : 0),
-      totalWords: summary.totalWords + (outlineMeta.get(item.id)?.words || 0),
+      ignoredCount: summary.ignoredCount + (status === 'ignored' ? 1 : 0),
+      totalWords: summary.totalWords + (status === 'ignored' ? 0 : (outlineMeta.get(item.id)?.words || 0)),
     };
-  }, { completedCount: 0, failedCount: 0, totalWords: 0 }), [leaves, outlineMeta, sections]);
-  const { completedCount, failedCount, totalWords } = contentSummary;
+  }, { completedCount: 0, failedCount: 0, ignoredCount: 0, totalWords: 0 }), [leaves, outlineMeta, sections]);
+  const { completedCount, failedCount, ignoredCount, totalWords } = contentSummary;
+  const resolvedCount = completedCount + ignoredCount;
+  const unresolvedCount = Math.max(0, leaves.length - resolvedCount);
   const modeCounts = allLeaves.reduce<Record<OutlineContentMode, number>>((counts, item) => {
     if (item.content_mode) counts[item.content_mode] += 1;
     return counts;
   }, { 'ai-generate': 0, 'template-fill': 0, 'point-to-point': 0, other: 0 });
   const pendingCount = modeCounts['template-fill'] + modeCounts['point-to-point'] + modeCounts.other;
-  const progress = leaves.length ? Math.round((completedCount / leaves.length) * 100) : 0;
+  const progress = leaves.length ? Math.round((resolvedCount / leaves.length) * 100) : 0;
   const planningTotal = contentStats?.planning_total || leaves.length;
   const planningCompleted = contentStats?.planning_completed || 0;
   const planningProgress = planningTotal ? Math.round((planningCompleted / planningTotal) * 100) : 0;
@@ -401,8 +409,10 @@ function ContentEditPage({
   const totalAdjustmentRemainingWords = contentStats?.total_adjustment_remaining_words || 0;
   const canRetryContentCorrection = taskFailed
     && leaves.length > 0
-    && completedCount === leaves.length
+    && resolvedCount === leaves.length
     && ['original-auditing', 'auditing', 'table-cleaning', 'final-section-word-adjusting', 'total-word-adjusting', 'illustration-planning', 'illustration-generating'].includes(String(contentStats?.phase || ''));
+  const awaitingContentDecision = taskFailed && Boolean(contentStats?.awaiting_content_decision);
+  const generationStrategyLocked = paused;
   const retryingIllustrationPlanning = canRetryContentCorrection && contentStats?.phase === 'illustration-planning';
   const retryingIllustrationGeneration = canRetryContentCorrection && contentStats?.phase === 'illustration-generating';
   const contentRetryTargetLabel = retryingIllustrationGeneration
@@ -483,7 +493,7 @@ function ContentEditPage({
             ? `${illustrationPlanningStepCompleted}/${illustrationPlanningStepTotal}`
             : illustrationGenerating
               ? `${illustrationGenerationCompleted}/${illustrationGenerationTotal}`
-            : `${completedCount}/${leaves.length}`;
+            : `${resolvedCount}/${leaves.length}`;
   const progressPhaseLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '正文编排' : restoring ? '原方案还原' : sectionWordAdjusting ? '小节字数调整' : finalSectionWordAdjusting ? '最终小节复核' : totalWordAdjusting ? '全文字数调整' : contentCorrecting ? '内容矫正' : illustrationPlanning ? '全文图片编排' : illustrationGenerating ? '全文图片生成' : '正文生成';
   const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${wordAdjusting ? ' is-word-adjusting' : ''}${contentCorrecting ? ' is-auditing' : ''}${illustrationPlanning || illustrationGenerating ? ' is-illustration-planning' : ''}${taskInFlight && (planning || restoring || wordAdjusting || contentCorrecting || illustrationPlanning || illustrationGenerating) ? ' is-active' : ''}`;
   const progressDescription = taskFailed
@@ -556,8 +566,8 @@ function ContentEditPage({
                     ? latestTaskLog || '正文生成任务正在运行。'
                     : paused
                       ? '正文生成已暂停，可导出当前已完成内容或点击继续。'
-                      : completedCount
-                        ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。`
+                      : resolvedCount
+                        ? `已生成 ${completedCount} 个小节${ignoredCount ? `，已忽略 ${ignoredCount} 个小节` : ''}，共 ${totalWords} 字。`
                         : '点击生成正文后，目录会实时显示每个小节状态。';
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
   const generationButtonLabel = pausing
@@ -568,7 +578,7 @@ function ContentEditPage({
         ? '继续'
         : canRetryContentCorrection
           ? `重试${contentRetryTargetLabel}`
-          : completedCount === leaves.length && leaves.length
+          : resolvedCount === leaves.length && leaves.length
               ? '重新生成正文'
               : completedCount > 0
                 ? '继续生成正文'
@@ -716,6 +726,31 @@ function ContentEditPage({
     }
   };
 
+  // 只重新生成当前失败的正文小节，全部成功后由 Main 自动进入后续流程。
+  const retryFailedSections = async () => {
+    if (!awaitingContentDecision || !unresolvedCount || taskBlocksGeneration) return;
+    try {
+      await window.yibiao?.tasks.startContentGeneration({ retryFailedSections: true });
+      trackConfigUsage({ content_generation_action: 'retry_failed_sections' });
+      showToast('失败小节重试任务已在后台启动', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '启动失败小节重试失败', 'error');
+    }
+  };
+
+  // 用户确认后忽略剩余失败或未完成小节，直接执行检查、字数调整和配图。
+  const continuePostProcessing = async () => {
+    if (!awaitingContentDecision || taskBlocksGeneration) return;
+    try {
+      await window.yibiao?.tasks.startContentGeneration({ continuePostProcessing: true });
+      trackConfigUsage({ content_generation_action: 'continue_with_ignored_sections' });
+      setContinuePostProcessingDialogOpen(false);
+      showToast('后续处理任务已在后台启动', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '启动后续处理失败', 'error');
+    }
+  };
+
   const rerunIllustrations = async () => {
     if (!contentIllustrationPlan || taskBlocksGeneration) {
       return;
@@ -743,7 +778,7 @@ function ContentEditPage({
       void retryContentCorrection();
       return;
     }
-    if (completedCount === leaves.length && leaves.length) {
+    if (resolvedCount === leaves.length && leaves.length) {
       void openGenerationDialog();
       return;
     }
@@ -756,12 +791,14 @@ function ContentEditPage({
     config,
     regenerate,
     contentGenerationAction,
+    simulatePartialFailures = false,
   }: {
     savedGenerationOptions: ContentGenerationOptions;
     nextImageModelAvailable: boolean;
     config?: ClientConfig | null;
     regenerate: boolean;
     contentGenerationAction: ContentGenerationAction;
+    simulatePartialFailures?: boolean;
   }) => {
     if (!outlineData?.outline?.length) {
       showToast('请先生成目录', 'info');
@@ -776,6 +813,7 @@ function ContentEditPage({
 
     await window.yibiao?.tasks.startContentGeneration({
       regenerate,
+      simulatePartialFailures,
       generationOptions: {
         useAiImages: nextImageModelAvailable && savedGenerationOptions.useAiImages,
         maxAiImages: savedGenerationOptions.maxAiImages,
@@ -802,10 +840,12 @@ function ContentEditPage({
       original_plan_coverage_repair_mode: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit ? savedGenerationOptions.originalPlanCoverageRepairMode : undefined,
     }, config);
     setGenerationDialogOpen(false);
-    showToast(regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
+    showToast(simulatePartialFailures
+      ? '随机失败模式正文生成任务已在后台启动'
+      : regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
   };
 
-  const startGeneration = async () => {
+  const startGeneration = async (simulatePartialFailures = false) => {
     if (!outlineData?.outline?.length) {
       showToast('请先生成目录', 'info');
       return;
@@ -817,13 +857,13 @@ function ContentEditPage({
       const nextImageModelAvailable = nextImageModelStatus === 'available';
       setImageModelStatus(nextImageModelStatus);
       const savedGenerationOptions = await saveDraftGenerationOptions(false, nextImageModelAvailable);
-      const regenerate = leaves.length > 0 && completedCount === leaves.length;
+      const regenerate = leaves.length > 0 && resolvedCount === leaves.length;
       const contentGenerationAction: ContentGenerationAction = regenerate
           ? 'regenerate'
-          : completedCount > 0
+          : resolvedCount > 0
             ? 'continue'
             : 'start';
-      await launchContentGeneration({ savedGenerationOptions, nextImageModelAvailable, config, regenerate, contentGenerationAction });
+      await launchContentGeneration({ savedGenerationOptions, nextImageModelAvailable, config, regenerate, contentGenerationAction, simulatePartialFailures });
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动正文生成任务失败', 'error');
     }
@@ -1009,6 +1049,7 @@ function ContentEditPage({
         <div className="content-generation-stats" aria-label="正文生成统计">
           <span><strong>{leaves.length}</strong> 个 AI 小节</span>
           <span><strong>{completedCount}</strong> 已生成</span>
+          {ignoredCount > 0 && <span><strong>{ignoredCount}</strong> 已忽略</span>}
           <span title={`模板填写 ${modeCounts['template-fill']}，点对点应答表 ${modeCounts['point-to-point']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
           <span><strong>{totalWords}</strong> 字</span>
         </div>
@@ -1026,9 +1067,22 @@ function ContentEditPage({
               <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
             </svg>
           </button>
-          <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={pausing || !leaves.length}>
-            {generationButtonLabel}
-          </button>
+          {awaitingContentDecision ? (
+            <>
+              {unresolvedCount > 0 && (
+                <button type="button" className="primary-action" onClick={() => void retryFailedSections()} disabled={taskBlocksGeneration}>
+                  重试失败小节
+                </button>
+              )}
+              <button type="button" className="secondary-action" onClick={() => setContinuePostProcessingDialogOpen(true)} disabled={taskBlocksGeneration}>
+                继续后续流程
+              </button>
+            </>
+          ) : (
+            <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={pausing || !leaves.length}>
+              {generationButtonLabel}
+            </button>
+          )}
         </div>
       </section>
 
@@ -1127,8 +1181,12 @@ function ContentEditPage({
             <div className="markdown-empty-state content-generation-empty">
               <strong>{getLeafStatus(selectedItem, sections) === 'error'
                 ? sections[selectedItem.id]?.error || '正文生成失败'
-                : selectedItem.content_mode === 'ai-generate' ? '正文待生成' : '该小节等待后续处理'}</strong>
-              <p>{selectedItem.content_mode && selectedItem.content_mode !== 'ai-generate'
+                : getLeafStatus(selectedItem, sections) === 'ignored'
+                  ? '该小节已按用户选择忽略'
+                  : selectedItem.content_mode === 'ai-generate' ? '正文待生成' : '该小节等待后续处理'}</strong>
+              <p>{getLeafStatus(selectedItem, sections) === 'ignored'
+                ? '该小节不参与一致性检查、字数调整和图片编排；如需补充，可直接编辑正文。'
+                : selectedItem.content_mode && selectedItem.content_mode !== 'ai-generate'
                 ? `${pendingModeDescriptions[selectedItem.content_mode]}${selectedItem.content_mode === 'other' && selectedItem.content_mode_note ? ` ${selectedItem.content_mode_note}` : ''}`
                 : taskInFlight ? '如果该小节正在生成，模型返回内容后会实时显示在这里。' : paused ? '任务已暂停，可先导出当前内容或点击继续。' : '点击生成正文后，后台会按 AI 生成小节生成内容。'}</p>
             </div>
@@ -1140,6 +1198,39 @@ function ContentEditPage({
           )}
         </article>
       </section>
+
+      <Dialog.Root open={continuePostProcessingDialogOpen} onOpenChange={setContinuePostProcessingDialogOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="content-regenerate-card content-incomplete-decision-card">
+            <div className="content-regenerate-card-head">
+              <Dialog.Title>忽略未完成小节并继续？</Dialog.Title>
+              <Dialog.Description asChild>
+                <div className="content-incomplete-decision-copy">
+                  <p className="content-incomplete-decision-summary">
+                    仍有 <strong>{unresolvedCount} 个</strong>正文小节失败或未完成。
+                  </p>
+                  <div className="content-incomplete-decision-impact">
+                    <strong>确认继续后：</strong>
+                    <ul>
+                      <li>这些小节将标记为“已忽略”</li>
+                      <li>不再参与一致性检查、字数调整和图片编排</li>
+                      <li>全文最少字数可能会分配到其余成功小节</li>
+                    </ul>
+                  </div>
+                  <p className="content-incomplete-decision-warning">
+                    完成后将不再提供失败小节重试入口。
+                  </p>
+                </div>
+              </Dialog.Description>
+            </div>
+            <div className="content-regenerate-actions">
+              <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
+              <button type="button" className="primary-action" onClick={() => void continuePostProcessing()}>确认并继续</button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <Dialog.Root
         open={generationDialogOpen}
@@ -1371,7 +1462,12 @@ function ContentEditPage({
               <button type="button" className="secondary-action" onClick={saveGenerationOptions} disabled={taskInFlight || paused}>
                 保存配置
               </button>
-              {!paused && <button type="button" className="primary-action" onClick={startGeneration} disabled={taskBlocksGeneration}>开始生成</button>}
+              {!paused && developerMode && (
+                <button type="button" className="secondary-action" onClick={() => void startGeneration(true)} disabled={taskBlocksGeneration || leaves.length < 2}>
+                  以随机失败模式开始
+                </button>
+              )}
+              {!paused && <button type="button" className="primary-action" onClick={() => void startGeneration(false)} disabled={taskBlocksGeneration}>开始生成</button>}
             </div>
           </Dialog.Content>
         </Dialog.Portal>
