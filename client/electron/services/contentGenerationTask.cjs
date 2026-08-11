@@ -2901,7 +2901,7 @@ function withSection(sections, item, partial) {
   };
 }
 
-async function runContentGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask: updateManagedTask, payload, taskControl, previousState }) {
+async function runContentGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask: updateManagedTask, checkpointTask: checkpointManagedTask, payload, taskControl, previousState }) {
   const resume = Boolean(payload.resume);
   const storedPlan = resume ? (previousState || {}) : (workspaceStore.loadTechnicalPlan() || {});
   const wordControl = normalizeOutlineWordControlSnapshot(storedPlan.outlineWordControlSnapshot);
@@ -3216,18 +3216,26 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   let lastTaskProgress = resume ? Math.max(0, Number(storedPlan.contentGenerationTask?.progress) || 0) : 0;
 
   // 所有正文任务更新都在这里补充累计进度和当前阶段明细。
-  function updateTask(partial = {}, workspaceState, eventPatch, options) {
+  function buildTaskUpdate(partial = {}) {
     const latestLog = (partial.logs || logs || []).at(-1) || '';
     const progressDetail = buildContentPhaseProgress(contentStats, latestLog, progressMode);
     const calculatedProgress = buildContentOverallProgress(progressMode, progressDetail, partial.status);
     lastTaskProgress = partial.status === 'success'
       ? 100
       : Math.max(lastTaskProgress, calculatedProgress);
-    return updateManagedTask({
+    return {
       ...partial,
       progress: lastTaskProgress,
       progress_detail: progressDetail,
-    }, workspaceState, eventPatch, options);
+    };
+  }
+
+  function updateTask(partial = {}, workspaceState, eventPatch, options) {
+    return updateManagedTask(buildTaskUpdate(partial), workspaceState, eventPatch, options);
+  }
+
+  function checkpointTask(partial = {}, workspacePartial, eventPatch) {
+    return checkpointManagedTask(buildTaskUpdate(partial), workspacePartial, eventPatch);
   }
 
   const developerLogger = createContentDeveloperLogger(aiService, {
@@ -3506,14 +3514,12 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   function persistPausedContentGeneration(message = '正文生成已暂停，可导出当前已完成内容，稍后继续。') {
     logs = [...logs, message];
     const runtime = syncRuntime();
-    const saved = workspaceStore.updateTechnicalPlan({
+    checkpointTask({ status: 'paused', progress: progressFor(leaves, sections), logs, stats: statsSnapshot(), pause_requested: false }, {
       outlineData,
       contentGenerationSections: sections,
       contentGenerationPlans: storedContentPlans,
       contentGenerationRuntime: runtime,
-      contentGenerationTask: updateTask({ status: 'paused', progress: progressFor(leaves, sections), logs, stats: statsSnapshot(), pause_requested: false }),
     });
-    updateTask({ status: 'paused', progress: progressFor(leaves, sections), logs, stats: statsSnapshot(), pause_requested: false }, saved);
   }
 
   // 所有正文请求结束后存在失败时，保存等待用户重试或忽略的稳定状态。
@@ -3533,14 +3539,12 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       stats: statsSnapshot(),
       pause_requested: false,
     };
-    const saved = workspaceStore.updateTechnicalPlan({
+    checkpointTask(taskPatch, {
       outlineData,
       contentGenerationSections: sections,
       contentGenerationPlans: storedContentPlans,
       contentGenerationRuntime: runtime,
-      contentGenerationTask: updateTask(taskPatch),
     });
-    updateTask(taskPatch, saved);
   }
 
   function pauseIfRequested(message = '正文生成已暂停，可导出当前已完成内容，稍后继续。') {
@@ -3647,16 +3651,14 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
   const initialRuntime = syncRuntime();
   const initialIllustrationPatch = runOnlyIllustrationGeneration || targetItemId ? {} : { contentIllustrationPlan: undefined };
-  let technicalPlan = workspaceStore.updateTechnicalPlan({
+  let technicalPlan = checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
     outlineData,
     contentGenerationSections: sections,
     contentGenerationPlans: storedContentPlans,
     ...initialIllustrationPatch,
     contentGenerationRuntime: initialRuntime,
     referenceKnowledgeDocumentIds,
-    contentGenerationTask: updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }),
-  });
-  updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, technicalPlan, {
+  }, {
     contentRuntime: initialRuntime,
     technicalPlanPatch: {
       outlineData,
@@ -3666,7 +3668,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       contentGenerationRuntime: initialRuntime,
       referenceKnowledgeDocumentIds,
     },
-  });
+  }).workspaceState;
 
   if (!tasksToRun.length && !runOnlyIllustrationStage) {
     logs = [...logs, retryContentCorrection
@@ -6670,14 +6672,12 @@ workspace 文件说明：
       stats: statsSnapshot(),
       touched_item_ids: [...touchedItemIds],
     });
-    technicalPlan = workspaceStore.updateTechnicalPlan({
+    technicalPlan = checkpointTask({ status: finalStatus, progress: finalProgress, logs, stats: statsSnapshot(), pause_requested: false }, {
       outlineData,
       contentGenerationSections: sections,
       contentGenerationPlans: storedContentPlans,
       contentGenerationRuntime: undefined,
-      contentGenerationTask: updateTask({ status: finalStatus, progress: finalProgress, logs, stats: statsSnapshot(), pause_requested: false }),
-    });
-    updateTask({ status: finalStatus, progress: finalProgress, logs, stats: statsSnapshot(), pause_requested: false }, technicalPlan);
+    }).workspaceState;
   } catch (error) {
     if (isAiQueueScopePausedError(error)) {
       persistPausedContentGeneration('正文生成已暂停，未发起的 AI 请求已从队列丢弃，可导出当前已完成内容，稍后继续。');

@@ -770,14 +770,13 @@ async function finalizeGlobalFacts(aiService, context, log) {
   });
 }
 
-async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseService, updateTask }) {
+async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseService, checkpointTask }) {
   let logs = ['开始生成全局事实变量。'];
   let currentProgress = 5;
   function log(message, progress = currentProgress) {
     currentProgress = Math.max(currentProgress, Math.min(progress, 99));
     logs = [...logs, message];
-    const technicalPlan = workspaceStore.updateTechnicalPlan({ globalFactsTask: updateTask({ status: 'running', progress: currentProgress, logs }) });
-    updateTask({ status: 'running', progress: currentProgress, logs }, technicalPlan);
+    checkpointTask({ status: 'running', progress: currentProgress, logs });
   }
 
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
@@ -804,15 +803,13 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
     throw new Error('请先生成目录，再生成全局事实');
   }
 
-  let technicalPlan = workspaceStore.updateTechnicalPlan({
+  checkpointTask({ status: 'running', progress: 5, logs }, {
     globalFacts: [],
     contentGenerationTask: undefined,
     contentGenerationSections: {},
     contentGenerationPlans: {},
     contentGenerationRuntime: undefined,
-    globalFactsTask: updateTask({ status: 'running', progress: 5, logs }),
   });
-  updateTask({ status: 'running', progress: 5, logs }, technicalPlan);
 
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
   const bidAnalysisFactsText = formatBidAnalysisFactsForPrompt(storedPlan);
@@ -842,14 +839,12 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
   log('第一步：正在按招标文件分段提取全局事实变量。', 22);
   const tenderFacts = await runTenderGlobalFactsExtraction(aiService, baseContext, tenderMarkdown, log);
   let groups = tenderFacts.groups;
-  technicalPlan = workspaceStore.updateTechnicalPlan({ globalFacts: groups });
-  updateTask({ status: 'running', progress: 48, logs }, technicalPlan);
+  checkpointTask({ status: 'running', progress: 48, logs }, { globalFacts: groups });
 
   const knowledgePatch = await runKnowledgeGlobalFactPatches(aiService, { ...baseContext, groups }, knowledgeItems, log);
   if (knowledgePatch.patches?.length) {
     groups = mergeGlobalFactPatches(groups, knowledgePatch.patches);
-    technicalPlan = workspaceStore.updateTechnicalPlan({ globalFacts: groups });
-    updateTask({ status: 'running', progress: 66, logs }, technicalPlan);
+    checkpointTask({ status: 'running', progress: 66, logs }, { globalFacts: groups });
     log(`知识库全局事实补充已应用：${knowledgePatch.patches.length} 条。`, 66);
   } else if (knowledgeItems.length) {
     log('知识库未返回需要补充的全局事实变量。', 66);
@@ -859,8 +854,7 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
     const originalPatch = await runOriginalPlanGlobalFactPatches(aiService, { ...baseContext, groups }, originalPlanMarkdown, log);
     if (originalPatch.patches?.length) {
       groups = mergeGlobalFactPatches(groups, originalPatch.patches);
-      technicalPlan = workspaceStore.updateTechnicalPlan({ globalFacts: groups });
-      updateTask({ status: 'running', progress: 86, logs }, technicalPlan);
+      checkpointTask({ status: 'running', progress: 86, logs }, { globalFacts: groups });
       log(`原方案全局事实补充已应用：${originalPatch.patches.length} 条。`, 86);
     } else {
       log('原方案未返回需要补充的全局事实变量。', 86);
@@ -870,11 +864,10 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
   const finalFacts = await finalizeGlobalFacts(aiService, { ...baseContext, groups }, log);
   groups = finalFacts.groups;
   log(`全局事实变量合并完成：${groups.length} 个大项。`, 92);
-  technicalPlan = workspaceStore.updateTechnicalPlan({
-    globalFacts: groups,
-    globalFactsTask: updateTask({ status: 'success', progress: 100, logs: [...logs, '全局事实变量生成完成。'] }),
-  });
-  updateTask({ status: 'success', progress: 100, logs: [...logs, '全局事实变量生成完成。'] }, technicalPlan);
+  checkpointTask(
+    { status: 'success', progress: 100, logs: [...logs, '全局事实变量生成完成。'] },
+    { globalFacts: groups },
+  );
 }
 
 module.exports = {

@@ -550,10 +550,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         const pausedLogs = currentTask.logs?.length
           ? currentTask.logs
           : ['已请求暂停，正在等待当前 AI 请求完成。'];
-        const pausingTask = updateTask({ status: 'pausing', pause_requested: true, logs: pausedLogs });
-        const state = updateWorkspaceState(definition, { [taskField]: pausingTask });
-        emit(pausingTask, buildSnapshot(definition, state, pausingTask));
-        return pausingTask;
+        return checkpointTask({ status: 'pausing', pause_requested: true, logs: pausedLogs }).task;
       },
       waitForOutlineSelection() {
         if (abortController.signal.aborted) {
@@ -623,6 +620,17 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       return currentTask;
     };
 
+    // 将业务状态和任务状态作为同一个 checkpoint 落库，并在提交后统一推送事件。
+    const checkpointTask = (taskPartial, workspacePartial = {}, eventPatch) => {
+      const nextTask = updateTask(taskPartial);
+      const persistedState = updateWorkspaceState(definition, {
+        ...(workspacePartial || {}),
+        [taskField]: nextTask,
+      });
+      emit(nextTask, buildSnapshot(definition, persistedState, nextTask, eventPatch));
+      return { task: nextTask, workspaceState: persistedState };
+    };
+
     // 为一级目录默认选择注册自动确认，并把截止时间同步到任务状态。
     taskControl.registerOutlineSelectionAutoConfirmation = () => {
       if (type !== 'outline-generation' || taskControl.outlineSelectionAutoConfirmationId) return;
@@ -645,14 +653,12 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
           const nextSelection = { ...currentSelection };
           if (autoAnswerAt) nextSelection.auto_answer_at = autoAnswerAt;
           else delete nextSelection.auto_answer_at;
-          currentTask = updateTask({
+          currentTask = checkpointTask({
             stats: {
               ...(currentTask.stats || {}),
               outline_selection: nextSelection,
             },
-          });
-          const nextState = updateWorkspaceState(definition, { [taskField]: currentTask });
-          emit(currentTask, buildSnapshot(definition, nextState, currentTask));
+          }).task;
         },
       });
     };
@@ -667,7 +673,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       const selectedIds = Array.isArray(request.selectedIds) ? request.selectedIds : [];
       autoConfirmationService.unregister(taskControl.outlineSelectionAutoConfirmationId);
       taskControl.outlineSelectionAutoConfirmationId = null;
-      currentTask = updateTask({
+      const checkpoint = checkpointTask({
         stats: {
           ...(currentTask.stats || {}),
           outline_selection: {
@@ -677,12 +683,11 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
           },
         },
       });
-      const confirmedState = updateWorkspaceState(definition, { [taskField]: currentTask });
-      emit(currentTask, buildSnapshot(definition, confirmedState, currentTask));
+      currentTask = checkpoint.task;
       taskControl.outlineSelectionWaiter = null;
       taskControl.outlineSelectionResult = { items, selectedIds };
       waiter.resolve(taskControl.outlineSelectionResult);
-      return confirmedState;
+      return checkpoint.workspaceState;
     };
 
     // 用户修改一级目录草稿后停止当前确认项的自动提交。
@@ -713,10 +718,8 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       () => createAgentUserTaskContext(type, definition, payload, currentTask),
       { queueScopeId },
     );
-    runner({ aiService: runnerAiService, agentService: runnerAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
-      const failedTask = updateTask({ status: 'error', error: error.message || '任务执行失败' });
-      const nextState = updateWorkspaceState(definition, { [taskField]: failedTask });
-      emit(failedTask, buildSnapshot(definition, nextState, failedTask));
+    runner({ aiService: runnerAiService, agentService: runnerAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, checkpointTask, payload, taskControl, previousState }).catch((error) => {
+      checkpointTask({ status: 'error', error: error.message || '任务执行失败' });
     }).finally(() => {
       taskControl.dispose();
       if (aiService?.resumeQueueScope) {

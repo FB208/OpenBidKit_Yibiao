@@ -619,7 +619,7 @@ function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRoot
 }
 
 // 运行 V2 目录业务任务；完整 Agent 执行之间通过程序确认衔接并复用同一持久 Session。
-async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowledgeBaseService, updateTask, taskControl, payload }) {
+async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowledgeBaseService, checkpointTask, taskControl, payload }) {
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
   const restoringOutlineSelection = payload?.agent_resume?.phase === 'outline-selection';
   const hasOriginalPlan = Boolean(storedPlan.originalPlanFile);
@@ -658,9 +658,8 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     ? [...(Array.isArray(storedPlan.outlineGenerationTask?.logs) ? storedPlan.outlineGenerationTask.logs : []), '已恢复一级目录确认状态']
     : ['开始生成一级目录'];
   let currentProgress = restoringOutlineSelection ? Number(storedPlan.outlineGenerationTask?.progress || 30) : 10;
-  let task = updateTask({ status: 'running', progress: currentProgress, logs });
-  let technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
-  updateTask(task, technicalPlan);
+  const initialCheckpoint = checkpointTask({ status: 'running', progress: currentProgress, logs });
+  let task = initialCheckpoint.task;
   let lockedRoots = [];
   let technicalBranches = [];
   let scoreDirectoryPlan = null;
@@ -674,7 +673,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   let outlineReview = null;
 
   function updateAgentState(partial = {}) {
-    task = updateTask({
+    const checkpoint = checkpointTask({
       stats: {
         ...(task.stats || {}),
         agent: {
@@ -691,22 +690,20 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
         },
       },
     });
-    technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
-    updateTask(task, technicalPlan);
+    task = checkpoint.task;
   }
 
   function publish(message, progress, statsPatch = {}) {
     const text = String(message || '').trim();
     if (text && text !== logs[logs.length - 1]) logs = [...logs, text];
     currentProgress = Math.max(currentProgress, progress || currentProgress);
-    task = updateTask({
+    const checkpoint = checkpointTask({
       status: 'running',
       progress: currentProgress,
       logs,
       stats: { ...(task.stats || {}), ...statsPatch },
     });
-    technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
-    updateTask(task, technicalPlan);
+    task = checkpoint.task;
   }
 
   function publishAgentActivity(event = {}) {
@@ -727,7 +724,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   function applyConfirmedSelection(confirmed) {
     const selectedIdSet = new Set(confirmed.selectedIds);
     lockedRoots = renumberOutline(confirmed.items.filter((item) => selectedIdSet.has(item.id)));
-    task = updateTask({
+    const checkpoint = checkpointTask({
       stats: {
         ...(task.stats || {}),
         outline_selection: {
@@ -737,8 +734,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
         },
       },
     });
-    technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
-    updateTask(task, technicalPlan);
+    task = checkpoint.task;
   }
 
   function continueWithChildrenGeneration(allocations) {
@@ -984,7 +980,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   }
   const persistedFinalOutline = stripOutlineInternalFields(finalOutline);
   const finalLogs = [...logs, '目录生成与审核完成', ...(leafWarning ? [leafWarning] : [])];
-  const finalTask = updateTask({
+  const finalTaskPatch = {
     status: 'success',
     progress: 100,
     error: undefined,
@@ -1000,18 +996,17 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
         ...(leafWarning ? { word_adjustment_warning: leafWarning, word_adjustment_warning_kind: 'leaf-count' } : {}),
       },
     },
-  });
-  technicalPlan = workspaceStore.updateTechnicalPlan({
+  };
+  const finalCheckpoint = checkpointTask(finalTaskPatch, {
     outlineData: { ...persistedFinalOutline, project_overview: storedPlan.projectOverview || '' },
     outlineWordControlSnapshot: wordControlOptions,
-    outlineGenerationTask: finalTask,
     contentGenerationTask: undefined,
     contentGenerationSections: {},
     contentGenerationPlans: {},
     contentGenerationRuntime: undefined,
     contentIllustrationPlan: undefined,
   });
-  updateTask(finalTask, technicalPlan);
+  task = finalCheckpoint.task;
   agentService.updatePersistentTask(OUTLINE_AGENT_TASK_KEY, {
     status: 'success',
     phase: 'completed',

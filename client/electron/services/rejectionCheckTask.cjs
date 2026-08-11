@@ -1494,18 +1494,14 @@ async function runLogicCheck(aiService, input, onProgress) {
   return normalizeLogicCheckFindings(payload, input.bidDocuments);
 }
 
-function updateExtractionState(workspaceStore, updateTask, taskPartial, extractionPartial) {
+function updateExtractionState(workspaceStore, checkpointTask, taskPartial, extractionPartial) {
   const prev = workspaceStore.loadRejectionCheck() || {};
-  const task = updateTask(taskPartial);
-  const rejectionCheck = workspaceStore.updateRejectionCheck({
+  return checkpointTask(taskPartial, {
     invalidBidAndRejectionItems: { ...(prev.invalidBidAndRejectionItems || {}), ...extractionPartial },
-    extractionTask: task,
-  });
-  updateTask(taskPartial, rejectionCheck);
-  return rejectionCheck;
+  }).workspaceState;
 }
 
-async function runRejectionItemsExtractionTask({ aiService, workspaceStore, updateTask, payload }) {
+async function runRejectionItemsExtractionTask({ aiService, workspaceStore, checkpointTask, payload }) {
   const state = workspaceStore.loadRejectionCheck ? workspaceStore.loadRejectionCheck() : {};
   const tenderDocument = state.tenderDocument || null;
   if (typeof workspaceStore.readDocumentMarkdown !== 'function' || typeof workspaceStore.createDocumentSignature !== 'function') {
@@ -1523,7 +1519,7 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, upda
   });
 
   const logs = ['开始解析无效与废标项。'];
-  updateExtractionState(workspaceStore, updateTask, { status: 'running', progress: 5, logs }, {
+  updateExtractionState(workspaceStore, checkpointTask, { status: 'running', progress: 5, logs }, {
     status: 'running',
     content: '',
     source: 'ai',
@@ -1544,7 +1540,7 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, upda
       tender_signature: tenderSignature,
       error: compactLogError(error),
     });
-    updateExtractionState(workspaceStore, updateTask, {
+    updateExtractionState(workspaceStore, checkpointTask, {
       status: 'error',
       progress: 100,
       logs: [`无效与废标项解析失败：${message}`],
@@ -1568,7 +1564,7 @@ async function runRejectionItemsExtractionTask({ aiService, workspaceStore, upda
     output_metrics: textMetrics(finalContent),
     error: success ? undefined : '模型未返回解析内容',
   });
-  updateExtractionState(workspaceStore, updateTask, {
+  updateExtractionState(workspaceStore, checkpointTask, {
     status: success ? 'success' : 'error',
     progress: 100,
     logs: success ? ['无效与废标项解析完成。'] : ['无效与废标项解析失败：模型未返回解析内容。'],
@@ -1587,14 +1583,11 @@ function createRunningResult(inputSignature, progressMessage) {
   return { status: 'running', findings: [], inputSignature, progressMessage, updatedAt: now() };
 }
 
-function updateCheckWorkspace(workspaceStore, updateTask, taskPartial, partial) {
-  const task = updateTask(taskPartial);
-  const rejectionCheck = workspaceStore.updateRejectionCheck({ ...partial, checkTask: task });
-  updateTask(taskPartial, rejectionCheck);
-  return rejectionCheck;
+function updateCheckWorkspace(checkpointTask, taskPartial, partial) {
+  return checkpointTask(taskPartial, partial).workspaceState;
 }
 
-async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, payload }) {
+async function runRejectionCheckTask({ aiService, workspaceStore, checkpointTask, payload }) {
   const state = workspaceStore.loadRejectionCheck ? workspaceStore.loadRejectionCheck() : {};
   const options = state.checkOptions || {};
   const runOptions = payload?.runOptions || options;
@@ -1644,11 +1637,11 @@ async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, pa
   if (runOptions.rejectionCheck) initialPartial.rejectionCheckResult = createRunningResult(rejectionInputSignature, '第一轮：正在分析检查范围。');
   if (runOptions.typoCheck) initialPartial.typoCheckResult = createRunningResult(bidSignature, '正在识别错别字候选。');
   if (runOptions.logicCheck) initialPartial.logicCheckResult = createRunningResult(bidSignature, '正在检查逻辑谬误。');
-  updateCheckWorkspace(workspaceStore, updateTask, { status: 'running', progress: 5, logs }, initialPartial);
+  updateCheckWorkspace(checkpointTask, { status: 'running', progress: 5, logs }, initialPartial);
 
   function updateOverall(label, partial) {
     const progress = Math.min(95, Math.round(5 + (completed / enabledTasks.length) * 90));
-    updateCheckWorkspace(workspaceStore, updateTask, { status: 'running', progress, logs: [...logs, label] }, partial);
+    updateCheckWorkspace(checkpointTask, { status: 'running', progress, logs: [...logs, label] }, partial);
   }
 
   async function runOne(kind, label, runner, resultKey, inputSignature) {
@@ -1708,7 +1701,7 @@ async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, pa
 
   const results = await Promise.all(tasks);
   const failed = results.filter((item) => item.status === 'error');
-  updateCheckWorkspace(workspaceStore, updateTask, {
+  updateCheckWorkspace(checkpointTask, {
     status: failed.length ? 'error' : 'success',
     progress: 100,
     logs: failed.length ? [`检查完成，${failed.length} 个任务失败。`] : ['检查完成。'],
