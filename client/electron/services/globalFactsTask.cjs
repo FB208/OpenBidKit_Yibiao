@@ -770,13 +770,13 @@ async function finalizeGlobalFacts(aiService, context, log) {
   });
 }
 
-async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseService, checkpointTask }) {
+async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseService, updateTask, checkpointTask }) {
   let logs = ['开始生成全局事实变量。'];
   let currentProgress = 5;
   function log(message, progress = currentProgress) {
     currentProgress = Math.max(currentProgress, Math.min(progress, 99));
     logs = [...logs, message];
-    checkpointTask({ status: 'running', progress: currentProgress, logs });
+    updateTask({ status: 'running', progress: currentProgress, logs });
   }
 
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};

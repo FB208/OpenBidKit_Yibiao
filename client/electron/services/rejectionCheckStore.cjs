@@ -141,14 +141,14 @@ function getTechnicalPlanDiscardedBids(technicalPlan) {
   return task?.status === 'success' && task.content?.trim() ? stripTripleQuoteWrapper(task.content) : '';
 }
 
-function taskFromRow(row) {
+function taskFromRow(row, taskLogStore) {
   if (!row) return undefined;
   return {
     task_id: row.task_id,
     type: row.type,
     status: normalizeStatus(row.status, ['running', 'success', 'error'], 'running'),
     progress: Number(row.progress || 0),
-    logs: safeJsonParse(row.logs_json, []),
+    logs: taskLogStore.list('rejection-check', row.type, row.task_id),
     started_at: row.started_at,
     updated_at: row.updated_at,
     error: row.error || undefined,
@@ -156,7 +156,7 @@ function taskFromRow(row) {
   };
 }
 
-function createRejectionCheckStore({ app, db, fileService, technicalPlanStore }) {
+function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, taskLogStore }) {
   const rejectionCheckDir = getRejectionCheckDir(app);
 
   function ensureMetaRow() {
@@ -364,13 +364,12 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
     }
     const timestamp = now();
     db.prepare(`
-      INSERT INTO rejection_check_tasks (type, task_id, status, progress, logs_json, stats_json, error, started_at, updated_at)
-      VALUES (@type, @task_id, @status, @progress, @logs_json, @stats_json, @error, @started_at, @updated_at)
+      INSERT INTO rejection_check_tasks (type, task_id, status, progress, stats_json, error, started_at, updated_at)
+      VALUES (@type, @task_id, @status, @progress, @stats_json, @error, @started_at, @updated_at)
       ON CONFLICT(type) DO UPDATE SET
         task_id = excluded.task_id,
         status = excluded.status,
         progress = excluded.progress,
-        logs_json = excluded.logs_json,
         stats_json = excluded.stats_json,
         error = excluded.error,
         started_at = excluded.started_at,
@@ -380,19 +379,19 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore })
       task_id: String(task.task_id || ''),
       status: String(task.status || 'running'),
       progress: Math.max(0, Math.min(100, Math.round(Number(task.progress || 0)))),
-      logs_json: JSON.stringify(Array.isArray(task.logs) ? task.logs : []),
       stats_json: jsonOrNull(task.stats),
       error: task.error ? String(task.error) : null,
       started_at: task.started_at || timestamp,
       updated_at: task.updated_at || timestamp,
     });
+    taskLogStore.sync('rejection-check', type, String(task.task_id || ''), task.logs, task.updated_at || timestamp);
   }
 
   function loadTasks() {
     const tasks = {};
     for (const row of db.prepare('SELECT * FROM rejection_check_tasks').all()) {
       const field = taskTypeFields[row.type];
-      if (field) tasks[field] = taskFromRow(row);
+      if (field) tasks[field] = taskFromRow(row, taskLogStore);
     }
     return tasks;
   }

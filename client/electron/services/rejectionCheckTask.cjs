@@ -1584,11 +1584,11 @@ function createRunningResult(inputSignature, progressMessage) {
   return { status: 'running', inputSignature, progressMessage, error: undefined, updatedAt: now() };
 }
 
-function updateCheckWorkspace(checkpointTask, taskPartial, partial) {
-  checkpointTask(taskPartial, partial);
+function updateCheckWorkspace(updateTask, checkpointTask, taskPartial, partial, persist = false) {
+  (persist ? checkpointTask : updateTask)(taskPartial, partial);
 }
 
-async function runRejectionCheckTask({ aiService, workspaceStore, checkpointTask, payload }) {
+async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, checkpointTask, payload }) {
   const state = workspaceStore.loadRejectionCheck ? workspaceStore.loadRejectionCheck() : {};
   const options = state.checkOptions || {};
   const runOptions = payload?.runOptions || options;
@@ -1638,11 +1638,11 @@ async function runRejectionCheckTask({ aiService, workspaceStore, checkpointTask
   if (runOptions.rejectionCheck) initialPartial.rejectionCheckResult = { ...createRunningResult(rejectionInputSignature, '第一轮：正在分析检查范围。'), findings: [], activeFindingId: undefined };
   if (runOptions.typoCheck) initialPartial.typoCheckResult = { ...createRunningResult(bidSignature, '正在识别错别字候选。'), findings: [], activeFindingId: undefined };
   if (runOptions.logicCheck) initialPartial.logicCheckResult = { ...createRunningResult(bidSignature, '正在检查逻辑谬误。'), findings: [], activeFindingId: undefined };
-  updateCheckWorkspace(checkpointTask, { status: 'running', progress: 5, logs }, initialPartial);
+  updateCheckWorkspace(updateTask, checkpointTask, { status: 'running', progress: 5, logs }, initialPartial, true);
 
-  function updateOverall(label, partial) {
+  function updateOverall(label, partial, persist = false) {
     const progress = Math.min(95, Math.round(5 + (completed / enabledTasks.length) * 90));
-    updateCheckWorkspace(checkpointTask, { status: 'running', progress, logs: [...logs, label] }, partial);
+    updateCheckWorkspace(updateTask, checkpointTask, { status: 'running', progress, logs: [...logs, label] }, partial, persist);
   }
 
   async function runOne(kind, label, runner, resultKey, inputSignature) {
@@ -1671,7 +1671,7 @@ async function runRejectionCheckTask({ aiService, workspaceStore, checkpointTask
           progressMessage: findings.length ? `${label}发现 ${findings.length} 项` : `${label}未发现问题`,
           updatedAt: now(),
         },
-      });
+      }, true);
       return { kind, status: 'success' };
     } catch (error) {
       completed += 1;
@@ -1683,8 +1683,8 @@ async function runRejectionCheckTask({ aiService, workspaceStore, checkpointTask
         error: compactLogError(error),
       });
       updateOverall(`${label}失败：${message}`, {
-          [resultKey]: { status: 'error', findings: [], inputSignature, activeFindingId: undefined, error: message, progressMessage: message, updatedAt: now() },
-      });
+        [resultKey]: { status: 'error', findings: [], inputSignature, activeFindingId: undefined, error: message, progressMessage: message, updatedAt: now() },
+      }, true);
       return { kind, status: 'error', error: message };
     }
   }
@@ -1702,12 +1702,12 @@ async function runRejectionCheckTask({ aiService, workspaceStore, checkpointTask
 
   const results = await Promise.all(tasks);
   const failed = results.filter((item) => item.status === 'error');
-  updateCheckWorkspace(checkpointTask, {
+  updateCheckWorkspace(updateTask, checkpointTask, {
     status: failed.length ? 'error' : 'success',
     progress: 100,
     logs: failed.length ? [`检查完成，${failed.length} 个任务失败。`] : ['检查完成。'],
     error: failed.length ? `${failed.length} 个检查任务失败` : undefined,
-  }, {});
+  }, {}, true);
   developerLogger.write('rejection.check.completed', {
     status: failed.length ? 'error' : 'success',
     enabled_tasks: enabledTasks,

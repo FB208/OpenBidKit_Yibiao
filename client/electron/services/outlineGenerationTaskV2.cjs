@@ -619,7 +619,7 @@ function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRoot
 }
 
 // 运行 V2 目录业务任务；完整 Agent 执行之间通过程序确认衔接并复用同一持久 Session。
-async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowledgeBaseService, checkpointTask, taskControl, payload }) {
+async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowledgeBaseService, updateTask, checkpointTask, taskControl, payload }) {
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
   const restoringOutlineSelection = payload?.agent_resume?.phase === 'outline-selection';
   const hasOriginalPlan = Boolean(storedPlan.originalPlanFile);
@@ -697,13 +697,12 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     const text = String(message || '').trim();
     if (text && text !== logs[logs.length - 1]) logs = [...logs, text];
     currentProgress = Math.max(currentProgress, progress || currentProgress);
-    const checkpoint = checkpointTask({
+    task = updateTask({
       status: 'running',
       progress: currentProgress,
       logs,
       stats: { ...(task.stats || {}), ...statsPatch },
     });
-    task = checkpoint.task;
   }
 
   function publishAgentActivity(event = {}) {

@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 19;
+const schemaVersion = 20;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -47,7 +47,6 @@ function createInitialSchema(db) {
       outline_project_overview TEXT,
       content_generation_options_json TEXT,
       content_generation_runtime_json TEXT,
-      content_illustration_plan_json TEXT,
       selected_section_id TEXT,
       selected_section_title TEXT,
       selected_section_head_line TEXT,
@@ -60,7 +59,6 @@ function createInitialSchema(db) {
       task_id TEXT NOT NULL,
       status TEXT NOT NULL,
       progress INTEGER NOT NULL DEFAULT 0,
-      logs_json TEXT,
       stats_json TEXT,
       error TEXT,
       pause_requested INTEGER NOT NULL DEFAULT 0,
@@ -243,7 +241,6 @@ function addTechnicalPlanTenderFiles(db) {
 }
 
 function addTechnicalPlanIllustrationPlan(db) {
-  addColumnIfMissing(db, 'technical_plan_meta', 'content_illustration_plan_json', 'TEXT');
   removeLegacyTechnicalPlanIllustrationType(db);
 }
 
@@ -257,6 +254,97 @@ function addTechnicalPlanOutlineWordControl(db) {
 function addTechnicalPlanOutlineContentMode(db) {
   addColumnIfMissing(db, 'technical_plan_outline_nodes', 'content_mode', 'TEXT');
   addColumnIfMissing(db, 'technical_plan_outline_nodes', 'content_mode_note', 'TEXT');
+}
+
+function createTaskLogsAndIllustrationItemsSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_domain TEXT NOT NULL,
+      task_type TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_task_logs_task
+    ON task_logs(task_domain, task_type, task_id, id DESC);
+
+    CREATE TRIGGER IF NOT EXISTS trg_technical_plan_task_logs_delete
+    AFTER DELETE ON technical_plan_tasks
+    BEGIN
+      DELETE FROM task_logs
+      WHERE task_domain = 'technical-plan' AND task_type = OLD.type AND task_id = OLD.task_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_rejection_check_task_logs_delete
+    AFTER DELETE ON rejection_check_tasks
+    BEGIN
+      DELETE FROM task_logs
+      WHERE task_domain = 'rejection-check' AND task_type = OLD.type AND task_id = OLD.task_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_duplicate_check_task_logs_delete
+    AFTER DELETE ON duplicate_check_tasks
+    BEGIN
+      DELETE FROM task_logs
+      WHERE task_domain = 'duplicate-check' AND task_type = OLD.type AND task_id = OLD.task_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_technical_plan_task_logs_replace
+    AFTER UPDATE OF task_id ON technical_plan_tasks
+    WHEN OLD.task_id <> NEW.task_id
+    BEGIN
+      DELETE FROM task_logs
+      WHERE task_domain = 'technical-plan' AND task_type = OLD.type AND task_id = OLD.task_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_rejection_check_task_logs_replace
+    AFTER UPDATE OF task_id ON rejection_check_tasks
+    WHEN OLD.task_id <> NEW.task_id
+    BEGIN
+      DELETE FROM task_logs
+      WHERE task_domain = 'rejection-check' AND task_type = OLD.type AND task_id = OLD.task_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_duplicate_check_task_logs_replace
+    AFTER UPDATE OF task_id ON duplicate_check_tasks
+    WHEN OLD.task_id <> NEW.task_id
+    BEGIN
+      DELETE FROM task_logs
+      WHERE task_domain = 'duplicate-check' AND task_type = OLD.type AND task_id = OLD.task_id;
+    END;
+
+    CREATE TABLE IF NOT EXISTS technical_plan_illustration_plans (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      plan_version INTEGER NOT NULL,
+      revision TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS technical_plan_illustration_items (
+      item_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      image_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      section_ids_json TEXT NOT NULL,
+      placement TEXT NOT NULL,
+      priority INTEGER NOT NULL DEFAULT 0,
+      generation_status TEXT,
+      generation_mode TEXT,
+      generation_code TEXT,
+      generation_source_path TEXT,
+      generation_asset_url TEXT,
+      generation_attempts INTEGER,
+      generation_error TEXT,
+      generation_updated_at TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_technical_plan_illustration_items_order
+    ON technical_plan_illustration_items(sort_order);
+  `);
 }
 
 function removeLegacyTechnicalPlanIllustrationType(db) {
@@ -317,7 +405,6 @@ function createDuplicateCheckSchema(db) {
       task_id TEXT NOT NULL,
       status TEXT NOT NULL,
       progress INTEGER NOT NULL DEFAULT 0,
-      logs_json TEXT,
       stats_json TEXT,
       error TEXT,
       payload_signature TEXT,
@@ -528,7 +615,6 @@ function createRejectionCheckSchema(db) {
       task_id TEXT NOT NULL,
       status TEXT NOT NULL,
       progress INTEGER NOT NULL DEFAULT 0,
-      logs_json TEXT,
       stats_json TEXT,
       error TEXT,
       started_at TEXT NOT NULL,
@@ -979,6 +1065,11 @@ const schemaHealthTableGroups = [
     tables: ['export_templates'],
     repair: createExportTemplatesSchema,
   },
+  {
+    version: 20,
+    tables: ['task_logs', 'technical_plan_illustration_plans', 'technical_plan_illustration_items'],
+    repair: createTaskLogsAndIllustrationItemsSchema,
+  },
 ];
 
 const schemaHealthColumnGroups = [
@@ -1112,13 +1203,6 @@ const schemaHealthColumnGroups = [
     table: 'technical_plan_meta',
     columns: {
       tender_files_json: 'TEXT',
-    },
-  },
-  {
-    version: 17,
-    table: 'technical_plan_meta',
-    columns: {
-      content_illustration_plan_json: 'TEXT',
     },
   },
   {
@@ -1295,6 +1379,11 @@ const migrations = [
     version: 19,
     description: '技术方案目录叶子新增内容处理模式',
     up: addTechnicalPlanOutlineContentMode,
+  },
+  {
+    version: 20,
+    description: '任务日志按行存储并拆分全文图片计划项目',
+    up: createTaskLogsAndIllustrationItemsSchema,
   },
 ];
 

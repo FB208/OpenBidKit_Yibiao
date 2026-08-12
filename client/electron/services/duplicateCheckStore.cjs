@@ -128,14 +128,14 @@ function fileFromRow(row) {
   };
 }
 
-function taskFromRow(row) {
+function taskFromRow(row, taskLogStore) {
   if (!row) return undefined;
   return {
     task_id: row.task_id,
     type: row.type,
     status: normalizeStatus(row.status, ['running', 'success', 'error'], 'running'),
     progress: Number(row.progress || 0),
-    logs: safeJsonParse(row.logs_json, []),
+    logs: taskLogStore.list('duplicate-check', row.type, row.task_id),
     started_at: row.started_at,
     updated_at: row.updated_at,
     error: row.error || undefined,
@@ -231,7 +231,7 @@ function createSectionStatsPatch(section, analysis) {
   return stats;
 }
 
-function createDuplicateCheckStore({ app, db }) {
+function createDuplicateCheckStore({ app, db, taskLogStore }) {
   const duplicateCheckDir = getDuplicateCheckDir(app);
   const contentDir = getDuplicateCheckContentDir(app);
 
@@ -320,13 +320,12 @@ function createDuplicateCheckStore({ app, db }) {
     }
     const timestamp = now();
     db.prepare(`
-      INSERT INTO duplicate_check_tasks (type, task_id, status, progress, logs_json, stats_json, error, payload_signature, started_at, updated_at)
-      VALUES (@type, @task_id, @status, @progress, @logs_json, @stats_json, @error, @payload_signature, @started_at, @updated_at)
+      INSERT INTO duplicate_check_tasks (type, task_id, status, progress, stats_json, error, payload_signature, started_at, updated_at)
+      VALUES (@type, @task_id, @status, @progress, @stats_json, @error, @payload_signature, @started_at, @updated_at)
       ON CONFLICT(type) DO UPDATE SET
         task_id = excluded.task_id,
         status = excluded.status,
         progress = excluded.progress,
-        logs_json = excluded.logs_json,
         stats_json = excluded.stats_json,
         error = excluded.error,
         payload_signature = excluded.payload_signature,
@@ -337,17 +336,17 @@ function createDuplicateCheckStore({ app, db }) {
       task_id: String(task.task_id || ''),
       status: String(task.status || 'running'),
       progress: Math.max(0, Math.min(100, Math.round(Number(task.progress || 0)))),
-      logs_json: JSON.stringify(Array.isArray(task.logs) ? task.logs : []),
       stats_json: jsonOrNull(task.stats),
       error: task.error ? String(task.error) : null,
       payload_signature: task.payload_signature ? String(task.payload_signature) : null,
       started_at: task.started_at || timestamp,
       updated_at: task.updated_at || timestamp,
     });
+    taskLogStore.sync('duplicate-check', type, String(task.task_id || ''), task.logs, task.updated_at || timestamp);
   }
 
   function loadTask(type) {
-    return taskFromRow(db.prepare('SELECT * FROM duplicate_check_tasks WHERE type = ?').get(type));
+    return taskFromRow(db.prepare('SELECT * FROM duplicate_check_tasks WHERE type = ?').get(type), taskLogStore);
   }
 
   function saveSection(section, analysis) {

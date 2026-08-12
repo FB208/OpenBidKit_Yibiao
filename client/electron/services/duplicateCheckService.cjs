@@ -2721,7 +2721,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
   }
 
   return {
-    async runAnalysisTask({ workspaceStore: taskWorkspaceStore, checkpointTask, payload }) {
+    async runAnalysisTask({ workspaceStore: taskWorkspaceStore, updateTask, checkpointTask, payload }) {
       const signature = createSignature(payload);
       const force = payload.force === true;
       const bidFiles = Array.isArray(payload.bidFiles) ? payload.bidFiles : [];
@@ -2788,7 +2788,16 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
           latestLog = message;
           partial.logs = [message];
         }
-        checkpointTask(partial, { [field]: analysisPartial });
+        const detailFields = field === 'metadataAnalysis'
+          ? ['contentFiles', 'files']
+          : field === 'outlineAnalysis'
+            ? ['files', 'duplicateGroups', 'pairwiseSimilarities']
+            : field === 'contentAnalysis'
+              ? ['duplicateSentences']
+              : ['files', 'duplicateImages'];
+        const hasResultChange = detailFields.some((key) => Object.prototype.hasOwnProperty.call(analysisPartial, key));
+        const hasTerminalTransition = ['success', 'error'].includes(analysisPartial.status);
+        (hasResultChange || hasTerminalTransition ? checkpointTask : updateTask)(partial, { [field]: analysisPartial });
       };
 
       const finalStatus = await run(signature, payload, notifyTask, developerLogger);

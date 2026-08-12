@@ -117,7 +117,9 @@ function createAiRequestQueue(options = {}) {
       const result = await job.runner({ attempt: job.attempts, maxAttempts: job.maxAttempts });
       settleJob(job, 'resolve', result);
     } catch (error) {
-      if (isRetryableAiRequestError(error) && job.attempts < job.maxAttempts) {
+      if (job.signal?.aborted) {
+        settleJob(job, 'reject', job.signal.reason || error);
+      } else if (isRetryableAiRequestError(error) && job.attempts < job.maxAttempts) {
         job.attempts += 1;
         scheduleRetry(job);
       } else {

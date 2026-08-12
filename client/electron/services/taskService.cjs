@@ -6,6 +6,7 @@ const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
 const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
 const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
+const { normalizeLogs } = require('./taskLogStore.cjs');
 
 const taskDefinitions = {
   'bid-section-extraction': {
@@ -596,7 +597,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     };
     activeTaskControls.set(type, taskControl);
 
-    const updateTask = (partial, workspaceState, eventPatch, options = {}) => {
+    const applyTaskPatch = (partial) => {
       const nextStatus = currentTask.status === 'pausing' && partial.status === 'running'
         ? 'pausing'
         : partial.status || currentTask.status;
@@ -605,22 +606,26 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         ...partial,
         status: nextStatus,
         pause_requested: partial.pause_requested === false ? false : taskControl.pauseRequested || partial.pause_requested,
-        logs: partial.logs ? partial.logs : currentTask.logs,
+        logs: partial.logs ? normalizeLogs(partial.logs) : currentTask.logs,
         updated_at: now(),
       };
       activeTasks.set(type, currentTask);
-      if (workspaceState) {
-        if (taskField) {
-          updateWorkspaceStateWithoutReload(definition, { [taskField]: currentTask });
-        }
-        emit(currentTask, buildSnapshot(definition, { ...workspaceState, [taskField]: currentTask }, currentTask, eventPatch));
-      }
       return currentTask;
+    };
+
+    // 仅更新内存并推送 Renderer，用于无恢复价值的高频展示状态。
+    const updateTask = (partial, workspaceState = {}, eventPatch) => {
+      const nextTask = applyTaskPatch(partial);
+      emit(nextTask, buildSnapshot(definition, { ...(workspaceState || {}), [taskField]: nextTask }, nextTask, eventPatch));
+      return nextTask;
     };
 
     // 将业务状态和任务状态作为同一个 checkpoint 落库，并在提交后统一推送事件。
     const checkpointTask = (taskPartial, workspacePartial = {}, eventPatch) => {
-      const nextTask = updateTask(taskPartial);
+      if (taskControl.signal.aborted) {
+        throw taskControl.signal.reason || new Error('后台任务已取消');
+      }
+      const nextTask = applyTaskPatch(taskPartial);
       const persistedPatch = {
         ...(workspacePartial || {}),
         [taskField]: nextTask,
@@ -715,13 +720,15 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       : definition.stateKey === 'rejectionCheck'
         ? rejectionCheckStore
         : duplicateCheckStore;
-    const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId) : aiService;
+    const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId, taskControl.signal) : aiService;
     const runnerAgentService = agentService.bindTaskContext(
       () => createAgentUserTaskContext(type, definition, payload, currentTask),
-      { queueScopeId },
+      { queueScopeId, signal: taskControl.signal },
     );
     runner({ aiService: runnerAiService, agentService: runnerAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, checkpointTask, payload, taskControl, previousState }).catch((error) => {
-      checkpointTask({ status: 'error', error: error.message || '任务执行失败' });
+      if (!taskControl.signal.aborted) {
+        checkpointTask({ status: 'error', error: error.message || '任务执行失败' });
+      }
     }).finally(() => {
       taskControl.dispose();
       if (aiService?.resumeQueueScope) {
@@ -735,13 +742,17 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     return currentTask;
   }
 
-  // 取消目录生成并等待其异步清理完成，避免重置后旧任务重新写回状态。
-  async function cancelOutlineGenerationForReset() {
-    const task = activeTasks.get('outline-generation');
-    const control = activeTaskControls.get('outline-generation');
-    if (!task || !isActiveTaskStatus(task.status) || !control?.cancel) return;
-    control.cancel('技术方案已重置，目录生成任务已取消');
-    await control.waitForSettlement();
+  // 取消全部技术方案任务并等待退出，避免重置后旧任务重新写回状态。
+  async function cancelTechnicalPlanTasksForReset() {
+    const controls = [];
+    for (const [type, task] of activeTasks.entries()) {
+      const definition = getTaskDefinition(type);
+      const control = activeTaskControls.get(type);
+      if (definition.group !== 'technical-plan' || !isActiveTaskStatus(task.status) || !control?.cancel) continue;
+      controls.push(control);
+      control.cancel('技术方案已重置，后台任务已取消');
+    }
+    await Promise.all(controls.map((control) => control.waitForSettlement()));
   }
 
   function recoverInterruptedContentGenerationTask() {
@@ -877,18 +888,14 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     }
 
     const message = '上次招标文件解析未完成，请重新解析';
-    const nextBidAnalysisTasks = {};
-    let hasInterruptedItem = false;
+    const interruptedBidAnalysisTasks = {};
     for (const [itemId, item] of Object.entries(technicalPlan.bidAnalysisTasks || {})) {
       if (item?.status === 'running') {
-        nextBidAnalysisTasks[itemId] = {
+        interruptedBidAnalysisTasks[itemId] = {
           ...item,
           status: 'error',
           error: message,
         };
-        hasInterruptedItem = true;
-      } else {
-        nextBidAnalysisTasks[itemId] = item;
       }
     }
 
@@ -902,8 +909,8 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       logs: logs.includes(message) ? logs : [...logs, message],
       updated_at: now(),
     };
-    const partial = hasInterruptedItem
-      ? { bidAnalysisTask: recoveredTask, bidAnalysisTasks: nextBidAnalysisTasks }
+    const partial = Object.keys(interruptedBidAnalysisTasks).length
+      ? { bidAnalysisTask: recoveredTask, bidAnalysisTasks: interruptedBidAnalysisTasks }
       : { bidAnalysisTask: recoveredTask };
     technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
     emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-analysis'), partial, recoveredTask));
@@ -1155,7 +1162,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       return control.suppressOutlineSelectionAutoConfirmation(payload);
     },
     async resetTechnicalPlan() {
-      await cancelOutlineGenerationForReset();
+      await cancelTechnicalPlanTasksForReset();
       return technicalPlanStore.clearTechnicalPlan();
     },
     getActiveTasks() {

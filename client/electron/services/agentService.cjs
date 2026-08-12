@@ -414,7 +414,7 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
             entry.resolve(normalizeRunResult(rawResult));
           } catch (error) {
             const normalizedError = normalizeRunError(error);
-            if (normalizedError?.code !== 'AGENT_DISCONNECTED') {
+            if (!entry.payload.signal?.aborted && !['AGENT_DISCONNECTED', 'TASK_CANCELLED'].includes(normalizedError?.code)) {
               agentErrorReporter.reportFailure({
                 payload: entry.payload,
                 error: normalizedError,
@@ -500,11 +500,18 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
   // 为后台父任务绑定最新诊断上下文和统一 AI 队列作用域。
   function bindTaskContext(userTaskContextProvider, options = {}) {
     const queueScopeId = safeText(options.queueScopeId || options.queue_scope_id);
+    const signal = options.signal;
     return {
-      runTask: (payload = {}) => enqueueTask({
-        ...payload,
-        ...(queueScopeId && !payload.queueScopeId && !payload.queue_scope_id ? { queue_scope_id: queueScopeId } : {}),
-      }, userTaskContextProvider),
+      runTask: (payload = {}) => {
+        const taskSignal = signal && payload.signal
+          ? AbortSignal.any([signal, payload.signal])
+          : payload.signal || signal;
+        return enqueueTask({
+          ...payload,
+          ...(queueScopeId && !payload.queueScopeId && !payload.queue_scope_id ? { queue_scope_id: queueScopeId } : {}),
+          ...(taskSignal ? { signal: taskSignal } : {}),
+        }, userTaskContextProvider);
+      },
       getStatus,
       hasPersistentTaskSession,
       loadPersistentTask,

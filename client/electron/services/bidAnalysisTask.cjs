@@ -253,7 +253,7 @@ function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent, sect
   return runBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint });
 }
 
-async function runBidAnalysisTask({ aiService, workspaceStore, checkpointTask, payload }) {
+async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, checkpointTask, payload }) {
   const config = normalizeBidAnalysisConfig(payload.mode, payload.selected_task_ids || payload.selectedTaskIds);
   const mode = config.mode;
   const selectedTaskIdSet = new Set(config.taskIds);
@@ -310,16 +310,18 @@ async function runBidAnalysisTask({ aiService, workspaceStore, checkpointTask, p
       : '开始解析招标文件。';
   const initialLogs = [initialMessage];
   let initialPartial = { bidAnalysisMode: mode, bidAnalysisSelectedTaskIds: config.taskIds };
+  let initialEventPatch;
   let currentTasks = { ...(storedPlanForHint.bidAnalysisTasks || {}) };
   if (forceRerun && !requestedTaskIds) {
+    const resetTasks = {};
     for (const task of selectedTasks) {
-      currentTasks[task.id] = { id: task.id, label: task.label, status: 'idle', content: '' };
+      const resetTask = { id: task.id, label: task.label, status: 'idle', content: '' };
+      currentTasks[task.id] = resetTask;
+      resetTasks[task.id] = resetTask;
     }
     initialPartial = {
       ...initialPartial,
-      projectOverview: '',
-      techRequirements: '',
-      bidAnalysisTasks: currentTasks,
+      bidAnalysisTasks: resetTasks,
       bidAnalysisProgress: 0,
       outlineGenerationTask: undefined,
       globalFactsTask: undefined,
@@ -331,19 +333,36 @@ async function runBidAnalysisTask({ aiService, workspaceStore, checkpointTask, p
       contentGenerationRuntime: undefined,
       outlineData: null,
     };
+    initialEventPatch = {
+      technicalPlanPatch: {
+        projectOverview: '',
+        techRequirements: '',
+      },
+    };
   }
   checkpointTask(
     { status: 'running', progress: 0, logs: initialLogs },
     initialPartial,
+    initialEventPatch,
   );
   const tasksToRun = requestedTaskIds || forceRerun ? scopedTasks : scopedTasks.filter((task) => currentTasks[task.id]?.status !== 'success');
 
-  async function runOne(task) {
-    currentTasks = { ...currentTasks, [task.id]: { id: task.id, label: task.label, status: 'running', content: '' } };
-    const runningProgress = doneProgress(currentTasks);
+  function checkpointBidItem(taskPartial, item, progress, technicalPlanPatch = {}) {
     checkpointTask(
+      taskPartial,
+      { bidAnalysisItem: item, bidAnalysisProgress: progress },
+      { bidItem: item, technicalPlanPatch },
+    );
+  }
+
+  async function runOne(task) {
+    const runningItem = { id: task.id, label: task.label, status: 'running', content: '' };
+    currentTasks = { ...currentTasks, [task.id]: runningItem };
+    const runningProgress = doneProgress(currentTasks);
+    checkpointBidItem(
       { status: 'running', progress: runningProgress },
-      { bidAnalysisTasks: currentTasks, bidAnalysisProgress: runningProgress },
+      runningItem,
+      runningProgress,
     );
 
     const content = await runBidAnalysisPromptTask({
@@ -358,22 +377,28 @@ async function runBidAnalysisTask({ aiService, workspaceStore, checkpointTask, p
       throw new Error(`${task.label}解析结果为空，请重新解析`);
     }
 
-    currentTasks = { ...currentTasks, [task.id]: { id: task.id, label: task.label, status: 'success', content: trimmedContent } };
-    const partial = { bidAnalysisTasks: currentTasks, bidAnalysisProgress: doneProgress(currentTasks) };
-    if (task.id === 'projectOverview') partial.projectOverview = trimmedContent;
-    if (task.id === 'techRequirements') partial.techRequirements = trimmedContent;
-    checkpointTask(
-      { status: 'running', progress: partial.bidAnalysisProgress },
-      partial,
+    const completedItem = { id: task.id, label: task.label, status: 'success', content: trimmedContent };
+    currentTasks = { ...currentTasks, [task.id]: completedItem };
+    const progress = doneProgress(currentTasks);
+    const technicalPlanPatch = {};
+    if (task.id === 'projectOverview') technicalPlanPatch.projectOverview = trimmedContent;
+    if (task.id === 'techRequirements') technicalPlanPatch.techRequirements = trimmedContent;
+    checkpointBidItem(
+      { status: 'running', progress },
+      completedItem,
+      progress,
+      technicalPlanPatch,
     );
   }
 
   function handleTaskError(task, error) {
-    currentTasks = { ...currentTasks, [task.id]: { id: task.id, label: task.label, status: 'error', content: currentTasks[task.id]?.content || '', error: error.message || '解析失败' } };
+    const failedItem = { id: task.id, label: task.label, status: 'error', content: currentTasks[task.id]?.content || '', error: error.message || '解析失败' };
+    currentTasks = { ...currentTasks, [task.id]: failedItem };
     const progress = doneProgress(currentTasks);
-    checkpointTask(
+    checkpointBidItem(
       { status: 'running', progress, logs: [`${task.label}解析失败：${error.message || '未知错误'}`] },
-      { bidAnalysisTasks: currentTasks, bidAnalysisProgress: progress },
+      failedItem,
+      progress,
     );
   }
 
@@ -392,7 +417,7 @@ async function runBidAnalysisTask({ aiService, workspaceStore, checkpointTask, p
   if (projectOverviewTask) {
     const warmupSucceeded = await runOneSafely(projectOverviewTask);
     if (warmupSucceeded && remainingTasks.length) {
-      checkpointTask({
+      updateTask({
         status: 'running',
         progress: doneProgress(currentTasks),
         logs: ['提示词缓存预热完成，等待 5 秒后开始并发解析剩余项。'],

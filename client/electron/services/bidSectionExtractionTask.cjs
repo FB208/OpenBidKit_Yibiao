@@ -196,7 +196,7 @@ async function collectJson(aiService, options) {
   throw new Error('AI 服务尚未初始化');
 }
 
-async function runBidSectionExtractionTask({ aiService, workspaceStore, checkpointTask }) {
+async function runBidSectionExtractionTask({ aiService, workspaceStore, updateTask, checkpointTask }) {
   const originalMarkdown = workspaceStore.readOriginalTenderMarkdown?.() || workspaceStore.readTenderMarkdown();
   const cleanMarkdown = String(originalMarkdown || '').trim();
   if (!cleanMarkdown) {
@@ -207,10 +207,10 @@ async function runBidSectionExtractionTask({ aiService, workspaceStore, checkpoi
     workspaceStore.prepareBidSectionExtraction();
   }
 
-  const logs = [];
+  let logs = [];
   const log = (message, progress) => {
-    const nextLogs = pushLog(logs, message);
-    checkpointTask({ status: 'running', progress, logs: nextLogs }, {
+    logs = pushLog(logs, message);
+    updateTask({ status: 'running', progress, logs }, {
       bidSectionMode: 'multiple',
       bidSectionExtractionStatus: 'running',
       bidSectionExtractionError: undefined,

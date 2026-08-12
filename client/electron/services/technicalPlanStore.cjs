@@ -377,7 +377,7 @@ function mapOutlineItems(items, mapper) {
   });
 }
 
-function createTechnicalPlanStore({ app, db, fileService, agentService }) {
+function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogStore }) {
   function deleteOutlineAgentTask() {
     agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY);
   }
@@ -761,7 +761,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       type: row.type,
       status: normalizeStatus(row.status, ['running', 'pausing', 'paused', 'success', 'error'], 'running'),
       progress: Number(row.progress || 0),
-      logs: safeJsonParse(row.logs_json, []),
+      logs: taskLogStore.list('technical-plan', row.type, row.task_id),
       started_at: row.started_at,
       updated_at: row.updated_at,
       error: row.error || undefined,
@@ -780,13 +780,12 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     }
     const timestamp = now();
     db.prepare(`
-      INSERT INTO technical_plan_tasks (type, task_id, status, progress, logs_json, stats_json, error, pause_requested, started_at, updated_at)
-      VALUES (@type, @task_id, @status, @progress, @logs_json, @stats_json, @error, @pause_requested, @started_at, @updated_at)
+      INSERT INTO technical_plan_tasks (type, task_id, status, progress, stats_json, error, pause_requested, started_at, updated_at)
+      VALUES (@type, @task_id, @status, @progress, @stats_json, @error, @pause_requested, @started_at, @updated_at)
       ON CONFLICT(type) DO UPDATE SET
         task_id = excluded.task_id,
         status = excluded.status,
         progress = excluded.progress,
-        logs_json = excluded.logs_json,
         stats_json = excluded.stats_json,
         error = excluded.error,
         pause_requested = excluded.pause_requested,
@@ -797,13 +796,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       task_id: String(task.task_id || ''),
       status: String(task.status || 'running'),
       progress: Math.max(0, Math.min(100, Math.round(Number(task.progress || 0)))),
-      logs_json: JSON.stringify(Array.isArray(task.logs) ? task.logs : []),
       stats_json: jsonOrNull(task.stats),
       error: task.error ? String(task.error) : null,
       pause_requested: toDbBool(task.pause_requested),
       started_at: task.started_at || timestamp,
       updated_at: task.updated_at || timestamp,
     });
+    taskLogStore.sync('technical-plan', type, String(task.task_id || ''), task.logs, task.updated_at || timestamp);
     if (type === 'bid-section-extraction') {
       updateMeta({
         bid_section_extraction_status: normalizeBidSectionExtractionStatus(task.status),
@@ -881,6 +880,12 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
         updated_at: task?.updated_at || timestamp,
       });
     }
+  }
+
+  function saveBidItem(item, mode) {
+    const itemId = String(item?.id || '').trim();
+    if (!itemId) return;
+    saveBidItems({ [itemId]: item }, mode);
   }
 
   function upsertDerivedBidItem(itemId, content, mode) {
@@ -1092,6 +1097,116 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     }, {});
   }
 
+  function clearContentIllustrationPlan() {
+    db.prepare('DELETE FROM technical_plan_illustration_items').run();
+    db.prepare('DELETE FROM technical_plan_illustration_plans').run();
+  }
+
+  function illustrationItemValues(item, sortOrder, timestamp) {
+    const generation = item?.generation;
+    return {
+      item_id: String(item.item_id),
+      kind: String(item.kind || ''),
+      image_type: String(item.image_type || ''),
+      title: String(item.title || ''),
+      section_ids_json: JSON.stringify(Array.isArray(item.section_ids) ? item.section_ids : []),
+      placement: String(item.placement || 'after'),
+      priority: Number(item.priority || 0),
+      generation_status: generation?.status ? String(generation.status) : null,
+      generation_mode: generation?.mode ? String(generation.mode) : null,
+      generation_code: generation?.code ? String(generation.code) : null,
+      generation_source_path: generation?.source_path ? String(generation.source_path) : null,
+      generation_asset_url: generation?.asset_url ? String(generation.asset_url) : null,
+      generation_attempts: generation?.attempts === undefined ? null : Number(generation.attempts || 0),
+      generation_error: generation?.error ? String(generation.error) : null,
+      generation_updated_at: generation?.updated_at || null,
+      sort_order: Number(sortOrder || 0),
+      updated_at: item.updated_at || timestamp,
+    };
+  }
+
+  const upsertIllustrationItem = db.prepare(`
+    INSERT INTO technical_plan_illustration_items (
+      item_id, kind, image_type, title, section_ids_json, placement, priority,
+      generation_status, generation_mode, generation_code, generation_source_path,
+      generation_asset_url, generation_attempts, generation_error, generation_updated_at,
+      sort_order, updated_at
+    ) VALUES (
+      @item_id, @kind, @image_type, @title, @section_ids_json, @placement, @priority,
+      @generation_status, @generation_mode, @generation_code, @generation_source_path,
+      @generation_asset_url, @generation_attempts, @generation_error, @generation_updated_at,
+      @sort_order, @updated_at
+    ) ON CONFLICT(item_id) DO UPDATE SET
+      kind = excluded.kind,
+      image_type = excluded.image_type,
+      title = excluded.title,
+      section_ids_json = excluded.section_ids_json,
+      placement = excluded.placement,
+      priority = excluded.priority,
+      generation_status = excluded.generation_status,
+      generation_mode = excluded.generation_mode,
+      generation_code = excluded.generation_code,
+      generation_source_path = excluded.generation_source_path,
+      generation_asset_url = excluded.generation_asset_url,
+      generation_attempts = excluded.generation_attempts,
+      generation_error = excluded.generation_error,
+      generation_updated_at = excluded.generation_updated_at,
+      sort_order = excluded.sort_order,
+      updated_at = excluded.updated_at
+  `);
+
+  function replaceContentIllustrationPlan(plan) {
+    clearContentIllustrationPlan();
+    if (!plan || !Array.isArray(plan.items)) return;
+    const timestamp = plan.updated_at || now();
+    db.prepare(`
+      INSERT INTO technical_plan_illustration_plans (id, plan_version, revision, updated_at)
+      VALUES (1, ?, ?, ?)
+    `).run(Number(plan.plan_version || 0), String(plan.revision || ''), timestamp);
+    plan.items.forEach((item, index) => {
+      if (item?.item_id) upsertIllustrationItem.run(illustrationItemValues(item, index, timestamp));
+    });
+  }
+
+  function saveContentIllustrationItem(item) {
+    if (!item?.item_id) return;
+    const existing = db.prepare('SELECT sort_order FROM technical_plan_illustration_items WHERE item_id = ?').get(item.item_id);
+    upsertIllustrationItem.run(illustrationItemValues(item, existing?.sort_order || 0, now()));
+  }
+
+  function loadContentIllustrationPlan() {
+    const plan = db.prepare('SELECT * FROM technical_plan_illustration_plans WHERE id = 1').get();
+    if (!plan) return undefined;
+    const items = db.prepare('SELECT * FROM technical_plan_illustration_items ORDER BY sort_order ASC, item_id ASC').all().map((row) => {
+      const generation = row.generation_status ? {
+        status: row.generation_status,
+        ...(row.generation_mode ? { mode: row.generation_mode } : {}),
+        ...(row.generation_code ? { code: row.generation_code } : {}),
+        ...(row.generation_source_path ? { source_path: row.generation_source_path } : {}),
+        ...(row.generation_asset_url ? { asset_url: row.generation_asset_url } : {}),
+        ...(row.generation_attempts === null ? {} : { attempts: Number(row.generation_attempts || 0) }),
+        ...(row.generation_error ? { error: row.generation_error } : {}),
+        ...(row.generation_updated_at ? { updated_at: row.generation_updated_at } : {}),
+      } : undefined;
+      return {
+        item_id: row.item_id,
+        kind: row.kind,
+        image_type: row.image_type,
+        title: row.title,
+        section_ids: safeJsonParse(row.section_ids_json, []),
+        placement: row.placement,
+        priority: Number(row.priority || 0),
+        ...(generation ? { generation } : {}),
+      };
+    });
+    return {
+      plan_version: Number(plan.plan_version || 0),
+      revision: plan.revision,
+      items,
+      updated_at: plan.updated_at || undefined,
+    };
+  }
+
   function normalizeGlobalFactGroups(groups) {
     const seen = new Set();
     return (Array.isArray(groups) ? groups : []).map((group, index) => {
@@ -1194,7 +1309,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       plan_json = excluded.plan_json,
       updated_at = excluded.updated_at
   `);
-  const saveContentGenerationItemTransaction = db.transaction(({ nodeId, section, storedPlan, runtime }) => {
+  function saveContentGenerationItemFields({ nodeId, section, storedPlan, runtime }) {
     const timestamp = now();
     if (section) {
       updateGeneratedContent.run(String(section.content || ''), timestamp, nodeId);
@@ -1219,11 +1334,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     if (runtime !== undefined) {
       updateMeta({ content_generation_runtime_json: jsonOrNull(runtime) });
     }
-  });
-
-  // 定向保存正文任务中的单个小节、对应编排计划和运行状态。
-  function saveContentGenerationItem(partial = {}) {
-    saveContentGenerationItemTransaction(partial);
   }
 
   function clearDownstreamFromTender() {
@@ -1233,6 +1343,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    clearContentIllustrationPlan();
     clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
     updateMeta({
@@ -1246,7 +1357,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       outline_project_overview: null,
       content_generation_options_json: null,
       content_generation_runtime_json: null,
-      content_illustration_plan_json: null,
       pending_tender_markdown_path: null,
       pending_tender_file_name: null,
       pending_tender_parser_label: null,
@@ -1269,13 +1379,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    clearContentIllustrationPlan();
     clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
     updateMeta({
       step: 'bid-analysis',
       content_generation_options_json: null,
       content_generation_runtime_json: null,
-      content_illustration_plan_json: null,
       outline_word_control_snapshot_json: null,
       outline_project_name: null,
       outline_project_overview: null,
@@ -1287,8 +1397,9 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
     db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'content-generation'").run();
+    clearContentIllustrationPlan();
     clearTechnicalPlanMermaidCache();
-    updateMeta({ content_generation_runtime_json: null, content_illustration_plan_json: null });
+    updateMeta({ content_generation_runtime_json: null });
   }
 
   function clearDownstreamFromOriginalPlan() {
@@ -1298,6 +1409,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
+    clearContentIllustrationPlan();
     clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
     updateMeta({
@@ -1305,7 +1417,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       outline_project_name: null,
       outline_project_overview: null,
       content_generation_runtime_json: null,
-      content_illustration_plan_json: null,
       outline_word_control_snapshot_json: null,
     });
   }
@@ -1332,6 +1443,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     db.prepare('DELETE FROM technical_plan_content_plans').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    clearContentIllustrationPlan();
     clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
     updateMeta({
@@ -1350,7 +1462,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       outline_word_control_snapshot_json: null,
       content_generation_options_json: null,
       content_generation_runtime_json: null,
-      content_illustration_plan_json: null,
     });
   }
 
@@ -1460,13 +1571,15 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     }
     if (hasOwn(partial, 'contentGenerationOptions')) metaUpdates.content_generation_options_json = jsonOrNull(partial.contentGenerationOptions);
     if (hasOwn(partial, 'contentGenerationRuntime')) metaUpdates.content_generation_runtime_json = jsonOrNull(partial.contentGenerationRuntime);
-    if (hasOwn(partial, 'contentIllustrationPlan')) metaUpdates.content_illustration_plan_json = jsonOrNull(partial.contentIllustrationPlan);
 
     if (Object.keys(metaUpdates).length) updateMeta(metaUpdates);
 
     const nextBidMode = isValidBidMode(partial.bidAnalysisMode) ? partial.bidAnalysisMode : meta.bid_analysis_mode;
     if (hasOwn(partial, 'referenceKnowledgeDocumentIds')) replaceReferenceDocumentIds(partial.referenceKnowledgeDocumentIds);
+    if (hasOwn(partial, 'contentIllustrationPlan')) replaceContentIllustrationPlan(partial.contentIllustrationPlan);
+    if (hasOwn(partial, 'contentIllustrationItem')) saveContentIllustrationItem(partial.contentIllustrationItem);
     if (hasOwn(partial, 'bidAnalysisTasks')) saveBidItems(partial.bidAnalysisTasks, nextBidMode);
+    if (hasOwn(partial, 'bidAnalysisItem')) saveBidItem(partial.bidAnalysisItem, nextBidMode);
     if (hasOwn(partial, 'projectOverview')) upsertDerivedBidItem('projectOverview', partial.projectOverview, nextBidMode);
     if (hasOwn(partial, 'techRequirements')) upsertDerivedBidItem('techRequirements', partial.techRequirements, nextBidMode);
     if (hasOwn(partial, 'globalFacts')) {
@@ -1496,6 +1609,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
 
     if (hasOwn(partial, 'contentGenerationSections')) saveContentSections(partial.contentGenerationSections);
     if (hasOwn(partial, 'contentGenerationPlans')) saveContentPlans(partial.contentGenerationPlans);
+    if (hasOwn(partial, 'contentGenerationItem')) saveContentGenerationItemFields(partial.contentGenerationItem);
   }
 
   function loadTechnicalPlan() {
@@ -1565,7 +1679,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       globalFacts: loadGlobalFacts(),
       contentGenerationOptions: safeJsonParse(meta.content_generation_options_json, undefined),
       contentGenerationRuntime: safeJsonParse(meta.content_generation_runtime_json, undefined),
-      contentIllustrationPlan: safeJsonParse(meta.content_illustration_plan_json, undefined),
+      contentIllustrationPlan: loadContentIllustrationPlan(),
       contentGenerationSections: loadContentSections(outlineData),
       contentGenerationPlans: loadContentPlans(),
       outlineData,
@@ -1741,7 +1855,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
         clearTechnicalPlanMermaidCache();
         updateMeta({ content_generation_runtime_json: null });
       }
-      updateMeta({ content_illustration_plan_json: null });
+      clearContentIllustrationPlan();
     });
     transaction();
     return {
@@ -1802,7 +1916,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
         VALUES (?, ?, NULL, ?)
         ON CONFLICT(node_id) DO UPDATE SET status = excluded.status, error = NULL, updated_at = excluded.updated_at
       `).run(nodeId, nextContent.trim() ? 'success' : 'idle', timestamp);
-      updateMeta({ content_illustration_plan_json: null });
+      clearContentIllustrationPlan();
     });
     transaction();
     return { contentIllustrationPlan: undefined };
@@ -1974,6 +2088,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
       db.prepare('DELETE FROM technical_plan_reference_docs').run();
       db.prepare('DELETE FROM technical_plan_outline_nodes').run();
       db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+      clearContentIllustrationPlan();
       db.prepare('DELETE FROM technical_plan_meta').run();
       ensureMetaRow();
       updateMeta({ workflow_kind: workflowKind });
@@ -2002,7 +2117,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService }) {
     loadTechnicalPlan,
     updateTechnicalPlan,
     updateTechnicalPlanWithoutReload,
-    saveContentGenerationItem,
     clearMermaidCache: clearTechnicalPlanMermaidCache,
     clearIllustrationFiles,
     clearTechnicalPlan,
