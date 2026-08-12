@@ -105,7 +105,7 @@ function createAgentErrorReporter({ app, configStore, licenseService }) {
   let closing = false;
 
   function startProcess(job) {
-    if (closing) return;
+    if (closing) return Promise.resolve();
     let child;
     try {
       child = utilityProcess.fork(PROCESS_ENTRY, [], {
@@ -113,18 +113,27 @@ function createAgentErrorReporter({ app, configStore, licenseService }) {
         serviceName: 'Yibiao Agent Error Reporter',
       });
     } catch {
-      return;
+      return Promise.resolve();
     }
     processes.add(child);
-    child.once('spawn', () => {
-      try {
-        child.postMessage(job);
-      } catch {
-        child.kill();
-      }
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        processes.delete(child);
+        resolve();
+      };
+      child.once('spawn', () => {
+        try {
+          child.postMessage(job);
+        } catch {
+          child.kill();
+        }
+      });
+      child.once('error', finish);
+      child.once('exit', finish);
     });
-    child.on('error', () => undefined);
-    child.once('exit', () => processes.delete(child));
   }
 
   async function dispatch({ payload, error, userTaskContext }) {
@@ -133,8 +142,9 @@ function createAgentErrorReporter({ app, configStore, licenseService }) {
     const version = typeof app?.getVersion === 'function' ? app.getVersion() : '';
     if (closing || !license || !version || !config.analytics_client_id || !config.analytics_created_at) return;
     if (!await canUploadCurrentVersion(version)) return;
+    if (closing) return;
 
-    startProcess({
+    return startProcess({
       schemaVersion: REPORT_SCHEMA_VERSION,
       reportId: crypto.randomUUID(),
       projectName: PROJECT_NAME,
@@ -177,10 +187,8 @@ function createAgentErrorReporter({ app, configStore, licenseService }) {
   }
 
   function reportFailure(options) {
-    if (!options?.error || closing || isExpectedAgentInterruption(options.error)) return;
-    setImmediate(() => {
-      void dispatch(options).catch(() => undefined);
-    });
+    if (!options?.error || closing || isExpectedAgentInterruption(options.error)) return Promise.resolve();
+    return dispatch(options).catch(() => undefined);
   }
 
   function close() {

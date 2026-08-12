@@ -414,12 +414,20 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
             entry.resolve(normalizeRunResult(rawResult));
           } catch (error) {
             const normalizedError = normalizeRunError(error);
-            if (!entry.payload.signal?.aborted && !['AGENT_DISCONNECTED', 'TASK_CANCELLED'].includes(normalizedError?.code)) {
-              agentErrorReporter.reportFailure({
+            const persistentTask = Boolean(entry.payload.persistent_task?.task_key);
+            const shouldReport = !entry.payload.signal?.aborted
+              && !['AGENT_DISCONNECTED', 'TASK_CANCELLED'].includes(normalizedError?.code);
+            const taskRuntime = runtime;
+            if (shouldReport) {
+              void agentErrorReporter.reportFailure({
                 payload: entry.payload,
                 error: normalizedError,
                 userTaskContext: resolveUserTaskContext(entry.userTaskContextProvider),
+              }).finally(() => {
+                if (!persistentTask) void taskRuntime?.deleteTaskArchive?.(entry.taskId);
               });
+            } else if (!persistentTask) {
+              void taskRuntime?.deleteTaskArchive?.(entry.taskId);
             }
             entry.reject(normalizedError);
           } finally {

@@ -92,6 +92,7 @@ export interface ClientConfig extends AiConfig {
   developer_mode?: boolean;
   developer_token_stats_auto_open?: boolean;
   developer_agent_monitor_auto_open?: boolean;
+  storage_cleanup_version?: number;
   analytics_client_id?: string;
   analytics_created_at?: string;
 }

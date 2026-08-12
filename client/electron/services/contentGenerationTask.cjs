@@ -6218,6 +6218,7 @@ workspace 文件说明：
       outlineData,
       contentRuntime: phaseRuntime,
     });
+    workspaceStore.clearUnreferencedGeneratedImages?.();
 
     const imageAvailability = aiService.getImageModelAvailability
       ? aiService.getImageModelAvailability()

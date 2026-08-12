@@ -12,6 +12,7 @@ const phaseLabels: Record<WorkspaceDatabasePhase, string> = {
   repairing: '正在修复本地数据库结构',
   'backing-up': '正在备份本地数据库',
   upgrading: '正在升级本地数据库',
+  cleaning: '正在清理历史缓存',
   ready: '本地数据库已就绪',
   error: '本地数据库初始化失败',
 };

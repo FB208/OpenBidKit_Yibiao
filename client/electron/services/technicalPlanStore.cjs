@@ -7,6 +7,7 @@ const {
   getTechnicalPlanIllustrationsDir,
   getTechnicalPlanOriginalPlanMarkdownPath,
   getTechnicalPlanTenderMarkdownPath,
+  getGeneratedImagesDir,
 } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 const { clearMermaidCache } = require('../utils/mermaidCache.cjs');
@@ -1130,9 +1131,72 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     }, {});
   }
 
-  function clearContentIllustrationPlan() {
+  function loadGeneratedIllustrationAssetUrls() {
+    return db.prepare(`
+      SELECT generation_asset_url
+      FROM technical_plan_illustration_items
+      WHERE generation_asset_url IS NOT NULL AND generation_asset_url <> ''
+    `).all().map((row) => row.generation_asset_url);
+  }
+
+  function deleteGeneratedIllustrationAssets(assetUrls) {
+    const generatedImagesDir = path.resolve(getGeneratedImagesDir(app));
+    const prefix = 'yibiao-asset://generated-images/';
+    for (const assetUrl of new Set(assetUrls || [])) {
+      const originalSource = String(assetUrl || '');
+      const retainedByPlan = db.prepare('SELECT 1 FROM technical_plan_illustration_items WHERE generation_asset_url = ? LIMIT 1').get(originalSource);
+      const stillReferenced = db.prepare('SELECT 1 FROM technical_plan_outline_nodes WHERE instr(content, ?) > 0 LIMIT 1').get(originalSource);
+      if (retainedByPlan || stillReferenced) continue;
+      const source = originalSource.split('?')[0];
+      if (!source.startsWith(prefix)) continue;
+      let relativePath;
+      try {
+        relativePath = decodeURIComponent(source.slice(prefix.length));
+      } catch {
+        continue;
+      }
+      const filePath = path.resolve(generatedImagesDir, relativePath);
+      if (filePath === generatedImagesDir || !filePath.startsWith(`${generatedImagesDir}${path.sep}`)) continue;
+      fs.rmSync(filePath, { force: true });
+    }
+  }
+
+  const pendingGeneratedAssetCleanup = new Set();
+  let generatedAssetCleanupScheduled = false;
+  function scheduleGeneratedAssetCleanup(assetUrls) {
+    (assetUrls || []).filter(Boolean).forEach((assetUrl) => pendingGeneratedAssetCleanup.add(assetUrl));
+    if (!pendingGeneratedAssetCleanup.size || generatedAssetCleanupScheduled) return;
+    generatedAssetCleanupScheduled = true;
+    setImmediate(() => {
+      generatedAssetCleanupScheduled = false;
+      const queuedAssetUrls = [...pendingGeneratedAssetCleanup];
+      pendingGeneratedAssetCleanup.clear();
+      try {
+        deleteGeneratedIllustrationAssets(queuedAssetUrls);
+      } catch (error) {
+        console.warn('[technical-plan] 清理旧生图失败', error?.message || String(error));
+      }
+    });
+  }
+
+  function clearUnreferencedRootGeneratedImages() {
+    const generatedImagesDir = getGeneratedImagesDir(app);
+    if (!fs.existsSync(generatedImagesDir)) return;
+    const assetUrls = fs.readdirSync(generatedImagesDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => `yibiao-asset://generated-images/${encodeURIComponent(entry.name)}`);
+    scheduleGeneratedAssetCleanup(assetUrls);
+  }
+
+  function deleteContentIllustrationPlanRows() {
     db.prepare('DELETE FROM technical_plan_illustration_items').run();
     db.prepare('DELETE FROM technical_plan_illustration_plans').run();
+  }
+
+  function clearContentIllustrationPlan() {
+    const assetUrls = loadGeneratedIllustrationAssetUrls();
+    deleteContentIllustrationPlanRows();
+    scheduleGeneratedAssetCleanup(assetUrls);
   }
 
   function illustrationItemValues(item, sortOrder, timestamp) {
@@ -1189,8 +1253,12 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   `);
 
   function replaceContentIllustrationPlan(plan) {
-    clearContentIllustrationPlan();
-    if (!plan || !Array.isArray(plan.items)) return;
+    const previousAssetUrls = loadGeneratedIllustrationAssetUrls();
+    deleteContentIllustrationPlanRows();
+    if (!plan || !Array.isArray(plan.items)) {
+      scheduleGeneratedAssetCleanup(previousAssetUrls);
+      return;
+    }
     const timestamp = plan.updated_at || now();
     db.prepare(`
       INSERT INTO technical_plan_illustration_plans (id, plan_version, revision, updated_at)
@@ -1199,12 +1267,18 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     plan.items.forEach((item, index) => {
       if (item?.item_id) upsertIllustrationItem.run(illustrationItemValues(item, index, timestamp));
     });
+    const retainedAssetUrls = new Set(loadGeneratedIllustrationAssetUrls());
+    scheduleGeneratedAssetCleanup(previousAssetUrls.filter((assetUrl) => !retainedAssetUrls.has(assetUrl)));
   }
 
   function saveContentIllustrationItem(item) {
     if (!item?.item_id) return;
-    const existing = db.prepare('SELECT sort_order FROM technical_plan_illustration_items WHERE item_id = ?').get(item.item_id);
+    const existing = db.prepare('SELECT sort_order, generation_asset_url FROM technical_plan_illustration_items WHERE item_id = ?').get(item.item_id);
     upsertIllustrationItem.run(illustrationItemValues(item, existing?.sort_order || 0, now()));
+    const nextAssetUrl = item?.generation?.asset_url ? String(item.generation.asset_url) : '';
+    if (existing?.generation_asset_url && existing.generation_asset_url !== nextAssetUrl) {
+      scheduleGeneratedAssetCleanup([existing.generation_asset_url]);
+    }
   }
 
   function loadContentIllustrationPlan() {
@@ -2230,6 +2304,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     updateTechnicalPlanWithoutReload,
     clearMermaidCache: clearTechnicalPlanMermaidCache,
     clearIllustrationFiles,
+    clearUnreferencedGeneratedImages: clearUnreferencedRootGeneratedImages,
     clearTechnicalPlan,
     importTenderDocument,
     importOriginalPlanDocument,

@@ -1409,6 +1409,26 @@ function backupDatabaseFiles(db, databasePath, onStatus) {
   copyIfExists(`${databasePath}-shm`, `${databasePath}-shm.${suffix}`);
 }
 
+// 数据库升级成功后，统一删除当前数据库积累的全部历史备份。
+function clearDatabaseBackupFiles(databasePath) {
+  const directory = path.dirname(databasePath);
+  const databaseName = path.basename(databasePath);
+  const backupPrefixes = [
+    `${databaseName}.backup-`,
+    `${databaseName}-wal.backup-`,
+    `${databaseName}-shm.backup-`,
+  ];
+
+  for (const fileName of fs.readdirSync(directory)) {
+    if (!backupPrefixes.some((prefix) => fileName.startsWith(prefix))) continue;
+    try {
+      fs.unlinkSync(path.join(directory, fileName));
+    } catch (error) {
+      console.warn(`[sqlite] 删除数据库备份失败：${fileName}`, error?.message || String(error));
+    }
+  }
+}
+
 function applyMigrations(db, databasePath, onStatus) {
   const currentVersion = Number(db.pragma('user_version', { simple: true }) || 0);
   if (currentVersion > schemaVersion) {
@@ -1447,6 +1467,7 @@ function applyMigrations(db, databasePath, onStatus) {
   }
 
   ensureWorkspaceSchemaHealth(db, schemaVersion, onStatus);
+  clearDatabaseBackupFiles(databasePath);
 }
 
 function createSqliteDatabase(app, options = {}) {
@@ -1457,7 +1478,12 @@ function createSqliteDatabase(app, options = {}) {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
-  applyMigrations(db, databasePath, options.onStatus);
+  try {
+    applyMigrations(db, databasePath, options.onStatus);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 
   const close = () => {
     if (db.open) {

@@ -401,6 +401,12 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     return { taskDir, archivedWorkspace };
   }
 
+  // 普通任务结果已交付或诊断已读取后删除归档现场。
+  async function deleteTaskArchive(taskId) {
+    const taskDir = path.join(layout.tasksRoot, safeTaskSegment(taskId));
+    await fs.promises.rm(taskDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
+  }
+
   function writeJson(filePath, value) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf-8');
@@ -983,8 +989,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       }
 
       const output = await readOutputAsync(workspaceDir, outputFile);
-      const archive = persistentTask ? null : await archiveWorkspace(taskId);
-      archivedWorkspace = persistentTask ? workspaceDir : archive.archivedWorkspace;
+      archivedWorkspace = persistentTask ? workspaceDir : '';
       const result = {
         success: true,
         runtime_id: runtimeId,
@@ -1015,8 +1020,6 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           agent_connection: 'idle',
           session_file: session.sessionFile ? path.basename(session.sessionFile) : persistentTask.state.session_file || '',
         });
-      } else {
-        await writeJsonAsync(path.join(archive.taskDir, 'result.json'), result);
       }
       emitMonitorEvent({
         type: 'task_end',
@@ -1717,6 +1720,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
   return {
     warmup,
     runTask,
+    deleteTaskArchive,
     runSelfCheck,
     getStatus,
     restart,
