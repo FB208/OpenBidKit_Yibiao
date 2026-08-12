@@ -755,12 +755,11 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     await Promise.all(controls.map((control) => control.waitForSettlement()));
   }
 
-  function recoverInterruptedContentGenerationTask() {
+  function recoverInterruptedContentGenerationTask(technicalPlan) {
     if (activeTasks.has('content-generation')) {
       return;
     }
 
-    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const contentTask = technicalPlan.contentGenerationTask;
     if (!isActiveTaskStatus(contentTask?.status)) {
       return;
@@ -804,12 +803,11 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     emit(pausedTask, buildSnapshot(getTaskDefinition('content-generation'), partial, pausedTask));
   }
 
-  function recoverInterruptedOutlineGenerationTask() {
+  function recoverInterruptedOutlineGenerationTask(technicalPlan) {
     if (activeTasks.has('outline-generation')) {
       return;
     }
 
-    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const outlineTask = technicalPlan.outlineGenerationTask;
     if (!isActiveTaskStatus(outlineTask?.status)) {
       return;
@@ -876,12 +874,11 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-generation'), partial, recoveredTask));
   }
 
-  function recoverInterruptedBidAnalysisTask() {
+  function recoverInterruptedBidAnalysisTask(technicalPlan) {
     if (activeTasks.has('bid-analysis')) {
       return;
     }
 
-    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const bidAnalysisTask = technicalPlan.bidAnalysisTask;
     if (!isActiveTaskStatus(bidAnalysisTask?.status)) {
       return;
@@ -916,12 +913,11 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-analysis'), partial, recoveredTask));
   }
 
-  function recoverInterruptedBidSectionExtractionTask() {
+  function recoverInterruptedBidSectionExtractionTask(technicalPlan) {
     if (activeTasks.has('bid-section-extraction')) {
       return;
     }
 
-    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const extractionTask = technicalPlan.bidSectionExtractionTask;
     if (!isActiveTaskStatus(extractionTask?.status)) {
       return;
@@ -946,12 +942,11 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-section-extraction'), partial, recoveredTask));
   }
 
-  function recoverInterruptedGlobalFactsTask() {
+  function recoverInterruptedGlobalFactsTask(technicalPlan) {
     if (activeTasks.has('global-facts-generation')) {
       return;
     }
 
-    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const globalFactsTask = technicalPlan.globalFactsTask;
     if (!isActiveTaskStatus(globalFactsTask?.status)) {
       return;
@@ -971,10 +966,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     emit(recoveredTask, buildSnapshot(getTaskDefinition('global-facts-generation'), partial, recoveredTask));
   }
 
-  function recoverInterruptedRejectionCheckTasks() {
+  function recoverInterruptedRejectionCheckTasks(state) {
     const staleExtractionMessage = '上次解析未完成，请重新解析';
     const staleCheckMessage = '上次检查未完成，请重新检查';
-    const state = rejectionCheckStore.loadRejectionCheck() || {};
     const partial = {};
 
     if (!activeTasks.has('rejection-items-extraction') && state.extractionTask?.status === 'running') {
@@ -1013,11 +1007,10 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     }
   }
 
-  function recoverInterruptedDuplicateCheckTask() {
+  function recoverInterruptedDuplicateCheckTask(state) {
     if (activeTasks.has('duplicate-analysis')) {
       return;
     }
-    const state = duplicateCheckStore.loadDuplicateCheck() || {};
     if (state.analysisTask?.status !== 'running') {
       return;
     }
@@ -1044,13 +1037,16 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     emit(recoveredTask, { duplicateCheckPatch: partial });
   }
 
-  recoverInterruptedBidSectionExtractionTask();
-  recoverInterruptedBidAnalysisTask();
-  recoverInterruptedOutlineGenerationTask();
-  recoverInterruptedContentGenerationTask();
-  recoverInterruptedGlobalFactsTask();
-  recoverInterruptedRejectionCheckTasks();
-  recoverInterruptedDuplicateCheckTask();
+  const technicalPlanRecoveryState = technicalPlanStore.loadTechnicalPlan() || {};
+  const rejectionCheckRecoveryState = rejectionCheckStore.loadRejectionCheck() || {};
+  const duplicateCheckRecoveryState = duplicateCheckStore.loadDuplicateCheck() || {};
+  recoverInterruptedBidSectionExtractionTask(technicalPlanRecoveryState);
+  recoverInterruptedBidAnalysisTask(technicalPlanRecoveryState);
+  recoverInterruptedOutlineGenerationTask(technicalPlanRecoveryState);
+  recoverInterruptedContentGenerationTask(technicalPlanRecoveryState);
+  recoverInterruptedGlobalFactsTask(technicalPlanRecoveryState);
+  recoverInterruptedRejectionCheckTasks(rejectionCheckRecoveryState);
+  recoverInterruptedDuplicateCheckTask(duplicateCheckRecoveryState);
 
   return {
     subscribe,
