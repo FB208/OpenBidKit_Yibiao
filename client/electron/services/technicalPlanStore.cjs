@@ -377,6 +377,39 @@ function mapOutlineItems(items, mapper) {
   });
 }
 
+function remapStringId(value, idMap) {
+  const id = String(value || '').trim();
+  return idMap.get(id) || id;
+}
+
+function remapContentRuntimeIds(runtime, idMap) {
+  if (!runtime || typeof runtime !== 'object') return runtime;
+  const remapIds = (value) => Array.isArray(value) ? value.map((id) => remapStringId(id, idMap)) : value;
+  const itemRounds = runtime.word_adjustment_item_rounds && typeof runtime.word_adjustment_item_rounds === 'object'
+    ? Object.fromEntries(Object.entries(runtime.word_adjustment_item_rounds).map(([id, rounds]) => [remapStringId(id, idMap), rounds]))
+    : runtime.word_adjustment_item_rounds;
+  return {
+    ...runtime,
+    touched_item_ids: remapIds(runtime.touched_item_ids),
+    word_adjustment_item_id: remapStringId(runtime.word_adjustment_item_id, idMap),
+    word_adjustment_item_rounds: itemRounds,
+    word_adjustment_completed_item_ids: remapIds(runtime.word_adjustment_completed_item_ids),
+    target_item_id: remapStringId(runtime.target_item_id, idMap),
+  };
+}
+
+function remapContentTaskStats(stats, idMap) {
+  if (!stats?.content) return stats;
+  return {
+    ...stats,
+    content: {
+      ...stats.content,
+      section_adjustment_item_id: remapStringId(stats.content.section_adjustment_item_id, idMap),
+      total_adjustment_item_id: remapStringId(stats.content.total_adjustment_item_id, idMap),
+    },
+  };
+}
+
 function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogStore }) {
   function deleteOutlineAgentTask() {
     agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY);
@@ -1549,9 +1582,71 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     }
   }
 
+  // 目录排序时使用临时编号同步主键和外键，避免删除重建正文状态与计划。
+  function saveSortedOutline(outlineData, idMap) {
+    const rows = flattenOutlineItems(outlineData?.outline || []);
+    const rowOrder = new Map(rows.map((row, index) => [row.node_id, index]));
+    const changedIds = [...idMap.entries()].filter(([oldId, newId]) => oldId !== newId);
+    const temporaryIds = new Map(changedIds.map(([oldId], index) => [oldId, `__outline_sort_${crypto.randomUUID()}_${index}`]));
+    db.pragma('defer_foreign_keys = ON');
+
+    for (const [oldId] of changedIds) {
+      const temporaryId = temporaryIds.get(oldId);
+      db.prepare('UPDATE technical_plan_outline_nodes SET node_id = ? WHERE node_id = ?').run(temporaryId, oldId);
+      db.prepare('UPDATE technical_plan_content_sections SET node_id = ? WHERE node_id = ?').run(temporaryId, oldId);
+      db.prepare('UPDATE technical_plan_content_plans SET node_id = ? WHERE node_id = ?').run(temporaryId, oldId);
+    }
+    for (const [oldId] of changedIds) {
+      db.prepare('UPDATE technical_plan_outline_nodes SET parent_node_id = ? WHERE parent_node_id = ?').run(temporaryIds.get(oldId), oldId);
+    }
+    for (const [oldId, newId] of changedIds) {
+      const temporaryId = temporaryIds.get(oldId);
+      db.prepare('UPDATE technical_plan_outline_nodes SET node_id = ? WHERE node_id = ?').run(newId, temporaryId);
+      db.prepare('UPDATE technical_plan_content_sections SET node_id = ? WHERE node_id = ?').run(newId, temporaryId);
+      db.prepare('UPDATE technical_plan_content_plans SET node_id = ? WHERE node_id = ?').run(newId, temporaryId);
+      db.prepare('UPDATE technical_plan_outline_nodes SET parent_node_id = ? WHERE parent_node_id = ?').run(newId, temporaryId);
+    }
+
+    const updateNode = db.prepare(`
+      UPDATE technical_plan_outline_nodes
+      SET parent_node_id = @parent_node_id,
+        sort_order = @sort_order,
+        level = @level,
+        updated_at = @updated_at
+      WHERE node_id = @node_id
+    `);
+    const timestamp = now();
+    rows.forEach((row) => updateNode.run({ ...row, updated_at: timestamp }));
+    updateMeta({
+      outline_project_name: outlineData?.project_name || null,
+      outline_project_overview: outlineData?.project_overview || null,
+    });
+
+    const updateIllustration = db.prepare('UPDATE technical_plan_illustration_items SET section_ids_json = ?, updated_at = ? WHERE item_id = ?');
+    for (const item of db.prepare('SELECT item_id, section_ids_json FROM technical_plan_illustration_items').all()) {
+      const sectionIds = safeJsonParse(item.section_ids_json, [])
+        .map((sectionId) => idMap.get(String(sectionId)) || String(sectionId))
+        .sort((left, right) => (rowOrder.get(left) ?? Number.MAX_SAFE_INTEGER) - (rowOrder.get(right) ?? Number.MAX_SAFE_INTEGER));
+      updateIllustration.run(JSON.stringify(sectionIds), timestamp, item.item_id);
+    }
+
+    const meta = readMetaRow();
+    if (meta.content_generation_runtime_json) {
+      const runtime = remapContentRuntimeIds(safeJsonParse(meta.content_generation_runtime_json, {}), idMap);
+      db.prepare('UPDATE technical_plan_meta SET content_generation_runtime_json = ?, updated_at = ? WHERE id = 1')
+        .run(JSON.stringify(runtime), timestamp);
+    }
+    const contentTask = db.prepare("SELECT stats_json FROM technical_plan_tasks WHERE type = 'content-generation'").get();
+    if (contentTask?.stats_json) {
+      const stats = remapContentTaskStats(safeJsonParse(contentTask.stats_json, {}), idMap);
+      db.prepare("UPDATE technical_plan_tasks SET stats_json = ? WHERE type = 'content-generation'").run(JSON.stringify(stats));
+    }
+  }
+
   function applyPartial(partial) {
     const meta = ensureMetaRow();
     const metaUpdates = {};
+    const invalidatesContentGeneration = partial.invalidateContentGeneration === true;
 
     if (hasOwn(partial, 'workflowKind')) metaUpdates.workflow_kind = normalizeWorkflowKind(partial.workflowKind);
     if (hasOwn(partial, 'step') && isValidStep(partial.step)) metaUpdates.step = partial.step;
@@ -1570,13 +1665,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         : JSON.stringify(normalizeOutlineWordControlOptions(partial.outlineWordControlSnapshot));
     }
     if (hasOwn(partial, 'contentGenerationOptions')) metaUpdates.content_generation_options_json = jsonOrNull(partial.contentGenerationOptions);
-    if (hasOwn(partial, 'contentGenerationRuntime')) metaUpdates.content_generation_runtime_json = jsonOrNull(partial.contentGenerationRuntime);
+    if (!invalidatesContentGeneration && hasOwn(partial, 'contentGenerationRuntime')) metaUpdates.content_generation_runtime_json = jsonOrNull(partial.contentGenerationRuntime);
 
     if (Object.keys(metaUpdates).length) updateMeta(metaUpdates);
 
     const nextBidMode = isValidBidMode(partial.bidAnalysisMode) ? partial.bidAnalysisMode : meta.bid_analysis_mode;
     if (hasOwn(partial, 'referenceKnowledgeDocumentIds')) replaceReferenceDocumentIds(partial.referenceKnowledgeDocumentIds);
-    if (hasOwn(partial, 'contentIllustrationPlan')) replaceContentIllustrationPlan(partial.contentIllustrationPlan);
+    if (!invalidatesContentGeneration && hasOwn(partial, 'contentIllustrationPlan')) replaceContentIllustrationPlan(partial.contentIllustrationPlan);
     if (hasOwn(partial, 'contentIllustrationItem')) saveContentIllustrationItem(partial.contentIllustrationItem);
     if (hasOwn(partial, 'bidAnalysisTasks')) saveBidItems(partial.bidAnalysisTasks, nextBidMode);
     if (hasOwn(partial, 'bidAnalysisItem')) saveBidItem(partial.bidAnalysisItem, nextBidMode);
@@ -1584,10 +1679,12 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (hasOwn(partial, 'techRequirements')) upsertDerivedBidItem('techRequirements', partial.techRequirements, nextBidMode);
     if (hasOwn(partial, 'globalFacts')) {
       replaceGlobalFacts(partial.globalFacts);
-      clearContentGenerationState();
     }
 
+    if (invalidatesContentGeneration) clearContentGenerationState();
+
     for (const [field, type] of Object.entries(taskFieldTypes)) {
+      if (invalidatesContentGeneration && field === 'contentGenerationTask') continue;
       if (hasOwn(partial, field)) saveTask(type, partial[field]);
     }
 
@@ -1607,8 +1704,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       }
     }
 
-    if (hasOwn(partial, 'contentGenerationSections')) saveContentSections(partial.contentGenerationSections);
-    if (hasOwn(partial, 'contentGenerationPlans')) saveContentPlans(partial.contentGenerationPlans);
+    if (!invalidatesContentGeneration && hasOwn(partial, 'contentGenerationSections')) saveContentSections(partial.contentGenerationSections);
+    if (!invalidatesContentGeneration && hasOwn(partial, 'contentGenerationPlans')) saveContentPlans(partial.contentGenerationPlans);
     if (hasOwn(partial, 'contentGenerationItem')) saveContentGenerationItemFields(partial.contentGenerationItem);
   }
 
@@ -1838,8 +1935,14 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const invalidatesContentTask = reason !== 'sort';
 
     let savedOutlineData = outlineData;
+    let savedIllustrationPlan;
     const transaction = db.transaction(() => {
       assertOutlineMutationAllowed();
+      if (reason === 'sort') {
+        saveSortedOutline(outlineData, idMap);
+        savedIllustrationPlan = loadContentIllustrationPlan();
+        return;
+      }
       const snapshot = loadOutlinePersistenceSnapshot();
       const outlineToSave = buildOutlineWithPersistedContent(outlineData, { snapshot, reverseMap, affectedIds, clearAll });
       savedOutlineData = outlineToSave;
@@ -1858,9 +1961,17 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       clearContentIllustrationPlan();
     });
     transaction();
+    const sortedContentRuntime = reason === 'sort'
+      ? safeJsonParse(readMetaRow().content_generation_runtime_json, undefined)
+      : undefined;
+    const sortedContentTask = reason === 'sort' ? loadTask('content-generation') : undefined;
     return {
       outlineData: savedOutlineData,
-      contentIllustrationPlan: undefined,
+      contentIllustrationPlan: reason === 'sort' ? savedIllustrationPlan : undefined,
+      ...(reason === 'sort' ? {
+        contentGenerationTask: sortedContentTask,
+        contentGenerationRuntime: sortedContentRuntime,
+      } : {}),
       ...(invalidatesContentTask ? {
         contentGenerationTask: undefined,
         contentGenerationRuntime: undefined,

@@ -806,10 +806,6 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
 
   checkpointTask({ status: 'running', progress: 5, logs }, {
     globalFacts: [],
-    contentGenerationTask: undefined,
-    contentGenerationSections: {},
-    contentGenerationPlans: {},
-    contentGenerationRuntime: undefined,
   });
 
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);

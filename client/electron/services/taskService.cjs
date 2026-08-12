@@ -322,15 +322,13 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
 
     if (task.type === 'global-facts-generation') {
       copyPatchFields(patch, state, ['globalFacts']);
-      if (!isActiveTaskStatus(task.status)) {
-        copyPatchFields(patch, state, [
-          'contentGenerationTask',
-          'contentGenerationSections',
-          'contentGenerationPlans',
-          'contentIllustrationPlan',
-          'contentGenerationRuntime',
-        ]);
-      }
+      copyPatchFields(patch, state, [
+        'contentGenerationTask',
+        'contentGenerationSections',
+        'contentGenerationPlans',
+        'contentIllustrationPlan',
+        'contentGenerationRuntime',
+      ]);
     }
 
     if (task.type === 'content-generation') {
@@ -1102,6 +1100,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     },
     startGlobalFactsGeneration(payload) {
       return startManagedTask('global-facts-generation', payload, runGlobalFactsTask, {
+        invalidateContentGeneration: true,
         globalFacts: [],
         contentGenerationTask: undefined,
         contentGenerationSections: {},

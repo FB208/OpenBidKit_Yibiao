@@ -755,16 +755,15 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
         if (taskType === 'global-facts-generation') {
           const hasGlobalFacts = hasOwnField(technicalPlan, 'globalFacts');
-          const globalFactsChanged = hasGlobalFacts && technicalPlan.globalFacts !== prev.globalFacts;
           return {
             ...prev,
             globalFactsTask: trimTaskLogs(technicalPlan.globalFactsTask) || latestTask,
             globalFacts: hasGlobalFacts ? (technicalPlan.globalFacts || []) : prev.globalFacts,
-            contentGenerationTask: globalFactsChanged ? undefined : prev.contentGenerationTask,
-            contentGenerationSections: globalFactsChanged ? {} : prev.contentGenerationSections,
-            contentGenerationPlans: globalFactsChanged ? {} : prev.contentGenerationPlans,
-            contentIllustrationPlan: globalFactsChanged ? undefined : prev.contentIllustrationPlan,
-            contentGenerationRuntime: globalFactsChanged ? undefined : prev.contentGenerationRuntime,
+            contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : prev.contentGenerationTask,
+            contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : prev.contentGenerationSections,
+            contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
+            contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : prev.contentIllustrationPlan,
+            contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
           };
         }
 
@@ -1037,7 +1036,26 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
   const saveOutline = async (request: SaveOutlineRequest) => {
     const saved = await window.yibiao?.technicalPlan.saveOutline(request);
-    setState((prev) => ({ ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData }));
+    setState((prev) => {
+      if (request.reason !== 'sort') {
+        return { ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData };
+      }
+      const contentGenerationSections = Object.fromEntries(Object.entries(prev.contentGenerationSections).map(([nodeId, section]) => {
+        const nextId = request.idMap?.[nodeId] || nodeId;
+        return [nextId, { ...section, id: nextId }];
+      }));
+      const contentGenerationPlans = Object.fromEntries(Object.entries(prev.contentGenerationPlans).map(([nodeId, plan]) => [
+        request.idMap?.[nodeId] || nodeId,
+        plan,
+      ]));
+      return {
+        ...prev,
+        ...(saved || {}),
+        outlineData: saved?.outlineData || request.outlineData,
+        contentGenerationSections,
+        contentGenerationPlans,
+      };
+    });
   };
 
   const saveOutlineSelection = async (request: SaveOutlineSelectionRequest) => {
