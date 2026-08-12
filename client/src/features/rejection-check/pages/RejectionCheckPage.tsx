@@ -570,6 +570,8 @@ function RejectionCheckPage() {
   const [extractionTask, setExtractionTask] = useState<RejectionBackgroundTaskState | undefined>();
   const [checkTask, setCheckTask] = useState<RejectionBackgroundTaskState | undefined>();
   const [customCheckItems, setCustomCheckItems] = useState('');
+  const [customCheckItemsDraft, setCustomCheckItemsDraft] = useState('');
+  const [customCheckItemsSaving, setCustomCheckItemsSaving] = useState(false);
   const [checkOptions, setCheckOptions] = useState<RejectionCheckOptions>(defaultCheckOptions);
   const [draftCheckOptions, setDraftCheckOptions] = useState<RejectionCheckOptions>(defaultCheckOptions);
   const [checkConfigDialogOpen, setCheckConfigDialogOpen] = useState(false);
@@ -578,6 +580,9 @@ function RejectionCheckPage() {
   const hydratedRef = useRef(false);
   const autoStartedSignatureRef = useRef('');
   const activeTaskTypesRef = useRef<Set<string> | null>(null);
+  const customCheckItemsRef = useRef('');
+  const customCheckItemsDraftRef = useRef('');
+  const customCheckItemsSaveVersionRef = useRef(0);
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
 
@@ -600,7 +605,7 @@ function RejectionCheckPage() {
     || logicCheckResult.findings.length
     || extractionTask
     || checkTask
-    || customCheckItems.trim()
+    || customCheckItemsDraft.trim()
     || checkOptionsChanged,
   );
   const canGoNext = Boolean(tenderDocument && bidDocuments.length);
@@ -647,7 +652,8 @@ function RejectionCheckPage() {
   const logicCheckRunning = logicCheckResult.status === 'running';
   const backgroundCheckRunning = checkTask?.status === 'running';
   const checkRunning = rejectionCheckRunning || typoCheckRunning || logicCheckRunning || backgroundCheckRunning;
-  const customCheckItemsDisabled = extractionRunning || checkRunning;
+  const customCheckItemsDirty = customCheckItemsDraft !== customCheckItems;
+  const customCheckItemsDisabled = extractionRunning || checkRunning || customCheckItemsSaving;
   const hasStaleRejectionCheckResult = Boolean(
     currentRejectionCheckInputSignature
     && rejectionCheckResult.inputSignature
@@ -678,6 +684,22 @@ function RejectionCheckPage() {
     trackPageView(page);
   }, [activeCheckResultTab, activeDocumentTab, activeResultTab, activeTenderSourceDocument, analyticsReady, step]);
 
+  function syncCustomCheckItemsFromWorkspace(value: unknown) {
+    const nextValue = typeof value === 'string' ? value : '';
+    const shouldSyncDraft = customCheckItemsDraftRef.current === customCheckItemsRef.current;
+    customCheckItemsRef.current = nextValue;
+    setCustomCheckItems(nextValue);
+    if (shouldSyncDraft) {
+      customCheckItemsDraftRef.current = nextValue;
+      setCustomCheckItemsDraft(nextValue);
+    }
+  }
+
+  function updateCustomCheckItemsDraft(value: string) {
+    customCheckItemsDraftRef.current = value;
+    setCustomCheckItemsDraft(value);
+  }
+
   function applyWorkspaceState(state: RejectionCheckWorkspaceState, options: { syncViewState?: boolean } = {}) {
     const syncViewState = options.syncViewState !== false;
     setTenderDocument(state.tenderDocument || null);
@@ -705,7 +727,7 @@ function RejectionCheckPage() {
     setLogicCheckResult(normalizeLogicCheckResultState(state.logicCheckResult));
     setExtractionTask(normalizeBackgroundTaskState(state.extractionTask));
     setCheckTask(normalizeBackgroundTaskState(state.checkTask));
-    setCustomCheckItems(typeof state.customCheckItems === 'string' ? state.customCheckItems : '');
+    syncCustomCheckItemsFromWorkspace(state.customCheckItems);
     const nextOptions = normalizeCheckOptions(state.checkOptions);
     setCheckOptions(nextOptions);
     setDraftCheckOptions(nextOptions);
@@ -739,7 +761,7 @@ function RejectionCheckPage() {
     }
     if (has('extractionTask')) setExtractionTask(normalizeBackgroundTaskState(patch.extractionTask));
     if (has('checkTask')) setCheckTask(normalizeBackgroundTaskState(patch.checkTask));
-    if (has('customCheckItems')) setCustomCheckItems(typeof patch.customCheckItems === 'string' ? patch.customCheckItems : '');
+    if (has('customCheckItems')) syncCustomCheckItemsFromWorkspace(patch.customCheckItems);
     if (has('checkOptions')) {
       const nextOptions = normalizeCheckOptions(patch.checkOptions);
       setCheckOptions(nextOptions);
@@ -788,13 +810,12 @@ function RejectionCheckPage() {
       step,
       activeResultTab,
       activeCheckResultTab,
-      customCheckItems,
       checkOptions,
     })
       .catch((error) => {
         showToast(error instanceof Error ? error.message : '保存废标项检查页面状态失败', 'error');
       });
-  }, [activeCheckResultTab, activeDocumentTab, activeResultTab, checkOptions, customCheckItems, showToast, step]);
+  }, [activeCheckResultTab, activeDocumentTab, activeResultTab, checkOptions, showToast, step]);
 
   useEffect(() => {
     if (!window.yibiao?.tasks) {
@@ -992,6 +1013,7 @@ function RejectionCheckPage() {
 
   function resetWorkspace() {
     autoStartedSignatureRef.current = '';
+    customCheckItemsSaveVersionRef.current += 1;
     setStep('documents');
     setTenderDocument(null);
     setTenderDocuments([]);
@@ -1006,7 +1028,11 @@ function RejectionCheckPage() {
     setLogicCheckResult(createEmptyLogicCheckResultState());
     setExtractionTask(undefined);
     setCheckTask(undefined);
+    customCheckItemsRef.current = '';
+    customCheckItemsDraftRef.current = '';
     setCustomCheckItems('');
+    setCustomCheckItemsDraft('');
+    setCustomCheckItemsSaving(false);
     setCheckOptions(defaultCheckOptions);
     setDraftCheckOptions(defaultCheckOptions);
     setCheckConfigDialogOpen(false);
@@ -1038,8 +1064,57 @@ function RejectionCheckPage() {
     showToast('检查配置已保存', 'success');
   }
 
+  async function saveCustomCheckItems() {
+    if (!customCheckItemsDirty || customCheckItemsDisabled) {
+      return;
+    }
+
+    const saveUiState = window.yibiao?.rejectionCheck.saveUiState;
+    if (typeof saveUiState !== 'function') {
+      showToast('废标项检查缓存接口尚未加载，请重启应用后重试', 'error');
+      return;
+    }
+
+    const nextCustomCheckItems = customCheckItemsDraftRef.current;
+    const saveVersion = ++customCheckItemsSaveVersionRef.current;
+    try {
+      setCustomCheckItemsSaving(true);
+      await saveUiState({ customCheckItems: nextCustomCheckItems });
+      if (saveVersion !== customCheckItemsSaveVersionRef.current) {
+        return;
+      }
+      customCheckItemsRef.current = nextCustomCheckItems;
+      setCustomCheckItems(nextCustomCheckItems);
+      showToast('自定义检查项已保存', 'success');
+    } catch (error) {
+      if (saveVersion !== customCheckItemsSaveVersionRef.current) {
+        return;
+      }
+      showToast(error instanceof Error ? error.message : '保存自定义检查项失败', 'error');
+    } finally {
+      if (saveVersion === customCheckItemsSaveVersionRef.current) {
+        setCustomCheckItemsSaving(false);
+      }
+    }
+  }
+
+  function ensureCustomCheckItemsSaved() {
+    if (!customCheckItemsDirty) {
+      return true;
+    }
+
+    setStep('items');
+    setActiveResultTab('custom');
+    showToast('自定义检查项有未保存修改，请先保存', 'info');
+    return false;
+  }
+
   async function startChecks(options: RejectionCheckOptions = checkOptions, runOptions: RejectionCheckOptions = options) {
     if (checkRunning) {
+      return;
+    }
+
+    if (!ensureCustomCheckItemsSaved()) {
       return;
     }
 
@@ -1127,7 +1202,6 @@ function RejectionCheckPage() {
 
       await window.yibiao?.rejectionCheck.saveUiState({
         activeCheckResultTab: nextActiveCheckResultTab,
-        customCheckItems,
         checkOptions: options,
       });
 
@@ -1345,6 +1419,9 @@ function RejectionCheckPage() {
   }
 
   function switchStep(nextStep: RejectionCheckStep) {
+    if (nextStep !== step && !ensureCustomCheckItemsSaved()) {
+      return;
+    }
     if (nextStep === 'items' && !canGoNext) {
       showToast('请先准备招标文件和投标文件', 'info');
       return;
@@ -1853,8 +1930,33 @@ function RejectionCheckPage() {
             aria-labelledby={`rejection-result-tab-${activeResultTab}`}
           >
             <div className="analysis-result-head rejection-reader-head">
-              <strong>{activeResultTab === 'analysis' ? '解析结果' : '自定义检查项'}</strong>
-              <span>{activeResultTab === 'analysis' ? `${extractionStatusLabels[visibleExtractionStatus]} · ${resultSourceLabel}` : customCheckItemsDisabled ? '任务运行中暂不能修改自定义检查项，当前检查会使用启动任务时的内容' : '可填写补充检查口径、人工关注项或项目经验'}</span>
+              <div className="rejection-reader-heading">
+                <strong>{activeResultTab === 'analysis' ? '解析结果' : '自定义检查项'}</strong>
+                <span>{activeResultTab === 'analysis'
+                  ? `${extractionStatusLabels[visibleExtractionStatus]} · ${resultSourceLabel}`
+                  : customCheckItemsSaving
+                    ? '正在保存自定义检查项'
+                    : extractionRunning || checkRunning
+                      ? '任务运行中暂不能修改自定义检查项，当前检查会使用启动任务时的内容'
+                      : customCheckItemsDirty
+                        ? '内容尚未保存，保存后才用于废标项检查'
+                        : '可填写补充检查口径、人工关注项或项目经验'}</span>
+              </div>
+              {activeResultTab === 'custom' && (
+                <div className="rejection-custom-save-actions">
+                  <span className={`rejection-custom-save-state${customCheckItemsDirty ? ' is-dirty' : ''}`}>
+                    {customCheckItemsDirty ? '有未保存修改' : '已保存'}
+                  </span>
+                  <button
+                    type="button"
+                    className="primary-action"
+                    onClick={() => void saveCustomCheckItems()}
+                    disabled={!customCheckItemsDirty || customCheckItemsDisabled}
+                  >
+                    {customCheckItemsSaving ? '保存中...' : '保存'}
+                  </button>
+                </div>
+              )}
             </div>
 
             {activeResultTab === 'analysis' ? (
@@ -1873,8 +1975,8 @@ function RejectionCheckPage() {
             ) : (
               <MarkdownEditor
                 className="rejection-custom-editor"
-                value={customCheckItems}
-                onChange={setCustomCheckItems}
+                value={customCheckItemsDraft}
+                onChange={updateCustomCheckItemsDraft}
                 disabled={customCheckItemsDisabled}
                 placeholder="输入自定义检查项，例如：\n- 关注报价文件是否存在多处不一致\n- 关注资格证明材料有效期是否覆盖投标截止时间\n- 关注技术偏离表是否遗漏关键参数响应"
               />

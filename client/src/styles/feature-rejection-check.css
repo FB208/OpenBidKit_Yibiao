@@ -212,12 +212,39 @@
 
 .rejection-reader-head {
   min-width: 0;
+  flex-wrap: wrap;
 }
 
-.rejection-reader-head span {
+.rejection-reader-heading {
+  display: grid;
+  flex: 1 1 320px;
+  min-width: 0;
+  gap: 4px;
+}
+
+.rejection-reader-head > span,
+.rejection-reader-heading span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.rejection-custom-save-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.rejection-custom-save-state {
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.rejection-custom-save-state.is-dirty {
+  color: #9a5b00;
 }
 
 .rejection-result-command-bar {
