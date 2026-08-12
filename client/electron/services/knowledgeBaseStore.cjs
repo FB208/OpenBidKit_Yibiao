@@ -1036,6 +1036,59 @@ function createKnowledgeBaseStore({ app, db }) {
     return fs.existsSync(markdownPath) ? fs.readFileSync(markdownPath, 'utf-8') : '';
   }
 
+  // 批量读取引用文档及其知识条目，避免按文档重复查询状态、条目和来源关系。
+  function readReferences(documentIds, options = {}) {
+    const ids = [...new Set((Array.isArray(documentIds) ? documentIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean))];
+    if (!ids.length) return [];
+    const placeholders = ids.map(() => '?').join(', ');
+    const documentRows = db.prepare(`SELECT * FROM knowledge_documents WHERE document_id IN (${placeholders})`).all(...ids);
+    const documentById = new Map(documentRows.map((row) => [row.document_id, row]));
+    const blocksByItem = new Map();
+    const itemsByDocument = new Map();
+    if (options.includeItems !== false) {
+      for (const row of db.prepare(`
+        SELECT document_id, item_id, block_id
+        FROM knowledge_item_blocks
+        WHERE document_id IN (${placeholders})
+        ORDER BY document_id ASC, item_id ASC, sort_order ASC
+      `).all(...ids)) {
+        const key = `${row.document_id}::${row.item_id}`;
+        const blocks = blocksByItem.get(key) || [];
+        blocks.push(row.block_id);
+        blocksByItem.set(key, blocks);
+      }
+      for (const row of db.prepare(`
+        SELECT * FROM knowledge_items
+        WHERE document_id IN (${placeholders})
+        ORDER BY document_id ASC, sort_order ASC, id ASC
+      `).all(...ids)) {
+        const items = itemsByDocument.get(row.document_id) || [];
+        items.push({
+          id: row.item_id,
+          title: row.title,
+          resume: row.resume,
+          content: row.content,
+          source_block_ids: blocksByItem.get(`${row.document_id}::${row.item_id}`) || [],
+          source_file: row.source_file || undefined,
+        });
+        itemsByDocument.set(row.document_id, items);
+      }
+    }
+    return ids.flatMap((documentId) => {
+      const row = documentById.get(documentId);
+      if (!row) return [];
+      const document = documentFromRow(row);
+      const markdownPath = options.includeMarkdown ? resolvePath(row.markdown_path) : '';
+      return [{
+        document,
+        items: itemsByDocument.get(documentId) || [],
+        ...(options.includeMarkdown ? { markdown: fs.existsSync(markdownPath) ? fs.readFileSync(markdownPath, 'utf-8') : '' } : {}),
+      }];
+    });
+  }
+
   function reportFromRow(row) {
     if (!row) return null;
     return {
@@ -1088,19 +1141,16 @@ function createKnowledgeBaseStore({ app, db }) {
   }
 
   function getOutlineReferences(documentIds) {
-    const ids = Array.isArray(documentIds) ? documentIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
-    if (!ids.length) return { items: [] };
     const seen = new Set();
     const items = [];
-    for (const documentId of ids) {
-      const document = db.prepare('SELECT document_id, status FROM knowledge_documents WHERE document_id = ?').get(documentId);
-      if (!document || document.status !== 'success') continue;
-      for (const item of readItems(documentId)) {
+    for (const reference of readReferences(documentIds)) {
+      if (reference.document.status !== 'success') continue;
+      for (const item of reference.items) {
         const itemId = String(item?.id || '').trim();
         const title = String(item?.title || '').trim();
         const resume = String(item?.resume || item?.summary || '').trim();
         if (!itemId || !title || !resume) continue;
-        const referenceId = `${documentId}::${itemId}`;
+        const referenceId = `${reference.document.id}::${itemId}`;
         if (seen.has(referenceId)) continue;
         seen.add(referenceId);
         items.push({ id: referenceId, title, resume });
@@ -1416,6 +1466,7 @@ function createKnowledgeBaseStore({ app, db }) {
     readMatchBatches,
     saveMatchBatch,
     readMarkdown,
+    readReferences,
     saveBlocks: saveBlocksTransaction,
     readBlocks,
     readFilteredBlocks,

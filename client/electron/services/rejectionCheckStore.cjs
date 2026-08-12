@@ -295,11 +295,12 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
 
   function documentFromRow(row) {
     if (!row) return null;
+    const filePath = resolveMarkdownPath(row.markdown_path, row.role, row.document_id);
     return {
       id: row.document_id || row.role,
       role: normalizeDocumentRole(row.role),
       fileName: row.file_name,
-      content: readDocumentMarkdown(row.document_id || row.role),
+      content: fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '',
       source: row.source === 'technical-plan' ? 'technical-plan' : 'upload',
       parserLabel: row.parser_label || undefined,
       importedAt: row.imported_at,
@@ -664,9 +665,11 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
     const meta = db.prepare('SELECT * FROM rejection_check_meta WHERE id = 1').get();
     if (!meta) throw new Error('废标项检查数据库尚未初始化');
     const tasks = loadTasks();
-    const tenderDocument = loadTenderDocument();
-    const tenderDocuments = loadTenderDocuments();
-    const bidDocuments = loadBidDocuments();
+    const documents = db.prepare('SELECT * FROM rejection_check_documents ORDER BY role ASC, sort_order ASC, imported_at ASC').all();
+    const tenderRows = documents.filter((row) => row.role === 'tender');
+    const tenderDocument = documentFromRow(tenderRows.find((row) => row.document_id === tenderDocumentId) || tenderRows[0]);
+    const tenderDocuments = tenderRows.filter((row) => row.document_id !== tenderDocumentId).map(documentFromRow).filter(Boolean);
+    const bidDocuments = documents.filter((row) => row.role === 'bid').map(documentFromRow).filter(Boolean);
     const activeDocumentTab = normalizeDocumentTab(meta.active_document_tab);
     const validActiveDocumentTab = activeDocumentTab === 'tender'
       || tenderDocuments.some((document) => document.id === activeDocumentTab)

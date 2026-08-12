@@ -2069,57 +2069,40 @@ function normalizeReferenceDocumentIds(storedPlan) {
     : [];
 }
 
-function loadContentKnowledgeItems(knowledgeBaseService, documentIds, log) {
+function loadContentKnowledgeReferences(knowledgeBaseService, documentIds, log) {
   if (!documentIds.length) {
     log('本次正文编排未选择参考知识库。');
-    return [];
+    return { items: [], contentMap: new Map() };
   }
-  if (!knowledgeBaseService?.getOutlineReferences) {
+  if (!knowledgeBaseService?.readReferences) {
     log('未找到知识库读取服务，正文编排不使用知识库。');
-    return [];
+    return { items: [], contentMap: new Map() };
   }
 
   try {
-    const result = knowledgeBaseService.getOutlineReferences(documentIds);
-    const items = Array.isArray(result?.items) ? result.items.map((item) => ({
-      id: String(item?.id || '').trim(),
-      title: String(item?.title || '').trim(),
-      resume: String(item?.resume || '').trim(),
-    })).filter((item) => item.id && item.title && item.resume) : [];
-    log(items.length ? `正文编排已读取 ${items.length} 条知识库轻量条目。` : '未读取到可用知识库轻量条目，正文编排不使用知识库。');
-    return items;
-  } catch (error) {
-    log(`读取正文编排参考知识库失败，已跳过：${error.message || String(error)}`);
-    return [];
-  }
-}
-
-function loadContentKnowledgeContentMap(knowledgeBaseService, documentIds, log) {
-  const map = new Map();
-  if (!documentIds.length || !knowledgeBaseService?.readItems) {
-    return map;
-  }
-
-  for (const documentId of documentIds) {
-    try {
-      const items = knowledgeBaseService.readItems(documentId);
-      for (const item of Array.isArray(items) ? items : []) {
+    const references = knowledgeBaseService.readReferences(documentIds);
+    const items = [];
+    const contentMap = new Map();
+    for (const reference of Array.isArray(references) ? references : []) {
+      const documentId = String(reference?.document?.id || '').trim();
+      for (const item of Array.isArray(reference?.items) ? reference.items : []) {
         const itemId = String(item?.id || '').trim();
         const content = String(item?.content || '').trim();
-        if (!itemId || !content) {
-          continue;
+        if (documentId && itemId && content) contentMap.set(`${documentId}::${itemId}`, { content });
+        const title = String(item?.title || '').trim();
+        const resume = String(item?.resume || '').trim();
+        if (reference?.document?.status === 'success' && documentId && itemId && title && resume) {
+          items.push({ id: `${documentId}::${itemId}`, title, resume });
         }
-        map.set(`${documentId}::${itemId}`, { content });
       }
-    } catch (error) {
-      log(`读取知识库正文素材失败，已跳过文档 ${documentId}：${error.message || String(error)}`);
     }
+    log(items.length ? `正文编排已读取 ${items.length} 条知识库轻量条目。` : '未读取到可用知识库轻量条目，正文编排不使用知识库。');
+    if (contentMap.size) log(`正文生成可用知识库正文素材 ${contentMap.size} 条。`);
+    return { items, contentMap };
+  } catch (error) {
+    log(`读取正文编排参考知识库失败，已跳过：${error.message || String(error)}`);
+    return { items: [], contentMap: new Map() };
   }
-
-  if (map.size) {
-    log(`正文生成可用知识库正文素材 ${map.size} 条。`);
-  }
-  return map;
 }
 
 function resolveKnowledgeContents(itemIds, knowledgeContentMap) {
@@ -3418,13 +3401,12 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
   }
 
-  knowledgeItems = loadContentKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, (message) => {
+  const knowledgeReferences = loadContentKnowledgeReferences(knowledgeBaseService, referenceKnowledgeDocumentIds, (message) => {
     logs = [...logs, message];
   });
+  knowledgeItems = knowledgeReferences.items;
   allowedKnowledgeItemIds = new Set(knowledgeItems.map((item) => item.id));
-  knowledgeContentMap = loadContentKnowledgeContentMap(knowledgeBaseService, referenceKnowledgeDocumentIds, (message) => {
-    logs = [...logs, message];
-  });
+  knowledgeContentMap = knowledgeReferences.contentMap;
 
   function getLeafContentForWords(item) {
     const section = sections[item.id];

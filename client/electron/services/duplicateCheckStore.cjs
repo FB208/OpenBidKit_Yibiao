@@ -640,12 +640,12 @@ function createDuplicateCheckStore({ app, db, taskLogStore }) {
     }
   }
 
-  function loadMetadataAnalysis(row) {
+  function loadMetadataAnalysis(row, filesState, fileNameById) {
     if (!row) return undefined;
     const stats = safeJsonParse(row.stats_json, {});
     const contentFiles = db.prepare('SELECT * FROM duplicate_check_content_files ORDER BY file_id ASC').all().map((item) => ({
       file_id: item.file_id,
-      file_name: loadFileName(item.file_id),
+      file_name: fileNameById.get(item.file_id) || item.file_id,
       status: normalizeStatus(item.status, ['pending', 'running', 'success', 'error'], 'pending'),
       content_path: item.content_path || undefined,
       content_length: Number(item.content_length || 0),
@@ -655,14 +655,14 @@ function createDuplicateCheckStore({ app, db, taskLogStore }) {
     const metadataRows = db.prepare('SELECT * FROM duplicate_check_metadata_items ORDER BY file_id ASC, sort_order ASC, id ASC').all();
     const statusByFile = new Map((stats.files || []).map((file) => [file.file_id, file]));
     const filesById = new Map();
-    for (const file of loadFiles().bidFiles) {
+    for (const file of filesState.bidFiles) {
       const summary = statusByFile.get(file.id) || {};
       filesById.set(file.id, { file_id: file.id, file_name: file.file_name, status: summary.status || 'pending', metadata: [], error: summary.error });
     }
     for (const item of metadataRows) {
       if (!filesById.has(item.file_id)) {
         const summary = statusByFile.get(item.file_id) || {};
-        filesById.set(item.file_id, { file_id: item.file_id, file_name: loadFileName(item.file_id), status: summary.status || 'success', metadata: [], error: summary.error });
+        filesById.set(item.file_id, { file_id: item.file_id, file_name: fileNameById.get(item.file_id) || item.file_id, status: summary.status || 'success', metadata: [], error: summary.error });
       }
       filesById.get(item.file_id).metadata.push({
         key: item.key,
@@ -691,7 +691,7 @@ function createDuplicateCheckStore({ app, db, taskLogStore }) {
     };
   }
 
-  function loadOutlineAnalysis(row) {
+  function loadOutlineAnalysis(row, filesState) {
     if (!row) return undefined;
     const stats = safeJsonParse(row.stats_json, {});
     const itemsByFile = new Map();
@@ -739,7 +739,7 @@ function createDuplicateCheckStore({ app, db, taskLogStore }) {
       }
     }
     const summaryByFile = new Map((stats.files || []).map((file) => [file.file_id, file]));
-    const files = loadFiles().bidFiles.map((file) => {
+    const files = filesState.bidFiles.map((file) => {
       const summary = summaryByFile.get(file.id) || {};
       const items = itemsByFile.get(file.id) || [];
       return {
@@ -780,7 +780,7 @@ function createDuplicateCheckStore({ app, db, taskLogStore }) {
     };
   }
 
-  function loadContentAnalysis(row) {
+  function loadContentAnalysis(row, filesState) {
     if (!row) return undefined;
     const stats = safeJsonParse(row.stats_json, {});
     const occurrenceRows = db.prepare('SELECT * FROM duplicate_check_content_occurrences').all();
@@ -808,17 +808,17 @@ function createDuplicateCheckStore({ app, db, taskLogStore }) {
       tenderSentenceCount: Number(stats.tenderSentenceCount || 0),
       tenderMatchedSentenceCount: Number(stats.tenderMatchedSentenceCount || 0),
       totalSentenceCount: Number(stats.totalSentenceCount || 0),
-      extraction: stats.extraction || createEmptyProgress('pending', loadFiles().bidFiles.length),
+      extraction: stats.extraction || createEmptyProgress('pending', filesState.bidFiles.length),
       duplicateSentences,
     };
   }
 
-  function loadImageAnalysis(row) {
+  function loadImageAnalysis(row, filesState, fileNameById) {
     if (!row) return undefined;
     const stats = safeJsonParse(row.stats_json, {});
     const files = db.prepare('SELECT * FROM duplicate_check_image_files ORDER BY file_id ASC').all().map((item) => ({
       file_id: item.file_id,
-      file_name: loadFileName(item.file_id),
+      file_name: fileNameById.get(item.file_id) || item.file_id,
       status: normalizeStatus(item.status, ['pending', 'running', 'success', 'error'], 'pending'),
       image_count: Number(item.image_count || 0),
       unique_image_count: Number(item.unique_image_count || 0),
@@ -850,26 +850,25 @@ function createDuplicateCheckStore({ app, db, taskLogStore }) {
       signature: row.signature || undefined,
       started_at: row.started_at || undefined,
       updated_at: row.updated_at || undefined,
-      extraction: stats.extraction || createEmptyProgress('pending', loadFiles().bidFiles.length),
+      extraction: stats.extraction || createEmptyProgress('pending', filesState.bidFiles.length),
       totalImageCount: Number(stats.totalImageCount || 0),
       files,
       duplicateImages,
     };
   }
 
-  function loadFileName(fileId) {
-    const row = db.prepare('SELECT file_name FROM duplicate_check_files WHERE file_id = ?').get(fileId);
-    return row?.file_name || fileId;
-  }
-
-  function loadAnalysisSections() {
+  function loadAnalysisSections(filesState) {
     const rows = db.prepare('SELECT * FROM duplicate_check_analysis_sections').all();
     const bySection = new Map(rows.map((row) => [row.section, row]));
+    const fileNameById = new Map([
+      ...filesState.tenderFiles,
+      ...filesState.bidFiles,
+    ].map((file) => [file.id, file.file_name]));
     return {
-      metadataAnalysis: loadMetadataAnalysis(bySection.get('metadata')),
-      outlineAnalysis: loadOutlineAnalysis(bySection.get('outline')),
-      contentAnalysis: loadContentAnalysis(bySection.get('content')),
-      imageAnalysis: loadImageAnalysis(bySection.get('image')),
+      metadataAnalysis: loadMetadataAnalysis(bySection.get('metadata'), filesState, fileNameById),
+      outlineAnalysis: loadOutlineAnalysis(bySection.get('outline'), filesState),
+      contentAnalysis: loadContentAnalysis(bySection.get('content'), filesState),
+      imageAnalysis: loadImageAnalysis(bySection.get('image'), filesState, fileNameById),
     };
   }
 
@@ -905,7 +904,7 @@ function createDuplicateCheckStore({ app, db, taskLogStore }) {
       step: normalizeStep(meta.step),
       activeAnalysisTab: normalizeTab(meta.active_analysis_tab),
       analysisTask: loadTask('duplicate-analysis'),
-      ...loadAnalysisSections(),
+      ...loadAnalysisSections(files),
     };
   }
 

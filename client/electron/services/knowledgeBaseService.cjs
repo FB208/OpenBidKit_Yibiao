@@ -2281,6 +2281,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       return knowledgeBaseStore.readMarkdown(documentId);
     },
 
+    readReferences(documentIds, options) {
+      return knowledgeBaseStore.readReferences(documentIds, options);
+    },
+
     readItems(documentId) {
       return knowledgeBaseStore.readItems(documentId);
     },

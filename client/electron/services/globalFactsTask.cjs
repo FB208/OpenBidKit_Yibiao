@@ -207,16 +207,17 @@ function loadKnowledgeItems(knowledgeBaseService, documentIds, log) {
     log('未选择参考知识库，本次只基于招标文件、Step02 解析结果和目录预设关键信息。', 12);
     return [];
   }
-  if (!knowledgeBaseService?.readItems) {
+  if (!knowledgeBaseService?.readReferences) {
     log('未找到知识库读取服务，本次不使用知识库条目。', 12);
     return [];
   }
 
   const items = [];
-  for (const documentId of documentIds) {
-    try {
-      const documentItems = knowledgeBaseService.readItems(documentId);
-      for (const item of Array.isArray(documentItems) ? documentItems : []) {
+  try {
+    const references = knowledgeBaseService.readReferences(documentIds);
+    for (const reference of Array.isArray(references) ? references : []) {
+      const documentId = String(reference?.document?.id || '').trim();
+      for (const item of Array.isArray(reference?.items) ? reference.items : []) {
         const title = singleLine(item?.title);
         const content = String(item?.content || '').trim();
         if (!title || !content) continue;
@@ -227,9 +228,9 @@ function loadKnowledgeItems(knowledgeBaseService, documentIds, log) {
           content,
         });
       }
-    } catch (error) {
-      log(`读取知识库条目失败，已跳过文档 ${documentId}：${error.message || String(error)}`, 12);
     }
+  } catch (error) {
+    log(`读取知识库条目失败，已跳过：${error.message || String(error)}`, 12);
   }
   log(items.length ? `已读取 ${items.length} 条知识库完整条目。` : '未读取到可用知识库完整条目。', 14);
   return items;

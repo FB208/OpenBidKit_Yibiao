@@ -477,13 +477,13 @@ function normalizeReferenceDocumentIds(storedPlan) {
 }
 
 function buildKnowledgeFiles(knowledgeBaseService, documentIds) {
-  if (!knowledgeBaseService?.readMarkdown) return [];
-  const files = [];
-  documentIds.forEach((documentId, index) => {
-    const content = String(knowledgeBaseService.readMarkdown(documentId) || '').trim();
-    if (content) files.push({ path: `参考知识库/参考资料-${index + 1}.md`, content });
-  });
-  return files;
+  if (!knowledgeBaseService?.readReferences) return [];
+  return knowledgeBaseService.readReferences(documentIds, { includeMarkdown: true, includeItems: false })
+    .map((reference, index) => ({
+      path: `参考知识库/参考资料-${index + 1}.md`,
+      content: String(reference?.markdown || '').trim(),
+    }))
+    .filter((file) => file.content);
 }
 
 function createInitialPrompt(taskInstruction) {

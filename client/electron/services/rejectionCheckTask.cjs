@@ -1502,13 +1502,16 @@ function updateExtractionState(checkpointTask, currentExtraction, taskPartial, e
   return nextExtraction;
 }
 
-async function runRejectionItemsExtractionTask({ aiService, workspaceStore, checkpointTask, payload }) {
-  const state = workspaceStore.loadRejectionCheck ? workspaceStore.loadRejectionCheck() : {};
+async function runRejectionItemsExtractionTask({ aiService, workspaceStore, checkpointTask, payload, previousState }) {
+  const state = {
+    ...(previousState || {}),
+    ...(payload?.workspaceState || {}),
+  };
   const tenderDocument = state.tenderDocument || null;
   if (typeof workspaceStore.readDocumentMarkdown !== 'function' || typeof workspaceStore.createDocumentSignature !== 'function') {
     throw new Error('废标项检查存储接口尚未初始化');
   }
-  const tenderContent = String(workspaceStore.readDocumentMarkdown('tender') || '');
+  const tenderContent = String(tenderDocument?.content || '');
   const tenderSignature = String(workspaceStore.createDocumentSignature({ ...tenderDocument, content: tenderContent }) || '');
   if (!tenderContent.trim() || !tenderSignature) throw new Error('缺少招标文件内容，无法解析无效与废标项');
   const developerLogger = createRejectionDeveloperLogger(aiService, 'rejection-items-extraction', {
@@ -1588,8 +1591,11 @@ function updateCheckWorkspace(updateTask, checkpointTask, taskPartial, partial, 
   (persist ? checkpointTask : updateTask)(taskPartial, partial);
 }
 
-async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, checkpointTask, payload }) {
-  const state = workspaceStore.loadRejectionCheck ? workspaceStore.loadRejectionCheck() : {};
+async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, checkpointTask, payload, previousState }) {
+  const state = {
+    ...(previousState || {}),
+    ...(payload?.workspaceState || {}),
+  };
   const options = state.checkOptions || {};
   const runOptions = payload?.runOptions || options;
   const bidDocuments = Array.isArray(state.bidDocuments) ? state.bidDocuments : [];
@@ -1599,7 +1605,7 @@ async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, ch
     throw new Error('废标项检查存储接口尚未初始化');
   }
   const currentBidDocuments = bidDocuments
-    .map((document) => ({ ...document, content: String(workspaceStore.readDocumentMarkdown(document.id) || '') }))
+    .map((document) => ({ ...document, content: String(document.content || '') }))
     .filter((document) => document.id && document.content.trim());
   const invalidBidAndRejectionItems = String(state.invalidBidAndRejectionItems?.content || '');
   const customCheckItems = String(state.customCheckItems ?? '');
