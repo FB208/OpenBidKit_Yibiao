@@ -46,7 +46,52 @@ function deleteImportedImageBatchesForExactScope(app, scope) {
   }
 }
 
+async function deleteImportedImageBatchesAsync(app, scopePrefix) {
+  const prefix = String(scopePrefix || '').trim();
+  if (!prefix || !app?.getPath) return;
+
+  const baseDir = path.resolve(getImportedImagesDir(app));
+  let entries;
+  try {
+    entries = await fs.promises.readdir(baseDir, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  await Promise.all(entries
+    .filter((entry) => entry.isDirectory() && (entry.name === prefix || entry.name.startsWith(`${prefix}-`)))
+    .map((entry) => {
+      const targetPath = path.resolve(baseDir, entry.name);
+      if (!isPathInsideDirectory(baseDir, targetPath) || targetPath === baseDir) return undefined;
+      return fs.promises.rm(targetPath, { recursive: true, force: true });
+    }));
+}
+
+async function deleteImportedImageBatchesForExactScopeAsync(app, scope) {
+  const safeScope = normalizeImportedImageScope(scope);
+  if (!safeScope || !app?.getPath) return;
+
+  const baseDir = path.resolve(getImportedImagesDir(app));
+  let entries;
+  try {
+    entries = await fs.promises.readdir(baseDir, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  const exactBatchPattern = new RegExp(`^${safeScope.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d{10,}-[0-9a-f]{8}$`, 'i');
+  await Promise.all(entries
+    .filter((entry) => entry.isDirectory() && exactBatchPattern.test(entry.name))
+    .map((entry) => {
+      const targetPath = path.resolve(baseDir, entry.name);
+      if (!isPathInsideDirectory(baseDir, targetPath) || targetPath === baseDir) return undefined;
+      return fs.promises.rm(targetPath, { recursive: true, force: true });
+    }));
+}
+
 module.exports = {
   deleteImportedImageBatches,
+  deleteImportedImageBatchesAsync,
   deleteImportedImageBatchesForExactScope,
+  deleteImportedImageBatchesForExactScopeAsync,
 };

@@ -47,16 +47,6 @@ function jsonOrNull(value) {
   return value === undefined || value === null ? null : JSON.stringify(value);
 }
 
-function hashContent(content) {
-  return crypto.createHash('sha256').update(String(content || ''), 'utf8').digest('hex');
-}
-
-function hashFileIfReadable(filePath) {
-  const targetPath = String(filePath || '').trim();
-  if (!targetPath || !fs.existsSync(targetPath)) return null;
-  return hashContent(fs.readFileSync(targetPath, 'utf-8'));
-}
-
 function toDbBool(value) {
   return value ? 1 : 0;
 }
@@ -432,7 +422,7 @@ function createDuplicateCheckStore({ app, db, taskLogStore }) {
       `);
       for (const item of Array.isArray(analysis.contentFiles) ? analysis.contentFiles : []) {
         if (!item?.file_id) continue;
-        const contentHash = item.content_hash ? String(item.content_hash) : hashFileIfReadable(item.content_path);
+        const contentHash = item.content_hash ? String(item.content_hash) : null;
         contentInsert.run({
           file_id: String(item.file_id),
           status: String(item.status || 'pending'),

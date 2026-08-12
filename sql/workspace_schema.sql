@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 18;
+PRAGMA user_version = 21;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -629,21 +629,6 @@ ON rejection_check_logic_findings(sort_order);
 -- ============================================================================
 -- 知识库 knowledge_*（v3 目标设计）
 -- ============================================================================
-
--- 旧知识库数据迁移状态。
--- 旧数据来源是 userData/workspace/knowledge-base/index.json 和每文档结果 JSON。
--- 用户进入知识库页面后确认迁移；迁移成功并校验后删除旧 index.json 和每文档结果 JSON。
-CREATE TABLE IF NOT EXISTS knowledge_migration_meta (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  legacy_index_hash TEXT,
-  status TEXT NOT NULL DEFAULT 'idle',
-  migrated_folder_count INTEGER NOT NULL DEFAULT 0,
-  migrated_document_count INTEGER NOT NULL DEFAULT 0,
-  started_at TEXT,
-  completed_at TEXT,
-  cleanup_completed_at TEXT,
-  error TEXT
-);
 
 -- 知识库文件夹。
 CREATE TABLE IF NOT EXISTS knowledge_folders (

@@ -2311,7 +2311,14 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         })).trim();
         const contentPath = path.join(dir, `${fileId}.md`);
         await fs.writeFile(contentPath, markdown, 'utf-8');
-        results.push({ file_id: fileId, file_name: file.file_name, status: 'success', content_path: contentPath, content_length: markdown.length });
+        results.push({
+          file_id: fileId,
+          file_name: file.file_name,
+          status: 'success',
+          content_path: contentPath,
+          content_length: markdown.length,
+          content_hash: hashText(markdown),
+        });
         developerLogger?.write('duplicate.content_extraction.file.completed', {
           file: summarizeDuplicateFileForLog(file, tenderFileIds.has(fileId) ? 'tender' : 'bid'),
           markdown_metrics: textMetrics(markdown),

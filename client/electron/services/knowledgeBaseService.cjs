@@ -2077,14 +2077,6 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
   recoverInterruptedDocuments();
 
   return {
-    getMigrationStatus() {
-      return knowledgeBaseStore.getMigrationStatus();
-    },
-
-    migrateLegacy() {
-      return knowledgeBaseStore.migrateLegacy();
-    },
-
     list() {
       return knowledgeBaseStore.list();
     },

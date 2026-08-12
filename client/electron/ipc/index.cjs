@@ -93,8 +93,6 @@ const workspaceDatabaseChannels = [
   'rejection-check:save-ui-state',
   'rejection-check:update-state',
   'rejection-check:clear',
-  'knowledge-base:get-migration-status',
-  'knowledge-base:migrate-legacy',
   'knowledge-base:list',
   'knowledge-base:create-folder',
   'knowledge-base:rename-folder',

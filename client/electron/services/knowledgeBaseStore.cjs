@@ -6,15 +6,6 @@ const { getKnowledgeBaseDir } = require('../utils/paths.cjs');
 const documentStatuses = ['pending', 'copying', 'converting', 'extracting', 'ready_for_matching', 'matching', 'recovering', 'analyzing', 'saving', 'success', 'error'];
 const documentStepKeys = ['copy_source', 'convert_markdown', 'build_blocks', 'extract_first_items', 'extract_supplement_items', 'merge_candidates', 'match_batches', 'recover_missing', 'save_result'];
 const stepStatuses = ['idle', 'running', 'success', 'error'];
-const legacyResultJsonFiles = [
-  'blocks.json',
-  'filtered_blocks.json',
-  'candidate_items.json',
-  'match_result.json',
-  'report.json',
-  'items.json',
-];
-
 function now() {
   return new Date().toISOString();
 }
@@ -48,11 +39,6 @@ function safeJsonParse(value, fallback) {
   }
 }
 
-function readJson(filePath, fallback) {
-  if (!fs.existsSync(filePath)) return fallback;
-  return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-}
-
 function jsonOrNull(value) {
   return value === undefined || value === null ? null : JSON.stringify(value);
 }
@@ -76,14 +62,6 @@ function normalizeRelativePath(value) {
 
 function getContentCharCount(text) {
   return String(text || '').replace(/\s+/g, '').length;
-}
-
-function getArrayLength(value) {
-  return Array.isArray(value) ? value.length : 0;
-}
-
-function createEmptyIndex() {
-  return { folders: [], documents: [] };
 }
 
 function defaultDocumentDir(folderId, documentId) {
@@ -124,43 +102,8 @@ function normalizeDocument(document) {
   };
 }
 
-function normalizeIndex(index) {
-  const folders = Array.isArray(index?.folders) ? index.folders.map((folder, index) => ({
-    id: String(folder?.id || folder?.folder_id || createId('folder')),
-    name: safeName(folder?.name),
-    sort_order: Number(folder?.sort_order ?? index),
-    created_at: folder?.created_at || now(),
-    updated_at: folder?.updated_at || now(),
-  })) : [];
-  const folderIds = new Set(folders.map((folder) => folder.id));
-  const orderByFolder = new Map();
-  const documents = Array.isArray(index?.documents) ? index.documents.map((document) => {
-    const normalized = normalizeDocument(document);
-    if (normalized.sort_order === undefined) {
-      const nextOrder = orderByFolder.get(normalized.folder_id) || 0;
-      normalized.sort_order = nextOrder;
-      orderByFolder.set(normalized.folder_id, nextOrder + 1);
-    }
-    return normalized;
-  }) : [];
-  for (const document of documents) {
-    if (!folderIds.has(document.folder_id)) {
-      folderIds.add(document.folder_id);
-      folders.push({
-        id: document.folder_id,
-        name: '未分类',
-        sort_order: folders.length,
-        created_at: document.created_at || now(),
-        updated_at: document.updated_at || now(),
-      });
-    }
-  }
-  return { folders, documents };
-}
-
 function createKnowledgeBaseStore({ app, db }) {
   const baseDir = getKnowledgeBaseDir(app);
-  const legacyIndexPath = path.join(baseDir, 'index.json');
 
   function ensureBaseDir() {
     fs.mkdirSync(baseDir, { recursive: true });
@@ -1159,290 +1102,6 @@ function createKnowledgeBaseStore({ app, db }) {
     return { items };
   }
 
-  function getMigrationMeta() {
-    return db.prepare('SELECT * FROM knowledge_migration_meta WHERE id = 1').get();
-  }
-
-  function updateMigrationMeta(fields) {
-    const current = getMigrationMeta();
-    const timestamp = now();
-    if (!current) {
-      db.prepare(`
-        INSERT INTO knowledge_migration_meta (
-          id, legacy_index_hash, status, migrated_folder_count, migrated_document_count, started_at, completed_at, cleanup_completed_at, error
-        ) VALUES (
-          1, @legacy_index_hash, @status, @migrated_folder_count, @migrated_document_count, @started_at, @completed_at, @cleanup_completed_at, @error
-        )
-      `).run({
-        legacy_index_hash: fields.legacy_index_hash || null,
-        status: fields.status || 'idle',
-        migrated_folder_count: Number(fields.migrated_folder_count || 0),
-        migrated_document_count: Number(fields.migrated_document_count || 0),
-        started_at: fields.started_at || timestamp,
-        completed_at: fields.completed_at || null,
-        cleanup_completed_at: fields.cleanup_completed_at || null,
-        error: fields.error || null,
-      });
-      return;
-    }
-    const entries = Object.entries(fields || {}).filter(([, value]) => value !== undefined);
-    if (!entries.length) return;
-    const assignments = entries.map(([key]) => `${key} = @${key}`).join(', ');
-    db.prepare(`UPDATE knowledge_migration_meta SET ${assignments} WHERE id = 1`).run(Object.fromEntries(entries));
-  }
-
-  function readLegacyIndex() {
-    if (!fs.existsSync(legacyIndexPath)) return createEmptyIndex();
-    return normalizeIndex(readJson(legacyIndexPath, createEmptyIndex()));
-  }
-
-  function cleanupLegacyJson(index) {
-    const normalized = normalizeIndex(index || readLegacyIndex());
-    for (const document of normalized.documents) {
-      const documentDir = resolvePath(document.document_dir);
-      for (const fileName of legacyResultJsonFiles) {
-        fs.rmSync(path.join(documentDir, fileName), { force: true });
-      }
-    }
-    fs.rmSync(legacyIndexPath, { force: true });
-    updateMigrationMeta({ cleanup_completed_at: now(), error: null });
-  }
-
-  function countRows(sql, ...params) {
-    return Number(db.prepare(sql).get(...params)?.value || 0);
-  }
-
-  function assertMigratedCount(label, actual, expected) {
-    if (actual !== expected) {
-      throw new Error(`迁移校验失败，${label} 数量不一致：期望 ${expected}，实际 ${actual}`);
-    }
-  }
-
-  function countExpectedItemBlocks(items) {
-    const pairs = new Set();
-    (Array.isArray(items) ? items : []).forEach((item) => {
-      if (!item?.id) return;
-      (Array.isArray(item.source_block_ids) ? item.source_block_ids : []).forEach((blockId) => {
-        pairs.add(`${item.id}\u0000${String(blockId)}`);
-      });
-    });
-    return pairs.size;
-  }
-
-  function getSuccessfulLegacyDocuments(legacy) {
-    return (Array.isArray(legacy?.documents) ? legacy.documents : []).filter((document) => document.status === 'success');
-  }
-
-  function getLegacyMigrationCounts(legacy) {
-    const total = Array.isArray(legacy?.documents) ? legacy.documents.length : 0;
-    const success = getSuccessfulLegacyDocuments(legacy).length;
-    return { total, success, skipped: Math.max(0, total - success) };
-  }
-
-  function validateMigratedLegacy(legacy, expectedByDocumentId) {
-    for (const folder of legacy.folders) {
-      const exists = db.prepare('SELECT 1 FROM knowledge_folders WHERE folder_id = ?').get(folder.id);
-      if (!exists) {
-        throw new Error(`迁移校验失败，未找到文件夹：${folder.name || folder.id}`);
-      }
-    }
-
-    for (const document of legacy.documents) {
-      const exists = db.prepare('SELECT 1 FROM knowledge_documents WHERE document_id = ?').get(document.id);
-      if (!exists) {
-        throw new Error(`迁移校验失败，未找到文档：${document.file_name || document.id}`);
-      }
-      const expected = expectedByDocumentId.get(document.id) || {};
-      const label = document.file_name || document.id;
-      assertMigratedCount(`${label} 有效 block`, countRows('SELECT COUNT(*) AS value FROM knowledge_blocks WHERE document_id = ? AND is_filtered = 0', document.id), expected.blockCount || 0);
-      assertMigratedCount(`${label} 筛除 block`, countRows('SELECT COUNT(*) AS value FROM knowledge_blocks WHERE document_id = ? AND is_filtered = 1', document.id), expected.filteredBlockCount || 0);
-      assertMigratedCount(`${label} 候选条目`, countRows('SELECT COUNT(*) AS value FROM knowledge_candidate_items WHERE document_id = ?', document.id), expected.candidateItemCount || 0);
-      assertMigratedCount(`${label} 最终条目`, countRows('SELECT COUNT(*) AS value FROM knowledge_items WHERE document_id = ?', document.id), expected.finalItemCount || 0);
-      assertMigratedCount(`${label} 条目来源关系`, countRows('SELECT COUNT(*) AS value FROM knowledge_item_blocks WHERE document_id = ?', document.id), expected.itemBlockCount || 0);
-      assertMigratedCount(`${label} 舍弃记录`, countRows('SELECT COUNT(*) AS value FROM knowledge_discarded_groups WHERE document_id = ?', document.id), expected.discardedGroupCount || 0);
-      assertMigratedCount(`${label} 报告`, countRows('SELECT COUNT(*) AS value FROM knowledge_reports WHERE document_id = ?', document.id), expected.reportCount || 0);
-    }
-  }
-
-  function getMigrationStatus() {
-    const meta = getMigrationMeta();
-    const legacyExists = fs.existsSync(legacyIndexPath);
-    if (!legacyExists) {
-      return {
-        needsMigration: false,
-        legacyFolderCount: 0,
-        legacyDocumentCount: 0,
-        legacyCompletedDocumentCount: 0,
-        legacySkippedDocumentCount: 0,
-        migrationCompleted: meta?.status === 'success',
-        cleanupPending: false,
-      };
-    }
-
-    let legacy = createEmptyIndex();
-    try {
-      legacy = readLegacyIndex();
-    } catch (error) {
-      return {
-        needsMigration: true,
-        legacyFolderCount: 0,
-        legacyDocumentCount: 0,
-        legacyCompletedDocumentCount: 0,
-        legacySkippedDocumentCount: 0,
-        migrationCompleted: false,
-        cleanupPending: false,
-        message: `读取旧知识库索引失败：${error.message || String(error)}`,
-      };
-    }
-
-    const counts = getLegacyMigrationCounts(legacy);
-    if (meta?.status === 'success') {
-      return {
-        needsMigration: false,
-        legacyFolderCount: legacy.folders.length,
-        legacyDocumentCount: legacy.documents.length,
-        legacyCompletedDocumentCount: counts.success,
-        legacySkippedDocumentCount: counts.skipped,
-        migrationCompleted: true,
-        cleanupPending: true,
-        message: meta.error ? `旧知识库 JSON 清理未完成：${meta.error}` : '旧知识库 JSON 等待清理',
-      };
-    }
-
-    return {
-      needsMigration: true,
-      legacyFolderCount: legacy.folders.length,
-      legacyDocumentCount: legacy.documents.length,
-      legacyCompletedDocumentCount: counts.success,
-      legacySkippedDocumentCount: counts.skipped,
-      migrationCompleted: false,
-      cleanupPending: false,
-    };
-  }
-
-  function migrateLegacy() {
-    ensureBaseDir();
-    if (!fs.existsSync(legacyIndexPath)) {
-      const meta = getMigrationMeta();
-      if (meta?.status === 'success' && !meta.cleanup_completed_at) {
-        updateMigrationMeta({ cleanup_completed_at: now(), error: null });
-      }
-      return { success: true, message: '未发现需要迁移的旧知识库数据', migratedFolderCount: 0, migratedDocumentCount: 0, skippedDocumentCount: 0 };
-    }
-    const startedAt = now();
-
-    try {
-      const rawIndexContent = fs.readFileSync(legacyIndexPath, 'utf-8');
-      const legacyIndexHash = stableHash(rawIndexContent);
-      const legacy = normalizeIndex(JSON.parse(rawIndexContent || '{}'));
-      const successfulDocuments = getSuccessfulLegacyDocuments(legacy);
-      const skippedDocumentCount = legacy.documents.length - successfulDocuments.length;
-      const migrationMeta = getMigrationMeta();
-      if (migrationMeta?.status === 'success') {
-        let cleanupPending = false;
-        let cleanupError = '';
-        try {
-          cleanupLegacyJson(legacy);
-        } catch (error) {
-          cleanupPending = true;
-          cleanupError = error.message || String(error);
-          updateMigrationMeta({ error: cleanupError });
-        }
-        return {
-          success: true,
-          message: cleanupPending ? `旧知识库 JSON 清理未完成：${cleanupError}` : '旧知识库 JSON 清理完成',
-          migratedFolderCount: Number(migrationMeta.migrated_folder_count || legacy.folders.length),
-          migratedDocumentCount: Number(migrationMeta.migrated_document_count || successfulDocuments.length),
-          skippedDocumentCount,
-          cleanupPending,
-        };
-      }
-      const migrationLegacy = { folders: legacy.folders, documents: successfulDocuments };
-      const expectedByDocumentId = new Map();
-      const migrateTransaction = db.transaction(() => {
-        updateMigrationMeta({
-          legacy_index_hash: legacyIndexHash,
-          status: 'running',
-          migrated_folder_count: 0,
-          migrated_document_count: 0,
-          started_at: startedAt,
-          completed_at: null,
-          cleanup_completed_at: null,
-          error: null,
-        });
-        legacy.folders.forEach(insertOrUpdateFolder);
-        for (const document of successfulDocuments) {
-          const documentDir = resolvePath(document.document_dir);
-          const markdownPath = resolvePath(document.markdown_path);
-          const blocks = readJson(path.join(documentDir, 'blocks.json'), []);
-          const filteredBlocks = readJson(path.join(documentDir, 'filtered_blocks.json'), []);
-          const matchResult = readJson(path.join(documentDir, 'match_result.json'), null);
-          const report = readJson(path.join(documentDir, 'report.json'), matchResult?.report || null);
-          const candidateItems = readJson(path.join(documentDir, 'candidate_items.json'), matchResult?.candidate_items || []);
-          const finalItems = readJson(path.join(documentDir, 'items.json'), []);
-          const markdownChars = fs.existsSync(markdownPath) ? fs.readFileSync(markdownPath, 'utf-8').length : 0;
-          expectedByDocumentId.set(document.id, {
-            blockCount: getArrayLength(blocks),
-            filteredBlockCount: getArrayLength(filteredBlocks),
-            candidateItemCount: getArrayLength(candidateItems),
-            finalItemCount: getArrayLength(finalItems),
-            itemBlockCount: countExpectedItemBlocks(finalItems),
-            discardedGroupCount: getArrayLength(matchResult?.discarded) + getArrayLength(matchResult?.system_discarded_after_retry),
-            reportCount: report ? 1 : 0,
-          });
-          insertOrUpdateDocument({
-            ...document,
-            block_count: blocks.length,
-            filtered_block_count: filteredBlocks.length,
-            candidate_item_count: candidateItems.length,
-            item_count: finalItems.length,
-            discarded_block_count: Number(report?.discarded_blocks_count || document.discarded_block_count || 0),
-            system_discarded_after_retry_count: Number(report?.system_discarded_after_retry_count || document.system_discarded_after_retry_count || 0),
-          }, {
-            markdownHash: hashFileIfExists(markdownPath),
-            markdownChars,
-          });
-          replaceBlocks(document.id, blocks, filteredBlocks);
-          replaceCandidateItems(document.id, candidateItems, 'legacy');
-          replaceFinalItems(document.id, finalItems);
-          replaceDiscardedGroups(document.id, matchResult || {});
-          saveReport(document.id, report);
-        }
-        validateMigratedLegacy(migrationLegacy, expectedByDocumentId);
-        updateMigrationMeta({
-          status: 'success',
-          migrated_folder_count: legacy.folders.length,
-          migrated_document_count: successfulDocuments.length,
-          completed_at: now(),
-          error: null,
-        });
-      });
-      migrateTransaction();
-
-      let cleanupPending = false;
-      try {
-        cleanupLegacyJson(legacy);
-      } catch (error) {
-        cleanupPending = true;
-        updateMigrationMeta({ error: error.message || String(error) });
-      }
-
-      const summary = `知识库迁移完成，共迁移 ${legacy.folders.length} 个文件夹、${successfulDocuments.length} 个已完成文档${skippedDocumentCount ? `，跳过 ${skippedDocumentCount} 个未完成文档` : ''}`;
-
-      return {
-        success: true,
-        message: cleanupPending ? `${summary}；旧 JSON 清理将在下次进入时继续` : summary,
-        migratedFolderCount: legacy.folders.length,
-        migratedDocumentCount: successfulDocuments.length,
-        skippedDocumentCount,
-        cleanupPending,
-      };
-    } catch (error) {
-      updateMigrationMeta({ status: 'error', started_at: startedAt, error: error.message || String(error) });
-      throw error;
-    }
-  }
-
   ensureBaseDir();
 
   return {
@@ -1476,8 +1135,6 @@ function createKnowledgeBaseStore({ app, db }) {
     readItems,
     readAnalysis,
     getOutlineReferences,
-    getMigrationStatus,
-    migrateLegacy,
     resolvePath,
   };
 }
@@ -1485,7 +1142,6 @@ function createKnowledgeBaseStore({ app, db }) {
 module.exports = {
   createKnowledgeBaseStore,
   _internals: {
-    normalizeIndex,
     normalizeDocument,
   },
 };

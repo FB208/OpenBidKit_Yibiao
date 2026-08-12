@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 20;
+const schemaVersion = 21;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -776,18 +776,6 @@ function createWorkspaceV2Schema(db) {
 
 function createKnowledgeBaseSchema(db) {
   db.exec(`
-    CREATE TABLE IF NOT EXISTS knowledge_migration_meta (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      legacy_index_hash TEXT,
-      status TEXT NOT NULL DEFAULT 'idle',
-      migrated_folder_count INTEGER NOT NULL DEFAULT 0,
-      migrated_document_count INTEGER NOT NULL DEFAULT 0,
-      started_at TEXT,
-      completed_at TEXT,
-      cleanup_completed_at TEXT,
-      error TEXT
-    );
-
     CREATE TABLE IF NOT EXISTS knowledge_folders (
       folder_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -1041,7 +1029,6 @@ const schemaHealthTableGroups = [
   {
     version: 3,
     tables: [
-      'knowledge_migration_meta',
       'knowledge_folders',
       'knowledge_documents',
       'knowledge_blocks',
@@ -1071,6 +1058,10 @@ const schemaHealthTableGroups = [
     repair: createTaskLogsAndIllustrationItemsSchema,
   },
 ];
+
+function removeKnowledgeMigrationMeta(db) {
+  db.exec('DROP TABLE IF EXISTS knowledge_migration_meta;');
+}
 
 const schemaHealthColumnGroups = [
   {
@@ -1384,6 +1375,11 @@ const migrations = [
     version: 20,
     description: '任务日志按行存储并拆分全文图片计划项目',
     up: createTaskLogsAndIllustrationItemsSchema,
+  },
+  {
+    version: 21,
+    description: '移除废弃的知识库旧数据迁移状态',
+    up: removeKnowledgeMigrationMeta,
   },
 ];
 

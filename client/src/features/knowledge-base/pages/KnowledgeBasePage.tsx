@@ -2,7 +2,7 @@ import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef,
 import * as Dialog from '@radix-ui/react-dialog';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
-import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeBaseMigrationStatus, KnowledgeDocument, KnowledgeItem } from '../types';
+import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeItem } from '../types';
 
 declare global {
   interface Window {
@@ -300,9 +300,6 @@ function KnowledgeBasePage() {
   const [activeFolderId, setActiveFolderId] = useState('');
   const [listLoading, setListLoading] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [migrationRunning, setMigrationRunning] = useState(false);
-  const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
-  const [pendingMigrationStatus, setPendingMigrationStatus] = useState<KnowledgeBaseMigrationStatus | null>(null);
   const [viewer, setViewer] = useState<KnowledgeViewer | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
   const [viewerTrace, setViewerTrace] = useState<RenderDebugTrace | null>(null);
@@ -424,19 +421,6 @@ function KnowledgeBasePage() {
       setListLoading(true);
       const config = await window.yibiao?.config.load();
       setDeveloperMode(Boolean(config?.developer_mode));
-      const migrationStatus = await window.yibiao?.knowledgeBase.getMigrationStatus();
-      if (migrationStatus?.needsMigration) {
-        setPendingMigrationStatus(migrationStatus);
-        setMigrationDialogOpen(true);
-      } else if (migrationStatus?.cleanupPending) {
-        const cleanupResult = await window.yibiao?.knowledgeBase.migrateLegacy();
-        if (!cleanupResult?.success) {
-          throw new Error(cleanupResult?.message || '旧知识库 JSON 清理失败');
-        }
-        if (cleanupResult.cleanupPending) {
-          showToast(cleanupResult.message || '旧知识库 JSON 清理未完成，将在下次进入时继续处理', 'info');
-        }
-      }
       const data = await window.yibiao?.knowledgeBase.list();
       if (data) {
         setIndex(data);
@@ -471,7 +455,7 @@ function KnowledgeBasePage() {
   };
 
   const startFolderDrag = (event: DragEvent<HTMLElement>, folderId: string) => {
-    if (migrationRunning || dragSaving) {
+    if (dragSaving) {
       event.preventDefault();
       return;
     }
@@ -482,7 +466,7 @@ function KnowledgeBasePage() {
   };
 
   const startDocumentDrag = (event: DragEvent<HTMLElement>, document: KnowledgeDocument) => {
-    if (migrationRunning || dragSaving || !canMoveKnowledgeDocument(document)) {
+    if (dragSaving || !canMoveKnowledgeDocument(document)) {
       event.preventDefault();
       return;
     }
@@ -493,7 +477,7 @@ function KnowledgeBasePage() {
   };
 
   const handleFolderDragOver = (event: DragEvent<HTMLElement>, folderId: string) => {
-    if (!dragPayload || migrationRunning || dragSaving) return;
+    if (!dragPayload || dragSaving) return;
     if (dragPayload.kind === 'folder' && dragPayload.folderId === folderId) return;
     if (dragPayload.kind === 'document' && dragPayload.folderId === folderId) return;
     event.preventDefault();
@@ -503,7 +487,7 @@ function KnowledgeBasePage() {
   };
 
   const handleFolderDrop = async (event: DragEvent<HTMLElement>, folderId: string) => {
-    if (!dragPayload || migrationRunning || dragSaving) return;
+    if (!dragPayload || dragSaving) return;
     event.preventDefault();
     const payload = dragPayload;
     const position = getDropPosition(event);
@@ -528,7 +512,7 @@ function KnowledgeBasePage() {
   };
 
   const handleDocumentDragOver = (event: DragEvent<HTMLElement>, document: KnowledgeDocument) => {
-    if (!dragPayload || dragPayload.kind !== 'document' || migrationRunning || dragSaving || dragPayload.documentId === document.id) return;
+    if (!dragPayload || dragPayload.kind !== 'document' || dragSaving || dragPayload.documentId === document.id) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
     setFolderDropTargetId(null);
@@ -536,7 +520,7 @@ function KnowledgeBasePage() {
   };
 
   const handleDocumentDrop = async (event: DragEvent<HTMLElement>, document: KnowledgeDocument) => {
-    if (!dragPayload || dragPayload.kind !== 'document' || migrationRunning || dragSaving || dragPayload.documentId === document.id) return;
+    if (!dragPayload || dragPayload.kind !== 'document' || dragSaving || dragPayload.documentId === document.id) return;
     event.preventDefault();
     const position = getDropPosition(event);
     setDragSaving(true);
@@ -555,38 +539,6 @@ function KnowledgeBasePage() {
     } finally {
       setDragSaving(false);
       clearDragState();
-    }
-  };
-
-  const cancelMigration = () => {
-    if (migrationRunning) return;
-    setMigrationDialogOpen(false);
-    setPendingMigrationStatus(null);
-    showToast('已暂缓知识库迁移，下次进入知识库会继续提示', 'info');
-  };
-
-  const confirmMigration = async () => {
-    if (migrationRunning) return;
-    setMigrationRunning(true);
-    setLoading(true);
-    try {
-      const result = await window.yibiao?.knowledgeBase.migrateLegacy();
-      if (!result?.success) {
-        throw new Error(result?.message || '知识库迁移失败');
-      }
-      const data = await window.yibiao?.knowledgeBase.list();
-      if (!data) {
-        throw new Error('知识库迁移完成，但读取迁移结果失败');
-      }
-      applyKnowledgeIndex(data);
-      setPendingMigrationStatus(null);
-      setMigrationDialogOpen(false);
-      showToast(result.message || '知识库迁移完成', result.cleanupPending ? 'info' : 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '知识库迁移失败', 'error');
-    } finally {
-      setMigrationRunning(false);
-      setLoading(false);
     }
   };
 
@@ -612,10 +564,6 @@ function KnowledgeBasePage() {
   };
 
   const createFolder = async () => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
     const name = newFolderName.trim();
     if (!name) {
       showToast('请输入文件夹名称', 'info');
@@ -639,10 +587,6 @@ function KnowledgeBasePage() {
   };
 
   const uploadDocuments = async () => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
     if (!activeFolder) {
       showToast('请先创建文件夹', 'info');
       return;
@@ -677,10 +621,6 @@ function KnowledgeBasePage() {
   };
 
   const renameFolder = async (folderId: string, currentName: string) => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
     const name = window.prompt('请输入新的文件夹名称', currentName)?.trim();
     if (!name || name === currentName) return;
 
@@ -698,10 +638,6 @@ function KnowledgeBasePage() {
   };
 
   const deleteFolder = async (folderId: string, folderName: string) => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
     const count = documentsByFolder.get(folderId)?.length || 0;
     if (!window.confirm(`确定删除文件夹“${folderName}”吗？其中 ${count} 个文档也会一起删除。`)) return;
 
@@ -721,10 +657,6 @@ function KnowledgeBasePage() {
   };
 
   const deleteDocument = async (document: KnowledgeDocument) => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
     if (!window.confirm(`确定删除文档“${document.file_name}”吗？`)) return;
 
     try {
@@ -738,11 +670,6 @@ function KnowledgeBasePage() {
   };
 
   const retryDocument = async (document: KnowledgeDocument) => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
-
     setRetryingDocumentIds((prev) => new Set(prev).add(document.id));
     try {
       const result = await window.yibiao?.knowledgeBase.retryDocument(document.id);
@@ -807,10 +734,6 @@ function KnowledgeBasePage() {
   };
 
   const openDocument = async (document: KnowledgeDocument, mode: KnowledgeViewer['mode']) => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
     if (mode === 'analysis' && !developerMode) {
       return;
     }
@@ -903,10 +826,6 @@ function KnowledgeBasePage() {
   };
 
   const startMatching = async (targetDocument = viewer?.document, options?: { silent?: boolean }) => {
-    if (migrationRunning) {
-      if (!options?.silent) showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
     if (!targetDocument) return;
     try {
       setStartingMatching(true);
@@ -926,16 +845,6 @@ function KnowledgeBasePage() {
     }
   };
 
-  const migrationDialog = pendingMigrationStatus ? (
-    <KnowledgeMigrationDialog
-      open={migrationDialogOpen}
-      status={pendingMigrationStatus}
-      running={migrationRunning}
-      onCancel={cancelMigration}
-      onConfirm={() => void confirmMigration()}
-    />
-  ) : null;
-
   if (viewer) {
     return (
       <>
@@ -954,7 +863,6 @@ function KnowledgeBasePage() {
           onStartMatching={() => void startMatching()}
           onRefreshAnalysis={() => void loadAnalysis(viewer.document.id)}
         />
-        {migrationDialog}
       </>
     );
   }
@@ -969,9 +877,9 @@ function KnowledgeBasePage() {
           <small>{index.folders.length} 个文件夹 / {index.documents.length} 个文档</small>
         </div>
         <div className="knowledge-toolbar-actions">
-          <button type="button" className="secondary-action" onClick={() => setShowCreateFolder((value) => !value)} disabled={migrationRunning || listLoading}>新建文件夹</button>
-          <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || migrationRunning || !activeFolder}>
-            {migrationRunning ? '迁移中...' : loading ? '处理中...' : '上传文档'}
+          <button type="button" className="secondary-action" onClick={() => setShowCreateFolder((value) => !value)} disabled={listLoading}>新建文件夹</button>
+          <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || !activeFolder}>
+            {loading ? '处理中...' : '上传文档'}
           </button>
         </div>
       </section>
@@ -989,9 +897,8 @@ function KnowledgeBasePage() {
             value={newFolderName}
             onChange={(event) => setNewFolderName(event.target.value)}
             placeholder="输入文件夹名称"
-            disabled={migrationRunning}
           />
-          <button type="submit" className="primary-action" disabled={creatingFolder || migrationRunning}>{creatingFolder ? '创建中...' : '创建'}</button>
+          <button type="submit" className="primary-action" disabled={creatingFolder}>{creatingFolder ? '创建中...' : '创建'}</button>
           <button
             type="button"
             className="secondary-action"
@@ -1032,21 +939,21 @@ function KnowledgeBasePage() {
                     <div className="knowledge-folder-row">
                       <span
                         className="knowledge-drag-handle"
-                        draggable={!migrationRunning && !dragSaving}
+                        draggable={!dragSaving}
                         onDragStart={(event) => startFolderDrag(event, folder.id)}
                         onDragEnd={clearDragState}
                         title="拖拽排序"
                         aria-hidden="true"
                       >⋮⋮</span>
-                      <button type="button" className="knowledge-folder-main" onClick={() => startTransition(() => setActiveFolderId(folder.id))} disabled={migrationRunning}>
+                      <button type="button" className="knowledge-folder-main" onClick={() => startTransition(() => setActiveFolderId(folder.id))}>
                         <span aria-hidden="true">F</span>
                         <strong>{folder.name}</strong>
                         <small>{dropTarget && dragPayload?.kind === 'document' ? '松开移动到此文件夹' : `${count} 个文档`}</small>
                       </button>
                     </div>
                     <div className="knowledge-folder-actions">
-                      <button type="button" onClick={() => void renameFolder(folder.id, folder.name)} disabled={migrationRunning}>重命名</button>
-                      <button type="button" className="is-danger" onClick={() => void deleteFolder(folder.id, folder.name)} disabled={migrationRunning}>删除</button>
+                      <button type="button" onClick={() => void renameFolder(folder.id, folder.name)}>重命名</button>
+                      <button type="button" className="is-danger" onClick={() => void deleteFolder(folder.id, folder.name)}>删除</button>
                     </div>
                   </article>
                 );
@@ -1075,7 +982,7 @@ function KnowledgeBasePage() {
             <div className="knowledge-document-list">
               {visibleDocuments.map((document) => {
                 const retrying = retryingDocumentIds.has(document.id);
-                const canDragDocument = canMoveKnowledgeDocument(document) && !migrationRunning && !dragSaving;
+                const canDragDocument = canMoveKnowledgeDocument(document) && !dragSaving;
                 const dragging = dragPayload?.kind === 'document' && dragPayload.documentId === document.id;
                 const dropTarget = documentDropTarget?.documentId === document.id ? ` is-drop-${documentDropTarget.position}` : '';
                 return (
@@ -1112,15 +1019,15 @@ function KnowledgeBasePage() {
                       <span>{document.block_count || 0} 个 block</span>
                     </div>
                     <div className="knowledge-document-actions">
-                      {developerMode && <button type="button" onClick={() => void openDocument(document, 'analysis')} disabled={migrationRunning || !canOpenAnalysis(document)}>分析调试</button>}
-                      <button type="button" onClick={() => void openDocument(document, 'items')} disabled={migrationRunning || document.status !== 'success'}>查看条目</button>
-                      <button type="button" onClick={() => void openDocument(document, 'markdown')} disabled={migrationRunning || !canOpenMarkdown(document)}>查看 Markdown</button>
+                      {developerMode && <button type="button" onClick={() => void openDocument(document, 'analysis')} disabled={!canOpenAnalysis(document)}>分析调试</button>}
+                      <button type="button" onClick={() => void openDocument(document, 'items')} disabled={document.status !== 'success'}>查看条目</button>
+                      <button type="button" onClick={() => void openDocument(document, 'markdown')} disabled={!canOpenMarkdown(document)}>查看 Markdown</button>
                       {document.status === 'error' && (
-                        <button type="button" className="is-retry" onClick={() => void retryDocument(document)} disabled={migrationRunning || retrying}>
+                        <button type="button" className="is-retry" onClick={() => void retryDocument(document)} disabled={retrying}>
                           {retrying ? '重试中...' : '重试'}
                         </button>
                       )}
-                      <button type="button" className="is-danger" onClick={() => void deleteDocument(document)} disabled={migrationRunning}>删除</button>
+                      <button type="button" className="is-danger" onClick={() => void deleteDocument(document)}>删除</button>
                     </div>
                   </article>
                 );
@@ -1141,70 +1048,7 @@ function KnowledgeBasePage() {
         </main>
         </section>
       </div>
-      {migrationDialog}
     </>
-  );
-}
-
-interface KnowledgeMigrationDialogProps {
-  open: boolean;
-  status: KnowledgeBaseMigrationStatus;
-  running: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}
-
-function KnowledgeMigrationDialog({ open, status, running, onCancel, onConfirm }: KnowledgeMigrationDialogProps) {
-  const { total, completed, skipped } = getMigrationCounts(status);
-
-  return (
-    <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onCancel()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="content-regenerate-modal" />
-        <Dialog.Content className="knowledge-migration-card">
-          <div className="knowledge-migration-head">
-            <span className="section-kicker">数据迁移</span>
-            <Dialog.Title>知识库数据迁移</Dialog.Title>
-            <Dialog.Description>知识库已升级为本地数据库管理，读写更高效，大量知识库也不卡</Dialog.Description>
-          </div>
-
-          <div className="knowledge-migration-body">
-                        <section className={`knowledge-migration-warning${skipped ? ' is-warning' : ''}`}>
-              <strong>迁移规则</strong>
-              <p>本次只迁移状态为“已完成”的文档；未完成或处理中的文档会被丢弃，不会迁移到新版本知识库。</p>
-            </section>
-            <section className="knowledge-migration-lead">
-              <strong>进行中文档处理方式</strong>
-              <p>如果旧版知识库里还有未处理完成的文档，请先重新安装v2.4版本，将所有知识库文档解析为“已完成”状态后，再更新至v2.5以上版本执行迁移。</p>
-            </section>
-
-
-
-            <div className="knowledge-migration-stats" aria-label="旧知识库迁移统计">
-              <div>
-                <span>旧文档总数</span>
-                <strong>{total}</strong>
-              </div>
-              <div>
-                <span>可迁移：已完成</span>
-                <strong>{completed}</strong>
-              </div>
-              <div className={skipped ? 'is-warning' : ''}>
-                <span>将跳过：未完成/处理中</span>
-                <strong>{skipped}</strong>
-              </div>
-            </div>
-          </div>
-
-          <div className="content-regenerate-actions knowledge-migration-actions">
-            <button type="button" className="secondary-action" onClick={onCancel} disabled={running}>暂不迁移</button>
-            <button type="button" className="primary-action" onClick={onConfirm} disabled={running}>
-              {running ? '迁移中...' : '开始迁移'}
-            </button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
   );
 }
 
@@ -1643,13 +1487,6 @@ function canOpenMarkdown(document: KnowledgeDocument) {
 
 function canMoveKnowledgeDocument(document: KnowledgeDocument) {
   return ['ready_for_matching', 'success', 'error'].includes(document.status);
-}
-
-function getMigrationCounts(status: KnowledgeBaseMigrationStatus) {
-  const total = Math.max(0, Number(status.legacyDocumentCount || 0));
-  const skipped = Math.max(0, Number(status.legacySkippedDocumentCount || 0));
-  const completed = Math.max(0, Number(status.legacyCompletedDocumentCount ?? Math.max(0, total - skipped)));
-  return { total, completed, skipped };
 }
 
 function mergeDocuments(prev: KnowledgeDocument[], next: KnowledgeDocument[]) {
