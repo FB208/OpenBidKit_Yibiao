@@ -134,6 +134,18 @@ function createPluginContext(app, pluginId, services) {
       }
       return services.agentService.suppressQuestionAutoAnswer(payload);
     },
+    confirmOutlineSelection(payload) {
+      if (!services.taskService?.confirmOutlineSelection) {
+        throw new Error('任务服务不可用');
+      }
+      return services.taskService.confirmOutlineSelection(payload);
+    },
+    suppressOutlineSelectionAutoConfirmation(payload) {
+      if (!services.taskService?.suppressOutlineSelectionAutoConfirmation) {
+        return { success: true };
+      }
+      return services.taskService.suppressOutlineSelectionAutoConfirmation(payload);
+    },
     createWindow(options = {}) {
       const defaultOptions = {
         width: 800,
