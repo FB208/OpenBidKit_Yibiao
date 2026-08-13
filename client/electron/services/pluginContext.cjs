@@ -104,6 +104,36 @@ function createPluginContext(app, pluginId, services) {
 
       return services.taskService.subscribeCallback(listener);
     },
+    getPendingAgentQuestion() {
+      return services.agentService?.getPendingQuestion?.() || null;
+    },
+    onAgentQuestion(callback) {
+      if (!services.agentService?.onQuestion) {
+        return () => {};
+      }
+
+      const listener = (question) => {
+        try {
+          callback(question);
+        } catch (error) {
+          logger.error('Agent question callback error:', error);
+        }
+      };
+
+      return services.agentService.onQuestion(listener);
+    },
+    answerAgentQuestion(payload) {
+      if (!services.agentService?.answerQuestion) {
+        throw new Error('Agent 问答服务不可用');
+      }
+      return services.agentService.answerQuestion(payload);
+    },
+    suppressAgentQuestionAutoAnswer(payload) {
+      if (!services.agentService?.suppressQuestionAutoAnswer) {
+        throw new Error('Agent 问答服务不可用');
+      }
+      return services.agentService.suppressQuestionAutoAnswer(payload);
+    },
     createWindow(options = {}) {
       const defaultOptions = {
         width: 800,

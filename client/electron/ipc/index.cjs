@@ -205,6 +205,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   
   // 更新 pluginService 的服务引用
   pluginService.updateServices({
+    agentService,
     taskService,
     technicalPlanStore,
     duplicateCheckStore,
@@ -325,6 +326,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerExportIpc({ exportService });
   registerSystemFontIpc({ systemFontService });
   registerPluginIpc(ipcMain, app, {
+    agentService,
     taskService: null,
     technicalPlanStore: null,
     duplicateCheckStore: null,
