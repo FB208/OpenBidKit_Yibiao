@@ -8,6 +8,17 @@ const PLUGIN_MARKET_URL = 'https://analytics.agnet.top/plugins';
 const PLUGIN_DOWNLOAD_URL = `${PLUGIN_MARKET_URL}/download`;
 const PLUGIN_STATE_FILE = 'plugin-states.json';
 
+/** 比较正式版版本号，返回值大于 0 表示前者版本更高。 */
+function comparePluginVersions(a, b) {
+  const partsA = String(a || '').trim().replace(/^v/i, '').split('.').map((part) => Number(part) || 0);
+  const partsB = String(b || '').trim().replace(/^v/i, '').split('.').map((part) => Number(part) || 0);
+  for (let index = 0; index < Math.max(partsA.length, partsB.length); index += 1) {
+    const difference = (partsA[index] || 0) - (partsB[index] || 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
 class PluginService {
   constructor() {
     this.app = null;
@@ -18,6 +29,35 @@ class PluginService {
     this.marketCacheTime = 0;
     this.updatingPlugins = new Set();
     this.failedUpdates = new Map();
+    this.pluginOperations = new Map();
+    this.activeBulkUpdatePromise = null;
+  }
+
+  /** 获取单个插件的独占操作权，内部子步骤可复用所有者令牌。 */
+  acquirePluginOperation(pluginId, operation, ownerToken) {
+    const activeOperation = this.pluginOperations.get(pluginId);
+    if (ownerToken) {
+      if (!activeOperation || activeOperation.token !== ownerToken) {
+        throw new Error('插件操作上下文已失效');
+      }
+      return { token: ownerToken, ownsLock: false };
+    }
+
+    if (activeOperation) {
+      throw new Error(`插件正在${activeOperation.operation}，请稍后再试`);
+    }
+
+    const token = Symbol(pluginId);
+    this.pluginOperations.set(pluginId, { token, operation });
+    return { token, ownsLock: true };
+  }
+
+  /** 仅由锁的所有者释放插件操作权。 */
+  releasePluginOperation(pluginId, lock) {
+    if (!lock.ownsLock) return;
+    if (this.pluginOperations.get(pluginId)?.token === lock.token) {
+      this.pluginOperations.delete(pluginId);
+    }
   }
 
   /**
@@ -211,6 +251,61 @@ class PluginService {
     return installed;
   }
 
+  /** 检查所有已安装插件是否存在更高的市场版本。 */
+  async checkAvailableUpdates() {
+    const marketPlugins = await this.fetchAvailablePlugins();
+    const installedMap = new Map(this.getInstalledPlugins().map((plugin) => [plugin.id, plugin]));
+
+    return marketPlugins.flatMap((plugin) => {
+      const installed = installedMap.get(plugin.id);
+      if (!installed || comparePluginVersions(plugin.version, installed.version) <= 0) {
+        return [];
+      }
+      return [{
+        id: plugin.id,
+        name: plugin.name,
+        installedVersion: installed.version,
+        version: plugin.version,
+      }];
+    });
+  }
+
+  /** 依次升级当前所有可升级插件，并汇总每个插件的执行结果。 */
+  async updateAllAvailablePlugins() {
+    if (this.activeBulkUpdatePromise) {
+      throw new Error('插件批量升级正在进行，请勿重复执行');
+    }
+
+    const bulkUpdatePromise = (async () => {
+      const updates = await this.checkAvailableUpdates();
+      const results = [];
+
+      for (const plugin of updates) {
+        try {
+          await this.updatePlugin(plugin.id);
+          results.push({ ...plugin, success: true });
+        } catch (error) {
+          results.push({
+            ...plugin,
+            success: false,
+            message: error?.message || String(error),
+          });
+        }
+      }
+
+      return { updates, results };
+    })();
+
+    this.activeBulkUpdatePromise = bulkUpdatePromise;
+    try {
+      return await bulkUpdatePromise;
+    } finally {
+      if (this.activeBulkUpdatePromise === bulkUpdatePromise) {
+        this.activeBulkUpdatePromise = null;
+      }
+    }
+  }
+
   /**
    * 下载插件
    */
@@ -282,7 +377,8 @@ class PluginService {
   /**
    * 安装插件
    */
-  async installPlugin(pluginId) {
+  async installPlugin(pluginId, ownerToken) {
+    const lock = this.acquirePluginOperation(pluginId, '安装', ownerToken);
     try {
       // 从服务器获取插件信息
       const plugins = await this.fetchAvailablePlugins();
@@ -337,6 +433,8 @@ class PluginService {
     } catch (error) {
       console.error('[plugin-service] 安装插件失败:', error);
       throw error;
+    } finally {
+      this.releasePluginOperation(pluginId, lock);
     }
   }
 
@@ -374,48 +472,53 @@ class PluginService {
         throw new Error('manifest.json 中缺少插件版本');
       }
 
-      const pluginDir = path.join(this.getPluginsDir(), pluginId);
-      const previousManifest = this.readManifest(pluginDir);
-      const previousState = { ...(this.pluginStates[pluginId] || {}) };
-      const wasEnabled = Boolean(previousManifest) && previousState.enabled === true;
-      const shouldRestoreEnabledState = wasEnabled && hasMain;
-      if (this.plugins.has(pluginId)) {
-        await this.disablePlugin(pluginId);
+      const lock = this.acquirePluginOperation(pluginId, '离线安装');
+      try {
+        const pluginDir = path.join(this.getPluginsDir(), pluginId);
+        const previousManifest = this.readManifest(pluginDir);
+        const previousState = { ...(this.pluginStates[pluginId] || {}) };
+        const wasEnabled = Boolean(previousManifest) && previousState.enabled === true;
+        const shouldRestoreEnabledState = wasEnabled && hasMain;
+        if (this.plugins.has(pluginId)) {
+          await this.disablePlugin(pluginId);
+        }
+        this.clearPluginModuleCache(pluginDir);
+        if (fs.existsSync(pluginDir)) {
+          fs.rmSync(pluginDir, { recursive: true, force: true });
+        }
+
+        fs.renameSync(stagingDir, pluginDir);
+        stagingDir = null;
+
+        this.pluginStates[pluginId] = {
+          ...previousState,
+          installed: true,
+          enabled: false,
+          version: pluginVersion,
+          installedAt: previousState.installedAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        this.savePluginStates();
+
+        if (shouldRestoreEnabledState) {
+          await this.enablePlugin(pluginId);
+        }
+
+        // 清除更新失败标记
+        this.failedUpdates.delete(pluginId);
+
+        console.log('[plugin-service] 离线插件安装成功:', pluginId, pluginVersion);
+        return {
+          id: pluginId,
+          name: pluginName,
+          version: pluginVersion,
+          previousVersion: previousManifest?.version || null,
+          updated: Boolean(previousManifest),
+          enabled: shouldRestoreEnabledState,
+        };
+      } finally {
+        this.releasePluginOperation(pluginId, lock);
       }
-      this.clearPluginModuleCache(pluginDir);
-      if (fs.existsSync(pluginDir)) {
-        fs.rmSync(pluginDir, { recursive: true, force: true });
-      }
-
-      fs.renameSync(stagingDir, pluginDir);
-      stagingDir = null;
-
-      this.pluginStates[pluginId] = {
-        ...previousState,
-        installed: true,
-        enabled: false,
-        version: pluginVersion,
-        installedAt: previousState.installedAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      this.savePluginStates();
-
-      if (shouldRestoreEnabledState) {
-        await this.enablePlugin(pluginId);
-      }
-
-      // 清除更新失败标记
-      this.failedUpdates.delete(pluginId);
-
-      console.log('[plugin-service] 离线插件安装成功:', pluginId, pluginVersion);
-      return {
-        id: pluginId,
-        name: pluginName,
-        version: pluginVersion,
-        previousVersion: previousManifest?.version || null,
-        updated: Boolean(previousManifest),
-        enabled: shouldRestoreEnabledState,
-      };
     } catch (error) {
       console.error('[plugin-service] 离线安装插件失败:', error);
       throw error;
@@ -429,7 +532,8 @@ class PluginService {
   /**
    * 卸载插件
    */
-  async uninstallPlugin(pluginId) {
+  async uninstallPlugin(pluginId, ownerToken) {
+    const lock = this.acquirePluginOperation(pluginId, '卸载', ownerToken);
     try {
       // 先禁用
       if (this.plugins.has(pluginId)) {
@@ -452,6 +556,8 @@ class PluginService {
     } catch (error) {
       console.error('[plugin-service] 卸载插件失败:', error);
       throw error;
+    } finally {
+      this.releasePluginOperation(pluginId, lock);
     }
   }
 
@@ -546,6 +652,7 @@ class PluginService {
    * 更新插件（删除重装）
    */
   async updatePlugin(pluginId) {
+    const lock = this.acquirePluginOperation(pluginId, '更新');
     let stage = '读取插件状态';
     this.updatingPlugins.add(pluginId);
     this.failedUpdates.delete(pluginId);
@@ -554,10 +661,10 @@ class PluginService {
       const wasEnabled = this.pluginStates[pluginId]?.enabled === true;
 
       stage = '卸载旧版本';
-      await this.uninstallPlugin(pluginId);
+      await this.uninstallPlugin(pluginId, lock.token);
 
       stage = '下载并安装新版本';
-      await this.installPlugin(pluginId);
+      await this.installPlugin(pluginId, lock.token);
 
       if (wasEnabled) {
         stage = '恢复插件启用状态';
@@ -578,6 +685,7 @@ class PluginService {
       throw new Error(`更新阶段"${stage}"失败：${message}`);
     } finally {
       this.updatingPlugins.delete(pluginId);
+      this.releasePluginOperation(pluginId, lock);
     }
   }
 
@@ -597,3 +705,4 @@ class PluginService {
 }
 
 module.exports = new PluginService();
+module.exports.comparePluginVersions = comparePluginVersions;

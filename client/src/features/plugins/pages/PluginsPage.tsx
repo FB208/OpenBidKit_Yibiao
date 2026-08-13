@@ -32,9 +32,11 @@ function PluginsPage() {
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('yibiao:plugins-changed', loadPlugins);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('yibiao:plugins-changed', loadPlugins);
     };
   }, []);
 

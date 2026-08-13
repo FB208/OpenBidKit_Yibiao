@@ -32,7 +32,9 @@ function registerPluginIpc(ipcMain, app, services) {
           installedVersion: installedPlugin?.version,
           enabled: installedPlugin?.enabled || false,
           hasConfig: installedPlugin?.hasConfig || false,
-          hasUpdate: installedMap.has(plugin.id) && !isUpdating && installedPlugin.version !== plugin.version,
+          hasUpdate: installedMap.has(plugin.id)
+            && !isUpdating
+            && pluginService.comparePluginVersions(plugin.version, installedPlugin.version) > 0,
           updating: isUpdating,
           updateFailed: updateFailed ? {
             stage: updateFailed.stage,
@@ -143,6 +145,10 @@ function registerPluginIpc(ipcMain, app, services) {
   ipcMain.handle('plugins:update', async (event, pluginId) => {
     return await pluginService.updatePlugin(pluginId);
   });
+
+  // 检查和批量升级当前所有存在新版本的插件
+  ipcMain.handle('plugins:checkUpdates', async () => pluginService.checkAvailableUpdates());
+  ipcMain.handle('plugins:updateAll', async () => pluginService.updateAllAvailablePlugins());
 
   // 打开配置窗口
   ipcMain.handle('plugins:openConfig', async (event, pluginId) => {

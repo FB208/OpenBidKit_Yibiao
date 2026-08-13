@@ -32,6 +32,11 @@ const bridge = {
     ipcRenderer.on('app:update-error', listener);
     return () => ipcRenderer.removeListener('app:update-error', listener);
   },
+  onPluginUpdatesAvailable: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('plugins:updates-available', listener);
+    return () => ipcRenderer.removeListener('plugins:updates-available', listener);
+  },
   database: {
     getStatus: () => ipcRenderer.invoke('workspace-database:get-status'),
     onStatus: (callback) => {
@@ -225,6 +230,8 @@ const bridge = {
     enable: (pluginId) => ipcRenderer.invoke('plugins:enable', pluginId),
     disable: (pluginId) => ipcRenderer.invoke('plugins:disable', pluginId),
     update: (pluginId) => ipcRenderer.invoke('plugins:update', pluginId),
+    checkUpdates: () => ipcRenderer.invoke('plugins:checkUpdates'),
+    updateAll: () => ipcRenderer.invoke('plugins:updateAll'),
     openConfig: (pluginId) => ipcRenderer.invoke('plugins:openConfig', pluginId),
     refreshMarket: () => ipcRenderer.invoke('plugins:refreshMarket'),
     clearUpdateFailedState: (pluginId) => ipcRenderer.invoke('plugins:clearUpdateFailedState', pluginId),

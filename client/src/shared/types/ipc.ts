@@ -147,6 +147,23 @@ export interface UpdateInstallResult {
   message?: string;
 }
 
+export interface PluginUpdateInfo {
+  id: string;
+  name: string;
+  installedVersion: string;
+  version: string;
+}
+
+export interface PluginUpdateResult extends PluginUpdateInfo {
+  success: boolean;
+  message?: string;
+}
+
+export interface PluginUpdateAllResult {
+  updates: PluginUpdateInfo[];
+  results: PluginUpdateResult[];
+}
+
 export interface GpuHardwareAccelerationStatus {
   configured: boolean;
   enabled: boolean;
@@ -478,6 +495,7 @@ export interface YibiaoBridge {
   onUpdateProgress: (callback: (event: { percent: number }) => void) => () => void;
   onUpdateDownloaded: (callback: (event: { version: string }) => void) => () => void;
   onUpdateError: (callback: (event: { message: string }) => void) => () => void;
+  onPluginUpdatesAvailable: (callback: (updates: PluginUpdateInfo[]) => void) => () => void;
   database: {
     getStatus: () => Promise<WorkspaceDatabaseStatus>;
     onStatus: (callback: (status: WorkspaceDatabaseStatus) => void) => () => void;
@@ -637,6 +655,8 @@ export interface YibiaoBridge {
     enable: (pluginId: string) => Promise<void>;
     disable: (pluginId: string) => Promise<void>;
     update: (pluginId: string) => Promise<void>;
+    checkUpdates: () => Promise<PluginUpdateInfo[]>;
+    updateAll: () => Promise<PluginUpdateAllResult>;
     openConfig: (pluginId: string) => Promise<void>;
     refreshMarket: () => Promise<void>;
     clearUpdateFailedState: (pluginId: string) => Promise<boolean>;

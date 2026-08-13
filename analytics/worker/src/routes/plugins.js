@@ -79,6 +79,8 @@ export async function handleAdminPluginSync(request, env) {
       syncedCount: result.syncedCount,
       failedCount: result.failedCount,
       failures: result.failures,
+      cleanupDeletedCount: result.cleanupDeletedCount,
+      cleanupError: result.cleanupError,
     }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('[analytics] admin sync plugins failed', error?.message || String(error));
