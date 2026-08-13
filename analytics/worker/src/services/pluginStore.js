@@ -79,9 +79,9 @@ export function buildPluginIconUrl(repository) {
   }
 }
 
-/** 构建 GitHub API 请求头，复用后端已有的可选 Token */
+/** 构建插件仓库专用的 GitHub API 请求头。 */
 function buildGitHubHeaders(env) {
-  const token = String(env.GITHUB_API_TOKEN || env.GITHUB_TOKEN || '').trim();
+  const token = String(env.OPENBIDKIT_PET_READ_TOKEN || '').trim();
   return {
     Accept: 'application/vnd.github+json',
     'User-Agent': 'OpenBidKit-Yibiao-Plugin-Market',

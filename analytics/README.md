@@ -125,7 +125,8 @@ Worker 运行时还需要在 Cloudflare 后台配置 Secret：
 | `ACCOUNT_ID` | Cloudflare Account ID |
 | `ADMIN_TOKEN` | Dashboard 管理 Token |
 | `ANALYTICS_API_TOKEN` | Analytics Engine SQL Read Token |
-| `GITHUB_API_TOKEN` | 可选，降低 GitHub API 限流概率 |
+| `OPENBIDKIT_PET_READ_TOKEN` | 插件同步专用 GitHub Fine-grained Token，仅授予 `openbidkit-pet` 仓库 `Contents: Read-only` 权限 |
+| `OPENBIDKIT_YIBIAO_METADATA_READ_TOKEN` | 可选，仓库统计专用 GitHub Fine-grained Token，仅选择 `OpenBidKit_Yibiao` 仓库并保留自动授予的 `Metadata: Read-only` 权限 |
 | `LICENSE_PRIVATE_KEY_JWK` | ECDSA P-256 私钥 JWK，用于签发客户端 license |
 | `LICENSE_KEY_ID` | 可选，授权签名 key id，默认 `official-build-key-2026-01` |
 
