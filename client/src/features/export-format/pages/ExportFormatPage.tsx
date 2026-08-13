@@ -683,10 +683,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderQuickSettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>快捷设置</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy">
@@ -756,10 +752,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderLayoutSettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>布局设置</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy"><strong>模板名称</strong></div>
@@ -888,10 +880,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderHeadingSettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>标题样式</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy"><strong>一级标题另起页</strong></div>
@@ -1076,10 +1064,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderBodySettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>正文样式</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy"><strong>字体</strong><span>支持输入搜索系统字体，常用字体已置顶。</span></div>
@@ -1185,10 +1169,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderTableSettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>表格样式</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy"><strong>线框宽度</strong></div>
@@ -1218,10 +1198,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderImageSettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>图片设置</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy"><strong>图片最大宽度（%）</strong></div>
@@ -1269,10 +1245,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderCoverSettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>封皮</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy"><strong>首页不同</strong><span>勾选后首页使用独立页眉页脚，适合封皮不显示页码。</span></div>
