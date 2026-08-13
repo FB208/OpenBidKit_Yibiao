@@ -9,7 +9,7 @@ import { TemplatePreview } from '../../export-format/pages/ExportFormatPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
+import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
 import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
 import type { OutlineData, OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
@@ -1332,38 +1332,34 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         </section>
       )}
 
-      <Dialog.Root open={sortLeaveDialogOpen} onOpenChange={(open) => !open && continueSorting()}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="content-regenerate-card outline-sort-leave-card">
-            <div className="content-regenerate-card-head">
-              <span className="section-kicker">目录排序</span>
-              <Dialog.Title>排序结果是否保存</Dialog.Title>
-              <Dialog.Description>
-                当前目录排序还没有保存。保存后会更新目录编号并保留已生成正文；不保存则丢弃本次排序草稿。
-              </Dialog.Description>
-            </div>
-            <div className="content-regenerate-actions">
-              <button type="button" className="secondary-action" onClick={continueSorting} disabled={savingSortBeforeLeave}>继续排序</button>
-              <button type="button" className="secondary-action" onClick={discardSortAndLeave} disabled={savingSortBeforeLeave}>不保存</button>
-              <button type="button" className="primary-action" onClick={() => { void saveSortAndLeave(); }} disabled={savingSortBeforeLeave}>
-                {savingSortBeforeLeave ? '正在保存...' : '保存排序'}
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <AppDialog
+        open={sortLeaveDialogOpen}
+        onOpenChange={(open) => !open && continueSorting()}
+        kicker="目录排序"
+        title="排序结果是否保存"
+        description="当前目录排序还没有保存。保存后会更新目录编号并保留已生成正文；不保存则丢弃本次排序草稿。"
+        cardClassName="outline-sort-leave-card"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={continueSorting} disabled={savingSortBeforeLeave}>继续排序</button>
+            <button type="button" className="secondary-action" onClick={discardSortAndLeave} disabled={savingSortBeforeLeave}>不保存</button>
+            <button type="button" className="primary-action" onClick={() => { void saveSortAndLeave(); }} disabled={savingSortBeforeLeave}>
+              {savingSortBeforeLeave ? '正在保存...' : '保存排序'}
+            </button>
+          </>
+        )}
+      />
 
-      <Dialog.Root open={Boolean(wordControlWarningDialog)} onOpenChange={(open) => !open && setWordControlWarningDialog(null)}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="content-regenerate-card word-control-result-card">
-            <div className="content-regenerate-card-head">
-              <span className="section-kicker">结果提醒</span>
-              <Dialog.Title>{wordControlWarningDialog?.title}</Dialog.Title>
-              <Dialog.Description>{wordControlWarningDialog?.message}</Dialog.Description>
-            </div>
-            <div className="word-control-result-body">
+      <AppDialog
+        open={Boolean(wordControlWarningDialog)}
+        onOpenChange={(open) => !open && setWordControlWarningDialog(null)}
+        kicker="结果提醒"
+        title={wordControlWarningDialog?.title}
+        description={wordControlWarningDialog?.message}
+        cardClassName="word-control-result-card"
+        actions={<Dialog.Close className="primary-action" type="button">知道了</Dialog.Close>}
+      >
+        <div className="word-control-result-body">
               <div className="word-control-result-metrics">
                 {wordControlWarningDialog?.metrics.map((metric) => (
                   <section className="word-control-result-metric" key={metric.label}>
@@ -1397,78 +1393,62 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
                   </div>
                 </section>
               ) : null}
-            </div>
-            <div className="content-regenerate-actions">
-              <Dialog.Close className="primary-action" type="button">知道了</Dialog.Close>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+        </div>
+      </AppDialog>
 
-      <Dialog.Root open={petInstallDialogOpen} onOpenChange={(open) => !open && !installingPetPlugin && setPetInstallDialogOpen(false)}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="content-regenerate-card">
-            <div className="content-regenerate-card-head">
-              <span className="section-kicker">AI 调整</span>
-              <Dialog.Title>需要安装桌宠插件</Dialog.Title>
-              <Dialog.Description>
-                AI 调整通过桌宠的 AI 对话完成。当前桌宠插件尚未安装或未启用，是否立即安装并启用？
-              </Dialog.Description>
-            </div>
-            <div className="content-regenerate-actions">
-              <button type="button" className="secondary-action" onClick={() => setPetInstallDialogOpen(false)} disabled={installingPetPlugin}>取消</button>
-              <button type="button" className="primary-action" onClick={() => { void installPetPluginAndOpenChat(); }} disabled={installingPetPlugin}>
-                {installingPetPlugin ? '正在安装...' : '安装并启用'}
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <AppDialog
+        open={petInstallDialogOpen}
+        onOpenChange={(open) => !open && !installingPetPlugin && setPetInstallDialogOpen(false)}
+        kicker="AI 调整"
+        title="需要安装桌宠插件"
+        description="AI 调整通过桌宠的 AI 对话完成。当前桌宠插件尚未安装或未启用，是否立即安装并启用？"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => setPetInstallDialogOpen(false)} disabled={installingPetPlugin}>取消</button>
+            <button type="button" className="primary-action" onClick={() => { void installPetPluginAndOpenChat(); }} disabled={installingPetPlugin}>
+              {installingPetPlugin ? '正在安装...' : '安装并启用'}
+            </button>
+          </>
+        )}
+      />
 
-      <Dialog.Root open={outlineWordControlLeaveDialogOpen} onOpenChange={(open) => !open && resolveOutlineWordControlLeave(false)}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="content-regenerate-card">
-            <div className="content-regenerate-card-head">
-              <span className="section-kicker">字数检查</span>
-              <Dialog.Title>AI生成小节数量未达预期</Dialog.Title>
-              <Dialog.Description>您手动修改的目录可能导致生成正文字数不符合预期</Dialog.Description>
-            </div>
-            <div className="content-regenerate-actions">
-              <button type="button" className="secondary-action" onClick={() => resolveOutlineWordControlLeave(false)}>再修改目录</button>
-              <button type="button" className="primary-action" onClick={() => resolveOutlineWordControlLeave(true)}>仍然继续</button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <AppDialog
+        open={outlineWordControlLeaveDialogOpen}
+        onOpenChange={(open) => !open && resolveOutlineWordControlLeave(false)}
+        kicker="字数检查"
+        title="AI生成小节数量未达预期"
+        description="您手动修改的目录可能导致生成正文字数不符合预期"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => resolveOutlineWordControlLeave(false)}>再修改目录</button>
+            <button type="button" className="primary-action" onClick={() => resolveOutlineWordControlLeave(true)}>仍然继续</button>
+          </>
+        )}
+      />
 
-      <Dialog.Root open={Boolean(workflowSwitchRequest)} onOpenChange={(open) => !open && !switchingWorkflow && cancelWorkflowSwitch()}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="content-regenerate-card workflow-switch-card">
-            <div className="content-regenerate-card-head">
-              <span className="section-kicker">切换模式</span>
-              <Dialog.Title>确认切换到{workflowSwitchRequest ? workflowLabel(workflowSwitchRequest.to) : '新模式'}</Dialog.Title>
-              <Dialog.Description>
-                {workflowSwitchRequest
-                  ? `当前保存的进度是「${workflowLabel(workflowSwitchRequest.from)}」模式生成的。切换到「${workflowLabel(workflowSwitchRequest.to)}」会清空之前的已有进度。是否继续？`
-                  : '切换模式会清空当前模式下的生成进度。'}
-              </Dialog.Description>
-            </div>
-            <div className="workflow-switch-summary">
-              <span>保留：招标文件、招标文件解析结果、参考知识库选择</span>
-              <span>清空：{workflowSwitchClearText}</span>
-            </div>
-            <div className="content-regenerate-actions">
-              <button type="button" className="secondary-action" onClick={cancelWorkflowSwitch} disabled={switchingWorkflow}>取消</button>
-              <button type="button" className="primary-action" onClick={() => { void confirmWorkflowSwitch(); }} disabled={switchingWorkflow}>
-                {switchingWorkflow ? '正在切换...' : '继续切换'}
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <AppDialog
+        open={Boolean(workflowSwitchRequest)}
+        onOpenChange={(open) => !open && !switchingWorkflow && cancelWorkflowSwitch()}
+        kicker="切换模式"
+        title={`确认切换到${workflowSwitchRequest ? workflowLabel(workflowSwitchRequest.to) : '新模式'}`}
+        description={workflowSwitchRequest
+          ? `当前保存的进度是「${workflowLabel(workflowSwitchRequest.from)}」模式生成的。切换到「${workflowLabel(workflowSwitchRequest.to)}」会清空之前的已有进度。是否继续？`
+          : '切换模式会清空当前模式下的生成进度。'}
+        cardClassName="workflow-switch-card"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={cancelWorkflowSwitch} disabled={switchingWorkflow}>取消</button>
+            <button type="button" className="primary-action" onClick={() => { void confirmWorkflowSwitch(); }} disabled={switchingWorkflow}>
+              {switchingWorkflow ? '正在切换...' : '继续切换'}
+            </button>
+          </>
+        )}
+      >
+        <div className="workflow-switch-summary">
+          <span>保留：招标文件、招标文件解析结果、参考知识库选择</span>
+          <span>清空：{workflowSwitchClearText}</span>
+        </div>
+      </AppDialog>
 
       <Dialog.Root open={exportTemplateDialogOpen} onOpenChange={(open) => !open && !isExporting && setExportTemplateDialogOpen(false)}>
         <Dialog.Portal>
@@ -1567,9 +1547,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
               </Dialog.Description>
             </div>
             <div className="export-progress-body">
-              <div className="content-generation-progress-track" aria-label={`Word 导出进度 ${exportProgress.progress}%`}>
-                <span style={{ width: `${exportProgress.progress}%` }} />
-              </div>
+              <ProgressBar value={exportProgress.progress} label={`Word 导出进度 ${exportProgress.progress}%`} />
               <p>{exportProgress.message || '正在处理导出任务，请稍候。'}</p>
               {exportProgress.warnings.length > 0 && (
                 <div className="export-warning-list">

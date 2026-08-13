@@ -12,12 +12,37 @@
   --yb-text-soft: #66707f;
   --yb-text-muted: #98a2b3;
 
+  /* 语义色：成功 / 警告 / 危险，各含主色、深文字、浅背景、边框四档 */
+  --yb-success: #168a4a;
+  --yb-success-deep: #0f6f3b;
+  --yb-success-soft: #e9f7ef;
+  --yb-success-border: #bfe5cd;
+  --yb-warning: #f28a00;
+  --yb-warning-deep: #9a5b00;
+  --yb-warning-soft: #fdf3e4;
+  --yb-warning-border: #f2d8ab;
+  --yb-danger: #c83220;
+  --yb-danger-deep: #a32619;
+  --yb-danger-soft: #fdeeeb;
+  --yb-danger-border: #f3c8c0;
+
+  /* 圆角阶梯：胶囊用 pill，卡片用 xl，面板内容块用 lg/md，小控件用 sm */
+  --yb-radius-sm: 8px;
+  --yb-radius-md: 12px;
+  --yb-radius-lg: 16px;
+  --yb-radius-xl: 24px;
+  --yb-radius-pill: 999px;
+
   /* 分层阴影体系：由弱到强，元素层级越高、越需要强调，阴影越重 */
   --yb-shadow-xs: 0 2px 8px rgba(23, 32, 51, 0.04);
   --yb-shadow-sm: 0 8px 20px rgba(33, 116, 253, 0.05);
   --yb-shadow: 0 18px 40px rgba(33, 116, 253, 0.07);
   --yb-shadow-lg: 0 30px 64px rgba(33, 116, 253, 0.11), 0 10px 26px rgba(23, 32, 51, 0.06);
   --yb-shadow-hover: 0 22px 46px rgba(33, 116, 253, 0.16), 0 8px 18px rgba(23, 32, 51, 0.08);
+  --yb-shadow-modal: 0 28px 72px rgba(23, 32, 51, 0.16);
+
+  /* 统一键盘焦点环 */
+  --yb-focus-ring: 0 0 0 3px rgba(33, 116, 253, 0.22);
 
   /* 统一过渡节奏：交互反馈用更快的 ease-out，跨状态切换用更柔和的曲线 */
   --yb-ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -84,4 +109,49 @@ select {
 
 button {
   cursor: pointer;
+}
+
+/* 全局键盘焦点可见性：按钮/链接类控件用 outline 环，文本输入类控件用统一的蓝色焦点环。
+ * 仅在 :focus-visible（键盘导航）时出现，鼠标点击不受影响；feature 层可用更高优先级覆盖。 */
+button:focus-visible,
+a:focus-visible,
+[role='button']:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid rgba(33, 116, 253, 0.55);
+  outline-offset: 2px;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: var(--yb-focus-ring);
+}
+
+/* 全局统一细滚动条（标准属性，Chromium 新版下自动覆盖 webkit 私有样式） */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(102, 112, 127, 0.32) transparent;
+}
+
+/* 弱动效偏好：关闭弹窗进场和装饰性无限动画（pulse/扫光），
+ * 保留加载 spinner（yb-spin / workspace-database-spin）表达"进行中"状态。 */
+@media (prefers-reduced-motion: reduce) {
+  [class*='-modal'][data-state='open'],
+  [class*='-overlay'][data-state='open'],
+  [class*='-card'][data-state='open'],
+  [class*='-dialog'][data-state='open'],
+  .agent-runtime-status-bar.is-running .agent-runtime-status-dot,
+  .yb-progress-track.is-active::after,
+  .content-outline-item.is-running .content-outline-dot,
+  .content-outline-item.is-planning .content-outline-dot,
+  .plugin-status-pill.is-updating {
+    animation: none !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+  }
 }

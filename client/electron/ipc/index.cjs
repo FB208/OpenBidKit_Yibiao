@@ -70,6 +70,7 @@ function sendToWebContents(webContents, channel, payload) {
 const workspaceDatabaseChannels = [
   'technical-plan:load-state',
   'technical-plan:import-tender-document',
+  'technical-plan:remove-tender-document',
   'technical-plan:import-original-plan-document',
   'technical-plan:check-bid-sections',
   'technical-plan:select-bid-section',

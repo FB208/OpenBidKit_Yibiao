@@ -2,7 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState } from 'react';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { OutlineContentMode } from '../../../shared/types';
-import { useAutoAnswer } from '../../../shared/ui';
+import { AppSwitch, useAutoAnswer } from '../../../shared/ui';
 import type { OutlineAttribute, OutlineSelectionItem, OutlineSelectionState } from '../types';
 
 interface OutlineSelectionDialogProps {
@@ -178,17 +178,7 @@ function OutlineSelectionDialog({
               <span>{selectedIds.length ? `将使用 ${selectedIds.length} 个一级目录` : '请至少选择一个一级目录'}</span>
               <div className="outline-selection-auto-answer">
                 <label>
-                  <span className="yb-switch-control">
-                    <input
-                      type="checkbox"
-                      checked={autoAnswerEnabled}
-                      disabled={autoAnswerSaving || saving}
-                      onChange={(event) => void setAutoAnswerEnabled(event.target.checked)}
-                    />
-                    <span className="yb-switch-track" aria-hidden="true">
-                      <span className="yb-switch-thumb" />
-                    </span>
-                  </span>
+                  <AppSwitch checked={autoAnswerEnabled} disabled={autoAnswerSaving || saving} onCheckedChange={(checked) => void setAutoAnswerEnabled(checked)} />
                   <span>自动确认</span>
                 </label>
                 {selection.auto_answer_at && (

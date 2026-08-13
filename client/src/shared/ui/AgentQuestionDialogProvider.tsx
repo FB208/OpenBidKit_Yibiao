@@ -1,6 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { AgentQuestion } from '../types';
+import AppSwitch from './AppSwitch';
 import MarkdownRenderer from './MarkdownRenderer';
 import { useToast } from './ToastProvider';
 
@@ -208,17 +209,7 @@ export function AgentQuestionDialogProvider({ children }: { children: ReactNode 
             <footer className="agent-question-actions">
               <div className="agent-question-auto-answer">
                 <label>
-                  <span className="yb-switch-control">
-                    <input
-                      type="checkbox"
-                      checked={autoAnswerEnabled}
-                      disabled={autoAnswerSaving || submitting}
-                      onChange={(event) => void setAutoAnswerEnabled(event.target.checked)}
-                    />
-                    <span className="yb-switch-track" aria-hidden="true">
-                      <span className="yb-switch-thumb" />
-                    </span>
-                  </span>
+                  <AppSwitch checked={autoAnswerEnabled} disabled={autoAnswerSaving || submitting} onCheckedChange={(checked) => void setAutoAnswerEnabled(checked)} />
                   <span>自动回答</span>
                 </label>
                 {question?.auto_answer_at && recommendedOption && (

@@ -555,28 +555,41 @@ async function parseDocumentWithConfig(app, filePath, config, options = {}) {
 }
 
 function createFileService({ app, configStore } = {}) {
+  /** 拖拽上传等场景直接给定文件路径时跳过系统选择弹窗 */
+  function normalizeProvidedFilePaths(filePaths) {
+    if (!Array.isArray(filePaths)) return [];
+    return filePaths.map((item) => String(item || '').trim()).filter(Boolean);
+  }
+
   async function importTechnicalPlanDocument(documentLabel = '招标文件', options = {}) {
     const label = String(documentLabel || '招标文件').trim() || '招标文件';
     const multiple = options?.multiple === true;
 const config = configStore ? configStore.load() : { components: { file_parser: { provider: 'local' } } };
     const provider = config.components?.file_parser?.provider || 'local';
     const supportedExtensions = getSelectableExtensions(provider);
-    const result = await dialog.showOpenDialog({
-      title: `选择${label}`,
-      properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
-      filters: [
-        { name: parserLabels[provider] || label, extensions: [...supportedExtensions].map((item) => item.slice(1)) },
-        { name: '所有文件', extensions: ['*'] },
-      ],
-    });
+    let selectedPaths = normalizeProvidedFilePaths(options?.filePaths);
+    if (!multiple && selectedPaths.length > 1) {
+      selectedPaths = selectedPaths.slice(0, 1);
+    }
+    if (!selectedPaths.length) {
+      const result = await dialog.showOpenDialog({
+        title: `选择${label}`,
+        properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+        filters: [
+          { name: parserLabels[provider] || label, extensions: [...supportedExtensions].map((item) => item.slice(1)) },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      });
 
-    if (result.canceled || result.filePaths.length === 0) {
-      return { success: false, message: '已取消选择' };
+      if (result.canceled || result.filePaths.length === 0) {
+        return { success: false, message: '已取消选择' };
+      }
+      selectedPaths = result.filePaths;
     }
 
     const parsedDocuments = [];
     const errors = [];
-    for (const filePath of result.filePaths) {
+    for (const filePath of selectedPaths) {
       const ext = path.extname(filePath).toLowerCase();
       const parser = resolveFileParser(config, filePath);
       if (!supportedExtensions.has(ext)) {
@@ -636,29 +649,33 @@ const config = configStore ? configStore.load() : { components: { file_parser: {
 
     importTechnicalPlanDocument,
 
-    async importRejectionCheckDocument(role = 'tender') {
+    async importRejectionCheckDocument(role = 'tender', filePaths) {
       const documentRole = role === 'bid' ? 'bid' : 'tender';
       const documentLabel = documentRole === 'bid' ? '投标文件' : '招标文件';
       const config = configStore ? configStore.load() : { components: { file_parser: { provider: 'local' } } };
       const provider = config.components?.file_parser?.provider || 'local';
       const supportedExtensions = getSelectableExtensions(provider);
       const multiple = documentRole === 'bid' || documentRole === 'tender';
-      const result = await dialog.showOpenDialog({
-        title: `选择${documentLabel}`,
-        properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
-        filters: [
-          { name: parserLabels[provider] || documentLabel, extensions: [...supportedExtensions].map((item) => item.slice(1)) },
-          { name: '所有文件', extensions: ['*'] },
-        ],
-      });
+      let selectedPaths = normalizeProvidedFilePaths(filePaths);
+      if (!selectedPaths.length) {
+        const result = await dialog.showOpenDialog({
+          title: `选择${documentLabel}`,
+          properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+          filters: [
+            { name: parserLabels[provider] || documentLabel, extensions: [...supportedExtensions].map((item) => item.slice(1)) },
+            { name: '所有文件', extensions: ['*'] },
+          ],
+        });
 
-      if (result.canceled || result.filePaths.length === 0) {
-        return { success: false, message: '已取消选择' };
+        if (result.canceled || result.filePaths.length === 0) {
+          return { success: false, message: '已取消选择' };
+        }
+        selectedPaths = result.filePaths;
       }
 
       const parsedDocuments = [];
       const errors = [];
-      for (const filePath of result.filePaths) {
+      for (const filePath of selectedPaths) {
         const ext = path.extname(filePath).toLowerCase();
         const parser = resolveFileParser(config, filePath);
         if (!supportedExtensions.has(ext)) {
@@ -715,20 +732,27 @@ const config = configStore ? configStore.load() : { components: { file_parser: {
 
     async selectDuplicateCheckFiles(options = {}) {
       const multiple = options?.multiple !== false;
-      const result = await dialog.showOpenDialog({
-        title: multiple ? '选择投标文件' : '选择招标文件',
-        properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
-        filters: [
-          { name: '标书文档', extensions: [...duplicateCheckSupportedExtensions].map((item) => item.slice(1)) },
-          { name: '所有文件', extensions: ['*'] },
-        ],
-      });
+      let selectedPaths = normalizeProvidedFilePaths(options?.filePaths);
+      if (!multiple && selectedPaths.length > 1) {
+        selectedPaths = selectedPaths.slice(0, 1);
+      }
+      if (!selectedPaths.length) {
+        const result = await dialog.showOpenDialog({
+          title: multiple ? '选择投标文件' : '选择招标文件',
+          properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+          filters: [
+            { name: '标书文档', extensions: [...duplicateCheckSupportedExtensions].map((item) => item.slice(1)) },
+            { name: '所有文件', extensions: ['*'] },
+          ],
+        });
 
-      if (result.canceled || result.filePaths.length === 0) {
-        return { success: false, message: '已取消选择', files: [] };
+        if (result.canceled || result.filePaths.length === 0) {
+          return { success: false, message: '已取消选择', files: [] };
+        }
+        selectedPaths = result.filePaths;
       }
 
-      const supportedPaths = result.filePaths.filter((filePath) => duplicateCheckSupportedExtensions.has(path.extname(filePath).toLowerCase()));
+      const supportedPaths = selectedPaths.filter((filePath) => duplicateCheckSupportedExtensions.has(path.extname(filePath).toLowerCase()));
       if (!supportedPaths.length) {
         return { success: false, message: '未选择支持的文件类型', files: [] };
       }

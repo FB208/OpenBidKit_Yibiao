@@ -1,9 +1,8 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Popover from '@radix-ui/react-popover';
-import * as Switch from '@radix-ui/react-switch';
 import { memo, useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
+import { AppSwitch, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { ClientConfig, ImageModelStatus, OutlineContentMode, OutlineData, OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
@@ -495,7 +494,16 @@ function ContentEditPage({
               ? `${illustrationGenerationCompleted}/${illustrationGenerationTotal}`
             : `${resolvedCount}/${leaves.length}`;
   const progressPhaseLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '正文编排' : restoring ? '原方案还原' : sectionWordAdjusting ? '小节字数调整' : finalSectionWordAdjusting ? '最终小节复核' : totalWordAdjusting ? '全文字数调整' : contentCorrecting ? '内容矫正' : illustrationPlanning ? '全文图片编排' : illustrationGenerating ? '全文图片生成' : '正文生成';
-  const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${wordAdjusting ? ' is-word-adjusting' : ''}${contentCorrecting ? ' is-auditing' : ''}${illustrationPlanning || illustrationGenerating ? ' is-illustration-planning' : ''}${taskInFlight && (planning || restoring || wordAdjusting || contentCorrecting || illustrationPlanning || illustrationGenerating) ? ' is-active' : ''}`;
+  const progressTone = planning
+    ? 'success'
+    : wordAdjusting
+      ? 'warning'
+      : contentCorrecting
+        ? 'sky'
+        : illustrationPlanning || illustrationGenerating
+          ? 'violet'
+          : 'primary';
+  const progressActive = taskInFlight && (planning || restoring || wordAdjusting || contentCorrecting || illustrationPlanning || illustrationGenerating);
   const progressDescription = taskFailed
     ? taskErrorMessage
     : planning
@@ -1054,19 +1062,6 @@ function ContentEditPage({
           <span><strong>{totalWords}</strong> 字</span>
         </div>
         <div className="content-generation-actions">
-          <button
-            type="button"
-            className="outline-config-action"
-            onClick={openGenerationDialog}
-            disabled={taskInFlight || !leaves.length}
-            aria-label="打开正文生成配置"
-            title="正文生成配置"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
-              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
-            </svg>
-          </button>
           {awaitingContentDecision ? (
             <>
               {unresolvedCount > 0 && (
@@ -1122,9 +1117,7 @@ function ContentEditPage({
             </button>
             {!statsCollapsed && (
               <div className="content-outline-stats-body">
-                <div className={progressTrackClass} aria-label={`${progressPhaseLabel}进度 ${displayProgress}%`}>
-                  <span style={{ width: `${displayProgress}%` }} />
-                </div>
+                <ProgressBar value={displayProgress} tone={progressTone} active={progressActive} label={`${progressPhaseLabel}进度 ${displayProgress}%`} />
                 <p>{progressDescription}</p>
                 {failedCount > 0 && <small>失败 {failedCount} 个小节</small>}
               </div>
@@ -1265,15 +1258,11 @@ function ContentEditPage({
                   <span>
                     <strong>全文一致性审计</strong>
                   </span>
-                  <Switch.Root
-                    className="content-generation-switch"
+                  <AppSwitch
                     checked={draftGenerationOptions.enableConsistencyAudit}
                     disabled={generationStrategyLocked}
                     onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, enableConsistencyAudit: checked }))}
-                    aria-label="是否启用全文一致性审计"
-                  >
-                    <Switch.Thumb className="content-generation-switch-thumb" />
-                  </Switch.Root>
+                    aria-label="是否启用全文一致性审计" />
                 </label>
                 {draftGenerationOptions.enableConsistencyAudit && (
                   <label className="content-generation-config-row">
@@ -1296,15 +1285,11 @@ function ContentEditPage({
                     <span>
                       <strong>原方案覆盖审计</strong>
                     </span>
-                    <Switch.Root
-                      className="content-generation-switch"
+                    <AppSwitch
                       checked={draftGenerationOptions.enableOriginalPlanCoverageAudit}
                       disabled={generationStrategyLocked}
                       onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, enableOriginalPlanCoverageAudit: checked }))}
-                      aria-label="是否启用原方案覆盖审计"
-                    >
-                      <Switch.Thumb className="content-generation-switch-thumb" />
-                    </Switch.Root>
+                      aria-label="是否启用原方案覆盖审计" />
                   </label>
                   {draftGenerationOptions.enableOriginalPlanCoverageAudit && (
                     <label className="content-generation-config-row">
@@ -1338,15 +1323,11 @@ function ContentEditPage({
                   </div>
                   <div className="content-generation-config-control">
                     <em className={`content-image-status is-${imageModelStatus}`}>{imageModelStatusLabels[imageModelStatus]}</em>
-                    <Switch.Root
-                      className="content-generation-switch"
+                    <AppSwitch
                       checked={draftGenerationOptions.useAiImages && imageModelAvailable}
                       disabled={generationStrategyLocked || !imageModelAvailable}
                       onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useAiImages: checked }))}
-                      aria-label="是否使用 AI 生图"
-                    >
-                      <Switch.Thumb className="content-generation-switch-thumb" />
-                    </Switch.Root>
+                      aria-label="是否使用 AI 生图" />
                   </div>
                 </div>
                 {draftGenerationOptions.useAiImages && imageModelAvailable && (
@@ -1380,15 +1361,11 @@ function ContentEditPage({
                       <ImageExampleIcon />
                     </button>
                   </div>
-                  <Switch.Root
-                    className="content-generation-switch"
+                  <AppSwitch
                     checked={draftGenerationOptions.useMermaidImages}
                     disabled={generationStrategyLocked}
                     onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useMermaidImages: checked }))}
-                    aria-label="是否使用 Mermaid 生图"
-                  >
-                    <Switch.Thumb className="content-generation-switch-thumb" />
-                  </Switch.Root>
+                    aria-label="是否使用 Mermaid 生图" />
                 </div>
                 {draftGenerationOptions.useMermaidImages && (
                   <label className="content-generation-config-row">
@@ -1421,15 +1398,11 @@ function ContentEditPage({
                       <ImageExampleIcon />
                     </button>
                   </div>
-                  <Switch.Root
-                    className="content-generation-switch"
+                  <AppSwitch
                     checked={draftGenerationOptions.useHtmlImages}
                     disabled={generationStrategyLocked}
                     onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useHtmlImages: checked }))}
-                    aria-label="是否生成 HTML 图片"
-                  >
-                    <Switch.Thumb className="content-generation-switch-thumb" />
-                  </Switch.Root>
+                    aria-label="是否生成 HTML 图片" />
                 </div>
                 {draftGenerationOptions.useHtmlImages && (
                   <label className="content-generation-config-row">

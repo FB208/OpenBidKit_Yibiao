@@ -1,6 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useState } from 'react';
-import { useToast } from '../../../shared/ui';
+import { EmptyState, useToast } from '../../../shared/ui';
 import type { AvailablePlugin } from '../../../shared/types/ipc';
 
 const downloadCountFormatter = new Intl.NumberFormat('zh-CN');
@@ -203,15 +203,9 @@ function PluginsPage() {
 
         <div className="plugins-list">
           {loading && plugins.length === 0 ? (
-            <div className="plugins-empty-state">
-              <strong>正在读取插件</strong>
-              <span>请稍候...</span>
-            </div>
+            <EmptyState title="正在读取插件" hint="请稍候..." />
           ) : plugins.length === 0 ? (
-            <div className="plugins-empty-state">
-              <strong>暂无可用插件</strong>
-              <span>插件市场正在建设中，稍后再来看看。</span>
-            </div>
+            <EmptyState title="暂无可用插件" hint="插件市场正在建设中，稍后再来看看。" />
           ) : (
             <div className="plugins-grid">
               {plugins.map((plugin) => {

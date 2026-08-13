@@ -1,8 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import * as Switch from '@radix-ui/react-switch';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { FloatingToolbar, isLibreOfficeRequiredMessage, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import { AppSwitch, FloatingToolbar, isLibreOfficeRequiredMessage, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, TaskProgressPanel, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, UploadBoard, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type {
   LogicCheckFinding,
@@ -366,18 +365,14 @@ function stripTripleQuoteWrapper(content: string) {
 
 function DocumentFilePill({ document, onRemove }: { document: RejectionDocumentContent; onRemove?: () => void }) {
   return (
-    <article className="rejection-file-pill">
-      <div className="rejection-file-icon">{getFileBadge(document)}</div>
-      <div className="rejection-file-info">
-        <strong title={document.fileName}>{document.fileName}</strong>
-        <span>{sourceLabels[document.source]} · {formatContentLength(document.content)} · {formatImportedAt(document.importedAt)}</span>
-      </div>
-      {onRemove && (
-        <button type="button" onClick={onRemove} aria-label={`移除${documentLabels[document.role]}`}>
-          移除
-        </button>
-      )}
-    </article>
+    <UploadFilePill
+      badge={getFileBadge(document)}
+      name={document.fileName}
+      meta={`${sourceLabels[document.source]} · ${formatContentLength(document.content)} · ${formatImportedAt(document.importedAt)}`}
+      onRemove={onRemove}
+      removeLabel="移除"
+      removeAriaLabel={`移除${documentLabels[document.role]}`}
+    />
   );
 }
 
@@ -868,7 +863,10 @@ function RejectionCheckPage() {
     void prepareInvalidBidAndRejectionItems(false);
   }, [extractionRunning, invalidBidAndRejectionItems.content, invalidBidAndRejectionItems.source, invalidBidAndRejectionItems.tenderSignature, step, tenderDocument, tenderSignature]);
 
-  async function importParsedDocument(role: RejectionDocumentRole) {
+  const resolveDroppedFilePaths = (files: FileList) =>
+    Array.from(files).map((file) => window.yibiao?.file.getPathForFile(file) || '').filter(Boolean);
+
+  async function importParsedDocument(role: RejectionDocumentRole, filePaths?: string[]) {
     const documentLabel = documentLabels[role];
     try {
       const importer = window.yibiao?.rejectionCheck.importDocument;
@@ -877,7 +875,7 @@ function RejectionCheckPage() {
       }
 
       setBusy(role === 'tender' ? 'tender-upload' : 'bid-upload');
-      const result = await importer(role);
+      const result = await importer(role, filePaths);
 
       if (!result?.success) {
         const message = result?.message || `未选择${documentLabel}`;
@@ -1759,78 +1757,73 @@ function RejectionCheckPage() {
     <div className={`rejection-check-page is-${step}`}>
       {step === 'documents' ? (
         <>
-          <section className="rejection-upload-board">
-            <div className="rejection-page-title">
-              <div>
-                <span className="section-kicker">STEP 01</span>
-                <h2>选择标书</h2>
-              </div>
-            </div>
-
-            <div className="rejection-upload-stack">
-              <article className="rejection-upload-row">
-                <div className="rejection-upload-label">
-                  <span>01</span>
-                  <strong>招标文件</strong>
-                </div>
-                <div className="rejection-upload-content">
-                  {tenderDocuments.length ? (
-                    <div className="duplicate-file-list rejection-bid-file-list">
-                      {tenderDocuments.map((document, index) => (
-                        <div className="rejection-bid-file-entry" key={document.id}>
-                          <span>{`招标文件${index + 1}`}</span>
-                          <DocumentFilePill document={document} />
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="rejection-empty-upload">
-                      <strong>等待招标文件</strong>
-                      <span>用于识别废标条款、响应格式和强制性要求。</span>
-                    </div>
-                  )}
-                </div>
-                <div className="rejection-upload-actions">
+          <UploadBoard kicker="STEP 01" title="选择标书">
+            <UploadRow
+              index="01"
+              title="招标文件"
+              onDropFiles={(files) => {
+                const paths = resolveDroppedFilePaths(files);
+                if (paths.length) void importParsedDocument('tender', paths);
+              }}
+              dropDisabled={busy !== null}
+              actions={(
+                <>
                   <button type="button" className="secondary-action" onClick={readTenderFromTechnicalPlan} disabled={busy !== null}>
                     {busy === 'technical-plan' ? '读取中...' : '从技术方案读取'}
                   </button>
                   <button type="button" className="primary-action" onClick={() => void importParsedDocument('tender')} disabled={busy !== null}>
-                    {busy === 'tender-upload' ? '解析中...' : tenderDocuments.length ? '替换' : '上传'}
+                    {busy === 'tender-upload' ? '解析中...' : tenderDocuments.length ? '继续上传' : '上传'}
                   </button>
+                </>
+              )}
+            >
+              {tenderDocuments.length ? (
+                <div className="duplicate-file-list rejection-bid-file-list">
+                  {tenderDocuments.map((document, index) => (
+                    <div className="rejection-bid-file-entry" key={document.id}>
+                      <span>{`招标文件${index + 1}`}</span>
+                      <DocumentFilePill document={document} onRemove={() => removeDocument('tender', document.id)} />
+                    </div>
+                  ))}
                 </div>
-              </article>
+              ) : (
+                <UploadEmpty title="等待招标文件" hint="用于识别废标条款、响应格式和强制性要求。">
+                  <button type="button" className="text-button" onClick={() => void importParsedDocument('tender')} disabled={busy !== null}>选择招标文件</button>
+                </UploadEmpty>
+              )}
+            </UploadRow>
 
-              <article className="rejection-upload-row bid-row">
-                <div className="rejection-upload-label">
-                  <span>02</span>
-                  <strong>投标文件</strong>
-                  <small>必选，可多份</small>
-                </div>
-                <div className="rejection-upload-content">
-                  {bidDocuments.length ? (
-                    <div className="duplicate-file-list rejection-bid-file-list">
-                      {bidDocuments.map((document, index) => (
-                        <div className="rejection-bid-file-entry" key={document.id}>
-                          <span>{`投标文件${index + 1}`}</span>
-                          <DocumentFilePill document={document} onRemove={() => removeDocument('bid', document.id)} />
-                        </div>
-                      ))}
+            <UploadRow
+              index="02"
+              title="投标文件"
+              note="必选，可多份"
+              onDropFiles={(files) => {
+                const paths = resolveDroppedFilePaths(files);
+                if (paths.length) void importParsedDocument('bid', paths);
+              }}
+              dropDisabled={busy !== null}
+              actions={(
+                <button type="button" className="primary-action" onClick={() => void importParsedDocument('bid')} disabled={busy !== null}>
+                  {busy === 'bid-upload' ? '解析中...' : bidDocuments.length ? '继续上传' : '上传'}
+                </button>
+              )}
+            >
+              {bidDocuments.length ? (
+                <div className="duplicate-file-list rejection-bid-file-list">
+                  {bidDocuments.map((document, index) => (
+                    <div className="rejection-bid-file-entry" key={document.id}>
+                      <span>{`投标文件${index + 1}`}</span>
+                      <DocumentFilePill document={document} onRemove={() => removeDocument('bid', document.id)} />
                     </div>
-                  ) : (
-                    <div className="rejection-empty-upload">
-                      <strong>等待投标文件</strong>
-                      <span>可一次选择多份，也可以后续继续追加上传。</span>
-                    </div>
-                  )}
+                  ))}
                 </div>
-                <div className="rejection-upload-actions single-action">
-                  <button type="button" className="primary-action" onClick={() => void importParsedDocument('bid')} disabled={busy !== null}>
-                    {busy === 'bid-upload' ? '解析中...' : bidDocuments.length ? '继续上传' : '上传'}
-                  </button>
-                </div>
-              </article>
-            </div>
-          </section>
+              ) : (
+                <UploadEmpty title="等待投标文件" hint="可一次选择多份，也可以后续继续追加上传。">
+                  <button type="button" className="text-button" onClick={() => void importParsedDocument('bid')} disabled={busy !== null}>选择投标文件</button>
+                </UploadEmpty>
+              )}
+            </UploadRow>
+          </UploadBoard>
 
           <div className="document-switch-tabs" role="tablist" aria-label="废标项检查正文切换">
             {[
@@ -1994,18 +1987,6 @@ function RejectionCheckPage() {
               <div className="rejection-check-result-actions">
                 <button
                   type="button"
-                  className="outline-config-action"
-                  onClick={openCheckConfigDialog}
-                  aria-label="打开检查配置"
-                  title="检查配置"
-                >
-                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
-                    <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
-                  </svg>
-                </button>
-                <button
-                  type="button"
                   className="primary-action"
                   onClick={openCheckConfigDialog}
                   disabled={checkRunning || extractionRunning}
@@ -2014,6 +1995,63 @@ function RejectionCheckPage() {
                 </button>
               </div>
             </div>
+
+            {(() => {
+              const summaries = checkResultTabs
+                .filter((tab) => isCheckResultTabEnabled(tab.id, checkOptions))
+                .map((tab) => {
+                  const status: RejectionCheckTabStatus = tab.id === 'rejection'
+                    ? visibleRejectionCheckStatus
+                    : tab.id === 'typo'
+                      ? visibleTypoCheckStatus
+                      : visibleLogicCheckStatus;
+                  const progressMessage = tab.id === 'rejection'
+                    ? rejectionCheckResult.progressMessage
+                    : tab.id === 'typo'
+                      ? typoCheckResult.progressMessage
+                      : logicCheckResult.progressMessage;
+                  return { id: tab.id, label: tab.label, status, progress: getCheckResultTabProgress(status, progressMessage) };
+                });
+              if (!summaries.length) return null;
+              const failedCount = summaries.filter((item) => item.status === 'error').length;
+              const doneCount = summaries.filter((item) => item.status === 'success').length;
+              const overallStatus = checkRunning
+                ? 'running' as const
+                : failedCount > 0
+                  ? 'error' as const
+                  : doneCount === summaries.length
+                    ? 'success' as const
+                    : 'idle' as const;
+              const overallProgress = Math.round(summaries.reduce((sum, item) => sum + item.progress, 0) / summaries.length);
+              const overallMessage = overallStatus === 'running'
+                ? '正在按已启用的检查项逐项核查投标文件。'
+                : overallStatus === 'error'
+                  ? `${failedCount} 个检查项失败，可直接重试。`
+                  : overallStatus === 'success'
+                    ? '全部检查项已完成，点击下方标签查看各项结果。'
+                    : '等待开始检查。';
+              return (
+                <TaskProgressPanel
+                  status={overallStatus}
+                  title="投标文件检查"
+                  message={overallMessage}
+                  progress={overallProgress}
+                  onRetry={openCheckConfigDialog}
+                  retryLabel="重新检查"
+                  detailsLabel="各检查项状态"
+                  details={(
+                    <>
+                      {summaries.map((item) => (
+                        <div key={item.id} className={`yb-task-progress-item is-${item.status}`}>
+                          <strong>{item.label}</strong>
+                          <em>{checkTabStatusLabels[item.status]}</em>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                />
+              );
+            })()}
 
             <div className="rejection-check-result-tabs" role="tablist" aria-label="废标项检查结果类型">
               {checkResultTabs.map((tab) => {
@@ -2047,9 +2085,7 @@ function RejectionCheckPage() {
                       <strong>{tab.label}</strong>
                       <em>{checkTabStatusLabels[status]}</em>
                     </span>
-                    <span className="duplicate-analysis-progress" aria-label={`${tab.label}检查进度 ${progress}%`}>
-                      <span style={{ width: `${progress}%` }} />
-                    </span>
+                    <ProgressBar value={progress} label={`${tab.label}检查进度 ${progress}%`} />
                   </button>
                 );
               })}
@@ -2117,37 +2153,27 @@ function RejectionCheckPage() {
                       <strong>废标项检查</strong>
                       <small>基于招标文件无效与废标项检查投标文件响应风险，默认必选。</small>
                     </span>
-                    <Switch.Root className="content-generation-switch" checked disabled aria-label="废标项检查">
-                      <Switch.Thumb className="content-generation-switch-thumb" />
-                    </Switch.Root>
+                    <AppSwitch checked disabled aria-label="废标项检查" />
                   </label>
                   <label className="content-generation-config-row">
                     <span>
                       <strong>错别字检查</strong>
                       <small>检查投标文件中的错别字、明显别字和文字疏漏。</small>
                     </span>
-                    <Switch.Root
-                      className="content-generation-switch"
+                    <AppSwitch
                       checked={draftCheckOptions.typoCheck}
                       onCheckedChange={(checked) => setDraftCheckOptions((prev) => ({ ...prev, typoCheck: checked }))}
-                      aria-label="错别字检查"
-                    >
-                      <Switch.Thumb className="content-generation-switch-thumb" />
-                    </Switch.Root>
+                      aria-label="错别字检查" />
                   </label>
                   <label className="content-generation-config-row">
                     <span>
                       <strong>逻辑谬误检查</strong>
                       <small>检查前后矛盾、逻辑不一致和表述漏洞。</small>
                     </span>
-                    <Switch.Root
-                      className="content-generation-switch"
+                    <AppSwitch
                       checked={draftCheckOptions.logicCheck}
                       onCheckedChange={(checked) => setDraftCheckOptions((prev) => ({ ...prev, logicCheck: checked }))}
-                      aria-label="逻辑谬误检查"
-                    >
-                      <Switch.Thumb className="content-generation-switch-thumb" />
-                    </Switch.Root>
+                      aria-label="逻辑谬误检查" />
                   </label>
                 </div>
 

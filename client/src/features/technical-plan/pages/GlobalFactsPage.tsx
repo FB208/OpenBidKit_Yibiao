@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
+import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
 import type { OutlineData } from '../../../shared/types';
 import type { BackgroundTaskState, GlobalFactGroupState } from '../types';
 
@@ -174,9 +174,7 @@ function GlobalFactsPage({ outlineData, globalFacts, task, onGlobalFactsSaved }:
             </button>
             {!progressCollapsed && (
               <div className="content-outline-stats-body">
-                <div className={`content-generation-progress-track${running ? ' is-active' : ''}`} aria-label={`全局事实设定进度 ${progress}%`}>
-                  <span style={{ width: `${progress}%` }} />
-                </div>
+                <ProgressBar value={progress} active={running} label={`全局事实设定进度 ${progress}%`} />
                 <p>{taskFailed ? task?.error || latestLog || '全局事实设定失败，请重新解析。' : latestLog || '点击“开始解析”后，后台会生成全局事实变量。'}</p>
                 {taskFailed && <small>失败后不会自动重试，可点击“重新解析”。</small>}
               </div>

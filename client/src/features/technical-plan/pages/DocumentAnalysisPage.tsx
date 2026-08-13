@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, UploadBoard, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FileParserProvider } from '../../../shared/types';
 import type { TechnicalPlanOriginalPlanFile, TechnicalPlanState, TechnicalPlanTenderFile, TechnicalPlanTenderSourceFile, TechnicalPlanWorkflowKind } from '../types';
 
@@ -16,15 +16,15 @@ const documentLabels = {
   originalPlan: '原方案',
 };
 
-function DocumentFilePill({ file }: { file: TechnicalPlanTenderFile | TechnicalPlanOriginalPlanFile }) {
+function DocumentFilePill({ file, onRemove, removeDisabled = false }: { file: TechnicalPlanTenderFile | TechnicalPlanTenderSourceFile | TechnicalPlanOriginalPlanFile; onRemove?: () => void; removeDisabled?: boolean }) {
   return (
-    <div className="technical-document-file-pill">
-      <div className="technical-document-file-icon">MD</div>
-      <div className="technical-document-file-info">
-        <strong>{file.fileName}</strong>
-        <span>{[file.parserLabel, `${file.markdownChars} 字`].filter(Boolean).join(' · ')}</span>
-      </div>
-    </div>
+    <UploadFilePill
+      badge="MD"
+      name={file.fileName}
+      meta={[file.parserLabel, `${file.markdownChars} 字`].filter(Boolean).join(' · ')}
+      onRemove={onRemove}
+      removeDisabled={removeDisabled}
+    />
   );
 }
 
@@ -125,10 +125,13 @@ function DocumentAnalysisPage({
     };
   }, [activeDocumentTab, showToast, tenderSourceMarkdowns]);
 
-  const importTenderDocument = async () => {
+  const resolveDroppedFilePaths = (files: FileList) =>
+    Array.from(files).map((file) => window.yibiao?.file.getPathForFile(file) || '').filter(Boolean);
+
+  const importTenderDocument = async (filePaths?: string[]) => {
     try {
       setBusy('tender');
-      const result = await window.yibiao?.technicalPlan.importTenderDocument();
+      const result = await window.yibiao?.technicalPlan.importTenderDocument(filePaths);
 
       if (!result?.success) {
         const message = result?.message || '未导入文件';
@@ -136,7 +139,7 @@ function DocumentAnalysisPage({
           showDocumentParseNotice(message);
           return;
         }
-        showToast(message, message === '已取消选择' ? 'info' : 'error');
+        showToast(message, message === '已取消选择' || message.startsWith('已跳过') ? 'info' : 'error');
         return;
       }
 
@@ -147,10 +150,10 @@ function DocumentAnalysisPage({
 
       const state = await window.yibiao.technicalPlan.loadState();
       onFileImported(state, result.markdown);
-      const firstSource = state.tenderFiles?.[0];
-      if (firstSource) {
-        setTenderSourceMarkdowns(state.tenderFiles?.length === 1 ? { [firstSource.id]: result.markdown } : {});
-        setActiveDocumentTab(`tender:${firstSource.id}`);
+      const lastSource = state.tenderFiles?.[state.tenderFiles.length - 1];
+      if (lastSource) {
+        setTenderSourceMarkdowns(state.tenderFiles.length === 1 ? { [lastSource.id]: result.markdown } : {});
+        setActiveDocumentTab(`tender:${lastSource.id}`);
       }
       showToast(result.message || '招标文件已导入', 'success');
     } catch (error) {
@@ -165,10 +168,36 @@ function DocumentAnalysisPage({
     }
   };
 
-  const importOriginalPlanDocument = async () => {
+  const removeTenderDocument = async (sourceId: string) => {
+    try {
+      setBusy('tender');
+      const result = await window.yibiao?.technicalPlan.removeTenderDocument(sourceId);
+      if (!result?.success) {
+        showToast(result?.message || '移除招标文件失败', 'error');
+        return;
+      }
+      const state = await window.yibiao.technicalPlan.loadState();
+      onFileImported(state, result.markdown || '');
+      const firstSource = state.tenderFiles?.[0];
+      if (firstSource) {
+        setTenderSourceMarkdowns(state.tenderFiles.length === 1 ? { [firstSource.id]: result.markdown || '' } : {});
+        setActiveDocumentTab(`tender:${firstSource.id}`);
+      } else {
+        setTenderSourceMarkdowns({});
+        setActiveDocumentTab('tender');
+      }
+      showToast(result.message || '已移除招标文件', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '移除招标文件失败', 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const importOriginalPlanDocument = async (filePaths?: string[]) => {
     try {
       setBusy('originalPlan');
-      const result = await window.yibiao?.technicalPlan.importOriginalPlanDocument();
+      const result = await window.yibiao?.technicalPlan.importOriginalPlanDocument(filePaths);
 
       if (!result?.success) {
         const message = result?.message || '未导入文件';
@@ -225,63 +254,64 @@ function DocumentAnalysisPage({
 
   return (
     <div className={`plan-step-body document-analysis-page technical-document-page${hasSectionHint ? ' has-section-hint' : ''}${hasDocumentTabs ? ' has-document-tabs' : ''}`}>
-      <section className="technical-document-upload-board">
-        <div className="technical-document-page-title">
-          <div>
-            <span className="section-kicker">STEP 01</span>
-            <h2>选择标书</h2>
-            <p>默认解析方案：{configuredParserLabel}</p>
-          </div>
-        </div>
-
-        <div className="technical-document-upload-stack">
-          <article className="technical-document-upload-row">
-            <div className="technical-document-upload-label">
-              <span>01</span>
-              <strong>招标文件</strong>
-            </div>
-            <div className="technical-document-upload-content">
-              {tenderFile ? (
-                <DocumentFilePill file={tenderFile} />
-              ) : (
-                <div className="technical-document-empty-upload">
-                  <strong>等待招标文件</strong>
-                  <span>用于解析项目概况、技术要求、评分项和后续正文约束。</span>
-                </div>
-              )}
-            </div>
-            <div className="technical-document-upload-actions">
-              <button type="button" className="primary-action" onClick={() => void importTenderDocument()} disabled={isBusy}>
-                {busy === 'tender' ? '解析中...' : tenderFile ? '替换' : '上传'}
-              </button>
-            </div>
-          </article>
-
-          {isExpansionWorkflow && (
-            <article className="technical-document-upload-row original-plan-row">
-              <div className="technical-document-upload-label">
-                <span>02</span>
-                <strong>原方案</strong>
-              </div>
-              <div className="technical-document-upload-content">
-                {originalPlanFile ? (
-                  <DocumentFilePill file={originalPlanFile} />
-                ) : (
-                  <div className="technical-document-empty-upload">
-                    <strong>等待原方案</strong>
-                    <span>上传已经写好的技术方案，后续用于优化和扩充。</span>
-                  </div>
-                )}
-              </div>
-              <div className="technical-document-upload-actions">
-                <button type="button" className="primary-action" onClick={() => void importOriginalPlanDocument()} disabled={isBusy}>
-                  {busy === 'originalPlan' ? '解析中...' : originalPlanFile ? '替换' : '上传'}
-                </button>
-              </div>
-            </article>
+      <UploadBoard kicker="STEP 01" title="选择标书" subtitle={`默认解析方案：${configuredParserLabel}`}>
+        <UploadRow
+          index="01"
+          title="招标文件"
+          onDropFiles={(files) => {
+            const paths = resolveDroppedFilePaths(files);
+            if (paths.length) void importTenderDocument(paths);
+          }}
+          dropDisabled={isBusy}
+          actions={(
+            <button type="button" className="primary-action" onClick={() => void importTenderDocument()} disabled={isBusy}>
+              {busy === 'tender' ? '解析中...' : tenderFiles.length ? '继续上传' : '上传'}
+            </button>
           )}
-        </div>
-      </section>
+        >
+          {tenderFiles.length ? (
+            <div className="upload-file-list">
+              {tenderFiles.map((file) => (
+                <DocumentFilePill
+                  key={file.id}
+                  file={file}
+                  onRemove={() => void removeTenderDocument(file.id)}
+                  removeDisabled={isBusy}
+                />
+              ))}
+            </div>
+          ) : (
+            <UploadEmpty title="等待招标文件" hint="用于解析项目概况、技术要求、评分项和后续正文约束。">
+              <button type="button" className="text-button" onClick={() => void importTenderDocument()} disabled={isBusy}>选择招标文件</button>
+            </UploadEmpty>
+          )}
+        </UploadRow>
+
+        {isExpansionWorkflow && (
+          <UploadRow
+            index="02"
+            title="原方案"
+            onDropFiles={(files) => {
+              const paths = resolveDroppedFilePaths(files);
+              if (paths.length) void importOriginalPlanDocument(paths);
+            }}
+            dropDisabled={isBusy}
+            actions={(
+              <button type="button" className="primary-action" onClick={() => void importOriginalPlanDocument()} disabled={isBusy}>
+                {busy === 'originalPlan' ? '解析中...' : originalPlanFile ? '替换' : '上传'}
+              </button>
+            )}
+          >
+            {originalPlanFile ? (
+              <DocumentFilePill file={originalPlanFile} />
+            ) : (
+              <UploadEmpty title="等待原方案" hint="上传已经写好的技术方案，后续用于优化和扩充。">
+                <button type="button" className="text-button" onClick={() => void importOriginalPlanDocument()} disabled={isBusy}>导入原方案</button>
+              </UploadEmpty>
+            )}
+          </UploadRow>
+        )}
+      </UploadBoard>
 
       {selectedSectionTitle && (
         <section className="analysis-section-hint">
