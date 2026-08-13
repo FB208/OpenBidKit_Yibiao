@@ -160,6 +160,11 @@ function registerPluginIpc(ipcMain, app, services) {
     return await pluginService.refreshMarket();
   });
 
+  // 向运行中的插件发送宿主事件（如让桌宠打开 AI 对话）
+  ipcMain.handle('plugins:notify-event', async (event, pluginId, hostEvent, payload) => {
+    return await pluginService.notifyPluginEvent(pluginId, hostEvent, payload);
+  });
+
   // 清除更新失败状态
   ipcMain.handle('plugins:clearUpdateFailedState', async (event, pluginId) => {
     pluginService.failedUpdates.delete(pluginId);

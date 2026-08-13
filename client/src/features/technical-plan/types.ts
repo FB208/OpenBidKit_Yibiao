@@ -364,6 +364,7 @@ export interface TechnicalPlanState {
   bidSectionExtractionTask?: BackgroundTaskState;
   bidAnalysisTask?: BackgroundTaskState;
   outlineGenerationTask?: BackgroundTaskState;
+  outlineAdjustmentTask?: BackgroundTaskState;
   globalFactsTask?: BackgroundTaskState;
   globalFacts: GlobalFactGroupState[];
   contentGenerationTask?: BackgroundTaskState;

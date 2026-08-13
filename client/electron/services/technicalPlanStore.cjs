@@ -66,6 +66,7 @@ const taskFieldTypes = {
   bidSectionExtractionTask: 'bid-section-extraction',
   bidAnalysisTask: 'bid-analysis',
   outlineGenerationTask: 'outline-generation',
+  outlineAdjustmentTask: 'outline-adjustment',
   globalFactsTask: 'global-facts-generation',
   contentGenerationTask: 'content-generation',
 };

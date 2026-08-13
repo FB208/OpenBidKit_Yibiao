@@ -17,6 +17,7 @@ export {
   ToolbarArrowRightIcon,
   ToolbarDocumentIcon,
   ToolbarOutlineIcon,
+  ToolbarSparkleIcon,
 } from './FloatingToolbar';
 export { ToastProvider, useToast } from './ToastProvider';
 export type { ToastAction, ToastOptions, ToastType } from './ToastProvider';

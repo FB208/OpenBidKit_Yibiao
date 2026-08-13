@@ -23,6 +23,7 @@ interface OutlineEditPageProps {
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
   contentTaskStatus?: BackgroundTaskState['status'];
+  aiAdjustmentRunning?: boolean;
   onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; outlineMode: OutlineMode; outlineExpansionMode: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<void>;
   onOutlineSaved: (request: SaveOutlineRequest) => Promise<void>;
   onOutlineSelectionSaved: (request: SaveOutlineSelectionRequest) => Promise<void>;
@@ -328,6 +329,7 @@ function OutlineEditPage({
   outlineData,
   task,
   contentTaskStatus,
+  aiAdjustmentRunning = false,
   onOutlineConfigChange,
   onOutlineSaved,
   onOutlineSelectionSaved,
@@ -380,7 +382,7 @@ function OutlineEditPage({
   const isExpansionWorkflow = workflowKind === 'existing-plan-expansion';
   const knowledgePickingDisabled = generating;
   const contentMutationLocked = contentTaskStatus === 'running' || contentTaskStatus === 'pausing' || contentTaskStatus === 'paused';
-  const outlineMutationLocked = generating || contentMutationLocked || savingSort;
+  const outlineMutationLocked = generating || contentMutationLocked || savingSort || aiAdjustmentRunning;
   const progressLogs = task?.logs || [];
   const latestLog = progressLogs[progressLogs.length - 1];
   const progress = generating

@@ -9,7 +9,7 @@ import { TemplatePreview } from '../../export-format/pages/ExportFormatPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
+import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
 import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
 import type { OutlineData, OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
@@ -56,6 +56,8 @@ interface WordControlWarningDialogState {
   metrics: WordControlWarningMetric[];
   sections: WordControlWarningSection[];
 }
+
+const PET_PLUGIN_ID = 'openbidkit-pet';
 
 const steps: TechnicalPlanStep[] = [
   'document-analysis',
@@ -334,6 +336,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const [savingSortBeforeLeave, setSavingSortBeforeLeave] = useState(false);
   const [workflowSwitchRequest, setWorkflowSwitchRequest] = useState<WorkflowSwitchRequest | null>(null);
   const [switchingWorkflow, setSwitchingWorkflow] = useState(false);
+  const [petInstallDialogOpen, setPetInstallDialogOpen] = useState(false);
+  const [installingPetPlugin, setInstallingPetPlugin] = useState(false);
   const sortGuardRef = useRef<OutlineSortGuard | null>(null);
   const sortLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const outlineWordControlLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
@@ -753,6 +757,20 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           };
         }
 
+        if (taskType === 'outline-adjustment') {
+          const hasOutlineData = hasOwnField(technicalPlan, 'outlineData');
+          return {
+            ...prev,
+            outlineAdjustmentTask: trimTaskLogs(technicalPlan.outlineAdjustmentTask) || latestTask,
+            outlineData: hasOutlineData ? (technicalPlan.outlineData || null) : prev.outlineData,
+            contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : prev.contentGenerationTask,
+            contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : prev.contentGenerationSections,
+            contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
+            contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : prev.contentIllustrationPlan,
+            contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
+          };
+        }
+
         if (taskType === 'global-facts-generation') {
           const hasGlobalFacts = hasOwnField(technicalPlan, 'globalFacts');
           return {
@@ -1081,6 +1099,63 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const generatedContentCount = state.outlineData?.outline
     ? collectLeafItems(state.outlineData.outline).filter((item) => item.content?.trim()).length
     : 0;
+  const outlineGenerationStatus = state.outlineGenerationTask?.status;
+  const isOutlineGenerating = outlineGenerationStatus === 'running' || outlineGenerationStatus === 'pausing';
+  const outlineAdjustmentStatus = state.outlineAdjustmentTask?.status;
+  const isOutlineAdjusting = outlineAdjustmentStatus === 'running' || outlineAdjustmentStatus === 'pausing';
+  const aiAdjustDisabled = !state.outlineData || !state.outlineWordControlSnapshot || isOutlineGenerating || isOutlineAdjusting;
+  const aiAdjustTooltip = isOutlineAdjusting
+    ? 'AI 正在按要求调整目录，请稍候'
+    : isOutlineGenerating || !state.outlineData
+      ? '目录生成结束后才能使用 AI 调整'
+      : !state.outlineWordControlSnapshot
+        ? '当前目录缺少字数控制生效配置，请重新生成目录'
+        : '通过桌宠 AI 对话调整当前目录';
+
+  const openPetAiChat = useCallback(async () => {
+    await window.yibiao!.plugins.notifyEvent(PET_PLUGIN_ID, 'open-ai-chat');
+  }, []);
+
+  const handleAiAdjustClick = useCallback(async () => {
+    try {
+      const plugins = await window.yibiao!.plugins.getAvailablePlugins();
+      const pet = plugins.find((plugin) => plugin.id === PET_PLUGIN_ID);
+      if (!pet) {
+        showToast('插件市场中未找到桌宠插件，请在插件市场刷新后重试', 'error');
+        return;
+      }
+      if (!pet.installed || !pet.enabled) {
+        setPetInstallDialogOpen(true);
+        return;
+      }
+      await openPetAiChat();
+      showToast('请在桌宠对话框中输入调整要求', 'info');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '打开桌宠 AI 对话失败', 'error');
+    }
+  }, [openPetAiChat, showToast]);
+
+  const installPetPluginAndOpenChat = useCallback(async () => {
+    setInstallingPetPlugin(true);
+    try {
+      const plugins = await window.yibiao!.plugins.getAvailablePlugins();
+      const pet = plugins.find((plugin) => plugin.id === PET_PLUGIN_ID);
+      if (!pet) {
+        throw new Error('插件市场中未找到桌宠插件');
+      }
+      if (!pet.installed) {
+        await window.yibiao!.plugins.install(PET_PLUGIN_ID);
+      }
+      await window.yibiao!.plugins.enable(PET_PLUGIN_ID);
+      setPetInstallDialogOpen(false);
+      await openPetAiChat();
+      showToast('桌宠已启用，请在桌宠对话框中输入调整要求', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '安装桌宠插件失败', 'error');
+    } finally {
+      setInstallingPetPlugin(false);
+    }
+  }, [openPetAiChat, showToast]);
   const workflowSwitchClearText = workflowSwitchRequest?.to === 'technical-plan'
     ? '原方案、目录、全局事实、正文和生成进度'
     : '目录、全局事实、正文和生成进度';
@@ -1145,6 +1220,19 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         },
       ],
     },
+    ...(state.step === 'outline-generation' ? [{
+      id: 'technical-plan-ai',
+      actions: [
+        {
+          id: 'ai-adjust',
+          label: isOutlineAdjusting ? 'AI调整中' : 'AI调整',
+          icon: <ToolbarSparkleIcon />,
+          disabled: aiAdjustDisabled,
+          tooltip: aiAdjustTooltip,
+          onClick: () => { void handleAiAdjustClick(); },
+        },
+      ],
+    }] : []),
     {
       id: 'technical-plan-navigation',
       actions: navigationActions,
@@ -1201,6 +1289,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           outlineData={state.outlineData}
           task={state.outlineGenerationTask}
           contentTaskStatus={state.contentGenerationTask?.status}
+          aiAdjustmentRunning={isOutlineAdjusting}
           onOutlineConfigChange={saveOutlineConfig}
           onOutlineSaved={saveOutline}
           onOutlineSelectionSaved={saveOutlineSelection}
@@ -1310,6 +1399,27 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             </div>
             <div className="content-regenerate-actions">
               <Dialog.Close className="primary-action" type="button">知道了</Dialog.Close>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={petInstallDialogOpen} onOpenChange={(open) => !open && !installingPetPlugin && setPetInstallDialogOpen(false)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="content-regenerate-card">
+            <div className="content-regenerate-card-head">
+              <span className="section-kicker">AI 调整</span>
+              <Dialog.Title>需要安装桌宠插件</Dialog.Title>
+              <Dialog.Description>
+                AI 调整通过桌宠的 AI 对话完成。当前桌宠插件尚未安装或未启用，是否立即安装并启用？
+              </Dialog.Description>
+            </div>
+            <div className="content-regenerate-actions">
+              <button type="button" className="secondary-action" onClick={() => setPetInstallDialogOpen(false)} disabled={installingPetPlugin}>取消</button>
+              <button type="button" className="primary-action" onClick={() => { void installPetPluginAndOpenChat(); }} disabled={installingPetPlugin}>
+                {installingPetPlugin ? '正在安装...' : '安装并启用'}
+              </button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>

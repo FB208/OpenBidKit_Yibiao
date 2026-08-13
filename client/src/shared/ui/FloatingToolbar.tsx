@@ -205,6 +205,18 @@ export function ToolbarDocumentIcon() {
   );
 }
 
+export function ToolbarSparkleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
+      <path d="M12 4.5 13.8 9.2 18.5 11 13.8 12.8 12 17.5 10.2 12.8 5.5 11 10.2 9.2z" />
+      <path d="M18.6 4.4v3.2" />
+      <path d="M17 6h3.2" />
+      <path d="M6.2 16.6v2.8" />
+      <path d="M4.8 18h2.8" />
+    </svg>
+  );
+}
+
 export function ToolbarOutlineIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">

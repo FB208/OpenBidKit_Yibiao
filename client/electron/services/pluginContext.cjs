@@ -134,6 +134,33 @@ function createPluginContext(app, pluginId, services) {
       }
       return services.agentService.suppressQuestionAutoAnswer(payload);
     },
+    listAgentWorkspaces() {
+      if (!services.agentWorkspaceService?.listAgentWorkspaces) {
+        return [];
+      }
+      return services.agentWorkspaceService.listAgentWorkspaces();
+    },
+    sendAgentWorkspaceMessage(payload) {
+      if (!services.agentWorkspaceService?.sendAgentWorkspaceMessage) {
+        throw new Error('Agent 工作空间服务不可用');
+      }
+      return services.agentWorkspaceService.sendAgentWorkspaceMessage(payload);
+    },
+    onAgentWorkspaceChatEvent(callback) {
+      if (!services.agentWorkspaceService?.onAgentWorkspaceChatEvent) {
+        return () => {};
+      }
+
+      const listener = (event) => {
+        try {
+          callback(event);
+        } catch (error) {
+          logger.error('Agent workspace chat event callback error:', error);
+        }
+      };
+
+      return services.agentWorkspaceService.onAgentWorkspaceChatEvent(listener);
+    },
     confirmOutlineSelection(payload) {
       if (!services.taskService?.confirmOutlineSelection) {
         throw new Error('任务服务不可用');

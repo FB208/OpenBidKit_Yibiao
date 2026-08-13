@@ -571,6 +571,20 @@ class PluginService {
   }
 
   /**
+   * 向当前运行中的插件发送宿主事件（插件可选导出 onHostEvent 接收）。
+   */
+  async notifyPluginEvent(pluginId, event, payload) {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) {
+      throw new Error('插件未启用');
+    }
+    if (typeof plugin.module.onHostEvent !== 'function') {
+      throw new Error('插件不支持宿主事件');
+    }
+    await plugin.module.onHostEvent(event, payload);
+  }
+
+  /**
    * 启用插件
    */
   async enablePlugin(pluginId) {

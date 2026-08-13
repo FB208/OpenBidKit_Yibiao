@@ -660,6 +660,7 @@ export interface YibiaoBridge {
     openConfig: (pluginId: string) => Promise<void>;
     refreshMarket: () => Promise<void>;
     clearUpdateFailedState: (pluginId: string) => Promise<boolean>;
+    notifyEvent: (pluginId: string, event: string, payload?: unknown) => Promise<void>;
   };
 }
 

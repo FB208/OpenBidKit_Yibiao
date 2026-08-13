@@ -1015,4 +1015,12 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   });
 }
 
-module.exports = { runOutlineGenerationTaskV2 };
+module.exports = {
+  runOutlineGenerationTaskV2,
+  OUTLINE_OUTPUT_FILE,
+  OUTLINE_JSON_SCHEMA,
+  buildFinalOutline,
+  stripOutlineInternalFields,
+  readJson,
+  formatProgressTitle,
+};

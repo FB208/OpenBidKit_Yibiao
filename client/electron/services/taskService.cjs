@@ -4,6 +4,7 @@ const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
 const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
 const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
 const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
+const { runOutlineAdjustmentTask } = require('./outlineAdjustmentTask.cjs');
 const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
 const { normalizeLogs } = require('./taskLogStore.cjs');
@@ -35,6 +36,15 @@ const taskDefinitions = {
     lockPolicy: 'group-exclusive',
     stateKey: 'technicalPlan',
     field: 'outlineGenerationTask',
+  },
+  'outline-adjustment': {
+    label: '目录AI调整',
+    group: 'technical-plan',
+    groupLabel: '技术方案',
+    step: 3,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'technicalPlan',
+    field: 'outlineAdjustmentTask',
   },
   'global-facts-generation': {
     label: '全局事实设定',
@@ -872,6 +882,31 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-generation'), partial, recoveredTask));
   }
 
+  function recoverInterruptedOutlineAdjustmentTask(technicalPlan) {
+    if (activeTasks.has('outline-adjustment')) {
+      return;
+    }
+
+    const adjustmentTask = technicalPlan.outlineAdjustmentTask;
+    if (!isActiveTaskStatus(adjustmentTask?.status)) {
+      return;
+    }
+
+    const message = '上次目录 AI 调整未完成，请重新发送调整要求。';
+    const recoveredTask = {
+      ...adjustmentTask,
+      status: 'error',
+      progress: Math.max(0, Math.min(99, Number(adjustmentTask.progress || 0) || 0)),
+      pause_requested: false,
+      error: message,
+      logs: [...(Array.isArray(adjustmentTask.logs) ? adjustmentTask.logs : []), message],
+      updated_at: now(),
+    };
+    const partial = { outlineAdjustmentTask: recoveredTask };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-adjustment'), partial, recoveredTask));
+  }
+
   function recoverInterruptedBidAnalysisTask(technicalPlan) {
     if (activeTasks.has('bid-analysis')) {
       return;
@@ -1041,6 +1076,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
   recoverInterruptedBidSectionExtractionTask(technicalPlanRecoveryState);
   recoverInterruptedBidAnalysisTask(technicalPlanRecoveryState);
   recoverInterruptedOutlineGenerationTask(technicalPlanRecoveryState);
+  recoverInterruptedOutlineAdjustmentTask(technicalPlanRecoveryState);
   recoverInterruptedContentGenerationTask(technicalPlanRecoveryState);
   recoverInterruptedGlobalFactsTask(technicalPlanRecoveryState);
   recoverInterruptedRejectionCheckTasks(rejectionCheckRecoveryState);
@@ -1063,6 +1099,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         outlineData: null,
         outlineWordControlSnapshot: undefined,
         outlineGenerationTask: undefined,
+        outlineAdjustmentTask: undefined,
         referenceKnowledgeDocumentIds: [],
         globalFactsTask: undefined,
         globalFacts: [],
@@ -1087,6 +1124,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
         outlineData: null,
         outlineWordControlSnapshot: undefined,
+        outlineAdjustmentTask: undefined,
         globalFactsTask: undefined,
         globalFacts: [],
         contentGenerationTask: undefined,
@@ -1097,6 +1135,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       }, {
         beforeStart: () => agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY),
       });
+    },
+    startOutlineAdjustment(payload) {
+      return startManagedTask('outline-adjustment', payload, runOutlineAdjustmentTask);
     },
     startGlobalFactsGeneration(payload) {
       return startManagedTask('global-facts-generation', payload, runGlobalFactsTask, {
