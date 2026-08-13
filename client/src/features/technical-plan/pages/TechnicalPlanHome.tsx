@@ -1227,6 +1227,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           id: 'ai-adjust',
           label: isOutlineAdjusting ? 'AI调整中' : 'AI调整',
           icon: <ToolbarSparkleIcon />,
+          variant: 'ai' as const,
           disabled: aiAdjustDisabled,
           tooltip: aiAdjustTooltip,
           onClick: () => { void handleAiAdjustClick(); },

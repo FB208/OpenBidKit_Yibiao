@@ -2,7 +2,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { useRef, useState } from 'react';
 import type { PointerEvent, ReactNode } from 'react';
 
-export type FloatingToolbarActionVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'warning' | 'success';
+export type FloatingToolbarActionVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'warning' | 'success' | 'ai';
 
 export interface FloatingToolbarAction {
   id: string;

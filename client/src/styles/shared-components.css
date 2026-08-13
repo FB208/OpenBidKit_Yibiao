@@ -115,6 +115,19 @@
   background: linear-gradient(135deg, var(--yb-primary-hover) 0%, var(--yb-violet) 100%);
 }
 
+.floating-toolbar-button.is-ai:not(:disabled) {
+  color: #ffffff;
+  background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+  border-color: rgba(99, 102, 241, 0.22);
+  box-shadow: 0 10px 22px rgba(124, 92, 244, 0.22);
+}
+
+.floating-toolbar-button.is-ai:hover:not(:disabled) {
+  color: #ffffff;
+  background: linear-gradient(135deg, #4f46e5 0%, #9333ea 100%);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
 .floating-toolbar-button.is-ghost {
   color: var(--yb-text-muted);
 }

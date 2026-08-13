@@ -50,6 +50,15 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     }
   }
 
+  function resetChatState(workspaceId) {
+    const state = getChatState(workspaceId);
+    if (!state.messages.length && !state.pending) return;
+    state.messages = [];
+    state.pending = false;
+    state.pending_task_id = null;
+    emitChatEvent(workspaceId);
+  }
+
   function appendMessage(workspaceId, role, text) {
     const state = getChatState(workspaceId);
     state.messages.push({
@@ -174,9 +183,19 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     return () => chatSubscribers.delete(callback);
   }
 
+  // 重新生成目录会重建 Agent 工作空间，聊天记录跟随工作空间同步重置。
+  let lastOutlineGenerationTaskId = null;
+
   // 目录调整任务结束后把最终回复写回对话记录。
   taskService.subscribeCallback((event) => {
     const task = event?.task;
+    if (task?.type === 'outline-generation') {
+      if (task.task_id && task.task_id !== lastOutlineGenerationTaskId) {
+        lastOutlineGenerationTaskId = task.task_id;
+        resetChatState(OUTLINE_AGENT_TASK_KEY);
+      }
+      return;
+    }
     if (task?.type !== 'outline-adjustment') return;
     const state = getChatState(OUTLINE_AGENT_TASK_KEY);
     if (!state.pending || task.task_id !== state.pending_task_id) return;
