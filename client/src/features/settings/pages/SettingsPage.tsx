@@ -586,12 +586,9 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [agentSelfCheckStatus, setAgentSelfCheckStatus] = useState<AgentSelfCheckUiStatus>('untested');
   const [agentSelfCheckResult, setAgentSelfCheckResult] = useState<AgentSelfCheckResult | null>(null);
   const [exportingAgentSelfCheckReport, setExportingAgentSelfCheckReport] = useState(false);
+  const [agentAutoAnswerDraft, setAgentAutoAnswerDraft] = useState(false);
   const { showToast } = useToast();
-  const {
-    enabled: agentAutoAnswerEnabled,
-    saving: agentAutoAnswerSaving,
-    setEnabled: setAgentAutoAnswerEnabled,
-  } = useAutoAnswer();
+  const { enabled: agentAutoAnswerEnabled } = useAutoAnswer();
 
   useEffect(() => {
     void loadTextConfig();
@@ -622,6 +619,14 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
     return () => { unsubs.forEach((unsub) => unsub()); };
   }, []);
+
+  // 弹窗中的自动确认开关实时保存后，同步刷新设置页草稿和已保存基准。
+  useEffect(() => {
+    setAgentAutoAnswerDraft(agentAutoAnswerEnabled);
+    setSavedConfig((current) => current
+      ? { ...current, agent_auto_answer_enabled: agentAutoAnswerEnabled }
+      : current);
+  }, [agentAutoAnswerEnabled]);
 
   const loadTextConfig = async () => {
     try {
@@ -656,6 +661,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
           gpu_hardware_acceleration_configured: Boolean(config.gpu_hardware_acceleration_configured),
         },
       }));
+      setAgentAutoAnswerDraft(Boolean(config.agent_auto_answer_enabled));
       setSavedConfig(config);
       onDeveloperModeChange?.(Boolean(config.developer_mode));
     } catch (error) {
@@ -674,7 +680,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     [state.imageModel.provider]: imageProfileFromState(state.imageModel),
   });
 
-  const createClientConfig = (options: { includeAgentScenarios?: boolean } = {}): ClientConfig => {
+  const createClientConfig = (options: { includeAgentSettings?: boolean } = {}): ClientConfig => {
     const textModelProfiles = getCurrentTextModelProfiles();
     const activeTextProfile = textModelProfiles[state.textModel.provider]
       || normalizeTextModelProfile(state.textModel.provider);
@@ -699,7 +705,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       image_model: activeImageProfile,
       image_model_profiles: imageModelProfiles,
       components: componentsFromState(state.components),
-      agent_mode_scenarios: options.includeAgentScenarios ? state.agentModeScenarios : persistedAgentModeScenarios,
+      agent_mode_scenarios: options.includeAgentSettings ? state.agentModeScenarios : persistedAgentModeScenarios,
+      ...(options.includeAgentSettings
+        ? { agent_auto_answer_enabled: agentAutoAnswerDraft }
+        : savedConfig ? { agent_auto_answer_enabled: Boolean(savedConfig.agent_auto_answer_enabled) } : {}),
       update_channel: state.general.update_channel,
       gpu_hardware_acceleration_enabled: state.general.gpu_hardware_acceleration_enabled,
       gpu_hardware_acceleration_configured: state.general.gpu_hardware_acceleration_configured,
@@ -1373,7 +1382,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
 
     if (activeTab === 'agent') {
-      return JSON.stringify(state.agentModeScenarios) !== JSON.stringify(normalizeAgentModeScenarios(savedConfig.agent_mode_scenarios));
+      return JSON.stringify(state.agentModeScenarios) !== JSON.stringify(normalizeAgentModeScenarios(savedConfig.agent_mode_scenarios))
+        || agentAutoAnswerDraft !== Boolean(savedConfig.agent_auto_answer_enabled);
     }
 
     return false;
@@ -1478,7 +1488,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       return;
     }
     if (activeTab === 'agent') {
-      await saveClientConfig(createClientConfig({ includeAgentScenarios: true }));
+      await saveClientConfig(createClientConfig({ includeAgentSettings: true }));
     }
   };
 
@@ -2229,9 +2239,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               <span className="yb-switch-control">
                 <input
                   type="checkbox"
-                  checked={agentAutoAnswerEnabled}
-                  disabled={agentAutoAnswerSaving}
-                  onChange={(event) => void setAgentAutoAnswerEnabled(event.target.checked)}
+                  checked={agentAutoAnswerDraft}
+                  onChange={(event) => setAgentAutoAnswerDraft(event.target.checked)}
                 />
                 <span className="yb-switch-track" aria-hidden="true">
                   <span className="yb-switch-thumb" />
