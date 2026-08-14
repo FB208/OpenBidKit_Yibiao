@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 18;
+const schemaVersion = 19;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -896,6 +896,36 @@ function createExportTemplatesSchema(db) {
   `);
 }
 
+function createFeasibilityReportSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS feasibility_report_meta (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      step TEXT NOT NULL DEFAULT 'materials',
+      project_info_json TEXT,
+      source_files_json TEXT,
+      analysis_markdown TEXT NOT NULL DEFAULT '',
+      outline_template TEXT NOT NULL DEFAULT 'government',
+      target_words INTEGER NOT NULL DEFAULT 30000,
+      reference_document_ids_json TEXT,
+      key_parameters_markdown TEXT NOT NULL DEFAULT '',
+      outline_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS feasibility_report_tasks (
+      type TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      progress INTEGER NOT NULL DEFAULT 0,
+      logs_json TEXT,
+      error TEXT,
+      started_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+}
+
 const schemaHealthTableGroups = [
   {
     version: 1,
@@ -970,6 +1000,11 @@ const schemaHealthTableGroups = [
     version: 15,
     tables: ['export_templates'],
     repair: createExportTemplatesSchema,
+  },
+  {
+    version: 19,
+    tables: ['feasibility_report_meta', 'feasibility_report_tasks'],
+    repair: createFeasibilityReportSchema,
   },
 ];
 
@@ -1274,6 +1309,11 @@ const migrations = [
     version: 18,
     description: '技术方案新增目录字数控制设置和生效快照',
     up: addTechnicalPlanOutlineWordControl,
+  },
+  {
+    version: 19,
+    description: '新增可行性研究报告独立工作区',
+    up: createFeasibilityReportSchema,
   },
 ];
 
