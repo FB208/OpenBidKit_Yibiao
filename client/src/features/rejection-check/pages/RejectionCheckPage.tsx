@@ -1,7 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { AppSwitch, FloatingToolbar, isLibreOfficeRequiredMessage, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, TaskProgressPanel, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, UploadBoard, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import { AppSwitch, FloatingToolbar, isLibreOfficeRequiredMessage, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, UploadBoard, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type {
   LogicCheckFinding,
@@ -1987,6 +1987,18 @@ function RejectionCheckPage() {
               <div className="rejection-check-result-actions">
                 <button
                   type="button"
+                  className="outline-config-action"
+                  onClick={openCheckConfigDialog}
+                  aria-label="打开检查配置"
+                  title="检查配置"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
+                    <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
                   className="primary-action"
                   onClick={openCheckConfigDialog}
                   disabled={checkRunning || extractionRunning}
@@ -1995,63 +2007,6 @@ function RejectionCheckPage() {
                 </button>
               </div>
             </div>
-
-            {(() => {
-              const summaries = checkResultTabs
-                .filter((tab) => isCheckResultTabEnabled(tab.id, checkOptions))
-                .map((tab) => {
-                  const status: RejectionCheckTabStatus = tab.id === 'rejection'
-                    ? visibleRejectionCheckStatus
-                    : tab.id === 'typo'
-                      ? visibleTypoCheckStatus
-                      : visibleLogicCheckStatus;
-                  const progressMessage = tab.id === 'rejection'
-                    ? rejectionCheckResult.progressMessage
-                    : tab.id === 'typo'
-                      ? typoCheckResult.progressMessage
-                      : logicCheckResult.progressMessage;
-                  return { id: tab.id, label: tab.label, status, progress: getCheckResultTabProgress(status, progressMessage) };
-                });
-              if (!summaries.length) return null;
-              const failedCount = summaries.filter((item) => item.status === 'error').length;
-              const doneCount = summaries.filter((item) => item.status === 'success').length;
-              const overallStatus = checkRunning
-                ? 'running' as const
-                : failedCount > 0
-                  ? 'error' as const
-                  : doneCount === summaries.length
-                    ? 'success' as const
-                    : 'idle' as const;
-              const overallProgress = Math.round(summaries.reduce((sum, item) => sum + item.progress, 0) / summaries.length);
-              const overallMessage = overallStatus === 'running'
-                ? '正在按已启用的检查项逐项核查投标文件。'
-                : overallStatus === 'error'
-                  ? `${failedCount} 个检查项失败，可直接重试。`
-                  : overallStatus === 'success'
-                    ? '全部检查项已完成，点击下方标签查看各项结果。'
-                    : '等待开始检查。';
-              return (
-                <TaskProgressPanel
-                  status={overallStatus}
-                  title="投标文件检查"
-                  message={overallMessage}
-                  progress={overallProgress}
-                  onRetry={openCheckConfigDialog}
-                  retryLabel="重新检查"
-                  detailsLabel="各检查项状态"
-                  details={(
-                    <>
-                      {summaries.map((item) => (
-                        <div key={item.id} className={`yb-task-progress-item is-${item.status}`}>
-                          <strong>{item.label}</strong>
-                          <em>{checkTabStatusLabels[item.status]}</em>
-                        </div>
-                      ))}
-                    </>
-                  )}
-                />
-              );
-            })()}
 
             <div className="rejection-check-result-tabs" role="tablist" aria-label="废标项检查结果类型">
               {checkResultTabs.map((tab) => {

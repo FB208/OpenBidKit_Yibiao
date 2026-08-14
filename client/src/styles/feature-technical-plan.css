@@ -2231,7 +2231,36 @@
   gap: 10px;
 }
 
-/* 齿轮配置入口已移除：配置统一从各步骤主按钮弹窗进入 */
+.outline-config-action {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.08);
+  border: 1px solid rgba(33, 116, 253, 0.18);
+  border-radius: var(--yb-radius-md);
+}
+
+.outline-config-action svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.outline-config-action:hover:not(:disabled) {
+  background: rgba(33, 116, 253, 0.13);
+  border-color: rgba(33, 116, 253, 0.3);
+}
+
+.outline-config-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 
 .outline-generation-config-card {
   position: fixed;

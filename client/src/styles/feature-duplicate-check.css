@@ -186,6 +186,20 @@
   box-shadow: var(--yb-shadow);
 }
 
+.duplicate-page-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.duplicate-page-title h2 {
+  margin: 8px 0 0;
+  color: var(--yb-text);
+  font-size: 24px;
+  letter-spacing: -0.035em;
+}
+
 .duplicate-analysis-title {
   min-height: 58px;
 }

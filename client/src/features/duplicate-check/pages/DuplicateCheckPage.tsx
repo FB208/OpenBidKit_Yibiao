@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { FloatingToolbar, isLibreOfficeRequiredMessage, ProgressBar, TaskProgressPanel, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, UploadBoard, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import { FloatingToolbar, isLibreOfficeRequiredMessage, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, UploadBoard, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { DuplicateAnalysisStatus, DuplicateAnalysisTabId, DuplicateCheckStep, DuplicateCheckTaskState, DuplicateCheckWorkspaceState, DuplicateContentAnalysisState, DuplicateImageAnalysisState, DuplicateMetadataAnalysisState, DuplicateOutlineAnalysisState, LocalFileSelection } from '../../../shared/types';
 
@@ -507,40 +507,6 @@ function DuplicateAnalysisPane({ activeTab, onTabChange, metadataAnalysis, outli
       ? Math.round((metadataAnalysis.metadataExtraction.completed / metadataAnalysis.metadataExtraction.total) * 100)
       : 0;
   const analysisRunning = startingAnalysis || metadataStatus === 'running' || outlineAnalysis?.status === 'running' || contentAnalysis?.status === 'running' || imageAnalysis?.status === 'running';
-  const dimensionSummaries = analysisTabs.map((item) => {
-    const status: DuplicateAnalysisStatus = item.id === 'metadata'
-      ? metadataStatus
-      : item.id === 'outline'
-        ? outlineAnalysis?.status || 'pending'
-        : item.id === 'content'
-          ? contentAnalysis?.status || 'pending'
-          : imageAnalysis?.status || 'pending';
-    const progress = item.id === 'metadata'
-      ? metadataProgress
-      : item.id === 'outline'
-        ? outlineAnalysis?.progress || 0
-        : item.id === 'content'
-          ? contentAnalysis?.progress || 0
-          : imageAnalysis?.progress || 0;
-    return { id: item.id, label: item.label, status, progress };
-  });
-  const errorCount = dimensionSummaries.filter((item) => item.status === 'error').length;
-  const successCount = dimensionSummaries.filter((item) => item.status === 'success').length;
-  const overallStatus = analysisRunning
-    ? 'running' as const
-    : errorCount > 0
-      ? 'error' as const
-      : successCount === dimensionSummaries.length
-        ? 'success' as const
-        : 'idle' as const;
-  const overallProgress = Math.round(dimensionSummaries.reduce((sum, item) => sum + (item.status === 'success' || item.status === 'error' ? 100 : item.progress), 0) / dimensionSummaries.length);
-  const overallMessage = overallStatus === 'running'
-    ? '正在按元数据、目录、正文、图片四个维度分析投标文件。'
-    : overallStatus === 'error'
-      ? `${errorCount} 个维度分析失败，可在下方查看详情后重试。`
-      : overallStatus === 'success'
-        ? '四个维度均分析完成，点击下方标签查看各维度结果。'
-        : '等待开始查重分析。';
 
   return (
     <section className="duplicate-analysis-panel">
@@ -553,26 +519,6 @@ function DuplicateAnalysisPane({ activeTab, onTabChange, metadataAnalysis, outli
           {analysisRunning ? '分析中...' : '重新查重'}
         </button>
       </div>
-
-      <TaskProgressPanel
-        status={overallStatus}
-        title="查重分析"
-        message={overallMessage}
-        progress={overallProgress}
-        onRetry={bidFiles.length ? onRerun : undefined}
-        retryLabel="重新查重"
-        detailsLabel="各维度状态"
-        details={(
-          <>
-            {dimensionSummaries.map((item) => (
-              <div key={item.id} className={`yb-task-progress-item is-${item.status}`}>
-                <strong>{item.label}</strong>
-                <em>{statusLabel(item.status)}</em>
-              </div>
-            ))}
-          </>
-        )}
-      />
 
       <div className="duplicate-analysis-tabs" role="tablist" aria-label="标书查重维度">
         {analysisTabs.map((item) => {
