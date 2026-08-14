@@ -42,6 +42,15 @@ const resultTypeFields = Object.fromEntries(Object.entries(resultFieldTypes).map
 
 const tenderDocumentId = 'tender';
 
+function appendImportFailureParts(messageParts, errors) {
+  const failed = Array.isArray(errors)
+    ? errors.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (!failed.length) return;
+  messageParts.push(`失败 ${failed.length} 份`);
+  messageParts.push(failed.join('；'));
+}
+
 function now() {
   return new Date().toISOString();
 }
@@ -161,6 +170,13 @@ function taskFromRow(row, taskLogStore) {
 
 function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, taskLogStore }) {
   const rejectionCheckDir = getRejectionCheckDir(app);
+  let tenderRewriteQueue = Promise.resolve();
+
+  function runSerializedTenderRewrite(task) {
+    const run = tenderRewriteQueue.then(task, task);
+    tenderRewriteQueue = run.then(() => undefined, () => undefined);
+    return run;
+  }
 
   function ensureMetaRow() {
     const existing = db.prepare('SELECT * FROM rejection_check_meta WHERE id = 1').get();
@@ -867,36 +883,39 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
     let skippedCount = 0;
     let firstAddedBidDocumentId = '';
     if (documentRole === 'tender') {
-      const existingDocuments = loadTenderSourceDocuments();
-      const existingKeys = new Set(existingDocuments.map((document) => `${document.fileName}\u0000${stableHash(document.content)}`));
-      const addedDocuments = [];
-      importedDocuments.forEach((item) => {
-        const markdown = String(item.file_content || '').trim();
-        if (!markdown) return;
-        const fileName = item.file_name || '招标文件';
-        const key = `${fileName}\u0000${stableHash(markdown)}`;
-        if (existingKeys.has(key)) {
-          skippedCount += 1;
-          return;
+      await runSerializedTenderRewrite(async () => {
+        const existingDocuments = loadTenderSourceDocuments();
+        const existingRows = db.prepare("SELECT file_name, content_hash FROM rejection_check_documents WHERE role = 'tender' AND document_id != ?").all(tenderDocumentId);
+        const existingKeys = new Set(existingRows.map((row) => `${row.file_name}\u0000${row.content_hash}`));
+        const addedDocuments = [];
+        importedDocuments.forEach((item) => {
+          const markdown = String(item.file_content || '').trim();
+          if (!markdown) return;
+          const fileName = item.file_name || '招标文件';
+          const key = `${fileName}\u0000${stableHash(markdown)}`;
+          if (existingKeys.has(key)) {
+            skippedCount += 1;
+            return;
+          }
+          existingKeys.add(key);
+          addedDocuments.push({
+            id: createTenderSourceDocumentId(fileName, markdown, existingDocuments.length + addedDocuments.length),
+            role: 'tender',
+            fileName,
+            content: markdown,
+            source: 'upload',
+            parserLabel: item.parser_label || undefined,
+            importedAt: now(),
+          });
+        });
+        addedCount = addedDocuments.length;
+        if (addedCount > 0) {
+          await updateRejectionCheckWithAsyncFiles({
+            tenderDocuments: [...existingDocuments, ...addedDocuments],
+            activeDocumentTab: 'tender',
+          });
         }
-        existingKeys.add(key);
-        addedDocuments.push({
-          id: createTenderSourceDocumentId(fileName, markdown, existingDocuments.length + addedDocuments.length),
-          role: 'tender',
-          fileName,
-          content: markdown,
-          source: 'upload',
-          parserLabel: item.parser_label || undefined,
-          importedAt: now(),
-        });
       });
-      addedCount = addedDocuments.length;
-      if (addedCount > 0) {
-        await updateRejectionCheckWithAsyncFiles({
-          tenderDocuments: [...existingDocuments, ...addedDocuments],
-          activeDocumentTab: 'tender',
-        });
-      }
     } else {
       const existingRows = db.prepare("SELECT document_id, file_name, content_hash FROM rejection_check_documents WHERE role = 'bid'").all();
       const existingKeys = new Set(existingRows.map((row) => `${row.file_name}\u0000${row.content_hash}`));
@@ -945,12 +964,11 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
       }
       addedCount = preparedDocuments.length;
     }
-    const failedCount = Array.isArray(result?.errors) ? result.errors.length : 0;
     const fallbackToLocal = importedDocuments.some((item) => item?.fallback_to_local) || String(result?.message || '').includes('自动使用本地解析');
     if (addedCount === 0) {
       const messageParts = [];
       if (skippedCount > 0) messageParts.push(`已跳过 ${skippedCount} 份重复文件`);
-      if (failedCount > 0) messageParts.push(`失败 ${failedCount} 份`);
+      appendImportFailureParts(messageParts, result?.errors);
       const message = messageParts.length ? messageParts.join('，') : result.message || '未导入文件';
       return { success: false, message };
     }
@@ -958,7 +976,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
     const messageParts = [`已解析 ${addedCount} 份${documentLabel}`];
     if (fallbackToLocal) messageParts.push('当前格式已自动使用本地解析');
     if (skippedCount > 0) messageParts.push(`跳过 ${skippedCount} 份重复文件`);
-    if (failedCount > 0) messageParts.push(`失败 ${failedCount} 份`);
+    appendImportFailureParts(messageParts, result?.errors);
     return { success: true, message: messageParts.join('，') };
   }
 
@@ -1009,7 +1027,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
       importedAt: now(),
     };
     const tenderSignature = createDocumentSignature(mainDocument);
-    await updateRejectionCheckWithAsyncFiles({
+    await runSerializedTenderRewrite(() => updateRejectionCheckWithAsyncFiles({
       tenderDocument: mainDocument,
       tenderDocuments: documentsToSave,
       activeDocumentTab: 'tender',
@@ -1022,17 +1040,19 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
           updatedAt: now(),
         },
       } : {}),
-    });
+    }));
     return { success: true, message: '已从技术方案读取招标文件' };
   }
 
   async function removeDocument(role, documentId) {
     const documentRole = normalizeDocumentRole(role);
     if (documentRole === 'tender' && documentId && String(documentId) !== tenderDocumentId) {
-      const remaining = loadTenderSourceDocuments().filter((document) => document.id !== String(documentId));
-      await updateRejectionCheckWithAsyncFiles({
-        tenderDocuments: remaining,
-        activeDocumentTab: 'tender',
+      await runSerializedTenderRewrite(async () => {
+        const remaining = loadTenderSourceDocuments().filter((document) => document.id !== String(documentId));
+        await updateRejectionCheckWithAsyncFiles({
+          tenderDocuments: remaining,
+          activeDocumentTab: 'tender',
+        });
       });
       return;
     }

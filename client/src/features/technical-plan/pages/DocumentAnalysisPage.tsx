@@ -11,6 +11,13 @@ const parserLabels: Record<FileParserProvider, string> = {
   'mineru-agent-api': 'MinerU-Agent 轻量解析 API',
 };
 
+function resolveImportToastType(message: string, success: boolean) {
+  if (message.includes('失败')) return 'error' as const;
+  if (success) return 'success' as const;
+  if (message === '已取消选择' || message.startsWith('已跳过')) return 'info' as const;
+  return 'error' as const;
+}
+
 const documentLabels = {
   tender: '招标文件',
   originalPlan: '原方案',
@@ -139,7 +146,7 @@ function DocumentAnalysisPage({
           showDocumentParseNotice(message);
           return;
         }
-        showToast(message, message === '已取消选择' || message.startsWith('已跳过') ? 'info' : 'error');
+        showToast(message, resolveImportToastType(message, false));
         return;
       }
 
@@ -155,7 +162,8 @@ function DocumentAnalysisPage({
         setTenderSourceMarkdowns(state.tenderFiles.length === 1 ? { [lastSource.id]: result.markdown } : {});
         setActiveDocumentTab(`tender:${lastSource.id}`);
       }
-      showToast(result.message || '招标文件已导入', 'success');
+      const message = result.message || '招标文件已导入';
+      showToast(message, resolveImportToastType(message, true));
     } catch (error) {
       const message = error instanceof Error ? error.message : '文件解析失败';
       if (isLibreOfficeRequiredMessage(message)) {

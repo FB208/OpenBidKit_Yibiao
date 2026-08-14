@@ -351,6 +351,13 @@ function getTenderDocumentLabel(tenderDocuments: RejectionDocumentContent[], doc
   return index >= 0 ? `招标文件${index + 1}` : '招标文件';
 }
 
+function resolveImportToastType(message: string, success: boolean) {
+  if (message.includes('失败')) return 'error' as const;
+  if (success) return 'success' as const;
+  if (message === '已取消选择' || message.startsWith('已跳过')) return 'info' as const;
+  return 'error' as const;
+}
+
 function createBidDocumentsSignature(bidDocuments: RejectionDocumentContent[]) {
   return bidDocuments.map(createDocumentSignature).filter(Boolean).join('\n---yibiao-rejection-bid-signature---\n');
 }
@@ -363,13 +370,14 @@ function stripTripleQuoteWrapper(content: string) {
   return content;
 }
 
-function DocumentFilePill({ document, onRemove }: { document: RejectionDocumentContent; onRemove?: () => void }) {
+function DocumentFilePill({ document, onRemove, removeDisabled = false }: { document: RejectionDocumentContent; onRemove?: () => void; removeDisabled?: boolean }) {
   return (
     <UploadFilePill
       badge={getFileBadge(document)}
       name={document.fileName}
       meta={`${sourceLabels[document.source]} · ${formatContentLength(document.content)} · ${formatImportedAt(document.importedAt)}`}
       onRemove={onRemove}
+      removeDisabled={removeDisabled}
       removeLabel="移除"
       removeAriaLabel={`移除${documentLabels[document.role]}`}
     />
@@ -570,7 +578,7 @@ function RejectionCheckPage() {
   const [checkOptions, setCheckOptions] = useState<RejectionCheckOptions>(defaultCheckOptions);
   const [draftCheckOptions, setDraftCheckOptions] = useState<RejectionCheckOptions>(defaultCheckOptions);
   const [checkConfigDialogOpen, setCheckConfigDialogOpen] = useState(false);
-  const [busy, setBusy] = useState<'technical-plan' | 'tender-upload' | 'bid-upload' | null>(null);
+  const [busy, setBusy] = useState<'technical-plan' | 'tender-upload' | 'bid-upload' | 'remove' | null>(null);
   const [analyticsReady, setAnalyticsReady] = useState(false);
   const hydratedRef = useRef(false);
   const autoStartedSignatureRef = useRef('');
@@ -883,12 +891,13 @@ function RejectionCheckPage() {
           showDocumentParseNotice(message);
           return;
         }
-        showToast(message, message === '已取消选择' || message.startsWith('已跳过') ? 'info' : 'error');
+        showToast(message, resolveImportToastType(message, false));
         return;
       }
 
       applyWorkspaceState(await window.yibiao.rejectionCheck.loadState());
-      showToast(result.message || `${documentLabel}已解析`, 'success');
+      const successMessage = result.message || `${documentLabel}已解析`;
+      showToast(successMessage, resolveImportToastType(successMessage, true));
     } catch (error) {
       const message = error instanceof Error ? error.message : `${documentLabel}解析失败`;
       if (isLibreOfficeRequiredMessage(message)) {
@@ -925,6 +934,10 @@ function RejectionCheckPage() {
   }
 
   function removeDocument(role: RejectionDocumentRole, documentId?: string) {
+    if (busy !== null) {
+      return;
+    }
+    setBusy('remove');
     void window.yibiao?.rejectionCheck.removeDocument(role, documentId)
       .then(() => window.yibiao.rejectionCheck.loadState())
       .then((state) => {
@@ -932,6 +945,9 @@ function RejectionCheckPage() {
       })
       .catch((error) => {
         showToast(error instanceof Error ? error.message : `移除${documentLabels[role]}失败`, 'error');
+      })
+      .finally(() => {
+        setBusy(null);
       });
   }
 
@@ -1782,7 +1798,7 @@ function RejectionCheckPage() {
                   {tenderDocuments.map((document, index) => (
                     <div className="rejection-bid-file-entry" key={document.id}>
                       <span>{`招标文件${index + 1}`}</span>
-                      <DocumentFilePill document={document} onRemove={() => removeDocument('tender', document.id)} />
+                      <DocumentFilePill document={document} onRemove={() => removeDocument('tender', document.id)} removeDisabled={busy !== null} />
                     </div>
                   ))}
                 </div>
@@ -1813,7 +1829,7 @@ function RejectionCheckPage() {
                   {bidDocuments.map((document, index) => (
                     <div className="rejection-bid-file-entry" key={document.id}>
                       <span>{`投标文件${index + 1}`}</span>
-                      <DocumentFilePill document={document} onRemove={() => removeDocument('bid', document.id)} />
+                      <DocumentFilePill document={document} onRemove={() => removeDocument('bid', document.id)} removeDisabled={busy !== null} />
                     </div>
                   ))}
                 </div>

@@ -73,6 +73,15 @@ const taskFieldTypes = {
 
 const taskTypeFields = Object.fromEntries(Object.entries(taskFieldTypes).map(([field, type]) => [type, field]));
 
+function appendImportFailureParts(messageParts, errors) {
+  const failed = Array.isArray(errors)
+    ? errors.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (!failed.length) return;
+  messageParts.push(`失败 ${failed.length} 份`);
+  messageParts.push(failed.join('；'));
+}
+
 function now() {
   return new Date().toISOString();
 }
@@ -2108,7 +2117,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     return { contentIllustrationPlan: undefined };
   }
 
-  async function importTenderDocument(filePaths) {
+  async function runBeforeCommit(beforeCommit) {
+    if (typeof beforeCommit === 'function') {
+      await beforeCommit();
+    }
+  }
+
+  async function importTenderDocument(filePaths, options = {}) {
     if (!fileService?.importDocument) {
       throw new Error('文件导入服务尚未初始化');
     }
@@ -2151,6 +2166,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (!addedDocuments.length) {
       const messageParts = [];
       if (skippedCount > 0) messageParts.push(`已跳过 ${skippedCount} 份重复文件`);
+      appendImportFailureParts(messageParts, result.errors);
       return {
         success: false,
         message: messageParts.join('，') || result.message || '未导入文件',
@@ -2162,13 +2178,15 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const markdown = combineTenderMarkdown(mergedDocuments.map((item) => item.file_content));
     const fileName = mergedDocuments.length > 1 ? `${mergedDocuments.length} 份招标文件` : mergedDocuments[0].file_name || '未命名文件';
     const parserLabel = mergedDocuments.length > 1 ? null : mergedDocuments[0].parser_label || null;
-    cleanupPendingTenderSelection();
     const messageParts = [`已解析 ${addedDocuments.length} 份招标文件`];
     if (result.fallbackToLocal === true || mergedDocuments.some((item) => item.fallback_to_local)) {
       messageParts.push('当前格式已自动使用本地解析');
     }
     if (skippedCount > 0) messageParts.push(`跳过 ${skippedCount} 份重复文件`);
+    appendImportFailureParts(messageParts, result.errors);
 
+    await runBeforeCommit(options.beforeCommit);
+    cleanupPendingTenderSelection();
     return saveTenderMarkdownAndState(markdown, {
       fileName,
       parserLabel,
@@ -2179,7 +2197,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     });
   }
 
-  function removeTenderDocument(sourceId) {
+  async function removeTenderDocument(sourceId, options = {}) {
     const targetId = String(sourceId || '');
     const existingFiles = loadTenderSourceFiles();
     const remainingFiles = existingFiles.filter((file) => file.id !== targetId);
@@ -2187,6 +2205,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       return { success: false, message: '未找到要删除的招标文件', markdown: '' };
     }
 
+    await runBeforeCommit(options.beforeCommit);
     if (!remainingFiles.length) {
       clearTenderSourceFiles();
       if (fs.existsSync(tenderMarkdownPath)) fs.rmSync(tenderMarkdownPath, { force: true });
@@ -2229,7 +2248,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     });
   }
 
-  async function importOriginalPlanDocument(filePaths) {
+  async function importOriginalPlanDocument(filePaths, options = {}) {
     const importer = fileService?.importTechnicalPlanDocument || fileService?.importDocument;
     if (!importer) {
       throw new Error('文件导入服务尚未初始化');
@@ -2249,6 +2268,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const markdown = String(result.file_content || '').trim();
     const fileName = result.file_name || '未命名文件';
     const parserLabel = result.parser_label || null;
+    await runBeforeCommit(options.beforeCommit);
     const targetDir = path.dirname(originalPlanMarkdownPath);
     const tempPath = path.join(targetDir, `original-plan-${Date.now()}.tmp.md`);
     fs.mkdirSync(targetDir, { recursive: true });
