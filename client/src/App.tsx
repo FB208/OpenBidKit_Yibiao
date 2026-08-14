@@ -3,7 +3,6 @@ import AppRouter from './app/AppRouter';
 import GpuHardwareAccelerationPrompt from './app/GpuHardwareAccelerationPrompt';
 import LicenseStatusPrompt from './app/LicenseStatusPrompt';
 import RequiredOnlineServicesPrompt from './app/RequiredOnlineServicesPrompt';
-import StartupAdvertisementDialog from './app/StartupAdvertisementDialog';
 import UpdateNotifier from './app/UpdateNotifier';
 import AppShell from './components/AppShell';
 import { trackAppOpen, trackConfigUsage, trackPageView } from './shared/analytics/analytics';
@@ -16,7 +15,6 @@ function isDeveloperSection(section: SectionId) {
 function App() {
   const [activeSection, setActiveSection] = useState<SectionId>('bid-generation');
   const [developerMode, setDeveloperMode] = useState(false);
-  const [startupAdvertisementOpen, setStartupAdvertisementOpen] = useState(true);
   const leaveGuardRef = useRef<((nextSection?: string) => Promise<boolean>) | null>(null);
 
   useEffect(() => {
@@ -52,10 +50,9 @@ function App() {
 
   return (
     <>
-      <StartupAdvertisementDialog onClosed={() => setStartupAdvertisementOpen(false)} />
       <GpuHardwareAccelerationPrompt />
       <RequiredOnlineServicesPrompt />
-      <UpdateNotifier noticeEnabled={!startupAdvertisementOpen} />
+      <UpdateNotifier noticeEnabled />
       <LicenseStatusPrompt />
       <AppShell
         activeSection={activeSection}
