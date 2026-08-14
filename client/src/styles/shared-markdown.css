@@ -96,7 +96,7 @@
   overflow: auto;
   background: #ffffff;
   border: 1px solid var(--yb-border-soft);
-  border-radius: 14px;
+  border-radius: var(--yb-radius-md);
   scrollbar-gutter: stable;
 }
 
@@ -158,16 +158,16 @@
 
 .markdown-viewer code {
   padding: 2px 6px;
-  color: #155bd7;
+  color: var(--yb-primary-deep);
   background: rgba(33, 116, 253, 0.08);
-  border-radius: 8px;
+  border-radius: var(--yb-radius-sm);
 }
 
 .markdown-viewer pre {
   overflow: auto;
   padding: 16px;
   background: #101828;
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
 }
 
 .markdown-viewer pre code {
@@ -178,7 +178,7 @@
 
 .markdown-viewer img {
   max-width: 100%;
-  border-radius: 14px;
+  border-radius: var(--yb-radius-md);
 }
 
 .markdown-viewer p:has(> img:only-child),
@@ -361,7 +361,7 @@
   padding: 18px;
   background: linear-gradient(180deg, rgba(248, 250, 253, 0.92), #ffffff);
   border: 1px solid var(--yb-border-soft);
-  border-radius: 18px;
+  border-radius: var(--yb-radius-lg);
   box-shadow: 0 14px 34px rgba(33, 116, 253, 0.08);
 }
 
@@ -385,7 +385,7 @@
   display: grid;
   width: 100%;
   gap: 8px;
-  color: #c83220;
+  color: var(--yb-danger);
 }
 
 .mermaid-preview-error strong {
@@ -423,7 +423,7 @@
   padding: 20px;
   background: #ffffff;
   border: 1px solid rgba(228, 233, 240, 0.88);
-  border-radius: 24px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.26);
 }
 
@@ -440,7 +440,7 @@
   line-height: 1;
   background: rgba(248, 250, 253, 0.92);
   border: 1px solid var(--yb-border-soft);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .image-preview-close:hover {
@@ -462,7 +462,7 @@
   max-height: calc(100vh - 178px);
   justify-self: center;
   object-fit: contain;
-  border-radius: 18px;
+  border-radius: var(--yb-radius-lg);
 }
 
 .markdown-empty-state {
@@ -515,14 +515,14 @@
   font-weight: 800;
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(33, 116, 253, 0.18);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
   cursor: pointer;
   transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .markdown-fullscreen-trigger:hover:not(:disabled) {
-  color: #155bd7;
+  color: var(--yb-primary-deep);
   background: #ffffff;
   border-color: rgba(33, 116, 253, 0.34);
 }
@@ -580,7 +580,7 @@
   font-weight: 800;
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(33, 116, 253, 0.22);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   box-shadow: 0 12px 34px rgba(15, 23, 42, 0.16);
   cursor: pointer;
   transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease;
@@ -609,7 +609,7 @@
   overflow: auto;
   background: #ffffff;
   border: 1px solid rgba(228, 233, 240, 0.88);
-  border-radius: 22px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: var(--yb-shadow);
 }
 
@@ -650,9 +650,9 @@
   font-size: 14px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--yb-radius-sm);
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease;
 }
 
 .markdown-editor-toolbar button:hover:not(:disabled) {
@@ -672,11 +672,11 @@
   font-weight: 800;
   background: rgba(33, 116, 253, 0.08);
   border-color: rgba(33, 116, 253, 0.12);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .markdown-editor-toolbar .markdown-editor-fullscreen-trigger:hover:not(:disabled) {
-  color: #155bd7;
+  color: var(--yb-primary-deep);
   background: rgba(33, 116, 253, 0.13);
 }
 
@@ -719,7 +719,7 @@
   overflow: hidden;
   background: #ffffff;
   border: 1px solid rgba(228, 233, 240, 0.9);
-  border-radius: 24px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: 0 28px 72px rgba(23, 32, 51, 0.18);
 }
 

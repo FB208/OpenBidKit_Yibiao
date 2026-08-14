@@ -7,6 +7,7 @@ const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
 const { runOutlineAdjustmentTask } = require('./outlineAdjustmentTask.cjs');
 const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
+const { originalPlanDownstreamTaskTypes } = require('./technicalPlanStore.cjs');
 const { normalizeLogs } = require('./taskLogStore.cjs');
 
 const taskDefinitions = {
@@ -750,15 +751,32 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     return currentTask;
   }
 
-  // 取消全部技术方案任务并等待退出，避免重置后旧任务重新写回状态。
-  async function cancelTechnicalPlanTasksForReset() {
+  // 取消技术方案任务并等待退出，避免清空下游后旧任务继续提交 checkpoint。
+  async function cancelTechnicalPlanTasks(reason, taskTypes) {
+    const typeFilter = Array.isArray(taskTypes) && taskTypes.length ? new Set(taskTypes) : null;
     const controls = [];
     for (const [type, task] of activeTasks.entries()) {
       const definition = getTaskDefinition(type);
       const control = activeTaskControls.get(type);
       if (definition.group !== 'technical-plan' || !isActiveTaskStatus(task.status) || !control?.cancel) continue;
+      if (typeFilter && !typeFilter.has(type)) continue;
       controls.push(control);
-      control.cancel('技术方案已重置，后台任务已取消');
+      control.cancel(reason);
+    }
+    await Promise.all(controls.map((control) => control.waitForSettlement()));
+  }
+
+  // 取消废标检查任务并等待退出，避免清空下游后旧任务继续提交 checkpoint。
+  async function cancelRejectionCheckTasks(reason, taskTypes) {
+    const typeFilter = Array.isArray(taskTypes) && taskTypes.length ? new Set(taskTypes) : null;
+    const controls = [];
+    for (const [type, task] of activeTasks.entries()) {
+      const definition = getTaskDefinition(type);
+      const control = activeTaskControls.get(type);
+      if (definition.group !== 'rejection-check' || !isActiveTaskStatus(task.status) || !control?.cancel) continue;
+      if (typeFilter && !typeFilter.has(type)) continue;
+      controls.push(control);
+      control.cancel(reason);
     }
     await Promise.all(controls.map((control) => control.waitForSettlement()));
   }
@@ -1198,8 +1216,50 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       return control.suppressOutlineSelectionAutoConfirmation(payload);
     },
     async resetTechnicalPlan() {
-      await cancelTechnicalPlanTasksForReset();
+      await cancelTechnicalPlanTasks('技术方案已重置，后台任务已取消');
       return technicalPlanStore.clearTechnicalPlan();
+    },
+    importTenderDocument(filePaths) {
+      return technicalPlanStore.importTenderDocument(filePaths, {
+        beforeCommit: () => cancelTechnicalPlanTasks('招标文件已更新，后台任务已取消'),
+      });
+    },
+    removeTenderDocument(sourceId) {
+      return technicalPlanStore.removeTenderDocument(sourceId, {
+        beforeCommit: () => cancelTechnicalPlanTasks('招标文件已更新，后台任务已取消'),
+      });
+    },
+    importOriginalPlanDocument(filePaths) {
+      return technicalPlanStore.importOriginalPlanDocument(filePaths, {
+        beforeCommit: () => cancelTechnicalPlanTasks('原方案已更新，后台任务已取消', originalPlanDownstreamTaskTypes),
+      });
+    },
+    async resetRejectionCheck() {
+      await cancelRejectionCheckTasks('废标项检查已重置，后台任务已取消');
+      return rejectionCheckStore.clearRejectionCheck();
+    },
+    importRejectionCheckDocument(role, filePaths) {
+      const documentRole = role === 'bid' ? 'bid' : 'tender';
+      return rejectionCheckStore.importDocument(role, filePaths, {
+        beforeCommit: () => cancelRejectionCheckTasks(
+          documentRole === 'bid' ? '投标文件已更新，后台任务已取消' : '招标文件已更新，后台任务已取消',
+          documentRole === 'bid' ? ['rejection-check-run'] : undefined,
+        ),
+      });
+    },
+    importRejectionCheckTenderFromTechnicalPlan() {
+      return rejectionCheckStore.importTenderFromTechnicalPlan({
+        beforeCommit: () => cancelRejectionCheckTasks('招标文件已更新，后台任务已取消'),
+      });
+    },
+    removeRejectionCheckDocument(role, documentId) {
+      const documentRole = role === 'bid' ? 'bid' : 'tender';
+      return rejectionCheckStore.removeDocument(role, documentId, {
+        beforeCommit: () => cancelRejectionCheckTasks(
+          documentRole === 'bid' ? '投标文件已更新，后台任务已取消' : '招标文件已更新，后台任务已取消',
+          documentRole === 'bid' ? ['rejection-check-run'] : undefined,
+        ),
+      });
     },
     getActiveTasks() {
       return Array.from(activeTasks.values());

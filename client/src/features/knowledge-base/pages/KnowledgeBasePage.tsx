@@ -1,7 +1,7 @@
 import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import { AppDialog, InlineSpinner, isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeItem } from '../types';
 
 declare global {
@@ -317,6 +317,12 @@ function KnowledgeBasePage() {
   const [folderDropTargetId, setFolderDropTargetId] = useState<string | null>(null);
   const [documentDropTarget, setDocumentDropTarget] = useState<KnowledgeDocumentDropTarget | null>(null);
   const [dragSaving, setDragSaving] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<
+    | { type: 'folder'; folderId: string; folderName: string; count: number }
+    | { type: 'document'; document: KnowledgeDocument }
+    | null
+  >(null);
+  const [deletingConfirm, setDeletingConfirm] = useState(false);
   const autoMatchingIdsRef = useRef(new Set<string>());
   const documentParseNoticeIdsRef = useRef(new Set<string>());
   const viewerRequestIdRef = useRef(0);
@@ -637,35 +643,42 @@ function KnowledgeBasePage() {
     }
   };
 
-  const deleteFolder = async (folderId: string, folderName: string) => {
+  const deleteFolder = (folderId: string, folderName: string) => {
     const count = documentsByFolder.get(folderId)?.length || 0;
-    if (!window.confirm(`确定删除文件夹“${folderName}”吗？其中 ${count} 个文档也会一起删除。`)) return;
-
-    try {
-      const result = await window.yibiao?.knowledgeBase.deleteFolder(folderId);
-      const folders = index.folders.filter((item) => item.id !== folderId);
-      const documents = index.documents.filter((document) => document.folder_id !== folderId);
-      setIndex({ folders, documents });
-      if (activeFolderId === folderId) {
-        setActiveFolderId(folders[0]?.id || '');
-      }
-      setViewer((prev) => (prev?.document.folder_id === folderId ? null : prev));
-      showToast(result?.message || '文件夹已删除', 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '删除文件夹失败', 'error');
-    }
+    setDeleteConfirm({ type: 'folder', folderId, folderName, count });
   };
 
-  const deleteDocument = async (document: KnowledgeDocument) => {
-    if (!window.confirm(`确定删除文档“${document.file_name}”吗？`)) return;
+  const deleteDocument = (document: KnowledgeDocument) => {
+    setDeleteConfirm({ type: 'document', document });
+  };
 
+  const confirmDelete = async () => {
+    if (!deleteConfirm) return;
+    setDeletingConfirm(true);
     try {
-      const result = await window.yibiao?.knowledgeBase.deleteDocument(document.id);
-      setIndex((prev) => ({ ...prev, documents: prev.documents.filter((item) => item.id !== document.id) }));
-      setViewer((prev) => (prev?.document.id === document.id ? null : prev));
-      showToast(result?.message || '文档已删除', 'success');
+      if (deleteConfirm.type === 'folder') {
+        const { folderId } = deleteConfirm;
+        const result = await window.yibiao?.knowledgeBase.deleteFolder(folderId);
+        const folders = index.folders.filter((item) => item.id !== folderId);
+        const documents = index.documents.filter((document) => document.folder_id !== folderId);
+        setIndex({ folders, documents });
+        if (activeFolderId === folderId) {
+          setActiveFolderId(folders[0]?.id || '');
+        }
+        setViewer((prev) => (prev?.document.folder_id === folderId ? null : prev));
+        showToast(result?.message || '文件夹已删除', 'success');
+      } else {
+        const { document } = deleteConfirm;
+        const result = await window.yibiao?.knowledgeBase.deleteDocument(document.id);
+        setIndex((prev) => ({ ...prev, documents: prev.documents.filter((item) => item.id !== document.id) }));
+        setViewer((prev) => (prev?.document.id === document.id ? null : prev));
+        showToast(result?.message || '文档已删除', 'success');
+      }
+      setDeleteConfirm(null);
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '删除文档失败', 'error');
+      showToast(error instanceof Error ? error.message : deleteConfirm.type === 'folder' ? '删除文件夹失败' : '删除文档失败', 'error');
+    } finally {
+      setDeletingConfirm(false);
     }
   };
 
@@ -963,6 +976,7 @@ function KnowledgeBasePage() {
             <div className="knowledge-empty-box">
               <strong>还没有文件夹</strong>
               <p>先创建一个文件夹，再上传历史资料。</p>
+              <button type="button" className="primary-action" onClick={() => setShowCreateFolder(true)}>新建文件夹</button>
             </div>
           )}
         </aside>
@@ -1009,9 +1023,7 @@ function KnowledgeBasePage() {
                       </div>
                       <span className={`knowledge-status is-${document.status}`}>{statusLabels[document.status]}</span>
                     </div>
-                    <div className="knowledge-progress-track" aria-label={`处理进度 ${document.progress}%`}>
-                      <span style={{ width: `${Math.max(0, Math.min(100, document.progress || 0))}%` }} />
-                    </div>
+                    <ProgressBar value={document.progress || 0} label={`处理进度 ${document.progress}%`} />
                     <div className="knowledge-document-meta">
                       <span>{document.message}</span>
                       <span>{document.item_count || 0} 条知识</span>
@@ -1043,11 +1055,30 @@ function KnowledgeBasePage() {
             <div className="knowledge-empty-box large">
               <strong>当前文件夹暂无文档</strong>
               <p>支持上传 .doc、.docx、.wps、.pdf、.md、.xls、.xlsx 文档。</p>
+              <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || !activeFolder}>
+                {loading ? '处理中...' : '上传文档'}
+              </button>
             </div>
           )}
         </main>
         </section>
       </div>
+
+      <AppDialog
+        open={Boolean(deleteConfirm)}
+        onOpenChange={(open) => !open && !deletingConfirm && setDeleteConfirm(null)}
+        kicker="知识库"
+        title={deleteConfirm?.type === 'folder' ? `确定删除文件夹“${deleteConfirm.folderName}”吗？` : `确定删除文档“${deleteConfirm?.type === 'document' ? deleteConfirm.document.file_name : ''}”吗？`}
+        description={deleteConfirm?.type === 'folder' ? `其中 ${deleteConfirm.count} 个文档也会一起删除，删除后不可恢复。` : '删除后不可恢复。'}
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => setDeleteConfirm(null)} disabled={deletingConfirm}>取消</button>
+            <button type="button" className="danger-action" onClick={() => { void confirmDelete(); }} disabled={deletingConfirm}>
+              {deletingConfirm ? '正在删除...' : '确认删除'}
+            </button>
+          </>
+        )}
+      />
     </>
   );
 }
@@ -1295,7 +1326,7 @@ function KnowledgeItemSourceDialog({ item, developerMode, rendering, debugTrace,
       </div>
       {rendering ? (
         <div className="knowledge-empty-box large knowledge-source-loading">
-          <span className="inline-spinner" aria-hidden="true" />
+          <InlineSpinner />
           <strong>正在渲染原文...</strong>
           <p>内容较大时需要稍等片刻。</p>
         </div>

@@ -42,6 +42,15 @@ const resultTypeFields = Object.fromEntries(Object.entries(resultFieldTypes).map
 
 const tenderDocumentId = 'tender';
 
+function appendImportFailureParts(messageParts, errors) {
+  const failed = Array.isArray(errors)
+    ? errors.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (!failed.length) return;
+  messageParts.push(`失败 ${failed.length} 份`);
+  messageParts.push(failed.join('；'));
+}
+
 function now() {
   return new Date().toISOString();
 }
@@ -161,6 +170,13 @@ function taskFromRow(row, taskLogStore) {
 
 function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, taskLogStore }) {
   const rejectionCheckDir = getRejectionCheckDir(app);
+  let tenderRewriteQueue = Promise.resolve();
+
+  function runSerializedTenderRewrite(task) {
+    const run = tenderRewriteQueue.then(task, task);
+    tenderRewriteQueue = run.then(() => undefined, () => undefined);
+    return run;
+  }
 
   function ensureMetaRow() {
     const existing = db.prepare('SELECT * FROM rejection_check_meta WHERE id = 1').get();
@@ -330,6 +346,12 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
       )));
       throw error;
     }
+  }
+
+  function loadTenderSourceDocuments() {
+    return db.prepare("SELECT * FROM rejection_check_documents WHERE role = 'tender' AND document_id != ? ORDER BY sort_order ASC, imported_at ASC").all(tenderDocumentId)
+      .map(documentFromRow)
+      .filter(Boolean);
   }
 
   function documentFromRow(row) {
@@ -843,12 +865,18 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
     return updateRejectionCheck(state || {});
   }
 
-  async function importDocument(role) {
+  async function runBeforeCommit(beforeCommit) {
+    if (typeof beforeCommit === 'function') {
+      await beforeCommit();
+    }
+  }
+
+  async function importDocument(role, filePaths, options = {}) {
     if (!fileService?.importRejectionCheckDocument) {
       throw new Error('文件导入服务尚未初始化');
     }
     const documentRole = normalizeDocumentRole(role);
-    const result = await fileService.importRejectionCheckDocument(documentRole);
+    const result = await fileService.importRejectionCheckDocument(documentRole, filePaths);
     const importedDocuments = Array.isArray(result?.documents)
       ? result.documents
       : result?.file_content
@@ -861,21 +889,40 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
     let skippedCount = 0;
     let firstAddedBidDocumentId = '';
     if (documentRole === 'tender') {
-      const documents = importedDocuments.map((item, index) => {
-        const markdown = String(item.file_content || '').trim();
-        if (!markdown) return null;
-        return {
-          id: createTenderSourceDocumentId(item.file_name || '招标文件', markdown, index),
-          role: 'tender',
-          fileName: item.file_name || '招标文件',
-          content: markdown,
-          source: 'upload',
-          parserLabel: item.parser_label || undefined,
-          importedAt: now(),
-        };
-      }).filter(Boolean);
-      await updateRejectionCheckWithAsyncFiles({ tenderDocuments: documents, activeDocumentTab: 'tender' });
-      addedCount = documents.length;
+      await runSerializedTenderRewrite(async () => {
+        const existingDocuments = loadTenderSourceDocuments();
+        const existingRows = db.prepare("SELECT file_name, content_hash FROM rejection_check_documents WHERE role = 'tender' AND document_id != ?").all(tenderDocumentId);
+        const existingKeys = new Set(existingRows.map((row) => `${row.file_name}\u0000${row.content_hash}`));
+        const addedDocuments = [];
+        importedDocuments.forEach((item) => {
+          const markdown = String(item.file_content || '').trim();
+          if (!markdown) return;
+          const fileName = item.file_name || '招标文件';
+          const key = `${fileName}\u0000${stableHash(markdown)}`;
+          if (existingKeys.has(key)) {
+            skippedCount += 1;
+            return;
+          }
+          existingKeys.add(key);
+          addedDocuments.push({
+            id: createTenderSourceDocumentId(fileName, markdown, existingDocuments.length + addedDocuments.length),
+            role: 'tender',
+            fileName,
+            content: markdown,
+            source: 'upload',
+            parserLabel: item.parser_label || undefined,
+            importedAt: now(),
+          });
+        });
+        addedCount = addedDocuments.length;
+        if (addedCount > 0) {
+          await runBeforeCommit(options.beforeCommit);
+          await updateRejectionCheckWithAsyncFiles({
+            tenderDocuments: [...existingDocuments, ...addedDocuments],
+            activeDocumentTab: 'tender',
+          });
+        }
+      });
     } else {
       const existingRows = db.prepare("SELECT document_id, file_name, content_hash FROM rejection_check_documents WHERE role = 'bid'").all();
       const existingKeys = new Set(existingRows.map((row) => `${row.file_name}\u0000${row.content_hash}`));
@@ -905,6 +952,9 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
         if (!firstAddedBidDocumentId) firstAddedBidDocumentId = prepared.values.document_id;
         sortOrder += 1;
       }
+      if (preparedDocuments.length) {
+        await runBeforeCommit(options.beforeCommit);
+      }
       await writePreparedDocuments(preparedDocuments);
       const transaction = db.transaction(() => {
         preparedDocuments.forEach(savePreparedDocument);
@@ -924,24 +974,23 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
       }
       addedCount = preparedDocuments.length;
     }
-    const failedCount = Array.isArray(result?.errors) ? result.errors.length : 0;
     const fallbackToLocal = importedDocuments.some((item) => item?.fallback_to_local) || String(result?.message || '').includes('自动使用本地解析');
-    if (documentRole === 'bid' && addedCount === 0) {
+    if (addedCount === 0) {
       const messageParts = [];
       if (skippedCount > 0) messageParts.push(`已跳过 ${skippedCount} 份重复文件`);
-      if (failedCount > 0) messageParts.push(`失败 ${failedCount} 份`);
+      appendImportFailureParts(messageParts, result?.errors);
       const message = messageParts.length ? messageParts.join('，') : result.message || '未导入文件';
       return { success: false, message };
     }
-    const bidMessageParts = [`已解析 ${addedCount} 份投标文件`];
-    if (fallbackToLocal) bidMessageParts.push('当前格式已自动使用本地解析');
-    if (skippedCount > 0) bidMessageParts.push(`跳过 ${skippedCount} 份重复文件`);
-    if (failedCount > 0) bidMessageParts.push(`失败 ${failedCount} 份`);
-    const message = documentRole === 'bid' ? bidMessageParts.join('，') : result.message || `已解析 ${addedCount} 份招标文件`;
-    return { success: true, message };
+    const documentLabel = documentRole === 'bid' ? '投标文件' : '招标文件';
+    const messageParts = [`已解析 ${addedCount} 份${documentLabel}`];
+    if (fallbackToLocal) messageParts.push('当前格式已自动使用本地解析');
+    if (skippedCount > 0) messageParts.push(`跳过 ${skippedCount} 份重复文件`);
+    appendImportFailureParts(messageParts, result?.errors);
+    return { success: true, message: messageParts.join('，') };
   }
 
-  async function importTenderFromTechnicalPlan() {
+  async function importTenderFromTechnicalPlan(options = {}) {
     if (!technicalPlanStore?.readTenderMarkdown || !technicalPlanStore?.loadTechnicalPlan) {
       throw new Error('技术方案缓存接口尚未初始化');
     }
@@ -988,24 +1037,44 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
       importedAt: now(),
     };
     const tenderSignature = createDocumentSignature(mainDocument);
-    await updateRejectionCheckWithAsyncFiles({
-      tenderDocument: mainDocument,
-      tenderDocuments: documentsToSave,
-      activeDocumentTab: 'tender',
-      ...(discardedBids ? {
-        invalidBidAndRejectionItems: {
-          status: 'success',
-          content: discardedBids,
-          source: 'technical-plan',
-          tenderSignature,
-          updatedAt: now(),
-        },
-      } : {}),
+    await runSerializedTenderRewrite(async () => {
+      await runBeforeCommit(options.beforeCommit);
+      await updateRejectionCheckWithAsyncFiles({
+        tenderDocument: mainDocument,
+        tenderDocuments: documentsToSave,
+        activeDocumentTab: 'tender',
+        ...(discardedBids ? {
+          invalidBidAndRejectionItems: {
+            status: 'success',
+            content: discardedBids,
+            source: 'technical-plan',
+            tenderSignature,
+            updatedAt: now(),
+          },
+        } : {}),
+      });
     });
     return { success: true, message: '已从技术方案读取招标文件' };
   }
 
-  async function removeDocument(role, documentId) {
+  async function removeDocument(role, documentId, options = {}) {
+    const documentRole = normalizeDocumentRole(role);
+    if (documentRole === 'tender' && documentId && String(documentId) !== tenderDocumentId) {
+      await runSerializedTenderRewrite(async () => {
+        const existing = loadTenderSourceDocuments();
+        const remaining = existing.filter((document) => document.id !== String(documentId));
+        if (remaining.length === existing.length) {
+          return;
+        }
+        await runBeforeCommit(options.beforeCommit);
+        await updateRejectionCheckWithAsyncFiles({
+          tenderDocuments: remaining,
+          activeDocumentTab: 'tender',
+        });
+      });
+      return;
+    }
+    await runBeforeCommit(options.beforeCommit);
     let removedRows = [];
     const transaction = db.transaction(() => {
       removedRows = clearDocumentRows(role, documentId);

@@ -2,7 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { bidAnalysisTasks, getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
-import { MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
+import { MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
 import BidSectionSelectorDialog from '../components/BidSectionSelectorDialog';
 import type { BackgroundTaskState, BidAnalysisMode, BidAnalysisTasks, BidAnalysisTaskState, BidSectionExtractionStatus, BidSectionMode, DetectedBidSection, TechnicalPlanState } from '../types';
 
@@ -609,9 +609,7 @@ function BidAnalysisPage({
             </button>
             {!progressCollapsed && (
               <div className="content-outline-stats-body">
-                <div className="content-generation-progress-track" aria-label={`解析进度 ${progress}%`}>
-                  <span style={{ width: `${progress}%` }} />
-                </div>
+                <ProgressBar value={progress} label={`解析进度 ${progress}%`} />
                 <p>{progressMessage}</p>
               </div>
             )}

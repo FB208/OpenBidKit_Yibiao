@@ -44,7 +44,7 @@
   word-break: break-word;
   background: #f5f8ff;
   border: 1px solid var(--yb-border-soft);
-  border-radius: 18px;
+  border-radius: var(--yb-radius-lg);
 }
 
 /* 开发者测试页专用样式：只服务 ContentExpansionReplaceTestPage.tsx，不参与正式扩写页面。 */
@@ -131,7 +131,7 @@
   color: var(--yb-text);
   background: #ffffff;
   border: 1px solid var(--yb-border-soft);
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
   outline: none;
 }
 
@@ -150,7 +150,7 @@
 .developer-expansion-replace-field select:focus,
 .developer-expansion-replace-field textarea:focus {
   border-color: rgba(33, 116, 253, 0.5);
-  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.1);
+  box-shadow: var(--yb-focus-ring);
 }
 
 .developer-expansion-replace-check {
@@ -167,7 +167,7 @@
   padding: 14px 16px;
   background: rgba(255, 251, 235, 0.72);
   border: 1px solid rgba(245, 158, 11, 0.2);
-  border-radius: 18px;
+  border-radius: var(--yb-radius-lg);
 }
 
 .developer-expansion-replace-source-note strong {
@@ -181,7 +181,7 @@
   padding: 18px;
   background: #f8fafc;
   border: 1px solid var(--yb-border-soft);
-  border-radius: 20px;
+  border-radius: var(--yb-radius-xl);
 }
 
 .developer-expansion-replace-status strong {
@@ -190,7 +190,7 @@
 }
 
 .developer-expansion-replace-status.is-success strong {
-  color: #047857;
+  color: var(--yb-success);
 }
 
 .developer-expansion-replace-status.is-warning strong {
@@ -198,7 +198,7 @@
 }
 
 .developer-expansion-replace-status.is-danger strong {
-  color: #b91c1c;
+  color: var(--yb-danger);
 }
 
 .developer-expansion-replace-status.is-muted strong {
@@ -218,7 +218,7 @@
   padding: 14px;
   background: linear-gradient(135deg, rgba(248, 250, 253, 0.94), rgba(255, 255, 255, 0.98));
   border: 1px solid var(--yb-border-soft);
-  border-radius: 18px;
+  border-radius: var(--yb-radius-lg);
 }
 
 .developer-expansion-replace-metrics strong {
@@ -236,7 +236,7 @@
   word-break: break-word;
   background: #f8fafc;
   border: 1px solid var(--yb-border-soft);
-  border-radius: 18px;
+  border-radius: var(--yb-radius-lg);
 }
 
 .developer-expansion-replace-panel.is-wide pre {
@@ -289,7 +289,7 @@
   padding: 24px;
   color: #ffffff;
   background: linear-gradient(150deg, var(--yb-primary-deep), var(--yb-violet));
-  border-radius: 24px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: 0 24px 54px rgba(33, 116, 253, 0.22);
 }
 
@@ -329,7 +329,7 @@
 .developer-secondary-preview-list span {
   background: linear-gradient(135deg, rgba(248, 250, 253, 0.9), rgba(255, 255, 255, 0.98));
   border: 1px solid var(--yb-border-soft);
-  border-radius: 20px;
+  border-radius: var(--yb-radius-xl);
 }
 
 .developer-secondary-metrics article {
@@ -368,7 +368,7 @@
   color: #ffffff;
   font-weight: 900;
   background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
 }
 
 .developer-secondary-steps strong {
@@ -415,7 +415,7 @@
 .demo-preview-card {
   background: rgba(255, 255, 255, 0.94);
   border: 1px solid rgba(228, 233, 240, 0.88);
-  border-radius: 26px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: var(--yb-shadow);
 }
 
@@ -496,12 +496,12 @@
   align-items: center;
   justify-content: center;
   font-weight: 800;
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .demo-dev-badge {
   padding: 9px 13px;
-  color: #155bd7;
+  color: var(--yb-primary-deep);
   background: rgba(33, 116, 253, 0.1);
   border: 1px solid rgba(33, 116, 253, 0.18);
 }
@@ -523,7 +523,7 @@
 .demo-signal-grid article {
   background: rgba(255, 255, 255, 0.88);
   border: 1px solid rgba(33, 116, 253, 0.13);
-  border-radius: 22px;
+  border-radius: var(--yb-radius-xl);
 }
 
 .demo-metric-stack article {
@@ -591,7 +591,7 @@
 .opportunity-card-list article {
   background: linear-gradient(135deg, rgba(248, 250, 253, 0.9), rgba(255, 255, 255, 0.98));
   border: 1px solid var(--yb-border-soft);
-  border-radius: 20px;
+  border-radius: var(--yb-radius-xl);
 }
 
 .demo-step-list article {
@@ -609,7 +609,7 @@
   color: #ffffff;
   font-weight: 900;
   background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
 }
 
 .demo-step-list strong,
@@ -637,7 +637,7 @@
 }
 
 .demo-status-pill.is-ok {
-  color: #16804f;
+  color: var(--yb-success);
   background: rgba(22, 128, 79, 0.09);
 }
 
@@ -647,7 +647,7 @@
 }
 
 .demo-status-pill.is-danger {
-  color: #c83220;
+  color: var(--yb-danger);
   background: rgba(200, 50, 32, 0.09);
 }
 
@@ -664,7 +664,7 @@
   padding: 16px;
   background: linear-gradient(180deg, #f8fafd, #ffffff);
   border: 1px solid var(--yb-border-soft);
-  border-radius: 22px;
+  border-radius: var(--yb-radius-xl);
 }
 
 .demo-document-preview span {
@@ -684,7 +684,7 @@
   padding: 26px;
   text-align: center;
   background: linear-gradient(145deg, rgba(23, 32, 51, 0.94), rgba(33, 116, 253, 0.72));
-  border-radius: 26px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: 0 22px 54px rgba(33, 116, 253, 0.24);
 }
 
@@ -710,7 +710,7 @@
   position: absolute;
   inset: 18px;
   border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .opportunity-radar-ring i {
@@ -748,7 +748,7 @@
   font-style: normal;
   font-weight: 900;
   background: #eef4ff;
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
 }
 
 .demo-signal-grid {
@@ -775,7 +775,7 @@
   color: var(--yb-text-soft);
   background: rgba(248, 250, 253, 0.9);
   border: 1px solid var(--yb-border-soft);
-  border-radius: 18px;
+  border-radius: var(--yb-radius-lg);
 }
 
 .demo-timeline span::before {
@@ -786,7 +786,7 @@
   height: 10px;
   content: '';
   background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 /* [13146-13288] token-stats-* (DeveloperTokenStatsWindow.tsx) */
@@ -818,7 +818,7 @@ body.token-stats-transparent-root #root {
     radial-gradient(circle at 86% 18%, rgba(150, 112, 255, 0.34), transparent 30%),
     linear-gradient(145deg, rgba(8, 17, 34, 0.76), rgba(10, 20, 42, 0.52));
   border: 1px solid rgba(210, 232, 255, 0.24);
-  border-radius: 24px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
   backdrop-filter: blur(22px) saturate(1.25);
   -webkit-app-region: drag;
@@ -863,7 +863,7 @@ body.token-stats-transparent-root #root {
   font-weight: 700;
   background: rgba(255, 255, 255, 0.14);
   border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   cursor: pointer;
 }
 
@@ -890,7 +890,7 @@ body.token-stats-transparent-root #root {
   padding: 11px 12px;
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.13);
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
 }
 
 .token-stats-card span {
@@ -1001,11 +1001,11 @@ body.agent-monitor-root #root {
   height: 9px;
   flex: 0 0 auto;
   background: var(--yb-text-muted);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .agent-monitor-live-dot.is-attached {
-  background: #168a4a;
+  background: var(--yb-success);
   box-shadow: 0 0 0 4px rgba(22, 138, 74, 0.1);
 }
 
@@ -1062,7 +1062,7 @@ body.agent-monitor-root #root {
   text-align: left;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: var(--yb-radius-sm);
   transition: background var(--yb-duration-fast) var(--yb-ease), border-color var(--yb-duration-fast) var(--yb-ease);
 }
 
@@ -1079,7 +1079,7 @@ body.agent-monitor-root #root {
   width: 7px;
   height: 7px;
   background: var(--yb-text-muted);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .agent-monitor-task-dot.is-running {
@@ -1088,11 +1088,11 @@ body.agent-monitor-root #root {
 }
 
 .agent-monitor-task-dot.is-success {
-  background: #168a4a;
+  background: var(--yb-success);
 }
 
 .agent-monitor-task-dot.is-error {
-  background: #c83220;
+  background: var(--yb-danger);
 }
 
 .agent-monitor-task-copy {
@@ -1186,8 +1186,8 @@ body.agent-monitor-root #root {
 }
 
 .agent-monitor-task-stats strong.is-running { color: var(--yb-primary); }
-.agent-monitor-task-stats strong.is-success { color: #168a4a; }
-.agent-monitor-task-stats strong.is-error { color: #c83220; }
+.agent-monitor-task-stats strong.is-success { color: var(--yb-success); }
+.agent-monitor-task-stats strong.is-error { color: var(--yb-danger); }
 
 .agent-monitor-tabs {
   display: flex;
@@ -1233,14 +1233,14 @@ body.agent-monitor-root #root {
 .agent-monitor-workspace-error {
   max-width: 260px;
   overflow: hidden;
-  color: #c83220;
+  color: var(--yb-danger);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .agent-monitor-tabs .agent-monitor-follow.is-active {
-  color: #168a4a;
+  color: var(--yb-success);
   background: rgba(22, 138, 74, 0.08);
   border-color: rgba(22, 138, 74, 0.16);
 }
@@ -1281,7 +1281,7 @@ body.agent-monitor-root #root {
 }
 
 .agent-monitor-entry.is-assistant.is-streaming {
-  border-left-color: #168a4a;
+  border-left-color: var(--yb-success);
 }
 
 .agent-monitor-entry.is-assistant header {
@@ -1316,7 +1316,7 @@ body.agent-monitor-root #root {
   overflow: hidden;
   background: var(--yb-surface);
   border: 1px solid var(--yb-border-soft);
-  border-radius: 9px;
+  border-radius: var(--yb-radius-sm);
   box-shadow: var(--yb-shadow-xs);
 }
 
@@ -1357,7 +1357,7 @@ body.agent-monitor-root #root {
   width: 20px;
   height: 20px;
   place-items: center;
-  color: #168a4a;
+  color: var(--yb-success);
   font: 700 11px "Cascadia Mono", Consolas, monospace;
   background: rgba(22, 138, 74, 0.08);
   border-radius: 5px;
@@ -1404,8 +1404,8 @@ body.agent-monitor-root #root {
 }
 
 .agent-monitor-entry.is-system.is-warning span { color: #d67a00; }
-.agent-monitor-entry.is-system.is-error span { color: #c83220; }
-.agent-monitor-entry.is-system.is-success span { color: #168a4a; }
+.agent-monitor-entry.is-system.is-error span { color: var(--yb-danger); }
+.agent-monitor-entry.is-system.is-success span { color: var(--yb-success); }
 
 .agent-monitor-document-view {
   display: flex;
@@ -1418,7 +1418,7 @@ body.agent-monitor-root #root {
   overflow: hidden;
   background: var(--yb-surface);
   border: 1px solid var(--yb-border-soft);
-  border-radius: 18px;
+  border-radius: var(--yb-radius-lg);
   box-shadow: var(--yb-shadow-xs);
 }
 
@@ -1540,7 +1540,7 @@ body.agent-monitor-root #root {
 
 .agent-monitor-output-error {
   padding: 12px 16px;
-  color: #c83220;
+  color: var(--yb-danger);
   font-size: 12px;
   background: rgba(200, 50, 32, 0.06);
   border-bottom: 1px solid rgba(200, 50, 32, 0.14);
@@ -1577,7 +1577,7 @@ body.agent-monitor-root #root {
 
 .agent-monitor-fatal strong,
 .agent-monitor-fatal span {
-  color: #c83220;
+  color: var(--yb-danger);
 }
 
 @media (max-width: 1040px) {

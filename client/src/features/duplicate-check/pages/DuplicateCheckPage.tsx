@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { FloatingToolbar, isLibreOfficeRequiredMessage, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import { FloatingToolbar, isLibreOfficeRequiredMessage, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, UploadBoard, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { DuplicateAnalysisStatus, DuplicateAnalysisTabId, DuplicateCheckStep, DuplicateCheckTaskState, DuplicateCheckWorkspaceState, DuplicateContentAnalysisState, DuplicateImageAnalysisState, DuplicateMetadataAnalysisState, DuplicateOutlineAnalysisState, LocalFileSelection } from '../../../shared/types';
 
@@ -48,14 +48,14 @@ function formatDate(value: string) {
 
 function FilePill({ file, onRemove, disabled = false }: { file: LocalFileSelection; onRemove: () => void; disabled?: boolean }) {
   return (
-    <article className="duplicate-file-pill">
-      <div className="duplicate-file-icon">{file.extension.replace('.', '').slice(0, 4).toUpperCase() || 'DOC'}</div>
-      <div className="duplicate-file-info">
-        <strong title={file.file_name}>{file.file_name}</strong>
-        <span>{formatFileSize(file.size)} · {formatDate(file.modified_at)}</span>
-      </div>
-      <button type="button" onClick={onRemove} aria-label={`删除 ${file.file_name}`} disabled={disabled}>删除</button>
-    </article>
+    <UploadFilePill
+      badge={file.extension.replace('.', '').slice(0, 4).toUpperCase() || 'DOC'}
+      name={file.file_name}
+      meta={`${formatFileSize(file.size)} · ${formatDate(file.modified_at)}`}
+      onRemove={onRemove}
+      removeDisabled={disabled}
+      removeAriaLabel={`删除 ${file.file_name}`}
+    />
   );
 }
 
@@ -559,9 +559,7 @@ function DuplicateAnalysisPane({ activeTab, onTabChange, metadataAnalysis, outli
                 <em>{statusLabel(status)}</em>
               </span>
               {status !== 'pending' && (
-                <span className="duplicate-analysis-progress" aria-label={`${item.label}分析进度 ${progress}%`}>
-                  <span style={{ width: `${progress}%` }} />
-                </span>
+                <ProgressBar value={progress} label={`${item.label}分析进度 ${progress}%`} />
               )}
             </button>
           );
@@ -787,13 +785,16 @@ function DuplicateCheckPage() {
     startDuplicateAnalysis(false);
   }, [bidFiles, contentAnalysis?.status, currentAnalysisSignature, imageAnalysis?.status, metadataAnalysis?.signature, metadataAnalysis?.status, outlineAnalysis?.status, showToast, step, tenderFiles]);
 
-  const selectFiles = async (multiple: boolean) => {
+  const selectFiles = async (multiple: boolean, filePaths?: string[]) => {
     const selector = window.yibiao?.file?.selectDuplicateCheckFiles;
     if (typeof selector !== 'function') {
       throw new Error('文件选择接口尚未加载，请重启应用后重试');
     }
-    return selector({ multiple });
+    return selector({ multiple, filePaths });
   };
+
+  const resolveDroppedFilePaths = (files: FileList) =>
+    Array.from(files).map((file) => window.yibiao?.file.getPathForFile(file) || '').filter(Boolean);
 
   const persistSelectedFiles = async (nextTenderFiles: LocalFileSelection[], nextBidFiles: LocalFileSelection[], nextStep: DuplicateCheckStep = step) => {
     const saver = window.yibiao?.duplicateCheck?.saveFiles;
@@ -808,14 +809,14 @@ function DuplicateCheckPage() {
     return state;
   };
 
-  const uploadTenderFile = async () => {
+  const uploadTenderFile = async (filePaths?: string[]) => {
     if (isAnalysisRunning) {
       showToast('标书查重分析正在运行，请完成后再调整文件', 'info');
       return;
     }
     try {
       setBusy('tender');
-      const result = await selectFiles(true);
+      const result = await selectFiles(true, filePaths);
       if (!result?.success || !result.files?.length) {
         const message = result?.message || '未选择招标文件';
         if (isLibreOfficeRequiredMessage(message)) {
@@ -825,8 +826,15 @@ function DuplicateCheckPage() {
         showToast(message, message === '已取消选择' ? 'info' : 'error');
         return;
       }
-      await persistSelectedFiles(result.files, bidFiles);
-      showToast(`已选择 ${result.files.length} 份招标文件，暂不执行解析`, 'success');
+      const exists = new Set(tenderFiles.map((file) => file.file_path));
+      const nextFiles = result.files.filter((file) => !exists.has(file.file_path));
+      if (nextFiles.length < result.files.length) {
+        showToast('已跳过重复选择的招标文件', 'info');
+      }
+      if (nextFiles.length > 0) {
+        await persistSelectedFiles([...tenderFiles, ...nextFiles], bidFiles);
+        showToast(`已加入 ${nextFiles.length} 份招标文件，暂不执行解析`, 'success');
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : '选择招标文件失败';
       if (isLibreOfficeRequiredMessage(message)) {
@@ -839,14 +847,14 @@ function DuplicateCheckPage() {
     }
   };
 
-  const uploadBidFiles = async () => {
+  const uploadBidFiles = async (filePaths?: string[]) => {
     if (isAnalysisRunning) {
       showToast('标书查重分析正在运行，请完成后再调整文件', 'info');
       return;
     }
     try {
       setBusy('bid');
-      const result = await selectFiles(true);
+      const result = await selectFiles(true, filePaths);
       if (!result?.success || !result.files?.length) {
         const message = result?.message || '未选择投标文件';
         if (isLibreOfficeRequiredMessage(message)) {
@@ -960,82 +968,90 @@ function DuplicateCheckPage() {
     <div className="duplicate-check-page">
       {step === 'upload' ? (
         <>
-          <section className="duplicate-upload-board">
-            <div className="duplicate-page-title">
-              <div>
-                <span className="section-kicker">STEP 01</span>
-                <h2>选择标书</h2>
-              </div>
+          <UploadBoard
+            kicker="STEP 01"
+            title="选择标书"
+            aside={(
               <div className="duplicate-upload-summary">
                 <span>{tenderFiles.length ? `${tenderFiles.length} 份招标文件` : '未上传招标文件'}</span>
                 <strong>{bidFiles.length} 份投标文件</strong>
                 <small>{formatFileSize(totalSize)}</small>
               </div>
-            </div>
-
-            <div className="duplicate-upload-stack">
-              <article className="duplicate-upload-row">
-                <div className="duplicate-upload-label">
-                  <span>01</span>
-                  <strong>招标文件</strong>
-                  <small>可选，可多份</small>
-                </div>
-                <div className="duplicate-upload-content">
-                  {tenderFiles.length ? (
-                    <div className="duplicate-file-list">
-                      {tenderFiles.map((file, index) => (
-                        <button
-                          key={file.file_path}
-                          type="button"
-                          className={`duplicate-document-tab${activeTenderFileId === file.id ? ' is-active' : ''}`}
-                          onClick={() => setActiveTenderFileId(file.id)}
-                        >
-                          <span>{`招标文件${index + 1}`}</span>
-                          <strong>{file.file_name}</strong>
-                        </button>
-                      ))}
-                      {tenderFiles.map((file) => (
-                        <FilePill key={`pill-${file.file_path}`} file={file} disabled={isAnalysisRunning} onRemove={() => {
-                          void persistSelectedFiles(tenderFiles.filter((item) => item.file_path !== file.file_path), bidFiles)
-                            .catch((error) => showToast(error instanceof Error ? error.message : '移除招标文件失败', 'error'));
-                        }} />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="duplicate-empty-upload" />
-                  )}
-                </div>
-                <button type="button" className="primary-action duplicate-upload-button" onClick={uploadTenderFile} disabled={busy !== null || isAnalysisRunning}>
-                  {busy === 'tender' ? '选择中...' : tenderFiles.length ? '替换' : '上传'}
+            )}
+          >
+            <UploadRow
+              index="01"
+              title="招标文件"
+              note="可选，可多份"
+              onDropFiles={(files) => {
+                const paths = resolveDroppedFilePaths(files);
+                if (paths.length) void uploadTenderFile(paths);
+              }}
+              dropDisabled={busy !== null || isAnalysisRunning}
+              actions={(
+                <button type="button" className="primary-action" onClick={() => void uploadTenderFile()} disabled={busy !== null || isAnalysisRunning}>
+                  {busy === 'tender' ? '选择中...' : tenderFiles.length ? '继续上传' : '上传'}
                 </button>
-              </article>
+              )}
+            >
+              {tenderFiles.length ? (
+                <div className="duplicate-file-list">
+                  {tenderFiles.map((file, index) => (
+                    <button
+                      key={file.file_path}
+                      type="button"
+                      className={`duplicate-document-tab${activeTenderFileId === file.id ? ' is-active' : ''}`}
+                      onClick={() => setActiveTenderFileId(file.id)}
+                    >
+                      <span>{`招标文件${index + 1}`}</span>
+                      <strong>{file.file_name}</strong>
+                    </button>
+                  ))}
+                  {tenderFiles.map((file) => (
+                    <FilePill key={`pill-${file.file_path}`} file={file} disabled={isAnalysisRunning} onRemove={() => {
+                      void persistSelectedFiles(tenderFiles.filter((item) => item.file_path !== file.file_path), bidFiles)
+                        .catch((error) => showToast(error instanceof Error ? error.message : '移除招标文件失败', 'error'));
+                    }} />
+                  ))}
+                </div>
+              ) : (
+                <UploadEmpty title="等待招标文件" hint="可选。上传后，多份投标文件引用招标文件中的内容不计入重复。">
+                  <button type="button" className="text-button" onClick={() => void uploadTenderFile()} disabled={busy !== null || isAnalysisRunning}>选择招标文件</button>
+                </UploadEmpty>
+              )}
+            </UploadRow>
 
-              <article className="duplicate-upload-row bid-row">
-                <div className="duplicate-upload-label">
-                  <span>02</span>
-                  <strong>投标文件</strong>
-                  <small>必选，可多份</small>
-                </div>
-                <div className="duplicate-upload-content">
-                  {bidFiles.length ? (
-                    <div className="duplicate-file-list">
-                      {bidFiles.map((file) => (
-                        <FilePill key={file.file_path} file={file} disabled={isAnalysisRunning} onRemove={() => {
-                          void persistSelectedFiles(tenderFiles, bidFiles.filter((item) => item.file_path !== file.file_path))
-                            .catch((error) => showToast(error instanceof Error ? error.message : '移除投标文件失败', 'error'));
-                        }} />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="duplicate-empty-upload" />
-                  )}
-                </div>
-                <button type="button" className="primary-action duplicate-upload-button" onClick={uploadBidFiles} disabled={busy !== null || isAnalysisRunning}>
+            <UploadRow
+              index="02"
+              title="投标文件"
+              note="必选，可多份"
+              onDropFiles={(files) => {
+                const paths = resolveDroppedFilePaths(files);
+                if (paths.length) void uploadBidFiles(paths);
+              }}
+              dropDisabled={busy !== null || isAnalysisRunning}
+              actions={(
+                <button type="button" className="primary-action" onClick={() => void uploadBidFiles()} disabled={busy !== null || isAnalysisRunning}>
                   {busy === 'bid' ? '选择中...' : '上传'}
                 </button>
-              </article>
-            </div>
-          </section>
+              )}
+            >
+              {bidFiles.length ? (
+                <div className="duplicate-file-list">
+                  {bidFiles.map((file) => (
+                    <FilePill key={file.file_path} file={file} disabled={isAnalysisRunning} onRemove={() => {
+                      void persistSelectedFiles(tenderFiles, bidFiles.filter((item) => item.file_path !== file.file_path))
+                        .catch((error) => showToast(error instanceof Error ? error.message : '移除投标文件失败', 'error'));
+                    }} />
+                  ))}
+                </div>
+              ) : (
+                <UploadEmpty title="等待投标文件" hint="至少上传两份投标文件，用于互相比对重复内容。">
+                  <button type="button" className="text-button" onClick={() => void uploadBidFiles()} disabled={busy !== null || isAnalysisRunning}>选择投标文件</button>
+                </UploadEmpty>
+              )}
+            </UploadRow>
+          </UploadBoard>
 
           <section className="duplicate-guide-panel">
             <div className="duplicate-guide-head">

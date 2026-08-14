@@ -18,7 +18,7 @@
     radial-gradient(circle at 95% 0%, rgba(33, 116, 253, 0.1), transparent 28%),
     rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(228, 233, 240, 0.88);
-  border-radius: 26px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: var(--yb-shadow);
 }
 
@@ -81,9 +81,9 @@
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 253, 0.86));
   border: 1px solid var(--yb-border-soft);
-  border-radius: 22px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: 0 14px 34px rgba(23, 32, 51, 0.04);
-  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  transition: border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
 .plugin-card:hover {
@@ -158,7 +158,7 @@
   font-weight: 700;
   background: rgba(33, 116, 253, 0.08);
   border: 1px solid rgba(33, 116, 253, 0.12);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .plugin-card-description {
@@ -196,7 +196,7 @@
   font-weight: 700;
   background: #f2f5f9;
   border: 1px solid var(--yb-border-soft);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .plugin-status-pill.is-installed {
@@ -206,19 +206,19 @@
 }
 
 .plugin-status-pill.is-enabled {
-  color: #168a4a;
+  color: var(--yb-success);
   background: rgba(22, 138, 74, 0.1);
   border-color: rgba(22, 138, 74, 0.2);
 }
 
 .plugin-status-pill.is-update {
-  color: #f28a00;
+  color: var(--yb-warning);
   background: rgba(242, 138, 0, 0.1);
   border-color: rgba(242, 138, 0, 0.2);
 }
 
 .plugin-status-pill.is-updating {
-  color: #f28a00;
+  color: var(--yb-warning);
   background: rgba(242, 138, 0, 0.1);
   border-color: rgba(242, 138, 0, 0.2);
   animation: pulse 1.5s ease-in-out infinite;
@@ -234,7 +234,7 @@
 }
 
 .plugin-status-pill.is-error {
-  color: #d92d20;
+  color: var(--yb-danger);
   background: rgba(217, 45, 32, 0.1);
   border-color: rgba(217, 45, 32, 0.2);
 }
@@ -252,22 +252,6 @@
   font-size: 13.5px;
 }
 
-.plugins-empty-state {
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  padding: 42px 24px;
-  color: var(--yb-text-soft);
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px dashed rgba(94, 111, 143, 0.24);
-  border-radius: 22px;
-}
-
-.plugins-empty-state strong {
-  color: var(--yb-text);
-  font-size: 16px;
-}
-
 .plugin-uninstall-dialog {
   position: fixed;
   top: 50%;
@@ -279,8 +263,8 @@
   padding: 24px;
   background: #ffffff;
   border: 1px solid rgba(228, 233, 240, 0.9);
-  border-radius: 24px;
-  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.16);
+  border-radius: var(--yb-radius-xl);
+  box-shadow: var(--yb-shadow-modal);
   transform: translate(-50%, -50%);
 }
 

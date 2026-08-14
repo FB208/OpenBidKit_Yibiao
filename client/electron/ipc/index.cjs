@@ -70,6 +70,7 @@ function sendToWebContents(webContents, channel, payload) {
 const workspaceDatabaseChannels = [
   'technical-plan:load-state',
   'technical-plan:import-tender-document',
+  'technical-plan:remove-tender-document',
   'technical-plan:import-original-plan-document',
   'technical-plan:check-bid-sections',
   'technical-plan:select-bid-section',
@@ -200,7 +201,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerKnowledgeBaseIpc({ knowledgeBaseService });
   registerTechnicalPlanIpc({ technicalPlanStore, taskService });
   registerDuplicateCheckIpc({ duplicateCheckStore });
-  registerRejectionCheckIpc({ rejectionCheckStore });
+  registerRejectionCheckIpc({ rejectionCheckStore, taskService });
   registerTemplateIpc({ templateStore });
   registerTaskIpc({ taskService });
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });

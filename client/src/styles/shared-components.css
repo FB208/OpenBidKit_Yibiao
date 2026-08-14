@@ -16,7 +16,7 @@
   color: var(--yb-text);
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(228, 233, 240, 0.92);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   box-shadow: var(--yb-shadow-lg);
   backdrop-filter: blur(18px);
   -webkit-app-region: no-drag;
@@ -37,7 +37,7 @@
   cursor: grab;
   background: transparent;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   opacity: 0.78;
 }
 
@@ -82,7 +82,7 @@
   white-space: nowrap;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   transition: color var(--yb-duration-fast) ease, background var(--yb-duration-fast) ease,
     border-color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
@@ -138,31 +138,31 @@
 }
 
 .floating-toolbar-button.is-danger {
-  color: #ff3501;
+  color: var(--yb-danger);
 }
 
 .floating-toolbar-button.is-danger:hover:not(:disabled) {
-  color: #ff3501;
+  color: var(--yb-danger);
   background: rgba(255, 53, 1, 0.08);
   border-color: rgba(255, 53, 1, 0.16);
 }
 
 .floating-toolbar-button.is-warning {
-  color: #f28a00;
+  color: var(--yb-warning);
 }
 
 .floating-toolbar-button.is-warning:hover:not(:disabled) {
-  color: #f28a00;
+  color: var(--yb-warning);
   background: rgba(242, 138, 0, 0.09);
   border-color: rgba(242, 138, 0, 0.18);
 }
 
 .floating-toolbar-button.is-success {
-  color: #168a4a;
+  color: var(--yb-success);
 }
 
 .floating-toolbar-button.is-success:hover:not(:disabled) {
-  color: #168a4a;
+  color: var(--yb-success);
   background: rgba(22, 138, 74, 0.1);
   border-color: rgba(22, 138, 74, 0.2);
 }
@@ -196,7 +196,7 @@
 .empty-panel {
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(228, 233, 240, 0.88);
-  border-radius: 26px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: var(--yb-shadow);
 }
 
@@ -217,7 +217,7 @@
   color: #ffffff;
   font-weight: 600;
   background: linear-gradient(135deg, var(--yb-primary) 0%, var(--yb-violet) 100%);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   box-shadow: 0 14px 30px rgba(33, 116, 253, 0.2);
 }
 
@@ -241,7 +241,7 @@
   font-weight: 600;
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(33, 116, 253, 0.18);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .secondary-action:hover:not(:disabled) {
@@ -260,11 +260,11 @@
   justify-content: center;
   gap: 8px;
   padding: 12px 20px;
-  color: #c83220;
+  color: var(--yb-danger);
   font-weight: 600;
   background: rgba(200, 50, 32, 0.07);
   border: 1px solid rgba(200, 50, 32, 0.16);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .danger-action:hover:not(:disabled) {
@@ -306,7 +306,7 @@
   overflow: hidden;
   padding: 28px;
   background: rgba(255, 255, 255, 0.95);
-  border-radius: 26px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: var(--yb-shadow);
 }
 
@@ -322,7 +322,7 @@
     radial-gradient(circle at 92% 0%, rgba(33, 116, 253, 0.09), transparent 34%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 253, 0.7));
   border: 1px solid var(--yb-border-soft);
-  border-radius: 20px;
+  border-radius: var(--yb-radius-xl);
 }
 
 .secondary-menu-list-head::before {
@@ -333,7 +333,7 @@
   width: 4px;
   content: '';
   background: linear-gradient(180deg, var(--yb-primary), var(--yb-violet));
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .secondary-menu-list-head::after {
@@ -374,7 +374,7 @@
   margin-top: 14px;
   overflow: hidden;
   border: 1px solid var(--yb-border-soft);
-  border-radius: 20px;
+  border-radius: var(--yb-radius-xl);
 }
 
 .secondary-menu-row {
@@ -402,7 +402,7 @@
   width: 3px;
   content: '';
   background: linear-gradient(180deg, var(--yb-primary), var(--yb-violet));
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   opacity: 0;
   transition: opacity var(--yb-duration-fast) ease;
 }
@@ -468,7 +468,7 @@
   height: 30px;
   place-items: center;
   color: var(--yb-text-muted);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   transition: color var(--yb-duration-fast) ease, background var(--yb-duration-fast) ease,
     transform var(--yb-duration-fast) ease;
 }
@@ -496,19 +496,108 @@
 }
 
 
-/* [1717-1729] progress-track (generic, used by developer demo pages) */
-.progress-track {
+/* 统一进度条（shared/ui/ProgressBar.tsx）：--progress 变量控制宽度，
+ * 语义色变体对应正文生成的不同阶段，is-active 提供可选扫光动效 */
+.yb-progress-track {
+  position: relative;
+  display: block;
   height: 8px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.22);
-  border-radius: 999px;
+  background: rgba(33, 116, 253, 0.1);
+  border-radius: var(--yb-radius-pill);
 }
 
-.progress-track span {
+.yb-progress-track > span {
   display: block;
+  width: var(--progress, 0%);
   height: 100%;
-  background: linear-gradient(90deg, #ffffff, #c7d2fe);
+  background: linear-gradient(90deg, var(--yb-primary), var(--yb-violet));
   border-radius: inherit;
+  transition: width var(--yb-duration) ease;
+}
+
+.yb-progress-track.is-success {
+  background: rgba(28, 184, 116, 0.12);
+}
+
+.yb-progress-track.is-success > span {
+  background: linear-gradient(90deg, var(--yb-success), #58d68d);
+}
+
+.yb-progress-track.is-warning {
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.yb-progress-track.is-warning > span {
+  background: linear-gradient(90deg, var(--yb-warning), #f97316);
+}
+
+.yb-progress-track.is-sky {
+  background: rgba(14, 165, 233, 0.13);
+}
+
+.yb-progress-track.is-sky > span {
+  background: linear-gradient(90deg, #0ea5e9, #14b8a6);
+}
+
+.yb-progress-track.is-violet {
+  background: rgba(139, 92, 246, 0.12);
+}
+
+.yb-progress-track.is-violet > span {
+  background: linear-gradient(90deg, #8b5cf6, var(--yb-primary));
+}
+
+.yb-progress-track.is-active::after {
+  position: absolute;
+  inset: 0;
+  content: '';
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.42), transparent);
+  animation: yb-progress-sweep 1.35s linear infinite;
+}
+
+@keyframes yb-progress-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* 统一空态卡片（shared/ui/EmptyState.tsx）：虚线卡片 + 标题/说明 + 可选引导按钮 */
+.yb-empty-state {
+  display: grid;
+  grid-column: 1 / -1;
+  justify-items: center;
+  gap: 8px;
+  padding: 42px 24px;
+  color: var(--yb-text-soft);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px dashed rgba(94, 111, 143, 0.24);
+  border-radius: var(--yb-radius-xl);
+}
+
+.yb-empty-state strong {
+  color: var(--yb-text);
+  font-size: 16px;
+}
+
+/* 行内加载指示器（shared/ui/InlineSpinner.tsx），原属 Settings，被知识库等跨功能使用后上移到共享层 */
+.inline-spinner {
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgba(33, 116, 253, 0.22);
+  border-top-color: var(--yb-primary);
+  border-radius: var(--yb-radius-pill);
+  animation: yb-spin 780ms linear infinite;
+}
+
+@keyframes yb-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* [6358-6366] (rewritten) panel/empty-panel h3 (trimmed from stage-card/category-card dead code) */
@@ -547,7 +636,7 @@
   font-size: 13px;
   background: #172033;
   border: 1px solid rgba(33, 116, 253, 0.24);
-  border-radius: 10px;
+  border-radius: var(--yb-radius-md);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.22);
 }
 

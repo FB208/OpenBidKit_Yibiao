@@ -139,7 +139,7 @@
   color: #364153;
   background: #ffffff;
   border: 1px solid var(--yb-border-soft);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   box-shadow: 0 10px 24px rgba(33, 116, 253, 0.14), 0 0 0 4px rgba(248, 250, 253, 0.85);
   transition: box-shadow var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
@@ -152,7 +152,7 @@
 .collapse-button svg {
   width: 18px;
   height: 18px;
-  transition: transform 160ms ease;
+  transition: transform var(--yb-duration-fast) ease;
 }
 
 .rotate-180 {
@@ -183,7 +183,7 @@
 
 .sidebar-nav::-webkit-scrollbar-thumb {
   background: rgba(102, 112, 127, 0.28);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .sidebar-nav::-webkit-scrollbar-thumb:hover {
@@ -202,7 +202,7 @@
   text-align: left;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
   transition: background var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease,
     border-color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
@@ -248,7 +248,7 @@
   color: inherit;
   background: linear-gradient(150deg, rgba(33, 116, 253, 0.1), rgba(91, 84, 211, 0.07));
   border: 1px solid rgba(33, 116, 253, 0.1);
-  border-radius: 12px;
+  border-radius: var(--yb-radius-md);
   transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease;
 }
 
@@ -310,7 +310,7 @@
   color: #243047;
   background: rgba(255, 255, 255, 0.88);
   border: 1px solid rgba(228, 233, 240, 0.92);
-  border-radius: 18px;
+  border-radius: var(--yb-radius-lg);
   box-shadow: 0 16px 34px rgba(36, 48, 72, 0.08);
 }
 
@@ -318,7 +318,7 @@
   width: 10px;
   height: 10px;
   background: var(--yb-primary);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   box-shadow: 0 0 0 6px rgba(33, 116, 253, 0.12);
 }
 
@@ -327,12 +327,12 @@
 }
 
 .agent-runtime-status-bar.is-warning .agent-runtime-status-dot {
-  background: #f59e0b;
+  background: var(--yb-warning);
   box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.14);
 }
 
 .agent-runtime-status-bar.is-error .agent-runtime-status-dot {
-  background: #c83220;
+  background: var(--yb-danger);
   box-shadow: 0 0 0 6px rgba(200, 50, 32, 0.12);
 }
 
@@ -372,7 +372,7 @@
   font-style: normal;
   font-weight: 700;
   background: #f2f5f9;
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 @keyframes agent-runtime-pulse {

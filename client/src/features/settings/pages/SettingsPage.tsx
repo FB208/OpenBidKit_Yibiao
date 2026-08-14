@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { DetailHelpLink, FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useAutoAnswer, useToast } from '../../../shared/ui';
+import { AppSwitch, DetailHelpLink, FloatingToolbar, InlineSpinner, InputWithAction, OfflineLicenseActivationDialog, useAutoAnswer, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
@@ -1612,16 +1612,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <strong>GPU 硬件加速</strong>
                 <span>启用后界面可能更流畅；极少数电脑启用后会闪退，关闭后兼容性更好。修改后需重启生效。</span>
               </div>
-              <span className="yb-switch-control">
-                <input
-                  type="checkbox"
-                  checked={state.general.gpu_hardware_acceleration_enabled}
-                  onChange={(event) => updateGpuHardwareAcceleration(event.target.checked)}
-                />
-                <span className="yb-switch-track" aria-hidden="true">
-                  <span className="yb-switch-thumb" />
-                </span>
-              </span>
+              <AppSwitch checked={state.general.gpu_hardware_acceleration_enabled} onCheckedChange={(checked) => updateGpuHardwareAcceleration(checked)} />
             </label>
           </div>
 
@@ -1632,16 +1623,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <strong>开发者模式</strong>
                 <span>会打乱既有工作流，生成大量日志占用磁盘空间，<strong>非专业人士请勿开启</strong></span>
               </div>
-              <span className="yb-switch-control">
-                <input
-                  type="checkbox"
-                  checked={state.general.developer_mode}
-                  onChange={(event) => updateDeveloperMode(event.target.checked)}
-                />
-                <span className="yb-switch-track" aria-hidden="true">
-                  <span className="yb-switch-thumb" />
-                </span>
-              </span>
+              <AppSwitch checked={state.general.developer_mode} onCheckedChange={(checked) => updateDeveloperMode(checked)} />
             </label>
             {state.general.developer_mode && (
               <>
@@ -1650,32 +1632,14 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                     <strong>默认打开 Token 统计小窗</strong>
                     <span>开启后，应用下次启动时自动打开开发者 Token 统计悬浮窗</span>
                   </div>
-                  <span className="yb-switch-control">
-                    <input
-                      type="checkbox"
-                      checked={state.general.developer_token_stats_auto_open}
-                      onChange={(event) => updateDeveloperTokenStatsAutoOpen(event.target.checked)}
-                    />
-                    <span className="yb-switch-track" aria-hidden="true">
-                      <span className="yb-switch-thumb" />
-                    </span>
-                  </span>
+                  <AppSwitch checked={state.general.developer_token_stats_auto_open} onCheckedChange={(checked) => updateDeveloperTokenStatsAutoOpen(checked)} />
                 </label>
                 <label className="settings-row">
                   <div className="settings-row-copy">
                     <strong>默认打开 Pi Agent 执行监视器</strong>
                     <span>开启后，应用下次启动时自动打开 Pi Agent 执行监视器</span>
                   </div>
-                  <span className="yb-switch-control">
-                    <input
-                      type="checkbox"
-                      checked={state.general.developer_agent_monitor_auto_open}
-                      onChange={(event) => updateDeveloperAgentMonitorAutoOpen(event.target.checked)}
-                    />
-                    <span className="yb-switch-track" aria-hidden="true">
-                      <span className="yb-switch-thumb" />
-                    </span>
-                  </span>
+                  <AppSwitch checked={state.general.developer_agent_monitor_auto_open} onCheckedChange={(checked) => updateDeveloperAgentMonitorAutoOpen(checked)} />
                 </label>
                 <div className="settings-row">
                   <div className="settings-row-copy">
@@ -1793,11 +1757,11 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   onClick={fetchTextModels}
                   disabled={loadingModels === 'text'}
                 >
-                  {loadingModels === 'text' && <span className="inline-spinner" aria-hidden="true" />}
+                  {loadingModels === 'text' && <InlineSpinner />}
                   {loadingModels === 'text' ? '获取中' : '获取'}
                 </button>
                 <button type="button" className="inline-action" onClick={testTextConfig} disabled={testingTextModel}>
-                  {testingTextModel && <span className="inline-spinner" aria-hidden="true" />}
+                  {testingTextModel && <InlineSpinner />}
                   {testingTextModel ? '测试中' : '测试'}
                 </button>
               </div>
@@ -1834,7 +1798,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   onClick={fetchReasoningEfforts}
                   disabled={loadingReasoningEfforts}
                 >
-                  {loadingReasoningEfforts && <span className="inline-spinner" aria-hidden="true" />}
+                  {loadingReasoningEfforts && <InlineSpinner />}
                   {loadingReasoningEfforts ? '获取中' : '获取'}
                 </button>
               </div>
@@ -1859,7 +1823,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   onClick={fetchContextLength}
                   disabled={loadingContextLength}
                 >
-                  {loadingContextLength && <span className="inline-spinner" aria-hidden="true" />}
+                  {loadingContextLength && <InlineSpinner />}
                   {loadingContextLength ? '获取中' : '获取'}
                 </button>
               </div>
@@ -1884,17 +1848,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <span>默认关闭以兼容不支持温度参数的模型；开启后数值越低输出越稳定</span>
               </div>
               <div className={`settings-temperature-control ${state.textModel.temperature_enabled ? '' : 'is-disabled'}`}>
-                <span className="yb-switch-control">
-                  <input
-                    type="checkbox"
-                    aria-label="启用模型温度"
-                    checked={state.textModel.temperature_enabled}
-                    onChange={(event) => updateTextModelConfig({ temperature_enabled: event.target.checked })}
-                  />
-                  <span className="yb-switch-track" aria-hidden="true">
-                    <span className="yb-switch-thumb" />
-                  </span>
-                </span>
+                <AppSwitch aria-label="启用模型温度" checked={state.textModel.temperature_enabled} onCheckedChange={(checked) => updateTextModelConfig({ temperature_enabled: checked })} />
                 <input
                   className="settings-temperature-slider"
                   type="range"
@@ -2012,11 +1966,11 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   onClick={fetchImageModels}
                   disabled={loadingModels === 'image'}
                 >
-                  {loadingModels === 'image' && <span className="inline-spinner" aria-hidden="true" />}
+                  {loadingModels === 'image' && <InlineSpinner />}
                   {loadingModels === 'image' ? '获取中' : '获取'}
                 </button>
                 <button type="button" className="inline-action" onClick={testImageConfig} disabled={testingImageModel}>
-                  {testingImageModel && <span className="inline-spinner" aria-hidden="true" />}
+                  {testingImageModel && <InlineSpinner />}
                   {testingImageModel ? '测试中' : '测试'}
                 </button>
               </div>
@@ -2236,16 +2190,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <strong>自动采用推荐方案</strong>
                 <span>开启后，需要确认的弹窗会倒计时 8 秒；期间未修改选项或手动提交时，自动执行默认方案。</span>
               </div>
-              <span className="yb-switch-control">
-                <input
-                  type="checkbox"
-                  checked={agentAutoAnswerDraft}
-                  onChange={(event) => setAgentAutoAnswerDraft(event.target.checked)}
-                />
-                <span className="yb-switch-track" aria-hidden="true">
-                  <span className="yb-switch-thumb" />
-                </span>
-              </span>
+              <AppSwitch checked={agentAutoAnswerDraft} onCheckedChange={(checked) => setAgentAutoAnswerDraft(checked)} />
             </label>
           </div>
 
@@ -2256,16 +2201,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <strong>已有方案扩写-旧目录提取</strong>
                 <span>开启后，已有方案扩写会把原方案交给智能体完成旧目录提取和补漏；关闭后使用原有分段提取流程。</span>
               </div>
-              <span className="yb-switch-control">
-                <input
-                  type="checkbox"
-                  checked={state.agentModeScenarios.existing_plan_expansion_original_outline_extraction}
-                  onChange={(event) => updateAgentModeScenario('existing_plan_expansion_original_outline_extraction', event.target.checked)}
-                />
-                <span className="yb-switch-track" aria-hidden="true">
-                  <span className="yb-switch-thumb" />
-                </span>
-              </span>
+              <AppSwitch checked={state.agentModeScenarios.existing_plan_expansion_original_outline_extraction} onCheckedChange={(checked) => updateAgentModeScenario('existing_plan_expansion_original_outline_extraction', checked)} />
             </label>
           </div>
 
@@ -2285,7 +2221,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               </div>
               <div className="settings-action-cell">
                 <button type="button" className="inline-action" onClick={runAgentSelfCheck} disabled={agentSelfCheckStatus === 'checking'}>
-                  {agentSelfCheckStatus === 'checking' && <span className="inline-spinner" aria-hidden="true" />}
+                  {agentSelfCheckStatus === 'checking' && <InlineSpinner />}
                   {agentSelfCheckStatus === 'checking' ? '自检中' : '自检'}
                 </button>
               </div>
@@ -2301,7 +2237,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <div className="agent-self-check-result-actions">
                   <small>{agentSelfCheckResult.duration_ms ? `${Math.round(agentSelfCheckResult.duration_ms / 1000)} 秒` : agentSelfCheckResult.checked_at}</small>
                   <button type="button" className="inline-action" onClick={exportAgentSelfCheckReport} disabled={exportingAgentSelfCheckReport}>
-                    {exportingAgentSelfCheckReport && <span className="inline-spinner" aria-hidden="true" />}
+                    {exportingAgentSelfCheckReport && <InlineSpinner />}
                     {exportingAgentSelfCheckReport ? '导出中' : '导出报告'}
                   </button>
                 </div>

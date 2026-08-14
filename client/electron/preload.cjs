@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const bridge = {
   appName: '易标投标工具箱',
@@ -126,6 +126,8 @@ const bridge = {
   },
   file: {
     selectDuplicateCheckFiles: (options) => ipcRenderer.invoke('file:select-duplicate-check-files', options),
+    /** 把拖拽进来的 File 对象换成本地绝对路径，供各上传区拖拽导入使用 */
+    getPathForFile: (file) => webUtils.getPathForFile(file),
   },
   knowledgeBase: {
     list: () => ipcRenderer.invoke('knowledge-base:list'),
@@ -149,8 +151,9 @@ const bridge = {
   },
   technicalPlan: {
     loadState: () => ipcRenderer.invoke('technical-plan:load-state'),
-    importTenderDocument: () => ipcRenderer.invoke('technical-plan:import-tender-document'),
-    importOriginalPlanDocument: () => ipcRenderer.invoke('technical-plan:import-original-plan-document'),
+    importTenderDocument: (filePaths) => ipcRenderer.invoke('technical-plan:import-tender-document', filePaths),
+    removeTenderDocument: (sourceId) => ipcRenderer.invoke('technical-plan:remove-tender-document', sourceId),
+    importOriginalPlanDocument: (filePaths) => ipcRenderer.invoke('technical-plan:import-original-plan-document', filePaths),
     checkBidSections: () => ipcRenderer.invoke('technical-plan:check-bid-sections'),
     selectBidSection: (selectedSection) => ipcRenderer.invoke('technical-plan:select-bid-section', selectedSection),
     readTenderMarkdown: () => ipcRenderer.invoke('technical-plan:read-tender-markdown'),
@@ -177,7 +180,7 @@ const bridge = {
   },
   rejectionCheck: {
     loadState: () => ipcRenderer.invoke('rejection-check:load-state'),
-    importDocument: (role) => ipcRenderer.invoke('rejection-check:import-document', role),
+    importDocument: (role, filePaths) => ipcRenderer.invoke('rejection-check:import-document', role, filePaths),
     importTenderFromTechnicalPlan: () => ipcRenderer.invoke('rejection-check:import-tender-from-technical-plan'),
     removeDocument: (role, documentId) => ipcRenderer.invoke('rejection-check:remove-document', role, documentId),
     saveUiState: (payload) => ipcRenderer.invoke('rejection-check:save-ui-state', payload),

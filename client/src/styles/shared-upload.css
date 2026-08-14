@@ -1,0 +1,225 @@
+/* 共享上传面板（shared/ui/UploadBoard.tsx）：
+ * 技术方案 Step01、标书查重、废标项检查的上传区统一使用这套样式，
+ * 替代原先三套近同构的 technical-document-upload-* / duplicate-upload-* / rejection-upload-*。 */
+.upload-board {
+  display: grid;
+  gap: 14px;
+  padding: 20px 24px 22px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(228, 233, 240, 0.88);
+  border-radius: var(--yb-radius-xl);
+  box-shadow: var(--yb-shadow);
+}
+
+.upload-page-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+/* 页面级标题与 Step02–05 command-bar 的 24px 标题保持同级 */
+.upload-page-title h2 {
+  margin: 8px 0 0;
+  color: var(--yb-text);
+  font-size: 24px;
+  letter-spacing: -0.035em;
+}
+
+.upload-page-title p {
+  margin: 6px 0 0;
+  color: var(--yb-text-soft);
+}
+
+.upload-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.upload-row {
+  display: grid;
+  min-height: 86px;
+  grid-template-columns: 168px minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px 14px 22px;
+  background: linear-gradient(135deg, rgba(248, 250, 253, 0.86), rgba(255, 255, 255, 0.98));
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-xl);
+  transition: border-color var(--yb-duration-fast) ease, background var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease;
+}
+
+/* 拖拽文件悬停时的高亮态 */
+.upload-row.is-drag-over {
+  position: relative;
+  background: linear-gradient(135deg, rgba(33, 116, 253, 0.07), rgba(255, 255, 255, 0.98));
+  border-color: rgba(33, 116, 253, 0.45);
+  box-shadow: var(--yb-focus-ring);
+}
+
+/* 拖入时的“松开导入”提示徽标 */
+.upload-row.is-drag-over::after {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  content: '松开导入';
+  padding: 4px 12px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--yb-primary);
+  border-radius: var(--yb-radius-pill);
+  box-shadow: var(--yb-shadow-sm);
+  pointer-events: none;
+}
+
+.upload-label {
+  display: grid;
+  gap: 5px;
+}
+
+.upload-label span {
+  width: max-content;
+  padding: 4px 8px;
+  color: var(--yb-primary);
+  font-size: 12px;
+  font-weight: 800;
+  background: #eef4ff;
+  border-radius: var(--yb-radius-pill);
+}
+
+.upload-label strong {
+  color: var(--yb-text);
+  font-size: 19px;
+}
+
+.upload-label small {
+  color: var(--yb-text-soft);
+  font-size: 12px;
+}
+
+.upload-content {
+  min-width: 0;
+}
+
+.upload-file-list {
+  display: grid;
+  max-height: 172px;
+  gap: 10px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.upload-empty {
+  display: grid;
+  min-height: 58px;
+  align-content: center;
+  justify-items: start;
+  gap: 4px;
+  padding: 10px 14px;
+  background: linear-gradient(90deg, rgba(33, 116, 253, 0.055), rgba(33, 116, 253, 0.012));
+  border: 1px solid rgba(33, 116, 253, 0.13);
+  border-radius: var(--yb-radius-lg);
+}
+
+.upload-empty strong {
+  color: var(--yb-text);
+  font-size: 14px;
+}
+
+.upload-empty span {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+}
+
+/* 空态内的引导按钮，直达该行主操作 */
+.upload-empty .text-button {
+  padding: 0;
+  margin-top: 2px;
+  color: var(--yb-primary);
+  font-size: 13px;
+  font-weight: 700;
+  background: transparent;
+  border: 0;
+}
+
+.upload-empty .text-button:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.upload-empty .text-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.upload-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 104px;
+}
+
+.upload-actions .primary-action,
+.upload-actions .secondary-action {
+  min-width: 96px;
+  white-space: nowrap;
+}
+
+.upload-file-pill {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
+}
+
+.upload-file-icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  place-items: center;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 900;
+  background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
+  border-radius: var(--yb-radius-md);
+}
+
+.upload-file-info {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 4px;
+}
+
+.upload-file-info strong {
+  overflow: hidden;
+  color: var(--yb-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-file-info span {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+}
+
+.upload-file-pill button {
+  padding: 7px 10px;
+  color: var(--yb-danger);
+  font-weight: 700;
+  background: rgba(200, 50, 32, 0.08);
+  border: 0;
+  border-radius: var(--yb-radius-pill);
+  cursor: pointer;
+}
+
+.upload-file-pill button:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
