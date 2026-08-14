@@ -72,6 +72,12 @@ const taskFieldTypes = {
 };
 
 const taskTypeFields = Object.fromEntries(Object.entries(taskFieldTypes).map(([field, type]) => [type, field]));
+const originalPlanDownstreamTaskTypes = Object.freeze([
+  'outline-generation',
+  'outline-adjustment',
+  'global-facts-generation',
+  'content-generation',
+]);
 
 function appendImportFailureParts(messageParts, errors) {
   const failed = Array.isArray(errors)
@@ -1521,7 +1527,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
   function clearDownstreamFromOriginalPlan() {
     deleteOutlineAgentTask();
-    db.prepare("DELETE FROM technical_plan_tasks WHERE type IN ('outline-generation', 'global-facts-generation', 'content-generation')").run();
+    db.prepare(`DELETE FROM technical_plan_tasks WHERE type IN (${originalPlanDownstreamTaskTypes.map(() => '?').join(', ')})`).run(...originalPlanDownstreamTaskTypes);
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     db.prepare('DELETE FROM technical_plan_content_sections').run();
@@ -1555,7 +1561,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
   function clearWorkflowSpecificState(workflowKind) {
     deleteOutlineAgentTask();
-    db.prepare("DELETE FROM technical_plan_tasks WHERE type IN ('outline-generation', 'global-facts-generation', 'content-generation')").run();
+    db.prepare(`DELETE FROM technical_plan_tasks WHERE type IN (${originalPlanDownstreamTaskTypes.map(() => '?').join(', ')})`).run(...originalPlanDownstreamTaskTypes);
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
@@ -2450,4 +2456,5 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
 module.exports = {
   createTechnicalPlanStore,
+  originalPlanDownstreamTaskTypes,
 };
