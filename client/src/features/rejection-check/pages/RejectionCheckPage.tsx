@@ -655,6 +655,7 @@ function RejectionCheckPage() {
   const logicCheckRunning = logicCheckResult.status === 'running';
   const backgroundCheckRunning = checkTask?.status === 'running';
   const checkRunning = rejectionCheckRunning || typoCheckRunning || logicCheckRunning || backgroundCheckRunning;
+  const documentsLocked = busy !== null || extractionRunning || checkRunning;
   const customCheckItemsDirty = customCheckItemsDraft !== customCheckItems;
   const customCheckItemsDisabled = extractionRunning || checkRunning || customCheckItemsSaving;
   const hasStaleRejectionCheckResult = Boolean(
@@ -876,6 +877,9 @@ function RejectionCheckPage() {
 
   async function importParsedDocument(role: RejectionDocumentRole, filePaths?: string[]) {
     const documentLabel = documentLabels[role];
+    if (documentsLocked) {
+      return;
+    }
     try {
       const importer = window.yibiao?.rejectionCheck.importDocument;
       if (typeof importer !== 'function') {
@@ -911,6 +915,9 @@ function RejectionCheckPage() {
   }
 
   async function readTenderFromTechnicalPlan() {
+    if (documentsLocked) {
+      return;
+    }
     if (!window.yibiao?.rejectionCheck?.importTenderFromTechnicalPlan) {
       showToast('废标项检查缓存接口尚未加载，请重启应用后重试', 'error');
       return;
@@ -934,7 +941,7 @@ function RejectionCheckPage() {
   }
 
   function removeDocument(role: RejectionDocumentRole, documentId?: string) {
-    if (busy !== null) {
+    if (documentsLocked) {
       return;
     }
     setBusy('remove');
@@ -1728,7 +1735,7 @@ function RejectionCheckPage() {
           id: 'reset',
           label: '重置',
           variant: 'danger',
-          disabled: (!hasAnyWorkspaceData && step === 'documents') || busy !== null || extractionRunning || checkRunning,
+          disabled: (!hasAnyWorkspaceData && step === 'documents') || documentsLocked,
           tooltip: '清空当前废标项检查文件',
           onClick: resetWorkspace,
         },
@@ -1736,7 +1743,8 @@ function RejectionCheckPage() {
           id: 'home',
           label: '首页',
           variant: step === 'documents' ? 'primary' : 'secondary',
-          tooltip: '回到选择标书',
+          disabled: extractionRunning || checkRunning,
+          tooltip: extractionRunning || checkRunning ? '请等待当前解析或检查结束后再返回' : '回到选择标书',
           onClick: () => switchStep('documents'),
         },
       ],
@@ -1781,13 +1789,13 @@ function RejectionCheckPage() {
                 const paths = resolveDroppedFilePaths(files);
                 if (paths.length) void importParsedDocument('tender', paths);
               }}
-              dropDisabled={busy !== null}
+              dropDisabled={documentsLocked}
               actions={(
                 <>
-                  <button type="button" className="secondary-action" onClick={readTenderFromTechnicalPlan} disabled={busy !== null}>
+                  <button type="button" className="secondary-action" onClick={readTenderFromTechnicalPlan} disabled={documentsLocked}>
                     {busy === 'technical-plan' ? '读取中...' : '从技术方案读取'}
                   </button>
-                  <button type="button" className="primary-action" onClick={() => void importParsedDocument('tender')} disabled={busy !== null}>
+                  <button type="button" className="primary-action" onClick={() => void importParsedDocument('tender')} disabled={documentsLocked}>
                     {busy === 'tender-upload' ? '解析中...' : tenderDocuments.length ? '继续上传' : '上传'}
                   </button>
                 </>
@@ -1798,13 +1806,13 @@ function RejectionCheckPage() {
                   {tenderDocuments.map((document, index) => (
                     <div className="rejection-bid-file-entry" key={document.id}>
                       <span>{`招标文件${index + 1}`}</span>
-                      <DocumentFilePill document={document} onRemove={() => removeDocument('tender', document.id)} removeDisabled={busy !== null} />
+                      <DocumentFilePill document={document} onRemove={() => removeDocument('tender', document.id)} removeDisabled={documentsLocked} />
                     </div>
                   ))}
                 </div>
               ) : (
                 <UploadEmpty title="等待招标文件" hint="用于识别废标条款、响应格式和强制性要求。">
-                  <button type="button" className="text-button" onClick={() => void importParsedDocument('tender')} disabled={busy !== null}>选择招标文件</button>
+                  <button type="button" className="text-button" onClick={() => void importParsedDocument('tender')} disabled={documentsLocked}>选择招标文件</button>
                 </UploadEmpty>
               )}
             </UploadRow>
@@ -1817,9 +1825,9 @@ function RejectionCheckPage() {
                 const paths = resolveDroppedFilePaths(files);
                 if (paths.length) void importParsedDocument('bid', paths);
               }}
-              dropDisabled={busy !== null}
+              dropDisabled={documentsLocked}
               actions={(
-                <button type="button" className="primary-action" onClick={() => void importParsedDocument('bid')} disabled={busy !== null}>
+                <button type="button" className="primary-action" onClick={() => void importParsedDocument('bid')} disabled={documentsLocked}>
                   {busy === 'bid-upload' ? '解析中...' : bidDocuments.length ? '继续上传' : '上传'}
                 </button>
               )}
@@ -1829,13 +1837,13 @@ function RejectionCheckPage() {
                   {bidDocuments.map((document, index) => (
                     <div className="rejection-bid-file-entry" key={document.id}>
                       <span>{`投标文件${index + 1}`}</span>
-                      <DocumentFilePill document={document} onRemove={() => removeDocument('bid', document.id)} removeDisabled={busy !== null} />
+                      <DocumentFilePill document={document} onRemove={() => removeDocument('bid', document.id)} removeDisabled={documentsLocked} />
                     </div>
                   ))}
                 </div>
               ) : (
                 <UploadEmpty title="等待投标文件" hint="可一次选择多份，也可以后续继续追加上传。">
-                  <button type="button" className="text-button" onClick={() => void importParsedDocument('bid')} disabled={busy !== null}>选择投标文件</button>
+                  <button type="button" className="text-button" onClick={() => void importParsedDocument('bid')} disabled={documentsLocked}>选择投标文件</button>
                 </UploadEmpty>
               )}
             </UploadRow>

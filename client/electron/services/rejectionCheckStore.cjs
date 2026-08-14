@@ -865,7 +865,13 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
     return updateRejectionCheck(state || {});
   }
 
-  async function importDocument(role, filePaths) {
+  async function runBeforeCommit(beforeCommit) {
+    if (typeof beforeCommit === 'function') {
+      await beforeCommit();
+    }
+  }
+
+  async function importDocument(role, filePaths, options = {}) {
     if (!fileService?.importRejectionCheckDocument) {
       throw new Error('文件导入服务尚未初始化');
     }
@@ -910,6 +916,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
         });
         addedCount = addedDocuments.length;
         if (addedCount > 0) {
+          await runBeforeCommit(options.beforeCommit);
           await updateRejectionCheckWithAsyncFiles({
             tenderDocuments: [...existingDocuments, ...addedDocuments],
             activeDocumentTab: 'tender',
@@ -944,6 +951,9 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
         existingKeys.add(key);
         if (!firstAddedBidDocumentId) firstAddedBidDocumentId = prepared.values.document_id;
         sortOrder += 1;
+      }
+      if (preparedDocuments.length) {
+        await runBeforeCommit(options.beforeCommit);
       }
       await writePreparedDocuments(preparedDocuments);
       const transaction = db.transaction(() => {
@@ -980,7 +990,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
     return { success: true, message: messageParts.join('，') };
   }
 
-  async function importTenderFromTechnicalPlan() {
+  async function importTenderFromTechnicalPlan(options = {}) {
     if (!technicalPlanStore?.readTenderMarkdown || !technicalPlanStore?.loadTechnicalPlan) {
       throw new Error('技术方案缓存接口尚未初始化');
     }
@@ -1027,28 +1037,36 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
       importedAt: now(),
     };
     const tenderSignature = createDocumentSignature(mainDocument);
-    await runSerializedTenderRewrite(() => updateRejectionCheckWithAsyncFiles({
-      tenderDocument: mainDocument,
-      tenderDocuments: documentsToSave,
-      activeDocumentTab: 'tender',
-      ...(discardedBids ? {
-        invalidBidAndRejectionItems: {
-          status: 'success',
-          content: discardedBids,
-          source: 'technical-plan',
-          tenderSignature,
-          updatedAt: now(),
-        },
-      } : {}),
-    }));
+    await runSerializedTenderRewrite(async () => {
+      await runBeforeCommit(options.beforeCommit);
+      await updateRejectionCheckWithAsyncFiles({
+        tenderDocument: mainDocument,
+        tenderDocuments: documentsToSave,
+        activeDocumentTab: 'tender',
+        ...(discardedBids ? {
+          invalidBidAndRejectionItems: {
+            status: 'success',
+            content: discardedBids,
+            source: 'technical-plan',
+            tenderSignature,
+            updatedAt: now(),
+          },
+        } : {}),
+      });
+    });
     return { success: true, message: '已从技术方案读取招标文件' };
   }
 
-  async function removeDocument(role, documentId) {
+  async function removeDocument(role, documentId, options = {}) {
     const documentRole = normalizeDocumentRole(role);
     if (documentRole === 'tender' && documentId && String(documentId) !== tenderDocumentId) {
       await runSerializedTenderRewrite(async () => {
-        const remaining = loadTenderSourceDocuments().filter((document) => document.id !== String(documentId));
+        const existing = loadTenderSourceDocuments();
+        const remaining = existing.filter((document) => document.id !== String(documentId));
+        if (remaining.length === existing.length) {
+          return;
+        }
+        await runBeforeCommit(options.beforeCommit);
         await updateRejectionCheckWithAsyncFiles({
           tenderDocuments: remaining,
           activeDocumentTab: 'tender',
@@ -1056,6 +1074,7 @@ function createRejectionCheckStore({ app, db, fileService, technicalPlanStore, t
       });
       return;
     }
+    await runBeforeCommit(options.beforeCommit);
     let removedRows = [];
     const transaction = db.transaction(() => {
       removedRows = clearDocumentRows(role, documentId);
