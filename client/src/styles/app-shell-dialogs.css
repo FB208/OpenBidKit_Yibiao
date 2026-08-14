@@ -295,6 +295,63 @@
   transform: translate(-50%, -50%);
 }
 
+/* 软件启动广告弹窗 */
+.startup-advertisement-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(9, 14, 28, 0.62);
+  backdrop-filter: blur(6px);
+}
+
+.startup-advertisement-card {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 1201;
+  display: flex;
+  flex-direction: column;
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  gap: 14px;
+  padding: 14px;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid rgba(228, 233, 240, 0.9);
+  border-radius: 22px;
+  box-shadow: 0 32px 86px rgba(9, 14, 28, 0.34);
+  transform: translate(-50%, -50%);
+}
+
+.startup-advertisement-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-radius: 14px;
+}
+
+.startup-advertisement-link {
+  display: block;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.startup-advertisement-link img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.startup-advertisement-actions {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
 
 /* [4568-4657] document-parse-notice-modal/card/head/close/body/actions */
 .document-parse-notice-modal {
@@ -738,4 +795,3 @@
   border: 1px solid rgba(245, 158, 11, 0.32);
   border-radius: var(--yb-radius-md);
 }
-

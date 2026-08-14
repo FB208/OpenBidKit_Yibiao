@@ -14,7 +14,11 @@ declare global {
   }
 }
 
-function UpdateNotifier() {
+interface UpdateNotifierProps {
+  noticeEnabled: boolean;
+}
+
+function UpdateNotifier({ noticeEnabled }: UpdateNotifierProps) {
   const { showToast, dismissToast } = useToast();
   const updateCheckingRef = useRef(false);
   const pluginUpdateRunningRef = useRef(false);
@@ -180,16 +184,15 @@ function UpdateNotifier() {
 
   return (
     <Dialog.Root
-      open={Boolean(remoteNotice)}
-      onOpenChange={(open) => {
-        if (!open && remoteNotice) {
-          closeRemoteNotice();
-        }
-      }}
+      open={noticeEnabled && Boolean(remoteNotice)}
     >
       <Dialog.Portal>
         <Dialog.Overlay className="remote-notice-modal" />
-        <Dialog.Content className="remote-notice-card">
+        <Dialog.Content
+          className="remote-notice-card"
+          onEscapeKeyDown={(event) => event.preventDefault()}
+          onPointerDownOutside={(event) => event.preventDefault()}
+        >
           <Dialog.Title className="remote-notice-title">{remoteNotice?.title || '公告'}</Dialog.Title>
           <Dialog.Description className="sr-only">远程公告</Dialog.Description>
           {remoteNotice?.updatedAt ? <div className="remote-notice-time">公告时间：{remoteNotice.updatedAt}</div> : null}
