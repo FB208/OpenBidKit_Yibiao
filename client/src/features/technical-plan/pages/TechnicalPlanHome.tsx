@@ -101,8 +101,10 @@ const resetState = {
   bidSectionExtractionTask: undefined,
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
+  outlineAdjustmentTask: undefined,
   globalFactsMode: 'fabricate' as GlobalFactsMode,
   globalFactsTask: undefined,
+  globalFactsAdjustmentTask: undefined,
   globalFacts: [] as GlobalFactGroupState[],
   contentGenerationTask: undefined,
   contentGenerationOptions: undefined,
@@ -282,7 +284,7 @@ function workflowLabel(kind: TechnicalPlanWorkflowKind) {
 }
 
 function hasRunningTechnicalPlanTask(state: TechnicalPlanState) {
-  return [state.bidSectionExtractionTask, state.bidAnalysisTask, state.outlineGenerationTask, state.globalFactsTask, state.contentGenerationTask]
+  return [state.bidSectionExtractionTask, state.bidAnalysisTask, state.outlineGenerationTask, state.outlineAdjustmentTask, state.globalFactsTask, state.globalFactsAdjustmentTask, state.contentGenerationTask]
     .some((task) => task?.status === 'running' || task?.status === 'pausing');
 }
 
@@ -357,6 +359,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const bidAnalysisReady = requiredBidAnalysisReady && !isBidAnalysisTaskRunning && bidSectionReady;
   const globalFactsReady = state.globalFacts.length > 0 && state.globalFactsTask?.status === 'success';
   const globalFactsHasPlaceholder = state.globalFacts.some((group) => `${group.title || ''}${group.content || ''}`.includes('【待填写】'));
+  const isGlobalFactsAdjusting = state.globalFactsAdjustmentTask?.status === 'running' || state.globalFactsAdjustmentTask?.status === 'pausing';
   const contentTaskStatus = state.contentGenerationTask?.status;
   const isContentGenerating = contentTaskStatus === 'running' || contentTaskStatus === 'pausing';
   const isContentPaused = contentTaskStatus === 'paused';
@@ -373,7 +376,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     || (state.step === 'document-analysis' && (!state.tenderFile || (requiresOriginalPlan && !state.originalPlanFile)))
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
     || (state.step === 'outline-generation' && (!state.outlineData || !state.outlineWordControlSnapshot))
-    || (state.step === 'global-facts' && (!globalFactsReady || globalFactsHasPlaceholder));
+    || (state.step === 'global-facts' && (!globalFactsReady || globalFactsHasPlaceholder || isGlobalFactsAdjusting));
   const nextTooltip = state.step === 'document-analysis' && !state.tenderFile
       ? '上传完招标文件后才能进入下一步'
       : state.step === 'document-analysis' && requiresOriginalPlan && !state.originalPlanFile
@@ -392,6 +395,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
                     ? '目录生成完成后才能进入全局事实设定'
                     : state.step === 'outline-generation' && !state.outlineWordControlSnapshot
                       ? '当前目录缺少字数控制生效配置，请重新生成目录'
+                    : state.step === 'global-facts' && isGlobalFactsAdjusting
+                      ? '全局事实正在 AI 调整，请等待结束后再进入正文生成'
                     : state.step === 'global-facts' && !globalFactsReady
                       ? '全局事实设定完成后才能进入正文生成'
                       : state.step === 'global-facts' && globalFactsHasPlaceholder
@@ -694,6 +699,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             outlineGenerationTask: hasOwnField(technicalPlan, 'outlineGenerationTask') ? trimTaskLogs(technicalPlan.outlineGenerationTask) : prev.outlineGenerationTask,
             referenceKnowledgeDocumentIds: Array.isArray(technicalPlan.referenceKnowledgeDocumentIds) ? technicalPlan.referenceKnowledgeDocumentIds : prev.referenceKnowledgeDocumentIds,
             globalFactsTask: hasOwnField(technicalPlan, 'globalFactsTask') ? trimTaskLogs(technicalPlan.globalFactsTask) : prev.globalFactsTask,
+            globalFactsAdjustmentTask: hasOwnField(technicalPlan, 'globalFactsAdjustmentTask') ? trimTaskLogs(technicalPlan.globalFactsAdjustmentTask) : prev.globalFactsAdjustmentTask,
             globalFacts: hasOwnField(technicalPlan, 'globalFacts') ? (technicalPlan.globalFacts || []) : prev.globalFacts,
             contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : prev.contentGenerationTask,
             contentGenerationOptions: hasOwnField(technicalPlan, 'contentGenerationOptions') ? technicalPlan.contentGenerationOptions : prev.contentGenerationOptions,
@@ -723,6 +729,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             techRequirements: technicalPlan.techRequirements ?? prev.techRequirements,
             outlineGenerationTask: outlineDataReset ? undefined : prev.outlineGenerationTask,
             globalFactsTask: outlineDataReset ? undefined : prev.globalFactsTask,
+            globalFactsAdjustmentTask: outlineDataReset ? undefined : prev.globalFactsAdjustmentTask,
             globalFacts: outlineDataReset ? [] : prev.globalFacts,
             contentGenerationTask: outlineDataReset ? undefined : prev.contentGenerationTask,
             contentGenerationOptions: outlineDataReset ? undefined : prev.contentGenerationOptions,
@@ -752,6 +759,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
               : prev.referenceKnowledgeDocumentIds,
             outlineData: nextOutlineData,
             globalFactsTask: hasOwnField(technicalPlan, 'globalFactsTask') ? trimTaskLogs(technicalPlan.globalFactsTask) : prev.globalFactsTask,
+            globalFactsAdjustmentTask: hasOwnField(technicalPlan, 'globalFactsAdjustmentTask') ? trimTaskLogs(technicalPlan.globalFactsAdjustmentTask) : prev.globalFactsAdjustmentTask,
             globalFacts: hasOwnField(technicalPlan, 'globalFacts') ? (technicalPlan.globalFacts || []) : prev.globalFacts,
             contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : (outlineDataChanged ? undefined : prev.contentGenerationTask),
             contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : (outlineDataChanged ? {} : prev.contentGenerationSections),
@@ -780,6 +788,21 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           return {
             ...prev,
             globalFactsTask: trimTaskLogs(technicalPlan.globalFactsTask) || latestTask,
+            globalFactsAdjustmentTask: hasOwnField(technicalPlan, 'globalFactsAdjustmentTask') ? trimTaskLogs(technicalPlan.globalFactsAdjustmentTask) : prev.globalFactsAdjustmentTask,
+            globalFacts: hasGlobalFacts ? (technicalPlan.globalFacts || []) : prev.globalFacts,
+            contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : prev.contentGenerationTask,
+            contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : prev.contentGenerationSections,
+            contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
+            contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : prev.contentIllustrationPlan,
+            contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
+          };
+        }
+
+        if (taskType === 'global-facts-adjustment') {
+          const hasGlobalFacts = hasOwnField(technicalPlan, 'globalFacts');
+          return {
+            ...prev,
+            globalFactsAdjustmentTask: trimTaskLogs(technicalPlan.globalFactsAdjustmentTask) || latestTask,
             globalFacts: hasGlobalFacts ? (technicalPlan.globalFacts || []) : prev.globalFacts,
             contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : prev.contentGenerationTask,
             contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : prev.contentGenerationSections,
@@ -1112,14 +1135,25 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const isOutlineGenerating = outlineGenerationStatus === 'running' || outlineGenerationStatus === 'pausing';
   const outlineAdjustmentStatus = state.outlineAdjustmentTask?.status;
   const isOutlineAdjusting = outlineAdjustmentStatus === 'running' || outlineAdjustmentStatus === 'pausing';
-  const aiAdjustDisabled = !state.outlineData || !state.outlineWordControlSnapshot || isOutlineGenerating || isOutlineAdjusting;
-  const aiAdjustTooltip = isOutlineAdjusting
-    ? 'AI 正在按要求调整目录，请稍候'
-    : isOutlineGenerating || !state.outlineData
-      ? '目录生成结束后才能使用 AI 调整'
-      : !state.outlineWordControlSnapshot
-        ? '当前目录缺少字数控制生效配置，请重新生成目录'
-        : '通过桌宠 AI 对话调整当前目录';
+  const isGlobalFactsGenerating = state.globalFactsTask?.status === 'running' || state.globalFactsTask?.status === 'pausing';
+  const isFactsAiStep = state.step === 'global-facts';
+  const isAiAdjusting = isFactsAiStep ? isGlobalFactsAdjusting : isOutlineAdjusting;
+  const aiAdjustDisabled = isFactsAiStep
+    ? !state.globalFacts.length || isGlobalFactsGenerating || isGlobalFactsAdjusting
+    : !state.outlineData || !state.outlineWordControlSnapshot || isOutlineGenerating || isOutlineAdjusting;
+  const aiAdjustTooltip = isFactsAiStep
+    ? (isGlobalFactsAdjusting
+      ? 'AI 正在按要求调整全局事实，请稍候'
+      : isGlobalFactsGenerating || !state.globalFacts.length
+        ? '全局事实设定结束后才能使用 AI 调整'
+        : '通过桌宠 AI 对话调整当前全局事实')
+    : (isOutlineAdjusting
+      ? 'AI 正在按要求调整目录，请稍候'
+      : isOutlineGenerating || !state.outlineData
+        ? '目录生成结束后才能使用 AI 调整'
+        : !state.outlineWordControlSnapshot
+          ? '当前目录缺少字数控制生效配置，请重新生成目录'
+          : '通过桌宠 AI 对话调整当前目录');
 
   const openPetAiChat = useCallback(async () => {
     await window.yibiao!.plugins.notifyEvent(PET_PLUGIN_ID, 'open-ai-chat');
@@ -1229,12 +1263,12 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         },
       ],
     },
-    ...(state.step === 'outline-generation' ? [{
+    ...(state.step === 'outline-generation' || state.step === 'global-facts' ? [{
       id: 'technical-plan-ai',
       actions: [
         {
           id: 'ai-adjust',
-          label: isOutlineAdjusting ? 'AI调整中' : 'AI调整',
+          label: isAiAdjusting ? 'AI调整中' : 'AI调整',
           icon: <ToolbarSparkleIcon />,
           variant: 'ai' as const,
           disabled: aiAdjustDisabled,
@@ -1314,6 +1348,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           globalFacts={state.globalFacts}
           globalFactsMode={state.globalFactsMode || 'fabricate'}
           task={state.globalFactsTask}
+          aiAdjustmentRunning={isGlobalFactsAdjusting}
           onGlobalFactsSaved={saveGlobalFacts}
           onGlobalFactsConfigChange={saveGlobalFactsConfig}
         />

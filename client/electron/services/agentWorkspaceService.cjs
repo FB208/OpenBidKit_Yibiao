@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
+const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 
 function now() {
   return new Date().toISOString();
@@ -17,13 +18,23 @@ function countGeneratedLeaves(items) {
   ), 0);
 }
 
+const STEP_WORKSPACE_IDS = Object.freeze({
+  'outline-generation': OUTLINE_AGENT_TASK_KEY,
+  'global-facts': GLOBAL_FACTS_AGENT_TASK_KEY,
+});
+
+function getMappedWorkspaceId(step) {
+  return STEP_WORKSPACE_IDS[step] || null;
+}
+
 /**
  * 通用 Agent 工作空间服务：向插件暴露可对话的 Agent 工作空间。
- * 当前仅内置目录生成工作空间；后续其他持久 Agent 任务可按同样的
+ * 当前内置目录生成与全局事实设定工作空间；后续其他持久 Agent 任务可按同样的
  * provider 形态（descriptor + sendMessage）注册接入。
  */
 function createAgentWorkspaceService({ agentService, taskService, technicalPlanStore }) {
   const chatSubscribers = new Set();
+  const workspaceChangeSubscribers = new Set();
   // workspaceId -> { messages, pending, pending_task_id }
   const chatStates = new Map();
 
@@ -75,6 +86,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     'outline-generation': '目录生成',
     'outline-adjustment': '目录AI调整',
     'global-facts-generation': '全局事实设定',
+    'global-facts-adjustment': '全局事实AI调整',
     'content-generation': '正文生成',
   };
 
@@ -97,6 +109,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
             status: 'busy',
             busy_reason: '目录生成任务执行中，完成后即可发送调整要求',
             has_generated_content: false,
+            empty_hint: '向 Agent 描述你的目录调整要求，例如“把安全管理章节拆成两章”。',
           };
         }
         return null;
@@ -108,12 +121,17 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
         : contentPaused
           ? '正文生成已暂停，请先在主界面继续或重置正文任务'
           : '';
+      const hasGeneratedContent = countGeneratedLeaves(plan.outlineData.outline) > 0;
       return {
         id: this.id,
         title: '目录生成',
         status: busyReason ? 'busy' : 'ready',
         busy_reason: busyReason,
-        has_generated_content: countGeneratedLeaves(plan.outlineData.outline) > 0,
+        has_generated_content: hasGeneratedContent,
+        empty_hint: '向 Agent 描述你的目录调整要求，例如“把安全管理章节拆成两章”。',
+        ...(hasGeneratedContent
+          ? { send_warning: '调整目录将清空已生成的正文内容，是否继续？' }
+          : {}),
       };
     },
     sendMessage(message) {
@@ -121,14 +139,64 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     },
   };
 
-  const providers = [outlineWorkspaceProvider];
+  const globalFactsWorkspaceProvider = {
+    id: GLOBAL_FACTS_AGENT_TASK_KEY,
+    buildDescriptor() {
+      const plan = technicalPlanStore.loadTechnicalPlan() || {};
+      const activeTasks = taskService.getActiveTasks();
+      const busyTask = activeTasks.find((task) => task.group === 'technical-plan' && isActiveTaskStatus(task.status));
+      const hasFacts = Array.isArray(plan.globalFacts) && plan.globalFacts.length > 0;
+      const hasSession = agentService.hasPersistentTaskSession(GLOBAL_FACTS_AGENT_TASK_KEY);
+
+      if (!hasFacts || !hasSession) {
+        if (busyTask?.type === 'global-facts-generation') {
+          return {
+            id: this.id,
+            title: '全局事实设定',
+            status: 'busy',
+            busy_reason: '全局事实设定任务执行中，完成后即可发送调整要求',
+            has_generated_content: false,
+            empty_hint: '向 Agent 描述你的全局事实调整要求。',
+          };
+        }
+        return null;
+      }
+
+      const contentPaused = plan.contentGenerationTask?.status === 'paused';
+      const busyReason = busyTask
+        ? `${technicalPlanTaskLabels[busyTask.type] || busyTask.type}任务执行中，请等待完成`
+        : contentPaused
+          ? '正文生成已暂停，请先在主界面继续或重置正文任务'
+          : '';
+      const hasGeneratedContent = countGeneratedLeaves(plan.outlineData?.outline) > 0;
+      return {
+        id: this.id,
+        title: '全局事实设定',
+        status: busyReason ? 'busy' : 'ready',
+        busy_reason: busyReason,
+        has_generated_content: hasGeneratedContent,
+        empty_hint: '向 Agent 描述你的全局事实调整要求。',
+        ...(hasGeneratedContent
+          ? { send_warning: '调整全局事实将清空已生成的正文内容，是否继续？' }
+          : {}),
+      };
+    },
+    sendMessage(message) {
+      return taskService.startGlobalFactsAdjustment({ requirement: message });
+    },
+  };
+
+  const providers = [outlineWorkspaceProvider, globalFactsWorkspaceProvider];
 
   function buildWorkspaceEntry(provider) {
     const descriptor = provider.buildDescriptor();
     if (!descriptor) return null;
+    const plan = technicalPlanStore.loadTechnicalPlan() || {};
+    const mappedId = getMappedWorkspaceId(plan.step);
     const state = getChatState(provider.id);
     return {
       ...descriptor,
+      active: descriptor.id === mappedId,
       pending: state.pending,
       messages: state.messages.map((message) => ({ ...message })),
     };
@@ -140,6 +208,25 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
       .filter(Boolean);
   }
 
+  function getActiveWorkspaceId() {
+    return listAgentWorkspaces().find((item) => item.active)?.id || null;
+  }
+
+  function emitWorkspacesChanged() {
+    const workspaces = listAgentWorkspaces();
+    const event = {
+      active_workspace_id: workspaces.find((item) => item.active)?.id || null,
+      workspaces,
+    };
+    for (const callback of workspaceChangeSubscribers) {
+      try {
+        callback(event);
+      } catch (error) {
+        console.error('[agent-workspace] 工作空间变更回调失败:', error);
+      }
+    }
+  }
+
   function sendAgentWorkspaceMessage(payload = {}) {
     const workspaceId = String(payload.workspaceId || payload.workspace_id || '');
     const message = String(payload.message || '').trim();
@@ -149,6 +236,10 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     }
     if (!message) {
       throw new Error('请输入调整要求');
+    }
+    const activeWorkspaceId = getActiveWorkspaceId();
+    if (!activeWorkspaceId || workspaceId !== activeWorkspaceId) {
+      throw new Error('当前步骤没有可对话的工作空间');
     }
     const descriptor = provider.buildDescriptor();
     if (!descriptor) {
@@ -183,10 +274,15 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     return () => chatSubscribers.delete(callback);
   }
 
-  // 重新生成目录会重建 Agent 工作空间，聊天记录跟随工作空间同步重置。
-  let lastOutlineGenerationTaskId = null;
+  function onAgentWorkspacesChanged(callback) {
+    workspaceChangeSubscribers.add(callback);
+    return () => workspaceChangeSubscribers.delete(callback);
+  }
 
-  // 目录调整任务结束后把最终回复写回对话记录。
+  // 重新生成目录或全局事实会重建对应 Agent 工作空间，聊天记录跟随工作空间同步重置。
+  let lastOutlineGenerationTaskId = null;
+  let lastGlobalFactsGenerationTaskId = null;
+
   taskService.subscribeCallback((event) => {
     const task = event?.task;
     if (task?.type === 'outline-generation') {
@@ -196,19 +292,42 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
       }
       return;
     }
-    if (task?.type !== 'outline-adjustment') return;
-    const state = getChatState(OUTLINE_AGENT_TASK_KEY);
+    if (task?.type === 'global-facts-generation') {
+      if (task.task_id && task.task_id !== lastGlobalFactsGenerationTaskId) {
+        lastGlobalFactsGenerationTaskId = task.task_id;
+        resetChatState(GLOBAL_FACTS_AGENT_TASK_KEY);
+      }
+      return;
+    }
+    if (task?.type === 'outline-adjustment') {
+      const state = getChatState(OUTLINE_AGENT_TASK_KEY);
+      if (!state.pending || task.task_id !== state.pending_task_id) return;
+      if (task.status === 'success') {
+        state.pending = false;
+        state.pending_task_id = null;
+        appendMessage(OUTLINE_AGENT_TASK_KEY, 'agent', task.stats?.adjustment?.summary || '目录已按要求调整完成。');
+        emitChatEvent(OUTLINE_AGENT_TASK_KEY);
+      } else if (task.status === 'error') {
+        state.pending = false;
+        state.pending_task_id = null;
+        appendMessage(OUTLINE_AGENT_TASK_KEY, 'error', task.error || '目录 AI 调整失败');
+        emitChatEvent(OUTLINE_AGENT_TASK_KEY);
+      }
+      return;
+    }
+    if (task?.type !== 'global-facts-adjustment') return;
+    const state = getChatState(GLOBAL_FACTS_AGENT_TASK_KEY);
     if (!state.pending || task.task_id !== state.pending_task_id) return;
     if (task.status === 'success') {
       state.pending = false;
       state.pending_task_id = null;
-      appendMessage(OUTLINE_AGENT_TASK_KEY, 'agent', task.stats?.adjustment?.summary || '目录已按要求调整完成。');
-      emitChatEvent(OUTLINE_AGENT_TASK_KEY);
+      appendMessage(GLOBAL_FACTS_AGENT_TASK_KEY, 'agent', task.stats?.adjustment?.summary || '全局事实已按要求调整完成。');
+      emitChatEvent(GLOBAL_FACTS_AGENT_TASK_KEY);
     } else if (task.status === 'error') {
       state.pending = false;
       state.pending_task_id = null;
-      appendMessage(OUTLINE_AGENT_TASK_KEY, 'error', task.error || '目录 AI 调整失败');
-      emitChatEvent(OUTLINE_AGENT_TASK_KEY);
+      appendMessage(GLOBAL_FACTS_AGENT_TASK_KEY, 'error', task.error || '全局事实 AI 调整失败');
+      emitChatEvent(GLOBAL_FACTS_AGENT_TASK_KEY);
     }
   });
 
@@ -216,6 +335,8 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     listAgentWorkspaces,
     sendAgentWorkspaceMessage,
     onAgentWorkspaceChatEvent,
+    onAgentWorkspacesChanged,
+    emitWorkspacesChanged,
   };
 }
 

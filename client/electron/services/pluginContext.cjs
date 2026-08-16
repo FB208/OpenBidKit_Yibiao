@@ -161,6 +161,21 @@ function createPluginContext(app, pluginId, services) {
 
       return services.agentWorkspaceService.onAgentWorkspaceChatEvent(listener);
     },
+    onAgentWorkspacesChanged(callback) {
+      if (!services.agentWorkspaceService?.onAgentWorkspacesChanged) {
+        return () => {};
+      }
+
+      const listener = (event) => {
+        try {
+          callback(event);
+        } catch (error) {
+          logger.error('Agent workspaces changed callback error:', error);
+        }
+      };
+
+      return services.agentWorkspaceService.onAgentWorkspacesChanged(listener);
+    },
     confirmOutlineSelection(payload) {
       if (!services.taskService?.confirmOutlineSelection) {
         throw new Error('任务服务不可用');

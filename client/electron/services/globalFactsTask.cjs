@@ -1018,8 +1018,14 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
 }
 
 module.exports = {
+  formatBidAnalysisFactsForPrompt,
+  formatOutlineForPrompt,
+  loadKnowledgeItems,
   mergeGlobalFactPatches,
+  normalizeGlobalFactsMode,
   normalizeGlobalFactsPatchResponse,
   normalizeGlobalFactsResponse,
+  normalizeReferenceDocumentIds,
   runGlobalFactsTask,
+  validateGlobalFactsResponse,
 };

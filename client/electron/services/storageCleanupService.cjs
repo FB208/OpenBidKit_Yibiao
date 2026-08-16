@@ -6,8 +6,10 @@ const {
   getWorkspaceDir,
 } = require('../utils/paths.cjs');
 const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
+const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 
 const STORAGE_CLEANUP_VERSION = 1;
+const PERSISTENT_AGENT_TASK_KEYS = [OUTLINE_AGENT_TASK_KEY, GLOBAL_FACTS_AGENT_TASK_KEY];
 const LEGACY_WORKSPACE_FILES = [
   'technical_plan.json',
   'duplicate_check.json',
@@ -32,7 +34,7 @@ function clearStalePiTaskArchives(app) {
   try {
     clearDirectoryExcept(
       path.join(getAgentRuntimeDir(app), 'pi', 'tasks'),
-      [OUTLINE_AGENT_TASK_KEY],
+      PERSISTENT_AGENT_TASK_KEYS,
     );
   } catch (error) {
     console.warn('[storage-cleanup] 清理普通 Pi 任务归档失败', error?.message || String(error));
@@ -109,7 +111,7 @@ function runHistoricalStorageCleanup({ app, db, configStore, onStatus }) {
   run('清理旧 Agent 运行目录', () => clearDirectoryExcept(agentRuntimeDir, ['pi']));
   run('清理普通 Pi 任务归档', () => clearDirectoryExcept(
     path.join(agentRuntimeDir, 'pi', 'tasks'),
-    [OUTLINE_AGENT_TASK_KEY],
+    PERSISTENT_AGENT_TASK_KEYS,
   ));
   run('清理旧 Agent 缓存', () => removePath(path.join(userDataDir, 'agent-cache')));
   run('清理废弃工作区状态', () => {

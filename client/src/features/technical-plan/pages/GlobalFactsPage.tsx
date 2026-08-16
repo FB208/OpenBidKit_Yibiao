@@ -9,6 +9,7 @@ interface GlobalFactsPageProps {
   globalFacts: GlobalFactGroupState[];
   globalFactsMode: GlobalFactsMode;
   task?: BackgroundTaskState;
+  aiAdjustmentRunning?: boolean;
   onGlobalFactsSaved: (globalFacts: GlobalFactGroupState[]) => Promise<void> | void;
   onGlobalFactsConfigChange: (globalFactsMode: GlobalFactsMode) => Promise<void> | void;
 }
@@ -65,6 +66,7 @@ function GlobalFactsPage({
   globalFacts,
   globalFactsMode,
   task,
+  aiAdjustmentRunning = false,
   onGlobalFactsSaved,
   onGlobalFactsConfigChange,
 }: GlobalFactsPageProps) {
@@ -80,6 +82,7 @@ function GlobalFactsPage({
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const hasOutline = Boolean(outlineData?.outline?.length);
   const running = starting || task?.status === 'running';
+  const mutationLocked = running || aiAdjustmentRunning;
   const taskFailed = task?.status === 'error';
   const activeGroup = globalFacts.find((group) => group.id === selectedGroupId) || globalFacts[0] || null;
   const progress = getProgress(task, globalFacts.length > 0);
@@ -89,8 +92,10 @@ function GlobalFactsPage({
   const dirty = Boolean(activeGroup && (draftTitle !== activeGroup.title || draftContent !== activeGroup.content));
 
   const openSettingsDialog = () => {
-    if (running) {
-      showToast('全局事实设定任务正在运行，请等待任务结束后再调整配置', 'info');
+    if (mutationLocked) {
+      showToast(aiAdjustmentRunning
+        ? '全局事实正在 AI 调整，请等待结束后再调整配置'
+        : '全局事实设定任务正在运行，请等待任务结束后再调整配置', 'info');
       return;
     }
     setDraftGlobalFactsMode(normalizeGlobalFactsMode(globalFactsMode));
@@ -98,6 +103,12 @@ function GlobalFactsPage({
   };
 
   const saveConfig = async (closeDialog = true) => {
+    if (mutationLocked) {
+      showToast(aiAdjustmentRunning
+        ? '全局事实正在 AI 调整，请等待结束后再调整配置'
+        : '全局事实设定任务正在运行，请等待任务结束后再调整配置', 'info');
+      return globalFactsMode;
+    }
     const nextMode = normalizeGlobalFactsMode(draftGlobalFactsMode);
     setSavingConfig(true);
     try {
@@ -113,6 +124,12 @@ function GlobalFactsPage({
   };
 
   const startGeneration = async () => {
+    if (mutationLocked) {
+      showToast(aiAdjustmentRunning
+        ? '全局事实正在 AI 调整，请等待结束后再重新解析'
+        : '全局事实设定任务正在运行，请等待任务结束后再操作', 'info');
+      return;
+    }
     if (!hasOutline) {
       showToast('请先生成目录，再进行全局事实设定', 'info');
       return;
@@ -159,6 +176,12 @@ function GlobalFactsPage({
   }, [activeGroup?.id, activeGroup?.title, activeGroup?.content]);
 
   const saveFacts = async (nextFacts: GlobalFactGroupState[], message = '全局事实已保存') => {
+    if (mutationLocked) {
+      showToast(aiAdjustmentRunning
+        ? '全局事实正在 AI 调整，请等待结束后再修改'
+        : '全局事实设定任务正在运行，请等待任务结束后再修改', 'info');
+      return;
+    }
     try {
       setSaving(true);
       await onGlobalFactsSaved(nextFacts);
@@ -228,7 +251,7 @@ function GlobalFactsPage({
             type="button"
             className="outline-config-action"
             onClick={openSettingsDialog}
-            disabled={running}
+            disabled={mutationLocked}
             aria-label="打开全局事实设定配置"
             title="全局事实设定配置"
           >
@@ -237,7 +260,7 @@ function GlobalFactsPage({
               <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
             </svg>
           </button>
-          <button type="button" className="primary-action" onClick={openSettingsDialog} disabled={running || !hasOutline}>
+          <button type="button" className="primary-action" onClick={openSettingsDialog} disabled={mutationLocked || !hasOutline}>
             {running ? '生成中...' : globalFacts.length ? '重新解析' : '开始解析'}
           </button>
         </div>
@@ -282,7 +305,7 @@ function GlobalFactsPage({
             )}
           </div>
           <div className="global-facts-panel-actions">
-            <button type="button" className="secondary-action" onClick={addFactGroup} disabled={running || saving}>新增大项</button>
+            <button type="button" className="secondary-action" onClick={addFactGroup} disabled={mutationLocked || saving}>新增大项</button>
           </div>
         </aside>
 
@@ -295,8 +318,8 @@ function GlobalFactsPage({
             </div>
             <div className="global-facts-reader-actions">
               <button type="button" className="secondary-action" onClick={copyActiveGroup} disabled={!activeGroup || !draftContent}>复制</button>
-              <button type="button" className="danger-action" onClick={deleteActiveGroup} disabled={!activeGroup || running || saving}>删除</button>
-              <button type="button" className="primary-action" onClick={saveActiveGroup} disabled={!activeGroup || !dirty || running || saving}>保存</button>
+              <button type="button" className="danger-action" onClick={deleteActiveGroup} disabled={!activeGroup || mutationLocked || saving}>删除</button>
+              <button type="button" className="primary-action" onClick={saveActiveGroup} disabled={!activeGroup || !dirty || mutationLocked || saving}>保存</button>
             </div>
           </div>
 
@@ -305,12 +328,12 @@ function GlobalFactsPage({
               <div className="global-facts-edit-pane">
                 <label>
                   <span>大项标题</span>
-                  <input value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} disabled={running || saving} />
+                  <input value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} disabled={mutationLocked || saving} />
                 </label>
                 <MarkdownEditor
                   value={draftContent}
                   onChange={setDraftContent}
-                  disabled={running || saving}
+                  disabled={mutationLocked || saving}
                   placeholder="填写后续正文需要统一使用的事实变量，例如人员、时间、型号、服务承诺等..."
                 />
               </div>
@@ -355,7 +378,7 @@ function GlobalFactsPage({
                       className={`global-facts-mode-option${selected ? ' is-selected' : ''}`}
                       key={option.value}
                       onClick={() => setDraftGlobalFactsMode(option.value)}
-                      disabled={running || savingConfig}
+                      disabled={mutationLocked || savingConfig}
                       role="radio"
                       aria-checked={selected}
                     >
@@ -375,7 +398,7 @@ function GlobalFactsPage({
                 onClick={() => {
                   void saveConfig().catch((error) => showToast(error instanceof Error ? error.message : '保存全局事实配置失败', 'error'));
                 }}
-                disabled={running || savingConfig}
+                disabled={mutationLocked || savingConfig}
               >
                 {savingConfig ? '正在保存...' : '保存配置'}
               </button>
@@ -383,7 +406,7 @@ function GlobalFactsPage({
                 type="button"
                 className="primary-action"
                 onClick={() => { void startGeneration(); }}
-                disabled={running || savingConfig || !hasOutline}
+                disabled={mutationLocked || savingConfig || !hasOutline}
               >
                 {globalFacts.length ? '重新解析' : '开始解析'}
               </button>

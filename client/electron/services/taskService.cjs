@@ -2,10 +2,12 @@ const crypto = require('node:crypto');
 const { runBidSectionExtractionTask } = require('./bidSectionExtractionTask.cjs');
 const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
 const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
-const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
+const { runGlobalFactsTaskV2 } = require('./globalFactsTaskV2.cjs');
 const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
 const { runOutlineAdjustmentTask } = require('./outlineAdjustmentTask.cjs');
+const { runGlobalFactsAdjustmentTask } = require('./globalFactsAdjustmentTask.cjs');
 const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
+const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
 const { originalPlanDownstreamTaskTypes } = require('./technicalPlanStore.cjs');
 const { normalizeLogs } = require('./taskLogStore.cjs');
@@ -55,6 +57,15 @@ const taskDefinitions = {
     lockPolicy: 'group-exclusive',
     stateKey: 'technicalPlan',
     field: 'globalFactsTask',
+  },
+  'global-facts-adjustment': {
+    label: '全局事实AI调整',
+    group: 'technical-plan',
+    groupLabel: '技术方案',
+    step: 4,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'technicalPlan',
+    field: 'globalFactsAdjustmentTask',
   },
   'content-generation': {
     label: '正文生成',
@@ -269,6 +280,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
           'outlineWordControlSnapshot',
           'outlineGenerationTask',
           'globalFactsTask',
+          'globalFactsAdjustmentTask',
           'globalFacts',
           'contentGenerationTask',
           'contentGenerationOptions',
@@ -297,6 +309,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         'outlineGenerationTask',
         'referenceKnowledgeDocumentIds',
         'globalFactsTask',
+        'globalFactsAdjustmentTask',
         'globalFacts',
         'contentGenerationTask',
         'contentGenerationOptions',
@@ -315,12 +328,14 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         'outlineWordControlSnapshot',
         'referenceKnowledgeDocumentIds',
         'globalFactsTask',
+        'globalFactsAdjustmentTask',
         'globalFacts',
       ]);
       if (task.status === 'success' || state.outlineData === null || hasOwn(eventPatch, 'outlineData')) {
         copyPatchFields(patch, state, [
           'outlineData',
           'globalFactsTask',
+          'globalFactsAdjustmentTask',
           'globalFacts',
           'contentGenerationTask',
           'contentGenerationSections',
@@ -332,6 +347,17 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     }
 
     if (task.type === 'global-facts-generation') {
+      copyPatchFields(patch, state, ['globalFacts', 'globalFactsAdjustmentTask']);
+      copyPatchFields(patch, state, [
+        'contentGenerationTask',
+        'contentGenerationSections',
+        'contentGenerationPlans',
+        'contentIllustrationPlan',
+        'contentGenerationRuntime',
+      ]);
+    }
+
+    if (task.type === 'global-facts-adjustment') {
       copyPatchFields(patch, state, ['globalFacts']);
       copyPatchFields(patch, state, [
         'contentGenerationTask',
@@ -925,6 +951,31 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-adjustment'), partial, recoveredTask));
   }
 
+  function recoverInterruptedGlobalFactsAdjustmentTask(technicalPlan) {
+    if (activeTasks.has('global-facts-adjustment')) {
+      return;
+    }
+
+    const adjustmentTask = technicalPlan.globalFactsAdjustmentTask;
+    if (!isActiveTaskStatus(adjustmentTask?.status)) {
+      return;
+    }
+
+    const message = '上次全局事实 AI 调整未完成，请重新发送调整要求。';
+    const recoveredTask = {
+      ...adjustmentTask,
+      status: 'error',
+      progress: Math.max(0, Math.min(99, Number(adjustmentTask.progress || 0) || 0)),
+      pause_requested: false,
+      error: message,
+      logs: [...(Array.isArray(adjustmentTask.logs) ? adjustmentTask.logs : []), message],
+      updated_at: now(),
+    };
+    const partial = { globalFactsAdjustmentTask: recoveredTask };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('global-facts-adjustment'), partial, recoveredTask));
+  }
+
   function recoverInterruptedBidAnalysisTask(technicalPlan) {
     if (activeTasks.has('bid-analysis')) {
       return;
@@ -1097,6 +1148,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
   recoverInterruptedOutlineAdjustmentTask(technicalPlanRecoveryState);
   recoverInterruptedContentGenerationTask(technicalPlanRecoveryState);
   recoverInterruptedGlobalFactsTask(technicalPlanRecoveryState);
+  recoverInterruptedGlobalFactsAdjustmentTask(technicalPlanRecoveryState);
   recoverInterruptedRejectionCheckTasks(rejectionCheckRecoveryState);
   recoverInterruptedDuplicateCheckTask(duplicateCheckRecoveryState);
 
@@ -1120,6 +1172,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         outlineAdjustmentTask: undefined,
         referenceKnowledgeDocumentIds: [],
         globalFactsTask: undefined,
+        globalFactsAdjustmentTask: undefined,
         globalFacts: [],
         contentGenerationTask: undefined,
         contentGenerationOptions: undefined,
@@ -1144,6 +1197,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         outlineWordControlSnapshot: undefined,
         outlineAdjustmentTask: undefined,
         globalFactsTask: undefined,
+        globalFactsAdjustmentTask: undefined,
         globalFacts: [],
         contentGenerationTask: undefined,
         contentGenerationSections: {},
@@ -1158,15 +1212,21 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       return startManagedTask('outline-adjustment', payload, runOutlineAdjustmentTask);
     },
     startGlobalFactsGeneration(payload) {
-      return startManagedTask('global-facts-generation', payload, runGlobalFactsTask, {
+      return startManagedTask('global-facts-generation', payload, runGlobalFactsTaskV2, {
         invalidateContentGeneration: true,
         globalFacts: [],
+        globalFactsAdjustmentTask: undefined,
         contentGenerationTask: undefined,
         contentGenerationSections: {},
         contentGenerationPlans: {},
         contentIllustrationPlan: undefined,
         contentGenerationRuntime: undefined,
+      }, {
+        beforeStart: () => agentService.deletePersistentTask(GLOBAL_FACTS_AGENT_TASK_KEY),
       });
+    },
+    startGlobalFactsAdjustment(payload) {
+      return startManagedTask('global-facts-adjustment', payload, runGlobalFactsAdjustmentTask);
     },
     startContentGeneration(payload) {
       const technicalPlan = technicalPlanStore.loadTechnicalPlan();
