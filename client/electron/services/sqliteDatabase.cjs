@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 21;
+const schemaVersion = 22;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -41,6 +41,7 @@ function createInitialSchema(db) {
       bid_section_extraction_error TEXT,
       outline_mode TEXT NOT NULL DEFAULT 'aligned',
       outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
+      global_facts_mode TEXT NOT NULL DEFAULT 'fabricate',
       outline_word_control_options_json TEXT,
       outline_word_control_snapshot_json TEXT,
       outline_project_name TEXT,
@@ -224,6 +225,10 @@ function addTechnicalPlanBidAnalysisSelection(db) {
 
 function addTechnicalPlanOutlineExpansionMode(db) {
   addColumnIfMissing(db, 'technical_plan_meta', 'outline_expansion_mode', "TEXT NOT NULL DEFAULT 'ai-complement'");
+}
+
+function addTechnicalPlanGlobalFactsMode(db) {
+  addColumnIfMissing(db, 'technical_plan_meta', 'global_facts_mode', "TEXT NOT NULL DEFAULT 'fabricate'");
 }
 
 function addTechnicalPlanBidSectionOptimization(db) {
@@ -1177,6 +1182,13 @@ const schemaHealthColumnGroups = [
     },
   },
   {
+    version: 22,
+    table: 'technical_plan_meta',
+    columns: {
+      global_facts_mode: "TEXT NOT NULL DEFAULT 'fabricate'",
+    },
+  },
+  {
     version: 14,
     table: 'technical_plan_meta',
     columns: {
@@ -1380,6 +1392,11 @@ const migrations = [
     version: 21,
     description: '移除废弃的知识库旧数据迁移状态',
     up: removeKnowledgeMigrationMeta,
+  },
+  {
+    version: 22,
+    description: '技术方案新增全局事实补全模式',
+    up: addTechnicalPlanGlobalFactsMode,
   },
 ];
 

@@ -51,6 +51,7 @@ const initialState = {
   bidSectionExtractionTask: undefined,
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
+  globalFactsMode: 'fabricate',
   globalFactsTask: undefined,
   globalFacts: [],
   contentGenerationTask: undefined,
@@ -309,6 +310,14 @@ function isValidOutlineMode(value) {
 
 function isValidOutlineExpansionMode(value) {
   return value === 'original-only' || value === 'ai-complement';
+}
+
+function isValidGlobalFactsMode(value) {
+  return value === 'fabricate' || value === 'omit' || value === 'placeholder';
+}
+
+function normalizeGlobalFactsMode(value) {
+  return isValidGlobalFactsMode(value) ? value : 'fabricate';
 }
 
 function collectLeafItems(items) {
@@ -1478,6 +1487,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       outline_word_control_snapshot_json: null,
       outline_project_name: null,
       outline_project_overview: null,
+      global_facts_mode: 'fabricate',
       content_generation_options_json: null,
       content_generation_runtime_json: null,
       pending_tender_markdown_path: null,
@@ -1573,6 +1583,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       workflow_kind: normalizeWorkflowKind(workflowKind),
       step: 'document-analysis',
       outline_expansion_mode: 'ai-complement',
+      global_facts_mode: 'fabricate',
       original_plan_file_name: null,
       original_plan_markdown_path: null,
       original_plan_markdown_hash: null,
@@ -1748,6 +1759,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (hasOwn(partial, 'bidSectionExtractionError')) metaUpdates.bid_section_extraction_error = partial.bidSectionExtractionError ? String(partial.bidSectionExtractionError) : null;
     if (hasOwn(partial, 'outlineMode') && isValidOutlineMode(partial.outlineMode)) metaUpdates.outline_mode = partial.outlineMode;
     if (hasOwn(partial, 'outlineExpansionMode') && isValidOutlineExpansionMode(partial.outlineExpansionMode)) metaUpdates.outline_expansion_mode = partial.outlineExpansionMode;
+    if (hasOwn(partial, 'globalFactsMode')) metaUpdates.global_facts_mode = normalizeGlobalFactsMode(partial.globalFactsMode);
     if (hasOwn(partial, 'outlineWordControlOptions')) metaUpdates.outline_word_control_options_json = jsonOrNull(normalizeOutlineWordControlOptions(partial.outlineWordControlOptions));
     if (hasOwn(partial, 'outlineWordControlSnapshot')) {
       metaUpdates.outline_word_control_snapshot_json = partial.outlineWordControlSnapshot === undefined || partial.outlineWordControlSnapshot === null
@@ -1857,6 +1869,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       bidSectionExtractionError: bidSectionExtractionTask?.error || meta.bid_section_extraction_error || undefined,
       outlineMode: isValidOutlineMode(meta.outline_mode) ? meta.outline_mode : 'aligned',
       outlineExpansionMode: isValidOutlineExpansionMode(meta.outline_expansion_mode) ? meta.outline_expansion_mode : 'ai-complement',
+      globalFactsMode: normalizeGlobalFactsMode(meta.global_facts_mode),
       outlineWordControlOptions: normalizeOutlineWordControlOptions(safeJsonParse(meta.outline_word_control_options_json, defaultOutlineWordControlOptions)),
       outlineWordControlSnapshot: meta.outline_word_control_snapshot_json
         ? normalizeOutlineWordControlOptions(safeJsonParse(meta.outline_word_control_snapshot_json, defaultOutlineWordControlOptions))
@@ -2067,6 +2080,12 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         contentGenerationRuntime: undefined,
       } : {}),
     };
+  }
+
+  function saveGlobalFactsConfig({ globalFactsMode } = {}) {
+    const normalized = normalizeGlobalFactsMode(globalFactsMode);
+    updateTechnicalPlan({ globalFactsMode: normalized });
+    return { globalFactsMode: normalized };
   }
 
   function saveGlobalFacts(globalFacts) {
@@ -2446,6 +2465,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     saveOutlineConfig,
     saveOutlineSelection,
     saveOutline,
+    saveGlobalFactsConfig,
     saveGlobalFacts,
     saveIllustrationHtml,
     saveIllustrationPng,

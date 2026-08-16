@@ -74,6 +74,33 @@ function singleLine(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeGlobalFactsMode(value) {
+  return value === 'omit' || value === 'placeholder' ? value : 'fabricate';
+}
+
+function buildContentFactCompletenessInstruction(mode) {
+  if (mode === 'omit') {
+    return `事实补全规则（别招欠模式）：
+1. 严禁虚拟、杜撰任何未在本章节全局事实变量和参考材料中明确给出的具体信息。
+2. 全局事实变量中已经给出的笼统口径必须沿用，不得自行补成具体工艺、人名、日期、地点、业绩、证书、规格型号或实施细节。
+3. 如果有不确定的，尽量使用笼统的方式表达，不涉及不确定的时间、地点、人员、业绩、证书、规格型号等任何事实项内容。
+4. 不要为了写得具体而编造人名、日期、地点、业绩、证书编号、规格型号。`;
+  }
+  if (mode === 'placeholder') {
+    return `事实补全规则（放着我来模式）：
+1. 严禁虚拟、杜撰任何未在本章节全局事实变量和参考材料中明确给出的具体信息。
+2. 任何不确定项必须使用【待填写】作为占位符，不要改写成“待定”或其他说法。
+3. 如果全局事实变量中已有【待填写】，正文必须原样沿用，不得改成具体值。
+4. 不要杜撰不确定的时间、地点、人员、业绩、证书、规格型号等任何事实项内容。`;
+  }
+  return '';
+}
+
+function withFactCompletenessInstruction(text, mode) {
+  const extra = buildContentFactCompletenessInstruction(mode);
+  return extra ? `${text}\n\n${extra}` : text;
+}
+
 function formatGlobalFactsForPrompt(globalFacts) {
   const groups = (Array.isArray(globalFacts) ? globalFacts : [])
     .map((group, index) => {
@@ -858,7 +885,7 @@ function formatKnowledgeContentsForPrompt(contents) {
     .join('\n\n');
 }
 
-function buildChapterContentMessages({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, preSectionInstruction, wordControl, generationTarget = 0 }) {
+function buildChapterContentMessages({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, preSectionInstruction, wordControl, generationTarget = 0, globalFactsMode }) {
   const chapterId = chapter.id || 'unknown';
   const chapterTitle = chapter.title || '未命名章节';
   const chapterDescription = chapter.description || '';
@@ -884,7 +911,7 @@ function buildChapterContentMessages({ chapter, projectOverview, selectedFactsTe
 13. 只有步骤、流程、时间顺序、操作顺序等连续性非常强的内容，才可以使用有序列表；其他分段一律使用自然段、无编号列表或无编号加粗引导语，禁止使用任何形式的编号。
 14. 直接返回章节内容，不生成标题，不要任何额外说明。
 15. 如果本章节需要使用的全局事实变量中包含相关内容，必须优先使用变量值，不得前后矛盾。
-16. 仅使用本章节提供的全局事实变量；未提供时不要主动编造具体人员、周期、质保、品牌、型号等会影响全文一致性的承诺。`,
+16. 仅使用本章节提供的全局事实变量；未提供时不要主动编造具体人员、周期、质保、品牌、型号等会影响全文一致性的承诺。${buildContentFactCompletenessInstruction(globalFactsMode) ? `\n\n${buildContentFactCompletenessInstruction(globalFactsMode)}` : ''}`,
     },
   ];
 
@@ -939,7 +966,7 @@ function buildChapterContentMessages({ chapter, projectOverview, selectedFactsTe
   return messages;
 }
 
-function buildRestoredChapterContentMessages({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent, wordControl, generationTarget = 0 }) {
+function buildRestoredChapterContentMessages({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent, wordControl, generationTarget = 0, globalFactsMode }) {
   const messages = buildChapterContentMessages({
     chapter,
     projectOverview,
@@ -948,6 +975,7 @@ function buildRestoredChapterContentMessages({ chapter, projectOverview, selecte
     contentPlan,
     knowledgeContents,
     wordControl: { ...wordControl, minimumWords: 0, maximumWords: 0, sectionWords: 0, strictSectionWords: false },
+    globalFactsMode,
     preSectionInstruction: `当前章节已经从用户原方案中还原出正文底稿。该底稿是用户已经写好的真实技术方案内容，必须作为本章节的基础保留。
 
 处理要求：
@@ -1139,8 +1167,8 @@ ${formatOriginalSegmentsForPrompt(originalSegments)}`,
   ];
 }
 
-function buildAgentRestoredChapterContentPrompt() {
-  return `你是投标技术方案正文优化扩写 Agent。当前章节已经从用户原方案中还原出正文底稿，该底稿是用户已经写好的真实技术方案内容，必须作为本章节的基础保留。
+function buildAgentRestoredChapterContentPrompt(globalFactsMode) {
+  return withFactCompletenessInstruction(`你是投标技术方案正文优化扩写 Agent。当前章节已经从用户原方案中还原出正文底稿，该底稿是用户已经写好的真实技术方案内容，必须作为本章节的基础保留。
 
 workspace 文件：
 - chapter-context.md：当前章节信息、项目概述、本章节全局事实变量、用户额外要求和正文编排决策。
@@ -1160,7 +1188,7 @@ workspace 文件：
  10. chapter-context.md 如包含小节字数目标，应尽量遵守，但保留原方案实质内容的要求优先。
 11. 不要修改业务数据库，程序会读取你的输出文件后自行写回。
 
-最终请把当前小节完整正文写入 optimized-section.md。该文件只能包含正文内容，不要包含标题或说明。`;
+最终请把当前小节完整正文写入 optimized-section.md。该文件只能包含正文内容，不要包含标题或说明。`, globalFactsMode);
 }
 
 function buildAgentRestoredChapterContentFiles({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent, wordControl, generationTarget = 0 }) {
@@ -1627,7 +1655,7 @@ ${entry.content || ''}
 </section>`).join('\n\n');
 }
 
-function buildConsistencyAuditMessages({ group, globalFactsText, bidAnalysisFactsText }) {
+function buildConsistencyAuditMessages({ group, globalFactsText, bidAnalysisFactsText, globalFactsMode }) {
   const allowedIds = (group.items || []).map(({ item }) => item.id).filter(Boolean);
   return [
     {
@@ -1640,7 +1668,7 @@ function buildConsistencyAuditMessages({ group, globalFactsText, bidAnalysisFact
 3. 正文没有涉及某条事实时，不要报告缺失，不要建议补充。
 4. 不报告文风、质量、重复、篇幅、表达优化等问题。
 5. section_id 必须来自允许的目录编号清单，禁止编造编号。
-6. 只筛选冲突目录编号和冲突证据，不要重写正文。
+6. 只筛选冲突目录编号和冲突证据，不要重写正文。${buildContentFactCompletenessInstruction(globalFactsMode) ? `\n7. 全局事实中的【待填写】不是冲突，不要要求正文补成具体值，也不要把缺失项当成需要杜撰的内容。` : ''}
 
 返回格式：
 {
@@ -1728,7 +1756,7 @@ ${JSON.stringify(Array.from(allowedSectionIds || []), null, 2)}`,
   ];
 }
 
-function buildConsistencyRepairMessages({ context, conflicts, globalFactsText, bidAnalysisFactsText, currentContent, attempt, failures, tableRequirement }) {
+function buildConsistencyRepairMessages({ context, conflicts, globalFactsText, bidAnalysisFactsText, currentContent, attempt, failures, tableRequirement, globalFactsMode }) {
   const { item } = context;
   const tableAllowed = normalizeTableRequirement(tableRequirement) !== 'none';
   const failureBlock = (failures || []).length
@@ -1750,7 +1778,7 @@ function buildConsistencyRepairMessages({ context, conflicts, globalFactsText, b
 7. ${tableAllowed ? '如果修改表格，old_text 必须包含完整表格行或完整表格块，不要只返回单元格碎片。' : '本次配置为不要表格；如果冲突位于表格中，new_text 必须把相关内容改为普通文字或普通列表，不得继续返回 Markdown 表格或 HTML 表格。'}
 8. new_text 是替换后的正文块，不要包含章节标题，不要包含行号。
 9. ${tableAllowed ? '保留 Markdown 表格、列表、代码块、图片和 Mermaid 块结构。' : '保留普通列表、代码块、图片和 Mermaid 块结构；不得新增或保留 Markdown 表格、HTML 表格。'}
-10. start_line/end_line 使用下方带行号正文中的 1-based 行号；如果不确定也必须提供可唯一匹配的 old_text。
+10. start_line/end_line 使用下方带行号正文中的 1-based 行号；如果不确定也必须提供可唯一匹配的 old_text。${buildContentFactCompletenessInstruction(globalFactsMode) ? `\n\n${buildContentFactCompletenessInstruction(globalFactsMode)}\n不得把【待填写】改成具体值，也不得为缺失项杜撰事实。` : ''}
 
 返回格式：
 {
@@ -2371,7 +2399,7 @@ function buildWordAdjustmentRepairMessages({ invalidContent, issues }, expectedM
   ];
 }
 
-function buildWordAdjustmentMessages({ context, currentContent, currentWords, targetWords, mode, granularity, selectedFactsText, maximumChangeWords, totalRemainingWords, totalWords, minimumWords, maximumWords }) {
+function buildWordAdjustmentMessages({ context, currentContent, currentWords, targetWords, mode, granularity, selectedFactsText, maximumChangeWords, totalRemainingWords, totalWords, minimumWords, maximumWords, globalFactsMode }) {
   const { item, parentChapters, siblingChapters } = context;
   const chapterPath = [...(parentChapters || []), item].map((chapter) => `${chapter.id} ${chapter.title}`).join(' > ');
   const siblings = (siblingChapters || []).filter((chapter) => chapter.id !== item.id).map((chapter) => `${chapter.id} ${chapter.title}`).join('；') || '无';
@@ -2408,7 +2436,7 @@ ${operationRules}
 6. 不改变核心意思，不修改参数、数量、日期、周期和标准，不删除技术路线、职责、流程、风险措施、人员安排、验收要求、售后和服务承诺。
 7. 不新增未提供的品牌、型号、人员、承诺和服务期限。
 8. 不修改图片、Mermaid、代码块、表格结构、列表编号层级和资源路径，不生成 Markdown 标题或伪目录标题。
-9. 不把其他目录应承载的内容移动到当前小节。`,
+9. 不把其他目录应承载的内容移动到当前小节。${buildContentFactCompletenessInstruction(globalFactsMode) ? `\n\n${buildContentFactCompletenessInstruction(globalFactsMode)}` : ''}`,
     },
     { role: 'user', content: `当前章节路径：${chapterPath}\n章节描述：${item.description || ''}\n同级章节：${siblings}` },
     ...(String(selectedFactsText || '').trim() ? [{ role: 'user', content: `本章节全局事实变量：\n${selectedFactsText}` }] : []),
@@ -2896,6 +2924,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
   const globalFacts = Array.isArray(storedPlan.globalFacts) ? storedPlan.globalFacts : [];
   const globalFactsText = formatGlobalFactsForPrompt(globalFacts);
+  const globalFactsMode = normalizeGlobalFactsMode(storedPlan.globalFactsMode);
   if (!globalFactsText || storedPlan.globalFactsTask?.status !== 'success') {
     throw new Error('请先完成全局事实设定，再生成正文');
   }
@@ -4189,8 +4218,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       const selectedFactsText = resolveSelectedFactsText(contentPlan, globalFacts);
       const generationTarget = computeGenerationWordTarget(wordControl, leaves.length);
       const contentMessages = needsRestoredOptimization
-        ? buildRestoredChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent: previousContent, wordControl, generationTarget })
-        : buildChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, wordControl, generationTarget });
+        ? buildRestoredChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent: previousContent, wordControl, generationTarget, globalFactsMode })
+        : buildChapterContentMessages({ chapter: item, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, wordControl, generationTarget, globalFactsMode });
 
       let generatedContent;
       if (needsRestoredOptimization && shouldUseAgentForMessages(aiService, contentMessages)) {
@@ -4209,7 +4238,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
         const { agentResult, outputContent } = await runContentAgentTask({
           title: `已还原正文优化扩写 Agent-${item.id}`,
-          prompt: buildAgentRestoredChapterContentPrompt(),
+          prompt: buildAgentRestoredChapterContentPrompt(globalFactsMode),
           outputFile: 'optimized-section.md',
           files: buildAgentRestoredChapterContentFiles({
             chapter: item,
@@ -4391,6 +4420,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         totalWords: targetItemId ? undefined : countTotalContentWords(),
         minimumWords: targetItemId ? 0 : wordControl.minimumWords,
         maximumWords: targetItemId ? 0 : wordControl.maximumWords,
+        globalFactsMode,
       }),
       logTitle: `正文${options.mode === 'expand' ? '扩写' : '缩写'}-${item.id}-${item.title || '未命名章节'}`,
       progressLabel: '正文字数调整',
@@ -5439,7 +5469,7 @@ workspace 文件说明：
 - 保留原章节结构，不新增、删除或重排章节。
 - 正文修改范围限定在 yibiao-section-start 和 yibiao-section-end 标记之间。
 - 修复事实冲突、前后矛盾、同一信息多处表达不一致等问题。
-- 优先以 global-facts.md 中的事实变量和关键项目信息为准。`;
+- 优先以 global-facts.md 中的事实变量和关键项目信息为准。${buildContentFactCompletenessInstruction(globalFactsMode) ? `\n\n${buildContentFactCompletenessInstruction(globalFactsMode)}\n不得把【待填写】改成具体值，也不得为缺失项杜撰事实。` : ''}`;
   }
 
   function updateAgentConsistencyProgress(step, label, extra = {}) {
@@ -5706,6 +5736,7 @@ workspace 文件说明：
             attempt,
             failures,
             tableRequirement,
+            globalFactsMode,
           }),
           logTitle: `一致性修复-${item.id}-${item.title || '未命名章节'}`,
           progressLabel: '正文一致性修复',
@@ -5862,7 +5893,7 @@ workspace 文件说明：
           allowed_ids: [...allowedIds],
         });
         const response = await aiService.collectJsonResponse({
-          messages: buildConsistencyAuditMessages({ group, globalFactsText, bidAnalysisFactsText }),
+          messages: buildConsistencyAuditMessages({ group, globalFactsText, bidAnalysisFactsText, globalFactsMode }),
           logTitle: `一致性审计-${group.index}-${group.total}`,
           progressLabel: '全文一致性审计',
           failureMessage: '模型返回的一致性审计结果格式无效',

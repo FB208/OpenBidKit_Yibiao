@@ -824,6 +824,12 @@
   color: var(--yb-text-soft);
 }
 
+.global-facts-command-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .global-facts-stats {
   display: flex;
   flex-wrap: wrap;
@@ -1043,6 +1049,79 @@
 .global-facts-empty {
   min-height: 0;
   overflow: auto;
+}
+
+.global-facts-config-card {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 101;
+  display: grid;
+  width: min(760px, calc(100vw - 40px));
+  max-height: min(720px, calc(100vh - 40px));
+  transform: translate(-50%, -50%);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  padding: 22px;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid rgba(228, 233, 240, 0.9);
+  border-radius: var(--yb-radius-xl);
+  box-shadow: var(--yb-shadow-modal);
+}
+
+.global-facts-config-head strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--yb-text);
+  font-size: 20px;
+}
+
+.global-facts-config-body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.global-facts-mode-list {
+  display: grid;
+  gap: 10px;
+}
+
+.global-facts-mode-option {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  color: var(--yb-text-soft);
+  text-align: left;
+  background: rgba(248, 250, 253, 0.82);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease;
+}
+
+.global-facts-mode-option strong {
+  color: var(--yb-text);
+  font-size: 14px;
+}
+
+.global-facts-mode-option span {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.global-facts-mode-option:hover:not(:disabled),
+.global-facts-mode-option.is-selected {
+  background: rgba(33, 116, 253, 0.08);
+  border-color: rgba(33, 116, 253, 0.34);
+}
+
+.global-facts-mode-option.is-selected strong {
+  color: var(--yb-primary);
+}
+
+.global-facts-mode-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 /* [3404-3927] content-generation-*-/content-outline-*-/content-reader-*-/content-status-badge/content-regenerate-popover (ContentEditPage.tsx) */

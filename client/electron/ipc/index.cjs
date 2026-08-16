@@ -80,6 +80,7 @@ const workspaceDatabaseChannels = [
   'technical-plan:set-workflow-kind',
   'technical-plan:save-outline-config',
   'technical-plan:save-outline',
+  'technical-plan:save-global-facts-config',
   'technical-plan:save-global-facts',
   'technical-plan:save-content-generation-options',
   'technical-plan:save-chapter-content',
