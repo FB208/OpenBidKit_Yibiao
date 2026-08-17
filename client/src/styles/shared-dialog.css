@@ -1,4 +1,42 @@
-/* [4003-4009] content-regenerate-modal (global dialog overlay, reused by 13+ features) */
+/* 弹窗统一进场动画：遮罩淡入、卡片淡入 + 轻微放大。
+   所有弹窗类名约定以 -modal/-overlay（遮罩）或 -card/-dialog（卡片）结尾，
+   Radix 会在打开时设置 data-state='open'，因此用属性选择器统一覆盖。
+   缩放使用独立的 scale 属性，不覆盖居中卡片的 transform: translate(-50%, -50%)。 */
+@keyframes yb-dialog-overlay-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes yb-dialog-card-in {
+  from {
+    opacity: 0;
+    scale: 0.97;
+  }
+
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+[class*='-modal'][data-state='open'],
+[class*='-overlay'][data-state='open'] {
+  animation: yb-dialog-overlay-in var(--yb-duration-fast) var(--yb-ease);
+}
+
+[class*='-card'][data-state='open'],
+[class*='-dialog'][data-state='open'] {
+  animation: yb-dialog-card-in var(--yb-duration) var(--yb-ease);
+}
+
+/* [4003-4009] content-regenerate-modal (global dialog overlay, reused by 13+ features)
+   .app-dialog-* 是 AppDialog 组件使用的中性别名，与 content-regenerate-* 视觉完全一致 */
+.app-dialog-modal,
 .content-regenerate-modal {
   position: fixed;
   inset: 0;
@@ -48,8 +86,8 @@
   overflow: hidden;
   background: #ffffff;
   border: 1px solid rgba(228, 233, 240, 0.9);
-  border-radius: 22px;
-  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.16);
+  border-radius: var(--yb-radius-xl);
+  box-shadow: var(--yb-shadow-modal);
   transform: translate(-50%, -50%);
 }
 
@@ -75,7 +113,7 @@
   line-height: 1;
   background: rgba(248, 250, 253, 0.92);
   border: 1px solid var(--yb-border-soft);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   cursor: pointer;
 }
 
@@ -109,6 +147,7 @@
   overflow: auto;
 }
 
+.app-dialog-card,
 .content-regenerate-card {
   position: fixed;
   top: 50%;
@@ -123,18 +162,20 @@
   overflow: hidden;
   background: #ffffff;
   border: 1px solid rgba(228, 233, 240, 0.9);
-  border-radius: 24px;
-  box-shadow: 0 28px 72px rgba(23, 32, 51, 0.16);
+  border-radius: var(--yb-radius-xl);
+  box-shadow: var(--yb-shadow-modal);
   transform: translate(-50%, -50%);
 }
 
 /* [5146-5190] content-regenerate-card-head + textarea + actions (shared dialog inner parts) */
+.app-dialog-card-head,
 .content-regenerate-card-head {
   display: grid;
   flex: 0 0 auto;
   gap: 8px;
 }
 
+.app-dialog-card-head h2,
 .content-regenerate-card-head h2 {
   margin: 0;
   color: var(--yb-text);
@@ -142,6 +183,7 @@
   letter-spacing: -0.02em;
 }
 
+.app-dialog-card-head p,
 .content-regenerate-card-head p {
   margin: 0;
   color: var(--yb-text-soft);
@@ -156,17 +198,18 @@
   line-height: 1.7;
   background: #fbfcff;
   border: 1px solid var(--yb-border-soft);
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
   outline: none;
   resize: vertical;
 }
 
 .content-regenerate-card textarea:focus {
   background: #ffffff;
-  border-color: rgba(33, 116, 253, 0.38);
-  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.08);
+  border-color: rgba(33, 116, 253, 0.5);
+  box-shadow: var(--yb-focus-ring);
 }
 
+.app-dialog-actions,
 .content-regenerate-actions {
   display: flex;
   flex: 0 0 auto;
@@ -175,59 +218,301 @@
   gap: 10px;
 }
 
-/* [8731-8785] (rewritten) yb-switch-control (renamed from settings-switch-control, shared by settings/export-format/outline-edit; values unchanged) */
-.yb-switch-control {
+/* 统一开关（shared/ui/AppSwitch.tsx，基于 Radix Switch）：
+ * 替代原生 checkbox 拼装的 yb-switch-control 和技术方案自建的 content-generation-switch */
+.yb-switch {
   position: relative;
-  display: inline-flex;
   width: 46px;
   height: 26px;
   justify-self: end;
-  align-items: center;
-}
-
-.yb-switch-control input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  cursor: pointer;
-  opacity: 0;
-}
-
-.yb-switch-track {
-  display: block;
-  width: 46px;
-  height: 26px;
-  padding: 3px;
+  flex: 0 0 auto;
+  padding: 0;
   background: #dfe7f3;
   border: 1px solid rgba(180, 194, 214, 0.9);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   box-shadow: inset 0 1px 2px rgba(23, 32, 51, 0.05);
-  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, opacity var(--yb-duration-fast) ease;
+}
+
+.yb-switch[data-state='checked'] {
+  background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
+  border-color: rgba(33, 116, 253, 0.35);
+  box-shadow: 0 6px 16px rgba(33, 116, 253, 0.18);
+}
+
+.yb-switch[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .yb-switch-thumb {
   display: block;
   width: 18px;
   height: 18px;
+  transform: translateX(3px);
   background: #ffffff;
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   box-shadow: 0 2px 8px rgba(23, 32, 51, 0.12);
-  transition: transform 180ms ease;
+  transition: transform var(--yb-duration) ease;
 }
 
-.yb-switch-control input:checked + .yb-switch-track {
-  background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
-  border-color: rgba(33, 116, 253, 0.35);
-  box-shadow: 0 6px 16px rgba(33, 116, 253, 0.18);
+.yb-switch-thumb[data-state='checked'] {
+  transform: translateX(23px);
 }
 
-.yb-switch-control input:checked + .yb-switch-track .yb-switch-thumb {
-  transform: translateX(20px);
+/* Agent 提问始终覆盖业务弹窗，但保留 Toast 的最高提示层级。 */
+.agent-question-modal {
+  position: fixed;
+  inset: 0;
+  z-index: var(--yb-z-agent-question);
+  background: rgba(12, 20, 36, 0.52);
+  backdrop-filter: blur(7px);
 }
 
-.yb-switch-control input:focus-visible + .yb-switch-track {
-  outline: 3px solid rgba(33, 116, 253, 0.18);
-  outline-offset: 3px;
+.agent-question-card {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: calc(var(--yb-z-agent-question) + 1);
+  display: flex;
+  flex-direction: column;
+  width: min(620px, calc(100vw - 40px));
+  max-height: min(720px, calc(100vh - 40px));
+  gap: 14px;
+  padding: 22px;
+  overflow: hidden;
+  background: var(--yb-surface);
+  border: 1px solid rgba(228, 233, 240, 0.94);
+  border-radius: var(--yb-radius-xl);
+  box-shadow: 0 36px 96px rgba(12, 20, 36, 0.25);
+  transform: translate(-50%, -50%);
+}
+
+.agent-question-head {
+  flex: 0 0 auto;
+}
+
+.agent-question-head h2 {
+  margin: 0;
+  color: var(--yb-text);
+  font-size: 19px;
+  line-height: 1.4;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.agent-question-body {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.agent-question-copy {
+  padding: 13px 15px;
+  color: var(--yb-text);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.65;
+  background: rgba(33, 116, 253, 0.055);
+  border-left: 3px solid rgba(33, 116, 253, 0.62);
+  border-radius: 0 12px 12px 0;
+  text-wrap: pretty;
+}
+
+.agent-question-copy p,
+.agent-question-copy ul,
+.agent-question-copy ol {
+  margin: 0;
+}
+
+.agent-question-copy p + p,
+.agent-question-copy p + ul,
+.agent-question-copy p + ol,
+.agent-question-copy ul + p,
+.agent-question-copy ol + p {
+  margin-top: 9px;
+}
+
+.agent-question-copy ul,
+.agent-question-copy ol {
+  display: grid;
+  gap: 4px;
+  padding-left: 22px;
+}
+
+.agent-question-copy strong {
+  font-weight: 700;
+}
+
+.agent-question-options {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-question-option {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 11px 13px;
+  background: #fbfcff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-md);
+  cursor: pointer;
+  transition: border-color var(--yb-duration-fast) var(--yb-ease), background var(--yb-duration-fast) var(--yb-ease), box-shadow var(--yb-duration-fast) var(--yb-ease);
+}
+
+.agent-question-option:hover {
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.24);
+}
+
+.agent-question-option.is-selected {
+  background: rgba(33, 116, 253, 0.055);
+  border-color: rgba(33, 116, 253, 0.38);
+  box-shadow: 0 8px 22px rgba(33, 116, 253, 0.08);
+}
+
+.agent-question-option > input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.agent-question-radio {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  place-items: center;
+  background: #ffffff;
+  border: 1.5px solid #c8d2e1;
+  border-radius: var(--yb-radius-pill);
+}
+
+.agent-question-option.is-selected .agent-question-radio {
+  border: 5px solid var(--yb-primary);
+}
+
+.agent-question-option:has(input:focus-visible) {
+  outline: 3px solid rgba(33, 116, 253, 0.16);
+  outline-offset: 2px;
+}
+
+.agent-question-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.agent-question-option-copy strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--yb-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.agent-question-option-copy strong em {
+  padding: 2px 7px;
+  color: var(--yb-primary-deep);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  background: rgba(33, 116, 253, 0.1);
+  border-radius: var(--yb-radius-pill);
+}
+
+.agent-question-option-copy small {
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agent-question-custom-answer {
+  width: 100%;
+  min-height: 82px;
+  max-height: 200px;
+  padding: 13px 15px;
+  color: var(--yb-text);
+  font: inherit;
+  line-height: 1.6;
+  overflow-y: auto;
+  resize: vertical;
+  background: #fbfcff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-md);
+  outline: none;
+}
+
+.agent-question-custom-answer:focus {
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.38);
+  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.08);
+}
+
+.agent-question-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+}
+
+.agent-question-auto-answer {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-question-auto-answer label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  color: var(--yb-text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.agent-question-auto-answer .yb-switch {
+  justify-self: auto;
+}
+
+.agent-question-auto-answer small {
+  color: var(--yb-primary-deep);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 640px) {
+  .agent-question-card {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    gap: 12px;
+    padding: 18px;
+    border-radius: var(--yb-radius-xl);
+  }
+
+  .agent-question-body {
+    gap: 10px;
+  }
+
+  .agent-question-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .agent-question-auto-answer {
+    width: 100%;
+  }
+
 }

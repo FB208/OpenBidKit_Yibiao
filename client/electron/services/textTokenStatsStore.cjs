@@ -32,21 +32,28 @@ function normalizeCachedTokenNumber(source) {
 
 function normalizeTokenUsage(usage) {
   const source = usage || {};
-  const promptTokens = normalizeTokenNumber(source.prompt_tokens ?? source.promptTokens ?? source.promptTokenCount);
-  const completionTokens = normalizeTokenNumber(
-    source.completion_tokens
-    ?? source.completionTokens
-    ?? source.completionTokenCount
-    ?? source.candidatesTokenCount,
-  );
+  const standardPromptTokens = source.prompt_tokens ?? source.promptTokens;
+  const standardCompletionTokens = source.completion_tokens ?? source.completionTokens ?? source.completionTokenCount;
+  const promptTokens = standardPromptTokens !== undefined && standardPromptTokens !== null
+    ? normalizeTokenNumber(standardPromptTokens)
+    : normalizeTokenNumber(source.promptTokenCount) + normalizeTokenNumber(source.toolUsePromptTokenCount);
+  const completionTokens = standardCompletionTokens !== undefined && standardCompletionTokens !== null
+    ? normalizeTokenNumber(standardCompletionTokens)
+    : normalizeTokenNumber(source.candidatesTokenCount) + normalizeTokenNumber(source.thoughtsTokenCount);
   const totalTokens = normalizeTokenNumber(source.total_tokens ?? source.totalTokens ?? source.totalTokenCount)
     || promptTokens + completionTokens;
+  const completionDetails = source.completion_tokens_details || source.completionTokensDetails || {};
 
   return {
     prompt_tokens: promptTokens,
     completion_tokens: completionTokens,
     total_tokens: totalTokens,
     cached_tokens: normalizeCachedTokenNumber(source),
+    reasoning_tokens: normalizeTokenNumber(
+      completionDetails.reasoning_tokens
+      ?? completionDetails.reasoningTokens
+      ?? source.thoughtsTokenCount,
+    ),
   };
 }
 

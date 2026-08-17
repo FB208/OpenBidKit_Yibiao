@@ -1,0 +1,2 @@
+[permissions]
+allow = ["Bash=cd /d/CodeSpace/SelfSpace/yibiao-simple && sed -n '1105,1140p' client/electron/services/knowledgeBaseService.cjs", "Bash=cd /d/CodeSpace/SelfSpace/yibiao-simple && sed -n '1,60p' client/electron/services/templateStore.cjs && echo \"=====TEMPLATE_FROM_ROW=====\" && grep -n \"templateFromRow\\|getTemplate\\b\" client/electron/services/templateStore.cjs", "Bash=cd /d/CodeSpace/SelfSpace/yibiao-simple && sed -n '440,520p' client/src/features/export-format/pages/ExportFormatPage.tsx"]

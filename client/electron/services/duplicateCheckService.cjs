@@ -2216,12 +2216,6 @@ function loadDeveloperConfig(configStore) {
 }
 
 function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) {
-  function emit(target, state) {
-    if (typeof target === 'function') {
-      target(state);
-    }
-  }
-
   function analysisProgress(value) {
     if (!value) return 0;
     if (value.status === 'success' || value.status === 'error') return 100;
@@ -2257,44 +2251,42 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     return currentSignature === signature;
   }
 
-  function updateAnalysis(partial, webContents, signature) {
-    if (!isCurrentDuplicateCheckSignature(signature)) return null;
+  function updateAnalysisField(field, partial, persist, signature) {
+    const analysisPartial = {
+      ...partial,
+      ...(signature ? { signature } : {}),
+      updated_at: now(),
+    };
+    if (typeof persist === 'function') {
+      return persist(field, analysisPartial);
+    }
     const prev = workspaceStore.loadDuplicateCheck() || {};
-    const prevAnalysis = prev.metadataAnalysis || {};
-    const metadataAnalysis = { ...prevAnalysis, ...partial, updated_at: now() };
-    const next = workspaceStore.updateDuplicateCheck({ metadataAnalysis });
-    emit(webContents, next);
-    return next;
+    if (signature) {
+      const currentSignature = createSignature({
+        tenderFile: prev.tenderFile || null,
+        tenderFiles: Array.isArray(prev.tenderFiles) ? prev.tenderFiles : [],
+        bidFiles: Array.isArray(prev.bidFiles) ? prev.bidFiles : [],
+      });
+      if (currentSignature !== signature) return null;
+    }
+    workspaceStore.updateDuplicateCheckWithoutReload({ [field]: analysisPartial });
+    return undefined;
   }
 
-  function updateOutlineAnalysis(partial, webContents, signature) {
-    if (!isCurrentDuplicateCheckSignature(signature)) return null;
-    const prev = workspaceStore.loadDuplicateCheck() || {};
-    const prevAnalysis = prev.outlineAnalysis || {};
-    const outlineAnalysis = { ...prevAnalysis, ...partial, updated_at: now() };
-    const next = workspaceStore.updateDuplicateCheck({ outlineAnalysis });
-    emit(webContents, next);
-    return next;
+  function updateAnalysis(partial, persist, signature) {
+    return updateAnalysisField('metadataAnalysis', partial, persist, signature);
   }
 
-  function updateContentAnalysis(partial, webContents, signature) {
-    if (!isCurrentDuplicateCheckSignature(signature)) return null;
-    const prev = workspaceStore.loadDuplicateCheck() || {};
-    const prevAnalysis = prev.contentAnalysis || {};
-    const contentAnalysis = { ...prevAnalysis, ...partial, updated_at: now() };
-    const next = workspaceStore.updateDuplicateCheck({ contentAnalysis });
-    emit(webContents, next);
-    return next;
+  function updateOutlineAnalysis(partial, persist, signature) {
+    return updateAnalysisField('outlineAnalysis', partial, persist, signature);
   }
 
-  function updateImageAnalysis(partial, webContents, signature) {
-    if (!isCurrentDuplicateCheckSignature(signature)) return null;
-    const prev = workspaceStore.loadDuplicateCheck() || {};
-    const prevAnalysis = prev.imageAnalysis || {};
-    const imageAnalysis = { ...prevAnalysis, ...partial, updated_at: now() };
-    const next = workspaceStore.updateDuplicateCheck({ imageAnalysis });
-    emit(webContents, next);
-    return next;
+  function updateContentAnalysis(partial, persist, signature) {
+    return updateAnalysisField('contentAnalysis', partial, persist, signature);
+  }
+
+  function updateImageAnalysis(partial, persist, signature) {
+    return updateAnalysisField('imageAnalysis', partial, persist, signature);
   }
 
   async function runContentExtraction(allFiles, webContents, signature, developerLogger, tenderFiles) {
@@ -2319,7 +2311,14 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         })).trim();
         const contentPath = path.join(dir, `${fileId}.md`);
         await fs.writeFile(contentPath, markdown, 'utf-8');
-        results.push({ file_id: fileId, file_name: file.file_name, status: 'success', content_path: contentPath, content_length: markdown.length });
+        results.push({
+          file_id: fileId,
+          file_name: file.file_name,
+          status: 'success',
+          content_path: contentPath,
+          content_length: markdown.length,
+          content_hash: hashText(markdown),
+        });
         developerLogger?.write('duplicate.content_extraction.file.completed', {
           file: summarizeDuplicateFileForLog(file, tenderFileIds.has(fileId) ? 'tender' : 'bid'),
           markdown_metrics: textMetrics(markdown),
@@ -2729,7 +2728,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
   }
 
   return {
-    async runAnalysisTask({ workspaceStore: taskWorkspaceStore, updateTask, payload }) {
+    async runAnalysisTask({ workspaceStore: taskWorkspaceStore, updateTask, checkpointTask, payload }) {
       const signature = createSignature(payload);
       const force = payload.force === true;
       const bidFiles = Array.isArray(payload.bidFiles) ? payload.bidFiles : [];
@@ -2758,10 +2757,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         && current.outlineAnalysis?.signature === signature && current.outlineAnalysis?.status === 'success'
         && current.contentAnalysis?.signature === signature && current.contentAnalysis?.status === 'success'
         && current.imageAnalysis?.signature === signature && current.imageAnalysis?.status === 'success') {
-        const nextState = taskWorkspaceStore.updateDuplicateCheck({
-          analysisTask: updateTask({ status: 'success', progress: 100, logs: ['标书查重分析已完成，无需重复分析。'] }),
-        });
-        updateTask({ status: 'success', progress: 100, logs: ['标书查重分析已完成，无需重复分析。'] }, nextState);
+        checkpointTask({ status: 'success', progress: 100, logs: ['标书查重分析已完成，无需重复分析。'] });
         developerLogger.write('duplicate.task.skipped', { signature, reason: 'already_success' });
         return;
       }
@@ -2770,9 +2766,15 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       const outlineAnalysis = createInitialOutlineAnalysis(signature, bidFiles);
       const contentAnalysis = createInitialContentAnalysis(signature, bidFiles);
       const imageAnalysis = createInitialImageAnalysis(signature, bidFiles);
+      let analysisState = {
+        metadataAnalysis,
+        outlineAnalysis,
+        contentAnalysis,
+        imageAnalysis,
+      };
       const initialLogs = [force ? '开始重新执行标书查重分析。' : '开始执行标书查重分析。'];
       let latestLog = initialLogs[0];
-      let state = taskWorkspaceStore.updateDuplicateCheck({
+      checkpointTask({ status: 'running', progress: 0, logs: initialLogs }, {
         tenderFile: tenderFiles[0] || null,
         tenderFiles,
         bidFiles,
@@ -2780,30 +2782,38 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
         outlineAnalysis,
         contentAnalysis,
         imageAnalysis,
-        analysisTask: updateTask({ status: 'running', progress: 0, logs: initialLogs }),
       });
-      updateTask({ status: 'running', progress: 0, logs: initialLogs }, state);
 
-      const notifyTask = (nextState) => {
-        const message = latestAnalysisMessage(nextState);
-        const partial = { status: 'running', progress: overallProgress(nextState) };
+      const notifyTask = (field, analysisPartial) => {
+        analysisState = {
+          ...analysisState,
+          [field]: { ...(analysisState[field] || {}), ...analysisPartial },
+        };
+        const message = latestAnalysisMessage(analysisState);
+        const partial = { status: 'running', progress: overallProgress(analysisState) };
         if (message && message !== latestLog) {
           latestLog = message;
           partial.logs = [message];
         }
-        updateTask(partial, nextState);
+        const detailFields = field === 'metadataAnalysis'
+          ? ['contentFiles', 'files']
+          : field === 'outlineAnalysis'
+            ? ['files', 'duplicateGroups', 'pairwiseSimilarities']
+            : field === 'contentAnalysis'
+              ? ['duplicateSentences']
+              : ['files', 'duplicateImages'];
+        const hasResultChange = detailFields.some((key) => Object.prototype.hasOwnProperty.call(analysisPartial, key));
+        const hasTerminalTransition = ['success', 'error'].includes(analysisPartial.status);
+        (hasResultChange || hasTerminalTransition ? checkpointTask : updateTask)(partial, { [field]: analysisPartial });
       };
 
       const finalStatus = await run(signature, payload, notifyTask, developerLogger);
-      state = taskWorkspaceStore.loadDuplicateCheck() || state;
       const doneLog = finalStatus === 'success' ? '标书查重分析完成。' : '标书查重分析完成，部分结果失败。';
-      const finalTask = updateTask({ status: finalStatus, progress: 100, logs: [doneLog] });
       if (!isCurrentDuplicateCheckSignature(signature)) {
         developerLogger.write('duplicate.task.stale_signature', { signature });
         return;
       }
-      const finalState = taskWorkspaceStore.updateDuplicateCheck({ analysisTask: finalTask });
-      updateTask({ status: finalStatus, progress: 100, logs: [doneLog] }, finalState);
+      checkpointTask({ status: finalStatus, progress: 100, logs: [doneLog] });
       developerLogger.write('duplicate.task.completed', {
         signature,
         status: finalStatus,

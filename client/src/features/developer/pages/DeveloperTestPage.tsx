@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { aiClient } from '../../../shared/ai/aiClient';
 import { getBidAnalysisTasks } from '../../technical-plan/services/bidAnalysisWorkflow';
-import { requestOutlineGeneration } from '../../technical-plan/services/outlineWorkflow';
 
 type RunningMode = 'text' | 'json' | null;
 
@@ -18,10 +17,15 @@ const sampleTenderContent = `# 易标测试项目招标文件
 2. 项目实施计划，满分 20 分，要求进度安排合理、风险控制明确。
 3. 运维服务能力，满分 15 分，要求说明响应时效和服务保障。`;
 
-const sampleOutlineInput = {
-  overview: '易标测试项目，软件服务类采购，预算 100 万元，实施地点北京市海淀区。',
+const sampleJsonInput = {
+  project_name: '易标测试项目',
   requirements: '技术方案完整性 30 分；项目实施计划 20 分；运维服务能力 15 分。',
 };
+
+interface JsonTestResult {
+  project_name: string;
+  requirements: Array<{ title: string; score: number }>;
+}
 
 const textTask = getBidAnalysisTasks('full').find((task) => task.id === 'projectInfo');
 
@@ -81,14 +85,20 @@ function DeveloperTestPage() {
   const runJsonTest = async () => {
     resetOutput();
     setRunningMode('json');
-    appendEvent('调用项目真实 JSON 请求：requestOutlineGeneration。');
+    appendEvent('调用通用 AI JSON 请求：aiClient.requestJson。');
 
     try {
-      const outline = await requestOutlineGeneration({
-        ...sampleOutlineInput,
-        onProgress: appendEvent,
+      const response = await aiClient.requestJson<JsonTestResult>({
+        messages: [
+          {
+            role: 'system',
+            content: '请从用户输入中提取项目名称和评分要求，只返回 JSON：{"project_name":"","requirements":[{"title":"","score":0}]}。',
+          },
+          { role: 'user', content: JSON.stringify(sampleJsonInput) },
+        ],
+        logTitle: '开发者测试-JSON请求',
       });
-      setResult(JSON.stringify(outline, null, 2));
+      setResult(JSON.stringify(response, null, 2));
       appendEvent('JSON 请求完成。');
     } catch (error) {
       appendEvent(`JSON 请求错误：${error instanceof Error ? error.message : 'AI JSON 请求失败'}`);
@@ -106,7 +116,7 @@ function DeveloperTestPage() {
           <span className="eyebrow">JSON Request Lab</span>
           <h2>Json请求测试</h2>
           <p>
-            这里复用项目真实业务请求来复现 response_format 兼容问题：文本按钮使用招标文件解析任务，Json 按钮使用目录生成任务。
+            这里通过通用 AI 请求复现不同响应模式的兼容问题：文本按钮验证普通响应，JSON 按钮验证结构化响应。
           </p>
           <div className="developer-test-actions">
             <button type="button" className="primary-action" onClick={runTextTest} disabled={running || !textTask}>
@@ -133,7 +143,7 @@ function DeveloperTestPage() {
             <span />
             <strong>JSON 复用入口</strong>
           </div>
-          <pre>{JSON.stringify({ service: 'requestOutlineGeneration', input: sampleOutlineInput }, null, 2)}</pre>
+          <pre>{JSON.stringify({ service: 'aiClient.requestJson', input: sampleJsonInput }, null, 2)}</pre>
         </section>
 
         <section className="panel developer-test-panel is-wide">

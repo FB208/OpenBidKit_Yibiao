@@ -61,6 +61,7 @@ function renderPluginsTable() {
       <td class="plugin-name-cell">
         <strong>${escapeHtml(plugin.name)}</strong><br />
         <small>${escapeHtml(plugin.id)} · v${escapeHtml(plugin.version)}</small><br />
+        ${plugin.previousVersion ? `<small>保留上一版 v${escapeHtml(plugin.previousVersion)}</small><br />` : ''}
         <small>${escapeHtml(plugin.enabled ? '启用' : '停用')} · 排序 ${escapeHtml(plugin.sortOrder)}</small>
       </td>
       <td class="plugin-tags-cell">${renderPluginTags(plugin)}</td>
@@ -94,12 +95,6 @@ function renderPluginsTable() {
   `;
 }
 
-/** 使用同步接口返回的最新数据更新当前列表，保留本次同步失败的插件 */
-function applySyncedPlugins(syncedPlugins) {
-  const syncedById = new Map((syncedPlugins || []).map((plugin) => [plugin.id, plugin]));
-  appState.plugins = (appState.plugins || []).map((plugin) => syncedById.get(plugin.id) || plugin);
-  renderPluginsTable();
-}
 export function resetPluginForm() {
   state.pluginForm.reset();
   state.pluginId.value = '';
@@ -146,11 +141,12 @@ export async function syncPlugins() {
     setPluginsStatus('正在同步所有插件的最新正式 Release...', '');
 
     const data = await requestJson('/api/plugins/sync', { method: 'POST' });
-    applySyncedPlugins(data.plugins);
     await loadPlugins({ quiet: true });
     const totalCount = Number(data.totalCount) || 0;
     const syncedCount = Number(data.syncedCount) || 0;
     const failedCount = Number(data.failedCount) || 0;
+    const cleanupDeletedCount = Number(data.cleanupDeletedCount) || 0;
+    const cleanupError = String(data.cleanupError || '');
     const failureSummary = (data.failures || [])
       .map((failure) => `${failure.id || '未知插件'}：${truncate(failure.message, 120) || '未知错误'}`)
       .join('；');
@@ -158,10 +154,13 @@ export async function syncPlugins() {
       totalCount,
       syncedCount,
       failedCount,
-      versions: (data.plugins || []).map((plugin) => plugin.id + '@' + plugin.version),
       failures: data.failures || [],
+      cleanupDeletedCount,
+      cleanupError,
     });
-    if (failedCount > 0) {
+    if (cleanupError) {
+      setPluginsStatus(`插件同步完成，但清理 R2 历史安装包失败：${truncate(cleanupError, 160)}`, 'error');
+    } else if (failedCount > 0) {
       const prefix = syncedCount > 0
         ? `同步完成：成功 ${syncedCount} 个，失败 ${failedCount} 个。`
         : `同步失败：${failedCount} 个插件均未同步。`;
@@ -169,7 +168,8 @@ export async function syncPlugins() {
     } else if (totalCount === 0) {
       setPluginsStatus('当前没有可同步的插件。', 'ok');
     } else {
-      setPluginsStatus(`同步完成，已同步 ${syncedCount} 个插件。`, 'ok');
+      const cleanupText = cleanupDeletedCount > 0 ? `，已清理 ${cleanupDeletedCount} 个历史安装包` : '';
+      setPluginsStatus(`同步完成，已同步 ${syncedCount} 个插件${cleanupText}。`, 'ok');
     }
   } catch (error) {
     setPluginsStatus(error?.message || String(error), 'error');

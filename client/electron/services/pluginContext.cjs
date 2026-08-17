@@ -104,6 +104,90 @@ function createPluginContext(app, pluginId, services) {
 
       return services.taskService.subscribeCallback(listener);
     },
+    getPendingAgentQuestion() {
+      return services.agentService?.getPendingQuestion?.() || null;
+    },
+    onAgentQuestion(callback) {
+      if (!services.agentService?.onQuestion) {
+        return () => {};
+      }
+
+      const listener = (question) => {
+        try {
+          callback(question);
+        } catch (error) {
+          logger.error('Agent question callback error:', error);
+        }
+      };
+
+      return services.agentService.onQuestion(listener);
+    },
+    answerAgentQuestion(payload) {
+      if (!services.agentService?.answerQuestion) {
+        throw new Error('Agent 问答服务不可用');
+      }
+      return services.agentService.answerQuestion(payload);
+    },
+    suppressAgentQuestionAutoAnswer(payload) {
+      if (!services.agentService?.suppressQuestionAutoAnswer) {
+        throw new Error('Agent 问答服务不可用');
+      }
+      return services.agentService.suppressQuestionAutoAnswer(payload);
+    },
+    listAgentWorkspaces() {
+      if (!services.agentWorkspaceService?.listAgentWorkspaces) {
+        return [];
+      }
+      return services.agentWorkspaceService.listAgentWorkspaces();
+    },
+    sendAgentWorkspaceMessage(payload) {
+      if (!services.agentWorkspaceService?.sendAgentWorkspaceMessage) {
+        throw new Error('Agent 工作空间服务不可用');
+      }
+      return services.agentWorkspaceService.sendAgentWorkspaceMessage(payload);
+    },
+    onAgentWorkspaceChatEvent(callback) {
+      if (!services.agentWorkspaceService?.onAgentWorkspaceChatEvent) {
+        return () => {};
+      }
+
+      const listener = (event) => {
+        try {
+          callback(event);
+        } catch (error) {
+          logger.error('Agent workspace chat event callback error:', error);
+        }
+      };
+
+      return services.agentWorkspaceService.onAgentWorkspaceChatEvent(listener);
+    },
+    onAgentWorkspacesChanged(callback) {
+      if (!services.agentWorkspaceService?.onAgentWorkspacesChanged) {
+        return () => {};
+      }
+
+      const listener = (event) => {
+        try {
+          callback(event);
+        } catch (error) {
+          logger.error('Agent workspaces changed callback error:', error);
+        }
+      };
+
+      return services.agentWorkspaceService.onAgentWorkspacesChanged(listener);
+    },
+    confirmOutlineSelection(payload) {
+      if (!services.taskService?.confirmOutlineSelection) {
+        throw new Error('任务服务不可用');
+      }
+      return services.taskService.confirmOutlineSelection(payload);
+    },
+    suppressOutlineSelectionAutoConfirmation(payload) {
+      if (!services.taskService?.suppressOutlineSelectionAutoConfirmation) {
+        return { success: true };
+      }
+      return services.taskService.suppressOutlineSelectionAutoConfirmation(payload);
+    },
     createWindow(options = {}) {
       const defaultOptions = {
         width: 800,

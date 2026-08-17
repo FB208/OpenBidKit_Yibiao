@@ -18,17 +18,22 @@ function normalizeAgentRetryCount(value) {
     : 0;
 }
 
+function normalizeAgentModelRetryCount(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number > 0 ? Math.min(9999, Math.floor(number)) : 0;
+}
+
 function encodeAgentRuntimeMetricPart(value, maxLength) {
   return encodeURIComponent(normalizeText(value, maxLength));
 }
 
-function createAgentRuntimeMetricKey(runtime, status, retryCount, provider, endpointHost, model) {
+function createAgentRuntimeMetricKey(runtime, status, retryCount, provider, endpointHost, model, modelRetryMetric) {
   if (!AGENT_RUNTIME_KIND_PATTERN.test(runtime) || !AGENT_RUNTIME_STATUSES.has(status)) return '';
   return [
-    'v3',
+    modelRetryMetric ? 'v4' : 'v3',
     runtime,
     status,
-    `r${normalizeAgentRetryCount(retryCount)}`,
+    modelRetryMetric ? `m${normalizeAgentModelRetryCount(retryCount)}` : `r${normalizeAgentRetryCount(retryCount)}`,
     encodeAgentRuntimeMetricPart(provider, 80),
     encodeAgentRuntimeMetricPart(endpointHost, 120),
     encodeAgentRuntimeMetricPart(model, 160),
@@ -131,6 +136,9 @@ export function normalizeTrackBody(body, request) {
   const agentRuntimeKind = normalizeText(body.agent_runtime_kind || body.agentRuntimeKind, 40);
   const agentRuntimeStatus = normalizeText(body.agent_runtime_status || body.agentRuntimeStatus, 20);
   const agentRuntimeRetryCount = normalizeAgentRetryCount(body.agent_runtime_retry_count ?? body.agentRuntimeRetryCount);
+  const hasAgentRuntimeModelRetryCount = Object.prototype.hasOwnProperty.call(body, 'agent_runtime_model_retry_count')
+    || Object.prototype.hasOwnProperty.call(body, 'agentRuntimeModelRetryCount');
+  const agentRuntimeModelRetryCount = normalizeAgentModelRetryCount(body.agent_runtime_model_retry_count ?? body.agentRuntimeModelRetryCount);
 
   const event = {
     projectName: normalizeText(body.projectName || body.project_name, 80),
@@ -152,13 +160,15 @@ export function normalizeTrackBody(body, request) {
     agentRuntimeKind,
     agentRuntimeStatus,
     agentRuntimeRetryCount,
+    agentRuntimeModelRetryCount,
     agentRuntimeMetricKey: createAgentRuntimeMetricKey(
       agentRuntimeKind,
       agentRuntimeStatus,
-      agentRuntimeRetryCount,
+      hasAgentRuntimeModelRetryCount ? agentRuntimeModelRetryCount : agentRuntimeRetryCount,
       normalizeText(body.ai_model_provider || body.aiModelProvider, 80),
       normalizeBaseUrlHost(body.ai_model_base_url || body.aiModelBaseUrl),
       aiModelName,
+      hasAgentRuntimeModelRetryCount,
     ),
     licenseStatus: normalizeText(body.license_status || body.licenseStatus, 30),
     licensePlan: normalizeText(body.license_plan || body.licensePlan, 40),

@@ -9,8 +9,8 @@ import { TemplatePreview } from '../../export-format/pages/ExportFormatPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
+import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
+import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
 import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
 import type { OutlineData, OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from '../../../shared/types/exportFormat';
@@ -57,6 +57,8 @@ interface WordControlWarningDialogState {
   sections: WordControlWarningSection[];
 }
 
+const PET_PLUGIN_ID = 'openbidkit-pet';
+
 const steps: TechnicalPlanStep[] = [
   'document-analysis',
   'bid-analysis',
@@ -99,7 +101,10 @@ const resetState = {
   bidSectionExtractionTask: undefined,
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
+  outlineAdjustmentTask: undefined,
+  globalFactsMode: 'fabricate' as GlobalFactsMode,
   globalFactsTask: undefined,
+  globalFactsAdjustmentTask: undefined,
   globalFacts: [] as GlobalFactGroupState[],
   contentGenerationTask: undefined,
   contentGenerationOptions: undefined,
@@ -117,7 +122,7 @@ function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
 function isOutlineLeafCountOutsideRange(outlineData: OutlineData, options: OutlineWordControlOptions) {
   if (options.minimumWords === 0 && options.maximumWords === 0) return false;
   const effectiveSectionWords = options.sectionWords > 0 ? options.sectionWords : 3000;
-  const leafCount = collectLeafItems(outlineData.outline || []).length;
+  const leafCount = collectLeafItems(outlineData.outline || []).filter((item) => item.content_mode === 'ai-generate').length;
   const minimumLeafCount = options.minimumWords > 0 ? Math.ceil(options.minimumWords / effectiveSectionWords) : null;
   const maximumLeafCount = options.maximumWords > 0 ? Math.floor(options.maximumWords / effectiveSectionWords) : null;
   return (minimumLeafCount !== null && leafCount < minimumLeafCount)
@@ -193,14 +198,17 @@ function buildWordControlWarningDialog(task: BackgroundTaskState, state: Technic
     // 数量类：叶子数量未进入区间，展示预期与实际对比。
     const minimumLeafCount = outlineStats.minimum_leaf_count || 0;
     const maximumLeafCount = outlineStats.maximum_leaf_count || 0;
+    const targetLeafCount = outlineStats.target_leaf_count;
     const currentLeafCount = outlineStats.current_leaf_count || 0;
     return {
       taskId: task.task_id,
-      title: '目录叶子数量未达到预期',
+      title: 'AI生成小节数量未达到预期',
       message: outlineStats.word_adjustment_warning,
       metrics: [{
-        label: '目录叶子小节',
-        expected: formatCountRange(minimumLeafCount, maximumLeafCount, '个'),
+        label: 'AI生成小节',
+        expected: typeof targetLeafCount === 'number'
+          ? `${targetLeafCount.toLocaleString('zh-CN')} 个`
+          : formatCountRange(minimumLeafCount, maximumLeafCount, '个'),
         actual: `${currentLeafCount.toLocaleString('zh-CN')} 个`,
       }],
       sections: [],
@@ -215,7 +223,9 @@ function buildWordControlWarningDialog(task: BackgroundTaskState, state: Technic
   const sectionWords = contentStats.section_words || 0;
   const sectionMinimumWords = sectionWords > 0 ? Math.ceil(sectionWords * 0.8) : 0;
   const sectionMaximumWords = sectionWords > 0 ? Math.floor(sectionWords * 1.2) : 0;
-  const orderedLeaves = state.outlineData?.outline?.length ? collectLeafItems(state.outlineData.outline) : [];
+  const orderedLeaves = state.outlineData?.outline?.length
+    ? collectLeafItems(state.outlineData.outline).filter((item) => item.content_mode === 'ai-generate')
+    : [];
   const sectionSources = orderedLeaves.length
     ? orderedLeaves.map((item) => ({
         id: item.id,
@@ -274,7 +284,7 @@ function workflowLabel(kind: TechnicalPlanWorkflowKind) {
 }
 
 function hasRunningTechnicalPlanTask(state: TechnicalPlanState) {
-  return [state.bidSectionExtractionTask, state.bidAnalysisTask, state.outlineGenerationTask, state.globalFactsTask, state.contentGenerationTask]
+  return [state.bidSectionExtractionTask, state.bidAnalysisTask, state.outlineGenerationTask, state.outlineAdjustmentTask, state.globalFactsTask, state.globalFactsAdjustmentTask, state.contentGenerationTask]
     .some((task) => task?.status === 'running' || task?.status === 'pausing');
 }
 
@@ -329,6 +339,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const [savingSortBeforeLeave, setSavingSortBeforeLeave] = useState(false);
   const [workflowSwitchRequest, setWorkflowSwitchRequest] = useState<WorkflowSwitchRequest | null>(null);
   const [switchingWorkflow, setSwitchingWorkflow] = useState(false);
+  const [petInstallDialogOpen, setPetInstallDialogOpen] = useState(false);
+  const [installingPetPlugin, setInstallingPetPlugin] = useState(false);
   const sortGuardRef = useRef<OutlineSortGuard | null>(null);
   const sortLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const outlineWordControlLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
@@ -346,6 +358,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     || (state.bidSectionExtractionStatus === 'success' && !isBidSectionExtractionRunning && selectedBidSectionValid);
   const bidAnalysisReady = requiredBidAnalysisReady && !isBidAnalysisTaskRunning && bidSectionReady;
   const globalFactsReady = state.globalFacts.length > 0 && state.globalFactsTask?.status === 'success';
+  const globalFactsHasPlaceholder = state.globalFacts.some((group) => `${group.title || ''}${group.content || ''}`.includes('【待填写】'));
+  const isGlobalFactsAdjusting = state.globalFactsAdjustmentTask?.status === 'running' || state.globalFactsAdjustmentTask?.status === 'pausing';
   const contentTaskStatus = state.contentGenerationTask?.status;
   const isContentGenerating = contentTaskStatus === 'running' || contentTaskStatus === 'pausing';
   const isContentPaused = contentTaskStatus === 'paused';
@@ -362,7 +376,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     || (state.step === 'document-analysis' && (!state.tenderFile || (requiresOriginalPlan && !state.originalPlanFile)))
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
     || (state.step === 'outline-generation' && (!state.outlineData || !state.outlineWordControlSnapshot))
-    || (state.step === 'global-facts' && !globalFactsReady);
+    || (state.step === 'global-facts' && (!globalFactsReady || globalFactsHasPlaceholder || isGlobalFactsAdjusting));
   const nextTooltip = state.step === 'document-analysis' && !state.tenderFile
       ? '上传完招标文件后才能进入下一步'
       : state.step === 'document-analysis' && requiresOriginalPlan && !state.originalPlanFile
@@ -381,8 +395,12 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
                     ? '目录生成完成后才能进入全局事实设定'
                     : state.step === 'outline-generation' && !state.outlineWordControlSnapshot
                       ? '当前目录缺少字数控制生效配置，请重新生成目录'
-                      : state.step === 'global-facts' && !globalFactsReady
-                        ? '全局事实设定完成后才能进入正文生成'
+                    : state.step === 'global-facts' && isGlobalFactsAdjusting
+                      ? '全局事实正在 AI 调整，请等待结束后再进入正文生成'
+                    : state.step === 'global-facts' && !globalFactsReady
+                      ? '全局事实设定完成后才能进入正文生成'
+                      : state.step === 'global-facts' && globalFactsHasPlaceholder
+                        ? '请先将【待填写】替换为实际内容后再进入正文生成'
                         : activeIndex >= steps.length - 1
                           ? '当前已经是最后一步'
                           : `进入${stepLabels[steps[activeIndex + 1]]}`;
@@ -414,7 +432,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
     try {
       setSwitchingWorkflow(true);
-      const saved = await window.yibiao.technicalPlan.switchWorkflowKind(targetWorkflowKind);
+      await window.yibiao.technicalPlan.switchWorkflowKind(targetWorkflowKind);
+      const saved = await window.yibiao.technicalPlan.loadState();
       lastExecutedWorkflowSwitchRef.current = targetWorkflowKind;
       setState((prev) => ({ ...prev, ...saved, workflowKind: targetWorkflowKind }));
       setOriginalPlanMarkdown('');
@@ -680,6 +699,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             outlineGenerationTask: hasOwnField(technicalPlan, 'outlineGenerationTask') ? trimTaskLogs(technicalPlan.outlineGenerationTask) : prev.outlineGenerationTask,
             referenceKnowledgeDocumentIds: Array.isArray(technicalPlan.referenceKnowledgeDocumentIds) ? technicalPlan.referenceKnowledgeDocumentIds : prev.referenceKnowledgeDocumentIds,
             globalFactsTask: hasOwnField(technicalPlan, 'globalFactsTask') ? trimTaskLogs(technicalPlan.globalFactsTask) : prev.globalFactsTask,
+            globalFactsAdjustmentTask: hasOwnField(technicalPlan, 'globalFactsAdjustmentTask') ? trimTaskLogs(technicalPlan.globalFactsAdjustmentTask) : prev.globalFactsAdjustmentTask,
             globalFacts: hasOwnField(technicalPlan, 'globalFacts') ? (technicalPlan.globalFacts || []) : prev.globalFacts,
             contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : prev.contentGenerationTask,
             contentGenerationOptions: hasOwnField(technicalPlan, 'contentGenerationOptions') ? technicalPlan.contentGenerationOptions : prev.contentGenerationOptions,
@@ -709,6 +729,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             techRequirements: technicalPlan.techRequirements ?? prev.techRequirements,
             outlineGenerationTask: outlineDataReset ? undefined : prev.outlineGenerationTask,
             globalFactsTask: outlineDataReset ? undefined : prev.globalFactsTask,
+            globalFactsAdjustmentTask: outlineDataReset ? undefined : prev.globalFactsAdjustmentTask,
             globalFacts: outlineDataReset ? [] : prev.globalFacts,
             contentGenerationTask: outlineDataReset ? undefined : prev.contentGenerationTask,
             contentGenerationOptions: outlineDataReset ? undefined : prev.contentGenerationOptions,
@@ -738,6 +759,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
               : prev.referenceKnowledgeDocumentIds,
             outlineData: nextOutlineData,
             globalFactsTask: hasOwnField(technicalPlan, 'globalFactsTask') ? trimTaskLogs(technicalPlan.globalFactsTask) : prev.globalFactsTask,
+            globalFactsAdjustmentTask: hasOwnField(technicalPlan, 'globalFactsAdjustmentTask') ? trimTaskLogs(technicalPlan.globalFactsAdjustmentTask) : prev.globalFactsAdjustmentTask,
             globalFacts: hasOwnField(technicalPlan, 'globalFacts') ? (technicalPlan.globalFacts || []) : prev.globalFacts,
             contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : (outlineDataChanged ? undefined : prev.contentGenerationTask),
             contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : (outlineDataChanged ? {} : prev.contentGenerationSections),
@@ -747,18 +769,46 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           };
         }
 
+        if (taskType === 'outline-adjustment') {
+          const hasOutlineData = hasOwnField(technicalPlan, 'outlineData');
+          return {
+            ...prev,
+            outlineAdjustmentTask: trimTaskLogs(technicalPlan.outlineAdjustmentTask) || latestTask,
+            outlineData: hasOutlineData ? (technicalPlan.outlineData || null) : prev.outlineData,
+            contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : prev.contentGenerationTask,
+            contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : prev.contentGenerationSections,
+            contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
+            contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : prev.contentIllustrationPlan,
+            contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
+          };
+        }
+
         if (taskType === 'global-facts-generation') {
           const hasGlobalFacts = hasOwnField(technicalPlan, 'globalFacts');
-          const globalFactsChanged = hasGlobalFacts && technicalPlan.globalFacts !== prev.globalFacts;
           return {
             ...prev,
             globalFactsTask: trimTaskLogs(technicalPlan.globalFactsTask) || latestTask,
+            globalFactsAdjustmentTask: hasOwnField(technicalPlan, 'globalFactsAdjustmentTask') ? trimTaskLogs(technicalPlan.globalFactsAdjustmentTask) : prev.globalFactsAdjustmentTask,
             globalFacts: hasGlobalFacts ? (technicalPlan.globalFacts || []) : prev.globalFacts,
-            contentGenerationTask: globalFactsChanged ? undefined : prev.contentGenerationTask,
-            contentGenerationSections: globalFactsChanged ? {} : prev.contentGenerationSections,
-            contentGenerationPlans: globalFactsChanged ? {} : prev.contentGenerationPlans,
-            contentIllustrationPlan: globalFactsChanged ? undefined : prev.contentIllustrationPlan,
-            contentGenerationRuntime: globalFactsChanged ? undefined : prev.contentGenerationRuntime,
+            contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : prev.contentGenerationTask,
+            contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : prev.contentGenerationSections,
+            contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
+            contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : prev.contentIllustrationPlan,
+            contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
+          };
+        }
+
+        if (taskType === 'global-facts-adjustment') {
+          const hasGlobalFacts = hasOwnField(technicalPlan, 'globalFacts');
+          return {
+            ...prev,
+            globalFactsAdjustmentTask: trimTaskLogs(technicalPlan.globalFactsAdjustmentTask) || latestTask,
+            globalFacts: hasGlobalFacts ? (technicalPlan.globalFacts || []) : prev.globalFacts,
+            contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : prev.contentGenerationTask,
+            contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : prev.contentGenerationSections,
+            contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
+            contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : prev.contentIllustrationPlan,
+            contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
           };
         }
 
@@ -1010,7 +1060,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
     try {
       const result = await window.yibiao?.technicalPlan.clear();
-      setState(result?.state || { ...resetState, workflowKind });
+      setState({ ...resetState, workflowKind });
       setTenderMarkdown('');
       setOriginalPlanMarkdown('');
       showToast(result?.message || '技术方案已重置', 'success');
@@ -1029,9 +1079,37 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     setState((prev) => ({ ...prev, ...(saved || {}), globalFacts }));
   };
 
+  const saveGlobalFactsConfig = async (globalFactsMode: GlobalFactsMode) => {
+    const saved = await window.yibiao?.technicalPlan.saveGlobalFactsConfig({ globalFactsMode });
+    setState((prev) => ({ ...prev, ...(saved || {}), globalFactsMode }));
+  };
+
   const saveOutline = async (request: SaveOutlineRequest) => {
     const saved = await window.yibiao?.technicalPlan.saveOutline(request);
-    setState((prev) => ({ ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData }));
+    setState((prev) => {
+      if (request.reason !== 'sort') {
+        return { ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData };
+      }
+      const contentGenerationSections = Object.fromEntries(Object.entries(prev.contentGenerationSections).map(([nodeId, section]) => {
+        const nextId = request.idMap?.[nodeId] || nodeId;
+        return [nextId, { ...section, id: nextId }];
+      }));
+      const contentGenerationPlans = Object.fromEntries(Object.entries(prev.contentGenerationPlans).map(([nodeId, plan]) => [
+        request.idMap?.[nodeId] || nodeId,
+        plan,
+      ]));
+      return {
+        ...prev,
+        ...(saved || {}),
+        outlineData: saved?.outlineData || request.outlineData,
+        contentGenerationSections,
+        contentGenerationPlans,
+      };
+    });
+  };
+
+  const saveOutlineSelection = async (request: SaveOutlineSelectionRequest) => {
+    await window.yibiao?.technicalPlan.saveOutlineSelection(request);
   };
 
   const saveOutlineConfig = async (config: {
@@ -1040,10 +1118,9 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     outlineExpansionMode: TechnicalPlanState['outlineExpansionMode'];
     wordControlOptions: OutlineWordControlOptions;
   }) => {
-    const saved = await window.yibiao!.technicalPlan.saveOutlineConfig(config);
+    await window.yibiao!.technicalPlan.saveOutlineConfig(config);
     setState((prev) => ({
       ...prev,
-      ...saved,
       outlineMode: config.outlineMode,
       outlineExpansionMode: config.outlineExpansionMode,
       outlineWordControlOptions: config.wordControlOptions,
@@ -1054,6 +1131,74 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const generatedContentCount = state.outlineData?.outline
     ? collectLeafItems(state.outlineData.outline).filter((item) => item.content?.trim()).length
     : 0;
+  const outlineGenerationStatus = state.outlineGenerationTask?.status;
+  const isOutlineGenerating = outlineGenerationStatus === 'running' || outlineGenerationStatus === 'pausing';
+  const outlineAdjustmentStatus = state.outlineAdjustmentTask?.status;
+  const isOutlineAdjusting = outlineAdjustmentStatus === 'running' || outlineAdjustmentStatus === 'pausing';
+  const isGlobalFactsGenerating = state.globalFactsTask?.status === 'running' || state.globalFactsTask?.status === 'pausing';
+  const isFactsAiStep = state.step === 'global-facts';
+  const isAiAdjusting = isFactsAiStep ? isGlobalFactsAdjusting : isOutlineAdjusting;
+  const aiAdjustDisabled = isFactsAiStep
+    ? !state.globalFacts.length || isGlobalFactsGenerating || isGlobalFactsAdjusting
+    : !state.outlineData || !state.outlineWordControlSnapshot || isOutlineGenerating || isOutlineAdjusting;
+  const aiAdjustTooltip = isFactsAiStep
+    ? (isGlobalFactsAdjusting
+      ? 'AI 正在按要求调整全局事实，请稍候'
+      : isGlobalFactsGenerating || !state.globalFacts.length
+        ? '全局事实设定结束后才能使用 AI 调整'
+        : '通过桌宠 AI 对话调整当前全局事实')
+    : (isOutlineAdjusting
+      ? 'AI 正在按要求调整目录，请稍候'
+      : isOutlineGenerating || !state.outlineData
+        ? '目录生成结束后才能使用 AI 调整'
+        : !state.outlineWordControlSnapshot
+          ? '当前目录缺少字数控制生效配置，请重新生成目录'
+          : '通过桌宠 AI 对话调整当前目录');
+
+  const openPetAiChat = useCallback(async () => {
+    await window.yibiao!.plugins.notifyEvent(PET_PLUGIN_ID, 'open-ai-chat');
+  }, []);
+
+  const handleAiAdjustClick = useCallback(async () => {
+    try {
+      const plugins = await window.yibiao!.plugins.getAvailablePlugins();
+      const pet = plugins.find((plugin) => plugin.id === PET_PLUGIN_ID);
+      if (!pet) {
+        showToast('插件市场中未找到桌宠插件，请在插件市场刷新后重试', 'error');
+        return;
+      }
+      if (!pet.installed || !pet.enabled) {
+        setPetInstallDialogOpen(true);
+        return;
+      }
+      await openPetAiChat();
+      showToast('请在桌宠对话框中输入调整要求', 'info');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '打开桌宠 AI 对话失败', 'error');
+    }
+  }, [openPetAiChat, showToast]);
+
+  const installPetPluginAndOpenChat = useCallback(async () => {
+    setInstallingPetPlugin(true);
+    try {
+      const plugins = await window.yibiao!.plugins.getAvailablePlugins();
+      const pet = plugins.find((plugin) => plugin.id === PET_PLUGIN_ID);
+      if (!pet) {
+        throw new Error('插件市场中未找到桌宠插件');
+      }
+      if (!pet.installed) {
+        await window.yibiao!.plugins.install(PET_PLUGIN_ID);
+      }
+      await window.yibiao!.plugins.enable(PET_PLUGIN_ID);
+      setPetInstallDialogOpen(false);
+      await openPetAiChat();
+      showToast('桌宠已启用，请在桌宠对话框中输入调整要求', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '安装桌宠插件失败', 'error');
+    } finally {
+      setInstallingPetPlugin(false);
+    }
+  }, [openPetAiChat, showToast]);
   const workflowSwitchClearText = workflowSwitchRequest?.to === 'technical-plan'
     ? '原方案、目录、全局事实、正文和生成进度'
     : '目录、全局事实、正文和生成进度';
@@ -1118,6 +1263,20 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         },
       ],
     },
+    ...(state.step === 'outline-generation' || state.step === 'global-facts' ? [{
+      id: 'technical-plan-ai',
+      actions: [
+        {
+          id: 'ai-adjust',
+          label: isAiAdjusting ? 'AI调整中' : 'AI调整',
+          icon: <ToolbarSparkleIcon />,
+          variant: 'ai' as const,
+          disabled: aiAdjustDisabled,
+          tooltip: aiAdjustTooltip,
+          onClick: () => { void handleAiAdjustClick(); },
+        },
+      ],
+    }] : []),
     {
       id: 'technical-plan-navigation',
       actions: navigationActions,
@@ -1164,20 +1323,20 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         />
       )}
       {state.step === 'outline-generation' && (
-        <OutlineEditPage
-          workflowKind={workflowKind}
-          projectOverview={state.projectOverview}
-          techRequirements={state.techRequirements}
-          outlineMode={state.outlineMode || 'aligned'}
-          outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
+          <OutlineEditPage
+            workflowKind={workflowKind}
+            projectOverview={state.projectOverview}
+            outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
           outlineWordControlOptions={state.outlineWordControlOptions}
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           outlineData={state.outlineData}
           task={state.outlineGenerationTask}
           contentTaskStatus={state.contentGenerationTask?.status}
+          aiAdjustmentRunning={isOutlineAdjusting}
           onOutlineConfigChange={saveOutlineConfig}
           onOutlineSaved={saveOutline}
+          onOutlineSelectionSaved={saveOutlineSelection}
           onSortGuardChange={(guard) => {
             sortGuardRef.current = guard;
           }}
@@ -1187,8 +1346,11 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         <GlobalFactsPage
           outlineData={state.outlineData}
           globalFacts={state.globalFacts}
+          globalFactsMode={state.globalFactsMode || 'fabricate'}
           task={state.globalFactsTask}
+          aiAdjustmentRunning={isGlobalFactsAdjusting}
           onGlobalFactsSaved={saveGlobalFacts}
+          onGlobalFactsConfigChange={saveGlobalFactsConfig}
         />
       )}
       {state.step === 'content-edit' && (
@@ -1216,38 +1378,34 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         </section>
       )}
 
-      <Dialog.Root open={sortLeaveDialogOpen} onOpenChange={(open) => !open && continueSorting()}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="content-regenerate-card outline-sort-leave-card">
-            <div className="content-regenerate-card-head">
-              <span className="section-kicker">目录排序</span>
-              <Dialog.Title>排序结果是否保存</Dialog.Title>
-              <Dialog.Description>
-                当前目录排序还没有保存。保存后会更新目录编号并保留已生成正文；不保存则丢弃本次排序草稿。
-              </Dialog.Description>
-            </div>
-            <div className="content-regenerate-actions">
-              <button type="button" className="secondary-action" onClick={continueSorting} disabled={savingSortBeforeLeave}>继续排序</button>
-              <button type="button" className="secondary-action" onClick={discardSortAndLeave} disabled={savingSortBeforeLeave}>不保存</button>
-              <button type="button" className="primary-action" onClick={() => { void saveSortAndLeave(); }} disabled={savingSortBeforeLeave}>
-                {savingSortBeforeLeave ? '正在保存...' : '保存排序'}
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <AppDialog
+        open={sortLeaveDialogOpen}
+        onOpenChange={(open) => !open && continueSorting()}
+        kicker="目录排序"
+        title="排序结果是否保存"
+        description="当前目录排序还没有保存。保存后会更新目录编号并保留已生成正文；不保存则丢弃本次排序草稿。"
+        cardClassName="outline-sort-leave-card"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={continueSorting} disabled={savingSortBeforeLeave}>继续排序</button>
+            <button type="button" className="secondary-action" onClick={discardSortAndLeave} disabled={savingSortBeforeLeave}>不保存</button>
+            <button type="button" className="primary-action" onClick={() => { void saveSortAndLeave(); }} disabled={savingSortBeforeLeave}>
+              {savingSortBeforeLeave ? '正在保存...' : '保存排序'}
+            </button>
+          </>
+        )}
+      />
 
-      <Dialog.Root open={Boolean(wordControlWarningDialog)} onOpenChange={(open) => !open && setWordControlWarningDialog(null)}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="content-regenerate-card word-control-result-card">
-            <div className="content-regenerate-card-head">
-              <span className="section-kicker">结果提醒</span>
-              <Dialog.Title>{wordControlWarningDialog?.title}</Dialog.Title>
-              <Dialog.Description>{wordControlWarningDialog?.message}</Dialog.Description>
-            </div>
-            <div className="word-control-result-body">
+      <AppDialog
+        open={Boolean(wordControlWarningDialog)}
+        onOpenChange={(open) => !open && setWordControlWarningDialog(null)}
+        kicker="结果提醒"
+        title={wordControlWarningDialog?.title}
+        description={wordControlWarningDialog?.message}
+        cardClassName="word-control-result-card"
+        actions={<Dialog.Close className="primary-action" type="button">知道了</Dialog.Close>}
+      >
+        <div className="word-control-result-body">
               <div className="word-control-result-metrics">
                 {wordControlWarningDialog?.metrics.map((metric) => (
                   <section className="word-control-result-metric" key={metric.label}>
@@ -1281,57 +1439,62 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
                   </div>
                 </section>
               ) : null}
-            </div>
-            <div className="content-regenerate-actions">
-              <Dialog.Close className="primary-action" type="button">知道了</Dialog.Close>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+        </div>
+      </AppDialog>
 
-      <Dialog.Root open={outlineWordControlLeaveDialogOpen} onOpenChange={(open) => !open && resolveOutlineWordControlLeave(false)}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="content-regenerate-card">
-            <div className="content-regenerate-card-head">
-              <span className="section-kicker">字数检查</span>
-              <Dialog.Title>目录叶子数量未达预期</Dialog.Title>
-              <Dialog.Description>您手动修改的目录可能导致生成正文字数不符合预期</Dialog.Description>
-            </div>
-            <div className="content-regenerate-actions">
-              <button type="button" className="secondary-action" onClick={() => resolveOutlineWordControlLeave(false)}>再修改目录</button>
-              <button type="button" className="primary-action" onClick={() => resolveOutlineWordControlLeave(true)}>仍然继续</button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <AppDialog
+        open={petInstallDialogOpen}
+        onOpenChange={(open) => !open && !installingPetPlugin && setPetInstallDialogOpen(false)}
+        kicker="AI 调整"
+        title="需要安装桌宠插件"
+        description="AI 调整通过桌宠的 AI 对话完成。当前桌宠插件尚未安装或未启用，是否立即安装并启用？"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => setPetInstallDialogOpen(false)} disabled={installingPetPlugin}>取消</button>
+            <button type="button" className="primary-action" onClick={() => { void installPetPluginAndOpenChat(); }} disabled={installingPetPlugin}>
+              {installingPetPlugin ? '正在安装...' : '安装并启用'}
+            </button>
+          </>
+        )}
+      />
 
-      <Dialog.Root open={Boolean(workflowSwitchRequest)} onOpenChange={(open) => !open && !switchingWorkflow && cancelWorkflowSwitch()}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="content-regenerate-card workflow-switch-card">
-            <div className="content-regenerate-card-head">
-              <span className="section-kicker">切换模式</span>
-              <Dialog.Title>确认切换到{workflowSwitchRequest ? workflowLabel(workflowSwitchRequest.to) : '新模式'}</Dialog.Title>
-              <Dialog.Description>
-                {workflowSwitchRequest
-                  ? `当前保存的进度是「${workflowLabel(workflowSwitchRequest.from)}」模式生成的。切换到「${workflowLabel(workflowSwitchRequest.to)}」会清空之前的已有进度。是否继续？`
-                  : '切换模式会清空当前模式下的生成进度。'}
-              </Dialog.Description>
-            </div>
-            <div className="workflow-switch-summary">
-              <span>保留：招标文件、招标文件解析结果、参考知识库选择</span>
-              <span>清空：{workflowSwitchClearText}</span>
-            </div>
-            <div className="content-regenerate-actions">
-              <button type="button" className="secondary-action" onClick={cancelWorkflowSwitch} disabled={switchingWorkflow}>取消</button>
-              <button type="button" className="primary-action" onClick={() => { void confirmWorkflowSwitch(); }} disabled={switchingWorkflow}>
-                {switchingWorkflow ? '正在切换...' : '继续切换'}
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <AppDialog
+        open={outlineWordControlLeaveDialogOpen}
+        onOpenChange={(open) => !open && resolveOutlineWordControlLeave(false)}
+        kicker="字数检查"
+        title="AI生成小节数量未达预期"
+        description="您手动修改的目录可能导致生成正文字数不符合预期"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => resolveOutlineWordControlLeave(false)}>再修改目录</button>
+            <button type="button" className="primary-action" onClick={() => resolveOutlineWordControlLeave(true)}>仍然继续</button>
+          </>
+        )}
+      />
+
+      <AppDialog
+        open={Boolean(workflowSwitchRequest)}
+        onOpenChange={(open) => !open && !switchingWorkflow && cancelWorkflowSwitch()}
+        kicker="切换模式"
+        title={`确认切换到${workflowSwitchRequest ? workflowLabel(workflowSwitchRequest.to) : '新模式'}`}
+        description={workflowSwitchRequest
+          ? `当前保存的进度是「${workflowLabel(workflowSwitchRequest.from)}」模式生成的。切换到「${workflowLabel(workflowSwitchRequest.to)}」会清空之前的已有进度。是否继续？`
+          : '切换模式会清空当前模式下的生成进度。'}
+        cardClassName="workflow-switch-card"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={cancelWorkflowSwitch} disabled={switchingWorkflow}>取消</button>
+            <button type="button" className="primary-action" onClick={() => { void confirmWorkflowSwitch(); }} disabled={switchingWorkflow}>
+              {switchingWorkflow ? '正在切换...' : '继续切换'}
+            </button>
+          </>
+        )}
+      >
+        <div className="workflow-switch-summary">
+          <span>保留：招标文件、招标文件解析结果、参考知识库选择</span>
+          <span>清空：{workflowSwitchClearText}</span>
+        </div>
+      </AppDialog>
 
       <Dialog.Root open={exportTemplateDialogOpen} onOpenChange={(open) => !open && !isExporting && setExportTemplateDialogOpen(false)}>
         <Dialog.Portal>
@@ -1430,9 +1593,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
               </Dialog.Description>
             </div>
             <div className="export-progress-body">
-              <div className="content-generation-progress-track" aria-label={`Word 导出进度 ${exportProgress.progress}%`}>
-                <span style={{ width: `${exportProgress.progress}%` }} />
-              </div>
+              <ProgressBar value={exportProgress.progress} label={`Word 导出进度 ${exportProgress.progress}%`} />
               <p>{exportProgress.message || '正在处理导出任务，请稍候。'}</p>
               {exportProgress.warnings.length > 0 && (
                 <div className="export-warning-list">

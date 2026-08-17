@@ -196,7 +196,7 @@ async function collectJson(aiService, options) {
   throw new Error('AI 服务尚未初始化');
 }
 
-async function runBidSectionExtractionTask({ aiService, workspaceStore, updateTask }) {
+async function runBidSectionExtractionTask({ aiService, workspaceStore, updateTask, checkpointTask }) {
   const originalMarkdown = workspaceStore.readOriginalTenderMarkdown?.() || workspaceStore.readTenderMarkdown();
   const cleanMarkdown = String(originalMarkdown || '').trim();
   if (!cleanMarkdown) {
@@ -207,15 +207,14 @@ async function runBidSectionExtractionTask({ aiService, workspaceStore, updateTa
     workspaceStore.prepareBidSectionExtraction();
   }
 
-  const logs = [];
+  let logs = [];
   const log = (message, progress) => {
-    const nextLogs = pushLog(logs, message);
-    const state = workspaceStore.updateTechnicalPlan({
+    logs = pushLog(logs, message);
+    updateTask({ status: 'running', progress, logs }, {
       bidSectionMode: 'multiple',
       bidSectionExtractionStatus: 'running',
       bidSectionExtractionError: undefined,
     });
-    updateTask({ status: 'running', progress, logs: nextLogs }, state);
   };
 
   try {
@@ -249,23 +248,20 @@ async function runBidSectionExtractionTask({ aiService, workspaceStore, updateTa
     const merged = normalizeSectionsResponse(mergedRaw, totalLines);
     validateSectionsResponse(merged);
 
-    const finalState = workspaceStore.updateTechnicalPlan({
+    const finalLogs = pushLog(logs, `已识别 ${merged.sections.length} 个标段，请选择本次投标范围。`);
+    checkpointTask({ status: 'success', progress: 100, logs: finalLogs }, {
       bidSectionMode: 'multiple',
       bidSections: merged.sections,
       bidSectionExtractionStatus: 'success',
       bidSectionExtractionError: undefined,
     });
-    const finalLogs = pushLog(logs, `已识别 ${merged.sections.length} 个标段，请选择本次投标范围。`);
-    updateTask({ status: 'success', progress: 100, logs: finalLogs }, finalState);
   } catch (error) {
     const message = error instanceof Error ? error.message : '多标段识别失败';
-    const failedState = workspaceStore.updateTechnicalPlan({
+    checkpointTask({ status: 'error', progress: 100, error: message, logs: pushLog(logs, message) }, {
       bidSectionMode: 'multiple',
       bidSectionExtractionStatus: 'error',
       bidSectionExtractionError: message,
     });
-    updateTask({ status: 'error', progress: 100, error: message, logs: pushLog(logs, message) }, failedState);
-    throw error;
   }
 }
 

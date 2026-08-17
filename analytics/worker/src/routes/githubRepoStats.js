@@ -105,7 +105,7 @@ function parseRepoStatsFromHtml(html) {
 }
 
 function buildGitHubHeaders(env) {
-  const token = String(env.GITHUB_API_TOKEN || env.GITHUB_TOKEN || '').trim();
+  const token = String(env.OPENBIDKIT_YIBIAO_METADATA_READ_TOKEN || '').trim();
   return {
     Accept: 'application/vnd.github+json',
     'User-Agent': 'OpenBidKit-Yibiao-Analytics',

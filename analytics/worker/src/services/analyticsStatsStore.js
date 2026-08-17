@@ -140,19 +140,24 @@ function parseAgentRuntimeMetricKey(value) {
   const version = parts[0];
   const isV2 = version === 'v2' && parts.length >= 6;
   const isV3 = version === 'v3' && parts.length >= 7;
-  if (!isV2 && !isV3) return null;
+  const isV4 = version === 'v4' && parts.length >= 7;
+  if (!isV2 && !isV3 && !isV4) return null;
 
-  const offset = isV3 ? 1 : 0;
-  const runtime = isV3 ? decodeAgentRuntimeMetricPart(parts[1], 40) : LEGACY_AGENT_RUNTIME;
+  const offset = isV3 || isV4 ? 1 : 0;
+  const runtime = isV3 || isV4 ? decodeAgentRuntimeMetricPart(parts[1], 40) : LEGACY_AGENT_RUNTIME;
   const status = parts[1 + offset];
-  const retryMatch = /^r(\d+)$/.exec(parts[2 + offset]);
+  const retryMatch = (isV4 ? /^m(\d+)$/ : /^r(\d+)$/).exec(parts[2 + offset]);
   if (!AGENT_RUNTIME_KIND_PATTERN.test(runtime) || !retryMatch) return null;
-  const retryCount = Math.min(AGENT_RUNTIME_MAX_RETRY_COUNT, Math.max(0, Math.floor(Number(retryMatch[1]) || 0)));
+  const retryCount = Math.min(
+    isV4 ? 9999 : AGENT_RUNTIME_MAX_RETRY_COUNT,
+    Math.max(0, Math.floor(Number(retryMatch[1]) || 0)),
+  );
   if (!AGENT_RUNTIME_STATUSES.has(status)) return null;
   return {
     runtime,
     status,
     retryCount,
+    retryKind: isV4 ? 'model' : 'result',
     provider: decodeAgentRuntimeMetricPart(parts[3 + offset], 80),
     endpointHost: decodeAgentRuntimeMetricPart(parts[4 + offset], 120),
     model: decodeAgentRuntimeMetricPart(parts.slice(5 + offset).join('|'), 160),
@@ -715,20 +720,31 @@ function createAgentRuntimeSummary(source = {}) {
   const successCount = number(source.successCount ?? source.success_count);
   const failedCount = number(source.failedCount ?? source.failed_count);
   const totalCount = number(source.totalCount ?? source.total_count) || successCount + failedCount;
-  const retryCount = number(source.retryCount ?? source.retry_count);
-  const retriedRunCount = number(source.retriedRunCount ?? source.retried_run_count);
-  const retrySuccessCount = number(source.retrySuccessCount ?? source.retry_success_count);
+  const resultRetryCount = number(source.resultRetryCount ?? source.retryCount ?? source.retry_count);
+  const resultRetriedRunCount = number(source.resultRetriedRunCount ?? source.retriedRunCount ?? source.retried_run_count);
+  const resultRetrySuccessCount = number(source.resultRetrySuccessCount ?? source.retrySuccessCount ?? source.retry_success_count);
+  const modelRunCount = number(source.modelRunCount ?? source.model_run_count);
+  const modelRetryCount = number(source.modelRetryCount ?? source.model_retry_count);
+  const modelRetriedRunCount = number(source.modelRetriedRunCount ?? source.model_retried_run_count);
+  const modelRetrySuccessCount = number(source.modelRetrySuccessCount ?? source.model_retry_success_count);
   return {
     successCount,
     failedCount,
     totalCount,
-    retryCount,
-    retriedRunCount,
-    retrySuccessCount,
+    retryCount: modelRetryCount,
+    retriedRunCount: modelRetriedRunCount,
+    retrySuccessCount: modelRetrySuccessCount,
+    modelRunCount,
+    modelRetryCount,
+    modelRetriedRunCount,
+    modelRetrySuccessCount,
+    resultRetryCount,
+    resultRetriedRunCount,
+    resultRetrySuccessCount,
     successRate: totalCount > 0 ? successCount / totalCount : 0,
     failureRate: totalCount > 0 ? failedCount / totalCount : 0,
-    retryRate: totalCount > 0 ? retriedRunCount / totalCount : 0,
-    retrySuccessRate: retriedRunCount > 0 ? retrySuccessCount / retriedRunCount : 0,
+    retryRate: modelRunCount > 0 ? modelRetriedRunCount / modelRunCount : 0,
+    retrySuccessRate: modelRetriedRunCount > 0 ? modelRetrySuccessCount / modelRetriedRunCount : 0,
   };
 }
 
@@ -737,9 +753,13 @@ function createEmptyAgentRuntimeCounters() {
     successCount: 0,
     failedCount: 0,
     totalCount: 0,
-    retryCount: 0,
-    retriedRunCount: 0,
-    retrySuccessCount: 0,
+    resultRetryCount: 0,
+    resultRetriedRunCount: 0,
+    resultRetrySuccessCount: 0,
+    modelRunCount: 0,
+    modelRetryCount: 0,
+    modelRetriedRunCount: 0,
+    modelRetrySuccessCount: 0,
   };
 }
 
@@ -747,10 +767,19 @@ function addAgentRuntimeMetric(counters, parsed, count) {
   if (parsed.status === 'success') counters.successCount += count;
   if (parsed.status === 'failed') counters.failedCount += count;
   counters.totalCount += count;
-  counters.retryCount += count * parsed.retryCount;
-  if (parsed.retryCount > 0) {
-    counters.retriedRunCount += count;
-    if (parsed.status === 'success') counters.retrySuccessCount += count;
+  if (parsed.retryKind === 'model') {
+    counters.modelRunCount += count;
+    counters.modelRetryCount += count * parsed.retryCount;
+    if (parsed.retryCount > 0) {
+      counters.modelRetriedRunCount += count;
+      if (parsed.status === 'success') counters.modelRetrySuccessCount += count;
+    }
+  } else {
+    counters.resultRetryCount += count * parsed.retryCount;
+    if (parsed.retryCount > 0) {
+      counters.resultRetriedRunCount += count;
+      if (parsed.status === 'success') counters.resultRetrySuccessCount += count;
+    }
   }
 }
 
@@ -802,17 +831,25 @@ function createAgentRuntimeSummaryFromRows(rows = []) {
     successCount: 0,
     failedCount: 0,
     totalCount: 0,
-    retryCount: 0,
-    retriedRunCount: 0,
-    retrySuccessCount: 0,
+    resultRetryCount: 0,
+    resultRetriedRunCount: 0,
+    resultRetrySuccessCount: 0,
+    modelRunCount: 0,
+    modelRetryCount: 0,
+    modelRetriedRunCount: 0,
+    modelRetrySuccessCount: 0,
   };
   for (const row of rows || []) {
     summary.successCount += number(row.successCount ?? row.success_count);
     summary.failedCount += number(row.failedCount ?? row.failed_count);
     summary.totalCount += number(row.totalCount ?? row.total_count);
-    summary.retryCount += number(row.retryCount ?? row.retry_count);
-    summary.retriedRunCount += number(row.retriedRunCount ?? row.retried_run_count);
-    summary.retrySuccessCount += number(row.retrySuccessCount ?? row.retry_success_count);
+    summary.resultRetryCount += number(row.resultRetryCount ?? row.retry_count);
+    summary.resultRetriedRunCount += number(row.resultRetriedRunCount ?? row.retried_run_count);
+    summary.resultRetrySuccessCount += number(row.resultRetrySuccessCount ?? row.retry_success_count);
+    summary.modelRunCount += number(row.modelRunCount ?? row.model_run_count);
+    summary.modelRetryCount += number(row.modelRetryCount ?? row.model_retry_count);
+    summary.modelRetriedRunCount += number(row.modelRetriedRunCount ?? row.model_retried_run_count);
+    summary.modelRetrySuccessCount += number(row.modelRetrySuccessCount ?? row.model_retry_success_count);
   }
   return createAgentRuntimeSummary(summary);
 }
@@ -838,9 +875,13 @@ function createAgentRuntimeRowsByRuntime(models = []) {
     counters.successCount += model.successCount;
     counters.failedCount += model.failedCount;
     counters.totalCount += model.totalCount;
-    counters.retryCount += model.retryCount;
-    counters.retriedRunCount += model.retriedRunCount;
-    counters.retrySuccessCount += model.retrySuccessCount;
+    counters.resultRetryCount += model.resultRetryCount;
+    counters.resultRetriedRunCount += model.resultRetriedRunCount;
+    counters.resultRetrySuccessCount += model.resultRetrySuccessCount;
+    counters.modelRunCount += model.modelRunCount;
+    counters.modelRetryCount += model.modelRetryCount;
+    counters.modelRetriedRunCount += model.modelRetriedRunCount;
+    counters.modelRetrySuccessCount += model.modelRetrySuccessCount;
   }
   return Array.from(grouped.values())
     .map((row) => ({ runtime: row.runtime, ...createAgentRuntimeSummary(row) }))
@@ -856,34 +897,9 @@ function createAgentRuntimeResponse(rows = []) {
   };
 }
 
-async function ensureAgentRuntimeStatsTable(db) {
-  await run(db, `
-    CREATE TABLE IF NOT EXISTS stats_agent_runtime (
-      project_name TEXT NOT NULL,
-      runtime TEXT NOT NULL,
-      provider TEXT NOT NULL,
-      endpoint_host TEXT NOT NULL,
-      model TEXT NOT NULL,
-      success_count INTEGER NOT NULL DEFAULT 0,
-      failed_count INTEGER NOT NULL DEFAULT 0,
-      total_count INTEGER NOT NULL DEFAULT 0,
-      retry_count INTEGER NOT NULL DEFAULT 0,
-      retried_run_count INTEGER NOT NULL DEFAULT 0,
-      retry_success_count INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL,
-      PRIMARY KEY (project_name, runtime, provider, endpoint_host, model)
-    )
-  `);
-  await run(db, `
-    CREATE INDEX IF NOT EXISTS idx_stats_agent_runtime_project_total
-    ON stats_agent_runtime (project_name, total_count DESC)
-  `);
-}
-
 export async function queryStatsAgentRuntime(env, projectName, range) {
   if (range === 'history') {
     const db = requireStatsDb(env);
-    await ensureAgentRuntimeStatsTable(db);
     const rows = await all(db, `
       SELECT
         runtime,
@@ -893,9 +909,13 @@ export async function queryStatsAgentRuntime(env, projectName, range) {
         success_count AS successCount,
         failed_count AS failedCount,
         total_count AS totalCount,
-        retry_count AS retryCount,
-        retried_run_count AS retriedRunCount,
-        retry_success_count AS retrySuccessCount
+        retry_count AS resultRetryCount,
+        retried_run_count AS resultRetriedRunCount,
+        retry_success_count AS resultRetrySuccessCount,
+        model_run_count AS modelRunCount,
+        model_retry_count AS modelRetryCount,
+        model_retried_run_count AS modelRetriedRunCount,
+        model_retry_success_count AS modelRetrySuccessCount
       FROM stats_agent_runtime
       WHERE project_name = ?
       ORDER BY total_count DESC, runtime ASC, provider ASC, endpoint_host ASC, model ASC
@@ -1929,20 +1949,28 @@ function prepareAgentRuntimeStatements(db, rows, updatedAt) {
         CAST(json_extract(item.value, '$.successCount') AS INTEGER) AS success_count,
         CAST(json_extract(item.value, '$.failedCount') AS INTEGER) AS failed_count,
         CAST(json_extract(item.value, '$.totalCount') AS INTEGER) AS total_count,
-        CAST(json_extract(item.value, '$.retryCount') AS INTEGER) AS retry_count,
-        CAST(json_extract(item.value, '$.retriedRunCount') AS INTEGER) AS retried_run_count,
-        CAST(json_extract(item.value, '$.retrySuccessCount') AS INTEGER) AS retry_success_count
+        CAST(json_extract(item.value, '$.resultRetryCount') AS INTEGER) AS retry_count,
+        CAST(json_extract(item.value, '$.resultRetriedRunCount') AS INTEGER) AS retried_run_count,
+        CAST(json_extract(item.value, '$.resultRetrySuccessCount') AS INTEGER) AS retry_success_count,
+        CAST(json_extract(item.value, '$.modelRunCount') AS INTEGER) AS model_run_count,
+        CAST(json_extract(item.value, '$.modelRetryCount') AS INTEGER) AS model_retry_count,
+        CAST(json_extract(item.value, '$.modelRetriedRunCount') AS INTEGER) AS model_retried_run_count,
+        CAST(json_extract(item.value, '$.modelRetrySuccessCount') AS INTEGER) AS model_retry_success_count
       FROM json_each(?) AS item
     )
     INSERT INTO stats_agent_runtime (
       project_name, runtime, provider, endpoint_host, model,
       success_count, failed_count, total_count,
-      retry_count, retried_run_count, retry_success_count, updated_at
+      retry_count, retried_run_count, retry_success_count,
+      model_run_count, model_retry_count, model_retried_run_count, model_retry_success_count,
+      updated_at
     )
     SELECT
       project_name, runtime, provider, endpoint_host, model,
       success_count, failed_count, total_count,
-      retry_count, retried_run_count, retry_success_count, ?
+      retry_count, retried_run_count, retry_success_count,
+      model_run_count, model_retry_count, model_retried_run_count, model_retry_success_count,
+      ?
     FROM rows
     WHERE project_name != ''
     ON CONFLICT(project_name, runtime, provider, endpoint_host, model) DO UPDATE SET
@@ -1952,13 +1980,16 @@ function prepareAgentRuntimeStatements(db, rows, updatedAt) {
       retry_count = stats_agent_runtime.retry_count + excluded.retry_count,
       retried_run_count = stats_agent_runtime.retried_run_count + excluded.retried_run_count,
       retry_success_count = stats_agent_runtime.retry_success_count + excluded.retry_success_count,
+      model_run_count = stats_agent_runtime.model_run_count + excluded.model_run_count,
+      model_retry_count = stats_agent_runtime.model_retry_count + excluded.model_retry_count,
+      model_retried_run_count = stats_agent_runtime.model_retried_run_count + excluded.model_retried_run_count,
+      model_retry_success_count = stats_agent_runtime.model_retry_success_count + excluded.model_retry_success_count,
       updated_at = excluded.updated_at
   `).bind(json, updatedAt)];
 }
 
 async function runAgentRuntimeStage(env, activityDate, projectNames, completedByProject) {
   const db = requireStatsDb(env);
-  await ensureAgentRuntimeStatsTable(db);
   const grouped = groupRowsByProject(await queryRollupAgentRuntimeRows(env, activityDate, projectNames), projectNames);
   const results = [];
   for (const projectName of uniqueProjectNames(projectNames)) {

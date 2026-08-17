@@ -32,7 +32,9 @@ function registerPluginIpc(ipcMain, app, services) {
           installedVersion: installedPlugin?.version,
           enabled: installedPlugin?.enabled || false,
           hasConfig: installedPlugin?.hasConfig || false,
-          hasUpdate: installedMap.has(plugin.id) && !isUpdating && installedPlugin.version !== plugin.version,
+          hasUpdate: installedMap.has(plugin.id)
+            && !isUpdating
+            && pluginService.comparePluginVersions(plugin.version, installedPlugin.version) > 0,
           updating: isUpdating,
           updateFailed: updateFailed ? {
             stage: updateFailed.stage,
@@ -144,6 +146,10 @@ function registerPluginIpc(ipcMain, app, services) {
     return await pluginService.updatePlugin(pluginId);
   });
 
+  // 检查和批量升级当前所有存在新版本的插件
+  ipcMain.handle('plugins:checkUpdates', async () => pluginService.checkAvailableUpdates());
+  ipcMain.handle('plugins:updateAll', async () => pluginService.updateAllAvailablePlugins());
+
   // 打开配置窗口
   ipcMain.handle('plugins:openConfig', async (event, pluginId) => {
     return openPluginConfigWindow(app, pluginId, pluginService);
@@ -152,6 +158,11 @@ function registerPluginIpc(ipcMain, app, services) {
   // 刷新插件市场
   ipcMain.handle('plugins:refreshMarket', async () => {
     return await pluginService.refreshMarket();
+  });
+
+  // 向运行中的插件发送宿主事件（如让桌宠打开 AI 对话）
+  ipcMain.handle('plugins:notify-event', async (event, pluginId, hostEvent, payload) => {
+    return await pluginService.notifyPluginEvent(pluginId, hostEvent, payload);
   });
 
   // 清除更新失败状态

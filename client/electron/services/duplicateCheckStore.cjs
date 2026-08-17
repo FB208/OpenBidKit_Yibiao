@@ -47,16 +47,6 @@ function jsonOrNull(value) {
   return value === undefined || value === null ? null : JSON.stringify(value);
 }
 
-function hashContent(content) {
-  return crypto.createHash('sha256').update(String(content || ''), 'utf8').digest('hex');
-}
-
-function hashFileIfReadable(filePath) {
-  const targetPath = String(filePath || '').trim();
-  if (!targetPath || !fs.existsSync(targetPath)) return null;
-  return hashContent(fs.readFileSync(targetPath, 'utf-8'));
-}
-
 function toDbBool(value) {
   return value ? 1 : 0;
 }
@@ -128,14 +118,14 @@ function fileFromRow(row) {
   };
 }
 
-function taskFromRow(row) {
+function taskFromRow(row, taskLogStore) {
   if (!row) return undefined;
   return {
     task_id: row.task_id,
     type: row.type,
     status: normalizeStatus(row.status, ['running', 'success', 'error'], 'running'),
     progress: Number(row.progress || 0),
-    logs: safeJsonParse(row.logs_json, []),
+    logs: taskLogStore.list('duplicate-check', row.type, row.task_id),
     started_at: row.started_at,
     updated_at: row.updated_at,
     error: row.error || undefined,
@@ -186,54 +176,52 @@ function buildRows(files) {
   return keyOrder.map((key) => rowsByKey.get(key));
 }
 
-function createSectionStats(section, analysis) {
+function createSectionStatsPatch(section, analysis) {
+  const stats = {};
   if (section === 'metadata') {
-    return {
-      contentExtraction: analysis.contentExtraction,
-      metadataExtraction: analysis.metadataExtraction,
-      logs: analysis.logs,
-      files: Array.isArray(analysis.files)
-        ? analysis.files.map((file) => ({ file_id: file.file_id, file_name: file.file_name, status: file.status, error: file.error }))
-        : [],
-    };
+    if (hasOwn(analysis, 'contentExtraction')) stats.contentExtraction = analysis.contentExtraction;
+    if (hasOwn(analysis, 'metadataExtraction')) stats.metadataExtraction = analysis.metadataExtraction;
+    if (hasOwn(analysis, 'logs')) stats.logs = analysis.logs;
+    if (hasOwn(analysis, 'files')) {
+      stats.files = (Array.isArray(analysis.files) ? analysis.files : [])
+        .map((file) => ({ file_id: file.file_id, file_name: file.file_name, status: file.status, error: file.error }));
+    }
+    return stats;
   }
   if (section === 'outline') {
-    return {
-      tenderSentenceCount: analysis.tenderSentenceCount,
-      tenderMatchedItemCount: analysis.tenderMatchedItemCount,
-      extraction: analysis.extraction,
-      files: Array.isArray(analysis.files)
-        ? analysis.files.map((file) => ({
-            file_id: file.file_id,
-            file_name: file.file_name,
-            status: file.status,
-            source: file.source,
-            confidence: file.confidence,
-            item_count: file.item_count,
-            tender_matched_count: file.tender_matched_count,
-            error: file.error,
-          }))
-        : [],
-    };
+    if (hasOwn(analysis, 'tenderSentenceCount')) stats.tenderSentenceCount = analysis.tenderSentenceCount;
+    if (hasOwn(analysis, 'tenderMatchedItemCount')) stats.tenderMatchedItemCount = analysis.tenderMatchedItemCount;
+    if (hasOwn(analysis, 'extraction')) stats.extraction = analysis.extraction;
+    if (hasOwn(analysis, 'files')) {
+      stats.files = (Array.isArray(analysis.files) ? analysis.files : []).map((file) => ({
+        file_id: file.file_id,
+        file_name: file.file_name,
+        status: file.status,
+        source: file.source,
+        confidence: file.confidence,
+        item_count: file.item_count,
+        tender_matched_count: file.tender_matched_count,
+        error: file.error,
+      }));
+    }
+    return stats;
   }
   if (section === 'content') {
-    return {
-      tenderSentenceCount: analysis.tenderSentenceCount,
-      tenderMatchedSentenceCount: analysis.tenderMatchedSentenceCount,
-      totalSentenceCount: analysis.totalSentenceCount,
-      extraction: analysis.extraction,
-    };
+    if (hasOwn(analysis, 'tenderSentenceCount')) stats.tenderSentenceCount = analysis.tenderSentenceCount;
+    if (hasOwn(analysis, 'tenderMatchedSentenceCount')) stats.tenderMatchedSentenceCount = analysis.tenderMatchedSentenceCount;
+    if (hasOwn(analysis, 'totalSentenceCount')) stats.totalSentenceCount = analysis.totalSentenceCount;
+    if (hasOwn(analysis, 'extraction')) stats.extraction = analysis.extraction;
+    return stats;
   }
   if (section === 'image') {
-    return {
-      extraction: analysis.extraction,
-      totalImageCount: analysis.totalImageCount,
-    };
+    if (hasOwn(analysis, 'extraction')) stats.extraction = analysis.extraction;
+    if (hasOwn(analysis, 'totalImageCount')) stats.totalImageCount = analysis.totalImageCount;
+    return stats;
   }
-  return undefined;
+  return stats;
 }
 
-function createDuplicateCheckStore({ app, db }) {
+function createDuplicateCheckStore({ app, db, taskLogStore }) {
   const duplicateCheckDir = getDuplicateCheckDir(app);
   const contentDir = getDuplicateCheckContentDir(app);
 
@@ -322,13 +310,12 @@ function createDuplicateCheckStore({ app, db }) {
     }
     const timestamp = now();
     db.prepare(`
-      INSERT INTO duplicate_check_tasks (type, task_id, status, progress, logs_json, stats_json, error, payload_signature, started_at, updated_at)
-      VALUES (@type, @task_id, @status, @progress, @logs_json, @stats_json, @error, @payload_signature, @started_at, @updated_at)
+      INSERT INTO duplicate_check_tasks (type, task_id, status, progress, stats_json, error, payload_signature, started_at, updated_at)
+      VALUES (@type, @task_id, @status, @progress, @stats_json, @error, @payload_signature, @started_at, @updated_at)
       ON CONFLICT(type) DO UPDATE SET
         task_id = excluded.task_id,
         status = excluded.status,
         progress = excluded.progress,
-        logs_json = excluded.logs_json,
         stats_json = excluded.stats_json,
         error = excluded.error,
         payload_signature = excluded.payload_signature,
@@ -339,17 +326,17 @@ function createDuplicateCheckStore({ app, db }) {
       task_id: String(task.task_id || ''),
       status: String(task.status || 'running'),
       progress: Math.max(0, Math.min(100, Math.round(Number(task.progress || 0)))),
-      logs_json: JSON.stringify(Array.isArray(task.logs) ? task.logs : []),
       stats_json: jsonOrNull(task.stats),
       error: task.error ? String(task.error) : null,
       payload_signature: task.payload_signature ? String(task.payload_signature) : null,
       started_at: task.started_at || timestamp,
       updated_at: task.updated_at || timestamp,
     });
+    taskLogStore.sync('duplicate-check', type, String(task.task_id || ''), task.logs, task.updated_at || timestamp);
   }
 
   function loadTask(type) {
-    return taskFromRow(db.prepare('SELECT * FROM duplicate_check_tasks WHERE type = ?').get(type));
+    return taskFromRow(db.prepare('SELECT * FROM duplicate_check_tasks WHERE type = ?').get(type), taskLogStore);
   }
 
   function saveSection(section, analysis) {
@@ -359,6 +346,11 @@ function createDuplicateCheckStore({ app, db }) {
     }
 
     const timestamp = now();
+    const existing = db.prepare('SELECT * FROM duplicate_check_analysis_sections WHERE section = ?').get(section);
+    const stats = {
+      ...safeJsonParse(existing?.stats_json, {}),
+      ...createSectionStatsPatch(section, analysis),
+    };
     db.prepare(`
       INSERT INTO duplicate_check_analysis_sections (section, status, progress, message, signature, stats_json, started_at, updated_at)
       VALUES (@section, @status, @progress, @message, @signature, @stats_json, @started_at, @updated_at)
@@ -372,12 +364,16 @@ function createDuplicateCheckStore({ app, db }) {
         updated_at = excluded.updated_at
     `).run({
       section,
-      status: String(analysis.status || 'pending'),
-      progress: Math.max(0, Math.min(100, Math.round(Number(analysis.progress || 0)))),
-      message: String(analysis.message || ''),
-      signature: analysis.signature ? String(analysis.signature) : null,
-      stats_json: jsonOrNull(createSectionStats(section, analysis)),
-      started_at: analysis.started_at || timestamp,
+      status: hasOwn(analysis, 'status') ? String(analysis.status || 'pending') : existing?.status || 'pending',
+      progress: hasOwn(analysis, 'progress')
+        ? Math.max(0, Math.min(100, Math.round(Number(analysis.progress || 0))))
+        : Number(existing?.progress || 0),
+      message: hasOwn(analysis, 'message') ? String(analysis.message || '') : existing?.message || '',
+      signature: hasOwn(analysis, 'signature')
+        ? analysis.signature ? String(analysis.signature) : null
+        : existing?.signature || null,
+      stats_json: jsonOrNull(stats),
+      started_at: hasOwn(analysis, 'started_at') ? analysis.started_at || timestamp : existing?.started_at || timestamp,
       updated_at: analysis.updated_at || timestamp,
     });
 
@@ -416,135 +412,146 @@ function createDuplicateCheckStore({ app, db }) {
   }
 
   function saveMetadataAnalysisDetails(analysis) {
-    db.prepare('DELETE FROM duplicate_check_content_files').run();
-    db.prepare('DELETE FROM duplicate_check_metadata_items').run();
     const timestamp = now();
-    db.prepare('UPDATE duplicate_check_files SET content_hash = NULL, updated_at = ?').run(timestamp);
-    const contentInsert = db.prepare(`
-      INSERT INTO duplicate_check_content_files (file_id, status, content_path, content_length, parser_label, error, updated_at)
-      VALUES (@file_id, @status, @content_path, @content_length, @parser_label, @error, @updated_at)
-    `);
-    for (const item of Array.isArray(analysis.contentFiles) ? analysis.contentFiles : []) {
-      if (!item?.file_id) continue;
-      const contentHash = item.content_hash ? String(item.content_hash) : hashFileIfReadable(item.content_path);
-      contentInsert.run({
-        file_id: String(item.file_id),
-        status: String(item.status || 'pending'),
-        content_path: item.content_path ? String(item.content_path) : null,
-        content_length: Number(item.content_length || 0),
-        parser_label: item.parser_label ? String(item.parser_label) : null,
-        error: item.error ? String(item.error) : null,
-        updated_at: item.updated_at || timestamp,
-      });
-      db.prepare('UPDATE duplicate_check_files SET content_hash = @content_hash, updated_at = @updated_at WHERE file_id = @file_id').run({
-        file_id: String(item.file_id),
-        content_hash: contentHash,
-        updated_at: item.updated_at || timestamp,
-      });
-    }
-
-    const metadataInsert = db.prepare(`
-      INSERT INTO duplicate_check_metadata_items (
-        file_id, key, label, value, normalized, date_day, comparable, date_comparable, sort_order
-      ) VALUES (
-        @file_id, @key, @label, @value, @normalized, @date_day, @comparable, @date_comparable, @sort_order
-      )
-    `);
-    for (const file of Array.isArray(analysis.files) ? analysis.files : []) {
-      if (!file?.file_id) continue;
-      (Array.isArray(file.metadata) ? file.metadata : []).forEach((item, index) => {
-        if (!item?.key) return;
-        metadataInsert.run({
-          file_id: String(file.file_id),
-          key: String(item.key),
-          label: String(item.label || item.key),
-          value: String(item.value || ''),
-          normalized: item.normalized ? String(item.normalized) : null,
-          date_day: item.date_day ? String(item.date_day) : null,
-          comparable: toDbBool(item.comparable),
-          date_comparable: toDbBool(item.date_comparable),
-          sort_order: index,
+    if (hasOwn(analysis, 'contentFiles')) {
+      db.prepare('DELETE FROM duplicate_check_content_files').run();
+      db.prepare('UPDATE duplicate_check_files SET content_hash = NULL, updated_at = ?').run(timestamp);
+      const contentInsert = db.prepare(`
+        INSERT INTO duplicate_check_content_files (file_id, status, content_path, content_length, parser_label, error, updated_at)
+        VALUES (@file_id, @status, @content_path, @content_length, @parser_label, @error, @updated_at)
+      `);
+      for (const item of Array.isArray(analysis.contentFiles) ? analysis.contentFiles : []) {
+        if (!item?.file_id) continue;
+        const contentHash = item.content_hash ? String(item.content_hash) : null;
+        contentInsert.run({
+          file_id: String(item.file_id),
+          status: String(item.status || 'pending'),
+          content_path: item.content_path ? String(item.content_path) : null,
+          content_length: Number(item.content_length || 0),
+          parser_label: item.parser_label ? String(item.parser_label) : null,
+          error: item.error ? String(item.error) : null,
+          updated_at: item.updated_at || timestamp,
         });
-      });
-    }
-  }
-
-  function saveOutlineAnalysisDetails(analysis) {
-    db.prepare('DELETE FROM duplicate_check_outline_items').run();
-    db.prepare('DELETE FROM duplicate_check_outline_groups').run();
-    db.prepare('DELETE FROM duplicate_check_outline_pairwise').run();
-    const itemInsert = db.prepare(`
-      INSERT INTO duplicate_check_outline_items (
-        item_id, file_id, parent_item_id, level, number, title, normalized_title, path_titles_json,
-        normalized_path, source, confidence, sort_order, from_tender, matched_tender_sentence
-      ) VALUES (
-        @item_id, @file_id, @parent_item_id, @level, @number, @title, @normalized_title, @path_titles_json,
-        @normalized_path, @source, @confidence, @sort_order, @from_tender, @matched_tender_sentence
-      )
-    `);
-    for (const file of Array.isArray(analysis.files) ? analysis.files : []) {
-      for (const item of Array.isArray(file.items) ? file.items : []) {
-        if (!item?.id || !file?.file_id) continue;
-        itemInsert.run({
-          item_id: scopedOutlineItemId(file.file_id, item.id),
-          file_id: String(file.file_id),
-          parent_item_id: item.parent_id ? scopedOutlineItemId(file.file_id, item.parent_id) : null,
-          level: Number(item.level || 1),
-          number: item.number ? String(item.number) : null,
-          title: String(item.title || ''),
-          normalized_title: String(item.normalized_title || ''),
-          path_titles_json: JSON.stringify(Array.isArray(item.path_titles) ? item.path_titles : []),
-          normalized_path: String(item.normalized_path || ''),
-          source: String(item.source || file.source || 'semantic'),
-          confidence: Number(item.confidence ?? file.confidence ?? 0),
-          sort_order: Number(item.order || 0),
-          from_tender: toDbBool(item.from_tender),
-          matched_tender_sentence: item.matched_tender_sentence ? String(item.matched_tender_sentence) : null,
+        db.prepare('UPDATE duplicate_check_files SET content_hash = @content_hash, updated_at = @updated_at WHERE file_id = @file_id').run({
+          file_id: String(item.file_id),
+          content_hash: contentHash,
+          updated_at: item.updated_at || timestamp,
         });
       }
     }
 
-    const groupInsert = db.prepare(`
-      INSERT INTO duplicate_check_outline_groups (group_id, type, title, score, file_ids_json, item_ids_json, paths_json, sort_order)
-      VALUES (@group_id, @type, @title, @score, @file_ids_json, @item_ids_json, @paths_json, @sort_order)
-    `);
-    (Array.isArray(analysis.duplicateGroups) ? analysis.duplicateGroups : []).forEach((group, index) => {
-      if (!group?.id) return;
-      groupInsert.run({
-        group_id: String(group.id),
-        type: String(group.type || 'duplicate'),
-        title: String(group.title || ''),
-        score: Number(group.score || 0),
-        file_ids_json: JSON.stringify(Array.isArray(group.file_ids) ? group.file_ids : []),
-        item_ids_json: JSON.stringify(group.item_ids || {}),
-        paths_json: JSON.stringify(group.paths || {}),
-        sort_order: index,
-      });
-    });
+    if (hasOwn(analysis, 'files')) {
+      db.prepare('DELETE FROM duplicate_check_metadata_items').run();
+      const metadataInsert = db.prepare(`
+        INSERT INTO duplicate_check_metadata_items (
+          file_id, key, label, value, normalized, date_day, comparable, date_comparable, sort_order
+        ) VALUES (
+          @file_id, @key, @label, @value, @normalized, @date_day, @comparable, @date_comparable, @sort_order
+        )
+      `);
+      for (const file of Array.isArray(analysis.files) ? analysis.files : []) {
+        if (!file?.file_id) continue;
+        (Array.isArray(file.metadata) ? file.metadata : []).forEach((item, index) => {
+          if (!item?.key) return;
+          metadataInsert.run({
+            file_id: String(file.file_id),
+            key: String(item.key),
+            label: String(item.label || item.key),
+            value: String(item.value || ''),
+            normalized: item.normalized ? String(item.normalized) : null,
+            date_day: item.date_day ? String(item.date_day) : null,
+            comparable: toDbBool(item.comparable),
+            date_comparable: toDbBool(item.date_comparable),
+            sort_order: index,
+          });
+        });
+      }
+    }
+  }
 
-    const pairwiseInsert = db.prepare(`
-      INSERT INTO duplicate_check_outline_pairwise (
-        file_a_id, file_b_id, score, title_overlap, path_overlap, order_similarity, shared_count, risk
-      ) VALUES (
-        @file_a_id, @file_b_id, @score, @title_overlap, @path_overlap, @order_similarity, @shared_count, @risk
-      )
-    `);
-    for (const item of Array.isArray(analysis.pairwiseSimilarities) ? analysis.pairwiseSimilarities : []) {
-      if (!item?.file_a_id || !item?.file_b_id) continue;
-      pairwiseInsert.run({
-        file_a_id: String(item.file_a_id),
-        file_b_id: String(item.file_b_id),
-        score: Number(item.score || 0),
-        title_overlap: Number(item.title_overlap || 0),
-        path_overlap: Number(item.path_overlap || 0),
-        order_similarity: Number(item.order_similarity || 0),
-        shared_count: Number(item.shared_count || 0),
-        risk: String(item.risk || 'none'),
+  function saveOutlineAnalysisDetails(analysis) {
+    if (hasOwn(analysis, 'files')) {
+      db.prepare('DELETE FROM duplicate_check_outline_items').run();
+      const itemInsert = db.prepare(`
+        INSERT INTO duplicate_check_outline_items (
+          item_id, file_id, parent_item_id, level, number, title, normalized_title, path_titles_json,
+          normalized_path, source, confidence, sort_order, from_tender, matched_tender_sentence
+        ) VALUES (
+          @item_id, @file_id, @parent_item_id, @level, @number, @title, @normalized_title, @path_titles_json,
+          @normalized_path, @source, @confidence, @sort_order, @from_tender, @matched_tender_sentence
+        )
+      `);
+      for (const file of Array.isArray(analysis.files) ? analysis.files : []) {
+        for (const item of Array.isArray(file.items) ? file.items : []) {
+          if (!item?.id || !file?.file_id) continue;
+          itemInsert.run({
+            item_id: scopedOutlineItemId(file.file_id, item.id),
+            file_id: String(file.file_id),
+            parent_item_id: item.parent_id ? scopedOutlineItemId(file.file_id, item.parent_id) : null,
+            level: Number(item.level || 1),
+            number: item.number ? String(item.number) : null,
+            title: String(item.title || ''),
+            normalized_title: String(item.normalized_title || ''),
+            path_titles_json: JSON.stringify(Array.isArray(item.path_titles) ? item.path_titles : []),
+            normalized_path: String(item.normalized_path || ''),
+            source: String(item.source || file.source || 'semantic'),
+            confidence: Number(item.confidence ?? file.confidence ?? 0),
+            sort_order: Number(item.order || 0),
+            from_tender: toDbBool(item.from_tender),
+            matched_tender_sentence: item.matched_tender_sentence ? String(item.matched_tender_sentence) : null,
+          });
+        }
+      }
+    }
+
+    if (hasOwn(analysis, 'duplicateGroups')) {
+      db.prepare('DELETE FROM duplicate_check_outline_groups').run();
+      const groupInsert = db.prepare(`
+        INSERT INTO duplicate_check_outline_groups (group_id, type, title, score, file_ids_json, item_ids_json, paths_json, sort_order)
+        VALUES (@group_id, @type, @title, @score, @file_ids_json, @item_ids_json, @paths_json, @sort_order)
+      `);
+      (Array.isArray(analysis.duplicateGroups) ? analysis.duplicateGroups : []).forEach((group, index) => {
+        if (!group?.id) return;
+        groupInsert.run({
+          group_id: String(group.id),
+          type: String(group.type || 'duplicate'),
+          title: String(group.title || ''),
+          score: Number(group.score || 0),
+          file_ids_json: JSON.stringify(Array.isArray(group.file_ids) ? group.file_ids : []),
+          item_ids_json: JSON.stringify(group.item_ids || {}),
+          paths_json: JSON.stringify(group.paths || {}),
+          sort_order: index,
+        });
       });
+    }
+
+    if (hasOwn(analysis, 'pairwiseSimilarities')) {
+      db.prepare('DELETE FROM duplicate_check_outline_pairwise').run();
+      const pairwiseInsert = db.prepare(`
+        INSERT INTO duplicate_check_outline_pairwise (
+          file_a_id, file_b_id, score, title_overlap, path_overlap, order_similarity, shared_count, risk
+        ) VALUES (
+          @file_a_id, @file_b_id, @score, @title_overlap, @path_overlap, @order_similarity, @shared_count, @risk
+        )
+      `);
+      for (const item of Array.isArray(analysis.pairwiseSimilarities) ? analysis.pairwiseSimilarities : []) {
+        if (!item?.file_a_id || !item?.file_b_id) continue;
+        pairwiseInsert.run({
+          file_a_id: String(item.file_a_id),
+          file_b_id: String(item.file_b_id),
+          score: Number(item.score || 0),
+          title_overlap: Number(item.title_overlap || 0),
+          path_overlap: Number(item.path_overlap || 0),
+          order_similarity: Number(item.order_similarity || 0),
+          shared_count: Number(item.shared_count || 0),
+          risk: String(item.risk || 'none'),
+        });
+      }
     }
   }
 
   function saveContentAnalysisDetails(analysis) {
+    if (!hasOwn(analysis, 'duplicateSentences')) return;
     db.prepare('DELETE FROM duplicate_check_content_occurrences').run();
     db.prepare('DELETE FROM duplicate_check_content_duplicates').run();
     const duplicateInsert = db.prepare(`
@@ -571,60 +578,64 @@ function createDuplicateCheckStore({ app, db }) {
   }
 
   function saveImageAnalysisDetails(analysis) {
-    db.prepare('DELETE FROM duplicate_check_image_occurrences').run();
-    db.prepare('DELETE FROM duplicate_check_duplicate_images').run();
-    db.prepare('DELETE FROM duplicate_check_image_files').run();
     const timestamp = now();
-    const fileInsert = db.prepare(`
-      INSERT INTO duplicate_check_image_files (file_id, status, image_count, unique_image_count, error, updated_at)
-      VALUES (@file_id, @status, @image_count, @unique_image_count, @error, @updated_at)
-    `);
-    for (const file of Array.isArray(analysis.files) ? analysis.files : []) {
-      if (!file?.file_id) continue;
-      fileInsert.run({
-        file_id: String(file.file_id),
-        status: String(file.status || 'pending'),
-        image_count: Number(file.image_count || 0),
-        unique_image_count: Number(file.unique_image_count || 0),
-        error: file.error ? String(file.error) : null,
-        updated_at: file.updated_at || timestamp,
-      });
-    }
-
-    const imageInsert = db.prepare(`
-      INSERT INTO duplicate_check_duplicate_images (image_id, hash, preview_url, file_ids_json, sort_order)
-      VALUES (@image_id, @hash, @preview_url, @file_ids_json, @sort_order)
-    `);
-    const occurrenceInsert = db.prepare(`
-      INSERT INTO duplicate_check_image_occurrences (image_id, file_id, occurrence_count, locations_json)
-      VALUES (@image_id, @file_id, @occurrence_count, @locations_json)
-    `);
-    (Array.isArray(analysis.duplicateImages) ? analysis.duplicateImages : []).forEach((item, index) => {
-      const imageId = item?.id || `I${String(index + 1).padStart(6, '0')}`;
-      imageInsert.run({
-        image_id: imageId,
-        hash: String(item?.hash || ''),
-        preview_url: String(item?.preview_url || ''),
-        file_ids_json: JSON.stringify(Array.isArray(item?.file_ids) ? item.file_ids : []),
-        sort_order: index,
-      });
-      for (const [fileId, count] of Object.entries(item?.occurrences || {})) {
-        occurrenceInsert.run({
-          image_id: imageId,
-          file_id: fileId,
-          occurrence_count: Number(count || 0),
-          locations_json: jsonOrNull(item?.locations?.[fileId]),
+    if (hasOwn(analysis, 'files')) {
+      db.prepare('DELETE FROM duplicate_check_image_files').run();
+      const fileInsert = db.prepare(`
+        INSERT INTO duplicate_check_image_files (file_id, status, image_count, unique_image_count, error, updated_at)
+        VALUES (@file_id, @status, @image_count, @unique_image_count, @error, @updated_at)
+      `);
+      for (const file of Array.isArray(analysis.files) ? analysis.files : []) {
+        if (!file?.file_id) continue;
+        fileInsert.run({
+          file_id: String(file.file_id),
+          status: String(file.status || 'pending'),
+          image_count: Number(file.image_count || 0),
+          unique_image_count: Number(file.unique_image_count || 0),
+          error: file.error ? String(file.error) : null,
+          updated_at: file.updated_at || timestamp,
         });
       }
-    });
+    }
+
+    if (hasOwn(analysis, 'duplicateImages')) {
+      db.prepare('DELETE FROM duplicate_check_image_occurrences').run();
+      db.prepare('DELETE FROM duplicate_check_duplicate_images').run();
+      const imageInsert = db.prepare(`
+        INSERT INTO duplicate_check_duplicate_images (image_id, hash, preview_url, file_ids_json, sort_order)
+        VALUES (@image_id, @hash, @preview_url, @file_ids_json, @sort_order)
+      `);
+      const occurrenceInsert = db.prepare(`
+        INSERT INTO duplicate_check_image_occurrences (image_id, file_id, occurrence_count, locations_json)
+        VALUES (@image_id, @file_id, @occurrence_count, @locations_json)
+      `);
+      (Array.isArray(analysis.duplicateImages) ? analysis.duplicateImages : []).forEach((item, index) => {
+        const imageId = item?.id || `I${String(index + 1).padStart(6, '0')}`;
+        imageInsert.run({
+          image_id: imageId,
+          hash: String(item?.hash || ''),
+          preview_url: String(item?.preview_url || ''),
+          file_ids_json: JSON.stringify(Array.isArray(item?.file_ids) ? item.file_ids : []),
+          sort_order: index,
+        });
+        for (const [fileId, count] of Object.entries(item?.occurrences || {})) {
+          occurrenceInsert.run({
+            image_id: imageId,
+            file_id: fileId,
+            occurrence_count: Number(count || 0),
+            locations_json: jsonOrNull(item?.locations?.[fileId]),
+          });
+        }
+      });
+    }
   }
 
-  function loadMetadataAnalysis(row) {
+  function loadMetadataAnalysis(row, filesState, fileNameById) {
     if (!row) return undefined;
     const stats = safeJsonParse(row.stats_json, {});
     const contentFiles = db.prepare('SELECT * FROM duplicate_check_content_files ORDER BY file_id ASC').all().map((item) => ({
       file_id: item.file_id,
-      file_name: loadFileName(item.file_id),
+      file_name: fileNameById.get(item.file_id) || item.file_id,
       status: normalizeStatus(item.status, ['pending', 'running', 'success', 'error'], 'pending'),
       content_path: item.content_path || undefined,
       content_length: Number(item.content_length || 0),
@@ -634,14 +645,14 @@ function createDuplicateCheckStore({ app, db }) {
     const metadataRows = db.prepare('SELECT * FROM duplicate_check_metadata_items ORDER BY file_id ASC, sort_order ASC, id ASC').all();
     const statusByFile = new Map((stats.files || []).map((file) => [file.file_id, file]));
     const filesById = new Map();
-    for (const file of loadFiles().bidFiles) {
+    for (const file of filesState.bidFiles) {
       const summary = statusByFile.get(file.id) || {};
       filesById.set(file.id, { file_id: file.id, file_name: file.file_name, status: summary.status || 'pending', metadata: [], error: summary.error });
     }
     for (const item of metadataRows) {
       if (!filesById.has(item.file_id)) {
         const summary = statusByFile.get(item.file_id) || {};
-        filesById.set(item.file_id, { file_id: item.file_id, file_name: loadFileName(item.file_id), status: summary.status || 'success', metadata: [], error: summary.error });
+        filesById.set(item.file_id, { file_id: item.file_id, file_name: fileNameById.get(item.file_id) || item.file_id, status: summary.status || 'success', metadata: [], error: summary.error });
       }
       filesById.get(item.file_id).metadata.push({
         key: item.key,
@@ -670,7 +681,7 @@ function createDuplicateCheckStore({ app, db }) {
     };
   }
 
-  function loadOutlineAnalysis(row) {
+  function loadOutlineAnalysis(row, filesState) {
     if (!row) return undefined;
     const stats = safeJsonParse(row.stats_json, {});
     const itemsByFile = new Map();
@@ -718,7 +729,7 @@ function createDuplicateCheckStore({ app, db }) {
       }
     }
     const summaryByFile = new Map((stats.files || []).map((file) => [file.file_id, file]));
-    const files = loadFiles().bidFiles.map((file) => {
+    const files = filesState.bidFiles.map((file) => {
       const summary = summaryByFile.get(file.id) || {};
       const items = itemsByFile.get(file.id) || [];
       return {
@@ -759,7 +770,7 @@ function createDuplicateCheckStore({ app, db }) {
     };
   }
 
-  function loadContentAnalysis(row) {
+  function loadContentAnalysis(row, filesState) {
     if (!row) return undefined;
     const stats = safeJsonParse(row.stats_json, {});
     const occurrenceRows = db.prepare('SELECT * FROM duplicate_check_content_occurrences').all();
@@ -787,17 +798,17 @@ function createDuplicateCheckStore({ app, db }) {
       tenderSentenceCount: Number(stats.tenderSentenceCount || 0),
       tenderMatchedSentenceCount: Number(stats.tenderMatchedSentenceCount || 0),
       totalSentenceCount: Number(stats.totalSentenceCount || 0),
-      extraction: stats.extraction || createEmptyProgress('pending', loadFiles().bidFiles.length),
+      extraction: stats.extraction || createEmptyProgress('pending', filesState.bidFiles.length),
       duplicateSentences,
     };
   }
 
-  function loadImageAnalysis(row) {
+  function loadImageAnalysis(row, filesState, fileNameById) {
     if (!row) return undefined;
     const stats = safeJsonParse(row.stats_json, {});
     const files = db.prepare('SELECT * FROM duplicate_check_image_files ORDER BY file_id ASC').all().map((item) => ({
       file_id: item.file_id,
-      file_name: loadFileName(item.file_id),
+      file_name: fileNameById.get(item.file_id) || item.file_id,
       status: normalizeStatus(item.status, ['pending', 'running', 'success', 'error'], 'pending'),
       image_count: Number(item.image_count || 0),
       unique_image_count: Number(item.unique_image_count || 0),
@@ -829,26 +840,25 @@ function createDuplicateCheckStore({ app, db }) {
       signature: row.signature || undefined,
       started_at: row.started_at || undefined,
       updated_at: row.updated_at || undefined,
-      extraction: stats.extraction || createEmptyProgress('pending', loadFiles().bidFiles.length),
+      extraction: stats.extraction || createEmptyProgress('pending', filesState.bidFiles.length),
       totalImageCount: Number(stats.totalImageCount || 0),
       files,
       duplicateImages,
     };
   }
 
-  function loadFileName(fileId) {
-    const row = db.prepare('SELECT file_name FROM duplicate_check_files WHERE file_id = ?').get(fileId);
-    return row?.file_name || fileId;
-  }
-
-  function loadAnalysisSections() {
+  function loadAnalysisSections(filesState) {
     const rows = db.prepare('SELECT * FROM duplicate_check_analysis_sections').all();
     const bySection = new Map(rows.map((row) => [row.section, row]));
+    const fileNameById = new Map([
+      ...filesState.tenderFiles,
+      ...filesState.bidFiles,
+    ].map((file) => [file.id, file.file_name]));
     return {
-      metadataAnalysis: loadMetadataAnalysis(bySection.get('metadata')),
-      outlineAnalysis: loadOutlineAnalysis(bySection.get('outline')),
-      contentAnalysis: loadContentAnalysis(bySection.get('content')),
-      imageAnalysis: loadImageAnalysis(bySection.get('image')),
+      metadataAnalysis: loadMetadataAnalysis(bySection.get('metadata'), filesState, fileNameById),
+      outlineAnalysis: loadOutlineAnalysis(bySection.get('outline'), filesState),
+      contentAnalysis: loadContentAnalysis(bySection.get('content'), filesState),
+      imageAnalysis: loadImageAnalysis(bySection.get('image'), filesState, fileNameById),
     };
   }
 
@@ -875,7 +885,8 @@ function createDuplicateCheckStore({ app, db }) {
   });
 
   function loadDuplicateCheck() {
-    const meta = ensureMetaRow();
+    const meta = db.prepare('SELECT * FROM duplicate_check_meta WHERE id = 1').get();
+    if (!meta) throw new Error('标书查重数据库尚未初始化');
     const files = loadFiles();
     return {
       ...initialState,
@@ -883,13 +894,16 @@ function createDuplicateCheckStore({ app, db }) {
       step: normalizeStep(meta.step),
       activeAnalysisTab: normalizeTab(meta.active_analysis_tab),
       analysisTask: loadTask('duplicate-analysis'),
-      ...loadAnalysisSections(),
+      ...loadAnalysisSections(files),
     };
   }
 
-  function updateDuplicateCheck(partial) {
+  function updateDuplicateCheckWithoutReload(partial) {
     updateDuplicateCheckTransaction(partial || {});
-    return loadDuplicateCheck();
+  }
+
+  function updateDuplicateCheck(partial) {
+    updateDuplicateCheckWithoutReload(partial);
   }
 
   function saveDuplicateCheck(state) {
@@ -908,11 +922,10 @@ function createDuplicateCheckStore({ app, db }) {
     });
     transaction();
     clearDuplicateContentArtifacts();
-    return loadDuplicateCheck();
   }
 
   function saveUiState({ step, activeAnalysisTab } = {}) {
-    return updateDuplicateCheck({ step, activeAnalysisTab });
+    updateDuplicateCheckWithoutReload({ step, activeAnalysisTab });
   }
 
   function clearDuplicateCheck() {
@@ -939,7 +952,7 @@ function createDuplicateCheckStore({ app, db }) {
     }
     deleteImportedImageBatches(app, 'duplicate-check-content');
     ensureDirectories();
-    return { success: true, message: '标书查重缓存已清空', state: loadDuplicateCheck() };
+    return { success: true, message: '标书查重缓存已清空' };
   }
 
   function clearDuplicateContentArtifacts() {
@@ -956,11 +969,13 @@ function createDuplicateCheckStore({ app, db }) {
   }
 
   ensureDirectories();
+  ensureMetaRow();
 
   return {
     loadDuplicateCheck,
     saveDuplicateCheck,
     updateDuplicateCheck,
+    updateDuplicateCheckWithoutReload,
     clearDuplicateCheck,
     saveFiles,
     saveUiState,

@@ -18,7 +18,7 @@
 | Analytics Engine `agnet_analytics` | `ANALYTICS` | 详细事件、今天/7天/30天查询、最近事件、Cron 汇总来源 |
 | D1 `openbidkit-analytics` | `ANALYTICS_DB` | 新版 `stats_*` 长期统计表 |
 | D1 `openbidkit-resources` | `RESOURCE_DB` | 资源管理元数据 |
-| R2 `openbidkit` | `RESOURCE_BUCKET` | 资源图片 |
+| R2 `openbidkit` | `RESOURCE_BUCKET` | 资源图片、插件当前版与上一版安装包 |
 | R2 `openbidkit-agent-errors` | `AGENT_ERROR_BUCKET` | gzip Agent 完整失败诊断包，保留 7 天 |
 | KV | `NOTICE_STORE` | 公告、授权配置、GitHub stats 缓存和模型信息精简索引 |
 
@@ -55,6 +55,10 @@
 | `GET/POST /api/license-config` | KV | `ADMIN_TOKEN` | 授权配置后台管理 |
 | `GET /resources` | `RESOURCE_DB` + AE | 无 | 客户端资源列表，点击量为 D1 累计 + AE 今天 |
 | `GET/POST/DELETE /api/resources` | `RESOURCE_DB` + R2 + AE | `ADMIN_TOKEN` | 资源管理 |
+| `GET /plugins` | `RESOURCE_DB` + R2 | 无 | 插件市场列表，当前版作为升级目标，同时返回保留的上一版信息和地址 |
+| `POST /plugins/download` | `RESOURCE_DB` | 无 | 累计插件成功下载次数 |
+| `GET/POST/DELETE /api/plugins` | `RESOURCE_DB` + R2 | `ADMIN_TOKEN` | 插件管理；新增、更新和删除会同步维护 R2 安装包 |
+| `POST /api/plugins/sync` | GitHub + `RESOURCE_DB` + R2 | `ADMIN_TOKEN` | 从 GitHub 正式 Release 同步全部插件，并清理 R2 历史版本和孤立对象 |
 
 旧 `/api/summary` 已删除。
 
@@ -76,7 +80,7 @@
 | 版本客户端数 | D1 历史来自 `stats_clients.last_active_version` 当前分组重算；今天/7天/30天来自 AE 去重客户端数 |
 | 模型 Total Tokens | `ai_request` 的 `double4` 按 `_sample_interval` 聚合，历史写入 `stats_models.total_tokens` |
 | 概览 AI 指标 | 北京时间 02:30 模型汇总完成后，从 D1 `stats_models` 覆盖刷新 `stats_totals.total_text_tokens` 和 `stats_totals.total_generated_images`；生成图片数沿用生图模型请求次数口径 |
-| Agent 执行统计 | `agent_runtime` 的 `blob9` 单字段 v3 复合值聚合，包含运行时、最终状态、重试次数、文本模型服务商、endpoint host 和模型名；历史读 D1，今天/7天/30天读 AE；已有 v2 AE 指标和迁移前 D1 汇总统一归为 `opencode` |
+| Agent 执行统计 | 新版 `agent_runtime` 使用 `blob9` v4 复合值聚合运行时、最终状态、Pi 原生模型重试次数、文本模型服务商、endpoint host 和模型名；v3 历史结果修复次数保留在独立列，不与模型重试混算；历史读 D1，今天/7天/30天读 AE |
 | 配置使用 | 新版 `config_usage` 使用 `config_key/config_value` 键值对上报；D1 历史保留，AE 旧格式不再兼容 |
 | 授权状态 | 客户端上报 `license_status/license_plan/license_expires_at/source_trusted/untrusted_reason`；AE 写入 `blob14-blob18`，D1 `stats_clients` 保存最新状态 |
 
@@ -91,9 +95,13 @@
 | `resource_click` | 资源点击 |
 | `agent_runtime` | Agent 执行成功率、失败率、重试率和重试后成功率 |
 
-`config_usage` 使用 `config_key/config_value` 键值对上报，每个配置项一条事件。Worker 从 Cloudflare 真实客户端 IP 请求头读取公网 IP 并写入 `blob13`，客户端不自报 IP；`CF-Pseudo-IPv4` 不参与统计。授权状态写入 `blob14-blob18`，只包含状态、授权类型、有效期日期和可信来源标记，不上传设备原始指纹。`ai_request` 只采集请求类型、服务商、endpoint host、模型名和 token 用量，不采集 API Key、Prompt、响应内容或错误详情。`agent_runtime` 额外接收运行时注册表 ID 字段 `agent_runtime_kind`，使用 `^[a-z0-9][a-z0-9._-]{0,39}$` 通用低基数字符格式校验，不限定具体运行时白名单；执行统计编码到 `blob9=v3|<runtime>|<success|failed>|r<0-3>|<provider>|<host>|<model>`，不采集 API Key、任务内容、错误详情、Prompt、输出或本地路径。
+`config_usage` 使用 `config_key/config_value` 键值对上报，每个配置项一条事件。Worker 从 Cloudflare 真实客户端 IP 请求头读取公网 IP 并写入 `blob13`，客户端不自报 IP；`CF-Pseudo-IPv4` 不参与统计。授权状态写入 `blob14-blob18`，只包含状态、授权类型、有效期日期和可信来源标记，不上传设备原始指纹。`ai_request` 只采集请求类型、服务商、endpoint host、模型名和 token 用量，不采集 API Key、Prompt、响应内容或错误详情。`agent_runtime` 额外接收运行时注册表 ID 和 `agent_runtime_model_retry_count`，新版统计编码到 `blob9=v4|<runtime>|<success|failed>|m<model-retry-count>|<provider>|<host>|<model>`；旧版 v3 的 `r<0-3>` 继续表示结果修复次数并独立汇总，不采集 API Key、任务内容、错误详情、Prompt、输出或本地路径。
 
-`GET /api/agent-runtime` 的 `agentRuntime` 保留总体计数，并返回 `successRate/failureRate/retryRate/retrySuccessRate`；`runtimes[]` 按运行时返回同口径指标；`models[]` 模型明细包含 `runtime`，并继续返回服务商、endpoint host、模型及全部执行指标。
+`GET /api/agent-runtime` 的 `agentRuntime` 保留总体计数，`retryRate/retrySuccessRate` 按 v4 模型口径任务计算；`runtimes[]` 和 `models[]` 同时返回 `modelRunCount`、模型重试统计及独立的历史结果修复统计。
+
+插件仍以 GitHub 最新正式 Release 为发布上游。Worker 同步时先在 D1 登记发布对象，再把 ZIP 写入 `plugins/.staging/` 临时对象并校验，然后发布到 `openbidkit` R2 的 `plugins/<插件ID>/<插件ID>-v<版本>.zip`；正式对象确认完整后才更新市场下载地址。同版本重复同步会直接复用完整的已发布对象，不覆盖线上包。新版本切换成功后，数据库记录当前版和上一版，R2 每个插件只保留这两个正式版本；全量同步结束会再次清理更早版本、已删除插件和遗留临时对象。插件发布、删除和全局清理通过 D1 租约锁跨 Worker 串行执行，清理前还会逐个检查 30 分钟有效的发布标记，避免删除并发发布中的临时键或正式键。客户端只接收 `https://openbidkit-oss.agnet.top` 下载地址，市场升级目标始终是最新版，上一版仅用于保障在途下载。
+
+首次部署该分发逻辑后，需要在 Dashboard 的“插件管理”中执行一次“同步全部插件”，把现有 GitHub 下载地址迁移为 R2 地址；迁移完成前，公共插件接口不会向客户端下发尚未镜像的插件。
 
 Agent 异常日志与 `agent_runtime` 埋点完全分离。接收默认关闭；开启后仍必须配置至少一个精确版本号，空列表表示不接收。Worker 在读取正文前检查开关、版本和剩余容量；日志压缩后总占用上限为 2 GiB，达到上限直接丢弃。正文只保存到 `AGENT_ERROR_BUCKET`，D1 只保存元数据和容量计数；日志到期、单条删除或批量删除都会释放容量。上传必须携带 Worker 已签发、来源可信且未过期的 license。
 
@@ -117,7 +125,8 @@ Worker 运行时还需要在 Cloudflare 后台配置 Secret：
 | `ACCOUNT_ID` | Cloudflare Account ID |
 | `ADMIN_TOKEN` | Dashboard 管理 Token |
 | `ANALYTICS_API_TOKEN` | Analytics Engine SQL Read Token |
-| `GITHUB_API_TOKEN` | 可选，降低 GitHub API 限流概率 |
+| `OPENBIDKIT_PET_READ_TOKEN` | 插件同步专用 GitHub Fine-grained Token，仅授予 `openbidkit-pet` 仓库 `Contents: Read-only` 权限 |
+| `OPENBIDKIT_YIBIAO_METADATA_READ_TOKEN` | 可选，仓库统计专用 GitHub Fine-grained Token，仅选择 `OpenBidKit_Yibiao` 仓库并保留自动授予的 `Metadata: Read-only` 权限 |
 | `LICENSE_PRIVATE_KEY_JWK` | ECDSA P-256 私钥 JWK，用于签发客户端 license |
 | `LICENSE_KEY_ID` | 可选，授权签名 key id，默认 `official-build-key-2026-01` |
 
@@ -149,7 +158,7 @@ npm run setup:analytics-storage
 | 动作 | 说明 |
 | --- | --- |
 | D1 | 创建或复用 `openbidkit-analytics`，binding 为 `ANALYTICS_DB` |
-| R2 | 创建或复用 `openbidkit-agent-errors`，binding 为 `AGENT_ERROR_BUCKET`，配置 7 天删除生命周期 |
+| R2 | 复用 `openbidkit` 的 `RESOURCE_BUCKET` 保存资源图片、插件当前版与上一版安装包；创建或复用 `openbidkit-agent-errors`，binding 为 `AGENT_ERROR_BUCKET`，配置 7 天删除生命周期 |
 | Cron | 生产账户使用 Workers Paid Plan；确认北京时间 01:00 到 03:00 的 5 个统计 Cron，以及北京时间 04:00 的独立模型信息同步 Cron |
 | Migration | 通过 Wrangler D1 migrations 执行 `analytics-migrations/*.sql` 并记录已应用版本；Agent 运行时迁移会重建 `stats_agent_runtime` 联合主键并将既有汇总归为 `opencode`；同时自动补齐 `stats_clients` 授权字段、`stats_versions.client_count`、`stats_models.total_tokens` 和概览 AI 指标字段 |
 

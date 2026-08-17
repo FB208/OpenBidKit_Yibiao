@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { AiHttpErrorDialogProvider, DocumentParseNoticeProvider, ToastProvider } from '../../shared/ui';
+import { AgentQuestionDialogProvider, AiHttpErrorDialogProvider, DocumentParseNoticeProvider, ToastProvider } from '../../shared/ui';
 
 interface AppProvidersProps {
   children: ReactNode;
@@ -8,9 +8,11 @@ interface AppProvidersProps {
 function AppProviders({ children }: AppProvidersProps) {
   return (
     <ToastProvider>
-      <AiHttpErrorDialogProvider>
-        <DocumentParseNoticeProvider>{children}</DocumentParseNoticeProvider>
-      </AiHttpErrorDialogProvider>
+      <AgentQuestionDialogProvider>
+        <AiHttpErrorDialogProvider>
+          <DocumentParseNoticeProvider>{children}</DocumentParseNoticeProvider>
+        </AiHttpErrorDialogProvider>
+      </AgentQuestionDialogProvider>
     </ToastProvider>
   );
 }

@@ -2,7 +2,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { useRef, useState } from 'react';
 import type { PointerEvent, ReactNode } from 'react';
 
-export type FloatingToolbarActionVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'warning' | 'success';
+export type FloatingToolbarActionVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'warning' | 'success' | 'ai';
 
 export interface FloatingToolbarAction {
   id: string;
@@ -201,6 +201,18 @@ export function ToolbarDocumentIcon() {
       <path d="M13.5 4v4.35h4.25" />
       <path d="M9.5 12.2h5" />
       <path d="M9.5 15.7h4" />
+    </svg>
+  );
+}
+
+export function ToolbarSparkleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
+      <path d="M12 4.5 13.8 9.2 18.5 11 13.8 12.8 12 17.5 10.2 12.8 5.5 11 10.2 9.2z" />
+      <path d="M18.6 4.4v3.2" />
+      <path d="M17 6h3.2" />
+      <path d="M6.2 16.6v2.8" />
+      <path d="M4.8 18h2.8" />
     </svg>
   );
 }

@@ -50,16 +50,7 @@ function normalizePageSize(value) {
   return Math.max(1, Math.min(MAX_PAGE_SIZE, Math.floor(pageSize)));
 }
 
-async function ensureSettings(db, projectName) {
-  await db.prepare(`
-    INSERT OR IGNORE INTO agent_error_settings (
-      project_name, receive_enabled, retention_days, max_storage_bytes, used_bytes, updated_at
-    ) VALUES (?, 0, ?, ?, 0, ?)
-  `).bind(projectName, DEFAULT_RETENTION_DAYS, DEFAULT_MAX_STORAGE_BYTES, nowIso()).run();
-}
-
 async function readSettingsRow(db, projectName) {
-  await ensureSettings(db, projectName);
   return db.prepare(`
     SELECT
       project_name AS projectName,
@@ -76,6 +67,19 @@ async function readSettingsRow(db, projectName) {
 export async function readAgentErrorConfig(env, projectName) {
   const { db } = requireStorage(env);
   const settings = await readSettingsRow(db, projectName);
+  if (!settings) {
+    return {
+      projectName,
+      receiveEnabled: false,
+      retentionDays: DEFAULT_RETENTION_DAYS,
+      maxStorageBytes: DEFAULT_MAX_STORAGE_BYTES,
+      usedBytes: 0,
+      remainingBytes: DEFAULT_MAX_STORAGE_BYTES,
+      logCount: 0,
+      versions: [],
+      updatedAt: '',
+    };
+  }
   const versionResult = await db.prepare(`
     SELECT version
     FROM agent_error_versions
@@ -108,14 +112,19 @@ export async function saveAgentErrorConfig(env, input = {}) {
   if (!isValidProjectName(projectName)) throw new Error('invalid projectName');
   const versions = normalizeVersions(input.versions);
   if (versions.length > MAX_VERSION_COUNT) throw new Error('too many versions');
-  await ensureSettings(db, projectName);
+  const receiveEnabled = input.receiveEnabled === true;
   const updatedAt = nowIso();
   const statements = [
     db.prepare(`
-      UPDATE agent_error_settings
-      SET receive_enabled = ?, retention_days = ?, max_storage_bytes = ?, updated_at = ?
-      WHERE project_name = ?
-    `).bind(input.receiveEnabled === true ? 1 : 0, DEFAULT_RETENTION_DAYS, DEFAULT_MAX_STORAGE_BYTES, updatedAt, projectName),
+      INSERT INTO agent_error_settings (
+        project_name, receive_enabled, retention_days, max_storage_bytes, used_bytes, updated_at
+      ) VALUES (?, ?, ?, ?, 0, ?)
+      ON CONFLICT(project_name) DO UPDATE SET
+        receive_enabled = excluded.receive_enabled,
+        retention_days = excluded.retention_days,
+        max_storage_bytes = excluded.max_storage_bytes,
+        updated_at = excluded.updated_at
+    `).bind(projectName, receiveEnabled ? 1 : 0, DEFAULT_RETENTION_DAYS, DEFAULT_MAX_STORAGE_BYTES, updatedAt),
     db.prepare('DELETE FROM agent_error_versions WHERE project_name = ?').bind(projectName),
     ...versions.map((version) => db.prepare(`
       INSERT INTO agent_error_versions (project_name, version, created_at)
@@ -123,7 +132,7 @@ export async function saveAgentErrorConfig(env, input = {}) {
     `).bind(projectName, version, updatedAt)),
   ];
   await db.batch(statements);
-  return readAgentErrorConfig(env, projectName);
+  return { projectName, receiveEnabled, versions, updatedAt };
 }
 
 export async function checkAgentErrorReception(env, projectName, version, compressedBytes = 0) {

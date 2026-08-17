@@ -1,15 +1,29 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { dialog } = require('electron');
 const { createPiRuntimeService } = require('./pi/piRuntimeService.cjs');
 const { buildPiSelfCheckReportMarkdown } = require('./pi/piSelfCheckService.cjs');
 const { createAgentErrorReporter } = require('./agent/agentErrorReporter.cjs');
+const { resolveAgentAbortReason } = require('./agent/agentInterruption.cjs');
+const {
+  deletePersistentAgentTask,
+  getPersistentAgentSessionPath,
+  loadPersistentAgentTask,
+  updatePersistentAgentTask,
+} = require('./pi/piPersistentTaskStore.cjs');
 
 const PI_RUNTIME_ID = 'pi';
 const PI_RUNTIME_NAME = 'Pi Agent';
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function createAgentDisconnectedError() {
+  const error = new Error('Agent 服务正在关闭');
+  error.code = 'AGENT_DISCONNECTED';
+  return error;
 }
 
 function safeText(value) {
@@ -125,10 +139,11 @@ function normalizeSelfCheckResult(rawResult = {}) {
 }
 
 // 协调唯一 Pi Agent 实例，并保持所有智能体任务共用同一条 FIFO 队列。
-function createAgentService({ app, configStore, aiService, licenseService }) {
+function createAgentService({ app, configStore, aiService, licenseService, autoConfirmationService }) {
   const agentErrorReporter = createAgentErrorReporter({ app, configStore, licenseService });
   const listeners = new Set();
   const monitorListeners = new Set();
+  const questionListeners = new Set();
   const queue = [];
   let runtime = null;
   let runtimeUnsubscribe = null;
@@ -137,6 +152,7 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
   let closing = false;
   let monitorSequence = 0;
   let monitorFlushTimer = null;
+  let pendingQuestion = null;
   const pendingAssistantDeltas = new Map();
   const pendingToolUpdates = new Map();
 
@@ -208,6 +224,117 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     });
   }
 
+  function getPendingQuestion() {
+    return pendingQuestion?.question || null;
+  }
+
+  function emitQuestionState() {
+    const question = getPendingQuestion();
+    questionListeners.forEach((listener) => {
+      try { listener(question); } catch {}
+    });
+  }
+
+  function clearPendingQuestion(entry) {
+    if (!entry || pendingQuestion !== entry) return;
+    autoConfirmationService.unregister(entry.autoConfirmationId);
+    entry.signal?.removeEventListener?.('abort', entry.onAbort);
+    pendingQuestion = null;
+    emitQuestionState();
+  }
+
+  function rejectPendingQuestion(error) {
+    const entry = pendingQuestion;
+    if (!entry) return;
+    clearPendingQuestion(entry);
+    entry.reject(error);
+  }
+
+  // 建立一次 Agent 到用户的提问，并在收到答案前保持工具调用等待。
+  function requestUserQuestion(request = {}, signal) {
+    if (closing) return Promise.reject(new Error('Agent 服务正在关闭'));
+    if (signal?.aborted) return Promise.reject(createAbortError(signal));
+    if (pendingQuestion) return Promise.reject(new Error('已有 Agent 问题正在等待用户回答'));
+
+    const questionId = crypto.randomUUID();
+    const sourceOptions = Array.isArray(request.options) ? request.options : [];
+    const options = sourceOptions.map((option, index) => ({
+      id: `option-${index + 1}`,
+      label: safeText(option?.label),
+      description: safeText(option?.description),
+      recommended: index === 0,
+      custom: option?.custom === true,
+    }));
+    const question = {
+      question_id: questionId,
+      task_id: safeText(request.task_id),
+      task_title: safeText(request.task_title) || '易标智能体任务',
+      question: safeText(request.question),
+      options,
+      asked_at: nowIso(),
+    };
+
+    return new Promise((resolve, reject) => {
+      const entry = {
+        question,
+        resolve,
+        reject,
+        signal,
+        onAbort: null,
+        autoConfirmationId: `agent-question:${questionId}`,
+      };
+      entry.onAbort = () => {
+        if (pendingQuestion !== entry) return;
+        clearPendingQuestion(entry);
+        reject(createAbortError(signal));
+      };
+      pendingQuestion = entry;
+      signal?.addEventListener?.('abort', entry.onAbort, { once: true });
+      const recommendedOption = question.options.find((option) => option.recommended && !option.custom);
+      autoConfirmationService.register({
+        id: entry.autoConfirmationId,
+        submit: () => answerQuestion({
+          question_id: question.question_id,
+          option_id: recommendedOption.id,
+        }),
+        onStateChange: ({ auto_answer_at: autoAnswerAt }) => {
+          if (pendingQuestion !== entry) return;
+          if (autoAnswerAt) entry.question.auto_answer_at = autoAnswerAt;
+          else delete entry.question.auto_answer_at;
+          emitQuestionState();
+        },
+      });
+    });
+  }
+
+  // 用户切换选项后停止当前 Agent 问题的自动回答计时。
+  function suppressQuestionAutoAnswer(payload = {}) {
+    const entry = pendingQuestion;
+    if (!entry || payload.question_id !== entry.question.question_id) return { success: true };
+    autoConfirmationService.suppress(entry.autoConfirmationId);
+    return { success: true };
+  }
+
+  // 提交用户选择并恢复正在等待的 Agent 工具调用。
+  function answerQuestion(payload = {}) {
+    const entry = pendingQuestion;
+    if (!entry || payload.question_id !== entry.question.question_id) {
+      throw new Error('当前 Agent 问题已失效');
+    }
+    const option = entry.question.options.find((item) => item.id === payload.option_id);
+    if (!option) throw new Error('请选择一个有效选项');
+    const answer = option.custom ? safeText(payload.custom_answer) : option.label;
+    if (!answer) throw new Error('请输入具体要求');
+    const result = {
+      answer,
+      selected_option: option.label,
+      is_custom: option.custom,
+    };
+    clearPendingQuestion(entry);
+    entry.resolve(result);
+    return { success: true };
+  }
+
   function ensureRuntime() {
     if (runtime) return runtime;
     runtime = createPiRuntimeService({
@@ -216,6 +343,7 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
       aiService,
       isMonitorActive: () => monitorListeners.size > 0,
       onMonitorEvent: emitMonitorEvent,
+      requestUserQuestion,
     });
     runtimeUnsubscribe = runtime.onStatus?.(() => emitStatus()) || null;
     return runtime;
@@ -254,7 +382,7 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
   }
 
   function createAbortError(signal) {
-    return signal?.reason instanceof Error ? signal.reason : new Error(safeText(signal?.reason) || 'Agent 任务已取消');
+    return resolveAgentAbortReason(signal);
   }
 
   function removeQueuedEntry(entry, error) {
@@ -286,11 +414,21 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
             entry.resolve(normalizeRunResult(rawResult));
           } catch (error) {
             const normalizedError = normalizeRunError(error);
-            agentErrorReporter.reportFailure({
-              payload: entry.payload,
-              error: normalizedError,
-              userTaskContext: resolveUserTaskContext(entry.userTaskContextProvider),
-            });
+            const persistentTask = Boolean(entry.payload.persistent_task?.task_key);
+            const shouldReport = !entry.payload.signal?.aborted
+              && !['AGENT_DISCONNECTED', 'TASK_CANCELLED'].includes(normalizedError?.code);
+            const taskRuntime = runtime;
+            if (shouldReport) {
+              void agentErrorReporter.reportFailure({
+                payload: entry.payload,
+                error: normalizedError,
+                userTaskContext: resolveUserTaskContext(entry.userTaskContextProvider),
+              }).finally(() => {
+                if (!persistentTask) void taskRuntime?.deleteTaskArchive?.(entry.taskId);
+              });
+            } else if (!persistentTask) {
+              void taskRuntime?.deleteTaskArchive?.(entry.taskId);
+            }
             entry.reject(normalizedError);
           } finally {
             activeEntry = null;
@@ -345,11 +483,48 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     return enqueueTask(payload, null);
   }
 
-  // 为后台父任务绑定最新诊断上下文，不再绑定或选择运行时。
-  function bindTaskContext(userTaskContextProvider) {
+  function loadPersistentTask(taskKey) {
+    return loadPersistentAgentTask(app, taskKey);
+  }
+
+  function deletePersistentTask(taskKey) {
+    deletePersistentAgentTask(app, taskKey);
+  }
+
+  function updatePersistentTask(taskKey, partial) {
+    return updatePersistentAgentTask(app, taskKey, partial);
+  }
+
+  function hasPersistentTaskSession(taskKey) {
+    const task = loadPersistentAgentTask(app, taskKey);
+    if (!task?.state?.session_file) return false;
+    try {
+      return fs.existsSync(getPersistentAgentSessionPath(app, taskKey, task.state.session_file));
+    } catch {
+      return false;
+    }
+  }
+
+  // 为后台父任务绑定最新诊断上下文和统一 AI 队列作用域。
+  function bindTaskContext(userTaskContextProvider, options = {}) {
+    const queueScopeId = safeText(options.queueScopeId || options.queue_scope_id);
+    const signal = options.signal;
     return {
-      runTask: (payload) => enqueueTask(payload, userTaskContextProvider),
+      runTask: (payload = {}) => {
+        const taskSignal = signal && payload.signal
+          ? AbortSignal.any([signal, payload.signal])
+          : payload.signal || signal;
+        return enqueueTask({
+          ...payload,
+          ...(queueScopeId && !payload.queueScopeId && !payload.queue_scope_id ? { queue_scope_id: queueScopeId } : {}),
+          ...(taskSignal ? { signal: taskSignal } : {}),
+        }, userTaskContextProvider);
+      },
       getStatus,
+      hasPersistentTaskSession,
+      loadPersistentTask,
+      updatePersistentTask,
+      deletePersistentTask,
     };
   }
 
@@ -424,6 +599,12 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     };
   }
 
+  function onQuestion(listener) {
+    if (typeof listener !== 'function') return () => {};
+    questionListeners.add(listener);
+    return () => questionListeners.delete(listener);
+  }
+
   function getMonitorSnapshot() {
     const runtimeStatus = getRuntimeStatus();
     return {
@@ -449,10 +630,12 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
 
   async function close() {
     closing = true;
+    rejectPendingQuestion(createAgentDisconnectedError());
+    questionListeners.clear();
     monitorListeners.clear();
     clearPendingMonitorEvents();
     agentErrorReporter.close();
-    const error = new Error('Agent 服务正在关闭');
+    const error = createAgentDisconnectedError();
     while (queue.length) {
       const entry = queue.shift();
       entry.cleanup?.();
@@ -467,15 +650,23 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
 
   return {
     bindTaskContext,
+    deletePersistentTask,
+    loadPersistentTask,
+    updatePersistentTask,
     warmup,
     runTask,
     selfCheck,
     getStatus,
+    hasPersistentTaskSession,
     restart,
     handleConfigChanged,
     onStatus,
     onMonitorEvent,
     getMonitorSnapshot,
+    getPendingQuestion,
+    answerQuestion,
+    suppressQuestionAutoAnswer,
+    onQuestion,
     exportSelfCheckReport,
     close,
   };

@@ -232,6 +232,14 @@ export interface DuplicateCheckWorkspaceState {
   imageAnalysis?: DuplicateImageAnalysisState;
 }
 
+export type DuplicateCheckWorkspacePatch = Omit<Partial<DuplicateCheckWorkspaceState>,
+  'metadataAnalysis' | 'outlineAnalysis' | 'contentAnalysis' | 'imageAnalysis'> & {
+  metadataAnalysis?: Partial<DuplicateMetadataAnalysisState>;
+  outlineAnalysis?: Partial<DuplicateOutlineAnalysisState>;
+  contentAnalysis?: Partial<DuplicateContentAnalysisState>;
+  imageAnalysis?: Partial<DuplicateImageAnalysisState>;
+};
+
 export interface ChapterContentContext {
   project_overview: string;
 }

@@ -52,7 +52,7 @@ function App() {
     <>
       <GpuHardwareAccelerationPrompt />
       <RequiredOnlineServicesPrompt />
-      <UpdateNotifier />
+      <UpdateNotifier noticeEnabled />
       <LicenseStatusPrompt />
       <AppShell
         activeSection={activeSection}

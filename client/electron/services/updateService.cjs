@@ -23,6 +23,22 @@ let downloadedUpdateChannel = '';
 let downloadedUpdateFilePath = '';
 let activeUpdateCheckPromise = null;
 
+// 新版本启动后删除已经安装或更旧的手动安装包，保留尚未安装的更新包。
+function clearManualUpdateDownloads(app) {
+  const updatesDir = path.join(app.getPath('userData'), 'updates');
+  try {
+    if (!fs.existsSync(updatesDir)) return;
+    for (const entry of fs.readdirSync(updatesDir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const match = /^Yibiao-(.+?)-(?:win-x64\.exe|mac-(?:x64|arm64)\.dmg)$/i.exec(entry.name);
+      if (!match || compareVersions(match[1], app.getVersion()) > 0) continue;
+      fs.rmSync(path.join(updatesDir, entry.name), { force: true });
+    }
+  } catch (error) {
+    console.warn('[update] 清理旧更新安装包失败', error?.message || String(error));
+  }
+}
+
 // 将版本号拆分为核心版本和 SemVer 预发布标识。
 function parseVersion(value) {
   const normalized = String(value || '').trim().replace(/^v/i, '').split('+')[0];
@@ -616,6 +632,7 @@ function setupAutoUpdate({ app, mainWindow }) {
   if (!app.isPackaged) {
     return;
   }
+  clearManualUpdateDownloads(app);
   if (process.platform === 'darwin') {
     return;
   }

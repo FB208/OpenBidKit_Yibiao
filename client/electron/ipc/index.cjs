@@ -1,6 +1,7 @@
 const { clipboard, ipcMain, shell } = require('electron');
 const { registerAgentIpc } = require('./agentIpc.cjs');
 const { registerAiIpc } = require('./aiIpc.cjs');
+const { registerAutoConfirmationIpc } = require('./autoConfirmationIpc.cjs');
 const { registerConfigIpc } = require('./configIpc.cjs');
 const { registerDeveloperIpc } = require('./developerIpc.cjs');
 const { registerDuplicateCheckIpc } = require('./duplicateCheckIpc.cjs');
@@ -18,6 +19,7 @@ const { registerPluginIpc } = require('./pluginIpc.cjs');
 const pluginService = require('../services/pluginService.cjs');
 const { createAgentService } = require('../services/agentService.cjs');
 const { createAiService } = require('../services/aiService.cjs');
+const { createAutoConfirmationService } = require('../services/autoConfirmationService.cjs');
 const { createConfigStore } = require('../services/configStore.cjs');
 const { createDeveloperExpansionReplaceTestService } = require('../services/developerExpansionReplaceTest.cjs');
 const { createDuplicateCheckService } = require('../services/duplicateCheckService.cjs');
@@ -31,7 +33,10 @@ const { createLicenseService } = require('../services/licenseService.cjs');
 const { createRejectionCheckStore } = require('../services/rejectionCheckStore.cjs');
 const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
 const { createSystemFontService } = require('../services/systemFontService.cjs');
+const { clearOrphanedGeneratedImages, clearStalePiTaskArchives, runHistoricalStorageCleanup } = require('../services/storageCleanupService.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
+const { createAgentWorkspaceService } = require('../services/agentWorkspaceService.cjs');
+const { createTaskLogStore } = require('../services/taskLogStore.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
 const { createTemplateStore } = require('../services/templateStore.cjs');
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
@@ -67,6 +72,7 @@ function sendToWebContents(webContents, channel, payload) {
 const workspaceDatabaseChannels = [
   'technical-plan:load-state',
   'technical-plan:import-tender-document',
+  'technical-plan:remove-tender-document',
   'technical-plan:import-original-plan-document',
   'technical-plan:check-bid-sections',
   'technical-plan:select-bid-section',
@@ -76,6 +82,7 @@ const workspaceDatabaseChannels = [
   'technical-plan:set-workflow-kind',
   'technical-plan:save-outline-config',
   'technical-plan:save-outline',
+  'technical-plan:save-global-facts-config',
   'technical-plan:save-global-facts',
   'technical-plan:save-content-generation-options',
   'technical-plan:save-chapter-content',
@@ -104,8 +111,6 @@ const workspaceDatabaseChannels = [
   'rejection-check:save-ui-state',
   'rejection-check:update-state',
   'rejection-check:clear',
-  'knowledge-base:get-migration-status',
-  'knowledge-base:migrate-legacy',
   'knowledge-base:list',
   'knowledge-base:create-folder',
   'knowledge-base:rename-folder',
@@ -119,6 +124,8 @@ const workspaceDatabaseChannels = [
   'tasks:start-bid-section-extraction',
   'tasks:start-bid-analysis',
   'tasks:start-outline-generation',
+  'tasks:confirm-outline-selection',
+  'tasks:suppress-outline-selection-auto-confirmation',
   'tasks:start-global-facts-generation',
   'tasks:start-content-generation',
   'tasks:start-feasibility-analysis',
@@ -194,8 +201,12 @@ function registerWorkspaceDatabaseStatusIpc({ mainWindow }) {
   };
 }
 
-function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, updateStatus }) {
+function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, updateStatus }) {
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
+  runHistoricalStorageCleanup({ app, db: sqliteDatabase.db, configStore, onStatus: updateStatus });
+  clearStalePiTaskArchives(app);
+  clearOrphanedGeneratedImages(app, sqliteDatabase.db);
+  const taskLogStore = createTaskLogStore({ db: sqliteDatabase.db });
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
   const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService });
@@ -210,15 +221,29 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerKnowledgeBaseIpc({ knowledgeBaseService });
   registerTechnicalPlanIpc({ technicalPlanStore });
   registerFeasibilityReportIpc({ feasibilityReportStore });
+  const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService, agentService, taskLogStore });
+  const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db, taskLogStore });
+  const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore, taskLogStore });
+  const templateStore = createTemplateStore({ db: sqliteDatabase.db });
+  const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
+  const taskService = createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
+  const agentWorkspaceService = createAgentWorkspaceService({ agentService, taskService, technicalPlanStore });
+  technicalPlanStore.setAgentWorkspaceChangeListener(() => agentWorkspaceService.emitWorkspacesChanged());
+
+  clearWorkspaceDatabaseIpc();
+  registerKnowledgeBaseIpc({ knowledgeBaseService });
+  registerTechnicalPlanIpc({ technicalPlanStore, taskService });
   registerDuplicateCheckIpc({ duplicateCheckStore });
-  registerRejectionCheckIpc({ rejectionCheckStore });
+  registerRejectionCheckIpc({ rejectionCheckStore, taskService });
   registerTemplateIpc({ templateStore });
   registerTaskIpc({ taskService });
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
   
   // 更新 pluginService 的服务引用
   pluginService.updateServices({
+    agentService,
     taskService,
+    agentWorkspaceService,
     technicalPlanStore,
     duplicateCheckStore,
     rejectionCheckStore,
@@ -239,7 +264,8 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const licenseService = createLicenseService({ app, configStore });
   const aiService = createAiService({ app, configStore });
   const developerExpansionReplaceTestService = createDeveloperExpansionReplaceTestService({ aiService });
-  const agentService = createAgentService({ app, configStore, aiService, licenseService });
+  const autoConfirmationService = createAutoConfirmationService({ configStore });
+  const agentService = createAgentService({ app, configStore, aiService, licenseService, autoConfirmationService });
   const fileService = createFileService({ app, configStore });
   const exportService = createExportService({ configStore });
   const systemFontService = createSystemFontService();
@@ -249,6 +275,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
 
   const closeServices = async () => {
     await agentService.close?.();
+    autoConfirmationService.close?.();
   };
 
   const closeServicesBeforeExit = async () => {
@@ -307,6 +334,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     aiService,
     onConfigChanged(nextConfig, previousConfig) {
       agentService.handleConfigChanged?.(nextConfig, previousConfig);
+      autoConfirmationService.handleConfigChanged?.(nextConfig, previousConfig);
     },
     onDeveloperModeChange(developerMode) {
       if (!developerMode) {
@@ -317,23 +345,19 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsWindow, developerExpansionReplaceTestService });
   registerLicenseIpc({ licenseService });
   registerAiIpc({ aiService });
-  registerAgentIpc({ agentService, mainWindow });
+  registerAgentIpc({ agentService });
+  registerAutoConfirmationIpc({ autoConfirmationService });
   registerFileIpc({ fileService });
   registerExportIpc({ exportService });
   registerSystemFontIpc({ systemFontService });
   registerPluginIpc(ipcMain, app, {
+    agentService,
     taskService: null,
     technicalPlanStore: null,
     duplicateCheckStore: null,
     rejectionCheckStore: null,
   });
   registerPendingWorkspaceDatabaseIpc(databaseStatus.getStatus);
-
-  setTimeout(() => {
-    void agentService.warmup?.().catch((error) => {
-      console.warn('[agent] warmup failed', error?.message || String(error));
-    });
-  }, 500);
 
   setTimeout(() => {
     void licenseService.refreshOnStartup?.().catch((error) => {
@@ -347,7 +371,12 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     databaseStatus.updateStatus({ phase: 'checking', ready: false, message: '正在检查本地数据库' });
     setTimeout(() => {
       try {
-        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, updateStatus: databaseStatus.updateStatus });
+        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, updateStatus: databaseStatus.updateStatus });
+        setTimeout(() => {
+          void agentService.warmup?.().catch((error) => {
+            console.warn('[agent] warmup failed', error?.message || String(error));
+          });
+        }, 500);
       } catch (error) {
         databaseStatus.updateStatus({
           phase: 'error',
@@ -435,8 +464,22 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     return quitAndInstall({ app });
   });
 
+  /** 与主程序更新检查并行检查插件，并使用独立事件通知 Renderer。 */
+  const checkPluginUpdates = (webContents) => {
+    void pluginService.checkAvailableUpdates()
+      .then((updates) => {
+        if (updates.length > 0) {
+          sendToWebContents(webContents, 'plugins:updates-available', updates);
+        }
+      })
+      .catch((error) => {
+        console.warn('[plugin-service] 自动检查插件更新失败:', error?.message || String(error));
+      });
+  };
+
   ipcMain.handle('app:check-update', (event) => {
     const webContents = event.sender;
+    checkPluginUpdates(webContents);
     return checkAndDownloadUpdate({
       app,
       mainWindow,
@@ -455,6 +498,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
 
   ipcMain.handle('app:start-update', (event) => {
     const webContents = event.sender;
+    checkPluginUpdates(webContents);
     return triggerUpdateDownload({
       app,
       mainWindow,

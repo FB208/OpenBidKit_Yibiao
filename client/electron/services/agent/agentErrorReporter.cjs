@@ -1,6 +1,7 @@
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { utilityProcess } = require('electron');
+const { isExpectedAgentInterruption } = require('./agentInterruption.cjs');
 
 const ANALYTICS_ENDPOINT = process.env.YIBIAO_AGENT_ERROR_ENDPOINT || 'https://analytics.agnet.top/agent-errors';
 const PROJECT_NAME = 'yibiao-client';
@@ -10,18 +11,6 @@ const UPLOAD_TIMEOUT_MS = 30 * 1000;
 const PREFLIGHT_TIMEOUT_MS = 5 * 1000;
 const PROCESS_ENTRY = path.join(__dirname, 'agentErrorReportProcess.cjs');
 const PI_RUNTIME_ID = 'pi';
-
-function isExpectedInterruption(error) {
-  const code = String(error?.code || error?.cause?.code || '');
-  const message = String(error?.message || error || '');
-  return code === 'CONTENT_GENERATION_PAUSED'
-    || code === 'AI_QUEUE_SCOPE_PAUSED'
-    || code === 'ABORT_ERR'
-    || message === 'CONTENT_GENERATION_PAUSED'
-    || message.includes('请求已取消')
-    || message.includes('任务已取消')
-    || message.includes('服务正在关闭');
-}
 
 async function canUploadCurrentVersion(version) {
   const controller = new AbortController();
@@ -99,6 +88,7 @@ function createErrorSnapshot(error) {
     agentPartialOutputChars: Number(error?.agentPartialOutputChars || String(error?.agentPartialOutput || '').length),
     agentValidationFailed: Boolean(error?.agentValidationFailed),
     agentRetryAttempts: Array.isArray(error?.agentRetryAttempts) ? error.agentRetryAttempts : [],
+    agentModelRetryCount: Number(error?.agentModelRetryCount || 0),
     agentDiagnostics: error?.agentDiagnostics && typeof error.agentDiagnostics === 'object' ? error.agentDiagnostics : {},
     piAssistantError: error?.piAssistantError || null,
     raw_response_body: error?.raw_response_body,
@@ -115,7 +105,7 @@ function createAgentErrorReporter({ app, configStore, licenseService }) {
   let closing = false;
 
   function startProcess(job) {
-    if (closing) return;
+    if (closing) return Promise.resolve();
     let child;
     try {
       child = utilityProcess.fork(PROCESS_ENTRY, [], {
@@ -123,18 +113,27 @@ function createAgentErrorReporter({ app, configStore, licenseService }) {
         serviceName: 'Yibiao Agent Error Reporter',
       });
     } catch {
-      return;
+      return Promise.resolve();
     }
     processes.add(child);
-    child.once('spawn', () => {
-      try {
-        child.postMessage(job);
-      } catch {
-        child.kill();
-      }
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        processes.delete(child);
+        resolve();
+      };
+      child.once('spawn', () => {
+        try {
+          child.postMessage(job);
+        } catch {
+          child.kill();
+        }
+      });
+      child.once('error', finish);
+      child.once('exit', finish);
     });
-    child.on('error', () => undefined);
-    child.once('exit', () => processes.delete(child));
   }
 
   async function dispatch({ payload, error, userTaskContext }) {
@@ -143,8 +142,9 @@ function createAgentErrorReporter({ app, configStore, licenseService }) {
     const version = typeof app?.getVersion === 'function' ? app.getVersion() : '';
     if (closing || !license || !version || !config.analytics_client_id || !config.analytics_created_at) return;
     if (!await canUploadCurrentVersion(version)) return;
+    if (closing) return;
 
-    startProcess({
+    return startProcess({
       schemaVersion: REPORT_SCHEMA_VERSION,
       reportId: crypto.randomUUID(),
       projectName: PROJECT_NAME,
@@ -187,10 +187,8 @@ function createAgentErrorReporter({ app, configStore, licenseService }) {
   }
 
   function reportFailure(options) {
-    if (!options?.error || closing || isExpectedInterruption(options.error)) return;
-    setImmediate(() => {
-      void dispatch(options).catch(() => undefined);
-    });
+    if (!options?.error || closing || isExpectedAgentInterruption(options.error)) return Promise.resolve();
+    return dispatch(options).catch(() => undefined);
   }
 
   function close() {

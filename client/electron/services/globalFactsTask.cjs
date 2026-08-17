@@ -4,19 +4,116 @@ const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs')
 const DEFAULT_CONTEXT_LENGTH_LIMIT = 400000;
 const GLOBAL_FACTS_CONTEXT_LIMIT_RATIO = 0.8;
 const MIN_GLOBAL_FACTS_SEGMENT_CHARS = 1000;
-const GLOBAL_FACTS_SYSTEM_PROMPT = `你是专业的投标技术方案事实变量整理助手。请基于用户提供的上下文，整理后续正文需要统一采用的全局事实变量。
+
+function normalizeGlobalFactsMode(value) {
+  return value === 'omit' || value === 'placeholder' ? value : 'fabricate';
+}
+
+function buildMissingFactRule(mode) {
+  if (mode === 'omit') {
+    return '4. 用户资料没有给出具体值时，该项仍须保留，写成不涉及具体时间、地点、人员、业绩、证书、规格型号、工艺步骤、数量指标的正确笼统承诺；严禁省略该项或杜撰具体值。';
+  }
+  if (mode === 'placeholder') {
+    return '4. 用户资料没有给出具体值，但该信息会影响后续正文一致写法时，必须保留该项并把事实值写成【待填写】，严禁省略该项或杜撰具体值。占位符必须逐字使用【待填写】。';
+  }
+  return '4. 用户资料没有给出具体值，但该信息对全文一致性重要，且当前任务允许补足时，可以根据项目语境模拟生成合理、稳定、不冲突的事实值。';
+}
+
+function buildGlobalFactsCompletenessRules(mode) {
+  if (mode === 'omit') {
+    return `事实补全规则（别招欠模式）：
+1. 先按统一选题标准确定要输出哪些事实项，再按本模式填写值。选题与是否缺少具体值无关。
+2. 凡招标要求、评分口径、项目概述、目录或参考材料表明后续技术方案正文需要统一口径的事项，都必须建项并写出 bullet；不得因材料缺少具体实施方案、人名、日期、指标、型号等而省略该项、不建组或不输出该 bullet。
+3. 参考材料已经给出明确事实值时，照录材料中的事实值。
+4. 严禁虚拟、杜撰、补造任何未在参考材料中出现的具体事实。
+5. 材料只有要求、约束或评价口径、没有具体值时，该项仍须保留，写成不涉及具体时间、地点、人员、业绩、证书、规格型号、工艺步骤、数量指标的正确笼统承诺，表明本方案按招标要求执行该项，但不展开具体做法。
+6. 当前分段或当前材料只给出要求、没有具体实施方案时，仍须输出该事实项，不得因此返回空结果或跳过该项。
+7. 笼统但正确的承诺口径不是空泛内容，合并与最终整理时不得因不够具体而删除。
+8. 工期、运维期或交货时间等事项若正文需要统一口径，必须保留为事实项；材料没有具体值时使用笼统承诺，不要编造日期或周期，也不要因此省略该项。
+9. 已有方案扩写时，原方案中已有事实必须提取；只对招标、知识库、原方案都没有的具体值使用上述笼统写法，选题仍不得漏项。`;
+  }
+  if (mode === 'placeholder') {
+    return `事实补全规则（放着我来模式）：
+1. 先按统一选题标准确定要输出哪些事实项，再按本模式填写值。选题与是否缺少具体值无关。
+2. 凡招标要求、评分口径、项目概述、目录或参考材料表明后续技术方案正文需要统一口径的事项，都必须建项并写出 bullet；不得因材料缺少具体实施方案、人名、日期、指标、型号等而省略该项、不建组或不输出该 bullet。
+3. 参考材料已经给出明确事实值时，照录材料中的事实值。
+4. 严禁虚拟、杜撰、补造任何未在参考材料中出现的具体事实。
+5. 材料只有要求、约束或评价口径、没有具体值时，该项仍须保留，值必须逐字写成【待填写】，不要改写成“待定”“TBD”或其他说法，也不要编造具体值。
+6. 当前分段或当前材料只给出要求、没有具体实施方案时，仍须输出该事实项，不得因此返回空结果或跳过该项。
+7. 【待填写】占位不是空泛内容，合并与最终整理时不得因不够具体而删除。
+8. 工期、运维期或交货时间等事项若正文需要统一口径，必须保留为事实项；材料没有具体值时使用【待填写】，不要编造日期或周期，也不要因此省略该项。
+9. 已有方案扩写时，原方案中已有事实必须提取；只对招标、知识库、原方案都没有的具体值使用【待填写】，选题仍不得漏项。`;
+  }
+  return '';
+}
+
+function buildGlobalFactsSystemPrompt(mode) {
+  const completenessRules = buildGlobalFactsCompletenessRules(mode);
+  return `你是专业的投标技术方案事实变量整理助手。请基于用户提供的上下文，整理后续正文需要统一采用的全局事实变量。
 
 关键定义：
 1. 全局事实变量不是招标要求摘录、评分规则摘要或待办事项清单，而是技术方案正文中需要保持一致的确定性方案事实、响应设定、承诺口径或执行安排。
 2. 用户资料已经给出明确事实时，优先使用资料中的事实值。
 3. 用户资料只给出要求、约束或评价口径时，不要原样摘录为要求句；如果该内容会影响后续正文的一致写法，应转写为本方案已经采用、已经具备或统一承诺的事实表达。
-4. 用户资料没有给出具体值，但该信息对全文一致性重要，且当前任务允许补足时，可以根据项目语境模拟生成合理、稳定、不冲突的事实值。
+${buildMissingFactRule(mode)}
 
 通用要求：
 1. 输出必须使用简体中文。
 2. 只关注技术方案正文会反复使用、且前后必须一致的事实变量。
 3. 每条事实都应能直接指导后续正文统一写法，避免正文各章节自行生成不同口径。
-4. 不输出分析过程、来源说明、风险提示、正文草稿或未落地的要求句。`;
+4. 不输出分析过程、来源说明、风险提示、正文草稿或未落地的要求句。${completenessRules ? `\n\n${completenessRules}` : ''}`;
+}
+
+function buildTenderMergeFactValueRules(mode) {
+  if (mode === 'omit') {
+    return `4. 资料中已有明确事实值时使用明确值；资料没有明确值时仍须保留该项，写成正确笼统承诺，不要补足具体值，也不要为缺具体值而删项。
+5. 必须包含工期、运维期或交货时间中的至少一个相关变量；材料没有具体值时使用笼统承诺，不要编造日期或周期，也不要省略该类变量。`;
+  }
+  if (mode === 'placeholder') {
+    return `4. 资料中已有明确事实值时使用明确值；资料没有明确值但该信息对全文一致性重要时，必须保留该项，值写成【待填写】，严禁杜撰，也不得因缺具体值而删项。
+5. 必须包含工期、运维期或交货时间中的至少一个相关变量；材料没有具体值时使用【待填写】，不要编造日期或周期。`;
+  }
+  return `4. 资料中已有明确事实值时使用明确值；资料没有明确值但该信息对全文一致性重要时，可以根据项目语境补足一套合理、稳定、不冲突的事实值。
+5. 必须包含工期、运维期或交货时间中的至少一个相关变量；如果分段候选不足，但项目概述或 Step02 关键解析结果中已有明确内容，应补入。`;
+}
+
+function buildMergeCleanupRule(mode) {
+  if (mode === 'omit' || mode === 'placeholder') {
+    return '1. 分段候选只代表对应片段，合并时要综合所有片段，删除重复和互相矛盾的表述。笼统但正确的承诺口径以及【待填写】不是空泛内容，不得因不够具体而删除。';
+  }
+  return '1. 分段候选只代表对应片段，合并时要综合所有片段，删除重复、空泛和互相矛盾的表述。';
+}
+
+function buildPatchMergeCleanupRule(mode) {
+  if (mode === 'omit' || mode === 'placeholder') {
+    return '1. 删除重复、互相矛盾或仍停留在要求摘录层面的补充项。笼统但正确的承诺口径以及【待填写】不是空泛内容，不得因不够具体而删除。';
+  }
+  return '1. 删除重复、空泛、互相矛盾或仍停留在要求摘录层面的补充项。';
+}
+
+function buildFinalRewriteRule(mode) {
+  if (mode === 'omit' || mode === 'placeholder') {
+    return '4. 如果某条内容表达的是“需要满足什么要求”，请改写为“本方案统一采用什么事实、安排、承诺或响应口径”。笼统但正确的承诺口径以及【待填写】都不是空泛内容，不得因不够具体而删除；仅删除真正无法指导正文统一写法的要求摘录、评分规则或资料清单。';
+  }
+  return '4. 如果某条内容表达的是“需要满足什么要求”，请改写为“本方案统一采用什么事实、安排、承诺或响应口径”；无法形成稳定事实且不能帮助正文保持一致的，应删除。';
+}
+
+function buildFinalDedupRule(mode) {
+  if (mode === 'omit' || mode === 'placeholder') {
+    return '3. 合并同义或重复大项，删除明显重复 bullet，以及仍停留在招标要求、评分规则、资料清单、待办事项层面的内容。';
+  }
+  return '3. 合并同义或重复大项，删除空泛内容、明显重复 bullet，以及仍停留在招标要求、评分规则、资料清单、待办事项层面的内容。';
+}
+
+function buildFinalScheduleRule(mode) {
+  if (mode === 'omit') {
+    return '6. 必须保留工期、运维期或交货时间中的至少一个相关变量；材料没有具体值时使用笼统承诺，不要编造日期或周期，也不要省略该类变量。';
+  }
+  if (mode === 'placeholder') {
+    return '6. 必须保留工期、运维期或交货时间中的至少一个相关变量；材料没有具体值时使用【待填写】，不要编造日期或周期。';
+  }
+  return '6. 必须保留工期、运维期或交货时间中的至少一个相关变量。';
+}
 
 function singleLine(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -207,16 +304,17 @@ function loadKnowledgeItems(knowledgeBaseService, documentIds, log) {
     log('未选择参考知识库，本次只基于招标文件、Step02 解析结果和目录预设关键信息。', 12);
     return [];
   }
-  if (!knowledgeBaseService?.readItems) {
+  if (!knowledgeBaseService?.readReferences) {
     log('未找到知识库读取服务，本次不使用知识库条目。', 12);
     return [];
   }
 
   const items = [];
-  for (const documentId of documentIds) {
-    try {
-      const documentItems = knowledgeBaseService.readItems(documentId);
-      for (const item of Array.isArray(documentItems) ? documentItems : []) {
+  try {
+    const references = knowledgeBaseService.readReferences(documentIds);
+    for (const reference of Array.isArray(references) ? references : []) {
+      const documentId = String(reference?.document?.id || '').trim();
+      for (const item of Array.isArray(reference?.items) ? reference.items : []) {
         const title = singleLine(item?.title);
         const content = String(item?.content || '').trim();
         if (!title || !content) continue;
@@ -227,9 +325,9 @@ function loadKnowledgeItems(knowledgeBaseService, documentIds, log) {
           content,
         });
       }
-    } catch (error) {
-      log(`读取知识库条目失败，已跳过文档 ${documentId}：${error.message || String(error)}`, 12);
     }
+  } catch (error) {
+    log(`读取知识库条目失败，已跳过：${error.message || String(error)}`, 12);
   }
   log(items.length ? `已读取 ${items.length} 条知识库完整条目。` : '未读取到可用知识库完整条目。', 14);
   return items;
@@ -313,8 +411,8 @@ function createKnowledgeItemSegments(knowledgeItems, aiService, fixedMessages) {
   return segments.map((segment, index) => ({ ...segment, index: index + 1, total: segments.length }));
 }
 
-function buildGlobalFactsLightContextMessages({ projectOverview, outlineData, bidAnalysisFactsText, knowledgeItems, sectionHint }) {
-  const messages = [{ role: 'system', content: GLOBAL_FACTS_SYSTEM_PROMPT }];
+function buildGlobalFactsLightContextMessages({ projectOverview, outlineData, bidAnalysisFactsText, knowledgeItems, sectionHint, globalFactsMode }) {
+  const messages = [{ role: 'system', content: buildGlobalFactsSystemPrompt(globalFactsMode) }];
   if (sectionHint) {
     messages.push({ role: 'system', content: sectionHint });
   }
@@ -327,20 +425,70 @@ function buildGlobalFactsLightContextMessages({ projectOverview, outlineData, bi
   return messages;
 }
 
-function buildGroupsJsonExample() {
+function buildGroupsJsonExample(mode) {
+  if (mode === 'placeholder') {
+    return `请返回 JSON，格式如下：
+{
+  "groups": [
+    {
+      "id": "project_team",
+      "title": "项目角色变量",
+      "content": "- 项目经理：【待填写】。\\n- 技术负责人：【待填写】。"
+    }
+  ]
+}`;
+  }
+  if (mode === 'omit') {
+    return `请返回 JSON，格式如下：
+{
+  "groups": [
+    {
+      "id": "project_team",
+      "title": "项目角色变量",
+      "content": "- 项目经理：按招标文件对该岗位的要求配备。\\n- 技术负责人：按招标文件对该岗位的要求配备。"
+    }
+  ]
+}`;
+  }
   return `请返回 JSON，格式如下：
 {
   "groups": [
     {
       "id": "project_team",
       "title": "项目角色变量",
-      "content": "- 项目经理：张伟，负责总体协调。\n- 技术负责人：李明，负责方案设计和联调验收。"
+      "content": "- 项目经理：张伟，负责总体协调。\\n- 技术负责人：李明，负责方案设计和联调验收。"
     }
   ]
 }`;
 }
 
-function buildPatchesJsonExample() {
+function buildPatchesJsonExample(mode) {
+  if (mode === 'placeholder') {
+    return `请返回 JSON，格式如下：
+{
+  "patches": [
+    {
+      "target_group_id": "project_team",
+      "title": "项目角色变量",
+      "mode": "append",
+      "content": "- 现场负责人：【待填写】。"
+    }
+  ]
+}`;
+  }
+  if (mode === 'omit') {
+    return `请返回 JSON，格式如下：
+{
+  "patches": [
+    {
+      "target_group_id": "project_team",
+      "title": "项目角色变量",
+      "mode": "append",
+      "content": "- 现场负责人：按招标文件对该项工作的要求执行。"
+    }
+  ]
+}`;
+  }
   return `请返回 JSON，格式如下：
 {
   "patches": [
@@ -355,7 +503,8 @@ function buildPatchesJsonExample() {
 }
 
 function buildTenderSegmentGlobalFactsMessages(context) {
-  const { tenderSegment } = context;
+  const { tenderSegment, globalFactsMode } = context;
+  const completenessRules = buildGlobalFactsCompletenessRules(globalFactsMode);
   return [
     ...buildGlobalFactsLightContextMessages(context),
     { role: 'user', content: `招标文件分段 ${tenderSegment.index}/${tenderSegment.total}：\n${tenderSegment.content}` },
@@ -372,9 +521,9 @@ function buildTenderSegmentGlobalFactsMessages(context) {
 4. 每条 content 只写短 bullet，内容应是正文可直接引用或遵循的稳定事实、响应设定、承诺口径或执行安排。
 5. 当前分段无法支持形成事实候选时，返回 {"groups":[]}；不要为了凑内容编造与本段无关的具体值。
 6. 不要输出商务报价、资格材料、正文草稿、分析过程或来源说明。
-7. 只返回 JSON。`,
+7. 只返回 JSON。${completenessRules ? `\n\n${completenessRules}` : ''}`,
     },
-    { role: 'user', content: buildGroupsJsonExample() },
+    { role: 'user', content: buildGroupsJsonExample(globalFactsMode) },
   ];
 }
 
@@ -388,6 +537,7 @@ function formatSegmentGroupsForPrompt(segmentResults) {
 }
 
 function buildTenderSegmentMergeMessages(context) {
+  const completenessRules = buildGlobalFactsCompletenessRules(context.globalFactsMode);
   return [
     ...buildGlobalFactsLightContextMessages(context),
     { role: 'user', content: `招标文件分段候选全局事实：\n${formatSegmentGroupsForPrompt(context.segmentResults)}` },
@@ -398,16 +548,15 @@ function buildTenderSegmentMergeMessages(context) {
 请把所有分段候选合并为后续技术方案正文可直接使用的全局事实变量。
 
 要求：
-1. 分段候选只代表对应片段，合并时要综合所有片段，删除重复、空泛和互相矛盾的表述。
+${buildMergeCleanupRule(context.globalFactsMode)}
 2. 合并后的结果必须是稳定的方案事实、响应设定、承诺口径或执行安排，不保留未落地的要求句、评分规则或资料清单。
 3. 对招标文件中的硬性要求和约束，应判断其是否会影响后续正文的一致写法；会影响的，应转写为本方案统一采用的事实、安排或承诺口径。
-4. 资料中已有明确事实值时使用明确值；资料没有明确值但该信息对全文一致性重要时，可以根据项目语境补足一套合理、稳定、不冲突的事实值。
-5. 必须包含工期、运维期或交货时间中的至少一个相关变量；如果分段候选不足，但项目概述或 Step02 关键解析结果中已有明确内容，应补入。
+${buildTenderMergeFactValueRules(context.globalFactsMode)}
 6. 每条 bullet 都应回答“后续正文遇到这个事项时统一写什么”，而不是回答“招标文件要求什么”。
 7. 仅编写技术方案部分，不要涉及商务报价或资格材料。
-8. 只返回 JSON。`,
+8. 只返回 JSON。${completenessRules ? `\n\n${completenessRules}` : ''}`,
     },
-    { role: 'user', content: buildGroupsJsonExample() },
+    { role: 'user', content: buildGroupsJsonExample(context.globalFactsMode) },
   ];
 }
 
@@ -432,9 +581,9 @@ function buildKnowledgeSegmentPatchMessages(context) {
 6. 如果确实需要新增大项，提供 title 和 content。
 7. mode 只能是 append、prepend 或 replace；默认使用 append。
 8. 没有可补充内容时返回 {"patches":[]}。
-9. 只返回 JSON。`,
+9. 只返回 JSON。${buildGlobalFactsCompletenessRules(context.globalFactsMode) ? `\n\n${buildGlobalFactsCompletenessRules(context.globalFactsMode)}` : ''}`,
     },
-    { role: 'user', content: buildPatchesJsonExample() },
+    { role: 'user', content: buildPatchesJsonExample(context.globalFactsMode) },
   ];
 }
 
@@ -461,9 +610,9 @@ function buildOriginalPlanSegmentPatchMessages(context) {
 6. mode 只能是 append、prepend 或 replace；当原方案明确事实与当前变量冲突且原方案应优先时使用 replace 或 prepend。
 7. 每条 content 只写短 bullet，直接给可复用的变量值，不要写分析过程、来源说明、风险提示或正文草稿。
 8. 没有可补充内容时返回 {"patches":[]}。
-9. 只返回 JSON。`,
+9. 只返回 JSON。${buildGlobalFactsCompletenessRules(context.globalFactsMode) ? `\n\n${buildGlobalFactsCompletenessRules(context.globalFactsMode)}` : ''}`,
     },
-    { role: 'user', content: buildPatchesJsonExample() },
+    { role: 'user', content: buildPatchesJsonExample(context.globalFactsMode) },
   ];
 }
 
@@ -488,15 +637,15 @@ function buildSegmentPatchMergeMessages(context) {
 请把所有分段 patches 合并成一份可应用的 patches。
 
 要求：
-1. 删除重复、空泛、互相矛盾或仍停留在要求摘录层面的补充项。
+${buildPatchMergeCleanupRule(context.globalFactsMode)}
 2. 能合并到同一变量组的内容尽量合并，避免对同一事实反复 append。
 3. 合并后的 patch 内容必须是正文可直接统一使用的方案事实、响应设定、承诺口径或执行安排。
 4. target_group_id 必须优先使用当前全局事实变量中已有的 id；确实需要新增大项时再提供 title 和 content。
 5. mode 只能是 append、prepend 或 replace。
 6. 没有可补充内容时返回 {"patches":[]}。
-7. 只返回 JSON。`,
+7. 只返回 JSON。${buildGlobalFactsCompletenessRules(context.globalFactsMode) ? `\n\n${buildGlobalFactsCompletenessRules(context.globalFactsMode)}` : ''}`,
     },
-    { role: 'user', content: buildPatchesJsonExample() },
+    { role: 'user', content: buildPatchesJsonExample(context.globalFactsMode) },
   ];
 }
 
@@ -513,15 +662,15 @@ function buildFinalGlobalFactsReviewMessages(context) {
 要求：
 1. 最终结果必须全部是后续技术方案正文可直接统一使用的事实变量。
 2. 保留所有具体、可复用、会影响全文一致性的方案事实、响应设定、承诺口径和执行安排。
-3. 合并同义或重复大项，删除空泛内容、明显重复 bullet，以及仍停留在招标要求、评分规则、资料清单、待办事项层面的内容。
-4. 如果某条内容表达的是“需要满足什么要求”，请改写为“本方案统一采用什么事实、安排、承诺或响应口径”；无法形成稳定事实且不能帮助正文保持一致的，应删除。
+${buildFinalDedupRule(context.globalFactsMode)}
+${buildFinalRewriteRule(context.globalFactsMode)}
 5. 不要新增与当前事实相冲突的具体值、服务承诺或技术边界。
-6. 必须保留工期、运维期或交货时间中的至少一个相关变量。
+${buildFinalScheduleRule(context.globalFactsMode)}
 7. 每个 group 必须包含 id、title、content。
 8. ${context.isExpansionWorkflow ? '当前是已有方案扩写模式，原方案分段补充后的事实优先保留，不要在最终整理时弱化或删除原方案已有承诺。' : '只返回 JSON。'}
-${context.isExpansionWorkflow ? '9. 只返回 JSON。' : ''}`,
+${context.isExpansionWorkflow ? '9. 只返回 JSON。' : ''}${buildGlobalFactsCompletenessRules(context.globalFactsMode) ? `\n\n${buildGlobalFactsCompletenessRules(context.globalFactsMode)}` : ''}`,
     },
-    { role: 'user', content: buildGroupsJsonExample() },
+    { role: 'user', content: buildGroupsJsonExample(context.globalFactsMode) },
   ];
 }
 
@@ -770,17 +919,17 @@ async function finalizeGlobalFacts(aiService, context, log) {
   });
 }
 
-async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseService, updateTask }) {
+async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseService, updateTask, checkpointTask, payload }) {
   let logs = ['开始生成全局事实变量。'];
   let currentProgress = 5;
   function log(message, progress = currentProgress) {
     currentProgress = Math.max(currentProgress, Math.min(progress, 99));
     logs = [...logs, message];
-    const technicalPlan = workspaceStore.updateTechnicalPlan({ globalFactsTask: updateTask({ status: 'running', progress: currentProgress, logs }) });
-    updateTask({ status: 'running', progress: currentProgress, logs }, technicalPlan);
+    updateTask({ status: 'running', progress: currentProgress, logs });
   }
 
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
+  const globalFactsMode = normalizeGlobalFactsMode(payload?.globalFactsMode || payload?.global_facts_mode || storedPlan.globalFactsMode);
   const tenderMarkdown = workspaceStore.readTenderMarkdown();
   if (!String(tenderMarkdown || '').trim()) {
     throw new Error('请先上传招标文件，再生成全局事实');
@@ -804,15 +953,9 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
     throw new Error('请先生成目录，再生成全局事实');
   }
 
-  let technicalPlan = workspaceStore.updateTechnicalPlan({
+  checkpointTask({ status: 'running', progress: 5, logs }, {
     globalFacts: [],
-    contentGenerationTask: undefined,
-    contentGenerationSections: {},
-    contentGenerationPlans: {},
-    contentGenerationRuntime: undefined,
-    globalFactsTask: updateTask({ status: 'running', progress: 5, logs }),
   });
-  updateTask({ status: 'running', progress: 5, logs }, technicalPlan);
 
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
   const bidAnalysisFactsText = formatBidAnalysisFactsForPrompt(storedPlan);
@@ -837,19 +980,18 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
     knowledgeItems,
     sectionHint,
     isExpansionWorkflow,
+    globalFactsMode,
   };
 
   log('第一步：正在按招标文件分段提取全局事实变量。', 22);
   const tenderFacts = await runTenderGlobalFactsExtraction(aiService, baseContext, tenderMarkdown, log);
   let groups = tenderFacts.groups;
-  technicalPlan = workspaceStore.updateTechnicalPlan({ globalFacts: groups });
-  updateTask({ status: 'running', progress: 48, logs }, technicalPlan);
+  checkpointTask({ status: 'running', progress: 48, logs }, { globalFacts: groups });
 
   const knowledgePatch = await runKnowledgeGlobalFactPatches(aiService, { ...baseContext, groups }, knowledgeItems, log);
   if (knowledgePatch.patches?.length) {
     groups = mergeGlobalFactPatches(groups, knowledgePatch.patches);
-    technicalPlan = workspaceStore.updateTechnicalPlan({ globalFacts: groups });
-    updateTask({ status: 'running', progress: 66, logs }, technicalPlan);
+    checkpointTask({ status: 'running', progress: 66, logs }, { globalFacts: groups });
     log(`知识库全局事实补充已应用：${knowledgePatch.patches.length} 条。`, 66);
   } else if (knowledgeItems.length) {
     log('知识库未返回需要补充的全局事实变量。', 66);
@@ -859,8 +1001,7 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
     const originalPatch = await runOriginalPlanGlobalFactPatches(aiService, { ...baseContext, groups }, originalPlanMarkdown, log);
     if (originalPatch.patches?.length) {
       groups = mergeGlobalFactPatches(groups, originalPatch.patches);
-      technicalPlan = workspaceStore.updateTechnicalPlan({ globalFacts: groups });
-      updateTask({ status: 'running', progress: 86, logs }, technicalPlan);
+      checkpointTask({ status: 'running', progress: 86, logs }, { globalFacts: groups });
       log(`原方案全局事实补充已应用：${originalPatch.patches.length} 条。`, 86);
     } else {
       log('原方案未返回需要补充的全局事实变量。', 86);
@@ -870,16 +1011,21 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
   const finalFacts = await finalizeGlobalFacts(aiService, { ...baseContext, groups }, log);
   groups = finalFacts.groups;
   log(`全局事实变量合并完成：${groups.length} 个大项。`, 92);
-  technicalPlan = workspaceStore.updateTechnicalPlan({
-    globalFacts: groups,
-    globalFactsTask: updateTask({ status: 'success', progress: 100, logs: [...logs, '全局事实变量生成完成。'] }),
-  });
-  updateTask({ status: 'success', progress: 100, logs: [...logs, '全局事实变量生成完成。'] }, technicalPlan);
+  checkpointTask(
+    { status: 'success', progress: 100, logs: [...logs, '全局事实变量生成完成。'] },
+    { globalFacts: groups },
+  );
 }
 
 module.exports = {
+  formatBidAnalysisFactsForPrompt,
+  formatOutlineForPrompt,
+  loadKnowledgeItems,
   mergeGlobalFactPatches,
+  normalizeGlobalFactsMode,
   normalizeGlobalFactsPatchResponse,
   normalizeGlobalFactsResponse,
+  normalizeReferenceDocumentIds,
   runGlobalFactsTask,
+  validateGlobalFactsResponse,
 };

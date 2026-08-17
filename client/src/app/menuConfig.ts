@@ -140,7 +140,7 @@ const developerMenuItems: AppMenuItem[] = [
       {
         id: 'developer-json-test',
         label: 'Json请求测试',
-        description: '复用项目真实目录生成链路，验证模型 JSON 响应和修复流程。',
+        description: '通过通用 AI 请求验证模型 JSON 响应和修复流程。',
         icon: 'code',
       },
       {

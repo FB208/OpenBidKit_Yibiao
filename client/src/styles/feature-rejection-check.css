@@ -11,178 +11,13 @@
   overflow: hidden;
 }
 
-.rejection-upload-board,
+/* Step01 上传区已迁移到共享 shared-upload.css（shared/ui/UploadBoard.tsx） */
 .rejection-reader-card,
 .rejection-result-command-bar {
   background: rgba(255, 255, 255, 0.94);
   border: 1px solid rgba(228, 233, 240, 0.88);
-  border-radius: 26px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: var(--yb-shadow);
-}
-
-.rejection-upload-board {
-  display: grid;
-  gap: 14px;
-  padding: 20px 24px 22px;
-}
-
-.rejection-page-title,
-.rejection-file-pill {
-  display: flex;
-  align-items: center;
-}
-
-.rejection-page-title {
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.rejection-page-title h2 {
-  margin: 8px 0 0;
-  color: var(--yb-text);
-  font-size: 28px;
-  letter-spacing: -0.035em;
-}
-
-.rejection-upload-stack {
-  display: grid;
-  gap: 12px;
-}
-
-.rejection-upload-row {
-  display: grid;
-  min-height: 86px;
-  grid-template-columns: 168px minmax(180px, 1fr) auto;
-  align-items: center;
-  gap: 16px;
-  padding: 14px 18px 14px 22px;
-  background: linear-gradient(135deg, rgba(248, 250, 253, 0.86), rgba(255, 255, 255, 0.98));
-  border: 1px solid var(--yb-border-soft);
-  border-radius: 22px;
-}
-
-.rejection-upload-label {
-  display: grid;
-  gap: 5px;
-}
-
-.rejection-upload-label span {
-  width: max-content;
-  padding: 4px 8px;
-  color: var(--yb-primary);
-  font-size: 12px;
-  font-weight: 800;
-  background: #eef4ff;
-  border-radius: 999px;
-}
-
-.rejection-upload-label strong {
-  color: var(--yb-text);
-  font-size: 19px;
-}
-
-.rejection-upload-label small {
-  color: var(--yb-text-soft);
-  font-size: 12px;
-}
-
-.rejection-empty-upload span,
-.rejection-file-info span {
-  color: var(--yb-text-soft);
-}
-
-.rejection-upload-content {
-  min-width: 0;
-}
-
-.rejection-empty-upload {
-  display: grid;
-  min-height: 58px;
-  align-content: center;
-  gap: 4px;
-  padding: 10px 14px;
-  background: linear-gradient(90deg, rgba(33, 116, 253, 0.055), rgba(33, 116, 253, 0.012));
-  border: 1px solid rgba(33, 116, 253, 0.13);
-  border-radius: 16px;
-}
-
-.rejection-empty-upload strong {
-  color: var(--yb-text);
-  font-size: 14px;
-}
-
-.rejection-empty-upload span {
-  font-size: 13px;
-}
-
-.rejection-upload-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 10px;
-  min-width: 230px;
-}
-
-.rejection-upload-actions.single-action {
-  min-width: 104px;
-}
-
-.rejection-upload-actions .primary-action,
-.rejection-upload-actions .secondary-action {
-  min-width: 96px;
-  white-space: nowrap;
-}
-
-.rejection-file-pill {
-  min-width: 0;
-  gap: 12px;
-  padding: 10px 12px;
-  background: #ffffff;
-  border: 1px solid var(--yb-border-soft);
-  border-radius: 18px;
-}
-
-.rejection-file-icon {
-  display: grid;
-  width: 46px;
-  height: 46px;
-  flex: 0 0 46px;
-  place-items: center;
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 900;
-  background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
-  border-radius: 14px;
-}
-
-.rejection-file-info {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 4px;
-}
-
-.rejection-file-info strong {
-  overflow: hidden;
-  color: var(--yb-text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rejection-file-info span {
-  overflow: hidden;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rejection-file-pill button {
-  padding: 7px 10px;
-  color: #c83220;
-  font-weight: 700;
-  background: rgba(200, 50, 32, 0.08);
-  border: 0;
-  border-radius: 999px;
 }
 
 .rejection-bid-file-list {
@@ -203,7 +38,7 @@
   font-size: 12px;
   font-weight: 900;
   background: rgba(33, 116, 253, 0.09);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .rejection-reader-card {
@@ -212,12 +47,39 @@
 
 .rejection-reader-head {
   min-width: 0;
+  flex-wrap: wrap;
 }
 
-.rejection-reader-head span {
+.rejection-reader-heading {
+  display: grid;
+  flex: 1 1 320px;
+  min-width: 0;
+  gap: 4px;
+}
+
+.rejection-reader-head > span,
+.rejection-reader-heading span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.rejection-custom-save-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.rejection-custom-save-state {
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.rejection-custom-save-state.is-dirty {
+  color: var(--yb-warning-deep);
 }
 
 .rejection-result-command-bar {
@@ -251,7 +113,7 @@
   padding: 10px 14px;
   background: rgba(248, 250, 253, 0.78);
   border: 1px solid var(--yb-border-soft);
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
   transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
@@ -312,7 +174,7 @@
   padding: 24px;
   background: rgba(255, 255, 255, 0.94);
   border: 1px solid rgba(228, 233, 240, 0.88);
-  border-radius: 26px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: var(--yb-shadow);
 }
 
@@ -332,7 +194,7 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   background: #ffffff;
   border: 1px solid rgba(27, 50, 92, 0.14);
-  border-radius: 22px;
+  border-radius: var(--yb-radius-xl);
 }
 
 .rejection-check-result-tab {
@@ -370,7 +232,7 @@
   font-size: 12px;
   font-style: normal;
   font-weight: 800;
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .rejection-check-result-tab.is-running em {
@@ -379,12 +241,12 @@
 }
 
 .rejection-check-result-tab.is-success em {
-  color: #14825b;
+  color: var(--yb-success);
   background: rgba(20, 130, 91, 0.1);
 }
 
 .rejection-check-result-tab.is-error em {
-  color: #c33434;
+  color: var(--yb-danger);
   background: rgba(224, 72, 72, 0.1);
 }
 
@@ -403,7 +265,7 @@
   padding: 34px;
   background: linear-gradient(180deg, rgba(248, 250, 253, 0.88), rgba(255, 255, 255, 0.98));
   border: 1px solid var(--yb-border-soft);
-  border-radius: 26px;
+  border-radius: var(--yb-radius-xl);
 }
 
 .rejection-check-result-content h3 {
@@ -462,7 +324,7 @@
   font-weight: 800;
   background: rgba(255, 255, 255, 0.78);
   border: 1px solid rgba(27, 50, 92, 0.12);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .rejection-bid-result-filter button.is-active {
@@ -477,7 +339,7 @@
   color: inherit;
   font-size: 12px;
   background: rgba(27, 50, 92, 0.08);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .rejection-finding-group {
@@ -494,7 +356,7 @@
   color: var(--yb-text-soft);
   background: linear-gradient(90deg, rgba(33, 116, 253, 0.08), rgba(91, 84, 211, 0.04));
   border: 1px solid rgba(33, 116, 253, 0.12);
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
 }
 
 .rejection-finding-group-head strong {
@@ -511,7 +373,7 @@
   overflow: hidden;
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid rgba(27, 50, 92, 0.12);
-  border-radius: 20px;
+  border-radius: var(--yb-radius-xl);
   box-shadow: 0 14px 32px rgba(33, 116, 253, 0.08);
 }
 
@@ -537,7 +399,7 @@
   text-align: left;
   background: transparent;
   border: 0;
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
   transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
 
@@ -555,7 +417,7 @@
   font-size: 18px;
   font-weight: 900;
   background: rgba(33, 116, 253, 0.1);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .rejection-finding-title-wrap {
@@ -596,7 +458,7 @@
   font-size: 12px;
   font-style: normal;
   font-weight: 900;
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .rejection-finding-file-tag {
@@ -605,7 +467,7 @@
 }
 
 .rejection-finding-tag.is-invalidBid {
-  color: #b42318;
+  color: var(--yb-danger);
   background: rgba(200, 50, 32, 0.1);
 }
 
@@ -615,7 +477,7 @@
 }
 
 .rejection-finding-tag.is-typo {
-  color: #9a5b00;
+  color: var(--yb-warning-deep);
   background: rgba(245, 158, 11, 0.13);
 }
 
@@ -625,17 +487,17 @@
 }
 
 .rejection-finding-severity.is-high {
-  color: #b42318;
+  color: var(--yb-danger);
   background: rgba(200, 50, 32, 0.1);
 }
 
 .rejection-finding-severity.is-medium {
-  color: #9a5b00;
+  color: var(--yb-warning-deep);
   background: rgba(245, 158, 11, 0.13);
 }
 
 .rejection-finding-severity.is-low {
-  color: #14825b;
+  color: var(--yb-success);
   background: rgba(20, 130, 91, 0.1);
 }
 
@@ -651,11 +513,11 @@
   padding: 8px 12px;
   font-weight: 800;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .rejection-finding-delete {
-  color: #c83220;
+  color: var(--yb-danger);
   background: rgba(200, 50, 32, 0.08);
   transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
@@ -716,7 +578,7 @@
   padding: 14px;
   background: linear-gradient(180deg, rgba(248, 250, 253, 0.92), rgba(255, 255, 255, 0.98));
   border: 1px solid var(--yb-border-soft);
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
 }
 
 .rejection-finding-detail-block strong {

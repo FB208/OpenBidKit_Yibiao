@@ -134,10 +134,11 @@ const tasks = [
 2. 重点提取响应文件需要包含哪些部分，例如报价文件、商务文件、技术文件、资格证明、承诺函、授权委托书、响应表、偏离表、分项报价表等。
 3. 如果招标文件提供了固定格式、表格或附件模板，请提取模板名称、用途、填写要求和关键字段。
 4. 提取签字盖章、文件命名、装订/密封、上传格式、份数、递交截止时间、递交方式等要求。
-5. 区分“必须提供”和“如适用/可选提供”的内容；如果招标文件没有明确区分，不要自行判断。
-6. 不要生成供应商自己的最终响应文件，不要编造公司信息、报价、资质、承诺内容。
-7. 如果没有找到明确响应文件要求，请说明“未找到明确响应文件要求”，并列出可能相关的投标/响应文件格式段落摘要。
-8. 只输出整理结果，不要输出分析过程。`,
+5. 保持投标文件中所列的响应文件顺序，保证后续编写响应文件时，可以直接按照你提取的结果一一对应编写。
+6. 区分“必须提供”和“如适用/可选提供”的内容；如果招标文件没有明确区分，不要自行判断。
+7. 不要生成供应商自己的最终响应文件，不要编造公司信息、报价、资质、承诺内容。
+8. 如果没有找到明确响应文件要求，请说明“未找到明确响应文件要求”，并列出可能相关的投标/响应文件格式段落摘要。
+9. 只输出整理结果，不要输出分析过程。`,
   },
   { id: 'agentInfo', label: '代理机构信息', required: false, output: 'json', description: '代理机构联系方式和账户信息。', prompt: () => jsonTask('提取代理机构信息', '提取代理机构名称、地址、联系人、电话、邮箱和银行账户信息。', `{"company_name":"公司名称","address":"地址","contact_person":"联系人","contact_phone":"联系电话","email":"联系邮箱","bank_account_name":"银行账户名称","bank_account_number":"银行账户账号","bank_account_address":"银行账户开户行","bank_account_address_detail":"银行账户开户行地址"}`) },
   { id: 'keyInfo', label: '投标关键节点', required: false, output: 'json', description: '公告、获取文件、递交、截止和开标信息。', prompt: () => jsonTask('提取投标关键节点', '提取招标公告发布日期、招标文件获取方式、售价、获取时间、提交地点、截止时间、开标时间、开标地点和其他注意事项。', `{"bid_announcement_time":"招标公告发布日期","bid_file_get_way":"招标文件获取方式","bid_file_price":"招标文件售价","get_bid_file_time":"获取招标文件时间","bid_document_submission_location":"投标文件提交地点","bid_submission_deadline":"投标截止时间","bid_opening_time":"开标时间","bid_opening_address":"开标地点","other_notes":"其他注意事项"}`) },
@@ -252,7 +253,7 @@ function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent, sect
   return runBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint });
 }
 
-async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, payload }) {
+async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, checkpointTask, payload }) {
   const config = normalizeBidAnalysisConfig(payload.mode, payload.selected_task_ids || payload.selectedTaskIds);
   const mode = config.mode;
   const selectedTaskIdSet = new Set(config.taskIds);
@@ -308,21 +309,23 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
       ? '开始重新解析全部招标文件解析项。'
       : '开始解析招标文件。';
   const initialLogs = [initialMessage];
-  let initialPartial = { bidAnalysisMode: mode, bidAnalysisSelectedTaskIds: config.taskIds, bidAnalysisTask: updateTask({ status: 'running', progress: 0, logs: initialLogs }) };
+  let initialPartial = { bidAnalysisMode: mode, bidAnalysisSelectedTaskIds: config.taskIds };
+  let initialEventPatch;
+  let currentTasks = { ...(storedPlanForHint.bidAnalysisTasks || {}) };
   if (forceRerun && !requestedTaskIds) {
-    const prev = workspaceStore.loadTechnicalPlan() || {};
-    const resetTasks = { ...(prev.bidAnalysisTasks || {}) };
+    const resetTasks = {};
     for (const task of selectedTasks) {
-      resetTasks[task.id] = { id: task.id, label: task.label, status: 'idle', content: '' };
+      const resetTask = { id: task.id, label: task.label, status: 'idle', content: '' };
+      currentTasks[task.id] = resetTask;
+      resetTasks[task.id] = resetTask;
     }
     initialPartial = {
       ...initialPartial,
-      projectOverview: '',
-      techRequirements: '',
       bidAnalysisTasks: resetTasks,
       bidAnalysisProgress: 0,
       outlineGenerationTask: undefined,
       globalFactsTask: undefined,
+      globalFactsAdjustmentTask: undefined,
       globalFacts: [],
       contentGenerationTask: undefined,
       contentGenerationOptions: undefined,
@@ -331,16 +334,37 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
       contentGenerationRuntime: undefined,
       outlineData: null,
     };
+    initialEventPatch = {
+      technicalPlanPatch: {
+        projectOverview: '',
+        techRequirements: '',
+      },
+    };
   }
-  let technicalPlan = workspaceStore.updateTechnicalPlan(initialPartial);
-  const currentTasks = technicalPlan.bidAnalysisTasks || {};
+  checkpointTask(
+    { status: 'running', progress: 0, logs: initialLogs },
+    initialPartial,
+    initialEventPatch,
+  );
   const tasksToRun = requestedTaskIds || forceRerun ? scopedTasks : scopedTasks.filter((task) => currentTasks[task.id]?.status !== 'success');
 
+  function checkpointBidItem(taskPartial, item, progress, technicalPlanPatch = {}) {
+    checkpointTask(
+      taskPartial,
+      { bidAnalysisItem: item, bidAnalysisProgress: progress },
+      { bidItem: item, technicalPlanPatch },
+    );
+  }
+
   async function runOne(task) {
-    const runningPrev = workspaceStore.loadTechnicalPlan() || {};
-    const runningTasks = { ...(runningPrev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'running', content: '' } };
-    technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTasks: runningTasks, bidAnalysisProgress: doneProgress(runningTasks) });
-    updateTask({ status: 'running', progress: technicalPlan.bidAnalysisProgress || 0 }, technicalPlan);
+    const runningItem = { id: task.id, label: task.label, status: 'running', content: '' };
+    currentTasks = { ...currentTasks, [task.id]: runningItem };
+    const runningProgress = doneProgress(currentTasks);
+    checkpointBidItem(
+      { status: 'running', progress: runningProgress },
+      runningItem,
+      runningProgress,
+    );
 
     const content = await runBidAnalysisPromptTask({
       aiService,
@@ -354,20 +378,29 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
       throw new Error(`${task.label}解析结果为空，请重新解析`);
     }
 
-    const prev = workspaceStore.loadTechnicalPlan() || {};
-    const nextTasks = { ...(prev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'success', content: trimmedContent } };
-    const partial = { bidAnalysisTasks: nextTasks, bidAnalysisProgress: doneProgress(nextTasks) };
-    if (task.id === 'projectOverview') partial.projectOverview = trimmedContent;
-    if (task.id === 'techRequirements') partial.techRequirements = trimmedContent;
-    technicalPlan = workspaceStore.updateTechnicalPlan(partial);
-    updateTask({ status: 'running', progress: technicalPlan.bidAnalysisProgress || 0 }, technicalPlan);
+    const completedItem = { id: task.id, label: task.label, status: 'success', content: trimmedContent };
+    currentTasks = { ...currentTasks, [task.id]: completedItem };
+    const progress = doneProgress(currentTasks);
+    const technicalPlanPatch = {};
+    if (task.id === 'projectOverview') technicalPlanPatch.projectOverview = trimmedContent;
+    if (task.id === 'techRequirements') technicalPlanPatch.techRequirements = trimmedContent;
+    checkpointBidItem(
+      { status: 'running', progress },
+      completedItem,
+      progress,
+      technicalPlanPatch,
+    );
   }
 
   function handleTaskError(task, error) {
-    const prev = workspaceStore.loadTechnicalPlan() || {};
-    const nextTasks = { ...(prev.bidAnalysisTasks || {}), [task.id]: { id: task.id, label: task.label, status: 'error', content: prev.bidAnalysisTasks?.[task.id]?.content || '', error: error.message || '解析失败' } };
-    technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTasks: nextTasks, bidAnalysisProgress: doneProgress(nextTasks) });
-    updateTask({ status: 'running', progress: technicalPlan.bidAnalysisProgress || 0, logs: [`${task.label}解析失败：${error.message || '未知错误'}`] }, technicalPlan);
+    const failedItem = { id: task.id, label: task.label, status: 'error', content: currentTasks[task.id]?.content || '', error: error.message || '解析失败' };
+    currentTasks = { ...currentTasks, [task.id]: failedItem };
+    const progress = doneProgress(currentTasks);
+    checkpointBidItem(
+      { status: 'running', progress, logs: [`${task.label}解析失败：${error.message || '未知错误'}`] },
+      failedItem,
+      progress,
+    );
   }
 
   async function runOneSafely(task) {
@@ -385,24 +418,25 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, paylo
   if (projectOverviewTask) {
     const warmupSucceeded = await runOneSafely(projectOverviewTask);
     if (warmupSucceeded && remainingTasks.length) {
-      updateTask({ status: 'running', progress: technicalPlan.bidAnalysisProgress || 0, logs: ['提示词缓存预热完成，等待 5 秒后开始并发解析剩余项。'] }, technicalPlan);
+      updateTask({
+        status: 'running',
+        progress: doneProgress(currentTasks),
+        logs: ['提示词缓存预热完成，等待 5 秒后开始并发解析剩余项。'],
+      });
       await waitForPromptCacheWarmup();
     }
   }
   await Promise.all(remainingTasks.map(runOneSafely));
 
-  const latestPlan = workspaceStore.loadTechnicalPlan() || {};
-  const missingRequiredTasks = getMissingRequiredTasks(latestPlan.bidAnalysisTasks || {});
+  const missingRequiredTasks = getMissingRequiredTasks(currentTasks);
   if (missingRequiredTasks.length) {
     const missingLabels = missingRequiredTasks.map((task) => task.label).join('、');
     const message = `必填解析项未完成：${missingLabels}，请重新解析失败项。`;
-    technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTask: updateTask({ status: 'error', progress: 100, error: message, logs: [message] }) });
-    updateTask({ status: 'error', progress: 100, error: message }, technicalPlan);
+    checkpointTask({ status: 'error', progress: 100, error: message, logs: [message] });
     return;
   }
 
-  technicalPlan = workspaceStore.updateTechnicalPlan({ bidAnalysisTask: updateTask({ status: 'success', progress: 100, error: undefined, logs: ['招标文件解析完成。'] }) });
-  updateTask({ status: 'success', progress: 100, error: undefined }, technicalPlan);
+  checkpointTask({ status: 'success', progress: 100, error: undefined, logs: ['招标文件解析完成。'] });
 }
 
 module.exports = {

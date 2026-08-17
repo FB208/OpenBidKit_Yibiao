@@ -5,6 +5,7 @@ const path = require('node:path');
 const { dialog } = require('electron');
 const { getKnowledgeBaseDir } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
+const { enqueueJsonLine, enqueueLogRemoval } = require('../utils/silentFileLog.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { parseDocumentWithConfig } = require('./fileService.cjs');
 
@@ -1068,16 +1069,15 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
 
     try {
       const logPath = getDebugLogPath(app, documentId || 'unknown');
-      ensureDir(path.dirname(logPath));
       const entry = {
         time: now(),
         event,
         ...payload,
       };
-      fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, 'utf-8');
+      enqueueJsonLine(logPath, entry);
       console.info(`[knowledge-base] ${event}`, entry);
-    } catch (error) {
-      console.warn('[knowledge-base] 写入调试日志失败', error);
+    } catch {
+      // 调试日志不能影响知识库主流程。
     }
   }
 
@@ -2074,20 +2074,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     }
   }
 
+  recoverInterruptedDocuments();
+
   return {
-    getMigrationStatus() {
-      recoverInterruptedDocuments();
-      return knowledgeBaseStore.getMigrationStatus();
-    },
-
-    migrateLegacy() {
-      const result = knowledgeBaseStore.migrateLegacy();
-      recoverInterruptedDocuments();
-      return { ...result, index: knowledgeBaseStore.list() };
-    },
-
     list() {
-      recoverInterruptedDocuments();
       return knowledgeBaseStore.list();
     },
 
@@ -2100,7 +2090,8 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     },
 
     reorderFolder(draggedFolderId, targetFolderId, position) {
-      return { success: true, message: '文件夹排序已保存', index: knowledgeBaseStore.reorderFolders(draggedFolderId, targetFolderId, position) };
+      knowledgeBaseStore.reorderFolders(draggedFolderId, targetFolderId, position);
+      return { success: true, message: '文件夹排序已保存' };
     },
 
     deleteFolder(folderId) {
@@ -2117,7 +2108,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       for (const document of documentsToDelete) {
         deleteImportedImageBatches(app, `knowledge-${document.id}`);
         fs.rmSync(fromRelative(baseDir, document.document_dir), { recursive: true, force: true });
-        fs.rmSync(getDebugLogPath(app, document.id), { force: true });
+        enqueueLogRemoval(getDebugLogPath(app, document.id));
       }
       fs.rmSync(fromRelative(baseDir, path.join('folders', folderId)), { recursive: true, force: true });
       knowledgeBaseStore.deleteFolder(folderId);
@@ -2132,7 +2123,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
 
       deleteImportedImageBatches(app, `knowledge-${documentId}`);
       fs.rmSync(fromRelative(baseDir, document.document_dir), { recursive: true, force: true });
-      fs.rmSync(getDebugLogPath(app, documentId), { force: true });
+      enqueueLogRemoval(getDebugLogPath(app, documentId));
       knowledgeBaseStore.deleteDocument(documentId);
       return { success: true, message: `已删除文档“${document.file_name}”` };
     },
@@ -2174,8 +2165,8 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       }
 
       try {
-        const result = knowledgeBaseStore.moveDocument(documentId, targetFolderId, moveOptions);
-        return { success: true, message: `已移动文档“${document.file_name}”`, index: result.index, document: result.document };
+        const movedDocument = knowledgeBaseStore.moveDocument(documentId, targetFolderId, moveOptions);
+        return { success: true, message: `已移动文档“${document.file_name}”`, document: movedDocument };
       } catch (error) {
         if (oldDir && newDir && fs.existsSync(newDir) && !fs.existsSync(oldDir)) {
           try {
@@ -2280,6 +2271,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
 
     readMarkdown(documentId) {
       return knowledgeBaseStore.readMarkdown(documentId);
+    },
+
+    readReferences(documentIds, options) {
+      return knowledgeBaseStore.readReferences(documentIds, options);
     },
 
     readItems(documentId) {

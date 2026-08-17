@@ -22,6 +22,7 @@ const {
   writeAiLog,
 } = require('../utils/aiLog.cjs');
 const textTokenStatsStore = require('./textTokenStatsStore.cjs');
+const { normalizeTokenUsage } = textTokenStatsStore;
 
 const AI_REQUEST_TIMEOUT_MS = 600000;
 
@@ -94,57 +95,6 @@ function createModuleDeveloperLogger(app, config, moduleName, request = {}) {
     name: request.name || request.logTitle || moduleName,
     meta: request.meta || {},
   });
-}
-
-function normalizeTokenNumber(value) {
-  const number = Number(value || 0);
-  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
-}
-
-function normalizeCachedTokenNumber(source) {
-  const promptDetails = source.prompt_tokens_details
-    || source.promptTokensDetails
-    || source.input_token_details
-    || source.inputTokenDetails
-    || {};
-  return normalizeTokenNumber(
-    source.cached_tokens
-    ?? source.cachedTokens
-    ?? source.prompt_cached_tokens
-    ?? source.promptCachedTokens
-    ?? source.prompt_cache_hit_tokens
-    ?? source.promptCacheHitTokens
-    ?? source.cache_read_input_tokens
-    ?? source.cacheReadInputTokens
-    ?? source.cached_content_token_count
-    ?? source.cachedContentTokenCount
-    ?? promptDetails.cached_tokens
-    ?? promptDetails.cachedTokens
-    ?? promptDetails.cache_read
-    ?? promptDetails.cacheRead
-    ?? promptDetails.cache_read_input_tokens
-    ?? promptDetails.cacheReadInputTokens
-  );
-}
-
-function normalizeTokenUsage(usage) {
-  const source = usage || {};
-  const promptTokens = normalizeTokenNumber(source.prompt_tokens ?? source.promptTokens ?? source.promptTokenCount);
-  const completionTokens = normalizeTokenNumber(
-    source.completion_tokens
-    ?? source.completionTokens
-    ?? source.completionTokenCount
-    ?? source.candidatesTokenCount,
-  );
-  const totalTokens = normalizeTokenNumber(source.total_tokens ?? source.totalTokens ?? source.totalTokenCount)
-    || promptTokens + completionTokens;
-
-  return {
-    prompt_tokens: promptTokens,
-    completion_tokens: completionTokens,
-    total_tokens: totalTokens,
-    cached_tokens: normalizeCachedTokenNumber(source),
-  };
 }
 
 function getTextTokenStatsSnapshot() {
@@ -243,10 +193,11 @@ function createOperationTimeout(timeoutMs) {
   };
 }
 
-async function runWithOperationTimeout(runner, timeoutMs = AI_REQUEST_TIMEOUT_MS) {
+async function runWithOperationTimeout(runner, timeoutMs = AI_REQUEST_TIMEOUT_MS, parentSignal) {
   const timeout = createOperationTimeout(timeoutMs);
   try {
-    return await timeout.run(runner(timeout.signal));
+    const signal = parentSignal ? AbortSignal.any([timeout.signal, parentSignal]) : timeout.signal;
+    return await timeout.run(runner(signal));
   } finally {
     timeout.clear();
   }
@@ -370,10 +321,10 @@ function createAiResponseDataError(message, responseData) {
   return error;
 }
 
-async function downloadImage(url) {
+async function downloadImage(url, options = {}) {
   let response = null;
   try {
-    response = await fetch(url);
+    response = await fetch(url, { signal: options.signal });
   } catch (error) {
     throw markAiRequestError(error, { retryable: true });
   }
@@ -686,7 +637,7 @@ function normalizeJsonPayload(request, parsed) {
   return normalized;
 }
 
-async function repairJsonResponse(app, config, invalidContent, issues, responseFormat, progressCallback, progressLabel, repairMessagesBuilder, logTitle) {
+async function repairJsonResponse(app, config, invalidContent, issues, responseFormat, progressCallback, progressLabel, repairMessagesBuilder, logTitle, signal) {
   await emitProgress(progressCallback, `${progressLabel}格式校验失败，正在基于当前结果进行修复。`);
   return chatWithConfig(app, config, {
     messages: repairMessagesBuilder
@@ -694,6 +645,7 @@ async function repairJsonResponse(app, config, invalidContent, issues, responseF
       : buildJsonRepairMessages(invalidContent, issues, progressLabel),
     response_format: responseFormat,
     logTitle: logTitle ? `${logTitle}修复` : `${progressLabel}修复`,
+    signal,
   });
 }
 
@@ -718,6 +670,7 @@ async function parseOrRepairJsonResponseWithConfig(app, config, request, content
         progressLabel,
         request.repairMessagesBuilder,
         logTitle,
+        request.signal,
       );
       return normalizeJsonPayload(request, parseJsonContent(repairedContent));
     } catch {
@@ -742,6 +695,7 @@ async function collectJsonResponseWithConfig(app, config, request) {
       timeout_ms: request.timeout_ms,
       timeout_message: request.timeout_message,
       logTitle,
+      signal: request.signal,
     });
 
     try {
@@ -762,6 +716,7 @@ async function collectJsonResponseWithConfig(app, config, request) {
           progressLabel,
           request.repairMessagesBuilder,
           logTitle,
+          request.signal,
         );
         const repairedParsed = parseJsonContent(repairedContent);
         return normalizeJsonPayload(request, repairedParsed);
@@ -804,6 +759,39 @@ function createChatRequestBody(config, request, options = {}) {
     body.response_format = request.response_format;
   }
 
+  return body;
+}
+
+// 保留 Pi 工具调用协议字段，并统一应用当前文本模型配置。
+function createAgentChatRequestBody(config, sourceBody) {
+  const source = sourceBody && typeof sourceBody === 'object' ? sourceBody : {};
+  const messages = Array.isArray(source.messages) ? source.messages : [];
+  if (!messages.length) {
+    throw new Error('Agent 代理请求缺少 messages');
+  }
+
+  const body = {
+    ...source,
+    model: config.model_name,
+    messages,
+    stream: normalizeTextRequestMode(config) === 'stream',
+  };
+  if (!body.stream) delete body.stream_options;
+  if (config.temperature_enabled) {
+    body.temperature = config.temperature;
+  } else {
+    delete body.temperature;
+  }
+  if (config.reasoning_effort) {
+    body.reasoning_effort = config.reasoning_effort;
+  } else {
+    delete body.reasoning_effort;
+  }
+
+  // 部分 OpenAI 兼容上游会拒绝 Agent SDK 注入的输出长度参数。
+  delete body.max_tokens;
+  delete body.max_output_tokens;
+  delete body.max_completion_tokens;
   return body;
 }
 
@@ -1106,7 +1094,7 @@ async function requestOpenAICompatibleImageData(baseUrl, apiKey, requestBody, fa
   }
 }
 
-async function createImageFromOpenAICompatibleItem(item) {
+async function createImageFromOpenAICompatibleItem(item, options = {}) {
   if (item?.b64_json) {
     return {
       buffer: Buffer.from(item.b64_json, 'base64'),
@@ -1115,7 +1103,7 @@ async function createImageFromOpenAICompatibleItem(item) {
   }
 
   if (item?.url) {
-    return downloadImage(item.url);
+    return downloadImage(item.url, options);
   }
 
   return null;
@@ -1272,7 +1260,7 @@ async function chatWithConfig(app, config, request) {
         requestBody = createChatRequestBody(config, request, { omitResponseFormat: true, stream: requestMode === 'stream' });
         return requestTextAi(app, config, requestBody, { signal, requestMode });
       }
-    }, timeoutMs));
+    }, timeoutMs, request.signal));
 
     responseData = result.responseData;
     recordTextTokenStats(config, result.usage);
@@ -1321,6 +1309,81 @@ async function chatWithConfig(app, config, request) {
     markAiRequestError(wrappedError, { retryable: false });
     emitAiHttpErrorToWindows(wrappedError);
     throw wrappedError;
+  }
+}
+
+// 通过统一文本出口执行一次 Agent Chat Completions 请求，响应消费完成后才释放队列槽。
+async function runAgentChatCompletionWithConfig(app, config, request) {
+  if (!config.api_key) {
+    throw new Error('请先在设置中配置文本模型 API Key');
+  }
+  if (!config.model_name) {
+    throw new Error('请先在设置中配置文本模型名称');
+  }
+  requireBaseUrl(config.base_url, '请先在设置中配置文本模型 Base URL');
+  if (typeof request.consumeResponse !== 'function') {
+    throw new Error('Agent 代理请求缺少响应消费函数');
+  }
+
+  const requestId = createRequestId();
+  const requestBody = createAgentChatRequestBody(config, request.body);
+  const requestMode = requestBody.stream ? 'stream' : 'normal';
+  const logTitle = resolveAiLogTitle(request, 'Pi Agent');
+  let responseData = null;
+  let analyticsTracked = false;
+
+  try {
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: 'chat-pending',
+      request_mode: requestMode,
+      url: `${trimBaseUrl(config.base_url)}/chat/completions`,
+      request: requestBody,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    });
+    await Promise.resolve(request.onRequestStart?.({ config, requestBody, requestId }));
+    const response = await fetchChatCompletion(app, config, requestBody, { signal: request.signal });
+    await ensureTextAiResponseOk(response, 'AI 请求失败');
+    const result = await request.consumeResponse(response, {
+      config,
+      requestBody,
+      requestId,
+    });
+    responseData = result?.responseData ?? null;
+    recordTextTokenStats(config, result?.usage);
+    trackAiRequest(app, config, { ai_request_type: 'text', usage: result?.usage });
+    analyticsTracked = true;
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: 'chat',
+      request_mode: requestMode,
+      url: `${trimBaseUrl(config.base_url)}/chat/completions`,
+      request: requestBody,
+      response: responseData,
+      content: result?.content || '',
+      created_at: new Date().toISOString(),
+    });
+    return result;
+  } catch (error) {
+    if (!analyticsTracked) {
+      recordTextTokenStats(config, null);
+      trackAiRequest(app, config, { ai_request_type: 'text' });
+    }
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: 'chat-error',
+      request_mode: requestMode,
+      url: `${trimBaseUrl(config.base_url)}/chat/completions`,
+      request: requestBody,
+      response: getAiErrorLogResponse(error, responseData),
+      error: getAiErrorLogError(error, error?.message || 'AI 请求失败'),
+      created_at: new Date().toISOString(),
+    });
+    throw error;
   }
 }
 
@@ -1573,12 +1636,17 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
         { signal, source: `${meta.logProvider}-image-model` },
       ),
       AI_REQUEST_TIMEOUT_MS,
+      request.signal,
     ));
     trackAiRequest(app, config, { ai_request_type: 'image', usage: extractOpenAIUsage(responseData) });
     analyticsTracked = true;
 
     const item = responseData.data?.[0] || {};
-    const image = await createImageFromOpenAICompatibleItem(item);
+    const image = await runWithOperationTimeout(
+      (signal) => createImageFromOpenAICompatibleItem(item, { signal }),
+      AI_REQUEST_TIMEOUT_MS,
+      request.signal,
+    );
 
     if (!image) {
       throw createAiResponseDataError(getOpenAICompatibleImageFailureMessage(responseData, `${meta.label}生图未返回图片数据`), responseData);
@@ -1652,6 +1720,7 @@ async function generateGoogleImage(app, config, request) {
         { signal },
       ),
       AI_REQUEST_TIMEOUT_MS,
+      request.signal,
     ));
     trackAiRequest(app, config, { ai_request_type: 'image', usage: extractGoogleUsage(responseData) });
     analyticsTracked = true;
@@ -1734,7 +1803,7 @@ function createAiService({ app, configStore }) {
     return String(request?.queueScopeId || request?.queue_scope_id || '').trim();
   }
 
-  function withQueueScope(request, queueScopeId) {
+  function withQueueScope(request, queueScopeId, signal) {
     const normalizedScopeId = String(queueScopeId || '').trim();
     if (!normalizedScopeId || !request || typeof request !== 'object') {
       return request;
@@ -1743,15 +1812,20 @@ function createAiService({ app, configStore }) {
     return {
       ...request,
       queueScopeId: getQueueScopeId(request) || normalizedScopeId,
+      ...(signal && !request.signal ? { signal } : {}),
     };
   }
 
-  function enqueueTextRequest(request, runner) {
-    return textRequestQueue.enqueue(runner, { scopeId: getQueueScopeId(request) });
+  function enqueueTextRequest(request, runner, options = {}) {
+    return textRequestQueue.enqueue(runner, {
+      scopeId: getQueueScopeId(request),
+      signal: options.signal,
+      maxAttempts: options.maxAttempts,
+    });
   }
 
   function enqueueImageRequest(request, runner) {
-    return imageRequestQueue.enqueue(runner, { scopeId: getQueueScopeId(request) });
+    return imageRequestQueue.enqueue(runner, { scopeId: getQueueScopeId(request), signal: request?.signal });
   }
 
   const service = {
@@ -1763,6 +1837,17 @@ function createAiService({ app, configStore }) {
       return enqueueTextRequest(request, () => {
         const config = configStore.load();
         return chatWithConfig(app, config, request);
+      }, { signal: request?.signal });
+    },
+
+    async runAgentChatCompletion(request) {
+      return enqueueTextRequest(request, () => {
+        const config = configStore.load();
+        return runAgentChatCompletionWithConfig(app, config, request);
+      }, {
+        signal: request?.signal,
+        // Pi Session 保留回合级原生重试，本队列只负责统一调度和并发控制。
+        maxAttempts: 1,
       });
     },
 
@@ -1770,21 +1855,21 @@ function createAiService({ app, configStore }) {
       return enqueueTextRequest(request, () => {
         const config = configStore.load();
         return collectJsonResponseWithConfig(app, config, request);
-      });
+      }, { signal: request?.signal });
     },
 
     async collectJsonResponse(request) {
       return enqueueTextRequest(request, () => {
         const config = configStore.load();
         return collectJsonResponseWithConfig(app, config, request);
-      });
+      }, { signal: request?.signal });
     },
 
     async parseJsonResponseContent(request, content) {
       return enqueueTextRequest(request, () => {
         const config = configStore.load();
         return parseOrRepairJsonResponseWithConfig(app, config, request, content);
-      });
+      }, { signal: request?.signal });
     },
 
     pauseQueueScope(scopeId) {
@@ -1816,23 +1901,26 @@ function createAiService({ app, configStore }) {
       return onTextTokenStatsChanged(listener);
     },
 
-    withQueueScope(scopeId) {
+    withQueueScope(scopeId, signal) {
       return {
         ...service,
         chat(request) {
-          return service.chat(withQueueScope(request, scopeId));
+          return service.chat(withQueueScope(request, scopeId, signal));
         },
         requestJson(request) {
-          return service.requestJson(withQueueScope(request, scopeId));
+          return service.requestJson(withQueueScope(request, scopeId, signal));
         },
         collectJsonResponse(request) {
-          return service.collectJsonResponse(withQueueScope(request, scopeId));
+          return service.collectJsonResponse(withQueueScope(request, scopeId, signal));
         },
         parseJsonResponseContent(request, content) {
-          return service.parseJsonResponseContent(withQueueScope(request, scopeId), content);
+          return service.parseJsonResponseContent(withQueueScope(request, scopeId, signal), content);
+        },
+        runAgentChatCompletion(request) {
+          return service.runAgentChatCompletion(withQueueScope(request, scopeId, signal));
         },
         generateImage(request) {
-          return service.generateImage(withQueueScope(request, scopeId));
+          return service.generateImage(withQueueScope(request, scopeId, signal));
         },
       };
     },

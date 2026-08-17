@@ -268,3 +268,13 @@ donotsync/
 testfiles/
 doc/
 logs/
+
+# 企业微信群聊导出工具本地环境和敏感产物
+scripts/wecom_chat_export/.venv/
+scripts/wecom_chat_export/output/
+scripts/wecom_chat_export/*.csv
+scripts/wecom_chat_export/*.json
+scripts/wecom_chat_export/*.db
+scripts/wecom_chat_export/*.db-wal
+scripts/wecom_chat_export/*.db-shm
+scripts/
