@@ -12,6 +12,10 @@ function isDeveloperSection(section: SectionId) {
   return section.startsWith('developer-');
 }
 
+function isTechnicalPlanSection(section: SectionId) {
+  return section === 'technical-plan' || section === 'existing-plan-expansion';
+}
+
 function App() {
   const [activeSection, setActiveSection] = useState<SectionId>('bid-generation');
   const [developerMode, setDeveloperMode] = useState(false);
@@ -30,6 +34,8 @@ function App() {
 
   useEffect(() => {
     trackPageView(activeSection);
+    if (isTechnicalPlanSection(activeSection)) return;
+    void window.yibiao?.ui?.setCurrentView({ section: activeSection });
   }, [activeSection]);
 
   useEffect(() => {

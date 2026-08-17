@@ -45,6 +45,9 @@ const bridge = {
       return () => ipcRenderer.removeListener('workspace-database:status', listener);
     },
   },
+  ui: {
+    setCurrentView: (view) => ipcRenderer.invoke('ui:set-current-view', view),
+  },
   config: {
     load: () => ipcRenderer.invoke('config:load'),
     save: (config) => ipcRenderer.invoke('config:save', config),

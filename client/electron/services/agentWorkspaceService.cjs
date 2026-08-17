@@ -23,8 +23,18 @@ const STEP_WORKSPACE_IDS = Object.freeze({
   'global-facts': GLOBAL_FACTS_AGENT_TASK_KEY,
 });
 
-function getMappedWorkspaceId(step) {
-  return STEP_WORKSPACE_IDS[step] || null;
+const TECHNICAL_PLAN_SECTIONS = new Set(['technical-plan', 'existing-plan-expansion']);
+
+function normalizeCurrentView(view = {}) {
+  const section = String(view.section || '').trim();
+  const rawStep = view.step;
+  const step = rawStep == null || rawStep === '' ? '' : String(rawStep).trim();
+  return { section, step };
+}
+
+function getMappedWorkspaceId(view) {
+  if (!TECHNICAL_PLAN_SECTIONS.has(view?.section)) return null;
+  return STEP_WORKSPACE_IDS[view.step] || null;
 }
 
 /**
@@ -35,6 +45,8 @@ function getMappedWorkspaceId(step) {
 function createAgentWorkspaceService({ agentService, taskService, technicalPlanStore }) {
   const chatSubscribers = new Set();
   const workspaceChangeSubscribers = new Set();
+  // 当前可见页；未上报前无生效工作空间。不写库。
+  let currentView = { section: '', step: '' };
   // workspaceId -> { messages, pending, pending_task_id }
   const chatStates = new Map();
 
@@ -191,8 +203,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
   function buildWorkspaceEntry(provider) {
     const descriptor = provider.buildDescriptor();
     if (!descriptor) return null;
-    const plan = technicalPlanStore.loadTechnicalPlan() || {};
-    const mappedId = getMappedWorkspaceId(plan.step);
+    const mappedId = getMappedWorkspaceId(currentView);
     const state = getChatState(provider.id);
     return {
       ...descriptor,
@@ -200,6 +211,11 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
       pending: state.pending,
       messages: state.messages.map((message) => ({ ...message })),
     };
+  }
+
+  function setCurrentView(view = {}) {
+    currentView = normalizeCurrentView(view);
+    emitWorkspacesChanged();
   }
 
   function listAgentWorkspaces() {
@@ -337,6 +353,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     onAgentWorkspaceChatEvent,
     onAgentWorkspacesChanged,
     emitWorkspacesChanged,
+    setCurrentView,
   };
 }
 

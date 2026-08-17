@@ -550,6 +550,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     if (!hydrated) return;
 
     trackPageView(`${workflowKind}/${state.step}`);
+    void window.yibiao?.ui?.setCurrentView({ section: workflowKind, step: state.step });
   }, [hydrated, state.step, workflowKind]);
 
   useEffect(() => {

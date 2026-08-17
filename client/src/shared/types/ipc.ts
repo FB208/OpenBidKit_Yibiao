@@ -500,6 +500,9 @@ export interface YibiaoBridge {
     getStatus: () => Promise<WorkspaceDatabaseStatus>;
     onStatus: (callback: (status: WorkspaceDatabaseStatus) => void) => () => void;
   };
+  ui: {
+    setCurrentView: (view: { section: string; step?: string | null }) => Promise<{ success: boolean }>;
+  };
   config: {
     load: () => Promise<ClientConfig>;
     save: (config: ClientConfig) => Promise<ConfigSaveResult>;
