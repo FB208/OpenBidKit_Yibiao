@@ -1,8 +1,3 @@
-export interface SourceReferenceTag {
-  id: string;
-  name: string;
-  type?: 'knowledge_base' | 'key_parameter' | string;
-}
 export type OutlineContentMode = 'ai-generate' | 'template-fill' | 'point-to-point' | 'other';
 
 export const OUTLINE_CONTENT_MODE_LABELS: Record<OutlineContentMode, string> = {
@@ -22,7 +17,6 @@ export interface OutlineItem {
   source_requirement_id?: string;
   source_requirement_title?: string;
   knowledge_item_ids?: string[];
-  source_references?: SourceReferenceTag[];
   children?: OutlineItem[];
   content?: string;
 }

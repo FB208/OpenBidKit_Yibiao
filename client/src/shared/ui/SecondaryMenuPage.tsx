@@ -33,19 +33,7 @@ function SecondaryMenuPage({ menuItem, onNavigate }: SecondaryMenuPageProps) {
       <section className="panel secondary-menu-list-panel">
         <div className="secondary-menu-list-head">
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span>{menuItem.label}</span>
-              {menuItem.badge && (
-                <span style={{
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  padding: '2px 7px',
-                  borderRadius: '12px',
-                  background: '#2f6fed',
-                  color: '#ffffff',
-                }}>{menuItem.badge}</span>
-              )}
-            </div>
+            <span>{menuItem.label}</span>
             <p>{menuItem.description}</p>
           </div>
         </div>
@@ -58,19 +46,7 @@ function SecondaryMenuPage({ menuItem, onNavigate }: SecondaryMenuPageProps) {
                   <SubMenuIcon item={item} />
                 </span>
                 <span className="secondary-menu-row-copy">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <strong>{item.label}</strong>
-                    {item.badge && (
-                      <span style={{
-                        fontSize: '10px',
-                        fontWeight: 700,
-                        padding: '1px 6px',
-                        borderRadius: '10px',
-                        background: '#2f6fed',
-                        color: '#ffffff',
-                      }}>{item.badge}</span>
-                    )}
-                  </div>
+                  <strong>{item.label}</strong>
                   <small>{item.description}</small>
                 </span>
                 <span className="secondary-menu-row-arrow">

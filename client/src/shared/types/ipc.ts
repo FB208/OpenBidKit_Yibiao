@@ -1,10 +1,6 @@
 import type { AiHttpErrorPayload, ChatCompletionRequest, JsonCompletionRequest } from './ai';
 import type { DuplicateCheckWorkspacePatch, DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelInfoResult, ModelListResult, UpdateChannel } from './config';
-import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMigrationResult, KnowledgeBaseMigrationStatus, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
-import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
-import type { FeasibilityProjectInfo, FeasibilityReportState, FeasibilityReportStep, FeasibilityOutlineTemplate } from '../../features/feasibility-report/types';
-import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspacePatch, RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
@@ -36,7 +32,6 @@ export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDu
   rejectionCheck?: TRejectionCheckState;
   rejectionCheckPatch?: RejectionCheckWorkspacePatch;
   duplicateCheck?: TDuplicateCheckState;
-  feasibilityReport?: FeasibilityReportState;
   duplicateCheckPatch?: DuplicateCheckWorkspacePatch;
 }
 
@@ -615,25 +610,6 @@ export interface YibiaoBridge {
     saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<Partial<TechnicalPlanState>>;
     clear: () => Promise<{ success: boolean; message?: string }>;
   };
-  feasibilityReport: {
-    loadState: () => Promise<FeasibilityReportState>;
-    importSourceDocuments: () => Promise<{ success: boolean; message?: string; state: FeasibilityReportState; markdown: string }>;
-    readSourceMarkdown: (sourceId: string) => Promise<string>;
-    readCombinedSourceMarkdown: () => Promise<string>;
-    updateStep: (step: FeasibilityReportStep) => Promise<FeasibilityReportState>;
-    saveProjectInfo: (projectInfo: FeasibilityProjectInfo) => Promise<FeasibilityReportState>;
-    saveAnalysis: (markdown: string) => Promise<FeasibilityReportState>;
-    saveOutlineConfig: (payload: { outlineTemplate: FeasibilityOutlineTemplate; targetWords: number; referenceKnowledgeDocumentIds: string[] }) => Promise<FeasibilityReportState>;
-    saveOutline: (outlineData: OutlineData) => Promise<FeasibilityReportState>;
-    saveKeyParameters: (markdown: string) => Promise<FeasibilityReportState>;
-    saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<FeasibilityReportState>;
-    clear: () => Promise<{ success: boolean; message?: string; state: FeasibilityReportState }>;
-    runValidationCheck: () => Promise<any>;
-    runConsistencyCheck: () => Promise<any>;
-    saveFinancialData: (financialData: any) => Promise<FeasibilityReportState>;
-    calculateFinancials: (payload?: any) => Promise<any>;
-    syncFinancialsToContent: () => Promise<FeasibilityReportState>;
-  };
   duplicateCheck: {
     loadState: () => Promise<DuplicateCheckWorkspaceState>;
     saveFiles: (payload: Pick<DuplicateCheckWorkspaceState, 'tenderFile' | 'tenderFiles' | 'bidFiles'> & Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<void>;
@@ -664,11 +640,6 @@ export interface YibiaoBridge {
     suppressOutlineSelectionAutoConfirmation: (payload: { taskId: string }) => Promise<{ success: boolean }>;
     startGlobalFactsGeneration: (payload: unknown) => Promise<unknown>;
     startContentGeneration: (payload: unknown) => Promise<unknown>;
-    startFeasibilityAnalysis: (payload?: unknown) => Promise<unknown>;
-    startFeasibilityOutline: (payload: unknown) => Promise<unknown>;
-    startFeasibilityParameters: (payload?: unknown) => Promise<unknown>;
-    startFeasibilityContent: (payload?: unknown) => Promise<unknown>;
-    startFeasibilityHumanWriting: (payload?: unknown) => Promise<unknown>;
     pauseContentGeneration: () => Promise<unknown>;
     startRejectionItemsExtraction: (payload: unknown) => Promise<unknown>;
     startRejectionCheck: (payload: unknown) => Promise<unknown>;

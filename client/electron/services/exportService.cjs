@@ -1495,13 +1495,7 @@ async function htmlTableToDocx($, tableNode, context) {
         totalColumns: maxColumns,
       }));
     }
-    const isHeaderRow = rowIndex === 0;
-    const shouldRepeatHeader = context?.exportFormat?.table?.repeat_header_row ?? true;
-    rows.push(new TableRow({
-      children: cells,
-      cantSplit: true,
-      tableHeader: (isHeaderRow && shouldRepeatHeader) ? true : undefined,
-    }));
+    rows.push(new TableRow({ children: cells }));
   }
 
   if (!rows.length) {
@@ -1680,46 +1674,6 @@ async function htmlHeadingToDocxBlocks($, node, context) {
   return [paragraph(await htmlInlineRuns($, $(node).contents().toArray(), context, runMarks), headingOpts)];
 }
 
-function buildDocxImageGuidanceBox($, node, context) {
-  const fullText = String($(node).text() || '').trim();
-
-  const titleMatch = fullText.match(/(?:📸\s*)?(【[^】]+】[^\n*]*)/);
-  const titleText = titleMatch ? titleMatch[1].trim() : '📸 【插图指引】：此处建议插入工程项目图纸/照片';
-
-  let descText = fullText.replace(/📸\s*/g, '').replace(/(?:📸\s*)?【[^】]+】[^\n*]*/g, '').replace(/^\s*[*_说明：:\s]*/g, '').trim();
-  if (!descText) {
-    descText = '此处请插入相关的工程效果图、现场实景照片、总平面布置图、工艺流程示意图或实施进度甘特图。';
-  }
-
-  const p1 = paragraph([
-    textRun('📸 ', { font: 'Segoe UI Emoji', size: 21 }),
-    textRun(titleText, { bold: true, size: 21, color: '1A5F7A' }),
-  ], { after: 100, alignment: AlignmentType.LEFT });
-
-  const p2 = paragraph([
-    textRun(`规格建议：横版 16:9 / 建议居中排版    插图说明：${descText}`, { size: 18, color: '475569', italics: true }),
-  ], { after: 60, alignment: AlignmentType.LEFT });
-
-  const cell = new TableCell({
-    children: [p1, p2],
-    shading: { fill: 'F0F6FF', type: ShadingType.CLEAR },
-    margins: { top: 120, bottom: 120, left: 200, right: 200 },
-    borders: {
-      top: { style: BorderStyle.SINGLE, size: 6, color: 'C7DCD' },
-      bottom: { style: BorderStyle.SINGLE, size: 6, color: 'C7DCD' },
-      left: { style: BorderStyle.SINGLE, size: 18, color: '1A5F7A' },
-      right: { style: BorderStyle.SINGLE, size: 6, color: 'C7DCD' },
-    },
-  });
-
-  const table = new Table({
-    width: { size: 9000, type: WidthType.DXA },
-    rows: [new TableRow({ children: [cell], cantSplit: true })],
-  });
-
-  return [table, paragraph([textRun('', { size: 12 })], { after: 150 })];
-}
-
 async function htmlNodeToDocxBlocks($, node, context, options = {}) {
   if (node.type === 'text') {
     const text = String(node.data || '').trim();
@@ -1749,10 +1703,6 @@ async function htmlNodeToDocxBlocks($, node, context, options = {}) {
     return htmlListToDocx($, node, context, options);
   }
   if (tag === 'blockquote') {
-    const text = String($(node).text() || '').trim();
-    if (text.includes('📸') || text.includes('插图指引') || text.includes('建议插图')) {
-      return buildDocxImageGuidanceBox($, node, context);
-    }
     return [paragraph(await htmlInlineRuns($, $(node).contents().toArray(), context, { color: '536176' }), {
       indent: { left: 360 },
       border: { left: { style: BorderStyle.SINGLE, size: 12, color: '2174FD' } },
@@ -2082,330 +2032,9 @@ function buildHeadingParagraphStyles(exportFormat) {
   return styles;
 }
 
-function buildFeasibilityCoverParagraphs(payload) {
-  const info = payload.project_info || {};
-  const options = payload.feasibility_options || {};
-  const now = new Date();
-  const dateStr = `${now.getFullYear()}年${String(now.getMonth() + 1).padStart(2, '0')}月`;
-
-  return [
-    paragraph([textRun(options.securityLevel || '内部资料 / 普通', { bold: true, size: 20, color: '666666' })], { alignment: AlignmentType.RIGHT, after: 600 }),
-    paragraph([textRun(payload.project_name || info.projectName || '项目可行性研究报告', { bold: true, size: 40, color: '1A5F7A' })], { alignment: AlignmentType.CENTER, after: 300 }),
-    paragraph([textRun('可行性研究报告', { bold: true, size: 32, color: '333333' })], { alignment: AlignmentType.CENTER, after: 600 }),
-    paragraph([textRun(`（所属行业：${info.industry || '国家标准大纲'}）`, { italics: true, size: 22, color: '666666' })], { alignment: AlignmentType.CENTER, after: 2000 }),
-
-    paragraph([textRun(`项目建设单位：${info.projectUnit || '【未指定】'}`, { size: 24, bold: true })], { alignment: AlignmentType.CENTER, after: 180 }),
-    paragraph([textRun(`报告编制单位：${options.preparationUnit || '可行性研究报告编制中心'}`, { size: 24 })], { alignment: AlignmentType.CENTER, after: 180 }),
-    paragraph([textRun(`文档识别编号：${options.documentCode || 'KYBG-2026-0088'}`, { size: 22, color: '666666' })], { alignment: AlignmentType.CENTER, after: 180 }),
-    paragraph([textRun(`编制出版日期：${dateStr}`, { size: 22, color: '666666' })], { alignment: AlignmentType.CENTER, after: 400 }),
-    pageBreakParagraph(),
-  ];
-}
-
-function buildFeasibilityNotesParagraphs(payload) {
-  const info = payload.project_info || {};
-
-  const tableHeader = new TableRow({
-    children: ['编制角色', '人员姓名', '专业职称 / 职务', '签章 / 审核状态'].map((text) =>
-      new TableCell({
-        children: [paragraph([textRun(text, { bold: true, size: 22, color: 'FFFFFF' })], { alignment: AlignmentType.CENTER })],
-        shading: { fill: '1A5F7A', type: ShadingType.CLEAR },
-        width: { size: 2250, type: WidthType.DXA },
-      })
-    ),
-  });
-
-  const roles = [
-    ['项目总负责人', '张研明', '高级工程师 / 注册咨询工程师', '已审定'],
-    ['技术审定人', '李国华', '教授级高工 / 项目审核专家', '已审核'],
-    ['主要校核人', '王建军', '资深咨询师 / 行业专家', '已校核'],
-    ['报告主编人', '陈思远', '高级项目经理 / 编制主笔', '已签字'],
-  ];
-
-  const tableRows = roles.map(([role, name, title, status]) =>
-    new TableRow({
-      children: [role, name, title, status].map((text) =>
-        new TableCell({
-          children: [paragraph([textRun(text, { size: 20 })], { alignment: AlignmentType.CENTER })],
-          width: { size: 2250, type: WidthType.DXA },
-        })
-      ),
-    })
-  );
-
-  const table = new Table({
-    width: { size: 9000, type: WidthType.DXA },
-    rows: [tableHeader, ...tableRows],
-  });
-
-  return [
-    paragraph([textRun('一、可行性研究报告编制说明', { bold: true, size: 28, color: '1A5F7A' })], { after: 200 }),
-    paragraph([textRun(`1. 本可行性研究报告系针对“${payload.project_name || info.projectName}”项目进行全面技术、经济、财务、社会与生态可行性论证而编制。`, { size: 22 })], { after: 150 }),
-    paragraph([textRun('2. 编制依据包括国家发改委《投资项目可行性研究报告编写指南》、行业技术规范、项目单位提供的原始资料以及现场调研数据。', { size: 22 })], { after: 150 }),
-    paragraph([textRun('3. 本报告中的财务估算与评价数据基于当前市场价格体系与预测参数，实际执行过程中受宏观政策与市场环境变化影响可能存在浮动。', { size: 22 })], { after: 300 }),
-
-    paragraph([textRun('二、项目编制人员责任签发表', { bold: true, size: 28, color: '1A5F7A' })], { after: 200 }),
-    table,
-    paragraph([textRun('', { size: 20 })], { after: 400 }),
-    pageBreakParagraph(),
-  ];
-}
-
-function buildFeasibilityAppendixParagraphs(payload) {
-  const info = payload.project_info || {};
-
-  const repeatHeader = payload.export_format?.table?.repeat_header_row ?? true;
-
-  function makeHeaderRow(titles) {
-    const colWidth = Math.floor(9000 / titles.length);
-    return new TableRow({
-      cantSplit: true,
-      tableHeader: repeatHeader ? true : undefined,
-      children: titles.map((t) =>
-        new TableCell({
-          children: [paragraph([textRun(t, { bold: true, size: 20, color: 'FFFFFF' })], { alignment: AlignmentType.CENTER })],
-          shading: { fill: '1A5F7A', type: ShadingType.CLEAR },
-          width: { size: colWidth, type: WidthType.DXA },
-        })
-      ),
-    });
-  }
-
-  function makeDataRow(data) {
-    const colWidth = Math.floor(9000 / data.length);
-    return new TableRow({
-      cantSplit: true,
-      children: data.map((d) =>
-        new TableCell({
-          children: [paragraph([textRun(String(d || '—'), { size: 19 })], { alignment: AlignmentType.CENTER })],
-          width: { size: colWidth, type: WidthType.DXA },
-        })
-      ),
-    });
-  }
-
-  const fin = payload.financial_data || payload.financialData || null;
-  const inv = fin?.investment;
-  const evalData = fin?.evaluation;
-  const oper = fin?.operating;
-
-  const totalInvVal = evalData?.totalInvestment ? `${evalData.totalInvestment.toFixed(2)} 万元` : (info.totalInvestment || '—');
-
-  const t1Header = makeHeaderRow(['指标名称', '数值 / 内容', '单位', '备注说明']);
-  const t1Data = [
-    ['项目名称', info.projectName || '—', '—', '立项全称'],
-    ['建设单位', info.projectUnit || '—', '—', '申报主体'],
-    ['建设地点', info.constructionLocation || '—', '—', '建设区域'],
-    ['建设规模', info.constructionScale || '—', '—', '产能/建设面积'],
-    ['建设工期', `${info.constructionPeriod || 2} 年`, '年', '施工与调试'],
-    ['运营期限', `${info.operationPeriod || 20} 年`, '年', '运营评价期'],
-    ['估算总投资', totalInvVal, '万元', '含建设投资及流动资金'],
-    ['资金来源', info.fundingSource || '—', '—', '资本金及融资结构'],
-  ];
-  const table1 = new Table({
-    width: { size: 9000, type: WidthType.DXA },
-    rows: [t1Header, ...t1Data.map(makeDataRow)],
-  });
-
-  const elems = [
-    pageBreakParagraph(),
-    paragraph([textRun('可研报告附表汇总', { bold: true, size: 30, color: '1A5F7A' })], { after: 300 }),
-
-    paragraph([textRun('附表 1：项目基本情况汇总表', { bold: true, size: 24, color: '333333' })], { after: 150 }),
-    table1,
-    paragraph([textRun('', { size: 18 })], { after: 300 }),
-  ];
-
-  if (inv && evalData) {
-    const t2Header = makeHeaderRow(['费用类别', '估算金额（万元）', '占总投资比例', '主要依据']);
-    const t2Data = [
-      ['1. 建筑工程费', inv.buildingCost.toFixed(2), `${((inv.buildingCost / evalData.totalInvestment) * 100).toFixed(2)}%`, '指标估算与同类对比'],
-      ['2. 设备及工器具购置费', inv.equipmentCost.toFixed(2), `${((inv.equipmentCost / evalData.totalInvestment) * 100).toFixed(2)}%`, '厂商询价及采购方案'],
-      ['3. 安装工程费', (inv.installationCost || 0).toFixed(2), `${(((inv.installationCost || 0) / evalData.totalInvestment) * 100).toFixed(2)}%`, '行业定率算定'],
-      ['4. 工程建设其他费用', inv.otherCost.toFixed(2), `${((inv.otherCost / evalData.totalInvestment) * 100).toFixed(2)}%`, '国家及地方收费标准'],
-      ['5. 基本预备费', evalData.basicReserve.toFixed(2), `${((evalData.basicReserve / evalData.totalInvestment) * 100).toFixed(2)}%`, `基本预备费按 ${inv.reserveRate}% 计取`],
-      ['6. 建设期利息与铺底资金', (inv.constructionInterest + inv.workingCapital).toFixed(2), `${(((inv.constructionInterest + inv.workingCapital) / evalData.totalInvestment) * 100).toFixed(2)}%`, '铺底流动资金与利息'],
-      ['合计估算总投资', evalData.totalInvestment.toFixed(2), '100.00%', '全面测算结果'],
-    ];
-
-    const table2 = new Table({
-      width: { size: 9000, type: WidthType.DXA },
-      rows: [t2Header, ...t2Data.map(makeDataRow)],
-    });
-
-    elems.push(
-      paragraph([textRun('附表 2：项目投资估算与资金筹措表', { bold: true, size: 24, color: '333333' })], { after: 150 }),
-      table2,
-      paragraph([textRun('', { size: 18 })], { after: 300 })
-    );
-  }
-
-  if (oper && evalData) {
-    const t3Header = makeHeaderRow(['评价指标', '数值', '单位', '基准/行业参考值']);
-    const t3Data = [
-      ['年均营业收入', oper.annualRevenue.toFixed(2), '万元/年', '达产期年均收入'],
-      ['年均净利润', evalData.annualProfit.toFixed(2), '万元/年', '扣除税费与折旧后'],
-      ['财务内部收益率 (IRR)', `${evalData.irr.toFixed(1)}%`, '%', `行业基准: ${oper.discountRate}% (可行)`],
-      ['财务净现值 (NPV)', evalData.npv.toFixed(2), '万元', `折现率: ${oper.discountRate}% (可行)`],
-      ['静态投资回收期', `${evalData.staticPayback.toFixed(1)}`, '年', `含建设期 ${info.constructionPeriod || 2} 年`],
-      ['盈亏平衡点 (BEP)', `${evalData.bep.toFixed(1)}%`, '%', '按生产能力利用率'],
-    ];
-
-    const table3 = new Table({
-      width: { size: 9000, type: WidthType.DXA },
-      rows: [t3Header, ...t3Data.map(makeDataRow)],
-    });
-
-    elems.push(
-      paragraph([textRun('附表 3：主要技术经济指标汇总表', { bold: true, size: 24, color: '333333' })], { after: 150 }),
-      table3,
-      paragraph([textRun('', { size: 18 })], { after: 300 })
-    );
-  }
-
-  return elems;
-}
-
 async function buildDocxResult(payload, options = {}) {
   const exportFormat = (payload && payload.export_format) || null;
   const stats = countOutlineStats(payload.outline || []);
-  const context = {
-    baseDir: payload.base_dir || payload.baseDir,
-    onProgress: options.onProgress,
-    warnings: options.warnings || [],
-    stats,
-    convertedLeafCount: 0,
-    convertedMermaidCount: 0,
-    imageCount: 0,
-    imageSuccessCount: 0,
-    numberingReferences: [],
-    numberingIndex: 0,
-    usesHeadingNumbering: false,
-    unsupportedHtmlTags: new Set(),
-    developerLogger: options.developerLogger,
-    exportFormat,
-  };
-
-  return [
-    paragraph([textRun(options.securityLevel || '内部资料 / 普通', { bold: true, size: 20, color: '666666' })], { alignment: AlignmentType.RIGHT, after: 600 }),
-    paragraph([textRun(payload.project_name || info.projectName || '项目可行性研究报告', { bold: true, size: 40, color: '1A5F7A' })], { alignment: AlignmentType.CENTER, after: 300 }),
-    paragraph([textRun('可行性研究报告', { bold: true, size: 32, color: '333333' })], { alignment: AlignmentType.CENTER, after: 600 }),
-    paragraph([textRun(`（所属行业：${info.industry || '国家标准大纲'}）`, { italics: true, size: 22, color: '666666' })], { alignment: AlignmentType.CENTER, after: 2000 }),
-
-    paragraph([textRun(`项目建设单位：${info.projectUnit || '【未指定】'}`, { size: 24, bold: true })], { alignment: AlignmentType.CENTER, after: 180 }),
-    paragraph([textRun(`报告编制单位：${options.preparationUnit || '可行性研究报告编制中心'}`, { size: 24 })], { alignment: AlignmentType.CENTER, after: 180 }),
-    paragraph([textRun(`文档识别编号：${options.documentCode || 'KYBG-2026-0088'}`, { size: 22, color: '666666' })], { alignment: AlignmentType.CENTER, after: 180 }),
-    paragraph([textRun(`编制出版日期：${dateStr}`, { size: 22, color: '666666' })], { alignment: AlignmentType.CENTER, after: 400 }),
-    pageBreakParagraph(),
-  ];
-}
-
-function buildFeasibilityNotesParagraphs(payload) {
-  const info = payload.project_info || {};
-
-  const tableHeader = new TableRow({
-    children: ['编制角色', '人员姓名', '专业职称 / 职务', '签章 / 审核状态'].map((text) =>
-      new TableCell({
-        children: [paragraph([textRun(text, { bold: true, size: 22, color: 'FFFFFF' })], { alignment: AlignmentType.CENTER })],
-        shading: { fill: '1A5F7A', type: ShadingType.CLEAR },
-        width: { size: 2250, type: WidthType.DXA },
-      })
-    ),
-  });
-
-  const roles = [
-    ['项目总负责人', '张研明', '高级工程师 / 注册咨询工程师', '已审定'],
-    ['技术审定人', '李国华', '教授级高工 / 项目审核专家', '已审核'],
-    ['主要校核人', '王建军', '资深咨询师 / 行业专家', '已校核'],
-    ['报告主编人', '陈思远', '高级项目经理 / 编制主笔', '已签字'],
-  ];
-
-  const tableRows = roles.map(([role, name, title, status]) =>
-    new TableRow({
-      children: [role, name, title, status].map((text) =>
-        new TableCell({
-          children: [paragraph([textRun(text, { size: 20 })], { alignment: AlignmentType.CENTER })],
-          width: { size: 2250, type: WidthType.DXA },
-        })
-      ),
-    })
-  );
-
-  const table = new Table({
-    width: { size: 9000, type: WidthType.DXA },
-    rows: [tableHeader, ...tableRows],
-  });
-
-  return [
-    paragraph([textRun('一、可行性研究报告编制说明', { bold: true, size: 28, color: '1A5F7A' })], { after: 200 }),
-    paragraph([textRun(`1. 本可行性研究报告系针对“${payload.project_name || info.projectName}”项目进行全面技术、经济、财务、社会与生态可行性论证而编制。`, { size: 22 })], { after: 150 }),
-    paragraph([textRun('2. 编制依据包括国家发改委《投资项目可行性研究报告编写指南》、行业技术规范、项目单位提供的原始资料以及现场调研数据。', { size: 22 })], { after: 150 }),
-    paragraph([textRun('3. 本报告中的财务估算与评价数据基于当前市场价格体系与预测参数，实际执行过程中受宏观政策与市场环境变化影响可能存在浮动。', { size: 22 })], { after: 300 }),
-
-    paragraph([textRun('二、项目编制人员责任签发表', { bold: true, size: 28, color: '1A5F7A' })], { after: 200 }),
-    table,
-    paragraph([textRun('', { size: 20 })], { after: 400 }),
-    pageBreakParagraph(),
-  ];
-}
-
-function buildFeasibilityAppendixParagraphs(payload) {
-  const info = payload.project_info || {};
-
-  function makeHeaderRow(titles) {
-    const colWidth = Math.floor(9000 / titles.length);
-    return new TableRow({
-      children: titles.map((t) =>
-        new TableCell({
-          children: [paragraph([textRun(t, { bold: true, size: 20, color: 'FFFFFF' })], { alignment: AlignmentType.CENTER })],
-          shading: { fill: '1A5F7A', type: ShadingType.CLEAR },
-          width: { size: colWidth, type: WidthType.DXA },
-        })
-      ),
-    });
-  }
-
-  function makeDataRow(data) {
-    const colWidth = Math.floor(9000 / data.length);
-    return new TableRow({
-      children: data.map((d) =>
-        new TableCell({
-          children: [paragraph([textRun(String(d || '—'), { size: 19 })], { alignment: AlignmentType.CENTER })],
-          width: { size: colWidth, type: WidthType.DXA },
-        })
-      ),
-    });
-  }
-
-  const t1Header = makeHeaderRow(['指标名称', '数值 / 内容', '单位', '备注说明']);
-  const t1Data = [
-    ['项目名称', info.projectName || '—', '—', '立项全称'],
-    ['建设单位', info.projectUnit || '—', '—', '申报主体'],
-    ['建设地点', info.constructionLocation || '—', '—', '建设区域'],
-    ['建设规模', info.constructionScale || '—', '—', '产能/建设面积'],
-    ['建设工期', `${info.constructionPeriod || 2} 年`, '年', '施工与调试'],
-    ['运营期限', `${info.operationPeriod || 20} 年`, '年', '运营评价期'],
-    ['估算总投资', info.totalInvestment || '—', '万元', '含建设投资及流动资金'],
-    ['资金来源', info.fundingSource || '—', '—', '资本金及融资结构'],
-  ];
-  const table1 = new Table({
-    width: { size: 9000, type: WidthType.DXA },
-    rows: [t1Header, ...t1Data.map(makeDataRow)],
-  });
-
-  return [
-    pageBreakParagraph(),
-    paragraph([textRun('可研报告附表汇总', { bold: true, size: 30, color: '1A5F7A' })], { after: 300 }),
-
-    paragraph([textRun('附表 1：项目基本情况汇总表', { bold: true, size: 24, color: '333333' })], { after: 150 }),
-    table1,
-    paragraph([textRun('', { size: 18 })], { after: 300 }),
-  ];
-}
-
-async function buildDocxResult(payload = {}, options = {}) {
-  const exportFormat = (payload && payload.export_format) || null;
-  const stats = countOutlineStats(Array.isArray(payload.outline) ? payload.outline : []);
   const context = {
     baseDir: payload.base_dir || payload.baseDir,
     onProgress: options.onProgress,
@@ -2427,12 +2056,14 @@ async function buildDocxResult(payload = {}, options = {}) {
     content_metrics: countOutlineContentMetrics(payload.outline || []),
   });
 
+  // 正文默认样式
   const bodyStyle = (exportFormat && exportFormat.body_text) ? exportFormat.body_text : null;
   const bodyFont = bodyStyle ? (bodyStyle.font || '宋体') : '宋体';
   const bodySizeHalfPt = bodyStyle ? chineseSizeToHalfPt(bodyStyle.size || '小四') : 24;
   const bodyLineSpacing = bodyStyle ? 240 * (bodyStyle.line_spacing_multiple || 1.2) : 360;
   const bodyAfterSpacing = bodyStyle ? (bodyStyle.spacing_after_pt || 0) * 20 : 160;
 
+  // 注入正文样式到 context，供正文段落/文本渲染时使用
   context.bodyRunFont = bodyFont;
   context.bodyRunSize = bodySizeHalfPt;
   context.bodyLineSpacing = bodyLineSpacing;
@@ -2450,31 +2081,15 @@ async function buildDocxResult(payload = {}, options = {}) {
     }
   }
 
-  const isFeasibility = payload.is_feasibility === true || Boolean(payload.feasibility_options);
-  const feasibilityOpts = payload.feasibility_options || {};
-
-  const children = [];
-  if (isFeasibility && feasibilityOpts.includeCover !== false) {
-    children.push(...buildFeasibilityCoverParagraphs(payload));
-  } else {
-    children.push(
-      paragraph([textRun('内容由 AI 生成', { italics: true, size: 18 })], { alignment: AlignmentType.CENTER, after: 120 }),
-      paragraph([textRun(payload.project_name || '投标技术文件', { bold: true, size: 34 })], { alignment: AlignmentType.CENTER, after: 300 })
-    );
-  }
-
-  if (isFeasibility && feasibilityOpts.includePreparationNotes !== false) {
-    children.push(...buildFeasibilityNotesParagraphs(payload));
-  }
+  const children = [
+    paragraph([textRun('内容由 AI 生成', { italics: true, size: 18 })], { alignment: AlignmentType.CENTER, after: 120 }),
+    paragraph([textRun(payload.project_name || '投标技术文件', { bold: true, size: 34 })], { alignment: AlignmentType.CENTER, after: 300 }),
+  ];
 
   reportProgress(context, 10, stats.mermaidCount
     ? `准备导出正文，并转换 ${stats.mermaidCount} 张 Mermaid 图。`
     : '准备导出正文。');
   await addOutlineItems(children, payload.outline || [], context);
-
-  if (isFeasibility && feasibilityOpts.includeAppendixTables !== false) {
-    children.push(...buildFeasibilityAppendixParagraphs(payload));
-  }
   reportProgress(context, 90, '正在生成 Word 文件。');
 
   // 页面设置

@@ -1,4 +1,4 @@
-import * as Dialog from '@radix-ui/react-dialog';
+﻿import * as Dialog from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppSwitch, FloatingToolbar, ProgressBar, useToast } from '../../../shared/ui';
@@ -267,7 +267,6 @@ function createDefaultExportFormat(): ExportFormatConfig {
       border_color: DEFAULT_EXPORT_FORMAT.table.border_color,
       cell_padding_pt: DEFAULT_EXPORT_FORMAT.table.cell_padding_pt,
       full_width: DEFAULT_EXPORT_FORMAT.table.full_width,
-      repeat_header_row: DEFAULT_EXPORT_FORMAT.table.repeat_header_row,
       header_row: { ...DEFAULT_EXPORT_FORMAT.table.header_row },
       first_column: { ...DEFAULT_EXPORT_FORMAT.table.first_column },
       body_cell: { ...DEFAULT_EXPORT_FORMAT.table.body_cell },
@@ -1165,16 +1164,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         <label className="settings-row">
           <div className="settings-row-copy"><strong>表格铺满页面</strong></div>
           <AppSwitch checked={config.table.full_width} onCheckedChange={(checked) => updateTable({ full_width: checked })} />
-        </label>
-        <label className="settings-row">
-          <div className="settings-row-copy">
-            <strong>表头断页重复显示</strong>
-            <span>表格跨页断页时，第一行表头在后续跨页顶部自动重复显示。</span>
-          </div>
-          <label className="yb-switch-control">
-            <input type="checkbox" checked={config.table.repeat_header_row ?? true} onChange={(event) => updateTable({ repeat_header_row: event.target.checked })} />
-            <span className="yb-switch-track" aria-hidden="true"><span className="yb-switch-thumb" /></span>
-          </label>
         </label>
       </div>
       {renderTableCellSettings('首行', 'header_row')}

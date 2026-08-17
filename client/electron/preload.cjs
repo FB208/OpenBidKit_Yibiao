@@ -110,6 +110,17 @@ const bridge = {
       return () => ipcRenderer.removeListener('developer-token-stats:changed', listener);
     },
   },
+  developerAgentMonitor: {
+    openWindow: () => ipcRenderer.invoke('developer-agent-monitor:open-window'),
+    openWorkspace: (workspaceDir) => ipcRenderer.invoke('developer-agent-monitor:open-workspace', workspaceDir),
+    attach: () => ipcRenderer.invoke('developer-agent-monitor:attach'),
+    detach: () => ipcRenderer.invoke('developer-agent-monitor:detach'),
+    onEvent: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('developer-agent-monitor:event', listener);
+      return () => ipcRenderer.removeListener('developer-agent-monitor:event', listener);
+    },
+  },
   developerExpansionReplaceTest: {
     run: (payload) => ipcRenderer.invoke('developer-expansion-replace-test:run', payload),
   },
@@ -161,25 +172,6 @@ const bridge = {
     saveChapterContent: (payload) => ipcRenderer.invoke('technical-plan:save-chapter-content', payload),
     clear: () => ipcRenderer.invoke('technical-plan:clear'),
   },
-  feasibilityReport: {
-    loadState: () => ipcRenderer.invoke('feasibility-report:load-state'),
-    importSourceDocuments: () => ipcRenderer.invoke('feasibility-report:import-source-documents'),
-    readSourceMarkdown: (sourceId) => ipcRenderer.invoke('feasibility-report:read-source-markdown', sourceId),
-    readCombinedSourceMarkdown: () => ipcRenderer.invoke('feasibility-report:read-combined-source-markdown'),
-    updateStep: (step) => ipcRenderer.invoke('feasibility-report:update-step', step),
-    saveProjectInfo: (projectInfo) => ipcRenderer.invoke('feasibility-report:save-project-info', projectInfo),
-    saveAnalysis: (markdown) => ipcRenderer.invoke('feasibility-report:save-analysis', markdown),
-    saveOutlineConfig: (payload) => ipcRenderer.invoke('feasibility-report:save-outline-config', payload),
-    saveOutline: (outlineData) => ipcRenderer.invoke('feasibility-report:save-outline', outlineData),
-    saveKeyParameters: (markdown) => ipcRenderer.invoke('feasibility-report:save-key-parameters', markdown),
-    saveChapterContent: (payload) => ipcRenderer.invoke('feasibility-report:save-chapter-content', payload),
-    clear: () => ipcRenderer.invoke('feasibility-report:clear'),
-    runValidationCheck: () => ipcRenderer.invoke('feasibility-report:run-validation-check'),
-    runConsistencyCheck: () => ipcRenderer.invoke('feasibility-report:run-consistency-check'),
-    saveFinancialData: (financialData) => ipcRenderer.invoke('feasibility-report:save-financial-data', financialData),
-    calculateFinancials: (payload) => ipcRenderer.invoke('feasibility-report:calculate-financials', payload),
-    syncFinancialsToContent: () => ipcRenderer.invoke('feasibility-report:sync-financials-to-content'),
-  },
   duplicateCheck: {
     loadState: () => ipcRenderer.invoke('duplicate-check:load-state'),
     saveFiles: (payload) => ipcRenderer.invoke('duplicate-check:save-files', payload),
@@ -210,11 +202,6 @@ const bridge = {
     suppressOutlineSelectionAutoConfirmation: (payload) => ipcRenderer.invoke('tasks:suppress-outline-selection-auto-confirmation', payload),
     startGlobalFactsGeneration: (payload) => ipcRenderer.invoke('tasks:start-global-facts-generation', payload),
     startContentGeneration: (payload) => ipcRenderer.invoke('tasks:start-content-generation', payload),
-    startFeasibilityAnalysis: (payload) => ipcRenderer.invoke('tasks:start-feasibility-analysis', payload),
-    startFeasibilityOutline: (payload) => ipcRenderer.invoke('tasks:start-feasibility-outline', payload),
-    startFeasibilityParameters: (payload) => ipcRenderer.invoke('tasks:start-feasibility-parameters', payload),
-    startFeasibilityContent: (payload) => ipcRenderer.invoke('tasks:start-feasibility-content', payload),
-    startFeasibilityHumanWriting: (payload) => ipcRenderer.invoke('tasks:start-feasibility-human-writing', payload),
     pauseContentGeneration: () => ipcRenderer.invoke('tasks:pause-content-generation'),
     startRejectionItemsExtraction: (payload) => ipcRenderer.invoke('tasks:start-rejection-items-extraction', payload),
     startRejectionCheck: (payload) => ipcRenderer.invoke('tasks:start-rejection-check', payload),

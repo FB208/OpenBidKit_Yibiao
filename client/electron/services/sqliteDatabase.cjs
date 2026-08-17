@@ -3,7 +3,6 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 19;
 const schemaVersion = 22;
 
 function createInitialSchema(db) {
@@ -984,36 +983,6 @@ function createExportTemplatesSchema(db) {
   `);
 }
 
-function createFeasibilityReportSchema(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS feasibility_report_meta (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      step TEXT NOT NULL DEFAULT 'materials',
-      project_info_json TEXT,
-      source_files_json TEXT,
-      analysis_markdown TEXT NOT NULL DEFAULT '',
-      outline_template TEXT NOT NULL DEFAULT 'government',
-      target_words INTEGER NOT NULL DEFAULT 30000,
-      reference_document_ids_json TEXT,
-      key_parameters_markdown TEXT NOT NULL DEFAULT '',
-      outline_json TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS feasibility_report_tasks (
-      type TEXT PRIMARY KEY,
-      task_id TEXT NOT NULL,
-      status TEXT NOT NULL,
-      progress INTEGER NOT NULL DEFAULT 0,
-      logs_json TEXT,
-      error TEXT,
-      started_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-  `);
-}
-
 const schemaHealthTableGroups = [
   {
     version: 1,
@@ -1089,9 +1058,6 @@ const schemaHealthTableGroups = [
     repair: createExportTemplatesSchema,
   },
   {
-    version: 19,
-    tables: ['feasibility_report_meta', 'feasibility_report_tasks'],
-    repair: createFeasibilityReportSchema,
     version: 20,
     tables: ['task_logs', 'technical_plan_illustration_plans', 'technical_plan_illustration_items'],
     repair: createTaskLogsAndIllustrationItemsSchema,
@@ -1414,8 +1380,6 @@ const migrations = [
   },
   {
     version: 19,
-    description: '新增可行性研究报告独立工作区',
-    up: createFeasibilityReportSchema,
     description: '技术方案目录叶子新增内容处理模式',
     up: addTechnicalPlanOutlineContentMode,
   },
@@ -1484,7 +1448,10 @@ function clearDatabaseBackupFiles(databasePath) {
 
 function applyMigrations(db, databasePath, onStatus) {
   const currentVersion = Number(db.pragma('user_version', { simple: true }) || 0);
-  if (currentVersion >= schemaVersion) {
+  if (currentVersion > schemaVersion) {
+    throw new Error(`本地数据库版本 ${currentVersion} 高于当前客户端支持版本 ${schemaVersion}，请升级客户端后再使用技术方案功能。`);
+  }
+  if (currentVersion === schemaVersion) {
     ensureWorkspaceSchemaHealth(db, schemaVersion, onStatus);
     return;
   }

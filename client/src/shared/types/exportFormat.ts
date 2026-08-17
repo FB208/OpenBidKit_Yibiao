@@ -67,7 +67,6 @@ export interface TableStyleConfig {
   border_color: string;
   cell_padding_pt: number;
   full_width: boolean;
-  repeat_header_row: boolean;
   header_row: TableCellStyleConfig;
   first_column: TableCellStyleConfig;
   body_cell: TableCellStyleConfig;
@@ -359,7 +358,6 @@ const DEFAULT_TABLE_STYLE: TableStyleConfig = {
   border_color: '#dcdff6',
   cell_padding_pt: 6,
   full_width: true,
-  repeat_header_row: true,
   header_row: {
     font: '黑体',
     size: '小四',
@@ -423,7 +421,6 @@ export const DEFAULT_EXPORT_FORMAT: ExportFormatConfig = {
     border_color: DEFAULT_TABLE_STYLE.border_color,
     cell_padding_pt: DEFAULT_TABLE_STYLE.cell_padding_pt,
     full_width: DEFAULT_TABLE_STYLE.full_width,
-    repeat_header_row: DEFAULT_TABLE_STYLE.repeat_header_row,
     header_row: { ...DEFAULT_TABLE_STYLE.header_row },
     first_column: { ...DEFAULT_TABLE_STYLE.first_column },
     body_cell: { ...DEFAULT_TABLE_STYLE.body_cell },
