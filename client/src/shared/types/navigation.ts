@@ -3,6 +3,8 @@ export type SectionId =
   | 'technical-plan'
   | 'existing-plan-expansion'
   | 'business-bid'
+  | 'report-generation'
+  | 'feasibility-report'
   | 'knowledge-base'
   | 'document-knowledge-base'
   | 'image-knowledge-base'
@@ -38,6 +40,7 @@ export interface AppSubMenuItem {
   description: string;
   icon?: 'document' | 'expand' | 'briefcase' | 'compare' | 'shield' | 'code' | 'prompt' | 'file' | 'export' | 'tool';
   notice?: AppMenuNotice;
+  badge?: string;
 }
 
 export interface AppMenuItem {
@@ -46,4 +49,5 @@ export interface AppMenuItem {
   description: string;
   children?: AppSubMenuItem[];
   notice?: AppMenuNotice;
+  badge?: string;
 }

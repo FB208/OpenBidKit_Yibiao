@@ -9,6 +9,13 @@ const { runGlobalFactsAdjustmentTask } = require('./globalFactsAdjustmentTask.cj
 const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
+const {
+  runFeasibilityAnalysisTask,
+  runFeasibilityOutlineTask,
+  runFeasibilityParametersTask,
+  runFeasibilityContentTask,
+  runFeasibilityHumanWritingTask,
+} = require('./feasibilityReportTasks.cjs');
 const { originalPlanDownstreamTaskTypes } = require('./technicalPlanStore.cjs');
 const { normalizeLogs } = require('./taskLogStore.cjs');
 
@@ -75,6 +82,51 @@ const taskDefinitions = {
     lockPolicy: 'group-exclusive',
     stateKey: 'technicalPlan',
     field: 'contentGenerationTask',
+  },
+  'feasibility-analysis': {
+    label: '可研项目资料分析',
+    group: 'feasibility-report',
+    groupLabel: '可行性研究报告',
+    step: 2,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'feasibilityReport',
+    field: 'analysisTask',
+  },
+  'feasibility-outline': {
+    label: '可研报告目录生成',
+    group: 'feasibility-report',
+    groupLabel: '可行性研究报告',
+    step: 3,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'feasibilityReport',
+    field: 'outlineTask',
+  },
+  'feasibility-parameters': {
+    label: '可研关键参数生成',
+    group: 'feasibility-report',
+    groupLabel: '可行性研究报告',
+    step: 4,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'feasibilityReport',
+    field: 'parametersTask',
+  },
+  'feasibility-content': {
+    label: '可研报告正文生成',
+    group: 'feasibility-report',
+    groupLabel: '可行性研究报告',
+    step: 5,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'feasibilityReport',
+    field: 'contentTask',
+  },
+  'feasibility-human-writing': {
+    label: '可研自然化审校',
+    group: 'feasibility-report',
+    groupLabel: '可行性研究报告',
+    step: 5,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'feasibilityReport',
+    field: 'humanWritingTask',
   },
   'rejection-items-extraction': {
     label: '无效与废标项解析',
@@ -247,6 +299,7 @@ function createTask(type, payload) {
   };
 }
 
+function createTaskService({ aiService, agentService, technicalPlanStore, feasibilityReportStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService }) {
 function createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService }) {
   const subscribers = new Set();
   const callbackSubscribers = new Set();
@@ -407,6 +460,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     if (definition.stateKey === 'duplicateCheck') {
       return { duplicateCheckPatch: state };
     }
+    if (definition.stateKey === 'feasibilityReport') {
+      return { feasibilityReport: state };
+    }
     return {};
   }
 
@@ -420,6 +476,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     }
     if (definition.stateKey === 'duplicateCheck') {
       return { duplicateCheck: duplicateCheckStore.loadDuplicateCheck() };
+    }
+    if (definition.stateKey === 'feasibilityReport') {
+      return { feasibilityReport: feasibilityReportStore.loadFeasibilityReport() };
     }
     return {};
   }
@@ -512,6 +571,10 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       duplicateCheckStore.updateDuplicateCheckWithoutReload(partial);
       return;
     }
+    if (definition.stateKey === 'feasibilityReport') {
+      return feasibilityReportStore.updateFeasibilityReport(partial);
+    }
+    return technicalPlanStore.updateTechnicalPlan(partial);
     technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
   }
 
@@ -524,6 +587,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     }
     if (definition.stateKey === 'duplicateCheck') {
       return duplicateCheckStore.loadDuplicateCheck();
+    }
+    if (definition.stateKey === 'feasibilityReport') {
+      return feasibilityReportStore.loadFeasibilityReport();
     }
     return technicalPlanStore.loadTechnicalPlan();
   }
@@ -754,6 +820,10 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       ? technicalPlanStore
       : definition.stateKey === 'rejectionCheck'
         ? rejectionCheckStore
+        : definition.stateKey === 'feasibilityReport'
+          ? feasibilityReportStore
+          : duplicateCheckStore;
+    const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId) : aiService;
         : duplicateCheckStore;
     const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId, taskControl.signal) : aiService;
     const runnerAgentService = agentService.bindTaskContext(
@@ -1068,6 +1138,33 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     emit(recoveredTask, buildSnapshot(getTaskDefinition('global-facts-generation'), partial, recoveredTask));
   }
 
+  function recoverInterruptedFeasibilityTasks() {
+    const state = feasibilityReportStore.loadFeasibilityReport() || {};
+    for (const [type, field] of Object.entries({
+      'feasibility-analysis': 'analysisTask',
+      'feasibility-outline': 'outlineTask',
+      'feasibility-parameters': 'parametersTask',
+      'feasibility-content': 'contentTask',
+      'feasibility-human-writing': 'humanWritingTask',
+    })) {
+      if (activeTasks.has(type) || !isActiveTaskStatus(state[field]?.status)) continue;
+      const message = type === 'feasibility-content' || type === 'feasibility-human-writing'
+        ? '上次正文任务因应用关闭而中断，已完成章节仍保留，请重新执行。'
+        : '上次任务因应用关闭而中断，请重新执行。';
+      const recoveredTask = {
+        ...state[field],
+        status: 'error',
+        pause_requested: false,
+        error: message,
+        logs: [...(Array.isArray(state[field].logs) ? state[field].logs : []), message],
+        updated_at: now(),
+      };
+      const nextState = feasibilityReportStore.updateFeasibilityReport({ [field]: recoveredTask });
+      emit(recoveredTask, { feasibilityReport: nextState });
+    }
+  }
+
+  function recoverInterruptedRejectionCheckTasks() {
   function recoverInterruptedRejectionCheckTasks(state) {
     const staleExtractionMessage = '上次解析未完成，请重新解析';
     const staleCheckMessage = '上次检查未完成，请重新检查';
@@ -1235,6 +1332,46 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       }
       return startManagedTask('content-generation', payload, runContentGenerationTask);
     },
+    startFeasibilityAnalysis(payload) {
+      return startManagedTask('feasibility-analysis', payload, runFeasibilityAnalysisTask, {
+        analysisMarkdown: '',
+        outlineData: null,
+        keyParametersMarkdown: '',
+        outlineTask: undefined,
+        parametersTask: undefined,
+        contentTask: undefined,
+        humanWritingTask: undefined,
+      });
+    },
+    startFeasibilityOutline(payload) {
+      return startManagedTask('feasibility-outline', payload, runFeasibilityOutlineTask, {
+        outlineData: null,
+        keyParametersMarkdown: '',
+        parametersTask: undefined,
+        contentTask: undefined,
+        humanWritingTask: undefined,
+      });
+    },
+    startFeasibilityParameters(payload) {
+      return startManagedTask('feasibility-parameters', payload, runFeasibilityParametersTask, {
+        keyParametersMarkdown: '',
+        contentTask: undefined,
+        humanWritingTask: undefined,
+      });
+    },
+    startFeasibilityContent(payload) {
+      const state = feasibilityReportStore.loadFeasibilityReport();
+      if (!state.outlineData?.outline?.length) throw new Error('请先生成可研报告目录');
+      if (!state.keyParametersMarkdown?.trim()) throw new Error('请先完成关键参数与编制口径');
+      return startManagedTask('feasibility-content', payload, runFeasibilityContentTask, {
+        humanWritingTask: undefined,
+      });
+    },
+    startFeasibilityHumanWriting(payload) {
+      const state = feasibilityReportStore.loadFeasibilityReport();
+      if (!state.outlineData?.outline?.length) throw new Error('请先生成可研报告正文');
+      return startManagedTask('feasibility-human-writing', payload, runFeasibilityHumanWritingTask);
+    },
     pauseContentGeneration() {
       const task = activeTasks.get('content-generation');
       const control = activeTaskControls.get('content-generation');
@@ -1322,6 +1459,14 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       });
     },
     getActiveTasks() {
+      recoverInterruptedBidSectionExtractionTask();
+      recoverInterruptedBidAnalysisTask();
+      recoverInterruptedOutlineGenerationTask();
+      recoverInterruptedContentGenerationTask();
+      recoverInterruptedGlobalFactsTask();
+      recoverInterruptedFeasibilityTasks();
+      recoverInterruptedRejectionCheckTasks();
+      recoverInterruptedDuplicateCheckTask();
       return Array.from(activeTasks.values());
     },
   };

@@ -53,6 +53,21 @@ export const appMenuItems: AppMenuItem[] = [
     ],
   },
   {
+    id: 'report-generation',
+    label: '报告生成',
+    description: '项目研究与专项报告编制',
+    badge: 'Beta',
+    children: [
+      {
+        id: 'feasibility-report',
+        label: '可行性研究报告',
+        description: '结合项目资料与知识库生成可研目录、关键参数和正文',
+        icon: 'document',
+        badge: 'Beta',
+      },
+    ],
+  },
+  {
     id: 'knowledge-base',
     label: '知识库',
     description: '素材、模板和案例资产',
