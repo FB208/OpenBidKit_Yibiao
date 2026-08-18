@@ -6,6 +6,8 @@ const {
   formatProgressTitle,
   buildAgentOutlineInput,
   finalizeOutline,
+  loadLightweightKnowledgeItems,
+  allowedKnowledgeIdSet,
 } = require('./feasibilityOutlineTask.cjs');
 
 function createFeasibilityOutlineAdjustmentPrompt(requirement) {
@@ -16,8 +18,8 @@ ${requirement}
 
 请按以下要求完成目录调整：
 1. 先读取 ${OUTLINE_OUTPUT_FILE}，理解当前目录结构，再严格按照用户的调整要求修改；与要求无关的节点保持原样，不要顺带重写。
-2. 修改后仍须保持完整根结构 {"outline":[...]}：每项包含 title、description，非叶子项再包含 children。不要写入 content。
-3. 目录最多三级。title 只写纯标题，不要带章节编号或 Markdown 标记。
+2. 修改后仍须保持完整根结构 {"outline":[...]}：每项包含 title、description，非叶子项再包含 children。叶子可保留或填写 knowledge_item_ids。不要写入 content。
+3. 目录最多三级。title 只写纯标题，不要带章节编号或 Markdown 标记。与调整无关的叶子 knowledge_item_ids 应原样保留。
 4. 材料或用户要求足以判断时直接执行，不要调用 ask-user。
 5. 将调整后的完整目录覆盖写回 ${OUTLINE_OUTPUT_FILE}。程序已为该文件预置 Schema，写入后调用 json-validation，只传 {"file_path":"${OUTLINE_OUTPUT_FILE}"}；校验失败后必须先修改文件，再重新校验。
 6. 全部完成后，用简体中文输出一段简短的最终总结（不超过 200 字，不使用 Markdown 标题），说明本次实际做了哪些目录调整；如有未能执行的要求，一并说明原因。该总结会直接展示给用户。`;
@@ -26,6 +28,7 @@ ${requirement}
 async function runFeasibilityOutlineAdjustmentTask({
   agentService,
   workspaceStore,
+  knowledgeBaseService,
   updateTask,
   checkpointTask,
   taskControl,
@@ -88,7 +91,10 @@ async function runFeasibilityOutlineAdjustmentTask({
     onActivity: publishAgentActivity,
   });
 
-  const outline = finalizeOutline(readJson(agentResult.output_content, OUTLINE_OUTPUT_FILE));
+  const allowedKnowledgeIds = allowedKnowledgeIdSet(
+    loadLightweightKnowledgeItems(knowledgeBaseService, state.referenceDocumentIds || []),
+  );
+  const outline = finalizeOutline(readJson(agentResult.output_content, OUTLINE_OUTPUT_FILE), allowedKnowledgeIds);
   const summary = String(agentResult.assistant_text || '').trim() || '报告目录已按要求调整完成。';
   const saved = workspaceStore.saveOutline({
     outlineData: {

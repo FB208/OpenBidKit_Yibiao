@@ -1703,6 +1703,10 @@ async function htmlNodeToDocxBlocks($, node, context, options = {}) {
     return htmlListToDocx($, node, context, options);
   }
   if (tag === 'blockquote') {
+    const text = String($(node).text() || '').trim();
+    if (context.feasibility && text.includes('📸') && text.includes('【插图指引】')) {
+      return buildDocxImageGuidanceBox($, node);
+    }
     return [paragraph(await htmlInlineRuns($, $(node).contents().toArray(), context, { color: '536176' }), {
       indent: { left: 360 },
       border: { left: { style: BorderStyle.SINGLE, size: 12, color: '2174FD' } },
@@ -1788,127 +1792,203 @@ async function addMarkdownContent(children, content, context) {
   children.push(...await markdownToDocxBlocks(content, context));
 }
 
-function displayFeasibilityField(value) {
-  const text = String(value || '').trim();
-  return text || '【待补充】';
-}
+const FEASIBILITY_ACCENT = '1A5F7A';
+const FEASIBILITY_TABLE_WIDTH = 9000;
 
-function escapeMarkdownTableCell(value) {
-  return displayFeasibilityField(value).replace(/\|/g, '｜').replace(/\n/g, ' ');
-}
-
-function formatLocalDate(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function buildFeasibilityAppendixMarkdown(projectInfo = {}) {
-  const typeLabel = projectInfo.projectType === 'enterprise' ? '企业投资项目' : '政府投资项目';
-  const rows = [
-    ['项目名称', projectInfo.projectName],
-    ['项目类型', typeLabel],
-    ['所属行业', projectInfo.industry],
-    ['建设单位', projectInfo.constructionUnit],
-    ['建设地点', projectInfo.location],
-    ['建设内容与规模', projectInfo.constructionContent],
-    ['建设期（年）', projectInfo.constructionPeriodYears],
-    ['运营期（年）', projectInfo.operationPeriodYears],
-    ['总投资', projectInfo.totalInvestment],
-    ['资金来源', projectInfo.fundingSource],
-  ];
-  return [
-    '| 项目 | 内容 |',
-    '| --- | --- |',
-    ...rows.map(([label, value]) => `| ${label} | ${escapeMarkdownTableCell(value)} |`),
-  ].join('\n');
-}
-
-function buildFeasibilitySignatureMarkdown() {
-  return [
-    '| 角色 | 姓名 | 签字 | 日期 |',
-    '| --- | --- | --- | --- |',
-    '| 项目负责人 |  |  |  |',
-    '| 技术负责人 |  |  |  |',
-    '| 经济负责人 |  |  |  |',
-    '| 审核人 |  |  |  |',
-    '| 审定人 |  |  |  |',
-  ].join('\n');
-}
-
-function buildFeasibilityPreparationMarkdown(options = {}, projectInfo = {}) {
-  const unit = displayFeasibilityField(options.preparationUnit || projectInfo.constructionUnit);
-  return [
-    `本报告依据国家现行投资项目可行性研究相关要求及项目提供资料编制，编制单位为${unit}。`,
-    '',
-    '编制原则：依法合规、事实充分、口径一致、结论可复核。资料不足处以【待补充】标注，资料冲突处以【待确认】标注。',
-    '',
-    '编制范围：项目背景与必要性、建设方案、投资与资金筹措口径、影响与风险、结论与建议。本阶段不计算 NPV、IRR 或投资回收期，也不生成财务测算附表。',
-    '',
-    '**编制责任签发表**（请手写填写姓名、签字和日期，本软件不预填责任人）',
-    '',
-    buildFeasibilitySignatureMarkdown(),
-  ].join('\n');
-}
-
-async function addFeasibilityWrapping(children, payload, context) {
+function readFeasibilityExportContext(payload) {
   const options = payload?.feasibility_options;
-  if (!options || typeof options !== 'object') return false;
-
+  if (!options || typeof options !== 'object') return null;
   const projectInfo = options.project_info && typeof options.project_info === 'object' ? options.project_info : {};
-  const includeCover = options.includeCover !== false;
-  const includeNotes = options.includePreparationNotes !== false;
-  const includeAppendix = options.includeAppendixTables !== false;
-  if (!includeCover && !includeNotes && !includeAppendix) return false;
+  return {
+    options,
+    projectInfo,
+    includeCover: options.includeCover !== false,
+    includeNotes: options.includePreparationNotes !== false,
+    includeAppendix: options.includeAppendixTables !== false,
+  };
+}
 
-  if (includeCover) {
-    const security = String(options.securityLevel || '').trim();
-    if (security) {
-      children.push(paragraph([textRun(`密级：${security}`, { size: 22 })], { alignment: AlignmentType.RIGHT, after: 80 }));
-    }
-    children.push(paragraph(
-      [textRun(displayFeasibilityField(projectInfo.projectName || payload.project_name), { bold: true, font: '黑体', size: 48 })],
-      { alignment: AlignmentType.CENTER, before: 1600, after: 240 },
-    ));
-    children.push(paragraph(
-      [textRun('可行性研究报告', { bold: true, font: '黑体', size: 40 })],
-      { alignment: AlignmentType.CENTER, after: 480 },
-    ));
-    children.push(paragraph(
-      [textRun(`编制单位：${displayFeasibilityField(options.preparationUnit || projectInfo.constructionUnit)}`, { size: 24 })],
-      { alignment: AlignmentType.CENTER, after: 80 },
-    ));
-    children.push(paragraph(
-      [textRun(`编制日期：${formatLocalDate()}`, { size: 24 })],
-      { alignment: AlignmentType.CENTER, after: 200 },
-    ));
-    children.push(paragraph(
-      [textRun('内容由 AI 辅助生成，请人工审校后使用', { italics: true, size: 18, color: '536176' })],
-      { alignment: AlignmentType.CENTER, after: 200 },
-    ));
-    children.push(pageBreakParagraph());
-  } else {
-    children.push(paragraph([textRun('内容由 AI 生成', { italics: true, size: 18 })], { alignment: AlignmentType.CENTER, after: 120 }));
-    children.push(paragraph(
-      [textRun(payload.project_name || '可行性研究报告', { bold: true, size: 34 })],
+function formatFeasibilityYearMonth(date = new Date()) {
+  return `${date.getFullYear()}年${String(date.getMonth() + 1).padStart(2, '0')}月`;
+}
+
+function displayFeasibilityAppendixValue(value) {
+  const text = String(value || '').trim();
+  return text || '—';
+}
+
+function buildFeasibilityTableCell(text, options = {}) {
+  const colWidth = options.width || Math.floor(FEASIBILITY_TABLE_WIDTH / (options.columnCount || 4));
+  return new TableCell({
+    children: [paragraph(
+      [textRun(text, {
+        bold: options.header === true,
+        size: options.header ? 20 : 19,
+        color: options.header ? 'FFFFFF' : '333333',
+      })],
+      { alignment: AlignmentType.CENTER, after: 40 },
+    )],
+    shading: options.header ? { fill: FEASIBILITY_ACCENT, type: ShadingType.CLEAR } : undefined,
+    width: { size: colWidth, type: WidthType.DXA },
+  });
+}
+
+function buildFeasibilityTableRow(values, options = {}) {
+  const columnCount = values.length;
+  return new TableRow({
+    cantSplit: true,
+    tableHeader: options.header ? true : undefined,
+    children: values.map((value) => buildFeasibilityTableCell(value, { ...options, columnCount })),
+  });
+}
+
+function buildFeasibilityNativeTable(header, rows) {
+  return new Table({
+    width: { size: FEASIBILITY_TABLE_WIDTH, type: WidthType.DXA },
+    rows: [buildFeasibilityTableRow(header, { header: true }), ...rows.map((row) => buildFeasibilityTableRow(row))],
+  });
+}
+
+function buildDocxImageGuidanceBox($, node) {
+  const fullText = String($(node).text() || '').trim();
+  const titleMatch = fullText.match(/(?:📸\s*)?(【[^】]+】[^\n*]*)/);
+  const titleText = titleMatch ? titleMatch[1].trim() : '【插图指引】：此处建议插入工程项目图纸/照片';
+  let descText = fullText
+    .replace(/📸\s*/g, '')
+    .replace(/(?:📸\s*)?【[^】]+】[^\n*]*/g, '')
+    .replace(/^\s*[*_说明：:\s]*/g, '')
+    .trim();
+  if (!descText) {
+    descText = '此处请插入相关的工程效果图、现场实景照片、总平面布置图、工艺流程示意图或实施进度甘特图。';
+  }
+
+  const cell = new TableCell({
+    children: [
+      paragraph([
+        textRun('📸 ', { font: 'Segoe UI Emoji', size: 21 }),
+        textRun(titleText, { bold: true, size: 21, color: FEASIBILITY_ACCENT }),
+      ], { after: 100, alignment: AlignmentType.LEFT }),
+      paragraph([
+        textRun(`规格建议：横版 16:9 / 建议居中排版 插图说明：${descText}`, { size: 18, color: '475569', italics: true }),
+      ], { after: 60, alignment: AlignmentType.LEFT }),
+    ],
+    shading: { fill: 'F0F6FF', type: ShadingType.CLEAR },
+    margins: { top: 120, bottom: 120, left: 200, right: 200 },
+    borders: {
+      top: { style: BorderStyle.SINGLE, size: 6, color: 'C7DCEA' },
+      bottom: { style: BorderStyle.SINGLE, size: 6, color: 'C7DCEA' },
+      left: { style: BorderStyle.SINGLE, size: 18, color: FEASIBILITY_ACCENT },
+      right: { style: BorderStyle.SINGLE, size: 6, color: 'C7DCEA' },
+    },
+  });
+
+  return [
+    new Table({
+      width: { size: FEASIBILITY_TABLE_WIDTH, type: WidthType.DXA },
+      rows: [new TableRow({ children: [cell], cantSplit: true })],
+    }),
+    paragraph([textRun('', { size: 12 })], { after: 150 }),
+  ];
+}
+
+function buildFeasibilityCoverParagraphs(payload, feasibility) {
+  const { options, projectInfo } = feasibility;
+  const projectName = String(payload.project_name || projectInfo.projectName || '项目可行性研究报告').trim();
+  const constructionUnit = String(projectInfo.constructionUnit || '').trim();
+  const preparationUnit = String(options.preparationUnit || constructionUnit || '可行性研究报告编制中心').trim();
+  const documentCode = String(options.documentCode || '').trim();
+  return [
+    paragraph(
+      [textRun(String(options.securityLevel || '').trim() || '内部资料 / 普通', { bold: true, size: 20, color: '666666' })],
+      { alignment: AlignmentType.RIGHT, after: 600 },
+    ),
+    paragraph(
+      [textRun(projectName, { bold: true, size: 40, color: FEASIBILITY_ACCENT })],
       { alignment: AlignmentType.CENTER, after: 300 },
-    ));
-  }
+    ),
+    paragraph(
+      [textRun('可行性研究报告', { bold: true, size: 32, color: '333333' })],
+      { alignment: AlignmentType.CENTER, after: 600 },
+    ),
+    paragraph(
+      [textRun(`（所属行业：${String(projectInfo.industry || '').trim() || '国家标准大纲'}）`, { italics: true, size: 22, color: '666666' })],
+      { alignment: AlignmentType.CENTER, after: 2000 },
+    ),
+    paragraph(
+      [textRun(`项目建设单位：${constructionUnit}`, { size: 24, bold: true })],
+      { alignment: AlignmentType.CENTER, after: 180 },
+    ),
+    paragraph(
+      [textRun(`报告编制单位：${preparationUnit}`, { size: 24 })],
+      { alignment: AlignmentType.CENTER, after: 180 },
+    ),
+    paragraph(
+      [textRun(`文档识别编号：${documentCode}`, { size: 22, color: '666666' })],
+      { alignment: AlignmentType.CENTER, after: 180 },
+    ),
+    paragraph(
+      [textRun(`编制出版日期：${formatFeasibilityYearMonth()}`, { size: 22, color: '666666' })],
+      { alignment: AlignmentType.CENTER, after: 400 },
+    ),
+    pageBreakParagraph(),
+  ];
+}
 
-  if (includeNotes) {
-    children.push(paragraph([textRun('编制说明', { bold: true, font: '黑体', size: 32 })], { after: 160 }));
-    await addMarkdownContent(children, buildFeasibilityPreparationMarkdown(options, projectInfo), context);
-    children.push(pageBreakParagraph());
-  }
+function buildFeasibilityNotesParagraphs(payload, feasibility) {
+  const { projectInfo } = feasibility;
+  const projectName = String(payload.project_name || projectInfo.projectName || '').trim();
+  const signatureTable = buildFeasibilityNativeTable(
+    ['编制角色', '人员姓名', '专业职称 / 职务', '签章 / 审核状态'],
+    [
+      ['项目总负责人', '', '', ''],
+      ['技术审定人', '', '', ''],
+      ['主要校核人', '', '', ''],
+      ['报告主编人', '', '', ''],
+    ],
+  );
 
-  if (includeAppendix) {
-    children.push(paragraph([textRun('附表1 项目基本情况', { bold: true, font: '黑体', size: 32 })], { after: 160 }));
-    await addMarkdownContent(children, buildFeasibilityAppendixMarkdown(projectInfo), context);
-    children.push(pageBreakParagraph());
-  }
+  return [
+    paragraph([textRun('一、可行性研究报告编制说明', { bold: true, size: 28, color: FEASIBILITY_ACCENT })], { after: 200 }),
+    paragraph(
+      [textRun(`1. 本可行性研究报告系针对“${projectName}”项目进行全面技术、经济、社会与生态可行性论证而编制。`, { size: 22 })],
+      { after: 150 },
+    ),
+    paragraph(
+      [textRun('2. 编制依据包括国家发改委《投资项目可行性研究报告编写指南》、行业技术规范、项目单位提供的原始资料以及现场调研数据。', { size: 22 })],
+      { after: 300 },
+    ),
+    paragraph([textRun('二、项目编制人员责任签发表', { bold: true, size: 28, color: FEASIBILITY_ACCENT })], { after: 200 }),
+    signatureTable,
+    paragraph([textRun('', { size: 20 })], { after: 400 }),
+    pageBreakParagraph(),
+  ];
+}
 
-  return true;
+function buildFeasibilityAppendixParagraphs(feasibility) {
+  const { projectInfo } = feasibility;
+  const constructionPeriod = String(projectInfo.constructionPeriodYears || '').trim();
+  const operationPeriod = String(projectInfo.operationPeriodYears || '').trim();
+  const table = buildFeasibilityNativeTable(
+    ['指标名称', '数值 / 内容', '单位', '备注说明'],
+    [
+      ['项目名称', displayFeasibilityAppendixValue(projectInfo.projectName), '—', '立项全称'],
+      ['建设单位', displayFeasibilityAppendixValue(projectInfo.constructionUnit), '—', '申报主体'],
+      ['建设地点', displayFeasibilityAppendixValue(projectInfo.location), '—', '建设区域'],
+      ['建设规模', displayFeasibilityAppendixValue(projectInfo.constructionContent), '—', '产能/建设面积'],
+      ['建设工期', constructionPeriod ? `${constructionPeriod} 年` : '—', constructionPeriod ? '年' : '—', '施工与调试'],
+      ['运营期限', operationPeriod ? `${operationPeriod} 年` : '—', operationPeriod ? '年' : '—', '运营评价期'],
+      ['估算总投资', displayFeasibilityAppendixValue(projectInfo.totalInvestment), '万元', '含建设投资及流动资金'],
+      ['资金来源', displayFeasibilityAppendixValue(projectInfo.fundingSource), '—', '资本金及融资结构'],
+    ],
+  );
+
+  return [
+    pageBreakParagraph(),
+    paragraph([textRun('可研报告附表汇总', { bold: true, size: 30, color: FEASIBILITY_ACCENT })], { after: 300 }),
+    paragraph([textRun('附表 1：项目基本情况汇总表', { bold: true, size: 24, color: '333333' })], { after: 150 }),
+    table,
+    paragraph([textRun('', { size: 18 })], { after: 300 }),
+  ];
 }
 
 function buildOutlineHeadingParagraph(item, context, level, options = {}) {
@@ -2173,6 +2253,7 @@ async function buildDocxResult(payload, options = {}) {
     unsupportedHtmlTags: new Set(),
     developerLogger: options.developerLogger,
     exportFormat,
+    feasibility: readFeasibilityExportContext(payload),
   };
   writeExportLog(context, 'export.docx.build.started', {
     stats,
@@ -2205,18 +2286,26 @@ async function buildDocxResult(payload, options = {}) {
   }
 
   const children = [];
-  const wrapped = await addFeasibilityWrapping(children, payload, context);
-  if (!wrapped) {
+  const feasibility = context.feasibility;
+  if (feasibility?.includeCover) {
+    children.push(...buildFeasibilityCoverParagraphs(payload, feasibility));
+  } else {
     children.push(
       paragraph([textRun('内容由 AI 生成', { italics: true, size: 18 })], { alignment: AlignmentType.CENTER, after: 120 }),
-      paragraph([textRun(payload.project_name || '投标技术文件', { bold: true, size: 34 })], { alignment: AlignmentType.CENTER, after: 300 }),
+      paragraph([textRun(payload.project_name || (feasibility ? '可行性研究报告' : '投标技术文件'), { bold: true, size: 34 })], { alignment: AlignmentType.CENTER, after: 300 }),
     );
+  }
+  if (feasibility?.includeNotes) {
+    children.push(...buildFeasibilityNotesParagraphs(payload, feasibility));
   }
 
   reportProgress(context, 10, stats.mermaidCount
     ? `准备导出正文，并转换 ${stats.mermaidCount} 张 Mermaid 图。`
     : '准备导出正文。');
   await addOutlineItems(children, payload.outline || [], context);
+  if (feasibility?.includeAppendix) {
+    children.push(...buildFeasibilityAppendixParagraphs(feasibility));
+  }
   reportProgress(context, 90, '正在生成 Word 文件。');
 
   // 页面设置

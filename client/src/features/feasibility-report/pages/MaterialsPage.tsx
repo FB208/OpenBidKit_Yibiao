@@ -19,7 +19,7 @@ function MaterialsPage({ projectInfo, onProjectInfoChange }: MaterialsPageProps)
         <div>
           <span className="section-kicker">STEP 01</span>
           <h3>项目资料</h3>
-          <p>先填写项目基础参数。本阶段不计算 NPV、IRR 或投资回收期。下一步可按需补充资料文件，不是必填。</p>
+          <p>第一阶段只保存已知投资口径，不自动计算 NPV、IRR、回收期等复杂财务指标。下一步可按需补充资料文件，不是必填。</p>
         </div>
         <div className="feasibility-form-grid">
           <label>
@@ -29,8 +29,8 @@ function MaterialsPage({ projectInfo, onProjectInfoChange }: MaterialsPageProps)
           <label>
             <span>项目类型</span>
             <select value={draft.projectType} onChange={(event) => updateField('projectType', event.target.value as FeasibilityProjectType)}>
-              <option value="government">政府投资</option>
-              <option value="enterprise">企业投资</option>
+              <option value="government">政府投资项目</option>
+              <option value="enterprise">企业投资项目</option>
             </select>
           </label>
           <label>

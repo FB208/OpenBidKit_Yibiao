@@ -2,12 +2,20 @@ const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs')
 const {
   analysisToMarkdown,
   buildAnalysisMergeSystemPrompt,
+  buildAnalysisMergeUserInstruction,
   buildAnalysisSystemPrompt,
+  buildAnalysisUserInstruction,
   buildContentSystemPrompt,
+  buildContentWritingRules,
   buildHumanWritingSystemPrompt,
   buildParametersSystemPrompt,
+  buildParametersUserInstruction,
   formatProjectInfo,
+  renderOutlineForPrompt,
 } = require('./feasibilityReportPrompts.cjs');
+const { loadLightweightKnowledgeItems } = require('./feasibilityOutlineTask.cjs');
+
+const PROTECTED_QUANTITY_PATTERN = /(?:\d+(?:\.\d+)?(?:\s*(?:-|～|~|至)\s*\d+(?:\.\d+)?)?\s*(?:亿元|万元|元|%|％|年|个月|月|日|天|小时|平方米|平方公里|亩|公里|米|千米|吨|千瓦时|千瓦|兆瓦|人|户|家|项|套|台|个|座|栋|层|次))/g;
 
 function collectLeaves(items = [], trail = [], leaves = []) {
   for (const item of items || []) {
@@ -25,21 +33,91 @@ function hasContent(item) {
   return Boolean(String(item?.content || '').trim());
 }
 
+function countProtectedWritingTokens(content) {
+  const source = String(content || '');
+  const counts = new Map();
+  const quantities = source.match(PROTECTED_QUANTITY_PATTERN) || [];
+  const markers = source.match(/【(?:待补充|待确认)】/g) || [];
+  for (const token of [...quantities, ...markers]) {
+    const normalized = token.replace(/\s+/g, ' ').trim();
+    if (!normalized) continue;
+    counts.set(normalized, (counts.get(normalized) || 0) + 1);
+  }
+  return counts;
+}
+
+function findMissingProtectedTokens(original, revised) {
+  const originalCounts = countProtectedWritingTokens(original);
+  const revisedCounts = countProtectedWritingTokens(revised);
+  const missing = [];
+  for (const [token, count] of originalCounts) {
+    if ((revisedCounts.get(token) || 0) < count) missing.push(token);
+  }
+  return missing;
+}
+
 function protectFacts(original, rewritten) {
-  const source = String(original || '');
   const next = String(rewritten || '').trim();
-  if (!next) return source;
-  const markers = source.match(/【待补充】|【待确认】/g) || [];
-  const nextMarkers = next.match(/【待补充】|【待确认】/g) || [];
-  if (markers.length && nextMarkers.length < markers.length) return source;
-  const quantities = source.match(/\d+(?:\.\d+)?\s*(?:万|亿|元|万元|亿元|%|％|年|个月|公里|千米|米|平方米|亩|吨|千瓦|兆瓦)?/g) || [];
-  const missing = quantities.filter((token) => token && !next.includes(token.trim()));
-  if (missing.length) return source;
+  if (!next) return String(original || '');
+  if (findMissingProtectedTokens(original, next).length) return String(original || '');
   return next;
 }
 
-function buildKnowledgeBrief(items = []) {
-  return (items || []).slice(0, 24).map((item) => `- ${item.title}：${item.resume}`).join('\n');
+function stripMarkdownFence(value) {
+  return String(value || '').trim().replace(/^```(?:markdown)?\s*/i, '').replace(/\s*```$/i, '').trim();
+}
+
+function loadKnowledgeContentMap(knowledgeBaseService, documentIds) {
+  const map = new Map();
+  if (!knowledgeBaseService?.readReferences) return map;
+  try {
+    for (const reference of knowledgeBaseService.readReferences(documentIds || []) || []) {
+      if (reference?.document?.status && reference.document.status !== 'success') continue;
+      const documentId = String(reference?.document?.id || '').trim();
+      for (const item of Array.isArray(reference?.items) ? reference.items : []) {
+        const itemId = String(item?.id || '').trim();
+        const content = String(item?.content || '').trim();
+        if (!documentId || !itemId || !content) continue;
+        map.set(`${documentId}::${itemId}`, {
+          title: String(item.title || ''),
+          resume: String(item.resume || ''),
+          content,
+        });
+      }
+    }
+  } catch {
+    return map;
+  }
+  return map;
+}
+
+function scoreKnowledge(item, chapter) {
+  const query = `${chapter.title || ''}${chapter.description || ''}`;
+  const target = `${item.title || ''}${item.resume || ''}`;
+  const chars = [...new Set(query.replace(/[\s，。；：、（）()《》“”]/g, ''))];
+  return chars.reduce((score, char) => score + (target.includes(char) ? 1 : 0), 0);
+}
+
+function selectKnowledgeContents(chapter, knowledgeMap) {
+  const explicitIds = Array.isArray(chapter.knowledge_item_ids) ? chapter.knowledge_item_ids : [];
+  const explicit = explicitIds.map((id) => knowledgeMap.get(id)).filter(Boolean);
+  const selected = explicit.length
+    ? explicit
+    : Array.from(knowledgeMap.values())
+      .map((item) => ({ item, score: scoreKnowledge(item, chapter) }))
+      .filter((entry) => entry.score > 1)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3)
+      .map((entry) => entry.item);
+  let used = 0;
+  const blocks = [];
+  for (const item of selected) {
+    const block = `### ${item.title}\n\n${item.content}`.trim();
+    if (used + block.length > 24000) break;
+    blocks.push(block);
+    used += block.length;
+  }
+  return blocks.join('\n\n');
 }
 
 async function runFeasibilityAnalysisTask({ aiService, workspaceStore, updateTask, checkpointTask }) {
@@ -61,7 +139,8 @@ async function runFeasibilityAnalysisTask({ aiService, workspaceStore, updateTas
     return aiService.requestJson({
       messages: [
         { role: 'system', content: system },
-        { role: 'user', content: `项目参数：\n${projectBlock}\n\n资料：\n${sourceBlock}` },
+        { role: 'user', content: `项目基础参数：\n${projectBlock}\n\n当前资料分段：${index}/${total}\n\n${sourceBlock}` },
+        { role: 'user', content: buildAnalysisUserInstruction(index, total) },
       ],
       progressLabel: '可研资料分析',
       failureMessage: '资料分析结果不是有效 JSON',
@@ -82,7 +161,8 @@ async function runFeasibilityAnalysisTask({ aiService, workspaceStore, updateTas
     payload = await aiService.requestJson({
       messages: [
         { role: 'system', content: buildAnalysisMergeSystemPrompt() },
-        { role: 'user', content: JSON.stringify(parts) },
+        { role: 'user', content: `项目基础参数：\n${projectBlock}\n\n分段分析结果：\n${JSON.stringify(parts, null, 2)}` },
+        { role: 'user', content: buildAnalysisMergeUserInstruction() },
       ],
       progressLabel: '可研资料分析合并',
       failureMessage: '合并分析结果不是有效 JSON',
@@ -104,27 +184,23 @@ async function runFeasibilityAnalysisTask({ aiService, workspaceStore, updateTas
   });
 }
 
-async function runFeasibilityParametersTask({ aiService, workspaceStore, updateTask, checkpointTask }) {
+async function runFeasibilityParametersTask({ aiService, workspaceStore, knowledgeBaseService, updateTask, checkpointTask }) {
   const state = workspaceStore.loadFeasibilityReport();
   if (!state.outlineData?.outline?.length) throw new Error('请先生成报告目录');
-  let logs = ['开始生成关键参数。'];
+  let logs = ['正在提取可研报告关键参数与统一口径。'];
   updateTask({ progress: 12, logs });
-  const titles = collectLeaves(state.outlineData.outline).map((item) => item.trail.join(' / ')).join('\n');
+  const knowledgeItems = loadLightweightKnowledgeItems(knowledgeBaseService, state.referenceDocumentIds || []);
   const markdown = await aiService.chat({
     messages: [
       { role: 'system', content: buildParametersSystemPrompt() },
-      {
-        role: 'user',
-        content: [
-          `项目参数：\n${formatProjectInfo(state.projectInfo)}`,
-          `资料分析：\n${state.analysisMarkdown}`,
-          `目录叶子章节：\n${titles}`,
-        ].join('\n\n'),
-      },
+      { role: 'user', content: `项目基础参数：\n${formatProjectInfo(state.projectInfo)}\n\n项目资料分析：\n${state.analysisMarkdown}` },
+      { role: 'user', content: `报告目录：\n${renderOutlineForPrompt(state.outlineData.outline)}` },
+      { role: 'user', content: `知识库轻量条目：\n${knowledgeItems.length ? JSON.stringify(knowledgeItems, null, 2) : '未选择知识库'}` },
+      { role: 'user', content: buildParametersUserInstruction() },
     ],
     logTitle: '可研关键参数',
   });
-  logs = [...logs, '关键参数已生成，已清空旧正文。'];
+  logs = [...logs, '关键参数与编制口径生成完成，请人工核对待补充项。已清空旧正文。'];
   checkpointTask({ status: 'success', progress: 100, logs }, {
     keyParametersMarkdown: String(markdown || '').trim(),
     outlineData: { ...state.outlineData, outline: clearContent(state.outlineData.outline) },
@@ -133,25 +209,30 @@ async function runFeasibilityParametersTask({ aiService, workspaceStore, updateT
   });
 }
 
-async function generateLeafContent({ aiService, state, leaf, knowledgeBrief, targetWords }) {
-  return aiService.chat({
-    messages: [
-      { role: 'system', content: buildContentSystemPrompt() },
-      {
-        role: 'user',
-        content: [
-          `当前章节：${leaf.trail.join(' / ')}`,
-          `写作重点：${leaf.description || '无'}`,
-          `建议字数：约 ${targetWords} 字`,
-          `项目参数：\n${formatProjectInfo(state.projectInfo)}`,
-          `关键参数：\n${state.keyParametersMarkdown || '无'}`,
-          `资料分析摘要：\n${String(state.analysisMarkdown || '').slice(0, 6000)}`,
-          knowledgeBrief ? `知识库素材：\n${knowledgeBrief}` : '',
-        ].filter(Boolean).join('\n\n'),
-      },
-    ],
+async function generateLeafContent({ aiService, state, leaf, knowledge, targetWords }) {
+  const chapterPath = (leaf.trail || []).join(' > ');
+  const messages = [
+    { role: 'system', content: buildContentSystemPrompt() },
+    { role: 'user', content: `项目基础参数：\n${formatProjectInfo(state.projectInfo)}` },
+    { role: 'user', content: `项目资料分析：\n${state.analysisMarkdown}` },
+    { role: 'user', content: `全文关键参数与编制口径：\n${state.keyParametersMarkdown}` },
+    {
+      role: 'user',
+      content: `当前章节路径：${chapterPath}\n章节写作重点：${leaf.description || '围绕章节标题展开充分论证。'}\n参考目标字数：约 ${targetWords} 字。`,
+    },
+  ];
+  if (knowledge) {
+    messages.push({
+      role: 'user',
+      content: `可吸收的知识库素材如下。请改写到本项目语境，不要提及“知识库”“历史文档”或资料来源：\n\n${knowledge}`,
+    });
+  }
+  messages.push({ role: 'user', content: buildContentWritingRules() });
+  const response = await aiService.chat({
+    messages,
     logTitle: `可研正文-${leaf.title}`,
   });
+  return stripMarkdownFence(response);
 }
 
 function replaceLeafContent(items, nodeId, content) {
@@ -185,15 +266,21 @@ function contentProgress(phase, completed, total) {
   return Math.min(70, 5 + Math.round((completed / safeTotal) * 65));
 }
 
-async function rewriteLeafContent({ aiService, leaf }) {
+async function rewriteLeafContent({ aiService, state, leaf }) {
+  const chapterPath = (leaf.trail || []).join(' > ');
   const rewritten = await aiService.chat({
     messages: [
       { role: 'system', content: buildHumanWritingSystemPrompt() },
-      { role: 'user', content: leaf.content },
+      { role: 'user', content: `项目基础参数：\n${formatProjectInfo(state.projectInfo)}` },
+      { role: 'user', content: `全文关键参数与编制口径：\n${state.keyParametersMarkdown}` },
+      {
+        role: 'user',
+        content: `当前章节路径：${chapterPath}\n\n请只审校下面的已有正文。不得输出章节标题，不得补写资料中不存在的事实。\n\n${leaf.content}`,
+      },
     ],
     logTitle: `可研审校-${leaf.title}`,
   });
-  return protectFacts(leaf.content, rewritten);
+  return protectFacts(leaf.content, stripMarkdownFence(rewritten));
 }
 
 async function runFeasibilityContentTask({
@@ -218,8 +305,7 @@ async function runFeasibilityContentTask({
     ? [...previousState.contentTask.logs]
     : [];
   let lastProgress = Math.max(0, Number(previousState?.contentTask?.progress || 0) || 0);
-  const references = knowledgeBaseService?.getOutlineReferences?.(state.referenceDocumentIds || []) || { items: [] };
-  const knowledgeBrief = buildKnowledgeBrief(references.items);
+  const knowledgeMap = loadKnowledgeContentMap(knowledgeBaseService, state.referenceDocumentIds || []);
   const perLeafWords = Math.max(600, Math.round((state.targetWords || 30000) / Math.max(collectLeaves(outline).length, 1)));
   const leaves = () => collectLeaves(outline);
   const statsSnapshot = () => ({ phase, reviewedNodeIds: [...reviewedNodeIds] });
@@ -278,7 +364,7 @@ async function runFeasibilityContentTask({
           aiService,
           state,
           leaf,
-          knowledgeBrief,
+          knowledge: selectKnowledgeContents(leaf, knowledgeMap),
           targetWords: perLeafWords,
         }) || '').trim();
         outline = replaceLeafContent(outline, leaf.id, content);
@@ -334,7 +420,7 @@ async function runFeasibilityContentTask({
         stats: statsSnapshot(),
       });
       const currentLeaf = collectLeaves(outline).find((item) => item.id === leaf.id) || leaf;
-      outline = replaceLeafContent(outline, leaf.id, await rewriteLeafContent({ aiService, leaf: currentLeaf }));
+      outline = replaceLeafContent(outline, leaf.id, await rewriteLeafContent({ aiService, state, leaf: currentLeaf }));
       reviewedNodeIds = [...reviewedNodeIds, leaf.id];
       lastProgress = contentProgress('human-writing', reviewedNodeIds.length, Math.max(reviewTotal, 1));
       checkpointTask({
@@ -380,14 +466,8 @@ async function runFeasibilityHumanWritingTask({ aiService, workspaceStore, updat
     const leaf = leaves[index];
     logs = [...logs, `正在审校：${leaf.title}`];
     updateTask({ progress: Math.round((index / leaves.length) * 90), logs });
-    const rewritten = await aiService.chat({
-      messages: [
-        { role: 'system', content: buildHumanWritingSystemPrompt() },
-        { role: 'user', content: leaf.content },
-      ],
-      logTitle: `可研审校-${leaf.title}`,
-    });
-    outline = replaceLeafContent(outline, leaf.id, protectFacts(leaf.content, rewritten));
+    const rewritten = await rewriteLeafContent({ aiService, state, leaf });
+    outline = replaceLeafContent(outline, leaf.id, rewritten);
     checkpointTask({ progress: Math.round(((index + 1) / leaves.length) * 90), logs }, {
       outlineData: { ...state.outlineData, outline },
     });

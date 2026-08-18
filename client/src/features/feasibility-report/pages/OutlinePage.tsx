@@ -391,7 +391,7 @@ function OutlinePage({
                     <strong>目录生成配置</strong>
                     <span>最多三级目录</span>
                   </div>
-                  <div className="outline-word-control-grid">
+                  <div className="outline-word-control-grid feasibility-outline-config-fields">
                     <label>
                       <span>大纲模板</span>
                       <select value={draftTemplate} onChange={(event) => setDraftTemplate(event.target.value as FeasibilityOutlineTemplate)}>

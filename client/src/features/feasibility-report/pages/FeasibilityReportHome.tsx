@@ -18,6 +18,7 @@ import ParametersPage from './ParametersPage';
 import SourcesPage from './SourcesPage';
 import type { FeasibilityExportOptions, FeasibilityOutlineTemplate, FeasibilityProjectInfo, FeasibilityReportState, FeasibilityReportStep } from '../types';
 import {
+  collectFeasibilityLeaves,
   DEFAULT_FEASIBILITY_EXPORT_OPTIONS,
   DEFAULT_FEASIBILITY_PROJECT_INFO,
   FEASIBILITY_STEP_LABELS,
@@ -94,6 +95,10 @@ function FeasibilityReportHome({ registerLeaveGuard, onSectionChange }: Feasibil
   const contentPaused = state.contentTask?.status === 'paused';
   const reviewRunning = isActiveStatus(state.humanWritingTask?.status);
   const anyRunning = analysisRunning || outlineRunning || outlineAdjusting || parametersRunning || contentRunning || reviewRunning;
+  const generatedContentCount = state.outlineData?.outline
+    ? collectFeasibilityLeaves(state.outlineData.outline).filter((item) => item.content?.trim()).length
+    : 0;
+  const wrappingEnabled = exportOptions.includeCover || exportOptions.includePreparationNotes || exportOptions.includeAppendixTables;
   const selectedExportTemplate = exportTemplates.find((item) => item.template_id === selectedExportTemplateId) || null;
   const exportTemplatePreviewStyle = useMemo(
     () => buildExportFormatCssVars(selectedExportTemplate?.config || DEFAULT_EXPORT_FORMAT),
@@ -365,6 +370,7 @@ function FeasibilityReportHome({ registerLeaveGuard, onSectionChange }: Feasibil
         export_format: exportFormat,
         feasibility_options: {
           ...exportOptions,
+          documentCode: String(exportOptions.documentCode || '').trim() || `KYBG-${Date.now().toString().slice(-6)}`,
           project_info: state.projectInfo,
         },
       });
@@ -522,6 +528,7 @@ function FeasibilityReportHome({ registerLeaveGuard, onSectionChange }: Feasibil
             label: '上一步',
             icon: <ToolbarArrowLeftIcon />,
             disabled: activeIndex <= 0 || anyRunning,
+            tooltip: activeIndex <= 0 ? '当前已经是第一步' : `返回${FEASIBILITY_STEP_LABELS[FEASIBILITY_STEPS[activeIndex - 1]]}`,
             onClick: () => { void goToOffset(-1); },
           },
           {
@@ -530,6 +537,15 @@ function FeasibilityReportHome({ registerLeaveGuard, onSectionChange }: Feasibil
             icon: <ToolbarDocumentIcon />,
             variant: 'primary',
             disabled: contentRunning || reviewRunning || isExporting || !state.outlineData,
+            tooltip: contentRunning || reviewRunning
+              ? '正文生成或暂停处理中，完成暂停后再导出'
+              : isExporting
+                ? 'Word 正在导出，请稍候'
+                : contentPaused
+                  ? '正文生成已暂停，可导出当前已完成内容'
+                  : generatedContentCount
+                    ? '导出当前可行性研究报告正文'
+                    : '可导出空目录文档，建议先生成正文',
             onClick: () => { void openExportTemplateDialog(); },
           },
         ]
@@ -689,8 +705,8 @@ function FeasibilityReportHome({ registerLeaveGuard, onSectionChange }: Feasibil
             <div className="export-template-select-head">
               <div>
                 <span className="section-kicker">Word 导出</span>
-                <Dialog.Title>导出可行性研究报告</Dialog.Title>
-                <Dialog.Description>选择已保存模板，并确认封面、编制说明和基本情况附表。无财务测算时只会生成项目基本情况表。</Dialog.Description>
+                <Dialog.Title>选择导出模板</Dialog.Title>
+                <Dialog.Description>选择一个已保存模板后继续导出。可研封面、编制说明和基本情况附表在下方单独确认；无财务测算时只会生成项目基本情况表。</Dialog.Description>
               </div>
               <Dialog.Close className="detail-help-close" type="button" aria-label="关闭模板选择" disabled={isExporting}>×</Dialog.Close>
             </div>
@@ -710,11 +726,15 @@ function FeasibilityReportHome({ registerLeaveGuard, onSectionChange }: Feasibil
               </label>
               <label>
                 <span>编制单位</span>
-                <input value={exportOptions.preparationUnit} onChange={(event) => setExportOptions((prev) => ({ ...prev, preparationUnit: event.target.value }))} placeholder="导出封面和编制说明使用" />
+                <input value={exportOptions.preparationUnit} onChange={(event) => setExportOptions((prev) => ({ ...prev, preparationUnit: event.target.value }))} placeholder="可行性研究报告编制中心" />
               </label>
               <label>
                 <span>密级</span>
-                <input value={exportOptions.securityLevel} onChange={(event) => setExportOptions((prev) => ({ ...prev, securityLevel: event.target.value }))} placeholder="可留空" />
+                <input value={exportOptions.securityLevel} onChange={(event) => setExportOptions((prev) => ({ ...prev, securityLevel: event.target.value }))} placeholder="内部资料 / 普通" />
+              </label>
+              <label>
+                <span>文档号</span>
+                <input value={exportOptions.documentCode} onChange={(event) => setExportOptions((prev) => ({ ...prev, documentCode: event.target.value }))} placeholder="留空则自动生成 KYBG- 编号" />
               </label>
             </div>
 
@@ -794,7 +814,11 @@ function FeasibilityReportHome({ registerLeaveGuard, onSectionChange }: Feasibil
             <div className="content-regenerate-card-head">
               <span className="section-kicker">Word 导出</span>
               <Dialog.Title>{exportProgress.running ? '正在导出 Word' : exportProgress.error ? '导出失败' : '导出完成'}</Dialog.Title>
-              <Dialog.Description>正在将封面、附表、正文、表格和插图指引写入 Word 文档。</Dialog.Description>
+              <Dialog.Description>
+                {wrappingEnabled
+                  ? '正在将正文、表格和图片写入 Word 文档，并按选项附加封面、编制说明和附表。'
+                  : '正在将正文、表格和图片写入 Word 文档。'}
+              </Dialog.Description>
             </div>
             <div className="export-progress-body">
               <ProgressBar value={exportProgress.progress} label={`Word 导出进度 ${exportProgress.progress}%`} />

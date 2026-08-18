@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
 import type { OutlineData, OutlineItem } from '../../../shared/types';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
+import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
+import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
 import type { FeasibilityBackgroundTaskState } from '../types';
 import { collectFeasibilityLeaves } from '../types';
 
@@ -17,24 +19,63 @@ interface ContentPageProps {
   onSave: (item: OutlineItem, content: string) => Promise<void>;
 }
 
-const statusLabels: Record<string, string> = {
-  idle: '待生成',
-  running: '进行中',
-  success: '已生成',
-  error: '失败',
-  pending: '目录分组',
-};
+type TreeStatus = 'idle' | 'running' | 'success' | 'error' | 'partial';
 
-function formatDuration(milliseconds: number) {
-  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
-  const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
-  const seconds = (totalSeconds % 60).toString().padStart(2, '0');
-  return `${minutes}:${seconds}`;
+interface OutlineNodeMeta {
+  status: TreeStatus;
+  leafCount: number;
 }
 
-function collectLeafCount(item: OutlineItem): number {
-  if (!item.children?.length) return 1;
-  return item.children.reduce((sum, child) => sum + collectLeafCount(child), 0);
+const statusLabels: Record<TreeStatus, string> = {
+  idle: '待生成',
+  running: '生成中',
+  success: '已生成',
+  error: '失败',
+  partial: '部分生成',
+};
+
+function getLeafStatus(
+  item: OutlineItem,
+  options: { running: boolean; failed: boolean; activeLeafTitle: string },
+): TreeStatus {
+  if (options.running && options.activeLeafTitle && item.title === options.activeLeafTitle) return 'running';
+  if (item.content?.trim()) return 'success';
+  if (options.failed && options.activeLeafTitle && item.title === options.activeLeafTitle) return 'error';
+  return 'idle';
+}
+
+function getParentStatus(childStatuses: TreeStatus[]): TreeStatus {
+  if (childStatuses.some((status) => status === 'running')) return 'running';
+  if (childStatuses.every((status) => status === 'success')) return 'success';
+  if (childStatuses.some((status) => status === 'error')) return 'error';
+  if (childStatuses.some((status) => status === 'success' || status === 'partial')) return 'partial';
+  return 'idle';
+}
+
+function buildOutlineMeta(
+  items: OutlineItem[],
+  options: { running: boolean; failed: boolean; activeLeafTitle: string },
+) {
+  const meta = new Map<string, OutlineNodeMeta>();
+
+  function visit(item: OutlineItem): OutlineNodeMeta {
+    if (!item.children?.length) {
+      const nodeMeta = { status: getLeafStatus(item, options), leafCount: 1 };
+      meta.set(item.id, nodeMeta);
+      return nodeMeta;
+    }
+
+    const children = item.children.map(visit);
+    const nodeMeta = {
+      status: getParentStatus(children.map((child) => child.status)),
+      leafCount: children.reduce((sum, child) => sum + child.leafCount, 0),
+    };
+    meta.set(item.id, nodeMeta);
+    return nodeMeta;
+  }
+
+  items.forEach(visit);
+  return meta;
 }
 
 function readContentPhase(task?: FeasibilityBackgroundTaskState) {
@@ -58,10 +99,9 @@ function ContentPage({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [preview, setPreview] = useState(true);
-  const [progressCollapsed, setProgressCollapsed] = useState(false);
+  const [statsCollapsed, setStatsCollapsed] = useState(false);
   const [pausePending, setPausePending] = useState(false);
-  const [nowTick, setNowTick] = useState(() => Date.now());
-  const logListRef = useRef<HTMLDivElement | null>(null);
+  const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const leaves = useMemo(() => collectFeasibilityLeaves(outlineData?.outline || []), [outlineData]);
   const selectedItem = useMemo(() => {
     const find = (items: OutlineItem[]): OutlineItem | null => {
@@ -96,7 +136,7 @@ function ContentPage({
         ? 100
         : Math.max(0, Math.min(99, leaves.length ? Math.round((generatedCount / leaves.length) * 100) : Number(task?.progress || 0) || 0));
   const phaseLabel = inReviewPhase ? '审校' : '正文生成';
-  const statusLabel = running ? '进行中' : failed ? '失败' : paused ? '已暂停' : generatedCount === leaves.length && leaves.length ? '已完成' : generatedCount ? '部分完成' : '等待开始';
+  const displayProgressLabel = inReviewPhase ? '审校统计' : '生成统计';
   const statusMessage = failed
     ? task?.error || latestLog || (inReviewPhase ? '自然化审校失败' : '正文生成失败')
     : latestLog || (paused
@@ -106,10 +146,6 @@ function ContentPage({
         : generatedCount
           ? `已生成 ${generatedCount} / ${leaves.length} 个章节。`
           : '点击右上角“生成正文”后，后台会按叶子章节撰写并自动审校。');
-  const startedAt = task?.started_at ? Date.parse(task.started_at) : NaN;
-  const updatedAt = task?.updated_at ? Date.parse(task.updated_at) : NaN;
-  const elapsedText = running && Number.isFinite(startedAt) ? `已运行 ${formatDuration(nowTick - startedAt)}` : '';
-  const staleText = running && Number.isFinite(updatedAt) ? `最近更新 ${Math.floor(Math.max(0, nowTick - updatedAt) / 1000)} 秒前` : '';
   const activeLeafTitle = latestLog.match(/^正在(?:撰写|审校)：(.+)$/)?.[1] || '';
   const generationButtonLabel = pausing
     ? '正在暂停中...'
@@ -122,26 +158,27 @@ function ContentPage({
           : generatedCount > 0
             ? '继续生成正文'
             : '生成正文';
+  const exportFormatPreviewStyle = useMemo<CSSProperties>(() => buildExportFormatCssVars(exportFormat), [exportFormat]);
+  const outlineMeta = useMemo(
+    () => buildOutlineMeta(outlineData?.outline || [], { running, failed, activeLeafTitle }),
+    [activeLeafTitle, failed, outlineData, running],
+  );
 
   useEffect(() => {
     if (!selectedItemId && leaves[0]) setSelectedItemId(leaves[0].id);
   }, [leaves, selectedItemId]);
 
   useEffect(() => {
-    if (!running) return;
-    const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [running]);
+    window.yibiao?.config.load()
+      .then((config) => {
+        if (config?.export_format) setExportFormat(config.export_format);
+      })
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (contentTask?.status !== 'running') setPausePending(false);
   }, [contentTask?.status]);
-
-  useEffect(() => {
-    if (logListRef.current) {
-      logListRef.current.scrollTop = logListRef.current.scrollHeight;
-    }
-  }, [progressLogs.length]);
 
   const startEditing = () => {
     if (!selectedItem || !selectedIsLeaf) return;
@@ -192,18 +229,11 @@ function ContentPage({
     void startContentGeneration({ onlyMissing: generatedCount > 0 });
   };
 
-  const getItemStatus = (item: OutlineItem, isLeaf: boolean) => {
-    if (!isLeaf) return 'pending';
-    if (running && activeLeafTitle && item.title === activeLeafTitle) return 'running';
-    if (item.content?.trim()) return 'success';
-    if (failed && activeLeafTitle && item.title === activeLeafTitle) return 'error';
-    return 'idle';
-  };
-
   const renderTree = (items: OutlineItem[], level = 0): ReactNode => items.map((item) => {
     const isLeaf = !item.children?.length;
-    const status = getItemStatus(item, isLeaf);
-    const leafCount = isLeaf ? 1 : collectLeafCount(item);
+    const meta = outlineMeta.get(item.id);
+    const status = meta?.status || 'idle';
+    const leafCount = meta?.leafCount || 0;
     const statusText = status === 'running'
       ? (inReviewPhase ? '审校中' : '生成中')
       : statusLabels[status];
@@ -216,10 +246,10 @@ function ContentPage({
         >
           <span className="content-outline-dot" aria-hidden="true" />
           <span className="content-outline-text">
-            <strong>{formatOutlineTitle(item.id, item.title, DEFAULT_EXPORT_FORMAT.headings[Math.min(item.id.split('.').length - 1, 5)])}</strong>
+            <strong>{formatOutlineTitle(item.id, item.title, exportFormat.headings[Math.min(item.id.split('.').length - 1, 5)])}</strong>
             <small>{isLeaf ? statusText : `${statusText} · ${leafCount} 个章节`}</small>
           </span>
-          {isLeaf ? <em>{statusText}</em> : null}
+          <em>{statusText}</em>
         </button>
         {item.children?.length ? renderTree(item.children, level + 1) : null}
       </div>
@@ -227,7 +257,7 @@ function ContentPage({
   });
 
   const selectedStatus = selectedItem
-    ? getItemStatus(selectedItem, selectedIsLeaf)
+    ? (outlineMeta.get(selectedItem.id)?.status || 'idle')
     : 'idle';
   const selectedContent = (editing ? draft : selectedItem?.content) || '';
   const selectedStatusText = selectedStatus === 'running'
@@ -250,7 +280,7 @@ function ContentPage({
       <section className="content-generation-command-bar">
         <div>
           <span className="section-kicker">STEP 06</span>
-          <strong>正文与导出</strong>
+          <strong>正文生成</strong>
           <p>按叶子章节增量生成正文，完成后自动自然化审校。选址、工艺、环保、进度类章节会插入插图指引框。</p>
         </div>
         <div className="content-generation-stats" aria-label="正文生成统计">
@@ -270,43 +300,30 @@ function ContentPage({
         </div>
       </section>
 
-      <section className="content-generation-workspace feasibility-content-workspace">
-        <aside className="outline-progress-panel">
-          <div className="analysis-result-head">
-            <strong>{inReviewPhase ? '审校过程' : '生成过程'}</strong>
-            <span>{statusLabel}</span>
-          </div>
-          <div className={`content-outline-stats outline-progress-summary${progressCollapsed ? ' is-collapsed' : ''}`}>
-            <button type="button" onClick={() => setProgressCollapsed((prev) => !prev)} aria-expanded={!progressCollapsed}>
-              <span>{inReviewPhase ? '审校进度' : '生成进度'}</span>
-              <strong>{progress}%</strong>
-              <em>{progressCollapsed ? '展开' : '折叠'}</em>
-            </button>
-            {!progressCollapsed && (
-              <div className="content-outline-stats-body">
-                <ProgressBar value={progress} active={running} label={`${phaseLabel}进度 ${progress}%`} />
-                <p>{statusMessage}</p>
-                {(elapsedText || staleText) && (
-                  <div className="outline-progress-meta">
-                    {elapsedText && <span>{elapsedText}</span>}
-                    {staleText && <span>{staleText}</span>}
-                  </div>
-                )}
-                {failed && <small>{task?.error || latestLog || (inReviewPhase ? '自然化审校失败' : '正文生成失败')}</small>}
-              </div>
-            )}
-          </div>
-          <div className="outline-progress-log" ref={logListRef}>
-            {progressLogs.length ? progressLogs.map((item, index) => (
-              <p className={index === progressLogs.length - 1 ? 'is-latest' : ''} key={`${item}-${index}`}>{item}</p>
-            )) : <p>等待生成任务启动。</p>}
-          </div>
-        </aside>
-
+      <section className="content-generation-workspace">
         <aside className="content-outline-panel">
           <div className="analysis-result-head">
             <strong>报告目录</strong>
             <span>{leaves.length} 个章节</span>
+          </div>
+          <div className={`content-outline-stats${statsCollapsed ? ' is-collapsed' : ''}`}>
+            <button type="button" onClick={() => setStatsCollapsed((prev) => !prev)} aria-expanded={!statsCollapsed}>
+              <span>{displayProgressLabel}</span>
+              <strong>{generatedCount}/{leaves.length}</strong>
+              <em>{statsCollapsed ? '展开' : '折叠'}</em>
+            </button>
+            {!statsCollapsed && (
+              <div className="content-outline-stats-body">
+                <ProgressBar
+                  value={progress}
+                  tone={inReviewPhase ? 'sky' : 'primary'}
+                  active={running}
+                  label={`${phaseLabel}进度 ${progress}%`}
+                />
+                <p>{statusMessage}</p>
+                {failed && <small>{task?.error || latestLog || (inReviewPhase ? '自然化审校失败' : '正文生成失败')}</small>}
+              </div>
+            )}
           </div>
           <div className="content-outline-list">
             {renderTree(outlineData.outline)}
@@ -316,9 +333,9 @@ function ContentPage({
         <article className="content-reader-panel">
           <div className="content-reader-head">
             <div>
-              <span className="section-kicker">章节正文</span>
+              <span className="section-kicker">正文内容</span>
               <strong>{selectedItem ? `${selectedItem.id} ${selectedItem.title}` : '选择章节'}</strong>
-              <p>{selectedItem?.description || '选择左侧叶子章节查看或编辑正文。'}</p>
+              <p>{selectedItem?.description || '选择左侧目录项查看生成正文。'}</p>
             </div>
             <div className="content-reader-actions">
               <span className={`content-status-badge is-${selectedStatus}`}>{selectedStatusText}</span>
@@ -353,7 +370,8 @@ function ContentPage({
             />
           ) : selectedIsLeaf && selectedContent.trim() ? (
             <MarkdownFullscreenViewer
-              className="markdown-viewer content-generation-output"
+              className="markdown-viewer content-generation-output export-format-preview"
+              style={exportFormatPreviewStyle}
               title={selectedItem ? `${selectedItem.id} ${selectedItem.title}全屏查看` : '正文预览全屏查看'}
             >
               <MarkdownRenderer allowRawHtml={false}>{selectedContent}</MarkdownRenderer>
@@ -372,7 +390,7 @@ function ContentPage({
           ) : (
             <div className="markdown-empty-state content-generation-empty">
               <strong>当前是目录分组</strong>
-              <p>该目录下包含 {selectedItem ? collectLeafCount(selectedItem) : 0} 个章节，请选择叶子章节查看具体正文。</p>
+              <p>该目录下包含 {selectedItem ? (outlineMeta.get(selectedItem.id)?.leafCount || 0) : 0} 个章节，请选择叶子章节查看具体正文。</p>
             </div>
           )}
         </article>

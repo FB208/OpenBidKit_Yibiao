@@ -35,8 +35,8 @@ const emptyProjectInfo = Object.freeze({
   constructionUnit: '',
   location: '',
   constructionContent: '',
-  constructionPeriodYears: '',
-  operationPeriodYears: '',
+  constructionPeriodYears: '2',
+  operationPeriodYears: '20',
   totalInvestment: '',
   fundingSource: '',
 });
@@ -100,8 +100,8 @@ function normalizeProjectInfo(value) {
     constructionUnit: String(source.constructionUnit || '').trim(),
     location: String(source.location || '').trim(),
     constructionContent: String(source.constructionContent || '').trim(),
-    constructionPeriodYears: String(source.constructionPeriodYears || '').trim(),
-    operationPeriodYears: String(source.operationPeriodYears || '').trim(),
+    constructionPeriodYears: String(source.constructionPeriodYears || '').trim() || '2',
+    operationPeriodYears: String(source.operationPeriodYears || '').trim() || '20',
     totalInvestment: String(source.totalInvestment || '').trim(),
     fundingSource: String(source.fundingSource || '').trim(),
   };

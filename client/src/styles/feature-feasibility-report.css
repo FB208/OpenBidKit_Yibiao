@@ -60,6 +60,10 @@
   resize: vertical;
 }
 
+.feasibility-outline-config-fields {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .feasibility-markdown-workspace {
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
 }
@@ -84,24 +88,6 @@
 
 .feasibility-analysis-edit-pane {
   grid-template-rows: minmax(0, 1fr);
-}
-
-.feasibility-content-workspace {
-  grid-template-columns: minmax(220px, 280px) minmax(260px, 320px) minmax(0, 1fr);
-}
-
-.feasibility-content-workspace > .outline-progress-panel {
-  height: 100%;
-  min-height: 0;
-}
-
-.feasibility-content-workspace > .content-outline-panel {
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.feasibility-content-workspace .content-reader-panel > *:not(.content-reader-head) {
-  height: 100%;
-  min-height: 0;
 }
 
 .feasibility-analysis-edit-pane .markdown-editor {
@@ -133,7 +119,8 @@
 }
 
 .feasibility-export-options label:nth-child(4),
-.feasibility-export-options label:nth-child(5) {
+.feasibility-export-options label:nth-child(5),
+.feasibility-export-options label:nth-child(6) {
   display: grid;
   gap: 6px;
   color: var(--yb-text-soft);
@@ -145,8 +132,7 @@
     grid-template-columns: 1fr;
   }
 
-  .feasibility-markdown-workspace,
-  .feasibility-content-workspace {
+  .feasibility-markdown-workspace {
     grid-template-columns: 1fr;
   }
 }

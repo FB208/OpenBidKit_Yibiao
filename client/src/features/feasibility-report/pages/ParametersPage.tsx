@@ -82,7 +82,7 @@ function ParametersPage({
         <div>
           <span className="section-kicker">STEP 05</span>
           <strong>关键参数</strong>
-          <p>核对【待补充】和【待确认】标记。保存后会清空已生成正文。本步骤不计算 NPV/IRR。</p>
+          <p>请重点核对“【待补充】”和“【待确认】”。保存修改后，旧正文会被清空以避免使用过期参数。本步骤不自动计算 NPV、IRR、回收期。</p>
         </div>
         <div className="global-facts-command-actions">
           <button type="button" className="primary-action" onClick={() => { void onStart(); }} disabled={running || !hasOutline}>
@@ -129,7 +129,7 @@ function ParametersPage({
             <div>
               <span className="section-kicker">编制口径</span>
               <strong>关键参数</strong>
-              <p>可直接编辑；保存后会清空已生成正文。本步骤不计算 NPV/IRR。</p>
+              <p>可直接编辑。请重点核对“【待补充】”和“【待确认】”。保存修改后，旧正文会被清空。</p>
             </div>
             <div className="global-facts-reader-actions">
               <button type="button" className="secondary-action" onClick={() => { void copyParameters(); }} disabled={!hasContent}>复制</button>

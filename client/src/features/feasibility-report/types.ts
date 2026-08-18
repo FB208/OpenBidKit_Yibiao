@@ -69,6 +69,7 @@ export interface FeasibilityExportOptions {
   includeAppendixTables: boolean;
   preparationUnit: string;
   securityLevel: string;
+  documentCode: string;
 }
 
 export interface FeasibilityReportState {
@@ -97,17 +98,17 @@ export const FEASIBILITY_STEP_LABELS: Record<FeasibilityReportStep, string> = {
   analysis: '资料分析',
   outline: '报告目录',
   parameters: '关键参数',
-  content: '正文导出',
+  content: '正文生成',
 };
 
 export const FEASIBILITY_OUTLINE_TEMPLATE_LABELS: Record<FeasibilityOutlineTemplate, string> = {
-  government: '政府投资项目',
-  enterprise: '企业投资项目',
-  industrial: '工业制造项目',
-  hi_tech: '高新技术项目',
-  infrastructure: '基础设施项目',
-  eco_environmental: '生态环境项目',
-  commercial_realestate: '商业地产项目',
+  government: '政府投资项目通用大纲（2023版标准）',
+  enterprise: '企业投资项目参考大纲（2023版标准）',
+  industrial: '工业与高端制造可行性研究大纲',
+  hi_tech: '高新技术与数字化/信息化大纲',
+  infrastructure: '基础设施与公用事业大纲',
+  eco_environmental: '农业与生态环保项目大纲',
+  commercial_realestate: '商业/园区与地产开发大纲',
 };
 
 export const DEFAULT_FEASIBILITY_PROJECT_INFO: FeasibilityProjectInfo = {
@@ -117,8 +118,8 @@ export const DEFAULT_FEASIBILITY_PROJECT_INFO: FeasibilityProjectInfo = {
   constructionUnit: '',
   location: '',
   constructionContent: '',
-  constructionPeriodYears: '',
-  operationPeriodYears: '',
+  constructionPeriodYears: '2',
+  operationPeriodYears: '20',
   totalInvestment: '',
   fundingSource: '',
 };
@@ -127,8 +128,9 @@ export const DEFAULT_FEASIBILITY_EXPORT_OPTIONS: FeasibilityExportOptions = {
   includeCover: true,
   includePreparationNotes: true,
   includeAppendixTables: true,
-  preparationUnit: '',
-  securityLevel: '',
+  preparationUnit: '可行性研究报告编制中心',
+  securityLevel: '内部资料 / 普通',
+  documentCode: '',
 };
 
 export function collectFeasibilityLeaves(items: OutlineItem[] = [], leaves: OutlineItem[] = []): OutlineItem[] {
