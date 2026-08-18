@@ -1,3 +1,5 @@
+import type { OutlineContentMode } from './outline';
+
 export type { AiHttpErrorPayload, ChatCompletionRequest, ChatMessage, JsonCompletionRequest } from './ai';
 export type {
   DuplicateAnalysisTabId,
@@ -103,3 +105,27 @@ export type {
   RejectionFindingType,
   RejectionResultTab,
 } from '../../features/rejection-check/types';
+
+export type OutlineAttribute = '通用' | '商务' | '资信' | '技术' | '其他';
+
+export interface OutlineSelectionItem {
+  id: string;
+  title: string;
+  description: string;
+  attr: OutlineAttribute;
+  content_mode: OutlineContentMode;
+  content_mode_note?: string;
+}
+
+export interface OutlineSelectionState {
+  items: OutlineSelectionItem[];
+  selected_ids: string[];
+  confirmed: boolean;
+  auto_answer_at?: string;
+}
+
+export interface SaveOutlineSelectionRequest {
+  taskId: string;
+  items: OutlineSelectionItem[];
+  selectedIds: string[];
+}

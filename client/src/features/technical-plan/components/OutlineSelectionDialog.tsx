@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { OutlineContentMode } from '../../../shared/types';
 import { AppSwitch, useAutoAnswer } from '../../../shared/ui';
-import type { OutlineAttribute, OutlineSelectionItem, OutlineSelectionState } from '../types';
+import type { OutlineAttribute, OutlineSelectionItem, OutlineSelectionState } from '../../../shared/types';
 
 interface OutlineSelectionDialogProps {
   open: boolean;
