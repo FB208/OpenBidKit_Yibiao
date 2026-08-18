@@ -1639,6 +1639,33 @@
   min-height: 0;
 }
 
+/* 模板填写小节状态面板（ContentEditPage.tsx） */
+.content-template-fill-state {
+  align-items: flex-start;
+  text-align: left;
+}
+
+.content-template-fill-error {
+  color: var(--yb-danger, #b3261e);
+}
+
+.content-template-fill-preview {
+  width: 100%;
+  max-height: 240px;
+  margin: 10px 0 12px;
+  padding: 10px 12px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--yb-text-muted);
+  background: rgba(23, 32, 51, 0.05);
+  border: 1px solid rgba(23, 32, 51, 0.12);
+  border-radius: 8px;
+}
+
+
 /* [4289-4344] content-generation-config-card + export-progress-card + export-template-select-dialog (TechnicalPlanHome模板选择弹窗) */
 .content-generation-config-card {
   position: fixed;

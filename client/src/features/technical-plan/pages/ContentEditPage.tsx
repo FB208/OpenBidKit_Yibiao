@@ -6,7 +6,7 @@ import { AppSwitch, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, 
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { ClientConfig, ImageModelStatus, OutlineContentMode, OutlineData, OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
-import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentIllustrationKind, ContentIllustrationPlanState, ContentTableRequirement, OriginalPlanCoverageRepairMode, TechnicalPlanWorkflowKind } from '../types';
+import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentIllustrationKind, ContentIllustrationPlanState, ContentTableRequirement, OriginalPlanCoverageRepairMode, TechnicalPlanTemplateFill, TechnicalPlanTemplateFills, TemplateFillStatus, TechnicalPlanWorkflowKind } from '../types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
@@ -23,6 +23,8 @@ interface ContentEditPageProps {
   contentGenerationOptions?: ContentGenerationOptions;
   contentIllustrationPlan?: ContentIllustrationPlanState;
   sections: ContentGenerationSections;
+  templateFills: TechnicalPlanTemplateFills;
+  onTemplateFillRetry: (nodeId: string) => Promise<{ summary: { total: number; success: number; error: number; skipped: number; pending: number }; fill: TechnicalPlanTemplateFill | null } | null>;
   onContentGenerationOptionsChange: (options: ContentGenerationOptions) => Promise<void> | void;
   onContentSaved: (item: OutlineItem, content: string) => Promise<void> | void;
 }
@@ -52,6 +54,14 @@ const pendingModeDescriptions: Record<Exclude<OutlineContentMode, 'ai-generate'>
   'template-fill': '该小节已标记为模板填写，后续将从招标文件提取并填充内容。',
   'point-to-point': '该小节已标记为点对点应答表，后续将在正文完成并确定 Word 页码后回填。',
   other: '该小节采用其他处理模式，暂不进入 AI 正文生成流程。',
+};
+
+const templateFillStatusLabels: Record<TemplateFillStatus, string> = {
+  pending: '待提取',
+  running: '提取中',
+  success: '已提取',
+  error: '提取失败',
+  skipped: '已跳过',
 };
 
 const imageModelStatusLabels: Record<ImageModelStatus, string> = {
@@ -294,6 +304,8 @@ function ContentEditPage({
   contentGenerationOptions,
   contentIllustrationPlan,
   sections,
+  templateFills,
+  onTemplateFillRetry,
   onContentGenerationOptionsChange,
   onContentSaved,
 }: ContentEditPageProps) {
@@ -323,6 +335,24 @@ function ContentEditPage({
   const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
   const selectedContent = selectedItem && selectedIsLeaf ? getLeafContent(selectedItem, sections) : '';
+  const selectedTemplateFill = selectedItem && selectedIsLeaf && selectedItem.content_mode === 'template-fill' ? templateFills[selectedItem.id] : undefined;
+  const [templateFillRetrying, setTemplateFillRetrying] = useState(false);
+
+  const retrySelectedTemplateFill = async () => {
+    if (!selectedItem || templateFillRetrying) return;
+    setTemplateFillRetrying(true);
+    try {
+      const result = await onTemplateFillRetry(selectedItem.id);
+      if (result?.fill?.status === 'success') {
+        showToast('模板填写提取成功', 'success');
+      } else if (result?.fill?.error) {
+        showToast(result.fill.error, 'error');
+      }
+    } finally {
+      setTemplateFillRetrying(false);
+    }
+  };
+
   const exportFormatPreviewStyle = useMemo<CSSProperties>(() => buildExportFormatCssVars(exportFormat), [exportFormat]);
   const running = task?.status === 'running';
   const pausing = task?.status === 'pausing' || pausePending;
@@ -578,6 +608,7 @@ function ContentEditPage({
                         ? `已生成 ${completedCount} 个小节${ignoredCount ? `，已忽略 ${ignoredCount} 个小节` : ''}，共 ${totalWords} 字。`
                         : '点击生成正文后，目录会实时显示每个小节状态。';
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
+  const selectedTemplateFillLabel = selectedTemplateFill ? templateFillStatusLabels[selectedTemplateFill.status] : '';
   const generationButtonLabel = pausing
     ? '正在暂停中...'
     : running
@@ -1149,7 +1180,7 @@ function ContentEditPage({
               <p>{selectedItem?.description || '选择左侧目录项查看生成正文。'}</p>
             </div>
             <div className="content-reader-actions">
-              <span className={`content-status-badge is-${selectedStatus}`}>{statusLabels[selectedStatus]}</span>
+              <span className={`content-status-badge is-${selectedStatus}`}>{selectedTemplateFillLabel || statusLabels[selectedStatus]}</span>
               {editing ? (
                 <>
                   <button type="button" className={isPreviewing ? 'secondary-action' : 'primary-action'} onClick={togglePreview}>
@@ -1183,6 +1214,26 @@ function ContentEditPage({
             <MarkdownFullscreenViewer className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle} title={`${selectedItem.id} ${selectedItem.title}全屏查看`}>
               <MarkdownContent content={selectedContent} onPreviewImage={handlePreviewImage} />
             </MarkdownFullscreenViewer>
+          ) : selectedItem && selectedIsLeaf && selectedItem.content_mode === 'template-fill' ? (
+            <div className="markdown-empty-state content-generation-empty content-template-fill-state">
+              <strong>{`模板填写：${templateFillStatusLabels[selectedTemplateFill?.status || 'pending']}`}</strong>
+              {selectedTemplateFill?.error ? (
+                <p className="content-template-fill-error">{selectedTemplateFill.error}</p>
+              ) : (
+                <p>{pendingModeDescriptions['template-fill']}导出 Word 时会按书签把提取内容原样粘贴到本小节位置。</p>
+              )}
+              {selectedTemplateFill?.previewText ? (
+                <pre className="content-template-fill-preview">{selectedTemplateFill.previewText}</pre>
+              ) : null}
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => void retrySelectedTemplateFill()}
+                disabled={templateFillRetrying || taskBlocksGeneration}
+              >
+                {templateFillRetrying ? '正在提取...' : selectedTemplateFill && selectedTemplateFill.status !== 'success' ? '重试模板填写' : '重新提取模板'}
+              </button>
+            </div>
           ) : selectedItem && selectedIsLeaf ? (
             <div className="markdown-empty-state content-generation-empty">
               <strong>{getLeafStatus(selectedItem, sections) === 'error'

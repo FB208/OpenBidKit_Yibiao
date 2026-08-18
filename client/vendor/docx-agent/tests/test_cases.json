@@ -1,0 +1,4683 @@
+{
+  "_meta": {
+    "base_doc": "input/base.docx",
+    "target_plain_doc": "input/target_plain.docx",
+    "output_dir": "output",
+    "version": "1.0",
+    "note": "测试用例基于 base.docx 真实结构快照(见 logs/base_structure.md)。段落索引、文本、书签名、表格坐标均来自实测。每条用例独立从 base.docx 全新加载,互不污染。assertions 中的 location 用 paragraph[N]/table[0].tr[R].tc[C]/runs[M] 表示。"
+  },
+  "T001": {
+    "name": "loc_by_para_index_normal",
+    "target_function": "locator.locate_by_paragraph_index",
+    "category": "normal",
+    "description": "按段落索引定位段落7(正文宋体四号),验证返回正确段落与文本",
+    "input": {
+      "index": 7
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_text",
+        "value": "正文宋体四号"
+      },
+      {
+        "type": "located_index",
+        "value": 7
+      },
+      {
+        "type": "no_modify"
+      }
+    ]
+  },
+  "T002": {
+    "name": "loc_by_para_index_h1",
+    "target_function": "locator.locate_by_paragraph_index",
+    "category": "normal",
+    "description": "按索引定位标题1段落(索引2),验证pStyle=1",
+    "input": {
+      "index": 2
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_text",
+        "value": "标题1"
+      },
+      {
+        "type": "located_pstyle",
+        "value": "1"
+      }
+    ]
+  },
+  "T003": {
+    "name": "loc_by_para_index_oob",
+    "target_function": "locator.locate_by_paragraph_index",
+    "category": "exception",
+    "description": "段落索引越界(999),应抛LocateError",
+    "input": {
+      "index": 999
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T004": {
+    "name": "loc_by_para_index_negative",
+    "target_function": "locator.locate_by_paragraph_index",
+    "category": "exception",
+    "description": "负索引(-1)不支持,应抛LocateError",
+    "input": {
+      "index": -1
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T005": {
+    "name": "loc_by_text_multirun",
+    "target_function": "locator.locate_by_text",
+    "category": "normal",
+    "description": "按文本定位段落12'链接',该段文本分散在多个run,验证能正确拼接匹配",
+    "input": {
+      "text": "链接",
+      "occurrence": 1,
+      "exact": false
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_index",
+        "value": 12
+      },
+      {
+        "type": "located_text",
+        "value": "链接"
+      }
+    ]
+  },
+  "T006": {
+    "name": "loc_by_text_exact",
+    "target_function": "locator.locate_by_text",
+    "category": "normal",
+    "description": "精确匹配定位标题2(段落3),exact=true",
+    "input": {
+      "text": "标题2",
+      "exact": true
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_index",
+        "value": 3
+      }
+    ]
+  },
+  "T007": {
+    "name": "loc_by_text_partial",
+    "target_function": "locator.locate_by_text",
+    "category": "normal",
+    "description": "模糊匹配'宋体四号',应命中多个含此文本的段落,occurrence取第1个",
+    "input": {
+      "text": "宋体四号",
+      "occurrence": 1
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "match_count_gte",
+        "value": 1
+      },
+      {
+        "type": "located_index",
+        "value": 7
+      }
+    ]
+  },
+  "T008": {
+    "name": "loc_by_text_notfound",
+    "target_function": "locator.locate_by_text",
+    "category": "exception",
+    "description": "文本不存在,应抛LocateError",
+    "input": {
+      "text": "这段文字在base中不存在xyz"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T009": {
+    "name": "loc_by_text_empty",
+    "target_function": "locator.locate_by_text",
+    "category": "exception",
+    "description": "空文本定位,应抛LocateError",
+    "input": {
+      "text": ""
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T010": {
+    "name": "loc_by_text_occ_oob",
+    "target_function": "locator.locate_by_text",
+    "category": "exception",
+    "description": "occurrence超出匹配数,应抛LocateError",
+    "input": {
+      "text": "标题1",
+      "occurrence": 99
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T011": {
+    "name": "loc_by_heading_h1",
+    "target_function": "locator.locate_by_heading_level",
+    "category": "normal",
+    "description": "定位H1(标题1,段落2),通过pStyle映射",
+    "input": {
+      "level": 1,
+      "occurrence": 1
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_index",
+        "value": 2
+      },
+      {
+        "type": "located_pstyle",
+        "value": "1"
+      }
+    ]
+  },
+  "T012": {
+    "name": "loc_by_heading_h3",
+    "target_function": "locator.locate_by_heading_level",
+    "category": "normal",
+    "description": "定位H3(标题3,段落4)",
+    "input": {
+      "level": 3,
+      "occurrence": 1
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_index",
+        "value": 4
+      }
+    ]
+  },
+  "T013": {
+    "name": "loc_by_heading_invalid_level",
+    "target_function": "locator.locate_by_heading_level",
+    "category": "exception",
+    "description": "level=0非法(应1~9),抛LocateError",
+    "input": {
+      "level": 0
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T014": {
+    "name": "loc_by_heading_notfound",
+    "target_function": "locator.locate_by_heading_level",
+    "category": "exception",
+    "description": "H5段落不存在(base只有标题1/2/3),应抛LocateError",
+    "input": {
+      "level": 5
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T015": {
+    "name": "loc_by_bookmark_toc",
+    "target_function": "locator.locate_by_bookmark",
+    "category": "normal",
+    "description": "按书签_Toc234486118定位(实测在段落1)",
+    "input": {
+      "bookmark_name": "_Toc234486118"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_index",
+        "value": 1
+      }
+    ]
+  },
+  "T016": {
+    "name": "loc_by_bookmark_custom",
+    "target_function": "locator.locate_by_bookmark",
+    "category": "normal",
+    "description": "按中文书签_标题3定位(段落4)",
+    "input": {
+      "bookmark_name": "_标题3"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_index",
+        "value": 4
+      }
+    ]
+  },
+  "T017": {
+    "name": "loc_by_bookmark_notfound",
+    "target_function": "locator.locate_by_bookmark",
+    "category": "exception",
+    "description": "书签不存在,抛LocateError",
+    "input": {
+      "bookmark_name": "不存在的书签"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T018": {
+    "name": "loc_by_bookmark_empty",
+    "target_function": "locator.locate_by_bookmark",
+    "category": "exception",
+    "description": "空书签名,抛LocateError",
+    "input": {
+      "bookmark_name": ""
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T019": {
+    "name": "loc_table_cell_c1",
+    "target_function": "locator.locate_table_cell",
+    "category": "normal",
+    "description": "定位表格(0,0,0)单元格,内容C1",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "col": 0
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_text",
+        "value": "C1"
+      }
+    ]
+  },
+  "T020": {
+    "name": "loc_table_cell_8",
+    "target_function": "locator.locate_table_cell",
+    "category": "normal",
+    "description": "定位表格(0,2,3)单元格,内容8",
+    "input": {
+      "table_index": 0,
+      "row": 2,
+      "col": 3
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_text",
+        "value": "8"
+      }
+    ]
+  },
+  "T021": {
+    "name": "loc_table_cell_row_oob",
+    "target_function": "locator.locate_table_cell",
+    "category": "exception",
+    "description": "行索引越界(表格仅3行),抛LocateError",
+    "input": {
+      "table_index": 0,
+      "row": 9,
+      "col": 0
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T022": {
+    "name": "loc_table_cell_col_oob",
+    "target_function": "locator.locate_table_cell",
+    "category": "exception",
+    "description": "列索引越界(仅4列),抛LocateError",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "col": 9
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T023": {
+    "name": "write_insert_para_inherit",
+    "target_function": "writer.insert_paragraph_after",
+    "category": "normal",
+    "description": "在段落7后插入新段落并继承样式,验证新段落样式与段落7一致、插入点前段落零差异",
+    "input": {
+      "anchor": 7,
+      "text": "新插入的段落内容",
+      "inherit_style": true
+    },
+    "expected_changes": [
+      "paragraph[8](新增)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "new_paragraph",
+        "value": "新插入的段落内容"
+      },
+      {
+        "type": "style_equals_source",
+        "location": "new_paragraph",
+        "source": "paragraph[7]"
+      },
+      {
+        "type": "prefix_unchanged",
+        "up_to": 7
+      },
+      {
+        "type": "styles_xml_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T024": {
+    "name": "write_insert_para_h1_inherit",
+    "target_function": "writer.insert_paragraph_after",
+    "category": "normal",
+    "description": "在标题1段落后插入新标题段落,验证继承pStyle=1",
+    "input": {
+      "anchor": 2,
+      "text": "新增标题1",
+      "inherit_style": true
+    },
+    "expected_changes": [
+      "paragraph[3](新增)"
+    ],
+    "assertions": [
+      {
+        "type": "located_pstyle",
+        "location": "new_paragraph",
+        "value": "1"
+      },
+      {
+        "type": "prefix_unchanged",
+        "up_to": 2
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T025": {
+    "name": "write_insert_para_default_style",
+    "target_function": "writer.insert_paragraph_after",
+    "category": "normal",
+    "description": "inherit_style=false插入默认样式段落,验证新段落不带锚点样式",
+    "input": {
+      "anchor": 7,
+      "text": "默认样式段落",
+      "inherit_style": false
+    },
+    "expected_changes": [
+      "paragraph[8](新增)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "new_paragraph",
+        "value": "默认样式段落"
+      },
+      {
+        "type": "no_inherited_rpr",
+        "location": "new_paragraph"
+      },
+      {
+        "type": "prefix_unchanged",
+        "up_to": 7
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T026": {
+    "name": "write_insert_para_empty_text",
+    "target_function": "writer.insert_paragraph_after",
+    "category": "boundary",
+    "description": "插入空段落(text=''),验证仅含pPr无run,结构合法",
+    "input": {
+      "anchor": 7,
+      "text": "",
+      "inherit_style": true
+    },
+    "expected_changes": [
+      "paragraph[8](新增空段落)"
+    ],
+    "assertions": [
+      {
+        "type": "located_text",
+        "location": "new_paragraph",
+        "value": ""
+      },
+      {
+        "type": "openable"
+      },
+      {
+        "type": "prefix_unchanged",
+        "up_to": 7
+      }
+    ]
+  },
+  "T027": {
+    "name": "write_insert_para_at_end",
+    "target_function": "writer.insert_paragraph_after",
+    "category": "boundary",
+    "description": "在body末尾段落(38)后插入,验证新段落落在sectPr之前",
+    "input": {
+      "anchor": 38,
+      "text": "末尾新增段落",
+      "inherit_style": true
+    },
+    "expected_changes": [
+      "paragraph[39](新增)"
+    ],
+    "assertions": [
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "new_p_before_sectpr"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T028": {
+    "name": "write_insert_para_anchor_dict",
+    "target_function": "writer.insert_paragraph_after",
+    "category": "normal",
+    "description": "anchor用locator返回的dict形式,验证三种anchor形式兼容",
+    "input": {
+      "anchor": {
+        "type": "locator_dict",
+        "anchor_text": "正文宋体四号"
+      },
+      "text": "通过dict锚点插入"
+    },
+    "expected_changes": [
+      "paragraph[8](新增)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "new_paragraph",
+        "value": "通过dict锚点插入"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T029": {
+    "name": "write_append_text_inherit",
+    "target_function": "writer.append_text_to_paragraph",
+    "category": "normal",
+    "description": "在段落7末尾追加文本并继承样式,验证run rPr与原run一致(字号28)、不改段落数",
+    "input": {
+      "anchor": 7,
+      "text": "【追加】",
+      "inherit_style": true
+    },
+    "expected_changes": [
+      "paragraph[7].runs[1](新增)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "paragraph[7]",
+        "value": "正文宋体四号【追加】"
+      },
+      {
+        "type": "run_rpr_inherited",
+        "location": "paragraph[7]",
+        "run": -1,
+        "source_run": 0
+      },
+      {
+        "type": "others_unchanged"
+      },
+      {
+        "type": "styles_xml_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T030": {
+    "name": "write_append_text_default",
+    "target_function": "writer.append_text_to_paragraph",
+    "category": "normal",
+    "description": "追加文本但不继承样式,验证新run无rPr",
+    "input": {
+      "anchor": 7,
+      "text": "无样式追加",
+      "inherit_style": false
+    },
+    "expected_changes": [
+      "paragraph[7].runs[1](新增)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "paragraph[7]",
+        "value": "无样式追加"
+      },
+      {
+        "type": "new_run_no_rpr",
+        "location": "paragraph[7]",
+        "run": -1
+      },
+      {
+        "type": "others_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T031": {
+    "name": "write_append_text_empty",
+    "target_function": "writer.append_text_to_paragraph",
+    "category": "exception",
+    "description": "空文本追加,应抛WriterError",
+    "input": {
+      "anchor": 7,
+      "text": ""
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T032": {
+    "name": "write_append_text_to_empty_para",
+    "target_function": "writer.append_text_to_paragraph",
+    "category": "boundary",
+    "description": "向空段落(段落0,无run)追加文本,验证无模板时新run无rPr但仍可追加",
+    "input": {
+      "anchor": 0,
+      "text": "向空段落追加"
+    },
+    "expected_changes": [
+      "paragraph[0].runs[0](新增)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "paragraph[0]",
+        "value": "向空段落追加"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T033": {
+    "name": "write_insert_text_after_para",
+    "target_function": "writer.insert_text_at_anchor",
+    "category": "normal",
+    "description": "按文本锚点'正文宋体四号'在其后插入新段落",
+    "input": {
+      "anchor_text": "正文宋体四号",
+      "new_text": "锚点插入",
+      "mode": "after_paragraph",
+      "inherit_style": true
+    },
+    "expected_changes": [
+      "paragraph[8](新增)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "new_paragraph",
+        "value": "锚点插入"
+      },
+      {
+        "type": "style_equals_source",
+        "location": "new_paragraph",
+        "source": "paragraph[7]"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T034": {
+    "name": "write_insert_text_append_mode",
+    "target_function": "writer.insert_text_at_anchor",
+    "category": "normal",
+    "description": "按文本锚点追加到段落末尾模式",
+    "input": {
+      "anchor_text": "正文宋体四号",
+      "new_text": "追加模式",
+      "mode": "append_to_paragraph",
+      "inherit_style": true
+    },
+    "expected_changes": [
+      "paragraph[7].runs[1](新增)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "paragraph[7]",
+        "value": "追加模式"
+      },
+      {
+        "type": "others_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T035": {
+    "name": "write_insert_text_anchor_notfound",
+    "target_function": "writer.insert_text_at_anchor",
+    "category": "exception",
+    "description": "锚点文本不存在,应抛LocateError",
+    "input": {
+      "anchor_text": "不存在的锚点xyz",
+      "new_text": "测试"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T036": {
+    "name": "write_insert_text_invalid_mode",
+    "target_function": "writer.insert_text_at_anchor",
+    "category": "exception",
+    "description": "mode非法,应抛WriterError",
+    "input": {
+      "anchor_text": "正文宋体四号",
+      "new_text": "测试",
+      "mode": "invalid_mode"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T037": {
+    "name": "del_paragraph_normal",
+    "target_function": "deleter.delete_paragraph",
+    "category": "normal",
+    "description": "删除段落35'内容填充',验证删除点前段落零差异、段落数-1",
+    "input": {
+      "anchor": 35
+    },
+    "expected_changes": [
+      "paragraph[35](删除)"
+    ],
+    "assertions": [
+      {
+        "type": "paragraph_removed",
+        "index": 35,
+        "removed_text": "内容填充"
+      },
+      {
+        "type": "prefix_unchanged",
+        "up_to": 34
+      },
+      {
+        "type": "styles_xml_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T038": {
+    "name": "del_paragraph_h1",
+    "target_function": "deleter.delete_paragraph",
+    "category": "normal",
+    "description": "删除标题1段落(索引2,含bookmarkEnd),验证bookmarkEnd随段移除",
+    "input": {
+      "anchor": 2
+    },
+    "expected_changes": [
+      "paragraph[2](删除)"
+    ],
+    "assertions": [
+      {
+        "type": "paragraph_removed",
+        "index": 2,
+        "removed_text": "标题1"
+      },
+      {
+        "type": "prefix_unchanged",
+        "up_to": 1
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T039": {
+    "name": "del_paragraph_at_end",
+    "target_function": "deleter.delete_paragraph",
+    "category": "boundary",
+    "description": "删除body末尾段落(38),验证sectPr保留",
+    "input": {
+      "anchor": 38
+    },
+    "expected_changes": [
+      "paragraph[38](删除)"
+    ],
+    "assertions": [
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T040": {
+    "name": "del_paragraph_anchor_index_oob",
+    "target_function": "deleter.delete_paragraph",
+    "category": "exception",
+    "description": "删除索引越界段落,抛LocateError",
+    "input": {
+      "anchor": 999
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T041": {
+    "name": "del_run_by_text_normal",
+    "target_function": "deleter.delete_run_by_text",
+    "category": "normal",
+    "description": "删除段落9的run'下划线',验证保留'宋体四号'与下划线样式、不改段落数",
+    "input": {
+      "anchor": 9,
+      "text": "下划线"
+    },
+    "expected_changes": [
+      "paragraph[9].runs[1](删除)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "paragraph[9]",
+        "value": "宋体四号"
+      },
+      {
+        "type": "text_not_contains",
+        "location": "paragraph[9]",
+        "value": "下划线"
+      },
+      {
+        "type": "run_rpr_preserved",
+        "location": "paragraph[9]",
+        "run": 0,
+        "attr": "u",
+        "value": "single"
+      },
+      {
+        "type": "others_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T042": {
+    "name": "del_run_by_text_first_run",
+    "target_function": "deleter.delete_run_by_text",
+    "category": "normal",
+    "description": "删除段落9的第一个run'宋体四号',验证保留'下划线'",
+    "input": {
+      "anchor": 9,
+      "text": "宋体四号"
+    },
+    "expected_changes": [
+      "paragraph[9].runs[0](删除)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "paragraph[9]",
+        "value": "下划线"
+      },
+      {
+        "type": "text_not_contains",
+        "location": "paragraph[9]",
+        "value": "宋体四号"
+      },
+      {
+        "type": "others_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T043": {
+    "name": "del_run_by_text_notfound",
+    "target_function": "deleter.delete_run_by_text",
+    "category": "exception",
+    "description": "段落内无匹配文本的run,抛DeleterError",
+    "input": {
+      "anchor": 9,
+      "text": "不存在的run文本"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "DeleterError"
+      }
+    ]
+  },
+  "T044": {
+    "name": "del_run_by_text_empty",
+    "target_function": "deleter.delete_run_by_text",
+    "category": "exception",
+    "description": "空文本删run,抛DeleterError",
+    "input": {
+      "anchor": 9,
+      "text": ""
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "DeleterError"
+      }
+    ]
+  },
+  "T045": {
+    "name": "del_table_row_normal",
+    "target_function": "deleter.delete_table_row",
+    "category": "normal",
+    "description": "删除表格第0行(C1|C2|C3|C4),验证剩2行且首行=1|2|3|4、body段落样式零差异",
+    "input": {
+      "table_index": 0,
+      "row": 0
+    },
+    "expected_changes": [
+      "table[0].tr[0](删除)"
+    ],
+    "assertions": [
+      {
+        "type": "table_row_count",
+        "table": 0,
+        "value": 2
+      },
+      {
+        "type": "table_cell_text",
+        "table": 0,
+        "row": 0,
+        "col": 0,
+        "value": "1"
+      },
+      {
+        "type": "all_body_paragraphs_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T046": {
+    "name": "del_table_row_last",
+    "target_function": "deleter.delete_table_row",
+    "category": "boundary",
+    "description": "删除表格最后行(行2),验证剩2行",
+    "input": {
+      "table_index": 0,
+      "row": 2
+    },
+    "expected_changes": [
+      "table[0].tr[2](删除)"
+    ],
+    "assertions": [
+      {
+        "type": "table_row_count",
+        "table": 0,
+        "value": 2
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T047": {
+    "name": "del_table_row_oob",
+    "target_function": "deleter.delete_table_row",
+    "category": "exception",
+    "description": "行索引越界,抛DeleterError",
+    "input": {
+      "table_index": 0,
+      "row": 99
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "DeleterError"
+      }
+    ]
+  },
+  "T048": {
+    "name": "clear_table_cell_normal",
+    "target_function": "deleter.clear_table_cell",
+    "category": "normal",
+    "description": "清空单元格(0,0,0)'C1',验证保留tcPr与空段落、单元格为空",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "col": 0,
+      "remove_paragraph": false
+    },
+    "expected_changes": [
+      "table[0].tr[0].tc[0](清空)"
+    ],
+    "assertions": [
+      {
+        "type": "table_cell_text",
+        "table": 0,
+        "row": 0,
+        "col": 0,
+        "value": ""
+      },
+      {
+        "type": "tcPr_preserved",
+        "table": 0,
+        "row": 0,
+        "col": 0
+      },
+      {
+        "type": "cell_has_paragraph",
+        "table": 0,
+        "row": 0,
+        "col": 0
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T049": {
+    "name": "clear_table_cell_remove_para",
+    "target_function": "deleter.clear_table_cell",
+    "category": "normal",
+    "description": "清空单元格并删除多余段落(remove_paragraph=true),验证保留一个空段落",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "col": 0,
+      "remove_paragraph": true
+    },
+    "expected_changes": [
+      "table[0].tr[0].tc[0](清空+删多余段)"
+    ],
+    "assertions": [
+      {
+        "type": "table_cell_text",
+        "table": 0,
+        "row": 0,
+        "col": 0,
+        "value": ""
+      },
+      {
+        "type": "cell_has_paragraph",
+        "table": 0,
+        "row": 0,
+        "col": 0
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T050": {
+    "name": "clear_table_cell_oob",
+    "target_function": "deleter.clear_table_cell",
+    "category": "exception",
+    "description": "单元格坐标越界,抛LocateError",
+    "input": {
+      "table_index": 0,
+      "row": 9,
+      "col": 9
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T051": {
+    "name": "clip_copy_para_same_doc",
+    "target_function": "clipboard.copy_paragraph_after",
+    "category": "normal",
+    "description": "同文档复制段落7到段落2后,验证新段落样式与源完全一致、图片关系复用",
+    "input": {
+      "source": 7,
+      "target": 2,
+      "remap_bookmarks": true
+    },
+    "expected_changes": [
+      "paragraph[3](粘贴)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "new_paragraph",
+        "value": "正文宋体四号"
+      },
+      {
+        "type": "style_equals_source",
+        "location": "new_paragraph",
+        "source": "paragraph[7]"
+      },
+      {
+        "type": "prefix_unchanged",
+        "up_to": 2
+      },
+      {
+        "type": "styles_xml_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T052": {
+    "name": "clip_copy_para_image",
+    "target_function": "clipboard.copy_paragraph_after",
+    "category": "normal",
+    "description": "同文档复制图片段31到段落7后,验证3个图片drawing关系rId8复用、可显示",
+    "input": {
+      "source": 31,
+      "target": 7,
+      "remap_bookmarks": true
+    },
+    "expected_changes": [
+      "paragraph[8](粘贴图片)"
+    ],
+    "assertions": [
+      {
+        "type": "image_count_in_paragraph",
+        "location": "new_paragraph",
+        "value": 3
+      },
+      {
+        "type": "image_embed",
+        "location": "new_paragraph",
+        "value": "rId8"
+      },
+      {
+        "type": "styles_xml_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T053": {
+    "name": "clip_copy_para_bookmark_remap",
+    "target_function": "clipboard.copy_paragraph_after",
+    "category": "normal",
+    "description": "复制含书签段落3(标题2,_Toc234486119),验证书签id重映射且name加_copy后缀",
+    "input": {
+      "source": 3,
+      "target": 7,
+      "remap_bookmarks": true
+    },
+    "expected_changes": [
+      "paragraph[8](粘贴含书签)"
+    ],
+    "assertions": [
+      {
+        "type": "remapped_bookmarks_gte",
+        "value": 1
+      },
+      {
+        "type": "bookmark_name_suffix",
+        "location": "new_paragraph",
+        "suffix": "_copy"
+      },
+      {
+        "type": "bookmark_id_gt",
+        "location": "new_paragraph",
+        "min": 4
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T054": {
+    "name": "clip_copy_para_self",
+    "target_function": "clipboard.copy_paragraph_after",
+    "category": "boundary",
+    "description": "源=目标段落(段落7复制到自身后),验证产生相邻副本、不报错",
+    "input": {
+      "source": 7,
+      "target": 7,
+      "remap_bookmarks": true
+    },
+    "expected_changes": [
+      "paragraph[8](粘贴副本)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "new_paragraph",
+        "value": "正文宋体四号"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T055": {
+    "name": "clip_copy_run_end",
+    "target_function": "clipboard.copy_run_to_paragraph",
+    "category": "normal",
+    "description": "复制段落7的run[0]到段落2末尾,验证保留字号28、不改段落数",
+    "input": {
+      "source_run_index": 0,
+      "source_paragraph": 7,
+      "target_paragraph": 2,
+      "position": "end"
+    },
+    "expected_changes": [
+      "paragraph[2].runs[2](粘贴run)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "paragraph[2]",
+        "value": "正文宋体四号"
+      },
+      {
+        "type": "run_rpr_preserved",
+        "location": "paragraph[2]",
+        "run": -1,
+        "attr": "sz",
+        "value": "28"
+      },
+      {
+        "type": "others_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T056": {
+    "name": "clip_copy_run_start",
+    "target_function": "clipboard.copy_run_to_paragraph",
+    "category": "normal",
+    "description": "复制段落7的run[0]到段落2开头(pPr后),验证插入位置正确",
+    "input": {
+      "source_run_index": 0,
+      "source_paragraph": 7,
+      "target_paragraph": 2,
+      "position": "start"
+    },
+    "expected_changes": [
+      "paragraph[2].runs[0](粘贴run)"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "paragraph[2]",
+        "value": "正文宋体四号"
+      },
+      {
+        "type": "others_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T057": {
+    "name": "clip_copy_run_oob",
+    "target_function": "clipboard.copy_run_to_paragraph",
+    "category": "exception",
+    "description": "run索引越界,抛ClipboardError",
+    "input": {
+      "source_run_index": 99,
+      "source_paragraph": 7,
+      "target_paragraph": 2,
+      "position": "end"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "ClipboardError"
+      }
+    ]
+  },
+  "T058": {
+    "name": "clip_copy_run_invalid_pos",
+    "target_function": "clipboard.copy_run_to_paragraph",
+    "category": "exception",
+    "description": "position非法,抛ClipboardError",
+    "input": {
+      "source_run_index": 0,
+      "source_paragraph": 7,
+      "target_paragraph": 2,
+      "position": "middle"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "ClipboardError"
+      }
+    ]
+  },
+  "T059": {
+    "name": "clip_copy_cell_append",
+    "target_function": "clipboard.copy_table_cell_to_cell",
+    "category": "normal",
+    "description": "append模式复制单元格(0,1,1)到(0,2,1),验证目标含源内容且保留原内容",
+    "input": {
+      "src_table": 0,
+      "src_row": 1,
+      "src_col": 1,
+      "tgt_table": 0,
+      "tgt_row": 2,
+      "tgt_col": 1,
+      "mode": "append"
+    },
+    "expected_changes": [
+      "table[0].tr[2].tc[1](追加)"
+    ],
+    "assertions": [
+      {
+        "type": "table_cell_text_contains",
+        "table": 0,
+        "row": 2,
+        "col": 1,
+        "value": "2"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T060": {
+    "name": "clip_copy_cell_replace",
+    "target_function": "clipboard.copy_table_cell_to_cell",
+    "category": "normal",
+    "description": "replace模式复制单元格(0,1,1)到(0,2,1),验证目标含源内容",
+    "input": {
+      "src_table": 0,
+      "src_row": 1,
+      "src_col": 1,
+      "tgt_table": 0,
+      "tgt_row": 2,
+      "tgt_col": 1,
+      "mode": "replace"
+    },
+    "expected_changes": [
+      "table[0].tr[2].tc[1](替换)"
+    ],
+    "assertions": [
+      {
+        "type": "table_cell_text_contains",
+        "table": 0,
+        "row": 2,
+        "col": 1,
+        "value": "2"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T061": {
+    "name": "clip_copy_cell_invalid_mode",
+    "target_function": "clipboard.copy_table_cell_to_cell",
+    "category": "exception",
+    "description": "mode非法,抛ClipboardError",
+    "input": {
+      "src_table": 0,
+      "src_row": 1,
+      "src_col": 1,
+      "tgt_table": 0,
+      "tgt_row": 2,
+      "tgt_col": 1,
+      "mode": "invalid"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "ClipboardError"
+      }
+    ]
+  },
+  "T062": {
+    "name": "clip_copy_cell_oob",
+    "target_function": "clipboard.copy_table_cell_to_cell",
+    "category": "exception",
+    "description": "源单元格越界,抛LocateError",
+    "input": {
+      "src_table": 0,
+      "src_row": 9,
+      "src_col": 9,
+      "tgt_table": 0,
+      "tgt_row": 0,
+      "tgt_col": 0,
+      "mode": "append"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T063": {
+    "name": "xdoc_copy_image_para",
+    "target_function": "clipboard.copy_paragraph_across_docs",
+    "category": "normal",
+    "description": "跨文档复制图片段31到贫瘠目标,验证图片media注入、rId重映射、可打开",
+    "input": {
+      "src_path": "input/base.docx",
+      "src_anchor": 31,
+      "tgt_path": "input/target_plain.docx",
+      "tgt_anchor": 0,
+      "output_path": "output/xdoc_T063.docx"
+    },
+    "expected_changes": [
+      "目标新增media+关系+段落"
+    ],
+    "assertions": [
+      {
+        "type": "copied_images_gte",
+        "value": 1
+      },
+      {
+        "type": "image_count_in_paragraph",
+        "location": "new_paragraph",
+        "value": 3
+      },
+      {
+        "type": "image_embed_not",
+        "location": "new_paragraph",
+        "value": "rId8"
+      },
+      {
+        "type": "media_added_in_target"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T064": {
+    "name": "xdoc_copy_list_para",
+    "target_function": "clipboard.copy_paragraph_across_docs",
+    "category": "normal",
+    "description": "跨文档复制列表段13(numId=1),验证编号定义注入、numId重映射",
+    "input": {
+      "src_path": "input/base.docx",
+      "src_anchor": 13,
+      "tgt_path": "input/target_plain.docx",
+      "tgt_anchor": 0,
+      "output_path": "output/xdoc_T064.docx"
+    },
+    "expected_changes": [
+      "目标numbering新增num+abstractNum"
+    ],
+    "assertions": [
+      {
+        "type": "num_map_has",
+        "src": "1"
+      },
+      {
+        "type": "new_paragraph_numid",
+        "value": "mapped"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T065": {
+    "name": "xdoc_copy_h1_para",
+    "target_function": "clipboard.copy_paragraph_across_docs",
+    "category": "normal",
+    "description": "跨文档复制标题段2(pStyle=1),验证样式注入、pPr指纹与源一致",
+    "input": {
+      "src_path": "input/base.docx",
+      "src_anchor": 2,
+      "tgt_path": "input/target_plain.docx",
+      "tgt_anchor": 0,
+      "output_path": "output/xdoc_T065.docx"
+    },
+    "expected_changes": [
+      "目标styles新增heading1"
+    ],
+    "assertions": [
+      {
+        "type": "located_pstyle",
+        "location": "new_paragraph",
+        "value": "1"
+      },
+      {
+        "type": "style_equals_source",
+        "location": "new_paragraph",
+        "source": "paragraph[2]"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T066": {
+    "name": "xdoc_copy_bookmark_para",
+    "target_function": "clipboard.copy_paragraph_across_docs",
+    "category": "normal",
+    "description": "跨文档复制含书签段3,验证书签id重映射、name加_copy",
+    "input": {
+      "src_path": "input/base.docx",
+      "src_anchor": 3,
+      "tgt_path": "input/target_plain.docx",
+      "tgt_anchor": 0,
+      "output_path": "output/xdoc_T066.docx"
+    },
+    "expected_changes": [
+      "目标新增段落+书签重映射"
+    ],
+    "assertions": [
+      {
+        "type": "remapped_bookmarks_gte",
+        "value": 1
+      },
+      {
+        "type": "bookmark_name_suffix",
+        "location": "new_paragraph",
+        "suffix": "_copy"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T067": {
+    "name": "xdoc_copy_normal_para_rpr",
+    "target_function": "clipboard.copy_paragraph_across_docs",
+    "category": "normal",
+    "description": "跨文档复制段7(正文宋体四号),验证run rPr与段落标记rPr指纹与源完全一致",
+    "input": {
+      "src_path": "input/base.docx",
+      "src_anchor": 7,
+      "tgt_path": "input/target_plain.docx",
+      "tgt_anchor": 0,
+      "output_path": "output/xdoc_T067.docx"
+    },
+    "expected_changes": [
+      "目标新增段落"
+    ],
+    "assertions": [
+      {
+        "type": "run_rpr_equals_source",
+        "location": "new_paragraph",
+        "run": 0,
+        "source": "paragraph[7]"
+      },
+      {
+        "type": "ppr_rpr_equals_source",
+        "location": "new_paragraph",
+        "source": "paragraph[7]"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T068": {
+    "name": "xdoc_copy_src_notfound",
+    "target_function": "clipboard.copy_paragraph_across_docs",
+    "category": "exception",
+    "description": "源段落锚点不存在,抛LocateError",
+    "input": {
+      "src_path": "input/base.docx",
+      "src_anchor": 999,
+      "tgt_path": "input/target_plain.docx",
+      "tgt_anchor": 0,
+      "output_path": "output/xdoc_T068.docx"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T069": {
+    "name": "verifier_self_compare",
+    "target_function": "verifier.compare_documents",
+    "category": "normal",
+    "description": "校验器自我对比(base.docx与自身),结果应为无差异",
+    "input": {
+      "doc_before": "input/base.docx",
+      "doc_after": "input/base.docx",
+      "expected_changes": null
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "unexpected_empty"
+      },
+      {
+        "type": "styles_xml_unchanged"
+      },
+      {
+        "type": "summary_is",
+        "value": "无差异"
+      }
+    ]
+  },
+  "T070": {
+    "name": "verifier_detect_change",
+    "target_function": "verifier.compare_documents",
+    "category": "normal",
+    "description": "故意改字号后对比,验证能检出runs[0].rPr.sz变化",
+    "input": {
+      "scenario": "modify_size_28_to_32",
+      "paragraph": 7
+    },
+    "expected_changes": [
+      "paragraph[7].runs[0].rPr.sz"
+    ],
+    "assertions": [
+      {
+        "type": "unexpected_contains",
+        "path": "runs[0].rPr.sz",
+        "expected": {
+          "val": "28"
+        },
+        "actual": {
+          "val": "32"
+        }
+      }
+    ]
+  },
+  "T071": {
+    "name": "verifier_expected_applied",
+    "target_function": "verifier.compare_documents",
+    "category": "normal",
+    "description": "改字号并声明为预期,验证放行后无意外、记入expected_applied",
+    "input": {
+      "scenario": "modify_size_28_to_32",
+      "paragraph": 7,
+      "expected": [
+        {
+          "paragraph": 7,
+          "path": "runs[0].rPr.sz"
+        }
+      ]
+    },
+    "expected_changes": [
+      "paragraph[7].runs[0].rPr.sz(预期)"
+    ],
+    "assertions": [
+      {
+        "type": "unexpected_empty"
+      },
+      {
+        "type": "expected_applied_contains",
+        "path": "runs[0].rPr.sz"
+      }
+    ]
+  },
+  "T072": {
+    "name": "verifier_fingerprint_stable",
+    "target_function": "verifier.extract_style_fingerprint",
+    "category": "normal",
+    "description": "同段落连续抽取两次指纹,验证哈希一致(可复现)",
+    "input": {
+      "paragraph": 7
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "fingerprint_stable",
+        "paragraph": 7
+      }
+    ]
+  },
+  "T073": {
+    "name": "verifier_validate_openable",
+    "target_function": "verifier.validate_openable",
+    "category": "normal",
+    "description": "验证base.docx可正常打开",
+    "input": {
+      "path": "input/base.docx"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "openable_true"
+      }
+    ]
+  },
+  "T074": {
+    "name": "verifier_validate_openable_corrupt",
+    "target_function": "verifier.validate_openable",
+    "category": "exception",
+    "description": "验证损坏文件(非zip)应返回False",
+    "input": {
+      "path": "input/not_a_docx.bin",
+      "content": "garbage"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "openable_false"
+      }
+    ]
+  },
+  "T075": {
+    "name": "tbl_insert_row_after_first",
+    "target_function": "writer.insert_table_row",
+    "category": "normal",
+    "description": "表格新增行:在行0后插入新行(模板行0),验证行数3->4、新行在索引1、单元格为空、保留tcPr样式",
+    "input": {
+      "table_index": 0,
+      "after_row": 0,
+      "template_row": 0
+    },
+    "expected_changes": [
+      "table[0].tr[1](新增空行)"
+    ],
+    "assertions": [
+      {
+        "type": "table_row_count",
+        "table": 0,
+        "value": 4
+      },
+      {
+        "type": "table_row_text",
+        "table": 0,
+        "row": 1,
+        "value": [
+          "",
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "type": "table_row_text",
+        "table": 0,
+        "row": 0,
+        "value": [
+          "C1",
+          "C2",
+          "C3",
+          "C4"
+        ]
+      },
+      {
+        "type": "new_row_tcPr_preserved",
+        "table": 0,
+        "row": 1
+      },
+      {
+        "type": "all_body_paragraphs_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T076": {
+    "name": "tbl_insert_row_at_end",
+    "target_function": "writer.insert_table_row",
+    "category": "normal",
+    "description": "在末尾行(行2)后新增行,验证行数3->4、新行在索引3",
+    "input": {
+      "table_index": 0,
+      "after_row": 2,
+      "template_row": 2
+    },
+    "expected_changes": [
+      "table[0].tr[3](新增)"
+    ],
+    "assertions": [
+      {
+        "type": "table_row_count",
+        "table": 0,
+        "value": 4
+      },
+      {
+        "type": "table_row_text",
+        "table": 0,
+        "row": 3,
+        "value": [
+          "",
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "type": "table_row_text",
+        "table": 0,
+        "row": 2,
+        "value": [
+          "5",
+          "6",
+          "7",
+          "8"
+        ]
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T077": {
+    "name": "tbl_insert_row_at_front",
+    "target_function": "writer.insert_table_row",
+    "category": "boundary",
+    "description": "after_row=-1插到表格最前,验证新行在索引0、原行0后移到行1",
+    "input": {
+      "table_index": 0,
+      "after_row": -1,
+      "template_row": 0
+    },
+    "expected_changes": [
+      "table[0].tr[0](新增最前)"
+    ],
+    "assertions": [
+      {
+        "type": "table_row_count",
+        "table": 0,
+        "value": 4
+      },
+      {
+        "type": "table_row_text",
+        "table": 0,
+        "row": 0,
+        "value": [
+          "",
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "type": "table_row_text",
+        "table": 0,
+        "row": 1,
+        "value": [
+          "C1",
+          "C2",
+          "C3",
+          "C4"
+        ]
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T078": {
+    "name": "tbl_insert_row_template_none",
+    "target_function": "writer.insert_table_row",
+    "category": "normal",
+    "description": "template_row=None,默认用after_row自身作模板,验证样式继承自锚点行",
+    "input": {
+      "table_index": 0,
+      "after_row": 1,
+      "template_row": null
+    },
+    "expected_changes": [
+      "table[0].tr[2](新增)"
+    ],
+    "assertions": [
+      {
+        "type": "table_row_count",
+        "table": 0,
+        "value": 4
+      },
+      {
+        "type": "table_row_text",
+        "table": 0,
+        "row": 2,
+        "value": [
+          "",
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T079": {
+    "name": "tbl_insert_row_fill_cells",
+    "target_function": "writer.insert_table_row",
+    "category": "normal",
+    "description": "新增行后用set_table_cell_text填入内容,验证新增行可写入且样式保留",
+    "input": {
+      "table_index": 0,
+      "after_row": 0,
+      "template_row": 0,
+      "then_fill": [
+        {
+          "col": 0,
+          "text": "新A"
+        },
+        {
+          "col": 1,
+          "text": "新B"
+        }
+      ]
+    },
+    "expected_changes": [
+      "table[0].tr[1](新增并填充)"
+    ],
+    "assertions": [
+      {
+        "type": "table_row_count",
+        "table": 0,
+        "value": 4
+      },
+      {
+        "type": "table_cell_text",
+        "table": 0,
+        "row": 1,
+        "col": 0,
+        "value": "新A"
+      },
+      {
+        "type": "table_cell_text",
+        "table": 0,
+        "row": 1,
+        "col": 1,
+        "value": "新B"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T080": {
+    "name": "tbl_insert_row_table_oob",
+    "target_function": "writer.insert_table_row",
+    "category": "exception",
+    "description": "表格索引越界,抛WriterError",
+    "input": {
+      "table_index": 9,
+      "after_row": 0,
+      "template_row": 0
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T081": {
+    "name": "tbl_insert_row_after_oob",
+    "target_function": "writer.insert_table_row",
+    "category": "exception",
+    "description": "after_row越界(表格仅3行),抛WriterError",
+    "input": {
+      "table_index": 0,
+      "after_row": 99,
+      "template_row": 0
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T082": {
+    "name": "tbl_insert_row_template_oob",
+    "target_function": "writer.insert_table_row",
+    "category": "exception",
+    "description": "template_row越界,抛WriterError",
+    "input": {
+      "table_index": 0,
+      "after_row": 0,
+      "template_row": 99
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T083": {
+    "name": "tbl_set_cell_replace",
+    "target_function": "writer.set_table_cell_text",
+    "category": "normal",
+    "description": "单元格写入(replace模式):把(0,0,0)'C1'改为'新内容',验证文本替换、保留tcPr与段落样式",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "col": 0,
+      "text": "新内容",
+      "mode": "replace",
+      "inherit_style": true
+    },
+    "expected_changes": [
+      "table[0].tr[0].tc[0](写入)"
+    ],
+    "assertions": [
+      {
+        "type": "table_cell_text",
+        "table": 0,
+        "row": 0,
+        "col": 0,
+        "value": "新内容"
+      },
+      {
+        "type": "tcPr_preserved",
+        "table": 0,
+        "row": 0,
+        "col": 0
+      },
+      {
+        "type": "table_cell_text",
+        "table": 0,
+        "row": 0,
+        "col": 1,
+        "value": "C2"
+      },
+      {
+        "type": "all_body_paragraphs_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T084": {
+    "name": "tbl_set_cell_append",
+    "target_function": "writer.set_table_cell_text",
+    "category": "normal",
+    "description": "单元格追加(append模式):在(0,0,0)'C1'后追加'追加',验证原文本保留、追加成功",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "col": 0,
+      "text": "追加",
+      "mode": "append",
+      "inherit_style": true
+    },
+    "expected_changes": [
+      "table[0].tr[0].tc[0](追加)"
+    ],
+    "assertions": [
+      {
+        "type": "table_cell_text_contains",
+        "table": 0,
+        "row": 0,
+        "col": 0,
+        "value": "C1"
+      },
+      {
+        "type": "table_cell_text_contains",
+        "table": 0,
+        "row": 0,
+        "col": 0,
+        "value": "追加"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T085": {
+    "name": "tbl_set_cell_inherit_false",
+    "target_function": "writer.set_table_cell_text",
+    "category": "normal",
+    "description": "inherit_style=false写入,验证新run无rPr(不继承单元格样式)",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "col": 0,
+      "text": "无样式",
+      "mode": "replace",
+      "inherit_style": false
+    },
+    "expected_changes": [
+      "table[0].tr[0].tc[0](写入无样式)"
+    ],
+    "assertions": [
+      {
+        "type": "table_cell_text",
+        "table": 0,
+        "row": 0,
+        "col": 0,
+        "value": "无样式"
+      },
+      {
+        "type": "new_run_no_rpr",
+        "location": "table[0].tr[0].tc[0]",
+        "run": -1
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T086": {
+    "name": "tbl_set_cell_to_empty_cell",
+    "target_function": "writer.set_table_cell_text",
+    "category": "boundary",
+    "description": "向空单元格写入(先clear再写),验证无模板时仍可写入",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "col": 0,
+      "text": "填入空格",
+      "mode": "replace",
+      "pre_clear": true
+    },
+    "expected_changes": [
+      "table[0].tr[0].tc[0](清空后写入)"
+    ],
+    "assertions": [
+      {
+        "type": "table_cell_text",
+        "table": 0,
+        "row": 0,
+        "col": 0,
+        "value": "填入空格"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T087": {
+    "name": "tbl_set_cell_empty_text",
+    "target_function": "writer.set_table_cell_text",
+    "category": "exception",
+    "description": "空文本写入,应抛WriterError(清空应走clear_table_cell)",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "col": 0,
+      "text": "",
+      "mode": "replace"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T088": {
+    "name": "tbl_set_cell_invalid_mode",
+    "target_function": "writer.set_table_cell_text",
+    "category": "exception",
+    "description": "mode非法,抛WriterError",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "col": 0,
+      "text": "测试",
+      "mode": "invalid"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T089": {
+    "name": "tbl_set_cell_coord_oob",
+    "target_function": "writer.set_table_cell_text",
+    "category": "exception",
+    "description": "单元格坐标越界,抛LocateError",
+    "input": {
+      "table_index": 0,
+      "row": 9,
+      "col": 9,
+      "text": "测试",
+      "mode": "replace"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T090": {
+    "name": "tbl_delete_row_normal",
+    "target_function": "deleter.delete_table_row",
+    "category": "normal",
+    "description": "删除表格行0(C1|C2|C3|C4),验证行数3->2、首行变为1|2|3|4、body段落样式零差异",
+    "input": {
+      "table_index": 0,
+      "row": 0
+    },
+    "expected_changes": [
+      "table[0].tr[0](删除)"
+    ],
+    "assertions": [
+      {
+        "type": "table_row_count",
+        "table": 0,
+        "value": 2
+      },
+      {
+        "type": "table_row_text",
+        "table": 0,
+        "row": 0,
+        "value": [
+          "1",
+          "2",
+          "3",
+          "4"
+        ]
+      },
+      {
+        "type": "all_body_paragraphs_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T091": {
+    "name": "tbl_delete_row_middle",
+    "target_function": "deleter.delete_table_row",
+    "category": "normal",
+    "description": "删除中间行(行1,1|2|3|4),验证行0和行2保留、行数3->2",
+    "input": {
+      "table_index": 0,
+      "row": 1
+    },
+    "expected_changes": [
+      "table[0].tr[1](删除)"
+    ],
+    "assertions": [
+      {
+        "type": "table_row_count",
+        "table": 0,
+        "value": 2
+      },
+      {
+        "type": "table_row_text",
+        "table": 0,
+        "row": 0,
+        "value": [
+          "C1",
+          "C2",
+          "C3",
+          "C4"
+        ]
+      },
+      {
+        "type": "table_row_text",
+        "table": 0,
+        "row": 1,
+        "value": [
+          "5",
+          "6",
+          "7",
+          "8"
+        ]
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T092": {
+    "name": "tbl_delete_then_insert_row",
+    "target_function": "deleter.delete_table_row",
+    "category": "normal",
+    "description": "删行后新增行(组合操作),验证行数恢复、结构稳定",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "then_insert": {
+        "after_row": 0,
+        "template_row": 0
+      }
+    },
+    "expected_changes": [
+      "table[0].tr[0](删除后新增)"
+    ],
+    "assertions": [
+      {
+        "type": "table_row_count",
+        "table": 0,
+        "value": 3
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T093": {
+    "name": "tbl_cell_query_content",
+    "target_function": "locator.locate_table_cell",
+    "category": "normal",
+    "description": "查:定位表格各单元格,验证返回正确文本(表格内容查)",
+    "input": {
+      "table_index": 0,
+      "row": 1,
+      "col": 2
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_text",
+        "value": "3"
+      },
+      {
+        "type": "no_modify"
+      }
+    ]
+  },
+  "T094": {
+    "name": "tbl_cell_crud_roundtrip",
+    "target_function": "writer.set_table_cell_text",
+    "category": "normal",
+    "description": "增改查删完整闭环:向空单元格写入->查询验证->清空->验证为空,验证全流程样式无损",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "col": 0,
+      "text": "CRUD测试",
+      "mode": "replace",
+      "crud_roundtrip": true
+    },
+    "expected_changes": [
+      "table[0].tr[0].tc[0](增改查删闭环)"
+    ],
+    "assertions": [
+      {
+        "type": "table_cell_text",
+        "table": 0,
+        "row": 0,
+        "col": 0,
+        "value": "CRUD测试"
+      },
+      {
+        "type": "tcPr_preserved",
+        "table": 0,
+        "row": 0,
+        "col": 0
+      },
+      {
+        "type": "all_body_paragraphs_unchanged"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T096": {
+    "name": "loc_by_heading_normal",
+    "target_function": "locator.locate_by_heading",
+    "category": "normal",
+    "description": "按标题文本+层级定位标题1(base.docx 用 pStyle=1)，验证段落2 pStyle=1 outlineLvl=None",
+    "input": {
+      "text": "标题1",
+      "level": 1
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_index",
+        "value": 2
+      },
+      {
+        "type": "located_text",
+        "value": "标题1"
+      },
+      {
+        "type": "located_pstyle",
+        "value": "1"
+      },
+      {
+        "type": "no_modify"
+      }
+    ]
+  },
+  "T097": {
+    "name": "loc_by_heading_level_none_degrade",
+    "target_function": "locator.locate_by_heading",
+    "category": "normal",
+    "description": "text=None 退化为第 occurrence 个该层级标题，验证向后兼容 locate_by_heading_level",
+    "input": {
+      "level": 1
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_index",
+        "value": 2
+      },
+      {
+        "type": "located_text",
+        "value": "标题1"
+      },
+      {
+        "type": "match_count_gte",
+        "value": 1
+      },
+      {
+        "type": "no_modify"
+      }
+    ]
+  },
+  "T098": {
+    "name": "loc_by_heading_not_found",
+    "target_function": "locator.locate_by_heading",
+    "category": "exception",
+    "description": "未命中文本应抛 LocateError（含已扫描标题数，便于排错）",
+    "input": {
+      "text": "不存在的标题xyz",
+      "level": 1
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T099": {
+    "name": "loc_by_heading_level_oob",
+    "target_function": "locator.locate_by_heading",
+    "category": "exception",
+    "description": "level 越界(10)应抛 LocateError",
+    "input": {
+      "level": 10
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T100": {
+    "name": "loc_by_heading_occurrence_zero",
+    "target_function": "locator.locate_by_heading",
+    "category": "exception",
+    "description": "occurrence<1 应抛 ValueError",
+    "input": {
+      "level": 1,
+      "occurrence": 0
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "ValueError"
+      }
+    ]
+  },
+  "T101": {
+    "name": "loc_in_section_normal",
+    "target_function": "locator.locate_in_section",
+    "category": "normal",
+    "description": "在标题1章节范围内找「自定义样式」(段落6)，验证 section_heading 索引=2",
+    "input": {
+      "section_text": "标题1",
+      "target_text": "自定义样式",
+      "level": 1
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_index",
+        "value": 6
+      },
+      {
+        "type": "located_text",
+        "value": "自定义样式"
+      },
+      {
+        "type": "no_modify"
+      }
+    ]
+  },
+  "T102": {
+    "name": "loc_in_section_same_paragraph",
+    "target_function": "locator.locate_in_section",
+    "category": "normal",
+    "description": "section 与 target 同一段（标题1段本身含「标题1」）也算命中",
+    "input": {
+      "section_text": "标题1",
+      "target_text": "标题1",
+      "level": 1
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_index",
+        "value": 2
+      },
+      {
+        "type": "no_modify"
+      }
+    ]
+  },
+  "T103": {
+    "name": "loc_in_section_target_not_found",
+    "target_function": "locator.locate_in_section",
+    "category": "exception",
+    "description": "范围内未命中 target 应抛 LocateError",
+    "input": {
+      "section_text": "标题1",
+      "target_text": "不存在的文本xyz",
+      "level": 1
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T104": {
+    "name": "loc_in_section_section_not_found",
+    "target_function": "locator.locate_in_section",
+    "category": "exception",
+    "description": "section 标题未找到应抛 LocateError",
+    "input": {
+      "section_text": "不存在的章节",
+      "target_text": "x",
+      "level": 1
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T105": {
+    "name": "loc_table_by_header_normal",
+    "target_function": "locator.locate_table_by_header",
+    "category": "normal",
+    "description": "按表头关键词[C1,C2]定位表0，验证 header_cells=[C1,C2,C3,C4]",
+    "input": {
+      "header_keywords": [
+        "C1",
+        "C2"
+      ]
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_table_index",
+        "value": 0
+      },
+      {
+        "type": "located_header_cells",
+        "value": [
+          "C1",
+          "C2",
+          "C3",
+          "C4"
+        ]
+      },
+      {
+        "type": "no_modify"
+      }
+    ]
+  },
+  "T106": {
+    "name": "loc_table_by_header_all_keywords",
+    "target_function": "locator.locate_table_by_header",
+    "category": "normal",
+    "description": "表头同时包含全部关键词[C3,C4]才命中",
+    "input": {
+      "header_keywords": [
+        "C3",
+        "C4"
+      ]
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "located_table_index",
+        "value": 0
+      },
+      {
+        "type": "no_modify"
+      }
+    ]
+  },
+  "T107": {
+    "name": "loc_table_by_header_not_found",
+    "target_function": "locator.locate_table_by_header",
+    "category": "exception",
+    "description": "未命中表头关键词应抛 LocateError",
+    "input": {
+      "header_keywords": [
+        "不存在的表头关键词"
+      ]
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T108": {
+    "name": "loc_table_by_header_empty_list",
+    "target_function": "locator.locate_table_by_header",
+    "category": "exception",
+    "description": "空 list 应抛 ValueError",
+    "input": {
+      "header_keywords": []
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "ValueError"
+      }
+    ]
+  },
+  "T109": {
+    "name": "replace_all_placeholders_normal",
+    "target_function": "writer.replace_all_placeholders",
+    "category": "normal",
+    "description": "同段4个占位符一次性替换(姓名/性别/年龄/职务)，验证无残留",
+    "input": {
+      "pre_setup": [
+        {
+          "op": "insert_paragraph_after",
+          "anchor": 7,
+          "text": "姓名：____ 性别：____ 年龄：____ 职务：____",
+          "inherit_style": true
+        }
+      ],
+      "anchor": 8,
+      "pattern": "_{2,}",
+      "values": [
+        "张三",
+        "男",
+        "18",
+        "销售"
+      ],
+      "run_props": {
+        "underline": true
+      }
+    },
+    "expected_changes": [
+      "paragraph[8](多占位符替换)"
+    ],
+    "assertions": [
+      {
+        "type": "replaced_count",
+        "value": 4
+      },
+      {
+        "type": "paragraph_text",
+        "paragraph": 8,
+        "exact": true,
+        "value": "姓名：张三 性别：男 年龄：18 职务：销售"
+      },
+      {
+        "type": "text_not_contains",
+        "location": "paragraph[8]",
+        "value": "____"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T110": {
+    "name": "replace_all_placeholders_single",
+    "target_function": "writer.replace_all_placeholders",
+    "category": "normal",
+    "description": "单个占位符也能用 replace_all（values 长度=1）",
+    "input": {
+      "pre_setup": [
+        {
+          "op": "insert_paragraph_after",
+          "anchor": 7,
+          "text": "地址：________",
+          "inherit_style": true
+        }
+      ],
+      "anchor": 8,
+      "pattern": "_{2,}",
+      "values": [
+        "广西南宁"
+      ]
+    },
+    "expected_changes": [
+      "paragraph[8](单占位符替换)"
+    ],
+    "assertions": [
+      {
+        "type": "replaced_count",
+        "value": 1
+      },
+      {
+        "type": "paragraph_text",
+        "paragraph": 8,
+        "exact": true,
+        "value": "地址：广西南宁"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T111": {
+    "name": "replace_all_placeholders_len_mismatch",
+    "target_function": "writer.replace_all_placeholders",
+    "category": "exception",
+    "description": "values 长度 != 命中数应抛 WriterError（明确告知命中N传M）",
+    "input": {
+      "pre_setup": [
+        {
+          "op": "insert_paragraph_after",
+          "anchor": 7,
+          "text": "姓名：____ 性别：____",
+          "inherit_style": true
+        }
+      ],
+      "anchor": 8,
+      "pattern": "_{2,}",
+      "values": [
+        "张三"
+      ]
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T112": {
+    "name": "replace_all_placeholders_no_hit",
+    "target_function": "writer.replace_all_placeholders",
+    "category": "exception",
+    "description": "命中 0 应抛 WriterError（不静默跳过）",
+    "input": {
+      "pre_setup": [
+        {
+          "op": "insert_paragraph_after",
+          "anchor": 7,
+          "text": "无占位符的普通段落",
+          "inherit_style": true
+        }
+      ],
+      "anchor": 8,
+      "pattern": "_{2,}",
+      "values": [
+        "值"
+      ]
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T113": {
+    "name": "set_paragraph_text_normal",
+    "target_function": "writer.set_paragraph_text",
+    "category": "normal",
+    "description": "整段替换段落7文本，保留 pPr 与 rPr 模板(字号28)",
+    "input": {
+      "anchor": 7,
+      "text": "整段替换后的新文本",
+      "inherit_style": true
+    },
+    "expected_changes": [
+      "paragraph[7](整段替换)"
+    ],
+    "assertions": [
+      {
+        "type": "paragraph_text",
+        "paragraph": 7,
+        "exact": true,
+        "value": "整段替换后的新文本"
+      },
+      {
+        "type": "run_rpr_preserved",
+        "location": "paragraph[7]",
+        "run": 0,
+        "attr": "sz",
+        "value": "28"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T114": {
+    "name": "set_paragraph_text_empty",
+    "target_function": "writer.set_paragraph_text",
+    "category": "normal",
+    "description": "text='' 清空段落全部 run(保留 pPr)，run_index=None 不抛",
+    "input": {
+      "anchor": 7,
+      "text": "",
+      "inherit_style": true
+    },
+    "expected_changes": [
+      "paragraph[7](清空)"
+    ],
+    "assertions": [
+      {
+        "type": "paragraph_text",
+        "paragraph": 7,
+        "exact": true,
+        "value": ""
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T115": {
+    "name": "set_paragraph_text_inherit_false",
+    "target_function": "writer.set_paragraph_text",
+    "category": "normal",
+    "description": "inherit_style=False 新 run 无 rPr",
+    "input": {
+      "anchor": 7,
+      "text": "无样式新文本",
+      "inherit_style": false
+    },
+    "expected_changes": [
+      "paragraph[7](整段替换无样式)"
+    ],
+    "assertions": [
+      {
+        "type": "paragraph_text",
+        "paragraph": 7,
+        "exact": true,
+        "value": "无样式新文本"
+      },
+      {
+        "type": "new_run_no_rpr",
+        "location": "paragraph[7]"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T116": {
+    "name": "set_cell_by_label_right",
+    "target_function": "writer.set_cell_by_label",
+    "category": "normal",
+    "description": "label=C1 右侧相邻单元格写入值(方向 right)",
+    "input": {
+      "table_index": 0,
+      "label": "C1",
+      "value": "右侧值",
+      "direction": "right"
+    },
+    "expected_changes": [
+      "table[0].tr[0].tc[1](标签右侧写入)"
+    ],
+    "assertions": [
+      {
+        "type": "cell_adjacent_value",
+        "table": 0,
+        "label": "C1",
+        "direction": "right",
+        "value": "右侧值"
+      },
+      {
+        "type": "table_cell_text",
+        "table": 0,
+        "row": 0,
+        "col": 1,
+        "value": "右侧值"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T117": {
+    "name": "set_cell_by_label_below",
+    "target_function": "writer.set_cell_by_label",
+    "category": "normal",
+    "description": "label=C1 下方相邻单元格写入值(方向 below)",
+    "input": {
+      "table_index": 0,
+      "label": "C1",
+      "value": "下方值",
+      "direction": "below"
+    },
+    "expected_changes": [
+      "table[0].tr[1].tc[0](标签下方写入)"
+    ],
+    "assertions": [
+      {
+        "type": "cell_adjacent_value",
+        "table": 0,
+        "label": "C1",
+        "direction": "below",
+        "value": "下方值"
+      },
+      {
+        "type": "table_cell_text",
+        "table": 0,
+        "row": 1,
+        "col": 0,
+        "value": "下方值"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T118": {
+    "name": "set_cell_by_label_label_not_found",
+    "target_function": "writer.set_cell_by_label",
+    "category": "exception",
+    "description": "label 未找到应抛 LocateError",
+    "input": {
+      "table_index": 0,
+      "label": "不存在的标签",
+      "value": "值"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T119": {
+    "name": "set_cell_by_label_row_end",
+    "target_function": "writer.set_cell_by_label",
+    "category": "exception",
+    "description": "label=C4 在行末尾无右侧相邻单元格应抛 WriterError",
+    "input": {
+      "table_index": 0,
+      "label": "C4",
+      "value": "值",
+      "direction": "right"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T120": {
+    "name": "add_page_break_before_normal",
+    "target_function": "structure.add_page_break_before",
+    "category": "normal",
+    "description": "给段落7加 pageBreakBefore，added=True",
+    "input": {
+      "anchor": 7
+    },
+    "expected_changes": [
+      "paragraph[7].pPr.pageBreakBefore(新增)"
+    ],
+    "assertions": [
+      {
+        "type": "page_break_before",
+        "paragraph": 7,
+        "value": true
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T121": {
+    "name": "add_page_break_before_idempotent",
+    "target_function": "structure.add_page_break_before",
+    "category": "normal",
+    "description": "已存在 pageBreakBefore 时再调 added=False(幂等)",
+    "input": {
+      "pre_setup": [
+        {
+          "op": "add_page_break_before",
+          "paragraph": 7
+        }
+      ],
+      "anchor": 7
+    },
+    "expected_changes": [
+      "paragraph[7].pPr.pageBreakBefore(幂等)"
+    ],
+    "assertions": [
+      {
+        "type": "page_break_before",
+        "paragraph": 7,
+        "value": true
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T122": {
+    "name": "remove_page_break_pbb",
+    "target_function": "structure.remove_page_break",
+    "category": "normal",
+    "description": "移除段落7的 pageBreakBefore(先用 pre_setup 加上)",
+    "input": {
+      "pre_setup": [
+        {
+          "op": "add_page_break_before",
+          "paragraph": 7
+        }
+      ],
+      "anchor": 7
+    },
+    "expected_changes": [
+      "paragraph[7].pPr.pageBreakBefore(移除)"
+    ],
+    "assertions": [
+      {
+        "type": "removed_flag",
+        "flag": "removed_pbb",
+        "value": true
+      },
+      {
+        "type": "page_break_before",
+        "paragraph": 7,
+        "value": false
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T123": {
+    "name": "remove_page_break_br",
+    "target_function": "structure.remove_page_break",
+    "category": "normal",
+    "description": "移除段内 run 的 <w:br type=page>（含空 run）",
+    "input": {
+      "pre_setup": [
+        {
+          "op": "append_run",
+          "anchor": 7,
+          "paragraph": 8
+        }
+      ],
+      "anchor": 8
+    },
+    "expected_changes": [
+      "paragraph[8].runs[](删 br)"
+    ],
+    "assertions": [
+      {
+        "type": "removed_flag",
+        "flag": "removed_br",
+        "value": true
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T124": {
+    "name": "remove_page_break_none",
+    "target_function": "structure.remove_page_break",
+    "category": "normal",
+    "description": "无分页可删时 removed_pbb=removed_br=False（不抛）",
+    "input": {
+      "anchor": 7
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "removed_flag",
+        "flag": "removed_pbb",
+        "value": false
+      },
+      {
+        "type": "removed_flag",
+        "flag": "removed_br",
+        "value": false
+      }
+    ]
+  },
+  "T125": {
+    "name": "remove_section_break_anchor",
+    "target_function": "structure.remove_section_break",
+    "category": "normal",
+    "description": "移除指定段(段落8)的内嵌 sectPr(先用 pre_setup 加上)",
+    "input": {
+      "pre_setup": [
+        {
+          "op": "add_inline_sectpr",
+          "paragraph": 8
+        }
+      ],
+      "anchor": 8
+    },
+    "expected_changes": [
+      "paragraph[8].pPr.sectPr(移除)"
+    ],
+    "assertions": [
+      {
+        "type": "removed_count",
+        "value": 1
+      },
+      {
+        "type": "no_inline_section_breaks"
+      },
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T126": {
+    "name": "remove_section_break_all_inline",
+    "target_function": "structure.remove_section_break",
+    "category": "normal",
+    "description": "all_inline=True 移除全文内嵌 sectPr",
+    "input": {
+      "pre_setup": [
+        {
+          "op": "add_inline_sectpr",
+          "paragraph": 8
+        },
+        {
+          "op": "add_inline_sectpr",
+          "paragraph": 10
+        }
+      ],
+      "all_inline": true
+    },
+    "expected_changes": [
+      "body(移除内嵌 sectPr)"
+    ],
+    "assertions": [
+      {
+        "type": "removed_count",
+        "value": 2
+      },
+      {
+        "type": "no_inline_section_breaks"
+      },
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T127": {
+    "name": "remove_section_break_neither",
+    "target_function": "structure.remove_section_break",
+    "category": "exception",
+    "description": "anchor 与 all_inline 都未传应抛 ValueError",
+    "input": {},
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "ValueError"
+      }
+    ]
+  },
+  "T128": {
+    "name": "delete_range_keep_start",
+    "target_function": "structure.delete_range",
+    "category": "normal",
+    "description": "删段落8~11(delete_start=False 保留 start=7)，验证段落7保留",
+    "input": {
+      "start_anchor": 7,
+      "end_anchor_exclusive": 12,
+      "delete_start": false
+    },
+    "expected_changes": [
+      "body[8:12](删除4段)"
+    ],
+    "assertions": [
+      {
+        "type": "deleted_paragraphs",
+        "value": 4
+      },
+      {
+        "type": "paragraph_text",
+        "paragraph": 7,
+        "exact": true,
+        "value": "正文宋体四号"
+      },
+      {
+        "type": "paragraph_text",
+        "paragraph": 8,
+        "exact": true,
+        "value": "链接"
+      },
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T129": {
+    "name": "delete_range_include_start",
+    "target_function": "structure.delete_range",
+    "category": "normal",
+    "description": "delete_start=True 连 start 段一起删",
+    "input": {
+      "start_anchor": 7,
+      "end_anchor_exclusive": 10,
+      "delete_start": true
+    },
+    "expected_changes": [
+      "body[7:10](删除3段含start)"
+    ],
+    "assertions": [
+      {
+        "type": "deleted_paragraphs",
+        "value": 3
+      },
+      {
+        "type": "paragraph_text",
+        "paragraph": 7,
+        "exact": true,
+        "value": "宋体四号突出显示黄色"
+      },
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T130": {
+    "name": "delete_range_end_before_start",
+    "target_function": "structure.delete_range",
+    "category": "exception",
+    "description": "end 在 start 之前应抛 StructureError",
+    "input": {
+      "start_anchor": 10,
+      "end_anchor_exclusive": 5
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "StructureError"
+      }
+    ]
+  },
+  "T131": {
+    "name": "delete_range_to_end",
+    "target_function": "structure.delete_range",
+    "category": "normal",
+    "description": "end_anchor_exclusive=None 删到 body 末尾 sectPr 前",
+    "input": {
+      "start_anchor": 35,
+      "end_anchor_exclusive": null,
+      "delete_start": true
+    },
+    "expected_changes": [
+      "body[35:末尾](删除到 sectPr 前)"
+    ],
+    "assertions": [
+      {
+        "type": "deleted_paragraphs",
+        "value": 4
+      },
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T132": {
+    "name": "delete_section_keep_heading",
+    "target_function": "structure.delete_section",
+    "category": "normal",
+    "description": "删「标题1」章节内容(保留标题)，base.docx 标题1章节延展到末尾",
+    "input": {
+      "section_text": "标题1",
+      "level": 1,
+      "delete_heading": false
+    },
+    "expected_changes": [
+      "body(删标题1章节内容)"
+    ],
+    "assertions": [
+      {
+        "type": "paragraph_text",
+        "paragraph": 2,
+        "exact": true,
+        "value": "标题1"
+      },
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T133": {
+    "name": "delete_section_with_heading",
+    "target_function": "structure.delete_section",
+    "category": "normal",
+    "description": "连标题一起删「标题1」",
+    "input": {
+      "section_text": "标题1",
+      "level": 1,
+      "delete_heading": true
+    },
+    "expected_changes": [
+      "body(删标题1章节含标题)"
+    ],
+    "assertions": [
+      {
+        "type": "text_not_contains",
+        "location": "paragraph[2]",
+        "value": "标题1"
+      },
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T134": {
+    "name": "delete_section_not_found",
+    "target_function": "structure.delete_section",
+    "category": "exception",
+    "description": "章节未找到应抛 LocateError",
+    "input": {
+      "section_text": "不存在的章节",
+      "level": 1
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "LocateError"
+      }
+    ]
+  },
+  "T135": {
+    "name": "insert_toc_field_full",
+    "target_function": "structure.insert_toc_field",
+    "category": "normal",
+    "description": "段落7后插「目  录」标题段 + 标准 TOC 域(pageBreak+更新提示)",
+    "input": {
+      "anchor": 7,
+      "toc_level": "1-3",
+      "title": "目  录",
+      "page_break": true,
+      "update_prompt": true
+    },
+    "expected_changes": [
+      "paragraph[8](目录标题段)",
+      "paragraph[9](TOC 域段)"
+    ],
+    "assertions": [
+      {
+        "type": "toc_field_present"
+      },
+      {
+        "type": "page_break_before",
+        "paragraph": 8,
+        "value": true
+      },
+      {
+        "type": "paragraph_text",
+        "paragraph": 8,
+        "exact": true,
+        "value": "目  录"
+      },
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T136": {
+    "name": "insert_toc_field_no_title",
+    "target_function": "structure.insert_toc_field",
+    "category": "normal",
+    "description": "title=None 只插 TOC 域段，title_paragraph_index=None",
+    "input": {
+      "anchor": 7,
+      "toc_level": "1-3",
+      "title": null,
+      "page_break": false,
+      "update_prompt": false
+    },
+    "expected_changes": [
+      "paragraph[8](TOC 域段)"
+    ],
+    "assertions": [
+      {
+        "type": "toc_field_present"
+      },
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T137": {
+    "name": "insert_toc_field_at_end",
+    "target_function": "structure.insert_toc_field",
+    "category": "normal",
+    "description": "anchor=末尾段(38)，新段插到 sectPr 前",
+    "input": {
+      "anchor": 38,
+      "toc_level": "1-3",
+      "title": "目录"
+    },
+    "expected_changes": [
+      "paragraph[39](目录标题段)",
+      "paragraph[40](TOC 域段)"
+    ],
+    "assertions": [
+      {
+        "type": "toc_field_present"
+      },
+      {
+        "type": "new_p_before_sectpr"
+      },
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T138": {
+    "name": "check_structure_base_pass",
+    "target_function": "verifier.check_structure",
+    "category": "normal",
+    "description": "base.docx 结构校验：1 个 H1(标题1)，无检查项时 passed=True",
+    "input": {},
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "structure_passed",
+        "value": true
+      },
+      {
+        "type": "h1_count",
+        "value": 1
+      }
+    ]
+  },
+  "T139": {
+    "name": "check_structure_h1_titles",
+    "target_function": "verifier.check_structure",
+    "category": "normal",
+    "description": "h1_titles=['标题1'] 顺序敏感匹配，passed=True",
+    "input": {
+      "h1_titles": [
+        "标题1"
+      ]
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "structure_passed",
+        "value": true
+      },
+      {
+        "type": "h1_count",
+        "value": 1
+      }
+    ]
+  },
+  "T140": {
+    "name": "check_structure_min_h1_fail",
+    "target_function": "verifier.check_structure",
+    "category": "normal",
+    "description": "min_h1_count=5 但实际 1 个 H1 -> violation passed=False",
+    "input": {
+      "min_h1_count": 5
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "structure_passed",
+        "value": false
+      },
+      {
+        "type": "structure_violation_check",
+        "check": "min_h1_count",
+        "present": true
+      }
+    ]
+  },
+  "T141": {
+    "name": "check_structure_toc_field_absent",
+    "target_function": "verifier.check_structure",
+    "category": "normal",
+    "description": "base.docx 无 TOC 域 -> toc_field=True 校验 violation",
+    "input": {
+      "toc_field": true
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "structure_passed",
+        "value": false
+      },
+      {
+        "type": "structure_violation_check",
+        "check": "toc_field",
+        "present": true
+      }
+    ]
+  },
+  "T142": {
+    "name": "check_structure_no_inline_sectpr",
+    "target_function": "verifier.check_structure",
+    "category": "normal",
+    "description": "base.docx 无内嵌分节符 -> no_inline_section_breaks=True 通过",
+    "input": {
+      "no_inline_section_breaks": true
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "structure_passed",
+        "value": true
+      }
+    ]
+  },
+  "T143": {
+    "name": "merge_two_docs",
+    "target_function": "structure.merge_documents",
+    "category": "normal",
+    "description": "合并两份docx: target_plain(master) + base.docx(part), 断言 total_inserted、sectPr 仍在、可打开、段落数正确",
+    "input": {
+      "master_path": "input/target_plain.docx",
+      "part_paths": [
+        "input/base.docx"
+      ],
+      "output_path": "output/merge_T143.docx"
+    },
+    "expected_changes": [
+      "master 末尾 sectPr 前插入 part 全部 body 子元素"
+    ],
+    "assertions": [
+      {
+        "type": "total_inserted",
+        "value": 44
+      },
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "openable"
+      },
+      {
+        "type": "paragraph_count",
+        "value": 42
+      }
+    ]
+  },
+  "T144": {
+    "name": "merge_part_with_images",
+    "target_function": "structure.merge_documents",
+    "category": "normal",
+    "description": "合并含图片的 part(base.docx) 到贫瘠目标 target_plain, 断言图片迁移成功(blip数>0)、可打开",
+    "input": {
+      "master_path": "input/target_plain.docx",
+      "part_paths": [
+        "input/base.docx"
+      ],
+      "output_path": "output/merge_T144.docx"
+    },
+    "expected_changes": [
+      "目标新增 media + 图片关系"
+    ],
+    "assertions": [
+      {
+        "type": "blip_count",
+        "value": 1,
+        "cmp": ">="
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T145": {
+    "name": "merge_empty_parts_raises",
+    "target_function": "structure.merge_documents",
+    "category": "exception",
+    "description": "边界: part_paths 空 -> raises ValueError",
+    "input": {
+      "master_path": "input/target_plain.docx",
+      "part_paths": [],
+      "output_path": "output/merge_T145_empty.docx"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "ValueError"
+      }
+    ]
+  },
+  "T145b": {
+    "name": "merge_with_page_break",
+    "target_function": "structure.merge_documents",
+    "category": "normal",
+    "description": "insert_page_break=True: 合并后首个 part 前插入分页段, 含 <w:br type=page>",
+    "input": {
+      "master_path": "input/target_plain.docx",
+      "part_paths": [
+        "input/base.docx"
+      ],
+      "output_path": "output/merge_T145b.docx",
+      "insert_page_break": true
+    },
+    "expected_changes": [
+      "首个 part 前插入分页段"
+    ],
+    "assertions": [
+      {
+        "type": "page_break_present",
+        "value": 1
+      },
+      {
+        "type": "merged_parts",
+        "value": 1
+      },
+      {
+        "type": "sectpr_is_last"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T146": {
+    "name": "copy_table_across_docs",
+    "target_function": "clipboard.copy_table_across_docs",
+    "category": "normal",
+    "description": "整表跨文档复制: base.docx 表[0] 复制到 target_plain, 断言目标表数+1、表格可定位(行数)、可打开",
+    "input": {
+      "src_path": "input/base.docx",
+      "src_table_index": 0,
+      "tgt_path": "input/target_plain.docx",
+      "tgt_anchor": 0,
+      "output_path": "output/copytable_T146.docx"
+    },
+    "expected_changes": [
+      "目标新增表格 + 依赖"
+    ],
+    "assertions": [
+      {
+        "type": "table_count",
+        "value": 1
+      },
+      {
+        "type": "table_row_count",
+        "table": 0,
+        "value": 3
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T147": {
+    "name": "copy_range_across_docs",
+    "target_function": "clipboard.copy_range_across_docs",
+    "category": "normal",
+    "description": "范围跨文档复制: base.docx P2..P7 范围复制到 target_plain, 断言 inserted_count、可打开",
+    "input": {
+      "src_path": "input/base.docx",
+      "start_anchor": 2,
+      "end_anchor_exclusive": 8,
+      "tgt_path": "input/target_plain.docx",
+      "tgt_anchor": 0,
+      "output_path": "output/copyrange_T147.docx"
+    },
+    "expected_changes": [
+      "目标新增 6 个段落"
+    ],
+    "assertions": [
+      {
+        "type": "inserted_count",
+        "value": 6
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T148": {
+    "name": "copy_range_with_image",
+    "target_function": "clipboard.copy_range_across_docs",
+    "category": "normal",
+    "description": "含图片段范围跨文档复制: base.docx 含 P31 的范围(P28..P35), 断言图片迁移(blip数>0)、可打开",
+    "input": {
+      "src_path": "input/base.docx",
+      "start_anchor": 28,
+      "end_anchor_exclusive": 35,
+      "tgt_path": "input/target_plain.docx",
+      "tgt_anchor": 0,
+      "output_path": "output/copyrange_T148.docx"
+    },
+    "expected_changes": [
+      "目标新增 media + 图片关系"
+    ],
+    "assertions": [
+      {
+        "type": "blip_count",
+        "value": 1,
+        "cmp": ">="
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T149": {
+    "name": "copy_table_oob_raises",
+    "target_function": "clipboard.copy_table_across_docs",
+    "category": "exception",
+    "description": "边界: 源表索引越界 -> raises ClipboardError",
+    "input": {
+      "src_path": "input/base.docx",
+      "src_table_index": 99,
+      "tgt_path": "input/target_plain.docx",
+      "tgt_anchor": 0,
+      "output_path": "output/copytable_T149.docx"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "ClipboardError"
+      }
+    ]
+  },
+  "T149b": {
+    "name": "copy_range_end_before_start_raises",
+    "target_function": "clipboard.copy_range_across_docs",
+    "category": "exception",
+    "description": "边界: end_anchor_exclusive 在 start 之前 -> raises ClipboardError",
+    "input": {
+      "src_path": "input/base.docx",
+      "start_anchor": 10,
+      "end_anchor_exclusive": 5,
+      "tgt_path": "input/target_plain.docx",
+      "tgt_anchor": 0,
+      "output_path": "output/copyrange_T149b.docx"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "ClipboardError"
+      }
+    ]
+  },
+  "T152": {
+    "name": "renumber_headings_base",
+    "target_function": "structure.renumber_headings",
+    "category": "normal",
+    "description": "base.docx(P2=H1,P3=H2,P4=H3) 重编号: P2 前缀「一、」、P3 前缀「1.1 」、P4 前缀「1.1.1 」",
+    "input": {
+      "levels": [
+        1,
+        2,
+        3
+      ],
+      "h1_style": "chinese"
+    },
+    "expected_changes": [
+      "P2/P3/P4 标题编号重写"
+    ],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "paragraph[2]",
+        "value": "一、"
+      },
+      {
+        "type": "text_contains",
+        "location": "paragraph[3]",
+        "value": "1.1 "
+      },
+      {
+        "type": "text_contains",
+        "location": "paragraph[4]",
+        "value": "1.1.1 "
+      },
+      {
+        "type": "renumbered_count",
+        "value": 3
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T153": {
+    "name": "renumber_headings_tobacco",
+    "target_function": "structure.renumber_headings",
+    "category": "normal",
+    "description": "烟草招标.docx(outlineLvl=0 标题) 重编号: 首个标题前缀「一、」、count>0",
+    "input": {
+      "doc_path": "input/烟草招标.docx",
+      "levels": [
+        1,
+        2,
+        3
+      ],
+      "h1_style": "chinese"
+    },
+    "expected_changes": [
+      "标题编号重写"
+    ],
+    "assertions": [
+      {
+        "type": "renumbered_count_gte",
+        "value": 1
+      },
+      {
+        "type": "first_renumbered_prefix",
+        "value": "一、"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T154": {
+    "name": "renumber_headings_skip_titles",
+    "target_function": "structure.renumber_headings",
+    "category": "boundary",
+    "description": "skip_titles=['目录'] 跳过匹配标题; 无标题文档 count=0 不抛",
+    "input": {
+      "levels": [
+        1,
+        2,
+        3
+      ],
+      "skip_titles": [
+        "目录"
+      ],
+      "h1_style": "chinese"
+    },
+    "expected_changes": [
+      "跳过目录标题"
+    ],
+    "assertions": [
+      {
+        "type": "renumbered_count",
+        "value": 3
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T155": {
+    "name": "insert_image_p7",
+    "target_function": "writer.insert_image",
+    "category": "normal",
+    "description": "insert_image insert image to P7, assert has a:blip, openable",
+    "input": {
+      "anchor": 7,
+      "image_path": "output/_test_img.png",
+      "inherit_style": true
+    },
+    "expected_changes": [
+      "paragraph[7].runs[N].drawing"
+    ],
+    "assertions": [
+      {
+        "type": "has_drawing"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T156": {
+    "name": "insert_image_width",
+    "target_function": "writer.insert_image",
+    "category": "normal",
+    "description": "insert_image width=Inches(2), assert wp:extent cx/cy set proportionally",
+    "input": {
+      "anchor": 7,
+      "image_path": "output/_test_img.png",
+      "width_pt": 2,
+      "inherit_style": true
+    },
+    "expected_changes": [
+      "paragraph[7].runs[N].drawing"
+    ],
+    "assertions": [
+      {
+        "type": "image_extent_set"
+      },
+      {
+        "type": "has_drawing"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T157": {
+    "name": "insert_image_nonexistent",
+    "target_function": "writer.insert_image",
+    "category": "exception",
+    "description": "insert_image nonexistent path -> raises WriterError",
+    "input": {
+      "anchor": 7,
+      "image_path": "output/_nonexistent_image.png"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T158": {
+    "name": "set_table_column_widths",
+    "target_function": "writer.set_table_column_widths",
+    "category": "normal",
+    "description": "set_table_column_widths table[0] 4 cols, assert tblGrid gridCol=4, tblLayout=fixed",
+    "input": {
+      "table_index": 0,
+      "widths_pt": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "layout": "fixed"
+    },
+    "expected_changes": [
+      "tbl[0].tblGrid/tcW"
+    ],
+    "assertions": [
+      {
+        "type": "tbl_grid_col_count",
+        "table": 0,
+        "value": 4
+      },
+      {
+        "type": "tbl_layout_fixed",
+        "table": 0
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T159": {
+    "name": "set_row_height",
+    "target_function": "writer.set_row_height",
+    "category": "normal",
+    "description": "set_row_height row 0, assert trHeight val/hRule",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "height_pt": 1,
+      "rule": "atLeast"
+    },
+    "expected_changes": [
+      "tbl[0].tr[0].trPr.trHeight"
+    ],
+    "assertions": [
+      {
+        "type": "row_has_trheight",
+        "table": 0,
+        "row": 0,
+        "rule": "atLeast"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T160": {
+    "name": "shade_cell",
+    "target_function": "writer.shade_cell",
+    "category": "normal",
+    "description": "shade_cell (0,0) fill FFE699, assert shd fill",
+    "input": {
+      "table_index": 0,
+      "row": 0,
+      "col": 0,
+      "fill": "FFE699"
+    },
+    "expected_changes": [
+      "tbl[0].tr[0].tc[0].tcPr.shd"
+    ],
+    "assertions": [
+      {
+        "type": "cell_shaded",
+        "table": 0,
+        "row": 0,
+        "col": 0,
+        "fill": "FFE699"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T161": {
+    "name": "set_table_borders",
+    "target_function": "writer.set_table_borders",
+    "category": "normal",
+    "description": "set_table_borders, assert tblBorders has 6 side children",
+    "input": {
+      "table_index": 0
+    },
+    "expected_changes": [
+      "tbl[0].tblPr.tblBorders"
+    ],
+    "assertions": [
+      {
+        "type": "tbl_borders_count",
+        "table": 0,
+        "value": 6
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T162": {
+    "name": "set_repeat_header_row",
+    "target_function": "writer.set_repeat_header_row",
+    "category": "normal",
+    "description": "set_repeat_header_row row 0, assert trPr has tblHeader",
+    "input": {
+      "table_index": 0,
+      "row": 0
+    },
+    "expected_changes": [
+      "tbl[0].tr[0].trPr.tblHeader"
+    ],
+    "assertions": [
+      {
+        "type": "row_has_tblheader",
+        "table": 0,
+        "row": 0
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T163": {
+    "name": "table_format_oob",
+    "target_function": "writer.set_table_column_widths",
+    "category": "exception",
+    "description": "table index oob -> raises WriterError",
+    "input": {
+      "table_index": 99,
+      "widths_pt": [
+        1
+      ],
+      "layout": "fixed"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T167": {
+    "name": "create_paragraph_style",
+    "target_function": "writer.create_paragraph_style",
+    "category": "normal",
+    "description": "create_paragraph_style MyTitle, assert styles.xml contains it, name correct",
+    "input": {
+      "style_id": "MyTitle",
+      "name": "My Title",
+      "based_on": "Normal",
+      "font_name": "宋体",
+      "font_size": 14,
+      "bold": true,
+      "color": "000000",
+      "alignment": "center"
+    },
+    "expected_changes": [
+      "styles.xml/style[MyTitle]"
+    ],
+    "assertions": [
+      {
+        "type": "style_exists",
+        "style_id": "MyTitle",
+        "name": "My Title"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T168": {
+    "name": "apply_style_p7",
+    "target_function": "writer.apply_style",
+    "category": "normal",
+    "description": "apply_style on P7 with MyTitle, assert P7 pStyle=val",
+    "input": {
+      "anchor": 7,
+      "style_id": "MyTitle",
+      "pre_setup": [
+        {
+          "op": "create_paragraph_style",
+          "style_id": "MyTitle",
+          "name": "My Title"
+        }
+      ]
+    },
+    "expected_changes": [
+      "paragraph[7].pPr.pStyle"
+    ],
+    "assertions": [
+      {
+        "type": "paragraph_pstyle",
+        "paragraph": 7,
+        "value": "MyTitle"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T169": {
+    "name": "set_run_font_p7",
+    "target_function": "writer.set_run_font",
+    "category": "normal",
+    "description": "set_run_font P7 SongTi, assert rFonts has eastAsia + all four attrs",
+    "input": {
+      "anchor": 7,
+      "font_name": "宋体",
+      "size": 14
+    },
+    "expected_changes": [
+      "paragraph[7].runs[*].rPr.rFonts"
+    ],
+    "assertions": [
+      {
+        "type": "run_fonts_set",
+        "paragraph": 7,
+        "east_asia": "宋体",
+        "ascii": "宋体"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T170": {
+    "name": "style_id_exists",
+    "target_function": "writer.create_paragraph_style",
+    "category": "exception",
+    "description": "style_id already exists -> raises WriterError",
+    "input": {
+      "style_id": "a",
+      "name": "Normal"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T170b": {
+    "name": "apply_style_nonexistent",
+    "target_function": "writer.apply_style",
+    "category": "exception",
+    "description": "apply nonexistent style -> raises WriterError",
+    "input": {
+      "anchor": 7,
+      "style_id": "NonExistentStyle"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "WriterError"
+      }
+    ]
+  },
+  "T164": {
+    "name": "add_comment_p7",
+    "target_function": "comments.add_comment",
+    "category": "normal",
+    "description": "给 base.docx P7 加批注, list_comments 确认新增, 文档可打开",
+    "input": {
+      "anchor": 7,
+      "text": "这是一条测试批注",
+      "author": "tester",
+      "initials": "ts"
+    },
+    "expected_changes": [
+      "commentRangeStart/End + commentReference"
+    ],
+    "assertions": [
+      {
+        "type": "comment_count",
+        "value": 2
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T165": {
+    "name": "delete_comment_existing",
+    "target_function": "comments.delete_comment",
+    "category": "normal",
+    "description": "删 base.docx 既有批注「这是一条批注」, count=0, 无悬空 commentReference",
+    "input": {
+      "comment_id_or_text": "这是一条批注",
+      "by": "text"
+    },
+    "expected_changes": [
+      "comments.xml/comment deleted"
+    ],
+    "assertions": [
+      {
+        "type": "comment_count",
+        "value": 0
+      },
+      {
+        "type": "no_dangling_comment_ref"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T166": {
+    "name": "comment_edge_cases",
+    "target_function": "comments.add_comment",
+    "category": "exception",
+    "description": "空文本 -> raises CommentError; delete 未命中 -> deleted_count=0",
+    "input": {
+      "anchor": 7,
+      "text": "",
+      "author": "tester",
+      "initials": "ts"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "CommentError"
+      }
+    ]
+  },
+  "T171": {
+    "name": "extract_outline_base",
+    "target_function": "locator.extract_outline",
+    "category": "normal",
+    "description": "extract_outline base.docx -> outline 含 P2(level1)/P3(level2)/P4(level3), count>=3",
+    "input": {},
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "outline_count_gte",
+        "value": 3
+      },
+      {
+        "type": "outline_has_entry",
+        "level": 1,
+        "paragraph_index": 2
+      },
+      {
+        "type": "outline_has_entry",
+        "level": 2,
+        "paragraph_index": 3
+      },
+      {
+        "type": "outline_has_entry",
+        "level": 3,
+        "paragraph_index": 4
+      }
+    ]
+  },
+  "T172": {
+    "name": "extract_outline_tobacco",
+    "target_function": "locator.extract_outline",
+    "category": "normal",
+    "description": "extract_outline 烟草招标.docx(outlineLvl 标题) -> count>0",
+    "input": {
+      "doc_path": "input/烟草招标.docx"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "outline_count_gte",
+        "value": 1
+      }
+    ]
+  },
+  "T173": {
+    "name": "extract_all_text_base",
+    "target_function": "reader.extract_all_text",
+    "category": "normal",
+    "description": "extract_all_text base.docx -> text 含「正文宋体四号」, paragraph_count>0, table_count=1",
+    "input": {},
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "ret_text",
+        "value": "正文宋体四号"
+      },
+      {
+        "type": "ret_paragraph_count_gt",
+        "value": 0
+      },
+      {
+        "type": "ret_table_count",
+        "value": 1
+      }
+    ]
+  },
+  "T174": {
+    "name": "to_markdown_base",
+    "target_function": "reader.to_markdown",
+    "category": "normal",
+    "description": "to_markdown base.docx -> markdown 含 '# ' 标题行 + 表格分隔行 '|---|'",
+    "input": {},
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "text_contains",
+        "location": "ret_markdown",
+        "value": "# "
+      },
+      {
+        "type": "text_contains",
+        "location": "ret_markdown",
+        "value": "---"
+      }
+    ]
+  },
+  "T175": {
+    "name": "get_footer_text_base_empty",
+    "target_function": "reader.get_footer_text",
+    "category": "normal",
+    "description": "base.docx 无 footer part（linked），get_footer_text 返回空 text、has_part=False、linked=True，且非 mutate",
+    "input": {},
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "ret_field_equals",
+        "field": "text",
+        "value": ""
+      },
+      {
+        "type": "ret_field_equals",
+        "field": "has_part",
+        "value": false
+      },
+      {
+        "type": "ret_field_equals",
+        "field": "linked",
+        "value": true
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T176": {
+    "name": "get_header_text_which_first_page",
+    "target_function": "reader.get_header_text",
+    "category": "normal",
+    "description": "base.docx first_page header 同样 linked 空；which=first_page 读回空，has_part=False、linked=True",
+    "input": {
+      "which": "first_page"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "ret_field_equals",
+        "field": "text",
+        "value": ""
+      },
+      {
+        "type": "ret_field_equals",
+        "field": "has_part",
+        "value": false
+      },
+      {
+        "type": "ret_field_equals",
+        "field": "which",
+        "value": "first_page"
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T177": {
+    "name": "get_footer_text_oob_section",
+    "target_function": "reader.get_footer_text",
+    "category": "exception",
+    "description": "section_index 越界 -> raises ReaderError",
+    "input": {
+      "section_index": 99
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "ReaderError"
+      }
+    ]
+  },
+  "T178": {
+    "name": "get_header_text_bad_which",
+    "target_function": "reader.get_header_text",
+    "category": "exception",
+    "description": "which 非法 -> raises ValueError",
+    "input": {
+      "which": "bogus"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "ValueError"
+      }
+    ]
+  },
+  "T179": {
+    "name": "set_footer_text_default",
+    "target_function": "structure.set_footer_text",
+    "category": "normal",
+    "description": "set_footer_text 设默认页脚「机密文档」居中，读回 text=机密文档 has_part=True",
+    "input": {
+      "text": "机密文档",
+      "align": "center"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "hf_text",
+        "kind": "footer",
+        "which": "default",
+        "value": "机密文档",
+        "exact": true
+      },
+      {
+        "type": "hf_has_part",
+        "kind": "footer",
+        "which": "default",
+        "value": true
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T180": {
+    "name": "set_header_text_first_page",
+    "target_function": "structure.set_header_text",
+    "category": "normal",
+    "description": "set_header_text 首页页眉 + 常规页眉 各自独立 part，读回各自文本",
+    "input": {
+      "text": "首页页眉",
+      "which": "first_page"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "hf_text",
+        "kind": "header",
+        "which": "first_page",
+        "value": "首页页眉",
+        "exact": true
+      },
+      {
+        "type": "hf_has_part",
+        "kind": "header",
+        "which": "first_page",
+        "value": true
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T181": {
+    "name": "set_footer_text_idempotent",
+    "target_function": "structure.set_footer_text",
+    "category": "normal",
+    "description": "set_footer_text 重复写同文本幂等：读回仍为该文本（不堆叠重复 run）",
+    "input": {
+      "text": "页脚A"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "hf_text",
+        "kind": "footer",
+        "which": "default",
+        "value": "页脚A",
+        "exact": true
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T182": {
+    "name": "set_footer_text_clear",
+    "target_function": "structure.set_footer_text",
+    "category": "normal",
+    "description": "set_footer_text text='' 清空首段 run（保留 part），读回空、has_part=True",
+    "input": {
+      "text": ""
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "hf_text",
+        "kind": "footer",
+        "which": "default",
+        "value": "",
+        "exact": true
+      },
+      {
+        "type": "hf_has_part",
+        "kind": "footer",
+        "which": "default",
+        "value": true
+      },
+      {
+        "type": "openable"
+      }
+    ]
+  },
+  "T183": {
+    "name": "set_header_text_oob_section",
+    "target_function": "structure.set_header_text",
+    "category": "exception",
+    "description": "section_index 越界 -> raises StructureError",
+    "input": {
+      "text": "x",
+      "section_index": 99
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "StructureError"
+      }
+    ]
+  },
+  "T184": {
+    "name": "set_footer_text_bad_align",
+    "target_function": "structure.set_footer_text",
+    "category": "exception",
+    "description": "align 非法 -> raises ValueError",
+    "input": {
+      "text": "x",
+      "align": "middle"
+    },
+    "expected_changes": [],
+    "assertions": [
+      {
+        "type": "raises",
+        "exception": "ValueError"
+      }
+    ]
+  }
+}

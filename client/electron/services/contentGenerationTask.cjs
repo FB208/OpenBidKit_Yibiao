@@ -2694,6 +2694,7 @@ function progressFor(leaves, sections) {
 
 const CONTENT_PHASE_LABELS = {
   planning: '正文编排',
+  'template-filling': '模板内容提取',
   restoring: '原方案还原',
   generating: '正文生成',
   'section-word-adjusting': '小节字数调整',
@@ -2709,6 +2710,7 @@ const CONTENT_PHASE_LABELS = {
 
 const CONTENT_PROGRESS_PROFILES = {
   full: {
+    'template-filling': [0, 8],
     planning: [0, 12],
     restoring: [12, 18],
     generating: [18, 58],
@@ -2777,6 +2779,10 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
   if (phase === 'planning') {
     completed = stats.planning_completed;
     total = stats.planning_total;
+    phaseProgress = percentageFor(completed, total);
+  } else if (phase === 'template-filling') {
+    completed = stats.template_fill_completed;
+    total = stats.template_fill_total;
     phaseProgress = percentageFor(completed, total);
   } else if (phase === 'restoring') {
     completed = stats.restoration_completed;
@@ -2912,7 +2918,7 @@ function withSection(sections, item, partial) {
   };
 }
 
-async function runContentGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask: updateManagedTask, checkpointTask: checkpointManagedTask, payload, taskControl, previousState }) {
+async function runContentGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, templateFillService, updateTask: updateManagedTask, checkpointTask: checkpointManagedTask, payload, taskControl, previousState }) {
   const resume = Boolean(payload.resume);
   const storedPlan = resume ? (previousState || {}) : (workspaceStore.loadTechnicalPlan() || {});
   const wordControl = normalizeOutlineWordControlSnapshot(storedPlan.outlineWordControlSnapshot);
@@ -2981,9 +2987,11 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     outlineData = { ...outlineData, outline: clearOutlineContent(outlineData.outline) };
   }
 
+  const templateLeaves = collectLeafContexts(outlineData.outline)
+    .filter(({ item }) => item?.content_mode === 'template-fill');
   let leaves = collectLeafContexts(outlineData.outline)
     .filter(({ item }) => item?.content_mode === 'ai-generate');
-  if (!leaves.length) {
+  if (!leaves.length && !templateLeaves.length) {
     throw new Error('当前目录没有标记为“AI生成”的正文小节');
   }
   const regenerateRequirement = resume ? contentRuntime.regenerate_requirement : String(payload.requirement || '').trim();
@@ -3009,6 +3017,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     phase: 'planning',
     planning_total: 0,
     planning_completed: 0,
+    template_fill_total: templateLeaves.length,
+    template_fill_completed: 0,
     restoration_total: 0,
     restoration_completed: 0,
     generation_total: 0,
@@ -3182,7 +3192,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     ? `准备重试内容矫正，共 ${leaves.length} 个已生成小节。`
     : resume
       ? `继续已暂停的正文生成任务，共 ${leaves.length} 个小节。`
-      : `准备生成正文，共 ${leaves.length} 个小节。`];
+      : `准备生成正文，共 ${leaves.length} 个 AI 生成小节${templateLeaves.length ? `、${templateLeaves.length} 个模板填写小节` : ''}。`];
   if (targetItemId) {
     logs = [`准备重新生成正文小节：${targetItemId}。`];
   } else if (retryFailedSections) {
@@ -6514,6 +6524,74 @@ workspace 文件说明：
   }
 
   try {
+    // 模板填写阶段：从招标原始 Word 提取模板小节快照，独立于 AI 正文；单节点失败不阻塞后续流程。
+    const runTemplateFillStage = templateFillService
+      && templateLeaves.length > 0
+      && !resume
+      && !retryContentCorrection
+      && !rerunIllustrations
+      && !retryFailedSections
+      && !continuePostProcessing
+      && !targetItemId;
+    let templateFillSummary = null;
+    if (runTemplateFillStage) {
+      contentStats.phase = 'template-filling';
+      logs = [...logs, `开始模板填写阶段：共 ${templateLeaves.length} 个模板填写小节，先从招标原始 Word 提取内容快照。`];
+      publishTaskUpdate({ status: 'running', logs, stats: statsSnapshot() });
+      let templateFillCompleted = 0;
+      const templateTitleById = new Map(templateLeaves.map(({ item }) => [item.id, item.title || '未命名章节']));
+      const fillStatusLabels = { success: '成功', error: '失败', skipped: '跳过', pending: '待处理', running: '处理中' };
+      try {
+        templateFillSummary = await templateFillService.fillTemplateLeaves({
+          onUpdate: (patch) => {
+            templateFillCompleted += Object.keys(patch).length;
+            contentStats.template_fill_completed = templateFillCompleted;
+            for (const [fillNodeId, fill] of Object.entries(patch)) {
+              const label = fillStatusLabels[fill?.status] || fill?.status || '未知';
+              logs = [...logs, `模板填写（${templateTitleById.get(fillNodeId) || fillNodeId}）：${label}${fill?.error ? `，${fill.error}` : ''}。`];
+            }
+            checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
+              templateFills: patch,
+            });
+          },
+        });
+      } catch (error) {
+        logs = [...logs, `模板填写阶段异常：${error?.message || error}。模板填写已中断，不影响 AI 正文生成。`];
+      }
+      if (templateFillSummary) {
+        const fillFailed = templateFillSummary.error || 0;
+        logs = [...logs, `模板填写阶段结束：成功 ${templateFillSummary.success || 0} 个，失败 ${fillFailed} 个，跳过 ${templateFillSummary.skipped || 0} 个${fillFailed ? '，可在正文页对失败小节单独重试' : ''}。`];
+        writeDeveloperLog('content.template_fill.completed', { ...templateFillSummary });
+      }
+    }
+
+    if (!leaves.length) {
+      // 目录里只有模板填写小节：模板阶段完成后直接收尾，不进入 AI 正文流程。
+      const fillFailedCount = templateFillSummary?.error || 0;
+      const fillSkippedCount = templateFillSummary?.skipped || 0;
+      contentStats.phase = 'done';
+      logs = [...logs, fillFailedCount || fillSkippedCount
+        ? `模板填写任务结束：${fillFailedCount} 个小节失败，${fillSkippedCount} 个小节跳过。`
+        : '模板填写任务完成。'];
+      writeDeveloperLog('content.task.completed', {
+        status: fillFailedCount ? 'error' : 'success',
+        stats: statsSnapshot(),
+        template_only: true,
+      });
+      const templateOnlyPatch = { status: 'success', logs, stats: statsSnapshot(), pause_requested: false };
+      if (fillFailedCount) {
+        templateOnlyPatch.status = 'error';
+        templateOnlyPatch.error = `模板填写有 ${fillFailedCount} 个小节失败，可在正文页对失败小节单独重试`;
+      }
+      checkpointTask(templateOnlyPatch, {
+        outlineData,
+        contentGenerationSections: sections,
+        contentGenerationPlans: storedContentPlans,
+        contentGenerationRuntime: undefined,
+      });
+      return;
+    }
+
     if (continuePostProcessing) {
       const ignoredContexts = leaves.filter(({ item }) => isUnresolvedContentSection(sections[item.id]));
       for (const { item } of ignoredContexts) {

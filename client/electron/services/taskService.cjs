@@ -252,6 +252,11 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
   const callbackSubscribers = new Set();
   const activeTasks = new Map();
   const activeTaskControls = new Map();
+  let templateFillService = null;
+
+  function setTemplateFillService(service) {
+    templateFillService = service || null;
+  }
 
   function emit(task, snapshot) {
     const event = { task, ...snapshot };
@@ -760,7 +765,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       () => createAgentUserTaskContext(type, definition, payload, currentTask),
       { queueScopeId, signal: taskControl.signal },
     );
-    runner({ aiService: runnerAiService, agentService: runnerAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, checkpointTask, payload, taskControl, previousState }).catch((error) => {
+    runner({ aiService: runnerAiService, agentService: runnerAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, templateFillService, updateTask, checkpointTask, payload, taskControl, previousState }).catch((error) => {
       if (!taskControl.signal.aborted) {
         checkpointTask({ status: 'error', error: error.message || '任务执行失败' });
       }
@@ -1155,6 +1160,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
   return {
     subscribe,
     subscribeCallback,
+    setTemplateFillService,
     startBidSectionExtraction(payload) {
       return startManagedTask('bid-section-extraction', payload, runBidSectionExtractionTask, {
         bidSectionMode: 'multiple',

@@ -31,6 +31,8 @@ const { createLicenseService } = require('../services/licenseService.cjs');
 const { createRejectionCheckStore } = require('../services/rejectionCheckStore.cjs');
 const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
 const { createSystemFontService } = require('../services/systemFontService.cjs');
+const { createDocxAgentService } = require('../services/docxAgentService.cjs');
+const { createTemplateFillService } = require('../services/templateFillService.cjs');
 const { clearOrphanedGeneratedImages, clearStalePiTaskArchives, runHistoricalStorageCleanup } = require('../services/storageCleanupService.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
 const { createAgentWorkspaceService } = require('../services/agentWorkspaceService.cjs');
@@ -221,7 +223,7 @@ function registerWorkspaceDatabaseStatusIpc({ mainWindow }) {
   };
 }
 
-function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, updateStatus }) {
+function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, updateStatus, exportContextRef }) {
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
   runHistoricalStorageCleanup({ app, db: sqliteDatabase.db, configStore, onStatus: updateStatus });
   clearStalePiTaskArchives(app);
@@ -235,6 +237,14 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const templateStore = createTemplateStore({ db: sqliteDatabase.db });
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
   const taskService = createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
+  const templateFillService = createTemplateFillService({ store: technicalPlanStore, docxAgentService });
+  taskService.setTemplateFillService(templateFillService);
+  if (exportContextRef) {
+    exportContextRef.current = {
+      getTemplateFills: technicalPlanStore.getTemplateFills,
+      resolveWorkspaceFilePath: technicalPlanStore.resolveWorkspaceFilePath,
+    };
+  }
   const agentWorkspaceService = createAgentWorkspaceService({ agentService, taskService, technicalPlanStore });
   agentWorkspaceServiceRef = agentWorkspaceService;
   technicalPlanStore.setAgentWorkspaceChangeListener(() => agentWorkspaceService.emitWorkspacesChanged());
@@ -244,7 +254,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
 
   clearWorkspaceDatabaseIpc();
   registerKnowledgeBaseIpc({ knowledgeBaseService });
-  registerTechnicalPlanIpc({ technicalPlanStore, taskService });
+  registerTechnicalPlanIpc({ technicalPlanStore, taskService, templateFillService });
   registerDuplicateCheckIpc({ duplicateCheckStore });
   registerRejectionCheckIpc({ rejectionCheckStore, taskService });
   registerTemplateIpc({ templateStore });
@@ -279,7 +289,9 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const autoConfirmationService = createAutoConfirmationService({ configStore });
   const agentService = createAgentService({ app, configStore, aiService, licenseService, autoConfirmationService });
   const fileService = createFileService({ app, configStore });
-  const exportService = createExportService({ configStore });
+  const docxAgentService = createDocxAgentService({ app });
+  const exportContextRef = { current: null };
+  const exportService = createExportService({ configStore, docxAgentService, getTemplateFillContext: () => exportContextRef.current });
   const systemFontService = createSystemFontService();
   const databaseStatus = registerWorkspaceDatabaseStatusIpc({ mainWindow });
   let workspaceDatabaseStarted = false;
@@ -399,7 +411,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     databaseStatus.updateStatus({ phase: 'checking', ready: false, message: '正在检查本地数据库' });
     setTimeout(() => {
       try {
-        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, updateStatus: databaseStatus.updateStatus });
+        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, updateStatus: databaseStatus.updateStatus, exportContextRef });
         setTimeout(() => {
           void agentService.warmup?.().catch((error) => {
             console.warn('[agent] warmup failed', error?.message || String(error));

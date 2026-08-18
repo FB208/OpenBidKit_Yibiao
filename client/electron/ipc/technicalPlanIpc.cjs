@@ -1,6 +1,6 @@
 const { ipcMain } = require('electron');
 
-function registerTechnicalPlanIpc({ technicalPlanStore, taskService }) {
+function registerTechnicalPlanIpc({ technicalPlanStore, taskService, templateFillService }) {
   ipcMain.handle('technical-plan:load-state', () => technicalPlanStore.loadTechnicalPlan());
   ipcMain.handle('technical-plan:import-tender-document', (_event, filePaths) => taskService.importTenderDocument(filePaths));
   ipcMain.handle('technical-plan:remove-tender-document', (_event, sourceId) => taskService.removeTenderDocument(sourceId));
@@ -21,6 +21,10 @@ function registerTechnicalPlanIpc({ technicalPlanStore, taskService }) {
   ipcMain.handle('technical-plan:save-global-facts', (_event, globalFacts) => technicalPlanStore.saveGlobalFacts(globalFacts));
   ipcMain.handle('technical-plan:save-content-generation-options', (_event, options) => technicalPlanStore.saveContentGenerationOptions(options));
   ipcMain.handle('technical-plan:save-chapter-content', (_event, payload) => technicalPlanStore.saveChapterContent(payload));
+  ipcMain.handle('technical-plan:retry-template-fill', async (_event, nodeId) => {
+    const summary = await templateFillService.fillTemplateLeaves({ nodeIds: [nodeId], force: true });
+    return { summary, fill: technicalPlanStore.getTemplateFills()?.[nodeId] || null };
+  });
   ipcMain.handle('technical-plan:clear', () => taskService.resetTechnicalPlan());
 }
 

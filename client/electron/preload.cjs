@@ -173,6 +173,7 @@ const bridge = {
     saveGlobalFacts: (globalFacts) => ipcRenderer.invoke('technical-plan:save-global-facts', globalFacts),
     saveContentGenerationOptions: (options) => ipcRenderer.invoke('technical-plan:save-content-generation-options', options),
     saveChapterContent: (payload) => ipcRenderer.invoke('technical-plan:save-chapter-content', payload),
+    retryTemplateFill: (nodeId) => ipcRenderer.invoke('technical-plan:retry-template-fill', nodeId),
     clear: () => ipcRenderer.invoke('technical-plan:clear'),
   },
   duplicateCheck: {

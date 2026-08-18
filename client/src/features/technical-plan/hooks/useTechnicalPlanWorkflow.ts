@@ -35,6 +35,7 @@ const initialState: TechnicalPlanState = {
   contentGenerationTask: undefined,
   contentGenerationSections: {},
   contentGenerationPlans: {},
+  templateFills: {},
   contentGenerationRuntime: undefined,
   outlineData: null,
 };

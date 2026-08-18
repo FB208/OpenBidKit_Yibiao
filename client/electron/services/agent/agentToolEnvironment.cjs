@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {
   getBundledAgentToolsBinDir,
+  getDocxAgentCliPath,
 } = require('../../utils/paths.cjs');
 
 const SHIM_COMMANDS = [
@@ -932,11 +933,33 @@ function writeToolRunner(binDir) {
   return runnerPath;
 }
 
-function ensureRuntimeShims(binDir) {
+function writeDocxAgentShim(binDir, cliPath) {
+  if (!cliPath) return;
+  if (process.platform === 'win32') {
+    writeFileIfChanged(path.join(binDir, 'docx-agent.cmd'), [
+      '@echo off',
+      'setlocal',
+      'set "PYTHONUTF8=1"',
+      'set "PYTHONIOENCODING=utf-8"',
+      `python "${cliPath}" %*`,
+      'exit /b %ERRORLEVEL%',
+      '',
+    ].join('\r\n'));
+    return;
+  }
+  writeFileIfChanged(path.join(binDir, 'docx-agent'), [
+    '#!/bin/sh',
+    `PYTHONUTF8=1 exec python3 "${cliPath.replace(/"/g, '\\"')}" "$@"`,
+    '',
+  ].join('\n'), 0o755);
+}
+
+function ensureRuntimeShims(binDir, docxAgentCliPath) {
   fs.mkdirSync(binDir, { recursive: true });
   const runnerPath = writeToolRunner(binDir);
   writeNodeShim(binDir);
   SHIM_COMMANDS.forEach((command) => writeCommandShim(binDir, command, runnerPath));
+  writeDocxAgentShim(binDir, docxAgentCliPath);
   return runnerPath;
 }
 
@@ -960,7 +983,7 @@ function prependPathEntries(env, entries) {
 function ensureAgentToolEnvironment({ app, runtimeRoot, workspaceDir, writeInstructions = false } = {}) {
   const runtimeToolsBinDir = getRuntimeToolsBinDir(runtimeRoot);
   const bundledToolsBinDir = getBundledAgentToolsBinDir(app);
-  ensureRuntimeShims(runtimeToolsBinDir);
+  ensureRuntimeShims(runtimeToolsBinDir, app ? getDocxAgentCliPath(app) : '');
   verifyBundledTools(bundledToolsBinDir);
   const agentsPath = writeInstructions ? writeAgentInstructionsFile(workspaceDir) : '';
   return {

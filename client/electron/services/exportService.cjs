@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { fileURLToPath } = require('node:url');
 const { app, dialog, nativeImage } = require('electron');
@@ -10,8 +11,10 @@ const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.
 const { REMOTE_IMAGE_RETRY_ATTEMPTS, REMOTE_IMAGE_RETRY_DELAY_MS } = require('../utils/remoteImageRetry.cjs');
 const { renderMarkdownHtml } = require('../utils/renderMarkdownHtml.cjs');
 const { getLocalImageRenderService } = require('./localImageRenderService.cjs');
+const { buildTemplateFillBookmarkName } = require('./templateFillService.cjs');
 const {
   AlignmentType,
+  Bookmark,
   BorderStyle,
   Document,
   ExternalHyperlink,
@@ -185,7 +188,7 @@ function countOutlineStats(items = []) {
   return { leafCount, mermaidCount };
 }
 
-function buildPendingContentModeParagraph(item) {
+function buildPendingContentModeParagraph(item, context) {
   if (String(item?.content || '').trim()) return null;
   let message = '';
   if (item?.content_mode === 'template-fill') {
@@ -195,9 +198,26 @@ function buildPendingContentModeParagraph(item) {
   } else if (item?.content_mode === 'other') {
     message = `待处理：${String(item?.content_mode_note || '').trim() || '该小节采用其他特殊处理模式。'}`;
   }
-  return message
-    ? paragraph([textRun(`[${message}]`, { color: '8A650B', italics: true })], { after: 120 })
-    : null;
+  if (!message) return null;
+  const run = textRun(`[${message}]`, { color: '8A650B', italics: true });
+  const fill = context?.templateFills?.[item?.id];
+  if (item?.content_mode === 'template-fill' && fill?.status === 'success' && fill.snapshotRelPath) {
+    // 导出锚点书签与占位段共存；粘贴成功后 CLI 会按书签删除占位段。
+    return paragraph([new Bookmark({ id: buildTemplateFillBookmarkName(item.id), children: [run] })], { after: 120 });
+  }
+  return paragraph([run], { after: 120 });
+}
+
+function collectTemplateFillLeaves(items = []) {
+  const leaves = [];
+  for (const item of items || []) {
+    if (item.children?.length) {
+      leaves.push(...collectTemplateFillLeaves(item.children));
+    } else if (item?.content_mode === 'template-fill') {
+      leaves.push(item);
+    }
+  }
+  return leaves;
 }
 
 function collectOutlineContents(items = []) {
@@ -1831,7 +1851,7 @@ async function addChapterFrameRows(rows, items, context, level = 1) {
       if (String(item.content || '').trim()) {
         await addMarkdownContent(bodyChildren, item.content, context);
       } else {
-        const pendingParagraph = buildPendingContentModeParagraph(item);
+        const pendingParagraph = buildPendingContentModeParagraph(item, context);
         if (pendingParagraph) bodyChildren.push(pendingParagraph);
       }
       rows.push(buildChapterLeafRow(
@@ -1857,7 +1877,7 @@ async function addChapterFrameRows(rows, items, context, level = 1) {
         await addMarkdownContent(bodyChildren, item.content, context);
         rows.push(buildChapterContentRow(context.exportFormat, bodyChildren));
       } else {
-        const pendingParagraph = buildPendingContentModeParagraph(item);
+        const pendingParagraph = buildPendingContentModeParagraph(item, context);
         if (pendingParagraph) rows.push(buildChapterContentRow(context.exportFormat, [pendingParagraph]));
       }
       context.convertedLeafCount = (context.convertedLeafCount || 0) + 1;
@@ -1888,7 +1908,7 @@ async function addOutlineItems(children, items, context, level = 1) {
       if (String(item.content || '').trim()) {
         await addMarkdownContent(children, item.content, context);
       } else {
-        const pendingParagraph = buildPendingContentModeParagraph(item);
+        const pendingParagraph = buildPendingContentModeParagraph(item, context);
         if (pendingParagraph) children.push(pendingParagraph);
       }
       context.convertedLeafCount = (context.convertedLeafCount || 0) + 1;
@@ -2050,6 +2070,7 @@ async function buildDocxResult(payload, options = {}) {
     unsupportedHtmlTags: new Set(),
     developerLogger: options.developerLogger,
     exportFormat,
+    templateFills: options.templateFills || {},
   };
   writeExportLog(context, 'export.docx.build.started', {
     stats,
@@ -2172,7 +2193,67 @@ async function buildDocxBuffer(payload, options = {}) {
   return result.buffer;
 }
 
-function createExportService({ configStore } = {}) {
+// 导出阶段：用 docx-agent 把模板小节快照高保真粘贴到锚点书签处；单节点失败保留占位段，不阻塞导出。
+async function pasteTemplateFillSnapshots({ buffer, outline, docxAgentService, templateFillContext, onProgress, warnings, developerLogger }) {
+  const logContext = { onProgress, warnings, developerLogger };
+  const templateFills = templateFillContext?.getTemplateFills?.() || {};
+  const pendingLeaves = collectTemplateFillLeaves(outline)
+    .filter((item) => templateFills[item.id]?.status === 'success' && templateFills[item.id].snapshotRelPath);
+  if (!pendingLeaves.length) {
+    return { buffer, pastedCount: 0, failedCount: 0 };
+  }
+
+  let tempDocx = '';
+  try {
+    await docxAgentService.ensureRuntime();
+    tempDocx = path.join(os.tmpdir(), `yibiao-export-fill-${process.pid}-${Date.now()}.docx`);
+    fs.writeFileSync(tempDocx, buffer);
+    const resolvePath = templateFillContext.resolveWorkspaceFilePath;
+    let pastedCount = 0;
+    let failedCount = 0;
+    for (let index = 0; index < pendingLeaves.length; index += 1) {
+      const item = pendingLeaves[index];
+      const fill = templateFills[item.id];
+      try {
+        const srcPath = resolvePath ? resolvePath(fill.snapshotRelPath) : '';
+        if (!srcPath || !fs.existsSync(srcPath)) {
+          throw new Error('模板快照文件不存在');
+        }
+        await docxAgentService.copyRange({
+          src: srcPath,
+          tgt: tempDocx,
+          anchorBookmark: buildTemplateFillBookmarkName(item.id),
+        });
+        pastedCount += 1;
+      } catch (error) {
+        failedCount += 1;
+        addWarning(logContext, `模板填写小节「${item.title || item.id}」粘贴失败，已保留占位提示：${error?.message || error}`);
+      }
+      reportProgress(logContext, 97 + ((index + 1) / pendingLeaves.length) * 2, `正在填入模板内容（${index + 1}/${pendingLeaves.length}）。`);
+    }
+    writeExportLog(logContext, 'export.template_fill.completed', {
+      total: pendingLeaves.length,
+      pasted_count: pastedCount,
+      failed_count: failedCount,
+    });
+    if (!pastedCount) {
+      return { buffer, pastedCount: 0, failedCount };
+    }
+    return { buffer: fs.readFileSync(tempDocx), pastedCount, failedCount };
+  } catch (error) {
+    addWarning(logContext, `模板填写粘贴阶段未执行，已保留模板小节占位提示：${error?.message || error}`);
+    writeExportLog(logContext, 'export.template_fill.skipped', { error: compactLogError(error) });
+    return { buffer, pastedCount: 0, failedCount: 0 };
+  } finally {
+    if (tempDocx) {
+      try {
+        fs.rmSync(tempDocx, { force: true });
+      } catch { /* 临时文件清理失败可忽略 */ }
+    }
+  }
+}
+
+function createExportService({ configStore, docxAgentService, getTemplateFillContext } = {}) {
   return {
     async exportWord(payload = {}, onProgress) {
       const stats = countOutlineStats(Array.isArray(payload.outline) ? payload.outline : []);
@@ -2217,14 +2298,29 @@ function createExportService({ configStore } = {}) {
 
       try {
         const warnings = [];
-        const buildResult = await buildDocxResult(payload, { onProgress, warnings, developerLogger });
+        const templateFillContext = getTemplateFillContext ? getTemplateFillContext() : null;
+        const templateFills = templateFillContext?.getTemplateFills?.() || {};
+        const buildResult = await buildDocxResult(payload, { onProgress, warnings, developerLogger, templateFills });
+        const fillResult = docxAgentService && templateFillContext
+          ? await pasteTemplateFillSnapshots({
+              buffer: buildResult.buffer,
+              outline: payload.outline,
+              docxAgentService,
+              templateFillContext,
+              onProgress,
+              warnings: buildResult.warnings,
+              developerLogger,
+            })
+          : { buffer: buildResult.buffer, pastedCount: 0, failedCount: 0 };
+        const outputBuffer = fillResult.buffer;
         reportProgress({ onProgress, warnings: buildResult.warnings, stats: buildResult.stats }, 96, '正在写入 Word 文件。');
         developerLogger.write('export.word.write.started', {
           output_file_name: path.basename(result.filePath),
           output_extension: path.extname(result.filePath).toLowerCase(),
-          buffer_bytes: buildResult.buffer.length,
+          buffer_bytes: outputBuffer.length,
+          template_fill_pasted_count: fillResult.pastedCount,
         });
-        fs.writeFileSync(result.filePath, buildResult.buffer);
+        fs.writeFileSync(result.filePath, outputBuffer);
         const message = buildResult.warnings.length
           ? `Word 已导出，但有 ${buildResult.warnings.length} 处图片未能插入，请打开文档核对。`
           : 'Word 已导出，请打开文档核对图片、表格和版式。';

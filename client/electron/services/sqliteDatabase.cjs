@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 22;
+const schemaVersion = 23;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -1287,6 +1287,25 @@ function ensureWorkspaceSchemaHealth(db, targetVersion = schemaVersion, onStatus
   }
 }
 
+function createTechnicalPlanTemplateFillsSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS technical_plan_template_fills (
+      node_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'pending',
+      source_file_id TEXT,
+      locator_json TEXT,
+      preview_text TEXT,
+      snapshot_relpath TEXT,
+      error TEXT,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (node_id) REFERENCES technical_plan_outline_nodes(node_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_technical_plan_template_fills_status
+    ON technical_plan_template_fills(status);
+  `);
+}
+
 const migrations = [
   {
     version: 1,
@@ -1397,6 +1416,11 @@ const migrations = [
     version: 22,
     description: '技术方案新增全局事实补全模式',
     up: addTechnicalPlanGlobalFactsMode,
+  },
+  {
+    version: 23,
+    description: '技术方案新增模板填写状态表',
+    up: createTechnicalPlanTemplateFillsSchema,
   },
 ];
 

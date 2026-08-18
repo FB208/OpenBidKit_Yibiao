@@ -40,6 +40,18 @@ function getTechnicalPlanIllustrationsDir(app) {
   return path.join(getTechnicalPlanDir(app), 'illustrations');
 }
 
+function getTechnicalPlanTenderSourcesDir(app) {
+  return path.join(getTechnicalPlanDir(app), 'tender-sources');
+}
+
+function getTechnicalPlanTemplateFillsDir(app) {
+  return path.join(getTechnicalPlanDir(app), 'template-fills');
+}
+
+function getDocxAgentCliPath(app) {
+  return path.join(__dirname, '..', 'services', 'docxAgent', 'cli.py');
+}
+
 function getTechnicalPlanGeneratedIllustrationsDir(app) {
   return path.join(getGeneratedImagesDir(app), 'technical-plan', 'illustrations');
 }
@@ -119,6 +131,7 @@ module.exports = {
   getAiLogsDir,
   getBundledAgentToolsBinDir,
   getDeveloperLogsDir,
+  getDocxAgentCliPath,
   getDuplicateCheckContentDir,
   getDuplicateCheckDir,
   getConfigFilePath,
@@ -134,7 +147,9 @@ module.exports = {
   getTechnicalPlanIllustrationsDir,
   getTechnicalPlanLogsDir,
   getTechnicalPlanOriginalPlanMarkdownPath,
+  getTechnicalPlanTemplateFillsDir,
   getTechnicalPlanTenderMarkdownPath,
+  getTechnicalPlanTenderSourcesDir,
   getWorkspaceDir,
   getWorkspaceDatabasePath,
   getUserDataPath,

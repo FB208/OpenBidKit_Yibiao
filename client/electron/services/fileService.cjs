@@ -29,6 +29,24 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// 保留招标原始 Word 供 template-fill 高保真抽取：.docx 原样返回，.doc/.wps 转 docx 存临时文件。
+async function prepareTenderSourceDocx(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.docx') {
+    return { sourceDocxPath: filePath, sourceDocxTemp: false };
+  }
+  if (ext !== '.doc' && ext !== '.wps') {
+    return null;
+  }
+  const { withLegacyWordDocxFile } = await import('./doc2markdown/convert.mjs');
+  return withLegacyWordDocxFile(filePath, async (docxPath) => {
+    const tempName = `yibiao-tender-source-${crypto.createHash('sha1').update(filePath).digest('hex').slice(0, 10)}.docx`;
+    const tempPath = path.join(require('node:os').tmpdir(), tempName);
+    await fs.copyFile(docxPath, tempPath);
+    return { sourceDocxPath: tempPath, sourceDocxTemp: true };
+  });
+}
+
 function getSupportedExtensions(provider) {
   if (provider === 'mineru-agent-api') {
     return mineruAgentSupportedExtensions;
@@ -611,12 +629,21 @@ const config = configStore ? configStore.load() : { components: { file_parser: {
         continue;
       }
 
+      let sourceDocx = null;
+      try {
+        sourceDocx = await prepareTenderSourceDocx(filePath);
+      } catch {
+        sourceDocx = null;
+      }
+
       parsedDocuments.push({
         file_content: fileContent,
         file_name: path.basename(filePath),
         parser_provider: parser.provider,
         parser_label: parserLabels[parser.provider] || '本地解析',
         fallback_to_local: Boolean(parser.fallbackToLocal),
+        source_docx_path: sourceDocx?.sourceDocxPath || null,
+        source_docx_temp: sourceDocx?.sourceDocxTemp === true,
       });
     }
 

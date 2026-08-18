@@ -110,6 +110,7 @@ const resetState = {
   contentGenerationOptions: undefined,
   contentGenerationSections: {},
   contentGenerationPlans: {},
+  templateFills: {},
   contentIllustrationPlan: undefined,
   contentGenerationRuntime: undefined,
   outlineData: null,
@@ -706,6 +707,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             contentGenerationOptions: hasOwnField(technicalPlan, 'contentGenerationOptions') ? technicalPlan.contentGenerationOptions : prev.contentGenerationOptions,
             contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : prev.contentGenerationSections,
             contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
+            templateFills: hasOwnField(technicalPlan, 'templateFills') ? { ...prev.templateFills, ...(technicalPlan.templateFills || {}) } : prev.templateFills,
             contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : prev.contentIllustrationPlan,
             contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
           };
@@ -736,6 +738,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             contentGenerationOptions: outlineDataReset ? undefined : prev.contentGenerationOptions,
             contentGenerationSections: outlineDataReset ? {} : prev.contentGenerationSections,
             contentGenerationPlans: outlineDataReset ? {} : prev.contentGenerationPlans,
+            templateFills: outlineDataReset ? {} : prev.templateFills,
             contentIllustrationPlan: outlineDataReset ? undefined : prev.contentIllustrationPlan,
             contentGenerationRuntime: outlineDataReset ? undefined : prev.contentGenerationRuntime,
             outlineWordControlSnapshot: outlineDataReset ? undefined : prev.outlineWordControlSnapshot,
@@ -765,6 +768,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : (outlineDataChanged ? undefined : prev.contentGenerationTask),
             contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : (outlineDataChanged ? {} : prev.contentGenerationSections),
             contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : (outlineDataChanged ? {} : prev.contentGenerationPlans),
+            templateFills: hasOwnField(technicalPlan, 'templateFills') ? { ...prev.templateFills, ...(technicalPlan.templateFills || {}) } : (outlineDataChanged ? {} : prev.templateFills),
             contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : (outlineDataChanged ? undefined : prev.contentIllustrationPlan),
             contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : (outlineDataChanged ? undefined : prev.contentGenerationRuntime),
           };
@@ -837,6 +841,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
               : prev.referenceKnowledgeDocumentIds,
             contentGenerationSections: nextSections,
             contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
+            templateFills: hasOwnField(technicalPlan, 'templateFills') ? { ...prev.templateFills, ...(technicalPlan.templateFills || {}) } : prev.templateFills,
             contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : prev.contentIllustrationPlan,
             contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
             outlineData: nextOutlineData,
@@ -1052,6 +1057,20 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     }));
     const saved = await window.yibiao?.technicalPlan.saveChapterContent({ nodeId: item.id, content });
     if (saved) setState((prev) => ({ ...prev, ...saved }));
+  };
+
+  const retryTemplateFill = async (nodeId: string) => {
+    try {
+      const result = await window.yibiao?.technicalPlan.retryTemplateFill(nodeId);
+      const fill = result?.fill;
+      if (fill) {
+        setState((prev) => ({ ...prev, templateFills: { ...prev.templateFills, [fill.nodeId]: fill } }));
+      }
+      return result || null;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '模板填写重试失败', 'error');
+      return null;
+    }
   };
 
   const resetTechnicalPlan = async () => {
@@ -1363,6 +1382,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           contentGenerationOptions={state.contentGenerationOptions}
           contentIllustrationPlan={state.contentIllustrationPlan}
           sections={state.contentGenerationSections}
+          templateFills={state.templateFills}
+          onTemplateFillRetry={retryTemplateFill}
           onContentGenerationOptionsChange={saveContentGenerationOptions}
           onContentSaved={saveChapterContent}
         />

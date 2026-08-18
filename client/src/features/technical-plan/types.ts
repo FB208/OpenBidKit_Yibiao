@@ -9,7 +9,7 @@ export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error
 export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error' | 'ignored';
-export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'section-word-adjusting' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'final-section-word-adjusting' | 'total-word-adjusting' | 'illustration-planning' | 'illustration-generating' | 'done';
+export type ContentGenerationPhase = 'planning' | 'template-filling' | 'restoring' | 'generating' | 'section-word-adjusting' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'final-section-word-adjusting' | 'total-word-adjusting' | 'illustration-planning' | 'illustration-generating' | 'done';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 export type ConsistencyRepairMode = 'agent' | 'normal';
 export type OriginalPlanCoverageRepairMode = 'agent' | 'normal';
@@ -341,6 +341,21 @@ export interface DetectedBidSection {
   evidence?: string[];
 }
 
+export type TemplateFillStatus = 'pending' | 'running' | 'success' | 'error' | 'skipped';
+
+export interface TechnicalPlanTemplateFill {
+  nodeId: string;
+  status: TemplateFillStatus;
+  sourceFileId?: string;
+  locator?: Record<string, unknown> | null;
+  previewText: string;
+  snapshotRelPath?: string;
+  error?: string;
+  updatedAt: string;
+}
+
+export type TechnicalPlanTemplateFills = Record<string, TechnicalPlanTemplateFill>;
+
 export interface TechnicalPlanState {
   workflowKind: TechnicalPlanWorkflowKind;
   step: TechnicalPlanStep;
@@ -374,6 +389,7 @@ export interface TechnicalPlanState {
   contentGenerationOptions?: ContentGenerationOptions;
   contentGenerationSections: ContentGenerationSections;
   contentGenerationPlans: ContentGenerationPlans;
+  templateFills: TechnicalPlanTemplateFills;
   contentIllustrationPlan?: ContentIllustrationPlanState;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   outlineData: OutlineData | null;

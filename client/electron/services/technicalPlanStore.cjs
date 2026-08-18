@@ -6,7 +6,9 @@ const {
   getTechnicalPlanGeneratedIllustrationsDir,
   getTechnicalPlanIllustrationsDir,
   getTechnicalPlanOriginalPlanMarkdownPath,
+  getTechnicalPlanTemplateFillsDir,
   getTechnicalPlanTenderMarkdownPath,
+  getTechnicalPlanTenderSourcesDir,
   getGeneratedImagesDir,
 } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
@@ -18,6 +20,8 @@ const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs'
 const tenderMarkdownRelativePath = path.join('technical-plan', 'tender.md').replace(/\\/g, '/');
 const tenderOriginalMarkdownRelativePath = path.join('technical-plan', 'tender-original.md').replace(/\\/g, '/');
 const tenderSourceFilesDirRelativePath = path.join('technical-plan', 'tender-files').replace(/\\/g, '/');
+const tenderSourcesDirRelativePath = path.join('technical-plan', 'tender-sources').replace(/\\/g, '/');
+const templateFillsDirRelativePath = path.join('technical-plan', 'template-fills').replace(/\\/g, '/');
 const originalPlanMarkdownRelativePath = path.join('technical-plan', 'original-plan.md').replace(/\\/g, '/');
 const originalOutlineRuntimeFileName = 'original-outline-runtime.json';
 const defaultOutlineWordControlOptions = Object.freeze({
@@ -61,6 +65,7 @@ const initialState = {
   contentGenerationPlans: {},
   contentIllustrationPlan: undefined,
   contentGenerationRuntime: undefined,
+  templateFills: {},
   outlineData: null,
 };
 
@@ -471,6 +476,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   const tenderMarkdownPath = getTechnicalPlanTenderMarkdownPath(app);
   const tenderOriginalMarkdownPath = path.join(path.dirname(tenderMarkdownPath), 'tender-original.md');
   const tenderSourceFilesDir = path.join(path.dirname(tenderMarkdownPath), 'tender-files');
+  const tenderSourcesDir = getTechnicalPlanTenderSourcesDir(app);
+  const templateFillsDir = getTechnicalPlanTemplateFillsDir(app);
   const originalPlanMarkdownPath = getTechnicalPlanOriginalPlanMarkdownPath(app);
   const originalOutlineRuntimePath = path.join(path.dirname(originalPlanMarkdownPath), originalOutlineRuntimeFileName);
   const illustrationsDir = getTechnicalPlanIllustrationsDir(app);
@@ -698,6 +705,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         markdownPath: String(file.markdownPath || ''),
         markdownChars: Number(file.markdownChars || 0),
         contentHash: String(file.contentHash || ''),
+        sourceDocxPath: file.sourceDocxPath ? String(file.sourceDocxPath) : undefined,
         parserLabel: file.parserLabel ? String(file.parserLabel) : undefined,
         importedAt: file.importedAt ? String(file.importedAt) : undefined,
         updatedAt: file.updatedAt ? String(file.updatedAt) : meta.updated_at,
@@ -767,6 +775,43 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     return fs.readFileSync(filePath, 'utf-8');
   }
 
+  // 把招标源 docx 落进 tender-sources/<id>-<safeName>.docx，返回工作区相对路径；失败返回 undefined。
+  function persistTenderSourceDocx(source, id, fileName) {
+    try {
+      if (source?.source_docx_workspace) {
+        const existingRelative = String(source.source_docx_workspace);
+        return fs.existsSync(resolveMarkdownPath(existingRelative)) ? existingRelative : undefined;
+      }
+      const externalPath = source?.source_docx_path;
+      if (!externalPath) return undefined;
+      const relativePath = path.join(tenderSourcesDirRelativePath, `${id}-${safeFileNamePart(fileName)}.docx`).replace(/\\/g, '/');
+      const targetPath = resolveMarkdownPath(relativePath);
+      fs.mkdirSync(tenderSourcesDir, { recursive: true });
+      fs.copyFileSync(externalPath, targetPath);
+      if (source?.source_docx_temp && fs.existsSync(externalPath)) {
+        fs.rmSync(externalPath, { force: true });
+      }
+      return relativePath;
+    } catch (error) {
+      console.error('[technical-plan] 保留招标源 docx 失败:', error);
+      return undefined;
+    }
+  }
+
+  function reconcileTenderSourceDocxFiles(tenderSourceFiles) {
+    if (!fs.existsSync(tenderSourcesDir)) return;
+    const referenced = new Set((tenderSourceFiles || [])
+      .map((file) => file.sourceDocxPath)
+      .filter(Boolean)
+      .map((relativePath) => path.basename(relativePath)));
+    for (const entry of fs.readdirSync(tenderSourcesDir)) {
+      if (!entry.toLowerCase().endsWith('.docx')) continue;
+      if (!referenced.has(entry)) {
+        fs.rmSync(path.join(tenderSourcesDir, entry), { force: true });
+      }
+    }
+  }
+
   function writeTenderSourceMarkdown(source, index) {
     const markdown = String(source?.file_content || '').trim();
     const fileName = source?.file_name || '招标文件';
@@ -780,6 +825,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       markdownPath: relativePath,
       markdownChars: markdown.length,
       contentHash: stableHash(markdown),
+      sourceDocxPath: persistTenderSourceDocx(source, id, fileName),
       parserLabel: source?.parser_label || undefined,
       importedAt: now(),
       updatedAt: now(),
@@ -789,6 +835,91 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   function clearTenderSourceFiles() {
     if (fs.existsSync(tenderSourceFilesDir)) {
       fs.rmSync(tenderSourceFilesDir, { recursive: true, force: true });
+    }
+  }
+
+  function normalizeTemplateFillStatus(value) {
+    return normalizeStatus(value, ['pending', 'running', 'success', 'error', 'skipped'], 'pending');
+  }
+
+  function loadTemplateFills() {
+    const rows = db.prepare('SELECT * FROM technical_plan_template_fills').all();
+    const fills = {};
+    for (const row of rows) {
+      fills[row.node_id] = {
+        nodeId: row.node_id,
+        status: normalizeTemplateFillStatus(row.status),
+        sourceFileId: row.source_file_id || undefined,
+        locator: safeJsonParse(row.locator_json, undefined),
+        previewText: row.preview_text || '',
+        snapshotRelPath: row.snapshot_relpath || undefined,
+        error: row.error || undefined,
+        updatedAt: row.updated_at,
+      };
+    }
+    return fills;
+  }
+
+  function deleteTemplateFillSnapshotFile(snapshotRelPath) {
+    const relativePath = String(snapshotRelPath || '');
+    if (!relativePath.startsWith(`${templateFillsDirRelativePath}/`)) return;
+    const filePath = resolveMarkdownPath(relativePath);
+    if (fs.existsSync(filePath)) {
+      fs.rmSync(filePath, { force: true });
+    }
+  }
+
+  function upsertTemplateFillRow(fill) {
+    const nodeId = String(fill?.nodeId || '').trim();
+    if (!nodeId) return;
+    db.prepare(`
+      INSERT INTO technical_plan_template_fills (
+        node_id, status, source_file_id, locator_json, preview_text, snapshot_relpath, error, updated_at
+      ) VALUES (
+        @node_id, @status, @source_file_id, @locator_json, @preview_text, @snapshot_relpath, @error, @updated_at
+      ) ON CONFLICT(node_id) DO UPDATE SET
+        status = excluded.status,
+        source_file_id = excluded.source_file_id,
+        locator_json = excluded.locator_json,
+        preview_text = excluded.preview_text,
+        snapshot_relpath = excluded.snapshot_relpath,
+        error = excluded.error,
+        updated_at = excluded.updated_at
+    `).run({
+      node_id: nodeId,
+      status: normalizeTemplateFillStatus(fill?.status),
+      source_file_id: fill?.sourceFileId || null,
+      locator_json: jsonOrNull(fill?.locator),
+      preview_text: fill?.previewText ? String(fill.previewText) : null,
+      snapshot_relpath: fill?.snapshotRelPath || null,
+      error: fill?.error ? String(fill.error) : null,
+      updated_at: fill?.updatedAt || now(),
+    });
+  }
+
+  function deleteTemplateFill(nodeId) {
+    const row = db.prepare('SELECT snapshot_relpath FROM technical_plan_template_fills WHERE node_id = ?').get(String(nodeId || ''));
+    if (!row) return;
+    deleteTemplateFillSnapshotFile(row.snapshot_relpath);
+    db.prepare('DELETE FROM technical_plan_template_fills WHERE node_id = ?').run(String(nodeId || ''));
+  }
+
+  // partial: { [nodeId]: fillRow | null }，null 表示删除该节点状态。
+  function saveTemplateFills(partial) {
+    if (!partial || typeof partial !== 'object') return;
+    for (const [nodeId, fill] of Object.entries(partial)) {
+      if (fill === null || fill === undefined) {
+        deleteTemplateFill(nodeId);
+      } else {
+        upsertTemplateFillRow({ ...fill, nodeId: fill.nodeId || nodeId });
+      }
+    }
+  }
+
+  function clearTemplateFills() {
+    db.prepare('DELETE FROM technical_plan_template_fills').run();
+    if (fs.existsSync(templateFillsDir)) {
+      fs.rmSync(templateFillsDir, { recursive: true, force: true });
     }
   }
 
@@ -1504,6 +1635,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    clearTemplateFills();
     clearContentIllustrationPlan();
     clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
@@ -1543,6 +1675,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
+    clearTemplateFills();
     clearContentIllustrationPlan();
     clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
@@ -1643,6 +1776,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       }, {}),
       sections: db.prepare('SELECT node_id, status, error, updated_at FROM technical_plan_content_sections').all(),
       plans: db.prepare('SELECT node_id, plan_json, updated_at FROM technical_plan_content_plans').all(),
+      fills: db.prepare('SELECT node_id, status, source_file_id, locator_json, preview_text, snapshot_relpath, error, updated_at FROM technical_plan_template_fills').all(),
     };
   }
 
@@ -1719,6 +1853,46 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     }
   }
 
+  // 模板填写状态与正文共用 saveOutline 的 reason 协议：replace 清空全部，edit/delete/add-* 只失效受影响节点，其余跟随 idMap 重映射保留。
+  function restoreMappedTemplateFillRows({ snapshot, idMap, affectedIds, nextIds, clearAll }) {
+    if (clearAll || !nextIds.size) {
+      clearTemplateFills();
+      return;
+    }
+
+    db.prepare('DELETE FROM technical_plan_template_fills').run();
+
+    const survivingRows = new Set();
+    const seen = new Set();
+    for (const row of snapshot.fills) {
+      const oldId = String(row.node_id || '').trim();
+      const newId = idMap.get(oldId) || oldId;
+      if (!newId || !nextIds.has(newId) || seen.has(newId)) continue;
+      if (shouldClearSavedNode({ clearAll, oldId, newId, affectedIds })) continue;
+      seen.add(newId);
+      survivingRows.add(row);
+    }
+    for (const row of snapshot.fills) {
+      if (!survivingRows.has(row)) {
+        deleteTemplateFillSnapshotFile(row.snapshot_relpath);
+      }
+    }
+    for (const row of survivingRows) {
+      const oldId = String(row.node_id || '').trim();
+      const newId = idMap.get(oldId) || oldId;
+      upsertTemplateFillRow({
+        nodeId: newId,
+        status: row.status,
+        sourceFileId: row.source_file_id || undefined,
+        locator: safeJsonParse(row.locator_json, undefined),
+        previewText: row.preview_text || '',
+        snapshotRelPath: row.snapshot_relpath || undefined,
+        error: row.error || undefined,
+        updatedAt: row.updated_at,
+      });
+    }
+  }
+
   // 目录排序时使用临时编号同步主键和外键，避免删除重建正文状态与计划。
   function saveSortedOutline(outlineData, idMap) {
     const rows = flattenOutlineItems(outlineData?.outline || []);
@@ -1732,6 +1906,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       db.prepare('UPDATE technical_plan_outline_nodes SET node_id = ? WHERE node_id = ?').run(temporaryId, oldId);
       db.prepare('UPDATE technical_plan_content_sections SET node_id = ? WHERE node_id = ?').run(temporaryId, oldId);
       db.prepare('UPDATE technical_plan_content_plans SET node_id = ? WHERE node_id = ?').run(temporaryId, oldId);
+      db.prepare('UPDATE technical_plan_template_fills SET node_id = ? WHERE node_id = ?').run(temporaryId, oldId);
     }
     for (const [oldId] of changedIds) {
       db.prepare('UPDATE technical_plan_outline_nodes SET parent_node_id = ? WHERE parent_node_id = ?').run(temporaryIds.get(oldId), oldId);
@@ -1741,6 +1916,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       db.prepare('UPDATE technical_plan_outline_nodes SET node_id = ? WHERE node_id = ?').run(newId, temporaryId);
       db.prepare('UPDATE technical_plan_content_sections SET node_id = ? WHERE node_id = ?').run(newId, temporaryId);
       db.prepare('UPDATE technical_plan_content_plans SET node_id = ? WHERE node_id = ?').run(newId, temporaryId);
+      db.prepare('UPDATE technical_plan_template_fills SET node_id = ? WHERE node_id = ?').run(newId, temporaryId);
       db.prepare('UPDATE technical_plan_outline_nodes SET parent_node_id = ? WHERE parent_node_id = ?').run(newId, temporaryId);
     }
 
@@ -1845,6 +2021,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (!invalidatesContentGeneration && hasOwn(partial, 'contentGenerationSections')) saveContentSections(partial.contentGenerationSections);
     if (!invalidatesContentGeneration && hasOwn(partial, 'contentGenerationPlans')) saveContentPlans(partial.contentGenerationPlans);
     if (hasOwn(partial, 'contentGenerationItem')) saveContentGenerationItemFields(partial.contentGenerationItem);
+    if (hasOwn(partial, 'templateFills')) saveTemplateFills(partial.templateFills);
   }
 
   function loadTechnicalPlan() {
@@ -1918,6 +2095,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       contentIllustrationPlan: loadContentIllustrationPlan(),
       contentGenerationSections: loadContentSections(outlineData),
       contentGenerationPlans: loadContentPlans(),
+      templateFills: loadTemplateFills(),
       outlineData,
     };
   }
@@ -2080,11 +2258,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
     let savedOutlineData = outlineData;
     let savedIllustrationPlan;
+    let savedTemplateFills;
     const transaction = db.transaction(() => {
       assertOutlineMutationAllowed();
       if (reason === 'sort') {
         saveSortedOutline(outlineData, idMap);
         savedIllustrationPlan = loadContentIllustrationPlan();
+        savedTemplateFills = loadTemplateFills();
         return;
       }
       const snapshot = loadOutlinePersistenceSnapshot();
@@ -2097,6 +2277,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       const rows = flattenOutlineItems(outlineToSave?.outline || []);
       const nextIds = new Set(rows.map((row) => row.node_id));
       restoreMappedContentRows({ snapshot, idMap, affectedIds, nextIds, clearAll });
+      restoreMappedTemplateFillRows({ snapshot, idMap, affectedIds, nextIds, clearAll });
+      savedTemplateFills = loadTemplateFills();
       if (invalidatesContentTask) {
         db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'content-generation'").run();
         clearTechnicalPlanMermaidCache();
@@ -2112,6 +2294,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     return {
       outlineData: savedOutlineData,
       contentIllustrationPlan: reason === 'sort' ? savedIllustrationPlan : undefined,
+      templateFills: savedTemplateFills,
       ...(reason === 'sort' ? {
         contentGenerationTask: sortedContentTask,
         contentGenerationRuntime: sortedContentRuntime,
@@ -2210,6 +2393,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         file_content: markdown,
         file_name: file.fileName,
         parser_label: file.parserLabel,
+        source_docx_workspace: file.sourceDocxPath || null,
         content_hash: file.contentHash || stableHash(markdown),
       } : null;
     }).filter(Boolean);
@@ -2274,6 +2458,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     await runBeforeCommit(options.beforeCommit);
     if (!remainingFiles.length) {
       clearTenderSourceFiles();
+      if (fs.existsSync(tenderSourcesDir)) fs.rmSync(tenderSourcesDir, { recursive: true, force: true });
       if (fs.existsSync(tenderMarkdownPath)) fs.rmSync(tenderMarkdownPath, { force: true });
       if (fs.existsSync(tenderOriginalMarkdownPath)) fs.rmSync(tenderOriginalMarkdownPath, { force: true });
       const transaction = db.transaction(() => {
@@ -2375,6 +2560,9 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const tenderSourceFiles = Array.isArray(sourceFiles)
       ? sourceFiles.map(writeTenderSourceMarkdown)
       : undefined;
+    if (tenderSourceFiles) {
+      reconcileTenderSourceDocxFiles(tenderSourceFiles);
+    }
     writeMarkdownFile(tenderMarkdownPath, nextMarkdown, 'tender');
     if (resetOriginal) {
       writeMarkdownFile(tenderOriginalMarkdownPath, nextMarkdown, 'tender-original');
@@ -2465,9 +2653,11 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       fs.rmSync(tenderOriginalMarkdownPath, { force: true });
     }
     clearTenderSourceFiles();
+    if (fs.existsSync(tenderSourcesDir)) fs.rmSync(tenderSourcesDir, { recursive: true, force: true });
     if (fs.existsSync(originalPlanMarkdownPath)) {
       fs.rmSync(originalPlanMarkdownPath, { force: true });
     }
+    clearTemplateFills();
     clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
     clearIllustrationFiles();
@@ -2501,6 +2691,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     readOriginalOutlineRuntime,
     saveOriginalOutlineRuntime,
     clearOriginalOutlineRuntime,
+    getTemplateFills: loadTemplateFills,
+    getTenderSourceFiles: loadTenderSourceFiles,
+    resolveWorkspaceFilePath: resolveMarkdownPath,
+    getTemplateFillsDir: () => templateFillsDir,
     updateStep,
     setWorkflowKind,
     switchWorkflowKind,
