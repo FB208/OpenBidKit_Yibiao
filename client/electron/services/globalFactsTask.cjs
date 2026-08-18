@@ -207,8 +207,13 @@ function normalizeReferenceSnippetIds(storedPlan) {
   return Array.isArray(raw) ? [...new Set(raw.map((id) => String(id || '').trim()).filter(Boolean))] : [];
 }
 
-function loadKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, log) {
-  if (!documentIds.length && !snippetIds.length) {
+function normalizeReferenceItemIds(storedPlan) {
+  const raw = storedPlan?.referenceKnowledgeItemIds || [];
+  return Array.isArray(raw) ? [...new Set(raw.map((id) => String(id || '').trim()).filter(Boolean))] : [];
+}
+
+function loadKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, itemIds, log) {
+  if (!documentIds.length && !snippetIds.length && !itemIds.length) {
     log('未选择参考知识库，本次只基于招标文件、Step02 解析结果和目录预设关键信息。', 12);
     return [];
   }
@@ -218,22 +223,46 @@ function loadKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, log) 
   }
 
   const items = [];
-  for (const documentId of documentIds) {
+  const seen = new Set();
+  const pushItem = (item) => {
+    if (!item?.id || seen.has(item.id)) return;
+    seen.add(item.id);
+    items.push(item);
+  };
+  let itemLoadSucceeded = false;
+  if (itemIds.length && knowledgeBaseService?.readItemContents) {
     try {
-      const documentItems = knowledgeBaseService.readItems(documentId);
-      for (const item of Array.isArray(documentItems) ? documentItems : []) {
-        const title = singleLine(item?.title);
-        const content = String(item?.content || '').trim();
+      const contents = knowledgeBaseService.readItemContents(itemIds);
+      const result = knowledgeBaseService.getItemReferences(itemIds);
+      for (const meta of Array.isArray(result?.items) ? result.items : []) {
+        const content = contents.get(meta.id)?.content || '';
+        const title = singleLine(meta.title);
         if (!title || !content) continue;
-        items.push({
-          id: `${documentId}::${singleLine(item?.id)}`,
-          title,
-          resume: singleLine(item?.resume),
-          content,
-        });
+        pushItem({ id: singleLine(meta.id), title, resume: singleLine(meta.resume), content });
       }
+      itemLoadSucceeded = true;
     } catch (error) {
-      log(`读取知识库条目失败，已跳过文档 ${documentId}：${error.message || String(error)}`, 12);
+      log(`读取勾选知识条目失败，将按文档全量读取：${error.message || String(error)}`, 12);
+    }
+  }
+  if ((!itemIds.length || !itemLoadSucceeded) && documentIds.length) {
+    for (const documentId of documentIds) {
+      try {
+        const documentItems = knowledgeBaseService.readItems(documentId);
+        for (const item of Array.isArray(documentItems) ? documentItems : []) {
+          const title = singleLine(item?.title);
+          const content = String(item?.content || '').trim();
+          if (!title || !content) continue;
+          pushItem({
+            id: `${documentId}::${singleLine(item?.id)}`,
+            title,
+            resume: singleLine(item?.resume),
+            content,
+          });
+        }
+      } catch (error) {
+        log(`读取知识库条目失败，已跳过文档 ${documentId}：${error.message || String(error)}`, 12);
+      }
     }
   }
   if (snippetIds.length && knowledgeBaseService?.getSnippetReferences) {
@@ -243,7 +272,7 @@ function loadKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, log) 
         const title = singleLine(item?.title);
         const content = String(item?.resume || '').trim();
         if (!title || !content) continue;
-        items.push({
+        pushItem({
           id: singleLine(item?.id),
           title,
           resume: singleLine(content),
@@ -849,7 +878,7 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
   if (isExpansionWorkflow) {
     log('已读取原方案，本次将优先从原方案抽取全局事实变量。', 18);
   }
-  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, log);
+  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, normalizeReferenceItemIds(storedPlan), log);
 
   const selectedSectionId = storedPlan.tenderFile?.selectedSectionId;
   const selectedSection = selectedSectionId && Array.isArray(storedPlan.bidSections)

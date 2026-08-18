@@ -277,23 +277,41 @@ function normalizeReferenceSnippetIds(payload) {
     : [];
 }
 
+function normalizeReferenceItemIds(payload) {
+  return Array.isArray(payload?.reference_knowledge_item_ids)
+    ? [...new Set(payload.reference_knowledge_item_ids.map((id) => String(id || '').trim()).filter(Boolean))]
+    : [];
+}
+
 function normalizeOutlineExpansionMode(payload, storedPlan) {
   const value = payload?.outline_expansion_mode || payload?.outlineExpansionMode || storedPlan?.outlineExpansionMode;
   return value === 'original-only' ? 'original-only' : 'ai-complement';
 }
 
-function loadOutlineKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, log) {
+function loadOutlineKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, itemIds, log) {
   const items = [];
   const seen = new Set();
-  if (documentIds.length && knowledgeBaseService?.getOutlineReferences) {
+  const pushItem = (item) => {
+    if (!item?.id || seen.has(item.id)) return;
+    seen.add(item.id);
+    items.push(item);
+  };
+  let itemLoadSucceeded = false;
+  if (itemIds.length && knowledgeBaseService?.getItemReferences) {
+    try {
+      log(`正在读取 ${itemIds.length} 条勾选的知识条目。`, 6);
+      const result = knowledgeBaseService.getItemReferences(itemIds);
+      for (const item of Array.isArray(result?.items) ? result.items : []) pushItem(item);
+      itemLoadSucceeded = true;
+    } catch (error) {
+      log(`读取勾选知识条目失败，将按文档全量读取：${error.message || String(error)}`, 7);
+    }
+  }
+  if ((!itemIds.length || !itemLoadSucceeded) && documentIds.length && knowledgeBaseService?.getOutlineReferences) {
     try {
       log(`正在读取 ${documentIds.length} 个参考知识库文档。`, 6);
       const result = knowledgeBaseService.getOutlineReferences(documentIds);
-      for (const item of Array.isArray(result?.items) ? result.items : []) {
-        if (!item?.id || seen.has(item.id)) continue;
-        seen.add(item.id);
-        items.push(item);
-      }
+      for (const item of Array.isArray(result?.items) ? result.items : []) pushItem(item);
     } catch (error) {
       log(`读取参考知识库失败，将按普通目录生成：${error.message || String(error)}`, 7);
     }
@@ -302,11 +320,7 @@ function loadOutlineKnowledgeItems(knowledgeBaseService, documentIds, snippetIds
     try {
       log(`正在读取 ${snippetIds.length} 个参考知识库片段。`, 6);
       const result = knowledgeBaseService.getSnippetReferences(snippetIds);
-      for (const item of Array.isArray(result?.items) ? result.items : []) {
-        if (!item?.id || seen.has(item.id)) continue;
-        seen.add(item.id);
-        items.push(item);
-      }
+      for (const item of Array.isArray(result?.items) ? result.items : []) pushItem(item);
     } catch (error) {
       log(`读取参考知识库片段失败，将按普通目录生成：${error.message || String(error)}`, 7);
     }
@@ -3050,7 +3064,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     groups = alignedResult.groups || [];
   }
 
-  const knowledgeItems = loadOutlineKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, log);
+  const knowledgeItems = loadOutlineKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, normalizeReferenceItemIds(taskPayload), log);
   outline = await enhanceOutlineWithKnowledgeAdditions(aiService, taskPayload, outline, knowledgeItems, log);
   const finalResult = await runFinalOutlineGate({
     aiService,

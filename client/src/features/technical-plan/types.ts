@@ -277,6 +277,7 @@ export interface TechnicalPlanState {
   outlineExpansionMode: OutlineExpansionMode;
   referenceKnowledgeDocumentIds: string[];
   referenceKnowledgeSnippetIds: string[];
+  referenceKnowledgeItemIds: string[];
   bidSectionExtractionTask?: BackgroundTaskState;
   bidAnalysisTask?: BackgroundTaskState;
   outlineGenerationTask?: BackgroundTaskState;

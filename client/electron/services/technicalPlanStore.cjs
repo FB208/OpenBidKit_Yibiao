@@ -730,6 +730,19 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       .forEach((snippetId, index) => insert.run({ snippet_id: snippetId, sort_order: index }));
   }
 
+  function loadReferenceItemIds() {
+    return db.prepare('SELECT reference_key FROM technical_plan_reference_items ORDER BY sort_order ASC').all()
+      .map((row) => row.reference_key);
+  }
+
+  function replaceReferenceItemIds(itemIds) {
+    db.prepare('DELETE FROM technical_plan_reference_items').run();
+    const insert = db.prepare('INSERT INTO technical_plan_reference_items (reference_key, sort_order, created_at) VALUES (@reference_key, @sort_order, @created_at)');
+    const timestamp = now();
+    [...new Set((Array.isArray(itemIds) ? itemIds : []).map((id) => String(id || '').trim()).filter(Boolean))]
+      .forEach((itemId, index) => insert.run({ reference_key: itemId, sort_order: index, created_at: timestamp }));
+  }
+
   function taskFromRow(row) {
     if (!row) return undefined;
     return {
@@ -1151,6 +1164,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_bid_items').run();
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_reference_snippets').run();
+    db.prepare('DELETE FROM technical_plan_reference_items').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     clearOriginalOutlineRuntime();
@@ -1186,6 +1200,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_bid_items').run();
     db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_reference_snippets').run();
+    db.prepare('DELETE FROM technical_plan_reference_items').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     clearOriginalOutlineRuntime();
@@ -1375,6 +1390,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     const nextBidMode = isValidBidMode(partial.bidAnalysisMode) ? partial.bidAnalysisMode : meta.bid_analysis_mode;
     if (hasOwn(partial, 'referenceKnowledgeDocumentIds')) replaceReferenceDocumentIds(partial.referenceKnowledgeDocumentIds);
     if (hasOwn(partial, 'referenceKnowledgeSnippetIds')) replaceReferenceSnippetIds(partial.referenceKnowledgeSnippetIds);
+    if (hasOwn(partial, 'referenceKnowledgeItemIds')) replaceReferenceItemIds(partial.referenceKnowledgeItemIds);
     if (hasOwn(partial, 'bidAnalysisTasks')) saveBidItems(partial.bidAnalysisTasks, nextBidMode);
     if (hasOwn(partial, 'projectOverview')) upsertDerivedBidItem('projectOverview', partial.projectOverview, nextBidMode);
     if (hasOwn(partial, 'techRequirements')) upsertDerivedBidItem('techRequirements', partial.techRequirements, nextBidMode);
@@ -1463,6 +1479,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       outlineExpansionMode: isValidOutlineExpansionMode(meta.outline_expansion_mode) ? meta.outline_expansion_mode : 'ai-complement',
       referenceKnowledgeDocumentIds: loadReferenceDocumentIds(),
       referenceKnowledgeSnippetIds: loadReferenceSnippetIds(),
+      referenceKnowledgeItemIds: loadReferenceItemIds(),
       ...tasks,
       globalFacts: loadGlobalFacts(),
       contentGenerationOptions: safeJsonParse(meta.content_generation_options_json, undefined),
@@ -1517,12 +1534,13 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     return loadTechnicalPlan();
   }
 
-  function saveOutlineConfig({ referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, outlineExpansionMode } = {}) {
+  function saveOutlineConfig({ referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, referenceKnowledgeItemIds, outlineExpansionMode } = {}) {
     return updateTechnicalPlan({
       outlineMode: 'aligned',
       outlineExpansionMode: isValidOutlineExpansionMode(outlineExpansionMode) ? outlineExpansionMode : 'ai-complement',
       referenceKnowledgeDocumentIds,
       referenceKnowledgeSnippetIds,
+      referenceKnowledgeItemIds,
     });
   }
 
@@ -1832,6 +1850,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       db.prepare('DELETE FROM technical_plan_bid_items').run();
       db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_reference_snippets').run();
+      db.prepare('DELETE FROM technical_plan_reference_items').run();
       db.prepare('DELETE FROM technical_plan_outline_nodes').run();
       db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
       db.prepare('DELETE FROM technical_plan_meta').run();

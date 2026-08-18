@@ -1521,6 +1521,19 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       return knowledgeBaseStore.getOutlineReferences(documentIds);
     },
 
+    listItems(documentId) {
+      const result = knowledgeBaseStore.getOutlineReferences([documentId]);
+      return Array.isArray(result?.items) ? result.items : [];
+    },
+
+    getItemReferences(referenceKeys) {
+      return knowledgeBaseStore.getItemReferences(referenceKeys);
+    },
+
+    readItemContents(referenceKeys) {
+      return knowledgeBaseStore.readItemContents(referenceKeys);
+    },
+
     readMarkdown(documentId) {
       return knowledgeBaseStore.readMarkdown(documentId);
     },

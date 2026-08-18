@@ -106,6 +106,7 @@ const bridge = {
     startMatching: (documentId, batchSize) => ipcRenderer.invoke('knowledge-base:start-matching', documentId, batchSize),
     readMarkdown: (documentId) => ipcRenderer.invoke('knowledge-base:read-markdown', documentId),
     readItems: (documentId) => ipcRenderer.invoke('knowledge-base:read-items', documentId),
+    listItems: (documentId) => ipcRenderer.invoke('knowledge-base:list-items', documentId),
     readAnalysis: (documentId) => ipcRenderer.invoke('knowledge-base:read-analysis', documentId),
     createItem: (documentId, payload) => ipcRenderer.invoke('knowledge-base:create-item', documentId, payload),
     updateItem: (documentId, itemId, partial) => ipcRenderer.invoke('knowledge-base:update-item', documentId, itemId, partial),

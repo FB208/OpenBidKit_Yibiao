@@ -28,6 +28,16 @@ function collectLeafItems(items) {
   return (items || []).flatMap((item) => item?.children?.length ? collectLeafItems(item.children) : [item]);
 }
 
+function mapOutlineItems(items, mapper) {
+  return (items || []).map((item) => {
+    const nextItem = mapper(item);
+    if (item?.children?.length) {
+      nextItem.children = mapOutlineItems(item.children, mapper);
+    }
+    return nextItem;
+  });
+}
+
 function formatOutlineForPrompt(items, level = 1, lines = []) {
   for (const item of items || []) {
     const id = singleLine(item?.id || 'unknown');
@@ -288,7 +298,8 @@ async function identifyTemplate(aiService, description) {
       },
     });
     return response;
-  } catch {
+  } catch (error) {
+    console.error('[businessBid] 模板识别失败', error?.message || String(error));
     return { has_template: false, reason: '识别失败', fixed_content: '', variables: [] };
   }
 }
@@ -333,7 +344,7 @@ async function fillVariables(variables, globalFacts, clauseItems, tenderMarkdown
         value = null;
       }
     }
-    v.extracted_value = value || v.name;
+    v.extracted_value = value || null;
   }
   return variables;
 }
@@ -342,8 +353,9 @@ function applyTemplate(fixedContent, variables) {
   let result = String(fixedContent || '');
   for (const v of Array.isArray(variables) ? variables : []) {
     if (!v?.name) continue;
-    const value = v.extracted_value || v.name;
-    result = result.replace(new RegExp(`__${v.name}__`, 'g'), value);
+    if (!v.extracted_value) continue;
+    const escapedName = v.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    result = result.replace(new RegExp(`__${escapedName}__`, 'g'), v.extracted_value);
   }
   return result;
 }
@@ -352,7 +364,7 @@ function fillCheck(variables, content) {
   const missing = [];
   for (const v of Array.isArray(variables) ? variables : []) {
     if (!v?.name) continue;
-    const value = v.extracted_value || v.name;
+    const value = v.extracted_value || null;
     // value 应在正文中出现
     if (!value || !content.includes(value)) {
       missing.push(v);
@@ -433,7 +445,8 @@ async function detectBusinessContentList(aiService, tenderMarkdown) {
       validator: () => {},
     });
     return response;
-  } catch {
+  } catch (error) {
+    console.error('[businessBid] 商务标内容清单识别失败', error?.message || String(error));
     return { hasExplicitList: false, sourceText: '', requiredItems: [] };
   }
 }
@@ -774,7 +787,7 @@ ${templateContent}` },
     clauseItems,
     clauseAnalysisTasks,
     clauseAnalysisProgress: 100,
-    hasExplicitContentList: false,
+    hasExplicitContentList: hasExplicitList,
     selectedTemplateItemIds: templateItemIds,
     templateApplied: true,
     clauseAnalysisTask: { task_id: '', type: 'business-clause-analysis', status: 'success', progress: 100, logs: [...logs, `商务响应矩阵已基于模板重新生成：${clauseItems.length} 项。`], started_at: now(), updated_at: now() },

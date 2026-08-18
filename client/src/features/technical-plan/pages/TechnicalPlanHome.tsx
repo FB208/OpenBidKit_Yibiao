@@ -73,6 +73,7 @@ const resetState = {
   outlineExpansionMode: 'ai-complement' as const,
   referenceKnowledgeDocumentIds: [] as string[],
   referenceKnowledgeSnippetIds: [] as string[],
+  referenceKnowledgeItemIds: [] as string[],
   bidSectionExtractionTask: undefined,
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
@@ -498,6 +499,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             outlineGenerationTask: hasOwnField(technicalPlan, 'outlineGenerationTask') ? trimTaskLogs(technicalPlan.outlineGenerationTask) : prev.outlineGenerationTask,
             referenceKnowledgeDocumentIds: Array.isArray(technicalPlan.referenceKnowledgeDocumentIds) ? technicalPlan.referenceKnowledgeDocumentIds : prev.referenceKnowledgeDocumentIds,
             referenceKnowledgeSnippetIds: Array.isArray(technicalPlan.referenceKnowledgeSnippetIds) ? technicalPlan.referenceKnowledgeSnippetIds : prev.referenceKnowledgeSnippetIds,
+            referenceKnowledgeItemIds: Array.isArray(technicalPlan.referenceKnowledgeItemIds) ? technicalPlan.referenceKnowledgeItemIds : prev.referenceKnowledgeItemIds,
             globalFactsTask: hasOwnField(technicalPlan, 'globalFactsTask') ? trimTaskLogs(technicalPlan.globalFactsTask) : prev.globalFactsTask,
             globalFacts: hasOwnField(technicalPlan, 'globalFacts') ? (technicalPlan.globalFacts || []) : prev.globalFacts,
             contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : prev.contentGenerationTask,
@@ -555,6 +557,9 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             referenceKnowledgeSnippetIds: Array.isArray(technicalPlan.referenceKnowledgeSnippetIds)
               ? technicalPlan.referenceKnowledgeSnippetIds
               : prev.referenceKnowledgeSnippetIds,
+            referenceKnowledgeItemIds: Array.isArray(technicalPlan.referenceKnowledgeItemIds)
+              ? technicalPlan.referenceKnowledgeItemIds
+              : prev.referenceKnowledgeItemIds,
             outlineData: nextOutlineData,
             globalFactsTask: hasOwnField(technicalPlan, 'globalFactsTask') ? trimTaskLogs(technicalPlan.globalFactsTask) : prev.globalFactsTask,
             globalFacts: hasOwnField(technicalPlan, 'globalFacts') ? (technicalPlan.globalFacts || []) : prev.globalFacts,
@@ -605,6 +610,9 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             referenceKnowledgeSnippetIds: Array.isArray(technicalPlan.referenceKnowledgeSnippetIds)
               ? technicalPlan.referenceKnowledgeSnippetIds
               : prev.referenceKnowledgeSnippetIds,
+            referenceKnowledgeItemIds: Array.isArray(technicalPlan.referenceKnowledgeItemIds)
+              ? technicalPlan.referenceKnowledgeItemIds
+              : prev.referenceKnowledgeItemIds,
             contentGenerationSections: nextSections,
             contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
             contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : prev.contentIllustrationPlan,
@@ -982,12 +990,13 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           referenceKnowledgeSnippetIds={state.referenceKnowledgeSnippetIds}
+          referenceKnowledgeItemIds={state.referenceKnowledgeItemIds}
           outlineData={state.outlineData}
           task={state.outlineGenerationTask}
           contentTaskStatus={state.contentGenerationTask?.status}
-          onOutlineConfigChange={({ referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, outlineExpansionMode }) => {
-            setState((prev) => ({ ...prev, outlineMode: 'aligned', outlineExpansionMode, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds: referenceKnowledgeSnippetIds ?? prev.referenceKnowledgeSnippetIds }));
-            window.yibiao?.technicalPlan.saveOutlineConfig({ referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, outlineExpansionMode }).then((saved) => {
+          onOutlineConfigChange={({ referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, referenceKnowledgeItemIds, outlineExpansionMode }) => {
+            setState((prev) => ({ ...prev, outlineMode: 'aligned', outlineExpansionMode, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds: referenceKnowledgeSnippetIds ?? prev.referenceKnowledgeSnippetIds, referenceKnowledgeItemIds: referenceKnowledgeItemIds ?? prev.referenceKnowledgeItemIds }));
+            window.yibiao?.technicalPlan.saveOutlineConfig({ referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, referenceKnowledgeItemIds, outlineExpansionMode }).then((saved) => {
               setState((prev) => ({ ...prev, ...saved }));
             }).catch((error) => {
               showToast(error instanceof Error ? error.message : '保存目录配置失败', 'error');

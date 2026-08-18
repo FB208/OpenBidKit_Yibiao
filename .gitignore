@@ -33,6 +33,7 @@ client/vendor/opencode/*
 
 # 临时和缓存文件
 *.tmp
+*.tmp.*
 *.temp
 .DS_Store
 Thumbs.db

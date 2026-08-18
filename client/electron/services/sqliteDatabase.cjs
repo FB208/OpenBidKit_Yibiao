@@ -169,6 +169,20 @@ function createTechnicalPlanReferenceSnippetsSchema(db) {
   `);
 }
 
+function createTechnicalPlanReferenceItemsSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS technical_plan_reference_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      reference_key TEXT NOT NULL UNIQUE,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_technical_plan_reference_items_order
+    ON technical_plan_reference_items(sort_order);
+  `);
+}
+
 function addTechnicalPlanBidSectionV6Compat(db) {
   // v6 兼容：部分旧版本客户端可能已添加 current_bid_section_id 和 bid_sections_extracted，
   // 此处做幂等处理，如果列已存在则 ALTER TABLE 会抛错，用 try/catch 忽略。
@@ -1046,6 +1060,11 @@ const schemaHealthTableGroups = [
     version: 19,
     tables: ['technical_plan_reference_snippets'],
     repair: createTechnicalPlanReferenceSnippetsSchema,
+  },
+  {
+    version: 20,
+    tables: ['technical_plan_reference_items'],
+    repair: createTechnicalPlanReferenceItemsSchema,
   },
 ];
 

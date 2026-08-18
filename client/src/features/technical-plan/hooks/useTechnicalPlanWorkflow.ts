@@ -22,6 +22,7 @@ const initialState: TechnicalPlanState = {
   outlineExpansionMode: 'ai-complement',
   referenceKnowledgeDocumentIds: [],
   referenceKnowledgeSnippetIds: [],
+  referenceKnowledgeItemIds: [],
   bidSectionExtractionTask: undefined,
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,

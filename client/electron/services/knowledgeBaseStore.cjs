@@ -1176,6 +1176,71 @@ function createKnowledgeBaseStore({ app, db }) {
     return { items };
   }
 
+  function getItemReferences(referenceKeys) {
+    const keys = Array.isArray(referenceKeys) ? referenceKeys.map((key) => String(key || '').trim()).filter(Boolean) : [];
+    if (!keys.length) return { items: [] };
+    const wanted = new Set(keys);
+    const byDocument = new Map();
+    for (const key of keys) {
+      const sep = key.indexOf('::');
+      if (sep <= 0) continue;
+      const documentId = key.slice(0, sep);
+      const itemId = key.slice(sep + 2);
+      if (!documentId || !itemId) continue;
+      const list = byDocument.get(documentId) || [];
+      list.push(itemId);
+      byDocument.set(documentId, list);
+    }
+    if (!byDocument.size) return { items: [] };
+    const items = [];
+    for (const [documentId, itemIds] of byDocument.entries()) {
+      const document = db.prepare('SELECT document_id, status FROM knowledge_documents WHERE document_id = ?').get(documentId);
+      if (!document || document.status !== 'success') continue;
+      const itemSet = new Set(itemIds);
+      for (const item of readItems(documentId)) {
+        const itemId = String(item?.id || '').trim();
+        const title = String(item?.title || '').trim();
+        const resume = String(item?.resume || '').trim();
+        if (!itemId || !itemSet.has(itemId) || !title || !resume) continue;
+        const referenceId = `${documentId}::${itemId}`;
+        if (!wanted.has(referenceId)) continue;
+        items.push({ id: referenceId, title, resume });
+      }
+    }
+    return { items };
+  }
+
+  function readItemContents(referenceKeys) {
+    const map = new Map();
+    const keys = Array.isArray(referenceKeys) ? referenceKeys.map((key) => String(key || '').trim()).filter(Boolean) : [];
+    if (!keys.length) return map;
+    const wanted = new Set(keys);
+    const byDocument = new Map();
+    for (const key of keys) {
+      const sep = key.indexOf('::');
+      if (sep <= 0) continue;
+      const documentId = key.slice(0, sep);
+      const itemId = key.slice(sep + 2);
+      if (!documentId || !itemId) continue;
+      const list = byDocument.get(documentId) || [];
+      list.push(itemId);
+      byDocument.set(documentId, list);
+    }
+    for (const [documentId, itemIds] of byDocument.entries()) {
+      const document = db.prepare('SELECT document_id, status FROM knowledge_documents WHERE document_id = ?').get(documentId);
+      if (!document || document.status !== 'success') continue;
+      const itemSet = new Set(itemIds);
+      for (const item of readItems(documentId)) {
+        const itemId = String(item?.id || '').trim();
+        const content = String(item?.content || '').trim();
+        const referenceId = `${documentId}::${itemId}`;
+        if (!itemId || !itemSet.has(itemId) || !wanted.has(referenceId) || !content) continue;
+        map.set(referenceId, { content });
+      }
+    }
+    return map;
+  }
+
   function createItem(documentId, payload) {
     getDocument(documentId);
     const title = String(payload?.title || '').trim();
@@ -1802,6 +1867,8 @@ function createKnowledgeBaseStore({ app, db }) {
     readItems,
     readAnalysis,
     getOutlineReferences,
+    getItemReferences,
+    readItemContents,
     createItem,
     updateItem,
     deleteItem,

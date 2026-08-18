@@ -2308,8 +2308,15 @@ function normalizeReferenceSnippetIds(storedPlan) {
     : [];
 }
 
-function loadContentKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, log) {
-  if (!documentIds.length && !snippetIds.length) {
+function normalizeReferenceItemIds(storedPlan) {
+  const raw = storedPlan?.referenceKnowledgeItemIds ?? [];
+  return Array.isArray(raw)
+    ? [...new Set(raw.map((id) => String(id || '').trim()).filter(Boolean))]
+    : [];
+}
+
+function loadContentKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, itemIds, log) {
+  if (!documentIds.length && !snippetIds.length && !itemIds.length) {
     log('本次正文编排未选择参考知识库。');
     return [];
   }
@@ -2318,54 +2325,85 @@ function loadContentKnowledgeItems(knowledgeBaseService, documentIds, snippetIds
     return [];
   }
 
-  try {
-    const items = [];
-    const seen = new Set();
-    const pushItem = (raw) => {
-      const id = String(raw?.id || '').trim();
-      const title = String(raw?.title || '').trim();
-      const resume = String(raw?.resume || '').trim();
-      if (!id || !title || !resume || seen.has(id)) {
-        return;
-      }
-      seen.add(id);
-      items.push({ id, title, resume });
-    };
-    if (documentIds.length) {
+  const items = [];
+  const seen = new Set();
+  const pushItem = (raw) => {
+    const id = String(raw?.id || '').trim();
+    const title = String(raw?.title || '').trim();
+    const resume = String(raw?.resume || '').trim();
+    if (!id || !title || !resume || seen.has(id)) {
+      return;
+    }
+    seen.add(id);
+    items.push({ id, title, resume });
+  };
+  let itemLoadSucceeded = false;
+  if (itemIds.length && knowledgeBaseService?.getItemReferences) {
+    try {
+      const itemResult = knowledgeBaseService.getItemReferences(itemIds);
+      (Array.isArray(itemResult?.items) ? itemResult.items : []).forEach(pushItem);
+      itemLoadSucceeded = true;
+    } catch (error) {
+      log(`读取勾选知识条目失败，将按文档全量读取：${error.message || String(error)}`);
+    }
+  }
+  if ((!itemIds.length || !itemLoadSucceeded) && documentIds.length) {
+    try {
       const result = knowledgeBaseService.getOutlineReferences(documentIds);
       (Array.isArray(result?.items) ? result.items : []).forEach(pushItem);
+    } catch (error) {
+      log(`读取参考知识库文档失败，已跳过：${error.message || String(error)}`);
     }
-    if (snippetIds.length && knowledgeBaseService?.getSnippetReferences) {
+  }
+  if (snippetIds.length && knowledgeBaseService?.getSnippetReferences) {
+    try {
       const snippetResult = knowledgeBaseService.getSnippetReferences(snippetIds);
       (Array.isArray(snippetResult?.items) ? snippetResult.items : []).forEach(pushItem);
+    } catch (error) {
+      log(`读取知识库片段失败，已跳过：${error.message || String(error)}`);
     }
-    log(items.length ? `正文编排已读取 ${items.length} 条知识库轻量条目。` : '未读取到可用知识库轻量条目，正文编排不使用知识库。');
-    return items;
-  } catch (error) {
-    log(`读取正文编排参考知识库失败，已跳过：${error.message || String(error)}`);
-    return [];
   }
+  log(items.length ? `正文编排已读取 ${items.length} 条知识库轻量条目。` : '未读取到可用知识库轻量条目，正文编排不使用知识库。');
+  return items;
 }
 
-function loadContentKnowledgeContentMap(knowledgeBaseService, documentIds, snippetIds, log) {
+function loadContentKnowledgeContentMap(knowledgeBaseService, documentIds, snippetIds, itemIds, log) {
   const map = new Map();
-  if ((!documentIds.length && !snippetIds.length) || !knowledgeBaseService?.readItems) {
+  if ((!documentIds.length && !snippetIds.length && !itemIds.length) || !knowledgeBaseService?.readItems) {
     return map;
   }
 
-  for (const documentId of documentIds) {
+  let itemLoadFailed = false;
+  if (itemIds.length && knowledgeBaseService?.readItemContents) {
     try {
-      const items = knowledgeBaseService.readItems(documentId);
-      for (const item of Array.isArray(items) ? items : []) {
-        const itemId = String(item?.id || '').trim();
-        const content = String(item?.content || '').trim();
-        if (!itemId || !content) {
-          continue;
-        }
-        map.set(`${documentId}::${itemId}`, { content });
+      const contents = knowledgeBaseService.readItemContents(itemIds);
+      for (const [key, value] of contents.entries()) {
+        const content = String(value?.content || '').trim();
+        if (!key || !content) continue;
+        map.set(key, { content });
       }
     } catch (error) {
-      log(`读取知识库正文素材失败，已跳过文档 ${documentId}：${error.message || String(error)}`);
+      itemLoadFailed = true;
+      log(`读取勾选知识条目正文素材失败，将按文档全量读取：${error.message || String(error)}`);
+    }
+  }
+
+  // 无勾选条目或勾选读取异常时降级文档全量；勾选条目全部失效（已删除）时不降级，保持"条目即权威"
+  if (!itemIds.length || itemLoadFailed) {
+    for (const documentId of documentIds) {
+      try {
+        const items = knowledgeBaseService.readItems(documentId);
+        for (const item of Array.isArray(items) ? items : []) {
+          const itemId = String(item?.id || '').trim();
+          const content = String(item?.content || '').trim();
+          if (!itemId || !content) {
+            continue;
+          }
+          map.set(`${documentId}::${itemId}`, { content });
+        }
+      } catch (error) {
+        log(`读取知识库正文素材失败，已跳过文档 ${documentId}：${error.message || String(error)}`);
+      }
     }
   }
 
@@ -3394,11 +3432,11 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     updateTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, workspaceStore.loadTechnicalPlan());
   }
 
-  knowledgeItems = loadContentKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, (message) => {
+  knowledgeItems = loadContentKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, normalizeReferenceItemIds(storedPlan), (message) => {
     logs = [...logs, message];
   });
   allowedKnowledgeItemIds = new Set(knowledgeItems.map((item) => item.id));
-  knowledgeContentMap = loadContentKnowledgeContentMap(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, (message) => {
+  knowledgeContentMap = loadContentKnowledgeContentMap(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, normalizeReferenceItemIds(storedPlan), (message) => {
     logs = [...logs, message];
   });
 

@@ -16,6 +16,7 @@ function registerKnowledgeBaseIpc({ knowledgeBaseService }) {
   ipcMain.handle('knowledge-base:start-matching', (event, documentId, batchSize) => knowledgeBaseService.startMatching(documentId, batchSize, event.sender));
   ipcMain.handle('knowledge-base:read-markdown', (_event, documentId) => knowledgeBaseService.readMarkdown(documentId));
   ipcMain.handle('knowledge-base:read-items', (_event, documentId) => knowledgeBaseService.readItems(documentId));
+  ipcMain.handle('knowledge-base:list-items', (_event, documentId) => knowledgeBaseService.listItems(documentId));
   ipcMain.handle('knowledge-base:read-analysis', (_event, documentId) => knowledgeBaseService.readAnalysis(documentId));
   ipcMain.handle('knowledge-base:create-item', (_event, documentId, payload) => knowledgeBaseService.createItem(documentId, payload));
   ipcMain.handle('knowledge-base:update-item', (_event, documentId, itemId, partial) => knowledgeBaseService.updateItem(documentId, itemId, partial));

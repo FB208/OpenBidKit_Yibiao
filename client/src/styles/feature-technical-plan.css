@@ -3736,3 +3736,41 @@
     padding: 0 16px 16px;
   }
 }
+
+/* ── Outline Knowledge Item Selection ─────────── */
+.outline-knowledge-subhead.compact {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  padding: 6px 8px 4px;
+}
+.outline-knowledge-item-list.compact {
+  padding-left: 22px;
+}
+.outline-knowledge-item.compact {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.outline-knowledge-item.compact:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+.outline-knowledge-item.compact.is-selected {
+  background: rgba(64, 158, 255, 0.08);
+}
+.outline-knowledge-item.compact strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.outline-knowledge-load-more {
+  margin: 4px 8px;
+  font-size: 12px;
+  color: var(--el-color-primary, #409eff);
+  background: none;
+  border: none;
+  cursor: pointer;
+}

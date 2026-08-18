@@ -1,5 +1,5 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { useToast } from '../../../shared/ui';
@@ -17,10 +17,11 @@ interface OutlineEditPageProps {
   outlineExpansionMode: OutlineExpansionMode;
   referenceKnowledgeDocumentIds: string[];
   referenceKnowledgeSnippetIds: string[];
+  referenceKnowledgeItemIds: string[];
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
   contentTaskStatus?: BackgroundTaskState['status'];
-  onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; referenceKnowledgeSnippetIds?: string[]; outlineExpansionMode: OutlineExpansionMode }) => void;
+  onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; referenceKnowledgeSnippetIds?: string[]; referenceKnowledgeItemIds?: string[]; outlineExpansionMode: OutlineExpansionMode }) => void;
   onOutlineSaved: (request: SaveOutlineRequest) => Promise<void>;
   onSortGuardChange?: (guard: OutlineSortGuard | null) => void;
 }
@@ -224,6 +225,7 @@ function OutlineEditPage({
   outlineExpansionMode,
   referenceKnowledgeDocumentIds,
   referenceKnowledgeSnippetIds,
+  referenceKnowledgeItemIds,
   outlineData,
   task,
   contentTaskStatus,
@@ -242,6 +244,10 @@ function OutlineEditPage({
   const [draftOutlineExpansionMode, setDraftOutlineExpansionMode] = useState<OutlineExpansionMode>(outlineExpansionMode);
   const [draftKnowledgeDocumentIds, setDraftKnowledgeDocumentIds] = useState<string[]>(referenceKnowledgeDocumentIds);
   const [draftKnowledgeSnippetIds, setDraftKnowledgeSnippetIds] = useState<string[]>(referenceKnowledgeSnippetIds);
+  const [draftKnowledgeItemIds, setDraftKnowledgeItemIds] = useState<string[]>(referenceKnowledgeItemIds);
+  const [knowledgeItemsByDocument, setKnowledgeItemsByDocument] = useState<Record<string, { id: string; title: string; resume: string }[]>>({});
+  const [visibleItemCountByDocument, setVisibleItemCountByDocument] = useState<Record<string, number>>({});
+  const draftKnowledgeDocumentIdsRef = useRef<string[]>(draftKnowledgeDocumentIds);
   const [knowledgeSnippets, setKnowledgeSnippets] = useState<KnowledgeSnippet[]>([]);
   const [developerMode, setDeveloperMode] = useState(false);
   const [draftForceOutlineAgentRepair, setDraftForceOutlineAgentRepair] = useState(false);
@@ -350,10 +356,11 @@ function OutlineEditPage({
     setDraftOutlineExpansionMode(isExpansionWorkflow ? outlineExpansionMode : 'ai-complement');
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
     setDraftKnowledgeSnippetIds(referenceKnowledgeSnippetIds);
+    setDraftKnowledgeItemIds(referenceKnowledgeItemIds);
     setDraftForceOutlineAgentRepair(false);
     setKnowledgeSearch('');
     void loadKnowledgeIndex();
-  }, [generationDialogOpen, isExpansionWorkflow, outlineExpansionMode, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds]);
+  }, [generationDialogOpen, isExpansionWorkflow, outlineExpansionMode, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, referenceKnowledgeItemIds]);
 
   const loadKnowledgeIndex = async () => {
     try {
@@ -373,6 +380,35 @@ function OutlineEditPage({
     }
   };
 
+  const loadDocumentItems = async (document: KnowledgeDocument) => {
+    if (knowledgeItemsByDocument[document.id] || document.status !== 'success') {
+      return knowledgeItemsByDocument[document.id] || [];
+    }
+    try {
+      const items = await window.yibiao?.knowledgeBase.listItems(document.id);
+      const list = Array.isArray(items) ? items : [];
+      setKnowledgeItemsByDocument((prev) => ({
+        ...prev,
+        [document.id]: list,
+      }));
+      return list;
+    } catch {
+      return [];
+    }
+  };
+
+  useEffect(() => {
+    const pending = draftKnowledgeDocumentIds
+      .map((documentId) => knowledgeIndex.documents.find((document) => document.id === documentId))
+      .filter((document): document is KnowledgeDocument => Boolean(document));
+    pending.forEach((document) => void loadDocumentItems(document));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKnowledgeDocumentIds]);
+
+  useEffect(() => {
+    draftKnowledgeDocumentIdsRef.current = draftKnowledgeDocumentIds;
+  }, [draftKnowledgeDocumentIds]);
+
   const openGenerationDialog = () => {
     if (sorting) {
       showToast('请先保存当前目录排序', 'info');
@@ -391,6 +427,7 @@ function OutlineEditPage({
     setDraftOutlineExpansionMode(isExpansionWorkflow ? outlineExpansionMode : 'ai-complement');
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
     setDraftKnowledgeSnippetIds(referenceKnowledgeSnippetIds);
+    setDraftKnowledgeItemIds(referenceKnowledgeItemIds);
     setKnowledgeSearch('');
     setGenerationDialogOpen(true);
   };
@@ -399,6 +436,7 @@ function OutlineEditPage({
     onOutlineConfigChange({
       referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
       referenceKnowledgeSnippetIds: draftKnowledgeSnippetIds,
+      referenceKnowledgeItemIds: draftKnowledgeItemIds,
       outlineExpansionMode: isExpansionWorkflow ? draftOutlineExpansionMode : 'ai-complement',
     });
     setGenerationDialogOpen(false);
@@ -424,12 +462,14 @@ function OutlineEditPage({
       onOutlineConfigChange({
         referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
         referenceKnowledgeSnippetIds: draftKnowledgeSnippetIds,
+        referenceKnowledgeItemIds: draftKnowledgeItemIds,
         outlineExpansionMode: nextOutlineExpansionMode,
       });
       setGenerationDialogOpen(false);
       await window.yibiao?.tasks.startOutlineGeneration({
         reference_knowledge_document_ids: draftKnowledgeDocumentIds,
         reference_knowledge_snippet_ids: draftKnowledgeSnippetIds,
+        reference_knowledge_item_ids: draftKnowledgeItemIds,
         outline_expansion_mode: nextOutlineExpansionMode,
         debug_force_outline_agent_repair: developerMode && draftForceOutlineAgentRepair,
       });
@@ -446,12 +486,23 @@ function OutlineEditPage({
     if (document.status !== 'success' || knowledgePickingDisabled) {
       return;
     }
-
-    setDraftKnowledgeDocumentIds((prev) => (
-      prev.includes(document.id)
-        ? prev.filter((id) => id !== document.id)
-        : [...prev, document.id]
-    ));
+    setDraftKnowledgeDocumentIds((prev) => {
+      const adding = !prev.includes(document.id);
+      if (adding) {
+        void loadDocumentItems(document).then((items) => {
+          if (!draftKnowledgeDocumentIdsRef.current.includes(document.id)) {
+            return;
+          }
+          setDraftKnowledgeItemIds((prevItems) => {
+            const documentItemIds = (items || []).map((item) => item.id);
+            return [...prevItems, ...documentItemIds.filter((id) => !prevItems.includes(id))];
+          });
+        });
+        return [...prev, document.id];
+      }
+      setDraftKnowledgeItemIds((prevItems) => prevItems.filter((id) => !id.startsWith(`${document.id}::`)));
+      return prev.filter((id) => id !== document.id);
+    });
   };
 
   const toggleKnowledgeFolder = (folderId: string) => {
@@ -464,6 +515,17 @@ function OutlineEditPage({
     }
     const ids = documents.filter((document) => document.status === 'success').map((document) => document.id);
     setDraftKnowledgeDocumentIds((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
+    documents.filter((document) => document.status === 'success').forEach((document) => {
+      void loadDocumentItems(document).then((items) => {
+        if (!draftKnowledgeDocumentIdsRef.current.includes(document.id)) {
+          return;
+        }
+        setDraftKnowledgeItemIds((prevItems) => {
+          const documentItemIds = (items || []).map((item) => item.id);
+          return [...prevItems, ...documentItemIds.filter((id) => !prevItems.includes(id))];
+        });
+      });
+    });
   };
 
   const clearFolderDocuments = (documents: KnowledgeDocument[]) => {
@@ -472,6 +534,11 @@ function OutlineEditPage({
     }
     const ids = new Set(documents.map((document) => document.id));
     setDraftKnowledgeDocumentIds((prev) => prev.filter((id) => !ids.has(id)));
+    setDraftKnowledgeItemIds((prev) => prev.filter((id) => {
+      const sep = id.indexOf('::');
+      const documentId = sep > 0 ? id.slice(0, sep) : '';
+      return !ids.has(documentId);
+    }));
   };
 
   const removeDraftKnowledgeDocument = (documentId: string) => {
@@ -486,6 +553,33 @@ function OutlineEditPage({
       return;
     }
     setDraftKnowledgeDocumentIds([]);
+    setDraftKnowledgeItemIds([]);
+  };
+
+  const clearDraftKnowledgeItems = () => {
+    if (knowledgePickingDisabled) {
+      return;
+    }
+    setDraftKnowledgeItemIds([]);
+  };
+
+  const toggleDraftKnowledgeItem = (item: { id: string; title: string }) => {
+    if (knowledgePickingDisabled) {
+      return;
+    }
+    const referenceId = item.id;
+    setDraftKnowledgeItemIds((prev) => (
+      prev.includes(referenceId)
+        ? prev.filter((id) => id !== referenceId)
+        : [...prev, referenceId]
+    ));
+  };
+
+  const removeDraftKnowledgeItem = (referenceId: string) => {
+    if (knowledgePickingDisabled) {
+      return;
+    }
+    setDraftKnowledgeItemIds((prev) => prev.filter((id) => id !== referenceId));
   };
 
   const toggleDraftKnowledgeSnippet = (snippet: KnowledgeSnippet) => {
@@ -892,7 +986,11 @@ function OutlineEditPage({
       const folderDocuments = availableDocuments.filter((document) => document.folder_id === folder.id);
       const folderMatched = keyword ? includesKeyword(folder.name, keyword) : false;
       const documents = keyword
-        ? folderDocuments.filter((document) => folderMatched || includesKeyword(document.file_name, keyword))
+        ? folderDocuments.filter((document) =>
+            folderMatched
+            || includesKeyword(document.file_name, keyword)
+            || (knowledgeItemsByDocument[document.id] || []).some((item) => includesKeyword(item.title, keyword))
+          )
         : folderDocuments;
 
       return documents.length ? [{ folder, documents }] : [];
@@ -949,7 +1047,8 @@ function OutlineEditPage({
                           const selected = draftKnowledgeDocumentIds.includes(document.id);
 
                           return (
-                            <label className={`outline-knowledge-document compact${selected ? ' is-selected' : ''}`} key={document.id}>
+                            <React.Fragment key={document.id}>
+                            <label className={`outline-knowledge-document compact${selected ? ' is-selected' : ''}`}>
                               <input
                                 type="checkbox"
                                 checked={selected}
@@ -959,6 +1058,34 @@ function OutlineEditPage({
                               <strong title={document.file_name}>{document.file_name}</strong>
                               <small>{document.item_count || 0} 条</small>
                             </label>
+                            {expanded && selected && (
+                              <div className="outline-knowledge-item-list compact">
+                                <div className="outline-knowledge-subhead compact">条目（可取消勾选）</div>
+                                {(knowledgeItemsByDocument[document.id] || []).slice(0, visibleItemCountByDocument[document.id] || 50).map((item) => {
+                                  const itemSelected = draftKnowledgeItemIds.includes(item.id);
+                                  return (
+                                    <label className={`outline-knowledge-item compact${itemSelected ? ' is-selected' : ''}`} key={item.id}>
+                                      <input
+                                        type="checkbox"
+                                        checked={itemSelected}
+                                        disabled={knowledgePickingDisabled}
+                                        onChange={() => toggleDraftKnowledgeItem(item)}
+                                      />
+                                      <strong title={item.title}>{item.title}</strong>
+                                    </label>
+                                  );
+                                })}
+                                {(knowledgeItemsByDocument[document.id] || []).length > (visibleItemCountByDocument[document.id] || 50) && (
+                                  <button
+                                    type="button"
+                                    className="outline-knowledge-load-more"
+                                    onClick={() => setVisibleItemCountByDocument((prev) => ({ ...prev, [document.id]: (prev[document.id] || 50) + 50 }))}
+                                    disabled={knowledgePickingDisabled}
+                                  >显示更多</button>
+                                )}
+                              </div>
+                            )}
+                            </React.Fragment>
                           );
                         })}
                       </div>
@@ -996,8 +1123,8 @@ function OutlineEditPage({
               <strong>本次已选</strong>
               <button
                 type="button"
-                onClick={() => { clearDraftKnowledgeDocuments(); clearDraftKnowledgeSnippets(); }}
-                disabled={knowledgePickingDisabled || (!draftKnowledgeDocumentIds.length && !draftKnowledgeSnippetIds.length)}
+                onClick={() => { clearDraftKnowledgeDocuments(); clearDraftKnowledgeSnippets(); clearDraftKnowledgeItems(); }}
+                disabled={knowledgePickingDisabled || (!draftKnowledgeDocumentIds.length && !draftKnowledgeSnippetIds.length && !draftKnowledgeItemIds.length)}
               >清空</button>
             </div>
             <div className="outline-knowledge-subhead compact">文档</div>
@@ -1025,6 +1152,27 @@ function OutlineEditPage({
               </div>
             ) : (
               <div className="outline-knowledge-empty compact">未选择知识库片段</div>
+            )}
+            <div className="outline-knowledge-subhead compact">条目</div>
+            {draftKnowledgeItemIds.length ? (
+              <div className="outline-knowledge-selected-list">
+                {draftKnowledgeItemIds.slice(0, 50).map((referenceId) => {
+                  const sep = referenceId.indexOf('::');
+                  const documentId = referenceId.slice(0, sep);
+                  const item = (knowledgeItemsByDocument[documentId] || []).find((entry) => entry.id === referenceId);
+                  return (
+                    <div className="outline-knowledge-selected-item" key={referenceId}>
+                      <strong title={item?.title || referenceId}>{item?.title || referenceId}</strong>
+                      <button type="button" onClick={() => removeDraftKnowledgeItem(referenceId)} disabled={knowledgePickingDisabled}>移除</button>
+                    </div>
+                  );
+                })}
+                {draftKnowledgeItemIds.length > 50 && (
+                  <div className="outline-knowledge-empty compact">已显示前 50 条，共 {draftKnowledgeItemIds.length} 条</div>
+                )}
+              </div>
+            ) : (
+              <div className="outline-knowledge-empty compact">未选择知识条目</div>
             )}
           </aside>
         </div>

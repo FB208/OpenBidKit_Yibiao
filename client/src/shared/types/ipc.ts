@@ -481,6 +481,7 @@ export interface YibiaoBridge {
     startMatching: (documentId: string, batchSize: number) => Promise<KnowledgeBaseStartMatchingResult>;
     readMarkdown: (documentId: string) => Promise<string>;
     readItems: (documentId: string) => Promise<KnowledgeItem[]>;
+    listItems: (documentId: string) => Promise<{ id: string; title: string; resume: string }[]>;
     readAnalysis: (documentId: string) => Promise<KnowledgeAnalysisSnapshot>;
     createItem: (documentId: string, payload: { title: string; resume: string; content: string; source_file?: string }) => Promise<KnowledgeItem>;
     updateItem: (documentId: string, itemId: string, partial: Partial<Pick<KnowledgeItem, 'title' | 'resume' | 'content' | 'source_file'>>) => Promise<KnowledgeItem>;
@@ -524,7 +525,7 @@ export interface YibiaoBridge {
     setWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
     switchWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
     saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode }) => Promise<TechnicalPlanState>;
-    saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; referenceKnowledgeSnippetIds?: string[]; outlineExpansionMode?: OutlineExpansionMode }) => Promise<TechnicalPlanState>;
+    saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; referenceKnowledgeSnippetIds?: string[]; referenceKnowledgeItemIds?: string[]; outlineExpansionMode?: OutlineExpansionMode }) => Promise<TechnicalPlanState>;
     saveOutline: (payload: SaveOutlineRequest) => Promise<TechnicalPlanState>;
     saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<TechnicalPlanState>;
     saveContentGenerationOptions: (options: ContentGenerationOptions) => Promise<TechnicalPlanState>;

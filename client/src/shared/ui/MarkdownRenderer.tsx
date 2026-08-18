@@ -340,7 +340,7 @@ function MarkdownRenderer({
     };
 
     return Array.from(root?.childNodes || []).map((node, index) => renderNode(node, index));
-  }, [enableGfm, html, imageClassName, imageMode, linkMode, linkTextClassName, onPreviewImage, previewImageTitle, renderMermaid]);
+  }, [enableGfm, html, imageClassName, imageMode, linkMode, linkTextClassName, onPreviewImage, previewImageTitle, renderMermaid, resolveImage]);
 
   return <>{content}</>;
 }
