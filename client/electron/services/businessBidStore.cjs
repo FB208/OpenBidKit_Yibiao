@@ -307,7 +307,7 @@ function createBusinessBidStore({ app, fileService, technicalPlanStore, knowledg
   function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineMode, referenceKnowledgeSnippetIds, referenceKnowledgeItemIds, outlineExpansionMode, wordControlOptions } = {}) {
     return updateBusinessBid({
       outlineMode: ['aligned', 'response-file'].includes(outlineMode) ? outlineMode : 'response-file',
-      outlineExpansionMode: ['ai-complement', 'aligned'].includes(outlineExpansionMode) ? outlineExpansionMode : 'ai-complement',
+      outlineExpansionMode: ['ai-complement', 'original-only'].includes(outlineExpansionMode) ? outlineExpansionMode : 'ai-complement',
       outlineWordControlOptions: normalizeOutlineWordControlOptions(wordControlOptions),
       referenceKnowledgeDocumentIds: Array.isArray(referenceKnowledgeDocumentIds) ? referenceKnowledgeDocumentIds : [],
       referenceKnowledgeSnippetIds: Array.isArray(referenceKnowledgeSnippetIds) ? referenceKnowledgeSnippetIds : [],
