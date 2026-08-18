@@ -59,8 +59,15 @@ function normalizeReferenceSnippetIds(state) {
   return Array.isArray(raw) ? [...new Set(raw.map((id) => String(id || '').trim()).filter(Boolean))] : [];
 }
 
-function loadKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, log) {
-  if (!documentIds.length && !snippetIds.length) {
+// 与 globalFactsTask.cjs 中同名函数保持一致（该模块未导出此函数，故在本地定义）。
+function normalizeReferenceItemIds(state) {
+  const raw = state?.referenceKnowledgeItemIds || [];
+  return Array.isArray(raw) ? [...new Set(raw.map((id) => String(id || '').trim()).filter(Boolean))] : [];
+}
+
+function loadKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, itemIds, log) {
+  const normalizedItemIds = Array.isArray(itemIds) ? itemIds : [];
+  if (!documentIds.length && !snippetIds.length && !normalizedItemIds.length) {
     log('未选择参考知识库，本次仅基于招标文件与技术方案上下文。', 12);
     return [];
   }
@@ -70,17 +77,43 @@ function loadKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, log) 
   }
 
   const items = [];
-  for (const documentId of documentIds) {
+  const seen = new Set();
+  const pushItem = (item) => {
+    if (!item?.id || seen.has(item.id)) return;
+    seen.add(item.id);
+    items.push(item);
+  };
+
+  // 优先读取用户勾选的具体知识条目（勾选成功时不再按文档全量读取）。
+  let itemLoadSucceeded = false;
+  if (normalizedItemIds.length && knowledgeBaseService?.readItemContents && knowledgeBaseService?.getItemReferences) {
     try {
-      const documentItems = knowledgeBaseService.readItems(documentId);
-      for (const item of Array.isArray(documentItems) ? documentItems : []) {
-        const title = singleLine(item?.title);
-        const content = String(item?.content || '').trim();
+      const contents = knowledgeBaseService.readItemContents(normalizedItemIds);
+      const result = knowledgeBaseService.getItemReferences(normalizedItemIds);
+      for (const meta of Array.isArray(result?.items) ? result.items : []) {
+        const title = singleLine(meta?.title);
+        const content = String(contents.get(meta?.id)?.content || '').trim();
         if (!title || !content) continue;
-        items.push({ id: `${documentId}::${singleLine(item?.id)}`, title, resume: singleLine(item?.resume), content });
+        pushItem({ id: singleLine(meta?.id), title, resume: singleLine(meta?.resume), content });
       }
+      itemLoadSucceeded = true;
     } catch (error) {
-      log(`读取知识库条目失败，已跳过文档 ${documentId}：${error.message || String(error)}`, 12);
+      log(`读取勾选知识条目失败，将按文档全量读取：${error.message || String(error)}`, 12);
+    }
+  }
+  if ((!normalizedItemIds.length || !itemLoadSucceeded) && documentIds.length) {
+    for (const documentId of documentIds) {
+      try {
+        const documentItems = knowledgeBaseService.readItems(documentId);
+        for (const item of Array.isArray(documentItems) ? documentItems : []) {
+          const title = singleLine(item?.title);
+          const content = String(item?.content || '').trim();
+          if (!title || !content) continue;
+          pushItem({ id: `${documentId}::${singleLine(item?.id)}`, title, resume: singleLine(item?.resume), content });
+        }
+      } catch (error) {
+        log(`读取知识库条目失败，已跳过文档 ${documentId}：${error.message || String(error)}`, 12);
+      }
     }
   }
   if (snippetIds.length && knowledgeBaseService?.getSnippetReferences) {
@@ -90,7 +123,7 @@ function loadKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, log) 
         const title = singleLine(item?.title);
         const content = String(item?.resume || '').trim();
         if (!title || !content) continue;
-        items.push({ id: singleLine(item?.id), title, resume: singleLine(content), content });
+        pushItem({ id: singleLine(item?.id), title, resume: singleLine(content), content });
       }
     } catch (error) {
       log(`读取知识库片段失败，已跳过：${error.message || String(error)}`, 12);
@@ -528,7 +561,7 @@ async function runBusinessClauseAnalysisTask({ aiService, workspaceStore, knowle
   const referenceKnowledgeSnippetIds = normalizeReferenceSnippetIds(storedPlan);
   const technicalPlanSummary = storedPlan.referenceTechnicalPlanSummary || '';
   log('正在读取招标文件与参考知识库。', 10);
-  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, log);
+  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, normalizeReferenceItemIds(storedPlan), log);
   const relevantKnowledge = selectRelevantItems(BUSINESS_CLAUSE_QUERY, knowledgeItems, { maxItems: MAX_KNOWLEDGE_ITEMS });
   log(`按商务相关性筛选：知识库 ${relevantKnowledge.length}/${knowledgeItems.length} 条用于条款解析。`, 12);
 
@@ -679,7 +712,7 @@ async function runBusinessClauseRegenerationTask({ aiService, workspaceStore, kn
   const referenceKnowledgeSnippetIds = normalizeReferenceSnippetIds(storedPlan);
   const technicalPlanSummary = storedPlan.referenceTechnicalPlanSummary || '';
   log('正在读取招标文件与模板内容。', 10);
-  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, log);
+  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, normalizeReferenceItemIds(storedPlan), log);
   const relevantKnowledge = selectRelevantItems(BUSINESS_CLAUSE_QUERY, knowledgeItems, { maxItems: MAX_KNOWLEDGE_ITEMS });
   log(`按商务相关性筛选：知识库 ${relevantKnowledge.length}/${knowledgeItems.length} 条用于条款解析。`, 12);
 
@@ -795,7 +828,74 @@ ${templateContent}` },
   updateTask({ status: 'success', progress: 100, logs: [...logs, `商务响应矩阵已基于模板重新生成：${clauseItems.length} 项。`] }, state);
 }
 
-async function runBusinessOutlineGenerationTask({ aiService, workspaceStore, knowledgeBaseService, updateTask, payload }) {
+function normalizeWordControlOptionsForBusiness(value) {
+  const sectionWords = Number.isFinite(Number(value?.sectionWords)) && Number(value.sectionWords) >= 0 ? Math.floor(Number(value.sectionWords)) : 0;
+  return {
+    minimumWords: Number.isFinite(Number(value?.minimumWords)) && Number(value.minimumWords) >= 0 ? Math.floor(Number(value.minimumWords)) : 0,
+    maximumWords: Number.isFinite(Number(value?.maximumWords)) && Number(value.maximumWords) >= 0 ? Math.floor(Number(value.maximumWords)) : 0,
+    sectionWords,
+    strictSectionWords: sectionWords > 0 && Boolean(value?.strictSectionWords),
+  };
+}
+
+function buildBusinessRootOutlineMessages({ storedPlan, tenderMarkdown, clauseItems, technicalPlanSummary, relevantKnowledge }) {
+  const outlineQuery = `${BUSINESS_OUTLINE_QUERY} ${singleLine(storedPlan.tenderFile?.fileName) || ''} ${(clauseItems || []).map((c) => `${c.category} ${c.title}`).join(' ')}`;
+  return [
+    { role: 'system', content: `你是专业的商务标书目录设计助手。请基于商务响应矩阵与招标文件，先设计一级目录（章）候选，供用户确认。
+
+要求：
+1. 只使用简体中文。
+2. 一级目录（章）覆盖：投标函与法定代表人身份证明、商务响应表、报价说明与报价汇总、合同条款偏离表、资格审查与资信业绩材料、供货/交付与售后服务承诺、付款与履约保障等。
+3. 至少 6 个一级章，最多 10 个。
+4. 只返回 JSON。` },
+    { role: 'user', content: `项目/标段名称：${singleLine(storedPlan.tenderFile?.fileName) || '未提供'}` },
+    { role: 'user', content: `商务响应矩阵：\n${formatClauseMatrix(clauseItems)}` },
+    { role: 'user', content: `招标文件正文：\n${String(tenderMarkdown || '').trim().slice(0, 20000)}` },
+    { role: 'user', content: technicalPlanSummary.trim() ? `已生成技术方案（可选参考上下文，已按目录主题筛选）：\n${selectRelevantParagraphs(outlineQuery, technicalPlanSummary.trim(), { maxParagraphs: MAX_TECH_PARAGRAPHS })}` : '未关联技术方案。' },
+    { role: 'user', content: `参考知识库条目（按目录主题筛选）：\n${formatKnowledgeItems(relevantKnowledge)}` },
+    { role: 'user', content: `请输出一级目录 JSON 格式如下：
+{
+  "outline": [
+    { "id": "1", "title": "投标函及投标函附录", "description": "投标承诺与法定代表人身份证明" }
+  ]
+}` },
+  ];
+}
+
+function buildBusinessChildrenMessages({ storedPlan, clauseItems, confirmedRoots, relevantKnowledge, sectionWords }) {
+  return [
+    { role: 'system', content: `你是专业的商务标书目录设计助手。基于已确认的一级目录，生成完整的商务标三级目录。
+
+要求：
+1. 只使用简体中文。
+2. 目录应为三级结构：章（1.）→ 节（1.1）→ 点（1.1.1）。
+3. 只对用户确认的一级目录生成子目录。
+4. 不要照搬技术实施方案的细节，聚焦商务与合同维度。
+5. 每小节正文目标字数约 ${sectionWords} 字。
+6. 只返回 JSON。` },
+    { role: 'user', content: `项目/标段名称：${singleLine(storedPlan.tenderFile?.fileName) || '未提供'}` },
+    { role: 'user', content: `商务响应矩阵：\n${formatClauseMatrix(clauseItems)}` },
+    { role: 'user', content: `已确认的一级目录：\n${confirmedRoots.map((item) => `${item.id} ${item.title}：${item.description}`).join('\n')}` },
+    { role: 'user', content: `参考知识库条目（按目录主题筛选）：\n${formatKnowledgeItems(relevantKnowledge)}` },
+    { role: 'user', content: `请输出完整商务标目录，JSON 格式如下：
+{
+  "outline": [
+    {
+      "id": "1",
+      "title": "投标函及投标函附录",
+      "description": "投标承诺与法定代表人身份证明",
+      "children": [
+        { "id": "1.1", "title": "投标函", "description": "投标报价与工期承诺" },
+        { "id": "1.2", "title": "法定代表人身份证明", "description": "法人资格与授权" }
+      ]
+    }
+  ]
+}
+要求：每个一级章至少 2 个二级节，每节至少 2 个三级点。` },
+  ];
+}
+
+async function runBusinessOutlineGenerationTask({ aiService, workspaceStore, knowledgeBaseService, updateTask, checkpointTask, taskControl, payload }) {
   let logs = ['开始生成商务标目录。'];
   let currentProgress = 5;
   function log(message, progress = currentProgress) {
@@ -816,77 +916,75 @@ async function runBusinessOutlineGenerationTask({ aiService, workspaceStore, kno
 
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
   const referenceKnowledgeSnippetIds = normalizeReferenceSnippetIds(storedPlan);
+  const referenceKnowledgeItemIds = normalizeReferenceItemIds(storedPlan);
+  const wordControlOptions = normalizeWordControlOptionsForBusiness(storedPlan.outlineWordControlOptions);
   const technicalPlanSummary = storedPlan.referenceTechnicalPlanSummary || '';
-  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, log);
+  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, referenceKnowledgeItemIds, log);
   const outlineQuery = `${BUSINESS_OUTLINE_QUERY} ${singleLine(storedPlan.tenderFile?.fileName) || ''} ${(clauseItems || []).map((c) => `${c.category} ${c.title}`).join(' ')}`;
   const relevantKnowledge = selectRelevantItems(outlineQuery, knowledgeItems, { maxItems: MAX_KNOWLEDGE_ITEMS });
   log(`按目录主题筛选：知识库 ${relevantKnowledge.length}/${knowledgeItems.length} 条用于目录生成。`, 12);
 
-  updateTask({ status: 'running', progress: 20, logs });
-  const messages = [
-    {
-      role: 'system',
-      content: `你是专业的商务标书目录设计助手。请基于商务响应矩阵与招标文件，设计一份层级清晰、可直接用于标书编写的商务标目录。
-
-要求：
-1. 只使用简体中文。
-2. 目录应为三级结构：章（1.）→ 节（1.1）→ 点（1.1.1）。
-3. 必须覆盖：投标函与法定代表人身份证明、商务响应表、报价说明与报价汇总、合同条款偏离表、资格审查与资信业绩材料、供货/交付与售后服务承诺、付款与履约保障等。
-4. 不要照搬技术实施方案的细节，聚焦商务与合同维度。
-5. 只返回 JSON。`,
-    },
-    { role: 'user', content: `项目/标段名称：${singleLine(storedPlan.tenderFile?.fileName) || '未提供'}` },
-    { role: 'user', content: `商务响应矩阵：\n${formatClauseMatrix(clauseItems)}` },
-    { role: 'user', content: `招标文件正文：\n${String(tenderMarkdown || '').trim().slice(0, 20000)}` },
-    {
-      role: 'user',
-      content: technicalPlanSummary.trim()
-        ? `已生成技术方案（可选参考上下文，已按目录主题筛选，商务标可引用其中已确认的事实设定）：\n${selectRelevantParagraphs(outlineQuery, technicalPlanSummary.trim(), { maxParagraphs: MAX_TECH_PARAGRAPHS })}`
-        : '未关联技术方案。',
-    },
-    { role: 'user', content: `参考知识库条目（按目录主题筛选）：\n${formatKnowledgeItems(relevantKnowledge)}` },
-    {
-      role: 'user',
-      content: `请输出商务标目录，JSON 格式如下：
-{
-  "project_name": "项目/标段名称",
-  "outline": [
-    {
-      "id": "1",
-      "title": "投标函及投标函附录",
-      "description": "投标承诺与法定代表人身份证明",
-      "children": [
-        { "id": "1.1", "title": "投标函", "description": "投标报价与工期承诺" },
-        { "id": "1.2", "title": "法定代表人身份证明", "description": "法人资格与授权" }
-      ]
-    }
-  ]
-}
-要求：outline 至少 6 个一级章，且每个一级章至少 2 个二级节，形成完整商务标结构。`,
-    },
-  ];
-
-  const response = await collectJson(aiService, {
-    messages,
+  // ── 阶段一：生成一级目录候选，等待用户确认 ─────────────────
+  const rootMessages = buildBusinessRootOutlineMessages({ storedPlan, tenderMarkdown, clauseItems, technicalPlanSummary, relevantKnowledge });
+  log('正在生成一级目录候选。', 25);
+  const rootResponse = await collectJson(aiService, {
+    messages: rootMessages,
     temperature: 0.4,
-    logTitle: '商务标目录生成',
-    progressLabel: '商务目录生成',
+    logTitle: '商务标一级目录生成',
+    progressLabel: '商务一级目录生成',
+    failureMessage: '模型返回的商务标一级目录格式无效',
+    normalizer: (value) => normalizeOutlineResponse(value),
+    validator: (value) => {
+      if (!Array.isArray(value?.outline) || !value.outline.length) throw new Error('商务标一级目录缺少 outline');
+    },
+    progressCallback: (message) => log(message, 40),
+  });
+  const rootItems = (rootResponse.outline || []).map((item, index) => ({
+    id: String(index + 1),
+    title: singleLine(item.title),
+    description: singleLine(item.description),
+    attr: '商务',
+    content_mode: 'ai-generate',
+  }));
+  const selection = { items: rootItems, selected_ids: rootItems.map((item) => item.id), confirmed: false };
+  log('一级目录已生成，等待确认。', 45);
+  checkpointTask({ status: 'waiting-outline-selection', progress: 45, logs, stats: { outline_selection: selection } });
+
+  const confirmed = await taskControl.waitForOutlineSelection();
+  const selectedIdSet = new Set(confirmed.selectedIds || []);
+  const confirmedRoots = rootItems.filter((item) => selectedIdSet.has(item.id));
+  if (!confirmedRoots.length) throw new Error('未选择任何一级目录，已取消生成');
+  checkpointTask({
+    status: 'running',
+    progress: 50,
+    logs: [...logs, `已确认 ${confirmedRoots.length} 个一级目录，开始生成子目录。`],
+    stats: { outline_selection: { items: confirmed.items, selected_ids: confirmed.selectedIds, confirmed: true } },
+  });
+
+  // ── 阶段二：基于已确认的一级目录生成完整三级目录 ───────────
+  const sectionWords = wordControlOptions.sectionWords > 0 ? wordControlOptions.sectionWords : 3000;
+  const childrenMessages = buildBusinessChildrenMessages({ storedPlan, clauseItems, confirmedRoots, relevantKnowledge, sectionWords });
+  const fullResponse = await collectJson(aiService, {
+    messages: childrenMessages,
+    temperature: 0.4,
+    logTitle: '商务标子目录生成',
+    progressLabel: '商务子目录生成',
     failureMessage: '模型返回的商务标目录格式无效',
     normalizer: (value) => normalizeOutlineResponse(value),
     validator: (value) => {
-      if (!Array.isArray(value?.outline) || !value.outline.length) {
-        throw new Error('商务标目录缺少 outline');
-      }
+      if (!Array.isArray(value?.outline) || !value.outline.length) throw new Error('商务标目录缺少 outline');
     },
-    progressCallback: (message) => log(message, 60),
+    progressCallback: (message) => log(message, 80),
   });
 
-  const outline = renumberOutlineItems(response.outline || []);
+  const outline = renumberOutlineItems(fullResponse.outline || []);
   validateBusinessOutline(outline);
-  const outlineData = { outline, project_name: response.projectName || storedPlan.tenderFile?.fileName };
+  const outlineData = { outline, project_name: fullResponse.projectName || storedPlan.tenderFile?.fileName };
+  const outlineWordControlSnapshot = wordControlOptions;
 
   const state = workspaceStore.updateBusinessBid({
     outlineData,
+    outlineWordControlSnapshot,
     contentGenerationSections: {},
     contentGenerationTask: undefined,
     outlineGenerationTask: { task_id: '', type: 'business-outline-generation', status: 'success', progress: 100, logs: [...logs, '商务标目录已生成。'], started_at: now(), updated_at: now() },
@@ -917,7 +1015,7 @@ async function runBusinessGlobalFactsTask({ aiService, workspaceStore, knowledge
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
   const referenceKnowledgeSnippetIds = normalizeReferenceSnippetIds(storedPlan);
   const technicalPlanSummary = storedPlan.referenceTechnicalPlanSummary || '';
-  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, log);
+  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, normalizeReferenceItemIds(storedPlan), log);
   const relevantKnowledge = selectRelevantItems(BUSINESS_FACTS_QUERY, knowledgeItems, { maxItems: MAX_KNOWLEDGE_ITEMS });
   log(`按事实主题筛选：知识库 ${relevantKnowledge.length}/${knowledgeItems.length} 条用于全局事实设定。`, 12);
 
@@ -1003,7 +1101,7 @@ async function runBusinessContentGenerationTask({ aiService, workspaceStore, kno
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
   const referenceKnowledgeSnippetIds = normalizeReferenceSnippetIds(storedPlan);
   const technicalPlanSummary = storedPlan.referenceTechnicalPlanSummary || '';
-  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, log);
+  const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, normalizeReferenceItemIds(storedPlan), log);
 
   const minimumWords = Math.max(300, Number(storedPlan.contentGenerationOptions?.minimumWords) || 600);
   const leaves = collectLeafItems(outlineData.outline);
