@@ -1,4 +1,4 @@
-import type { OutlineData } from '../../shared/types/outline';
+import type { OutlineData, OutlineExpansionMode, OutlineWordControlOptions } from '../../shared/types/outline';
 import type { BackgroundTaskState, GlobalFactGroupState, ContentGenerationSectionState } from '../technical-plan/types';
 
 export type { OutlineData } from '../../shared/types/outline';
@@ -58,6 +58,10 @@ export interface BusinessBidState {
   referenceTechnicalPlanSummary?: string;
   referenceKnowledgeDocumentIds: string[];
   referenceKnowledgeSnippetIds: string[];
+  referenceKnowledgeItemIds: string[];
+  outlineWordControlOptions: OutlineWordControlOptions;
+  outlineWordControlSnapshot?: OutlineWordControlOptions;
+  outlineExpansionMode: OutlineExpansionMode;
   /** 招标文件中是否明确列出了商务标应包含的内容清单 */
   hasExplicitContentList?: boolean;
   /** 招标文件中列出的商务标应包含内容清单（如有） */
@@ -103,6 +107,9 @@ export const initialBusinessBidState: BusinessBidState = {
   referenceTechnicalPlan: false,
   referenceKnowledgeDocumentIds: [],
   referenceKnowledgeSnippetIds: [],
+  referenceKnowledgeItemIds: [],
+  outlineWordControlOptions: { minimumWords: 0, maximumWords: 0, sectionWords: 0, strictSectionWords: false },
+  outlineExpansionMode: 'ai-complement',
   hasExplicitContentList: undefined,
   requiredBusinessContents: undefined,
   selectedTemplateItemIds: undefined,
