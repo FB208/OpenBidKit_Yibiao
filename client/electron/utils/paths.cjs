@@ -28,6 +28,14 @@ function getTechnicalPlanDir(app) {
   return path.join(getWorkspaceDir(app), 'technical-plan');
 }
 
+function getFeasibilityReportDir(app) {
+  return path.join(getWorkspaceDir(app), 'feasibility-report');
+}
+
+function getFeasibilityReportSourcesDir(app) {
+  return path.join(getFeasibilityReportDir(app), 'sources');
+}
+
 function getTechnicalPlanTenderMarkdownPath(app) {
   return path.join(getTechnicalPlanDir(app), 'tender.md');
 }
@@ -123,6 +131,8 @@ module.exports = {
   getDuplicateCheckDir,
   getConfigFilePath,
   getGpuStartupProbePath,
+  getFeasibilityReportDir,
+  getFeasibilityReportSourcesDir,
   getGeneratedImagesDir,
   getImportedImagesDir,
   getKnowledgeBaseDir,

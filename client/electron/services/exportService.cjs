@@ -1788,6 +1788,129 @@ async function addMarkdownContent(children, content, context) {
   children.push(...await markdownToDocxBlocks(content, context));
 }
 
+function displayFeasibilityField(value) {
+  const text = String(value || '').trim();
+  return text || '【待补充】';
+}
+
+function escapeMarkdownTableCell(value) {
+  return displayFeasibilityField(value).replace(/\|/g, '｜').replace(/\n/g, ' ');
+}
+
+function formatLocalDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function buildFeasibilityAppendixMarkdown(projectInfo = {}) {
+  const typeLabel = projectInfo.projectType === 'enterprise' ? '企业投资项目' : '政府投资项目';
+  const rows = [
+    ['项目名称', projectInfo.projectName],
+    ['项目类型', typeLabel],
+    ['所属行业', projectInfo.industry],
+    ['建设单位', projectInfo.constructionUnit],
+    ['建设地点', projectInfo.location],
+    ['建设内容与规模', projectInfo.constructionContent],
+    ['建设期（年）', projectInfo.constructionPeriodYears],
+    ['运营期（年）', projectInfo.operationPeriodYears],
+    ['总投资', projectInfo.totalInvestment],
+    ['资金来源', projectInfo.fundingSource],
+  ];
+  return [
+    '| 项目 | 内容 |',
+    '| --- | --- |',
+    ...rows.map(([label, value]) => `| ${label} | ${escapeMarkdownTableCell(value)} |`),
+  ].join('\n');
+}
+
+function buildFeasibilitySignatureMarkdown() {
+  return [
+    '| 角色 | 姓名 | 签字 | 日期 |',
+    '| --- | --- | --- | --- |',
+    '| 项目负责人 |  |  |  |',
+    '| 技术负责人 |  |  |  |',
+    '| 经济负责人 |  |  |  |',
+    '| 审核人 |  |  |  |',
+    '| 审定人 |  |  |  |',
+  ].join('\n');
+}
+
+function buildFeasibilityPreparationMarkdown(options = {}, projectInfo = {}) {
+  const unit = displayFeasibilityField(options.preparationUnit || projectInfo.constructionUnit);
+  return [
+    `本报告依据国家现行投资项目可行性研究相关要求及项目提供资料编制，编制单位为${unit}。`,
+    '',
+    '编制原则：依法合规、事实充分、口径一致、结论可复核。资料不足处以【待补充】标注，资料冲突处以【待确认】标注。',
+    '',
+    '编制范围：项目背景与必要性、建设方案、投资与资金筹措口径、影响与风险、结论与建议。本阶段不计算 NPV、IRR 或投资回收期，也不生成财务测算附表。',
+    '',
+    '**编制责任签发表**（请手写填写姓名、签字和日期，本软件不预填责任人）',
+    '',
+    buildFeasibilitySignatureMarkdown(),
+  ].join('\n');
+}
+
+async function addFeasibilityWrapping(children, payload, context) {
+  const options = payload?.feasibility_options;
+  if (!options || typeof options !== 'object') return false;
+
+  const projectInfo = options.project_info && typeof options.project_info === 'object' ? options.project_info : {};
+  const includeCover = options.includeCover !== false;
+  const includeNotes = options.includePreparationNotes !== false;
+  const includeAppendix = options.includeAppendixTables !== false;
+  if (!includeCover && !includeNotes && !includeAppendix) return false;
+
+  if (includeCover) {
+    const security = String(options.securityLevel || '').trim();
+    if (security) {
+      children.push(paragraph([textRun(`密级：${security}`, { size: 22 })], { alignment: AlignmentType.RIGHT, after: 80 }));
+    }
+    children.push(paragraph(
+      [textRun(displayFeasibilityField(projectInfo.projectName || payload.project_name), { bold: true, font: '黑体', size: 48 })],
+      { alignment: AlignmentType.CENTER, before: 1600, after: 240 },
+    ));
+    children.push(paragraph(
+      [textRun('可行性研究报告', { bold: true, font: '黑体', size: 40 })],
+      { alignment: AlignmentType.CENTER, after: 480 },
+    ));
+    children.push(paragraph(
+      [textRun(`编制单位：${displayFeasibilityField(options.preparationUnit || projectInfo.constructionUnit)}`, { size: 24 })],
+      { alignment: AlignmentType.CENTER, after: 80 },
+    ));
+    children.push(paragraph(
+      [textRun(`编制日期：${formatLocalDate()}`, { size: 24 })],
+      { alignment: AlignmentType.CENTER, after: 200 },
+    ));
+    children.push(paragraph(
+      [textRun('内容由 AI 辅助生成，请人工审校后使用', { italics: true, size: 18, color: '536176' })],
+      { alignment: AlignmentType.CENTER, after: 200 },
+    ));
+    children.push(pageBreakParagraph());
+  } else {
+    children.push(paragraph([textRun('内容由 AI 生成', { italics: true, size: 18 })], { alignment: AlignmentType.CENTER, after: 120 }));
+    children.push(paragraph(
+      [textRun(payload.project_name || '可行性研究报告', { bold: true, size: 34 })],
+      { alignment: AlignmentType.CENTER, after: 300 },
+    ));
+  }
+
+  if (includeNotes) {
+    children.push(paragraph([textRun('编制说明', { bold: true, font: '黑体', size: 32 })], { after: 160 }));
+    await addMarkdownContent(children, buildFeasibilityPreparationMarkdown(options, projectInfo), context);
+    children.push(pageBreakParagraph());
+  }
+
+  if (includeAppendix) {
+    children.push(paragraph([textRun('附表1 项目基本情况', { bold: true, font: '黑体', size: 32 })], { after: 160 }));
+    await addMarkdownContent(children, buildFeasibilityAppendixMarkdown(projectInfo), context);
+    children.push(pageBreakParagraph());
+  }
+
+  return true;
+}
+
 function buildOutlineHeadingParagraph(item, context, level, options = {}) {
   const style = getHeadingStyle(context.exportFormat, level);
   const nativeHeadingNumbering = usesNativeHeadingNumbering(style) && !options.manualNumbering && !options.omitNumbering;
@@ -2081,10 +2204,14 @@ async function buildDocxResult(payload, options = {}) {
     }
   }
 
-  const children = [
-    paragraph([textRun('内容由 AI 生成', { italics: true, size: 18 })], { alignment: AlignmentType.CENTER, after: 120 }),
-    paragraph([textRun(payload.project_name || '投标技术文件', { bold: true, size: 34 })], { alignment: AlignmentType.CENTER, after: 300 }),
-  ];
+  const children = [];
+  const wrapped = await addFeasibilityWrapping(children, payload, context);
+  if (!wrapped) {
+    children.push(
+      paragraph([textRun('内容由 AI 生成', { italics: true, size: 18 })], { alignment: AlignmentType.CENTER, after: 120 }),
+      paragraph([textRun(payload.project_name || '投标技术文件', { bold: true, size: 34 })], { alignment: AlignmentType.CENTER, after: 300 }),
+    );
+  }
 
   reportProgress(context, 10, stats.mermaidCount
     ? `准备导出正文，并转换 ${stats.mermaidCount} 张 Mermaid 图。`
@@ -2201,7 +2328,7 @@ function createExportService({ configStore } = {}) {
       reportProgress(progressContext, 2, stats.mermaidCount
         ? `检测到 ${stats.mermaidCount} 张 Mermaid 图，导出时会转换为 Word 图片。`
         : '正在准备 Word 导出。');
-      const defaultFilename = `${sanitizeFilename(payload.project_name || '标书文档')}_${formatExportTimestamp()}.docx`;
+      const defaultFilename = `${sanitizeFilename(payload.project_name || (payload.feasibility_options ? '可行性研究报告' : '标书文档'))}_${formatExportTimestamp()}.docx`;
       const defaultDir = app?.getPath ? app.getPath('downloads') : process.env.USERPROFILE || process.cwd();
       const result = await dialog.showSaveDialog({
         title: '导出 Word 文档',

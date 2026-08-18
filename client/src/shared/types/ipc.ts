@@ -4,6 +4,7 @@ import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelInfoRes
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspacePatch, RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
+import type { FeasibilityProjectInfo, FeasibilityReportState, FeasibilityReportStep, FeasibilitySaveOutlineRequest, FeasibilitySourceFile } from '../../features/feasibility-report/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
 import type { OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from './outline';
 
@@ -33,6 +34,7 @@ export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDu
   rejectionCheckPatch?: RejectionCheckWorkspacePatch;
   duplicateCheck?: TDuplicateCheckState;
   duplicateCheckPatch?: DuplicateCheckWorkspacePatch;
+  feasibilityReportPatch?: Partial<FeasibilityReportState>;
 }
 
 export interface WordExportProgressEvent {
@@ -613,6 +615,21 @@ export interface YibiaoBridge {
     saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<Partial<TechnicalPlanState>>;
     clear: () => Promise<{ success: boolean; message?: string }>;
   };
+  feasibilityReport: {
+    loadState: () => Promise<FeasibilityReportState>;
+    importSourceDocuments: (filePaths?: string[]) => Promise<{ success: boolean; message?: string; sourceFiles?: FeasibilitySourceFile[] }>;
+    removeSourceDocument: (sourceId: string) => Promise<{ success: boolean; message?: string; sourceFiles?: FeasibilitySourceFile[] }>;
+    readSourceMarkdown: (sourceId: string) => Promise<string>;
+    readCombinedSourceMarkdown: () => Promise<string>;
+    updateStep: (step: FeasibilityReportStep) => Promise<void>;
+    saveProjectInfo: (projectInfo: FeasibilityProjectInfo) => Promise<FeasibilityReportState>;
+    saveAnalysis: (markdown: string) => Promise<FeasibilityReportState>;
+    saveOutlineConfig: (payload: { outlineTemplate?: string; targetWords?: number; referenceDocumentIds?: string[] }) => Promise<FeasibilityReportState>;
+    saveOutline: (payload: FeasibilitySaveOutlineRequest) => Promise<Partial<FeasibilityReportState>>;
+    saveKeyParameters: (markdown: string) => Promise<FeasibilityReportState>;
+    saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<Partial<FeasibilityReportState>>;
+    clear: () => Promise<{ success: boolean; message?: string }>;
+  };
   duplicateCheck: {
     loadState: () => Promise<DuplicateCheckWorkspaceState>;
     saveFiles: (payload: Pick<DuplicateCheckWorkspaceState, 'tenderFile' | 'tenderFiles' | 'bidFiles'> & Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<void>;
@@ -647,6 +664,12 @@ export interface YibiaoBridge {
     startRejectionItemsExtraction: (payload: unknown) => Promise<unknown>;
     startRejectionCheck: (payload: unknown) => Promise<unknown>;
     startDuplicateAnalysis: (payload: unknown) => Promise<unknown>;
+    startFeasibilityAnalysis: (payload?: unknown) => Promise<unknown>;
+    startFeasibilityOutline: (payload?: unknown) => Promise<unknown>;
+    startFeasibilityParameters: (payload?: unknown) => Promise<unknown>;
+    startFeasibilityContent: (payload?: unknown) => Promise<unknown>;
+    pauseFeasibilityContent: () => Promise<unknown>;
+    startFeasibilityHumanWriting: (payload?: unknown) => Promise<unknown>;
     getActiveTasks: () => Promise<TaskEventTask[]>;
     onTaskEvent: <TState = unknown, TRejectionCheckState = unknown, TDuplicateCheckState = unknown>(callback: (event: TaskEvent<TState, TRejectionCheckState, TDuplicateCheckState>) => void) => () => void;
   };

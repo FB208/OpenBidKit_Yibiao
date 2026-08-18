@@ -4,7 +4,7 @@
 -- 1. 本文件用于开源开发者阅读、评审和排查问题，展示 workspace/yibiao.sqlite 的目标完整表结构。
 -- 2. 用户运行客户端时不需要手动执行本文件。
 -- 3. 客户端运行时建表和升级以 Electron Main 侧 migration 代码为准。
--- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17、目录字数控制 v18、全局事实补全模式 v22 目标结构。
+-- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17、目录字数控制 v18、全局事实补全模式 v22、可行性研究报告 v23 目标结构。
 -- 5. 每次表结构调整后，需要同步更新本文件和 runtime migration 版本。
 -- 6. 本文件不保存历史版本，每次更新都写入最新目标完整结构。
 
@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 22;
+PRAGMA user_version = 23;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -848,3 +848,58 @@ CREATE TABLE IF NOT EXISTS export_templates (
 
 CREATE INDEX IF NOT EXISTS idx_export_templates_updated
 ON export_templates(updated_at DESC);
+
+-- ============================================================================
+-- 可行性研究报告 feasibility_report_*（v23 已落地）
+-- ============================================================================
+
+-- 可研报告单例元数据。只保留一行 id = 1。
+-- 导入资料 Markdown 保存在 userData/workspace/feasibility-report/sources/，不进入 SQLite。
+-- 目录与正文权威来源是 feasibility_report_outline_nodes.content。
+CREATE TABLE IF NOT EXISTS feasibility_report_meta (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  step TEXT NOT NULL DEFAULT 'materials',
+  project_info_json TEXT,
+  source_files_json TEXT,
+  analysis_markdown TEXT,
+  outline_template TEXT NOT NULL DEFAULT 'government',
+  target_words INTEGER NOT NULL DEFAULT 30000,
+  reference_document_ids_json TEXT,
+  key_parameters_markdown TEXT,
+  outline_project_name TEXT,
+  outline_project_overview TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS feasibility_report_tasks (
+  type TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  progress INTEGER NOT NULL DEFAULT 0,
+  stats_json TEXT,
+  error TEXT,
+  pause_requested INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS feasibility_report_outline_nodes (
+  node_id TEXT PRIMARY KEY,
+  parent_node_id TEXT,
+  sort_order INTEGER NOT NULL,
+  level INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  knowledge_item_ids_json TEXT,
+  content TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (parent_node_id) REFERENCES feasibility_report_outline_nodes(node_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_feasibility_report_outline_parent_order
+ON feasibility_report_outline_nodes(parent_node_id, sort_order);
+
+CREATE INDEX IF NOT EXISTS idx_feasibility_report_outline_level
+ON feasibility_report_outline_nodes(level);

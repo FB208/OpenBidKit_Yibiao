@@ -1,0 +1,152 @@
+/* 可行性研究报告：只补充本功能特有布局，步骤页尽量复用技术方案工作台既有类名。 */
+
+.technical-workbench > .feasibility-materials-page {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.feasibility-project-form {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-height: 0;
+  overflow: auto;
+  padding: 22px 24px;
+}
+
+.feasibility-project-form h3 {
+  margin: 7px 0 5px;
+  color: var(--yb-text);
+  font-size: 24px;
+  letter-spacing: -0.025em;
+}
+
+.feasibility-project-form p {
+  margin: 0;
+  color: var(--yb-text-soft);
+}
+
+.feasibility-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+
+.feasibility-form-grid .is-wide {
+  grid-column: 1 / -1;
+}
+
+.feasibility-form-grid label {
+  display: grid;
+  gap: 6px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+}
+
+.feasibility-form-grid input,
+.feasibility-form-grid select,
+.feasibility-form-grid textarea,
+.outline-word-control-grid select,
+.feasibility-export-options input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 11px;
+  color: var(--yb-text);
+  background: #ffffff;
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-md);
+}
+
+.feasibility-form-grid textarea {
+  resize: vertical;
+}
+
+.feasibility-markdown-workspace {
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+}
+
+.feasibility-markdown-workspace > .outline-progress-panel {
+  height: 100%;
+  min-height: 0;
+}
+
+.feasibility-markdown-workspace > .content-outline-stats {
+  min-height: 0;
+  overflow: auto;
+  border-bottom: 0;
+  border-right: 1px solid var(--yb-border-soft);
+}
+
+.feasibility-markdown-workspace > .markdown-editor,
+.feasibility-markdown-workspace > .global-facts-reader {
+  height: 100%;
+  min-height: 0;
+}
+
+.feasibility-analysis-edit-pane {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.feasibility-content-workspace {
+  grid-template-columns: minmax(220px, 280px) minmax(260px, 320px) minmax(0, 1fr);
+}
+
+.feasibility-content-workspace > .outline-progress-panel {
+  height: 100%;
+  min-height: 0;
+}
+
+.feasibility-content-workspace > .content-outline-panel {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.feasibility-content-workspace .content-reader-panel > *:not(.content-reader-head) {
+  height: 100%;
+  min-height: 0;
+}
+
+.feasibility-analysis-edit-pane .markdown-editor {
+  height: 100%;
+  min-height: 0;
+}
+
+.feasibility-export-dialog {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.feasibility-export-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 16px;
+  padding: 12px 14px;
+  background: rgba(248, 250, 253, 0.82);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
+}
+
+.feasibility-export-options label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--yb-text);
+  font-size: 13px;
+}
+
+.feasibility-export-options label:nth-child(4),
+.feasibility-export-options label:nth-child(5) {
+  display: grid;
+  gap: 6px;
+  color: var(--yb-text-soft);
+}
+
+@media (max-width: 900px) {
+  .feasibility-form-grid,
+  .feasibility-export-options {
+    grid-template-columns: 1fr;
+  }
+
+  .feasibility-markdown-workspace,
+  .feasibility-content-workspace {
+    grid-template-columns: 1fr;
+  }
+}

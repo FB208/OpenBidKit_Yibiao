@@ -21,7 +21,7 @@
   overflow: hidden;
 }
 
-.technical-workbench > .plan-step-body:not(.document-analysis-page):not(.bid-analysis-page):not(.outline-generation-page):not(.content-generation-page) {
+.technical-workbench > .plan-step-body:not(.document-analysis-page):not(.bid-analysis-page):not(.outline-generation-page):not(.content-generation-page):not(.feasibility-materials-page) {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
