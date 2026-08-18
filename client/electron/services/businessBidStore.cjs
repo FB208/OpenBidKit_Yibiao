@@ -83,6 +83,11 @@ function normalizeClauseStatus(responseStatus) {
   return 'idle';
 }
 
+function normalizeNonNegativeInteger(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.floor(number) : 0;
+}
+
 function createBusinessBidStore({ app, fileService, technicalPlanStore, knowledgeBaseService }) {
   const workspaceDir = path.join(app.getPath('userData'), 'workspace');
   const businessBidDir = path.join(workspaceDir, 'business-bid');
@@ -289,10 +294,46 @@ function createBusinessBidStore({ app, fileService, technicalPlanStore, knowledg
   }
 
 
-  function saveOutlineConfig({ referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds } = {}) {
+  function normalizeOutlineWordControlOptions(value) {
+    const sectionWords = normalizeNonNegativeInteger(value?.sectionWords);
+    return {
+      minimumWords: normalizeNonNegativeInteger(value?.minimumWords),
+      maximumWords: normalizeNonNegativeInteger(value?.maximumWords),
+      sectionWords,
+      strictSectionWords: sectionWords > 0 && Boolean(value?.strictSectionWords),
+    };
+  }
+
+  function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineMode, referenceKnowledgeSnippetIds, referenceKnowledgeItemIds, outlineExpansionMode, wordControlOptions } = {}) {
     return updateBusinessBid({
+      outlineMode: ['aligned', 'response-file'].includes(outlineMode) ? outlineMode : 'response-file',
+      outlineExpansionMode: ['ai-complement', 'aligned'].includes(outlineExpansionMode) ? outlineExpansionMode : 'ai-complement',
+      outlineWordControlOptions: normalizeOutlineWordControlOptions(wordControlOptions),
       referenceKnowledgeDocumentIds: Array.isArray(referenceKnowledgeDocumentIds) ? referenceKnowledgeDocumentIds : [],
       referenceKnowledgeSnippetIds: Array.isArray(referenceKnowledgeSnippetIds) ? referenceKnowledgeSnippetIds : [],
+      referenceKnowledgeItemIds: Array.isArray(referenceKnowledgeItemIds) ? referenceKnowledgeItemIds : [],
+    });
+  }
+
+  // 保存用户确认后的一级目录待扩展选择，不写入正式目录树。
+  function saveOutlineSelection({ taskId, items, selectedIds } = {}) {
+    const task = readState().outlineGenerationTask;
+    if (!task || task.task_id !== taskId || task.status !== 'success') {
+      throw new Error('一级目录生成结果已变化，请重新打开后再选择');
+    }
+    return updateBusinessBid({
+      outlineGenerationTask: {
+        ...task,
+        updated_at: now(),
+        stats: {
+          ...(task.stats || {}),
+          outline_selection: {
+            items,
+            selected_ids: selectedIds,
+            confirmed: true,
+          },
+        },
+      },
     });
   }
 
@@ -424,6 +465,7 @@ function createBusinessBidStore({ app, fileService, technicalPlanStore, knowledg
     hasTechnicalPlan,
     updateStep,
     saveOutlineConfig,
+    saveOutlineSelection,
     saveOutline,
     saveGlobalFacts,
     saveContentGenerationOptions,
