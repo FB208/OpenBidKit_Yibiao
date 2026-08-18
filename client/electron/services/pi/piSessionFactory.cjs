@@ -27,9 +27,9 @@ function normalizeContextLimit(value) {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 400000;
 }
 
-function normalizeOutputLimit(contextLength) {
-  const normalizedContextLength = normalizeContextLimit(contextLength);
-  return Math.min(32768, normalizedContextLength);
+function normalizeOutputLimit(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 32768;
 }
 
 // 创建隔离的 Pi Session；持久任务可在后续完整执行中重新打开原 Session。
@@ -53,7 +53,7 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
       reasoning: false,
       input: ['text'],
       contextWindow: normalizeContextLimit(config.context_length_limit),
-      maxTokens: normalizeOutputLimit(config.context_length_limit),
+      maxTokens: normalizeOutputLimit(config.max_output_tokens),
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       compat: {
         supportsDeveloperRole: false,

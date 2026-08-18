@@ -1,8 +1,9 @@
 import type { AgentModeScenariosConfig, ComponentsConfig, ConfiguredTextModelProvider, ImageModelConfig, ImageModelProfiles, TextModelConfig, TextModelProfiles, UpdateChannel } from '../../shared/types';
 
 export interface SettingsPageState {
-  textModel: Omit<TextModelConfig, 'context_length_limit' | 'concurrency_limit'> & {
+  textModel: Omit<TextModelConfig, 'context_length_limit' | 'max_output_tokens' | 'concurrency_limit'> & {
     context_length_limit: number | '';
+    max_output_tokens: number | '';
     concurrency_limit: number | '';
     provider: ConfiguredTextModelProvider;
   };

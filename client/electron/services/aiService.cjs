@@ -759,6 +759,7 @@ function createChatRequestBody(config, request, options = {}) {
   const body = {
     model: modelName,
     messages: request.messages,
+    max_tokens: config.max_output_tokens,
   };
 
   if (config.temperature_enabled) {
@@ -806,10 +807,11 @@ function createAgentChatRequestBody(config, sourceBody) {
     delete body.reasoning_effort;
   }
 
-  // 部分 OpenAI 兼容上游会拒绝 Agent SDK 注入的输出长度参数。
+  // 丢掉 SDK 注入的输出长度，改写当前配置的 max_output_tokens。
   delete body.max_tokens;
   delete body.max_output_tokens;
   delete body.max_completion_tokens;
+  body.max_tokens = config.max_output_tokens;
   return body;
 }
 

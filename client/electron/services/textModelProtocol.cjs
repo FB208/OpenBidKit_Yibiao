@@ -1,8 +1,9 @@
 const TEXT_API_PROTOCOLS = ['openai-compatible', 'anthropic-messages'];
 const DEFAULT_TEXT_API_PROTOCOL = 'openai-compatible';
 const ANTHROPIC_VERSION = '2023-06-01';
-// Anthropic Messages 必填 max_tokens。不用 context window 推导，避免默认 400000 被封顶成 32768 后拒掉低输出上限模型。
-const ANTHROPIC_DEFAULT_MAX_TOKENS = 4096;
+// Anthropic Messages 必填 max_tokens。读配置里的 max_output_tokens，缺省 32768，不从上下文窗口推导。
+const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
+const ANTHROPIC_DEFAULT_MAX_TOKENS = DEFAULT_MAX_OUTPUT_TOKENS;
 const ANTHROPIC_CONTINUE_USER_CONTENT = '（继续）';
 
 function trimBaseUrl(baseUrl) {
@@ -50,8 +51,15 @@ function createTextRequestHeaders(config) {
   };
 }
 
-function resolveAnthropicMaxTokens() {
-  return ANTHROPIC_DEFAULT_MAX_TOKENS;
+function resolveAnthropicMaxTokens(config, source) {
+  const candidates = [source?.max_tokens, config?.max_output_tokens];
+  for (const candidate of candidates) {
+    const number = Number(candidate);
+    if (Number.isFinite(number) && number > 0) {
+      return Math.floor(number);
+    }
+  }
+  return DEFAULT_MAX_OUTPUT_TOKENS;
 }
 
 function extractOpenAiMessageText(content) {
@@ -261,7 +269,7 @@ function buildAnthropicMessagesRequest(config, sourceBody) {
 
   const body = {
     model: config?.model_name || source.model,
-    max_tokens: resolveAnthropicMaxTokens(),
+    max_tokens: resolveAnthropicMaxTokens(config, source),
     messages: conversation,
   };
 
@@ -757,6 +765,7 @@ module.exports = {
   TEXT_API_PROTOCOLS,
   DEFAULT_TEXT_API_PROTOCOL,
   ANTHROPIC_VERSION,
+  DEFAULT_MAX_OUTPUT_TOKENS,
   ANTHROPIC_DEFAULT_MAX_TOKENS,
   trimBaseUrl,
   normalizeTextApiProtocol,

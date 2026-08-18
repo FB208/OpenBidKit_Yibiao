@@ -85,16 +85,19 @@ const textApiProtocolOptions: Array<{ value: TextApiProtocol; label: string }> =
 ];
 
 const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
+const MIN_MAX_OUTPUT_TOKENS = 1024;
+const MAX_MAX_OUTPUT_TOKENS = 128000;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_TEXT_TEMPERATURE = 0.7;
 
 const textProviderDefaults: Record<ConfiguredTextModelProvider, TextModelConfig> = {
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream', api_protocol: 'openai-compatible' },
-  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream', api_protocol: 'openai-compatible' },
-  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream', api_protocol: 'openai-compatible' },
-  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream', api_protocol: 'openai-compatible' },
-  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream', api_protocol: 'openai-compatible' },
-  custom: { api_key: '', base_url: '', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream', api_protocol: 'openai-compatible' },
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream', api_protocol: 'openai-compatible' },
+  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream', api_protocol: 'openai-compatible' },
+  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream', api_protocol: 'openai-compatible' },
+  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream', api_protocol: 'openai-compatible' },
+  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream', api_protocol: 'openai-compatible' },
+  custom: { api_key: '', base_url: '', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream', api_protocol: 'openai-compatible' },
 };
 
 const textProviderApiKeyUrls: Partial<Record<ConfiguredTextModelProvider, string>> = {
@@ -127,6 +130,13 @@ function normalizeTextContextLengthLimit(value?: number | string): number {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT;
 }
 
+function normalizeMaxOutputTokens(value?: number | string): number {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= MIN_MAX_OUTPUT_TOKENS && number <= MAX_MAX_OUTPUT_TOKENS
+    ? Math.floor(number)
+    : DEFAULT_MAX_OUTPUT_TOKENS;
+}
+
 function normalizeTextConcurrencyLimit(value?: number | string): number {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.round(number) : DEFAULT_TEXT_CONCURRENCY_LIMIT;
@@ -143,6 +153,12 @@ function parseTextContextLengthInput(value: string): number | '' {
   if (value === '') return '';
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(1, Math.floor(number)) : '';
+}
+
+function parseMaxOutputTokensInput(value: string): number | '' {
+  if (value === '') return '';
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.floor(number) : '';
 }
 
 function parseTextConcurrencyLimitInput(value: string): number | '' {
@@ -165,6 +181,7 @@ function normalizeTextModelProfile(provider: ConfiguredTextModelProvider, profil
     model_name: profile?.model_name ?? defaults.model_name,
     reasoning_effort: profile?.reasoning_effort?.trim() ?? defaults.reasoning_effort,
     context_length_limit: normalizeTextContextLengthLimit(profile?.context_length_limit ?? defaults.context_length_limit),
+    max_output_tokens: normalizeMaxOutputTokens(profile?.max_output_tokens ?? defaults.max_output_tokens),
     concurrency_limit: normalizeTextConcurrencyLimit(profile?.concurrency_limit ?? defaults.concurrency_limit),
     temperature_enabled: profile?.temperature_enabled ?? defaults.temperature_enabled,
     temperature: normalizeTextTemperature(profile?.temperature ?? defaults.temperature),
@@ -196,6 +213,7 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
     model_name: textModel.model_name,
     reasoning_effort: textModel.reasoning_effort.trim(),
     context_length_limit: normalizeTextContextLengthLimit(textModel.context_length_limit),
+    max_output_tokens: normalizeMaxOutputTokens(textModel.max_output_tokens),
     concurrency_limit: normalizeTextConcurrencyLimit(textModel.concurrency_limit),
     temperature_enabled: textModel.temperature_enabled,
     temperature: normalizeTextTemperature(textModel.temperature),
@@ -712,6 +730,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       model_name: activeTextProfile.model_name,
       reasoning_effort: activeTextProfile.reasoning_effort,
       context_length_limit: activeTextProfile.context_length_limit,
+      max_output_tokens: activeTextProfile.max_output_tokens,
       concurrency_limit: activeTextProfile.concurrency_limit,
       temperature_enabled: activeTextProfile.temperature_enabled,
       temperature: activeTextProfile.temperature,
@@ -1866,6 +1885,21 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   {loadingContextLength ? '获取中' : '获取'}
                 </button>
               </div>
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>最大输出 Token</strong>
+                <span>单次回复的输出上限，不是上下文窗口。允许 1024–128000，默认 32768</span>
+              </div>
+              <input
+                type="number"
+                min={MIN_MAX_OUTPUT_TOKENS}
+                max={MAX_MAX_OUTPUT_TOKENS}
+                step={1}
+                value={state.textModel.max_output_tokens}
+                placeholder="32768"
+                onChange={(event) => updateTextModelConfig({ max_output_tokens: parseMaxOutputTokensInput(event.target.value) })}
+              />
             </label>
             <label className="settings-row">
               <div className="settings-row-copy">
