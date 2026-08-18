@@ -1,4 +1,5 @@
-import type { OutlineData, OutlineExpansionMode, OutlineWordControlOptions } from '../../shared/types/outline';
+import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../shared/types';
+import type { OutlineData, OutlineExpansionMode, OutlineWordControlOptions } from '../../shared/types';
 import type { BackgroundTaskState, GlobalFactGroupState, ContentGenerationSectionState } from '../technical-plan/types';
 
 export type { OutlineData } from '../../shared/types/outline';
@@ -108,7 +109,7 @@ export const initialBusinessBidState: BusinessBidState = {
   referenceKnowledgeDocumentIds: [],
   referenceKnowledgeSnippetIds: [],
   referenceKnowledgeItemIds: [],
-  outlineWordControlOptions: { minimumWords: 0, maximumWords: 0, sectionWords: 0, strictSectionWords: false },
+  outlineWordControlOptions: { ...DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS },
   outlineExpansionMode: 'ai-complement',
   hasExplicitContentList: undefined,
   requiredBusinessContents: undefined,
