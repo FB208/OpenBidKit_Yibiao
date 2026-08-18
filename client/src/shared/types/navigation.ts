@@ -22,8 +22,9 @@ export type SectionId =
   | 'developer-parser-sandbox'
   | 'developer-export-preview'
   | 'developer-expansion-replace-test'
-  | 'developer-opencode-agent-test'
-  | 'settings';
+  | 'developer-agent-test'
+  | 'settings'
+  | 'plugin-manager';
 
 export interface AppMenuNotice {
   message: string;

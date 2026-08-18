@@ -2,15 +2,23 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { BrowserWindow, app: electronApp } = require('electron');
+const { BrowserWindow, app: electronApp, nativeImage } = require('electron');
 
 const DEFAULT_COMPONENT_CONCURRENCY = 5;
 const MIN_COMPONENT_CONCURRENCY = 1;
 const MAX_COMPONENT_CONCURRENCY = 20;
 /** Mermaid 本地渲染参考宽度（约 A4 正文可用宽） */
 const WORD_FRIENDLY_RENDER_WIDTH = 680;
+/** Mermaid 使用 3 倍像素输出，保证 Word 缩放和高分屏查看时仍清晰 */
+const MERMAID_CAPTURE_SCALE = 3;
 /** HTML 配图设计宽度，与生成 Prompt 一致；导出 Word 时再等比缩小 */
 const HTML_DESIGN_WIDTH = 1240;
+/** HTML 使用 2 倍像素输出，兼顾清晰度和长图内存占用 */
+const HTML_CAPTURE_SCALE = 2;
+/** HTML 中可见文字的最小设计字号，缩入 Word 后仍保持可读 */
+const HTML_MIN_TEXT_FONT_SIZE = 24;
+/** HTML 高度超过该值后会在 Word 中触发二次缩小 */
+const HTML_MAX_DESIGN_HEIGHT = 1800;
 const MERMAID_RENDER_TIMEOUT_MS = 30000;
 const HTML_RENDER_TIMEOUT_MS = 120000;
 const MAX_CAPTURE_SEGMENT_HEIGHT = 8192;
@@ -112,12 +120,12 @@ async function ensureDebugger(webContents) {
 }
 
 // 设置设备视口尺寸。
-async function setDeviceMetrics(webContents, width, height) {
+async function setDeviceMetrics(webContents, width, height, deviceScaleFactor = 1) {
   await ensureDebugger(webContents);
   await webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', {
     width: Math.max(1, Math.round(width)),
     height: Math.max(1, Math.round(height)),
-    deviceScaleFactor: 1,
+    deviceScaleFactor: Math.max(1, Number(deviceScaleFactor) || 1),
     mobile: false,
   });
 }
@@ -141,14 +149,28 @@ async function captureClip(webContents, clip) {
   return Buffer.from(result.data, 'base64');
 }
 
-// 用 nativeImage 纵向无缝拼接多段 PNG。
-function stitchPngVertically(buffers, totalWidth, totalHeight) {
-  const { nativeImage } = require('electron');
+// 返回 PNG 的实际像素尺寸。
+function getPngResult(buffer, fallbackWidth, fallbackHeight) {
+  const image = nativeImage.createFromBuffer(buffer);
+  const size = image.isEmpty() ? {} : image.getSize();
+  return {
+    buffer,
+    width: Math.max(1, Number(size.width) || fallbackWidth),
+    height: Math.max(1, Number(size.height) || fallbackHeight),
+  };
+}
+
+// 用 nativeImage 纵向无缝拼接多段 PNG，尺寸以截图的实际像素为准。
+function stitchPngVertically(buffers) {
+  const images = buffers.map((buffer) => {
+    const image = nativeImage.createFromBuffer(buffer);
+    return { image, size: image.getSize() };
+  });
+  const totalWidth = Math.max(1, ...images.map(({ size }) => size.width));
+  const totalHeight = Math.max(1, images.reduce((sum, { size }) => sum + size.height, 0));
   const canvas = Buffer.alloc(totalWidth * totalHeight * 4, 255);
   let offsetY = 0;
-  for (const buffer of buffers) {
-    const image = nativeImage.createFromBuffer(buffer);
-    const size = image.getSize();
+  for (const { image, size } of images) {
     const bitmap = image.toBitmap();
     const rowBytes = size.width * 4;
     for (let y = 0; y < size.height; y += 1) {
@@ -161,7 +183,7 @@ function stitchPngVertically(buffers, totalWidth, totalHeight) {
   const stitched = nativeImage.createFromBitmap(canvas, { width: totalWidth, height: totalHeight });
   const png = stitched.toPNG();
   if (!png?.length) throw new Error('拼接截图失败');
-  return png;
+  return { buffer: png, width: totalWidth, height: totalHeight };
 }
 
 // 按内容高度完整截图，必要时分段后无缝拼接。
@@ -169,8 +191,10 @@ async function captureFullContent(webContents, width, height, options = {}) {
   throwIfPaused(options);
   const safeWidth = Math.max(1, Math.round(width));
   const safeHeight = Math.max(1, Math.round(height));
-  if (safeHeight <= MAX_CAPTURE_SEGMENT_HEIGHT) {
-    await setDeviceMetrics(webContents, safeWidth, safeHeight);
+  const captureScale = Math.max(1, Math.round(Number(options.captureScale) || 1));
+  const maxSegmentHeight = Math.max(1, Math.floor(MAX_CAPTURE_SEGMENT_HEIGHT / captureScale));
+  if (safeHeight <= maxSegmentHeight) {
+    await setDeviceMetrics(webContents, safeWidth, safeHeight, captureScale);
     throwIfPaused(options);
     const buffer = await captureClip(webContents, {
       x: 0,
@@ -178,15 +202,15 @@ async function captureFullContent(webContents, width, height, options = {}) {
       width: safeWidth,
       height: safeHeight,
     });
-    return { buffer, width: safeWidth, height: safeHeight };
+    return getPngResult(buffer, safeWidth * captureScale, safeHeight * captureScale);
   }
 
   const segments = [];
   let y = 0;
   while (y < safeHeight) {
     throwIfPaused(options);
-    const segmentHeight = Math.min(MAX_CAPTURE_SEGMENT_HEIGHT, safeHeight - y);
-    await setDeviceMetrics(webContents, safeWidth, Math.min(safeHeight, y + segmentHeight));
+    const segmentHeight = Math.min(maxSegmentHeight, safeHeight - y);
+    await setDeviceMetrics(webContents, safeWidth, segmentHeight, captureScale);
     const buffer = await captureClip(webContents, {
       x: 0,
       y,
@@ -196,8 +220,7 @@ async function captureFullContent(webContents, width, height, options = {}) {
     segments.push(buffer);
     y += segmentHeight;
   }
-  const buffer = stitchPngVertically(segments, safeWidth, safeHeight);
-  return { buffer, width: safeWidth, height: safeHeight };
+  return stitchPngVertically(segments);
 }
 
 // 轮询页面资源与布局状态（单次不阻塞，便于主进程响应暂停）。
@@ -267,6 +290,97 @@ async function probeLayoutMetrics(webContents, minWidth, contentOnly = false) {
     }
     return { ready: imagesReady && fontsReady && width > 0 && height > 0, width, height };
   })()`, true);
+}
+
+// 在最终截图前，用浏览器实际排版结果检查模型生成 HTML 中可客观识别的文字和画布问题。
+// 只检查文字的 transform；writing-mode 不在检查范围内，竖排文字保持允许。
+function buildHtmlLayoutProbeScript() {
+  return `(() => {
+    const root=document.getElementById('yibiao-capture-root')||document.body||document.documentElement;
+    if(!root)return ['未找到截图画布'];
+    const issues=[];
+    const add=(value)=>{if(value&&!issues.includes(value)&&issues.length<12)issues.push(value)};
+    const visible=(element)=>{const style=getComputedStyle(element);return style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity||1)>0};
+    const label=(element)=>{const tag=(element.tagName||'元素').toLowerCase();const className=String(element.className||'').trim().split(/\\s+/).filter(Boolean).slice(0,2).join('.');return className?tag+'.'+className:tag};
+    const related=(left,right)=>left===right||left.contains(right)||right.contains(left);
+    const rootRect=root.getBoundingClientRect();
+    const minFontSize=${HTML_MIN_TEXT_FONT_SIZE};
+    const textEntries=[];
+    const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+    let node;
+    while((node=walker.nextNode())){
+      if(!node.nodeValue||!node.nodeValue.trim())continue;
+      const element=node.parentElement;
+      if(!element||!visible(element)||['script','style','noscript'].includes(element.tagName.toLowerCase()))continue;
+      const range=document.createRange();range.selectNodeContents(node);
+      const rects=Array.from(range.getClientRects()).filter((rect)=>rect.width>0&&rect.height>0);
+      if(rects.length)textEntries.push({element,rects});
+    }
+    const hasInvalidTransform=(transform)=>{
+      if(!transform||transform==='none')return false;
+      const match=transform.match(/^matrix\\(([^)]+)\\)$/);
+      if(match){const values=match[1].split(',').map(Number);return values.length!==6||Math.abs(values[1])>.01||Math.abs(values[2])>.01||values[0]<0||values[3]<0||Math.abs(Math.abs(values[0])-1)>.01||Math.abs(Math.abs(values[3])-1)>.01}
+      const matrix3d=transform.match(/^matrix3d\\(([^)]+)\\)$/);
+      if(matrix3d){const values=matrix3d[1].split(',').map(Number);return values.length!==16||Math.abs(values[1])>.01||Math.abs(values[4])>.01||Math.abs(values[0]-1)>.01||Math.abs(values[5]-1)>.01||values[0]<0||values[5]<0}
+      return true;
+    };
+    for(const entry of textEntries){
+      for(let element=entry.element;element&&element!==root.parentElement;element=element.parentElement){
+        const style=getComputedStyle(element);
+        if(hasInvalidTransform(style.transform)){add('文字存在旋转、倒置、镜像或缩放变形：'+label(element));break}
+        if(style.position==='fixed'||style.position==='sticky'){add('文字使用固定或粘性定位，截图布局不稳定：'+label(element));break}
+      }
+      const fontSize=parseFloat(getComputedStyle(entry.element).fontSize||'0');
+      if(fontSize>0&&fontSize<minFontSize)add('文字字号过小：'+label(entry.element)+' 为 '+fontSize+'px，至少需要 '+minFontSize+'px');
+      for(const rect of entry.rects){
+        if(rect.left<rootRect.left-1||rect.right>rootRect.right+1||rect.top<rootRect.top-1||rect.bottom>rootRect.bottom+1){add('文字超出截图画布：'+label(entry.element));break}
+        for(let element=entry.element.parentElement;element&&element!==root.parentElement;element=element.parentElement){
+          const style=getComputedStyle(element);
+          const clipsX=['hidden','clip','scroll','auto'].includes(style.overflowX);
+          const clipsY=['hidden','clip','scroll','auto'].includes(style.overflowY);
+          const box=element.getBoundingClientRect();
+          if((clipsX&&(rect.left<box.left-1||rect.right>box.right+1))||(clipsY&&(rect.top<box.top-1||rect.bottom>box.bottom+1))){add('文字被容器裁切：'+label(element));break}
+          if(style.textOverflow==='ellipsis'&&element.scrollWidth>element.clientWidth+1){add('文字被省略截断：'+label(element));break}
+        }
+      }
+    }
+    for(let index=0;index<textEntries.length;index+=1){
+      for(let next=index+1;next<textEntries.length;next+=1){
+        const left=textEntries[index];const right=textEntries[next];
+        if(related(left.element,right.element)||left.element===right.element)continue;
+        const overlaps=left.rects.some((a)=>right.rects.some((b)=>{
+          const width=Math.max(0,Math.min(a.right,b.right)-Math.max(a.left,b.left));
+          const height=Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top));
+          return width*height>=Math.max(8,Math.min(a.width*a.height,b.width*b.height)*.2);
+        }));
+        if(overlaps)add('文字内容发生重叠：'+label(left.element)+' 与 '+label(right.element));
+      }
+    }
+    for(const entry of textEntries){
+      const rect=entry.rects[0];
+      const points=[[rect.left+rect.width/2,rect.top+rect.height/2],[rect.left+Math.min(3,rect.width/2),rect.top+rect.height/2]];
+      for(const [x,y] of points){
+        if(x<rootRect.left||x>rootRect.right||y<rootRect.top||y>rootRect.bottom)continue;
+        const top=document.elementsFromPoint(x,y).find((element)=>element!==document.documentElement&&element!==document.body);
+        if(!top||related(top,entry.element)||!visible(top))continue;
+        const style=getComputedStyle(top);
+        const background=style.backgroundImage!=='none'||!/^rgba?\\([^)]*,\\s*0\\)$/.test(style.backgroundColor)||['img','svg','canvas','video'].includes(top.tagName.toLowerCase());
+        if(background){add('文字被前景元素遮挡：'+label(entry.element)+' 被 '+label(top)+' 覆盖');break}
+      }
+    }
+    for(const element of root.querySelectorAll('*')){
+      if(!visible(element))continue;
+      const rect=element.getBoundingClientRect();
+      if(rect.width>0&&rect.height>0&&(rect.left<rootRect.left-1||rect.right>rootRect.right+1)){add('元素横向超出截图画布：'+label(element));}
+    }
+    if(!textEntries.length&&!root.querySelector('img,svg,canvas,video'))add('截图画布没有可见内容');
+    return issues;
+  })()`;
+}
+
+async function probeHtmlLayoutIssues(webContents) {
+  const result = await webContents.executeJavaScript(buildHtmlLayoutProbeScript(), true);
+  return Array.isArray(result) ? result.map((issue) => String(issue || '').trim()).filter(Boolean) : [];
 }
 
 // 等待页面布局与资源稳定，并返回内容真实宽高；等待期间响应暂停。
@@ -610,7 +724,39 @@ function createLocalImageRenderService({ configStore } = {}) {
         }
         const width = Math.min(WORD_FRIENDLY_RENDER_WIDTH, Math.max(1, rawWidth));
         const height = Math.max(1, rawHeight);
-        return await captureFullContent(win.webContents, width, height, options);
+        return await captureFullContent(win.webContents, width, height, {
+          ...options,
+          captureScale: MERMAID_CAPTURE_SCALE,
+        });
+      } finally {
+        destroyWindow(win);
+      }
+    });
+  }
+
+  // 只做 HTML 渲染和布局质检，不生成 PNG
+  async function probeHtmlLayoutOnly(html, options = {}) {
+    return runHtml(async () => {
+      throwIfPaused(options, 'HTML 质检已暂停');
+      const documentHtml = buildHtmlDocument(html);
+      const win = createRenderWindow(HTML_DESIGN_WIDTH, 900);
+      try {
+        await withTimeout(
+          loadHtmlDocument(win, documentHtml, HTML_RENDER_TIMEOUT_MS, options),
+          HTML_RENDER_TIMEOUT_MS,
+          'HTML 页面加载超时',
+        );
+        throwIfPaused(options, 'HTML 质检已暂停');
+        await setDeviceMetrics(win.webContents, HTML_DESIGN_WIDTH, 900);
+        const metrics = await withTimeout(
+          waitForLayoutReady(win.webContents, HTML_RENDER_TIMEOUT_MS, HTML_DESIGN_WIDTH, options),
+          HTML_RENDER_TIMEOUT_MS,
+          'HTML 布局等待超时',
+        );
+        const width = Math.max(HTML_DESIGN_WIDTH, Math.ceil(metrics.width || 0));
+        const height = Math.max(1, Math.ceil(metrics.height || 0));
+        const layoutIssues = await probeHtmlLayoutIssues(win.webContents);
+        return { width, height, layout_issues: layoutIssues };
       } finally {
         destroyWindow(win);
       }
@@ -639,8 +785,13 @@ function createLocalImageRenderService({ configStore } = {}) {
         );
         const width = Math.max(HTML_DESIGN_WIDTH, Math.ceil(metrics.width || 0));
         const height = Math.max(1, Math.ceil(metrics.height || 0));
+        const layoutIssues = await probeHtmlLayoutIssues(win.webContents);
         throwIfPaused(options, 'HTML 转图已暂停');
-        return await captureFullContent(win.webContents, width, height, options);
+        const captured = await captureFullContent(win.webContents, width, height, {
+          ...options,
+          captureScale: HTML_CAPTURE_SCALE,
+        });
+        return { ...captured, layout_issues: layoutIssues };
       } finally {
         destroyWindow(win);
       }
@@ -650,6 +801,7 @@ function createLocalImageRenderService({ configStore } = {}) {
   return {
     renderMermaidToPng,
     renderHtmlToPng,
+    probeHtmlLayoutOnly,
     wordFriendlyRenderWidth: WORD_FRIENDLY_RENDER_WIDTH,
     htmlDesignWidth: HTML_DESIGN_WIDTH,
   };
@@ -670,9 +822,12 @@ function getLocalImageRenderService() {
 }
 
 module.exports = {
+  HTML_CAPTURE_SCALE,
   HTML_DESIGN_WIDTH,
+  HTML_MAX_DESIGN_HEIGHT,
   WORD_FRIENDLY_RENDER_WIDTH,
   createLocalImageRenderService,
   getLocalImageRenderService,
   initLocalImageRenderService,
+  __test__: { buildHtmlLayoutProbeScript },
 };

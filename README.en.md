@@ -20,6 +20,13 @@
   </a>
 </p>
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/45446?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-45446" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/45446" alt="FB208%2FOpenBidKit_Yibiao | Trendshift" width="250" height="55"></a>
+  <a href="https://trendshift.io/repositories/45446?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-45446" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/45446/daily?language=JavaScript&amp;v=20260720" alt="FB208%2FOpenBidKit_Yibiao | Trendshift" width="250" height="55"></a>
+  <a href="https://trendshift.io/repositories/45446?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-45446" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/45446/weekly?language=JavaScript" alt="FB208%2FOpenBidKit_Yibiao | Trendshift" width="250" height="55"></a>
+    <a href="https://atomgit.com/FB208/OpenBidKit_Yibiao"><img alt="AtomGit G-Star" src="https://atomgit.com/FB208/OpenBidKit_Yibiao/star/new_badge.svg"></a>
+</p>
+
 <p align="left">
   <strong>🚀 Out-of-the-box, open-source, and free AI bid proposal writing tool</strong>
   <br>
@@ -84,7 +91,7 @@ If this project helps you, you can support ongoing maintenance and open-source d
     </td>
     <td width="33%" valign="top">
       <strong>⚙️ Custom AI Configuration</strong><br>
-      Configure text models, image models, and file parsing providers to fit your team's preferred stack.
+      Configure text models, image models, and file parsing providers, with Pi Agent handling all agent tasks.
     </td>
     <td width="33%" valign="top">
       <strong>✏️ Editable Workflow</strong><br>
@@ -111,16 +118,15 @@ Download the latest release from [GitHub Releases](https://github.com/yibiaoai/y
 
 There is no root-level `package.json` in this repository. The desktop client lives under `client/`, so all client development commands must be run from the `client/` directory.
 
-Before debugging OpenCode Agent locally, prepare the OpenCode binary for your current platform. Otherwise the developer test page will fail with `OpenCode binary 不存在`.
+The client uses Pi Agent exclusively, and the runtime is installed by `npm ci`. Pi's command environment depends on `rg`, `fd`, and `jq`; prepare and verify these tools for your platform before local debugging.
 
 Windows x64:
 
 ```powershell
 cd client
 npm ci
-$env:OPENCODE_VERSION="v1.17.8"
-node scripts/prepare-opencode-binary.cjs --platform win32 --arch x64
-node scripts/verify-opencode-binary.cjs --platform win32 --arch x64
+node scripts/prepare-agent-tools.cjs --platform win32 --arch x64
+node scripts/verify-agent-tools.cjs --platform win32 --arch x64
 npm run dev
 ```
 
@@ -129,9 +135,8 @@ macOS Apple Silicon:
 ```bash
 cd client
 npm ci
-export OPENCODE_VERSION="v1.17.8"
-node scripts/prepare-opencode-binary.cjs --platform darwin --arch arm64
-node scripts/verify-opencode-binary.cjs --platform darwin --arch arm64
+node scripts/prepare-agent-tools.cjs --platform darwin --arch arm64
+node scripts/verify-agent-tools.cjs --platform darwin --arch arm64
 npm run dev
 ```
 
@@ -140,19 +145,12 @@ macOS Intel:
 ```bash
 cd client
 npm ci
-export OPENCODE_VERSION="v1.17.8"
-node scripts/prepare-opencode-binary.cjs --platform darwin --arch x64
-node scripts/verify-opencode-binary.cjs --platform darwin --arch x64
+node scripts/prepare-agent-tools.cjs --platform darwin --arch x64
+node scripts/verify-agent-tools.cjs --platform darwin --arch x64
 npm run dev
 ```
 
-If you already have a working OpenCode binary, you can point the app to it with an environment variable:
-
-```bash
-YIBIAO_OPENCODE_BIN=/absolute/path/to/opencode npm run dev
-```
-
-End users who install a GitHub Release package do not need to run these scripts. The release workflow downloads and injects the correct OpenCode binary automatically in GitHub Actions. If you build a local installer manually, run the matching `prepare-opencode-binary.cjs` and `verify-opencode-binary.cjs` commands before packaging.
+End users who install a GitHub Release package do not need to run these scripts. The release workflow prepares and injects the platform-specific agent command tools automatically. Before building a local installer, run the matching `prepare-agent-tools.cjs` and `verify-agent-tools.cjs` commands.
 
 Regular build verification:
 
@@ -168,6 +166,7 @@ The current product is an independent desktop client under `client/`. It does no
 - **Desktop**: Electron Main / Preload provides local file access, configuration, export, and background task capabilities.
 - **Renderer**: Vite + React + TypeScript, with global CSS and Radix UI primitives.
 - **Features**: Technical proposal, knowledge base, duplicate-check workspace, rejection-risk checklist workspace, and settings.
+- **Agent Runtime**: Pi Agent uses the text-model configuration, a dedicated AI proxy, bundled command tools, and one global serial queue.
 - **Local Data**: Configuration, workspace data, and generated caches are stored under Electron `userData`.
 - **Packaging**: Built for Windows / macOS with electron-builder.
 
@@ -251,6 +250,9 @@ People who provide requirement analysis, technical support, test files, useful f
 <p align="center">刘梦</p>
     </td>
     <td width="20%" valign="top">
+    
+![](https://oss.agnet.top/keep/2026/07/23/20260723095939267.png)
+<p align="center">cc</p>
     </td>
     <td width="20%" valign="top">
     </td>
@@ -286,9 +288,9 @@ You may use, modify, distribute, and commercialize this project, but modified ve
 
 <a href="https://www.star-history.com/?repos=FB208%2FOpenBidKit_Yibiao&type=timeline&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="assets/star-history/star-history-dark.svg" />
+   <source media="(prefers-color-scheme: light)" srcset="assets/star-history/star-history-light.svg" />
+   <img alt="Star History Chart" src="assets/star-history/star-history-light.svg" />
  </picture>
 </a>
 

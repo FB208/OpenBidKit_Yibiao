@@ -74,6 +74,7 @@
 
 .brand-block {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 12px;
   min-height: 52px;
@@ -138,7 +139,7 @@
   color: #364153;
   background: #ffffff;
   border: 1px solid var(--yb-border-soft);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   box-shadow: 0 10px 24px rgba(33, 116, 253, 0.14), 0 0 0 4px rgba(248, 250, 253, 0.85);
   transition: box-shadow var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
@@ -151,7 +152,7 @@
 .collapse-button svg {
   width: 18px;
   height: 18px;
-  transition: transform 160ms ease;
+  transition: transform var(--yb-duration-fast) ease;
 }
 
 .rotate-180 {
@@ -160,10 +161,33 @@
 
 .sidebar-nav {
   display: flex;
+  min-height: 0;
   flex: 1;
   flex-direction: column;
   gap: 5px;
   margin-top: 20px;
+  padding-right: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: rgba(102, 112, 127, 0.36) transparent;
+  scrollbar-width: thin;
+}
+
+.sidebar-nav::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-nav::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-nav::-webkit-scrollbar-thumb {
+  background: rgba(102, 112, 127, 0.28);
+  border-radius: var(--yb-radius-pill);
+}
+
+.sidebar-nav::-webkit-scrollbar-thumb:hover {
+  background: rgba(102, 112, 127, 0.46);
 }
 
 /* [346-432] nav-item/settings-trigger + nav-icon + nav-copy + sidebar-footer */
@@ -178,7 +202,7 @@
   text-align: left;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
   transition: background var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease,
     border-color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
 }
@@ -224,7 +248,7 @@
   color: inherit;
   background: linear-gradient(150deg, rgba(33, 116, 253, 0.1), rgba(91, 84, 211, 0.07));
   border: 1px solid rgba(33, 116, 253, 0.1);
-  border-radius: 12px;
+  border-radius: var(--yb-radius-md);
   transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease;
 }
 
@@ -258,6 +282,7 @@
 
 .sidebar-footer {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 5px;
   margin-top: auto;
@@ -285,7 +310,7 @@
   color: #243047;
   background: rgba(255, 255, 255, 0.88);
   border: 1px solid rgba(228, 233, 240, 0.92);
-  border-radius: 18px;
+  border-radius: var(--yb-radius-lg);
   box-shadow: 0 16px 34px rgba(36, 48, 72, 0.08);
 }
 
@@ -293,7 +318,7 @@
   width: 10px;
   height: 10px;
   background: var(--yb-primary);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   box-shadow: 0 0 0 6px rgba(33, 116, 253, 0.12);
 }
 
@@ -302,12 +327,12 @@
 }
 
 .agent-runtime-status-bar.is-warning .agent-runtime-status-dot {
-  background: #f59e0b;
+  background: var(--yb-warning);
   box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.14);
 }
 
 .agent-runtime-status-bar.is-error .agent-runtime-status-dot {
-  background: #c83220;
+  background: var(--yb-danger);
   box-shadow: 0 0 0 6px rgba(200, 50, 32, 0.12);
 }
 
@@ -347,7 +372,7 @@
   font-style: normal;
   font-weight: 700;
   background: #f2f5f9;
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 @keyframes agent-runtime-pulse {
@@ -402,77 +427,4 @@
   flex-direction: column;
   gap: 26px;
   overflow: auto;
-}
-
-/* [11182-11691] (rewritten, shared-range) layout responsive rules extracted from mixed media(860px) block */
-@media (max-width: 860px) {
-  .app-shell {
-    height: 100vh;
-    flex-direction: column;
-  }
-
-  .sidebar,
-  .sidebar.is-collapsed {
-    width: 100%;
-    min-width: 0;
-    height: auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 10px;
-    padding: 12px;
-  }
-
-  .brand-copy,
-  .collapse-button,
-  .nav-copy,
-  .settings-copy {
-    display: none;
-  }
-
-  .brand-mark {
-    width: 42px;
-    height: 42px;
-    flex-basis: 42px;
-  }
-
-  .sidebar-nav {
-    flex: 1;
-    flex-direction: row;
-    gap: 8px;
-    margin: 0;
-    overflow-x: auto;
-  }
-
-  .sidebar-footer {
-    flex-direction: row;
-    gap: 8px;
-    margin: 0;
-    padding: 0;
-    border-top: 0;
-  }
-
-  .nav-item,
-  .settings-trigger {
-    width: auto;
-    padding: 7px;
-  }
-
-  .main-area {
-    height: calc(100vh - 68px);
-    min-height: 0;
-  }
-
-  .agent-runtime-status-bar {
-    grid-template-columns: auto minmax(0, 1fr);
-    margin: 12px 20px 0;
-  }
-
-  .agent-runtime-status-meta {
-    grid-column: 2;
-    justify-content: flex-start;
-  }
-
-  .content-shell {
-    padding: 20px;
-  }
 }

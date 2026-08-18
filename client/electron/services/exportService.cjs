@@ -187,6 +187,21 @@ function countOutlineStats(items = []) {
   return { leafCount, mermaidCount };
 }
 
+function buildPendingContentModeParagraph(item) {
+  if (String(item?.content || '').trim()) return null;
+  let message = '';
+  if (item?.content_mode === 'template-fill') {
+    message = '待模板填写：后续将从招标文件提取并填充内容。';
+  } else if (item?.content_mode === 'point-to-point') {
+    message = '待点对点应答表回填：将在正文完成并确定 Word 页码后处理。';
+  } else if (item?.content_mode === 'other') {
+    message = `待处理：${String(item?.content_mode_note || '').trim() || '该小节采用其他特殊处理模式。'}`;
+  }
+  return message
+    ? paragraph([textRun(`[${message}]`, { color: '8A650B', italics: true })], { after: 120 })
+    : null;
+}
+
 function collectOutlineContents(items = []) {
   const contents = [];
   for (const item of items || []) {
@@ -1238,6 +1253,22 @@ async function resolveMermaidImageForExport(code, context = {}, options = {}) {
   };
 }
 
+// 读取高分辨率截图携带的像素密度，版面尺寸仍按设计像素计算。
+function getImagePixelDensity(source) {
+  try {
+    const url = new URL(String(source || ''));
+    const isInternalRenderAsset = url.protocol === 'yibiao-asset:'
+      && url.hostname === 'generated-images'
+      && (url.pathname.startsWith('/mermaid-cache/')
+        || url.pathname.startsWith('/technical-plan/illustrations/'));
+    if (!isInternalRenderAsset) return 1;
+    const value = Number(url.searchParams.get('pixel-density'));
+    return Number.isFinite(value) && value >= 1 ? value : 1;
+  } catch {
+    return 1;
+  }
+}
+
 async function imageRunFromNode(node, context, options = {}) {
   let loaded = null;
   const imageLabel = compactText(node.alt || node.url || '未知图片');
@@ -1306,8 +1337,9 @@ async function imageRunFromNode(node, context, options = {}) {
     });
     return textRun(`[${message}]`, { color: 'C83220' });
   }
-  const sourceWidth = size.width || MAX_IMAGE_WIDTH;
-  const sourceHeight = size.height || Math.round(MAX_IMAGE_WIDTH * 0.62);
+  const pixelDensity = getImagePixelDensity(node.url);
+  const sourceWidth = (size.width || MAX_IMAGE_WIDTH) / pixelDensity;
+  const sourceHeight = (size.height || Math.round(MAX_IMAGE_WIDTH * 0.62)) / pixelDensity;
   const maxWidth = getImageMaxWidth(context);
   const maxHeight = getImageMaxHeight(context);
   const ratio = Math.min(1, maxWidth / sourceWidth, maxHeight / sourceHeight);
@@ -1321,6 +1353,7 @@ async function imageRunFromNode(node, context, options = {}) {
     bytes: loaded.buffer.length,
     source_width: sourceWidth,
     source_height: sourceHeight,
+    pixel_density: pixelDensity,
     max_width: maxWidth,
     max_height: maxHeight,
     scale_ratio: ratio,
@@ -1814,6 +1847,9 @@ async function addChapterFrameRows(rows, items, context, level = 1) {
       const bodyChildren = [];
       if (String(item.content || '').trim()) {
         await addMarkdownContent(bodyChildren, item.content, context);
+      } else {
+        const pendingParagraph = buildPendingContentModeParagraph(item);
+        if (pendingParagraph) bodyChildren.push(pendingParagraph);
       }
       rows.push(buildChapterLeafRow(
         context.exportFormat,
@@ -1837,6 +1873,9 @@ async function addChapterFrameRows(rows, items, context, level = 1) {
         const bodyChildren = [];
         await addMarkdownContent(bodyChildren, item.content, context);
         rows.push(buildChapterContentRow(context.exportFormat, bodyChildren));
+      } else {
+        const pendingParagraph = buildPendingContentModeParagraph(item);
+        if (pendingParagraph) rows.push(buildChapterContentRow(context.exportFormat, [pendingParagraph]));
       }
       context.convertedLeafCount = (context.convertedLeafCount || 0) + 1;
       reportConversionProgress(context, `已处理 ${context.convertedLeafCount}/${context.stats?.leafCount || context.convertedLeafCount} 个正文小节。`);
@@ -1865,6 +1904,9 @@ async function addOutlineItems(children, items, context, level = 1) {
     if (!item.children?.length) {
       if (String(item.content || '').trim()) {
         await addMarkdownContent(children, item.content, context);
+      } else {
+        const pendingParagraph = buildPendingContentModeParagraph(item);
+        if (pendingParagraph) children.push(pendingParagraph);
       }
       context.convertedLeafCount = (context.convertedLeafCount || 0) + 1;
       reportConversionProgress(context, `已处理 ${context.convertedLeafCount}/${context.stats?.leafCount || context.convertedLeafCount} 个正文小节。`);

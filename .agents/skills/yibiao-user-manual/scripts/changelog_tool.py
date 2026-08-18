@@ -405,7 +405,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.repository is None:
         args.repository = repository_root()
     if args.changelog is None:
-        args.changelog = args.repository / "使用说明" / "v2版本更新日志.md"
+        args.changelog = args.repository / "使用说明" / "更新日志" / "v2版本更新日志.md"
     return args
 
 

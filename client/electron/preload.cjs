@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const bridge = {
   appName: '易标投标工具箱',
@@ -32,6 +32,11 @@ const bridge = {
     ipcRenderer.on('app:update-error', listener);
     return () => ipcRenderer.removeListener('app:update-error', listener);
   },
+  onPluginUpdatesAvailable: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('plugins:updates-available', listener);
+    return () => ipcRenderer.removeListener('plugins:updates-available', listener);
+  },
   database: {
     getStatus: () => ipcRenderer.invoke('workspace-database:get-status'),
     onStatus: (callback) => {
@@ -40,10 +45,14 @@ const bridge = {
       return () => ipcRenderer.removeListener('workspace-database:status', listener);
     },
   },
+  ui: {
+    setCurrentView: (view) => ipcRenderer.invoke('ui:set-current-view', view),
+  },
   config: {
     load: () => ipcRenderer.invoke('config:load'),
     save: (config) => ipcRenderer.invoke('config:save', config),
     listModels: (config) => ipcRenderer.invoke('config:list-models', config),
+    getModelInfo: (modelName) => ipcRenderer.invoke('config:get-model-info', modelName),
     openConfigFolder: () => ipcRenderer.invoke('config:open-config-folder'),
   },
   license: {
@@ -62,16 +71,36 @@ const bridge = {
       return () => ipcRenderer.removeListener('ai:http-error', listener);
     },
   },
+  autoConfirmation: {
+    getState: () => ipcRenderer.invoke('auto-confirmation:get-state'),
+    setEnabled: (enabled) => ipcRenderer.invoke('auto-confirmation:set-enabled', enabled),
+    onChanged: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('auto-confirmation:state', listener);
+      ipcRenderer.send('auto-confirmation:subscribe');
+      return () => ipcRenderer.removeListener('auto-confirmation:state', listener);
+    },
+  },
   agent: {
     run: (payload) => ipcRenderer.invoke('agent:run', payload),
     selfCheck: () => ipcRenderer.invoke('agent:self-check'),
     exportSelfCheckReport: (payload) => ipcRenderer.invoke('agent:export-self-check-report', payload),
     getStatus: () => ipcRenderer.invoke('agent:get-status'),
     restart: (reason) => ipcRenderer.invoke('agent:restart', reason),
+    getPendingQuestion: () => ipcRenderer.invoke('agent:get-pending-question'),
+    answerQuestion: (payload) => ipcRenderer.invoke('agent:answer-question', payload),
+    suppressQuestionAutoAnswer: (payload) => ipcRenderer.invoke('agent:suppress-question-auto-answer', payload),
     onStatus: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('agent:status', listener);
+      ipcRenderer.send('agent:subscribe');
       return () => ipcRenderer.removeListener('agent:status', listener);
+    },
+    onQuestion: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('agent:question-state', listener);
+      ipcRenderer.send('agent:subscribe');
+      return () => ipcRenderer.removeListener('agent:question-state', listener);
     },
   },
   developerTokenStats: {
@@ -84,13 +113,28 @@ const bridge = {
       return () => ipcRenderer.removeListener('developer-token-stats:changed', listener);
     },
   },
+  developerAgentMonitor: {
+    openWindow: () => ipcRenderer.invoke('developer-agent-monitor:open-window'),
+    openWorkspace: (workspaceDir) => ipcRenderer.invoke('developer-agent-monitor:open-workspace', workspaceDir),
+    attach: () => ipcRenderer.invoke('developer-agent-monitor:attach'),
+    detach: () => ipcRenderer.invoke('developer-agent-monitor:detach'),
+    onEvent: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('developer-agent-monitor:event', listener);
+      return () => ipcRenderer.removeListener('developer-agent-monitor:event', listener);
+    },
+  },
   developerExpansionReplaceTest: {
     run: (payload) => ipcRenderer.invoke('developer-expansion-replace-test:run', payload),
   },
   file: {
     selectDuplicateCheckFiles: (options) => ipcRenderer.invoke('file:select-duplicate-check-files', options),
+    /** 把拖拽进来的 File 对象换成本地绝对路径，供各上传区拖拽导入使用 */
+    getPathForFile: (file) => webUtils.getPathForFile(file),
   },
   knowledgeBase: {
+    list: () => ipcRenderer.invoke('knowledge-base:list'),
+    createFolder: (name) => ipcRenderer.invoke('knowledge-base:create-folder', name),
     getMigrationStatus: () => ipcRenderer.invoke('knowledge-base:get-migration-status'),
     migrateLegacy: () => ipcRenderer.invoke('knowledge-base:migrate-legacy'),
     list: (type) => ipcRenderer.invoke('knowledge-base:list', type),
@@ -103,7 +147,7 @@ const bridge = {
     moveDocument: (documentId, targetFolderId, targetDocumentId, position) => ipcRenderer.invoke('knowledge-base:move-document', documentId, targetFolderId, targetDocumentId, position),
     uploadDocuments: (folderId) => ipcRenderer.invoke('knowledge-base:upload-documents', folderId),
     retryDocument: (documentId) => ipcRenderer.invoke('knowledge-base:retry-document', documentId),
-    startMatching: (documentId, batchSize) => ipcRenderer.invoke('knowledge-base:start-matching', documentId, batchSize),
+    startMatching: (documentId, batchSize) => ipcRenderer.invoke('knowledge-base:start-matching', documentId, batchSize), // batchSize 已忽略
     readMarkdown: (documentId) => ipcRenderer.invoke('knowledge-base:read-markdown', documentId),
     readItems: (documentId) => ipcRenderer.invoke('knowledge-base:read-items', documentId),
     listItems: (documentId) => ipcRenderer.invoke('knowledge-base:list-items', documentId),
@@ -131,8 +175,9 @@ const bridge = {
   },
   technicalPlan: {
     loadState: () => ipcRenderer.invoke('technical-plan:load-state'),
-    importTenderDocument: () => ipcRenderer.invoke('technical-plan:import-tender-document'),
-    importOriginalPlanDocument: () => ipcRenderer.invoke('technical-plan:import-original-plan-document'),
+    importTenderDocument: (filePaths) => ipcRenderer.invoke('technical-plan:import-tender-document', filePaths),
+    removeTenderDocument: (sourceId) => ipcRenderer.invoke('technical-plan:remove-tender-document', sourceId),
+    importOriginalPlanDocument: (filePaths) => ipcRenderer.invoke('technical-plan:import-original-plan-document', filePaths),
     checkBidSections: () => ipcRenderer.invoke('technical-plan:check-bid-sections'),
     selectBidSection: (selectedSection) => ipcRenderer.invoke('technical-plan:select-bid-section', selectedSection),
     readTenderMarkdown: () => ipcRenderer.invoke('technical-plan:read-tender-markdown'),
@@ -143,7 +188,9 @@ const bridge = {
     switchWorkflowKind: (workflowKind) => ipcRenderer.invoke('technical-plan:switch-workflow-kind', workflowKind),
     saveBidAnalysisConfig: (payload) => ipcRenderer.invoke('technical-plan:save-bid-analysis-config', payload),
     saveOutlineConfig: (payload) => ipcRenderer.invoke('technical-plan:save-outline-config', payload),
+    saveOutlineSelection: (payload) => ipcRenderer.invoke('tasks:confirm-outline-selection', payload),
     saveOutline: (outlineData) => ipcRenderer.invoke('technical-plan:save-outline', outlineData),
+    saveGlobalFactsConfig: (payload) => ipcRenderer.invoke('technical-plan:save-global-facts-config', payload),
     saveGlobalFacts: (globalFacts) => ipcRenderer.invoke('technical-plan:save-global-facts', globalFacts),
     saveContentGenerationOptions: (options) => ipcRenderer.invoke('technical-plan:save-content-generation-options', options),
     saveChapterContent: (payload) => ipcRenderer.invoke('technical-plan:save-chapter-content', payload),
@@ -176,7 +223,7 @@ const bridge = {
   },
   rejectionCheck: {
     loadState: () => ipcRenderer.invoke('rejection-check:load-state'),
-    importDocument: (role) => ipcRenderer.invoke('rejection-check:import-document', role),
+    importDocument: (role, filePaths) => ipcRenderer.invoke('rejection-check:import-document', role, filePaths),
     importTenderFromTechnicalPlan: () => ipcRenderer.invoke('rejection-check:import-tender-from-technical-plan'),
     removeDocument: (role, documentId) => ipcRenderer.invoke('rejection-check:remove-document', role, documentId),
     saveUiState: (payload) => ipcRenderer.invoke('rejection-check:save-ui-state', payload),
@@ -194,6 +241,7 @@ const bridge = {
     startBidSectionExtraction: (payload) => ipcRenderer.invoke('tasks:start-bid-section-extraction', payload),
     startBidAnalysis: (payload) => ipcRenderer.invoke('tasks:start-bid-analysis', payload),
     startOutlineGeneration: (payload) => ipcRenderer.invoke('tasks:start-outline-generation', payload),
+    suppressOutlineSelectionAutoConfirmation: (payload) => ipcRenderer.invoke('tasks:suppress-outline-selection-auto-confirmation', payload),
     startGlobalFactsGeneration: (payload) => ipcRenderer.invoke('tasks:start-global-facts-generation', payload),
     startContentGeneration: (payload) => ipcRenderer.invoke('tasks:start-content-generation', payload),
     pauseContentGeneration: () => ipcRenderer.invoke('tasks:pause-content-generation'),
@@ -225,6 +273,21 @@ const bridge = {
   },
   systemFonts: {
     list: () => ipcRenderer.invoke('system-fonts:list'),
+  },
+  plugins: {
+    getAvailablePlugins: () => ipcRenderer.invoke('plugins:getAvailablePlugins'),
+    install: (pluginId) => ipcRenderer.invoke('plugins:install', pluginId),
+    installOffline: () => ipcRenderer.invoke('plugins:installOffline'),
+    uninstall: (pluginId) => ipcRenderer.invoke('plugins:uninstall', pluginId),
+    enable: (pluginId) => ipcRenderer.invoke('plugins:enable', pluginId),
+    disable: (pluginId) => ipcRenderer.invoke('plugins:disable', pluginId),
+    update: (pluginId) => ipcRenderer.invoke('plugins:update', pluginId),
+    checkUpdates: () => ipcRenderer.invoke('plugins:checkUpdates'),
+    updateAll: () => ipcRenderer.invoke('plugins:updateAll'),
+    openConfig: (pluginId) => ipcRenderer.invoke('plugins:openConfig', pluginId),
+    refreshMarket: () => ipcRenderer.invoke('plugins:refreshMarket'),
+    clearUpdateFailedState: (pluginId) => ipcRenderer.invoke('plugins:clearUpdateFailedState', pluginId),
+    notifyEvent: (pluginId, event, payload) => ipcRenderer.invoke('plugins:notify-event', pluginId, event, payload),
   },
 };
 

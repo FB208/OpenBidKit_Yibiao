@@ -2,8 +2,12 @@ const crypto = require('node:crypto');
 const { runBidSectionExtractionTask } = require('./bidSectionExtractionTask.cjs');
 const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
 const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
-const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
-const { runOutlineGenerationTask } = require('./outlineGenerationTask.cjs');
+const { runGlobalFactsTaskV2 } = require('./globalFactsTaskV2.cjs');
+const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
+const { runOutlineAdjustmentTask } = require('./outlineAdjustmentTask.cjs');
+const { runGlobalFactsAdjustmentTask } = require('./globalFactsAdjustmentTask.cjs');
+const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
+const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
 const {
   runBusinessClauseAnalysisTask,
@@ -12,6 +16,8 @@ const {
   runBusinessGlobalFactsTask,
   runBusinessContentGenerationTask,
 } = require('./businessBidGeneration.cjs');
+const { originalPlanDownstreamTaskTypes } = require('./technicalPlanStore.cjs');
+const { normalizeLogs } = require('./taskLogStore.cjs');
 
 const taskDefinitions = {
   'bid-section-extraction': {
@@ -41,6 +47,15 @@ const taskDefinitions = {
     stateKey: 'technicalPlan',
     field: 'outlineGenerationTask',
   },
+  'outline-adjustment': {
+    label: '目录AI调整',
+    group: 'technical-plan',
+    groupLabel: '技术方案',
+    step: 3,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'technicalPlan',
+    field: 'outlineAdjustmentTask',
+  },
   'global-facts-generation': {
     label: '全局事实设定',
     group: 'technical-plan',
@@ -49,6 +64,15 @@ const taskDefinitions = {
     lockPolicy: 'group-exclusive',
     stateKey: 'technicalPlan',
     field: 'globalFactsTask',
+  },
+  'global-facts-adjustment': {
+    label: '全局事实AI调整',
+    group: 'technical-plan',
+    groupLabel: '技术方案',
+    step: 4,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'technicalPlan',
+    field: 'globalFactsAdjustmentTask',
   },
   'content-generation': {
     label: '正文生成',
@@ -177,11 +201,29 @@ function copyPatchFields(target, source, fields) {
   }
 }
 
-const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
-
-function collectLeafItems(items) {
-  return (items || []).flatMap((item) => item?.children?.length ? collectLeafItems(item.children) : [item]);
+// 提取技术方案流程中由用户选择或填写的任务参数，不包含生成结果和正文缓存。
+function createTechnicalPlanUserSettings(state = {}) {
+  const settings = {};
+  copyPatchFields(settings, state, [
+    'workflowKind',
+    'step',
+    'tenderFile',
+    'tenderFiles',
+    'originalPlanFile',
+    'bidAnalysisMode',
+    'bidAnalysisSelectedTaskIds',
+    'bidSectionMode',
+    'outlineMode',
+    'outlineExpansionMode',
+    'outlineWordControlOptions',
+    'outlineWordControlSnapshot',
+    'referenceKnowledgeDocumentIds',
+    'contentGenerationOptions',
+  ]);
+  return settings;
 }
+
+const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 
 function clearOutlineContentByIds(items, interruptedIds) {
   if (!(interruptedIds instanceof Set) || !interruptedIds.size) {
@@ -232,29 +274,9 @@ function normalizeInterruptedContentSections(technicalPlan) {
 }
 
 function inferContentGenerationPhase(technicalPlan) {
-  const taskContent = technicalPlan?.contentGenerationTask?.stats?.content || {};
-  const taskPhase = taskContent.phase;
-  const runtimePhase = technicalPlan?.contentGenerationRuntime?.phase;
-  if (['restoring', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'table-cleaning', 'illustration-planning', 'illustration-generating'].includes(taskPhase)) {
-    return taskPhase;
-  }
-  if (['planning', 'restoring', 'generating', 'outline-expanding', 'expanding', 'original-auditing', 'auditing', 'table-cleaning', 'illustration-planning', 'illustration-generating'].includes(runtimePhase)) {
-    return runtimePhase;
-  }
-
-  const leaves = collectLeafItems(technicalPlan?.outlineData?.outline || []);
-  const sections = technicalPlan?.contentGenerationSections || {};
-  const completed = leaves.filter((item) => sections[item.id]?.status === 'success').length;
-  const minimumWords = Number(taskContent.minimum_words ?? technicalPlan?.contentGenerationOptions?.minimumWords ?? 0) || 0;
-  const currentWords = Number(taskContent.current_words ?? 0) || 0;
-
-  if (leaves.length && completed >= leaves.length && minimumWords > 0 && currentWords < minimumWords) {
-    return 'expanding';
-  }
-  if (leaves.length && completed > 0) {
-    return 'generating';
-  }
-  return taskPhase || 'planning';
+  return technicalPlan?.contentGenerationTask?.stats?.content?.phase
+    || technicalPlan?.contentGenerationRuntime?.phase
+    || 'planning';
 }
 
 function createTask(type, payload) {
@@ -277,8 +299,9 @@ function createTask(type, payload) {
   };
 }
 
-function createTaskService({ aiService, agentService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService, businessBidStore }) {
+function createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService, businessBidStore }) {
   const subscribers = new Set();
+  const callbackSubscribers = new Set();
   const activeTasks = new Map();
   const activeTaskControls = new Map();
 
@@ -288,6 +311,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       if (!webContents.isDestroyed()) {
         webContents.send('tasks:event', event);
       }
+    }
+    for (const callback of callbackSubscribers) {
+      callback(event);
     }
   }
 
@@ -303,8 +329,10 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       if (state.outlineData === null) {
         copyPatchFields(patch, state, [
           'outlineData',
+          'outlineWordControlSnapshot',
           'outlineGenerationTask',
           'globalFactsTask',
+          'globalFactsAdjustmentTask',
           'globalFacts',
           'contentGenerationTask',
           'contentGenerationOptions',
@@ -329,10 +357,12 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         'projectOverview',
         'techRequirements',
         'outlineData',
+        'outlineWordControlSnapshot',
         'outlineGenerationTask',
         'referenceKnowledgeDocumentIds',
         'referenceKnowledgeSnippetIds',
         'globalFactsTask',
+        'globalFactsAdjustmentTask',
         'globalFacts',
         'contentGenerationTask',
         'contentGenerationOptions',
@@ -344,11 +374,21 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     }
 
     if (task.type === 'outline-generation') {
-      copyPatchFields(patch, state, ['outlineMode', 'outlineExpansionMode', 'referenceKnowledgeDocumentIds', 'referenceKnowledgeSnippetIds']);
+      copyPatchFields(patch, state, [
+        'outlineMode',
+        'outlineExpansionMode',
+        'outlineWordControlOptions',
+        'outlineWordControlSnapshot',
+        'referenceKnowledgeDocumentIds',
+        'globalFactsTask',
+        'globalFactsAdjustmentTask',
+        'globalFacts',
+      , 'referenceKnowledgeSnippetIds']);
       if (task.status === 'success' || state.outlineData === null || hasOwn(eventPatch, 'outlineData')) {
         copyPatchFields(patch, state, [
           'outlineData',
           'globalFactsTask',
+          'globalFactsAdjustmentTask',
           'globalFacts',
           'contentGenerationTask',
           'contentGenerationSections',
@@ -360,20 +400,29 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     }
 
     if (task.type === 'global-facts-generation') {
+      copyPatchFields(patch, state, ['globalFacts', 'globalFactsAdjustmentTask']);
+      copyPatchFields(patch, state, [
+        'contentGenerationTask',
+        'contentGenerationSections',
+        'contentGenerationPlans',
+        'contentIllustrationPlan',
+        'contentGenerationRuntime',
+      ]);
+    }
+
+    if (task.type === 'global-facts-adjustment') {
       copyPatchFields(patch, state, ['globalFacts']);
-      if (!isActiveTaskStatus(task.status)) {
-        copyPatchFields(patch, state, [
-          'contentGenerationTask',
-          'contentGenerationSections',
-          'contentGenerationPlans',
-          'contentIllustrationPlan',
-          'contentGenerationRuntime',
-        ]);
-      }
+      copyPatchFields(patch, state, [
+        'contentGenerationTask',
+        'contentGenerationSections',
+        'contentGenerationPlans',
+        'contentIllustrationPlan',
+        'contentGenerationRuntime',
+      ]);
     }
 
     if (task.type === 'content-generation') {
-      copyPatchFields(patch, state, ['contentIllustrationPlan', 'contentGenerationRuntime']);
+      copyPatchFields(patch, state, ['outlineWordControlSnapshot', 'contentIllustrationPlan', 'contentGenerationRuntime']);
       if (!isActiveTaskStatus(task.status)) {
         copyPatchFields(patch, state, [
           'outlineData',
@@ -467,10 +516,10 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       return buildBusinessBidSnapshot(task, state, eventPatch);
     }
     if (definition.stateKey === 'rejectionCheck') {
-      return { rejectionCheck: state };
+      return { rejectionCheckPatch: state };
     }
     if (definition.stateKey === 'duplicateCheck') {
-      return { duplicateCheck: state };
+      return { duplicateCheckPatch: state };
     }
     return {};
   }
@@ -500,6 +549,17 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       }
     }
     webContents.once('destroyed', () => subscribers.delete(webContents));
+  }
+
+  /**
+   * 订阅 Main 进程中的任务事件，并返回取消订阅函数
+   */
+  function subscribeCallback(callback) {
+    callbackSubscribers.add(callback);
+    for (const task of activeTasks.values()) {
+      callback({ task, ...getSnapshotForTask(task) });
+    }
+    return () => callbackSubscribers.delete(callback);
   }
 
   function getTaskField(type) {
@@ -556,20 +616,26 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     throw new Error(`当前${definition.groupLabel || '任务组'}正在执行“${conflict.definition.label || conflict.task.type}”，请完成后再启动“${definition.label || type}”。`);
   }
 
-  function updateWorkspaceState(definition, partial) {
+  function updateWorkspaceStateWithoutReload(definition, partial) {
     if (definition.stateKey === 'technicalPlan') {
-      return technicalPlanStore.updateTechnicalPlan(partial);
+      technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+      return;
+    }
+    if (definition.stateKey === 'businessBid') {
+      return businessBidStore.updateBusinessBid(partial);
     }
     if (definition.stateKey === 'businessBid') {
       return businessBidStore.updateBusinessBid(partial);
     }
     if (definition.stateKey === 'rejectionCheck') {
-      return rejectionCheckStore.updateRejectionCheck(partial);
+      rejectionCheckStore.updateRejectionCheckWithoutReload(partial);
+      return;
     }
     if (definition.stateKey === 'duplicateCheck') {
-      return duplicateCheckStore.updateDuplicateCheck(partial);
+      duplicateCheckStore.updateDuplicateCheckWithoutReload(partial);
+      return;
     }
-    return technicalPlanStore.updateTechnicalPlan(partial);
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
   }
 
   function loadWorkspaceState(definition) {
@@ -588,7 +654,27 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     return technicalPlanStore.loadTechnicalPlan();
   }
 
-  function startManagedTask(type, payload, runner, initialPartial = {}) {
+  // 在 Agent 失败时采集父任务及其前置步骤的用户参数快照。
+  function createAgentUserTaskContext(type, definition, payload, currentTask) {
+    const workspaceState = loadWorkspaceState(definition) || {};
+    return {
+      managed_task: {
+        type,
+        label: definition.label || type,
+        group: definition.group || '',
+        group_label: definition.groupLabel || '',
+        step: definition.step,
+        state_key: definition.stateKey || '',
+        payload,
+        state: currentTask,
+      },
+      workflow_settings: definition.stateKey === 'technicalPlan'
+        ? createTechnicalPlanUserSettings(workspaceState)
+        : {},
+    };
+  }
+
+  function startManagedTask(type, payload, runner, initialPartial = {}, startOptions = {}) {
     const existingTask = activeTasks.get(type);
     if (existingTask && isActiveTaskStatus(existingTask.status)) {
       const nextPayloadSignature = getPayloadSignature(type, payload);
@@ -601,16 +687,26 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     }
 
     assertTaskCanStart(type, payload);
+    startOptions.beforeStart?.();
 
     const definition = getTaskDefinition(type);
-    const task = createTask(type, payload);
+    const task = startOptions.existingTask || createTask(type, payload);
     const queueScopeId = `${type}:${task.task_id}`;
     activeTasks.set(type, task);
     const taskField = getTaskField(type);
     let currentTask = task;
+    const abortController = new AbortController();
+    let resolveSettled;
+    const settledPromise = new Promise((resolve) => {
+      resolveSettled = resolve;
+    });
     const taskControl = {
       queueScopeId,
+      signal: abortController.signal,
       pauseRequested: false,
+      outlineSelectionWaiter: null,
+      outlineSelectionResult: null,
+      outlineSelectionAutoConfirmationId: null,
       isPauseRequested() {
         return this.pauseRequested;
       },
@@ -619,15 +715,50 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         const pausedLogs = currentTask.logs?.length
           ? currentTask.logs
           : ['已请求暂停，正在等待当前 AI 请求完成。'];
-        const pausingTask = updateTask({ status: 'pausing', pause_requested: true, logs: pausedLogs });
-        const state = updateWorkspaceState(definition, { [taskField]: pausingTask });
-        emit(pausingTask, buildSnapshot(definition, state, pausingTask));
-        return pausingTask;
+        return checkpointTask({ status: 'pausing', pause_requested: true, logs: pausedLogs }).task;
+      },
+      waitForOutlineSelection() {
+        if (abortController.signal.aborted) {
+          throw abortController.signal.reason || new Error('目录生成任务已取消');
+        }
+        if (this.outlineSelectionResult) return Promise.resolve(this.outlineSelectionResult);
+        if (this.outlineSelectionWaiter) {
+          this.registerOutlineSelectionAutoConfirmation?.();
+          return this.outlineSelectionWaiter.promise;
+        }
+        let resolve;
+        let reject;
+        const promise = new Promise((resolvePromise, rejectPromise) => {
+          resolve = resolvePromise;
+          reject = rejectPromise;
+        });
+        promise.catch(() => undefined);
+        this.outlineSelectionWaiter = { promise, resolve, reject };
+        this.registerOutlineSelectionAutoConfirmation?.();
+        return promise;
+      },
+      cancel(reason = '后台任务已取消') {
+        const error = new Error(reason);
+        error.code = 'TASK_CANCELLED';
+        this.outlineSelectionWaiter?.reject?.(error);
+        this.outlineSelectionWaiter = null;
+        autoConfirmationService.unregister(this.outlineSelectionAutoConfirmationId);
+        this.outlineSelectionAutoConfirmationId = null;
+        if (!abortController.signal.aborted) abortController.abort(error);
+      },
+      waitForSettlement() {
+        return settledPromise;
+      },
+      dispose() {
+        this.outlineSelectionWaiter?.reject?.(new Error('目录生成任务已结束'));
+        this.outlineSelectionWaiter = null;
+        autoConfirmationService.unregister(this.outlineSelectionAutoConfirmationId);
+        this.outlineSelectionAutoConfirmationId = null;
       },
     };
     activeTaskControls.set(type, taskControl);
 
-    const updateTask = (partial, workspaceState, eventPatch) => {
+    const applyTaskPatch = (partial) => {
       const nextStatus = currentTask.status === 'pausing' && partial.status === 'running'
         ? 'pausing'
         : partial.status || currentTask.status;
@@ -636,20 +767,114 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         ...partial,
         status: nextStatus,
         pause_requested: partial.pause_requested === false ? false : taskControl.pauseRequested || partial.pause_requested,
-        logs: partial.logs ? partial.logs : currentTask.logs,
+        logs: partial.logs ? normalizeLogs(partial.logs) : currentTask.logs,
         updated_at: now(),
       };
       activeTasks.set(type, currentTask);
-      if (workspaceState) {
-        const persistedState = taskField ? updateWorkspaceState(definition, { [taskField]: currentTask }) : workspaceState;
-        emit(currentTask, buildSnapshot(definition, persistedState, currentTask, eventPatch));
-      }
       return currentTask;
     };
 
+    // 仅更新内存并推送 Renderer，用于无恢复价值的高频展示状态。
+    const updateTask = (partial, workspaceState = {}, eventPatch) => {
+      const nextTask = applyTaskPatch(partial);
+      emit(nextTask, buildSnapshot(definition, { ...(workspaceState || {}), [taskField]: nextTask }, nextTask, eventPatch));
+      return nextTask;
+    };
+
+    // 将业务状态和任务状态作为同一个 checkpoint 落库，并在提交后统一推送事件。
+    const checkpointTask = (taskPartial, workspacePartial = {}, eventPatch) => {
+      if (taskControl.signal.aborted) {
+        throw taskControl.signal.reason || new Error('后台任务已取消');
+      }
+      const nextTask = applyTaskPatch(taskPartial);
+      const persistedPatch = {
+        ...(workspacePartial || {}),
+        [taskField]: nextTask,
+      };
+      updateWorkspaceStateWithoutReload(definition, persistedPatch);
+      emit(nextTask, buildSnapshot(definition, persistedPatch, nextTask, eventPatch));
+      return { task: nextTask };
+    };
+
+    // 为一级目录默认选择注册自动确认，并把截止时间同步到任务状态。
+    taskControl.registerOutlineSelectionAutoConfirmation = () => {
+      if (type !== 'outline-generation' || taskControl.outlineSelectionAutoConfirmationId) return;
+      const selection = currentTask.stats?.outline_selection;
+      if (!selection?.items?.length || !selection.selected_ids?.length || selection.confirmed) return;
+      const confirmationId = `outline-selection:${currentTask.task_id}`;
+      const defaultItems = selection.items;
+      const defaultSelectedIds = selection.selected_ids;
+      taskControl.outlineSelectionAutoConfirmationId = confirmationId;
+      autoConfirmationService.register({
+        id: confirmationId,
+        submit: () => taskControl.confirmOutlineSelection({
+          taskId: currentTask.task_id,
+          items: defaultItems,
+          selectedIds: defaultSelectedIds,
+        }),
+        onStateChange: ({ auto_answer_at: autoAnswerAt }) => {
+          const currentSelection = currentTask.stats?.outline_selection;
+          if (!currentSelection || currentSelection.confirmed) return;
+          const nextSelection = { ...currentSelection };
+          if (autoAnswerAt) nextSelection.auto_answer_at = autoAnswerAt;
+          else delete nextSelection.auto_answer_at;
+          currentTask = checkpointTask({
+            stats: {
+              ...(currentTask.stats || {}),
+              outline_selection: nextSelection,
+            },
+          }).task;
+        },
+      });
+    };
+
+    taskControl.confirmOutlineSelection = (request = {}) => {
+      if (type !== 'outline-generation' || request.taskId !== currentTask.task_id) {
+        throw new Error('一级目录生成结果已变化，请重新打开后再选择');
+      }
+      const waiter = taskControl.outlineSelectionWaiter;
+      if (!waiter) throw new Error('当前目录任务不在一级目录确认阶段');
+      const items = Array.isArray(request.items) ? request.items : [];
+      const selectedIds = Array.isArray(request.selectedIds) ? request.selectedIds : [];
+      autoConfirmationService.unregister(taskControl.outlineSelectionAutoConfirmationId);
+      taskControl.outlineSelectionAutoConfirmationId = null;
+      const checkpoint = checkpointTask({
+        stats: {
+          ...(currentTask.stats || {}),
+          outline_selection: {
+            items,
+            selected_ids: selectedIds,
+            confirmed: true,
+          },
+        },
+      });
+      currentTask = checkpoint.task;
+      taskControl.outlineSelectionWaiter = null;
+      taskControl.outlineSelectionResult = { items, selectedIds };
+      waiter.resolve(taskControl.outlineSelectionResult);
+      return { success: true };
+    };
+
+    // 用户修改一级目录草稿后停止当前确认项的自动提交。
+    taskControl.suppressOutlineSelectionAutoConfirmation = (request = {}) => {
+      if (type !== 'outline-generation' || request.taskId !== currentTask.task_id) {
+        return { success: true };
+      }
+      autoConfirmationService.suppress(taskControl.outlineSelectionAutoConfirmationId);
+      return { success: true };
+    };
+
     const previousState = loadWorkspaceState(definition) || {};
-    const state = updateWorkspaceState(definition, { ...initialPartial, [taskField]: currentTask });
-    emit(currentTask, buildSnapshot(definition, state, currentTask));
+    const initialState = startOptions.skipInitialStateUpdate
+      ? previousState
+      : { ...initialPartial, [taskField]: currentTask };
+    if (!startOptions.skipInitialStateUpdate) {
+      updateWorkspaceStateWithoutReload(definition, initialState);
+    }
+    emit(currentTask, buildSnapshot(definition, initialState, currentTask));
+    if (startOptions.restoreOutlineSelectionWaiter) {
+      taskControl.waitForOutlineSelection();
+    }
 
     const runnerWorkspaceStore = definition.stateKey === 'technicalPlan'
       ? technicalPlanStore
@@ -658,28 +883,63 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         : definition.stateKey === 'rejectionCheck'
           ? rejectionCheckStore
           : duplicateCheckStore;
-    const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId) : aiService;
-    runner({ aiService: runnerAiService, agentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, payload, taskControl, previousState }).catch((error) => {
-      const failedTask = updateTask({ status: 'error', error: error.message || '任务执行失败' });
-      const nextState = updateWorkspaceState(definition, { [taskField]: failedTask });
-      emit(failedTask, buildSnapshot(definition, nextState, failedTask));
+    const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId, taskControl.signal) : aiService;
+    const runnerAgentService = agentService.bindTaskContext(
+      () => createAgentUserTaskContext(type, definition, payload, currentTask),
+      { queueScopeId, signal: taskControl.signal },
+    );
+    runner({ aiService: runnerAiService, agentService: runnerAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, updateTask, checkpointTask, payload, taskControl, previousState }).catch((error) => {
+      if (!taskControl.signal.aborted) {
+        checkpointTask({ status: 'error', error: error.message || '任务执行失败' });
+      }
     }).finally(() => {
+      taskControl.dispose();
       if (aiService?.resumeQueueScope) {
         aiService.resumeQueueScope(queueScopeId);
       }
       activeTasks.delete(type);
       activeTaskControls.delete(type);
+      resolveSettled();
     });
 
     return currentTask;
   }
 
-  function recoverInterruptedContentGenerationTask() {
+  // 取消技术方案任务并等待退出，避免清空下游后旧任务继续提交 checkpoint。
+  async function cancelTechnicalPlanTasks(reason, taskTypes) {
+    const typeFilter = Array.isArray(taskTypes) && taskTypes.length ? new Set(taskTypes) : null;
+    const controls = [];
+    for (const [type, task] of activeTasks.entries()) {
+      const definition = getTaskDefinition(type);
+      const control = activeTaskControls.get(type);
+      if (definition.group !== 'technical-plan' || !isActiveTaskStatus(task.status) || !control?.cancel) continue;
+      if (typeFilter && !typeFilter.has(type)) continue;
+      controls.push(control);
+      control.cancel(reason);
+    }
+    await Promise.all(controls.map((control) => control.waitForSettlement()));
+  }
+
+  // 取消废标检查任务并等待退出，避免清空下游后旧任务继续提交 checkpoint。
+  async function cancelRejectionCheckTasks(reason, taskTypes) {
+    const typeFilter = Array.isArray(taskTypes) && taskTypes.length ? new Set(taskTypes) : null;
+    const controls = [];
+    for (const [type, task] of activeTasks.entries()) {
+      const definition = getTaskDefinition(type);
+      const control = activeTaskControls.get(type);
+      if (definition.group !== 'rejection-check' || !isActiveTaskStatus(task.status) || !control?.cancel) continue;
+      if (typeFilter && !typeFilter.has(type)) continue;
+      controls.push(control);
+      control.cancel(reason);
+    }
+    await Promise.all(controls.map((control) => control.waitForSettlement()));
+  }
+
+  function recoverInterruptedContentGenerationTask(technicalPlan) {
     if (activeTasks.has('content-generation')) {
       return;
     }
 
-    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const contentTask = technicalPlan.contentGenerationTask;
     if (!isActiveTaskStatus(contentTask?.status)) {
       return;
@@ -709,7 +969,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       stats: nextStats,
       updated_at: now(),
     };
-    const state = technicalPlanStore.updateTechnicalPlan({
+    const partial = {
       outlineData,
       contentGenerationSections: sections,
       contentGenerationTask: pausedTask,
@@ -718,22 +978,67 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         phase,
         updated_at: now(),
       },
-    });
-    emit(pausedTask, buildSnapshot(getTaskDefinition('content-generation'), state, pausedTask));
+    };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(pausedTask, buildSnapshot(getTaskDefinition('content-generation'), partial, pausedTask));
   }
 
-  function recoverInterruptedOutlineGenerationTask() {
+  function recoverInterruptedOutlineGenerationTask(technicalPlan) {
     if (activeTasks.has('outline-generation')) {
       return;
     }
 
-    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const outlineTask = technicalPlan.outlineGenerationTask;
     if (!isActiveTaskStatus(outlineTask?.status)) {
       return;
     }
 
-    const message = '上次目录生成未完成，请重新生成目录；如旧方案目录提取已有进度，将自动继续。';
+    const agentState = outlineTask.stats?.agent || {};
+    let persistentTask = null;
+    try {
+      persistentTask = agentService.loadPersistentTask(OUTLINE_AGENT_TASK_KEY);
+    } catch {}
+    const recoverableWaiting = persistentTask?.state?.run_id === outlineTask.task_id
+      && persistentTask.state.status === 'waiting-outline-selection'
+      && persistentTask.state.phase === 'outline-selection'
+      && persistentTask.state.agent_connection === 'idle'
+      && Boolean(persistentTask.state.session_file)
+      && agentService.hasPersistentTaskSession(OUTLINE_AGENT_TASK_KEY)
+      && Boolean(outlineTask.stats?.outline_selection?.items?.length)
+      && outlineTask.stats.outline_selection.confirmed !== true;
+    if (recoverableWaiting) {
+      startManagedTask('outline-generation', {
+        ...(agentState.resume_payload || {}),
+        agent_resume: {
+          phase: 'outline-selection',
+        },
+      }, runOutlineGenerationTaskV2, {}, {
+        existingTask: outlineTask,
+        skipInitialStateUpdate: true,
+        restoreOutlineSelectionWaiter: true,
+      });
+      return;
+    }
+
+    const message = '上次目录生成未完成，请重新生成目录。';
+    if (persistentTask) {
+      try {
+        agentService.updatePersistentTask(OUTLINE_AGENT_TASK_KEY, {
+          status: 'interrupted',
+          agent_connection: 'idle',
+          error: message,
+        });
+      } catch {}
+    }
+    const recoveredStats = { ...(outlineTask.stats || {}) };
+    delete recoveredStats.outline_selection;
+    if (recoveredStats.agent) {
+      recoveredStats.agent = {
+        ...recoveredStats.agent,
+        status: 'interrupted',
+        agent_connection: 'idle',
+      };
+    }
     const recoveredTask = {
       ...outlineTask,
       status: 'error',
@@ -741,36 +1046,83 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       pause_requested: false,
       error: message,
       logs: [...(Array.isArray(outlineTask.logs) ? outlineTask.logs : []), message],
+      stats: recoveredStats,
       updated_at: now(),
     };
-    const state = technicalPlanStore.updateTechnicalPlan({ outlineGenerationTask: recoveredTask });
-    emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-generation'), state, recoveredTask));
+    const partial = { outlineGenerationTask: recoveredTask };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-generation'), partial, recoveredTask));
   }
 
-  function recoverInterruptedBidAnalysisTask() {
+  function recoverInterruptedOutlineAdjustmentTask(technicalPlan) {
+    if (activeTasks.has('outline-adjustment')) {
+      return;
+    }
+
+    const adjustmentTask = technicalPlan.outlineAdjustmentTask;
+    if (!isActiveTaskStatus(adjustmentTask?.status)) {
+      return;
+    }
+
+    const message = '上次目录 AI 调整未完成，请重新发送调整要求。';
+    const recoveredTask = {
+      ...adjustmentTask,
+      status: 'error',
+      progress: Math.max(0, Math.min(99, Number(adjustmentTask.progress || 0) || 0)),
+      pause_requested: false,
+      error: message,
+      logs: [...(Array.isArray(adjustmentTask.logs) ? adjustmentTask.logs : []), message],
+      updated_at: now(),
+    };
+    const partial = { outlineAdjustmentTask: recoveredTask };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-adjustment'), partial, recoveredTask));
+  }
+
+  function recoverInterruptedGlobalFactsAdjustmentTask(technicalPlan) {
+    if (activeTasks.has('global-facts-adjustment')) {
+      return;
+    }
+
+    const adjustmentTask = technicalPlan.globalFactsAdjustmentTask;
+    if (!isActiveTaskStatus(adjustmentTask?.status)) {
+      return;
+    }
+
+    const message = '上次全局事实 AI 调整未完成，请重新发送调整要求。';
+    const recoveredTask = {
+      ...adjustmentTask,
+      status: 'error',
+      progress: Math.max(0, Math.min(99, Number(adjustmentTask.progress || 0) || 0)),
+      pause_requested: false,
+      error: message,
+      logs: [...(Array.isArray(adjustmentTask.logs) ? adjustmentTask.logs : []), message],
+      updated_at: now(),
+    };
+    const partial = { globalFactsAdjustmentTask: recoveredTask };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('global-facts-adjustment'), partial, recoveredTask));
+  }
+
+  function recoverInterruptedBidAnalysisTask(technicalPlan) {
     if (activeTasks.has('bid-analysis')) {
       return;
     }
 
-    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const bidAnalysisTask = technicalPlan.bidAnalysisTask;
     if (!isActiveTaskStatus(bidAnalysisTask?.status)) {
       return;
     }
 
     const message = '上次招标文件解析未完成，请重新解析';
-    const nextBidAnalysisTasks = {};
-    let hasInterruptedItem = false;
+    const interruptedBidAnalysisTasks = {};
     for (const [itemId, item] of Object.entries(technicalPlan.bidAnalysisTasks || {})) {
       if (item?.status === 'running') {
-        nextBidAnalysisTasks[itemId] = {
+        interruptedBidAnalysisTasks[itemId] = {
           ...item,
           status: 'error',
           error: message,
         };
-        hasInterruptedItem = true;
-      } else {
-        nextBidAnalysisTasks[itemId] = item;
       }
     }
 
@@ -784,19 +1136,18 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       logs: logs.includes(message) ? logs : [...logs, message],
       updated_at: now(),
     };
-    const partial = hasInterruptedItem
-      ? { bidAnalysisTask: recoveredTask, bidAnalysisTasks: nextBidAnalysisTasks }
+    const partial = Object.keys(interruptedBidAnalysisTasks).length
+      ? { bidAnalysisTask: recoveredTask, bidAnalysisTasks: interruptedBidAnalysisTasks }
       : { bidAnalysisTask: recoveredTask };
-    const state = technicalPlanStore.updateTechnicalPlan(partial);
-    emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-analysis'), state, recoveredTask));
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-analysis'), partial, recoveredTask));
   }
 
-  function recoverInterruptedBidSectionExtractionTask() {
+  function recoverInterruptedBidSectionExtractionTask(technicalPlan) {
     if (activeTasks.has('bid-section-extraction')) {
       return;
     }
 
-    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const extractionTask = technicalPlan.bidSectionExtractionTask;
     if (!isActiveTaskStatus(extractionTask?.status)) {
       return;
@@ -812,20 +1163,20 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       logs: [...(Array.isArray(extractionTask.logs) ? extractionTask.logs : []), message],
       updated_at: now(),
     };
-    const state = technicalPlanStore.updateTechnicalPlan({
+    const partial = {
       bidSectionExtractionTask: recoveredTask,
       bidSectionExtractionStatus: 'error',
       bidSectionExtractionError: message,
-    });
-    emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-section-extraction'), state, recoveredTask));
+    };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-section-extraction'), partial, recoveredTask));
   }
 
-  function recoverInterruptedGlobalFactsTask() {
+  function recoverInterruptedGlobalFactsTask(technicalPlan) {
     if (activeTasks.has('global-facts-generation')) {
       return;
     }
 
-    const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const globalFactsTask = technicalPlan.globalFactsTask;
     if (!isActiveTaskStatus(globalFactsTask?.status)) {
       return;
@@ -840,14 +1191,14 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       logs: [...(Array.isArray(globalFactsTask.logs) ? globalFactsTask.logs : []), message],
       updated_at: now(),
     };
-    const state = technicalPlanStore.updateTechnicalPlan({ globalFactsTask: recoveredTask });
-    emit(recoveredTask, buildSnapshot(getTaskDefinition('global-facts-generation'), state, recoveredTask));
+    const partial = { globalFactsTask: recoveredTask };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('global-facts-generation'), partial, recoveredTask));
   }
 
-  function recoverInterruptedRejectionCheckTasks() {
+  function recoverInterruptedRejectionCheckTasks(state) {
     const staleExtractionMessage = '上次解析未完成，请重新解析';
     const staleCheckMessage = '上次检查未完成，请重新检查';
-    const state = rejectionCheckStore.loadRejectionCheck() || {};
     const partial = {};
 
     if (!activeTasks.has('rejection-items-extraction') && state.extractionTask?.status === 'running') {
@@ -882,15 +1233,14 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     }
 
     if (Object.keys(partial).length) {
-      rejectionCheckStore.updateRejectionCheck(partial);
+      rejectionCheckStore.updateRejectionCheckWithoutReload(partial);
     }
   }
 
-  function recoverInterruptedDuplicateCheckTask() {
+  function recoverInterruptedDuplicateCheckTask(state) {
     if (activeTasks.has('duplicate-analysis')) {
       return;
     }
-    const state = duplicateCheckStore.loadDuplicateCheck() || {};
     if (state.analysisTask?.status !== 'running') {
       return;
     }
@@ -906,18 +1256,33 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       error: message,
       updated_at: now(),
     };
-    const nextState = duplicateCheckStore.updateDuplicateCheck({
+    const partial = {
       analysisTask: recoveredTask,
       metadataAnalysis: markAnalysis(state.metadataAnalysis),
       outlineAnalysis: markAnalysis(state.outlineAnalysis),
       contentAnalysis: markAnalysis(state.contentAnalysis),
       imageAnalysis: markAnalysis(state.imageAnalysis),
-    });
-    emit(nextState.analysisTask || recoveredTask, { duplicateCheck: nextState });
+    };
+    duplicateCheckStore.updateDuplicateCheckWithoutReload(partial);
+    emit(recoveredTask, { duplicateCheckPatch: partial });
   }
+
+  const technicalPlanRecoveryState = technicalPlanStore.loadTechnicalPlan() || {};
+  const rejectionCheckRecoveryState = rejectionCheckStore.loadRejectionCheck() || {};
+  const duplicateCheckRecoveryState = duplicateCheckStore.loadDuplicateCheck() || {};
+  recoverInterruptedBidSectionExtractionTask(technicalPlanRecoveryState);
+  recoverInterruptedBidAnalysisTask(technicalPlanRecoveryState);
+  recoverInterruptedOutlineGenerationTask(technicalPlanRecoveryState);
+  recoverInterruptedOutlineAdjustmentTask(technicalPlanRecoveryState);
+  recoverInterruptedContentGenerationTask(technicalPlanRecoveryState);
+  recoverInterruptedGlobalFactsTask(technicalPlanRecoveryState);
+  recoverInterruptedGlobalFactsAdjustmentTask(technicalPlanRecoveryState);
+  recoverInterruptedRejectionCheckTasks(rejectionCheckRecoveryState);
+  recoverInterruptedDuplicateCheckTask(duplicateCheckRecoveryState);
 
   return {
     subscribe,
+    subscribeCallback,
     startBidSectionExtraction(payload) {
       return startManagedTask('bid-section-extraction', payload, runBidSectionExtractionTask, {
         bidSectionMode: 'multiple',
@@ -930,15 +1295,19 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         projectOverview: '',
         techRequirements: '',
         outlineData: null,
+        outlineWordControlSnapshot: undefined,
         outlineGenerationTask: undefined,
+        outlineAdjustmentTask: undefined,
         referenceKnowledgeDocumentIds: [],
         referenceKnowledgeSnippetIds: [],
         globalFactsTask: undefined,
+        globalFactsAdjustmentTask: undefined,
         globalFacts: [],
         contentGenerationTask: undefined,
         contentGenerationOptions: undefined,
         contentGenerationSections: {},
         contentGenerationPlans: {},
+        contentIllustrationPlan: undefined,
         contentGenerationRuntime: undefined,
       });
     },
@@ -946,23 +1315,54 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       return startManagedTask('bid-analysis', payload, runBidAnalysisTask);
     },
     startOutlineGeneration(payload) {
-      return startManagedTask('outline-generation', payload, runOutlineGenerationTask, {
-        outlineMode: 'aligned',
+      const outlineMode = payload?.outline_mode === 'response-file' ? 'response-file' : 'aligned';
+      const taskPayload = { ...payload, outline_mode: outlineMode };
+      return startManagedTask('outline-generation', taskPayload, runOutlineGenerationTaskV2, {
+        outlineMode,
         outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
+        outlineWordControlOptions: payload?.word_control_options,
         referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
-        referenceKnowledgeSnippetIds: Array.isArray(payload?.reference_knowledge_snippet_ids) ? payload.reference_knowledge_snippet_ids : [],
-      });
-    },
-    startGlobalFactsGeneration(payload) {
-      return startManagedTask('global-facts-generation', payload, runGlobalFactsTask, {
+        outlineData: null,
+        outlineWordControlSnapshot: undefined,
+        outlineAdjustmentTask: undefined,
+        globalFactsTask: undefined,
+        globalFactsAdjustmentTask: undefined,
         globalFacts: [],
         contentGenerationTask: undefined,
         contentGenerationSections: {},
         contentGenerationPlans: {},
+        contentIllustrationPlan: undefined,
         contentGenerationRuntime: undefined,
+      }, {
+        beforeStart: () => agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY),
+        referenceKnowledgeSnippetIds: Array.isArray(payload?.reference_knowledge_snippet_ids) ? payload.reference_knowledge_snippet_ids : [],
       });
     },
+    startOutlineAdjustment(payload) {
+      return startManagedTask('outline-adjustment', payload, runOutlineAdjustmentTask);
+    },
+    startGlobalFactsGeneration(payload) {
+      return startManagedTask('global-facts-generation', payload, runGlobalFactsTaskV2, {
+        invalidateContentGeneration: true,
+        globalFacts: [],
+        globalFactsAdjustmentTask: undefined,
+        contentGenerationTask: undefined,
+        contentGenerationSections: {},
+        contentGenerationPlans: {},
+        contentIllustrationPlan: undefined,
+        contentGenerationRuntime: undefined,
+      }, {
+        beforeStart: () => agentService.deletePersistentTask(GLOBAL_FACTS_AGENT_TASK_KEY),
+      });
+    },
+    startGlobalFactsAdjustment(payload) {
+      return startManagedTask('global-facts-adjustment', payload, runGlobalFactsAdjustmentTask);
+    },
     startContentGeneration(payload) {
+      const technicalPlan = technicalPlanStore.loadTechnicalPlan();
+      if (!technicalPlan.outlineWordControlSnapshot) {
+        throw new Error('当前目录没有字数控制生效快照，请重新生成目录');
+      }
       return startManagedTask('content-generation', payload, runContentGenerationTask);
     },
     startBusinessClauseAnalysis(payload) {
@@ -1066,14 +1466,63 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       }
       return startManagedTask('duplicate-analysis', payload, duplicateCheckService.runAnalysisTask);
     },
+    confirmOutlineSelection(payload) {
+      const control = activeTaskControls.get('outline-generation');
+      if (!control?.confirmOutlineSelection) throw new Error('当前没有等待确认的一级目录任务');
+      return control.confirmOutlineSelection(payload);
+    },
+    suppressOutlineSelectionAutoConfirmation(payload) {
+      const control = activeTaskControls.get('outline-generation');
+      if (!control?.suppressOutlineSelectionAutoConfirmation) return { success: true };
+      return control.suppressOutlineSelectionAutoConfirmation(payload);
+    },
+    async resetTechnicalPlan() {
+      await cancelTechnicalPlanTasks('技术方案已重置，后台任务已取消');
+      return technicalPlanStore.clearTechnicalPlan();
+    },
+    importTenderDocument(filePaths) {
+      return technicalPlanStore.importTenderDocument(filePaths, {
+        beforeCommit: () => cancelTechnicalPlanTasks('招标文件已更新，后台任务已取消'),
+      });
+    },
+    removeTenderDocument(sourceId) {
+      return technicalPlanStore.removeTenderDocument(sourceId, {
+        beforeCommit: () => cancelTechnicalPlanTasks('招标文件已更新，后台任务已取消'),
+      });
+    },
+    importOriginalPlanDocument(filePaths) {
+      return technicalPlanStore.importOriginalPlanDocument(filePaths, {
+        beforeCommit: () => cancelTechnicalPlanTasks('原方案已更新，后台任务已取消', originalPlanDownstreamTaskTypes),
+      });
+    },
+    async resetRejectionCheck() {
+      await cancelRejectionCheckTasks('废标项检查已重置，后台任务已取消');
+      return rejectionCheckStore.clearRejectionCheck();
+    },
+    importRejectionCheckDocument(role, filePaths) {
+      const documentRole = role === 'bid' ? 'bid' : 'tender';
+      return rejectionCheckStore.importDocument(role, filePaths, {
+        beforeCommit: () => cancelRejectionCheckTasks(
+          documentRole === 'bid' ? '投标文件已更新，后台任务已取消' : '招标文件已更新，后台任务已取消',
+          documentRole === 'bid' ? ['rejection-check-run'] : undefined,
+        ),
+      });
+    },
+    importRejectionCheckTenderFromTechnicalPlan() {
+      return rejectionCheckStore.importTenderFromTechnicalPlan({
+        beforeCommit: () => cancelRejectionCheckTasks('招标文件已更新，后台任务已取消'),
+      });
+    },
+    removeRejectionCheckDocument(role, documentId) {
+      const documentRole = role === 'bid' ? 'bid' : 'tender';
+      return rejectionCheckStore.removeDocument(role, documentId, {
+        beforeCommit: () => cancelRejectionCheckTasks(
+          documentRole === 'bid' ? '投标文件已更新，后台任务已取消' : '招标文件已更新，后台任务已取消',
+          documentRole === 'bid' ? ['rejection-check-run'] : undefined,
+        ),
+      });
+    },
     getActiveTasks() {
-      recoverInterruptedBidSectionExtractionTask();
-      recoverInterruptedBidAnalysisTask();
-      recoverInterruptedOutlineGenerationTask();
-      recoverInterruptedContentGenerationTask();
-      recoverInterruptedGlobalFactsTask();
-      recoverInterruptedRejectionCheckTasks();
-      recoverInterruptedDuplicateCheckTask();
       return Array.from(activeTasks.values());
     },
   };

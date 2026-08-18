@@ -3,7 +3,7 @@
   position: fixed;
   right: 28px;
   top: 28px;
-  z-index: 80;
+  z-index: var(--yb-z-toast);
   display: grid;
   gap: 12px;
   width: min(560px, calc(100vw - 40px));
@@ -12,6 +12,7 @@
   padding: 0;
   list-style: none;
   outline: none;
+  pointer-events: auto;
 }
 
 .app-toast {
@@ -28,7 +29,7 @@
   user-select: text;
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid rgba(228, 233, 240, 0.92);
-  border-radius: 16px;
+  border-radius: var(--yb-radius-lg);
   box-shadow: 0 18px 48px rgba(23, 32, 51, 0.12), 0 4px 16px rgba(33, 116, 253, 0.08);
   backdrop-filter: blur(14px);
 }
@@ -54,7 +55,7 @@
 
 .app-toast[data-swipe='cancel'] {
   transform: translateX(0);
-  transition: transform 180ms ease-out;
+  transition: transform var(--yb-duration) ease-out;
 }
 
 .app-toast[data-swipe='end'] {
@@ -91,7 +92,7 @@
   color: var(--yb-text-muted);
   background: transparent;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
   user-select: none;
 }
 
@@ -117,7 +118,7 @@
   font-weight: 700;
   background: rgba(23, 32, 51, 0.05);
   border: 1px solid rgba(228, 233, 240, 0.9);
-  border-radius: 999px;
+  border-radius: var(--yb-radius-pill);
 }
 
 .app-toast-action:hover {
@@ -128,14 +129,14 @@
 
 .app-toast-action.is-primary {
   color: #fff;
-  background: linear-gradient(135deg, #2174fd 0%, #4098fc 100%);
+  background: linear-gradient(135deg, var(--yb-primary) 0%, var(--yb-primary-hover) 100%);
   border-color: transparent;
   box-shadow: 0 8px 18px rgba(33, 116, 253, 0.22);
 }
 
 .app-toast-action.is-primary:hover {
   color: #fff;
-  background: linear-gradient(135deg, #1767ea 0%, #2d8cf6 100%);
+  background: linear-gradient(135deg, var(--yb-primary-deep) 0%, var(--yb-primary-hover) 100%);
 }
 
 .app-toast.is-success {
@@ -143,7 +144,7 @@
 }
 
 .app-toast.is-success .app-toast-title {
-  color: #137a43;
+  color: var(--yb-success);
 }
 
 .app-toast.is-error {
@@ -151,7 +152,7 @@
 }
 
 .app-toast.is-error .app-toast-title {
-  color: #c83220;
+  color: var(--yb-danger);
 }
 
 @keyframes toast-slide-in {

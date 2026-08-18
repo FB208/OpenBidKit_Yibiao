@@ -2,6 +2,7 @@ export const DATASET = 'agnet_analytics';
 export const ALLOWED_EVENTS = new Set(['app_open', 'page_view', 'config_usage', 'ai_request', 'resource_click', 'agent_runtime']);
 export const AGENT_RUNTIME_STATUSES = new Set(['success', 'failed']);
 export const AGENT_RUNTIME_MAX_RETRY_COUNT = 3;
+export const AGENT_RUNTIME_KIND_PATTERN = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 export const PROJECT_NAME_PATTERN = /^[a-zA-Z0-9._-]{1,80}$/;
 export const NOTICE_KEY_PREFIX = 'project_notice:';
 export const LICENSE_CONFIG_KEY_PREFIX = 'project_license_config:';
@@ -18,6 +19,11 @@ export const GITHUB_REPO_FULL_NAME = 'FB208/OpenBidKit_Yibiao';
 export const GITHUB_REPO_STATS_CACHE_KEY = `github_repo_stats:${GITHUB_REPO_FULL_NAME}`;
 export const GITHUB_REPO_STATS_CACHE_TTL_SECONDS = 1800;
 export const GITHUB_REPO_STATS_STALE_TTL_SECONDS = 604800;
+export const MODEL_INFO_SOURCE_URL = 'https://models.dev/api.json';
+export const MODEL_INFO_CACHE_INDEX_KEY = 'model_info_cache:index';
+export const MODEL_INFO_CACHE_STATUS_KEY = 'model_info_cache:status';
+export const MODEL_INFO_CACHE_OVERRIDES_KEY = 'model_info_cache:overrides';
+export const MODEL_INFO_SYNC_CRON = '0 20 * * *';
 export const DEFAULT_FREE_LICENSE_DAYS = 30;
 
 export const CONFIG_USAGE_FIELDS = [
@@ -27,7 +33,11 @@ export const CONFIG_USAGE_FIELDS = [
   { key: 'bidAnalysisModes' },
   { key: 'outlineModes' },
   { key: 'tableRequirements' },
+  { key: 'wordControlEnabled' },
   { key: 'minimumWords' },
+  { key: 'maximumWords' },
+  { key: 'sectionWords' },
+  { key: 'strictSectionWords' },
   { key: 'contentConcurrencies' },
   { key: 'contentGenerationActions' },
   { key: 'enableConsistencyAudit' },

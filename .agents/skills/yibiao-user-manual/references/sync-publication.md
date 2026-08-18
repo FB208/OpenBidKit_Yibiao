@@ -45,7 +45,7 @@ python .agents/skills/yibiao-user-manual/scripts/sync_manual.py --json `
 
 ## 固定映射
 
-- `使用说明/` 子目录映射为网站文件夹；根目录版本日志映射为网站根文档。
+- `使用说明/` 子目录映射为网站同名文件夹；版本日志固定映射到网站“更新日志”文件夹。
 - 按文件夹路径和完整文件名匹配文档。
 - 只上传 Markdown 实际引用的 JPG、JPEG、PNG、GIF 或 WebP。
 - 不删除服务器文档、文件夹、图片、评论或点赞。

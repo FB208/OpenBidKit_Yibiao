@@ -2,14 +2,17 @@ export type TextModelProvider = 'jinlong' | 'volcengine' | 'deepseek' | 'agnes' 
 export type LegacyTextModelProvider = 'longcat';
 export type ConfiguredTextModelProvider = TextModelProvider | LegacyTextModelProvider;
 export type AiRequestMode = 'normal' | 'stream';
-export type UpdateChannel = 'github' | 'cloudflare';
+export type UpdateChannel = 'github' | 'cloudflare' | 'atomgit';
 
 export interface TextModelConfig {
   api_key: string;
   base_url: string;
   model_name: string;
+  reasoning_effort: string;
   context_length_limit: number;
   concurrency_limit: number;
+  temperature_enabled: boolean;
+  temperature: number;
   request_mode: AiRequestMode;
 }
 
@@ -81,12 +84,29 @@ export interface ClientConfig extends AiConfig {
   image_model_profiles: ImageModelProfiles;
   components: ComponentsConfig;
   agent_mode_scenarios: AgentModeScenariosConfig;
+  agent_auto_answer_enabled?: boolean;
   update_channel?: UpdateChannel;
   gpu_hardware_acceleration_enabled?: boolean;
   gpu_hardware_acceleration_configured?: boolean;
   export_format?: import('./exportFormat').ExportFormatConfig;
   developer_mode?: boolean;
   developer_token_stats_auto_open?: boolean;
+  developer_agent_monitor_auto_open?: boolean;
+  storage_cleanup_version?: number;
   analytics_client_id?: string;
   analytics_created_at?: string;
+}
+
+export interface ModelInfoCacheEntry {
+  reasoningEfforts: string[];
+  context: number;
+  output: number;
+}
+
+export interface ModelInfoResult {
+  success: boolean;
+  message: string;
+  modelName: string;
+  model: ModelInfoCacheEntry | null;
+  syncedAt: string;
 }

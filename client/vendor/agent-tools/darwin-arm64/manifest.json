@@ -1,0 +1,35 @@
+{
+  "platform": "darwin",
+  "arch": "arm64",
+  "key": "darwin-arm64",
+  "tools": [
+    {
+      "command": "rg",
+      "version": "14.1.1",
+      "repo": "BurntSushi/ripgrep",
+      "asset": "ripgrep-14.1.1-aarch64-apple-darwin.tar.gz",
+      "platform": "darwin",
+      "arch": "arm64",
+      "key": "darwin-arm64"
+    },
+    {
+      "command": "fd",
+      "version": "v10.3.0",
+      "repo": "sharkdp/fd",
+      "asset": "fd-v10.3.0-aarch64-apple-darwin.tar.gz",
+      "platform": "darwin",
+      "arch": "arm64",
+      "key": "darwin-arm64"
+    },
+    {
+      "command": "jq",
+      "version": "jq-1.7.1",
+      "repo": "jqlang/jq",
+      "asset": "jq-macos-arm64",
+      "platform": "darwin",
+      "arch": "arm64",
+      "key": "darwin-arm64"
+    }
+  ],
+  "prepared_at": "2026-08-05T01:32:44.101Z"
+}

@@ -7,13 +7,15 @@ const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'agnes', 'custo
 const legacyTextModelProviders = ['longcat'];
 const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'agnes', 'custom'];
 const aiRequestModes = ['normal', 'stream'];
-const updateChannels = ['github', 'cloudflare'];
+const updateChannels = ['github', 'cloudflare', 'atomgit'];
 const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
+const DEFAULT_TEXT_TEMPERATURE = 0.7;
 const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
 const DEFAULT_COMPONENT_CONCURRENCY_LIMIT = 5;
 const MIN_COMPONENT_CONCURRENCY_LIMIT = 1;
 const MAX_COMPONENT_CONCURRENCY_LIMIT = 20;
+const DEFAULT_AGENT_AUTO_ANSWER_ENABLED = false;
 const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#eef5ff', '#f3f7ff', '#f8fbff', '#fbfdff', '#ffffff', '#ffffff'];
 const openAICompatibleImageSizes = ['auto', '1024x1024', '1536x1024', '1024x1536', '2048x2048', '2048x1152', '3840x2160', '2160x3840'];
 const googleImageSizes = ['512', '1K', '2K', '4K'];
@@ -35,40 +37,55 @@ const defaultTextModelProfiles = {
     api_key: '',
     base_url: textProviderBaseUrls.jinlong,
     model_name: 'gpt-3.5-turbo',
+    reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
+    temperature_enabled: false,
+    temperature: DEFAULT_TEXT_TEMPERATURE,
     request_mode: 'stream',
   },
   volcengine: {
     api_key: '',
     base_url: textProviderBaseUrls.volcengine,
     model_name: '',
+    reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
+    temperature_enabled: false,
+    temperature: DEFAULT_TEXT_TEMPERATURE,
     request_mode: 'stream',
   },
   deepseek: {
     api_key: '',
     base_url: textProviderBaseUrls.deepseek,
     model_name: '',
+    reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
+    temperature_enabled: false,
+    temperature: DEFAULT_TEXT_TEMPERATURE,
     request_mode: 'stream',
   },
   agnes: {
     api_key: '',
     base_url: textProviderBaseUrls.agnes,
     model_name: '',
+    reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
+    temperature_enabled: false,
+    temperature: DEFAULT_TEXT_TEMPERATURE,
     request_mode: 'stream',
   },
   custom: {
     api_key: '',
     base_url: '',
     model_name: '',
+    reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
+    temperature_enabled: false,
+    temperature: DEFAULT_TEXT_TEMPERATURE,
     request_mode: 'stream',
   },
 };
@@ -78,8 +95,11 @@ const legacyTextModelProfiles = {
     api_key: '',
     base_url: 'https://api.longcat.chat/openai/v1',
     model_name: '',
+    reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
+    temperature_enabled: false,
+    temperature: DEFAULT_TEXT_TEMPERATURE,
     request_mode: 'stream',
   },
 };
@@ -228,8 +248,11 @@ const defaultConfig = {
   api_key: '',
   base_url: textProviderBaseUrls.jinlong,
   model_name: 'gpt-3.5-turbo',
+  reasoning_effort: '',
   context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
   concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
+  temperature_enabled: false,
+  temperature: DEFAULT_TEXT_TEMPERATURE,
   request_mode: 'stream',
   image_model: {
     ...defaultImageModelProfiles.jinlong,
@@ -243,13 +266,16 @@ const defaultConfig = {
     mermaid_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
     html_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
   },
-  update_channel: 'github',
+  update_channel: 'atomgit',
   gpu_hardware_acceleration_enabled: true,
   gpu_hardware_acceleration_configured: true,
   export_format: defaultExportFormat,
   agent_mode_scenarios: defaultAgentModeScenarios,
+  agent_auto_answer_enabled: DEFAULT_AGENT_AUTO_ANSWER_ENABLED,
   developer_mode: false,
   developer_token_stats_auto_open: false,
+  developer_agent_monitor_auto_open: false,
+  storage_cleanup_version: 0,
   analytics_client_id: '',
   analytics_created_at: '',
 };
@@ -299,6 +325,23 @@ function normalizeTextConcurrencyLimit(value, fallback = DEFAULT_TEXT_CONCURRENC
   return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
 }
 
+// 归一化文本模型温度，OpenAI Like 接口通用范围为 0-2。
+function normalizeTextTemperature(value, fallback = DEFAULT_TEXT_TEMPERATURE) {
+  if (value === '' || value === null || value === undefined) return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 && number <= 2 ? number : fallback;
+}
+
+// 归一化文本模型温度开关。
+function normalizeTextTemperatureEnabled(value, fallback = false) {
+  return value === undefined ? fallback : Boolean(value);
+}
+
+// 归一化文本模型思考强度，空字符串表示不发送该参数。
+function normalizeReasoningEffort(value, fallback = '') {
+  return value === undefined || value === null ? fallback : String(value).trim();
+}
+
 function normalizeImageConcurrencyLimit(value, fallback = DEFAULT_IMAGE_CONCURRENCY_LIMIT) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
@@ -343,8 +386,11 @@ function normalizeTextModelProfile(provider, profile) {
     api_key: source.api_key !== undefined ? source.api_key : defaults.api_key,
     base_url: sourceBaseUrl,
     model_name: source.model_name !== undefined ? source.model_name : defaults.model_name,
+    reasoning_effort: normalizeReasoningEffort(source.reasoning_effort, defaults.reasoning_effort),
     context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit, defaults.context_length_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(source.concurrency_limit, defaults.concurrency_limit),
+    temperature_enabled: normalizeTextTemperatureEnabled(source.temperature_enabled, defaults.temperature_enabled),
+    temperature: normalizeTextTemperature(source.temperature, defaults.temperature),
     request_mode: normalizeAiRequestMode(source.request_mode, defaults.request_mode),
   };
 }
@@ -373,8 +419,11 @@ function textProfileFromFlatConfig(source, fallback, provider) {
     api_key: source.api_key !== undefined ? source.api_key : fallback.api_key,
     base_url: sourceBaseUrl,
     model_name: source.model_name !== undefined ? source.model_name : fallback.model_name,
+    reasoning_effort: normalizeReasoningEffort(source.reasoning_effort, fallback.reasoning_effort),
     context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit !== undefined ? source.context_length_limit : fallback.context_length_limit, fallback.context_length_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(source.concurrency_limit !== undefined ? source.concurrency_limit : fallback.concurrency_limit, fallback.concurrency_limit),
+    temperature_enabled: normalizeTextTemperatureEnabled(source.temperature_enabled, fallback.temperature_enabled),
+    temperature: normalizeTextTemperature(source.temperature !== undefined ? source.temperature : fallback.temperature, fallback.temperature),
     request_mode: normalizeAiRequestMode(source.request_mode !== undefined ? source.request_mode : fallback.request_mode, fallback.request_mode),
   };
 }
@@ -404,8 +453,11 @@ function textProfileFromUnknownProvider(source, sourceProvider, fallback) {
     api_key: pickTextProfileField(source.api_key, selectedProfile?.api_key, fallback.api_key),
     base_url: pickTextProfileField(source.base_url, selectedProfile?.base_url, fallback.base_url),
     model_name: pickTextProfileField(source.model_name, selectedProfile?.model_name, fallback.model_name),
+    reasoning_effort: normalizeReasoningEffort(source.reasoning_effort ?? selectedProfile?.reasoning_effort, fallback.reasoning_effort),
     context_length_limit: normalizeTextContextLengthLimit(pickTextProfileField(source.context_length_limit, selectedProfile?.context_length_limit, fallback.context_length_limit), fallback.context_length_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(pickTextProfileField(source.concurrency_limit, selectedProfile?.concurrency_limit, fallback.concurrency_limit), fallback.concurrency_limit),
+    temperature_enabled: normalizeTextTemperatureEnabled(source.temperature_enabled ?? selectedProfile?.temperature_enabled, fallback.temperature_enabled),
+    temperature: normalizeTextTemperature(pickTextProfileField(source.temperature, selectedProfile?.temperature, fallback.temperature), fallback.temperature),
     request_mode: normalizeAiRequestMode(pickTextProfileField(source.request_mode, selectedProfile?.request_mode, fallback.request_mode), fallback.request_mode),
   };
 }
@@ -661,8 +713,11 @@ function normalizeConfig(config) {
     api_key: activeTextProfile.api_key,
     base_url: activeTextProfile.base_url,
     model_name: activeTextProfile.model_name,
+    reasoning_effort: activeTextProfile.reasoning_effort,
     context_length_limit: activeTextProfile.context_length_limit,
     concurrency_limit: activeTextProfile.concurrency_limit,
+    temperature_enabled: activeTextProfile.temperature_enabled,
+    temperature: activeTextProfile.temperature,
     request_mode: activeTextProfile.request_mode,
     image_model: activeImageProfile,
     image_model_profiles: imageModelProfiles,
@@ -672,8 +727,15 @@ function normalizeConfig(config) {
     gpu_hardware_acceleration_configured: gpuHardwareAccelerationConfigured === false ? true : gpuHardwareAccelerationConfigured,
     export_format: normalizeExportFormat(source.export_format),
     agent_mode_scenarios: normalizeAgentModeScenarios(source.agent_mode_scenarios),
+    agent_auto_answer_enabled: source.agent_auto_answer_enabled === undefined
+      ? defaultConfig.agent_auto_answer_enabled
+      : Boolean(source.agent_auto_answer_enabled),
     developer_mode: source.developer_mode === undefined ? defaultConfig.developer_mode : Boolean(source.developer_mode),
     developer_token_stats_auto_open: source.developer_token_stats_auto_open === undefined ? defaultConfig.developer_token_stats_auto_open : Boolean(source.developer_token_stats_auto_open),
+    developer_agent_monitor_auto_open: source.developer_agent_monitor_auto_open === undefined ? defaultConfig.developer_agent_monitor_auto_open : Boolean(source.developer_agent_monitor_auto_open),
+    storage_cleanup_version: Number.isFinite(Number(source.storage_cleanup_version))
+      ? Math.max(0, Math.floor(Number(source.storage_cleanup_version)))
+      : defaultConfig.storage_cleanup_version,
     analytics_client_id: source.analytics_client_id || defaultConfig.analytics_client_id,
     analytics_created_at: source.analytics_created_at || defaultConfig.analytics_created_at,
   };

@@ -2,7 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { bidAnalysisTasks, getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
-import { MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
+import { MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
 import BidSectionSelectorDialog from '../components/BidSectionSelectorDialog';
 import type { BackgroundTaskState, BidAnalysisMode, BidAnalysisTasks, BidAnalysisTaskState, BidSectionExtractionStatus, BidSectionMode, DetectedBidSection, TechnicalPlanState } from '../types';
 
@@ -121,8 +121,8 @@ function getModeLabel(mode: BidAnalysisMode) {
 }
 
 const taskGroups = [
-  { title: '关键项', ids: ['projectOverview', 'techRequirements', 'projectInfo', 'partAInfo', 'deliveryAndServiceRequirements'] },
-  { title: '采购与响应', ids: ['procurementList', 'responseFileRequirements'] },
+  { title: '关键项', ids: ['projectOverview', 'techRequirements', 'projectInfo', 'partAInfo', 'deliveryAndServiceRequirements', 'responseFileRequirements'] },
+  { title: '采购项', ids: ['procurementList'] },
   { title: '投标流程', ids: ['keyInfo', 'marginInfo', 'openBid'] },
   { title: '评审要求', ids: ['qualificationReview', 'complianceCheck', 'evaluationBid', 'businessScoring'] },
   { title: '主体与合同', ids: ['agentInfo', 'discardedBids', 'signingProcess', 'terminationCondition'] },
@@ -312,7 +312,7 @@ function BidAnalysisPage({
     ? '正在优化提示词缓存'
     : requiredDone && taskRunning
       ? '关键项已解析完成，等待当前解析任务结束后进入下一步。'
-      : requiredDone ? '招标文件解析任务已结束，可以进入下一步。' : '等待项目概述、技术评分、项目信息、甲方信息和交货服务要求解析成功。';
+      : requiredDone ? '招标文件解析任务已结束，可以进入下一步。' : '等待关键解析项完成';
   const bidSectionConfigLabel = bidSectionMode === 'multiple'
     ? selectedSectionTitle ? `多标段 · ${selectedSectionTitle}` : '多标段 · 待选择'
     : '单标段';
@@ -383,10 +383,9 @@ function BidAnalysisPage({
   const saveConfig = async (nextTaskIds = draftSelectedTaskIds, closeDialog = true, nextBidSectionMode = draftBidSectionMode) => {
     const normalizedTaskIds = normalizeSelectedTaskIds(nextTaskIds);
     const nextMode = getModeForSelection(normalizedTaskIds);
-    const saved = await window.yibiao?.technicalPlan.saveBidAnalysisConfig({ mode: nextMode, selectedTaskIds: normalizedTaskIds, bidSectionMode: nextBidSectionMode });
-    if (saved) {
-      onConfigSaved(saved);
-    }
+    await window.yibiao?.technicalPlan.saveBidAnalysisConfig({ mode: nextMode, selectedTaskIds: normalizedTaskIds, bidSectionMode: nextBidSectionMode });
+    const saved = await window.yibiao?.technicalPlan.loadState();
+    if (saved) onConfigSaved(saved);
     syncProgressForSelection(normalizedTaskIds);
     if (closeDialog) {
       setSettingsOpen(false);
@@ -524,11 +523,11 @@ function BidAnalysisPage({
     try {
       setSelectingSection(true);
       const result = await window.yibiao?.technicalPlan.selectBidSection(selectedSection);
-      if (!result?.success || !result.state) {
+      if (!result?.success) {
         showToast(result?.message || '投标范围选择失败', 'error');
         return;
       }
-      onConfigSaved(result.state);
+      onConfigSaved(await window.yibiao.technicalPlan.loadState());
       setSectionSelectorOpen(false);
       showToast(result.message || '已选择投标范围', 'success');
       if (pendingAnalysisAfterSection) {
@@ -710,9 +709,7 @@ function BidAnalysisPage({
             </button>
             {!progressCollapsed && (
               <div className="content-outline-stats-body">
-                <div className="content-generation-progress-track" aria-label={`解析进度 ${progress}%`}>
-                  <span style={{ width: `${progress}%` }} />
-                </div>
+                <ProgressBar value={progress} label={`解析进度 ${progress}%`} />
                 <p>{progressMessage}</p>
               </div>
             )}

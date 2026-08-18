@@ -1,7 +1,7 @@
 ﻿import * as Dialog from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { FloatingToolbar, useToast } from '../../../shared/ui';
+import { AppSwitch, FloatingToolbar, ProgressBar, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type {
   BodyTextStyleConfig,
@@ -243,6 +243,17 @@ function headingPreviewTitle(config: ExportFormatConfig, level: number, id: stri
   return formatOutlineTitle(id, title, heading);
 }
 
+function createDefaultTemplateName(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hour = String(date.getHours()).padStart(2, '0');
+  const minute = String(date.getMinutes()).padStart(2, '0');
+  const second = String(date.getSeconds()).padStart(2, '0');
+
+  return `yibiao-${year}-${month}-${day}-${hour}${minute}${second}`;
+}
+
 function createDefaultExportFormat(): ExportFormatConfig {
   return {
     template_name: DEFAULT_EXPORT_FORMAT.template_name,
@@ -261,6 +272,13 @@ function createDefaultExportFormat(): ExportFormatConfig {
       body_cell: { ...DEFAULT_EXPORT_FORMAT.table.body_cell },
     },
     image: { ...DEFAULT_EXPORT_FORMAT.image },
+  };
+}
+
+function createNewTemplateExportFormat(): ExportFormatConfig {
+  return {
+    ...createDefaultExportFormat(),
+    template_name: createDefaultTemplateName(),
   };
 }
 
@@ -291,7 +309,9 @@ function withExportFormatDefaults(source: ExportFormatConfig): ExportFormatConfi
 function ExportFormatPage({ mode = 'create', templateId = null, onBack }: ExportFormatPageProps) {
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<TemplateTab>('quick');
-  const [config, setConfig] = useState<ExportFormatConfig>(() => createDefaultExportFormat());
+  const [config, setConfig] = useState<ExportFormatConfig>(
+    () => mode === 'create' ? createNewTemplateExportFormat() : createDefaultExportFormat(),
+  );
   const [savedConfig, setSavedConfig] = useState<ExportFormatConfig | null>(null);
   const [currentTemplateId, setCurrentTemplateId] = useState<string | null>(templateId);
   const [selectedLayoutPresetId, setSelectedLayoutPresetId] = useState('');
@@ -343,7 +363,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           return;
         }
 
-        const defaultConfig = createDefaultExportFormat();
+        const defaultConfig = createNewTemplateExportFormat();
         if (cancelled) return;
         setCurrentTemplateId(null);
         setConfig(defaultConfig);
@@ -369,6 +389,19 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   const updateTemplate = useCallback((updates: Partial<ExportFormatConfig>) => {
     setConfig((prev) => ({ ...prev, ...updates }));
   }, []);
+
+  const handleConfirmTemplateName = useCallback(() => {
+    const templateName = config.template_name.trim();
+    if (!templateName) {
+      showToast('请输入模板名称', 'info');
+      return;
+    }
+
+    if (templateName !== config.template_name) {
+      updateTemplate({ template_name: templateName });
+    }
+    showToast('模板名称已确认，保存配置后生效', 'success');
+  }, [config.template_name, showToast, updateTemplate]);
 
   const updatePage = useCallback((updates: Partial<PageSetupConfig>) => {
     setConfig((prev) => ({ ...prev, page: { ...prev.page, ...updates } }));
@@ -463,9 +496,15 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
       return;
     }
 
-    setConfig(createDefaultExportFormat());
+    setConfig((prev) => {
+      if (mode === 'create') {
+        return createNewTemplateExportFormat();
+      }
+
+      return { ...createDefaultExportFormat(), template_name: prev.template_name };
+    });
     showToast('已恢复默认模版设置，保存后生效', 'info');
-  }, [selectedLayoutPresetId, selectedThemePresetId, showToast]);
+  }, [mode, selectedLayoutPresetId, selectedThemePresetId, showToast]);
 
   const handleApplyLayoutPreset = useCallback((presetId: string) => {
     if (!presetId) return;
@@ -644,10 +683,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderQuickSettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>快捷设置</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy">
@@ -669,6 +704,31 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
             {EXPORT_THEME_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
           </select>
         </label>
+        {mode === 'create' ? (
+          <form
+            className="settings-row export-template-name-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleConfirmTemplateName();
+            }}
+          >
+            <div className="settings-row-copy">
+              <strong>设置模板名称</strong>
+              <span>默认按 yibiao-YYYY-MM-DD-HHmmss 格式生成，保存后显示在“我的模板”中。</span>
+            </div>
+            <div className="input-with-action export-template-name-control">
+              <input
+                type="text"
+                value={config.template_name}
+                onChange={(event) => updateTemplate({ template_name: event.target.value })}
+                placeholder="请输入模板名称"
+                aria-label="模板名称"
+                spellCheck={false}
+              />
+              <button type="submit" className="input-with-action-button">确定</button>
+            </div>
+          </form>
+        ) : null}
       </div>
       <div className="export-format-preset-panel">
         <div className="export-format-preset-panel-head">
@@ -692,10 +752,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderLayoutSettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>布局设置</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy"><strong>模板名称</strong></div>
@@ -725,10 +781,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         </div>
         <label className="settings-row">
           <div className="settings-row-copy"><strong>页眉</strong></div>
-          <label className="yb-switch-control">
-            <input type="checkbox" checked={config.page.header_enabled} onChange={(event) => updatePage({ header_enabled: event.target.checked })} />
-            <span className="yb-switch-track" aria-hidden="true"><span className="yb-switch-thumb" /></span>
-          </label>
+          <AppSwitch checked={config.page.header_enabled} onCheckedChange={(checked) => updatePage({ header_enabled: checked })} />
         </label>
         {config.page.header_enabled && (
           <>
@@ -760,10 +813,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         )}
         <label className="settings-row">
           <div className="settings-row-copy"><strong>页脚</strong></div>
-          <label className="yb-switch-control">
-            <input type="checkbox" checked={config.page.footer_enabled} onChange={(event) => updatePage({ footer_enabled: event.target.checked })} />
-            <span className="yb-switch-track" aria-hidden="true"><span className="yb-switch-thumb" /></span>
-          </label>
+          <AppSwitch checked={config.page.footer_enabled} onCheckedChange={(checked) => updatePage({ footer_enabled: checked })} />
         </label>
         {config.page.footer_enabled && (
           <>
@@ -801,10 +851,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         )}
         <label className="settings-row">
           <div className="settings-row-copy"><strong>页码</strong><span>是否启用页码显示</span></div>
-          <label className="yb-switch-control">
-            <input type="checkbox" checked={config.page.page_number_enabled} onChange={(event) => updatePage({ page_number_enabled: event.target.checked })} />
-            <span className="yb-switch-track" aria-hidden="true"><span className="yb-switch-thumb" /></span>
-          </label>
+          <AppSwitch checked={config.page.page_number_enabled} onCheckedChange={(checked) => updatePage({ page_number_enabled: checked })} />
         </label>
         {config.page.page_number_enabled && (
           <>
@@ -824,33 +871,20 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderHeadingSettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>标题样式</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy"><strong>一级标题另起页</strong></div>
-          <label className="yb-switch-control">
-            <input type="checkbox" checked={config.heading_level1_page_break_before} onChange={(event) => updateTemplate({ heading_level1_page_break_before: event.target.checked })} />
-            <span className="yb-switch-track" aria-hidden="true"><span className="yb-switch-thumb" /></span>
-          </label>
+          <AppSwitch checked={config.heading_level1_page_break_before} onCheckedChange={(checked) => updateTemplate({ heading_level1_page_break_before: checked })} />
         </label>
         <label className="settings-row">
           <div className="settings-row-copy"><strong>章节页框</strong><span>会导致导航窗格失效</span></div>
-          <label className="yb-switch-control">
-            <input type="checkbox" checked={config.heading_border.enabled} onChange={(event) => updateHeadingBorder({ enabled: event.target.checked })} />
-            <span className="yb-switch-track" aria-hidden="true"><span className="yb-switch-thumb" /></span>
-          </label>
+          <AppSwitch checked={config.heading_border.enabled} onCheckedChange={(checked) => updateHeadingBorder({ enabled: checked })} />
         </label>
         {config.heading_border.enabled && (
           <>
             <label className="settings-row">
               <div className="settings-row-copy"><strong>最小标题居左</strong><span>最小标题不显示序号，固定在内容左侧</span></div>
-              <label className="yb-switch-control">
-                <input type="checkbox" checked={config.heading_border.min_heading_left_enabled} onChange={(event) => updateHeadingBorder({ min_heading_left_enabled: event.target.checked })} />
-                <span className="yb-switch-track" aria-hidden="true"><span className="yb-switch-thumb" /></span>
-              </label>
+              <AppSwitch checked={config.heading_border.min_heading_left_enabled} onCheckedChange={(checked) => updateHeadingBorder({ min_heading_left_enabled: checked })} />
             </label>
             <label className="settings-row">
               <div className="settings-row-copy"><strong>页框颜色</strong></div>
@@ -979,10 +1013,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
                     </label>
                     <label className="export-format-heading-switch">
                       <span>加粗</span>
-                      <label className="yb-switch-control">
-                        <input type="checkbox" checked={heading.bold} onChange={(event) => updateHeading(index, { bold: event.target.checked })} />
-                        <span className="yb-switch-track" aria-hidden="true"><span className="yb-switch-thumb" /></span>
-                      </label>
+                      <AppSwitch checked={heading.bold} onCheckedChange={(checked) => updateHeading(index, { bold: checked })} />
                     </label>
                     <label>
                       <span>文字颜色</span>
@@ -1012,10 +1043,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderBodySettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>正文样式</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy"><strong>字体</strong><span>支持输入搜索系统字体，常用字体已置顶。</span></div>
@@ -1121,10 +1148,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderTableSettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>表格样式</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy"><strong>线框宽度</strong></div>
@@ -1140,10 +1163,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         </label>
         <label className="settings-row">
           <div className="settings-row-copy"><strong>表格铺满页面</strong></div>
-          <label className="yb-switch-control">
-            <input type="checkbox" checked={config.table.full_width} onChange={(event) => updateTable({ full_width: event.target.checked })} />
-            <span className="yb-switch-track" aria-hidden="true"><span className="yb-switch-thumb" /></span>
-          </label>
+          <AppSwitch checked={config.table.full_width} onCheckedChange={(checked) => updateTable({ full_width: checked })} />
         </label>
       </div>
       {renderTableCellSettings('首行', 'header_row')}
@@ -1154,10 +1174,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderImageSettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>图片设置</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy"><strong>图片最大宽度（%）</strong></div>
@@ -1187,17 +1203,11 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         </label>
         <label className="settings-row">
           <div className="settings-row-copy"><strong>图题加粗</strong></div>
-          <label className="yb-switch-control">
-            <input type="checkbox" checked={config.image.caption_bold} onChange={(event) => updateImage({ caption_bold: event.target.checked })} />
-            <span className="yb-switch-track" aria-hidden="true"><span className="yb-switch-thumb" /></span>
-          </label>
+          <AppSwitch checked={config.image.caption_bold} onCheckedChange={(checked) => updateImage({ caption_bold: checked })} />
         </label>
         <label className="settings-row">
           <div className="settings-row-copy"><strong>图题斜体</strong></div>
-          <label className="yb-switch-control">
-            <input type="checkbox" checked={config.image.caption_italic} onChange={(event) => updateImage({ caption_italic: event.target.checked })} />
-            <span className="yb-switch-track" aria-hidden="true"><span className="yb-switch-thumb" /></span>
-          </label>
+          <AppSwitch checked={config.image.caption_italic} onCheckedChange={(checked) => updateImage({ caption_italic: checked })} />
         </label>
       </div>
     </>
@@ -1205,17 +1215,10 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const renderCoverSettings = () => (
     <>
-      <div className="settings-section-title">
-        <span />
-        <strong>封皮</strong>
-      </div>
       <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy"><strong>首页不同</strong><span>勾选后首页使用独立页眉页脚，适合封皮不显示页码。</span></div>
-          <label className="yb-switch-control">
-            <input type="checkbox" checked={config.page.first_page_different} onChange={(event) => updatePage({ first_page_different: event.target.checked })} />
-            <span className="yb-switch-track" aria-hidden="true"><span className="yb-switch-thumb" /></span>
-          </label>
+          <AppSwitch checked={config.page.first_page_different} onCheckedChange={(checked) => updatePage({ first_page_different: checked })} />
         </label>
       </div>
     </>
@@ -1295,9 +1298,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
               </Dialog.Description>
             </div>
             <div className="export-progress-body">
-              <div className="content-generation-progress-track" aria-label={`导出测试进度 ${exportProgress.progress}%`}>
-                <span style={{ width: `${exportProgress.progress}%` }} />
-              </div>
+              <ProgressBar value={exportProgress.progress} label={`导出测试进度 ${exportProgress.progress}%`} />
               <p>{exportProgress.message || '正在处理导出任务，请稍候。'}</p>
               {exportProgress.warnings.length > 0 && (
                 <div className="export-warning-list">

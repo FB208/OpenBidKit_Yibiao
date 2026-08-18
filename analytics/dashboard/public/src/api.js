@@ -1,6 +1,9 @@
 import { state } from './state.js';
 
 const productionApiBase = 'https://analytics.agnet.top';
+const projectOptionsCacheTtl = 60_000;
+let projectOptionsLoadedAt = 0;
+let projectOptionsRequest = null;
 
 function isLocalDashboard() {
   return ['localhost', '127.0.0.1', ''].includes(window.location.hostname) || window.location.protocol === 'file:';
@@ -123,17 +126,54 @@ export async function requestFormData(path, formData, options = {}) {
   return data;
 }
 
-export async function loadProjectOptions() {
-  try {
-    const data = await requestJson('/api/projects');
-    state.projectOptions.innerHTML = '';
-
-    for (const project of data.projects || []) {
-      const option = document.createElement('option');
-      option.value = project;
-      state.projectOptions.appendChild(option);
-    }
-  } catch {
-    // 项目列表只是输入提示，失败不影响按项目名查询。
+// 下载管理员接口返回的二进制文件。
+export async function requestDownload(path, fallbackFileName) {
+  const apiBase = normalizeApiBase(state.apiBase.value);
+  const response = await fetch(`${apiBase}${path}`, {
+    headers: { Authorization: `Bearer ${state.adminToken.value.trim()}` },
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(data?.message || `下载失败：${response.status}`);
   }
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const fileName = disposition.match(/filename="([^"]+)"/i)?.[1] || fallbackFileName;
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
+export async function loadProjectOptions() {
+  if (Date.now() - projectOptionsLoadedAt < projectOptionsCacheTtl) {
+    return;
+  }
+  if (projectOptionsRequest) {
+    return projectOptionsRequest;
+  }
+
+  projectOptionsRequest = (async () => {
+    try {
+      const data = await requestJson('/api/projects');
+      state.projectOptions.innerHTML = '';
+
+      for (const project of data.projects || []) {
+        const option = document.createElement('option');
+        option.value = project;
+        state.projectOptions.appendChild(option);
+      }
+      projectOptionsLoadedAt = Date.now();
+    } catch {
+      // 项目列表只是输入提示，失败不影响按项目名查询。
+    } finally {
+      projectOptionsRequest = null;
+    }
+  })();
+
+  return projectOptionsRequest;
 }

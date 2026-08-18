@@ -1,4 +1,4 @@
-import type { OutlineData, OutlineExpansionMode, OutlineMode } from '../../shared/types';
+import type { OutlineContentMode, OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../shared/types';
 
 export type TechnicalPlanStep = 'document-analysis' | 'bid-analysis' | 'outline-generation' | 'global-facts' | 'content-edit' | 'expand';
 export type TechnicalPlanWorkflowKind = 'technical-plan' | 'existing-plan-expansion';
@@ -6,19 +6,44 @@ export type BidAnalysisMode = 'key' | 'full' | 'custom';
 export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
 export type BidSectionMode = 'single' | 'multiple';
 export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error';
-export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'global-facts-generation' | 'content-generation';
+export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
-export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
+export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error' | 'ignored';
+export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'section-word-adjusting' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'final-section-word-adjusting' | 'total-word-adjusting' | 'illustration-planning' | 'illustration-generating' | 'done';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 export type ConsistencyRepairMode = 'agent' | 'normal';
 export type OriginalPlanCoverageRepairMode = 'agent' | 'normal';
 export type SaveOutlineReason = 'sort' | 'edit' | 'delete' | 'add-root' | 'add-child' | 'replace';
+export type OutlineAttribute = '通用' | '商务' | '资信' | '技术' | '其他';
+export type GlobalFactsMode = 'fabricate' | 'omit' | 'placeholder';
 
 export interface SaveOutlineRequest {
   outlineData: OutlineData;
   reason: SaveOutlineReason;
   idMap?: Record<string, string>;
   affectedNodeIds?: string[];
+}
+
+export interface OutlineSelectionItem {
+  id: string;
+  title: string;
+  description: string;
+  attr: OutlineAttribute;
+  content_mode: OutlineContentMode;
+  content_mode_note?: string;
+}
+
+export interface OutlineSelectionState {
+  items: OutlineSelectionItem[];
+  selected_ids: string[];
+  confirmed: boolean;
+  auto_answer_at?: string;
+}
+
+export interface SaveOutlineSelectionRequest {
+  taskId: string;
+  items: OutlineSelectionItem[];
+  selectedIds: string[];
 }
 
 export interface ContentGenerationOptions {
@@ -30,11 +55,21 @@ export interface ContentGenerationOptions {
   maxHtmlImages: number;
   htmlImageTypes: string;
   tableRequirement: ContentTableRequirement;
-  minimumWords: number;
   enableConsistencyAudit: boolean;
   consistencyRepairMode: ConsistencyRepairMode;
   enableOriginalPlanCoverageAudit: boolean;
   originalPlanCoverageRepairMode: OriginalPlanCoverageRepairMode;
+}
+
+export interface ContentGenerationProgressDetail {
+  mode: 'full' | 'single' | 'correction' | 'illustration' | 'illustration-generation';
+  phase: ContentGenerationPhase;
+  phase_label: string;
+  phase_progress: number;
+  completed: number;
+  total: number;
+  step: string;
+  step_label: string;
 }
 
 export interface BackgroundTaskState {
@@ -42,28 +77,70 @@ export interface BackgroundTaskState {
   type: BackgroundTaskType;
   status: BackgroundTaskStatus;
   progress: number;
+  progress_detail?: ContentGenerationProgressDetail;
   logs: string[];
   started_at: string;
   updated_at: string;
   error?: string;
   stats?: {
+    agent?: {
+      task_key: string;
+      run_id: string;
+      status: 'created' | 'running' | 'waiting-outline-selection' | 'success' | 'interrupted' | 'error';
+      phase?: 'initial-outline' | 'outline-selection' | 'score-planning' | 'leaf_allocation' | 'children_generation' | 'leaf_adjustment' | 'leaf_final_decision' | 'outline_review_compaction' | 'outline_review' | 'completed' | string;
+      agent_connection?: 'idle' | 'running';
+      session_file?: string;
+      resume_payload?: {
+        reference_knowledge_document_ids?: string[];
+        outline_mode?: OutlineMode;
+        outline_expansion_mode?: OutlineExpansionMode;
+        word_control_options?: OutlineWordControlOptions;
+      };
+    };
+    outline_selection?: OutlineSelectionState;
+    outline?: {
+      phase: 'generating' | 'reviewing' | 'word-adjusting' | 'second-review' | 'done';
+      current_leaf_count: number;
+      target_leaf_count?: number | null;
+      leaf_counts_by_mode?: Partial<Record<OutlineContentMode, number>>;
+      minimum_leaf_count?: number;
+      maximum_leaf_count?: number;
+      word_adjustment_attempts: number;
+      word_adjustment_warning?: string;
+      word_adjustment_warning_kind?: 'leaf-count' | 'quality';
+    };
     content?: {
-      phase: 'planning' | 'restoring' | 'generating' | 'outline-expanding' | 'expanding' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'illustration-planning' | 'illustration-generating' | 'done';
+      phase: ContentGenerationPhase;
       planning_total: number;
       planning_completed: number;
+      restoration_total?: number;
+      restoration_completed?: number;
       generation_total: number;
       generation_completed: number;
-      outline_expansion_total?: number;
-      outline_expansion_completed?: number;
-      outline_expansion_step_total?: number;
-      outline_expansion_step_completed?: number;
-      outline_expansion_round?: number;
-      outline_expansion_round_total?: number;
-      outline_expansion_step_label?: string;
       minimum_words?: number;
+      maximum_words?: number;
+      section_words?: number;
+      strict_section_words?: boolean;
       current_words?: number;
+      section_adjustment_total?: number;
+      section_adjustment_completed?: number;
+      section_adjustment_active_count?: number;
+      section_adjustment_item_id?: string;
+      section_adjustment_round?: number;
+      section_adjustment_round_total?: number;
+      total_adjustment_round?: number;
+      total_adjustment_round_total?: number;
+      total_adjustment_mode?: 'expand' | 'shrink' | '';
+      total_adjustment_batch_total?: number;
+      total_adjustment_batch_completed?: number;
+      total_adjustment_batch_failed?: number;
+      total_adjustment_active_count?: number;
+      total_adjustment_item_id?: string;
+      total_adjustment_remaining_words?: number;
+      word_control_warning?: string;
       audit_group_total?: number;
       audit_group_completed?: number;
+      audit_step?: '' | 'checking' | 'fixing' | 'agent' | 'done';
       audit_conflict_total?: number;
       audit_fix_total?: number;
       audit_fix_completed?: number;
@@ -96,6 +173,8 @@ export interface BackgroundTaskState {
       illustration_generation_html_total?: number;
       illustration_generation_html_completed?: number;
       illustration_generation_step_label?: string;
+      awaiting_content_decision?: boolean;
+      ignored_section_count?: number;
     };
   };
 }
@@ -195,12 +274,17 @@ export interface ContentIllustrationPlanState {
 export interface ContentGenerationRuntimeState {
   phase?: string;
   touched_item_ids?: string[];
-  outline_expansion_completed?: number;
-  expansion_cycle_item_ids?: string[];
-  expansion_attempted_item_ids?: string[];
-  expansion_cycle_start_words?: number;
+  completed_stages?: string[];
+  word_adjustment_stage?: 'section' | 'final-section' | 'total';
+  word_adjustment_item_id?: string;
+  word_adjustment_round?: number;
+  word_adjustment_item_rounds?: Record<string, number>;
+  word_adjustment_completed_item_ids?: string[];
+  word_adjustment_no_progress_rounds?: number;
+  word_adjustment_round_start_words?: number;
   target_item_id?: string;
   regenerate_requirement?: string;
+  awaiting_content_decision?: boolean;
   updated_at?: string;
 }
 
@@ -275,13 +359,18 @@ export interface TechnicalPlanState {
   bidSectionExtractionError?: string;
   outlineMode: OutlineMode;
   outlineExpansionMode: OutlineExpansionMode;
+  outlineWordControlOptions: OutlineWordControlOptions;
+  outlineWordControlSnapshot?: OutlineWordControlOptions;
   referenceKnowledgeDocumentIds: string[];
   referenceKnowledgeSnippetIds: string[];
   referenceKnowledgeItemIds: string[];
   bidSectionExtractionTask?: BackgroundTaskState;
   bidAnalysisTask?: BackgroundTaskState;
   outlineGenerationTask?: BackgroundTaskState;
+  outlineAdjustmentTask?: BackgroundTaskState;
+  globalFactsMode: GlobalFactsMode;
   globalFactsTask?: BackgroundTaskState;
+  globalFactsAdjustmentTask?: BackgroundTaskState;
   globalFacts: GlobalFactGroupState[];
   contentGenerationTask?: BackgroundTaskState;
   contentGenerationOptions?: ContentGenerationOptions;

@@ -42,6 +42,13 @@ function collectNativeBinaries(directory, binaries = []) {
     }
 
     const normalizedPath = entryPath.split(path.sep).join('/');
+    const prebuildTarget = normalizedPath.match(/\/prebuilds\/(darwin|win32|linux)-([^/]+)\//);
+    if (prebuildTarget) {
+      const [, platform, arch] = prebuildTarget;
+      if (platform !== 'darwin' || (arch !== requestedArch && arch !== 'universal')) {
+        continue;
+      }
+    }
     if (entry.name.endsWith('.node') || normalizedPath.includes('/Contents/MacOS/')) {
       binaries.push(entryPath);
     }

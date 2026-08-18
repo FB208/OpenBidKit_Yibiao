@@ -6,15 +6,6 @@ const { getKnowledgeBaseDir } = require('../utils/paths.cjs');
 const documentStatuses = ['pending', 'copying', 'converting', 'extracting', 'ready_for_matching', 'matching', 'recovering', 'analyzing', 'saving', 'success', 'error'];
 const documentStepKeys = ['copy_source', 'convert_markdown', 'build_blocks', 'extract_first_items', 'extract_supplement_items', 'merge_candidates', 'match_batches', 'recover_missing', 'save_result'];
 const stepStatuses = ['idle', 'running', 'success', 'error'];
-const legacyResultJsonFiles = [
-  'blocks.json',
-  'filtered_blocks.json',
-  'candidate_items.json',
-  'match_result.json',
-  'report.json',
-  'items.json',
-];
-
 function now() {
   return new Date().toISOString();
 }
@@ -48,11 +39,6 @@ function safeJsonParse(value, fallback) {
   }
 }
 
-function readJson(filePath, fallback) {
-  if (!fs.existsSync(filePath)) return fallback;
-  return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-}
-
 function jsonOrNull(value) {
   return value === undefined || value === null ? null : JSON.stringify(value);
 }
@@ -76,14 +62,6 @@ function normalizeRelativePath(value) {
 
 function getContentCharCount(text) {
   return String(text || '').replace(/\s+/g, '').length;
-}
-
-function getArrayLength(value) {
-  return Array.isArray(value) ? value.length : 0;
-}
-
-function createEmptyIndex() {
-  return { folders: [], documents: [] };
 }
 
 function defaultDocumentDir(folderId, documentId) {
@@ -162,7 +140,6 @@ function normalizeIndex(index) {
 
 function createKnowledgeBaseStore({ app, db }) {
   const baseDir = getKnowledgeBaseDir(app);
-  const legacyIndexPath = path.join(baseDir, 'index.json');
 
   function ensureBaseDir() {
     fs.mkdirSync(baseDir, { recursive: true });
@@ -243,6 +220,32 @@ function createKnowledgeBaseStore({ app, db }) {
       : fs.existsSync(markdownPath)
         ? fs.readFileSync(markdownPath, 'utf-8').length
         : 0;
+    const values = {
+      document_id: normalized.id,
+      folder_id: normalized.folder_id,
+      file_name: normalized.file_name,
+      document_dir: normalized.document_dir,
+      source_path: normalized.source_path,
+      markdown_path: normalized.markdown_path,
+      markdown_hash: markdownHash,
+      markdown_chars: markdownChars,
+      source_extension: normalized.source_extension,
+      status: normalized.status,
+      progress: normalized.progress,
+      message: normalized.message,
+      error: normalized.error || null,
+      item_count: normalized.item_count,
+      block_count: normalized.block_count,
+      filtered_block_count: normalized.filtered_block_count,
+      candidate_item_count: normalized.candidate_item_count,
+      discarded_block_count: normalized.discarded_block_count,
+      system_discarded_after_retry_count: normalized.system_discarded_after_retry_count,
+      last_batch_size: normalized.last_batch_size === undefined ? null : normalized.last_batch_size,
+      parser_label: normalized.parser_label || null,
+      sort_order: Number(normalized.sort_order || 0),
+      created_at: normalized.created_at,
+      updated_at: normalized.updated_at,
+    };
     db.prepare(`
       INSERT INTO knowledge_documents (
         document_id, folder_id, file_name, document_dir, source_path, markdown_path, markdown_hash, markdown_chars,
@@ -277,37 +280,11 @@ function createKnowledgeBaseStore({ app, db }) {
         parser_label = excluded.parser_label,
         sort_order = excluded.sort_order,
         updated_at = excluded.updated_at
-    `).run({
-      document_id: normalized.id,
-      folder_id: normalized.folder_id,
-      file_name: normalized.file_name,
-      document_dir: normalized.document_dir,
-      source_path: normalized.source_path,
-      markdown_path: normalized.markdown_path,
-      markdown_hash: markdownHash,
-      markdown_chars: markdownChars,
-      source_extension: normalized.source_extension,
-      status: normalized.status,
-      progress: normalized.progress,
-      message: normalized.message,
-      error: normalized.error || null,
-      item_count: normalized.item_count,
-      block_count: normalized.block_count,
-      filtered_block_count: normalized.filtered_block_count,
-      candidate_item_count: normalized.candidate_item_count,
-      discarded_block_count: normalized.discarded_block_count,
-      system_discarded_after_retry_count: normalized.system_discarded_after_retry_count,
-      last_batch_size: normalized.last_batch_size === undefined ? null : normalized.last_batch_size,
-      parser_label: normalized.parser_label || null,
-      sort_order: Number(normalized.sort_order || 0),
-      created_at: normalized.created_at,
-      updated_at: normalized.updated_at,
-    });
-    return getDocument(normalized.id);
+    `).run(values);
+    return documentFromRow(values);
   }
 
   function list(type) {
-    ensureBaseDir();
     let folders;
     if (type) {
       const safeType = type === 'image' ? 'image' : 'document';
@@ -367,7 +344,10 @@ function createKnowledgeBaseStore({ app, db }) {
     const interruptedMessage = '上次任务中断，请点击重试继续处理';
     legacyIds.forEach((documentId) => updateLegacy.run({ document_id: documentId, message: legacyMessage, updated_at: timestamp }));
     interruptedIds.forEach((documentId) => updateInterrupted.run({ document_id: documentId, message: interruptedMessage, updated_at: timestamp }));
-    return [...new Set([...legacyIds, ...interruptedIds])].map((documentId) => getDocument(documentId));
+    return [
+      ...legacyIds.map((id) => ({ id, status: 'error', message: legacyMessage })),
+      ...interruptedIds.map((id) => ({ id, status: 'error', message: interruptedMessage })),
+    ];
   }
 
   function getDocument(documentId) {
@@ -383,14 +363,40 @@ function createKnowledgeBaseStore({ app, db }) {
     const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS value FROM knowledge_folders WHERE type = ? AND parent_id IS ?').get(safeType, safeParentId)?.value ?? -1;
     const folder = { id: createId('folder'), name: safeName(name), type: safeType, parent_id: safeParentId, sort_order: Number(maxOrder) + 1, created_at: timestamp, updated_at: timestamp };
     insertOrUpdateFolder(folder);
-    return folderFromRow(db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folder.id));
+    return folder;
   }
 
   function renameFolder(folderId, name) {
     const folder = db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folderId);
     if (!folder) throw new Error('知识库文件夹不存在');
-    db.prepare('UPDATE knowledge_folders SET name = ?, updated_at = ? WHERE folder_id = ?').run(safeName(name), now(), folderId);
-    return folderFromRow(db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folderId));
+    const nextName = safeName(name);
+    const updatedAt = now();
+    db.prepare('UPDATE knowledge_folders SET name = ?, updated_at = ? WHERE folder_id = ?').run(nextName, updatedAt, folderId);
+    return folderFromRow({ ...folder, name: nextName, updated_at: updatedAt });
+  }
+
+  function getChildFolders(parentId) {
+    const safeParentId = parentId || null;
+    return db.prepare('SELECT * FROM knowledge_folders WHERE parent_id IS ? ORDER BY sort_order ASC, created_at ASC').all(safeParentId).map(folderFromRow);
+  }
+
+  function getDescendantFolderIds(folderId) {
+    const ids = [folderId];
+    const queue = [folderId];
+    while (queue.length) {
+      const current = queue.shift();
+      const children = db.prepare('SELECT folder_id FROM knowledge_folders WHERE parent_id = ?').all(current);
+      for (const child of children) {
+        ids.push(child.folder_id);
+        queue.push(child.folder_id);
+      }
+    }
+    return ids;
+  }
+
+  function isLeafFolder(folderId) {
+    const count = db.prepare('SELECT COUNT(*) AS c FROM knowledge_folders WHERE parent_id = ?').get(folderId)?.c || 0;
+    return count === 0;
   }
 
   function getChildFolders(parentId) {
@@ -509,6 +515,7 @@ function createKnowledgeBaseStore({ app, db }) {
       throw new Error('知识库文件夹不存在');
     }
     if (draggedFolderId === targetFolderId) return list(draggedFolder.type);
+    if (draggedFolderId === targetFolderId) return;
     db.transaction(() => resequenceFolderIds(reorderIds(folderIds, draggedFolderId, targetFolderId, normalizedPosition)))();
     return list(draggedFolder.type);
   }
@@ -562,11 +569,18 @@ function createKnowledgeBaseStore({ app, db }) {
       resequenceDocumentIds(targetFolderId, nextTargetIds, timestamp);
     });
     transaction();
-    return { index: list(), document: getDocument(documentId) };
+    return {
+      ...document,
+      folder_id: targetFolderId,
+      document_dir: options.documentDir || document.document_dir,
+      source_path: options.sourcePath || document.source_path,
+      markdown_path: options.markdownPath || document.markdown_path,
+      sort_order: insertIndex,
+      updated_at: timestamp,
+    };
   }
 
-  function updateDocument(documentId, partial = {}) {
-    getDocument(documentId);
+  function buildDocumentUpdate(documentId, partial = {}) {
     const columnByField = {
       file_name: 'file_name',
       status: 'status',
@@ -597,9 +611,27 @@ function createKnowledgeBaseStore({ app, db }) {
       values[column] = value;
       assignments.push(`${column} = @${column}`);
     }
-    if (!assignments.length) return getDocument(documentId);
+    return { assignments, values };
+  }
+
+  /** 内部状态落库只执行写入，不读取文档快照。 */
+  function writeDocumentUpdate(documentId, partial = {}) {
+    const { assignments, values } = buildDocumentUpdate(documentId, partial);
+    if (!assignments.length) return;
     db.prepare(`UPDATE knowledge_documents SET ${assignments.join(', ')}, updated_at = @updated_at WHERE document_id = @document_id`).run(values);
-    return getDocument(documentId);
+  }
+
+  function updateDocument(documentId, partial = {}) {
+    const { assignments, values } = buildDocumentUpdate(documentId, partial);
+    if (!assignments.length) return getDocument(documentId);
+    const row = db.prepare(`
+      UPDATE knowledge_documents
+      SET ${assignments.join(', ')}, updated_at = @updated_at
+      WHERE document_id = @document_id
+      RETURNING *
+    `).get(values);
+    if (!row) throw new Error('知识库文档不存在');
+    return documentFromRow(row);
   }
 
   function updateMarkdownMetadata(documentId, markdown, parserLabel) {
@@ -615,7 +647,6 @@ function createKnowledgeBaseStore({ app, db }) {
       parser_label: parserLabel ? String(parserLabel) : null,
       updated_at: now(),
     });
-    return getDocument(documentId);
   }
 
   function replaceBlocks(documentId, blocks, filteredBlocks) {
@@ -655,7 +686,7 @@ function createKnowledgeBaseStore({ app, db }) {
         sort_order: index,
       });
     });
-    updateDocument(documentId, { block_count: Array.isArray(blocks) ? blocks.length : 0, filtered_block_count: Array.isArray(filteredBlocks) ? filteredBlocks.length : 0 });
+    writeDocumentUpdate(documentId, { block_count: Array.isArray(blocks) ? blocks.length : 0, filtered_block_count: Array.isArray(filteredBlocks) ? filteredBlocks.length : 0 });
   }
 
   const saveBlocksTransaction = db.transaction(replaceBlocks);
@@ -701,7 +732,7 @@ function createKnowledgeBaseStore({ app, db }) {
         updated_at: timestamp,
       });
     });
-    updateDocument(documentId, { candidate_item_count: Array.isArray(items) ? items.length : 0 });
+    writeDocumentUpdate(documentId, { candidate_item_count: Array.isArray(items) ? items.length : 0 });
   }
 
   const saveCandidateItemsTransaction = db.transaction(replaceCandidateItems);
@@ -759,7 +790,7 @@ function createKnowledgeBaseStore({ app, db }) {
       });
     });
     const itemCount = Number(db.prepare('SELECT COUNT(*) AS c FROM knowledge_items WHERE document_id = ?').get(documentId).c);
-    updateDocument(documentId, { item_count: itemCount });
+    writeDocumentUpdate(documentId, { item_count: itemCount });
   }
 
   function replaceDiscardedGroups(documentId, matchResult) {
@@ -843,7 +874,7 @@ function createKnowledgeBaseStore({ app, db }) {
       replaceFinalItems(documentId, Array.isArray(finalItems) ? finalItems : []);
       replaceDiscardedGroups(documentId, matchResult || {});
       saveReport(documentId, report || matchResult?.report || null);
-      updateDocument(documentId, {
+      writeDocumentUpdate(documentId, {
         item_count: Array.isArray(finalItems) ? finalItems.length : 0,
         candidate_item_count: Array.isArray(candidateItems) ? candidateItems.length : 0,
         discarded_block_count: Number((report || matchResult?.report)?.discarded_blocks_count || 0),
@@ -880,7 +911,6 @@ function createKnowledgeBaseStore({ app, db }) {
   }
 
   function saveDocumentStep(documentId, stepKey, fields = {}) {
-    getDocument(documentId);
     assertDocumentStepKey(stepKey);
     const timestamp = now();
     const current = db.prepare('SELECT * FROM knowledge_document_steps WHERE document_id = ? AND step_key = ?').get(documentId, stepKey);
@@ -928,7 +958,6 @@ function createKnowledgeBaseStore({ app, db }) {
       completed_at: completedAt,
       updated_at: timestamp,
     });
-    return getDocumentStep(documentId, stepKey);
   }
 
   function batchFromRow(row) {
@@ -957,7 +986,6 @@ function createKnowledgeBaseStore({ app, db }) {
   }
 
   function saveMatchBatch(documentId, batchIndex, fields = {}) {
-    getDocument(documentId);
     const index = Number(batchIndex || 0);
     const timestamp = now();
     const current = db.prepare('SELECT * FROM knowledge_match_batches WHERE document_id = ? AND batch_index = ?').get(documentId, index);
@@ -1008,7 +1036,6 @@ function createKnowledgeBaseStore({ app, db }) {
       completed_at: completedAt,
       updated_at: timestamp,
     });
-    return getMatchBatch(documentId, index);
   }
 
   function deleteDocumentStepsFrom(documentId, stepKey) {
@@ -1028,12 +1055,10 @@ function createKnowledgeBaseStore({ app, db }) {
   }
 
   function clearMatchBatches(documentId) {
-    getDocument(documentId);
     db.prepare('DELETE FROM knowledge_match_batches WHERE document_id = ?').run(documentId);
   }
 
   function clearDocumentProcessingFromStep(documentId, stepKey) {
-    getDocument(documentId);
     assertDocumentStepKey(stepKey);
     const startIndex = documentStepKeys.indexOf(stepKey);
     const transaction = db.transaction(() => {
@@ -1071,10 +1096,9 @@ function createKnowledgeBaseStore({ app, db }) {
       if (startIndex <= documentStepKeys.indexOf('save_result')) {
         Object.assign(resetFields, { item_count: 0, discarded_block_count: 0, system_discarded_after_retry_count: 0 });
       }
-      updateDocument(documentId, resetFields);
+      writeDocumentUpdate(documentId, resetFields);
     });
     transaction();
-    return getDocument(documentId);
   }
 
   function readItems(documentId) {
@@ -1101,6 +1125,59 @@ function createKnowledgeBaseStore({ app, db }) {
     const document = getDocument(documentId);
     const markdownPath = resolvePath(document.markdown_path);
     return fs.existsSync(markdownPath) ? fs.readFileSync(markdownPath, 'utf-8') : '';
+  }
+
+  // 批量读取引用文档及其知识条目，避免按文档重复查询状态、条目和来源关系。
+  function readReferences(documentIds, options = {}) {
+    const ids = [...new Set((Array.isArray(documentIds) ? documentIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean))];
+    if (!ids.length) return [];
+    const placeholders = ids.map(() => '?').join(', ');
+    const documentRows = db.prepare(`SELECT * FROM knowledge_documents WHERE document_id IN (${placeholders})`).all(...ids);
+    const documentById = new Map(documentRows.map((row) => [row.document_id, row]));
+    const blocksByItem = new Map();
+    const itemsByDocument = new Map();
+    if (options.includeItems !== false) {
+      for (const row of db.prepare(`
+        SELECT document_id, item_id, block_id
+        FROM knowledge_item_blocks
+        WHERE document_id IN (${placeholders})
+        ORDER BY document_id ASC, item_id ASC, sort_order ASC
+      `).all(...ids)) {
+        const key = `${row.document_id}::${row.item_id}`;
+        const blocks = blocksByItem.get(key) || [];
+        blocks.push(row.block_id);
+        blocksByItem.set(key, blocks);
+      }
+      for (const row of db.prepare(`
+        SELECT * FROM knowledge_items
+        WHERE document_id IN (${placeholders})
+        ORDER BY document_id ASC, sort_order ASC, id ASC
+      `).all(...ids)) {
+        const items = itemsByDocument.get(row.document_id) || [];
+        items.push({
+          id: row.item_id,
+          title: row.title,
+          resume: row.resume,
+          content: row.content,
+          source_block_ids: blocksByItem.get(`${row.document_id}::${row.item_id}`) || [],
+          source_file: row.source_file || undefined,
+        });
+        itemsByDocument.set(row.document_id, items);
+      }
+    }
+    return ids.flatMap((documentId) => {
+      const row = documentById.get(documentId);
+      if (!row) return [];
+      const document = documentFromRow(row);
+      const markdownPath = options.includeMarkdown ? resolvePath(row.markdown_path) : '';
+      return [{
+        document,
+        items: itemsByDocument.get(documentId) || [],
+        ...(options.includeMarkdown ? { markdown: fs.existsSync(markdownPath) ? fs.readFileSync(markdownPath, 'utf-8') : '' } : {}),
+      }];
+    });
   }
 
   function reportFromRow(row) {
@@ -1155,19 +1232,16 @@ function createKnowledgeBaseStore({ app, db }) {
   }
 
   function getOutlineReferences(documentIds) {
-    const ids = Array.isArray(documentIds) ? documentIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
-    if (!ids.length) return { items: [] };
     const seen = new Set();
     const items = [];
-    for (const documentId of ids) {
-      const document = db.prepare('SELECT document_id, status FROM knowledge_documents WHERE document_id = ?').get(documentId);
-      if (!document || document.status !== 'success') continue;
-      for (const item of readItems(documentId)) {
+    for (const reference of readReferences(documentIds)) {
+      if (reference.document.status !== 'success') continue;
+      for (const item of reference.items) {
         const itemId = String(item?.id || '').trim();
         const title = String(item?.title || '').trim();
         const resume = String(item?.resume || item?.summary || '').trim();
         if (!itemId || !title || !resume) continue;
-        const referenceId = `${documentId}::${itemId}`;
+        const referenceId = `${reference.document.id}::${itemId}`;
         if (seen.has(referenceId)) continue;
         seen.add(referenceId);
         items.push({ id: referenceId, title, resume });
@@ -1858,6 +1932,7 @@ function createKnowledgeBaseStore({ app, db }) {
     readMatchBatches,
     saveMatchBatch,
     readMarkdown,
+    readReferences,
     saveBlocks: saveBlocksTransaction,
     readBlocks,
     readFilteredBlocks,
@@ -1885,8 +1960,6 @@ function createKnowledgeBaseStore({ app, db }) {
     deleteImageRow,
     getImageAbsolutePath,
     readImageFileAsDataUrl,
-    getMigrationStatus,
-    migrateLegacy,
     resolvePath,
   };
 }
@@ -1894,7 +1967,6 @@ function createKnowledgeBaseStore({ app, db }) {
 module.exports = {
   createKnowledgeBaseStore,
   _internals: {
-    normalizeIndex,
     normalizeDocument,
   },
 };

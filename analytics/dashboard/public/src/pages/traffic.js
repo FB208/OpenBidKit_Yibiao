@@ -46,12 +46,13 @@ const pageLabels = {
   'new-template': '模版设置 - 新建模板',
   'export-format': '模版设置 - 新建模板',
   'bid-opportunity': '投标机会',
+  'plugin-manager': '插件管理',
   'developer-test': '测试页',
   'developer-json-test': '测试页 - Json请求测试',
   'developer-prompt-lab': '测试页 - Prompt调试台',
   'developer-parser-sandbox': '测试页 - 文件解析沙盘',
   'developer-export-preview': '测试页 - 导出链路预演',
-  'developer-opencode-agent-test': '测试页 - OpenCode Agent测试',
+  'developer-agent-test': '测试页 - 智能体链路测试',
   settings: '设置',
 };
 

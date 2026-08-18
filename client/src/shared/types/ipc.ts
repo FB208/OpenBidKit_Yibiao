@@ -1,15 +1,28 @@
 import type { AiHttpErrorPayload, ChatCompletionRequest, JsonCompletionRequest } from './ai';
-import type { DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
-import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult, UpdateChannel } from './config';
-import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMigrationResult, KnowledgeBaseMigrationStatus, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeFolderType, KnowledgeImage, KnowledgeItem, KnowledgeSnippet } from '../../features/knowledge-base/types';
-import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
-import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
+import type { DuplicateCheckWorkspacePatch, DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
+import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelInfoResult, ModelListResult, UpdateChannel } from './config';
+import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeFolderType, KnowledgeImage, KnowledgeItem, KnowledgeSnippet } from '../../features/knowledge-base/types';
+import type { RejectionCheckWorkspacePatch, RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
+import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
 import type { BusinessBidState, BusinessBidStep, BusinessBidClauseItem } from '../../features/business-bid/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
-import type { OutlineData, OutlineExpansionMode } from './outline';
+import type { OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from './outline';
+
+export interface TaskEventTask {
+  task_id: string;
+  type: string;
+  status: string;
+  progress: number;
+  progress_detail?: ContentGenerationProgressDetail;
+  logs: string[];
+  started_at: string;
+  updated_at: string;
+  error?: string;
+  stats?: unknown;
+}
 
 export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDuplicateCheckState = unknown> {
-  task: unknown;
+  task: TaskEventTask;
   technicalPlan?: TState;
   technicalPlanPatch?: Partial<TechnicalPlanState>;
   businessBid?: TState;
@@ -20,7 +33,9 @@ export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDu
   contentPlan?: { nodeId: string; value: ContentGenerationPlanState | null };
   contentRuntime?: ContentGenerationRuntimeState;
   rejectionCheck?: TRejectionCheckState;
+  rejectionCheckPatch?: RejectionCheckWorkspacePatch;
   duplicateCheck?: TDuplicateCheckState;
+  duplicateCheckPatch?: DuplicateCheckWorkspacePatch;
 }
 
 export interface WordExportProgressEvent {
@@ -135,6 +150,23 @@ export interface UpdateInstallResult {
   message?: string;
 }
 
+export interface PluginUpdateInfo {
+  id: string;
+  name: string;
+  installedVersion: string;
+  version: string;
+}
+
+export interface PluginUpdateResult extends PluginUpdateInfo {
+  success: boolean;
+  message?: string;
+}
+
+export interface PluginUpdateAllResult {
+  updates: PluginUpdateInfo[];
+  results: PluginUpdateResult[];
+}
+
 export interface GpuHardwareAccelerationStatus {
   configured: boolean;
   enabled: boolean;
@@ -143,7 +175,7 @@ export interface GpuHardwareAccelerationStatus {
   forcedDisabled: boolean;
 }
 
-export type WorkspaceDatabasePhase = 'checking' | 'repairing' | 'backing-up' | 'upgrading' | 'ready' | 'error';
+export type WorkspaceDatabasePhase = 'checking' | 'repairing' | 'backing-up' | 'upgrading' | 'cleaning' | 'ready' | 'error';
 
 export interface WorkspaceDatabaseStatus {
   phase: WorkspaceDatabasePhase;
@@ -156,7 +188,7 @@ export interface WorkspaceDatabaseStatus {
   migrationDescription?: string;
 }
 
-export type AgentSelfCheckStepStatus = 'pending' | 'running' | 'success' | 'error';
+export type AgentSelfCheckStepStatus = 'pending' | 'running' | 'success' | 'warning' | 'error' | 'skipped';
 export type AgentSelfCheckStatus = 'normal' | 'error' | 'busy';
 
 export type AgentRuntimePhase = 'stopped' | 'starting' | 'idle' | 'running' | 'aborting' | 'unhealthy' | 'restarting' | 'closing';
@@ -171,6 +203,39 @@ export interface AgentRuntimeActiveTask {
   last_progress_at?: string;
   elapsed_seconds: number;
   idle_seconds: number;
+  waiting_for_user?: boolean;
+}
+
+export interface AgentQuestionOption {
+  id: string;
+  label: string;
+  description: string;
+  recommended: boolean;
+  custom: boolean;
+}
+
+export interface AgentQuestion {
+  question_id: string;
+  task_id: string;
+  task_title: string;
+  question: string;
+  options: AgentQuestionOption[];
+  asked_at: string;
+  auto_answer_at?: string;
+}
+
+export interface AutoConfirmationState {
+  enabled: boolean;
+}
+
+export interface AgentQuestionAnswerPayload {
+  question_id: string;
+  option_id: string;
+  custom_answer?: string;
+}
+
+export interface AgentQuestionAnswerResult {
+  success: boolean;
 }
 
 export type LicenseStatusValue = 'missing' | 'active' | 'expired' | 'invalid' | 'invalidated' | 'machine_mismatch' | 'refresh_failed' | 'debug_disabled';
@@ -208,6 +273,8 @@ export interface LicenseOfflineActivationResult {
 }
 
 export interface AgentRuntimeStatus {
+  runtime_id: 'pi';
+  runtime_name: string;
   phase: AgentRuntimePhase;
   healthy: boolean;
   message: string;
@@ -229,13 +296,7 @@ export interface AgentRuntimeStatus {
     queued: number;
     limit: number;
   };
-  opencode?: {
-    pid: number;
-    base_url?: string;
-    port?: number;
-    last_exit_code?: number | null;
-    last_exit_signal?: string;
-  };
+  runtime_details?: Record<string, unknown>;
 }
 
 export interface AgentRunFile {
@@ -252,7 +313,6 @@ export interface AgentRunPayload {
   files?: AgentRunFile[];
   timeout_ms?: number;
   max_retries?: number;
-  agent?: string;
 }
 
 export interface AgentRetryAttempt {
@@ -264,6 +324,7 @@ export interface AgentRetryAttempt {
 
 export interface AgentRunResult {
   success: boolean;
+  runtime_id: 'pi';
   status?: 'busy' | string;
   skipped?: boolean;
   message?: string;
@@ -278,12 +339,71 @@ export interface AgentRunResult {
   diff?: unknown[];
   session_id?: string;
   retry_count?: number;
+  model_retry_count?: number;
   retry_attempts?: AgentRetryAttempt[];
   validation_result?: unknown;
   active_task?: AgentRuntimeActiveTask | null;
-  opencode_request_log?: unknown[];
-  opencode_stderr_tail?: string;
-  opencode_stdout_tail?: string;
+  diagnostics?: Record<string, unknown>;
+}
+
+export type AgentMonitorEventType =
+  | 'task_start'
+  | 'task_input'
+  | 'task_output'
+  | 'assistant_delta'
+  | 'assistant_end'
+  | 'tool_start'
+  | 'tool_update'
+  | 'tool_end'
+  | 'agent_start'
+  | 'agent_end'
+  | 'agent_settled'
+  | 'turn_start'
+  | 'turn_end'
+  | 'compaction_start'
+  | 'compaction_end'
+  | 'auto_retry_start'
+  | 'auto_retry_end'
+  | 'retry'
+  | 'task_end'
+  | 'task_error';
+
+export interface AgentMonitorEvent {
+  sequence: number;
+  at: string;
+  type: AgentMonitorEventType;
+  task_id: string;
+  title?: string;
+  workspace_dir?: string;
+  stage_index?: number;
+  workflow_stage?: string;
+  prompt?: string;
+  output_file?: string;
+  files?: AgentRunFile[];
+  delta?: string;
+  text?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  args?: unknown;
+  partial_result?: unknown;
+  result?: unknown;
+  is_error?: boolean;
+  attempt?: number;
+  maximum?: number;
+  delay_ms?: number;
+  success?: boolean;
+  final_error?: string;
+  message?: string;
+  output_content?: string;
+  assistant_text?: string;
+  retry_count?: number;
+  model_retry_count?: number;
+}
+
+export interface AgentMonitorSnapshot {
+  attached_at: string;
+  active_task?: AgentRuntimeActiveTask | null;
+  workspace_dir?: string;
 }
 
 export interface AgentSelfCheckStep {
@@ -292,79 +412,36 @@ export interface AgentSelfCheckStep {
   status: AgentSelfCheckStepStatus;
   message?: string;
   updated_at?: string;
-}
-
-export type AgentToolCheckStatus = 'success' | 'warning' | 'error';
-
-export interface AgentToolCheckResult {
-  id: string;
-  label: string;
-  command: string;
-  type: 'bundled' | 'shim' | string;
-  critical?: boolean;
-  status: AgentToolCheckStatus;
-  message: string;
-  expected_path?: string;
-  resolved_type?: string;
-  resolved_source?: string;
-  exit_code?: number;
+  started_at?: string;
+  completed_at?: string;
   duration_ms?: number;
-  stdout?: string;
-  stderr?: string;
 }
 
-export interface AgentSelfCheckDiagnostics {
-  name?: string;
-  message?: string;
-  stage?: string;
-  stack?: string;
-  agent_task_id?: string;
-  agent_title?: string;
-  agent_workspace_dir?: string;
-  agent_runtime_root?: string;
-  agent_output_file?: string;
-  agent_output_path?: string;
-  agent_partial_output_chars?: number;
-  agent_partial_output?: string;
-  opencode_binary_path?: string;
-  opencode_base_url?: string;
-  opencode_port?: number;
-  opencode_exit_code?: number | null;
-  opencode_exit_signal?: string;
-  opencode_spawn_error?: string;
-  opencode_last_health_error?: string;
-  opencode_last_health_cause?: string;
-  opencode_stdout_tail?: string;
-  opencode_stderr_tail?: string;
-  opencode_request_log?: unknown[];
-}
-
-export interface AgentSelfCheckEnvironmentSnapshot {
-  app?: Record<string, unknown>;
-  process?: Record<string, unknown>;
-  paths?: Record<string, unknown>;
-  opencode?: Record<string, unknown>;
-  text_model?: Record<string, unknown>;
-}
-
-export interface AgentIsolationCheckResult {
-  success: boolean;
-  workspace_dir: string;
-  home_dir: string;
-  config_dir: string;
-  temp_dir: string;
-  allowed_roots: string[];
-  effective_permission: string;
-  external_read_denied: boolean;
-  loaded_skills: Array<{
-    name: string;
-    location?: string;
+export interface AgentDiagnosticSection {
+  id: string;
+  title: string;
+  status: AgentSelfCheckStepStatus | 'warning';
+  summary?: string;
+  details?: Array<{
+    label: string;
+    value: string;
   }>;
-  violations: string[];
+  items?: Array<{
+    id: string;
+    label: string;
+    status: AgentSelfCheckStepStatus | 'warning';
+    message?: string;
+    detail?: string;
+  }>;
 }
 
 export interface AgentSelfCheckResult {
+  report_version?: number;
+  check_id?: string;
   success: boolean;
+  repaired?: boolean;
+  runtime_id: 'pi';
+  runtime_name: string;
   status: AgentSelfCheckStatus;
   message: string;
   checked_at: string;
@@ -376,22 +453,20 @@ export interface AgentSelfCheckResult {
   output_file: string;
   output_path: string;
   output_content?: string;
-  opencode_binary_path: string;
   conclusion?: string;
-  model_config?: Record<string, unknown>;
-  environment?: AgentSelfCheckEnvironmentSnapshot | null;
-  isolation_check: AgentIsolationCheckResult | null;
-  direct_model_test?: Record<string, unknown> | null;
-  tool_check_summary?: string;
-  tool_check_environment?: Record<string, unknown> | null;
-  tool_checks?: AgentToolCheckResult[];
-  opencode_request_log?: unknown[];
-  proxy_diagnostics?: { events: unknown[] };
-  workspace_snapshot?: Record<string, unknown> | null;
-  agent_result?: Record<string, unknown>;
   steps: AgentSelfCheckStep[];
-  diagnostics?: AgentSelfCheckDiagnostics;
-  error?: AgentSelfCheckDiagnostics;
+  sections: AgentDiagnosticSection[];
+  diagnostics?: Record<string, unknown>;
+  error?: Record<string, unknown>;
+  model_config?: Record<string, unknown>;
+  model_check?: Record<string, unknown>;
+  environment?: Record<string, unknown>;
+  loopback_check?: Record<string, unknown>;
+  tool_check?: Record<string, unknown>;
+  agent_check?: Record<string, unknown>;
+  session_snapshot?: Record<string, unknown>;
+  diagnosis?: Record<string, unknown>;
+  repair?: Record<string, unknown>;
   detail_text: string;
   runtime_status?: AgentRuntimeStatus;
 }
@@ -423,14 +498,19 @@ export interface YibiaoBridge {
   onUpdateProgress: (callback: (event: { percent: number }) => void) => () => void;
   onUpdateDownloaded: (callback: (event: { version: string }) => void) => () => void;
   onUpdateError: (callback: (event: { message: string }) => void) => () => void;
+  onPluginUpdatesAvailable: (callback: (updates: PluginUpdateInfo[]) => void) => () => void;
   database: {
     getStatus: () => Promise<WorkspaceDatabaseStatus>;
     onStatus: (callback: (status: WorkspaceDatabaseStatus) => void) => () => void;
+  };
+  ui: {
+    setCurrentView: (view: { section: string; step?: string | null }) => Promise<{ success: boolean }>;
   };
   config: {
     load: () => Promise<ClientConfig>;
     save: (config: ClientConfig) => Promise<ConfigSaveResult>;
     listModels: (config?: ClientConfig) => Promise<ModelListResult>;
+    getModelInfo: (modelName: string) => Promise<ModelInfoResult>;
     openConfigFolder: () => Promise<{ success: boolean; path: string }>;
   };
   license: {
@@ -445,13 +525,22 @@ export interface YibiaoBridge {
     testImageModel: (config: ClientConfig) => Promise<ImageModelTestResult>;
     onHttpError: (callback: (event: AiHttpErrorPayload) => void) => () => void;
   };
+  autoConfirmation: {
+    getState: () => Promise<AutoConfirmationState>;
+    setEnabled: (enabled: boolean) => Promise<ConfigSaveResult & AutoConfirmationState>;
+    onChanged: (callback: (state: AutoConfirmationState) => void) => () => void;
+  };
   agent: {
     run: (payload: AgentRunPayload) => Promise<AgentRunResult>;
     selfCheck: () => Promise<AgentSelfCheckResult>;
     exportSelfCheckReport: (payload: AgentSelfCheckResult) => Promise<AgentSelfCheckReportExportResult>;
     getStatus: () => Promise<AgentRuntimeStatus>;
     restart: (reason?: string) => Promise<AgentRuntimeStatus>;
+    getPendingQuestion: () => Promise<AgentQuestion | null>;
+    answerQuestion: (payload: AgentQuestionAnswerPayload) => Promise<AgentQuestionAnswerResult>;
+    suppressQuestionAutoAnswer: (payload: { question_id: string }) => Promise<{ success: boolean }>;
     onStatus: (callback: (status: AgentRuntimeStatus) => void) => () => void;
+    onQuestion: (callback: (question: AgentQuestion | null) => void) => () => void;
   };
   developerTokenStats: {
     openWindow: () => Promise<{ success: boolean }>;
@@ -459,15 +548,22 @@ export interface YibiaoBridge {
     reset: () => Promise<DeveloperTextTokenStats>;
     onChanged: (callback: (stats: DeveloperTextTokenStats) => void) => () => void;
   };
+  developerAgentMonitor: {
+    openWindow: () => Promise<{ success: boolean }>;
+    openWorkspace: (workspaceDir: string) => Promise<{ success: boolean; path: string }>;
+    attach: () => Promise<AgentMonitorSnapshot>;
+    detach: () => Promise<{ success: boolean }>;
+    onEvent: (callback: (event: AgentMonitorEvent) => void) => () => void;
+  };
   developerExpansionReplaceTest: {
     run: (payload: DeveloperExpansionReplaceTestPayload) => Promise<DeveloperExpansionReplaceTestResult>;
   };
   file: {
-    selectDuplicateCheckFiles: (options?: { multiple?: boolean }) => Promise<FileSelectionResult>;
+    selectDuplicateCheckFiles: (options?: { multiple?: boolean; filePaths?: string[] }) => Promise<FileSelectionResult>;
+    /** 把拖拽进来的 File 对象换成本地绝对路径，供各上传区拖拽导入使用 */
+    getPathForFile: (file: File) => string;
   };
   knowledgeBase: {
-    getMigrationStatus: () => Promise<KnowledgeBaseMigrationStatus>;
-    migrateLegacy: () => Promise<KnowledgeBaseMigrationResult>;
     list: (type?: KnowledgeFolderType) => Promise<KnowledgeBaseIndex>;
     createFolder: (name: string, type: KnowledgeFolderType, parentId?: string) => Promise<KnowledgeFolder>;
     renameFolder: (folderId: string, name: string) => Promise<KnowledgeFolder>;
@@ -478,7 +574,7 @@ export interface YibiaoBridge {
     moveDocument: (documentId: string, targetFolderId: string, targetDocumentId?: string | null, position?: 'before' | 'after') => Promise<KnowledgeBaseIndexMutationResult>;
     uploadDocuments: (folderId: string) => Promise<KnowledgeBaseUploadResult>;
     retryDocument: (documentId: string) => Promise<KnowledgeBaseRetryDocumentResult>;
-    startMatching: (documentId: string, batchSize: number) => Promise<KnowledgeBaseStartMatchingResult>;
+    startMatching: (documentId: string, batchSize?: number) => Promise<KnowledgeBaseStartMatchingResult>;
     readMarkdown: (documentId: string) => Promise<string>;
     readItems: (documentId: string) => Promise<KnowledgeItem[]>;
     listItems: (documentId: string) => Promise<{ id: string; title: string; resume: string }[]>;
@@ -502,36 +598,41 @@ export interface YibiaoBridge {
   };
   technicalPlan: {
     loadState: () => Promise<TechnicalPlanState>;
-    importTenderDocument: () => Promise<{
+    importTenderDocument: (filePaths?: string[]) => Promise<{
       success: boolean;
       message?: string;
-      state?: TechnicalPlanState;
       markdown?: string;
       fileName?: string;
       parserLabel?: string | null;
     }>;
-    importOriginalPlanDocument: () => Promise<{
+    removeTenderDocument: (sourceId: string) => Promise<{
       success: boolean;
       message?: string;
-      state?: TechnicalPlanState;
+      markdown?: string;
+    }>;
+    importOriginalPlanDocument: (filePaths?: string[]) => Promise<{
+      success: boolean;
+      message?: string;
       markdown?: string;
     }>;
     checkBidSections: () => Promise<{ hasMultiple: boolean; totalDeclared?: number | null }>;
-    selectBidSection: (selectedSection: DetectedBidSection) => Promise<{ success: boolean; message?: string; state: TechnicalPlanState; markdown: string }>;
+    selectBidSection: (selectedSection: DetectedBidSection) => Promise<{ success: boolean; message?: string; markdown: string }>;
     readTenderMarkdown: () => Promise<string>;
     readTenderSourceMarkdown: (sourceId: string) => Promise<string>;
     readOriginalPlanMarkdown: () => Promise<string>;
-    updateStep: (step: TechnicalPlanStep) => Promise<TechnicalPlanState>;
-    setWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
-    switchWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
-    saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode }) => Promise<TechnicalPlanState>;
-    saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; referenceKnowledgeSnippetIds?: string[]; referenceKnowledgeItemIds?: string[]; outlineExpansionMode?: OutlineExpansionMode }) => Promise<TechnicalPlanState>;
-    saveOutline: (payload: SaveOutlineRequest) => Promise<TechnicalPlanState>;
-    saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<TechnicalPlanState>;
-    saveContentGenerationOptions: (options: ContentGenerationOptions) => Promise<TechnicalPlanState>;
-    saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<TechnicalPlanState>;
+    updateStep: (step: TechnicalPlanStep) => Promise<void>;
+    setWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<void>;
+    switchWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<void>;
+    saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode }) => Promise<void>;
+    saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; outlineMode?: OutlineMode; referenceKnowledgeSnippetIds?: string[]; referenceKnowledgeItemIds?: string[]; outlineExpansionMode?: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<void>;
+    saveOutlineSelection: (payload: SaveOutlineSelectionRequest) => Promise<{ success: boolean }>;
+    saveOutline: (payload: SaveOutlineRequest) => Promise<Partial<TechnicalPlanState>>;
+    saveGlobalFactsConfig: (payload: { globalFactsMode: GlobalFactsMode }) => Promise<Partial<TechnicalPlanState>>;
+    saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<Partial<TechnicalPlanState>>;
+    saveContentGenerationOptions: (options: ContentGenerationOptions) => Promise<Partial<TechnicalPlanState>>;
+    saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<Partial<TechnicalPlanState>>;
     saveTenderStarredSections: (starredSections: Record<string, boolean>) => Promise<TechnicalPlanState>;
-    clear: () => Promise<{ success: boolean; message?: string; state: TechnicalPlanState }>;
+    clear: () => Promise<{ success: boolean; message?: string }>;
   };
   businessBid: {
     loadState: () => Promise<BusinessBidState>;
@@ -559,19 +660,19 @@ export interface YibiaoBridge {
   };
   duplicateCheck: {
     loadState: () => Promise<DuplicateCheckWorkspaceState>;
-    saveFiles: (payload: Pick<DuplicateCheckWorkspaceState, 'tenderFile' | 'tenderFiles' | 'bidFiles'> & Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<DuplicateCheckWorkspaceState>;
-    saveUiState: (payload: Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<DuplicateCheckWorkspaceState>;
-    updateState: (partial: Partial<DuplicateCheckWorkspaceState>) => Promise<DuplicateCheckWorkspaceState>;
-    clear: () => Promise<{ success: boolean; message?: string; state: DuplicateCheckWorkspaceState }>;
+    saveFiles: (payload: Pick<DuplicateCheckWorkspaceState, 'tenderFile' | 'tenderFiles' | 'bidFiles'> & Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<void>;
+    saveUiState: (payload: Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<void>;
+    updateState: (partial: DuplicateCheckWorkspacePatch) => Promise<void>;
+    clear: () => Promise<{ success: boolean; message?: string }>;
   };
   rejectionCheck: {
     loadState: () => Promise<RejectionCheckWorkspaceState>;
-    importDocument: (role: RejectionDocumentRole) => Promise<{ success: boolean; message?: string; state: RejectionCheckWorkspaceState }>;
-    importTenderFromTechnicalPlan: () => Promise<{ success: boolean; message?: string; state: RejectionCheckWorkspaceState }>;
-    removeDocument: (role: RejectionDocumentRole, documentId?: string) => Promise<RejectionCheckWorkspaceState>;
-    saveUiState: (payload: Partial<Pick<RejectionCheckWorkspaceState, 'step' | 'activeDocumentTab' | 'activeResultTab' | 'activeCheckResultTab' | 'customCheckItems' | 'checkOptions'>>) => Promise<RejectionCheckWorkspaceState>;
-    updateState: (partial: Partial<RejectionCheckWorkspaceState>) => Promise<RejectionCheckWorkspaceState>;
-    clear: () => Promise<{ success: boolean; message?: string; state: RejectionCheckWorkspaceState }>;
+    importDocument: (role: RejectionDocumentRole, filePaths?: string[]) => Promise<{ success: boolean; message?: string }>;
+    importTenderFromTechnicalPlan: () => Promise<{ success: boolean; message?: string }>;
+    removeDocument: (role: RejectionDocumentRole, documentId?: string) => Promise<void>;
+    saveUiState: (payload: Partial<Pick<RejectionCheckWorkspaceState, 'step' | 'activeDocumentTab' | 'activeResultTab' | 'activeCheckResultTab' | 'customCheckItems' | 'checkOptions'>>) => Promise<void>;
+    updateState: (partial: RejectionCheckWorkspacePatch) => Promise<void>;
+    clear: () => Promise<{ success: boolean; message?: string }>;
   };
   templates: {
     list: () => Promise<ExportTemplateRecord[]>;
@@ -584,6 +685,7 @@ export interface YibiaoBridge {
     startBidSectionExtraction: (payload?: unknown) => Promise<unknown>;
     startBidAnalysis: (payload: unknown) => Promise<unknown>;
     startOutlineGeneration: (payload: unknown) => Promise<unknown>;
+    suppressOutlineSelectionAutoConfirmation: (payload: { taskId: string }) => Promise<{ success: boolean }>;
     startGlobalFactsGeneration: (payload: unknown) => Promise<unknown>;
     startContentGeneration: (payload: unknown) => Promise<unknown>;
     pauseContentGeneration: () => Promise<unknown>;
@@ -596,7 +698,7 @@ export interface YibiaoBridge {
     startRejectionItemsExtraction: (payload: unknown) => Promise<unknown>;
     startRejectionCheck: (payload: unknown) => Promise<unknown>;
     startDuplicateAnalysis: (payload: unknown) => Promise<unknown>;
-    getActiveTasks: () => Promise<unknown[]>;
+    getActiveTasks: () => Promise<TaskEventTask[]>;
     onTaskEvent: <TState = unknown, TRejectionCheckState = unknown, TDuplicateCheckState = unknown>(callback: (event: TaskEvent<TState, TRejectionCheckState, TDuplicateCheckState>) => void) => () => void;
   };
   export: {
@@ -606,5 +708,55 @@ export interface YibiaoBridge {
   };
   systemFonts: {
     list: () => Promise<string[]>;
+  };
+  plugins: {
+    getAvailablePlugins: () => Promise<AvailablePlugin[]>;
+    install: (pluginId: string) => Promise<void>;
+    installOffline: () => Promise<OfflinePluginInstallResult>;
+    uninstall: (pluginId: string) => Promise<void>;
+    enable: (pluginId: string) => Promise<void>;
+    disable: (pluginId: string) => Promise<void>;
+    update: (pluginId: string) => Promise<void>;
+    checkUpdates: () => Promise<PluginUpdateInfo[]>;
+    updateAll: () => Promise<PluginUpdateAllResult>;
+    openConfig: (pluginId: string) => Promise<void>;
+    refreshMarket: () => Promise<void>;
+    clearUpdateFailedState: (pluginId: string) => Promise<boolean>;
+    notifyEvent: (pluginId: string, event: string, payload?: unknown) => Promise<void>;
+  };
+}
+
+export type OfflinePluginInstallResult =
+  | { canceled: true }
+  | {
+      canceled: false;
+      id: string;
+      name: string;
+      version: string;
+      previousVersion: string | null;
+      updated: boolean;
+      enabled: boolean;
+    };
+
+export interface AvailablePlugin {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  author?: string;
+  repository: string;
+  releaseUrl: string;
+  tags: string[];
+  iconUrl: string;
+  downloadCount: number;
+  installed: boolean;
+  installedVersion?: string;
+  enabled: boolean;
+  hasConfig: boolean;
+  hasUpdate?: boolean;
+  updating?: boolean;
+  updateFailed?: {
+    stage: string;
+    message: string;
   };
 }

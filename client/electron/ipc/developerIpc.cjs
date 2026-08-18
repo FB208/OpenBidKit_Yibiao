@@ -1,4 +1,4 @@
-const { BrowserWindow, ipcMain } = require('electron');
+const { BrowserWindow, ipcMain, shell } = require('electron');
 
 function requireDeveloperMode(configStore) {
   if (!configStore.load()?.developer_mode) {
@@ -14,7 +14,17 @@ function broadcastTextTokenStats(stats) {
   });
 }
 
-function registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsWindow, developerExpansionReplaceTestService }) {
+function registerDeveloperIpc({ configStore, aiService, agentService, openDeveloperTokenStatsWindow, openDeveloperAgentMonitorWindow, developerExpansionReplaceTestService }) {
+  let monitorSenderId = null;
+  let unsubscribeMonitor = null;
+
+  function detachMonitor(senderId) {
+    if (senderId !== undefined && senderId !== null && senderId !== monitorSenderId) return;
+    try { unsubscribeMonitor?.(); } catch {}
+    unsubscribeMonitor = null;
+    monitorSenderId = null;
+  }
+
   aiService.onTextTokenStatsChanged((stats) => {
     broadcastTextTokenStats(stats);
   });
@@ -32,6 +42,41 @@ function registerDeveloperIpc({ configStore, aiService, openDeveloperTokenStatsW
   ipcMain.handle('developer-token-stats:reset', () => {
     requireDeveloperMode(configStore);
     return aiService.resetTextTokenStats();
+  });
+
+  ipcMain.handle('developer-agent-monitor:open-window', () => {
+    requireDeveloperMode(configStore);
+    return openDeveloperAgentMonitorWindow();
+  });
+
+  ipcMain.handle('developer-agent-monitor:attach', (event) => {
+    requireDeveloperMode(configStore);
+    const sender = event.sender;
+    detachMonitor();
+    monitorSenderId = sender.id;
+    unsubscribeMonitor = agentService.onMonitorEvent((monitorEvent) => {
+      if (sender.isDestroyed?.()) {
+        detachMonitor(sender.id);
+        return;
+      }
+      sender.send('developer-agent-monitor:event', monitorEvent);
+    });
+    sender.once('destroyed', () => detachMonitor(sender.id));
+    return agentService.getMonitorSnapshot();
+  });
+
+  ipcMain.handle('developer-agent-monitor:detach', (event) => {
+    detachMonitor(event.sender.id);
+    return { success: true };
+  });
+
+  ipcMain.handle('developer-agent-monitor:open-workspace', async (_event, workspaceDir) => {
+    requireDeveloperMode(configStore);
+    const errorMessage = await shell.openPath(workspaceDir);
+    if (errorMessage) {
+      throw new Error(`打开当前工作空间失败：${errorMessage}`);
+    }
+    return { success: true, path: workspaceDir };
   });
 
   ipcMain.handle('developer-expansion-replace-test:run', (_event, payload) => {

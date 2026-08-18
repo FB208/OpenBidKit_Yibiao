@@ -4,7 +4,7 @@ const path = require('node:path');
 const { getGeneratedImagesDir } = require('./paths.cjs');
 
 const MERMAID_CACHE_DIR_NAME = 'mermaid-cache';
-const MERMAID_CACHE_VERSION = 4;
+const MERMAID_CACHE_VERSION = 5;
 const MERMAID_CACHE_OUTPUT_TYPE = 'png';
 const MERMAID_CACHE_THEME = 'default';
 const MERMAID_CACHE_BG_COLOR = '!white';
@@ -36,7 +36,7 @@ function getMermaidCacheFilePath(app, hash) {
 }
 
 function getMermaidCacheAssetUrl(hash) {
-  return `yibiao-asset://generated-images/${encodeURIComponent(MERMAID_CACHE_DIR_NAME)}/${encodeURIComponent(`${hash}.png`)}`;
+  return `yibiao-asset://generated-images/${encodeURIComponent(MERMAID_CACHE_DIR_NAME)}/${encodeURIComponent(`${hash}.png`)}?pixel-density=3`;
 }
 
 function getMermaidCacheEntry(app, code, options = {}) {

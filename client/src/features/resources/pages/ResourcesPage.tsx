@@ -1,7 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useState, type FormEvent } from 'react';
 import { trackResourceClick } from '../../../shared/analytics/analytics';
-import { MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
+import { EmptyState, MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../../../shared/ui';
 
 interface ResourceItem {
   id: string;
@@ -112,10 +112,7 @@ function ResourcesPage() {
               </button>
             ))}
             {!loading && resources.length === 0 ? (
-              <div className="resources-empty-state">
-                <strong>暂无资源</strong>
-                <span>{searchText.trim() ? '没有匹配当前关键词的资源。' : '资源管理后台还没有上架资源。'}</span>
-              </div>
+              <EmptyState title="暂无资源" hint={searchText.trim() ? '没有匹配当前关键词的资源。' : '资源管理后台还没有上架资源。'} />
             ) : null}
           </div>
         </section>

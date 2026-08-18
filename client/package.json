@@ -15,8 +15,8 @@
     "postinstall": "electron-builder install-app-deps",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "generate-build-attestation": "node scripts/generate-build-attestation.cjs",
-    "prepare-opencode-tools": "node scripts/prepare-opencode-tools.cjs",
-    "verify-opencode-tools": "node scripts/verify-opencode-tools.cjs",
+    "prepare-agent-tools": "node scripts/prepare-agent-tools.cjs",
+    "verify-agent-tools": "node scripts/verify-agent-tools.cjs",
     "smoke:electron-native": "electron scripts/electron-native-smoke.cjs",
     "start": "electron ."
   },
@@ -34,22 +34,6 @@
       "assets/**/*",
       "package.json"
     ],
-    "extraResources": [
-      {
-        "from": "vendor/opencode",
-        "to": "opencode",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "vendor/opencode-tools",
-        "to": "opencode-tools",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
     "publish": [
       {
         "provider": "github",
@@ -60,6 +44,15 @@
     ],
     "win": {
       "icon": "assets/icon.ico",
+      "extraResources": [
+        {
+          "from": "vendor/agent-tools/win32-${arch}",
+          "to": "agent-tools/win32-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
       "target": [
         {
           "target": "nsis",
@@ -90,6 +83,15 @@
       "icon": "assets/icon.icns",
       "identity": null,
       "category": "public.app-category.business",
+      "extraResources": [
+        {
+          "from": "vendor/agent-tools/darwin-${arch}",
+          "to": "agent-tools/darwin-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
       "target": [
         {
           "target": "dmg",
@@ -135,13 +137,16 @@
     "artifactName": "Yibiao-${version}-${os}-${arch}.${ext}"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "0.80.10",
+    "@earendil-works/pi-coding-agent": "0.80.10",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-popover": "^1.1.15",
     "@radix-ui/react-separator": "^1.1.7",
     "@radix-ui/react-switch": "^1.2.6",
     "@radix-ui/react-toast": "^1.2.15",
     "@radix-ui/react-tooltip": "^1.2.8",
-    "adm-zip": "^0.5.17",
+    "adm-zip": "^0.6.0",
+    "ajv": "^8.17.1",
     "better-sqlite3": "^12.10.0",
     "cfb": "^1.2.2",
     "chardet": "^2.1.1",
@@ -162,6 +167,7 @@
     "react-dom": "^19.1.1",
     "turndown": "^7.2.4",
     "turndown-plugin-gfm": "^1.0.2",
+    "typebox": "^1.1.38",
     "undici": "^7.25.0",
     "xlsx": "^0.18.5"
   },
@@ -174,7 +180,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.2.1",
     "cross-env": "^10.0.0",
-    "electron": "^41.5.0",
+    "electron": "^41.10.2",
     "electron-builder": "^26.8.1",
     "js-yaml": "^4.1.1",
     "typescript": "^5.9.2",

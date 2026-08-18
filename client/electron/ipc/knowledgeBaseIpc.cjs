@@ -1,8 +1,6 @@
 const { ipcMain } = require('electron');
 
 function registerKnowledgeBaseIpc({ knowledgeBaseService }) {
-  ipcMain.handle('knowledge-base:get-migration-status', () => knowledgeBaseService.getMigrationStatus());
-  ipcMain.handle('knowledge-base:migrate-legacy', () => knowledgeBaseService.migrateLegacy());
   ipcMain.handle('knowledge-base:list', (_event, type) => knowledgeBaseService.list(type));
   ipcMain.handle('knowledge-base:create-folder', (_event, name, type, parentId) => knowledgeBaseService.createFolder(name, type, parentId));
   ipcMain.handle('knowledge-base:rename-folder', (_event, folderId, name) => knowledgeBaseService.renameFolder(folderId, name));
@@ -13,6 +11,7 @@ function registerKnowledgeBaseIpc({ knowledgeBaseService }) {
   ipcMain.handle('knowledge-base:move-document', (_event, documentId, targetFolderId, targetDocumentId, position) => knowledgeBaseService.moveDocument(documentId, targetFolderId, targetDocumentId, position));
   ipcMain.handle('knowledge-base:upload-documents', (event, folderId) => knowledgeBaseService.uploadDocuments(folderId, event.sender));
   ipcMain.handle('knowledge-base:retry-document', (event, documentId) => knowledgeBaseService.retryDocument(documentId, event.sender));
+  // batchSize 已忽略，服务端按模型上下文自动分段匹配
   ipcMain.handle('knowledge-base:start-matching', (event, documentId, batchSize) => knowledgeBaseService.startMatching(documentId, batchSize, event.sender));
   ipcMain.handle('knowledge-base:read-markdown', (_event, documentId) => knowledgeBaseService.readMarkdown(documentId));
   ipcMain.handle('knowledge-base:read-items', (_event, documentId) => knowledgeBaseService.readItems(documentId));

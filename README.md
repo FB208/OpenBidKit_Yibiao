@@ -20,6 +20,13 @@
   </a>
 </p>
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/45446?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-45446" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/45446" alt="FB208%2FOpenBidKit_Yibiao | Trendshift" width="250" height="55"></a>
+  <a href="https://trendshift.io/repositories/45446?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-45446" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/45446/daily?language=JavaScript&amp;v=20260720" alt="FB208%2FOpenBidKit_Yibiao | Trendshift" width="250" height="55"></a>
+  <a href="https://trendshift.io/repositories/45446?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-45446" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/45446/weekly?language=JavaScript" alt="FB208%2FOpenBidKit_Yibiao | Trendshift" width="250" height="55"></a>
+  <a href="https://atomgit.com/FB208/OpenBidKit_Yibiao"><img alt="AtomGit G-Star" src="https://atomgit.com/FB208/OpenBidKit_Yibiao/star/new_badge.svg"></a>
+</p>
+
 
 <p align="left">
   <strong>🚀 开箱即用-开源免费AI标书编写工具</strong>
@@ -85,7 +92,7 @@
     </td>
     <td width="33%" valign="top">
       <strong>⚙️ 自定义AI配置</strong><br>
-      支持文本模型、生图模型和文件解析方式配置，适配团队习惯。
+      支持文本模型、生图模型、文件解析方式配置，并由 Pi Agent 处理智能体任务。
     </td>
     <td width="33%" valign="top">
       <strong>✏️ 可编辑工作流</strong><br>
@@ -114,48 +121,25 @@
 
 本仓库根目录没有 `package.json`，桌面客户端代码在 `client/`，开发命令都需要在 `client/` 目录下执行。
 
-本地开发调试 OpenCode Agent 相关能力前，需要先准备当前平台的 OpenCode binary。否则开发者测试页会报错：`OpenCode binary 不存在`。
-
-Windows x64：
+客户端统一使用 Pi Agent，SDK 随 `npm ci` 安装。Pi 使用的 `rg`、`fd`、`jq` 已按 Windows x64、macOS Apple Silicon 和 macOS Intel 分别保存在仓库中，日常开发和打包无需下载工具。三个平台的开发命令一致：
 
 ```powershell
 cd client
 npm ci
-$env:OPENCODE_VERSION="v1.17.8"
-node scripts/prepare-opencode-binary.cjs --platform win32 --arch x64
-node scripts/verify-opencode-binary.cjs --platform win32 --arch x64
 npm run dev
 ```
 
-macOS Apple Silicon：
+普通用户下载 GitHub Release 安装包后不需要额外准备；发布流程只校验仓库中对应平台的工具，并将该平台目录注入安装包。
 
-```bash
-cd client
-npm ci
-export OPENCODE_VERSION="v1.17.8"
-node scripts/prepare-opencode-binary.cjs --platform darwin --arch arm64
-node scripts/verify-opencode-binary.cjs --platform darwin --arch arm64
-npm run dev
+升级内置命令工具时，维护者在 `client/` 目录按目标平台执行：
+
+```powershell
+node scripts/prepare-agent-tools.cjs --platform win32 --arch x64
+node scripts/prepare-agent-tools.cjs --platform darwin --arch x64
+node scripts/prepare-agent-tools.cjs --platform darwin --arch arm64
 ```
 
-macOS Intel：
-
-```bash
-cd client
-npm ci
-export OPENCODE_VERSION="v1.17.8"
-node scripts/prepare-opencode-binary.cjs --platform darwin --arch x64
-node scripts/verify-opencode-binary.cjs --platform darwin --arch x64
-npm run dev
-```
-
-如果你已经有可用的 OpenCode binary，也可以通过环境变量指定路径：
-
-```bash
-YIBIAO_OPENCODE_BIN=/absolute/path/to/opencode npm run dev
-```
-
-普通用户下载 GitHub Release 安装包后不需要执行这些脚本；发布流程会在 GitHub Actions 中自动下载并注入对应平台的 OpenCode binary。本地手动打包前也需要先执行对应平台的 `prepare-opencode-binary.cjs` 和 `verify-opencode-binary.cjs`。
+脚本每次只替换指定平台目录，其他平台资源保持不变；完成三套资源升级后统一提交。
 
 常规构建验证：
 
@@ -166,7 +150,7 @@ npm run build
 
 ### Windows 本地打包
 
-完成上述 Windows OpenCode binary 准备和依赖安装后，在 `client/` 目录执行：
+完成依赖安装后，在 `client/` 目录执行：
 
 ```powershell
 npm run dist:win
@@ -181,6 +165,7 @@ npm run dist:win
 - **桌面端**：Electron Main / Preload 提供本地文件、配置、导出和后台任务能力
 - **界面层**：Vite + React + TypeScript，使用全局 CSS 和 Radix UI 基础组件
 - **业务模块**：技术方案、知识库、标书查重、废标项检查、设置页
+- **智能体运行时**：Pi Agent 使用文本模型配置、独立 AI Proxy、命令工具环境和全局串行队列
 - **本地数据**：配置、工作区、生成缓存保存在 Electron `userData` 目录
 - **打包发布**：使用 electron-builder 构建 Windows / macOS 客户端
 
@@ -262,6 +247,9 @@ npm run dist:win
 <p align="center">刘梦</p>
     </td>
     <td width="20%" valign="top">
+    
+![](https://oss.agnet.top/keep/2026/07/23/20260723095939267.png)
+<p align="center">cc</p>
     </td>
     <td width="20%" valign="top">
     </td>
@@ -299,9 +287,9 @@ npm run dist:win
 
 <a href="https://www.star-history.com/?repos=FB208%2FOpenBidKit_Yibiao&type=timeline&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="assets/star-history/star-history-dark.svg" />
+   <source media="(prefers-color-scheme: light)" srcset="assets/star-history/star-history-light.svg" />
+   <img alt="Star History Chart" src="assets/star-history/star-history-light.svg" />
  </picture>
 </a>
 

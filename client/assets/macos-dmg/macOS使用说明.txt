@@ -12,12 +12,12 @@ macOS 未签名版本安装说明
 3. 再从“应用程序”中打开“易标投标工具箱”。
 
 说明：
-- 这个命令会递归处理整个 .app，包括内置的 OpenCode Agent 可执行文件。
-- OpenCode Agent 已内置，不需要用户安装系统级 OpenCode。
+- 这个命令会递归处理整个 .app，包括 Pi Agent 使用的内置命令工具。
+- Pi Agent 已内置，不需要用户额外安装智能体运行时。
 - 正常情况下不需要手动 chmod，程序包已经在构建阶段设置好可执行权限。
-- 如果开启开发者模式后运行 OpenCode Agent 测试页，提示 spawn EACCES，再执行下面命令排查：
+- 如果开启开发者模式后运行 Pi Agent 链路测试页，提示 spawn EACCES，再按机器架构执行对应命令排查：
 
-  chmod +x "/Applications/易标投标工具箱.app/Contents/Resources/opencode/darwin-arm64/opencode"
-  chmod +x "/Applications/易标投标工具箱.app/Contents/Resources/opencode/darwin-x64/opencode"
+  chmod +x "/Applications/易标投标工具箱.app/Contents/Resources/agent-tools/darwin-arm64/bin/"*
+  chmod +x "/Applications/易标投标工具箱.app/Contents/Resources/agent-tools/darwin-x64/bin/"*
 
   Apple Silicon 机器通常使用 darwin-arm64；Intel 机器通常使用 darwin-x64。

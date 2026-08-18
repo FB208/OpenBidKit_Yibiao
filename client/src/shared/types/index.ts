@@ -4,6 +4,7 @@ export type {
   DuplicateAnalysisStatus,
   DuplicateCheckStep,
   DuplicateCheckTaskState,
+  DuplicateCheckWorkspacePatch,
   DuplicateCheckWorkspaceState,
   DuplicateContentAnalysisState,
   DuplicateContentExtractionItem,
@@ -43,6 +44,8 @@ export type {
   ImageModelSize,
   ImageModelStatus,
   LegacyTextModelProvider,
+  ModelInfoCacheEntry,
+  ModelInfoResult,
   ModelListResult,
   TextModelConfig,
   TextModelProvider,
@@ -78,8 +81,9 @@ export {
   DEFAULT_EXPORT_FORMAT,
   HEADING_LEVEL_LABELS,
 } from './exportFormat';
-export type { OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, TechnicalRequirementGroup } from './outline';
-export type { AgentIsolationCheckResult, AgentRetryAttempt, AgentRunFile, AgentRunPayload, AgentRunResult, AgentRuntimeActiveTask, AgentRuntimePhase, AgentRuntimeStatus, AgentSelfCheckDiagnostics, AgentSelfCheckReportExportResult, AgentSelfCheckResult, AgentSelfCheckStatus, AgentSelfCheckStep, AgentSelfCheckStepStatus, AgentToolCheckResult, AgentToolCheckStatus, GpuHardwareAccelerationStatus, LatestReleaseInfo, LicenseOfflineActivationResult, LicenseRuntimeStatus, UpdateCheckResult, WordExportProgressEvent, WordExportResult, WorkspaceDatabasePhase, WorkspaceDatabaseStatus, YibiaoBridge } from './ipc';
+export type { OutlineContentMode, OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, OutlineWordControlOptions } from './outline';
+export { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS, OUTLINE_CONTENT_MODE_LABELS } from './outline';
+export type { AgentDiagnosticSection, AgentMonitorEvent, AgentMonitorEventType, AgentMonitorSnapshot, AgentQuestion, AgentQuestionAnswerPayload, AgentQuestionAnswerResult, AgentQuestionOption, AgentRetryAttempt, AgentRunFile, AgentRunPayload, AgentRunResult, AgentRuntimeActiveTask, AgentRuntimePhase, AgentRuntimeStatus, AgentSelfCheckReportExportResult, AgentSelfCheckResult, AgentSelfCheckStatus, AgentSelfCheckStep, AgentSelfCheckStepStatus, AutoConfirmationState, GpuHardwareAccelerationStatus, LatestReleaseInfo, LicenseOfflineActivationResult, LicenseRuntimeStatus, UpdateCheckResult, WordExportProgressEvent, WordExportResult, WorkspaceDatabasePhase, WorkspaceDatabaseStatus, YibiaoBridge } from './ipc';
 export type {
   RejectionCheckFinding,
   RejectionCheckResultState,

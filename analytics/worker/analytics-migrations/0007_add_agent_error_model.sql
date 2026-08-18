@@ -1,0 +1,1 @@
+ALTER TABLE agent_error_logs ADD COLUMN model TEXT NOT NULL DEFAULT '';

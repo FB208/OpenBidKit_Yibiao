@@ -55,8 +55,12 @@ function buildIllustrationPlanningContext({ outlineData, sections, options, aiIm
       const description = String(item?.description || '').trim();
       const children = Array.isArray(item?.children) ? item.children : [];
       const isLeaf = children.length === 0;
-      const content = isLeaf ? resolveSectionContent(item, sections) : '';
-      const eligible = Boolean(isLeaf && content && sections?.[id]?.status !== 'error');
+      const content = isLeaf && item?.content_mode === 'ai-generate' && sections?.[id]?.status === 'success'
+        ? resolveSectionContent(item, sections)
+        : '';
+      const eligible = Boolean(isLeaf
+        && content
+        && sections?.[id]?.status === 'success');
       const order = eligibleSectionIds.length;
 
       markdownLines.push(`${'#'.repeat(Math.min(depth + 1, 6))} ${id} ${title}`.trim());

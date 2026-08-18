@@ -156,22 +156,25 @@ function formatSize(bytes) {
 }
 
 function buildReleaseBody({ githubRelease, assets }) {
-  const lines = [
-    '## 下载地址',
-    '',
-    '安装包和自动更新包托管在 Cloudflare R2，Gitee Release 不直接上传文件。',
-    '',
-    '| 平台 | 类型 | 文件 | 大小 | 下载 |',
-    '| --- | --- | --- | --- | --- |',
-  ];
+  const lines = [];
+  if (assets.length > 0) {
+    lines.push(
+      '## 下载地址',
+      '',
+      '安装包和自动更新包托管在 Cloudflare R2，Gitee Release 不直接上传文件。',
+      '',
+      '| 平台 | 类型 | 文件 | 大小 | 下载 |',
+      '| --- | --- | --- | --- | --- |',
+    );
 
-  for (const asset of assets) {
-    lines.push(`| ${asset.platform} | ${asset.kind} | ${asset.name} | ${formatSize(asset.size)} | [下载](${asset.url}) |`);
-  }
+    for (const asset of assets) {
+      lines.push(`| ${asset.platform} | ${asset.kind} | ${asset.name} | ${formatSize(asset.size)} | [下载](${asset.url}) |`);
+    }
 
-  lines.push('', '## SHA256', '', '| 文件 | SHA256 |', '| --- | --- |');
-  for (const asset of assets) {
-    lines.push(`| ${asset.name} | \`${asset.sha256}\` |`);
+    lines.push('', '## SHA256', '', '| 文件 | SHA256 |', '| --- | --- |');
+    for (const asset of assets) {
+      lines.push(`| ${asset.name} | \`${asset.sha256}\` |`);
+    }
   }
 
   const githubBody = String(githubRelease.body || '').trim();
@@ -335,17 +338,20 @@ async function main() {
   const owner = requireEnv('GITEE_OWNER');
   const repo = requireEnv('GITEE_REPO');
   const tagName = requireEnv('TAG_NAME');
-  const assetsDir = requireEnv('RELEASE_ASSETS_DIR');
   const releaseJsonPath = requireEnv('GITHUB_RELEASE_JSON');
-  const publicBaseUrl = normalizePublicBaseUrl(requireEnv('R2_PUBLIC_BASE_URL'));
-  const prefix = normalizePrefix(optionalEnv('R2_RELEASE_PREFIX', DEFAULT_R2_RELEASE_PREFIX));
 
   const githubRelease = await readGithubRelease(releaseJsonPath, tagName);
-  const assetFiles = await listDownloadFiles(assetsDir);
-  const assets = await buildDownloadAssets({ assetFiles, publicBaseUrl, prefix });
+  const prerelease = Boolean(githubRelease.isPrerelease || githubRelease.prerelease);
+  let assets = [];
+  if (!prerelease) {
+    const assetsDir = requireEnv('RELEASE_ASSETS_DIR');
+    const publicBaseUrl = normalizePublicBaseUrl(requireEnv('R2_PUBLIC_BASE_URL'));
+    const prefix = normalizePrefix(optionalEnv('R2_RELEASE_PREFIX', DEFAULT_R2_RELEASE_PREFIX));
+    const assetFiles = await listDownloadFiles(assetsDir);
+    assets = await buildDownloadAssets({ assetFiles, publicBaseUrl, prefix });
+  }
   const releaseName = String(githubRelease.name || githubRelease.tagName || tagName);
   const releaseBody = buildReleaseBody({ githubRelease, assets });
-  const prerelease = Boolean(githubRelease.isPrerelease || githubRelease.prerelease);
 
   await waitForGiteeTag({ owner, repo, token, tagName });
   await publishGiteeRelease({

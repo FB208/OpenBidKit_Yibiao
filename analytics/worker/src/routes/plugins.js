@@ -1,0 +1,158 @@
+import { corsHeaders, json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
+import {
+  deletePlugin,
+  incrementPluginDownload,
+  listAdminPlugins,
+  listPublicPlugins,
+  normalizePluginRow,
+  readPlugin,
+  syncAllPlugins,
+  upsertPlugin,
+} from '../services/pluginStore.js';
+import { normalizeText } from '../utils.js';
+
+export async function handlePublicPlugins(request, env, url) {
+  if (request.method !== 'GET') {
+    return methodNotAllowed();
+  }
+
+  try {
+    const plugins = await listPublicPlugins(env, {
+      query: url.searchParams.get('q') || url.searchParams.get('query') || '',
+    });
+    return json({ code: 0, plugins }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    console.error('[analytics] public plugins failed', error?.message || String(error));
+    return json({ code: 500, message: error?.message || 'plugins query failed' }, { status: 500 });
+  }
+}
+
+/** 记录客户端成功完成的插件下载 */
+export async function handlePublicPluginDownload(request, env) {
+  if (request.method !== 'POST') {
+    return methodNotAllowed();
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ code: 400, message: 'invalid JSON body' }, { status: 400 });
+  }
+
+  const id = normalizeText(body.id, 80);
+  if (!id) {
+    return json({ code: 400, message: 'missing id' }, { status: 400 });
+  }
+
+  try {
+    const change = await incrementPluginDownload(env, id);
+    if (!change) {
+      return json({ code: 404, message: 'plugin not found' }, { status: 404 });
+    }
+    return json({ code: 0, downloadCount: change.downloadCount });
+  } catch (error) {
+    console.error('[analytics] record plugin download failed', error?.message || String(error));
+    return json({ code: 500, message: 'plugin download record failed' }, { status: 500 });
+  }
+}
+
+/** 由管理后台显式同步全部插件的最新正式 Release */
+export async function handleAdminPluginSync(request, env) {
+  if (!requireAdmin(request, env)) {
+    return unauthorized();
+  }
+
+  if (request.method !== 'POST') {
+    return methodNotAllowed();
+  }
+
+  if (!env.RESOURCE_DB) {
+    return json({ code: 500, message: 'RESOURCE_DB is not configured' }, { status: 500 });
+  }
+
+  try {
+    const result = await syncAllPlugins(env);
+    return json({
+      code: 0,
+      totalCount: result.totalCount,
+      syncedCount: result.syncedCount,
+      failedCount: result.failedCount,
+      failures: result.failures,
+      cleanupDeletedCount: result.cleanupDeletedCount,
+      cleanupError: result.cleanupError,
+    }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    console.error('[analytics] admin sync plugins failed', error?.message || String(error));
+    return json({ code: 500, message: error?.message || 'plugins sync failed' }, { status: 500 });
+  }
+}
+export async function handleAdminPlugins(request, env, url) {
+  if (!requireAdmin(request, env)) {
+    return unauthorized();
+  }
+
+  if (!env.RESOURCE_DB) {
+    return json({ code: 500, message: 'RESOURCE_DB is not configured' }, { status: 500 });
+  }
+
+  if (request.method === 'GET') {
+    return handleAdminGetPlugins(env);
+  }
+
+  if (request.method === 'POST') {
+    return handleAdminSavePlugin(request, env);
+  }
+
+  if (request.method === 'DELETE') {
+    return handleAdminDeletePlugin(env, url);
+  }
+
+  return methodNotAllowed();
+}
+
+async function handleAdminGetPlugins(env) {
+  try {
+    const plugins = await listAdminPlugins(env);
+    return json({ code: 0, plugins }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    console.error('[analytics] admin get plugins failed', error?.message || String(error));
+    return json({ code: 500, message: error?.message || 'plugins query failed' }, { status: 500 });
+  }
+}
+
+async function handleAdminSavePlugin(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ code: 400, message: 'invalid JSON body' }, { status: 400 });
+  }
+
+  try {
+    const plugin = await upsertPlugin(env, body);
+    return json({ code: 0, plugin });
+  } catch (error) {
+    console.error('[analytics] save plugin failed', error?.message || String(error));
+    const status = Number(error?.statusCode) || 500;
+    return json({ code: status, message: error?.message || 'plugin save failed' }, { status });
+  }
+}
+
+async function handleAdminDeletePlugin(env, url) {
+  const id = normalizeText(url.searchParams.get('id'), 120);
+  if (!id) {
+    return json({ code: 400, message: 'missing id' }, { status: 400 });
+  }
+
+  try {
+    const deleted = await deletePlugin(env, id);
+    if (!deleted) {
+      return json({ code: 404, message: 'plugin not found' }, { status: 404 });
+    }
+    return json({ code: 0, plugin: null });
+  } catch (error) {
+    console.error('[analytics] delete plugin failed', error?.message || String(error));
+    return json({ code: 500, message: error?.message || 'plugin delete failed' }, { status: 500 });
+  }
+}

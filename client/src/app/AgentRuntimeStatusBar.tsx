@@ -60,13 +60,16 @@ function AgentRuntimeStatusBar() {
 
   const activeTask = status?.active_task || null;
   const queuedCount = status?.queued_count || 0;
-  const title = activeTask?.title || (queuedCount ? 'Agent 任务排队中' : phaseLabels[status?.phase || ''] || 'Agent 状态');
+  const runtimeName = status?.runtime_name || '智能体';
+  const title = activeTask?.title
+    ? `${runtimeName} · ${activeTask.title}`
+    : queuedCount ? `${runtimeName} 任务排队中` : `${runtimeName} · ${phaseLabels[status?.phase || ''] || '运行状态'}`;
   const message = activeTask?.progress_text || (queuedCount ? '已有 Agent 任务等待执行' : status?.message || '等待 Agent 真实进度');
   const elapsedText = activeTask ? `已运行 ${activeTask.elapsed_seconds}s` : '';
   const idleText = activeTask ? `空闲 ${activeTask.idle_seconds}s` : '';
-  const queueText = queuedCount ? `Agent 排队 ${queuedCount} 个` : '';
+  const queueText = queuedCount ? `全局排队 ${queuedCount} 个` : '';
   const proxyText = status?.proxy ? `模型队列 ${status.proxy.active}/${status.proxy.queued}/${status.proxy.limit}` : '';
-  const warningText = status?.last_health_error || (status?.restart_pending ? '配置已变更，Agent 空闲后会自动重启' : '');
+  const warningText = status?.last_health_error || (status?.restart_pending ? `${runtimeName} 将在空闲后自动重启` : '');
 
   return (
     <div className={`agent-runtime-status-bar is-${getTone(status as AgentRuntimeStatus)}`} role="status" aria-live="polite">

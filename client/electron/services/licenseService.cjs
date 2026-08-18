@@ -600,6 +600,10 @@ function createLicenseService({ app, configStore }) {
     getBuildAttestation() {
       return readBuildAttestation();
     },
+    getLicenseEnvelope() {
+      const envelope = normalizeLicenseEnvelope(readJsonFile(licenseFile));
+      return envelope ? { payload: envelope.payload, signature: envelope.signature } : null;
+    },
     getStatus() {
       return evaluateLocalLicense();
     },

@@ -5,7 +5,7 @@ import BidOpportunityPage from '../features/bid-opportunity/pages/BidOpportunity
 import BusinessBidHome from '../features/business-bid/pages/BusinessBidHome';
 import ContentExpansionReplaceTestPage from '../features/developer/pages/ContentExpansionReplaceTestPage';
 import DeveloperDemoPage, { isDeveloperDemoSection } from '../features/developer/pages/DeveloperDemoPage';
-import OpenCodeAgentTestPage from '../features/developer/pages/OpenCodeAgentTestPage';
+import AgentTestPage from '../features/developer/pages/AgentTestPage';
 import DeveloperTestPage from '../features/developer/pages/DeveloperTestPage';
 import ExportFormatPage from '../features/export-format/pages/ExportFormatPage';
 import MyTemplatesPage from '../features/export-format/pages/MyTemplatesPage';
@@ -14,6 +14,7 @@ import KnowledgeBasePage from '../features/knowledge-base/pages/KnowledgeBasePag
 import ImageKnowledgeBasePage from '../features/knowledge-base/pages/ImageKnowledgeBasePage';
 import RejectionCheckPage from '../features/rejection-check/pages/RejectionCheckPage';
 import ResourcesPage from '../features/resources/pages/ResourcesPage';
+import PluginsPage from '../features/plugins/pages/PluginsPage';
 import SettingsPage from '../features/settings/pages/SettingsPage';
 import TechnicalPlanHome from '../features/technical-plan/pages/TechnicalPlanHome';
 import SecondaryMenuPage from '../shared/ui/SecondaryMenuPage';
@@ -57,6 +58,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <ImageKnowledgeBasePage onSectionChange={onSectionChange} />;
     case 'resources':
       return <ResourcesPage />;
+    case 'plugin-manager':
+      return <PluginsPage />;
     case 'duplicate-check':
       return <DuplicateCheckPage />;
     case 'rejection-check':
@@ -77,8 +80,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <DeveloperTestPage />;
     case 'developer-expansion-replace-test':
       return <ContentExpansionReplaceTestPage />;
-    case 'developer-opencode-agent-test':
-      return <OpenCodeAgentTestPage />;
+    case 'developer-agent-test':
+      return <AgentTestPage />;
     case 'settings':
       return <SettingsPage onDeveloperModeChange={onDeveloperModeChange} />;
     default:
