@@ -1467,12 +1467,16 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       return startManagedTask('duplicate-analysis', payload, duplicateCheckService.runAnalysisTask);
     },
     confirmOutlineSelection(payload) {
-      const control = activeTaskControls.get('outline-generation');
+      const { taskId } = payload || {};
+      const type = taskId && String(taskId).startsWith('business-') ? 'business-outline-generation' : 'outline-generation';
+      const control = activeTaskControls.get(type);
       if (!control?.confirmOutlineSelection) throw new Error('当前没有等待确认的一级目录任务');
       return control.confirmOutlineSelection(payload);
     },
     suppressOutlineSelectionAutoConfirmation(payload) {
-      const control = activeTaskControls.get('outline-generation');
+      const { taskId } = payload || {};
+      const type = taskId && String(taskId).startsWith('business-') ? 'business-outline-generation' : 'outline-generation';
+      const control = activeTaskControls.get(type);
       if (!control?.suppressOutlineSelectionAutoConfirmation) return { success: true };
       return control.suppressOutlineSelectionAutoConfirmation(payload);
     },
