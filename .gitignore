@@ -285,3 +285,5 @@ scripts/wecom_chat_export/*.db
 scripts/wecom_chat_export/*.db-wal
 scripts/wecom_chat_export/*.db-shm
 scripts/
+
+client/vendor/opencode/win32-x64/opencode.exe
