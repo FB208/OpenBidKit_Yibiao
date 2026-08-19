@@ -81,6 +81,81 @@ const OUTLINE_PAGE_COPY: Record<'technical' | 'business', OutlinePageCopy> = {
     emptyHint: '先完成商务条款解析，再生成商务标目录。',
   },
 };
+const contentModeOptions = Object.keys(OUTLINE_CONTENT_MODE_LABELS) as OutlineContentMode[];
+const outlineExpansionModeOptions: Array<{ value: OutlineExpansionMode; title: string; description: string }> = [
+  {
+    value: 'original-only',
+    title: outlineExpansionModeLabels['original-only'],
+    description: '提取并补漏原方案目录后直接作为新目录；知识库不参与目录补充，但会用于后续全局事实和正文生成。',
+  },
+  {
+    value: 'ai-complement',
+    title: outlineExpansionModeLabels['ai-complement'],
+    description: '保留原方案一级目录，在其基础上补充招标评分项缺口，并可继续使用知识库增强。',
+  },
+];
+
+const WORD_COUNT_INPUT_UNIT = 10000;
+
+function parseWordCountDraft(value: string) {
+  if (!value) return 0;
+  if (!/^\d*(?:\.\d{0,4})?$/.test(value)) return null;
+  const number = Number(value);
+  const words = Math.round(number * WORD_COUNT_INPUT_UNIT);
+  return Number.isSafeInteger(words) && words >= 0 ? words : null;
+}
+
+function formatWordCountDraft(words: number) {
+  return String(Math.max(0, Math.round(Number(words) || 0)) / WORD_COUNT_INPUT_UNIT);
+}
+
+function normalizeWordControlDraft(values: {
+  minimumWords: string;
+  maximumWords: string;
+  sectionWords: string;
+  strictSectionWords: boolean;
+}) {
+  const minimumWords = parseWordCountDraft(values.minimumWords);
+  const maximumWords = parseWordCountDraft(values.maximumWords);
+  const sectionWords = parseWordCountDraft(values.sectionWords);
+  if (minimumWords === null || maximumWords === null || sectionWords === null) {
+    throw new Error('字数设置只允许填写非负整数');
+  }
+  const options: OutlineWordControlOptions = {
+    minimumWords,
+    maximumWords,
+    sectionWords,
+    strictSectionWords: sectionWords > 0 && values.strictSectionWords,
+  };
+  if (minimumWords > 0 && maximumWords > 0 && maximumWords < minimumWords) {
+    throw new Error('最多字数不能低于最少字数');
+  }
+  const effectiveSectionWords = sectionWords > 0 ? sectionWords : 3000;
+  const minimumLeafCount = minimumWords > 0 ? Math.ceil(minimumWords / effectiveSectionWords) : null;
+  const maximumLeafCount = maximumWords > 0 ? Math.floor(maximumWords / effectiveSectionWords) : null;
+  if (maximumLeafCount !== null && maximumLeafCount < 1) {
+    throw new Error('当前最多字数无法形成有效叶子节点范围，请调整最多字数或每小节字数');
+  }
+  if (minimumLeafCount !== null && maximumLeafCount !== null && minimumLeafCount > maximumLeafCount) {
+    throw new Error('当前设置无法形成有效叶子节点范围，请调整最少字数、最多字数或每小节字数');
+  }
+  return options;
+}
+
+function getEstimatedPages(minimumWords: number, maximumWords: number) {
+  const baseWords = minimumWords > 0 && maximumWords > 0
+    ? (minimumWords + maximumWords) / 2
+    : minimumWords || maximumWords;
+  return baseWords > 0 ? Math.ceil(baseWords / 650) : null;
+}
+
+function areWordControlOptionsEqual(left?: OutlineWordControlOptions, right?: OutlineWordControlOptions) {
+  return Boolean(left && right
+    && left.minimumWords === right.minimumWords
+    && left.maximumWords === right.maximumWords
+    && left.sectionWords === right.sectionWords
+    && left.strictSectionWords === right.strictSectionWords);
+}
 
 const emptyKnowledgeIndex: KnowledgeBaseIndex = { folders: [], documents: [] };
 const outlineExpansionModeLabels: Record<OutlineExpansionMode, string> = {

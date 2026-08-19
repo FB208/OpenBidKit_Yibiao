@@ -2159,7 +2159,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       for (const document of documentsToDelete) {
         deleteImportedImageBatches(app, `knowledge-${document.id}`);
         fs.rmSync(fromRelative(baseDir, document.document_dir), { recursive: true, force: true });
-        fs.rmSync(getDebugLogPath(app, document.id), { force: true });
+        enqueueLogRemoval(getDebugLogPath(app, document.id));
       }
       // 删除所有相关文件夹的文件系统目录和图片
       for (const descendantId of descendantIds) {
@@ -2229,6 +2229,57 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       try {
         const movedDocument = knowledgeBaseStore.moveDocument(documentId, targetFolderId, moveOptions);
         return { success: true, message: `已移动文档"${document.file_name}"`, document: movedDocument };
+      } catch (error) {
+        if (oldDir && newDir && fs.existsSync(newDir) && !fs.existsSync(oldDir)) {
+          try {
+            fs.renameSync(newDir, oldDir);
+          } catch {
+            // 回滚失败时保留原始错误，避免掩盖数据库更新问题。
+          }
+        }
+        throw error;
+      }
+    },
+
+    moveDocument(documentId, targetFolderId, targetDocumentId, position) {
+      const document = getDocument(documentId);
+      if (activePreparations.has(documentId) || activeMatches.has(documentId)) {
+        throw new Error('该文档正在处理中，请完成后再移动');
+      }
+      if (!['ready_for_matching', 'success', 'error'].includes(document.status)) {
+        throw new Error('该文档正在处理中，请完成后再移动');
+      }
+
+      const index = knowledgeBaseStore.list();
+      const targetFolder = index.folders.find((folder) => folder.id === targetFolderId);
+      if (!targetFolder) throw new Error('目标知识库文件夹不存在');
+
+      let moveOptions = { targetDocumentId, position };
+      let oldDir = '';
+      let newDir = '';
+      if (document.folder_id !== targetFolderId) {
+        const newDocumentDir = path.join('folders', targetFolderId, 'documents', documentId).replace(/\\/g, '/');
+        oldDir = fromRelative(baseDir, document.document_dir);
+        newDir = fromRelative(baseDir, newDocumentDir);
+        if (!fs.existsSync(oldDir)) {
+          throw new Error('文档文件不存在，无法移动');
+        }
+        if (fs.existsSync(newDir)) {
+          throw new Error('目标文件夹中已存在同名文档目录，无法移动');
+        }
+        ensureDir(path.dirname(newDir));
+        fs.renameSync(oldDir, newDir);
+        moveOptions = {
+          ...moveOptions,
+          documentDir: newDocumentDir,
+          sourcePath: rebaseDocumentRelativePath(document.source_path, document.document_dir, newDocumentDir),
+          markdownPath: rebaseDocumentRelativePath(document.markdown_path, document.document_dir, newDocumentDir),
+        };
+      }
+
+      try {
+        const movedDocument = knowledgeBaseStore.moveDocument(documentId, targetFolderId, moveOptions);
+        return { success: true, message: `已移动文档“${document.file_name}”`, document: movedDocument };
       } catch (error) {
         if (oldDir && newDir && fs.existsSync(newDir) && !fs.existsSync(oldDir)) {
           try {

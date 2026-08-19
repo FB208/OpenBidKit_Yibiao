@@ -2114,11 +2114,11 @@ function normalizeReferenceItemIds(storedPlan) {
 function loadContentKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, itemIds, log) {
   if (!documentIds.length && !snippetIds.length && !itemIds.length) {
     log('本次正文编排未选择参考知识库。');
-    return [];
+    return { items: [], contentMap: new Map() };
   }
   if (!knowledgeBaseService?.readReferences) {
     log('未找到知识库读取服务，正文编排不使用知识库。');
-    return [];
+    return { items: [], contentMap: new Map() };
   }
 
   const items = [];
@@ -2217,12 +2217,13 @@ function loadContentKnowledgeContentMap(knowledgeBaseService, documentIds, snipp
     } catch (error) {
       log(`读取知识库片段正文素材失败，已跳过：${error.message || String(error)}`);
     }
+    log(items.length ? `正文编排已读取 ${items.length} 条知识库轻量条目。` : '未读取到可用知识库轻量条目，正文编排不使用知识库。');
+    if (contentMap.size) log(`正文生成可用知识库正文素材 ${contentMap.size} 条。`);
+    return { items, contentMap };
+  } catch (error) {
+    log(`读取正文编排参考知识库失败，已跳过：${error.message || String(error)}`);
+    return { items: [], contentMap: new Map() };
   }
-
-  if (map.size) {
-    log(`正文生成可用知识库正文素材 ${map.size} 条。`);
-  }
-  return map;
 }
 
 function resolveKnowledgeContents(itemIds, knowledgeContentMap) {
