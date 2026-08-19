@@ -283,7 +283,6 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const templateStore = createTemplateStore({ db: sqliteDatabase.db });
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
   const businessBidStore = createBusinessBidStore({ app, fileService, technicalPlanStore, knowledgeBaseService });
-  const feasibilityReportStore = createFeasibilityReportStore({ app, technicalPlanStore, fileService });
   const taskService = createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService, businessBidStore, feasibilityReportStore });
   const agentWorkspaceService = createAgentWorkspaceService({ agentService, taskService, technicalPlanStore, feasibilityReportStore });
   agentWorkspaceServiceRef = agentWorkspaceService;

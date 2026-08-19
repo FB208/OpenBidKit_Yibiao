@@ -595,6 +595,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       'humanWritingTask',
     ]);
     return { feasibilityReportPatch: patch };
+  }
 
   function buildSnapshot(definition, state, task, eventPatch) {
     if (definition.stateKey === 'technicalPlan') {
