@@ -26,6 +26,8 @@ interface OutlineEditPageProps {
   task?: BackgroundTaskState;
   contentTaskStatus?: BackgroundTaskState['status'];
   aiAdjustmentRunning?: boolean;
+  kind?: 'technical' | 'business';
+  hasClauseItems?: boolean;
   onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; outlineMode: OutlineMode; referenceKnowledgeSnippetIds?: string[]; referenceKnowledgeItemIds?: string[]; outlineExpansionMode: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<void>;
   onOutlineSaved: (request: SaveOutlineRequest) => Promise<void>;
   onOutlineSelectionSaved: (request: SaveOutlineSelectionRequest) => Promise<void>;
@@ -54,6 +56,31 @@ interface DropTargetState {
   position: 'before' | 'after';
   valid: boolean;
 }
+
+interface OutlinePageCopy {
+  kicker: string;
+  title: string;
+  description: string;
+  emptyTitle: string;
+  emptyHint: string;
+}
+
+const OUTLINE_PAGE_COPY: Record<'technical' | 'business', OutlinePageCopy> = {
+  technical: {
+    kicker: 'STEP 03',
+    title: '技术方案目录生成',
+    description: '基于响应文件与参考知识库，生成章节结构、字数与展开模式可调的技术方案目录。',
+    emptyTitle: '尚未生成目录',
+    emptyHint: '先完成招标文件解析，再生成技术方案目录。',
+  },
+  business: {
+    kicker: 'STEP 03',
+    title: '商务标目录生成',
+    description: '基于商务响应矩阵与参考知识库，生成投标函、响应表、报价、偏离表、资信材料等结构。',
+    emptyTitle: '尚未生成目录',
+    emptyHint: '先完成商务条款解析，再生成商务标目录。',
+  },
+};
 
 const emptyKnowledgeIndex: KnowledgeBaseIndex = { folders: [], documents: [] };
 const outlineExpansionModeLabels: Record<OutlineExpansionMode, string> = {
@@ -334,6 +361,8 @@ function OutlineEditPage({
   task,
   contentTaskStatus,
   aiAdjustmentRunning = false,
+  kind = 'technical',
+  hasClauseItems = false,
   onOutlineConfigChange,
   onOutlineSaved,
   onOutlineSelectionSaved,
@@ -431,6 +460,10 @@ function OutlineEditPage({
     strictSectionWords: parsedDraftSectionWords > 0 && draftStrictSectionWords,
   };
   const wordControlRequiresRegeneration = Boolean(outlineData && !areWordControlOptionsEqual(normalizedDraftOptions, outlineWordControlSnapshot));
+
+  const copy = OUTLINE_PAGE_COPY[kind];
+  const isBusiness = kind === 'business';
+  const hasPrerequisite = isBusiness ? hasClauseItems : Boolean(projectOverview);
 
   const initializeWordControlDraft = () => {
     setDraftMinimumWords(formatWordCountDraft(outlineWordControlOptions.minimumWords));
@@ -574,7 +607,7 @@ function OutlineEditPage({
       showToast(lockMessage, 'info');
       return;
     }
-    if (!projectOverview) {
+    if (!hasPrerequisite) {
       showToast('请先完成招标文件解析', 'info');
       return;
     }
@@ -610,8 +643,8 @@ function OutlineEditPage({
         referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
         outlineMode: isExpansionWorkflow ? 'aligned' : 'response-file',
         referenceKnowledgeSnippetIds: draftKnowledgeSnippetIds,
-      referenceKnowledgeItemIds: draftKnowledgeItemIds,
-      outlineExpansionMode: isExpansionWorkflow ? draftOutlineExpansionMode : 'ai-complement',
+        referenceKnowledgeItemIds: draftKnowledgeItemIds,
+        outlineExpansionMode: isBusiness ? 'ai-complement' : (isExpansionWorkflow ? draftOutlineExpansionMode : 'ai-complement'),
         wordControlOptions,
       });
       applyNormalizedWordControlDraft(wordControlOptions);
@@ -629,8 +662,8 @@ function OutlineEditPage({
     if (lockMessage) {
       throw new Error(lockMessage);
     }
-    if (!projectOverview) {
-      showToast('请先完成招标文件解析', 'info');
+    if (!hasPrerequisite) {
+      showToast(isBusiness ? '请先完成商务条款解析' : '请先完成招标文件解析', 'info');
       return;
     }
 
@@ -641,7 +674,7 @@ function OutlineEditPage({
       setLocalStartAt(startedNow);
       setNowTick(startedNow);
       const nextOutlineMode: OutlineMode = isExpansionWorkflow ? 'aligned' : 'response-file';
-      const nextOutlineExpansionMode = isExpansionWorkflow ? draftOutlineExpansionMode : 'ai-complement';
+      const nextOutlineExpansionMode = isBusiness ? 'ai-complement' : (isExpansionWorkflow ? draftOutlineExpansionMode : 'ai-complement');
       await onOutlineConfigChange({
         referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
         outlineMode: nextOutlineMode,
@@ -651,14 +684,22 @@ function OutlineEditPage({
         wordControlOptions,
       });
       setGenerationDialogOpen(false);
-      await window.yibiao?.tasks.startOutlineGeneration({
-        reference_knowledge_document_ids: draftKnowledgeDocumentIds,
-        outline_mode: nextOutlineMode,
-        reference_knowledge_snippet_ids: draftKnowledgeSnippetIds,
-        reference_knowledge_item_ids: draftKnowledgeItemIds,
-        outline_expansion_mode: nextOutlineExpansionMode,
-        word_control_options: wordControlOptions,
-      });
+      if (isBusiness) {
+        await window.yibiao?.tasks.startBusinessOutlineGeneration({
+          reference_knowledge_document_ids: draftKnowledgeDocumentIds,
+          reference_knowledge_snippet_ids: draftKnowledgeSnippetIds,
+          reference_knowledge_item_ids: draftKnowledgeItemIds,
+        });
+      } else {
+        await window.yibiao?.tasks.startOutlineGeneration({
+          reference_knowledge_document_ids: draftKnowledgeDocumentIds,
+          outline_mode: nextOutlineMode,
+          reference_knowledge_snippet_ids: draftKnowledgeSnippetIds,
+          reference_knowledge_item_ids: draftKnowledgeItemIds,
+          outline_expansion_mode: nextOutlineExpansionMode,
+          word_control_options: wordControlOptions,
+        });
+      }
       trackConfigUsage({
         outline_mode: isExpansionWorkflow ? nextOutlineExpansionMode : nextOutlineMode,
         word_control_enabled: wordControlOptions.minimumWords > 0 || wordControlOptions.maximumWords > 0 || wordControlOptions.sectionWords > 0,
@@ -1167,7 +1208,7 @@ function OutlineEditPage({
   };
 
   const renderOutlineExpansionModePicker = () => {
-    if (!isExpansionWorkflow) {
+    if (!isExpansionWorkflow || isBusiness) {
       return null;
     }
 
@@ -1414,9 +1455,9 @@ function OutlineEditPage({
     <div className="plan-step-body outline-generation-page">
       <section className="outline-command-bar">
         <div>
-          <span className="section-kicker">STEP 03</span>
-          <strong>目录生成</strong>
-          <p>{isExpansionWorkflow ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `一级目录依据响应文件要求生成；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
+          <span className="section-kicker">{copy.kicker}</span>
+          <strong>{copy.title}</strong>
+          <p>{copy.description}</p>
         </div>
         <div className="outline-command-actions">
           {awaitingOutlineSelection && (
@@ -1428,7 +1469,7 @@ function OutlineEditPage({
             type="button"
             className="outline-config-action"
             onClick={openGenerationDialog}
-            disabled={generating || sorting || contentMutationLocked || !projectOverview}
+            disabled={generating || sorting || contentMutationLocked || !hasPrerequisite}
             aria-label="打开目录生成配置"
             title="目录生成配置"
           >
@@ -1437,7 +1478,7 @@ function OutlineEditPage({
               <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
             </svg>
           </button>
-          <button type="button" className="primary-action" onClick={openGenerationDialog} disabled={generating || sorting || contentMutationLocked || !projectOverview}>
+          <button type="button" className="primary-action" onClick={openGenerationDialog} disabled={generating || sorting || contentMutationLocked || !hasPrerequisite}>
             {generating ? 'AI 正在生成目录' : outlineData ? '重新生成目录' : '生成目录'}
           </button>
         </div>
@@ -1513,10 +1554,10 @@ function OutlineEditPage({
             </div>
           ) : (
             <div className="markdown-empty-state outline-empty-state">
-              <strong>{awaitingOutlineSelection ? '一级目录已生成' : '尚未生成目录'}</strong>
+              <strong>{awaitingOutlineSelection ? '一级目录已生成' : copy.emptyTitle}</strong>
               <p>{awaitingOutlineSelection
                 ? '请查看并确认需要继续使用的一级目录。'
-                : taskFailed ? '上次目录生成未完成，请重新生成目录。' : '先完成招标文件解析，再生成技术方案目录。'}</p>
+                : taskFailed ? '上次目录生成未完成，请重新生成目录。' : copy.emptyHint}</p>
             </div>
           )}
         </section>
@@ -1699,7 +1740,7 @@ function OutlineEditPage({
               <button type="button" className="secondary-action" onClick={() => { void saveOutlineConfig(); }} disabled={generating || contentMutationLocked || savingOutlineConfig}>
                 {savingOutlineConfig ? '正在保存...' : '保存配置'}
               </button>
-              <button type="button" className="primary-action" onClick={generateOutline} disabled={generating || contentMutationLocked || savingOutlineConfig || !projectOverview}>
+              <button type="button" className="primary-action" onClick={generateOutline} disabled={generating || contentMutationLocked || savingOutlineConfig || !hasPrerequisite}>
                 {outlineData ? '重新生成目录' : '开始生成'}
               </button>
             </div>
