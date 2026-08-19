@@ -2,7 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useState } from 'react';
 import DocumentAnalysisPage from './DocumentAnalysisPage';
 import BidAnalysisPage from './BidAnalysisPage';
-import OutlineEditPage from './OutlineEditPage';
+import OutlineEditPage from '../../technical-plan/pages/OutlineEditPage';
 import GlobalFactsPage from './GlobalFactsPage';
 import ContentEditPage from './ContentEditPage';
 import ExpandPage from './ExpandPage';
@@ -12,6 +12,8 @@ import { BUSINESS_BID_STEPS, BUSINESS_BID_STEP_LABELS } from '../types';
 import type { BusinessBidState, BusinessBidStep, OutlineData } from '../types';
 import type { WordExportProgressEvent } from '../../../shared/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from '../../../shared/types/exportFormat';
+import type { OutlineMode, OutlineExpansionMode, OutlineWordControlOptions, SaveOutlineSelectionRequest } from '../../../shared/types';
+import type { SaveOutlineRequest } from '../../technical-plan/types';
 
 
 function updateOutlineItemContent(items: OutlineData['outline'], itemId: string, content: string): OutlineData['outline'] {
@@ -219,9 +221,35 @@ export default function BusinessBidHome() {
     if (saved) setState((prev) => ({ ...prev, ...saved }));
   };
 
-  const saveOutline = async (outlineData: OutlineData) => {
-    const saved = await window.yibiao?.businessBid.saveOutline({ outlineData });
-    setState((prev) => ({ ...prev, ...(saved || {}), outlineData: saved?.outlineData || outlineData }));
+  const saveOutlineConfig = async (config: {
+    referenceKnowledgeDocumentIds: string[];
+    outlineMode?: OutlineMode;
+    referenceKnowledgeSnippetIds?: string[];
+    referenceKnowledgeItemIds?: string[];
+    outlineExpansionMode?: OutlineExpansionMode;
+    wordControlOptions: OutlineWordControlOptions;
+  }) => {
+    const saved = await window.yibiao?.businessBid.saveOutlineConfig({
+      referenceKnowledgeDocumentIds: config.referenceKnowledgeDocumentIds,
+      referenceKnowledgeSnippetIds: config.referenceKnowledgeSnippetIds,
+      referenceKnowledgeItemIds: config.referenceKnowledgeItemIds,
+      outlineExpansionMode: config.outlineExpansionMode,
+      wordControlOptions: config.wordControlOptions,
+    });
+    setState((prev) => ({ ...prev, ...(saved || {}) }));
+  };
+
+  const saveOutlineSelection = async (request: SaveOutlineSelectionRequest) => {
+    await window.yibiao?.tasks.saveOutlineSelection({
+      taskId: request.taskId,
+      items: request.items,
+      selectedIds: request.selectedIds,
+    });
+  };
+
+  const saveOutline = async (request: SaveOutlineRequest) => {
+    const saved = await window.yibiao?.businessBid.saveOutline(request);
+    setState((prev) => ({ ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData }));
   };
 
   const saveGlobalFacts = async (globalFacts: BusinessBidState['globalFacts']) => {
@@ -303,13 +331,22 @@ export default function BusinessBidHome() {
       )}
       {state.step === 'outline-generation' && (
         <OutlineEditPage
+          kind="business"
+          workflowKind="technical-plan"
+          projectOverview=""
           outlineData={state.outlineData}
+          outlineWordControlOptions={state.outlineWordControlOptions}
+          outlineWordControlSnapshot={state.outlineWordControlSnapshot}
+          outlineExpansionMode={state.outlineExpansionMode}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           referenceKnowledgeSnippetIds={state.referenceKnowledgeSnippetIds}
+          referenceKnowledgeItemIds={state.referenceKnowledgeItemIds || []}
           task={state.outlineGenerationTask}
+          contentTaskStatus={state.contentGenerationTask?.status}
           hasClauseItems={Boolean(state.clauseItems?.length)}
+          onOutlineConfigChange={saveOutlineConfig}
           onOutlineSaved={saveOutline}
-          onStateChange={(nextState) => { void saveBusinessBidState(nextState); }}
+          onOutlineSelectionSaved={saveOutlineSelection}
         />
       )}
       {state.step === 'global-facts' && (

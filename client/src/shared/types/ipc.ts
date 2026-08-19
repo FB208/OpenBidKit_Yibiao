@@ -649,8 +649,15 @@ export interface YibiaoBridge {
     disassociateTechnicalPlan: () => Promise<BusinessBidState>;
     hasTechnicalPlan: () => Promise<boolean>;
     updateStep: (step: BusinessBidStep) => Promise<BusinessBidState>;
-    saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; referenceKnowledgeSnippetIds?: string[] }) => Promise<BusinessBidState>;
-    saveOutline: (payload: { outlineData?: OutlineData }) => Promise<BusinessBidState>;
+    saveOutlineConfig: (payload: {
+      referenceKnowledgeDocumentIds: string[];
+      outlineMode?: OutlineMode;
+      referenceKnowledgeSnippetIds?: string[];
+      referenceKnowledgeItemIds?: string[];
+      outlineExpansionMode?: OutlineExpansionMode;
+      wordControlOptions?: OutlineWordControlOptions;
+    }) => Promise<BusinessBidState>;
+    saveOutline: (payload: SaveOutlineRequest | { outlineData?: OutlineData }) => Promise<BusinessBidState>;
     saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<BusinessBidState>;
     saveClauseItems: (clauseItems: BusinessBidClauseItem[]) => Promise<BusinessBidState>;
     saveContentGenerationOptions: (options: { minimumWords: number }) => Promise<BusinessBidState>;
@@ -686,6 +693,7 @@ export interface YibiaoBridge {
     startBidAnalysis: (payload: unknown) => Promise<unknown>;
     startOutlineGeneration: (payload: unknown) => Promise<unknown>;
     suppressOutlineSelectionAutoConfirmation: (payload: { taskId: string }) => Promise<{ success: boolean }>;
+    saveOutlineSelection: (payload: SaveOutlineSelectionRequest) => Promise<void>;
     startGlobalFactsGeneration: (payload: unknown) => Promise<unknown>;
     startContentGeneration: (payload: unknown) => Promise<unknown>;
     pauseContentGeneration: () => Promise<unknown>;
