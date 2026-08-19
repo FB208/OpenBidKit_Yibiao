@@ -213,7 +213,7 @@ const bridge = {
     saveChapterContent: (payload) => ipcRenderer.invoke('business-bid:save-chapter-content', payload),
     clear: () => ipcRenderer.invoke('business-bid:clear'),
     exportPdf: (clauseItems) => ipcRenderer.invoke('business-bid:export-pdf', clauseItems),
-  };
+  },
   feasibilityReport: {
     loadState: () => ipcRenderer.invoke('feasibility-report:load-state'),
     importSourceDocuments: (filePaths) => ipcRenderer.invoke('feasibility-report:import-source-documents', filePaths),
