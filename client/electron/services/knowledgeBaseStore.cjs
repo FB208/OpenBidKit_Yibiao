@@ -399,30 +399,6 @@ function createKnowledgeBaseStore({ app, db }) {
     return count === 0;
   }
 
-  function getChildFolders(parentId) {
-    const safeParentId = parentId || null;
-    return db.prepare('SELECT * FROM knowledge_folders WHERE parent_id IS ? ORDER BY sort_order ASC, created_at ASC').all(safeParentId).map(folderFromRow);
-  }
-
-  function getDescendantFolderIds(folderId) {
-    const ids = [folderId];
-    const queue = [folderId];
-    while (queue.length) {
-      const current = queue.shift();
-      const children = db.prepare('SELECT folder_id FROM knowledge_folders WHERE parent_id = ?').all(current);
-      for (const child of children) {
-        ids.push(child.folder_id);
-        queue.push(child.folder_id);
-      }
-    }
-    return ids;
-  }
-
-  function isLeafFolder(folderId) {
-    const count = db.prepare('SELECT COUNT(*) AS c FROM knowledge_folders WHERE parent_id = ?').get(folderId)?.c || 0;
-    return count === 0;
-  }
-
   function deleteFolder(folderId) {
     const folder = db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folderId);
     if (!folder) throw new Error('知识库文件夹不存在');
@@ -515,7 +491,6 @@ function createKnowledgeBaseStore({ app, db }) {
       throw new Error('知识库文件夹不存在');
     }
     if (draggedFolderId === targetFolderId) return list(draggedFolder.type);
-    if (draggedFolderId === targetFolderId) return;
     db.transaction(() => resequenceFolderIds(reorderIds(folderIds, draggedFolderId, targetFolderId, normalizedPosition)))();
     return list(draggedFolder.type);
   }

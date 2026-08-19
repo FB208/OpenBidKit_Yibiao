@@ -133,8 +133,6 @@ const bridge = {
     getPathForFile: (file) => webUtils.getPathForFile(file),
   },
   knowledgeBase: {
-    list: () => ipcRenderer.invoke('knowledge-base:list'),
-    createFolder: (name) => ipcRenderer.invoke('knowledge-base:create-folder', name),
     getMigrationStatus: () => ipcRenderer.invoke('knowledge-base:get-migration-status'),
     migrateLegacy: () => ipcRenderer.invoke('knowledge-base:migrate-legacy'),
     list: (type) => ipcRenderer.invoke('knowledge-base:list', type),

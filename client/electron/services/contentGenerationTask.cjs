@@ -2114,11 +2114,11 @@ function normalizeReferenceItemIds(storedPlan) {
 function loadContentKnowledgeItems(knowledgeBaseService, documentIds, snippetIds, itemIds, log) {
   if (!documentIds.length && !snippetIds.length && !itemIds.length) {
     log('本次正文编排未选择参考知识库。');
-    return { items: [], contentMap: new Map() };
+    return [];
   }
   if (!knowledgeBaseService?.readReferences) {
     log('未找到知识库读取服务，正文编排不使用知识库。');
-    return { items: [], contentMap: new Map() };
+    return [];
   }
 
   const items = [];
@@ -2222,6 +2222,7 @@ function loadContentKnowledgeContentMap(knowledgeBaseService, documentIds, snipp
   if (map.size) {
     log(`正文生成可用知识库正文素材 ${map.size} 条。`);
   }
+  return map;
 }
 
 function resolveKnowledgeContents(itemIds, knowledgeContentMap) {
@@ -3524,7 +3525,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
   const knowledgeReferences = { items: loadContentKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, normalizeReferenceItemIds(storedPlan), (message) => {
     logs = [...logs, message];
-  });
+  })};
   knowledgeItems = knowledgeReferences.items;
   allowedKnowledgeItemIds = new Set(knowledgeItems.map((item) => item.id));
   knowledgeContentMap = loadContentKnowledgeContentMap(knowledgeBaseService, referenceKnowledgeDocumentIds, referenceKnowledgeSnippetIds, normalizeReferenceItemIds(storedPlan), (message) => {
