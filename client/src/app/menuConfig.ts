@@ -10,7 +10,7 @@ export const appMenuItems: AppMenuItem[] = [
   {
     id: 'bid-generation',
     label: '标书生成',
-    description: '技术方案与商务标编制',
+    description: '技术方案、可研报告与商务标编制',
     children: [
       {
         id: 'technical-plan',
@@ -23,6 +23,13 @@ export const appMenuItems: AppMenuItem[] = [
         label: '已有方案扩写',
         description: '解决人写技术方案太薄的问题，上传写好的方案，进行优化和扩充，遵从原方案真实可落地，又能扩写出厚厚的标书',
         icon: 'expand',
+      },
+      {
+        id: 'feasibility-report',
+        label: '可行性研究报告',
+        description: '根据项目资料编制可行性研究报告',
+        icon: 'document',
+        badge: 'Beta',
       },
       {
         id: 'business-bid',

@@ -12,8 +12,8 @@ function isDeveloperSection(section: SectionId) {
   return section.startsWith('developer-');
 }
 
-function isTechnicalPlanSection(section: SectionId) {
-  return section === 'technical-plan' || section === 'existing-plan-expansion';
+function isManagedWorkbenchSection(section: SectionId) {
+  return section === 'technical-plan' || section === 'existing-plan-expansion' || section === 'feasibility-report';
 }
 
 function App() {
@@ -34,7 +34,7 @@ function App() {
 
   useEffect(() => {
     trackPageView(activeSection);
-    if (isTechnicalPlanSection(activeSection)) return;
+    if (isManagedWorkbenchSection(activeSection)) return;
     void window.yibiao?.ui?.setCurrentView({ section: activeSection });
   }, [activeSection]);
 

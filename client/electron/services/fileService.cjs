@@ -600,7 +600,10 @@ const config = configStore ? configStore.load() : { components: { file_parser: {
       let fileContent = '';
       try {
         const assetHash = crypto.createHash('sha1').update(filePath).digest('hex').slice(0, 12);
-        fileContent = (await parseDocumentWithConfig(app, filePath, config, { assetScope: `technical-plan-${assetHash}`, preserveImages: false })).trim();
+        fileContent = (await parseDocumentWithConfig(app, filePath, config, {
+          assetScope: `${options?.assetScopePrefix || 'technical-plan'}-${assetHash}`,
+          preserveImages: false,
+        })).trim();
       } catch (error) {
         errors.push(`${path.basename(filePath)}：${formatImportError(error, filePath)}`);
         continue;

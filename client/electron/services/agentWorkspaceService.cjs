@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
+const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 
 function now() {
   return new Date().toISOString();
@@ -33,6 +34,9 @@ function normalizeCurrentView(view = {}) {
 }
 
 function getMappedWorkspaceId(view) {
+  if (view?.section === 'feasibility-report' && view.step === 'outline') {
+    return FEASIBILITY_OUTLINE_AGENT_TASK_KEY;
+  }
   if (!TECHNICAL_PLAN_SECTIONS.has(view?.section)) return null;
   return STEP_WORKSPACE_IDS[view.step] || null;
 }
@@ -42,7 +46,7 @@ function getMappedWorkspaceId(view) {
  * 当前内置目录生成与全局事实设定工作空间；后续其他持久 Agent 任务可按同样的
  * provider 形态（descriptor + sendMessage）注册接入。
  */
-function createAgentWorkspaceService({ agentService, taskService, technicalPlanStore }) {
+function createAgentWorkspaceService({ agentService, taskService, technicalPlanStore, feasibilityReportStore }) {
   const chatSubscribers = new Set();
   const workspaceChangeSubscribers = new Set();
   // 当前可见页；未上报前无生效工作空间。不写库。
@@ -100,6 +104,14 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     'global-facts-generation': '全局事实设定',
     'global-facts-adjustment': '全局事实AI调整',
     'content-generation': '正文生成',
+  };
+  const feasibilityReportTaskLabels = {
+    'feasibility-analysis': '资料分析',
+    'feasibility-outline': '目录生成',
+    'feasibility-outline-adjustment': '目录AI调整',
+    'feasibility-parameters': '关键参数生成',
+    'feasibility-content': '正文生成',
+    'feasibility-human-writing': '自然化审校',
   };
 
   // 目录生成工作空间 provider。
@@ -198,7 +210,54 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     },
   };
 
-  const providers = [outlineWorkspaceProvider, globalFactsWorkspaceProvider];
+  const feasibilityOutlineWorkspaceProvider = {
+    id: FEASIBILITY_OUTLINE_AGENT_TASK_KEY,
+    buildDescriptor() {
+      const report = feasibilityReportStore?.loadFeasibilityReport?.() || {};
+      const activeTasks = taskService.getActiveTasks();
+      const busyTask = activeTasks.find((task) => task.group === 'feasibility-report' && isActiveTaskStatus(task.status));
+      const hasOutline = Boolean(report.outlineData?.outline?.length);
+      const hasSession = agentService.hasPersistentTaskSession(FEASIBILITY_OUTLINE_AGENT_TASK_KEY);
+
+      if (!hasOutline || !hasSession) {
+        if (busyTask?.type === 'feasibility-outline') {
+          return {
+            id: this.id,
+            title: '可研报告目录',
+            status: 'busy',
+            busy_reason: '报告目录生成任务执行中，完成后即可发送调整要求',
+            has_generated_content: false,
+            empty_hint: '向 Agent 描述你的目录调整要求，例如“把风险分析拆成两章”。',
+          };
+        }
+        return null;
+      }
+
+      const contentPaused = report.contentTask?.status === 'paused';
+      const busyReason = busyTask
+        ? `${feasibilityReportTaskLabels[busyTask.type] || busyTask.type}任务执行中，请等待完成`
+        : contentPaused
+          ? '正文生成已暂停，请先在主界面继续或重置正文任务'
+          : '';
+      const hasGeneratedContent = countGeneratedLeaves(report.outlineData.outline) > 0;
+      return {
+        id: this.id,
+        title: '可研报告目录',
+        status: busyReason ? 'busy' : 'ready',
+        busy_reason: busyReason,
+        has_generated_content: hasGeneratedContent,
+        empty_hint: '向 Agent 描述你的目录调整要求，例如“把风险分析拆成两章”。',
+        ...(hasGeneratedContent
+          ? { send_warning: '调整目录将清空已生成的关键参数和正文内容，是否继续？' }
+          : {}),
+      };
+    },
+    sendMessage(message) {
+      return taskService.startFeasibilityOutlineAdjustment({ requirement: message });
+    },
+  };
+
+  const providers = [outlineWorkspaceProvider, globalFactsWorkspaceProvider, feasibilityOutlineWorkspaceProvider];
 
   function buildWorkspaceEntry(provider) {
     const descriptor = provider.buildDescriptor();
@@ -298,6 +357,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
   // 重新生成目录或全局事实会重建对应 Agent 工作空间，聊天记录跟随工作空间同步重置。
   let lastOutlineGenerationTaskId = null;
   let lastGlobalFactsGenerationTaskId = null;
+  let lastFeasibilityOutlineTaskId = null;
 
   taskService.subscribeCallback((event) => {
     const task = event?.task;
@@ -315,6 +375,13 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
       }
       return;
     }
+    if (task?.type === 'feasibility-outline') {
+      if (task.task_id && task.task_id !== lastFeasibilityOutlineTaskId) {
+        lastFeasibilityOutlineTaskId = task.task_id;
+        resetChatState(FEASIBILITY_OUTLINE_AGENT_TASK_KEY);
+      }
+      return;
+    }
     if (task?.type === 'outline-adjustment') {
       const state = getChatState(OUTLINE_AGENT_TASK_KEY);
       if (!state.pending || task.task_id !== state.pending_task_id) return;
@@ -328,6 +395,22 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
         state.pending_task_id = null;
         appendMessage(OUTLINE_AGENT_TASK_KEY, 'error', task.error || '目录 AI 调整失败');
         emitChatEvent(OUTLINE_AGENT_TASK_KEY);
+      }
+      return;
+    }
+    if (task?.type === 'feasibility-outline-adjustment') {
+      const state = getChatState(FEASIBILITY_OUTLINE_AGENT_TASK_KEY);
+      if (!state.pending || task.task_id !== state.pending_task_id) return;
+      if (task.status === 'success') {
+        state.pending = false;
+        state.pending_task_id = null;
+        appendMessage(FEASIBILITY_OUTLINE_AGENT_TASK_KEY, 'agent', task.stats?.adjustment?.summary || '报告目录已按要求调整完成。');
+        emitChatEvent(FEASIBILITY_OUTLINE_AGENT_TASK_KEY);
+      } else if (task.status === 'error') {
+        state.pending = false;
+        state.pending_task_id = null;
+        appendMessage(FEASIBILITY_OUTLINE_AGENT_TASK_KEY, 'error', task.error || '报告目录 AI 调整失败');
+        emitChatEvent(FEASIBILITY_OUTLINE_AGENT_TASK_KEY);
       }
       return;
     }

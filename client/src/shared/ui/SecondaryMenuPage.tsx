@@ -46,7 +46,10 @@ function SecondaryMenuPage({ menuItem, onNavigate }: SecondaryMenuPageProps) {
                   <SubMenuIcon item={item} />
                 </span>
                 <span className="secondary-menu-row-copy">
-                  <strong>{item.label}</strong>
+                  <strong>
+                    {item.label}
+                    {item.badge ? <span className="secondary-menu-badge">{item.badge}</span> : null}
+                  </strong>
                   <small>{item.description}</small>
                 </span>
                 <span className="secondary-menu-row-arrow">
