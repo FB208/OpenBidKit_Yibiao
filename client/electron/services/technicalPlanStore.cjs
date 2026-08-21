@@ -313,7 +313,7 @@ function getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds) {
 }
 
 function isValidOutlineMode(value) {
-  return value === 'aligned' || value === 'response-file';
+  return value === 'aligned' || value === 'response-file' || value === 'standalone-technical';
 }
 
 function isValidOutlineExpansionMode(value) {
