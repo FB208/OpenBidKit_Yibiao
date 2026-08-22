@@ -127,6 +127,7 @@ fieldset.settings-list {
 
 .settings-row input,
 .settings-row select,
+.settings-row textarea,
 .settings-row .settings-readonly-value {
   width: 100%;
   min-height: 36px;
@@ -147,6 +148,14 @@ fieldset.settings-list {
 
 .settings-row select {
   padding-right: 42px;
+}
+
+.settings-row textarea {
+  min-height: 132px;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
 }
 
 .settings-temperature-control {
@@ -286,7 +295,8 @@ fieldset.settings-list {
 }
 
 .settings-row input:focus,
-.settings-row select:focus {
+.settings-row select:focus,
+.settings-row textarea:focus {
   background-color: #ffffff;
   border-color: rgba(33, 116, 253, 0.5);
   box-shadow: var(--yb-focus-ring);
