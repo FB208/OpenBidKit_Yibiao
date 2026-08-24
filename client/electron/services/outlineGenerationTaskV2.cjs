@@ -671,8 +671,8 @@ function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRoot
 12. 程序已为 ${OUTLINE_OUTPUT_FILE} 和 ${OUTLINE_REVIEW_FILE} 预置 Schema。分别调用 json-validation 校验，只传 file_path；校验失败后必须先修改对应文件，再重新校验。`;
 }
 
-// 运行 V2 目录业务任务；开发者模式下一级目录确认后并行调度目录任务和独立模版提取任务。
-async function runOutlineGenerationTaskV2({ aiService, agentService, ordinaryAgentService, workspaceStore, knowledgeBaseService, openXmlHelperService, updateTask, checkpointTask, taskControl, payload }) {
+// 运行 V2 目录业务任务；普通目录模式下一级目录确认后并行调度目录任务和独立模版提取任务。
+async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, workspaceStore, knowledgeBaseService, openXmlHelperService, updateTask, checkpointTask, taskControl, payload }) {
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
   const restoringOutlineSelection = payload?.agent_resume?.phase === 'outline-selection';
   const standaloneTechnical = storedPlan.outlineMode === 'standalone-technical';
@@ -909,8 +909,7 @@ async function runOutlineGenerationTaskV2({ aiService, agentService, ordinaryAge
 
   const confirmed = await taskControl.waitForOutlineSelection();
   applyConfirmedSelection(confirmed);
-  const extractTemplate =
-    !standaloneTechnical && Boolean(aiService?.isDeveloperMode?.());
+  const extractTemplate = !standaloneTechnical;
 
   publish(
     extractTemplate
