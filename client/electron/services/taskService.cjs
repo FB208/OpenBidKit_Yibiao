@@ -586,7 +586,10 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
         const pausedContentTask = technicalPlan.contentGenerationTask;
         if (pausedContentTask?.status === 'paused') {
-          if (type === 'content-generation' && payload?.resume) {
+          const developerRestart = type === 'content-generation'
+            && payload?.developerRestart
+            && Boolean(aiService?.isDeveloperMode?.());
+          if (type === 'content-generation' && (payload?.resume || developerRestart)) {
             return;
           }
           throw new Error('正文生成已暂停，请先继续当前正文生成任务或重置技术方案后再启动新的任务。');
@@ -899,8 +902,8 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       if (aiService?.resumeQueueScope) {
         aiService.resumeQueueScope(queueScopeId);
       }
-      activeTasks.delete(type);
-      activeTaskControls.delete(type);
+      if (activeTasks.get(type) === currentTask) activeTasks.delete(type);
+      if (activeTaskControls.get(type) === taskControl) activeTaskControls.delete(type);
       resolveSettled();
     });
 
@@ -1467,7 +1470,8 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       if (!technicalPlan.outlineWordControlSnapshot) {
         throw new Error('当前目录没有字数控制生效快照，请重新生成目录');
       }
-      return startManagedTask('content-generation', payload, runContentGenerationTask);
+      const taskPayload = payload?.developerRestart ? { ...payload, regenerate: true } : payload;
+      return startManagedTask('content-generation', taskPayload, runContentGenerationTask);
     },
     pauseContentGeneration() {
       const task = activeTasks.get('content-generation');

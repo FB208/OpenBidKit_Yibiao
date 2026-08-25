@@ -317,6 +317,7 @@ function ContentEditPage({
   const [htmlImageTypesDraft, setHtmlImageTypesDraft] = useState(DEFAULT_HTML_IMAGE_TYPES);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [pausePending, setPausePending] = useState(false);
+  const [developerStageActionPending, setDeveloperStageActionPending] = useState<'continue' | 'restart' | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const [developerMode, setDeveloperMode] = useState(false);
   const firstLeafId = allLeaves[0]?.id || '';
@@ -332,6 +333,7 @@ function ContentEditPage({
   const phaseVisible = taskInFlight || paused || taskFailed;
   const taskBlocksGeneration = taskInFlight || paused;
   const contentStats = task?.stats?.content;
+  const developerStageGate = developerMode && paused ? contentStats?.developer_stage_gate : undefined;
   const progressDetail = task?.progress_detail;
   const illustrationStats = useMemo(() => {
     const stats: Record<ContentIllustrationKind, { planned: number; success: number }> = {
@@ -504,7 +506,9 @@ function ContentEditPage({
           ? 'violet'
           : 'primary';
   const progressActive = taskInFlight && (planning || restoring || wordAdjusting || contentCorrecting || illustrationPlanning || illustrationGenerating);
-  const progressDescription = taskFailed
+  const progressDescription = developerStageGate
+    ? `${progressPhaseLabel}阶段已完成。可继续下一阶段，或从正文编排重新执行全部阶段。`
+    : taskFailed
     ? taskErrorMessage
     : planning
     ? paused ? `正文生成已暂停在编排阶段，已完成 ${planningCompleted}/${planningTotal} 个小节。` : `正在编排正文结构，已完成 ${planningCompleted}/${planningTotal} 个小节。`
@@ -623,6 +627,9 @@ function ContentEditPage({
     if (task?.status !== 'running') {
       setPausePending(false);
     }
+    if (task?.status !== 'paused') {
+      setDeveloperStageActionPending(null);
+    }
   }, [task?.status]);
 
   useEffect(() => {
@@ -713,11 +720,34 @@ function ContentEditPage({
       return;
     }
 
+    if (developerStageGate) setDeveloperStageActionPending('continue');
     try {
-      await window.yibiao?.tasks.startContentGeneration({ resume: true });
-      showToast('已继续正文生成任务', 'success');
+      await window.yibiao?.tasks.startContentGeneration({
+        resume: true,
+        ...(developerStageGate ? { developerStageAction: 'continue', developerStage: developerStageGate } : {}),
+      });
+      showToast(developerStageGate ? '已开始执行下一阶段' : '已继续正文生成任务', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '继续正文生成失败', 'error');
+    } finally {
+      setDeveloperStageActionPending(null);
+    }
+  };
+
+  // 开发者阶段停点直接复用全量重新生成，不保留当前阶段产物。
+  const restartContentGeneration = async () => {
+    if (!developerStageGate || developerStageActionPending) return;
+    setDeveloperStageActionPending('restart');
+    try {
+      setEditingItemId(null);
+      setIsPreviewing(false);
+      setDraftContent('');
+      await window.yibiao?.tasks.startContentGeneration({ developerRestart: true, regenerate: true });
+      showToast('已从正文编排重新执行全部阶段', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '重新执行正文生成失败', 'error');
+    } finally {
+      setDeveloperStageActionPending(null);
     }
   };
 
@@ -1075,7 +1105,26 @@ function ContentEditPage({
               <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
             </svg>
           </button>
-          {awaitingContentDecision ? (
+          {developerStageGate ? (
+            <>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => void restartContentGeneration()}
+                disabled={Boolean(developerStageActionPending)}
+              >
+                {developerStageActionPending === 'restart' ? '正在重新执行...' : '从正文编排重新执行'}
+              </button>
+              <button
+                type="button"
+                className="primary-action"
+                onClick={() => void resumeGeneration()}
+                disabled={Boolean(developerStageActionPending)}
+              >
+                {developerStageActionPending === 'continue' ? '正在继续...' : '继续下一阶段'}
+              </button>
+            </>
+          ) : awaitingContentDecision ? (
             <>
               {unresolvedCount > 0 && (
                 <button type="button" className="primary-action" onClick={() => void retryFailedSections()} disabled={taskBlocksGeneration}>

@@ -175,6 +175,7 @@ export interface BackgroundTaskState {
       illustration_generation_step_label?: string;
       awaiting_content_decision?: boolean;
       ignored_section_count?: number;
+      developer_stage_gate?: ContentGenerationPhase;
     };
   };
 }
@@ -275,6 +276,7 @@ export interface ContentGenerationRuntimeState {
   phase?: string;
   touched_item_ids?: string[];
   completed_stages?: string[];
+  developer_stage_gate?: ContentGenerationPhase | '';
   word_adjustment_stage?: 'section' | 'final-section' | 'total';
   word_adjustment_item_id?: string;
   word_adjustment_round?: number;
@@ -284,6 +286,7 @@ export interface ContentGenerationRuntimeState {
   word_adjustment_round_start_words?: number;
   target_item_id?: string;
   regenerate_requirement?: string;
+  simulate_partial_failures?: boolean;
   awaiting_content_decision?: boolean;
   updated_at?: string;
 }
