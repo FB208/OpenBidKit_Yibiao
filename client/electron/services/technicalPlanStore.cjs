@@ -21,6 +21,7 @@ const {
   TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
+const { CONTENT_PLANNING_AGENT_TASK_KEY } = require('./contentPlanningAgentConfig.cjs');
 
 const tenderMarkdownRelativePath = path.join('technical-plan', 'tender.md').replace(/\\/g, '/');
 const tenderOriginalMarkdownRelativePath = path.join('technical-plan', 'tender-original.md').replace(/\\/g, '/');
@@ -455,6 +456,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   function deleteOutlineAgentTask() {
     agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY);
     agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
+    agentService.deletePersistentTask(CONTENT_PLANNING_AGENT_TASK_KEY);
   }
   function deleteGlobalFactsAgentTask() {
     agentService.deletePersistentTask(GLOBAL_FACTS_AGENT_TASK_KEY);
@@ -468,7 +470,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const meta = ensureMetaRow();
     const hasOutline = Boolean(db.prepare('SELECT 1 FROM technical_plan_outline_nodes LIMIT 1').get());
     const hasFacts = Boolean(db.prepare('SELECT 1 FROM technical_plan_global_fact_groups LIMIT 1').get());
-    return `${meta.step || ''}|${hasOutline ? 1 : 0}|${hasFacts ? 1 : 0}`;
+    const hasContentPlans = Boolean(db.prepare('SELECT 1 FROM technical_plan_content_plans LIMIT 1').get());
+    return `${meta.step || ''}|${hasOutline ? 1 : 0}|${hasFacts ? 1 : 0}|${hasContentPlans ? 1 : 0}`;
   }
   function notifyAgentWorkspaceChange(options = {}) {
     const signal = getAgentWorkspaceSignal();
@@ -1638,6 +1641,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function clearContentGenerationState() {
+    agentService.deletePersistentTask(CONTENT_PLANNING_AGENT_TASK_KEY);
     db.prepare("UPDATE technical_plan_outline_nodes SET content = '', updated_at = ?").run(now());
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
@@ -2012,6 +2016,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const shouldClearMermaidCache = shouldClearMermaidCacheForPartial(partial);
     updateTechnicalPlanTransaction(partial || {});
     const deletedAgentSessions = hasOwn(partial, 'outlineData') && partial.outlineData === null;
+    const contentPlanningChanged = hasOwn(partial, 'contentGenerationPlans') || partial.invalidateContentGeneration === true;
     if (deletedAgentSessions) {
       deleteOutlineAgentTask();
       deleteGlobalFactsAgentTask();
@@ -2019,8 +2024,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (shouldClearMermaidCache) {
       clearTechnicalPlanMermaidCache();
     }
-    if (deletedAgentSessions || hasOwn(partial, 'step') || hasOwn(partial, 'outlineData') || hasOwn(partial, 'globalFacts')) {
-      notifyAgentWorkspaceChange({ force: deletedAgentSessions });
+    if (deletedAgentSessions || contentPlanningChanged || hasOwn(partial, 'step') || hasOwn(partial, 'outlineData') || hasOwn(partial, 'globalFacts')) {
+      notifyAgentWorkspaceChange({ force: deletedAgentSessions || contentPlanningChanged });
     }
   }
 
@@ -2186,6 +2191,9 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       clearContentIllustrationPlan();
     });
     transaction();
+    if (invalidatesContentTask) {
+      agentService.deletePersistentTask(CONTENT_PLANNING_AGENT_TASK_KEY);
+    }
     const sortedContentRuntime = reason === 'sort'
       ? safeJsonParse(readMetaRow().content_generation_runtime_json, undefined)
       : undefined;

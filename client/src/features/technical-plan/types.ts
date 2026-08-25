@@ -217,9 +217,6 @@ export interface ContentGenerationPlanData {
   knowledge: {
     item_ids: string[];
   };
-  facts: {
-    titles: string[];
-  };
   table: {
     needed: boolean;
     purpose: string;

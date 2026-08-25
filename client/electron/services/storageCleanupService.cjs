@@ -10,6 +10,7 @@ const {
   TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
+const { CONTENT_PLANNING_AGENT_TASK_KEY } = require('./contentPlanningAgentConfig.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 
 const STORAGE_CLEANUP_VERSION = 1;
@@ -17,6 +18,7 @@ const PERSISTENT_AGENT_TASK_KEYS = [
   OUTLINE_AGENT_TASK_KEY,
   TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
   GLOBAL_FACTS_AGENT_TASK_KEY,
+  CONTENT_PLANNING_AGENT_TASK_KEY,
   FEASIBILITY_OUTLINE_AGENT_TASK_KEY,
 ];
 const LEGACY_WORKSPACE_FILES = [

@@ -11,6 +11,7 @@ const {
   TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
+const { CONTENT_PLANNING_AGENT_TASK_KEY } = require('./contentPlanningAgentConfig.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
 const { originalPlanDownstreamTaskTypes } = require('./technicalPlanStore.cjs');
@@ -1436,6 +1437,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         beforeStart: () => {
           agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY);
           agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
+          agentService.deletePersistentTask(CONTENT_PLANNING_AGENT_TASK_KEY);
           technicalPlanStore.clearBidTemplate();
         },
       });
@@ -1471,7 +1473,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         throw new Error('当前目录没有字数控制生效快照，请重新生成目录');
       }
       const taskPayload = payload?.developerRestart ? { ...payload, regenerate: true } : payload;
-      return startManagedTask('content-generation', taskPayload, runContentGenerationTask);
+      return startManagedTask('content-generation', taskPayload, runContentGenerationTask, {}, {
+        primarySession: true,
+      });
     },
     pauseContentGeneration() {
       const task = activeTasks.get('content-generation');
