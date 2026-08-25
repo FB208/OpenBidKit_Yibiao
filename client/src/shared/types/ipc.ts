@@ -624,6 +624,7 @@ export interface YibiaoBridge {
     saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<Partial<TechnicalPlanState>>;
     saveContentGenerationOptions: (options: ContentGenerationOptions) => Promise<Partial<TechnicalPlanState>>;
     saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<Partial<TechnicalPlanState>>;
+    resetContentGeneration: () => Promise<TechnicalPlanState>;
     clear: () => Promise<{ success: boolean; message?: string }>;
     openBidTemplate: () => Promise<{ success: boolean; message?: string }>;
   };

@@ -1077,6 +1077,12 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     setState((prev) => ({ ...prev, ...(saved || {}), contentGenerationOptions }));
   };
 
+  // 重置正文阶段并用 Main 返回的最新工作区替换当前状态。
+  const resetContentGeneration = async () => {
+    const saved = await window.yibiao!.technicalPlan.resetContentGeneration();
+    setState(saved);
+  };
+
   const saveGlobalFacts = async (globalFacts: GlobalFactGroupState[]) => {
     const saved = await window.yibiao?.technicalPlan.saveGlobalFacts(globalFacts);
     setState((prev) => ({ ...prev, ...(saved || {}), globalFacts }));
@@ -1376,6 +1382,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           contentIllustrationPlan={state.contentIllustrationPlan}
           sections={state.contentGenerationSections}
           onContentGenerationOptionsChange={saveContentGenerationOptions}
+          onContentGenerationReset={resetContentGeneration}
           onContentSaved={saveChapterContent}
         />
       )}

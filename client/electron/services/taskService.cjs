@@ -1591,6 +1591,12 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       await cancelTechnicalPlanTasks('技术方案已重置，后台任务已取消');
       return technicalPlanStore.clearTechnicalPlan();
     },
+    // 仅重置正文阶段，保留目录、全局事实和生成配置。
+    async resetContentGeneration() {
+      await cancelTechnicalPlanTasks('正文生成阶段已重置，后台任务已取消', ['content-generation']);
+      technicalPlanStore.updateTechnicalPlanWithoutReload({ invalidateContentGeneration: true });
+      return technicalPlanStore.loadTechnicalPlan();
+    },
     importTenderDocument(filePaths) {
       return technicalPlanStore.importTenderDocument(filePaths, {
         beforeCommit: () => cancelTechnicalPlanTasks('招标文件已更新，后台任务已取消'),

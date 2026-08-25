@@ -52,7 +52,7 @@
 - 不把 `ACCOUNT_ID`、`ADMIN_TOKEN`、`ANALYTICS_API_TOKEN` 等密钥写入仓库；Worker 配置保留 `keep_vars: true`，不要在 `wrangler.jsonc` 增加 `secrets.required`。
 - 禁止删除、绕过或弱化任何埋点、统计、Analytics Dashboard 展示和 Worker 聚合逻辑；如确需调整，必须等价保留统计能力并说明影响。
 
-## 必须遵守的要求
+## 必须遵守的原则
 - 尽量保持整体编码风格统一；前端组件和样式优先封装、复用现有实现。
 - 当用户提出功能异常时，不要猜原因；先真实排查代码和复现链路，按需增加诊断日志，精准定位后再修复。
 - 这是一个开源客户端项目，前端后端等所有数据传输层都在用户本地客户端上，Electron Renderer、preload、Main 和内部 IPC 属于用户本机可信边界，不在层级间重复堆叠参数校验，只在用户输入层进行校验，进入软件传输之后，任何层级间不用校验。

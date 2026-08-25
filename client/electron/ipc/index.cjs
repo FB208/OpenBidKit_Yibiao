@@ -126,6 +126,7 @@ const workspaceDatabaseChannels = [
   'technical-plan:save-global-facts',
   'technical-plan:save-content-generation-options',
   'technical-plan:save-chapter-content',
+  'technical-plan:reset-content-generation',
   'technical-plan:clear',
   'technical-plan:open-bid-template',
   'feasibility-report:load-state',

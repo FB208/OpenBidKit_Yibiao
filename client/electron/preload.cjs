@@ -173,6 +173,7 @@ const bridge = {
     saveGlobalFacts: (globalFacts) => ipcRenderer.invoke('technical-plan:save-global-facts', globalFacts),
     saveContentGenerationOptions: (options) => ipcRenderer.invoke('technical-plan:save-content-generation-options', options),
     saveChapterContent: (payload) => ipcRenderer.invoke('technical-plan:save-chapter-content', payload),
+    resetContentGeneration: () => ipcRenderer.invoke('technical-plan:reset-content-generation'),
     clear: () => ipcRenderer.invoke('technical-plan:clear'),
     openBidTemplate: () => ipcRenderer.invoke('technical-plan:open-bid-template'),
   },

@@ -24,6 +24,7 @@ interface ContentEditPageProps {
   contentIllustrationPlan?: ContentIllustrationPlanState;
   sections: ContentGenerationSections;
   onContentGenerationOptionsChange: (options: ContentGenerationOptions) => Promise<void> | void;
+  onContentGenerationReset: () => Promise<void>;
   onContentSaved: (item: OutlineItem, content: string) => Promise<void> | void;
 }
 
@@ -295,6 +296,7 @@ function ContentEditPage({
   contentIllustrationPlan,
   sections,
   onContentGenerationOptionsChange,
+  onContentGenerationReset,
   onContentSaved,
 }: ContentEditPageProps) {
   const { showToast } = useToast();
@@ -318,6 +320,8 @@ function ContentEditPage({
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [pausePending, setPausePending] = useState(false);
   const [developerStageActionPending, setDeveloperStageActionPending] = useState<'continue' | 'restart' | null>(null);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetPending, setResetPending] = useState(false);
   const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const [developerMode, setDeveloperMode] = useState(false);
   const firstLeafId = allLeaves[0]?.id || '';
@@ -751,6 +755,24 @@ function ContentEditPage({
     }
   };
 
+  // 停止当前任务并清空正文阶段，供开发者从头重试完整流程。
+  const resetContentGeneration = async () => {
+    if (resetPending) return;
+    setResetPending(true);
+    try {
+      setEditingItemId(null);
+      setIsPreviewing(false);
+      setDraftContent('');
+      await onContentGenerationReset();
+      setResetDialogOpen(false);
+      showToast('正文阶段已重置', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '重置正文阶段失败', 'error');
+    } finally {
+      setResetPending(false);
+    }
+  };
+
   const retryContentCorrection = async () => {
     if (!canRetryContentCorrection) {
       return;
@@ -1105,6 +1127,16 @@ function ContentEditPage({
               <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
             </svg>
           </button>
+          {developerMode && (
+            <button
+              type="button"
+              className="danger-action"
+              onClick={() => setResetDialogOpen(true)}
+              disabled={resetPending}
+            >
+              {resetPending ? '正在重置...' : '重置正文阶段'}
+            </button>
+          )}
           {developerStageGate ? (
             <>
               <button
@@ -1253,6 +1285,31 @@ function ContentEditPage({
           )}
         </article>
       </section>
+
+      <Dialog.Root
+        open={resetDialogOpen}
+        onOpenChange={(open) => {
+          if (!resetPending) setResetDialogOpen(open);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="content-regenerate-card">
+            <div className="content-regenerate-card-head">
+              <Dialog.Title>重置正文阶段？</Dialog.Title>
+              <Dialog.Description>
+                将停止当前正文任务，并清空已生成正文、生成进度、正文编排缓存和配图计划。目录、全局事实及正文生成配置会保留。
+              </Dialog.Description>
+            </div>
+            <div className="content-regenerate-actions">
+              <Dialog.Close className="secondary-action" type="button" disabled={resetPending}>取消</Dialog.Close>
+              <button type="button" className="danger-action" onClick={() => void resetContentGeneration()} disabled={resetPending}>
+                {resetPending ? '正在重置...' : '确认重置'}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <Dialog.Root open={continuePostProcessingDialogOpen} onOpenChange={setContinuePostProcessingDialogOpen}>
         <Dialog.Portal>
