@@ -56,12 +56,12 @@ function createPiOpenXmlTool({
       chapters: Type.Optional(Type.Array(Type.Object({
         id: Type.Optional(Type.String()),
         title: Type.String({ minLength: 1, description: '投标模版里使用的一级目录标题。' }),
-        sourceTitle: Type.Optional(Type.String({ description: '招标 Word 里的真实标题。' })),
+        sourceTitle: Type.Optional(Type.String({ description: '招标 Word 里的真实标题，仅适用于招标原文结构中 heading=true 的标题。' })),
         source: Type.Optional(Type.String({ description: '该章所在原件在招标原文结构.json 中的完整 source.path；多份 Word 原件时必填。' })),
-        startBlock: Type.Optional(Type.Number({ minimum: 0, description: '起始块号，含。' })),
-        endBlock: Type.Optional(Type.Number({ minimum: 1, description: '结束块号，不含。' })),
+        startBlock: Type.Optional(Type.Number({ minimum: 0, description: '起始标题块号，含；heading=false 时必须与 endBlock 一起提供。' })),
+        endBlock: Type.Optional(Type.Number({ minimum: 1, description: '结束块号，不含；使用 startBlock 时应停在下一同级章节或附件之前。' })),
       }, { additionalProperties: false }), {
-        description: 'extract-chapters 必填。每章必须提供 sourceTitle 或 startBlock。',
+        description: 'extract-chapters 必填。heading=true 可提供 sourceTitle；heading=false 必须提供 startBlock 和 endBlock。',
       })),
       fields: Type.Optional(Type.Array(Type.Object({
         candidate_id: Type.String({ minLength: 1, description: '投标模版字段候选.json 中的候选 ID。' }),

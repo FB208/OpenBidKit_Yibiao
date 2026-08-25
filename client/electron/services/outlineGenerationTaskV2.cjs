@@ -671,7 +671,7 @@ function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRoot
 12. 程序已为 ${OUTLINE_OUTPUT_FILE} 和 ${OUTLINE_REVIEW_FILE} 预置 Schema。分别调用 json-validation 校验，只传 file_path；校验失败后必须先修改对应文件，再重新校验。`;
 }
 
-// 运行 V2 目录业务任务；普通目录模式下一级目录确认后并行调度目录任务和独立模版提取任务。
+// 运行 V2 目录业务任务；存在模板填写目录时并行调度目录任务和独立模版提取任务。
 async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, workspaceStore, knowledgeBaseService, openXmlHelperService, updateTask, checkpointTask, taskControl, payload }) {
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
   const restoringOutlineSelection = payload?.agent_resume?.phase === 'outline-selection';
@@ -909,14 +909,17 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
 
   const confirmed = await taskControl.waitForOutlineSelection();
   applyConfirmedSelection(confirmed);
-  const extractTemplate = !standaloneTechnical;
+  const templateRoots = standaloneTechnical
+    ? []
+    : lockedRoots.filter((item) => item.content_mode === 'template-fill');
+  const extractTemplate = templateRoots.length > 0;
 
   publish(
     extractTemplate
       ? '一级目录已确认，目录生成与投标模版提取并行开始'
       : standaloneTechnical
         ? '一级目录已确认，已跳过投标模版提取，开始生成技术文件目录'
-        : '一级目录已确认，开始生成完整目录',
+        : '一级目录已确认，当前无模板填写目录，已跳过投标模版提取，开始生成完整目录',
     35,
   );
 
@@ -961,7 +964,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
         workspaceStore,
         openXmlHelperService,
         taskId: templateTaskId,
-        outline: lockedRoots,
+        outline: templateRoots,
         signal: parallelSignal,
         onActivity: publishTemplateAgentActivity,
         onCheckpoint: syncTemplateAgentCheckpoint,
@@ -1175,7 +1178,9 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
   }
   const persistedFinalOutline = stripOutlineInternalFields(finalOutline);
   const completionLog = !extractTemplate
-    ? '目录生成与审核完成'
+    ? standaloneTechnical
+      ? '目录生成与审核完成'
+      : '目录生成与审核完成，当前无模板填写目录'
     : templateResult.status === 'skipped'
       ? '目录生成与审核完成，当前无招标 Word 原件'
       : `目录生成、审核与投标模版提取完成，共标记 ${templateResult.field_count || 0} 个字段`;
@@ -1214,7 +1219,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     },
   };
   const finalCheckpoint = checkpointTask(finalTaskPatch, {
-    bidTemplateExists: !standaloneTechnical && workspaceStore.hasBidTemplate(),
+    bidTemplateExists: extractTemplate && workspaceStore.hasBidTemplate(),
     outlineData: { ...persistedFinalOutline, project_overview: storedPlan.projectOverview || '' },
     outlineWordControlSnapshot: wordControlOptions,
     contentGenerationTask: undefined,
