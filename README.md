@@ -1,5 +1,12 @@
 <img src="./screenshots/banner.webp" alt="易标使用演示视频" width="100%">
 
+## 🙏 赞助商
+
+| 赞助商 | 说明 |
+| --- | --- |
+| ![APIMart_AI](./screenshots/APIMart_AI) | 感谢 APIMart 赞助了本项目！APIMart 是专注 AI 图片/视频生成的低价 API 平台，GPT-Image-2 低至 $0.006/张，1 美元可出图 160+ 张。图片、视频一套异步 API 通吃，提交任务拿 ID、回调取结果，跑批万张不超时、换模型不改代码。按量付费、无月费，通过此[注册链接](https://go.apimart.ai/gh-openbidkit_yibiao)注册即可开用。 |
+
+
 # 易标投标工具箱 - AI智能标书写作助手
 
 <p align="center">
