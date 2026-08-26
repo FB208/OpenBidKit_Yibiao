@@ -9,13 +9,13 @@ const githubStarNotice = {
 export const appMenuItems: AppMenuItem[] = [
   {
     id: 'bid-generation',
-    label: '标书生成',
-    description: '技术方案、可研报告与商务标编制',
+    label: '内容生成',
+    description: '标书与可研报告内容编制',
     children: [
       {
         id: 'technical-plan',
-        label: '生成技术方案',
-        description: '根据招标文件生成新方案，或导入已有方案继续优化扩写',
+        label: '标书生成',
+        description: '根据招标文件生成技术方案、商务标等投标内容，或导入已有方案继续优化扩写',
         icon: 'document',
       },
       {
@@ -24,13 +24,6 @@ export const appMenuItems: AppMenuItem[] = [
         description: '根据项目资料编制可行性研究报告',
         icon: 'document',
         badge: 'Beta',
-      },
-      {
-        id: 'business-bid',
-        label: '商务标',
-        description: '整理商务响应、报价口径和合同偏离材料。',
-        icon: 'briefcase',
-        notice: githubStarNotice,
       },
     ],
   },

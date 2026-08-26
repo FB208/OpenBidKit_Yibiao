@@ -60,6 +60,18 @@ export interface ContentGenerationOptions {
   originalPlanCoverageRepairMode: OriginalPlanCoverageRepairMode;
 }
 
+export interface TechnicalPlanGenerationConfig {
+  bidAnalysisMode: BidAnalysisMode;
+  bidAnalysisSelectedTaskIds: string[];
+  bidSectionMode: BidSectionMode;
+  outlineMode: OutlineMode;
+  outlineExpansionMode: OutlineExpansionMode;
+  outlineWordControlOptions: OutlineWordControlOptions;
+  referenceKnowledgeDocumentIds: string[];
+  globalFactsMode: GlobalFactsMode;
+  contentGenerationOptions: ContentGenerationOptions;
+}
+
 export interface ContentGenerationProgressDetail {
   mode: 'full' | 'single' | 'correction' | 'illustration' | 'illustration-generation';
   phase: ContentGenerationPhase;

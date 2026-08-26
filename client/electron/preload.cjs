@@ -154,6 +154,8 @@ const bridge = {
   },
   technicalPlan: {
     loadState: () => ipcRenderer.invoke('technical-plan:load-state'),
+    loadGenerationConfig: () => ipcRenderer.invoke('technical-plan:load-generation-config'),
+    saveGenerationConfig: (partial) => ipcRenderer.invoke('technical-plan:save-generation-config', partial),
     importTenderDocument: (filePaths) => ipcRenderer.invoke('technical-plan:import-tender-document', filePaths),
     removeTenderDocument: (sourceId) => ipcRenderer.invoke('technical-plan:remove-tender-document', sourceId),
     importOriginalPlanDocument: (filePaths) => ipcRenderer.invoke('technical-plan:import-original-plan-document', filePaths),

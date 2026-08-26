@@ -111,6 +111,8 @@ function sendToWebContents(webContents, channel, payload) {
 
 const workspaceDatabaseChannels = [
   'technical-plan:load-state',
+  'technical-plan:load-generation-config',
+  'technical-plan:save-generation-config',
   'technical-plan:import-tender-document',
   'technical-plan:remove-tender-document',
   'technical-plan:import-original-plan-document',

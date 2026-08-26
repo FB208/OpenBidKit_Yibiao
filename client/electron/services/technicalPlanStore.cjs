@@ -39,6 +39,21 @@ const defaultOutlineWordControlOptions = Object.freeze({
   sectionWords: 0,
   strictSectionWords: false,
 });
+const defaultHtmlImageTypes = '甘特图、进度网络图、组织架构图、泳道图、RACI 职责矩阵、风险矩阵、系统架构与拓扑图、WBS 工作分解结构图、鱼骨图、柱状图、折线图、饼图';
+const defaultContentGenerationOptions = Object.freeze({
+  useAiImages: true,
+  maxAiImages: 6,
+  useMermaidImages: true,
+  maxMermaidImages: 5,
+  useHtmlImages: true,
+  maxHtmlImages: 10,
+  htmlImageTypes: defaultHtmlImageTypes,
+  tableRequirement: 'heavy',
+  enableConsistencyAudit: true,
+  consistencyRepairMode: 'agent',
+  enableOriginalPlanCoverageAudit: false,
+  originalPlanCoverageRepairMode: 'agent',
+});
 
 const initialState = {
   step: 'document-analysis',
@@ -67,7 +82,7 @@ const initialState = {
   globalFactsTask: undefined,
   globalFacts: [],
   contentGenerationTask: undefined,
-  contentGenerationOptions: undefined,
+  contentGenerationOptions: { ...defaultContentGenerationOptions },
   contentGenerationSections: {},
   contentGenerationPlans: {},
   contentIllustrationPlan: undefined,
@@ -315,10 +330,6 @@ function getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds) {
   return normalizeBidAnalysisConfig(mode, selectedTaskIds).selectedTaskIds;
 }
 
-function isValidOutlineMode(value) {
-  return value === 'aligned' || value === 'response-file' || value === 'standalone-technical';
-}
-
 function isValidOutlineExpansionMode(value) {
   return value === 'original-only' || value === 'ai-complement';
 }
@@ -329,6 +340,60 @@ function isValidGlobalFactsMode(value) {
 
 function normalizeGlobalFactsMode(value) {
   return isValidGlobalFactsMode(value) ? value : 'fabricate';
+}
+
+function normalizeGenerationDocumentIds(values) {
+  return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter(Boolean))];
+}
+
+function normalizeContentGenerationOptions(options) {
+  const source = options && typeof options === 'object' && !Array.isArray(options) ? options : {};
+  return {
+    useAiImages: hasOwn(source, 'useAiImages') ? Boolean(source.useAiImages) : defaultContentGenerationOptions.useAiImages,
+    maxAiImages: hasOwn(source, 'maxAiImages') ? normalizeNonNegativeInteger(source.maxAiImages) : defaultContentGenerationOptions.maxAiImages,
+    useMermaidImages: hasOwn(source, 'useMermaidImages') ? Boolean(source.useMermaidImages) : defaultContentGenerationOptions.useMermaidImages,
+    maxMermaidImages: hasOwn(source, 'maxMermaidImages') ? normalizeNonNegativeInteger(source.maxMermaidImages) : defaultContentGenerationOptions.maxMermaidImages,
+    useHtmlImages: hasOwn(source, 'useHtmlImages') ? Boolean(source.useHtmlImages) : defaultContentGenerationOptions.useHtmlImages,
+    maxHtmlImages: hasOwn(source, 'maxHtmlImages') ? normalizeNonNegativeInteger(source.maxHtmlImages) : defaultContentGenerationOptions.maxHtmlImages,
+    htmlImageTypes: String(source.htmlImageTypes || defaultContentGenerationOptions.htmlImageTypes),
+    tableRequirement: ['none', 'light', 'moderate', 'heavy'].includes(source.tableRequirement) ? source.tableRequirement : defaultContentGenerationOptions.tableRequirement,
+    enableConsistencyAudit: hasOwn(source, 'enableConsistencyAudit') ? Boolean(source.enableConsistencyAudit) : defaultContentGenerationOptions.enableConsistencyAudit,
+    consistencyRepairMode: ['agent', 'normal'].includes(source.consistencyRepairMode) ? source.consistencyRepairMode : defaultContentGenerationOptions.consistencyRepairMode,
+    enableOriginalPlanCoverageAudit: hasOwn(source, 'enableOriginalPlanCoverageAudit') ? Boolean(source.enableOriginalPlanCoverageAudit) : defaultContentGenerationOptions.enableOriginalPlanCoverageAudit,
+    originalPlanCoverageRepairMode: ['agent', 'normal'].includes(source.originalPlanCoverageRepairMode) ? source.originalPlanCoverageRepairMode : defaultContentGenerationOptions.originalPlanCoverageRepairMode,
+  };
+}
+
+function createDefaultGenerationConfig() {
+  const bidAnalysis = normalizeBidAnalysisConfig('key', []);
+  return {
+    bidAnalysisMode: bidAnalysis.mode,
+    bidAnalysisSelectedTaskIds: bidAnalysis.selectedTaskIds,
+    bidSectionMode: 'single',
+    outlineMode: 'response-file',
+    outlineExpansionMode: 'ai-complement',
+    outlineWordControlOptions: { ...defaultOutlineWordControlOptions },
+    referenceKnowledgeDocumentIds: [],
+    globalFactsMode: 'fabricate',
+    contentGenerationOptions: { ...defaultContentGenerationOptions },
+  };
+}
+
+function normalizeGenerationConfig(config) {
+  const source = config && typeof config === 'object' && !Array.isArray(config) ? config : {};
+  const defaults = createDefaultGenerationConfig();
+  const bidAnalysis = normalizeBidAnalysisConfig(source.bidAnalysisMode, source.bidAnalysisSelectedTaskIds);
+  return {
+    bidAnalysisMode: bidAnalysis.mode,
+    bidAnalysisSelectedTaskIds: bidAnalysis.selectedTaskIds,
+    bidSectionMode: normalizeBidSectionMode(source.bidSectionMode),
+    outlineMode: source.outlineMode === 'standalone-technical' ? 'standalone-technical' : 'response-file',
+    outlineExpansionMode: isValidOutlineExpansionMode(source.outlineExpansionMode) ? source.outlineExpansionMode : defaults.outlineExpansionMode,
+    outlineWordControlOptions: normalizeOutlineWordControlOptions(source.outlineWordControlOptions),
+    referenceKnowledgeDocumentIds: normalizeGenerationDocumentIds(source.referenceKnowledgeDocumentIds),
+    globalFactsMode: normalizeGlobalFactsMode(source.globalFactsMode),
+    contentGenerationOptions: normalizeContentGenerationOptions(source.contentGenerationOptions),
+  };
 }
 
 function collectLeafItems(items) {
@@ -666,8 +731,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (existing) return existing;
     const timestamp = now();
     db.prepare(`
-      INSERT INTO technical_plan_meta (id, step, bid_analysis_mode, outline_mode, outline_expansion_mode, created_at, updated_at)
-      VALUES (1, 'document-analysis', 'key', 'aligned', 'ai-complement', @timestamp, @timestamp)
+      INSERT INTO technical_plan_meta (id, step, created_at, updated_at)
+      VALUES (1, 'document-analysis', @timestamp, @timestamp)
     `).run({ timestamp });
     return db.prepare('SELECT * FROM technical_plan_meta WHERE id = 1').get();
   }
@@ -687,6 +752,174 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       ...Object.fromEntries(entries),
       updated_at: now(),
     });
+  }
+
+  function ensureGenerationConfigRow() {
+    const existing = db.prepare('SELECT * FROM technical_plan_generation_config WHERE id = 1').get();
+    if (existing) return existing;
+    const timestamp = now();
+    const defaults = createDefaultGenerationConfig();
+    const content = defaults.contentGenerationOptions;
+    db.prepare(`
+      INSERT INTO technical_plan_generation_config (
+        id, bid_analysis_mode, bid_section_mode, outline_mode, outline_expansion_mode,
+        minimum_words, maximum_words, section_words, strict_section_words, global_facts_mode,
+        use_ai_images, max_ai_images, use_mermaid_images, max_mermaid_images,
+        use_html_images, max_html_images, html_image_types, table_requirement,
+        enable_consistency_audit, consistency_repair_mode,
+        enable_original_plan_coverage_audit, original_plan_coverage_repair_mode,
+        created_at, updated_at
+      ) VALUES (
+        1, @bid_analysis_mode, @bid_section_mode, @outline_mode, @outline_expansion_mode,
+        @minimum_words, @maximum_words, @section_words, @strict_section_words, @global_facts_mode,
+        @use_ai_images, @max_ai_images, @use_mermaid_images, @max_mermaid_images,
+        @use_html_images, @max_html_images, @html_image_types, @table_requirement,
+        @enable_consistency_audit, @consistency_repair_mode,
+        @enable_original_plan_coverage_audit, @original_plan_coverage_repair_mode,
+        @created_at, @updated_at
+      )
+    `).run({
+      bid_analysis_mode: defaults.bidAnalysisMode,
+      bid_section_mode: defaults.bidSectionMode,
+      outline_mode: defaults.outlineMode,
+      outline_expansion_mode: defaults.outlineExpansionMode,
+      minimum_words: defaults.outlineWordControlOptions.minimumWords,
+      maximum_words: defaults.outlineWordControlOptions.maximumWords,
+      section_words: defaults.outlineWordControlOptions.sectionWords,
+      strict_section_words: toDbBool(defaults.outlineWordControlOptions.strictSectionWords),
+      global_facts_mode: defaults.globalFactsMode,
+      use_ai_images: toDbBool(content.useAiImages),
+      max_ai_images: content.maxAiImages,
+      use_mermaid_images: toDbBool(content.useMermaidImages),
+      max_mermaid_images: content.maxMermaidImages,
+      use_html_images: toDbBool(content.useHtmlImages),
+      max_html_images: content.maxHtmlImages,
+      html_image_types: content.htmlImageTypes,
+      table_requirement: content.tableRequirement,
+      enable_consistency_audit: toDbBool(content.enableConsistencyAudit),
+      consistency_repair_mode: content.consistencyRepairMode,
+      enable_original_plan_coverage_audit: toDbBool(content.enableOriginalPlanCoverageAudit),
+      original_plan_coverage_repair_mode: content.originalPlanCoverageRepairMode,
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+    return db.prepare('SELECT * FROM technical_plan_generation_config WHERE id = 1').get();
+  }
+
+  function loadGenerationBidTaskIds() {
+    return db.prepare('SELECT task_id FROM technical_plan_generation_bid_tasks ORDER BY sort_order ASC').all().map((row) => row.task_id);
+  }
+
+  function loadGenerationReferenceDocumentIds() {
+    return db.prepare('SELECT document_id FROM technical_plan_generation_reference_docs ORDER BY sort_order ASC').all().map((row) => row.document_id);
+  }
+
+  function replaceGenerationList(tableName, columnName, values) {
+    db.prepare(`DELETE FROM ${tableName}`).run();
+    const insert = db.prepare(`INSERT INTO ${tableName} (${columnName}, sort_order) VALUES (@value, @sort_order)`);
+    normalizeGenerationDocumentIds(values).forEach((value, index) => insert.run({ value, sort_order: index }));
+  }
+
+  // 读取并规范化当前项目全部生成配置。
+  function loadGenerationConfig() {
+    const row = ensureGenerationConfigRow();
+    return normalizeGenerationConfig({
+      bidAnalysisMode: row.bid_analysis_mode,
+      bidAnalysisSelectedTaskIds: loadGenerationBidTaskIds(),
+      bidSectionMode: row.bid_section_mode,
+      outlineMode: row.outline_mode,
+      outlineExpansionMode: row.outline_expansion_mode,
+      outlineWordControlOptions: {
+        minimumWords: row.minimum_words,
+        maximumWords: row.maximum_words,
+        sectionWords: row.section_words,
+        strictSectionWords: fromDbBool(row.strict_section_words),
+      },
+      referenceKnowledgeDocumentIds: loadGenerationReferenceDocumentIds(),
+      globalFactsMode: row.global_facts_mode,
+      contentGenerationOptions: {
+        useAiImages: fromDbBool(row.use_ai_images),
+        maxAiImages: row.max_ai_images,
+        useMermaidImages: fromDbBool(row.use_mermaid_images),
+        maxMermaidImages: row.max_mermaid_images,
+        useHtmlImages: fromDbBool(row.use_html_images),
+        maxHtmlImages: row.max_html_images,
+        htmlImageTypes: row.html_image_types,
+        tableRequirement: row.table_requirement,
+        enableConsistencyAudit: fromDbBool(row.enable_consistency_audit),
+        consistencyRepairMode: row.consistency_repair_mode,
+        enableOriginalPlanCoverageAudit: fromDbBool(row.enable_original_plan_coverage_audit),
+        originalPlanCoverageRepairMode: row.original_plan_coverage_repair_mode,
+      },
+    });
+  }
+
+  function writeGenerationConfig(config) {
+    ensureGenerationConfigRow();
+    const normalized = normalizeGenerationConfig(config);
+    const wordControl = normalized.outlineWordControlOptions;
+    const content = normalized.contentGenerationOptions;
+    db.prepare(`
+      UPDATE technical_plan_generation_config SET
+        bid_analysis_mode = @bid_analysis_mode,
+        bid_section_mode = @bid_section_mode,
+        outline_mode = @outline_mode,
+        outline_expansion_mode = @outline_expansion_mode,
+        minimum_words = @minimum_words,
+        maximum_words = @maximum_words,
+        section_words = @section_words,
+        strict_section_words = @strict_section_words,
+        global_facts_mode = @global_facts_mode,
+        use_ai_images = @use_ai_images,
+        max_ai_images = @max_ai_images,
+        use_mermaid_images = @use_mermaid_images,
+        max_mermaid_images = @max_mermaid_images,
+        use_html_images = @use_html_images,
+        max_html_images = @max_html_images,
+        html_image_types = @html_image_types,
+        table_requirement = @table_requirement,
+        enable_consistency_audit = @enable_consistency_audit,
+        consistency_repair_mode = @consistency_repair_mode,
+        enable_original_plan_coverage_audit = @enable_original_plan_coverage_audit,
+        original_plan_coverage_repair_mode = @original_plan_coverage_repair_mode,
+        updated_at = @updated_at
+      WHERE id = 1
+    `).run({
+      bid_analysis_mode: normalized.bidAnalysisMode,
+      bid_section_mode: normalized.bidSectionMode,
+      outline_mode: normalized.outlineMode,
+      outline_expansion_mode: normalized.outlineExpansionMode,
+      minimum_words: wordControl.minimumWords,
+      maximum_words: wordControl.maximumWords,
+      section_words: wordControl.sectionWords,
+      strict_section_words: toDbBool(wordControl.strictSectionWords),
+      global_facts_mode: normalized.globalFactsMode,
+      use_ai_images: toDbBool(content.useAiImages),
+      max_ai_images: content.maxAiImages,
+      use_mermaid_images: toDbBool(content.useMermaidImages),
+      max_mermaid_images: content.maxMermaidImages,
+      use_html_images: toDbBool(content.useHtmlImages),
+      max_html_images: content.maxHtmlImages,
+      html_image_types: content.htmlImageTypes,
+      table_requirement: content.tableRequirement,
+      enable_consistency_audit: toDbBool(content.enableConsistencyAudit),
+      consistency_repair_mode: content.consistencyRepairMode,
+      enable_original_plan_coverage_audit: toDbBool(content.enableOriginalPlanCoverageAudit),
+      original_plan_coverage_repair_mode: content.originalPlanCoverageRepairMode,
+      updated_at: now(),
+    });
+    replaceGenerationList('technical_plan_generation_bid_tasks', 'task_id', normalized.bidAnalysisSelectedTaskIds);
+    replaceGenerationList('technical_plan_generation_reference_docs', 'document_id', normalized.referenceKnowledgeDocumentIds);
+    return normalized;
+  }
+
+  function updateGenerationConfig(partial = {}) {
+    const current = loadGenerationConfig();
+    const merged = { ...current };
+    for (const key of Object.keys(current)) {
+      if (hasOwn(partial, key)) merged[key] = partial[key];
+    }
+    return writeGenerationConfig(merged);
   }
 
   function resolveMarkdownPath(relativeOrAbsolutePath) {
@@ -904,18 +1137,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
       throw error;
     }
-  }
-
-  function loadReferenceDocumentIds() {
-    return db.prepare('SELECT document_id FROM technical_plan_reference_docs ORDER BY sort_order ASC').all()
-      .map((row) => row.document_id);
-  }
-
-  function replaceReferenceDocumentIds(documentIds) {
-    db.prepare('DELETE FROM technical_plan_reference_docs').run();
-    const insert = db.prepare('INSERT INTO technical_plan_reference_docs (document_id, sort_order) VALUES (@document_id, @sort_order)');
-    [...new Set((Array.isArray(documentIds) ? documentIds : []).map((id) => String(id || '').trim()).filter(Boolean))]
-      .forEach((documentId, index) => insert.run({ document_id: documentId, sort_order: index }));
   }
 
   function taskFromRow(row) {
@@ -1578,23 +1799,17 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     deleteGlobalFactsAgentTask();
     db.prepare('DELETE FROM technical_plan_tasks').run();
     db.prepare('DELETE FROM technical_plan_bid_items').run();
-    db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     clearContentIllustrationPlan();
     clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
+    writeGenerationConfig(createDefaultGenerationConfig());
     updateMeta({
       step: 'document-analysis',
-      bid_analysis_mode: 'key',
-      bid_analysis_selected_task_ids_json: null,
-      outline_mode: 'aligned',
-      outline_expansion_mode: 'ai-complement',
       outline_word_control_snapshot_json: null,
       outline_project_name: null,
       outline_project_overview: null,
-      global_facts_mode: 'fabricate',
-      content_generation_options_json: null,
       content_generation_runtime_json: null,
       pending_tender_markdown_path: null,
       pending_tender_file_name: null,
@@ -1602,7 +1817,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       pending_tender_sections_json: null,
       pending_tender_total_declared: null,
       pending_tender_created_at: null,
-      bid_section_mode: 'single',
       bid_sections_json: null,
       bid_section_extraction_status: 'idle',
       bid_section_extraction_error: null,
@@ -1618,15 +1832,17 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     deleteGlobalFactsAgentTask();
     db.prepare('DELETE FROM technical_plan_tasks').run();
     db.prepare('DELETE FROM technical_plan_bid_items').run();
-    db.prepare('DELETE FROM technical_plan_reference_docs').run();
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     clearContentIllustrationPlan();
     clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
+    updateGenerationConfig({
+      referenceKnowledgeDocumentIds: [],
+      contentGenerationOptions: createDefaultGenerationConfig().contentGenerationOptions,
+    });
     updateMeta({
       step: 'bid-analysis',
-      content_generation_options_json: null,
       content_generation_runtime_json: null,
       outline_word_control_snapshot_json: null,
       outline_project_name: null,
@@ -1821,33 +2037,37 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function applyPartial(partial) {
-    const meta = ensureMetaRow();
+    ensureMetaRow();
     const metaUpdates = {};
+    const generationConfigPatch = {};
     const invalidatesContentGeneration = partial.invalidateContentGeneration === true;
 
     if (hasOwn(partial, 'step') && isValidStep(partial.step)) metaUpdates.step = partial.step;
-    if (hasOwn(partial, 'bidAnalysisMode') && isValidBidMode(partial.bidAnalysisMode)) metaUpdates.bid_analysis_mode = partial.bidAnalysisMode;
-    if (hasOwn(partial, 'bidAnalysisSelectedTaskIds')) metaUpdates.bid_analysis_selected_task_ids_json = jsonOrNull(normalizeBidAnalysisTaskIds(partial.bidAnalysisSelectedTaskIds));
-    if (hasOwn(partial, 'bidSectionMode')) metaUpdates.bid_section_mode = normalizeBidSectionMode(partial.bidSectionMode);
+    if (hasOwn(partial, 'bidAnalysisMode')) generationConfigPatch.bidAnalysisMode = partial.bidAnalysisMode;
+    if (hasOwn(partial, 'bidAnalysisSelectedTaskIds')) generationConfigPatch.bidAnalysisSelectedTaskIds = partial.bidAnalysisSelectedTaskIds;
+    if (hasOwn(partial, 'bidSectionMode')) generationConfigPatch.bidSectionMode = partial.bidSectionMode;
     if (hasOwn(partial, 'bidSections')) metaUpdates.bid_sections_json = jsonOrNull(normalizeBidSections(partial.bidSections));
     if (hasOwn(partial, 'bidSectionExtractionStatus')) metaUpdates.bid_section_extraction_status = normalizeBidSectionExtractionStatus(partial.bidSectionExtractionStatus);
     if (hasOwn(partial, 'bidSectionExtractionError')) metaUpdates.bid_section_extraction_error = partial.bidSectionExtractionError ? String(partial.bidSectionExtractionError) : null;
-    if (hasOwn(partial, 'outlineMode') && isValidOutlineMode(partial.outlineMode)) metaUpdates.outline_mode = partial.outlineMode;
-    if (hasOwn(partial, 'outlineExpansionMode') && isValidOutlineExpansionMode(partial.outlineExpansionMode)) metaUpdates.outline_expansion_mode = partial.outlineExpansionMode;
-    if (hasOwn(partial, 'globalFactsMode')) metaUpdates.global_facts_mode = normalizeGlobalFactsMode(partial.globalFactsMode);
-    if (hasOwn(partial, 'outlineWordControlOptions')) metaUpdates.outline_word_control_options_json = jsonOrNull(normalizeOutlineWordControlOptions(partial.outlineWordControlOptions));
+    if (hasOwn(partial, 'outlineMode')) generationConfigPatch.outlineMode = partial.outlineMode;
+    if (hasOwn(partial, 'outlineExpansionMode')) generationConfigPatch.outlineExpansionMode = partial.outlineExpansionMode;
+    if (hasOwn(partial, 'globalFactsMode')) generationConfigPatch.globalFactsMode = partial.globalFactsMode;
+    if (hasOwn(partial, 'outlineWordControlOptions')) generationConfigPatch.outlineWordControlOptions = partial.outlineWordControlOptions;
+    if (hasOwn(partial, 'referenceKnowledgeDocumentIds')) generationConfigPatch.referenceKnowledgeDocumentIds = partial.referenceKnowledgeDocumentIds;
+    if (hasOwn(partial, 'contentGenerationOptions')) generationConfigPatch.contentGenerationOptions = partial.contentGenerationOptions;
     if (hasOwn(partial, 'outlineWordControlSnapshot')) {
       metaUpdates.outline_word_control_snapshot_json = partial.outlineWordControlSnapshot === undefined || partial.outlineWordControlSnapshot === null
         ? null
         : JSON.stringify(normalizeOutlineWordControlOptions(partial.outlineWordControlSnapshot));
     }
-    if (hasOwn(partial, 'contentGenerationOptions')) metaUpdates.content_generation_options_json = jsonOrNull(partial.contentGenerationOptions);
     if (!invalidatesContentGeneration && hasOwn(partial, 'contentGenerationRuntime')) metaUpdates.content_generation_runtime_json = jsonOrNull(partial.contentGenerationRuntime);
 
     if (Object.keys(metaUpdates).length) updateMeta(metaUpdates);
 
-    const nextBidMode = isValidBidMode(partial.bidAnalysisMode) ? partial.bidAnalysisMode : meta.bid_analysis_mode;
-    if (hasOwn(partial, 'referenceKnowledgeDocumentIds')) replaceReferenceDocumentIds(partial.referenceKnowledgeDocumentIds);
+    const generationConfig = Object.keys(generationConfigPatch).length
+      ? updateGenerationConfig(generationConfigPatch)
+      : loadGenerationConfig();
+    const nextBidMode = generationConfig.bidAnalysisMode;
     if (!invalidatesContentGeneration && hasOwn(partial, 'contentIllustrationPlan')) replaceContentIllustrationPlan(partial.contentIllustrationPlan);
     if (hasOwn(partial, 'contentIllustrationItem')) saveContentIllustrationItem(partial.contentIllustrationItem);
     if (hasOwn(partial, 'bidAnalysisTasks')) saveBidItems(partial.bidAnalysisTasks, nextBidMode);
@@ -1888,11 +2108,9 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
   function loadTechnicalPlan() {
     const meta = readMetaRow();
-    const bidAnalysisMode = isValidBidMode(meta.bid_analysis_mode) ? meta.bid_analysis_mode : 'key';
-    const bidAnalysisSelectedTaskIds = getBidAnalysisTaskIdsForConfig(
-      bidAnalysisMode,
-      safeJsonParse(meta.bid_analysis_selected_task_ids_json, []),
-    );
+    const generationConfig = loadGenerationConfig();
+    const bidAnalysisMode = generationConfig.bidAnalysisMode;
+    const bidAnalysisSelectedTaskIds = generationConfig.bidAnalysisSelectedTaskIds;
     const bidAnalysisTasks = loadBidItems();
     const outlineData = loadOutlineData(meta);
     const tasks = loadTasks();
@@ -1935,23 +2153,23 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       bidAnalysisSelectedTaskIds,
       bidAnalysisTasks,
       bidAnalysisProgress: calculateBidProgress(bidAnalysisMode, bidAnalysisTasks, bidAnalysisSelectedTaskIds),
-      bidSectionMode: normalizeBidSectionMode(meta.bid_section_mode),
+      bidSectionMode: generationConfig.bidSectionMode,
       bidSections,
       bidSectionExtractionStatus: bidSectionExtractionTask?.status
         ? normalizeBidSectionExtractionStatus(bidSectionExtractionTask.status)
         : normalizeBidSectionExtractionStatus(meta.bid_section_extraction_status),
       bidSectionExtractionError: bidSectionExtractionTask?.error || meta.bid_section_extraction_error || undefined,
-      outlineMode: isValidOutlineMode(meta.outline_mode) ? meta.outline_mode : 'aligned',
-      outlineExpansionMode: isValidOutlineExpansionMode(meta.outline_expansion_mode) ? meta.outline_expansion_mode : 'ai-complement',
-      globalFactsMode: normalizeGlobalFactsMode(meta.global_facts_mode),
-      outlineWordControlOptions: normalizeOutlineWordControlOptions(safeJsonParse(meta.outline_word_control_options_json, defaultOutlineWordControlOptions)),
+      outlineMode: generationConfig.outlineMode,
+      outlineExpansionMode: generationConfig.outlineExpansionMode,
+      globalFactsMode: generationConfig.globalFactsMode,
+      outlineWordControlOptions: generationConfig.outlineWordControlOptions,
       outlineWordControlSnapshot: meta.outline_word_control_snapshot_json
         ? normalizeOutlineWordControlOptions(safeJsonParse(meta.outline_word_control_snapshot_json, defaultOutlineWordControlOptions))
         : undefined,
-      referenceKnowledgeDocumentIds: loadReferenceDocumentIds(),
+      referenceKnowledgeDocumentIds: generationConfig.referenceKnowledgeDocumentIds,
       ...tasks,
       globalFacts: loadGlobalFacts(),
-      contentGenerationOptions: safeJsonParse(meta.content_generation_options_json, undefined),
+      contentGenerationOptions: generationConfig.contentGenerationOptions,
       contentGenerationRuntime: safeJsonParse(meta.content_generation_runtime_json, undefined),
       contentIllustrationPlan: loadContentIllustrationPlan(),
       bidTemplateExists: fs.existsSync(bidTemplatePath) && fs.existsSync(bidTemplateFieldsPath),
@@ -1991,11 +2209,41 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     return updateTechnicalPlan({ step });
   }
 
+  // 局部保存统一生成配置；标段变化继续沿用现有下游清理规则。
+  function saveGenerationConfig(partial = {}) {
+    let saved;
+    const transaction = db.transaction(() => {
+      const current = loadGenerationConfig();
+      const nextSectionMode = hasOwn(partial, 'bidSectionMode')
+        ? normalizeBidSectionMode(partial.bidSectionMode)
+        : current.bidSectionMode;
+      const sectionModeChanged = nextSectionMode !== current.bidSectionMode;
+
+      if (sectionModeChanged) {
+        clearDownstreamFromBidSectionChange();
+        resetTenderWorkingCopyToOriginal();
+        updateMeta({
+          bid_sections_json: null,
+          bid_section_extraction_status: 'idle',
+          bid_section_extraction_error: null,
+          selected_section_id: null,
+          selected_section_title: null,
+        });
+      } else if (hasOwn(partial, 'contentGenerationOptions')) {
+        clearContentIllustrationPlan();
+      }
+
+      saved = updateGenerationConfig(partial);
+    });
+    transaction();
+    return saved;
+  }
+
   function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineMode, outlineExpansionMode, wordControlOptions } = {}) {
-    updateTechnicalPlan({
-      outlineMode: isValidOutlineMode(outlineMode) ? outlineMode : 'aligned',
-      outlineExpansionMode: isValidOutlineExpansionMode(outlineExpansionMode) ? outlineExpansionMode : 'ai-complement',
-      outlineWordControlOptions: normalizeOutlineWordControlOptions(wordControlOptions),
+    saveGenerationConfig({
+      outlineMode,
+      outlineExpansionMode,
+      outlineWordControlOptions: wordControlOptions,
       referenceKnowledgeDocumentIds,
     });
   }
@@ -2038,42 +2286,19 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
   function saveBidAnalysisConfig({ mode, selectedTaskIds, bidSectionMode } = {}) {
     const config = normalizeBidAnalysisConfig(mode, selectedTaskIds);
-    const nextSectionMode = bidSectionMode === undefined ? null : normalizeBidSectionMode(bidSectionMode);
-    const meta = ensureMetaRow();
-    const shouldChangeSectionMode = nextSectionMode && nextSectionMode !== normalizeBidSectionMode(meta.bid_section_mode);
-    if (!shouldChangeSectionMode) {
-      updateTechnicalPlan({
-        bidAnalysisMode: config.mode,
-        bidAnalysisSelectedTaskIds: config.selectedTaskIds,
-      });
-      return;
-    }
-
-    const transaction = db.transaction(() => {
-      clearDownstreamFromBidSectionChange();
-      if (nextSectionMode === 'single' || nextSectionMode === 'multiple') {
-        resetTenderWorkingCopyToOriginal();
-      }
-      updateMeta({
-        bid_analysis_mode: config.mode,
-        bid_analysis_selected_task_ids_json: jsonOrNull(config.selectedTaskIds),
-        bid_section_mode: nextSectionMode,
-        bid_sections_json: null,
-        bid_section_extraction_status: 'idle',
-        bid_section_extraction_error: null,
-        selected_section_id: null,
-        selected_section_title: null,
-      });
+    saveGenerationConfig({
+      bidAnalysisMode: config.mode,
+      bidAnalysisSelectedTaskIds: config.selectedTaskIds,
+      ...(bidSectionMode === undefined ? {} : { bidSectionMode }),
     });
-    transaction();
   }
 
   function prepareBidSectionExtraction() {
     const transaction = db.transaction(() => {
       clearDownstreamFromBidSectionChange();
       resetTenderWorkingCopyToOriginal();
+      updateGenerationConfig({ bidSectionMode: 'multiple' });
       updateMeta({
-        bid_section_mode: 'multiple',
         bid_sections_json: null,
         bid_section_extraction_status: 'running',
         bid_section_extraction_error: null,
@@ -2143,9 +2368,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function saveGlobalFactsConfig({ globalFactsMode } = {}) {
-    const normalized = normalizeGlobalFactsMode(globalFactsMode);
-    updateTechnicalPlan({ globalFactsMode: normalized });
-    return { globalFactsMode: normalized };
+    const saved = saveGenerationConfig({ globalFactsMode });
+    return { globalFactsMode: saved.globalFactsMode };
   }
 
   function saveGlobalFacts(globalFacts) {
@@ -2179,8 +2403,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function saveContentGenerationOptions(contentGenerationOptions) {
-    updateTechnicalPlan({ contentGenerationOptions, contentIllustrationPlan: undefined });
-    return { contentGenerationOptions, contentIllustrationPlan: undefined };
+    const saved = saveGenerationConfig({ contentGenerationOptions });
+    return { contentGenerationOptions: saved.contentGenerationOptions, contentIllustrationPlan: undefined };
   }
 
   function saveChapterContent({ nodeId, content }) {
@@ -2421,8 +2645,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         original_plan_markdown_chars: 0,
         original_plan_parser_label: null,
         original_plan_imported_at: null,
-        outline_expansion_mode: 'ai-complement',
       });
+      updateGenerationConfig({ outlineExpansionMode: 'ai-complement' });
       clearDownstreamFromOriginalPlan();
     });
     transaction();
@@ -2493,11 +2717,11 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       writeMarkdownFile(tenderMarkdownPath, workingMarkdown, 'tender');
       const transaction = db.transaction(() => {
         clearDownstreamFromBidSectionChange();
+        updateGenerationConfig({ bidSectionMode: 'multiple' });
         updateMeta({
           tender_markdown_path: tenderMarkdownRelativePath,
           tender_markdown_hash: stableHash(workingMarkdown),
           tender_markdown_chars: workingMarkdown.length,
-          bid_section_mode: 'multiple',
           selected_section_id: matched.id || null,
           selected_section_title: matched.title || null,
         });
@@ -2521,12 +2745,15 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const transaction = db.transaction(() => {
       db.prepare('DELETE FROM technical_plan_tasks').run();
       db.prepare('DELETE FROM technical_plan_bid_items').run();
-      db.prepare('DELETE FROM technical_plan_reference_docs').run();
+      db.prepare('DELETE FROM technical_plan_generation_bid_tasks').run();
+      db.prepare('DELETE FROM technical_plan_generation_reference_docs').run();
+      db.prepare('DELETE FROM technical_plan_generation_config').run();
       db.prepare('DELETE FROM technical_plan_outline_nodes').run();
       db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
       clearContentIllustrationPlan();
       db.prepare('DELETE FROM technical_plan_meta').run();
       ensureMetaRow();
+      ensureGenerationConfigRow();
     });
     transaction();
     if (fs.existsSync(tenderMarkdownPath)) {
@@ -2547,10 +2774,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     return { success: true, message: '技术方案缓存已清空' };
   }
 
+  ensureGenerationConfigRow();
   cleanupLegacyPendingTenderState(ensureMetaRow());
 
   return {
     loadTechnicalPlan,
+    loadGenerationConfig,
+    saveGenerationConfig,
     updateTechnicalPlan,
     updateTechnicalPlanWithoutReload,
     clearMermaidCache: clearTechnicalPlanMermaidCache,

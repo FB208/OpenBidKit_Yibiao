@@ -398,7 +398,7 @@
 }
 
 
-/* [6459-6847] demo-*-/opportunity-* (BusinessBidPage.tsx + BidOpportunityPage.tsx 共用占位页) */
+/* [6459-6847] demo-*-/opportunity-*（BidOpportunityPage.tsx 占位页） */
 .demo-coming-page {
   position: relative;
   display: grid;
@@ -430,12 +430,6 @@
   background:
     radial-gradient(circle at 88% 18%, rgba(33, 116, 253, 0.18), transparent 32%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.97), rgba(248, 250, 253, 0.92));
-}
-
-.business-bid-demo .demo-hero-card {
-  background:
-    radial-gradient(circle at 88% 16%, rgba(91, 84, 211, 0.18), transparent 34%),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(245, 248, 255, 0.94));
 }
 
 .opportunity-hero-card {

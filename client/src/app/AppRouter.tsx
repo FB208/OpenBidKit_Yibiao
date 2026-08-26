@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import type { SectionId } from '../shared/types/navigation';
 import { getAppMenuItemById } from './menuConfig';
 import BidOpportunityPage from '../features/bid-opportunity/pages/BidOpportunityPage';
-import BusinessBidPage from '../features/business-bid/pages/BusinessBidPage';
 import ContentExpansionReplaceTestPage from '../features/developer/pages/ContentExpansionReplaceTestPage';
 import DeveloperDemoPage, { isDeveloperDemoSection } from '../features/developer/pages/DeveloperDemoPage';
 import AgentTestPage from '../features/developer/pages/AgentTestPage';
@@ -50,8 +49,6 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <TechnicalPlanHome registerLeaveGuard={registerLeaveGuard} onSectionChange={onSectionChange} />;
     case 'feasibility-report':
       return <FeasibilityReportHome registerLeaveGuard={registerLeaveGuard} onSectionChange={onSectionChange} />;
-    case 'business-bid':
-      return <BusinessBidPage />;
     case 'document-knowledge-base':
       return <KnowledgeBasePage />;
     case 'resources':

@@ -25,6 +25,7 @@ interface ConfigUsagePayload {
   image_model_status?: string;
   bid_analysis_mode?: string;
   outline_mode?: string;
+  outline_expansion_mode?: string;
   table_requirement?: string;
   use_mermaid_images?: boolean;
   use_ai_images?: boolean;
@@ -47,6 +48,7 @@ const configUsageFields: Array<[keyof ConfigUsagePayload, string]> = [
   ['image_model_status', 'imageModelStatuses'],
   ['bid_analysis_mode', 'bidAnalysisModes'],
   ['outline_mode', 'outlineModes'],
+  ['outline_expansion_mode', 'outlineExpansionModes'],
   ['table_requirement', 'tableRequirements'],
   ['use_mermaid_images', 'useMermaidImages'],
   ['use_ai_images', 'useAiImages'],

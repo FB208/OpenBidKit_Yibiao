@@ -4,7 +4,7 @@
 -- 1. 本文件用于开源开发者阅读、评审和排查问题，展示 workspace/yibiao.sqlite 的目标完整表结构。
 -- 2. 用户运行客户端时不需要手动执行本文件。
 -- 3. 客户端运行时建表和升级以 Electron Main 侧 migration 代码为准。
--- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17、目录字数控制 v18、全局事实补全模式 v22、可行性研究报告 v23 目标结构。
+-- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17、目录字数控制 v18、全局事实补全模式 v22、可行性研究报告 v23、统一生成配置 v24 目标结构。
 -- 5. 每次表结构调整后，需要同步更新本文件和 runtime migration 版本。
 -- 6. 本文件不保存历史版本，每次更新都写入最新目标完整结构。
 
@@ -14,14 +14,14 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 23;
+PRAGMA user_version = 24;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
 -- ============================================================================
 
 -- 技术方案单例元数据。
--- 只保留一行 id = 1，用于保存当前步骤、招标文件/原方案 Markdown 元数据、模式配置和正文生成运行时 JSON。
+-- 只保留一行 id = 1，用于保存当前步骤、招标文件/原方案 Markdown 元数据和任务运行状态。
 -- 招标文件 Markdown 原文不进入 SQLite，原始文件保存到 userData/workspace/technical-plan/tender-original.md，当前投标范围工作副本保存到 userData/workspace/technical-plan/tender.md。
 -- 原方案 Markdown 原文不进入 SQLite，保存到 userData/workspace/technical-plan/original-plan.md。
 -- pending_tender_* 为旧版 Step01 标段待选择兼容清理字段，新流程不再写入。
@@ -54,25 +54,13 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   pending_tender_sections_json TEXT,
   pending_tender_total_declared INTEGER,
   pending_tender_created_at TEXT,
-  bid_analysis_mode TEXT NOT NULL DEFAULT 'key',
-  -- v10 招标解析项选择配置，JSON 数组，关键项由运行时代码强制并入。
-  bid_analysis_selected_task_ids_json TEXT,
-  -- v14 投标范围模式：single / multiple；多标段 AI 提取结果保存在 bid_sections_json。
-  bid_section_mode TEXT NOT NULL DEFAULT 'single',
   bid_sections_json TEXT,
   bid_section_extraction_status TEXT NOT NULL DEFAULT 'idle',
   bid_section_extraction_error TEXT,
-  outline_mode TEXT NOT NULL DEFAULT 'aligned',
-  -- v13 上传原方案后的目录使用方式：original-only / ai-complement。
-  outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
-  -- v22 Step04 事实补全模式：fabricate / omit / placeholder，缺省 fabricate。
-  global_facts_mode TEXT NOT NULL DEFAULT 'fabricate',
-  -- v18 Step03 当前可编辑字数设置，以及当前目录生成成功时固化的生效快照。
-  outline_word_control_options_json TEXT,
+  -- 目录生成成功时固化的字数控制生效快照；当前可编辑配置在统一生成配置表。
   outline_word_control_snapshot_json TEXT,
   outline_project_name TEXT,
   outline_project_overview TEXT,
-  content_generation_options_json TEXT,
   content_generation_runtime_json TEXT,
   -- v6 兼容字段（旧版客户端遗留，新代码不再使用但保留以兼容）
   current_bid_section_id TEXT,
@@ -84,6 +72,52 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- v24 当前项目统一生成配置；只保留一行 id = 1。
+CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  bid_analysis_mode TEXT NOT NULL DEFAULT 'key',
+  bid_section_mode TEXT NOT NULL DEFAULT 'single',
+  outline_mode TEXT NOT NULL DEFAULT 'response-file',
+  outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
+  minimum_words INTEGER NOT NULL DEFAULT 0,
+  maximum_words INTEGER NOT NULL DEFAULT 0,
+  section_words INTEGER NOT NULL DEFAULT 0,
+  strict_section_words INTEGER NOT NULL DEFAULT 0,
+  global_facts_mode TEXT NOT NULL DEFAULT 'fabricate',
+  use_ai_images INTEGER NOT NULL DEFAULT 1,
+  max_ai_images INTEGER NOT NULL DEFAULT 6,
+  use_mermaid_images INTEGER NOT NULL DEFAULT 1,
+  max_mermaid_images INTEGER NOT NULL DEFAULT 5,
+  use_html_images INTEGER NOT NULL DEFAULT 1,
+  max_html_images INTEGER NOT NULL DEFAULT 10,
+  html_image_types TEXT NOT NULL DEFAULT '',
+  table_requirement TEXT NOT NULL DEFAULT 'heavy',
+  enable_consistency_audit INTEGER NOT NULL DEFAULT 1,
+  consistency_repair_mode TEXT NOT NULL DEFAULT 'agent',
+  enable_original_plan_coverage_audit INTEGER NOT NULL DEFAULT 0,
+  original_plan_coverage_repair_mode TEXT NOT NULL DEFAULT 'agent',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- v24 统一配置中选择的招标解析项。
+CREATE TABLE IF NOT EXISTS technical_plan_generation_bid_tasks (
+  task_id TEXT PRIMARY KEY,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_technical_plan_generation_bid_tasks_order
+ON technical_plan_generation_bid_tasks(sort_order);
+
+-- v24 统一配置中选择的参考知识库文档。
+CREATE TABLE IF NOT EXISTS technical_plan_generation_reference_docs (
+  document_id TEXT PRIMARY KEY,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_technical_plan_generation_reference_docs_order
+ON technical_plan_generation_reference_docs(sort_order);
 
 -- 技术方案后台任务状态。
 CREATE TABLE IF NOT EXISTS technical_plan_tasks (
@@ -155,15 +189,6 @@ CREATE TABLE IF NOT EXISTS technical_plan_bid_items (
 
 CREATE INDEX IF NOT EXISTS idx_technical_plan_bid_items_order
 ON technical_plan_bid_items(sort_order);
-
--- 技术方案选中的参考知识库文档。
-CREATE TABLE IF NOT EXISTS technical_plan_reference_docs (
-  document_id TEXT PRIMARY KEY,
-  sort_order INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_technical_plan_reference_docs_order
-ON technical_plan_reference_docs(sort_order);
 
 -- 技术方案目录树节点。
 -- 目录结构和正文内容的权威来源。

@@ -2,6 +2,8 @@ const { ipcMain, shell } = require('electron');
 
 function registerTechnicalPlanIpc({ technicalPlanStore, taskService }) {
   ipcMain.handle('technical-plan:load-state', () => technicalPlanStore.loadTechnicalPlan());
+  ipcMain.handle('technical-plan:load-generation-config', () => technicalPlanStore.loadGenerationConfig());
+  ipcMain.handle('technical-plan:save-generation-config', (_event, partial) => technicalPlanStore.saveGenerationConfig(partial));
   ipcMain.handle('technical-plan:import-tender-document', (_event, filePaths) => taskService.importTenderDocument(filePaths));
   ipcMain.handle('technical-plan:remove-tender-document', (_event, sourceId) => taskService.removeTenderDocument(sourceId));
   ipcMain.handle('technical-plan:import-original-plan-document', (_event, filePaths) => taskService.importOriginalPlanDocument(filePaths));

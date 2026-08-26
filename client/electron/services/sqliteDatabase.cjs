@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 23;
+const schemaVersion = 24;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -32,20 +32,12 @@ function createInitialSchema(db) {
       pending_tender_sections_json TEXT,
       pending_tender_total_declared INTEGER,
       pending_tender_created_at TEXT,
-      bid_analysis_mode TEXT NOT NULL DEFAULT 'key',
-      bid_analysis_selected_task_ids_json TEXT,
-      bid_section_mode TEXT NOT NULL DEFAULT 'single',
       bid_sections_json TEXT,
       bid_section_extraction_status TEXT NOT NULL DEFAULT 'idle',
       bid_section_extraction_error TEXT,
-      outline_mode TEXT NOT NULL DEFAULT 'aligned',
-      outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
-      global_facts_mode TEXT NOT NULL DEFAULT 'fabricate',
-      outline_word_control_options_json TEXT,
       outline_word_control_snapshot_json TEXT,
       outline_project_name TEXT,
       outline_project_overview TEXT,
-      content_generation_options_json TEXT,
       content_generation_runtime_json TEXT,
       selected_section_id TEXT,
       selected_section_title TEXT,
@@ -78,14 +70,6 @@ function createInitialSchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_technical_plan_bid_items_order
     ON technical_plan_bid_items(sort_order);
-
-    CREATE TABLE IF NOT EXISTS technical_plan_reference_docs (
-      document_id TEXT PRIMARY KEY,
-      sort_order INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_technical_plan_reference_docs_order
-    ON technical_plan_reference_docs(sort_order);
 
     CREATE TABLE IF NOT EXISTS technical_plan_outline_nodes (
       node_id TEXT PRIMARY KEY,
@@ -140,6 +124,56 @@ function createInitialSchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_technical_plan_global_fact_groups_order
     ON technical_plan_global_fact_groups(sort_order);
+  `);
+
+  createTechnicalPlanGenerationConfigSchema(db);
+}
+
+// 技术方案生成配置统一使用单例配置表，列表选择使用关联表保存顺序。
+function createTechnicalPlanGenerationConfigSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      bid_analysis_mode TEXT NOT NULL DEFAULT 'key',
+      bid_section_mode TEXT NOT NULL DEFAULT 'single',
+      outline_mode TEXT NOT NULL DEFAULT 'response-file',
+      outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
+      minimum_words INTEGER NOT NULL DEFAULT 0,
+      maximum_words INTEGER NOT NULL DEFAULT 0,
+      section_words INTEGER NOT NULL DEFAULT 0,
+      strict_section_words INTEGER NOT NULL DEFAULT 0,
+      global_facts_mode TEXT NOT NULL DEFAULT 'fabricate',
+      use_ai_images INTEGER NOT NULL DEFAULT 1,
+      max_ai_images INTEGER NOT NULL DEFAULT 6,
+      use_mermaid_images INTEGER NOT NULL DEFAULT 1,
+      max_mermaid_images INTEGER NOT NULL DEFAULT 5,
+      use_html_images INTEGER NOT NULL DEFAULT 1,
+      max_html_images INTEGER NOT NULL DEFAULT 10,
+      html_image_types TEXT NOT NULL DEFAULT '',
+      table_requirement TEXT NOT NULL DEFAULT 'heavy',
+      enable_consistency_audit INTEGER NOT NULL DEFAULT 1,
+      consistency_repair_mode TEXT NOT NULL DEFAULT 'agent',
+      enable_original_plan_coverage_audit INTEGER NOT NULL DEFAULT 0,
+      original_plan_coverage_repair_mode TEXT NOT NULL DEFAULT 'agent',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS technical_plan_generation_bid_tasks (
+      task_id TEXT PRIMARY KEY,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_technical_plan_generation_bid_tasks_order
+    ON technical_plan_generation_bid_tasks(sort_order);
+
+    CREATE TABLE IF NOT EXISTS technical_plan_generation_reference_docs (
+      document_id TEXT PRIMARY KEY,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_technical_plan_generation_reference_docs_order
+    ON technical_plan_generation_reference_docs(sort_order);
   `);
 }
 
@@ -251,6 +285,29 @@ function addTechnicalPlanIllustrationPlan(db) {
 function addTechnicalPlanOutlineWordControl(db) {
   addColumnIfMissing(db, 'technical_plan_meta', 'outline_word_control_options_json', 'TEXT');
   addColumnIfMissing(db, 'technical_plan_meta', 'outline_word_control_snapshot_json', 'TEXT');
+}
+
+// v24 不迁移旧配置值，直接启用新的统一配置表并移除旧存储位置。
+function unifyTechnicalPlanGenerationConfig(db) {
+  createTechnicalPlanGenerationConfigSchema(db);
+  db.exec('DROP TABLE IF EXISTS technical_plan_reference_docs;');
+
+  const columns = getExistingColumns(db, 'technical_plan_meta');
+  const legacyConfigColumns = [
+    'bid_analysis_mode',
+    'bid_analysis_selected_task_ids_json',
+    'bid_section_mode',
+    'outline_mode',
+    'outline_expansion_mode',
+    'global_facts_mode',
+    'outline_word_control_options_json',
+    'content_generation_options_json',
+  ];
+  for (const column of legacyConfigColumns) {
+    if (columns.has(column)) {
+      db.exec(`ALTER TABLE technical_plan_meta DROP COLUMN ${column}`);
+    }
+  }
 }
 
 // 目录叶子内容处理模式；父节点保持为空，旧测试目录不补默认值。
@@ -1040,7 +1097,6 @@ const schemaHealthTableGroups = [
       'technical_plan_meta',
       'technical_plan_tasks',
       'technical_plan_bid_items',
-      'technical_plan_reference_docs',
       'technical_plan_outline_nodes',
       'technical_plan_content_sections',
       'technical_plan_content_plans',
@@ -1117,6 +1173,11 @@ const schemaHealthTableGroups = [
     tables: ['feasibility_report_meta', 'feasibility_report_tasks', 'feasibility_report_outline_nodes'],
     repair: createFeasibilityReportSchema,
   },
+  {
+    version: 24,
+    tables: ['technical_plan_generation_config', 'technical_plan_generation_bid_tasks', 'technical_plan_generation_reference_docs'],
+    repair: createTechnicalPlanGenerationConfigSchema,
+  },
 ];
 
 function removeKnowledgeMigrationMeta(db) {
@@ -1135,11 +1196,8 @@ const schemaHealthColumnGroups = [
       tender_markdown_chars: 'INTEGER',
       tender_parser_label: 'TEXT',
       tender_imported_at: 'TEXT',
-      bid_analysis_mode: 'TEXT',
-      outline_mode: 'TEXT',
       outline_project_name: 'TEXT',
       outline_project_overview: 'TEXT',
-      content_generation_options_json: 'TEXT',
       content_generation_runtime_json: 'TEXT',
       created_at: 'TEXT',
       updated_at: 'TEXT',
@@ -1187,13 +1245,6 @@ const schemaHealthColumnGroups = [
     },
   },
   {
-    version: 10,
-    table: 'technical_plan_meta',
-    columns: {
-      bid_analysis_selected_task_ids_json: 'TEXT',
-    },
-  },
-  {
     version: 11,
     table: 'knowledge_documents',
     columns: {
@@ -1229,27 +1280,12 @@ const schemaHealthColumnGroups = [
     },
   },
   {
-    version: 13,
-    table: 'technical_plan_meta',
-    columns: {
-      outline_expansion_mode: "TEXT NOT NULL DEFAULT 'ai-complement'",
-    },
-  },
-  {
-    version: 22,
-    table: 'technical_plan_meta',
-    columns: {
-      global_facts_mode: "TEXT NOT NULL DEFAULT 'fabricate'",
-    },
-  },
-  {
     version: 14,
     table: 'technical_plan_meta',
     columns: {
       tender_original_markdown_path: 'TEXT',
       tender_original_markdown_hash: 'TEXT',
       tender_original_markdown_chars: 'INTEGER NOT NULL DEFAULT 0',
-      bid_section_mode: "TEXT NOT NULL DEFAULT 'single'",
       bid_sections_json: 'TEXT',
       bid_section_extraction_status: "TEXT NOT NULL DEFAULT 'idle'",
       bid_section_extraction_error: 'TEXT',
@@ -1266,7 +1302,6 @@ const schemaHealthColumnGroups = [
     version: 18,
     table: 'technical_plan_meta',
     columns: {
-      outline_word_control_options_json: 'TEXT',
       outline_word_control_snapshot_json: 'TEXT',
     },
   },
@@ -1276,6 +1311,35 @@ const schemaHealthColumnGroups = [
     columns: {
       content_mode: 'TEXT',
       content_mode_note: 'TEXT',
+    },
+  },
+  {
+    version: 24,
+    table: 'technical_plan_generation_config',
+    columns: {
+      bid_analysis_mode: "TEXT NOT NULL DEFAULT 'key'",
+      bid_section_mode: "TEXT NOT NULL DEFAULT 'single'",
+      outline_mode: "TEXT NOT NULL DEFAULT 'response-file'",
+      outline_expansion_mode: "TEXT NOT NULL DEFAULT 'ai-complement'",
+      minimum_words: 'INTEGER NOT NULL DEFAULT 0',
+      maximum_words: 'INTEGER NOT NULL DEFAULT 0',
+      section_words: 'INTEGER NOT NULL DEFAULT 0',
+      strict_section_words: 'INTEGER NOT NULL DEFAULT 0',
+      global_facts_mode: "TEXT NOT NULL DEFAULT 'fabricate'",
+      use_ai_images: 'INTEGER NOT NULL DEFAULT 1',
+      max_ai_images: 'INTEGER NOT NULL DEFAULT 6',
+      use_mermaid_images: 'INTEGER NOT NULL DEFAULT 1',
+      max_mermaid_images: 'INTEGER NOT NULL DEFAULT 5',
+      use_html_images: 'INTEGER NOT NULL DEFAULT 1',
+      max_html_images: 'INTEGER NOT NULL DEFAULT 10',
+      html_image_types: "TEXT NOT NULL DEFAULT ''",
+      table_requirement: "TEXT NOT NULL DEFAULT 'heavy'",
+      enable_consistency_audit: 'INTEGER NOT NULL DEFAULT 1',
+      consistency_repair_mode: "TEXT NOT NULL DEFAULT 'agent'",
+      enable_original_plan_coverage_audit: 'INTEGER NOT NULL DEFAULT 0',
+      original_plan_coverage_repair_mode: "TEXT NOT NULL DEFAULT 'agent'",
+      created_at: 'TEXT',
+      updated_at: 'TEXT',
     },
   },
 ];
@@ -1456,6 +1520,11 @@ const migrations = [
     version: 23,
     description: '新增可行性研究报告工作区表结构',
     up: createFeasibilityReportSchema,
+  },
+  {
+    version: 24,
+    description: '统一技术方案生成配置存储',
+    up: unifyTechnicalPlanGenerationConfig,
   },
 ];
 

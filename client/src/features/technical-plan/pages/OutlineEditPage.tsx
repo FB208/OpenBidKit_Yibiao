@@ -440,7 +440,9 @@ function OutlineEditPage({
     strictSectionWords: parsedDraftSectionWords > 0 && draftStrictSectionWords,
   };
   const wordControlRequiresRegeneration = Boolean(outlineData && !areWordControlOptionsEqual(normalizedDraftOptions, outlineWordControlSnapshot));
-  const outlineModeRequiresRegeneration = Boolean(outlineData && !hasOriginalPlan && draftOutlineMode !== outlineMode);
+  const outlineModeRequiresRegeneration = Boolean(
+    outlineData && draftOutlineMode !== (outlineMode === 'standalone-technical' ? 'standalone-technical' : 'response-file'),
+  );
 
   const initializeWordControlDraft = () => {
     setDraftMinimumWords(formatWordCountDraft(outlineWordControlOptions.minimumWords));
@@ -588,7 +590,7 @@ function OutlineEditPage({
       setSavingOutlineConfig(true);
       await onOutlineConfigChange({
         referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
-        outlineMode: hasOriginalPlan ? 'aligned' : draftOutlineMode,
+        outlineMode: draftOutlineMode,
         outlineExpansionMode: hasOriginalPlan ? draftOutlineExpansionMode : 'ai-complement',
         wordControlOptions,
       });
@@ -618,7 +620,7 @@ function OutlineEditPage({
       setStartingOutline(true);
       setLocalStartAt(startedNow);
       setNowTick(startedNow);
-      const nextOutlineMode: OutlineMode = hasOriginalPlan ? 'aligned' : draftOutlineMode;
+      const nextOutlineMode: OutlineMode = draftOutlineMode;
       const nextOutlineExpansionMode = hasOriginalPlan ? draftOutlineExpansionMode : 'ai-complement';
       await onOutlineConfigChange({
         referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
@@ -634,7 +636,8 @@ function OutlineEditPage({
         word_control_options: wordControlOptions,
       });
       trackConfigUsage({
-        outline_mode: hasOriginalPlan ? nextOutlineExpansionMode : nextOutlineMode,
+        outline_mode: nextOutlineMode,
+        outline_expansion_mode: hasOriginalPlan ? nextOutlineExpansionMode : undefined,
         word_control_enabled: wordControlOptions.minimumWords > 0 || wordControlOptions.maximumWords > 0 || wordControlOptions.sectionWords > 0,
         minimum_words: wordControlOptions.minimumWords,
         maximum_words: wordControlOptions.maximumWords,
@@ -1090,20 +1093,11 @@ function OutlineEditPage({
             );
           })}
         </div>
-        {outlineModeRequiresRegeneration && (
-          <div className="outline-word-control-notice">
-            技术文件结构已改变，需要重新生成目录后才能生效！
-          </div>
-        )}
       </section>
     );
   };
 
   const renderTechnicalDocumentModePicker = () => {
-    if (hasOriginalPlan) {
-      return null;
-    }
-
     return (
       <section className="outline-generation-config-section outline-expansion-mode-section">
         <div className="outline-generation-config-head">
@@ -1128,6 +1122,11 @@ function OutlineEditPage({
             );
           })}
         </div>
+        {outlineModeRequiresRegeneration && (
+          <div className="outline-word-control-notice">
+            技术文件结构已改变，需要重新生成目录后才能生效！
+          </div>
+        )}
       </section>
     );
   };
@@ -1247,7 +1246,7 @@ function OutlineEditPage({
         <div>
           <span className="section-kicker">STEP {stepNumber}</span>
           <strong>目录生成</strong>
-          <p>{hasOriginalPlan ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `${outlineMode === 'standalone-technical' ? '技术评分大项直接作为一级目录' : '一级目录依据完整响应文件要求生成'}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
+          <p>{`${outlineMode === 'standalone-technical' ? '技术评分大项直接作为一级目录' : '一级目录依据完整响应文件要求生成'}；${hasOriginalPlan ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；` : ''}参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
         </div>
         <div className="outline-command-actions">
           {awaitingOutlineSelection && (

@@ -32,6 +32,7 @@ export const CONFIG_USAGE_FIELDS = [
   { key: 'imageModelStatuses' },
   { key: 'bidAnalysisModes' },
   { key: 'outlineModes' },
+  { key: 'outlineExpansionModes' },
   { key: 'tableRequirements' },
   { key: 'wordControlEnabled' },
   { key: 'minimumWords' },
