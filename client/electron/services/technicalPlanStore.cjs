@@ -49,10 +49,6 @@ const defaultContentGenerationOptions = Object.freeze({
   maxHtmlImages: 10,
   htmlImageTypes: defaultHtmlImageTypes,
   tableRequirement: 'heavy',
-  enableConsistencyAudit: true,
-  consistencyRepairMode: 'agent',
-  enableOriginalPlanCoverageAudit: false,
-  originalPlanCoverageRepairMode: 'agent',
 });
 
 const initialState = {
@@ -357,10 +353,6 @@ function normalizeContentGenerationOptions(options) {
     maxHtmlImages: hasOwn(source, 'maxHtmlImages') ? normalizeNonNegativeInteger(source.maxHtmlImages) : defaultContentGenerationOptions.maxHtmlImages,
     htmlImageTypes: String(source.htmlImageTypes || defaultContentGenerationOptions.htmlImageTypes),
     tableRequirement: ['none', 'light', 'moderate', 'heavy'].includes(source.tableRequirement) ? source.tableRequirement : defaultContentGenerationOptions.tableRequirement,
-    enableConsistencyAudit: hasOwn(source, 'enableConsistencyAudit') ? Boolean(source.enableConsistencyAudit) : defaultContentGenerationOptions.enableConsistencyAudit,
-    consistencyRepairMode: ['agent', 'normal'].includes(source.consistencyRepairMode) ? source.consistencyRepairMode : defaultContentGenerationOptions.consistencyRepairMode,
-    enableOriginalPlanCoverageAudit: hasOwn(source, 'enableOriginalPlanCoverageAudit') ? Boolean(source.enableOriginalPlanCoverageAudit) : defaultContentGenerationOptions.enableOriginalPlanCoverageAudit,
-    originalPlanCoverageRepairMode: ['agent', 'normal'].includes(source.originalPlanCoverageRepairMode) ? source.originalPlanCoverageRepairMode : defaultContentGenerationOptions.originalPlanCoverageRepairMode,
   };
 }
 
@@ -768,16 +760,12 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         minimum_words, maximum_words, section_words, strict_section_words, global_facts_mode,
         use_ai_images, max_ai_images, use_mermaid_images, max_mermaid_images,
         use_html_images, max_html_images, html_image_types, table_requirement,
-        enable_consistency_audit, consistency_repair_mode,
-        enable_original_plan_coverage_audit, original_plan_coverage_repair_mode,
         created_at, updated_at
       ) VALUES (
         1, @bid_analysis_mode, @bid_section_mode, @outline_mode, @outline_expansion_mode,
         @minimum_words, @maximum_words, @section_words, @strict_section_words, @global_facts_mode,
         @use_ai_images, @max_ai_images, @use_mermaid_images, @max_mermaid_images,
         @use_html_images, @max_html_images, @html_image_types, @table_requirement,
-        @enable_consistency_audit, @consistency_repair_mode,
-        @enable_original_plan_coverage_audit, @original_plan_coverage_repair_mode,
         @created_at, @updated_at
       )
     `).run({
@@ -798,10 +786,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       max_html_images: content.maxHtmlImages,
       html_image_types: content.htmlImageTypes,
       table_requirement: content.tableRequirement,
-      enable_consistency_audit: toDbBool(content.enableConsistencyAudit),
-      consistency_repair_mode: content.consistencyRepairMode,
-      enable_original_plan_coverage_audit: toDbBool(content.enableOriginalPlanCoverageAudit),
-      original_plan_coverage_repair_mode: content.originalPlanCoverageRepairMode,
       created_at: timestamp,
       updated_at: timestamp,
     });
@@ -848,10 +832,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         maxHtmlImages: row.max_html_images,
         htmlImageTypes: row.html_image_types,
         tableRequirement: row.table_requirement,
-        enableConsistencyAudit: fromDbBool(row.enable_consistency_audit),
-        consistencyRepairMode: row.consistency_repair_mode,
-        enableOriginalPlanCoverageAudit: fromDbBool(row.enable_original_plan_coverage_audit),
-        originalPlanCoverageRepairMode: row.original_plan_coverage_repair_mode,
       },
     });
   }
@@ -880,10 +860,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         max_html_images = @max_html_images,
         html_image_types = @html_image_types,
         table_requirement = @table_requirement,
-        enable_consistency_audit = @enable_consistency_audit,
-        consistency_repair_mode = @consistency_repair_mode,
-        enable_original_plan_coverage_audit = @enable_original_plan_coverage_audit,
-        original_plan_coverage_repair_mode = @original_plan_coverage_repair_mode,
         updated_at = @updated_at
       WHERE id = 1
     `).run({
@@ -904,10 +880,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       max_html_images: content.maxHtmlImages,
       html_image_types: content.htmlImageTypes,
       table_requirement: content.tableRequirement,
-      enable_consistency_audit: toDbBool(content.enableConsistencyAudit),
-      consistency_repair_mode: content.consistencyRepairMode,
-      enable_original_plan_coverage_audit: toDbBool(content.enableOriginalPlanCoverageAudit),
-      original_plan_coverage_repair_mode: content.originalPlanCoverageRepairMode,
       updated_at: now(),
     });
     replaceGenerationList('technical_plan_generation_bid_tasks', 'task_id', normalized.bidAnalysisSelectedTaskIds);

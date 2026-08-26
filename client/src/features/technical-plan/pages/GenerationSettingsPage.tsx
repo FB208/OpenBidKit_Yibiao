@@ -244,10 +244,10 @@ function GenerationSettingsPage({
   const [globalFactsModeBusy, setGlobalFactsModeBusy] = useState(false);
   const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
   const [draftTableRequirement, setDraftTableRequirement] = useState<ContentTableRequirement>(() => (
-    normalizeContentGenerationOptions(contentGenerationOptions, false, contentLeafCount, Boolean(originalPlanFile)).tableRequirement
+    normalizeContentGenerationOptions(contentGenerationOptions, false, contentLeafCount).tableRequirement
   ));
   const [draftIllustrationOptions, setDraftIllustrationOptions] = useState<ContentGenerationOptions>(() => (
-    normalizeContentGenerationOptions(contentGenerationOptions, false, contentLeafCount, Boolean(originalPlanFile))
+    normalizeContentGenerationOptions(contentGenerationOptions, false, contentLeafCount)
   ));
   const [contentOptionsBusy, setContentOptionsBusy] = useState(false);
   const [htmlImageTypesDialogOpen, setHtmlImageTypesDialogOpen] = useState(false);
@@ -277,7 +277,6 @@ function GenerationSettingsPage({
     contentGenerationOptions,
     imageModelAvailable,
     contentLeafCount,
-    Boolean(originalPlanFile),
   );
 
   useEffect(() => {
@@ -312,11 +311,10 @@ function GenerationSettingsPage({
       contentGenerationOptions,
       imageModelAvailable,
       contentLeafCount,
-      Boolean(originalPlanFile),
     );
     setDraftTableRequirement(nextOptions.tableRequirement);
     setDraftIllustrationOptions(nextOptions);
-  }, [contentGenerationOptions, contentLeafCount, imageModelAvailable, originalPlanFile?.contentHash]);
+  }, [contentGenerationOptions, contentLeafCount, imageModelAvailable]);
 
   useEffect(() => {
     if (activeTab !== 'knowledge') return;
@@ -511,7 +509,7 @@ function GenerationSettingsPage({
         useHtmlImages: draftIllustrationOptions.useHtmlImages,
         maxHtmlImages: draftIllustrationOptions.maxHtmlImages,
         htmlImageTypes: draftIllustrationOptions.htmlImageTypes,
-      }, imageModelAvailable, contentLeafCount, Boolean(originalPlanFile));
+      }, imageModelAvailable, contentLeafCount);
       await onContentGenerationOptionsChange(nextOptions);
       setDraftIllustrationOptions(nextOptions);
       showToast('配图设置已保存', 'success');

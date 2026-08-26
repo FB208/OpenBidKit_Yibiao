@@ -38,10 +38,7 @@ const GENERATION_WORD_TARGET_RATIO = 0.8;
 const TOTAL_WORD_SHRINK_MIN_CAPACITY_RATIO = 0.3;
 const CONTENT_WORD_CONTROL_WARNING = '经多轮修复，字数仍未达预期，请您人工核对';
 const SECTION_WORD_CONTROL_WARNING = '字数未达预期，请您人工核对';
-const CONSISTENCY_AUDIT_GROUP_WORD_LIMIT = 300000;
-const CONSISTENCY_REPAIR_MAX_ATTEMPTS = 2;
 const ORIGINAL_PLAN_SEGMENT_MAX_CHARS = 6000;
-const ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS = 2;
 const TABLE_CLEANUP_CONTEXT_CHARS = 600;
 const TABLE_CLEANUP_BATCH_CHAR_LIMIT = 30000;
 const CONTENT_GENERATION_PAUSED = 'CONTENT_GENERATION_PAUSED';
@@ -472,14 +469,6 @@ function normalizeTableRequirement(value) {
   if (text === '适中') return 'moderate';
   if (text === '大量') return 'heavy';
   return 'heavy';
-}
-
-function normalizeConsistencyRepairMode(value) {
-  return String(value || '').trim() === 'normal' ? 'normal' : 'agent';
-}
-
-function normalizeOriginalPlanCoverageRepairMode(value) {
-  return String(value || '').trim() === 'normal' ? 'normal' : 'agent';
 }
 
 function normalizeOutlineWordControlSnapshot(value) {
@@ -1559,29 +1548,10 @@ function parseAgentJsonContent(content) {
   throw new Error(`Agent 未返回可解析的 JSON：${lastError?.message || '内容为空'}`);
 }
 
-function stripPromptLineNumbers(text) {
-  return normalizeNewlines(text)
-    .split('\n')
-    .map((line) => line.replace(/^\[\d{1,6}\]\s?/, ''))
-    .join('\n');
-}
-
-function normalizeConsistencyPatchText(text) {
-  return stripPromptLineNumbers(text).trim();
-}
-
 function formatChapterPath(context) {
   return [...(context.parentChapters || []), context.item]
     .map((chapter) => `${chapter.id || 'unknown'} ${chapter.title || '未命名章节'}`)
     .join(' > ');
-}
-
-function formatContentWithLineNumbers(content) {
-  const lines = normalizeNewlines(content).split('\n');
-  const width = Math.max(3, String(lines.length).length);
-  return lines
-    .map((line, index) => `[${String(index + 1).padStart(width, '0')}] ${line}`)
-    .join('\n');
 }
 
 function escapeSectionAttribute(value) {
@@ -1638,377 +1608,6 @@ function parseAgentSectionMarkdown(markdown) {
   return sections;
 }
 
-function findExactOccurrences(content, search) {
-  const indexes = [];
-  if (!search) return indexes;
-  let startIndex = 0;
-  while (startIndex <= content.length) {
-    const index = content.indexOf(search, startIndex);
-    if (index < 0) break;
-    indexes.push(index);
-    startIndex = index + search.length;
-  }
-  return indexes;
-}
-
-function extractLineRangeText(content, startLine, endLine) {
-  const lines = normalizeNewlines(content).split('\n');
-  const start = Math.max(1, Math.round(Number(startLine) || 0));
-  const end = Math.max(start, Math.round(Number(endLine) || 0));
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end > lines.length) {
-    return null;
-  }
-  return lines.slice(start - 1, end).join('\n');
-}
-
-function replaceLineRange(content, startLine, endLine, replacement) {
-  const lines = normalizeNewlines(content).split('\n');
-  const start = Math.max(1, Math.round(Number(startLine) || 0));
-  const end = Math.max(start, Math.round(Number(endLine) || 0));
-  const nextLines = [
-    ...lines.slice(0, start - 1),
-    ...normalizeNewlines(replacement).split('\n'),
-    ...lines.slice(end),
-  ];
-  return nextLines.join('\n');
-}
-
-function describeConsistencyPatchMatch(content, patch) {
-  const currentContent = normalizeNewlines(content);
-  const oldText = normalizeConsistencyPatchText(patch.old_text);
-  const newText = normalizeConsistencyPatchText(patch.new_text);
-  const startLine = Number(patch.start_line);
-  const endLine = Number(patch.end_line);
-  const detail = {
-    section_id: singleLine(patch.section_id),
-    start_line: Number.isFinite(startLine) ? startLine : 0,
-    end_line: Number.isFinite(endLine) ? endLine : 0,
-    old_text: oldText,
-    new_text: newText,
-    old_text_metrics: textMetrics(oldText),
-    new_text_metrics: textMetrics(newText),
-    before_content_metrics: textMetrics(currentContent),
-    line_range: null,
-    exact_match_count: 0,
-  };
-
-  if (Number.isFinite(startLine) && Number.isFinite(endLine) && startLine > 0 && endLine >= startLine) {
-    const candidate = extractLineRangeText(currentContent, startLine, endLine);
-    detail.line_range = {
-      exists: candidate !== null,
-      matches_old_text: candidate === oldText,
-      candidate_metrics: candidate === null ? null : textMetrics(candidate),
-    };
-  }
-
-  detail.exact_match_count = findExactOccurrences(currentContent, oldText).length;
-  return detail;
-}
-
-function applyExactConsistencyPatch(content, patch) {
-  const currentContent = normalizeNewlines(content);
-  const oldText = normalizeConsistencyPatchText(patch.old_text);
-  const newText = normalizeConsistencyPatchText(patch.new_text);
-  if (!oldText) {
-    throw new Error('old_text 为空');
-  }
-  if (!newText) {
-    throw new Error('new_text 为空');
-  }
-  if (oldText === newText) {
-    throw new Error('old_text 与 new_text 相同');
-  }
-
-  const startLine = Number(patch.start_line);
-  const endLine = Number(patch.end_line);
-  if (Number.isFinite(startLine) && Number.isFinite(endLine) && startLine > 0 && endLine >= startLine) {
-    const candidate = extractLineRangeText(currentContent, startLine, endLine);
-    if (candidate === oldText) {
-      return replaceLineRange(currentContent, startLine, endLine, newText);
-    }
-  }
-
-  const matches = findExactOccurrences(currentContent, oldText);
-  if (!matches.length) {
-    throw new Error('old_text 未在当前小节正文中找到');
-  }
-  if (matches.length > 1) {
-    throw new Error('old_text 在当前小节正文中出现多次，请提供更多上下文确保唯一定位');
-  }
-  const index = matches[0];
-  return `${currentContent.slice(0, index)}${newText}${currentContent.slice(index + oldText.length)}`;
-}
-
-function applyConsistencyRepairPatches(content, patches) {
-  let nextContent = normalizeNewlines(content);
-  const errors = [];
-  const patchResults = [];
-  let appliedCount = 0;
-
-  for (const [index, patch] of (patches || []).entries()) {
-    const detail = { index, ...describeConsistencyPatchMatch(nextContent, patch) };
-    try {
-      nextContent = applyExactConsistencyPatch(nextContent, patch);
-      appliedCount += 1;
-      patchResults.push({
-        ...detail,
-        applied: true,
-        after_content_metrics: textMetrics(nextContent),
-      });
-    } catch (error) {
-      errors.push(`patch[${index}] ${error.message || '应用失败'}`);
-      patchResults.push({
-        ...detail,
-        applied: false,
-        error: error.message || '应用失败',
-        after_content_metrics: textMetrics(nextContent),
-      });
-    }
-  }
-
-  return { content: nextContent, appliedCount, errors, patchResults };
-}
-
-function formatConsistencyAuditGroupContent(group) {
-  return (group.items || []).map((entry) => `<section>
-编号：${entry.item.id || 'unknown'}
-标题：${entry.item.title || '未命名章节'}
-路径：${formatChapterPath(entry)}
-正文：
-${entry.content || ''}
-</section>`).join('\n\n');
-}
-
-function buildConsistencyAuditMessages({ group, globalFactsText, bidAnalysisFactsText, globalFactsMode }) {
-  const allowedIds = (group.items || []).map(({ item }) => item.id).filter(Boolean);
-  return [
-    {
-      role: 'user',
-      content: `你是投标技术方案全文一致性审计助手。请审计本组正文是否与给定事实冲突。
-
-要求：
-1. 只返回 JSON，不要输出解释、总结或 Markdown。
-2. 只找正文中已经明确写出、且与事实相违背的内容。
-3. 正文没有涉及某条事实时，不要报告缺失，不要建议补充。
-4. 不报告文风、质量、重复、篇幅、表达优化等问题。
-5. section_id 必须来自允许的目录编号清单，禁止编造编号。
-6. 只筛选冲突目录编号和冲突证据，不要重写正文。${buildContentFactCompletenessInstruction(globalFactsMode) ? `\n7. 全局事实中的【待填写】不是冲突，不要要求正文补成具体值，也不要把缺失项当成需要杜撰的内容。` : ''}
-
-返回格式：
-{
-  "conflicts": [
-    {
-      "section_id": "1.2.3",
-      "fact_title": "相关事实变量标题",
-      "evidence": "正文中的冲突原文摘录",
-      "reason": "为什么与事实冲突",
-      "severity": "high"
-    }
-  ]
-}`,
-    },
-    { role: 'user', content: `全局事实变量：\n${globalFactsText || '未提供'}` },
-    { role: 'user', content: `招标文件关键解析结果（项目信息、甲方信息、交货和服务要求）：\n${bidAnalysisFactsText || '未提供'}` },
-    { role: 'user', content: `允许返回的目录编号清单：\n${JSON.stringify(allowedIds, null, 2)}` },
-    { role: 'user', content: `待审计正文分组：\n${formatConsistencyAuditGroupContent(group)}` },
-  ];
-}
-
-function normalizeConsistencyAuditResponse(value, allowedSectionIds) {
-  const source = value?.result && typeof value.result === 'object' ? value.result : value || {};
-  const rawConflicts = Array.isArray(source)
-    ? source
-    : Array.isArray(source.conflicts)
-      ? source.conflicts
-      : Array.isArray(source.items)
-        ? source.items
-        : [];
-  const allowed = allowedSectionIds instanceof Set ? allowedSectionIds : new Set(allowedSectionIds || []);
-  const issues = [];
-  const conflicts = [];
-
-  rawConflicts.forEach((item, index) => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) {
-      issues.push(`conflicts[${index}] 必须是对象`);
-      return;
-    }
-    const sectionId = singleLine(item.section_id || item.sectionId || item.id || item.chapter_id || item.chapterId);
-    if (!sectionId || !allowed.has(sectionId)) {
-      issues.push(`conflicts[${index}].section_id 无效：${sectionId || '空'}`);
-      return;
-    }
-    conflicts.push({
-      section_id: sectionId,
-      fact_title: singleLine(item.fact_title || item.factTitle || item.fact || item.title),
-      evidence: String(item.evidence || item.quote || item.source || '').trim(),
-      reason: String(item.reason || item.description || item.issue || '').trim(),
-      severity: singleLine(item.severity || 'medium') || 'medium',
-    });
-  });
-
-  if (issues.length) {
-    throw new Error(`审计结果格式无效：${issues.join('；')}`);
-  }
-  return { conflicts };
-}
-
-function validateConsistencyAuditResponse(value) {
-  if (!value || !Array.isArray(value.conflicts)) {
-    throw new Error('一致性审计结果缺少 conflicts 数组');
-  }
-}
-
-function buildConsistencyAuditRepairMessages({ invalidContent, issues }, allowedSectionIds) {
-  const issueLines = (issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
-  return [
-    {
-      role: 'user',
-      content: `你是严格的 JSON 修复器。请把模型输出修复为“全文一致性审计”JSON。
-
-必须满足：
-1. 顶层只能包含 conflicts 数组。
-2. conflicts 可以为空数组。
-3. 每条 conflict 必须包含 section_id、fact_title、evidence、reason、severity。
-4. section_id 只能来自允许清单。
-5. 禁止输出正文、修复方案、Markdown 或解释文字。
-
-允许的 section_id：
-${JSON.stringify(Array.from(allowedSectionIds || []), null, 2)}`,
-    },
-    { role: 'user', content: `错误列表：\n${issueLines}` },
-    { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
-  ];
-}
-
-function buildConsistencyRepairMessages({ context, conflicts, globalFactsText, bidAnalysisFactsText, currentContent, attempt, failures, tableRequirement, globalFactsMode }) {
-  const { item } = context;
-  const tableAllowed = normalizeTableRequirement(tableRequirement) !== 'none';
-  const failureBlock = (failures || []).length
-    ? `\n上次修复应用失败原因：\n${failures.map((failure, index) => `${index + 1}. ${failure}`).join('\n')}\n请重新返回能够在当前正文中唯一定位的 old_text。`
-    : '';
-
-  return [
-    {
-      role: 'user',
-      content: `你是投标技术方案正文一致性修复助手。请只针对当前小节返回局部精确替换 patch。
-
-要求：
-1. 只返回 JSON，不要输出解释、总结或 Markdown 代码围栏。
-2. 不要返回完整正文，只返回需要局部替换的 patches。
-3. 事实输入比当前小节实际需要的更多；正文没有涉及的事实必须忽略。
-4. 目标只修正正文中与事实冲突的内容，不要参照事实重写或扩充正文。
-5. 不要优化文风，不要新增无关事实，不要新增新的承诺。
-6. old_text 必须是当前小节正文中逐字存在的原文块，建议包含足够前后上下文，确保只出现一次。
-7. ${tableAllowed ? '如果修改表格，old_text 必须包含完整表格行或完整表格块，不要只返回单元格碎片。' : '本次配置为不要表格；如果冲突位于表格中，new_text 必须把相关内容改为普通文字或普通列表，不得继续返回 Markdown 表格或 HTML 表格。'}
-8. new_text 是替换后的正文块，不要包含章节标题，不要包含行号。
-9. ${tableAllowed ? '保留 Markdown 表格、列表、代码块、图片和 Mermaid 块结构。' : '保留普通列表、代码块、图片和 Mermaid 块结构；不得新增或保留 Markdown 表格、HTML 表格。'}
-10. start_line/end_line 使用下方带行号正文中的 1-based 行号；如果不确定也必须提供可唯一匹配的 old_text。${buildContentFactCompletenessInstruction(globalFactsMode) ? `\n\n${buildContentFactCompletenessInstruction(globalFactsMode)}\n不得把【待填写】改成具体值，也不得为缺失项杜撰事实。` : ''}
-
-返回格式：
-{
-  "patches": [
-    {
-      "section_id": "当前小节编号",
-      "start_line": 2,
-      "end_line": 4,
-      "old_text": "当前正文中逐字存在且唯一的原文块，不包含行号",
-      "new_text": "替换后的正文块，不包含行号",
-      "reason": "修复了哪个事实冲突"
-    }
-  ]
-}`,
-    },
-    { role: 'user', content: `全局事实变量：\n${globalFactsText || '未提供'}` },
-    { role: 'user', content: `招标文件关键解析结果（项目信息、甲方信息、交货和服务要求）：\n${bidAnalysisFactsText || '未提供'}` },
-    { role: 'user', content: `当前小节：${item.id || 'unknown'} ${item.title || '未命名章节'}\n路径：${formatChapterPath(context)}\n描述：${item.description || ''}` },
-    { role: 'user', content: `审计发现的冲突：\n${JSON.stringify(conflicts || [], null, 2)}` },
-    { role: 'user', content: `当前小节正文（带行号；patch 的 old_text/new_text 不要包含这些行号）：\n${formatContentWithLineNumbers(currentContent)}` },
-    { role: 'user', content: `patches[*].section_id 必须是 ${item.id || 'unknown'}。修复尝试次数：${attempt}/${CONSISTENCY_REPAIR_MAX_ATTEMPTS}${failureBlock}\n请只返回 JSON。` },
-  ];
-}
-
-function normalizeConsistencyRepairResponse(value, expectedSectionId) {
-  const source = value?.result && typeof value.result === 'object' ? value.result : value || {};
-  const rawPatches = Array.isArray(source)
-    ? source
-    : Array.isArray(source.patches)
-      ? source.patches
-      : Array.isArray(source.operations)
-        ? source.operations
-        : (source.old_text || source.oldText || source.new_text || source.newText)
-          ? [source]
-          : [];
-  const patches = rawPatches.map((patch) => {
-    const rawSectionId = singleLine(patch?.section_id || patch?.sectionId || patch?.id || '');
-    const sectionId = rawSectionId && rawSectionId !== '当前小节编号' ? rawSectionId : expectedSectionId;
-    return {
-      section_id: sectionId,
-      start_line: Number(patch?.start_line ?? patch?.startLine ?? patch?.line_start ?? patch?.lineStart ?? 0) || 0,
-      end_line: Number(patch?.end_line ?? patch?.endLine ?? patch?.line_end ?? patch?.lineEnd ?? 0) || 0,
-      old_text: normalizeConsistencyPatchText(patch?.old_text ?? patch?.oldText ?? patch?.original ?? patch?.before ?? ''),
-      new_text: normalizeConsistencyPatchText(patch?.new_text ?? patch?.newText ?? patch?.replacement ?? patch?.after ?? ''),
-      reason: String(patch?.reason || patch?.description || '').trim(),
-    };
-  });
-  const invalidSection = patches.find((patch) => expectedSectionId && patch.section_id !== expectedSectionId);
-  if (invalidSection) {
-    throw new Error(`一致性修复结果 section_id 无效：${invalidSection.section_id || '空'}`);
-  }
-  return { patches };
-}
-
-function validateConsistencyRepairResponse(value) {
-  if (!value || !Array.isArray(value.patches)) {
-    throw new Error('一致性修复结果缺少 patches 数组');
-  }
-  value.patches.forEach((patch, index) => {
-    if (!patch.section_id) {
-      throw new Error(`patches[${index}].section_id 缺失`);
-    }
-    if (!patch.old_text) {
-      throw new Error(`patches[${index}].old_text 缺失`);
-    }
-    if (!patch.new_text) {
-      throw new Error(`patches[${index}].new_text 缺失`);
-    }
-    if (patch.old_text === patch.new_text) {
-      throw new Error(`patches[${index}].old_text 与 new_text 相同`);
-    }
-  });
-}
-
-function buildConsistencyRepairJsonRepairMessages({ invalidContent, issues }, expectedSectionId) {
-  const issueLines = (issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
-  return [
-    {
-      role: 'user',
-      content: `你是严格的 JSON 修复器。请把模型输出修复为“正文一致性局部修复”JSON。
-
-必须满足：
-1. 顶层只能包含 patches 数组。
-2. 每条 patch 必须包含 section_id、start_line、end_line、old_text、new_text、reason。
-3. section_id 必须是 ${expectedSectionId}。
-4. old_text 和 new_text 都不能包含行号，不能相同，不能为空。
-5. 不要返回完整正文，不要输出 Markdown 或解释文字。
-6. 如果无法修复，返回 {"patches":[]}。`,
-    },
-    { role: 'user', content: `错误列表：\n${issueLines}` },
-    { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
-  ];
-}
-
-const ORIGINAL_COVERAGE_STATUSES = new Set(['covered', 'partial', 'missing', 'conflict']);
-
-function normalizeOriginalCoverageStatus(value) {
-  const text = String(value || '').trim().toLowerCase();
-  if (ORIGINAL_COVERAGE_STATUSES.has(text)) return text;
-  if (['已覆盖', '覆盖', '完整', '保留', '保留完整'].includes(text)) return 'covered';
-  if (['部分', '部分覆盖', '部分保留', 'partial_covered'].includes(text)) return 'partial';
-  if (['缺失', '未覆盖', '未保留', '遗漏'].includes(text)) return 'missing';
-  if (['冲突', '矛盾', '不一致'].includes(text)) return 'conflict';
-  return text;
-}
-
 function formatOriginalCoverageSources(sources) {
   return (sources || []).map((segment) => `<source id="${segment.id}">
 标题路径：${segment.title_path?.length ? segment.title_path.join(' > ') : '未识别标题'}
@@ -2016,185 +1615,6 @@ function formatOriginalCoverageSources(sources) {
 原文：
 ${segment.content || ''}
 </source>`).join('\n\n');
-}
-
-function buildOriginalCoverageAuditMessages({ target }) {
-  const allowedSourceIds = (target.sources || []).map((segment) => segment.id).filter(Boolean);
-  return [
-    {
-      role: 'user',
-      content: `你是投标技术方案原方案覆盖审计助手。请检查当前小节正文是否保留了原方案来源段中的实质内容。
-
-要求：
-1. 只返回 JSON，不要输出解释、总结或 Markdown。
-2. 必须对每个 source_id 返回一条 items 记录，covered 也必须返回。
-3. 可接受改写、扩写、调序、合并和专业化表达；不要因为不是逐字一致就判为缺失。
-4. 重点检查原方案中的实质信息、技术路线、服务承诺、设备参数、人员安排、周期、验收、售后、实施方法是否仍然保留。
-5. status 只能是 covered、partial、missing、conflict。
-6. covered 表示核心内容已经保留；partial 表示部分核心信息缺失；missing 表示该来源段核心内容基本没有体现；conflict 表示正文与来源段核心事实明显相反或矛盾。
-7. conflict 只报告，不要求修复；partial/missing 请给出 missing_points 和 repair_suggestion。
-8. node_id 必须是当前小节编号，source_id 必须来自允许清单。
-
-返回格式：
-{
-  "items": [
-    {
-      "source_id": "P001",
-      "node_id": "当前小节编号",
-      "status": "covered",
-      "missing_points": [],
-      "repair_suggestion": ""
-    }
-  ]
-}`,
-    },
-    { role: 'user', content: `当前小节：${target.item.id || 'unknown'} ${target.item.title || '未命名章节'}\n路径：${formatChapterPath(target)}\n描述：${target.item.description || ''}` },
-    { role: 'user', content: `允许的 source_id：\n${JSON.stringify(allowedSourceIds, null, 2)}` },
-    { role: 'user', content: `原方案来源段：\n${formatOriginalCoverageSources(target.sources)}` },
-    { role: 'user', content: `当前小节正文：\n${target.content || ''}` },
-    { role: 'user', content: '请只返回覆盖审计 JSON。' },
-  ];
-}
-
-function normalizeOriginalCoverageAuditResponse(value, context = {}) {
-  const source = value?.result && typeof value.result === 'object' ? value.result : value || {};
-  const rawItems = Array.isArray(source)
-    ? source
-    : Array.isArray(source.items)
-      ? source.items
-      : Array.isArray(source.results)
-        ? source.results
-        : Array.isArray(source.coverage)
-          ? source.coverage
-          : [];
-  const allowedSourceIds = context.allowedSourceIds instanceof Set ? context.allowedSourceIds : new Set(context.allowedSourceIds || []);
-  const expectedNodeId = String(context.expectedNodeId || '').trim();
-  const issues = [];
-  const items = [];
-  const seenSourceIds = new Set();
-
-  rawItems.forEach((item, index) => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) {
-      issues.push(`items[${index}] 必须是对象`);
-      return;
-    }
-    const sourceId = String(item.source_id || item.sourceId || item.id || '').trim();
-    if (!sourceId || !allowedSourceIds.has(sourceId)) {
-      issues.push(`items[${index}].source_id 无效：${sourceId || '空'}`);
-      return;
-    }
-    if (seenSourceIds.has(sourceId)) {
-      issues.push(`items[${index}].source_id 重复：${sourceId}`);
-      return;
-    }
-    const rawNodeId = singleLine(item.node_id || item.nodeId || item.section_id || item.sectionId || '');
-    const nodeId = rawNodeId && rawNodeId !== '当前小节编号' ? rawNodeId : expectedNodeId;
-    if (!nodeId || (expectedNodeId && nodeId !== expectedNodeId)) {
-      issues.push(`items[${index}].node_id 无效：${nodeId || '空'}`);
-      return;
-    }
-    const status = normalizeOriginalCoverageStatus(item.status || item.coverage_status || item.coverageStatus);
-    if (!ORIGINAL_COVERAGE_STATUSES.has(status)) {
-      issues.push(`items[${index}].status 无效：${status || '空'}`);
-      return;
-    }
-    const rawMissingPoints = Array.isArray(item.missing_points || item.missingPoints)
-      ? item.missing_points || item.missingPoints
-      : item.missing_point || item.missingPoint || item.reason
-        ? [item.missing_point || item.missingPoint || item.reason]
-        : [];
-    seenSourceIds.add(sourceId);
-    items.push({
-      source_id: sourceId,
-      node_id: nodeId,
-      status,
-      missing_points: rawMissingPoints.map((point) => String(point || '').trim()).filter(Boolean),
-      repair_suggestion: String(item.repair_suggestion || item.repairSuggestion || item.suggestion || '').trim(),
-    });
-  });
-
-  if (issues.length) {
-    throw new Error(`原方案覆盖审计结果格式无效：${issues.join('；')}`);
-  }
-  return { items };
-}
-
-function validateOriginalCoverageAuditResponse(value, allowedSourceIds) {
-  if (!value || !Array.isArray(value.items)) {
-    throw new Error('原方案覆盖审计结果缺少 items 数组');
-  }
-  const allowed = allowedSourceIds instanceof Set ? allowedSourceIds : new Set(allowedSourceIds || []);
-  const seen = new Set(value.items.map((item) => item.source_id).filter(Boolean));
-  const missing = Array.from(allowed).filter((sourceId) => !seen.has(sourceId));
-  if (missing.length) {
-    throw new Error(`原方案覆盖审计缺少 source_id：${missing.join('、')}`);
-  }
-}
-
-function buildOriginalCoverageAuditJsonRepairMessages({ invalidContent, issues }, target) {
-  const issueLines = (issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
-  const allowedSourceIds = (target.sources || []).map((segment) => segment.id).filter(Boolean);
-  return [
-    {
-      role: 'user',
-      content: `你是严格的 JSON 修复器。请把模型输出修复为“原方案覆盖审计”JSON。
-
-必须满足：
-1. 顶层只能包含 items 数组。
-2. 必须为每个 source_id 返回一条 item，不能遗漏，不能重复。
-3. 每条 item 必须包含 source_id、node_id、status、missing_points、repair_suggestion。
-4. node_id 必须是 ${target.item.id || 'unknown'}。
-5. status 只能是 covered、partial、missing、conflict。
-6. 禁止输出正文、修复 patch、Markdown 或解释文字。
-
-允许的 source_id：
-${JSON.stringify(allowedSourceIds, null, 2)}`,
-    },
-    { role: 'user', content: `错误列表：\n${issueLines}` },
-    { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
-  ];
-}
-
-function buildOriginalCoverageRepairMessages({ target, coverageItems, currentContent, attempt, failures }) {
-  const failureBlock = (failures || []).length
-    ? `\n上次补写应用失败原因：\n${failures.map((failure, index) => `${index + 1}. ${failure}`).join('\n')}\n请重新返回可应用的 insert/replace patch。`
-    : '';
-  const sourceById = new Map((target.sources || []).map((segment) => [segment.id, segment]));
-  const issueSourceIds = [...new Set((coverageItems || []).map((item) => item.source_id).filter(Boolean))];
-  const issueSources = issueSourceIds.map((sourceId) => sourceById.get(sourceId)).filter(Boolean);
-
-  return [
-    {
-      role: 'user',
-      content: `你是投标技术方案正文原方案覆盖修复助手。请只针对当前小节返回一次局部补写 patch，用于补回原方案中缺失的实质内容。
-
-要求：
-1. 只返回 JSON，不要输出解释、总结或 Markdown 代码围栏。
-2. 不要返回完整正文，只返回一次 insert 或 replace 操作。
-3. operation 只能是 "insert" 或 "replace"。
-4. 优先使用 insert 在合适段落后补充缺失内容；如果正文已有同主题但内容不完整，可使用 replace 扩写该段。
-5. insert 时 anchor 填写建议插入在哪个当前正文段落之后；适合放末尾时写 "end"。
-6. replace 时 target_text 必须逐字复制当前小节正文中的完整待替换 Markdown 原文块，不得摘要、改写或只返回其中一句。
-7. replace 目标块如为 Markdown 列表、表格、引用、加粗引导块或连续多行结构，target_text 必须包含完整结构。
-8. content 只写新增或替换后的正文片段，不要包含章节标题。
-9. 必须补回审计指出的 partial/missing 核心信息，但不要提到“原方案”“来源段”“用户原文”。
-10. 不要新增图片 Markdown、Mermaid、代码块或伪目录标题，也不要选择图片 Markdown、Mermaid 或代码块作为 replace 的 target_text。
-11. 保持与当前小节职责一致，不要写其他章节内容。
-
-返回格式：
-{
-  "operation": "insert",
-  "anchor": "end",
-  "target_text": "replace 时填写逐字复制的完整待替换 Markdown 原文块，insert 时留空",
-  "content": "补写后的正文片段"
-}`,
-    },
-    { role: 'user', content: `当前小节：${target.item.id || 'unknown'} ${target.item.title || '未命名章节'}\n路径：${formatChapterPath(target)}\n描述：${target.item.description || ''}` },
-    { role: 'user', content: `需要补回的原方案来源段：\n${formatOriginalCoverageSources(issueSources)}` },
-    { role: 'user', content: `覆盖审计问题：\n${JSON.stringify(coverageItems || [], null, 2)}` },
-    { role: 'user', content: `当前小节正文：\n${currentContent || ''}` },
-    { role: 'user', content: `补写尝试次数：${attempt}/${ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS}${failureBlock}\n请只返回 JSON。` },
-  ];
 }
 
 function normalizeChildren(item) {
@@ -2920,30 +2340,11 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
     phaseProgress = total ? percentageFor(completed + activeCount * roundProgress, total) : 0;
     step = 'adjusting';
   } else if (phase === 'original-auditing' || phase === 'auditing') {
-    const agentTotal = Math.max(0, Number(stats.audit_agent_step_total) || 0);
-    const fixTotal = Math.max(0, Number(stats.audit_fix_total) || 0);
-    if (stats.audit_step === 'done') {
-      completed = 1;
-      total = 1;
-      phaseProgress = 100;
-      step = 'done';
-    } else if (agentTotal || stats.audit_step === 'agent') {
-      completed = stats.audit_agent_step_completed;
-      total = agentTotal;
-      phaseProgress = percentageFor(completed, total);
-      step = 'agent';
-      stepLabel = stats.audit_agent_step_label || stepLabel;
-    } else if (stats.audit_step === 'fixing') {
-      completed = stats.audit_fix_completed;
-      total = fixTotal;
-      phaseProgress = fixTotal ? clampPercentage(45 + percentageFor(completed, total) * 0.55) : 100;
-      step = 'fixing';
-    } else {
-      completed = stats.audit_group_completed;
-      total = stats.audit_group_total;
-      phaseProgress = clampPercentage(percentageFor(completed, total) * 0.45);
-      step = 'checking';
-    }
+    completed = stats.audit_agent_step_completed;
+    total = stats.audit_agent_step_total;
+    phaseProgress = percentageFor(completed, total);
+    step = 'agent';
+    stepLabel = stats.audit_agent_step_label || stepLabel;
   } else if (phase === 'table-cleaning') {
     completed = stats.table_cleanup_completed;
     total = stats.table_cleanup_total;
@@ -3119,14 +2520,6 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   const tableRequirement = normalizeTableRequirement(generationOptions.tableRequirement ?? generationOptions.table_requirement);
   let maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
-  const enableConsistencyAudit = Boolean(generationOptions.enableConsistencyAudit ?? generationOptions.enable_consistency_audit ?? true);
-  const requestedConsistencyRepairMode = normalizeConsistencyRepairMode(generationOptions.consistencyRepairMode ?? generationOptions.consistency_repair_mode);
-  const consistencyRepairMode = targetItemId ? 'normal' : requestedConsistencyRepairMode;
-  const enableOriginalPlanCoverageAudit = hasOriginalPlan && Boolean(generationOptions.enableOriginalPlanCoverageAudit ?? generationOptions.enable_original_plan_coverage_audit ?? false);
-  const requestedOriginalPlanCoverageRepairMode = hasOriginalPlan
-    ? normalizeOriginalPlanCoverageRepairMode(generationOptions.originalPlanCoverageRepairMode ?? generationOptions.original_plan_coverage_repair_mode)
-    : 'agent';
-  const originalPlanCoverageRepairMode = hasOriginalPlan && !targetItemId ? requestedOriginalPlanCoverageRepairMode : 'normal';
   const contentStats = {
     phase: 'planning',
     planning_total: 0,
@@ -3156,14 +2549,6 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     total_adjustment_item_id: '',
     total_adjustment_remaining_words: 0,
     word_control_warning: undefined,
-    audit_group_total: 0,
-    audit_group_completed: 0,
-    audit_step: '',
-    audit_conflict_total: 0,
-    audit_fix_total: 0,
-    audit_fix_completed: 0,
-    audit_fix_failed: 0,
-    audit_repair_mode: enableConsistencyAudit ? consistencyRepairMode : '',
     audit_agent_step_total: 0,
     audit_agent_step_completed: 0,
     audit_agent_step_label: '',
@@ -3328,16 +2713,10 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   if (wordControl.minimumWords > 0 || wordControl.maximumWords > 0 || wordControl.sectionWords > 0) {
     logs = [...logs, `目录生效字数配置：最少 ${wordControl.minimumWords || '不限制'} 字，最多 ${wordControl.maximumWords || '不限制'} 字，每小节 ${wordControl.sectionWords || '不控制'} 字。`];
   }
-  logs = [...logs, enableConsistencyAudit
-    ? `全文一致性审计已启用，正文扩写完成后将使用${consistencyRepairMode === 'agent' ? ' Agent 修复' : '普通修复'}检查并修复事实冲突。`
-    : '全文一致性审计未启用。'];
+  logs = [...logs, '全文一致性审计为必做阶段，正文扩写完成后将使用 Agent 检查并修复事实冲突。'];
   if (hasOriginalPlan) {
     logs = [...logs, `检测到已上传原方案：已读取并拆分为 ${originalPlanSegments.length} 个原文段。`];
-    logs = [...logs, enableOriginalPlanCoverageAudit
-      ? targetItemId
-        ? '原方案覆盖审计已启用，本次将使用普通模式检查并修复当前小节的原文保留情况。'
-        : `原方案覆盖审计已启用，本次将使用${originalPlanCoverageRepairMode === 'agent' ? ' Agent' : '普通模式'}检查并补回原文保留情况。`
-      : '原方案覆盖审计未启用。'];
+    logs = [...logs, `原方案覆盖审计为必做阶段，本次将使用 Agent 检查并补回${targetItemId ? '当前小节' : '正文'}的原文保留情况。`];
   }
 
   const progressMode = resume && storedPlan.contentGenerationTask?.progress_detail?.mode
@@ -3392,12 +2771,6 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       text_concurrency_limit: contentConcurrency,
       table_requirement: tableRequirement,
       word_control: wordControl,
-      enable_consistency_audit: enableConsistencyAudit,
-      requested_consistency_repair_mode: requestedConsistencyRepairMode,
-      consistency_repair_mode: consistencyRepairMode,
-      enable_original_plan_coverage_audit: enableOriginalPlanCoverageAudit,
-      requested_original_plan_coverage_repair_mode: requestedOriginalPlanCoverageRepairMode,
-      original_plan_coverage_repair_mode: originalPlanCoverageRepairMode,
       original_plan_segment_count: originalPlanSegments.length,
       generation_options: generationOptions,
     },
@@ -5056,8 +4429,6 @@ workspace 文件说明：
 
   function updateAgentOriginalCoverageProgress(step, label, extra = {}) {
     contentStats.phase = 'original-auditing';
-    contentStats.audit_step = 'agent';
-    contentStats.audit_repair_mode = 'agent';
     contentStats.audit_agent_step_total = 5;
     contentStats.audit_agent_step_completed = Math.max(0, Math.min(5, Number(step) || 0));
     contentStats.audit_agent_step_label = label || '';
@@ -5069,125 +4440,13 @@ workspace 文件说明：
     return runtime;
   }
 
-  async function repairOriginalCoverageSection({ target, coverageItems }) {
-    const { item } = target;
-    let currentContent = sections[item.id]?.content || item.content || '';
-    let failures = [];
-    let appliedTotal = 0;
-    writeDeveloperLog('original_coverage.repair.section.start', {
-      section_id: item.id,
-      title: item.title || '未命名章节',
-      issue_count: (coverageItems || []).length,
-      coverage_items: coverageItems,
-      content_metrics: textMetrics(currentContent),
-    });
-
-    for (let attempt = 1; attempt <= ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS; attempt += 1) {
-      if (isPauseRequested()) {
-        writeDeveloperLog('original_coverage.repair.section.paused', {
-          section_id: item.id,
-          title: item.title || '未命名章节',
-          applied_count: appliedTotal,
-        });
-        return { appliedCount: appliedTotal, failed: false, paused: true };
-      }
-
-      try {
-        writeDeveloperLog('original_coverage.repair.attempt.start', {
-          section_id: item.id,
-          title: item.title || '未命名章节',
-          attempt,
-          max_attempts: ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS,
-          previous_failures: failures,
-          content_metrics: textMetrics(currentContent),
-        });
-        const patch = await aiService.collectJsonResponse({
-          messages: buildOriginalCoverageRepairMessages({
-            target,
-            coverageItems,
-            currentContent,
-            attempt,
-            failures,
-            tableRequirement,
-          }),
-          logTitle: `原方案覆盖修复-${item.id}-${item.title || '未命名章节'}`,
-          progressLabel: '原方案覆盖修复',
-          failureMessage: '模型返回的原方案覆盖修复结果格式无效',
-          normalizer: normalizeContentExpansionPatch,
-          validator: validateContentExpansionPatch,
-          repairMessagesBuilder: (contextForRepair) => buildContentExpansionRepairMessages(contextForRepair, currentContent),
-          max_retries: 1,
-        });
-        writeDeveloperLog('original_coverage.repair.response', {
-          section_id: item.id,
-          title: item.title || '未命名章节',
-          attempt,
-          patch,
-        });
-
-        const nextContent = applyContentExpansionPatch(currentContent, patch);
-        if (normalizeNewlines(nextContent).trim() === normalizeNewlines(currentContent).trim()) {
-          failures = ['补写 patch 应用后正文没有变化'];
-          writeDeveloperLog('original_coverage.repair.no_change', {
-            section_id: item.id,
-            title: item.title || '未命名章节',
-            attempt,
-            patch,
-          });
-        } else {
-          currentContent = nextContent;
-          appliedTotal += 1;
-          rememberTouchedItem(item.id);
-          saveSection(item, { status: 'success', content: currentContent, error: undefined }, currentContent, { logs });
-          writeDeveloperLog('original_coverage.repair.section.saved', {
-            section_id: item.id,
-            title: item.title || '未命名章节',
-            attempt,
-            applied_total: appliedTotal,
-            content_metrics: textMetrics(currentContent),
-          });
-          return { appliedCount: appliedTotal, failed: false, paused: false };
-        }
-      } catch (error) {
-        if (isPauseLikeError(error)) {
-          throw error;
-        }
-        failures = [error.message || '模型返回无效'];
-        writeDeveloperLog('original_coverage.repair.attempt.error', {
-          section_id: item.id,
-          title: item.title || '未命名章节',
-          attempt,
-          error: error.message || '模型返回无效',
-          stack: error.stack || '',
-        });
-      }
-
-      logs = [...logs, `原方案覆盖修复第 ${attempt}/${ORIGINAL_COVERAGE_REPAIR_MAX_ATTEMPTS} 次未完成：${item.id} ${item.title || '未命名章节'}，${failures.join('；')}。`];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-    }
-
-    writeDeveloperLog('original_coverage.repair.section.done', {
-      section_id: item.id,
-      title: item.title || '未命名章节',
-      applied_count: appliedTotal,
-      failed: true,
-      errors: failures,
-    });
-    return { appliedCount: appliedTotal, failed: true, paused: false, errors: failures };
-  }
-
-  async function runAgentOriginalCoverageRepairIfEnabled() {
+  async function runAgentOriginalCoverageRepair(options = {}) {
     if (!hasOriginalPlan) {
       return { ran: false, fixedCount: 0, failedCount: 0 };
     }
-    if (!enableOriginalPlanCoverageAudit) {
-      writeDeveloperLog('original_coverage.agent.skipped', { reason: 'disabled' });
-      logs = [...logs, '原方案覆盖审计未启用，跳过 Agent 覆盖修复阶段。'];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      return { ran: false, fixedCount: 0, failedCount: 0 };
-    }
 
-    const coverageTargets = buildOriginalCoverageAuditTargets('');
+    const normalizedTargetId = String(options.targetItemId || targetItemId || '').trim();
+    const coverageTargets = buildOriginalCoverageAuditTargets(normalizedTargetId);
     const sectionIndex = buildAgentConsistencySectionIndex(coverageTargets);
     if (!sectionIndex.size) {
       writeDeveloperLog('original_coverage.agent.skipped', { reason: 'no_targets' });
@@ -5196,16 +4455,11 @@ workspace 文件说明：
       return { ran: false, fixedCount: 0, failedCount: 0 };
     }
 
-    contentStats.audit_group_total = 0;
-    contentStats.audit_group_completed = 0;
-    contentStats.audit_conflict_total = 0;
-    contentStats.audit_fix_total = 0;
-    contentStats.audit_fix_completed = 0;
-    contentStats.audit_fix_failed = 0;
     contentStats.audit_agent_changed_sections = 0;
     contentStats.audit_agent_failed_sections = 0;
-    logs = [...logs, `开始 Agent 原方案覆盖修复：共 ${sectionIndex.size} 个已还原小节。`];
+    logs = [...logs, `开始 Agent 原方案覆盖修复：共 ${sectionIndex.size} 个已还原小节${normalizedTargetId ? `，目标小节 ${normalizedTargetId}` : ''}。`];
     writeDeveloperLog('original_coverage.agent.start', {
+      target_item_id: normalizedTargetId,
       section_count: sectionIndex.size,
       sections: coverageTargets.map((target) => ({
         id: target.item.id,
@@ -5223,12 +4477,7 @@ workspace 文件说明：
     pauseIfRequested('正文生成已在原方案覆盖 Agent 修复开始前暂停，本次 Agent 未启动；继续后将重新执行。');
 
     if (!agentService?.runTask) {
-      const failedCount = sectionIndex.size;
-      contentStats.audit_agent_failed_sections = failedCount;
-      logs = [...logs, `原方案覆盖 Agent 修复无法启动：Agent 服务尚未初始化，${failedCount} 个小节需人工核对。`];
-      writeDeveloperLog('original_coverage.agent.unavailable', { failed_count: failedCount });
-      updateAgentOriginalCoverageProgress(5, '原方案覆盖 Agent 不可用', { audit_agent_failed_sections: failedCount });
-      return { ran: true, fixedCount: 0, failedCount };
+      throw new Error('Agent 服务尚未初始化，无法执行必做的原方案覆盖审计');
     }
 
     updateAgentOriginalCoverageProgress(2, 'Agent 正在检查并补回原方案内容');
@@ -5273,13 +4522,8 @@ workspace 文件说明：
         onActivity: createAgentActivityProgressHandler(updateAgentOriginalCoverageProgress, 2, 'Agent 正在检查并补回原方案内容'),
       }, 'original_coverage.agent');
       if (isAgentBusyResult(agentResult)) {
-        logs = [...logs, 'Agent 正在处理其他任务，本轮跳过原方案覆盖 Agent 修复。'];
         writeDeveloperLog('original_coverage.agent.busy', { active_task: agentResult?.active_task || null });
-        updateAgentOriginalCoverageProgress(0, 'Agent 正忙，已跳过原方案覆盖 Agent 修复', {
-          audit_agent_changed_sections: 0,
-          audit_agent_failed_sections: 0,
-        });
-        return { ran: false, fixedCount: 0, failedCount: 0, skipped: true, reason: 'busy' };
+        throw new Error('Agent 正在处理其他任务，无法执行必做的原方案覆盖审计');
       }
       pauseIfRequested('正文生成已在原方案覆盖 Agent 修复结果回写前暂停，本次 Agent 输出未回写；继续后将重新执行。');
 
@@ -5328,7 +4572,7 @@ workspace 文件说明：
 
       const failedCount = sectionIndex.size;
       contentStats.audit_agent_failed_sections = failedCount;
-      logs = [...logs, `原方案覆盖 Agent 修复失败：${error.message || '未知错误'}。已保留原正文，${failedCount} 个小节需人工核对，任务将继续进入后续流程。`];
+      logs = [...logs, `原方案覆盖 Agent 修复失败：${error.message || '未知错误'}。已保留原正文，原方案覆盖审计未完成。`];
       writeDeveloperLog('original_coverage.agent.failed', {
         failed_count: failedCount,
         ...agentErrorDiagnostics(error),
@@ -5336,223 +4580,14 @@ workspace 文件说明：
       updateAgentOriginalCoverageProgress(contentStats.audit_agent_step_completed || 2, '原方案覆盖 Agent 修复失败', {
         audit_agent_failed_sections: failedCount,
       });
-      return { ran: true, fixedCount: 0, failedCount };
+      throw error;
     } finally {
       if (pauseWatcher) clearInterval(pauseWatcher);
     }
   }
 
-  async function runOriginalPlanCoverageAuditIfEnabled(options = {}) {
-    if (!hasOriginalPlan) {
-      return { ran: false, fixedCount: 0, failedCount: 0 };
-    }
-    if (!enableOriginalPlanCoverageAudit) {
-      writeDeveloperLog('original_coverage.audit.skipped', { reason: 'disabled' });
-      logs = [...logs, '原方案覆盖审计未启用，跳过审计阶段。'];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      return { ran: false, fixedCount: 0, failedCount: 0 };
-    }
-
-    const auditTargets = buildOriginalCoverageAuditTargets(options.targetItemId || targetItemId);
-    if (!auditTargets.length) {
-      writeDeveloperLog('original_coverage.audit.skipped', { reason: 'no_targets', target_item_id: options.targetItemId || targetItemId || '' });
-      logs = [...logs, '原方案覆盖审计跳过：没有可审计的已还原成功正文小节。'];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      return { ran: false, fixedCount: 0, failedCount: 0 };
-    }
-
-    const coverageIssuesBySectionId = new Map();
-    let issueCount = 0;
-    let conflictCount = 0;
-    contentStats.phase = 'original-auditing';
-    contentStats.audit_step = 'checking';
-    contentStats.audit_repair_mode = 'normal';
-    contentStats.audit_group_total = auditTargets.length;
-    contentStats.audit_group_completed = 0;
-    contentStats.audit_conflict_total = 0;
-    contentStats.audit_fix_total = 0;
-    contentStats.audit_fix_completed = 0;
-    contentStats.audit_fix_failed = 0;
-    contentStats.audit_agent_step_total = 0;
-    contentStats.audit_agent_step_completed = 0;
-    contentStats.audit_agent_step_label = '';
-    contentStats.audit_agent_changed_sections = 0;
-    contentStats.audit_agent_failed_sections = 0;
-    logs = [...logs, `开始原方案覆盖审计：${auditTargets.length} 个已还原小节，并发 ${contentConcurrency}。`];
-    const originalAuditRuntime = syncRuntime({ phase: 'original-auditing' });
-    writeDeveloperLog('original_coverage.audit.start', {
-      target_item_id: options.targetItemId || targetItemId || '',
-      target_count: auditTargets.length,
-      concurrency: contentConcurrency,
-      targets: auditTargets.map((target) => ({
-        section_id: target.item.id,
-        title: target.item.title || '未命名章节',
-        source_ids: target.sources.map((segment) => segment.id),
-        content_metrics: textMetrics(target.content),
-      })),
-    });
-    checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
-      contentGenerationRuntime: originalAuditRuntime,
-    }, { contentRuntime: originalAuditRuntime });
-
-    async function auditOriginalCoverageTarget(target) {
-      const allowedSourceIds = new Set(target.sources.map((segment) => segment.id).filter(Boolean));
-      try {
-        writeDeveloperLog('original_coverage.audit.section.start', {
-          section_id: target.item.id,
-          title: target.item.title || '未命名章节',
-          source_ids: [...allowedSourceIds],
-        });
-        const response = await aiService.collectJsonResponse({
-          messages: buildOriginalCoverageAuditMessages({ target }),
-          logTitle: `原方案覆盖审计-${target.item.id}-${target.item.title || '未命名章节'}`,
-          progressLabel: '原方案覆盖审计',
-          failureMessage: '模型返回的原方案覆盖审计结果格式无效',
-          normalizer: (value) => normalizeOriginalCoverageAuditResponse(value, { allowedSourceIds, expectedNodeId: target.item.id }),
-          validator: (value) => validateOriginalCoverageAuditResponse(value, allowedSourceIds),
-          repairMessagesBuilder: (contextForRepair) => buildOriginalCoverageAuditJsonRepairMessages(contextForRepair, target),
-          max_retries: 1,
-        });
-        const coverageItems = response.items || [];
-        const repairItems = coverageItems.filter((item) => ['partial', 'missing'].includes(item.status));
-        const conflictItems = coverageItems.filter((item) => item.status === 'conflict');
-        if (repairItems.length) {
-          coverageIssuesBySectionId.set(target.item.id, { target, coverageItems: repairItems });
-        }
-        issueCount += repairItems.length + conflictItems.length;
-        conflictCount += conflictItems.length;
-        contentStats.audit_conflict_total = issueCount;
-        logs = [...logs, `原方案覆盖审计完成：${target.item.id} ${target.item.title || '未命名章节'}，需补写 ${repairItems.length} 段，冲突 ${conflictItems.length} 段。`];
-        writeDeveloperLog('original_coverage.audit.section.success', {
-          section_id: target.item.id,
-          title: target.item.title || '未命名章节',
-          items: coverageItems,
-          repair_count: repairItems.length,
-          conflict_count: conflictItems.length,
-        });
-      } catch (error) {
-        if (isPauseLikeError(error)) {
-          throw error;
-        }
-        logs = [...logs, `原方案覆盖审计失败：${target.item.id} ${target.item.title || '未命名章节'}，${error.message || '模型返回无效'}，已跳过该小节。`];
-        writeDeveloperLog('original_coverage.audit.section.error', {
-          section_id: target.item.id,
-          title: target.item.title || '未命名章节',
-          error: error.message || '模型返回无效',
-          stack: error.stack || '',
-        });
-      } finally {
-        contentStats.audit_group_completed += 1;
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      }
-    }
-
-    if (auditTargets.length > 1) {
-      const [warmupTarget, ...remainingTargets] = auditTargets;
-      logs = [...logs, `开始原方案覆盖审计预热：${warmupTarget.item.id} ${warmupTarget.item.title || '未命名章节'}。`];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-
-      await auditOriginalCoverageTarget(warmupTarget);
-      pauseIfRequested('正文生成已在原方案覆盖审计预热后暂停，可导出当前已完成内容，稍后继续。');
-
-      if (remainingTargets.length) {
-        continueAfterPromptCacheWarmup(`原方案覆盖审计预热完成，开始并发审计剩余 ${remainingTargets.length} 个小节。`);
-        logs = [...logs, `开始并发审计剩余 ${remainingTargets.length} 个小节。`];
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-        await runItemsWithWorkerPool(remainingTargets, contentConcurrency, auditOriginalCoverageTarget, isPauseRequested);
-      }
-    } else {
-      await runItemsWithWorkerPool(auditTargets, contentConcurrency, auditOriginalCoverageTarget, isPauseRequested);
-    }
-
-    pauseIfRequested('正文生成已在原方案覆盖审计阶段暂停，可导出当前已完成内容，稍后继续。');
-
-    const repairTargets = Array.from(coverageIssuesBySectionId.values());
-    contentStats.audit_step = 'fixing';
-    contentStats.audit_fix_total = repairTargets.length;
-    contentStats.audit_fix_completed = 0;
-    contentStats.audit_fix_failed = 0;
-    logs = [...logs, repairTargets.length
-      ? `原方案覆盖审计发现 ${repairTargets.length} 个小节需要补写，开始局部修复。${conflictCount ? `另有 ${conflictCount} 个来源段存在冲突，保留给一致性审计或人工核对。` : ''}`
-      : `原方案覆盖审计未发现需要自动补写的来源段。${conflictCount ? `发现 ${conflictCount} 个冲突来源段，保留给一致性审计或人工核对。` : ''}`];
-    writeDeveloperLog('original_coverage.repair.start', {
-      target_count: repairTargets.length,
-      conflict_count: conflictCount,
-      issue_count: issueCount,
-      concurrency: contentConcurrency,
-      targets: repairTargets.map(({ target, coverageItems }) => ({
-        section_id: target.item.id,
-        title: target.item.title || '未命名章节',
-        coverage_items: coverageItems,
-      })),
-    });
-    publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-
-    if (!repairTargets.length) {
-      writeDeveloperLog('original_coverage.audit.done', { fixed_count: 0, failed_count: 0, repair_target_count: 0, conflict_count: conflictCount });
-      return { ran: true, fixedCount: 0, failedCount: 0 };
-    }
-
-    let fixedCount = 0;
-    async function repairOriginalCoverageTarget(target) {
-      const item = target.target.item;
-      try {
-        const result = await repairOriginalCoverageSection(target);
-        if (result.appliedCount > 0) {
-          fixedCount += 1;
-          logs = [...logs, `原方案覆盖修复完成：${item.id} ${item.title || '未命名章节'}，应用 ${result.appliedCount} 个局部补写。`];
-        }
-        if (result.failed) {
-          contentStats.audit_fix_failed += 1;
-          logs = [...logs, `原方案覆盖修复需人工核对：${item.id} ${item.title || '未命名章节'}，${(result.errors || []).join('；') || '未能应用补写 patch'}。`];
-        }
-      } catch (error) {
-        if (isPauseLikeError(error)) {
-          throw error;
-        }
-        contentStats.audit_fix_failed += 1;
-        logs = [...logs, `原方案覆盖修复失败：${item.id} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}。`];
-      } finally {
-        contentStats.audit_fix_completed += 1;
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      }
-    }
-
-    if (repairTargets.length > 1) {
-      const [warmupTarget, ...remainingTargets] = repairTargets;
-      logs = [...logs, `开始原方案覆盖修复预热：${warmupTarget.target.item.id} ${warmupTarget.target.item.title || '未命名章节'}。`];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-
-      await repairOriginalCoverageTarget(warmupTarget);
-      pauseIfRequested('正文生成已在原方案覆盖修复预热后暂停，可导出当前已完成内容，稍后继续。');
-
-      if (remainingTargets.length) {
-        continueAfterPromptCacheWarmup(`原方案覆盖修复预热完成，开始并发修复剩余 ${remainingTargets.length} 个小节。`);
-        logs = [...logs, `开始并发修复剩余 ${remainingTargets.length} 个小节。`];
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-        await runItemsWithWorkerPool(remainingTargets, contentConcurrency, repairOriginalCoverageTarget, isPauseRequested);
-      }
-    } else {
-      await runItemsWithWorkerPool(repairTargets, contentConcurrency, repairOriginalCoverageTarget, isPauseRequested);
-    }
-
-    pauseIfRequested('正文生成已在原方案覆盖修复阶段暂停，可导出当前已完成内容，稍后继续。');
-
-    logs = [...logs, `原方案覆盖审计完成：发现 ${repairTargets.length} 个需补写小节，成功修复 ${fixedCount} 个，${contentStats.audit_fix_failed} 个需人工核对。`];
-    contentStats.audit_step = 'done';
-    writeDeveloperLog('original_coverage.audit.done', {
-      repair_target_count: repairTargets.length,
-      fixed_count: fixedCount,
-      failed_count: contentStats.audit_fix_failed,
-      conflict_count: conflictCount,
-      issue_count: issueCount,
-    });
-    publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-    return { ran: true, fixedCount, failedCount: contentStats.audit_fix_failed };
-  }
-
-  function buildConsistencyAuditTargets(auditTargetItemId = '') {
-    const normalizedTargetId = String(auditTargetItemId || '').trim();
+  function buildConsistencyTargets(targetItemIdForAudit = '') {
+    const normalizedTargetId = String(targetItemIdForAudit || '').trim();
     return leaves
       .filter(({ item }) => !normalizedTargetId || item.id === normalizedTargetId)
       .map((context) => {
@@ -5560,41 +4595,9 @@ workspace 文件说明：
         return {
           ...context,
           content,
-          words: getLeafWordCount(context.item),
         };
       })
       .filter(({ item, content }) => sections[item.id]?.status === 'success' && String(content || '').trim());
-  }
-
-  function buildConsistencyAuditGroups(targets) {
-    const totalWords = (targets || []).reduce((sum, item) => sum + item.words, 0);
-    if (!targets?.length) {
-      return [];
-    }
-
-    let groupCount = 1;
-    if (totalWords > CONSISTENCY_AUDIT_GROUP_WORD_LIMIT) {
-      groupCount = 2;
-      while (totalWords / groupCount > CONSISTENCY_AUDIT_GROUP_WORD_LIMIT) {
-        groupCount += 1;
-      }
-    }
-    const targetWords = Math.max(1, Math.ceil(totalWords / groupCount));
-    const groups = [];
-    let current = { index: 1, items: [], words: 0, targetWords };
-
-    for (const target of targets) {
-      if (current.items.length && current.words + target.words > targetWords && groups.length < groupCount - 1) {
-        groups.push(current);
-        current = { index: groups.length + 1, items: [], words: 0, targetWords };
-      }
-      current.items.push(target);
-      current.words += target.words;
-    }
-    if (current.items.length) {
-      groups.push(current);
-    }
-    return groups.map((group, index) => ({ ...group, index: index + 1, total: groups.length, totalWords }));
   }
 
   function buildAgentConsistencySectionIndex(targets) {
@@ -5674,8 +4677,6 @@ workspace 文件说明：
 
   function updateAgentConsistencyProgress(step, label, extra = {}) {
     contentStats.phase = 'auditing';
-    contentStats.audit_step = 'agent';
-    contentStats.audit_repair_mode = 'agent';
     contentStats.audit_agent_step_total = 5;
     contentStats.audit_agent_step_completed = Math.max(0, Math.min(5, Number(step) || 0));
     contentStats.audit_agent_step_label = label || '';
@@ -5727,18 +4728,12 @@ workspace 文件说明：
     return { changedCount, skippedCount, changedIds };
   }
 
-  async function runAgentConsistencyRepairIfEnabled(options = {}) {
-    if (!enableConsistencyAudit) {
-      writeDeveloperLog('consistency.agent.skipped', { reason: 'disabled' });
-      logs = [...logs, '全文一致性审计未启用，跳过 Agent 一致性修复阶段。'];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      return { ran: false, fixedCount: 0, failedCount: 0 };
-    }
+  async function runAgentConsistencyRepair(options = {}) {
     if (!agentService?.runTask) {
       throw new Error('Agent 服务尚未初始化，无法执行 Agent 一致性修复');
     }
 
-    const allTargets = buildConsistencyAuditTargets('');
+    const allTargets = buildConsistencyTargets('');
     const sectionIndex = buildAgentConsistencySectionIndex(allTargets);
     if (!sectionIndex.size) {
       writeDeveloperLog('consistency.agent.skipped', { reason: 'no_targets', target_item_id: options.targetItemId || targetItemId || '' });
@@ -5755,12 +4750,6 @@ workspace 文件说明：
       return { ran: false, fixedCount: 0, failedCount: 0 };
     }
 
-    contentStats.audit_group_total = 0;
-    contentStats.audit_group_completed = 0;
-    contentStats.audit_conflict_total = 0;
-    contentStats.audit_fix_total = 0;
-    contentStats.audit_fix_completed = 0;
-    contentStats.audit_fix_failed = 0;
     contentStats.audit_agent_changed_sections = 0;
     contentStats.audit_agent_failed_sections = 0;
     logs = [...logs, `开始 Agent 全文一致性修复：共 ${sectionIndex.size} 个正文小节${normalizedTargetId ? `，仅回写目标小节 ${normalizedTargetId}` : ''}。`];
@@ -5824,13 +4813,8 @@ workspace 文件说明：
         onActivity: createAgentActivityProgressHandler(updateAgentConsistencyProgress, 2, 'Agent 正在审计并修复全文'),
       }, 'consistency.agent');
       if (isAgentBusyResult(agentResult)) {
-        logs = [...logs, 'Agent 正在处理其他任务，本轮跳过 Agent 一致性修复。'];
         writeDeveloperLog('consistency.agent.busy', { active_task: agentResult?.active_task || null });
-        updateAgentConsistencyProgress(0, 'Agent 正忙，已跳过本轮 Agent 修复', {
-          audit_agent_changed_sections: 0,
-          audit_agent_failed_sections: 0,
-        });
-        return { ran: false, fixedCount: 0, failedCount: 0, skipped: true, reason: 'busy' };
+        throw new Error('Agent 正在处理其他任务，无法执行必做的全文一致性审计');
       }
       pauseIfRequested('正文生成已在 Agent 全文一致性修复结果回写前暂停，本次 Agent 输出未回写；继续后将重新执行 Agent 修复。');
 
@@ -5879,7 +4863,7 @@ workspace 文件说明：
       }
       const failedCount = normalizedTargetId ? 1 : sectionIndex.size;
       contentStats.audit_agent_failed_sections = failedCount;
-      logs = [...logs, `Agent 一致性修复失败：${error.message || '未知错误'}。已保留原正文，未回退普通修复。`];
+      logs = [...logs, `Agent 一致性修复失败：${error.message || '未知错误'}。已保留原正文，全文一致性审计未完成。`];
       writeDeveloperLog('consistency.agent.failed', {
         target_item_id: normalizedTargetId,
         failed_count: failedCount,
@@ -5892,349 +4876,6 @@ workspace 文件说明：
     } finally {
       if (pauseWatcher) clearInterval(pauseWatcher);
     }
-  }
-
-  async function repairConsistencySection({ context, conflicts }) {
-    const { item } = context;
-    let currentContent = sections[item.id]?.content || item.content || '';
-    let failures = [];
-    let appliedTotal = 0;
-    writeDeveloperLog('consistency.repair.section.start', {
-      section_id: item.id,
-      title: item.title || '未命名章节',
-      conflict_count: (conflicts || []).length,
-      conflicts,
-      content_metrics: textMetrics(currentContent),
-    });
-
-    for (let attempt = 1; attempt <= CONSISTENCY_REPAIR_MAX_ATTEMPTS; attempt += 1) {
-      if (isPauseRequested()) {
-        writeDeveloperLog('consistency.repair.section.paused', {
-          section_id: item.id,
-          title: item.title || '未命名章节',
-          applied_count: appliedTotal,
-        });
-        return { appliedCount: appliedTotal, failed: false, paused: true };
-      }
-
-      try {
-        writeDeveloperLog('consistency.repair.attempt.start', {
-          section_id: item.id,
-          title: item.title || '未命名章节',
-          attempt,
-          max_attempts: CONSISTENCY_REPAIR_MAX_ATTEMPTS,
-          previous_failures: failures,
-          content_metrics: textMetrics(currentContent),
-        });
-        const response = await aiService.collectJsonResponse({
-          messages: buildConsistencyRepairMessages({
-            context,
-            conflicts,
-            globalFactsText,
-            bidAnalysisFactsText,
-            currentContent,
-            attempt,
-            failures,
-            tableRequirement,
-            globalFactsMode,
-          }),
-          logTitle: `一致性修复-${item.id}-${item.title || '未命名章节'}`,
-          progressLabel: '正文一致性修复',
-          failureMessage: '模型返回的正文一致性修复结果格式无效',
-          normalizer: (value) => normalizeConsistencyRepairResponse(value, item.id),
-          validator: validateConsistencyRepairResponse,
-          repairMessagesBuilder: (contextForRepair) => buildConsistencyRepairJsonRepairMessages(contextForRepair, item.id),
-          max_retries: 1,
-        });
-        writeDeveloperLog('consistency.repair.response', {
-          section_id: item.id,
-          title: item.title || '未命名章节',
-          attempt,
-          patch_count: response.patches.length,
-          patches: response.patches,
-        });
-
-        if (!response.patches.length) {
-          failures = ['模型未返回可应用的 patches'];
-          writeDeveloperLog('consistency.repair.no_patches', {
-            section_id: item.id,
-            title: item.title || '未命名章节',
-            attempt,
-          });
-        } else {
-          const result = applyConsistencyRepairPatches(currentContent, response.patches);
-          writeDeveloperLog('consistency.repair.apply_result', {
-            section_id: item.id,
-            title: item.title || '未命名章节',
-            attempt,
-            applied_count: result.appliedCount,
-            errors: result.errors,
-            patch_results: result.patchResults,
-          });
-          if (result.appliedCount > 0) {
-            currentContent = result.content;
-            appliedTotal += result.appliedCount;
-            rememberTouchedItem(item.id);
-            saveSection(item, { status: 'success', content: currentContent, error: undefined }, currentContent, { logs });
-            writeDeveloperLog('consistency.repair.section.saved', {
-              section_id: item.id,
-              title: item.title || '未命名章节',
-              attempt,
-              applied_total: appliedTotal,
-              content_metrics: textMetrics(currentContent),
-            });
-          }
-          if (!result.errors.length) {
-            writeDeveloperLog('consistency.repair.section.done', {
-              section_id: item.id,
-              title: item.title || '未命名章节',
-              applied_count: appliedTotal,
-              failed: false,
-            });
-            return { appliedCount: appliedTotal, failed: false, paused: false };
-          }
-          failures = result.errors;
-        }
-      } catch (error) {
-        if (isPauseLikeError(error)) {
-          throw error;
-        }
-        failures = [error.message || '模型返回无效'];
-        writeDeveloperLog('consistency.repair.attempt.error', {
-          section_id: item.id,
-          title: item.title || '未命名章节',
-          attempt,
-          error: error.message || '模型返回无效',
-          stack: error.stack || '',
-        });
-      }
-
-      logs = [...logs, `一致性修复第 ${attempt}/${CONSISTENCY_REPAIR_MAX_ATTEMPTS} 次未完成：${item.id} ${item.title || '未命名章节'}，${failures.join('；')}。`];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-    }
-
-    writeDeveloperLog('consistency.repair.section.done', {
-      section_id: item.id,
-      title: item.title || '未命名章节',
-      applied_count: appliedTotal,
-      failed: true,
-      errors: failures,
-    });
-    return { appliedCount: appliedTotal, failed: true, paused: false, errors: failures };
-  }
-
-  async function runConsistencyAuditIfEnabled(options = {}) {
-    if (!enableConsistencyAudit) {
-      writeDeveloperLog('consistency.audit.skipped', { reason: 'disabled' });
-      logs = [...logs, '全文一致性审计未启用，跳过审计阶段。'];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      return { ran: false, fixedCount: 0, failedCount: 0 };
-    }
-
-    const auditTargets = buildConsistencyAuditTargets(options.targetItemId || targetItemId);
-    if (!auditTargets.length) {
-      writeDeveloperLog('consistency.audit.skipped', { reason: 'no_targets', target_item_id: options.targetItemId || targetItemId || '' });
-      logs = [...logs, '全文一致性审计跳过：没有可审计的成功正文小节。'];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      return { ran: false, fixedCount: 0, failedCount: 0 };
-    }
-
-    const auditGroups = buildConsistencyAuditGroups(auditTargets);
-    const targetById = new Map(auditTargets.map((context) => [context.item.id, context]));
-    const conflictsBySectionId = new Map();
-
-    contentStats.phase = 'auditing';
-    contentStats.audit_step = 'checking';
-    contentStats.audit_repair_mode = 'normal';
-    contentStats.audit_group_total = auditGroups.length;
-    contentStats.audit_group_completed = 0;
-    contentStats.audit_conflict_total = 0;
-    contentStats.audit_fix_total = 0;
-    contentStats.audit_fix_completed = 0;
-    contentStats.audit_fix_failed = 0;
-    contentStats.audit_agent_step_total = 0;
-    contentStats.audit_agent_step_completed = 0;
-    contentStats.audit_agent_step_label = '';
-    contentStats.audit_agent_changed_sections = 0;
-    contentStats.audit_agent_failed_sections = 0;
-    logs = [...logs, `开始全文一致性审计：${auditTargets.length} 个小节，拆分为 ${auditGroups.length} 组，并发 ${contentConcurrency}。`];
-    const auditRuntime = syncRuntime({ phase: 'auditing' });
-    writeDeveloperLog('consistency.audit.start', {
-      target_item_id: options.targetItemId || targetItemId || '',
-      target_count: auditTargets.length,
-      group_count: auditGroups.length,
-      concurrency: contentConcurrency,
-      group_word_limit: CONSISTENCY_AUDIT_GROUP_WORD_LIMIT,
-      groups: auditGroups.map((group) => ({
-        index: group.index,
-        total: group.total,
-        words: group.words,
-        target_words: group.targetWords,
-        total_words: group.totalWords,
-        sections: group.items.map(({ item, words, content }) => ({
-          id: item.id,
-          title: item.title || '未命名章节',
-          words,
-          content_metrics: textMetrics(content),
-        })),
-      })),
-    });
-    checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
-      contentGenerationRuntime: auditRuntime,
-    }, { contentRuntime: auditRuntime });
-
-    async function auditConsistencyGroup(group) {
-      const allowedIds = new Set(group.items.map(({ item }) => item.id).filter(Boolean));
-      try {
-        writeDeveloperLog('consistency.audit.group.start', {
-          index: group.index,
-          total: group.total,
-          words: group.words,
-          allowed_ids: [...allowedIds],
-        });
-        const response = await aiService.collectJsonResponse({
-          messages: buildConsistencyAuditMessages({ group, globalFactsText, bidAnalysisFactsText, globalFactsMode }),
-          logTitle: `一致性审计-${group.index}-${group.total}`,
-          progressLabel: '全文一致性审计',
-          failureMessage: '模型返回的一致性审计结果格式无效',
-          normalizer: (value) => normalizeConsistencyAuditResponse(value, allowedIds),
-          validator: validateConsistencyAuditResponse,
-          repairMessagesBuilder: (contextForRepair) => buildConsistencyAuditRepairMessages(contextForRepair, allowedIds),
-          max_retries: 1,
-        });
-
-        for (const conflict of response.conflicts) {
-          const list = conflictsBySectionId.get(conflict.section_id) || [];
-          list.push(conflict);
-          conflictsBySectionId.set(conflict.section_id, list);
-        }
-        contentStats.audit_conflict_total = conflictsBySectionId.size;
-        logs = [...logs, `一致性审计完成：第 ${group.index}/${group.total} 组，发现 ${response.conflicts.length} 条冲突，累计 ${conflictsBySectionId.size} 个冲突小节。`];
-        writeDeveloperLog('consistency.audit.group.success', {
-          index: group.index,
-          total: group.total,
-          conflict_count: response.conflicts.length,
-          conflicts: response.conflicts,
-          conflict_section_count: conflictsBySectionId.size,
-        });
-      } catch (error) {
-        if (isPauseLikeError(error)) {
-          throw error;
-        }
-        logs = [...logs, `一致性审计失败：第 ${group.index}/${group.total} 组，${error.message || '模型返回无效'}，已跳过该组。`];
-        writeDeveloperLog('consistency.audit.group.error', {
-          index: group.index,
-          total: group.total,
-          error: error.message || '模型返回无效',
-          stack: error.stack || '',
-        });
-      } finally {
-        contentStats.audit_group_completed += 1;
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      }
-    }
-
-    if (auditGroups.length > 1) {
-      const [warmupGroup, ...remainingGroups] = auditGroups;
-      logs = [...logs, `开始全文一致性审计预热：第 ${warmupGroup.index}/${warmupGroup.total} 组。`];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-
-      await auditConsistencyGroup(warmupGroup);
-      pauseIfRequested('正文生成已在一致性审计预热后暂停，可导出当前已完成内容，稍后继续。');
-
-      if (remainingGroups.length) {
-        continueAfterPromptCacheWarmup(`全文一致性审计预热完成，开始并发审计剩余 ${remainingGroups.length} 组。`);
-        logs = [...logs, `开始并发审计剩余 ${remainingGroups.length} 组。`];
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-        await runItemsWithWorkerPool(remainingGroups, contentConcurrency, auditConsistencyGroup, isPauseRequested);
-      }
-    } else {
-      await runItemsWithWorkerPool(auditGroups, contentConcurrency, auditConsistencyGroup, isPauseRequested);
-    }
-
-    pauseIfRequested('正文生成已在一致性审计阶段暂停，可导出当前已完成内容，稍后继续。');
-
-    const repairTargets = Array.from(conflictsBySectionId.entries())
-      .map(([sectionId, conflicts]) => ({ context: targetById.get(sectionId), conflicts }))
-      .filter((target) => target.context);
-    contentStats.audit_step = 'fixing';
-    contentStats.audit_fix_total = repairTargets.length;
-    contentStats.audit_fix_completed = 0;
-    contentStats.audit_fix_failed = 0;
-    logs = [...logs, repairTargets.length
-      ? `一致性审计发现 ${repairTargets.length} 个冲突小节，开始局部修复，并发 ${contentConcurrency}。`
-      : '一致性审计未发现需要修复的事实冲突。'];
-    writeDeveloperLog('consistency.repair.start', {
-      target_count: repairTargets.length,
-      concurrency: contentConcurrency,
-      targets: repairTargets.map(({ context, conflicts }) => ({
-        section_id: context.item.id,
-        title: context.item.title || '未命名章节',
-        conflict_count: conflicts.length,
-        conflicts,
-      })),
-    });
-    publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-
-    if (!repairTargets.length) {
-      writeDeveloperLog('consistency.audit.done', { fixed_count: 0, failed_count: 0, repair_target_count: 0 });
-      return { ran: true, fixedCount: 0, failedCount: 0 };
-    }
-
-    let fixedCount = 0;
-    async function repairConsistencyTarget(target) {
-      const item = target.context.item;
-      try {
-        const result = await repairConsistencySection(target);
-        if (result.appliedCount > 0) {
-          fixedCount += 1;
-          logs = [...logs, `一致性修复完成：${item.id} ${item.title || '未命名章节'}，应用 ${result.appliedCount} 个局部替换。`];
-        }
-        if (result.failed) {
-          contentStats.audit_fix_failed += 1;
-          logs = [...logs, `一致性修复需人工核对：${item.id} ${item.title || '未命名章节'}，${(result.errors || []).join('；') || '未能唯一定位替换内容'}。`];
-        }
-      } catch (error) {
-        if (isPauseLikeError(error)) {
-          throw error;
-        }
-        contentStats.audit_fix_failed += 1;
-        logs = [...logs, `一致性修复失败：${item.id} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}。`];
-      } finally {
-        contentStats.audit_fix_completed += 1;
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      }
-    }
-
-    if (repairTargets.length > 1) {
-      const [warmupTarget, ...remainingTargets] = repairTargets;
-      logs = [...logs, `开始一致性修复预热：${warmupTarget.context.item.id} ${warmupTarget.context.item.title || '未命名章节'}。`];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-
-      await repairConsistencyTarget(warmupTarget);
-      pauseIfRequested('正文生成已在一致性修复预热后暂停，可导出当前已完成内容，稍后继续。');
-
-      if (remainingTargets.length) {
-        continueAfterPromptCacheWarmup(`一致性修复预热完成，开始并发修复剩余 ${remainingTargets.length} 个小节。`);
-        logs = [...logs, `开始并发修复剩余 ${remainingTargets.length} 个小节。`];
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-        await runItemsWithWorkerPool(remainingTargets, contentConcurrency, repairConsistencyTarget, isPauseRequested);
-      }
-    } else {
-      await runItemsWithWorkerPool(repairTargets, contentConcurrency, repairConsistencyTarget, isPauseRequested);
-    }
-
-    pauseIfRequested('正文生成已在一致性修复阶段暂停，可导出当前已完成内容，稍后继续。');
-
-    logs = [...logs, `一致性审计完成：发现 ${repairTargets.length} 个冲突小节，成功修复 ${fixedCount} 个，${contentStats.audit_fix_failed} 个需人工核对。`];
-    contentStats.audit_step = 'done';
-    writeDeveloperLog('consistency.audit.done', {
-      repair_target_count: repairTargets.length,
-      fixed_count: fixedCount,
-      failed_count: contentStats.audit_fix_failed,
-    });
-    publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-    return { ran: true, fixedCount, failedCount: contentStats.audit_fix_failed };
   }
 
   function getCurrentSuccessfulContent(item) {
@@ -6799,22 +5440,12 @@ workspace 文件说明：
         publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
       }
       if (!completedStages.has('original-auditing')) {
-        let result;
-        if (originalPlanCoverageRepairMode === 'agent') {
-          result = await runAgentOriginalCoverageRepairIfEnabled();
-        } else {
-          result = await runOriginalPlanCoverageAuditIfEnabled();
-        }
+        const result = await runAgentOriginalCoverageRepair();
         markStageCompleted('original-auditing', { pauseForDeveloper: Boolean(result?.ran) });
       }
       pauseIfRequested('正文生成已在原方案覆盖审计后暂停，可导出当前已完成内容，稍后继续。');
       if (!completedStages.has('auditing')) {
-        let result;
-        if (consistencyRepairMode === 'agent') {
-          result = await runAgentConsistencyRepairIfEnabled();
-        } else {
-          result = await runConsistencyAuditIfEnabled();
-        }
+        const result = await runAgentConsistencyRepair();
         markStageCompleted('auditing', { pauseForDeveloper: Boolean(result?.ran) });
       }
       if (!completedStages.has('table-cleaning')) {
@@ -6838,12 +5469,12 @@ workspace 文件说明：
       }
     } else if (!runOnlyIllustrationStage) {
       if (!completedStages.has('original-auditing')) {
-        const result = await runOriginalPlanCoverageAuditIfEnabled({ targetItemId });
+        const result = await runAgentOriginalCoverageRepair({ targetItemId });
         markStageCompleted('original-auditing', { pauseForDeveloper: Boolean(result?.ran) });
       }
       pauseIfRequested('正文生成已在原方案覆盖审计后暂停，可导出当前已完成内容，稍后继续。');
       if (!completedStages.has('auditing')) {
-        const result = await runConsistencyAuditIfEnabled({ targetItemId });
+        const result = await runAgentConsistencyRepair({ targetItemId });
         markStageCompleted('auditing', { pauseForDeveloper: Boolean(result?.ran) });
       }
       if (!completedStages.has('table-cleaning')) {

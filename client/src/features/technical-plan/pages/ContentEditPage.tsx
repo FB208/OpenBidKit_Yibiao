@@ -2,12 +2,12 @@ import * as Dialog from '@radix-ui/react-dialog';
 import * as Popover from '@radix-ui/react-popover';
 import { memo, useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { AppSwitch, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
+import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
-import type { ClientConfig, ImageModelStatus, OutlineContentMode, OutlineData, OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
+import type { ClientConfig, OutlineContentMode, OutlineData, OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
-import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentIllustrationKind, ContentIllustrationPlanState, OriginalPlanCoverageRepairMode } from '../types';
-import { defaultContentGenerationOptions, normalizeContentGenerationOptions } from '../contentGenerationOptions';
+import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentIllustrationKind, ContentIllustrationPlanState } from '../types';
+import { normalizeContentGenerationOptions } from '../contentGenerationOptions';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
@@ -22,7 +22,6 @@ interface ContentEditPageProps {
   contentGenerationOptions?: ContentGenerationOptions;
   contentIllustrationPlan?: ContentIllustrationPlanState;
   sections: ContentGenerationSections;
-  onContentGenerationOptionsChange: (options: ContentGenerationOptions) => Promise<void> | void;
   onContentGenerationReset: () => Promise<void>;
   onContentSaved: (item: OutlineItem, content: string) => Promise<void> | void;
 }
@@ -53,16 +52,6 @@ const pendingModeDescriptions: Record<Exclude<OutlineContentMode, 'ai-generate'>
   'point-to-point': '该小节已标记为点对点应答表，后续将在正文完成并确定 Word 页码后回填。',
   other: '该小节采用其他处理模式，暂不进入 AI 正文生成流程。',
 };
-
-const consistencyRepairModeOptions: Array<{ value: ConsistencyRepairMode; label: string }> = [
-  { value: 'agent', label: 'Agent 修复（推荐）' },
-  { value: 'normal', label: '普通修复' },
-];
-
-const originalPlanCoverageRepairModeOptions: Array<{ value: OriginalPlanCoverageRepairMode; label: string }> = [
-  { value: 'agent', label: 'Agent 修复（推荐）' },
-  { value: 'normal', label: '普通修复' },
-];
 
 const illustrationKindLabels: Record<ContentIllustrationKind, string> = {
   html: 'HTML 图片',
@@ -201,7 +190,6 @@ function ContentEditPage({
   contentGenerationOptions,
   contentIllustrationPlan,
   sections,
-  onContentGenerationOptionsChange,
   onContentGenerationReset,
   onContentSaved,
 }: ContentEditPageProps) {
@@ -216,10 +204,7 @@ function ContentEditPage({
   const [requirementItem, setRequirementItem] = useState<OutlineItem | null>(null);
   const [regenerateRequirement, setRegenerateRequirement] = useState('');
   const [statsCollapsed, setStatsCollapsed] = useState(false);
-  const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
-  const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
   const [continuePostProcessingDialogOpen, setContinuePostProcessingDialogOpen] = useState(false);
-  const [draftGenerationOptions, setDraftGenerationOptions] = useState<ContentGenerationOptions>(defaultContentGenerationOptions);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [pausePending, setPausePending] = useState(false);
   const [developerStageActionPending, setDeveloperStageActionPending] = useState<'continue' | 'restart' | null>(null);
@@ -320,7 +305,6 @@ function ContentEditPage({
     && resolvedCount === leaves.length
     && ['original-auditing', 'auditing', 'table-cleaning', 'final-section-word-adjusting', 'total-word-adjusting', 'illustration-planning', 'illustration-generating'].includes(String(contentStats?.phase || ''));
   const awaitingContentDecision = taskFailed && Boolean(contentStats?.awaiting_content_decision);
-  const generationStrategyLocked = paused;
   const retryingIllustrationPlanning = canRetryContentCorrection && contentStats?.phase === 'illustration-planning';
   const retryingIllustrationGeneration = canRetryContentCorrection && contentStats?.phase === 'illustration-generating';
   const contentRetryTargetLabel = retryingIllustrationGeneration
@@ -330,37 +314,22 @@ function ContentEditPage({
       : '内容矫正';
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
-  const auditGroupTotal = contentStats?.audit_group_total || 0;
-  const auditGroupCompleted = contentStats?.audit_group_completed || 0;
-  const auditConflictTotal = contentStats?.audit_conflict_total || 0;
-  const auditFixTotal = contentStats?.audit_fix_total || 0;
-  const auditFixCompleted = contentStats?.audit_fix_completed || 0;
-  const auditFixFailed = contentStats?.audit_fix_failed || 0;
-  const auditAgentMode = contentStats?.audit_repair_mode === 'agent';
   const auditAgentStepTotal = contentStats?.audit_agent_step_total || 0;
   const auditAgentStepCompleted = contentStats?.audit_agent_step_completed || 0;
   const auditAgentStepLabel = contentStats?.audit_agent_step_label || '';
   const auditAgentChangedSections = contentStats?.audit_agent_changed_sections || 0;
   const auditAgentFailedSections = contentStats?.audit_agent_failed_sections || 0;
-  const auditProgress = auditAgentMode && auditAgentStepTotal
+  const auditProgress = auditAgentStepTotal
     ? Math.round((auditAgentStepCompleted / auditAgentStepTotal) * 100)
-    : auditFixTotal
-    ? Math.round((auditFixCompleted / auditFixTotal) * 100)
-    : auditGroupTotal
-      ? Math.round((auditGroupCompleted / auditGroupTotal) * 100)
-      : 0;
+    : 0;
   const tableCleanupTotal = contentStats?.table_cleanup_total || 0;
   const tableCleanupCompleted = contentStats?.table_cleanup_completed || 0;
   const tableCleanupRewritten = contentStats?.table_cleanup_rewritten || 0;
   const tableCleanupSkipped = contentStats?.table_cleanup_skipped || 0;
   const tableCleanupProgress = tableCleanupTotal ? Math.round((tableCleanupCompleted / tableCleanupTotal) * 100) : 0;
-  const auditCorrectionCount = auditFixTotal
-    ? `${auditFixCompleted}/${auditFixTotal}`
-    : auditAgentMode && auditAgentStepTotal
-      ? `${auditAgentStepCompleted}/${auditAgentStepTotal}`
-      : auditGroupTotal
-        ? `${auditGroupCompleted}/${auditGroupTotal}`
-        : '检查中';
+  const auditCorrectionCount = auditAgentStepTotal
+    ? `${auditAgentStepCompleted}/${auditAgentStepTotal}`
+    : '检查中';
   const contentCorrectionProgress = tableCleaning ? tableCleanupProgress : auditProgress;
   const contentCorrectionCount = tableCleaning
     ? tableCleanupTotal ? `${tableCleanupCompleted}/${tableCleanupTotal}` : '检查中'
@@ -441,30 +410,18 @@ function ContentEditPage({
             : `正在进行全文字数调整，当前 ${currentWords} 字，目标 ${wordTargetText}，${totalAdjustmentRoundText}已完成 ${totalAdjustmentBatchCompleted}/${totalAdjustmentBatchTotal} 个小节，正在处理 ${totalAdjustmentActiveCount} 个${totalAdjustmentItemId ? `（最近：${totalAdjustmentItemId}）` : ''}${totalAdjustmentBatchFailed ? `，失败 ${totalAdjustmentBatchFailed} 个` : ''}${totalAdjustmentRemainingWords ? `，仍需调整约 ${totalAdjustmentRemainingWords} 字` : ''}。`
         : originalAuditing
             ? paused
-              ? auditAgentMode
-                ? `内容矫正已暂停在原方案覆盖 Agent 修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
-                : `内容矫正已暂停在原方案覆盖检查阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 个小节，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
-              : auditAgentMode
-                ? auditAgentFailedSections
-                  ? `原方案覆盖 Agent 修复未完成：${auditAgentFailedSections} 个小节需人工核对，任务将继续进入后续流程。`
-                  : auditAgentStepCompleted >= auditAgentStepTotal && auditAgentChangedSections
-                    ? `原方案覆盖 Agent 修复完成：已回写 ${auditAgentChangedSections} 个小节。`
-                    : `正在内容矫正：${auditAgentStepLabel || 'Agent 正在检查并补回原方案内容'}，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal || 5}。`
-                : auditFixTotal
-                ? `正在内容矫正：补写原方案缺失内容，已完成 ${auditFixCompleted}/${auditFixTotal} 个小节${auditFixFailed ? `，${auditFixFailed} 个需人工核对` : ''}。`
-                : `正在内容矫正：检查原方案覆盖情况，已完成 ${auditGroupCompleted}/${auditGroupTotal} 个小节${auditConflictTotal ? `，发现 ${auditConflictTotal} 个需核对来源段` : ''}。`
+              ? `内容矫正已暂停在原方案覆盖 Agent 修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
+              : auditAgentFailedSections
+                ? `原方案覆盖 Agent 修复未完成：${auditAgentFailedSections} 个小节未完成审计。`
+                : auditAgentStepCompleted >= auditAgentStepTotal && auditAgentChangedSections
+                  ? `原方案覆盖 Agent 修复完成：已回写 ${auditAgentChangedSections} 个小节。`
+                  : `正在内容矫正：${auditAgentStepLabel || 'Agent 正在检查并补回原方案内容'}，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal || 5}。`
           : auditing
             ? paused
-              ? auditAgentMode
-                ? `内容矫正已暂停在 Agent 全文一致性修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
-                : `内容矫正已暂停在全文一致性检查阶段，审计 ${auditGroupCompleted}/${auditGroupTotal} 组，修复 ${auditFixCompleted}/${auditFixTotal} 个小节。`
-              : auditAgentMode
-                ? auditAgentStepCompleted >= auditAgentStepTotal && auditAgentChangedSections
-                  ? `Agent 一致性修复完成：已回写 ${auditAgentChangedSections} 个小节。`
-                  : `正在内容矫正：${auditAgentStepLabel || 'Agent 正在审计并修复全文'}，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal || 5}。`
-                : auditFixTotal
-                ? `正在内容矫正：修复一致性冲突，已完成 ${auditFixCompleted}/${auditFixTotal} 个小节${auditFixFailed ? `，${auditFixFailed} 个需人工核对` : ''}。`
-                : `正在内容矫正：检查全文一致性，已完成 ${auditGroupCompleted}/${auditGroupTotal} 组${auditConflictTotal ? `，发现 ${auditConflictTotal} 个冲突小节` : ''}。`
+              ? `内容矫正已暂停在 Agent 全文一致性修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
+              : auditAgentStepCompleted >= auditAgentStepTotal && auditAgentChangedSections
+                ? `Agent 一致性修复完成：已回写 ${auditAgentChangedSections} 个小节。`
+                : `正在内容矫正：${auditAgentStepLabel || 'Agent 正在审计并修复全文'}，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal || 5}。`
             : tableCleaning
               ? paused
                 ? `内容矫正已暂停在表格清理阶段，已处理 ${tableCleanupCompleted}/${tableCleanupTotal} 个表格。`
@@ -503,8 +460,6 @@ function ContentEditPage({
                 ? '继续生成正文'
                 : '生成正文';
   const editing = Boolean(selectedItem && selectedIsLeaf && editingItemId === selectedItem.id);
-  const imageModelAvailable = imageModelStatus === 'available';
-
   const handlePreviewImage = useCallback((src: string, alt: string) => setPreviewImage({ src, alt }), []);
 
   useEffect(() => {
@@ -522,7 +477,6 @@ function ContentEditPage({
     window.yibiao?.config.load()
       .then((config) => {
         setDeveloperMode(Boolean(config.developer_mode));
-        setImageModelStatus(config.image_model?.status || 'untested');
         if (config.export_format) {
           setExportFormat(config.export_format);
         }
@@ -547,53 +501,6 @@ function ContentEditPage({
     setIsPreviewing(false);
     setDraftContent('');
   }, [editingItemId, selectedItem]);
-
-  const openGenerationDialog = async () => {
-    if (!outlineData?.outline?.length) {
-      showToast('请先生成目录', 'info');
-      return;
-    }
-    if (taskInFlight) {
-      showToast('正文生成任务进行中，请暂停后再修改配置', 'info');
-      return;
-    }
-
-    try {
-      const config = await window.yibiao?.config.load();
-      const nextStatus = config?.image_model?.status || 'untested';
-      const available = nextStatus === 'available';
-      setImageModelStatus(nextStatus);
-      setDraftGenerationOptions(normalizeContentGenerationOptions(contentGenerationOptions, available, leaves.length, hasOriginalPlan));
-      setGenerationDialogOpen(true);
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '读取生成配置失败', 'error');
-    }
-  };
-
-  const saveDraftGenerationOptions = async (showSuccess: boolean, imageAvailable = imageModelAvailable) => {
-    const normalizedDraftOptions = normalizeContentGenerationOptions(draftGenerationOptions, imageAvailable, leaves.length, hasOriginalPlan);
-    const currentOptions = contentGenerationOptions
-      ? { ...defaultContentGenerationOptions, ...contentGenerationOptions }
-      : normalizeContentGenerationOptions(undefined, imageAvailable, leaves.length, hasOriginalPlan);
-    const nextOptions = paused ? currentOptions : normalizedDraftOptions;
-    await onContentGenerationOptionsChange(nextOptions);
-    setDraftGenerationOptions(normalizeContentGenerationOptions(nextOptions, imageAvailable, leaves.length, hasOriginalPlan));
-
-    if (showSuccess) {
-      setGenerationDialogOpen(false);
-      showToast('正文生成配置已保存', 'success');
-    }
-
-    return nextOptions;
-  };
-
-  const saveGenerationOptions = async () => {
-    try {
-      await saveDraftGenerationOptions(true);
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '正文生成配置保存失败', 'error');
-    }
-  };
 
   const pauseGeneration = async () => {
     if (!running) {
@@ -729,11 +636,7 @@ function ContentEditPage({
       void retryContentCorrection();
       return;
     }
-    if (resolvedCount === leaves.length && leaves.length) {
-      void openGenerationDialog();
-      return;
-    }
-    void openGenerationDialog();
+    void startGeneration();
   };
 
   const launchContentGeneration = async ({
@@ -774,10 +677,6 @@ function ContentEditPage({
         maxHtmlImages: savedGenerationOptions.maxHtmlImages,
         htmlImageTypes: savedGenerationOptions.htmlImageTypes,
         tableRequirement: savedGenerationOptions.tableRequirement,
-        enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
-        consistencyRepairMode: savedGenerationOptions.consistencyRepairMode,
-        enableOriginalPlanCoverageAudit: hasOriginalPlan && savedGenerationOptions.enableOriginalPlanCoverageAudit,
-        originalPlanCoverageRepairMode: hasOriginalPlan ? savedGenerationOptions.originalPlanCoverageRepairMode : undefined,
       },
     });
     trackConfigUsage({
@@ -785,18 +684,17 @@ function ContentEditPage({
       use_mermaid_images: savedGenerationOptions.useMermaidImages,
       use_ai_images: nextImageModelAvailable && savedGenerationOptions.useAiImages,
       content_generation_action: contentGenerationAction,
-      enable_consistency_audit: savedGenerationOptions.enableConsistencyAudit,
-      consistency_repair_mode: savedGenerationOptions.enableConsistencyAudit ? savedGenerationOptions.consistencyRepairMode : undefined,
-      enable_original_plan_coverage_audit: hasOriginalPlan && savedGenerationOptions.enableOriginalPlanCoverageAudit,
-      original_plan_coverage_repair_mode: hasOriginalPlan && savedGenerationOptions.enableOriginalPlanCoverageAudit ? savedGenerationOptions.originalPlanCoverageRepairMode : undefined,
+      enable_consistency_audit: true,
+      consistency_repair_mode: 'agent',
+      enable_original_plan_coverage_audit: hasOriginalPlan,
+      original_plan_coverage_repair_mode: hasOriginalPlan ? 'agent' : undefined,
     }, config);
-    setGenerationDialogOpen(false);
     showToast(simulatePartialFailures
       ? '随机失败模式正文生成任务已在后台启动'
       : regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
   };
 
-  const startGeneration = async (simulatePartialFailures = false, useSavedOptions = false) => {
+  const startGeneration = async (simulatePartialFailures = false) => {
     if (!outlineData?.outline?.length) {
       showToast('请先生成目录', 'info');
       return;
@@ -806,10 +704,7 @@ function ContentEditPage({
       const config = await window.yibiao?.config.load();
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
-      setImageModelStatus(nextImageModelStatus);
-      const savedGenerationOptions = useSavedOptions
-        ? normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length, hasOriginalPlan)
-        : await saveDraftGenerationOptions(false, nextImageModelAvailable);
+      const savedGenerationOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length);
       const regenerate = leaves.length > 0 && resolvedCount === leaves.length;
       const contentGenerationAction: ContentGenerationAction = regenerate
           ? 'regenerate'
@@ -831,8 +726,7 @@ function ContentEditPage({
       const config = await window.yibiao?.config.load();
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
-      const savedGenerationOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length, hasOriginalPlan);
-      setImageModelStatus(nextImageModelStatus);
+      const savedGenerationOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length);
       await window.yibiao?.tasks.startContentGeneration({
         regenerate: true,
         targetItemId: requirementItem.id,
@@ -846,10 +740,6 @@ function ContentEditPage({
           maxHtmlImages: savedGenerationOptions.maxHtmlImages,
           htmlImageTypes: savedGenerationOptions.htmlImageTypes,
           tableRequirement: savedGenerationOptions.tableRequirement,
-          enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
-          consistencyRepairMode: savedGenerationOptions.consistencyRepairMode,
-          enableOriginalPlanCoverageAudit: hasOriginalPlan && savedGenerationOptions.enableOriginalPlanCoverageAudit,
-          originalPlanCoverageRepairMode: hasOriginalPlan ? 'normal' : undefined,
         },
       });
       trackConfigUsage({
@@ -857,10 +747,10 @@ function ContentEditPage({
         use_mermaid_images: savedGenerationOptions.useMermaidImages,
         use_ai_images: nextImageModelAvailable && savedGenerationOptions.useAiImages,
         content_generation_action: 'regenerate_section',
-        enable_consistency_audit: savedGenerationOptions.enableConsistencyAudit,
-        consistency_repair_mode: savedGenerationOptions.enableConsistencyAudit ? savedGenerationOptions.consistencyRepairMode : undefined,
-        enable_original_plan_coverage_audit: hasOriginalPlan && savedGenerationOptions.enableOriginalPlanCoverageAudit,
-        original_plan_coverage_repair_mode: hasOriginalPlan && savedGenerationOptions.enableOriginalPlanCoverageAudit ? 'normal' : undefined,
+        enable_consistency_audit: true,
+        consistency_repair_mode: 'agent',
+        enable_original_plan_coverage_audit: hasOriginalPlan,
+        original_plan_coverage_repair_mode: hasOriginalPlan ? 'agent' : undefined,
       }, config);
       setSelectedItemId(requirementItem.id);
       setRequirementItem(null);
@@ -1007,23 +897,10 @@ function ContentEditPage({
           <span><strong>{totalWords}</strong> 字</span>
         </div>
         <div className="content-generation-actions">
-          <button
-            type="button"
-            className="outline-config-action"
-            onClick={openGenerationDialog}
-            disabled={taskInFlight || !leaves.length}
-            aria-label="打开正文生成配置"
-            title="正文生成配置"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
-              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
-            </svg>
-          </button>
           {developerMode && (
             <>
               {!paused && (
-                <button type="button" className="secondary-action" onClick={() => void startGeneration(true, true)} disabled={taskBlocksGeneration || leaves.length < 2}>
+                <button type="button" className="secondary-action" onClick={() => void startGeneration(true)} disabled={taskBlocksGeneration || leaves.length < 2}>
                   以随机失败模式开始
                 </button>
               )}
@@ -1198,7 +1075,7 @@ function ContentEditPage({
             <div className="content-regenerate-card-head">
               <Dialog.Title>重置正文阶段？</Dialog.Title>
               <Dialog.Description>
-                将停止当前正文任务，并清空已生成正文、生成进度、正文编排缓存和配图计划。目录、全局事实及正文生成配置会保留。
+                将停止当前正文任务，并清空已生成正文、生成进度、正文编排缓存和配图计划。目录、全局事实及 Step 02 生成设置会保留。
               </Dialog.Description>
             </div>
             <div className="content-regenerate-actions">
@@ -1239,83 +1116,6 @@ function ContentEditPage({
             <div className="content-regenerate-actions">
               <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
               <button type="button" className="primary-action" onClick={() => void continuePostProcessing()}>确认并继续</button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-
-      <Dialog.Root
-        open={generationDialogOpen}
-        onOpenChange={setGenerationDialogOpen}
-      >
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="content-generation-config-card" aria-describedby={undefined}>
-            <div className="content-regenerate-card-head">
-              <Dialog.Title>正文生成配置</Dialog.Title>
-            </div>
-            <div className="content-generation-config-list">
-              <div className="content-generation-config-group">
-                <label className="content-generation-config-row">
-                  <span>
-                    <strong>全文一致性审计</strong>
-                  </span>
-                  <AppSwitch
-                    checked={draftGenerationOptions.enableConsistencyAudit}
-                    disabled={generationStrategyLocked}
-                    onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, enableConsistencyAudit: checked }))}
-                    aria-label="是否启用全文一致性审计" />
-                </label>
-                {draftGenerationOptions.enableConsistencyAudit && (
-                  <label className="content-generation-config-row">
-                    <span>
-                      <strong>一致性修复方式</strong>
-                    </span>
-                    <select
-                      value={draftGenerationOptions.consistencyRepairMode}
-                      disabled={generationStrategyLocked}
-                      onChange={(event) => setDraftGenerationOptions((prev) => ({ ...prev, consistencyRepairMode: event.target.value as ConsistencyRepairMode }))}
-                    >
-                      {consistencyRepairModeOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
-                    </select>
-                  </label>
-                )}
-              </div>
-              {hasOriginalPlan && (
-                <div className="content-generation-config-group">
-                  <label className="content-generation-config-row">
-                    <span>
-                      <strong>原方案覆盖审计</strong>
-                    </span>
-                    <AppSwitch
-                      checked={draftGenerationOptions.enableOriginalPlanCoverageAudit}
-                      disabled={generationStrategyLocked}
-                      onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, enableOriginalPlanCoverageAudit: checked }))}
-                      aria-label="是否启用原方案覆盖审计" />
-                  </label>
-                  {draftGenerationOptions.enableOriginalPlanCoverageAudit && (
-                    <label className="content-generation-config-row">
-                      <span>
-                        <strong>原方案覆盖修复方式</strong>
-                      </span>
-                      <select
-                        value={draftGenerationOptions.originalPlanCoverageRepairMode}
-                        disabled={generationStrategyLocked}
-                        onChange={(event) => setDraftGenerationOptions((prev) => ({ ...prev, originalPlanCoverageRepairMode: event.target.value as OriginalPlanCoverageRepairMode }))}
-                      >
-                        {originalPlanCoverageRepairModeOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
-                      </select>
-                    </label>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="content-regenerate-actions">
-              <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
-              <button type="button" className="secondary-action" onClick={saveGenerationOptions} disabled={taskInFlight || paused}>
-                保存配置
-              </button>
-              {!paused && <button type="button" className="primary-action" onClick={() => void startGeneration(false)} disabled={taskBlocksGeneration}>开始生成</button>}
             </div>
           </Dialog.Content>
         </Dialog.Portal>

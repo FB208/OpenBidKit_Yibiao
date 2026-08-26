@@ -93,10 +93,6 @@ CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
   max_html_images INTEGER NOT NULL DEFAULT 10,
   html_image_types TEXT NOT NULL DEFAULT '',
   table_requirement TEXT NOT NULL DEFAULT 'heavy',
-  enable_consistency_audit INTEGER NOT NULL DEFAULT 1,
-  consistency_repair_mode TEXT NOT NULL DEFAULT 'agent',
-  enable_original_plan_coverage_audit INTEGER NOT NULL DEFAULT 0,
-  original_plan_coverage_repair_mode TEXT NOT NULL DEFAULT 'agent',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

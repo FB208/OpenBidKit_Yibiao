@@ -1234,7 +1234,6 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
           contentGenerationOptions={state.contentGenerationOptions}
           contentIllustrationPlan={state.contentIllustrationPlan}
           sections={state.contentGenerationSections}
-          onContentGenerationOptionsChange={saveContentGenerationOptions}
           onContentGenerationReset={resetContentGeneration}
           onContentSaved={saveChapterContent}
         />

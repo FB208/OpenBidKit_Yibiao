@@ -10,8 +10,6 @@ export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' 
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error' | 'ignored';
 export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'section-word-adjusting' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'final-section-word-adjusting' | 'total-word-adjusting' | 'illustration-planning' | 'illustration-generating' | 'done';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
-export type ConsistencyRepairMode = 'agent' | 'normal';
-export type OriginalPlanCoverageRepairMode = 'agent' | 'normal';
 export type SaveOutlineReason = 'sort' | 'edit' | 'delete' | 'add-root' | 'add-child' | 'replace';
 export type OutlineAttribute = '通用' | '商务' | '资信' | '技术' | '其他';
 export type GlobalFactsMode = 'fabricate' | 'omit' | 'placeholder';
@@ -54,10 +52,6 @@ export interface ContentGenerationOptions {
   maxHtmlImages: number;
   htmlImageTypes: string;
   tableRequirement: ContentTableRequirement;
-  enableConsistencyAudit: boolean;
-  consistencyRepairMode: ConsistencyRepairMode;
-  enableOriginalPlanCoverageAudit: boolean;
-  originalPlanCoverageRepairMode: OriginalPlanCoverageRepairMode;
 }
 
 export interface TechnicalPlanGenerationConfig {
@@ -149,14 +143,6 @@ export interface BackgroundTaskState {
       total_adjustment_item_id?: string;
       total_adjustment_remaining_words?: number;
       word_control_warning?: string;
-      audit_group_total?: number;
-      audit_group_completed?: number;
-      audit_step?: '' | 'checking' | 'fixing' | 'agent' | 'done';
-      audit_conflict_total?: number;
-      audit_fix_total?: number;
-      audit_fix_completed?: number;
-      audit_fix_failed?: number;
-      audit_repair_mode?: ConsistencyRepairMode | '';
       audit_agent_step_total?: number;
       audit_agent_step_completed?: number;
       audit_agent_step_label?: string;
