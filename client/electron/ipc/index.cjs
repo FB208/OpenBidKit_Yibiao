@@ -125,7 +125,6 @@ const workspaceDatabaseChannels = [
   'technical-plan:save-bid-analysis-config',
   'technical-plan:save-outline-selection',
   'technical-plan:save-outline',
-  'technical-plan:save-global-facts-config',
   'technical-plan:save-global-facts',
   'technical-plan:save-content-generation-options',
   'technical-plan:save-chapter-content',

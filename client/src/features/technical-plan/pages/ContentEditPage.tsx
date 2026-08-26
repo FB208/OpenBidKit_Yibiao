@@ -6,14 +6,12 @@ import { AppSwitch, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, 
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { ClientConfig, ImageModelStatus, OutlineContentMode, OutlineData, OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
-import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentIllustrationKind, ContentIllustrationPlanState, ContentTableRequirement, OriginalPlanCoverageRepairMode } from '../types';
+import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentIllustrationKind, ContentIllustrationPlanState, OriginalPlanCoverageRepairMode } from '../types';
+import { defaultContentGenerationOptions, normalizeContentGenerationOptions } from '../contentGenerationOptions';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
-import aiImageExampleUrl from '../../../../assets/generate_img_example/ai.png';
-import mermaidImageExampleUrl from '../../../../assets/generate_img_example/mermaid.png';
-import htmlImageExampleUrl from '../../../../assets/generate_img_example/html.png';
 
 interface ContentEditPageProps {
   stepNumber: string;
@@ -56,19 +54,6 @@ const pendingModeDescriptions: Record<Exclude<OutlineContentMode, 'ai-generate'>
   other: '该小节采用其他处理模式，暂不进入 AI 正文生成流程。',
 };
 
-const imageModelStatusLabels: Record<ImageModelStatus, string> = {
-  untested: '未测试',
-  available: '可用',
-  unavailable: '不可用',
-};
-
-const tableRequirementOptions: Array<{ value: ContentTableRequirement; label: string }> = [
-  { value: 'none', label: '不要' },
-  { value: 'light', label: '少量' },
-  { value: 'moderate', label: '适中' },
-  { value: 'heavy', label: '大量' },
-];
-
 const consistencyRepairModeOptions: Array<{ value: ConsistencyRepairMode; label: string }> = [
   { value: 'agent', label: 'Agent 修复（推荐）' },
   { value: 'normal', label: '普通修复' },
@@ -86,87 +71,6 @@ const illustrationKindLabels: Record<ContentIllustrationKind, string> = {
 };
 
 const illustrationKinds: ContentIllustrationKind[] = ['html', 'mermaid', 'ai'];
-
-const imageGenerationExamples: Record<ContentIllustrationKind, { src: string; alt: string }> = {
-  ai: { src: aiImageExampleUrl, alt: 'AI 生图示例' },
-  mermaid: { src: mermaidImageExampleUrl, alt: 'Mermaid 生图示例' },
-  html: { src: htmlImageExampleUrl, alt: 'HTML 生图示例' },
-};
-
-// 渲染生图示例入口使用的帮助图标。
-function ImageExampleIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M9.7 9.1a2.5 2.5 0 0 1 4.7 1.2c0 1.8-2.4 2.1-2.4 3.7" />
-      <path d="M12 17h.01" strokeWidth="2.4" />
-    </svg>
-  );
-}
-
-const DEFAULT_HTML_IMAGE_TYPES = '甘特图、进度网络图、组织架构图、泳道图、RACI 职责矩阵、风险矩阵、系统架构与拓扑图、WBS 工作分解结构图、鱼骨图、柱状图、折线图、饼图';
-
-const defaultContentGenerationOptions: ContentGenerationOptions = {
-  useAiImages: false,
-  maxAiImages: 6,
-  useMermaidImages: true,
-  maxMermaidImages: 5,
-  useHtmlImages: true,
-  maxHtmlImages: 10,
-  htmlImageTypes: DEFAULT_HTML_IMAGE_TYPES,
-  tableRequirement: 'heavy',
-  enableConsistencyAudit: true,
-  consistencyRepairMode: 'agent',
-  enableOriginalPlanCoverageAudit: false,
-  originalPlanCoverageRepairMode: 'agent',
-};
-
-function isContentTableRequirement(value: unknown): value is ContentTableRequirement {
-  return tableRequirementOptions.some((option) => option.value === value);
-}
-
-function isConsistencyRepairMode(value: unknown): value is ConsistencyRepairMode {
-  return consistencyRepairModeOptions.some((option) => option.value === value);
-}
-
-function isOriginalPlanCoverageRepairMode(value: unknown): value is OriginalPlanCoverageRepairMode {
-  return originalPlanCoverageRepairModeOptions.some((option) => option.value === value);
-}
-
-function buildDefaultGenerationOptions(imageModelAvailable: boolean, leafCount: number): ContentGenerationOptions {
-  const imageLimit = Math.max(1, leafCount);
-  return {
-    ...defaultContentGenerationOptions,
-    useAiImages: imageModelAvailable,
-    maxAiImages: Math.min(defaultContentGenerationOptions.maxAiImages, imageLimit),
-    maxMermaidImages: Math.min(defaultContentGenerationOptions.maxMermaidImages, imageLimit),
-    maxHtmlImages: Math.min(defaultContentGenerationOptions.maxHtmlImages, imageLimit),
-  };
-}
-
-function normalizeGenerationOptions(options: ContentGenerationOptions | undefined, imageModelAvailable: boolean, leafCount: number, hasOriginalPlan = false): ContentGenerationOptions {
-  const fallback = buildDefaultGenerationOptions(imageModelAvailable, leafCount);
-  const maxAiImagesLimit = Math.max(1, leafCount);
-  const requestedMaxAiImages = Number(options?.maxAiImages ?? fallback.maxAiImages);
-  const requestedMaxMermaidImages = Number(options?.maxMermaidImages ?? fallback.maxMermaidImages);
-  const requestedMaxHtmlImages = Number(options?.maxHtmlImages ?? fallback.maxHtmlImages);
-  const tableRequirement = options?.tableRequirement;
-
-  return {
-    useAiImages: Boolean(options?.useAiImages ?? fallback.useAiImages) && imageModelAvailable,
-    maxAiImages: Math.max(0, Math.min(Number.isFinite(requestedMaxAiImages) ? Math.round(requestedMaxAiImages) : fallback.maxAiImages, maxAiImagesLimit)),
-    useMermaidImages: Boolean(options?.useMermaidImages ?? fallback.useMermaidImages),
-    maxMermaidImages: Math.max(0, Math.min(Number.isFinite(requestedMaxMermaidImages) ? Math.round(requestedMaxMermaidImages) : fallback.maxMermaidImages, maxAiImagesLimit)),
-    useHtmlImages: Boolean(options?.useHtmlImages ?? fallback.useHtmlImages),
-    maxHtmlImages: Math.max(0, Math.min(Number.isFinite(requestedMaxHtmlImages) ? Math.round(requestedMaxHtmlImages) : fallback.maxHtmlImages, maxAiImagesLimit)),
-    htmlImageTypes: String(options?.htmlImageTypes ?? fallback.htmlImageTypes),
-    tableRequirement: isContentTableRequirement(tableRequirement) ? tableRequirement : fallback.tableRequirement,
-    enableConsistencyAudit: Boolean(options?.enableConsistencyAudit ?? fallback.enableConsistencyAudit),
-    consistencyRepairMode: isConsistencyRepairMode(options?.consistencyRepairMode) ? options.consistencyRepairMode : fallback.consistencyRepairMode,
-    enableOriginalPlanCoverageAudit: hasOriginalPlan ? Boolean(options?.enableOriginalPlanCoverageAudit ?? fallback.enableOriginalPlanCoverageAudit) : false,
-    originalPlanCoverageRepairMode: hasOriginalPlan && isOriginalPlanCoverageRepairMode(options?.originalPlanCoverageRepairMode) ? options.originalPlanCoverageRepairMode : fallback.originalPlanCoverageRepairMode,
-  };
-}
 
 function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
   return items.flatMap((item) => item.children?.length ? collectLeafItems(item.children) : [item]);
@@ -316,8 +220,6 @@ function ContentEditPage({
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
   const [continuePostProcessingDialogOpen, setContinuePostProcessingDialogOpen] = useState(false);
   const [draftGenerationOptions, setDraftGenerationOptions] = useState<ContentGenerationOptions>(defaultContentGenerationOptions);
-  const [htmlImageTypesDialogOpen, setHtmlImageTypesDialogOpen] = useState(false);
-  const [htmlImageTypesDraft, setHtmlImageTypesDraft] = useState(DEFAULT_HTML_IMAGE_TYPES);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [pausePending, setPausePending] = useState(false);
   const [developerStageActionPending, setDeveloperStageActionPending] = useState<'continue' | 'restart' | null>(null);
@@ -661,7 +563,7 @@ function ContentEditPage({
       const nextStatus = config?.image_model?.status || 'untested';
       const available = nextStatus === 'available';
       setImageModelStatus(nextStatus);
-      setDraftGenerationOptions(normalizeGenerationOptions(contentGenerationOptions, available, leaves.length, hasOriginalPlan));
+      setDraftGenerationOptions(normalizeContentGenerationOptions(contentGenerationOptions, available, leaves.length, hasOriginalPlan));
       setGenerationDialogOpen(true);
     } catch (error) {
       showToast(error instanceof Error ? error.message : '读取生成配置失败', 'error');
@@ -669,13 +571,13 @@ function ContentEditPage({
   };
 
   const saveDraftGenerationOptions = async (showSuccess: boolean, imageAvailable = imageModelAvailable) => {
-    const normalizedDraftOptions = normalizeGenerationOptions(draftGenerationOptions, imageAvailable, leaves.length, hasOriginalPlan);
+    const normalizedDraftOptions = normalizeContentGenerationOptions(draftGenerationOptions, imageAvailable, leaves.length, hasOriginalPlan);
     const currentOptions = contentGenerationOptions
       ? { ...defaultContentGenerationOptions, ...contentGenerationOptions }
-      : normalizeGenerationOptions(undefined, imageAvailable, leaves.length, hasOriginalPlan);
+      : normalizeContentGenerationOptions(undefined, imageAvailable, leaves.length, hasOriginalPlan);
     const nextOptions = paused ? currentOptions : normalizedDraftOptions;
     await onContentGenerationOptionsChange(nextOptions);
-    setDraftGenerationOptions(normalizeGenerationOptions(nextOptions, imageAvailable, leaves.length, hasOriginalPlan));
+    setDraftGenerationOptions(normalizeContentGenerationOptions(nextOptions, imageAvailable, leaves.length, hasOriginalPlan));
 
     if (showSuccess) {
       setGenerationDialogOpen(false);
@@ -691,18 +593,6 @@ function ContentEditPage({
     } catch (error) {
       showToast(error instanceof Error ? error.message : '正文生成配置保存失败', 'error');
     }
-  };
-
-  // 打开 HTML 图片类型设置并建立独立草稿。
-  const openHtmlImageTypesDialog = () => {
-    setHtmlImageTypesDraft(draftGenerationOptions.htmlImageTypes);
-    setHtmlImageTypesDialogOpen(true);
-  };
-
-  // 确认 HTML 图片类型设置并写回主配置草稿。
-  const confirmHtmlImageTypes = () => {
-    setDraftGenerationOptions((prev) => ({ ...prev, htmlImageTypes: htmlImageTypesDraft }));
-    setHtmlImageTypesDialogOpen(false);
   };
 
   const pauseGeneration = async () => {
@@ -906,7 +796,7 @@ function ContentEditPage({
       : regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
   };
 
-  const startGeneration = async (simulatePartialFailures = false) => {
+  const startGeneration = async (simulatePartialFailures = false, useSavedOptions = false) => {
     if (!outlineData?.outline?.length) {
       showToast('请先生成目录', 'info');
       return;
@@ -917,7 +807,9 @@ function ContentEditPage({
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
       setImageModelStatus(nextImageModelStatus);
-      const savedGenerationOptions = await saveDraftGenerationOptions(false, nextImageModelAvailable);
+      const savedGenerationOptions = useSavedOptions
+        ? normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length, hasOriginalPlan)
+        : await saveDraftGenerationOptions(false, nextImageModelAvailable);
       const regenerate = leaves.length > 0 && resolvedCount === leaves.length;
       const contentGenerationAction: ContentGenerationAction = regenerate
           ? 'regenerate'
@@ -939,7 +831,7 @@ function ContentEditPage({
       const config = await window.yibiao?.config.load();
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
-      const savedGenerationOptions = normalizeGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length, hasOriginalPlan);
+      const savedGenerationOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length, hasOriginalPlan);
       setImageModelStatus(nextImageModelStatus);
       await window.yibiao?.tasks.startContentGeneration({
         regenerate: true,
@@ -1129,14 +1021,21 @@ function ContentEditPage({
             </svg>
           </button>
           {developerMode && (
-            <button
-              type="button"
-              className="danger-action"
-              onClick={() => setResetDialogOpen(true)}
-              disabled={resetPending}
-            >
-              {resetPending ? '正在重置...' : '重置正文阶段'}
-            </button>
+            <>
+              {!paused && (
+                <button type="button" className="secondary-action" onClick={() => void startGeneration(true, true)} disabled={taskBlocksGeneration || leaves.length < 2}>
+                  以随机失败模式开始
+                </button>
+              )}
+              <button
+                type="button"
+                className="danger-action"
+                onClick={() => setResetDialogOpen(true)}
+                disabled={resetPending}
+              >
+                {resetPending ? '正在重置...' : '重置正文阶段'}
+              </button>
+            </>
           )}
           {developerStageGate ? (
             <>
@@ -1347,10 +1246,7 @@ function ContentEditPage({
 
       <Dialog.Root
         open={generationDialogOpen}
-        onOpenChange={(open) => {
-          setGenerationDialogOpen(open);
-          if (!open) setHtmlImageTypesDialogOpen(false);
-        }}
+        onOpenChange={setGenerationDialogOpen}
       >
         <Dialog.Portal>
           <Dialog.Overlay className="content-regenerate-modal" />
@@ -1359,20 +1255,6 @@ function ContentEditPage({
               <Dialog.Title>正文生成配置</Dialog.Title>
             </div>
             <div className="content-generation-config-list">
-              <div className="content-generation-config-group">
-                <label className="content-generation-config-row">
-                  <span>
-                    <strong>表格需求</strong>
-                  </span>
-                  <select
-                    value={draftGenerationOptions.tableRequirement}
-                    disabled={generationStrategyLocked}
-                    onChange={(event) => setDraftGenerationOptions((prev) => ({ ...prev, tableRequirement: event.target.value as ContentTableRequirement }))}
-                  >
-                    {tableRequirementOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
-                  </select>
-                </label>
-              </div>
               <div className="content-generation-config-group">
                 <label className="content-generation-config-row">
                   <span>
@@ -1427,160 +1309,13 @@ function ContentEditPage({
                   )}
                 </div>
               )}
-              <div className="content-generation-config-group">
-                <div className="content-generation-config-row">
-                  <div className="content-generation-image-option-title">
-                    <strong>使用 AI 生图</strong>
-                    <button
-                      type="button"
-                      className="content-generation-example-button"
-                      onClick={() => setPreviewImage(imageGenerationExamples.ai)}
-                      aria-label="查看 AI 生图示例"
-                      title="查看 AI 生图示例"
-                    >
-                      <ImageExampleIcon />
-                    </button>
-                  </div>
-                  <div className="content-generation-config-control">
-                    <em className={`content-image-status is-${imageModelStatus}`}>{imageModelStatusLabels[imageModelStatus]}</em>
-                    <AppSwitch
-                      checked={draftGenerationOptions.useAiImages && imageModelAvailable}
-                      disabled={generationStrategyLocked || !imageModelAvailable}
-                      onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useAiImages: checked }))}
-                      aria-label="是否使用 AI 生图" />
-                  </div>
-                </div>
-                {draftGenerationOptions.useAiImages && imageModelAvailable && (
-                  <label className="content-generation-config-row">
-                    <span><strong>AI 生图上限</strong></span>
-                    <input
-                      type="number"
-                      min="0"
-                      max={Math.max(1, leaves.length)}
-                      value={draftGenerationOptions.maxAiImages}
-                      disabled={generationStrategyLocked}
-                      onChange={(event) => setDraftGenerationOptions((prev) => ({
-                        ...prev,
-                        maxAiImages: Math.max(0, Math.min(Number(event.target.value) || 0, Math.max(1, leaves.length))),
-                      }))}
-                    />
-                  </label>
-                )}
-              </div>
-              <div className="content-generation-config-group">
-                <div className="content-generation-config-row">
-                  <div className="content-generation-image-option-title">
-                    <strong>使用 Mermaid 生图</strong>
-                    <button
-                      type="button"
-                      className="content-generation-example-button"
-                      onClick={() => setPreviewImage(imageGenerationExamples.mermaid)}
-                      aria-label="查看 Mermaid 生图示例"
-                      title="查看 Mermaid 生图示例"
-                    >
-                      <ImageExampleIcon />
-                    </button>
-                  </div>
-                  <AppSwitch
-                    checked={draftGenerationOptions.useMermaidImages}
-                    disabled={generationStrategyLocked}
-                    onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useMermaidImages: checked }))}
-                    aria-label="是否使用 Mermaid 生图" />
-                </div>
-                {draftGenerationOptions.useMermaidImages && (
-                  <label className="content-generation-config-row">
-                    <span><strong>Mermaid 生图上限</strong></span>
-                    <input
-                      type="number"
-                      min="0"
-                      max={Math.max(1, leaves.length)}
-                      value={draftGenerationOptions.maxMermaidImages}
-                      disabled={generationStrategyLocked}
-                      onChange={(event) => setDraftGenerationOptions((prev) => ({
-                        ...prev,
-                        maxMermaidImages: Math.max(0, Math.min(Number(event.target.value) || 0, Math.max(1, leaves.length))),
-                      }))}
-                    />
-                  </label>
-                )}
-              </div>
-              <div className="content-generation-config-group">
-                <div className="content-generation-config-row">
-                  <div className="content-generation-image-option-title">
-                    <strong>生成 HTML 图片</strong>
-                    <button
-                      type="button"
-                      className="content-generation-example-button"
-                      onClick={() => setPreviewImage(imageGenerationExamples.html)}
-                      aria-label="查看 HTML 生图示例"
-                      title="查看 HTML 生图示例"
-                    >
-                      <ImageExampleIcon />
-                    </button>
-                  </div>
-                  <AppSwitch
-                    checked={draftGenerationOptions.useHtmlImages}
-                    disabled={generationStrategyLocked}
-                    onCheckedChange={(checked) => setDraftGenerationOptions((prev) => ({ ...prev, useHtmlImages: checked }))}
-                    aria-label="是否生成 HTML 图片" />
-                </div>
-                {draftGenerationOptions.useHtmlImages && (
-                  <label className="content-generation-config-row">
-                    <span><strong>HTML 生图上限</strong></span>
-                    <input
-                      type="number"
-                      min="0"
-                      max={Math.max(1, leaves.length)}
-                      value={draftGenerationOptions.maxHtmlImages}
-                      disabled={generationStrategyLocked}
-                      onChange={(event) => setDraftGenerationOptions((prev) => ({
-                        ...prev,
-                        maxHtmlImages: Math.max(0, Math.min(Number(event.target.value) || 0, Math.max(1, leaves.length))),
-                      }))}
-                    />
-                  </label>
-                )}
-              </div>
-              {draftGenerationOptions.useHtmlImages && (
-                <div className="content-generation-config-group">
-                  <div className="content-generation-config-row">
-                    <span><strong>高级设置</strong></span>
-                    <button type="button" className="secondary-action" onClick={openHtmlImageTypesDialog} disabled={generationStrategyLocked}>打开</button>
-                  </div>
-                </div>
-              )}
             </div>
             <div className="content-regenerate-actions">
               <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
               <button type="button" className="secondary-action" onClick={saveGenerationOptions} disabled={taskInFlight || paused}>
                 保存配置
               </button>
-              {!paused && developerMode && (
-                <button type="button" className="secondary-action" onClick={() => void startGeneration(true)} disabled={taskBlocksGeneration || leaves.length < 2}>
-                  以随机失败模式开始
-                </button>
-              )}
               {!paused && <button type="button" className="primary-action" onClick={() => void startGeneration(false)} disabled={taskBlocksGeneration}>开始生成</button>}
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-
-      <Dialog.Root open={htmlImageTypesDialogOpen} onOpenChange={setHtmlImageTypesDialogOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal html-image-types-modal" />
-          <Dialog.Content className="content-regenerate-card html-image-types-card" aria-describedby={undefined}>
-            <div className="content-regenerate-card-head">
-              <Dialog.Title>HTML 可生成的图片类型</Dialog.Title>
-            </div>
-            <textarea
-              value={htmlImageTypesDraft}
-              onChange={(event) => setHtmlImageTypesDraft(event.target.value)}
-              aria-label="HTML 可生成的图片类型"
-            />
-            <div className="content-regenerate-actions">
-              <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
-              <button type="button" className="primary-action" onClick={confirmHtmlImageTypes}>确认</button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>

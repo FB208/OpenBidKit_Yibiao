@@ -911,11 +911,6 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
     setState((prev) => ({ ...prev, ...(saved || {}), globalFacts }));
   };
 
-  const saveGlobalFactsConfig = async (globalFactsMode: GlobalFactsMode) => {
-    const saved = await window.yibiao?.technicalPlan.saveGlobalFactsConfig({ globalFactsMode });
-    setState((prev) => ({ ...prev, ...(saved || {}), globalFactsMode }));
-  };
-
   const saveOutline = async (request: SaveOutlineRequest) => {
     const saved = await window.yibiao?.technicalPlan.saveOutline(request);
     setState((prev) => {
@@ -964,6 +959,11 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
     setState((prev) => ({ ...prev, referenceKnowledgeDocumentIds: saved.referenceKnowledgeDocumentIds }));
   };
 
+  const saveGenerationGlobalFactsMode = async (globalFactsMode: GlobalFactsMode) => {
+    const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ globalFactsMode });
+    setState((prev) => ({ ...prev, globalFactsMode: saved.globalFactsMode }));
+  };
+
   const openBidTemplate = async () => {
     const result = await window.yibiao?.technicalPlan.openBidTemplate();
     if (!result?.success) {
@@ -974,6 +974,9 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
   const generatedContentCount = state.outlineData?.outline
     ? collectLeafItems(state.outlineData.outline).filter((item) => item.content?.trim()).length
     : 0;
+  const contentLeafCount = state.outlineData?.outline
+    ? collectLeafItems(state.outlineData.outline).filter((item) => item.content_mode === 'ai-generate').length
+    : 0;
   const outlineGenerationStatus = state.outlineGenerationTask?.status;
   const isOutlineGenerating = outlineGenerationStatus === 'running' || outlineGenerationStatus === 'pausing';
   const outlineAdjustmentStatus = state.outlineAdjustmentTask?.status;
@@ -983,6 +986,8 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
     || contentTaskStatus === 'pausing'
     || contentTaskStatus === 'paused';
   const isGlobalFactsGenerating = state.globalFactsTask?.status === 'running' || state.globalFactsTask?.status === 'pausing';
+  const globalFactsConfigLocked = isGlobalFactsGenerating || isGlobalFactsAdjusting;
+  const contentConfigLocked = contentTaskStatus === 'running' || contentTaskStatus === 'pausing' || contentTaskStatus === 'paused';
   const isFactsAiStep = state.step === 'global-facts';
   const isAiAdjusting = isFactsAiStep ? isGlobalFactsAdjusting : isOutlineAdjusting;
   const aiAdjustDisabled = isFactsAiStep
@@ -1149,13 +1154,20 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
           outlineWordControlOptions={state.outlineWordControlOptions}
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
+          globalFactsMode={state.globalFactsMode || 'fabricate'}
+          contentGenerationOptions={state.contentGenerationOptions}
+          contentLeafCount={contentLeafCount}
           hasOutlineData={Boolean(state.outlineData)}
           outlineConfigLocked={outlineConfigLocked}
+          globalFactsConfigLocked={globalFactsConfigLocked}
+          contentConfigLocked={contentConfigLocked}
           onOriginalPlanChanged={(nextState) => setState((prev) => ({ ...prev, ...nextState }))}
           onOutlineModeChange={saveGenerationOutlineMode}
           onOutlineExpansionModeChange={saveGenerationOutlineExpansionMode}
           onOutlineWordControlOptionsChange={saveGenerationWordControlOptions}
           onReferenceKnowledgeDocumentIdsChange={saveGenerationReferenceKnowledge}
+          onGlobalFactsModeChange={saveGenerationGlobalFactsMode}
+          onContentGenerationOptionsChange={saveContentGenerationOptions}
         />
       )}
 
@@ -1210,7 +1222,6 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
           task={state.globalFactsTask}
           aiAdjustmentRunning={isGlobalFactsAdjusting}
           onGlobalFactsSaved={saveGlobalFacts}
-          onGlobalFactsConfigChange={saveGlobalFactsConfig}
         />
       )}
       {state.step === 'content-edit' && (

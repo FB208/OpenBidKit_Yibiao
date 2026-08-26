@@ -2360,11 +2360,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     };
   }
 
-  function saveGlobalFactsConfig({ globalFactsMode } = {}) {
-    const saved = saveGenerationConfig({ globalFactsMode });
-    return { globalFactsMode: saved.globalFactsMode };
-  }
-
   function saveGlobalFacts(globalFacts) {
     const normalizedGlobalFacts = normalizeGlobalFactGroups(globalFacts);
     let savedTask;
@@ -2801,7 +2796,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     saveBidAnalysisConfig,
     saveOutlineSelection,
     saveOutline,
-    saveGlobalFactsConfig,
     saveGlobalFacts,
     saveIllustrationHtml,
     saveIllustrationPng,

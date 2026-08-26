@@ -1,8 +1,13 @@
+import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import { AppDialog, AppSwitch, isLibreOfficeRequiredMessage, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
-import type { OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
+import type { ImageModelStatus, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
 import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
-import type { TechnicalPlanOriginalPlanFile, TechnicalPlanState } from '../types';
+import type { ContentGenerationOptions, ContentIllustrationKind, ContentTableRequirement, GlobalFactsMode, TechnicalPlanOriginalPlanFile, TechnicalPlanState } from '../types';
+import { DEFAULT_HTML_IMAGE_TYPES, normalizeContentGenerationOptions } from '../contentGenerationOptions';
+import aiImageExampleUrl from '../../../../assets/generate_img_example/ai.png';
+import mermaidImageExampleUrl from '../../../../assets/generate_img_example/mermaid.png';
+import htmlImageExampleUrl from '../../../../assets/generate_img_example/html.png';
 
 type GenerationSettingsTab = 'content' | 'existing-plan' | 'knowledge' | 'length' | 'illustration' | 'writing' | 'appearance';
 
@@ -14,13 +19,20 @@ interface GenerationSettingsPageProps {
   outlineWordControlOptions: OutlineWordControlOptions;
   outlineWordControlSnapshot?: OutlineWordControlOptions;
   referenceKnowledgeDocumentIds: string[];
+  globalFactsMode: GlobalFactsMode;
+  contentGenerationOptions?: ContentGenerationOptions;
+  contentLeafCount: number;
   hasOutlineData: boolean;
   outlineConfigLocked: boolean;
+  globalFactsConfigLocked: boolean;
+  contentConfigLocked: boolean;
   onOriginalPlanChanged: (state: TechnicalPlanState) => void;
   onOutlineModeChange: (outlineMode: OutlineMode) => Promise<void>;
   onOutlineExpansionModeChange: (outlineExpansionMode: OutlineExpansionMode) => Promise<void>;
   onOutlineWordControlOptionsChange: (options: OutlineWordControlOptions) => Promise<void>;
   onReferenceKnowledgeDocumentIdsChange: (documentIds: string[]) => Promise<void>;
+  onGlobalFactsModeChange: (globalFactsMode: GlobalFactsMode) => Promise<void>;
+  onContentGenerationOptionsChange: (options: ContentGenerationOptions) => Promise<void>;
 }
 
 const tabs: Array<{ id: GenerationSettingsTab; label: string }> = [
@@ -67,7 +79,51 @@ const outlineExpansionModeOptions: Array<{ value: OutlineExpansionMode; title: s
     description: '保留原方案一级目录，在其基础上补充招标评分项缺口，并可继续使用知识库增强。',
   },
 ];
+const globalFactsModeOptions: Array<{ value: GlobalFactsMode; title: string; description: string }> = [
+  {
+    value: 'fabricate',
+    title: '胡咧咧模式',
+    description: '未在参考材料中找到的直接证据，但经评估，正文中可能用到，为保证全文一致，会由 AI 直接杜撰。如：涉及人员名单，但用户未提供，AI 会编辑不存在的人名。此模式写完的技术方案直接完整可用，无需人工干预。',
+  },
+  {
+    value: 'omit',
+    title: '别招欠模式',
+    description: '选题范围与胡咧咧模式相同。未在参考材料中找到具体值时，仍会保留该项，改写成符合招标要求的笼统口径，不写具体人员、时间、地点、业绩、证书、规格型号或实施细节。如：涉及人员名单但用户未提供，会保留岗位事实并写成按招标要求配备，而不是编造人名或忽略该项。正文阶段同样沿用笼统写法。',
+  },
+  {
+    value: 'placeholder',
+    title: '放着我来模式',
+    description: '选题范围与胡咧咧模式相同。未在参考材料中找到具体值时，仍会保留该项，并将值标记为【待填写】。如：涉及人员名单但用户未提供，会保留岗位事实并写成【待填写】。用户需要二次修改后再进入正文生成阶段。正文生产时的任何不确定项也会使用【待填写】占位。',
+  },
+];
+const tableRequirementOptions: Array<{ value: ContentTableRequirement; label: string }> = [
+  { value: 'none', label: '不要' },
+  { value: 'light', label: '少量' },
+  { value: 'moderate', label: '适中' },
+  { value: 'heavy', label: '大量' },
+];
+const imageModelStatusLabels: Record<ImageModelStatus, string> = {
+  untested: '未测试',
+  available: '可用',
+  unavailable: '不可用',
+};
+const imageGenerationExamples: Record<ContentIllustrationKind, { src: string; alt: string }> = {
+  ai: { src: aiImageExampleUrl, alt: 'AI 生图示例' },
+  mermaid: { src: mermaidImageExampleUrl, alt: 'Mermaid 生图示例' },
+  html: { src: htmlImageExampleUrl, alt: 'HTML 生图示例' },
+};
 const WORD_COUNT_INPUT_UNIT = 10000;
+
+// 渲染生图示例入口使用的帮助图标。
+function ImageExampleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.7 9.1a2.5 2.5 0 0 1 4.7 1.2c0 1.8-2.4 2.1-2.4 3.7" />
+      <path d="M12 17h.01" strokeWidth="2.4" />
+    </svg>
+  );
+}
 
 function parseWordCountDraft(value: string) {
   if (!value) return 0;
@@ -140,6 +196,10 @@ function includesKeyword(value: string, keyword: string) {
   return value.toLowerCase().includes(keyword);
 }
 
+function normalizeGlobalFactsMode(value: GlobalFactsMode | undefined): GlobalFactsMode {
+  return value === 'omit' || value === 'placeholder' ? value : 'fabricate';
+}
+
 // 汇总生成前配置，并管理已有方案与参考知识库。
 function GenerationSettingsPage({
   originalPlanFile,
@@ -149,13 +209,20 @@ function GenerationSettingsPage({
   outlineWordControlOptions,
   outlineWordControlSnapshot,
   referenceKnowledgeDocumentIds,
+  globalFactsMode,
+  contentGenerationOptions,
+  contentLeafCount,
   hasOutlineData,
   outlineConfigLocked,
+  globalFactsConfigLocked,
+  contentConfigLocked,
   onOriginalPlanChanged,
   onOutlineModeChange,
   onOutlineExpansionModeChange,
   onOutlineWordControlOptionsChange,
   onReferenceKnowledgeDocumentIdsChange,
+  onGlobalFactsModeChange,
+  onContentGenerationOptionsChange,
 }: GenerationSettingsPageProps) {
   const [activeTab, setActiveTab] = useState<GenerationSettingsTab>('content');
   const [originalPlanBusy, setOriginalPlanBusy] = useState(false);
@@ -173,6 +240,19 @@ function GenerationSettingsPage({
   const [knowledgeIndex, setKnowledgeIndex] = useState<KnowledgeBaseIndex>(emptyKnowledgeIndex);
   const [loadingKnowledge, setLoadingKnowledge] = useState(false);
   const [knowledgeSaving, setKnowledgeSaving] = useState(false);
+  const [draftGlobalFactsMode, setDraftGlobalFactsMode] = useState<GlobalFactsMode>(() => normalizeGlobalFactsMode(globalFactsMode));
+  const [globalFactsModeBusy, setGlobalFactsModeBusy] = useState(false);
+  const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
+  const [draftTableRequirement, setDraftTableRequirement] = useState<ContentTableRequirement>(() => (
+    normalizeContentGenerationOptions(contentGenerationOptions, false, contentLeafCount, Boolean(originalPlanFile)).tableRequirement
+  ));
+  const [draftIllustrationOptions, setDraftIllustrationOptions] = useState<ContentGenerationOptions>(() => (
+    normalizeContentGenerationOptions(contentGenerationOptions, false, contentLeafCount, Boolean(originalPlanFile))
+  ));
+  const [contentOptionsBusy, setContentOptionsBusy] = useState(false);
+  const [htmlImageTypesDialogOpen, setHtmlImageTypesDialogOpen] = useState(false);
+  const [htmlImageTypesDraft, setHtmlImageTypesDraft] = useState(DEFAULT_HTML_IMAGE_TYPES);
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
@@ -191,6 +271,14 @@ function GenerationSettingsPage({
     hasOutlineData && !areWordControlOptionsEqual(normalizedDraftOptions, outlineWordControlSnapshot),
   );
   const knowledgeSelectionDisabled = loadingKnowledge || knowledgeSaving || outlineConfigLocked;
+  const imageModelAvailable = imageModelStatus === 'available';
+  const contentImageLimit = contentLeafCount > 0 ? contentLeafCount : Number.MAX_SAFE_INTEGER;
+  const currentContentGenerationOptions = normalizeContentGenerationOptions(
+    contentGenerationOptions,
+    imageModelAvailable,
+    contentLeafCount,
+    Boolean(originalPlanFile),
+  );
 
   useEffect(() => {
     setDraftOutlineExpansionMode(outlineExpansionMode);
@@ -206,6 +294,29 @@ function GenerationSettingsPage({
   useEffect(() => {
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
   }, [referenceKnowledgeDocumentIds]);
+
+  useEffect(() => {
+    setDraftGlobalFactsMode(normalizeGlobalFactsMode(globalFactsMode));
+  }, [globalFactsMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.yibiao?.config.load().then((config) => {
+      if (!cancelled) setImageModelStatus(config.image_model?.status || 'untested');
+    }).catch((error) => console.warn('读取生图模型状态失败', error));
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const nextOptions = normalizeContentGenerationOptions(
+      contentGenerationOptions,
+      imageModelAvailable,
+      contentLeafCount,
+      Boolean(originalPlanFile),
+    );
+    setDraftTableRequirement(nextOptions.tableRequirement);
+    setDraftIllustrationOptions(nextOptions);
+  }, [contentGenerationOptions, contentLeafCount, imageModelAvailable, originalPlanFile?.contentHash]);
 
   useEffect(() => {
     if (activeTab !== 'knowledge') return;
@@ -311,7 +422,7 @@ function GenerationSettingsPage({
     }
   };
 
-  // 按目录生成阶段原有规则校验并保存全文字数配置。
+  // 按目录生成阶段原有规则校验，并保存篇幅与表格需求。
   const saveWordControlOptions = async () => {
     try {
       const options = normalizeWordControlDraft({
@@ -321,16 +432,24 @@ function GenerationSettingsPage({
         strictSectionWords: draftStrictSectionWords,
       });
       setWordControlBusy(true);
+      setContentOptionsBusy(true);
       await onOutlineWordControlOptionsChange(options);
+      if (draftTableRequirement !== currentContentGenerationOptions.tableRequirement) {
+        await onContentGenerationOptionsChange({
+          ...currentContentGenerationOptions,
+          tableRequirement: draftTableRequirement,
+        });
+      }
       setDraftMinimumWords(formatWordCountDraft(options.minimumWords));
       setDraftMaximumWords(formatWordCountDraft(options.maximumWords));
       setDraftSectionWords(formatWordCountDraft(options.sectionWords));
       setDraftStrictSectionWords(options.strictSectionWords);
-      showToast('全文字数设置已保存', 'success');
+      showToast('篇幅和表格设置已保存', 'success');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '保存全文字数设置失败', 'error');
+      showToast(error instanceof Error ? error.message : '保存篇幅和表格设置失败', 'error');
     } finally {
       setWordControlBusy(false);
+      setContentOptionsBusy(false);
     }
   };
 
@@ -362,6 +481,55 @@ function GenerationSettingsPage({
     } finally {
       setKnowledgeSaving(false);
     }
+  };
+
+  // 保存全局事实与正文共用的不确定信息补全方式。
+  const saveGlobalFactsMode = async () => {
+    const nextMode = normalizeGlobalFactsMode(draftGlobalFactsMode);
+    if (nextMode === globalFactsMode || globalFactsModeBusy) return;
+    try {
+      setGlobalFactsModeBusy(true);
+      await onGlobalFactsModeChange(nextMode);
+      showToast('全局事实设定配置已保存', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存全局事实配置失败', 'error');
+    } finally {
+      setGlobalFactsModeBusy(false);
+    }
+  };
+
+  // 保存三类配图开关、数量上限和 HTML 图片类型。
+  const saveIllustrationOptions = async () => {
+    try {
+      setContentOptionsBusy(true);
+      const nextOptions = normalizeContentGenerationOptions({
+        ...currentContentGenerationOptions,
+        useAiImages: draftIllustrationOptions.useAiImages,
+        maxAiImages: draftIllustrationOptions.maxAiImages,
+        useMermaidImages: draftIllustrationOptions.useMermaidImages,
+        maxMermaidImages: draftIllustrationOptions.maxMermaidImages,
+        useHtmlImages: draftIllustrationOptions.useHtmlImages,
+        maxHtmlImages: draftIllustrationOptions.maxHtmlImages,
+        htmlImageTypes: draftIllustrationOptions.htmlImageTypes,
+      }, imageModelAvailable, contentLeafCount, Boolean(originalPlanFile));
+      await onContentGenerationOptionsChange(nextOptions);
+      setDraftIllustrationOptions(nextOptions);
+      showToast('配图设置已保存', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存配图设置失败', 'error');
+    } finally {
+      setContentOptionsBusy(false);
+    }
+  };
+
+  const openHtmlImageTypesDialog = () => {
+    setHtmlImageTypesDraft(draftIllustrationOptions.htmlImageTypes);
+    setHtmlImageTypesDialogOpen(true);
+  };
+
+  const confirmHtmlImageTypes = () => {
+    setDraftIllustrationOptions((current) => ({ ...current, htmlImageTypes: htmlImageTypesDraft }));
+    setHtmlImageTypesDialogOpen(false);
   };
 
   const toggleKnowledgeDocument = (document: KnowledgeDocument) => {
@@ -707,14 +875,187 @@ function GenerationSettingsPage({
                   </div>
                 </div>
               </div>
+              <div className="content-generation-config-group generation-settings-table-requirement">
+                <label className="content-generation-config-row">
+                  <span>
+                    <strong>表格需求</strong>
+                    <small>设置正文编排时需要安排的表格数量倾向。</small>
+                  </span>
+                  <select
+                    value={draftTableRequirement}
+                    disabled={contentConfigLocked || contentOptionsBusy}
+                    onChange={(event) => setDraftTableRequirement(event.target.value as ContentTableRequirement)}
+                  >
+                    {tableRequirementOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+                  </select>
+                </label>
+              </div>
               {wordControlRequiresRegeneration && (
                 <div className="outline-word-control-notice">
                   {outlineWordControlSnapshot ? '生成目录后若修改了字数设置，需要重新生成目录才能生效！' : '当前目录缺少字数控制生效配置，请重新生成目录。'}
                 </div>
               )}
               <div className="generation-settings-save-row">
-                <button type="button" className="primary-action" onClick={() => void saveWordControlOptions()} disabled={outlineConfigLocked || wordControlBusy}>
-                  {wordControlBusy ? '正在保存...' : '保存设置'}
+                <button type="button" className="primary-action" onClick={() => void saveWordControlOptions()} disabled={outlineConfigLocked || contentConfigLocked || wordControlBusy || contentOptionsBusy}>
+                  {wordControlBusy || contentOptionsBusy ? '正在保存...' : '保存设置'}
+                </button>
+              </div>
+            </section>
+          ) : activeTab === 'illustration' ? (
+            <section className="generation-settings-illustration-section">
+              <div className="content-generation-config-list">
+                <div className="content-generation-config-group">
+                  <div className="content-generation-config-row">
+                    <div className="content-generation-image-option-title">
+                      <strong>使用 AI 生图</strong>
+                      <button type="button" className="content-generation-example-button" onClick={() => setPreviewImage(imageGenerationExamples.ai)} aria-label="查看 AI 生图示例" title="查看 AI 生图示例">
+                        <ImageExampleIcon />
+                      </button>
+                    </div>
+                    <div className="content-generation-config-control">
+                      <em className={`content-image-status is-${imageModelStatus}`}>{imageModelStatusLabels[imageModelStatus]}</em>
+                      <AppSwitch
+                        checked={draftIllustrationOptions.useAiImages && imageModelAvailable}
+                        disabled={contentConfigLocked || contentOptionsBusy || !imageModelAvailable}
+                        onCheckedChange={(checked) => setDraftIllustrationOptions((current) => ({ ...current, useAiImages: checked }))}
+                        aria-label="是否使用 AI 生图"
+                      />
+                    </div>
+                  </div>
+                  {draftIllustrationOptions.useAiImages && imageModelAvailable && (
+                    <label className="content-generation-config-row">
+                      <span><strong>AI 生图上限</strong></span>
+                      <input
+                        type="number"
+                        min="0"
+                        max={contentLeafCount > 0 ? contentLeafCount : undefined}
+                        value={draftIllustrationOptions.maxAiImages}
+                        disabled={contentConfigLocked || contentOptionsBusy}
+                        onChange={(event) => setDraftIllustrationOptions((current) => ({
+                          ...current,
+                          maxAiImages: Math.max(0, Math.min(Number(event.target.value) || 0, contentImageLimit)),
+                        }))}
+                      />
+                    </label>
+                  )}
+                </div>
+                <div className="content-generation-config-group">
+                  <div className="content-generation-config-row">
+                    <div className="content-generation-image-option-title">
+                      <strong>使用 Mermaid 生图</strong>
+                      <button type="button" className="content-generation-example-button" onClick={() => setPreviewImage(imageGenerationExamples.mermaid)} aria-label="查看 Mermaid 生图示例" title="查看 Mermaid 生图示例">
+                        <ImageExampleIcon />
+                      </button>
+                    </div>
+                    <AppSwitch
+                      checked={draftIllustrationOptions.useMermaidImages}
+                      disabled={contentConfigLocked || contentOptionsBusy}
+                      onCheckedChange={(checked) => setDraftIllustrationOptions((current) => ({ ...current, useMermaidImages: checked }))}
+                      aria-label="是否使用 Mermaid 生图"
+                    />
+                  </div>
+                  {draftIllustrationOptions.useMermaidImages && (
+                    <label className="content-generation-config-row">
+                      <span><strong>Mermaid 生图上限</strong></span>
+                      <input
+                        type="number"
+                        min="0"
+                        max={contentLeafCount > 0 ? contentLeafCount : undefined}
+                        value={draftIllustrationOptions.maxMermaidImages}
+                        disabled={contentConfigLocked || contentOptionsBusy}
+                        onChange={(event) => setDraftIllustrationOptions((current) => ({
+                          ...current,
+                          maxMermaidImages: Math.max(0, Math.min(Number(event.target.value) || 0, contentImageLimit)),
+                        }))}
+                      />
+                    </label>
+                  )}
+                </div>
+                <div className="content-generation-config-group">
+                  <div className="content-generation-config-row">
+                    <div className="content-generation-image-option-title">
+                      <strong>生成 HTML 图片</strong>
+                      <button type="button" className="content-generation-example-button" onClick={() => setPreviewImage(imageGenerationExamples.html)} aria-label="查看 HTML 生图示例" title="查看 HTML 生图示例">
+                        <ImageExampleIcon />
+                      </button>
+                    </div>
+                    <AppSwitch
+                      checked={draftIllustrationOptions.useHtmlImages}
+                      disabled={contentConfigLocked || contentOptionsBusy}
+                      onCheckedChange={(checked) => setDraftIllustrationOptions((current) => ({ ...current, useHtmlImages: checked }))}
+                      aria-label="是否生成 HTML 图片"
+                    />
+                  </div>
+                  {draftIllustrationOptions.useHtmlImages && (
+                    <label className="content-generation-config-row">
+                      <span><strong>HTML 生图上限</strong></span>
+                      <input
+                        type="number"
+                        min="0"
+                        max={contentLeafCount > 0 ? contentLeafCount : undefined}
+                        value={draftIllustrationOptions.maxHtmlImages}
+                        disabled={contentConfigLocked || contentOptionsBusy}
+                        onChange={(event) => setDraftIllustrationOptions((current) => ({
+                          ...current,
+                          maxHtmlImages: Math.max(0, Math.min(Number(event.target.value) || 0, contentImageLimit)),
+                        }))}
+                      />
+                    </label>
+                  )}
+                </div>
+                {draftIllustrationOptions.useHtmlImages && (
+                  <div className="content-generation-config-group">
+                    <div className="content-generation-config-row">
+                      <span>
+                        <strong>高级设置</strong>
+                        <small>设置允许生成的 HTML 图片类型。</small>
+                      </span>
+                      <button type="button" className="secondary-action" onClick={openHtmlImageTypesDialog} disabled={contentConfigLocked || contentOptionsBusy}>打开</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="generation-settings-save-row">
+                <button type="button" className="primary-action" onClick={() => void saveIllustrationOptions()} disabled={contentConfigLocked || contentOptionsBusy}>
+                  {contentOptionsBusy ? '正在保存...' : '保存设置'}
+                </button>
+              </div>
+            </section>
+          ) : activeTab === 'writing' ? (
+            <section className="generation-settings-writing-section">
+              <div className="content-generation-config-row">
+                <span>
+                  <strong>不确定信息怎么写</strong>
+                  <small>设置参考材料没有提供具体值时，全局事实和正文采用的统一写法。</small>
+                </span>
+              </div>
+              <div className="global-facts-mode-list" role="radiogroup" aria-label="事实补全模式">
+                {globalFactsModeOptions.map((option) => {
+                  const selected = draftGlobalFactsMode === option.value;
+                  return (
+                    <button
+                      type="button"
+                      className={`global-facts-mode-option${selected ? ' is-selected' : ''}`}
+                      key={option.value}
+                      onClick={() => setDraftGlobalFactsMode(option.value)}
+                      disabled={globalFactsConfigLocked || globalFactsModeBusy}
+                      role="radio"
+                      aria-checked={selected}
+                    >
+                      <strong>{option.title}</strong>
+                      <span>{option.description}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="generation-settings-save-row">
+                <button
+                  type="button"
+                  className="primary-action"
+                  onClick={() => void saveGlobalFactsMode()}
+                  disabled={globalFactsConfigLocked || globalFactsModeBusy || draftGlobalFactsMode === globalFactsMode}
+                >
+                  {globalFactsModeBusy ? '正在保存...' : '保存设置'}
                 </button>
               </div>
             </section>
@@ -726,6 +1067,37 @@ function GenerationSettingsPage({
           )}
         </div>
       </section>
+
+      <Dialog.Root open={htmlImageTypesDialogOpen} onOpenChange={setHtmlImageTypesDialogOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal html-image-types-modal" />
+          <Dialog.Content className="content-regenerate-card html-image-types-card" aria-describedby={undefined}>
+            <div className="content-regenerate-card-head">
+              <Dialog.Title>HTML 可生成的图片类型</Dialog.Title>
+            </div>
+            <textarea
+              value={htmlImageTypesDraft}
+              onChange={(event) => setHtmlImageTypesDraft(event.target.value)}
+              aria-label="HTML 可生成的图片类型"
+            />
+            <div className="content-regenerate-actions">
+              <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
+              <button type="button" className="primary-action" onClick={confirmHtmlImageTypes}>确认</button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={Boolean(previewImage)} onOpenChange={(open) => !open && setPreviewImage(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="image-preview-modal" />
+          <Dialog.Content className="image-preview-card">
+            <Dialog.Close className="image-preview-close" type="button" aria-label="关闭图片预览">×</Dialog.Close>
+            <Dialog.Title>{previewImage?.alt || '图片预览'}</Dialog.Title>
+            {previewImage && <img src={previewImage.src} alt={previewImage.alt} />}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <AppDialog
         open={removeDialogOpen}

@@ -1,4 +1,3 @@
-import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useState } from 'react';
 import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
 import type { OutlineData } from '../../../shared/types';
@@ -12,7 +11,6 @@ interface GlobalFactsPageProps {
   task?: BackgroundTaskState;
   aiAdjustmentRunning?: boolean;
   onGlobalFactsSaved: (globalFacts: GlobalFactGroupState[]) => Promise<void> | void;
-  onGlobalFactsConfigChange: (globalFactsMode: GlobalFactsMode) => Promise<void> | void;
 }
 
 const statusLabels: Record<string, string> = {
@@ -21,28 +19,6 @@ const statusLabels: Record<string, string> = {
   success: '已完成',
   error: '失败',
 };
-
-const globalFactsModeOptions: Array<{ value: GlobalFactsMode; title: string; description: string }> = [
-  {
-    value: 'fabricate',
-    title: '胡咧咧模式',
-    description: '未在参考材料中找到的直接证据，但经评估，正文中可能用到，为保证全文一致，会由 AI 直接杜撰。如：涉及人员名单，但用户未提供，AI 会编辑不存在的人名。此模式写完的技术方案直接完整可用，无需人工干预。',
-  },
-  {
-    value: 'omit',
-    title: '别招欠模式',
-    description: '选题范围与胡咧咧模式相同。未在参考材料中找到具体值时，仍会保留该项，改写成符合招标要求的笼统口径，不写具体人员、时间、地点、业绩、证书、规格型号或实施细节。如：涉及人员名单但用户未提供，会保留岗位事实并写成按招标要求配备，而不是编造人名或忽略该项。正文阶段同样沿用笼统写法。',
-  },
-  {
-    value: 'placeholder',
-    title: '放着我来模式',
-    description: '选题范围与胡咧咧模式相同。未在参考材料中找到具体值时，仍会保留该项，并将值标记为【待填写】。如：涉及人员名单但用户未提供，会保留岗位事实并写成【待填写】。用户需要二次修改后再进入正文生成阶段。正文生产时的任何不确定项也会使用【待填写】占位。',
-  },
-];
-
-function normalizeGlobalFactsMode(value: GlobalFactsMode | undefined): GlobalFactsMode {
-  return value === 'omit' || value === 'placeholder' ? value : 'fabricate';
-}
 
 function createFactId() {
   const randomId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -70,7 +46,6 @@ function GlobalFactsPage({
   task,
   aiAdjustmentRunning = false,
   onGlobalFactsSaved,
-  onGlobalFactsConfigChange,
 }: GlobalFactsPageProps) {
   const { showToast } = useToast();
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(globalFacts[0]?.id || null);
@@ -78,9 +53,6 @@ function GlobalFactsPage({
   const [draftContent, setDraftContent] = useState('');
   const [starting, setStarting] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [savingConfig, setSavingConfig] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [draftGlobalFactsMode, setDraftGlobalFactsMode] = useState<GlobalFactsMode>(() => normalizeGlobalFactsMode(globalFactsMode));
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const hasOutline = Boolean(outlineData?.outline?.length);
   const running = starting || task?.status === 'running';
@@ -92,38 +64,6 @@ function GlobalFactsPage({
   const latestLog = task?.logs?.[task.logs.length - 1] || '';
   const totalChars = useMemo(() => globalFacts.reduce((sum, group) => sum + group.content.length, 0), [globalFacts]);
   const dirty = Boolean(activeGroup && (draftTitle !== activeGroup.title || draftContent !== activeGroup.content));
-
-  const openSettingsDialog = () => {
-    if (mutationLocked) {
-      showToast(aiAdjustmentRunning
-        ? '全局事实正在 AI 调整，请等待结束后再调整配置'
-        : '全局事实设定任务正在运行，请等待任务结束后再调整配置', 'info');
-      return;
-    }
-    setDraftGlobalFactsMode(normalizeGlobalFactsMode(globalFactsMode));
-    setSettingsOpen(true);
-  };
-
-  const saveConfig = async (closeDialog = true) => {
-    if (mutationLocked) {
-      showToast(aiAdjustmentRunning
-        ? '全局事实正在 AI 调整，请等待结束后再调整配置'
-        : '全局事实设定任务正在运行，请等待任务结束后再调整配置', 'info');
-      return globalFactsMode;
-    }
-    const nextMode = normalizeGlobalFactsMode(draftGlobalFactsMode);
-    setSavingConfig(true);
-    try {
-      await onGlobalFactsConfigChange(nextMode);
-      if (closeDialog) {
-        setSettingsOpen(false);
-        showToast('全局事实设定配置已保存', 'success');
-      }
-      return nextMode;
-    } finally {
-      setSavingConfig(false);
-    }
-  };
 
   const startGeneration = async () => {
     if (mutationLocked) {
@@ -139,9 +79,7 @@ function GlobalFactsPage({
 
     try {
       setStarting(true);
-      const nextMode = await saveConfig(false);
-      setSettingsOpen(false);
-      await window.yibiao?.tasks.startGlobalFactsGeneration({ globalFactsMode: nextMode });
+      await window.yibiao?.tasks.startGlobalFactsGeneration({ globalFactsMode });
       showToast('全局事实设定任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动全局事实设定失败', 'error');
@@ -149,13 +87,6 @@ function GlobalFactsPage({
       setStarting(false);
     }
   };
-
-  useEffect(() => {
-    if (!settingsOpen) {
-      return;
-    }
-    setDraftGlobalFactsMode(normalizeGlobalFactsMode(globalFactsMode));
-  }, [globalFactsMode, settingsOpen]);
 
   useEffect(() => {
     if (!globalFacts.length) {
@@ -249,20 +180,7 @@ function GlobalFactsPage({
           <span><strong>{totalChars}</strong> 字</span>
         </div>
         <div className="global-facts-command-actions">
-          <button
-            type="button"
-            className="outline-config-action"
-            onClick={openSettingsDialog}
-            disabled={mutationLocked}
-            aria-label="打开全局事实设定配置"
-            title="全局事实设定配置"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
-              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
-            </svg>
-          </button>
-          <button type="button" className="primary-action" onClick={openSettingsDialog} disabled={mutationLocked || !hasOutline}>
+          <button type="button" className="primary-action" onClick={() => void startGeneration()} disabled={mutationLocked || !hasOutline}>
             {running ? '生成中...' : globalFacts.length ? '重新解析' : '开始解析'}
           </button>
         </div>
@@ -356,66 +274,6 @@ function GlobalFactsPage({
         </article>
       </section>
 
-      <Dialog.Root open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="global-facts-config-card">
-            <Dialog.Title className="sr-only">全局事实设定配置</Dialog.Title>
-            <Dialog.Description className="sr-only">选择本次全局事实补全模式。</Dialog.Description>
-
-            <header className="global-facts-config-head">
-              <div>
-                <span className="section-kicker">解析配置</span>
-                <strong>全局事实设定配置</strong>
-              </div>
-            </header>
-
-            <div className="global-facts-config-body">
-              <div className="global-facts-mode-list" role="radiogroup" aria-label="事实补全模式">
-                {globalFactsModeOptions.map((option) => {
-                  const selected = draftGlobalFactsMode === option.value;
-                  return (
-                    <button
-                      type="button"
-                      className={`global-facts-mode-option${selected ? ' is-selected' : ''}`}
-                      key={option.value}
-                      onClick={() => setDraftGlobalFactsMode(option.value)}
-                      disabled={mutationLocked || savingConfig}
-                      role="radio"
-                      aria-checked={selected}
-                    >
-                      <strong>{option.title}</strong>
-                      <span>{option.description}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="content-regenerate-actions">
-              <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
-              <button
-                type="button"
-                className="secondary-action"
-                onClick={() => {
-                  void saveConfig().catch((error) => showToast(error instanceof Error ? error.message : '保存全局事实配置失败', 'error'));
-                }}
-                disabled={mutationLocked || savingConfig}
-              >
-                {savingConfig ? '正在保存...' : '保存配置'}
-              </button>
-              <button
-                type="button"
-                className="primary-action"
-                onClick={() => { void startGeneration(); }}
-                disabled={mutationLocked || savingConfig || !hasOutline}
-              >
-                {globalFacts.length ? '重新解析' : '开始解析'}
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
     </div>
   );
 }
