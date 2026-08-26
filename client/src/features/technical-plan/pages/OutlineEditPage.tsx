@@ -17,6 +17,7 @@ interface OutlineEditPageProps {
   hasOriginalPlan: boolean;
   projectOverview: string;
   outlineMode: OutlineMode;
+  outlineModeRequiresRegeneration: boolean;
   outlineExpansionMode: OutlineExpansionMode;
   outlineWordControlOptions: OutlineWordControlOptions;
   outlineWordControlSnapshot?: OutlineWordControlOptions;
@@ -25,7 +26,7 @@ interface OutlineEditPageProps {
   task?: BackgroundTaskState;
   contentTaskStatus?: BackgroundTaskState['status'];
   aiAdjustmentRunning?: boolean;
-  onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; outlineMode: OutlineMode; outlineExpansionMode: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<void>;
+  onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; outlineExpansionMode: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<void>;
   onOutlineSaved: (request: SaveOutlineRequest) => Promise<void>;
   onOutlineSelectionSaved: (request: SaveOutlineSelectionRequest) => Promise<void>;
   onOpenBidTemplate?: () => Promise<void>;
@@ -61,6 +62,11 @@ const outlineExpansionModeLabels: Record<OutlineExpansionMode, string> = {
   'original-only': '仅使用原方案目录',
   'ai-complement': 'AI基于原方案补充',
 };
+const outlineModeLabels: Record<OutlineMode, string> = {
+  'response-file': '完整投标文件',
+  'standalone-technical': '技术文件独立成册',
+  'standalone-business': '商务标独立成册',
+};
 const contentModeOptions = Object.keys(OUTLINE_CONTENT_MODE_LABELS) as OutlineContentMode[];
 const outlineExpansionModeOptions: Array<{ value: OutlineExpansionMode; title: string; description: string }> = [
   {
@@ -74,19 +80,6 @@ const outlineExpansionModeOptions: Array<{ value: OutlineExpansionMode; title: s
     description: '保留原方案一级目录，在其基础上补充招标评分项缺口，并可继续使用知识库增强。',
   },
 ];
-const technicalDocumentModeOptions: Array<{ value: Extract<OutlineMode, 'response-file' | 'standalone-technical'>; title: string; description: string }> = [
-  {
-    value: 'response-file',
-    title: '完整投标文件结构',
-    description: '保留技术方案、项目管理方案、监理大纲、施工组织设计或技术标等外层章节，便于组织完整投标文件。',
-  },
-  {
-    value: 'standalone-technical',
-    title: '技术文件独立成册',
-    description: '一级目录直接从技术评分大项开始，不再创建技术方案、项目管理方案、监理大纲、施工组织设计或技术标等外层总目录。',
-  },
-];
-
 const WORD_COUNT_INPUT_UNIT = 10000;
 
 function parseWordCountDraft(value: string) {
@@ -339,6 +332,7 @@ function OutlineEditPage({
   hasOriginalPlan,
   projectOverview,
   outlineMode,
+  outlineModeRequiresRegeneration,
   outlineExpansionMode,
   outlineWordControlOptions,
   outlineWordControlSnapshot,
@@ -364,7 +358,6 @@ function OutlineEditPage({
   const [startingOutline, setStartingOutline] = useState(false);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
-  const [draftOutlineMode, setDraftOutlineMode] = useState<OutlineMode>(outlineMode === 'standalone-technical' ? 'standalone-technical' : 'response-file');
   const [draftOutlineExpansionMode, setDraftOutlineExpansionMode] = useState<OutlineExpansionMode>(outlineExpansionMode);
   const [draftKnowledgeDocumentIds, setDraftKnowledgeDocumentIds] = useState<string[]>(referenceKnowledgeDocumentIds);
   const [draftMinimumWords, setDraftMinimumWords] = useState(formatWordCountDraft(outlineWordControlOptions.minimumWords));
@@ -440,9 +433,6 @@ function OutlineEditPage({
     strictSectionWords: parsedDraftSectionWords > 0 && draftStrictSectionWords,
   };
   const wordControlRequiresRegeneration = Boolean(outlineData && !areWordControlOptionsEqual(normalizedDraftOptions, outlineWordControlSnapshot));
-  const outlineModeRequiresRegeneration = Boolean(
-    outlineData && draftOutlineMode !== (outlineMode === 'standalone-technical' ? 'standalone-technical' : 'response-file'),
-  );
 
   const initializeWordControlDraft = () => {
     setDraftMinimumWords(formatWordCountDraft(outlineWordControlOptions.minimumWords));
@@ -520,13 +510,12 @@ function OutlineEditPage({
       return;
     }
 
-    setDraftOutlineMode(outlineMode === 'standalone-technical' ? 'standalone-technical' : 'response-file');
     setDraftOutlineExpansionMode(hasOriginalPlan ? outlineExpansionMode : 'ai-complement');
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
     initializeWordControlDraft();
     setKnowledgeSearch('');
     void loadKnowledgeIndex();
-  }, [generationDialogOpen, hasOriginalPlan, outlineMode, outlineExpansionMode, outlineWordControlOptions, referenceKnowledgeDocumentIds]);
+  }, [generationDialogOpen, hasOriginalPlan, outlineExpansionMode, outlineWordControlOptions, referenceKnowledgeDocumentIds]);
 
   const loadKnowledgeIndex = async () => {
     try {
@@ -558,7 +547,6 @@ function OutlineEditPage({
       return;
     }
 
-    setDraftOutlineMode(outlineMode === 'standalone-technical' ? 'standalone-technical' : 'response-file');
     setDraftOutlineExpansionMode(hasOriginalPlan ? outlineExpansionMode : 'ai-complement');
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
     initializeWordControlDraft();
@@ -581,16 +569,11 @@ function OutlineEditPage({
   };
 
   const saveOutlineConfig = async () => {
-    if (outlineModeRequiresRegeneration) {
-      showToast('技术文件结构已改变，请点击“重新生成目录”使新结构生效', 'info');
-      return;
-    }
     try {
       const wordControlOptions = getNormalizedWordControlOptions();
       setSavingOutlineConfig(true);
       await onOutlineConfigChange({
         referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
-        outlineMode: draftOutlineMode,
         outlineExpansionMode: hasOriginalPlan ? draftOutlineExpansionMode : 'ai-complement',
         wordControlOptions,
       });
@@ -620,23 +603,21 @@ function OutlineEditPage({
       setStartingOutline(true);
       setLocalStartAt(startedNow);
       setNowTick(startedNow);
-      const nextOutlineMode: OutlineMode = draftOutlineMode;
       const nextOutlineExpansionMode = hasOriginalPlan ? draftOutlineExpansionMode : 'ai-complement';
       await onOutlineConfigChange({
         referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
-        outlineMode: nextOutlineMode,
         outlineExpansionMode: nextOutlineExpansionMode,
         wordControlOptions,
       });
       setGenerationDialogOpen(false);
       await window.yibiao?.tasks.startOutlineGeneration({
         reference_knowledge_document_ids: draftKnowledgeDocumentIds,
-        outline_mode: nextOutlineMode,
+        outline_mode: outlineMode,
         outline_expansion_mode: nextOutlineExpansionMode,
         word_control_options: wordControlOptions,
       });
       trackConfigUsage({
-        outline_mode: nextOutlineMode,
+        outline_mode: outlineMode,
         outline_expansion_mode: hasOriginalPlan ? nextOutlineExpansionMode : undefined,
         word_control_enabled: wordControlOptions.minimumWords > 0 || wordControlOptions.maximumWords > 0 || wordControlOptions.sectionWords > 0,
         minimum_words: wordControlOptions.minimumWords,
@@ -1097,40 +1078,6 @@ function OutlineEditPage({
     );
   };
 
-  const renderTechnicalDocumentModePicker = () => {
-    return (
-      <section className="outline-generation-config-section outline-expansion-mode-section">
-        <div className="outline-generation-config-head">
-          <strong>技术文件结构</strong>
-          <span>{technicalDocumentModeOptions.find((option) => option.value === draftOutlineMode)?.title}</span>
-        </div>
-        <div className="outline-expansion-mode-switch">
-          {technicalDocumentModeOptions.map((option) => {
-            const selected = draftOutlineMode === option.value;
-            return (
-              <button
-                type="button"
-                className={`outline-expansion-mode-option${selected ? ' is-selected' : ''}`}
-                key={option.value}
-                onClick={() => setDraftOutlineMode(option.value)}
-                disabled={generating}
-                aria-pressed={selected}
-              >
-                <strong>{option.title}</strong>
-                <span>{option.description}</span>
-              </button>
-            );
-          })}
-        </div>
-        {outlineModeRequiresRegeneration && (
-          <div className="outline-word-control-notice">
-            技术文件结构已改变，需要重新生成目录后才能生效！
-          </div>
-        )}
-      </section>
-    );
-  };
-
   const renderKnowledgePicker = () => {
     if (loadingKnowledge) {
       return <div className="outline-knowledge-empty">正在读取知识库...</div>;
@@ -1246,7 +1193,8 @@ function OutlineEditPage({
         <div>
           <span className="section-kicker">STEP {stepNumber}</span>
           <strong>目录生成</strong>
-          <p>{`${outlineMode === 'standalone-technical' ? '技术评分大项直接作为一级目录' : '一级目录依据完整响应文件要求生成'}；${hasOriginalPlan ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；` : ''}参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
+          <p>{`生成范围：${outlineModeLabels[outlineMode]}；${hasOriginalPlan ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；` : ''}参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
+          {outlineModeRequiresRegeneration && <p>生成范围已改变，当前目录仍为原生成结果，请重新生成目录使新范围生效。</p>}
         </div>
         <div className="outline-command-actions">
           {awaitingOutlineSelection && (
@@ -1449,12 +1397,11 @@ function OutlineEditPage({
           <Dialog.Overlay className="content-regenerate-modal" />
           <Dialog.Content className="outline-generation-config-card">
             <Dialog.Title className="sr-only">{outlineData ? '重新生成目录' : '生成目录'}</Dialog.Title>
-            <Dialog.Description className="sr-only">选择本次目录生成方式、字数控制和参考知识库。</Dialog.Description>
+            <Dialog.Description className="sr-only">选择本次目录生成的字数控制、原方案使用方式和参考知识库。</Dialog.Description>
 
             <div className="outline-generation-config-body">
               {/* 左栏：所有配置项 */}
               <div className="outline-generation-config-left">
-                {renderTechnicalDocumentModePicker()}
                 {renderOutlineExpansionModePicker()}
                 <section className="outline-generation-config-section outline-word-control-section">
                   <div className="content-generation-config-row">

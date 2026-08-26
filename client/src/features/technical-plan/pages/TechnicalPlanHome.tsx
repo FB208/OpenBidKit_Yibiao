@@ -88,7 +88,7 @@ const resetState: TechnicalPlanState = {
   bidSections: [],
   bidSectionExtractionStatus: 'idle' as const,
   bidSectionExtractionError: undefined,
-  outlineMode: 'aligned' as const,
+  outlineMode: 'response-file' as const,
   outlineExpansionMode: 'ai-complement' as const,
   outlineWordControlOptions: { ...DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS },
   outlineWordControlSnapshot: undefined,
@@ -119,6 +119,7 @@ function isOutlineLeafCountOutsideRange(outlineData: OutlineData, options: Outli
   if (options.minimumWords === 0 && options.maximumWords === 0) return false;
   const effectiveSectionWords = options.sectionWords > 0 ? options.sectionWords : 3000;
   const leafCount = collectLeafItems(outlineData.outline || []).filter((item) => item.content_mode === 'ai-generate').length;
+  if (leafCount === 0) return false;
   const minimumLeafCount = options.minimumWords > 0 ? Math.ceil(options.minimumWords / effectiveSectionWords) : null;
   const maximumLeafCount = options.maximumWords > 0 ? Math.floor(options.maximumWords / effectiveSectionWords) : null;
   return (minimumLeafCount !== null && leafCount < minimumLeafCount)
@@ -328,6 +329,10 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
   }, [exportTemplateSearch, exportTemplates]);
   const selectedExportTemplate = filteredExportTemplates.find((template) => template.template_id === selectedExportTemplateId) || filteredExportTemplates[0] || null;
   const exportTemplatePreviewStyle = useMemo(() => buildExportFormatCssVars(selectedExportTemplate?.config || exportFormat), [exportFormat, selectedExportTemplate]);
+  const generatedOutlineMode = state.outlineGenerationTask?.stats?.agent?.resume_payload?.outline_mode;
+  const outlineModeRequiresRegeneration = Boolean(
+    state.outlineData && generatedOutlineMode && generatedOutlineMode !== state.outlineMode,
+  );
   const isNextDisabled = activeIndex >= steps.length - 1
     || (state.step === 'document-analysis' && !state.tenderFile)
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
@@ -939,6 +944,11 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
     await window.yibiao?.technicalPlan.saveOutlineSelection(request);
   };
 
+  const saveGenerationOutlineMode = async (outlineMode: TechnicalPlanState['outlineMode']) => {
+    const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ outlineMode });
+    setState((prev) => ({ ...prev, outlineMode: saved.outlineMode }));
+  };
+
   const openBidTemplate = async () => {
     const result = await window.yibiao?.technicalPlan.openBidTemplate();
     if (!result?.success) {
@@ -948,14 +958,12 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
 
   const saveOutlineConfig = async (config: {
     referenceKnowledgeDocumentIds: string[];
-    outlineMode: TechnicalPlanState['outlineMode'];
     outlineExpansionMode: TechnicalPlanState['outlineExpansionMode'];
     wordControlOptions: OutlineWordControlOptions;
   }) => {
     await window.yibiao!.technicalPlan.saveOutlineConfig(config);
     setState((prev) => ({
       ...prev,
-      outlineMode: config.outlineMode,
       outlineExpansionMode: config.outlineExpansionMode,
       outlineWordControlOptions: config.wordControlOptions,
       referenceKnowledgeDocumentIds: config.referenceKnowledgeDocumentIds,
@@ -1130,7 +1138,10 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
       {state.step === 'generation-settings' && (
         <GenerationSettingsPage
           originalPlanFile={state.originalPlanFile}
+          outlineMode={state.outlineMode}
+          outlineModeRequiresRegeneration={outlineModeRequiresRegeneration}
           onOriginalPlanChanged={(nextState) => setState((prev) => ({ ...prev, ...nextState }))}
+          onOutlineModeChange={saveGenerationOutlineMode}
         />
       )}
 
@@ -1159,6 +1170,7 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
           hasOriginalPlan={Boolean(state.originalPlanFile)}
           projectOverview={state.projectOverview}
           outlineMode={state.outlineMode}
+          outlineModeRequiresRegeneration={outlineModeRequiresRegeneration}
           outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
           outlineWordControlOptions={state.outlineWordControlOptions}
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}

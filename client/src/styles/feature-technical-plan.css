@@ -139,17 +139,45 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .generation-settings-option {
+  position: relative;
   display: grid;
   align-content: start;
   gap: 10px;
   min-height: 148px;
   padding: 20px;
+  cursor: pointer;
   background: rgba(248, 250, 253, 0.82);
   border: 1px solid var(--yb-border-soft);
   border-radius: var(--yb-radius-lg);
+  transition: border-color var(--yb-duration-fast) ease, background-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease;
+}
+
+.generation-settings-option:hover {
+  border-color: rgba(33, 116, 253, 0.32);
+  background: rgba(247, 250, 255, 0.98);
+}
+
+.generation-settings-option:focus-within {
+  outline: 2px solid var(--yb-primary);
+  outline-offset: 2px;
+}
+
+.generation-settings-option.is-selected {
+  background: rgba(239, 246, 255, 0.96);
+  border-color: rgba(33, 116, 253, 0.5);
+  box-shadow: inset 0 0 0 1px rgba(33, 116, 253, 0.08), 0 8px 22px rgba(33, 116, 253, 0.1);
+}
+
+.generation-settings-option-grid:disabled .generation-settings-option {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .generation-settings-option > span {
@@ -159,6 +187,16 @@
   letter-spacing: 0.08em;
 }
 
+.generation-settings-option input {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--yb-primary);
+}
+
 .generation-settings-option strong {
   color: var(--yb-text);
   font-size: 16px;
@@ -166,6 +204,14 @@
 
 .generation-settings-option small {
   color: var(--yb-text-muted);
+  line-height: 1.6;
+}
+
+.generation-settings-option-status {
+  grid-column: 1 / -1;
+  min-height: 22px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
   line-height: 1.6;
 }
 

@@ -1,12 +1,16 @@
 import { useState, type KeyboardEvent } from 'react';
 import { AppDialog, isLibreOfficeRequiredMessage, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import type { OutlineMode } from '../../../shared/types';
 import type { TechnicalPlanOriginalPlanFile, TechnicalPlanState } from '../types';
 
 type GenerationSettingsTab = 'content' | 'existing-plan' | 'length' | 'illustration' | 'writing' | 'appearance';
 
 interface GenerationSettingsPageProps {
   originalPlanFile: TechnicalPlanOriginalPlanFile | null;
+  outlineMode: OutlineMode;
+  outlineModeRequiresRegeneration: boolean;
   onOriginalPlanChanged: (state: TechnicalPlanState) => void;
+  onOutlineModeChange: (outlineMode: OutlineMode) => Promise<void>;
 }
 
 const tabs: Array<{ id: GenerationSettingsTab; label: string }> = [
@@ -18,16 +22,35 @@ const tabs: Array<{ id: GenerationSettingsTab; label: string }> = [
   { id: 'appearance', label: '长嘛样' },
 ];
 
-const documentOptions = [
-  '完整投标文件',
-  '商务标独立成册',
-  '技术方案独立成册',
+const documentOptions: Array<{ value: OutlineMode; title: string; description: string }> = [
+  {
+    value: 'response-file',
+    title: '完整投标文件',
+    description: '按照招标文件响应要求完整生成',
+  },
+  {
+    value: 'standalone-technical',
+    title: '技术文件独立成册',
+    description: '一级目录从技术评分大项开始',
+  },
+  {
+    value: 'standalone-business',
+    title: '商务标独立成册',
+    description: '按照招标文件响应要求仅生成商务部分',
+  },
 ];
 
 // 汇总生成前配置，并在“我有方案”中管理扩写底稿。
-function GenerationSettingsPage({ originalPlanFile, onOriginalPlanChanged }: GenerationSettingsPageProps) {
+function GenerationSettingsPage({
+  originalPlanFile,
+  outlineMode,
+  outlineModeRequiresRegeneration,
+  onOriginalPlanChanged,
+  onOutlineModeChange,
+}: GenerationSettingsPageProps) {
   const [activeTab, setActiveTab] = useState<GenerationSettingsTab>('content');
   const [originalPlanBusy, setOriginalPlanBusy] = useState(false);
+  const [outlineModeBusy, setOutlineModeBusy] = useState(false);
   const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
@@ -102,6 +125,20 @@ function GenerationSettingsPage({ originalPlanFile, onOriginalPlanChanged }: Gen
     }
   };
 
+  // 保存投标文件生成范围；已有结果继续保留到用户重新生成目录。
+  const saveOutlineMode = async (nextOutlineMode: OutlineMode) => {
+    if (nextOutlineMode === outlineMode || outlineModeBusy) return;
+    try {
+      setOutlineModeBusy(true);
+      await onOutlineModeChange(nextOutlineMode);
+      showToast('生成范围已保存', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存生成范围失败', 'error');
+    } finally {
+      setOutlineModeBusy(false);
+    }
+  };
+
   return (
     <div className="plan-step-body generation-settings-page">
       <section className="generation-settings-shell">
@@ -142,15 +179,30 @@ function GenerationSettingsPage({ originalPlanFile, onOriginalPlanChanged }: Gen
           role="tabpanel"
         >
           {activeTab === 'content' ? (
-            <div className="generation-settings-option-grid">
+            <fieldset className="generation-settings-option-grid" disabled={outlineModeBusy}>
+              <legend className="sr-only">选择投标文件生成范围</legend>
               {documentOptions.map((option, index) => (
-                <article className="generation-settings-option" key={option}>
+                <label className={`generation-settings-option${outlineMode === option.value ? ' is-selected' : ''}`} key={option.value}>
                   <span>{String(index + 1).padStart(2, '0')}</span>
-                  <strong>{option}</strong>
-                  <small>具体设置稍后补充</small>
-                </article>
+                  <input
+                    type="radio"
+                    name="technical-plan-outline-mode"
+                    value={option.value}
+                    checked={outlineMode === option.value}
+                    onChange={() => void saveOutlineMode(option.value)}
+                  />
+                  <strong>{option.title}</strong>
+                  <small>{option.description}</small>
+                </label>
               ))}
-            </div>
+              <div className="generation-settings-option-status" role="status" aria-live="polite">
+                {outlineModeBusy
+                  ? '正在保存生成范围...'
+                  : outlineModeRequiresRegeneration
+                    ? '生成范围已改变，当前目录和正文仍保留原结果，重新生成目录后生效。'
+                    : ''}
+              </div>
+            </fieldset>
           ) : activeTab === 'existing-plan' ? (
             <UploadRow
               index="01"

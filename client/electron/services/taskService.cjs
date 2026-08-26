@@ -1410,9 +1410,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     startOutlineGeneration(payload) {
       const outlineMode = payload?.outline_mode === 'standalone-technical'
         ? 'standalone-technical'
-        : payload?.outline_mode === 'response-file'
-          ? 'response-file'
-          : 'aligned';
+        : payload?.outline_mode === 'standalone-business'
+          ? 'standalone-business'
+          : 'response-file';
       const taskPayload = { ...payload, outline_mode: outlineMode };
       return startManagedTask('outline-generation', taskPayload, runOutlineGenerationTaskV2, {
         outlineMode,

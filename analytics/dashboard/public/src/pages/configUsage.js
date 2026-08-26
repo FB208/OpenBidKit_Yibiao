@@ -23,8 +23,9 @@ function labelConfigValue(groupKey, value) {
     outlineModes: {
       free: '自由生成',
       aligned: '按评分项对齐',
-      'response-file': '完整投标文件结构',
+      'response-file': '完整投标文件',
       'standalone-technical': '技术文件独立成册',
+      'standalone-business': '商务标独立成册',
     },
     outlineExpansionModes: {
       'original-only': '仅使用原方案目录',
@@ -58,9 +59,9 @@ const configUsageGroups = [
   ['fileParserProviders', '文件解析方式'],
   ['imageProviders', '生图服务商'],
   ['imageModelStatuses', '生图模型状态'],
-  ['bidAnalysisModes', 'Step 02 解析模式'],
-  ['outlineModes', 'Step 03 文件结构模式'],
-  ['outlineExpansionModes', 'Step 03 原方案目录模式'],
+  ['bidAnalysisModes', 'Step 03 解析模式'],
+  ['outlineModes', 'Step 02 生成范围'],
+  ['outlineExpansionModes', 'Step 04 原方案目录模式'],
   ['tableRequirements', '正文表格需求'],
   ['wordControlEnabled', '控制字数'],
   ['minimumWords', '最少字数'],

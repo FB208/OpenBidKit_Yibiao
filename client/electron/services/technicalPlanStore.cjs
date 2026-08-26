@@ -70,7 +70,7 @@ const initialState = {
   bidSections: [],
   bidSectionExtractionStatus: 'idle',
   bidSectionExtractionError: undefined,
-  outlineMode: 'aligned',
+  outlineMode: 'response-file',
   outlineExpansionMode: 'ai-complement',
   outlineWordControlOptions: { ...defaultOutlineWordControlOptions },
   outlineWordControlSnapshot: undefined,
@@ -387,7 +387,9 @@ function normalizeGenerationConfig(config) {
     bidAnalysisMode: bidAnalysis.mode,
     bidAnalysisSelectedTaskIds: bidAnalysis.selectedTaskIds,
     bidSectionMode: normalizeBidSectionMode(source.bidSectionMode),
-    outlineMode: source.outlineMode === 'standalone-technical' ? 'standalone-technical' : 'response-file',
+    outlineMode: ['response-file', 'standalone-technical', 'standalone-business'].includes(source.outlineMode)
+      ? source.outlineMode
+      : 'response-file',
     outlineExpansionMode: isValidOutlineExpansionMode(source.outlineExpansionMode) ? source.outlineExpansionMode : defaults.outlineExpansionMode,
     outlineWordControlOptions: normalizeOutlineWordControlOptions(source.outlineWordControlOptions),
     referenceKnowledgeDocumentIds: normalizeGenerationDocumentIds(source.referenceKnowledgeDocumentIds),
@@ -2239,9 +2241,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     return saved;
   }
 
-  function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineMode, outlineExpansionMode, wordControlOptions } = {}) {
+  function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineExpansionMode, wordControlOptions } = {}) {
     saveGenerationConfig({
-      outlineMode,
       outlineExpansionMode,
       outlineWordControlOptions: wordControlOptions,
       referenceKnowledgeDocumentIds,

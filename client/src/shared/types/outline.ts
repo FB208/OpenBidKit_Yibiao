@@ -21,7 +21,7 @@ export interface OutlineItem {
   content?: string;
 }
 
-export type OutlineMode = 'aligned' | 'response-file' | 'standalone-technical';
+export type OutlineMode = 'response-file' | 'standalone-technical' | 'standalone-business';
 export type OutlineExpansionMode = 'original-only' | 'ai-complement';
 
 export interface OutlineWordControlOptions {
