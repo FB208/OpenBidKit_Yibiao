@@ -2241,12 +2241,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     return saved;
   }
 
-  function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineExpansionMode, wordControlOptions } = {}) {
-    saveGenerationConfig({
-      outlineExpansionMode,
-      outlineWordControlOptions: wordControlOptions,
-      referenceKnowledgeDocumentIds,
-    });
+  function saveOutlineConfig({ referenceKnowledgeDocumentIds } = {}) {
+    saveGenerationConfig({ referenceKnowledgeDocumentIds });
   }
 
   // 保存用户确认后的一级目录待扩展选择，不写入正式目录树。

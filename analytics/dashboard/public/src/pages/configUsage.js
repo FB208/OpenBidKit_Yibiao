@@ -61,7 +61,7 @@ const configUsageGroups = [
   ['imageModelStatuses', '生图模型状态'],
   ['bidAnalysisModes', 'Step 03 解析模式'],
   ['outlineModes', 'Step 02 生成范围'],
-  ['outlineExpansionModes', 'Step 04 原方案目录模式'],
+  ['outlineExpansionModes', 'Step 02 原方案目录模式'],
   ['tableRequirements', '正文表格需求'],
   ['wordControlEnabled', '控制字数'],
   ['minimumWords', '最少字数'],

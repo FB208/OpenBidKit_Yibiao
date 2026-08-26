@@ -215,6 +215,30 @@
   line-height: 1.6;
 }
 
+.generation-settings-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.generation-settings-config-section,
+.generation-settings-length-section {
+  padding: 20px;
+  background: rgba(248, 250, 253, 0.72);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
+}
+
+.generation-settings-save-row {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.generation-settings-length-section {
+  display: grid;
+  gap: 14px;
+}
+
 .generation-settings-placeholder {
   display: grid;
   min-height: 220px;
@@ -255,6 +279,11 @@
 
   .generation-settings-option {
     min-height: 112px;
+  }
+
+  .generation-settings-page .outline-expansion-mode-switch,
+  .generation-settings-page .outline-word-control-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -2581,6 +2610,10 @@
   gap: 20px;
   min-height: 0;
   overflow: hidden;
+}
+
+.outline-generation-config-body.is-knowledge-only {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .outline-generation-config-left {

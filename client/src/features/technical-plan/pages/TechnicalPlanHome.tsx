@@ -949,6 +949,16 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
     setState((prev) => ({ ...prev, outlineMode: saved.outlineMode }));
   };
 
+  const saveGenerationOutlineExpansionMode = async (outlineExpansionMode: TechnicalPlanState['outlineExpansionMode']) => {
+    const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ outlineExpansionMode });
+    setState((prev) => ({ ...prev, outlineExpansionMode: saved.outlineExpansionMode }));
+  };
+
+  const saveGenerationWordControlOptions = async (outlineWordControlOptions: OutlineWordControlOptions) => {
+    const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ outlineWordControlOptions });
+    setState((prev) => ({ ...prev, outlineWordControlOptions: saved.outlineWordControlOptions }));
+  };
+
   const openBidTemplate = async () => {
     const result = await window.yibiao?.technicalPlan.openBidTemplate();
     if (!result?.success) {
@@ -958,14 +968,10 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
 
   const saveOutlineConfig = async (config: {
     referenceKnowledgeDocumentIds: string[];
-    outlineExpansionMode: TechnicalPlanState['outlineExpansionMode'];
-    wordControlOptions: OutlineWordControlOptions;
   }) => {
     await window.yibiao!.technicalPlan.saveOutlineConfig(config);
     setState((prev) => ({
       ...prev,
-      outlineExpansionMode: config.outlineExpansionMode,
-      outlineWordControlOptions: config.wordControlOptions,
       referenceKnowledgeDocumentIds: config.referenceKnowledgeDocumentIds,
     }));
   };
@@ -977,6 +983,10 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
   const isOutlineGenerating = outlineGenerationStatus === 'running' || outlineGenerationStatus === 'pausing';
   const outlineAdjustmentStatus = state.outlineAdjustmentTask?.status;
   const isOutlineAdjusting = outlineAdjustmentStatus === 'running' || outlineAdjustmentStatus === 'pausing';
+  const outlineConfigLocked = isOutlineGenerating
+    || contentTaskStatus === 'running'
+    || contentTaskStatus === 'pausing'
+    || contentTaskStatus === 'paused';
   const isGlobalFactsGenerating = state.globalFactsTask?.status === 'running' || state.globalFactsTask?.status === 'pausing';
   const isFactsAiStep = state.step === 'global-facts';
   const isAiAdjusting = isFactsAiStep ? isGlobalFactsAdjusting : isOutlineAdjusting;
@@ -1140,8 +1150,15 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
           originalPlanFile={state.originalPlanFile}
           outlineMode={state.outlineMode}
           outlineModeRequiresRegeneration={outlineModeRequiresRegeneration}
+          outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
+          outlineWordControlOptions={state.outlineWordControlOptions}
+          outlineWordControlSnapshot={state.outlineWordControlSnapshot}
+          hasOutlineData={Boolean(state.outlineData)}
+          outlineConfigLocked={outlineConfigLocked}
           onOriginalPlanChanged={(nextState) => setState((prev) => ({ ...prev, ...nextState }))}
           onOutlineModeChange={saveGenerationOutlineMode}
+          onOutlineExpansionModeChange={saveGenerationOutlineExpansionMode}
+          onOutlineWordControlOptionsChange={saveGenerationWordControlOptions}
         />
       )}
 
@@ -1173,7 +1190,6 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
           outlineModeRequiresRegeneration={outlineModeRequiresRegeneration}
           outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
           outlineWordControlOptions={state.outlineWordControlOptions}
-          outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           outlineData={state.outlineData}
           task={state.outlineGenerationTask}
