@@ -217,15 +217,25 @@
 
 .generation-settings-stack {
   display: grid;
-  gap: 18px;
+  overflow: hidden;
+  background: rgba(248, 250, 253, 0.72);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
 }
 
 .generation-settings-config-section,
-.generation-settings-length-section {
+.generation-settings-length-section,
+.generation-settings-knowledge-section {
   padding: 20px;
   background: rgba(248, 250, 253, 0.72);
   border: 1px solid var(--yb-border-soft);
   border-radius: var(--yb-radius-lg);
+}
+
+.outline-knowledge-picker.generation-settings-knowledge-section {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100%;
+  overflow: hidden;
 }
 
 .generation-settings-save-row {
@@ -237,6 +247,21 @@
 .generation-settings-length-section {
   display: grid;
   gap: 14px;
+}
+
+.generation-settings-existing-upload.upload-row {
+  grid-template-columns: 168px minmax(180px, 1fr) auto;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.generation-settings-stack .generation-settings-config-section {
+  padding: 18px 22px 22px;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--yb-border-soft);
+  border-radius: 0;
 }
 
 .generation-settings-placeholder {
@@ -2610,10 +2635,6 @@
   gap: 20px;
   min-height: 0;
   overflow: hidden;
-}
-
-.outline-generation-config-body.is-knowledge-only {
-  grid-template-columns: minmax(0, 1fr);
 }
 
 .outline-generation-config-left {

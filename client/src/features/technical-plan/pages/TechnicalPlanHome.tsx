@@ -959,21 +959,16 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
     setState((prev) => ({ ...prev, outlineWordControlOptions: saved.outlineWordControlOptions }));
   };
 
+  const saveGenerationReferenceKnowledge = async (referenceKnowledgeDocumentIds: string[]) => {
+    const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ referenceKnowledgeDocumentIds });
+    setState((prev) => ({ ...prev, referenceKnowledgeDocumentIds: saved.referenceKnowledgeDocumentIds }));
+  };
+
   const openBidTemplate = async () => {
     const result = await window.yibiao?.technicalPlan.openBidTemplate();
     if (!result?.success) {
       showToast(result?.message || '无法打开投标模版', 'error');
     }
-  };
-
-  const saveOutlineConfig = async (config: {
-    referenceKnowledgeDocumentIds: string[];
-  }) => {
-    await window.yibiao!.technicalPlan.saveOutlineConfig(config);
-    setState((prev) => ({
-      ...prev,
-      referenceKnowledgeDocumentIds: config.referenceKnowledgeDocumentIds,
-    }));
   };
 
   const generatedContentCount = state.outlineData?.outline
@@ -1153,12 +1148,14 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
           outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
           outlineWordControlOptions={state.outlineWordControlOptions}
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
+          referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           hasOutlineData={Boolean(state.outlineData)}
           outlineConfigLocked={outlineConfigLocked}
           onOriginalPlanChanged={(nextState) => setState((prev) => ({ ...prev, ...nextState }))}
           onOutlineModeChange={saveGenerationOutlineMode}
           onOutlineExpansionModeChange={saveGenerationOutlineExpansionMode}
           onOutlineWordControlOptionsChange={saveGenerationWordControlOptions}
+          onReferenceKnowledgeDocumentIdsChange={saveGenerationReferenceKnowledge}
         />
       )}
 
@@ -1195,7 +1192,6 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
           task={state.outlineGenerationTask}
           contentTaskStatus={state.contentGenerationTask?.status}
           aiAdjustmentRunning={isOutlineAdjusting}
-          onOutlineConfigChange={saveOutlineConfig}
           onOutlineSaved={saveOutline}
           onOutlineSelectionSaved={saveOutlineSelection}
           bidTemplateExists={Boolean(state.bidTemplateExists)}

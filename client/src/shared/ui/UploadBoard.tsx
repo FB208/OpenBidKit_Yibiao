@@ -31,7 +31,7 @@ export function UploadBoard({ kicker, title, subtitle, aside, children, classNam
 
 export interface UploadRowProps {
   /** 行序号标签，例如 01 */
-  index: string;
+  index?: string;
   title: string;
   /** 标题下的补充说明，例如“必选，可多份” */
   note?: string;
@@ -44,7 +44,7 @@ export interface UploadRowProps {
   dropDisabled?: boolean;
 }
 
-/** 单个上传行：序号标签 + 内容区（文件胶囊/空态）+ 操作按钮 */
+/** 单个上传行：可选序号标签 + 内容区（文件胶囊/空态）+ 操作按钮 */
 export function UploadRow({ index, title, note, actions, children, className, onDropFiles, dropDisabled = false }: UploadRowProps) {
   const [dragOver, setDragOver] = useState(false);
   // 计数进入/离开次数，避免拖过子元素时高亮闪烁
@@ -91,7 +91,7 @@ export function UploadRow({ index, title, note, actions, children, className, on
       onDrop={handleDrop}
     >
       <div className="upload-label">
-        <span>{index}</span>
+        {index ? <span>{index}</span> : null}
         <strong>{title}</strong>
         {note ? <small>{note}</small> : null}
       </div>

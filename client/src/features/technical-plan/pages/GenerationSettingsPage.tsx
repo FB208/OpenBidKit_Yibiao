@@ -1,9 +1,10 @@
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import { AppDialog, AppSwitch, isLibreOfficeRequiredMessage, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
+import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
 import type { TechnicalPlanOriginalPlanFile, TechnicalPlanState } from '../types';
 
-type GenerationSettingsTab = 'content' | 'existing-plan' | 'length' | 'illustration' | 'writing' | 'appearance';
+type GenerationSettingsTab = 'content' | 'existing-plan' | 'knowledge' | 'length' | 'illustration' | 'writing' | 'appearance';
 
 interface GenerationSettingsPageProps {
   originalPlanFile: TechnicalPlanOriginalPlanFile | null;
@@ -12,22 +13,26 @@ interface GenerationSettingsPageProps {
   outlineExpansionMode: OutlineExpansionMode;
   outlineWordControlOptions: OutlineWordControlOptions;
   outlineWordControlSnapshot?: OutlineWordControlOptions;
+  referenceKnowledgeDocumentIds: string[];
   hasOutlineData: boolean;
   outlineConfigLocked: boolean;
   onOriginalPlanChanged: (state: TechnicalPlanState) => void;
   onOutlineModeChange: (outlineMode: OutlineMode) => Promise<void>;
   onOutlineExpansionModeChange: (outlineExpansionMode: OutlineExpansionMode) => Promise<void>;
   onOutlineWordControlOptionsChange: (options: OutlineWordControlOptions) => Promise<void>;
+  onReferenceKnowledgeDocumentIdsChange: (documentIds: string[]) => Promise<void>;
 }
 
 const tabs: Array<{ id: GenerationSettingsTab; label: string }> = [
   { id: 'content', label: '写嘛' },
   { id: 'existing-plan', label: '我有方案' },
+  { id: 'knowledge', label: '知识库' },
   { id: 'length', label: '写多少' },
   { id: 'illustration', label: '插图吗' },
   { id: 'writing', label: '怎么写' },
   { id: 'appearance', label: '长嘛样' },
 ];
+const emptyKnowledgeIndex: KnowledgeBaseIndex = { folders: [], documents: [] };
 
 const documentOptions: Array<{ value: OutlineMode; title: string; description: string }> = [
   {
@@ -124,7 +129,18 @@ function areWordControlOptionsEqual(left?: OutlineWordControlOptions, right?: Ou
     && left.strictSectionWords === right.strictSectionWords);
 }
 
-// 汇总生成前配置，并在“我有方案”中管理扩写底稿。
+function getInitialExpandedKnowledgeFolders(index: KnowledgeBaseIndex) {
+  const firstAvailableFolder = index.folders.find((folder) => (
+    index.documents.some((document) => document.folder_id === folder.id && document.status === 'success')
+  ));
+  return new Set(firstAvailableFolder ? [firstAvailableFolder.id] : []);
+}
+
+function includesKeyword(value: string, keyword: string) {
+  return value.toLowerCase().includes(keyword);
+}
+
+// 汇总生成前配置，并管理已有方案与参考知识库。
 function GenerationSettingsPage({
   originalPlanFile,
   outlineMode,
@@ -132,12 +148,14 @@ function GenerationSettingsPage({
   outlineExpansionMode,
   outlineWordControlOptions,
   outlineWordControlSnapshot,
+  referenceKnowledgeDocumentIds,
   hasOutlineData,
   outlineConfigLocked,
   onOriginalPlanChanged,
   onOutlineModeChange,
   onOutlineExpansionModeChange,
   onOutlineWordControlOptionsChange,
+  onReferenceKnowledgeDocumentIdsChange,
 }: GenerationSettingsPageProps) {
   const [activeTab, setActiveTab] = useState<GenerationSettingsTab>('content');
   const [originalPlanBusy, setOriginalPlanBusy] = useState(false);
@@ -149,6 +167,12 @@ function GenerationSettingsPage({
   const [draftSectionWords, setDraftSectionWords] = useState(formatWordCountDraft(outlineWordControlOptions.sectionWords));
   const [draftStrictSectionWords, setDraftStrictSectionWords] = useState(outlineWordControlOptions.strictSectionWords);
   const [wordControlBusy, setWordControlBusy] = useState(false);
+  const [draftKnowledgeDocumentIds, setDraftKnowledgeDocumentIds] = useState<string[]>(referenceKnowledgeDocumentIds);
+  const [knowledgeSearch, setKnowledgeSearch] = useState('');
+  const [expandedKnowledgeFolderIds, setExpandedKnowledgeFolderIds] = useState<Set<string>>(new Set());
+  const [knowledgeIndex, setKnowledgeIndex] = useState<KnowledgeBaseIndex>(emptyKnowledgeIndex);
+  const [loadingKnowledge, setLoadingKnowledge] = useState(false);
+  const [knowledgeSaving, setKnowledgeSaving] = useState(false);
   const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
@@ -166,6 +190,7 @@ function GenerationSettingsPage({
   const wordControlRequiresRegeneration = Boolean(
     hasOutlineData && !areWordControlOptionsEqual(normalizedDraftOptions, outlineWordControlSnapshot),
   );
+  const knowledgeSelectionDisabled = loadingKnowledge || knowledgeSaving || outlineConfigLocked;
 
   useEffect(() => {
     setDraftOutlineExpansionMode(outlineExpansionMode);
@@ -177,6 +202,17 @@ function GenerationSettingsPage({
     setDraftSectionWords(formatWordCountDraft(outlineWordControlOptions.sectionWords));
     setDraftStrictSectionWords(outlineWordControlOptions.strictSectionWords);
   }, [outlineWordControlOptions]);
+
+  useEffect(() => {
+    setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
+  }, [referenceKnowledgeDocumentIds]);
+
+  useEffect(() => {
+    if (activeTab !== 'knowledge') return;
+    setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
+    setKnowledgeSearch('');
+    void loadKnowledgeIndex();
+  }, [activeTab, referenceKnowledgeDocumentIds]);
 
   const resolveDroppedFilePaths = (files: FileList) =>
     Array.from(files).map((file) => window.yibiao?.file.getPathForFile(file) || '').filter(Boolean);
@@ -298,6 +334,187 @@ function GenerationSettingsPage({
     }
   };
 
+  // 加载知识库索引，供生成任务选择参考文档。
+  const loadKnowledgeIndex = async () => {
+    try {
+      setLoadingKnowledge(true);
+      const index = await window.yibiao?.knowledgeBase.list();
+      const nextIndex = index || emptyKnowledgeIndex;
+      setKnowledgeIndex(nextIndex);
+      setExpandedKnowledgeFolderIds(getInitialExpandedKnowledgeFolders(nextIndex));
+    } catch (error) {
+      setKnowledgeIndex(emptyKnowledgeIndex);
+      setExpandedKnowledgeFolderIds(new Set());
+      showToast(error instanceof Error ? error.message : '读取知识库失败', 'error');
+    } finally {
+      setLoadingKnowledge(false);
+    }
+  };
+
+  // 保存目录与正文生成共用的参考知识库。
+  const saveReferenceKnowledgeDocumentIds = async () => {
+    try {
+      setKnowledgeSaving(true);
+      await onReferenceKnowledgeDocumentIdsChange(draftKnowledgeDocumentIds);
+      showToast('参考知识库已保存', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存参考知识库失败', 'error');
+    } finally {
+      setKnowledgeSaving(false);
+    }
+  };
+
+  const toggleKnowledgeDocument = (document: KnowledgeDocument) => {
+    if (document.status !== 'success' || knowledgeSelectionDisabled) return;
+    setDraftKnowledgeDocumentIds((current) => (
+      current.includes(document.id)
+        ? current.filter((id) => id !== document.id)
+        : [...current, document.id]
+    ));
+  };
+
+  const toggleKnowledgeFolder = (folderId: string) => {
+    setExpandedKnowledgeFolderIds((current) => (current.has(folderId) ? new Set() : new Set([folderId])));
+  };
+
+  const selectKnowledgeFolder = (documents: KnowledgeDocument[]) => {
+    if (knowledgeSelectionDisabled) return;
+    const ids = documents.filter((document) => document.status === 'success').map((document) => document.id);
+    setDraftKnowledgeDocumentIds((current) => [...current, ...ids.filter((id) => !current.includes(id))]);
+  };
+
+  const deselectKnowledgeFolder = (documents: KnowledgeDocument[]) => {
+    if (knowledgeSelectionDisabled) return;
+    const ids = new Set(documents.map((document) => document.id));
+    setDraftKnowledgeDocumentIds((current) => current.filter((id) => !ids.has(id)));
+  };
+
+  const removeKnowledgeDocument = (documentId: string) => {
+    if (knowledgeSelectionDisabled) return;
+    setDraftKnowledgeDocumentIds((current) => current.filter((id) => id !== documentId));
+  };
+
+  const clearKnowledgeDocuments = () => {
+    if (knowledgeSelectionDisabled) return;
+    setDraftKnowledgeDocumentIds([]);
+  };
+
+  // 渲染可搜索、按文件夹展开的知识库选择器。
+  const renderKnowledgePicker = () => {
+    const keyword = knowledgeSearch.trim().toLowerCase();
+    const availableDocuments = knowledgeIndex.documents.filter((document) => document.status === 'success');
+    const selectedDocuments = draftKnowledgeDocumentIds
+      .map((documentId) => knowledgeIndex.documents.find((document) => document.id === documentId))
+      .filter((document): document is KnowledgeDocument => Boolean(document));
+    const visibleFolders = knowledgeIndex.folders.flatMap((folder) => {
+      const folderDocuments = availableDocuments.filter((document) => document.folder_id === folder.id);
+      const folderMatched = keyword ? includesKeyword(folder.name, keyword) : false;
+      const documents = keyword
+        ? folderDocuments.filter((document) => folderMatched || includesKeyword(document.file_name, keyword))
+        : folderDocuments;
+      return documents.length ? [{ folder, documents }] : [];
+    });
+    const visibleDocumentCount = visibleFolders.reduce((total, group) => total + group.documents.length, 0);
+
+    return (
+      <section className="outline-generation-config-section outline-knowledge-picker generation-settings-knowledge-section">
+        <div className="outline-generation-config-head">
+          <strong>参考知识库</strong>
+          <span>已选择 {draftKnowledgeDocumentIds.length} 个文档</span>
+        </div>
+        {loadingKnowledge ? (
+          <div className="outline-knowledge-empty">正在读取知识库...</div>
+        ) : !availableDocuments.length ? (
+          <div className="outline-knowledge-empty">暂无已完成的知识库文档，可先到知识库上传并处理完成后再选择。</div>
+        ) : (
+          <div className="outline-knowledge-compact">
+            <div className="outline-knowledge-search-row">
+              <input
+                className="outline-knowledge-search"
+                value={knowledgeSearch}
+                onChange={(event) => setKnowledgeSearch(event.target.value)}
+                disabled={knowledgeSelectionDisabled}
+                placeholder="搜索文件夹或文档"
+              />
+              <span>{keyword ? `匹配 ${visibleDocumentCount} 个文档` : `共 ${availableDocuments.length} 个可用文档`}</span>
+            </div>
+            <div className="outline-knowledge-grid">
+              <div className="outline-knowledge-browser">
+                <div className="outline-knowledge-pane-head">
+                  <strong>知识库</strong>
+                  <span>{visibleFolders.length} 个文件夹</span>
+                </div>
+                <div className="outline-knowledge-folder-list compact">
+                  {visibleFolders.length ? visibleFolders.map(({ folder, documents }) => {
+                    const expanded = keyword ? true : expandedKnowledgeFolderIds.has(folder.id);
+                    const selectedCount = documents.filter((document) => draftKnowledgeDocumentIds.includes(document.id)).length;
+                    return (
+                      <section className="outline-knowledge-folder compact" key={folder.id}>
+                        <div className="outline-knowledge-folder-head compact">
+                          <button type="button" onClick={() => toggleKnowledgeFolder(folder.id)} disabled={Boolean(keyword)} aria-expanded={expanded}>
+                            <span>{expanded ? '▾' : '▸'}</span>
+                            <strong>{folder.name}</strong>
+                          </button>
+                          <small>{documents.length} 个 / 已选 {selectedCount}</small>
+                          <div className="outline-knowledge-folder-actions">
+                            <button type="button" onClick={() => selectKnowledgeFolder(documents)} disabled={knowledgeSelectionDisabled}>全选</button>
+                            <button type="button" onClick={() => deselectKnowledgeFolder(documents)} disabled={knowledgeSelectionDisabled || !selectedCount}>取消</button>
+                          </div>
+                        </div>
+                        {expanded && (
+                          <div className="outline-knowledge-document-list compact">
+                            {documents.map((document) => {
+                              const selected = draftKnowledgeDocumentIds.includes(document.id);
+                              return (
+                                <label className={`outline-knowledge-document compact${selected ? ' is-selected' : ''}`} key={document.id}>
+                                  <input type="checkbox" checked={selected} onChange={() => toggleKnowledgeDocument(document)} disabled={knowledgeSelectionDisabled} />
+                                  <strong title={document.file_name}>{document.file_name}</strong>
+                                  <small>{document.item_count || 0} 条</small>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </section>
+                    );
+                  }) : <div className="outline-knowledge-empty compact">没有匹配的知识库文档</div>}
+                </div>
+              </div>
+              <aside className="outline-knowledge-selected-pane">
+                <div className="outline-knowledge-pane-head">
+                  <strong>本次已选</strong>
+                  <button type="button" onClick={clearKnowledgeDocuments} disabled={knowledgeSelectionDisabled || !draftKnowledgeDocumentIds.length}>清空</button>
+                </div>
+                {selectedDocuments.length ? (
+                  <div className="outline-knowledge-selected-list">
+                    {selectedDocuments.map((document) => (
+                      <div className="outline-knowledge-selected-item" key={document.id}>
+                        <strong title={document.file_name}>{document.file_name}</strong>
+                        <button type="button" onClick={() => removeKnowledgeDocument(document.id)} disabled={knowledgeSelectionDisabled}>移除</button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="outline-knowledge-empty compact">未选择知识库文档</div>
+                )}
+              </aside>
+            </div>
+          </div>
+        )}
+        <div className="generation-settings-save-row">
+          <button
+            type="button"
+            className="primary-action"
+            onClick={() => void saveReferenceKnowledgeDocumentIds()}
+            disabled={knowledgeSelectionDisabled}
+          >
+            {knowledgeSaving ? '正在保存...' : '保存设置'}
+          </button>
+        </div>
+      </section>
+    );
+  };
+
   return (
     <div className="plan-step-body generation-settings-page">
       <section className="generation-settings-shell">
@@ -305,7 +522,7 @@ function GenerationSettingsPage({
           <div>
             <span className="section-kicker">STEP 02</span>
             <strong>生成设置</strong>
-            <p>在生成前集中设置投标文件的内容范围、篇幅、插图、写法和最终样式。</p>
+            <p>在生成前集中设置投标文件的内容范围、参考知识、篇幅、插图、写法和最终样式。</p>
           </div>
         </header>
 
@@ -365,9 +582,8 @@ function GenerationSettingsPage({
           ) : activeTab === 'existing-plan' ? (
             <div className="generation-settings-stack">
               <UploadRow
-                index="01"
                 title="已有技术方案"
-                note="可选，仅保留一份"
+                className="generation-settings-existing-upload"
                 actions={(
                   <button type="button" className="primary-action" onClick={() => void importOriginalPlan()} disabled={originalPlanBusy}>
                     {originalPlanBusy ? '处理中...' : originalPlanFile ? '替换' : '上传'}
@@ -431,6 +647,8 @@ function GenerationSettingsPage({
                 </section>
               )}
             </div>
+          ) : activeTab === 'knowledge' ? (
+            renderKnowledgePicker()
           ) : activeTab === 'length' ? (
             <section className="outline-word-control-section generation-settings-length-section">
               <div className="content-generation-config-row">

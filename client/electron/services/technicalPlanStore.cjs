@@ -2241,10 +2241,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     return saved;
   }
 
-  function saveOutlineConfig({ referenceKnowledgeDocumentIds } = {}) {
-    saveGenerationConfig({ referenceKnowledgeDocumentIds });
-  }
-
   // 保存用户确认后的一级目录待扩展选择，不写入正式目录树。
   function saveOutlineSelection({ taskId, items, selectedIds } = {}) {
     const task = loadTask('outline-generation');
@@ -2803,7 +2799,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     updateStep,
     setAgentWorkspaceChangeListener,
     saveBidAnalysisConfig,
-    saveOutlineConfig,
     saveOutlineSelection,
     saveOutline,
     saveGlobalFactsConfig,
