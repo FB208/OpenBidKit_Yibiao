@@ -14,7 +14,7 @@ export const appMenuItems: AppMenuItem[] = [
     children: [
       {
         id: 'technical-plan',
-        label: '标书生成',
+        label: '投标文件',
         description: '根据招标文件生成技术方案、商务标等投标内容，或导入已有方案继续优化扩写',
         icon: 'document',
       },
