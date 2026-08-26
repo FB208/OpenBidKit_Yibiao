@@ -4,8 +4,9 @@
 
 | Sponsors | Description |
 | --- | --- |
-| ![APIMart_AI](./screenshots/APIMart_AI) | Thanks to APIMart for sponsoring this project! APIMart is a low-cost API platform for AI image & video generation — GPT-Image-2 from $0.006/image, 160+ images per dollar. One async API covers both image and video: submit a task, get an ID, fetch results via polling or callback. Batch tens of thousands of images without timeouts, switch models without changing code. Pay-as-you-go with no monthly fee — [sign up here](https://go.apimart.ai/gh-openbidkit_yibiao) to get started. |
-
+| ![APIMart_AI](./screenshots/APIMart_AI.jpg) | Thanks to APIMart for sponsoring this project! APIMart is a low-cost API platform for AI image & video generation — GPT-Image-2 from $0.006/image, 160+ images per dollar. One async API covers both image and video: submit a task, get an ID, fetch results via polling or callback. Batch tens of thousands of images without timeouts, switch models without changing code. Pay-as-you-go with no monthly fee — [sign up here](https://s.markup.com.cn/apimart) to get started. |
+| ![JLaudeAPI](./screenshots/JLaudeAPI.png) | Thanks to JLaudeAPI for sponsoring this project!JLaudeAPI is a trusted AI API aggregation platform offering GPT, Claude, Gemini, Grok, leading Chinese LLMs, and mainstream image/video generation models with reliable access.It also provides an enterprise-grade management panel, transparent GPT-Pro account status, invoicing, and corporate payment support—built for business development and production use.Get started via this [registration link](https://s.markup.com.cn/jl).
+ |
 
 # Yibiao Bid Toolbox - AI Bid Proposal Writing Assistant
 
