@@ -46,7 +46,7 @@ const CONTENT_PLAN_VERSION = 5;
 const CONTENT_PLANNING_OUTPUT_FILE = '正文编排目录.json';
 const CONTENT_PLANNING_KNOWLEDGE_FILE = '参考知识库轻量条目.json';
 const CONTENT_PLANNING_BID_INFO_FILE = '招标文件关键信息.md';
-const CONTENT_MODES = ['ai-generate', 'template-fill', 'point-to-point', 'other'];
+const CONTENT_MODES = ['ai-generate', 'template-fill', 'directory-generate', 'manual-fill', 'other'];
 const TABLE_REQUIREMENT_LABELS = {
   none: '不要',
   light: '少量',
@@ -85,7 +85,7 @@ function createContentPlanningNodeSchema(level, root = false) {
     id: { type: 'string', minLength: 1 },
     title: { type: 'string', minLength: 1 },
     description: { type: 'string', minLength: 1 },
-    ...(root ? { attr: { type: 'string', enum: ['通用', '商务', '资信', '技术', '其他'] } } : {}),
+    ...(root ? { attr: { type: 'string', enum: ['通用', '商务/资信', '技术', '其他', '目录', '报价', '业绩'] } } : {}),
   };
   const baseRequired = ['id', 'title', 'description', ...(root ? ['attr'] : [])];
   const aiLeafSchema = {

@@ -13,7 +13,7 @@ function createTemplateExtractionPrompt(sourcePaths = []) {
 
 任务：根据用户已确认且处理模式为“模板填写”的一级目录，从招标 Word 原件抽取投标模版，识别模版中需要填写的位置，并写入 Word 内容控件和字段清单。本任务只提取和标记，不生成任何字段值，也不填写模版。
 
-当前 Session 从一级目录生成任务分叉而来。此前生成的 outline.json 只是待用户选择的候选结果；${TEMPLATE_OUTLINE_INPUT_FILE} 只包含最终确认的“模板填写”目录，本任务必须只以该文件作为抽取范围依据，不得处理点对点应答表、AI 生成或其他模式目录。
+当前 Session 从一级目录生成任务分叉而来。此前生成的 outline.json 只是待用户选择的候选结果；${TEMPLATE_OUTLINE_INPUT_FILE} 只包含最终确认的“模板填写”目录，本任务必须只以该文件作为抽取范围依据，不得处理目录生成、人工填写、AI 生成或其他模式目录。
 
 程序固定绑定的招标 Word 原件：
 ${sourceList}

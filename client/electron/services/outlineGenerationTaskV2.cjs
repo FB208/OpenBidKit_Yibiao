@@ -13,7 +13,14 @@ const LEAF_ALLOCATION_CONTEXT_FILE = 'leaf-allocation-context.json';
 const OUTLINE_REVIEW_FILE = 'outline-review.json';
 const OUTLINE_REVIEW_CONTEXT_FILE = 'outline-review-context.json';
 const AI_CONTENT_MODE = 'ai-generate';
-const CONTENT_MODES = ['ai-generate', 'template-fill', 'point-to-point', 'other'];
+const OUTLINE_ATTRIBUTES = ['通用', '商务/资信', '技术', '其他', '目录', '报价', '业绩'];
+const CONTENT_MODES = ['ai-generate', 'template-fill', 'directory-generate', 'manual-fill', 'other'];
+const ATTRIBUTE_CONTENT_MODE_RULES = {
+  '商务/资信': 'template-fill',
+  目录: 'directory-generate',
+  报价: 'manual-fill',
+  业绩: 'template-fill',
+};
 
 function createDirectoryNodeSchema(level, root = false) {
   const baseProperties = {
@@ -21,7 +28,7 @@ function createDirectoryNodeSchema(level, root = false) {
     title: { type: 'string', minLength: 1 },
     description: { type: 'string', minLength: 1 },
     ...(root ? {
-      attr: { type: 'string', enum: ['通用', '商务', '资信', '技术', '其他'] },
+      attr: { type: 'string', enum: OUTLINE_ATTRIBUTES },
       branch_id: { type: 'string', minLength: 1 },
     } : {}),
   };
@@ -35,6 +42,12 @@ function createDirectoryNodeSchema(level, root = false) {
       content_mode: { type: 'string', enum: CONTENT_MODES },
       content_mode_note: { type: 'string' },
     },
+    ...(root ? {
+      allOf: Object.entries(ATTRIBUTE_CONTENT_MODE_RULES).map(([attr, contentMode]) => ({
+        if: { properties: { attr: { const: attr } }, required: ['attr'] },
+        then: { properties: { content_mode: { const: contentMode } } },
+      })),
+    } : {}),
   };
   if (level < 6) {
     const branchSchema = {
@@ -516,10 +529,10 @@ function createInitialPrompt(taskInstruction, { standaloneTechnical = false } = 
     : '我们的目标是为编写响应文件/投标文件准备一级目录。';
   const modeRequirements = standaloneTechnical
     ? `6. 本模式只生成技术文件独立分册：只能保留适合展开技术正文的评分大项，attr 必须为“技术”，content_mode 必须为 ai-generate。
-7. 每个一级目录直接对应一个技术评分大项，并保持评分大项的原顺序和正式表述；不得创建“技术方案”“项目管理方案”“监理大纲”“监理大纲（暗标）”“施工组织设计”“技术标”等外层总目录，也不得加入商务、资信、投标函、授权委托书等非技术章节。
+7. 每个一级目录直接对应一个技术评分大项，并保持评分大项的原顺序和正式表述；不得创建“技术方案”“项目管理方案”“监理大纲”“监理大纲（暗标）”“施工组织设计”“技术标”等外层总目录，也不得加入商务/资信、投标函、授权委托书等非技术章节。
 8. 完整结构示例：{"outline":[{"id":"1","title":"评分大项一","description":"评分大项一的技术响应范围","attr":"技术","content_mode":"ai-generate"},{"id":"2","title":"评分大项二","description":"评分大项二的技术响应范围","attr":"技术","content_mode":"ai-generate"}]}。`
-    : `6. 每个一级目录当前都是叶子节点，必须根据它后续应采用的内容处理方式填写 content_mode：技术方案正文使用 ai-generate；需要从招标文件提取并套用表格或格式的商务、资信材料使用 template-fill；需要在全部正文完成并确定 Word 页码后回填的点对点应答表使用 point-to-point；无法归类的特殊内容使用 other，并在 content_mode_note 说明原因。
-7. 完整结构示例：{"outline":[{"id":"1","title":"技术方案","description":"技术方案目录说明","attr":"技术","content_mode":"ai-generate"},{"id":"2","title":"特殊资料","description":"特殊资料目录说明","attr":"其他","content_mode":"other","content_mode_note":"说明特殊处理原因"}]}。content_mode_note 只在 content_mode=other 且确有说明时填写。`;
+    : `6. 每个一级目录当前都是叶子节点，必须根据属性和后续处理方式填写 content_mode：技术方案正文使用 ai-generate；attr=商务/资信或业绩时必须使用 template-fill；attr=目录时必须使用 directory-generate；attr=报价时必须使用 manual-fill；无法归类的特殊内容使用 other，并在 content_mode_note 说明原因。
+7. 完整结构示例：{"outline":[{"id":"1","title":"投标文件目录","description":"投标文件目录说明","attr":"目录","content_mode":"directory-generate"},{"id":"2","title":"技术方案","description":"技术方案目录说明","attr":"技术","content_mode":"ai-generate"},{"id":"3","title":"投标报价","description":"投标报价目录说明","attr":"报价","content_mode":"manual-fill"}]}。content_mode_note 只在 content_mode=other 且确有说明时填写。`;
   return `请只在当前工作目录内工作。
 
 任务：
@@ -533,7 +546,7 @@ ${taskInstruction}
 2. 一级目录 id 是从 1 开始且不重复的连续序号字符串。
 3. title 必须是可直接用于投标文件目录的正式标题，不得包含“附件1”“附件一”“第一章”等编号或前缀。
 4. description 是目录说明。
-5. attr 必须从“通用”“商务”“资信”“技术”“其他”中选择。
+5. attr 必须从“通用”“商务/资信”“技术”“其他”“目录”“报价”“业绩”中选择。
 ${modeRequirements}
 8. ${OUTLINE_OUTPUT_FILE} 必须是纯 JSON，不包含 Markdown 代码块或解释文字。
 9. 程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema。写入后调用 json-validation，只传 {"file_path":"${OUTLINE_OUTPUT_FILE}"}；校验失败后必须先修改文件，再重新校验。`;
@@ -562,7 +575,7 @@ function createScorePlanningPrompt({ standaloneTechnical = false } = {}) {
   const placementInstruction = standaloneTechnical
     ? `4. 当前采用“技术文件独立成册”：${OUTLINE_OUTPUT_FILE} 中每个一级根节点本身就应对应一个技术评分大项。每个根节点建立一个 branch，score_item_level 固定为 1，mappings 只填写与该根标题对应的评分大项，target_title 必须与 root_title 完全一致；不得再创建“技术方案”“项目管理方案”“监理大纲”“监理大纲（暗标）”“施工组织设计”“技术标”等外层分支。
 5. 一级根节点与评分大项默认严格一一对应；发现缺失、重复、合并或顺序不一致时，必须作为一级目录调整向用户说明并取得批准。detail_points 只用于后续生成根节点以下的目录。`
-    : `4. 判断技术方案位于哪些目录分支，以及每个分支内评分项对应节点应统一处于哪个层级。不同分支可以使用不同层级，不预设必须是二级目录。优先选择 attr=技术且 content_mode=ai-generate 的一级目录；template-fill、point-to-point 和 other 是特殊处理叶子，不得作为普通技术方案分支展开，除非先向用户说明并取得调整批准。
+    : `4. 判断技术方案位于哪些目录分支，以及每个分支内评分项对应节点应统一处于哪个层级。不同分支可以使用不同层级，不预设必须是二级目录。优先选择 attr=技术且 content_mode=ai-generate 的一级目录；template-fill、directory-generate、manual-fill 和 other 是特殊处理叶子，不得作为普通技术方案分支展开，除非先向用户说明并取得调整批准。
 5. 默认每个评分项对应一个独立同层级节点，节点标题与评分大项基本一一对应；detail_points 用于后续生成更下级目录。`;
   const planExample = standaloneTechnical
     ? `{"branches":[{"branch_id":"B1","root_id":"1","root_title":"评分大项一","score_item_level":1,"mappings":[{"requirement_id":"R1","target_title":"评分大项一"}]}],"extra_titles":[],"allow_root_changes":false}`
@@ -602,7 +615,7 @@ function createChildrenPrompt({ hasOriginalPlan, originalOnly, targetLeafCount, 
     : '';
   const outlineExample = standaloneTechnical
     ? `{"outline":[{"id":"1","title":"评分大项一","description":"评分大项说明","attr":"技术","branch_id":"B1","children":[{"id":"1.1","title":"响应内容一","description":"具体响应内容","content_mode":"ai-generate"},{"id":"1.2","title":"响应内容二","description":"具体响应内容","content_mode":"ai-generate"}]}]}`
-    : `{"outline":[{"id":"1","title":"技术应答表","description":"应答表说明","attr":"技术","content_mode":"point-to-point"},{"id":"2","title":"技术方案","description":"技术方案说明","attr":"技术","branch_id":"B1","children":[{"id":"2.1","title":"评分大项","description":"评分大项说明","children":[{"id":"2.1.1","title":"具体方案一","description":"具体方案说明","content_mode":"ai-generate"},{"id":"2.1.2","title":"具体方案二","description":"具体方案说明","content_mode":"ai-generate"}]},{"id":"2.2","title":"另一评分大项","description":"评分大项说明","content_mode":"ai-generate"}]}]}`;
+    : `{"outline":[{"id":"1","title":"投标文件目录","description":"投标文件目录说明","attr":"目录","content_mode":"directory-generate"},{"id":"2","title":"技术方案","description":"技术方案说明","attr":"技术","branch_id":"B1","children":[{"id":"2.1","title":"评分大项","description":"评分大项说明","children":[{"id":"2.1.1","title":"具体方案一","description":"具体方案说明","content_mode":"ai-generate"},{"id":"2.1.2","title":"具体方案二","description":"具体方案说明","content_mode":"ai-generate"}]},{"id":"2.2","title":"另一评分大项","description":"评分大项说明","content_mode":"ai-generate"}]}]}`;
   return `请继续使用当前上下文，为 ${OUTLINE_OUTPUT_FILE} 生成完整目录。生成方式和处理顺序由你自主决定，但必须严格遵循评分项目录规划。
 
 要求：
@@ -616,7 +629,7 @@ function createChildrenPrompt({ hasOriginalPlan, originalOnly, targetLeafCount, 
 8. 未纳入评分项目录规划的一级目录和分支保持原样，不得增加子目录。
 9. 如果存在参考知识库或原方案，只能用于完善评分项对应节点的下级结构，不得改变评分项映射或引入未经批准的同层级大项。
 10. ${leafInstruction}${LEAF_ALLOCATION_FILE} 中 allocations 使用 branch_id 指向技术分支，不使用可能变化的 root_id。${standaloneLeafInstruction}评分项完整对应和目录质量优先于数量目标。
-11. 每个最终叶子节点必须填写 content_mode：技术方案正文为 ai-generate；从招标文件提取后按模板填写为 template-fill；需要在 Word 页码确定后回填为 point-to-point；其他特殊内容为 other，并用 content_mode_note 说明。父节点不得包含 content_mode 或 content_mode_note。
+11. 每个最终叶子节点必须填写 content_mode：技术方案正文为 ai-generate；商务/资信和业绩材料为 template-fill；投标文件目录为 directory-generate；报价为 manual-fill；其他特殊内容为 other，并用 content_mode_note 说明。父节点不得包含 content_mode 或 content_mode_note。
 12. 任意非叶子节点的 children 至少包含两个节点，不要创建只有一个子节点的冗余层级。
 13. 目录层级可变，但最多六级；一级目录包含 attr，子目录不包含 attr。所有 id 必须使用层级点号编号：一级为 1、2，二级为 2.1、2.2，三级为 2.1.1、2.1.2，后续层级依此类推，并与实际父子位置一致。
 14. title 只写纯标题，不包含章节编号或 Markdown 标记。
@@ -635,7 +648,7 @@ function createLeafAdjustmentPrompt(targetLeafCount, actualLeafCount) {
 根据本轮 ask-user 回答处理：
 1. 用户选择“接受当前结果”时，不要修改 ${OUTLINE_OUTPUT_FILE}。
 2. 用户选择“允许 Agent 自行调整”或“自定义需求”时，必须继续遵循 ${SCORE_DIRECTORY_PLAN_FILE}：不得删除、移动或改变评分项对应节点的目标层级，不得新增未经批准的同层级大项；优先调整评分项节点下面的更深层目录。
-3. 只通过合理调整 ai-generate 叶子的目录结构满足数量目标，不得为了凑数把 template-fill、point-to-point 或 other 改成 ai-generate，也不得改变非 AI 叶子的处理模式。
+3. 只通过合理调整 ai-generate 叶子的目录结构满足数量目标，不得为了凑数把 template-fill、directory-generate、manual-fill 或 other 改成 ai-generate，也不得改变非 AI 叶子的处理模式。
 4. 调整后仍须保持完整根结构 {"outline":[一级目录节点]}，id 必须使用与父子位置一致的层级点号编号；技术一级目录必须保留 ${SCORE_DIRECTORY_PLAN_FILE} 中对应的 branch_id，不能因增删、移动或重新编号而改变；父节点只含 children，不含 content_mode，叶子节点只含 content_mode，不含 children。
 5. 不要机械增加重复、空泛或近义目录。程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema；完成调整后覆盖写回该文件，并调用 json-validation 校验，只传 file_path；校验失败后必须先修改文件，再重新校验。`;
 }
@@ -900,7 +913,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     const generated = readJson(initialResult.output_content, OUTLINE_OUTPUT_FILE);
     const items = generated.outline || [];
     const defaultSelectedIds = standaloneBusiness
-      ? items.filter((item) => item.content_mode === 'template-fill').map((item) => item.id)
+      ? items.filter((item) => ['template-fill', 'directory-generate', 'manual-fill'].includes(item.content_mode)).map((item) => item.id)
       : standaloneTechnical
         ? items.filter((item) => item.attr === '技术').map((item) => item.id)
         : items.map((item) => item.id);

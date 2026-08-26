@@ -49,7 +49,8 @@ const statusLabels: Record<TreeStatus, string> = {
 
 const pendingModeDescriptions: Record<Exclude<OutlineContentMode, 'ai-generate'>, string> = {
   'template-fill': '该小节已标记为模板填写，后续将从招标文件提取并填充内容。',
-  'point-to-point': '该小节已标记为点对点应答表，后续将在正文完成并确定 Word 页码后回填。',
+  'directory-generate': '该小节已标记为目录生成，不进入 AI 正文生成流程。',
+  'manual-fill': '该小节已标记为人工填写，请在导出后补充内容。',
   other: '该小节采用其他处理模式，暂不进入 AI 正文生成流程。',
 };
 
@@ -273,8 +274,8 @@ function ContentEditPage({
   const modeCounts = allLeaves.reduce<Record<OutlineContentMode, number>>((counts, item) => {
     if (item.content_mode) counts[item.content_mode] += 1;
     return counts;
-  }, { 'ai-generate': 0, 'template-fill': 0, 'point-to-point': 0, other: 0 });
-  const pendingCount = modeCounts['template-fill'] + modeCounts['point-to-point'] + modeCounts.other;
+  }, { 'ai-generate': 0, 'template-fill': 0, 'directory-generate': 0, 'manual-fill': 0, other: 0 });
+  const pendingCount = modeCounts['template-fill'] + modeCounts['directory-generate'] + modeCounts['manual-fill'] + modeCounts.other;
   const progress = leaves.length ? Math.round((resolvedCount / leaves.length) * 100) : 0;
   const planningTotal = contentStats?.planning_total || leaves.length;
   const planningCompleted = contentStats?.planning_completed || 0;
@@ -893,7 +894,7 @@ function ContentEditPage({
           <span><strong>{leaves.length}</strong> 个 AI 小节</span>
           <span><strong>{completedCount}</strong> 已生成</span>
           {ignoredCount > 0 && <span><strong>{ignoredCount}</strong> 已忽略</span>}
-          <span title={`模板填写 ${modeCounts['template-fill']}，点对点应答表 ${modeCounts['point-to-point']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
+          <span title={`模板填写 ${modeCounts['template-fill']}，目录生成 ${modeCounts['directory-generate']}，人工填写 ${modeCounts['manual-fill']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
           <span><strong>{totalWords}</strong> 字</span>
         </div>
         <div className="content-generation-actions">

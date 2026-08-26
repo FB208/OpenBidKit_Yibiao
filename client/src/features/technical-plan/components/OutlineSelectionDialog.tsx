@@ -14,7 +14,7 @@ interface OutlineSelectionDialogProps {
   onConfirm: (items: OutlineSelectionItem[], selectedIds: string[]) => void;
 }
 
-const outlineAttributes: OutlineAttribute[] = ['通用', '商务', '资信', '技术', '其他'];
+const outlineAttributes: OutlineAttribute[] = ['通用', '商务/资信', '技术', '其他', '目录', '报价', '业绩'];
 const contentModes = Object.keys(OUTLINE_CONTENT_MODE_LABELS) as OutlineContentMode[];
 
 // 展示一级目录候选，并维护本次确认前的属性和选择草稿。

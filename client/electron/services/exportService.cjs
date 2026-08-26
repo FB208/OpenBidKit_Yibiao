@@ -190,8 +190,10 @@ function buildPendingContentModeParagraph(item) {
   let message = '';
   if (item?.content_mode === 'template-fill') {
     message = '待模板填写：后续将从招标文件提取并填充内容。';
-  } else if (item?.content_mode === 'point-to-point') {
-    message = '待点对点应答表回填：将在正文完成并确定 Word 页码后处理。';
+  } else if (item?.content_mode === 'directory-generate') {
+    message = '待目录生成：请在导出后生成或更新目录。';
+  } else if (item?.content_mode === 'manual-fill') {
+    message = '待人工填写：请在导出后补充内容。';
   } else if (item?.content_mode === 'other') {
     message = `待处理：${String(item?.content_mode_note || '').trim() || '该小节采用其他特殊处理模式。'}`;
   }

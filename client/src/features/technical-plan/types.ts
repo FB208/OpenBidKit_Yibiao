@@ -11,7 +11,7 @@ export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'e
 export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'section-word-adjusting' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'final-section-word-adjusting' | 'total-word-adjusting' | 'illustration-planning' | 'illustration-generating' | 'done';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 export type SaveOutlineReason = 'sort' | 'edit' | 'delete' | 'add-root' | 'add-child' | 'replace';
-export type OutlineAttribute = '通用' | '商务' | '资信' | '技术' | '其他';
+export type OutlineAttribute = '通用' | '商务/资信' | '技术' | '其他' | '目录' | '报价' | '业绩';
 export type GlobalFactsMode = 'fabricate' | 'omit' | 'placeholder';
 
 export interface SaveOutlineRequest {

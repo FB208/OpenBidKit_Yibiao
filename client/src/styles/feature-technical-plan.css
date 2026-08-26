@@ -3915,7 +3915,8 @@
 }
 
 .outline-content-mode-badge.is-template-fill,
-.outline-content-mode-badge.is-point-to-point {
+.outline-content-mode-badge.is-directory-generate,
+.outline-content-mode-badge.is-manual-fill {
   color: #9a5b13;
   background: rgba(245, 158, 11, 0.1);
   border-color: rgba(245, 158, 11, 0.2);
