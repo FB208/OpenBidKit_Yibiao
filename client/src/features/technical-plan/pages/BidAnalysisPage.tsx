@@ -7,6 +7,7 @@ import BidSectionSelectorDialog from '../components/BidSectionSelectorDialog';
 import type { BackgroundTaskState, BidAnalysisMode, BidAnalysisTasks, BidAnalysisTaskState, BidSectionExtractionStatus, BidSectionMode, DetectedBidSection, TechnicalPlanState } from '../types';
 
 interface BidAnalysisPageProps {
+  stepNumber: string;
   hasTenderFile: boolean;
   mode: BidAnalysisMode;
   selectedTaskIds: string[];
@@ -197,6 +198,7 @@ function JsonResultTable({ content }: { content: string }) {
 }
 
 function BidAnalysisPage({
+  stepNumber,
   hasTenderFile,
   mode,
   selectedTaskIds,
@@ -567,7 +569,7 @@ function BidAnalysisPage({
     <div className="plan-step-body bid-analysis-page">
       <section className="bid-analysis-command-bar">
         <div>
-          <span className="section-kicker">STEP 02</span>
+          <span className="section-kicker">STEP {stepNumber}</span>
           <strong>招标文件解析</strong>
           <p>并发解析招标文件，全部选中解析项结束后进入目录生成。</p>
         </div>

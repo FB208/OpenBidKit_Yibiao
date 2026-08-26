@@ -3,7 +3,7 @@ import type { DuplicateCheckWorkspacePatch, DuplicateCheckWorkspaceState, FileSe
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelInfoResult, ModelListResult, UpdateChannel } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspacePatch, RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
-import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
+import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../../features/technical-plan/types';
 import type { FeasibilityProjectInfo, FeasibilityReportState, FeasibilityReportStep, FeasibilitySaveOutlineRequest, FeasibilitySourceFile } from '../../features/feasibility-report/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
 import type { OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from './outline';
@@ -608,14 +608,12 @@ export interface YibiaoBridge {
       message?: string;
       markdown?: string;
     }>;
+    removeOriginalPlanDocument: () => Promise<{ success: boolean; message?: string }>;
     checkBidSections: () => Promise<{ hasMultiple: boolean; totalDeclared?: number | null }>;
     selectBidSection: (selectedSection: DetectedBidSection) => Promise<{ success: boolean; message?: string; markdown: string }>;
     readTenderMarkdown: () => Promise<string>;
     readTenderSourceMarkdown: (sourceId: string) => Promise<string>;
-    readOriginalPlanMarkdown: () => Promise<string>;
     updateStep: (step: TechnicalPlanStep) => Promise<void>;
-    setWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<void>;
-    switchWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<void>;
     saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode }) => Promise<void>;
     saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; outlineMode?: OutlineMode; outlineExpansionMode?: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<void>;
     saveOutlineSelection: (payload: SaveOutlineSelectionRequest) => Promise<{ success: boolean }>;

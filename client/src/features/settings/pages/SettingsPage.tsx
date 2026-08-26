@@ -3,7 +3,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppSwitch, DetailHelpLink, FloatingToolbar, InlineSpinner, InputWithAction, OfflineLicenseActivationDialog, useAutoAnswer, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelRatio, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelRatio, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'components' | 'agent' | 'about';
@@ -42,23 +42,11 @@ const updateChannelOptions: Array<{ value: UpdateChannel; label: string; descrip
   { value: 'atomgit', label: 'AtomGit', description: '使用 AtomGit Release 检查和下载更新' },
 ];
 
-const defaultAgentModeScenarios: AgentModeScenariosConfig = {
-  existing_plan_expansion_original_outline_extraction: true,
-};
-
 function normalizeUpdateChannel(value?: string): UpdateChannel {
   if (value === 'cloudflare' || value === 'atomgit') {
     return value;
   }
   return 'atomgit';
-}
-
-function normalizeAgentModeScenarios(value?: Partial<AgentModeScenariosConfig>): AgentModeScenariosConfig {
-  return {
-    existing_plan_expansion_original_outline_extraction: value?.existing_plan_expansion_original_outline_extraction === undefined
-      ? defaultAgentModeScenarios.existing_plan_expansion_original_outline_extraction
-      : Boolean(value.existing_plan_expansion_original_outline_extraction),
-  };
 }
 
 function getLicenseSourceLabel(status: LicenseRuntimeStatus | null) {
@@ -604,7 +592,6 @@ const initialState: SettingsPageState = {
     mermaid_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
     html_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
   },
-  agentModeScenarios: { ...defaultAgentModeScenarios },
   general: {
     developer_mode: false,
     developer_token_stats_auto_open: false,
@@ -708,7 +695,6 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         imageModel: activeImageProfile,
         imageModelProfiles,
         components: normalizeComponentsState(config.components),
-        agentModeScenarios: normalizeAgentModeScenarios(config.agent_mode_scenarios),
         general: {
           developer_mode: Boolean(config.developer_mode),
           developer_token_stats_auto_open: Boolean(config.developer_token_stats_auto_open),
@@ -737,16 +723,12 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     [state.imageModel.provider]: imageProfileFromState(state.imageModel),
   });
 
-  const createClientConfig = (options: { includeAgentSettings?: boolean } = {}): ClientConfig => {
+  const createClientConfig = (options: { includeAgentAutoAnswer?: boolean } = {}): ClientConfig => {
     const textModelProfiles = getCurrentTextModelProfiles();
     const activeTextProfile = textModelProfiles[state.textModel.provider]
       || normalizeTextModelProfile(state.textModel.provider);
     const imageModelProfiles = getCurrentImageModelProfiles();
     const activeImageProfile = imageModelProfiles[state.imageModel.provider];
-    const persistedAgentModeScenarios = savedConfig
-      ? normalizeAgentModeScenarios(savedConfig.agent_mode_scenarios)
-      : state.agentModeScenarios;
-
     return {
       text_model_provider: state.textModel.provider,
       text_model_profiles: textModelProfiles,
@@ -762,8 +744,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       image_model: activeImageProfile,
       image_model_profiles: imageModelProfiles,
       components: componentsFromState(state.components),
-      agent_mode_scenarios: options.includeAgentSettings ? state.agentModeScenarios : persistedAgentModeScenarios,
-      ...(options.includeAgentSettings
+      ...(options.includeAgentAutoAnswer
         ? { agent_auto_answer_enabled: agentAutoAnswerDraft }
         : savedConfig ? { agent_auto_answer_enabled: Boolean(savedConfig.agent_auto_answer_enabled) } : {}),
       update_channel: state.general.update_channel,
@@ -923,16 +904,6 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         ...prev.general,
         gpu_hardware_acceleration_enabled: enabled,
         gpu_hardware_acceleration_configured: true,
-      },
-    }));
-  };
-
-  const updateAgentModeScenario = (key: keyof AgentModeScenariosConfig, enabled: boolean) => {
-    setState((prev) => ({
-      ...prev,
-      agentModeScenarios: {
-        ...prev.agentModeScenarios,
-        [key]: enabled,
       },
     }));
   };
@@ -1439,8 +1410,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
 
     if (activeTab === 'agent') {
-      return JSON.stringify(state.agentModeScenarios) !== JSON.stringify(normalizeAgentModeScenarios(savedConfig.agent_mode_scenarios))
-        || agentAutoAnswerDraft !== Boolean(savedConfig.agent_auto_answer_enabled);
+      return agentAutoAnswerDraft !== Boolean(savedConfig.agent_auto_answer_enabled);
     }
 
     return false;
@@ -1545,7 +1515,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       return;
     }
     if (activeTab === 'agent') {
-      await saveClientConfig(createClientConfig({ includeAgentSettings: true }));
+      await saveClientConfig(createClientConfig({ includeAgentAutoAnswer: true }));
     }
   };
 
@@ -2303,17 +2273,6 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 <span>开启后，需要确认的弹窗会倒计时 8 秒；期间未修改选项或手动提交时，自动执行默认方案。</span>
               </div>
               <AppSwitch checked={agentAutoAnswerDraft} onCheckedChange={(checked) => setAgentAutoAnswerDraft(checked)} />
-            </label>
-          </div>
-
-          <div className="settings-group-title">在以下场景启用智能体模式</div>
-          <div className="settings-list">
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>已有方案扩写-旧目录提取</strong>
-                <span>开启后，已有方案扩写会把原方案交给智能体完成旧目录提取和补漏；关闭后使用原有分段提取流程。</span>
-              </div>
-              <AppSwitch checked={state.agentModeScenarios.existing_plan_expansion_original_outline_extraction} onCheckedChange={(checked) => updateAgentModeScenario('existing_plan_expansion_original_outline_extraction', checked)} />
             </label>
           </div>
 

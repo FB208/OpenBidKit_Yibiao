@@ -2,6 +2,7 @@ import type { TechnicalPlanState, TechnicalPlanStep } from '../types';
 
 const validSteps: TechnicalPlanStep[] = [
   'document-analysis',
+  'generation-settings',
   'bid-analysis',
   'outline-generation',
   'global-facts',

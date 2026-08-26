@@ -221,7 +221,6 @@ function copyPatchFields(target, source, fields) {
 function createTechnicalPlanUserSettings(state = {}) {
   const settings = {};
   copyPatchFields(settings, state, [
-    'workflowKind',
     'step',
     'tenderFile',
     'tenderFiles',
@@ -1614,6 +1613,11 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     importOriginalPlanDocument(filePaths) {
       return technicalPlanStore.importOriginalPlanDocument(filePaths, {
         beforeCommit: () => cancelTechnicalPlanTasks('原方案已更新，后台任务已取消', originalPlanDownstreamTaskTypes),
+      });
+    },
+    removeOriginalPlanDocument() {
+      return technicalPlanStore.removeOriginalPlanDocument({
+        beforeCommit: () => cancelTechnicalPlanTasks('原方案已移除，后台任务已取消', originalPlanDownstreamTaskTypes),
       });
     },
     async resetRejectionCheck() {

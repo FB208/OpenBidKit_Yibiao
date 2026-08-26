@@ -15,14 +15,8 @@ export const appMenuItems: AppMenuItem[] = [
       {
         id: 'technical-plan',
         label: '生成技术方案',
-        description: '根据招标文件重头编写一份标书',
+        description: '根据招标文件生成新方案，或导入已有方案继续优化扩写',
         icon: 'document',
-      },
-      {
-        id: 'existing-plan-expansion',
-        label: '已有方案扩写',
-        description: '解决人写技术方案太薄的问题，上传写好的方案，进行优化和扩充，遵从原方案真实可落地，又能扩写出厚厚的标书',
-        icon: 'expand',
       },
       {
         id: 'feasibility-report',

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppSwitch, ProgressBar, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, OutlineSelectionItem, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanWorkflowKind } from '../types';
+import type { BackgroundTaskState, OutlineSelectionItem, SaveOutlineRequest, SaveOutlineSelectionRequest } from '../types';
 import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { OutlineContentMode, OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
@@ -13,7 +13,8 @@ import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
 import OutlineSelectionDialog from '../components/OutlineSelectionDialog';
 
 interface OutlineEditPageProps {
-  workflowKind: TechnicalPlanWorkflowKind;
+  stepNumber: string;
+  hasOriginalPlan: boolean;
   projectOverview: string;
   outlineMode: OutlineMode;
   outlineExpansionMode: OutlineExpansionMode;
@@ -334,7 +335,8 @@ function includesKeyword(value: string, keyword: string) {
 }
 
 function OutlineEditPage({
-  workflowKind,
+  stepNumber,
+  hasOriginalPlan,
   projectOverview,
   outlineMode,
   outlineExpansionMode,
@@ -397,7 +399,6 @@ function OutlineEditPage({
   const hasOutlineSelection = Boolean(outlineSelection?.items?.length);
   const awaitingOutlineSelection = Boolean(taskRunning && hasOutlineSelection && !outlineSelection?.confirmed);
   const generating = startingOutline || taskRunning;
-  const isExpansionWorkflow = workflowKind === 'existing-plan-expansion';
   const knowledgePickingDisabled = generating;
   const contentMutationLocked = contentTaskStatus === 'running' || contentTaskStatus === 'pausing' || contentTaskStatus === 'paused';
   const outlineMutationLocked = generating || contentMutationLocked || savingSort || aiAdjustmentRunning;
@@ -439,7 +440,7 @@ function OutlineEditPage({
     strictSectionWords: parsedDraftSectionWords > 0 && draftStrictSectionWords,
   };
   const wordControlRequiresRegeneration = Boolean(outlineData && !areWordControlOptionsEqual(normalizedDraftOptions, outlineWordControlSnapshot));
-  const outlineModeRequiresRegeneration = Boolean(outlineData && !isExpansionWorkflow && draftOutlineMode !== outlineMode);
+  const outlineModeRequiresRegeneration = Boolean(outlineData && !hasOriginalPlan && draftOutlineMode !== outlineMode);
 
   const initializeWordControlDraft = () => {
     setDraftMinimumWords(formatWordCountDraft(outlineWordControlOptions.minimumWords));
@@ -518,12 +519,12 @@ function OutlineEditPage({
     }
 
     setDraftOutlineMode(outlineMode === 'standalone-technical' ? 'standalone-technical' : 'response-file');
-    setDraftOutlineExpansionMode(isExpansionWorkflow ? outlineExpansionMode : 'ai-complement');
+    setDraftOutlineExpansionMode(hasOriginalPlan ? outlineExpansionMode : 'ai-complement');
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
     initializeWordControlDraft();
     setKnowledgeSearch('');
     void loadKnowledgeIndex();
-  }, [generationDialogOpen, isExpansionWorkflow, outlineMode, outlineExpansionMode, outlineWordControlOptions, referenceKnowledgeDocumentIds]);
+  }, [generationDialogOpen, hasOriginalPlan, outlineMode, outlineExpansionMode, outlineWordControlOptions, referenceKnowledgeDocumentIds]);
 
   const loadKnowledgeIndex = async () => {
     try {
@@ -556,7 +557,7 @@ function OutlineEditPage({
     }
 
     setDraftOutlineMode(outlineMode === 'standalone-technical' ? 'standalone-technical' : 'response-file');
-    setDraftOutlineExpansionMode(isExpansionWorkflow ? outlineExpansionMode : 'ai-complement');
+    setDraftOutlineExpansionMode(hasOriginalPlan ? outlineExpansionMode : 'ai-complement');
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
     initializeWordControlDraft();
     setKnowledgeSearch('');
@@ -587,8 +588,8 @@ function OutlineEditPage({
       setSavingOutlineConfig(true);
       await onOutlineConfigChange({
         referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
-        outlineMode: isExpansionWorkflow ? 'aligned' : draftOutlineMode,
-        outlineExpansionMode: isExpansionWorkflow ? draftOutlineExpansionMode : 'ai-complement',
+        outlineMode: hasOriginalPlan ? 'aligned' : draftOutlineMode,
+        outlineExpansionMode: hasOriginalPlan ? draftOutlineExpansionMode : 'ai-complement',
         wordControlOptions,
       });
       applyNormalizedWordControlDraft(wordControlOptions);
@@ -617,8 +618,8 @@ function OutlineEditPage({
       setStartingOutline(true);
       setLocalStartAt(startedNow);
       setNowTick(startedNow);
-      const nextOutlineMode: OutlineMode = isExpansionWorkflow ? 'aligned' : draftOutlineMode;
-      const nextOutlineExpansionMode = isExpansionWorkflow ? draftOutlineExpansionMode : 'ai-complement';
+      const nextOutlineMode: OutlineMode = hasOriginalPlan ? 'aligned' : draftOutlineMode;
+      const nextOutlineExpansionMode = hasOriginalPlan ? draftOutlineExpansionMode : 'ai-complement';
       await onOutlineConfigChange({
         referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
         outlineMode: nextOutlineMode,
@@ -633,7 +634,7 @@ function OutlineEditPage({
         word_control_options: wordControlOptions,
       });
       trackConfigUsage({
-        outline_mode: isExpansionWorkflow ? nextOutlineExpansionMode : nextOutlineMode,
+        outline_mode: hasOriginalPlan ? nextOutlineExpansionMode : nextOutlineMode,
         word_control_enabled: wordControlOptions.minimumWords > 0 || wordControlOptions.maximumWords > 0 || wordControlOptions.sectionWords > 0,
         minimum_words: wordControlOptions.minimumWords,
         maximum_words: wordControlOptions.maximumWords,
@@ -1061,7 +1062,7 @@ function OutlineEditPage({
   };
 
   const renderOutlineExpansionModePicker = () => {
-    if (!isExpansionWorkflow) {
+    if (!hasOriginalPlan) {
       return null;
     }
 
@@ -1099,7 +1100,7 @@ function OutlineEditPage({
   };
 
   const renderTechnicalDocumentModePicker = () => {
-    if (isExpansionWorkflow) {
+    if (hasOriginalPlan) {
       return null;
     }
 
@@ -1244,9 +1245,9 @@ function OutlineEditPage({
     <div className="plan-step-body outline-generation-page">
       <section className="outline-command-bar">
         <div>
-          <span className="section-kicker">STEP 03</span>
+          <span className="section-kicker">STEP {stepNumber}</span>
           <strong>目录生成</strong>
-          <p>{isExpansionWorkflow ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `${outlineMode === 'standalone-technical' ? '技术评分大项直接作为一级目录' : '一级目录依据完整响应文件要求生成'}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
+          <p>{hasOriginalPlan ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `${outlineMode === 'standalone-technical' ? '技术评分大项直接作为一级目录' : '一级目录依据完整响应文件要求生成'}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
         </div>
         <div className="outline-command-actions">
           {awaitingOutlineSelection && (
@@ -1414,7 +1415,7 @@ function OutlineEditPage({
                     <small>{selectedItem.content_mode_note}</small>
                   )}
                   {selectedItem.source_requirement_title && (
-                    <small>{isExpansionWorkflow && outlineExpansionMode === 'original-only' ? '来源原方案目录' : '来源响应文件目录'}：{selectedItem.source_requirement_title}</small>
+                    <small>{hasOriginalPlan && outlineExpansionMode === 'original-only' ? '来源原方案目录' : '来源响应文件目录'}：{selectedItem.source_requirement_title}</small>
                   )}
                   <div className="outline-detail-actions">
                     <button type="button" className="primary-action" onClick={() => startEditing(selectedItem)} disabled={outlineMutationLocked || sorting}>编辑</button>

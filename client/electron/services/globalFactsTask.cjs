@@ -30,7 +30,7 @@ function buildGlobalFactsCompletenessRules(mode) {
 6. 当前分段或当前材料只给出要求、没有具体实施方案时，仍须输出该事实项，不得因此返回空结果或跳过该项。
 7. 笼统但正确的承诺口径不是空泛内容，合并与最终整理时不得因不够具体而删除。
 8. 工期、运维期或交货时间等事项若正文需要统一口径，必须保留为事实项；材料没有具体值时使用笼统承诺，不要编造日期或周期，也不要因此省略该项。
-9. 已有方案扩写时，原方案中已有事实必须提取；只对招标、知识库、原方案都没有的具体值使用上述笼统写法，选题仍不得漏项。`;
+9. 已上传原方案时，原方案中已有事实必须提取；只对招标、知识库、原方案都没有的具体值使用上述笼统写法，选题仍不得漏项。`;
   }
   if (mode === 'placeholder') {
     return `事实补全规则（放着我来模式）：
@@ -42,7 +42,7 @@ function buildGlobalFactsCompletenessRules(mode) {
 6. 当前分段或当前材料只给出要求、没有具体实施方案时，仍须输出该事实项，不得因此返回空结果或跳过该项。
 7. 【待填写】占位不是空泛内容，合并与最终整理时不得因不够具体而删除。
 8. 工期、运维期或交货时间等事项若正文需要统一口径，必须保留为事实项；材料没有具体值时使用【待填写】，不要编造日期或周期，也不要因此省略该项。
-9. 已有方案扩写时，原方案中已有事实必须提取；只对招标、知识库、原方案都没有的具体值使用【待填写】，选题仍不得漏项。`;
+9. 已上传原方案时，原方案中已有事实必须提取；只对招标、知识库、原方案都没有的具体值使用【待填写】，选题仍不得漏项。`;
   }
   return '';
 }
@@ -74,7 +74,7 @@ function buildTenderMergeFactValueRules(mode) {
 5. 必须包含工期、运维期或交货时间中的至少一个相关变量；材料没有具体值时使用【待填写】，不要编造日期或周期。`;
   }
   return `4. 资料中已有明确事实值时使用明确值；资料没有明确值但该信息对全文一致性重要时，可以根据项目语境补足一套合理、稳定、不冲突的事实值。
-5. 必须包含工期、运维期或交货时间中的至少一个相关变量；如果分段候选不足，但项目概述或 Step02 关键解析结果中已有明确内容，应补入。`;
+5. 必须包含工期、运维期或交货时间中的至少一个相关变量；如果分段候选不足，但项目概述或招标文件关键解析结果中已有明确内容，应补入。`;
 }
 
 function buildMergeCleanupRule(mode) {
@@ -301,7 +301,7 @@ function normalizeReferenceDocumentIds(storedPlan) {
 
 function loadKnowledgeItems(knowledgeBaseService, documentIds, log) {
   if (!documentIds.length) {
-    log('未选择参考知识库，本次只基于招标文件、Step02 解析结果和目录预设关键信息。', 12);
+    log('未选择参考知识库，本次只基于招标文件解析结果和目录预设关键信息。', 12);
     return [];
   }
   if (!knowledgeBaseService?.readReferences) {
@@ -353,7 +353,7 @@ function formatBidAnalysisFactsForPrompt(storedPlan) {
     formatBidAnalysisFactForPrompt(storedPlan, 'projectInfo', '项目信息'),
     formatBidAnalysisFactForPrompt(storedPlan, 'partAInfo', '甲方信息'),
     formatBidAnalysisFactForPrompt(storedPlan, 'deliveryAndServiceRequirements', '交货和服务要求'),
-  ].filter(Boolean).join('\n\n') || '未提供 Step02 关键解析结果。';
+  ].filter(Boolean).join('\n\n') || '未提供招标文件关键解析结果。';
 }
 
 function getMessagesContentLength(messages) {
@@ -418,7 +418,7 @@ function buildGlobalFactsLightContextMessages({ projectOverview, outlineData, bi
   }
   messages.push(
     { role: 'user', content: `项目概述：\n${String(projectOverview || '').trim() || '未提供'}` },
-    { role: 'user', content: `Step02 关键解析结果：\n${bidAnalysisFactsText}` },
+    { role: 'user', content: `招标文件关键解析结果：\n${bidAnalysisFactsText}` },
     { role: 'user', content: `已生成技术方案目录：\n${formatOutlineForPrompt(outlineData.outline || [])}` },
     { role: 'user', content: (knowledgeItems || []).length ? `用户已选择 ${(knowledgeItems || []).length} 条知识库条目；知识库正文将在独立分段步骤中处理。` : '用户未选择参考知识库。' },
   );
@@ -597,7 +597,7 @@ function buildOriginalPlanSegmentPatchMessages(context) {
       role: 'user',
       content: `原方案全局事实补充任务：
 
-当前是“已有方案扩写”模式。用户提供的原方案是本次要扩写的投标技术方案核心草稿，已有内容必须在后续扩写正文中被保留。
+当前已上传原方案。用户提供的原方案是本次要扩写的投标技术方案核心草稿，已有内容必须在后续扩写正文中被保留。
 
 请基于当前原方案分段，补充或替换全局事实变量。
 
@@ -667,8 +667,8 @@ ${buildFinalRewriteRule(context.globalFactsMode)}
 5. 不要新增与当前事实相冲突的具体值、服务承诺或技术边界。
 ${buildFinalScheduleRule(context.globalFactsMode)}
 7. 每个 group 必须包含 id、title、content。
-8. ${context.isExpansionWorkflow ? '当前是已有方案扩写模式，原方案分段补充后的事实优先保留，不要在最终整理时弱化或删除原方案已有承诺。' : '只返回 JSON。'}
-${context.isExpansionWorkflow ? '9. 只返回 JSON。' : ''}${buildGlobalFactsCompletenessRules(context.globalFactsMode) ? `\n\n${buildGlobalFactsCompletenessRules(context.globalFactsMode)}` : ''}`,
+8. ${context.hasOriginalPlan ? '当前已上传原方案，原方案分段补充后的事实优先保留，不要在最终整理时弱化或删除原方案已有承诺。' : '只返回 JSON。'}
+${context.hasOriginalPlan ? '9. 只返回 JSON。' : ''}${buildGlobalFactsCompletenessRules(context.globalFactsMode) ? `\n\n${buildGlobalFactsCompletenessRules(context.globalFactsMode)}` : ''}`,
     },
     { role: 'user', content: buildGroupsJsonExample(context.globalFactsMode) },
   ];
@@ -934,12 +934,9 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
   if (!String(tenderMarkdown || '').trim()) {
     throw new Error('请先上传招标文件，再生成全局事实');
   }
-  const isExpansionWorkflow = storedPlan.workflowKind === 'existing-plan-expansion';
+  const hasOriginalPlan = Boolean(storedPlan.originalPlanFile);
   let originalPlanMarkdown = '';
-  if (isExpansionWorkflow) {
-    if (!storedPlan.originalPlanFile) {
-      throw new Error('请先上传原方案，再生成全局事实');
-    }
+  if (hasOriginalPlan) {
     if (!workspaceStore.readOriginalPlanMarkdown) {
       throw new Error('原方案读取服务尚未初始化');
     }
@@ -959,8 +956,8 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
 
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
   const bidAnalysisFactsText = formatBidAnalysisFactsForPrompt(storedPlan);
-  log('正在读取招标文件、Step02 解析结果、目录和参考知识库。', 10);
-  if (isExpansionWorkflow) {
+  log('正在读取招标文件解析结果、目录和参考知识库。', 10);
+  if (hasOriginalPlan) {
     log('已读取原方案，本次将优先从原方案抽取全局事实变量。', 18);
   }
   const knowledgeItems = loadKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);
@@ -979,7 +976,7 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
     bidAnalysisFactsText,
     knowledgeItems,
     sectionHint,
-    isExpansionWorkflow,
+    hasOriginalPlan,
     globalFactsMode,
   };
 
@@ -997,7 +994,7 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
     log('知识库未返回需要补充的全局事实变量。', 66);
   }
 
-  if (isExpansionWorkflow) {
+  if (hasOriginalPlan) {
     const originalPatch = await runOriginalPlanGlobalFactPatches(aiService, { ...baseContext, groups }, originalPlanMarkdown, log);
     if (originalPatch.patches?.length) {
       groups = mergeGlobalFactPatches(groups, originalPatch.patches);

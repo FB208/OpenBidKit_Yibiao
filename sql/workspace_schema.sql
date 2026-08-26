@@ -21,14 +21,12 @@ PRAGMA user_version = 23;
 -- ============================================================================
 
 -- 技术方案单例元数据。
--- 只保留一行 id = 1，用于保存当前步骤、工作流类型、招标文件/原方案 Markdown 元数据、模式配置和正文生成运行时 JSON。
+-- 只保留一行 id = 1，用于保存当前步骤、招标文件/原方案 Markdown 元数据、模式配置和正文生成运行时 JSON。
 -- 招标文件 Markdown 原文不进入 SQLite，原始文件保存到 userData/workspace/technical-plan/tender-original.md，当前投标范围工作副本保存到 userData/workspace/technical-plan/tender.md。
 -- 原方案 Markdown 原文不进入 SQLite，保存到 userData/workspace/technical-plan/original-plan.md。
 -- pending_tender_* 为旧版 Step01 标段待选择兼容清理字段，新流程不再写入。
 CREATE TABLE IF NOT EXISTS technical_plan_meta (
   id INTEGER PRIMARY KEY CHECK (id = 1),
-  -- v9 工作流类型：technical-plan / existing-plan-expansion
-  workflow_kind TEXT NOT NULL DEFAULT 'technical-plan',
   step TEXT NOT NULL DEFAULT 'document-analysis',
   tender_file_name TEXT,
   tender_markdown_path TEXT,
@@ -42,7 +40,7 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   tender_original_markdown_path TEXT,
   tender_original_markdown_hash TEXT,
   tender_original_markdown_chars INTEGER NOT NULL DEFAULT 0,
-  -- v9 已有方案扩写的原方案文件状态
+  -- v9 用户上传的原方案文件状态
   original_plan_file_name TEXT,
   original_plan_markdown_path TEXT,
   original_plan_markdown_hash TEXT,
@@ -65,7 +63,7 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   bid_section_extraction_status TEXT NOT NULL DEFAULT 'idle',
   bid_section_extraction_error TEXT,
   outline_mode TEXT NOT NULL DEFAULT 'aligned',
-  -- v13 已有方案扩写目录使用方式：original-only / ai-complement。
+  -- v13 上传原方案后的目录使用方式：original-only / ai-complement。
   outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
   -- v22 Step04 事实补全模式：fabricate / omit / placeholder，缺省 fabricate。
   global_facts_mode TEXT NOT NULL DEFAULT 'fabricate',

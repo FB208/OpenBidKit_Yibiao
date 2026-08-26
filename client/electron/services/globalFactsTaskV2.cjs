@@ -155,7 +155,7 @@ function buildFileCatalog({ tenderPaths, isWorkingCopy, hasSectionHint, knowledg
     }
   }
   lines.push('- 项目概述.md：项目背景和术语，用于确定大项，不作为商务/资格材料来源。');
-  lines.push('- 招标解析结果.md：Step02 已抽出的项目信息、甲方信息、交货和服务要求，用于确定大项并提取明确值。');
+  lines.push('- 招标解析结果.md：招标文件解析阶段已抽出的项目信息、甲方信息、交货和服务要求，用于确定大项并提取明确值。');
   lines.push('- 技术方案目录.md：已确认目录，用于判断正文会反复用到哪些统一口径。');
   if (hasSectionHint) {
     lines.push('- 标段说明.md：本次投标范围，只关注该范围内的事实。');
@@ -164,7 +164,7 @@ function buildFileCatalog({ tenderPaths, isWorkingCopy, hasSectionHint, knowledg
     lines.push('- 参考知识库/条目-*.md：补充已有大项的具体内容。');
   }
   if (hasOriginalPlan) {
-    lines.push('- 原方案.md：已有方案扩写底稿，补充已有大项的具体内容。');
+    lines.push('- 原方案.md：用户上传的优化扩写底稿，补充已有大项的具体内容。');
   }
   lines.push('- 材料说明.md：本次实际提供的文件清单，与上述用途一致。');
   return lines.join('\n');
@@ -302,12 +302,9 @@ async function runGlobalFactsTaskV2({
     throw new Error('请先生成目录，再生成全局事实');
   }
 
-  const isExpansionWorkflow = storedPlan.workflowKind === 'existing-plan-expansion';
+  const hasOriginalPlan = Boolean(storedPlan.originalPlanFile);
   let originalPlanMarkdown = '';
-  if (isExpansionWorkflow) {
-    if (!storedPlan.originalPlanFile) {
-      throw new Error('请先上传原方案，再生成全局事实');
-    }
+  if (hasOriginalPlan) {
     originalPlanMarkdown = String(workspaceStore.readOriginalPlanMarkdown?.() || '').trim();
     if (!originalPlanMarkdown) {
       throw new Error('请先上传原方案，再生成全局事实');

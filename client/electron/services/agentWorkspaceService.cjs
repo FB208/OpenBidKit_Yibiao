@@ -26,7 +26,7 @@ const STEP_WORKSPACE_IDS = Object.freeze({
   'content-edit': CONTENT_PLANNING_AGENT_TASK_KEY,
 });
 
-const TECHNICAL_PLAN_SECTIONS = new Set(['technical-plan', 'existing-plan-expansion']);
+const TECHNICAL_PLAN_SECTIONS = new Set(['technical-plan']);
 
 function normalizeCurrentView(view = {}) {
   const section = String(view.section || '').trim();

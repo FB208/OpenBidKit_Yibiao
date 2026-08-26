@@ -1235,7 +1235,7 @@ function buildOriginalMaterialRestoreMessages({ targets, originalSegments, proje
 }`,
     },
     { role: 'user', content: `招标文件关键信息：\n${formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText)}` },
-    { role: 'user', content: `Step04 全局事实变量标题清单：\n${globalFactTitlesText || '未提供'}` },
+    { role: 'user', content: `全局事实变量标题清单：\n${globalFactTitlesText || '未提供'}` },
     { role: 'user', content: `当前可还原叶子节点：\n${formatRestoreTargetsForPrompt(targets) || '无'}` },
     { role: 'user', content: `原方案段落：\n${formatOriginalSegmentsForPrompt(originalSegments)}` },
     { role: 'user', content: '请只返回 JSON，不要生成正文。' },
@@ -1243,7 +1243,7 @@ function buildOriginalMaterialRestoreMessages({ targets, originalSegments, proje
 }
 
 function buildAgentOriginalMaterialRestorePrompt() {
-  return `你是投标技术方案原文归属判断 Agent。用户提供的原方案是本次已有方案扩写的核心草稿，请基于 workspace 输入文件判断每个原方案段落应该还原到当前目录的哪个叶子小节。
+  return `你是投标技术方案原文归属判断 Agent。用户已上传原方案作为本次优化扩写的核心草稿，请基于 workspace 输入文件判断每个原方案段落应该还原到当前目录的哪个叶子小节。
 
 workspace 文件：
 - context.md：招标文件关键信息和全局事实变量标题清单。
@@ -1275,7 +1275,7 @@ function buildAgentOriginalMaterialRestoreFiles({ targets, originalSegments, pro
       content: `# 招标文件关键信息
 ${formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText)}
 
-# Step04 全局事实变量标题清单
+# 全局事实变量标题清单
 ${globalFactTitlesText || '未提供'}`,
     },
     {
@@ -1807,8 +1807,8 @@ function buildConsistencyAuditMessages({ group, globalFactsText, bidAnalysisFact
   ]
 }`,
     },
-    { role: 'user', content: `Step04 全局事实变量：\n${globalFactsText || '未提供'}` },
-    { role: 'user', content: `Step02 关键解析结果（项目信息、甲方信息、交货和服务要求）：\n${bidAnalysisFactsText || '未提供'}` },
+    { role: 'user', content: `全局事实变量：\n${globalFactsText || '未提供'}` },
+    { role: 'user', content: `招标文件关键解析结果（项目信息、甲方信息、交货和服务要求）：\n${bidAnalysisFactsText || '未提供'}` },
     { role: 'user', content: `允许返回的目录编号清单：\n${JSON.stringify(allowedIds, null, 2)}` },
     { role: 'user', content: `待审计正文分组：\n${formatConsistencyAuditGroupContent(group)}` },
   ];
@@ -1918,8 +1918,8 @@ function buildConsistencyRepairMessages({ context, conflicts, globalFactsText, b
   ]
 }`,
     },
-    { role: 'user', content: `Step04 全局事实变量：\n${globalFactsText || '未提供'}` },
-    { role: 'user', content: `Step02 关键解析结果（项目信息、甲方信息、交货和服务要求）：\n${bidAnalysisFactsText || '未提供'}` },
+    { role: 'user', content: `全局事实变量：\n${globalFactsText || '未提供'}` },
+    { role: 'user', content: `招标文件关键解析结果（项目信息、甲方信息、交货和服务要求）：\n${bidAnalysisFactsText || '未提供'}` },
     { role: 'user', content: `当前小节：${item.id || 'unknown'} ${item.title || '未命名章节'}\n路径：${formatChapterPath(context)}\n描述：${item.description || ''}` },
     { role: 'user', content: `审计发现的冲突：\n${JSON.stringify(conflicts || [], null, 2)}` },
     { role: 'user', content: `当前小节正文（带行号；patch 的 old_text/new_text 不要包含这些行号）：\n${formatContentWithLineNumbers(currentContent)}` },
@@ -2996,7 +2996,7 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
   };
 }
 
-// 按当前任务模式把阶段内进度映射为单调递增的 Step05 累计进度。
+// 按当前任务模式把阶段内进度映射为单调递增的正文生成累计进度。
 function buildContentOverallProgress(progressMode, detail, status) {
   if (status === 'success' || detail.phase === 'done') return 100;
   const profile = CONTENT_PROGRESS_PROFILES[progressMode] || CONTENT_PROGRESS_PROFILES.full;
@@ -3056,13 +3056,10 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   }
   const globalFactTitlesText = formatGlobalFactTitlesForPrompt(globalFacts);
   const bidAnalysisFactsText = formatBidAnalysisFactsForPrompt(storedPlan);
-  const isExpansionWorkflow = storedPlan.workflowKind === 'existing-plan-expansion';
+  const hasOriginalPlan = Boolean(storedPlan.originalPlanFile);
   let originalPlanMarkdown = '';
   let originalPlanSegments = [];
-  if (isExpansionWorkflow) {
-    if (!storedPlan.originalPlanFile) {
-      throw new Error('请先上传原方案，再生成正文');
-    }
+  if (hasOriginalPlan) {
     if (!workspaceStore.readOriginalPlanMarkdown) {
       throw new Error('原方案读取服务尚未初始化');
     }
@@ -3072,7 +3069,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     }
     originalPlanSegments = splitOriginalPlanSegments(originalPlanMarkdown);
     if (!originalPlanSegments.length) {
-      throw new Error('原方案正文为空，无法执行已有方案扩写');
+      throw new Error('原方案正文为空，无法执行优化扩写');
     }
   }
   const originalPlanSegmentById = new Map(originalPlanSegments.map((segment) => [segment.id, segment]));
@@ -3125,11 +3122,11 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   const enableConsistencyAudit = Boolean(generationOptions.enableConsistencyAudit ?? generationOptions.enable_consistency_audit ?? true);
   const requestedConsistencyRepairMode = normalizeConsistencyRepairMode(generationOptions.consistencyRepairMode ?? generationOptions.consistency_repair_mode);
   const consistencyRepairMode = targetItemId ? 'normal' : requestedConsistencyRepairMode;
-  const enableOriginalPlanCoverageAudit = isExpansionWorkflow && Boolean(generationOptions.enableOriginalPlanCoverageAudit ?? generationOptions.enable_original_plan_coverage_audit ?? false);
-  const requestedOriginalPlanCoverageRepairMode = isExpansionWorkflow
+  const enableOriginalPlanCoverageAudit = hasOriginalPlan && Boolean(generationOptions.enableOriginalPlanCoverageAudit ?? generationOptions.enable_original_plan_coverage_audit ?? false);
+  const requestedOriginalPlanCoverageRepairMode = hasOriginalPlan
     ? normalizeOriginalPlanCoverageRepairMode(generationOptions.originalPlanCoverageRepairMode ?? generationOptions.original_plan_coverage_repair_mode)
     : 'agent';
-  const originalPlanCoverageRepairMode = isExpansionWorkflow && !targetItemId ? requestedOriginalPlanCoverageRepairMode : 'normal';
+  const originalPlanCoverageRepairMode = hasOriginalPlan && !targetItemId ? requestedOriginalPlanCoverageRepairMode : 'normal';
   const contentStats = {
     phase: 'planning',
     planning_total: 0,
@@ -3334,8 +3331,8 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   logs = [...logs, enableConsistencyAudit
     ? `全文一致性审计已启用，正文扩写完成后将使用${consistencyRepairMode === 'agent' ? ' Agent 修复' : '普通修复'}检查并修复事实冲突。`
     : '全文一致性审计未启用。'];
-  if (isExpansionWorkflow) {
-    logs = [...logs, `已有方案扩写模式：已读取原方案并拆分为 ${originalPlanSegments.length} 个原文段。`];
+  if (hasOriginalPlan) {
+    logs = [...logs, `检测到已上传原方案：已读取并拆分为 ${originalPlanSegments.length} 个原文段。`];
     logs = [...logs, enableOriginalPlanCoverageAudit
       ? targetItemId
         ? '原方案覆盖审计已启用，本次将使用普通模式检查并修复当前小节的原文保留情况。'
@@ -4196,7 +4193,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   }
 
   async function restoreOriginalMaterialsIfNeeded(targets) {
-    if (!isExpansionWorkflow || !originalPlanSegments.length || !targets?.length) {
+    if (!hasOriginalPlan || !originalPlanSegments.length || !targets?.length) {
       return;
     }
 
@@ -5001,7 +4998,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   }
 
   function buildOriginalCoverageAuditTargets(auditTargetItemId = '') {
-    if (!isExpansionWorkflow || !originalPlanSegments.length) {
+    if (!hasOriginalPlan || !originalPlanSegments.length) {
       return [];
     }
     const normalizedTargetId = String(auditTargetItemId || '').trim();
@@ -5180,7 +5177,7 @@ workspace 文件说明：
   }
 
   async function runAgentOriginalCoverageRepairIfEnabled() {
-    if (!isExpansionWorkflow) {
+    if (!hasOriginalPlan) {
       return { ran: false, fixedCount: 0, failedCount: 0 };
     }
     if (!enableOriginalPlanCoverageAudit) {
@@ -5346,7 +5343,7 @@ workspace 文件说明：
   }
 
   async function runOriginalPlanCoverageAuditIfEnabled(options = {}) {
-    if (!isExpansionWorkflow) {
+    if (!hasOriginalPlan) {
       return { ran: false, fixedCount: 0, failedCount: 0 };
     }
     if (!enableOriginalPlanCoverageAudit) {
@@ -5650,7 +5647,7 @@ workspace 文件说明：
     return [
       '# 全局事实变量',
       globalFactsText || '未提供',
-      '# Step02 关键解析结果',
+      '# 招标文件关键解析结果',
       bidAnalysisFactsText || '未提供',
     ].join('\n\n');
   }
@@ -5659,7 +5656,7 @@ workspace 文件说明：
     return `请在当前工作目录中完成全文一致性修复，让 technical-plan.md 成为程序可继续解析和回写的最终正文文件。
 
 workspace 文件说明：
-- global-facts.md：全局事实变量、Step02 关键解析结果和需要保持一致的项目信息。
+- global-facts.md：全局事实变量、招标文件关键解析结果和需要保持一致的项目信息。
 - technical-plan.md：当前技术方案正文全文，包含章节标题、section id 和 yibiao-section-start / yibiao-section-end 标记。
 
 任务目标：
@@ -6743,7 +6740,7 @@ workspace 文件说明：
           markStageCompleted('planning');
           pauseIfRequested('正文生成已在正文编排后暂停，可导出当前已完成内容，稍后继续。');
         }
-        if (isExpansionWorkflow && !completedStages.has('restoring')) {
+        if (hasOriginalPlan && !completedStages.has('restoring')) {
           await restoreOriginalMaterialsIfNeeded(tasksToRun);
           markStageCompleted('restoring');
           pauseIfRequested('正文生成已在原方案还原阶段暂停，可导出当前已完成内容，稍后继续。');
@@ -6759,7 +6756,7 @@ workspace 文件说明：
           markStageCompleted('planning');
           pauseIfRequested('正文生成已在正文编排后暂停，可导出当前已完成内容，稍后继续。');
         }
-        if (isExpansionWorkflow && !completedStages.has('restoring')) {
+        if (hasOriginalPlan && !completedStages.has('restoring')) {
           await restoreOriginalMaterialsIfNeeded(tasksToRun);
           markStageCompleted('restoring');
           pauseIfRequested('正文生成已在原方案还原阶段暂停，可导出当前已完成内容，稍后继续。');

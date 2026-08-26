@@ -78,15 +78,10 @@ export interface ComponentsConfig {
   html_concurrency_limit: number;
 }
 
-export interface AgentModeScenariosConfig {
-  existing_plan_expansion_original_outline_extraction: boolean;
-}
-
 export interface ClientConfig extends AiConfig {
   image_model: ImageModelConfig;
   image_model_profiles: ImageModelProfiles;
   components: ComponentsConfig;
-  agent_mode_scenarios: AgentModeScenariosConfig;
   agent_auto_answer_enabled?: boolean;
   update_channel?: UpdateChannel;
   gpu_hardware_acceleration_enabled?: boolean;

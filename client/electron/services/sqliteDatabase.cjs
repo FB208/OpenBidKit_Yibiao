@@ -9,7 +9,6 @@ function createInitialSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS technical_plan_meta (
       id INTEGER PRIMARY KEY CHECK (id = 1),
-      workflow_kind TEXT NOT NULL DEFAULT 'technical-plan',
       step TEXT NOT NULL DEFAULT 'document-analysis',
       tender_file_name TEXT,
       tender_markdown_path TEXT,
@@ -200,14 +199,13 @@ function addTechnicalPlanPendingTenderSelection(db) {
   addIfMissing('pending_tender_created_at', 'TEXT');
 }
 
-function addTechnicalPlanWorkflowAndOriginalPlan(db) {
+function addTechnicalPlanOriginalPlan(db) {
   const cols = db.prepare("PRAGMA table_info(technical_plan_meta)").all().map((row) => row.name);
   const addIfMissing = (name, type) => {
     if (!cols.includes(name)) {
       db.exec(`ALTER TABLE technical_plan_meta ADD COLUMN ${name} ${type}`);
     }
   };
-  addIfMissing('workflow_kind', "TEXT NOT NULL DEFAULT 'technical-plan'");
   addIfMissing('original_plan_file_name', 'TEXT');
   addIfMissing('original_plan_markdown_path', 'TEXT');
   addIfMissing('original_plan_markdown_hash', 'TEXT');
@@ -249,7 +247,7 @@ function addTechnicalPlanIllustrationPlan(db) {
   removeLegacyTechnicalPlanIllustrationType(db);
 }
 
-// 为 Step03 当前设置和目录生效快照分别增加存储字段。
+// 为目录生成当前设置和目录生效快照分别增加存储字段。
 function addTechnicalPlanOutlineWordControl(db) {
   addColumnIfMissing(db, 'technical_plan_meta', 'outline_word_control_options_json', 'TEXT');
   addColumnIfMissing(db, 'technical_plan_meta', 'outline_word_control_snapshot_json', 'TEXT');
@@ -1180,7 +1178,6 @@ const schemaHealthColumnGroups = [
     version: 9,
     table: 'technical_plan_meta',
     columns: {
-      workflow_kind: "TEXT NOT NULL DEFAULT 'technical-plan'",
       original_plan_file_name: 'TEXT',
       original_plan_markdown_path: 'TEXT',
       original_plan_markdown_hash: 'TEXT',
@@ -1387,8 +1384,8 @@ const migrations = [
   },
   {
     version: 9,
-    description: '技术方案新增工作流类型和原方案文件状态',
-    up: addTechnicalPlanWorkflowAndOriginalPlan,
+    description: '技术方案新增原方案文件状态',
+    up: addTechnicalPlanOriginalPlan,
   },
   {
     version: 10,

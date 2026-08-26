@@ -1,7 +1,6 @@
 import type { OutlineContentMode, OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../shared/types';
 
-export type TechnicalPlanStep = 'document-analysis' | 'bid-analysis' | 'outline-generation' | 'global-facts' | 'content-edit' | 'expand';
-export type TechnicalPlanWorkflowKind = 'technical-plan' | 'existing-plan-expansion';
+export type TechnicalPlanStep = 'document-analysis' | 'generation-settings' | 'bid-analysis' | 'outline-generation' | 'global-facts' | 'content-edit' | 'expand';
 export type BidAnalysisMode = 'key' | 'full' | 'custom';
 export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
 export type BidSectionMode = 'single' | 'multiple';
@@ -343,7 +342,6 @@ export interface DetectedBidSection {
 }
 
 export interface TechnicalPlanState {
-  workflowKind: TechnicalPlanWorkflowKind;
   step: TechnicalPlanStep;
   tenderFile: TechnicalPlanTenderFile | null;
   tenderFiles: TechnicalPlanTenderSourceFile[];

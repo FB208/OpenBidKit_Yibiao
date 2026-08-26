@@ -30,7 +30,6 @@ export type {
 export type {
   AiConfig,
   AiRequestMode,
-  AgentModeScenariosConfig,
   ClientConfig,
   ConfiguredTextModelProvider,
   ConfigSaveResult,

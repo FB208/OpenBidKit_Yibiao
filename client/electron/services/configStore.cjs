@@ -21,10 +21,6 @@ const openAICompatibleImageSizes = ['auto', '1K', '2K', '3K', '4K', '1024x768', 
 const googleImageSizes = ['512', '1K', '2K', '4K'];
 const agnesImageRatios = ['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9'];
 
-const defaultAgentModeScenarios = {
-  existing_plan_expansion_original_outline_extraction: true,
-};
-
 const textProviderBaseUrls = {
   jinlong: 'https://jlaudeapi.com/v1',
   volcengine: 'https://ark.cn-beijing.volces.com/api/v3',
@@ -285,7 +281,6 @@ const defaultConfig = {
   gpu_hardware_acceleration_enabled: true,
   gpu_hardware_acceleration_configured: true,
   export_format: defaultExportFormat,
-  agent_mode_scenarios: defaultAgentModeScenarios,
   agent_auto_answer_enabled: DEFAULT_AGENT_AUTO_ANSWER_ENABLED,
   developer_mode: false,
   developer_token_stats_auto_open: false,
@@ -534,15 +529,6 @@ function normalizeImageModelProfiles(sourceProfiles) {
   return profiles;
 }
 
-function normalizeAgentModeScenarios(source) {
-  const scenarios = source && typeof source === 'object' ? source : {};
-  return {
-    existing_plan_expansion_original_outline_extraction: scenarios.existing_plan_expansion_original_outline_extraction === undefined
-      ? defaultAgentModeScenarios.existing_plan_expansion_original_outline_extraction
-      : Boolean(scenarios.existing_plan_expansion_original_outline_extraction),
-  };
-}
-
 const VALID_NUMBERING_FORMATS = ['outline-decimal', 'custom'];
 const VALID_HEADING_BORDER_STRUCTURES = ['上下结构', '左右结构'];
 const VALID_LIST_STYLES = ['none', 'disc', 'circle', 'square', 'diamond', 'dash', 'check', 'arrow', 'sparkle'];
@@ -748,7 +734,6 @@ function normalizeConfig(config) {
     gpu_hardware_acceleration_enabled: gpuHardwareAccelerationEnabled,
     gpu_hardware_acceleration_configured: gpuHardwareAccelerationConfigured === false ? true : gpuHardwareAccelerationConfigured,
     export_format: normalizeExportFormat(source.export_format),
-    agent_mode_scenarios: normalizeAgentModeScenarios(source.agent_mode_scenarios),
     agent_auto_answer_enabled: source.agent_auto_answer_enabled === undefined
       ? defaultConfig.agent_auto_answer_enabled
       : Boolean(source.agent_auto_answer_enabled),
@@ -834,10 +819,6 @@ function createConfigStore(app) {
           image_model_profiles: {
             ...currentConfig.image_model_profiles,
             ...(config && config.image_model_profiles ? config.image_model_profiles : {}),
-          },
-          agent_mode_scenarios: {
-            ...currentConfig.agent_mode_scenarios,
-            ...(config && config.agent_mode_scenarios ? config.agent_mode_scenarios : {}),
           },
           analytics_client_id: config?.analytics_client_id || currentConfig.analytics_client_id,
           analytics_created_at: config?.analytics_created_at || currentConfig.analytics_created_at,

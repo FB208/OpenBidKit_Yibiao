@@ -4,7 +4,6 @@ import { technicalPlanStorage } from '../services/technicalPlanStorage';
 import type { TechnicalPlanState } from '../types';
 
 const initialState: TechnicalPlanState = {
-  workflowKind: 'technical-plan',
   step: 'document-analysis',
   tenderFile: null,
   tenderFiles: [],

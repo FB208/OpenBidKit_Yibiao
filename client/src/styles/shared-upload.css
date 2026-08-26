@@ -18,7 +18,7 @@
   gap: 18px;
 }
 
-/* 页面级标题与 Step02–05 command-bar 的 24px 标题保持同级 */
+/* 页面级标题与后续步骤 command-bar 的 24px 标题保持同级 */
 .upload-page-title h2 {
   margin: 8px 0 0;
   color: var(--yb-text);

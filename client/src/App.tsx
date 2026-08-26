@@ -13,7 +13,7 @@ function isDeveloperSection(section: SectionId) {
 }
 
 function isManagedWorkbenchSection(section: SectionId) {
-  return section === 'technical-plan' || section === 'existing-plan-expansion' || section === 'feasibility-report';
+  return section === 'technical-plan' || section === 'feasibility-report';
 }
 
 function App() {

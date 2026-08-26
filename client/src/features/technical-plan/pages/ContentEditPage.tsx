@@ -6,7 +6,7 @@ import { AppSwitch, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, 
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { ClientConfig, ImageModelStatus, OutlineContentMode, OutlineData, OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
-import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentIllustrationKind, ContentIllustrationPlanState, ContentTableRequirement, OriginalPlanCoverageRepairMode, TechnicalPlanWorkflowKind } from '../types';
+import type { BackgroundTaskState, ConsistencyRepairMode, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentIllustrationKind, ContentIllustrationPlanState, ContentTableRequirement, OriginalPlanCoverageRepairMode } from '../types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
@@ -16,7 +16,8 @@ import mermaidImageExampleUrl from '../../../../assets/generate_img_example/merm
 import htmlImageExampleUrl from '../../../../assets/generate_img_example/html.png';
 
 interface ContentEditPageProps {
-  workflowKind: TechnicalPlanWorkflowKind;
+  stepNumber: string;
+  hasOriginalPlan: boolean;
   outlineWordControlSnapshot?: OutlineWordControlOptions;
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
@@ -143,7 +144,7 @@ function buildDefaultGenerationOptions(imageModelAvailable: boolean, leafCount: 
   };
 }
 
-function normalizeGenerationOptions(options: ContentGenerationOptions | undefined, imageModelAvailable: boolean, leafCount: number, isExpansionWorkflow = false): ContentGenerationOptions {
+function normalizeGenerationOptions(options: ContentGenerationOptions | undefined, imageModelAvailable: boolean, leafCount: number, hasOriginalPlan = false): ContentGenerationOptions {
   const fallback = buildDefaultGenerationOptions(imageModelAvailable, leafCount);
   const maxAiImagesLimit = Math.max(1, leafCount);
   const requestedMaxAiImages = Number(options?.maxAiImages ?? fallback.maxAiImages);
@@ -162,8 +163,8 @@ function normalizeGenerationOptions(options: ContentGenerationOptions | undefine
     tableRequirement: isContentTableRequirement(tableRequirement) ? tableRequirement : fallback.tableRequirement,
     enableConsistencyAudit: Boolean(options?.enableConsistencyAudit ?? fallback.enableConsistencyAudit),
     consistencyRepairMode: isConsistencyRepairMode(options?.consistencyRepairMode) ? options.consistencyRepairMode : fallback.consistencyRepairMode,
-    enableOriginalPlanCoverageAudit: isExpansionWorkflow ? Boolean(options?.enableOriginalPlanCoverageAudit ?? fallback.enableOriginalPlanCoverageAudit) : false,
-    originalPlanCoverageRepairMode: isExpansionWorkflow && isOriginalPlanCoverageRepairMode(options?.originalPlanCoverageRepairMode) ? options.originalPlanCoverageRepairMode : fallback.originalPlanCoverageRepairMode,
+    enableOriginalPlanCoverageAudit: hasOriginalPlan ? Boolean(options?.enableOriginalPlanCoverageAudit ?? fallback.enableOriginalPlanCoverageAudit) : false,
+    originalPlanCoverageRepairMode: hasOriginalPlan && isOriginalPlanCoverageRepairMode(options?.originalPlanCoverageRepairMode) ? options.originalPlanCoverageRepairMode : fallback.originalPlanCoverageRepairMode,
   };
 }
 
@@ -288,7 +289,8 @@ const MarkdownContent = memo(function MarkdownContent({ content, onPreviewImage 
 });
 
 function ContentEditPage({
-  workflowKind,
+  stepNumber,
+  hasOriginalPlan,
   outlineWordControlSnapshot,
   outlineData,
   task,
@@ -300,7 +302,6 @@ function ContentEditPage({
   onContentSaved,
 }: ContentEditPageProps) {
   const { showToast } = useToast();
-  const isExpansionWorkflow = workflowKind === 'existing-plan-expansion';
   const allLeaves = useMemo(() => outlineData?.outline ? collectLeafItems(outlineData.outline) : [], [outlineData]);
   const leaves = useMemo(() => allLeaves.filter((item) => item.content_mode === 'ai-generate'), [allLeaves]);
   const [selectedItemId, setSelectedItemId] = useState('');
@@ -660,7 +661,7 @@ function ContentEditPage({
       const nextStatus = config?.image_model?.status || 'untested';
       const available = nextStatus === 'available';
       setImageModelStatus(nextStatus);
-      setDraftGenerationOptions(normalizeGenerationOptions(contentGenerationOptions, available, leaves.length, isExpansionWorkflow));
+      setDraftGenerationOptions(normalizeGenerationOptions(contentGenerationOptions, available, leaves.length, hasOriginalPlan));
       setGenerationDialogOpen(true);
     } catch (error) {
       showToast(error instanceof Error ? error.message : '读取生成配置失败', 'error');
@@ -668,13 +669,13 @@ function ContentEditPage({
   };
 
   const saveDraftGenerationOptions = async (showSuccess: boolean, imageAvailable = imageModelAvailable) => {
-    const normalizedDraftOptions = normalizeGenerationOptions(draftGenerationOptions, imageAvailable, leaves.length, isExpansionWorkflow);
+    const normalizedDraftOptions = normalizeGenerationOptions(draftGenerationOptions, imageAvailable, leaves.length, hasOriginalPlan);
     const currentOptions = contentGenerationOptions
       ? { ...defaultContentGenerationOptions, ...contentGenerationOptions }
-      : normalizeGenerationOptions(undefined, imageAvailable, leaves.length, isExpansionWorkflow);
+      : normalizeGenerationOptions(undefined, imageAvailable, leaves.length, hasOriginalPlan);
     const nextOptions = paused ? currentOptions : normalizedDraftOptions;
     await onContentGenerationOptionsChange(nextOptions);
-    setDraftGenerationOptions(normalizeGenerationOptions(nextOptions, imageAvailable, leaves.length, isExpansionWorkflow));
+    setDraftGenerationOptions(normalizeGenerationOptions(nextOptions, imageAvailable, leaves.length, hasOriginalPlan));
 
     if (showSuccess) {
       setGenerationDialogOpen(false);
@@ -885,8 +886,8 @@ function ContentEditPage({
         tableRequirement: savedGenerationOptions.tableRequirement,
         enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
         consistencyRepairMode: savedGenerationOptions.consistencyRepairMode,
-        enableOriginalPlanCoverageAudit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
-        originalPlanCoverageRepairMode: isExpansionWorkflow ? savedGenerationOptions.originalPlanCoverageRepairMode : undefined,
+        enableOriginalPlanCoverageAudit: hasOriginalPlan && savedGenerationOptions.enableOriginalPlanCoverageAudit,
+        originalPlanCoverageRepairMode: hasOriginalPlan ? savedGenerationOptions.originalPlanCoverageRepairMode : undefined,
       },
     });
     trackConfigUsage({
@@ -896,8 +897,8 @@ function ContentEditPage({
       content_generation_action: contentGenerationAction,
       enable_consistency_audit: savedGenerationOptions.enableConsistencyAudit,
       consistency_repair_mode: savedGenerationOptions.enableConsistencyAudit ? savedGenerationOptions.consistencyRepairMode : undefined,
-      enable_original_plan_coverage_audit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
-      original_plan_coverage_repair_mode: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit ? savedGenerationOptions.originalPlanCoverageRepairMode : undefined,
+      enable_original_plan_coverage_audit: hasOriginalPlan && savedGenerationOptions.enableOriginalPlanCoverageAudit,
+      original_plan_coverage_repair_mode: hasOriginalPlan && savedGenerationOptions.enableOriginalPlanCoverageAudit ? savedGenerationOptions.originalPlanCoverageRepairMode : undefined,
     }, config);
     setGenerationDialogOpen(false);
     showToast(simulatePartialFailures
@@ -938,7 +939,7 @@ function ContentEditPage({
       const config = await window.yibiao?.config.load();
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
-      const savedGenerationOptions = normalizeGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length, isExpansionWorkflow);
+      const savedGenerationOptions = normalizeGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length, hasOriginalPlan);
       setImageModelStatus(nextImageModelStatus);
       await window.yibiao?.tasks.startContentGeneration({
         regenerate: true,
@@ -955,8 +956,8 @@ function ContentEditPage({
           tableRequirement: savedGenerationOptions.tableRequirement,
           enableConsistencyAudit: savedGenerationOptions.enableConsistencyAudit,
           consistencyRepairMode: savedGenerationOptions.consistencyRepairMode,
-          enableOriginalPlanCoverageAudit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
-          originalPlanCoverageRepairMode: isExpansionWorkflow ? 'normal' : undefined,
+          enableOriginalPlanCoverageAudit: hasOriginalPlan && savedGenerationOptions.enableOriginalPlanCoverageAudit,
+          originalPlanCoverageRepairMode: hasOriginalPlan ? 'normal' : undefined,
         },
       });
       trackConfigUsage({
@@ -966,8 +967,8 @@ function ContentEditPage({
         content_generation_action: 'regenerate_section',
         enable_consistency_audit: savedGenerationOptions.enableConsistencyAudit,
         consistency_repair_mode: savedGenerationOptions.enableConsistencyAudit ? savedGenerationOptions.consistencyRepairMode : undefined,
-        enable_original_plan_coverage_audit: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit,
-        original_plan_coverage_repair_mode: isExpansionWorkflow && savedGenerationOptions.enableOriginalPlanCoverageAudit ? 'normal' : undefined,
+        enable_original_plan_coverage_audit: hasOriginalPlan && savedGenerationOptions.enableOriginalPlanCoverageAudit,
+        original_plan_coverage_repair_mode: hasOriginalPlan && savedGenerationOptions.enableOriginalPlanCoverageAudit ? 'normal' : undefined,
       }, config);
       setSelectedItemId(requirementItem.id);
       setRequirementItem(null);
@@ -1102,7 +1103,7 @@ function ContentEditPage({
     <div className={`plan-step-body content-generation-page${showIllustrationStats ? ' has-dev-stats' : ''}`}>
       <section className="content-generation-command-bar">
         <div>
-          <span className="section-kicker">STEP 05</span>
+          <span className="section-kicker">STEP {stepNumber}</span>
           <strong>正文生成</strong>
           <p>只对标记为“AI生成”的叶子小节生成正文，其他模式保留为待处理。</p>
         </div>
@@ -1398,7 +1399,7 @@ function ContentEditPage({
                   </label>
                 )}
               </div>
-              {isExpansionWorkflow && (
+              {hasOriginalPlan && (
                 <div className="content-generation-config-group">
                   <label className="content-generation-config-row">
                     <span>

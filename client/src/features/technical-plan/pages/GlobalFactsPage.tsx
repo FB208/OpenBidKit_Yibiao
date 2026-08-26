@@ -5,6 +5,7 @@ import type { OutlineData } from '../../../shared/types';
 import type { BackgroundTaskState, GlobalFactGroupState, GlobalFactsMode } from '../types';
 
 interface GlobalFactsPageProps {
+  stepNumber: string;
   outlineData: OutlineData | null;
   globalFacts: GlobalFactGroupState[];
   globalFactsMode: GlobalFactsMode;
@@ -62,6 +63,7 @@ function getProgress(task: BackgroundTaskState | undefined, hasFacts: boolean) {
 }
 
 function GlobalFactsPage({
+  stepNumber,
   outlineData,
   globalFacts,
   globalFactsMode,
@@ -238,7 +240,7 @@ function GlobalFactsPage({
     <div className="plan-step-body global-facts-page">
       <section className="global-facts-command-bar">
         <div>
-          <span className="section-kicker">STEP 04</span>
+          <span className="section-kicker">STEP {stepNumber}</span>
           <strong>全局事实设定</strong>
           <p>基于目录提前预设正文会反复用到的事实变量，避免各小节随机生成人员、时间、型号等内容。</p>
         </div>

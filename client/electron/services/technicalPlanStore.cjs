@@ -41,7 +41,6 @@ const defaultOutlineWordControlOptions = Object.freeze({
 });
 
 const initialState = {
-  workflowKind: 'technical-plan',
   step: 'document-analysis',
   tenderFile: null,
   tenderFiles: [],
@@ -162,16 +161,12 @@ function normalizeStatus(value, allowed, fallback) {
   return allowed.includes(value) ? value : fallback;
 }
 
-function normalizeWorkflowKind(value) {
-  return value === 'existing-plan-expansion' ? 'existing-plan-expansion' : 'technical-plan';
-}
-
 function normalizeNonNegativeInteger(value) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? Math.floor(number) : 0;
 }
 
-// 统一 Step03 当前设置和目录快照的字段语义。
+// 统一目录生成当前设置和目录快照的字段语义。
 function normalizeOutlineWordControlOptions(value) {
   const sectionWords = normalizeNonNegativeInteger(value?.sectionWords);
   return {
@@ -183,7 +178,7 @@ function normalizeOutlineWordControlOptions(value) {
 }
 
 function isValidStep(value) {
-  return ['document-analysis', 'bid-analysis', 'outline-generation', 'global-facts', 'content-edit', 'expand'].includes(value);
+  return ['document-analysis', 'generation-settings', 'bid-analysis', 'outline-generation', 'global-facts', 'content-edit', 'expand'].includes(value);
 }
 
 function normalizeGlobalFactId(value, index) {
@@ -671,8 +666,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (existing) return existing;
     const timestamp = now();
     db.prepare(`
-      INSERT INTO technical_plan_meta (id, workflow_kind, step, bid_analysis_mode, outline_mode, outline_expansion_mode, created_at, updated_at)
-      VALUES (1, 'technical-plan', 'document-analysis', 'key', 'aligned', 'ai-complement', @timestamp, @timestamp)
+      INSERT INTO technical_plan_meta (id, step, bid_analysis_mode, outline_mode, outline_expansion_mode, created_at, updated_at)
+      VALUES (1, 'document-analysis', 'key', 'aligned', 'ai-complement', @timestamp, @timestamp)
     `).run({ timestamp });
     return db.prepare('SELECT * FROM technical_plan_meta WHERE id = 1').get();
   }
@@ -1663,20 +1658,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
     updateMeta({
-      step: 'document-analysis',
+      step: 'generation-settings',
       outline_project_name: null,
       outline_project_overview: null,
       content_generation_runtime_json: null,
       outline_word_control_snapshot_json: null,
     });
     notifyAgentWorkspaceChange({ force: true });
-  }
-
-  function assertNoTechnicalPlanTaskRunning() {
-    const row = db.prepare("SELECT type FROM technical_plan_tasks WHERE status IN ('running', 'pausing') LIMIT 1").get();
-    if (row) {
-      throw new Error('当前有技术方案任务正在运行，请等待任务结束后再切换模式');
-    }
   }
 
   // 正文任务活动或暂停期间禁止手工保存，避免清空待恢复的图片计划。
@@ -1685,38 +1673,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (row) {
       throw new Error('当前正文生成任务正在运行或已暂停，请先完成任务再编辑正文');
     }
-  }
-
-  function clearWorkflowSpecificState(workflowKind) {
-    deleteOutlineAgentTask();
-    deleteGlobalFactsAgentTask();
-    db.prepare(`DELETE FROM technical_plan_tasks WHERE type IN (${originalPlanDownstreamTaskTypes.map(() => '?').join(', ')})`).run(...originalPlanDownstreamTaskTypes);
-    db.prepare('DELETE FROM technical_plan_content_sections').run();
-    db.prepare('DELETE FROM technical_plan_content_plans').run();
-    db.prepare('DELETE FROM technical_plan_outline_nodes').run();
-    db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
-    clearContentIllustrationPlan();
-    clearOriginalOutlineRuntime();
-    clearTechnicalPlanMermaidCache();
-    updateMeta({
-      workflow_kind: normalizeWorkflowKind(workflowKind),
-      step: 'document-analysis',
-      outline_expansion_mode: 'ai-complement',
-      global_facts_mode: 'fabricate',
-      original_plan_file_name: null,
-      original_plan_markdown_path: null,
-      original_plan_markdown_hash: null,
-      original_plan_markdown_chars: 0,
-      original_plan_parser_label: null,
-      original_plan_imported_at: null,
-      outline_project_name: null,
-      outline_project_overview: null,
-      outline_word_control_options_json: null,
-      outline_word_control_snapshot_json: null,
-      content_generation_options_json: null,
-      content_generation_runtime_json: null,
-    });
-    notifyAgentWorkspaceChange({ force: true });
   }
 
   function loadOutlinePersistenceSnapshot() {
@@ -1869,7 +1825,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const metaUpdates = {};
     const invalidatesContentGeneration = partial.invalidateContentGeneration === true;
 
-    if (hasOwn(partial, 'workflowKind')) metaUpdates.workflow_kind = normalizeWorkflowKind(partial.workflowKind);
     if (hasOwn(partial, 'step') && isValidStep(partial.step)) metaUpdates.step = partial.step;
     if (hasOwn(partial, 'bidAnalysisMode') && isValidBidMode(partial.bidAnalysisMode)) metaUpdates.bid_analysis_mode = partial.bidAnalysisMode;
     if (hasOwn(partial, 'bidAnalysisSelectedTaskIds')) metaUpdates.bid_analysis_selected_task_ids_json = jsonOrNull(normalizeBidAnalysisTaskIds(partial.bidAnalysisSelectedTaskIds));
@@ -1970,7 +1925,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
     return {
       ...initialState,
-      workflowKind: normalizeWorkflowKind(meta.workflow_kind),
       step: isValidStep(meta.step) ? meta.step : 'document-analysis',
       tenderFile,
       tenderFiles,
@@ -2035,30 +1989,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
   function updateStep(step) {
     return updateTechnicalPlan({ step });
-  }
-
-  function setWorkflowKind(workflowKind) {
-    return updateTechnicalPlan({ workflowKind: normalizeWorkflowKind(workflowKind) });
-  }
-
-  function switchWorkflowKind(workflowKind) {
-    const nextWorkflowKind = normalizeWorkflowKind(workflowKind);
-    const meta = ensureMetaRow();
-    if (normalizeWorkflowKind(meta.workflow_kind) === nextWorkflowKind) {
-      return;
-    }
-
-    const originalPlanFilePath = meta.original_plan_markdown_path
-      ? resolveMarkdownPath(meta.original_plan_markdown_path)
-      : originalPlanMarkdownPath;
-    const transaction = db.transaction(() => {
-      assertNoTechnicalPlanTaskRunning();
-      clearWorkflowSpecificState(nextWorkflowKind);
-    });
-    transaction();
-    if (fs.existsSync(originalPlanFilePath)) {
-      fs.rmSync(originalPlanFilePath, { force: true });
-    }
   }
 
   function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineMode, outlineExpansionMode, wordControlOptions } = {}) {
@@ -2442,6 +2372,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const fileName = result.file_name || '未命名文件';
     const parserLabel = result.parser_label || null;
     await runBeforeCommit(options.beforeCommit);
+    clearBidTemplate();
     const targetDir = path.dirname(originalPlanMarkdownPath);
     const tempPath = path.join(targetDir, `original-plan-${Date.now()}.tmp.md`);
     fs.mkdirSync(targetDir, { recursive: true });
@@ -2452,7 +2383,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       const timestamp = now();
       const transaction = db.transaction(() => {
         updateMeta({
-          workflow_kind: 'existing-plan-expansion',
           original_plan_file_name: fileName,
           original_plan_markdown_path: originalPlanMarkdownRelativePath,
           original_plan_markdown_hash: stableHash(markdown),
@@ -2472,6 +2402,34 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
       throw error;
     }
+  }
+
+  async function removeOriginalPlanDocument(options = {}) {
+    const meta = ensureMetaRow();
+    if (!meta.original_plan_markdown_path) {
+      return { success: true, message: '当前没有已上传的原方案' };
+    }
+
+    await runBeforeCommit(options.beforeCommit);
+    clearBidTemplate();
+    const filePath = resolveMarkdownPath(meta.original_plan_markdown_path);
+    const transaction = db.transaction(() => {
+      updateMeta({
+        original_plan_file_name: null,
+        original_plan_markdown_path: null,
+        original_plan_markdown_hash: null,
+        original_plan_markdown_chars: 0,
+        original_plan_parser_label: null,
+        original_plan_imported_at: null,
+        outline_expansion_mode: 'ai-complement',
+      });
+      clearDownstreamFromOriginalPlan();
+    });
+    transaction();
+    if (fs.existsSync(filePath)) {
+      fs.rmSync(filePath, { force: true });
+    }
+    return { success: true, message: '已移除原方案' };
   }
 
   function saveTenderMarkdownAndState(markdown, { fileName, parserLabel, message, selectedSection, fallbackToLocal, resetOriginal, sourceFiles }) {
@@ -2560,7 +2518,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     deleteOutlineAgentTask();
     deleteGlobalFactsAgentTask();
     cleanupPendingTenderSelection();
-    const workflowKind = normalizeWorkflowKind(ensureMetaRow().workflow_kind);
     const transaction = db.transaction(() => {
       db.prepare('DELETE FROM technical_plan_tasks').run();
       db.prepare('DELETE FROM technical_plan_bid_items').run();
@@ -2570,7 +2527,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       clearContentIllustrationPlan();
       db.prepare('DELETE FROM technical_plan_meta').run();
       ensureMetaRow();
-      updateMeta({ workflow_kind: workflowKind });
     });
     transaction();
     if (fs.existsSync(tenderMarkdownPath)) {
@@ -2604,6 +2560,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     importTenderDocument,
     removeTenderDocument,
     importOriginalPlanDocument,
+    removeOriginalPlanDocument,
     checkBidSections,
     prepareBidSectionExtraction,
     selectBidSection,
@@ -2617,8 +2574,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     saveOriginalOutlineRuntime,
     clearOriginalOutlineRuntime,
     updateStep,
-    setWorkflowKind,
-    switchWorkflowKind,
     setAgentWorkspaceChangeListener,
     saveBidAnalysisConfig,
     saveOutlineConfig,
