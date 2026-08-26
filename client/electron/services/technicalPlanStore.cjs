@@ -98,14 +98,6 @@ const taskFieldTypes = {
 };
 
 const taskTypeFields = Object.fromEntries(Object.entries(taskFieldTypes).map(([field, type]) => [type, field]));
-const originalPlanDownstreamTaskTypes = Object.freeze([
-  'outline-generation',
-  'outline-adjustment',
-  'global-facts-generation',
-  'global-facts-adjustment',
-  'content-generation',
-]);
-
 function appendImportFailureParts(messageParts, errors) {
   const failed = Array.isArray(errors)
     ? errors.map((item) => String(item || '').trim()).filter(Boolean)
@@ -1836,27 +1828,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     updateMeta({ content_generation_runtime_json: null });
   }
 
-  function clearDownstreamFromOriginalPlan() {
-    deleteOutlineAgentTask();
-    deleteGlobalFactsAgentTask();
-    db.prepare(`DELETE FROM technical_plan_tasks WHERE type IN (${originalPlanDownstreamTaskTypes.map(() => '?').join(', ')})`).run(...originalPlanDownstreamTaskTypes);
-    db.prepare('DELETE FROM technical_plan_outline_nodes').run();
-    db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
-    db.prepare('DELETE FROM technical_plan_content_sections').run();
-    db.prepare('DELETE FROM technical_plan_content_plans').run();
-    clearContentIllustrationPlan();
-    clearOriginalOutlineRuntime();
-    clearTechnicalPlanMermaidCache();
-    updateMeta({
-      step: 'generation-settings',
-      outline_project_name: null,
-      outline_project_overview: null,
-      content_generation_runtime_json: null,
-      outline_word_control_snapshot_json: null,
-    });
-    notifyAgentWorkspaceChange({ force: true });
-  }
-
   // 正文任务活动或暂停期间禁止手工保存，避免清空待恢复的图片计划。
   function assertContentEditingAllowed() {
     const row = db.prepare("SELECT status FROM technical_plan_tasks WHERE type = 'content-generation' AND status IN ('running', 'pausing', 'paused') LIMIT 1").get();
@@ -2183,7 +2154,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     return updateTechnicalPlan({ step });
   }
 
-  // 局部保存统一生成配置；标段变化继续沿用现有下游清理规则。
+  // 局部保存统一生成配置；普通配置只更新存储，标段变化继续沿用现有下游清理规则。
   function saveGenerationConfig(partial = {}) {
     let saved;
     const transaction = db.transaction(() => {
@@ -2203,8 +2174,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
           selected_section_id: null,
           selected_section_title: null,
         });
-      } else if (hasOwn(partial, 'contentGenerationOptions')) {
-        clearContentIllustrationPlan();
       }
 
       saved = updateGenerationConfig(partial);
@@ -2364,7 +2333,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
   function saveContentGenerationOptions(contentGenerationOptions) {
     const saved = saveGenerationConfig({ contentGenerationOptions });
-    return { contentGenerationOptions: saved.contentGenerationOptions, contentIllustrationPlan: undefined };
+    return { contentGenerationOptions: saved.contentGenerationOptions };
   }
 
   function saveChapterContent({ nodeId, content }) {
@@ -2535,7 +2504,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     });
   }
 
-  async function importOriginalPlanDocument(filePaths, options = {}) {
+  async function importOriginalPlanDocument(filePaths) {
     const importer = fileService?.importTechnicalPlanDocument || fileService?.importDocument;
     if (!importer) {
       throw new Error('文件导入服务尚未初始化');
@@ -2555,8 +2524,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const markdown = String(result.file_content || '').trim();
     const fileName = result.file_name || '未命名文件';
     const parserLabel = result.parser_label || null;
-    await runBeforeCommit(options.beforeCommit);
-    clearBidTemplate();
     const targetDir = path.dirname(originalPlanMarkdownPath);
     const tempPath = path.join(targetDir, `original-plan-${Date.now()}.tmp.md`);
     fs.mkdirSync(targetDir, { recursive: true });
@@ -2574,7 +2541,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
           original_plan_parser_label: parserLabel || null,
           original_plan_imported_at: timestamp,
         });
-        clearDownstreamFromOriginalPlan();
       });
       transaction();
       return {
@@ -2588,14 +2554,12 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     }
   }
 
-  async function removeOriginalPlanDocument(options = {}) {
+  async function removeOriginalPlanDocument() {
     const meta = ensureMetaRow();
     if (!meta.original_plan_markdown_path) {
       return { success: true, message: '当前没有已上传的原方案' };
     }
 
-    await runBeforeCommit(options.beforeCommit);
-    clearBidTemplate();
     const filePath = resolveMarkdownPath(meta.original_plan_markdown_path);
     const transaction = db.transaction(() => {
       updateMeta({
@@ -2607,7 +2571,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         original_plan_imported_at: null,
       });
       updateGenerationConfig({ outlineExpansionMode: 'ai-complement' });
-      clearDownstreamFromOriginalPlan();
     });
     transaction();
     if (fs.existsSync(filePath)) {
@@ -2829,5 +2792,4 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
 module.exports = {
   createTechnicalPlanStore,
-  originalPlanDownstreamTaskTypes,
 };

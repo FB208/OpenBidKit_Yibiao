@@ -14,7 +14,6 @@ const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs'
 const { CONTENT_PLANNING_AGENT_TASK_KEY } = require('./contentPlanningAgentConfig.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
-const { originalPlanDownstreamTaskTypes } = require('./technicalPlanStore.cjs');
 const {
   clearContent,
   runFeasibilityAnalysisTask,
@@ -1611,14 +1610,10 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       });
     },
     importOriginalPlanDocument(filePaths) {
-      return technicalPlanStore.importOriginalPlanDocument(filePaths, {
-        beforeCommit: () => cancelTechnicalPlanTasks('原方案已更新，后台任务已取消', originalPlanDownstreamTaskTypes),
-      });
+      return technicalPlanStore.importOriginalPlanDocument(filePaths);
     },
     removeOriginalPlanDocument() {
-      return technicalPlanStore.removeOriginalPlanDocument({
-        beforeCommit: () => cancelTechnicalPlanTasks('原方案已移除，后台任务已取消', originalPlanDownstreamTaskTypes),
-      });
+      return technicalPlanStore.removeOriginalPlanDocument();
     },
     async resetRejectionCheck() {
       await cancelRejectionCheckTasks('废标项检查已重置，后台任务已取消');

@@ -634,7 +634,7 @@ function normalizeOriginalMaterial(value) {
     optimized: Boolean(source.optimized),
     source_ids: [...new Set(sourceIds.map((id) => String(id || '').trim()).filter(Boolean))],
     source_titles: [...new Set(sourceTitles.map((title) => singleLine(title)).filter(Boolean))],
-    source_hashes: [...new Set(sourceHashes.map((hash) => String(hash || '').trim()).filter(Boolean))],
+    source_hashes: sourceHashes.map((hash) => String(hash || '').trim()).filter(Boolean),
     restored_chars: Math.max(0, Math.round(Number(source.restored_chars ?? source.restoredChars) || 0)),
     ...(source.restored_at || source.restoredAt ? { restored_at: source.restored_at || source.restoredAt } : {}),
     ...(source.optimized_at || source.optimizedAt ? { optimized_at: source.optimized_at || source.optimizedAt } : {}),
@@ -3403,7 +3403,11 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     const plan = contentPlans.get(itemId) || getStoredContentPlan(itemId)?.plan || normalizeContentPlan({}, allowedKnowledgeItemIds);
     const originalMaterial = normalizeOriginalMaterial(plan.original_material);
     const sourceSegments = originalMaterial.source_ids.map((sourceId) => originalPlanSegmentById.get(sourceId)).filter(Boolean);
-    const allSourcesValid = Boolean(originalMaterial.source_ids.length) && sourceSegments.length === originalMaterial.source_ids.length;
+    const sourceHashesValid = originalMaterial.source_hashes.length === sourceSegments.length
+      && sourceSegments.every((segment, index) => segment.hash === originalMaterial.source_hashes[index]);
+    const allSourcesValid = Boolean(originalMaterial.source_ids.length)
+      && sourceSegments.length === originalMaterial.source_ids.length
+      && sourceHashesValid;
     const content = sections[itemId]?.content || item?.content || '';
     const hasContent = Boolean(String(content || '').trim());
     const validRestored = Boolean(originalMaterial.restored && allSourcesValid && hasContent);

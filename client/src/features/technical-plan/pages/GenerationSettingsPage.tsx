@@ -35,6 +35,13 @@ interface GenerationSettingsPageProps {
   onContentGenerationOptionsChange: (options: ContentGenerationOptions) => Promise<void>;
 }
 
+interface WordControlDraft {
+  minimumWords: string;
+  maximumWords: string;
+  sectionWords: string;
+  strictSectionWords: boolean;
+}
+
 const tabs: Array<{ id: GenerationSettingsTab; label: string }> = [
   { id: 'content', label: '写嘛' },
   { id: 'existing-plan', label: '我有方案' },
@@ -137,12 +144,7 @@ function formatWordCountDraft(words: number) {
   return String(Math.max(0, Math.round(Number(words) || 0)) / WORD_COUNT_INPUT_UNIT);
 }
 
-function normalizeWordControlDraft(values: {
-  minimumWords: string;
-  maximumWords: string;
-  sectionWords: string;
-  strictSectionWords: boolean;
-}) {
+function normalizeWordControlDraft(values: WordControlDraft) {
   const minimumWords = parseWordCountDraft(values.minimumWords);
   const maximumWords = parseWordCountDraft(values.maximumWords);
   const sectionWords = parseWordCountDraft(values.sectionWords);
@@ -227,7 +229,6 @@ function GenerationSettingsPage({
   const [activeTab, setActiveTab] = useState<GenerationSettingsTab>('content');
   const [originalPlanBusy, setOriginalPlanBusy] = useState(false);
   const [outlineModeBusy, setOutlineModeBusy] = useState(false);
-  const [draftOutlineExpansionMode, setDraftOutlineExpansionMode] = useState<OutlineExpansionMode>(outlineExpansionMode);
   const [outlineExpansionModeBusy, setOutlineExpansionModeBusy] = useState(false);
   const [draftMinimumWords, setDraftMinimumWords] = useState(formatWordCountDraft(outlineWordControlOptions.minimumWords));
   const [draftMaximumWords, setDraftMaximumWords] = useState(formatWordCountDraft(outlineWordControlOptions.maximumWords));
@@ -240,7 +241,6 @@ function GenerationSettingsPage({
   const [knowledgeIndex, setKnowledgeIndex] = useState<KnowledgeBaseIndex>(emptyKnowledgeIndex);
   const [loadingKnowledge, setLoadingKnowledge] = useState(false);
   const [knowledgeSaving, setKnowledgeSaving] = useState(false);
-  const [draftGlobalFactsMode, setDraftGlobalFactsMode] = useState<GlobalFactsMode>(() => normalizeGlobalFactsMode(globalFactsMode));
   const [globalFactsModeBusy, setGlobalFactsModeBusy] = useState(false);
   const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
   const [draftTableRequirement, setDraftTableRequirement] = useState<ContentTableRequirement>(() => (
@@ -280,10 +280,6 @@ function GenerationSettingsPage({
   );
 
   useEffect(() => {
-    setDraftOutlineExpansionMode(outlineExpansionMode);
-  }, [outlineExpansionMode, originalPlanFile?.contentHash]);
-
-  useEffect(() => {
     setDraftMinimumWords(formatWordCountDraft(outlineWordControlOptions.minimumWords));
     setDraftMaximumWords(formatWordCountDraft(outlineWordControlOptions.maximumWords));
     setDraftSectionWords(formatWordCountDraft(outlineWordControlOptions.sectionWords));
@@ -293,10 +289,6 @@ function GenerationSettingsPage({
   useEffect(() => {
     setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
   }, [referenceKnowledgeDocumentIds]);
-
-  useEffect(() => {
-    setDraftGlobalFactsMode(normalizeGlobalFactsMode(globalFactsMode));
-  }, [globalFactsMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -339,6 +331,11 @@ function GenerationSettingsPage({
     const nextTab = tabs[nextIndex];
     setActiveTab(nextTab.id);
     document.getElementById(`generation-settings-tab-${nextTab.id}`)?.focus();
+  };
+
+  // 数字输入按回车时通过失焦统一触发校验和保存。
+  const blurInputOnEnter = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') event.currentTarget.blur();
   };
 
   // 导入或替换已有方案，并刷新技术方案状态。
@@ -398,7 +395,7 @@ function GenerationSettingsPage({
     try {
       setOutlineModeBusy(true);
       await onOutlineModeChange(nextOutlineMode);
-      showToast('生成范围已保存', 'success');
+      showToast('保存成功', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '保存生成范围失败', 'error');
     } finally {
@@ -407,12 +404,12 @@ function GenerationSettingsPage({
   };
 
   // 保存原方案目录使用方式，不改变当前已生成目录。
-  const saveOutlineExpansionMode = async () => {
-    if (draftOutlineExpansionMode === outlineExpansionMode || outlineExpansionModeBusy) return;
+  const saveOutlineExpansionMode = async (nextMode: OutlineExpansionMode) => {
+    if (nextMode === outlineExpansionMode || outlineExpansionModeBusy) return;
     try {
       setOutlineExpansionModeBusy(true);
-      await onOutlineExpansionModeChange(draftOutlineExpansionMode);
-      showToast('原方案目录使用方式已保存', 'success');
+      await onOutlineExpansionModeChange(nextMode);
+      showToast('保存成功', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '保存原方案目录使用方式失败', 'error');
     } finally {
@@ -420,34 +417,42 @@ function GenerationSettingsPage({
     }
   };
 
-  // 按目录生成阶段原有规则校验，并保存篇幅与表格需求。
-  const saveWordControlOptions = async () => {
+  // 按目录生成阶段原有规则校验并保存篇幅设置。
+  const saveWordControlOptions = async (overrides: Partial<WordControlDraft> = {}) => {
+    if (wordControlBusy) return;
+    const draft = {
+      minimumWords: draftMinimumWords,
+      maximumWords: draftMaximumWords,
+      sectionWords: draftSectionWords,
+      strictSectionWords: draftStrictSectionWords,
+      ...overrides,
+    };
+    let options: OutlineWordControlOptions;
     try {
-      const options = normalizeWordControlDraft({
-        minimumWords: draftMinimumWords,
-        maximumWords: draftMaximumWords,
-        sectionWords: draftSectionWords,
-        strictSectionWords: draftStrictSectionWords,
-      });
-      setWordControlBusy(true);
-      setContentOptionsBusy(true);
-      await onOutlineWordControlOptionsChange(options);
-      if (draftTableRequirement !== currentContentGenerationOptions.tableRequirement) {
-        await onContentGenerationOptionsChange({
-          ...currentContentGenerationOptions,
-          tableRequirement: draftTableRequirement,
-        });
-      }
-      setDraftMinimumWords(formatWordCountDraft(options.minimumWords));
-      setDraftMaximumWords(formatWordCountDraft(options.maximumWords));
-      setDraftSectionWords(formatWordCountDraft(options.sectionWords));
-      setDraftStrictSectionWords(options.strictSectionWords);
-      showToast('篇幅和表格设置已保存', 'success');
+      options = normalizeWordControlDraft(draft);
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '保存篇幅和表格设置失败', 'error');
+      showToast(error instanceof Error ? error.message : '保存篇幅设置失败', 'error');
+      return;
+    }
+
+    setDraftMinimumWords(formatWordCountDraft(options.minimumWords));
+    setDraftMaximumWords(formatWordCountDraft(options.maximumWords));
+    setDraftSectionWords(formatWordCountDraft(options.sectionWords));
+    setDraftStrictSectionWords(options.strictSectionWords);
+    if (areWordControlOptionsEqual(options, outlineWordControlOptions)) return;
+
+    try {
+      setWordControlBusy(true);
+      await onOutlineWordControlOptionsChange(options);
+      showToast('保存成功', 'success');
+    } catch (error) {
+      setDraftMinimumWords(formatWordCountDraft(outlineWordControlOptions.minimumWords));
+      setDraftMaximumWords(formatWordCountDraft(outlineWordControlOptions.maximumWords));
+      setDraftSectionWords(formatWordCountDraft(outlineWordControlOptions.sectionWords));
+      setDraftStrictSectionWords(outlineWordControlOptions.strictSectionWords);
+      showToast(error instanceof Error ? error.message : '保存篇幅设置失败', 'error');
     } finally {
       setWordControlBusy(false);
-      setContentOptionsBusy(false);
     }
   };
 
@@ -469,12 +474,18 @@ function GenerationSettingsPage({
   };
 
   // 保存目录与正文生成共用的参考知识库。
-  const saveReferenceKnowledgeDocumentIds = async () => {
+  const saveReferenceKnowledgeDocumentIds = async (nextDocumentIds: string[]) => {
+    if (knowledgeSaving) return;
+    const unchanged = nextDocumentIds.length === referenceKnowledgeDocumentIds.length
+      && nextDocumentIds.every((documentId, index) => documentId === referenceKnowledgeDocumentIds[index]);
+    setDraftKnowledgeDocumentIds(nextDocumentIds);
+    if (unchanged) return;
     try {
       setKnowledgeSaving(true);
-      await onReferenceKnowledgeDocumentIdsChange(draftKnowledgeDocumentIds);
-      showToast('参考知识库已保存', 'success');
+      await onReferenceKnowledgeDocumentIdsChange(nextDocumentIds);
+      showToast('保存成功', 'success');
     } catch (error) {
+      setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
       showToast(error instanceof Error ? error.message : '保存参考知识库失败', 'error');
     } finally {
       setKnowledgeSaving(false);
@@ -482,13 +493,13 @@ function GenerationSettingsPage({
   };
 
   // 保存全局事实与正文共用的不确定信息补全方式。
-  const saveGlobalFactsMode = async () => {
-    const nextMode = normalizeGlobalFactsMode(draftGlobalFactsMode);
+  const saveGlobalFactsMode = async (value: GlobalFactsMode) => {
+    const nextMode = normalizeGlobalFactsMode(value);
     if (nextMode === globalFactsMode || globalFactsModeBusy) return;
     try {
       setGlobalFactsModeBusy(true);
       await onGlobalFactsModeChange(nextMode);
-      showToast('全局事实设定配置已保存', 'success');
+      showToast('保存成功', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '保存全局事实配置失败', 'error');
     } finally {
@@ -496,25 +507,23 @@ function GenerationSettingsPage({
     }
   };
 
-  // 保存三类配图开关、数量上限和 HTML 图片类型。
-  const saveIllustrationOptions = async () => {
+  // 保存表格及三类配图设置，不改变已有正文和配图结果。
+  const saveContentOptions = async (value: ContentGenerationOptions) => {
+    if (contentOptionsBusy) return false;
+    const nextOptions = normalizeContentGenerationOptions(value, imageModelAvailable, contentLeafCount);
+    setDraftTableRequirement(nextOptions.tableRequirement);
+    setDraftIllustrationOptions(nextOptions);
+    if (JSON.stringify(nextOptions) === JSON.stringify(currentContentGenerationOptions)) return true;
     try {
       setContentOptionsBusy(true);
-      const nextOptions = normalizeContentGenerationOptions({
-        ...currentContentGenerationOptions,
-        useAiImages: draftIllustrationOptions.useAiImages,
-        maxAiImages: draftIllustrationOptions.maxAiImages,
-        useMermaidImages: draftIllustrationOptions.useMermaidImages,
-        maxMermaidImages: draftIllustrationOptions.maxMermaidImages,
-        useHtmlImages: draftIllustrationOptions.useHtmlImages,
-        maxHtmlImages: draftIllustrationOptions.maxHtmlImages,
-        htmlImageTypes: draftIllustrationOptions.htmlImageTypes,
-      }, imageModelAvailable, contentLeafCount);
       await onContentGenerationOptionsChange(nextOptions);
-      setDraftIllustrationOptions(nextOptions);
-      showToast('配图设置已保存', 'success');
+      showToast('保存成功', 'success');
+      return true;
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '保存配图设置失败', 'error');
+      setDraftTableRequirement(currentContentGenerationOptions.tableRequirement);
+      setDraftIllustrationOptions(currentContentGenerationOptions);
+      showToast(error instanceof Error ? error.message : '保存正文生成设置失败', 'error');
+      return false;
     } finally {
       setContentOptionsBusy(false);
     }
@@ -525,18 +534,21 @@ function GenerationSettingsPage({
     setHtmlImageTypesDialogOpen(true);
   };
 
-  const confirmHtmlImageTypes = () => {
-    setDraftIllustrationOptions((current) => ({ ...current, htmlImageTypes: htmlImageTypesDraft }));
-    setHtmlImageTypesDialogOpen(false);
+  const confirmHtmlImageTypes = async () => {
+    const saved = await saveContentOptions({
+      ...draftIllustrationOptions,
+      tableRequirement: draftTableRequirement,
+      htmlImageTypes: htmlImageTypesDraft,
+    });
+    if (saved) setHtmlImageTypesDialogOpen(false);
   };
 
   const toggleKnowledgeDocument = (document: KnowledgeDocument) => {
     if (document.status !== 'success' || knowledgeSelectionDisabled) return;
-    setDraftKnowledgeDocumentIds((current) => (
-      current.includes(document.id)
-        ? current.filter((id) => id !== document.id)
-        : [...current, document.id]
-    ));
+    const nextDocumentIds = draftKnowledgeDocumentIds.includes(document.id)
+      ? draftKnowledgeDocumentIds.filter((id) => id !== document.id)
+      : [...draftKnowledgeDocumentIds, document.id];
+    void saveReferenceKnowledgeDocumentIds(nextDocumentIds);
   };
 
   const toggleKnowledgeFolder = (folderId: string) => {
@@ -546,23 +558,23 @@ function GenerationSettingsPage({
   const selectKnowledgeFolder = (documents: KnowledgeDocument[]) => {
     if (knowledgeSelectionDisabled) return;
     const ids = documents.filter((document) => document.status === 'success').map((document) => document.id);
-    setDraftKnowledgeDocumentIds((current) => [...current, ...ids.filter((id) => !current.includes(id))]);
+    void saveReferenceKnowledgeDocumentIds([...draftKnowledgeDocumentIds, ...ids.filter((id) => !draftKnowledgeDocumentIds.includes(id))]);
   };
 
   const deselectKnowledgeFolder = (documents: KnowledgeDocument[]) => {
     if (knowledgeSelectionDisabled) return;
     const ids = new Set(documents.map((document) => document.id));
-    setDraftKnowledgeDocumentIds((current) => current.filter((id) => !ids.has(id)));
+    void saveReferenceKnowledgeDocumentIds(draftKnowledgeDocumentIds.filter((id) => !ids.has(id)));
   };
 
   const removeKnowledgeDocument = (documentId: string) => {
     if (knowledgeSelectionDisabled) return;
-    setDraftKnowledgeDocumentIds((current) => current.filter((id) => id !== documentId));
+    void saveReferenceKnowledgeDocumentIds(draftKnowledgeDocumentIds.filter((id) => id !== documentId));
   };
 
   const clearKnowledgeDocuments = () => {
     if (knowledgeSelectionDisabled) return;
-    setDraftKnowledgeDocumentIds([]);
+    void saveReferenceKnowledgeDocumentIds([]);
   };
 
   // 渲染可搜索、按文件夹展开的知识库选择器。
@@ -667,16 +679,6 @@ function GenerationSettingsPage({
             </div>
           </div>
         )}
-        <div className="generation-settings-save-row">
-          <button
-            type="button"
-            className="primary-action"
-            onClick={() => void saveReferenceKnowledgeDocumentIds()}
-            disabled={knowledgeSelectionDisabled}
-          >
-            {knowledgeSaving ? '正在保存...' : '保存设置'}
-          </button>
-        </div>
       </section>
     );
   };
@@ -688,7 +690,7 @@ function GenerationSettingsPage({
           <div>
             <span className="section-kicker">STEP 02</span>
             <strong>生成设置</strong>
-            <p>在生成前集中设置投标文件的内容范围、参考知识、篇幅、插图、写法和最终样式。</p>
+            <p>配置修改后自动保存且不清空已有结果，后续重新生成时使用新设置。</p>
           </div>
         </header>
 
@@ -748,7 +750,7 @@ function GenerationSettingsPage({
           ) : activeTab === 'existing-plan' ? (
             <div className="generation-settings-stack">
               <UploadRow
-                title="已有技术方案"
+                title="基于上传的方案进行扩写"
                 className="generation-settings-existing-upload"
                 actions={(
                   <button type="button" className="primary-action" onClick={() => void importOriginalPlan()} disabled={originalPlanBusy}>
@@ -780,17 +782,17 @@ function GenerationSettingsPage({
                 <section className="outline-generation-config-section outline-expansion-mode-section generation-settings-config-section">
                   <div className="outline-generation-config-head">
                     <strong>原方案目录使用方式</strong>
-                    <span>{outlineExpansionModeLabels[draftOutlineExpansionMode]}</span>
+                    <span>{outlineExpansionModeLabels[outlineExpansionMode]}</span>
                   </div>
                   <div className="outline-expansion-mode-switch">
                     {outlineExpansionModeOptions.map((option) => {
-                      const selected = draftOutlineExpansionMode === option.value;
+                      const selected = outlineExpansionMode === option.value;
                       return (
                         <button
                           type="button"
                           className={`outline-expansion-mode-option${selected ? ' is-selected' : ''}`}
                           key={option.value}
-                          onClick={() => setDraftOutlineExpansionMode(option.value)}
+                          onClick={() => void saveOutlineExpansionMode(option.value)}
                           disabled={outlineConfigLocked || outlineExpansionModeBusy}
                           aria-pressed={selected}
                         >
@@ -799,16 +801,6 @@ function GenerationSettingsPage({
                         </button>
                       );
                     })}
-                  </div>
-                  <div className="generation-settings-save-row">
-                    <button
-                      type="button"
-                      className="primary-action"
-                      onClick={() => void saveOutlineExpansionMode()}
-                      disabled={outlineConfigLocked || outlineExpansionModeBusy || draftOutlineExpansionMode === outlineExpansionMode}
-                    >
-                      {outlineExpansionModeBusy ? '正在保存...' : '保存设置'}
-                    </button>
                   </div>
                 </section>
               )}
@@ -827,21 +819,32 @@ function GenerationSettingsPage({
                 <div className="outline-word-control-grid">
                   <label>
                     <span>最少字数（万）</span>
-                    <input inputMode="decimal" value={draftMinimumWords} disabled={outlineConfigLocked || wordControlBusy} onChange={(event) => /^\d*(?:\.\d{0,4})?$/.test(event.target.value) && setDraftMinimumWords(event.target.value)} onBlur={() => setDraftMinimumWords(formatWordCountDraft(parseWordCountDraft(draftMinimumWords) ?? 0))} />
+                    <input inputMode="decimal" value={draftMinimumWords} disabled={outlineConfigLocked || wordControlBusy} onChange={(event) => /^\d*(?:\.\d{0,4})?$/.test(event.target.value) && setDraftMinimumWords(event.target.value)} onKeyDown={blurInputOnEnter} onBlur={() => {
+                      const value = formatWordCountDraft(parseWordCountDraft(draftMinimumWords) ?? 0);
+                      setDraftMinimumWords(value);
+                      void saveWordControlOptions({ minimumWords: value });
+                    }} />
                   </label>
                   <label>
                     <span>最多字数（万）</span>
-                    <input inputMode="decimal" value={draftMaximumWords} disabled={outlineConfigLocked || wordControlBusy} onChange={(event) => /^\d*(?:\.\d{0,4})?$/.test(event.target.value) && setDraftMaximumWords(event.target.value)} onBlur={() => setDraftMaximumWords(formatWordCountDraft(parseWordCountDraft(draftMaximumWords) ?? 0))} />
+                    <input inputMode="decimal" value={draftMaximumWords} disabled={outlineConfigLocked || wordControlBusy} onChange={(event) => /^\d*(?:\.\d{0,4})?$/.test(event.target.value) && setDraftMaximumWords(event.target.value)} onKeyDown={blurInputOnEnter} onBlur={() => {
+                      const value = formatWordCountDraft(parseWordCountDraft(draftMaximumWords) ?? 0);
+                      setDraftMaximumWords(value);
+                      void saveWordControlOptions({ maximumWords: value });
+                    }} />
                   </label>
                   <label>
                     <span>每小节字数（万）</span>
                     <input inputMode="decimal" value={draftSectionWords} disabled={outlineConfigLocked || wordControlBusy} onChange={(event) => {
                       if (!/^\d*(?:\.\d{0,4})?$/.test(event.target.value)) return;
                       setDraftSectionWords(event.target.value);
-                    }} onBlur={() => {
+                    }} onKeyDown={blurInputOnEnter} onBlur={() => {
                       const sectionWords = parseWordCountDraft(draftSectionWords) ?? 0;
-                      setDraftSectionWords(formatWordCountDraft(sectionWords));
-                      if (sectionWords === 0) setDraftStrictSectionWords(false);
+                      const value = formatWordCountDraft(sectionWords);
+                      const strictSectionWords = sectionWords > 0 && draftStrictSectionWords;
+                      setDraftSectionWords(value);
+                      setDraftStrictSectionWords(strictSectionWords);
+                      void saveWordControlOptions({ sectionWords: value, strictSectionWords });
                     }} />
                   </label>
                 </div>
@@ -854,7 +857,10 @@ function GenerationSettingsPage({
                     <strong>强控小节字数</strong>
                     <small>{draftStrictSectionWords ? '强制控制每小节字数必须是预设值的正负 20%' : '仅控制总字数'}</small>
                   </span>
-                  <AppSwitch checked={draftStrictSectionWords} onCheckedChange={setDraftStrictSectionWords} disabled={outlineConfigLocked || wordControlBusy || parsedDraftSectionWords === 0} aria-label="强控小节字数，允许范围为预设值的正负 20%" />
+                  <AppSwitch checked={draftStrictSectionWords} onCheckedChange={(checked) => {
+                    setDraftStrictSectionWords(checked);
+                    void saveWordControlOptions({ strictSectionWords: checked });
+                  }} disabled={outlineConfigLocked || wordControlBusy || parsedDraftSectionWords === 0} aria-label="强控小节字数，允许范围为预设值的正负 20%" />
                 </div>
                 <div className="outline-word-control-estimate">
                   <div className="outline-word-control-estimate-label">预估页数</div>
@@ -882,7 +888,10 @@ function GenerationSettingsPage({
                   <select
                     value={draftTableRequirement}
                     disabled={contentConfigLocked || contentOptionsBusy}
-                    onChange={(event) => setDraftTableRequirement(event.target.value as ContentTableRequirement)}
+                    onChange={(event) => {
+                      const tableRequirement = event.target.value as ContentTableRequirement;
+                      void saveContentOptions({ ...draftIllustrationOptions, tableRequirement });
+                    }}
                   >
                     {tableRequirementOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
                   </select>
@@ -893,11 +902,6 @@ function GenerationSettingsPage({
                   {outlineWordControlSnapshot ? '生成目录后若修改了字数设置，需要重新生成目录才能生效！' : '当前目录缺少字数控制生效配置，请重新生成目录。'}
                 </div>
               )}
-              <div className="generation-settings-save-row">
-                <button type="button" className="primary-action" onClick={() => void saveWordControlOptions()} disabled={outlineConfigLocked || contentConfigLocked || wordControlBusy || contentOptionsBusy}>
-                  {wordControlBusy || contentOptionsBusy ? '正在保存...' : '保存设置'}
-                </button>
-              </div>
             </section>
           ) : activeTab === 'illustration' ? (
             <section className="generation-settings-illustration-section">
@@ -915,7 +919,11 @@ function GenerationSettingsPage({
                       <AppSwitch
                         checked={draftIllustrationOptions.useAiImages && imageModelAvailable}
                         disabled={contentConfigLocked || contentOptionsBusy || !imageModelAvailable}
-                        onCheckedChange={(checked) => setDraftIllustrationOptions((current) => ({ ...current, useAiImages: checked }))}
+                        onCheckedChange={(checked) => void saveContentOptions({
+                          ...draftIllustrationOptions,
+                          tableRequirement: draftTableRequirement,
+                          useAiImages: checked,
+                        })}
                         aria-label="是否使用 AI 生图"
                       />
                     </div>
@@ -933,6 +941,8 @@ function GenerationSettingsPage({
                           ...current,
                           maxAiImages: Math.max(0, Math.min(Number(event.target.value) || 0, contentImageLimit)),
                         }))}
+                        onKeyDown={blurInputOnEnter}
+                        onBlur={() => void saveContentOptions({ ...draftIllustrationOptions, tableRequirement: draftTableRequirement })}
                       />
                     </label>
                   )}
@@ -948,7 +958,11 @@ function GenerationSettingsPage({
                     <AppSwitch
                       checked={draftIllustrationOptions.useMermaidImages}
                       disabled={contentConfigLocked || contentOptionsBusy}
-                      onCheckedChange={(checked) => setDraftIllustrationOptions((current) => ({ ...current, useMermaidImages: checked }))}
+                      onCheckedChange={(checked) => void saveContentOptions({
+                        ...draftIllustrationOptions,
+                        tableRequirement: draftTableRequirement,
+                        useMermaidImages: checked,
+                      })}
                       aria-label="是否使用 Mermaid 生图"
                     />
                   </div>
@@ -965,6 +979,8 @@ function GenerationSettingsPage({
                           ...current,
                           maxMermaidImages: Math.max(0, Math.min(Number(event.target.value) || 0, contentImageLimit)),
                         }))}
+                        onKeyDown={blurInputOnEnter}
+                        onBlur={() => void saveContentOptions({ ...draftIllustrationOptions, tableRequirement: draftTableRequirement })}
                       />
                     </label>
                   )}
@@ -980,7 +996,11 @@ function GenerationSettingsPage({
                     <AppSwitch
                       checked={draftIllustrationOptions.useHtmlImages}
                       disabled={contentConfigLocked || contentOptionsBusy}
-                      onCheckedChange={(checked) => setDraftIllustrationOptions((current) => ({ ...current, useHtmlImages: checked }))}
+                      onCheckedChange={(checked) => void saveContentOptions({
+                        ...draftIllustrationOptions,
+                        tableRequirement: draftTableRequirement,
+                        useHtmlImages: checked,
+                      })}
                       aria-label="是否生成 HTML 图片"
                     />
                   </div>
@@ -997,6 +1017,8 @@ function GenerationSettingsPage({
                           ...current,
                           maxHtmlImages: Math.max(0, Math.min(Number(event.target.value) || 0, contentImageLimit)),
                         }))}
+                        onKeyDown={blurInputOnEnter}
+                        onBlur={() => void saveContentOptions({ ...draftIllustrationOptions, tableRequirement: draftTableRequirement })}
                       />
                     </label>
                   )}
@@ -1013,29 +1035,18 @@ function GenerationSettingsPage({
                   </div>
                 )}
               </div>
-              <div className="generation-settings-save-row">
-                <button type="button" className="primary-action" onClick={() => void saveIllustrationOptions()} disabled={contentConfigLocked || contentOptionsBusy}>
-                  {contentOptionsBusy ? '正在保存...' : '保存设置'}
-                </button>
-              </div>
             </section>
           ) : activeTab === 'writing' ? (
             <section className="generation-settings-writing-section">
-              <div className="content-generation-config-row">
-                <span>
-                  <strong>不确定信息怎么写</strong>
-                  <small>设置参考材料没有提供具体值时，全局事实和正文采用的统一写法。</small>
-                </span>
-              </div>
               <div className="global-facts-mode-list" role="radiogroup" aria-label="事实补全模式">
                 {globalFactsModeOptions.map((option) => {
-                  const selected = draftGlobalFactsMode === option.value;
+                  const selected = globalFactsMode === option.value;
                   return (
                     <button
                       type="button"
                       className={`global-facts-mode-option${selected ? ' is-selected' : ''}`}
                       key={option.value}
-                      onClick={() => setDraftGlobalFactsMode(option.value)}
+                      onClick={() => void saveGlobalFactsMode(option.value)}
                       disabled={globalFactsConfigLocked || globalFactsModeBusy}
                       role="radio"
                       aria-checked={selected}
@@ -1045,16 +1056,6 @@ function GenerationSettingsPage({
                     </button>
                   );
                 })}
-              </div>
-              <div className="generation-settings-save-row">
-                <button
-                  type="button"
-                  className="primary-action"
-                  onClick={() => void saveGlobalFactsMode()}
-                  disabled={globalFactsConfigLocked || globalFactsModeBusy || draftGlobalFactsMode === globalFactsMode}
-                >
-                  {globalFactsModeBusy ? '正在保存...' : '保存设置'}
-                </button>
               </div>
             </section>
           ) : (
@@ -1066,7 +1067,7 @@ function GenerationSettingsPage({
         </div>
       </section>
 
-      <Dialog.Root open={htmlImageTypesDialogOpen} onOpenChange={setHtmlImageTypesDialogOpen}>
+      <Dialog.Root open={htmlImageTypesDialogOpen} onOpenChange={(open) => !contentOptionsBusy && setHtmlImageTypesDialogOpen(open)}>
         <Dialog.Portal>
           <Dialog.Overlay className="content-regenerate-modal html-image-types-modal" />
           <Dialog.Content className="content-regenerate-card html-image-types-card" aria-describedby={undefined}>
@@ -1076,11 +1077,12 @@ function GenerationSettingsPage({
             <textarea
               value={htmlImageTypesDraft}
               onChange={(event) => setHtmlImageTypesDraft(event.target.value)}
+              disabled={contentOptionsBusy}
               aria-label="HTML 可生成的图片类型"
             />
             <div className="content-regenerate-actions">
-              <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
-              <button type="button" className="primary-action" onClick={confirmHtmlImageTypes}>确认</button>
+              <Dialog.Close className="secondary-action" type="button" disabled={contentOptionsBusy}>取消</Dialog.Close>
+              <button type="button" className="primary-action" onClick={() => void confirmHtmlImageTypes()} disabled={contentOptionsBusy}>{contentOptionsBusy ? '正在保存...' : '确认'}</button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
@@ -1102,7 +1104,7 @@ function GenerationSettingsPage({
         onOpenChange={(open) => !originalPlanBusy && setRemoveDialogOpen(open)}
         kicker="移除已有方案"
         title="确认切回普通生成模式"
-        description="移除后会保留招标文件和解析结果，并清空依赖原方案的目录、全局事实、正文和生成进度。"
+        description="移除后会保留招标文件、目录、全局事实、正文、生成进度和配图结果；后续重新生成时不再使用原方案。"
         actions={(
           <>
             <button type="button" className="secondary-action" onClick={() => setRemoveDialogOpen(false)} disabled={originalPlanBusy}>取消</button>
