@@ -1628,7 +1628,7 @@ function createSqliteDatabase(app, options = {}) {
     }
   };
 
-  app.once('before-quit', close);
+  app.once('will-quit', close);
 
   return {
     db,
