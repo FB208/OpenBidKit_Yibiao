@@ -6,6 +6,7 @@
 @import './styles/layout-app-shell.css';
 @import './styles/shared-components.css';
 @import './styles/shared-dialog.css';
+@import './styles/shared-donation.css';
 @import './styles/shared-toast.css';
 @import './styles/shared-upload.css';
 @import './styles/shared-markdown.css';

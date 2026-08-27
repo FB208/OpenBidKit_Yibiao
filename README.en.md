@@ -1,4 +1,4 @@
-<img src="./screenshots/banner.webp" alt="Yibiao usage demo video" width="100%">
+<img src="./screenshots/banner2.webp" alt="Yibiao usage demo video" width="100%">
 
 ## 🙏 Sponsors
 

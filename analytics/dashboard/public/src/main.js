@@ -4,6 +4,7 @@ import { loadAgentErrors, setupAgentErrorsPage } from './pages/agentErrors.js';
 import { loadClients, loadClientDetail, loadIpStats } from './pages/clients.js';
 import { loadConfigUsage, loadModelUsage } from './pages/configUsage.js';
 import { loadLatest } from './pages/latest.js';
+import { loadIpBlocks, setupIpBlocksPage } from './pages/ipBlocks.js';
 import { loadModelInfoCache, setupModelInfoCachePage, syncModelInfoCache } from './pages/modelInfoCache.js';
 import { downloadOfflineLicense, generateOfflineLicense, loadLicenseConfig, saveLicenseConfig } from './pages/license.js';
 import { disableNotice, loadNotice, publishNotice } from './pages/notice.js';
@@ -24,6 +25,7 @@ const tabLoaders = {
   models: () => loadModelUsage(),
   agent: (options = {}) => Promise.all([loadAgentRuntime(), loadAgentErrors({ resetPage: options.resetAgentErrorPage })]),
   latest: (options = {}) => loadLatest(options),
+  'ip-blocks': () => loadIpBlocks(),
   notice: () => loadNotice(),
   license: () => loadLicenseConfig(),
   resources: () => loadResources(),
@@ -118,6 +120,7 @@ function bindEvents() {
   setupPluginsPage();
   setupModelInfoCachePage();
   setupAgentErrorsPage();
+  setupIpBlocksPage();
   state.syncModelInfoCacheButton.addEventListener('click', syncModelInfoCache);
   state.prevLatestPage.addEventListener('click', () => {
     appState.latestPage = Math.max(1, appState.latestPage - 1);

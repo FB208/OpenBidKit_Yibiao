@@ -6,8 +6,6 @@ import path from 'node:path';
 const GITEE_API_BASE_URL = 'https://gitee.com/api/v5';
 const DEFAULT_R2_RELEASE_PREFIX = 'release';
 const GITEE_TARGET_COMMITISH = 'main';
-const TAG_SYNC_TIMEOUT_SECONDS = 600;
-const TAG_SYNC_POLL_INTERVAL_SECONDS = 10;
 
 function requireEnv(name) {
   const value = String(process.env[name] || '').trim();
@@ -46,12 +44,6 @@ function joinKey(prefix, fileName) {
 
 function encodePathSegment(value) {
   return encodeURIComponent(String(value));
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 async function readGithubRelease(releaseJsonPath, tagName) {
@@ -255,19 +247,6 @@ async function hasGiteeTag({ owner, repo, token, tagName }) {
   return false;
 }
 
-async function waitForGiteeTag({ owner, repo, token, tagName }) {
-  const deadline = Date.now() + TAG_SYNC_TIMEOUT_SECONDS * 1000;
-  while (Date.now() <= deadline) {
-    if (await hasGiteeTag({ owner, repo, token, tagName })) {
-      console.log(`Gitee tag is ready: ${tagName}`);
-      return;
-    }
-    console.log(`Waiting for Gitee tag: ${tagName}`);
-    await sleep(TAG_SYNC_POLL_INTERVAL_SECONDS * 1000);
-  }
-  throw new Error(`Gitee tag ${tagName} was not found after ${TAG_SYNC_TIMEOUT_SECONDS} seconds.`);
-}
-
 async function getGiteeReleaseByTag({ owner, repo, token, tagName }) {
   return giteeRequest({
     owner,
@@ -338,6 +317,15 @@ async function main() {
   const owner = requireEnv('GITEE_OWNER');
   const repo = requireEnv('GITEE_REPO');
   const tagName = requireEnv('TAG_NAME');
+  if (!await hasGiteeTag({ owner, repo, token, tagName })) {
+    throw new Error(`Gitee tag ${tagName} was not found.`);
+  }
+  console.log(`Gitee tag is ready: ${tagName}`);
+
+  if (process.argv.includes('--check-tag')) {
+    return;
+  }
+
   const releaseJsonPath = requireEnv('GITHUB_RELEASE_JSON');
 
   const githubRelease = await readGithubRelease(releaseJsonPath, tagName);
@@ -353,7 +341,6 @@ async function main() {
   const releaseName = String(githubRelease.name || githubRelease.tagName || tagName);
   const releaseBody = buildReleaseBody({ githubRelease, assets });
 
-  await waitForGiteeTag({ owner, repo, token, tagName });
   await publishGiteeRelease({
     owner,
     repo,

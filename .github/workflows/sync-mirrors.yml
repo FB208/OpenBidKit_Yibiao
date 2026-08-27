@@ -1,0 +1,61 @@
+name: Sync Code to Mirrors
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-atomgit-code:
+    name: Sync code to AtomGit
+    runs-on: ubuntu-latest
+    concurrency:
+      group: atomgit-code-sync
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Sync code to AtomGit
+        env:
+          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
+          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
+          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
+        run: node .github/scripts/sync-atomgit-git.mjs
+
+  sync-gitee-code:
+    name: Sync code to Gitee
+    runs-on: ubuntu-latest
+    concurrency:
+      group: gitee-code-sync
+      cancel-in-progress: false
+
+    steps:
+      - name: Trigger Gitee pull mirror
+        env:
+          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
+          GITEE_OWNER: ${{ vars.GITEE_OWNER }}
+          GITEE_REPO: ${{ vars.GITEE_REPO }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$GITEE_ACCESS_TOKEN" ] || [ -z "$GITEE_OWNER" ] || [ -z "$GITEE_REPO" ]; then
+            echo "GITEE_ACCESS_TOKEN, GITEE_OWNER and GITEE_REPO are required."
+            exit 1
+          fi
+
+          response="$(curl --fail --show-error --silent --request POST --retry 3 --retry-all-errors --retry-delay 20 \
+            "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/remote_mirror/pull?access_token=${GITEE_ACCESS_TOKEN}"
+          )"
+
+          echo "Gitee mirror response: ${response}"

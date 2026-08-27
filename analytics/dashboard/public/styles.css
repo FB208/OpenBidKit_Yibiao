@@ -957,6 +957,15 @@ button:disabled {
   align-self: auto;
 }
 
+.ip-block-form {
+  grid-template-columns: 220px minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.ip-block-table {
+  margin-top: 12px;
+}
+
 /* ===== 授权管理 ===== */
 .license-management-grid {
   display: grid;

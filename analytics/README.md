@@ -20,7 +20,7 @@
 | D1 `openbidkit-resources` | `RESOURCE_DB` | 资源管理元数据 |
 | R2 `openbidkit` | `RESOURCE_BUCKET` | 资源图片、插件当前版与上一版安装包 |
 | R2 `openbidkit-agent-errors` | `AGENT_ERROR_BUCKET` | gzip Agent 完整失败诊断包，保留 7 天 |
-| KV | `NOTICE_STORE` | 公告、授权配置、GitHub stats 缓存和模型信息精简索引 |
+| KV | `NOTICE_STORE` | IP 封禁列表、公告、授权配置、GitHub stats 缓存和模型信息精简索引 |
 
 `openbidkit-analytics` 可以在改版时直接删除并由 `setup:analytics-storage` 重建；删除后异常日志元数据会丢失，R2 孤立对象仍由 7 天生命周期自动清理。不要删除 `openbidkit-resources`。
 
@@ -30,6 +30,8 @@
 | --- | --- | --- | --- |
 | `GET /health` | Worker | 无 | 健康检查 |
 | `POST /track` | AE + D1 | 无 | 写 AE；从 Cloudflare 真实客户端 IP 请求头记录客户端 IP；新客户端按 `client_created_at` 窗口实时入库，授权字段按快照覆盖既有 `stats_clients` |
+| `GET /ip-blocks` | KV + Worker | 无 | 返回全局封禁 IP 列表和 Cloudflare 观测到的请求公网出口 IP，供客户端启动后静默检查 |
+| `GET/POST/DELETE /api/ip-blocks` | KV | `ADMIN_TOKEN` | 读取、添加或删除全局精确 IPv4/IPv6 封禁记录；原因可选，封禁时间由 Worker 自动生成 |
 | `GET/POST /agent-errors` | D1 + R2 | GET 无；POST 有效可信 license | GET 供客户端预检开关、版本和容量；POST 仅在预检条件仍满足时保存 gzip Agent 失败诊断包 |
 | `GET /api/projects` | D1 优先，AE 兜底 | `ADMIN_TOKEN` | 项目列表 |
 | `GET /api/overview` | D1 + AE + KV | `ADMIN_TOKEN` | 概览总数、文本 Token、生图次数、新增、今日活跃、每日统计 |
@@ -61,6 +63,8 @@
 | `POST /api/plugins/sync` | GitHub + `RESOURCE_DB` + R2 | `ADMIN_TOKEN` | 从 GitHub 正式 Release 同步全部插件，并清理 R2 历史版本和孤立对象 |
 
 旧 `/api/summary` 已删除。
+
+除 `/ip-blocks` 和 `/api/*` 管理接口外，Worker 会在路由处理前检查请求的 `CF-Connecting-IP`。命中封禁列表的公开读取或上传请求直接返回空 `204`，不会读取请求正文，也不会写入 AE、D1 或 R2；KV 读取异常时保持公开服务可用。客户端在正常启动后异步调用 `/ip-blocks`，只有返回成功、出口 IP 明确且与列表精确匹配时才结束进程，网络或响应异常不影响正常启动，开发调试模式执行相同检查。
 
 ## 统计口径
 

@@ -193,6 +193,7 @@ celerybeat.pid
 .env_cf.secrets
 .env.secrets
 .dev.vars
+/analytics/scripts/2026-08-26-new-client-investigation/data/
 .venv
 env/
 venv/
@@ -282,4 +283,3 @@ scripts/wecom_chat_export/*.json
 scripts/wecom_chat_export/*.db
 scripts/wecom_chat_export/*.db-wal
 scripts/wecom_chat_export/*.db-shm
-

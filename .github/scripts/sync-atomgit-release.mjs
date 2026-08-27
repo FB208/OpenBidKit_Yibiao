@@ -91,6 +91,29 @@ async function getAtomGitReleaseByTag({ owner, repo, token, tagName }) {
   });
 }
 
+/** 检查 AtomGit 是否已同步指定标签。 */
+async function hasAtomGitTag({ owner, repo, token, tagName }) {
+  for (let page = 1; page <= 10; page += 1) {
+    const tags = await atomGitRequest({
+      owner,
+      repo,
+      token,
+      apiPath: '/tags',
+      query: { page, per_page: 100 },
+    });
+    if (!Array.isArray(tags) || tags.length === 0) {
+      return false;
+    }
+    if (tags.some((tag) => tag?.name === tagName)) {
+      return true;
+    }
+    if (tags.length < 100) {
+      return false;
+    }
+  }
+  return false;
+}
+
 /** 创建新的 AtomGit Release。 */
 async function createAtomGitRelease({ owner, repo, token, tagName, name, body, releaseStatus }) {
   await atomGitRequest({
@@ -149,6 +172,10 @@ async function main() {
   const releaseBody = String(githubRelease.body || '');
   const releaseStatus = githubRelease.isPrerelease ? 'pre' : 'latest';
 
+  if (!await hasAtomGitTag({ owner, repo, token, tagName })) {
+    throw new Error(`AtomGit tag ${tagName} was not found.`);
+  }
+  console.log(`AtomGit tag is ready: ${tagName}`);
   await publishAtomGitRelease({
     owner,
     repo,

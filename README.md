@@ -1,4 +1,4 @@
-<img src="./screenshots/banner.webp" alt="易标使用演示视频" width="100%">
+<img src="./screenshots/banner2.webp" alt="易标使用演示视频" width="100%">
 
 ## 🙏 赞助商
 

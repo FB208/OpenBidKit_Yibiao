@@ -1538,6 +1538,8 @@ function prepareClientStatements(db, rows, updatedAt) {
     FROM rows
     WHERE project_name != '' AND client_id != ''
     ON CONFLICT(project_name, client_id) DO UPDATE SET
+      first_seen_at = MIN(stats_clients.first_seen_at, excluded.first_seen_at),
+      first_seen_date = MIN(stats_clients.first_seen_date, excluded.first_seen_date),
       active_days = stats_clients.active_days + 1,
       last_active_date = CASE WHEN excluded.last_active_date >= stats_clients.last_active_date THEN excluded.last_active_date ELSE stats_clients.last_active_date END,
       last_active_version = CASE WHEN excluded.last_active_date >= stats_clients.last_active_date THEN excluded.last_active_version ELSE stats_clients.last_active_version END,
@@ -1565,7 +1567,12 @@ function prepareClientActivityStatements(db, rows, updatedAt) {
       FROM json_each(?) AS item
     )
     INSERT INTO stats_client_activity (project_name, activity_date, client_id, client_created_date, updated_at)
-    SELECT project_name, activity_date, client_id, client_created_date, ?
+    SELECT rows.project_name, rows.activity_date, rows.client_id,
+      COALESCE((
+        SELECT MIN(clients.first_seen_date, rows.client_created_date)
+        FROM stats_clients AS clients
+        WHERE clients.project_name = rows.project_name AND clients.client_id = rows.client_id
+      ), rows.client_created_date), ?
     FROM rows
     WHERE project_name != '' AND activity_date != '' AND client_id != '' AND client_created_date != ''
     ON CONFLICT(project_name, activity_date, client_id) DO UPDATE SET

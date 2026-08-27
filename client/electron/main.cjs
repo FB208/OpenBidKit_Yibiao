@@ -9,6 +9,7 @@ const { getConfigFilePath, getGeneratedImagesDir, getGpuStartupProbePath, getImp
 const rendererUrl = process.env.ELECTRON_RENDERER_URL;
 const iconPath = path.join(__dirname, '../assets/icon.ico');
 const packagedIndexUrl = pathToFileURL(path.join(__dirname, '../dist/index.html')).toString();
+const IP_BLOCK_LIST_ENDPOINT = 'https://analytics.agnet.top/ip-blocks';
 const GPU_HARDWARE_ACCELERATION_TRIAL_ARG = '--yibiao-trial-hardware-acceleration';
 const FORCE_DISABLE_GPU_ARGS = ['--disable-gpu', '--disable-hardware-acceleration'];
 let appQuitting = false;
@@ -18,6 +19,22 @@ let developerAgentMonitorWindow = null;
 let services = null;
 let closeBeforeQuitStarted = false;
 let quitAfterClose = false;
+
+// 应用正常启动后静默检查公网出口 IP，仅明确命中封禁列表时结束进程。
+async function checkBlockedIpAfterStartup() {
+  try {
+    const response = await net.fetch(IP_BLOCK_LIST_ENDPOINT, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    const clientIp = typeof data?.clientIp === 'string' ? data.clientIp.trim().toLowerCase() : '';
+    if (data?.code !== 0 || !clientIp || !Array.isArray(data.blockedIps)) return;
+    const blocked = data.blockedIps.some((ip) => typeof ip === 'string' && ip.trim().toLowerCase() === clientIp);
+    if (blocked) process.exit(0);
+  } catch {}
+}
 
 function hasProcessArg(name) {
   return process.argv.some((arg) => arg === name || arg.startsWith(`${name}=`));
@@ -490,6 +507,7 @@ app.whenReady().then(() => {
     closeDeveloperTokenStatsWindow();
     closeDeveloperAgentMonitorWindow();
   });
+  void checkBlockedIpAfterStartup();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

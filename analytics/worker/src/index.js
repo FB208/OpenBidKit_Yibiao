@@ -5,6 +5,7 @@ import { handleClients, handleClientDetail, handleIpStats } from './routes/clien
 import { handleConfigUsage, handleModelUsage } from './routes/configUsage.js';
 import { handleGitHubRepoStats } from './routes/githubRepoStats.js';
 import { handleHealth } from './routes/health.js';
+import { handleAdminIpBlocks, handlePublicIpBlocks } from './routes/ipBlocks.js';
 import { handleLatest } from './routes/latest.js';
 import { handleLicenseActivate, handleLicenseConfig, handleOfflineLicense } from './routes/license.js';
 import { handleAdminModelInfoCache, handleAdminModelInfoOverride, handlePublicModelInfo } from './routes/modelInfo.js';
@@ -19,6 +20,7 @@ import { handleTraffic } from './routes/traffic.js';
 import { MODEL_INFO_SYNC_CRON } from './constants.js';
 import { syncModelInfoCache } from './services/modelInfoCache.js';
 import { cleanupExpiredAgentErrors } from './services/agentErrorStore.js';
+import { isRequestIpBlocked } from './services/ipBlockStore.js';
 import {
   OVERVIEW_AI_TOTALS_CRON,
   refreshOverviewAiTotals,
@@ -27,6 +29,7 @@ import {
 
 const routes = new Map([
   ['/health', (request, env) => handleHealth(env)],
+  ['/ip-blocks', handlePublicIpBlocks],
   ['/track', handleTrack],
   ['/agent-errors', handleAgentErrorIngest],
   ['/license/activate', handleLicenseActivate],
@@ -59,6 +62,7 @@ const routes = new Map([
   ['/api/agent-errors/download', handleAdminAgentErrorDownload],
   ['/api/agent-errors', handleAdminAgentErrors],
   ['/api/github-repo-stats', handleGitHubRepoStats],
+  ['/api/ip-blocks', handleAdminIpBlocks],
 ]);
 
 export default {
@@ -68,6 +72,9 @@ export default {
     }
 
     const url = new URL(request.url);
+    if (url.pathname !== '/ip-blocks' && !url.pathname.startsWith('/api/') && await isRequestIpBlocked(env, request)) {
+      return new Response(null, { status: 204, headers: corsHeaders });
+    }
     const handler = routes.get(url.pathname);
     if (handler) {
       return handler(request, env, url);

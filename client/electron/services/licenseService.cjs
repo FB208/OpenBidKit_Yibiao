@@ -2,10 +2,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { execFileSync } = require('node:child_process');
 const { dialog } = require('electron');
 const { fetch } = require('undici');
 const { getLicenseFilePath } = require('../utils/paths.cjs');
+const { getOsMachineId } = require('../utils/machineIdentity.cjs');
 
 const packageJson = require('../../package.json');
 
@@ -128,50 +128,6 @@ async function verifyBuildAttestation(publicJwk, attestation) {
     trusted,
     reason: trusted ? '' : 'build_signature_invalid',
   };
-}
-
-function readWindowsMachineGuid() {
-  try {
-    const output = execFileSync('reg', ['query', 'HKLM\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid'], {
-      encoding: 'utf-8',
-      windowsHide: true,
-      timeout: 3000,
-    });
-    return output.match(/MachineGuid\s+REG_\w+\s+([^\r\n]+)/i)?.[1]?.trim() || '';
-  } catch {
-    return '';
-  }
-}
-
-function readMacMachineId() {
-  try {
-    const output = execFileSync('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], {
-      encoding: 'utf-8',
-      timeout: 3000,
-    });
-    return output.match(/"IOPlatformUUID"\s+=\s+"([^"]+)"/)?.[1]?.trim() || '';
-  } catch {
-    return '';
-  }
-}
-
-function readLinuxMachineId() {
-  for (const filePath of ['/etc/machine-id', '/var/lib/dbus/machine-id']) {
-    try {
-      const value = fs.readFileSync(filePath, 'utf-8').trim();
-      if (value) return value;
-    } catch {}
-  }
-  return '';
-}
-
-function getOsMachineId() {
-  const value = process.platform === 'win32'
-    ? readWindowsMachineGuid()
-    : process.platform === 'darwin'
-    ? readMacMachineId()
-    : readLinuxMachineId();
-  return value || `${process.platform}:${os.hostname()}`;
 }
 
 function getMacFingerprint() {

@@ -32,6 +32,7 @@
         </div>
         <div class="nav-group">
           <span class="nav-group-label">系统管理</span>
+          <button class="nav-item" type="button" data-tab-button="ip-blocks">IP 封禁</button>
           <button class="nav-item" type="button" data-tab-button="notice">公告管理</button>
           <button class="nav-item" type="button" data-tab-button="license">授权管理</button>
           <button class="nav-item" type="button" data-tab-button="resources">资源管理</button>
@@ -334,6 +335,32 @@
               </div>
             </div>
             <div id="latestTable"></div>
+          </section>
+        </section>
+
+        <!-- IP 封禁 -->
+        <section id="tab-ip-blocks" class="tab-panel" data-tab-panel="ip-blocks">
+          <section class="panel section notice-panel">
+            <div class="section-head">
+              <div>
+                <h2>IP 封禁</h2>
+                <p>全局封禁精确的 IPv4 或 IPv6 地址。命中后客户端公开读取和上传请求都会被直接丢弃。</p>
+              </div>
+              <button id="loadIpBlocksButton" type="button">读取封禁列表</button>
+            </div>
+            <div class="notice-form ip-block-form">
+              <label>
+                IP 地址
+                <input id="ipBlockInput" maxlength="80" placeholder="例如：124.193.61.30" />
+              </label>
+              <label>
+                封禁原因（可选）
+                <input id="ipBlockReason" maxlength="500" placeholder="例如：异常批量埋点" />
+              </label>
+              <button id="addIpBlockButton" type="button">添加封禁</button>
+            </div>
+            <div id="ipBlockStatus" class="notice-status"></div>
+            <div id="ipBlockTable" class="ip-block-table"></div>
           </section>
         </section>
 

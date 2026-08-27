@@ -12,14 +12,25 @@ on:
         type: string
 
 permissions:
+  actions: write
   contents: write
 
 jobs:
+  dispatch-code-mirrors:
+    name: Dispatch code mirror sync
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dispatch code mirror sync
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: gh workflow run sync-mirrors.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH"
+
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    outputs:
-      is_prerelease: ${{ steps.release_type.outputs.is_prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -427,131 +438,21 @@ jobs:
           fi
           gh release upload "$TAG_NAME" "${manifests[@]}" --clobber
 
-  publish-atomgit-release:
-    name: Publish AtomGit Release
+  dispatch-mirror-releases:
+    name: Dispatch mirror Release sync
     needs:
-      - build-windows
-      - publish-macos
-    runs-on: ubuntu-latest
-    concurrency:
-      group: atomgit-release-${{ inputs.tag_name || github.ref_name }}
-      cancel-in-progress: false
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ inputs.tag_name || github.ref }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Sync code and release tags to AtomGit
-        env:
-          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
-          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
-          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
-        run: node .github/scripts/sync-atomgit-git.mjs
-
-      - name: Read GitHub Release metadata
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
-        run: |
-          gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url > atomgit-release.json
-
-      - name: Create or update AtomGit Release
-        env:
-          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
-          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
-          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
-          GITHUB_RELEASE_JSON: atomgit-release.json
-        run: node .github/scripts/sync-atomgit-release.mjs
-
-  publish-r2-release:
-    name: Publish R2 Release
-    needs:
-      - create-release
       - build-windows
       - publish-macos
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag_name || github.ref }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install R2 publish tooling
-        if: needs.create-release.outputs.is_prerelease != 'true'
-        run: npm install --no-save --package-lock=false @aws-sdk/client-s3
-
-      - name: Read GitHub Release metadata
+      - name: Dispatch mirror Release sync
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
-        run: gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url > github-release.json
-
-      - name: Download GitHub Release assets
-        if: needs.create-release.outputs.is_prerelease != 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
-        run: |
-          mkdir -p release-assets
-          gh release download "$TAG_NAME" --dir release-assets --clobber
-          ls -lah release-assets
-
-      - name: Publish release assets to Cloudflare R2
-        if: needs.create-release.outputs.is_prerelease != 'true'
-        env:
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ vars.R2_BUCKET || 'openbidkit' }}
-          R2_RELEASE_PREFIX: ${{ vars.R2_RELEASE_PREFIX || 'release' }}
-          R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
-          RELEASE_ASSETS_DIR: release-assets
-          GITHUB_RELEASE_JSON: github-release.json
-        run: node .github/scripts/publish-r2-release.mjs
-
-      - name: Trigger Gitee pull mirror
-        env:
-          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
-          GITEE_OWNER: ${{ vars.GITEE_OWNER }}
-          GITEE_REPO: ${{ vars.GITEE_REPO }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "$GITEE_ACCESS_TOKEN" ] || [ -z "$GITEE_OWNER" ] || [ -z "$GITEE_REPO" ]; then
-            echo "GITEE_ACCESS_TOKEN, GITEE_OWNER and GITEE_REPO are required."
-            exit 1
-          fi
-
-          response="$(curl --fail --show-error --silent --request POST --retry 3 --retry-all-errors --retry-delay 20 \
-            "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/remote_mirror/pull?access_token=${GITEE_ACCESS_TOKEN}"
-          )"
-
-          echo "Gitee mirror response: ${response}"
-
-      - name: Publish Gitee Release
-        env:
-          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
-          GITEE_OWNER: ${{ vars.GITEE_OWNER }}
-          GITEE_REPO: ${{ vars.GITEE_REPO }}
-          R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
-          R2_RELEASE_PREFIX: ${{ vars.R2_RELEASE_PREFIX || 'release' }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
-          RELEASE_ASSETS_DIR: release-assets
-          GITHUB_RELEASE_JSON: github-release.json
-        run: node .github/scripts/sync-gitee-release.mjs
+        run: >-
+          gh workflow run sync-releases.yml
+          --repo "$GITHUB_REPOSITORY"
+          --ref "$DEFAULT_BRANCH"
+          -f tag_name="$TAG_NAME"

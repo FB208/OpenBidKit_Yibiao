@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 const { getConfigFilePath } = require('../utils/paths.cjs');
+const { createAnalyticsClientId } = require('../utils/machineIdentity.cjs');
 
 const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
 const legacyTextModelProviders = ['longcat'];
@@ -289,10 +289,6 @@ const defaultConfig = {
   analytics_client_id: '',
   analytics_created_at: '',
 };
-
-function createAnalyticsClientId() {
-  return crypto.randomUUID();
-}
 
 function createAnalyticsCreatedAt() {
   const parts = new Intl.DateTimeFormat('zh-CN', {

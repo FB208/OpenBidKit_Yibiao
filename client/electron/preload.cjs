@@ -11,6 +11,22 @@ const bridge = {
   requiredOnlineServices: {
     getStatus: () => ipcRenderer.invoke('required-online-services:get-status'),
   },
+  donation: {
+    getConfig: () => ipcRenderer.invoke('donation:get-config'),
+    createTip: (request) => ipcRenderer.invoke('donation:create-tip', request),
+    getOrderStatus: (merchantOrderNo) => ipcRenderer.invoke('donation:get-order-status', merchantOrderNo),
+    finalizeOrderStatus: (merchantOrderNo) => ipcRenderer.invoke('donation:finalize-order-status', merchantOrderNo),
+    onPrompt: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('donation:prompt', listener);
+      return () => ipcRenderer.removeListener('donation:prompt', listener);
+    },
+    onPaid: (callback) => {
+      const listener = () => callback();
+      ipcRenderer.on('donation:paid', listener);
+      return () => ipcRenderer.removeListener('donation:paid', listener);
+    },
+  },
   getLatestVersion: () => ipcRenderer.invoke('app:get-latest-version'),
   getUpdateDownloadUrl: () => ipcRenderer.invoke('app:get-update-download-url'),
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),

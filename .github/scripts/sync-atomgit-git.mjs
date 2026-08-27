@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 
-const MAIN_BRANCH = 'main';
-const RELEASE_TAG_PATTERN = 'v*';
+const MIRROR_HEADS_REFSPEC = 'refs/mirror/heads/*:refs/heads/*';
+const MIRROR_TAGS_REFSPEC = 'refs/tags/*:refs/tags/*';
 
 /** 读取必填环境变量。 */
 function requireEnv(name) {
@@ -32,7 +32,7 @@ function runGit(args, env = process.env) {
   });
 }
 
-/** 将 GitHub 的 main 分支和版本标签单向同步到 AtomGit。 */
+/** 将 GitHub 的全部分支和标签单向同步到 AtomGit。 */
 async function main() {
   const token = requireEnv('ATOMGIT_ACCESS_TOKEN');
   const owner = requireEnv('ATOMGIT_OWNER');
@@ -44,8 +44,8 @@ async function main() {
     '--force',
     '--prune',
     'origin',
-    `+refs/heads/${MAIN_BRANCH}:refs/remotes/origin/${MAIN_BRANCH}`,
-    `+refs/tags/${RELEASE_TAG_PATTERN}:refs/tags/${RELEASE_TAG_PATTERN}`,
+    `+refs/heads/*:refs/mirror/heads/*`,
+    `+${MIRROR_TAGS_REFSPEC}`,
   ]);
 
   const authorization = Buffer.from(`${owner}:${token}`, 'utf8').toString('base64');
@@ -62,11 +62,11 @@ async function main() {
     '--force',
     '--prune',
     remoteUrl,
-    `refs/remotes/origin/${MAIN_BRANCH}:refs/heads/${MAIN_BRANCH}`,
-    `refs/tags/${RELEASE_TAG_PATTERN}:refs/tags/${RELEASE_TAG_PATTERN}`,
+    MIRROR_HEADS_REFSPEC,
+    MIRROR_TAGS_REFSPEC,
   ], gitEnv);
 
-  console.log(`AtomGit code synchronized: ${owner}/${repo} (${MAIN_BRANCH}, ${RELEASE_TAG_PATTERN}).`);
+  console.log(`AtomGit code synchronized: ${owner}/${repo} (all branches and tags).`);
 }
 
 main().catch((error) => {

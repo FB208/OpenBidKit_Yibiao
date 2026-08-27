@@ -12,6 +12,35 @@ export function normalizeMetricValue(value, maxLength) {
   return normalizeText(value, maxLength);
 }
 
+// 规范化单个 IPv4 或 IPv6 地址，拒绝网段和地址列表。
+export function normalizeIpAddress(value) {
+  const text = normalizeText(value, 80).replace(/^\[|\]$/g, '').toLowerCase();
+  if (!text || /[\s,/]/.test(text)) return '';
+
+  const ipv4Parts = text.split('.');
+  if (ipv4Parts.length === 4 && ipv4Parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)) {
+    return ipv4Parts.map((part) => String(Number(part))).join('.');
+  }
+
+  if (!text.includes(':')) return '';
+  try {
+    const hostname = new URL(`http://[${text}]/`).hostname;
+    return hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+// 读取 Cloudflare 观测到的真实公网出口 IP。
+export function getRequestClientIp(request) {
+  const connectingIp = normalizeIpAddress(request?.headers?.get('CF-Connecting-IP'));
+  const connectingIpv6 = normalizeIpAddress(request?.headers?.get('CF-Connecting-IPv6'));
+  const firstOctet = Number(connectingIp.split('.')[0]);
+  return connectingIp.includes('.') && firstOctet >= 240 && firstOctet <= 255
+    ? connectingIpv6
+    : connectingIp;
+}
+
 export function isValidProjectName(projectName) {
   return PROJECT_NAME_PATTERN.test(projectName);
 }

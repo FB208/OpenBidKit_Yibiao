@@ -4,7 +4,7 @@ import {
   AGENT_RUNTIME_STATUSES,
   ALLOWED_EVENTS,
 } from '../constants.js';
-import { isValidProjectName, normalizeMetricValue, normalizeText } from '../utils.js';
+import { getRequestClientIp, isValidProjectName, normalizeMetricValue, normalizeText } from '../utils.js';
 
 function normalizeTokenNumber(value) {
   const number = Number(value || 0);
@@ -53,36 +53,6 @@ function normalizeBaseUrlHost(value) {
     }
   }
   return normalizeText(text.replace(/^https?:\/\//i, '').split('/')[0].toLowerCase(), 120);
-}
-
-function isIpv4(value) {
-  const parts = String(value || '').split('.');
-  return parts.length === 4 && parts.every((part) => {
-    if (!/^\d{1,3}$/.test(part)) return false;
-    const number = Number(part);
-    return number >= 0 && number <= 255;
-  });
-}
-
-function isPseudoIpv4(value) {
-  if (!isIpv4(value)) return false;
-  const first = Number(String(value).split('.')[0]);
-  return first >= 240 && first <= 255;
-}
-
-function isSingleIp(value) {
-  return Boolean(value) && !/[\s,]/.test(value);
-}
-
-function normalizeClientIp(request) {
-  const connectingIp = normalizeText(request?.headers?.get('CF-Connecting-IP'), 80);
-  const connectingIpv6 = normalizeText(request?.headers?.get('CF-Connecting-IPv6'), 80);
-
-  if (isPseudoIpv4(connectingIp)) {
-    return isSingleIp(connectingIpv6) ? connectingIpv6 : '';
-  }
-
-  return isSingleIp(connectingIp) ? connectingIp : '';
 }
 
 function createMetricBlobs(event) {
@@ -149,7 +119,7 @@ export function normalizeTrackBody(body, request) {
     arch: normalizeText(body.arch, 50),
     clientId: normalizeText(body.client_id || body.clientId, 120),
     clientCreatedAt: normalizeText(body.client_created_at || body.clientCreatedAt, 20).slice(0, 10),
-    clientIp: normalizeClientIp(request),
+    clientIp: getRequestClientIp(request),
     configKey: normalizeText(body.config_key || body.configKey, 80),
     configValue: normalizeMetricValue(body.config_value ?? body.configValue, 200),
     aiRequestType,

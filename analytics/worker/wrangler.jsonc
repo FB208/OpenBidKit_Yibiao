@@ -30,5 +30,34 @@
       "0 19 * * *",
       "0 20 * * *"
     ]
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "NOTICE_STORE",
+      "id": "2fdc318b450342e9a1d29eb89518ee33"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "ANALYTICS_DB",
+      "database_name": "openbidkit-analytics",
+      "database_id": "6de1e310-4de7-48e3-ac62-2c2788845107",
+      "migrations_dir": "analytics-migrations"
+    },
+    {
+      "binding": "RESOURCE_DB",
+      "database_name": "openbidkit-resources",
+      "database_id": "c6d4d4f1-8436-4466-b4bb-5e8869acc691"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "AGENT_ERROR_BUCKET",
+      "bucket_name": "openbidkit-agent-errors"
+    },
+    {
+      "binding": "RESOURCE_BUCKET",
+      "bucket_name": "openbidkit"
+    }
+  ]
 }
