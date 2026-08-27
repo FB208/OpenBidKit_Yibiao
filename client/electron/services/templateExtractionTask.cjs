@@ -27,7 +27,7 @@ ${sourceList}
 6. 对候选逐项分类：真实待填位置放入 fields，只有扫描误判、固定说明文字或无需填写的位置才能放入 ignored_candidate_ids。所有候选必须且只能归入其中一类。
 7. fields 每项只填写 candidate_id、name、fill_by，以及确有必要时的 instruction。fill_by 只能是 ai 或 manual；签字、盖章、签章、手印和必须放置人工材料的位置使用 manual。
 8. 同一项内容需要填入多处时，多个候选必须使用完全相同的 name、fill_by 和 instruction，让后续程序能够按 name 合并；不同语义不得仅因标题近似而合并。
-9. 最后调用 openxml，action=apply-template-fields，传入 fields 和 ignored_candidate_ids。不要直接编辑 DOCX、不要生成字段值、不要修改 ${TEMPLATE_OUTLINE_INPUT_FILE}。
+9. 最后调用 openxml，action=apply-template-fields，传入 fields 和 ignored_candidate_ids。每次调用彼此独立，不会记忆或合并前一次失败调用的参数；如果调用失败，必须根据 openxml 返回的重复、重叠、无效或遗漏候选重新核对 投标模版字段候选.json，并在当前会话重新提交包含全部候选的完整 fields 和 ignored_candidate_ids，直至成功。不得只增量补交错误中列出的候选，不得使用 * 等通配符，失败后不得结束任务。不要直接编辑 DOCX、不要生成字段值、不要修改 ${TEMPLATE_OUTLINE_INPUT_FILE}。
 10. 成功后确认工作区已有 ${TEMPLATE_FIELDS_OUTPUT_FILE}，然后结束任务。`;
 }
 

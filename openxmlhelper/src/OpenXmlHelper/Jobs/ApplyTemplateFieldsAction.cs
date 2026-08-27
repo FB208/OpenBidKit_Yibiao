@@ -106,10 +106,6 @@ static class ApplyTemplateFieldsAction
             .Select(item => (item ?? "").Trim())
             .Where(item => item.Length > 0)
             .ToList();
-        if (ignoredIds.Count != ignoredIds.Distinct(StringComparer.Ordinal).Count())
-        {
-            throw new InvalidOperationException("ignored_candidate_ids 存在重复项");
-        }
 
         var selections = (request.Fields ?? []).Select(item => new TemplateFieldSelection
         {
@@ -126,27 +122,33 @@ static class ApplyTemplateFieldsAction
         {
             throw new InvalidOperationException("fill_by 只能是 ai 或 manual");
         }
-        if (selections.Select(item => item.CandidateId).Distinct(StringComparer.Ordinal).Count() != selections.Count)
-        {
-            throw new InvalidOperationException("模板字段 candidate_id 不能重复");
-        }
 
-        var classifiedIds = selections.Select(item => item.CandidateId)
-            .Concat(ignoredIds)
+        var fieldIds = selections.Select(item => item.CandidateId).ToList();
+        var duplicateFieldIds = fieldIds
+            .GroupBy(item => item, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
             .ToList();
-        if (classifiedIds.Distinct(StringComparer.Ordinal).Count() != classifiedIds.Count)
+        var duplicateIgnoredIds = ignoredIds
+            .GroupBy(item => item, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToList();
+        var overlapIds = fieldIds.Intersect(ignoredIds, StringComparer.Ordinal).ToList();
+        var classifiedIds = fieldIds.Concat(ignoredIds).Distinct(StringComparer.Ordinal).ToList();
+        var unknownIds = classifiedIds.Where(item => !candidateMap.ContainsKey(item)).ToList();
+        var missingIds = candidateMap.Keys.Except(classifiedIds, StringComparer.Ordinal).ToList();
+        var classificationErrors = new List<string>();
+        if (duplicateFieldIds.Count > 0) classificationErrors.Add($"fields 重复：{string.Join('、', duplicateFieldIds)}");
+        if (duplicateIgnoredIds.Count > 0) classificationErrors.Add($"ignored_candidate_ids 重复：{string.Join('、', duplicateIgnoredIds)}");
+        if (overlapIds.Count > 0) classificationErrors.Add($"同时出现在 fields 和 ignored_candidate_ids：{string.Join('、', overlapIds)}");
+        if (unknownIds.Count > 0) classificationErrors.Add($"无效候选：{string.Join('、', unknownIds)}");
+        if (missingIds.Count > 0) classificationErrors.Add($"尚未分类：{string.Join('、', missingIds)}");
+        if (classificationErrors.Count > 0)
         {
-            throw new InvalidOperationException("同一候选不能同时标记为字段和忽略");
-        }
-        var unknown = classifiedIds.Where(item => !candidateMap.ContainsKey(item)).ToList();
-        if (unknown.Count > 0)
-        {
-            throw new InvalidOperationException($"存在无效候选：{string.Join('、', unknown)}");
-        }
-        var missing = candidateMap.Keys.Except(classifiedIds, StringComparer.Ordinal).ToList();
-        if (missing.Count > 0)
-        {
-            throw new InvalidOperationException($"这些候选尚未分类：{string.Join('、', missing)}");
+            throw new InvalidOperationException(
+                $"候选分类未通过（候选总数 {candidateMap.Count}，fields {selections.Count} 项，ignored_candidate_ids {ignoredIds.Count} 项）：{string.Join("；", classificationErrors)}。" +
+                "apply-template-fields 不会记忆或合并前一次失败调用的参数；请重新提交完整 fields 和 ignored_candidate_ids，每个候选必须且只能归入一类，禁止增量补交或使用通配符。");
         }
 
         var inconsistent = selections

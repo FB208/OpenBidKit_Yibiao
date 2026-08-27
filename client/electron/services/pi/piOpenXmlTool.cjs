@@ -13,11 +13,10 @@ const AGENT_TEMPLATE_FILE = 'bid-template.docx';
 const AGENT_TEMPLATE_FIELDS_FILE = 'bid-template-fields.json';
 const DEFAULT_TIMEOUT_MS = 300000;
 
-function createToolResult(payload, isError = false) {
+function createToolResult(payload) {
   return {
     content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
     details: payload,
-    ...(isError ? { isError: true } : {}),
   };
 }
 
@@ -46,7 +45,7 @@ function createPiOpenXmlTool({
   return {
     name: OPENXML_TOOL_NAME,
     label: 'Open XML 助手',
-    description: '列出招标 Word 原文块、抽取投标模版章节、扫描待填候选，并把确认后的候选写成 Word 内容控件。按 list-blocks、extract-chapters、scan-template-fields、apply-template-fields 顺序调用。',
+    description: '列出招标 Word 原文块、抽取投标模版章节、扫描待填候选，并把确认后的候选写成 Word 内容控件。按 list-blocks、extract-chapters、scan-template-fields、apply-template-fields 顺序调用。apply-template-fields 每次调用都必须提交全部候选的完整分类，失败调用的参数不会被记忆或合并。',
     promptSnippet: '用 openxml 抽取投标模版、扫描待填候选并写入内容控件。',
     parameters: Type.Object({
       action: Type.String({
@@ -69,7 +68,7 @@ function createPiOpenXmlTool({
         fill_by: Type.String({ enum: ['ai', 'manual'], description: 'ai 表示未来由 AI 填写；manual 表示必须人工处理。' }),
         instruction: Type.Optional(Type.String({ description: '仅在字段名称不足以说明要求时填写。' })),
       }, { additionalProperties: false }), {
-        description: 'apply-template-fields 中保留并标记为内容控件的候选。',
+        description: 'apply-template-fields 中保留并标记为内容控件的全部候选。',
       })),
       ignored_candidate_ids: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
         description: 'apply-template-fields 中确认不是待填字段的全部候选 ID。',
@@ -211,11 +210,7 @@ function createPiOpenXmlTool({
         if (signal?.aborted) {
           throw signal.reason instanceof Error ? signal.reason : error;
         }
-        return createToolResult({
-          ok: false,
-          action: params?.action || '',
-          error: error?.message || String(error),
-        }, true);
+        throw error;
       }
     },
   };
