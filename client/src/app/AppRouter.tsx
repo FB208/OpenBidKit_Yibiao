@@ -10,6 +10,7 @@ import DeveloperTestPage from '../features/developer/pages/DeveloperTestPage';
 import ExportFormatPage from '../features/export-format/pages/ExportFormatPage';
 import MyTemplatesPage from '../features/export-format/pages/MyTemplatesPage';
 import DuplicateCheckPage from '../features/duplicate-check/pages/DuplicateCheckPage';
+import CredentialLibraryPage from '../features/credential-library/pages/CredentialLibraryPage';
 import KnowledgeBasePage from '../features/knowledge-base/pages/KnowledgeBasePage';
 import RejectionCheckPage from '../features/rejection-check/pages/RejectionCheckPage';
 import ResourcesPage from '../features/resources/pages/ResourcesPage';
@@ -52,6 +53,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <FeasibilityReportHome registerLeaveGuard={registerLeaveGuard} onSectionChange={onSectionChange} />;
     case 'document-knowledge-base':
       return <KnowledgeBasePage />;
+    case 'credential-library':
+      return <CredentialLibraryPage developerMode={developerMode} />;
     case 'resources':
       return <ResourcesPage />;
     case 'plugin-manager':

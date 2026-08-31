@@ -168,6 +168,21 @@ const bridge = {
       return () => ipcRenderer.removeListener('knowledge-base:event', listener);
     },
   },
+  credentialLibrary: {
+    load: () => ipcRenderer.invoke('credential-library:load'),
+    importTestData: () => ipcRenderer.invoke('credential-library:import-test-data'),
+    saveProfile: (partial) => ipcRenderer.invoke('credential-library:save-profile', partial),
+    addProfileImages: (fieldKey, filePaths) => ipcRenderer.invoke('credential-library:add-profile-images', fieldKey, filePaths),
+    deleteImage: (imageId) => ipcRenderer.invoke('credential-library:delete-image', imageId),
+    saveCertificate: (payload) => ipcRenderer.invoke('credential-library:save-certificate', payload),
+    deleteCertificate: (recordId) => ipcRenderer.invoke('credential-library:delete-certificate', recordId),
+    saveEmployee: (payload) => ipcRenderer.invoke('credential-library:save-employee', payload),
+    deleteEmployee: (recordId) => ipcRenderer.invoke('credential-library:delete-employee', recordId),
+    saveProject: (payload) => ipcRenderer.invoke('credential-library:save-project', payload),
+    deleteProject: (recordId) => ipcRenderer.invoke('credential-library:delete-project', recordId),
+    saveOtherMaterial: (payload) => ipcRenderer.invoke('credential-library:save-other-material', payload),
+    deleteOtherMaterial: (recordId) => ipcRenderer.invoke('credential-library:delete-other-material', recordId),
+  },
   technicalPlan: {
     loadState: () => ipcRenderer.invoke('technical-plan:load-state'),
     loadGenerationConfig: () => ipcRenderer.invoke('technical-plan:load-generation-config'),

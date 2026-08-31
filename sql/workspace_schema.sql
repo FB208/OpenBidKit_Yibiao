@@ -4,7 +4,7 @@
 -- 1. 本文件用于开源开发者阅读、评审和排查问题，展示 workspace/yibiao.sqlite 的目标完整表结构。
 -- 2. 用户运行客户端时不需要手动执行本文件。
 -- 3. 客户端运行时建表和升级以 Electron Main 侧 migration 代码为准。
--- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17、目录字数控制 v18、全局事实补全模式 v22、可行性研究报告 v23、统一生成配置 v24 目标结构。
+-- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17、目录字数控制 v18、全局事实补全模式 v22、可行性研究报告 v23、统一生成配置 v24、单企业资信库 v25 目标结构。
 -- 5. 每次表结构调整后，需要同步更新本文件和 runtime migration 版本。
 -- 6. 本文件不保存历史版本，每次更新都写入最新目标完整结构。
 
@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 24;
+PRAGMA user_version = 25;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -850,6 +850,117 @@ CREATE TABLE IF NOT EXISTS knowledge_match_batches (
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_match_batches_status
 ON knowledge_match_batches(document_id, status, batch_index);
+
+-- ============================================================================
+-- 单企业资信库 credential_library_*（v25 已落地）
+-- ============================================================================
+
+-- 企业基础、介绍、财务、开户行和水印配置单例。
+CREATE TABLE IF NOT EXISTS credential_library_profile (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  company_name TEXT,
+  unified_social_credit_code TEXT,
+  phone TEXT,
+  email TEXT,
+  legal_representative TEXT,
+  registered_capital TEXT,
+  operating_period_start TEXT,
+  operating_period_end TEXT,
+  address TEXT,
+  business_scope TEXT,
+  industry TEXT,
+  company_type TEXT,
+  insured_employee_count TEXT,
+  company_intro TEXT,
+  tax_certificate_date TEXT,
+  tax_certificate_note TEXT,
+  audit_report_date TEXT,
+  audit_report_note TEXT,
+  social_security_certificate_date TEXT,
+  social_security_certificate_note TEXT,
+  bank_account_name TEXT,
+  bank_account_number TEXT,
+  bank_name TEXT,
+  bank_routing_number TEXT,
+  watermark_enabled INTEGER NOT NULL DEFAULT 0,
+  watermark_content TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- 用户自定义的其他证书。
+CREATE TABLE IF NOT EXISTS credential_library_certificates (
+  certificate_id TEXT PRIMARY KEY,
+  name TEXT,
+  number TEXT,
+  validity_mode TEXT,
+  valid_from TEXT,
+  valid_to TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- 企业人员档案。
+CREATE TABLE IF NOT EXISTS credential_library_employees (
+  employee_id TEXT PRIMARY KEY,
+  name TEXT,
+  id_number TEXT,
+  position TEXT,
+  professional_title TEXT,
+  gender TEXT,
+  phone TEXT,
+  id_validity_mode TEXT,
+  id_valid_from TEXT,
+  id_valid_to TEXT,
+  education TEXT,
+  school TEXT,
+  major TEXT,
+  introduction TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- 企业项目业绩。
+CREATE TABLE IF NOT EXISTS credential_library_projects (
+  project_id TEXT PRIMARY KEY,
+  project_name TEXT,
+  project_number TEXT,
+  customer_name TEXT,
+  project_type TEXT,
+  project_manager TEXT,
+  contract_amount TEXT,
+  start_date TEXT,
+  end_date TEXT,
+  project_status TEXT,
+  introduction TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- 其他自定义资料。
+CREATE TABLE IF NOT EXISTS credential_library_other_materials (
+  material_id TEXT PRIMARY KEY,
+  name TEXT,
+  note TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- 所有原图统一保存到 credential-library/images/，这里只记录相对路径和业务归属。
+CREATE TABLE IF NOT EXISTS credential_library_images (
+  image_id TEXT PRIMARY KEY,
+  owner_type TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  field_key TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  relative_path TEXT NOT NULL,
+  custom_name TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_credential_library_images_owner
+ON credential_library_images(owner_type, owner_id, field_key, sort_order, created_at);
 
 -- ============================================================================
 -- 导出模板 export_templates（v15 目标设计）

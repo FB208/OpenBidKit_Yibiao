@@ -5,6 +5,7 @@ import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex,
 import type { RejectionCheckWorkspacePatch, RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanGenerationConfig, TechnicalPlanState, TechnicalPlanStep } from '../../features/technical-plan/types';
 import type { FeasibilityProjectInfo, FeasibilityReportState, FeasibilityReportStep, FeasibilitySaveOutlineRequest, FeasibilitySourceFile } from '../../features/feasibility-report/types';
+import type { CredentialCertificate, CredentialEmployee, CredentialImageFieldKey, CredentialLibraryImportResult, CredentialLibraryMutationResult, CredentialLibraryProfile, CredentialLibrarySnapshot, CredentialOtherMaterial, CredentialProject, CredentialRecordSavePayload } from '../../features/credential-library/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
 import type { OutlineData } from './outline';
 
@@ -635,6 +636,21 @@ export interface YibiaoBridge {
     readItems: (documentId: string) => Promise<KnowledgeItem[]>;
     readAnalysis: (documentId: string) => Promise<KnowledgeAnalysisSnapshot>;
     onEvent: (callback: (event: KnowledgeBaseEvent) => void) => () => void;
+  };
+  credentialLibrary: {
+    load: () => Promise<CredentialLibrarySnapshot>;
+    importTestData: () => Promise<CredentialLibraryImportResult | null>;
+    saveProfile: (partial: Partial<CredentialLibraryProfile>) => Promise<CredentialLibrarySnapshot>;
+    addProfileImages: (fieldKey: CredentialImageFieldKey, filePaths: string[]) => Promise<CredentialLibrarySnapshot>;
+    deleteImage: (imageId: string) => Promise<CredentialLibraryMutationResult>;
+    saveCertificate: (payload: CredentialRecordSavePayload<CredentialCertificate>) => Promise<CredentialLibraryMutationResult>;
+    deleteCertificate: (recordId: string) => Promise<CredentialLibraryMutationResult>;
+    saveEmployee: (payload: CredentialRecordSavePayload<CredentialEmployee>) => Promise<CredentialLibraryMutationResult>;
+    deleteEmployee: (recordId: string) => Promise<CredentialLibraryMutationResult>;
+    saveProject: (payload: CredentialRecordSavePayload<CredentialProject>) => Promise<CredentialLibraryMutationResult>;
+    deleteProject: (recordId: string) => Promise<CredentialLibraryMutationResult>;
+    saveOtherMaterial: (payload: CredentialRecordSavePayload<CredentialOtherMaterial>) => Promise<CredentialLibraryMutationResult>;
+    deleteOtherMaterial: (recordId: string) => Promise<CredentialLibraryMutationResult>;
   };
   technicalPlan: {
     loadState: () => Promise<TechnicalPlanState>;

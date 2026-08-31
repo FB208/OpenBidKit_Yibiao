@@ -4,6 +4,7 @@ export type SectionId =
   | 'feasibility-report'
   | 'knowledge-base'
   | 'document-knowledge-base'
+  | 'credential-library'
   | 'image-knowledge-base'
   | 'resources'
   | 'bid-check'
@@ -36,7 +37,7 @@ export interface AppSubMenuItem {
   id: SectionId;
   label: string;
   description: string;
-  icon?: 'document' | 'expand' | 'compare' | 'shield' | 'code' | 'prompt' | 'file' | 'export' | 'tool';
+  icon?: 'document' | 'expand' | 'briefcase' | 'compare' | 'shield' | 'code' | 'prompt' | 'file' | 'export' | 'tool';
   badge?: string;
   notice?: AppMenuNotice;
 }

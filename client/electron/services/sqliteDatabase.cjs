@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 24;
+const schemaVersion = 26;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -1019,6 +1019,121 @@ function createKnowledgeBaseSchema(db) {
   `);
 }
 
+/** 创建单企业资信库及其图片索引。 */
+function createCredentialLibrarySchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS credential_library_profile (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      company_name TEXT,
+      unified_social_credit_code TEXT,
+      phone TEXT,
+      email TEXT,
+      legal_representative TEXT,
+      registered_capital TEXT,
+      operating_period_start TEXT,
+      operating_period_end TEXT,
+      address TEXT,
+      business_scope TEXT,
+      industry TEXT,
+      company_type TEXT,
+      insured_employee_count TEXT,
+      company_intro TEXT,
+      tax_certificate_date TEXT,
+      tax_certificate_note TEXT,
+      audit_report_date TEXT,
+      audit_report_note TEXT,
+      social_security_certificate_date TEXT,
+      social_security_certificate_note TEXT,
+      bank_account_name TEXT,
+      bank_account_number TEXT,
+      bank_name TEXT,
+      bank_routing_number TEXT,
+      watermark_enabled INTEGER NOT NULL DEFAULT 0,
+      watermark_content TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS credential_library_certificates (
+      certificate_id TEXT PRIMARY KEY,
+      name TEXT,
+      number TEXT,
+      validity_mode TEXT,
+      valid_from TEXT,
+      valid_to TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS credential_library_employees (
+      employee_id TEXT PRIMARY KEY,
+      name TEXT,
+      id_number TEXT,
+      position TEXT,
+      professional_title TEXT,
+      gender TEXT,
+      phone TEXT,
+      id_validity_mode TEXT,
+      id_valid_from TEXT,
+      id_valid_to TEXT,
+      education TEXT,
+      school TEXT,
+      major TEXT,
+      introduction TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS credential_library_projects (
+      project_id TEXT PRIMARY KEY,
+      project_name TEXT,
+      project_number TEXT,
+      customer_name TEXT,
+      project_type TEXT,
+      project_manager TEXT,
+      contract_amount TEXT,
+      start_date TEXT,
+      end_date TEXT,
+      project_status TEXT,
+      introduction TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS credential_library_other_materials (
+      material_id TEXT PRIMARY KEY,
+      name TEXT,
+      note TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS credential_library_images (
+      image_id TEXT PRIMARY KEY,
+      owner_type TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      field_key TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      relative_path TEXT NOT NULL,
+      custom_name TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_credential_library_images_owner
+    ON credential_library_images(owner_type, owner_id, field_key, sort_order, created_at);
+  `);
+}
+
+/** 为员工档案增加身份证有效期模式，并按产品约定清除旧日期。 */
+function addCredentialEmployeeIdValidityMode(db) {
+  addColumnIfMissing(db, 'credential_library_employees', 'id_validity_mode', 'TEXT');
+  db.exec(`
+    UPDATE credential_library_employees
+    SET id_validity_mode = '', id_valid_from = '', id_valid_to = '';
+  `);
+}
+
 function createExportTemplatesSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS export_templates (
@@ -1173,6 +1288,18 @@ const schemaHealthTableGroups = [
     version: 24,
     tables: ['technical_plan_generation_config', 'technical_plan_generation_bid_tasks', 'technical_plan_generation_reference_docs'],
     repair: createTechnicalPlanGenerationConfigSchema,
+  },
+  {
+    version: 25,
+    tables: [
+      'credential_library_profile',
+      'credential_library_certificates',
+      'credential_library_employees',
+      'credential_library_projects',
+      'credential_library_other_materials',
+      'credential_library_images',
+    ],
+    repair: createCredentialLibrarySchema,
   },
 ];
 
@@ -1332,6 +1459,13 @@ const schemaHealthColumnGroups = [
       table_requirement: "TEXT NOT NULL DEFAULT 'heavy'",
       created_at: 'TEXT',
       updated_at: 'TEXT',
+    },
+  },
+  {
+    version: 26,
+    table: 'credential_library_employees',
+    columns: {
+      id_validity_mode: 'TEXT',
     },
   },
 ];
@@ -1517,6 +1651,16 @@ const migrations = [
     version: 24,
     description: '统一技术方案生成配置存储',
     up: unifyTechnicalPlanGenerationConfig,
+  },
+  {
+    version: 25,
+    description: '新增单企业资信库表结构',
+    up: createCredentialLibrarySchema,
+  },
+  {
+    version: 26,
+    description: '员工档案新增身份证有效期模式',
+    up: addCredentialEmployeeIdValidityMode,
   },
 ];
 

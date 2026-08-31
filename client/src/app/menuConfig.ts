@@ -58,6 +58,12 @@ export const appMenuItems: AppMenuItem[] = [
         icon: 'document',
       },
       {
+        id: 'credential-library',
+        label: '资信库',
+        description: '管理单家企业的资质、人员、业绩和财务资料',
+        icon: 'shield',
+      },
+      {
         id: 'image-knowledge-base',
         label: '图片知识库',
         description: '管理图片素材、图示和视觉参考资料',

@@ -3,6 +3,7 @@ const { registerAgentIpc } = require('./agentIpc.cjs');
 const { registerAiIpc } = require('./aiIpc.cjs');
 const { registerAutoConfirmationIpc } = require('./autoConfirmationIpc.cjs');
 const { registerConfigIpc } = require('./configIpc.cjs');
+const { registerCredentialLibraryIpc } = require('./credentialLibraryIpc.cjs');
 const { registerDeveloperIpc } = require('./developerIpc.cjs');
 const { registerDonationIpc } = require('./donationIpc.cjs');
 const { registerDuplicateCheckIpc } = require('./duplicateCheckIpc.cjs');
@@ -22,6 +23,7 @@ const { createAgentService } = require('../services/agentService.cjs');
 const { createAiService } = require('../services/aiService.cjs');
 const { createAutoConfirmationService } = require('../services/autoConfirmationService.cjs');
 const { createConfigStore } = require('../services/configStore.cjs');
+const { createCredentialLibraryService } = require('../services/credentialLibraryService.cjs');
 const { createDeveloperExpansionReplaceTestService } = require('../services/developerExpansionReplaceTest.cjs');
 const { createDonationService } = require('../services/donationService.cjs');
 const { createDuplicateCheckService } = require('../services/duplicateCheckService.cjs');
@@ -112,6 +114,19 @@ function sendToWebContents(webContents, channel, payload) {
 }
 
 const workspaceDatabaseChannels = [
+  'credential-library:load',
+  'credential-library:import-test-data',
+  'credential-library:save-profile',
+  'credential-library:add-profile-images',
+  'credential-library:delete-image',
+  'credential-library:save-certificate',
+  'credential-library:delete-certificate',
+  'credential-library:save-employee',
+  'credential-library:delete-employee',
+  'credential-library:save-project',
+  'credential-library:delete-project',
+  'credential-library:save-other-material',
+  'credential-library:delete-other-material',
   'technical-plan:load-state',
   'technical-plan:load-generation-config',
   'technical-plan:save-generation-config',
@@ -255,6 +270,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   clearStalePiTaskArchives(app);
   clearOrphanedGeneratedImages(app, sqliteDatabase.db);
   const taskLogStore = createTaskLogStore({ db: sqliteDatabase.db });
+  const credentialLibraryService = createCredentialLibraryService({ app, db: sqliteDatabase.db });
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
   const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService, agentService, taskLogStore, configStore });
@@ -273,6 +289,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   }
 
   clearWorkspaceDatabaseIpc();
+  registerCredentialLibraryIpc({ credentialLibraryService, configStore });
   registerKnowledgeBaseIpc({ knowledgeBaseService });
   registerTechnicalPlanIpc({ technicalPlanStore, taskService });
   registerFeasibilityReportIpc({ feasibilityReportStore, taskService });

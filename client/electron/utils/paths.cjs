@@ -113,6 +113,11 @@ function getKnowledgeBaseDir(app) {
   return path.join(getWorkspaceDir(app), 'knowledge-base');
 }
 
+/** 资信库原始图片与其他文件的工作区根目录。 */
+function getCredentialLibraryDir(app) {
+  return path.join(getWorkspaceDir(app), 'credential-library');
+}
+
 function getAiLogsDir(app) {
   return path.join(getUserDataPath(app), 'logs', 'ai');
 }
@@ -197,6 +202,7 @@ module.exports = {
   getDuplicateCheckContentDir,
   getDuplicateCheckDir,
   getConfigFilePath,
+  getCredentialLibraryDir,
   getDonationStateFilePath,
   getGpuStartupProbePath,
   getFeasibilityReportDir,

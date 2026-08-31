@@ -18,6 +18,7 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'feasibility-report': DocumentIcon,
   'knowledge-base': ArchiveIcon,
   'document-knowledge-base': ArchiveIcon,
+  'credential-library': ArchiveIcon,
   'image-knowledge-base': ArchiveIcon,
   resources: ResourcesIcon,
   'bid-check': BidCheckIcon,
