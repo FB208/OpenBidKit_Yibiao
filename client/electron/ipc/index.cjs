@@ -44,6 +44,8 @@ const { createTemplateStore } = require('../services/templateStore.cjs');
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
 const { initLocalImageRenderService } = require('../services/localImageRenderService.cjs');
 const { createOpenXmlHelperService } = require('../services/openXmlHelperService.cjs');
+const { cleanupTrashDirSync } = require('../utils/forceRemove.cjs');
+const { getWorkspaceTrashDir } = require('../utils/paths.cjs');
 
 let pendingUiCurrentView = null;
 let agentWorkspaceServiceRef = null;
@@ -250,6 +252,8 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
   runHistoricalStorageCleanup({ app, db: sqliteDatabase.db, configStore, onStatus: updateStatus });
   clearStalePiTaskArchives(app);
+  // 清理上次强制删除时因占用未能物理删除、被移入回收目录的残留
+  cleanupTrashDirSync(getWorkspaceTrashDir(app));
   clearOrphanedGeneratedImages(app, sqliteDatabase.db);
   const taskLogStore = createTaskLogStore({ db: sqliteDatabase.db });
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });

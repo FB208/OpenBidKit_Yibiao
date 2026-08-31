@@ -12,11 +12,13 @@ const {
   getTechnicalPlanTenderMarkdownPath,
   getTechnicalPlanTenderOriginalsDir,
   getGeneratedImagesDir,
+  getWorkspaceTrashDir,
 } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 const { clearMermaidCache } = require('../utils/mermaidCache.cjs');
 const { detectBidSections } = require('../utils/bidSectionDetector.cjs');
 const { compactLogError, createDeveloperLogger } = require('../utils/developerLog.cjs');
+const { forceRemoveSync, isFileLockError } = require('../utils/forceRemove.cjs');
 const {
   OUTLINE_AGENT_TASK_KEY,
   TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
@@ -507,6 +509,17 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     name: 'tender-original-files',
   });
 
+  const workspaceTrashDir = getWorkspaceTrashDir(app);
+
+  /**
+   * 工作区内的强制删除统一带回收目录兜底:强杀外部占用进程;占用者属于本应用进程(如 Agent 在
+   * Main 内的句柄)无法自杀时,登记延迟删除并放行,重启后补删,保证重置/导入不被阻断。
+   * 投标模版等以“文件存在”判定状态的路径必须传 deferOnFailure: false,残留会被误认为有效数据。
+   */
+  function removeWorkspacePathSync(targetPath, onEvent, { deferOnFailure = true } = {}) {
+    forceRemoveSync(targetPath, { trashDir: workspaceTrashDir, onEvent, deferOnFailure });
+  }
+
   /** 已在受管原件目录中的文件直接复用，不再复制或重命名。 */
   function getManagedTenderOriginalRelativePath(filePath) {
     const resolvedPath = path.resolve(String(filePath || ''));
@@ -576,8 +589,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
   // 清理技术方案专属的图片源文件和生成图片。
   function clearIllustrationFiles() {
-    fs.rmSync(illustrationsDir, { recursive: true, force: true });
-    fs.rmSync(generatedIllustrationsDir, { recursive: true, force: true });
+    removeWorkspacePathSync(illustrationsDir);
+    removeWorkspacePathSync(generatedIllustrationsDir);
   }
   function resolvePendingTenderMarkdownPath(filePath) {
     return path.resolve(resolveMarkdownPath(filePath));
@@ -866,7 +879,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       if (!keep.has(filePathKey(filePath))) {
         tenderOriginalLogger.write('tender-original.delete.started', { phase, file_path: filePath });
         try {
-          fs.rmSync(filePath, { force: true });
+          removeWorkspacePathSync(filePath, (event, payload) => tenderOriginalLogger.write(event, { phase, ...payload }));
           tenderOriginalLogger.write('tender-original.delete.completed', { phase, file_path: filePath });
         } catch (error) {
           tenderOriginalLogger.write('tender-original.delete.failed', {
@@ -877,7 +890,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
             error: compactLogError(error),
           });
           const fileName = path.basename(filePath);
-          const message = ['EPERM', 'EBUSY', 'EACCES'].includes(error?.code)
+          const message = isFileLockError(error)
             ? `无法删除旧招标 Word 原件“${fileName}”，请关闭可能占用该文件的 Word/WPS，并确认文件可写后重试`
             : `无法清理旧招标 Word 原件“${fileName}”：${error?.message || error}`;
           const cleanupError = new Error(message);
@@ -906,11 +919,16 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     for (const filePath of templateFiles) {
       if (!fs.existsSync(filePath)) continue;
       try {
-        fs.rmSync(filePath, { force: true });
+        removeWorkspacePathSync(
+          filePath,
+          (event, payload) => tenderOriginalLogger.write(event, { phase: 'bid-template-cleanup', ...payload }),
+          { deferOnFailure: false },
+        );
       } catch (error) {
-        if (['EPERM', 'EBUSY', 'EACCES'].includes(error?.code)) {
+        if (isFileLockError(error)) {
           const lockError = new Error('投标模版正在被 Word 使用，请关闭后重试');
           lockError.code = 'BID_TEMPLATE_IN_USE';
+          lockError.cause = error;
           throw lockError;
         }
         throw error;
@@ -923,7 +941,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (fs.existsSync(tenderOriginalsDir)) {
       tenderOriginalLogger.write('tender-original.delete-directory.started', { phase, directory_path: tenderOriginalsDir });
       try {
-        fs.rmSync(tenderOriginalsDir, { recursive: true, force: true });
+        removeWorkspacePathSync(tenderOriginalsDir, (event, payload) => tenderOriginalLogger.write(event, { phase, ...payload }));
         tenderOriginalLogger.write('tender-original.delete-directory.completed', { phase, directory_path: tenderOriginalsDir });
       } catch (error) {
         tenderOriginalLogger.write('tender-original.delete-directory.failed', {
@@ -941,7 +959,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       }
     }
     if (fs.existsSync(tenderSourceFilesDir)) {
-      fs.rmSync(tenderSourceFilesDir, { recursive: true, force: true });
+      removeWorkspacePathSync(tenderSourceFilesDir);
     }
   }
 
@@ -2474,8 +2492,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     clearBidTemplate();
     if (!remainingFiles.length) {
       clearTenderSourceFiles('remove-last-tender');
-      if (fs.existsSync(tenderMarkdownPath)) fs.rmSync(tenderMarkdownPath, { force: true });
-      if (fs.existsSync(tenderOriginalMarkdownPath)) fs.rmSync(tenderOriginalMarkdownPath, { force: true });
+      removeWorkspacePathSync(tenderMarkdownPath);
+      removeWorkspacePathSync(tenderOriginalMarkdownPath);
       const transaction = db.transaction(() => {
         clearDownstreamFromTender();
         updateMeta({
@@ -2573,7 +2591,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (Array.isArray(sourceFiles)) {
       clearBidTemplate();
       if (fs.existsSync(tenderSourceFilesDir)) {
-        fs.rmSync(tenderSourceFilesDir, { recursive: true, force: true });
+        removeWorkspacePathSync(tenderSourceFilesDir);
       }
     }
     const tenderSourceFiles = Array.isArray(sourceFiles)
@@ -2653,15 +2671,9 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const workflowKind = normalizeWorkflowKind(ensureMetaRow().workflow_kind);
     clearTenderSourceFiles();
     cleanupPendingTenderSelection();
-    if (fs.existsSync(tenderMarkdownPath)) {
-      fs.rmSync(tenderMarkdownPath, { force: true });
-    }
-    if (fs.existsSync(tenderOriginalMarkdownPath)) {
-      fs.rmSync(tenderOriginalMarkdownPath, { force: true });
-    }
-    if (fs.existsSync(originalPlanMarkdownPath)) {
-      fs.rmSync(originalPlanMarkdownPath, { force: true });
-    }
+    removeWorkspacePathSync(tenderMarkdownPath);
+    removeWorkspacePathSync(tenderOriginalMarkdownPath);
+    removeWorkspacePathSync(originalPlanMarkdownPath);
     clearOriginalOutlineRuntime();
     clearTechnicalPlanMermaidCache();
     clearIllustrationFiles();

@@ -24,6 +24,11 @@ function getWorkspaceDir(app) {
   return path.join(getUserDataPath(app), 'workspace');
 }
 
+/** 强制删除失败时的回收目录;放在 workspace 外,避免被工作区扫描看到。 */
+function getWorkspaceTrashDir(app) {
+  return path.join(getUserDataPath(app), 'workspace-trash');
+}
+
 function getWorkspaceDatabasePath(app) {
   return path.join(getWorkspaceDir(app), 'yibiao.sqlite');
 }
@@ -223,5 +228,6 @@ module.exports = {
   getTechnicalPlanTenderOriginalsDir,
   getWorkspaceDir,
   getWorkspaceDatabasePath,
+  getWorkspaceTrashDir,
   getUserDataPath,
 };
