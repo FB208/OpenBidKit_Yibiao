@@ -1,13 +1,13 @@
 import { loadSettings, saveSettings } from './api.js';
 import { loadAgentRuntime } from './pages/agentRuntime.js';
 import { loadAgentErrors, setupAgentErrorsPage } from './pages/agentErrors.js';
-import { loadClients, loadClientDetail, loadIpStats } from './pages/clients.js';
+import { loadClients, loadClientDetail, loadIpStats, setupIpStatsActions } from './pages/clients.js';
 import { loadConfigUsage, loadModelUsage } from './pages/configUsage.js';
 import { loadLatest } from './pages/latest.js';
 import { loadIpBlocks, setupIpBlocksPage } from './pages/ipBlocks.js';
 import { loadModelInfoCache, setupModelInfoCachePage, syncModelInfoCache } from './pages/modelInfoCache.js';
 import { downloadOfflineLicense, generateOfflineLicense, loadLicenseConfig, saveLicenseConfig } from './pages/license.js';
-import { disableNotice, loadNotice, publishNotice } from './pages/notice.js';
+import { bindNoticeEvents, loadNotices } from './pages/notice.js';
 import { loadOverview } from './pages/overview.js';
 import { bindResourceEvents, loadResources } from './pages/resources.js';
 import { loadPlugins, setupPluginsPage } from './pages/plugins.js';
@@ -26,7 +26,7 @@ const tabLoaders = {
   agent: (options = {}) => Promise.all([loadAgentRuntime(), loadAgentErrors({ resetPage: options.resetAgentErrorPage })]),
   latest: (options = {}) => loadLatest(options),
   'ip-blocks': () => loadIpBlocks(),
-  notice: () => loadNotice(),
+  notice: () => loadNotices(),
   license: () => loadLicenseConfig(),
   resources: () => loadResources(),
   plugins: () => loadPlugins(),
@@ -109,9 +109,7 @@ async function refreshActiveTab(options = {}) {
 
 function bindEvents() {
   state.refreshButton.addEventListener('click', () => refreshActiveTab({ resetLatestPage: true, resetIpPage: true, forceRefresh: true }));
-  state.loadNoticeButton.addEventListener('click', () => loadNotice().catch(() => undefined));
-  state.publishNoticeButton.addEventListener('click', publishNotice);
-  state.disableNoticeButton.addEventListener('click', disableNotice);
+  bindNoticeEvents();
   state.loadLicenseConfigButton.addEventListener('click', () => loadLicenseConfig().catch(() => undefined));
   state.saveLicenseConfigButton.addEventListener('click', saveLicenseConfig);
   state.generateOfflineLicenseButton.addEventListener('click', generateOfflineLicense);
@@ -121,6 +119,7 @@ function bindEvents() {
   setupModelInfoCachePage();
   setupAgentErrorsPage();
   setupIpBlocksPage();
+  setupIpStatsActions();
   state.syncModelInfoCacheButton.addEventListener('click', syncModelInfoCache);
   state.prevLatestPage.addEventListener('click', () => {
     appState.latestPage = Math.max(1, appState.latestPage - 1);
@@ -162,6 +161,11 @@ function bindEvents() {
   state.adminToken.addEventListener('change', saveSettingsAndClearCache);
   state.rememberToken.addEventListener('change', saveSettings);
   state.projectName.addEventListener('change', saveSettingsAndClearCache);
+  state.ipDate.addEventListener('change', () => refreshActiveTab({ resetIpPage: true, forceRefresh: true }));
+  state.allIpDatesButton.addEventListener('click', () => {
+    state.ipDate.value = '';
+    void refreshActiveTab({ resetIpPage: true, forceRefresh: true });
+  });
   state.trafficRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
   state.configRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
   state.modelRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));

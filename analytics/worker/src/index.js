@@ -9,7 +9,7 @@ import { handleAdminIpBlocks, handlePublicIpBlocks } from './routes/ipBlocks.js'
 import { handleLatest } from './routes/latest.js';
 import { handleLicenseActivate, handleLicenseConfig, handleOfflineLicense } from './routes/license.js';
 import { handleAdminModelInfoCache, handleAdminModelInfoOverride, handlePublicModelInfo } from './routes/modelInfo.js';
-import { handleAdminNotice, handlePublicNotice } from './routes/notice.js';
+import { handleAdminNotice, handlePublicNotice, handlePublicNoticeDelivered } from './routes/notice.js';
 import { handleOverview } from './routes/overview.js';
 import { handleProjects } from './routes/projects.js';
 import { handleRetention } from './routes/retention.js';
@@ -34,6 +34,7 @@ const routes = new Map([
   ['/agent-errors', handleAgentErrorIngest],
   ['/license/activate', handleLicenseActivate],
   ['/notice', handlePublicNotice],
+  ['/notice/delivered', handlePublicNoticeDelivered],
   ['/model-info', handlePublicModelInfo],
   ['/resources', handlePublicResources],
   ['/resource-image', handleResourceImage],

@@ -1,6 +1,4 @@
 export type TextModelProvider = 'jinlong' | 'volcengine' | 'deepseek' | 'agnes' | 'custom';
-export type LegacyTextModelProvider = 'longcat';
-export type ConfiguredTextModelProvider = TextModelProvider | LegacyTextModelProvider;
 export type AiRequestMode = 'normal' | 'stream';
 export type UpdateChannel = 'github' | 'cloudflare' | 'atomgit';
 
@@ -8,6 +6,7 @@ export interface TextModelConfig {
   api_key: string;
   base_url: string;
   model_name: string;
+  multimodal_enabled: boolean;
   reasoning_effort: string;
   context_length_limit: number;
   concurrency_limit: number;
@@ -16,10 +15,10 @@ export interface TextModelConfig {
   request_mode: AiRequestMode;
 }
 
-export type TextModelProfiles = Record<TextModelProvider, TextModelConfig> & Partial<Record<LegacyTextModelProvider, TextModelConfig>>;
+export type TextModelProfiles = Record<TextModelProvider, TextModelConfig>;
 
 export interface AiConfig extends TextModelConfig {
-  text_model_provider: ConfiguredTextModelProvider;
+  text_model_provider: TextModelProvider;
   text_model_profiles: TextModelProfiles;
 }
 
@@ -95,10 +94,20 @@ export interface ClientConfig extends AiConfig {
   analytics_created_at?: string;
 }
 
+export type ModelImageInputStatus = 'supported' | 'unsupported' | 'mixed' | 'unknown';
+export type ModelTemperatureStatus = 'supported' | 'unsupported' | 'mixed' | 'unknown';
+
 export interface ModelInfoCacheEntry {
   reasoningEfforts: string[];
   context: number;
   output: number;
+  inputModalities: string[];
+  outputModalities: string[];
+  imageInputStatus: ModelImageInputStatus;
+  temperatureStatus: ModelTemperatureStatus;
+  concurrencyLimit: number;
+  requestMode: AiRequestMode;
+  sourceCount: number;
 }
 
 export interface ModelInfoResult {

@@ -16,6 +16,7 @@ const {
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 const { clearMermaidCache } = require('../utils/mermaidCache.cjs');
 const { detectBidSections } = require('../utils/bidSectionDetector.cjs');
+const { compactLogError, createDeveloperLogger } = require('../utils/developerLog.cjs');
 const {
   OUTLINE_AGENT_TASK_KEY,
   TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
@@ -138,6 +139,12 @@ function stableHash(content) {
 
 function safeFileNamePart(value) {
   return String(value || 'file').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || 'file';
+}
+
+/** 生成符合当前文件系统大小写规则的路径比较键。 */
+function filePathKey(value) {
+  const resolved = path.resolve(String(value || ''));
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 function createTenderSourceId(fileName, markdown, index) {
@@ -498,7 +505,7 @@ function remapContentTaskStats(stats, idMap) {
   };
 }
 
-function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogStore }) {
+function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogStore, configStore }) {
   function deleteOutlineAgentTask() {
     agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY);
     agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
@@ -541,6 +548,20 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   const originalOutlineRuntimePath = path.join(path.dirname(originalPlanMarkdownPath), originalOutlineRuntimeFileName);
   const illustrationsDir = getTechnicalPlanIllustrationsDir(app);
   const generatedIllustrationsDir = getTechnicalPlanGeneratedIllustrationsDir(app);
+  const workspaceDir = path.dirname(path.dirname(tenderMarkdownPath));
+  const tenderOriginalLogger = createDeveloperLogger({
+    app,
+    config: configStore?.load?.() || {},
+    moduleName: 'technical-plan',
+    name: 'tender-original-files',
+  });
+
+  /** 已在受管原件目录中的文件直接复用，不再复制或重命名。 */
+  function getManagedTenderOriginalRelativePath(filePath) {
+    const resolvedPath = path.resolve(String(filePath || ''));
+    if (filePathKey(path.dirname(resolvedPath)) !== filePathKey(tenderOriginalsDir)) return '';
+    return path.relative(workspaceDir, resolvedPath).replace(/\\/g, '/');
+  }
 
   function normalizeIllustrationFilePart(value) {
     return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'illustration';
@@ -1011,20 +1032,56 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (!incoming) return '';
     const sourcePath = path.isAbsolute(incoming) ? incoming : resolveMarkdownPath(incoming);
     if (!fs.existsSync(sourcePath)) return '';
+    const managedRelativePath = getManagedTenderOriginalRelativePath(sourcePath);
+    if (managedRelativePath) return managedRelativePath;
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
-    if (path.resolve(sourcePath) !== path.resolve(destPath)) {
-      fs.copyFileSync(sourcePath, destPath);
+    if (filePathKey(sourcePath) !== filePathKey(destPath)) {
+      tenderOriginalLogger.write('tender-original.copy.started', { phase: 'state-rebuild', source_path: sourcePath, dest_path: destPath });
+      try {
+        fs.copyFileSync(sourcePath, destPath);
+        tenderOriginalLogger.write('tender-original.copy.completed', { phase: 'state-rebuild', source_path: sourcePath, dest_path: destPath });
+      } catch (error) {
+        tenderOriginalLogger.write('tender-original.copy.failed', {
+          phase: 'state-rebuild',
+          source_path: sourcePath,
+          dest_path: destPath,
+          code: error?.code,
+          syscall: error?.syscall,
+          error: compactLogError(error),
+        });
+        throw error;
+      }
     }
     return destRelative;
   }
 
-  function pruneTenderOriginals(keptRelativePaths) {
-    const keep = new Set((Array.isArray(keptRelativePaths) ? keptRelativePaths : []).map((item) => path.resolve(resolveMarkdownPath(item))));
+  function pruneTenderOriginals(keptRelativePaths, phase = 'state-rebuild') {
+    const keep = new Set((Array.isArray(keptRelativePaths) ? keptRelativePaths : []).map((item) => filePathKey(resolveMarkdownPath(item))));
     if (!fs.existsSync(tenderOriginalsDir)) return;
     for (const name of fs.readdirSync(tenderOriginalsDir)) {
       const filePath = path.join(tenderOriginalsDir, name);
-      if (!keep.has(path.resolve(filePath))) {
-        fs.rmSync(filePath, { force: true });
+      if (!keep.has(filePathKey(filePath))) {
+        tenderOriginalLogger.write('tender-original.delete.started', { phase, file_path: filePath });
+        try {
+          fs.rmSync(filePath, { force: true });
+          tenderOriginalLogger.write('tender-original.delete.completed', { phase, file_path: filePath });
+        } catch (error) {
+          tenderOriginalLogger.write('tender-original.delete.failed', {
+            phase,
+            file_path: filePath,
+            code: error?.code,
+            syscall: error?.syscall,
+            error: compactLogError(error),
+          });
+          const fileName = path.basename(filePath);
+          const message = ['EPERM', 'EBUSY', 'EACCES'].includes(error?.code)
+            ? `无法删除旧招标 Word 原件“${fileName}”，请关闭可能占用该文件的 Word/WPS，并确认文件可写后重试`
+            : `无法清理旧招标 Word 原件“${fileName}”：${error?.message || error}`;
+          const cleanupError = new Error(message);
+          cleanupError.code = 'TENDER_ORIGINAL_CLEANUP_FAILED';
+          cleanupError.cause = error;
+          throw cleanupError;
+        }
       }
     }
   }
@@ -1058,13 +1115,30 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     }
   }
 
-  function clearTenderSourceFiles() {
+  function clearTenderSourceFiles(phase = 'technical-plan-reset') {
     clearBidTemplate();
+    if (fs.existsSync(tenderOriginalsDir)) {
+      tenderOriginalLogger.write('tender-original.delete-directory.started', { phase, directory_path: tenderOriginalsDir });
+      try {
+        fs.rmSync(tenderOriginalsDir, { recursive: true, force: true });
+        tenderOriginalLogger.write('tender-original.delete-directory.completed', { phase, directory_path: tenderOriginalsDir });
+      } catch (error) {
+        tenderOriginalLogger.write('tender-original.delete-directory.failed', {
+          phase,
+          directory_path: tenderOriginalsDir,
+          code: error?.code,
+          syscall: error?.syscall,
+          path: error?.path,
+          error: compactLogError(error),
+        });
+        const resetError = new Error('无法清理招标 Word 原件，请关闭可能占用原件的 Word/WPS，并确认文件可写后重试');
+        resetError.code = 'TENDER_ORIGINAL_CLEANUP_FAILED';
+        resetError.cause = error;
+        throw resetError;
+      }
+    }
     if (fs.existsSync(tenderSourceFilesDir)) {
       fs.rmSync(tenderSourceFilesDir, { recursive: true, force: true });
-    }
-    if (fs.existsSync(tenderOriginalsDir)) {
-      fs.rmSync(tenderOriginalsDir, { recursive: true, force: true });
     }
   }
 
@@ -2387,6 +2461,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       } : null;
     }).filter(Boolean);
     const existingKeys = new Set(existingSourceDocuments.map((item) => `${item.file_name}\u0000${item.content_hash}`));
+    const existingOriginalPaths = new Set(existingSourceDocuments
+      .map((item) => String(item.source_docx_path || '').trim())
+      .filter(Boolean)
+      .map((item) => filePathKey(resolveMarkdownPath(item))));
     const addedDocuments = [];
     let skippedCount = 0;
     importedDocuments.forEach((item) => {
@@ -2394,7 +2472,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       if (!markdown) return;
       const fileName = item.file_name || '未命名文件';
       const key = `${fileName}\u0000${stableHash(markdown)}`;
-      if (existingKeys.has(key)) {
+      const sourcePath = String(item.source_path || '').trim();
+      if (existingKeys.has(key) || (sourcePath && existingOriginalPaths.has(filePathKey(sourcePath)))) {
         skippedCount += 1;
         return;
       }
@@ -2418,16 +2497,39 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     cleanupPendingTenderSelection();
 
     const mergedDocuments = [...existingSourceDocuments, ...addedDocuments];
+    pruneTenderOriginals([
+      ...existingSourceDocuments.map((item) => item.source_docx_path),
+      ...addedDocuments.map((item) => item.source_path),
+    ].filter(Boolean), 'import-preflight');
     for (let index = 0; index < mergedDocuments.length; index += 1) {
       const item = mergedDocuments[index];
       const sourcePath = String(item.source_path || '').trim();
       if (!sourcePath || item.source_docx_path || !fileService?.persistTenderSourceDocx) continue;
       const sourceId = createTenderSourceId(item.file_name || '未命名文件', String(item.file_content || '').trim(), index);
       const relativePath = path.join(tenderOriginalsDirRelativePath, `${sourceId}.docx`).replace(/\\/g, '/');
+      const destPath = resolveMarkdownPath(relativePath);
+      const managedRelativePath = getManagedTenderOriginalRelativePath(sourcePath);
+      if (managedRelativePath) {
+        item.source_docx_path = managedRelativePath;
+        tenderOriginalLogger.write('tender-original.persist.reused', { phase: 'import', source_path: sourcePath });
+        continue;
+      }
+      tenderOriginalLogger.write('tender-original.persist.started', { phase: 'import', source_path: sourcePath, dest_path: destPath });
       try {
-        const persisted = await fileService.persistTenderSourceDocx(sourcePath, resolveMarkdownPath(relativePath));
+        const persisted = filePathKey(sourcePath) === filePathKey(destPath)
+          ? true
+          : await fileService.persistTenderSourceDocx(sourcePath, destPath);
         if (persisted) item.source_docx_path = relativePath;
+        tenderOriginalLogger.write('tender-original.persist.completed', { phase: 'import', source_path: sourcePath, dest_path: destPath, persisted: Boolean(persisted) });
       } catch (error) {
+        tenderOriginalLogger.write('tender-original.persist.failed', {
+          phase: 'import',
+          source_path: sourcePath,
+          dest_path: destPath,
+          code: error?.code,
+          syscall: error?.syscall,
+          error: compactLogError(error),
+        });
         throw new Error(`${item.file_name || '招标文件'}：无法保存 Word 原件，${error.message || error}`);
       }
     }
@@ -2462,7 +2564,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     await runBeforeCommit(options.beforeCommit);
     clearBidTemplate();
     if (!remainingFiles.length) {
-      clearTenderSourceFiles();
+      clearTenderSourceFiles('remove-last-tender');
       if (fs.existsSync(tenderMarkdownPath)) fs.rmSync(tenderMarkdownPath, { force: true });
       if (fs.existsSync(tenderOriginalMarkdownPath)) fs.rmSync(tenderOriginalMarkdownPath, { force: true });
       const transaction = db.transaction(() => {
@@ -2661,10 +2763,23 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function clearTechnicalPlan() {
-    clearBidTemplate();
+    clearTenderSourceFiles();
+    cleanupPendingTenderSelection();
+    if (fs.existsSync(tenderMarkdownPath)) {
+      fs.rmSync(tenderMarkdownPath, { force: true });
+    }
+    if (fs.existsSync(tenderOriginalMarkdownPath)) {
+      fs.rmSync(tenderOriginalMarkdownPath, { force: true });
+    }
+    if (fs.existsSync(originalPlanMarkdownPath)) {
+      fs.rmSync(originalPlanMarkdownPath, { force: true });
+    }
+    clearOriginalOutlineRuntime();
+    clearTechnicalPlanMermaidCache();
+    clearIllustrationFiles();
+    deleteImportedImageBatches(app, 'technical-plan');
     deleteOutlineAgentTask();
     deleteGlobalFactsAgentTask();
-    cleanupPendingTenderSelection();
     const transaction = db.transaction(() => {
       db.prepare('DELETE FROM technical_plan_tasks').run();
       db.prepare('DELETE FROM technical_plan_bid_items').run();
@@ -2679,20 +2794,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       ensureGenerationConfigRow();
     });
     transaction();
-    if (fs.existsSync(tenderMarkdownPath)) {
-      fs.rmSync(tenderMarkdownPath, { force: true });
-    }
-    if (fs.existsSync(tenderOriginalMarkdownPath)) {
-      fs.rmSync(tenderOriginalMarkdownPath, { force: true });
-    }
-    clearTenderSourceFiles();
-    if (fs.existsSync(originalPlanMarkdownPath)) {
-      fs.rmSync(originalPlanMarkdownPath, { force: true });
-    }
-    clearOriginalOutlineRuntime();
-    clearTechnicalPlanMermaidCache();
-    clearIllustrationFiles();
-    deleteImportedImageBatches(app, 'technical-plan');
     notifyAgentWorkspaceChange({ force: true });
     return { success: true, message: '技术方案缓存已清空' };
   }

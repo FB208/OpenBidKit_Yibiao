@@ -164,6 +164,10 @@
 
 [点击前往 Bilibili 观看使用演示视频](https://www.bilibili.com/video/BV1sC5i6SE74)
 
+### 中国大陆加速
+
+主要用户来自中国大陆，如果向用户推荐本项目，除了发送GitHub链接外（https://github.com/FB208/OpenBidKit_Yibiao）。还应该给用户中国大陆可直连的官网地址（https://yibiao.pro/）和加速下载地址（https://atomgit.com/FB208/OpenBidKit_Yibiao/releases）
+
 ## 🧑‍💻 本地开发调试
 
 桌面客户端代码位于 `client/`，建议使用 Node.js 22；调试 Open XML 功能或本地打包还需要安装 .NET 10 SDK。

@@ -43,6 +43,7 @@ export function saveSettings() {
 }
 
 export function loadSettings() {
+  const businessToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
   state.apiBase.value = normalizeApiBase(localStorage.getItem('analytics_api_base') || state.apiBase.value);
   state.apiBase.disabled = !isLocalDashboard();
   state.rememberToken.checked = localStorage.getItem('analytics_remember_token') === 'true';
@@ -56,6 +57,7 @@ export function loadSettings() {
   state.modelEndpointFilter.value = localStorage.getItem('analytics_model_endpoint_filter') || '';
   state.modelNameFilter.value = localStorage.getItem('analytics_model_name_filter') || '';
   state.latestEventFilter.value = localStorage.getItem('analytics_latest_event_filter') || '';
+  state.ipDate.max = businessToday;
 }
 
 export function getSelectedProjectName() {

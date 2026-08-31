@@ -1,4 +1,14 @@
-export type { AiHttpErrorPayload, ChatCompletionRequest, ChatMessage, JsonCompletionRequest } from './ai';
+export type {
+  AiHttpErrorPayload,
+  ChatCompletionRequest,
+  ChatContentPart,
+  ChatImageDetail,
+  ChatImageUrlContentPart,
+  ChatLocalImageContentPart,
+  ChatMessage,
+  ChatTextContentPart,
+  JsonCompletionRequest,
+} from './ai';
 export type {
   DuplicateAnalysisTabId,
   DuplicateAnalysisStatus,
@@ -31,7 +41,6 @@ export type {
   AiConfig,
   AiRequestMode,
   ClientConfig,
-  ConfiguredTextModelProvider,
   ConfigSaveResult,
   ComponentsConfig,
   FileParserConfig,
@@ -43,7 +52,8 @@ export type {
   ImageModelRatio,
   ImageModelSize,
   ImageModelStatus,
-  LegacyTextModelProvider,
+  ModelImageInputStatus,
+  ModelTemperatureStatus,
   ModelInfoCacheEntry,
   ModelInfoResult,
   ModelListResult,

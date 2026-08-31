@@ -1,5 +1,5 @@
 import { assertReady, getEncodedProjectAndDays, loadProjectOptions, requestJson, saveSettings } from '../api.js';
-import { escapeHtml, formatNumber, renderTable } from '../render.js';
+import { escapeHtml, formatNumber, renderTable, setError } from '../render.js';
 import { appState, state } from '../state.js';
 
 function detailButton(clientId) {
@@ -90,19 +90,66 @@ export async function loadIpStats(options = {}) {
   saveSettings();
 
   const { projectName } = getEncodedProjectAndDays();
-  const data = await requestJson(`/api/ip-stats?projectName=${projectName}&page=${appState.ipPage}`);
+  const activityDate = state.ipDate.value;
+  const dateQuery = activityDate ? `&date=${encodeURIComponent(activityDate)}` : '';
+  const data = await requestJson(`/api/ip-stats?projectName=${projectName}&page=${appState.ipPage}${dateQuery}`);
   appState.ipTotal = Number(data.total || 0);
   appState.ipPage = Number(data.page || appState.ipPage);
   appState.ipPageSize = Number(data.pageSize || appState.ipPageSize);
   const rows = (data.items || []).map((item) => ({
     ip: item.ip,
     clientCount: formatNumber(item.clientCount),
+    newClientCount: formatNumber(item.newClientCount),
+    totalTokens: formatNumber(item.totalTokens),
+    aiServices: (item.aiServices || [])
+      .map((service) => [service.provider, service.endpointHost].filter(Boolean).join(' / '))
+      .join('；') || '-',
+    action: `<button class="danger-button" type="button" data-ip-stats-block="${escapeHtml(item.ip)}">封禁</button>`,
   }));
 
-  renderTable(state.ipStatsTable, rows, [
+  const columns = [
     { key: 'ip', label: 'IP 地址', code: true },
     { key: 'clientCount', label: '客户端数' },
-  ], '暂无 IP 统计数据');
+  ];
+  if (activityDate) {
+    columns.push({ key: 'newClientCount', label: '新客户端数' });
+    columns.push({ key: 'totalTokens', label: 'Total Tokens' });
+    columns.push({ key: 'aiServices', label: 'AI 服务商 / 域名', code: true });
+  }
+  columns.push({ key: 'action', label: '操作', html: true });
+  renderTable(state.ipStatsTable, rows, columns, '暂无 IP 统计数据');
+}
+
+// 从 IP 统计表直接添加全局封禁。
+export function setupIpStatsActions() {
+  state.ipStatsTable.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-ip-stats-block]');
+    if (!button) return;
+    const ip = button.dataset.ipStatsBlock;
+    if (!window.confirm(`确认封禁 IP「${ip}」并删除当前视图对应的客户端明细吗？`)) return;
+
+    button.disabled = true;
+    button.textContent = '封禁中';
+    try {
+      const date = state.ipDate.value;
+      const data = await requestJson('/api/ip-blocks', {
+        method: 'POST',
+        body: {
+          ip,
+          projectName: state.projectName.value.trim(),
+          date: date || undefined,
+          reason: date ? `IP 统计快捷封禁（${date}）` : 'IP 统计快捷封禁',
+        },
+      });
+      setError('');
+      button.textContent = `已封禁（删 ${formatNumber(data.deletedClientCount)}）`;
+      button.title = `匹配 ${formatNumber(data.matchedClientCount)} 个客户端，删除 ${formatNumber(data.deletedClientCount)} 条客户端明细`;
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = '封禁';
+      setError(error?.message || String(error));
+    }
+  });
 }
 
 export async function loadClientDetail() {

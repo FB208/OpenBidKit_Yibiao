@@ -4,6 +4,7 @@ import { getAppMenuItemById } from './menuConfig';
 import BidOpportunityPage from '../features/bid-opportunity/pages/BidOpportunityPage';
 import ContentExpansionReplaceTestPage from '../features/developer/pages/ContentExpansionReplaceTestPage';
 import DeveloperDemoPage, { isDeveloperDemoSection } from '../features/developer/pages/DeveloperDemoPage';
+import DeveloperMultimodalTestPage from '../features/developer/pages/DeveloperMultimodalTestPage';
 import AgentTestPage from '../features/developer/pages/AgentTestPage';
 import DeveloperTestPage from '../features/developer/pages/DeveloperTestPage';
 import ExportFormatPage from '../features/export-format/pages/ExportFormatPage';
@@ -73,6 +74,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return null;
     case 'developer-json-test':
       return <DeveloperTestPage />;
+    case 'developer-multimodal-test':
+      return <DeveloperMultimodalTestPage />;
     case 'developer-expansion-replace-test':
       return <ContentExpansionReplaceTestPage />;
     case 'developer-agent-test':

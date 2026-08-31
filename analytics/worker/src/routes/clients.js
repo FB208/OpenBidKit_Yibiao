@@ -1,6 +1,6 @@
 import { json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
 import { queryStatsClientDetail, queryStatsClients, queryStatsIpStats } from '../services/analyticsStatsStore.js';
-import { isValidProjectName, logQueryError, normalizeText, safePage } from '../utils.js';
+import { addBusinessDateDays, getBusinessToday, isValidProjectName, logQueryError, normalizeText, safePage } from '../utils.js';
 
 function normalizeClientDetailRange(value) {
   const range = normalizeText(value, 20);
@@ -63,14 +63,25 @@ export async function handleIpStats(request, env, url) {
   }
 
   const projectName = normalizeText(url.searchParams.get('projectName'), 80);
+  const activityDate = normalizeText(url.searchParams.get('date'), 10);
   const page = safePage(url.searchParams.get('page'));
   const pageSize = 20;
-  if (!isValidProjectName(projectName)) {
-    return json({ code: 400, message: 'invalid projectName' }, { status: 400 });
+  const validDate = !activityDate || (
+    /^\d{4}-\d{2}-\d{2}$/.test(activityDate)
+    && addBusinessDateDays(activityDate, 0) === activityDate
+    && activityDate <= getBusinessToday()
+  );
+  if (!isValidProjectName(projectName) || !validDate) {
+    return json({ code: 400, message: 'invalid params' }, { status: 400 });
   }
 
   try {
-    return json({ code: 0, projectName, ...(await queryStatsIpStats(env, projectName, page, pageSize)) });
+    return json({
+      code: 0,
+      projectName,
+      date: activityDate,
+      ...(await queryStatsIpStats(env, projectName, activityDate, page, pageSize)),
+    });
   } catch (error) {
     logQueryError('ip-stats', error);
     return json({ code: 500, message: 'query failed' }, { status: 500 });

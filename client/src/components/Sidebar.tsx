@@ -31,6 +31,7 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'bid-opportunity': RadarIcon,
   'developer-test': FlaskIcon,
   'developer-json-test': FlaskIcon,
+  'developer-multimodal-test': FlaskIcon,
   'developer-prompt-lab': FlaskIcon,
   'developer-parser-sandbox': FlaskIcon,
   'developer-export-preview': FlaskIcon,

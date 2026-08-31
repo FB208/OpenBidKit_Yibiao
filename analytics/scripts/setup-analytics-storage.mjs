@@ -10,6 +10,8 @@ const migrationsDirName = 'analytics-migrations';
 
 const d1BindingName = 'ANALYTICS_DB';
 const d1DatabaseName = 'openbidkit-analytics';
+const noticeBindingName = 'NOTICE_STORE';
+const legacyIpBlockKey = 'security:ip-block-list:v1';
 // 这里只维护 5 个埋点汇总 Cron；付费计划下的模型信息同步 Cron 独立配置在 wrangler.jsonc。
 const dailyRollupCrons = [
   '0 17 * * *',
@@ -348,9 +350,85 @@ function ensureAnalyticsIndexes() {
   }
 }
 
+function sqlString(value) {
+  return `'${String(value ?? '').replace(/'/g, "''")}'`;
+}
+
+function parseLegacyIpBlocks(output) {
+  const source = String(output || '').trim();
+  if (!source || source === 'null') return [];
+
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    const start = source.indexOf('[');
+    const end = source.lastIndexOf(']');
+    if (start === -1 || end <= start) throw new Error('Unable to parse legacy IP block KV value.');
+    parsed = JSON.parse(source.slice(start, end + 1));
+  }
+
+  const seen = new Set();
+  return (Array.isArray(parsed) ? parsed : []).map((item) => ({
+    ip: String(item?.ip || '').trim().toLowerCase(),
+    reason: String(item?.reason || '').trim().slice(0, 500),
+    createdAt: String(item?.createdAt || '').trim().slice(0, 40),
+  })).filter((item) => item.ip && !seen.has(item.ip) && seen.add(item.ip));
+}
+
+// 将旧 KV 封禁记录一次性迁移到 D1，旧 Worker 切换完成前仍继续读取 KV。
+function migrateLegacyIpBlocks() {
+  const stateResult = runWrangler([
+    'd1', 'execute', d1BindingName, '--remote', '--json',
+    '--command', 'SELECT kv_migrated_at FROM ip_block_storage_meta WHERE id = 1',
+  ]);
+  if (stateResult.status !== 0) {
+    console.error(stateResult.output);
+    process.exit(stateResult.status || 1);
+  }
+  const stateRows = parseJsonArrayFromOutput(stateResult.output).flatMap((item) => item?.results || []);
+  if (stateRows.length) {
+    console.log('Legacy IP block KV records already migrated to D1.');
+    return;
+  }
+
+  const kvResult = runWrangler([
+    'kv', 'key', 'get', legacyIpBlockKey,
+    '--binding', noticeBindingName,
+    '--remote', '--text',
+  ]);
+  if (kvResult.status !== 0 && !/not found|404/i.test(kvResult.output)) {
+    console.error(kvResult.output);
+    process.exit(kvResult.status || 1);
+  }
+
+  let entries;
+  try {
+    entries = kvResult.status === 0 ? parseLegacyIpBlocks(kvResult.output) : [];
+  } catch (error) {
+    console.error(error?.message || String(error));
+    process.exit(1);
+  }
+  const fallbackCreatedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const insertSql = entries.length
+    ? `INSERT INTO ip_blocks (ip, reason, created_at) VALUES ${entries.map((item) => `(${sqlString(item.ip)}, ${sqlString(item.reason)}, ${sqlString(item.createdAt || fallbackCreatedAt)})`).join(', ')} ON CONFLICT(ip) DO NOTHING;`
+    : '';
+  const migratedAt = new Date().toISOString();
+  const migrationResult = runWrangler([
+    'd1', 'execute', d1BindingName, '--remote',
+    '--command', `${insertSql} INSERT INTO ip_block_storage_meta (id, kv_migrated_at) VALUES (1, ${sqlString(migratedAt)}) ON CONFLICT(id) DO NOTHING;`,
+  ]);
+  if (migrationResult.status !== 0) {
+    console.error(migrationResult.output);
+    process.exit(migrationResult.status || 1);
+  }
+  console.log(`Migrated ${entries.length} legacy IP block record(s) from KV to D1.`);
+}
+
 const analyticsDatabaseId = ensureD1Database();
 updateD1Config(analyticsDatabaseId);
 ensureCronTrigger();
 applyAnalyticsMigrations();
 ensureAnalyticsColumns();
 ensureAnalyticsIndexes();
+migrateLegacyIpBlocks();

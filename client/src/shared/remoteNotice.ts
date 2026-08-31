@@ -40,6 +40,26 @@ export function dismissRemoteNotice(noticeId: string) {
   }
 }
 
+// 公告弹窗展示后上报一次送达计数。
+export async function reportRemoteNoticeDelivered(notice: Pick<RemoteNotice, 'id' | 'projectName'>) {
+  const response = await fetch(`${NOTICE_ENDPOINT}/delivered`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      projectName: notice.projectName || PROJECT_NAME,
+      noticeId: notice.id,
+    }),
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    console.info(LOG_PREFIX, 'delivery report failed', response.status);
+  }
+}
+
 function normalizeNotice(notice: RemoteNotice | null | undefined): RemoteNotice | null {
   if (!notice?.id || !notice.content || notice.enabled === false) {
     return null;

@@ -29,6 +29,10 @@ function splitReasoningEfforts(value) {
     .filter(Boolean))];
 }
 
+function splitModalities(value) {
+  return splitReasoningEfforts(value).map((item) => item.toLowerCase());
+}
+
 // 渲染模型信息缓存的最近同步状态。
 function renderModelInfoCache(status, overrideCount) {
   const available = Boolean(status?.lastSuccessAt);
@@ -38,6 +42,8 @@ function renderModelInfoCache(status, overrideCount) {
   state.modelInfoCacheSourceModels.textContent = formatNumber(status?.sourceModelCount || 0);
   state.modelInfoCacheModels.textContent = formatNumber(status?.indexedModelCount || 0);
   state.modelInfoCacheReasoningModels.textContent = formatNumber(status?.reasoningEffortModelCount || 0);
+  state.modelInfoCacheImageModels.textContent = formatNumber(status?.imageInputModelCount || 0);
+  state.modelInfoCacheTemperatureModels.textContent = formatNumber(status?.temperatureModelCount || 0);
   state.modelInfoCacheOverrides.textContent = formatNumber(overrideCount || 0);
   state.modelInfoCacheBytes.textContent = formatBytes(status?.sourceBytes);
   state.modelInfoCacheTrigger.textContent = status?.trigger === 'cron' ? '定时任务' : status?.trigger === 'manual' ? '管理员手动' : '-';
@@ -51,6 +57,21 @@ function renderReasoningEfforts(efforts) {
   return `<div class="model-info-efforts">${efforts.map((effort) => `<span>${escapeHtml(effort)}</span>`).join('')}</div>`;
 }
 
+function renderModalities(modalities) {
+  if (!Array.isArray(modalities) || !modalities.length) return '<span class="model-info-empty-value">未知</span>';
+  return `<div class="model-info-modalities">${modalities.map((modality) => `<span>${escapeHtml(modality)}</span>`).join('')}</div>`;
+}
+
+function renderCapabilityStatus(status) {
+  const meta = {
+    supported: { label: '支持', className: 'is-supported' },
+    unsupported: { label: '不支持', className: 'is-unsupported' },
+    mixed: { label: '部分支持', className: 'is-mixed' },
+    unknown: { label: '未知', className: 'is-unknown' },
+  }[status] || { label: '未知', className: 'is-unknown' };
+  return `<span class="model-info-capability ${meta.className}">${meta.label}</span>`;
+}
+
 // 渲染当前分页的模型详细索引。
 function renderModelInfoTable() {
   const models = appState.modelInfoModels || [];
@@ -62,10 +83,16 @@ function renderModelInfoTable() {
   const rows = models.map((model) => `
     <tr class="${model.overridden ? 'is-overridden' : ''}">
       <td class="model-info-name-cell"><code title="${escapeHtml(model.modelName)}">${escapeHtml(model.modelName)}</code></td>
+      <td>${renderModalities(model.inputModalities)}</td>
+      <td>${renderModalities(model.outputModalities)}</td>
+      <td>${renderCapabilityStatus(model.imageInputStatus)}</td>
+      <td>${renderCapabilityStatus(model.temperatureStatus)}</td>
+      <td class="model-info-number-cell">${escapeHtml(formatNumber(model.concurrencyLimit))}</td>
+      <td>${model.requestMode === 'normal' ? '普通' : '流式'}</td>
       <td>${renderReasoningEfforts(model.reasoningEfforts)}</td>
       <td class="model-info-number-cell">${escapeHtml(formatNumber(model.context))}</td>
       <td class="model-info-number-cell">${escapeHtml(formatNumber(model.output))}</td>
-      <td><span class="model-info-source ${model.overridden ? 'is-overridden' : ''}">${model.overridden ? '人工修改' : '自动同步'}</span></td>
+      <td><span class="model-info-source ${model.overridden ? 'is-overridden' : ''}">${model.overridden ? '人工修改' : '自动同步'}</span>${!model.overridden && model.sourceCount ? `<small class="model-info-source-count">${escapeHtml(formatNumber(model.sourceCount))} 个来源</small>` : ''}</td>
       <td class="model-info-time-cell">${escapeHtml(formatDateTime(model.updatedAt))}</td>
       <td class="model-info-row-actions">
         <button type="button" class="secondary-button" data-model-info-action="edit" data-model-name="${escapeHtml(model.modelName)}">修改</button>
@@ -79,6 +106,12 @@ function renderModelInfoTable() {
       <thead>
         <tr>
           <th>模型名称</th>
+          <th>输入模态</th>
+          <th>输出模态</th>
+          <th>图片理解</th>
+          <th>模型温度</th>
+          <th>并发上限</th>
+          <th>请求方式</th>
           <th>思考强度</th>
           <th>上下文长度</th>
           <th>最大输出</th>
@@ -150,6 +183,12 @@ function openModelInfoEditor(modelName) {
   }
   state.modelInfoEditName.value = model.modelName;
   state.modelInfoEditEfforts.value = (model.reasoningEfforts || []).join(', ');
+  state.modelInfoEditInputModalities.value = (model.inputModalities || []).join(', ');
+  state.modelInfoEditOutputModalities.value = (model.outputModalities || []).join(', ');
+  state.modelInfoEditImageInputStatus.value = model.imageInputStatus || 'unknown';
+  state.modelInfoEditTemperatureStatus.value = model.temperatureStatus || 'unknown';
+  state.modelInfoEditConcurrencyLimit.value = String(model.concurrencyLimit || 10);
+  state.modelInfoEditRequestMode.value = model.requestMode === 'normal' ? 'normal' : 'stream';
   state.modelInfoEditContext.value = String(model.context || 0);
   state.modelInfoEditOutput.value = String(model.output || 0);
   state.modelInfoEditDialog.showModal();
@@ -160,8 +199,9 @@ async function saveModelInfoEdit(event) {
   const modelName = state.modelInfoEditName.value.trim();
   const context = Number(state.modelInfoEditContext.value);
   const output = Number(state.modelInfoEditOutput.value);
-  if (!Number.isInteger(context) || context < 0 || !Number.isInteger(output) || output < 0) {
-    setModelInfoCacheStatus('上下文长度和最大输出必须是非负整数。', 'error');
+  const concurrencyLimit = Number(state.modelInfoEditConcurrencyLimit.value);
+  if (!Number.isInteger(context) || context < 0 || !Number.isInteger(output) || output < 0 || !Number.isInteger(concurrencyLimit) || concurrencyLimit < 1) {
+    setModelInfoCacheStatus('上下文长度和最大输出必须是非负整数，并发上限必须是正整数。', 'error');
     return;
   }
 
@@ -172,6 +212,12 @@ async function saveModelInfoEdit(event) {
       body: {
         modelName,
         reasoningEfforts: splitReasoningEfforts(state.modelInfoEditEfforts.value),
+        inputModalities: splitModalities(state.modelInfoEditInputModalities.value),
+        outputModalities: splitModalities(state.modelInfoEditOutputModalities.value),
+        imageInputStatus: state.modelInfoEditImageInputStatus.value,
+        temperatureStatus: state.modelInfoEditTemperatureStatus.value,
+        concurrencyLimit,
+        requestMode: state.modelInfoEditRequestMode.value,
         context,
         output,
       },

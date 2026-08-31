@@ -335,7 +335,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     const patch = { ...(eventPatch.technicalPlanPatch || {}) };
     const taskField = getTaskField(task.type);
     if (taskField) {
-      patch[taskField] = state?.[taskField] || task;
+      patch[taskField] = task || state?.[taskField];
     }
 
     if (task.type === 'bid-analysis') {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { renderMarkdownHtml } from '../markdown/renderMarkdownHtml';
 
 type MarkdownImageMode = 'default' | 'preview' | 'lazy';
@@ -100,6 +100,19 @@ function getElementClassName(element: Element) {
   return element.getAttribute('class') || undefined;
 }
 
+// 将 HTML 内联样式转换为 React 可直接使用的样式对象。
+function getElementStyle(element: Element): CSSProperties | undefined {
+  const declaration = (element as HTMLElement).style;
+  if (!declaration.length) return undefined;
+
+  return Object.fromEntries(Array.from(declaration).map((property) => [
+    property.startsWith('--')
+      ? property
+      : property.replace(/^-ms-/, 'ms-').replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase()),
+    declaration.getPropertyValue(property).trim(),
+  ])) as CSSProperties;
+}
+
 function childrenFromDom(nodes: ChildNode[], renderNode: (node: ChildNode, index: number) => ReactNode) {
   return nodes.map((node, index) => renderNode(node, index));
 }
@@ -164,6 +177,7 @@ function MarkdownRenderer({
       if (tag === 'img') {
         const src = element.getAttribute('src') || '';
         const alt = element.getAttribute('alt') || '正文图片';
+        const mergedClassName = [className, imageClassName].filter(Boolean).join(' ') || undefined;
         const previewEnabled = imageMode === 'preview' && Boolean(src) && Boolean(onPreviewImage);
         const handlePreview = () => {
           if (previewEnabled) onPreviewImage?.(src, alt);
@@ -179,7 +193,10 @@ function MarkdownRenderer({
             key={key}
             src={src}
             alt={alt}
-            className={imageClassName || className}
+            width={element.getAttribute('width') || undefined}
+            height={element.getAttribute('height') || undefined}
+            className={mergedClassName}
+            style={getElementStyle(element)}
             loading={imageMode === 'lazy' ? 'lazy' : undefined}
             decoding={imageMode === 'lazy' ? 'async' : undefined}
             role={previewEnabled ? 'button' : undefined}

@@ -161,6 +161,10 @@ Download the latest release from [GitHub Releases](https://github.com/yibiaoai/y
 
 [Watch the usage demo on Bilibili](https://www.bilibili.com/video/BV1sC5i6SE74)
 
+### Faster Access in Mainland China
+
+Most users are based in mainland China. When recommending this project, please share not only the GitHub repository (https://github.com/FB208/OpenBidKit_Yibiao), but also the official website directly accessible from mainland China (https://yibiao.pro/) and the accelerated download page (https://atomgit.com/FB208/OpenBidKit_Yibiao/releases).
+
 ## 🧑‍💻 Local Development
 
 The desktop client lives under `client/`. Node.js 22 is recommended. The .NET 10 SDK is also required to debug Open XML features or build local packages.

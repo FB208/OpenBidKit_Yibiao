@@ -134,7 +134,7 @@
             <div class="section-head">
               <div>
                 <h2>IP 统计</h2>
-                <p>按客户端最后访问 IP 汇总，仅展示已记录 IP 的客户端。</p>
+                <p>全部展示客户端当前最后访问 IP；选择日期后展示当天最后访问 IP 和新客户端数。</p>
               </div>
               <div class="pager">
                 <button id="prevIpPage" type="button">上一页</button>
@@ -143,6 +143,13 @@
                 <button id="jumpIpPage" type="button">跳转</button>
                 <button id="nextIpPage" type="button">下一页</button>
               </div>
+            </div>
+            <div class="filter-row">
+              <label>
+                日期（留空为全部）
+                <input id="ipDate" type="date" />
+              </label>
+              <button id="allIpDatesButton" type="button">查看全部</button>
             </div>
             <div id="ipStatsTable"></div>
           </section>
@@ -370,32 +377,50 @@
             <div class="section-head">
               <div>
                 <h2>公告管理</h2>
-                <p>发布后客户端会在启动和每 30 分钟轮询时拉取最新 Markdown 公告。同一公告关闭后不再显示，重新发布会生成新的公告 ID。</p>
+                <p>公告永久保存在 D1；每次新增或编辑都会生成新的客户端版本，并同步为 KV 当前公告。</p>
               </div>
-              <button id="loadNoticeButton" type="button">读取公告</button>
+              <div class="section-actions">
+                <button id="newNoticeButton" class="secondary-button" type="button">新增公告</button>
+                <button id="loadNoticeButton" type="button">刷新列表</button>
+              </div>
             </div>
-            <div id="noticeMeta" class="notice-meta">当前未读取公告。</div>
-            <div class="notice-form">
-              <label>
-                公告标题
-                <input id="noticeTitle" maxlength="120" placeholder="例如：开源许可证提醒" />
-              </label>
-              <label>
-                状态
-                <select id="noticeEnabled">
-                  <option value="true" selected>启用</option>
-                  <option value="false">保存但不展示</option>
-                </select>
-              </label>
-              <label class="notice-field-wide">
-                Markdown 内容
-                <textarea id="noticeContent" maxlength="20000" placeholder="输入 Markdown 公告内容。支持标题、列表、链接、加粗等语法。"></textarea>
-              </label>
-            </div>
-            <div class="notice-actions">
-              <button id="disableNoticeButton" class="danger-button" type="button">停用公告</button>
-              <button id="publishNoticeButton" type="button">发布公告</button>
-            </div>
+            <div id="noticesTable" class="notice-table-wrap"></div>
+            <form id="noticeForm">
+              <input id="noticeId" type="hidden" />
+              <div id="noticeMeta" class="notice-meta">新增公告，保存后将同步到客户端 KV。</div>
+              <div class="notice-form">
+                <label>
+                  公告标题
+                  <input id="noticeTitle" maxlength="120" placeholder="例如：开源许可证提醒" />
+                </label>
+                <label>
+                  状态
+                  <select id="noticeEnabled">
+                    <option value="true" selected>启用</option>
+                    <option value="false">保存但不展示</option>
+                  </select>
+                </label>
+                <div class="notice-field-wide notice-markdown-field">
+                  <span id="noticeContentLabel" class="notice-field-label">Markdown 内容</span>
+                  <div class="notice-editor-shell">
+                    <div class="notice-editor-tabs" role="tablist" aria-label="公告内容模式">
+                      <button id="noticeEditorTab" class="notice-editor-tab active" type="button" role="tab" aria-selected="true" aria-controls="noticeEditorPanel">编辑</button>
+                      <button id="noticePreviewTab" class="notice-editor-tab" type="button" role="tab" aria-selected="false" aria-controls="noticePreviewPanel">预览</button>
+                    </div>
+                    <div id="noticeEditorPanel" role="tabpanel" aria-labelledby="noticeEditorTab">
+                      <textarea id="noticeContent" maxlength="20000" aria-labelledby="noticeContentLabel" placeholder="输入 Markdown 公告内容。支持标题、列表、链接、加粗等语法。"></textarea>
+                    </div>
+                    <div id="noticePreviewPanel" class="notice-preview-panel" role="tabpanel" aria-labelledby="noticePreviewTab" hidden>
+                      <div id="noticePreviewContent" class="notice-preview-content"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="notice-actions">
+                <button id="deleteNoticeButton" class="danger-button" type="button" disabled>删除公告</button>
+                <button id="saveNoticeButton" type="submit">保存并发布</button>
+              </div>
+            </form>
             <div id="noticeStatus" class="notice-status"></div>
           </section>
         </section>
@@ -606,6 +631,8 @@
               <div class="panel card"><span>源模型记录</span><strong id="modelInfoCacheSourceModels">0</strong></div>
               <div class="panel card"><span>索引模型数</span><strong id="modelInfoCacheModels">0</strong></div>
               <div class="panel card"><span>含思考强度模型</span><strong id="modelInfoCacheReasoningModels">0</strong></div>
+              <div class="panel card"><span>支持图片理解模型</span><strong id="modelInfoCacheImageModels">0</strong></div>
+              <div class="panel card"><span>支持温度参数模型</span><strong id="modelInfoCacheTemperatureModels">0</strong></div>
               <div class="panel card"><span>人工修改模型</span><strong id="modelInfoCacheOverrides">0</strong></div>
               <div class="panel card"><span>源数据大小</span><strong id="modelInfoCacheBytes">0 B</strong></div>
               <div class="panel card"><span>触发方式</span><strong id="modelInfoCacheTrigger">-</strong></div>
@@ -696,6 +723,45 @@
           <small>多个档位使用逗号分隔，留空表示没有明确档位。</small>
         </label>
         <label>
+          输入模态
+          <input id="modelInfoEditInputModalities" type="text" placeholder="例如 text, image, pdf" />
+          <small>多个模态使用逗号分隔；留空表示未知。</small>
+        </label>
+        <label>
+          输出模态
+          <input id="modelInfoEditOutputModalities" type="text" placeholder="例如 text, image" />
+          <small>图片理解要求输入包含 image、输出包含 text。</small>
+        </label>
+        <label>
+          图片理解
+          <select id="modelInfoEditImageInputStatus">
+            <option value="supported">支持</option>
+            <option value="unsupported">不支持</option>
+            <option value="mixed">部分支持</option>
+            <option value="unknown">未知</option>
+          </select>
+        </label>
+        <label>
+          模型温度
+          <select id="modelInfoEditTemperatureStatus">
+            <option value="supported">支持</option>
+            <option value="unsupported">不支持</option>
+            <option value="mixed">部分支持</option>
+            <option value="unknown">未知</option>
+          </select>
+        </label>
+        <label>
+          并发上限
+          <input id="modelInfoEditConcurrencyLimit" type="number" min="1" step="1" required />
+        </label>
+        <label>
+          请求方式
+          <select id="modelInfoEditRequestMode">
+            <option value="stream">流式请求</option>
+            <option value="normal">普通请求</option>
+          </select>
+        </label>
+        <label>
           上下文长度
           <input id="modelInfoEditContext" type="number" min="0" step="1" required />
         </label>
@@ -727,6 +793,7 @@
   <!-- 窄屏遮罩 -->
   <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.2.0/dist/markdown-it.min.js"></script>
   <script type="module" src="./src/main.js"></script>
   <script>
     // 侧边栏逻辑：宽屏折叠 / 窄屏抽屉

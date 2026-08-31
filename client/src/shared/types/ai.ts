@@ -1,8 +1,30 @@
 export type ChatRole = 'system' | 'user' | 'assistant';
+export type ChatImageDetail = 'auto' | 'low' | 'high';
+
+export interface ChatTextContentPart {
+  type: 'text';
+  text: string;
+}
+
+export interface ChatImageUrlContentPart {
+  type: 'image_url';
+  image_url: {
+    url: string;
+    detail?: ChatImageDetail;
+  };
+}
+
+export interface ChatLocalImageContentPart {
+  type: 'local_image';
+  path: string;
+  detail?: ChatImageDetail;
+}
+
+export type ChatContentPart = ChatTextContentPart | ChatImageUrlContentPart | ChatLocalImageContentPart;
 
 export interface ChatMessage {
   role: ChatRole;
-  content: string;
+  content: string | ChatContentPart[];
 }
 
 export interface ChatRequestOptions {

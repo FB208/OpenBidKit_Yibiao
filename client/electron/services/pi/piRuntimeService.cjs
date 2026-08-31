@@ -8,6 +8,7 @@ const { trackAgentRuntime } = require('../agent/agentRuntimeAnalytics.cjs');
 const { preparePiEnvironment } = require('./piEnvironment.cjs');
 const { restorePiErrorMessage } = require('./piRetryErrorNormalizer.cjs');
 const { createPiSession, loadPiModules } = require('./piSessionFactory.cjs');
+const { AGENT_REPORTED_FAILURE_CODE } = require('./piTaskFailureTool.cjs');
 const {
   createPersistentAgentTask,
   getPersistentAgentSessionPath,
@@ -782,6 +783,11 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         timeoutMs: DEFAULT_PI_HTTP_IDLE_TIMEOUT_MS,
         jsonValidationSchemas: payload.json_validation_schemas,
         requestUserQuestion: (request, signal) => waitForUserQuestion(request, signal, taskToken),
+        reportTaskFailure: (reason) => {
+          const error = new Error(String(reason || '').trim() || 'Agent 无法继续当前任务');
+          error.code = AGENT_REPORTED_FAILURE_CODE;
+          if (!activeController.signal.aborted) activeController.abort(error);
+        },
         openXmlTool: payload.open_xml_tool,
       });
       session = created.session;

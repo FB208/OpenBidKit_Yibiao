@@ -5,6 +5,10 @@ const {
   createPiUserQuestionTool,
 } = require('./piUserQuestionTool.cjs');
 const {
+  AGENT_TASK_FAILURE_TOOL_NAME,
+  createPiTaskFailureTool,
+} = require('./piTaskFailureTool.cjs');
+const {
   OPENXML_TOOL_NAME,
   createPiOpenXmlTool,
 } = require('./piOpenXmlTool.cjs');
@@ -37,7 +41,7 @@ function normalizeOutputLimit(contextLength) {
 }
 
 // 创建隔离的 Pi Session；持久任务可在后续完整执行中重新打开原 Session。
-async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, openXmlTool }) {
+async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, reportTaskFailure, openXmlTool }) {
   const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
@@ -119,6 +123,10 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     Type: typebox.Type,
     requestUserQuestion,
   }));
+  const taskFailureTool = codingAgent.defineTool(createPiTaskFailureTool({
+    Type: typebox.Type,
+    reportTaskFailure,
+  }));
   const openXmlCustomTool = openXmlTool
     ? codingAgent.defineTool(createPiOpenXmlTool({
       workspaceDir,
@@ -137,8 +145,8 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     model,
     modelRuntime,
     thinkingLevel: 'off',
-    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user', ...(openXmlCustomTool ? [OPENXML_TOOL_NAME] : [])],
-    customTools: [bashTool, jsonValidationTool, userQuestionTool, ...(openXmlCustomTool ? [openXmlCustomTool] : [])],
+    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user', AGENT_TASK_FAILURE_TOOL_NAME, ...(openXmlCustomTool ? [OPENXML_TOOL_NAME] : [])],
+    customTools: [bashTool, jsonValidationTool, userQuestionTool, taskFailureTool, ...(openXmlCustomTool ? [openXmlCustomTool] : [])],
     resourceLoader,
     settingsManager,
     sessionManager,

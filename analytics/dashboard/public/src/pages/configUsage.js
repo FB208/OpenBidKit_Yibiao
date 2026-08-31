@@ -13,7 +13,6 @@ function labelConfigValue(groupKey, value) {
       jinlong: '金龙中转站',
       volcengine: '火山方舟',
       deepseek: 'DeepSeek',
-      longcat: '龙猫',
       agnes: 'Agnes AI',
       custom: '自定义文本服务',
     },

@@ -1,7 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { bidAnalysisTasks, getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
+import { bidAnalysisTasks, getBidAnalysisTasks, isMissingBidAnalysisResult } from '../services/bidAnalysisWorkflow';
 import { MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
 import BidSectionSelectorDialog from '../components/BidSectionSelectorDialog';
 import type { BackgroundTaskState, BidAnalysisMode, BidAnalysisTasks, BidAnalysisTaskState, BidSectionExtractionStatus, BidSectionMode, DetectedBidSection, TechnicalPlanState } from '../types';
@@ -20,6 +20,7 @@ interface BidAnalysisPageProps {
   tasks: BidAnalysisTasks;
   task?: BackgroundTaskState;
   progress: number;
+  focusTaskRequest?: { taskId: string } | null;
   onProgressChange: (progress: number) => void;
   onConfigSaved: (state: TechnicalPlanState) => void;
 }
@@ -211,6 +212,7 @@ function BidAnalysisPage({
   tasks,
   task,
   progress,
+  focusTaskRequest,
   onProgressChange,
   onConfigSaved,
 }: BidAnalysisPageProps) {
@@ -244,6 +246,10 @@ function BidAnalysisPage({
   const activeTaskState = activeTask ? tasks[activeTask.id] : undefined;
   const activeTaskStatus = activeTaskState?.status || 'idle';
   const activeTaskContent = activeTaskState?.content || '';
+  const activeTaskMissingResult = isMissingBidAnalysisResult(activeTask, activeTaskContent);
+  const firstMissingSelectedTask = selectedTasks.find((selectedTask) => (
+    isMissingBidAnalysisResult(selectedTask, tasks[selectedTask.id]?.content)
+  ));
   const failedTaskCount = selectedTasks.filter((task) => tasks[task.id]?.status === 'error').length;
   const doneCount = selectedTasks.filter((task) => {
     const status = tasks[task.id]?.status;
@@ -261,6 +267,8 @@ function BidAnalysisPage({
     ? '正在优化提示词缓存'
     : requiredDone && taskRunning
       ? '关键项已解析完成，等待当前解析任务结束后进入下一步。'
+      : firstMissingSelectedTask
+        ? `${firstMissingSelectedTask.label}未提取到有效内容，请重新解析该项。`
       : requiredDone ? '招标文件解析任务已结束，可以进入下一步。' : '等待关键解析项完成';
   const bidSectionConfigLabel = bidSectionMode === 'multiple'
     ? selectedSectionTitle ? `多标段 · ${selectedSectionTitle}` : '多标段 · 待选择'
@@ -276,6 +284,12 @@ function BidAnalysisPage({
     }).length;
     onProgressChange(Math.round((nextDoneCount / nextTasks.length) * 100));
   };
+
+  useEffect(() => {
+    if (focusTaskRequest && selectedTasks.some((selectedTask) => selectedTask.id === focusTaskRequest.taskId)) {
+      setSelectedTaskId(focusTaskRequest.taskId);
+    }
+  }, [focusTaskRequest, selectedTasks]);
 
   useEffect(() => {
     if (!fullRerunLocked) {
@@ -432,7 +446,7 @@ function BidAnalysisPage({
   };
 
   const retryActiveTask = () => {
-    if (!activeTask || activeTaskStatus !== 'error') {
+    if (!activeTask || (activeTaskStatus !== 'error' && !activeTaskMissingResult)) {
       showToast('当前解析项没有失败，无需单独重试', 'info');
       return;
     }
@@ -629,17 +643,18 @@ function BidAnalysisPage({
                   {groupTasks.map((task) => {
                     const status = tasks[task.id]?.status || 'idle';
                     const content = tasks[task.id]?.content || '';
+                    const missingResult = isMissingBidAnalysisResult(task, content);
 
                     return (
                       <button
                         type="button"
-                        className={`bid-analysis-task-item is-${status}${visibleSelectedTaskId === task.id ? ' is-active' : ''}`}
+                        className={`bid-analysis-task-item is-${missingResult ? 'error' : status}${visibleSelectedTaskId === task.id ? ' is-active' : ''}`}
                         key={task.id}
                         onClick={() => setSelectedTaskId(task.id)}
                       >
                         <strong>{task.label}</strong>
                         <small>{content ? `${content.length} 字` : task.description}</small>
-                        <em>{statusLabel[status]}</em>
+                        <em>{missingResult ? '未提取到' : statusLabel[status]}</em>
                       </button>
                     );
                   })}
@@ -657,8 +672,8 @@ function BidAnalysisPage({
               <p>{activeTask?.description || '选择左侧任务查看解析结果。'}</p>
             </div>
             <div className="bid-analysis-reader-actions">
-              <span className={`bid-analysis-status is-${activeTaskStatus}`}>{statusLabel[activeTaskStatus]}</span>
-              {activeTaskStatus === 'error' && (
+              <span className={`bid-analysis-status is-${activeTaskMissingResult ? 'error' : activeTaskStatus}`}>{activeTaskMissingResult ? '未提取到' : statusLabel[activeTaskStatus]}</span>
+              {(activeTaskStatus === 'error' || activeTaskMissingResult) && (
                 <button type="button" className="secondary-action" onClick={retryActiveTask} disabled={taskRunning || !hasTenderFile}>重新解析此项</button>
               )}
               <button type="button" className="secondary-action" onClick={copyActiveResult} disabled={!activeTaskContent}>复制</button>

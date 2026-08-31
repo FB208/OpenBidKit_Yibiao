@@ -283,7 +283,7 @@
   z-index: 131;
   display: flex;
   flex-direction: column;
-  width: min(640px, calc(100vw - 40px));
+  width: min(720px, calc(100vw - 40px));
   max-height: min(680px, calc(100vh - 56px));
   gap: 18px;
   padding: 24px;

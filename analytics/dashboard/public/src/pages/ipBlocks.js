@@ -45,15 +45,21 @@ export function setupIpBlocksPage() {
   state.addIpBlockButton.addEventListener('click', async () => {
     const ip = state.ipBlockInput.value.trim();
     const reason = state.ipBlockReason.value.trim();
+    const projectName = state.projectName.value.trim();
     if (!ip) return setIpBlockStatus('请输入 IP 地址。', 'error');
+    if (!projectName) return setIpBlockStatus('请先输入项目名。', 'error');
+    if (!window.confirm(`确认封禁 IP「${ip}」并删除当前项目中对应的客户端明细吗？`)) return;
     try {
       assertAdminToken();
       saveSettings();
-      await requestJson('/api/ip-blocks', { method: 'POST', body: { ip, reason } });
+      const data = await requestJson('/api/ip-blocks', {
+        method: 'POST',
+        body: { ip, reason, projectName },
+      });
       state.ipBlockInput.value = '';
       state.ipBlockReason.value = '';
       await loadIpBlocks();
-      setIpBlockStatus(`已封禁 ${ip}。`, 'ok');
+      setIpBlockStatus(`已封禁 ${ip}，删除 ${data.deletedClientCount || 0} 条客户端明细。`, 'ok');
     } catch (error) {
       setIpBlockStatus(error?.message || String(error), 'error');
     }
@@ -66,9 +72,9 @@ export function setupIpBlocksPage() {
     if (!button) return;
     const ip = button.dataset.ipBlockDelete;
     try {
-      await requestJson(`/api/ip-blocks?ip=${encodeURIComponent(ip)}`, { method: 'DELETE' });
+      const data = await requestJson(`/api/ip-blocks?ip=${encodeURIComponent(ip)}`, { method: 'DELETE' });
       await loadIpBlocks();
-      setIpBlockStatus(`已解除 ${ip}。`, 'ok');
+      setIpBlockStatus(`已解除 ${ip}，释放 ${data.releasedClientCount || 0} 个客户端标记。`, 'ok');
     } catch (error) {
       setIpBlockStatus(error?.message || String(error), 'error');
     }

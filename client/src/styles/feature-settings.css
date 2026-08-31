@@ -83,6 +83,18 @@
   border-top: none;
 }
 
+.settings-group-title-with-action {
+  justify-content: space-between;
+}
+
+.settings-group-action {
+  min-height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
 .settings-list {
   border-top: 1px solid var(--yb-border-soft);
 }

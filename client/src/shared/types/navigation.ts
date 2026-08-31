@@ -17,6 +17,7 @@ export type SectionId =
   | 'bid-opportunity'
   | 'developer-test'
   | 'developer-json-test'
+  | 'developer-multimodal-test'
   | 'developer-prompt-lab'
   | 'developer-parser-sandbox'
   | 'developer-export-preview'

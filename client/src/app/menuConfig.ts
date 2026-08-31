@@ -123,6 +123,12 @@ const developerMenuItems: AppMenuItem[] = [
         icon: 'code',
       },
       {
+        id: 'developer-multimodal-test',
+        label: '多模态测试',
+        description: '上传图片并使用自定义提示词验证文本模型的图片理解能力。',
+        icon: 'code',
+      },
+      {
         id: 'developer-prompt-lab',
         label: 'Prompt调试台',
         description: '集中观察 Prompt 版本、变量注入和输出约束，便于后续调参。',

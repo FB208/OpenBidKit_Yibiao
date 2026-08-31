@@ -10,7 +10,7 @@ const {
 } = require('../agent/agentToolEnvironment.cjs');
 const { PI_RETRY_ERROR_NORMALIZER_PATH } = require('./piRetryErrorNormalizer.cjs');
 
-const EXPECTED_PI_TOOLS = ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user'];
+const EXPECTED_PI_TOOLS = ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user', 'report-failure'];
 const CRITICAL_COMMANDS = new Set(['node', ...BUNDLED_COMMANDS]);
 const COMMANDS = ['node', ...BUNDLED_COMMANDS, ...SHIM_COMMANDS];
 const MODEL_CHECK_TIMEOUT_MS = 30000;

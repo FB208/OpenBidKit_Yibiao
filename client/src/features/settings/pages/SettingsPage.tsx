@@ -3,7 +3,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppSwitch, DetailHelpLink, FloatingToolbar, InlineSpinner, InputWithAction, OfflineLicenseActivationDialog, useAutoAnswer, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelRatio, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelRatio, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'components' | 'agent' | 'about';
@@ -71,16 +71,15 @@ const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_TEXT_TEMPERATURE = 0.7;
 
-const textProviderDefaults: Record<ConfiguredTextModelProvider, TextModelConfig> = {
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  custom: { api_key: '', base_url: '', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+const textProviderDefaults: Record<TextModelProvider, TextModelConfig> = {
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  custom: { api_key: '', base_url: '', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
 };
 
-const textProviderApiKeyUrls: Partial<Record<ConfiguredTextModelProvider, string>> = {
+const textProviderApiKeyUrls: Partial<Record<TextModelProvider, string>> = {
   jinlong: 'https://s.markup.com.cn/jl',
   volcengine: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
   deepseek: 'https://platform.deepseek.com/api_keys',
@@ -132,13 +131,14 @@ function parseTextTemperatureInput(value: string): number {
   return normalizeTextTemperature(value);
 }
 
-function normalizeTextModelProfile(provider: ConfiguredTextModelProvider, profile?: Partial<TextModelConfig>): TextModelConfig {
+function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partial<TextModelConfig>): TextModelConfig {
   const defaults = textProviderDefaults[provider];
   const baseUrl = provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url;
   return {
     api_key: profile?.api_key ?? defaults.api_key,
     base_url: baseUrl,
     model_name: profile?.model_name ?? defaults.model_name,
+    multimodal_enabled: profile?.multimodal_enabled ?? defaults.multimodal_enabled,
     reasoning_effort: profile?.reasoning_effort?.trim() ?? defaults.reasoning_effort,
     context_length_limit: normalizeTextContextLengthLimit(profile?.context_length_limit ?? defaults.context_length_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(profile?.concurrency_limit ?? defaults.concurrency_limit),
@@ -149,19 +149,12 @@ function normalizeTextModelProfile(provider: ConfiguredTextModelProvider, profil
 }
 
 function normalizeTextModelProfiles(
-  profiles?: Partial<Record<ConfiguredTextModelProvider, TextModelConfig>>,
-  activeProvider?: ConfiguredTextModelProvider,
+  profiles?: Partial<Record<TextModelProvider, TextModelConfig>>,
 ): TextModelProfiles {
-  const nextProfiles = textModelProviders.reduce((normalizedProfiles, provider) => ({
+  return textModelProviders.reduce((normalizedProfiles, provider) => ({
     ...normalizedProfiles,
     [provider.value]: normalizeTextModelProfile(provider.value, profiles?.[provider.value]),
   }), {} as TextModelProfiles);
-
-  if (activeProvider === 'longcat' || profiles?.longcat) {
-    nextProfiles.longcat = normalizeTextModelProfile('longcat', profiles?.longcat);
-  }
-
-  return nextProfiles;
 }
 
 function textProfileFromState(textModel: SettingsPageState['textModel']): TextModelConfig {
@@ -169,6 +162,7 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
     api_key: textModel.api_key,
     base_url: textModel.provider === 'custom' ? textModel.base_url : textProviderDefaults[textModel.provider].base_url,
     model_name: textModel.model_name,
+    multimodal_enabled: textModel.multimodal_enabled,
     reasoning_effort: textModel.reasoning_effort.trim(),
     context_length_limit: normalizeTextContextLengthLimit(textModel.context_length_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(textModel.concurrency_limit),
@@ -614,11 +608,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [reasoningEfforts, setReasoningEfforts] = useState<string[]>([]);
   const [imageModels, setImageModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState<'text' | 'image' | null>(null);
-  const [loadingReasoningEfforts, setLoadingReasoningEfforts] = useState(false);
-  const [loadingContextLength, setLoadingContextLength] = useState(false);
+  const [loadingModelInfo, setLoadingModelInfo] = useState(false);
   const [testingTextModel, setTestingTextModel] = useState(false);
   const [testingImageModel, setTestingImageModel] = useState(false);
-  const textModelBusy = loadingModels === 'text' || loadingReasoningEfforts || loadingContextLength || testingTextModel;
+  const textModelBusy = loadingModels === 'text' || loadingModelInfo || testingTextModel;
   const [imageTestPreview, setImageTestPreview] = useState<{ src: string; title: string } | null>(null);
   const [appVersion, setAppVersion] = useState('');
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
@@ -679,7 +672,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         return;
       }
 
-      const textModelProfiles = normalizeTextModelProfiles(config.text_model_profiles, config.text_model_provider);
+      const textModelProfiles = normalizeTextModelProfiles(config.text_model_profiles);
       const activeTextProfile = normalizeTextModelProfile(config.text_model_provider, textModelProfiles[config.text_model_provider]);
       const imageModelProfiles = normalizeImageModelProfiles(config.image_model_profiles);
       const activeImageProfile = normalizeImageModelProfile(config.image_model.provider, config.image_model);
@@ -735,6 +728,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       api_key: activeTextProfile.api_key,
       base_url: activeTextProfile.base_url,
       model_name: activeTextProfile.model_name,
+      multimodal_enabled: activeTextProfile.multimodal_enabled,
       reasoning_effort: activeTextProfile.reasoning_effort,
       context_length_limit: activeTextProfile.context_length_limit,
       concurrency_limit: activeTextProfile.concurrency_limit,
@@ -1216,8 +1210,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
   };
 
-  // 从云端模型信息缓存获取当前模型明确支持的思考强度。
-  const fetchReasoningEfforts = async () => {
+  // 从云端模型信息缓存一次填充当前模型可确定的高级参数。
+  const fetchTextModelInfo = async () => {
     const modelName = state.textModel.model_name.trim();
     if (!modelName) {
       showToast('请先填写文本模型名称', 'info');
@@ -1225,56 +1219,41 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
 
     try {
-      setLoadingReasoningEfforts(true);
+      setLoadingModelInfo(true);
       const result = await window.yibiao?.config.getModelInfo(modelName);
-      const efforts = result?.model?.reasoningEfforts || [];
-      setReasoningEfforts(efforts);
-      if (efforts.length) {
-        updateTextModelConfig({
-          reasoning_effort: !state.textModel.reasoning_effort || efforts.includes(state.textModel.reasoning_effort)
-            ? state.textModel.reasoning_effort
-            : '',
-        });
-      }
-      showToast(
-        efforts.length
-          ? `获取到 ${efforts.length} 个可用思考强度`
-          : result?.success ? '该模型没有明确的思考强度信息，请手动录入' : result?.message || '未获取到模型信息',
-        efforts.length ? 'success' : 'info',
-      );
-    } catch (error) {
-      setReasoningEfforts([]);
-      showToast(error instanceof Error ? error.message : '获取模型思考强度失败', 'error');
-    } finally {
-      setLoadingReasoningEfforts(false);
-    }
-  };
-
-  // 从云端模型信息缓存获取当前模型的最大上下文长度。
-  const fetchContextLength = async () => {
-    const modelName = state.textModel.model_name.trim();
-    if (!modelName) {
-      showToast('请先填写文本模型名称', 'info');
-      return;
-    }
-
-    try {
-      setLoadingContextLength(true);
-      const result = await window.yibiao?.config.getModelInfo(modelName);
-      const contextLength = Number(result?.model?.context || 0);
-      if (!result?.success || contextLength <= 0) {
-        showToast(
-          result?.success ? '该模型没有明确的上下文长度信息，请手动录入' : result?.message || '未获取到模型信息',
-          'info',
-        );
+      if (!result?.success || !result.model) {
+        showToast(result?.message || '未获取到模型信息', 'info');
         return;
       }
-      updateTextModelConfig({ context_length_limit: contextLength });
-      showToast(`已获取上下文长度：${contextLength}`, 'success');
+
+      const modelInfo = result.model;
+      const efforts = modelInfo.reasoningEfforts || [];
+      const updates: Partial<Omit<SettingsPageState['textModel'], 'provider'>> = {
+        concurrency_limit: modelInfo.concurrencyLimit,
+        request_mode: modelInfo.requestMode,
+      };
+      if (efforts.length && state.textModel.reasoning_effort && !efforts.includes(state.textModel.reasoning_effort)) {
+        updates.reasoning_effort = '';
+      }
+      if (modelInfo.context > 0) {
+        updates.context_length_limit = modelInfo.context;
+      }
+      if (modelInfo.imageInputStatus === 'supported' || modelInfo.imageInputStatus === 'mixed') {
+        updates.multimodal_enabled = true;
+      } else if (modelInfo.imageInputStatus === 'unsupported') {
+        updates.multimodal_enabled = false;
+      }
+      if (modelInfo.temperatureStatus === 'unsupported') {
+        updates.temperature_enabled = false;
+      }
+
+      setReasoningEfforts(efforts);
+      updateTextModelConfig(updates);
+      showToast('已获取并填写模型高级参数', 'success');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '获取模型上下文长度失败', 'error');
+      showToast(error instanceof Error ? error.message : '获取模型信息失败', 'error');
     } finally {
-      setLoadingContextLength(false);
+      setLoadingModelInfo(false);
     }
   };
 
@@ -1373,7 +1352,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         profiles: getCurrentTextModelProfiles(),
       }) !== JSON.stringify({
         provider: savedConfig.text_model_provider,
-        profiles: normalizeTextModelProfiles(savedConfig.text_model_profiles, savedConfig.text_model_provider),
+        profiles: normalizeTextModelProfiles(savedConfig.text_model_profiles),
       });
     }
 
@@ -1722,9 +1701,6 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 value={state.textModel.provider}
                 onChange={(event) => updateTextModelProvider(event.target.value as TextModelProvider)}
               >
-                {state.textModel.provider === 'longcat' && (
-                  <option value="longcat" disabled>龙猫（历史配置）</option>
-                )}
                 {textModelProviders.map((provider) => (
                   <option value={provider.value} key={provider.value}>{provider.label}</option>
                 ))}
@@ -1797,65 +1773,58 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             </label>
           </div>
 
-          <div className="settings-group-title">高级参数</div>
+          <div className="settings-group-title settings-group-title-with-action">
+            <span>高级参数</span>
+            <button type="button" className="inline-action settings-group-action" onClick={fetchTextModelInfo} disabled={loadingModelInfo}>
+              {loadingModelInfo && <InlineSpinner />}
+              {loadingModelInfo ? '填充中' : '自动填充高级参数'}
+            </button>
+          </div>
           <div className="settings-list">
+            <div className="settings-row">
+              <div className="settings-row-copy">
+                <strong>支持多模态</strong>
+                <span>开启后允许文本模型接收图片；关闭时带图片的请求会在本地拦截</span>
+              </div>
+              <div className="settings-action-cell">
+                <AppSwitch aria-label="支持多模态" checked={state.textModel.multimodal_enabled} onCheckedChange={(checked) => updateTextModelConfig({ multimodal_enabled: checked })} />
+              </div>
+            </div>
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>模型思考强度</strong>
-                <span>可手动录入，也可从云端模型信息缓存获取明确支持的档位；选择默认时不发送参数</span>
+                <span>可手动录入，自动填充后可选择模型明确支持的档位；选择默认时不发送参数</span>
               </div>
-              <div className="settings-control-with-action is-single-action">
-                {reasoningEfforts.length > 0 ? (
-                  <select
-                    value={state.textModel.reasoning_effort}
-                    onChange={(event) => updateTextModelConfig({ reasoning_effort: event.target.value })}
-                  >
-                    <option value="">默认</option>
-                    {reasoningEfforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    value={state.textModel.reasoning_effort}
-                    placeholder="例如 medium；留空则使用默认"
-                    onChange={(event) => updateTextModelConfig({ reasoning_effort: event.target.value })}
-                  />
-                )}
-                <button
-                  type="button"
-                  className="inline-action"
-                  onClick={fetchReasoningEfforts}
-                  disabled={loadingReasoningEfforts}
+              {reasoningEfforts.length > 0 ? (
+                <select
+                  value={state.textModel.reasoning_effort}
+                  onChange={(event) => updateTextModelConfig({ reasoning_effort: event.target.value })}
                 >
-                  {loadingReasoningEfforts && <InlineSpinner />}
-                  {loadingReasoningEfforts ? '获取中' : '获取'}
-                </button>
-              </div>
+                  <option value="">默认</option>
+                  {reasoningEfforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={state.textModel.reasoning_effort}
+                  placeholder="例如 medium；留空则使用默认"
+                  onChange={(event) => updateTextModelConfig({ reasoning_effort: event.target.value })}
+                />
+              )}
             </label>
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>上下文长度限制</strong>
-                <span>可手动录入，也可从云端模型信息缓存获取；处理长文本时会自动截断并分批处理</span>
+                <span>可手动录入或自动填充；处理长文本时会自动截断并分批处理</span>
               </div>
-              <div className="settings-control-with-action is-single-action">
-                <input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={state.textModel.context_length_limit}
-                  placeholder="400000"
-                  onChange={(event) => updateTextModelConfig({ context_length_limit: parseTextContextLengthInput(event.target.value) })}
-                />
-                <button
-                  type="button"
-                  className="inline-action"
-                  onClick={fetchContextLength}
-                  disabled={loadingContextLength}
-                >
-                  {loadingContextLength && <InlineSpinner />}
-                  {loadingContextLength ? '获取中' : '获取'}
-                </button>
-              </div>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={state.textModel.context_length_limit}
+                placeholder="400000"
+                onChange={(event) => updateTextModelConfig({ context_length_limit: parseTextContextLengthInput(event.target.value) })}
+              />
             </label>
             <label className="settings-row">
               <div className="settings-row-copy">

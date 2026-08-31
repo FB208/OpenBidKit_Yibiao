@@ -16,11 +16,11 @@
 | 数据源 | Binding | 用途 |
 | --- | --- | --- |
 | Analytics Engine `agnet_analytics` | `ANALYTICS` | 详细事件、今天/7天/30天查询、最近事件、Cron 汇总来源 |
-| D1 `openbidkit-analytics` | `ANALYTICS_DB` | 新版 `stats_*` 长期统计表 |
+| D1 `openbidkit-analytics` | `ANALYTICS_DB` | 新版 `stats_*` 长期统计表和全局 IP 封禁状态 |
 | D1 `openbidkit-resources` | `RESOURCE_DB` | 资源管理元数据 |
 | R2 `openbidkit` | `RESOURCE_BUCKET` | 资源图片、插件当前版与上一版安装包 |
 | R2 `openbidkit-agent-errors` | `AGENT_ERROR_BUCKET` | gzip Agent 完整失败诊断包，保留 7 天 |
-| KV | `NOTICE_STORE` | IP 封禁列表、公告、授权配置、GitHub stats 缓存和模型信息精简索引 |
+| KV | `NOTICE_STORE` | 公告、授权配置、GitHub stats 缓存和模型信息精简索引；旧 IP 封禁列表仅用于一次性迁移 |
 
 `openbidkit-analytics` 可以在改版时直接删除并由 `setup:analytics-storage` 重建；删除后异常日志元数据会丢失，R2 孤立对象仍由 7 天生命周期自动清理。不要删除 `openbidkit-resources`。
 
@@ -30,14 +30,14 @@
 | --- | --- | --- | --- |
 | `GET /health` | Worker | 无 | 健康检查 |
 | `POST /track` | AE + D1 | 无 | 写 AE；从 Cloudflare 真实客户端 IP 请求头记录客户端 IP；新客户端按 `client_created_at` 窗口实时入库，授权字段按快照覆盖既有 `stats_clients` |
-| `GET /ip-blocks` | KV + Worker | 无 | 返回全局封禁 IP 列表和 Cloudflare 观测到的请求公网出口 IP，供客户端启动后静默检查 |
-| `GET/POST/DELETE /api/ip-blocks` | KV | `ADMIN_TOKEN` | 读取、添加或删除全局精确 IPv4/IPv6 封禁记录；原因可选，封禁时间由 Worker 自动生成 |
+| `GET /ip-blocks` | D1 + Worker | 无 | 返回全局封禁 IP 列表和 Cloudflare 观测到的请求公网出口 IP，供客户端启动后静默检查 |
+| `GET/POST/DELETE /api/ip-blocks` | D1 + AE | `ADMIN_TOKEN` | 管理全局精确 IP 封禁；POST 原子写封禁、删除客户端明细并写防回填标记，DELETE 原子解除封禁并释放标记 |
 | `GET/POST /agent-errors` | D1 + R2 | GET 无；POST 有效可信 license | GET 供客户端预检开关、版本和容量；POST 仅在预检条件仍满足时保存 gzip Agent 失败诊断包 |
 | `GET /api/projects` | D1 优先，AE 兜底 | `ADMIN_TOKEN` | 项目列表 |
 | `GET /api/overview` | D1 + AE + KV | `ADMIN_TOKEN` | 概览总数、文本 Token、生图次数、新增、今日活跃、每日统计 |
 | `GET /api/clients` | D1 | `ADMIN_TOKEN` | 客户端统计列表 |
 | `GET /api/client-detail` | AE | `ADMIN_TOKEN` | 单客户端 7天/30天/全部事件明细 |
-| `GET /api/ip-stats` | D1 | `ADMIN_TOKEN` | 按最后访问 IP 汇总客户端数，分页返回 |
+| `GET /api/ip-stats` | D1 或 AE | `ADMIN_TOKEN` | `date` 可选；无日期按全部客户端当前最后访问 IP 汇总，指定日期时按当天最后访问 IP 汇总，并返回新客户端数、Total Tokens、AI 服务商和 endpoint host |
 | `GET /api/traffic` | D1 或 AE | `ADMIN_TOKEN` | 访问分析，`range=history/today/7/30` |
 | `GET /api/config-usage` | D1 或 AE | `ADMIN_TOKEN` | 配置使用，`range=history/today/7/30` |
 | `GET /api/model-usage` | D1 或 AE | `ADMIN_TOKEN` | 模型使用，支持 `provider/endpointHost/model` 筛选 |
@@ -64,7 +64,9 @@
 
 旧 `/api/summary` 已删除。
 
-除 `/ip-blocks` 和 `/api/*` 管理接口外，Worker 会在路由处理前检查请求的 `CF-Connecting-IP`。命中封禁列表的公开读取或上传请求直接返回空 `204`，不会读取请求正文，也不会写入 AE、D1 或 R2；KV 读取异常时保持公开服务可用。客户端在正常启动后异步调用 `/ip-blocks`，只有返回成功、出口 IP 明确且与列表精确匹配时才结束进程，网络或响应异常不影响正常启动，开发调试模式执行相同检查。
+除 `/ip-blocks` 和 `/api/*` 管理接口外，Worker 会在路由处理前检查请求的 `CF-Connecting-IP`。命中 D1 `ip_blocks` 的公开读取或上传请求直接返回空 `204`，不会读取请求正文，也不会写入 AE、D1 或 R2；D1 读取异常时保持公开服务可用。客户端在正常启动后异步调用 `/ip-blocks`，只有返回成功、出口 IP 明确且与列表精确匹配时才结束进程，网络或响应异常不影响正常启动，开发调试模式执行相同检查。
+
+管理端封禁 IP 时，无日期按 `stats_clients.last_access_ip` 匹配当前项目客户端，指定日期先按 AE 中客户端当天最后访问 IP 匹配；AE 查询成功后，通过单个 D1 事务写 `ip_blocks`、删除 `stats_clients` 和 `stats_client_activity`、写 `stats_blocked_clients` 并重算 `stats_totals.total_clients`。版本、每日统计和留存等其他历史汇总不回算，Agent 异常元数据和 R2 诊断包不删除。AE 原始事件保留三个月，但 IP 统计会隐藏仍被封禁的地址；解除封禁通过单个 D1 事务删除封禁和客户端标记，后续埋点最迟在 60 秒实时去重缓存过期后重新采集。
 
 ## 统计口径
 
@@ -164,7 +166,7 @@ npm run setup:analytics-storage
 | D1 | 创建或复用 `openbidkit-analytics`，binding 为 `ANALYTICS_DB` |
 | R2 | 复用 `openbidkit` 的 `RESOURCE_BUCKET` 保存资源图片、插件当前版与上一版安装包；创建或复用 `openbidkit-agent-errors`，binding 为 `AGENT_ERROR_BUCKET`，配置 7 天删除生命周期 |
 | Cron | 生产账户使用 Workers Paid Plan；确认北京时间 01:00 到 03:00 的 5 个统计 Cron，以及北京时间 04:00 的独立模型信息同步 Cron |
-| Migration | 通过 Wrangler D1 migrations 执行 `analytics-migrations/*.sql` 并记录已应用版本；Agent 运行时迁移会重建 `stats_agent_runtime` 联合主键并将既有汇总归为 `opencode`；同时自动补齐 `stats_clients` 授权字段、`stats_versions.client_count`、`stats_models.total_tokens` 和概览 AI 指标字段 |
+| Migration | 通过 Wrangler D1 migrations 执行 `analytics-migrations/*.sql` 并记录已应用版本；自动补齐统计字段；首次创建 `ip_blocks` 后把旧 KV 封禁记录一次性导入 D1，并用 `ip_block_storage_meta` 防止重复迁移 |
 
 如果刚删除过 `openbidkit-analytics`，脚本会重新创建并更新 `wrangler.jsonc` 的 `database_id`。
 

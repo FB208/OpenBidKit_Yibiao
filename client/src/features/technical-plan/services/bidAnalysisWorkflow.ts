@@ -10,6 +10,13 @@ export interface BidAnalysisTaskDefinition {
   buildTaskPrompt: () => string;
 }
 
+export const BID_ANALYSIS_MISSING_RESULT = '未提取到';
+
+// 仅将 Markdown 整项固定标记识别为未提取，避免误判局部缺失。
+export function isMissingBidAnalysisResult(task: BidAnalysisTaskDefinition | undefined, content: string | undefined) {
+  return task?.output === 'markdown' && String(content || '').trim() === BID_ANALYSIS_MISSING_RESULT;
+}
+
 function jsonTask(title: string, goals: string, outputJson: string) {
   return `任务：${title}
 
@@ -61,7 +68,7 @@ export const bidAnalysisTasks: BidAnalysisTaskDefinition[] = [
 1. 重点识别与“技术评分”“评标方法”“评分标准”“技术参数”“技术要求”“技术方案”“技术部分”“评审要素”相关的章节。
 2. 不要提取商务、价格、资质等与技术类评分项无关的条目。
 
-每一项按以下结构输出，信息缺失时标注“未提及”：
+每一项按以下结构输出，信息缺失时标注“没有提及”：
 【评分项名称】：<原文描述，保留专业术语>
 【权重/分值】：<具体分值或占比>
 【评分标准】：<详细规则>

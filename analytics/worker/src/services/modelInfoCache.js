@@ -5,8 +5,41 @@ import {
   MODEL_INFO_SOURCE_URL,
 } from '../constants.js';
 
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 3;
 const REASONING_EFFORT_ORDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const MODALITY_ORDER = ['text', 'image', 'pdf', 'audio', 'video'];
+const CAPABILITY_STATUSES = new Set(['supported', 'unsupported', 'mixed', 'unknown']);
+const DEFAULT_CONCURRENCY_LIMIT = 10;
+const DEFAULT_REQUEST_MODE = 'stream';
+
+// 清理并稳定排序模型输入、输出模态。
+function normalizeModalities(values) {
+  const modalities = Array.isArray(values)
+    ? [...new Set(values.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean))]
+    : [];
+  return modalities.sort((left, right) => {
+    const leftIndex = MODALITY_ORDER.indexOf(left);
+    const rightIndex = MODALITY_ORDER.indexOf(right);
+    if (leftIndex === -1 && rightIndex === -1) return left.localeCompare(right);
+    if (leftIndex === -1) return 1;
+    if (rightIndex === -1) return -1;
+    return leftIndex - rightIndex;
+  });
+}
+
+// 根据图片输入和文本输出能力判断单个来源是否支持图片理解。
+function getImageInputCapability(inputModalities, outputModalities) {
+  if (!inputModalities.length || !outputModalities.length) return null;
+  return inputModalities.includes('image') && outputModalities.includes('text');
+}
+
+// 汇总同名模型在不同来源中的布尔能力支持情况。
+function resolveCapabilityStatus(capabilities) {
+  if (!capabilities.length || capabilities.some((value) => value === null)) return 'unknown';
+  if (capabilities.every(Boolean)) return 'supported';
+  if (capabilities.every((value) => !value)) return 'unsupported';
+  return 'mixed';
+}
 
 // 将单个模型记录合并到按模型 ID 聚合的临时索引。
 function mergeModelRecord(records, modelId, model) {
@@ -17,7 +50,13 @@ function mergeModelRecord(records, modelId, model) {
     effortSets: [],
     context: 0,
     output: 0,
+    inputModalities: [],
+    outputModalities: [],
+    imageInputCapabilities: [],
+    temperatureCapabilities: [],
+    sourceCount: 0,
   };
+  record.sourceCount += 1;
   const effortOption = Array.isArray(model?.reasoning_options)
     ? model.reasoning_options.find((option) => option?.type === 'effort')
     : null;
@@ -27,6 +66,17 @@ function mergeModelRecord(records, modelId, model) {
       .filter(Boolean))]
     : [];
   if (efforts.length) record.effortSets.push(efforts);
+
+  const hasInputModalities = Array.isArray(model?.modalities?.input);
+  const hasOutputModalities = Array.isArray(model?.modalities?.output);
+  const inputModalities = normalizeModalities(model?.modalities?.input);
+  const outputModalities = normalizeModalities(model?.modalities?.output);
+  record.inputModalities = normalizeModalities([...record.inputModalities, ...inputModalities]);
+  record.outputModalities = normalizeModalities([...record.outputModalities, ...outputModalities]);
+  record.imageInputCapabilities.push(hasInputModalities && hasOutputModalities
+    ? getImageInputCapability(inputModalities, outputModalities)
+    : null);
+  record.temperatureCapabilities.push(typeof model?.temperature === 'boolean' ? model.temperature : null);
 
   const context = Number(model?.limit?.context || 0);
   const output = Number(model?.limit?.output || 0);
@@ -49,12 +99,26 @@ function sortReasoningEfforts(efforts) {
 
 // 统一模型能力记录格式，供自动索引和人工覆盖共同使用。
 function normalizeModelInfoRecord(model) {
+  const inputModalities = normalizeModalities(model?.inputModalities);
+  const outputModalities = normalizeModalities(model?.outputModalities);
+  const inferredImageInputStatus = getImageInputCapability(inputModalities, outputModalities);
   return {
     reasoningEfforts: Array.isArray(model?.reasoningEfforts)
       ? [...new Set(model.reasoningEfforts.map((value) => String(value || '').trim()).filter(Boolean))]
       : [],
     context: Math.max(0, Math.floor(Number(model?.context) || 0)),
     output: Math.max(0, Math.floor(Number(model?.output) || 0)),
+    inputModalities,
+    outputModalities,
+    imageInputStatus: CAPABILITY_STATUSES.has(model?.imageInputStatus)
+      ? model.imageInputStatus
+      : inferredImageInputStatus === null ? 'unknown' : inferredImageInputStatus ? 'supported' : 'unsupported',
+    temperatureStatus: CAPABILITY_STATUSES.has(model?.temperatureStatus) ? model.temperatureStatus : 'unknown',
+    concurrencyLimit: Number.isFinite(Number(model?.concurrencyLimit)) && Number(model.concurrencyLimit) > 0
+      ? Math.floor(Number(model.concurrencyLimit))
+      : DEFAULT_CONCURRENCY_LIMIT,
+    requestMode: model?.requestMode === 'normal' ? 'normal' : DEFAULT_REQUEST_MODE,
+    sourceCount: Math.max(0, Math.floor(Number(model?.sourceCount) || 0)),
   };
 }
 
@@ -76,15 +140,32 @@ export function buildModelInfoIndex(catalog, sourceBytes, syncedAt = new Date().
 
   const models = {};
   let reasoningEffortModelCount = 0;
+  let imageInputModelCount = 0;
+  let mixedImageInputModelCount = 0;
+  let temperatureModelCount = 0;
+  let mixedTemperatureModelCount = 0;
   for (const [modelId, record] of records.entries()) {
     const reasoningEfforts = record.effortSets.length
       ? sortReasoningEfforts(record.effortSets[0].filter((effort) => record.effortSets.every((values) => values.includes(effort))))
       : [];
     if (reasoningEfforts.length) reasoningEffortModelCount += 1;
+    const imageInputStatus = resolveCapabilityStatus(record.imageInputCapabilities);
+    const temperatureStatus = resolveCapabilityStatus(record.temperatureCapabilities);
+    if (imageInputStatus === 'supported') imageInputModelCount += 1;
+    if (imageInputStatus === 'mixed') mixedImageInputModelCount += 1;
+    if (temperatureStatus === 'supported') temperatureModelCount += 1;
+    if (temperatureStatus === 'mixed') mixedTemperatureModelCount += 1;
     models[modelId] = {
       reasoningEfforts,
       context: record.context,
       output: record.output,
+      inputModalities: record.inputModalities,
+      outputModalities: record.outputModalities,
+      imageInputStatus,
+      temperatureStatus,
+      concurrencyLimit: DEFAULT_CONCURRENCY_LIMIT,
+      requestMode: DEFAULT_REQUEST_MODE,
+      sourceCount: record.sourceCount,
     };
   }
 
@@ -97,6 +178,10 @@ export function buildModelInfoIndex(catalog, sourceBytes, syncedAt = new Date().
     sourceModelCount,
     indexedModelCount: Object.keys(models).length,
     reasoningEffortModelCount,
+    imageInputModelCount,
+    mixedImageInputModelCount,
+    temperatureModelCount,
+    mixedTemperatureModelCount,
     models,
   };
 }
@@ -154,7 +239,7 @@ export async function readCachedModelInfo(env, modelName) {
   return {
     available: Boolean(index || override),
     index,
-    model: override ? normalizeModelInfoRecord(override) : sourceModel,
+    model: override || sourceModel ? normalizeModelInfoRecord(override || sourceModel) : null,
   };
 }
 
@@ -259,6 +344,10 @@ export async function syncModelInfoCache(env, trigger = 'manual') {
       sourceModelCount: index.sourceModelCount,
       indexedModelCount: index.indexedModelCount,
       reasoningEffortModelCount: index.reasoningEffortModelCount,
+      imageInputModelCount: index.imageInputModelCount,
+      mixedImageInputModelCount: index.mixedImageInputModelCount,
+      temperatureModelCount: index.temperatureModelCount,
+      mixedTemperatureModelCount: index.mixedTemperatureModelCount,
     };
 
     await env.NOTICE_STORE.put(MODEL_INFO_CACHE_INDEX_KEY, JSON.stringify(index));

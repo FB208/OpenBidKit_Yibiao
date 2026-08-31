@@ -585,14 +585,15 @@ function createScorePlanningPrompt({ standaloneTechnical = false } = {}) {
 请完成技术评分项结构化和目录规划：
 1. 阅读 ${OUTLINE_OUTPUT_FILE}、技术评分信息.md，以及存在的原方案.md 和参考知识库目录。
 2. 只从技术评分信息.md 的“技术评分项”中提取适合在技术方案中一一响应、展开编写的评分大项。“技术评分要求”只能作为评分标准、扣分规则和编写约束，不得提取为评分项。
+如果技术评分信息中没有任何可用于技术方案目录规划的评分项，立即调用 report-failure，说明需要补充或重新解析技术评分信息；不要调用 ask-user 让用户接受空结果，不要生成空结构、编造评分项或删除、清空文件。
 3. 将评分大项写入 ${TECHNICAL_SCORE_GROUPS_FILE}，完整结构为 {"groups":[{"requirement_id":"R1","title":"评分大项","description":"关注内容","detail_points":["关键评分细项"]}]}。根对象只能包含 groups；保持原顺序、专业术语和关键评分细项，requirement_id 使用连续的 R1、R2 格式。
 ${placementInstruction}
 6. 只有以下偏离需要用户批准：合并或拆分评分项、遗漏评分项对应节点、增加评分项中不存在的同层级大项、改变分支评分项目标层级，以及新增、删除、合并或调整用户已确认的一级目录。普通标题规范化和评分项下级目录扩展不需要询问。
-7. 无论是否存在偏离，都必须调用一次 ask-user 让用户确认。没有偏离时，question 只说明你分析得出的技术方案所在目录和评分项所在层级，最多使用两句话且不要使用列表；存在偏离时，只补充实际需要用户批准的偏离及影响，存在多个实际确认事项时才使用简单 Markdown 分行列出。question、选项名称和选项说明不得复述、概括或改写本任务 Prompt 中的要求，只呈现你分析后确实需要用户确认的结论或不确定事项。第一项给出推荐方案；另提供一个名为“调整目录安排”等明确业务名称的选项并设置 custom=true，让用户说明希望调整的位置或层级，其他选项均设置 custom=false。
+7. 存在至少一个有效评分项时，无论是否存在偏离，都必须调用一次 ask-user 让用户确认。没有偏离时，question 只说明你分析得出的技术方案所在目录和评分项所在层级，最多使用两句话且不要使用列表；存在偏离时，只补充实际需要用户批准的偏离及影响，存在多个实际确认事项时才使用简单 Markdown 分行列出。question、选项名称和选项说明不得复述、概括或改写本任务 Prompt 中的要求，只呈现你分析后确实需要用户确认的结论或不确定事项。第一项给出推荐方案；另提供一个名为“调整目录安排”等明确业务名称的选项并设置 custom=true，让用户说明希望调整的位置或层级，其他选项均设置 custom=false。
 8. 根据用户回答写入 ${SCORE_DIRECTORY_PLAN_FILE}。完整字段层级示例：${planExample}。branches 中每个分支填写唯一且后续保持不变的 branch_id，并用当前 ${OUTLINE_OUTPUT_FILE} 中尚未调整的一级目录编号和标题填写 root_id、root_title；统一填写 score_item_level，并让每个 requirement_id 在 mappings 中恰好出现一次。后续新增、重排或改名一级目录时，branch_id 仍用于稳定关联同一技术分支，不能随 root_id 改变；程序会在完整目录重新编号后同步 root_id 和 root_title。默认一一对应；经用户批准合并时，多个 mapping 可以使用相同 target_title；经用户批准拆分时才填写 mapping.additional_titles；合并或拆分时才填写 adjustment_note。extra_titles 必须位于根对象，经批准增加同层级大项时才写入条目，否则使用空数组。
 9. 默认锁定一级目录，allow_root_changes=false；只有用户明确批准一级目录调整时才设为 true。
-10. 程序已为 ${TECHNICAL_SCORE_GROUPS_FILE} 和 ${SCORE_DIRECTORY_PLAN_FILE} 预置 Schema。分别调用 json-validation 校验，调用时只传 file_path；校验失败后必须先修改对应文件，再重新校验。
-11. 此阶段不要修改 ${OUTLINE_OUTPUT_FILE}。`;
+10. 程序已为 ${TECHNICAL_SCORE_GROUPS_FILE} 和 ${SCORE_DIRECTORY_PLAN_FILE} 预置 Schema。分别调用 json-validation 校验，调用时只传 file_path；校验失败后必须先修改对应文件，再重新校验；如果现有材料无法在不编造评分项的情况下通过校验，调用 report-failure。
+11. 此阶段不要修改 ${OUTLINE_OUTPUT_FILE}，也不要删除、清空或重命名任何任务文件。`;
 }
 
 function createChildrenPrompt({ hasOriginalPlan, originalOnly, targetLeafCount, allowRootChanges, standaloneTechnical }) {
@@ -747,10 +748,12 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
   let wordAdjustmentAttempts = 0;
   let outlineReview = null;
 
-  function updateAgentState(partial = {}) {
+  function updateAgentState(partial = {}, taskPatch = {}) {
     const checkpoint = checkpointTask({
+      ...taskPatch,
       stats: {
         ...(task.stats || {}),
+        ...(taskPatch.stats || {}),
         agent: {
           ...(task.stats?.agent || {}),
           task_key: OUTLINE_AGENT_TASK_KEY,
@@ -918,14 +921,24 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
         ? items.filter((item) => item.attr === '技术').map((item) => item.id)
         : items.map((item) => item.id);
     const selection = { items, selected_ids: defaultSelectedIds, confirmed: false };
-    publish('一级目录已生成，等待用户确认', 30, { outline_selection: selection });
+    const waitingMessage = '一级目录已生成，等待用户确认';
+    if (waitingMessage !== logs[logs.length - 1]) logs = [...logs, waitingMessage];
+    currentProgress = Math.max(currentProgress, 30);
     agentService.updatePersistentTask(OUTLINE_AGENT_TASK_KEY, {
       status: 'waiting-outline-selection',
       phase: 'outline-selection',
       agent_connection: 'idle',
       error: null,
     });
-    updateAgentState({ status: 'waiting-outline-selection', phase: 'outline-selection', agent_connection: 'idle' });
+    updateAgentState(
+      { status: 'waiting-outline-selection', phase: 'outline-selection', agent_connection: 'idle' },
+      {
+        status: 'running',
+        progress: currentProgress,
+        logs,
+        stats: { outline_selection: selection },
+      },
+    );
   }
 
   const confirmed = await taskControl.waitForOutlineSelection();

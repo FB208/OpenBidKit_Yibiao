@@ -18,6 +18,21 @@ function sanitizeAiLogTitle(value) {
     .replace(/[. ]+$/g, '');
 }
 
+// 递归移除请求中的 Base64 图片正文，保留图片类型和消息结构用于诊断。
+function sanitizeAiLogRequest(value) {
+  if (typeof value === 'string') {
+    const match = /^data:image\/[^;]+;base64,/i.exec(value);
+    return match ? `${match[0]}[图片数据已省略]` : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(sanitizeAiLogRequest);
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeAiLogRequest(item)]));
+  }
+  return value;
+}
+
 function resolveAiLogTitle(request, fallback = '') {
   return sanitizeAiLogTitle(request?.logTitle || request?.log_title || request?.progressLabel || request?.schemaName || fallback);
 }
@@ -46,6 +61,7 @@ function writeAiLog(app, config, payload) {
     const logTitle = sanitizeAiLogTitle(payload.log_title);
     const logPayload = {
       ...payload,
+      ...(payload.request ? { request: sanitizeAiLogRequest(payload.request) } : {}),
       ...(logTitle ? { log_title: logTitle } : {}),
     };
     const fileName = buildAiLogFileName(logPayload);

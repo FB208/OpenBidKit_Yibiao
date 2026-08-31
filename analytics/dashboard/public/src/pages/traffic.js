@@ -58,6 +58,7 @@ const pageLabels = {
   'plugin-manager': '插件管理',
   'developer-test': '测试页',
   'developer-json-test': '测试页 - Json请求测试',
+  'developer-multimodal-test': '测试页 - 多模态测试',
   'developer-prompt-lab': '测试页 - Prompt调试台',
   'developer-parser-sandbox': '测试页 - 文件解析沙盘',
   'developer-export-preview': '测试页 - 导出链路预演',

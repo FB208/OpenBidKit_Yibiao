@@ -3,6 +3,7 @@ const { mergeSegmentedAiResults } = require('../utils/segmentedAiResultMerger.cj
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 
 const PROMPT_CACHE_WARMUP_DELAY_MS = 5000;
+const MARKDOWN_MISSING_RESULT = '未提取到';
 
 function waitForPromptCacheWarmup() {
   return new Promise((resolve) => setTimeout(resolve, PROMPT_CACHE_WARMUP_DELAY_MS));
@@ -12,7 +13,7 @@ const stableSystemPrompt = `你是专业的投标资料分析助手。请严格�
 
 通用要求：
 1. 保持信息全面、准确，优先使用用户提供上下文中的内容；除非具体任务明确要求或允许根据经验补充，否则不要自行编造
-2. 如果上下文没有提及，明确写“没有提及”
+2. 已提取到相关内容但局部信息没有提及时，明确写“没有提及”
 3. 只输出最终结果，不输出过程、提示语或客套话
 4. 始终使用简体中文`;
 
@@ -104,7 +105,7 @@ const tasks = [
 【要求/判定口径】：<具体要求、解释、扣分或判定规则>
 【数据来源】：<章节、条款、页码或表格位置>
 
-若某一类没有内容，请保留对应标题并写“未提取到”。直接返回提取结果。`,
+若某一类没有内容，请保留对应标题并写“没有提及”。直接返回提取结果。`,
   },
   { id: 'projectInfo', label: '项目信息', required: true, output: 'json', description: '项目名称、编号、类型、预算和地址。', prompt: () => jsonTask('提取项目信息', '提取项目名称、项目编号、项目类型、项目预算、项目地址。', `{"project_name":"项目名称","project_number":"项目编号","project_type":"项目类型","project_budget":"项目预算","project_address":"项目地址"}`) },
   { id: 'partAInfo', label: '甲方信息', required: true, output: 'json', description: '招标人公司、地址、联系人和电话。', prompt: () => jsonTask('提取甲方信息', '提取公司名称、地址、联系人、联系电话。', `{"company_name":"公司名称","address":"地址","contact_person":"联系人","contact_phone":"联系电话"}`) },
@@ -185,6 +186,19 @@ function getBidAnalysisTaskById(taskId) {
   return tasks.find((task) => task.id === taskId);
 }
 
+// 为 Markdown 解析项统一约定整项无结果标记，避免与局部缺失混淆。
+function buildTaskPrompt(task) {
+  const prompt = task.prompt();
+  if (task.output !== 'markdown') return prompt;
+  return `${prompt}
+
+整体无结果规则：仅当当前任务完全未提取到任何相关内容时，只返回“${MARKDOWN_MISSING_RESULT}”，不要附加标题、标点、解释或其他文字。只要提取到任何有效内容，就正常返回结果；局部字段或局部分类缺失时写“没有提及”，不要使用“${MARKDOWN_MISSING_RESULT}”。`;
+}
+
+function isMissingMarkdownResult(task, content) {
+  return task.output === 'markdown' && String(content || '').trim() === MARKDOWN_MISSING_RESULT;
+}
+
 function buildTenderContextMessages(fileContent, sectionHint) {
   const messages = [
     { role: 'system', content: stableSystemPrompt },
@@ -199,7 +213,7 @@ function buildTenderContextMessages(fileContent, sectionHint) {
 function buildMessages(fileContent, task, sectionHint) {
   const messages = buildTenderContextMessages(fileContent, sectionHint);
   messages.push(
-    { role: 'user', content: task.prompt() },
+    { role: 'user', content: buildTaskPrompt(task) },
   );
   return messages;
 }
@@ -212,7 +226,7 @@ async function runSingleBidAnalysisPromptTask({ aiService, fileContent, task, se
   });
 }
 
-async function runBidAnalysisPromptTask({ aiService, fileContent, fileSegments, task, sectionHint }) {
+async function runBidAnalysisPromptTaskOnce({ aiService, fileContent, fileSegments, task, sectionHint }) {
   const segments = Array.isArray(fileSegments) && fileSegments.length
     ? fileSegments
     : splitUserTextByContextLimit(fileContent, typeof aiService.getConfig === 'function' ? aiService.getConfig() : {});
@@ -235,13 +249,20 @@ async function runBidAnalysisPromptTask({ aiService, fileContent, fileSegments, 
   return mergeSegmentedAiResults({
     aiService,
     segmentResults,
-    taskPrompt: task.prompt(),
+    taskPrompt: buildTaskPrompt(task),
     output: task.output,
     systemPrompt: stableSystemPrompt,
     sectionHint,
     taskLabel: task.label,
     logTitle: `招标解析合并-${task.label}`,
   });
+}
+
+// Markdown 整项无结果时完整重跑一次，第二次结果原样交给上层保存。
+async function runBidAnalysisPromptTask(options) {
+  const content = await runBidAnalysisPromptTaskOnce(options);
+  if (!isMissingMarkdownResult(options.task, content)) return content;
+  return runBidAnalysisPromptTaskOnce(options);
 }
 
 function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent, sectionHint }) {

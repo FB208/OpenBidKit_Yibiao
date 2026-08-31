@@ -14,7 +14,22 @@ function parseNonNegativeInteger(value) {
   return Number.isInteger(number) && number >= 0 ? number : null;
 }
 
-// 返回客户端按模型名称查询的思考强度和上下文限制。
+function parsePositiveInteger(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
+function parseCapabilityStatus(value) {
+  return ['supported', 'unsupported', 'mixed', 'unknown'].includes(value) ? value : null;
+}
+
+// 解析管理端提交的模型模态列表。
+function parseModalities(value) {
+  if (!Array.isArray(value) || value.length > 20) return null;
+  return [...new Set(value.map((item) => normalizeText(item, 40).toLowerCase()).filter(Boolean))];
+}
+
+// 返回客户端按模型名称查询的思考强度、上下文限制和模态能力。
 export async function handlePublicModelInfo(request, env, url) {
   if (request.method !== 'GET') return methodNotAllowed();
 
@@ -84,10 +99,16 @@ export async function handleAdminModelInfoOverride(request, env, url) {
     const modelName = normalizeText(body?.modelName, 200);
     const context = parseNonNegativeInteger(body?.context);
     const output = parseNonNegativeInteger(body?.output);
+    const inputModalities = parseModalities(body?.inputModalities);
+    const outputModalities = parseModalities(body?.outputModalities);
+    const imageInputStatus = parseCapabilityStatus(body?.imageInputStatus);
+    const temperatureStatus = parseCapabilityStatus(body?.temperatureStatus);
+    const concurrencyLimit = parsePositiveInteger(body?.concurrencyLimit);
+    const requestMode = ['stream', 'normal'].includes(body?.requestMode) ? body.requestMode : null;
     if (!modelName) {
       return json({ code: 400, message: 'missing modelName' }, { status: 400 });
     }
-    if (!Array.isArray(body?.reasoningEfforts) || body.reasoningEfforts.length > 20 || context === null || output === null) {
+    if (!Array.isArray(body?.reasoningEfforts) || body.reasoningEfforts.length > 20 || context === null || output === null || inputModalities === null || outputModalities === null || imageInputStatus === null || temperatureStatus === null || concurrencyLimit === null || requestMode === null) {
       return json({ code: 400, message: 'invalid model info' }, { status: 400 });
     }
 
@@ -102,7 +123,17 @@ export async function handleAdminModelInfoOverride(request, env, url) {
     const reasoningEfforts = [...new Set(body.reasoningEfforts
       .map((value) => normalizeText(value, 40))
       .filter(Boolean))];
-    const model = await saveModelInfoOverride(env, modelName, { reasoningEfforts, context, output });
+    const model = await saveModelInfoOverride(env, modelName, {
+      reasoningEfforts,
+      context,
+      output,
+      inputModalities,
+      outputModalities,
+      imageInputStatus,
+      temperatureStatus,
+      concurrencyLimit,
+      requestMode,
+    });
     return json({ code: 0, modelName, model }, { headers: { 'Cache-Control': 'no-store' } });
   }
 
