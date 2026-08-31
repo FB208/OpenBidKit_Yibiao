@@ -1591,6 +1591,8 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     },
     async resetTechnicalPlan() {
       await cancelTechnicalPlanTasks('技术方案已重置，后台任务已取消');
+      // 空闲常驻的 openxml 助手不在任务取消范围内,重置前显式关掉,确保没有进程握着招标原件
+      await openXmlHelperService.close?.();
       return technicalPlanStore.clearTechnicalPlan();
     },
     // 仅重置正文阶段，保留目录、全局事实和生成配置。
@@ -1601,12 +1603,18 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     },
     importTenderDocument(filePaths) {
       return technicalPlanStore.importTenderDocument(filePaths, {
-        beforeCommit: () => cancelTechnicalPlanTasks('招标文件已更新，后台任务已取消'),
+        beforeCommit: async () => {
+          await cancelTechnicalPlanTasks('招标文件已更新，后台任务已取消');
+          await openXmlHelperService.close?.();
+        },
       });
     },
     removeTenderDocument(sourceId) {
       return technicalPlanStore.removeTenderDocument(sourceId, {
-        beforeCommit: () => cancelTechnicalPlanTasks('招标文件已更新，后台任务已取消'),
+        beforeCommit: async () => {
+          await cancelTechnicalPlanTasks('招标文件已更新，后台任务已取消');
+          await openXmlHelperService.close?.();
+        },
       });
     },
     importOriginalPlanDocument(filePaths) {

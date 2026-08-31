@@ -188,18 +188,25 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
 
     terminationPromise = new Promise((resolve) => {
       let settled = false;
+      const timers = [];
       const finish = () => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        for (const timer of timers) clearTimeout(timer);
         resolve();
       };
-      const timer = setTimeout(() => {
-        try { current.kill(); } catch {}
+      if (current.exitCode !== null || current.signalCode !== null) {
         finish();
-      }, 2000);
+        return;
+      }
       current.once('exit', finish);
       current.once('error', finish);
+      // 2 秒未退出补发强杀,但必须继续等真实退出:提前放行会让删除流程撞上仍被持有的文件句柄
+      timers.push(setTimeout(() => {
+        try { current.kill('SIGKILL'); } catch {}
+      }, 2000));
+      // 进程僵死无法回收时的最终兜底,残留句柄交由删除侧的占用进程强杀处理
+      timers.push(setTimeout(finish, 15000));
       try {
         current.stdin?.end();
       } catch {}
