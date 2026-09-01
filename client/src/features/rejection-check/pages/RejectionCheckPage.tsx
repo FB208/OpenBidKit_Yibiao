@@ -1,8 +1,9 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { AppSwitch, FloatingToolbar, isLibreOfficeRequiredMessage, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, UploadBoard, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import { AppDialog, AppSwitch, FloatingToolbar, isLibreOfficeRequiredMessage, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, UploadBoard, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
+import { hasExportableRejectionResults } from '../exportState';
 import type {
   LogicCheckFinding,
   LogicCheckResultState,
@@ -579,6 +580,8 @@ function RejectionCheckPage() {
   const [draftCheckOptions, setDraftCheckOptions] = useState<RejectionCheckOptions>(defaultCheckOptions);
   const [checkConfigDialogOpen, setCheckConfigDialogOpen] = useState(false);
   const [busy, setBusy] = useState<'technical-plan' | 'tender-upload' | 'bid-upload' | 'remove' | null>(null);
+  const [exportingExcel, setExportingExcel] = useState(false);
+  const [exportedExcelPath, setExportedExcelPath] = useState('');
   const [analyticsReady, setAnalyticsReady] = useState(false);
   const hydratedRef = useRef(false);
   const autoStartedSignatureRef = useRef('');
@@ -655,6 +658,13 @@ function RejectionCheckPage() {
   const logicCheckRunning = logicCheckResult.status === 'running';
   const backgroundCheckRunning = checkTask?.status === 'running';
   const checkRunning = rejectionCheckRunning || typoCheckRunning || logicCheckRunning || backgroundCheckRunning;
+  const hasExportableCurrentResult = hasExportableRejectionResults({
+    rejectionCheckResult,
+    typoCheckResult,
+    logicCheckResult,
+    rejectionInputSignature: currentRejectionCheckInputSignature,
+    bidSignature,
+  });
   const documentsLocked = busy !== null || extractionRunning || checkRunning;
   const customCheckItemsDirty = customCheckItemsDraft !== customCheckItems;
   const customCheckItemsDisabled = extractionRunning || checkRunning || customCheckItemsSaving;
@@ -1439,6 +1449,41 @@ function RejectionCheckPage() {
       : prev);
   }
 
+  async function exportCheckResultsExcel() {
+    if (!window.yibiao?.rejectionCheck?.exportExcel) {
+      showToast('废标检查结果导出接口尚未加载，请重启应用后重试', 'error');
+      return;
+    }
+    setExportingExcel(true);
+    try {
+      const result = await window.yibiao.rejectionCheck.exportExcel({
+        rejectionInputSignature: currentRejectionCheckInputSignature,
+        bidSignature,
+      });
+      if (result.canceled) return;
+      if (!result.success || !result.path) {
+        showToast(result.message || '废标检查结果导出失败', 'error');
+        return;
+      }
+      setExportedExcelPath(result.path);
+      showToast(result.message || '废标检查结果已导出', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '废标检查结果导出失败', 'error');
+    } finally {
+      setExportingExcel(false);
+    }
+  }
+
+  async function openExportedExcelFile() {
+    if (!exportedExcelPath) return;
+    try {
+      await window.yibiao.export.openFile(exportedExcelPath);
+      setExportedExcelPath('');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '打开 Excel 文件失败', 'error');
+    }
+  }
+
   function switchStep(nextStep: RejectionCheckStep) {
     if (nextStep !== step && !ensureCustomCheckItemsSaved()) {
       return;
@@ -1728,6 +1773,22 @@ function RejectionCheckPage() {
   }
 
   const toolbarGroups: FloatingToolbarGroup[] = [
+    ...(step === 'results' ? [{
+      id: 'rejection-check-export',
+      actions: [{
+        id: 'export-excel',
+        label: exportingExcel ? '导出中...' : '导出 Excel',
+        icon: <ToolbarDocumentIcon />,
+        variant: 'success' as const,
+        disabled: checkRunning || exportingExcel || !hasExportableCurrentResult,
+        tooltip: checkRunning
+          ? '请等待当前检查结束后再导出'
+          : !hasExportableCurrentResult
+            ? '没有当前检查输入对应的可导出结果'
+            : '导出当前废标项、错别字和逻辑问题',
+        onClick: () => { void exportCheckResultsExcel(); },
+      }],
+    }] : []),
     {
       id: 'rejection-check-reset',
       actions: [
@@ -2170,6 +2231,20 @@ function RejectionCheckPage() {
           </Dialog.Root>
         </>
       )}
+
+      <AppDialog
+        open={Boolean(exportedExcelPath)}
+        onOpenChange={(open) => !open && setExportedExcelPath('')}
+        kicker="导出完成"
+        title="废标检查结果已导出"
+        description={exportedExcelPath ? `文件已保存到：${exportedExcelPath}` : undefined}
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => setExportedExcelPath('')}>稍后打开</button>
+            <button type="button" className="primary-action" onClick={() => { void openExportedExcelFile(); }}>打开文件</button>
+          </>
+        )}
+      />
 
       <FloatingToolbar groups={toolbarGroups} label="废标项检查工具条" />
     </div>
