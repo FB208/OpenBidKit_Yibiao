@@ -7,7 +7,7 @@ import type {
   TableCellStyleConfig,
   TableStyleConfig,
 } from '../../shared/types/exportFormat';
-import { DEFAULT_EXPORT_FORMAT } from '../../shared/types/exportFormat';
+import { DEFAULT_EXPORT_FORMAT, isDecorativeHeaderFooterStyle } from '../../shared/types/exportFormat';
 
 type HeadingLayoutStyle = Omit<HeadingStyleConfig, 'text_color'>;
 type TableCellLayoutStyle = Pick<TableCellStyleConfig, 'font' | 'size' | 'alignment'>;
@@ -53,6 +53,10 @@ interface ExportThemePreset {
   heading_border_color: string;
   heading_border_cell_colors: string[];
   header_footer_color: string;
+  chrome_bar_color: string;
+  chrome_accent_color: string;
+  chrome_on_bar_color: string;
+  chrome_on_accent_color: string;
   table_border_color: string;
   table_header_text_color: string;
   table_header_background_color: string;
@@ -506,6 +510,10 @@ export const EXPORT_THEME_PRESETS: ExportThemePreset[] = [
     heading_border_color: '#000000',
     heading_border_cell_colors: ['#ffffff', '#ffffff', '#ffffff', '#ffffff', '#ffffff', '#ffffff'],
     header_footer_color: '#000000',
+    chrome_bar_color: '#e8e8e8',
+    chrome_accent_color: '#000000',
+    chrome_on_bar_color: '#000000',
+    chrome_on_accent_color: '#ffffff',
     table_border_color: '#000000',
     table_header_text_color: '#000000',
     table_header_background_color: '#ffffff',
@@ -523,6 +531,10 @@ export const EXPORT_THEME_PRESETS: ExportThemePreset[] = [
     heading_border_color: '#2174fd',
     heading_border_cell_colors: ['#dbeafe', '#e8f1ff', '#f1f7ff', '#f6faff', '#ffffff', '#ffffff'],
     header_footer_color: '#315b9f',
+    chrome_bar_color: '#dbeafe',
+    chrome_accent_color: '#173f82',
+    chrome_on_bar_color: '#173f82',
+    chrome_on_accent_color: '#ffffff',
     table_border_color: '#8db8ff',
     table_header_text_color: '#123a78',
     table_header_background_color: '#dbeafe',
@@ -540,6 +552,10 @@ export const EXPORT_THEME_PRESETS: ExportThemePreset[] = [
     heading_border_color: '#a9d7f2',
     heading_border_cell_colors: ['#eaf7ff', '#f2fbff', '#f7fdff', '#fbfeff', '#ffffff', '#ffffff'],
     header_footer_color: '#55798f',
+    chrome_bar_color: '#eaf7ff',
+    chrome_accent_color: '#2f6f92',
+    chrome_on_bar_color: '#245f82',
+    chrome_on_accent_color: '#ffffff',
     table_border_color: '#bddded',
     table_header_text_color: '#245f82',
     table_header_background_color: '#eaf7ff',
@@ -557,6 +573,10 @@ export const EXPORT_THEME_PRESETS: ExportThemePreset[] = [
     heading_border_color: '#22a05a',
     heading_border_cell_colors: ['#dcfce7', '#e9fbed', '#f1fcf4', '#f7fdf8', '#ffffff', '#ffffff'],
     header_footer_color: '#2e7449',
+    chrome_bar_color: '#dcfce7',
+    chrome_accent_color: '#116a3a',
+    chrome_on_bar_color: '#0f5a32',
+    chrome_on_accent_color: '#ffffff',
     table_border_color: '#8fd3a6',
     table_header_text_color: '#0f5a32',
     table_header_background_color: '#dcfce7',
@@ -574,6 +594,10 @@ export const EXPORT_THEME_PRESETS: ExportThemePreset[] = [
     heading_border_color: '#a7dcb3',
     heading_border_cell_colors: ['#eaf8ee', '#f2fbf4', '#f7fdf8', '#fbfefc', '#ffffff', '#ffffff'],
     header_footer_color: '#5f8468',
+    chrome_bar_color: '#eaf8ee',
+    chrome_accent_color: '#3d764b',
+    chrome_on_bar_color: '#356a43',
+    chrome_on_accent_color: '#ffffff',
     table_border_color: '#bfdfc5',
     table_header_text_color: '#356a43',
     table_header_background_color: '#eaf8ee',
@@ -591,6 +615,10 @@ export const EXPORT_THEME_PRESETS: ExportThemePreset[] = [
     heading_border_color: '#f59e0b',
     heading_border_cell_colors: ['#fff3d6', '#fff7e6', '#fffaf0', '#fffdf8', '#ffffff', '#ffffff'],
     header_footer_color: '#9b6123',
+    chrome_bar_color: '#fff3d6',
+    chrome_accent_color: '#8a4b10',
+    chrome_on_bar_color: '#79420e',
+    chrome_on_accent_color: '#ffffff',
     table_border_color: '#f2c46f',
     table_header_text_color: '#79420e',
     table_header_background_color: '#fff3d6',
@@ -608,6 +636,10 @@ export const EXPORT_THEME_PRESETS: ExportThemePreset[] = [
     heading_border_color: '#a78bfa',
     heading_border_cell_colors: ['#f2edff', '#f6f2ff', '#faf7ff', '#fdfbff', '#ffffff', '#ffffff'],
     header_footer_color: '#7054aa',
+    chrome_bar_color: '#f2edff',
+    chrome_accent_color: '#5b3ca6',
+    chrome_on_bar_color: '#553798',
+    chrome_on_accent_color: '#ffffff',
     table_border_color: '#c9b8ff',
     table_header_text_color: '#553798',
     table_header_background_color: '#f2edff',
@@ -709,6 +741,26 @@ export function applyExportLayoutPreset(config: ExportFormatConfig, presetId: st
   };
 }
 
+function shouldReplaceThemeColor(value: string | undefined, colors: Array<string | undefined>, defaultColor: string): boolean {
+  if (!value) return true;
+  if (normalizeColor(value) === normalizeColor(defaultColor)) return true;
+  return isThemeColor(value, colors);
+}
+
+function applyChromeThemeColors(page: ExportFormatConfig['page'], preset: ExportThemePreset): ExportFormatConfig['page'] {
+  const barThemeColors = EXPORT_THEME_PRESETS.map((item) => item.chrome_bar_color);
+  const accentThemeColors = EXPORT_THEME_PRESETS.map((item) => item.chrome_accent_color);
+  return {
+    ...page,
+    chrome_bar_color: shouldReplaceThemeColor(page.chrome_bar_color, barThemeColors, DEFAULT_EXPORT_FORMAT.page.chrome_bar_color)
+      ? preset.chrome_bar_color
+      : page.chrome_bar_color,
+    chrome_accent_color: shouldReplaceThemeColor(page.chrome_accent_color, accentThemeColors, DEFAULT_EXPORT_FORMAT.page.chrome_accent_color)
+      ? preset.chrome_accent_color
+      : page.chrome_accent_color,
+  };
+}
+
 export function applyExportThemePreset(config: ExportFormatConfig, presetId: string): ExportFormatConfig {
   const preset = EXPORT_THEME_PRESETS.find((item) => item.id === presetId);
   if (!preset) return config;
@@ -732,10 +784,13 @@ export function applyExportThemePreset(config: ExportFormatConfig, presetId: str
     },
   };
 
+  const decorative = isDecorativeHeaderFooterStyle(config.page.header_footer_style);
+
   if (!config.heading_border.enabled) {
     const withoutGlobalThemeColors = clearDisabledFrameThemeColors(config);
     return {
       ...withoutGlobalThemeColors,
+      page: decorative ? applyChromeThemeColors(withoutGlobalThemeColors.page, preset) : withoutGlobalThemeColors.page,
       table,
     };
   }
@@ -743,7 +798,7 @@ export function applyExportThemePreset(config: ExportFormatConfig, presetId: str
   return {
     ...config,
     page: {
-      ...config.page,
+      ...applyChromeThemeColors(config.page, preset),
       header_color: preset.header_footer_color,
       footer_color: preset.header_footer_color,
     },

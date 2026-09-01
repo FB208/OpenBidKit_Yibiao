@@ -479,6 +479,37 @@ img, svg, canvas, video { max-width: 100%; height: auto; }
 </html>`;
 }
 
+function buildExactHtmlDocument(html, width, height) {
+  const source = String(html || '').trim();
+  const safeWidth = Math.max(1, Math.round(width));
+  const safeHeight = Math.max(1, Math.round(height));
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body {
+      margin: 0 !important;
+      padding: 0 !important;
+      width: ${safeWidth}px !important;
+      height: ${safeHeight}px !important;
+      overflow: hidden !important;
+      background: #ffffff !important;
+    }
+    #yibiao-capture-root {
+      width: ${safeWidth}px;
+      height: ${safeHeight}px;
+      overflow: hidden;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+  </style>
+</head>
+<body>
+  <div id="yibiao-capture-root">${source}</div>
+</body>
+</html>`;
+}
+
 // 构建 Mermaid 本地渲染页面：保留 SVG 真实尺寸，过宽时等比缩小，页面随内容收缩。
 function buildMermaidDocument(code, mermaidScriptUrl) {
   const escaped = JSON.stringify(String(code || ''));
@@ -798,9 +829,41 @@ function createLocalImageRenderService({ configStore } = {}) {
     });
   }
 
+  async function renderExactHtmlToPng({ html, width, height, scale = 2 } = {}, options = {}) {
+    return runHtml(async () => {
+      throwIfPaused(options, 'HTML 转图已暂停');
+      const safeWidth = Math.max(1, Math.round(Number(width) || 1));
+      const safeHeight = Math.max(1, Math.round(Number(height) || 1));
+      const captureScale = Math.max(1, Math.round(Number(scale) || 2));
+      const documentHtml = buildExactHtmlDocument(html, safeWidth, safeHeight);
+      const win = createRenderWindow(safeWidth, safeHeight);
+      try {
+        await withTimeout(
+          loadHtmlDocument(win, documentHtml, HTML_RENDER_TIMEOUT_MS, options),
+          HTML_RENDER_TIMEOUT_MS,
+          'HTML 页面加载超时',
+        );
+        throwIfPaused(options, 'HTML 转图已暂停');
+        await setDeviceMetrics(win.webContents, safeWidth, safeHeight, captureScale);
+        await delay(LAYOUT_SETTLE_MS);
+        throwIfPaused(options, 'HTML 转图已暂停');
+        const buffer = await captureClip(win.webContents, {
+          x: 0,
+          y: 0,
+          width: safeWidth,
+          height: safeHeight,
+        });
+        return getPngResult(buffer, safeWidth * captureScale, safeHeight * captureScale);
+      } finally {
+        destroyWindow(win);
+      }
+    });
+  }
+
   return {
     renderMermaidToPng,
     renderHtmlToPng,
+    renderExactHtmlToPng,
     probeHtmlLayoutOnly,
     wordFriendlyRenderWidth: WORD_FRIENDLY_RENDER_WIDTH,
     htmlDesignWidth: HTML_DESIGN_WIDTH,

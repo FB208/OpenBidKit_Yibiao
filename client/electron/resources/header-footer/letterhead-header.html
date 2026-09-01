@@ -1,0 +1,82 @@
+<style>
+  .letter-header {
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: color-mix(in srgb, #fff 90%, {{bar}} 10%);
+  }
+  .letter-header-logo,
+  .letter-header-bar,
+  .letter-header-hair,
+  .letter-header-text {
+    position: absolute;
+    pointer-events: none;
+  }
+  .letter-header-logo {
+    top: 0;
+    left: 0;
+    width: 42px;
+    height: calc(100% - 8px);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, {{accent}} 82%, #000 18%),
+      {{accent}}
+    );
+  }
+  .letter-header-logo::before,
+  .letter-header-logo::after {
+    content: "";
+    position: absolute;
+    left: 10px;
+    background: {{onAccent}};
+  }
+  .letter-header-logo::before {
+    top: 12px;
+    width: 22px;
+    height: 2.4px;
+  }
+  .letter-header-logo::after {
+    top: 18px;
+    width: 14px;
+    height: 2.4px;
+    opacity: 0.7;
+  }
+  .letter-header-text {
+    top: 0;
+    right: 16px;
+    bottom: 10px;
+    left: 56px;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    color: {{accent}};
+    font-family: {{font}};
+    font-size: {{sizePt}}pt;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .letter-header-hair {
+    right: 0;
+    bottom: 7px;
+    left: 0;
+    height: 1px;
+    background: color-mix(in srgb, {{accent}} 38%, transparent);
+  }
+  .letter-header-bar {
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 5px;
+    background: {{accent}};
+  }
+</style>
+<div class="letter-header">
+  <span class="letter-header-logo"></span>
+  <span class="letter-header-text">{{text}}</span>
+  <span class="letter-header-hair"></span>
+  <span class="letter-header-bar"></span>
+</div>

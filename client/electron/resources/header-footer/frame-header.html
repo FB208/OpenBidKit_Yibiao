@@ -1,0 +1,66 @@
+<style>
+  .frame-header {
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: color-mix(in srgb, #fff 92%, {{bar}} 8%);
+  }
+  .frame-header-outer,
+  .frame-header-inner,
+  .frame-header-mark,
+  .frame-header-text {
+    position: absolute;
+    pointer-events: none;
+  }
+  .frame-header-outer {
+    top: 4px;
+    right: 6px;
+    bottom: 4px;
+    left: 6px;
+    border: 2.6px solid {{accent}};
+  }
+  .frame-header-inner {
+    top: 10px;
+    right: 12px;
+    bottom: 10px;
+    left: 12px;
+    border: 1px solid {{accent}};
+  }
+  .frame-header-mark {
+    width: 7px;
+    height: 7px;
+    background: {{accent}};
+  }
+  .frame-header-mark.is-tl { top: 7px; left: 9px; }
+  .frame-header-mark.is-tr { top: 7px; right: 9px; }
+  .frame-header-mark.is-bl { bottom: 7px; left: 9px; }
+  .frame-header-mark.is-br { right: 9px; bottom: 7px; }
+  .frame-header-text {
+    top: 0;
+    right: 22px;
+    bottom: 0;
+    left: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    color: {{accent}};
+    font-family: {{font}};
+    font-size: {{sizePt}}pt;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+</style>
+<div class="frame-header">
+  <span class="frame-header-outer"></span>
+  <span class="frame-header-inner"></span>
+  <span class="frame-header-mark is-tl"></span>
+  <span class="frame-header-mark is-tr"></span>
+  <span class="frame-header-mark is-bl"></span>
+  <span class="frame-header-mark is-br"></span>
+  <span class="frame-header-text">{{text}}</span>
+</div>

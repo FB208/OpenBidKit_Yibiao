@@ -9,9 +9,11 @@ import type {
   HeadingBorderConfig,
   HeadingNumberingFormat,
   HeadingStyleConfig,
+  HeaderFooterStyle,
   ImageStyleConfig,
   ListStyle,
   OrderedListStyle,
+  PageNumberPad,
   PageSetupConfig,
   PaperSize,
   TableCellStyleConfig,
@@ -23,10 +25,16 @@ import {
   FONT_OPTIONS,
   HEADING_LEVEL_LABELS,
   HEADING_NUMBERING_FORMAT_OPTIONS,
+  isDecorativeHeaderFooterStyle,
+  isHtmlHeaderFooterStyle,
+  usesFooterTextColor,
+  usesHeaderTextColor,
   LIST_STYLE_OPTIONS,
   ORDERED_LIST_STYLE_OPTIONS,
   PAPER_DIMENSIONS,
   PAPER_SIZES,
+  PAGE_NUMBER_PAD_OPTIONS,
+  resolveHeaderFooterStyle,
   SIZE_OPTIONS,
 } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
@@ -38,8 +46,9 @@ import {
   applyExportLayoutPreset,
   applyExportThemePreset,
 } from '../exportFormatPresets';
+import { HeaderFooterStylePicker, PageFooterChrome, PageHeaderChrome } from '../HeaderFooterChrome';
 
-type TemplateTab = 'quick' | 'layout' | 'cover' | 'heading' | 'body' | 'table' | 'image';
+type TemplateTab = 'quick' | 'layout' | 'header-footer' | 'cover' | 'heading' | 'body' | 'table' | 'image';
 type TableCellStyleKey = 'header_row' | 'first_column' | 'body_cell';
 
 interface ExportFormatPageProps {
@@ -51,6 +60,7 @@ interface ExportFormatPageProps {
 const templateTabs: Array<{ id: TemplateTab; label: string }> = [
   { id: 'quick', label: '快捷设置' },
   { id: 'layout', label: '布局设置' },
+  { id: 'header-footer', label: '页眉页脚' },
   { id: 'cover', label: '封皮' },
   { id: 'heading', label: '标题样式' },
   { id: 'body', label: '正文样式' },
@@ -525,6 +535,22 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
     showToast(`已应用主题预设：${preset?.label || '未命名预设'}，保存后生效`, 'success');
   }, [showToast]);
 
+  const handleApplyHeaderFooterStyle = useCallback((style: HeaderFooterStyle) => {
+    setConfig((prev) => {
+      const next = {
+        ...prev,
+        page: {
+          ...prev.page,
+          header_footer_style: style,
+          header_enabled: true,
+          footer_enabled: true,
+          page_number_enabled: true,
+        },
+      };
+      return selectedThemePresetId ? applyExportThemePreset(next, selectedThemePresetId) : next;
+    });
+  }, [selectedThemePresetId]);
+
   const handleExportTest = useCallback(async () => {
     let unsubscribe: (() => void) | undefined;
 
@@ -697,7 +723,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         <label className="settings-row">
           <div className="settings-row-copy">
             <strong>主题预设</strong>
-            <span>未开启章节页框时只应用表格颜色；开启章节页框后同步应用标题、页框、页眉页脚和表格颜色。</span>
+            <span>未开章节页框时，经典文字只改表格色；装饰页眉页脚会同步改色条和强调色。</span>
           </div>
           <select value={selectedThemePresetId} onChange={(event) => handleApplyThemePreset(event.target.value)}>
             <option value="" disabled>选择主题预设</option>
@@ -733,7 +759,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
       <div className="export-format-preset-panel">
         <div className="export-format-preset-panel-head">
           <strong>主题色展示</strong>
-          <span>主题只覆盖颜色；章节页框关闭时仅表格使用主题色。</span>
+          <span>主题只覆盖颜色；装饰页眉页脚会同步改色条，章节页框关闭时经典文字仅表格用主题色。</span>
         </div>
         <div className="export-format-preset-list is-theme is-static">
           {EXPORT_THEME_PRESETS.map((preset) => (
@@ -779,6 +805,28 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
             <input type="number" min={0} max={10} step={0.1} value={config.page.margin_left_cm} onChange={(event) => updatePage({ margin_left_cm: Number(event.target.value) })} placeholder="左" />
           </div>
         </div>
+      </div>
+    </>
+  );
+
+  const renderHeaderFooterSettings = () => {
+    const headerFooterStyle = resolveHeaderFooterStyle(config.page.header_footer_style);
+    const usesChromeBarColor = headerFooterStyle === 'band' || headerFooterStyle === 'footer-badge' || isHtmlHeaderFooterStyle(headerFooterStyle);
+    return (
+    <>
+      <div className="export-format-preset-panel is-header-footer">
+        <div className="export-format-preset-panel-head">
+          <strong>页眉页脚样式</strong>
+          <span>点选纸面结构，颜色由主题或下方色条色控制。</span>
+        </div>
+        <HeaderFooterStylePicker
+          value={headerFooterStyle}
+          bar={config.page.chrome_bar_color}
+          accent={config.page.chrome_accent_color}
+          onChange={handleApplyHeaderFooterStyle}
+        />
+      </div>
+      <div className="settings-list">
         <label className="settings-row">
           <div className="settings-row-copy"><strong>页眉</strong></div>
           <AppSwitch checked={config.page.header_enabled} onCheckedChange={(checked) => updatePage({ header_enabled: checked })} />
@@ -789,6 +837,17 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
               <div className="settings-row-copy"><strong>页眉文本</strong></div>
               <input type="text" value={config.page.header_text} onChange={(event) => updatePage({ header_text: event.target.value })} />
             </label>
+            {headerFooterStyle === 'band' && (
+              <label className="settings-row">
+                <div className="settings-row-copy"><strong>左侧短标记</strong><span>最多 4 个字，可空</span></div>
+                <input
+                  type="text"
+                  maxLength={4}
+                  value={config.page.header_badge_text}
+                  onChange={(event) => updatePage({ header_badge_text: event.target.value.slice(0, 4) })}
+                />
+              </label>
+            )}
             <label className="settings-row">
               <div className="settings-row-copy"><strong>页眉字体</strong></div>
               <FontPicker value={config.page.header_font} options={fontOptions} onChange={(font) => updatePage({ header_font: font })} />
@@ -799,16 +858,20 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
                 {SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
               </select>
             </label>
-            <label className="settings-row">
-              <div className="settings-row-copy"><strong>页眉对齐方式</strong></div>
-              <select value={config.page.header_alignment} onChange={(event) => updatePage({ header_alignment: event.target.value })}>
-                {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
-              </select>
-            </label>
-            <label className="settings-row">
-              <div className="settings-row-copy"><strong>页眉颜色</strong></div>
-              <input type="color" value={config.page.header_color} onChange={(event) => updatePage({ header_color: event.target.value })} />
-            </label>
+            {!isDecorativeHeaderFooterStyle(headerFooterStyle) && (
+              <label className="settings-row">
+                <div className="settings-row-copy"><strong>页眉对齐方式</strong></div>
+                <select value={config.page.header_alignment} onChange={(event) => updatePage({ header_alignment: event.target.value })}>
+                  {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
+                </select>
+              </label>
+            )}
+            {usesHeaderTextColor(headerFooterStyle) && (
+              <label className="settings-row">
+                <div className="settings-row-copy"><strong>页眉颜色</strong></div>
+                <input type="color" value={config.page.header_color} onChange={(event) => updatePage({ header_color: event.target.value })} />
+              </label>
+            )}
           </>
         )}
         <label className="settings-row">
@@ -831,19 +894,37 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
                 {SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
               </select>
             </label>
+            {!isDecorativeHeaderFooterStyle(headerFooterStyle) && (
+              <label className="settings-row">
+                <div className="settings-row-copy"><strong>页脚对齐方式</strong></div>
+                <select value={config.page.footer_alignment} onChange={(event) => updatePage({ footer_alignment: event.target.value })}>
+                  {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
+                </select>
+              </label>
+            )}
+            {usesFooterTextColor(headerFooterStyle) && (
+              <label className="settings-row">
+                <div className="settings-row-copy"><strong>页脚颜色</strong></div>
+                <input type="color" value={config.page.footer_color} onChange={(event) => updatePage({ footer_color: event.target.value })} />
+              </label>
+            )}
+          </>
+        )}
+        {isDecorativeHeaderFooterStyle(headerFooterStyle) && (
+          <>
+            {usesChromeBarColor && (
+              <label className="settings-row">
+                <div className="settings-row-copy"><strong>色条浅底</strong></div>
+                <input type="color" value={config.page.chrome_bar_color} onChange={(event) => updatePage({ chrome_bar_color: event.target.value })} />
+              </label>
+            )}
             <label className="settings-row">
-              <div className="settings-row-copy"><strong>页脚对齐方式</strong></div>
-              <select value={config.page.footer_alignment} onChange={(event) => updatePage({ footer_alignment: event.target.value })}>
-                {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
-              </select>
-            </label>
-            <label className="settings-row">
-              <div className="settings-row-copy"><strong>页脚颜色</strong></div>
-              <input type="color" value={config.page.footer_color} onChange={(event) => updatePage({ footer_color: event.target.value })} />
+              <div className="settings-row-copy"><strong>强调色</strong></div>
+              <input type="color" value={config.page.chrome_accent_color} onChange={(event) => updatePage({ chrome_accent_color: event.target.value })} />
             </label>
           </>
         )}
-        {(config.page.footer_enabled || config.page.page_number_enabled) && (
+        {!isDecorativeHeaderFooterStyle(headerFooterStyle) && (config.page.footer_enabled || config.page.page_number_enabled) && (
           <label className="settings-row">
             <div className="settings-row-copy"><strong>距底边距离</strong><span>页脚或页码距页面底边，单位：厘米</span></div>
             <input type="number" min={0} max={5} step={0.1} value={config.page.footer_distance_cm} onChange={(event) => updatePage({ footer_distance_cm: Number(event.target.value) })} />
@@ -863,11 +944,18 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
               <div className="settings-row-copy"><strong>页码起始值</strong></div>
               <input type="number" min={1} max={9999} step={1} value={config.page.page_number_start} onChange={(event) => updatePage({ page_number_start: Number(event.target.value) })} />
             </label>
+            <label className="settings-row">
+              <div className="settings-row-copy"><strong>页码补零</strong></div>
+              <select value={config.page.page_number_pad} onChange={(event) => updatePage({ page_number_pad: Number(event.target.value) as PageNumberPad })}>
+                {PAGE_NUMBER_PAD_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
           </>
         )}
       </div>
     </>
-  );
+    );
+  };
 
   const renderHeadingSettings = () => (
     <>
@@ -1227,6 +1315,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   const renderActiveSettings = () => {
     if (activeTab === 'quick') return renderQuickSettings();
     if (activeTab === 'layout') return renderLayoutSettings();
+    if (activeTab === 'header-footer') return renderHeaderFooterSettings();
     if (activeTab === 'heading') return renderHeadingSettings();
     if (activeTab === 'body') return renderBodySettings();
     if (activeTab === 'table') return renderTableSettings();
@@ -1339,8 +1428,6 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
   const [viewportSize, setViewportSize] = useState<PreviewViewportSize>({ width: 0, height: 0 });
   const [paginationMetrics, setPaginationMetrics] = useState<PreviewPaginationMetrics>({ bodyHeight: 0, blockHeights: {} });
   const paperSize = useMemo(() => getPreviewPaperSize(config), [config.page.orientation, config.page.paper_size]);
-  const footerText = config.page.footer_enabled ? config.page.footer_text.trim() : '';
-  const showFooterArea = Boolean(footerText) || config.page.page_number_enabled;
   const previewScale = useMemo(() => {
     const ratios = [1];
     if (viewportSize.width > 0 && paperSize.widthPx > 0) {
@@ -1360,27 +1447,6 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
     ...previewStyle,
     transform: `scale(${previewScale})`,
   }), [previewScale, previewStyle]);
-
-  const renderPageHeader = () => (
-    config.page.header_enabled && config.page.header_text.trim() ? (
-      <div className="export-template-page-header">
-        {config.page.header_text.trim()}
-      </div>
-    ) : null
-  );
-
-  const renderPageFooter = (pageIndex: number) => {
-    if (!showFooterArea) return null;
-    const pageNo = Math.max(1, Number(config.page.page_number_start) || 1) + pageIndex;
-    const pageNumberText = String(config.page.page_number_format || '第{page}页').replace('{page}', String(pageNo));
-
-    return (
-      <div className="export-template-page-footer" style={config.page.footer_enabled ? undefined : { textAlign: 'center' }}>
-        {footerText && <span>{footerText}</span>}
-        {config.page.page_number_enabled && <span>{pageNumberText}</span>}
-      </div>
-    );
-  };
 
   useEffect(() => {
     const node = previewStageRef.current;
@@ -1583,7 +1649,7 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
       cancelAnimationFrame(frameId);
       observer.disconnect();
     };
-  }, [previewBlocks, previewStyle, showFooterArea]);
+  }, [previewBlocks, previewStyle, config.page]);
 
   const previewPages = useMemo(() => {
     const bodyHeight = paginationMetrics.bodyHeight || Math.max(240, Math.round(paperSize.heightPx * 0.68));
@@ -1623,11 +1689,13 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
             {previewPages.map((page, pageIndex) => (
               <div key={pageIndex} className="export-template-preview-page-shell" style={pageShellStyle}>
                 <div className="export-format-paper export-format-preview-content export-template-preview-paper" style={paperStyle}>
-                  {renderPageHeader()}
+                  <PageHeaderChrome config={config} pageIndex={pageIndex} />
                   <div className="export-template-page-body">
-                    {page.map((block) => renderPreviewBlock(block))}
+                    <div className="export-template-page-body-inner">
+                      {page.map((block) => renderPreviewBlock(block))}
+                    </div>
                   </div>
-                  {renderPageFooter(pageIndex)}
+                  <PageFooterChrome config={config} pageIndex={pageIndex} />
                 </div>
               </div>
             ))}
@@ -1636,11 +1704,13 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
       </div>
       <div className="export-template-preview-measure" ref={measureRef} aria-hidden="true">
         <div className="export-format-paper export-format-preview-content export-template-preview-paper" style={previewStyle}>
-          {renderPageHeader()}
-          <div className="export-template-page-body" data-preview-measure-body="true">
+          <PageHeaderChrome config={config} />
+          <div className="export-template-page-body">
+            <div className="export-template-page-body-inner" data-preview-measure-body="true">
             {previewBlocks.map((block) => renderPreviewBlock(block, true))}
+            </div>
           </div>
-          {renderPageFooter(0)}
+          <PageFooterChrome config={config} />
         </div>
       </div>
     </aside>

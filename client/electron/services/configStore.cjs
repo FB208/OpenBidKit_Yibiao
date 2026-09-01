@@ -184,6 +184,10 @@ const defaultExportFormat = {
     header_size: '小五',
     header_alignment: '居中对齐',
     header_color: '#536176',
+    header_footer_style: 'plain',
+    header_badge_text: '',
+    chrome_bar_color: '#e8eef5',
+    chrome_accent_color: '#536176',
     footer_enabled: false,
     footer_text: '',
     footer_distance_cm: 1.75,
@@ -194,6 +198,7 @@ const defaultExportFormat = {
     page_number_enabled: false,
     page_number_format: '第{page}页',
     page_number_start: 1,
+    page_number_pad: 0,
   },
   heading_level1_page_break_before: false,
   heading_border: {
@@ -517,6 +522,8 @@ function normalizeImageModelProfiles(sourceProfiles) {
 
 const VALID_NUMBERING_FORMATS = ['outline-decimal', 'custom'];
 const VALID_HEADING_BORDER_STRUCTURES = ['上下结构', '左右结构'];
+const VALID_HEADER_FOOTER_STYLES = ['plain', 'band', 'rules', 'top-bar', 'footer-badge', 'slant', 'letterhead', 'frame'];
+const VALID_PAGE_NUMBER_PADS = [0, 2, 3];
 const VALID_LIST_STYLES = ['none', 'disc', 'circle', 'square', 'diamond', 'dash', 'check', 'arrow', 'sparkle'];
 const VALID_ORDERED_LIST_STYLES = ['decimal-dot', 'decimal-paren', 'decimal-full-paren', 'chinese-dot', 'chinese-paren', 'lower-alpha', 'upper-alpha', 'lower-roman', 'upper-roman'];
 
@@ -587,6 +594,15 @@ function normalizeExportFormat(source) {
     header_size: typeof srcPage.header_size === 'string' && srcPage.header_size ? srcPage.header_size : def.page.header_size,
     header_alignment: typeof srcPage.header_alignment === 'string' && srcPage.header_alignment ? srcPage.header_alignment : def.page.header_alignment,
     header_color: typeof srcPage.header_color === 'string' && srcPage.header_color ? srcPage.header_color : def.page.header_color,
+    header_footer_style: (() => {
+      let style = srcPage.header_footer_style;
+      if (style === 'spine') style = 'letterhead';
+      if (style === 'seal') style = 'frame';
+      return VALID_HEADER_FOOTER_STYLES.includes(style) ? style : def.page.header_footer_style;
+    })(),
+    header_badge_text: typeof srcPage.header_badge_text === 'string' ? srcPage.header_badge_text.slice(0, 4) : def.page.header_badge_text,
+    chrome_bar_color: typeof srcPage.chrome_bar_color === 'string' && srcPage.chrome_bar_color ? srcPage.chrome_bar_color : def.page.chrome_bar_color,
+    chrome_accent_color: typeof srcPage.chrome_accent_color === 'string' && srcPage.chrome_accent_color ? srcPage.chrome_accent_color : def.page.chrome_accent_color,
     footer_enabled: typeof srcPage.footer_enabled === 'boolean' ? srcPage.footer_enabled : def.page.footer_enabled,
     footer_text: typeof srcPage.footer_text === 'string' ? srcPage.footer_text : def.page.footer_text,
     footer_distance_cm: typeof srcPage.footer_distance_cm === 'number' ? srcPage.footer_distance_cm : def.page.footer_distance_cm,
@@ -597,6 +613,7 @@ function normalizeExportFormat(source) {
     page_number_enabled: typeof srcPage.page_number_enabled === 'boolean' ? srcPage.page_number_enabled : def.page.page_number_enabled,
     page_number_format: typeof srcPage.page_number_format === 'string' && srcPage.page_number_format ? srcPage.page_number_format : def.page.page_number_format,
     page_number_start: typeof srcPage.page_number_start === 'number' ? srcPage.page_number_start : def.page.page_number_start,
+    page_number_pad: VALID_PAGE_NUMBER_PADS.includes(srcPage.page_number_pad) ? srcPage.page_number_pad : def.page.page_number_pad,
   };
 
   const srcHeadingBorder = source.heading_border && typeof source.heading_border === 'object' ? source.heading_border : {};

@@ -10,6 +10,7 @@
 @import './styles/shared-toast.css';
 @import './styles/shared-upload.css';
 @import './styles/shared-markdown.css';
+@import './styles/shared-restricted-html.css';
 @import './styles/app-shell-dialogs.css';
 @import './styles/feature-technical-plan.css';
 @import './styles/feature-feasibility-report.css';

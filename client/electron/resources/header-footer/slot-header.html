@@ -1,0 +1,181 @@
+<style>
+  .slot-header {
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, {{accent}} 72%, #000 28%) 0%,
+      {{accent}} 38%,
+      color-mix(in srgb, {{accent}} 86%, #fff 14%) 100%
+    );
+  }
+  .slot-header-hatch,
+  .slot-header-flare,
+  .slot-header-sheen,
+  .slot-header-edge,
+  .slot-header-ear-back,
+  .slot-header-ear,
+  .slot-header-blade,
+  .slot-header-plate-cast,
+  .slot-header-plate {
+    position: absolute;
+    pointer-events: none;
+  }
+  .slot-header-hatch {
+    inset: 0;
+    background: repeating-linear-gradient(
+      135deg,
+      color-mix(in srgb, #fff 20%, transparent) 0 1px,
+      transparent 1px 7px
+    );
+  }
+  .slot-header-flare {
+    top: -30%;
+    left: 28%;
+    width: 46%;
+    height: 160%;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, #fff 22%, transparent) 42%,
+      transparent
+    );
+    transform: skewX(-22deg);
+  }
+  .slot-header-sheen {
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 2px;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, #fff 18%, {{accent}} 82%),
+      color-mix(in srgb, #fff 62%, {{accent}} 38%),
+      color-mix(in srgb, #fff 22%, {{accent}} 78%)
+    );
+  }
+  .slot-header-edge {
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: color-mix(in srgb, {{accent}} 58%, #000 42%);
+  }
+  .slot-header-ear-back {
+    top: 10px;
+    left: 16px;
+    width: 64px;
+    height: calc(100% - 6px);
+    background: color-mix(in srgb, {{accent}} 38%, #000 62%);
+    clip-path: polygon(0 0, 100% 0, 58% 100%, 0 100%);
+  }
+  .slot-header-ear {
+    top: 0;
+    left: 0;
+    width: 66px;
+    height: 100%;
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, {{accent}} 58%, #000 42%),
+      color-mix(in srgb, {{accent}} 74%, #000 26%)
+    );
+    clip-path: polygon(0 0, 100% 0, 62% 100%, 0 100%);
+    box-shadow: 8px 0 14px color-mix(in srgb, #000 32%, transparent);
+  }
+  .slot-header-ear::after {
+    content: "";
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    width: 18px;
+    height: 2px;
+    background: color-mix(in srgb, #fff 42%, {{accent}} 58%);
+  }
+  .slot-header-blade {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 16px;
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, {{accent}} 42%, #000 58%),
+      color-mix(in srgb, {{accent}} 62%, #000 38%)
+    );
+  }
+  .slot-header-blade::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -6px;
+    width: 6px;
+    background: color-mix(in srgb, #fff 38%, {{accent}} 62%);
+  }
+  .slot-header-plate-cast {
+    top: calc(22% + 5px);
+    right: 24px;
+    left: 86px;
+    height: 62%;
+    background: color-mix(in srgb, {{accent}} 28%, #000 72%);
+    clip-path: polygon(10px 0, 100% 0, calc(100% - 12px) 100%, 0 100%);
+    opacity: 0.7;
+  }
+  .slot-header-plate {
+    top: 16%;
+    right: 36px;
+    left: 78px;
+    bottom: 20%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, #fff 88%, {{bar}} 12%);
+    box-shadow:
+      0 1px 0 color-mix(in srgb, {{accent}} 22%, transparent),
+      0 4px 10px color-mix(in srgb, #000 16%, transparent),
+      inset 0 0 0 1px color-mix(in srgb, {{accent}} 18%, transparent);
+  }
+  .slot-header-tick {
+    position: absolute;
+    width: 13px;
+    height: 13px;
+    border-color: {{accent}};
+    border-style: solid;
+  }
+  .slot-header-tick.is-tl { top: 3px; left: 4px; border-width: 2px 0 0 2px; }
+  .slot-header-tick.is-tr { top: 3px; right: 4px; border-width: 2px 2px 0 0; }
+  .slot-header-tick.is-bl { bottom: 3px; left: 4px; border-width: 0 0 2px 2px; }
+  .slot-header-tick.is-br { right: 4px; bottom: 3px; border-width: 0 2px 2px 0; }
+  .slot-header-text {
+    display: block;
+    max-width: calc(100% - 28px);
+    overflow: hidden;
+    color: {{accent}};
+    font-family: {{font}};
+    font-size: {{sizePt}}pt;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+</style>
+<div class="slot-header">
+  <span class="slot-header-hatch"></span>
+  <span class="slot-header-flare"></span>
+  <span class="slot-header-sheen"></span>
+  <span class="slot-header-edge"></span>
+  <span class="slot-header-ear-back"></span>
+  <span class="slot-header-ear"></span>
+  <span class="slot-header-blade"></span>
+  <span class="slot-header-plate-cast"></span>
+  <span class="slot-header-plate">
+    <span class="slot-header-tick is-tl"></span>
+    <span class="slot-header-tick is-tr"></span>
+    <span class="slot-header-tick is-bl"></span>
+    <span class="slot-header-tick is-br"></span>
+    <span class="slot-header-text">{{text}}</span>
+  </span>
+</div>

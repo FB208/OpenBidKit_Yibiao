@@ -85,6 +85,10 @@ CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
   section_words INTEGER NOT NULL DEFAULT 0,
   strict_section_words INTEGER NOT NULL DEFAULT 0,
   global_facts_mode TEXT NOT NULL DEFAULT 'fabricate',
+  -- v27 正文生成模板，仅保存选择，当前不参与正文任务。
+  content_generation_template_id TEXT NOT NULL DEFAULT 'standard-document',
+  -- v28 当前项目明确选择的 Word 导出模板。
+  export_template_id TEXT NOT NULL DEFAULT '',
   use_ai_images INTEGER NOT NULL DEFAULT 1,
   max_ai_images INTEGER NOT NULL DEFAULT 6,
   use_mermaid_images INTEGER NOT NULL DEFAULT 1,

@@ -75,6 +75,8 @@ export type {
   ImageStyleConfig,
   ListStyle,
   PageSetupConfig,
+  HeaderFooterStyle,
+  PageNumberPad,
 } from './exportFormat';
 export {
   FONT_OPTIONS,
@@ -85,11 +87,16 @@ export {
   ALIGNMENT_TO_CSS,
   HEADING_NUMBERING_FORMAT_OPTIONS,
   HEADING_BORDER_STRUCTURE_OPTIONS,
+  HEADER_FOOTER_STYLE_OPTIONS,
+  PAGE_NUMBER_PAD_OPTIONS,
   LIST_STYLE_OPTIONS,
   PAPER_SIZES,
   PAPER_DIMENSIONS,
   DEFAULT_EXPORT_FORMAT,
   HEADING_LEVEL_LABELS,
+  resolveHeaderFooterStyle,
+  isDecorativeHeaderFooterStyle,
+  isHtmlHeaderFooterStyle,
 } from './exportFormat';
 export type { OutlineContentMode, OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, OutlineWordControlOptions } from './outline';
 export { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS, OUTLINE_CONTENT_MODE_LABELS } from './outline';

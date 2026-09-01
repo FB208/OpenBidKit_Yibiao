@@ -1,0 +1,84 @@
+<style>
+  .slant-header {
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: {{bar}};
+  }
+  .slant-header-cast,
+  .slant-header-panel,
+  .slant-header-slash,
+  .slant-header-chip,
+  .slant-header-text {
+    position: absolute;
+    pointer-events: none;
+  }
+  .slant-header-cast {
+    top: -18%;
+    left: -8%;
+    width: 64%;
+    height: 140%;
+    background: color-mix(in srgb, {{accent}} 46%, #000 54%);
+    transform: skewX(-18deg);
+  }
+  .slant-header-panel {
+    top: -18%;
+    left: -10%;
+    width: 61%;
+    height: 140%;
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, {{accent}} 78%, #000 22%),
+      {{accent}} 55%,
+      color-mix(in srgb, {{accent}} 88%, #fff 12%)
+    );
+    transform: skewX(-18deg);
+    box-shadow: 10px 0 18px color-mix(in srgb, #000 22%, transparent);
+  }
+  .slant-header-slash {
+    top: -20%;
+    left: 48%;
+    width: 5px;
+    height: 150%;
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, {{onAccent}} 35%, transparent),
+      {{onAccent}},
+      color-mix(in srgb, {{onAccent}} 35%, transparent)
+    );
+    transform: skewX(-18deg);
+  }
+  .slant-header-chip {
+    top: 10px;
+    right: 18px;
+    width: 42px;
+    height: 10px;
+    background: {{accent}};
+    clip-path: polygon(18% 0, 100% 0, 82% 100%, 0 100%);
+  }
+  .slant-header-text {
+    top: 0;
+    bottom: 0;
+    left: 22px;
+    right: 46%;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    color: {{onAccent}};
+    font-family: {{font}};
+    font-size: {{sizePt}}pt;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+</style>
+<div class="slant-header">
+  <span class="slant-header-cast"></span>
+  <span class="slant-header-panel"></span>
+  <span class="slant-header-slash"></span>
+  <span class="slant-header-chip"></span>
+  <span class="slant-header-text">{{text}}</span>
+</div>

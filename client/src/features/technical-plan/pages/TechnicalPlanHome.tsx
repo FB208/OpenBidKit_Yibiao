@@ -6,7 +6,6 @@ import BidAnalysisPage from './BidAnalysisPage';
 import OutlineEditPage from './OutlineEditPage';
 import GlobalFactsPage from './GlobalFactsPage';
 import ContentEditPage from './ContentEditPage';
-import { TemplatePreview } from '../../export-format/pages/ExportFormatPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { bidAnalysisTasks, getBidAnalysisTasks, isMissingBidAnalysisResult } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
@@ -15,10 +14,9 @@ import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, G
 import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
 import type { OutlineData, OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from '../../../shared/types/exportFormat';
-import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import type { SectionId } from '../../../shared/types/navigation';
-import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
 import { countReadableWords } from '../../../shared/utils/wordCount';
+import { DEFAULT_CONTENT_GENERATION_TEMPLATE_ID } from '../contentGenerationTemplates';
 
 interface TechnicalPlanHomeProps {
   registerLeaveGuard?: (guard: ((nextSection?: string) => Promise<boolean>) | null) => void;
@@ -102,6 +100,8 @@ const resetState: TechnicalPlanState = {
   globalFactsAdjustmentTask: undefined,
   globalFacts: [] as GlobalFactGroupState[],
   contentGenerationTask: undefined,
+  contentGenerationTemplateId: DEFAULT_CONTENT_GENERATION_TEMPLATE_ID,
+  exportTemplateId: '',
   contentGenerationOptions: undefined,
   contentGenerationSections: {},
   contentGenerationPlans: {},
@@ -287,12 +287,8 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
   const { showToast } = useToast();
   const [tenderMarkdown, setTenderMarkdown] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
-  const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
-  const [exportTemplateDialogOpen, setExportTemplateDialogOpen] = useState(false);
   const [exportTemplates, setExportTemplates] = useState<ExportTemplateRecord[]>([]);
   const [exportTemplatesLoading, setExportTemplatesLoading] = useState(false);
-  const [exportTemplateSearch, setExportTemplateSearch] = useState('');
-  const [selectedExportTemplateId, setSelectedExportTemplateId] = useState('');
   const [sortLeaveDialogOpen, setSortLeaveDialogOpen] = useState(false);
   const [outlineWordControlLeaveDialogOpen, setOutlineWordControlLeaveDialogOpen] = useState(false);
   const [wordControlWarningDialog, setWordControlWarningDialog] = useState<WordControlWarningDialogState | null>(null);
@@ -330,13 +326,6 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
   const isContentGenerating = contentTaskStatus === 'running' || contentTaskStatus === 'pausing';
   const isContentPaused = contentTaskStatus === 'paused';
   const isExporting = exportProgress.running;
-  const filteredExportTemplates = useMemo(() => {
-    const keyword = exportTemplateSearch.trim().toLowerCase();
-    if (!keyword) return exportTemplates;
-    return exportTemplates.filter((template) => template.template_name.toLowerCase().includes(keyword));
-  }, [exportTemplateSearch, exportTemplates]);
-  const selectedExportTemplate = filteredExportTemplates.find((template) => template.template_id === selectedExportTemplateId) || filteredExportTemplates[0] || null;
-  const exportTemplatePreviewStyle = useMemo(() => buildExportFormatCssVars(selectedExportTemplate?.config || exportFormat), [exportFormat, selectedExportTemplate]);
   const generatedOutlineMode = state.outlineGenerationTask?.stats?.agent?.resume_payload?.outline_mode;
   const outlineModeRequiresRegeneration = Boolean(
     state.outlineData && generatedOutlineMode && generatedOutlineMode !== state.outlineMode,
@@ -460,16 +449,6 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
     setPendingWordControlWarningTaskId(null);
     setWordControlWarningDialog(dialog);
   }, [hydrated, pendingWordControlWarningTaskId, state, wordControlWarningDialog]);
-
-  useEffect(() => {
-    let cancelled = false;
-    window.yibiao?.config.load().then((cfg) => {
-      if (!cancelled && cfg?.export_format) {
-        setExportFormat(cfg.export_format);
-      }
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
 
   useEffect(() => {
     if (!registerLeaveGuard) return;
@@ -744,26 +723,17 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
       const templates = await window.yibiao?.templates.list();
       const nextTemplates = templates || [];
       setExportTemplates(nextTemplates);
-      setSelectedExportTemplateId((prev) => nextTemplates.some((template) => template.template_id === prev) ? prev : nextTemplates[0]?.template_id || '');
     } catch (error) {
       setExportTemplates([]);
-      setSelectedExportTemplateId('');
       showToast(error instanceof Error ? error.message : '读取导出模板失败', 'error');
     } finally {
       setExportTemplatesLoading(false);
     }
   }, [showToast]);
 
-  const openExportTemplateDialog = async () => {
-    if (!state.outlineData?.outline?.length) {
-      showToast('请先生成目录', 'info');
-      return;
-    }
-
-    setExportTemplateDialogOpen(true);
-    setExportTemplateSearch('');
-    await loadExportTemplates();
-  };
+  useEffect(() => {
+    if (state.step === 'generation-settings') void loadExportTemplates();
+  }, [loadExportTemplates, state.step]);
 
   const runExportWord = async (latestExportFormat: ExportFormatConfig) => {
     if (!state.outlineData?.outline?.length) {
@@ -851,14 +821,23 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
     }
   };
 
-  const confirmExportTemplate = async () => {
-    if (!selectedExportTemplate) {
-      showToast('请先选择导出模板', 'info');
+  // 使用“长嘛样”保存的模板直接导出，不再临时改选。
+  const exportWordWithConfiguredTemplate = async () => {
+    const templateId = state.exportTemplateId.trim();
+    if (!templateId) {
+      showToast('请先到生成设置的“长嘛样”选择导出模板', 'info');
       return;
     }
-
-    setExportTemplateDialogOpen(false);
-    await runExportWord(selectedExportTemplate.config);
+    try {
+      const template = await window.yibiao?.templates.get(templateId);
+      if (!template) {
+        showToast('已选择的导出模板不存在，请回到“长嘛样”重新选择', 'error');
+        return;
+      }
+      await runExportWord(template.config);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '读取导出模板失败', 'error');
+    }
   };
 
   const createExportTemplate = () => {
@@ -867,7 +846,6 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
       return;
     }
 
-    setExportTemplateDialogOpen(false);
     onSectionChange('new-template');
   };
 
@@ -989,6 +967,16 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
     setState((prev) => ({ ...prev, globalFactsMode: saved.globalFactsMode }));
   };
 
+  const saveGenerationTemplate = async (contentGenerationTemplateId: TechnicalPlanState['contentGenerationTemplateId']) => {
+    const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ contentGenerationTemplateId });
+    setState((prev) => ({ ...prev, contentGenerationTemplateId: saved.contentGenerationTemplateId }));
+  };
+
+  const saveGenerationExportTemplate = async (exportTemplateId: string) => {
+    const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ exportTemplateId });
+    setState((prev) => ({ ...prev, exportTemplateId: saved.exportTemplateId }));
+  };
+
   const openBidTemplate = async () => {
     const result = await window.yibiao?.technicalPlan.openBidTemplate();
     if (!result?.success) {
@@ -1093,7 +1081,7 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
         variant: 'primary' as const,
         disabled: isContentGenerating || isExporting || !state.outlineData,
         tooltip: isContentGenerating ? '正文生成或暂停处理中，完成暂停后再导出' : isExporting ? 'Word 正在导出，请稍候' : isContentPaused ? '正文生成已暂停，可导出当前已完成内容' : generatedContentCount ? '导出当前技术方案正文' : '可导出空目录文档，建议先生成正文',
-        onClick: () => { void openExportTemplateDialog(); },
+        onClick: () => { void exportWordWithConfiguredTemplate(); },
       },
     ]
     : [
@@ -1181,6 +1169,10 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           globalFactsMode={state.globalFactsMode || 'fabricate'}
+          contentGenerationTemplateId={state.contentGenerationTemplateId}
+          exportTemplateId={state.exportTemplateId}
+          exportTemplates={exportTemplates}
+          exportTemplatesLoading={exportTemplatesLoading}
           contentGenerationOptions={state.contentGenerationOptions}
           contentLeafCount={contentLeafCount}
           hasOutlineData={Boolean(state.outlineData)}
@@ -1193,6 +1185,9 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
           onOutlineWordControlOptionsChange={saveGenerationWordControlOptions}
           onReferenceKnowledgeDocumentIdsChange={saveGenerationReferenceKnowledge}
           onGlobalFactsModeChange={saveGenerationGlobalFactsMode}
+          onContentGenerationTemplateIdChange={saveGenerationTemplate}
+          onExportTemplateIdChange={saveGenerationExportTemplate}
+          onCreateExportTemplate={createExportTemplate}
           onContentGenerationOptionsChange={saveContentGenerationOptions}
         />
       )}
@@ -1371,82 +1366,6 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
           </>
         )}
       />
-
-      <Dialog.Root open={exportTemplateDialogOpen} onOpenChange={(open) => !open && !isExporting && setExportTemplateDialogOpen(false)}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="export-template-select-dialog">
-            <div className="export-template-select-head">
-              <div>
-                <span className="section-kicker">Word 导出</span>
-                <Dialog.Title>选择导出模板</Dialog.Title>
-                <Dialog.Description>选择一个已保存模板后继续导出。模板样式应用范围保持现有导出逻辑。</Dialog.Description>
-              </div>
-              <Dialog.Close className="detail-help-close" type="button" aria-label="关闭模板选择" disabled={isExporting}>×</Dialog.Close>
-            </div>
-
-            <div className="export-template-select-body">
-              <section className="export-template-select-list-panel" aria-label="模板列表">
-                <input
-                  className="export-template-select-search"
-                  type="text"
-                  value={exportTemplateSearch}
-                  onChange={(event) => setExportTemplateSearch(event.target.value)}
-                  placeholder="搜索模板名称"
-                />
-                <div className="export-template-select-list">
-                  {exportTemplatesLoading ? (
-                    <div className="export-template-select-empty"><strong>正在读取模板</strong><span>请稍候...</span></div>
-                  ) : null}
-                  {!exportTemplatesLoading && filteredExportTemplates.length === 0 ? (
-                    <div className="export-template-select-empty">
-                      <strong>{exportTemplates.length ? '没有匹配模板' : '暂无可用模板'}</strong>
-                      <span>{exportTemplates.length ? '请换个关键词搜索，或新建一个模板。' : '请先新建并保存模板，保存后再返回导出。'}</span>
-                      <button type="button" className="secondary-action" onClick={createExportTemplate} disabled={isExporting}>新建模板</button>
-                    </div>
-                  ) : null}
-                  {!exportTemplatesLoading && filteredExportTemplates.map((template) => {
-                    const selected = selectedExportTemplate?.template_id === template.template_id;
-                    return (
-                      <button
-                        type="button"
-                        className={`export-template-select-row${selected ? ' is-active' : ''}`}
-                        key={template.template_id}
-                        onClick={() => setSelectedExportTemplateId(template.template_id)}
-                      >
-                        <strong>{template.template_name}</strong>
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
-
-              <section className="export-template-select-preview" aria-label="模板预览">
-                {selectedExportTemplate ? (
-                  <>
-                    <div className="export-template-select-preview-head">
-                      <span className="section-kicker">预览</span>
-                      <strong>{selectedExportTemplate.template_name}</strong>
-                    </div>
-                    <TemplatePreview config={selectedExportTemplate.config} previewStyle={exportTemplatePreviewStyle} />
-                  </>
-                ) : (
-                  <div className="export-template-select-preview-empty">
-                    <strong>暂无模板预览</strong>
-                    <span>选择模板后会在这里显示预览。</span>
-                  </div>
-                )}
-              </section>
-            </div>
-
-            <div className="content-regenerate-actions export-template-select-actions">
-              <button type="button" className="secondary-action" onClick={createExportTemplate} disabled={isExporting}>新建模板</button>
-              <Dialog.Close className="secondary-action" type="button" disabled={isExporting}>取消</Dialog.Close>
-              <button type="button" className="primary-action" onClick={() => { void confirmExportTemplate(); }} disabled={exportTemplatesLoading || !selectedExportTemplate || isExporting}>继续导出</button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
 
       <Dialog.Root
         open={exportProgress.open}

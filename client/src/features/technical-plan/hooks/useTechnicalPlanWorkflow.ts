@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
 import { technicalPlanStorage } from '../services/technicalPlanStorage';
 import type { TechnicalPlanState } from '../types';
+import { DEFAULT_CONTENT_GENERATION_TEMPLATE_ID } from '../contentGenerationTemplates';
 
 const initialState: TechnicalPlanState = {
   step: 'document-analysis',
@@ -33,6 +34,8 @@ const initialState: TechnicalPlanState = {
   globalFactsAdjustmentTask: undefined,
   globalFacts: [],
   contentGenerationTask: undefined,
+  contentGenerationTemplateId: DEFAULT_CONTENT_GENERATION_TEMPLATE_ID,
+  exportTemplateId: '',
   contentGenerationSections: {},
   contentGenerationPlans: {},
   contentGenerationRuntime: undefined,

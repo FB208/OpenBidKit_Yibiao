@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect x="5.5" y="5.5" width="15" height="15" stroke="{{mark}}" stroke-width="1.2" opacity="0.4"/>
+  <rect x="2.5" y="2.5" width="15" height="15" stroke="{{mark}}" stroke-width="1.75"/>
+  <line x1="6.4" y1="10" x2="13.6" y2="10" stroke="{{mark}}" stroke-width="1.35"/>
+  <line x1="10" y1="6.4" x2="10" y2="13.6" stroke="{{mark}}" stroke-width="1.35"/>
+</svg>

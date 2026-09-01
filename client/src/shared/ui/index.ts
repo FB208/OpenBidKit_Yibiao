@@ -16,6 +16,8 @@ export { default as InputWithAction } from './InputWithAction';
 export type { InputWithActionProps } from './InputWithAction';
 export { default as MarkdownEditor } from './MarkdownEditor';
 export type { MarkdownEditorProps } from './MarkdownEditor';
+export { default as RestrictedHtmlEditor, RestrictedHtmlPreview } from './RestrictedHtmlEditor';
+export type { RestrictedHtmlEditorProps, RestrictedHtmlPreviewProps } from './RestrictedHtmlEditor';
 export { default as MarkdownFullscreenViewer } from './MarkdownFullscreenViewer';
 export type { MarkdownFullscreenViewerProps } from './MarkdownFullscreenViewer';
 export type {

@@ -96,6 +96,54 @@ export const PAPER_SIZES = [
 
 export type PaperSize = (typeof PAPER_SIZES)[number]['value'];
 
+export const HEADER_FOOTER_STYLE_OPTIONS = [
+  { value: 'plain', label: '经典文字', description: '单行页眉页脚，适合正式公文。' },
+  { value: 'band', label: '通栏色带', description: '顶底通栏色条，页脚右侧页码方块。' },
+  { value: 'rules', label: '公文双线', description: '页眉下、页脚上各一条文武线。' },
+  { value: 'top-bar', label: '开槽色带', description: '通栏色带叠层，中间白槽标题，页脚活页码。' },
+  { value: 'footer-badge', label: '底栏页码', description: '页眉保持细线，页脚色条加页码徽章。' },
+  { value: 'slant', label: '斜切色块', description: '斜切叠层色块，封面感页眉。' },
+  { value: 'letterhead', label: '品牌信头', description: '左侧色块信头，底边强调条，页码旁竖线。' },
+  { value: 'frame', label: '图框角码', description: '双线圈框、四角实心角码，页脚图签页码。' },
+] as const;
+
+export type HeaderFooterStyle = (typeof HEADER_FOOTER_STYLE_OPTIONS)[number]['value'];
+
+export const HTML_HEADER_FOOTER_STYLES: HeaderFooterStyle[] = ['top-bar', 'slant', 'letterhead', 'frame'];
+
+export const PAGE_NUMBER_PAD_OPTIONS = [
+  { value: 0, label: '不补零' },
+  { value: 2, label: '2 位（01）' },
+  { value: 3, label: '3 位（001）' },
+] as const;
+
+export type PageNumberPad = (typeof PAGE_NUMBER_PAD_OPTIONS)[number]['value'];
+
+export function resolveHeaderFooterStyle(style: string | undefined): HeaderFooterStyle {
+  if (style === 'spine') return 'letterhead';
+  if (style === 'seal') return 'frame';
+  if (HEADER_FOOTER_STYLE_OPTIONS.some((item) => item.value === style)) return style as HeaderFooterStyle;
+  return 'plain';
+}
+
+export function isDecorativeHeaderFooterStyle(style: string | undefined): boolean {
+  return resolveHeaderFooterStyle(style) !== 'plain';
+}
+
+export function isHtmlHeaderFooterStyle(style: string | undefined): boolean {
+  return HTML_HEADER_FOOTER_STYLES.includes(resolveHeaderFooterStyle(style));
+}
+
+export function usesHeaderTextColor(style: string | undefined): boolean {
+  const resolved = resolveHeaderFooterStyle(style);
+  return resolved === 'plain' || resolved === 'rules' || resolved === 'footer-badge';
+}
+
+export function usesFooterTextColor(style: string | undefined): boolean {
+  const resolved = resolveHeaderFooterStyle(style);
+  return resolved === 'plain' || resolved === 'rules';
+}
+
 /** 纸张尺寸 mm（portrait 模式 width × height） */
 export const PAPER_DIMENSIONS: Record<PaperSize, { width: number; height: number }> = {
   a4: { width: 210, height: 297 },
@@ -123,6 +171,10 @@ export interface PageSetupConfig {
   header_size: string;
   header_alignment: string;
   header_color: string;
+  header_footer_style: HeaderFooterStyle;
+  header_badge_text: string;
+  chrome_bar_color: string;
+  chrome_accent_color: string;
   footer_enabled: boolean;
   footer_text: string;
   footer_distance_cm: number;
@@ -133,6 +185,7 @@ export interface PageSetupConfig {
   page_number_enabled: boolean;
   page_number_format: string;   // '第{page}页'
   page_number_start: number;
+  page_number_pad: PageNumberPad;
 }
 
 // ── 完整导出格式配置 ──────────────────────────────
@@ -320,6 +373,10 @@ const DEFAULT_PAGE_SETUP: PageSetupConfig = {
   header_size: '小五',
   header_alignment: '居中对齐',
   header_color: '#536176',
+  header_footer_style: 'plain',
+  header_badge_text: '',
+  chrome_bar_color: '#e8eef5',
+  chrome_accent_color: '#536176',
   footer_enabled: false,
   footer_text: '',
   footer_distance_cm: 1.75,
@@ -330,6 +387,7 @@ const DEFAULT_PAGE_SETUP: PageSetupConfig = {
   page_number_enabled: false,
   page_number_format: '第{page}页',
   page_number_start: 1,
+  page_number_pad: 0,
 };
 
 const DEFAULT_BODY_TEXT: BodyTextStyleConfig = {

@@ -3,8 +3,8 @@
  * 注入到正文预览容器的 style 上，实现实时 WYSIWYG 预览
  */
 
-import type { ExportFormatConfig, HeadingStyleConfig, ListStyle, OrderedListStyle, PaperSize } from '../types/exportFormat';
-import { SIZE_TO_PT, FONT_TO_CSS, ALIGNMENT_TO_CSS, PAPER_DIMENSIONS, DEFAULT_HEADING_BORDER_CELL_COLORS } from '../types/exportFormat';
+import type { ExportFormatConfig, HeadingStyleConfig, ListStyle, OrderedListStyle, PageSetupConfig, PaperSize } from '../types/exportFormat';
+import { SIZE_TO_PT, FONT_TO_CSS, ALIGNMENT_TO_CSS, PAPER_DIMENSIONS, DEFAULT_HEADING_BORDER_CELL_COLORS, isDecorativeHeaderFooterStyle, isHtmlHeaderFooterStyle, resolveHeaderFooterStyle } from '../types/exportFormat';
 
 /**
  * 中文字号名 → pt 值
@@ -93,6 +93,87 @@ function orderedListStyleToCss(style: OrderedListStyle | string | undefined) {
   }
 }
 
+const HTML_HEADER_HEIGHT_MM: Record<string, number> = {
+  'top-bar': 13.5,
+  slant: 15.5,
+  letterhead: 13,
+  frame: 14.5,
+};
+
+const HTML_FOOTER_HEIGHT_CM: Record<string, number> = {
+  'top-bar': 0.85,
+  slant: 0.85,
+  letterhead: 0.8,
+  frame: 0.85,
+};
+
+const CHROME_HTML_FROM_EDGE_CM = 0.15;
+const CHROME_TABLE_FROM_EDGE_CM = 0.3;
+const CHROME_BODY_CLEARANCE_CM = 0.15;
+const CHROME_BAND_ROW_CM = 360 / 567;
+
+function previewShowsHeader(page: PageSetupConfig): boolean {
+  if (!page.header_enabled) return false;
+  if (isDecorativeHeaderFooterStyle(page.header_footer_style)) return true;
+  return Boolean((page.header_text || '').trim());
+}
+
+function previewShowsFooter(page: PageSetupConfig): boolean {
+  return Boolean((page.footer_enabled && (page.footer_text || '').trim()) || page.page_number_enabled);
+}
+
+function chromeFromEdgeCm(page: PageSetupConfig): number {
+  return isHtmlHeaderFooterStyle(page.header_footer_style) ? CHROME_HTML_FROM_EDGE_CM : CHROME_TABLE_FROM_EDGE_CM;
+}
+
+function decorativeHeaderHeightCm(page: PageSetupConfig): number {
+  const style = resolveHeaderFooterStyle(page.header_footer_style);
+  const htmlMm = HTML_HEADER_HEIGHT_MM[style];
+  if (htmlMm) return htmlMm / 10;
+  if (style === 'band') return CHROME_BAND_ROW_CM;
+  if (style === 'rules') return 0.9;
+  if (style === 'footer-badge') return 0.7;
+  return 0;
+}
+
+function decorativeFooterHeightCm(page: PageSetupConfig): number {
+  const style = resolveHeaderFooterStyle(page.header_footer_style);
+  if (HTML_FOOTER_HEIGHT_CM[style]) return HTML_FOOTER_HEIGHT_CM[style];
+  if (style === 'band' || style === 'footer-badge') return CHROME_BAND_ROW_CM;
+  if (style === 'rules') return 0.9;
+  return 0;
+}
+
+function minBodyMarginForChromeCm(page: PageSetupConfig, chromeHeightCm: number): number {
+  if (!(chromeHeightCm > 0)) return 0;
+  return chromeFromEdgeCm(page) + chromeHeightCm + CHROME_BODY_CLEARANCE_CM;
+}
+
+function previewPageChromeLayout(page: PageSetupConfig): {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+  headerChrome: number;
+  footerChrome: number;
+} {
+  const top = page.margin_top_cm ?? 2;
+  const bottom = page.margin_bottom_cm ?? 2;
+  const left = page.margin_left_cm ?? 2;
+  const right = page.margin_right_cm ?? 2;
+  const decorative = isDecorativeHeaderFooterStyle(page.header_footer_style);
+  const headerChrome = decorative && previewShowsHeader(page) ? decorativeHeaderHeightCm(page) : 0;
+  const footerChrome = decorative && previewShowsFooter(page) ? decorativeFooterHeightCm(page) : 0;
+  return {
+    top: headerChrome > 0 ? Math.max(top, minBodyMarginForChromeCm(page, headerChrome)) : top,
+    bottom: footerChrome > 0 ? Math.max(bottom, minBodyMarginForChromeCm(page, footerChrome)) : bottom,
+    left,
+    right,
+    headerChrome,
+    footerChrome,
+  };
+}
+
 /**
  * 将完整的 ExportFormatConfig 转换为 CSS 自定义属性键值对
  * 可直接展开到 React 组件的 style 属性上
@@ -109,10 +190,13 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
   vars['--ef-page-width'] = `${pageWidth}mm`;
   vars['--ef-page-height'] = `${pageHeight}mm`;
   vars['--ef-page-aspect'] = `${pageWidth} / ${pageHeight}`;
-  vars['--ef-page-padding-top'] = `${config.page.margin_top_cm}cm`;
-  vars['--ef-page-padding-bottom'] = `${config.page.margin_bottom_cm}cm`;
-  vars['--ef-page-padding-left'] = `${config.page.margin_left_cm}cm`;
-  vars['--ef-page-padding-right'] = `${config.page.margin_right_cm}cm`;
+  const pageLayout = previewPageChromeLayout(config.page);
+  vars['--ef-page-padding-top'] = `${pageLayout.top}cm`;
+  vars['--ef-page-padding-bottom'] = `${pageLayout.bottom}cm`;
+  vars['--ef-page-padding-left'] = `${pageLayout.left}cm`;
+  vars['--ef-page-padding-right'] = `${pageLayout.right}cm`;
+  vars['--ef-header-chrome-height'] = `${pageLayout.headerChrome}cm`;
+  vars['--ef-footer-chrome-height'] = `${pageLayout.footerChrome}cm`;
   vars['--ef-header-font'] = chineseFontToCss(config.page.header_font || '宋体');
   vars['--ef-header-size'] = `${chineseSizeToPt(config.page.header_size || '小五')}pt`;
   vars['--ef-header-align'] = alignmentToCss(config.page.header_alignment || '居中对齐');
@@ -121,6 +205,8 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
   vars['--ef-footer-size'] = `${chineseSizeToPt(config.page.footer_size || '小五')}pt`;
   vars['--ef-footer-align'] = alignmentToCss(config.page.footer_alignment || '居中对齐');
   vars['--ef-footer-color'] = config.page.footer_color || '#536176';
+  vars['--ef-chrome-bar'] = config.page.chrome_bar_color || '#e8eef5';
+  vars['--ef-chrome-accent'] = config.page.chrome_accent_color || '#536176';
 
   // ── 章节页框 ──
   const headingBorder = config.heading_border;

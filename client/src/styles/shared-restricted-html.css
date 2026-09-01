@@ -1,0 +1,197 @@
+.restricted-html-editor {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto minmax(280px, 1fr) auto;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
+}
+
+.restricted-html-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  background: rgba(248, 250, 253, 0.92);
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.restricted-html-tabs button {
+  height: 32px;
+  padding: 0 12px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  font-weight: 700;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--yb-radius-pill);
+  cursor: pointer;
+}
+
+.restricted-html-tabs button:hover,
+.restricted-html-tabs button[aria-selected='true'] {
+  color: var(--yb-primary);
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.16);
+}
+
+.restricted-html-tabs button:focus-visible,
+.restricted-html-editable:focus-visible {
+  outline: 2px solid rgba(33, 116, 253, 0.42);
+  outline-offset: -2px;
+}
+
+.restricted-html-status {
+  margin-left: auto;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+}
+
+.restricted-html-status.is-error,
+.restricted-html-issues li[data-level='error'] {
+  color: var(--yb-danger);
+}
+
+.restricted-html-editable,
+.restricted-html-preview {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 26px 30px 34px;
+  color: var(--yb-text);
+  background: #ffffff;
+}
+
+.restricted-html-editable {
+  cursor: text;
+}
+
+.restricted-html-editable:empty::before {
+  color: var(--yb-text-muted);
+  content: attr(data-placeholder);
+  pointer-events: none;
+}
+
+.restricted-html-document {
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+.restricted-html-document > *:first-child {
+  margin-top: 0;
+}
+
+.restricted-html-document > *:last-child {
+  margin-bottom: 0;
+}
+
+.restricted-html-document h1,
+.restricted-html-document h2,
+.restricted-html-document h3,
+.restricted-html-document h4,
+.restricted-html-document h5,
+.restricted-html-document h6 {
+  margin: 1.35em 0 0.62em;
+  color: var(--yb-text);
+  line-height: 1.4;
+}
+
+.restricted-html-document h1 { font-size: 26px; }
+.restricted-html-document h2 { font-size: 22px; }
+.restricted-html-document h3 { font-size: 19px; }
+.restricted-html-document h4 { font-size: 17px; }
+.restricted-html-document h5 { font-size: 15px; }
+.restricted-html-document h6 { font-size: 14px; }
+
+.restricted-html-document p,
+.restricted-html-document ol,
+.restricted-html-document ul,
+.restricted-html-document figure,
+.restricted-html-document table,
+.restricted-html-document aside {
+  margin: 0 0 16px;
+}
+
+.restricted-html-document ol,
+.restricted-html-document ul {
+  padding-left: 1.8em;
+}
+
+.restricted-html-document table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.restricted-html-document caption,
+.restricted-html-document figcaption {
+  padding: 6px 0;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  text-align: center;
+}
+
+.restricted-html-document th,
+.restricted-html-document td {
+  min-width: 88px;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  border: 1px solid var(--yb-border-soft);
+}
+
+.restricted-html-document th {
+  background: rgba(33, 116, 253, 0.06);
+}
+
+.restricted-html-document template,
+.restricted-html-document img:not([src]) {
+  display: none;
+}
+
+.restricted-html-document aside {
+  color: var(--yb-text-soft);
+  font-size: 12px;
+}
+
+.restricted-html-empty {
+  display: grid;
+  min-height: 220px;
+  margin: 0;
+  place-items: center;
+  color: var(--yb-text-muted);
+}
+
+.restricted-html-issues {
+  display: grid;
+  gap: 4px;
+  max-height: 132px;
+  padding: 10px 16px;
+  margin: 0;
+  overflow: auto;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  list-style: none;
+  background: rgba(248, 250, 253, 0.92);
+  border-top: 1px solid var(--yb-border-soft);
+}
+
+.restricted-html-editor[data-disabled] {
+  opacity: 0.64;
+}
+
+@media (max-width: 720px) {
+  .restricted-html-editable,
+  .restricted-html-preview {
+    padding: 20px 18px 28px;
+  }
+
+  .restricted-html-status {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

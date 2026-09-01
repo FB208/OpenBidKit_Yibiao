@@ -10,6 +10,7 @@ const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.
 const { REMOTE_IMAGE_RETRY_ATTEMPTS, REMOTE_IMAGE_RETRY_DELAY_MS } = require('../utils/remoteImageRetry.cjs');
 const { renderMarkdownHtml } = require('../utils/renderMarkdownHtml.cjs');
 const { getLocalImageRenderService } = require('./localImageRenderService.cjs');
+const { fillChromeHeaderHtml, fillFooterChromeSvg, chineseSizeToPt } = require('./headerFooterChrome.cjs');
 const {
   AlignmentType,
   BorderStyle,
@@ -28,6 +29,7 @@ const {
   PageOrientation,
   Paragraph,
   ShadingType,
+  SimpleField,
   Table,
   TableCell,
   TableLayoutType,
@@ -438,14 +440,142 @@ function buildChapterFrameTable(exportFormat, rows) {
   });
 }
 
-function createPageNumberRuns(format, runOptions) {
+function hexLuminance(value) {
+  const raw = String(value || '').trim().replace(/^#/, '');
+  if (!/^[0-9a-f]{6}$/i.test(raw)) return 0;
+  const r = Number.parseInt(raw.slice(0, 2), 16);
+  const g = Number.parseInt(raw.slice(2, 4), 16);
+  const b = Number.parseInt(raw.slice(4, 6), 16);
+  return (r * 299 + g * 587 + b * 114) / 1000;
+}
+
+function darkenHex(value, amount = 0.18) {
+  const raw = String(value || '').trim().replace(/^#/, '');
+  if (!/^[0-9a-f]{6}$/i.test(raw)) return '#111111';
+  const channel = (start) => Math.max(0, Math.round(Number.parseInt(raw.slice(start, start + 2), 16) * (1 - amount)));
+  return `#${[0, 2, 4].map((start) => channel(start).toString(16).padStart(2, '0')).join('')}`;
+}
+
+function resolveHeaderFooterStyle(pageSetup) {
+  const style = pageSetup?.header_footer_style;
+  if (style === 'band' || style === 'rules' || style === 'top-bar' || style === 'footer-badge' || style === 'slant' || style === 'letterhead' || style === 'frame') return style;
+  if (style === 'spine') return 'letterhead';
+  if (style === 'seal') return 'frame';
+  return 'plain';
+}
+
+function isHtmlHeaderFooterStyle(pageSetup) {
+  const style = resolveHeaderFooterStyle(pageSetup);
+  return style === 'top-bar' || style === 'slant' || style === 'letterhead' || style === 'frame';
+}
+
+function isDecorativeHeaderFooterStyle(pageSetup) {
+  return resolveHeaderFooterStyle(pageSetup) !== 'plain';
+}
+
+function chromeColors(pageSetup) {
+  const bar = pageSetup?.chrome_bar_color || '#e8eef5';
+  const accent = pageSetup?.chrome_accent_color || '#536176';
+  const barFill = normalizeDocxColor(bar, 'E8EEF5');
+  const accentFill = normalizeDocxColor(accent, '536176');
+  const onAccent = hexLuminance(accent) < 160 ? 'FFFFFF' : '111111';
+  return {
+    bar: barFill,
+    accent: accentFill,
+    onBar: hexLuminance(bar) < 160 ? 'FFFFFF' : accentFill,
+    onAccent,
+    badge: normalizeDocxColor(darkenHex(accent, 0.12), '3A4452'),
+    slot: onAccent,
+  };
+}
+
+function noneBorder() {
+  return { style: BorderStyle.NIL, size: 0, color: 'FFFFFF' };
+}
+
+function chromeNilBorders() {
+  const none = noneBorder();
+  return { top: none, bottom: none, left: none, right: none };
+}
+
+function getPageWidthTwips(pageSetup) {
+  const dims = PAPER_DIMENSIONS_MM[pageSetup?.paper_size] || PAPER_DIMENSIONS_MM.a4;
+  const landscape = pageSetup?.orientation === 'landscape';
+  return mmToTwips(landscape ? dims.height : dims.width);
+}
+
+function chromeParagraph(children, options = {}) {
+  return new Paragraph({
+    children: children?.length ? children : [textRun('')],
+    alignment: options.alignment || AlignmentType.CENTER,
+    spacing: { before: 0, after: 0, line: 240 },
+  });
+}
+
+function chromeMicroParagraph() {
+  return new Paragraph({
+    children: [new TextRun({ text: '', size: 2 })],
+    spacing: { before: 0, after: 0, line: 20 },
+  });
+}
+
+function chromeCell({ children, width, fill, margins, borders }) {
+  return new TableCell({
+    children,
+    width: { size: width, type: WidthType.DXA },
+    shading: fill ? { type: ShadingType.CLEAR, fill } : undefined,
+    margins: margins || { top: 40, bottom: 40, left: 80, right: 80 },
+    verticalAlign: VerticalAlignTable.CENTER,
+    borders: borders || chromeNilBorders(),
+  });
+}
+
+function bleedTableRows(pageSetup, columnWidths, rows, options = {}) {
+  const pageWidth = getPageWidthTwips(pageSetup);
+  const leftMargin = cmToTwips(pageSetup?.margin_left_cm ?? 2);
+  const frame = options.frameColor
+    ? { style: BorderStyle.SINGLE, size: 12, color: options.frameColor }
+    : noneBorder();
+  return new Table({
+    width: { size: pageWidth, type: WidthType.DXA },
+    indent: { size: -leftMargin, type: WidthType.DXA },
+    layout: TableLayoutType.FIXED,
+    columnWidths,
+    borders: {
+      top: frame,
+      bottom: frame,
+      left: frame,
+      right: frame,
+      insideHorizontal: noneBorder(),
+      insideVertical: options.insideVerticalColor
+        ? { style: BorderStyle.SINGLE, size: 8, color: options.insideVerticalColor }
+        : noneBorder(),
+    },
+    rows: rows.map((row) => new TableRow({
+      height: { value: row.height, rule: row.rule || HeightRule.ATLEAST },
+      children: row.cells,
+    })),
+  });
+}
+
+function bleedTable(pageSetup, columnWidths, cells, rowHeight) {
+  return bleedTableRows(pageSetup, columnWidths, [{ cells, height: rowHeight }]);
+}
+
+function createPageNumberRuns(format, runOptions, pad = 0) {
   const parts = String(format || '第{page}页').split('{page}');
   const runs = [];
+  const safePad = Math.max(0, Math.min(6, Math.floor(Number(pad) || 0)));
 
   if (parts[0]) {
     runs.push(new TextRun({ ...runOptions, text: cleanText(parts[0]) }));
   }
-  runs.push(new TextRun({ ...runOptions, children: [PageNumber.CURRENT] }));
+  if (safePad > 0) {
+    const picture = '0'.repeat(safePad);
+    runs.push(new SimpleField(`PAGE \\# "${picture}"`, { ...runOptions, text: picture }));
+  } else {
+    runs.push(new TextRun({ ...runOptions, children: [PageNumber.CURRENT] }));
+  }
   if (parts[1]) {
     runs.push(new TextRun({ ...runOptions, text: cleanText(parts[1]) }));
   }
@@ -453,62 +583,510 @@ function createPageNumberRuns(format, runOptions) {
   return runs;
 }
 
-function buildWordHeaders(pageSetup) {
-  const enabled = pageSetup ? pageSetup.header_enabled === true : false;
-  const headerText = cleanText(pageSetup?.header_text || '').trim();
-  if (!enabled || !headerText) return undefined;
+function emptyHeader() {
+  return new Header({ children: [new Paragraph({ children: [] })] });
+}
 
-  const runOptions = {
+function emptyFooter() {
+  return new Footer({ children: [new Paragraph({ children: [] })] });
+}
+
+function withFirstPageEmpty(collection, CtorEmpty, firstPageDifferent) {
+  if (!collection) return undefined;
+  if (!firstPageDifferent) return collection;
+  return { ...collection, first: CtorEmpty() };
+}
+
+function headerRunOptions(pageSetup, color) {
+  return {
     font: pageSetup?.header_font || '宋体',
     size: chineseSizeToHalfPt(pageSetup?.header_size || '小五'),
-    color: normalizeDocxColor(pageSetup?.header_color || '#536176'),
-  };
-
-  return {
-    default: new Header({
-      children: [
-        new Paragraph({
-          alignment: alignmentToWordType(pageSetup?.header_alignment || '居中对齐'),
-          children: [new TextRun({ ...runOptions, text: headerText })],
-        }),
-      ],
-    }),
+    color: color || normalizeDocxColor(pageSetup?.header_color || '#536176'),
   };
 }
 
-function buildWordFooters(pageSetup) {
+function footerRunOptions(pageSetup, color) {
+  return {
+    font: pageSetup?.footer_font || '宋体',
+    size: chineseSizeToHalfPt(pageSetup?.footer_size || '小五'),
+    color: color || normalizeDocxColor(pageSetup?.footer_color || '#536176'),
+  };
+}
+
+function shouldBuildHeader(pageSetup) {
+  if (!pageSetup || pageSetup.header_enabled !== true) return false;
+  if (isDecorativeHeaderFooterStyle(pageSetup)) return true;
+  return Boolean(cleanText(pageSetup.header_text || '').trim());
+}
+
+function shouldBuildFooter(pageSetup) {
+  const footerEnabled = isFooterEnabled(pageSetup);
+  const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
+  return Boolean(footerText) || isPageNumberEnabled(pageSetup);
+}
+
+function buildPlainHeader(pageSetup) {
+  const headerText = cleanText(pageSetup?.header_text || '').trim();
+  const runOptions = headerRunOptions(pageSetup);
+  return new Header({
+    children: [
+      new Paragraph({
+        alignment: alignmentToWordType(pageSetup?.header_alignment || '居中对齐'),
+        children: [new TextRun({ ...runOptions, text: headerText })],
+      }),
+    ],
+  });
+}
+
+function buildRulesHeader(pageSetup) {
+  const headerText = cleanText(pageSetup?.header_text || '').trim();
+  const colors = chromeColors(pageSetup);
+  const runOptions = headerRunOptions(pageSetup);
+  const line = { style: BorderStyle.SINGLE, size: 12, color: colors.accent, space: 1 };
+  const thin = { style: BorderStyle.SINGLE, size: 6, color: colors.accent, space: 1 };
+  return new Header({
+    children: [
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 0, after: 40, line: 240 },
+        children: [new TextRun({ ...runOptions, text: headerText })],
+      }),
+      new Paragraph({
+        spacing: { before: 0, after: 0, line: 40 },
+        border: { top: line, bottom: thin },
+        children: [textRun('')],
+      }),
+    ],
+  });
+}
+
+function buildBandHeader(pageSetup) {
+  const colors = chromeColors(pageSetup);
+  const headerText = cleanText(pageSetup?.header_text || '').trim();
+  const badgeText = cleanText(pageSetup?.header_badge_text || '').trim().slice(0, 4);
+  const pageWidth = getPageWidthTwips(pageSetup);
+  const badgeWidth = cmToTwips(1.15);
+  const centerWidth = Math.max(400, pageWidth - badgeWidth * 2);
+  const runOptions = headerRunOptions(pageSetup, colors.onBar);
+  const badgeRun = { ...headerRunOptions(pageSetup, colors.onAccent), bold: true };
+  return new Header({
+    children: [bleedTable(pageSetup, [badgeWidth, centerWidth, badgeWidth], [
+      chromeCell({
+        width: badgeWidth,
+        fill: colors.accent,
+        children: [chromeParagraph([new TextRun({ ...badgeRun, text: badgeText })])],
+        margins: { top: 40, bottom: 40, left: 40, right: 40 },
+      }),
+      chromeCell({
+        width: centerWidth,
+        fill: colors.bar,
+        children: [chromeParagraph([new TextRun({ ...runOptions, text: headerText })])],
+      }),
+      chromeCell({
+        width: badgeWidth,
+        fill: colors.bar,
+        children: [chromeParagraph([textRun('')])],
+      }),
+    ], 360)],
+  });
+}
+
+function chromeFillCell(width, fill, children, margins) {
+  return chromeCell({
+    width,
+    fill,
+    children: children || [chromeMicroParagraph()],
+    margins: margins || { top: 0, bottom: 0, left: 0, right: 0 },
+  });
+}
+
+function mmToCssPx(mm) {
+  return Math.max(1, Math.round((Number(mm) || 0) * 96 / 25.4));
+}
+
+const HTML_HEADER_HEIGHT_MM = {
+  'top-bar': 13.5,
+  slant: 15.5,
+  letterhead: 13,
+  frame: 14.5,
+};
+
+const HTML_FOOTER_HEIGHT_CM = {
+  'top-bar': 0.85,
+  slant: 0.85,
+  letterhead: 0.8,
+  frame: 0.85,
+};
+
+const CHROME_HTML_FROM_EDGE_CM = 0.15;
+const CHROME_TABLE_FROM_EDGE_CM = 0.3;
+const CHROME_BODY_CLEARANCE_CM = 0.15;
+const CHROME_BAND_ROW_TWIPS = 360;
+
+function chromeFromEdgeCm(pageSetup) {
+  return isHtmlHeaderFooterStyle(pageSetup) ? CHROME_HTML_FROM_EDGE_CM : CHROME_TABLE_FROM_EDGE_CM;
+}
+
+function decorativeHeaderHeightCm(pageSetup) {
+  const style = resolveHeaderFooterStyle(pageSetup);
+  const htmlMm = HTML_HEADER_HEIGHT_MM[style];
+  if (htmlMm) return htmlMm / 10;
+  if (style === 'band') return CHROME_BAND_ROW_TWIPS / 567;
+  if (style === 'rules') return 0.9;
+  if (style === 'footer-badge') return 0.7;
+  return 0;
+}
+
+function decorativeFooterHeightCm(pageSetup) {
+  const style = resolveHeaderFooterStyle(pageSetup);
+  if (HTML_FOOTER_HEIGHT_CM[style]) return HTML_FOOTER_HEIGHT_CM[style];
+  if (style === 'band' || style === 'footer-badge') return CHROME_BAND_ROW_TWIPS / 567;
+  if (style === 'rules') return 0.9;
+  return 0;
+}
+
+function minBodyMarginForChromeCm(pageSetup, chromeHeightCm) {
+  if (!(chromeHeightCm > 0)) return 0;
+  return chromeFromEdgeCm(pageSetup) + chromeHeightCm + CHROME_BODY_CLEARANCE_CM;
+}
+
+function resolveWordPageMargins(pageSetup) {
+  const top = pageSetup?.margin_top_cm ?? 2;
+  const bottom = pageSetup?.margin_bottom_cm ?? 2;
+  const decorative = isDecorativeHeaderFooterStyle(pageSetup);
+  const fromEdge = decorative ? chromeFromEdgeCm(pageSetup) : null;
+  return {
+    top: decorative && shouldBuildHeader(pageSetup)
+      ? Math.max(top, minBodyMarginForChromeCm(pageSetup, decorativeHeaderHeightCm(pageSetup)))
+      : top,
+    bottom: decorative && shouldBuildFooter(pageSetup)
+      ? Math.max(bottom, minBodyMarginForChromeCm(pageSetup, decorativeFooterHeightCm(pageSetup)))
+      : bottom,
+    left: pageSetup?.margin_left_cm ?? 2,
+    right: pageSetup?.margin_right_cm ?? 2,
+    header: decorative ? fromEdge : 1.25,
+    footer: decorative ? fromEdge : (pageSetup?.footer_distance_cm ?? 1.75),
+  };
+}
+
+async function buildHtmlChromeHeader(pageSetup, style) {
+  const colors = chromeColors(pageSetup);
+  const headerText = cleanText(pageSetup?.header_text || '').trim();
+  const pageWidth = getPageWidthTwips(pageSetup);
+  const dims = PAPER_DIMENSIONS_MM[pageSetup?.paper_size] || PAPER_DIMENSIONS_MM.a4;
+  const landscape = pageSetup?.orientation === 'landscape';
+  const pageWidthMm = landscape ? dims.height : dims.width;
+  const heightMm = HTML_HEADER_HEIGHT_MM[style] || 13.5;
+  const widthPx = mmToCssPx(pageWidthMm);
+  const heightPx = mmToCssPx(heightMm);
+  const html = fillChromeHeaderHtml(style, {
+    accent: `#${colors.accent}`,
+    bar: `#${colors.bar}`,
+    text: headerText,
+    font: pageSetup?.header_font || '宋体',
+    sizePt: chineseSizeToPt(pageSetup?.header_size || '小五'),
+  });
+  const png = await getLocalImageRenderService().renderExactHtmlToPng({
+    html,
+    width: widthPx,
+    height: heightPx,
+    scale: 2,
+  });
+  return new Header({
+    children: [bleedTable(pageSetup, [pageWidth], [
+      chromeFillCell(pageWidth, undefined, [
+        new Paragraph({
+          spacing: { before: 0, after: 0, line: 20 },
+          children: [new ImageRun({
+            type: 'png',
+            data: png.buffer,
+            transformation: { width: widthPx, height: heightPx },
+            altText: { title: '页眉', description: headerText || '页眉', name: 'header' },
+          })],
+        }),
+      ]),
+    ], cmToTwips(heightMm / 10))],
+  });
+}
+
+function buildFooterBadgeHeader(pageSetup) {
+  const colors = chromeColors(pageSetup);
+  const headerText = cleanText(pageSetup?.header_text || '').trim();
+  const runOptions = headerRunOptions(pageSetup);
+  return new Header({
+    children: [
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 0, after: 40, line: 240 },
+        border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: colors.accent, space: 1 } },
+        children: [new TextRun({ ...runOptions, text: headerText })],
+      }),
+    ],
+  });
+}
+
+async function buildWordHeaders(pageSetup) {
+  if (!shouldBuildHeader(pageSetup)) return undefined;
+
+  const style = resolveHeaderFooterStyle(pageSetup);
+  let header;
+  if (style === 'band') header = buildBandHeader(pageSetup);
+  else if (style === 'rules') header = buildRulesHeader(pageSetup);
+  else if (isHtmlHeaderFooterStyle(pageSetup)) header = await buildHtmlChromeHeader(pageSetup, style);
+  else if (style === 'footer-badge') header = buildFooterBadgeHeader(pageSetup);
+  else header = buildPlainHeader(pageSetup);
+
+  return withFirstPageEmpty({ default: header }, emptyHeader, pageSetup?.first_page_different === true);
+}
+
+function buildPlainFooter(pageSetup) {
   const footerEnabled = isFooterEnabled(pageSetup);
   const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
   const pageNumberEnabled = isPageNumberEnabled(pageSetup);
-  if (!footerText && !pageNumberEnabled) return undefined;
-
-  const runOptions = {
-    font: pageSetup?.footer_font || '宋体',
-    size: chineseSizeToHalfPt(pageSetup?.footer_size || '小五'),
-    color: normalizeDocxColor(pageSetup?.footer_color || '#536176'),
-  };
+  const runOptions = footerRunOptions(pageSetup);
   const footerChildren = [];
-
-  if (footerText) {
-    footerChildren.push(new TextRun({ ...runOptions, text: footerText }));
-  }
-  if (footerText && pageNumberEnabled) {
-    footerChildren.push(new TextRun({ ...runOptions, text: '    ' }));
-  }
+  if (footerText) footerChildren.push(new TextRun({ ...runOptions, text: footerText }));
+  if (footerText && pageNumberEnabled) footerChildren.push(new TextRun({ ...runOptions, text: '    ' }));
   if (pageNumberEnabled) {
-    footerChildren.push(...createPageNumberRuns(pageSetup?.page_number_format || '第{page}页', runOptions));
+    footerChildren.push(...createPageNumberRuns(pageSetup?.page_number_format || '第{page}页', runOptions, pageSetup?.page_number_pad));
+  }
+  return new Footer({
+    children: [
+      new Paragraph({
+        alignment: alignmentToWordType(footerEnabled ? (pageSetup?.footer_alignment || '居中对齐') : '居中对齐'),
+        children: footerChildren,
+      }),
+    ],
+  });
+}
+
+function buildRulesFooter(pageSetup) {
+  const colors = chromeColors(pageSetup);
+  const footerEnabled = isFooterEnabled(pageSetup);
+  const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
+  const pageNumberEnabled = isPageNumberEnabled(pageSetup);
+  const runOptions = footerRunOptions(pageSetup);
+  const children = [];
+  if (footerText) children.push(new TextRun({ ...runOptions, text: footerText }));
+  if (footerText && pageNumberEnabled) children.push(new TextRun({ ...runOptions, text: '    ' }));
+  if (pageNumberEnabled) {
+    children.push(...createPageNumberRuns(pageSetup?.page_number_format || '第{page}页', runOptions, pageSetup?.page_number_pad));
+  }
+  const line = { style: BorderStyle.SINGLE, size: 12, color: colors.accent, space: 1 };
+  const thin = { style: BorderStyle.SINGLE, size: 6, color: colors.accent, space: 1 };
+  return new Footer({
+    children: [
+      new Paragraph({
+        spacing: { before: 0, after: 40, line: 40 },
+        border: { top: line, bottom: thin },
+        children: [textRun('')],
+      }),
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 40, after: 0, line: 240 },
+        children: children.length ? children : [textRun('')],
+      }),
+    ],
+  });
+}
+
+function buildBandFooter(pageSetup) {
+  const colors = chromeColors(pageSetup);
+  const footerEnabled = isFooterEnabled(pageSetup);
+  const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
+  const pageNumberEnabled = isPageNumberEnabled(pageSetup);
+  const pageWidth = getPageWidthTwips(pageSetup);
+  const badgeWidth = cmToTwips(2.1);
+  const spacerWidth = cmToTwips(1.15);
+  const centerWidth = Math.max(400, pageWidth - badgeWidth - spacerWidth);
+  const runOptions = footerRunOptions(pageSetup, colors.onAccent);
+  const badgeRun = { ...footerRunOptions(pageSetup, hexLuminance(`#${colors.badge}`) < 160 ? 'FFFFFF' : '111111'), bold: true };
+  const pageChildren = pageNumberEnabled
+    ? createPageNumberRuns(pageSetup?.page_number_format || '{page}', badgeRun, pageSetup?.page_number_pad)
+    : [textRun('')];
+  return new Footer({
+    children: [bleedTable(pageSetup, [spacerWidth, centerWidth, badgeWidth], [
+      chromeCell({ width: spacerWidth, fill: colors.accent, children: [chromeParagraph([textRun('')])] }),
+      chromeCell({
+        width: centerWidth,
+        fill: colors.accent,
+        children: [chromeParagraph([new TextRun({ ...runOptions, text: footerText })])],
+      }),
+      chromeCell({
+        width: badgeWidth,
+        fill: colors.badge,
+        children: [chromeParagraph(pageChildren)],
+        margins: { top: 40, bottom: 40, left: 60, right: 60 },
+      }),
+    ], 360)],
+  });
+}
+
+async function buildHtmlChromeFooter(pageSetup, style) {
+  const colors = chromeColors(pageSetup);
+  const footerEnabled = isFooterEnabled(pageSetup);
+  const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
+  const pageNumberEnabled = isPageNumberEnabled(pageSetup);
+  const pageWidth = getPageWidthTwips(pageSetup);
+  const runOptionsBase = footerRunOptions(pageSetup, colors.accent);
+  const pageRunBase = { ...footerRunOptions(pageSetup, colors.accent), bold: true };
+  const pageChildrenBase = pageNumberEnabled
+    ? createPageNumberRuns(pageSetup?.page_number_format || '{page}', pageRunBase, pageSetup?.page_number_pad)
+    : [new TextRun({ text: '', size: 2 })];
+
+  if (style === 'letterhead') {
+    const barWidth = cmToTwips(0.22);
+    const pageBoxWidth = cmToTwips(1.7);
+    const textWidth = Math.max(400, pageWidth - barWidth - pageBoxWidth);
+    return new Footer({
+      children: [bleedTableRows(pageSetup, [textWidth, barWidth, pageBoxWidth], [
+        {
+          height: cmToTwips(HTML_FOOTER_HEIGHT_CM.letterhead),
+          cells: [
+            chromeFillCell(
+              textWidth,
+              'FFFFFF',
+              [chromeParagraph([new TextRun({ ...runOptionsBase, text: footerText })], { alignment: AlignmentType.LEFT })],
+              { top: 40, bottom: 40, left: 0, right: 80 },
+            ),
+            chromeFillCell(barWidth, colors.accent, [chromeMicroParagraph()]),
+            chromeFillCell(
+              pageBoxWidth,
+              'FFFFFF',
+              [chromeParagraph(pageChildrenBase)],
+              { top: 40, bottom: 40, left: 60, right: 0 },
+            ),
+          ],
+        },
+      ])],
+    });
   }
 
-  return {
-    default: new Footer({
-      children: [
-        new Paragraph({
-          alignment: alignmentToWordType(footerEnabled ? (pageSetup?.footer_alignment || '居中对齐') : '居中对齐'),
-          children: footerChildren,
-        }),
-      ],
-    }),
+  const layouts = {
+    'top-bar': {
+      leftFill: colors.accent,
+      centerFill: 'FFFFFF',
+      rightFill: colors.badge,
+      mark: `#${colors.onAccent}`,
+      textColor: colors.accent,
+      pageColor: colors.onAccent,
+      iconBg: `#${colors.accent}`,
+      leftCm: 1.15,
+      rightCm: 1.6,
+    },
+    slant: {
+      leftFill: colors.accent,
+      centerFill: colors.bar,
+      rightFill: colors.badge,
+      mark: `#${colors.onAccent}`,
+      textColor: colors.accent,
+      pageColor: colors.onAccent,
+      iconBg: `#${colors.accent}`,
+      leftCm: 1.35,
+      rightCm: 1.6,
+    },
+    frame: {
+      leftFill: 'FFFFFF',
+      centerFill: 'FFFFFF',
+      rightFill: 'FFFFFF',
+      mark: `#${colors.accent}`,
+      textColor: colors.accent,
+      pageColor: colors.accent,
+      iconBg: '#FFFFFF',
+      leftCm: 1.0,
+      rightCm: 1.7,
+    },
   };
+  const layout = layouts[style] || layouts['top-bar'];
+  const iconWidth = cmToTwips(layout.leftCm);
+  const pageBoxWidth = cmToTwips(layout.rightCm);
+  const centerWidth = Math.max(400, pageWidth - iconWidth - pageBoxWidth);
+  const runOptions = footerRunOptions(pageSetup, layout.textColor);
+  const pageRun = { ...footerRunOptions(pageSetup, layout.pageColor), bold: true };
+  const pageChildren = pageNumberEnabled
+    ? createPageNumberRuns(pageSetup?.page_number_format || '{page}', pageRun, pageSetup?.page_number_pad)
+    : [new TextRun({ text: '', size: 2 })];
+  const svg = fillFooterChromeSvg(style, layout.mark);
+  const iconPng = await getLocalImageRenderService().renderExactHtmlToPng({
+    html: `<div style="width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:${layout.iconBg}">${svg}</div>`,
+    width: 36,
+    height: 36,
+    scale: 2,
+  });
+  const iconRun = new ImageRun({
+    type: 'svg',
+    data: Buffer.from(svg, 'utf8'),
+    fallback: { type: 'png', data: iconPng.buffer },
+    transformation: { width: 18, height: 18 },
+    altText: { title: '页脚标记', description: '页脚标记', name: 'footer-mark' },
+  });
+  return new Footer({
+    children: [bleedTableRows(pageSetup, [iconWidth, centerWidth, pageBoxWidth], [
+      {
+        height: cmToTwips(HTML_FOOTER_HEIGHT_CM[style] || HTML_FOOTER_HEIGHT_CM['top-bar']),
+        cells: [
+          chromeFillCell(iconWidth, layout.leftFill, [
+            chromeParagraph([iconRun]),
+          ], { top: 40, bottom: 40, left: 40, right: 40 }),
+          chromeFillCell(
+            centerWidth,
+            layout.centerFill,
+            [chromeParagraph([new TextRun({ ...runOptions, text: footerText })])],
+            { top: 40, bottom: 40, left: 80, right: 80 },
+          ),
+          chromeFillCell(
+            pageBoxWidth,
+            layout.rightFill,
+            [chromeParagraph(pageChildren)],
+            { top: 40, bottom: 40, left: 40, right: 40 },
+          ),
+        ],
+      },
+    ], style === 'frame' ? { frameColor: colors.accent, insideVerticalColor: colors.accent } : {})],
+  });
+}
+
+function buildFooterBadgeFooter(pageSetup) {
+  const colors = chromeColors(pageSetup);
+  const footerEnabled = isFooterEnabled(pageSetup);
+  const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
+  const pageNumberEnabled = isPageNumberEnabled(pageSetup);
+  const pageWidth = getPageWidthTwips(pageSetup);
+  const badgeWidth = cmToTwips(2.1);
+  const textWidth = pageWidth - badgeWidth;
+  const runOptions = footerRunOptions(pageSetup, colors.onBar);
+  const badgeRun = { ...footerRunOptions(pageSetup, colors.onAccent), bold: true };
+  const pageChildren = pageNumberEnabled
+    ? createPageNumberRuns(pageSetup?.page_number_format || '{page}', badgeRun, pageSetup?.page_number_pad)
+    : [textRun('')];
+  return new Footer({
+    children: [bleedTable(pageSetup, [textWidth, badgeWidth], [
+      chromeCell({
+        width: textWidth,
+        fill: colors.bar,
+        children: [chromeParagraph([new TextRun({ ...runOptions, text: footerText })])],
+      }),
+      chromeCell({
+        width: badgeWidth,
+        fill: colors.accent,
+        children: [chromeParagraph(pageChildren)],
+      }),
+    ], 360)],
+  });
+}
+
+async function buildWordFooters(pageSetup) {
+  if (!shouldBuildFooter(pageSetup)) return undefined;
+
+  const style = resolveHeaderFooterStyle(pageSetup);
+  let footer;
+  if (style === 'band') footer = buildBandFooter(pageSetup);
+  else if (style === 'rules') footer = buildRulesFooter(pageSetup);
+  else if (isHtmlHeaderFooterStyle(pageSetup)) footer = await buildHtmlChromeFooter(pageSetup, style);
+  else if (style === 'footer-badge') footer = buildFooterBadgeFooter(pageSetup);
+  else footer = buildPlainFooter(pageSetup);
+
+  return withFirstPageEmpty({ default: footer }, emptyFooter, pageSetup?.first_page_different === true);
 }
 
 function getTableStyle(context) {
@@ -642,8 +1220,9 @@ function getPageContentHeightPx(context) {
   const dims = PAPER_DIMENSIONS_MM[pageSetup.paper_size] || PAPER_DIMENSIONS_MM.a4;
   const pageHeightMm = pageSetup.orientation === 'landscape' ? dims.width : dims.height;
   const pageHeightTwips = mmToTwips(pageHeightMm);
-  const marginTopTwips = cmToTwips(pageSetup.margin_top_cm ?? 2);
-  const marginBottomTwips = cmToTwips(pageSetup.margin_bottom_cm ?? 2);
+  const margins = resolveWordPageMargins(pageSetup);
+  const marginTopTwips = cmToTwips(margins.top);
+  const marginBottomTwips = cmToTwips(margins.bottom);
   const contentHeightTwips = Math.max(1, pageHeightTwips - marginTopTwips - marginBottomTwips);
   return Math.round(contentHeightTwips / 15);
 }
@@ -2308,16 +2887,18 @@ async function buildDocxResult(payload, options = {}) {
   if (feasibility?.includeAppendix) {
     children.push(...buildFeasibilityAppendixParagraphs(feasibility));
   }
-  reportProgress(context, 90, '正在生成 Word 文件。');
+  reportProgress(context, 90, '正在生成页眉页脚与 Word 文件。');
 
   // 页面设置
   const pageSetup = (exportFormat && exportFormat.page) ? exportFormat.page : null;
+  const pageMarginCm = resolveWordPageMargins(pageSetup);
   const pageMargin = pageSetup ? {
-    top: cmToTwips(pageSetup.margin_top_cm ?? 2),
-    bottom: cmToTwips(pageSetup.margin_bottom_cm ?? 2),
-    left: cmToTwips(pageSetup.margin_left_cm ?? 2),
-    right: cmToTwips(pageSetup.margin_right_cm ?? 2),
-    footer: cmToTwips(pageSetup.footer_distance_cm ?? 1.75),
+    top: cmToTwips(pageMarginCm.top),
+    bottom: cmToTwips(pageMarginCm.bottom),
+    left: cmToTwips(pageMarginCm.left),
+    right: cmToTwips(pageMarginCm.right),
+    header: cmToTwips(pageMarginCm.header),
+    footer: cmToTwips(pageMarginCm.footer),
   } : { top: 1440, right: 1440, bottom: 1440, left: 1440, footer: cmToTwips(1.75) };
   const firstPageDifferent = pageSetup ? pageSetup.first_page_different === true : false;
 
@@ -2339,8 +2920,8 @@ async function buildDocxResult(payload, options = {}) {
   const sectionChildren = [...children];
   const pageNumberEnabled = isPageNumberEnabled(pageSetup);
   const pageNumberStart = Math.max(1, Math.floor(Number(pageSetup ? pageSetup.page_number_start : 1) || 1));
-  const headers = buildWordHeaders(pageSetup);
-  const footers = buildWordFooters(pageSetup);
+  const headers = await buildWordHeaders(pageSetup);
+  const footers = await buildWordFooters(pageSetup);
 
   const numbering = createNumberingConfig(context);
   const headingStyles = buildHeadingParagraphStyles(exportFormat);
