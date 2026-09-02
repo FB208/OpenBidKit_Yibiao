@@ -54,6 +54,13 @@ export interface WordExportResult {
   warnings?: string[];
 }
 
+export interface CheckResultExportResult {
+  success: boolean;
+  canceled?: boolean;
+  path?: string;
+  message?: string;
+}
+
 export interface RequiredOnlineServiceStatus {
   id: string;
   label: string;
@@ -710,6 +717,7 @@ export interface YibiaoBridge {
     saveUiState: (payload: Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<void>;
     updateState: (partial: DuplicateCheckWorkspacePatch) => Promise<void>;
     clear: () => Promise<{ success: boolean; message?: string }>;
+    exportExcel: (request: { signature: string }) => Promise<CheckResultExportResult>;
   };
   rejectionCheck: {
     loadState: () => Promise<RejectionCheckWorkspaceState>;
@@ -718,6 +726,7 @@ export interface YibiaoBridge {
     removeDocument: (role: RejectionDocumentRole, documentId?: string) => Promise<void>;
     saveUiState: (payload: Partial<Pick<RejectionCheckWorkspaceState, 'step' | 'activeDocumentTab' | 'activeResultTab' | 'activeCheckResultTab' | 'customCheckItems' | 'checkOptions'>>) => Promise<void>;
     updateState: (partial: RejectionCheckWorkspacePatch) => Promise<void>;
+    exportExcel: (request: { rejectionInputSignature: string; bidSignature: string }) => Promise<CheckResultExportResult>;
     clear: () => Promise<{ success: boolean; message?: string }>;
   };
   templates: {

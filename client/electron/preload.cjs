@@ -226,6 +226,7 @@ const bridge = {
     saveFiles: (payload) => ipcRenderer.invoke('duplicate-check:save-files', payload),
     saveUiState: (payload) => ipcRenderer.invoke('duplicate-check:save-ui-state', payload),
     updateState: (partial) => ipcRenderer.invoke('duplicate-check:update-state', partial),
+    exportExcel: (request) => ipcRenderer.invoke('duplicate-check:export-excel', request),
     clear: () => ipcRenderer.invoke('duplicate-check:clear'),
   },
   rejectionCheck: {
@@ -235,6 +236,7 @@ const bridge = {
     removeDocument: (role, documentId) => ipcRenderer.invoke('rejection-check:remove-document', role, documentId),
     saveUiState: (payload) => ipcRenderer.invoke('rejection-check:save-ui-state', payload),
     updateState: (partial) => ipcRenderer.invoke('rejection-check:update-state', partial),
+    exportExcel: (request) => ipcRenderer.invoke('rejection-check:export-excel', request),
     clear: () => ipcRenderer.invoke('rejection-check:clear'),
   },
   templates: {

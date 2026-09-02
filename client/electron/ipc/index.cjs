@@ -1,4 +1,4 @@
-const { clipboard, ipcMain, shell } = require('electron');
+const { clipboard, dialog, ipcMain, shell } = require('electron');
 const { registerAgentIpc } = require('./agentIpc.cjs');
 const { registerAiIpc } = require('./aiIpc.cjs');
 const { registerAutoConfirmationIpc } = require('./autoConfirmationIpc.cjs');
@@ -28,6 +28,7 @@ const { createDeveloperExpansionReplaceTestService } = require('../services/deve
 const { createDonationService } = require('../services/donationService.cjs');
 const { createDuplicateCheckService } = require('../services/duplicateCheckService.cjs');
 const { createDuplicateCheckStore } = require('../services/duplicateCheckStore.cjs');
+const { createCheckResultExportService } = require('../services/checkResultExportService.cjs');
 const { createExportService } = require('../services/exportService.cjs');
 const { createFileService } = require('../services/fileService.cjs');
 const { createKnowledgeBaseService } = require('../services/knowledgeBaseService.cjs');
@@ -166,6 +167,7 @@ const workspaceDatabaseChannels = [
   'duplicate-check:load-state',
   'duplicate-check:save-files',
   'duplicate-check:save-ui-state',
+  'duplicate-check:export-excel',
   'duplicate-check:update-state',
   'duplicate-check:clear',
   'rejection-check:load-state',
@@ -174,6 +176,7 @@ const workspaceDatabaseChannels = [
   'rejection-check:remove-document',
   'rejection-check:save-ui-state',
   'rejection-check:update-state',
+  'rejection-check:export-excel',
   'rejection-check:clear',
   'knowledge-base:list',
   'knowledge-base:create-folder',
@@ -283,6 +286,12 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore, taskLogStore });
   const templateStore = createTemplateStore({ db: sqliteDatabase.db });
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
+  const checkResultExportService = createCheckResultExportService({
+    app,
+    dialog,
+    rejectionCheckStore,
+    duplicateCheckStore,
+  });
   const taskService = createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService });
   const agentWorkspaceService = createAgentWorkspaceService({ agentService, taskService, technicalPlanStore, feasibilityReportStore });
   agentWorkspaceServiceRef = agentWorkspaceService;
@@ -297,8 +306,8 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerKnowledgeBaseIpc({ knowledgeBaseService });
   registerTechnicalPlanIpc({ technicalPlanStore, taskService });
   registerFeasibilityReportIpc({ feasibilityReportStore, taskService });
-  registerDuplicateCheckIpc({ duplicateCheckStore });
-  registerRejectionCheckIpc({ rejectionCheckStore, taskService });
+  registerDuplicateCheckIpc({ duplicateCheckStore, checkResultExportService });
+  registerRejectionCheckIpc({ rejectionCheckStore, taskService, checkResultExportService });
   registerTemplateIpc({ templateStore });
   registerTaskIpc({ taskService });
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
