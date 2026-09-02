@@ -1,11 +1,10 @@
-import { corsHeaders, json, methodNotAllowed } from '../http.js';
+import { json, methodNotAllowed } from '../http.js';
 import {
   normalizeTrackBody,
   validateTrackEvent,
   writeAnalyticsDataPoint,
 } from '../services/analyticsTrack.js';
 import { recordTrackClient } from '../services/analyticsStatsStore.js';
-import { isTrackVersionBlocked } from '../services/blockRuleStore.js';
 
 export async function handleTrack(request, env) {
   if (request.method !== 'POST') {
@@ -18,9 +17,6 @@ export async function handleTrack(request, env) {
     const validationError = validateTrackEvent(event);
     if (validationError) {
       return json({ code: 400, message: validationError }, { status: 400 });
-    }
-    if (await isTrackVersionBlocked(env, event.projectName, event.version)) {
-      return new Response(null, { status: 204, headers: corsHeaders });
     }
 
     writeAnalyticsDataPoint(env, event);

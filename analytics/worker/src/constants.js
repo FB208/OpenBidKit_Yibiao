@@ -1,5 +1,4 @@
 export const RAW_DATASET = 'agnet_analytics';
-export const ANALYTICS_BLOCK_FILTER_TOKEN = '__ANALYTICS_BLOCK_RULE_FILTER__';
 // 2026-08-26 至 27 日的异常流量误写入生产埋点，仅在查询时排除对应日期和出口 IP。
 export const ANALYTICS_DATA_FILTER = `NOT (
   blob13 IN ('124.193.61.30', '64.118.148.223')
@@ -9,7 +8,6 @@ export const DATASET = `(
   SELECT *
   FROM ${RAW_DATASET}
   WHERE ${ANALYTICS_DATA_FILTER}
-    AND ${ANALYTICS_BLOCK_FILTER_TOKEN}
 )`;
 export const ALLOWED_EVENTS = new Set(['app_open', 'page_view', 'config_usage', 'ai_request', 'resource_click', 'agent_runtime']);
 export const AGENT_RUNTIME_STATUSES = new Set(['success', 'failed']);
@@ -26,7 +24,7 @@ export const RESOURCE_DESCRIPTION_MAX_LENGTH = 1200;
 export const RESOURCE_MODAL_CONTENT_MAX_LENGTH = 50000;
 export const RESOURCE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 export const RESOURCE_ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
-export const WORKER_CODE_VERSION = 'block-rules-v1';
+export const WORKER_CODE_VERSION = 'stats-redesign-v1';
 export const GITHUB_REPO_FULL_NAME = 'FB208/OpenBidKit_Yibiao';
 export const GITHUB_REPO_STATS_CACHE_KEY = `github_repo_stats:${GITHUB_REPO_FULL_NAME}`;
 export const GITHUB_REPO_STATS_CACHE_TTL_SECONDS = 1800;

@@ -32,7 +32,7 @@
         </div>
         <div class="nav-group">
           <span class="nav-group-label">系统管理</span>
-          <button class="nav-item" type="button" data-tab-button="ip-blocks">封禁规则</button>
+          <button class="nav-item" type="button" data-tab-button="ip-blocks">IP 封禁</button>
           <button class="nav-item" type="button" data-tab-button="notice">公告管理</button>
           <button class="nav-item" type="button" data-tab-button="license">授权管理</button>
           <button class="nav-item" type="button" data-tab-button="resources">资源管理</button>
@@ -388,38 +388,29 @@
           </section>
         </section>
 
-        <!-- 封禁规则 -->
+        <!-- IP 封禁 -->
         <section id="tab-ip-blocks" class="tab-panel" data-tab-panel="ip-blocks">
           <section class="panel section notice-panel">
             <div class="section-head">
               <div>
-                <h2>封禁规则</h2>
-                <p>IP 规则全局生效并保持客户端启动检查；版本号与空版本规则仅剔除当前项目从添加当天起精确匹配的埋点，不修改历史汇总。</p>
+                <h2>IP 封禁</h2>
+                <p>全局封禁精确的 IPv4 或 IPv6 地址。命中后客户端公开读取和上传请求都会被直接丢弃。</p>
               </div>
-              <button id="loadBlockRulesButton" type="button">读取规则</button>
+              <button id="loadIpBlocksButton" type="button">读取封禁列表</button>
             </div>
             <div class="notice-form ip-block-form">
               <label>
-                规则类型
-                <select id="blockRuleType">
-                  <option value="ip">IP</option>
-                  <option value="version">版本号</option>
-                  <option value="empty-version">空版本号</option>
-                </select>
-              </label>
-              <label>
-                规则值
-                <input id="blockRuleValue" maxlength="80" placeholder="例如：124.193.61.30" />
+                IP 地址
+                <input id="ipBlockInput" maxlength="80" placeholder="例如：124.193.61.30" />
               </label>
               <label>
                 封禁原因（可选）
-                <input id="blockRuleReason" maxlength="500" placeholder="例如：异常批量埋点" />
+                <input id="ipBlockReason" maxlength="500" placeholder="例如：异常批量埋点" />
               </label>
-              <button id="addBlockRuleButton" type="button">添加规则</button>
+              <button id="addIpBlockButton" type="button">添加封禁</button>
             </div>
-            <div id="blockRuleScope" class="notice-meta">作用范围：全局拦截；清理当天实时写入的异常客户端，不修改历史汇总。</div>
-            <div id="blockRuleStatus" class="notice-status" role="status"></div>
-            <div id="blockRuleTable" class="ip-block-table"></div>
+            <div id="ipBlockStatus" class="notice-status"></div>
+            <div id="ipBlockTable" class="ip-block-table"></div>
           </section>
         </section>
 

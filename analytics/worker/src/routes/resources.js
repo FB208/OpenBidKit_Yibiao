@@ -23,7 +23,6 @@ import {
 import { businessDateRangeCondition, getBusinessToday, isValidProjectName, logQueryError, normalizeText, sqlString } from '../utils.js';
 
 const allowedImageTypes = new Set(RESOURCE_ALLOWED_IMAGE_TYPES);
-const MAX_ANALYTICS_ROWS = 100000;
 
 export async function handlePublicResources(request, env, url) {
   if (request.method !== 'GET') {
@@ -119,11 +118,11 @@ async function queryTodayResourceClickCounts(env, resources, url) {
     return new Map();
   }
 
-  const resourceKeys = new Set(
+  const resourceKeys = Array.from(new Set(
     resources.map((resource) => normalizeText(resource.analyticsKey, 80)).filter(Boolean),
-  );
+  ));
 
-  if (!resourceKeys.size) {
+  if (!resourceKeys.length) {
     return new Map();
   }
 
@@ -140,17 +139,14 @@ async function queryTodayResourceClickCounts(env, resources, url) {
     FROM ${DATASET}
     WHERE blob1 = ${sqlString(projectName)}
       AND blob2 = 'resource_click'
-      AND blob9 != ''
+      AND blob9 IN (${resourceKeys.map((key) => sqlString(key)).join(', ')})
       AND ${dateWhere}
     GROUP BY resourceKey
-    LIMIT ${MAX_ANALYTICS_ROWS}
   `;
 
   try {
     const result = await queryAnalytics(env, sql);
-    return new Map((result.data || [])
-      .filter((row) => resourceKeys.has(row.resourceKey))
-      .map((row) => [row.resourceKey, Number(row.clickCount || 0)]));
+    return new Map((result.data || []).map((row) => [row.resourceKey, Number(row.clickCount || 0)]));
   } catch (error) {
     logQueryError('resource clicks', error);
     return new Map();

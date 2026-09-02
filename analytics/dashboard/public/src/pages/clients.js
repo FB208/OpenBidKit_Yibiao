@@ -81,7 +81,6 @@ export async function loadClients(options = {}) {
   const rows = (data.items || []).map((client) => ({
     ...client,
     activeDays: formatNumber(client.activeDays),
-    lastActiveVersionText: client.lastActiveVersion || '空版本',
     licensePlanText: licensePlanText(client.licensePlan),
     licenseStatusText: licenseStatusText(client.licenseStatus),
     sourceTrustedText: sourceTrustedText(client.sourceTrusted),
@@ -93,7 +92,7 @@ export async function loadClients(options = {}) {
     { key: 'firstSeenAt', label: '首次访问时间' },
     { key: 'activeDays', label: '访问天数' },
     { key: 'lastActiveDate', label: '最近活跃日期' },
-    { key: 'lastActiveVersionText', label: '最近活跃版本', code: true },
+    { key: 'lastActiveVersion', label: '最近活跃版本', code: true },
     { key: 'licensePlanText', label: '授权类型' },
     { key: 'licenseStatusText', label: '授权状态' },
     { key: 'licenseExpiresAt', label: '授权有效期' },
@@ -150,26 +149,24 @@ export function setupIpStatsActions() {
     const button = event.target.closest('[data-ip-stats-block]');
     if (!button) return;
     const ip = button.dataset.ipStatsBlock;
-    if (!window.confirm(`确认添加全局 IP 规则「${ip}」并过滤今天及之后的埋点吗？历史汇总不会改动。`)) return;
+    if (!window.confirm(`确认封禁 IP「${ip}」并删除当前视图对应的客户端明细吗？`)) return;
 
     button.disabled = true;
     button.textContent = '封禁中';
     try {
       const date = state.ipDate.value;
-      const data = await requestJson('/api/block-rules', {
+      const data = await requestJson('/api/ip-blocks', {
         method: 'POST',
         body: {
-          type: 'ip',
-          value: ip,
+          ip,
           projectName: state.projectName.value.trim(),
+          date: date || undefined,
           reason: date ? `IP 统计快捷封禁（${date}）` : 'IP 统计快捷封禁',
         },
       });
       setError('');
-      button.textContent = data.cleanup?.status === 'failed' ? '已封禁（当天清理失败）' : '已封禁';
-      button.title = data.cleanup?.status === 'failed'
-        ? `规则已生效，当天实时客户端清理失败：${data.cleanup.error || '可重复封禁重试'}`
-        : `已清理当天实时客户端 ${data.cleanup?.removedClients || 0} 个；历史汇总未改动`;
+      button.textContent = `已封禁（删 ${formatNumber(data.deletedClientCount)}）`;
+      button.title = `匹配 ${formatNumber(data.matchedClientCount)} 个客户端，删除 ${formatNumber(data.deletedClientCount)} 条客户端明细`;
     } catch (error) {
       button.disabled = false;
       button.textContent = '封禁';

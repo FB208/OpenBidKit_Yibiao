@@ -1195,13 +1195,12 @@ button:disabled {
 }
 
 .ip-block-form {
-  grid-template-columns: 150px minmax(220px, 0.8fr) minmax(260px, 1fr) auto;
+  grid-template-columns: 220px minmax(0, 1fr) auto;
   align-items: end;
 }
 
 .ip-block-table {
   margin-top: 12px;
-  overflow-x: auto;
 }
 
 /* ===== 授权管理 ===== */
