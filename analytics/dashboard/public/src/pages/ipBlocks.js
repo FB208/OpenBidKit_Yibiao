@@ -16,6 +16,11 @@ function cleanupText(item) {
   return '待清理';
 }
 
+// 将底层空字符串规则显示为明确的空版本标签。
+function ruleValueText(type, value) {
+  return type === 'version' && value === '' ? '空版本' : value;
+}
+
 // 渲染当前项目可管理的 IP 与版本规则。
 function renderBlockRules(items) {
   if (!items.length) {
@@ -25,7 +30,7 @@ function renderBlockRules(items) {
   const rows = items.map((item) => `
     <tr>
       <td>${item.type === 'ip' ? 'IP' : '版本号'}</td>
-      <td><strong>${escapeHtml(item.value)}</strong></td>
+      <td><strong>${escapeHtml(ruleValueText(item.type, item.value))}</strong></td>
       <td>${item.type === 'ip' ? '全局拦截 / 当前项目清理' : escapeHtml(item.projectName || '-')}</td>
       <td>${escapeHtml(item.reason || '未填写')}</td>
       <td>${escapeHtml(item.createdAt || '-')}</td>
@@ -56,12 +61,18 @@ export async function loadBlockRules() {
 }
 
 function updateRuleInput() {
-  const isIp = state.blockRuleType.value === 'ip';
-  state.blockRuleValue.placeholder = isIp ? '例如：124.193.61.30' : '例如：web';
+  const selectedType = state.blockRuleType.value;
+  const isIp = selectedType === 'ip';
+  const isEmptyVersion = selectedType === 'empty-version';
+  state.blockRuleValue.disabled = isEmptyVersion;
+  if (isEmptyVersion) state.blockRuleValue.value = '';
+  state.blockRuleValue.placeholder = isIp ? '例如：124.193.61.30' : isEmptyVersion ? '无需填写' : '例如：web';
   state.blockRuleValue.maxLength = isIp ? 80 : 50;
   state.blockRuleScope.textContent = isIp
     ? '作用范围：全局拦截；历史清理按当前项目执行。'
-    : '作用范围：仅当前项目；版本号大小写敏感并且精确匹配。';
+    : isEmptyVersion
+      ? '作用范围：仅当前项目；匹配原始版本值为空的埋点。'
+      : '作用范围：仅当前项目；版本号大小写敏感并且精确匹配。';
 }
 
 // 提交规则；重复提交同一规则即重试未完成的历史清理。
@@ -84,14 +95,17 @@ export function setupBlockRulesPage() {
   state.loadBlockRulesButton.addEventListener('click', () => loadBlockRules().catch((error) => setBlockRuleStatus(error?.message || String(error), 'error')));
   state.blockRuleType.addEventListener('change', updateRuleInput);
   state.addBlockRuleButton.addEventListener('click', async () => {
-    const type = state.blockRuleType.value;
-    const value = state.blockRuleValue.value.trim();
+    const selectedType = state.blockRuleType.value;
+    const isEmptyVersion = selectedType === 'empty-version';
+    const type = isEmptyVersion ? 'version' : selectedType;
+    const value = isEmptyVersion ? '' : state.blockRuleValue.value.trim();
+    const valueText = ruleValueText(type, value);
     const reason = state.blockRuleReason.value.trim();
     const projectName = state.projectName.value.trim();
-    if (!value) return setBlockRuleStatus('请输入规则值。', 'error');
+    if (!isEmptyVersion && !value) return setBlockRuleStatus('请输入规则值。', 'error');
     if (!projectName) return setBlockRuleStatus('请先输入项目名。', 'error');
     if (type === 'version' && value === '-') return setBlockRuleStatus('“-”是页面占位符，不能作为版本规则。', 'error');
-    if (!window.confirm(`确认添加${type === 'ip' ? '全局 IP' : '当前项目版本号'}规则「${value}」并清理可恢复的历史统计吗？`)) return;
+    if (!window.confirm(`确认添加${type === 'ip' ? '全局 IP' : '当前项目版本号'}规则「${valueText}」并清理可恢复的历史统计吗？`)) return;
     try {
       assertAdminToken();
       saveSettings();
@@ -120,12 +134,13 @@ export function setupBlockRulesPage() {
     if (!button) return;
     const value = button.dataset.blockRuleDelete;
     const type = button.dataset.blockRuleType;
-    if (!window.confirm(`确认解除规则「${value}」吗？解除前的历史事件仍会保持排除。`)) return;
+    const valueText = ruleValueText(type, value);
+    if (!window.confirm(`确认解除规则「${valueText}」吗？解除前的历史事件仍会保持排除。`)) return;
     try {
       const projectName = state.projectName.value.trim();
       await requestJson(`/api/block-rules?type=${encodeURIComponent(type)}&value=${encodeURIComponent(value)}&projectName=${encodeURIComponent(projectName)}`, { method: 'DELETE' });
       await loadBlockRules();
-      setBlockRuleStatus(`已解除规则 ${value}；之后的新事件将恢复统计。`, 'ok');
+      setBlockRuleStatus(`已解除规则 ${valueText}；之后的新事件将恢复统计。`, 'ok');
     } catch (error) {
       setBlockRuleStatus(error?.message || String(error), 'error');
     }

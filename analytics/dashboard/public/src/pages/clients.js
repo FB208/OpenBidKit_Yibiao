@@ -81,6 +81,7 @@ export async function loadClients(options = {}) {
   const rows = (data.items || []).map((client) => ({
     ...client,
     activeDays: formatNumber(client.activeDays),
+    lastActiveVersionText: client.lastActiveVersion || '空版本',
     licensePlanText: licensePlanText(client.licensePlan),
     licenseStatusText: licenseStatusText(client.licenseStatus),
     sourceTrustedText: sourceTrustedText(client.sourceTrusted),
@@ -92,7 +93,7 @@ export async function loadClients(options = {}) {
     { key: 'firstSeenAt', label: '首次访问时间' },
     { key: 'activeDays', label: '访问天数' },
     { key: 'lastActiveDate', label: '最近活跃日期' },
-    { key: 'lastActiveVersion', label: '最近活跃版本', code: true },
+    { key: 'lastActiveVersionText', label: '最近活跃版本', code: true },
     { key: 'licensePlanText', label: '授权类型' },
     { key: 'licenseStatusText', label: '授权状态' },
     { key: 'licenseExpiresAt', label: '授权有效期' },

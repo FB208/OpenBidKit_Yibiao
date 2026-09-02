@@ -394,7 +394,7 @@
             <div class="section-head">
               <div>
                 <h2>封禁规则</h2>
-                <p>IP 规则全局生效并保持客户端启动检查；版本号规则仅剔除当前项目中大小写完全一致的埋点。</p>
+                <p>IP 规则全局生效并保持客户端启动检查；版本号与空版本规则仅剔除当前项目中精确匹配的埋点。</p>
               </div>
               <button id="loadBlockRulesButton" type="button">读取规则</button>
             </div>
@@ -404,6 +404,7 @@
                 <select id="blockRuleType">
                   <option value="ip">IP</option>
                   <option value="version">版本号</option>
+                  <option value="empty-version">空版本号</option>
                 </select>
               </label>
               <label>

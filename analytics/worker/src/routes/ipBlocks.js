@@ -31,8 +31,10 @@ function normalizeRule(type, value, projectName) {
     return ip ? { type, value: ip, projectName: '' } : null;
   }
   if (type === 'version') {
+    if (value == null) return null;
     const version = normalizeText(value, 50);
-    return version && version !== '-' ? { type, value: version, projectName } : null;
+    if ((!version && String(value) !== '') || version === '-') return null;
+    return { type, value: version, projectName };
   }
   return null;
 }
