@@ -1,6 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
-import { AppDialog, AppSwitch, isLibreOfficeRequiredMessage, RestrictedHtmlPreview, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import { AppDialog, AppSwitch, isLibreOfficeRequiredMessage, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { ImageModelStatus, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
 import { PAPER_DIMENSIONS, type ExportFormatConfig, type ExportTemplateRecord } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
@@ -9,6 +9,7 @@ import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base
 import type { ContentGenerationOptions, ContentIllustrationKind, ContentTableRequirement, GlobalFactsMode, TechnicalPlanOriginalPlanFile, TechnicalPlanState } from '../types';
 import { DEFAULT_HTML_IMAGE_TYPES, normalizeContentGenerationOptions } from '../contentGenerationOptions';
 import { contentGenerationTemplates, getContentGenerationTemplate, type ContentGenerationTemplateId } from '../contentGenerationTemplates';
+import { buildContentTemplatePreviewHtml } from '../contentGenerationTemplatePreviewImages';
 import aiImageExampleUrl from '../../../../assets/generate_img_example/ai.png';
 import mermaidImageExampleUrl from '../../../../assets/generate_img_example/mermaid.png';
 import htmlImageExampleUrl from '../../../../assets/generate_img_example/html.png';
@@ -134,9 +135,10 @@ const WORD_COUNT_INPUT_UNIT = 10000;
 const MM_TO_CSS_PX = 96 / 25.4;
 
 /** 用真实受限 HTML 和已保存的 Word 模板共同渲染排版预览。 */
-function ContentLayoutPreview({ value, config, compact = false }: { value: string; config: ExportFormatConfig; compact?: boolean }) {
+function ContentLayoutPreview({ templateId, value, config, compact = false }: { templateId: ContentGenerationTemplateId; value: string; config: ExportFormatConfig; compact?: boolean }) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [stageWidth, setStageWidth] = useState(0);
+  const previewHtml = useMemo(() => buildContentTemplatePreviewHtml(templateId, value), [templateId, value]);
   const previewStyle = useMemo<CSSProperties>(() => buildExportFormatCssVars(config) as CSSProperties, [config]);
   const dimensions = PAPER_DIMENSIONS[config.page.paper_size] || PAPER_DIMENSIONS.a4;
   const pageWidthMm = config.page.orientation === 'landscape' ? dimensions.height : dimensions.width;
@@ -170,7 +172,9 @@ function ContentLayoutPreview({ value, config, compact = false }: { value: strin
       <PageHeaderChrome config={config} />
       <div className="export-format-paper-body">
         <section className={config.heading_border.enabled ? 'export-template-chapter-frame content-layout-preview-frame' : undefined}>
-          <RestrictedHtmlPreview value={value} className="content-template-restricted-preview" />
+          <div className="restricted-html-preview content-template-restricted-preview">
+            {previewHtml ? <div className="restricted-html-document" dangerouslySetInnerHTML={{ __html: previewHtml }} /> : <p className="restricted-html-empty">暂无正文内容</p>}
+          </div>
         </section>
       </div>
       <PageFooterChrome config={config} />
@@ -1212,7 +1216,7 @@ function GenerationSettingsPage({
                         <button type="button" className="secondary-action" onClick={() => setPreviewContentTemplateId(template.id)}>查看完整预览</button>
                       </div>
                       <div className="content-template-thumbnail" aria-hidden="true">
-                        {selectedExportTemplate && <ContentLayoutPreview value={template.htmlExample} config={selectedExportTemplate.config} compact />}
+                        {selectedExportTemplate && <ContentLayoutPreview templateId={template.id} value={template.htmlExample} config={selectedExportTemplate.config} compact />}
                       </div>
                     </article>
                   );
@@ -1240,7 +1244,7 @@ function GenerationSettingsPage({
               <Dialog.Close className="image-preview-close" type="button" aria-label="关闭模板预览">×</Dialog.Close>
             </div>
             <div className="content-template-preview-dialog-body">
-              {previewContentTemplateId && selectedExportTemplate && <ContentLayoutPreview value={previewContentTemplate?.htmlExample || ''} config={selectedExportTemplate.config} />}
+              {previewContentTemplateId && selectedExportTemplate && <ContentLayoutPreview templateId={previewContentTemplateId} value={previewContentTemplate?.htmlExample || ''} config={selectedExportTemplate.config} />}
             </div>
           </Dialog.Content>
         </Dialog.Portal>

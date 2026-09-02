@@ -28,6 +28,7 @@ const UNKNOWN_BLOCK_TAGS = new Set([
   'dl', 'dt', 'dd', 'fieldset', 'details', 'summary', 'hr',
 ]);
 const FIGURE_GENERATIONS = new Set(['aiImage', 'mermaid', 'htmlImage']);
+const FIGURE_SIZES = new Set(['square', 'wide', 'tall', 'panorama']);
 const TABLE_PRESETS = new Set([
   'plain', 'headerRow', 'headerColumn', 'headerRowAndColumn', 'imageText', 'threeImages', 'fourImages',
 ]);
@@ -94,7 +95,10 @@ function allowedAttributes(element: Element) {
   const names = new Set<string>();
   if (ROOT_TAGS.has(tag)) names.add('id');
   if (tag === 'ol') names.add('start');
-  if (tag === 'figure') names.add('data-yb-generation');
+  if (tag === 'figure') {
+    names.add('data-yb-generation');
+    names.add('data-yb-size');
+  }
   if (tag === 'template' || tag === 'aside') names.add('data-yb-role');
   if (tag === 'img') {
     names.add('alt');
@@ -218,6 +222,8 @@ function validateFigure(figure: Element, context: BlockContext, ids: Map<string,
   validateId(figure, context, ids);
   const generation = figure.getAttribute('data-yb-generation') || '';
   if (!FIGURE_GENERATIONS.has(generation)) addIssue(context, 'error', 'figure 缺少合法 data-yb-generation');
+  const size = figure.getAttribute('data-yb-size') || '';
+  if (!FIGURE_SIZES.has(size)) addIssue(context, 'error', 'figure 缺少合法 data-yb-size');
   if (!onlyWhitespaceTextOutside(figure, new Set(['template', 'img', 'figcaption']))) {
     addIssue(context, 'error', 'figure 只能包含 template、img 和 figcaption');
   }
@@ -236,8 +242,22 @@ function validateFigure(figure: Element, context: BlockContext, ids: Map<string,
     }
   }
   const image = images[0];
-  if (image && !image.getAttribute('alt')?.trim()) addIssue(context, 'error', 'img 必须包含非空 alt');
+  if (image) {
+    if (!image.getAttribute('alt')?.trim()) addIssue(context, 'error', 'img 必须包含非空 alt');
+    const assetRef = image.getAttribute('data-yb-asset-ref');
+    if (assetRef != null && !isWorkspaceRelativeAssetRef(assetRef)) {
+      addIssue(context, 'error', 'data-yb-asset-ref 必须是工作区内的相对路径');
+    }
+  }
   if (captions[0]) validateInlineContainer(captions[0], context);
+}
+
+/** 校验图片资产引用，只允许使用正斜杠表示的工作区相对路径。 */
+function isWorkspaceRelativeAssetRef(value: string) {
+  const normalized = value.trim();
+  if (!normalized || normalized.includes('\\') || normalized.startsWith('/')) return false;
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(normalized)) return false;
+  return !normalized.split('/').some((part) => part === '..');
 }
 
 function tableRows(table: Element) {

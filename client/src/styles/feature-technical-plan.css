@@ -537,8 +537,8 @@
 
 .content-template-restricted-preview .restricted-html-document figure {
   display: grid;
-  grid-template-rows: minmax(180px, 1fr) auto;
-  width: var(--ef-image-max-width, 90%);
+  grid-template-rows: auto auto;
+  width: min(var(--yb-figure-width), var(--ef-image-max-width, 90%));
   max-width: 100%;
   margin-right: auto;
   margin-left: auto;
@@ -548,15 +548,54 @@
   border: 1px dashed var(--ef-table-border-color, var(--yb-border));
 }
 
+.content-template-restricted-preview .restricted-html-document figure[data-yb-size='square'] {
+  --yb-figure-width: 65%;
+  --yb-figure-ratio: 1 / 1;
+}
+
+.content-template-restricted-preview .restricted-html-document figure[data-yb-size='wide'] {
+  --yb-figure-width: 80%;
+  --yb-figure-ratio: 3 / 2;
+}
+
+.content-template-restricted-preview .restricted-html-document figure[data-yb-size='tall'] {
+  --yb-figure-width: 50%;
+  --yb-figure-ratio: 3 / 4;
+}
+
+.content-template-restricted-preview .restricted-html-document figure[data-yb-size='panorama'] {
+  --yb-figure-width: 90%;
+  --yb-figure-ratio: 16 / 9;
+}
+
 .content-template-restricted-preview .restricted-html-document figure::before {
   display: grid;
-  min-height: 180px;
+  width: 100%;
+  aspect-ratio: var(--yb-figure-ratio);
   place-items: center;
   padding: 20px;
   content: '图片占位';
   font-weight: 800;
   text-align: center;
   background: rgba(83, 97, 118, 0.08);
+}
+
+.content-template-restricted-preview .restricted-html-document figure[data-yb-preview-image]::before {
+  display: none;
+}
+
+.content-template-restricted-preview .restricted-html-document figure[data-yb-preview-image] > img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: var(--yb-figure-ratio);
+  min-width: 0;
+  object-fit: cover;
+  object-position: center;
+}
+
+.content-template-restricted-preview .restricted-html-document table figure {
+  width: 100%;
 }
 
 .content-template-restricted-preview .restricted-html-document figure[data-yb-generation='aiImage']::before {
@@ -586,13 +625,11 @@
 
 .content-template-restricted-preview .restricted-html-document table[data-yb-preset='threeImages'] figure,
 .content-template-restricted-preview .restricted-html-document table[data-yb-preset='fourImages'] figure {
-  grid-template-rows: minmax(112px, 1fr) auto;
   margin: 0;
 }
 
 .content-template-restricted-preview .restricted-html-document table[data-yb-preset='threeImages'] figure::before,
 .content-template-restricted-preview .restricted-html-document table[data-yb-preset='fourImages'] figure::before {
-  min-height: 112px;
   padding: 10px;
   font-size: 12px;
 }

@@ -10,6 +10,8 @@ sealed class InsertBodyHtmlRequest
     public string Input { get; set; } = "";
     [JsonPropertyName("target_id")]
     public string TargetId { get; set; } = "";
+    [JsonPropertyName("image_max_width_percent")]
+    public double ImageMaxWidthPercent { get; set; }
     public string Html { get; set; } = "";
 }
 
@@ -27,14 +29,20 @@ static class InsertBodyHtmlAction
             if (request is null
                 || string.IsNullOrWhiteSpace(request.Input)
                 || string.IsNullOrWhiteSpace(request.TargetId)
+                || request.ImageMaxWidthPercent is <= 0 or > 100
                 || string.IsNullOrWhiteSpace(request.Html))
             {
-                return JobResult.Fail("request.json 缺少 input、target_id 或 html");
+                return JobResult.Fail("request.json 缺少 input、target_id、image_max_width_percent 或 html");
             }
 
             var documentPath = WordWorkspace.ResolveWorkspacePath(workspace, request.Input);
             if (!File.Exists(documentPath)) return JobResult.Fail("Word 文件不存在");
-            var blockCount = RestrictedHtmlWordInserter.Insert(documentPath, request.TargetId, request.Html);
+            var blockCount = RestrictedHtmlWordInserter.Insert(
+                workspace,
+                documentPath,
+                request.TargetId,
+                request.ImageMaxWidthPercent,
+                request.Html);
             return JobResult.Success(Name, WordWorkspace.ToRelativePath(workspace, documentPath), blockCount);
         }
         catch (Exception exception)

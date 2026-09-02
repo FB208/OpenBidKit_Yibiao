@@ -6,7 +6,7 @@ export interface ContentGenerationTemplateDefinition {
   htmlExample: string;
 }
 
-/** 实际正文模板注册表；列表卡片和完整预览均直接渲染 htmlExample。 */
+/** 实际正文模板注册表；htmlExample 不保存仅供 Renderer 展示的预览图片地址。 */
 export const contentGenerationTemplates = [
   {
     id: 'standard-document',
@@ -61,13 +61,13 @@ export const contentGenerationTemplates = [
 <h2 id="std_h_004">第三节 质量与风险保障</h2>
 
 <!-- yibiao:block -->
-<p id="std_p_007">质量管理贯穿项目实施全过程。我方执行编制、复核、批准三级审查制度，对关键工序实行样板先行和专项检查，对发现的问题明确整改责任、整改期限和复核结论。</p>
+<p id="std_p_007">质量管理贯穿项目实施全过程。我方以质量策划为先导，以样板确认和工序检查为抓手，以成果复核和问题闭环为保障，执行编制、复核、批准三级审查制度；对关键工序设置质量控制点，未经检查确认不得转入下一阶段。</p>
 
 <!-- yibiao:block -->
-<figure id="std_fig_001" data-yb-generation="aiImage">
-  <template data-yb-role="prompt">生成项目团队开展现场质量检查的真实工作场景，画面包含检查人员、记录表和作业区域，无文字水印，适合竖版 A4 页面。</template>
-  <img alt="项目团队现场质量检查场景">
-  <figcaption>现场质量检查与过程记录</figcaption>
+<figure id="std_fig_001" data-yb-generation="htmlImage" data-yb-size="wide">
+  <template data-yb-role="prompt">生成 3:2 横向项目全过程质量管控架构图，展示质量策划、样板确认、工序检查、成果复核、问题整改和闭环验证之间的关系；采用专业工程蓝图风格，不使用文字，仅用清晰图形、箭头和层级表达，关键内容置于画面安全区域，无水印，适合竖版 A4 页面。</template>
+  <img alt="项目全过程质量管控架构图">
+  <figcaption>项目全过程质量管控架构</figcaption>
 </figure>
 
 <!-- yibiao:block -->
@@ -88,90 +88,91 @@ export const contentGenerationTemplates = [
     description: '以表格作为主要版面容器，大量使用表格内图片、三列图组和四宫格图组。',
     guidance: '按照竖版 A4 单栏阅读顺序组织内容，不建立页面级左右双栏。通过左图右文、合并单元格、三列图组和四宫格图组强化信息层级；所有图片必须放在表格单元格内并提供图例，表格宽度应适合竖版页面。',
     htmlExample: `<!-- yibiao:block -->
-<h1 id="visual_h_001">第一章 项目实施蓝图</h1>
+<h1 id="visual_h_001">第一章 项目实施总体策划</h1>
 
 <!-- yibiao:block -->
-<p id="visual_p_001">本方案以<strong>目标、行动、成果</strong>为主线，通过高密度表格和表格内场景图片集中展示项目实施重点。</p>
+<p id="visual_p_001">本方案以<strong>工作分解结构、里程碑计划、质量控制点和交付成果</strong>为主线，通过高密度表格与专业图示集中呈现项目实施逻辑、资源配置和全过程管控要求。</p>
 
 <!-- yibiao:block -->
 <table id="visual_tbl_001" data-yb-preset="headerRow">
-  <caption>项目实施核心目标</caption>
+  <caption>项目实施控制目标</caption>
   <thead>
-    <tr><th scope="col">管理维度</th><th scope="col">实施目标</th><th scope="col">成果标志</th></tr>
+    <tr><th scope="col">控制维度</th><th scope="col">管理目标</th><th scope="col">核验依据</th></tr>
   </thead>
   <tbody>
-    <tr><td>进度管理</td><td>关键节点按期完成</td><td>节点验收记录完整</td></tr>
-    <tr><td>质量管理</td><td>全过程质量受控</td><td>问题整改闭环</td></tr>
-    <tr><td>协同管理</td><td>信息传递及时准确</td><td>协同机制稳定运行</td></tr>
+    <tr><td>工期控制</td><td>总工期受控，关键里程碑按期实现</td><td>基准计划、周进度报告、节点确认单</td></tr>
+    <tr><td>质量控制</td><td>关键工序受检，质量问题闭环销项</td><td>检查记录、整改台账、复核结论</td></tr>
+    <tr><td>技术控制</td><td>技术方案可实施，接口边界清晰</td><td>深化成果、技术交底、变更记录</td></tr>
+    <tr><td>交付控制</td><td>实物、资料与培训同步完成</td><td>验收报告、竣工资料、移交清单</td></tr>
   </tbody>
 </table>
 
 <!-- yibiao:block -->
 <table id="visual_tbl_002" data-yb-preset="imageText">
-  <caption>实施阶段图文说明</caption>
+  <caption>项目实施总控模型</caption>
   <tbody>
     <tr>
-      <td><figure id="visual_fig_001" data-yb-generation="aiImage"><template data-yb-role="prompt">生成项目启动部署会议与现场踏勘组合场景，人员正在查看图纸并核对现场条件，真实工程摄影风格，无文字水印，适合竖版 A4 页面。</template><img alt="项目启动部署与现场踏勘场景"><figcaption>项目启动部署与现场踏勘</figcaption></figure></td>
-      <td><p><strong>现场部署与组织协同</strong></p><p>根据项目条件完成资源进场、工作界面确认和责任分工。</p><ol><li>核对实施条件。</li><li>明确接口责任。</li><li>建立检查机制。</li></ol></td>
+      <td><figure id="visual_fig_001" data-yb-generation="aiImage" data-yb-size="tall"><template data-yb-role="prompt">生成 3:4 竖向大型工程项目实施总控数字孪生场景图，以轴测视角展示施工区域、临建设施、物流通道、作业分区和管理节点；主体集中在画面中央安全区域，蓝灰工程视觉，无文字、标志和水印，适合竖版 A4 页面。</template><img alt="项目实施总控数字孪生场景图"><figcaption>项目实施总控场景</figcaption></figure></td>
+      <td><p><strong>计划、资源、质量一体化控制</strong></p><p>以批准的实施基线为依据，统一组织专业穿插、资源投入和质量检查。</p><ol><li>按 WBS 分解工作包与责任界面。</li><li>以里程碑驱动进度和资源计划。</li><li>通过质量门与问题台账闭环管控。</li></ol></td>
     </tr>
   </tbody>
 </table>
 
 <!-- yibiao:block -->
-<h2 id="visual_h_002">第一节 全过程质量控制</h2>
+<h2 id="visual_h_002">第一节 进度、质量与技术协同</h2>
 
 <!-- yibiao:block -->
 <table id="visual_tbl_003" data-yb-preset="plain">
-  <caption>质量控制方法</caption>
+  <caption>项目总体进度控制计划</caption>
   <tbody>
-    <tr><th scope="row">事前控制</th><td>审查方案、人员、材料和设备条件，形成开工检查记录。</td></tr>
-    <tr><th scope="row">事中控制</th><td>执行旁站、巡检和阶段复核，对发现的问题限时整改。</td></tr>
-    <tr><th scope="row">事后控制</th><td>整理过程资料，完成成果复核和交付验收。</td></tr>
-    <tr><td colspan="2"><figure id="visual_fig_002" data-yb-generation="htmlImage"><template data-yb-role="prompt">生成竖向全过程质量控制信息图，展示事前控制、事中控制、事后控制和闭环改进，中文清晰，适合竖版 A4 页面。</template><img alt="全过程质量控制信息图"><figcaption>全过程质量控制闭环</figcaption></figure></td></tr>
+    <tr><th scope="row">基准计划</th><td>将准备、深化、采购、实施、调试和验收工作分解到可检查的阶段节点。</td></tr>
+    <tr><th scope="row">滚动控制</th><td>按周更新实际进展、剩余工作量和资源需求，持续校核关键路径。</td></tr>
+    <tr><th scope="row">偏差纠正</th><td>对滞后事项及时采取资源增补、工序优化和专业穿插调整措施。</td></tr>
+    <tr><td colspan="2"><figure id="visual_fig_002" data-yb-generation="htmlImage" data-yb-size="panorama"><template data-yb-role="prompt">生成 16:9 全景项目总体进度甘特图，体现准备、深化、采购、实施、调试和验收六类工作在时间轴上的穿插关系、关键里程碑和关键路径；采用专业项目管理图表风格，不使用文字和数字，仅用分组色带、进度条和菱形节点表达，关键内容置于画面安全区域，无水印。</template><img alt="项目总体进度甘特图"><figcaption>总体进度甘特计划</figcaption></figure></td></tr>
   </tbody>
 </table>
 
 <!-- yibiao:block -->
 <table id="visual_tbl_004" data-yb-preset="threeImages">
-  <caption>三列关键工作图组</caption>
+  <caption>质量、工作分解与技术架构</caption>
   <tbody>
     <tr>
-      <td><figure id="visual_fig_003" data-yb-generation="aiImage"><template data-yb-role="prompt">生成项目团队进行技术交底的真实场景，无文字水印。</template><img alt="技术交底场景"><figcaption>技术交底</figcaption></figure></td>
-      <td><figure id="visual_fig_004" data-yb-generation="aiImage"><template data-yb-role="prompt">生成项目人员开展过程检查的真实场景，无文字水印。</template><img alt="过程检查场景"><figcaption>过程检查</figcaption></figure></td>
-      <td><figure id="visual_fig_005" data-yb-generation="aiImage"><template data-yb-role="prompt">生成项目人员复核过程资料的真实办公场景，无文字水印。</template><img alt="资料复核场景"><figcaption>资料复核</figcaption></figure></td>
+      <td><figure id="visual_fig_003" data-yb-generation="htmlImage" data-yb-size="square"><template data-yb-role="prompt">生成 1:1 方形全过程质量控制闭环信息图，展示输入审查、样板确认、工序检查、问题整改、复核销项和持续改进的循环关系；采用专业蓝白信息图风格，不使用文字，仅用图标、节点和箭头表达，关键内容置于画面安全区域，无水印。</template><img alt="全过程质量控制闭环信息图"><figcaption>全过程质量控制闭环</figcaption></figure></td>
+      <td><figure id="visual_fig_004" data-yb-generation="mermaid" data-yb-size="square"><template data-yb-role="prompt">生成 1:1 方形项目工作分解结构思维导图，以项目目标为中心，向外展开项目管理、深化设计、采购供应、现场实施、调试验收和资料移交六个一级分支，并继续分解关键工作；不使用文字，仅用层级色块、图标和连线表达，关键内容置于画面安全区域，无水印。</template><img alt="项目工作分解结构思维导图"><figcaption>WBS 工作分解结构</figcaption></figure></td>
+      <td><figure id="visual_fig_005" data-yb-generation="htmlImage" data-yb-size="square"><template data-yb-role="prompt">生成 1:1 方形项目技术架构图，分层展示基础设施层、设备接入层、数据传输层、平台服务层和业务应用层，体现上下行数据流和安全边界；采用专业蓝图风格，不使用文字，仅用模块、图标和连线表达，关键内容置于画面安全区域，无水印。</template><img alt="项目分层技术架构图"><figcaption>分层技术架构</figcaption></figure></td>
     </tr>
   </tbody>
 </table>
 
 <!-- yibiao:block -->
 <table id="visual_tbl_005" data-yb-preset="fourImages">
-  <caption>四宫格关键实施场景</caption>
+  <caption>组织、资源、实施与交付图组</caption>
   <tbody>
     <tr>
-      <td><figure id="visual_fig_006" data-yb-generation="aiImage"><template data-yb-role="prompt">生成项目人员组织协调会议的真实场景，无文字水印。</template><img alt="人员组织场景"><figcaption>人员组织</figcaption></figure></td>
-      <td><figure id="visual_fig_007" data-yb-generation="aiImage"><template data-yb-role="prompt">生成项目设备进场与配置的真实场景，无文字水印。</template><img alt="设备配置场景"><figcaption>设备配置</figcaption></figure></td>
+      <td><figure id="visual_fig_006" data-yb-generation="mermaid" data-yb-size="wide"><template data-yb-role="prompt">生成 3:2 横向工程项目组织架构图，以项目经理部为核心，下设技术管理、工程实施、质量安全、物资设备和资料交付五个专业组，并体现汇报与协同关系；不使用文字，仅用人物图标、层级节点和连接线表达，关键内容置于画面安全区域，无水印。</template><img alt="工程项目组织架构图"><figcaption>项目组织架构</figcaption></figure></td>
+      <td><figure id="visual_fig_007" data-yb-generation="aiImage" data-yb-size="wide"><template data-yb-role="prompt">生成 3:2 横向工程项目设备与工器具配置专业轴测图，分区展示运输吊装、安装加工、检测调试和安全防护四类资源，器材摆放有序；关键内容置于画面安全区域，蓝灰工程视觉，无文字、品牌和水印。</template><img alt="工程设备与工器具配置轴测图"><figcaption>设备资源配置</figcaption></figure></td>
     </tr>
     <tr>
-      <td><figure id="visual_fig_008" data-yb-generation="aiImage"><template data-yb-role="prompt">生成项目人员开展现场实施的真实场景，无文字水印。</template><img alt="现场实施场景"><figcaption>现场实施</figcaption></figure></td>
-      <td><figure id="visual_fig_009" data-yb-generation="aiImage"><template data-yb-role="prompt">生成项目成果验收会议的真实场景，无文字水印。</template><img alt="成果验收场景"><figcaption>成果验收</figcaption></figure></td>
+      <td><figure id="visual_fig_008" data-yb-generation="aiImage" data-yb-size="wide"><template data-yb-role="prompt">生成 3:2 横向复杂工程现场多专业协同实施剖切场景图，展示结构、机电、管线和设备安装在不同作业面有序穿插，具备真实工程细节；关键内容置于画面安全区域，专业工程可视化风格，无文字、品牌和水印。</template><img alt="多专业协同现场实施剖切场景图"><figcaption>多专业协同实施</figcaption></figure></td>
+      <td><figure id="visual_fig_009" data-yb-generation="htmlImage" data-yb-size="wide"><template data-yb-role="prompt">生成 3:2 横向项目验收与移交流程图，展示专业自检、联合预验收、问题整改、正式验收、资料归档和运维移交的顺序及反馈闭环；采用专业蓝白流程图风格，不使用文字，仅用图标、节点和箭头表达，关键内容置于画面安全区域，无水印。</template><img alt="项目验收与移交流程图"><figcaption>验收与移交闭环</figcaption></figure></td>
     </tr>
   </tbody>
 </table>
 
 <!-- yibiao:block -->
 <table id="visual_tbl_006" data-yb-preset="headerRow">
-  <caption>项目实施保障措施</caption>
-  <thead><tr><th scope="col">保障方向</th><th scope="col">主要措施</th><th scope="col">预期成效</th></tr></thead>
+  <caption>项目实施管理基线</caption>
+  <thead><tr><th scope="col">管理基线</th><th scope="col">主要控制措施</th><th scope="col">输出成果</th></tr></thead>
   <tbody>
-    <tr><td>组织保障</td><td>项目经理负责制，专业负责人分工协同</td><td>责任到人、决策高效</td></tr>
-    <tr><td>进度保障</td><td>节点计划、每日跟踪、偏差预警</td><td>关键任务按期完成</td></tr>
-    <tr><td>质量保障</td><td>样板先行、过程检查、三级复核</td><td>成果一次验收合格</td></tr>
-    <tr><td>服务保障</td><td>快速响应、定期回访、持续优化</td><td>服务全过程可追溯</td></tr>
+    <tr><td>组织基线</td><td>岗位授权、责任矩阵、专业协同与重大事项升级</td><td>组织架构、职责矩阵、沟通机制</td></tr>
+    <tr><td>进度基线</td><td>里程碑分解、滚动计划、偏差分析与赶工纠偏</td><td>总控计划、周计划、偏差报告</td></tr>
+    <tr><td>质量基线</td><td>样板先行、质量门检查、实测实量与问题销项</td><td>检查记录、问题台账、复核报告</td></tr>
+    <tr><td>交付基线</td><td>实物验收、资料同步、培训移交与质保响应</td><td>验收文件、移交清单、培训记录</td></tr>
   </tbody>
 </table>
 
 <!-- yibiao:block -->
-<p id="visual_p_002">通过纵向章节编排、表格化要点表达和带图例的场景图片，使实施逻辑清晰、重点直观且便于查阅。</p>`,
+<p id="visual_p_002">通过总控场景、管理图表、工程架构和交付流程的组合表达，使计划逻辑、责任关系、技术路径和成果边界能够快速识别，并为项目实施和履约检查提供统一依据。</p>`,
   },
 ] as const satisfies readonly ContentGenerationTemplateDefinition[];
 
