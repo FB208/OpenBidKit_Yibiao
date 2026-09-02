@@ -29,9 +29,9 @@
 | 接口 | 数据源 | 鉴权 | 用途 |
 | --- | --- | --- | --- |
 | `GET /health` | Worker | 无 | 健康检查 |
-| `POST /track` | AE + D1 | 无 | 写 AE；从 Cloudflare 真实客户端 IP 请求头记录客户端 IP；新客户端按 `client_created_at` 窗口实时入库，授权字段按快照覆盖既有 `stats_clients` |
+| `POST /track` | AE + D1 | 无 | 写 AE；命中当前项目精确版本规则时静默返回 `204`；新客户端实时写入当前日期、版本和 IP，既有客户端在后续有效事件中刷新最后活跃信息 |
 | `GET /ip-blocks` | D1 + Worker | 无 | 返回全局封禁 IP 列表和 Cloudflare 观测到的请求公网出口 IP，供客户端启动后静默检查 |
-| `GET/POST/DELETE /api/ip-blocks` | D1 + AE | `ADMIN_TOKEN` | 管理全局精确 IP 封禁；POST 原子写封禁、删除客户端明细并写防回填标记，DELETE 原子解除封禁并释放标记 |
+| `GET/POST/DELETE /api/block-rules` | D1 + AE | `ADMIN_TOKEN` | 管理全局精确 IP 与项目级、大小写敏感的精确版本规则；POST 同时清理可恢复历史统计，重复提交可重试，DELETE 保留解除前历史过滤截止时间 |
 | `GET/POST /agent-errors` | D1 + R2 | GET 无；POST 有效可信 license | GET 供客户端预检开关、版本和容量；POST 仅在预检条件仍满足时保存 gzip Agent 失败诊断包 |
 | `GET /api/projects` | D1 优先，AE 兜底 | `ADMIN_TOKEN` | 项目列表 |
 | `GET /api/overview` | D1 + AE + KV | `ADMIN_TOKEN` | 概览总数、文本 Token、生图次数、新增、今日活跃、每日统计 |
@@ -66,7 +66,7 @@
 
 除 `/ip-blocks` 和 `/api/*` 管理接口外，Worker 会在路由处理前检查请求的 `CF-Connecting-IP`。命中 D1 `ip_blocks` 的公开读取或上传请求直接返回空 `204`，不会读取请求正文，也不会写入 AE、D1 或 R2；D1 读取异常时保持公开服务可用。客户端在正常启动后异步调用 `/ip-blocks`，只有返回成功、出口 IP 明确且与列表精确匹配时才结束进程，网络或响应异常不影响正常启动，开发调试模式执行相同检查。
 
-管理端封禁 IP 时，无日期按 `stats_clients.last_access_ip` 匹配当前项目客户端，指定日期先按 AE 中客户端当天最后访问 IP 匹配；AE 查询成功后，通过单个 D1 事务写 `ip_blocks`、删除 `stats_clients` 和 `stats_client_activity`、写 `stats_blocked_clients` 并重算 `stats_totals.total_clients`。版本、每日统计和留存等其他历史汇总不回算，Agent 异常元数据和 R2 诊断包不删除。AE 原始事件保留三个月，但 IP 统计会隐藏仍被封禁的地址；解除封禁通过单个 D1 事务删除封禁和客户端标记，后续埋点最迟在 60 秒实时去重缓存过期后重新采集。
+统一规则由 `ip_blocks`、`version_blocks`、`block_rule_history` 和 `block_rule_cleanup_progress` 保存。活动规则统一过滤 AE 实时查询和 Cron 汇总；解除规则后，历史表按解除时间继续排除旧事件。添加或重复提交规则会按清理游标扣除 AE 保留期内已经进入 D1 的每日、总量、页面、版本、配置、模型、Agent、客户端与留存贡献，并绝对重算资源点击；重叠规则依据已成功落库的游标去重，同一项目同时只执行一个清理。高基数客户端和活动记录分页读取，固定上限查询触顶时清理失败且不推进游标。清理失败不撤销规则，可在管理端重试；版本规则清理成功前不能解除，全局 IP 规则必须完成所有已知统计项目的清理后才能解除。Agent 失败诊断元数据和 R2 诊断包不参与版本规则过滤。
 
 ## 统计口径
 
@@ -77,7 +77,7 @@
 | 活跃客户端 | 任意允许事件去重 `client_id` |
 | 总客户端数 | D1 `stats_totals.total_clients` |
 | 今日/7日新增 | D1 `stats_clients.first_seen_date` |
-| 实时客户端入库 | `/track` 只对当前业务日期或前 1 天创建的客户端尝试实时插入并增加总客户端数；授权字段会按客户端授权快照覆盖既有 `stats_clients`；D1 写入失败不影响 `/track` 返回成功；老客户端活跃由 Cron 批量更新 |
+| 实时客户端入库 | `/track` 对当前业务日期或前 1 天创建的客户端尝试实时插入并增加总客户端数，同时直接写当前日期、真实版本和 IP；既有客户端在有效事件中刷新最后活跃日期、版本、IP 和授权快照；D1 写入失败不影响埋点已写入 AE |
 | 最后访问 IP | Worker 优先记录 `CF-Connecting-IP`；如果它是 Pseudo IPv4 的 `240.0.0.0/4` 伪地址，则改用 `CF-Connecting-IPv6`；完全忽略 `CF-Pseudo-IPv4`。AE 写入 `blob13`，D1 `stats_clients.last_access_ip` 由新客户端实时入库和每日 Cron 更新 |
 | 每日统计 | 今天读 AE，前 9 天读 D1 |
 | 最近事件 | 只读 AE，不入 D1 |
@@ -166,7 +166,7 @@ npm run setup:analytics-storage
 | D1 | 创建或复用 `openbidkit-analytics`，binding 为 `ANALYTICS_DB` |
 | R2 | 复用 `openbidkit` 的 `RESOURCE_BUCKET` 保存资源图片、插件当前版与上一版安装包；创建或复用 `openbidkit-agent-errors`，binding 为 `AGENT_ERROR_BUCKET`，配置 7 天删除生命周期 |
 | Cron | 生产账户使用 Workers Paid Plan；确认北京时间 01:00 到 03:00 的 5 个统计 Cron，以及北京时间 04:00 的独立模型信息同步 Cron |
-| Migration | 通过 Wrangler D1 migrations 执行 `analytics-migrations/*.sql` 并记录已应用版本；自动补齐统计字段；首次创建 `ip_blocks` 后把旧 KV 封禁记录一次性导入 D1，并用 `ip_block_storage_meta` 防止重复迁移 |
+| Migration | 通过 Wrangler D1 migrations 执行 `analytics-migrations/*.sql` 并记录已应用版本；自动补齐统计字段；首次创建 `ip_blocks` 后把旧 KV 封禁记录一次性导入 D1，并用 `ip_block_storage_meta` 防止重复迁移；`0010` 增加版本规则、规则历史和清理进度 |
 
 如果刚删除过 `openbidkit-analytics`，脚本会重新创建并更新 `wrangler.jsonc` 的 `database_id`。
 

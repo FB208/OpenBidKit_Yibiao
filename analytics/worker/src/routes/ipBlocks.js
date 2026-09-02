@@ -1,9 +1,8 @@
 import { json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
-import { blockIpAndDeleteStatsClients, unblockIpAndReleaseStatsClients } from '../services/analyticsStatsStore.js';
+import { cleanupBlockRuleStats } from '../services/blockRuleCleanup.js';
+import { deleteBlockRule, listBlockRules, saveBlockRule } from '../services/blockRuleStore.js';
 import { listBlockedIps } from '../services/ipBlockStore.js';
 import {
-  addBusinessDateDays,
-  getBusinessToday,
   getRequestClientIp,
   isValidProjectName,
   logQueryError,
@@ -26,45 +25,65 @@ export async function handlePublicIpBlocks(request, env) {
   }
 }
 
-// 管理员读取、添加和删除全局封禁 IP。
-export async function handleAdminIpBlocks(request, env, url) {
+function normalizeRule(type, value, projectName) {
+  if (type === 'ip') {
+    const ip = normalizeIpAddress(value);
+    return ip ? { type, value: ip, projectName: '' } : null;
+  }
+  if (type === 'version') {
+    const version = normalizeText(value, 50);
+    return version && version !== '-' ? { type, value: version, projectName } : null;
+  }
+  return null;
+}
+
+// 管理员读取、添加、重试清理和解除统一封禁规则。
+export async function handleAdminBlockRules(request, env, url) {
   if (!requireAdmin(request, env)) return unauthorized();
+  const queryProjectName = normalizeText(url.searchParams.get('projectName'), 80);
   if (request.method === 'GET') {
-    return json({ code: 0, blockedIps: await listBlockedIps(env) }, { headers: { 'Cache-Control': 'no-store' } });
+    if (!isValidProjectName(queryProjectName)) return json({ code: 400, message: 'invalid projectName' }, { status: 400 });
+    return json({ code: 0, rules: await listBlockRules(env, queryProjectName) }, { headers: { 'Cache-Control': 'no-store' } });
   }
   if (request.method === 'POST') {
     let body;
     try { body = await request.json(); } catch { return json({ code: 400, message: 'invalid json body' }, { status: 400 }); }
-    const ip = normalizeIpAddress(body.ip);
     const projectName = normalizeText(body.projectName, 80);
-    const activityDate = normalizeText(body.date, 10);
-    const validDate = !activityDate || (
-      /^\d{4}-\d{2}-\d{2}$/.test(activityDate)
-      && addBusinessDateDays(activityDate, 0) === activityDate
-      && activityDate <= getBusinessToday()
-    );
-    if (!ip || !isValidProjectName(projectName) || !validDate) {
+    const rule = normalizeRule(normalizeText(body.type, 20), body.value, projectName);
+    if (!rule || !isValidProjectName(projectName)) {
       return json({ code: 400, message: 'invalid params' }, { status: 400 });
     }
     try {
+      await saveBlockRule(env, rule, body.reason);
+    } catch (error) {
+      logQueryError('block-rule-save', error);
+      return json({ code: 500, message: 'save failed' }, { status: 500 });
+    }
+    try {
+      const cleanup = await cleanupBlockRuleStats(env, rule, projectName);
+      return json({ code: 0, rule, cleanup: { status: 'success', ...cleanup } });
+    } catch (error) {
+      logQueryError('block-rule-cleanup', error);
       return json({
         code: 0,
-        ...(await blockIpAndDeleteStatsClients(env, projectName, ip, body.reason, activityDate)),
+        rule,
+        cleanup: { status: 'failed', error: normalizeText(error?.message || String(error), 1000) },
       });
-    } catch (error) {
-      logQueryError('ip-block-save', error);
-      return json({ code: 500, message: 'save failed' }, { status: 500 });
     }
   }
   if (request.method === 'DELETE') {
-    const ip = normalizeIpAddress(url.searchParams.get('ip'));
-    if (!ip) {
-      return json({ code: 400, message: 'invalid ip' }, { status: 400 });
+    const rule = normalizeRule(normalizeText(url.searchParams.get('type'), 20), url.searchParams.get('value'), queryProjectName);
+    if (!rule || !isValidProjectName(queryProjectName)) {
+      return json({ code: 400, message: 'invalid params' }, { status: 400 });
     }
     try {
-      return json({ code: 0, ...(await unblockIpAndReleaseStatsClients(env, ip)) });
+      return json({ code: 0, deleted: await deleteBlockRule(env, rule, queryProjectName) });
     } catch (error) {
-      logQueryError('ip-block-delete', error);
+      if (error?.code === 'BLOCK_RULE_CLEANUP_INCOMPLETE') {
+        const projects = (error.projects || []).slice(0, 10).join('、');
+        return json({ code: 409, message: `请先完成以下项目的历史清理：${projects || queryProjectName}` }, { status: 409 });
+      }
+      logQueryError('block-rule-delete', error);
       return json({ code: 500, message: 'delete failed' }, { status: 500 });
     }
   }

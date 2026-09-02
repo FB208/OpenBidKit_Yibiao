@@ -149,24 +149,26 @@ export function setupIpStatsActions() {
     const button = event.target.closest('[data-ip-stats-block]');
     if (!button) return;
     const ip = button.dataset.ipStatsBlock;
-    if (!window.confirm(`确认封禁 IP「${ip}」并删除当前视图对应的客户端明细吗？`)) return;
+    if (!window.confirm(`确认添加全局 IP 规则「${ip}」并清理当前项目可恢复的历史统计吗？`)) return;
 
     button.disabled = true;
     button.textContent = '封禁中';
     try {
       const date = state.ipDate.value;
-      const data = await requestJson('/api/ip-blocks', {
+      const data = await requestJson('/api/block-rules', {
         method: 'POST',
         body: {
-          ip,
+          type: 'ip',
+          value: ip,
           projectName: state.projectName.value.trim(),
-          date: date || undefined,
           reason: date ? `IP 统计快捷封禁（${date}）` : 'IP 统计快捷封禁',
         },
       });
       setError('');
-      button.textContent = `已封禁（删 ${formatNumber(data.deletedClientCount)}）`;
-      button.title = `匹配 ${formatNumber(data.matchedClientCount)} 个客户端，删除 ${formatNumber(data.deletedClientCount)} 条客户端明细`;
+      button.textContent = data.cleanup?.status === 'failed' ? '已封禁（清理失败）' : '已封禁';
+      button.title = data.cleanup?.status === 'failed'
+        ? `规则已生效，历史清理失败：${data.cleanup.error || '请到封禁规则页重试'}`
+        : `历史统计已清理至 ${data.cleanup?.cleanedUntil || '当前汇总进度'}`;
     } catch (error) {
       button.disabled = false;
       button.textContent = '封禁';
