@@ -6,6 +6,7 @@ import { handleConfigUsage, handleModelUsage } from './routes/configUsage.js';
 import { handleGitHubRepoStats } from './routes/githubRepoStats.js';
 import { handleHealth } from './routes/health.js';
 import { handleAdminIpBlocks, handlePublicIpBlocks } from './routes/ipBlocks.js';
+import { handleAdminVersionBlocks } from './routes/versionBlocks.js';
 import { handleLatest } from './routes/latest.js';
 import { handleLicenseActivate, handleLicenseConfig, handleOfflineLicense } from './routes/license.js';
 import { handleAdminModelInfoCache, handleAdminModelInfoOverride, handlePublicModelInfo } from './routes/modelInfo.js';
@@ -64,6 +65,7 @@ const routes = new Map([
   ['/api/agent-errors', handleAdminAgentErrors],
   ['/api/github-repo-stats', handleGitHubRepoStats],
   ['/api/ip-blocks', handleAdminIpBlocks],
+  ['/api/version-blocks', handleAdminVersionBlocks],
 ]);
 
 export default {

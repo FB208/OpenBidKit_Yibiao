@@ -32,7 +32,7 @@
         </div>
         <div class="nav-group">
           <span class="nav-group-label">系统管理</span>
-          <button class="nav-item" type="button" data-tab-button="ip-blocks">IP 封禁</button>
+          <button class="nav-item" type="button" data-tab-button="ip-blocks">封禁规则</button>
           <button class="nav-item" type="button" data-tab-button="notice">公告管理</button>
           <button class="nav-item" type="button" data-tab-button="license">授权管理</button>
           <button class="nav-item" type="button" data-tab-button="resources">资源管理</button>
@@ -388,7 +388,7 @@
           </section>
         </section>
 
-        <!-- IP 封禁 -->
+        <!-- 封禁规则 -->
         <section id="tab-ip-blocks" class="tab-panel" data-tab-panel="ip-blocks">
           <section class="panel section notice-panel">
             <div class="section-head">
@@ -411,6 +411,34 @@
             </div>
             <div id="ipBlockStatus" class="notice-status"></div>
             <div id="ipBlockTable" class="ip-block-table"></div>
+          </section>
+
+          <section class="panel section notice-panel">
+            <div class="section-head">
+              <div>
+                <h2>版本号封禁</h2>
+                <p>按当前项目封禁指定版本号（或未上报版本号的空版本号）。命中后 <code>/track</code> 上报会被静默丢弃，不会写入统计，也不会导致客户端自行退出。封禁生效后会清理当天尚未被凌晨定时任务汇总的实时客户端数据。</p>
+              </div>
+            </div>
+            <label class="agent-error-version-field">
+              版本号
+              <div class="agent-error-version-input">
+                <input id="versionBlockInput" maxlength="50" placeholder="例如 2.8.0，回车逐个添加" />
+                <button id="addVersionBlockButton" class="secondary-button" type="button">添加</button>
+              </div>
+            </label>
+            <div class="notice-form ip-block-form">
+              <label>
+                封禁原因（可选）
+                <input id="versionBlockReason" maxlength="500" placeholder="例如：异常灰度版本" />
+              </label>
+              <label class="agent-error-switch">
+                <input id="versionBlockEmptyCheckbox" type="checkbox" />
+                <span>封禁空版本号（未上报版本号的埋点）</span>
+              </label>
+            </div>
+            <div id="versionBlockTags" class="agent-error-versions"></div>
+            <div id="versionBlockStatus" class="notice-status"></div>
           </section>
         </section>
 

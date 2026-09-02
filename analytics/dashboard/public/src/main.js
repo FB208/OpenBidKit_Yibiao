@@ -4,7 +4,7 @@ import { loadAgentErrors, setupAgentErrorsPage } from './pages/agentErrors.js';
 import { loadClients, loadClientDetail, loadIpStats, setupIpStatsActions } from './pages/clients.js';
 import { loadConfigUsage, loadModelUsage } from './pages/configUsage.js';
 import { loadLatest } from './pages/latest.js';
-import { loadIpBlocks, setupIpBlocksPage } from './pages/ipBlocks.js';
+import { loadIpBlocks, loadVersionBlocksSafely, setupIpBlocksPage } from './pages/ipBlocks.js';
 import { loadModelInfoCache, setupModelInfoCachePage, syncModelInfoCache } from './pages/modelInfoCache.js';
 import { downloadOfflineLicense, generateOfflineLicense, loadLicenseConfig, saveLicenseConfig } from './pages/license.js';
 import { bindNoticeEvents, loadNotices } from './pages/notice.js';
@@ -25,7 +25,7 @@ const tabLoaders = {
   models: () => loadModelUsage(),
   agent: (options = {}) => Promise.all([loadAgentRuntime(), loadAgentErrors({ resetPage: options.resetAgentErrorPage })]),
   latest: (options = {}) => loadLatest(options),
-  'ip-blocks': () => loadIpBlocks(),
+  'ip-blocks': () => Promise.all([loadIpBlocks(), loadVersionBlocksSafely()]),
   notice: () => loadNotices(),
   license: () => loadLicenseConfig(),
   resources: () => loadResources(),

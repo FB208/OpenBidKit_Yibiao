@@ -742,6 +742,96 @@ export async function blockIpAndDeleteStatsClients(env, projectName, blockedIp, 
   };
 }
 
+// 按项目和版本号查询当天匹配的客户端 ID（用于版本封禁清理）。
+function dailyClientIdsByVersionSql(projectName, version, activityDate) {
+  return `
+    SELECT DISTINCT blob7 AS clientId
+    FROM ${RAW_DATASET}
+    WHERE ${ANALYTICS_DATA_FILTER}
+      AND blob1 = ${sqlString(projectName)}
+      AND blob2 IN ${allowedEventsSql()}
+      AND blob7 != ''
+      AND blob4 = ${sqlString(version)}
+      AND ${businessDateCondition(activityDate)}
+  `;
+}
+
+// 原子写入版本号封禁，并清理规则生效当天、尚未被凌晨定时任务汇总的实时客户端影子数据。
+export async function blockVersionAndDeleteStatsClients(env, projectName, version, reason) {
+  const db = requireStatsDb(env);
+  const normalizedProjectName = normalizeText(projectName, 80);
+  const normalizedVersionValue = normalizeText(version, 50);
+  const createdAt = nowText();
+  const businessDate = getBusinessToday();
+
+  // 先激活规则再扫描客户端快照：规则写入 D1 后立即对新上报生效，
+  // 缩小“扫描快照”和“规则生效”之间可能漏删新客户端的竞态窗口。
+  await db.prepare(`
+    INSERT INTO version_blocks (project_name, version, reason, created_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(project_name, version) DO UPDATE SET reason = excluded.reason
+  `).bind(normalizedProjectName, normalizedVersionValue, normalizeText(reason, 500), createdAt).run();
+  const ruleRow = await db.prepare(
+    'SELECT version, reason, created_at AS createdAt FROM version_blocks WHERE project_name = ? AND version = ?'
+  ).bind(normalizedProjectName, normalizedVersionValue).first();
+
+  const result = await queryAnalytics(env, `
+    SELECT clientId
+    FROM (${dailyClientIdsByVersionSql(normalizedProjectName, normalizedVersionValue, businessDate)})
+    LIMIT ${MAX_ANALYTICS_ROWS}
+  `);
+  const clientIds = Array.from(new Set((result.data || []).map((row) => normalizeText(row.clientId, 120)).filter(Boolean)));
+
+  const statements = [];
+
+  for (const chunk of chunkRows(clientIds.map((clientId) => ({ clientId })))) {
+    // 写入墓碑记录，对齐 IP 封禁的 stats_blocked_clients：防止凌晨定时汇总从 AE
+    // 重新读到封禁前的历史事件后，把这里刚清理掉的客户端又插回 stats_clients。
+    statements.push(db.prepare(`
+      INSERT INTO stats_blocked_version_clients (project_name, client_id, blocked_version, created_at)
+      SELECT ?, json_extract(item.value, '$.clientId'), ?, ?
+      FROM json_each(?) AS item
+      WHERE json_extract(item.value, '$.clientId') != ''
+      ON CONFLICT(project_name, client_id, blocked_version) DO NOTHING
+    `).bind(normalizedProjectName, normalizedVersionValue, createdAt, rowsJson(chunk)));
+    statements.push(db.prepare(`
+      DELETE FROM stats_client_activity
+      WHERE project_name = ?
+        AND activity_date = ?
+        AND client_id IN (
+          SELECT json_extract(item.value, '$.clientId') FROM json_each(?) AS item
+        )
+    `).bind(normalizedProjectName, businessDate, rowsJson(chunk)));
+    statements.push(db.prepare(`
+      DELETE FROM stats_clients
+      WHERE project_name = ?
+        AND substr(created_at, 1, 10) = ?
+        AND client_id IN (
+          SELECT json_extract(item.value, '$.clientId') FROM json_each(?) AS item
+        )
+    `).bind(normalizedProjectName, businessDate, rowsJson(chunk)));
+  }
+
+  statements.push(db.prepare(`
+    UPDATE stats_totals
+    SET total_clients = (SELECT COUNT(*) FROM stats_clients WHERE project_name = ?),
+      updated_at = ?
+    WHERE project_name = ?
+  `).bind(normalizedProjectName, createdAt, normalizedProjectName));
+
+  const results = await batchRun(db, statements);
+  const deletedClientCount = results
+    .slice(0, statements.length - 1)
+    .filter((_, index) => index % 3 === 2)
+    .reduce((sum, item) => sum + Number(item?.meta?.changes || 0), 0);
+
+  return {
+    rule: ruleRow || { version: normalizedVersionValue, reason: normalizeText(reason, 500), createdAt },
+    matchedClientCount: clientIds.length,
+    deletedClientCount,
+  };
+}
+
 // 原子解除 IP 封禁并释放客户端标记，允许后续事件重新建立客户端数据。
 export async function unblockIpAndReleaseStatsClients(env, blockedIp) {
   const db = requireStatsDb(env);
@@ -750,6 +840,23 @@ export async function unblockIpAndReleaseStatsClients(env, blockedIp) {
     db.prepare('DELETE FROM stats_blocked_clients WHERE blocked_ip = ?').bind(blockedIp),
   ]);
   return { ip: blockedIp, releasedClientCount: number(results[1]?.meta?.changes) };
+}
+
+// 原子解除版本号封禁并释放客户端标记，允许凌晨定时汇总重新把这些客户端数据统计回来。
+export async function unblockVersionAndReleaseStatsClients(env, projectName, version) {
+  const db = requireStatsDb(env);
+  const normalizedProjectName = normalizeText(projectName, 80);
+  const normalizedVersionValue = normalizeText(version, 50);
+  const results = await batchRun(db, [
+    db.prepare('DELETE FROM version_blocks WHERE project_name = ? AND version = ?')
+      .bind(normalizedProjectName, normalizedVersionValue),
+    db.prepare('DELETE FROM stats_blocked_version_clients WHERE project_name = ? AND blocked_version = ?')
+      .bind(normalizedProjectName, normalizedVersionValue),
+  ]);
+  return {
+    removed: Number(results[0]?.meta?.changes || 0) > 0,
+    releasedClientCount: number(results[1]?.meta?.changes),
+  };
 }
 
 export async function queryStatsClientDetail(env, projectName, clientId, range) {
@@ -1804,6 +1911,12 @@ function prepareClientStatements(db, rows, updatedAt) {
         WHERE blocked.project_name = rows.project_name
           AND blocked.client_id = rows.client_id
       )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM stats_blocked_version_clients blocked_version
+        WHERE blocked_version.project_name = rows.project_name
+          AND blocked_version.client_id = rows.client_id
+      )
     ON CONFLICT(project_name, client_id) DO UPDATE SET
       first_seen_at = MIN(stats_clients.first_seen_at, excluded.first_seen_at),
       first_seen_date = MIN(stats_clients.first_seen_date, excluded.first_seen_date),
@@ -1847,6 +1960,12 @@ function prepareClientActivityStatements(db, rows, updatedAt) {
         FROM stats_blocked_clients blocked
         WHERE blocked.project_name = rows.project_name
           AND blocked.client_id = rows.client_id
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM stats_blocked_version_clients blocked_version
+        WHERE blocked_version.project_name = rows.project_name
+          AND blocked_version.client_id = rows.client_id
       )
     ON CONFLICT(project_name, activity_date, client_id) DO UPDATE SET
       client_created_date = excluded.client_created_date,
