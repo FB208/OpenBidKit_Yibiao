@@ -827,6 +827,20 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         />
       </div>
       <div className="settings-list">
+        {isDecorativeHeaderFooterStyle(headerFooterStyle) && (
+          <>
+            {usesChromeBarColor && (
+              <label className="settings-row">
+                <div className="settings-row-copy"><strong>色条浅底</strong></div>
+                <input type="color" value={config.page.chrome_bar_color} onChange={(event) => updatePage({ chrome_bar_color: event.target.value })} />
+              </label>
+            )}
+            <label className="settings-row">
+              <div className="settings-row-copy"><strong>强调色</strong></div>
+              <input type="color" value={config.page.chrome_accent_color} onChange={(event) => updatePage({ chrome_accent_color: event.target.value })} />
+            </label>
+          </>
+        )}
         <label className="settings-row">
           <div className="settings-row-copy"><strong>页眉</strong></div>
           <AppSwitch checked={config.page.header_enabled} onCheckedChange={(checked) => updatePage({ header_enabled: checked })} />
@@ -908,20 +922,6 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
                 <input type="color" value={config.page.footer_color} onChange={(event) => updatePage({ footer_color: event.target.value })} />
               </label>
             )}
-          </>
-        )}
-        {isDecorativeHeaderFooterStyle(headerFooterStyle) && (
-          <>
-            {usesChromeBarColor && (
-              <label className="settings-row">
-                <div className="settings-row-copy"><strong>色条浅底</strong></div>
-                <input type="color" value={config.page.chrome_bar_color} onChange={(event) => updatePage({ chrome_bar_color: event.target.value })} />
-              </label>
-            )}
-            <label className="settings-row">
-              <div className="settings-row-copy"><strong>强调色</strong></div>
-              <input type="color" value={config.page.chrome_accent_color} onChange={(event) => updatePage({ chrome_accent_color: event.target.value })} />
-            </label>
           </>
         )}
         {!isDecorativeHeaderFooterStyle(headerFooterStyle) && (config.page.footer_enabled || config.page.page_number_enabled) && (

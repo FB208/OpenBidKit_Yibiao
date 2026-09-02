@@ -93,13 +93,7 @@ function orderedListStyleToCss(style: OrderedListStyle | string | undefined) {
   }
 }
 
-const HTML_HEADER_HEIGHT_MM: Record<string, number> = {
-  'top-bar': 13.5,
-  slant: 15.5,
-  letterhead: 13,
-  frame: 14.5,
-};
-
+const HEADER_CHROME_HEIGHT_CM = 1.35;
 const HTML_FOOTER_HEIGHT_CM: Record<string, number> = {
   'top-bar': 0.85,
   slant: 0.85,
@@ -124,16 +118,6 @@ function previewShowsFooter(page: PageSetupConfig): boolean {
 
 function chromeFromEdgeCm(page: PageSetupConfig): number {
   return isHtmlHeaderFooterStyle(page.header_footer_style) ? CHROME_HTML_FROM_EDGE_CM : CHROME_TABLE_FROM_EDGE_CM;
-}
-
-function decorativeHeaderHeightCm(page: PageSetupConfig): number {
-  const style = resolveHeaderFooterStyle(page.header_footer_style);
-  const htmlMm = HTML_HEADER_HEIGHT_MM[style];
-  if (htmlMm) return htmlMm / 10;
-  if (style === 'band') return CHROME_BAND_ROW_CM;
-  if (style === 'rules') return 0.9;
-  if (style === 'footer-badge') return 0.7;
-  return 0;
 }
 
 function decorativeFooterHeightCm(page: PageSetupConfig): number {
@@ -162,7 +146,7 @@ function previewPageChromeLayout(page: PageSetupConfig): {
   const left = page.margin_left_cm ?? 2;
   const right = page.margin_right_cm ?? 2;
   const decorative = isDecorativeHeaderFooterStyle(page.header_footer_style);
-  const headerChrome = decorative && previewShowsHeader(page) ? decorativeHeaderHeightCm(page) : 0;
+  const headerChrome = decorative && previewShowsHeader(page) ? HEADER_CHROME_HEIGHT_CM : 0;
   const footerChrome = decorative && previewShowsFooter(page) ? decorativeFooterHeightCm(page) : 0;
   return {
     top: headerChrome > 0 ? Math.max(top, minBodyMarginForChromeCm(page, headerChrome)) : top,

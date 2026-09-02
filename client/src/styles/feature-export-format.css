@@ -1444,6 +1444,7 @@
 .page-chrome-header {
   font-family: var(--ef-header-font, 'SimSun', serif);
   font-size: var(--ef-header-size, 9pt);
+  min-height: var(--ef-header-chrome-height, 1.35cm);
 }
 
 .page-chrome-footer {
@@ -1455,11 +1456,11 @@
   display: grid;
   grid-template-columns: 28pt minmax(0, 1fr) 28pt;
   align-items: stretch;
-  min-height: 22pt;
 }
 
 .page-chrome.is-band.page-chrome-footer {
   grid-template-columns: 36pt minmax(0, 1fr) auto;
+  min-height: 22pt;
 }
 
 .page-chrome-badge {
@@ -1522,36 +1523,8 @@
   padding: 0;
 }
 
-.page-chrome.is-top-bar.page-chrome-header.is-html {
-  min-height: 13.5mm;
-}
-
-.page-chrome.is-top-bar.page-chrome-header.is-html .slot-header {
-  height: 13.5mm;
-}
-
-.page-chrome.is-slant.page-chrome-header.is-html {
-  min-height: 15.5mm;
-}
-
-.page-chrome.is-slant.page-chrome-header.is-html .slant-header {
-  height: 15.5mm;
-}
-
-.page-chrome.is-letterhead.page-chrome-header.is-html {
-  min-height: 13mm;
-}
-
-.page-chrome.is-frame.page-chrome-header.is-html {
-  min-height: 14.5mm;
-}
-
-.page-chrome.is-letterhead.page-chrome-header.is-html .letter-header {
-  height: 13mm;
-}
-
-.page-chrome.is-frame.page-chrome-header.is-html .frame-header {
-  height: 14.5mm;
+.page-chrome.page-chrome-header.is-html > div {
+  height: var(--ef-header-chrome-height, 1.35cm);
 }
 
 .page-chrome.is-top-bar.page-chrome-footer.is-slot {
@@ -1947,4 +1920,3 @@
     grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
   }
 }
-

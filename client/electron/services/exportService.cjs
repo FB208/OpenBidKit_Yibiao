@@ -687,7 +687,7 @@ function buildBandHeader(pageSetup) {
         fill: colors.bar,
         children: [chromeParagraph([textRun('')])],
       }),
-    ], 360)],
+    ], cmToTwips(HEADER_CHROME_HEIGHT_CM))],
   });
 }
 
@@ -704,13 +704,7 @@ function mmToCssPx(mm) {
   return Math.max(1, Math.round((Number(mm) || 0) * 96 / 25.4));
 }
 
-const HTML_HEADER_HEIGHT_MM = {
-  'top-bar': 13.5,
-  slant: 15.5,
-  letterhead: 13,
-  frame: 14.5,
-};
-
+const HEADER_CHROME_HEIGHT_CM = 1.35;
 const HTML_FOOTER_HEIGHT_CM = {
   'top-bar': 0.85,
   slant: 0.85,
@@ -728,13 +722,7 @@ function chromeFromEdgeCm(pageSetup) {
 }
 
 function decorativeHeaderHeightCm(pageSetup) {
-  const style = resolveHeaderFooterStyle(pageSetup);
-  const htmlMm = HTML_HEADER_HEIGHT_MM[style];
-  if (htmlMm) return htmlMm / 10;
-  if (style === 'band') return CHROME_BAND_ROW_TWIPS / 567;
-  if (style === 'rules') return 0.9;
-  if (style === 'footer-badge') return 0.7;
-  return 0;
+  return isDecorativeHeaderFooterStyle(pageSetup) ? HEADER_CHROME_HEIGHT_CM : 0;
 }
 
 function decorativeFooterHeightCm(pageSetup) {
@@ -776,7 +764,7 @@ async function buildHtmlChromeHeader(pageSetup, style) {
   const dims = PAPER_DIMENSIONS_MM[pageSetup?.paper_size] || PAPER_DIMENSIONS_MM.a4;
   const landscape = pageSetup?.orientation === 'landscape';
   const pageWidthMm = landscape ? dims.height : dims.width;
-  const heightMm = HTML_HEADER_HEIGHT_MM[style] || 13.5;
+  const heightMm = HEADER_CHROME_HEIGHT_CM * 10;
   const widthPx = mmToCssPx(pageWidthMm);
   const heightPx = mmToCssPx(heightMm);
   const html = fillChromeHeaderHtml(style, {
