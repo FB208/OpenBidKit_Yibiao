@@ -123,7 +123,50 @@
                 <h2>客户端统计</h2>
                 <p>客户端列表来自 D1；详情弹窗实时查询 Analytics Engine。</p>
               </div>
+              <div class="pager">
+                <button id="prevClientsPage" type="button">上一页</button>
+                <span id="clientsPageInfo">第 1 页</span>
+                <input id="clientsPageInput" type="number" min="1" value="1" aria-label="跳转客户端统计页码" />
+                <button id="jumpClientsPage" type="button">跳转</button>
+                <button id="nextClientsPage" type="button">下一页</button>
+              </div>
             </div>
+            <form id="clientsFilterForm" class="filter-row">
+              <label>
+                客户端 ID
+                <input id="clientIdFilter" type="search" maxlength="120" placeholder="支持部分匹配" />
+              </label>
+              <label>
+                最近活跃日期（开始）
+                <input id="clientActiveFrom" type="date" />
+              </label>
+              <label>
+                最近活跃日期（结束）
+                <input id="clientActiveTo" type="date" />
+              </label>
+              <label>
+                授权类型
+                <select id="clientLicensePlan">
+                  <option value="">全部</option>
+                  <option value="free">免费授权</option>
+                  <option value="offline">离线授权</option>
+                  <option value="personal_premium">个人高级版</option>
+                  <option value="enterprise_premium">企业高级版</option>
+                </select>
+              </label>
+              <label>
+                最后访问 IP
+                <input id="clientIpFilter" type="search" maxlength="80" placeholder="精确匹配" />
+              </label>
+              <label>
+                最近活跃版本
+                <input id="clientVersionFilter" type="search" maxlength="50" placeholder="支持部分匹配" />
+              </label>
+              <div class="client-filter-actions">
+                <button id="resetClientFilters" class="secondary-button" type="button">清空</button>
+                <button type="submit">查询</button>
+              </div>
+            </form>
             <div id="clientsTable"></div>
           </section>
         </section>

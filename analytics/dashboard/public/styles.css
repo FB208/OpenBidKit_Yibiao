@@ -821,6 +821,17 @@ button:disabled {
   margin: 10px 0 14px;
 }
 
+.client-filter-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  grid-column: 1 / -1;
+}
+
+.client-filter-actions button {
+  align-self: auto;
+}
+
 /* ===== 按钮变体 ===== */
 .link-button {
   align-self: auto;

@@ -447,8 +447,42 @@ export async function queryStatsOverview(env, projectName) {
   };
 }
 
-export async function queryStatsClients(env, projectName) {
+// 按管理端筛选条件分页查询客户端。
+export async function queryStatsClients(env, projectName, filters, page, pageSize) {
   const db = requireStatsDb(env);
+  const normalizedPage = Math.max(1, Math.floor(number(page) || 1));
+  const normalizedPageSize = Math.min(100, Math.max(1, Math.floor(number(pageSize) || 20)));
+  const offset = (normalizedPage - 1) * normalizedPageSize;
+  const conditions = ['project_name = ?'];
+  const bindings = [projectName];
+
+  if (filters.clientId) {
+    conditions.push('instr(client_id, ?) > 0');
+    bindings.push(filters.clientId);
+  }
+  if (filters.activeFrom) {
+    conditions.push('last_active_date >= ?');
+    bindings.push(filters.activeFrom);
+  }
+  if (filters.activeTo) {
+    conditions.push('last_active_date <= ?');
+    bindings.push(filters.activeTo);
+  }
+  if (filters.licensePlan) {
+    conditions.push('license_plan = ?');
+    bindings.push(filters.licensePlan);
+  }
+  if (filters.lastAccessIp) {
+    conditions.push('last_access_ip = ?');
+    bindings.push(filters.lastAccessIp);
+  }
+  if (filters.lastActiveVersion) {
+    conditions.push('instr(last_active_version, ?) > 0');
+    bindings.push(filters.lastActiveVersion);
+  }
+
+  const where = conditions.join(' AND ');
+  const total = await first(db, `SELECT COUNT(*) AS count FROM stats_clients WHERE ${where}`, bindings);
   const rows = await all(db, `
     SELECT
       client_id AS clientId,
@@ -463,23 +497,29 @@ export async function queryStatsClients(env, projectName) {
       source_trusted AS sourceTrusted,
       untrusted_reason AS untrustedReason
     FROM stats_clients
-    WHERE project_name = ?
+    WHERE ${where}
     ORDER BY last_active_date DESC, first_seen_at DESC, client_id ASC
-  `, [projectName]);
+    LIMIT ? OFFSET ?
+  `, [...bindings, normalizedPageSize, offset]);
 
-  return rows.map((row) => ({
-    clientId: row.clientId,
-    firstSeenAt: row.firstSeenAt,
-    activeDays: number(row.activeDays),
-    lastActiveDate: row.lastActiveDate || '',
-    lastActiveVersion: row.lastActiveVersion || '',
-    lastAccessIp: row.lastAccessIp || '',
-    licenseStatus: row.licenseStatus || '',
-    licensePlan: row.licensePlan || '',
-    licenseExpiresAt: row.licenseExpiresAt || '',
-    sourceTrusted: row.sourceTrusted || '',
-    untrustedReason: row.untrustedReason || '',
-  }));
+  return {
+    page: normalizedPage,
+    pageSize: normalizedPageSize,
+    total: number(total?.count),
+    items: rows.map((row) => ({
+      clientId: row.clientId,
+      firstSeenAt: row.firstSeenAt,
+      activeDays: number(row.activeDays),
+      lastActiveDate: row.lastActiveDate || '',
+      lastActiveVersion: row.lastActiveVersion || '',
+      lastAccessIp: row.lastAccessIp || '',
+      licenseStatus: row.licenseStatus || '',
+      licensePlan: row.licensePlan || '',
+      licenseExpiresAt: row.licenseExpiresAt || '',
+      sourceTrusted: row.sourceTrusted || '',
+      untrustedReason: row.untrustedReason || '',
+    })),
+  };
 }
 
 // 按客户端汇总指定日期内最后一次访问 IP 和创建日期。

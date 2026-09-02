@@ -48,14 +48,37 @@ function bindClientDetailButtons() {
   });
 }
 
-export async function loadClients() {
+// 按当前筛选和页码加载客户端列表。
+export async function loadClients(options = {}) {
+  if (options.resetClientsPage) {
+    appState.clientsPage = 1;
+  }
+
   assertReady();
   await loadProjectOptions();
   saveSettings();
 
-  const { projectName } = getEncodedProjectAndDays();
-  const data = await requestJson(`/api/clients?projectName=${projectName}`);
-  const rows = (data.clients || []).map((client) => ({
+  const query = new URLSearchParams({
+    projectName: state.projectName.value.trim(),
+    page: String(appState.clientsPage),
+  });
+  const filters = [
+    ['clientId', state.clientIdFilter.value.trim()],
+    ['activeFrom', state.clientActiveFrom.value],
+    ['activeTo', state.clientActiveTo.value],
+    ['licensePlan', state.clientLicensePlan.value],
+    ['lastAccessIp', state.clientIpFilter.value.trim()],
+    ['lastActiveVersion', state.clientVersionFilter.value.trim()],
+  ];
+  for (const [key, value] of filters) {
+    if (value) query.set(key, value);
+  }
+
+  const data = await requestJson(`/api/clients?${query}`);
+  appState.clientsTotal = Number(data.total || 0);
+  appState.clientsPage = Number(data.page || appState.clientsPage);
+  appState.clientsPageSize = Number(data.pageSize || appState.clientsPageSize);
+  const rows = (data.items || []).map((client) => ({
     ...client,
     activeDays: formatNumber(client.activeDays),
     licensePlanText: licensePlanText(client.licensePlan),

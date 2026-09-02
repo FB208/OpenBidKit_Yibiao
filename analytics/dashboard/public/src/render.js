@@ -64,6 +64,16 @@ export function updateIpPager() {
   state.nextIpPage.disabled = appState.ipPage >= totalPages;
 }
 
+// 同步客户端统计分页控件。
+export function updateClientsPager() {
+  const totalPages = Math.max(1, Math.ceil(appState.clientsTotal / appState.clientsPageSize));
+  state.clientsPageInfo.textContent = `第 ${appState.clientsPage} / ${totalPages} 页，共 ${formatNumber(appState.clientsTotal)} 条`;
+  state.clientsPageInput.value = String(appState.clientsPage);
+  state.clientsPageInput.max = String(totalPages);
+  state.prevClientsPage.disabled = appState.clientsPage <= 1;
+  state.nextClientsPage.disabled = appState.clientsPage >= totalPages;
+}
+
 export function setNoticeStatus(message, type = '') {
   state.noticeStatus.className = type ? `notice-status ${type}` : 'notice-status';
   state.noticeStatus.textContent = message || '';

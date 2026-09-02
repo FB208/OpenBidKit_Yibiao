@@ -12,13 +12,13 @@ import { loadOverview } from './pages/overview.js';
 import { bindResourceEvents, loadResources } from './pages/resources.js';
 import { loadPlugins, setupPluginsPage } from './pages/plugins.js';
 import { loadTraffic } from './pages/traffic.js';
-import { setError, setStatus, updateIpPager, updateLatestPager } from './render.js';
+import { setError, setStatus, updateClientsPager, updateIpPager, updateLatestPager } from './render.js';
 import { appState, state } from './state.js';
 import { activateTab, getInitialTab } from './tabs.js';
 
 const tabLoaders = {
   overview: () => loadOverview(),
-  clients: () => loadClients(),
+  clients: (options = {}) => loadClients(options),
   ips: (options = {}) => loadIpStats(options),
   traffic: () => loadTraffic(),
   config: () => loadConfigUsage(),
@@ -47,6 +47,7 @@ function saveSettingsAndClearCache() {
   saveSettings();
   tabLoadedAt.clear();
   appState.agentErrorPage = 1;
+  appState.clientsPage = 1;
 }
 
 function getLatestTotalPages() {
@@ -55,6 +56,11 @@ function getLatestTotalPages() {
 
 function getIpTotalPages() {
   return Math.max(1, Math.ceil(appState.ipTotal / appState.ipPageSize));
+}
+
+// 计算客户端统计总页数。
+function getClientsTotalPages() {
+  return Math.max(1, Math.ceil(appState.clientsTotal / appState.clientsPageSize));
 }
 
 function jumpLatestPage() {
@@ -77,11 +83,23 @@ function jumpIpPage() {
   void refreshActiveTab({ forceRefresh: true });
 }
 
+// 跳转到客户端统计指定页。
+function jumpClientsPage() {
+  const value = Number(state.clientsPageInput.value || appState.clientsPage);
+  if (!Number.isFinite(value)) {
+    return;
+  }
+
+  appState.clientsPage = Math.min(Math.max(1, Math.floor(value)), getClientsTotalPages());
+  void refreshActiveTab({ forceRefresh: true });
+}
+
 async function refreshActiveTab(options = {}) {
   setError('');
   const activeTab = appState.activeTab;
   if (!options.forceRefresh && isTabCacheFresh(activeTab)) {
     setStatus('ok', '已连接');
+    updateClientsPager();
     updateLatestPager();
     updateIpPager();
     return;
@@ -102,13 +120,14 @@ async function refreshActiveTab(options = {}) {
     setError(error?.message || String(error));
   } finally {
     state.refreshButton.disabled = false;
+    updateClientsPager();
     updateLatestPager();
     updateIpPager();
   }
 }
 
 function bindEvents() {
-  state.refreshButton.addEventListener('click', () => refreshActiveTab({ resetLatestPage: true, resetIpPage: true, forceRefresh: true }));
+  state.refreshButton.addEventListener('click', () => refreshActiveTab({ resetClientsPage: true, resetLatestPage: true, resetIpPage: true, forceRefresh: true }));
   bindNoticeEvents();
   state.loadLicenseConfigButton.addEventListener('click', () => loadLicenseConfig().catch(() => undefined));
   state.saveLicenseConfigButton.addEventListener('click', saveLicenseConfig);
@@ -149,11 +168,33 @@ function bindEvents() {
       jumpIpPage();
     }
   });
+  state.prevClientsPage.addEventListener('click', () => {
+    appState.clientsPage = Math.max(1, appState.clientsPage - 1);
+    void refreshActiveTab({ forceRefresh: true });
+  });
+  state.nextClientsPage.addEventListener('click', () => {
+    appState.clientsPage += 1;
+    void refreshActiveTab({ forceRefresh: true });
+  });
+  state.jumpClientsPage.addEventListener('click', jumpClientsPage);
+  state.clientsPageInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      jumpClientsPage();
+    }
+  });
+  state.clientsFilterForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void refreshActiveTab({ resetClientsPage: true, forceRefresh: true });
+  });
+  state.resetClientFilters.addEventListener('click', () => {
+    state.clientsFilterForm.reset();
+    void refreshActiveTab({ resetClientsPage: true, forceRefresh: true });
+  });
 
   for (const button of state.tabButtons) {
     button.addEventListener('click', () => {
       activateTab(button.dataset.tabButton);
-      void refreshActiveTab({ resetLatestPage: true, resetIpPage: true, resetAgentErrorPage: true });
+      void refreshActiveTab({ resetClientsPage: true, resetLatestPage: true, resetIpPage: true, resetAgentErrorPage: true });
     });
   }
 
@@ -182,8 +223,9 @@ loadSettings();
 activateTab(getInitialTab());
 updateLatestPager();
 updateIpPager();
+updateClientsPager();
 bindEvents();
 
 if (state.adminToken.value.trim()) {
-  void refreshActiveTab({ resetLatestPage: true, resetIpPage: true });
+  void refreshActiveTab({ resetClientsPage: true, resetLatestPage: true, resetIpPage: true });
 }
