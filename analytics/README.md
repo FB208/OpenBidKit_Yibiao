@@ -31,7 +31,7 @@
 | `GET /health` | Worker | 无 | 健康检查 |
 | `POST /track` | AE + D1 | 无 | 写 AE；命中当前项目精确版本规则时静默返回 `204`；新客户端实时写入当前日期、版本和 IP，既有客户端在后续有效事件中刷新最后活跃信息 |
 | `GET /ip-blocks` | D1 + Worker | 无 | 返回全局封禁 IP 列表和 Cloudflare 观测到的请求公网出口 IP，供客户端启动后静默检查 |
-| `GET/POST/DELETE /api/block-rules` | D1 + AE | `ADMIN_TOKEN` | 管理全局精确 IP 与项目级、大小写敏感的精确版本规则；POST 同时清理可恢复历史统计，重复提交可重试，DELETE 保留解除前历史过滤截止时间 |
+| `GET/POST/DELETE /api/block-rules` | D1 + AE | `ADMIN_TOKEN` | 管理全局精确 IP 与项目级、大小写敏感的精确版本规则；POST 清理当天实时写入 D1 的异常新客户端，不修改 Cron 历史汇总 |
 | `GET/POST /agent-errors` | D1 + R2 | GET 无；POST 有效可信 license | GET 供客户端预检开关、版本和容量；POST 仅在预检条件仍满足时保存 gzip Agent 失败诊断包 |
 | `GET /api/projects` | D1 优先，AE 兜底 | `ADMIN_TOKEN` | 项目列表 |
 | `GET /api/overview` | D1 + AE + KV | `ADMIN_TOKEN` | 概览总数、文本 Token、生图次数、新增、今日活跃、每日统计 |
@@ -66,7 +66,7 @@
 
 除 `/ip-blocks` 和 `/api/*` 管理接口外，Worker 会在路由处理前检查请求的 `CF-Connecting-IP`。命中 D1 `ip_blocks` 的公开读取或上传请求直接返回空 `204`，不会读取请求正文，也不会写入 AE、D1 或 R2；D1 读取异常时保持公开服务可用。客户端在正常启动后异步调用 `/ip-blocks`，只有返回成功、出口 IP 明确且与列表精确匹配时才结束进程，网络或响应异常不影响正常启动，开发调试模式执行相同检查。
 
-统一规则由 `ip_blocks`、`version_blocks`、`block_rule_history` 和 `block_rule_cleanup_progress` 保存。版本规则支持大小写敏感的具体版本和原始空版本，管理端将后者明确显示为“空版本”。活动规则统一过滤 AE 实时查询和 Cron 汇总；解除规则后，历史表按解除时间继续排除旧事件。添加或重复提交规则会按清理游标扣除 AE 保留期内已经进入 D1 的每日、总量、页面、版本、配置、模型、Agent、客户端与留存贡献，并绝对重算资源点击；重叠规则依据已成功落库的游标去重，同一项目同时只执行一个清理。规则条件按作用域合并，客户端、IP 与 Cron 项目等动态列表按 SQL 字节预算分块，最终查询仍会在超过 AE 长度上限时于发送前中止。高基数客户端和活动记录分页读取，固定上限查询触顶时清理失败且不推进游标。清理失败不撤销规则，可在管理端重试；版本规则清理成功前不能解除，全局 IP 规则必须完成所有已知统计项目的清理后才能解除。Agent 失败诊断元数据和 R2 诊断包不参与版本规则过滤。
+统一规则由 `ip_blocks` 和 `version_blocks` 保存。版本规则支持大小写敏感的具体版本和原始空版本，管理端将后者明确显示为“空版本”。活动规则从创建当天起过滤 AE 实时查询和后续 Cron 汇总，不影响创建日前已汇总的历史数据。添加或重复提交规则只删除当天由 `/track` 实时写入 D1 的命中新客户端及其当天活动，并重算受影响项目的客户端总数；不修改每日、页面、版本、配置、模型、Agent、资源点击和留存等历史汇总。清理失败不撤销规则，可重复提交规则重试。解除后，AE 保留期内的匹配事件会重新出现在查询中，并可能参与后续汇总。Agent 失败诊断元数据和 R2 诊断包不参与版本规则过滤。
 
 ## 统计口径
 
@@ -166,7 +166,7 @@ npm run setup:analytics-storage
 | D1 | 创建或复用 `openbidkit-analytics`，binding 为 `ANALYTICS_DB` |
 | R2 | 复用 `openbidkit` 的 `RESOURCE_BUCKET` 保存资源图片、插件当前版与上一版安装包；创建或复用 `openbidkit-agent-errors`，binding 为 `AGENT_ERROR_BUCKET`，配置 7 天删除生命周期 |
 | Cron | 生产账户使用 Workers Paid Plan；确认北京时间 01:00 到 03:00 的 5 个统计 Cron，以及北京时间 04:00 的独立模型信息同步 Cron |
-| Migration | 通过 Wrangler D1 migrations 执行 `analytics-migrations/*.sql` 并记录已应用版本；自动补齐统计字段；首次创建 `ip_blocks` 后把旧 KV 封禁记录一次性导入 D1，并用 `ip_block_storage_meta` 防止重复迁移；`0010` 增加版本规则、规则历史和清理进度 |
+| Migration | 通过 Wrangler D1 migrations 执行 `analytics-migrations/*.sql` 并记录已应用版本；自动补齐统计字段；首次创建 `ip_blocks` 后把旧 KV 封禁记录一次性导入 D1，并用 `ip_block_storage_meta` 防止重复迁移；`0010` 增加版本规则（其中历史、清理进度和清理锁表已停用但保留） |
 
 如果刚删除过 `openbidkit-analytics`，脚本会重新创建并更新 `wrangler.jsonc` 的 `database_id`。
 

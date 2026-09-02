@@ -150,7 +150,7 @@ export function setupIpStatsActions() {
     const button = event.target.closest('[data-ip-stats-block]');
     if (!button) return;
     const ip = button.dataset.ipStatsBlock;
-    if (!window.confirm(`确认添加全局 IP 规则「${ip}」并清理当前项目可恢复的历史统计吗？`)) return;
+    if (!window.confirm(`确认添加全局 IP 规则「${ip}」并过滤今天及之后的埋点吗？历史汇总不会改动。`)) return;
 
     button.disabled = true;
     button.textContent = '封禁中';
@@ -166,10 +166,10 @@ export function setupIpStatsActions() {
         },
       });
       setError('');
-      button.textContent = data.cleanup?.status === 'failed' ? '已封禁（清理失败）' : '已封禁';
+      button.textContent = data.cleanup?.status === 'failed' ? '已封禁（当天清理失败）' : '已封禁';
       button.title = data.cleanup?.status === 'failed'
-        ? `规则已生效，历史清理失败：${data.cleanup.error || '请到封禁规则页重试'}`
-        : `历史统计已清理至 ${data.cleanup?.cleanedUntil || '当前汇总进度'}`;
+        ? `规则已生效，当天实时客户端清理失败：${data.cleanup.error || '可重复封禁重试'}`
+        : `已清理当天实时客户端 ${data.cleanup?.removedClients || 0} 个；历史汇总未改动`;
     } catch (error) {
       button.disabled = false;
       button.textContent = '封禁';

@@ -8,14 +8,6 @@ function setBlockRuleStatus(message, type = '') {
   state.blockRuleStatus.textContent = message || '';
 }
 
-function cleanupText(item) {
-  if (item.cleanupStatus === 'success') return item.cleanedUntil ? `已清理至 ${item.cleanedUntil}` : '无需清理';
-  if (item.cleanupStatus === 'running') return '清理中';
-  if (item.cleanupStatus === 'stats_applied') return `统计已清理，资源待重算${item.cleanupError ? `：${item.cleanupError}` : ''}`;
-  if (item.cleanupStatus === 'failed') return `清理失败：${item.cleanupError || '可重试'}`;
-  return '待清理';
-}
-
 // 将底层空字符串规则显示为明确的空版本标签。
 function ruleValueText(type, value) {
   return type === 'version' && value === '' ? '空版本' : value;
@@ -31,19 +23,17 @@ function renderBlockRules(items) {
     <tr>
       <td>${item.type === 'ip' ? 'IP' : '版本号'}</td>
       <td><strong>${escapeHtml(ruleValueText(item.type, item.value))}</strong></td>
-      <td>${item.type === 'ip' ? '全局拦截 / 当前项目清理' : escapeHtml(item.projectName || '-')}</td>
+      <td>${item.type === 'ip' ? '全局 / 添加当天起' : `${escapeHtml(item.projectName || '-')} / 添加当天起`}</td>
       <td>${escapeHtml(item.reason || '未填写')}</td>
       <td>${escapeHtml(item.createdAt || '-')}</td>
-      <td>${escapeHtml(cleanupText(item))}</td>
       <td>
-        ${item.cleanupStatus !== 'success' ? `<button type="button" class="secondary-button" data-block-rule-retry="${escapeHtml(item.value)}" data-block-rule-type="${item.type}" data-block-rule-reason="${escapeHtml(item.reason || '')}">重试清理</button>` : ''}
-        <button type="button" class="danger-button" data-block-rule-delete="${escapeHtml(item.value)}" data-block-rule-type="${item.type}" ${item.cleanupStatus === 'success' ? '' : 'disabled title="历史清理完成后才能解除规则"'}>解除规则</button>
+        <button type="button" class="danger-button" data-block-rule-delete="${escapeHtml(item.value)}" data-block-rule-type="${item.type}">解除规则</button>
       </td>
     </tr>
   `).join('');
   state.blockRuleTable.innerHTML = `
     <table>
-      <thead><tr><th>类型</th><th>规则值</th><th>作用范围</th><th>原因</th><th>创建时间</th><th>清理进度</th><th>操作</th></tr></thead>
+      <thead><tr><th>类型</th><th>规则值</th><th>作用范围</th><th>原因</th><th>创建时间</th><th>操作</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
@@ -69,13 +59,13 @@ function updateRuleInput() {
   state.blockRuleValue.placeholder = isIp ? '例如：124.193.61.30' : isEmptyVersion ? '无需填写' : '例如：web';
   state.blockRuleValue.maxLength = isIp ? 80 : 50;
   state.blockRuleScope.textContent = isIp
-    ? '作用范围：全局拦截；历史清理按当前项目执行。'
+    ? '作用范围：全局拦截；清理当天实时写入的异常客户端，不修改历史汇总。'
     : isEmptyVersion
-      ? '作用范围：仅当前项目；匹配原始版本值为空的埋点。'
-      : '作用范围：仅当前项目；版本号大小写敏感并且精确匹配。';
+      ? '作用范围：仅当前项目；从添加当天起匹配原始版本值为空的埋点。'
+      : '作用范围：仅当前项目；从添加当天起按大小写精确匹配版本号。';
 }
 
-// 提交规则；重复提交同一规则即重试未完成的历史清理。
+// 提交规则，并清理当天实时写入的异常客户端。
 async function submitBlockRule(type, value, reason) {
   const projectName = state.projectName.value.trim();
   const data = await requestJson('/api/block-rules', {
@@ -84,13 +74,13 @@ async function submitBlockRule(type, value, reason) {
   });
   await loadBlockRules();
   if (data.cleanup?.status === 'failed') {
-    setBlockRuleStatus(`规则已生效，但历史清理失败：${data.cleanup.error || '请重试'}`, 'error');
+    setBlockRuleStatus(`规则已生效，但当天实时客户端清理失败：${data.cleanup.error || '可重复添加规则重试'}`, 'error');
   } else {
-    setBlockRuleStatus(`规则已生效，历史统计已清理至 ${data.cleanup?.cleanedUntil || '当前汇总进度'}。`, 'ok');
+    setBlockRuleStatus(`规则已生效；已清理当天实时客户端 ${data.cleanup?.removedClients || 0} 个，历史汇总未改动。`, 'ok');
   }
 }
 
-// 绑定添加、重试清理和解除规则操作。
+// 绑定添加和解除规则操作。
 export function setupBlockRulesPage() {
   state.loadBlockRulesButton.addEventListener('click', () => loadBlockRules().catch((error) => setBlockRuleStatus(error?.message || String(error), 'error')));
   state.blockRuleType.addEventListener('change', updateRuleInput);
@@ -105,7 +95,7 @@ export function setupBlockRulesPage() {
     if (!isEmptyVersion && !value) return setBlockRuleStatus('请输入规则值。', 'error');
     if (!projectName) return setBlockRuleStatus('请先输入项目名。', 'error');
     if (type === 'version' && value === '-') return setBlockRuleStatus('“-”是页面占位符，不能作为版本规则。', 'error');
-    if (!window.confirm(`确认添加${type === 'ip' ? '全局 IP' : '当前项目版本号'}规则「${valueText}」并清理可恢复的历史统计吗？`)) return;
+    if (!window.confirm(`确认添加${type === 'ip' ? '全局 IP' : '当前项目版本号'}规则「${valueText}」并过滤今天及之后的埋点吗？历史汇总不会改动。`)) return;
     try {
       assertAdminToken();
       saveSettings();
@@ -120,22 +110,12 @@ export function setupBlockRulesPage() {
     if (event.key === 'Enter') state.addBlockRuleButton.click();
   });
   state.blockRuleTable.addEventListener('click', async (event) => {
-    const retryButton = event.target.closest('[data-block-rule-retry]');
-    if (retryButton) {
-      try {
-        setBlockRuleStatus('正在重试历史清理…');
-        await submitBlockRule(retryButton.dataset.blockRuleType, retryButton.dataset.blockRuleRetry, retryButton.dataset.blockRuleReason || '');
-      } catch (error) {
-        setBlockRuleStatus(error?.message || String(error), 'error');
-      }
-      return;
-    }
     const button = event.target.closest('[data-block-rule-delete]');
     if (!button) return;
     const value = button.dataset.blockRuleDelete;
     const type = button.dataset.blockRuleType;
     const valueText = ruleValueText(type, value);
-    if (!window.confirm(`确认解除规则「${valueText}」吗？解除前的历史事件仍会保持排除。`)) return;
+    if (!window.confirm(`确认解除规则「${valueText}」吗？Analytics Engine 保留期内的匹配事件会重新显示并可能参与后续汇总。`)) return;
     try {
       const projectName = state.projectName.value.trim();
       await requestJson(`/api/block-rules?type=${encodeURIComponent(type)}&value=${encodeURIComponent(value)}&projectName=${encodeURIComponent(projectName)}`, { method: 'DELETE' });

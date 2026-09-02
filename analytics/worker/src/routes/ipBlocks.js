@@ -1,6 +1,5 @@
 import { json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
-import { cleanupBlockRuleStats } from '../services/blockRuleCleanup.js';
-import { deleteBlockRule, listBlockRules, saveBlockRule } from '../services/blockRuleStore.js';
+import { cleanupTodayBlockRuleClients, deleteBlockRule, listBlockRules, saveBlockRule } from '../services/blockRuleStore.js';
 import { listBlockedIps } from '../services/ipBlockStore.js';
 import {
   getRequestClientIp,
@@ -39,7 +38,7 @@ function normalizeRule(type, value, projectName) {
   return null;
 }
 
-// 管理员读取、添加、重试清理和解除统一封禁规则。
+// 管理员读取、添加和解除统一封禁规则。
 export async function handleAdminBlockRules(request, env, url) {
   if (!requireAdmin(request, env)) return unauthorized();
   const queryProjectName = normalizeText(url.searchParams.get('projectName'), 80);
@@ -62,10 +61,10 @@ export async function handleAdminBlockRules(request, env, url) {
       return json({ code: 500, message: 'save failed' }, { status: 500 });
     }
     try {
-      const cleanup = await cleanupBlockRuleStats(env, rule, projectName);
+      const cleanup = await cleanupTodayBlockRuleClients(env, rule, projectName);
       return json({ code: 0, rule, cleanup: { status: 'success', ...cleanup } });
     } catch (error) {
-      logQueryError('block-rule-cleanup', error);
+      logQueryError('block-rule-today-cleanup', error);
       return json({
         code: 0,
         rule,
@@ -79,12 +78,8 @@ export async function handleAdminBlockRules(request, env, url) {
       return json({ code: 400, message: 'invalid params' }, { status: 400 });
     }
     try {
-      return json({ code: 0, deleted: await deleteBlockRule(env, rule, queryProjectName) });
+      return json({ code: 0, deleted: await deleteBlockRule(env, rule) });
     } catch (error) {
-      if (error?.code === 'BLOCK_RULE_CLEANUP_INCOMPLETE') {
-        const projects = (error.projects || []).slice(0, 10).join('、');
-        return json({ code: 409, message: `请先完成以下项目的历史清理：${projects || queryProjectName}` }, { status: 409 });
-      }
       logQueryError('block-rule-delete', error);
       return json({ code: 500, message: 'delete failed' }, { status: 500 });
     }

@@ -394,7 +394,7 @@
             <div class="section-head">
               <div>
                 <h2>封禁规则</h2>
-                <p>IP 规则全局生效并保持客户端启动检查；版本号与空版本规则仅剔除当前项目中精确匹配的埋点。</p>
+                <p>IP 规则全局生效并保持客户端启动检查；版本号与空版本规则仅剔除当前项目从添加当天起精确匹配的埋点，不修改历史汇总。</p>
               </div>
               <button id="loadBlockRulesButton" type="button">读取规则</button>
             </div>
@@ -417,7 +417,7 @@
               </label>
               <button id="addBlockRuleButton" type="button">添加规则</button>
             </div>
-            <div id="blockRuleScope" class="notice-meta">作用范围：全局拦截；历史清理按当前项目执行。</div>
+            <div id="blockRuleScope" class="notice-meta">作用范围：全局拦截；清理当天实时写入的异常客户端，不修改历史汇总。</div>
             <div id="blockRuleStatus" class="notice-status" role="status"></div>
             <div id="blockRuleTable" class="ip-block-table"></div>
           </section>
