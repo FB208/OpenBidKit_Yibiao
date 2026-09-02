@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { FloatingToolbar, isLibreOfficeRequiredMessage, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, UploadBoard, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import { AppDialog, FloatingToolbar, isLibreOfficeRequiredMessage, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, UploadBoard, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
+import { hasExportableDuplicateResults } from '../exportState';
 import type { DuplicateAnalysisStatus, DuplicateAnalysisTabId, DuplicateCheckStep, DuplicateCheckTaskState, DuplicateCheckWorkspaceState, DuplicateContentAnalysisState, DuplicateImageAnalysisState, DuplicateMetadataAnalysisState, DuplicateOutlineAnalysisState, LocalFileSelection } from '../../../shared/types';
 
 const guideItems = [
@@ -606,6 +607,8 @@ function DuplicateCheckPage() {
   const [analysisTask, setAnalysisTask] = useState<DuplicateCheckTaskState | undefined>();
   const [startingAnalysis, setStartingAnalysis] = useState(false);
   const [busy, setBusy] = useState<'tender' | 'bid' | null>(null);
+  const [exportingExcel, setExportingExcel] = useState(false);
+  const [exportedExcelPath, setExportedExcelPath] = useState('');
   const [analyticsReady, setAnalyticsReady] = useState(false);
   const startedMetadataSignatureRef = useRef<string | null>(null);
   const currentAnalysisSignatureRef = useRef('');
@@ -743,6 +746,13 @@ function DuplicateCheckPage() {
     const files: LocalFileSelection[] = [...tenderFiles, ...bidFiles];
     return createDuplicateCheckSignature(files);
   }, [bidFiles, tenderFiles]);
+  const hasExportableCurrentResult = hasExportableDuplicateResults({
+    metadataAnalysis,
+    outlineAnalysis,
+    contentAnalysis,
+    imageAnalysis,
+    signature: currentAnalysisSignature,
+  });
 
   useEffect(() => {
     currentAnalysisSignatureRef.current = currentAnalysisSignature;
@@ -886,6 +896,38 @@ function DuplicateCheckPage() {
     }
   };
 
+  async function exportDuplicateResultsExcel() {
+    if (!window.yibiao?.duplicateCheck?.exportExcel) {
+      showToast('标书查重结果导出接口尚未加载，请重启应用后重试', 'error');
+      return;
+    }
+    setExportingExcel(true);
+    try {
+      const result = await window.yibiao.duplicateCheck.exportExcel({ signature: currentAnalysisSignature });
+      if (result.canceled) return;
+      if (!result.success || !result.path) {
+        showToast(result.message || '标书查重结果导出失败', 'error');
+        return;
+      }
+      setExportedExcelPath(result.path);
+      showToast(result.message || '标书查重结果已导出', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '标书查重结果导出失败', 'error');
+    } finally {
+      setExportingExcel(false);
+    }
+  }
+
+  async function openExportedExcelFile() {
+    if (!exportedExcelPath) return;
+    try {
+      await window.yibiao.export.openFile(exportedExcelPath);
+      setExportedExcelPath('');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '打开 Excel 文件失败', 'error');
+    }
+  }
+
   const resetFiles = () => {
     if (isAnalysisRunning) {
       showToast('标书查重分析正在运行，请完成后再重置文件', 'info');
@@ -920,6 +962,22 @@ function DuplicateCheckPage() {
   };
 
   const toolbarGroups: FloatingToolbarGroup[] = [
+    ...(step === 'analysis' ? [{
+      id: 'duplicate-check-export',
+      actions: [{
+        id: 'export-excel',
+        label: exportingExcel ? '导出中...' : '导出 Excel',
+        icon: <ToolbarDocumentIcon />,
+        variant: 'success' as const,
+        disabled: isAnalysisRunning || exportingExcel || !hasExportableCurrentResult,
+        tooltip: isAnalysisRunning
+          ? '请等待当前查重任务结束后再导出'
+          : !hasExportableCurrentResult
+            ? '没有当前文件集合对应的可导出结果'
+            : '导出当前元数据、目录、正文和图片查重结果',
+        onClick: () => { void exportDuplicateResultsExcel(); },
+      }],
+    }] : []),
     {
       id: 'duplicate-check-reset',
       actions: [
@@ -1077,6 +1135,20 @@ function DuplicateCheckPage() {
       ) : (
         <DuplicateAnalysisPane activeTab={activeAnalysisTab} onTabChange={setActiveAnalysisTab} metadataAnalysis={metadataAnalysis} outlineAnalysis={outlineAnalysis} contentAnalysis={contentAnalysis} imageAnalysis={imageAnalysis} bidFiles={bidFiles} startingAnalysis={startingAnalysis || analysisTask?.status === 'running'} onRerun={() => startDuplicateAnalysis(true)} />
       )}
+
+      <AppDialog
+        open={Boolean(exportedExcelPath)}
+        onOpenChange={(open) => !open && setExportedExcelPath('')}
+        kicker="导出完成"
+        title="标书查重结果已导出"
+        description={exportedExcelPath ? `文件已保存到：${exportedExcelPath}` : undefined}
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => setExportedExcelPath('')}>稍后打开</button>
+            <button type="button" className="primary-action" onClick={() => { void openExportedExcelFile(); }}>打开文件</button>
+          </>
+        )}
+      />
 
       <FloatingToolbar groups={toolbarGroups} label="标书查重工具条" />
     </div>
