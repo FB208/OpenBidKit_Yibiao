@@ -22,7 +22,8 @@ import { listAdminResources } from './resourceStore.js';
 
 const MAX_ANALYTICS_ROWS = 100000;
 const ANALYTICS_PAGE_SIZE = 10000;
-const CLIENT_QUERY_CHUNK_SIZE = 5000;
+const ANALYTICS_IN_LIST_MAX_LENGTH = 4000;
+const D1_CLIENT_CHUNK_SIZE = 5000;
 
 function requireStatsDb(env) {
   if (!env.ANALYTICS_DB) throw new Error('ANALYTICS_DB is not configured');
@@ -37,9 +38,29 @@ function rowsJson(rows) {
   return JSON.stringify(rows || []);
 }
 
-function chunks(rows, size = CLIENT_QUERY_CHUNK_SIZE) {
+function chunks(rows, size = D1_CLIENT_CHUNK_SIZE) {
   const result = [];
   for (let index = 0; index < rows.length; index += size) result.push(rows.slice(index, index + size));
+  return result;
+}
+
+// 按转义后的 SQL 字节长度拆分 IN 列表，为查询主体和规则过滤保留空间。
+function sqlValueChunks(values) {
+  const result = [];
+  let current = [];
+  let currentLength = 0;
+  for (const value of values) {
+    const encodedLength = new TextEncoder().encode(sqlString(value)).byteLength;
+    const addedLength = encodedLength + (current.length ? 2 : 0);
+    if (current.length && currentLength + addedLength > ANALYTICS_IN_LIST_MAX_LENGTH) {
+      result.push(current);
+      current = [];
+      currentLength = 0;
+    }
+    current.push(value);
+    currentLength += encodedLength + (current.length > 1 ? 2 : 0);
+  }
+  if (current.length) result.push(current);
   return result;
 }
 
@@ -103,8 +124,8 @@ function mapDailyRows(cleanRows, badRows) {
 async function queryCleanClients(env, projectName, clientIds, dateCondition, cleanupFilter) {
   const clients = [];
   const activity = [];
-  for (let offset = 0; offset < clientIds.length; offset += CLIENT_QUERY_CHUNK_SIZE) {
-    const ids = clientIds.slice(offset, offset + CLIENT_QUERY_CHUNK_SIZE).map(sqlString).join(', ');
+  for (const clientIdChunk of sqlValueChunks(clientIds)) {
+    const ids = clientIdChunk.map(sqlString).join(', ');
     const [clientResult, activityRows] = await Promise.all([
       queryAnalytics(env, `
         SELECT

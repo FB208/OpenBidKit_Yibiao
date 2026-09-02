@@ -18,11 +18,11 @@ import {
   sqlString,
 } from '../utils.js';
 import { queryAnalytics } from './analyticsQuery.js';
-import { listBlockedIps } from './ipBlockStore.js';
 import { listAdminResources } from './resourceStore.js';
 
 const UNKNOWN_VERSION = '未知版本';
 const MAX_ANALYTICS_ROWS = 100000;
+const ANALYTICS_IN_LIST_MAX_LENGTH = 3000;
 const RECENT_CLIENT_CREATED_MAX_AGE_DAYS = 1;
 const MAX_RECENT_CLIENT_WRITE_ATTEMPTS = 10000;
 const RECENT_CLIENT_WRITE_ATTEMPT_TTL_MS = 60000;
@@ -127,6 +127,27 @@ function allowedEventsSql() {
 
 function configUsageKeysSql() {
   return `(${CONFIG_USAGE_FIELDS.map((field) => sqlString(field.key)).join(', ')})`;
+}
+
+// 按转义后的字节长度拆分动态 IN 列表，避免触发 AE 的 SQL 长度上限。
+function sqlValueChunks(values) {
+  const result = [];
+  let current = [];
+  let currentLength = 0;
+  for (const value of values) {
+    const encoded = sqlString(value);
+    const encodedLength = new TextEncoder().encode(encoded).byteLength;
+    const addedLength = encodedLength + (current.length ? 2 : 0);
+    if (current.length && currentLength + addedLength > ANALYTICS_IN_LIST_MAX_LENGTH) {
+      result.push(current);
+      current = [];
+      currentLength = 0;
+    }
+    currentLength += encodedLength + (current.length ? 2 : 0);
+    current.push(value);
+  }
+  if (current.length) result.push(current);
+  return result;
 }
 
 function decodeAgentRuntimeMetricPart(value, maxLength) {
@@ -530,10 +551,6 @@ export async function queryStatsIpStats(env, projectName, activityDate, page, pa
   const normalizedPage = Math.max(1, Math.floor(number(page) || 1));
   const normalizedPageSize = Math.min(100, Math.max(1, Math.floor(number(pageSize) || 20)));
   const offset = (normalizedPage - 1) * normalizedPageSize;
-  const blockedIps = (await listBlockedIps(env)).map((item) => item.ip).filter(Boolean);
-  const blockedIpList = blockedIps.map(sqlString).join(', ');
-  const blockedD1Where = blockedIps.length ? `AND last_access_ip NOT IN (${blockedIpList})` : '';
-  const blockedAeWhere = blockedIps.length ? `WHERE ip NOT IN (${blockedIpList})` : '';
 
   if (!activityDate) {
     const db = requireStatsDb(env);
@@ -541,17 +558,17 @@ export async function queryStatsIpStats(env, projectName, activityDate, page, pa
       SELECT COUNT(*) AS count
       FROM (
         SELECT last_access_ip
-        FROM stats_clients
+        FROM stats_clients AS clients
         WHERE project_name = ? AND last_access_ip != ''
-          ${blockedD1Where}
+          AND NOT EXISTS (SELECT 1 FROM ip_blocks WHERE ip = clients.last_access_ip)
         GROUP BY last_access_ip
       )
     `, [projectName]);
     const rows = await all(db, `
       SELECT last_access_ip AS ip, COUNT(*) AS clientCount
-      FROM stats_clients
+      FROM stats_clients AS clients
       WHERE project_name = ? AND last_access_ip != ''
-        ${blockedD1Where}
+        AND NOT EXISTS (SELECT 1 FROM ip_blocks WHERE ip = clients.last_access_ip)
       GROUP BY last_access_ip
       ORDER BY clientCount DESC, last_access_ip ASC
       LIMIT ? OFFSET ?
@@ -572,7 +589,6 @@ export async function queryStatsIpStats(env, projectName, activityDate, page, pa
     queryAnalytics(env, `
       SELECT COUNT(DISTINCT ip) AS count
       FROM (${clientIpsSql})
-      ${blockedAeWhere}
     `),
     queryAnalytics(env, `
       SELECT
@@ -580,7 +596,6 @@ export async function queryStatsIpStats(env, projectName, activityDate, page, pa
         COUNT() AS clientCount,
         countIf(clientCreatedDate = ${sqlString(activityDate)}) AS newClientCount
       FROM (${clientIpsSql})
-      ${blockedAeWhere}
       GROUP BY ip
       ORDER BY clientCount DESC, ip ASC
       LIMIT ${normalizedPageSize}
@@ -596,22 +611,22 @@ export async function queryStatsIpStats(env, projectName, activityDate, page, pa
   }));
   const itemByIp = new Map(items.map((item) => [item.ip, item]));
 
-  if (items.length) {
+  for (const ipChunk of sqlValueChunks(items.map((item) => item.ip))) {
     const aiUsage = await queryAnalytics(env, `
-      SELECT
-        blob13 AS ip,
-        blob9 AS provider,
-        blob10 AS endpointHost,
-        SUM(double4 * _sample_interval) AS totalTokens
-      FROM ${DATASET}
-      WHERE blob1 = ${sqlString(projectName)}
-        AND blob2 = 'ai_request'
-        AND blob13 IN (${items.map((item) => sqlString(item.ip)).join(', ')})
-        AND ${businessDateCondition(activityDate)}
-      GROUP BY ip, provider, endpointHost
-      ORDER BY ip ASC, totalTokens DESC, provider ASC, endpointHost ASC
-      LIMIT ${MAX_ANALYTICS_ROWS}
-    `);
+        SELECT
+          blob13 AS ip,
+          blob9 AS provider,
+          blob10 AS endpointHost,
+          SUM(double4 * _sample_interval) AS totalTokens
+        FROM ${DATASET}
+        WHERE blob1 = ${sqlString(projectName)}
+          AND blob2 = 'ai_request'
+          AND blob13 IN (${ipChunk.map(sqlString).join(', ')})
+          AND ${businessDateCondition(activityDate)}
+        GROUP BY ip, provider, endpointHost
+        ORDER BY ip ASC, totalTokens DESC, provider ASC, endpointHost ASC
+        LIMIT ${MAX_ANALYTICS_ROWS}
+      `);
     for (const row of aiUsage.data || []) {
       const item = itemByIp.get(row.ip || '');
       if (!item) continue;
@@ -1176,6 +1191,16 @@ function projectsSql(projectNames) {
   return `(${projects.map((projectName) => sqlString(projectName)).join(', ')})`;
 }
 
+// 分块执行按项目过滤的 AE 查询，并合并各块结果。
+async function queryAnalyticsByProjectChunks(env, projectNames, createSql) {
+  const rows = [];
+  for (const projectChunk of sqlValueChunks(uniqueProjectNames(projectNames))) {
+    const result = await queryAnalytics(env, createSql(projectsSql(projectChunk)));
+    rows.push(...(result.data || []));
+  }
+  return rows;
+}
+
 function rowsJson(rows) {
   return JSON.stringify(rows || []);
 }
@@ -1454,9 +1479,8 @@ async function executeProjectStageChunks(db, completedByProject, projectName, ac
 
 async function queryRollupDailyRows(env, activityDate, projectNames) {
   const dateWhere = businessDateCondition(activityDate);
-  const projectWhere = projectsSql(projectNames);
   const [summary, activeClients] = await Promise.all([
-    queryAnalytics(env, `
+    queryAnalyticsByProjectChunks(env, projectNames, (projectWhere) => `
       SELECT
         blob1 AS projectName,
         SUM(_sample_interval) AS eventCount,
@@ -1471,7 +1495,7 @@ async function queryRollupDailyRows(env, activityDate, projectNames) {
       ORDER BY projectName ASC
       LIMIT ${MAX_ANALYTICS_ROWS}
     `),
-    queryAnalytics(env, `
+    queryAnalyticsByProjectChunks(env, projectNames, (projectWhere) => `
       SELECT blob1 AS projectName, COUNT(DISTINCT blob7) AS activeClients
       FROM ${DATASET}
       WHERE blob1 IN ${projectWhere}
@@ -1484,8 +1508,8 @@ async function queryRollupDailyRows(env, activityDate, projectNames) {
     `),
   ]);
 
-  const activeByProject = new Map((activeClients.data || []).map((row) => [normalizeProjectName(row.projectName), number(row.activeClients)]));
-  const summaryByProject = new Map((summary.data || []).map((row) => [normalizeProjectName(row.projectName), row]));
+  const activeByProject = new Map(activeClients.map((row) => [normalizeProjectName(row.projectName), number(row.activeClients)]));
+  const summaryByProject = new Map(summary.map((row) => [normalizeProjectName(row.projectName), row]));
   return uniqueProjectNames(projectNames).map((projectName) => {
     const row = summaryByProject.get(projectName) || {};
     return {
@@ -1579,7 +1603,7 @@ async function runDailyStage(env, activityDate, projectNames, completedByProject
 
 async function queryRollupClientRows(env, activityDate, projectNames) {
   const versionExpr = `if(blob4 = '', ${sqlString(UNKNOWN_VERSION)}, blob4)`;
-  const result = await queryAnalytics(env, `
+  const rows = await queryAnalyticsByProjectChunks(env, projectNames, (projectWhere) => `
     SELECT
       blob1 AS projectName,
       blob7 AS clientId,
@@ -1594,7 +1618,7 @@ async function queryRollupClientRows(env, activityDate, projectNames) {
       argMax(blob17, timestamp) AS sourceTrusted,
       argMax(blob18, timestamp) AS untrustedReason
     FROM ${DATASET}
-    WHERE blob1 IN ${projectsSql(projectNames)}
+    WHERE blob1 IN ${projectWhere}
       AND blob2 IN ${allowedEventsSql()}
       AND blob7 != ''
       AND ${businessDateCondition(activityDate)}
@@ -1602,7 +1626,7 @@ async function queryRollupClientRows(env, activityDate, projectNames) {
     ORDER BY projectName ASC, clientId ASC
     LIMIT ${MAX_ANALYTICS_ROWS}
   `);
-  return (result.data || []).map((row) => ({
+  return rows.map((row) => ({
     projectName: normalizeProjectName(row.projectName),
     clientId: normalizeText(row.clientId, 120),
     firstSeenAt: String(row.firstSeenAt || `${activityDate} 00:00:00`),
@@ -1624,14 +1648,14 @@ async function queryRollupClientActivityRows(env, startDate, endDate, projectNam
   const dateWhere = startDate === endDate
     ? businessDateCondition(endDate)
     : businessDateRangeCondition(startDate, endDate);
-  const result = await queryAnalytics(env, `
+  const rows = await queryAnalyticsByProjectChunks(env, projectNames, (projectWhere) => `
     SELECT
       blob1 AS projectName,
       ${businessDateSqlExpression()} AS activityDate,
       blob7 AS clientId,
       argMin(blob8, timestamp) AS clientCreatedDate
     FROM ${DATASET}
-    WHERE blob1 IN ${projectsSql(projectNames)}
+    WHERE blob1 IN ${projectWhere}
       AND blob2 = 'app_open'
       AND blob7 != ''
       AND blob8 != ''
@@ -1640,7 +1664,7 @@ async function queryRollupClientActivityRows(env, startDate, endDate, projectNam
     ORDER BY projectName ASC, activityDate ASC, clientId ASC
     LIMIT ${MAX_ANALYTICS_ROWS}
   `);
-  return (result.data || []).map((row) => ({
+  return rows.map((row) => ({
     projectName: normalizeProjectName(row.projectName),
     activityDate: normalizeText(row.activityDate, 10),
     clientId: normalizeText(row.clientId, 120),
@@ -1790,10 +1814,10 @@ async function runClientsStage(env, activityDate, projectNames, completedByProje
 }
 
 async function queryRollupPageRows(env, activityDate, projectNames) {
-  const result = await queryAnalytics(env, `
+  const rows = await queryAnalyticsByProjectChunks(env, projectNames, (projectWhere) => `
     SELECT blob1 AS projectName, blob3 AS page, SUM(_sample_interval) AS count
     FROM ${DATASET}
-    WHERE blob1 IN ${projectsSql(projectNames)}
+    WHERE blob1 IN ${projectWhere}
       AND blob2 = 'page_view'
       AND blob3 != ''
       AND ${businessDateCondition(activityDate)}
@@ -1801,7 +1825,7 @@ async function queryRollupPageRows(env, activityDate, projectNames) {
     ORDER BY projectName ASC, page ASC
     LIMIT ${MAX_ANALYTICS_ROWS}
   `);
-  return (result.data || []).map((row) => ({
+  return rows.map((row) => ({
     projectName: normalizeProjectName(row.projectName),
     page: normalizeText(row.page, 120),
     count: number(row.count),
@@ -1840,17 +1864,17 @@ async function runPagesStage(env, activityDate, projectNames, completedByProject
 
 async function queryRollupVersionRows(env, activityDate, projectNames) {
   const versionExpr = `if(blob4 = '', ${sqlString(UNKNOWN_VERSION)}, blob4)`;
-  const result = await queryAnalytics(env, `
+  const rows = await queryAnalyticsByProjectChunks(env, projectNames, (projectWhere) => `
     SELECT blob1 AS projectName, ${versionExpr} AS version, SUM(_sample_interval) AS eventCount
     FROM ${DATASET}
-    WHERE blob1 IN ${projectsSql(projectNames)}
+    WHERE blob1 IN ${projectWhere}
       AND blob2 IN ${allowedEventsSql()}
       AND ${businessDateCondition(activityDate)}
     GROUP BY projectName, version
     ORDER BY projectName ASC, version ASC
     LIMIT ${MAX_ANALYTICS_ROWS}
   `);
-  return (result.data || []).map((row) => ({
+  return rows.map((row) => ({
     projectName: normalizeProjectName(row.projectName),
     version: normalizedVersion(row.version),
     eventCount: number(row.eventCount),
@@ -1941,10 +1965,10 @@ async function runVersionsStage(env, activityDate, projectNames, completedByProj
 }
 
 async function queryRollupConfigRows(env, activityDate, projectNames) {
-  const result = await queryAnalytics(env, `
+  const rows = await queryAnalyticsByProjectChunks(env, projectNames, (projectWhere) => `
     SELECT blob1 AS projectName, blob9 AS fieldKey, blob10 AS value, SUM(_sample_interval) AS events
     FROM ${DATASET}
-    WHERE blob1 IN ${projectsSql(projectNames)}
+    WHERE blob1 IN ${projectWhere}
       AND blob2 = 'config_usage'
       AND blob9 IN ${configUsageKeysSql()}
       AND blob10 != ''
@@ -1953,7 +1977,7 @@ async function queryRollupConfigRows(env, activityDate, projectNames) {
     ORDER BY projectName ASC, fieldKey ASC, value ASC
     LIMIT ${MAX_ANALYTICS_ROWS}
   `);
-  return (result.data || []).map((row) => ({
+  return rows.map((row) => ({
     projectName: normalizeProjectName(row.projectName),
     fieldKey: normalizeText(row.fieldKey, 80),
     value: normalizeText(row.value, 200),
@@ -1993,7 +2017,7 @@ async function runConfigsStage(env, activityDate, projectNames, completedByProje
 }
 
 async function queryRollupModelRows(env, activityDate, projectNames) {
-  const result = await queryAnalytics(env, `
+  const rows = await queryAnalyticsByProjectChunks(env, projectNames, (projectWhere) => `
     SELECT
       blob1 AS projectName,
       blob12 AS requestType,
@@ -2003,7 +2027,7 @@ async function queryRollupModelRows(env, activityDate, projectNames) {
       SUM(_sample_interval) AS requestCount,
       SUM(double4 * _sample_interval) AS totalTokens
     FROM ${DATASET}
-    WHERE blob1 IN ${projectsSql(projectNames)}
+    WHERE blob1 IN ${projectWhere}
       AND blob2 = 'ai_request'
       AND blob12 IN ('text', 'image')
       AND blob11 != ''
@@ -2012,7 +2036,7 @@ async function queryRollupModelRows(env, activityDate, projectNames) {
     ORDER BY projectName ASC, requestType ASC, provider ASC, endpointHost ASC, model ASC
     LIMIT ${MAX_ANALYTICS_ROWS}
   `);
-  return (result.data || []).map((row) => ({
+  return rows.map((row) => ({
     projectName: normalizeProjectName(row.projectName),
     requestType: normalizeText(row.requestType, 20),
     provider: normalizeText(row.provider, 80),
@@ -2059,13 +2083,13 @@ async function runModelsStage(env, activityDate, projectNames, completedByProjec
 }
 
 async function queryRollupAgentRuntimeRows(env, activityDate, projectNames) {
-  const result = await queryAnalytics(env, `
+  const rows = await queryAnalyticsByProjectChunks(env, projectNames, (projectWhere) => `
     SELECT
       blob1 AS projectName,
       blob9 AS metricKey,
       SUM(_sample_interval) AS runCount
     FROM ${DATASET}
-    WHERE blob1 IN ${projectsSql(projectNames)}
+    WHERE blob1 IN ${projectWhere}
       AND blob2 = 'agent_runtime'
       AND blob9 != ''
       AND ${businessDateCondition(activityDate)}
@@ -2074,7 +2098,7 @@ async function queryRollupAgentRuntimeRows(env, activityDate, projectNames) {
     LIMIT ${MAX_ANALYTICS_ROWS}
   `);
   const grouped = new Map();
-  for (const row of result.data || []) {
+  for (const row of rows) {
     const projectName = normalizeProjectName(row.projectName);
     if (!projectName) continue;
     if (!grouped.has(projectName)) grouped.set(projectName, []);
@@ -2250,10 +2274,10 @@ export async function backfillClientActivityWindow(env, projectName, startDate, 
 }
 
 async function queryHistoricalResourceClickRows(env, activityDate, projectNames) {
-  const result = await queryAnalytics(env, `
+  const rows = await queryAnalyticsByProjectChunks(env, projectNames, (projectWhere) => `
     SELECT blob9 AS resourceKey, SUM(_sample_interval) AS clickCount
     FROM ${DATASET}
-    WHERE blob1 IN ${projectsSql(projectNames)}
+    WHERE blob1 IN ${projectWhere}
       AND blob2 = 'resource_click'
       AND blob9 != ''
       AND ${businessDateSqlExpression()} <= ${sqlString(activityDate)}
@@ -2261,10 +2285,12 @@ async function queryHistoricalResourceClickRows(env, activityDate, projectNames)
     ORDER BY resourceKey ASC
     LIMIT ${MAX_ANALYTICS_ROWS}
   `);
-  return (result.data || []).map((row) => ({
-    resourceKey: normalizeText(row.resourceKey, 80),
-    clickCount: number(row.clickCount),
-  })).filter((row) => row.resourceKey);
+  const counts = new Map();
+  for (const row of rows) {
+    const resourceKey = normalizeText(row.resourceKey, 80);
+    if (resourceKey) counts.set(resourceKey, (counts.get(resourceKey) || 0) + number(row.clickCount));
+  }
+  return [...counts].map(([resourceKey, clickCount]) => ({ resourceKey, clickCount }));
 }
 
 function prepareResourceClickSetStatement(db, rows) {

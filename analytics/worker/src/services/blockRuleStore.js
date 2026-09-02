@@ -9,12 +9,6 @@ function ruleProjectName(rule) {
   return rule.type === 'version' ? normalizeText(rule.projectName, 80) : '';
 }
 
-function sameRule(row, rule) {
-  return row.ruleType === rule.type
-    && row.projectName === ruleProjectName(rule)
-    && row.value === rule.value;
-}
-
 // 读取当前项目可管理的全局 IP 与项目版本规则。
 export async function listBlockRules(env, projectName) {
   const db = requireStatsDb(env);
@@ -153,28 +147,50 @@ export async function isTrackVersionBlocked(env, projectName, version) {
   }
 }
 
-// 生成 Analytics Engine 的统一规则过滤条件；清理时可仅忽略本次新增的活动规则。
-export async function buildAnalyticsBlockCondition(env, options = {}) {
+// 按指定字段组合规则行，避免为同类值重复生成完整判断表达式。
+function groupRuleRows(rows, keyOf) {
+  const groups = new Map();
+  for (const row of rows || []) {
+    const key = JSON.stringify(keyOf(row));
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  return [...groups.values()];
+}
+
+// 将同组规则值压缩为一个 SQL IN 列表。
+function ruleValuesSql(rows) {
+  return [...new Set(rows.map((row) => row.value))].sort().map(sqlString).join(', ');
+}
+
+// 追加带截止时间的历史规则过滤条件。
+function appendHistoryConditions(conditions, rows) {
+  const groups = groupRuleRows(rows, (row) => [row.ruleType, row.projectName, row.excludedUntil]);
+  for (const group of groups) {
+    const sample = group[0];
+    const match = sample.ruleType === 'ip'
+      ? `blob13 IN (${ruleValuesSql(group)})`
+      : `(blob1 = ${sqlString(sample.projectName)} AND blob4 IN (${ruleValuesSql(group)}))`;
+    conditions.push(`(${match} AND ${businessDateTimeSqlExpression()} <= ${sqlString(sample.excludedUntil)})`);
+  }
+}
+
+// 生成 Analytics Engine 的统一规则过滤条件。
+export async function buildAnalyticsBlockCondition(env) {
   const db = requireStatsDb(env);
   const [ips, versions, history] = await Promise.all([
     db.prepare("SELECT 'ip' AS ruleType, '' AS projectName, ip AS value FROM ip_blocks").all(),
     db.prepare("SELECT 'version' AS ruleType, project_name AS projectName, version AS value FROM version_blocks").all(),
     db.prepare('SELECT rule_type AS ruleType, project_name AS projectName, rule_value AS value, excluded_until AS excludedUntil FROM block_rule_history').all(),
   ]);
-  const omit = options.omitActiveRule;
   const conditions = [];
-  for (const row of [...(ips.results || []), ...(versions.results || [])]) {
-    if (omit && sameRule(row, omit)) continue;
-    conditions.push(row.ruleType === 'ip'
-      ? `blob13 = ${sqlString(row.value)}`
-      : `(blob1 = ${sqlString(row.projectName)} AND blob4 = ${sqlString(row.value)})`);
+  if (ips.results?.length) {
+    conditions.push(`blob13 IN (${ruleValuesSql(ips.results)})`);
   }
-  for (const row of history.results || []) {
-    const match = row.ruleType === 'ip'
-      ? `blob13 = ${sqlString(row.value)}`
-      : `(blob1 = ${sqlString(row.projectName)} AND blob4 = ${sqlString(row.value)})`;
-    conditions.push(`(${match} AND ${businessDateTimeSqlExpression()} <= ${sqlString(row.excludedUntil)})`);
+  for (const group of groupRuleRows(versions.results, (row) => [row.projectName])) {
+    conditions.push(`(blob1 = ${sqlString(group[0].projectName)} AND blob4 IN (${ruleValuesSql(group)}))`);
   }
+  appendHistoryConditions(conditions, history.results);
   return conditions.length ? `NOT (${conditions.join(' OR ')})` : '1 = 1';
 }
 
@@ -199,23 +215,22 @@ export async function buildAnalyticsCleanupCondition(env, projectName, currentRu
       : `blob4 = ${sqlString(currentRule.value)}`;
     conditions.push(`(blob1 = ${sqlString(projectName)} AND ${match})`);
   }
-  for (const row of progress.results || []) {
-    if (!includeAllProjects && row.projectName !== projectName) continue;
-    if (currentRule
+  const appliedRows = (progress.results || []).filter((row) => {
+    if (!includeAllProjects && row.projectName !== projectName) return false;
+    return !(currentRule
       && row.ruleType === currentRule.type
       && row.value === currentRule.value
-      && row.projectName === projectName) continue;
-    const match = row.ruleType === 'ip'
-      ? `blob13 = ${sqlString(row.value)}`
-      : `blob4 = ${sqlString(row.value)}`;
-    conditions.push(`(blob1 = ${sqlString(row.projectName)} AND ${match} AND ${businessDateSqlExpression()} <= ${sqlString(row.cleanedUntil.slice(0, 10))})`);
+      && row.projectName === projectName);
+  });
+  const progressGroups = groupRuleRows(appliedRows, (row) => [row.ruleType, row.projectName, row.cleanedUntil.slice(0, 10)]);
+  for (const group of progressGroups) {
+    const sample = group[0];
+    const match = sample.ruleType === 'ip'
+      ? `blob13 IN (${ruleValuesSql(group)})`
+      : `blob4 IN (${ruleValuesSql(group)})`;
+    conditions.push(`(blob1 = ${sqlString(sample.projectName)} AND ${match} AND ${businessDateSqlExpression()} <= ${sqlString(sample.cleanedUntil.slice(0, 10))})`);
   }
-  for (const row of history.results || []) {
-    const match = row.ruleType === 'ip'
-      ? `blob13 = ${sqlString(row.value)}`
-      : `(blob1 = ${sqlString(row.projectName)} AND blob4 = ${sqlString(row.value)})`;
-    conditions.push(`(${match} AND ${businessDateTimeSqlExpression()} <= ${sqlString(row.excludedUntil)})`);
-  }
+  appendHistoryConditions(conditions, history.results);
   return conditions.length ? `NOT (${conditions.join(' OR ')})` : '1 = 1';
 }
 

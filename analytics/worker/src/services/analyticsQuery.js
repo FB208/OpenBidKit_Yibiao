@@ -2,6 +2,7 @@ import { ANALYTICS_BLOCK_FILTER_TOKEN } from '../constants.js';
 import { buildAnalyticsBlockCondition } from './blockRuleStore.js';
 
 const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+const MAX_ANALYTICS_SQL_LENGTH = 10000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -20,6 +21,10 @@ export async function queryAnalytics(env, sql) {
   const querySql = String(sql).includes(ANALYTICS_BLOCK_FILTER_TOKEN)
     ? String(sql).replaceAll(ANALYTICS_BLOCK_FILTER_TOKEN, await buildAnalyticsBlockCondition(env))
     : String(sql);
+  const querySqlLength = new TextEncoder().encode(querySql).byteLength;
+  if (querySqlLength > MAX_ANALYTICS_SQL_LENGTH) {
+    throw new Error(`Analytics Engine query exceeds ${MAX_ANALYTICS_SQL_LENGTH} bytes; sql=${compactSql(querySql)}`);
+  }
 
   for (let attempt = 1; attempt <= 4; attempt += 1) {
     const response = await fetch(api, {
