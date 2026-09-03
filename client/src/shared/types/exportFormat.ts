@@ -67,6 +67,11 @@ export interface TableStyleConfig {
   border_color: string;
   cell_padding_pt: number;
   full_width: boolean;
+  caption_font: string;
+  caption_size: string;
+  caption_alignment: string;
+  caption_bold: boolean;
+  caption_italic: boolean;
   header_row: TableCellStyleConfig;
   first_column: TableCellStyleConfig;
   body_cell: TableCellStyleConfig;
@@ -416,6 +421,11 @@ const DEFAULT_TABLE_STYLE: TableStyleConfig = {
   border_color: '#dcdff6',
   cell_padding_pt: 6,
   full_width: true,
+  caption_font: '宋体',
+  caption_size: '小四',
+  caption_alignment: '居中对齐',
+  caption_bold: true,
+  caption_italic: false,
   header_row: {
     font: '黑体',
     size: '小四',
@@ -479,6 +489,11 @@ export const DEFAULT_EXPORT_FORMAT: ExportFormatConfig = {
     border_color: DEFAULT_TABLE_STYLE.border_color,
     cell_padding_pt: DEFAULT_TABLE_STYLE.cell_padding_pt,
     full_width: DEFAULT_TABLE_STYLE.full_width,
+    caption_font: DEFAULT_TABLE_STYLE.caption_font,
+    caption_size: DEFAULT_TABLE_STYLE.caption_size,
+    caption_alignment: DEFAULT_TABLE_STYLE.caption_alignment,
+    caption_bold: DEFAULT_TABLE_STYLE.caption_bold,
+    caption_italic: DEFAULT_TABLE_STYLE.caption_italic,
     header_row: { ...DEFAULT_TABLE_STYLE.header_row },
     first_column: { ...DEFAULT_TABLE_STYLE.first_column },
     body_cell: { ...DEFAULT_TABLE_STYLE.body_cell },

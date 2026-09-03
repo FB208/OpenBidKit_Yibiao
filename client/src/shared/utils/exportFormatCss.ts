@@ -243,6 +243,11 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
     vars['--ef-table-border-color'] = table.border_color || '#dcdff6';
     vars['--ef-table-cell-padding'] = `${table.cell_padding_pt ?? 6}pt`;
     vars['--ef-table-width'] = table.full_width ? '100%' : 'auto';
+    vars['--ef-table-caption-font'] = chineseFontToCss(table.caption_font || '宋体');
+    vars['--ef-table-caption-size'] = `${chineseSizeToPt(table.caption_size || '小四')}pt`;
+    vars['--ef-table-caption-align'] = alignmentToCss(table.caption_alignment || '居中对齐');
+    vars['--ef-table-caption-weight'] = table.caption_bold ? '700' : '400';
+    vars['--ef-table-caption-style'] = table.caption_italic ? 'italic' : 'normal';
     const tableAreas = [
       ['header', table.header_row],
       ['first-column', table.first_column],

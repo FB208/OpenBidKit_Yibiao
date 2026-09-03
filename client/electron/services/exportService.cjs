@@ -53,6 +53,11 @@ const DEFAULT_TABLE_STYLE = {
   border_color: '#dcdff6',
   cell_padding_pt: 6,
   full_width: true,
+  caption_font: '宋体',
+  caption_size: '小四',
+  caption_alignment: '居中对齐',
+  caption_bold: true,
+  caption_italic: false,
   header_row: { font: '黑体', size: '小四', alignment: '居中对齐', text_color: '#243048', background_color: '#eef5ff' },
   first_column: { font: '宋体', size: '小四', alignment: '左对齐', text_color: '#243048', background_color: '#ffffff' },
   body_cell: { font: '宋体', size: '小四', alignment: '左对齐', text_color: '#243048', background_color: '#ffffff' },
@@ -299,6 +304,7 @@ function paragraph(children, options = {}) {
     alignment: options.alignment,
     bullet: options.bullet,
     numbering: options.numbering,
+    keepNext: options.keepNext,
     spacing: { before: options.before || 0, after: options.after ?? 160, line: options.line || 360 },
     indent: options.indent,
     border: options.border,
@@ -1079,6 +1085,27 @@ async function buildWordFooters(pageSetup) {
 
 function getTableStyle(context) {
   return context?.exportFormat?.table || DEFAULT_TABLE_STYLE;
+}
+
+function tableCaptionRunMarks(context) {
+  const table = getTableStyle(context);
+  return {
+    font: table.caption_font || DEFAULT_TABLE_STYLE.caption_font,
+    size: chineseSizeToHalfPt(table.caption_size || DEFAULT_TABLE_STYLE.caption_size),
+    bold: table.caption_bold === true,
+    italics: table.caption_italic === true,
+  };
+}
+
+function tableCaptionParagraphOptions(context) {
+  const table = getTableStyle(context);
+  return {
+    alignment: alignmentToWordType(table.caption_alignment || DEFAULT_TABLE_STYLE.caption_alignment),
+    after: 80,
+    line: context?.bodyLineSpacing,
+    indent: { left: 0, right: 0, firstLine: 0, hanging: 0 },
+    keepNext: true,
+  };
 }
 
 function getTableCellStyle(context, { isHeader = false, isFirstColumn = false } = {}) {
@@ -2032,6 +2059,7 @@ async function htmlInlineRuns($, nodes = [], context = {}, marks = {}) {
 
 async function htmlTableToDocx($, tableNode, context) {
   const rows = [];
+  const captionNode = $(tableNode).children('caption').first();
   const rowDescriptors = $(tableNode).find('tr').toArray().map((rowNode) => {
     const cells = $(rowNode).children('th,td').toArray().map((cellNode) => ({
       node: cellNode,
@@ -2071,7 +2099,15 @@ async function htmlTableToDocx($, tableNode, context) {
     return [];
   }
 
-  return [createDocxTable(rows, maxColumns, context)];
+  const blocks = [];
+  if (captionNode.length && cleanText(captionNode.text())) {
+    blocks.push(paragraph(
+      await htmlInlineRuns($, captionNode.contents().toArray(), context, tableCaptionRunMarks(context)),
+      tableCaptionParagraphOptions(context),
+    ));
+  }
+  blocks.push(createDocxTable(rows, maxColumns, context));
+  return blocks;
 }
 
 function buildListParagraphOptions(context, reference, level, itemIndex, totalItems, options = {}) {

@@ -166,6 +166,7 @@ function collectConfigFonts(config: ExportFormatConfig): string[] {
     config.table.header_row.font,
     config.table.first_column.font,
     config.table.body_cell.font,
+    config.table.caption_font,
     config.image.caption_font,
   ].filter(Boolean);
 }
@@ -277,6 +278,11 @@ function createDefaultExportFormat(): ExportFormatConfig {
       border_color: DEFAULT_EXPORT_FORMAT.table.border_color,
       cell_padding_pt: DEFAULT_EXPORT_FORMAT.table.cell_padding_pt,
       full_width: DEFAULT_EXPORT_FORMAT.table.full_width,
+      caption_font: DEFAULT_EXPORT_FORMAT.table.caption_font,
+      caption_size: DEFAULT_EXPORT_FORMAT.table.caption_size,
+      caption_alignment: DEFAULT_EXPORT_FORMAT.table.caption_alignment,
+      caption_bold: DEFAULT_EXPORT_FORMAT.table.caption_bold,
+      caption_italic: DEFAULT_EXPORT_FORMAT.table.caption_italic,
       header_row: { ...DEFAULT_EXPORT_FORMAT.table.header_row },
       first_column: { ...DEFAULT_EXPORT_FORMAT.table.first_column },
       body_cell: { ...DEFAULT_EXPORT_FORMAT.table.body_cell },
@@ -1254,6 +1260,35 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           <AppSwitch checked={config.table.full_width} onCheckedChange={(checked) => updateTable({ full_width: checked })} />
         </label>
       </div>
+      <div className="export-template-subsection">
+        <strong>表格标题</strong>
+        <div className="export-format-heading-grid">
+          <label>
+            <span>字体</span>
+            <FontPicker value={config.table.caption_font} options={fontOptions} onChange={(font) => updateTable({ caption_font: font })} />
+          </label>
+          <label>
+            <span>字号</span>
+            <select value={config.table.caption_size} onChange={(event) => updateTable({ caption_size: event.target.value })}>
+              {SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>对齐方式</span>
+            <select value={config.table.caption_alignment} onChange={(event) => updateTable({ caption_alignment: event.target.value })}>
+              {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
+            </select>
+          </label>
+          <label className="export-format-heading-switch">
+            <span>加粗</span>
+            <AppSwitch checked={config.table.caption_bold} onCheckedChange={(checked) => updateTable({ caption_bold: checked })} />
+          </label>
+          <label className="export-format-heading-switch">
+            <span>斜体</span>
+            <AppSwitch checked={config.table.caption_italic} onCheckedChange={(checked) => updateTable({ caption_italic: checked })} />
+          </label>
+        </div>
+      </div>
       {renderTableCellSettings('首行', 'header_row')}
       {renderTableCellSettings('首列', 'first_column')}
       {renderTableCellSettings('其余单元格', 'body_cell')}
@@ -1509,6 +1544,7 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
   const previewBlocks = useMemo<PreviewBlock[]>(() => {
     const serviceTable = (
       <table>
+        <caption>项目实施进度计划</caption>
         <thead>
           <tr>
             <th>阶段</th>

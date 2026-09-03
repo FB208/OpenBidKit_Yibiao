@@ -357,17 +357,18 @@
 }
 
 .content-layout-preview-stage {
-  display: flex;
-  width: max-content;
-  min-width: 100%;
-  justify-content: center;
+  width: 100%;
+  min-width: 0;
+}
+
+.content-layout-preview-stage > .export-template-preview-scale-box {
+  margin: 0 auto;
 }
 
 .content-layout-preview-stage.is-compact {
   position: relative;
   width: 100%;
   min-width: 0;
-  justify-content: flex-start;
   overflow: hidden;
 }
 
@@ -380,27 +381,132 @@
   transform-origin: top left;
 }
 
-.content-layout-preview-paper.is-compact {
-  overflow: hidden;
-  box-shadow: none;
-}
-
 .content-layout-preview-paper .export-format-paper-body {
   min-height: 0;
   overflow: hidden;
 }
 
 .content-layout-preview-paper .content-layout-preview-frame {
-  overflow: visible;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.content-layout-preview-page-content {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.content-layout-preview-page-content > .restricted-html-document {
+  width: 100%;
+}
+
+.content-layout-preview-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.content-layout-preview-columns.is-two-column {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8mm;
+}
+
+.content-layout-preview-column {
+  min-width: 0;
+}
+
+.content-layout-preview-block {
+  min-width: 0;
+}
+
+.content-layout-preview-block.is-sliced {
+  overflow: hidden;
+}
+
+.content-layout-preview-block.is-sliced > * {
+  position: relative;
+  top: calc(-1 * var(--content-preview-slice-offset, 0px));
+}
+
+.content-layout-preview-column > .content-layout-preview-block:first-child > :first-child,
+.content-layout-preview-page-content > .restricted-html-document > .content-layout-preview-block:first-child > :first-child {
+  margin-top: 0;
+}
+
+.content-layout-preview-measure {
+  position: fixed;
+  top: 0;
+  left: -100000px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.content-layout-preview-measure .content-layout-preview-paper {
+  transform: none;
+}
+
+.content-layout-preview-measure-flow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.content-layout-preview-measure-flow .content-layout-preview-block {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.content-layout-preview-page-content.is-two-column .content-layout-preview-measure-flow .content-layout-preview-block.is-column {
+  width: calc((100% - 8mm) / 2);
 }
 
 .content-template-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   padding: 0 2px;
+}
+
+.content-template-summary > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
 }
 
 .content-template-summary strong {
   color: var(--yb-text);
   font-size: 16px;
+}
+
+.content-template-summary p {
+  margin: 0;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.content-template-summary > span {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  color: var(--yb-primary);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  background: rgba(33, 116, 253, 0.08);
+  border: 1px solid rgba(33, 116, 253, 0.18);
+  border-radius: var(--yb-radius-pill);
 }
 
 .content-template-actions {
@@ -478,9 +584,11 @@
 .content-template-restricted-preview .restricted-html-document caption {
   padding: 0 0 9px;
   color: var(--yb-text-soft);
-  font-family: var(--ef-body-font, inherit);
-  font-size: var(--ef-body-size, 12pt);
-  font-weight: 800;
+  font-family: var(--ef-table-caption-font, var(--ef-body-font, inherit));
+  font-size: var(--ef-table-caption-size, var(--ef-body-size, 12pt));
+  font-style: var(--ef-table-caption-style, normal);
+  font-weight: var(--ef-table-caption-weight, 700);
+  text-align: var(--ef-table-caption-align, center);
 }
 
 .content-template-restricted-preview .restricted-html-document th,
@@ -785,6 +893,10 @@
 
   .content-template-actions {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .content-template-summary {
     flex-direction: column;
   }
 

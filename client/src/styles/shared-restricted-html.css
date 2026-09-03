@@ -125,7 +125,16 @@
   font-size: 13px;
 }
 
-.restricted-html-document caption,
+.restricted-html-document caption {
+  padding: 6px 0;
+  color: var(--yb-text-soft);
+  font-family: var(--ef-table-caption-font, inherit);
+  font-size: var(--ef-table-caption-size, 12px);
+  font-style: var(--ef-table-caption-style, normal);
+  font-weight: var(--ef-table-caption-weight, 700);
+  text-align: var(--ef-table-caption-align, center);
+}
+
 .restricted-html-document figcaption {
   padding: 6px 0;
   color: var(--yb-text-soft);

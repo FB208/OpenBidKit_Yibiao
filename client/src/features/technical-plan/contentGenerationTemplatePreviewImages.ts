@@ -25,6 +25,7 @@ const previewImages = {
     visual_fig_007: visualEquipmentConfigurationUrl,
     visual_fig_008: visualSiteImplementationUrl,
     visual_fig_009: visualAcceptanceWorkflowUrl,
+    visual_fig_010: standardQualityControlUrl,
   },
 } satisfies Record<ContentGenerationTemplateId, Record<string, string>>;
 

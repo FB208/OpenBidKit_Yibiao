@@ -134,10 +134,40 @@ const imageGenerationExamples: Record<ContentIllustrationKind, { src: string; al
 const WORD_COUNT_INPUT_UNIT = 10000;
 const MM_TO_CSS_PX = 96 / 25.4;
 
+interface ContentPreviewBlock {
+  id: string;
+  html: string;
+  fullWidth: boolean;
+  startsNewPage: boolean;
+  fallbackHeight: number;
+  sliceOffset?: number;
+  sliceHeight?: number;
+}
+
+interface ContentPreviewPage {
+  spanning: ContentPreviewBlock[];
+  columns: ContentPreviewBlock[][];
+}
+
+interface ContentPreviewMetrics {
+  bodyHeight: number;
+  blockHeights: Record<string, number>;
+}
+
+function areContentPreviewMetricsEqual(left: ContentPreviewMetrics, right: ContentPreviewMetrics) {
+  const leftKeys = Object.keys(left.blockHeights);
+  const rightKeys = Object.keys(right.blockHeights);
+  return left.bodyHeight === right.bodyHeight
+    && leftKeys.length === rightKeys.length
+    && leftKeys.every((key) => left.blockHeights[key] === right.blockHeights[key]);
+}
+
 /** 用真实受限 HTML 和已保存的 Word 模板共同渲染排版预览。 */
 function ContentLayoutPreview({ templateId, value, config, compact = false }: { templateId: ContentGenerationTemplateId; value: string; config: ExportFormatConfig; compact?: boolean }) {
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const measureRef = useRef<HTMLDivElement | null>(null);
   const [stageWidth, setStageWidth] = useState(0);
+  const [metrics, setMetrics] = useState<ContentPreviewMetrics>({ bodyHeight: 0, blockHeights: {} });
   const previewHtml = useMemo(() => buildContentTemplatePreviewHtml(templateId, value), [templateId, value]);
   const previewStyle = useMemo<CSSProperties>(() => buildExportFormatCssVars(config) as CSSProperties, [config]);
   const dimensions = PAPER_DIMENSIONS[config.page.paper_size] || PAPER_DIMENSIONS.a4;
@@ -145,46 +175,254 @@ function ContentLayoutPreview({ templateId, value, config, compact = false }: { 
   const pageHeightMm = config.page.orientation === 'landscape' ? dimensions.width : dimensions.height;
   const pageWidthPx = pageWidthMm * MM_TO_CSS_PX;
   const pageHeightPx = pageHeightMm * MM_TO_CSS_PX;
-  const previewScale = compact ? (stageWidth ? Math.min(1, stageWidth / pageWidthPx) : 0) : 1;
+  const columnCount = templateId === 'visual-table' ? 2 : 1;
+  const previewScale = stageWidth ? Math.min(1, stageWidth / pageWidthPx) : 1;
+
+  const previewBlocks = useMemo<ContentPreviewBlock[]>(() => {
+    if (!previewHtml) return [];
+    const document = new DOMParser().parseFromString(previewHtml, 'text/html');
+    const blocks: ContentPreviewBlock[] = [];
+    Array.from(document.body.children).forEach((element, index) => {
+      if (element.tagName.toLowerCase() === 'aside' && blocks.length) {
+        blocks[blocks.length - 1].html += element.outerHTML;
+        return;
+      }
+      const tag = element.tagName.toLowerCase();
+      const fullWidth = templateId === 'visual-table' && tag === 'h1';
+      blocks.push({
+        id: element.id || `content-preview-block-${index}`,
+        html: element.outerHTML,
+        fullWidth,
+        startsNewPage: tag === 'h1' && config.heading_level1_page_break_before,
+        fallbackHeight: tag === 'table' || tag === 'figure' ? 320 : tag === 'h1' ? 64 : 96,
+      });
+    });
+    return blocks;
+  }, [config.heading_level1_page_break_before, previewHtml, templateId]);
 
   useEffect(() => {
-    if (!compact || !stageRef.current) return;
+    if (!stageRef.current) return;
     const stage = stageRef.current;
     const updateWidth = () => setStageWidth(Math.max(0, stage.clientWidth));
     updateWidth();
     const observer = new ResizeObserver(updateWidth);
     observer.observe(stage);
     return () => observer.disconnect();
-  }, [compact]);
+  }, []);
 
-  const paper = (
+  useEffect(() => {
+    const measureRoot = measureRef.current;
+    if (!measureRoot) return;
+
+    let frameId = 0;
+    const measure = () => {
+      const body = measureRoot.querySelector<HTMLElement>('[data-content-preview-measure-body="true"]');
+      if (!body) return;
+      const blockHeights: Record<string, number> = {};
+      measureRoot.querySelectorAll<HTMLElement>('[data-content-preview-block-id]').forEach((block) => {
+        const blockId = block.dataset.contentPreviewBlockId;
+        if (blockId) blockHeights[blockId] = Math.ceil(block.getBoundingClientRect().height);
+      });
+      const nextMetrics = {
+        bodyHeight: Math.floor(body.getBoundingClientRect().height),
+        blockHeights,
+      };
+      setMetrics((previous) => areContentPreviewMetricsEqual(previous, nextMetrics) ? previous : nextMetrics);
+    };
+    const scheduleMeasure = () => {
+      cancelAnimationFrame(frameId);
+      frameId = requestAnimationFrame(measure);
+    };
+
+    scheduleMeasure();
+    const observer = new ResizeObserver(scheduleMeasure);
+    observer.observe(measureRoot);
+    measureRoot.querySelectorAll<HTMLElement>('[data-content-preview-block-id]').forEach((block) => observer.observe(block));
+    return () => {
+      cancelAnimationFrame(frameId);
+      observer.disconnect();
+    };
+  }, [previewBlocks, previewStyle, pageHeightPx, pageWidthPx]);
+
+  const previewPages = useMemo<ContentPreviewPage[]>(() => {
+    const bodyHeight = metrics.bodyHeight || Math.max(240, Math.round(pageHeightPx * 0.68));
+    const createPage = (): ContentPreviewPage => ({
+      spanning: [],
+      columns: Array.from({ length: columnCount }, () => []),
+    });
+    const pages = [createPage()];
+    let page = pages[0];
+    let columnIndex = 0;
+    let columnHeights = Array.from({ length: columnCount }, () => 0);
+    let spanningHeight = 0;
+
+    const hasPageContent = () => page.spanning.length > 0 || page.columns.some((column) => column.length > 0);
+    const hasColumnContent = () => page.columns.some((column) => column.length > 0);
+    const startPage = () => {
+      page = createPage();
+      pages.push(page);
+      columnIndex = 0;
+      columnHeights = Array.from({ length: columnCount }, () => 0);
+      spanningHeight = 0;
+    };
+    const nextColumn = () => {
+      columnIndex += 1;
+      if (columnIndex >= columnCount) startPage();
+    };
+    // ponytail: 预览按像素连续切片；需要避开表格行边界时再扩展为语义拆分。
+    const createSlice = (block: ContentPreviewBlock, offset: number, height: number, index: number): ContentPreviewBlock => ({
+      ...block,
+      id: `${block.id}-slice-${index}`,
+      startsNewPage: false,
+      sliceOffset: offset,
+      sliceHeight: height,
+    });
+
+    previewBlocks.forEach((block) => {
+      const blockHeight = Math.max(1, metrics.blockHeights[block.id] || block.fallbackHeight);
+      if (block.startsNewPage && hasPageContent()) startPage();
+
+      if (block.fullWidth) {
+        if (hasColumnContent() || (hasPageContent() && spanningHeight + blockHeight > bodyHeight)) startPage();
+        let offset = 0;
+        let sliceIndex = 0;
+        while (offset < blockHeight) {
+          const sliceHeight = Math.min(blockHeight - offset, bodyHeight - spanningHeight);
+          page.spanning.push(sliceHeight === blockHeight ? block : createSlice(block, offset, sliceHeight, sliceIndex));
+          spanningHeight += sliceHeight;
+          offset += sliceHeight;
+          sliceIndex += 1;
+          if (offset < blockHeight) startPage();
+        }
+        return;
+      }
+
+      let columnHeight = Math.max(1, bodyHeight - spanningHeight);
+      if (spanningHeight >= bodyHeight || (blockHeight <= bodyHeight && blockHeight > columnHeight)) {
+        startPage();
+        columnHeight = bodyHeight;
+      }
+      if (page.columns[columnIndex].length > 0 && columnHeights[columnIndex] + blockHeight > columnHeight) {
+        nextColumn();
+        columnHeight = Math.max(1, bodyHeight - spanningHeight);
+      }
+      if (blockHeight <= columnHeight - columnHeights[columnIndex]) {
+        page.columns[columnIndex].push(block);
+        columnHeights[columnIndex] += blockHeight;
+        return;
+      }
+
+      let offset = 0;
+      let sliceIndex = 0;
+      while (offset < blockHeight) {
+        const availableHeight = columnHeight - columnHeights[columnIndex];
+        if (availableHeight <= 0) {
+          nextColumn();
+          columnHeight = Math.max(1, bodyHeight - spanningHeight);
+          continue;
+        }
+        const sliceHeight = Math.min(blockHeight - offset, availableHeight);
+        page.columns[columnIndex].push(createSlice(block, offset, sliceHeight, sliceIndex));
+        columnHeights[columnIndex] += sliceHeight;
+        offset += sliceHeight;
+        sliceIndex += 1;
+        if (offset < blockHeight) {
+          nextColumn();
+          columnHeight = Math.max(1, bodyHeight - spanningHeight);
+        }
+      }
+    });
+
+    return pages.filter((item) => item.spanning.length > 0 || item.columns.some((column) => column.length > 0));
+  }, [columnCount, metrics.blockHeights, metrics.bodyHeight, pageHeightPx, previewBlocks]);
+
+  const renderBlock = (block: ContentPreviewBlock, measure = false) => (
     <div
-      className={`content-layout-preview-paper export-format-paper export-format-preview-content${compact ? ' is-compact' : ''}`}
-      style={{
-        ...previewStyle,
-        width: `${pageWidthPx}px`,
-        minHeight: `${pageHeightPx}px`,
-        ...(compact
-          ? { height: `${pageHeightPx}px`, transform: `scale(${previewScale})` }
-          : { height: 'auto', aspectRatio: 'auto' }),
-      }}
-    >
-      <PageHeaderChrome config={config} />
-      <div className="export-format-paper-body">
-        <section className={config.heading_border.enabled ? 'export-template-chapter-frame content-layout-preview-frame' : undefined}>
-          <div className="restricted-html-preview content-template-restricted-preview">
-            {previewHtml ? <div className="restricted-html-document" dangerouslySetInnerHTML={{ __html: previewHtml }} /> : <p className="restricted-html-empty">暂无正文内容</p>}
-          </div>
-        </section>
-      </div>
-      <PageFooterChrome config={config} />
-    </div>
+      key={block.id}
+      className={`export-template-preview-block content-layout-preview-block${block.fullWidth ? ' is-spanning' : ' is-column'}${block.sliceHeight ? ' is-sliced' : ''}`}
+      data-content-preview-block-id={measure ? block.id : undefined}
+      aria-hidden={block.sliceOffset ? true : undefined}
+      style={block.sliceHeight ? {
+        height: `${block.sliceHeight}px`,
+        '--content-preview-slice-offset': `${block.sliceOffset || 0}px`,
+      } as CSSProperties : undefined}
+      dangerouslySetInnerHTML={{ __html: block.html }}
+    />
   );
 
-  if (!compact) return <div className="content-layout-preview-stage">{paper}</div>;
+  const renderPageContent = (page: ContentPreviewPage, measure = false) => {
+    const content = (
+      <div
+        className={`restricted-html-preview content-template-restricted-preview content-layout-preview-page-content${columnCount === 2 ? ' is-two-column' : ''}`}
+        data-content-preview-measure-body={measure ? 'true' : undefined}
+      >
+        {measure ? (
+          <div className="restricted-html-document content-layout-preview-measure-flow">
+            {previewBlocks.map((block) => renderBlock(block, true))}
+          </div>
+        ) : (
+          <div className="restricted-html-document">
+            {page.spanning.map((block) => renderBlock(block))}
+            {page.columns.some((column) => column.length > 0) && (
+              <div className={`content-layout-preview-columns${columnCount === 2 ? ' is-two-column' : ''}`}>
+                {page.columns.map((column, index) => (
+                  <div className="content-layout-preview-column" key={index}>
+                    {column.map((block) => renderBlock(block))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+    return config.heading_border.enabled
+      ? <section className="export-template-chapter-frame is-fragment content-layout-preview-frame">{content}</section>
+      : content;
+  };
+
+  const paperStyle: CSSProperties = {
+    ...previewStyle,
+    width: `${pageWidthPx}px`,
+    height: `${pageHeightPx}px`,
+    minHeight: 0,
+    transform: `scale(${previewScale})`,
+  };
+  const pageShellStyle: CSSProperties = {
+    width: `${pageWidthPx * previewScale}px`,
+    height: `${pageHeightPx * previewScale}px`,
+  };
+  const visiblePages = compact ? previewPages.slice(0, 1) : previewPages;
+
   return (
-    <div ref={stageRef} className="content-layout-preview-stage is-compact" style={{ height: `${pageHeightPx * previewScale}px` }}>
-      {paper}
+    <div ref={stageRef} className={`content-layout-preview-stage${compact ? ' is-compact' : ''}`}>
+      <div className="export-template-preview-scale-box" style={{ width: `${pageWidthPx * previewScale}px` }}>
+        <div className="export-template-preview-page-stack">
+          {visiblePages.map((page, pageIndex) => (
+            <div className="export-template-preview-page-shell" style={pageShellStyle} key={pageIndex}>
+              <div className="content-layout-preview-paper export-format-paper export-format-preview-content" style={paperStyle}>
+                <PageHeaderChrome config={config} pageIndex={pageIndex} />
+                <div className="export-format-paper-body">
+                  {previewHtml ? renderPageContent(page) : <p className="restricted-html-empty">暂无正文内容</p>}
+                </div>
+                <PageFooterChrome config={config} pageIndex={pageIndex} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="content-layout-preview-measure" ref={measureRef} aria-hidden="true">
+        <div
+          className="content-layout-preview-paper export-format-paper export-format-preview-content"
+          style={{ ...previewStyle, width: `${pageWidthPx}px`, height: `${pageHeightPx}px`, minHeight: 0 }}
+        >
+          <PageHeaderChrome config={config} />
+          <div className="export-format-paper-body">
+            {renderPageContent({ spanning: [], columns: Array.from({ length: columnCount }, () => []) }, true)}
+          </div>
+          <PageFooterChrome config={config} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -1192,16 +1430,20 @@ function GenerationSettingsPage({
 
               <div className="generation-settings-appearance-head">
                 <strong>排版风格选择</strong>
-                <span>{selectedExportTemplate ? `以下排版结构使用“${selectedExportTemplate.template_name}”的样式渲染。` : '请先选择导出模板，再查看和选择排版结构。'}</span>
+                <span>{selectedExportTemplate ? `排版风格只改变内容组织，纸张和外观仍由“${selectedExportTemplate.template_name}”决定。` : '请先选择导出模板，再查看和选择排版结构。'}</span>
               </div>
               <fieldset className="content-template-grid" disabled={contentTemplateBusy || !selectedExportTemplate} aria-label="排版风格选择">
                 {contentGenerationTemplates.map((template) => {
                   const selected = currentContentTemplate.id === template.id;
                   return (
                     <article className={`content-template-option${selected ? ' is-selected' : ''}`} key={template.id}>
-                      <span className="content-template-summary">
-                        <strong>{template.name}</strong>
-                      </span>
+                      <div className="content-template-summary">
+                        <div>
+                          <strong>{template.name}</strong>
+                          <p>{template.description}</p>
+                        </div>
+                        <span>{template.recommendation}</span>
+                      </div>
                       <div className="content-template-actions">
                         <label className="content-template-radio">
                           <input
@@ -1239,7 +1481,7 @@ function GenerationSettingsPage({
             <div className="content-template-preview-dialog-head">
               <div>
                 <Dialog.Title>{previewContentTemplate?.name || '模板完整预览'}</Dialog.Title>
-                <Dialog.Description>以下内容由实际受限 HTML 直接渲染，完整结构可纵向滚动查看。</Dialog.Description>
+                <Dialog.Description>{previewContentTemplate ? `${previewContentTemplate.recommendation}；当前按所选导出模板真实分页，可纵向滚动查看全部页面。` : '当前按所选导出模板真实分页。'}</Dialog.Description>
               </div>
               <Dialog.Close className="image-preview-close" type="button" aria-label="关闭模板预览">×</Dialog.Close>
             </div>

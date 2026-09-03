@@ -1124,6 +1124,16 @@
   margin: 12px 0;
 }
 
+.export-format-preview-content caption {
+  padding: 0 0 8px;
+  color: var(--yb-text);
+  font-family: var(--ef-table-caption-font, 'SimSun', serif);
+  font-size: var(--ef-table-caption-size, 12pt);
+  font-style: var(--ef-table-caption-style, normal);
+  font-weight: var(--ef-table-caption-weight, 700);
+  text-align: var(--ef-table-caption-align, center);
+}
+
 .export-format-preview-content th,
 .export-format-preview-content td {
   padding: var(--ef-table-cell-padding, 6pt);
