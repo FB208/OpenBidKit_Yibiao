@@ -1,4 +1,5 @@
 import { corsHeaders, json, methodNotAllowed } from '../http.js';
+import { VERSION_FORMAT_PATTERN } from '../constants.js';
 import {
   normalizeTrackBody,
   validateTrackEvent,
@@ -16,6 +17,10 @@ export async function handleTrack(request, env) {
   try {
     const body = await request.json();
     const event = normalizeTrackBody(body, request);
+    if (!VERSION_FORMAT_PATTERN.test(event.version)) {
+      // 版本号格式不合法（含空版本号）：静默丢弃，不触发当天客户端数据清理。
+      return new Response(null, { status: 204, headers: corsHeaders });
+    }
     if (isValidProjectName(event.projectName) && await isTrackVersionBlocked(env, event.projectName, event.version)) {
       return new Response(null, { status: 204, headers: corsHeaders });
     }
