@@ -333,6 +333,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   const [selectedLayoutPresetId, setSelectedLayoutPresetId] = useState('');
   const [selectedThemePresetId, setSelectedThemePresetId] = useState('');
   const [expandedHeadings, setExpandedHeadings] = useState<Set<number>>(new Set([0, 1]));
+  const [expandedTableCards, setExpandedTableCards] = useState<Set<string>>(new Set(['caption']));
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
@@ -652,6 +653,15 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
       const next = new Set(prev);
       if (next.has(index)) next.delete(index);
       else next.add(index);
+      return next;
+    });
+  }, []);
+
+  const toggleTableCard = useCallback((key: string) => {
+    setExpandedTableCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }, []);
@@ -1205,37 +1215,46 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
     </>
   );
 
-  const renderTableCellSettings = (title: string, cellKey: TableCellStyleKey) => {
+  const renderTableCellSettings = (title: string, example: string, cellKey: TableCellStyleKey) => {
     const cell = config.table[cellKey];
+    const isExpanded = expandedTableCards.has(cellKey);
     return (
-      <div className="export-template-subsection">
-        <strong>{title}</strong>
-        <div className="export-format-heading-grid">
-          <label>
-            <span>字体</span>
-            <FontPicker value={cell.font} options={fontOptions} onChange={(font) => updateTableCell(cellKey, { font })} />
-          </label>
-          <label>
-            <span>字号</span>
-            <select value={cell.size} onChange={(event) => updateTableCell(cellKey, { size: event.target.value })}>
-              {SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>对齐方式</span>
-            <select value={cell.alignment} onChange={(event) => updateTableCell(cellKey, { alignment: event.target.value })}>
-              {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>文字颜色</span>
-            <input type="color" value={cell.text_color} onChange={(event) => updateTableCell(cellKey, { text_color: event.target.value })} />
-          </label>
-          <label>
-            <span>背景色</span>
-            <input type="color" value={cell.background_color} onChange={(event) => updateTableCell(cellKey, { background_color: event.target.value })} />
-          </label>
-        </div>
+      <div className={`export-format-heading-card${isExpanded ? ' is-expanded' : ''}`}>
+        <button type="button" className="export-format-heading-header" onClick={() => toggleTableCard(cellKey)}>
+          <span className="export-format-heading-label">{title}</span>
+          <span className="export-format-heading-example">{example}</span>
+          <span className={`export-format-heading-chevron${isExpanded ? ' is-open' : ''}`}>▸</span>
+        </button>
+        {isExpanded && (
+          <div className="export-format-heading-body">
+            <div className="export-format-heading-grid">
+              <label>
+                <span>字体</span>
+                <FontPicker value={cell.font} options={fontOptions} onChange={(font) => updateTableCell(cellKey, { font })} />
+              </label>
+              <label>
+                <span>字号</span>
+                <select value={cell.size} onChange={(event) => updateTableCell(cellKey, { size: event.target.value })}>
+                  {SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>对齐方式</span>
+                <select value={cell.alignment} onChange={(event) => updateTableCell(cellKey, { alignment: event.target.value })}>
+                  {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>文字颜色</span>
+                <input type="color" value={cell.text_color} onChange={(event) => updateTableCell(cellKey, { text_color: event.target.value })} />
+              </label>
+              <label>
+                <span>背景色</span>
+                <input type="color" value={cell.background_color} onChange={(event) => updateTableCell(cellKey, { background_color: event.target.value })} />
+              </label>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -1260,38 +1279,48 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           <AppSwitch checked={config.table.full_width} onCheckedChange={(checked) => updateTable({ full_width: checked })} />
         </label>
       </div>
-      <div className="export-template-subsection">
-        <strong>表格标题</strong>
-        <div className="export-format-heading-grid">
-          <label>
-            <span>字体</span>
-            <FontPicker value={config.table.caption_font} options={fontOptions} onChange={(font) => updateTable({ caption_font: font })} />
-          </label>
-          <label>
-            <span>字号</span>
-            <select value={config.table.caption_size} onChange={(event) => updateTable({ caption_size: event.target.value })}>
-              {SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>对齐方式</span>
-            <select value={config.table.caption_alignment} onChange={(event) => updateTable({ caption_alignment: event.target.value })}>
-              {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
-            </select>
-          </label>
-          <label className="export-format-heading-switch">
-            <span>加粗</span>
-            <AppSwitch checked={config.table.caption_bold} onCheckedChange={(checked) => updateTable({ caption_bold: checked })} />
-          </label>
-          <label className="export-format-heading-switch">
-            <span>斜体</span>
-            <AppSwitch checked={config.table.caption_italic} onCheckedChange={(checked) => updateTable({ caption_italic: checked })} />
-          </label>
+      <div className="export-format-heading-list">
+        <div className={`export-format-heading-card${expandedTableCards.has('caption') ? ' is-expanded' : ''}`}>
+          <button type="button" className="export-format-heading-header" onClick={() => toggleTableCard('caption')}>
+            <span className="export-format-heading-label">表格标题</span>
+            <span className="export-format-heading-example" />
+            <span className={`export-format-heading-chevron${expandedTableCards.has('caption') ? ' is-open' : ''}`}>▸</span>
+          </button>
+          {expandedTableCards.has('caption') && (
+            <div className="export-format-heading-body">
+              <div className="export-format-heading-grid">
+                <label>
+                  <span>字体</span>
+                  <FontPicker value={config.table.caption_font} options={fontOptions} onChange={(font) => updateTable({ caption_font: font })} />
+                </label>
+                <label>
+                  <span>字号</span>
+                  <select value={config.table.caption_size} onChange={(event) => updateTable({ caption_size: event.target.value })}>
+                    {SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>对齐方式</span>
+                  <select value={config.table.caption_alignment} onChange={(event) => updateTable({ caption_alignment: event.target.value })}>
+                    {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
+                  </select>
+                </label>
+                <label className="export-format-heading-switch">
+                  <span>加粗</span>
+                  <AppSwitch checked={config.table.caption_bold} onCheckedChange={(checked) => updateTable({ caption_bold: checked })} />
+                </label>
+                <label className="export-format-heading-switch">
+                  <span>斜体</span>
+                  <AppSwitch checked={config.table.caption_italic} onCheckedChange={(checked) => updateTable({ caption_italic: checked })} />
+                </label>
+              </div>
+            </div>
+          )}
         </div>
+        {renderTableCellSettings('首行', '表头行', 'header_row')}
+        {renderTableCellSettings('首列', '首列', 'first_column')}
+        {renderTableCellSettings('其余单元格', '正文单元格', 'body_cell')}
       </div>
-      {renderTableCellSettings('首行', 'header_row')}
-      {renderTableCellSettings('首列', 'first_column')}
-      {renderTableCellSettings('其余单元格', 'body_cell')}
     </>
   );
 

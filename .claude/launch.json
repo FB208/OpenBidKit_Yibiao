@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "yibiao-vite",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd client && npx vite --host 127.0.0.1 --port 5173 --strictPort"],
+      "port": 5173
+    }
+  ]
+}
