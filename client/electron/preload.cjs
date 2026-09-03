@@ -150,6 +150,7 @@ const bridge = {
   },
   knowledgeBase: {
     list: () => ipcRenderer.invoke('knowledge-base:list'),
+    search: (keyword) => ipcRenderer.invoke('knowledge-base:search', keyword),
     createFolder: (name) => ipcRenderer.invoke('knowledge-base:create-folder', name),
     renameFolder: (folderId, name) => ipcRenderer.invoke('knowledge-base:rename-folder', folderId, name),
     reorderFolder: (draggedFolderId, targetFolderId, position) => ipcRenderer.invoke('knowledge-base:reorder-folder', draggedFolderId, targetFolderId, position),

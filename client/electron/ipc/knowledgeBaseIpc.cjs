@@ -2,6 +2,7 @@ const { ipcMain } = require('electron');
 
 function registerKnowledgeBaseIpc({ knowledgeBaseService }) {
   ipcMain.handle('knowledge-base:list', () => knowledgeBaseService.list());
+  ipcMain.handle('knowledge-base:search', (_event, keyword) => knowledgeBaseService.search(keyword));
   ipcMain.handle('knowledge-base:create-folder', (_event, name) => knowledgeBaseService.createFolder(name));
   ipcMain.handle('knowledge-base:rename-folder', (_event, folderId, name) => knowledgeBaseService.renameFolder(folderId, name));
   ipcMain.handle('knowledge-base:reorder-folder', (_event, draggedFolderId, targetFolderId, position) => knowledgeBaseService.reorderFolder(draggedFolderId, targetFolderId, position));
