@@ -745,7 +745,7 @@ export async function blockIpAndDeleteStatsClients(env, projectName, blockedIp, 
 // 按项目和版本号查询当天匹配的客户端 ID（用于版本封禁清理）。
 function dailyClientIdsByVersionSql(projectName, version, activityDate) {
   return `
-    SELECT DISTINCT blob7 AS clientId
+    SELECT blob7 AS clientId
     FROM ${RAW_DATASET}
     WHERE ${ANALYTICS_DATA_FILTER}
       AND blob1 = ${sqlString(projectName)}
@@ -753,6 +753,7 @@ function dailyClientIdsByVersionSql(projectName, version, activityDate) {
       AND blob7 != ''
       AND blob4 = ${sqlString(version)}
       AND ${businessDateCondition(activityDate)}
+    GROUP BY blob7
   `;
 }
 
