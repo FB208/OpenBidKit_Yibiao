@@ -2080,6 +2080,9 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     list() {
       return knowledgeBaseStore.list();
     },
+    search(keyword) {
+      return knowledgeBaseStore.search(keyword);
+    },
 
     createFolder(name) {
       return knowledgeBaseStore.createFolder(name);

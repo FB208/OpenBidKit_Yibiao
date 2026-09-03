@@ -2,7 +2,7 @@ import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef,
 import * as Dialog from '@radix-ui/react-dialog';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, InlineSpinner, isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useDocumentParseNotice, useToast } from '../../../shared/ui';
-import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeItem } from '../types';
+import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeBaseSearchResult, KnowledgeDocument, KnowledgeItem } from '../types';
 
 declare global {
   interface Window {
@@ -323,6 +323,11 @@ function KnowledgeBasePage() {
     | null
   >(null);
   const [deletingConfirm, setDeletingConfirm] = useState(false);
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [submittedSearchKeyword, setSubmittedSearchKeyword] = useState('');
+  const [searchResults, setSearchResults] = useState<KnowledgeBaseSearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchRequestIdRef = useRef(0);
   const autoMatchingIdsRef = useRef(new Set<string>());
   const documentParseNoticeIdsRef = useRef(new Set<string>());
   const viewerRequestIdRef = useRef(0);
@@ -568,6 +573,52 @@ function KnowledgeBasePage() {
       }
     }
   };
+
+  const runGlobalSearch = async () => {
+    const keyword = searchKeyword.trim();
+    if (!keyword) {
+      searchRequestIdRef.current += 1;
+      setSubmittedSearchKeyword('');
+      setSearchResults([]);
+      return;
+    }
+
+    const requestId = searchRequestIdRef.current + 1;
+    searchRequestIdRef.current = requestId;
+    setSubmittedSearchKeyword(keyword);
+    setSearchResults([]);
+    setSearchLoading(true);
+    try {
+      const results = await window.yibiao?.knowledgeBase.search(keyword);
+      if (searchRequestIdRef.current !== requestId) return;
+      setSearchResults(results || []);
+    } catch (error) {
+      if (searchRequestIdRef.current === requestId) {
+        showToast(error instanceof Error ? error.message : '知识库检索失败', 'error');
+      }
+    } finally {
+      if (searchRequestIdRef.current === requestId) setSearchLoading(false);
+    }
+  };
+
+  const clearGlobalSearch = () => {
+    searchRequestIdRef.current += 1;
+    setSearchKeyword('');
+    setSubmittedSearchKeyword('');
+    setSearchResults([]);
+    setSearchLoading(false);
+  };
+
+  const openSearchResult = async (result: KnowledgeBaseSearchResult) => {
+    const document = index.documents.find((item) => item.id === result.document_id);
+    if (!document) {
+      showToast('对应知识文档已不存在，请重新检索', 'info');
+      return;
+    }
+    setActiveFolderId(result.folder_id);
+    await openDocument(document, 'items');
+  };
+
 
   const createFolder = async () => {
     const name = newFolderName.trim();
@@ -897,6 +948,28 @@ function KnowledgeBasePage() {
         </div>
       </section>
 
+      <form
+        className="knowledge-global-search"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void runGlobalSearch();
+        }}
+      >
+        <label htmlFor="knowledge-global-search-input">全库检索</label>
+        <div className="knowledge-global-search-controls">
+          <input
+            id="knowledge-global-search-input"
+            value={searchKeyword}
+            onChange={(event) => setSearchKeyword(event.target.value)}
+            placeholder="输入知识关键字，检索所有已完成文档"
+          />
+          <button type="submit" className="primary-action" disabled={searchLoading || !searchKeyword.trim()}>
+            {searchLoading ? '检索中...' : '检索'}
+          </button>
+          {submittedSearchKeyword && <button type="button" className="secondary-action" onClick={clearGlobalSearch}>返回文件夹</button>}
+        </div>
+      </form>
+
       {showCreateFolder && (
         <form
           className="knowledge-create-folder-bar"
@@ -925,7 +998,16 @@ function KnowledgeBasePage() {
         </form>
       )}
 
-      <section className="knowledge-layout">
+      {submittedSearchKeyword && (
+        <KnowledgeSearchResults
+          keyword={submittedSearchKeyword}
+          results={searchResults}
+          loading={searchLoading}
+          onOpenResult={(result) => { void openSearchResult(result); }}
+        />
+      )}
+
+      {!submittedSearchKeyword && <section className="knowledge-layout">
         <aside className="knowledge-folder-panel">
           <div className="knowledge-panel-head">
             <strong>文件夹</strong>
@@ -1061,7 +1143,7 @@ function KnowledgeBasePage() {
             </div>
           )}
         </main>
-        </section>
+        </section>}
       </div>
 
       <AppDialog
@@ -1527,3 +1609,48 @@ function mergeDocuments(prev: KnowledgeDocument[], next: KnowledgeDocument[]) {
 }
 
 export default KnowledgeBasePage;
+
+interface KnowledgeSearchResultsProps {
+  keyword: string;
+  results: KnowledgeBaseSearchResult[];
+  loading: boolean;
+  onOpenResult: (result: KnowledgeBaseSearchResult) => void;
+}
+
+function KnowledgeSearchResults({ keyword, results, loading, onOpenResult }: KnowledgeSearchResultsProps) {
+  return (
+    <section className="knowledge-search-panel">
+      <div className="knowledge-panel-head">
+        <strong>“{keyword}”的检索结果</strong>
+        <span>{loading ? '正在检索' : `${results.length} 条知识`}</span>
+      </div>
+      {loading ? (
+        <div className="knowledge-empty-box large">
+          <InlineSpinner />
+          <strong>正在检索全部知识库...</strong>
+          <p>检索完成后会显示对应文档和知识片段。</p>
+        </div>
+      ) : results.length ? (
+        <div className="knowledge-search-result-list">
+          {results.map((result) => (
+            <article className="knowledge-search-result-card" key={`${result.document_id}:${result.item_id}`}>
+              <div className="knowledge-search-result-path">
+                <span>{result.folder_name}</span>
+                <span aria-hidden="true">/</span>
+                <strong>{result.file_name}</strong>
+              </div>
+              <h3>{result.title}</h3>
+              <p>{result.snippet || result.resume || '该条目暂无可显示片段'}</p>
+              <button type="button" className="knowledge-item-source-action" onClick={() => onOpenResult(result)}>打开知识条目</button>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="knowledge-empty-box large">
+          <strong>没有找到相关知识</strong>
+          <p>请更换关键字，或确认相关文档已经完成知识整理。</p>
+        </div>
+      )}
+    </section>
+  );
+}
