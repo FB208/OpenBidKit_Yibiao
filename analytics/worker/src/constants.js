@@ -14,6 +14,8 @@ export const AGENT_RUNTIME_STATUSES = new Set(['success', 'failed']);
 export const AGENT_RUNTIME_MAX_RETRY_COUNT = 3;
 export const AGENT_RUNTIME_KIND_PATTERN = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 export const PROJECT_NAME_PATTERN = /^[a-zA-Z0-9._-]{1,80}$/;
+// 客户端上报版本号必须符合“2.x.x”格式，其余一律视为异常版本号，在 /track 静默丢弃。
+export const VERSION_FORMAT_PATTERN = /^2\.\d+\.\d+$/;
 export const NOTICE_KEY_PREFIX = 'project_notice:';
 export const LICENSE_CONFIG_KEY_PREFIX = 'project_license_config:';
 export const NOTICE_TITLE_MAX_LENGTH = 120;
