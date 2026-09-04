@@ -5,12 +5,7 @@ import { useToast } from '../../../shared/ui';
 import type { ExportTemplateRecord } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
-import { TemplatePreview } from './ExportFormatPage';
-
-interface MyTemplatesPageProps {
-  onCreateTemplate: () => void;
-  onEditTemplate: (templateId: string) => void;
-}
+import { ExportTemplateEditorDialog, TemplatePreview } from './ExportFormatPage';
 
 const templateDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric',
@@ -20,11 +15,12 @@ const templateDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   minute: '2-digit',
 });
 
-function MyTemplatesPage({ onCreateTemplate, onEditTemplate }: MyTemplatesPageProps) {
+function MyTemplatesPage() {
   const { showToast } = useToast();
   const [templates, setTemplates] = useState<ExportTemplateRecord[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [loading, setLoading] = useState(true);
+  const [editor, setEditor] = useState<{ mode: 'create' | 'edit'; templateId?: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ExportTemplateRecord | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -51,6 +47,11 @@ function MyTemplatesPage({ onCreateTemplate, onEditTemplate }: MyTemplatesPagePr
   useEffect(() => {
     trackPageView('my-templates');
     void loadTemplates();
+  }, [loadTemplates]);
+
+  const handleTemplateSaved = useCallback(async (template: ExportTemplateRecord) => {
+    await loadTemplates();
+    setSelectedId(template.template_id);
   }, [loadTemplates]);
 
   const confirmDelete = async () => {
@@ -80,7 +81,7 @@ function MyTemplatesPage({ onCreateTemplate, onEditTemplate }: MyTemplatesPagePr
             <h2>我的模板</h2>
             <p>查看、编辑和删除已保存的标书导出模板。</p>
           </div>
-          <button type="button" className="primary-action" onClick={onCreateTemplate}>新建模板</button>
+          <button type="button" className="primary-action" onClick={() => setEditor({ mode: 'create' })}>新建模板</button>
         </div>
 
         <div className="template-library-list">
@@ -88,8 +89,8 @@ function MyTemplatesPage({ onCreateTemplate, onEditTemplate }: MyTemplatesPagePr
           {!loading && templates.length === 0 ? (
             <div className="template-library-empty">
               <strong>还没有保存模板</strong>
-              <span>进入新建模板页配置排版样式，保存后会出现在这里。</span>
-              <button type="button" className="primary-action" onClick={onCreateTemplate}>新建第一个模板</button>
+              <span>打开模板编辑器配置排版样式，保存后会出现在这里。</span>
+              <button type="button" className="primary-action" onClick={() => setEditor({ mode: 'create' })}>新建第一个模板</button>
             </div>
           ) : null}
           {!loading && templates.map((template) => {
@@ -101,7 +102,7 @@ function MyTemplatesPage({ onCreateTemplate, onEditTemplate }: MyTemplatesPagePr
                   <small>更新于 {formatTemplateDate(template.updated_at)}</small>
                 </button>
                 <div className="template-library-card-actions">
-                  <button type="button" onClick={() => onEditTemplate(template.template_id)}>编辑</button>
+                  <button type="button" onClick={() => setEditor({ mode: 'edit', templateId: template.template_id })}>编辑</button>
                   <button type="button" className="is-danger" onClick={() => setDeleteTarget(template)}>删除</button>
                 </div>
               </article>
@@ -118,7 +119,7 @@ function MyTemplatesPage({ onCreateTemplate, onEditTemplate }: MyTemplatesPagePr
                 <span className="section-kicker">实时预览</span>
                 <h3>{selectedTemplate.template_name}</h3>
               </div>
-              <button type="button" className="secondary-action" onClick={() => onEditTemplate(selectedTemplate.template_id)}>编辑模板</button>
+              <button type="button" className="secondary-action" onClick={() => setEditor({ mode: 'edit', templateId: selectedTemplate.template_id })}>编辑模板</button>
             </div>
             <TemplatePreview config={previewConfig} previewStyle={previewStyle} />
           </>
@@ -129,6 +130,17 @@ function MyTemplatesPage({ onCreateTemplate, onEditTemplate }: MyTemplatesPagePr
           </div>
         )}
       </section>
+
+      <ExportTemplateEditorDialog
+        open={Boolean(editor)}
+        mode={editor?.mode || 'create'}
+        templateId={editor?.templateId || null}
+        returnLabel="返回我的模板"
+        onOpenChange={(open) => {
+          if (!open) setEditor(null);
+        }}
+        onSaved={handleTemplateSaved}
+      />
 
       <Dialog.Root open={Boolean(deleteTarget)} onOpenChange={(open) => !open && !deleting && setDeleteTarget(null)}>
         <Dialog.Portal>

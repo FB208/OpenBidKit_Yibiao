@@ -6,8 +6,7 @@ import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { OutlineItem } from '../../../shared/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
-import type { SectionId } from '../../../shared/types/navigation';
-import { TemplatePreview } from '../../export-format/pages/ExportFormatPage';
+import { ExportTemplateEditorDialog, TemplatePreview } from '../../export-format/pages/ExportFormatPage';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
 import type { WordExportProgressEvent } from '../../../shared/types';
 import AnalysisPage from './AnalysisPage';
@@ -27,7 +26,6 @@ import {
 
 interface FeasibilityReportHomeProps {
   registerLeaveGuard?: (guard: ((nextSection?: string) => Promise<boolean>) | null) => void;
-  onSectionChange?: (section: SectionId) => void;
 }
 
 const initialExportProgress = {
@@ -66,7 +64,7 @@ const emptyState: FeasibilityReportState = {
   outlineData: null,
 };
 
-function FeasibilityReportHome({ registerLeaveGuard, onSectionChange }: FeasibilityReportHomeProps) {
+function FeasibilityReportHome({ registerLeaveGuard }: FeasibilityReportHomeProps) {
   const { showToast } = useToast();
   const [state, setState] = useState<FeasibilityReportState>(emptyState);
   const [draftProjectInfo, setDraftProjectInfo] = useState<FeasibilityProjectInfo>(DEFAULT_FEASIBILITY_PROJECT_INFO);
@@ -77,6 +75,7 @@ function FeasibilityReportHome({ registerLeaveGuard, onSectionChange }: Feasibil
   const [resetOpen, setResetOpen] = useState(false);
   const [exportOptions, setExportOptions] = useState<FeasibilityExportOptions>(DEFAULT_FEASIBILITY_EXPORT_OPTIONS);
   const [exportTemplateDialogOpen, setExportTemplateDialogOpen] = useState(false);
+  const [exportTemplateEditorOpen, setExportTemplateEditorOpen] = useState(false);
   const [exportTemplates, setExportTemplates] = useState<ExportTemplateRecord[]>([]);
   const [exportTemplatesLoading, setExportTemplatesLoading] = useState(false);
   const [exportTemplateSearch, setExportTemplateSearch] = useState('');
@@ -419,12 +418,13 @@ function FeasibilityReportHome({ registerLeaveGuard, onSectionChange }: Feasibil
   };
 
   const createExportTemplate = () => {
-    if (!onSectionChange) {
-      showToast('请从左侧菜单进入模板设置新建模板', 'info');
-      return;
-    }
     setExportTemplateDialogOpen(false);
-    onSectionChange('new-template');
+    setExportTemplateEditorOpen(true);
+  };
+
+  const handleExportTemplateSaved = async (template: ExportTemplateRecord) => {
+    await loadExportTemplates();
+    setSelectedExportTemplateId(template.template_id);
   };
 
   const handleOpenExportedFile = async () => {
@@ -696,6 +696,17 @@ function FeasibilityReportHome({ registerLeaveGuard, onSectionChange }: Feasibil
             </button>
           </>
         )}
+      />
+
+      <ExportTemplateEditorDialog
+        open={exportTemplateEditorOpen}
+        mode="create"
+        returnLabel="返回导出"
+        onOpenChange={(open) => {
+          setExportTemplateEditorOpen(open);
+          if (!open) setExportTemplateDialogOpen(true);
+        }}
+        onSaved={handleExportTemplateSaved}
       />
 
       <Dialog.Root open={exportTemplateDialogOpen} onOpenChange={(open) => !open && !isExporting && setExportTemplateDialogOpen(false)}>

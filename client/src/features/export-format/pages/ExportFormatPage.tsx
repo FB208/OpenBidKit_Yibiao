@@ -1,7 +1,7 @@
 ﻿import * as Dialog from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { AppSwitch, FloatingToolbar, ProgressBar, useToast } from '../../../shared/ui';
+import { AppDialog, AppSwitch, FloatingToolbar, ProgressBar, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type {
   BodyTextStyleConfig,
@@ -18,6 +18,7 @@ import type {
   PaperSize,
   TableCellStyleConfig,
   TableStyleConfig,
+  ExportTemplateRecord,
 } from '../../../shared/types/exportFormat';
 import {
   ALIGNMENT_OPTIONS,
@@ -54,6 +55,19 @@ interface ExportFormatPageProps {
   mode?: 'create' | 'edit';
   templateId?: string | null;
   onBack?: () => void;
+  onSaved?: (template: ExportTemplateRecord) => void | Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
+  onSavingChange?: (saving: boolean) => void;
+  backLabel?: string;
+}
+
+export interface ExportTemplateEditorDialogProps {
+  open: boolean;
+  mode: 'create' | 'edit';
+  templateId?: string | null;
+  returnLabel: string;
+  onOpenChange: (open: boolean) => void;
+  onSaved?: (template: ExportTemplateRecord) => void | Promise<void>;
 }
 
 const templateTabs: Array<{ id: TemplateTab; label: string }> = [
@@ -321,13 +335,22 @@ function withExportFormatDefaults(source: ExportFormatConfig): ExportFormatConfi
   };
 }
 
-function ExportFormatPage({ mode = 'create', templateId = null, onBack }: ExportFormatPageProps) {
+function ExportFormatPage({
+  mode = 'create',
+  templateId = null,
+  onBack,
+  onSaved,
+  onDirtyChange,
+  onSavingChange,
+  backLabel = '返回',
+}: ExportFormatPageProps) {
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<TemplateTab>('quick');
   const [config, setConfig] = useState<ExportFormatConfig>(
     () => mode === 'create' ? createNewTemplateExportFormat() : createDefaultExportFormat(),
   );
   const [savedConfig, setSavedConfig] = useState<ExportFormatConfig | null>(null);
+  const [initialConfig, setInitialConfig] = useState<ExportFormatConfig | null>(null);
   const [currentTemplateId, setCurrentTemplateId] = useState<string | null>(templateId);
   const [selectedLayoutPresetId, setSelectedLayoutPresetId] = useState('');
   const [selectedThemePresetId, setSelectedThemePresetId] = useState('');
@@ -338,6 +361,8 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
   const [previewFullscreenOpen, setPreviewFullscreenOpen] = useState(false);
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -360,6 +385,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
     (async () => {
       setLoaded(false);
       setLoadError('');
+      setInitialConfig(null);
       try {
         if (mode === 'edit') {
           if (!templateId) {
@@ -374,6 +400,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           setCurrentTemplateId(template.template_id);
           setConfig(nextConfig);
           setSavedConfig(nextConfig);
+          setInitialConfig(nextConfig);
           setSelectedLayoutPresetId('');
           setSelectedThemePresetId('');
           return;
@@ -384,6 +411,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         setCurrentTemplateId(null);
         setConfig(defaultConfig);
         setSavedConfig(null);
+        setInitialConfig(defaultConfig);
         setSelectedLayoutPresetId('');
         setSelectedThemePresetId('');
       } catch (error) {
@@ -398,9 +426,21 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
     return () => { cancelled = true; };
   }, [mode, showToast, templateId]);
 
-  const isDirty = useMemo(() => !savedConfig || JSON.stringify(config) !== JSON.stringify(savedConfig), [config, savedConfig]);
+  const isDirty = useMemo(
+    () => loaded && !loadError && (!savedConfig || JSON.stringify(config) !== JSON.stringify(savedConfig)),
+    [config, loadError, loaded, savedConfig],
+  );
+  const hasUnsavedChanges = useMemo(() => {
+    if (!loaded || loadError) return false;
+    const baseline = savedConfig || initialConfig;
+    return Boolean(baseline && JSON.stringify(config) !== JSON.stringify(baseline));
+  }, [config, initialConfig, loadError, loaded, savedConfig]);
   const previewStyle = useMemo<CSSProperties>(() => buildExportFormatCssVars(config), [config]);
   const fontOptions = useMemo(() => mergeFontOptions(FONT_OPTIONS, collectConfigFonts(config), systemFonts), [config, systemFonts]);
+
+  useEffect(() => {
+    onDirtyChange?.(hasUnsavedChanges);
+  }, [hasUnsavedChanges, onDirtyChange]);
 
   const updateTemplate = useCallback((updates: Partial<ExportFormatConfig>) => {
     setConfig((prev) => ({ ...prev, ...updates }));
@@ -479,14 +519,19 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   }, []);
 
   const handleSave = useCallback(async () => {
+    if (savingRef.current) return;
     const templateName = config.template_name.trim();
     if (!templateName) {
       showToast('请先填写模板名称', 'info');
       return;
     }
 
+    savingRef.current = true;
+    setSaving(true);
+    onSavingChange?.(true);
     try {
       const nextConfig = templateName === config.template_name ? config : { ...config, template_name: templateName };
+      const configAtSaveStart = JSON.stringify(config);
       const template = currentTemplateId
         ? await window.yibiao?.templates.update(currentTemplateId, nextConfig)
         : await window.yibiao?.templates.create(nextConfig);
@@ -494,13 +539,18 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
         throw new Error('模板保存失败');
       }
       setCurrentTemplateId(template.template_id);
-      setConfig(template.config);
+      setConfig((current) => JSON.stringify(current) === configAtSaveStart ? template.config : current);
       setSavedConfig(template.config);
+      await onSaved?.(template);
       showToast(currentTemplateId ? '模板已保存' : '模板已创建', 'success');
     } catch (error) {
       showToast(`保存失败：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+      onSavingChange?.(false);
     }
-  }, [config, currentTemplateId, showToast]);
+  }, [config, currentTemplateId, onSaved, onSavingChange, showToast]);
 
   const handleResetDefault = useCallback(() => {
     if (selectedLayoutPresetId || selectedThemePresetId) {
@@ -675,7 +725,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   const resetToolbarGroup: FloatingToolbarGroup = {
     id: 'template-reset',
     actions: [
-      { id: 'reset-default', label: '重置默认', variant: 'danger', tooltip: selectedLayoutPresetId || selectedThemePresetId ? '恢复当前预设样式，保存后生效' : '恢复默认模版设置，保存后生效', onClick: handleResetDefault },
+      { id: 'reset-default', label: '重置默认', variant: 'danger', disabled: saving, tooltip: selectedLayoutPresetId || selectedThemePresetId ? '恢复当前预设样式，保存后生效' : '恢复默认模版设置，保存后生效', onClick: handleResetDefault },
     ],
   };
   const exportTestToolbarGroup: FloatingToolbarGroup = {
@@ -690,7 +740,16 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
       { id: 'fullscreen-preview', label: '全屏预览', variant: 'success', tooltip: '放大右侧模板预览', onClick: () => setPreviewFullscreenOpen(true) },
     ],
   };
-  const saveToolbarGroups: FloatingToolbarGroup[] = isDirty
+  const saveToolbarGroups: FloatingToolbarGroup[] = saving
+    ? [
+        {
+          id: 'template-saving',
+          actions: [
+            { id: 'saving-indicator', label: '保存中...', variant: 'ghost', disabled: true, onClick: () => {} },
+          ],
+        },
+      ]
+    : isDirty
     ? [
         {
           id: 'template-save-state',
@@ -717,7 +776,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
     ? {
         id: 'template-navigation',
         actions: [
-          { id: 'back', label: '返回我的模板', variant: 'secondary', onClick: onBack },
+          { id: 'back', label: backLabel, variant: 'secondary', disabled: saving, onClick: onBack },
         ],
       }
     : null;
@@ -1403,7 +1462,7 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
           <div className="export-template-error-state">
             <strong>模板加载失败</strong>
             <span>{loadError}</span>
-            {onBack ? <button type="button" className="secondary-action" onClick={onBack}>返回我的模板</button> : null}
+            {onBack ? <button type="button" className="secondary-action" onClick={onBack}>{backLabel}</button> : null}
           </div>
         </div>
       </div>
@@ -1411,14 +1470,14 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
   }
 
   return (
-    <div className="settings-page export-template-page">
+    <div className="settings-page export-template-page" aria-busy={saving}>
       <div className="settings-page-scroll export-template-scroll">
-        <div className="settings-tab-shell" role="tablist" aria-label="模版设置分类">
+        <div className="document-switch-tabs generation-settings-tabs" role="tablist" aria-label="模版设置分类">
           {templateTabs.map((tab) => (
             <button
               key={tab.id}
               type="button"
-              className={`settings-tab ${activeTab === tab.id ? 'is-active' : ''}`}
+              className={`document-switch-tab generation-settings-tab${activeTab === tab.id ? ' is-active' : ''}`}
               onClick={() => setActiveTab(tab.id)}
               role="tab"
               aria-selected={activeTab === tab.id}
@@ -1487,6 +1546,94 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
       </Dialog.Root>
       <FloatingToolbar groups={toolbarGroups} label="模版设置保存工具条" />
     </div>
+  );
+}
+
+/**
+ * 可在各业务页面复用的全屏模板编辑器。
+ */
+export function ExportTemplateEditorDialog({
+  open,
+  mode,
+  templateId = null,
+  returnLabel,
+  onOpenChange,
+  onSaved,
+}: ExportTemplateEditorDialogProps) {
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setDirty(false);
+      setSaving(false);
+      setDiscardConfirmOpen(false);
+    }
+  }, [open]);
+
+  const requestClose = useCallback(() => {
+    if (saving) return;
+    if (dirty) {
+      setDiscardConfirmOpen(true);
+      return;
+    }
+    onOpenChange(false);
+  }, [dirty, onOpenChange, saving]);
+
+  const discardAndClose = useCallback(() => {
+    setDiscardConfirmOpen(false);
+    setDirty(false);
+    onOpenChange(false);
+  }, [onOpenChange]);
+
+  return (
+    <>
+      <Dialog.Root
+        open={open}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) requestClose();
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="export-template-editor-overlay" />
+          <Dialog.Content
+            className="export-template-editor-dialog"
+            onPointerDownOutside={(event) => event.preventDefault()}
+          >
+            <Dialog.Title className="export-template-fullscreen-title">
+              {mode === 'edit' ? '编辑模板' : '新建模板'}
+            </Dialog.Title>
+            <Dialog.Description className="export-template-fullscreen-description">
+              配置模板的版面、页眉页脚、标题、正文、表格和图片样式。
+            </Dialog.Description>
+            <ExportFormatPage
+              mode={mode}
+              templateId={templateId}
+              onBack={requestClose}
+              onSaved={onSaved}
+              onDirtyChange={setDirty}
+              onSavingChange={setSaving}
+              backLabel={returnLabel}
+            />
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <AppDialog
+        open={discardConfirmOpen}
+        onOpenChange={setDiscardConfirmOpen}
+        kicker="未保存修改"
+        title="放弃本次模板修改？"
+        description="关闭后，本次尚未保存的模板设置将丢失。"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => setDiscardConfirmOpen(false)}>继续编辑</button>
+            <button type="button" className="danger-action" onClick={discardAndClose}>放弃修改</button>
+          </>
+        )}
+      />
+    </>
   );
 }
 
@@ -1785,5 +1932,3 @@ export function TemplatePreview({ config, previewStyle }: { config: ExportFormat
     </aside>
   );
 }
-
-export default ExportFormatPage;

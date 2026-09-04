@@ -14,13 +14,12 @@ import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, G
 import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
 import type { OutlineData, OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from '../../../shared/types/exportFormat';
-import type { SectionId } from '../../../shared/types/navigation';
 import { countReadableWords } from '../../../shared/utils/wordCount';
 import { DEFAULT_CONTENT_GENERATION_TEMPLATE_ID } from '../contentGenerationTemplates';
+import { ExportTemplateEditorDialog } from '../../export-format/pages/ExportFormatPage';
 
 interface TechnicalPlanHomeProps {
   registerLeaveGuard?: (guard: ((nextSection?: string) => Promise<boolean>) | null) => void;
-  onSectionChange?: (section: SectionId) => void;
 }
 
 interface OutlineSortGuard {
@@ -282,13 +281,14 @@ function updateOutlineItemContent(items: OutlineItem[], itemId: string, content:
   });
 }
 
-function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPlanHomeProps) {
+function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const { hydrated, state, setState } = useTechnicalPlanWorkflow();
   const { showToast } = useToast();
   const [tenderMarkdown, setTenderMarkdown] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
   const [exportTemplates, setExportTemplates] = useState<ExportTemplateRecord[]>([]);
   const [exportTemplatesLoading, setExportTemplatesLoading] = useState(false);
+  const [exportTemplateEditorOpen, setExportTemplateEditorOpen] = useState(false);
   const [sortLeaveDialogOpen, setSortLeaveDialogOpen] = useState(false);
   const [outlineWordControlLeaveDialogOpen, setOutlineWordControlLeaveDialogOpen] = useState(false);
   const [wordControlWarningDialog, setWordControlWarningDialog] = useState<WordControlWarningDialogState | null>(null);
@@ -841,12 +841,7 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
   };
 
   const createExportTemplate = () => {
-    if (!onSectionChange) {
-      showToast('请从左侧菜单进入模板设置新建模板', 'info');
-      return;
-    }
-
-    onSectionChange('new-template');
+    setExportTemplateEditorOpen(true);
   };
 
   const saveChapterContent = async (item: OutlineItem, content: string) => {
@@ -975,6 +970,15 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
   const saveGenerationExportTemplate = async (exportTemplateId: string) => {
     const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ exportTemplateId });
     setState((prev) => ({ ...prev, exportTemplateId: saved.exportTemplateId }));
+  };
+
+  const handleExportTemplateSaved = async (template: ExportTemplateRecord) => {
+    await loadExportTemplates();
+    try {
+      await saveGenerationExportTemplate(template.template_id);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存导出模板选择失败', 'error');
+    }
   };
 
   const openBidTemplate = async () => {
@@ -1191,6 +1195,14 @@ function TechnicalPlanHome({ registerLeaveGuard, onSectionChange }: TechnicalPla
           onContentGenerationOptionsChange={saveContentGenerationOptions}
         />
       )}
+
+      <ExportTemplateEditorDialog
+        open={exportTemplateEditorOpen}
+        mode="create"
+        returnLabel="返回生成设置"
+        onOpenChange={setExportTemplateEditorOpen}
+        onSaved={handleExportTemplateSaved}
+      />
 
       {state.step === 'bid-analysis' && (
         <BidAnalysisPage
