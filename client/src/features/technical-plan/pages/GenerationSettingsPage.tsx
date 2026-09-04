@@ -4,10 +4,8 @@ import { AppDialog, AppSwitch, isLibreOfficeRequiredMessage, UploadEmpty, Upload
 import type { ImageModelStatus, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
 import type { ExportTemplateRecord } from '../../../shared/types/exportFormat';
 import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
-import { RestrictedHtmlRenderer } from '../components/RestrictedHtmlRenderer';
 import type { ContentGenerationOptions, ContentIllustrationKind, ContentTableRequirement, GlobalFactsMode, TechnicalPlanOriginalPlanFile, TechnicalPlanState } from '../types';
 import { DEFAULT_HTML_IMAGE_TYPES, normalizeContentGenerationOptions } from '../contentGenerationOptions';
-import { contentGenerationTemplates, getContentGenerationTemplate, type ContentGenerationTemplateId } from '../contentGenerationTemplates';
 import aiImageExampleUrl from '../../../../assets/generate_img_example/ai.png';
 import mermaidImageExampleUrl from '../../../../assets/generate_img_example/mermaid.png';
 import htmlImageExampleUrl from '../../../../assets/generate_img_example/html.png';
@@ -23,7 +21,6 @@ interface GenerationSettingsPageProps {
   outlineWordControlSnapshot?: OutlineWordControlOptions;
   referenceKnowledgeDocumentIds: string[];
   globalFactsMode: GlobalFactsMode;
-  contentGenerationTemplateId: ContentGenerationTemplateId;
   exportTemplateId: string;
   exportTemplates: ExportTemplateRecord[];
   exportTemplatesLoading: boolean;
@@ -39,7 +36,6 @@ interface GenerationSettingsPageProps {
   onOutlineWordControlOptionsChange: (options: OutlineWordControlOptions) => Promise<void>;
   onReferenceKnowledgeDocumentIdsChange: (documentIds: string[]) => Promise<void>;
   onGlobalFactsModeChange: (globalFactsMode: GlobalFactsMode) => Promise<void>;
-  onContentGenerationTemplateIdChange: (templateId: ContentGenerationTemplateId) => Promise<void>;
   onExportTemplateIdChange: (templateId: string) => Promise<void>;
   onCreateExportTemplate?: () => void;
   onContentGenerationOptionsChange: (options: ContentGenerationOptions) => Promise<void>;
@@ -221,7 +217,6 @@ function GenerationSettingsPage({
   outlineWordControlSnapshot,
   referenceKnowledgeDocumentIds,
   globalFactsMode,
-  contentGenerationTemplateId,
   exportTemplateId,
   exportTemplates,
   exportTemplatesLoading,
@@ -237,7 +232,6 @@ function GenerationSettingsPage({
   onOutlineWordControlOptionsChange,
   onReferenceKnowledgeDocumentIdsChange,
   onGlobalFactsModeChange,
-  onContentGenerationTemplateIdChange,
   onExportTemplateIdChange,
   onCreateExportTemplate,
   onContentGenerationOptionsChange,
@@ -258,9 +252,7 @@ function GenerationSettingsPage({
   const [loadingKnowledge, setLoadingKnowledge] = useState(false);
   const [knowledgeSaving, setKnowledgeSaving] = useState(false);
   const [globalFactsModeBusy, setGlobalFactsModeBusy] = useState(false);
-  const [contentTemplateBusy, setContentTemplateBusy] = useState(false);
   const [exportTemplateBusy, setExportTemplateBusy] = useState(false);
-  const [previewContentTemplateId, setPreviewContentTemplateId] = useState<ContentGenerationTemplateId | null>(null);
   const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
   const [draftTableRequirement, setDraftTableRequirement] = useState<ContentTableRequirement>(() => (
     normalizeContentGenerationOptions(contentGenerationOptions, false, contentLeafCount).tableRequirement
@@ -297,8 +289,6 @@ function GenerationSettingsPage({
     imageModelAvailable,
     contentLeafCount,
   );
-  const currentContentTemplate = getContentGenerationTemplate(contentGenerationTemplateId);
-  const previewContentTemplate = previewContentTemplateId ? getContentGenerationTemplate(previewContentTemplateId) : null;
   const selectedExportTemplate = exportTemplates.find((template) => template.template_id === exportTemplateId) || null;
 
   useEffect(() => {
@@ -526,20 +516,6 @@ function GenerationSettingsPage({
       showToast(error instanceof Error ? error.message : '保存全局事实配置失败', 'error');
     } finally {
       setGlobalFactsModeBusy(false);
-    }
-  };
-
-  // 保存排版风格选择；当前仅用于结构预览，不影响正文生成结果。
-  const saveContentGenerationTemplate = async (templateId: ContentGenerationTemplateId) => {
-    if (templateId === contentGenerationTemplateId || contentTemplateBusy) return;
-    try {
-      setContentTemplateBusy(true);
-      await onContentGenerationTemplateIdChange(templateId);
-      showToast('保存成功', 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '保存排版风格失败', 'error');
-    } finally {
-      setContentTemplateBusy(false);
     }
   };
 
@@ -1130,50 +1106,6 @@ function GenerationSettingsPage({
                 {!exportTemplatesLoading && !exportTemplates.length && <p className="generation-settings-export-template-status">暂无可用模板，请先新建并保存 Word 导出模板。</p>}
                 {!exportTemplatesLoading && exportTemplateId && !selectedExportTemplate && <p className="generation-settings-export-template-status is-error">原导出模板已被删除，请重新选择。</p>}
               </section>
-
-              <div className="generation-settings-appearance-head">
-                <strong>排版风格选择</strong>
-                <span>{selectedExportTemplate ? `排版风格只改变内容组织，纸张和外观仍由“${selectedExportTemplate.template_name}”决定。` : '请先选择导出模板，再查看和选择排版结构。'}</span>
-              </div>
-              <fieldset className="content-template-grid" disabled={contentTemplateBusy || !selectedExportTemplate} aria-label="排版风格选择">
-                {contentGenerationTemplates.map((template) => {
-                  const selected = currentContentTemplate.id === template.id;
-                  return (
-                    <article className={`content-template-option${selected ? ' is-selected' : ''}`} key={template.id}>
-                      <div className="content-template-summary">
-                        <div>
-                          <strong>{template.name}</strong>
-                          <p>{template.description}</p>
-                        </div>
-                        <span>{template.recommendation}</span>
-                      </div>
-                      <div className="content-template-actions">
-                        <label className="content-template-radio">
-                          <input
-                            type="radio"
-                            name="content-generation-template"
-                            value={template.id}
-                            checked={selected}
-                            onChange={() => void saveContentGenerationTemplate(template.id)}
-                          />
-                          <span>{selected ? '当前模板' : '选择此模板'}</span>
-                        </label>
-                        <button type="button" className="secondary-action" onClick={() => setPreviewContentTemplateId(template.id)}>查看完整预览</button>
-                      </div>
-                      <div className="content-template-thumbnail" aria-hidden="true">
-                        {selectedExportTemplate && (
-                          <RestrictedHtmlRenderer
-                            value={template.displayHtml}
-                            config={selectedExportTemplate.config}
-                            columns={template.id === 'visual-table' ? 2 : 1}
-                            compact
-                          />
-                        )}
-                      </div>
-                    </article>
-                  );
-                })}
-              </fieldset>
             </section>
           ) : (
             <div className="generation-settings-placeholder" role="status">
@@ -1183,30 +1115,6 @@ function GenerationSettingsPage({
           )}
         </div>
       </section>
-
-      <Dialog.Root open={Boolean(previewContentTemplate)} onOpenChange={(open) => !open && setPreviewContentTemplateId(null)}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal content-template-preview-modal" />
-          <Dialog.Content className="content-template-preview-dialog">
-            <div className="content-template-preview-dialog-head">
-              <div>
-                <Dialog.Title>{previewContentTemplate?.name || '模板完整预览'}</Dialog.Title>
-                <Dialog.Description>{previewContentTemplate ? `${previewContentTemplate.recommendation}；当前按所选导出模板真实分页，可纵向滚动查看全部页面。` : '当前按所选导出模板真实分页。'}</Dialog.Description>
-              </div>
-              <Dialog.Close className="image-preview-close" type="button" aria-label="关闭模板预览">×</Dialog.Close>
-            </div>
-            <div className="content-template-preview-dialog-body">
-              {previewContentTemplateId && selectedExportTemplate && (
-                <RestrictedHtmlRenderer
-                  value={previewContentTemplate?.displayHtml || ''}
-                  config={selectedExportTemplate.config}
-                  columns={previewContentTemplateId === 'visual-table' ? 2 : 1}
-                />
-              )}
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
 
       <Dialog.Root open={htmlImageTypesDialogOpen} onOpenChange={(open) => !contentOptionsBusy && setHtmlImageTypesDialogOpen(open)}>
         <Dialog.Portal>

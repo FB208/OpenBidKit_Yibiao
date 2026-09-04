@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { parseRestrictedHtml } from '../../../shared/bodyHtml/restrictedHtml';
-import { PAPER_DIMENSIONS, type ExportFormatConfig } from '../../../shared/types/exportFormat';
-import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
-import { PageFooterChrome, PageHeaderChrome } from '../../export-format/HeaderFooterChrome';
+import { parseRestrictedHtml } from './restrictedHtml';
+import { PAPER_DIMENSIONS, type ExportFormatConfig } from '../types/exportFormat';
+import { buildExportFormatCssVars } from '../utils/exportFormatCss';
+import { formatOutlineNumber } from '../utils/outlineNumbering';
+import { PageFooterChrome, PageHeaderChrome } from '../ui/HeaderFooterChrome';
 
 const MM_TO_CSS_PX = 96 / 25.4;
 
@@ -40,13 +41,35 @@ interface PreviewPage {
 interface PreviewMetrics {
   bodyHeight: number;
   blockHeights: Record<string, number>;
+  tableMetrics: Record<string, TableMetrics>;
+}
+
+/** 可按行分页的表格拆分素材，行取自 tbody 且不含跨行合并。 */
+interface TableParts {
+  openTag: string;
+  captionHtml: string;
+  theadHtml: string;
+  rowsHtml: string[];
+  trailingHtml: string;
+}
+
+/** 表格块的分段高度；overhead 覆盖外层内边距、表格边框与外边距。 */
+interface TableMetrics {
+  overhead: number;
+  titleHeight: number;
+  captionHeight: number;
+  theadHeight: number;
+  rowHeights: number[];
 }
 
 export interface RestrictedHtmlRendererProps {
   value: string;
   config: ExportFormatConfig;
-  columns?: 1 | 2;
-  compact?: boolean;
+}
+
+/** 双栏只在横版纸张上生效，纵版保留用户已保存的开关值但按单栏排版。 */
+export function resolveRestrictedHtmlColumns(config: ExportFormatConfig): 1 | 2 {
+  return config.page.orientation === 'landscape' && config.page.two_column ? 2 : 1;
 }
 
 function areMetricsEqual(left: PreviewMetrics, right: PreviewMetrics) {
@@ -63,17 +86,82 @@ function fallbackHeight(tag: string) {
   return 96;
 }
 
-/** 解析包含本地图片地址的可信展示模板。 */
-function parseSourceBlocks(value: string): SourceBlock[] {
+function escapeAttributeValue(value: string) {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+function directChildren(parent: Element, tag: string) {
+  return Array.from(parent.children).filter((child) => child.tagName.toLowerCase() === tag);
+}
+
+/**
+ * 解析可按行拆分的表格；只有 tbody 至少两行且没有跨行合并时才允许拆分。
+ * 单行表格（图文、三图预设）和含 rowspan 的表格返回 null，由调用方整块移动，避免切开图片或合并单元格。
+ */
+function parseTableParts(html: string): TableParts | null {
+  if (!/^\s*<table[\s>]/i.test(html)) return null;
+  const roots = Array.from(new DOMParser().parseFromString(html, 'text/html').body.children);
+  const table = roots[0];
+  if (!table || table.tagName.toLowerCase() !== 'table') return null;
+  const tbody = directChildren(table, 'tbody')[0];
+  if (!tbody) return null;
+  const rows = directChildren(tbody, 'tr');
+  if (rows.length < 2) return null;
+  if (rows.some((row) => Array.from(row.children).some((cell) => Number(cell.getAttribute('rowspan') || 1) > 1))) return null;
+  const attributes = Array.from(table.attributes)
+    .map((attribute) => ` ${attribute.name}="${escapeAttributeValue(attribute.value)}"`)
+    .join('');
+  return {
+    openTag: `<table${attributes}>`,
+    captionHtml: directChildren(table, 'caption')[0]?.outerHTML || '',
+    theadHtml: directChildren(table, 'thead')[0]?.outerHTML || '',
+    // 标注整表内的原始行号奇偶，分段后隔行底色不随分片重新计数。
+    rowsHtml: rows.map((row, index) => {
+      if (index % 2 === 1) row.setAttribute('data-yb-row-even', '');
+      return row.outerHTML;
+    }),
+    trailingHtml: roots.slice(1).map((node) => node.outerHTML).join(''),
+  };
+}
+
+/** 生成一段表格分片；表名只出现在首段，表头行每段重复，表注跟随末段。 */
+function buildTableChunkHtml(parts: TableParts, from: number, to: number, isFirstChunk: boolean, isLastChunk: boolean) {
+  const caption = isFirstChunk ? parts.captionHtml : '';
+  const trailing = isLastChunk ? parts.trailingHtml : '';
+  return `${parts.openTag}${caption}${parts.theadHtml}<tbody data-yb-rows>${parts.rowsHtml.slice(from, to).join('')}</tbody></table>${trailing}`;
+}
+
+function escapeHtmlText(value: string) {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** 按导出模板的编号设置，为标题块补上编号前缀。 */
+function withHeadingNumber(html: string, level: number, outlineId: string, config: ExportFormatConfig) {
+  const prefix = formatOutlineNumber(outlineId, config.headings[level - 1]);
+  if (!prefix) return html;
+  const separator = /[、，。；：）)】\]》〉]$/.test(prefix) ? '' : ' ';
+  return html.replace(/^<h[1-6][^>]*>/i, (openTag) => `${openTag}${escapeHtmlText(prefix)}${separator}`);
+}
+
+/** 解析包含本地图片地址的可信展示模板，并按模板设置生成标题编号。 */
+function parseSourceBlocks(value: string, config: ExportFormatConfig): SourceBlock[] {
+  const counters = [0, 0, 0, 0, 0, 0];
   return parseRestrictedHtml(value, { allowImageSrc: true }).blocks
     .filter((block) => block.valid)
     .map((block) => {
       const headingMatch = /^h([1-6])$/.exec(block.kind);
+      const headingLevel = headingMatch ? Number(headingMatch[1]) : undefined;
+      let html = block.html;
+      if (headingLevel) {
+        counters[headingLevel - 1] += 1;
+        for (let deeper = headingLevel; deeper < counters.length; deeper += 1) counters[deeper] = 0;
+        html = withHeadingNumber(html, headingLevel, counters.slice(0, headingLevel).join('.'), config);
+      }
       return {
         id: block.id || `restricted-html-block-${block.index}`,
         tag: block.kind,
-        html: block.html,
-        headingLevel: headingMatch ? Number(headingMatch[1]) : undefined,
+        html,
+        headingLevel,
         fallbackHeight: fallbackHeight(block.kind),
       };
     });
@@ -170,16 +258,23 @@ function buildRenderBlocks(sourceBlocks: SourceBlock[], config: ExportFormatConf
 export function RestrictedHtmlRenderer({
   value,
   config,
-  columns = 1,
-  compact = false,
 }: RestrictedHtmlRendererProps) {
+  const columns = resolveRestrictedHtmlColumns(config);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const measureRef = useRef<HTMLDivElement | null>(null);
   const [stageWidth, setStageWidth] = useState(0);
-  const [metrics, setMetrics] = useState<PreviewMetrics>({ bodyHeight: 0, blockHeights: {} });
-  const sourceBlocks = useMemo(() => parseSourceBlocks(value), [value]);
+  const [metrics, setMetrics] = useState<PreviewMetrics>({ bodyHeight: 0, blockHeights: {}, tableMetrics: {} });
+  const sourceBlocks = useMemo(() => parseSourceBlocks(value, config), [config, value]);
   const renderBlocks = useMemo(() => buildRenderBlocks(sourceBlocks, config, columns), [columns, config, sourceBlocks]);
   const previewStyle = useMemo<CSSProperties>(() => buildExportFormatCssVars(config) as CSSProperties, [config]);
+  const tableParts = useMemo(() => {
+    const parts: Record<string, TableParts> = {};
+    renderBlocks.forEach((block) => {
+      const blockParts = parseTableParts(block.html);
+      if (blockParts) parts[block.id] = blockParts;
+    });
+    return parts;
+  }, [renderBlocks]);
   const dimensions = PAPER_DIMENSIONS[config.page.paper_size] || PAPER_DIMENSIONS.a4;
   const pageWidthMm = config.page.orientation === 'landscape' ? dimensions.height : dimensions.width;
   const pageHeightMm = config.page.orientation === 'landscape' ? dimensions.width : dimensions.height;
@@ -206,13 +301,37 @@ export function RestrictedHtmlRenderer({
       const body = measureRoot.querySelector<HTMLElement>('[data-content-preview-measure-body="true"]');
       if (!body) return;
       const blockHeights: Record<string, number> = {};
+      const tableMetrics: Record<string, TableMetrics> = {};
+      const elementHeight = (element: Element | null | undefined) => (
+        element ? Math.ceil(element.getBoundingClientRect().height) : 0
+      );
       measureRoot.querySelectorAll<HTMLElement>('[data-content-preview-block-id]').forEach((block) => {
         const blockId = block.dataset.contentPreviewBlockId;
-        if (blockId) blockHeights[blockId] = Math.ceil(block.getBoundingClientRect().height);
+        if (!blockId) return;
+        const blockHeight = Math.ceil(block.getBoundingClientRect().height);
+        blockHeights[blockId] = blockHeight;
+
+        // 文档顺序中的首个 table 即块的外层表格，图组单元格内的嵌套表格排在其后。
+        const table = block.querySelector('table');
+        const tbody = table ? directChildren(table, 'tbody')[0] : null;
+        if (!table || !tbody) return;
+        const rowHeights = directChildren(tbody, 'tr').map(elementHeight);
+        const titleHeight = elementHeight(block.querySelector('.export-template-chapter-leaf-title'));
+        const captionHeight = elementHeight(directChildren(table, 'caption')[0]);
+        const theadHeight = elementHeight(directChildren(table, 'thead')[0]);
+        const rowsHeight = rowHeights.reduce((total, height) => total + height, 0);
+        tableMetrics[blockId] = {
+          overhead: Math.max(0, blockHeight - titleHeight - captionHeight - theadHeight - rowsHeight),
+          titleHeight,
+          captionHeight,
+          theadHeight,
+          rowHeights,
+        };
       });
       const nextMetrics = {
         bodyHeight: Math.floor(body.getBoundingClientRect().height),
         blockHeights,
+        tableMetrics,
       };
       setMetrics((previous) => areMetricsEqual(previous, nextMetrics) ? previous : nextMetrics);
     };
@@ -256,7 +375,7 @@ export function RestrictedHtmlRenderer({
       columnIndex += 1;
       if (columnIndex >= columns) startPage();
     };
-    // ponytail: 预览按像素连续切片；需要避开表格行边界时再扩展为语义拆分。
+    // 段落与列表按像素连续切片；表格一律走行级分段，图片块整体移动，均不做像素切割。
     const createSlice = (block: RenderBlock, offset: number, height: number, index: number): RenderBlock => ({
       ...block,
       id: `${block.id}-slice-${index}`,
@@ -265,6 +384,84 @@ export function RestrictedHtmlRenderer({
       sliceHeight: height,
     });
 
+    /** 取表格块的分段高度；缺测量数据时按整块高度均摊，保证首屏也能排版。 */
+    const tableMetricsOf = (block: RenderBlock, parts: TableParts): TableMetrics => {
+      const measured = metrics.tableMetrics[block.id];
+      if (measured && measured.rowHeights.length === parts.rowsHtml.length) return measured;
+      const blockHeight = Math.max(1, metrics.blockHeights[block.id] || block.fallbackHeight);
+      const rowHeight = Math.max(1, Math.floor(blockHeight / parts.rowsHtml.length));
+      return {
+        overhead: 0,
+        titleHeight: 0,
+        captionHeight: 0,
+        theadHeight: 0,
+        rowHeights: parts.rowsHtml.map(() => rowHeight),
+      };
+    };
+
+    /** 首段之外重复表头但不重复表名，因此两种分段的固定高度不同。 */
+    const tableChunkFixedHeight = (tableSize: TableMetrics, isFirstChunk: boolean) => (
+      tableSize.overhead + tableSize.theadHeight
+      + (isFirstChunk ? tableSize.titleHeight + tableSize.captionHeight : 0)
+    );
+
+    /** 表格首段至少要容纳一行，用于判断标题能否与表格同页。 */
+    const minimalTableHeight = (block: RenderBlock, parts: TableParts) => {
+      const tableSize = tableMetricsOf(block, parts);
+      return tableChunkFixedHeight(tableSize, true) + (tableSize.rowHeights[0] || 0);
+    };
+
+    interface TablePackContext {
+      available: () => number;
+      exhausted: () => boolean;
+      place: (chunk: RenderBlock, height: number) => void;
+      advance: () => void;
+    }
+
+    /**
+     * 按 tbody 行边界把表格铺进当前区域，放不下的行继续到下一栏或下一页。
+     * 行是最小单位，单元格内的图片不会被切开；整行超过一整页时单独成段并允许溢出。
+     */
+    const packTableRows = (block: RenderBlock, parts: TableParts, context: TablePackContext) => {
+      const tableSize = tableMetricsOf(block, parts);
+      const rowCount = parts.rowsHtml.length;
+      let rowIndex = 0;
+      let chunkIndex = 0;
+
+      while (rowIndex < rowCount) {
+        const isFirstChunk = chunkIndex === 0;
+        const limit = context.available();
+        let used = tableChunkFixedHeight(tableSize, isFirstChunk);
+        let end = rowIndex;
+        while (end < rowCount && used + (tableSize.rowHeights[end] || 0) <= limit) {
+          used += tableSize.rowHeights[end] || 0;
+          end += 1;
+        }
+        if (end === rowIndex) {
+          if (!context.exhausted()) {
+            context.advance();
+            continue;
+          }
+          end = rowIndex + 1;
+          used += tableSize.rowHeights[rowIndex] || 0;
+        }
+
+        context.place({
+          ...block,
+          id: `${block.id}-rows-${chunkIndex}`,
+          html: buildTableChunkHtml(parts, rowIndex, end, isFirstChunk, end === rowCount),
+          titleHtml: isFirstChunk ? block.titleHtml : undefined,
+          startsNewPage: false,
+          sectionStart: isFirstChunk ? block.sectionStart : false,
+          sectionEnd: end === rowCount ? block.sectionEnd : false,
+        }, used);
+
+        rowIndex = end;
+        chunkIndex += 1;
+        if (rowIndex < rowCount) context.advance();
+      }
+    };
+
     renderBlocks.forEach((block, blockIndex) => {
       const blockHeight = Math.max(1, metrics.blockHeights[block.id] || block.fallbackHeight);
       const nextBlock = renderBlocks[blockIndex + 1];
@@ -272,9 +469,15 @@ export function RestrictedHtmlRenderer({
         && block.kind !== 'leaf'
         && nextBlock !== undefined
         && !nextBlock.headingLevel;
+      const nextBlockParts = keepWithNext && nextBlock ? tableParts[nextBlock.id] : undefined;
       const nextBlockHeight = keepWithNext && nextBlock
-        ? Math.max(1, metrics.blockHeights[nextBlock.id] || nextBlock.fallbackHeight)
+        ? (nextBlockParts
+          ? minimalTableHeight(nextBlock, nextBlockParts)
+          : Math.max(1, metrics.blockHeights[nextBlock.id] || nextBlock.fallbackHeight))
         : 0;
+      const blockTableParts = tableParts[block.id];
+      // 表格永不像素切片：可按行拆分的走行级分段，其余（单行图组、含 rowspan）整块移动。
+      const atomicTable = block.html.trimStart().startsWith('<table') && !blockTableParts;
       if (block.startsNewPage && hasPageContent()) startPage();
 
       if (block.fullWidth) {
@@ -284,9 +487,21 @@ export function RestrictedHtmlRenderer({
           || (hasPageContent() && requiredHeight <= bodyHeight && spanningHeight + requiredHeight > bodyHeight)
           || (hasPageContent() && spanningHeight + blockHeight > bodyHeight)
         ) startPage();
-        if (block.unbreakable) {
+        if (block.unbreakable || atomicTable) {
           page.spanning.push(block);
           spanningHeight += blockHeight;
+          return;
+        }
+        if (blockTableParts) {
+          packTableRows(block, blockTableParts, {
+            available: () => bodyHeight - spanningHeight,
+            exhausted: () => !hasPageContent(),
+            place: (chunk, height) => {
+              page.spanning.push(chunk);
+              spanningHeight += height;
+            },
+            advance: startPage,
+          });
           return;
         }
         let offset = 0;
@@ -310,6 +525,19 @@ export function RestrictedHtmlRenderer({
         else if (hasPageContent()) startPage();
         columnHeight = Math.max(1, bodyHeight - spanningHeight);
       }
+      // 可拆表格直接按行铺满当前栏，不走整块换栏，避免在正文中间留下大段空白。
+      if (blockTableParts) {
+        packTableRows(block, blockTableParts, {
+          available: () => Math.max(1, bodyHeight - spanningHeight) - columnHeights[columnIndex],
+          exhausted: () => page.columns[columnIndex].length === 0 && !hasPageContent(),
+          place: (chunk, height) => {
+            page.columns[columnIndex].push(chunk);
+            columnHeights[columnIndex] += height;
+          },
+          advance: nextColumn,
+        });
+        return;
+      }
       if (spanningHeight >= bodyHeight || (blockHeight <= bodyHeight && blockHeight > columnHeight)) {
         startPage();
         columnHeight = bodyHeight;
@@ -323,7 +551,7 @@ export function RestrictedHtmlRenderer({
         columnHeights[columnIndex] += blockHeight;
         return;
       }
-      if (block.unbreakable) {
+      if (block.unbreakable || atomicTable) {
         page.columns[columnIndex].push(block);
         columnHeights[columnIndex] += blockHeight;
         return;
@@ -436,13 +664,12 @@ export function RestrictedHtmlRenderer({
     width: `${pageWidthPx * previewScale}px`,
     height: `${pageHeightPx * previewScale}px`,
   };
-  const visiblePages = compact ? previewPages.slice(0, 1) : previewPages;
 
   return (
-    <div ref={stageRef} className={`content-layout-preview-stage${compact ? ' is-compact' : ''}`}>
+    <div ref={stageRef} className="content-layout-preview-stage">
       <div className="export-template-preview-scale-box" style={{ width: `${pageWidthPx * previewScale}px` }}>
         <div className="export-template-preview-page-stack">
-          {visiblePages.map((page, pageIndex) => (
+          {previewPages.map((page, pageIndex) => (
             <div className="export-template-preview-page-shell" style={pageShellStyle} key={pageIndex}>
               <div className="content-layout-preview-paper export-format-paper export-format-preview-content" style={paperStyle}>
                 <PageHeaderChrome config={config} pageIndex={pageIndex} />

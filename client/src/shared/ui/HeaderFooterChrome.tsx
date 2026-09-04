@@ -1,5 +1,5 @@
-import type { ExportFormatConfig, HeaderFooterStyle, PageSetupConfig } from '../../shared/types/exportFormat';
-import { HEADER_FOOTER_STYLE_OPTIONS, isDecorativeHeaderFooterStyle, isHtmlHeaderFooterStyle, resolveHeaderFooterStyle } from '../../shared/types/exportFormat';
+import type { ExportFormatConfig, HeaderFooterStyle, PageSetupConfig } from '../types/exportFormat';
+import { HEADER_FOOTER_STYLE_OPTIONS, isDecorativeHeaderFooterStyle, isHtmlHeaderFooterStyle, resolveHeaderFooterStyle } from '../types/exportFormat';
 import { fillChromeHeaderHtml, fillFooterChromeSvg } from './headerFooterChromeTemplates';
 
 function hexLuminance(hex: string): number {

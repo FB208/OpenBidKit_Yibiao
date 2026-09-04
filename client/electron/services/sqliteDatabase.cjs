@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 28;
+const schemaVersion = 29;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -143,7 +143,6 @@ function createTechnicalPlanGenerationConfigSchema(db) {
       section_words INTEGER NOT NULL DEFAULT 0,
       strict_section_words INTEGER NOT NULL DEFAULT 0,
       global_facts_mode TEXT NOT NULL DEFAULT 'fabricate',
-      content_generation_template_id TEXT NOT NULL DEFAULT 'standard-document',
       export_template_id TEXT NOT NULL DEFAULT '',
       use_ai_images INTEGER NOT NULL DEFAULT 1,
       max_ai_images INTEGER NOT NULL DEFAULT 6,
@@ -1141,6 +1140,13 @@ function addTechnicalPlanContentGenerationTemplate(db) {
   addColumnIfMissing(db, 'technical_plan_generation_config', 'content_generation_template_id', "TEXT NOT NULL DEFAULT 'standard-document'");
 }
 
+/** 合并导出模板与排版风格后，移除不再使用的正文模板选择。 */
+function removeTechnicalPlanContentGenerationTemplate(db) {
+  if (!getExistingTables(db).has('technical_plan_generation_config')) return;
+  if (!getExistingColumns(db, 'technical_plan_generation_config').has('content_generation_template_id')) return;
+  db.exec('ALTER TABLE technical_plan_generation_config DROP COLUMN content_generation_template_id');
+}
+
 /** 为技术方案生成配置增加 Word 导出模板选择。 */
 function addTechnicalPlanExportTemplate(db) {
   addColumnIfMissing(db, 'technical_plan_generation_config', 'export_template_id', "TEXT NOT NULL DEFAULT ''");
@@ -1481,13 +1487,6 @@ const schemaHealthColumnGroups = [
     },
   },
   {
-    version: 27,
-    table: 'technical_plan_generation_config',
-    columns: {
-      content_generation_template_id: "TEXT NOT NULL DEFAULT 'standard-document'",
-    },
-  },
-  {
     version: 28,
     table: 'technical_plan_generation_config',
     columns: {
@@ -1697,6 +1696,11 @@ const migrations = [
     version: 28,
     description: '技术方案新增 Word 导出模板配置',
     up: addTechnicalPlanExportTemplate,
+  },
+  {
+    version: 29,
+    description: '技术方案移除正文生成模板配置',
+    up: removeTechnicalPlanContentGenerationTemplate,
   },
 ];
 

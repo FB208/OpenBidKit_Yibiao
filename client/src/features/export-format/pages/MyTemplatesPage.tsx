@@ -1,10 +1,9 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { useToast } from '../../../shared/ui';
 import type { ExportTemplateRecord } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
-import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
 import { ExportTemplateEditorDialog, TemplatePreview } from './ExportFormatPage';
 
 const templateDateFormatter = new Intl.DateTimeFormat('zh-CN', {
@@ -26,7 +25,6 @@ function MyTemplatesPage() {
 
   const selectedTemplate = templates.find((template) => template.template_id === selectedId) || templates[0] || null;
   const previewConfig = selectedTemplate?.config || DEFAULT_EXPORT_FORMAT;
-  const previewStyle = useMemo<CSSProperties>(() => buildExportFormatCssVars(previewConfig), [previewConfig]);
 
   const loadTemplates = useCallback(async () => {
     setLoading(true);
@@ -121,7 +119,7 @@ function MyTemplatesPage() {
               </div>
               <button type="button" className="secondary-action" onClick={() => setEditor({ mode: 'edit', templateId: selectedTemplate.template_id })}>编辑模板</button>
             </div>
-            <TemplatePreview config={previewConfig} previewStyle={previewStyle} />
+            <TemplatePreview config={previewConfig} />
           </>
         ) : (
           <div className="template-library-preview-empty">

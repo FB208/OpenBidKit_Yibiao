@@ -5,9 +5,7 @@ import { AppDialog, AppSwitch, FloatingToolbar, ProgressBar, ToolbarArrowLeftIco
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { OutlineItem } from '../../../shared/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from '../../../shared/types/exportFormat';
-import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { ExportTemplateEditorDialog, TemplatePreview } from '../../export-format/pages/ExportFormatPage';
-import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
 import type { WordExportProgressEvent } from '../../../shared/types';
 import AnalysisPage from './AnalysisPage';
 import ContentPage from './ContentPage';
@@ -99,10 +97,6 @@ function FeasibilityReportHome({ registerLeaveGuard }: FeasibilityReportHomeProp
     : 0;
   const wrappingEnabled = exportOptions.includeCover || exportOptions.includePreparationNotes || exportOptions.includeAppendixTables;
   const selectedExportTemplate = exportTemplates.find((item) => item.template_id === selectedExportTemplateId) || null;
-  const exportTemplatePreviewStyle = useMemo(
-    () => buildExportFormatCssVars(selectedExportTemplate?.config || DEFAULT_EXPORT_FORMAT),
-    [selectedExportTemplate],
-  );
   const filteredExportTemplates = useMemo(() => {
     const keyword = exportTemplateSearch.trim().toLowerCase();
     if (!keyword) return exportTemplates;
@@ -791,7 +785,7 @@ function FeasibilityReportHome({ registerLeaveGuard }: FeasibilityReportHomeProp
                       <span className="section-kicker">预览</span>
                       <strong>{selectedExportTemplate.template_name}</strong>
                     </div>
-                    <TemplatePreview config={selectedExportTemplate.config} previewStyle={exportTemplatePreviewStyle} />
+                    <TemplatePreview config={selectedExportTemplate.config} />
                   </>
                 ) : (
                   <div className="export-template-select-preview-empty">

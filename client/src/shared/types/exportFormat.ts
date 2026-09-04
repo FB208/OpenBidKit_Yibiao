@@ -160,6 +160,7 @@ export const PAPER_DIMENSIONS: Record<PaperSize, { width: number; height: number
 export interface PageSetupConfig {
   paper_size: PaperSize;
   orientation: 'portrait' | 'landscape';
+  two_column: boolean;
   first_page_different: boolean;
   margin_top_cm: number;
   margin_bottom_cm: number;
@@ -362,6 +363,7 @@ export const ALIGNMENT_TO_CSS: Record<string, string> = {
 const DEFAULT_PAGE_SETUP: PageSetupConfig = {
   paper_size: 'a4',
   orientation: 'portrait',
+  two_column: false,
   first_page_different: false,
   margin_top_cm: 2,
   margin_bottom_cm: 2,

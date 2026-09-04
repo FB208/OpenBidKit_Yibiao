@@ -204,3 +204,361 @@
     white-space: nowrap;
   }
 }
+
+/* ── 受限 HTML 纸面预览：分页舞台与页面结构 ─────────────── */
+
+.content-layout-preview-stage {
+  width: 100%;
+  min-width: 0;
+}
+
+.content-layout-preview-stage > .export-template-preview-scale-box {
+  margin: 0 auto;
+}
+
+.content-layout-preview-paper {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+  transform-origin: top left;
+}
+
+.content-layout-preview-paper .export-format-paper-body {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.content-layout-preview-paper .content-layout-preview-frame {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.content-layout-preview-page-content {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.content-layout-preview-page-content > .restricted-html-document {
+  width: 100%;
+}
+
+.content-layout-preview-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.content-layout-preview-columns.is-two-column {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8mm;
+}
+
+.content-layout-preview-column {
+  min-width: 0;
+}
+
+.content-layout-preview-block {
+  min-width: 0;
+}
+
+.content-layout-preview-block.is-sliced {
+  overflow: hidden;
+}
+
+.content-layout-preview-block.is-sliced > * {
+  position: relative;
+  top: calc(-1 * var(--content-preview-slice-offset, 0px));
+}
+
+.content-layout-preview-column > .content-layout-preview-block:first-child > :first-child,
+.content-layout-preview-page-content > .restricted-html-document > .content-layout-preview-block:first-child > :first-child {
+  margin-top: 0;
+}
+
+.content-layout-preview-measure {
+  position: fixed;
+  top: 0;
+  left: -100000px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.content-layout-preview-measure .content-layout-preview-paper {
+  transform: none;
+}
+
+.content-layout-preview-measure-flow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.content-layout-preview-measure-flow .content-layout-preview-block {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.content-layout-preview-page-content.is-two-column .content-layout-preview-measure-flow .content-layout-preview-block.is-column {
+  width: calc((100% - 8mm) / 2);
+}
+
+/* ── 受限 HTML 纸面预览：正文、表格与图片样式 ───────────── */
+
+.content-template-restricted-preview {
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  background: transparent;
+  box-shadow: none;
+}
+
+.content-template-restricted-preview .restricted-html-document {
+  color: var(--yb-text);
+  font-family: var(--ef-body-font, inherit);
+  font-size: var(--ef-body-size, 12pt);
+  line-height: var(--ef-body-line-height, 1.5);
+}
+
+.content-template-restricted-preview .restricted-html-document h1 {
+  padding: 0;
+  color: var(--ef-h1-color, var(--yb-text));
+  font-size: var(--ef-h1-size, 18pt);
+  border: 0;
+}
+
+.content-template-restricted-preview .restricted-html-document h2 {
+  padding: 0;
+  color: var(--ef-h2-color, var(--yb-text));
+  font-size: var(--ef-h2-size, 14pt);
+  background: transparent;
+  border: 0;
+}
+
+.content-template-restricted-preview .export-template-chapter-heading-row h1,
+.content-template-restricted-preview .export-template-chapter-heading-row h2,
+.content-template-restricted-preview .export-template-chapter-heading-row h3,
+.content-template-restricted-preview .export-template-chapter-heading-row h4,
+.content-template-restricted-preview .export-template-chapter-heading-row h5,
+.content-template-restricted-preview .export-template-chapter-heading-row h6,
+.content-template-restricted-preview .export-template-chapter-leaf-title h1,
+.content-template-restricted-preview .export-template-chapter-leaf-title h2,
+.content-template-restricted-preview .export-template-chapter-leaf-title h3,
+.content-template-restricted-preview .export-template-chapter-leaf-title h4,
+.content-template-restricted-preview .export-template-chapter-leaf-title h5,
+.content-template-restricted-preview .export-template-chapter-leaf-title h6 {
+  margin: 0;
+}
+
+.content-template-restricted-preview .export-template-chapter-content-row,
+.content-template-restricted-preview .export-template-chapter-leaf-content {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.content-template-restricted-preview .export-template-chapter-content-row.is-section-start,
+.content-template-restricted-preview .export-template-chapter-leaf-row.is-section-start .export-template-chapter-leaf-content {
+  padding-top: 10pt;
+}
+
+.content-template-restricted-preview .export-template-chapter-content-row.is-section-end,
+.content-template-restricted-preview .export-template-chapter-leaf-row.is-section-end .export-template-chapter-leaf-content {
+  padding-bottom: 12pt;
+}
+
+.content-template-restricted-preview .export-template-chapter-leaf-row:not(.is-section-end) {
+  border-bottom: 0;
+}
+
+.content-template-restricted-preview .restricted-html-document figure,
+.content-template-restricted-preview .restricted-html-document table {
+  margin-bottom: 20px;
+}
+
+.content-template-restricted-preview .restricted-html-document table {
+  table-layout: fixed;
+  color: var(--yb-text);
+  font-size: var(--ef-table-body-cell-size, 12pt);
+  border: var(--ef-table-border-width, 1px) solid var(--ef-table-border-color, var(--yb-border));
+}
+
+.content-template-restricted-preview .restricted-html-document caption {
+  padding: 0 0 9px;
+  color: var(--yb-text-soft);
+  font-family: var(--ef-table-caption-font, var(--ef-body-font, inherit));
+  font-size: var(--ef-table-caption-size, var(--ef-body-size, 12pt));
+  font-style: var(--ef-table-caption-style, normal);
+  font-weight: var(--ef-table-caption-weight, 700);
+  text-align: var(--ef-table-caption-align, center);
+}
+
+.content-template-restricted-preview .restricted-html-document th,
+.content-template-restricted-preview .restricted-html-document td {
+  min-width: 0;
+  padding: var(--ef-table-cell-padding, 6pt);
+  border-color: var(--ef-table-border-color, var(--yb-border));
+  vertical-align: middle;
+}
+
+.content-template-restricted-preview .restricted-html-document thead th {
+  color: var(--ef-table-header-color, var(--yb-text));
+  background: var(--ef-table-header-background, rgba(33, 116, 253, 0.06));
+}
+
+.content-template-restricted-preview .restricted-html-document tbody th {
+  width: 22%;
+  color: var(--ef-table-first-column-color, var(--yb-text));
+  font-family: var(--ef-table-first-column-font, inherit);
+  font-size: var(--ef-table-first-column-size, inherit);
+  text-align: var(--ef-table-first-column-align, left);
+  background: var(--ef-table-first-column-background, #f8fbff);
+}
+
+/* 未分段表格按 DOM 行序取隔行底色 */
+.content-template-restricted-preview .restricted-html-document tbody:not([data-yb-rows]) tr:nth-child(even) td {
+  background: var(--ef-table-body-cell-background, #ffffff);
+}
+
+/* 分段表格改用整表内的原始行号，跨页续段的底色与未分页时一致 */
+.content-template-restricted-preview .restricted-html-document tbody[data-yb-rows] tr[data-yb-row-even] td {
+  background: var(--ef-table-body-cell-background, #ffffff);
+}
+
+.content-template-restricted-preview .restricted-html-document table[data-yb-preset='imageText'] td:first-child {
+  width: 44%;
+  padding: 0;
+}
+
+.content-template-restricted-preview .restricted-html-document table[data-yb-preset='imageText'] td:last-child {
+  width: 56%;
+  padding: var(--ef-table-cell-padding, 6pt);
+  background: var(--ef-table-body-cell-background, #ffffff);
+}
+
+.content-template-restricted-preview .restricted-html-document table[data-yb-preset='imageText'] figure {
+  margin: 0;
+  border: 0;
+}
+
+.content-template-restricted-preview .restricted-html-document table[data-yb-preset='threeImages'] td {
+  width: 33.333%;
+  padding: var(--ef-table-cell-padding, 6pt);
+}
+
+.content-template-restricted-preview .restricted-html-document table[data-yb-preset='fourImages'] td {
+  width: 50%;
+  padding: var(--ef-table-cell-padding, 6pt);
+}
+
+.content-template-restricted-preview .restricted-html-document figure {
+  display: grid;
+  grid-template-rows: auto auto;
+  width: min(var(--yb-figure-width), var(--ef-image-max-width, 90%));
+  max-width: 100%;
+  margin-right: var(--ef-image-margin-right, auto);
+  margin-left: var(--ef-image-margin-left, auto);
+  overflow: hidden;
+  color: var(--yb-text-soft);
+  background: rgba(83, 97, 118, 0.08);
+  border: 1px dashed var(--ef-table-border-color, var(--yb-border));
+}
+
+.content-template-restricted-preview .restricted-html-document figure[data-yb-size='square'] {
+  --yb-figure-width: 65%;
+  --yb-figure-ratio: 1 / 1;
+}
+
+.content-template-restricted-preview .restricted-html-document figure[data-yb-size='wide'] {
+  --yb-figure-width: 80%;
+  --yb-figure-ratio: 3 / 2;
+}
+
+.content-template-restricted-preview .restricted-html-document figure[data-yb-size='tall'] {
+  --yb-figure-width: 50%;
+  --yb-figure-ratio: 3 / 4;
+}
+
+.content-template-restricted-preview .restricted-html-document figure[data-yb-size='panorama'] {
+  --yb-figure-width: 90%;
+  --yb-figure-ratio: 16 / 9;
+}
+
+.content-template-restricted-preview .restricted-html-document figure::before {
+  display: grid;
+  width: 100%;
+  aspect-ratio: var(--yb-figure-ratio);
+  place-items: center;
+  padding: 20px;
+  content: '图片占位';
+  font-weight: 800;
+  text-align: center;
+  background: rgba(83, 97, 118, 0.08);
+}
+
+.content-template-restricted-preview .restricted-html-document figure:has(> img[src])::before {
+  display: none;
+}
+
+.content-template-restricted-preview .restricted-html-document figure > img[src] {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: var(--yb-figure-ratio);
+  min-width: 0;
+  object-fit: cover;
+  object-position: center;
+}
+
+.content-template-restricted-preview .restricted-html-document table figure {
+  width: 100%;
+}
+
+.content-template-restricted-preview .restricted-html-document figure[data-yb-generation='aiImage']::before {
+  content: 'AI 场景图片占位';
+}
+
+.content-template-restricted-preview .restricted-html-document figure[data-yb-generation='mermaid']::before {
+  content: '流程图占位';
+}
+
+.content-template-restricted-preview .restricted-html-document figure[data-yb-generation='htmlImage']::before {
+  content: '信息图占位';
+}
+
+.content-template-restricted-preview .restricted-html-document figcaption {
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--yb-text-soft);
+  font-family: var(--ef-image-caption-font, inherit);
+  font-size: var(--ef-image-caption-size, 9pt);
+  font-style: var(--ef-image-caption-style, normal);
+  font-weight: var(--ef-image-caption-weight, 400);
+  text-align: var(--ef-image-caption-align, center);
+  background: #ffffff;
+  border-top: 1px solid var(--ef-table-border-color, var(--yb-border));
+}
+
+.content-template-restricted-preview .restricted-html-document table[data-yb-preset='threeImages'] figure,
+.content-template-restricted-preview .restricted-html-document table[data-yb-preset='fourImages'] figure {
+  margin: 0;
+}
+
+.content-template-restricted-preview .restricted-html-document table[data-yb-preset='threeImages'] figure::before,
+.content-template-restricted-preview .restricted-html-document table[data-yb-preset='fourImages'] figure::before {
+  padding: 10px;
+  font-size: 12px;
+}

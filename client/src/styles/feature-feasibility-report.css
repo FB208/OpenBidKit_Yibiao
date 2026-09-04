@@ -270,10 +270,6 @@
   padding: 0;
 }
 
-.feasibility-export-dialog .export-template-select-preview .export-template-preview-paper {
-  min-height: 0;
-}
-
 .feasibility-export-dialog .export-template-select-actions {
   padding-top: 0;
 }

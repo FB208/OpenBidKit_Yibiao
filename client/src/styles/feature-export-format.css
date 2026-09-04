@@ -285,36 +285,8 @@
   flex: 0 0 auto;
 }
 
-.export-template-preview-paper {
-  display: flex;
-  flex-direction: column;
-  height: var(--ef-page-height, 297mm);
-  min-height: 0;
-  align-self: flex-start;
-  overflow: hidden;
-  transform-origin: top left;
-}
-
-.export-template-page-body {
-  overflow: hidden;
-}
-
 .export-template-preview-block {
   display: flow-root;
-}
-
-.export-template-preview-measure {
-  position: absolute;
-  left: -100000px;
-  top: 0;
-  width: var(--ef-page-width, 210mm);
-  visibility: hidden;
-  pointer-events: none;
-  z-index: -1;
-}
-
-.export-template-preview-measure .export-template-preview-paper {
-  transform: none;
 }
 
 .export-template-editor-overlay {
@@ -826,8 +798,7 @@
   visibility: hidden;
 }
 
-.export-format-paper-body,
-.export-template-page-body {
+.export-format-paper-body {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -837,11 +808,6 @@
     var(--ef-page-padding-right, 2cm)
     var(--ef-page-padding-bottom, 2cm)
     var(--ef-page-padding-left, 2cm);
-}
-
-.export-template-page-body-inner {
-  flex: 1 1 auto;
-  min-height: 0;
 }
 
 .export-template-chapter-frame {
@@ -1235,33 +1201,6 @@
   color: var(--ef-table-first-column-color, var(--yb-text));
   text-align: var(--ef-table-first-column-align, left);
   background: var(--ef-table-first-column-background, #f8fbff);
-}
-
-.export-template-image-figure {
-  display: block;
-  margin: 18px 0;
-  text-align: var(--ef-image-align, center);
-}
-
-.export-template-image-placeholder {
-  display: inline-grid;
-  width: var(--ef-image-max-width, 90%);
-  max-width: 100%;
-  height: 108px;
-  place-items: center;
-  color: rgba(83, 97, 118, 0.88);
-  background: linear-gradient(135deg, rgba(33, 116, 253, 0.11), rgba(124, 92, 255, 0.1));
-  border: 1px dashed rgba(33, 116, 253, 0.34);
-  border-radius: var(--yb-radius-md);
-}
-
-.export-template-image-figure figcaption {
-  margin-top: 8px;
-  font-family: var(--ef-image-caption-font, 'SimSun', serif);
-  font-size: var(--ef-image-caption-size, 9pt);
-  text-align: var(--ef-image-caption-align, center);
-  font-weight: var(--ef-image-caption-weight, 400);
-  font-style: var(--ef-image-caption-style, normal);
 }
 
 .export-template-error-state {

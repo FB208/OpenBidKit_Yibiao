@@ -8,7 +8,7 @@ import type {
   TableStyleConfig,
 } from '../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT, isDecorativeHeaderFooterStyle } from '../../shared/types/exportFormat';
-import { resolveChromeColors } from './HeaderFooterChrome';
+import { resolveChromeColors } from '../../shared/ui/HeaderFooterChrome';
 
 type HeadingLayoutStyle = Omit<HeadingStyleConfig, 'text_color'>;
 type TableCellLayoutStyle = Pick<TableCellStyleConfig, 'font' | 'size' | 'alignment'>;
@@ -17,6 +17,7 @@ type LayoutPageSettings = Pick<
   PageSetupConfig,
   | 'paper_size'
   | 'orientation'
+  | 'two_column'
   | 'first_page_different'
   | 'margin_top_cm'
   | 'margin_bottom_cm'
@@ -105,6 +106,7 @@ export const EXPORT_LAYOUT_PRESETS: ExportLayoutPreset[] = [
     page: {
       paper_size: 'a4',
       orientation: 'portrait',
+      two_column: false,
       first_page_different: false,
       margin_top_cm: 2,
       margin_bottom_cm: 2,
@@ -162,6 +164,7 @@ export const EXPORT_LAYOUT_PRESETS: ExportLayoutPreset[] = [
     page: {
       paper_size: 'a4',
       orientation: 'portrait',
+      two_column: false,
       first_page_different: true,
       margin_top_cm: 2.4,
       margin_bottom_cm: 2.2,
@@ -219,6 +222,7 @@ export const EXPORT_LAYOUT_PRESETS: ExportLayoutPreset[] = [
     page: {
       paper_size: 'a4',
       orientation: 'portrait',
+      two_column: false,
       first_page_different: false,
       margin_top_cm: 1.5,
       margin_bottom_cm: 1.5,
@@ -276,6 +280,7 @@ export const EXPORT_LAYOUT_PRESETS: ExportLayoutPreset[] = [
     page: {
       paper_size: 'a4',
       orientation: 'landscape',
+      two_column: true,
       first_page_different: false,
       margin_top_cm: 1.4,
       margin_bottom_cm: 1.4,
@@ -333,6 +338,7 @@ export const EXPORT_LAYOUT_PRESETS: ExportLayoutPreset[] = [
     page: {
       paper_size: 'a4',
       orientation: 'portrait',
+      two_column: false,
       first_page_different: true,
       margin_top_cm: 1.8,
       margin_bottom_cm: 1.8,
@@ -390,6 +396,7 @@ export const EXPORT_LAYOUT_PRESETS: ExportLayoutPreset[] = [
     page: {
       paper_size: 'a4',
       orientation: 'portrait',
+      two_column: false,
       first_page_different: true,
       margin_top_cm: 2,
       margin_bottom_cm: 2,
@@ -447,6 +454,7 @@ export const EXPORT_LAYOUT_PRESETS: ExportLayoutPreset[] = [
     page: {
       paper_size: 'a4',
       orientation: 'portrait',
+      two_column: false,
       first_page_different: true,
       margin_top_cm: 2,
       margin_bottom_cm: 2,

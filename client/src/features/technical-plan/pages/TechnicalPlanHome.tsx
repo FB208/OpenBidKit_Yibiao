@@ -15,7 +15,6 @@ import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
 import type { OutlineData, OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from '../../../shared/types/exportFormat';
 import { countReadableWords } from '../../../shared/utils/wordCount';
-import { DEFAULT_CONTENT_GENERATION_TEMPLATE_ID } from '../contentGenerationTemplates';
 import { ExportTemplateEditorDialog } from '../../export-format/pages/ExportFormatPage';
 
 interface TechnicalPlanHomeProps {
@@ -99,7 +98,6 @@ const resetState: TechnicalPlanState = {
   globalFactsAdjustmentTask: undefined,
   globalFacts: [] as GlobalFactGroupState[],
   contentGenerationTask: undefined,
-  contentGenerationTemplateId: DEFAULT_CONTENT_GENERATION_TEMPLATE_ID,
   exportTemplateId: '',
   contentGenerationOptions: undefined,
   contentGenerationSections: {},
@@ -962,11 +960,6 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     setState((prev) => ({ ...prev, globalFactsMode: saved.globalFactsMode }));
   };
 
-  const saveGenerationTemplate = async (contentGenerationTemplateId: TechnicalPlanState['contentGenerationTemplateId']) => {
-    const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ contentGenerationTemplateId });
-    setState((prev) => ({ ...prev, contentGenerationTemplateId: saved.contentGenerationTemplateId }));
-  };
-
   const saveGenerationExportTemplate = async (exportTemplateId: string) => {
     const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ exportTemplateId });
     setState((prev) => ({ ...prev, exportTemplateId: saved.exportTemplateId }));
@@ -1173,7 +1166,6 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           globalFactsMode={state.globalFactsMode || 'fabricate'}
-          contentGenerationTemplateId={state.contentGenerationTemplateId}
           exportTemplateId={state.exportTemplateId}
           exportTemplates={exportTemplates}
           exportTemplatesLoading={exportTemplatesLoading}
@@ -1189,7 +1181,6 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           onOutlineWordControlOptionsChange={saveGenerationWordControlOptions}
           onReferenceKnowledgeDocumentIdsChange={saveGenerationReferenceKnowledge}
           onGlobalFactsModeChange={saveGenerationGlobalFactsMode}
-          onContentGenerationTemplateIdChange={saveGenerationTemplate}
           onExportTemplateIdChange={saveGenerationExportTemplate}
           onCreateExportTemplate={createExportTemplate}
           onContentGenerationOptionsChange={saveContentGenerationOptions}
