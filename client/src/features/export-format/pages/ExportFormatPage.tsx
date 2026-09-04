@@ -27,7 +27,6 @@ import {
   HEADING_NUMBERING_FORMAT_OPTIONS,
   isDecorativeHeaderFooterStyle,
   isHtmlHeaderFooterStyle,
-  usesFooterTextColor,
   usesHeaderTextColor,
   LIST_STYLE_OPTIONS,
   ORDERED_LIST_STYLE_OPTIONS,
@@ -46,7 +45,7 @@ import {
   applyExportLayoutPreset,
   applyExportThemePreset,
 } from '../exportFormatPresets';
-import { HeaderFooterStylePicker, PageFooterChrome, PageHeaderChrome } from '../HeaderFooterChrome';
+import { HeaderFooterStylePicker, PageFooterChrome, PageHeaderChrome, resolveChromeColors } from '../HeaderFooterChrome';
 
 type TemplateTab = 'quick' | 'layout' | 'header-footer' | 'cover' | 'heading' | 'body' | 'table' | 'image';
 type TableCellStyleKey = 'header_row' | 'first_column' | 'body_cell';
@@ -544,15 +543,22 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
 
   const handleApplyHeaderFooterStyle = useCallback((style: HeaderFooterStyle) => {
     setConfig((prev) => {
+      const previousBandTextColor = resolveChromeColors(prev.page).onAccent;
+      const page = {
+        ...prev.page,
+        header_footer_style: style,
+        header_enabled: true,
+        footer_enabled: true,
+        page_number_enabled: true,
+      };
+      const footerColor = style === 'band'
+        ? resolveChromeColors(page).onAccent
+        : prev.page.header_footer_style === 'band' && prev.page.footer_color.toLowerCase() === previousBandTextColor
+          ? DEFAULT_EXPORT_FORMAT.page.footer_color
+          : prev.page.footer_color;
       const next = {
         ...prev,
-        page: {
-          ...prev.page,
-          header_footer_style: style,
-          header_enabled: true,
-          footer_enabled: true,
-          page_number_enabled: true,
-        },
+        page: { ...page, footer_color: footerColor },
       };
       return selectedThemePresetId ? applyExportThemePreset(next, selectedThemePresetId) : next;
     });
@@ -915,36 +921,34 @@ function ExportFormatPage({ mode = 'create', templateId = null, onBack }: Export
               <input type="text" value={config.page.footer_text} onChange={(event) => updatePage({ footer_text: event.target.value })} />
             </label>
             <label className="settings-row">
-              <div className="settings-row-copy"><strong>页脚字体</strong></div>
+              <div className="settings-row-copy"><strong>页脚对齐方式</strong></div>
+              <select value={config.page.footer_alignment} onChange={(event) => updatePage({ footer_alignment: event.target.value })}>
+                {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
+              </select>
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy"><strong>页脚颜色</strong></div>
+              <input type="color" value={config.page.footer_color} onChange={(event) => updatePage({ footer_color: event.target.value })} />
+            </label>
+          </>
+        )}
+        {(config.page.footer_enabled || config.page.page_number_enabled) && (
+          <>
+            <label className="settings-row">
+              <div className="settings-row-copy"><strong>页脚及页码字体</strong></div>
               <FontPicker value={config.page.footer_font} options={fontOptions} onChange={(font) => updatePage({ footer_font: font })} />
             </label>
             <label className="settings-row">
-              <div className="settings-row-copy"><strong>页脚字号</strong></div>
+              <div className="settings-row-copy"><strong>页脚及页码字号</strong></div>
               <select value={config.page.footer_size} onChange={(event) => updatePage({ footer_size: event.target.value })}>
                 {SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
               </select>
             </label>
-            {!isDecorativeHeaderFooterStyle(headerFooterStyle) && (
-              <label className="settings-row">
-                <div className="settings-row-copy"><strong>页脚对齐方式</strong></div>
-                <select value={config.page.footer_alignment} onChange={(event) => updatePage({ footer_alignment: event.target.value })}>
-                  {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
-                </select>
-              </label>
-            )}
-            {usesFooterTextColor(headerFooterStyle) && (
-              <label className="settings-row">
-                <div className="settings-row-copy"><strong>页脚颜色</strong></div>
-                <input type="color" value={config.page.footer_color} onChange={(event) => updatePage({ footer_color: event.target.value })} />
-              </label>
-            )}
+            <label className="settings-row">
+              <div className="settings-row-copy"><strong>距底边距离</strong><span>页脚或页码距页面底边，单位：厘米</span></div>
+              <input type="number" min={0} max={5} step={0.1} value={config.page.footer_distance_cm} onChange={(event) => updatePage({ footer_distance_cm: Number(event.target.value) })} />
+            </label>
           </>
-        )}
-        {!isDecorativeHeaderFooterStyle(headerFooterStyle) && (config.page.footer_enabled || config.page.page_number_enabled) && (
-          <label className="settings-row">
-            <div className="settings-row-copy"><strong>距底边距离</strong><span>页脚或页码距页面底边，单位：厘米</span></div>
-            <input type="number" min={0} max={5} step={0.1} value={config.page.footer_distance_cm} onChange={(event) => updatePage({ footer_distance_cm: Number(event.target.value) })} />
-          </label>
         )}
         <label className="settings-row">
           <div className="settings-row-copy"><strong>页码</strong><span>是否启用页码显示</span></div>

@@ -14,12 +14,6 @@ import {
   type RestrictedHtmlParseResult,
 } from '../bodyHtml/restrictedHtml';
 
-export interface RestrictedHtmlPreviewProps {
-  value: string;
-  className?: string;
-  emptyText?: string;
-}
-
 export interface RestrictedHtmlEditorProps {
   value: string;
   onChange: (value: string) => void;
@@ -47,21 +41,6 @@ function insertPlainText(text: string) {
     selection.removeAllRanges();
     selection.addRange(range);
   }
-}
-
-/** 安全渲染有效的受限 HTML 块，不渲染无效片段。 */
-export function RestrictedHtmlPreview({ value, className, emptyText = '暂无正文内容' }: RestrictedHtmlPreviewProps) {
-  const deferredValue = useDeferredValue(value);
-  const result = useMemo(() => parseRestrictedHtml(deferredValue), [deferredValue]);
-  return (
-    <div className={`restricted-html-preview${className ? ` ${className}` : ''}`}>
-      {result.previewHtml ? (
-        <div className="restricted-html-document" dangerouslySetInnerHTML={{ __html: result.previewHtml }} />
-      ) : (
-        <p className="restricted-html-empty">{emptyText}</p>
-      )}
-    </div>
-  );
 }
 
 /** 可视化编辑受限 HTML，并在每次有效修改后回写规范格式。 */

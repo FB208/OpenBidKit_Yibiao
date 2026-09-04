@@ -739,27 +739,28 @@ function decorativeFooterHeightCm(pageSetup) {
   return 0;
 }
 
-function minBodyMarginForChromeCm(pageSetup, chromeHeightCm) {
+function minBodyMarginForChromeCm(chromeHeightCm, fromEdgeCm) {
   if (!(chromeHeightCm > 0)) return 0;
-  return chromeFromEdgeCm(pageSetup) + chromeHeightCm + CHROME_BODY_CLEARANCE_CM;
+  return fromEdgeCm + chromeHeightCm + CHROME_BODY_CLEARANCE_CM;
 }
 
 function resolveWordPageMargins(pageSetup) {
   const top = pageSetup?.margin_top_cm ?? 2;
   const bottom = pageSetup?.margin_bottom_cm ?? 2;
   const decorative = isDecorativeHeaderFooterStyle(pageSetup);
-  const fromEdge = decorative ? chromeFromEdgeCm(pageSetup) : null;
+  const headerFromEdge = decorative ? chromeFromEdgeCm(pageSetup) : null;
+  const footerFromEdge = Math.max(0, pageSetup?.footer_distance_cm ?? 1.75);
   return {
     top: decorative && shouldBuildHeader(pageSetup)
-      ? Math.max(top, minBodyMarginForChromeCm(pageSetup, decorativeHeaderHeightCm(pageSetup)))
+      ? Math.max(top, minBodyMarginForChromeCm(decorativeHeaderHeightCm(pageSetup), headerFromEdge))
       : top,
     bottom: decorative && shouldBuildFooter(pageSetup)
-      ? Math.max(bottom, minBodyMarginForChromeCm(pageSetup, decorativeFooterHeightCm(pageSetup)))
+      ? Math.max(bottom, minBodyMarginForChromeCm(decorativeFooterHeightCm(pageSetup), footerFromEdge))
       : bottom,
     left: pageSetup?.margin_left_cm ?? 2,
     right: pageSetup?.margin_right_cm ?? 2,
-    header: decorative ? fromEdge : 1.25,
-    footer: decorative ? fromEdge : (pageSetup?.footer_distance_cm ?? 1.75),
+    header: decorative ? headerFromEdge : 1.25,
+    footer: footerFromEdge,
   };
 }
 
@@ -876,7 +877,7 @@ function buildRulesFooter(pageSetup) {
         children: [textRun('')],
       }),
       new Paragraph({
-        alignment: AlignmentType.CENTER,
+        alignment: alignmentToWordType(pageSetup?.footer_alignment || '居中对齐'),
         spacing: { before: 40, after: 0, line: 240 },
         children: children.length ? children : [textRun('')],
       }),
@@ -893,7 +894,7 @@ function buildBandFooter(pageSetup) {
   const badgeWidth = cmToTwips(2.1);
   const spacerWidth = cmToTwips(1.15);
   const centerWidth = Math.max(400, pageWidth - badgeWidth - spacerWidth);
-  const runOptions = footerRunOptions(pageSetup, colors.onAccent);
+  const runOptions = footerRunOptions(pageSetup);
   const badgeRun = { ...footerRunOptions(pageSetup, hexLuminance(`#${colors.badge}`) < 160 ? 'FFFFFF' : '111111'), bold: true };
   const pageChildren = pageNumberEnabled
     ? createPageNumberRuns(pageSetup?.page_number_format || '{page}', badgeRun, pageSetup?.page_number_pad)
@@ -904,7 +905,7 @@ function buildBandFooter(pageSetup) {
       chromeCell({
         width: centerWidth,
         fill: colors.accent,
-        children: [chromeParagraph([new TextRun({ ...runOptions, text: footerText })])],
+        children: [chromeParagraph([new TextRun({ ...runOptions, text: footerText })], { alignment: alignmentToWordType(pageSetup?.footer_alignment || '居中对齐') })],
       }),
       chromeCell({
         width: badgeWidth,
@@ -922,7 +923,7 @@ async function buildHtmlChromeFooter(pageSetup, style) {
   const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
   const pageNumberEnabled = isPageNumberEnabled(pageSetup);
   const pageWidth = getPageWidthTwips(pageSetup);
-  const runOptionsBase = footerRunOptions(pageSetup, colors.accent);
+  const runOptionsBase = footerRunOptions(pageSetup);
   const pageRunBase = { ...footerRunOptions(pageSetup, colors.accent), bold: true };
   const pageChildrenBase = pageNumberEnabled
     ? createPageNumberRuns(pageSetup?.page_number_format || '{page}', pageRunBase, pageSetup?.page_number_pad)
@@ -940,7 +941,7 @@ async function buildHtmlChromeFooter(pageSetup, style) {
             chromeFillCell(
               textWidth,
               'FFFFFF',
-              [chromeParagraph([new TextRun({ ...runOptionsBase, text: footerText })], { alignment: AlignmentType.LEFT })],
+              [chromeParagraph([new TextRun({ ...runOptionsBase, text: footerText })], { alignment: alignmentToWordType(pageSetup?.footer_alignment || '居中对齐') })],
               { top: 40, bottom: 40, left: 0, right: 80 },
             ),
             chromeFillCell(barWidth, colors.accent, [chromeMicroParagraph()]),
@@ -962,7 +963,6 @@ async function buildHtmlChromeFooter(pageSetup, style) {
       centerFill: 'FFFFFF',
       rightFill: colors.badge,
       mark: `#${colors.onAccent}`,
-      textColor: colors.accent,
       pageColor: colors.onAccent,
       iconBg: `#${colors.accent}`,
       leftCm: 1.15,
@@ -973,7 +973,6 @@ async function buildHtmlChromeFooter(pageSetup, style) {
       centerFill: colors.bar,
       rightFill: colors.badge,
       mark: `#${colors.onAccent}`,
-      textColor: colors.accent,
       pageColor: colors.onAccent,
       iconBg: `#${colors.accent}`,
       leftCm: 1.35,
@@ -984,7 +983,6 @@ async function buildHtmlChromeFooter(pageSetup, style) {
       centerFill: 'FFFFFF',
       rightFill: 'FFFFFF',
       mark: `#${colors.accent}`,
-      textColor: colors.accent,
       pageColor: colors.accent,
       iconBg: '#FFFFFF',
       leftCm: 1.0,
@@ -995,7 +993,7 @@ async function buildHtmlChromeFooter(pageSetup, style) {
   const iconWidth = cmToTwips(layout.leftCm);
   const pageBoxWidth = cmToTwips(layout.rightCm);
   const centerWidth = Math.max(400, pageWidth - iconWidth - pageBoxWidth);
-  const runOptions = footerRunOptions(pageSetup, layout.textColor);
+  const runOptions = footerRunOptions(pageSetup);
   const pageRun = { ...footerRunOptions(pageSetup, layout.pageColor), bold: true };
   const pageChildren = pageNumberEnabled
     ? createPageNumberRuns(pageSetup?.page_number_format || '{page}', pageRun, pageSetup?.page_number_pad)
@@ -1025,7 +1023,7 @@ async function buildHtmlChromeFooter(pageSetup, style) {
           chromeFillCell(
             centerWidth,
             layout.centerFill,
-            [chromeParagraph([new TextRun({ ...runOptions, text: footerText })])],
+            [chromeParagraph([new TextRun({ ...runOptions, text: footerText })], { alignment: alignmentToWordType(pageSetup?.footer_alignment || '居中对齐') })],
             { top: 40, bottom: 40, left: 80, right: 80 },
           ),
           chromeFillCell(
@@ -1048,7 +1046,7 @@ function buildFooterBadgeFooter(pageSetup) {
   const pageWidth = getPageWidthTwips(pageSetup);
   const badgeWidth = cmToTwips(2.1);
   const textWidth = pageWidth - badgeWidth;
-  const runOptions = footerRunOptions(pageSetup, colors.onBar);
+  const runOptions = footerRunOptions(pageSetup);
   const badgeRun = { ...footerRunOptions(pageSetup, colors.onAccent), bold: true };
   const pageChildren = pageNumberEnabled
     ? createPageNumberRuns(pageSetup?.page_number_format || '{page}', badgeRun, pageSetup?.page_number_pad)
@@ -1058,7 +1056,7 @@ function buildFooterBadgeFooter(pageSetup) {
       chromeCell({
         width: textWidth,
         fill: colors.bar,
-        children: [chromeParagraph([new TextRun({ ...runOptions, text: footerText })])],
+        children: [chromeParagraph([new TextRun({ ...runOptions, text: footerText })], { alignment: alignmentToWordType(pageSetup?.footer_alignment || '居中对齐') })],
       }),
       chromeCell({
         width: badgeWidth,

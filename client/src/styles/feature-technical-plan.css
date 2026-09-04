@@ -569,6 +569,21 @@
   border: 0;
 }
 
+.content-template-restricted-preview .export-template-chapter-heading-row h1,
+.content-template-restricted-preview .export-template-chapter-heading-row h2,
+.content-template-restricted-preview .export-template-chapter-heading-row h3,
+.content-template-restricted-preview .export-template-chapter-heading-row h4,
+.content-template-restricted-preview .export-template-chapter-heading-row h5,
+.content-template-restricted-preview .export-template-chapter-heading-row h6,
+.content-template-restricted-preview .export-template-chapter-leaf-title h1,
+.content-template-restricted-preview .export-template-chapter-leaf-title h2,
+.content-template-restricted-preview .export-template-chapter-leaf-title h3,
+.content-template-restricted-preview .export-template-chapter-leaf-title h4,
+.content-template-restricted-preview .export-template-chapter-leaf-title h5,
+.content-template-restricted-preview .export-template-chapter-leaf-title h6 {
+  margin: 0;
+}
+
 .content-template-restricted-preview .restricted-html-document figure,
 .content-template-restricted-preview .restricted-html-document table {
   margin-bottom: 20px;
@@ -648,8 +663,8 @@
   grid-template-rows: auto auto;
   width: min(var(--yb-figure-width), var(--ef-image-max-width, 90%));
   max-width: 100%;
-  margin-right: auto;
-  margin-left: auto;
+  margin-right: var(--ef-image-margin-right, auto);
+  margin-left: var(--ef-image-margin-left, auto);
   overflow: hidden;
   color: var(--yb-text-soft);
   background: rgba(83, 97, 118, 0.08);
@@ -688,11 +703,11 @@
   background: rgba(83, 97, 118, 0.08);
 }
 
-.content-template-restricted-preview .restricted-html-document figure[data-yb-preview-image]::before {
+.content-template-restricted-preview .restricted-html-document figure:has(> img[src])::before {
   display: none;
 }
 
-.content-template-restricted-preview .restricted-html-document figure[data-yb-preview-image] > img {
+.content-template-restricted-preview .restricted-html-document figure > img[src] {
   display: block;
   width: 100%;
   height: auto;

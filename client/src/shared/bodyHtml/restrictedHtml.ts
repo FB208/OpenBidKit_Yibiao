@@ -55,6 +55,11 @@ export interface RestrictedHtmlParseResult {
   previewHtml: string;
 }
 
+export interface RestrictedHtmlParseOptions {
+  /** 仅供内置展示模板保留已打包的本地图片地址。 */
+  allowImageSrc?: boolean;
+}
+
 interface BlockContext {
   index: number;
   issues: RestrictedHtmlIssue[];
@@ -90,7 +95,7 @@ function unwrapElement(element: Element) {
   element.replaceWith(...Array.from(element.childNodes));
 }
 
-function allowedAttributes(element: Element) {
+function allowedAttributes(element: Element, options: RestrictedHtmlParseOptions) {
   const tag = tagName(element);
   const names = new Set<string>();
   if (ROOT_TAGS.has(tag)) names.add('id');
@@ -103,6 +108,7 @@ function allowedAttributes(element: Element) {
   if (tag === 'img') {
     names.add('alt');
     names.add('data-yb-asset-ref');
+    if (options.allowImageSrc) names.add('src');
   }
   if (tag === 'table') names.add('data-yb-preset');
   if (tag === 'th' || tag === 'td') {
@@ -113,7 +119,7 @@ function allowedAttributes(element: Element) {
   return names;
 }
 
-function sanitizeElement(element: Element, context: BlockContext) {
+function sanitizeElement(element: Element, context: BlockContext, options: RestrictedHtmlParseOptions) {
   let current = element;
   let tag = tagName(current);
 
@@ -130,7 +136,7 @@ function sanitizeElement(element: Element, context: BlockContext) {
       return;
     }
     addIssue(context, 'warning', `已移除行内标签 <${tag}>，并保留其中的文字`);
-    for (const child of elementChildren(current)) sanitizeElement(child, context);
+    for (const child of elementChildren(current)) sanitizeElement(child, context, options);
     unwrapElement(current);
     return;
   }
@@ -139,7 +145,7 @@ function sanitizeElement(element: Element, context: BlockContext) {
   if (tag === 'i') current = replaceTag(current, 'em');
   tag = tagName(current);
 
-  const whitelist = allowedAttributes(current);
+  const whitelist = allowedAttributes(current, options);
   for (const attribute of Array.from(current.attributes)) {
     if (!whitelist.has(attribute.name.toLowerCase())) {
       current.removeAttribute(attribute.name);
@@ -147,7 +153,7 @@ function sanitizeElement(element: Element, context: BlockContext) {
     }
   }
 
-  for (const child of elementChildren(current)) sanitizeElement(child, context);
+  for (const child of elementChildren(current)) sanitizeElement(child, context, options);
 }
 
 function onlyWhitespaceTextOutside(element: Element, allowed: Set<string>) {
@@ -403,10 +409,10 @@ function validateBlock(root: Element, aside: Element | null, context: BlockConte
   }
 }
 
-function parseFragment(fragment: string, index: number, ids: Map<string, number>): RestrictedHtmlBlock {
+function parseFragment(fragment: string, index: number, ids: Map<string, number>, options: RestrictedHtmlParseOptions): RestrictedHtmlBlock {
   const context: BlockContext = { index, issues: [] };
   const document = new DOMParser().parseFromString(fragment, 'text/html');
-  for (const child of elementChildren(document.body)) sanitizeElement(child, context);
+  for (const child of elementChildren(document.body)) sanitizeElement(child, context, options);
   const roots = elementChildren(document.body);
   const root = roots[0] || null;
   const aside = roots.length === 2 && tagName(roots[1]) === 'aside' ? roots[1] : null;
@@ -425,7 +431,7 @@ function parseFragment(fragment: string, index: number, ids: Map<string, number>
 }
 
 /** 解析、清洗并校验一段易标受限 HTML。 */
-export function parseRestrictedHtml(source: string): RestrictedHtmlParseResult {
+export function parseRestrictedHtml(source: string, options: RestrictedHtmlParseOptions = {}): RestrictedHtmlParseResult {
   const raw = String(source || '');
   const markerMatches = raw.match(BLOCK_MARKER_PATTERN) || [];
   const pieces = raw.split(BLOCK_MARKER_PATTERN);
@@ -436,7 +442,7 @@ export function parseRestrictedHtml(source: string): RestrictedHtmlParseResult {
     fragments.splice(0, fragments.length, raw);
   }
   const ids = new Map<string, number>();
-  const blocks = fragments.map((fragment, index) => parseFragment(fragment, index, ids));
+  const blocks = fragments.map((fragment, index) => parseFragment(fragment, index, ids, options));
   if (!raw.trim()) return { blocks: [], issues: [], normalizedHtml: '', previewHtml: '' };
   if (!blocks.length) globalIssues.push({ blockIndex: 0, level: 'error', message: '没有可解析的正文块' });
   const issues = [...globalIssues, ...blocks.flatMap((block) => block.issues)];

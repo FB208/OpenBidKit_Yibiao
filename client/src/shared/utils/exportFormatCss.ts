@@ -120,6 +120,10 @@ function chromeFromEdgeCm(page: PageSetupConfig): number {
   return isHtmlHeaderFooterStyle(page.header_footer_style) ? CHROME_HTML_FROM_EDGE_CM : CHROME_TABLE_FROM_EDGE_CM;
 }
 
+function footerDistanceCm(page: PageSetupConfig): number {
+  return Math.max(0, page.footer_distance_cm ?? 1.75);
+}
+
 function decorativeFooterHeightCm(page: PageSetupConfig): number {
   const style = resolveHeaderFooterStyle(page.header_footer_style);
   if (HTML_FOOTER_HEIGHT_CM[style]) return HTML_FOOTER_HEIGHT_CM[style];
@@ -128,9 +132,9 @@ function decorativeFooterHeightCm(page: PageSetupConfig): number {
   return 0;
 }
 
-function minBodyMarginForChromeCm(page: PageSetupConfig, chromeHeightCm: number): number {
+function minBodyMarginForChromeCm(chromeHeightCm: number, fromEdgeCm: number): number {
   if (!(chromeHeightCm > 0)) return 0;
-  return chromeFromEdgeCm(page) + chromeHeightCm + CHROME_BODY_CLEARANCE_CM;
+  return fromEdgeCm + chromeHeightCm + CHROME_BODY_CLEARANCE_CM;
 }
 
 function previewPageChromeLayout(page: PageSetupConfig): {
@@ -139,7 +143,6 @@ function previewPageChromeLayout(page: PageSetupConfig): {
   left: number;
   right: number;
   headerChrome: number;
-  footerChrome: number;
 } {
   const top = page.margin_top_cm ?? 2;
   const bottom = page.margin_bottom_cm ?? 2;
@@ -149,12 +152,11 @@ function previewPageChromeLayout(page: PageSetupConfig): {
   const headerChrome = decorative && previewShowsHeader(page) ? HEADER_CHROME_HEIGHT_CM : 0;
   const footerChrome = decorative && previewShowsFooter(page) ? decorativeFooterHeightCm(page) : 0;
   return {
-    top: headerChrome > 0 ? Math.max(top, minBodyMarginForChromeCm(page, headerChrome)) : top,
-    bottom: footerChrome > 0 ? Math.max(bottom, minBodyMarginForChromeCm(page, footerChrome)) : bottom,
+    top: headerChrome > 0 ? Math.max(top, minBodyMarginForChromeCm(headerChrome, chromeFromEdgeCm(page))) : top,
+    bottom: footerChrome > 0 ? Math.max(bottom, minBodyMarginForChromeCm(footerChrome, footerDistanceCm(page))) : bottom,
     left,
     right,
     headerChrome,
-    footerChrome,
   };
 }
 
@@ -180,15 +182,17 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
   vars['--ef-page-padding-left'] = `${pageLayout.left}cm`;
   vars['--ef-page-padding-right'] = `${pageLayout.right}cm`;
   vars['--ef-header-chrome-height'] = `${pageLayout.headerChrome}cm`;
-  vars['--ef-footer-chrome-height'] = `${pageLayout.footerChrome}cm`;
   vars['--ef-header-font'] = chineseFontToCss(config.page.header_font || '宋体');
   vars['--ef-header-size'] = `${chineseSizeToPt(config.page.header_size || '小五')}pt`;
   vars['--ef-header-align'] = alignmentToCss(config.page.header_alignment || '居中对齐');
   vars['--ef-header-color'] = config.page.header_color || '#536176';
   vars['--ef-footer-font'] = chineseFontToCss(config.page.footer_font || '宋体');
   vars['--ef-footer-size'] = `${chineseSizeToPt(config.page.footer_size || '小五')}pt`;
-  vars['--ef-footer-align'] = alignmentToCss(config.page.footer_alignment || '居中对齐');
+  const footerAlignment = alignmentToCss(config.page.footer_alignment || '居中对齐');
+  vars['--ef-footer-align'] = footerAlignment;
+  vars['--ef-footer-justify'] = footerAlignment === 'center' ? 'center' : footerAlignment === 'right' ? 'flex-end' : 'flex-start';
   vars['--ef-footer-color'] = config.page.footer_color || '#536176';
+  vars['--ef-footer-distance'] = `${footerDistanceCm(config.page)}cm`;
   vars['--ef-chrome-bar'] = config.page.chrome_bar_color || '#e8eef5';
   vars['--ef-chrome-accent'] = config.page.chrome_accent_color || '#536176';
 
@@ -266,8 +270,11 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
   // ── 图片 ──
   const image = config.image;
   if (image) {
+    const imageAlignment = alignmentToCss(image.alignment || '居中对齐');
     vars['--ef-image-max-width'] = `${image.max_width_percent ?? 90}%`;
-    vars['--ef-image-align'] = alignmentToCss(image.alignment || '居中对齐');
+    vars['--ef-image-align'] = imageAlignment;
+    vars['--ef-image-margin-left'] = imageAlignment === 'right' || imageAlignment === 'center' ? 'auto' : '0';
+    vars['--ef-image-margin-right'] = imageAlignment === 'left' || imageAlignment === 'center' ? 'auto' : '0';
     vars['--ef-image-caption-font'] = chineseFontToCss(image.caption_font || '宋体');
     vars['--ef-image-caption-size'] = `${chineseSizeToPt(image.caption_size || '小五')}pt`;
     vars['--ef-image-caption-align'] = alignmentToCss(image.caption_alignment || '居中对齐');

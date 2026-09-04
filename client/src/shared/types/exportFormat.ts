@@ -144,11 +144,6 @@ export function usesHeaderTextColor(style: string | undefined): boolean {
   return resolved === 'plain' || resolved === 'rules' || resolved === 'footer-badge';
 }
 
-export function usesFooterTextColor(style: string | undefined): boolean {
-  const resolved = resolveHeaderFooterStyle(style);
-  return resolved === 'plain' || resolved === 'rules';
-}
-
 /** 纸张尺寸 mm（portrait 模式 width × height） */
 export const PAPER_DIMENSIONS: Record<PaperSize, { width: number; height: number }> = {
   a4: { width: 210, height: 297 },

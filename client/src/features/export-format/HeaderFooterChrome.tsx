@@ -71,9 +71,16 @@ function chromeClass(style: HeaderFooterStyle, extra = ''): string {
   return `page-chrome is-${style}${extra ? ` ${extra}` : ''}`;
 }
 
-export function PageHeaderChrome({ config }: ChromePartProps) {
+export function PageHeaderChrome({ config, pageIndex = 0 }: ChromePartProps) {
   const page = config.page;
   if (!showPageHeaderChrome(page)) return null;
+  if (page.first_page_different && pageIndex === 0) {
+    return (
+      <div className="page-chrome-first-page-placeholder" aria-hidden="true">
+        <PageHeaderChrome config={{ ...config, page: { ...page, first_page_different: false } }} pageIndex={pageIndex} />
+      </div>
+    );
+  }
 
   const style = resolveHeaderFooterStyle(page.header_footer_style);
   const colors = resolveChromeColors(page);
@@ -134,6 +141,13 @@ export function PageHeaderChrome({ config }: ChromePartProps) {
 export function PageFooterChrome({ config, pageIndex = 0 }: ChromePartProps) {
   const page = config.page;
   if (!showPageFooterChrome(page)) return null;
+  if (page.first_page_different && pageIndex === 0) {
+    return (
+      <div className="page-chrome-first-page-placeholder is-footer" aria-hidden="true">
+        <PageFooterChrome config={{ ...config, page: { ...page, first_page_different: false } }} pageIndex={pageIndex} />
+      </div>
+    );
+  }
 
   const style = resolveHeaderFooterStyle(page.header_footer_style);
   const colors = resolveChromeColors(page);
@@ -175,7 +189,7 @@ export function PageFooterChrome({ config, pageIndex = 0 }: ChromePartProps) {
           aria-hidden="true"
           dangerouslySetInnerHTML={{ __html: fillFooterChromeSvg(style, colors.onAccent) }}
         />
-        <span className="page-chrome-center is-slot" style={{ background: '#fff', color: colors.accent }}>{footerText}</span>
+        <span className="page-chrome-center is-slot" style={{ background: '#fff' }}>{footerText}</span>
         <span className="page-chrome-page-box is-badge" style={{ background: colors.badge, color: contrastText(colors.badge) }}>{pageNumberText}</span>
       </div>
     );
