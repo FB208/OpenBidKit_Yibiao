@@ -10,6 +10,7 @@ type RenderBlockKind = 'raw' | 'heading' | 'content' | 'leaf';
 
 interface SourceBlock {
   id: string;
+  tag: string;
   html: string;
   headingLevel?: number;
   fallbackHeight: number;
@@ -24,6 +25,9 @@ interface RenderBlock {
   fullWidth: boolean;
   startsNewPage: boolean;
   fallbackHeight: number;
+  sectionStart?: boolean;
+  sectionEnd?: boolean;
+  unbreakable?: boolean;
   sliceOffset?: number;
   sliceHeight?: number;
 }
@@ -61,26 +65,18 @@ function fallbackHeight(tag: string) {
 
 /** 解析包含本地图片地址的可信展示模板。 */
 function parseSourceBlocks(value: string): SourceBlock[] {
-  const previewHtml = parseRestrictedHtml(value, { allowImageSrc: true }).previewHtml;
-  if (!previewHtml) return [];
-
-  const document = new DOMParser().parseFromString(previewHtml, 'text/html');
-  const blocks: SourceBlock[] = [];
-  Array.from(document.body.children).forEach((element, index) => {
-    if (element.tagName.toLowerCase() === 'aside' && blocks.length) {
-      blocks[blocks.length - 1].html += element.outerHTML;
-      return;
-    }
-    const tag = element.tagName.toLowerCase();
-    const headingMatch = /^h([1-6])$/.exec(tag);
-    blocks.push({
-      id: element.id || `restricted-html-block-${index}`,
-      html: element.outerHTML,
-      headingLevel: headingMatch ? Number(headingMatch[1]) : undefined,
-      fallbackHeight: fallbackHeight(tag),
+  return parseRestrictedHtml(value, { allowImageSrc: true }).blocks
+    .filter((block) => block.valid)
+    .map((block) => {
+      const headingMatch = /^h([1-6])$/.exec(block.kind);
+      return {
+        id: block.id || `restricted-html-block-${block.index}`,
+        tag: block.kind,
+        html: block.html,
+        headingLevel: headingMatch ? Number(headingMatch[1]) : undefined,
+        fallbackHeight: fallbackHeight(block.kind),
+      };
     });
-  });
-  return blocks;
 }
 
 function isLeafHeading(blocks: SourceBlock[], index: number) {
@@ -101,6 +97,7 @@ function buildRenderBlocks(sourceBlocks: SourceBlock[], config: ExportFormatConf
       fullWidth: columns === 2 && block.headingLevel === 1,
       startsNewPage: block.headingLevel === 1 && config.heading_level1_page_break_before,
       fallbackHeight: block.fallbackHeight,
+      unbreakable: block.tag === 'figure',
     }));
   }
 
@@ -116,15 +113,20 @@ function buildRenderBlocks(sourceBlocks: SourceBlock[], config: ExportFormatConf
       const startsNewPage = block.headingLevel === 1 && config.heading_level1_page_break_before;
 
       if (config.heading_border.min_heading_left_enabled && content.length && isLeafHeading(sourceBlocks, index)) {
-        result.push({
-          id: `${block.id}-leaf`,
-          kind: 'leaf',
-          html: content.map((item) => item.html).join('\n'),
-          titleHtml: block.html,
-          headingLevel: block.headingLevel,
-          fullWidth,
-          startsNewPage,
-          fallbackHeight: block.fallbackHeight + content.reduce((sum, item) => sum + item.fallbackHeight, 0),
+        content.forEach((item, contentIndex) => {
+          result.push({
+            id: `${block.id}-leaf-${item.id}`,
+            kind: 'leaf',
+            html: item.html,
+            titleHtml: contentIndex === 0 ? block.html : undefined,
+            headingLevel: block.headingLevel,
+            fullWidth,
+            startsNewPage: contentIndex === 0 && startsNewPage,
+            fallbackHeight: item.fallbackHeight + (contentIndex === 0 ? block.fallbackHeight : 0),
+            sectionStart: contentIndex === 0,
+            sectionEnd: contentIndex === content.length - 1,
+            unbreakable: item.tag === 'figure',
+          });
         });
         index = contentEnd;
         continue;
@@ -146,13 +148,18 @@ function buildRenderBlocks(sourceBlocks: SourceBlock[], config: ExportFormatConf
     let contentEnd = index + 1;
     while (contentEnd < sourceBlocks.length && !sourceBlocks[contentEnd].headingLevel) contentEnd += 1;
     const content = sourceBlocks.slice(index, contentEnd);
-    result.push({
-      id: `${block.id}-content`,
-      kind: 'content',
-      html: content.map((item) => item.html).join('\n'),
-      fullWidth: false,
-      startsNewPage: false,
-      fallbackHeight: content.reduce((sum, item) => sum + item.fallbackHeight, 0),
+    content.forEach((item, contentIndex) => {
+      result.push({
+        id: `${item.id}-content`,
+        kind: 'content',
+        html: item.html,
+        fullWidth: false,
+        startsNewPage: false,
+        fallbackHeight: item.fallbackHeight,
+        sectionStart: contentIndex === 0,
+        sectionEnd: contentIndex === content.length - 1,
+        unbreakable: item.tag === 'figure',
+      });
     });
     index = contentEnd;
   }
@@ -258,12 +265,30 @@ export function RestrictedHtmlRenderer({
       sliceHeight: height,
     });
 
-    renderBlocks.forEach((block) => {
+    renderBlocks.forEach((block, blockIndex) => {
       const blockHeight = Math.max(1, metrics.blockHeights[block.id] || block.fallbackHeight);
+      const nextBlock = renderBlocks[blockIndex + 1];
+      const keepWithNext = Boolean(block.headingLevel)
+        && block.kind !== 'leaf'
+        && nextBlock !== undefined
+        && !nextBlock.headingLevel;
+      const nextBlockHeight = keepWithNext && nextBlock
+        ? Math.max(1, metrics.blockHeights[nextBlock.id] || nextBlock.fallbackHeight)
+        : 0;
       if (block.startsNewPage && hasPageContent()) startPage();
 
       if (block.fullWidth) {
-        if (hasColumnContent() || (hasPageContent() && spanningHeight + blockHeight > bodyHeight)) startPage();
+        const requiredHeight = blockHeight + nextBlockHeight;
+        if (
+          hasColumnContent()
+          || (hasPageContent() && requiredHeight <= bodyHeight && spanningHeight + requiredHeight > bodyHeight)
+          || (hasPageContent() && spanningHeight + blockHeight > bodyHeight)
+        ) startPage();
+        if (block.unbreakable) {
+          page.spanning.push(block);
+          spanningHeight += blockHeight;
+          return;
+        }
         let offset = 0;
         let sliceIndex = 0;
         while (offset < blockHeight) {
@@ -278,6 +303,13 @@ export function RestrictedHtmlRenderer({
       }
 
       let columnHeight = Math.max(1, bodyHeight - spanningHeight);
+      const requiredHeight = blockHeight + nextBlockHeight;
+      const remainingHeight = columnHeight - columnHeights[columnIndex];
+      if (keepWithNext && requiredHeight <= columnHeight && requiredHeight > remainingHeight) {
+        if (page.columns[columnIndex].length > 0) nextColumn();
+        else if (hasPageContent()) startPage();
+        columnHeight = Math.max(1, bodyHeight - spanningHeight);
+      }
       if (spanningHeight >= bodyHeight || (blockHeight <= bodyHeight && blockHeight > columnHeight)) {
         startPage();
         columnHeight = bodyHeight;
@@ -287,6 +319,11 @@ export function RestrictedHtmlRenderer({
         columnHeight = Math.max(1, bodyHeight - spanningHeight);
       }
       if (blockHeight <= columnHeight - columnHeights[columnIndex]) {
+        page.columns[columnIndex].push(block);
+        columnHeights[columnIndex] += blockHeight;
+        return;
+      }
+      if (block.unbreakable) {
         page.columns[columnIndex].push(block);
         columnHeights[columnIndex] += blockHeight;
         return;
@@ -317,6 +354,7 @@ export function RestrictedHtmlRenderer({
   }, [columns, metrics.blockHeights, metrics.bodyHeight, pageHeightPx, renderBlocks]);
 
   const renderBlockContent = (block: RenderBlock) => {
+    const sectionClasses = `${block.sectionStart ? ' is-section-start' : ''}${block.sectionEnd ? ' is-section-end' : ''}`;
     if (block.kind === 'heading') {
       return (
         <div
@@ -326,11 +364,11 @@ export function RestrictedHtmlRenderer({
       );
     }
     if (block.kind === 'content') {
-      return <div className="export-template-chapter-content-row" dangerouslySetInnerHTML={{ __html: block.html }} />;
+      return <div className={`export-template-chapter-content-row${sectionClasses}`} dangerouslySetInnerHTML={{ __html: block.html }} />;
     }
     if (block.kind === 'leaf') {
       return (
-        <div className={`export-template-chapter-leaf-row is-level-${block.headingLevel}`}>
+        <div className={`export-template-chapter-leaf-row is-level-${block.headingLevel}${sectionClasses}`}>
           <div className="export-template-chapter-leaf-title" dangerouslySetInnerHTML={{ __html: block.titleHtml || '' }} />
           <div className="export-template-chapter-leaf-content" dangerouslySetInnerHTML={{ __html: block.html }} />
         </div>
