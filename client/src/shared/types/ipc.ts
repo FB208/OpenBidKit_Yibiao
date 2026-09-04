@@ -735,6 +735,8 @@ export interface YibiaoBridge {
     create: (config: ExportFormatConfig) => Promise<ExportTemplateRecord>;
     update: (templateId: string, config: ExportFormatConfig) => Promise<ExportTemplateRecord>;
     delete: (templateId: string) => Promise<{ success: boolean; message: string }>;
+    /** 生成模板样张；key 是内容指纹，字节未变时可跳过重新加载。 */
+    renderPreview: (html: string, config: ExportFormatConfig) => Promise<{ key: string; bytes: Uint8Array; roles: string[] }>;
   };
   tasks: {
     startBidSectionExtraction: (payload?: unknown) => Promise<unknown>;

@@ -152,6 +152,8 @@
     "artifactName": "Yibiao-${version}-${os}-${arch}.${ext}"
   },
   "dependencies": {
+    "@docx-editor.dev/core": "2.15.0",
+    "@docx-editor.dev/react": "2.15.0",
     "@earendil-works/pi-ai": "0.80.10",
     "@earendil-works/pi-coding-agent": "0.80.10",
     "@radix-ui/react-dialog": "^1.1.15",

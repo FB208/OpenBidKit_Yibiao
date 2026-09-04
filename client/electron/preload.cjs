@@ -245,6 +245,7 @@ const bridge = {
     create: (config) => ipcRenderer.invoke('templates:create', config),
     update: (templateId, config) => ipcRenderer.invoke('templates:update', templateId, config),
     delete: (templateId) => ipcRenderer.invoke('templates:delete', templateId),
+    renderPreview: (html, config) => ipcRenderer.invoke('templates:render-preview', html, config),
   },
   tasks: {
     startBidSectionExtraction: (payload) => ipcRenderer.invoke('tasks:start-bid-section-extraction', payload),

@@ -2,6 +2,7 @@
  * 引用顺序: tokens -> layout -> shared -> app-shell dialogs -> features
  * 顺序影响 CSS 优先级 (同权重选择器后声明覆盖先声明)，调整顺序前请确认不会引发视觉回归。
  */
+@import '@docx-editor.dev/core/styles/editor.css';
 @import './styles/tokens.css';
 @import './styles/layout-app-shell.css';
 @import './styles/shared-components.css';

@@ -1,5 +1,7 @@
 ﻿import * as Dialog from '@radix-ui/react-dialog';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { DocxEditor, type DocxEditorRef } from '@docx-editor.dev/react';
+import { createBrowserAutomationHost } from '@docx-editor.dev/core/editor';
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, AppSwitch, FloatingToolbar, ProgressBar, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
@@ -45,8 +47,8 @@ import {
   applyExportThemePreset,
 } from '../exportFormatPresets';
 import { HeaderFooterStylePicker, resolveChromeColors } from '../../../shared/ui/HeaderFooterChrome';
-import { RestrictedHtmlRenderer } from '../../../shared/bodyHtml/RestrictedHtmlRenderer';
 import { DOCUMENT_DISPLAY_TEMPLATE_HTML } from '../../../shared/bodyHtml/documentTemplate';
+import { planPreviewUpdate, type PreviewPlan } from '../templatePreviewIncrement';
 
 type TemplateTab = 'quick' | 'layout' | 'header-footer' | 'cover' | 'heading' | 'body' | 'table' | 'image';
 type TableCellStyleKey = 'header_row' | 'first_column' | 'body_cell';
@@ -323,6 +325,8 @@ function ExportFormatPage({
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const templatePreview = useTemplatePreview(config, loaded && !loadError);
+  const exitPreviewFullscreen = useCallback(() => setPreviewFullscreenOpen(false), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1455,7 +1459,11 @@ function ExportFormatPage({
           <section className="settings-page-section export-template-editor">
             {renderActiveSettings()}
           </section>
-          <TemplatePreview config={config} />
+          <TemplatePreviewView
+            preview={templatePreview}
+            fullscreen={previewFullscreenOpen}
+            onExitFullscreen={exitPreviewFullscreen}
+          />
         </div>
       </div>
       <Dialog.Root
@@ -1495,17 +1503,6 @@ function ExportFormatPage({
                 <Dialog.Close className={exportProgress.filePath && !exportProgress.error ? 'secondary-action' : 'primary-action'} type="button">知道了</Dialog.Close>
               </div>
             )}
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-      <Dialog.Root open={previewFullscreenOpen} onOpenChange={setPreviewFullscreenOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="export-template-fullscreen-overlay" />
-          <Dialog.Content className="export-template-fullscreen-dialog">
-            <Dialog.Title className="export-template-fullscreen-title">全屏预览</Dialog.Title>
-            <Dialog.Description className="export-template-fullscreen-description">当前模板的全屏排版预览。</Dialog.Description>
-            <Dialog.Close className="export-template-fullscreen-close" type="button">退出全屏</Dialog.Close>
-            <TemplatePreview config={config} />
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
@@ -1602,12 +1599,263 @@ export function ExportTemplateEditorDialog({
   );
 }
 
-export function TemplatePreview({ config }: { config: ExportFormatConfig }) {
+/**
+ * 重新生成整篇样张约 140ms，就地改样式只要 10–40ms，两条路的去抖分开定。
+ * 去抖必须长于对应那条路的一次刷新，否则拖动时请求会一直排队。
+ */
+const PREVIEW_REBUILD_DELAY_MS = 400;
+const PREVIEW_INCREMENT_DELAY_MS = 120;
+
+/** 编辑器暴露给预览逻辑的就地更新能力。 */
+interface PreviewEditorHandle {
+  /** 就地应用一份增量计划；编辑器未就绪或计划落不了地时返回 false，由调用方退回重新生成。 */
+  apply: (plan: Extract<PreviewPlan, { kind: 'incremental' }>) => boolean;
+}
+
+interface TemplatePreviewState {
+  /** 样张内容指纹；只有它变化才需要让编辑器重新打开文档。 */
+  documentKey: string;
+  document: Uint8Array | null;
+  /** 正文段落角色，按文档顺序，与编辑器枚举出的段落一一对应。 */
+  roles: string[];
+  loading: boolean;
+  error: string;
+  editorHandleRef: MutableRefObject<PreviewEditorHandle | null>;
+}
+
+/** 生成 Word 样张，忽略不参与排版的模板名称。 */
+function useTemplatePreview(config: ExportFormatConfig, enabled = true): TemplatePreviewState {
+  const [preview, setPreview] = useState<{ key: string; document: Uint8Array | null; roles: string[] }>(
+    { key: '', document: null, roles: [] },
+  );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [attempt, setAttempt] = useState(0);
+  // 用序列化后的配置做指纹：值没变就不该重新生成，哪怕上层换了新对象。
+  const requestKey = useMemo(() => JSON.stringify({ ...config, template_name: '' }), [config]);
+  const configRef = useRef(config);
+  configRef.current = config;
+  const runningRef = useRef(false);
+  const renderedKeyRef = useRef('');
+  const mountedRef = useRef(true);
+  const editorHandleRef = useRef<PreviewEditorHandle | null>(null);
+  // 编辑器此刻真正呈现的那份配置；增量是相对它算的，不是相对上一次请求。
+  const appliedConfigRef = useRef<ExportFormatConfig | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    // 上一份样张还在生成时不排队；它结束后会把 attempt 加一，届时再按最新配置重新判断。
+    if (runningRef.current) return undefined;
+    if (requestKey === renderedKeyRef.current) return undefined;
+
+    const plan = planPreviewUpdate(appliedConfigRef.current, config, preview.roles);
+    if (plan.kind === 'none') {
+      renderedKeyRef.current = requestKey;
+      appliedConfigRef.current = config;
+      return undefined;
+    }
+
+    const incremental = plan.kind === 'incremental';
+    const delay = incremental
+      ? PREVIEW_INCREMENT_DELAY_MS
+      : (renderedKeyRef.current ? PREVIEW_REBUILD_DELAY_MS : 0);
+
+    const timer = window.setTimeout(() => {
+      const target = configRef.current;
+      if (plan.kind === 'incremental' && editorHandleRef.current?.apply(plan)) {
+        renderedKeyRef.current = requestKey;
+        appliedConfigRef.current = target;
+        setError('');
+        return;
+      }
+
+      runningRef.current = true;
+      setLoading(true);
+      void (async () => {
+        try {
+          const result = await window.yibiao.templates.renderPreview(
+            DOCUMENT_DISPLAY_TEMPLATE_HTML,
+            { ...target, template_name: '' },
+          );
+          renderedKeyRef.current = requestKey;
+          appliedConfigRef.current = target;
+          if (!mountedRef.current) return;
+          setError('');
+          // 字节没变就保持同一份引用，避免编辑器为一模一样的样张重开一次文档。
+          setPreview((current) => (current.key === result.key
+            ? current
+            : { key: result.key, document: new Uint8Array(result.bytes), roles: result.roles || [] }));
+        } catch (reason) {
+          // 同一份配置不重试，等下一次配置变化再说，否则会陷入失败重试循环。
+          renderedKeyRef.current = requestKey;
+          if (!mountedRef.current) return;
+          setError(reason instanceof Error ? reason.message : 'Word 样张生成失败');
+        } finally {
+          runningRef.current = false;
+          if (mountedRef.current) {
+            setLoading(false);
+            setAttempt((value) => value + 1);
+          }
+        }
+      })();
+    }, delay);
+
+    return () => window.clearTimeout(timer);
+    // config 仅用于算增量计划，它的变化已经由 requestKey 表达。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, requestKey, attempt, preview.roles]);
+
+  return {
+    documentKey: preview.key,
+    document: preview.document,
+    roles: preview.roles,
+    loading,
+    error,
+    editorHandleRef,
+  };
+}
+
+interface TemplatePreviewViewProps {
+  preview: TemplatePreviewState;
+  fullscreen?: boolean;
+  onExitFullscreen?: () => void;
+}
+
+interface AutomationResultEntry {
+  value?: { handle?: unknown; handles?: unknown[] };
+}
+
+type AutomationEditor = Parameters<typeof createBrowserAutomationHost>[0];
+
+/**
+ * 显示已生成的 Word 样张。
+ *
+ * 编辑器实例只挂载一次，样张更新走 load()：换 document 属性会整实例重挂载，
+ * 代价是重新解析、重新分页，还会把滚动位置弹回顶部。
+ *
+ * 挂在 edit 模式上，是因为 automation 的写操作在只读文档上会被拒；样张不该被人改动，
+ * 所以画布用 CSS 挡掉指针事件，既进不去光标，也不影响外层滚动。
+ */
+function TemplatePreviewView({ preview, fullscreen = false, onExitFullscreen }: TemplatePreviewViewProps) {
+  const { documentKey, document, roles, loading, error, editorHandleRef } = preview;
+  const editorRef = useRef<DocxEditorRef | null>(null);
+  const readyRef = useRef(false);
+  const loadedKeyRef = useRef('');
+  const hostRef = useRef<ReturnType<typeof createBrowserAutomationHost> | null>(null);
+  const handlesRef = useRef<unknown[]>([]);
+
+  /** 文档换了就要重新取句柄：上一份文档的句柄在新文档里没有意义。 */
+  const rebindHost = useCallback(() => {
+    hostRef.current = null;
+    handlesRef.current = [];
+    const editor = editorRef.current?.getEditor?.();
+    if (!editor) return;
+    try {
+      // Root 交给 onReady/getEditor 的就是它自己创建的实例，automation 宿主要的也是它；
+      // 包里把两个类型分开导出，这里按运行时事实收窄。
+      const host = createBrowserAutomationHost(editor as unknown as AutomationEditor);
+      const first = host.execute({ operations: [{ op: 'getDocument' }] } as never);
+      const documentHandle = (first.results[0] as AutomationResultEntry)?.value?.handle;
+      if (!documentHandle) return;
+      const second = host.execute({ operations: [{ op: 'getBody', document: documentHandle }] } as never);
+      const body = (second.results[0] as AutomationResultEntry)?.value?.handle;
+      if (!body) return;
+      const third = host.execute({ operations: [{ op: 'getParagraphs', body }] } as never);
+      hostRef.current = host;
+      handlesRef.current = (third.results[0] as AutomationResultEntry)?.value?.handles ?? [];
+    } catch {
+      hostRef.current = null;
+    }
+  }, []);
+
+  const applyDocument = useCallback(() => {
+    if (!readyRef.current || !document || loadedKeyRef.current === documentKey) return;
+    loadedKeyRef.current = documentKey;
+    editorRef.current?.load(document);
+    // load 是排程的，句柄要等新文档真正打开之后再取。
+    window.setTimeout(rebindHost, 0);
+  }, [document, documentKey, rebindHost]);
+
+  useEffect(() => { applyDocument(); }, [applyDocument]);
+
+  useEffect(() => {
+    editorHandleRef.current = {
+      apply: (plan) => {
+        const host = hostRef.current;
+        const paragraphs = handlesRef.current;
+        if (!host || paragraphs.length === 0) return false;
+        // 角色表和编辑器枚举出的段落必须一一对应，对不上说明两边不是同一份文档。
+        if (paragraphs.length !== roles.length) return false;
+
+        const operations: unknown[] = [];
+        for (const heading of plan.headings) {
+          const role = `heading${heading.level}`;
+          for (let index = 0; index < roles.length; index += 1) {
+            if (roles[index] !== role) continue;
+            const paragraph = paragraphs[index];
+            operations.push({ op: 'setFont', span: { paragraph }, font: heading.font });
+            operations.push({ op: 'setParagraphFormat', paragraph: { paragraph }, format: heading.format });
+          }
+        }
+        if (operations.length === 0) return false;
+
+        try {
+          // 整批是一个事务、一次重排、一个撤销步；任一条被拒就整批不写。
+          return host.execute({ operations } as never).ok === true;
+        } catch {
+          return false;
+        }
+      },
+    };
+    return () => { editorHandleRef.current = null; };
+  }, [editorHandleRef, roles]);
+
+  useEffect(() => {
+    if (!fullscreen || !onExitFullscreen) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onExitFullscreen();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [fullscreen, onExitFullscreen]);
+
   return (
-    <aside className="settings-page-section export-template-preview-panel" aria-label="模板预览">
+    <aside
+      className={`settings-page-section export-template-preview-panel${fullscreen ? ' is-fullscreen' : ''}`}
+      aria-label="模板预览"
+    >
+      {fullscreen && onExitFullscreen && (
+        <button type="button" className="export-template-fullscreen-close" onClick={onExitFullscreen}>退出全屏</button>
+      )}
       <div className="export-template-preview-scroll">
-        <RestrictedHtmlRenderer value={DOCUMENT_DISPLAY_TEMPLATE_HTML} config={config} />
+        <DocxEditor
+          ref={editorRef}
+          className="export-template-docx-editor"
+          mode="edit"
+          chrome={false}
+          navigation={false}
+          rulers={false}
+          onReady={() => { readyRef.current = true; applyDocument(); }}
+        />
+        {!document && (
+          <div className="export-template-preview-empty" role="status">
+            {error || '正在生成 Word 样张…'}
+          </div>
+        )}
+        {document && loading && <div className="export-template-preview-loading" role="status">正在更新 Word 样张…</div>}
+        {document && error && <div className="export-template-preview-error" role="alert">{error}</div>}
       </div>
     </aside>
   );
+}
+
+/** 可独立使用的 Word 模板预览。 */
+export function TemplatePreview({ config }: { config: ExportFormatConfig }) {
+  const preview = useTemplatePreview(config);
+  return <TemplatePreviewView preview={preview} />;
 }

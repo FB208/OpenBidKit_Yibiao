@@ -1,4 +1,4 @@
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -15,6 +15,10 @@ const {
 const SIGNAL_VERSION = 1;
 const PING_TIMEOUT_MS = 15000;
 const JOB_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+const TEMPLATE_PREVIEW_FILE = 'preview.docx';
+const TEMPLATE_PREVIEW_TIMEOUT_MS = 120000;
+const TEMPLATE_PREVIEW_ASSET_ROOT = 'preview-assets';
+const TEMPLATE_PREVIEW_CACHE_SIZE = 5;
 
 /** 生成任务编号：时间戳加短随机串。 */
 function createJobId() {
@@ -30,22 +34,20 @@ function getAbortError(signal) {
   return error;
 }
 
-/** 拉起 Open XML 助手，按任务目录提交动作并等待完成信号。 */
-function createOpenXmlHelperService({ app, configStore } = {}) {
+/**
+ * 一个独立的助手进程及其任务队列。
+ * 超时和取消都要终止整个助手，所以互不相干的用途必须各自持有一个，
+ * 否则模板预览超时会连带杀掉正在跑的导出任务。
+ */
+function createHelperRunner({ app, writeLog, ensureExecutable, name }) {
   let child = null;
   let stdoutBuffer = '';
   let queue = Promise.resolve();
   let terminationPromise = null;
   const pending = new Map();
-  const logger = createDeveloperLogger({
-    app,
-    config: configStore?.load?.() || {},
-    moduleName: 'openxml-helper',
-    name: 'openxml-helper',
-  });
 
-  function writeLog(event, payload = {}) {
-    logger.write(event, payload);
+  function log(event, payload = {}) {
+    writeLog(event, { helper: name, ...payload });
   }
 
   function rejectPending(error) {
@@ -74,19 +76,19 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     try {
       signal = JSON.parse(line);
     } catch (error) {
-      writeLog('openxml.signal.parse_error', { line, error: compactLogError(error) });
+      log('openxml.signal.parse_error', { line, error: compactLogError(error) });
       return;
     }
 
     if (signal?.v !== SIGNAL_VERSION || signal?.type !== 'done') {
-      writeLog('openxml.signal.ignored', { line });
+      log('openxml.signal.ignored', { line });
       return;
     }
 
     const jobId = String(signal.job || '').trim();
     const waiter = pending.get(jobId);
     if (!waiter) {
-      writeLog('openxml.signal.unmatched', { job: jobId });
+      log('openxml.signal.unmatched', { job: jobId });
       return;
     }
 
@@ -100,16 +102,10 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     const workspace = getWorkspaceDir(app);
     fs.mkdirSync(getOpenXmlJobsDir(app), { recursive: true });
 
-    let command;
-    let args;
-    if (app.isPackaged) {
-      command = getBundledOpenXmlHelperPath(app);
-      args = ['--workspace', workspace];
-    } else {
-      buildDebugHelper();
-      command = getOpenXmlHelperDebugExecutablePath();
-      args = ['--workspace', workspace];
-    }
+    const command = app.isPackaged
+      ? getBundledOpenXmlHelperPath(app)
+      : getOpenXmlHelperDebugExecutablePath();
+    const args = ['--workspace', workspace];
 
     if (!fs.existsSync(command)) {
       throw new Error(`找不到 Open XML 助手：${command}`);
@@ -129,10 +125,10 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     next.stderr.setEncoding('utf8');
     next.stdout.on('data', handleStdoutChunk);
     next.stderr.on('data', (chunk) => {
-      writeLog('openxml.helper.stderr', { message: String(chunk || '').trim() });
+      log('openxml.helper.stderr', { message: String(chunk || '').trim() });
     });
     next.on('error', (error) => {
-      writeLog('openxml.helper.spawn_error', { error: compactLogError(error) });
+      log('openxml.helper.spawn_error', { error: compactLogError(error) });
       if (child === next) {
         child = null;
         stdoutBuffer = '';
@@ -140,7 +136,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
       }
     });
     next.on('exit', (code, signal) => {
-      writeLog('openxml.helper.exit', { code, signal });
+      log('openxml.helper.exit', { code, signal });
       if (child === next) {
         child = null;
         stdoutBuffer = '';
@@ -149,32 +145,15 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     });
 
     child = next;
-    writeLog('openxml.helper.started', { command, packaged: Boolean(app.isPackaged) });
+    log('openxml.helper.started', { command, packaged: Boolean(app.isPackaged) });
   }
 
-  /** 开发态编译助手，避免 dotnet run 污染 stdout。 */
-  function buildDebugHelper() {
-    const projectPath = getOpenXmlHelperProjectPath();
-    if (!fs.existsSync(projectPath)) {
-      throw new Error(`找不到 Open XML 助手工程：${projectPath}`);
-    }
-
-    execFileSync('dotnet', ['build', projectPath, '-nologo', '-v', 'q'], {
-      encoding: 'utf8',
-      windowsHide: true,
-      shell: false,
-      timeout: 180000,
-      env: {
-        ...process.env,
-        DOTNET_NOLOGO: '1',
-      },
-    });
-  }
-
-  function ensureStarted() {
+  async function ensureStarted() {
     if (child && !child.killed) {
       return;
     }
+    await ensureExecutable();
+    if (child && !child.killed) return;
     spawnHelper();
   }
 
@@ -290,7 +269,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
       }
       if (signal?.aborted) throw getAbortError(signal);
 
-      ensureStarted();
+      await ensureStarted();
       if (signal?.aborted) {
         await terminateHelper();
         throw getAbortError(signal);
@@ -306,7 +285,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
           if (!pending.has(jobId)) return;
           pending.delete(jobId);
           cleanup();
-          writeLog(event, { job: jobId, action: jobAction });
+          log(event, { job: jobId, action: jobAction });
           void terminateHelper().then(
             () => reject(error),
             () => reject(error),
@@ -349,10 +328,6 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     }, signal);
   }
 
-  function ping() {
-    return runJob({ action: 'ping', timeoutMs: PING_TIMEOUT_MS });
-  }
-
   /** 结束助手进程并拒绝未完成任务。 */
   async function close() {
     const waiters = [...pending.values()];
@@ -362,9 +337,237 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     for (const waiter of waiters) waiter.reject(new Error('Open XML 助手已关闭'));
   }
 
+  return { runJob, close };
+}
+
+/** 拉起 Open XML 助手，按任务目录提交动作并等待完成信号。 */
+function createOpenXmlHelperService({ app, configStore } = {}) {
+  let debugBuildPromise = null;
+  let previewAssetPromise = null;
+  let previewActive = null;
+  let previewPending = null;
+  // 模板预览会在几份配置之间来回切换，留一小段最近结果就能把重复生成挡在链路之外。
+  const previewCache = new Map();
+  const logger = createDeveloperLogger({
+    app,
+    config: configStore?.load?.() || {},
+    moduleName: 'openxml-helper',
+    name: 'openxml-helper',
+  });
+
+  function writeLog(event, payload = {}) {
+    logger.write(event, payload);
+  }
+
+  /** 开发态异步编译助手，避免首次预览同步阻塞 Main 进程。 */
+  function buildDebugHelper() {
+    if (debugBuildPromise) return debugBuildPromise;
+    const projectPath = getOpenXmlHelperProjectPath();
+    if (!fs.existsSync(projectPath)) {
+      return Promise.reject(new Error(`找不到 Open XML 助手工程：${projectPath}`));
+    }
+
+    debugBuildPromise = new Promise((resolve, reject) => {
+      execFile('dotnet', ['build', projectPath, '-nologo', '-v', 'q'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        shell: false,
+        timeout: 180000,
+        env: {
+          ...process.env,
+          DOTNET_NOLOGO: '1',
+        },
+      }, (error) => {
+        if (error) {
+          debugBuildPromise = null;
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+    return debugBuildPromise;
+  }
+
+  async function ensureExecutable() {
+    if (!app.isPackaged) await buildDebugHelper();
+  }
+
+  const runner = createHelperRunner({ app, writeLog, ensureExecutable, name: 'main' });
+  const previewRunner = createHelperRunner({ app, writeLog, ensureExecutable, name: 'preview' });
+
+  function ping() {
+    return runner.runJob({ action: 'ping', timeoutMs: PING_TIMEOUT_MS });
+  }
+
+  /**
+   * 把样张配图同步到工作区内的共享目录。
+   * 配图在多次预览之间不变，逐个任务复制只会白白写盘，这里只在源文件变化时更新。
+   */
+  function syncPreviewAssets() {
+    if (previewAssetPromise) return previewAssetPromise;
+    previewAssetPromise = (async () => {
+      const sourceDir = path.join(app.getAppPath(), 'assets', 'content-template-preview');
+      const targetDir = path.join(getWorkspaceDir(app), TEMPLATE_PREVIEW_ASSET_ROOT, 'assets');
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const sources = fs.readdirSync(sourceDir).filter((item) => item.toLowerCase().endsWith('.webp'));
+      for (const name of sources) {
+        const source = path.join(sourceDir, name);
+        const target = path.join(targetDir, name);
+        const sourceStat = fs.statSync(source);
+        const targetStat = fs.existsSync(target) ? fs.statSync(target) : null;
+        if (targetStat && targetStat.size === sourceStat.size && targetStat.mtimeMs >= sourceStat.mtimeMs) {
+          continue;
+        }
+        fs.copyFileSync(source, target);
+      }
+
+      const known = new Set(sources);
+      for (const name of fs.readdirSync(targetDir)) {
+        if (!known.has(name)) fs.rmSync(path.join(targetDir, name), { force: true });
+      }
+      return TEMPLATE_PREVIEW_ASSET_ROOT;
+    })().catch((error) => {
+      previewAssetPromise = null;
+      throw error;
+    });
+    return previewAssetPromise;
+  }
+
+  function readPreviewCache(key) {
+    if (!previewCache.has(key)) return null;
+    const entry = previewCache.get(key);
+    previewCache.delete(key);
+    previewCache.set(key, entry);
+    return entry;
+  }
+
+  function writePreviewCache(key, entry) {
+    previewCache.set(key, entry);
+    while (previewCache.size > TEMPLATE_PREVIEW_CACHE_SIZE) {
+      previewCache.delete(previewCache.keys().next().value);
+    }
+  }
+
+  /**
+   * 将模板样张交给 OpenXmlHelper 生成 DOCX。
+   * 返回值带上内容指纹和段落角色表：前者让调用方判断样张是否真的变了
+   * （字节相同却换了一份新数组，会让编辑器白白重开一次文档），
+   * 后者让预览侧能按角色定位段落，对部分改动走增量而不是重新生成整篇。
+   */
+  function renderRestrictedHtmlDocx(html, exportFormat) {
+    const key = crypto.createHash('sha256').update(html).update('\0').update(JSON.stringify(exportFormat)).digest('hex');
+    const cached = readPreviewCache(key);
+    if (cached) {
+      settleSupersededPreview({ key, ...cached });
+      return Promise.resolve({ key, ...cached });
+    }
+    if (previewActive?.key === key) {
+      settleSupersededPreview(previewActive.promise);
+      return previewActive.promise;
+    }
+    if (previewPending?.key === key) {
+      return previewPending.promise;
+    }
+
+    const request = { key, html, exportFormat };
+    if (!previewActive) {
+      return startPreview(request);
+    }
+
+    const next = createPendingPreview(request);
+    if (previewPending) previewPending.resolve(next.promise);
+    previewPending = next;
+    return next.promise;
+  }
+
+  /** 创建尚未进入 Open XML 队列的最后一次预览请求。 */
+  function createPendingPreview(request) {
+    let resolve;
+    let reject;
+    const promise = new Promise((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    return { ...request, promise, resolve, reject };
+  }
+
+  /** 当前配置已有结果时，让被覆盖的等待调用跟随该结果正常结束。 */
+  function settleSupersededPreview(result) {
+    if (!previewPending) return;
+    const superseded = previewPending;
+    previewPending = null;
+    superseded.resolve(result);
+  }
+
+  /** 启动一个预览；结束后只把最后一次等待配置送入队列。 */
+  function startPreview(request) {
+    const promise = createRestrictedHtmlDocx(request.html, request.exportFormat)
+      .then((rendered) => ({ key: request.key, ...rendered }));
+    const task = { key: request.key, promise };
+    previewActive = task;
+    promise.then(
+      (result) => {
+        writePreviewCache(task.key, { bytes: result.bytes, roles: result.roles });
+        finishPreview(task);
+      },
+      () => finishPreview(task),
+    );
+    return promise;
+  }
+
+  /** 完成运行中的预览，并提升唯一保留的等待请求。 */
+  function finishPreview(task) {
+    if (previewActive !== task) return;
+    previewActive = null;
+    const next = previewPending;
+    previewPending = null;
+    if (!next) return;
+    startPreview(next).then(next.resolve, next.reject);
+  }
+
+  /** 执行一次样张生成任务；同配置的多个预览实例共用上层缓存。 */
+  async function createRestrictedHtmlDocx(html, exportFormat) {
+    const assetRoot = await syncPreviewAssets();
+    const result = await previewRunner.runJob({
+      action: 'render-restricted-html-docx',
+      request: { html, export_format: exportFormat, asset_root: assetRoot },
+      timeoutMs: TEMPLATE_PREVIEW_TIMEOUT_MS,
+    });
+
+    try {
+      return {
+        bytes: new Uint8Array(fs.readFileSync(path.join(result.jobDir, TEMPLATE_PREVIEW_FILE))),
+        roles: Array.isArray(result.paragraphRoles) ? result.paragraphRoles : [],
+      };
+    } finally {
+      const jobsRoot = path.resolve(getOpenXmlJobsDir(app));
+      const jobDir = path.resolve(result.jobDir);
+      if (path.dirname(jobDir) === jobsRoot) fs.rmSync(jobDir, { recursive: true, force: true });
+    }
+  }
+
+  /** 结束助手进程并拒绝未完成任务。 */
+  async function close() {
+    const queuedPreview = previewPending;
+    previewPending = null;
+    previewActive = null;
+    previewCache.clear();
+    queuedPreview?.reject(new Error('Open XML 助手已关闭'));
+    await Promise.all([runner.close(), previewRunner.close()]);
+  }
+
+  if (!app.isPackaged) {
+    void buildDebugHelper().catch((error) => {
+      writeLog('openxml.helper.build_error', { error: compactLogError(error) });
+    });
+  }
+
   return {
     ping,
-    runJob,
+    runJob: runner.runJob,
+    renderRestrictedHtmlDocx,
     close,
   };
 }

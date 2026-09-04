@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -18,6 +19,10 @@ sealed class JobResult
     public string? Error { get; set; }
     public string? Output { get; set; }
     public int? BlockCount { get; set; }
+
+    /// <summary>正文段落角色，按文档顺序；供预览侧按角色定位段落做增量改样式。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? ParagraphRoles { get; set; }
 
     public static JobResult Success(string action, string? output = null, int? blockCount = null) => new()
     {

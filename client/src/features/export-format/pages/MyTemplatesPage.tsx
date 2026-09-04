@@ -119,7 +119,8 @@ function MyTemplatesPage() {
               </div>
               <button type="button" className="secondary-action" onClick={() => setEditor({ mode: 'edit', templateId: selectedTemplate.template_id })}>编辑模板</button>
             </div>
-            <TemplatePreview config={previewConfig} />
+            {/* 编辑弹窗自带预览，两份样张同时挂载会各跑一次生成与排版 */}
+            {!editor && <TemplatePreview config={previewConfig} />}
           </>
         ) : (
           <div className="template-library-preview-empty">

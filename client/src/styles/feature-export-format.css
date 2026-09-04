@@ -256,16 +256,63 @@
 }
 
 .export-template-preview-scroll {
+  position: relative;
   display: flex;
   flex: 1;
   width: 100%;
   min-height: 0;
-  align-items: flex-start;
-  justify-content: center;
-  overflow: auto;
-  padding: 0 0 18px;
+  align-items: stretch;
+  overflow: hidden;
   box-sizing: border-box;
   background: transparent;
+}
+
+.export-template-docx-editor {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+/*
+ * 样张挂在编辑器的 edit 模式上，只是因为就地改样式的接口不接受只读文档；
+ * 样张本身不该被人改动，所以画布不接指针事件——光标进不去，
+ * 滚轮事件则照常落到外层的滚动容器上。
+ */
+.export-template-docx-editor .docx-paginated-surface {
+  pointer-events: none;
+  user-select: none;
+}
+
+.export-template-preview-empty {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  padding: 24px;
+  color: var(--yb-text-muted);
+  text-align: center;
+}
+
+.export-template-preview-loading,
+.export-template-preview-error {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 1;
+  max-width: calc(100% - 32px);
+  padding: 7px 12px;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-pill);
+  box-shadow: var(--yb-shadow-xs);
+  transform: translateX(-50%);
+}
+
+.export-template-preview-error {
+  color: var(--yb-danger);
 }
 
 .export-template-preview-scale-box {
@@ -354,22 +401,17 @@
   left: 42px;
 }
 
-.export-template-fullscreen-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: rgba(15, 23, 42, 0.36);
-}
-
-.export-template-fullscreen-dialog {
+.export-template-preview-panel.is-fullscreen {
   position: fixed;
   inset: 0;
   z-index: 1001;
-  overflow: hidden;
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
   padding: 0;
   background: radial-gradient(circle at 20% 0%, rgba(229, 240, 255, 0.88), #f7fbff 42%, #eef5ff 100%);
   border: 0;
-  outline: none;
+  border-radius: 0;
 }
 
 .export-template-fullscreen-title,
@@ -408,18 +450,10 @@
   border-color: rgba(22, 138, 74, 0.38);
 }
 
-.export-template-fullscreen-dialog .export-template-preview-panel {
-  position: relative;
-  top: auto;
-  width: 100%;
-  height: 100vh;
-  max-height: none;
-  min-height: 0;
-}
-
-.export-template-fullscreen-dialog .export-template-preview-scroll {
+.export-template-preview-panel.is-fullscreen .export-template-preview-scroll {
   width: 100%;
   height: 100%;
+  padding-top: 68px;
 }
 
 /* ── 标题格式卡片 ── */

@@ -46,6 +46,7 @@ sealed class JobRunner
             ScanTemplateFieldsAction.Name => ScanTemplateFieldsAction.Execute(_workspace, jobId),
             ApplyTemplateFieldsAction.Name => ApplyTemplateFieldsAction.Execute(_workspace, jobId),
             InsertBodyHtmlAction.Name => InsertBodyHtmlAction.Execute(_workspace, jobId),
+            RenderRestrictedHtmlDocxAction.Name => RenderRestrictedHtmlDocxAction.Execute(_workspace, jobId),
             _ => JobResult.Fail($"未知动作：{request.Action}"),
         };
 
