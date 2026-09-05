@@ -13,7 +13,7 @@ using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
 
-/// <summary>把受限 HTML 转为 Open XML 块并替换指定块级内容控件。</summary>
+/// <summary>把受限 HTML 转为 Open XML 块，写入文档正文或指定块级内容控件。</summary>
 static partial class RestrictedHtmlWordInserter
 {
     public const string TagPrefix = "yibiao:body:";
@@ -81,14 +81,13 @@ static partial class RestrictedHtmlWordInserter
         }
     }
 
-    /// <summary>向已打开的 Word 文档插入已解析 HTML；供一次性预览复用同一个包会话。</summary>
-    internal static int InsertIntoDocument(
+    /// <summary>在已打开的 Word 文档中定位指定内容控件并写入正文。</summary>
+    static int InsertIntoDocument(
         string workspace,
         WordprocessingDocument wordDocument,
         string targetId,
         double imageMaxWidthPercent,
-        IDocument htmlDocument,
-        bool cacheAssets = false)
+        IDocument htmlDocument)
     {
         var normalizedTargetId = (targetId ?? "").Trim();
         if (!TargetIdPattern().IsMatch(normalizedTargetId))
@@ -111,19 +110,31 @@ static partial class RestrictedHtmlWordInserter
                 : $"块级内容控件不唯一：{tag}");
         }
 
+        var content = targets[0].SdtContentBlock ?? targets[0].AppendChild(new Wp.SdtContentBlock());
+        return InsertIntoContent(workspace, mainPart, content, imageMaxWidthPercent, htmlDocument);
+    }
+
+    /// <summary>直接写入正文或内容控件，保留文档末尾的分节属性并替换配图标记。</summary>
+    internal static int InsertIntoContent(
+        string workspace,
+        MainDocumentPart mainPart,
+        OpenXmlCompositeElement content,
+        double imageMaxWidthPercent,
+        IDocument htmlDocument,
+        bool cacheAssets = false)
+    {
         var prepared = PrepareHtml(workspace, imageMaxWidthPercent, htmlDocument, cacheAssets);
         var converter = new HtmlConverter(mainPart);
         var blocks = converter.Parse(prepared.Html);
-        var content = targets[0].SdtContentBlock ?? targets[0].AppendChild(new Wp.SdtContentBlock());
+        var section = content.GetFirstChild<Wp.SectionProperties>();
         content.RemoveAllChildren();
-        foreach (var block in blocks)
-        {
-            content.AppendChild(block);
-        }
+        content.Append(blocks);
         if (!content.ChildElements.Any()) content.AppendChild(new Wp.Paragraph());
-        InsertFigures(mainPart, targets[0], content, prepared.Figures);
+        if (section is not null) content.AppendChild(section);
+        InsertFigures(mainPart, content, prepared.Figures);
+        System.Diagnostics.Debug.Assert(section is null || ReferenceEquals(content.LastChild, section));
         mainPart.Document.Save();
-        return content.ChildElements.Count;
+        return content.ChildElements.Count - (section is null ? 0 : 1);
     }
 
     /// <summary>提取配图信息，并用普通段落标记保留图片在正文或表格中的位置。</summary>
@@ -300,13 +311,12 @@ static partial class RestrictedHtmlWordInserter
     /// <summary>把转换后的标记段落替换为图片段落和可选图注。</summary>
     static void InsertFigures(
         MainDocumentPart mainPart,
-        Wp.SdtBlock target,
-        Wp.SdtContentBlock content,
+        OpenXmlCompositeElement content,
         IReadOnlyList<FigureSpec> figures)
     {
         if (figures.Count == 0) return;
         var specs = figures.ToDictionary(item => item.Token, StringComparer.Ordinal);
-        var contentWidth = ResolvePageContentWidth(mainPart, target);
+        var contentWidth = ResolvePageContentWidth(mainPart, content);
         var nextDrawingId = mainPart.Document.Descendants<DW.DocProperties>()
             .Select(item => item.Id?.Value ?? 0U)
             .DefaultIfEmpty(0U)
@@ -397,12 +407,14 @@ static partial class RestrictedHtmlWordInserter
             new Wp.Run(new Wp.Text(caption) { Space = SpaceProcessingModeValues.Preserve }));
     }
 
-    /// <summary>读取目标内容控件所在节的正文宽度，未设置页面参数时按 A4 与 2 cm 页边距处理。</summary>
-    static long ResolvePageContentWidth(MainDocumentPart mainPart, Wp.SdtBlock target)
+    /// <summary>读取正文或目标内容控件所在节的宽度，未设置页面参数时按 A4 与 2 cm 页边距处理。</summary>
+    static long ResolvePageContentWidth(MainDocumentPart mainPart, OpenXmlCompositeElement target)
     {
         var body = mainPart.Document.Body;
         var passedTarget = false;
-        var section = body is null ? null : FindFollowingSectionProperties(body, target, ref passedTarget);
+        var section = target is Wp.Body
+            ? target.GetFirstChild<Wp.SectionProperties>()
+            : body is null ? null : FindFollowingSectionProperties(body, target, ref passedTarget);
         var pageWidthValue = section?.GetFirstChild<Wp.PageSize>()?.Width?.Value;
         var pageWidth = pageWidthValue is null ? DefaultPageWidthTwips : (long)pageWidthValue.Value;
         var margins = section?.GetFirstChild<Wp.PageMargin>();

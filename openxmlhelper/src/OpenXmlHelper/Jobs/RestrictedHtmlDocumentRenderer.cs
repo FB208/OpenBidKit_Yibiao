@@ -11,7 +11,6 @@ namespace Yibiao.OpenXmlHelper.Jobs;
 /// <summary>用受限 HTML 和导出格式配置生成可直接预览的 Word 文档。</summary>
 static class RestrictedHtmlDocumentRenderer
 {
-    const string TargetId = "preview";
     const string HeadingMarker = "YIBIAOHEADING";
     const string TableCaptionMarker = "YIBIAOTABLECAPTION:";
     const string FigureCaptionMarker = "YIBIAOFIGURECAPTION:";
@@ -57,7 +56,7 @@ static class RestrictedHtmlDocumentRenderer
     /// <summary>一次样张渲染的产物：块数，以及按文档顺序排列的段落角色。</summary>
     public readonly record struct RenderResult(int BlockCount, IReadOnlyList<string> ParagraphRoles);
 
-    /// <summary>新建骨架、复用 HTML 插入器填充正文，再统一应用模板格式。</summary>
+    /// <summary>新建骨架、直接写入 HTML 正文，再统一应用模板格式。</summary>
     public static RenderResult Render(string assetRoot, string outputPath, string html, JsonElement exportFormat)
     {
         var format = new FormatReader(exportFormat);
@@ -67,11 +66,12 @@ static class RestrictedHtmlDocumentRenderer
 
         using var document = WordprocessingDocument.Create(outputPath, WordprocessingDocumentType.Document);
         CreateSkeleton(document, format);
+        var mainPart = document.MainDocumentPart!;
         // 样张是临时派生文件；完整校验仍由正式正文插入路径负责。
-        var blockCount = RestrictedHtmlWordInserter.InsertIntoDocument(
+        var blockCount = RestrictedHtmlWordInserter.InsertIntoContent(
             assetRoot,
-            document,
-            TargetId,
+            mainPart,
+            mainPart.Document.Body!,
             format.Number(format.Section("image"), "max_width_percent", 90),
             prepared.Document,
             cacheAssets: true);
@@ -86,7 +86,7 @@ static class RestrictedHtmlDocumentRenderer
     /// </summary>
     static IReadOnlyList<string> CollectParagraphRoles(WordprocessingDocument document)
     {
-        var content = document.MainDocumentPart?.Document.Body?.Descendants<Wp.SdtContentBlock>().FirstOrDefault();
+        var content = document.MainDocumentPart?.Document.Body;
         if (content is null) return [];
 
         var roles = new List<string>();
@@ -184,20 +184,15 @@ static class RestrictedHtmlDocumentRenderer
         return CellRole.Body;
     }
 
-    /// <summary>创建包含页面、样式、页眉页脚和正文占位块的新文档。</summary>
+    /// <summary>创建包含页面、样式、页眉页脚的空白文档。</summary>
     static void CreateSkeleton(WordprocessingDocument document, FormatReader format)
     {
         var mainPart = document.AddMainDocumentPart();
         AddStyles(mainPart, format);
         AddDocumentSettings(mainPart);
 
-        var contentControl = new Wp.SdtBlock(
-            new Wp.SdtProperties(
-                new Wp.SdtAlias { Val = "模板样张" },
-                new Wp.Tag { Val = $"{RestrictedHtmlWordInserter.TagPrefix}{TargetId}" }),
-            new Wp.SdtContentBlock(new Wp.Paragraph()));
         var section = CreateSectionProperties(mainPart, format);
-        mainPart.Document = new Wp.Document(new Wp.Body(contentControl, section));
+        mainPart.Document = new Wp.Document(new Wp.Body(section));
         mainPart.Document.Save();
     }
 
@@ -535,9 +530,7 @@ static class RestrictedHtmlDocumentRenderer
     static void ApplyFormatting(WordprocessingDocument document, FormatReader format, IReadOnlyList<TableSpec> tableSpecs)
     {
         var mainPart = document.MainDocumentPart ?? throw new InvalidOperationException("Word 缺少正文部件");
-        var body = mainPart.Document.Body ?? throw new InvalidOperationException("Word 缺少正文");
-        var content = body.Descendants<Wp.SdtContentBlock>().FirstOrDefault()
-            ?? throw new InvalidOperationException("Word 缺少样张内容块");
+        var content = mainPart.Document.Body ?? throw new InvalidOperationException("Word 缺少正文");
 
         foreach (var paragraph in content.Descendants<Wp.Paragraph>())
         {
@@ -678,7 +671,7 @@ static class RestrictedHtmlDocumentRenderer
 
     /// <summary>按源 HTML 的表格顺序设置边框、宽度、内边距和单元格角色。</summary>
     static void ApplyTables(
-        Wp.SdtContentBlock content,
+        Wp.Body content,
         FormatReader format,
         IReadOnlyList<TableSpec> tableSpecs)
     {
@@ -1038,7 +1031,7 @@ static class RestrictedHtmlDocumentRenderer
     /// <summary>双栏文档用连续分节把一级标题单独置于通栏。</summary>
     static void ApplyTwoColumnHeadingSections(
         MainDocumentPart mainPart,
-        Wp.SdtContentBlock content,
+        Wp.Body content,
         FormatReader format)
     {
         var page = format.Section("page");
