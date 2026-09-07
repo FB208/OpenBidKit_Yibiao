@@ -6,6 +6,31 @@ export interface KnowledgeItem {
   source_block_ids?: string[];
   source_file?: string;
 }
+export type KnowledgeSearchMatchField = 'file_name' | 'title' | 'resume' | 'content';
+
+export interface KnowledgeBaseSearchResult {
+  document_id: string;
+  folder_id: string;
+  folder_name: string;
+  file_name: string;
+  item_id: string;
+  title: string;
+  resume: string;
+  snippet: string;
+  match_field: KnowledgeSearchMatchField;
+}
+
+export interface KnowledgeBaseSearchRequest {
+  keyword: string;
+  page: number;
+}
+
+export interface KnowledgeBaseSearchPage {
+  items: KnowledgeBaseSearchResult[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
 
 export interface KnowledgeCandidateItem {
   id: string;
