@@ -1,4 +1,4 @@
-import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { Profiler, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, InlineSpinner, isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useDocumentParseNotice, useToast } from '../../../shared/ui';
@@ -293,6 +293,7 @@ function logProfilerRender(
 type KnowledgeViewer = {
   document: KnowledgeDocument;
   mode: 'analysis' | 'items' | 'markdown';
+  targetItemId?: string;
 };
 
 function KnowledgeBasePage() {
@@ -621,7 +622,7 @@ function KnowledgeBasePage() {
       return;
     }
     setActiveFolderId(result.folder_id);
-    await openDocument(document, 'items');
+    await openDocument(document, 'items', result.item_id);
   };
 
 
@@ -802,7 +803,8 @@ function KnowledgeBasePage() {
     return trace;
   };
 
-  const openDocument = async (document: KnowledgeDocument, mode: KnowledgeViewer['mode']) => {
+  // 打开文档，可指定首次自动查看原文的知识条目。
+  const openDocument = async (document: KnowledgeDocument, mode: KnowledgeViewer['mode'], targetItemId?: string) => {
     if (mode === 'analysis' && !developerMode) {
       return;
     }
@@ -812,7 +814,7 @@ function KnowledgeBasePage() {
     setViewerLoading(mode !== 'analysis');
     logRenderDebug(trace, 'state:loading-start', { loading: mode !== 'analysis' });
     startTransition(() => {
-      setViewer({ document, mode });
+      setViewer({ document, mode, targetItemId });
       setMarkdownPreview('');
       setItemsPreview([]);
       if (mode === 'analysis') {
@@ -862,6 +864,11 @@ function KnowledgeBasePage() {
           return;
         }
         updateTraceItemsMetrics(trace, nextItems);
+        if (targetItemId && !nextItems.some((item) => item.id === targetItemId)) {
+          showToast('对应知识条目已不存在，请重新检索', 'info');
+          closeViewer();
+          return;
+        }
         if (viewerRequestIdRef.current === requestId) {
           logRenderDebug(trace, 'state:set-items-preview', { itemCount: nextItems.length });
           setItemsPreview(nextItems);
@@ -920,6 +927,7 @@ function KnowledgeBasePage() {
         <KnowledgeDocumentViewer
           document={viewer.document}
           mode={viewer.mode}
+          targetItemId={viewer.targetItemId}
           itemsPreview={itemsPreview}
           markdownPreview={markdownPreview}
           analysisSnapshot={analysisSnapshot}
@@ -1175,6 +1183,7 @@ function KnowledgeBasePage() {
 interface KnowledgeDocumentViewerProps {
   document: KnowledgeDocument;
   mode: KnowledgeViewer['mode'];
+  targetItemId?: string;
   itemsPreview: KnowledgeItem[];
   markdownPreview: string;
   analysisSnapshot: KnowledgeAnalysisSnapshot | null;
@@ -1191,6 +1200,7 @@ interface KnowledgeDocumentViewerProps {
 function KnowledgeDocumentViewer({
   document,
   mode,
+  targetItemId,
   itemsPreview,
   markdownPreview,
   analysisSnapshot,
@@ -1209,6 +1219,7 @@ function KnowledgeDocumentViewer({
   const [sourceTrace, setSourceTrace] = useState<RenderDebugTrace | null>(null);
   const renderRequestIdRef = useRef(0);
   const sourceTraceRef = useRef<RenderDebugTrace | null>(null);
+  const pendingTargetItemIdRef = useRef(targetItemId);
 
   useEffect(() => {
     finishRenderDebugTrace(sourceTraceRef.current, 'viewer-reset');
@@ -1217,9 +1228,11 @@ function KnowledgeDocumentViewer({
     setSourceRendering(false);
     setSourceTrace(null);
     renderRequestIdRef.current += 1;
-  }, [document.id, mode]);
+    pendingTargetItemIdRef.current = targetItemId;
+  }, [document.id, mode, targetItemId]);
 
-  const openSourceItem = (item: KnowledgeItem) => {
+  // 复用原文打开流程，保留渲染进度和开发者调试记录。
+  const openSourceItem = useCallback((item: KnowledgeItem) => {
     renderRequestIdRef.current += 1;
     const requestId = renderRequestIdRef.current;
     finishRenderDebugTrace(sourceTraceRef.current, 'source-trace-replaced');
@@ -1236,7 +1249,16 @@ function KnowledgeDocumentViewer({
         setSourceRendering(false);
       }
     });
-  };
+  }, [developerMode, document]);
+
+  // 搜索定位只消费一次，关闭原文后不再自动弹出。
+  useEffect(() => {
+    if (mode !== 'items' || viewerLoading || !pendingTargetItemIdRef.current) return;
+    const item = itemsPreview.find((entry) => entry.id === pendingTargetItemIdRef.current);
+    if (!item) return;
+    pendingTargetItemIdRef.current = undefined;
+    openSourceItem(item);
+  }, [itemsPreview, mode, targetItemId, viewerLoading, openSourceItem]);
 
   const closeSourceItem = () => {
     renderRequestIdRef.current += 1;
