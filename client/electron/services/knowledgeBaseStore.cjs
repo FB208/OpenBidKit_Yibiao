@@ -253,6 +253,83 @@ function createKnowledgeBaseStore({ app, db }) {
     return { folders, documents };
   }
 
+  function search({ keyword, page }) {
+    const pageSize = 100;
+    const normalizedKeyword = String(keyword || '').trim();
+    if (!normalizedKeyword) return { items: [], total: 0, page: 1, pageSize };
+
+    const lowerKeyword = normalizedKeyword.toLocaleLowerCase();
+    const matchSql = `
+      FROM knowledge_items i
+      INNER JOIN knowledge_documents d ON d.document_id = i.document_id
+      INNER JOIN knowledge_folders f ON f.folder_id = d.folder_id
+      WHERE d.status = 'success'
+        AND (
+          instr(lower(COALESCE(d.file_name, '')), @keyword) > 0
+          OR instr(lower(COALESCE(i.title, '')), @keyword) > 0
+          OR instr(lower(COALESCE(i.resume, '')), @keyword) > 0
+          OR instr(lower(COALESCE(i.content, '')), @keyword) > 0
+        )
+    `;
+    const { rows, total, currentPage } = db.transaction(() => {
+      const { total } = db.prepare(`SELECT COUNT(*) AS total ${matchSql}`).get({ keyword: lowerKeyword });
+      const currentPage = Math.min(page, Math.max(1, Math.ceil(total / pageSize)));
+      const rows = total ? db.prepare(`
+      SELECT d.document_id, d.folder_id, d.file_name, f.name AS folder_name,
+             i.item_id, i.title, i.resume, i.content
+      ${matchSql}
+      ORDER BY
+        CASE
+          WHEN instr(lower(COALESCE(i.title, '')), @keyword) > 0 THEN 0
+          WHEN instr(lower(COALESCE(i.resume, '')), @keyword) > 0 THEN 1
+          WHEN instr(lower(COALESCE(i.content, '')), @keyword) > 0 THEN 2
+          WHEN instr(lower(COALESCE(d.file_name, '')), @keyword) > 0 THEN 3
+          ELSE 4
+        END,
+        d.updated_at DESC, i.sort_order ASC, i.id ASC
+      LIMIT @limit OFFSET @offset
+      `).all({ keyword: lowerKeyword, limit: pageSize, offset: (currentPage - 1) * pageSize }) : [];
+      return { rows, total, currentPage };
+    })();
+
+    const createSnippet = (value) => {
+      const text = String(value || '').replace(/\s+/g, ' ').trim();
+      if (!text) return '';
+      const matchIndex = text.toLocaleLowerCase().indexOf(lowerKeyword);
+      if (matchIndex < 0) return text.slice(0, 180);
+      const contextLength = 180;
+      const start = Math.max(0, matchIndex - Math.floor((contextLength - normalizedKeyword.length) / 2));
+      const end = Math.min(text.length, start + contextLength);
+      return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`;
+    };
+
+    const items = rows.map((row) => {
+      const titleMatched = String(row.title || '').toLocaleLowerCase().includes(lowerKeyword);
+      const resumeMatched = String(row.resume || '').toLocaleLowerCase().includes(lowerKeyword);
+      const contentMatched = String(row.content || '').toLocaleLowerCase().includes(lowerKeyword);
+      const matchField = titleMatched ? 'title' : resumeMatched ? 'resume' : contentMatched ? 'content' : 'file_name';
+      const snippetSource = matchField === 'title'
+        ? row.title
+        : matchField === 'resume'
+          ? row.resume
+          : matchField === 'content'
+            ? row.content
+            : row.file_name;
+      return {
+        document_id: row.document_id,
+        folder_id: row.folder_id,
+        folder_name: row.folder_name,
+        file_name: row.file_name,
+        item_id: row.item_id,
+        title: row.title,
+        resume: row.resume,
+        snippet: createSnippet(snippetSource),
+        match_field: matchField,
+      };
+    });
+    return { items, total, page: currentPage, pageSize };
+  }
+
   function recoverInterruptedDocuments(activeDocumentIds = []) {
     const activeIds = new Set((Array.isArray(activeDocumentIds) ? activeDocumentIds : []).map((id) => String(id || '')).filter(Boolean));
     const legacyRows = db.prepare(`
@@ -1135,6 +1212,7 @@ function createKnowledgeBaseStore({ app, db }) {
     readItems,
     readAnalysis,
     getOutlineReferences,
+    search,
     resolvePath,
   };
 }
