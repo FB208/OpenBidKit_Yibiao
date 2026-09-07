@@ -763,26 +763,6 @@ function ExportFormatPage({
   const renderQuickSettings = () => (
     <>
       <div className="settings-list">
-        <label className="settings-row">
-          <div className="settings-row-copy">
-            <strong>版面预设</strong>
-            <span>快捷设置所有版面包括纸张、边距、标题、正文等</span>
-          </div>
-          <select value={selectedLayoutPresetId} onChange={(event) => handleApplyLayoutPreset(event.target.value)}>
-            <option value="" disabled>选择版面预设</option>
-            {EXPORT_LAYOUT_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
-          </select>
-        </label>
-        <label className="settings-row">
-          <div className="settings-row-copy">
-            <strong>主题预设</strong>
-            <span>未开章节页框时，经典文字只改表格色；装饰页眉页脚会同步改色条和强调色。</span>
-          </div>
-          <select value={selectedThemePresetId} onChange={(event) => handleApplyThemePreset(event.target.value)}>
-            <option value="" disabled>选择主题预设</option>
-            {EXPORT_THEME_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
-          </select>
-        </label>
         {mode === 'create' ? (
           <form
             className="settings-row export-template-name-row"
@@ -792,8 +772,7 @@ function ExportFormatPage({
             }}
           >
             <div className="settings-row-copy">
-              <strong>设置模板名称</strong>
-              <span>默认按 yibiao-YYYY-MM-DD-HHmmss 格式生成，保存后显示在“我的模板”中。</span>
+              <strong>模版名称</strong>
             </div>
             <div className="input-with-action export-template-name-control">
               <input
@@ -808,6 +787,24 @@ function ExportFormatPage({
             </div>
           </form>
         ) : null}
+        <label className="settings-row">
+          <div className="settings-row-copy">
+            <strong>版面预设</strong>
+          </div>
+          <select value={selectedLayoutPresetId} onChange={(event) => handleApplyLayoutPreset(event.target.value)}>
+            <option value="" disabled>选择版面预设</option>
+            {EXPORT_LAYOUT_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+          </select>
+        </label>
+        <label className="settings-row">
+          <div className="settings-row-copy">
+            <strong>主题预设</strong>
+          </div>
+          <select value={selectedThemePresetId} onChange={(event) => handleApplyThemePreset(event.target.value)}>
+            <option value="" disabled>选择主题预设</option>
+            {EXPORT_THEME_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+          </select>
+        </label>
       </div>
       <div className="export-format-preset-panel">
         <div className="export-format-preset-panel-head">
