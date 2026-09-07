@@ -11,6 +11,7 @@ const {
   getBundledOpenXmlHelperPath,
   getWorkspaceDir,
 } = require('../utils/paths.cjs');
+const { buildChromeAssets, pruneChromeAssets } = require('./chromeAssetService.cjs');
 
 const SIGNAL_VERSION = 1;
 const PING_TIMEOUT_MS = 15000;
@@ -530,9 +531,30 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
   /** 执行一次样张生成任务；同配置的多个预览实例共用上层缓存。 */
   async function createRestrictedHtmlDocx(html, exportFormat) {
     const assetRoot = await syncPreviewAssets();
+    // 页眉页脚装饰：SVG 栅格化成 PNG 落工作区，C# 侧嵌成锚定浮动图。
+    // 段落底纹画不出渐变和斜切，装饰必须走图片。
+    const chrome = await buildChromeAssets(app, exportFormat?.page);
+    pruneChromeAssets(app, [chrome.header, chrome.footer]);
     const result = await previewRunner.runJob({
       action: 'render-restricted-html-docx',
-      request: { html, export_format: exportFormat, asset_root: assetRoot },
+      request: {
+        html,
+        export_format: exportFormat,
+        asset_root: assetRoot,
+        chrome_assets: {
+          root: chrome.assetRoot,
+          header: chrome.header,
+          footer: chrome.footer,
+          header_height_cm: chrome.layout.headerHeightCm,
+          footer_height_cm: chrome.layout.footerHeightCm,
+          footer_top_cm: chrome.layout.footerTopCm,
+          footer_distance_cm: chrome.layout.footerDistanceCm,
+          header_distance_cm: chrome.layout.headerDistanceCm,
+          margin_top_cm: chrome.layout.marginTopCm,
+          margin_bottom_cm: chrome.layout.marginBottomCm,
+          text_layout: chrome.textLayout,
+        },
+      },
       timeoutMs: TEMPLATE_PREVIEW_TIMEOUT_MS,
     });
 
@@ -568,6 +590,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     ping,
     runJob: runner.runJob,
     renderRestrictedHtmlDocx,
+    createRestrictedHtmlDocx,
     close,
   };
 }

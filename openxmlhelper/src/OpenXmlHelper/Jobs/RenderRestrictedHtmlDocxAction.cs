@@ -16,6 +16,10 @@ sealed class RenderRestrictedHtmlDocxRequest
 
     [JsonPropertyName("export_format")]
     public JsonElement ExportFormat { get; set; }
+
+    /// <summary>页眉页脚装饰图与文字层描述，由渲染进程的共享 SVG 生成器产出。</summary>
+    [JsonPropertyName("chrome_assets")]
+    public JsonElement ChromeAssets { get; set; }
 }
 
 /// <summary>把受限 HTML 按导出模板配置生成一份新的 Word 文档。</summary>
@@ -56,12 +60,16 @@ static class RenderRestrictedHtmlDocxAction
                 return JobResult.Fail($"配图目录不存在：{request.AssetRoot}");
             }
 
+            // 页眉页脚装饰图与配图分开存放：装饰随配置变化，配图在多次预览之间不变。
+            var chrome = ChromeAssets.From(workspace, request.ChromeAssets);
+
             var outputPath = Path.Combine(jobDirectory, outputName);
             var rendered = RestrictedHtmlDocumentRenderer.Render(
                 assetRoot,
                 outputPath,
                 request.Html,
-                request.ExportFormat);
+                request.ExportFormat,
+                chrome);
             var result = JobResult.Success(Name, outputName, rendered.BlockCount);
             result.ParagraphRoles = rendered.ParagraphRoles;
             return result;

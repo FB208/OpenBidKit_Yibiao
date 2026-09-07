@@ -4,6 +4,10 @@ using AngleSharp.Dom;
 using AngleSharp.Html.Parser;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using A = DocumentFormat.OpenXml.Drawing;
+using DW = DocumentFormat.OpenXml.Drawing.Wordprocessing;
+using PIC = DocumentFormat.OpenXml.Drawing.Pictures;
+using Wps = DocumentFormat.OpenXml.Office2010.Word.DrawingShape;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -57,15 +61,21 @@ static class RestrictedHtmlDocumentRenderer
     public readonly record struct RenderResult(int BlockCount, IReadOnlyList<string> ParagraphRoles);
 
     /// <summary>新建骨架、直接写入 HTML 正文，再统一应用模板格式。</summary>
-    public static RenderResult Render(string assetRoot, string outputPath, string html, JsonElement exportFormat)
+    public static RenderResult Render(
+        string assetRoot,
+        string outputPath,
+        string html,
+        JsonElement exportFormat,
+        ChromeAssets? chrome = null)
     {
+        chrome ??= ChromeAssets.Empty;
         var format = new FormatReader(exportFormat);
         var prepared = PrepareHtml(html, format);
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         if (File.Exists(outputPath)) File.Delete(outputPath);
 
         using var document = WordprocessingDocument.Create(outputPath, WordprocessingDocumentType.Document);
-        CreateSkeleton(document, format);
+        CreateSkeleton(document, format, chrome);
         var mainPart = document.MainDocumentPart!;
         // 样张是临时派生文件；完整校验仍由正式正文插入路径负责。
         var blockCount = RestrictedHtmlWordInserter.InsertIntoContent(
@@ -185,13 +195,13 @@ static class RestrictedHtmlDocumentRenderer
     }
 
     /// <summary>创建包含页面、样式、页眉页脚的空白文档。</summary>
-    static void CreateSkeleton(WordprocessingDocument document, FormatReader format)
+    static void CreateSkeleton(WordprocessingDocument document, FormatReader format, ChromeAssets chrome)
     {
         var mainPart = document.AddMainDocumentPart();
         AddStyles(mainPart, format);
         AddDocumentSettings(mainPart);
 
-        var section = CreateSectionProperties(mainPart, format);
+        var section = CreateSectionProperties(mainPart, format, chrome);
         mainPart.Document = new Wp.Document(new Wp.Body(section));
         mainPart.Document.Save();
     }
@@ -204,10 +214,8 @@ static class RestrictedHtmlDocumentRenderer
         var styles = new Wp.Styles(
             new Wp.Style(
                 new Wp.StyleName { Val = "Normal" },
-                new Wp.StyleParagraphProperties(CreateSpacing(
-                    format.Number(body, "spacing_before_pt", 0),
-                    format.Number(body, "spacing_after_pt", 0),
-                    format.Number(body, "line_spacing_multiple", 1.2))),
+                // 正文逐段应用间距；Normal 不携带行单位，避免标题、图注和表格继承正文段间距。
+                new Wp.StyleParagraphProperties(CreateSpacing(0, 0, 1)),
                 CreateStyleRunProperties(
                     format.Text(body, "font", "宋体"),
                     FontHalfPoints(format.Text(body, "size", "小四")),
@@ -257,7 +265,10 @@ static class RestrictedHtmlDocumentRenderer
     }
 
     /// <summary>按模板构造页面尺寸、边距、分栏及页眉页脚引用。</summary>
-    static Wp.SectionProperties CreateSectionProperties(MainDocumentPart mainPart, FormatReader format)
+    static Wp.SectionProperties CreateSectionProperties(
+        MainDocumentPart mainPart,
+        FormatReader format,
+        ChromeAssets chrome)
     {
         var page = format.Section("page");
         var paper = PaperSizes.TryGetValue(format.Text(page, "paper_size", "a4"), out var found)
@@ -268,8 +279,8 @@ static class RestrictedHtmlDocumentRenderer
         var height = MmToTwips(landscape ? paper.Width : paper.Height);
         var section = new Wp.SectionProperties();
 
-        AddHeaderReferences(mainPart, section, format);
-        AddFooterReferences(mainPart, section, format);
+        AddHeaderReferences(mainPart, section, format, chrome);
+        AddFooterReferences(mainPart, section, format, chrome);
         section.Append(
             new Wp.PageSize
             {
@@ -279,12 +290,19 @@ static class RestrictedHtmlDocumentRenderer
             },
             new Wp.PageMargin
             {
-                Top = CmToTwips(format.Number(page, "margin_top_cm", 2)),
-                Bottom = CmToTwips(format.Number(page, "margin_bottom_cm", 2)),
+                // 有装饰时用共享模块算好的边距（已让开装饰带），否则用配置值。
+                Top = CmToTwips(chrome.HasLayout
+                    ? chrome.MarginTopCm
+                    : format.Number(page, "margin_top_cm", 2)),
+                Bottom = CmToTwips(chrome.HasLayout
+                    ? chrome.MarginBottomCm
+                    : format.Number(page, "margin_bottom_cm", 2)),
                 Left = (uint)CmToTwips(format.Number(page, "margin_left_cm", 2)),
                 Right = (uint)CmToTwips(format.Number(page, "margin_right_cm", 2)),
-                Header = (uint)CmToTwips(1.25),
-                Footer = (uint)CmToTwips(format.Number(page, "footer_distance_cm", 1.75)),
+                // 页眉：有装饰时贴顶（文字由浮动文本框定位），plain 走普通段落流用 1.25cm。
+                // 页脚文字与浮动装饰使用共享布局中的距底边距离。
+                Header = (uint)CmToTwips(chrome.HasLayout ? chrome.HeaderDistanceCm : 1.25),
+                Footer = (uint)CmToTwips(chrome.FooterDistanceCm),
                 Gutter = 0U,
             });
         if (format.Bool(page, "page_number_enabled", false))
@@ -306,13 +324,14 @@ static class RestrictedHtmlDocumentRenderer
     static void AddHeaderReferences(
         MainDocumentPart mainPart,
         Wp.SectionProperties section,
-        FormatReader format)
+        FormatReader format,
+        ChromeAssets chrome)
     {
         var page = format.Section("page");
         if (!format.Bool(page, "header_enabled", false)) return;
 
         var headerPart = mainPart.AddNewPart<HeaderPart>();
-        headerPart.Header = new Wp.Header(CreateHeaderParagraph(format));
+        headerPart.Header = new Wp.Header(CreateHeaderContent(format, chrome, headerPart));
         headerPart.Header.Save();
         section.AppendChild(new Wp.HeaderReference
         {
@@ -331,19 +350,19 @@ static class RestrictedHtmlDocumentRenderer
         });
     }
 
-    /// <summary>创建默认页脚；页码和页脚文字共用同一段落。</summary>
+    /// <summary>创建默认页脚；装饰样式分别承载页码和正文区域。</summary>
     static void AddFooterReferences(
         MainDocumentPart mainPart,
         Wp.SectionProperties section,
-        FormatReader format)
+        FormatReader format,
+        ChromeAssets chrome)
     {
         var page = format.Section("page");
-        var footerEnabled = format.Bool(page, "footer_enabled", false);
-        var pageNumberEnabled = format.Bool(page, "page_number_enabled", false);
-        if (!footerEnabled && !pageNumberEnabled) return;
+        if (!format.Bool(page, "footer_enabled", false)
+            && !format.Bool(page, "page_number_enabled", false)) return;
 
         var footerPart = mainPart.AddNewPart<FooterPart>();
-        footerPart.Footer = new Wp.Footer(CreateFooterParagraph(format));
+        footerPart.Footer = new Wp.Footer(CreateFooterContent(format, chrome, footerPart));
         footerPart.Footer.Save();
         section.AppendChild(new Wp.FooterReference
         {
@@ -362,124 +381,341 @@ static class RestrictedHtmlDocumentRenderer
         });
     }
 
-    /// <summary>使用 Word 原生底纹与边框呈现各类页眉样式。</summary>
-    static Wp.Paragraph CreateHeaderParagraph(FormatReader format)
+    /// <summary>
+    /// 页眉/页脚里的满页宽装饰图。
+    ///
+    /// 相对纸张定位、置于文字之下、不参与环绕 —— 这是 Word 做水印和信纸底图的标准做法，
+    /// 装饰因此可以出血到页边之外，不受正文栏宽约束，也不占文档流高度。
+    /// 段落底纹只能画矩形，渐变和斜切必须走图片。
+    /// </summary>
+    static Wp.Run CreateAnchoredPicture(
+        OpenXmlPartContainer container,
+        string imagePath,
+        uint drawingId,
+        string name,
+        double widthCm,
+        double heightCm,
+        double xCm,
+        double yCm,
+        uint zIndex)
     {
-        var page = format.Section("page");
-        var style = NormalizeChromeStyle(format.Text(page, "header_footer_style", "plain"));
-        var bar = Color(format.Text(page, "chrome_bar_color", "#e8eef5"), "E8EEF5");
-        var accent = Color(format.Text(page, "chrome_accent_color", "#536176"), "536176");
-        var textColor = style switch
+        // 页眉和页脚各自持有 ImagePart，关系 ID 不能跨部件复用。
+        var imagePart = container switch
         {
-            "band" or "slant" => ContrastColor(bar),
-            "top-bar" => ContrastColor(accent),
-            _ => Color(format.Text(page, "header_color", "#536176"), "536176"),
+            HeaderPart header => header.AddImagePart(ImagePartType.Png),
+            FooterPart footer => footer.AddImagePart(ImagePartType.Png),
+            _ => throw new InvalidOperationException("装饰图只能挂在页眉或页脚部件上"),
         };
-        var text = format.Text(page, "header_text", "").Trim();
-        var badge = format.Text(page, "header_badge_text", "").Trim();
-        if (badge.Length > 4) badge = badge[..4];
-        if (badge.Length > 0 && style != "plain") text = $"{badge}    {text}";
+        using (var stream = File.OpenRead(imagePath))
+        {
+            imagePart.FeedData(stream);
+        }
+        var relationshipId = container.GetIdOfPart(imagePart);
 
-        var properties = new Wp.ParagraphProperties(
-            new Wp.SpacingBetweenLines { Before = "0", After = "80", Line = "240", LineRule = Wp.LineSpacingRuleValues.Auto },
-            new Wp.Justification { Val = Alignment(format.Text(page, "header_alignment", "居中对齐")) });
-        ApplyChrome(properties, style, bar, accent, top: false);
-        return new Wp.Paragraph(
-            properties,
-            CreateRun(
-                text,
-                format.Text(page, "header_font", "宋体"),
-                FontHalfPoints(format.Text(page, "header_size", "小五")),
-                textColor,
-                style is "band" or "top-bar" or "slant",
-                false));
+        var extent = new DW.Extent { Cx = CmToEmu(widthCm), Cy = CmToEmu(heightCm) };
+        var picture = new PIC.Picture(
+            new PIC.NonVisualPictureProperties(
+                new PIC.NonVisualDrawingProperties { Id = drawingId, Name = name },
+                new PIC.NonVisualPictureDrawingProperties()),
+            new PIC.BlipFill(
+                new A.Blip { Embed = relationshipId, CompressionState = A.BlipCompressionValues.Print },
+                new A.Stretch(new A.FillRectangle())),
+            new PIC.ShapeProperties(
+                new A.Transform2D(
+                    new A.Offset { X = 0L, Y = 0L },
+                    new A.Extents { Cx = extent.Cx, Cy = extent.Cy }),
+                new A.PresetGeometry(new A.AdjustValueList()) { Preset = A.ShapeTypeValues.Rectangle }));
+
+        // 子元素顺序由 schema 强制：
+        // simplePos -> positionH -> positionV -> extent -> effectExtent -> wrap -> docPr -> cNvGraphicFramePr -> graphic
+        var anchor = new DW.Anchor(
+            new DW.SimplePosition { X = 0L, Y = 0L },
+            new DW.HorizontalPosition(new DW.PositionOffset(CmToEmu(xCm).ToString(CultureInfo.InvariantCulture)))
+            { RelativeFrom = DW.HorizontalRelativePositionValues.Page },
+            new DW.VerticalPosition(new DW.PositionOffset(CmToEmu(yCm).ToString(CultureInfo.InvariantCulture)))
+            { RelativeFrom = DW.VerticalRelativePositionValues.Page },
+            extent,
+            new DW.EffectExtent { LeftEdge = 0L, TopEdge = 0L, RightEdge = 0L, BottomEdge = 0L },
+            new DW.WrapNone(),
+            new DW.DocProperties { Id = drawingId, Name = name },
+            new DW.NonVisualGraphicFrameDrawingProperties(new A.GraphicFrameLocks { NoChangeAspect = true }),
+            new A.Graphic(new A.GraphicData(picture)
+            { Uri = "http://schemas.openxmlformats.org/drawingml/2006/picture" }))
+        {
+            DistanceFromTop = 0U,
+            DistanceFromBottom = 0U,
+            DistanceFromLeft = 0U,
+            DistanceFromRight = 0U,
+            SimplePos = false,
+            RelativeHeight = zIndex,
+            BehindDoc = true,
+            Locked = false,
+            LayoutInCell = true,
+            AllowOverlap = true,
+        };
+        return new Wp.Run(new Wp.Drawing(anchor));
     }
 
-    /// <summary>创建带可刷新 PAGE 域的页脚段落。</summary>
-    static Wp.Paragraph CreateFooterParagraph(FormatReader format)
+    /// <summary>页眉页脚文字块的基础段落：零间距、单倍行距，对齐由调用方给定。</summary>
+    static Wp.Paragraph CreateChromeParagraph(string alignment)
+    {
+        return new Wp.Paragraph(new Wp.ParagraphProperties(
+            new Wp.SpacingBetweenLines { Before = "0", After = "0", Line = "240", LineRule = Wp.LineSpacingRuleValues.Auto },
+            new Wp.Justification { Val = Alignment(alignment) }));
+    }
+
+    /// <summary>
+    /// 把一段文字放进锚定浮动文本框，相对纸张绝对定位。
+    ///
+    /// 用文本框而不是浮动表格或段落框架：后两者的 tblpPr / framePr 定位在
+    /// docx-editor.dev 里不生效（实测水平偏移被完全忽略），只有 wp:anchor
+    /// 是精确的 —— 和装饰图共用同一套定位机制，两者才能对齐。
+    /// 文本框透明无边框，文字仍是可编辑、可搜索的原生 run。
+    /// </summary>
+    static Wp.Run CreateChromeTextBox(ChromeTextBox box, Wp.Paragraph paragraph, uint drawingId, string name)
+    {
+        var widthCm = Math.Max(0.1, box.EndCm - box.StartCm);
+        var heightCm = Math.Max(0.1, box.HeightCm);
+        var extent = new DW.Extent { Cx = CmToEmu(widthCm), Cy = CmToEmu(heightCm) };
+
+        var shape = new Wps.WordprocessingShape(
+            new Wps.NonVisualDrawingShapeProperties { TextBox = true },
+            new Wps.ShapeProperties(
+                new A.Transform2D(
+                    new A.Offset { X = 0L, Y = 0L },
+                    new A.Extents { Cx = extent.Cx, Cy = extent.Cy }),
+                new A.PresetGeometry(new A.AdjustValueList()) { Preset = A.ShapeTypeValues.Rectangle },
+                new A.NoFill()),
+            new Wps.TextBoxInfo2(new Wp.TextBoxContent(paragraph)),
+            // anchor=ctr 让文字在框内垂直居中；四边内边距清零，位置完全由 box 决定
+            new Wps.TextBodyProperties
+            {
+                Rotation = 0,
+                Anchor = A.TextAnchoringTypeValues.Center,
+                LeftInset = 0,
+                TopInset = 0,
+                RightInset = 0,
+                BottomInset = 0,
+            });
+
+        var anchor = new DW.Anchor(
+            new DW.SimplePosition { X = 0L, Y = 0L },
+            new DW.HorizontalPosition(new DW.PositionOffset(CmToEmu(box.StartCm).ToString(CultureInfo.InvariantCulture)))
+            { RelativeFrom = DW.HorizontalRelativePositionValues.Page },
+            new DW.VerticalPosition(new DW.PositionOffset(CmToEmu(box.TopCm).ToString(CultureInfo.InvariantCulture)))
+            { RelativeFrom = DW.VerticalRelativePositionValues.Page },
+            extent,
+            new DW.EffectExtent { LeftEdge = 0L, TopEdge = 0L, RightEdge = 0L, BottomEdge = 0L },
+            new DW.WrapNone(),
+            new DW.DocProperties { Id = drawingId, Name = name },
+            new DW.NonVisualGraphicFrameDrawingProperties(),
+            new A.Graphic(new A.GraphicData(shape)
+            { Uri = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape" }))
+        {
+            DistanceFromTop = 0U,
+            DistanceFromBottom = 0U,
+            DistanceFromLeft = 0U,
+            DistanceFromRight = 0U,
+            SimplePos = false,
+            RelativeHeight = drawingId,
+            // 文字要压在装饰之上，不能置于文字层下方
+            BehindDoc = false,
+            Locked = false,
+            LayoutInCell = true,
+            AllowOverlap = true,
+        };
+        return new Wp.Run(new Wp.Drawing(anchor));
+    }
+
+    /// <summary>浮动表格锚点和末尾必需段落，仅占 1 twip，可同时承载装饰底图。</summary>
+    static Wp.Paragraph CreateChromeAnchor(IEnumerable<OpenXmlElement>? children = null)
+    {
+        var paragraph = CreateChromeParagraph("左对齐");
+        SetSingleChild(paragraph.ParagraphProperties!, new Wp.SpacingBetweenLines
+        {
+            Before = "0", After = "0", Line = "1", LineRule = Wp.LineSpacingRuleValues.Exact,
+        });
+        if (children is not null) paragraph.Append(children);
+        paragraph.AppendChild(new Wp.Run(new Wp.RunProperties(new Wp.FontSize { Val = "1" }), new Wp.Text("")));
+        return paragraph;
+    }
+
+    /// <summary>按样式分区排版页眉标题和短标记，普通页眉保持段落排版。</summary>
+    static IEnumerable<OpenXmlElement> CreateHeaderContent(FormatReader format, ChromeAssets chrome, HeaderPart headerPart)
     {
         var page = format.Section("page");
-        var style = NormalizeChromeStyle(format.Text(page, "header_footer_style", "plain"));
-        var bar = Color(format.Text(page, "chrome_bar_color", "#e8eef5"), "E8EEF5");
-        var accent = Color(format.Text(page, "chrome_accent_color", "#536176"), "536176");
-        var textColor = style switch
+        var text = format.Text(page, "header_text", "").Trim();
+        // 短标记只有 band 样式用得上（前端输入框也只在 band 下显示），
+        // 其余样式不得把它并进正文，否则切换样式后会多出改不掉的文字。
+        var badge = format.Text(page, "header_badge_text", "").Trim();
+        if (badge.Length > 4) badge = badge[..4];
+
+        var layout = chrome.HeaderText;
+        var color = layout is not null && layout.Color.Length > 0
+            ? Color(layout.Color, "536176")
+            : Color(format.Text(page, "header_color", "#536176"), "536176");
+        var bold = layout?.Bold ?? false;
+        var alignment = layout is not null && layout.Align.Length > 0
+            ? layout.Align
+            : format.Text(page, "header_alignment", "居中对齐");
+
+        var paragraph = CreateChromeParagraph(alignment);
+        var decoration = new List<OpenXmlElement>();
+        if (chrome.HasHeaderImage)
         {
-            "band" or "slant" => ContrastColor(bar),
-            "top-bar" or "footer-badge" => ContrastColor(accent),
-            _ => Color(format.Text(page, "footer_color", "#536176"), "536176"),
-        };
+            decoration.Add(CreateAnchoredPicture(
+                headerPart,
+                chrome.HeaderImagePath,
+                901U,
+                "HeaderDecoration",
+                ResolvePaperSize(format).Width,
+                chrome.HeaderHeightCm,
+                0,
+                0,
+                10U));
+        }
+
+        var font = format.Text(page, "header_font", "宋体");
+        var size = FontHalfPoints(format.Text(page, "header_size", "小五"));
+        paragraph.AppendChild(CreateRun(text, font, size, color, bold, false));
+        if (layout?.Box is { } box)
+        {
+            // 装饰与各文字块都是浮动对象，全部挂在同一个 1 twip 高的段落上，
+            // 页眉区因此不被撑高，位置完全由各自的 anchor 决定。
+            var floats = new List<OpenXmlElement>(decoration);
+            if (layout.Badge?.Box is { } badgeBox && badge.Length > 0)
+            {
+                var badgeParagraph = CreateChromeParagraph(layout.Badge.Align);
+                badgeParagraph.AppendChild(CreateRun(
+                    badge, font, size, Color(layout.Badge.Color, "FFFFFF"), layout.Badge.Bold, false));
+                floats.Add(CreateChromeTextBox(badgeBox, badgeParagraph, 911U, "HeaderBadgeText"));
+            }
+            floats.Add(CreateChromeTextBox(box, paragraph, 912U, "HeaderText"));
+            return [CreateChromeAnchor(floats)];
+        }
+        paragraph.Append(decoration);
+        return [paragraph];
+    }
+
+    /// <summary>页脚：装饰走锚定图，文字与 PAGE 域仍是原生 run；页码底色用 run 级底纹自动贴合宽度。</summary>
+    static IEnumerable<OpenXmlElement> CreateFooterContent(FormatReader format, ChromeAssets chrome, FooterPart footerPart)
+    {
+        var page = format.Section("page");
+        var layout = chrome.FooterText;
+
         var font = format.Text(page, "footer_font", "宋体");
         var size = FontHalfPoints(format.Text(page, "footer_size", "小五"));
-        var properties = new Wp.ParagraphProperties(
-            new Wp.SpacingBetweenLines { Before = "80", After = "0", Line = "240", LineRule = Wp.LineSpacingRuleValues.Auto },
-            new Wp.Justification { Val = Alignment(format.Text(page, "footer_alignment", "居中对齐")) });
-        ApplyChrome(properties, style, bar, accent, top: true);
-        var paragraph = new Wp.Paragraph(properties);
+        var textColor = layout is not null && layout.Color.Length > 0
+            ? Color(layout.Color, "536176")
+            : Color(format.Text(page, "footer_color", "#536176"), "536176");
 
-        if (format.Bool(page, "footer_enabled", false))
+        var paragraph = CreateChromeParagraph(layout?.Align ?? format.Text(page, "footer_alignment", "居中对齐"));
+        var pageParagraph = CreateChromeParagraph(layout?.PageNumberAlign ?? "居中对齐");
+        var decoration = new List<OpenXmlElement>();
+        if (chrome.HasFooterImage)
+        {
+            decoration.Add(CreateAnchoredPicture(
+                footerPart,
+                chrome.FooterImagePath,
+                902U,
+                "FooterDecoration",
+                ResolvePaperSize(format).Width,
+                chrome.FooterHeightCm,
+                0,
+                chrome.FooterTopCm,
+                20U));
+        }
+
+        var footerEnabled = format.Bool(page, "footer_enabled", false);
+        var pageNumberEnabled = format.Bool(page, "page_number_enabled", false);
+
+        if (footerEnabled)
         {
             var footerText = format.Text(page, "footer_text", "").Trim();
-            if (footerText.Length > 0) paragraph.AppendChild(CreateRun(footerText, font, size, textColor, false, false));
+            if (footerText.Length > 0)
+            {
+                paragraph.AppendChild(CreateRun(footerText, font, size, textColor, false, false));
+            }
         }
-        if (format.Bool(page, "footer_enabled", false) && format.Bool(page, "page_number_enabled", false))
+        if (pageNumberEnabled)
         {
-            paragraph.AppendChild(CreateRun("    ", font, size, textColor, false, false));
-        }
-        if (format.Bool(page, "page_number_enabled", false))
-        {
+            var pageColor = layout is not null && layout.PageNumberColor.Length > 0
+                ? Color(layout.PageNumberColor, "536176")
+                : textColor;
             AppendPageNumber(
-                paragraph,
+                pageParagraph,
                 format.Text(page, "page_number_format", "第{page}页"),
                 format.Integer(page, "page_number_pad", 0),
                 font,
                 size,
-                textColor);
-        }
-        if (!paragraph.Elements<Wp.Run>().Any()) paragraph.AppendChild(new Wp.Run(new Wp.Text("")));
-        return paragraph;
-    }
+                pageColor,
+                layout?.PageNumberBold ?? false);
 
-    /// <summary>按当前装饰主题为页眉页脚段落增加底纹或分隔线。</summary>
-    static void ApplyChrome(Wp.ParagraphProperties properties, string style, string bar, string accent, bool top)
-    {
-        var anchor = properties.GetFirstChild<Wp.SpacingBetweenLines>();
-        if (style == "band")
-        {
-            InsertBefore(properties, new Wp.Shading { Val = Wp.ShadingPatternValues.Clear, Fill = bar }, anchor);
-            return;
+            // 页码文字沿用原生 run 底纹，和所在区域的装饰底色叠加。
+            var shading = layout?.PageNumberShading ?? "";
+            if (shading.Length > 0)
+            {
+                var fill = Color(shading, "536176");
+                foreach (var run in pageParagraph.Elements<Wp.Run>())
+                {
+                    // w:rPr 子元素顺序由 schema 强制，shd 排在 sz/szCs 之后
+                    run.RunProperties?.AppendChild(new Wp.Shading
+                    {
+                        Val = Wp.ShadingPatternValues.Clear,
+                        Color = "auto",
+                        Fill = fill,
+                    });
+                }
+            }
         }
-        if (style == "top-bar")
+        if (layout?.Box is { } box)
         {
-            InsertBefore(properties, CreateHorizontalBorders(accent, top ? 14U : 6U, top ? 6U : 14U), anchor);
-            InsertBefore(properties, new Wp.Shading { Val = Wp.ShadingPatternValues.Clear, Fill = accent }, anchor);
-            return;
+            // 收集所有浮动对象，最后统一挂到一个 1 twip 高的段落上
+            var blocks = new List<OpenXmlElement>();
+            if (layout.PageNumberBox is { } pageBox)
+            {
+                // 分区样式：正文与页码各占一块，页码块对准装饰里的色块
+                if (paragraph.Elements<Wp.Run>().Any())
+                {
+                    blocks.Add(CreateChromeTextBox(box, paragraph, 921U, "FooterText"));
+                }
+                if (pageNumberEnabled)
+                {
+                    blocks.Add(CreateChromeTextBox(pageBox, pageParagraph, 922U, "FooterPageNumber"));
+                }
+            }
+            else
+            {
+                // 不分区（rules）：正文与页码合排在同一块里，保持原来的居中一行
+                if (paragraph.Elements<Wp.Run>().Any() && pageNumberEnabled)
+                {
+                    paragraph.AppendChild(CreateRun("    ", font, size, textColor, false, false));
+                }
+                foreach (var run in pageParagraph.Elements<Wp.Run>().ToArray())
+                {
+                    run.Remove();
+                    paragraph.AppendChild(run);
+                }
+                if (paragraph.Elements<Wp.Run>().Any())
+                {
+                    blocks.Add(CreateChromeTextBox(box, paragraph, 921U, "FooterText"));
+                }
+            }
+            blocks.InsertRange(0, decoration);
+            return [CreateChromeAnchor(blocks)];
         }
-        if (style == "slant")
+        if (paragraph.Elements<Wp.Run>().Any() && pageNumberEnabled)
         {
-            InsertBefore(properties, CreateSideBorder(accent, left: !top, size: 24), anchor);
-            InsertBefore(properties, new Wp.Shading { Val = Wp.ShadingPatternValues.Clear, Fill = bar }, anchor);
-            return;
+            paragraph.AppendChild(CreateRun("    ", font, size, textColor, false, false));
         }
-        if (style == "footer-badge")
+        foreach (var run in pageParagraph.Elements<Wp.Run>().ToArray())
         {
-            InsertBefore(properties, CreateHorizontalBorders(accent, top ? 12U : 0U, top ? 0U : 12U), anchor);
-            InsertBefore(properties, new Wp.Shading { Val = Wp.ShadingPatternValues.Clear, Fill = top ? accent : bar }, anchor);
-            return;
+            run.Remove();
+            paragraph.AppendChild(run);
         }
-        if (style == "letterhead")
-        {
-            InsertBefore(properties, CreateSideBorder(accent, left: !top, size: 20), anchor);
-            return;
-        }
-        if (style == "frame")
-        {
-            InsertBefore(properties, CreateParagraphBorders(accent, topOnly: false, sidesOnly: false, size: 8), anchor);
-            return;
-        }
-        if (style == "rules")
-        {
-            InsertBefore(properties, CreateHorizontalBorders(accent, top ? 12U : 5U, top ? 5U : 12U), anchor);
-        }
+        paragraph.Append(decoration);
+        if (!paragraph.Elements<Wp.Run>().Any()) paragraph.AppendChild(new Wp.Run(new Wp.Text("")));
+        return [paragraph];
     }
 
     /// <summary>把格式字符串中的 {page} 替换为 Word 页码域。</summary>
@@ -489,22 +725,23 @@ static class RestrictedHtmlDocumentRenderer
         int pad,
         string font,
         int size,
-        string color)
+        string color,
+        bool bold = false)
     {
         if (format.Length == 0) format = "第{page}页";
         var markerIndex = format.IndexOf("{page}", StringComparison.Ordinal);
         if (markerIndex < 0)
         {
-            paragraph.AppendChild(CreateRun(format, font, size, color, false, false));
+            paragraph.AppendChild(CreateRun(format, font, size, color, bold, false));
             return;
         }
         var prefix = format[..markerIndex];
         var suffix = format[(markerIndex + 6)..];
-        if (prefix.Length > 0) paragraph.AppendChild(CreateRun(prefix, font, size, color, false, false));
+        if (prefix.Length > 0) paragraph.AppendChild(CreateRun(prefix, font, size, color, bold, false));
 
-        paragraph.AppendChild(CreateFieldRun(Wp.FieldCharValues.Begin, font, size, color));
+        paragraph.AppendChild(CreateFieldRun(Wp.FieldCharValues.Begin, font, size, color, bold));
         var picture = pad > 0 ? $" \\# \"{new string('0', Math.Clamp(pad, 1, 6))}\"" : "";
-        var codeRun = CreateRun($" PAGE{picture} ", font, size, color, false, false);
+        var codeRun = CreateRun($" PAGE{picture} ", font, size, color, bold, false);
         var codeText = codeRun.GetFirstChild<Wp.Text>();
         if (codeText is not null)
         {
@@ -512,15 +749,15 @@ static class RestrictedHtmlDocumentRenderer
             codeRun.AppendChild(new Wp.FieldCode($" PAGE{picture} ") { Space = SpaceProcessingModeValues.Preserve });
         }
         paragraph.AppendChild(codeRun);
-        paragraph.AppendChild(CreateFieldRun(Wp.FieldCharValues.Separate, font, size, color));
-        paragraph.AppendChild(CreateRun(pad > 0 ? new string('0', Math.Clamp(pad, 1, 6)) : "1", font, size, color, false, false));
-        paragraph.AppendChild(CreateFieldRun(Wp.FieldCharValues.End, font, size, color));
-        if (suffix.Length > 0) paragraph.AppendChild(CreateRun(suffix, font, size, color, false, false));
+        paragraph.AppendChild(CreateFieldRun(Wp.FieldCharValues.Separate, font, size, color, bold));
+        paragraph.AppendChild(CreateRun(pad > 0 ? new string('0', Math.Clamp(pad, 1, 6)) : "1", font, size, color, bold, false));
+        paragraph.AppendChild(CreateFieldRun(Wp.FieldCharValues.End, font, size, color, bold));
+        if (suffix.Length > 0) paragraph.AppendChild(CreateRun(suffix, font, size, color, bold, false));
     }
 
-    static Wp.Run CreateFieldRun(Wp.FieldCharValues type, string font, int size, string color)
+    static Wp.Run CreateFieldRun(Wp.FieldCharValues type, string font, int size, string color, bool bold = false)
     {
-        var run = CreateRun("", font, size, color, false, false);
+        var run = CreateRun("", font, size, color, bold, false);
         run.RemoveAllChildren<Wp.Text>();
         run.AppendChild(new Wp.FieldChar { FieldCharType = type });
         return run;
@@ -640,9 +877,7 @@ static class RestrictedHtmlDocumentRenderer
         SetParagraphLayout(
             paragraph,
             Alignment(format.Text(body, "alignment", "左对齐")),
-            format.Number(body, "spacing_before_pt", 0),
-            format.Number(body, "spacing_after_pt", 0),
-            format.Number(body, "line_spacing_multiple", 1.2),
+            CreateBodySpacing(format),
             isList ? 0 : CharsToTwips(format.Number(body, "first_line_indent_chars", 2), halfPoints));
         ApplyRuns(paragraph, format.Text(body, "font", "宋体"), halfPoints, null, null, null);
     }
@@ -786,9 +1021,7 @@ static class RestrictedHtmlDocumentRenderer
             SetParagraphLayout(
                 paragraph,
                 Alignment(format.Text(style, "alignment", role == CellRole.Header ? "居中对齐" : "左对齐")),
-                0,
-                4,
-                format.Number(format.Section("body_text"), "line_spacing_multiple", 1.2),
+                CreateBodySpacing(format, tableCell: true),
                 paragraph.ParagraphProperties?.NumberingProperties is null ? 0 : -1);
             ApplyRuns(
                 paragraph,
@@ -891,9 +1124,19 @@ static class RestrictedHtmlDocumentRenderer
         double lineMultiple,
         int firstLineTwips)
     {
+        SetParagraphLayout(paragraph, alignment, CreateSpacing(beforePoints, afterPoints, lineMultiple), firstLineTwips);
+    }
+
+    /// <summary>复用段落布局逻辑，允许正文传入原生单位与行距规则。</summary>
+    static void SetParagraphLayout(
+        Wp.Paragraph paragraph,
+        Wp.JustificationValues alignment,
+        Wp.SpacingBetweenLines spacing,
+        int firstLineTwips)
+    {
         var properties = EnsureParagraphProperties(paragraph);
         SetSingleChild(properties, new Wp.Justification { Val = alignment });
-        SetSingleChild(properties, CreateSpacing(beforePoints, afterPoints, lineMultiple));
+        SetSingleChild(properties, spacing);
         if (firstLineTwips < 0) return;
         properties.RemoveAllChildren<Wp.Indentation>();
         if (firstLineTwips > 0)
@@ -993,6 +1236,46 @@ static class RestrictedHtmlDocumentRenderer
         return paragraph.ParagraphProperties ?? paragraph.PrependChild(new Wp.ParagraphProperties());
     }
 
+    /// <summary>按正文新协议生成间距；单元格只共享行距，保留段前 0、段后 4pt。</summary>
+    static Wp.SpacingBetweenLines CreateBodySpacing(FormatReader format, bool tableCell = false)
+    {
+        var body = format.Section("body_text");
+        var beforeInLines = !tableCell && format.Text(body, "spacing_before_unit", "lines") == "lines";
+        var afterInLines = !tableCell && format.Text(body, "spacing_after_unit", "lines") == "lines";
+        var before = tableCell ? 0 : format.Number(body, "spacing_before", 0);
+        var after = tableCell ? 4 : format.Number(body, "spacing_after", 0);
+        var mode = format.Text(body, "line_spacing_mode", "multiple");
+        var value = format.Number(body, "line_spacing_value", 1.2);
+        var line = mode switch
+        {
+            "single" => 240,
+            "one-and-half" => 360,
+            "double" => 480,
+            "at-least" or "exact" => value * 20,
+            _ => value * 240,
+        };
+        var spacing = new Wp.SpacingBetweenLines
+        {
+            // 行距只约束到最小原生单位，不用倍数下限抬高合法的固定值或最小值。
+            Line = Math.Max(1, (int)Math.Round(line)).ToString(CultureInfo.InvariantCulture),
+            LineRule = mode switch
+            {
+                "at-least" => Wp.LineSpacingRuleValues.AtLeast,
+                "exact" => Wp.LineSpacingRuleValues.Exact,
+                _ => Wp.LineSpacingRuleValues.Auto,
+            },
+        };
+        // 行单位按百分之一行写入，磅按 twips 写入；同侧不同时设置两种单位。
+        var beforeValue = Math.Max(0, (int)Math.Round(before * (beforeInLines ? 100 : 20)));
+        var afterValue = Math.Max(0, (int)Math.Round(after * (afterInLines ? 100 : 20)));
+        if (beforeInLines) spacing.BeforeLines = beforeValue;
+        else spacing.Before = beforeValue.ToString(CultureInfo.InvariantCulture);
+        if (afterInLines) spacing.AfterLines = afterValue;
+        else spacing.After = afterValue.ToString(CultureInfo.InvariantCulture);
+        return spacing;
+    }
+
+    /// <summary>保留标题、图注等非正文段落的磅值间距和倍数行距。</summary>
     static Wp.SpacingBetweenLines CreateSpacing(double beforePoints, double afterPoints, double lineMultiple)
     {
         return new Wp.SpacingBetweenLines
@@ -1122,51 +1405,6 @@ static class RestrictedHtmlDocumentRenderer
         return borders;
     }
 
-    static Wp.ParagraphBorders CreateHorizontalBorders(string color, uint topSize, uint bottomSize)
-    {
-        var borders = new Wp.ParagraphBorders();
-        if (topSize > 0)
-        {
-            borders.AppendChild(new Wp.TopBorder
-            {
-                Val = Wp.BorderValues.Single,
-                Color = color,
-                Size = topSize,
-                Space = 1U,
-            });
-        }
-        if (bottomSize > 0)
-        {
-            borders.AppendChild(new Wp.BottomBorder
-            {
-                Val = Wp.BorderValues.Single,
-                Color = color,
-                Size = bottomSize,
-                Space = 1U,
-            });
-        }
-        return borders;
-    }
-
-    static Wp.ParagraphBorders CreateSideBorder(string color, bool left, uint size)
-    {
-        return left
-            ? new Wp.ParagraphBorders(new Wp.LeftBorder
-            {
-                Val = Wp.BorderValues.Single,
-                Color = color,
-                Size = size,
-                Space = 3U,
-            })
-            : new Wp.ParagraphBorders(new Wp.RightBorder
-            {
-                Val = Wp.BorderValues.Single,
-                Color = color,
-                Size = size,
-                Space = 3U,
-            });
-    }
-
     static void InsertBefore<T>(OpenXmlCompositeElement parent, T child, OpenXmlElement? anchor)
         where T : OpenXmlElement
     {
@@ -1207,30 +1445,12 @@ static class RestrictedHtmlDocumentRenderer
         };
     }
 
-    static string NormalizeChromeStyle(string value)
-    {
-        if (value == "spine") return "letterhead";
-        if (value == "seal") return "frame";
-        return value is "band" or "rules" or "top-bar" or "footer-badge" or "slant" or "letterhead" or "frame"
-            ? value
-            : "plain";
-    }
-
     static string Color(string value, string fallback)
     {
         var normalized = (value ?? "").Trim().TrimStart('#');
         return normalized.Length == 6 && normalized.All(Uri.IsHexDigit)
             ? normalized.ToUpperInvariant()
             : fallback;
-    }
-
-    static string ContrastColor(string color)
-    {
-        if (color.Length != 6) return "FFFFFF";
-        var red = int.Parse(color[..2], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-        var green = int.Parse(color[2..4], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-        var blue = int.Parse(color[4..], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-        return (red * 299 + green * 587 + blue * 114) / 1000 < 160 ? "FFFFFF" : "111111";
     }
 
     static int FontHalfPoints(string size)
@@ -1244,6 +1464,24 @@ static class RestrictedHtmlDocumentRenderer
     }
 
     static int CmToTwips(double value) => Math.Max(0, (int)Math.Round(value * 567));
+
+    /// <summary>不钳制符号的 cm→twips。装饰上的文字要贴到页边，缩进必须能取负值。</summary>
+    static int CmToTwipsSigned(double value) => (int)Math.Round(value * 567);
+
+    static long CmToEmu(double value) => (long)Math.Round(value * 360000);
+
+    /// <summary>纸张尺寸，单位 cm，已按横纵向交换。</summary>
+    static (double Width, double Height) ResolvePaperSize(FormatReader format)
+    {
+        var page = format.Section("page");
+        var paper = PaperSizes.TryGetValue(format.Text(page, "paper_size", "a4"), out var found)
+            ? found
+            : PaperSizes["a4"];
+        var landscape = format.Text(page, "orientation", "portrait") == "landscape";
+        return landscape
+            ? (paper.Height / 10.0, paper.Width / 10.0)
+            : (paper.Width / 10.0, paper.Height / 10.0);
+    }
     static int MmToTwips(double value) => Math.Max(1, (int)Math.Round(value * 56.7));
 
     /// <summary>按模板占位符将标题层级计数格式化为显示编号。</summary>

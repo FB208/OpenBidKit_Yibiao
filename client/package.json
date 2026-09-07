@@ -12,7 +12,7 @@
     "dist": "npm run build && node scripts/prepare-openxml-helper.cjs && electron-builder",
     "dist:win": "npm run build && node scripts/prepare-openxml-helper.cjs --platform win32 --arch x64 && electron-builder --win",
     "dist:mac": "npm run build && node scripts/prepare-openxml-helper.cjs --platform darwin --arch all && electron-builder --mac",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "node scripts/patch-docx-line-spacing.cjs && electron-builder install-app-deps",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "generate-build-attestation": "node scripts/generate-build-attestation.cjs",
     "prepare-agent-tools": "node scripts/prepare-agent-tools.cjs",

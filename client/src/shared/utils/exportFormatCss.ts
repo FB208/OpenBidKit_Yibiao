@@ -121,7 +121,7 @@ function chromeFromEdgeCm(page: PageSetupConfig): number {
 }
 
 function footerDistanceCm(page: PageSetupConfig): number {
-  return Math.max(0, page.footer_distance_cm ?? 1.75);
+  return Math.max(0, page.footer_distance_cm ?? 0);
 }
 
 function decorativeFooterHeightCm(page: PageSetupConfig): number {
@@ -213,12 +213,18 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
   vars['--ef-body-font'] = chineseFontToCss(config.body_text.font);
   vars['--ef-body-size'] = `${bodySizePt}pt`;
   vars['--ef-body-align'] = alignmentToCss(config.body_text.alignment);
-  vars['--ef-body-spacing-before'] = `${config.body_text.spacing_before_pt}pt`;
-  vars['--ef-body-spacing-after'] = `${config.body_text.spacing_after_pt}pt`;
+  // 与无文档网格的 Word 预览一致，标准行单位为 12pt，不取 CSS 当前行高。
+  vars['--ef-body-spacing-before'] = `${(config.body_text.spacing_before ?? 0) * (config.body_text.spacing_before_unit === 'pt' ? 1 : 12)}pt`;
+  vars['--ef-body-spacing-after'] = `${(config.body_text.spacing_after ?? 0) * (config.body_text.spacing_after_unit === 'pt' ? 1 : 12)}pt`;
   vars['--ef-body-indent'] = config.body_text.first_line_indent_chars > 0
     ? `${config.body_text.first_line_indent_chars}em`
     : '0';
-  vars['--ef-body-line-height'] = String(config.body_text.line_spacing_multiple);
+  const lineMode = config.body_text.line_spacing_mode ?? 'multiple';
+  const lineValue = config.body_text.line_spacing_value ?? 1.2;
+  // HTML 正文展示使用对应 CSS；模板预览直接读取 Word 原生间距，不经 CSS 换算。
+  vars['--ef-body-line-height'] = lineMode === 'exact' ? `${lineValue}pt`
+    : lineMode === 'at-least' ? `max(1em, ${lineValue}pt)`
+      : String(lineMode === 'single' ? 1 : lineMode === 'one-and-half' ? 1.5 : lineMode === 'double' ? 2 : lineValue);
   const listIndent = `${config.body_text.list_indent_chars ?? 2}em`;
   vars['--ef-list-indent'] = listIndent;
   const unorderedListStyle = unorderedListStyleToCss(config.body_text.list_style, listIndent);

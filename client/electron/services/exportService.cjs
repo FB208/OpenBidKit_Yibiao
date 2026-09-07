@@ -10,7 +10,11 @@ const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.
 const { REMOTE_IMAGE_RETRY_ATTEMPTS, REMOTE_IMAGE_RETRY_DELAY_MS } = require('../utils/remoteImageRetry.cjs');
 const { renderMarkdownHtml } = require('../utils/renderMarkdownHtml.cjs');
 const { getLocalImageRenderService } = require('./localImageRenderService.cjs');
-const { fillChromeHeaderHtml, fillFooterChromeSvg, chineseSizeToPt } = require('./headerFooterChrome.cjs');
+const {
+  renderChromePngs,
+  loadChromeModule,
+  resolveChromeLayoutSync,
+} = require('./chromeAssetService.cjs');
 const {
   AlignmentType,
   BorderStyle,
@@ -31,6 +35,8 @@ const {
   ShadingType,
   SimpleField,
   Table,
+  TableAnchorType,
+  TableBorders,
   TableCell,
   TableLayoutType,
   TableRow,
@@ -38,6 +44,10 @@ const {
   UnderlineType,
   VerticalAlignTable,
   WidthType,
+  HorizontalPositionRelativeFrom,
+  VerticalPositionRelativeFrom,
+  TextWrappingType,
+  ImportedXmlComponent,
 } = require('docx');
 
 const MAX_IMAGE_WIDTH = 520;
@@ -296,8 +306,29 @@ function textRunsWithBreaks(value, options = {}) {
   return runs;
 }
 
+/** 将正文间距转换为 Word 原生单位；行单位不转换成磅。 */
+function buildBodyParagraphSpacing(style = {}) {
+  const mode = style.line_spacing_mode ?? 'multiple';
+  const value = style.line_spacing_value ?? 1.2;
+  const points = mode === 'exact' || mode === 'at-least';
+  const multiple = mode === 'single' ? 1 : mode === 'one-and-half' ? 1.5 : mode === 'double' ? 2 : value;
+  const spacing = {
+    before: 0,
+    after: 0,
+    line: Math.max(1, Math.round(points ? value * 20 : multiple * 240)),
+    lineRule: mode === 'exact' ? 'exact' : mode === 'at-least' ? 'atLeast' : 'auto',
+  };
+  for (const side of ['before', 'after']) {
+    const inLines = (style[`spacing_${side}_unit`] ?? 'lines') === 'lines';
+    spacing[inLines ? `${side}Lines` : side] = Math.max(0, Math.round((style[`spacing_${side}`] ?? 0) * (inLines ? 100 : 20)));
+  }
+  return spacing;
+}
+
+/** 创建段落，并补齐 docx 库尚未提供的原生按行段间距属性。 */
 function paragraph(children, options = {}) {
-  return new Paragraph({
+  const spacing = options.spacing || { before: options.before || 0, after: options.after ?? 160, line: options.line || 360, lineRule: 'auto' };
+  const result = new Paragraph({
     children: children?.length ? children : [textRun('')],
     heading: options.heading,
     pageBreakBefore: options.pageBreakBefore,
@@ -305,11 +336,20 @@ function paragraph(children, options = {}) {
     bullet: options.bullet,
     numbering: options.numbering,
     keepNext: options.keepNext,
-    spacing: { before: options.before || 0, after: options.after ?? 160, line: options.line || 360 },
+    spacing,
     indent: options.indent,
     border: options.border,
     shading: options.shading,
   });
+  if (spacing.beforeLines !== undefined || spacing.afterLines !== undefined) {
+    // 保留 w:pPr 子节点顺序，只替换原间距节点，不追加第二个 w:spacing。
+    const properties = result.properties.root;
+    const index = properties.findIndex((item) => item.rootKey === 'w:spacing');
+    properties[index] = new ImportedXmlComponent('w:spacing', Object.fromEntries(
+      Object.entries(spacing).map(([key, value]) => [`w:${key}`, value]),
+    ));
+  }
+  return result;
 }
 
 function pageBreakParagraph() {
@@ -479,22 +519,6 @@ function isDecorativeHeaderFooterStyle(pageSetup) {
   return resolveHeaderFooterStyle(pageSetup) !== 'plain';
 }
 
-function chromeColors(pageSetup) {
-  const bar = pageSetup?.chrome_bar_color || '#e8eef5';
-  const accent = pageSetup?.chrome_accent_color || '#536176';
-  const barFill = normalizeDocxColor(bar, 'E8EEF5');
-  const accentFill = normalizeDocxColor(accent, '536176');
-  const onAccent = hexLuminance(accent) < 160 ? 'FFFFFF' : '111111';
-  return {
-    bar: barFill,
-    accent: accentFill,
-    onBar: hexLuminance(bar) < 160 ? 'FFFFFF' : accentFill,
-    onAccent,
-    badge: normalizeDocxColor(darkenHex(accent, 0.12), '3A4452'),
-    slot: onAccent,
-  };
-}
-
 function noneBorder() {
   return { style: BorderStyle.NIL, size: 0, color: 'FFFFFF' };
 }
@@ -508,64 +532,6 @@ function getPageWidthTwips(pageSetup) {
   const dims = PAPER_DIMENSIONS_MM[pageSetup?.paper_size] || PAPER_DIMENSIONS_MM.a4;
   const landscape = pageSetup?.orientation === 'landscape';
   return mmToTwips(landscape ? dims.height : dims.width);
-}
-
-function chromeParagraph(children, options = {}) {
-  return new Paragraph({
-    children: children?.length ? children : [textRun('')],
-    alignment: options.alignment || AlignmentType.CENTER,
-    spacing: { before: 0, after: 0, line: 240 },
-  });
-}
-
-function chromeMicroParagraph() {
-  return new Paragraph({
-    children: [new TextRun({ text: '', size: 2 })],
-    spacing: { before: 0, after: 0, line: 20 },
-  });
-}
-
-function chromeCell({ children, width, fill, margins, borders }) {
-  return new TableCell({
-    children,
-    width: { size: width, type: WidthType.DXA },
-    shading: fill ? { type: ShadingType.CLEAR, fill } : undefined,
-    margins: margins || { top: 40, bottom: 40, left: 80, right: 80 },
-    verticalAlign: VerticalAlignTable.CENTER,
-    borders: borders || chromeNilBorders(),
-  });
-}
-
-function bleedTableRows(pageSetup, columnWidths, rows, options = {}) {
-  const pageWidth = getPageWidthTwips(pageSetup);
-  const leftMargin = cmToTwips(pageSetup?.margin_left_cm ?? 2);
-  const frame = options.frameColor
-    ? { style: BorderStyle.SINGLE, size: 12, color: options.frameColor }
-    : noneBorder();
-  return new Table({
-    width: { size: pageWidth, type: WidthType.DXA },
-    indent: { size: -leftMargin, type: WidthType.DXA },
-    layout: TableLayoutType.FIXED,
-    columnWidths,
-    borders: {
-      top: frame,
-      bottom: frame,
-      left: frame,
-      right: frame,
-      insideHorizontal: noneBorder(),
-      insideVertical: options.insideVerticalColor
-        ? { style: BorderStyle.SINGLE, size: 8, color: options.insideVerticalColor }
-        : noneBorder(),
-    },
-    rows: rows.map((row) => new TableRow({
-      height: { value: row.height, rule: row.rule || HeightRule.ATLEAST },
-      children: row.cells,
-    })),
-  });
-}
-
-function bleedTable(pageSetup, columnWidths, cells, rowHeight) {
-  return bleedTableRows(pageSetup, columnWidths, [{ cells, height: rowHeight }]);
 }
 
 function createPageNumberRuns(format, runOptions, pad = 0) {
@@ -631,453 +597,328 @@ function shouldBuildFooter(pageSetup) {
   return Boolean(footerText) || isPageNumberEnabled(pageSetup);
 }
 
-function buildPlainHeader(pageSetup) {
-  const headerText = cleanText(pageSetup?.header_text || '').trim();
-  const runOptions = headerRunOptions(pageSetup);
-  return new Header({
-    children: [
-      new Paragraph({
-        alignment: alignmentToWordType(pageSetup?.header_alignment || '居中对齐'),
-        children: [new TextRun({ ...runOptions, text: headerText })],
-      }),
-    ],
-  });
-}
-
-function buildRulesHeader(pageSetup) {
-  const headerText = cleanText(pageSetup?.header_text || '').trim();
-  const colors = chromeColors(pageSetup);
-  const runOptions = headerRunOptions(pageSetup);
-  const line = { style: BorderStyle.SINGLE, size: 12, color: colors.accent, space: 1 };
-  const thin = { style: BorderStyle.SINGLE, size: 6, color: colors.accent, space: 1 };
-  return new Header({
-    children: [
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { before: 0, after: 40, line: 240 },
-        children: [new TextRun({ ...runOptions, text: headerText })],
-      }),
-      new Paragraph({
-        spacing: { before: 0, after: 0, line: 40 },
-        border: { top: line, bottom: thin },
-        children: [textRun('')],
-      }),
-    ],
-  });
-}
-
-function buildBandHeader(pageSetup) {
-  const colors = chromeColors(pageSetup);
-  const headerText = cleanText(pageSetup?.header_text || '').trim();
-  const badgeText = cleanText(pageSetup?.header_badge_text || '').trim().slice(0, 4);
-  const pageWidth = getPageWidthTwips(pageSetup);
-  const badgeWidth = cmToTwips(1.15);
-  const centerWidth = Math.max(400, pageWidth - badgeWidth * 2);
-  const runOptions = headerRunOptions(pageSetup, colors.onBar);
-  const badgeRun = { ...headerRunOptions(pageSetup, colors.onAccent), bold: true };
-  return new Header({
-    children: [bleedTable(pageSetup, [badgeWidth, centerWidth, badgeWidth], [
-      chromeCell({
-        width: badgeWidth,
-        fill: colors.accent,
-        children: [chromeParagraph([new TextRun({ ...badgeRun, text: badgeText })])],
-        margins: { top: 40, bottom: 40, left: 40, right: 40 },
-      }),
-      chromeCell({
-        width: centerWidth,
-        fill: colors.bar,
-        children: [chromeParagraph([new TextRun({ ...runOptions, text: headerText })])],
-      }),
-      chromeCell({
-        width: badgeWidth,
-        fill: colors.bar,
-        children: [chromeParagraph([textRun('')])],
-      }),
-    ], cmToTwips(HEADER_CHROME_HEIGHT_CM))],
-  });
-}
-
-function chromeFillCell(width, fill, children, margins) {
-  return chromeCell({
-    width,
-    fill,
-    children: children || [chromeMicroParagraph()],
-    margins: margins || { top: 0, bottom: 0, left: 0, right: 0 },
-  });
-}
-
-function mmToCssPx(mm) {
-  return Math.max(1, Math.round((Number(mm) || 0) * 96 / 25.4));
-}
-
-const HEADER_CHROME_HEIGHT_CM = 1.35;
-const HTML_FOOTER_HEIGHT_CM = {
-  'top-bar': 0.85,
-  slant: 0.85,
-  letterhead: 0.8,
-  frame: 0.85,
-};
-
-const CHROME_HTML_FROM_EDGE_CM = 0.15;
-const CHROME_TABLE_FROM_EDGE_CM = 0.3;
-const CHROME_BODY_CLEARANCE_CM = 0.15;
-const CHROME_BAND_ROW_TWIPS = 360;
-
-function chromeFromEdgeCm(pageSetup) {
-  return isHtmlHeaderFooterStyle(pageSetup) ? CHROME_HTML_FROM_EDGE_CM : CHROME_TABLE_FROM_EDGE_CM;
-}
-
-function decorativeHeaderHeightCm(pageSetup) {
-  return isDecorativeHeaderFooterStyle(pageSetup) ? HEADER_CHROME_HEIGHT_CM : 0;
-}
-
-function decorativeFooterHeightCm(pageSetup) {
-  const style = resolveHeaderFooterStyle(pageSetup);
-  if (HTML_FOOTER_HEIGHT_CM[style]) return HTML_FOOTER_HEIGHT_CM[style];
-  if (style === 'band' || style === 'footer-badge') return CHROME_BAND_ROW_TWIPS / 567;
-  if (style === 'rules') return 0.9;
-  return 0;
-}
-
-function minBodyMarginForChromeCm(chromeHeightCm, fromEdgeCm) {
-  if (!(chromeHeightCm > 0)) return 0;
-  return fromEdgeCm + chromeHeightCm + CHROME_BODY_CLEARANCE_CM;
-}
-
+/**
+ * Word 页边距。装饰带要占位，正文必须让开，这套推导来自共享几何模块
+ * （electron/shared/chrome/geometry.mjs），和预览、缩略图用的是同一份，
+ * 不再各算一份。模块未加载时退回配置原值。
+ */
 function resolveWordPageMargins(pageSetup) {
-  const top = pageSetup?.margin_top_cm ?? 2;
-  const bottom = pageSetup?.margin_bottom_cm ?? 2;
-  const decorative = isDecorativeHeaderFooterStyle(pageSetup);
-  const headerFromEdge = decorative ? chromeFromEdgeCm(pageSetup) : null;
-  const footerFromEdge = Math.max(0, pageSetup?.footer_distance_cm ?? 1.75);
+  const fallback = {
+    top: Number(pageSetup?.margin_top_cm ?? 2),
+    bottom: Number(pageSetup?.margin_bottom_cm ?? 2),
+    left: Number(pageSetup?.margin_left_cm ?? 2),
+    right: Number(pageSetup?.margin_right_cm ?? 2),
+    header: 0,
+    footer: 0,
+  };
+  const layout = resolveChromeLayoutSync(pageSetup);
+  if (!layout) return fallback;
   return {
-    top: decorative && shouldBuildHeader(pageSetup)
-      ? Math.max(top, minBodyMarginForChromeCm(decorativeHeaderHeightCm(pageSetup), headerFromEdge))
-      : top,
-    bottom: decorative && shouldBuildFooter(pageSetup)
-      ? Math.max(bottom, minBodyMarginForChromeCm(decorativeFooterHeightCm(pageSetup), footerFromEdge))
-      : bottom,
-    left: pageSetup?.margin_left_cm ?? 2,
-    right: pageSetup?.margin_right_cm ?? 2,
-    header: decorative ? headerFromEdge : 1.25,
-    footer: footerFromEdge,
+    top: layout.marginTopCm,
+    bottom: layout.marginBottomCm,
+    left: layout.marginLeftCm,
+    right: layout.marginRightCm,
+    // 文字与浮动装饰共用布局中的距边距离。
+    header: layout.headerDistanceCm,
+    footer: layout.footerDistanceCm,
   };
 }
 
-async function buildHtmlChromeHeader(pageSetup, style) {
-  const colors = chromeColors(pageSetup);
-  const headerText = cleanText(pageSetup?.header_text || '').trim();
-  const pageWidth = getPageWidthTwips(pageSetup);
-  const dims = PAPER_DIMENSIONS_MM[pageSetup?.paper_size] || PAPER_DIMENSIONS_MM.a4;
-  const landscape = pageSetup?.orientation === 'landscape';
-  const pageWidthMm = landscape ? dims.height : dims.width;
-  const heightMm = HEADER_CHROME_HEIGHT_CM * 10;
-  const widthPx = mmToCssPx(pageWidthMm);
-  const heightPx = mmToCssPx(heightMm);
-  const html = fillChromeHeaderHtml(style, {
-    accent: `#${colors.accent}`,
-    bar: `#${colors.bar}`,
-    text: headerText,
-    font: pageSetup?.header_font || '宋体',
-    sizePt: chineseSizeToPt(pageSetup?.header_size || '小五'),
-  });
-  const png = await getLocalImageRenderService().renderExactHtmlToPng({
-    html,
-    width: widthPx,
-    height: heightPx,
-    scale: 2,
-  });
-  return new Header({
-    children: [bleedTable(pageSetup, [pageWidth], [
-      chromeFillCell(pageWidth, undefined, [
-        new Paragraph({
-          spacing: { before: 0, after: 0, line: 20 },
-          children: [new ImageRun({
-            type: 'png',
-            data: png.buffer,
-            transformation: { width: widthPx, height: heightPx },
-            altText: { title: '页眉', description: headerText || '页眉', name: 'header' },
-          })],
-        }),
-      ]),
-    ], cmToTwips(heightMm / 10))],
+/**
+ * 页眉页脚装饰 —— 8 种样式共用一条实现。
+ *
+ * 装饰由共享 SVG 生成器（electron/shared/chrome）绘制后栅格化成 PNG，
+ * 以「相对纸张定位、置于文字下方、不参与环绕」的浮动图嵌入：这是 Word 做
+ * 水印和信纸底图的标准做法，天然满页出血，也不占文档流高度。
+ * 文字由相对纸张定位的透明表格分区承载，图标、底色和边框仍留在底图中。
+ *
+ * 文字、页码不进图片 —— 页码必须是可刷新的 PAGE 域，标题要可编辑可搜索。
+ * 页码文字底纹沿用 run 级底纹。
+ */
+
+/** XML 文本转义。文字来自用户输入，必须转义后再拼进手写 XML。 */
+function xmlEscape(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+/** 中文字号名 -> 半磅值，与 chineseSizeToHalfPt 同源。 */
+function runPropsXml(opts) {
+  const font = xmlEscape(opts.font || '宋体');
+  const parts = [`<w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:eastAsia="${font}" w:cs="${font}"/>`];
+  // w:rPr 子元素顺序由 schema 强制：rFonts -> b -> color -> sz -> szCs -> shd
+  if (opts.bold) parts.push('<w:b/>');
+  if (opts.color) parts.push(`<w:color w:val="${xmlEscape(opts.color)}"/>`);
+  if (opts.size) parts.push(`<w:sz w:val="${opts.size}"/><w:szCs w:val="${opts.size}"/>`);
+  if (opts.shadingFill) {
+    parts.push(`<w:shd w:val="clear" w:color="auto" w:fill="${xmlEscape(opts.shadingFill)}"/>`);
+  }
+  return `<w:rPr>${parts.join('')}</w:rPr>`;
+}
+
+/** 把一串 {text|field} 片段拼成 run XML；field 用于 PAGE 域。 */
+function runsXml(pieces) {
+  return pieces.map((p) => {
+    const rPr = runPropsXml(p);
+    if (p.field === 'begin' || p.field === 'separate' || p.field === 'end') {
+      return `<w:r>${rPr}<w:fldChar w:fldCharType="${p.field}"/></w:r>`;
+    }
+    if (p.field === 'instr') {
+      return `<w:r>${rPr}<w:instrText xml:space="preserve">${xmlEscape(p.text)}</w:instrText></w:r>`;
+    }
+    return `<w:r>${rPr}<w:t xml:space="preserve">${xmlEscape(p.text)}</w:t></w:r>`;
+  }).join('');
+}
+
+/**
+ * 锚定浮动文本框：相对纸张绝对定位的一块可编辑文字。
+ *
+ * 为什么不用浮动表格或段落框架：它们的 tblpPr / framePr 定位在 docx-editor.dev
+ * 里不生效（实测水平偏移被完全忽略），文字会退回文档流，和装饰错位。
+ * wp:anchor 是唯一两端都精确的机制，和装饰图共用同一套坐标系。
+ */
+function chromeTextBoxXml(box, align, pieces, zIndex, name) {
+  const widthEmu = Math.round(Math.max(0.1, box.endCm - box.startCm) * 360000);
+  const heightEmu = Math.round(Math.max(0.1, box.heightCm) * 360000);
+  const xEmu = Math.round(box.startCm * 360000);
+  const yEmu = Math.round(box.topCm * 360000);
+  const jc = { 左对齐: 'left', 居中对齐: 'center', 右对齐: 'right', 两端对齐: 'both' }[align] || 'center';
+
+  const paragraph =
+    `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>` +
+    `<w:jc w:val="${jc}"/></w:pPr>${runsXml(pieces)}</w:p>`;
+
+  return (
+    `<w:r><w:drawing>` +
+    `<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="${zIndex}"` +
+    ` behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"` +
+    ` xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">` +
+    `<wp:simplePos x="0" y="0"/>` +
+    `<wp:positionH relativeFrom="page"><wp:posOffset>${xEmu}</wp:posOffset></wp:positionH>` +
+    `<wp:positionV relativeFrom="page"><wp:posOffset>${yEmu}</wp:posOffset></wp:positionV>` +
+    `<wp:extent cx="${widthEmu}" cy="${heightEmu}"/>` +
+    `<wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/>` +
+        `<wp:docPr id="${zIndex}" name="${xmlEscape(name)}"/>` +
+    // schema 必需元素，缺了整个 drawing 会被解析器拒绝
+    `<wp:cNvGraphicFramePr/>` +
+    `<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">` +
+    `<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">` +
+    `<wps:wsp xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">` +
+    `<wps:cNvSpPr txBox="1"/>` +
+    `<wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${widthEmu}" cy="${heightEmu}"/></a:xfrm>` +
+    `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></wps:spPr>` +
+    `<wps:txbx><w:txbxContent>${paragraph}</w:txbxContent></wps:txbx>` +
+    `<wps:bodyPr rot="0" lIns="0" tIns="0" rIns="0" bIns="0" anchor="ctr"/>` +
+    `</wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`
+  );
+}
+
+/**
+ * 生成可插入段落的文本框组件。
+ *
+ * fromXmlString 返回的是包裹节点（rootKey 为 undefined），直接插进段落会输出
+ * <undefined>…</undefined>，破坏页眉页脚 XML。真正的 w:r 在 root[0]，要取出来。
+ */
+function chromeTextBox(box, align, pieces, zIndex, name) {
+  const wrapper = ImportedXmlComponent.fromXmlString(chromeTextBoxXml(box, align, pieces, zIndex, name));
+  return wrapper.root[0];
+}
+
+/** 把页码格式串拆成 run 片段，{page} 处插 PAGE 域。 */
+function pageNumberPieces(format, marks, pad) {
+  const token = '{page}';
+  const at = String(format || '第{page}页').indexOf(token);
+  if (at < 0) return [{ ...marks, text: format }];
+  const prefix = format.slice(0, at);
+  const suffix = format.slice(at + token.length);
+  const picture = pad > 0 ? ` \\# "${'0'.repeat(Math.max(1, Math.min(6, pad)))}"` : '';
+  const pieces = [];
+  if (prefix) pieces.push({ ...marks, text: prefix });
+  pieces.push({ ...marks, field: 'begin' });
+  pieces.push({ ...marks, field: 'instr', text: ` PAGE${picture} ` });
+  pieces.push({ ...marks, field: 'separate' });
+  pieces.push({ ...marks, text: pad > 0 ? '0'.repeat(Math.max(1, Math.min(6, pad))) : '1' });
+  pieces.push({ ...marks, field: 'end' });
+  if (suffix) pieces.push({ ...marks, text: suffix });
+  return pieces;
+}
+
+/** 浮动表格的锚点及末尾必需段落，不额外占用一整行页眉/页脚高度。 */
+function chromeAnchorParagraph(children = []) {
+  return new Paragraph({
+    spacing: { before: 0, after: 0, line: 1, lineRule: 'exact' },
+    children: [...children, new TextRun({ text: '', size: 1 })],
   });
 }
 
-function buildFooterBadgeHeader(pageSetup) {
-  const colors = chromeColors(pageSetup);
+/** 满页宽装饰图。yCm 是相对纸张上边缘的位置。 */
+function chromeImageRun(png, yCm, zIndex, name) {
+  return new ImageRun({
+    type: 'png',
+    data: png.buffer,
+    transformation: {
+      width: Math.round((png.widthCm / 2.54) * 96),
+      height: Math.round((png.heightCm / 2.54) * 96),
+    },
+    floating: {
+      horizontalPosition: { relative: HorizontalPositionRelativeFrom.PAGE, offset: 0 },
+      verticalPosition: {
+        relative: VerticalPositionRelativeFrom.PAGE,
+        offset: Math.round(yCm * 360000),
+      },
+      behindDocument: true,
+      allowOverlap: true,
+      lockAnchor: false,
+      layoutInCell: true,
+      wrap: { type: TextWrappingType.NONE },
+      zIndex,
+    },
+    altText: { title: name, description: name, name },
+  });
+}
+
+/** 页眉文字按样式区域排版；通栏色带的短标记单独进入左侧徽标区。 */
+function buildChromeHeader(pageSetup, chrome) {
+  const layout = chrome.textLayout.header;
   const headerText = cleanText(pageSetup?.header_text || '').trim();
-  const runOptions = headerRunOptions(pageSetup);
+  const badgeText = cleanText(pageSetup?.header_badge_text || '').trim().slice(0, 4);
+
+  const color = normalizeDocxColor(layout.color || pageSetup?.header_color || '#536176');
+  const runOptions = { ...headerRunOptions(pageSetup, color), bold: layout.bold };
+
+  const children = [];
+  if (chrome.header) {
+    children.push(chromeImageRun(chrome.header, chrome.layout.headerTopCm, 10, '页眉装饰'));
+  }
+  // 短标记是 band 独有的（输入框也只在 band 下显示），其余样式一律忽略，
+  // 否则从 band 切走后会凭空多出一段用户改不掉的文字。
+  const text = headerText;
+  const title = new TextRun({ ...runOptions, text });
+  if (layout.box) {
+    // 装饰与文字框都是浮动对象，挂在同一个 1 twip 高的段落上，
+    // 页眉区不被撑高，各自位置完全由 anchor 决定。
+    const marks = { font: runOptions.font, size: runOptions.size, color, bold: layout.bold };
+    if (layout.badge && badgeText) {
+      children.push(chromeTextBox(
+        layout.badge.box,
+        layout.badge.align,
+        [{
+          font: runOptions.font,
+          size: headerRunOptions(pageSetup).size,
+          color: normalizeDocxColor(layout.badge.color),
+          bold: layout.badge.bold,
+          text: badgeText,
+        }],
+        911,
+        'HeaderBadgeText',
+      ));
+    }
+    children.push(chromeTextBox(layout.box, layout.align, [{ ...marks, text }], 912, 'HeaderText'));
+    return new Header({ children: [chromeAnchorParagraph(children)] });
+  }
+  children.push(title);
+
   return new Header({
-    children: [
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { before: 0, after: 40, line: 240 },
-        border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: colors.accent, space: 1 } },
-        children: [new TextRun({ ...runOptions, text: headerText })],
-      }),
-    ],
+    children: [new Paragraph({
+      alignment: alignmentToWordType(layout.align || pageSetup?.header_alignment || '居中对齐'),
+      spacing: { before: 0, after: 0, line: 240 },
+      children,
+    })],
+  });
+}
+
+/** 有页码分区时分别排版正文和页码，普通样式保持单行组合。 */
+function buildChromeFooter(pageSetup, chrome) {
+  const layout = chrome.textLayout.footer;
+  const footerEnabled = isFooterEnabled(pageSetup);
+  const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
+  const pageNumberEnabled = isPageNumberEnabled(pageSetup);
+
+  const textColor = normalizeDocxColor(layout.color || pageSetup?.footer_color || '#536176');
+  const runOptions = footerRunOptions(pageSetup, textColor);
+
+  const children = [];
+  if (chrome.footer) {
+    children.push(chromeImageRun(chrome.footer, chrome.layout.footerTopCm, 20, '页脚装饰'));
+  }
+  const textRuns = footerText ? [new TextRun({ ...runOptions, text: footerText })] : [];
+  const pageRuns = [];
+  if (pageNumberEnabled) {
+    // 页码底色交给 run 级底纹，宽度跟着文字走，不必预先知道页码有几位
+    const pageRun = {
+      ...footerRunOptions(pageSetup, normalizeDocxColor(layout.pageNumber.color || textColor)),
+      bold: layout.pageNumber.bold === true,
+    };
+    if (layout.pageNumber.shadingFill) {
+      pageRun.shading = { fill: normalizeDocxColor(layout.pageNumber.shadingFill) };
+    }
+    pageRuns.push(...createPageNumberRuns(
+      pageSetup?.page_number_format || '第{page}页',
+      pageRun,
+      pageSetup?.page_number_pad,
+    ));
+  }
+  if (layout.box) {
+    const textMarks = { font: runOptions.font, size: runOptions.size, color: textColor };
+    const pnMarks = {
+      font: runOptions.font,
+      size: runOptions.size,
+      color: normalizeDocxColor(layout.pageNumber.color || textColor),
+      bold: layout.pageNumber.bold === true,
+      shadingFill: layout.pageNumber.shadingFill
+        ? normalizeDocxColor(layout.pageNumber.shadingFill)
+        : undefined,
+    };
+    const pnPieces = pageNumberEnabled
+      ? pageNumberPieces(pageSetup?.page_number_format || '第{page}页', pnMarks, pageSetup?.page_number_pad)
+      : [];
+
+    if (layout.pageNumber.box) {
+      // 分区样式：正文与页码各占一块，页码块跟着装饰的色块走
+      if (footerText) {
+        children.push(chromeTextBox(layout.box, layout.align, [{ ...textMarks, text: footerText }], 921, 'FooterText'));
+      }
+      if (pnPieces.length) {
+        children.push(chromeTextBox(layout.pageNumber.box, layout.pageNumber.align, pnPieces, 922, 'FooterPageNumber'));
+      }
+    } else {
+      // 不分区（rules）：正文与页码合排在同一块里，保持原来的居中一行
+      const merged = [];
+      if (footerText) merged.push({ ...textMarks, text: footerText });
+      if (footerText && pnPieces.length) merged.push({ ...textMarks, text: '    ' });
+      merged.push(...pnPieces);
+      if (merged.length) {
+        children.push(chromeTextBox(layout.box, layout.align, merged, 921, 'FooterText'));
+      }
+    }
+    return new Footer({ children: [chromeAnchorParagraph(children)] });
+  }
+  children.push(...textRuns);
+  if (textRuns.length && pageRuns.length) children.push(new TextRun({ ...runOptions, text: '    ' }));
+  children.push(...pageRuns);
+  if (!children.length) children.push(textRun(''));
+
+  return new Footer({
+    children: [new Paragraph({
+      alignment: alignmentToWordType(layout.align),
+      spacing: { before: 0, after: 0, line: 240 },
+      children,
+    })],
   });
 }
 
 async function buildWordHeaders(pageSetup) {
   if (!shouldBuildHeader(pageSetup)) return undefined;
-
-  const style = resolveHeaderFooterStyle(pageSetup);
-  let header;
-  if (style === 'band') header = buildBandHeader(pageSetup);
-  else if (style === 'rules') header = buildRulesHeader(pageSetup);
-  else if (isHtmlHeaderFooterStyle(pageSetup)) header = await buildHtmlChromeHeader(pageSetup, style);
-  else if (style === 'footer-badge') header = buildFooterBadgeHeader(pageSetup);
-  else header = buildPlainHeader(pageSetup);
-
+  const chrome = await renderChromePngs(pageSetup);
+  const header = buildChromeHeader(pageSetup, chrome);
   return withFirstPageEmpty({ default: header }, emptyHeader, pageSetup?.first_page_different === true);
-}
-
-function buildPlainFooter(pageSetup) {
-  const footerEnabled = isFooterEnabled(pageSetup);
-  const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
-  const pageNumberEnabled = isPageNumberEnabled(pageSetup);
-  const runOptions = footerRunOptions(pageSetup);
-  const footerChildren = [];
-  if (footerText) footerChildren.push(new TextRun({ ...runOptions, text: footerText }));
-  if (footerText && pageNumberEnabled) footerChildren.push(new TextRun({ ...runOptions, text: '    ' }));
-  if (pageNumberEnabled) {
-    footerChildren.push(...createPageNumberRuns(pageSetup?.page_number_format || '第{page}页', runOptions, pageSetup?.page_number_pad));
-  }
-  return new Footer({
-    children: [
-      new Paragraph({
-        alignment: alignmentToWordType(footerEnabled ? (pageSetup?.footer_alignment || '居中对齐') : '居中对齐'),
-        children: footerChildren,
-      }),
-    ],
-  });
-}
-
-function buildRulesFooter(pageSetup) {
-  const colors = chromeColors(pageSetup);
-  const footerEnabled = isFooterEnabled(pageSetup);
-  const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
-  const pageNumberEnabled = isPageNumberEnabled(pageSetup);
-  const runOptions = footerRunOptions(pageSetup);
-  const children = [];
-  if (footerText) children.push(new TextRun({ ...runOptions, text: footerText }));
-  if (footerText && pageNumberEnabled) children.push(new TextRun({ ...runOptions, text: '    ' }));
-  if (pageNumberEnabled) {
-    children.push(...createPageNumberRuns(pageSetup?.page_number_format || '第{page}页', runOptions, pageSetup?.page_number_pad));
-  }
-  const line = { style: BorderStyle.SINGLE, size: 12, color: colors.accent, space: 1 };
-  const thin = { style: BorderStyle.SINGLE, size: 6, color: colors.accent, space: 1 };
-  return new Footer({
-    children: [
-      new Paragraph({
-        spacing: { before: 0, after: 40, line: 40 },
-        border: { top: line, bottom: thin },
-        children: [textRun('')],
-      }),
-      new Paragraph({
-        alignment: alignmentToWordType(pageSetup?.footer_alignment || '居中对齐'),
-        spacing: { before: 40, after: 0, line: 240 },
-        children: children.length ? children : [textRun('')],
-      }),
-    ],
-  });
-}
-
-function buildBandFooter(pageSetup) {
-  const colors = chromeColors(pageSetup);
-  const footerEnabled = isFooterEnabled(pageSetup);
-  const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
-  const pageNumberEnabled = isPageNumberEnabled(pageSetup);
-  const pageWidth = getPageWidthTwips(pageSetup);
-  const badgeWidth = cmToTwips(2.1);
-  const spacerWidth = cmToTwips(1.15);
-  const centerWidth = Math.max(400, pageWidth - badgeWidth - spacerWidth);
-  const runOptions = footerRunOptions(pageSetup);
-  const badgeRun = { ...footerRunOptions(pageSetup, hexLuminance(`#${colors.badge}`) < 160 ? 'FFFFFF' : '111111'), bold: true };
-  const pageChildren = pageNumberEnabled
-    ? createPageNumberRuns(pageSetup?.page_number_format || '{page}', badgeRun, pageSetup?.page_number_pad)
-    : [textRun('')];
-  return new Footer({
-    children: [bleedTable(pageSetup, [spacerWidth, centerWidth, badgeWidth], [
-      chromeCell({ width: spacerWidth, fill: colors.accent, children: [chromeParagraph([textRun('')])] }),
-      chromeCell({
-        width: centerWidth,
-        fill: colors.accent,
-        children: [chromeParagraph([new TextRun({ ...runOptions, text: footerText })], { alignment: alignmentToWordType(pageSetup?.footer_alignment || '居中对齐') })],
-      }),
-      chromeCell({
-        width: badgeWidth,
-        fill: colors.badge,
-        children: [chromeParagraph(pageChildren)],
-        margins: { top: 40, bottom: 40, left: 60, right: 60 },
-      }),
-    ], 360)],
-  });
-}
-
-async function buildHtmlChromeFooter(pageSetup, style) {
-  const colors = chromeColors(pageSetup);
-  const footerEnabled = isFooterEnabled(pageSetup);
-  const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
-  const pageNumberEnabled = isPageNumberEnabled(pageSetup);
-  const pageWidth = getPageWidthTwips(pageSetup);
-  const runOptionsBase = footerRunOptions(pageSetup);
-  const pageRunBase = { ...footerRunOptions(pageSetup, colors.accent), bold: true };
-  const pageChildrenBase = pageNumberEnabled
-    ? createPageNumberRuns(pageSetup?.page_number_format || '{page}', pageRunBase, pageSetup?.page_number_pad)
-    : [new TextRun({ text: '', size: 2 })];
-
-  if (style === 'letterhead') {
-    const barWidth = cmToTwips(0.22);
-    const pageBoxWidth = cmToTwips(1.7);
-    const textWidth = Math.max(400, pageWidth - barWidth - pageBoxWidth);
-    return new Footer({
-      children: [bleedTableRows(pageSetup, [textWidth, barWidth, pageBoxWidth], [
-        {
-          height: cmToTwips(HTML_FOOTER_HEIGHT_CM.letterhead),
-          cells: [
-            chromeFillCell(
-              textWidth,
-              'FFFFFF',
-              [chromeParagraph([new TextRun({ ...runOptionsBase, text: footerText })], { alignment: alignmentToWordType(pageSetup?.footer_alignment || '居中对齐') })],
-              { top: 40, bottom: 40, left: 0, right: 80 },
-            ),
-            chromeFillCell(barWidth, colors.accent, [chromeMicroParagraph()]),
-            chromeFillCell(
-              pageBoxWidth,
-              'FFFFFF',
-              [chromeParagraph(pageChildrenBase)],
-              { top: 40, bottom: 40, left: 60, right: 0 },
-            ),
-          ],
-        },
-      ])],
-    });
-  }
-
-  const layouts = {
-    'top-bar': {
-      leftFill: colors.accent,
-      centerFill: 'FFFFFF',
-      rightFill: colors.badge,
-      mark: `#${colors.onAccent}`,
-      pageColor: colors.onAccent,
-      iconBg: `#${colors.accent}`,
-      leftCm: 1.15,
-      rightCm: 1.6,
-    },
-    slant: {
-      leftFill: colors.accent,
-      centerFill: colors.bar,
-      rightFill: colors.badge,
-      mark: `#${colors.onAccent}`,
-      pageColor: colors.onAccent,
-      iconBg: `#${colors.accent}`,
-      leftCm: 1.35,
-      rightCm: 1.6,
-    },
-    frame: {
-      leftFill: 'FFFFFF',
-      centerFill: 'FFFFFF',
-      rightFill: 'FFFFFF',
-      mark: `#${colors.accent}`,
-      pageColor: colors.accent,
-      iconBg: '#FFFFFF',
-      leftCm: 1.0,
-      rightCm: 1.7,
-    },
-  };
-  const layout = layouts[style] || layouts['top-bar'];
-  const iconWidth = cmToTwips(layout.leftCm);
-  const pageBoxWidth = cmToTwips(layout.rightCm);
-  const centerWidth = Math.max(400, pageWidth - iconWidth - pageBoxWidth);
-  const runOptions = footerRunOptions(pageSetup);
-  const pageRun = { ...footerRunOptions(pageSetup, layout.pageColor), bold: true };
-  const pageChildren = pageNumberEnabled
-    ? createPageNumberRuns(pageSetup?.page_number_format || '{page}', pageRun, pageSetup?.page_number_pad)
-    : [new TextRun({ text: '', size: 2 })];
-  const svg = fillFooterChromeSvg(style, layout.mark);
-  const iconPng = await getLocalImageRenderService().renderExactHtmlToPng({
-    html: `<div style="width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:${layout.iconBg}">${svg}</div>`,
-    width: 36,
-    height: 36,
-    scale: 2,
-  });
-  const iconRun = new ImageRun({
-    type: 'svg',
-    data: Buffer.from(svg, 'utf8'),
-    fallback: { type: 'png', data: iconPng.buffer },
-    transformation: { width: 18, height: 18 },
-    altText: { title: '页脚标记', description: '页脚标记', name: 'footer-mark' },
-  });
-  return new Footer({
-    children: [bleedTableRows(pageSetup, [iconWidth, centerWidth, pageBoxWidth], [
-      {
-        height: cmToTwips(HTML_FOOTER_HEIGHT_CM[style] || HTML_FOOTER_HEIGHT_CM['top-bar']),
-        cells: [
-          chromeFillCell(iconWidth, layout.leftFill, [
-            chromeParagraph([iconRun]),
-          ], { top: 40, bottom: 40, left: 40, right: 40 }),
-          chromeFillCell(
-            centerWidth,
-            layout.centerFill,
-            [chromeParagraph([new TextRun({ ...runOptions, text: footerText })], { alignment: alignmentToWordType(pageSetup?.footer_alignment || '居中对齐') })],
-            { top: 40, bottom: 40, left: 80, right: 80 },
-          ),
-          chromeFillCell(
-            pageBoxWidth,
-            layout.rightFill,
-            [chromeParagraph(pageChildren)],
-            { top: 40, bottom: 40, left: 40, right: 40 },
-          ),
-        ],
-      },
-    ], style === 'frame' ? { frameColor: colors.accent, insideVerticalColor: colors.accent } : {})],
-  });
-}
-
-function buildFooterBadgeFooter(pageSetup) {
-  const colors = chromeColors(pageSetup);
-  const footerEnabled = isFooterEnabled(pageSetup);
-  const footerText = footerEnabled ? cleanText(pageSetup?.footer_text || '').trim() : '';
-  const pageNumberEnabled = isPageNumberEnabled(pageSetup);
-  const pageWidth = getPageWidthTwips(pageSetup);
-  const badgeWidth = cmToTwips(2.1);
-  const textWidth = pageWidth - badgeWidth;
-  const runOptions = footerRunOptions(pageSetup);
-  const badgeRun = { ...footerRunOptions(pageSetup, colors.onAccent), bold: true };
-  const pageChildren = pageNumberEnabled
-    ? createPageNumberRuns(pageSetup?.page_number_format || '{page}', badgeRun, pageSetup?.page_number_pad)
-    : [textRun('')];
-  return new Footer({
-    children: [bleedTable(pageSetup, [textWidth, badgeWidth], [
-      chromeCell({
-        width: textWidth,
-        fill: colors.bar,
-        children: [chromeParagraph([new TextRun({ ...runOptions, text: footerText })], { alignment: alignmentToWordType(pageSetup?.footer_alignment || '居中对齐') })],
-      }),
-      chromeCell({
-        width: badgeWidth,
-        fill: colors.accent,
-        children: [chromeParagraph(pageChildren)],
-      }),
-    ], 360)],
-  });
 }
 
 async function buildWordFooters(pageSetup) {
   if (!shouldBuildFooter(pageSetup)) return undefined;
-
-  const style = resolveHeaderFooterStyle(pageSetup);
-  let footer;
-  if (style === 'band') footer = buildBandFooter(pageSetup);
-  else if (style === 'rules') footer = buildRulesFooter(pageSetup);
-  else if (isHtmlHeaderFooterStyle(pageSetup)) footer = await buildHtmlChromeFooter(pageSetup, style);
-  else if (style === 'footer-badge') footer = buildFooterBadgeFooter(pageSetup);
-  else footer = buildPlainFooter(pageSetup);
-
+  const chrome = await renderChromePngs(pageSetup);
+  const footer = buildChromeFooter(pageSetup, chrome);
   return withFirstPageEmpty({ default: footer }, emptyFooter, pageSetup?.first_page_different === true);
 }
 
@@ -1100,7 +941,7 @@ function tableCaptionParagraphOptions(context) {
   return {
     alignment: alignmentToWordType(table.caption_alignment || DEFAULT_TABLE_STYLE.caption_alignment),
     after: 80,
-    line: context?.bodyLineSpacing,
+    line: 240,
     indent: { left: 0, right: 0, firstLine: 0, hanging: 0 },
     keepNext: true,
   };
@@ -1162,9 +1003,12 @@ function tableCellRunMarks(style) {
   };
 }
 
-function tableCellParagraphOptions(style) {
+function tableCellParagraphOptions(style, context) {
+  const spacing = { ...context.bodySpacing, before: 0, after: 80 };
+  delete spacing.beforeLines;
+  delete spacing.afterLines;
   return {
-    after: 80,
+    spacing,
     alignment: alignmentToWordType(style?.alignment || DEFAULT_TABLE_STYLE.body_cell.alignment),
   };
 }
@@ -1274,8 +1118,8 @@ function getCaptionParagraphOptions(context) {
   const image = getImageStyle(context);
   return {
     alignment: alignmentToWordType(image.caption_alignment || DEFAULT_IMAGE_STYLE.caption_alignment),
-    after: context?.bodyAfterSpacing ?? 160,
-    line: context?.bodyLineSpacing,
+    after: 80,
+    line: 240,
     indent: { left: 0, right: 0, firstLine: 0, hanging: 0 },
   };
 }
@@ -2081,7 +1925,7 @@ async function htmlTableToDocx($, tableNode, context) {
       cells.push(createTableCell({
         children: [paragraph(
           await htmlInlineRuns($, $(cellNode).contents().toArray(), context, tableCellRunMarks(cellStyle)),
-          tableCellParagraphOptions(cellStyle),
+          tableCellParagraphOptions(cellStyle, context),
         )],
         context,
         isHeader,
@@ -2108,7 +1952,7 @@ async function htmlTableToDocx($, tableNode, context) {
   return blocks;
 }
 
-function buildListParagraphOptions(context, reference, level, itemIndex, totalItems, options = {}) {
+function buildListParagraphOptions(context, reference, level, options = {}) {
   const paragraphOptions = reference ? { numbering: { reference, level } } : {};
   if (!reference && options.manualListIndent) {
     const indent = getManualUnorderedListLevelIndent(context, level);
@@ -2117,10 +1961,8 @@ function buildListParagraphOptions(context, reference, level, itemIndex, totalIt
     const indent = getTaskListLevelIndent(context, level);
     if (indent) paragraphOptions.indent = indent;
   }
-  if (context.bodyLineSpacing) paragraphOptions.line = context.bodyLineSpacing;
+  paragraphOptions.spacing = context.bodySpacing;
   if (context.bodyAlignment) paragraphOptions.alignment = context.bodyAlignment;
-  if (itemIndex === 0 && context.bodyBeforeSpacing) paragraphOptions.before = context.bodyBeforeSpacing;
-  paragraphOptions.after = itemIndex === totalItems - 1 ? (context.bodyAfterSpacing ?? 0) : 0;
   return paragraphOptions;
 }
 
@@ -2151,7 +1993,7 @@ async function htmlListToDocx($, listNode, context, options = {}) {
   let numberingReference = null;
   const listItems = $(listNode).children('li').toArray();
 
-  for (const [itemIndex, itemNode] of listItems.entries()) {
+  for (const itemNode of listItems) {
     const inlineNodes = $(itemNode).contents().toArray()
       .filter((child) => !['ul', 'ol'].includes(htmlTagName(child)))
       .filter((child) => !isWhitespaceHtmlTextNode(child));
@@ -2163,8 +2005,6 @@ async function htmlListToDocx($, listNode, context, options = {}) {
       context,
       isTaskItem ? null : numberingReference,
       Math.min(options.listLevel || 0, 2),
-      itemIndex,
-      listItems.length,
       { manualIndent: isTaskItem, manualListIndent: !isTaskItem && unorderedListWithoutMarker },
     );
     blocks.push(paragraph(await htmlInlineRuns($, inlineNodes, context), listOptions));
@@ -2179,12 +2019,9 @@ async function htmlListToDocx($, listNode, context, options = {}) {
 
 /** 从 context 提取正文段落选项，供 HTML 正文段落使用 */
 function buildHtmlBodyParaOpts(context) {
-  const opts = {};
-  if (context.bodyAfterSpacing != null) opts.after = context.bodyAfterSpacing;
-  if (context.bodyLineSpacing) opts.line = context.bodyLineSpacing;
+  const opts = { spacing: context.bodySpacing };
   if (context.bodyAlignment) opts.alignment = context.bodyAlignment;
   if (context.bodyIndent) opts.indent = context.bodyIndent;
-  if (context.bodyBeforeSpacing) opts.before = context.bodyBeforeSpacing;
   return opts;
 }
 
@@ -2349,10 +2186,10 @@ async function htmlNodeToDocxBlocks($, node, context, options = {}) {
     for (const [index, group] of groups.entries()) {
       const paraOpts = { ...htmlParaOpts };
       if (groups.length > 1 && index < groups.length - 1) {
-        paraOpts.after = 0;
+        paraOpts.spacing = { ...paraOpts.spacing, after: 0, afterLines: 0 };
       }
       if (index > 0) {
-        delete paraOpts.before;
+        paraOpts.spacing = { ...paraOpts.spacing, before: 0, beforeLines: 0 };
       }
       paragraphs.push(paragraph(await htmlInlineRuns($, group, context), paraOpts));
     }
@@ -2839,6 +2676,8 @@ function buildHeadingParagraphStyles(exportFormat) {
 }
 
 async function buildDocxResult(payload, options = {}) {
+  // 页边距与装饰共用同一套几何，先把共享模块加载好，后面的同步取用才有值
+  await loadChromeModule();
   const exportFormat = (payload && payload.export_format) || null;
   const stats = countOutlineStats(payload.outline || []);
   const context = {
@@ -2867,14 +2706,12 @@ async function buildDocxResult(payload, options = {}) {
   const bodyStyle = (exportFormat && exportFormat.body_text) ? exportFormat.body_text : null;
   const bodyFont = bodyStyle ? (bodyStyle.font || '宋体') : '宋体';
   const bodySizeHalfPt = bodyStyle ? chineseSizeToHalfPt(bodyStyle.size || '小四') : 24;
-  const bodyLineSpacing = bodyStyle ? 240 * (bodyStyle.line_spacing_multiple || 1.2) : 360;
-  const bodyAfterSpacing = bodyStyle ? (bodyStyle.spacing_after_pt || 0) * 20 : 160;
+  const bodySpacing = buildBodyParagraphSpacing(bodyStyle || {});
 
   // 注入正文样式到 context，供正文段落/文本渲染时使用
   context.bodyRunFont = bodyFont;
   context.bodyRunSize = bodySizeHalfPt;
-  context.bodyLineSpacing = bodyLineSpacing;
-  context.bodyAfterSpacing = bodyAfterSpacing;
+  context.bodySpacing = bodySpacing;
   context.bodyListStyle = bodyStyle ? (bodyStyle.list_style || 'disc') : 'disc';
   context.bodyOrderedListStyle = bodyStyle ? (bodyStyle.ordered_list_style || 'decimal-dot') : 'decimal-dot';
   context.bodyListIndentChars = bodyStyle ? (bodyStyle.list_indent_chars ?? 2) : 2;
@@ -2882,9 +2719,6 @@ async function buildDocxResult(payload, options = {}) {
     context.bodyAlignment = alignmentToWordType(bodyStyle.alignment);
     if (bodyStyle.first_line_indent_chars > 0) {
       context.bodyIndent = { firstLine: charsToTwips(bodyStyle.first_line_indent_chars, bodySizeHalfPt) };
-    }
-    if (bodyStyle.spacing_before_pt > 0) {
-      context.bodyBeforeSpacing = bodyStyle.spacing_before_pt * 20;
     }
   }
 
@@ -2961,7 +2795,8 @@ async function buildDocxResult(payload, options = {}) {
       default: {
         document: {
           run: { font: bodyFont, size: bodySizeHalfPt },
-          paragraph: { spacing: { line: bodyLineSpacing, after: bodyAfterSpacing } },
+          // 正文逐段写入间距，文档默认保持 auto，避免固定行距传染标题和页眉页脚。
+          paragraph: { spacing: { line: 240, before: 0, after: 0, lineRule: 'auto' } },
         },
       },
       paragraphStyles: headingStyles,
@@ -2993,7 +2828,7 @@ async function buildDocxBuffer(payload, options = {}) {
   return result.buffer;
 }
 
-function createExportService({ configStore } = {}) {
+function createExportService({ configStore, openXmlHelperService } = {}) {
   return {
     async exportWord(payload = {}, onProgress) {
       const stats = countOutlineStats(Array.isArray(payload.outline) ? payload.outline : []);
@@ -3012,7 +2847,7 @@ function createExportService({ configStore } = {}) {
         stats,
         content_metrics: countOutlineContentMetrics(Array.isArray(payload.outline) ? payload.outline : []),
       });
-      if (!Array.isArray(payload.outline) || !payload.outline.length) {
+      if (!payload.template_html && (!Array.isArray(payload.outline) || !payload.outline.length)) {
         const error = new Error('没有可导出的目录内容');
         developerLogger.write('export.word.error', { error: compactLogError(error) });
         throw error;
@@ -3038,7 +2873,14 @@ function createExportService({ configStore } = {}) {
 
       try {
         const warnings = [];
-        const buildResult = await buildDocxResult(payload, { onProgress, warnings, developerLogger });
+        // 模板样张复用预览生成器，但不参与预览请求合并，固定使用本次导出的设置。
+        const buildResult = payload.template_html
+          ? {
+            buffer: Buffer.from((await openXmlHelperService.createRestrictedHtmlDocx(payload.template_html, payload.export_format)).bytes),
+            warnings,
+            stats,
+          }
+          : await buildDocxResult(payload, { onProgress, warnings, developerLogger });
         reportProgress({ onProgress, warnings: buildResult.warnings, stats: buildResult.stats }, 96, '正在写入 Word 文件。');
         developerLogger.write('export.word.write.started', {
           output_file_name: path.basename(result.filePath),
@@ -3075,3 +2917,28 @@ module.exports = {
   buildDocxResult,
   createExportService,
 };
+
+// 独立运行本文件可检查原生间距映射和最终 XML，不读写用户文件。
+if (require.main === module) {
+  const assert = require('node:assert/strict');
+  const AdmZip = require('adm-zip');
+  for (const [mode, value, line, rule] of [
+    ['single', 9, 240, 'auto'], ['one-and-half', 9, 360, 'auto'], ['double', 9, 480, 'auto'],
+    ['multiple', 1.2, 288, 'auto'], ['at-least', 18, 360, 'atLeast'], ['exact', 24, 480, 'exact'],
+  ]) {
+    const result = buildBodyParagraphSpacing({ line_spacing_mode: mode, line_spacing_value: value });
+    assert.equal(result.line, line);
+    assert.equal(result.lineRule, rule);
+  }
+  const spacing = buildBodyParagraphSpacing({ spacing_before: 0.5, spacing_after: 6, spacing_after_unit: 'pt' });
+  assert.equal(spacing.beforeLines, 50);
+  assert.equal(spacing.after, 120);
+  assert.equal(spacing.afterLines, undefined);
+  void Packer.toBuffer(new Document({ sections: [{ children: [paragraph([textRun('spacing')], { spacing })] }] }))
+    .then((buffer) => {
+      const xml = new AdmZip(buffer).readAsText('word/document.xml');
+      assert.match(xml, /w:beforeLines="50"/);
+      assert.match(xml, /w:after="120"/);
+      assert.equal((xml.match(/<w:spacing\b/g) || []).length, 1);
+    }).catch((error) => { console.error(error); process.exitCode = 1; });
+}

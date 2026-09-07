@@ -1,6 +1,7 @@
-import type { ExportFormatConfig, HeaderFooterStyle, PageSetupConfig } from '../types/exportFormat';
-import { HEADER_FOOTER_STYLE_OPTIONS, isDecorativeHeaderFooterStyle, isHtmlHeaderFooterStyle, resolveHeaderFooterStyle } from '../types/exportFormat';
-import { fillChromeHeaderHtml, fillFooterChromeSvg } from './headerFooterChromeTemplates';
+import { useMemo } from 'react';
+import { buildChrome } from '../../../electron/shared/chrome/index.mjs';
+import type { HeaderFooterStyle, PageSetupConfig } from '../types/exportFormat';
+import { HEADER_FOOTER_STYLE_OPTIONS, resolveHeaderFooterStyle } from '../types/exportFormat';
 
 function hexLuminance(hex: string): number {
   const raw = String(hex || '').replace('#', '');
@@ -20,23 +21,6 @@ function darkenHex(hex: string, amount = 0.18): string {
   if (!/^[0-9a-f]{6}$/i.test(raw)) return '#111111';
   const channel = (start: number) => Math.max(0, Math.round(Number.parseInt(raw.slice(start, start + 2), 16) * (1 - amount)));
   return `#${[0, 2, 4].map((start) => channel(start).toString(16).padStart(2, '0')).join('')}`;
-}
-
-export function formatPreviewPageNumber(page: PageSetupConfig, pageIndex = 0): string {
-  const pageNo = Math.max(1, Number(page.page_number_start) || 1) + pageIndex;
-  const pad = Number(page.page_number_pad) || 0;
-  const token = pad > 0 ? String(pageNo).padStart(pad, '0') : String(pageNo);
-  return String(page.page_number_format || '第{page}页').replace('{page}', token);
-}
-
-export function showPageHeaderChrome(page: PageSetupConfig): boolean {
-  if (!page.header_enabled) return false;
-  if (isDecorativeHeaderFooterStyle(page.header_footer_style)) return true;
-  return Boolean((page.header_text || '').trim());
-}
-
-export function showPageFooterChrome(page: PageSetupConfig): boolean {
-  return Boolean((page.footer_enabled && page.footer_text.trim()) || page.page_number_enabled);
 }
 
 interface ChromeColors {
@@ -62,328 +46,56 @@ export function resolveChromeColors(page: PageSetupConfig): ChromeColors {
   };
 }
 
-interface ChromePartProps {
-  config: ExportFormatConfig;
-  pageIndex?: number;
-}
+/**
+ * 样式缩略图 —— 和模板预览、正式导出吃同一套 SVG 生成器。
+ *
+ * 之前这里是用 CSS 另画的一套，是第四份平行实现，选择器里看到的和真实产出对不上。
+ * 现在直接渲染装饰 SVG（矢量，不需要栅格化），所见即所得。
+ */
+export function HeaderFooterStyleThumb({ style, bar, accent }: {
+  style: HeaderFooterStyle;
+  bar: string;
+  accent: string;
+}) {
+  const { headerSvg, footerSvg, layout } = useMemo(() => buildChrome({
+    header_footer_style: style,
+    header_enabled: true,
+    header_text: ' ',
+    footer_enabled: true,
+    footer_text: ' ',
+    page_number_enabled: true,
+    chrome_bar_color: bar || '#e8eef5',
+    chrome_accent_color: accent || '#536176',
+  }), [style, bar, accent]);
 
-function chromeClass(style: HeaderFooterStyle, extra = ''): string {
-  return `page-chrome is-${style}${extra ? ` ${extra}` : ''}`;
-}
+  const dataUrl = (svg: string | null) => (svg
+    ? `url("data:image/svg+xml,${encodeURIComponent(svg)}")`
+    : undefined);
 
-export function PageHeaderChrome({ config, pageIndex = 0 }: ChromePartProps) {
-  const page = config.page;
-  if (!showPageHeaderChrome(page)) return null;
-  if (page.first_page_different && pageIndex === 0) {
-    return (
-      <div className="page-chrome-first-page-placeholder" aria-hidden="true">
-        <PageHeaderChrome config={{ ...config, page: { ...page, first_page_different: false } }} pageIndex={pageIndex} />
-      </div>
-    );
-  }
-
-  const style = resolveHeaderFooterStyle(page.header_footer_style);
-  const colors = resolveChromeColors(page);
-  const headerText = (page.header_text || '').trim();
-  const badgeText = String(page.header_badge_text || '').trim().slice(0, 4);
-
-  if (style === 'band') {
-    return (
-      <div className={chromeClass(style, 'page-chrome-header')} style={{ background: colors.bar, color: colors.onBar }}>
-        <span className="page-chrome-badge" style={{ background: colors.accent, color: colors.onAccent }}>{badgeText}</span>
-        <span className="page-chrome-center">{headerText}</span>
-        <span className="page-chrome-spacer" aria-hidden="true" />
-      </div>
-    );
-  }
-
-  if (style === 'rules') {
-    return (
-      <div className={chromeClass(style, 'page-chrome-header')} style={{ color: page.header_color }}>
-        <span className="page-chrome-text">{headerText}</span>
-        <span className="page-chrome-rules" style={{ borderColor: colors.accent }} />
-      </div>
-    );
-  }
-
-  if (isHtmlHeaderFooterStyle(style)) {
-    return (
-      <div
-        className={chromeClass(style, 'page-chrome-header is-html')}
-        dangerouslySetInnerHTML={{
-          __html: fillChromeHeaderHtml(style, {
-            accent: colors.accent,
-            bar: colors.bar,
-            text: headerText,
-            font: page.header_font,
-            size: page.header_size,
-          }),
-        }}
-      />
-    );
-  }
-
-  if (style === 'footer-badge') {
-    return (
-      <div className={chromeClass(style, 'page-chrome-header')} style={{ color: page.header_color, borderColor: colors.accent }}>
-        <span className="page-chrome-text">{headerText}</span>
-      </div>
-    );
-  }
+  // 缩略图按纸张真实比例排版，装饰高度也按比例，一眼能看出占多大分量
+  const pct = (cm: number) => `${(cm / layout.heightCm) * 100}%`;
 
   return (
-    <div className={chromeClass(style, 'page-chrome-header')} style={{ color: page.header_color, textAlign: undefined }}>
-      {headerText}
-    </div>
-  );
-}
-
-export function PageFooterChrome({ config, pageIndex = 0 }: ChromePartProps) {
-  const page = config.page;
-  if (!showPageFooterChrome(page)) return null;
-  if (page.first_page_different && pageIndex === 0) {
-    return (
-      <div className="page-chrome-first-page-placeholder is-footer" aria-hidden="true">
-        <PageFooterChrome config={{ ...config, page: { ...page, first_page_different: false } }} pageIndex={pageIndex} />
-      </div>
-    );
-  }
-
-  const style = resolveHeaderFooterStyle(page.header_footer_style);
-  const colors = resolveChromeColors(page);
-  const footerText = page.footer_enabled ? page.footer_text.trim() : '';
-  const pageNumberText = page.page_number_enabled ? formatPreviewPageNumber(page, pageIndex) : '';
-
-  if (style === 'band') {
-    return (
-      <div className={chromeClass(style, 'page-chrome-footer')} style={{ background: colors.accent, color: colors.onAccent }}>
-        <span className="page-chrome-spacer" aria-hidden="true" />
-        <span className="page-chrome-center">{footerText}</span>
-        {pageNumberText ? (
-          <span className="page-chrome-badge is-page" style={{ background: colors.badge, color: contrastText(colors.badge) }}>{pageNumberText}</span>
-        ) : <span className="page-chrome-spacer" aria-hidden="true" />}
-      </div>
-    );
-  }
-
-  if (style === 'rules') {
-    return (
-      <div className={chromeClass(style, 'page-chrome-footer')} style={{ color: page.footer_color }}>
-        <span className="page-chrome-rules" style={{ borderColor: colors.accent }} />
-        <span className="page-chrome-text">
-          {footerText ? <span>{footerText}</span> : null}
-          {pageNumberText ? <span>{pageNumberText}</span> : null}
-        </span>
-      </div>
-    );
-  }
-
-  if (style === 'top-bar') {
-    return (
-      <div
-        className={chromeClass(style, 'page-chrome-footer is-slot')}
-        style={{ background: colors.accent, color: colors.onAccent }}
-      >
+    <span className="header-footer-style-thumb" aria-hidden="true">
+      {headerSvg ? (
         <span
-          className="page-chrome-footer-mark"
-          aria-hidden="true"
-          dangerouslySetInnerHTML={{ __html: fillFooterChromeSvg(style, colors.onAccent) }}
+          className="header-footer-style-thumb-chrome is-header"
+          style={{ height: pct(layout.headerHeightCm), backgroundImage: dataUrl(headerSvg) }}
         />
-        <span className="page-chrome-center is-slot" style={{ background: '#fff' }}>{footerText}</span>
-        <span className="page-chrome-page-box is-badge" style={{ background: colors.badge, color: contrastText(colors.badge) }}>{pageNumberText}</span>
-      </div>
-    );
-  }
-
-  if (style === 'slant') {
-    return (
-      <div
-        className={chromeClass(style, 'page-chrome-footer is-slant')}
-        style={{ background: colors.bar, color: colors.accent }}
-      >
+      ) : null}
+      <span className="header-footer-style-thumb-body">
+        <i /><i /><i /><i />
+      </span>
+      {footerSvg ? (
         <span
-          className="page-chrome-footer-mark is-accent"
-          style={{ background: colors.accent, color: colors.onAccent }}
-          aria-hidden="true"
-          dangerouslySetInnerHTML={{ __html: fillFooterChromeSvg(style, colors.onAccent) }}
+          className="header-footer-style-thumb-chrome is-footer"
+          style={{ height: pct(layout.footerHeightCm), backgroundImage: dataUrl(footerSvg) }}
         />
-        <span className="page-chrome-center">{footerText}</span>
-        <span className="page-chrome-page-box is-badge" style={{ background: colors.badge, color: contrastText(colors.badge) }}>{pageNumberText}</span>
-      </div>
-    );
-  }
-
-  if (style === 'letterhead') {
-    return (
-      <div
-        className={chromeClass(style, 'page-chrome-footer is-letterhead')}
-        style={{ background: '#fff', color: colors.accent, borderColor: colors.accent }}
-      >
-        <span className="page-chrome-center is-left">{footerText}</span>
-        <span className="page-chrome-accent-bar" style={{ background: colors.accent }} aria-hidden="true" />
-        <span className="page-chrome-page-box" style={{ color: colors.accent }}>{pageNumberText}</span>
-      </div>
-    );
-  }
-
-  if (style === 'frame') {
-    return (
-      <div
-        className={chromeClass(style, 'page-chrome-footer is-frame')}
-        style={{ background: '#fff', color: colors.accent, borderColor: colors.accent }}
-      >
-        <span
-          className="page-chrome-footer-mark"
-          aria-hidden="true"
-          dangerouslySetInnerHTML={{ __html: fillFooterChromeSvg(style, colors.accent) }}
-        />
-        <span className="page-chrome-center">{footerText}</span>
-        <span className="page-chrome-page-box is-frame" style={{ borderColor: colors.accent }}>{pageNumberText}</span>
-      </div>
-    );
-  }
-
-  if (style === 'footer-badge') {
-    return (
-      <div className={chromeClass(style, 'page-chrome-footer')} style={{ background: colors.bar, color: colors.onBar }}>
-        <span className="page-chrome-center">{footerText}</span>
-        {pageNumberText ? (
-          <span className="page-chrome-badge is-page" style={{ background: colors.accent, color: colors.onAccent }}>{pageNumberText}</span>
-        ) : null}
-      </div>
-    );
-  }
-
-  return (
-    <div className={chromeClass(style, 'page-chrome-footer')} style={page.footer_enabled ? undefined : { textAlign: 'center', color: page.footer_color }}>
-      {footerText ? <span>{footerText}</span> : null}
-      {pageNumberText ? <span>{pageNumberText}</span> : null}
-    </div>
-  );
-}
-
-function StyleThumbBody() {
-  return (
-    <span className="header-footer-style-thumb-body">
-      <i /><i /><i /><i />
+      ) : null}
     </span>
   );
 }
 
-export function HeaderFooterStyleThumb({ style, bar, accent }: { style: HeaderFooterStyle; bar: string; accent: string }) {
-  const barColor = bar || '#e8eef5';
-  const accentColor = accent || '#536176';
-
-  if (style === 'band') {
-    return (
-      <span className="header-footer-style-thumb is-band" aria-hidden="true">
-        <span className="header-footer-style-thumb-bar" style={{ background: barColor }}>
-          <i style={{ background: accentColor }} />
-        </span>
-        <StyleThumbBody />
-        <span className="header-footer-style-thumb-bar is-footer" style={{ background: accentColor }}>
-          <i style={{ background: darkenHex(accentColor) }} />
-        </span>
-      </span>
-    );
-  }
-
-  if (style === 'rules') {
-    return (
-      <span className="header-footer-style-thumb is-rules" aria-hidden="true">
-        <span className="header-footer-style-thumb-caption" style={{ background: accentColor }} />
-        <span className="header-footer-style-thumb-line" style={{ borderColor: accentColor }} />
-        <StyleThumbBody />
-        <span className="header-footer-style-thumb-line" style={{ borderColor: accentColor }} />
-        <span className="header-footer-style-thumb-caption" style={{ background: accentColor }} />
-      </span>
-    );
-  }
-
-  if (style === 'top-bar') {
-    return (
-      <span className="header-footer-style-thumb is-top-bar" aria-hidden="true">
-        <span className="header-footer-style-thumb-ribbon" style={{ background: accentColor }}>
-          <i style={{ background: darkenHex(accentColor, 0.32) }} />
-          <b style={{ background: barColor }} />
-          <em style={{ background: darkenHex(accentColor, 0.38) }} />
-        </span>
-        <StyleThumbBody />
-        <span className="header-footer-style-thumb-ribbon is-footer" style={{ background: accentColor }}>
-          <i style={{ background: darkenHex(accentColor, 0.18) }} />
-          <b style={{ background: '#fff' }} />
-          <em style={{ background: darkenHex(accentColor) }} />
-        </span>
-      </span>
-    );
-  }
-
-  if (style === 'footer-badge') {
-    return (
-      <span className="header-footer-style-thumb is-footer-badge" aria-hidden="true">
-        <span className="header-footer-style-thumb-hairline" style={{ background: accentColor }} />
-        <StyleThumbBody />
-        <span className="header-footer-style-thumb-bar is-footer" style={{ background: barColor }}>
-          <i style={{ background: accentColor }} />
-        </span>
-      </span>
-    );
-  }
-
-  if (style === 'slant') {
-    return (
-      <span className="header-footer-style-thumb is-slant" aria-hidden="true">
-        <span className="header-footer-style-thumb-slant" style={{ background: barColor }}>
-          <i style={{ background: accentColor }} />
-        </span>
-        <StyleThumbBody />
-        <span className="header-footer-style-thumb-bar is-footer" style={{ background: barColor }}>
-          <i style={{ background: accentColor }} />
-        </span>
-      </span>
-    );
-  }
-
-  if (style === 'letterhead') {
-    return (
-      <span className="header-footer-style-thumb is-letterhead" aria-hidden="true">
-        <span className="header-footer-style-thumb-letter-head">
-          <i style={{ background: accentColor }} />
-          <b style={{ background: accentColor }} />
-        </span>
-        <StyleThumbBody />
-        <span className="header-footer-style-thumb-letter-foot">
-          <b style={{ background: accentColor }} />
-          <em />
-        </span>
-      </span>
-    );
-  }
-
-  if (style === 'frame') {
-    return (
-      <span className="header-footer-style-thumb is-frame" aria-hidden="true">
-        <span className="header-footer-style-thumb-frame-head" style={{ borderColor: accentColor }}>
-          <i style={{ background: accentColor }} />
-          <i style={{ background: accentColor }} />
-          <b />
-        </span>
-        <StyleThumbBody />
-        <span className="header-footer-style-thumb-frame-foot" style={{ borderColor: accentColor }}>
-          <em style={{ borderColor: accentColor }} />
-        </span>
-      </span>
-    );
-  }
-
-  return (
-    <span className="header-footer-style-thumb is-plain" aria-hidden="true">
-      <span className="header-footer-style-thumb-caption" />
-      <StyleThumbBody />
-      <span className="header-footer-style-thumb-caption" />
-    </span>
-  );
-}
 
 interface StylePickerProps {
   value: HeaderFooterStyle;

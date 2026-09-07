@@ -7,6 +7,8 @@ import { AppDialog, AppSwitch, FloatingToolbar, ProgressBar, useToast } from '..
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type {
   BodyTextStyleConfig,
+  BodyLineSpacingMode,
+  ParagraphSpacingUnit,
   ExportFormatConfig,
   HeadingBorderConfig,
   HeadingNumberingFormat,
@@ -24,6 +26,7 @@ import type {
 } from '../../../shared/types/exportFormat';
 import {
   ALIGNMENT_OPTIONS,
+  BODY_LINE_SPACING_OPTIONS,
   DEFAULT_EXPORT_FORMAT,
   FONT_OPTIONS,
   HEADING_LEVEL_LABELS,
@@ -321,6 +324,8 @@ function ExportFormatPage({
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
+  const [exportSourceOpen, setExportSourceOpen] = useState(false);
+  const [exportSource, setExportSource] = useState<'template' | 'bid'>('template');
   const [previewFullscreenOpen, setPreviewFullscreenOpen] = useState(false);
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -577,14 +582,17 @@ function ExportFormatPage({
     });
   }, [selectedThemePresetId]);
 
-  const handleExportTest = useCallback(async () => {
+  /** 按所选来源导出模板样张或已有投标文件，共用进度和保存流程。 */
+  const handleExportTest = useCallback(async (source: 'template' | 'bid') => {
+    setExportSourceOpen(false);
+    setExportSource(source);
     let unsubscribe: (() => void) | undefined;
 
     try {
-      const technicalPlan = await window.yibiao?.technicalPlan.loadState();
+      const technicalPlan = source === 'bid' ? await window.yibiao?.technicalPlan.loadState() : undefined;
       const outlineData = technicalPlan?.outlineData;
       const outline = outlineData?.outline || [];
-      if (!hasGeneratedContent(outline)) {
+      if (source === 'bid' && !hasGeneratedContent(outline)) {
         showToast('无已完成标书', 'info');
         return;
       }
@@ -597,7 +605,7 @@ function ExportFormatPage({
         progress: 2,
         message: mermaidCount
           ? `检测到 ${mermaidCount} 张 Mermaid 图，导出时会转换为 Word 图片，可能需要稍等。`
-          : '正在使用当前模板导出测试 Word。',
+          : source === 'template' ? '正在使用当前设置导出模板预览样张。' : '正在使用当前模板导出投标文件。',
         warnings: [],
         mermaidCount,
       });
@@ -620,7 +628,8 @@ function ExportFormatPage({
 
       const result = await window.yibiao?.export.exportWord({
         requestId,
-        project_name: outlineData?.project_name,
+        project_name: source === 'template' ? config.template_name || '模板样张' : outlineData?.project_name,
+        template_html: source === 'template' ? DOCUMENT_DISPLAY_TEMPLATE_HTML : undefined,
         outline,
         export_format: config,
       });
@@ -694,7 +703,7 @@ function ExportFormatPage({
   const exportTestToolbarGroup: FloatingToolbarGroup = {
     id: 'template-export-test',
     actions: [
-      { id: 'export-test', label: '导出测试', variant: 'warning', disabled: exportProgress.running, onClick: () => { void handleExportTest(); } },
+      { id: 'export-test', label: '导出测试', variant: 'warning', disabled: exportProgress.running, onClick: () => setExportSourceOpen(true) },
     ],
   };
   const previewToolbarGroup: FloatingToolbarGroup = {
@@ -1196,22 +1205,51 @@ function ExportFormatPage({
             {ALIGNMENT_OPTIONS.map((alignment) => <option key={alignment} value={alignment}>{alignment}</option>)}
           </select>
         </label>
-        <label className="settings-row">
-          <div className="settings-row-copy"><strong>段前（磅）</strong></div>
-          <input type="number" min={0} max={100} step={1} value={config.body_text.spacing_before_pt} onChange={(event) => updateBodyText({ spacing_before_pt: Number(event.target.value) })} />
-        </label>
-        <label className="settings-row">
-          <div className="settings-row-copy"><strong>段后（磅）</strong></div>
-          <input type="number" min={0} max={100} step={1} value={config.body_text.spacing_after_pt} onChange={(event) => updateBodyText({ spacing_after_pt: Number(event.target.value) })} />
-        </label>
+        {(['before', 'after'] as const).map((position) => {
+          const label = position === 'before' ? '段前' : '段后';
+          const valueKey = `spacing_${position}` as const;
+          const unitKey = `spacing_${position}_unit` as const;
+          const maxSpacing = config.body_text[unitKey] === 'pt' ? 1584 : 132;
+          return (
+            <div className="settings-row" key={position}>
+              <div className="settings-row-copy"><strong>{label}</strong></div>
+              <div className="export-format-spacing-control">
+                <input aria-label={`${label}间距`} type="number" min={0} max={maxSpacing} step={0.1} value={config.body_text[valueKey]} onChange={(event) => updateBodyText({ [valueKey]: Math.min(maxSpacing, Math.max(0, Number(event.target.value))) })} />
+                <select aria-label={`${label}单位`} value={config.body_text[unitKey]} onChange={(event) => updateBodyText({
+                  [unitKey]: event.target.value as ParagraphSpacingUnit,
+                  [valueKey]: Math.min(config.body_text[valueKey], event.target.value === 'pt' ? 1584 : 132),
+                })}>
+                  <option value="lines">行</option>
+                  <option value="pt">磅</option>
+                </select>
+              </div>
+            </div>
+          );
+        })}
         <label className="settings-row">
           <div className="settings-row-copy"><strong>首行缩进（字符）</strong></div>
           <input type="number" min={0} max={10} step={0.5} value={config.body_text.first_line_indent_chars} onChange={(event) => updateBodyText({ first_line_indent_chars: Number(event.target.value) })} />
         </label>
         <label className="settings-row">
-          <div className="settings-row-copy"><strong>行间距（倍）</strong></div>
-          <input type="number" min={0.5} max={5} step={0.1} value={config.body_text.line_spacing_multiple} onChange={(event) => updateBodyText({ line_spacing_multiple: Number(event.target.value) })} />
+          <div className="settings-row-copy"><strong>行距</strong></div>
+          <select value={config.body_text.line_spacing_mode} onChange={(event) => {
+            const mode = event.target.value as BodyLineSpacingMode;
+            const wasPoints = ['at-least', 'exact'].includes(config.body_text.line_spacing_mode);
+            const usePoints = mode === 'at-least' || mode === 'exact';
+            updateBodyText({
+              line_spacing_mode: mode,
+              line_spacing_value: wasPoints === usePoints ? config.body_text.line_spacing_value : usePoints ? 12 : 1.2,
+            });
+          }}>
+            {BODY_LINE_SPACING_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
         </label>
+        {['at-least', 'exact', 'multiple'].includes(config.body_text.line_spacing_mode) && (
+          <label className="settings-row">
+            <div className="settings-row-copy"><strong>设置值（{config.body_text.line_spacing_mode === 'multiple' ? '倍' : '磅'}）</strong></div>
+            <input type="number" min={0.1} max={config.body_text.line_spacing_mode === 'multiple' ? 132 : 1584} step={config.body_text.line_spacing_mode === 'multiple' ? 0.01 : 0.1} value={config.body_text.line_spacing_value} onChange={(event) => updateBodyText({ line_spacing_value: Math.min(config.body_text.line_spacing_mode === 'multiple' ? 132 : 1584, Math.max(0.1, Number(event.target.value))) })} />
+          </label>
+        )}
         <label className="settings-row">
           <div className="settings-row-copy"><strong>无序列表符号</strong><span>Markdown “- 内容”的无序列表</span></div>
           <div className="export-bullet-library" role="radiogroup" aria-label="无序列表符号">
@@ -1466,6 +1504,19 @@ function ExportFormatPage({
           />
         </div>
       </div>
+      <AppDialog
+        open={exportSourceOpen}
+        onOpenChange={setExportSourceOpen}
+        title="导出测试"
+        actions={(
+          <button className="secondary-action" type="button" onClick={() => setExportSourceOpen(false)}>取消</button>
+        )}
+      >
+        <div style={{ display: 'grid', gap: 12 }}>
+          <button className="primary-action" type="button" onClick={() => { void handleExportTest('template'); }}>从模板导出</button>
+          <button className="primary-action" type="button" onClick={() => { void handleExportTest('bid'); }}>从投标文件导出</button>
+        </div>
+      </AppDialog>
       <Dialog.Root
         open={exportProgress.open}
         onOpenChange={(open) => {
@@ -1483,7 +1534,7 @@ function ExportFormatPage({
               <Dialog.Description>
                 {exportProgress.mermaidCount > 0
                   ? `本次包含 ${exportProgress.mermaidCount} 张 Mermaid 图，导出时会在本地转换成 Word 图片。`
-                  : '正在使用当前模板导出已生成的技术方案。'}
+                  : exportSource === 'template' ? '本次导出当前模板的预览样张。' : '本次使用当前模板导出已生成的投标文件。'}
               </Dialog.Description>
             </div>
             <div className="export-progress-body">

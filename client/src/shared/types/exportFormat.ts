@@ -41,14 +41,29 @@ export interface HeadingBorderConfig {
 }
 
 // ── 正文样式 ──────────────────────────────────────
+export const BODY_LINE_SPACING_OPTIONS = [
+  { value: 'single', label: '单倍行距' },
+  { value: 'one-and-half', label: '1.5 倍行距' },
+  { value: 'double', label: '2 倍行距' },
+  { value: 'at-least', label: '最小值' },
+  { value: 'exact', label: '固定值' },
+  { value: 'multiple', label: '多倍行距' },
+] as const;
+
+export type BodyLineSpacingMode = (typeof BODY_LINE_SPACING_OPTIONS)[number]['value'];
+export type ParagraphSpacingUnit = 'lines' | 'pt';
+
 export interface BodyTextStyleConfig {
   font: string;
   size: string;
   alignment: string;
-  spacing_before_pt: number;
-  spacing_after_pt: number;
+  spacing_before: number;
+  spacing_before_unit: ParagraphSpacingUnit;
+  spacing_after: number;
+  spacing_after_unit: ParagraphSpacingUnit;
   first_line_indent_chars: number;
-  line_spacing_multiple: number;
+  line_spacing_mode: BodyLineSpacingMode;
+  line_spacing_value: number;
   list_style: ListStyle;
   ordered_list_style: OrderedListStyle;
   list_indent_chars: number;
@@ -381,7 +396,7 @@ const DEFAULT_PAGE_SETUP: PageSetupConfig = {
   chrome_accent_color: '#536176',
   footer_enabled: false,
   footer_text: '',
-  footer_distance_cm: 1.75,
+  footer_distance_cm: 0,
   footer_font: '宋体',
   footer_size: '小五',
   footer_alignment: '居中对齐',
@@ -396,10 +411,13 @@ const DEFAULT_BODY_TEXT: BodyTextStyleConfig = {
   font: '宋体',
   size: '小四',
   alignment: '左对齐',
-  spacing_before_pt: 0,
-  spacing_after_pt: 0,
+  spacing_before: 0,
+  spacing_before_unit: 'lines',
+  spacing_after: 0,
+  spacing_after_unit: 'lines',
   first_line_indent_chars: 2,
-  line_spacing_multiple: 1.2,
+  line_spacing_mode: 'multiple',
+  line_spacing_value: 1.2,
   list_style: 'disc',
   ordered_list_style: 'decimal-dot',
   list_indent_chars: 2,
