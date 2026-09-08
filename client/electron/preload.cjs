@@ -251,6 +251,7 @@ const bridge = {
     create: (config) => ipcRenderer.invoke('templates:create', config),
     update: (templateId, config) => ipcRenderer.invoke('templates:update', templateId, config),
     delete: (templateId) => ipcRenderer.invoke('templates:delete', templateId),
+    duplicate: (templateId) => ipcRenderer.invoke('templates:duplicate', templateId),
     renderPreview: (html, config) => ipcRenderer.invoke('templates:render-preview', html, config),
   },
   tasks: {

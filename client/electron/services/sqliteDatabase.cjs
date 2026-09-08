@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 29;
+const schemaVersion = 30;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -1152,12 +1152,18 @@ function addTechnicalPlanExportTemplate(db) {
   addColumnIfMissing(db, 'technical_plan_generation_config', 'export_template_id', "TEXT NOT NULL DEFAULT ''");
 }
 
+/** 为导出模板增加系统预设标记，系统预设模板不可编辑不可删除。 */
+function addExportTemplateIsSystem(db) {
+  addColumnIfMissing(db, 'export_templates', 'is_system', 'INTEGER NOT NULL DEFAULT 0');
+}
+
 function createExportTemplatesSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS export_templates (
       template_id TEXT PRIMARY KEY,
       template_name TEXT NOT NULL,
       config_json TEXT NOT NULL,
+      is_system INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -1493,6 +1499,13 @@ const schemaHealthColumnGroups = [
       export_template_id: "TEXT NOT NULL DEFAULT ''",
     },
   },
+  {
+    version: 30,
+    table: 'export_templates',
+    columns: {
+      is_system: 'INTEGER NOT NULL DEFAULT 0',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -1701,6 +1714,11 @@ const migrations = [
     version: 29,
     description: '技术方案移除正文生成模板配置',
     up: removeTechnicalPlanContentGenerationTemplate,
+  },
+  {
+    version: 30,
+    description: '导出模板新增系统预设标记',
+    up: addExportTemplateIsSystem,
   },
 ];
 

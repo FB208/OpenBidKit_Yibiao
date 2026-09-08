@@ -57,7 +57,7 @@ type TemplateTab = 'quick' | 'layout' | 'header-footer' | 'cover' | 'heading' | 
 type TableCellStyleKey = 'header_row' | 'first_column' | 'body_cell';
 
 interface ExportFormatPageProps {
-  mode?: 'create' | 'edit';
+  mode?: 'create' | 'edit' | 'view';
   templateId?: string | null;
   onBack?: () => void;
   onSaved?: (template: ExportTemplateRecord) => void | Promise<void>;
@@ -68,7 +68,7 @@ interface ExportFormatPageProps {
 
 export interface ExportTemplateEditorDialogProps {
   open: boolean;
-  mode: 'create' | 'edit';
+  mode: 'create' | 'edit' | 'view';
   templateId?: string | null;
   returnLabel: string;
   onOpenChange: (open: boolean) => void;
@@ -330,6 +330,8 @@ function ExportFormatPage({
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  /** 系统预设模板以只读模式打开：控件全禁用，不给保存入口，但预览和分类切换照常。 */
+  const readOnly = mode === 'view';
   const templatePreview = useTemplatePreview(config, loaded && !loadError);
   const exitPreviewFullscreen = useCallback(() => setPreviewFullscreenOpen(false), []);
 
@@ -349,16 +351,16 @@ function ExportFormatPage({
   }, []);
 
   useEffect(() => {
-    trackPageView(mode === 'edit' ? 'my-templates/edit' : 'new-template');
+    trackPageView(mode === 'create' ? 'new-template' : mode === 'view' ? 'my-templates/view' : 'my-templates/edit');
     let cancelled = false;
     (async () => {
       setLoaded(false);
       setLoadError('');
       setInitialConfig(null);
       try {
-        if (mode === 'edit') {
+        if (mode === 'edit' || mode === 'view') {
           if (!templateId) {
-            throw new Error('缺少要编辑的模板');
+            throw new Error('缺少要打开的模板');
           }
           const template = await window.yibiao?.templates.get(templateId);
           if (!template) {
@@ -676,6 +678,10 @@ function ExportFormatPage({
     }
   }, [exportProgress.filePath, showToast]);
 
+  /** 只读态里折叠按钮被 fieldset 禁用，直接当全部展开处理，避免有内容看不到。 */
+  const isHeadingExpanded = (index: number) => readOnly || expandedHeadings.has(index);
+  const isTableCardExpanded = (key: string) => readOnly || expandedTableCards.has(key);
+
   const toggleHeading = useCallback((index: number) => {
     setExpandedHeadings((prev) => {
       const next = new Set(prev);
@@ -755,9 +761,9 @@ function ExportFormatPage({
   const toolbarGroups: FloatingToolbarGroup[] = [
     ...(navigationToolbarGroup ? [navigationToolbarGroup] : []),
     previewToolbarGroup,
-    resetToolbarGroup,
+    ...(readOnly ? [] : [resetToolbarGroup]),
     exportTestToolbarGroup,
-    ...saveToolbarGroups,
+    ...(readOnly ? [] : saveToolbarGroups),
   ];
 
   const renderQuickSettings = () => (
@@ -1108,7 +1114,7 @@ function ExportFormatPage({
       </details>
       <div className="export-format-heading-list">
         {config.headings.map((heading, index) => {
-          const isExpanded = expandedHeadings.has(index);
+          const isExpanded = isHeadingExpanded(index);
           const numExample = headingNumberExample(index, heading);
           return (
             <div key={index} className={`export-format-heading-card${isExpanded ? ' is-expanded' : ''}`}>
@@ -1284,7 +1290,7 @@ function ExportFormatPage({
 
   const renderTableCellSettings = (title: string, example: string, cellKey: TableCellStyleKey) => {
     const cell = config.table[cellKey];
-    const isExpanded = expandedTableCards.has(cellKey);
+    const isExpanded = isTableCardExpanded(cellKey);
     return (
       <div className={`export-format-heading-card${isExpanded ? ' is-expanded' : ''}`}>
         <button type="button" className="export-format-heading-header" onClick={() => toggleTableCard(cellKey)}>
@@ -1347,13 +1353,13 @@ function ExportFormatPage({
         </label>
       </div>
       <div className="export-format-heading-list">
-        <div className={`export-format-heading-card${expandedTableCards.has('caption') ? ' is-expanded' : ''}`}>
+        <div className={`export-format-heading-card${isTableCardExpanded('caption') ? ' is-expanded' : ''}`}>
           <button type="button" className="export-format-heading-header" onClick={() => toggleTableCard('caption')}>
             <span className="export-format-heading-label">表格标题</span>
             <span className="export-format-heading-example" />
-            <span className={`export-format-heading-chevron${expandedTableCards.has('caption') ? ' is-open' : ''}`}>▸</span>
+            <span className={`export-format-heading-chevron${isTableCardExpanded('caption') ? ' is-open' : ''}`}>▸</span>
           </button>
-          {expandedTableCards.has('caption') && (
+          {isTableCardExpanded('caption') && (
             <div className="export-format-heading-body">
               <div className="export-format-heading-grid">
                 <label>
@@ -1492,7 +1498,14 @@ function ExportFormatPage({
         </div>
         <div className="export-template-workspace">
           <section className="settings-page-section export-template-editor">
-            {renderActiveSettings()}
+            {readOnly ? (
+              <p className="export-template-readonly-notice" role="status">
+                系统预设模板不可编辑。需要在它的基础上调整，请回到“我的模板”复制一份。
+              </p>
+            ) : null}
+            <fieldset className="export-template-settings-fieldset" disabled={readOnly}>
+              {renderActiveSettings()}
+            </fieldset>
           </section>
           <TemplatePreviewView
             preview={templatePreview}
@@ -1612,10 +1625,12 @@ export function ExportTemplateEditorDialog({
             onPointerDownOutside={(event) => event.preventDefault()}
           >
             <Dialog.Title className="export-template-fullscreen-title">
-              {mode === 'edit' ? '编辑模板' : '新建模板'}
+              {mode === 'view' ? '查看模板' : mode === 'edit' ? '编辑模板' : '新建模板'}
             </Dialog.Title>
             <Dialog.Description className="export-template-fullscreen-description">
-              配置模板的版面、页眉页脚、标题、正文、表格和图片样式。
+              {mode === 'view'
+                ? '查看该模板的版面、页眉页脚、标题、正文、表格和图片样式。'
+                : '配置模板的版面、页眉页脚、标题、正文、表格和图片样式。'}
             </Dialog.Description>
             <ExportFormatPage
               mode={mode}

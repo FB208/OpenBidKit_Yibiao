@@ -966,15 +966,19 @@ CREATE INDEX IF NOT EXISTS idx_credential_library_images_owner
 ON credential_library_images(owner_type, owner_id, field_key, sort_order, created_at);
 
 -- ============================================================================
--- 导出模板 export_templates（v15 目标设计）
+-- 导出模板 export_templates（v15 建表，v30 增加系统预设标记）
 -- ============================================================================
 
 -- 标书导出模板库。
--- config_json 保存完整 ExportFormatConfig；当前仅用于模板保存、查看和编辑，尚未接入 Word 导出选择。
+-- config_json 保存完整 ExportFormatConfig，由技术方案生成设置里的
+-- technical_plan_generation_config.export_template_id 引用，Word 导出时按它排版。
+-- is_system = 1 是系统预设模板：真源在 electron/services/systemExportTemplates.cjs，
+-- 每次启动幂等同步进来，用户不可编辑不可删除，只能复制成自己的模板。
 CREATE TABLE IF NOT EXISTS export_templates (
   template_id TEXT PRIMARY KEY,
   template_name TEXT NOT NULL,
   config_json TEXT NOT NULL,
+  is_system INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

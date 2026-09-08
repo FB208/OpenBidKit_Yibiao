@@ -220,6 +220,8 @@ export interface ExportTemplateRecord {
   template_id: string;
   template_name: string;
   config: ExportFormatConfig;
+  /** 系统预设模板：不可编辑、不可删除，只能复制成自己的模板。 */
+  is_system: boolean;
   created_at: string;
   updated_at: string;
 }

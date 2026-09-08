@@ -1326,6 +1326,42 @@
   padding: 18px;
 }
 
+.template-library-group-title {
+  margin: 4px 0 0;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.template-library-list .template-library-group-title:first-child {
+  margin-top: 0;
+}
+
+.template-library-group-hint {
+  margin: -6px 0 0;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+}
+
+/* 卡片标题是 nowrap + ellipsis，徽标要挡住省略号才不会被截掉。 */
+.template-library-system-badge {
+  margin-left: 8px;
+  padding: 2px 8px;
+  color: var(--yb-primary);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  vertical-align: middle;
+  background: rgba(33, 116, 253, 0.1);
+  border-radius: var(--yb-radius-pill);
+}
+
+.template-library-card-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .template-library-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1668,4 +1704,22 @@
   .header-footer-style-picker {
     grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
   }
+}
+
+/* 只读模板用 fieldset[disabled] 一把禁掉所有控件；默认边框和 min-content 会破坏内部栅格。 */
+.export-template-settings-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.export-template-readonly-notice {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  color: var(--yb-text-muted);
+  font-size: 13px;
+  background: rgba(33, 116, 253, 0.06);
+  border: 1px solid rgba(33, 116, 253, 0.14);
+  border-radius: var(--yb-radius-lg);
 }

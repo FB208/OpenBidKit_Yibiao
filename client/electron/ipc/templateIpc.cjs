@@ -6,6 +6,7 @@ function registerTemplateIpc({ templateStore, openXmlHelperService }) {
   ipcMain.handle('templates:create', (_event, config) => templateStore.createTemplate(config));
   ipcMain.handle('templates:update', (_event, templateId, config) => templateStore.updateTemplate(templateId, config));
   ipcMain.handle('templates:delete', (_event, templateId) => templateStore.deleteTemplate(templateId));
+  ipcMain.handle('templates:duplicate', (_event, templateId) => templateStore.duplicateTemplate(templateId));
   ipcMain.handle('templates:render-preview', (_event, html, config) => openXmlHelperService.renderRestrictedHtmlDocx(html, config));
 }
 
