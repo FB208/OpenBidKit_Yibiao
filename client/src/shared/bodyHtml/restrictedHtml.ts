@@ -29,6 +29,7 @@ const UNKNOWN_BLOCK_TAGS = new Set([
 ]);
 const FIGURE_GENERATIONS = new Set(['aiImage', 'mermaid', 'htmlImage']);
 const FIGURE_SIZES = new Set(['square', 'wide', 'tall', 'panorama']);
+const FIGURE_FITS = new Set(['contain', 'cover']);
 const TABLE_PRESETS = new Set([
   'plain', 'headerRow', 'headerColumn', 'headerRowAndColumn', 'imageText', 'threeImages', 'fourImages',
 ]);
@@ -103,6 +104,8 @@ function allowedAttributes(element: Element, options: RestrictedHtmlParseOptions
   if (tag === 'figure') {
     names.add('data-yb-generation');
     names.add('data-yb-size');
+    // 画框适配方式：contain 按真实比例放进画框不裁切，cover 居中裁切；缺省即 cover。
+    names.add('data-yb-fit');
   }
   if (tag === 'template' || tag === 'aside') names.add('data-yb-role');
   if (tag === 'img') {
@@ -230,6 +233,8 @@ function validateFigure(figure: Element, context: BlockContext, ids: Map<string,
   if (!FIGURE_GENERATIONS.has(generation)) addIssue(context, 'error', 'figure 缺少合法 data-yb-generation');
   const size = figure.getAttribute('data-yb-size') || '';
   if (!FIGURE_SIZES.has(size)) addIssue(context, 'error', 'figure 缺少合法 data-yb-size');
+  const fit = figure.getAttribute('data-yb-fit');
+  if (fit !== null && !FIGURE_FITS.has(fit)) addIssue(context, 'error', 'figure 的 data-yb-fit 只能是 contain 或 cover');
   if (!onlyWhitespaceTextOutside(figure, new Set(['template', 'img', 'figcaption']))) {
     addIssue(context, 'error', 'figure 只能包含 template、img 和 figcaption');
   }

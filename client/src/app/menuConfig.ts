@@ -145,6 +145,12 @@ const developerMenuItems: AppMenuItem[] = [
         icon: 'tool',
       },
       {
+        id: 'developer-layout-budget-test',
+        label: '版面预算正文测试',
+        description: '按导出模板算版面容量，先排骨架再按字数配额生成正文，验证分页不留大段空白。',
+        icon: 'tool',
+      },
+      {
         id: 'developer-agent-test',
         label: 'Pi Agent 链路测试',
         description: '验证 Pi Agent 的状态、自检、任务输出和诊断。',

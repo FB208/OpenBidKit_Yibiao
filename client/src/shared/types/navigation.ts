@@ -20,6 +20,7 @@ export type SectionId =
   | 'developer-parser-sandbox'
   | 'developer-export-preview'
   | 'developer-expansion-replace-test'
+  | 'developer-layout-budget-test'
   | 'developer-agent-test'
   | 'settings'
   | 'plugin-manager';

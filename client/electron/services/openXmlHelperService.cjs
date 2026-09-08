@@ -457,8 +457,13 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
    * （字节相同却换了一份新数组，会让编辑器白白重开一次文档），
    * 后者让预览侧能按角色定位段落，对部分改动走增量而不是重新生成整篇。
    */
-  function renderRestrictedHtmlDocx(html, exportFormat) {
-    const key = crypto.createHash('sha256').update(html).update('\0').update(JSON.stringify(exportFormat)).digest('hex');
+  function renderRestrictedHtmlDocx(html, exportFormat, options = {}) {
+    // assetRoot 让调用方指定自己的配图目录（开发者版面测试用真实生成的图，
+    // 不能混进模板样张那份会被同步清理的目录）；不传就走模板样张资源。
+    const assetRoot = typeof options.assetRoot === 'string' ? options.assetRoot.trim() : '';
+    const key = crypto.createHash('sha256')
+      .update(html).update('\0').update(JSON.stringify(exportFormat)).update('\0').update(assetRoot)
+      .digest('hex');
     const cached = readPreviewCache(key);
     if (cached) {
       settleSupersededPreview({ key, ...cached });
@@ -472,7 +477,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
       return previewPending.promise;
     }
 
-    const request = { key, html, exportFormat };
+    const request = { key, html, exportFormat, assetRoot };
     if (!previewActive) {
       return startPreview(request);
     }
@@ -504,7 +509,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
 
   /** 启动一个预览；结束后只把最后一次等待配置送入队列。 */
   function startPreview(request) {
-    const promise = createRestrictedHtmlDocx(request.html, request.exportFormat)
+    const promise = createRestrictedHtmlDocx(request.html, request.exportFormat, { assetRoot: request.assetRoot })
       .then((rendered) => ({ key: request.key, ...rendered }));
     const task = { key: request.key, promise };
     previewActive = task;
@@ -529,8 +534,8 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
   }
 
   /** 执行一次样张生成任务；同配置的多个预览实例共用上层缓存。 */
-  async function createRestrictedHtmlDocx(html, exportFormat) {
-    const assetRoot = await syncPreviewAssets();
+  async function createRestrictedHtmlDocx(html, exportFormat, options = {}) {
+    const assetRoot = options.assetRoot?.trim() || await syncPreviewAssets();
     // 页眉页脚装饰：SVG 栅格化成 PNG 落工作区，C# 侧嵌成锚定浮动图。
     // 段落底纹画不出渐变和斜切，装饰必须走图片。
     const chrome = await buildChromeAssets(app, exportFormat?.page);

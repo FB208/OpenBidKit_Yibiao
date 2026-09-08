@@ -29,6 +29,18 @@ static partial class RestrictedHtmlWordInserter
     static readonly Dictionary<string, CachedAsset> AssetCache = new(StringComparer.OrdinalIgnoreCase);
     static long AssetCacheBytes;
 
+    /// <summary>
+    /// 画框适配方式。
+    /// cover 把图裁成画框比例，适合实景照片；contain 只把画框当成上界，
+    /// 图按自己的真实比例缩放进去，一个像素都不切——流程图、信息图必须走这条。
+    /// 不写 data-yb-fit 时保持 cover，老文档行为不变。
+    /// </summary>
+    enum FigureFit
+    {
+        Cover,
+        Contain,
+    }
+
     static readonly IReadOnlyDictionary<string, FigureSize> FigureSizes = new Dictionary<string, FigureSize>(StringComparer.Ordinal)
     {
         ["square"] = new(0.65, 1, 1),
@@ -178,6 +190,7 @@ static partial class RestrictedHtmlWordInserter
             var token = $"{FigureTokenPrefix}{Guid.NewGuid():N}";
             var caption = figure.Children.FirstOrDefault(item => item.LocalName == "figcaption")?.TextContent?.Trim() ?? "";
             var placement = ResolveFigurePlacement(figure, size, imageMaxWidthPercent);
+            var fit = ResolveFigureFit(figure);
             var asset = LoadAsset(assetPath, cacheAssets);
             figures.Add(new FigureSpec(
                 token,
@@ -186,6 +199,7 @@ static partial class RestrictedHtmlWordInserter
                 caption,
                 size,
                 placement,
+                fit,
                 asset.Dimensions,
                 asset.Bytes));
 
@@ -349,6 +363,12 @@ static partial class RestrictedHtmlWordInserter
         var width = Math.Max(1L, (long)Math.Round(pageContentWidth * spec.Placement.WidthRatio));
         width = Math.Max(1L, width - (long)Math.Round(spec.Placement.HorizontalPaddingPoints * EmusPerPoint));
         var height = Math.Max(1L, (long)Math.Round(width * (double)spec.Size.AspectHeight / spec.Size.AspectWidth));
+        if (spec.Fit == FigureFit.Contain)
+        {
+            // 画框此时只是上界：按图片自己的比例缩进去，宁可留白也不切内容。
+            // 高度只会小于等于版面预算，所以排版侧的装箱结论仍然成立。
+            (width, height) = FitInside(spec.Dimensions, width, height);
+        }
         var imagePart = mainPart.AddImagePart(ResolveImagePartType(spec.AssetPath));
         using (var stream = spec.Bytes is null
             ? (Stream)File.OpenRead(spec.AssetPath)
@@ -357,7 +377,9 @@ static partial class RestrictedHtmlWordInserter
             imagePart.FeedData(stream);
         }
         var relationshipId = mainPart.GetIdOfPart(imagePart);
-        var crop = ResolveCenterCrop(spec.Dimensions, spec.Size);
+        var crop = spec.Fit == FigureFit.Contain
+            ? new CropValues(0, 0, 0, 0)
+            : ResolveCenterCrop(spec.Dimensions, spec.Size);
         var name = Path.GetFileName(spec.AssetPath);
 
         var drawing = new Wp.Drawing(
@@ -640,6 +662,28 @@ static partial class RestrictedHtmlWordInserter
     }
 
     /// <summary>计算 DrawingML 千分之一百分比单位的居中 cover 裁切值。</summary>
+    /// <summary>读取 data-yb-fit；不写或写了不认识的值时按 cover 处理，保持旧行为。</summary>
+    static FigureFit ResolveFigureFit(IElement figure)
+    {
+        return (figure.GetAttribute("data-yb-fit") ?? "").Trim() switch
+        {
+            "contain" => FigureFit.Contain,
+            _ => FigureFit.Cover,
+        };
+    }
+
+    /// <summary>按图片真实比例缩放到不超过给定画框，返回实际占用的宽高。</summary>
+    static (long Width, long Height) FitInside(ImageDimensions dimensions, long boxWidth, long boxHeight)
+    {
+        if (dimensions.Width <= 0 || dimensions.Height <= 0) return (boxWidth, boxHeight);
+        var sourceRatio = (double)dimensions.Width / dimensions.Height;
+        var boxRatio = (double)boxWidth / boxHeight;
+        // 图比画框扁就顶着宽走，比画框瘦就顶着高走。
+        return sourceRatio > boxRatio
+            ? (boxWidth, Math.Max(1L, (long)Math.Round(boxWidth / sourceRatio)))
+            : (Math.Max(1L, (long)Math.Round(boxHeight * sourceRatio)), boxHeight);
+    }
+
     static CropValues ResolveCenterCrop(ImageDimensions dimensions, FigureSize size)
     {
         var sourceRatio = (double)dimensions.Width / dimensions.Height;
@@ -668,6 +712,7 @@ static partial class RestrictedHtmlWordInserter
         string Caption,
         FigureSize Size,
         FigurePlacement Placement,
+        FigureFit Fit,
         ImageDimensions Dimensions,
         byte[]? Bytes);
     sealed record PreparedHtml(string Html, IReadOnlyList<FigureSpec> Figures);

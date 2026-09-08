@@ -2,6 +2,7 @@ import type { SectionId } from '../shared/types/navigation';
 import { getAppMenuItemById } from './menuConfig';
 import BidOpportunityPage from '../features/bid-opportunity/pages/BidOpportunityPage';
 import ContentExpansionReplaceTestPage from '../features/developer/pages/ContentExpansionReplaceTestPage';
+import ContentLayoutBudgetTestPage from '../features/developer/pages/ContentLayoutBudgetTestPage';
 import DeveloperDemoPage, { isDeveloperDemoSection } from '../features/developer/pages/DeveloperDemoPage';
 import DeveloperMultimodalTestPage from '../features/developer/pages/DeveloperMultimodalTestPage';
 import AgentTestPage from '../features/developer/pages/AgentTestPage';
@@ -66,6 +67,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <DeveloperMultimodalTestPage />;
     case 'developer-expansion-replace-test':
       return <ContentExpansionReplaceTestPage />;
+    case 'developer-layout-budget-test':
+      return <ContentLayoutBudgetTestPage />;
     case 'developer-agent-test':
       return <AgentTestPage />;
     case 'settings':

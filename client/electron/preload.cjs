@@ -143,6 +143,11 @@ const bridge = {
   developerExpansionReplaceTest: {
     run: (payload) => ipcRenderer.invoke('developer-expansion-replace-test:run', payload),
   },
+  developerLayoutFigure: {
+    reset: () => ipcRenderer.invoke('developer-layout-figure:reset'),
+    render: (payload) => ipcRenderer.invoke('developer-layout-figure:render', payload),
+    renderPreview: (html, config) => ipcRenderer.invoke('developer-layout-figure:render-preview', html, config),
+  },
   file: {
     selectDuplicateCheckFiles: (options) => ipcRenderer.invoke('file:select-duplicate-check-files', options),
     /** 把拖拽进来的 File 对象换成本地绝对路径，供各上传区拖拽导入使用 */

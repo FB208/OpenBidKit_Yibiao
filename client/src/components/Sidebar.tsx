@@ -34,6 +34,7 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'developer-parser-sandbox': FlaskIcon,
   'developer-export-preview': FlaskIcon,
   'developer-expansion-replace-test': FlaskIcon,
+  'developer-layout-budget-test': FlaskIcon,
   'developer-agent-test': FlaskIcon,
   'plugin-manager': PluginIcon,
   settings: GearIcon,

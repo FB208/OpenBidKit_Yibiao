@@ -9,7 +9,8 @@ import visualWbsMindmapUrl from '../../../assets/content-template-preview/visual
  * 标题只写纯标题名，编号由导出模板的标题样式配置生成；图片使用已打包的本地地址。
  * 每一项模板设置都要能在样张里看到效果，因此保留六级标题、段落、有序与无序列表、
  * 独立图片、图文混排表格、并列图组以及带表头行与首列的表格各一处；
- * 样张每改一次配置就要重新生成并重新排版，所以刻意控制在三页左右，不做同类元素的重复堆叠。
+ * 样张每改一次配置就要重新生成并重新排版，所以控制在三到四页，不做同类元素的重复堆叠；
+ * 图片块之间必须有正文过渡，不允许图接图。
  */
 export const DOCUMENT_DISPLAY_TEMPLATE_HTML = `<!-- yibiao:block -->
 <h1 id="tpl_h_001">项目实施总体方案</h1>
@@ -80,6 +81,9 @@ export const DOCUMENT_DISPLAY_TEMPLATE_HTML = `<!-- yibiao:block -->
 </figure>
 
 <!-- yibiao:block -->
+<p id="tpl_p_009">上述管控架构在项目中逐层落地：质量策划阶段明确各分项的验收标准与检验批划分，实施阶段以样板先行、工序报验和旁站见证控制过程质量，成果阶段由项目部与技术负责人分级复核。检查中发现的问题统一登记、限期整改并复核销项，形成可追溯的闭环记录。</p>
+
+<!-- yibiao:block -->
 <h2 id="tpl_h_008">图文混排与图组展示</h2>
 
 <!-- yibiao:block -->
@@ -94,6 +98,15 @@ export const DOCUMENT_DISPLAY_TEMPLATE_HTML = `<!-- yibiao:block -->
 </table>
 
 <!-- yibiao:block -->
+<h3 id="tpl_h_009">总控模型的分解与支撑</h3>
+
+<!-- yibiao:block -->
+<p id="tpl_p_010">总控模型解决的是全局布置问题，落到执行层还需要进一步分解。我方以工作分解结构为骨架，将合同范围拆解为可独立交付、可单独计量、可明确责任的工作包，并为每个工作包配置进度窗口、资源需求、前置条件和验收标准，使总控计划与周作业计划之间保持可追踪的对应关系。</p>
+
+<!-- yibiao:block -->
+<p id="tpl_p_011">在此基础上，质量控制闭环、工作分解结构和分层技术架构共同构成实施阶段的支撑体系：质量闭环解决成果是否合格的判定，工作分解明确由谁在什么时间完成，技术架构确定依托何种系统和接口实现。三者在项目例会上统一复盘，任何一项出现偏差都会同步触发另外两项的复核。</p>
+
+<!-- yibiao:block -->
 <table id="tpl_tbl_003" data-yb-preset="threeImages">
   <caption>质量、工作分解与技术架构</caption>
   <tbody>
@@ -104,6 +117,9 @@ export const DOCUMENT_DISPLAY_TEMPLATE_HTML = `<!-- yibiao:block -->
     </tr>
   </tbody>
 </table>
+
+<!-- yibiao:block -->
+<p id="tpl_p_012">上述三项支撑体系在实施过程中同步运行，其运行状态由项目部按周汇总，形成偏差清单并纳入风险台账。对可能影响关键节点的事项，按影响程度分级响应，明确处置措施、责任岗位和关闭标准，确保问题在本阶段内闭合。</p>
 
 <!-- yibiao:block -->
 <table id="tpl_tbl_004" data-yb-preset="plain">

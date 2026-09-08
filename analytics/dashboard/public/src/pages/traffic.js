@@ -63,6 +63,8 @@ const pageLabels = {
   'developer-parser-sandbox': '测试页 - 文件解析沙盘',
   'developer-export-preview': '测试页 - 导出链路预演',
   'developer-agent-test': '测试页 - 智能体链路测试',
+  'developer-expansion-replace-test': '测试页 - 扩写替换测试',
+  'developer-layout-budget-test': '测试页 - 版面预算正文测试',
   settings: '设置',
 };
 

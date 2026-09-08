@@ -1755,3 +1755,199 @@ body.agent-monitor-root #root {
     gap: 12px;
   }
 }
+
+/* ── 版面预算正文测试页 ───────────────────────────── */
+.developer-layout-budget-page {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.developer-layout-budget-page > * {
+  flex-shrink: 0;
+}
+
+.developer-layout-budget-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.developer-layout-budget-page .developer-test-panel h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: var(--yb-text);
+}
+
+.developer-layout-budget-subtitle {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  color: var(--yb-text-soft);
+}
+
+.developer-layout-budget-note {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--yb-text-muted);
+}
+
+.developer-layout-budget-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 16px;
+  margin: 0;
+}
+
+.developer-layout-budget-metrics > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--yb-border-soft);
+  font-size: 12px;
+}
+
+.developer-layout-budget-metrics dt {
+  color: var(--yb-text-muted);
+}
+
+.developer-layout-budget-metrics dd {
+  margin: 0;
+  color: var(--yb-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.developer-layout-budget-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.developer-layout-budget-table th,
+.developer-layout-budget-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--yb-border-soft);
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.developer-layout-budget-table th {
+  color: var(--yb-text-muted);
+  font-weight: 500;
+}
+
+.developer-layout-budget-table tr.is-danger td {
+  color: var(--yb-danger);
+}
+
+.developer-layout-budget-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.developer-layout-budget-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--yb-text-muted);
+}
+
+.developer-layout-budget-field select,
+.developer-layout-budget-field input {
+  padding: 6px 8px;
+  background: var(--yb-bg);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-md);
+  color: var(--yb-text);
+  font-size: 12px;
+}
+
+.developer-layout-budget-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--yb-text-muted);
+}
+
+.developer-layout-budget-checks label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.developer-layout-budget-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--yb-text-muted);
+}
+
+.developer-layout-budget-list li.is-danger {
+  color: var(--yb-danger);
+}
+
+.developer-layout-budget-pre {
+  max-height: 320px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  background: var(--yb-bg);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-md);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--yb-text-soft);
+}
+
+.developer-layout-budget-preview {
+  position: relative;
+  height: 620px;
+  overflow: auto;
+  background: var(--yb-bg);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-md);
+}
+
+.developer-layout-budget-editor {
+  height: 100%;
+}
+
+.developer-layout-budget-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  font-size: 12px;
+  color: var(--yb-text-muted);
+  pointer-events: none;
+}
+
+@media (max-width: 1240px) {
+  .developer-layout-budget-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.developer-layout-budget-list.is-advice {
+  padding: 8px 10px 8px 26px;
+  background: var(--yb-bg);
+  border: 1px dashed var(--yb-border);
+  border-radius: var(--yb-radius-md);
+  color: var(--yb-text-soft);
+}
+
+.developer-layout-budget-page strong.is-danger {
+  color: var(--yb-danger);
+}

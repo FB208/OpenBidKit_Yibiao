@@ -535,6 +535,28 @@ export interface DonationPromptPayload {
   wordExportClicks: number;
 }
 
+export interface DeveloperLayoutFigureRequest {
+  id: string;
+  generation: 'aiImage' | 'mermaid' | 'htmlImage';
+  prompt: string;
+  caption: string;
+  /** 画框比例，由版面预算给定；html 图按它定画布，其余按它居中裁切。 */
+  aspectWidth: number;
+  aspectHeight: number;
+}
+
+export interface DeveloperLayoutFigureResult {
+  id: string;
+  generation: string;
+  /** 可直接写进 data-yb-asset-ref 的相对路径。 */
+  assetRef: string;
+  width: number;
+  height: number;
+  /** mermaid 是 code，html 是 HTML 源码，AI 图是本地文件路径。 */
+  source: string;
+  elapsedMs: number;
+}
+
 export interface YibiaoBridge {
   appName: string;
   platform: string;
@@ -622,6 +644,14 @@ export interface YibiaoBridge {
   };
   developerExpansionReplaceTest: {
     run: (payload: DeveloperExpansionReplaceTestPayload) => Promise<DeveloperExpansionReplaceTestResult>;
+  };
+  developerLayoutFigure: {
+    /** 清空上一轮生成的配图，返回测试专用的资源目录名。 */
+    reset: () => Promise<{ assetRoot: string }>;
+    /** 按骨架给定的画框比例真实生成一张配图。 */
+    render: (payload: DeveloperLayoutFigureRequest) => Promise<DeveloperLayoutFigureResult>;
+    /** 用测试资源目录渲染样张，图片走真实生成的那批。 */
+    renderPreview: (html: string, config: ExportFormatConfig) => Promise<{ key: string; bytes: Uint8Array; roles: string[] }>;
   };
   file: {
     selectDuplicateCheckFiles: (options?: { multiple?: boolean; filePaths?: string[] }) => Promise<FileSelectionResult>;

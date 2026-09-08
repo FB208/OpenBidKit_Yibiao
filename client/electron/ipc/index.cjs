@@ -25,6 +25,7 @@ const { createAutoConfirmationService } = require('../services/autoConfirmationS
 const { createConfigStore } = require('../services/configStore.cjs');
 const { createCredentialLibraryService } = require('../services/credentialLibraryService.cjs');
 const { createDeveloperExpansionReplaceTestService } = require('../services/developerExpansionReplaceTest.cjs');
+const { createDeveloperLayoutFigureService } = require('../services/developerLayoutFigureService.cjs');
 const { createDonationService } = require('../services/donationService.cjs');
 const { createDuplicateCheckService } = require('../services/duplicateCheckService.cjs');
 const { createDuplicateCheckStore } = require('../services/duplicateCheckStore.cjs');
@@ -339,6 +340,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const licenseService = createLicenseService({ app, configStore });
   const aiService = createAiService({ app, configStore });
   const developerExpansionReplaceTestService = createDeveloperExpansionReplaceTestService({ aiService });
+  const developerLayoutFigureService = createDeveloperLayoutFigureService({ app, aiService });
   const donationService = createDonationService({
     app,
     onPrompt: (payload) => sendToWebContents(mainWindow.webContents, 'donation:prompt', payload),
@@ -437,6 +439,8 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     openDeveloperTokenStatsWindow,
     openDeveloperAgentMonitorWindow,
     developerExpansionReplaceTestService,
+    developerLayoutFigureService,
+    openXmlHelperService,
   });
   registerDonationIpc({ donationService });
   registerLicenseIpc({ licenseService });

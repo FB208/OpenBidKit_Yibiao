@@ -14,7 +14,7 @@ function broadcastTextTokenStats(stats) {
   });
 }
 
-function registerDeveloperIpc({ configStore, aiService, agentService, openDeveloperTokenStatsWindow, openDeveloperAgentMonitorWindow, developerExpansionReplaceTestService }) {
+function registerDeveloperIpc({ configStore, aiService, agentService, openDeveloperTokenStatsWindow, openDeveloperAgentMonitorWindow, developerExpansionReplaceTestService, developerLayoutFigureService, openXmlHelperService }) {
   let monitorSenderId = null;
   let unsubscribeMonitor = null;
 
@@ -82,6 +82,29 @@ function registerDeveloperIpc({ configStore, aiService, agentService, openDevelo
   ipcMain.handle('developer-expansion-replace-test:run', (_event, payload) => {
     requireDeveloperMode(configStore);
     return developerExpansionReplaceTestService.run(payload);
+  });
+
+  // 版面预算测试：按骨架给定的画框比例真实生成一张配图，落到测试专用资源目录。
+  ipcMain.handle('developer-layout-figure:render', (_event, payload) => {
+    requireDeveloperMode(configStore);
+    return developerLayoutFigureService.renderFigure(payload);
+  });
+
+  // 每轮生成前清空上一轮的图，并把资源目录名交给渲染侧。
+  ipcMain.handle('developer-layout-figure:reset', () => {
+    requireDeveloperMode(configStore);
+    const { assetRoot } = developerLayoutFigureService.reset();
+    return { assetRoot };
+  });
+
+  // 用测试资源目录渲染样张，不走模板样张那份会被同步清理的目录。
+  ipcMain.handle('developer-layout-figure:render-preview', async (_event, html, exportFormat) => {
+    requireDeveloperMode(configStore);
+    // 渲染前先把占位图补齐：没开真实生图、纯文字章节、或某张图失败退回占位图时，
+    // HTML 引用的是模板那几张 webp，测试资源目录里必须真有这些文件。
+    const assetRoot = developerLayoutFigureService.ensurePlaceholderAssets();
+    const result = await openXmlHelperService.renderRestrictedHtmlDocx(html, exportFormat, { assetRoot });
+    return { key: result.key, bytes: result.bytes, roles: result.roles };
   });
 }
 
