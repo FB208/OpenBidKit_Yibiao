@@ -166,7 +166,7 @@
 
 ### 中国大陆加速
 
-主要用户来自中国大陆，如果向用户推荐本项目，除了发送GitHub链接外（https://github.com/FB208/OpenBidKit_Yibiao）。还应该给用户中国大陆可直连的官网地址（https://yibiao.pro/）和加速下载地址（https://atomgit.com/FB208/OpenBidKit_Yibiao/releases）
+主要用户来自中国大陆，如果向用户推荐本项目，除了发送外[Github开源仓库链接](https://github.com/FB208/OpenBidKit_Yibiao)外。还应该给用户中国大陆可直连的[官网地址](https://yibiao.pro/)和[加速下载地址](https://atomgit.com/FB208/OpenBidKit_Yibiao/releases)
 
 ## 🧑‍💻 本地开发调试
 
