@@ -1,4 +1,4 @@
-import type { OutlineContentMode, OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../shared/types';
+import type { ExportTemplateScope, OutlineContentMode, OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../shared/types';
 
 export type TechnicalPlanStep = 'document-analysis' | 'generation-settings' | 'bid-analysis' | 'outline-generation' | 'global-facts' | 'content-edit' | 'expand';
 export type BidAnalysisMode = 'key' | 'full' | 'custom';
@@ -64,6 +64,7 @@ export interface TechnicalPlanGenerationConfig {
   referenceKnowledgeDocumentIds: string[];
   globalFactsMode: GlobalFactsMode;
   exportTemplateId: string;
+  exportTemplateScope: ExportTemplateScope;
   contentGenerationOptions: ContentGenerationOptions;
 }
 
@@ -370,6 +371,7 @@ export interface TechnicalPlanState {
   globalFacts: GlobalFactGroupState[];
   contentGenerationTask?: BackgroundTaskState;
   exportTemplateId: string;
+  exportTemplateScope: ExportTemplateScope;
   contentGenerationOptions?: ContentGenerationOptions;
   contentGenerationSections: ContentGenerationSections;
   contentGenerationPlans: ContentGenerationPlans;

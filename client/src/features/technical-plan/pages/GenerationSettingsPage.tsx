@@ -2,7 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import { AppDialog, AppSwitch, isLibreOfficeRequiredMessage, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { ImageModelStatus, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
-import type { ExportTemplateRecord } from '../../../shared/types/exportFormat';
+import type { ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
 import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
 import type { ContentGenerationOptions, ContentIllustrationKind, ContentTableRequirement, GlobalFactsMode, TechnicalPlanOriginalPlanFile, TechnicalPlanState } from '../types';
 import { DEFAULT_HTML_IMAGE_TYPES, normalizeContentGenerationOptions } from '../contentGenerationOptions';
@@ -22,6 +22,7 @@ interface GenerationSettingsPageProps {
   referenceKnowledgeDocumentIds: string[];
   globalFactsMode: GlobalFactsMode;
   exportTemplateId: string;
+  exportTemplateScope: ExportTemplateScope;
   exportTemplates: ExportTemplateRecord[];
   exportTemplatesLoading: boolean;
   contentGenerationOptions?: ContentGenerationOptions;
@@ -37,6 +38,7 @@ interface GenerationSettingsPageProps {
   onReferenceKnowledgeDocumentIdsChange: (documentIds: string[]) => Promise<void>;
   onGlobalFactsModeChange: (globalFactsMode: GlobalFactsMode) => Promise<void>;
   onExportTemplateIdChange: (templateId: string) => Promise<void>;
+  onExportTemplateScopeChange: (scope: ExportTemplateScope) => Promise<void>;
   onCreateExportTemplate?: () => void;
   onContentGenerationOptionsChange: (options: ContentGenerationOptions) => Promise<void>;
 }
@@ -218,6 +220,7 @@ function GenerationSettingsPage({
   referenceKnowledgeDocumentIds,
   globalFactsMode,
   exportTemplateId,
+  exportTemplateScope,
   exportTemplates,
   exportTemplatesLoading,
   contentGenerationOptions,
@@ -233,6 +236,7 @@ function GenerationSettingsPage({
   onReferenceKnowledgeDocumentIdsChange,
   onGlobalFactsModeChange,
   onExportTemplateIdChange,
+  onExportTemplateScopeChange,
   onCreateExportTemplate,
   onContentGenerationOptionsChange,
 }: GenerationSettingsPageProps) {
@@ -253,6 +257,7 @@ function GenerationSettingsPage({
   const [knowledgeSaving, setKnowledgeSaving] = useState(false);
   const [globalFactsModeBusy, setGlobalFactsModeBusy] = useState(false);
   const [exportTemplateBusy, setExportTemplateBusy] = useState(false);
+  const [exportTemplateScopeBusy, setExportTemplateScopeBusy] = useState(false);
   const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
   const [draftTableRequirement, setDraftTableRequirement] = useState<ContentTableRequirement>(() => (
     normalizeContentGenerationOptions(contentGenerationOptions, false, contentLeafCount).tableRequirement
@@ -530,6 +535,20 @@ function GenerationSettingsPage({
       showToast(error instanceof Error ? error.message : '保存导出模板失败', 'error');
     } finally {
       setExportTemplateBusy(false);
+    }
+  };
+
+  // 范围与模板选择独立保存，任务运行期间也可修改，不改变已有生成结果。
+  const saveExportTemplateScope = async (scope: ExportTemplateScope) => {
+    if (scope === exportTemplateScope || exportTemplateScopeBusy) return;
+    try {
+      setExportTemplateScopeBusy(true);
+      await onExportTemplateScopeChange(scope);
+      showToast('保存成功', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存模板样式范围失败', 'error');
+    } finally {
+      setExportTemplateScopeBusy(false);
     }
   };
 
@@ -1105,6 +1124,24 @@ function GenerationSettingsPage({
                 </div>
                 {!exportTemplatesLoading && !exportTemplates.length && <p className="generation-settings-export-template-status">暂无可用模板，请先新建并保存 Word 导出模板。</p>}
                 {!exportTemplatesLoading && exportTemplateId && !selectedExportTemplate && <p className="generation-settings-export-template-status is-error">原导出模板已被删除，请重新选择。</p>}
+              </section>
+              <section className="generation-settings-export-template-section">
+                <div className="generation-settings-appearance-head">
+                  <strong id="generation-settings-export-template-scope-label">模板样式范围</strong>
+                  <span id="generation-settings-export-template-scope-description">纸张、方向、双栏和页边距始终应用于整个文件；其余样式（包括页眉页脚、页码和首页不同）遵循所选范围。选择仅技术方案时，AI 与非 AI 范围交界处另起页。</span>
+                </div>
+                <div className="generation-settings-export-template-control">
+                  <select
+                    value={exportTemplateScope}
+                    disabled={exportTemplateScopeBusy}
+                    onChange={(event) => void saveExportTemplateScope(event.target.value as ExportTemplateScope)}
+                    aria-labelledby="generation-settings-export-template-scope-label"
+                    aria-describedby="generation-settings-export-template-scope-description"
+                  >
+                    <option value="ai-only">仅技术方案（AI 生成目录）</option>
+                    <option value="document">整个文件</option>
+                  </select>
+                </div>
               </section>
             </section>
           ) : (

@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 30;
+const schemaVersion = 31;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -1157,6 +1157,11 @@ function addExportTemplateIsSystem(db) {
   addColumnIfMissing(db, 'export_templates', 'is_system', 'INTEGER NOT NULL DEFAULT 0');
 }
 
+/** 为项目增加模板样式范围，新旧项目未设置时均仅应用于 AI 生成目录。 */
+function addTechnicalPlanExportTemplateScope(db) {
+  addColumnIfMissing(db, 'technical_plan_generation_config', 'export_template_scope', "TEXT NOT NULL DEFAULT 'ai-only'");
+}
+
 function createExportTemplatesSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS export_templates (
@@ -1506,6 +1511,13 @@ const schemaHealthColumnGroups = [
       is_system: 'INTEGER NOT NULL DEFAULT 0',
     },
   },
+  {
+    version: 31,
+    table: 'technical_plan_generation_config',
+    columns: {
+      export_template_scope: "TEXT NOT NULL DEFAULT 'ai-only'",
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -1719,6 +1731,11 @@ const migrations = [
     version: 30,
     description: '导出模板新增系统预设标记',
     up: addExportTemplateIsSystem,
+  },
+  {
+    version: 31,
+    description: '技术方案新增导出模板样式范围配置',
+    up: addTechnicalPlanExportTemplateScope,
   },
 ];
 

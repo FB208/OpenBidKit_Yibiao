@@ -83,6 +83,7 @@ const initialState = {
   globalFacts: [],
   contentGenerationTask: undefined,
   exportTemplateId: defaultExportTemplateId,
+  exportTemplateScope: 'ai-only',
   contentGenerationOptions: { ...defaultContentGenerationOptions },
   contentGenerationSections: {},
   contentGenerationPlans: {},
@@ -371,6 +372,7 @@ function createDefaultGenerationConfig() {
     referenceKnowledgeDocumentIds: [],
     globalFactsMode: 'fabricate',
     exportTemplateId: defaultExportTemplateId,
+    exportTemplateScope: 'ai-only',
     contentGenerationOptions: { ...defaultContentGenerationOptions },
   };
 }
@@ -391,6 +393,7 @@ function normalizeGenerationConfig(config) {
     referenceKnowledgeDocumentIds: normalizeGenerationDocumentIds(source.referenceKnowledgeDocumentIds),
     globalFactsMode: normalizeGlobalFactsMode(source.globalFactsMode),
     exportTemplateId: String(source.exportTemplateId || '').trim(),
+    exportTemplateScope: source.exportTemplateScope ?? defaults.exportTemplateScope,
     contentGenerationOptions: normalizeContentGenerationOptions(source.contentGenerationOptions),
   };
 }
@@ -787,13 +790,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     db.prepare(`
       INSERT INTO technical_plan_generation_config (
         id, bid_analysis_mode, bid_section_mode, outline_mode, outline_expansion_mode,
-        minimum_words, maximum_words, section_words, strict_section_words, global_facts_mode, export_template_id,
+        minimum_words, maximum_words, section_words, strict_section_words, global_facts_mode, export_template_id, export_template_scope,
         use_ai_images, max_ai_images, use_mermaid_images, max_mermaid_images,
         use_html_images, max_html_images, html_image_types, table_requirement,
         created_at, updated_at
       ) VALUES (
         1, @bid_analysis_mode, @bid_section_mode, @outline_mode, @outline_expansion_mode,
-        @minimum_words, @maximum_words, @section_words, @strict_section_words, @global_facts_mode, @export_template_id,
+        @minimum_words, @maximum_words, @section_words, @strict_section_words, @global_facts_mode, @export_template_id, @export_template_scope,
         @use_ai_images, @max_ai_images, @use_mermaid_images, @max_mermaid_images,
         @use_html_images, @max_html_images, @html_image_types, @table_requirement,
         @created_at, @updated_at
@@ -809,6 +812,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       strict_section_words: toDbBool(defaults.outlineWordControlOptions.strictSectionWords),
       global_facts_mode: defaults.globalFactsMode,
       export_template_id: defaults.exportTemplateId,
+      export_template_scope: defaults.exportTemplateScope,
       use_ai_images: toDbBool(content.useAiImages),
       max_ai_images: content.maxAiImages,
       use_mermaid_images: toDbBool(content.useMermaidImages),
@@ -855,6 +859,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       referenceKnowledgeDocumentIds: loadGenerationReferenceDocumentIds(),
       globalFactsMode: row.global_facts_mode,
       exportTemplateId: row.export_template_id,
+      exportTemplateScope: row.export_template_scope,
       contentGenerationOptions: {
         useAiImages: fromDbBool(row.use_ai_images),
         maxAiImages: row.max_ai_images,
@@ -885,6 +890,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         strict_section_words = @strict_section_words,
         global_facts_mode = @global_facts_mode,
         export_template_id = @export_template_id,
+        export_template_scope = @export_template_scope,
         use_ai_images = @use_ai_images,
         max_ai_images = @max_ai_images,
         use_mermaid_images = @use_mermaid_images,
@@ -906,6 +912,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       strict_section_words: toDbBool(wordControl.strictSectionWords),
       global_facts_mode: normalized.globalFactsMode,
       export_template_id: normalized.exportTemplateId,
+      export_template_scope: normalized.exportTemplateScope,
       use_ai_images: toDbBool(content.useAiImages),
       max_ai_images: content.maxAiImages,
       use_mermaid_images: toDbBool(content.useMermaidImages),
@@ -2099,6 +2106,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (hasOwn(partial, 'globalFactsMode')) generationConfigPatch.globalFactsMode = partial.globalFactsMode;
     if (hasOwn(partial, 'outlineWordControlOptions')) generationConfigPatch.outlineWordControlOptions = partial.outlineWordControlOptions;
     if (hasOwn(partial, 'referenceKnowledgeDocumentIds')) generationConfigPatch.referenceKnowledgeDocumentIds = partial.referenceKnowledgeDocumentIds;
+    if (hasOwn(partial, 'exportTemplateScope')) generationConfigPatch.exportTemplateScope = partial.exportTemplateScope;
     if (hasOwn(partial, 'contentGenerationOptions')) generationConfigPatch.contentGenerationOptions = partial.contentGenerationOptions;
     if (hasOwn(partial, 'outlineWordControlSnapshot')) {
       metaUpdates.outline_word_control_snapshot_json = partial.outlineWordControlSnapshot === undefined || partial.outlineWordControlSnapshot === null
@@ -2215,6 +2223,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       ...tasks,
       globalFacts: loadGlobalFacts(),
       exportTemplateId: generationConfig.exportTemplateId,
+      exportTemplateScope: generationConfig.exportTemplateScope,
       contentGenerationOptions: generationConfig.contentGenerationOptions,
       contentGenerationRuntime: safeJsonParse(meta.content_generation_runtime_json, undefined),
       contentIllustrationPlan: loadContentIllustrationPlan(),

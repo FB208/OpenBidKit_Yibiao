@@ -4,7 +4,7 @@
 -- 1. 本文件用于开源开发者阅读、评审和排查问题，展示 workspace/yibiao.sqlite 的目标完整表结构。
 -- 2. 用户运行客户端时不需要手动执行本文件。
 -- 3. 客户端运行时建表和升级以 Electron Main 侧 migration 代码为准。
--- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17、目录字数控制 v18、全局事实补全模式 v22、可行性研究报告 v23、统一生成配置 v24、单企业资信库 v25 目标结构。
+-- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17、目录字数控制 v18、全局事实补全模式 v22、可行性研究报告 v23、统一生成配置 v24、单企业资信库 v25、导出模板样式范围 v31 目标结构。
 -- 5. 每次表结构调整后，需要同步更新本文件和 runtime migration 版本。
 -- 6. 本文件不保存历史版本，每次更新都写入最新目标完整结构。
 
@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 25;
+PRAGMA user_version = 31;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -88,6 +88,8 @@ CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
   -- v27 正文生成模板，仅保存选择，当前不参与正文任务。
   -- v28 当前项目明确选择的 Word 导出模板。
   export_template_id TEXT NOT NULL DEFAULT '',
+  -- v31 模板样式范围：ai-only 仅 AI 生成目录，document 整个文件；页面基础布局始终全文件。
+  export_template_scope TEXT NOT NULL DEFAULT 'ai-only',
   use_ai_images INTEGER NOT NULL DEFAULT 1,
   max_ai_images INTEGER NOT NULL DEFAULT 6,
   use_mermaid_images INTEGER NOT NULL DEFAULT 1,

@@ -776,7 +776,11 @@ static class RestrictedHtmlDocumentRenderer
         }
         ApplyTables(content, format, tableSpecs);
         ApplyNumbering(mainPart, format);
-        ApplyTwoColumnHeadingSections(mainPart, content, format);
+        // 章节页框会把整章塞进一个表格，一级标题不再是 Body 的直接子元素，
+        // 通栏分节那套就落不了地，两者只能二选一。
+        if (ChapterFrameEnabled(format)) ApplyChapterParagraphFrames(content, format);
+        else ApplyTwoColumnHeadingSections(mainPart, content, format);
+        RemoveLeadingPageBreak(content);
         mainPart.Document.Save();
     }
 
@@ -843,7 +847,7 @@ static class RestrictedHtmlDocumentRenderer
         {
             properties.RemoveAllChildren<Wp.PageBreakBefore>();
         }
-        ApplyHeadingBorder(properties, format, level);
+        ClearHeadingBorder(properties);
         ApplyRuns(
             paragraph,
             format.Text(heading, "font", level <= 5 ? "黑体" : "宋体"),
@@ -853,20 +857,14 @@ static class RestrictedHtmlDocumentRenderer
             null);
     }
 
-    /// <summary>章节边框用原生段落边框和底纹表达，保证编辑器与 Word 一致。</summary>
-    static void ApplyHeadingBorder(Wp.ParagraphProperties properties, FormatReader format, int level)
+    /// <summary>
+    /// 清掉标题段落自带的边框与底纹。
+    /// 章节页框的边框和底纹由 ApplyChapterParagraphFrames 统一设置，避免重复画框。
+    /// </summary>
+    static void ClearHeadingBorder(Wp.ParagraphProperties properties)
     {
         properties.RemoveAllChildren<Wp.ParagraphBorders>();
         properties.RemoveAllChildren<Wp.Shading>();
-        var border = format.Section("heading_border");
-        if (!format.Bool(border, "enabled", false)) return;
-
-        var color = Color(format.Text(border, "border_color", "#cfd8ee"), "CFD8EE");
-        var fill = Color(format.ArrayText(border, "level_cell_colors", level - 1, "#ffffff"), "FFFFFF");
-        var leftOnly = format.Text(border, "structure", "上下结构") == "左右结构"
-            || (format.Bool(border, "min_heading_left_enabled", false) && level >= 3);
-        SetSingleChild(properties, CreateParagraphBorders(color, topOnly: false, sidesOnly: leftOnly, size: 8));
-        SetSingleChild(properties, new Wp.Shading { Val = Wp.ShadingPatternValues.Clear, Fill = fill });
     }
 
     /// <summary>应用正文格式；列表保留编号缩进，不再使用首行缩进。</summary>
@@ -921,10 +919,13 @@ static class RestrictedHtmlDocumentRenderer
             {
                 var rowProperties = rows[rowIndex].GetFirstChild<Wp.TableRowProperties>()
                     ?? rows[rowIndex].PrependChild(new Wp.TableRowProperties());
-                SetSingleChild(rowProperties, new Wp.CantSplit());
+                // 只有表头行禁止跨页；正文行一律允许拆行，否则一行高过整页就再也排不下，
+                // 页框里的超长表格会整块被推走，在上一页留下大段空白。
+                rowProperties.RemoveAllChildren<Wp.CantSplit>();
                 rowProperties.RemoveAllChildren<Wp.TableHeader>();
                 if (spec is not null && rowIndex < spec.Rows.Count && spec.Rows[rowIndex].IsHeaderRow)
                 {
+                    SetSingleChild(rowProperties, new Wp.CantSplit());
                     rowProperties.AddChild(new Wp.TableHeader(), throwOnError: true);
                 }
                 var cells = rows[rowIndex].Elements<Wp.TableCell>().ToList();
@@ -948,11 +949,21 @@ static class RestrictedHtmlDocumentRenderer
         var properties = table.GetFirstChild<Wp.TableProperties>() ?? table.PrependChild(new Wp.TableProperties());
         properties.RemoveAllChildren();
         var fullWidth = format.Bool(style, "full_width", true);
-        properties.AppendChild(new Wp.TableWidth
-        {
-            Type = fullWidth ? Wp.TableWidthUnitValues.Pct : Wp.TableWidthUnitValues.Auto,
-            Width = fullWidth ? "5000" : "0",
-        });
+        // 满宽表格的宽度用 dxa 写死成正文栏宽。tblW 用百分比时 Word 会把单元格左右边距
+        // 加在百分比宽度之外，表格比正文栏宽出两个边距（默认配比 0.4cm），右边顶出页边距。
+        // 嵌套表格的百分比是相对父单元格算的，换成绝对宽度会撑破单元格，只处理顶层表格。
+        var pinnedWidth = fullWidth && table.Parent is Wp.Body;
+        properties.AppendChild(pinnedWidth
+            ? new Wp.TableWidth
+            {
+                Type = Wp.TableWidthUnitValues.Dxa,
+                Width = ContentWidthTwips(format).ToString(CultureInfo.InvariantCulture),
+            }
+            : new Wp.TableWidth
+            {
+                Type = fullWidth ? Wp.TableWidthUnitValues.Pct : Wp.TableWidthUnitValues.Auto,
+                Width = fullWidth ? "5000" : "0",
+            });
 
         var borderColor = Color(format.Text(style, "border_color", "#dcdff6"), "DCDFF6");
         var borderSize = (uint)Math.Clamp((int)Math.Round(format.Number(style, "border_width", 1) * 8), 0, 96);
@@ -1041,6 +1052,7 @@ static class RestrictedHtmlDocumentRenderer
         var body = format.Section("body_text");
         var halfPoints = FontHalfPoints(format.Text(body, "size", "小四"));
         var indentChars = format.Number(body, "list_indent_chars", 2);
+        var framed = ChapterFrameEnabled(format);
 
         foreach (var abstractNumber in numbering.Elements<Wp.AbstractNum>())
         {
@@ -1052,18 +1064,32 @@ static class RestrictedHtmlDocumentRenderer
                 if (unordered) ApplyUnorderedLevel(level, format.Text(body, "list_style", "disc"), halfPoints);
                 else ApplyOrderedLevel(level, format.Text(body, "ordered_list_style", "decimal-dot"), levelIndex);
 
-                var left = CharsToTwips(indentChars * (levelIndex + 1), halfPoints);
-                var hanging = Math.Min(left, CharsToTwips(1, halfPoints));
+                var indent = ListLevelIndent(indentChars, levelIndex, halfPoints, framed);
                 var paragraphProperties = level.GetFirstChild<Wp.PreviousParagraphProperties>()
                     ?? AddChild(level, new Wp.PreviousParagraphProperties());
-                SetSingleChild(paragraphProperties, new Wp.Indentation
-                {
-                    Left = left.ToString(CultureInfo.InvariantCulture),
-                    Hanging = hanging.ToString(CultureInfo.InvariantCulture),
-                });
+                var indentation = new Wp.Indentation { Left = indent.Left.ToString(CultureInfo.InvariantCulture) };
+                if (indent.Hanging > 0) indentation.Hanging = indent.Hanging.ToString(CultureInfo.InvariantCulture);
+                if (indent.FirstLine > 0) indentation.FirstLine = indent.FirstLine.ToString(CultureInfo.InvariantCulture);
+                SetSingleChild(paragraphProperties, indentation);
             }
         }
         numbering.Save();
+    }
+
+    /// <summary>
+    /// 列表级别的缩进；和 exportService.cjs 的 getListLevelIndent 逐条对应。
+    ///
+    /// 章节页框打开时改用首行缩进：left 固定为 ChapterFramePaddingTwips，层级由 firstLine 体现。
+    /// 页框内每一块的左竖线必须落在同一条线上，而 Word 与预览排版引擎给竖线定位的方式并不一样
+    /// ——Word 锚在段落最左那个字符（悬挂出去的编号也算，即 left - hanging），预览引擎锚在
+    /// w:ind left。hanging 非零时两边必然有一边是歪的；firstLine 只推首行、两边都不挪竖线，
+    /// 是同时对上的唯一写法。代价是折行的文字回到页框内边缘，不与编号后的文字对齐。
+    /// </summary>
+    static (int Left, int Hanging, int FirstLine) ListLevelIndent(double indentChars, int levelIndex, int halfPoints, bool framed)
+    {
+        var text = CharsToTwips(indentChars * (levelIndex + 1), halfPoints);
+        if (!framed) return (text, Math.Min(text, CharsToTwips(1, halfPoints)), 0);
+        return (ChapterFramePaddingTwips, 0, text);
     }
 
     /// <summary>设置无序列表符号及其字体。</summary>
@@ -1309,6 +1335,262 @@ static class RestrictedHtmlDocumentRenderer
         {
             properties.AddChild(new Wp.KeepNext(), throwOnError: true);
         }
+    }
+
+    // -- 章节页框 --------------------------------------------------------
+    //
+    // 用段落边框逐块画框，业务表格留在顶层；切分与取色规则和
+    // exportService.cjs 的 addOutlineItems / chapterFrameParagraphOptions 对应。
+
+    /// <summary>是否启用章节段落页框。</summary>
+    static bool ChapterFrameEnabled(FormatReader format)
+    {
+        return format.Bool(format.Section("heading_border"), "enabled", false);
+    }
+
+    /// <summary>段落的标题级别；1-6 表示 HeadingN，0 表示不是标题。</summary>
+    static int HeadingLevelOf(OpenXmlElement element)
+    {
+        if (element is not Wp.Paragraph paragraph) return 0;
+        var styleId = paragraph.ParagraphProperties?.ParagraphStyleId?.Val?.Value ?? "";
+        if (!styleId.StartsWith("Heading", StringComparison.Ordinal)) return 0;
+        return int.TryParse(styleId.AsSpan(7), out var level) && level >= 1 && level <= 6 ? level : 0;
+    }
+
+    /// <summary>
+    /// 去掉正文首个段落的分页属性。
+    /// 样张直接以一级标题开头，正式导出前面还有标题块；不去掉的话预览会凭空多出一页空白，
+    /// 让人以为模板设置有问题。
+    /// </summary>
+    static void RemoveLeadingPageBreak(Wp.Body content)
+    {
+        var first = content.ChildElements.FirstOrDefault(item => item is not Wp.SectionProperties);
+        if (first is Wp.Paragraph paragraph)
+        {
+            paragraph.ParagraphProperties?.RemoveAllChildren<Wp.PageBreakBefore>();
+        }
+    }
+
+    /// <summary>按一级标题把正文切成章；一级标题之前的内容（封面、目录等）不进页框。</summary>
+    static List<List<OpenXmlElement>> CollectChapters(Wp.Body content)
+    {
+        // 先固定住分组，后面要替换节点，不能边遍历边改
+        var elements = content.ChildElements
+            .Where(item => item is not Wp.SectionProperties)
+            .ToList();
+        var chapters = new List<List<OpenXmlElement>>();
+        List<OpenXmlElement>? current = null;
+        foreach (var element in elements)
+        {
+            if (HeadingLevelOf(element) == 1)
+            {
+                current = [];
+                chapters.Add(current);
+            }
+
+            current?.Add(element);
+        }
+
+        return chapters;
+    }
+
+    // -- 段落边框页框 ----------------------------------------------------
+    //
+    // 每个块自己画边框，相邻段落的竖线由 Word 和预览引擎合并成一条，
+    // 视觉上和整章包一张表一样，但每个块都能独立参与分页：
+    // 超长表格可以跨页拆行，正文也不会被整块推走。
+
+    /// <summary>页框竖线与文字之间的留白（twips）。</summary>
+    const int ChapterFramePaddingTwips = 115;
+
+    /// <summary>左右边线与文字的距离（磅）。加上 0.75 磅线宽正好等于上面的留白，竖线落在文字栏边缘。</summary>
+    const uint ChapterFrameBorderSpacePt = 5;
+
+    /// <summary>横线与文字的距离（磅）。</summary>
+    const uint ChapterFrameLineSpacePt = 1;
+
+    /// <summary>用段落边框给每个一级章节画连续页框。</summary>
+    static void ApplyChapterParagraphFrames(Wp.Body content, FormatReader format)
+    {
+        var border = format.Section("heading_border");
+        var color = Color(format.Text(border, "border_color", "#cfd8ee"), "CFD8EE");
+        var fills = new string[6];
+        for (var level = 1; level <= 6; level += 1)
+        {
+            fills[level - 1] = Color(format.ArrayText(border, "level_cell_colors", level - 1, "#ffffff"), "FFFFFF");
+        }
+
+        foreach (var chapter in CollectChapters(content))
+        {
+            if (chapter.Count == 0) continue;
+            foreach (var element in chapter)
+            {
+                if (element is Wp.Table table)
+                {
+                    ApplyChapterFrameTableBorders(table, color, format);
+                    continue;
+                }
+
+                if (element is not Wp.Paragraph paragraph) continue;
+                var level = HeadingLevelOf(paragraph);
+                // 正文只画左右竖线，交给 Word 和预览引擎合并成一条连续的框；
+                // 标题自带上横线和底纹，章尾那条横线由收尾段落补。
+                ApplyChapterFrameParagraph(
+                    paragraph,
+                    color,
+                    level > 0 ? fills[Math.Clamp(level - 1, 0, 5)] : null,
+                    topLine: level > 0);
+            }
+
+            chapter[^1].InsertAfterSelf(CreateChapterFrameClosingParagraph(color));
+        }
+    }
+
+    /// <summary>给页框内的一个段落加边框、底纹和左右留白。</summary>
+    static void ApplyChapterFrameParagraph(
+        Wp.Paragraph paragraph,
+        string color,
+        string? fill,
+        bool topLine)
+    {
+        var properties = EnsureParagraphProperties(paragraph);
+        SetSingleChild(properties, CreateChapterFrameBorders(color, topLine));
+
+        if (fill is null) properties.RemoveAllChildren<Wp.Shading>();
+        else SetSingleChild(properties, new Wp.Shading { Val = Wp.ShadingPatternValues.Clear, Fill = fill });
+
+        var indentation = properties.GetFirstChild<Wp.Indentation>();
+        if (indentation is null)
+        {
+            indentation = new Wp.Indentation();
+            properties.AddChild(indentation, throwOnError: true);
+        }
+
+        // 首行缩进已经写进 w:ind，页框留白只能往上叠，不能覆盖。
+        // 列表段落的 left / hanging 由编号定义给（ListLevelIndent 已经把留白算进去了），
+        // 这里一旦写 w:ind left，段落直接格式就会盖掉编号定义的 left 而 hanging 照旧继承，
+        // 最左字符被拉到留白左边，竖线跟着外凸——只补右留白。
+        if (properties.GetFirstChild<Wp.NumberingProperties>() is null)
+        {
+            indentation.Left = AddTwips(indentation.Left, ChapterFramePaddingTwips);
+        }
+
+        indentation.Right = AddTwips(indentation.Right, ChapterFramePaddingTwips);
+    }
+
+    /// <summary>页框边框；子元素顺序按 OOXML schema 的 top / left / bottom / right。</summary>
+    static Wp.ParagraphBorders CreateChapterFrameBorders(string color, bool topLine)
+    {
+        var borders = new Wp.ParagraphBorders();
+        if (topLine) borders.AppendChild(CreateFrameBorder<Wp.TopBorder>(color, ChapterFrameLineSpacePt));
+        borders.AppendChild(CreateFrameBorder<Wp.LeftBorder>(color, ChapterFrameBorderSpacePt));
+        borders.AppendChild(CreateFrameBorder<Wp.RightBorder>(color, ChapterFrameBorderSpacePt));
+        return borders;
+    }
+
+    /// <summary>
+    /// 章尾收尾段落：只有 1 twip 行高，肉眼看不见，作用是把页框底边那条横线画出来。
+    /// 让最后一个块自己画底线做不到——JS 侧的块建好就不可改，两边得用同一套办法。
+    /// </summary>
+    static Wp.Paragraph CreateChapterFrameClosingParagraph(string color)
+    {
+        var paragraph = new Wp.Paragraph();
+        var properties = EnsureParagraphProperties(paragraph);
+        properties.AddChild(CreateChapterFrameBorders(color, topLine: true), throwOnError: true);
+        properties.AddChild(new Wp.SpacingBetweenLines
+        {
+            Before = "0",
+            After = "0",
+            Line = "20",
+            LineRule = Wp.LineSpacingRuleValues.Exact,
+        }, throwOnError: true);
+        properties.AddChild(new Wp.Indentation
+        {
+            Left = ChapterFramePaddingTwips.ToString(CultureInfo.InvariantCulture),
+            Right = ChapterFramePaddingTwips.ToString(CultureInfo.InvariantCulture),
+        }, throwOnError: true);
+        return paragraph;
+    }
+
+    static string AddTwips(StringValue? value, int delta)
+    {
+        var current = int.TryParse(value?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : 0;
+        return (current + delta).ToString(CultureInfo.InvariantCulture);
+    }
+
+    static T CreateFrameBorder<T>(string color, uint spacePt) where T : Wp.BorderType, new()
+    {
+        return new T
+        {
+            Val = Wp.BorderValues.Single,
+            Color = color,
+            Size = 6,
+            Space = spacePt,
+        };
+    }
+
+    /// <summary>正文栏的可用宽度；双栏时是单栏宽度。</summary>
+    static int ContentWidthTwips(FormatReader format)
+    {
+        var page = format.Section("page");
+        var paper = PaperSizes.TryGetValue(format.Text(page, "paper_size", "a4"), out var found)
+            ? found
+            : PaperSizes["a4"];
+        var landscape = format.Text(page, "orientation", "portrait") == "landscape";
+        var width = MmToTwips(landscape ? paper.Height : paper.Width);
+        var text = width
+            - CmToTwips(format.Number(page, "margin_left_cm", 2))
+            - CmToTwips(format.Number(page, "margin_right_cm", 2));
+        // 分栏的判断和 BuildSectionProperties 一致：只有横向才真的分栏，栏间距固定 720。
+        if (landscape && format.Bool(page, "two_column", false)) text = (text - 720) / 2;
+        return Math.Max(1, text);
+    }
+
+    /// <summary>
+    /// 页框内的业务表格强制满栏宽并接管左右竖线，上下和内部横线保持表格自己的样式。
+    /// </summary>
+    static void ApplyChapterFrameTableBorders(Wp.Table table, string color, FormatReader format)
+    {
+        var properties = table.GetFirstChild<Wp.TableProperties>() ?? table.PrependChild(new Wp.TableProperties());
+        var width = ContentWidthTwips(format);
+        SetSingleChild(properties, new Wp.TableWidth
+        {
+            Type = Wp.TableWidthUnitValues.Dxa,
+            Width = width.ToString(CultureInfo.InvariantCulture),
+        });
+        SetSingleChild(properties, new Wp.TableLayout { Type = Wp.TableLayoutValues.Fixed });
+
+        // 与 exportService.cjs 的 tableColumnWidths 一致：均分逻辑列，余量补在末列。
+        var columnCount = table.Elements<Wp.TableRow>().Max(row => row.Elements<Wp.TableCell>()
+            .Sum(cell => cell.TableCellProperties?.GridSpan?.Val?.Value ?? 1));
+        var columnWidth = width / columnCount;
+        var grid = new Wp.TableGrid();
+        for (var index = 0; index < columnCount; index += 1)
+        {
+            grid.AppendChild(new Wp.GridColumn
+            {
+                Width = (columnWidth + (index == columnCount - 1 ? width % columnCount : 0))
+                    .ToString(CultureInfo.InvariantCulture),
+            });
+        }
+        SetSingleChild(table, grid);
+        // 列宽由新网格统一，去掉转换器的旧首选宽度，保留跨列与跨行合并。
+        foreach (var cell in table.Elements<Wp.TableRow>().SelectMany(row => row.Elements<Wp.TableCell>()))
+        {
+            cell.TableCellProperties?.RemoveAllChildren<Wp.TableCellWidth>();
+        }
+
+        var borders = properties.GetFirstChild<Wp.TableBorders>();
+        if (borders is null)
+        {
+            borders = new Wp.TableBorders();
+            properties.AddChild(borders, throwOnError: true);
+        }
+
+        SetSingleChild(borders, CreateTableBorder<Wp.LeftBorder>(color, 6));
+        SetSingleChild(borders, CreateTableBorder<Wp.RightBorder>(color, 6));
     }
 
     /// <summary>双栏文档用连续分节把一级标题单独置于通栏。</summary>

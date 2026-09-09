@@ -43,7 +43,6 @@ const defaultExportFormat = {
   heading_level1_page_break_before: false,
   heading_border: {
     enabled: false,
-    min_heading_left_enabled: false,
     border_color: '#cfd8ee',
     level_cell_colors: [...DEFAULT_HEADING_BORDER_CELL_COLORS],
     structure: '上下结构',
@@ -203,7 +202,6 @@ function normalizeExportFormat(source) {
   const srcHeadingCellColors = Array.isArray(srcHeadingBorder.level_cell_colors) ? srcHeadingBorder.level_cell_colors : [];
   const heading_border = {
     enabled: typeof srcHeadingBorder.enabled === 'boolean' ? srcHeadingBorder.enabled : def.heading_border.enabled,
-    min_heading_left_enabled: typeof srcHeadingBorder.min_heading_left_enabled === 'boolean' ? srcHeadingBorder.min_heading_left_enabled : def.heading_border.min_heading_left_enabled,
     border_color: typeof srcHeadingBorder.border_color === 'string' && srcHeadingBorder.border_color ? srcHeadingBorder.border_color : def.heading_border.border_color,
     level_cell_colors: defHeadingCellColors.map((color, index) => (typeof srcHeadingCellColors[index] === 'string' && srcHeadingCellColors[index] ? srcHeadingCellColors[index] : color)),
     structure: typeof srcHeadingBorder.structure === 'string' && VALID_HEADING_BORDER_STRUCTURES.includes(srcHeadingBorder.structure) ? srcHeadingBorder.structure : def.heading_border.structure,

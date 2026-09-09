@@ -34,6 +34,7 @@ const initialState: TechnicalPlanState = {
   globalFacts: [],
   contentGenerationTask: undefined,
   exportTemplateId: '',
+  exportTemplateScope: 'ai-only',
   contentGenerationSections: {},
   contentGenerationPlans: {},
   contentGenerationRuntime: undefined,

@@ -13,7 +13,7 @@ import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarA
 import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
 import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
 import type { OutlineData, OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
-import type { ExportFormatConfig, ExportTemplateRecord } from '../../../shared/types/exportFormat';
+import type { ExportFormatConfig, ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
 import { countReadableWords } from '../../../shared/utils/wordCount';
 import { ExportTemplateEditorDialog } from '../../export-format/pages/ExportFormatPage';
 
@@ -99,6 +99,7 @@ const resetState: TechnicalPlanState = {
   globalFacts: [] as GlobalFactGroupState[],
   contentGenerationTask: undefined,
   exportTemplateId: '',
+  exportTemplateScope: 'ai-only',
   contentGenerationOptions: undefined,
   contentGenerationSections: {},
   contentGenerationPlans: {},
@@ -776,6 +777,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         project_name: state.outlineData.project_name,
         outline: state.outlineData.outline,
         export_format: latestExportFormat,
+        export_template_scope: state.exportTemplateScope,
       });
       if (result?.canceled) {
         setExportProgress(initialExportProgress);
@@ -963,6 +965,12 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const saveGenerationExportTemplate = async (exportTemplateId: string) => {
     const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ exportTemplateId });
     setState((prev) => ({ ...prev, exportTemplateId: saved.exportTemplateId }));
+  };
+
+  // 独立保存模板样式范围，只合并本字段，避免覆盖同时保存的模板和任务状态。
+  const saveGenerationExportTemplateScope = async (exportTemplateScope: ExportTemplateScope) => {
+    const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ exportTemplateScope });
+    setState((prev) => ({ ...prev, exportTemplateScope: saved.exportTemplateScope }));
   };
 
   const handleExportTemplateSaved = async (template: ExportTemplateRecord) => {
@@ -1167,6 +1175,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           globalFactsMode={state.globalFactsMode || 'fabricate'}
           exportTemplateId={state.exportTemplateId}
+          exportTemplateScope={state.exportTemplateScope}
           exportTemplates={exportTemplates}
           exportTemplatesLoading={exportTemplatesLoading}
           contentGenerationOptions={state.contentGenerationOptions}
@@ -1182,6 +1191,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           onReferenceKnowledgeDocumentIdsChange={saveGenerationReferenceKnowledge}
           onGlobalFactsModeChange={saveGenerationGlobalFactsMode}
           onExportTemplateIdChange={saveGenerationExportTemplate}
+          onExportTemplateScopeChange={saveGenerationExportTemplateScope}
           onCreateExportTemplate={createExportTemplate}
           onContentGenerationOptionsChange={saveContentGenerationOptions}
         />

@@ -112,7 +112,7 @@ export interface PageMetrics {
 /**
  * 一个"标准行" = 240 twips = 12pt。
  * Word 的 beforeLines/afterLines 按标准行（网格线）算，不是按段落自己的行高，
- * 预览侧的 scripts/patch-docx-line-spacing.cjs 用的也是这个口径。
+ * 预览侧的 patches/@docx-editor.dev+core+2.15.0.patch 用的也是这个口径。
  * 拿正文实际行高来换算，行单位的段间距会被系统性放大——小四 1.2 倍行距下多算 56%。
  */
 const STANDARD_LINE_PT = 12;

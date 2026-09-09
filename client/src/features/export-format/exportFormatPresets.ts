@@ -35,7 +35,6 @@ interface ExportLayoutPreset {
   page: LayoutPageSettings;
   heading_level1_page_break_before: boolean;
   heading_border_enabled: boolean;
-  heading_border_min_heading_left_enabled: boolean;
   headings: HeadingLayoutStyle[];
   body_text: BodyTextStyleConfig;
   table: Pick<TableStyleConfig, 'border_width' | 'cell_padding_pt' | 'full_width'> & {
@@ -118,7 +117,6 @@ export const EXPORT_LAYOUT_PRESETS: ExportLayoutPreset[] = [
     },
     heading_level1_page_break_before: false,
     heading_border_enabled: false,
-    heading_border_min_heading_left_enabled: false,
     headings: [
       heading('黑体', '小二', '居中对齐', false, 10, 10),
       heading('黑体', '四号', '两端对齐', false, 10, 10),
@@ -179,7 +177,6 @@ export const EXPORT_LAYOUT_PRESETS: ExportLayoutPreset[] = [
     },
     heading_level1_page_break_before: true,
     heading_border_enabled: false,
-    heading_border_min_heading_left_enabled: false,
     headings: [
       heading('黑体', '二号', '居中对齐', true, 18, 14, 1.1),
       heading('黑体', '三号', '左对齐', true, 14, 10, 1.1),
@@ -240,7 +237,6 @@ export const EXPORT_LAYOUT_PRESETS: ExportLayoutPreset[] = [
     },
     heading_level1_page_break_before: false,
     heading_border_enabled: false,
-    heading_border_min_heading_left_enabled: false,
     headings: [
       heading('黑体', '三号', '左对齐', true, 8, 6, 1),
       heading('黑体', '小三', '左对齐', true, 7, 5, 1),
@@ -301,7 +297,6 @@ export const EXPORT_LAYOUT_PRESETS: ExportLayoutPreset[] = [
     },
     heading_level1_page_break_before: false,
     heading_border_enabled: false,
-    heading_border_min_heading_left_enabled: false,
     headings: [
       heading('黑体', '三号', '居中对齐', true, 8, 6, 1),
       heading('黑体', '小三', '左对齐', true, 6, 4, 1),
@@ -362,7 +357,6 @@ export const EXPORT_LAYOUT_PRESETS: ExportLayoutPreset[] = [
     },
     heading_level1_page_break_before: true,
     heading_border_enabled: false,
-    heading_border_min_heading_left_enabled: false,
     headings: [
       heading('微软雅黑', '小二', '居中对齐', true, 14, 12, 1.1),
       heading('微软雅黑', '三号', '左对齐', true, 12, 8, 1.1),
@@ -423,68 +417,6 @@ export const EXPORT_LAYOUT_PRESETS: ExportLayoutPreset[] = [
     },
     heading_level1_page_break_before: true,
     heading_border_enabled: true,
-    heading_border_min_heading_left_enabled: false,
-    headings: [
-      heading('黑体', '小二', '居中对齐', true, 0, 0, 1),
-      heading('黑体', '四号', '左对齐', true, 0, 0, 1),
-      heading('黑体', '小四', '左对齐', false, 0, 0, 1),
-      heading('楷体', '小四', '左对齐', false, 0, 0, 1),
-      heading('黑体', '小四', '左对齐', false, 0, 0, 1),
-      heading('宋体', '小四', '左对齐', false, 0, 0, 1),
-    ],
-    body_text: {
-      font: '宋体',
-      size: '小四',
-      alignment: '左对齐',
-      spacing_before: 0,
-      spacing_before_unit: 'lines',
-      spacing_after: 4,
-      spacing_after_unit: 'pt',
-      first_line_indent_chars: 2,
-      line_spacing_mode: 'multiple',
-      line_spacing_value: 1.25,
-      list_style: 'disc',
-      ordered_list_style: 'decimal-dot',
-      list_indent_chars: 2,
-    },
-    table: {
-      border_width: 1,
-      cell_padding_pt: 6,
-      full_width: true,
-      header_row: { font: '黑体', size: '小四', alignment: '居中对齐' },
-      first_column: { font: '宋体', size: '小四', alignment: '左对齐' },
-      body_cell: { font: '宋体', size: '小四', alignment: '左对齐' },
-    },
-    image: {
-      max_width_percent: 90,
-      alignment: '居中对齐',
-      caption_font: '宋体',
-      caption_size: '小五',
-      caption_alignment: '居中对齐',
-      caption_bold: false,
-      caption_italic: false,
-    },
-  },
-  {
-    id: 'left-title-frame',
-    label: '左题栏页框版',
-    description: '启用章节页框，最小标题固定在正文左侧，适合条目化响应内容。',
-    page: {
-      paper_size: 'a4',
-      orientation: 'portrait',
-      two_column: false,
-      first_page_different: true,
-      margin_top_cm: 2,
-      margin_bottom_cm: 2,
-      margin_left_cm: 2,
-      margin_right_cm: 2,
-      page_number_enabled: true,
-      page_number_format: '第{page}页',
-      page_number_start: 1,
-    },
-    heading_level1_page_break_before: true,
-    heading_border_enabled: true,
-    heading_border_min_heading_left_enabled: true,
     headings: [
       heading('黑体', '小二', '居中对齐', true, 0, 0, 1),
       heading('黑体', '四号', '左对齐', true, 0, 0, 1),
@@ -727,7 +659,6 @@ export function applyExportLayoutPreset(config: ExportFormatConfig, presetId: st
     heading_border: {
       ...config.heading_border,
       enabled: preset.heading_border_enabled,
-      min_heading_left_enabled: preset.heading_border_min_heading_left_enabled,
     },
     headings: config.headings.map((current, index) => ({
       ...current,

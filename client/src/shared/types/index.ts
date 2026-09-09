@@ -66,6 +66,7 @@ export type { AppMenuItem, SectionId } from './navigation';
 export type {
   ExportFormatConfig,
   ExportTemplateRecord,
+  ExportTemplateScope,
   HeadingNumberingFormat,
   HeadingStyleConfig,
   HeadingBorderConfig,

@@ -2,6 +2,9 @@
  * 导出格式配置类型、编号格式选项和字号/字体映射表
  */
 
+/** 项目级模板样式范围；纸张、方向、双栏及页边距始终应用于整个文件。 */
+export type ExportTemplateScope = 'ai-only' | 'document';
+
 // ── 编号格式 ─────────────────────────────────────
 export const HEADING_NUMBERING_FORMAT_OPTIONS = [
   { value: 'outline-decimal', label: '数字连续多级编号（1.1.1）' },
@@ -34,7 +37,6 @@ export interface HeadingStyleConfig {
 
 export interface HeadingBorderConfig {
   enabled: boolean;
-  min_heading_left_enabled: boolean;
   border_color: string;
   level_cell_colors: string[];
   structure: HeadingBorderStructure;
@@ -474,7 +476,6 @@ export const DEFAULT_HEADING_BORDER_CELL_COLORS = ['#eef5ff', '#f3f7ff', '#f8fbf
 
 const DEFAULT_HEADING_BORDER: HeadingBorderConfig = {
   enabled: false,
-  min_heading_left_enabled: false,
   border_color: '#cfd8ee',
   level_cell_colors: [...DEFAULT_HEADING_BORDER_CELL_COLORS],
   structure: '上下结构',
