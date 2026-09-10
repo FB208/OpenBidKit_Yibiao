@@ -191,11 +191,21 @@ export interface PageSetupConfig {
   header_color: string;
   header_footer_style: HeaderFooterStyle;
   header_badge_text: string;
+  /** 装饰带高度。null = 跟随所选样式的固有高度；给了值会被钳进安全区间 */
+  header_chrome_height_cm: number | null;
+  /** 页眉文字的位置：left 相对纸张左沿，top 相对装饰带上沿。null = 跟随样式默认 */
+  header_text_top_cm: number | null;
+  header_text_left_cm: number | null;
   chrome_bar_color: string;
   chrome_accent_color: string;
   footer_enabled: boolean;
   footer_text: string;
   footer_distance_cm: number;
+  /** 装饰带高度。null = 跟随所选样式的固有高度；给了值会被钳进安全区间 */
+  footer_chrome_height_cm: number | null;
+  /** 页脚文字的位置：left 相对纸张左沿，top 相对装饰带上沿。null = 跟随样式默认 */
+  footer_text_top_cm: number | null;
+  footer_text_left_cm: number | null;
   footer_font: string;
   footer_size: string;
   footer_alignment: string;
@@ -396,11 +406,17 @@ const DEFAULT_PAGE_SETUP: PageSetupConfig = {
   header_color: '#536176',
   header_footer_style: 'plain',
   header_badge_text: '',
+  header_chrome_height_cm: null,
+  header_text_top_cm: null,
+  header_text_left_cm: null,
   chrome_bar_color: '#e8eef5',
   chrome_accent_color: '#536176',
   footer_enabled: false,
   footer_text: '',
   footer_distance_cm: 0,
+  footer_chrome_height_cm: null,
+  footer_text_top_cm: null,
+  footer_text_left_cm: null,
   footer_font: '宋体',
   footer_size: '小五',
   footer_alignment: '居中对齐',

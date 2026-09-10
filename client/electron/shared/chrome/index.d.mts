@@ -108,4 +108,25 @@ export const HEADER_SLOT: { leftCm: number; rightCm: number; topRatio: number; b
 export const HEADER_FRAME: { xCm: number; yCm: number };
 export const FOOTER_FRAME_INSET_CM: number;
 export const CHROME_EDGE_BUDGET_CM: number;
+
+export interface ChromeRangeCm { min: number; max: number }
+export const HEADER_CHROME_HEIGHT_RANGE_CM: ChromeRangeCm;
+export const FOOTER_CHROME_HEIGHT_RANGE_CM: ChromeRangeCm;
+export function clampCm(value: number, range: ChromeRangeCm): number;
+export function resolveChromeHeightCm(
+  configured: unknown, defaultCm: number, range: ChromeRangeCm,
+): number;
+
+/** 某样式下六个可配几何量的真实默认值，供 UI 具象化填入输入框。 */
+export interface ChromeGeometryDefaults {
+  header_chrome_height_cm: number;
+  footer_chrome_height_cm: number;
+  header_text_left_cm: number;
+  header_text_top_cm: number;
+  footer_text_left_cm: number;
+  footer_text_top_cm: number;
+}
+export function resolveChromeGeometryDefaults(
+  page?: Record<string, unknown>,
+): ChromeGeometryDefaults;
 export const CHROME_BODY_CLEARANCE_CM: number;

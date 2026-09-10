@@ -17,7 +17,7 @@ export * from './colors.mjs';
 export * from './geometry.mjs';
 export { buildHeaderSvg } from './headerSvg.mjs';
 export { buildFooterSvg } from './footerSvg.mjs';
-export { buildTextLayout, formatPageNumber } from './textLayout.mjs';
+export { buildTextLayout, formatPageNumber, resolveChromeGeometryDefaults } from './textLayout.mjs';
 
 /**
  * 由页面配置产出完整的装饰描述。

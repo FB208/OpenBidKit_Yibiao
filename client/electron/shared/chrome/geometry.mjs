@@ -44,6 +44,38 @@ export const FOOTER_HEIGHT_CM = {
   frame: 0.85,
 };
 
+/**
+ * 用户可配高度的安全区间。
+ *
+ * 下限刻意低于该处最小的固有默认高度（页脚 band/footer-badge 的 0.635、页眉的 1.35），
+ * 否则用户手动拖到默认值反而会被自己的下限顶走；上限防止装饰带把正文挤没。
+ * 0 / 缺失 / 非法值根本不进这个区间 —— 那表示「跟随样式固有默认」，见 resolveChromeHeightCm。
+ *
+ * 实测：页脚低于 0.6cm 时 frame 的内框会算出负高度，页眉低于 0.5cm 时同样，
+ * 所以下限同时也是装饰结构本身的底线。svgUtil 的负尺寸兜底是第二层保险。
+ */
+export const HEADER_CHROME_HEIGHT_RANGE_CM = { min: 0.8, max: 4 };
+export const FOOTER_CHROME_HEIGHT_RANGE_CM = { min: 0.6, max: 3 };
+
+
+export const clampCm = (value, { min, max }) => Math.min(max, Math.max(min, value));
+
+/**
+ * 解析一个「0 = 跟随样式默认」的高度配置。
+ *
+ * 默认值走旁路而不是也钳一遍：band / footer-badge 的固有高度 0.635 低于任何
+ * 我们能接受的手动下限，默认值一旦进 clamp 就会被顶高，切换样式就变形。
+ * 老模板没有这个字段，天然落到 defaultCm，几何与改动前逐字节一致。
+ *
+ * defaultCm 为 0 表示该样式本就没有装饰带（plain 的页脚），配置多少都不能凭空造一条出来。
+ */
+export function resolveChromeHeightCm(configured, defaultCm, range) {
+  if (!(defaultCm > 0)) return 0;
+  // 同 placeBox：只认真正的 number。null / undefined / '' 都表示「跟随样式默认」。
+  if (typeof configured !== 'number' || !Number.isFinite(configured) || configured <= 0) return defaultCm;
+  return clampCm(configured, range);
+}
+
 /** 装饰与文字共用的页脚分区宽度。barCm 是正文与页码之间的竖条。 */
 export const FOOTER_COLUMNS = {
   band: { left: 1.15, right: 2.1 },
@@ -188,8 +220,14 @@ export function resolveChromeLayout(page = {}) {
   const headerVisible = showsHeader(page);
   const footerVisible = showsFooter(page);
   // plain 不生成装饰图，不能占装饰带高度 —— 否则会无故抬高用户设的正文上边距。
-  const headerHeightCm = headerVisible && isDecorative(style) ? HEADER_CHROME_HEIGHT_CM : 0;
-  const footerHeightCm = footerVisible ? (FOOTER_HEIGHT_CM[style] ?? 0) : 0;
+  const headerHeightCm = headerVisible && isDecorative(style)
+    ? resolveChromeHeightCm(
+      page.header_chrome_height_cm, HEADER_CHROME_HEIGHT_CM, HEADER_CHROME_HEIGHT_RANGE_CM)
+    : 0;
+  const footerHeightCm = footerVisible
+    ? resolveChromeHeightCm(
+      page.footer_chrome_height_cm, FOOTER_HEIGHT_CM[style] ?? 0, FOOTER_CHROME_HEIGHT_RANGE_CM)
+    : 0;
 
   const footerDistanceCm = Math.max(0, page.footer_distance_cm ?? DEFAULT_FOOTER_DISTANCE_CM);
 

@@ -2,6 +2,11 @@
 import { DocxEditor, type DocxEditorRef } from '@docx-editor.dev/react';
 import { createBrowserAutomationHost } from '@docx-editor.dev/core/editor';
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
+// 输入框的取值区间取自共享几何模块，别在 UI 里再写一份魔数 ——
+// 真正的钳制发生在 geometry.mjs，那里才兜得住老模板和手改的 JSON。
+import {
+  HEADER_CHROME_HEIGHT_RANGE_CM, FOOTER_CHROME_HEIGHT_RANGE_CM, resolveChromeGeometryDefaults,
+} from '../../../../electron/shared/chrome/index.mjs';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, AppSwitch, FloatingToolbar, ProgressBar, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
@@ -278,10 +283,20 @@ function createNewTemplateExportFormat(): ExportFormatConfig {
 
 function withExportFormatDefaults(source: ExportFormatConfig): ExportFormatConfig {
   const defaults = createDefaultExportFormat();
+  // 页眉页脚的六个几何量在配置里可以是 null（老模板、系统预设都没写过它们）。
+  // 几何层认得 null，但输入框认不得 —— 在这里落成该样式的真实数字，
+  // 用户打开模板看到的就是「页脚高 0.63」而不是一个没有信息量的空值。
+  const page = { ...defaults.page, ...source.page };
+  const geometryDefaults = resolveChromeGeometryDefaults(page);
+  for (const [key, value] of Object.entries(geometryDefaults)) {
+    if (typeof (page as Record<string, unknown>)[key] !== 'number') {
+      (page as Record<string, unknown>)[key] = value;
+    }
+  }
   return {
     ...defaults,
     ...source,
-    page: { ...defaults.page, ...source.page },
+    page,
     heading_border: {
       ...defaults.heading_border,
       ...source.heading_border,
@@ -571,6 +586,9 @@ function ExportFormatPage({
         footer_enabled: true,
         page_number_enabled: true,
       };
+      // 换样式就是换一套装饰结构：高度和文字位置整组回到新样式的默认值。
+      // 不重置的话，frame 的「文字左 0.58」会被带到 band 上，文字直接压在徽标块里。
+      Object.assign(page, resolveChromeGeometryDefaults(page));
       const footerColor = style === 'band'
         ? resolveChromeColors(page).onAccent
         : prev.page.header_footer_style === 'band' && prev.page.footer_color.toLowerCase() === previousBandTextColor
@@ -948,6 +966,36 @@ function ExportFormatPage({
                 <input type="color" value={config.page.header_color} onChange={(event) => updatePage({ header_color: event.target.value })} />
               </label>
             )}
+            {/* 高度和文字位置只对装饰样式有意义：plain 的页眉文字走 Word 普通段落，
+                没有装饰带也没有浮动文本框，这两组量都没有落点。 */}
+            {isDecorativeHeaderFooterStyle(headerFooterStyle) && (
+              <>
+                <label className="settings-row">
+                  <div className="settings-row-copy"><strong>页眉装饰带高度</strong><span>单位：厘米</span></div>
+                  <input
+                    type="number" min={HEADER_CHROME_HEIGHT_RANGE_CM.min} max={HEADER_CHROME_HEIGHT_RANGE_CM.max} step={0.05}
+                    value={config.page.header_chrome_height_cm ?? 0}
+                    onChange={(event) => updatePage({ header_chrome_height_cm: Number(event.target.value) })}
+                  />
+                </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy"><strong>页眉文字上边距</strong><span>文字区距装饰带上沿，单位：厘米</span></div>
+                  <input
+                    type="number" min={0} max={HEADER_CHROME_HEIGHT_RANGE_CM.max} step={0.05}
+                    value={config.page.header_text_top_cm ?? 0}
+                    onChange={(event) => updatePage({ header_text_top_cm: Number(event.target.value) })}
+                  />
+                </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy"><strong>页眉文字左边距</strong><span>文字区距纸张左沿，单位：厘米</span></div>
+                  <input
+                    type="number" min={0} max={20} step={0.05}
+                    value={config.page.header_text_left_cm ?? 0}
+                    onChange={(event) => updatePage({ header_text_left_cm: Number(event.target.value) })}
+                  />
+                </label>
+              </>
+            )}
           </>
         )}
         <label className="settings-row">
@@ -988,6 +1036,34 @@ function ExportFormatPage({
               <div className="settings-row-copy"><strong>距底边距离</strong><span>页脚或页码距页面底边，单位：厘米</span></div>
               <input type="number" min={0} max={5} step={0.1} value={config.page.footer_distance_cm} onChange={(event) => updatePage({ footer_distance_cm: Number(event.target.value) })} />
             </label>
+            {isDecorativeHeaderFooterStyle(headerFooterStyle) && (
+              <>
+                <label className="settings-row">
+                  <div className="settings-row-copy"><strong>页脚装饰带高度</strong><span>单位：厘米</span></div>
+                  <input
+                    type="number" min={FOOTER_CHROME_HEIGHT_RANGE_CM.min} max={FOOTER_CHROME_HEIGHT_RANGE_CM.max} step={0.05}
+                    value={config.page.footer_chrome_height_cm ?? 0}
+                    onChange={(event) => updatePage({ footer_chrome_height_cm: Number(event.target.value) })}
+                  />
+                </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy"><strong>页脚文字上边距</strong><span>文字区距装饰带上沿，单位：厘米</span></div>
+                  <input
+                    type="number" min={0} max={FOOTER_CHROME_HEIGHT_RANGE_CM.max} step={0.05}
+                    value={config.page.footer_text_top_cm ?? 0}
+                    onChange={(event) => updatePage({ footer_text_top_cm: Number(event.target.value) })}
+                  />
+                </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy"><strong>页脚文字左边距</strong><span>文字区距纸张左沿；页码格右锚定，不跟随</span></div>
+                  <input
+                    type="number" min={0} max={20} step={0.05}
+                    value={config.page.footer_text_left_cm ?? 0}
+                    onChange={(event) => updatePage({ footer_text_left_cm: Number(event.target.value) })}
+                  />
+                </label>
+              </>
+            )}
           </>
         )}
         <label className="settings-row">

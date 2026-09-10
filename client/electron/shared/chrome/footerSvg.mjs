@@ -40,7 +40,14 @@ const ICONS = {
     '<rect x="17" y="17" width="4" height="4" fill="{{mark}}"/>',
 };
 
-const ICON_SIZE_PT = 18;   // 与导出侧 ImageRun transformation 的 18pt 一致
+const ICON_SIZE_PT = 18;   // 图标的设计尺寸；页脚可以配得更矮，见 footerIconSize
+
+/**
+ * 图标边长。页脚高度可配之后 H 可能小于 18pt，(H - icon) / 2 就成了负数、
+ * 图标从色带上下溢出。只允许缩不允许胀 —— 图标是标记不是背景，
+ * 页脚加高时它保持原尺寸才对，跟着一起长会变成一个巨大的装饰品。
+ */
+const footerIconSize = (H) => Math.min(ptToSvg(ICON_SIZE_PT), H * 0.75);
 
 function plainFooter() {
   return null;
@@ -73,7 +80,7 @@ function footerBadgeFooter({ accent, bar }, W, H) {
 function topBarFooter({ accent, badge, onAccent }, W, H) {
   const leftW = cmToSvg(FOOTER_COLUMNS['top-bar'].left);
   const rightW = cmToSvg(FOOTER_COLUMNS['top-bar'].right);
-  const icon = ptToSvg(ICON_SIZE_PT);
+  const icon = footerIconSize(H);
   return svgDoc(W / 100, H / 100,
     rect(0, 0, W, H, '#ffffff') +
     rect(0, 0, leftW, H, accent) +
@@ -85,7 +92,7 @@ function topBarFooter({ accent, badge, onAccent }, W, H) {
 function slantFooter({ accent, bar, badge, onAccent }, W, H) {
   const leftW = cmToSvg(FOOTER_COLUMNS.slant.left);
   const rightW = cmToSvg(FOOTER_COLUMNS.slant.right);
-  const icon = ptToSvg(ICON_SIZE_PT);
+  const icon = footerIconSize(H);
   return svgDoc(W / 100, H / 100,
     rect(0, 0, W, H, bar) +
     rect(0, 0, leftW, H, accent) +
@@ -108,7 +115,7 @@ function letterheadFooter({ accent }, W, H) {
 function frameFooter({ accent }, W, H) {
   const leftW = cmToSvg(FOOTER_COLUMNS.frame.left);
   const rightW = cmToSvg(FOOTER_COLUMNS.frame.right);
-  const icon = ptToSvg(ICON_SIZE_PT);
+  const icon = footerIconSize(H);
   const outer = ptToSvg(2.2);
   const innerInset = cmToSvg(FOOTER_FRAME_INSET_CM);
   return svgDoc(W / 100, H / 100,

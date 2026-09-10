@@ -1,11 +1,16 @@
 /**
- * 将 ExportFormatConfig 映射为 CSS 自定义属性
- * 注入到正文预览容器的 style 上，实现实时 WYSIWYG 预览
+ * 将 ExportFormatConfig 映射为 CSS 自定义属性，注入正文预览容器
+ * （.markdown-viewer.export-format-preview，见 shared-markdown.css）。
+ *
+ * 只覆盖正文排版：纸张宽度、正文边距、字体字号行距、列表与标题样式。
+ * 页眉页脚、章节页框、纸面模拟那一套 CSS 变量已经删掉 —— 模板设置页的预览
+ * 早就换成 docx-editor.dev 渲染真实 docx 了（ExportFormatPage 的 DocxEditor），
+ * 那条链路走的是共享几何 + C# 排版，不吃这里的变量。
  */
 
 import { resolveChromeLayoutWithText } from '../../../electron/shared/chrome/index.mjs';
 import type { ExportFormatConfig, HeadingStyleConfig, ListStyle, OrderedListStyle } from '../types/exportFormat';
-import { SIZE_TO_PT, FONT_TO_CSS, ALIGNMENT_TO_CSS, DEFAULT_HEADING_BORDER_CELL_COLORS } from '../types/exportFormat';
+import { SIZE_TO_PT, FONT_TO_CSS, ALIGNMENT_TO_CSS } from '../types/exportFormat';
 
 /**
  * 中文字号名 → pt 值
@@ -102,43 +107,15 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
   const vars: Record<string, string> = {};
 
   // ── 页面设置 ──
-  // 纸张、边距、装饰带高度全部来自共享几何模块，与正式导出、C# 样张同源。
-  // 预览此前自带一份平行常量，正是预览和产出对不上的来源。
+  // 纸张与边距取自共享几何模块，与正式导出、C# 样张同源；正文边距要为页眉页脚
+  // 装饰带让位，所以必须走 resolveChromeLayoutWithText 而不是配置里的原始值。
   const { layout } = resolveChromeLayoutWithText(config.page as unknown as Record<string, unknown>);
 
   vars['--ef-page-width'] = `${layout.widthCm}cm`;
-  vars['--ef-page-height'] = `${layout.heightCm}cm`;
-  vars['--ef-page-aspect'] = `${layout.widthCm} / ${layout.heightCm}`;
   vars['--ef-page-padding-top'] = `${layout.marginTopCm}cm`;
   vars['--ef-page-padding-bottom'] = `${layout.marginBottomCm}cm`;
   vars['--ef-page-padding-left'] = `${layout.marginLeftCm}cm`;
   vars['--ef-page-padding-right'] = `${layout.marginRightCm}cm`;
-  vars['--ef-header-chrome-height'] = `${layout.headerHeightCm}cm`;
-  vars['--ef-header-font'] = chineseFontToCss(config.page.header_font || '宋体');
-  vars['--ef-header-size'] = `${chineseSizeToPt(config.page.header_size || '小五')}pt`;
-  vars['--ef-header-align'] = alignmentToCss(config.page.header_alignment || '居中对齐');
-  vars['--ef-header-color'] = config.page.header_color || '#536176';
-  vars['--ef-footer-font'] = chineseFontToCss(config.page.footer_font || '宋体');
-  vars['--ef-footer-size'] = `${chineseSizeToPt(config.page.footer_size || '小五')}pt`;
-  const footerAlignment = alignmentToCss(config.page.footer_alignment || '居中对齐');
-  vars['--ef-footer-align'] = footerAlignment;
-  vars['--ef-footer-justify'] = footerAlignment === 'center' ? 'center' : footerAlignment === 'right' ? 'flex-end' : 'flex-start';
-  vars['--ef-footer-color'] = config.page.footer_color || '#536176';
-  vars['--ef-footer-distance'] = `${layout.footerDistanceCm}cm`;
-  vars['--ef-chrome-bar'] = config.page.chrome_bar_color || '#e8eef5';
-  vars['--ef-chrome-accent'] = config.page.chrome_accent_color || '#536176';
-
-  // ── 章节页框 ──
-  const headingBorder = config.heading_border;
-  const frameEnabled = headingBorder?.enabled === true;
-  const frameColor = headingBorder?.border_color || '#2174fd';
-  const frameCellColors = DEFAULT_HEADING_BORDER_CELL_COLORS.map((color, index) => headingBorder?.level_cell_colors?.[index] || color);
-  vars['--ef-chapter-frame-border'] = frameEnabled ? `0.8pt solid ${frameColor}` : 'none';
-  vars['--ef-chapter-frame-color'] = frameEnabled ? frameColor : 'transparent';
-  vars['--ef-chapter-row-border'] = frameEnabled ? `0.6pt solid color-mix(in srgb, ${frameColor} 55%, white)` : 'none';
-  frameCellColors.forEach((color, index) => {
-    vars[`--ef-chapter-row-${index + 1}-background`] = frameEnabled ? color : 'transparent';
-  });
 
   // ── 正文 ──
   const bodySizePt = chineseSizeToPt(config.body_text.size);
@@ -184,7 +161,6 @@ export function buildExportFormatCssVars(config: ExportFormatConfig): Record<str
     vars['--ef-table-border-width'] = `${table.border_width ?? 1}px`;
     vars['--ef-table-border-color'] = table.border_color || '#dcdff6';
     vars['--ef-table-cell-padding'] = `${table.cell_padding_pt ?? 6}pt`;
-    vars['--ef-table-width'] = table.full_width ? '100%' : 'auto';
     vars['--ef-table-caption-font'] = chineseFontToCss(table.caption_font || '宋体');
     vars['--ef-table-caption-size'] = `${chineseSizeToPt(table.caption_size || '小四')}pt`;
     vars['--ef-table-caption-align'] = alignmentToCss(table.caption_alignment || '居中对齐');

@@ -29,8 +29,15 @@ export function svgDoc(widthCm, heightCm, inner, defs = '') {
   );
 }
 
+/**
+ * 宽高钳到非负：装饰带高度可配之后，「H 减去固定内缩」这类表达式会算出负数，
+ * 而负的 width/height 在 SVG 里是非法属性，整个 <rect> 被丢弃、图案缺一块还不报错。
+ * 钳成 0 至少是「这一笔没画出来」，比静默画坏可诊断。
+ */
 export function rect(x, y, w, h, fill, extra = '') {
-  return `<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(h)}" fill="${fill}"${extra ? ' ' + extra : ''}/>`;
+  const width = n(Math.max(0, w));
+  const height = n(Math.max(0, h));
+  return `<rect x="${n(x)}" y="${n(y)}" width="${width}" height="${height}" fill="${fill}"${extra ? ' ' + extra : ''}/>`;
 }
 
 export function polygon(points, fill, extra = '') {
@@ -49,9 +56,10 @@ export function vLine(x, y, h, thickness, color) {
 
 /** 描边矩形（不填充）。 */
 export function strokeRect(x, y, w, h, color, thickness) {
+  // 描边框内缩半个线宽，矮到一定程度 w/h 减完就是负的 —— 同 rect，钳到非负。
   return (
     `<rect x="${n(x + thickness / 2)}" y="${n(y + thickness / 2)}" ` +
-    `width="${n(w - thickness)}" height="${n(h - thickness)}" ` +
+    `width="${n(Math.max(0, w - thickness))}" height="${n(Math.max(0, h - thickness))}" ` +
     `fill="none" stroke="${color}" stroke-width="${n(thickness)}"/>`
   );
 }
