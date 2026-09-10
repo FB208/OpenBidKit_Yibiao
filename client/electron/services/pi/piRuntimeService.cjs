@@ -784,6 +784,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         timeoutMs: DEFAULT_PI_HTTP_IDLE_TIMEOUT_MS,
         jsonValidationSchemas: payload.json_validation_schemas,
         summaryEnabled,
+        autoValidateJson: payload.auto_validate_json === true,
         isFinalToolCall: payload.is_final_tool_call,
         requestUserQuestion: (request, signal) => waitForUserQuestion(request, signal, taskToken),
         reportTaskFailure: (reason) => {
@@ -859,6 +860,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
               error.piAssistantError = getAssistantErrorDetails(session.messages);
               throw error;
             }
+            created.assertJsonValidationPassed();
             assistantText = summaryEnabled ? extractAssistantText(session.messages) : '';
             const output = await readOutputAsync(workspaceDir, outputFile);
             checkpointPersistentTask({

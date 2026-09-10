@@ -549,7 +549,7 @@ ${taskInstruction}
 5. attr 必须从“通用”“商务/资信”“技术”“其他”“目录”“报价”“业绩”中选择。
 ${modeRequirements}
 8. ${OUTLINE_OUTPUT_FILE} 必须是纯 JSON，不包含 Markdown 代码块或解释文字。
-9. 程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema。写入后调用 json-validation，只传 {"file_path":"${OUTLINE_OUTPUT_FILE}"}；校验失败后必须先修改文件，再重新校验。`;
+9. 程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema。使用 write 写入或 edit 修改后会自动校验；失败时根据工具返回的错误继续修复，修复后自动复验，通过后无需再调用 json-validation。`;
 }
 
 function createLeafAllocationPrompt({ standaloneTechnical = false } = {}) {
@@ -566,7 +566,7 @@ function createLeafAllocationPrompt({ standaloneTechnical = false } = {}) {
 5. 将结果写入 ${LEAF_ALLOCATION_FILE}，保留 context 中的 mode、target_ai_leaf_count、fixed_ai_leaf_count 和 allocatable_ai_leaf_count。
 6. 不要修改 ${OUTLINE_OUTPUT_FILE}、${TECHNICAL_SCORE_GROUPS_FILE} 或 ${SCORE_DIRECTORY_PLAN_FILE}。
 7. 输出格式为 {"mode":"allocated","target_ai_leaf_count":20,"fixed_ai_leaf_count":1,"allocatable_ai_leaf_count":19,"allocations":[{"branch_id":"B1","leaf_count":10},{"branch_id":"B2","leaf_count":9}]}。
-8. 程序已为 ${LEAF_ALLOCATION_FILE} 预置 Schema。完成后调用 json-validation 校验，只传 file_path；校验失败后必须先修改文件，再重新校验。`;
+8. 程序已为 ${LEAF_ALLOCATION_FILE} 预置 Schema。使用 write 写入或 edit 修改后会自动校验；失败时继续修复，通过后无需再调用 json-validation。`;
 }
 
 
@@ -592,7 +592,7 @@ ${placementInstruction}
 7. 存在至少一个有效评分项时，无论是否存在偏离，都必须调用一次 ask-user 让用户确认。没有偏离时，question 只说明你分析得出的技术方案所在目录和评分项所在层级，最多使用两句话且不要使用列表；存在偏离时，只补充实际需要用户批准的偏离及影响，存在多个实际确认事项时才使用简单 Markdown 分行列出。question、选项名称和选项说明不得复述、概括或改写本任务 Prompt 中的要求，只呈现你分析后确实需要用户确认的结论或不确定事项。第一项给出推荐方案；另提供一个名为“调整目录安排”等明确业务名称的选项并设置 custom=true，让用户说明希望调整的位置或层级，其他选项均设置 custom=false。
 8. 根据用户回答写入 ${SCORE_DIRECTORY_PLAN_FILE}。完整字段层级示例：${planExample}。branches 中每个分支填写唯一且后续保持不变的 branch_id，并用当前 ${OUTLINE_OUTPUT_FILE} 中尚未调整的一级目录编号和标题填写 root_id、root_title；统一填写 score_item_level，并让每个 requirement_id 在 mappings 中恰好出现一次。后续新增、重排或改名一级目录时，branch_id 仍用于稳定关联同一技术分支，不能随 root_id 改变；程序会在完整目录重新编号后同步 root_id 和 root_title。默认一一对应；经用户批准合并时，多个 mapping 可以使用相同 target_title；经用户批准拆分时才填写 mapping.additional_titles；合并或拆分时才填写 adjustment_note。extra_titles 必须位于根对象，经批准增加同层级大项时才写入条目，否则使用空数组。
 9. 默认锁定一级目录，allow_root_changes=false；只有用户明确批准一级目录调整时才设为 true。
-10. 程序已为 ${TECHNICAL_SCORE_GROUPS_FILE} 和 ${SCORE_DIRECTORY_PLAN_FILE} 预置 Schema。分别调用 json-validation 校验，调用时只传 file_path；校验失败后必须先修改对应文件，再重新校验；如果现有材料无法在不编造评分项的情况下通过校验，调用 report-failure。
+10. 程序已为 ${TECHNICAL_SCORE_GROUPS_FILE} 和 ${SCORE_DIRECTORY_PLAN_FILE} 预置 Schema。两份文件分别使用 write 写入或 edit 修改后会自动校验；失败时先修复对应文件，全部通过后无需再调用 json-validation。如果现有材料无法在不编造评分项的情况下通过校验，调用 report-failure。
 11. 此阶段不要修改 ${OUTLINE_OUTPUT_FILE}，也不要删除、清空或重命名任何任务文件。`;
 }
 
@@ -635,7 +635,7 @@ function createChildrenPrompt({ hasOriginalPlan, originalOnly, targetLeafCount, 
 13. 目录层级可变，但最多六级；一级目录包含 attr，子目录不包含 attr。所有 id 必须使用层级点号编号：一级为 1、2，二级为 2.1、2.2，三级为 2.1.1、2.1.2，后续层级依此类推，并与实际父子位置一致。
 14. title 只写纯标题，不包含章节编号或 Markdown 标记。
 15. ${OUTLINE_OUTPUT_FILE} 的完整结构示例：${outlineExample}。branch_id 只写在评分规划对应的技术一级目录上；示例只说明字段位置和编号方式，实际层级与标题必须按任务材料生成。
-16. 程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema。直接覆盖写回该文件，完成后调用 json-validation 校验，只传 file_path；校验失败后必须先修改文件，再重新校验。`;
+16. 程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema。使用 write 覆盖写回该文件后会自动校验；失败时使用 edit 或 write 修复并自动复验，通过后无需再调用 json-validation。`;
 }
 
 function createLeafAdjustmentPrompt(targetLeafCount, actualLeafCount) {
@@ -651,7 +651,7 @@ function createLeafAdjustmentPrompt(targetLeafCount, actualLeafCount) {
 2. 用户选择“允许 Agent 自行调整”或“自定义需求”时，必须继续遵循 ${SCORE_DIRECTORY_PLAN_FILE}：不得删除、移动或改变评分项对应节点的目标层级，不得新增未经批准的同层级大项；优先调整评分项节点下面的更深层目录。
 3. 只通过合理调整 ai-generate 叶子的目录结构满足数量目标，不得为了凑数把 template-fill、directory-generate、manual-fill 或 other 改成 ai-generate，也不得改变非 AI 叶子的处理模式。
 4. 调整后仍须保持完整根结构 {"outline":[一级目录节点]}，id 必须使用与父子位置一致的层级点号编号；技术一级目录必须保留 ${SCORE_DIRECTORY_PLAN_FILE} 中对应的 branch_id，不能因增删、移动或重新编号而改变；父节点只含 children，不含 content_mode，叶子节点只含 content_mode，不含 children。
-5. 不要机械增加重复、空泛或近义目录。程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema；完成调整后覆盖写回该文件，并调用 json-validation 校验，只传 file_path；校验失败后必须先修改文件，再重新校验。`;
+5. 不要机械增加重复、空泛或近义目录。程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema；使用 write 写回或 edit 修改后会自动校验，失败时继续修复，通过后无需再调用 json-validation。`;
 }
 
 function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRootChanges }) {
@@ -682,7 +682,7 @@ function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRoot
 9. 修复必须继续遵守 ${SCORE_DIRECTORY_PLAN_FILE} 中用户确认的评分项映射、目标层级和一级目录调整边界。补回遗漏映射、合并重复目录或优化层级时，不得引入未经用户批准的评分大项规划变更。
 10. 技术一级目录必须保留 ${SCORE_DIRECTORY_PLAN_FILE} 中对应的 branch_id；调整一级目录顺序或编号时不得修改 branch_id。结构事实以 ${OUTLINE_REVIEW_CONTEXT_FILE} 为准；如果其中确定性检查不通过，直接依据列出的节点和缺失项形成问题并修复，不要重新统计。任何语义修复仍必须保证叶子保留合法 content_mode、父节点不包含 content_mode 或 content_mode_note、父节点至少有两个 children 且目录最多六级。
 11. 最终将完整问题清单和处理结果写入 ${OUTLINE_REVIEW_FILE}。无问题时完整格式为 {"status":"passed","issues":[],"user_feedback":"","summary":"审核通过原因"}；有问题时完整格式为 {"status":"user_feedback","issues":[{"category":"score-coverage","problem":"问题说明","repair":"修复方案","confirmation_required":true}],"user_feedback":"用户回答原文","summary":"处理结果"}。category 只能是 leaf-count、score-coverage、duplicate-directory、professional-structure；status 按本流程选择 passed、simple_fix、user_feedback 或 user_refuse。
-12. 程序已为 ${OUTLINE_OUTPUT_FILE} 和 ${OUTLINE_REVIEW_FILE} 预置 Schema。分别调用 json-validation 校验，只传 file_path；校验失败后必须先修改对应文件，再重新校验。`;
+12. 程序已为 ${OUTLINE_OUTPUT_FILE} 和 ${OUTLINE_REVIEW_FILE} 预置 Schema。使用 write 写入或 edit 修改后会自动校验，失败时继续修复；已通过自动校验的文件无需重复校验。本阶段未修改 ${OUTLINE_OUTPUT_FILE} 时，仍调用 json-validation 检查该文件，只传 file_path，不得为了触发自动校验而重写目录。两份文件全部校验通过后才结束本阶段。`;
 }
 
 // 运行 V2 目录业务任务；存在 AI 目录时继续扩展，存在模板填写目录时独立提取模版。
@@ -899,6 +899,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
       task_id: task.task_id,
       title: '技术方案一级目录生成',
       summary_enabled: false,
+      auto_validate_json: true,
       prompt: createInitialPrompt(taskInstruction, { standaloneTechnical }),
       output_file: OUTLINE_OUTPUT_FILE,
       files: initialFiles,
@@ -1015,6 +1016,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     task_id: task.task_id,
     title: '技术方案目录生成 V2',
     summary_enabled: false,
+    auto_validate_json: true,
     prompt: createScorePlanningPrompt({ standaloneTechnical }),
     output_file: OUTLINE_OUTPUT_FILE,
     files: [

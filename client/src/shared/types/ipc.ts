@@ -328,6 +328,8 @@ export interface AgentRunPayload {
   max_retries?: number;
   /** 是否生成结束总结，默认开启；false 时最后一批工具成功后直接结束本阶段。 */
   summary_enabled?: boolean;
+  /** 写入或修改预置 Schema 对应的 JSON 文件后自动校验，默认关闭。 */
+  auto_validate_json?: boolean;
 }
 
 export interface AgentRetryAttempt {
