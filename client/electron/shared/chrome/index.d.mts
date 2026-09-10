@@ -80,10 +80,12 @@ export interface ChromeResult {
 }
 
 export function buildChrome(page?: Record<string, unknown>): ChromeResult;
-export function chromeFingerprint(page?: Record<string, unknown>): string;
 
 export function resolveChromeColors(page?: Record<string, unknown>): ChromeColors;
 export function resolveChromeLayout(page?: Record<string, unknown>): ChromeLayout;
+export function resolveChromeLayoutWithText(
+  page?: Record<string, unknown>, colors?: ChromeColors,
+): { layout: ChromeLayout; textLayout: ChromeTextLayout };
 export function buildTextLayout(page: Record<string, unknown>, colors: ChromeColors, geometry?: ChromeLayout): ChromeTextLayout;
 export function buildHeaderSvg(
   style: string, colors: ChromeColors, widthCm: number, heightCm?: number,

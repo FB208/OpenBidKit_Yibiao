@@ -1,11 +1,9 @@
 /**
  * 页眉页脚几何 —— 全仓唯一实现。
  *
- * 此前这组常量在三处各写一份且互不一致：
- *   client/src/shared/utils/exportFormatCss.ts:96-107   前端预览
- *   client/electron/services/exportService.cjs:713-765  正式导出
- *   RestrictedHtmlDocumentRenderer.cs:286               C# 样张（Header 硬编码 1.25cm）
- * 现在只有这一份，三条链路都从这里取。
+ * 此前这组常量在多处各写一份且互不一致（前端预览的 exportFormatCss.ts、
+ * 正式导出的 exportService.cjs、C# 样张的 RestrictedHtmlDocumentRenderer.cs）。
+ * 现在只有这一份，所有链路——包括预览 CSS 变量——都从这里取。
  *
  * SVG 坐标系约定：1 个 SVG 单位 = 0.01cm，即 100 单位 = 1cm。
  * 这样 21cm 宽的页眉 viewBox 就是 "0 0 2100 135"，读起来直接对应物理尺寸。

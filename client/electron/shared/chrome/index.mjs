@@ -72,17 +72,3 @@ export function buildChrome(page = {}) {
     textLayout,
   };
 }
-
-/**
- * 内容指纹。用来给栅格化产物命名，配置没变就不重新截图。
- * 只对影响装饰外观的字段取值，避免正文改动触发重绘。
- */
-export function chromeFingerprint(page = {}) {
-  const keys = [
-    'header_footer_style', 'chrome_bar_color', 'chrome_accent_color',
-    'paper_size', 'orientation',
-    'header_enabled', 'footer_enabled', 'page_number_enabled',
-    'footer_distance_cm', 'footer_text', 'header_text',
-  ];
-  return keys.map((k) => `${k}=${page?.[k] ?? ''}`).join('|');
-}
