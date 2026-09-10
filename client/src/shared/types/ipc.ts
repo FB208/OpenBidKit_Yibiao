@@ -326,6 +326,8 @@ export interface AgentRunPayload {
   files?: AgentRunFile[];
   timeout_ms?: number;
   max_retries?: number;
+  /** 是否生成结束总结，默认开启；false 时最后一批工具成功后直接结束本阶段。 */
+  summary_enabled?: boolean;
 }
 
 export interface AgentRetryAttempt {

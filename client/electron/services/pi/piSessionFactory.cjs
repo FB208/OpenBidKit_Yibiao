@@ -15,6 +15,11 @@ const {
 const {
   createPiRetryErrorNormalizer,
 } = require('./piRetryErrorNormalizer.cjs');
+const {
+  PI_NO_SUMMARY_INSTRUCTIONS,
+  withTaskCompletionParameter,
+  installTaskCompletionHook,
+} = require('./piSummaryControl.cjs');
 
 let piModulesPromise = null;
 
@@ -41,7 +46,7 @@ function normalizeOutputLimit(contextLength) {
 }
 
 // 创建隔离的 Pi Session；持久任务可在后续完整执行中重新打开原 Session。
-async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, reportTaskFailure, openXmlTool }) {
+async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, reportTaskFailure, openXmlTool, summaryEnabled = true, isFinalToolCall }) {
   const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
@@ -102,7 +107,7 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
       agentsFiles: [{ path: '<yibiao-agent-workspace>', content: environment.instructions }],
     }),
     systemPromptOverride: () => undefined,
-    appendSystemPromptOverride: () => [],
+    appendSystemPromptOverride: () => summaryEnabled === false ? [PI_NO_SUMMARY_INSTRUCTIONS] : [],
   });
   await resourceLoader.reload();
   const bashTool = codingAgent.createBashToolDefinition(workspaceDir, {
@@ -139,6 +144,17 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     : sessionsDir
       ? codingAgent.SessionManager.create(workspaceDir, sessionsDir)
       : codingAgent.SessionManager.inMemory(workspaceDir);
+  let customTools = [bashTool, jsonValidationTool, userQuestionTool, taskFailureTool, ...(openXmlCustomTool ? [openXmlCustomTool] : [])];
+  if (summaryEnabled === false && !isFinalToolCall) {
+    customTools = [
+      codingAgent.createReadToolDefinition(workspaceDir, { autoResizeImages: false }),
+      codingAgent.createEditToolDefinition(workspaceDir),
+      codingAgent.createWriteToolDefinition(workspaceDir),
+      codingAgent.createFindToolDefinition(workspaceDir),
+      codingAgent.createLsToolDefinition(workspaceDir),
+      ...customTools,
+    ].map(withTaskCompletionParameter);
+  }
   const { session } = await codingAgent.createAgentSession({
     cwd: workspaceDir,
     agentDir: environment.layout.agentDir,
@@ -146,11 +162,12 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     modelRuntime,
     thinkingLevel: 'off',
     tools: ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user', AGENT_TASK_FAILURE_TOOL_NAME, ...(openXmlCustomTool ? [OPENXML_TOOL_NAME] : [])],
-    customTools: [bashTool, jsonValidationTool, userQuestionTool, taskFailureTool, ...(openXmlCustomTool ? [openXmlCustomTool] : [])],
+    customTools,
     resourceLoader,
     settingsManager,
     sessionManager,
   });
+  if (summaryEnabled === false) installTaskCompletionHook(session.agent, isFinalToolCall);
   return {
     session,
     sessionFile: session.sessionFile || sessionManager.getSessionFile() || '',

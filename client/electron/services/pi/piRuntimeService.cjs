@@ -694,6 +694,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     const outputFile = payload.output_file || 'agent-result.md';
     const timeoutMs = normalizeTimeoutMs(payload.timeout_ms);
     const maxRetries = normalizeMaxRetries(payload.max_retries);
+    const summaryEnabled = payload.summary_enabled !== false;
     const retryAttempts = [];
     const modelRetryStats = { count: 0 };
     const taskToken = crypto.randomUUID();
@@ -782,6 +783,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         config: configStore.load(),
         timeoutMs: DEFAULT_PI_HTTP_IDLE_TIMEOUT_MS,
         jsonValidationSchemas: payload.json_validation_schemas,
+        summaryEnabled,
+        isFinalToolCall: payload.is_final_tool_call,
         requestUserQuestion: (request, signal) => waitForUserQuestion(request, signal, taskToken),
         reportTaskFailure: (reason) => {
           const error = new Error(String(reason || '').trim() || 'Agent 无法继续当前任务');
@@ -856,7 +859,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
               error.piAssistantError = getAssistantErrorDetails(session.messages);
               throw error;
             }
-            assistantText = extractAssistantText(session.messages);
+            assistantText = summaryEnabled ? extractAssistantText(session.messages) : '';
             const output = await readOutputAsync(workspaceDir, outputFile);
             checkpointPersistentTask({
               status: 'running',

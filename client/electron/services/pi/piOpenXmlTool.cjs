@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const Ajv = require('ajv');
 
 const OPENXML_TOOL_NAME = 'openxml';
 const LIST_BLOCKS_ACTION = 'list-blocks';
@@ -42,10 +43,20 @@ function createPiOpenXmlTool({
   bidTemplateFieldsPath,
   bidTemplateFieldsRelativePath,
 }) {
+  // 分类从模型生成的文件读取，保留原工具参数的结构校验。
+  const validateFieldSelections = new Ajv({ allErrors: true, strict: true }).compile(Type.Object({
+    fields: Type.Array(Type.Object({
+      candidate_id: Type.String({ minLength: 1 }),
+      name: Type.String({ minLength: 1 }),
+      fill_by: Type.String({ enum: ['ai', 'manual'] }),
+      instruction: Type.Optional(Type.String()),
+    }, { additionalProperties: false })),
+    ignored_candidate_ids: Type.Array(Type.String({ minLength: 1 })),
+  }, { additionalProperties: false }));
   return {
     name: OPENXML_TOOL_NAME,
     label: 'Open XML 助手',
-    description: '列出招标 Word 原文块、抽取投标模版章节、扫描待填候选，并把确认后的候选写成 Word 内容控件。按 list-blocks、extract-chapters、scan-template-fields、apply-template-fields 顺序调用。apply-template-fields 每次调用都必须提交全部候选的完整分类，失败调用的参数不会被记忆或合并。',
+    description: '列出招标 Word 原文块、抽取投标模版章节、扫描待填候选，并把确认后的候选写成 Word 内容控件。按 list-blocks、extract-chapters、scan-template-fields、apply-template-fields 顺序调用。apply-template-fields 只传 fields_file，工具读取文件内全部候选的完整分类；失败时编辑该文件后重新提交路径，不要在工具参数里重复输出字段清单。',
     promptSnippet: '用 openxml 抽取投标模版、扫描待填候选并写入内容控件。',
     parameters: Type.Object({
       action: Type.String({
@@ -62,16 +73,9 @@ function createPiOpenXmlTool({
       }, { additionalProperties: false }), {
         description: 'extract-chapters 必填。heading=true 可提供 sourceTitle；heading=false 必须提供 startBlock 和 endBlock。',
       })),
-      fields: Type.Optional(Type.Array(Type.Object({
-        candidate_id: Type.String({ minLength: 1, description: '投标模版字段候选.json 中的候选 ID。' }),
-        name: Type.String({ minLength: 1, description: '字段名称；相同内容出现多处时必须使用完全相同的 name。' }),
-        fill_by: Type.String({ enum: ['ai', 'manual'], description: 'ai 表示未来由 AI 填写；manual 表示必须人工处理。' }),
-        instruction: Type.Optional(Type.String({ description: '仅在字段名称不足以说明要求时填写。' })),
-      }, { additionalProperties: false }), {
-        description: 'apply-template-fields 中保留并标记为内容控件的全部候选。',
-      })),
-      ignored_candidate_ids: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
-        description: 'apply-template-fields 中确认不是待填字段的全部候选 ID。',
+      fields_file: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'apply-template-fields 必填，当前工作区内的分类 JSON 文件路径。顶层为 fields 和 ignored_candidate_ids 数组；fields 每项包含 candidate_id、name、fill_by（ai 或 manual），可选 instruction。',
       })),
     }, { additionalProperties: false }),
     execute: async (_toolCallId, params, signal) => {
@@ -174,8 +178,17 @@ function createPiOpenXmlTool({
           if (!bidTemplateSourcePath || !fs.existsSync(bidTemplateSourcePath)) {
             throw new Error('请先调用 extract-chapters 抽取投标模版章节');
           }
-          const fields = normalizeTemplateFields(params.fields);
-          const ignoredCandidateIds = normalizeIgnoredCandidateIds(params.ignored_candidate_ids);
+          const classificationPath = normalizeRelativePath(params.fields_file);
+          if (classificationPath === '..' || classificationPath.startsWith('../')) {
+            throw new Error('fields_file 必须位于当前工作区内');
+          }
+          const selections = JSON.parse(fs.readFileSync(path.join(workspaceDir, classificationPath), 'utf8'));
+          if (!validateFieldSelections(selections)) {
+            const errors = validateFieldSelections.errors.map((error) => `${error.instancePath || '/'} ${error.message}`).join('；');
+            throw new Error(`分类文件结构无效，请修改 ${classificationPath} 后重新提交路径：${errors}`);
+          }
+          const fields = normalizeTemplateFields(selections.fields);
+          const ignoredCandidateIds = normalizeIgnoredCandidateIds(selections.ignored_candidate_ids);
           const result = await openXmlHelperService.runJob({
             action: APPLY_TEMPLATE_FIELDS_ACTION,
             timeoutMs: DEFAULT_TIMEOUT_MS,

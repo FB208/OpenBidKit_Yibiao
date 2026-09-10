@@ -898,6 +898,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     const initialResult = await agentService.runTask({
       task_id: task.task_id,
       title: '技术方案一级目录生成',
+      summary_enabled: false,
       prompt: createInitialPrompt(taskInstruction, { standaloneTechnical }),
       output_file: OUTLINE_OUTPUT_FILE,
       files: initialFiles,
@@ -1013,6 +1014,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
   const directoryPromise = requiresTechnicalDirectoryGeneration ? agentService.runTask({
     task_id: task.task_id,
     title: '技术方案目录生成 V2',
+    summary_enabled: false,
     prompt: createScorePlanningPrompt({ standaloneTechnical }),
     output_file: OUTLINE_OUTPUT_FILE,
     files: [

@@ -4,6 +4,7 @@ const {
 
 const TEMPLATE_FIELDS_OUTPUT_FILE = 'bid-template-fields.json';
 const TEMPLATE_OUTLINE_INPUT_FILE = '已确认一级目录.json';
+const TEMPLATE_CLASSIFICATION_FILE = '投标模版字段分类.json';
 
 function createTemplateExtractionPrompt(sourcePaths = []) {
   const sourceList = sourcePaths.length
@@ -24,11 +25,11 @@ ${sourceList}
 3. 针对已确认的每个一级目录，在原文结构中找到真实章节位置和完整边界，只调用一次 openxml，action=extract-chapters。原文块 heading=true 时可提供 sourceTitle；heading=false 时必须提供标题所在的 startBlock 和下一同级章节或附件开始位置 endBlock，endBlock 不包含在本章内。不得把两个已选目录之间的其他表单，或最后一个已选目录之后的文档尾部一并抽入；多份原件时填写 source.path。
 4. 调用一次 openxml，action=scan-template-fields；再阅读生成的 投标模版字段候选.json。
 5. 候选必须全部来自已确认一级目录对应的章节。如果候选上下文明显属于未选择的表单或后续附件，说明抽章边界错误；不得把这些候选批量放入 ignored_candidate_ids 来掩盖范围错误，也不得继续应用字段。
-6. 对候选逐项分类：真实待填位置放入 fields，只有扫描误判、固定说明文字或无需填写的位置才能放入 ignored_candidate_ids。所有候选必须且只能归入其中一类。
+6. 对候选逐项分类，并用 write 将完整结果写入 ${TEMPLATE_CLASSIFICATION_FILE}，顶层包含 fields 数组和 ignored_candidate_ids 数组。真实待填位置放入 fields，只有扫描误判、固定说明文字或无需填写的位置才能放入 ignored_candidate_ids。所有候选必须且只能归入其中一类。
 7. fields 每项只填写 candidate_id、name、fill_by，以及确有必要时的 instruction。fill_by 只能是 ai 或 manual；签字、盖章、签章、手印和必须放置人工材料的位置使用 manual。
 8. 同一项内容需要填入多处时，多个候选必须使用完全相同的 name、fill_by 和 instruction，让后续程序能够按 name 合并；不同语义不得仅因标题近似而合并。
-9. 最后调用 openxml，action=apply-template-fields，传入 fields 和 ignored_candidate_ids。每次调用彼此独立，不会记忆或合并前一次失败调用的参数；如果调用失败，必须根据 openxml 返回的重复、重叠、无效或遗漏候选重新核对 投标模版字段候选.json，并在当前会话重新提交包含全部候选的完整 fields 和 ignored_candidate_ids，直至成功。不得只增量补交错误中列出的候选，不得使用 * 等通配符，失败后不得结束任务。不要直接编辑 DOCX、不要生成字段值、不要修改 ${TEMPLATE_OUTLINE_INPUT_FILE}。
-10. 成功后确认工作区已有 ${TEMPLATE_FIELDS_OUTPUT_FILE}，然后结束任务。`;
+9. 完成其余检查后，最后单独调用 openxml，只传 {"action":"apply-template-fields","fields_file":"${TEMPLATE_CLASSIFICATION_FILE}"}。工具读取并校验文件中的完整 fields 和 ignored_candidate_ids，不要在调用参数里再次输出字段清单。调用失败时，根据错误用 edit 或 write 修正同一个分类文件，再提交文件路径；文件必须始终保留完整分类，不得只增量补交错误中列出的候选，不得使用 * 等通配符。不要直接编辑 DOCX、不要生成字段值、不要修改 ${TEMPLATE_OUTLINE_INPUT_FILE}，也不要把分类文件写到 ${TEMPLATE_FIELDS_OUTPUT_FILE}。
+10. apply-template-fields 已内置分类校验、Word 校验及产物检查，成功后程序自动结束任务，无需 task_complete。失败时继续修复，不得结束任务；成功后不再检查文件、重复应用字段或输出总结。`;
 }
 
 function buildOpenXmlToolOptions(workspaceStore, openXmlHelperService) {
@@ -63,6 +64,9 @@ async function runTemplateExtractionTask({
   const result = await agentService.runTask({
     task_id: taskId,
     title: '投标模版提取',
+    summary_enabled: false,
+    // 模版和字段清单由工具校验并落盘成功后结束，不依赖模型主动标记完成。
+    is_final_tool_call: (call) => call.name === 'openxml' && call.arguments?.action === 'apply-template-fields',
     prompt: createTemplateExtractionPrompt(sourcePaths),
     output_file: TEMPLATE_FIELDS_OUTPUT_FILE,
     files: [{
