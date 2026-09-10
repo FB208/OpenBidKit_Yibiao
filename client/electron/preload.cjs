@@ -1,5 +1,14 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+// 官方账户错误只向页面传递业务原因，不展示 Electron 附加的内部通道名称。
+async function invokeOfficialAccount(action, ...args) {
+  try {
+    return await ipcRenderer.invoke(`official-account:${action}`, ...args);
+  } catch (error) {
+    throw new Error(error.message.replace(/^Error invoking remote method '[^']+': Error:\s*/, ''));
+  }
+}
+
 const bridge = {
   appName: '易标投标工具箱',
   platform: process.platform,
@@ -76,6 +85,27 @@ const bridge = {
     refresh: () => ipcRenderer.invoke('license:refresh'),
     importOfflineFile: () => ipcRenderer.invoke('license:import-offline-file'),
     activateOfflineCode: (code) => ipcRenderer.invoke('license:activate-offline-code', code),
+  },
+  officialAccount: {
+    getState: () => invokeOfficialAccount('get-state'),
+    getRechargeOptions: () => invokeOfficialAccount('get-recharge-options'),
+    createRechargeOrder: (input) => invokeOfficialAccount('create-recharge-order', input),
+    getRechargeOrders: () => invokeOfficialAccount('get-recharge-orders'),
+    getRechargeOrder: (id) => invokeOfficialAccount('get-recharge-order', id),
+    closeRechargeOrder: (id) => invokeOfficialAccount('close-recharge-order', id),
+    onRechargeOrderChanged: (callback) => {
+      const listener = (_event, order) => callback(order);
+      ipcRenderer.on('official-account:order', listener);
+      return () => ipcRenderer.removeListener('official-account:order', listener);
+    },
+    sendEmailCode: (input) => invokeOfficialAccount('send-email-code', input),
+    loginWithEmail: (input) => invokeOfficialAccount('login', input),
+    bindEmail: (input) => invokeOfficialAccount('bind-email', input),
+    onStateChanged: (callback) => {
+      const listener = (_event, state) => callback(state);
+      ipcRenderer.on('official-account:state', listener);
+      return () => ipcRenderer.removeListener('official-account:state', listener);
+    },
   },
   ai: {
     chat: (request) => ipcRenderer.invoke('ai:chat', request),

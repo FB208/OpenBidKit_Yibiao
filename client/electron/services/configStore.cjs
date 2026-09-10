@@ -3,7 +3,7 @@ const path = require('node:path');
 const { getConfigFilePath } = require('../utils/paths.cjs');
 const { createAnalyticsClientId } = require('../utils/machineIdentity.cjs');
 
-const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
+const textModelProviders = ['official', 'jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
 const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'agnes', 'custom', 'comfyui'];
 const aiRequestModes = ['normal', 'stream'];
 const updateChannels = ['github', 'cloudflare', 'atomgit'];
@@ -25,6 +25,7 @@ const defaultAgentModeScenarios = {
 };
 
 const textProviderBaseUrls = {
+  official: '',
   jinlong: 'https://jlaudeapi.com/v1',
   volcengine: 'https://ark.cn-beijing.volces.com/api/v3',
   deepseek: 'https://api.deepseek.com',
@@ -33,6 +34,18 @@ const textProviderBaseUrls = {
 };
 
 const defaultTextModelProfiles = {
+  official: {
+    api_key: '',
+    base_url: textProviderBaseUrls.official,
+    model_name: '',
+    multimodal_enabled: false,
+    reasoning_effort: '',
+    context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
+    temperature_enabled: false,
+    temperature: DEFAULT_TEXT_TEMPERATURE,
+    request_mode: 'stream',
+  },
   jinlong: {
     api_key: '',
     base_url: textProviderBaseUrls.jinlong,
@@ -248,11 +261,12 @@ const defaultExportFormat = {
 };
 
 const defaultConfig = {
-  text_model_provider: 'jinlong',
+  text_model_provider: 'official',
+  official_api_model_type: 'cost-effective',
   text_model_profiles: defaultTextModelProfiles,
   api_key: '',
-  base_url: textProviderBaseUrls.jinlong,
-  model_name: 'gpt-3.5-turbo',
+  base_url: textProviderBaseUrls.official,
+  model_name: '',
   multimodal_enabled: false,
   reasoning_effort: '',
   context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
@@ -715,6 +729,7 @@ function normalizeConfig(config) {
   return {
     ...defaultConfig,
     text_model_provider: textModelProvider,
+    official_api_model_type: source.official_api_model_type ?? defaultConfig.official_api_model_type,
     text_model_profiles: textModelProfiles,
     api_key: activeTextProfile.api_key,
     base_url: activeTextProfile.base_url,

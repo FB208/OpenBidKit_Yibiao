@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
+import type { KeyboardEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppSwitch, DetailHelpLink, FloatingToolbar, InlineSpinner, InputWithAction, OfflineLicenseActivationDialog, useAutoAnswer, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelRatio, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
+import OfficialAccountControls from '../components/OfficialAccountControls';
+import OfficialOrdersPanel from '../components/OfficialOrdersPanel';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'components' | 'agent' | 'about';
 type UpdateStatus = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'error' | 'disabled';
@@ -67,12 +70,19 @@ function getLicenseSourceLabel(status: LicenseRuntimeStatus | null) {
 }
 
 const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
+  { value: 'official', label: '易标官方API' },
   { value: 'jinlong', label: '金龙中转站【推荐】' },
   { value: 'volcengine', label: '火山方舟' },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'agnes', label: 'Agnes AI' },
   { value: 'custom', label: '自定义' },
 ];
+
+const officialApiTabs = [
+  { id: 'statement', label: '声明' },
+  { id: 'orders', label: '订单' },
+  { id: 'transactions', label: '流水' },
+] as const;
 
 const aiRequestModeOptions: Array<{ value: AiRequestMode; label: string }> = [
   { value: 'normal', label: '普通请求' },
@@ -84,6 +94,7 @@ const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_TEXT_TEMPERATURE = 0.7;
 
 const textProviderDefaults: Record<TextModelProvider, TextModelConfig> = {
+  official: { api_key: '', base_url: '', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
   jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
   volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
   deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
@@ -582,10 +593,11 @@ const parserOptions = [
 
 const initialState: SettingsPageState = {
   textModel: {
-    provider: 'jinlong',
-    ...textProviderDefaults.jinlong,
+    provider: 'official',
+    ...textProviderDefaults.official,
   },
   textModelProfiles: createDefaultTextModelProfiles(),
+  officialApiModelType: 'cost-effective',
   imageModel: {
     ...imageProviderDefaults.jinlong,
   },
@@ -617,6 +629,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [state, setState] = useState<SettingsPageState>(initialState);
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [savedConfig, setSavedConfig] = useState<ClientConfig | null>(null);
+  const [officialApiTab, setOfficialApiTab] = useState<typeof officialApiTabs[number]['id']>('statement');
   const [textModels, setTextModels] = useState<string[]>([]);
   const [reasoningEfforts, setReasoningEfforts] = useState<string[]>([]);
   const [imageModels, setImageModels] = useState<string[]>([]);
@@ -698,6 +711,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
           ...activeTextProfile,
         },
         textModelProfiles,
+        officialApiModelType: config.official_api_model_type,
         imageModel: activeImageProfile,
         imageModelProfiles,
         components: normalizeComponentsState(config.components),
@@ -742,6 +756,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
 
     return {
       text_model_provider: state.textModel.provider,
+      official_api_model_type: state.officialApiModelType,
       text_model_profiles: textModelProfiles,
       api_key: activeTextProfile.api_key,
       base_url: activeTextProfile.base_url,
@@ -945,6 +960,21 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         ...normalizeTextModelProfile(provider, prev.textModelProfiles[provider]),
       },
     }));
+  };
+
+  // 用方向键及首尾键切换官方账户页签，并同步键盘焦点。
+  const handleOfficialApiTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const index = officialApiTabs.findIndex((tab) => tab.id === officialApiTab);
+    const nextIndex = event.key === 'ArrowRight' ? (index + 1) % officialApiTabs.length
+      : event.key === 'ArrowLeft' ? (index + officialApiTabs.length - 1) % officialApiTabs.length
+      : event.key === 'Home' ? 0
+      : event.key === 'End' ? officialApiTabs.length - 1
+      : -1;
+    if (nextIndex === -1) return;
+    event.preventDefault();
+    const nextTab = officialApiTabs[nextIndex].id;
+    setOfficialApiTab(nextTab);
+    event.currentTarget.querySelector<HTMLButtonElement>(`#official-api-tab-${nextTab}`)?.focus();
   };
 
   const updateTextModelConfig = (partial: Partial<Omit<SettingsPageState['textModel'], 'provider'>>, options: { clearModels?: boolean } = {}) => {
@@ -1379,9 +1409,11 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       return JSON.stringify({
         provider: state.textModel.provider,
         profiles: getCurrentTextModelProfiles(),
+        officialApiModelType: state.officialApiModelType,
       }) !== JSON.stringify({
         provider: savedConfig.text_model_provider,
         profiles: normalizeTextModelProfiles(savedConfig.text_model_profiles),
+        officialApiModelType: savedConfig.official_api_model_type,
       });
     }
 
@@ -1719,13 +1751,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       )}
 
       {activeTab === 'text-model' && (
-        <section className="settings-page-section">
+        <section className={`settings-page-section${state.textModel.provider === 'official' ? ' settings-official-api' : ''}`}>
           <div className="settings-group-title">服务商配置</div>
           <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>服务提供商</strong>
-                <span>选择服务商会自动使用预置 Base URL；只有自定义服务商允许修改</span>
+                {state.textModel.provider !== 'official' && <span>选择服务商会自动使用预置 Base URL；只有自定义服务商允许修改</span>}
               </div>
               <select
                 value={state.textModel.provider}
@@ -1736,176 +1768,241 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 ))}
               </select>
             </label>
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>Base URL</strong>
-                <span>OpenAI Like 接口地址，用于文本生成和分析任务</span>
-              </div>
-              <input
-                type="text"
-                value={state.textModel.base_url}
-                placeholder={currentTextProviderDefault.base_url || '例如 https://api.openai.com/v1'}
-                onChange={(event) => updateTextModelConfig({ base_url: event.target.value }, { clearModels: true })}
-                disabled={state.textModel.provider !== 'custom'}
-              />
-            </label>
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>API Key</strong>
-                <span>仅保存在本机配置文件中，不暴露给 Renderer 以外的原始能力</span>
-              </div>
-              <InputWithAction
-                type="password"
-                value={state.textModel.api_key}
-                placeholder="请输入文本模型 API Key"
-                onChange={(event) => updateTextModelConfig({ api_key: event.target.value }, { clearModels: true })}
-                actionLabel="获取"
-                actionTitle="打开当前服务商的 API Key 获取页面"
-                actionDisabled={!textProviderApiKeyUrls[state.textModel.provider]}
-                onAction={() => { void openTextProviderApiKeyPage(); }}
-              />
-            </label>
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>模型名称</strong>
-                <span>可手动录入，也可从当前 Base URL 拉取可用模型</span>
-              </div>
-              <div className="settings-control-with-action">
-                {textModels.length > 0 ? (
+          </div>
+          {state.textModel.provider === 'official' ? (
+            <>
+              <div className="settings-list">
+                <label className="settings-row">
+                  <div className="settings-row-copy"><strong>模型类型</strong></div>
                   <select
-                    value={state.textModel.model_name}
-                    onChange={(event) => updateTextModelName(event.target.value)}
+                    value={state.officialApiModelType}
+                    onChange={(event) => setState((prev) => ({ ...prev, officialApiModelType: event.target.value as ClientConfig['official_api_model_type'] }))}
                   >
-                    {textModels.map((model) => <option value={model} key={model}>{model}</option>)}
+                    <option value="cost-effective">性价比优先</option>
+                    <option value="high-quality">高质量优先</option>
                   </select>
-                ) : (
+                </label>
+                <OfficialAccountControls onViewOrders={() => setOfficialApiTab('orders')} />
+              </div>
+              <div className="official-api-details">
+                <div className="official-api-tabs" role="tablist" aria-label="官方账户信息" onKeyDown={handleOfficialApiTabKeyDown}>
+                  {officialApiTabs.map((tab) => (
+                    <button
+                      type="button"
+                      className={`official-api-tab${officialApiTab === tab.id ? ' is-active' : ''}`}
+                      role="tab"
+                      id={`official-api-tab-${tab.id}`}
+                      aria-controls={`official-api-panel-${tab.id}`}
+                      aria-selected={officialApiTab === tab.id}
+                      tabIndex={officialApiTab === tab.id ? 0 : -1}
+                      key={tab.id}
+                      onClick={() => setOfficialApiTab(tab.id)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+                <div
+                  className="official-api-tab-content"
+                  role="tabpanel"
+                  id={`official-api-panel-${officialApiTab}`}
+                  aria-labelledby={`official-api-tab-${officialApiTab}`}
+                  tabIndex={0}
+                >
+                  {officialApiTab === 'statement' ? (
+                    <p className="official-api-empty">服务声明待发布</p>
+                  ) : officialApiTab === 'orders' ? (
+                    <OfficialOrdersPanel />
+                  ) : (
+                    <table className="official-api-table" aria-label="流水记录">
+                      <thead>
+                        <tr>
+                          {['时间', '类型', '变动 e点', '余额 e点', '说明'].map((label) => <th scope="col" key={label}>{label}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr><td colSpan={5} className="official-api-empty">暂无流水</td></tr>
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="settings-list">
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>Base URL</strong>
+                    <span>OpenAI Like 接口地址，用于文本生成和分析任务</span>
+                  </div>
                   <input
                     type="text"
-                    value={state.textModel.model_name}
-                    placeholder="例如 deepseek-chat"
-                    onChange={(event) => updateTextModelName(event.target.value)}
+                    value={state.textModel.base_url}
+                    placeholder={currentTextProviderDefault.base_url || '例如 https://api.openai.com/v1'}
+                    onChange={(event) => updateTextModelConfig({ base_url: event.target.value }, { clearModels: true })}
+                    disabled={state.textModel.provider !== 'custom'}
                   />
-                )}
-                <button
-                  type="button"
-                  className="inline-action"
-                  onClick={fetchTextModels}
-                  disabled={loadingModels === 'text'}
-                >
-                  {loadingModels === 'text' && <InlineSpinner />}
-                  {loadingModels === 'text' ? '获取中' : '获取'}
-                </button>
-                <button type="button" className="inline-action" onClick={testTextConfig} disabled={testingTextModel}>
-                  {testingTextModel && <InlineSpinner />}
-                  {testingTextModel ? '测试中' : '测试'}
-                </button>
+                </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>API Key</strong>
+                    <span>仅保存在本机配置文件中，不暴露给 Renderer 以外的原始能力</span>
+                  </div>
+                  <InputWithAction
+                    type="password"
+                    value={state.textModel.api_key}
+                    placeholder="请输入文本模型 API Key"
+                    onChange={(event) => updateTextModelConfig({ api_key: event.target.value }, { clearModels: true })}
+                    actionLabel="获取"
+                    actionTitle="打开当前服务商的 API Key 获取页面"
+                    actionDisabled={!textProviderApiKeyUrls[state.textModel.provider]}
+                    onAction={() => { void openTextProviderApiKeyPage(); }}
+                  />
+                </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>模型名称</strong>
+                    <span>可手动录入，也可从当前 Base URL 拉取可用模型</span>
+                  </div>
+                  <div className="settings-control-with-action">
+                    {textModels.length > 0 ? (
+                      <select
+                        value={state.textModel.model_name}
+                        onChange={(event) => updateTextModelName(event.target.value)}
+                      >
+                        {textModels.map((model) => <option value={model} key={model}>{model}</option>)}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={state.textModel.model_name}
+                        placeholder="例如 deepseek-chat"
+                        onChange={(event) => updateTextModelName(event.target.value)}
+                      />
+                    )}
+                    <button
+                      type="button"
+                      className="inline-action"
+                      onClick={fetchTextModels}
+                      disabled={loadingModels === 'text'}
+                    >
+                      {loadingModels === 'text' && <InlineSpinner />}
+                      {loadingModels === 'text' ? '获取中' : '获取'}
+                    </button>
+                    <button type="button" className="inline-action" onClick={testTextConfig} disabled={testingTextModel}>
+                      {testingTextModel && <InlineSpinner />}
+                      {testingTextModel ? '测试中' : '测试'}
+                    </button>
+                  </div>
+                </label>
               </div>
-            </label>
-          </div>
 
-          <div className="settings-group-title settings-group-title-with-action">
-            <span>高级参数</span>
-            <button type="button" className="inline-action settings-group-action" onClick={fetchTextModelInfo} disabled={loadingModelInfo}>
-              {loadingModelInfo && <InlineSpinner />}
-              {loadingModelInfo ? '填充中' : '自动填充高级参数'}
-            </button>
-          </div>
-          <div className="settings-list">
-            <div className="settings-row">
-              <div className="settings-row-copy">
-                <strong>支持多模态</strong>
-                <span>开启后允许文本模型接收图片；关闭时带图片的请求会在本地拦截</span>
+              <div className="settings-group-title settings-group-title-with-action">
+                <span>高级参数</span>
+                <button type="button" className="inline-action settings-group-action" onClick={fetchTextModelInfo} disabled={loadingModelInfo}>
+                  {loadingModelInfo && <InlineSpinner />}
+                  {loadingModelInfo ? '填充中' : '自动填充高级参数'}
+                </button>
               </div>
-              <div className="settings-action-cell">
-                <AppSwitch aria-label="支持多模态" checked={state.textModel.multimodal_enabled} onCheckedChange={(checked) => updateTextModelConfig({ multimodal_enabled: checked })} />
+              <div className="settings-list">
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>支持多模态</strong>
+                    <span>开启后允许文本模型接收图片；关闭时带图片的请求会在本地拦截</span>
+                  </div>
+                  <div className="settings-action-cell">
+                    <AppSwitch aria-label="支持多模态" checked={state.textModel.multimodal_enabled} onCheckedChange={(checked) => updateTextModelConfig({ multimodal_enabled: checked })} />
+                  </div>
+                </div>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>模型思考强度</strong>
+                    <span>可手动录入，自动填充后可选择模型明确支持的档位；选择默认时不发送参数</span>
+                  </div>
+                  {reasoningEfforts.length > 0 ? (
+                    <select
+                      value={state.textModel.reasoning_effort}
+                      onChange={(event) => updateTextModelConfig({ reasoning_effort: event.target.value })}
+                    >
+                      <option value="">默认</option>
+                      {reasoningEfforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={state.textModel.reasoning_effort}
+                      placeholder="例如 medium；留空则使用默认"
+                      onChange={(event) => updateTextModelConfig({ reasoning_effort: event.target.value })}
+                    />
+                  )}
+                </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>上下文长度限制</strong>
+                    <span>可手动录入或自动填充；处理长文本时会自动截断并分批处理</span>
+                  </div>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={state.textModel.context_length_limit}
+                    placeholder="400000"
+                    onChange={(event) => updateTextModelConfig({ context_length_limit: parseTextContextLengthInput(event.target.value) })}
+                  />
+                </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>并发上限</strong>
+                    <span>全局文本 AI 请求同时执行的最大数量，超出后自动排队</span>
+                  </div>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={state.textModel.concurrency_limit}
+                    placeholder="10"
+                    onChange={(event) => updateTextModelConfig({ concurrency_limit: parseTextConcurrencyLimitInput(event.target.value) })}
+                  />
+                </label>
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>模型温度</strong>
+                    <span>默认关闭以兼容不支持温度参数的模型；开启后数值越低输出越稳定</span>
+                  </div>
+                  <div className={`settings-temperature-control ${state.textModel.temperature_enabled ? '' : 'is-disabled'}`}>
+                    <AppSwitch aria-label="启用模型温度" checked={state.textModel.temperature_enabled} onCheckedChange={(checked) => updateTextModelConfig({ temperature_enabled: checked })} />
+                    <input
+                      className="settings-temperature-slider"
+                      type="range"
+                      aria-label="模型温度"
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      value={state.textModel.temperature}
+                      disabled={!state.textModel.temperature_enabled}
+                      onChange={(event) => updateTextModelConfig({ temperature: parseTextTemperatureInput(event.target.value) })}
+                    />
+                    <output>{state.textModel.temperature.toFixed(1)}</output>
+                  </div>
+                </div>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>请求方式</strong>
+                    <span>流式请求只影响后端调用方式，应用仍等待完整结果后继续流程</span>
+                  </div>
+                  <select
+                    value={state.textModel.request_mode}
+                    onChange={(event) => updateTextModelConfig({ request_mode: event.target.value as AiRequestMode })}
+                  >
+                    {aiRequestModeOptions.map((option) => (
+                      <option value={option.value} key={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
               </div>
-            </div>
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>模型思考强度</strong>
-                <span>可手动录入，自动填充后可选择模型明确支持的档位；选择默认时不发送参数</span>
-              </div>
-              {reasoningEfforts.length > 0 ? (
-                <select
-                  value={state.textModel.reasoning_effort}
-                  onChange={(event) => updateTextModelConfig({ reasoning_effort: event.target.value })}
-                >
-                  <option value="">默认</option>
-                  {reasoningEfforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}
-                </select>
-              ) : (
-                <input
-                  type="text"
-                  value={state.textModel.reasoning_effort}
-                  placeholder="例如 medium；留空则使用默认"
-                  onChange={(event) => updateTextModelConfig({ reasoning_effort: event.target.value })}
-                />
-              )}
-            </label>
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>上下文长度限制</strong>
-                <span>可手动录入或自动填充；处理长文本时会自动截断并分批处理</span>
-              </div>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={state.textModel.context_length_limit}
-                placeholder="400000"
-                onChange={(event) => updateTextModelConfig({ context_length_limit: parseTextContextLengthInput(event.target.value) })}
-              />
-            </label>
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>并发上限</strong>
-                <span>全局文本 AI 请求同时执行的最大数量，超出后自动排队</span>
-              </div>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={state.textModel.concurrency_limit}
-                placeholder="10"
-                onChange={(event) => updateTextModelConfig({ concurrency_limit: parseTextConcurrencyLimitInput(event.target.value) })}
-              />
-            </label>
-            <div className="settings-row">
-              <div className="settings-row-copy">
-                <strong>模型温度</strong>
-                <span>默认关闭以兼容不支持温度参数的模型；开启后数值越低输出越稳定</span>
-              </div>
-              <div className={`settings-temperature-control ${state.textModel.temperature_enabled ? '' : 'is-disabled'}`}>
-                <AppSwitch aria-label="启用模型温度" checked={state.textModel.temperature_enabled} onCheckedChange={(checked) => updateTextModelConfig({ temperature_enabled: checked })} />
-                <input
-                  className="settings-temperature-slider"
-                  type="range"
-                  aria-label="模型温度"
-                  min={0}
-                  max={2}
-                  step={0.1}
-                  value={state.textModel.temperature}
-                  disabled={!state.textModel.temperature_enabled}
-                  onChange={(event) => updateTextModelConfig({ temperature: parseTextTemperatureInput(event.target.value) })}
-                />
-                <output>{state.textModel.temperature.toFixed(1)}</output>
-              </div>
-            </div>
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>请求方式</strong>
-                <span>流式请求只影响后端调用方式，应用仍等待完整结果后继续流程</span>
-              </div>
-              <select
-                value={state.textModel.request_mode}
-                onChange={(event) => updateTextModelConfig({ request_mode: event.target.value as AiRequestMode })}
-              >
-                {aiRequestModeOptions.map((option) => (
-                  <option value={option.value} key={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-          </div>
+            </>
+          )}
         </section>
       )}
 

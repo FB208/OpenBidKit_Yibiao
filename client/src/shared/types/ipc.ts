@@ -1,4 +1,5 @@
 import type { AiHttpErrorPayload, ChatCompletionRequest, JsonCompletionRequest } from './ai';
+import type { OfficialAccountState, OfficialEmailCredentials, OfficialEmailPurpose, OfficialRechargeOption, OfficialRechargeOrder } from './officialAccount';
 import type { DuplicateCheckWorkspacePatch, DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelInfoResult, ModelListResult, UpdateChannel } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMutationResult, KnowledgeBaseSearchRequest, KnowledgeBaseSearchPage, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
@@ -582,6 +583,19 @@ export interface YibiaoBridge {
     refresh: () => Promise<LicenseRuntimeStatus>;
     importOfflineFile: () => Promise<LicenseOfflineActivationResult>;
     activateOfflineCode: (code: string) => Promise<LicenseOfflineActivationResult>;
+  };
+  officialAccount: {
+    getState: () => Promise<OfficialAccountState>;
+    getRechargeOptions: () => Promise<OfficialRechargeOption[]>;
+    createRechargeOrder: (input: { optionId: string }) => Promise<OfficialRechargeOrder>;
+    getRechargeOrders: () => Promise<OfficialRechargeOrder[]>;
+    getRechargeOrder: (id: string) => Promise<OfficialRechargeOrder>;
+    closeRechargeOrder: (id: string) => Promise<OfficialRechargeOrder>;
+    onRechargeOrderChanged: (callback: (order: OfficialRechargeOrder) => void) => () => void;
+    onStateChanged: (callback: (state: OfficialAccountState) => void) => () => void;
+    sendEmailCode: (input: { email: string; purpose: OfficialEmailPurpose }) => Promise<boolean>;
+    loginWithEmail: (input: OfficialEmailCredentials) => Promise<OfficialAccountState>;
+    bindEmail: (input: OfficialEmailCredentials) => Promise<OfficialAccountState>;
   };
   ai: {
     chat: (request: ChatCompletionRequest) => Promise<string>;

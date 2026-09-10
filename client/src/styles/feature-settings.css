@@ -424,6 +424,502 @@ fieldset.settings-list {
   justify-content: flex-end;
 }
 
+/* 官方 API：沿用设置行布局，账户明细在独立页签区域展示。 */
+.settings-official-api {
+  container-type: inline-size;
+}
+
+.settings-official-api .settings-row {
+  grid-template-columns: minmax(100px, 1fr) minmax(0, 420px);
+}
+
+.settings-official-api .settings-row > * {
+  min-width: 0;
+}
+
+.official-api-account {
+  color: var(--yb-text);
+  font-size: 13px;
+  line-height: 1.65;
+  word-break: break-all;
+  user-select: text;
+}
+
+.official-api-account-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.official-api-account-row .official-api-account {
+  min-width: 0;
+  flex: 1;
+}
+
+.official-api-account-row .inline-action {
+  flex: 0 0 auto;
+}
+
+.official-account-form {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.official-account-form label {
+  color: var(--yb-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.official-account-form input {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 12px;
+  color: var(--yb-text);
+  font-size: 13px;
+  background: #eef3fa;
+  border: 1px solid #ccd6e3;
+  border-radius: var(--yb-radius-md);
+}
+
+.official-account-form .input-with-action input {
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.official-account-form input:focus-visible {
+  outline: 2px solid var(--yb-primary);
+  outline-offset: -2px;
+}
+
+.official-account-dialog {
+  width: min(480px, calc(100vw - 32px));
+}
+
+/* 充值复用支持开源的暖色弹窗及金额卡片，商品内容独立滚动。 */
+.official-recharge-dialog {
+  overflow-y: hidden;
+}
+
+.official-recharge-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 支付完成独立庆祝面板：一次性光环进场，不影响后台订单确认。 */
+.official-recharge-dialog.is-success {
+  width: min(480px, calc(100vw - 32px));
+  gap: 24px;
+  padding: 28px;
+  background: radial-gradient(ellipse at 50% 36%, #ffedc6 0%, #fff8eb 38%, #fff 76%);
+  border-color: #f2dec0;
+}
+
+.official-recharge-dialog.is-success .app-dialog-card-head {
+  text-align: center;
+}
+
+.official-recharge-dialog.is-success .section-kicker {
+  color: #a86520;
+}
+
+.official-recharge-dialog.is-success .app-dialog-card-head h2 {
+  color: #55351c;
+  font-size: 26px;
+}
+
+.official-recharge-dialog.is-success .app-dialog-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.official-recharge-dialog.is-success .app-dialog-actions button {
+  min-width: 0;
+}
+
+.official-recharge-success {
+  display: grid;
+  gap: 24px;
+  text-align: center;
+}
+
+.official-recharge-success-art {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 148px;
+}
+
+.official-recharge-success-orbit {
+  position: absolute;
+  width: 140px;
+  height: 140px;
+  border: 1px solid #e7bf7d;
+  border-radius: 50%;
+  box-shadow: 0 0 0 12px #efcf9226, 0 0 0 26px #efcf9212;
+  animation: official-recharge-celebrate 650ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.official-recharge-success-medal {
+  display: grid;
+  place-items: center;
+  width: 100px;
+  height: 100px;
+  color: #fff;
+  background: linear-gradient(145deg, #ffe3a2 0%, #edb64f 38%, #cb791d 100%);
+  border: 1px solid #fff2ca;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 6px #fff5d347, 0 14px 28px #b76f2233;
+  animation: official-recharge-celebrate 450ms 100ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.official-recharge-success-medal svg {
+  width: 56px;
+  height: 56px;
+}
+
+.official-recharge-success-sparks {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: #d69537;
+  box-shadow: -100px -30px #d69537, 98px 22px #d69537, -82px 48px #edbe66, 84px -50px #edbe66,
+    -48px -66px #c98935, 46px 66px #e1ad58;
+  rotate: -12deg;
+  animation: official-recharge-celebrate 700ms 150ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.official-recharge-success-credit {
+  color: #946e42;
+  font-size: 13px;
+  animation: official-recharge-celebrate 450ms 200ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.official-recharge-success-credit p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  color: #9c5014;
+}
+
+.official-recharge-success-credit strong {
+  min-width: 0;
+  font-size: clamp(28px, 6vw, 48px);
+  line-height: 1.15;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.official-recharge-success-receipt {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 16px 0 0;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  border-top: 1px dashed #e6d4b9;
+  overflow-wrap: anywhere;
+}
+
+.official-recharge-success-receipt strong {
+  color: var(--yb-text);
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes official-recharge-celebrate {
+  from { opacity: 0; transform: translateY(8px) scale(0.88); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .official-recharge-success * {
+    animation: none;
+  }
+}
+
+.official-recharge-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 180px;
+  color: var(--yb-text-soft);
+  font-size: 14px;
+}
+
+.official-recharge-products {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  list-style: none;
+}
+
+.official-recharge-product {
+  min-width: 0;
+  min-height: 128px;
+  padding: 16px 8px;
+  overflow-wrap: anywhere;
+}
+
+.official-recharge-name {
+  margin: 0 0 4px;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.official-recharge-price {
+  margin: 0;
+  color: #8f3f0f;
+  font-variant-numeric: tabular-nums;
+}
+
+.official-recharge-price strong {
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.official-recharge-points {
+  margin: 0;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.official-recharge-products:disabled .official-recharge-product {
+  cursor: wait;
+}
+
+.official-orders-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+}
+
+.official-api-table.official-orders-table {
+  min-width: 660px;
+}
+
+.official-orders-table .inline-action {
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.official-orders-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--yb-border-soft);
+  font-size: 12px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.official-order-link {
+  padding: 0;
+  color: var(--yb-primary-deep);
+  text-align: left;
+  background: none;
+  border: 0;
+  overflow-wrap: anywhere;
+}
+
+.official-order-link:hover {
+  text-decoration: underline;
+}
+
+.official-order-status {
+  color: var(--yb-text-soft);
+}
+
+.official-order-status.is-waiting {
+  color: var(--yb-warning-deep);
+}
+
+.official-order-status.is-success {
+  color: var(--yb-success-deep);
+}
+
+.official-order-refund {
+  display: block;
+  color: var(--yb-text-soft);
+}
+
+.official-order-dialog {
+  width: min(520px, calc(100vw - 32px));
+  overflow-wrap: anywhere;
+}
+
+.official-order-detail {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px 20px;
+  min-height: 0;
+  margin: 0;
+  overflow-y: auto;
+  font-size: 14px;
+}
+
+.official-order-detail dt {
+  color: var(--yb-text-soft);
+}
+
+.official-order-detail dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.official-api-balance-row,
+.official-api-balance-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.official-api-balance-row {
+  justify-content: space-between;
+}
+
+.official-api-balance {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 100%;
+  color: var(--yb-primary-deep);
+  user-select: text;
+}
+
+.official-api-balance-value {
+  min-width: 0;
+  font-size: 32px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.official-api-balance small {
+  flex: 0 0 auto;
+  color: var(--yb-text-soft);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.official-api-details {
+  min-width: 0;
+  margin: 12px 24px 24px;
+  overflow: hidden;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
+}
+
+.official-api-tabs {
+  display: flex;
+  overflow-x: auto;
+  background: var(--yb-bg);
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.official-api-tab {
+  flex: 0 0 auto;
+  min-width: 80px;
+  min-height: 44px;
+  padding: 10px 20px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  font-weight: 700;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+}
+
+.official-api-tab:hover,
+.official-api-tab.is-active {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.06);
+}
+
+.official-api-tab.is-active {
+  border-bottom-color: var(--yb-primary);
+}
+
+.official-api-tab:focus-visible,
+.official-api-tab-content:focus-visible {
+  outline: 2px solid var(--yb-primary);
+  outline-offset: -3px;
+}
+
+.official-api-tab-content {
+  min-height: 260px;
+  overflow-x: auto;
+}
+
+.official-api-empty {
+  margin: 0;
+  padding: 24px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  text-align: center;
+}
+
+.official-api-tab-content > .official-api-empty {
+  display: grid;
+  min-height: 260px;
+  place-items: center;
+}
+
+.official-api-table {
+  width: 100%;
+  min-width: 480px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.official-api-table th {
+  height: 44px;
+  padding: 10px 14px;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.official-api-table .official-api-empty {
+  height: 216px;
+}
+
+@container (max-width: 540px) {
+  .settings-official-api .settings-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 14px 16px;
+  }
+
+  .official-api-details {
+    margin: 12px 16px 20px;
+  }
+}
+
 .inline-action {
   display: inline-flex;
   min-height: 36px;

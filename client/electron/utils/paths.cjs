@@ -8,6 +8,16 @@ function getConfigFilePath(app) {
   return path.join(getUserDataPath(app), 'user_config.json');
 }
 
+// 官方账户会话独立于设置表单保存。
+function getOfficialApiSessionFilePath(app) {
+  return path.join(getUserDataPath(app), 'official_api_session.json');
+}
+
+// 支付二维码独立缓存，订单状态仍由服务端管理。
+function getOfficialRechargeQrCachePath(app) {
+  return path.join(getUserDataPath(app), 'official_recharge_qr_cache.json');
+}
+
 function getLicenseFilePath(app) {
   return path.join(getUserDataPath(app), 'license.json');
 }
@@ -210,6 +220,8 @@ module.exports = {
   getImportedImagesDir,
   getKnowledgeBaseDir,
   getLicenseFilePath,
+  getOfficialApiSessionFilePath,
+  getOfficialRechargeQrCachePath,
   getOpenXmlHelperDebugExecutablePath,
   getOpenXmlHelperProjectPath,
   getOpenXmlJobDir,

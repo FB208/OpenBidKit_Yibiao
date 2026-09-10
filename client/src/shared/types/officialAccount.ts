@@ -1,0 +1,39 @@
+/** 官方账户在页面上的展示状态，不包含开放令牌。 */
+export interface OfficialAccountState {
+  status: 'loading' | 'signed-out' | 'signed-in';
+  clientId: string;
+  email: string | null;
+  accountId: string | null;
+  availablePoint: string | null;
+}
+
+export type OfficialEmailPurpose = 'LOGIN' | 'BIND';
+
+export interface OfficialEmailCredentials {
+  email: string;
+  code: string;
+}
+
+/** 充值商品展示信息；价格和点数保留服务端字符串精度。 */
+export interface OfficialRechargeOption {
+  id: string;
+  name: string;
+  price: string;
+  pointValue: string;
+}
+
+/** 服务端充值订单；二维码仅在创建响应中返回。 */
+export interface OfficialRechargeOrder {
+  id: string;
+  orderNo: string;
+  optionId: string;
+  optionName: string;
+  quantity: number;
+  payPrice: string;
+  totalPoint: string;
+  payStatus: 'WAITING' | 'SUCCESS' | 'CLOSED';
+  refundStatus: 'NONE' | 'PENDING' | 'SUCCESS' | 'FAILED';
+  qrCode: string | null;
+  createTime: string;
+  finishTime: string | null;
+}

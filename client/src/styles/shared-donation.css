@@ -38,7 +38,8 @@
   gap: 8px;
 }
 
-.donation-amount-option {
+.donation-amount-option,
+.official-recharge-product {
   position: relative;
   display: grid;
   min-height: 86px;
@@ -50,38 +51,43 @@
   background: rgba(255, 255, 255, 0.82);
   border: 1px solid rgba(222, 211, 194, 0.9);
   border-radius: 14px;
-  cursor: pointer;
   box-shadow: 0 6px 18px rgba(91, 58, 26, 0.05);
+  cursor: pointer;
   transition-property: scale, color, border-color, background-color, box-shadow;
   transition-duration: 140ms;
   transition-timing-function: var(--yb-ease);
 }
 
-.donation-amount-option:hover {
+.donation-amount-option:hover,
+.official-recharge-product:hover {
   color: var(--yb-text);
   border-color: rgba(213, 132, 57, 0.5);
   box-shadow: 0 8px 22px rgba(139, 77, 25, 0.1);
 }
 
-.donation-amount-option:active {
+.donation-amount-option:active,
+.official-recharge-product:active {
   scale: 0.96;
 }
 
-.donation-amount-option.is-selected {
+.donation-amount-option.is-selected,
+.official-recharge-product.is-selected {
   color: #8f3f0f;
   background: linear-gradient(145deg, #fff4df, #ffebc8);
   border-color: rgba(212, 112, 34, 0.68);
   box-shadow: 0 8px 20px rgba(192, 93, 20, 0.13), inset 0 0 0 1px rgba(255, 255, 255, 0.72);
 }
 
-.donation-amount-option input {
+.donation-amount-option input,
+.official-recharge-product input {
   position: absolute;
   width: 1px;
   height: 1px;
   opacity: 0;
 }
 
-.donation-amount-option:has(input:focus-visible) {
+.donation-amount-option:has(input:focus-visible),
+.official-recharge-product:has(input:focus-visible) {
   outline: 3px solid rgba(33, 116, 253, 0.2);
   outline-offset: 2px;
 }

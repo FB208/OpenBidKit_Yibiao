@@ -1,4 +1,4 @@
-import type { AgentModeScenariosConfig, ComponentsConfig, ImageModelConfig, ImageModelProfiles, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../shared/types';
+import type { AgentModeScenariosConfig, ClientConfig, ComponentsConfig, ImageModelConfig, ImageModelProfiles, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../shared/types';
 
 export interface SettingsPageState {
   textModel: Omit<TextModelConfig, 'context_length_limit' | 'concurrency_limit'> & {
@@ -7,6 +7,7 @@ export interface SettingsPageState {
     provider: TextModelProvider;
   };
   textModelProfiles: TextModelProfiles;
+  officialApiModelType: ClientConfig['official_api_model_type'];
   imageModel: Omit<ImageModelConfig, 'concurrency_limit'> & {
     concurrency_limit: number | '';
   };

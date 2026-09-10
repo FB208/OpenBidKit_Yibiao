@@ -1,4 +1,4 @@
-export type TextModelProvider = 'jinlong' | 'volcengine' | 'deepseek' | 'agnes' | 'custom';
+export type TextModelProvider = 'official' | 'jinlong' | 'volcengine' | 'deepseek' | 'agnes' | 'custom';
 export type AiRequestMode = 'normal' | 'stream';
 export type UpdateChannel = 'github' | 'cloudflare' | 'atomgit';
 
@@ -82,6 +82,7 @@ export interface AgentModeScenariosConfig {
 }
 
 export interface ClientConfig extends AiConfig {
+  official_api_model_type: 'cost-effective' | 'high-quality';
   image_model: ImageModelConfig;
   image_model_profiles: ImageModelProfiles;
   components: ComponentsConfig;
