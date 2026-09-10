@@ -873,6 +873,11 @@ fieldset.settings-list {
   overflow-x: auto;
 }
 
+.official-api-statement strong {
+  color: var(--yb-primary-deep);
+  font-weight: 800;
+}
+
 .official-api-empty {
   margin: 0;
   padding: 24px;
