@@ -542,3 +542,35 @@ test('过期邮箱会话启动后要求重新登录，不注册匿名身份或�
   assert.equal(service.getState().status, 'signed-out');
   assert.match(service.getState().error, /重新登录/);
 });
+
+// 覆盖兑换认证、失败重试请求号和最新余额，避免使用首次入账快照。
+test('兑换失败不自动重发，重试沿用请求号，成功刷新当前余额', async (t) => {
+  let failed = true;
+  const bound = { ...account, email: 'redeem@example.com', availablePoint: '180' };
+  const env = setup(t, ({ endpoint }) => {
+    if (endpoint === '/redemptions') {
+      if (failed) throw new TypeError('network disconnected');
+      return { code: 0, data: { redeemedPoint: '100', availablePoint: '100' } };
+    }
+    if (endpoint === '/email/login') return { code: 0, data: { account: { ...bound, availablePoint: '0' }, login: emailLogin() } };
+    if (endpoint === '/recharge/orders') return { code: 0, data: [] };
+    return { code: 0, data: endpoint === '/account' ? bound : token('anonymous') };
+  });
+  const service = env.create();
+  await service.start();
+  await service.loginWithEmail({ email: bound.email, code: '123456' });
+  const input = { code: 'DEMO_123', requestNo: 'redeem-test-request' };
+  await assert.rejects(service.redeemCode(input), /暂时无法连接/);
+  assert.equal(env.requests.filter(item => item.endpoint === '/redemptions').length, 1);
+  failed = false;
+  assert.deepEqual(await service.redeemCode(input), { redeemedPoint: '100' });
+  const sent = env.requests.filter(item => item.endpoint === '/redemptions');
+  assert.equal(sent.length, 2);
+  for (const item of sent) {
+    assert.deepEqual(item.body, input);
+    assert.equal(item.method, 'POST');
+    assert.ok(item.headers.Authorization.startsWith('Bearer '));
+    assert.equal(item.headers['X-Yibiao-Open-Token'], undefined);
+  }
+  assert.equal(service.getState().availablePoint, '180');
+});

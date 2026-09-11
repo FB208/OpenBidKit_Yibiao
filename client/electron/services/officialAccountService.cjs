@@ -320,6 +320,18 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     });
   }
 
+  // 兑换成功后查询当前余额；幂等响应中的余额是首次入账快照。
+  function redeemCode(input) {
+    return enqueue(async () => {
+      const result = await request('/redemptions', { body: input, authenticated: true });
+      balanceNeedsRefresh = true;
+      balanceRetryAt = 0;
+      await refreshPaidBalance();
+      scheduleOrderCheck();
+      return { redeemedPoint: result.redeemedPoint };
+    });
+  }
+
   // 提交一次开票申请，沿用当前账户的认证请求，不自动重发。
   function createInvoiceApplication(input) {
     return enqueue(async () => {
@@ -517,7 +529,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
   }
 
   return { start, getState, onChanged, sendEmailCode, loginWithEmail, bindEmail, getRechargeOptions,
-    createInvoiceApplication, createRechargeOrder, getRechargeOrders, getRechargeOrder, closeRechargeOrder, onRechargeOrderChanged, close };
+    redeemCode, createInvoiceApplication, createRechargeOrder, getRechargeOrders, getRechargeOrder, closeRechargeOrder, onRechargeOrderChanged, close };
 }
 
 module.exports = { createOfficialAccountService };

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { OfficialEmailPurpose } from '../../../shared/types/officialAccount';
 import { AppDialog, InlineSpinner, InputWithAction, useToast } from '../../../shared/ui';
+import OfficialRedeemAction from './OfficialRedeemAction';
 import OfficialRechargeDialog from './OfficialRechargeDialog';
 import { useOfficialAccount } from './useOfficialAccount';
 
@@ -136,7 +137,7 @@ export default function OfficialAccountControls({ onViewOrders }: { onViewOrders
           </span>
           <div className="official-api-balance-actions">
             <button type="button" className="inline-action" ref={rechargeButton} disabled={account.status === 'loading'} onClick={openRecharge}>充值</button>
-            <button type="button" className="inline-action" onClick={() => showToast('兑换功能暂未开放', 'info')}>兑换</button>
+            <OfficialRedeemAction account={account} />
           </div>
         </div>
       </div>

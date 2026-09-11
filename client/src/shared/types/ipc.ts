@@ -585,6 +585,7 @@ export interface YibiaoBridge {
     activateOfflineCode: (code: string) => Promise<LicenseOfflineActivationResult>;
   };
   officialAccount: {
+    redeemCode: (input: { code: string; requestNo: string }) => Promise<{ redeemedPoint: string }>;
     createInvoiceApplication: (input: OfficialInvoiceApplicationInput) => Promise<void>;
     getInvoiceInfo: () => Promise<OfficialInvoiceInfo>;
     saveInvoiceInfo: (input: OfficialInvoiceInfo) => Promise<void>;

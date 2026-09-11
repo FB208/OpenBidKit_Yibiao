@@ -87,6 +87,7 @@ const bridge = {
     activateOfflineCode: (code) => ipcRenderer.invoke('license:activate-offline-code', code),
   },
   officialAccount: {
+    redeemCode: (input) => invokeOfficialAccount('redeem-code', input),
     createInvoiceApplication: (input) => invokeOfficialAccount('create-invoice-application', input),
     getInvoiceInfo: () => ipcRenderer.invoke('official-account:get-invoice-info'),
     saveInvoiceInfo: (input) => ipcRenderer.invoke('official-account:save-invoice-info', input),
