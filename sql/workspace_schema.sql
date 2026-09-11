@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 23;
+PRAGMA user_version = 24;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -903,3 +903,12 @@ ON feasibility_report_outline_nodes(parent_node_id, sort_order);
 
 CREATE INDEX IF NOT EXISTS idx_feasibility_report_outline_level
 ON feasibility_report_outline_nodes(level);
+
+-- 官方 API 开票信息（v24）：当前工作区保存一份。
+CREATE TABLE IF NOT EXISTS official_invoice_info (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  title_type TEXT NOT NULL DEFAULT 'enterprise',
+  buyer TEXT NOT NULL DEFAULT '',
+  tax_number TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT ''
+);

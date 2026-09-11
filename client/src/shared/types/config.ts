@@ -9,6 +9,7 @@ export interface TextModelConfig {
   multimodal_enabled: boolean;
   reasoning_effort: string;
   context_length_limit: number;
+  output_token_limit: number;
   concurrency_limit: number;
   temperature_enabled: boolean;
   temperature: number;

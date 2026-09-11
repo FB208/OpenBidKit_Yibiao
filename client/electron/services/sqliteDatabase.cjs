@@ -3,7 +3,20 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 23;
+const schemaVersion = 24;
+
+// 保存当前工作区的一份开票信息。
+function createOfficialInvoiceSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS official_invoice_info (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      title_type TEXT NOT NULL DEFAULT 'enterprise',
+      buyer TEXT NOT NULL DEFAULT '',
+      tax_number TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT ''
+    );
+  `);
+}
 
 function createInitialSchema(db) {
   db.exec(`
@@ -1119,6 +1132,7 @@ const schemaHealthTableGroups = [
     tables: ['feasibility_report_meta', 'feasibility_report_tasks', 'feasibility_report_outline_nodes'],
     repair: createFeasibilityReportSchema,
   },
+  { version: 24, tables: ['official_invoice_info'], repair: createOfficialInvoiceSchema },
 ];
 
 function removeKnowledgeMigrationMeta(db) {
@@ -1460,6 +1474,7 @@ const migrations = [
     description: '新增可行性研究报告工作区表结构',
     up: createFeasibilityReportSchema,
   },
+  { version: 24, description: '新增官方 API 开票信息', up: createOfficialInvoiceSchema },
 ];
 
 function timestampForFileName() {

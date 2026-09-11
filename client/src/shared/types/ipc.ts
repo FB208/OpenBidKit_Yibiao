@@ -1,5 +1,5 @@
 import type { AiHttpErrorPayload, ChatCompletionRequest, JsonCompletionRequest } from './ai';
-import type { OfficialAccountState, OfficialEmailCredentials, OfficialEmailPurpose, OfficialRechargeOption, OfficialRechargeOrder } from './officialAccount';
+import type { OfficialInvoiceInfo, OfficialAccountState, OfficialEmailCredentials, OfficialEmailPurpose, OfficialRechargeOption, OfficialRechargeOrder } from './officialAccount';
 import type { DuplicateCheckWorkspacePatch, DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelInfoResult, ModelListResult, UpdateChannel } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMutationResult, KnowledgeBaseSearchRequest, KnowledgeBaseSearchPage, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
@@ -585,6 +585,8 @@ export interface YibiaoBridge {
     activateOfflineCode: (code: string) => Promise<LicenseOfflineActivationResult>;
   };
   officialAccount: {
+    getInvoiceInfo: () => Promise<OfficialInvoiceInfo>;
+    saveInvoiceInfo: (input: OfficialInvoiceInfo) => Promise<void>;
     getState: () => Promise<OfficialAccountState>;
     getRechargeOptions: () => Promise<OfficialRechargeOption[]>;
     createRechargeOrder: (input: { optionId: string }) => Promise<OfficialRechargeOrder>;

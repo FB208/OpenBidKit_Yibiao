@@ -23,4 +23,10 @@ function registerOfficialAccountIpc({ officialAccountService }) {
   });
 }
 
-module.exports = { registerOfficialAccountIpc };
+// 在工作区数据库就绪后注册本地开票信息读写。
+function registerOfficialInvoiceIpc({ officialInvoiceStore }) {
+  ipcMain.handle('official-account:get-invoice-info', () => officialInvoiceStore.get());
+  ipcMain.handle('official-account:save-invoice-info', (_event, input) => officialInvoiceStore.save(input));
+}
+
+module.exports = { registerOfficialAccountIpc, registerOfficialInvoiceIpc };

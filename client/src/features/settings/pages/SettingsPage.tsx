@@ -7,6 +7,7 @@ import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelRatio, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 import OfficialAccountControls from '../components/OfficialAccountControls';
+import OfficialInvoicePanel from '../components/OfficialInvoicePanel';
 import OfficialOrdersPanel from '../components/OfficialOrdersPanel';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'components' | 'agent' | 'about';
@@ -82,6 +83,7 @@ const officialApiTabs = [
   { id: 'statement', label: '声明' },
   { id: 'orders', label: '订单' },
   { id: 'transactions', label: '流水' },
+  { id: 'invoice', label: '开票信息' },
 ] as const;
 
 const aiRequestModeOptions: Array<{ value: AiRequestMode; label: string }> = [
@@ -94,12 +96,12 @@ const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_TEXT_TEMPERATURE = 0.7;
 
 const textProviderDefaults: Record<TextModelProvider, TextModelConfig> = {
-  official: { api_key: '', base_url: '', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  custom: { api_key: '', base_url: '', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  official: { api_key: '', base_url: '', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: 0, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: 0, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: 0, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: 0, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: 0, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  custom: { api_key: '', base_url: '', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: 0, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
 };
 
 const textProviderApiKeyUrls: Partial<Record<TextModelProvider, string>> = {
@@ -143,6 +145,13 @@ function parseTextContextLengthInput(value: string): number | '' {
   return Number.isFinite(number) ? Math.max(1, Math.floor(number)) : '';
 }
 
+// 解析输出上限，允许清空或输入非负整数。
+function parseTextOutputTokenLimitInput(value: string): number | '' {
+  if (value === '') return '';
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.floor(number)) : '';
+}
+
 function parseTextConcurrencyLimitInput(value: string): number | '' {
   if (value === '') return '';
   const number = Number(value);
@@ -164,6 +173,7 @@ function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partia
     multimodal_enabled: profile?.multimodal_enabled ?? defaults.multimodal_enabled,
     reasoning_effort: profile?.reasoning_effort?.trim() ?? defaults.reasoning_effort,
     context_length_limit: normalizeTextContextLengthLimit(profile?.context_length_limit ?? defaults.context_length_limit),
+    output_token_limit: profile?.output_token_limit ?? 0,
     concurrency_limit: normalizeTextConcurrencyLimit(profile?.concurrency_limit ?? defaults.concurrency_limit),
     temperature_enabled: profile?.temperature_enabled ?? defaults.temperature_enabled,
     temperature: normalizeTextTemperature(profile?.temperature ?? defaults.temperature),
@@ -188,6 +198,7 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
     multimodal_enabled: textModel.multimodal_enabled,
     reasoning_effort: textModel.reasoning_effort.trim(),
     context_length_limit: normalizeTextContextLengthLimit(textModel.context_length_limit),
+    output_token_limit: Number(textModel.output_token_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(textModel.concurrency_limit),
     temperature_enabled: textModel.temperature_enabled,
     temperature: normalizeTextTemperature(textModel.temperature),
@@ -764,6 +775,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       multimodal_enabled: activeTextProfile.multimodal_enabled,
       reasoning_effort: activeTextProfile.reasoning_effort,
       context_length_limit: activeTextProfile.context_length_limit,
+      output_token_limit: activeTextProfile.output_token_limit,
       concurrency_limit: activeTextProfile.concurrency_limit,
       temperature_enabled: activeTextProfile.temperature_enabled,
       temperature: activeTextProfile.temperature,
@@ -1288,6 +1300,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       const modelInfo = result.model;
       const efforts = modelInfo.reasoningEfforts || [];
       const updates: Partial<Omit<SettingsPageState['textModel'], 'provider'>> = {
+        output_token_limit: modelInfo.output,
         concurrency_limit: modelInfo.concurrencyLimit,
         request_mode: modelInfo.requestMode,
       };
@@ -1830,6 +1843,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                     </div>
                   ) : officialApiTab === 'orders' ? (
                     <OfficialOrdersPanel />
+                  ) : officialApiTab === 'invoice' ? (
+                    <OfficialInvoicePanel />
                   ) : (
                     <table className="official-api-table" aria-label="流水记录">
                       <thead>
@@ -1966,6 +1981,20 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                     value={state.textModel.context_length_limit}
                     placeholder="400000"
                     onChange={(event) => updateTextModelConfig({ context_length_limit: parseTextContextLengthInput(event.target.value) })}
+                  />
+                </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>输出token上限</strong>
+                    <span>留空或设为 0 时不限制输出 token 数</span>
+                  </div>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={state.textModel.output_token_limit}
+                    placeholder="0"
+                    onChange={(event) => updateTextModelConfig({ output_token_limit: parseTextOutputTokenLimitInput(event.target.value) })}
                   />
                 </label>
                 <label className="settings-row">

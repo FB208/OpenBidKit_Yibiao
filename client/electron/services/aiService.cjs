@@ -867,6 +867,20 @@ async function collectJsonResponseWithConfig(app, config, request) {
   throw new Error(lastError?.message || failureMessage);
 }
 
+// 按文本模型设置统一输出上限，覆盖 Agent SDK 自带的长度参数。
+function applyOutputTokenLimit(body, config) {
+  delete body.max_output_tokens;
+  if (config.output_token_limit > 0) {
+    body.max_completion_tokens = config.output_token_limit;
+    body.max_tokens = config.output_token_limit;
+  } else {
+    delete body.max_completion_tokens;
+    delete body.max_tokens;
+  }
+  return body;
+}
+
+// 构造普通、流式及 JSON 文本请求。
 function createChatRequestBody(config, request, options = {}) {
   const modelName = JINLONG_DEPRECATED_MODEL_MAP[config.model_name] || config.model_name;
   const body = {
@@ -890,7 +904,7 @@ function createChatRequestBody(config, request, options = {}) {
     body.response_format = request.response_format;
   }
 
-  return body;
+  return applyOutputTokenLimit(body, config);
 }
 
 // 保留 Pi 工具调用协议字段，并统一应用当前文本模型配置。
@@ -919,11 +933,7 @@ function createAgentChatRequestBody(config, sourceBody) {
     delete body.reasoning_effort;
   }
 
-  // 部分 OpenAI 兼容上游会拒绝 Agent SDK 注入的输出长度参数。
-  delete body.max_tokens;
-  delete body.max_output_tokens;
-  delete body.max_completion_tokens;
-  return body;
+  return applyOutputTokenLimit(body, config);
 }
 
 async function fetchChatCompletion(app, config, body, options = {}) {

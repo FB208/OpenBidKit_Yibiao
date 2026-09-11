@@ -37,3 +37,11 @@ export interface OfficialRechargeOrder {
   createTime: string;
   finishTime: string | null;
 }
+
+/** 本地数据库保存的开票信息。 */
+export interface OfficialInvoiceInfo {
+  titleType: 'enterprise' | 'individual';
+  buyer: string;
+  taxNumber: string;
+  email: string;
+}
