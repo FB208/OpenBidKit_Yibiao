@@ -200,8 +200,21 @@ function ensureMultimodalEnabled(config, messages) {
 // 校验多模态能力，并将本地图片串行转换为 OpenAI Chat Completions 图片内容块。
 async function prepareMultimodalMessages(config, messages) {
   ensureMultimodalEnabled(config, messages);
+  // 部分推理服务（如 LM Studio 加载 Qwen3 系列模型，官方 chat template 硬校验）要求
+  // system 消息必须位于首位，否则直接报错。发送前把所有 system 消息按原顺序合并为
+  // 一条并置于最前，其余消息保持原顺序。
+  const sourceMessages = Array.isArray(messages) ? messages : [];
+  const systemParts = sourceMessages
+    .filter((message) => message?.role === 'system')
+    .map((message) => message.content)
+    .filter((content) => content !== undefined && content !== null && String(content).trim());
+  const nonSystemMessages = sourceMessages.filter((message) => message?.role !== 'system');
+  const normalizedMessages = systemParts.length
+    ? [{ role: 'system', content: systemParts.map((content) => String(content)).join('\n\n') }, ...nonSystemMessages]
+    : nonSystemMessages;
+
   const preparedMessages = [];
-  for (const message of messages) {
+  for (const message of normalizedMessages) {
     if (!Array.isArray(message.content)) {
       preparedMessages.push(message);
       continue;
