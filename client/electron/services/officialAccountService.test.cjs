@@ -15,6 +15,12 @@ function token(value) {
   return { token: value, tokenHeader: 'X-Yibiao-Open-Token', expiresInSeconds: '900', accountId: account.accountId };
 }
 
+// 模拟新邮箱登录结果；JWT 的 exp 用于本机定时，测试不执行服务端验签。
+function emailLogin(value = 'email') {
+  const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60 })).toString('base64url');
+  return { token: `header.${payload}.${value}`, tokenHeader: 'Bearer ', openUserId: 'user-one', tenantId: 'tenant-one', tenantCode: 'demo' };
+}
+
 // 使用临时中文目录和可记录请求的服务端替身，不创建真实账户或发送邮件。
 function setup(t, handler) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), '易标账户-'));
@@ -27,11 +33,14 @@ function setup(t, handler) {
       configStore: { load: () => ({ analytics_client_id: clientId }) },
       powerMonitor,
       fetchImpl: async (url, options) => {
-        const request = { url, endpoint: new URL(url).pathname.split('/open')[1], ...options, body: options.body ? JSON.parse(options.body) : undefined };
+        const request = { url, endpoint: new URL(url).pathname.replace('/qhp-yibiao/anonymous/yibiao/open', '').replace('/qhp-yibiao', ''), ...options, body: options.body ? JSON.parse(options.body) : undefined };
         requests.push(request);
         const result = await handler(request);
         const status = result.httpStatus || 200;
-        return { ok: status >= 200 && status < 300, status, json: async () => result };
+        return { ok: status >= 200 && status < 300, status, json: async () => {
+          if (result.invalidJson) throw new SyntaxError('Invalid JSON');
+          return result;
+        } };
       },
     });
     services.push(service);
@@ -44,7 +53,7 @@ function setup(t, handler) {
   return { create, requests, powerMonitor, sessionFile: path.join(directory, 'official_api_session.json'), qrCacheFile: path.join(directory, 'official_recharge_qr_cache.json') };
 }
 
-test('首次登录、有效令牌重启续登和绑定账户拒绝均正确同步状态', async (t) => {
+test('匿名账户每次启动重新注册，绑定过的 Client 拒绝匿名登录', async (t) => {
   let denied = false;
   const env = setup(t, ({ endpoint }) => {
     if (denied) return { code: -10, msg: '请使用邮箱登陆' };
@@ -53,7 +62,7 @@ test('首次登录、有效令牌重启续登和绑定账户拒绝均正确同�
   });
   const first = env.create();
   await first.start();
-  assert.deepEqual(first.getState(), { status: 'signed-in', clientId, email: null, accountId: account.accountId, availablePoint: '0' });
+  assert.deepEqual(first.getState(), { status: 'signed-in', clientId, identityType: 'anonymous', error: '', email: null, accountId: account.accountId, availablePoint: '0' });
   assert.deepEqual(env.requests[0].body, { clientId });
   assert.equal(env.requests[1].method, 'GET');
   assert.equal(env.requests[1].headers['X-Yibiao-Open-Token'], '/clients/register');
@@ -62,9 +71,9 @@ test('首次登录、有效令牌重启续登和绑定账户拒绝均正确同�
 
   const second = env.create();
   await second.start();
-  assert.equal(env.requests[2].endpoint, '/tokens/refresh');
-  assert.equal(env.requests[2].headers['X-Yibiao-Open-Token'], '/clients/register');
-  assert.equal(JSON.parse(fs.readFileSync(env.sessionFile, 'utf-8')).token, '/tokens/refresh');
+  assert.equal(env.requests[2].endpoint, '/clients/register');
+  assert.equal(env.requests[2].headers['X-Yibiao-Open-Token'], undefined);
+  assert.equal(JSON.parse(fs.readFileSync(env.sessionFile, 'utf-8')).token, '/clients/register');
   assert.equal(second.getState().availablePoint, '0');
   await second.close();
 
@@ -109,7 +118,7 @@ test('充值商品使用当前开放令牌，保留价格精度及顺序，重�
   await resumed.start();
   response = { code: 0, data: [] };
   assert.deepEqual(await resumed.getRechargeOptions(), []);
-  assert.equal(env.requests.at(-1).headers['X-Yibiao-Open-Token'], '/tokens/refresh');
+  assert.equal(env.requests.at(-1).headers['X-Yibiao-Open-Token'], '/clients/register');
   response = { code: -1, msg: '商品暂不可用' };
   await assert.rejects(resumed.getRechargeOptions(), /商品暂不可用/);
   response = { httpStatus: 503, code: 0, msg: '服务暂不可用' };
@@ -120,6 +129,7 @@ test('充值商品使用当前开放令牌，保留价格精度及顺序，重�
 });
 
 test('邮箱登陆与绑定使用正确凭据，绑定等待旧刷新结束并原子替换账户', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1800000000000 });
   let finishRefresh;
   let denyRegistration = true;
   const boundAccount = { accountId: '2087000000000000002', email: 'user@example.com', availablePoint: '9007199254740993.12' };
@@ -128,15 +138,15 @@ test('邮箱登陆与绑定使用正确凭据，绑定等待旧刷新结束并�
     if (endpoint === '/clients/register' && denyRegistration) return { code: -10, msg: '请使用邮箱登陆' };
     if (endpoint === '/tokens/refresh') return new Promise(resolve => { finishRefresh = resolve; });
     if (endpoint === '/email-codes') return { code: 0, data: true };
-    if (endpoint === '/email/login' || endpoint === '/email/bind') return { code: 0, data: { account: boundAccount, token: token(endpoint) } };
+    if (endpoint === '/email/login' || endpoint === '/email/bind') return { code: 0, data: { account: boundAccount, login: emailLogin(endpoint) } };
     return { code: 0, data: endpoint === '/account' ? account : token('anonymous') };
   });
   const service = env.create();
   await service.start();
   await service.sendEmailCode({ email: boundAccount.email, purpose: 'LOGIN' });
-  assert.deepEqual(env.requests.at(-1).body, { email: boundAccount.email, clientId, purpose: 'LOGIN' });
+  assert.deepEqual(env.requests.at(-1).body, { email: boundAccount.email, purpose: 'LOGIN' });
   await service.loginWithEmail({ email: boundAccount.email, code: '123456' });
-  assert.deepEqual(env.requests.at(-1).body, { email: boundAccount.email, code: '123456', clientId });
+  assert.deepEqual(env.requests.at(-1).body, { email: boundAccount.email, code: '123456' });
   assert.equal(service.getState().email, boundAccount.email);
   assert.equal(service.getState().availablePoint, boundAccount.availablePoint);
   await service.close();
@@ -146,23 +156,24 @@ test('邮箱登陆与绑定使用正确凭据，绑定等待旧刷新结束并�
   const anonymous = env.create();
   await anonymous.start();
   await anonymous.sendEmailCode({ email: boundAccount.email, purpose: 'BIND' });
-  assert.deepEqual(env.requests.at(-1).body, { email: boundAccount.email, clientId, purpose: 'BIND' });
+  assert.deepEqual(env.requests.at(-1).body, { email: boundAccount.email, purpose: 'BIND' });
   await anonymous.close();
 
   const resumed = env.create();
-  const starting = resumed.start();
+  await resumed.start();
+  t.mock.timers.tick(720000);
   await settle();
   const binding = resumed.bindEmail({ email: boundAccount.email, code: '654321' });
   await settle();
   assert.equal(env.requests.at(-1).endpoint, '/tokens/refresh');
   finishRefresh({ code: 0, data: token('refreshed') });
-  await starting;
   await binding;
   assert.equal(env.requests.at(-1).endpoint, '/email/bind');
   assert.equal(env.requests.at(-1).headers['X-Yibiao-Open-Token'], 'refreshed');
   assert.deepEqual(env.requests.at(-1).body, { email: boundAccount.email, code: '654321' });
   const saved = JSON.parse(fs.readFileSync(env.sessionFile, 'utf-8'));
-  assert.equal(saved.token, '/email/bind');
+  assert.equal(saved.kind, 'email');
+  assert.equal(saved.token, emailLogin('/email/bind').token);
   assert.deepEqual(saved.account, boundAccount);
   assert.equal(resumed.getState().email, boundAccount.email);
   assert.equal(resumed.getState().availablePoint, boundAccount.availablePoint);
@@ -297,35 +308,48 @@ test('重启恢复待支付订单，断网和余额失败按 30 秒重试，成�
   assert.equal(changes.at(-1).payStatus, 'SUCCESS');
 });
 
-test('缓存账户启动断网后，刷新重试成功恢复后台订单监控', async (t) => {
+test('邮箱启动刷新、每小时刷新及断网恢复均使用 JWT，并恢复订单监控', async (t) => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1800000000000 });
   let offline = false;
   let payStatus = 'WAITING';
+  const bound = { ...account, email: 'user@example.com' };
   const env = setup(t, ({ endpoint }) => {
     if (offline) throw new TypeError('offline');
+    if (endpoint === '/email/login') return { code: 0, data: { account: bound, login: emailLogin() } };
+    if (endpoint === '/openUser/refresh-token') return { code: 0, data: emailLogin('refreshed') };
     if (endpoint === '/recharge/orders') return { code: 0, data: [{ id: 'pending', payStatus }] };
     if (endpoint === '/recharge/orders/pending') return { code: 0, data: { id: 'pending', payStatus } };
-    return { code: 0, data: endpoint === '/account' ? { ...account, availablePoint: payStatus === 'SUCCESS' ? '123.45' : '0' } : token('current') };
+    return { code: 0, data: endpoint === '/account' ? { ...bound, availablePoint: payStatus === 'SUCCESS' ? '123.45' : '0' } : token('current') };
   });
   const first = env.create();
   await first.start();
+  await first.loginWithEmail({ email: bound.email, code: '123456' });
   await first.close();
-
+  const beforeRestart = env.requests.length;
   offline = true;
   const service = env.create();
   await service.start();
-  assert.equal(service.getState().status, 'signed-in');
+  assert.equal(service.getState().identityType, 'email');
+  const refreshRequest = env.requests[beforeRestart];
+  assert.equal(refreshRequest.url, 'https://v3.yibiao.pro/qhp-yibiao/openUser/refresh-token');
+  assert.equal(refreshRequest.method, 'GET');
+  assert.equal(refreshRequest.headers.Authorization, `Bearer ${emailLogin().token}`);
+  assert.equal(refreshRequest.headers['X-Yibiao-Open-Token'], undefined);
   const retryStart = env.requests.length;
   offline = false;
   t.mock.timers.tick(30000); await settle();
   t.mock.timers.tick(1); await settle();
-  assert.deepEqual(env.requests.slice(retryStart).map(item => item.endpoint), [
-    '/tokens/refresh', '/account', '/recharge/orders',
-  ]);
+  assert.deepEqual(env.requests.slice(retryStart).map(item => item.endpoint), ['/openUser/refresh-token', '/account', '/recharge/orders']);
   payStatus = 'SUCCESS';
   t.mock.timers.tick(5000); await settle();
-  assert.deepEqual(env.requests.slice(-2).map(item => item.endpoint), ['/recharge/orders/pending', '/account']);
   assert.equal(service.getState().availablePoint, '123.45');
+  const count = env.requests.filter(item => item.endpoint === '/openUser/refresh-token').length;
+  t.mock.timers.tick(3594998); await settle();
+  assert.equal(env.requests.filter(item => item.endpoint === '/openUser/refresh-token').length, count);
+  t.mock.timers.tick(1); await settle();
+  assert.equal(env.requests.filter(item => item.endpoint === '/openUser/refresh-token').length, count + 1);
+  assert.equal(env.requests.filter(item => item.endpoint === '/tokens/refresh').length, 0);
+  assert.equal(env.requests.filter(item => item.endpoint === '/clients/register').length, 1);
 });
 
 test('关单以服务端为准，拒绝后重新查支付结果，下单失败只查询不重发', async (t) => {
@@ -389,7 +413,8 @@ test('二维码按账户持久化，重启可继续支付，完成订单和过�
   const env = setup(t, ({ endpoint, method }) => {
     const longToken = { ...token('current'), expiresInSeconds: '604800' };
     if (endpoint === '/account') return { code: 0, data: currentAccount };
-    if (endpoint === '/email/login') return { code: 0, data: { account: currentAccount, token: longToken } };
+    if (endpoint === '/email/login') return { code: 0, data: { account: currentAccount, login: emailLogin() } };
+    if (endpoint === '/openUser/refresh-token') return { code: 0, data: emailLogin() };
     if (endpoint === '/recharge/orders' && method === 'POST') {
       const order = { id: String(orders.length + 1), payStatus: 'WAITING', qrCode: null };
       orders.push(order);
@@ -451,4 +476,69 @@ test('二维码按账户持久化，重启可继续支付，完成订单和过�
   await restarted.start();
   assert.equal(fs.existsSync(env.qrCacheFile), false);
   assert.equal((await restarted.getRechargeOrder('5')).qrCode, null);
+});
+
+test('开票申请使用当前认证信息和准确请求体，拒绝时不自动重发', async (t) => {
+  let reject = false;
+  const env = setup(t, ({ endpoint }) => {
+    if (endpoint === '/invoice-applications') return reject
+      ? { code: -10, msg: '该订单已申请开票' }
+      : { code: 0, data: { id: '100', status: 'PENDING' } };
+    if (endpoint === '/recharge/orders') return { code: 0, data: [] };
+    if (endpoint === '/email/login') return { code: 0, data: { account: { ...account, email: 'invoice@example.com' }, login: emailLogin() } };
+    return { code: 0, data: endpoint === '/account' ? account : token(endpoint) };
+  });
+  const service = env.create();
+  await service.start();
+  await service.loginWithEmail({ email: 'invoice@example.com', code: '123456' });
+  const input = { rechargeOrderId: '2087000000000000502', titleType: 'PERSONAL', invoiceTitle: '张三', taxpayerNo: '', receiverEmail: 'invoice@example.com', remark: '' };
+  await service.createInvoiceApplication(input);
+  const sent = env.requests.find((request) => request.endpoint === '/invoice-applications');
+  assert.equal(sent.method, 'POST');
+  assert.equal(sent.headers.Authorization, `Bearer ${emailLogin().token}`);
+  assert.equal(sent.headers['X-Yibiao-Open-Token'], undefined);
+  assert.deepEqual(sent.body, input);
+  reject = true;
+  await assert.rejects(service.createInvoiceApplication({ ...input, titleType: 'ENTERPRISE', taxpayerNo: '91310000TEST1234567', remark: '项目报销' }), /该订单已申请开票/);
+  assert.equal(env.requests.filter((request) => request.endpoint === '/invoice-applications').length, 2);
+});
+
+test('权限不足、业务错误和服务异常保留邮箱会话，仅 401 清除会话', async (t) => {
+  const bound = { ...account, email: 'user@example.com' };
+  let response = { code: 0, data: [] };
+  const env = setup(t, ({ endpoint }) => {
+    if (endpoint === '/email/login') return { code: 0, data: { account: bound, login: emailLogin() } };
+    if (endpoint === '/recharge/options') return response;
+    if (endpoint === '/recharge/orders') return { code: 0, data: [] };
+    return { code: 0, data: endpoint === '/account' ? account : token('anonymous') };
+  });
+  const service = env.create();
+  await service.start();
+  await service.loginWithEmail({ email: bound.email, code: '123456' });
+  for (const httpStatus of [403, 503, 200]) {
+    response = { httpStatus, code: -10, msg: '本次操作失败' };
+    await assert.rejects(service.getRechargeOptions(), /本次操作失败/);
+    assert.equal(service.getState().identityType, 'email');
+    assert.equal(fs.existsSync(env.sessionFile), true);
+  }
+  response = { httpStatus: 401, code: -10, msg: '令牌已撤销' };
+  await assert.rejects(service.getRechargeOptions(), /令牌已撤销/);
+  assert.equal(service.getState().status, 'signed-out');
+  assert.match(service.getState().error, /重新登录/);
+  assert.equal(fs.existsSync(env.sessionFile), false);
+  await service.loginWithEmail({ email: bound.email, code: '123456' });
+  response = { httpStatus: 401, invalidJson: true };
+  await assert.rejects(service.getRechargeOptions(), /响应读取失败/);
+  assert.equal(service.getState().status, 'signed-out');
+  assert.equal(fs.existsSync(env.sessionFile), false);
+});
+
+test('过期邮箱会话启动后要求重新登录，不注册匿名身份或调用匿名刷新', async (t) => {
+  const env = setup(t, () => { throw new Error('不应发起请求'); });
+  fs.writeFileSync(env.sessionFile, JSON.stringify({ kind: 'email', token: 'expired', expiresAt: Date.now() - 1, account: { ...account, email: 'user@example.com' } }), 'utf-8');
+  const service = env.create();
+  await service.start();
+  assert.equal(env.requests.length, 0);
+  assert.equal(service.getState().status, 'signed-out');
+  assert.match(service.getState().error, /重新登录/);
 });

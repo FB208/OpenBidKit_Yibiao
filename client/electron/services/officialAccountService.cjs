@@ -2,7 +2,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { getOfficialApiSessionFilePath, getOfficialRechargeQrCachePath } = require('../utils/paths.cjs');
 
-const API_BASE_URL = 'https://v3.yibiao.pro/qhp-yibiao/anonymous/yibiao/open';
+const SERVICE_BASE_URL = 'https://v3.yibiao.pro/qhp-yibiao';
+const API_BASE_URL = `${SERVICE_BASE_URL}/anonymous/yibiao/open`;
+const EMAIL_REFRESH_INTERVAL = 60 * 60 * 1000;
 const QR_CACHE_MAX_AGE = 24 * 60 * 60 * 1000;
 const QR_CACHE_CLEANUP_INTERVAL = 30 * 60 * 1000;
 
@@ -30,6 +32,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
   let session = null;
   let clientId = '';
   let loading = true;
+  let sessionError = '';
   let closed = false;
   let startPromise = null;
   let tail = Promise.resolve();
@@ -51,6 +54,8 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     return {
       status: loading ? 'loading' : account ? 'signed-in' : 'signed-out',
       clientId,
+      identityType: account ? session.kind : null,
+      error: sessionError,
       email: account?.email || null,
       accountId: account?.accountId || null,
       availablePoint: account?.availablePoint ?? null,
@@ -107,29 +112,33 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
   }
 
   // 失效会话停止刷新，并静默回到未登录状态。
-  function clearSession() {
+  function clearSession(message = '') {
     resetOrderTracking();
     clearTimeout(refreshTimer);
     refreshTimer = null;
     refreshAt = 0;
     session = null;
+    sessionError = message;
     loading = false;
     publish();
     fs.rmSync(sessionFile, { force: true });
   }
 
   // 官方接口统一响应解析；网络异常可在当前令牌有效期内重试。
-  async function request(endpoint, { body, authenticated = false, method = 'POST' } = {}) {
+  async function request(endpoint, { body, authenticated = false, method = 'POST', baseUrl = API_BASE_URL } = {}) {
     const remaining = session ? session.expiresAt - Date.now() : 0;
     if (authenticated && remaining <= 0) {
-      clearSession();
+      clearSession('登录已失效，请重新登录官方账户');
       throw new Error('请先登陆官方账户');
     }
     const headers = { 'Content-Type': 'application/json' };
-    if (authenticated) headers[session.tokenHeader] = session.token;
+    if (authenticated) {
+      if (session.kind === 'email') headers.Authorization = `Bearer ${session.token}`;
+      else headers['X-Yibiao-Open-Token'] = session.token;
+    }
     let response;
     try {
-      response = await fetchImpl(`${API_BASE_URL}${endpoint}`, {
+      response = await fetchImpl(`${baseUrl}${endpoint}`, {
         method,
         headers,
         ...(body ? { body: JSON.stringify(body) } : {}),
@@ -141,6 +150,8 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     } catch (error) {
       throw Object.assign(new Error('暂时无法连接官方账户服务，请稍后重试', { cause: error }), { retryable: true });
     }
+    // 认证失效以 HTTP 状态为准，即使错误正文不是 JSON 也应退出失效会话。
+    if (authenticated && response.status === 401) clearSession('登录已失效，请重新登录官方账户');
     let result;
     try {
       result = await response.json();
@@ -151,7 +162,6 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     }
     if (closed) throw new Error('官方账户服务已关闭');
     if (!response.ok || !result || (result.code !== 0 && result.code !== 200)) {
-      if (authenticated && (response.status === 401 || response.status === 403)) clearSession();
       throw Object.assign(new Error(result?.msg || `官方账户请求失败（${response.status}）`), { retryable: response.status >= 500 });
     }
     return result.data;
@@ -169,37 +179,54 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
   }
 
   // 接收服务端签发的新令牌，立即保存并按有效期的 80% 安排刷新。
-  function acceptToken(token, account = session?.account || null) {
+  function acceptAnonymousToken(token, account = session?.account || null) {
     const lifetime = Number(token?.expiresInSeconds) * 1000;
     if (!token?.token || !token.tokenHeader || !Number.isFinite(lifetime) || lifetime <= 0) {
       throw new Error('官方账户接口未返回有效令牌');
     }
     persist({
       token: token.token,
-      tokenHeader: token.tokenHeader,
+      kind: 'anonymous',
       expiresAt: Date.now() + lifetime,
       account: account ? { accountId: account.accountId, email: account.email || null, availablePoint: account.availablePoint } : null,
     });
+    sessionError = '';
     scheduleRefresh(lifetime * 0.8);
+  }
+
+  // 邮箱响应使用 QHP JWT；读取 exp 安排本机到期检查，签名与权限由服务端验证。
+  function acceptEmailLogin(login, account = session?.account) {
+    let expiresAt;
+    try {
+      expiresAt = Number(JSON.parse(Buffer.from(login.token.split('.')[1], 'base64url').toString('utf-8')).exp) * 1000;
+    } catch {
+      throw new Error('官方账户接口未返回有效的邮箱登录令牌');
+    }
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw new Error('邮箱登录令牌已过期，请重新登录');
+    persist({ kind: 'email', token: login.token, expiresAt, account });
+    sessionError = '';
+    scheduleRefresh(Math.min(EMAIL_REFRESH_INTERVAL, expiresAt - Date.now()));
   }
 
   // 保存账户展示字段，余额保留服务端字符串精度。
   function acceptAccount(account) {
     persist({ ...session, account: { accountId: account.accountId, email: account.email || null, availablePoint: account.availablePoint } });
     loading = false;
+    sessionError = '';
     publish();
   }
 
-  // 后台失败不弹提示；临时断网只在当前令牌有效期内继续刷新。
+  // 后台业务或临时服务失败保留仍有效的会话；只有失效或到期才退出。
   function handleAutomaticFailure(error) {
     if (closed) return;
     loading = false;
     const remaining = session ? session.expiresAt - Date.now() : 0;
-    if (error.retryable && remaining > 0) {
-      scheduleRefresh(Math.min(30000, remaining));
+    if (remaining > 0) {
+      sessionError = error.message;
+      scheduleRefresh(Math.min(error.retryable ? 30000 : session.kind === 'email' ? EMAIL_REFRESH_INTERVAL : remaining * 0.8, remaining));
       publish();
     } else {
-      clearSession();
+      clearSession(sessionError || error.message);
     }
   }
 
@@ -207,10 +234,11 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
   async function refreshSession() {
     try {
       if (!session || session.expiresAt <= Date.now()) {
-        clearSession();
+        clearSession('登录已失效，请重新登录官方账户');
         return;
       }
-      acceptToken(await request('/tokens/refresh', { authenticated: true }));
+      if (session.kind === 'email') acceptEmailLogin(await request('/openUser/refresh-token', { method: 'GET', authenticated: true, baseUrl: SERVICE_BASE_URL }));
+      else acceptAnonymousToken(await request('/tokens/refresh', { authenticated: true }));
       acceptAccount(await request('/account', { method: 'GET', authenticated: true }));
       if (!orderTrackingStarted) beginOrderTracking();
     } catch (error) {
@@ -231,7 +259,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     }
   }
 
-  // 启动时优先续用有效会话，否则只尝试一次 clientID 注册或登录。
+  // 邮箱会话启动时刷新；匿名会话每次启动重新注册，不使用缓存令牌续期。
   function start() {
     if (startPromise) return startPromise;
     powerMonitor.on('resume', handleResume);
@@ -247,13 +275,13 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
         clientId = configStore.load().analytics_client_id;
         publish();
         if (fs.existsSync(sessionFile)) session = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
-        if (session && session.expiresAt > Date.now()) {
+        if (session?.kind === 'email') {
           await refreshSession();
           return;
         }
         session = null;
         fs.rmSync(sessionFile, { force: true });
-        acceptToken(await request('/clients/register', { body: { clientId } }));
+        acceptAnonymousToken(await request('/clients/register', { body: { clientId } }));
         acceptAccount(await request('/account', { method: 'GET', authenticated: true }));
         beginOrderTracking();
       } catch (error) {
@@ -263,16 +291,16 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     return startPromise;
   }
 
-  // 验证码始终使用当前登录链路的原始 clientID。
+  // 验证码只提交邮箱和用途，不携带 Client 身份或已有凭据。
   function sendEmailCode({ email, purpose }) {
-    return enqueue(() => request('/email-codes', { body: { email, clientId, purpose } }));
+    return enqueue(() => request('/email-codes', { body: { email, purpose } }));
   }
 
   // 使用邮箱验证码登录，保存该响应中的账户及新令牌。
   function loginWithEmail({ email, code }) {
     return enqueue(async () => {
-      const result = await request('/email/login', { body: { email, code, clientId } });
-      acceptToken(result.token, result.account);
+      const result = await request('/email/login', { body: { email, code } });
+      acceptEmailLogin(result.login, result.account);
       loading = false;
       publish();
       beginOrderTracking();
@@ -284,11 +312,18 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
   function bindEmail({ email, code }) {
     return enqueue(async () => {
       const result = await request('/email/bind', { body: { email, code }, authenticated: true });
-      acceptToken(result.token, result.account);
+      acceptEmailLogin(result.login, result.account);
       loading = false;
       publish();
       beginOrderTracking();
       return getState();
+    });
+  }
+
+  // 提交一次开票申请，沿用当前账户的认证请求，不自动重发。
+  function createInvoiceApplication(input) {
+    return enqueue(async () => {
+      await request('/invoice-applications', { body: input, authenticated: true });
     });
   }
 
@@ -379,7 +414,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
 
   // 关闭页面仍确认支付；断网后 30 秒重试，到期停止。
   async function checkOrders() {
-    if (!session || session.expiresAt <= Date.now()) { clearSession(); return; }
+    if (!session || session.expiresAt <= Date.now()) { clearSession('登录已失效，请重新登录官方账户'); return; }
     orderRetryAt = 0;
     try {
       if (reloadOrders) await readRechargeOrders();
@@ -482,7 +517,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
   }
 
   return { start, getState, onChanged, sendEmailCode, loginWithEmail, bindEmail, getRechargeOptions,
-    createRechargeOrder, getRechargeOrders, getRechargeOrder, closeRechargeOrder, onRechargeOrderChanged, close };
+    createInvoiceApplication, createRechargeOrder, getRechargeOrders, getRechargeOrder, closeRechargeOrder, onRechargeOrderChanged, close };
 }
 
 module.exports = { createOfficialAccountService };

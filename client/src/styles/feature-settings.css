@@ -1767,3 +1767,10 @@ fieldset.settings-list {
   color: var(--yb-text);
   font-size: 15px;
 }
+
+/* 开票备注在弹窗中纵向排列，避免设置页双栏最小宽度造成溢出。 */
+.settings-row.official-invoice-remark {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 0;
+}

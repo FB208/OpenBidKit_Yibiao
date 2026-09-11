@@ -111,21 +111,22 @@ export default function OfficialAccountControls({ onViewOrders }: { onViewOrders
       <div className="settings-row">
         <div className="settings-row-copy"><strong>账号</strong></div>
         <div className="official-api-account-row" ref={accountRow} tabIndex={-1}>
-          <span className="official-api-account">{account.status === 'signed-in' && account.email ? account.email : account.clientId || '—'}</span>
-          {!(account.status === 'signed-in' && account.email) && (
+          <span className="official-api-account">{account.status === 'signed-in' && account.identityType === 'email' ? account.email : account.clientId || '—'}</span>
+          {!(account.status === 'signed-in' && account.identityType === 'email') && (
             <button
               type="button"
               className="inline-action"
               ref={accountButton}
               disabled={account.status === 'loading'}
-              onClick={() => { setCode(''); setPurpose(account.status === 'signed-in' ? 'BIND' : 'LOGIN'); }}
+              onClick={() => { setCode(''); setPurpose(account.identityType === 'anonymous' ? 'BIND' : 'LOGIN'); }}
             >
               {account.status === 'loading' && <InlineSpinner />}
-              {account.status === 'signed-in' ? '绑定邮箱' : '登陆'}
+              {account.identityType === 'anonymous' ? '绑定邮箱' : '登陆'}
             </button>
           )}
         </div>
       </div>
+      {account.error && <p className="official-api-empty" role="status">{account.error}</p>}
       <div className="settings-row">
         <div className="settings-row-copy"><strong>余额</strong></div>
         <div className="official-api-balance-row">

@@ -2,6 +2,8 @@
 export interface OfficialAccountState {
   status: 'loading' | 'signed-out' | 'signed-in';
   clientId: string;
+  identityType: 'anonymous' | 'email' | null;
+  error: string;
   email: string | null;
   accountId: string | null;
   availablePoint: string | null;
@@ -33,6 +35,7 @@ export interface OfficialRechargeOrder {
   totalPoint: string;
   payStatus: 'WAITING' | 'SUCCESS' | 'CLOSED';
   refundStatus: 'NONE' | 'PENDING' | 'SUCCESS' | 'FAILED';
+  invoiceStatus: 'CLOSED' | 'CAN_APPLY' | 'PENDING' | 'REJECTED' | 'ISSUED';
   qrCode: string | null;
   createTime: string;
   finishTime: string | null;
@@ -44,4 +47,14 @@ export interface OfficialInvoiceInfo {
   buyer: string;
   taxNumber: string;
   email: string;
+}
+
+/** 提交单笔订单的开票申请。 */
+export interface OfficialInvoiceApplicationInput {
+  rechargeOrderId: string;
+  titleType: 'ENTERPRISE' | 'PERSONAL';
+  invoiceTitle: string;
+  taxpayerNo: string;
+  receiverEmail: string;
+  remark: string;
 }

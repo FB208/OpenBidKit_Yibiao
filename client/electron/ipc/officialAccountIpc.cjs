@@ -2,6 +2,7 @@ const { BrowserWindow, ipcMain } = require('electron');
 
 // 转发官方账户操作，并向窗口推送不含令牌的展示状态。
 function registerOfficialAccountIpc({ officialAccountService }) {
+  ipcMain.handle('official-account:create-invoice-application', (_event, input) => officialAccountService.createInvoiceApplication(input));
   ipcMain.handle('official-account:get-state', () => officialAccountService.getState());
   ipcMain.handle('official-account:send-email-code', (_event, input) => officialAccountService.sendEmailCode(input));
   ipcMain.handle('official-account:login', (_event, input) => officialAccountService.loginWithEmail(input));

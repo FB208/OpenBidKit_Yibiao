@@ -3,9 +3,11 @@ import type { OfficialRechargeOrder } from '../../../shared/types/officialAccoun
 import { AppDialog, InlineSpinner, useToast } from '../../../shared/ui';
 import { useOfficialAccount } from './useOfficialAccount';
 import OfficialRechargeDialog from './OfficialRechargeDialog';
+import OfficialInvoiceAction from './OfficialInvoiceAction';
 
 const paymentLabels = { WAITING: '待支付', SUCCESS: '支付成功', CLOSED: '已关闭' };
 const refundLabels = { NONE: '', PENDING: '退款处理中', SUCCESS: '已退款', FAILED: '退款失败' };
+const invoiceLabels: Record<OfficialRechargeOrder['invoiceStatus'], string> = { CLOSED: '关闭', CAN_APPLY: '可申请', PENDING: '待处理', REJECTED: '已驳回', ISSUED: '已开票' };
 
 // 查询账户订单并订阅后台变化；详情和关单均使用服务端结果。
 export default function OfficialOrdersPanel() {
@@ -127,7 +129,7 @@ export default function OfficialOrdersPanel() {
         <button type="button" className="inline-action" disabled={status === 'loading'} onClick={() => setAttempt((value) => value + 1)}>{status === 'error' ? '重试' : '刷新'}</button>
       </div>
       <table className="official-api-table official-orders-table" aria-label="订单记录" aria-busy={status === 'loading'}>
-        <thead><tr>{['时间', '订单号', '金额', 'e点', '状态', '操作'].map((label) => <th scope="col" key={label}>{label}</th>)}</tr></thead>
+        <thead><tr>{['时间', '订单号', '金额', 'e点', '状态', '开票状态', '操作'].map((label) => <th scope="col" key={label}>{label}</th>)}</tr></thead>
         <tbody>
           {orders.slice((currentPage - 1) * 5, currentPage * 5).map((order) => (
             <tr key={order.id}>
@@ -136,10 +138,13 @@ export default function OfficialOrdersPanel() {
               <td>¥{order.payPrice}</td>
               <td>{order.totalPoint}</td>
               <td><span className={`official-order-status is-${order.payStatus.toLowerCase()}`}>{paymentLabels[order.payStatus]}</span>{order.refundStatus !== 'NONE' && <small className="official-order-refund">{refundLabels[order.refundStatus]}</small>}</td>
-              <td>{order.payStatus === 'WAITING' && <button type="button" className="inline-action" disabled={!!resuming} onClick={(event) => { void resumePayment(order, event.currentTarget); }}>{resuming === order.id ? '正在读取…' : '继续支付'}</button>}</td>
+              <td>{invoiceLabels[order.invoiceStatus]}</td>
+              <td>{order.payStatus === 'WAITING' && <button type="button" className="inline-action" disabled={!!resuming} onClick={(event) => { void resumePayment(order, event.currentTarget); }}>{resuming === order.id ? '正在读取…' : '继续支付'}</button>}
+                {order.payStatus === 'SUCCESS' && order.invoiceStatus === 'CAN_APPLY' && <OfficialInvoiceAction isEmailAccount={account.identityType === 'email'} order={order} onSubmitted={() => setAttempt((value) => value + 1)} />}
+              </td>
             </tr>
           ))}
-          {orders.length === 0 && <tr><td colSpan={6} className="official-api-empty">{status === 'loading' ? <InlineSpinner /> : status === 'error' ? '请重试加载订单' : '暂无订单'}</td></tr>}
+          {orders.length === 0 && <tr><td colSpan={7} className="official-api-empty">{status === 'loading' ? <InlineSpinner /> : status === 'error' ? '请重试加载订单' : '暂无订单'}</td></tr>}
         </tbody>
       </table>
       {status === 'ready' && orders.length > 0 && (
