@@ -654,7 +654,8 @@ function createLeafAdjustmentPrompt(targetLeafCount, actualLeafCount) {
 5. 不要机械增加重复、空泛或近义目录。程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema；使用 write 写回或 edit 修改后会自动校验，失败时继续修复，通过后无需再调用 json-validation。`;
 }
 
-function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRootChanges }) {
+// 将本阶段完整材料直接附在审核要求后，省去模型先请求读取固定文件的一轮交互。
+function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRootChanges, inputFiles }) {
   const leafCountReview = targetLeafCount === null
     ? ''
     : `\n- “AI生成”叶子数量：程序计算目标为 ${targetLeafCount} 个，当前为 ${actualLeafCount} 个，可接受范围为 ${Math.max(1, targetLeafCount - 2)} 至 ${targetLeafCount + 2} 个。只统计 content_mode=ai-generate 的最终叶子节点；修复后仍须保持在此范围内。`;
@@ -663,7 +664,7 @@ function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRoot
     : '一级目录已经由用户确认，数量、顺序、标题、描述和属性不得修改。';
   return `请对当前完整技术方案目录执行最终审核，并在用户确认后完成必要修复。
 
-开始审核时一次性并行读取 ${OUTLINE_REVIEW_CONTEXT_FILE}、${OUTLINE_OUTPUT_FILE}、技术评分信息.md 和 ${SCORE_DIRECTORY_PLAN_FILE}，不要探索工作区或读取其他文件。${OUTLINE_REVIEW_CONTEXT_FILE} 是宿主程序计算的确定性审核结果，叶子数量、内容模式数量、最大层级、父节点数量、单子节点和评分节点机械映射均直接采用其中结果，不要重新统计、编写脚本或执行额外结构检查；你只负责评分语义覆盖、近义重复和专业合理性审核。
+以下已提供 ${OUTLINE_REVIEW_CONTEXT_FILE}、${OUTLINE_OUTPUT_FILE}、技术评分信息.md 和 ${SCORE_DIRECTORY_PLAN_FILE} 在本阶段开始时的最新完整内容，请直接开始审核，无需重复读取这些文件；不要探索工作区或读取其他文件。后续修改文件后，以修改后的内容为准。${OUTLINE_REVIEW_CONTEXT_FILE} 是宿主程序计算的确定性审核结果，叶子数量、内容模式数量、最大层级、父节点数量、单子节点和评分节点机械映射均直接采用其中结果，不要重新统计、编写脚本或执行额外结构检查；你只负责评分语义覆盖、近义重复和专业合理性审核。
 
 审核维度：${leafCountReview}
 - 评分覆盖：直接以技术评分信息.md 为原始依据，逐项检查其中适合技术方案响应的评分大项是否被目录准确覆盖；结构化评分项和目录规划用于核对已确认的映射，但不能掩盖原始评分信息中的遗漏。
@@ -682,7 +683,10 @@ function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRoot
 9. 修复必须继续遵守 ${SCORE_DIRECTORY_PLAN_FILE} 中用户确认的评分项映射、目标层级和一级目录调整边界。补回遗漏映射、合并重复目录或优化层级时，不得引入未经用户批准的评分大项规划变更。
 10. 技术一级目录必须保留 ${SCORE_DIRECTORY_PLAN_FILE} 中对应的 branch_id；调整一级目录顺序或编号时不得修改 branch_id。结构事实以 ${OUTLINE_REVIEW_CONTEXT_FILE} 为准；如果其中确定性检查不通过，直接依据列出的节点和缺失项形成问题并修复，不要重新统计。任何语义修复仍必须保证叶子保留合法 content_mode、父节点不包含 content_mode 或 content_mode_note、父节点至少有两个 children 且目录最多六级。
 11. 最终将完整问题清单和处理结果写入 ${OUTLINE_REVIEW_FILE}。无问题时完整格式为 {"status":"passed","issues":[],"user_feedback":"","summary":"审核通过原因"}；有问题时完整格式为 {"status":"user_feedback","issues":[{"category":"score-coverage","problem":"问题说明","repair":"修复方案","confirmation_required":true}],"user_feedback":"用户回答原文","summary":"处理结果"}。category 只能是 leaf-count、score-coverage、duplicate-directory、professional-structure；status 按本流程选择 passed、simple_fix、user_feedback 或 user_refuse。
-12. 程序已为 ${OUTLINE_OUTPUT_FILE} 和 ${OUTLINE_REVIEW_FILE} 预置 Schema。使用 write 写入或 edit 修改后会自动校验，失败时继续修复；已通过自动校验的文件无需重复校验。本阶段未修改 ${OUTLINE_OUTPUT_FILE} 时，仍调用 json-validation 检查该文件，只传 file_path，不得为了触发自动校验而重写目录。两份文件全部校验通过后才结束本阶段。`;
+12. 程序已为 ${OUTLINE_OUTPUT_FILE} 和 ${OUTLINE_REVIEW_FILE} 预置 Schema。使用 write 写入或 edit 修改后会自动校验，失败时继续修复；已通过自动校验的文件无需重复校验。本阶段未修改 ${OUTLINE_OUTPUT_FILE} 时，仍调用 json-validation 检查该文件，只传 file_path，不得为了触发自动校验而重写目录。两份文件全部校验通过后才结束本阶段。
+
+本阶段输入材料：
+${inputFiles.map((file) => `【文件开始：${file.path}】\n${file.content}\n【文件结束：${file.path}】`).join('\n\n')}`;
 }
 
 // 运行 V2 目录业务任务；存在 AI 目录时继续扩展，存在模板填写目录时独立提取模版。
@@ -867,12 +871,19 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     };
   }
 
-  function continueWithOutlineReview() {
+  // 提示词与工作区共用同一份最新结果，评分原文从当前工作区读取。
+  async function continueWithOutlineReview(meta) {
     const reviewContext = buildOutlineReviewContext({
       outline: finalOutline,
       scoreDirectoryPlan,
       targetLeafCount,
     });
+    const files = [
+      { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) },
+      { path: SCORE_DIRECTORY_PLAN_FILE, content: JSON.stringify(scoreDirectoryPlan, null, 2) },
+      { path: OUTLINE_REVIEW_CONTEXT_FILE, content: JSON.stringify(reviewContext, null, 2) },
+    ];
+    const scoreFile = { path: '技术评分信息.md', content: await meta.readFile('技术评分信息.md') };
     publish('子目录生成完成，正在准备最终审核', 88, {
       outline: {
         phase: 'reviewing',
@@ -884,12 +895,8 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     return {
       stage: 'outline_review',
       message: 'Agent 正在审核并修复目录',
-      prompt: createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRootChanges }),
-      files: [
-        { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(finalOutline, null, 2) },
-        { path: SCORE_DIRECTORY_PLAN_FILE, content: JSON.stringify(scoreDirectoryPlan, null, 2) },
-        { path: OUTLINE_REVIEW_CONTEXT_FILE, content: JSON.stringify(reviewContext, null, 2) },
-      ],
+      prompt: createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRootChanges, inputFiles: [...files, scoreFile] }),
+      files,
     };
   }
 
@@ -1135,11 +1142,11 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
       if (latestLeafAnswer && latestLeafAnswer.selected_option !== '接受当前结果') {
         wordAdjustmentAttempts += 1;
       }
-      if (targetLeafCount === null || actualLeafCount === targetLeafCount) return continueWithOutlineReview();
+      if (targetLeafCount === null || actualLeafCount === targetLeafCount) return continueWithOutlineReview(meta);
 
       if (latestLeafAnswer?.selected_option === '接受当前结果') {
         leafWarning = `AI 生成小节目标为 ${targetLeafCount}，用户已接受当前 ${actualLeafCount} 个。`;
-        return continueWithOutlineReview();
+        return continueWithOutlineReview(meta);
       }
 
       publish('AI 生成小节数量存在差异，等待用户决定', 75, {
