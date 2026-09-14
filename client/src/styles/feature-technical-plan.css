@@ -312,6 +312,11 @@
   overflow: hidden;
 }
 
+/* 插图设置已移除上限输入，每组单行占满可用宽度。 */
+.generation-settings-illustration-section .content-generation-config-group {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .generation-settings-table-requirement .content-generation-config-row {
   grid-column: 1 / -1;
 }
