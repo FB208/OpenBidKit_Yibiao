@@ -56,10 +56,11 @@ const TABLE_REQUIREMENT_LABELS = {
 
 const CONTENT_PLAN_SCHEMA = {
   type: 'object',
-  required: ['writing_focus', 'knowledge', 'table'],
+  required: ['writing_focus', 'knowledge', 'table', 'image_suitability_score'],
   additionalProperties: false,
   properties: {
     writing_focus: { type: 'string', minLength: 1 },
+    image_suitability_score: { type: 'integer', minimum: 0, maximum: 10 },
     knowledge: {
       type: 'object',
       required: ['item_ids'],
@@ -654,6 +655,7 @@ function normalizeContentPlan(value, allowedKnowledgeItemIds) {
 
   return {
     writing_focus: singleLine(source.writing_focus || source.writingFocus || writing.focus || writing.writing_focus || writing.writingFocus),
+    image_suitability_score: source.image_suitability_score,
     knowledge: {
       item_ids: normalizeKnowledgeItemIds(rawKnowledgeItemIds, allowedKnowledgeItemIds),
     },
@@ -744,6 +746,9 @@ function validateContentPlan(plan) {
   }
   if (!plan.knowledge || !Array.isArray(plan.knowledge.item_ids)) {
     throw new Error('正文编排决策缺少 knowledge.item_ids');
+  }
+  if (!Number.isInteger(plan.image_suitability_score) || plan.image_suitability_score < 0 || plan.image_suitability_score > 10) {
+    throw new Error('正文编排决策的配图适配性评分必须是 0-10 的整数');
   }
   if (typeof plan.writing_focus !== 'string' || !plan.writing_focus.trim()) {
     throw new Error('正文编排决策缺少 writing_focus');
@@ -873,6 +878,7 @@ function buildContentPlanningOutline(items, storedContentPlans, root = true) {
       ...(contentMode === 'ai-generate' && stored?.plan ? {
         content_plan: {
           writing_focus: stored.plan.writing_focus,
+          image_suitability_score: stored.plan.image_suitability_score,
           knowledge: { item_ids: stored.plan.knowledge.item_ids },
           table: stored.plan.table,
         },
@@ -982,14 +988,15 @@ ${requirementText}
 请严格完成以下工作：
 1. 先读取全部三个文件，结合完整目录中的上下级和同级关系进行整体判断。
 2. 只为 content_mode 为 ai-generate 的叶子节点编排；本次只修改程序列出的目标节点，其他节点及已有 content_plan 保持原样。
-3. 每个 AI 生成叶子的 content_plan 必须包含 writing_focus、knowledge.item_ids、table.needed、table.purpose；非 AI 叶子和分支节点不得包含 content_plan。
+3. 每个 AI 生成叶子的 content_plan 必须包含 writing_focus、knowledge.item_ids、table.needed、table.purpose、image_suitability_score；非 AI 叶子和分支节点不得包含 content_plan。
 4. writing_focus 用 1-2 句话概括本节正文重点，不展开成正文，不编造具体参数、周期、人员、设备、品牌、型号或承诺，并避免与相邻章节重复。
 5. knowledge.item_ids 只能从 ${CONTENT_PLANNING_KNOWLEDGE_FILE} 中选择，可以多选或为空数组，不要编造 id。
 6. ${tableLimitInstruction}
 7. 表格仅在能明显提升职责、步骤、参数、风险、措施或成果等内容的表达清晰度时使用；需要时准确填写用途，不需要时 purpose 留空。
-8. 不得修改目录节点数量、顺序、父子关系、id、title、description、attr、content_mode 或 content_mode_note。
-9. 将完整结果覆盖写回 ${CONTENT_PLANNING_OUTPUT_FILE}。程序已为该文件预置 Schema，写入后调用 json-validation，只传 {"file_path":"${CONTENT_PLANNING_OUTPUT_FILE}"}；失败后先修改文件再重新校验。
-10. 完成后用简体中文简短说明已完成正文编排。`;
+8. image_suitability_score 是本节配图适配性评分，必须为 0-10 的整数：0 表示不适合配图，10 表示非常适合配图。结合本节标题、说明、写作重点和项目背景，判断图片能否帮助读者理解流程、结构、关系等内容；图片带来的理解帮助越明显，评分越高，仅起装饰作用时不应给高分。只评估适配性，不安排图片数量、类型、位置或生图提示词，也不根据图片数量档位或图片类型开关调整评分。
+9. 不得修改目录节点数量、顺序、父子关系、id、title、description、attr、content_mode 或 content_mode_note。
+10. 将完整结果覆盖写回 ${CONTENT_PLANNING_OUTPUT_FILE}。程序已为该文件预置 Schema，写入后调用 json-validation，只传 {"file_path":"${CONTENT_PLANNING_OUTPUT_FILE}"}；失败后先修改文件再重新校验。
+11. 完成后用简体中文简短说明已完成正文编排。`;
 }
 
 function formatKnowledgeContentsForPrompt(contents) {

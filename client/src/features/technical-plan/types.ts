@@ -216,6 +216,8 @@ export type ContentIllustrationPlacement = 'before' | 'after';
 
 export interface ContentGenerationPlanData {
   writing_focus?: string;
+  /** 小节配图适配性，0-10 分，目前仅供正文编排记录。 */
+  image_suitability_score: number;
   knowledge: {
     item_ids: string[];
   };
