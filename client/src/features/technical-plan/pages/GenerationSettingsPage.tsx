@@ -4,7 +4,7 @@ import { AppDialog, AppSwitch, isLibreOfficeRequiredMessage, UploadEmpty, Upload
 import type { ImageModelStatus, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
 import type { ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
 import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
-import type { ContentGenerationOptions, ContentIllustrationKind, ContentTableRequirement, GlobalFactsMode, TechnicalPlanOriginalPlanFile, TechnicalPlanState } from '../types';
+import type { ContentGenerationOptions, ContentImageQuantity, ContentIllustrationKind, ContentTableRequirement, GlobalFactsMode, TechnicalPlanOriginalPlanFile, TechnicalPlanState } from '../types';
 import { DEFAULT_HTML_IMAGE_TYPES, normalizeContentGenerationOptions } from '../contentGenerationOptions';
 import aiImageExampleUrl from '../../../../assets/generate_img_example/ai.png';
 import mermaidImageExampleUrl from '../../../../assets/generate_img_example/mermaid.png';
@@ -288,7 +288,6 @@ function GenerationSettingsPage({
   );
   const knowledgeSelectionDisabled = loadingKnowledge || knowledgeSaving || outlineConfigLocked;
   const imageModelAvailable = imageModelStatus === 'available';
-  const contentImageLimit = contentLeafCount > 0 ? contentLeafCount : Number.MAX_SAFE_INTEGER;
   const currentContentGenerationOptions = normalizeContentGenerationOptions(
     contentGenerationOptions,
     imageModelAvailable,
@@ -952,6 +951,24 @@ function GenerationSettingsPage({
             <section className="generation-settings-illustration-section">
               <div className="content-generation-config-list">
                 <div className="content-generation-config-group">
+                  <label className="content-generation-config-row">
+                    <span><strong>图片数量</strong></span>
+                    <select
+                      value={draftIllustrationOptions.imageQuantity}
+                      disabled={contentConfigLocked || contentOptionsBusy}
+                      onChange={(event) => void saveContentOptions({
+                        ...draftIllustrationOptions,
+                        tableRequirement: draftTableRequirement,
+                        imageQuantity: event.target.value as ContentImageQuantity,
+                      })}
+                    >
+                      <option value="none">无图</option>
+                      <option value="light">少图</option>
+                      <option value="heavy">多图</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="content-generation-config-group">
                   <div className="content-generation-config-row">
                     <div className="content-generation-image-option-title">
                       <strong>使用 AI 生图</strong>
@@ -973,24 +990,6 @@ function GenerationSettingsPage({
                       />
                     </div>
                   </div>
-                  {draftIllustrationOptions.useAiImages && imageModelAvailable && (
-                    <label className="content-generation-config-row">
-                      <span><strong>AI 生图上限</strong></span>
-                      <input
-                        type="number"
-                        min="0"
-                        max={contentLeafCount > 0 ? contentLeafCount : undefined}
-                        value={draftIllustrationOptions.maxAiImages}
-                        disabled={contentConfigLocked || contentOptionsBusy}
-                        onChange={(event) => setDraftIllustrationOptions((current) => ({
-                          ...current,
-                          maxAiImages: Math.max(0, Math.min(Number(event.target.value) || 0, contentImageLimit)),
-                        }))}
-                        onKeyDown={blurInputOnEnter}
-                        onBlur={() => void saveContentOptions({ ...draftIllustrationOptions, tableRequirement: draftTableRequirement })}
-                      />
-                    </label>
-                  )}
                 </div>
                 <div className="content-generation-config-group">
                   <div className="content-generation-config-row">
@@ -1011,24 +1010,6 @@ function GenerationSettingsPage({
                       aria-label="是否使用 Mermaid 生图"
                     />
                   </div>
-                  {draftIllustrationOptions.useMermaidImages && (
-                    <label className="content-generation-config-row">
-                      <span><strong>Mermaid 生图上限</strong></span>
-                      <input
-                        type="number"
-                        min="0"
-                        max={contentLeafCount > 0 ? contentLeafCount : undefined}
-                        value={draftIllustrationOptions.maxMermaidImages}
-                        disabled={contentConfigLocked || contentOptionsBusy}
-                        onChange={(event) => setDraftIllustrationOptions((current) => ({
-                          ...current,
-                          maxMermaidImages: Math.max(0, Math.min(Number(event.target.value) || 0, contentImageLimit)),
-                        }))}
-                        onKeyDown={blurInputOnEnter}
-                        onBlur={() => void saveContentOptions({ ...draftIllustrationOptions, tableRequirement: draftTableRequirement })}
-                      />
-                    </label>
-                  )}
                 </div>
                 <div className="content-generation-config-group">
                   <div className="content-generation-config-row">
@@ -1049,24 +1030,6 @@ function GenerationSettingsPage({
                       aria-label="是否生成 HTML 图片"
                     />
                   </div>
-                  {draftIllustrationOptions.useHtmlImages && (
-                    <label className="content-generation-config-row">
-                      <span><strong>HTML 生图上限</strong></span>
-                      <input
-                        type="number"
-                        min="0"
-                        max={contentLeafCount > 0 ? contentLeafCount : undefined}
-                        value={draftIllustrationOptions.maxHtmlImages}
-                        disabled={contentConfigLocked || contentOptionsBusy}
-                        onChange={(event) => setDraftIllustrationOptions((current) => ({
-                          ...current,
-                          maxHtmlImages: Math.max(0, Math.min(Number(event.target.value) || 0, contentImageLimit)),
-                        }))}
-                        onKeyDown={blurInputOnEnter}
-                        onBlur={() => void saveContentOptions({ ...draftIllustrationOptions, tableRequirement: draftTableRequirement })}
-                      />
-                    </label>
-                  )}
                 </div>
                 {draftIllustrationOptions.useHtmlImages && (
                   <div className="content-generation-config-group">

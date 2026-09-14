@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 31;
+const schemaVersion = 32;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -1162,6 +1162,11 @@ function addTechnicalPlanExportTemplateScope(db) {
   addColumnIfMissing(db, 'technical_plan_generation_config', 'export_template_scope', "TEXT NOT NULL DEFAULT 'ai-only'");
 }
 
+/** 保存图片数量档位，暂不参与图片生成。 */
+function addTechnicalPlanImageQuantity(db) {
+  addColumnIfMissing(db, 'technical_plan_generation_config', 'image_quantity', "TEXT NOT NULL DEFAULT 'light'");
+}
+
 function createExportTemplatesSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS export_templates (
@@ -1518,6 +1523,13 @@ const schemaHealthColumnGroups = [
       export_template_scope: "TEXT NOT NULL DEFAULT 'ai-only'",
     },
   },
+  {
+    version: 32,
+    table: 'technical_plan_generation_config',
+    columns: {
+      image_quantity: "TEXT NOT NULL DEFAULT 'light'",
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -1736,6 +1748,11 @@ const migrations = [
     version: 31,
     description: '技术方案新增导出模板样式范围配置',
     up: addTechnicalPlanExportTemplateScope,
+  },
+  {
+    version: 32,
+    description: '技术方案新增图片数量配置',
+    up: addTechnicalPlanImageQuantity,
   },
 ];
 

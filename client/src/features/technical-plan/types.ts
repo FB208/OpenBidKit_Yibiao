@@ -43,7 +43,10 @@ export interface SaveOutlineSelectionRequest {
   selectedIds: string[];
 }
 
+export type ContentImageQuantity = 'none' | 'light' | 'heavy';
+
 export interface ContentGenerationOptions {
+  imageQuantity: ContentImageQuantity;
   useAiImages: boolean;
   maxAiImages: number;
   useMermaidImages: boolean;

@@ -3,6 +3,7 @@ import type { ContentGenerationOptions, ContentTableRequirement } from './types'
 export const DEFAULT_HTML_IMAGE_TYPES = '甘特图、进度网络图、组织架构图、泳道图、RACI 职责矩阵、风险矩阵、系统架构与拓扑图、WBS 工作分解结构图、鱼骨图、柱状图、折线图、饼图';
 
 export const defaultContentGenerationOptions: ContentGenerationOptions = {
+  imageQuantity: 'light',
   useAiImages: false,
   maxAiImages: 6,
   useMermaidImages: true,
@@ -42,6 +43,7 @@ export function normalizeContentGenerationOptions(
   const requestedMaxHtmlImages = Number(options?.maxHtmlImages ?? fallback.maxHtmlImages);
 
   return {
+    imageQuantity: options?.imageQuantity ?? fallback.imageQuantity,
     useAiImages: Boolean(options?.useAiImages ?? fallback.useAiImages) && imageModelAvailable,
     maxAiImages: Math.max(0, Math.min(Number.isFinite(requestedMaxAiImages) ? Math.round(requestedMaxAiImages) : fallback.maxAiImages, imageLimit)),
     useMermaidImages: Boolean(options?.useMermaidImages ?? fallback.useMermaidImages),

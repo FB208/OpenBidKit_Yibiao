@@ -45,6 +45,7 @@ const defaultOutlineWordControlOptions = Object.freeze({
 const defaultHtmlImageTypes = '甘特图、进度网络图、组织架构图、泳道图、RACI 职责矩阵、风险矩阵、系统架构与拓扑图、WBS 工作分解结构图、鱼骨图、柱状图、折线图、饼图';
 const defaultExportTemplateId = '';
 const defaultContentGenerationOptions = Object.freeze({
+  imageQuantity: 'light',
   useAiImages: true,
   maxAiImages: 6,
   useMermaidImages: true,
@@ -349,6 +350,7 @@ function normalizeGenerationDocumentIds(values) {
 function normalizeContentGenerationOptions(options) {
   const source = options && typeof options === 'object' && !Array.isArray(options) ? options : {};
   return {
+    imageQuantity: source.imageQuantity ?? defaultContentGenerationOptions.imageQuantity,
     useAiImages: hasOwn(source, 'useAiImages') ? Boolean(source.useAiImages) : defaultContentGenerationOptions.useAiImages,
     maxAiImages: hasOwn(source, 'maxAiImages') ? normalizeNonNegativeInteger(source.maxAiImages) : defaultContentGenerationOptions.maxAiImages,
     useMermaidImages: hasOwn(source, 'useMermaidImages') ? Boolean(source.useMermaidImages) : defaultContentGenerationOptions.useMermaidImages,
@@ -792,13 +794,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         id, bid_analysis_mode, bid_section_mode, outline_mode, outline_expansion_mode,
         minimum_words, maximum_words, section_words, strict_section_words, global_facts_mode, export_template_id, export_template_scope,
         use_ai_images, max_ai_images, use_mermaid_images, max_mermaid_images,
-        use_html_images, max_html_images, html_image_types, table_requirement,
+        use_html_images, max_html_images, html_image_types, table_requirement, image_quantity,
         created_at, updated_at
       ) VALUES (
         1, @bid_analysis_mode, @bid_section_mode, @outline_mode, @outline_expansion_mode,
         @minimum_words, @maximum_words, @section_words, @strict_section_words, @global_facts_mode, @export_template_id, @export_template_scope,
         @use_ai_images, @max_ai_images, @use_mermaid_images, @max_mermaid_images,
-        @use_html_images, @max_html_images, @html_image_types, @table_requirement,
+        @use_html_images, @max_html_images, @html_image_types, @table_requirement, @image_quantity,
         @created_at, @updated_at
       )
     `).run({
@@ -821,6 +823,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       max_html_images: content.maxHtmlImages,
       html_image_types: content.htmlImageTypes,
       table_requirement: content.tableRequirement,
+      image_quantity: content.imageQuantity,
       created_at: timestamp,
       updated_at: timestamp,
     });
@@ -869,6 +872,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         maxHtmlImages: row.max_html_images,
         htmlImageTypes: row.html_image_types,
         tableRequirement: row.table_requirement,
+        imageQuantity: row.image_quantity,
       },
     });
   }
@@ -899,6 +903,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         max_html_images = @max_html_images,
         html_image_types = @html_image_types,
         table_requirement = @table_requirement,
+        image_quantity = @image_quantity,
         updated_at = @updated_at
       WHERE id = 1
     `).run({
@@ -921,6 +926,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       max_html_images: content.maxHtmlImages,
       html_image_types: content.htmlImageTypes,
       table_requirement: content.tableRequirement,
+      image_quantity: content.imageQuantity,
       updated_at: now(),
     });
     replaceGenerationList('technical_plan_generation_bid_tasks', 'task_id', normalized.bidAnalysisSelectedTaskIds);
