@@ -218,6 +218,8 @@ export interface ContentGenerationPlanData {
   writing_focus?: string;
   /** 小节配图适配性，0-10 分，目前仅供正文编排记录。 */
   image_suitability_score: number;
+  /** 编排后由程序按全文评分和图片数量档位决定，暂不参与生图。 */
+  image_needed: boolean;
   knowledge: {
     item_ids: string[];
   };

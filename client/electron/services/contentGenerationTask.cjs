@@ -656,6 +656,7 @@ function normalizeContentPlan(value, allowedKnowledgeItemIds) {
   return {
     writing_focus: singleLine(source.writing_focus || source.writingFocus || writing.focus || writing.writing_focus || writing.writingFocus),
     image_suitability_score: source.image_suitability_score,
+    image_needed: source.image_needed,
     knowledge: {
       item_ids: normalizeKnowledgeItemIds(rawKnowledgeItemIds, allowedKnowledgeItemIds),
     },
@@ -665,6 +666,16 @@ function normalizeContentPlan(value, allowedKnowledgeItemIds) {
     },
     original_material: normalizeOriginalMaterial(source.original_material || source.originalMaterial),
   };
+}
+
+// 按全文 AI 小节数确定配图名额；稳定排序保留同分小节的目录顺序，0 分不入选。
+function selectContentImageTargets(leaves, plans, imageQuantity) {
+  const ratio = imageQuantity === 'heavy' ? 0.5 : imageQuantity === 'light' ? 0.2 : 0;
+  const limit = Math.floor(leaves.length * ratio);
+  const candidates = leaves
+    .filter(({ item }) => plans[item.id].plan.image_suitability_score > 0)
+    .sort((left, right) => plans[right.item.id].plan.image_suitability_score - plans[left.item.id].plan.image_suitability_score);
+  return new Set(candidates.slice(0, limit).map(({ item }) => item.id));
 }
 
 function createStoredContentPlan(plan, tableRequirement) {
@@ -2519,6 +2530,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   const generationOptions = retryFailedSections || continuePostProcessing
     ? storedPlan.contentGenerationOptions || {}
     : payload.generationOptions || payload.generation_options || storedPlan.contentGenerationOptions || {};
+  const imageQuantity = storedPlan.contentGenerationOptions.imageQuantity;
   const aiConfig = aiService.getConfig ? aiService.getConfig() : {};
   const contentConcurrency = normalizeContentConcurrency(aiConfig.concurrency_limit);
   const imageConcurrency = normalizeImageConcurrency(aiConfig.image_model?.concurrency_limit);
@@ -3390,19 +3402,6 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     return plan;
   }
 
-  function saveContentPlanForItem(itemId, plan) {
-    contentPlans.set(itemId, plan);
-    storedContentPlans = pruneContentGenerationPlans({
-      ...storedContentPlans,
-      [itemId]: createStoredContentPlan(plan, tableRequirement),
-    }, leaves);
-    const runtime = syncRuntime();
-    checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
-      contentGenerationItem: { nodeId: itemId, storedPlan: storedContentPlans[itemId], runtime },
-    }, { contentRuntime: runtime });
-    return storedContentPlans[itemId];
-  }
-
   function getOriginalMaterialRuntimeState(itemOrId) {
     const itemId = typeof itemOrId === 'string' ? itemOrId : String(itemOrId?.id || '').trim();
     const item = typeof itemOrId === 'string' ? leaves.find((context) => context.item.id === itemId)?.item : itemOrId;
@@ -3506,12 +3505,25 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     return sections[item.id];
   }
 
-  function persistContentPlans(targets) {
+  // 合并本轮编排与已有结果，按全文计算配图标记后一起保存。
+  function persistContentPlans(targets, generatedPlans) {
     const nextPlans = { ...storedContentPlans };
     for (const context of targets) {
       const contentPlan = contentPlans.get(context.item.id) || normalizeContentPlan({}, allowedKnowledgeItemIds);
       nextPlans[context.item.id] = createStoredContentPlan(contentPlan, tableRequirement);
     }
+    for (const { item } of leaves) {
+      if (!nextPlans[item.id]) {
+        nextPlans[item.id] = createStoredContentPlan(generatedPlans.get(item.id), tableRequirement);
+      }
+    }
+    const selectedImageIds = selectContentImageTargets(leaves, nextPlans, imageQuantity);
+    for (const { item } of leaves) {
+      const plan = { ...nextPlans[item.id].plan, image_needed: selectedImageIds.has(item.id) };
+      nextPlans[item.id] = { ...nextPlans[item.id], plan, updated_at: now() };
+      contentPlans.set(item.id, plan);
+    }
+    logs = [...logs, `配图标记已计算：全文 ${leaves.length} 个 AI 小节，选中 ${selectedImageIds.size} 个小节。`];
     storedContentPlans = pruneContentGenerationPlans(nextPlans, leaves);
     const runtime = syncRuntime();
     checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
@@ -3545,8 +3557,9 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       .filter(({ item }) => !getReusableStoredContentPlan(item.id))
       .map(({ item }) => item.id);
     const hasPlanningSession = agentService.hasPersistentTaskSession(CONTENT_PLANNING_AGENT_TASK_KEY);
+    let generatedPlans = new Map();
     if (missingPlanItemIds.length || !hasPlanningSession) {
-      const generatedPlans = await runContentPlanningAgent(missingPlanItemIds);
+      generatedPlans = await runContentPlanningAgent(missingPlanItemIds);
       for (const { item } of planningTargets) {
         let contentPlan = generatedPlans.get(item.id);
         if (!contentPlan) throw new Error(`正文编排结果缺少目标节点：${item.id}`);
@@ -3555,8 +3568,6 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       }
     }
     contentStats.planning_completed = tasksToRun.length;
-    pauseIfRequested('正文生成已在编排阶段暂停，可导出当前已完成内容，稍后继续。');
-
     const tableCandidates = tasksToRun.filter(({ item }) => contentPlans.get(item.id)?.table.needed);
     const selectedTableIds = runLimits.maxTablesForRun === null
       ? new Set(tableCandidates.map(({ item }) => item.id))
@@ -3570,7 +3581,8 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     }
 
     logs = [...logs, `整体编排完成：表格候选 ${tableCandidates.length} 个，${runLimits.maxTablesForRun === null ? '保持现有编排' : `入选 ${selectedTableIds.size} 个`}。`];
-    persistContentPlans(tasksToRun);
+    persistContentPlans(tasksToRun, generatedPlans);
+    pauseIfRequested('正文生成已在编排阶段暂停，可导出当前已完成内容，稍后继续。');
     contentStats.phase = 'generating';
     publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
   }
@@ -3756,10 +3768,10 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     if (previousOriginalMaterial?.restored || previousOriginalMaterial?.source_ids?.length) {
       contentPlan = { ...contentPlan, original_material: previousOriginalMaterial };
     }
-    saveContentPlanForItem(context.item.id, contentPlan);
+    contentPlans.set(context.item.id, contentPlan);
     contentStats.planning_completed = 1;
+    persistContentPlans([context], generatedPlans);
     pauseIfRequested('正文生成已在小节编排后暂停，可导出当前已完成内容，稍后继续。');
-    persistContentPlans([context]);
     logs = [...logs, `当前小节编排已保存：${context.item.id} ${context.item.title || '未命名章节'}。`];
 
     pauseIfRequested('正文生成已在小节编排阶段暂停，可导出当前已完成内容，稍后继续。');
