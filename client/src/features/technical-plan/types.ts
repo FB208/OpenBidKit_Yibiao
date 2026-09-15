@@ -125,6 +125,13 @@ export interface BackgroundTaskState {
       planning_completed: number;
       restoration_total?: number;
       restoration_completed?: number;
+      /** 原方案还原结束时按来源段字符数统计，不代表扩写后的内容保留率。 */
+      original_restoration?: {
+        source_hash: string;
+        total_chars: number;
+        restored_chars: number;
+        rate: number | null;
+      };
       generation_total: number;
       generation_completed: number;
       minimum_words?: number;

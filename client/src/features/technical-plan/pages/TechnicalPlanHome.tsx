@@ -1263,7 +1263,8 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       {state.step === 'content-edit' && (
         <ContentEditPage
           stepNumber={activeStepNumber}
-          hasOriginalPlan={Boolean(state.originalPlanFile)}
+          hasOriginalPlan={Boolean(state.originalPlanFile?.markdownPath)}
+          originalPlanContentHash={state.originalPlanFile?.contentHash}
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           outlineData={state.outlineData}
           task={state.contentGenerationTask}

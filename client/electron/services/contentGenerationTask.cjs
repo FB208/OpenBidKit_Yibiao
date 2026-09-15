@@ -1218,36 +1218,6 @@ function formatRestoreTargetsForPrompt(targets) {
   }).join('\n');
 }
 
-function buildOriginalMaterialRestoreMessages({ targets, originalSegments, projectOverview, bidAnalysisFactsText, globalFactTitlesText }) {
-  return [
-    {
-      role: 'user',
-      content: `你是投标技术方案原文归属判断助手。用户提供的原方案是本次要扩写的核心草稿。请判断每个原方案段落应该还原到当前目录的哪个叶子小节。
-
-要求：
-1. 只返回 JSON，不要输出解释、总结或 Markdown。
-2. 你只能返回原方案段编号与叶子节点 ID 的映射，严禁改写、总结或生成正文。
-3. node_id 必须逐字使用“当前可还原叶子节点”中给出的 ID。
-4. source_ids 必须逐字使用“原方案段落”中的编号。
-5. 每个原方案段默认只分配给一个最匹配的主节点；如果完全不适合当前叶子节点，可以不分配。
-6. 优先按标题语义、章节职责、技术路线和同级章节边界归属，避免把同一内容拆散到无关章节。
-7. 如果某个原方案段只有章节标题、Markdown 标题或目录编号，没有实质正文内容，不要把它分配为正文来源；段落开头的标题行只用于判断归属。
-
-返回格式：
-{
-  "assignments": [
-    { "node_id": "1.1", "source_ids": ["P001", "P002"] }
-  ]
-}`,
-    },
-    { role: 'user', content: `招标文件关键信息：\n${formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText)}` },
-    { role: 'user', content: `全局事实变量标题清单：\n${globalFactTitlesText || '未提供'}` },
-    { role: 'user', content: `当前可还原叶子节点：\n${formatRestoreTargetsForPrompt(targets) || '无'}` },
-    { role: 'user', content: `原方案段落：\n${formatOriginalSegmentsForPrompt(originalSegments)}` },
-    { role: 'user', content: '请只返回 JSON，不要生成正文。' },
-  ];
-}
-
 function buildAgentOriginalMaterialRestorePrompt() {
   return `你是投标技术方案原文归属判断 Agent。用户已上传原方案作为本次优化扩写的核心草稿，请基于 workspace 输入文件判断每个原方案段落应该还原到当前目录的哪个叶子小节。
 
@@ -1411,28 +1381,6 @@ function validateOriginalRestoreAssignments(value) {
       throw new Error('原方案还原映射项缺少 node_id 或 source_ids');
     }
   }
-}
-
-function buildOriginalRestoreRepairMessages({ invalidContent, issues }, targets, originalSegments) {
-  const issueLines = (issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
-  return [
-    {
-      role: 'user',
-      content: `你是严格的 JSON 修复器。请把模型输出修复为“原方案段落归属映射”JSON。
-
-必须满足：
-1. 顶层只能包含 assignments 数组。
-2. 每条 assignment 必须包含 node_id 和 source_ids。
-3. node_id 只能使用当前可还原叶子节点中的 ID。
-4. source_ids 只能使用原方案段落编号。
-5. 如果某个原方案段只有章节标题、Markdown 标题或目录编号，没有实质正文内容，不要把它分配为正文来源；如果待修复内容中包含这类 source_id，请从 source_ids 中移除。
-6. 严禁输出正文、总结、解释或 Markdown。`,
-    },
-    { role: 'user', content: `当前可还原叶子节点：\n${formatRestoreTargetsForPrompt(targets) || '无'}` },
-    { role: 'user', content: `原方案段落（用于判断 source_ids 是否只有标题、编号或实质正文）：\n${formatOriginalSegmentsForPrompt(originalSegments) || '无'}` },
-    { role: 'user', content: `错误列表：\n${issueLines}` },
-    { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
-  ];
 }
 
 function normalizeContentExpansionPatch(value) {
@@ -2474,7 +2422,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   }
   const globalFactTitlesText = formatGlobalFactTitlesForPrompt(globalFacts);
   const bidAnalysisFactsText = formatBidAnalysisFactsForPrompt(storedPlan);
-  const hasOriginalPlan = Boolean(storedPlan.originalPlanFile);
+  const hasOriginalPlan = Boolean(storedPlan.originalPlanFile?.markdownPath);
   let originalPlanMarkdown = '';
   let originalPlanSegments = [];
   if (hasOriginalPlan) {
@@ -2491,6 +2439,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     }
   }
   const originalPlanSegmentById = new Map(originalPlanSegments.map((segment) => [segment.id, segment]));
+  const originalPlanSourceHash = hasOriginalPlan ? textHash(originalPlanMarkdown.trim()) : '';
 
   const projectOverview = outlineData.project_overview || storedPlan.projectOverview || '';
   const techRequirements = storedPlan.techRequirements || '';
@@ -2597,6 +2546,11 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     awaiting_content_decision: false,
     ignored_section_count: leaves.filter(({ item }) => storedPlan.contentGenerationSections?.[item.id]?.status === 'ignored').length,
   };
+  // 同一原方案继续任务时保留已完成的统计，全文重新生成则等待本轮还原结果。
+  const previousOriginalRestoration = previousState?.contentGenerationTask?.stats?.content?.original_restoration;
+  if (hasOriginalPlan && !fullRegenerate && previousOriginalRestoration?.source_hash === originalPlanSourceHash) {
+    contentStats.original_restoration = { ...previousOriginalRestoration };
+  }
   contentRuntime = normalizeContentGenerationRuntime({
     ...contentRuntime,
     target_item_id: targetItemId,
@@ -3403,6 +3357,8 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   }
 
   function getOriginalMaterialRuntimeState(itemOrId) {
+    // 未上传原方案时，不读取或扫描小节的来源记录。
+    if (!hasOriginalPlan) return { needsOptimization: false, needsRestoreRepair: false };
     const itemId = typeof itemOrId === 'string' ? itemOrId : String(itemOrId?.id || '').trim();
     const item = typeof itemOrId === 'string' ? leaves.find((context) => context.item.id === itemId)?.item : itemOrId;
     const plan = contentPlans.get(itemId) || getStoredContentPlan(itemId)?.plan || normalizeContentPlan({}, allowedKnowledgeItemIds);
@@ -3587,6 +3543,30 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
   }
 
+  // 仅在还原结束时统计全文有效来源，重复引用同一原文段只计一次。
+  function updateOriginalRestorationStats() {
+    if (!hasOriginalPlan) return;
+    const restoredSourceIds = new Set();
+    for (const { item } of leaves) {
+      const state = getOriginalMaterialRuntimeState(item);
+      if (!state.validRestored) continue;
+      for (const segment of state.sourceSegments) restoredSourceIds.add(segment.id);
+    }
+    let totalChars = 0;
+    let restoredChars = 0;
+    for (const segment of originalPlanSegments) {
+      totalChars += segment.chars;
+      if (restoredSourceIds.has(segment.id)) restoredChars += segment.chars;
+    }
+    contentStats.original_restoration = {
+      source_hash: originalPlanSourceHash,
+      total_chars: totalChars,
+      restored_chars: restoredChars,
+      rate: totalChars > 0 ? restoredChars / totalChars * 100 : null,
+    };
+  }
+
+  // 复用有效来源记录，其余小节统一由 Agent 判断原文归属后还原保存。
   async function restoreOriginalMaterialsIfNeeded(targets) {
     if (!hasOriginalPlan || !originalPlanSegments.length || !targets?.length) {
       return;
@@ -3598,8 +3578,9 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       .filter(({ state }) => !state.validRestored && !state.canRebuildRestoredContent)
       .map(({ context }) => context);
     if (!restoreTargets.length && !rebuildTargets.length) {
+      updateOriginalRestorationStats();
       logs = [...logs, '原方案还原：当前待生成小节均已完成还原，跳过还原阶段。'];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
+      checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
       return;
     }
 
@@ -3632,74 +3613,45 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     if (restoreTargets.length) {
       const allowedNodeIds = new Set(restoreTargets.map(({ item }) => item.id).filter(Boolean));
       const allowedSourceIds = new Set(originalPlanSegments.map((segment) => segment.id));
-      const restoreMessages = buildOriginalMaterialRestoreMessages({
-        targets: restoreTargets,
-        originalSegments: originalPlanSegments,
-        projectOverview,
-        bidAnalysisFactsText,
-        globalFactTitlesText,
+      logs = [...logs, '开始使用 Agent 判断原方案段落归属。'];
+      writeDeveloperLog('original_restore.agent.start', {
+        target_count: restoreTargets.length,
+        original_segment_count: originalPlanSegments.length,
       });
-      let result;
-      if (shouldUseAgentForMessages(aiService, restoreMessages)) {
-        const messagesLength = getMessagesContentLength(restoreMessages);
-        const contextLengthLimit = getTextContextLengthLimit(aiService);
-        logs = [...logs, `原方案还原映射提示词 ${messagesLength} 字符，超过上下文阈值 ${Math.floor(contextLengthLimit * AGENT_CONTEXT_THRESHOLD_RATIO)}，切换 Agent 文件模式。`];
-        writeDeveloperLog('original_restore.agent.start', {
-          message_chars: messagesLength,
-          context_length_limit: contextLengthLimit,
-          threshold_ratio: AGENT_CONTEXT_THRESHOLD_RATIO,
-          target_count: restoreTargets.length,
-          original_segment_count: originalPlanSegments.length,
-        });
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-        let validatedRestoreResult = null;
-        const { agentResult, outputContent } = await runContentAgentTask({
-          title: '原方案正文还原映射 Agent',
-          prompt: buildAgentOriginalMaterialRestorePrompt(),
-          outputFile: 'original-restore-result.json',
-          files: buildAgentOriginalMaterialRestoreFiles({
-            targets: restoreTargets,
-            originalSegments: originalPlanSegments,
-            projectOverview,
-            bidAnalysisFactsText,
-            globalFactTitlesText,
-          }),
-          eventPrefix: 'original_restore.agent',
-          activityLabel: 'Agent 正在判断原方案段落归属',
-          startPauseMessage: '正文生成已在原方案还原 Agent 映射开始前暂停，本次 Agent 未启动；继续后将重新执行。',
-          resultPauseMessage: '正文生成已在原方案还原 Agent 映射回写前暂停，本次 Agent 输出未回写；继续后将重新执行。',
-          pausedLogMessage: '原方案还原 Agent 映射已暂停：本轮 Agent 已取消并清理，继续后将重新执行。',
-          validateOutput: (resultForValidation) => {
-            const outputForValidation = String(resultForValidation?.output_content || '').trim();
-            const parsedForValidation = parseAgentJsonContent(outputForValidation);
-            validatedRestoreResult = normalizeOriginalRestoreAssignments(parsedForValidation, { allowedNodeIds, allowedSourceIds });
-            validateOriginalRestoreAssignments(validatedRestoreResult);
-            return validatedRestoreResult;
-          },
-        });
-        result = validatedRestoreResult || normalizeOriginalRestoreAssignments(parseAgentJsonContent(outputContent), { allowedNodeIds, allowedSourceIds });
-        pauseIfRequested('正文生成已在原方案还原 Agent 映射回写前暂停，本次 Agent 输出未回写；继续后将重新执行。');
-        writeDeveloperLog('original_restore.agent.validated', {
-          assignment_count: result.assignments.length,
-          agent_task_id: agentResult?.task_id || '',
-          agent_session_id: agentResult?.session_id || '',
-          output_metrics: textMetrics(outputContent),
-        });
-      } else {
-        result = await aiService.collectJsonResponse({
-          messages: restoreMessages,
-          logTitle: '原方案正文还原映射',
-          progressLabel: '原方案还原',
-          failureMessage: '模型返回的原方案还原映射格式无效',
-          normalizer: (value) => normalizeOriginalRestoreAssignments(value, { allowedNodeIds, allowedSourceIds }),
-          validator: validateOriginalRestoreAssignments,
-          repairMessagesBuilder: (context) => buildOriginalRestoreRepairMessages(context, restoreTargets, originalPlanSegments),
-          progressCallback: (message) => {
-            logs = [...logs, message || '原方案还原映射格式校验失败，正在修复'];
-            publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-          },
-        });
-      }
+      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
+      let validatedRestoreResult = null;
+      const { agentResult, outputContent } = await runContentAgentTask({
+        title: '原方案正文还原映射 Agent',
+        prompt: buildAgentOriginalMaterialRestorePrompt(),
+        outputFile: 'original-restore-result.json',
+        files: buildAgentOriginalMaterialRestoreFiles({
+          targets: restoreTargets,
+          originalSegments: originalPlanSegments,
+          projectOverview,
+          bidAnalysisFactsText,
+          globalFactTitlesText,
+        }),
+        eventPrefix: 'original_restore.agent',
+        activityLabel: 'Agent 正在判断原方案段落归属',
+        startPauseMessage: '正文生成已在原方案还原 Agent 映射开始前暂停，本次 Agent 未启动；继续后将重新执行。',
+        resultPauseMessage: '正文生成已在原方案还原 Agent 映射回写前暂停，本次 Agent 输出未回写；继续后将重新执行。',
+        pausedLogMessage: '原方案还原 Agent 映射已暂停：本轮 Agent 已取消并清理，继续后将重新执行。',
+        validateOutput: (resultForValidation) => {
+          const outputForValidation = String(resultForValidation?.output_content || '').trim();
+          const parsedForValidation = parseAgentJsonContent(outputForValidation);
+          validatedRestoreResult = normalizeOriginalRestoreAssignments(parsedForValidation, { allowedNodeIds, allowedSourceIds });
+          validateOriginalRestoreAssignments(validatedRestoreResult);
+          return validatedRestoreResult;
+        },
+      });
+      const result = validatedRestoreResult || normalizeOriginalRestoreAssignments(parseAgentJsonContent(outputContent), { allowedNodeIds, allowedSourceIds });
+      pauseIfRequested('正文生成已在原方案还原 Agent 映射回写前暂停，本次 Agent 输出未回写；继续后将重新执行。');
+      writeDeveloperLog('original_restore.agent.validated', {
+        assignment_count: result.assignments.length,
+        agent_task_id: agentResult?.task_id || '',
+        agent_session_id: agentResult?.session_id || '',
+        output_metrics: textMetrics(outputContent),
+      });
 
       const targetById = new Map(restoreTargets.map((context) => [context.item.id, context]));
       for (const assignment of result.assignments || []) {
@@ -3726,6 +3678,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     }
 
     contentStats.restoration_completed = contentStats.restoration_total;
+    updateOriginalRestorationStats();
     const unassignedCount = originalPlanSegments.filter((segment) => !assignedSourceIds.has(segment.id)).length;
     logs = [...logs, `原方案还原完成：已还原 ${restoredCount} 个小节，未分配原文段 ${unassignedCount} 个。`];
     contentStats.phase = 'generating';
