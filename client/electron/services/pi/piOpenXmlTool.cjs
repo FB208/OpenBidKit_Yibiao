@@ -14,10 +14,10 @@ const AGENT_TEMPLATE_FILE = 'bid-template.docx';
 const AGENT_TEMPLATE_FIELDS_FILE = 'bid-template-fields.json';
 const DEFAULT_TIMEOUT_MS = 300000;
 
-function createToolResult(payload) {
+function createToolResult(payload, compact = false, details = payload) {
   return {
-    content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
-    details: payload,
+    content: [{ type: 'text', text: JSON.stringify(payload, null, compact ? 0 : 2) }],
+    details,
   };
 }
 
@@ -164,13 +164,28 @@ function createPiOpenXmlTool({
           if (!fs.existsSync(candidatesPath)) {
             throw new Error('助手没有写出投标模版字段候选');
           }
-          fs.copyFileSync(candidatesPath, path.join(workspaceDir, AGENT_FIELD_CANDIDATES_FILE));
-          return createToolResult({
+          const candidateData = JSON.parse(fs.readFileSync(candidatesPath, 'utf8'));
+          fs.writeFileSync(
+            path.join(workspaceDir, AGENT_FIELD_CANDIDATES_FILE),
+            `${JSON.stringify(candidateData, null, 2)}\n`,
+            'utf8',
+          );
+          const toolPayload = {
             ok: true,
             action,
             file_path: AGENT_FIELD_CANDIDATES_FILE,
-            candidate_count: result.blockCount || result.block_count || 0,
-            message: `已写入 ${AGENT_FIELD_CANDIDATES_FILE}，请逐项分类后调用 apply-template-fields。`,
+            version: candidateData.version,
+            default_suggested_fill_by: candidateData.default_suggested_fill_by,
+            contexts: candidateData.contexts,
+            candidates: candidateData.candidates,
+            candidate_count: candidateData.candidates.length,
+            message: `已写入 ${AGENT_FIELD_CANDIDATES_FILE}，当前结果已包含紧凑候选，请逐项分类后调用 apply-template-fields。`,
+          };
+          return createToolResult(toolPayload, true, {
+            ok: true,
+            action,
+            file_path: AGENT_FIELD_CANDIDATES_FILE,
+            candidate_count: candidateData.candidates.length,
           });
         }
 
