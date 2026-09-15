@@ -226,7 +226,7 @@ ${buildMissingValueRule(globalFactsMode)}
 输出：
 1. 只写入 ${GLOBAL_FACTS_OUTPUT_FILE}，必须是纯 JSON，不要 Markdown 代码块。
 2. 根对象只有 groups；每项包含 id、title、content。
-3. 程序已为该文件预置 Schema。写入后调用 json-validation，只传 {"file_path":"${GLOBAL_FACTS_OUTPUT_FILE}"}；失败则先改文件再校验，直到通过。
+3. 程序已为该文件开启写入时自动 Schema 校验。使用 write 或 edit 后根据工具返回结果处理：失败时继续修复；通过且确认全部工作完成时，在最后一次 write 或 edit 中传 task_complete=true。已通过自动校验后不要重复调用 json-validation。
 
 格式示意：
 ${buildJsonExample(globalFactsMode)}`;
@@ -389,6 +389,8 @@ async function runGlobalFactsTaskV2({
   const agentResult = await agentService.runTask({
     task_id: task.task_id,
     title: '全局事实变量生成',
+    summary_enabled: false,
+    auto_validate_json: true,
     prompt,
     output_file: GLOBAL_FACTS_OUTPUT_FILE,
     files,
