@@ -21,12 +21,13 @@ static class ScanTemplateFieldsAction
         {
             var inputPath = WordWorkspace.ResolveWorkspacePath(workspace, request.Input);
             if (!File.Exists(inputPath)) return JobResult.Fail("投标模版源文件不存在");
+            var chapterRanges = ReadChapterRanges(inputPath);
             using var document = WordprocessingDocument.Open(inputPath, false);
-            var payload = TemplateFieldScanner.Scan(document);
+            var payload = TemplateFieldScanner.Scan(document, chapterRanges);
             var outputPath = Path.Combine(JobFolder.GetJobDirectory(workspace, jobId), OutputFileName);
             File.WriteAllText(
                 outputPath,
-                JsonSerializer.Serialize(payload, JsonOptions.File) + "\n",
+                JsonSerializer.Serialize(payload, JsonOptions.Signal) + "\n",
                 new UTF8Encoding(false));
             return JobResult.Success(Name, OutputFileName, payload.Candidates.Count);
         }
@@ -34,6 +35,24 @@ static class ScanTemplateFieldsAction
         {
             return JobResult.Fail(exception.Message);
         }
+    }
+
+    /// <summary>读取与抽章源模版相邻的章节范围。</summary>
+    static IReadOnlyList<TemplateChapterRange> ReadChapterRanges(string inputPath)
+    {
+        var chapterPath = Path.ChangeExtension(inputPath, ".chapters.json");
+        if (!File.Exists(chapterPath))
+        {
+            throw new InvalidOperationException("投标模版章节范围文件不存在，请重新抽取章节");
+        }
+        var payload = JsonSerializer.Deserialize<TemplateChapterRangeFile>(
+            File.ReadAllText(chapterPath, Encoding.UTF8),
+            JsonOptions.File);
+        if (payload is null || payload.Version != 1 || payload.Chapters is not { Count: > 0 })
+        {
+            throw new InvalidOperationException("投标模版章节范围文件无效");
+        }
+        return payload.Chapters;
     }
 
     static bool TryReadRequest(string workspace, string jobId, out ScanTemplateFieldsRequest request, out string error)

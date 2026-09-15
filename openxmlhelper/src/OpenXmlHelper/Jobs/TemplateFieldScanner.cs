@@ -22,22 +22,56 @@ static class TemplateFieldScanner
     static readonly Regex ManualPattern = new(
         @"签字|签名|签章|盖章|公章|印章|手印|法定代表人签|授权代表签",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    static readonly Regex TableTitlePattern = new(
+        @"(?:表|表格|一览表|应答表|明细表|汇总表)(?:\s*[（(][^）)]*[）)])?\s*$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    static readonly Regex NumberedGroupPattern = new(
+        @"^(?:[（(][一二三四五六七八九十百0-9]+[）)]|[一二三四五六七八九十百]+[、.．]|[0-9]+[、.．])\s*\S+",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    static readonly Regex SentenceLikePattern = new(
+        @"我公司|本公司|见第|投标文件|[。；;！？!?：:]",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-    public static TemplateFieldCandidateFile Scan(WordprocessingDocument document)
+    public static TemplateFieldCandidateFile Scan(
+        WordprocessingDocument document,
+        IReadOnlyList<TemplateChapterRange>? chapterRanges = null)
     {
         var part = document.MainDocumentPart ?? throw new InvalidOperationException("投标模版缺少正文部件");
         var body = part.Document.Body ?? throw new InvalidOperationException("投标模版正文为空");
         var result = new TemplateFieldCandidateFile();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var order = 0;
+        var chapters = NormalizeChapterRanges(chapterRanges, body.ChildElements.Count);
 
         for (var blockIndex = 0; blockIndex < body.ChildElements.Count; blockIndex += 1)
         {
             var block = body.ChildElements[blockIndex];
             var blockPath = $"body/{blockIndex}:{block.LocalName}";
-            ScanElement(block, blockPath, result.Candidates, seen, ref order);
+            var firstCandidate = result.Candidates.Count;
+            if (block is Wp.Table table)
+            {
+                var chapter = FindChapter(chapters, blockIndex);
+                ScanTable(
+                    table,
+                    blockPath,
+                    FindTableTitle(body, blockIndex, chapter),
+                    result.Candidates,
+                    seen,
+                    ref order);
+            }
+            else
+            {
+                ScanElement(block, blockPath, result.Candidates, seen, ref order);
+            }
+
+            var chapterName = FindChapter(chapters, blockIndex)?.Title;
+            for (var index = firstCandidate; index < result.Candidates.Count; index += 1)
+            {
+                result.Candidates[index].ChapterName = Optional(Limit(chapterName ?? "", 120));
+            }
         }
 
+        BuildStructureContexts(result);
         return result;
     }
 
@@ -73,7 +107,7 @@ static class TemplateFieldScanner
 
         if (element is Wp.Table table)
         {
-            ScanTable(table, path, candidates, seen, ref order);
+            ScanTable(table, path, null, candidates, seen, ref order);
             return;
         }
 
@@ -87,19 +121,66 @@ static class TemplateFieldScanner
     static void ScanTable(
         Wp.Table table,
         string path,
+        string? tableTitle,
         List<TemplateFieldCandidate> candidates,
         HashSet<string> seen,
         ref int order)
     {
-        var rows = table.Elements<Wp.TableRow>().ToList();
-        for (var rowIndex = 0; rowIndex < rows.Count; rowIndex += 1)
+        var rows = BuildTableRows(table);
+        var columnCount = Math.Max(
+            table.GetFirstChild<Wp.TableGrid>()?.Elements<Wp.GridColumn>().Count() ?? 0,
+            rows.SelectMany(item => item.Cells).Select(item => item.ColumnStart + item.ColumnSpan).DefaultIfEmpty(0).Max());
+        var firstMeaningfulRow = rows.FirstOrDefault(item => item.Cells.Any(cell => cell.Text.Length > 0));
+        var internalTitleRow = firstMeaningfulRow is not null
+            && TryReadFullWidthText(firstMeaningfulRow, columnCount, out var firstRowText)
+            && IsTableTitle(firstRowText)
+                ? firstMeaningfulRow
+                : null;
+        var effectiveTableTitle = internalTitleRow is null
+            ? tableTitle
+            : TryReadFullWidthText(internalTitleRow, columnCount, out var internalTitle) ? internalTitle : tableTitle;
+        var activeHeaders = new string?[columnCount];
+        string? groupTitle = null;
+        var mayInferHeader = true;
+        var previousWasHeader = false;
+
+        foreach (var row in rows)
         {
-            var cells = rows[rowIndex].Elements<Wp.TableCell>().ToList();
-            var rowTexts = cells.Select(ReadCellText).ToList();
-            for (var cellIndex = 0; cellIndex < cells.Count; cellIndex += 1)
+            var isInternalTitle = ReferenceEquals(row, internalTitleRow);
+            var isFullWidthText = TryReadFullWidthText(row, columnCount, out var fullWidthText);
+            var isGroup = isFullWidthText && !isInternalTitle && IsGroupTitle(fullWidthText);
+            var explicitHeader = HasExplicitTableHeader(row.Row);
+            var isHeader = !isGroup && (explicitHeader || mayInferHeader && IsHeaderShaped(row, columnCount));
+
+            if (isGroup)
             {
-                var cell = cells[cellIndex];
-                var cellPath = $"{path}/row/{rowIndex}/cell/{cellIndex}";
+                groupTitle = Optional(Limit(fullWidthText, 120));
+                mayInferHeader = true;
+                previousWasHeader = false;
+            }
+            else if (isHeader)
+            {
+                if (!previousWasHeader)
+                {
+                    Array.Clear(activeHeaders);
+                }
+                MergeColumnHeaders(activeHeaders, row);
+                mayInferHeader = false;
+                previousWasHeader = true;
+            }
+            else if (!isInternalTitle)
+            {
+                mayInferHeader = false;
+                previousWasHeader = false;
+            }
+
+            var rowTexts = row.Cells.Select(item => ReadCellText(item.Cell)).ToList();
+            foreach (var cellInfo in row.Cells)
+            {
+                var cell = cellInfo.Cell;
+                var cellPath = $"{path}/row/{row.RowIndex}/cell/{cellInfo.CellIndex}";
+                var firstCandidate = candidates.Count;
+                var rowContext = BuildCellContext(rowTexts, cellInfo.CellIndex);
                 var paragraphs = cell.Elements<Wp.Paragraph>().ToList();
                 for (var paragraphIndex = 0; paragraphIndex < paragraphs.Count; paragraphIndex += 1)
                 {
@@ -111,24 +192,261 @@ static class TemplateFieldScanner
                         ref order);
                 }
 
-                if (!IsSimpleEmptyCell(cell, rowTexts[cellIndex])) continue;
-                var targetParagraph = paragraphs.FirstOrDefault();
-                if (targetParagraph is null) continue;
-                var context = BuildCellContext(rowTexts, cellIndex);
-                AddCandidate(
-                    candidates,
-                    seen,
-                    ref order,
-                    kind: "empty-table-cell",
-                    location: $"{cellPath}/p/0",
-                    text: "",
-                    context,
-                    suggestedName: SuggestName(context),
-                    suggestedFillBy: SuggestFillBy(context),
-                    target: targetParagraph,
-                    start: 0,
-                    length: 0);
+                if (IsSimpleEmptyCell(cell, rowTexts[cellInfo.CellIndex]))
+                {
+                    var targetParagraph = paragraphs.FirstOrDefault();
+                    if (targetParagraph is not null)
+                    {
+                        AddCandidate(
+                            candidates,
+                            seen,
+                            ref order,
+                            kind: "empty-table-cell",
+                            location: $"{cellPath}/p/0",
+                            text: "",
+                            context: rowContext,
+                            suggestedName: SuggestName(rowContext),
+                            suggestedFillBy: SuggestFillBy(rowContext),
+                            target: targetParagraph,
+                            start: 0,
+                            length: 0);
+                    }
+                }
+
+                var columnHeader = ReadColumnHeader(activeHeaders, cellInfo.ColumnStart, cellInfo.ColumnSpan);
+                for (var index = firstCandidate; index < candidates.Count; index += 1)
+                {
+                    var candidate = candidates[index];
+                    // 同行信息只补充到输出，不参与稳定 candidate_id。
+                    candidate.Context = Optional(MergeCellContext(rowContext, candidate.Context));
+                    candidate.TableTitle = Optional(Limit(effectiveTableTitle ?? "", 120));
+                    candidate.ColumnHeader = Optional(Limit(columnHeader, 120));
+                    candidate.GroupTitle = groupTitle;
+                    candidate.RowNumber = row.RowIndex + 1;
+                    candidate.ColumnNumber = cellInfo.ColumnStart + 1;
+                    candidate.OutputLocation = null;
+                }
             }
+        }
+    }
+
+    /// <summary>校验抽章阶段记录的目标正文范围，保持原顺序供扫描定位。</summary>
+    static List<TemplateChapterRange> NormalizeChapterRanges(
+        IReadOnlyList<TemplateChapterRange>? chapterRanges,
+        int blockCount)
+    {
+        var result = new List<TemplateChapterRange>();
+        var previousEnd = 0;
+        foreach (var item in chapterRanges ?? [])
+        {
+            var title = (item.Title ?? "").Trim();
+            if (title.Length == 0
+                || item.StartBlock < 0
+                || item.EndBlock <= item.StartBlock
+                || item.EndBlock > blockCount
+                || result.Count > 0 && item.StartBlock < previousEnd)
+            {
+                throw new InvalidOperationException("投标模版章节范围文件无效");
+            }
+
+            result.Add(new TemplateChapterRange
+            {
+                Id = Optional(item.Id),
+                Title = title,
+                StartBlock = item.StartBlock,
+                EndBlock = item.EndBlock,
+            });
+            previousEnd = item.EndBlock;
+        }
+        return result;
+    }
+
+    static TemplateChapterRange? FindChapter(IReadOnlyList<TemplateChapterRange> chapters, int blockIndex)
+    {
+        return chapters.FirstOrDefault(item => blockIndex >= item.StartBlock && blockIndex < item.EndBlock);
+    }
+
+    /// <summary>只采用同章内明确的标题段或表名，避免把普通标签误作表题。</summary>
+    static string? FindTableTitle(
+        Wp.Body body,
+        int tableBlockIndex,
+        TemplateChapterRange? chapter)
+    {
+        var lowerBound = chapter?.StartBlock ?? 0;
+        for (var index = tableBlockIndex - 1; index >= lowerBound; index -= 1)
+        {
+            var block = body.ChildElements[index];
+            if (block is Wp.Table) break;
+            if (block is not Wp.Paragraph paragraph) continue;
+            var text = WordWorkspace.Normalize(paragraph.InnerText ?? "");
+            if (text.Length == 0) continue;
+            if (IsTableTitle(text)) return Limit(text, 120);
+            if (IsHeadingParagraph(paragraph)) break;
+        }
+        return null;
+    }
+
+    static bool IsHeadingParagraph(Wp.Paragraph paragraph)
+    {
+        var outlineLevel = paragraph.ParagraphProperties?.OutlineLevel?.Val?.Value;
+        if (outlineLevel is not null && outlineLevel.Value < 9) return true;
+        var styleId = paragraph.ParagraphProperties?.ParagraphStyleId?.Val?.Value ?? "";
+        return styleId.StartsWith("Heading", StringComparison.OrdinalIgnoreCase)
+            || styleId.StartsWith("标题", StringComparison.Ordinal);
+    }
+
+    static bool IsTableTitle(string value)
+    {
+        var text = WordWorkspace.Normalize(value);
+        return text.Length is > 0 and <= 100 && TableTitlePattern.IsMatch(text);
+    }
+
+    static bool IsGroupTitle(string value)
+    {
+        var text = WordWorkspace.Normalize(value);
+        var isNumbered = NumberedGroupPattern.IsMatch(text);
+        var sentenceText = isNumbered ? text.TrimEnd('：', ':') : text;
+        if (text.Length is 0 or > 80 || SentenceLikePattern.IsMatch(sentenceText)) return false;
+        return text.Length <= 30 || isNumbered;
+    }
+
+    /// <summary>把物理单元格映射到 Word 表格逻辑网格，跨列单元格占用连续逻辑列。</summary>
+    static List<TableRowInfo> BuildTableRows(Wp.Table table)
+    {
+        var result = new List<TableRowInfo>();
+        var rows = table.Elements<Wp.TableRow>().ToList();
+        for (var rowIndex = 0; rowIndex < rows.Count; rowIndex += 1)
+        {
+            var row = rows[rowIndex];
+            var column = row.TableRowProperties?.GetFirstChild<Wp.GridBefore>()?.Val?.Value ?? 0;
+            var cells = new List<TableCellInfo>();
+            var physicalCells = row.Elements<Wp.TableCell>().ToList();
+            for (var cellIndex = 0; cellIndex < physicalCells.Count; cellIndex += 1)
+            {
+                var cell = physicalCells[cellIndex];
+                var span = Math.Max(1, cell.TableCellProperties?.GridSpan?.Val?.Value ?? 1);
+                cells.Add(new TableCellInfo(
+                    cell,
+                    cellIndex,
+                    column,
+                    span,
+                    WordWorkspace.Normalize(cell.InnerText ?? "")));
+                column += span;
+            }
+            result.Add(new TableRowInfo(row, rowIndex, cells));
+        }
+        return result;
+    }
+
+    static bool TryReadFullWidthText(TableRowInfo row, int columnCount, out string text)
+    {
+        text = "";
+        if (columnCount <= 0) return false;
+        var nonEmpty = row.Cells.Where(item => item.Text.Length > 0).ToList();
+        if (nonEmpty.Count != 1) return false;
+        var cell = nonEmpty[0];
+        if (cell.ColumnStart != 0 || cell.ColumnSpan < columnCount) return false;
+        text = cell.Text;
+        return true;
+    }
+
+    static bool HasExplicitTableHeader(Wp.TableRow row)
+    {
+        return row.TableRowProperties?.GetFirstChild<Wp.TableHeader>() is not null;
+    }
+
+    /// <summary>保守识别三列以上表格起始处或分组后的短文本表头行。</summary>
+    static bool IsHeaderShaped(TableRowInfo row, int columnCount)
+    {
+        if (columnCount <= 2) return false;
+        var nonEmpty = row.Cells.Where(item => item.Text.Length > 0).ToList();
+        if (nonEmpty.Count < 3
+            || nonEmpty.Any(item => item.Text.Length > 30
+                || SentenceLikePattern.IsMatch(item.Text)
+                || PlaceholderPattern.IsMatch(item.Text)))
+        {
+            return false;
+        }
+        var coveredColumns = nonEmpty.Sum(item => item.ColumnSpan);
+        var formattedCells = nonEmpty.Count(HasHeaderFormatting);
+        return coveredColumns >= Math.Max(3, (int)Math.Ceiling(columnCount * 0.6))
+            && formattedCells >= (int)Math.Ceiling(nonEmpty.Count * 0.6);
+    }
+
+    /// <summary>读取单元格直接格式，只把明显的表头视觉特征作为推断依据。</summary>
+    static bool HasHeaderFormatting(TableCellInfo cell)
+    {
+        var centered = cell.Cell.Elements<Wp.Paragraph>().Any(paragraph =>
+            paragraph.ParagraphProperties?.Justification?.Val?.Value == Wp.JustificationValues.Center);
+        var bold = cell.Cell.Descendants<Wp.Run>().Any(run =>
+            run.RunProperties?.Bold is { } value && (value.Val is null || value.Val.Value));
+        var fill = cell.Cell.TableCellProperties?.GetFirstChild<Wp.Shading>()?.Fill?.Value ?? "";
+        var shaded = fill.Length > 0
+            && !string.Equals(fill, "auto", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(fill, "FFFFFF", StringComparison.OrdinalIgnoreCase);
+        return centered || bold || shaded;
+    }
+
+    static void MergeColumnHeaders(string?[] headers, TableRowInfo row)
+    {
+        foreach (var cell in row.Cells.Where(item => item.Text.Length > 0))
+        {
+            var end = Math.Min(headers.Length, cell.ColumnStart + cell.ColumnSpan);
+            for (var column = Math.Max(0, cell.ColumnStart); column < end; column += 1)
+            {
+                var current = headers[column];
+                if (current is null)
+                {
+                    headers[column] = cell.Text;
+                }
+                else if (!current.Split(" / ", StringSplitOptions.None).Contains(cell.Text, StringComparer.Ordinal))
+                {
+                    headers[column] = $"{current} / {cell.Text}";
+                }
+            }
+        }
+    }
+
+    static string ReadColumnHeader(string?[] headers, int columnStart, int columnSpan)
+    {
+        if (headers.Length == 0 || columnStart >= headers.Length) return "";
+        var end = Math.Min(headers.Length, columnStart + columnSpan);
+        return string.Join(
+            " / ",
+            headers[Math.Max(0, columnStart)..end]
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Distinct(StringComparer.Ordinal));
+    }
+
+    /// <summary>相同章节、表格、列和分组只写一次，候选通过 context_id 引用。</summary>
+    static void BuildStructureContexts(TemplateFieldCandidateFile result)
+    {
+        var ids = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var candidate in result.Candidates)
+        {
+            if (candidate.ChapterName is null
+                && candidate.TableTitle is null
+                && candidate.ColumnHeader is null
+                && candidate.GroupTitle is null)
+            {
+                continue;
+            }
+
+            var key = $"{candidate.ChapterName}\u0000{candidate.TableTitle}\u0000{candidate.ColumnHeader}\u0000{candidate.GroupTitle}";
+            if (!ids.TryGetValue(key, out var contextId))
+            {
+                contextId = $"ctx_{result.Contexts.Count + 1:D4}";
+                ids[key] = contextId;
+                result.Contexts.Add(new TemplateFieldStructureContext
+                {
+                    ContextId = contextId,
+                    ChapterName = candidate.ChapterName,
+                    TableTitle = candidate.TableTitle,
+                    ColumnHeader = candidate.ColumnHeader,
+                    GroupTitle = candidate.GroupTitle,
+                });
+            }
+            candidate.StructureContextId = contextId;
         }
     }
 
@@ -337,6 +655,15 @@ static class TemplateFieldScanner
         return Limit(string.Join("；", parts), 240);
     }
 
+    /// <summary>把同行标签放在候选自身内容前，截断时优先保留字段语义。</summary>
+    static string MergeCellContext(string rowContext, string? candidateContext)
+    {
+        var ownContext = candidateContext ?? "";
+        if (rowContext.Length == 0 || string.Equals(rowContext, ownContext, StringComparison.Ordinal)) return ownContext;
+        if (ownContext.Length == 0) return rowContext;
+        return Limit($"{rowContext}；{ownContext}", 240);
+    }
+
     static string BuildContext(string text, int start, int length)
     {
         var from = Math.Max(0, start - 80);
@@ -390,10 +717,11 @@ static class TemplateFieldScanner
             CandidateId = candidateId,
             Kind = kind,
             Location = location,
-            Text = Limit(text, 120),
-            Context = Limit(context, 240),
-            SuggestedName = Limit(suggestedName, 80),
-            SuggestedFillBy = suggestedFillBy,
+            OutputLocation = location,
+            Text = Optional(Limit(text, 120)),
+            Context = Optional(Limit(context, 240)),
+            SuggestedName = Optional(Limit(suggestedName, 80)),
+            SuggestedFillBy = suggestedFillBy == "manual" ? "manual" : null,
             Target = target,
             Start = start,
             Length = length,
@@ -406,4 +734,18 @@ static class TemplateFieldScanner
         var text = value ?? "";
         return text.Length <= maxLength ? text : text[..maxLength];
     }
+
+    static string? Optional(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    sealed record TableRowInfo(Wp.TableRow Row, int RowIndex, List<TableCellInfo> Cells);
+
+    sealed record TableCellInfo(
+        Wp.TableCell Cell,
+        int CellIndex,
+        int ColumnStart,
+        int ColumnSpan,
+        string Text);
 }

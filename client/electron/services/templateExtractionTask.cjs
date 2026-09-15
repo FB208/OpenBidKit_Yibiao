@@ -22,13 +22,13 @@ ${sourceList}
 必须按以下顺序执行：
 1. 阅读 ${TEMPLATE_OUTLINE_INPUT_FILE}。
 2. 只调用一次 openxml，action=list-blocks；再阅读生成的 招标原文结构.json。
-3. 针对已确认的每个一级目录，在原文结构中找到真实章节位置和完整边界，只调用一次 openxml，action=extract-chapters。原文块 heading=true 时可提供 sourceTitle；heading=false 时必须提供标题所在的 startBlock 和下一同级章节或附件开始位置 endBlock，endBlock 不包含在本章内。不得把两个已选目录之间的其他表单，或最后一个已选目录之后的文档尾部一并抽入；多份原件时填写 source.path。
-4. 调用一次 openxml，action=scan-template-fields；再阅读生成的 投标模版字段候选.json。
+3. 针对已确认的每个一级目录，在原文结构中找到真实章节位置和完整边界，正常情况下只调用一次 openxml，action=extract-chapters。原文块 heading=true 时可提供 sourceTitle；heading=false 时必须提供标题所在的 startBlock 和下一同级章节或附件开始位置 endBlock，endBlock 不包含在本章内。不得把两个已选目录之间的其他表单，或最后一个已选目录之后的文档尾部一并抽入；多份原件时填写 source.path。后续扫描若明确证明抽章边界错误，应修正相关边界后重新抽取并扫描。
+4. 调用一次 openxml，action=scan-template-fields。工具结果会直接返回 default_suggested_fill_by、contexts 和 candidates；candidate 未单独提供 suggested_fill_by 时使用顶层默认值。正常情况下根据 candidate.context_id 对照 contexts 中的章节、表格、列和分组上下文，直接逐项分类，无需再次读取 投标模版字段候选.json。只有工具结果信息缺失、内容被截断、候选上下文不足或明显异常时，才读取完整候选文件，或使用 read/bash 排查相关部分。
 5. 候选必须全部来自已确认一级目录对应的章节。如果候选上下文明显属于未选择的表单或后续附件，说明抽章边界错误；不得把这些候选批量放入 ignored_candidate_ids 来掩盖范围错误，也不得继续应用字段。
 6. 对候选逐项分类，并用 write 将完整结果写入 ${TEMPLATE_CLASSIFICATION_FILE}，顶层包含 fields 数组和 ignored_candidate_ids 数组。真实待填位置放入 fields，只有扫描误判、固定说明文字或无需填写的位置才能放入 ignored_candidate_ids。所有候选必须且只能归入其中一类。
 7. fields 每项只填写 candidate_id、name、fill_by，以及确有必要时的 instruction。fill_by 只能是 ai 或 manual；签字、盖章、签章、手印和必须放置人工材料的位置使用 manual。
 8. 同一项内容需要填入多处时，多个候选必须使用完全相同的 name、fill_by 和 instruction，让后续程序能够按 name 合并；不同语义不得仅因标题近似而合并。
-9. 完成其余检查后，最后单独调用 openxml，只传 {"action":"apply-template-fields","fields_file":"${TEMPLATE_CLASSIFICATION_FILE}"}。工具读取并校验文件中的完整 fields 和 ignored_candidate_ids，不要在调用参数里再次输出字段清单。调用失败时，根据错误用 edit 或 write 修正同一个分类文件，再提交文件路径；文件必须始终保留完整分类，不得只增量补交错误中列出的候选，不得使用 * 等通配符。不要直接编辑 DOCX、不要生成字段值、不要修改 ${TEMPLATE_OUTLINE_INPUT_FILE}，也不要把分类文件写到 ${TEMPLATE_FIELDS_OUTPUT_FILE}。
+9. 完成候选语义判断并用 write 或 edit 成功写入完整分类文件后，正常路径应立即单独调用 openxml，只传 {"action":"apply-template-fields","fields_file":"${TEMPLATE_CLASSIFICATION_FILE}"}。工具读取并校验文件中的完整 fields 和 ignored_candidate_ids，通常无需在应用前再用 read、bash 或 json-validation 做机械检查。只有候选信息缺失或冲突、工具结果被截断、写入结果异常，或 apply 失败且错误信息不足以直接修正时，才使用必要工具排查相关部分。调用失败时，优先根据错误用 edit 或 write 修正同一个分类文件，再提交文件路径；文件必须始终保留完整分类，不得在调用参数里再次输出字段清单，不得只增量补交错误中列出的候选，不得使用 * 等通配符。不要直接编辑 DOCX、不要生成字段值、不要修改 ${TEMPLATE_OUTLINE_INPUT_FILE}，也不要把分类文件写到 ${TEMPLATE_FIELDS_OUTPUT_FILE}。
 10. apply-template-fields 已内置分类校验、Word 校验及产物检查，成功后程序自动结束任务，无需 task_complete。失败时继续修复，不得结束任务；成功后不再检查文件、重复应用字段或输出总结。`;
 }
 

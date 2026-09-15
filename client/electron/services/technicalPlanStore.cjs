@@ -1121,7 +1121,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function clearBidTemplate() {
-    const templateFiles = [bidTemplatePath, bidTemplateSourcePath, bidTemplateFieldsPath];
+    const sourcePathParts = path.parse(bidTemplateSourcePath);
+    const templateFiles = [
+      bidTemplatePath,
+      bidTemplateSourcePath,
+      path.join(sourcePathParts.dir, `${sourcePathParts.name}.chapters.json`),
+      bidTemplateFieldsPath,
+    ];
     const templateDir = path.dirname(bidTemplatePath);
     if (fs.existsSync(templateDir)) {
       const tempPrefixes = [

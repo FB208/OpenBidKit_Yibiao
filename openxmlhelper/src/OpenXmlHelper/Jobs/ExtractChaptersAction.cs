@@ -68,7 +68,9 @@ static class ExtractChaptersAction
             }
 
             var outputPath = WordWorkspace.ResolveWorkspacePath(workspace, request.Output);
+            var chaptersOutputPath = Path.ChangeExtension(outputPath, ".chapters.json");
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+            if (File.Exists(chaptersOutputPath)) File.Delete(chaptersOutputPath);
 
             var session = WordWorkspace.OpenSources(workspace, sourcePaths);
             try
@@ -97,6 +99,7 @@ static class ExtractChaptersAction
                 var sectPr = destBody.Elements<Wp.SectionProperties>().LastOrDefault()?.CloneNode(true);
                 destBody.RemoveAllChildren();
                 var importContexts = new Dictionary<string, CrossDocumentImportContext>(StringComparer.OrdinalIgnoreCase);
+                var chapterRanges = new List<TemplateChapterRange>();
 
                 foreach (var match in matches)
                 {
@@ -110,6 +113,7 @@ static class ExtractChaptersAction
                         source.Blocks,
                         match.Range ?? GetRange(source.Blocks, hit.BlockIndex, otherStarts),
                         otherStarts);
+                    var startBlock = destBody.ChildElements.Count;
                     var titleReplaced = false;
                     foreach (var block in range)
                     {
@@ -134,6 +138,13 @@ static class ExtractChaptersAction
 
                         destBody.AppendChild(cloned);
                     }
+                    chapterRanges.Add(new TemplateChapterRange
+                    {
+                        Id = match.Chapter.Id.Length > 0 ? match.Chapter.Id : null,
+                        Title = match.Chapter.Title,
+                        StartBlock = startBlock,
+                        EndBlock = destBody.ChildElements.Count,
+                    });
                 }
 
                 if (sectPr is not null)
@@ -142,6 +153,11 @@ static class ExtractChaptersAction
                 }
 
                 destPart.Document.Save();
+                var chapterRangeFile = new TemplateChapterRangeFile { Chapters = chapterRanges };
+                File.WriteAllText(
+                    chaptersOutputPath,
+                    JsonSerializer.Serialize(chapterRangeFile, JsonOptions.Signal) + "\n",
+                    new UTF8Encoding(false));
                 return JobResult.Success(Name, WordWorkspace.ToRelativePath(workspace, outputPath));
             }
             finally
