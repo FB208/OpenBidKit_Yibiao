@@ -31,6 +31,7 @@ interface GenerationSettingsPageProps {
   outlineConfigLocked: boolean;
   globalFactsConfigLocked: boolean;
   contentConfigLocked: boolean;
+  generationConfigLocked: boolean;
   onOriginalPlanChanged: (state: TechnicalPlanState) => void;
   onOutlineModeChange: (outlineMode: OutlineMode) => Promise<void>;
   onOutlineExpansionModeChange: (outlineExpansionMode: OutlineExpansionMode) => Promise<void>;
@@ -229,6 +230,7 @@ function GenerationSettingsPage({
   outlineConfigLocked,
   globalFactsConfigLocked,
   contentConfigLocked,
+  generationConfigLocked,
   onOriginalPlanChanged,
   onOutlineModeChange,
   onOutlineExpansionModeChange,
@@ -356,6 +358,7 @@ function GenerationSettingsPage({
 
   // 导入或替换已有方案，并刷新技术方案状态。
   const importOriginalPlan = async (filePaths?: string[]) => {
+    if (generationConfigLocked) return;
     try {
       setOriginalPlanBusy(true);
       const result = await window.yibiao?.technicalPlan.importOriginalPlanDocument(filePaths);
@@ -388,6 +391,7 @@ function GenerationSettingsPage({
 
   // 删除已有方案并切回普通生成流程。
   const removeOriginalPlan = async () => {
+    if (generationConfigLocked) return;
     try {
       setOriginalPlanBusy(true);
       const result = await window.yibiao!.technicalPlan.removeOriginalPlanDocument();
@@ -407,7 +411,7 @@ function GenerationSettingsPage({
 
   // 保存投标文件生成范围；已有结果继续保留到用户重新生成目录。
   const saveOutlineMode = async (nextOutlineMode: OutlineMode) => {
-    if (nextOutlineMode === outlineMode || outlineModeBusy) return;
+    if (generationConfigLocked || nextOutlineMode === outlineMode || outlineModeBusy) return;
     try {
       setOutlineModeBusy(true);
       await onOutlineModeChange(nextOutlineMode);
@@ -421,7 +425,7 @@ function GenerationSettingsPage({
 
   // 保存原方案目录使用方式，不改变当前已生成目录。
   const saveOutlineExpansionMode = async (nextMode: OutlineExpansionMode) => {
-    if (nextMode === outlineExpansionMode || outlineExpansionModeBusy) return;
+    if (generationConfigLocked || nextMode === outlineExpansionMode || outlineExpansionModeBusy) return;
     try {
       setOutlineExpansionModeBusy(true);
       await onOutlineExpansionModeChange(nextMode);
@@ -435,7 +439,7 @@ function GenerationSettingsPage({
 
   // 按目录生成阶段原有规则校验并保存篇幅设置。
   const saveWordControlOptions = async (overrides: Partial<WordControlDraft> = {}) => {
-    if (wordControlBusy) return;
+    if (generationConfigLocked || wordControlBusy) return;
     const draft = {
       minimumWords: draftMinimumWords,
       maximumWords: draftMaximumWords,
@@ -491,7 +495,7 @@ function GenerationSettingsPage({
 
   // 保存目录与正文生成共用的参考知识库。
   const saveReferenceKnowledgeDocumentIds = async (nextDocumentIds: string[]) => {
-    if (knowledgeSaving) return;
+    if (generationConfigLocked || knowledgeSaving) return;
     const unchanged = nextDocumentIds.length === referenceKnowledgeDocumentIds.length
       && nextDocumentIds.every((documentId, index) => documentId === referenceKnowledgeDocumentIds[index]);
     setDraftKnowledgeDocumentIds(nextDocumentIds);
@@ -511,7 +515,7 @@ function GenerationSettingsPage({
   // 保存全局事实与正文共用的不确定信息补全方式。
   const saveGlobalFactsMode = async (value: GlobalFactsMode) => {
     const nextMode = normalizeGlobalFactsMode(value);
-    if (nextMode === globalFactsMode || globalFactsModeBusy) return;
+    if (generationConfigLocked || nextMode === globalFactsMode || globalFactsModeBusy) return;
     try {
       setGlobalFactsModeBusy(true);
       await onGlobalFactsModeChange(nextMode);
@@ -553,7 +557,7 @@ function GenerationSettingsPage({
 
   // 保存表格及三类配图设置，不改变已有正文和配图结果。
   const saveContentOptions = async (value: ContentGenerationOptions) => {
-    if (contentOptionsBusy) return false;
+    if (generationConfigLocked || contentOptionsBusy) return false;
     const nextOptions = normalizeContentGenerationOptions(value, imageModelAvailable, contentLeafCount);
     setDraftTableRequirement(nextOptions.tableRequirement);
     setDraftIllustrationOptions(nextOptions);
@@ -734,7 +738,7 @@ function GenerationSettingsPage({
           <div>
             <span className="section-kicker">STEP 02</span>
             <strong>生成设置</strong>
-            <p>配置修改后自动保存且不清空已有结果，后续重新生成时使用新设置。</p>
+            <p>{generationConfigLocked ? '正文任务已开始，生成设置已锁定，仅可修改“长嘛样”。' : '配置修改后自动保存，正文任务开始后将锁定生成设置。'}</p>
           </div>
         </header>
 
@@ -760,7 +764,9 @@ function GenerationSettingsPage({
           })}
         </div>
 
-        <div
+        <fieldset
+          disabled={generationConfigLocked && activeTab !== 'appearance'}
+          style={{ border: 0, margin: 0, minWidth: 0 }}
           className="bid-analysis-workspace generation-settings-panel"
           id="generation-settings-panel"
           aria-labelledby={`generation-settings-tab-${activeTab}`}
@@ -797,7 +803,7 @@ function GenerationSettingsPage({
                 title="基于上传的方案进行扩写"
                 className="generation-settings-existing-upload"
                 actions={(
-                  <button type="button" className="primary-action" onClick={() => void importOriginalPlan()} disabled={originalPlanBusy}>
+                  <button type="button" className="primary-action" onClick={() => void importOriginalPlan()} disabled={generationConfigLocked || originalPlanBusy}>
                     {originalPlanBusy ? '处理中...' : originalPlanFile ? '替换' : '上传'}
                   </button>
                 )}
@@ -805,7 +811,7 @@ function GenerationSettingsPage({
                   const paths = resolveDroppedFilePaths(files);
                   if (paths.length) void importOriginalPlan(paths);
                 }}
-                dropDisabled={originalPlanBusy}
+                dropDisabled={generationConfigLocked || originalPlanBusy}
               >
                 {originalPlanFile ? (
                   <UploadFilePill
@@ -818,7 +824,7 @@ function GenerationSettingsPage({
                   />
                 ) : (
                   <UploadEmpty title="等待已有技术方案" hint="上传后将在目录和正文阶段保留、优化并扩充原方案内容。">
-                    <button type="button" className="text-button" onClick={() => void importOriginalPlan()} disabled={originalPlanBusy}>选择已有方案</button>
+                    <button type="button" className="text-button" onClick={() => void importOriginalPlan()} disabled={generationConfigLocked || originalPlanBusy}>选择已有方案</button>
                   </UploadEmpty>
                 )}
               </UploadRow>
@@ -1113,7 +1119,7 @@ function GenerationSettingsPage({
               <p>当前先保留页面结构，后续按实际规则逐项接入。</p>
             </div>
           )}
-        </div>
+        </fieldset>
       </section>
 
       <Dialog.Root open={htmlImageTypesDialogOpen} onOpenChange={(open) => !contentOptionsBusy && setHtmlImageTypesDialogOpen(open)}>
@@ -1126,12 +1132,12 @@ function GenerationSettingsPage({
             <textarea
               value={htmlImageTypesDraft}
               onChange={(event) => setHtmlImageTypesDraft(event.target.value)}
-              disabled={contentOptionsBusy}
+              disabled={generationConfigLocked || contentOptionsBusy}
               aria-label="HTML 可生成的图片类型"
             />
             <div className="content-regenerate-actions">
-              <Dialog.Close className="secondary-action" type="button" disabled={contentOptionsBusy}>取消</Dialog.Close>
-              <button type="button" className="primary-action" onClick={() => void confirmHtmlImageTypes()} disabled={contentOptionsBusy}>{contentOptionsBusy ? '正在保存...' : '确认'}</button>
+              <Dialog.Close className="secondary-action" type="button" disabled={generationConfigLocked || contentOptionsBusy}>取消</Dialog.Close>
+              <button type="button" className="primary-action" onClick={() => void confirmHtmlImageTypes()} disabled={generationConfigLocked || contentOptionsBusy}>{contentOptionsBusy ? '正在保存...' : '确认'}</button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
@@ -1156,8 +1162,8 @@ function GenerationSettingsPage({
         description="移除后会保留招标文件、目录、全局事实、正文、生成进度和配图结果；后续重新生成时不再使用原方案。"
         actions={(
           <>
-            <button type="button" className="secondary-action" onClick={() => setRemoveDialogOpen(false)} disabled={originalPlanBusy}>取消</button>
-            <button type="button" className="danger-action" onClick={() => void removeOriginalPlan()} disabled={originalPlanBusy}>
+            <button type="button" className="secondary-action" onClick={() => setRemoveDialogOpen(false)} disabled={generationConfigLocked || originalPlanBusy}>取消</button>
+            <button type="button" className="danger-action" onClick={() => void removeOriginalPlan()} disabled={generationConfigLocked || originalPlanBusy}>
               {originalPlanBusy ? '正在移除...' : '确认移除'}
             </button>
           </>

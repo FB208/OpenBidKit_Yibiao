@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
+import { AppDialog, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
 import type { OutlineData } from '../../../shared/types';
 import type { BackgroundTaskState, GlobalFactGroupState, GlobalFactsMode } from '../types';
 
@@ -10,6 +10,7 @@ interface GlobalFactsPageProps {
   globalFactsMode: GlobalFactsMode;
   task?: BackgroundTaskState;
   aiAdjustmentRunning?: boolean;
+  contentTaskStatus?: BackgroundTaskState['status'];
   focusGroupRequest?: { groupId: string } | null;
   onGlobalFactsSaved: (globalFacts: GlobalFactGroupState[]) => Promise<void> | void;
 }
@@ -46,6 +47,7 @@ function GlobalFactsPage({
   globalFactsMode,
   task,
   aiAdjustmentRunning = false,
+  contentTaskStatus,
   focusGroupRequest,
   onGlobalFactsSaved,
 }: GlobalFactsPageProps) {
@@ -55,10 +57,13 @@ function GlobalFactsPage({
   const [draftContent, setDraftContent] = useState('');
   const [starting, setStarting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [pendingAction, setPendingAction] = useState<{ facts: GlobalFactGroupState[]; message: string } | 'generate' | null>(null);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const hasOutline = Boolean(outlineData?.outline?.length);
   const running = starting || task?.status === 'running';
-  const mutationLocked = running || aiAdjustmentRunning;
+  const mutationLocked = running || aiAdjustmentRunning || ['running', 'pausing', 'paused'].includes(contentTaskStatus || '');
+  const hasContent = (items: OutlineData['outline']): boolean => items.some(item => Boolean(item.content?.trim()) || hasContent(item.children || []));
+  const needsClearConfirmation = hasContent(outlineData?.outline || []);
   const taskFailed = task?.status === 'error';
   const activeGroup = globalFacts.find((group) => group.id === selectedGroupId) || globalFacts[0] || null;
   const progress = getProgress(task, globalFacts.length > 0);
@@ -67,7 +72,7 @@ function GlobalFactsPage({
   const totalChars = useMemo(() => globalFacts.reduce((sum, group) => sum + group.content.length, 0), [globalFacts]);
   const dirty = Boolean(activeGroup && (draftTitle !== activeGroup.title || draftContent !== activeGroup.content));
 
-  const startGeneration = async () => {
+  const startGeneration = async (confirmed = false) => {
     if (mutationLocked) {
       showToast(aiAdjustmentRunning
         ? '全局事实正在 AI 调整，请等待结束后再重新解析'
@@ -79,6 +84,10 @@ function GlobalFactsPage({
       return;
     }
 
+    if (needsClearConfirmation && !confirmed) {
+      setPendingAction('generate');
+      return;
+    }
     try {
       setStarting(true);
       await window.yibiao?.tasks.startGlobalFactsGeneration({ globalFactsMode });
@@ -116,16 +125,21 @@ function GlobalFactsPage({
     setDraftContent(activeGroup.content);
   }, [activeGroup?.id, activeGroup?.title, activeGroup?.content]);
 
-  const saveFacts = async (nextFacts: GlobalFactGroupState[], message = '全局事实已保存') => {
+  const saveFacts = async (nextFacts: GlobalFactGroupState[], message = '全局事实已保存', confirmed = false) => {
     if (mutationLocked) {
       showToast(aiAdjustmentRunning
         ? '全局事实正在 AI 调整，请等待结束后再修改'
         : '全局事实设定任务正在运行，请等待任务结束后再修改', 'info');
       return;
     }
+    if (needsClearConfirmation && !confirmed) {
+      setPendingAction({ facts: nextFacts, message });
+      return;
+    }
     try {
       setSaving(true);
       await onGlobalFactsSaved(nextFacts);
+      if (nextFacts.length > globalFacts.length) setSelectedGroupId(nextFacts[nextFacts.length - 1].id);
       showToast(message, 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '保存全局事实失败', 'error');
@@ -158,7 +172,6 @@ function GlobalFactsPage({
       updated_at: new Date().toISOString(),
     };
     await saveFacts([...globalFacts, nextGroup], '已新增事实大项');
-    setSelectedGroupId(nextGroup.id);
   };
 
   const deleteActiveGroup = async () => {
@@ -177,6 +190,23 @@ function GlobalFactsPage({
 
   return (
     <div className="plan-step-body global-facts-page">
+      <AppDialog
+        open={pendingAction !== null}
+        onOpenChange={(open) => !open && setPendingAction(null)}
+        title="确认清空正文"
+        description="修改全局事实将清空已有正文及相关编排、还原状态。是否继续？"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => setPendingAction(null)}>取消</button>
+            <button type="button" className="danger-action" onClick={() => {
+              const action = pendingAction;
+              setPendingAction(null);
+              if (action === 'generate') void startGeneration(true);
+              else if (action) void saveFacts(action.facts, action.message, true);
+            }}>清空并继续</button>
+          </>
+        )}
+      />
       <section className="global-facts-command-bar">
         <div>
           <span className="section-kicker">STEP {stepNumber}</span>

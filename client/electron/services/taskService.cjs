@@ -1471,7 +1471,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         throw new Error('当前目录没有字数控制生效快照，请重新生成目录');
       }
       const taskPayload = payload?.developerRestart ? { ...payload, regenerate: true } : payload;
-      return startManagedTask('content-generation', taskPayload, runContentGenerationTask, {}, {
+      return startManagedTask('content-generation', taskPayload, runContentGenerationTask, {
+        contentGenerationRuntime: { ...technicalPlan.contentGenerationRuntime, generation_started: true },
+      }, {
         primarySession: true,
       });
     },

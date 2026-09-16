@@ -228,7 +228,7 @@ function ContentEditPage({
   const phaseVisible = taskInFlight || paused || taskFailed;
   const taskBlocksGeneration = taskInFlight || paused;
   const contentStats = task?.stats?.content;
-  const originalRestoration = hasOriginalPlan && contentStats?.original_restoration?.source_hash === originalPlanContentHash
+  const originalRestoration = hasOriginalPlan && typeof contentStats?.original_restoration?.total_words === 'number' && contentStats.original_restoration.source_hash === originalPlanContentHash
     ? contentStats?.original_restoration : undefined;
   const developerStageGate = developerMode && paused ? contentStats?.developer_stage_gate : undefined;
   const progressDetail = task?.progress_detail;
@@ -901,8 +901,14 @@ function ContentEditPage({
           <span title={`模板填写 ${modeCounts['template-fill']}，目录生成 ${modeCounts['directory-generate']}，人工填写 ${modeCounts['manual-fill']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
           <span><strong>{totalWords}</strong> 字</span>
           {hasOriginalPlan && (
+            <span title="按原方案导入的图片引用统计，回填时同时核对本地资源；原图不受新增配图数量设置影响。">
+              原方案图片 <strong>{originalRestoration && typeof originalRestoration.total_images === 'number'
+                ? `${originalRestoration.restored_images}/${originalRestoration.total_images}` : '待统计'}</strong>
+            </span>
+          )}
+          {hasOriginalPlan && (
             <span title={originalRestoration
-              ? `已回填 ${originalRestoration.restored_chars.toLocaleString()} / 原文共 ${originalRestoration.total_chars.toLocaleString()} 字符。按来源段去重统计，不代表后续扩写的内容保留率。${originalRestoration.rate === null ? '没有可统计内容。' : ''}`
+              ? `已回填 ${originalRestoration.restored_words.toLocaleString()} / 原文共 ${originalRestoration.total_words.toLocaleString()} 字。已还原原文字数 ÷ 原方案总字数，使用相同可读字数口径，不计新增目录标题和结构标记，不代表后续扩写的内容保留率。${originalRestoration.rate === null ? '没有可统计内容。' : ''}`
               : '原方案还原完成后统计。'}>
               原方案还原率 <strong>{originalRestoration
                 ? originalRestoration.rate === null ? '—' : `${originalRestoration.rate.toFixed(1)}%`

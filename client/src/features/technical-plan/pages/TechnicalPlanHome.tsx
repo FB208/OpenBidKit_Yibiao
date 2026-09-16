@@ -911,26 +911,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
 
   const saveOutline = async (request: SaveOutlineRequest) => {
     const saved = await window.yibiao?.technicalPlan.saveOutline(request);
-    setState((prev) => {
-      if (request.reason !== 'sort') {
-        return { ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData };
-      }
-      const contentGenerationSections = Object.fromEntries(Object.entries(prev.contentGenerationSections).map(([nodeId, section]) => {
-        const nextId = request.idMap?.[nodeId] || nodeId;
-        return [nextId, { ...section, id: nextId }];
-      }));
-      const contentGenerationPlans = Object.fromEntries(Object.entries(prev.contentGenerationPlans).map(([nodeId, plan]) => [
-        request.idMap?.[nodeId] || nodeId,
-        plan,
-      ]));
-      return {
-        ...prev,
-        ...(saved || {}),
-        outlineData: saved?.outlineData || request.outlineData,
-        contentGenerationSections,
-        contentGenerationPlans,
-      };
-    });
+    setState((prev) => ({ ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData }));
   };
 
   const saveOutlineSelection = async (request: SaveOutlineSelectionRequest) => {
@@ -999,13 +980,11 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const isOutlineGenerating = outlineGenerationStatus === 'running' || outlineGenerationStatus === 'pausing';
   const outlineAdjustmentStatus = state.outlineAdjustmentTask?.status;
   const isOutlineAdjusting = outlineAdjustmentStatus === 'running' || outlineAdjustmentStatus === 'pausing';
-  const outlineConfigLocked = isOutlineGenerating
-    || contentTaskStatus === 'running'
-    || contentTaskStatus === 'pausing'
-    || contentTaskStatus === 'paused';
+  const generationConfigLocked = Boolean(state.contentGenerationRuntime?.generation_started || state.contentGenerationTask);
+  const outlineConfigLocked = generationConfigLocked || isOutlineGenerating;
   const isGlobalFactsGenerating = state.globalFactsTask?.status === 'running' || state.globalFactsTask?.status === 'pausing';
-  const globalFactsConfigLocked = isGlobalFactsGenerating || isGlobalFactsAdjusting;
-  const contentConfigLocked = contentTaskStatus === 'running' || contentTaskStatus === 'pausing' || contentTaskStatus === 'paused';
+  const globalFactsConfigLocked = generationConfigLocked || isGlobalFactsGenerating || isGlobalFactsAdjusting;
+  const contentConfigLocked = generationConfigLocked;
   const isFactsAiStep = state.step === 'global-facts';
   const isAiAdjusting = isFactsAiStep ? isGlobalFactsAdjusting : isOutlineAdjusting;
   const aiAdjustDisabled = isFactsAiStep
@@ -1184,6 +1163,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           outlineConfigLocked={outlineConfigLocked}
           globalFactsConfigLocked={globalFactsConfigLocked}
           contentConfigLocked={contentConfigLocked}
+          generationConfigLocked={generationConfigLocked}
           onOriginalPlanChanged={(nextState) => setState((prev) => ({ ...prev, ...nextState }))}
           onOutlineModeChange={saveGenerationOutlineMode}
           onOutlineExpansionModeChange={saveGenerationOutlineExpansionMode}
@@ -1256,6 +1236,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           globalFactsMode={state.globalFactsMode || 'fabricate'}
           task={state.globalFactsTask}
           aiAdjustmentRunning={isGlobalFactsAdjusting}
+          contentTaskStatus={contentTaskStatus}
           focusGroupRequest={globalFactsFocusRequest}
           onGlobalFactsSaved={saveGlobalFacts}
         />

@@ -54,6 +54,8 @@ function checkContentPlanning() {
   assert.equal(Object.hasOwn(JSON.parse(JSON.stringify(oldPlan)).plan, 'image_suitability_score'), false);
   const rebuiltOld = runtime.buildContentPlanningOutline(source, { '1.1': oldPlan });
   assert.equal(Object.hasOwn(rebuiltOld[0].children[0], 'content_plan'), false, '缺少评分的旧编排不复用');
+  const partial = { outline: structuredClone(source) };
+  assert.equal(runtime.extractContentPlanningPlans(partial, source, new Set(), new Set()).size, 0);
   console.log('正文编排评分：边界检查、保存回读、再次编排、旧编排不复用及后续提示词不变，全部通过。');
 }
 
@@ -79,7 +81,7 @@ function checkImageSelection() {
   }
 }
 
-// 直接执行正式编排保存函数，验证单小节更新会重算全文标记并保留其他编排字段。
+// 直接执行正式编排保存函数，验证单小节只更新自己的编排和标记，保留其他节点。
 function checkImageSelectionPersistence() {
   const leaves = Array.from({ length: 10 }, (_, index) => ({ item: {
     id: String(index), title: '小节' + index, description: '小节说明', content_mode: 'ai-generate', attr: '技术',
@@ -106,22 +108,23 @@ function checkImageSelectionPersistence() {
   vm.createContext(scope);
   vm.runInContext(taskSource.slice(start, end) + '\nthis.persist = persistContentPlans;', scope);
   scope.persist([leaves[9]], generatedPlans);
-  assert.deepEqual(Object.keys(saved).filter(id => saved[id].plan.image_needed), ['0', '9']);
-  assert.equal(saved['8'].plan.image_suitability_score, 1, '保留本轮补齐的小节评分');
-  assert.deepEqual({ ...saved['1'].plan, image_needed: originalOther.plan.image_needed }, originalOther.plan, '其他小节只改变配图标记');
+  assert.deepEqual(Object.keys(saved).filter(id => saved[id].plan.image_needed), ['0', '1', '2', '3', '4', '9']);
+  assert.equal(saved['8'], undefined, '不得补写非目标小节，即使 Agent 返回了结果');
+  assert.deepEqual(saved['1'], originalOther, '其他小节包括配图标记和保存时间全部不变');
   assert.equal(saved['1'].table_requirement, originalOther.table_requirement);
   assert.equal(scope.contentPlans.get('9').image_needed, true);
-  assert.equal(scope.contentPlans.get('1').image_needed, false);
-  for (const { item } of leaves) {
+  assert.equal(scope.contentPlans.has('1'), false);
+  for (const { item } of leaves.filter(({ item }) => saved[item.id])) {
     assert.equal(runtime.createStoredContentPlan(saved[item.id].plan, 'none').plan.image_needed, saved[item.id].plan.image_needed);
   }
   const agentOutline = runtime.buildContentPlanningOutline(leaves.map(({ item }) => item), saved);
-  assert.equal(agentOutline.some(item => Object.hasOwn(item.content_plan, 'image_needed')), false, '标记不交给 Agent 决定');
+  assert.equal(agentOutline.some(item => item.content_plan && Object.hasOwn(item.content_plan, 'image_needed')), false, '标记不交给 Agent 决定');
   assert.equal(validateSchema({ outline: agentOutline }), true);
   scope.imageQuantity = 'none';
   scope.persist([leaves[9]], generatedPlans);
-  assert.ok(Object.values(saved).every(value => value.plan.image_needed === false), '无图应清除之前选中的标记');
-  console.log('配图标记：比例、同分、0 分排除、全文保存及单小节重算检查通过。');
+  assert.equal(saved['9'].plan.image_needed, false, '无图只改变本次目标标记');
+  assert.deepEqual(saved['1'], originalOther);
+  console.log('配图标记：比例、同分、0 分排除、全文计算与局部保存检查通过。');
 }
 
 checkImageSelection();
@@ -148,14 +151,17 @@ async function checkPlanningPauseOrder() {
       getOriginalMaterialRuntimeState: () => ({ originalMaterial: {} }),
       agentService: { hasPersistentTaskSession: () => false },
       CONTENT_PLANNING_AGENT_TASK_KEY: 'test',
-      runContentPlanningAgent: async () => generatedPlans,
+      runContentPlanningAgent: async (ids) => {
+        assert.deepEqual([...ids], single ? ['3'] : leaves.map(({ item }) => item.id), '仅将本次目标交给 Agent');
+        return generatedPlans;
+      },
       publishTaskUpdate() {}, progressFor: () => 0, statsSnapshot: () => ({}), syncRuntime: () => ({}),
       checkpointTask: (_task, patch) => { saved = JSON.parse(JSON.stringify(patch.contentGenerationPlans)); },
       pauseIfRequested() {
         assert.ok(saved, '暂停前必须保存编排结果');
-        assert.equal(Object.keys(saved).length, leaves.length);
+        assert.equal(Object.keys(saved).length, single ? 1 : leaves.length);
         assert.ok(Object.values(saved).every(value => typeof value.plan.image_needed === 'boolean'));
-        assert.deepEqual(Object.keys(saved).filter(id => saved[id].plan.image_needed), ['2']);
+        assert.deepEqual(Object.keys(saved).filter(id => saved[id].plan.image_needed), single ? ['3'] : ['2']);
         throw paused;
       },
     };

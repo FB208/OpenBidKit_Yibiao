@@ -125,11 +125,13 @@ export interface BackgroundTaskState {
       planning_completed: number;
       restoration_total?: number;
       restoration_completed?: number;
-      /** 原方案还原结束时按来源段字符数统计，不代表扩写后的内容保留率。 */
+      /** 原方案还原保存后按原文可读字数统计，不代表扩写后的内容保留率。 */
       original_restoration?: {
         source_hash: string;
-        total_chars: number;
-        restored_chars: number;
+        total_words: number;
+        restored_words: number;
+        total_images: number;
+        restored_images: number;
         rate: number | null;
       };
       generation_total: number;
@@ -237,10 +239,10 @@ export interface ContentGenerationPlanData {
   original_material?: {
     restored: boolean;
     optimized: boolean;
-    source_ids: string[];
-    source_titles: string[];
-    source_hashes: string[];
-    restored_chars: number;
+    source_hash: string;
+    /** 原文件行号从 1 开始，包含首尾；不同小节的范围不可重叠。 */
+    source_ranges: { start_line: number; end_line: number }[];
+    restored_words: number;
     restored_at?: string;
     optimized_at?: string;
   };
@@ -283,6 +285,9 @@ export interface ContentIllustrationPlanState {
 }
 
 export interface ContentGenerationRuntimeState {
+  generation_started?: boolean;
+  direct_generation_item_ids?: string[];
+  pending_item_ids?: string[];
   phase?: string;
   touched_item_ids?: string[];
   completed_stages?: string[];

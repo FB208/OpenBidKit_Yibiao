@@ -17,7 +17,11 @@ const {
   stripGeneratedIllustrationsFromDocument,
 } = require('./contentIllustrationGeneration.cjs');
 const { applyRangeEdits, findTextMatches } = require('../utils/textEdit.cjs');
-const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
+const {
+  createOriginalSource, readOriginalRange, buildOriginalRestorationFiles,
+  buildOriginalRestorationPrompt, validateOriginalRestoration, calculateOriginalRestoration, ORIGINAL_PLAN_HEADING_INSTRUCTION,
+  originalImageReferences, validateOriginalImages,
+} = require('./originalPlanRestoration.cjs');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 const { CONTENT_PLANNING_AGENT_TASK_KEY } = require('./contentPlanningAgentConfig.cjs');
 
@@ -38,7 +42,6 @@ const GENERATION_WORD_TARGET_RATIO = 0.8;
 const TOTAL_WORD_SHRINK_MIN_CAPACITY_RATIO = 0.3;
 const CONTENT_WORD_CONTROL_WARNING = '经多轮修复，字数仍未达预期，请您人工核对';
 const SECTION_WORD_CONTROL_WARNING = '字数未达预期，请您人工核对';
-const ORIGINAL_PLAN_SEGMENT_MAX_CHARS = 6000;
 const TABLE_CLEANUP_CONTEXT_CHARS = 600;
 const TABLE_CLEANUP_BATCH_CHAR_LIMIT = 30000;
 const CONTENT_GENERATION_PAUSED = 'CONTENT_GENERATION_PAUSED';
@@ -91,7 +94,7 @@ function createContentPlanningNodeSchema(level, root = false) {
   const baseRequired = ['id', 'title', 'description', ...(root ? ['attr'] : [])];
   const aiLeafSchema = {
     type: 'object',
-    required: [...baseRequired, 'content_mode', 'content_plan'],
+    required: [...baseRequired, 'content_mode'],
     additionalProperties: false,
     properties: {
       ...baseProperties,
@@ -619,26 +622,17 @@ function normalizeKnowledgeItemIds(value, allowedKnowledgeItemIds) {
   return [...new Set(filtered)];
 }
 
+// 标准化当前还原来源，不读取旧分段编号。
 function normalizeOriginalMaterial(value) {
-  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  const sourceIds = Array.isArray(source.source_ids || source.sourceIds)
-    ? source.source_ids || source.sourceIds
-    : [];
-  const sourceTitles = Array.isArray(source.source_titles || source.sourceTitles)
-    ? source.source_titles || source.sourceTitles
-    : [];
-  const sourceHashes = Array.isArray(source.source_hashes || source.sourceHashes)
-    ? source.source_hashes || source.sourceHashes
-    : [];
+  const source = value && typeof value === 'object' ? value : {};
   return {
     restored: Boolean(source.restored),
     optimized: Boolean(source.optimized),
-    source_ids: [...new Set(sourceIds.map((id) => String(id || '').trim()).filter(Boolean))],
-    source_titles: [...new Set(sourceTitles.map((title) => singleLine(title)).filter(Boolean))],
-    source_hashes: sourceHashes.map((hash) => String(hash || '').trim()).filter(Boolean),
-    restored_chars: Math.max(0, Math.round(Number(source.restored_chars ?? source.restoredChars) || 0)),
-    ...(source.restored_at || source.restoredAt ? { restored_at: source.restored_at || source.restoredAt } : {}),
-    ...(source.optimized_at || source.optimizedAt ? { optimized_at: source.optimized_at || source.optimizedAt } : {}),
+    source_hash: String(source.source_hash || ''),
+    source_ranges: Array.isArray(source.source_ranges) ? source.source_ranges.map(({ start_line, end_line }) => ({ start_line, end_line })) : [],
+    restored_words: Math.max(0, Number(source.restored_words) || 0),
+    ...(source.restored_at ? { restored_at: source.restored_at } : {}),
+    ...(source.optimized_at ? { optimized_at: source.optimized_at } : {}),
   };
 }
 
@@ -673,7 +667,7 @@ function selectContentImageTargets(leaves, plans, imageQuantity) {
   const ratio = imageQuantity === 'heavy' ? 0.5 : imageQuantity === 'light' ? 0.2 : 0;
   const limit = Math.floor(leaves.length * ratio);
   const candidates = leaves
-    .filter(({ item }) => plans[item.id].plan.image_suitability_score > 0)
+    .filter(({ item }) => plans[item.id]?.plan?.image_suitability_score > 0)
     .sort((left, right) => plans[right.item.id].plan.image_suitability_score - plans[left.item.id].plan.image_suitability_score);
   return new Set(candidates.slice(0, limit).map(({ item }) => item.id));
 }
@@ -774,7 +768,7 @@ function formatContentPlanForPrompt(plan) {
     `写作重点：${plan.writing_focus || '围绕当前章节标题和描述展开'}`,
     `事实变量：${plan.facts?.titles?.length ? plan.facts.titles.join('；') : '无'}`,
     `表格：${plan.table.needed ? `需要，目的：${plan.table.purpose || '提升正文表达清晰度'}` : '不需要，本小节不要输出 Markdown 表格'}`,
-    `原方案还原：${plan.original_material?.restored ? `已还原 ${plan.original_material.restored_chars || 0} 字` : '未还原'}`,
+    `原方案还原：${plan.original_material?.restored ? `已还原 ${plan.original_material.restored_words || 0} 字` : '未还原'}`,
   ];
   return lines.join('\n');
 }
@@ -906,8 +900,8 @@ function readContentPlanningJson(content) {
   }
 }
 
-// 校验 Agent 未改动目录，并提取所有 AI 叶子的编排结果。
-function extractContentPlanningPlans(value, sourceItems, allowedKnowledgeItemIds) {
+// 校验目录结构，只提取本次目标节点的编排，其他节点可尚未编排。
+function extractContentPlanningPlans(value, sourceItems, allowedKnowledgeItemIds, targetItemIds) {
   if (!value || !Array.isArray(value.outline)) {
     throw new Error('正文编排结果缺少完整 outline');
   }
@@ -950,6 +944,7 @@ function extractContentPlanningPlans(value, sourceItems, allowedKnowledgeItemIds
         }
         return;
       }
+      if (targetItemIds && !targetItemIds.has(String(expected.id))) return;
       const rawKnowledgeIds = actual.content_plan?.knowledge?.item_ids;
       if (Array.isArray(rawKnowledgeIds)
         && allowedKnowledgeItemIds instanceof Set
@@ -999,7 +994,7 @@ ${requirementText}
 请严格完成以下工作：
 1. 先读取全部三个文件，结合完整目录中的上下级和同级关系进行整体判断。
 2. 只为 content_mode 为 ai-generate 的叶子节点编排；本次只修改程序列出的目标节点，其他节点及已有 content_plan 保持原样。
-3. 每个 AI 生成叶子的 content_plan 必须包含 writing_focus、knowledge.item_ids、table.needed、table.purpose、image_suitability_score；非 AI 叶子和分支节点不得包含 content_plan。
+3. 本次目标叶子的 content_plan 必须包含 writing_focus、knowledge.item_ids、table.needed、table.purpose、image_suitability_score；非 AI 叶子和分支节点不得包含 content_plan。
 4. writing_focus 用 1-2 句话概括本节正文重点，不展开成正文，不编造具体参数、周期、人员、设备、品牌、型号或承诺，并避免与相邻章节重复。
 5. knowledge.item_ids 只能从 ${CONTENT_PLANNING_KNOWLEDGE_FILE} 中选择，可以多选或为空数组，不要编造 id。
 6. ${tableLimitInstruction}
@@ -1015,7 +1010,7 @@ function formatKnowledgeContentsForPrompt(contents) {
     .join('\n\n');
 }
 
-function buildChapterContentMessages({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, preSectionInstruction, wordControl, generationTarget = 0, globalFactsMode }) {
+function buildChapterContentMessages({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, preSectionInstruction, wordControl, generationTarget = 0, globalFactsMode, originalPlanExpansion = false }) {
   const chapterId = chapter.id || 'unknown';
   const chapterTitle = chapter.title || '未命名章节';
   const chapterDescription = chapter.description || '';
@@ -1033,13 +1028,17 @@ function buildChapterContentMessages({ chapter, projectOverview, selectedFactsTe
 5. 围绕当前章节标题、描述和正文编排重点展开，保持内容聚焦。
 6. ${tableAllowed ? '可以使用 Markdown 段落、列表和表格；表格必须服务于内容表达，不要为了形式硬插。' : '只能使用 Markdown 段落、普通列表和加粗引导语，严禁输出 Markdown 表格或 HTML 表格。'}
 7. ${tableAllowed ? '正文只生成文字、列表、表格等内容，配图由系统另行处理。' : '正文只生成文字和普通列表，配图由系统另行处理。'}
-8. 严禁输出 Mermaid、PlantUML、Graphviz、flowchart、graph、sequenceDiagram 等图表代码块、mermaid.ink 链接或图片 Markdown；配图由系统另行处理。
+8. 严禁新增 Mermaid、PlantUML、Graphviz、flowchart、graph、sequenceDiagram 等图表代码块、mermaid.ink 链接或图片 Markdown；新增配图由系统另行处理。若输入含原方案已有图片，必须原样保留图片引用、顺序及对应内容，不能删除、重复或改写路径。
 9. ${tableAllowed ? '表格单元格内如有多项内容，优先使用编号、顿号、分号或短句，不要使用 HTML <br> 标签。' : '如需表达多项参数、职责、流程或措施，请改用分段文字或普通列表，不要用表格模拟。'}
-10. 严禁使用 Markdown 标题语法（#、##、###、####、#####、######），也不要生成与当前章节同级或下级的伪目录标题。
+${originalPlanExpansion ? `10. ${ORIGINAL_PLAN_HEADING_INSTRUCTION}
+11. 基于已还原底稿组织正文，内部标题的层级和编号应与当前章节及相邻内部标题一致。
+12. 保留标题含义及图注，不能因调整标题而删除对应的正文或图片。
+13. 步骤、流程和操作顺序的编号按其业务含义保留，不当作章节编号删除。
+14. 直接返回当前章节正文及所需内部标题，不重复外层章节标题，不输出额外说明。` : `10. 严禁使用 Markdown 标题语法（#、##、###、####、#####、######），也不要生成与当前章节同级或下级的伪目录标题。
 11. 如需在正文中分层表达，只能使用普通段落、无编号列表、表格或无编号加粗引导语，例如 **实施要点：**。
 12. 加粗引导语只允许写简短主题词，禁止使用任何形式的编号。
 13. 只有步骤、流程、时间顺序、操作顺序等连续性非常强的内容，才可以使用有序列表；其他分段一律使用自然段、无编号列表或无编号加粗引导语，禁止使用任何形式的编号。
-14. 直接返回章节内容，不生成标题，不要任何额外说明。
+14. 直接返回章节内容，不生成标题，不要任何额外说明。`}
 15. 如果本章节需要使用的全局事实变量中包含相关内容，必须优先使用变量值，不得前后矛盾。
 16. 仅使用本章节提供的全局事实变量；未提供时不要主动编造具体人员、周期、质保、品牌、型号等会影响全文一致性的承诺。${buildContentFactCompletenessInstruction(globalFactsMode) ? `\n\n${buildContentFactCompletenessInstruction(globalFactsMode)}` : ''}`,
     },
@@ -1088,7 +1087,7 @@ function buildChapterContentMessages({ chapter, projectOverview, selectedFactsTe
 章节描述: ${chapterDescription}
 
 请结合项目概述信息、本章节全局事实变量、参考正文素材和正文编排决策，围绕当前章节标题、描述和写作重点生成详细的专业内容。
-直接返回编写的正文内容，不要输出标题、Markdown 标题、带任何形式编号的加粗引导语、伪目录标题、解释、总结等任何其他内容`,
+${originalPlanExpansion ? '直接返回正文及按新目录整理的内部标题，不重复外层章节标题，不输出解释、总结或过程说明。' : '直接返回编写的正文内容，不要输出标题、Markdown 标题、带任何形式编号的加粗引导语、伪目录标题、解释、总结等任何其他内容'}`,
   });
   const sectionWordRequirement = buildSectionWordRequirement(wordControl, false, generationTarget);
   if (sectionWordRequirement) messages.push({ role: 'user', content: sectionWordRequirement });
@@ -1098,6 +1097,7 @@ function buildChapterContentMessages({ chapter, projectOverview, selectedFactsTe
 
 function buildRestoredChapterContentMessages({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent, wordControl, generationTarget = 0, globalFactsMode }) {
   const messages = buildChapterContentMessages({
+    originalPlanExpansion: true,
     chapter,
     projectOverview,
     selectedFactsText,
@@ -1112,11 +1112,11 @@ function buildRestoredChapterContentMessages({ chapter, projectOverview, selecte
 1. 首要遵从正文底稿，不要从零重写成另一套方案。
 2. 必须保留底稿中的实质信息、技术路线、服务承诺、设备参数、人员安排、周期、验收、售后和实施方法。
 3. 可以调整语序、合并重复表达、提升专业性、补充细节、增加过渡和说明，让正文更完整、更适合投标文件。
-4. 正文底稿中可能包含原方案 Markdown 标题行或编号标题，例如“# 第一章...”“## 第一节...”“### 二、...”“（一）...”，这些只作为章节定位线索，不属于最终正文。
-5. 输出时必须跳过底稿中的章节标题、Markdown 标题和编号标题；当前章节标题会由程序统一渲染，不要在正文中重复。
+4. ${ORIGINAL_PLAN_HEADING_INSTRUCTION}
+5. 保留所需内部标题、图注及其对应图片，特别是证书和检测报告图片；不能因标题调整而删除对应内容。
 6. 不要提到“原方案”“历史文档”“用户原文”或“底稿”。
-7. 加粗引导语不得使用任何形式的编号；除连续性非常强的步骤、流程、操作顺序外，不得使用有序编号分段。
-8. 输出当前章节完整正文，不输出标题。`,
+7. 内部标题的编号与新目录层级一致，同级标题编号连续；步骤、流程和业务顺序编号按其含义保留。
+8. 输出当前章节完整正文及所需内部标题、图注，不重复外层章节标题。`,
   });
   const finalMessage = messages.pop();
   if (finalMessage) {
@@ -1129,78 +1129,11 @@ ${String(restoredContent || '').trim()}`,
   });
   messages.push({
     role: 'user',
-    content: '请基于已还原正文底稿输出当前章节完整正文。必须保留底稿中的实质内容，可以优化扩写，但不要从零重写；如果底稿开头或中间出现章节标题、Markdown 标题或编号标题，只把它当作定位线索，不要输出这些标题或解释。',
+    content: '请基于已还原正文底稿输出当前章节完整正文。必须保留底稿中的实质内容，可以优化扩写，但不要从零重写。外层章节标题由程序生成；内部标题按新目录整理并保持编号连贯，保留图注及对应的全部原图引用、原图顺序，不重复、不改写图片路径。',
   });
   const sectionWordRequirement = buildSectionWordRequirement(wordControl, true, generationTarget);
   if (sectionWordRequirement) messages.push({ role: 'user', content: sectionWordRequirement });
   return messages;
-}
-
-function splitLongOriginalSegment(segment) {
-  const content = String(segment.content || '').trim();
-  if (!content) return [];
-  return splitUserTextByContextLimit(content, {}, {
-    contextLengthLimit: ORIGINAL_PLAN_SEGMENT_MAX_CHARS,
-    limitRatio: 1,
-    maxSegmentLimitRatio: 1,
-  }).map((part) => ({ ...segment, content: part.trim() })).filter((part) => part.content);
-}
-
-function splitOriginalPlanSegments(markdown) {
-  const lines = normalizeNewlines(markdown).split('\n');
-  const rawSegments = [];
-  let titleStack = [];
-  let currentTitlePath = [];
-  let buffer = [];
-
-  function flush() {
-    const content = buffer.join('\n').trim();
-    if (content) {
-      rawSegments.push({ title_path: [...currentTitlePath], content });
-    }
-    buffer = [];
-  }
-
-  for (const line of lines) {
-    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
-    if (heading) {
-      flush();
-      const level = heading[1].length;
-      const title = singleLine(heading[2]);
-      titleStack = titleStack.slice(0, level - 1);
-      titleStack[level - 1] = title;
-      currentTitlePath = titleStack.filter(Boolean);
-      buffer.push(line.trim());
-      continue;
-    }
-    buffer.push(line);
-  }
-  flush();
-
-  const sourceSegments = rawSegments.length ? rawSegments : [{ title_path: [], content: String(markdown || '').trim() }];
-  const segments = sourceSegments.flatMap(splitLongOriginalSegment)
-    .map((segment, index) => {
-      const content = String(segment.content || '').trim();
-      return {
-        id: `P${String(index + 1).padStart(3, '0')}`,
-        title_path: Array.isArray(segment.title_path) ? segment.title_path.map((title) => singleLine(title)).filter(Boolean) : [],
-        content,
-        hash: textHash(content),
-        chars: content.length,
-      };
-    })
-    .filter((segment) => segment.content);
-
-  return segments;
-}
-
-function formatOriginalSegmentsForPrompt(segments) {
-  return (segments || []).map((segment) => `<original_segment id="${segment.id}">
-标题路径：${segment.title_path?.length ? segment.title_path.join(' > ') : '未识别标题'}
-字符数：${segment.chars || String(segment.content || '').length}
-原文：
-${segment.content}
-</original_segment>`).join('\n\n');
 }
 
 function formatRestoreTargetsForPrompt(targets) {
@@ -1218,55 +1151,6 @@ function formatRestoreTargetsForPrompt(targets) {
   }).join('\n');
 }
 
-function buildAgentOriginalMaterialRestorePrompt() {
-  return `你是投标技术方案原文归属判断 Agent。用户已上传原方案作为本次优化扩写的核心草稿，请基于 workspace 输入文件判断每个原方案段落应该还原到当前目录的哪个叶子小节。
-
-workspace 文件：
-- context.md：招标文件关键信息和全局事实变量标题清单。
-- restore-targets.md：当前可还原叶子节点，包含 node_id、标题、描述、上级章节和同级章节。
-- original-segments.md：原方案段落，包含 source_id、标题路径、字符数和原文。
-
-工作要求：
-1. 你可以分批读取、建立索引和创建临时草稿，但最终只写入 original-restore-result.json。
-2. 只判断归属映射，严禁改写、总结或生成正文。
-3. node_id 必须逐字使用 restore-targets.md 中给出的 ID。
-4. source_ids 必须逐字使用 original-segments.md 中给出的编号。
-5. 每个原方案段默认只分配给一个最匹配的主节点；如果完全不适合当前叶子节点，可以不分配。
-6. 优先按标题语义、章节职责、技术路线和同级章节边界归属，避免把同一内容拆散到无关章节。
-7. 如果某个原方案段只有章节标题、Markdown 标题或目录编号，没有实质正文内容，不要把它分配为正文来源；段落开头的标题行只用于判断归属。
-8. 不要修改业务数据库、不要生成 technical-plan.md，程序会读取你的输出文件后自行写回。
-
-最终输出文件 original-restore-result.json 必须是合法 JSON，格式如下：
-{
-  "assignments": [
-    { "node_id": "1.1", "source_ids": ["P001", "P002"] }
-  ]
-}`;
-}
-
-function buildAgentOriginalMaterialRestoreFiles({ targets, originalSegments, projectOverview, bidAnalysisFactsText, globalFactTitlesText }) {
-  return [
-    {
-      path: 'context.md',
-      content: `# 招标文件关键信息
-${formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText)}
-
-# 全局事实变量标题清单
-${globalFactTitlesText || '未提供'}`,
-    },
-    {
-      path: 'restore-targets.md',
-      content: `# 当前可还原叶子节点
-${formatRestoreTargetsForPrompt(targets) || '无'}`,
-    },
-    {
-      path: 'original-segments.md',
-      content: `# 原方案段落
-${formatOriginalSegmentsForPrompt(originalSegments)}`,
-    },
-  ];
-}
-
 function buildAgentRestoredChapterContentPrompt(globalFactsMode) {
   return withFactCompletenessInstruction(`你是投标技术方案正文优化扩写 Agent。当前章节已经从用户原方案中还原出正文底稿，该底稿是用户已经写好的真实技术方案内容，必须作为本章节的基础保留。
 
@@ -1282,13 +1166,13 @@ workspace 文件：
 4. 结合 chapter-context.md 中的项目概述、全局事实变量和正文编排决策；如存在冲突，以全局事实变量为准。
 5. 可以吸收 knowledge-contents.md 中适合当前章节的技术素材，但不要提到“知识库”“历史文档”“参考资料”或素材来源。
 6. 不要提到“原方案”“历史文档”“用户原文”或“底稿”。
-7. 严禁输出 Mermaid、PlantUML、Graphviz、flowchart、graph、sequenceDiagram 等图表代码块、mermaid.ink 链接或图片 Markdown。
-8. restored-content.md 可能包含原方案 Markdown 标题行或编号标题，例如“# 第一章...”“## 第一节...”“### 二、...”“（一）...”，这些只作为章节定位线索，不属于最终正文。
-9. 不要输出章节标题、Markdown 标题、编号标题、解释、总结或过程说明；当前章节标题会由程序统一渲染。
+7. 严禁新增 Mermaid、PlantUML、Graphviz、flowchart、graph、sequenceDiagram 等图表代码块、mermaid.ink 链接或图片 Markdown。必须原样保留底稿已有图片的引用、顺序和对应内容，不删除、不重复、不改写资源路径。
+8. ${ORIGINAL_PLAN_HEADING_INSTRUCTION}
+9. 保留所需内部标题、图注及对应图片，不能因标题调整而删除对应的正文或图片；不输出解释、总结或过程说明。
  10. chapter-context.md 如包含小节字数目标，应尽量遵守，但保留原方案实质内容的要求优先。
 11. 不要修改业务数据库，程序会读取你的输出文件后自行写回。
 
-最终请把当前小节完整正文写入 optimized-section.md。该文件只能包含正文内容，不要包含标题或说明。`, globalFactsMode);
+最终请把当前小节完整正文及所需内部标题写入 optimized-section.md。不要重复外层章节标题，不输出额外说明。`, globalFactsMode);
 }
 
 function buildAgentRestoredChapterContentFiles({ chapter, projectOverview, selectedFactsText, regenerateRequirement, contentPlan, knowledgeContents, restoredContent, wordControl, generationTarget = 0 }) {
@@ -1300,7 +1184,7 @@ function buildAgentRestoredChapterContentFiles({ chapter, projectOverview, selec
 章节标题: ${chapter?.title || '未命名章节'}
 章节描述: ${chapter?.description || '无'}
 
-说明：章节编号和章节标题由程序统一渲染，optimized-section.md 只能写正文，不要重复输出章节标题、Markdown 标题或编号标题。
+说明：外层章节编号和章节标题由程序统一渲染，不要重复输出；optimized-section.md 包含正文及按新目录整理的内部标题，内部层级和编号应合理连贯，保留年份、型号等标题含义。
 
 # 项目概述信息
 ${projectOverview || '未提供'}
@@ -1326,61 +1210,6 @@ ${buildSectionWordRequirement(wordControl, true, generationTarget) || '不控制
       content: knowledgeContents?.length ? formatKnowledgeContentsForPrompt(knowledgeContents) : '无',
     },
   ];
-}
-
-function normalizeOriginalRestoreAssignments(value, context) {
-  const source = value?.result && typeof value.result === 'object' ? value.result : value || {};
-  const rawAssignments = Array.isArray(source)
-    ? source
-    : Array.isArray(source.assignments)
-      ? source.assignments
-      : Array.isArray(source.items)
-        ? source.items
-        : [];
-  const allowedNodeIds = context.allowedNodeIds || new Set();
-  const allowedSourceIds = context.allowedSourceIds || new Set();
-  const usedSourceIds = new Set();
-  const byNode = new Map();
-
-  for (const assignment of rawAssignments) {
-    const nodeId = String(assignment?.node_id || assignment?.nodeId || assignment?.id || '').trim();
-    if (!allowedNodeIds.has(nodeId)) {
-      continue;
-    }
-    const rawSourceIds = Array.isArray(assignment.source_ids || assignment.sourceIds)
-      ? assignment.source_ids || assignment.sourceIds
-      : Array.isArray(assignment.sources)
-        ? assignment.sources
-        : [];
-    const sourceIds = rawSourceIds
-      .map((sourceId) => String(sourceId || '').trim())
-      .filter((sourceId) => allowedSourceIds.has(sourceId) && !usedSourceIds.has(sourceId));
-    if (!sourceIds.length) {
-      continue;
-    }
-    for (const sourceId of sourceIds) {
-      usedSourceIds.add(sourceId);
-    }
-    byNode.set(nodeId, [...(byNode.get(nodeId) || []), ...sourceIds]);
-  }
-
-  return {
-    assignments: Array.from(byNode.entries()).map(([node_id, source_ids]) => ({
-      node_id,
-      source_ids: [...new Set(source_ids)],
-    })),
-  };
-}
-
-function validateOriginalRestoreAssignments(value) {
-  if (!value || !Array.isArray(value.assignments)) {
-    throw new Error('原方案还原映射缺少 assignments 数组');
-  }
-  for (const assignment of value.assignments) {
-    if (!assignment.node_id || !Array.isArray(assignment.source_ids)) {
-      throw new Error('原方案还原映射项缺少 node_id 或 source_ids');
-    }
-  }
 }
 
 function normalizeContentExpansionPatch(value) {
@@ -2074,6 +1903,9 @@ function selectRandomItemIds(itemIds, count) {
 function normalizeContentGenerationRuntime(value) {
   const source = value && typeof value === 'object' ? value : {};
   return {
+    generation_started: Boolean(source.generation_started),
+    direct_generation_item_ids: normalizeStringArray(source.direct_generation_item_ids),
+    pending_item_ids: normalizeStringArray(source.pending_item_ids),
     phase: String(source.phase || ''),
     touched_item_ids: normalizeStringArray(source.touched_item_ids),
     completed_stages: normalizeStringArray(source.completed_stages),
@@ -2424,21 +2256,17 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   const bidAnalysisFactsText = formatBidAnalysisFactsForPrompt(storedPlan);
   const hasOriginalPlan = Boolean(storedPlan.originalPlanFile?.markdownPath);
   let originalPlanMarkdown = '';
-  let originalPlanSegments = [];
   if (hasOriginalPlan) {
     if (!workspaceStore.readOriginalPlanMarkdown) {
       throw new Error('原方案读取服务尚未初始化');
     }
     originalPlanMarkdown = workspaceStore.readOriginalPlanMarkdown();
+    workspaceStore.assertOriginalImageFiles(originalPlanMarkdown);
     if (!String(originalPlanMarkdown || '').trim()) {
       throw new Error('请先上传原方案，再生成正文');
     }
-    originalPlanSegments = splitOriginalPlanSegments(originalPlanMarkdown);
-    if (!originalPlanSegments.length) {
-      throw new Error('原方案正文为空，无法执行优化扩写');
-    }
   }
-  const originalPlanSegmentById = new Map(originalPlanSegments.map((segment) => [segment.id, segment]));
+  const originalSource = hasOriginalPlan ? createOriginalSource(originalPlanMarkdown) : null;
   const originalPlanSourceHash = hasOriginalPlan ? textHash(originalPlanMarkdown.trim()) : '';
 
   const projectOverview = outlineData.project_overview || storedPlan.projectOverview || '';
@@ -2452,7 +2280,11 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   const continuePostProcessing = !resume && Boolean(payload.continuePostProcessing ?? payload.continue_post_processing);
   let contentRuntime = normalizeContentGenerationRuntime(resume || retryContentCorrection || retryFailedSections || continuePostProcessing
     ? (storedPlan.contentGenerationRuntime || previousState?.contentGenerationRuntime)
-    : {});
+    : {
+      generation_started: true,
+      direct_generation_item_ids: storedPlan.contentGenerationRuntime?.direct_generation_item_ids,
+      pending_item_ids: storedPlan.contentGenerationRuntime?.pending_item_ids,
+    });
   const runOnlyIllustrationPlanning = rerunIllustrations
     || (resume && contentRuntime.phase === 'illustration-planning')
     || (retryContentCorrection && previousState?.contentGenerationTask?.stats?.content?.phase === 'illustration-planning');
@@ -2465,6 +2297,11 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     throw new Error('单小节重新生成不支持重试内容矫正');
   }
   const fullRegenerate = regenerate && !targetItemId;
+  if (fullRegenerate) {
+    contentRuntime.direct_generation_item_ids = [];
+    contentRuntime.pending_item_ids = [];
+  }
+  const directGenerationIds = new Set(contentRuntime.direct_generation_item_ids);
   if (fullRegenerate) {
     workspaceStore.clearMermaidCache?.();
     outlineData = { ...outlineData, outline: clearOutlineContent(outlineData.outline) };
@@ -2548,7 +2385,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   };
   // 同一原方案继续任务时保留已完成的统计，全文重新生成则等待本轮还原结果。
   const previousOriginalRestoration = previousState?.contentGenerationTask?.stats?.content?.original_restoration;
-  if (hasOriginalPlan && !fullRegenerate && previousOriginalRestoration?.source_hash === originalPlanSourceHash) {
+  if (hasOriginalPlan && !fullRegenerate && typeof previousOriginalRestoration?.total_words === 'number' && previousOriginalRestoration.source_hash === originalPlanSourceHash) {
     contentStats.original_restoration = { ...previousOriginalRestoration };
   }
   contentRuntime = normalizeContentGenerationRuntime({
@@ -2605,6 +2442,11 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     tasksToRun = leaves.filter(({ item }) => isUnresolvedContentSection(sections[item.id]));
   } else if (continuePostProcessing) {
     tasksToRun = [];
+  }
+
+  if (!fullRegenerate && !targetItemId && contentRuntime.pending_item_ids.length) {
+    const pendingIds = new Set(contentRuntime.pending_item_ids);
+    tasksToRun = tasksToRun.filter(({ item }) => pendingIds.has(item.id));
   }
 
   const simulatePartialFailures = !retryContentCorrection
@@ -2687,7 +2529,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   }
   logs = [...logs, '全文一致性审计为必做阶段，正文扩写完成后将使用 Agent 检查并修复事实冲突。'];
   if (hasOriginalPlan) {
-    logs = [...logs, `检测到已上传原方案：已读取并拆分为 ${originalPlanSegments.length} 个原文段。`];
+    logs = [...logs, `检测到已上传原方案：已读取完整原方案，交由 Agent 按语义还原。`];
     logs = [...logs, `原方案覆盖审计为必做阶段，本次将使用 Agent 检查并补回${targetItemId ? '当前小节' : '正文'}的原文保留情况。`];
   }
 
@@ -2743,7 +2585,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       text_concurrency_limit: contentConcurrency,
       table_requirement: tableRequirement,
       word_control: wordControl,
-      original_plan_segment_count: originalPlanSegments.length,
+      original_plan_chars: originalPlanMarkdown.length,
       generation_options: generationOptions,
     },
   });
@@ -2919,7 +2761,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     }
   }
 
-  // 使用完整目录执行一次持久 Agent 编排，并返回所有 AI 叶子的结果。
+  // 完整目录只作上下文，持久 Agent 仅编排并返回本次目标节点。
   async function runContentPlanningAgent(targetItemIds, regenerateTargetItemIds = targetItemIds) {
     const hasSession = agentService.hasPersistentTaskSession(CONTENT_PLANNING_AGENT_TASK_KEY);
     const runId = crypto.randomUUID();
@@ -2995,6 +2837,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       readContentPlanningJson(agentResult.output_content),
       outlineData.outline,
       allowedKnowledgeItemIds,
+      new Set(targetItemIds),
     );
     updatePlanningAgentState({
       status: 'success',
@@ -3108,6 +2951,16 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     if (shouldPauseForDeveloper) {
       throw createContentGenerationPausedError();
     }
+  }
+
+  // 在实际生成入口同步阶段，覆盖全文/单节、首次执行和暂停恢复。
+  function startContentGenerationStage() {
+    contentStats.phase = 'generating';
+    contentStats.developer_stage_gate = undefined;
+    const runtime = syncRuntime({ phase: 'generating', developer_stage_gate: '' });
+    checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
+      contentGenerationRuntime: runtime,
+    }, { contentRuntime: runtime });
   }
 
   function isPauseRequested() {
@@ -3279,6 +3132,17 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       : '正文已全部生成，将执行内容复核和字数控制。'];
   }
 
+  // 原图属于已有方案，保存任何后续改写前核对引用，失败时不覆盖旧正文。
+  function validateSectionOriginalImages(itemId, content) {
+    if (!hasOriginalPlan || !originalSource.images.length) return;
+    const plan = contentPlans.get(itemId) || getStoredContentPlan(itemId)?.plan;
+    const material = plan?.original_material;
+    const originalContent = material?.source_hash === originalPlanSourceHash
+      ? (material.source_ranges || []).map(range => readOriginalRange(originalSource, range)).join('\n\n')
+      : sections[itemId]?.content || '';
+    validateOriginalImages(originalImageReferences(originalContent), content, originalSource.images);
+  }
+
   function saveSection(item, partial, contentForOutline, taskPartial = {}) {
     const hasPartialContent = Object.prototype.hasOwnProperty.call(partial || {}, 'content');
     const hasOutlineContent = contentForOutline !== undefined;
@@ -3286,11 +3150,12 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     if (hasPartialContent) {
       nextPartial.content = normalizeLeafContentForSave(nextPartial.content, item);
     }
-    sections = withSection(sections, item, nextPartial);
     const currentOutlineData = outlineData;
     const outlineContent = hasOutlineContent || hasPartialContent
-      ? normalizeLeafContentForSave(contentForOutline ?? (sections[item.id].content || ''), item)
-      : (sections[item.id].content || '');
+      ? normalizeLeafContentForSave(contentForOutline ?? nextPartial.content ?? sections[item.id]?.content ?? '', item)
+      : (sections[item.id]?.content || '');
+    if (hasOutlineContent || hasPartialContent) validateSectionOriginalImages(item.id, outlineContent);
+    sections = withSection(sections, item, nextPartial);
     if (hasOutlineContent || hasPartialContent) {
       sections = {
         ...sections,
@@ -3356,62 +3221,38 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     return plan;
   }
 
+  // 后续扩写与覆盖检查读取当前原文范围；不复用或重建旧分段记录。
   function getOriginalMaterialRuntimeState(itemOrId) {
-    // 未上传原方案时，不读取或扫描小节的来源记录。
     if (!hasOriginalPlan) return { needsOptimization: false, needsRestoreRepair: false };
-    const itemId = typeof itemOrId === 'string' ? itemOrId : String(itemOrId?.id || '').trim();
-    const item = typeof itemOrId === 'string' ? leaves.find((context) => context.item.id === itemId)?.item : itemOrId;
-    const plan = contentPlans.get(itemId) || getStoredContentPlan(itemId)?.plan || normalizeContentPlan({}, allowedKnowledgeItemIds);
+    const itemId = typeof itemOrId === 'string' ? itemOrId : itemOrId?.id;
+    const item = typeof itemOrId === 'string' ? leaves.find(context => context.item.id === itemId)?.item : itemOrId;
+    const plan = contentPlans.get(itemId) || getStoredContentPlan(itemId)?.plan || {};
     const originalMaterial = normalizeOriginalMaterial(plan.original_material);
-    const sourceSegments = originalMaterial.source_ids.map((sourceId) => originalPlanSegmentById.get(sourceId)).filter(Boolean);
-    const sourceHashesValid = originalMaterial.source_hashes.length === sourceSegments.length
-      && sourceSegments.every((segment, index) => segment.hash === originalMaterial.source_hashes[index]);
-    const allSourcesValid = Boolean(originalMaterial.source_ids.length)
-      && sourceSegments.length === originalMaterial.source_ids.length
-      && sourceHashesValid;
     const content = sections[itemId]?.content || item?.content || '';
-    const hasContent = Boolean(String(content || '').trim());
-    const validRestored = Boolean(originalMaterial.restored && allSourcesValid && hasContent);
-    const needsRestoreRepair = Boolean(originalMaterial.restored && !validRestored);
+    const validRestored = Boolean(originalMaterial.restored && originalMaterial.source_hash === originalPlanSourceHash
+      && originalMaterial.source_ranges.length && String(content).trim());
     return {
-      plan,
-      originalMaterial,
-      sourceSegments,
-      allSourcesValid,
-      content,
-      hasContent,
-      validRestored,
-      needsRestoreRepair,
-      canRebuildRestoredContent: Boolean(originalMaterial.restored && allSourcesValid && !hasContent),
+      plan, originalMaterial, content, validRestored,
+      needsRestoreRepair: Boolean(originalMaterial.restored && !validRestored),
       needsOptimization: Boolean(validRestored && !originalMaterial.optimized),
     };
   }
 
-  function buildOriginalMaterialFromSegments(segments, previous = {}) {
-    const restoredContent = segments.map((segment) => segment.content).join('\n\n').trim();
-    return normalizeOriginalMaterial({
-      restored: true,
-      optimized: false,
-      source_ids: segments.map((segment) => segment.id),
-      source_titles: segments.map((segment) => segment.title_path?.join(' > ') || segment.id),
-      source_hashes: segments.map((segment) => segment.hash),
-      restored_chars: restoredContent.length,
-      restored_at: previous.restored_at || now(),
-    });
-  }
-
-  function saveSectionAndContentPlan(item, partial, contentForOutline, plan, taskPartial = {}) {
+  function saveSectionAndContentPlan(item, partial, contentForOutline, plan, taskPartial = {}, { preserveOriginal = false } = {}) {
+    // 还原底稿已经逐字校验，保存时保留原文标题和表格格式。
+    const normalizeContent = preserveOriginal ? value => String(value ?? '') : value => normalizeLeafContentForSave(value, item);
     const hasPartialContent = Object.prototype.hasOwnProperty.call(partial || {}, 'content');
     const hasOutlineContent = contentForOutline !== undefined;
     const nextPartial = { ...(partial || {}) };
     if (hasPartialContent) {
-      nextPartial.content = normalizeLeafContentForSave(nextPartial.content, item);
+      nextPartial.content = normalizeContent(nextPartial.content);
     }
-    sections = withSection(sections, item, nextPartial);
     const currentOutlineData = outlineData;
     const outlineContent = hasOutlineContent || hasPartialContent
-      ? normalizeLeafContentForSave(contentForOutline ?? (sections[item.id].content || ''), item)
-      : (sections[item.id].content || '');
+      ? normalizeContent(contentForOutline ?? nextPartial.content ?? sections[item.id]?.content ?? '')
+      : (sections[item.id]?.content || '');
+    if (!preserveOriginal && (hasOutlineContent || hasPartialContent)) validateSectionOriginalImages(item.id, outlineContent);
+    sections = withSection(sections, item, nextPartial);
     if (hasOutlineContent || hasPartialContent) {
       sections = {
         ...sections,
@@ -3461,25 +3302,25 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     return sections[item.id];
   }
 
-  // 合并本轮编排与已有结果，按全文计算配图标记后一起保存。
+  // 只更新本轮目标；全文评分用于判定目标配图，其他节点的标记与时间保持原样。
   function persistContentPlans(targets, generatedPlans) {
     const nextPlans = { ...storedContentPlans };
-    for (const context of targets) {
-      const contentPlan = contentPlans.get(context.item.id) || normalizeContentPlan({}, allowedKnowledgeItemIds);
-      nextPlans[context.item.id] = createStoredContentPlan(contentPlan, tableRequirement);
-    }
-    for (const { item } of leaves) {
-      if (!nextPlans[item.id]) {
-        nextPlans[item.id] = createStoredContentPlan(generatedPlans.get(item.id), tableRequirement);
-      }
+    for (const { item } of targets) {
+      const contentPlan = contentPlans.get(item.id) || generatedPlans.get(item.id);
+      if (!contentPlan) throw new Error(`正文编排结果缺少目标节点：${item.id}`);
+      const originalMaterial = storedContentPlans[item.id]?.plan?.original_material;
+      nextPlans[item.id] = createStoredContentPlan({
+        ...contentPlan,
+        ...(originalMaterial ? { original_material: originalMaterial } : {}),
+      }, tableRequirement);
     }
     const selectedImageIds = selectContentImageTargets(leaves, nextPlans, imageQuantity);
-    for (const { item } of leaves) {
+    for (const { item } of targets) {
       const plan = { ...nextPlans[item.id].plan, image_needed: selectedImageIds.has(item.id) };
       nextPlans[item.id] = { ...nextPlans[item.id], plan, updated_at: now() };
       contentPlans.set(item.id, plan);
     }
-    logs = [...logs, `配图标记已计算：全文 ${leaves.length} 个 AI 小节，选中 ${selectedImageIds.size} 个小节。`];
+    logs = [...logs, `本次 ${targets.length} 个小节的编排及配图标记已保存。`];
     storedContentPlans = pruneContentGenerationPlans(nextPlans, leaves);
     const runtime = syncRuntime();
     checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
@@ -3509,12 +3350,9 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       : `继续整体编排决策，共 ${tasksToRun.length} 个小节，复用 ${tasksToRun.length - planningTargets.length} 个历史编排。`];
     publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
 
-    const missingPlanItemIds = leaves
-      .filter(({ item }) => !getReusableStoredContentPlan(item.id))
-      .map(({ item }) => item.id);
-    const hasPlanningSession = agentService.hasPersistentTaskSession(CONTENT_PLANNING_AGENT_TASK_KEY);
+    const missingPlanItemIds = planningTargets.map(({ item }) => item.id);
     let generatedPlans = new Map();
-    if (missingPlanItemIds.length || !hasPlanningSession) {
+    if (missingPlanItemIds.length) {
       generatedPlans = await runContentPlanningAgent(missingPlanItemIds);
       for (const { item } of planningTargets) {
         let contentPlan = generatedPlans.get(item.id);
@@ -3524,7 +3362,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       }
     }
     contentStats.planning_completed = tasksToRun.length;
-    const tableCandidates = tasksToRun.filter(({ item }) => contentPlans.get(item.id)?.table.needed);
+    const tableCandidates = planningTargets.filter(({ item }) => contentPlans.get(item.id)?.table.needed);
     const selectedTableIds = runLimits.maxTablesForRun === null
       ? new Set(tableCandidates.map(({ item }) => item.id))
       : pickDistributedTableTargets(tableCandidates, runLimits.maxTablesForRun);
@@ -3537,155 +3375,84 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     }
 
     logs = [...logs, `整体编排完成：表格候选 ${tableCandidates.length} 个，${runLimits.maxTablesForRun === null ? '保持现有编排' : `入选 ${selectedTableIds.size} 个`}。`];
-    persistContentPlans(tasksToRun, generatedPlans);
+    persistContentPlans(planningTargets, generatedPlans);
     pauseIfRequested('正文生成已在编排阶段暂停，可导出当前已完成内容，稍后继续。');
     contentStats.phase = 'generating';
     publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
   }
 
   // 仅在还原结束时统计全文有效来源，重复引用同一原文段只计一次。
+  // 保存完成后统一统计全文来源；日常进度快照不重复扫描。
   function updateOriginalRestorationStats() {
     if (!hasOriginalPlan) return;
-    const restoredSourceIds = new Set();
-    for (const { item } of leaves) {
+    const ranges = leaves.flatMap(({ item }) => {
       const state = getOriginalMaterialRuntimeState(item);
-      if (!state.validRestored) continue;
-      for (const segment of state.sourceSegments) restoredSourceIds.add(segment.id);
-    }
-    let totalChars = 0;
-    let restoredChars = 0;
-    for (const segment of originalPlanSegments) {
-      totalChars += segment.chars;
-      if (restoredSourceIds.has(segment.id)) restoredChars += segment.chars;
-    }
-    contentStats.original_restoration = {
-      source_hash: originalPlanSourceHash,
-      total_chars: totalChars,
-      restored_chars: restoredChars,
-      rate: totalChars > 0 ? restoredChars / totalChars * 100 : null,
-    };
+      return state.validRestored ? state.originalMaterial.source_ranges : [];
+    });
+    contentStats.original_restoration = calculateOriginalRestoration(originalSource, ranges, originalPlanSourceHash);
   }
 
-  // 复用有效来源记录，其余小节统一由 Agent 判断原文归属后还原保存。
+  // 未完成的还原阶段直接执行 Agent；完成后由流程阶段标记跳过，保护已扩写正文。
   async function restoreOriginalMaterialsIfNeeded(targets) {
-    if (!hasOriginalPlan || !originalPlanSegments.length || !targets?.length) {
-      return;
-    }
-
-    const targetStates = targets.map((context) => ({ context, state: getOriginalMaterialRuntimeState(context.item) }));
-    const rebuildTargets = targetStates.filter(({ state }) => state.canRebuildRestoredContent || (targetItemId && regenerate && state.validRestored));
-    const restoreTargets = targetStates
-      .filter(({ state }) => !state.validRestored && !state.canRebuildRestoredContent)
-      .map(({ context }) => context);
-    if (!restoreTargets.length && !rebuildTargets.length) {
-      updateOriginalRestorationStats();
-      logs = [...logs, '原方案还原：当前待生成小节均已完成还原，跳过还原阶段。'];
-      checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      return;
-    }
-
+    if (!hasOriginalPlan || !targets?.length || completedStages.has('restoring')) return;
+    const allowedNodeIds = new Set(targets.map(({ item }) => item.id));
+    const coveredRanges = leaves.filter(({ item }) => !allowedNodeIds.has(item.id)).flatMap(({ item }) => {
+      const state = getOriginalMaterialRuntimeState(item);
+      return state.validRestored ? state.originalMaterial.source_ranges.map(range => ({ ...range, node_id: item.id })) : [];
+    });
     contentStats.phase = 'restoring';
-    contentStats.restoration_total = rebuildTargets.length + restoreTargets.length;
+    contentStats.restoration_total = targets.length;
     contentStats.restoration_completed = 0;
-    logs = [...logs, `开始原方案还原：${originalPlanSegments.length} 个原文段，${restoreTargets.length} 个候选叶子小节，${rebuildTargets.length} 个小节可直接重建原文。`];
-    const restoringRuntime = syncRuntime({ phase: 'restoring' });
+    logs = [...logs, `开始原方案还原：完整原方案交由 Agent 分析，${targets.length} 个候选小节。`];
+    const runtime = syncRuntime({ phase: 'restoring' });
     checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
-      contentGenerationRuntime: restoringRuntime,
-    }, { contentRuntime: restoringRuntime });
-
-    const assignedSourceIds = new Set();
-    const completedRestoreTargetIds = new Set();
-    let restoredCount = 0;
-    for (const { context, state } of rebuildTargets) {
-      const segments = state.sourceSegments;
-      segments.forEach((segment) => assignedSourceIds.add(segment.id));
-      const restoredContent = segments.map((segment) => segment.content).join('\n\n').trim();
-      const originalMaterial = buildOriginalMaterialFromSegments(segments, state.originalMaterial);
-      completedRestoreTargetIds.add(context.item.id);
-      contentStats.restoration_completed = completedRestoreTargetIds.size;
-      saveSectionAndContentPlan(context.item, { status: 'idle', content: restoredContent, error: undefined }, restoredContent, {
-        ...state.plan,
-        original_material: originalMaterial,
-      }, { logs });
-      restoredCount += 1;
-    }
-
-    if (restoreTargets.length) {
-      const allowedNodeIds = new Set(restoreTargets.map(({ item }) => item.id).filter(Boolean));
-      const allowedSourceIds = new Set(originalPlanSegments.map((segment) => segment.id));
-      logs = [...logs, '开始使用 Agent 判断原方案段落归属。'];
-      writeDeveloperLog('original_restore.agent.start', {
-        target_count: restoreTargets.length,
-        original_segment_count: originalPlanSegments.length,
-      });
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      let validatedRestoreResult = null;
-      const { agentResult, outputContent } = await runContentAgentTask({
-        title: '原方案正文还原映射 Agent',
-        prompt: buildAgentOriginalMaterialRestorePrompt(),
-        outputFile: 'original-restore-result.json',
-        files: buildAgentOriginalMaterialRestoreFiles({
-          targets: restoreTargets,
-          originalSegments: originalPlanSegments,
-          projectOverview,
-          bidAnalysisFactsText,
-          globalFactTitlesText,
+      contentGenerationRuntime: runtime,
+    }, { contentRuntime: runtime });
+    const validationContext = { source: originalSource, allowedNodeIds, coveredRanges };
+    writeDeveloperLog('original_restore.agent.start', { target_count: targets.length, original_plan_chars: originalPlanMarkdown.length });
+    const { agentResult, outputContent } = await runContentAgentTask({
+      title: '原方案正文还原 Agent',
+      prompt: buildOriginalRestorationPrompt(),
+      outputFile: 'original-restore-result.json',
+      files: buildOriginalRestorationFiles({
+        source: originalSource,
+        targetsText: formatRestoreTargetsForPrompt(targets),
+        contextText: `${formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText)}\n\n全局事实变量标题：\n${globalFactTitlesText || '未提供'}`,
+        coveredRanges,
+      }),
+      eventPrefix: 'original_restore.agent',
+      activityLabel: 'Agent 正在按语义还原完整原方案',
+      validateOutput: result => validateOriginalRestoration(parseAgentJsonContent(result?.output_content), validationContext),
+    });
+    // 包括执行器恢复出的输出，也必须通过同一业务校验后才能保存。
+    const result = validateOriginalRestoration(parseAgentJsonContent(outputContent), validationContext);
+    pauseIfRequested('正文生成已在原方案还原回写前暂停，本次输出未回写；继续后重新执行。');
+    writeDeveloperLog('original_restore.agent.validated', {
+      assignment_count: result.assignments.length,
+      unassigned: result.unassigned,
+      agent_task_id: agentResult?.task_id || '',
+      agent_session_id: agentResult?.session_id || '',
+      output_metrics: textMetrics(outputContent),
+    });
+    const assignments = new Map(result.assignments.map(assignment => [assignment.node_id, assignment]));
+    for (const { item } of targets) {
+      const assignment = assignments.get(item.id);
+      const plan = getContentPlanForItem(item.id);
+      contentStats.restoration_completed += 1;
+      const content = assignment ? assignment.content.replace(/\r\n?/g, '\n').trim() : '';
+      saveSectionAndContentPlan(item, { status: 'idle', content, error: undefined }, content, {
+        ...plan,
+        original_material: normalizeOriginalMaterial({
+          restored: Boolean(assignment), optimized: false,
+          source_hash: originalPlanSourceHash,
+          source_ranges: assignment?.source_ranges || [],
+          restored_words: countReadableWords(content), restored_at: now(),
         }),
-        eventPrefix: 'original_restore.agent',
-        activityLabel: 'Agent 正在判断原方案段落归属',
-        startPauseMessage: '正文生成已在原方案还原 Agent 映射开始前暂停，本次 Agent 未启动；继续后将重新执行。',
-        resultPauseMessage: '正文生成已在原方案还原 Agent 映射回写前暂停，本次 Agent 输出未回写；继续后将重新执行。',
-        pausedLogMessage: '原方案还原 Agent 映射已暂停：本轮 Agent 已取消并清理，继续后将重新执行。',
-        validateOutput: (resultForValidation) => {
-          const outputForValidation = String(resultForValidation?.output_content || '').trim();
-          const parsedForValidation = parseAgentJsonContent(outputForValidation);
-          validatedRestoreResult = normalizeOriginalRestoreAssignments(parsedForValidation, { allowedNodeIds, allowedSourceIds });
-          validateOriginalRestoreAssignments(validatedRestoreResult);
-          return validatedRestoreResult;
-        },
-      });
-      const result = validatedRestoreResult || normalizeOriginalRestoreAssignments(parseAgentJsonContent(outputContent), { allowedNodeIds, allowedSourceIds });
-      pauseIfRequested('正文生成已在原方案还原 Agent 映射回写前暂停，本次 Agent 输出未回写；继续后将重新执行。');
-      writeDeveloperLog('original_restore.agent.validated', {
-        assignment_count: result.assignments.length,
-        agent_task_id: agentResult?.task_id || '',
-        agent_session_id: agentResult?.session_id || '',
-        output_metrics: textMetrics(outputContent),
-      });
-
-      const targetById = new Map(restoreTargets.map((context) => [context.item.id, context]));
-      for (const assignment of result.assignments || []) {
-        const context = targetById.get(assignment.node_id);
-        if (!context) {
-          continue;
-        }
-        const segments = (assignment.source_ids || []).map((sourceId) => originalPlanSegmentById.get(sourceId)).filter(Boolean);
-        if (!segments.length) {
-          continue;
-        }
-        segments.forEach((segment) => assignedSourceIds.add(segment.id));
-        const restoredContent = segments.map((segment) => segment.content).join('\n\n').trim();
-        const plan = getContentPlanForItem(context.item.id);
-        const originalMaterial = buildOriginalMaterialFromSegments(segments);
-        completedRestoreTargetIds.add(context.item.id);
-        contentStats.restoration_completed = completedRestoreTargetIds.size;
-        saveSectionAndContentPlan(context.item, { status: 'idle', content: restoredContent, error: undefined }, restoredContent, {
-          ...plan,
-          original_material: originalMaterial,
-        }, { logs });
-        restoredCount += 1;
-      }
+      }, { logs }, { preserveOriginal: true });
     }
-
-    contentStats.restoration_completed = contentStats.restoration_total;
     updateOriginalRestorationStats();
-    const unassignedCount = originalPlanSegments.filter((segment) => !assignedSourceIds.has(segment.id)).length;
-    logs = [...logs, `原方案还原完成：已还原 ${restoredCount} 个小节，未分配原文段 ${unassignedCount} 个。`];
-    contentStats.phase = 'generating';
-    const generatingRuntime = syncRuntime({ phase: 'generating' });
-    checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
-      contentGenerationRuntime: generatingRuntime,
-    }, { contentRuntime: generatingRuntime });
+    logs = [...logs, `原方案还原完成：已还原 ${result.assignments.length} 个小节，未还原范围 ${result.unassigned.length} 处，还原率 ${contentStats.original_restoration.rate?.toFixed(1) ?? '—'}%。`];
+    checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
   }
 
   async function prepareSingleSectionPlan() {
@@ -3710,15 +3477,12 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
 
     logs = [...logs, `开始重新编排当前小节：${context.item.id} ${context.item.title || '未命名章节'}。`];
     publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-    const targetIds = [...new Set([
-      context.item.id,
-      ...leaves.filter(({ item }) => !getReusableStoredContentPlan(item.id)).map(({ item }) => item.id),
-    ])];
+    const targetIds = [context.item.id];
     const generatedPlans = await runContentPlanningAgent(targetIds, [context.item.id]);
     let contentPlan = generatedPlans.get(context.item.id);
     if (!contentPlan) throw new Error(`正文编排结果缺少目标节点：${context.item.id}`);
     if (tableRequirement === 'none') contentPlan = clearContentPlanTable(contentPlan);
-    if (previousOriginalMaterial?.restored || previousOriginalMaterial?.source_ids?.length) {
+    if (previousOriginalMaterial?.restored || previousOriginalMaterial?.source_ranges?.length) {
       contentPlan = { ...contentPlan, original_material: previousOriginalMaterial };
     }
     contentPlans.set(context.item.id, contentPlan);
@@ -3804,6 +3568,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
           startPauseMessage: '正文生成已在已还原正文优化扩写 Agent 开始前暂停，本次 Agent 未启动；继续后将重新执行。',
           resultPauseMessage: '正文生成已在已还原正文优化扩写 Agent 回写前暂停，本次 Agent 输出未回写；继续后将重新执行。',
           pausedLogMessage: '已还原正文优化扩写 Agent 已暂停：本轮 Agent 已取消并清理，继续后将重新执行。',
+          validateOutput: result => validateSectionOriginalImages(item.id, result?.output_content || ''),
         });
         generatedContent = outputContent;
         pauseIfRequested('正文生成已在已还原正文优化扩写 Agent 回写前暂停，本次 Agent 输出未回写；继续后将重新执行。');
@@ -3823,10 +3588,12 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
 
       rawContent = needsRestoredOptimization ? generatedContent || '' : rawContent + (generatedContent || '');
 
-      content = normalizeLeafContentForSave(rawContent, item);
-      if (countContentWords(content) === 0) {
+      const nextContent = normalizeLeafContentForSave(rawContent, item);
+      validateSectionOriginalImages(item.id, nextContent);
+      if (countContentWords(nextContent) === 0 && !(needsRestoredOptimization && originalImageReferences(nextContent).length)) {
         throw new Error('正文生成结果没有有效可读内容');
       }
+      content = nextContent;
       logs = [...logs, needsRestoredOptimization
         ? `原方案优化扩写完成：${item.id} ${item.title || '未命名章节'}`
         : `生成完成：${item.id} ${item.title || '未命名章节'}`];
@@ -4346,16 +4113,19 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   }
 
   function buildOriginalCoverageAuditTargets(auditTargetItemId = '') {
-    if (!hasOriginalPlan || !originalPlanSegments.length) {
+    if (!hasOriginalPlan) {
       return [];
     }
     const normalizedTargetId = String(auditTargetItemId || '').trim();
-    const segmentMap = new Map(originalPlanSegments.map((segment) => [segment.id, segment]));
     return leaves
       .filter(({ item }) => !normalizedTargetId || item.id === normalizedTargetId)
       .map((context) => {
         const originalState = getOriginalMaterialRuntimeState(context.item);
-        const sources = originalState.originalMaterial.source_ids.map((sourceId) => segmentMap.get(sourceId)).filter(Boolean);
+        const sources = originalState.validRestored ? originalState.originalMaterial.source_ranges.map(range => ({
+          id: `L${range.start_line}-${range.end_line}`,
+          title_path: [`原方案第 ${range.start_line}-${range.end_line} 行`],
+          content: readOriginalRange(originalSource, range),
+        })) : [];
         return {
           ...context,
           content: originalState.content,
@@ -4395,6 +4165,7 @@ workspace 文件说明：
 
 最终 technical-plan.md 需要满足：
 - 保留所有章节编号、章节标题、HTML 注释标记和 section id。
+- 每个小节已有原方案图片必须原样保留引用及顺序，不能移到其他小节、删除、重复或替换成新图；证书和报告图片是原方案实质内容。
 - 保留原章节结构，不新增、删除或重排章节。
 - 正文修改范围限定在 yibiao-section-start 和 yibiao-section-end 标记之间。
 - 补回来源段中的实质信息、技术路线、服务承诺、设备参数、人员安排、周期、验收、售后、实施方法等内容；不追求逐字一致。
@@ -4644,6 +4415,7 @@ workspace 文件说明：
 
 最终 technical-plan.md 需要满足：
 - 保留所有章节编号、章节标题、HTML 注释标记和 section id。
+- 每个小节已有原方案图片必须原样保留引用及顺序，不能移到其他小节、删除、重复或替换成新图；证书和报告图片是原方案实质内容。
 - 保留原章节结构，不新增、删除或重排章节。
 - 正文修改范围限定在 yibiao-section-start 和 yibiao-section-end 标记之间。
 - 修复事实冲突、前后矛盾、同一信息多处表达不一致等问题。
@@ -4674,6 +4446,7 @@ workspace 文件说明：
         throw new Error(`Agent 输出缺少小节：${id}`);
       }
       const nextContent = String(parsedSections.get(id) || '').trim();
+      validateSectionOriginalImages(id, nextContent);
       if (String(section.originalContent || '').trim() && !nextContent) {
         throw new Error(`Agent 输出把非空小节改为空：${id}`);
       }
@@ -4681,6 +4454,8 @@ workspace 文件说明：
   }
 
   function applyAgentConsistencySections(parsedSections, sectionIndex, writableIds) {
+    // 先检查完整输出，避免后面某节丢图时前面小节已被写回。
+    validateAgentConsistencySections(parsedSections, sectionIndex);
     let changedCount = 0;
     let skippedCount = 0;
     const changedIds = [];
@@ -5356,12 +5131,13 @@ workspace 文件说明：
           markStageCompleted('planning');
           pauseIfRequested('正文生成已在正文编排后暂停，可导出当前已完成内容，稍后继续。');
         }
-        if (hasOriginalPlan && !completedStages.has('restoring')) {
-          await restoreOriginalMaterialsIfNeeded(tasksToRun);
+        if (hasOriginalPlan && !completedStages.has('restoring') && tasksToRun.some(({ item }) => !directGenerationIds.has(item.id))) {
+          await restoreOriginalMaterialsIfNeeded(tasksToRun.filter(({ item }) => !directGenerationIds.has(item.id)));
           markStageCompleted('restoring');
           pauseIfRequested('正文生成已在原方案还原阶段暂停，可导出当前已完成内容，稍后继续。');
         }
         if (!completedStages.has('generating')) {
+          startContentGenerationStage();
           await runItemsWithWorkerPool(tasksToRun, contentConcurrency, runOne, isPauseRequested);
           markStageCompleted('generating');
           pauseIfRequested('正文生成已在正文生成阶段暂停，可导出当前已完成内容，稍后继续。');
@@ -5372,12 +5148,13 @@ workspace 文件说明：
           markStageCompleted('planning');
           pauseIfRequested('正文生成已在正文编排后暂停，可导出当前已完成内容，稍后继续。');
         }
-        if (hasOriginalPlan && !completedStages.has('restoring')) {
-          await restoreOriginalMaterialsIfNeeded(tasksToRun);
+        if (hasOriginalPlan && !completedStages.has('restoring') && tasksToRun.some(({ item }) => !directGenerationIds.has(item.id))) {
+          await restoreOriginalMaterialsIfNeeded(tasksToRun.filter(({ item }) => !directGenerationIds.has(item.id)));
           markStageCompleted('restoring');
           pauseIfRequested('正文生成已在原方案还原阶段暂停，可导出当前已完成内容，稍后继续。');
         }
         if (!completedStages.has('generating')) {
+          startContentGenerationStage();
           await runContentTargetsWithWarmup(tasksToRun);
           const unresolvedContexts = leaves.filter(({ item }) => isUnresolvedContentSection(sections[item.id]));
           if (unresolvedContexts.length) {
@@ -5550,7 +5327,11 @@ workspace 文件说明：
       outlineData,
       contentGenerationSections: sections,
       contentGenerationPlans: storedContentPlans,
-      contentGenerationRuntime: undefined,
+      contentGenerationRuntime: {
+        generation_started: true,
+        direct_generation_item_ids: contentRuntime.direct_generation_item_ids,
+        pending_item_ids: contentRuntime.pending_item_ids.filter(id => !['success', 'ignored'].includes(sections[id]?.status)),
+      },
     });
   } catch (error) {
     if (isAiQueueScopePausedError(error)) {

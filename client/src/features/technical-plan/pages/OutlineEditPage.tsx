@@ -4,7 +4,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { ProgressBar, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, OutlineSelectionItem, SaveOutlineRequest, SaveOutlineSelectionRequest } from '../types';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
-import type { OutlineContentMode, OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
+import type { OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
@@ -62,7 +62,6 @@ const outlineModeLabels: Record<OutlineMode, string> = {
   'standalone-technical': '技术文件独立成册',
   'standalone-business': '商务标独立成册',
 };
-const contentModeOptions = Object.keys(OUTLINE_CONTENT_MODE_LABELS) as OutlineContentMode[];
 
 function collectOutlineIds(items: OutlineItem[], ids = new Set<string>()) {
   items.forEach((item) => {
@@ -261,9 +260,6 @@ function OutlineEditPage({
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
-  const [editDescription, setEditDescription] = useState('');
-  const [editContentMode, setEditContentMode] = useState<OutlineContentMode>('ai-generate');
-  const [editContentModeNote, setEditContentModeNote] = useState('');
   const [startingOutline, setStartingOutline] = useState(false);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const [localStartAt, setLocalStartAt] = useState<number | null>(null);
@@ -475,9 +471,6 @@ function OutlineEditPage({
     setSelectedItemId(item.id);
     setEditingItemId(item.id);
     setEditTitle(item.title);
-    setEditDescription(item.description);
-    setEditContentMode(item.content_mode || 'ai-generate');
-    setEditContentModeNote(item.content_mode_note || '');
   };
 
   const saveEditing = async () => {
@@ -489,14 +482,9 @@ function OutlineEditPage({
       await saveOutlineChange(updateOutlineItem(outlineData.outline, editingItemId, (item) => ({
         ...item,
         title: editTitle.trim() || item.title,
-        description: editDescription.trim(),
-        ...(!item.children?.length ? {
-          content_mode: editContentMode,
-          content_mode_note: editContentMode === 'other' ? editContentModeNote.trim() || undefined : undefined,
-        } : {}),
-      })), 'edit', [editingItemId]);
+      })), 'edit');
       setEditingItemId(null);
-      showToast('目录项已更新，相关正文已清空', 'success');
+      showToast('目录标题已更新', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '保存目录项失败', 'error');
     }
@@ -518,9 +506,6 @@ function OutlineEditPage({
       setSelectedItemId(newItem.id);
       setEditingItemId(newItem.id);
       setEditTitle(newItem.title);
-      setEditDescription(newItem.description);
-      setEditContentMode(newItem.content_mode || 'ai-generate');
-      setEditContentModeNote(newItem.content_mode_note || '');
       showToast('一级目录已添加', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '添加一级目录失败', 'error');
@@ -545,15 +530,12 @@ function OutlineEditPage({
       await saveOutlineChange(updateOutlineItem(outlineData.outline, parentId, (item) => ({
         ...item,
         children: [...(item.children || []), newItem],
-      })), 'add-child', [parentId]);
+      })), 'add-child', parent?.children?.length ? [] : [parentId]);
       setExpandedItems((prev) => new Set(prev).add(parentId));
       setSelectedItemId(newItem.id);
       setEditingItemId(newItem.id);
       setEditTitle(newItem.title);
-      setEditDescription(newItem.description);
-      setEditContentMode(newItem.content_mode || 'ai-generate');
-      setEditContentModeNote(newItem.content_mode_note || '');
-      showToast('子目录已添加，父目录正文已清空', 'success');
+      showToast(parent?.children?.length ? '子目录已添加' : '子目录已添加，原叶子节点正文已清空', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '添加子目录失败', 'error');
     }
@@ -915,24 +897,6 @@ function OutlineEditPage({
                     <span>标题</span>
                     <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} disabled={outlineMutationLocked || sorting} />
                   </label>
-                  <label>
-                    <span>描述</span>
-                    <textarea value={editDescription} onChange={(event) => setEditDescription(event.target.value)} disabled={outlineMutationLocked || sorting} />
-                  </label>
-                  {!selectedItem.children?.length && (
-                    <label>
-                      <span>内容处理模式</span>
-                      <select value={editContentMode} onChange={(event) => setEditContentMode(event.target.value as OutlineContentMode)} disabled={outlineMutationLocked || sorting}>
-                        {contentModeOptions.map((mode) => <option value={mode} key={mode}>{OUTLINE_CONTENT_MODE_LABELS[mode]}</option>)}
-                      </select>
-                    </label>
-                  )}
-                  {!selectedItem.children?.length && editContentMode === 'other' && (
-                    <label>
-                      <span>其他模式说明</span>
-                      <textarea value={editContentModeNote} onChange={(event) => setEditContentModeNote(event.target.value)} disabled={outlineMutationLocked || sorting} />
-                    </label>
-                  )}
                   <div className="outline-detail-actions">
                     <button type="button" className="primary-action" onClick={() => { void saveEditing(); }} disabled={outlineMutationLocked || sorting}>保存</button>
                     <button type="button" className="secondary-action" onClick={() => setEditingItemId(null)}>取消</button>

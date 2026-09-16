@@ -623,7 +623,7 @@ const config = configStore ? configStore.load() : { components: { file_parser: {
         const assetHash = crypto.createHash('sha1').update(filePath).digest('hex').slice(0, 12);
         fileContent = (await parseDocumentWithConfig(app, filePath, config, {
           assetScope: `${options?.assetScopePrefix || 'technical-plan'}-${assetHash}`,
-          preserveImages: false,
+          preserveImages: options.preserveImages === true,
         })).trim();
       } catch (error) {
         errors.push(`${path.basename(filePath)}：${formatImportError(error, filePath)}`);
