@@ -25,14 +25,38 @@ vm.runInNewContext(`${taskSource}\nmodule.exports = {
 function checkNumberedInputAndSchema() {
   const image = '![现场图](yibiao-asset://imported-images/方案/现场.png)';
   const source = restoration.createOriginalSource(
-    `1 实施方案\r\n${'技术参数😀'.repeat(600)} ${image}\r| 名称 | 参数 |\n| --- | --- |\n| 设备 | ${'规格'.repeat(1200)} |`);
+    `# 1 实施方案\r\n${'技术参数😀'.repeat(4000)} ${image}\r\n**项目目标**\r\n一、实施内容\r\n第1节 实施要求\r\n1.这是带逗号，属于正文说明。\r\n| 名称 | 参数 |\n| --- | --- |\n| 设备 | ${'规格'.repeat(1200)} |\r\n<table><tr><td>验收参数</td></tr></table>`);
   const files = restoration.buildOriginalRestorationFiles({
     source, targetsText: '1 实施方案', contextText: '项目背景', coveredRanges: [],
   });
   const numbered = files.find(file => file.path === 'original-plan-numbered.md');
+  const numberedParts = files.filter(file => /^original-plan-numbered-part-\d+\.md$/u.test(file.path));
+  const index = files.find(file => file.path === 'original-plan-index.md');
   assert.equal(numbered?.content, numberMarkdownLines(source.content));
+  assert.ok(numberedParts.length > 1, '超长行号视图应生成多个固定读取分片');
+  assert.equal(numberedParts.map(file => file.content).join('\n'), numbered.content, '固定分片拼接后必须与完整行号视图逐字一致');
+  assert.ok(numberedParts.every(file => Buffer.byteLength(file.content, 'utf8') <= 40 * 1024), '测试样本的每个分片应小于等于 40KB');
+  const partRanges = numberedParts.map((file) => {
+    const displayLines = file.content.split('\n');
+    return {
+      start: Number(/^L(\d+)/u.exec(displayLines[0])[1]),
+      end: Number(/^L(\d+)/u.exec(displayLines[displayLines.length - 1])[1]),
+    };
+  });
+  assert.ok(partRanges.some((range, index) => index > 0 && range.start === partRanges[index - 1].end), '同一真实长行应允许跨相邻读取分片');
+  assert.match(index.content, /分片行号范围允许重叠/u);
   assert.match(numbered.content, /L000002\[1\/\d+\] \|/u, '超长原文行应使用同一真实行号分片');
   assert.equal(files.find(file => file.path === 'original-plan.md')?.content, source.content);
+  for (const part of numberedParts) assert.ok(index.content.includes(part.path), `导航索引缺少分片：${part.path}`);
+  assert.match(index.content, /仅用于快速定位/u);
+  assert.match(index.content, /L000002：1 个图片引用/u);
+  assert.match(index.content, /L000007-L000009：Markdown 表格/u);
+  assert.match(index.content, /L000010-L000010：HTML 表格/u);
+  assert.match(index.content, /L000001 \| # 1 实施方案/u);
+  assert.match(index.content, /L000003 \| \*\*项目目标\*\*/u);
+  assert.match(index.content, /L000004 \| 一、实施内容/u);
+  assert.match(index.content, /L000005 \| 第1节 实施要求/u);
+  assert.doesNotMatch(index.content, /L000006 \|/u, '带句读的编号正文不应进入标题候选');
 
   const validator = createPiJsonValidator({
     workspaceDir: __dirname, trackFailures: false,
@@ -40,7 +64,7 @@ function checkNumberedInputAndSchema() {
   });
   const output = {
     assignments: [{
-      node_id: '1', source_ranges: [{ start_line: 1, end_line: 5 }],
+      node_id: '1', source_ranges: [{ start_line: 1, end_line: 10 }],
       heading_edits: [{ line: 1, content: '**1 实施方案**' }],
     }],
     unassigned: [],
@@ -51,12 +75,47 @@ function checkNumberedInputAndSchema() {
   })).details.valid, false, '新协议不兼容包含 content 的旧输出');
   const validated = restoration.validateOriginalRestoration(output, { source, allowedNodeIds: new Set(['1']) });
   assert.equal(validated.assignments[0].content,
-    source.content.replace('1 实施方案', '**1 实施方案**'), '正文应由程序从原始行逐字重建');
-  const prompt = restoration.buildOriginalRestorationPrompt();
+    source.content.replace('# 1 实施方案', '**1 实施方案**'), '正文应由程序从原始行逐字重建');
+  const prompt = restoration.buildOriginalRestorationPrompt({ numberedPartPaths: numberedParts.map(file => file.path) });
   assert.ok(prompt.includes('original-plan-numbered.md'));
+  for (const part of numberedParts) assert.ok(prompt.includes(part.path), `Prompt 缺少分片：${part.path}`);
+  assert.ok(prompt.includes('具体工具调用和读取节奏由你自行安排'));
+  assert.ok(prompt.includes('通常无需先执行 ls'));
+  assert.ok(!prompt.includes('第一批工具调用中一起读取'));
+  assert.ok(prompt.indexOf('1. restore-targets.md') < prompt.indexOf('4. original-plan-index.md'));
+  assert.ok(prompt.indexOf('4. original-plan-index.md') < prompt.indexOf(numberedParts[0].path));
+  assert.ok(prompt.includes('仅在分片读取异常或需要连续复核时读取'));
+  assert.ok(prompt.includes('仅在需要核对原始 Markdown 结构时读取'));
   assert.ok(prompt.includes('相同 L 编号的所有分片仍属于同一个真实原文行'));
   assert.ok(prompt.includes('不要在 assignment 顶层输出正文 content 字段'));
   assert.ok(prompt.includes('每项的标题 content 仍须填写'));
+  assert.ok(prompt.includes('不要求每个目标小节都有 assignment'));
+  assert.ok(prompt.includes('大型表格、成组图片、证书和清单等大块材料'));
+  assert.ok(prompt.includes('只有多个目标小节确实都需要完整保留该材料时'));
+  assert.ok(prompt.includes('纯空白签字、职务、日期、盖章栏'));
+  assert.ok(prompt.includes('优先直接写入 original-restore-result.json'));
+  assert.ok(prompt.includes('无需在 write 前逐行复述原文'));
+  assert.ok(prompt.includes('仍可使用 read、find 或 bash'));
+  assert.ok(prompt.includes('工具返回校验通过后无需再调用 json-validation'));
+  assert.ok(!prompt.includes('完成后调用 json-validation'));
+  const resumePrompt = restoration.buildOriginalRestorationPrompt({
+    resume: true, numberedPartPaths: numberedParts.map(file => file.path),
+  });
+  assert.ok(resumePrompt.includes('优先利用当前 Session 已有上下文'));
+  assert.ok(resumePrompt.includes('具体工具调用和读取节奏由你自行安排'));
+  assert.ok(!resumePrompt.includes('通常无需先执行 ls'), '继续任务仍需允许 Agent 检查已有输出');
+  assert.ok(!resumePrompt.includes('第一批工具调用中一起读取'));
+
+  const protectedSource = restoration.createOriginalSource(
+    `<img alt="${'超长图片说明'.repeat(5000)}" src="yibiao-asset://imported-images/方案/超长图片.png">`);
+  const protectedFiles = restoration.buildOriginalRestorationFiles({
+    source: protectedSource, targetsText: '1 图片材料', contextText: '', coveredRanges: [],
+  });
+  const protectedView = protectedFiles.find(file => file.path === 'original-plan-numbered.md').content;
+  const protectedParts = protectedFiles.filter(file => /^original-plan-numbered-part-\d+\.md$/u.test(file.path));
+  assert.equal(protectedParts.length, 1, '不可拆的超长 HTML 标签应独占一个读取分片');
+  assert.ok(Buffer.byteLength(protectedParts[0].content, 'utf8') > 40 * 1024, '单个不可拆展示行允许超过软上限');
+  assert.equal(protectedParts[0].content, protectedView, '超限独占分片仍须逐字保留行号视图');
 }
 
 // 跨小节来源可重叠，单节范围有序，长表格完整保留，拒绝遗漏和改写。
@@ -65,7 +124,7 @@ function checkSourceValidation() {
   const range = (start_line, end_line) => ({ start_line, end_line });
   const assignment = (node_id, start, end) => ({ node_id, source_ranges: [range(start, end)], heading_edits: [] });
   const result = { assignments: [assignment('1', 1, 2), assignment('2', 3, 5)], unassigned: [{ ...range(6, 6), reason: '签章栏' }] };
-  const validation = { source, allowedNodeIds: new Set(['1', '2']) };
+  const validation = { source, allowedNodeIds: new Set(['1', '2', '没有匹配原文']) };
   const validatedResult = restoration.validateOriginalRestoration(result, validation);
   const invalid = change => {
     const copy = structuredClone(result);
@@ -173,6 +232,7 @@ async function checkOriginalRestore() {
         async runTask(options) {
           calls += 1;
           assert.equal(options.primary_session, true);
+          assert.equal(options.summary_enabled, false, '还原结果写入成功后应直接结束，不生成总结');
           assert.equal(options.persistent_task.task_key, ORIGINAL_RESTORATION_AGENT_TASK_KEY);
           assert.equal(options.persistent_task.mode, scope.resume ? 'resume' : 'create');
           if (scope.resume) {
@@ -185,6 +245,11 @@ async function checkOriginalRestore() {
           assert.equal(options.json_validation_schemas['original-restore-result.json'], restoration.ORIGINAL_RESTORATION_JSON_SCHEMA);
           assert.equal(options.files.find(file => file.path === 'original-plan.md').content, originalPlanMarkdown);
           assert.equal(options.files.find(file => file.path === 'original-plan-numbered.md').content, numberMarkdownLines(originalPlanMarkdown));
+          const numberedParts = options.files.filter(file => /^original-plan-numbered-part-\d+\.md$/u.test(file.path));
+          assert.ok(numberedParts.length > 0);
+          assert.equal(numberedParts.map(file => file.content).join('\n'), numberMarkdownLines(originalPlanMarkdown));
+          assert.ok(options.files.some(file => file.path === 'original-plan-index.md'));
+          for (const part of numberedParts) assert.ok(options.prompt.includes(part.path));
           assert.ok(!options.files.some(file => ['original-segments.md', 'reserved-ranges.json', 'original-restore-result.json'].includes(file.path)), '恢复时不得覆盖已有输出文件');
           const coveredRanges = JSON.parse(options.files.find(file => file.path === 'covered-ranges.json').content);
           assert.equal(coveredRanges.length, mode === 'partial' ? 1 : 0);

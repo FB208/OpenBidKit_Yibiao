@@ -3433,18 +3433,23 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     let agentResult;
     try {
       abortOnPause();
+      const restorationFiles = buildOriginalRestorationFiles({
+        source: originalSource,
+        targetsText: formatRestoreTargetsForPrompt(targets),
+        contextText: `${formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText)}\n\n全局事实变量标题：\n${globalFactTitlesText || '未提供'}`,
+        coveredRanges,
+      });
+      const numberedPartPaths = restorationFiles
+        .filter(file => file.path.startsWith('original-plan-numbered-part-'))
+        .map(file => file.path);
       agentResult = await agentService.runTask({
         task_id: runId,
         title: '原方案正文还原 Agent',
         primary_session: true,
-        prompt: buildOriginalRestorationPrompt({ resume: resumeSession }),
+        summary_enabled: false,
+        prompt: buildOriginalRestorationPrompt({ resume: resumeSession, numberedPartPaths }),
         output_file: 'original-restore-result.json',
-        files: buildOriginalRestorationFiles({
-          source: originalSource,
-          targetsText: formatRestoreTargetsForPrompt(targets),
-          contextText: `${formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText)}\n\n全局事实变量标题：\n${globalFactTitlesText || '未提供'}`,
-          coveredRanges,
-        }),
+        files: restorationFiles,
         signal: AbortSignal.any([taskControl.signal, controller.signal]),
         timeout_ms: 30 * 60 * 1000,
         persistent_task: { task_key: ORIGINAL_RESTORATION_AGENT_TASK_KEY, mode: resumeSession ? 'resume' : 'create' },
