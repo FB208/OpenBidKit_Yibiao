@@ -5,6 +5,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire, Module } = require('node:module');
 const restoration = require('../electron/services/originalPlanRestoration.cjs');
+const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('../electron/services/originalPlanRestorationAgentConfig.cjs');
+const { createPiJsonValidator } = require('../electron/services/pi/piJsonValidationTool.cjs');
 const { countReadableWords } = require('../electron/utils/wordCount.cjs');
 const taskFile = path.resolve(__dirname, '../electron/services/contentGenerationTask.cjs');
 const taskSource = fs.readFileSync(taskFile, 'utf8');
@@ -13,7 +15,7 @@ vm.runInNewContext(`${taskSource}\nmodule.exports = {
   normalizeOriginalMaterial, parseAgentJsonContent, textMetrics, now,
   formatRestoreTargetsForPrompt, formatBidKeyInfoForPrompt, normalizeLeafContentForSave,
   withSection, updateOutlineItemContent, pruneContentGenerationPlans, createStoredContentPlan,
-  normalizeContentGenerationRuntime, CONTENT_PHASE_LABELS, createContentGenerationPausedError,
+  normalizeContentGenerationRuntime, CONTENT_PHASE_LABELS, createContentGenerationPausedError, isPauseLikeError,
   buildChapterContentMessages, buildRestoredChapterContentMessages,
   buildAgentRestoredChapterContentPrompt, buildAgentRestoredChapterContentFiles,
 };`, context, { filename: taskFile });
@@ -86,7 +88,7 @@ function checkSingleColumnTables() {
 
 // 执行正式保存、来源读取与还原函数，覆盖暂停续跑、失败和无原方案短路。
 async function checkOriginalRestore() {
-  for (const mode of ['success', 'partial', 'failure', 'pause', 'invalid-recovered-output']) {
+  for (const mode of ['success', 'partial', 'failure', 'pause-before', 'pause-during', 'resume', 'repair', 'invalid-output']) {
     const targetMarkdown = '# 实施方案\n原文内容\n<table><tr><td>参数</td></tr></table>';
     const originalPlanMarkdown = targetMarkdown + (mode === 'partial' ? '\n![已覆盖图片](yibiao-asset://imported-images/方案/现场.png)' : '');
     const originalSource = restoration.createOriginalSource(originalPlanMarkdown);
@@ -96,8 +98,23 @@ async function checkOriginalRestore() {
     const existingPlan = { original_material: { restored: true, optimized: false, source_hash: 'hash', source_ranges: [{ start_line: 2, end_line: 4 }] } };
     const saved = [];
     let calls = 0;
+    let pauseRequested = mode === 'pause-before';
+    let tick;
+    let sessionState = mode === 'resume' ? { session_file: 'original-session.jsonl', status: 'paused' } : null;
+    const originalSessionFile = 'original-session.jsonl';
+    const validator = createPiJsonValidator({
+      workspaceDir: __dirname, trackFailures: true,
+      validationSchemas: { 'original-restore-result.json': restoration.ORIGINAL_RESTORATION_JSON_SCHEMA },
+    });
     const scope = {
-      ...context.module.exports, ...restoration, countReadableWords,
+      ...context.module.exports, ...restoration, countReadableWords, ORIGINAL_RESTORATION_AGENT_TASK_KEY,
+      crypto: require('node:crypto'), AbortController, AbortSignal,
+      resume: mode === 'resume', taskControl: { signal: new AbortController().signal },
+      isPauseRequested: () => pauseRequested,
+      setInterval(callback) { tick = callback; return 1; }, clearInterval() { tick = null; },
+      updateContentAgentState(partial) { scope.agentState = { ...scope.agentState, ...partial }; },
+      createAgentActivityProgressHandler: () => () => {}, publishTaskUpdate() {}, agentErrorDiagnostics: () => ({}),
+      persistPausedContentGeneration() { scope.paused = true; },
       hasOriginalPlan: true, originalPlanMarkdown, originalSource, originalPlanSourceHash: 'hash',
       leaves: mode === 'partial' ? [target, existing] : [target],
       sections: mode === 'partial' ? { '2': { status: 'success', content: existingContent } } : {},
@@ -107,21 +124,60 @@ async function checkOriginalRestore() {
       projectOverview: '', bidAnalysisFactsText: '', globalFactTitlesText: '',
       getStoredContentPlan: () => null,
       getContentPlanForItem: () => ({ writing_focus: '实施方案', image_needed: true, image_suitability_score: 10 }),
-      runContentAgentTask: async options => {
-        calls += 1;
-        assert.equal(options.files.find(file => file.path === 'original-plan.md').content, originalPlanMarkdown);
-        assert.ok(!options.files.some(file => file.path === 'original-segments.md'));
-        assert.ok(!options.files.some(file => file.path === 'reserved-ranges.json'));
-        const coveredRanges = JSON.parse(options.files.find(file => file.path === 'covered-ranges.json').content);
-        assert.equal(coveredRanges.length, mode === 'partial' ? 1 : 0);
-        if (mode === 'failure') throw new Error('Agent 失败');
-        const result = { assignments: [{ node_id: '1', source_ranges: [{ start_line: 1, end_line: 3 }], heading_edits: [{ line: 1, content: '**实施方案**' }], content: targetMarkdown.replace('# 实施方案', '**实施方案**') }], unassigned: [] };
-        if (mode === 'invalid-recovered-output') result.assignments[0].content = '压缩摘要';
-        const outputContent = JSON.stringify(result);
-        if (mode !== 'invalid-recovered-output') options.validateOutput({ output_content: outputContent });
-        return { outputContent, agentResult: {} };
+      runContentAgentTask() { assert.fail('还原不得再调用临时包装'); },
+      agentService: {
+        hasPersistentTaskSession: () => Boolean(sessionState?.session_file),
+        loadPersistentTask: () => ({ state: sessionState }),
+        updatePersistentTask(key, partial) {
+          assert.equal(key, ORIGINAL_RESTORATION_AGENT_TASK_KEY);
+          assert.ok(sessionState);
+          sessionState = { ...sessionState, ...partial };
+          return { state: sessionState };
+        },
+        async runTask(options) {
+          calls += 1;
+          assert.equal(options.primary_session, true);
+          assert.equal(options.persistent_task.task_key, ORIGINAL_RESTORATION_AGENT_TASK_KEY);
+          assert.equal(options.persistent_task.mode, scope.resume ? 'resume' : 'create');
+          if (scope.resume) {
+            assert.equal(sessionState.session_file, originalSessionFile);
+            assert.equal(sessionState.run_id, options.task_id, '恢复前同步本轮运行 ID');
+            assert.ok(options.prompt.startsWith('继续同一次'));
+          } else sessionState = { run_id: options.task_id, session_file: originalSessionFile };
+          options.onCheckpoint(sessionState);
+          assert.equal(options.auto_validate_json, true);
+          assert.equal(options.json_validation_schemas['original-restore-result.json'], restoration.ORIGINAL_RESTORATION_JSON_SCHEMA);
+          assert.equal(options.files.find(file => file.path === 'original-plan.md').content, originalPlanMarkdown);
+          assert.ok(!options.files.some(file => ['original-segments.md', 'reserved-ranges.json', 'original-restore-result.json'].includes(file.path)), '恢复时不得覆盖已有输出文件');
+          const coveredRanges = JSON.parse(options.files.find(file => file.path === 'covered-ranges.json').content);
+          assert.equal(coveredRanges.length, mode === 'partial' ? 1 : 0);
+          if (mode === 'failure') throw new Error('Agent 失败');
+          if (mode === 'pause-during' && calls === 1) {
+            pauseRequested = true;
+            tick();
+            assert.equal(options.signal.aborted, true);
+            throw options.signal.reason;
+          }
+          const result = { assignments: [{ node_id: '1', source_ranges: [{ start_line: 1, end_line: 3 }], heading_edits: [{ line: 1, content: '**实施方案**' }], content: targetMarkdown.replace('# 实施方案', '**实施方案**') }], unassigned: [] };
+          if (mode === 'repair') {
+            const bad = structuredClone(result);
+            bad.assignments[0].source_ranges[0].start_line = '1';
+            assert.equal(validator.validateContent('original-restore-result.json', JSON.stringify(bad)).details.valid, false);
+            assert.throws(() => validator.assertValid(), /尚未通过校验/);
+            bad.assignments[0].source_ranges[0].start_line = 1;
+            bad.assignments[0].content = '改写后的内容';
+            assert.throws(() => options.validateOutput({ output_content: JSON.stringify(bad) }), /逐字复制/);
+            assert.equal(options.max_retries, 1, '保留同一 Session 内的业务校验修正机会');
+          }
+          if (mode === 'invalid-output') result.assignments[0].content = '压缩摘要';
+          const outputContent = JSON.stringify(result);
+          assert.equal(validator.validateContent('original-restore-result.json', outputContent).details.valid, true);
+          validator.assertValid();
+          if (mode !== 'invalid-output') options.validateOutput({ output_content: outputContent });
+          return { output_content: outputContent, task_id: options.task_id, session_id: 'original-session' };
+        },
       },
-      pauseIfRequested() { if (mode === 'pause') throw new Error('已暂停'); },
+      pauseIfRequested() { if (pauseRequested) throw scope.createContentGenerationPausedError(); },
       writeDeveloperLog() {}, updateContentWordCount() {},
       checkpointTask(task, patch) {
         if (patch?.contentGenerationItem) saved.push(patch.contentGenerationItem);
@@ -135,34 +191,50 @@ async function checkOriginalRestore() {
     const restoreEnd = taskSource.indexOf('  async function prepareSingleSectionPlan(', statsStart);
     vm.createContext(scope);
     vm.runInContext(taskSource.slice(stateStart, saveEnd) + taskSource.slice(statsStart, restoreEnd), scope);
-    if (mode === 'success' || mode === 'partial') {
+    if (mode === 'pause-during') {
+      await assert.rejects(scope.restoreOriginalMaterialsIfNeeded([target]), /CONTENT_GENERATION_PAUSED/);
+      assert.equal(saved.length, 0);
+      assert.equal(scope.paused, true);
+      assert.equal(sessionState.status, 'paused');
+      assert.equal(sessionState.session_file, originalSessionFile);
+      pauseRequested = false;
+      scope.resume = true;
+    }
+    if (['success', 'partial', 'pause-during', 'resume', 'repair'].includes(mode)) {
       await scope.restoreOriginalMaterialsIfNeeded([target]);
-      assert.equal(saved[0].section.content, targetMarkdown.replace('# 实施方案', '**实施方案**'), '保存调整后的内部标题并完整保留表格');
+      assert.equal(saved[0].section.content, targetMarkdown.replace('# 实施方案', '**实施方案**'));
       assert.equal(saved[0].storedPlan.plan.image_needed, true);
       assert.equal(saved[0].storedPlan.plan.original_material.source_ranges[0].end_line, 3);
       assert.equal(scope.contentStats.original_restoration.rate, 100);
+      assert.equal(sessionState.status, 'success');
+      assert.equal(scope.agentState.task_key, ORIGINAL_RESTORATION_AGENT_TASK_KEY);
+      assert.equal(scope.agentState.session_file, originalSessionFile);
       if (mode === 'partial') {
-        assert.equal(scope.sections['2'].content, existingContent, '部分还原不改写其他小节');
-        assert.equal(scope.contentStats.original_restoration.restored_images, 1, '其他小节已覆盖图片不必重新分配');
+        assert.equal(scope.sections['2'].content, existingContent);
+        assert.equal(scope.contentStats.original_restoration.restored_images, 1);
       }
       assert.equal(scope.getOriginalMaterialRuntimeState(target.item).needsOptimization, true);
       scope.completedStages.add('restoring');
       scope.sections['1'].content = '已经扩写的正文';
+      const completedCalls = calls;
       await scope.restoreOriginalMaterialsIfNeeded([target]);
-      assert.equal(calls, 1, '完成阶段继续执行不得重跑还原');
+      assert.equal(calls, completedCalls, '完成阶段继续不得重跑还原');
       assert.equal(scope.sections['1'].content, '已经扩写的正文');
     } else {
-      await assert.rejects(scope.restoreOriginalMaterialsIfNeeded([target]), /失败|暂停|逐字复制/);
+      await assert.rejects(scope.restoreOriginalMaterialsIfNeeded([target]), /失败|CONTENT_GENERATION_PAUSED|逐字复制/);
       assert.equal(saved.length, 0);
     }
+    assert.ok(tick == null, '本轮结束清除暂停定时器');
+    const previousCalls = calls;
     scope.hasOriginalPlan = false;
     scope.leaves = new Proxy([], { get() { assert.fail('没有原方案不得扫描目录'); } });
     scope.contentPlans = new Proxy(new Map(), { get() { assert.fail('没有原方案不得扫描记录'); } });
     assert.equal(scope.getOriginalMaterialRuntimeState(target.item).needsOptimization, false);
     scope.updateOriginalRestorationStats();
     await scope.restoreOriginalMaterialsIfNeeded([target]);
-    assert.equal(calls, 1);
+    assert.equal(calls, previousCalls);
   }
+  console.log('持久还原：新建/恢复、暂停保留 Session、预置 Schema 修正、主会话及回写检查通过。');
 }
 
 // 接受 Agent 的标题处理结果；原图在还原、扩写保存和整篇审计中均不能丢失或重复。

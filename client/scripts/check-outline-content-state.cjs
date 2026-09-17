@@ -29,13 +29,23 @@ if (!process.versions.electron) {
     const { createSqliteDatabase } = require('../electron/services/sqliteDatabase.cjs');
     const { createTechnicalPlanStore } = require('../electron/services/technicalPlanStore.cjs');
     const { createTaskLogStore } = require('../electron/services/taskLogStore.cjs');
+    const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('../electron/services/originalPlanRestorationAgentConfig.cjs');
+    const { createPersistentAgentTask, deletePersistentAgentTask } = require('../electron/services/pi/piPersistentTaskStore.cjs');
+    const { clearStalePiTaskArchives } = require('../electron/services/storageCleanupService.cjs');
+    // 在隔离 userData 创建真实任务目录，检查启动保留和业务重置清理。
+    const seedRestorationSession = () => {
+      const task = createPersistentAgentTask(app, ORIGINAL_RESTORATION_AGENT_TASK_KEY, { session_file: 'session.jsonl' });
+      fs.writeFileSync(path.join(task.paths.sessionsDir, 'session.jsonl'), '{}\n', 'utf8');
+      fs.writeFileSync(path.join(task.paths.workspaceDir, 'original-restore-result.json'), '{}', 'utf8');
+      return task.paths.taskRoot;
+    };
     let database;
     let store;
     const open = () => {
       database = createSqliteDatabase(app);
       store = createTechnicalPlanStore({
         app, db: database.db, fileService: {}, configStore: { load: () => ({}) },
-        taskLogStore: createTaskLogStore({ db: database.db }), agentService: { deletePersistentTask() {} },
+        taskLogStore: createTaskLogStore({ db: database.db }), agentService: { deletePersistentTask(key) { deletePersistentAgentTask(app, key); } },
       });
     };
     const leaf = (id, content = '') => ({ id, title: `小节${id}`, description: '原说明', content_mode: 'ai-generate', content });
@@ -57,6 +67,9 @@ if (!process.versions.electron) {
     open();
     try {
       seed();
+      let restorationRoot = seedRestorationSession();
+      clearStalePiTaskArchives(app);
+      assert.ok(fs.existsSync(restorationRoot), '启动清理必须保留还原持久工作区');
       let before = store.loadTechnicalPlan();
       let outline = structuredClone(before.outlineData.outline);
       outline[0].children[0].title = '修改后的标题';
@@ -65,9 +78,11 @@ if (!process.versions.electron) {
       assert.equal(result.contentGenerationSections['1.1'].content, '正文甲');
       assert.deepEqual(result.contentGenerationPlans, before.contentGenerationPlans);
       assert.deepEqual(result.contentGenerationRuntime, before.contentGenerationRuntime);
+      assert.ok(fs.existsSync(restorationRoot), '仅改名不清理还原会话');
 
       outline.push(leaf('3'));
       result = save(outline, 'add-root');
+      assert.equal(fs.existsSync(restorationRoot), false, '目录结构变化清理旧还原会话');
       assert.deepEqual(result.contentGenerationPlans, before.contentGenerationPlans);
       assert.equal(result.contentGenerationSections['2'].content, '正文丙');
       assert.deepEqual(result.contentGenerationRuntime.pending_item_ids, ['3']);
@@ -115,19 +130,44 @@ if (!process.versions.electron) {
       assert.deepEqual(result.contentGenerationRuntime.direct_generation_item_ids, []);
       assert.equal(result.contentGenerationSections['2'].content, '正文丙');
 
+      restorationRoot = seedRestorationSession();
       store.saveGlobalFacts([{ id: 'facts', title: '项目事实', content: '确认后的新事实' }]);
       result = store.loadTechnicalPlan();
       assert.equal(result.outlineData.outline[0].children[0].content || '', '');
       assert.deepEqual(result.contentGenerationPlans, {});
       assert.equal(result.contentGenerationRuntime, undefined, '清空正文后解除锁定');
       assert.equal(result.contentGenerationTask, undefined);
+      assert.equal(fs.existsSync(restorationRoot), false, '修改全局事实清理还原会话');
       seed();
+      restorationRoot = seedRestorationSession();
       store.updateTechnicalPlanWithoutReload({ invalidateContentGeneration: true });
+      assert.equal(fs.existsSync(restorationRoot), false, '重置正文清理还原会话');
       assert.equal(store.loadTechnicalPlan().contentGenerationRuntime, undefined, '正文重置清除锁定');
       await checkFactsConfirmation();
+      checkRestorationStart();
       console.log('目录状态：改名保留、增删局部影响、父子转换、编号重映射、重启锁定及清空确认检查通过。');
     } finally {
       database.close();
+    }
+  }
+
+  // 执行正式任务启动入口，确保新一轮清理、暂停继续保留、无原方案不访问还原工作区。
+  function checkRestorationStart() {
+    const source = fs.readFileSync(path.join(__dirname, '../electron/services/taskService.cjs'), 'utf8');
+    const start = source.indexOf('    startContentGeneration(payload) {');
+    const end = source.indexOf('    pauseContentGeneration()', start);
+    for (const [payload, hasOriginal, expectedDeletes] of [[{}, true, 1], [{ regenerate: true }, true, 1], [{ resume: true }, true, 0], [{ retryContentCorrection: true }, true, 0], [{ rerunIllustrations: true }, true, 0], [{}, false, 0]]) {
+      let deletes = 0;
+      const scope = {
+        ORIGINAL_RESTORATION_AGENT_TASK_KEY: 'technical-plan-original-restoration', runContentGenerationTask() {},
+        technicalPlanStore: { loadTechnicalPlan: () => ({ outlineWordControlSnapshot: {}, originalPlanFile: hasOriginal ? { markdownPath: 'original.md' } : null }) },
+        agentService: { deletePersistentTask() { deletes += 1; } },
+        startManagedTask(_type, _payload, _runner, _initial, options) { options.beforeStart(); },
+      };
+      vm.createContext(scope);
+      vm.runInContext(`this.service = {${source.slice(start, end)}};`, scope);
+      scope.service.startContentGeneration(payload);
+      assert.equal(deletes, expectedDeletes);
     }
   }
 

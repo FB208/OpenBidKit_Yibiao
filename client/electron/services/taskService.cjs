@@ -12,6 +12,7 @@ const {
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { CONTENT_PLANNING_AGENT_TASK_KEY } = require('./contentPlanningAgentConfig.cjs');
+const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
 const {
@@ -1436,6 +1437,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
           agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY);
           agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
           agentService.deletePersistentTask(CONTENT_PLANNING_AGENT_TASK_KEY);
+          agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
           technicalPlanStore.clearBidTemplate();
         },
       });
@@ -1475,6 +1477,16 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         contentGenerationRuntime: { ...technicalPlan.contentGenerationRuntime, generation_started: true },
       }, {
         primarySession: true,
+        beforeStart: () => {
+          // 新一轮正文生成清理还原现场；暂停继续及后续阶段重试保留 Session。
+          const continuing = taskPayload?.resume || [
+            'retryContentCorrection', 'retry_content_correction', 'retryFailedSections', 'retry_failed_sections',
+            'continuePostProcessing', 'continue_post_processing', 'rerunIllustrations', 'rerun_illustrations',
+          ].some(field => taskPayload?.[field]);
+          if (technicalPlan.originalPlanFile?.markdownPath && !continuing) {
+            agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
+          }
+        },
       });
     },
     pauseContentGeneration() {

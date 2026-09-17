@@ -89,8 +89,8 @@ function buildOriginalRestorationFiles({ source, targetsText, contextText, cover
 }
 
 // 由 Agent 按语义还原原文；程序校验来源和完整性。
-function buildOriginalRestorationPrompt() {
-  return `你负责将已有技术方案原文还原到新目录，供后续扩写使用。
+function buildOriginalRestorationPrompt({ resume = false } = {}) {
+  return `${resume ? '继续同一次原方案还原任务。先检查工作区已有输出文件，接着完成未完成的工作，并重新校验完整结果。\n' : ''}你负责将已有技术方案原文还原到新目录，供后续扩写使用。
 先阅读 original-plan.md 完整原方案、restore-targets.md 目标叶子小节、context.md 项目背景和 covered-ranges.json 其他小节已覆盖的原文范围。
 不要依赖固定长度切块。自行分析主题、章节职责和上下文，将不同主题的原文分别放到最合适的小节。
 HTML 和 Markdown 表格必须完整保留，禁止切断表格。
@@ -102,8 +102,47 @@ node_id 必须来自目标小节。原文范围用 start_line 和 end_line，行
 covered-ranges.json 仅用于核对全文覆盖情况。所有非空原文行须由已有覆盖范围或本次 assignments 覆盖；尚未覆盖的原文列入 unassigned 并说明原因，不能静默遗漏。
 最终写入 original-restore-result.json，格式：
 {"assignments":[{"node_id":"1.1","source_ranges":[{"start_line":1,"end_line":8}],"heading_edits":[{"line":1,"content":"**1.1.1 实施安排**"}],"content":"**1.1.1 实施安排**\\n对应原文和原图"}],"unassigned":[{"start_line":9,"end_line":10,"reason":"不适用于正文的签章栏"}]}
-不要修改输入文件或业务数据库。检查结果如有错误，按程序反馈修正输出文件。`;
+程序已为 original-restore-result.json 预置 JSON Schema，write/edit 会自动校验。完成后调用 json-validation，只传 {"file_path":"original-restore-result.json"}；失败时按工具反馈修正文件。
+不要修改输入文件或业务数据库。JSON 格式通过后，程序还会检查原文、表格、图片和覆盖范围；如有错误，按反馈在当前会话中修正输出文件。`;
 }
+
+// 结构校验交给新版 JSON 工具；原文完整性仍由 validateOriginalRestoration 检查。
+const ORIGINAL_RESTORATION_JSON_SCHEMA = {
+  type: 'object', required: ['assignments', 'unassigned'], additionalProperties: false,
+  $defs: {
+    range: {
+      type: 'object', required: ['start_line', 'end_line'], additionalProperties: false,
+      properties: { start_line: { type: 'integer', minimum: 1 }, end_line: { type: 'integer', minimum: 1 } },
+    },
+  },
+  properties: {
+    assignments: {
+      type: 'array', items: {
+        type: 'object', required: ['node_id', 'source_ranges', 'heading_edits', 'content'], additionalProperties: false,
+        properties: {
+          node_id: { type: 'string', minLength: 1 },
+          source_ranges: { type: 'array', minItems: 1, items: { $ref: '#/$defs/range' } },
+          heading_edits: {
+            type: 'array', items: {
+              type: 'object', required: ['line', 'content'], additionalProperties: false,
+              properties: { line: { type: 'integer', minimum: 1 }, content: { type: 'string' } },
+            },
+          },
+          content: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    unassigned: {
+      type: 'array', items: {
+        type: 'object', required: ['start_line', 'end_line', 'reason'], additionalProperties: false,
+        properties: {
+          start_line: { type: 'integer', minimum: 1 }, end_line: { type: 'integer', minimum: 1 },
+          reason: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+  },
+};
 
 // 验证原文对应、单节范围顺序和表格完整性，按全文覆盖情况检查遗漏。
 function validateOriginalRestoration(value, { source, allowedNodeIds, coveredRanges = [] }) {
@@ -184,4 +223,5 @@ module.exports = {
   createOriginalSource, readOriginalRange, buildOriginalRestorationFiles,
   buildOriginalRestorationPrompt, validateOriginalRestoration, calculateOriginalRestoration,
   originalImageReferences, validateOriginalImages, restoredAssignmentContent, ORIGINAL_PLAN_HEADING_INSTRUCTION,
+  ORIGINAL_RESTORATION_JSON_SCHEMA,
 };

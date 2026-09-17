@@ -20,10 +20,11 @@ const { applyRangeEdits, findTextMatches } = require('../utils/textEdit.cjs');
 const {
   createOriginalSource, readOriginalRange, buildOriginalRestorationFiles,
   buildOriginalRestorationPrompt, validateOriginalRestoration, calculateOriginalRestoration, ORIGINAL_PLAN_HEADING_INSTRUCTION,
-  originalImageReferences, validateOriginalImages,
+  originalImageReferences, validateOriginalImages, ORIGINAL_RESTORATION_JSON_SCHEMA,
 } = require('./originalPlanRestoration.cjs');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 const { CONTENT_PLANNING_AGENT_TASK_KEY } = require('./contentPlanningAgentConfig.cjs');
+const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
 
 const DEFAULT_CONTEXT_LENGTH_LIMIT = 400000;
 const AGENT_CONTEXT_THRESHOLD_RATIO = 0.7;
@@ -2398,7 +2399,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       : Boolean(payload.simulatePartialFailures ?? payload.simulate_partial_failures),
   });
   const completedStages = new Set(contentRuntime.completed_stages);
-  let planningAgentState = resume ? storedPlan.contentGenerationTask?.stats?.agent : undefined;
+  let contentAgentState = resume ? storedPlan.contentGenerationTask?.stats?.agent : undefined;
   const contentPlans = new Map();
   let storedContentPlans = pruneContentGenerationPlans(fullRegenerate ? {} : storedPlan.contentGenerationPlans, leaves);
   let knowledgeItems = [];
@@ -2750,9 +2751,9 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   allowedKnowledgeItemIds = new Set(knowledgeItems.map((item) => item.id));
   knowledgeContentMap = knowledgeReferences.contentMap;
 
-  function updatePlanningAgentState(partial = {}, persist = true) {
-    planningAgentState = {
-      ...(planningAgentState || {}),
+  function updateContentAgentState(partial = {}, persist = true) {
+    contentAgentState = {
+      ...(contentAgentState || {}),
       task_key: CONTENT_PLANNING_AGENT_TASK_KEY,
       ...partial,
     };
@@ -2776,12 +2777,12 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     } else {
       agentService.deletePersistentTask(CONTENT_PLANNING_AGENT_TASK_KEY);
     }
-    updatePlanningAgentState({
+    updateContentAgentState({
       run_id: runId,
       status: 'running',
       phase: 'content-planning',
       agent_connection: 'running',
-      session_file: hasSession ? planningAgentState?.session_file || '' : '',
+      session_file: hasSession ? contentAgentState?.session_file || '' : '',
     });
     logs = [...logs, `正文编排 Agent 已启动，本次处理 ${targetItemIds.length} 个目录节点。`];
     publishTaskUpdate({ status: 'running', logs, stats: statsSnapshot() });
@@ -2824,7 +2825,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
         publishTaskUpdate({ status: 'running', logs, stats: statsSnapshot() });
       },
       onCheckpoint(checkpoint = {}) {
-        updatePlanningAgentState({
+        updateContentAgentState({
           status: checkpoint.status,
           phase: checkpoint.phase,
           agent_connection: checkpoint.agent_connection,
@@ -2839,7 +2840,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       allowedKnowledgeItemIds,
       new Set(targetItemIds),
     );
-    updatePlanningAgentState({
+    updateContentAgentState({
       status: 'success',
       phase: 'completed',
       agent_connection: 'idle',
@@ -2911,7 +2912,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     contentStats.strict_section_words = wordControl.strictSectionWords;
     contentStats.ignored_section_count = leaves.filter(({ item }) => sections[item.id]?.status === 'ignored').length;
     return {
-      ...(planningAgentState ? { agent: { ...planningAgentState } } : {}),
+      ...(contentAgentState ? { agent: { ...contentAgentState } } : {}),
       content: { ...contentStats },
     };
   }
@@ -3410,23 +3411,82 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     }, { contentRuntime: runtime });
     const validationContext = { source: originalSource, allowedNodeIds, coveredRanges };
     writeDeveloperLog('original_restore.agent.start', { target_count: targets.length, original_plan_chars: originalPlanMarkdown.length });
-    const { agentResult, outputContent } = await runContentAgentTask({
-      title: '原方案正文还原 Agent',
-      prompt: buildOriginalRestorationPrompt(),
-      outputFile: 'original-restore-result.json',
-      files: buildOriginalRestorationFiles({
-        source: originalSource,
-        targetsText: formatRestoreTargetsForPrompt(targets),
-        contextText: `${formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText)}\n\n全局事实变量标题：\n${globalFactTitlesText || '未提供'}`,
-        coveredRanges,
-      }),
-      eventPrefix: 'original_restore.agent',
-      activityLabel: 'Agent 正在按语义还原完整原方案',
-      validateOutput: result => validateOriginalRestoration(parseAgentJsonContent(result?.output_content), validationContext),
+    pauseIfRequested('原方案还原尚未启动，继续后将创建或恢复持久会话。');
+    const resumeSession = resume && agentService.hasPersistentTaskSession(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
+    const runId = crypto.randomUUID();
+    if (resumeSession) {
+      agentService.updatePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY, {
+        run_id: runId, status: 'running', phase: 'restoring', agent_connection: 'running', error: null,
+      });
+    }
+    updateContentAgentState({
+      task_key: ORIGINAL_RESTORATION_AGENT_TASK_KEY, run_id: runId,
+      status: 'running', phase: 'restoring', agent_connection: 'running',
+      session_file: resumeSession ? agentService.loadPersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY).state.session_file : '',
     });
-    // 包括执行器恢复出的输出，也必须通过同一业务校验后才能保存。
+    const controller = new AbortController();
+    // 暂停取消本轮执行，但 Pi 会保留工作区和 Session，供下次继续。
+    const abortOnPause = () => {
+      if (isPauseRequested() && !controller.signal.aborted) controller.abort(createContentGenerationPausedError());
+    };
+    const pauseWatcher = setInterval(abortOnPause, 1000);
+    let agentResult;
+    try {
+      abortOnPause();
+      agentResult = await agentService.runTask({
+        task_id: runId,
+        title: '原方案正文还原 Agent',
+        primary_session: true,
+        prompt: buildOriginalRestorationPrompt({ resume: resumeSession }),
+        output_file: 'original-restore-result.json',
+        files: buildOriginalRestorationFiles({
+          source: originalSource,
+          targetsText: formatRestoreTargetsForPrompt(targets),
+          contextText: `${formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText)}\n\n全局事实变量标题：\n${globalFactTitlesText || '未提供'}`,
+          coveredRanges,
+        }),
+        signal: AbortSignal.any([taskControl.signal, controller.signal]),
+        timeout_ms: 30 * 60 * 1000,
+        persistent_task: { task_key: ORIGINAL_RESTORATION_AGENT_TASK_KEY, mode: resumeSession ? 'resume' : 'create' },
+        initial_stage: 'restoring',
+        json_validation_schemas: { 'original-restore-result.json': ORIGINAL_RESTORATION_JSON_SCHEMA },
+        auto_validate_json: true,
+        max_retries: 1,
+        validateOutput: result => validateOriginalRestoration(parseAgentJsonContent(result?.output_content), validationContext),
+        onActivity: createAgentActivityProgressHandler(() => {
+          publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
+        }, 0, 'Agent 正在按语义还原完整原方案'),
+        onCheckpoint(checkpoint = {}) {
+          updateContentAgentState({
+            task_key: ORIGINAL_RESTORATION_AGENT_TASK_KEY,
+            status: checkpoint.status, phase: checkpoint.phase,
+            agent_connection: checkpoint.agent_connection, session_file: checkpoint.session_file,
+          });
+        },
+      });
+      abortOnPause();
+      if (controller.signal.aborted) throw controller.signal.reason;
+    } catch (error) {
+      const paused = isPauseRequested() || isPauseLikeError(error);
+      updateContentAgentState({
+        task_key: ORIGINAL_RESTORATION_AGENT_TASK_KEY,
+        status: paused ? 'paused' : 'error', agent_connection: 'idle',
+      }, false);
+      writeDeveloperLog('original_restore.agent.error', agentErrorDiagnostics(error));
+      if (paused) {
+        if (agentService.hasPersistentTaskSession(ORIGINAL_RESTORATION_AGENT_TASK_KEY)) {
+          agentService.updatePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY, { status: 'paused', agent_connection: 'idle' });
+        }
+        persistPausedContentGeneration('原方案还原已暂停，工作区和 Session 已保留，继续后从原会话接着处理。');
+        throw createContentGenerationPausedError();
+      }
+      throw error;
+    } finally {
+      clearInterval(pauseWatcher);
+    }
+    const outputContent = String(agentResult.output_content || '');
+    // 持久会话返回的结果也须通过现有原文完整性检查后才能写入业务正文。
     const result = validateOriginalRestoration(parseAgentJsonContent(outputContent), validationContext);
-    pauseIfRequested('正文生成已在原方案还原回写前暂停，本次输出未回写；继续后重新执行。');
     writeDeveloperLog('original_restore.agent.validated', {
       assignment_count: result.assignments.length,
       unassigned: result.unassigned,
@@ -3451,6 +3511,12 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       }, { logs }, { preserveOriginal: true });
     }
     updateOriginalRestorationStats();
+    agentService.updatePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY, {
+      status: 'success', phase: 'completed', agent_connection: 'idle', error: null, completed_at: now(),
+    });
+    updateContentAgentState({
+      task_key: ORIGINAL_RESTORATION_AGENT_TASK_KEY, status: 'success', phase: 'completed', agent_connection: 'idle',
+    }, false);
     logs = [...logs, `原方案还原完成：已还原 ${result.assignments.length} 个小节，未还原范围 ${result.unassigned.length} 处，还原率 ${contentStats.original_restoration.rate?.toFixed(1) ?? '—'}%。`];
     checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
   }

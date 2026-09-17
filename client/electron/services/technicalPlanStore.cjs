@@ -26,6 +26,7 @@ const {
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { CONTENT_PLANNING_AGENT_TASK_KEY } = require('./contentPlanningAgentConfig.cjs');
+const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
 const { originalImageReferences } = require('./originalPlanRestoration.cjs');
 
 const tenderMarkdownRelativePath = path.join('technical-plan', 'tender.md').replace(/\\/g, '/');
@@ -525,6 +526,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY);
     agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
     agentService.deletePersistentTask(CONTENT_PLANNING_AGENT_TASK_KEY);
+    agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
   }
   function deleteGlobalFactsAgentTask() {
     agentService.deletePersistentTask(GLOBAL_FACTS_AGENT_TASK_KEY);
@@ -1942,6 +1944,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
   function clearContentGenerationState() {
     agentService.deletePersistentTask(CONTENT_PLANNING_AGENT_TASK_KEY);
+    agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
     db.prepare("UPDATE technical_plan_outline_nodes SET content = '', updated_at = ?").run(now());
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
@@ -2453,6 +2456,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     transaction();
     if (invalidatesContentTask) {
       agentService.deletePersistentTask(CONTENT_PLANNING_AGENT_TASK_KEY);
+      agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
       cleanupOriginalImageBatches();
     }
     const savedContentRuntime = safeJsonParse(readMetaRow().content_generation_runtime_json, undefined);
@@ -2775,6 +2779,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         });
       });
       transaction();
+      agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
       cleanupOriginalImageBatches();
       return {
         success: true,
@@ -2809,6 +2814,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (fs.existsSync(filePath)) {
       fs.rmSync(filePath, { force: true });
     }
+    agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
     cleanupOriginalImageBatches();
     return { success: true, message: '已移除原方案' };
   }
