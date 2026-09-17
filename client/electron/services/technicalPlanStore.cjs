@@ -265,7 +265,7 @@ function expandLineRanges(ranges, totalLines) {
 }
 
 function buildSelectedSectionMarkdown(markdown, sections, selectedSectionId) {
-  const sourceLines = String(markdown || '').split(/\r?\n/);
+  const sourceLines = String(markdown ?? '').replace(/\r\n?/g, '\n').split('\n');
   const totalLines = sourceLines.length;
   const selected = sections.find((section) => section.id === selectedSectionId);
   if (!selected) {

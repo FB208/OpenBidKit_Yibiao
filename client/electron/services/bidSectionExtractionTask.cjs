@@ -1,15 +1,9 @@
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
+const { numberMarkdownLines } = require('../utils/markdownLineView.cjs');
 
 function pushLog(logs, message) {
   logs.push(message);
   return logs.slice(-80);
-}
-
-function numberMarkdownLines(markdown) {
-  return String(markdown || '')
-    .split(/\r?\n/)
-    .map((line, index) => `L${String(index + 1).padStart(6, '0')} | ${line}`)
-    .join('\n');
 }
 
 function normalizeLineRange(range, totalLines) {
@@ -126,14 +120,14 @@ function buildExtractMessages(segment, segmentIndex, totalSegments) {
     },
     {
       role: 'user',
-      content: `当前是招标文件第 ${segmentIndex}/${totalSegments} 段。每行格式为“L000001 | 原文”。
+      content: `当前是招标文件第 ${segmentIndex}/${totalSegments} 段。普通行格式为“L000001 | 原文”；超长原文行会显示为“L000001[1/3] | 第一段”等多个分片，相同 L 编号的分片仍属于同一个真实原文行。
 
 任务：识别本段中明确属于某个标段/标包/分包/采购包/包件/标的的内容，并返回结构化 JSON。
 
 要求：
 1. 只识别明确属于某个标段的内容范围。
 2. 通用条款不要归入某个标段；不确定归属的内容不要输出范围。
-3. includeRanges 必须使用输入中的真实行号，startLine 和 endLine 都是不带 L 前缀的数字。
+3. includeRanges 必须使用输入中的真实行号，startLine 和 endLine 都是不带 L 前缀及分片序号的数字；不得把同一 L 编号的多个分片当成多行。
 4. 不要编造标段，不要补写原文没有的范围。
 5. 无法提供有效 includeRanges 的候选不要输出到 sections。
 6. 如果本段没有明确标段内容，返回 {"sections":[]}。
@@ -219,8 +213,9 @@ async function runBidSectionExtractionTask({ aiService, workspaceStore, updateTa
 
   try {
     log('开始识别招标文件中的标段范围。', 5);
-    const totalLines = cleanMarkdown.split(/\r?\n/).length;
-    const numberedMarkdown = numberMarkdownLines(cleanMarkdown);
+    const normalizedMarkdown = String(cleanMarkdown || '').replace(/\r\n?/g, '\n');
+    const totalLines = normalizedMarkdown.split('\n').length;
+    const numberedMarkdown = numberMarkdownLines(normalizedMarkdown);
     const segments = splitUserTextByContextLimit(numberedMarkdown, typeof aiService.getConfig === 'function' ? aiService.getConfig() : {});
     const sourceSegments = segments.length ? segments : [numberedMarkdown];
     log(`招标文件已按上下文拆分为 ${sourceSegments.length} 段，正在提取标段候选。`, 12);

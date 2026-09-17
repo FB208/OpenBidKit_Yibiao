@@ -1,4 +1,5 @@
 const { countReadableWords } = require('../utils/wordCount.cjs');
+const { numberMarkdownLines } = require('../utils/markdownLineView.cjs');
 
 const ORIGINAL_PLAN_HEADING_INSTRUCTION = '方案中的编号应该遵循新生成的目录结构，原方案中的标题根据实际情况保留或去除，保留的话要注意重新编号，以保证序号合理连贯。当前小节的外层标题由程序生成，不要重复输出。年份、型号及“3D”等属于标题含义的文字必须保留，不得当作编号删除。保留的内部标题用单行加粗文字表示。';
 
@@ -81,6 +82,7 @@ function readOriginalRange(source, range) {
 // 构建完整原方案、目录和背景输入；其他小节的来源仅用于核对全文覆盖情况。
 function buildOriginalRestorationFiles({ source, targetsText, contextText, coveredRanges }) {
   return [
+    { path: 'original-plan-numbered.md', content: numberMarkdownLines(source.content) },
     { path: 'original-plan.md', content: source.content },
     { path: 'restore-targets.md', content: targetsText },
     { path: 'context.md', content: contextText },
@@ -91,22 +93,23 @@ function buildOriginalRestorationFiles({ source, targetsText, contextText, cover
 // 由 Agent 按语义还原原文；程序校验来源和完整性。
 function buildOriginalRestorationPrompt({ resume = false } = {}) {
   return `${resume ? '继续同一次原方案还原任务。先检查工作区已有输出文件，接着完成未完成的工作，并重新校验完整结果。\n' : ''}你负责将已有技术方案原文还原到新目录，供后续扩写使用。
-先阅读 original-plan.md 完整原方案、restore-targets.md 目标叶子小节、context.md 项目背景和 covered-ranges.json 其他小节已覆盖的原文范围。
+先阅读 original-plan-numbered.md 行号视图、restore-targets.md 目标叶子小节、context.md 项目背景和 covered-ranges.json 其他小节已覆盖的原文范围。original-plan.md 是无行号的完整原方案，需要核对原始 Markdown 结构时可以读取。
+行号视图的普通行格式为“L000001 | 原文”；超长原文行会显示为“L000001[1/3] | 第一段”等多个分片。相同 L 编号的所有分片仍属于同一个真实原文行，不得拆给不同小节；source_ranges 和 heading_edits 只填写不带 L 前缀及分片序号的真实行号。
 不要依赖固定长度切块。自行分析主题、章节职责和上下文，将不同主题的原文分别放到最合适的小节。
 HTML 和 Markdown 表格必须完整保留，禁止切断表格。
 尽可能完整还原实质内容，保留原文措辞、数据和格式，不总结、不压缩、不扩写。${ORIGINAL_PLAN_HEADING_INSTRUCTION}
 识别原文中的独立标题行，在 heading_edits 中逐项记录原文件行号 line 和处理后的完整标题 content；删除标题时 content 填空字符串。标题的去留、层级和编号由你按新目录判断，保留标题的原意。不得将正文、参数、列表步骤、表格或图片行声明成标题。只有标题没有正文或图片时，不要当作实质正文还原，填写未还原原因。
 原方案图片是已有内容，必须随对应文字/证书标题一起还原，保留完整图片引用、顺序和原位置，不使用生图替代，不受新增配图数量设置影响；图片本身也属于实质内容。不得把图片列入 unassigned。
-node_id 必须来自目标小节。原文范围用 start_line 和 end_line，行号从 1 开始且包含首尾，按 original-plan.md 的换行计数。可以用脚本读取文件、计算行号并复制原文，避免手工估算或重写长表格。
-每个小节只输出一条 assignment；source_ranges 按原文顺序排列。heading_edits 必须提供，无标题时填 []。各范围中按 heading_edits 替换标题行或删除 content 为空的标题行，保留其余所有行及空行，再用两个换行连接各范围，得到 assignment 的 content（允许去除整体首尾空白）；非标题内容逐字一致。
+node_id 必须来自目标小节。原文范围用 start_line 和 end_line，行号从 1 开始且包含首尾。公共行号视图已由程序生成，通常不需要自行编写脚本计算行号；如果判断或修正需要，仍可使用 read、find 或 bash 核对工作区文件。
+每个小节只输出一条 assignment；source_ranges 按原文顺序排列。heading_edits 必须提供，无标题时填 []，其中每项的标题 content 仍须填写。程序会根据 source_ranges 和 heading_edits 从无行号原文逐字重建小节正文，不要在 assignment 顶层输出正文 content 字段。
 covered-ranges.json 仅用于核对全文覆盖情况。所有非空原文行须由已有覆盖范围或本次 assignments 覆盖；尚未覆盖的原文列入 unassigned 并说明原因，不能静默遗漏。
 最终写入 original-restore-result.json，格式：
-{"assignments":[{"node_id":"1.1","source_ranges":[{"start_line":1,"end_line":8}],"heading_edits":[{"line":1,"content":"**1.1.1 实施安排**"}],"content":"**1.1.1 实施安排**\\n对应原文和原图"}],"unassigned":[{"start_line":9,"end_line":10,"reason":"不适用于正文的签章栏"}]}
+{"assignments":[{"node_id":"1.1","source_ranges":[{"start_line":1,"end_line":8}],"heading_edits":[{"line":1,"content":"**1.1.1 实施安排**"}]}],"unassigned":[{"start_line":9,"end_line":10,"reason":"不适用于正文的签章栏"}]}
 程序已为 original-restore-result.json 预置 JSON Schema，write/edit 会自动校验。完成后调用 json-validation，只传 {"file_path":"original-restore-result.json"}；失败时按工具反馈修正文件。
 不要修改输入文件或业务数据库。JSON 格式通过后，程序还会检查原文、表格、图片和覆盖范围；如有错误，按反馈在当前会话中修正输出文件。`;
 }
 
-// 结构校验交给新版 JSON 工具；原文完整性仍由 validateOriginalRestoration 检查。
+// 结构校验交给新版 JSON 工具；范围、标题和覆盖完整性仍由业务校验检查。
 const ORIGINAL_RESTORATION_JSON_SCHEMA = {
   type: 'object', required: ['assignments', 'unassigned'], additionalProperties: false,
   $defs: {
@@ -118,7 +121,7 @@ const ORIGINAL_RESTORATION_JSON_SCHEMA = {
   properties: {
     assignments: {
       type: 'array', items: {
-        type: 'object', required: ['node_id', 'source_ranges', 'heading_edits', 'content'], additionalProperties: false,
+        type: 'object', required: ['node_id', 'source_ranges', 'heading_edits'], additionalProperties: false,
         properties: {
           node_id: { type: 'string', minLength: 1 },
           source_ranges: { type: 'array', minItems: 1, items: { $ref: '#/$defs/range' } },
@@ -128,7 +131,6 @@ const ORIGINAL_RESTORATION_JSON_SCHEMA = {
               properties: { line: { type: 'integer', minimum: 1 }, content: { type: 'string' } },
             },
           },
-          content: { type: 'string', minLength: 1 },
         },
       },
     },
@@ -144,7 +146,7 @@ const ORIGINAL_RESTORATION_JSON_SCHEMA = {
   },
 };
 
-// 验证原文对应、单节范围顺序和表格完整性，按全文覆盖情况检查遗漏。
+// 验证范围、标题和表格完整性，按原始行重建正文并检查全文覆盖情况。
 function validateOriginalRestoration(value, { source, allowedNodeIds, coveredRanges = [] }) {
   if (!Array.isArray(value?.assignments) || !Array.isArray(value?.unassigned)) {
     throw new Error('原方案还原结果必须包含 assignments 和 unassigned 数组');
@@ -152,6 +154,7 @@ function validateOriginalRestoration(value, { source, allowedNodeIds, coveredRan
   const restoredLines = new Set();
   const unassignedLines = new Set();
   const nodeIds = new Set();
+  const assignments = [];
   // 汇总已覆盖与未还原的行，未还原记录不能与已有覆盖相矛盾。
   function claim(range, unassigned = false) {
     const { start_line: start, end_line: end } = range || {};
@@ -185,10 +188,7 @@ function validateOriginalRestoration(value, { source, allowedNodeIds, coveredRan
       if (range.start_line <= lastEnd) throw new Error(`小节 ${assignment.node_id} 的原文范围须按原文顺序排列`);
       lastEnd = range.end_line;
     }
-    const expected = restoredAssignmentContent(source, assignment);
-    if (!expected || typeof assignment.content !== 'string' || assignment.content.replace(/\r\n?/g, '\n').trim() !== expected) {
-      throw new Error(`小节 ${assignment.node_id} 的正文与声明的原文范围不一致，必须逐字复制`);
-    }
+    assignments.push({ ...assignment, content: restoredAssignmentContent(source, assignment) });
   }
   for (const range of value.unassigned) {
     if (typeof range.reason !== 'string' || !range.reason.trim()) throw new Error('未还原原文必须说明原因');
@@ -197,7 +197,7 @@ function validateOriginalRestoration(value, { source, allowedNodeIds, coveredRan
   }
   const missing = source.lines.findIndex((line, index) => line.trim() && !restoredLines.has(index) && !unassignedLines.has(index));
   if (missing >= 0) throw new Error(`原文第 ${missing + 1} 行未交代去向，请还原或填写未还原原因`);
-  return value;
+  return { ...value, assignments };
 }
 
 // 使用项目统一可读字数口径，分子只计算已经验证并保存的原文范围。

@@ -8,6 +8,7 @@ const restoration = require('../electron/services/originalPlanRestoration.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('../electron/services/originalPlanRestorationAgentConfig.cjs');
 const { createPiJsonValidator } = require('../electron/services/pi/piJsonValidationTool.cjs');
 const { countReadableWords } = require('../electron/utils/wordCount.cjs');
+const { numberMarkdownLines } = require('../electron/utils/markdownLineView.cjs');
 const taskFile = path.resolve(__dirname, '../electron/services/contentGenerationTask.cjs');
 const taskSource = fs.readFileSync(taskFile, 'utf8');
 const context = { module: { exports: {} }, require: createRequire(taskFile) };
@@ -20,14 +21,52 @@ vm.runInNewContext(`${taskSource}\nmodule.exports = {
   buildAgentRestoredChapterContentPrompt, buildAgentRestoredChapterContentFiles,
 };`, context, { filename: taskFile });
 
+// 行号视图直接供 Agent 定位；Agent 只声明范围，程序从无行号原文重建正文。
+function checkNumberedInputAndSchema() {
+  const image = '![现场图](yibiao-asset://imported-images/方案/现场.png)';
+  const source = restoration.createOriginalSource(
+    `1 实施方案\r\n${'技术参数😀'.repeat(600)} ${image}\r| 名称 | 参数 |\n| --- | --- |\n| 设备 | ${'规格'.repeat(1200)} |`);
+  const files = restoration.buildOriginalRestorationFiles({
+    source, targetsText: '1 实施方案', contextText: '项目背景', coveredRanges: [],
+  });
+  const numbered = files.find(file => file.path === 'original-plan-numbered.md');
+  assert.equal(numbered?.content, numberMarkdownLines(source.content));
+  assert.match(numbered.content, /L000002\[1\/\d+\] \|/u, '超长原文行应使用同一真实行号分片');
+  assert.equal(files.find(file => file.path === 'original-plan.md')?.content, source.content);
+
+  const validator = createPiJsonValidator({
+    workspaceDir: __dirname, trackFailures: false,
+    validationSchemas: { 'original-restore-result.json': restoration.ORIGINAL_RESTORATION_JSON_SCHEMA },
+  });
+  const output = {
+    assignments: [{
+      node_id: '1', source_ranges: [{ start_line: 1, end_line: 5 }],
+      heading_edits: [{ line: 1, content: '**1 实施方案**' }],
+    }],
+    unassigned: [],
+  };
+  assert.equal(validator.validateContent('original-restore-result.json', JSON.stringify(output)).details.valid, true);
+  assert.equal(validator.validateContent('original-restore-result.json', JSON.stringify({
+    ...output, assignments: [{ ...output.assignments[0], content: '旧版正文' }],
+  })).details.valid, false, '新协议不兼容包含 content 的旧输出');
+  const validated = restoration.validateOriginalRestoration(output, { source, allowedNodeIds: new Set(['1']) });
+  assert.equal(validated.assignments[0].content,
+    source.content.replace('1 实施方案', '**1 实施方案**'), '正文应由程序从原始行逐字重建');
+  const prompt = restoration.buildOriginalRestorationPrompt();
+  assert.ok(prompt.includes('original-plan-numbered.md'));
+  assert.ok(prompt.includes('相同 L 编号的所有分片仍属于同一个真实原文行'));
+  assert.ok(prompt.includes('不要在 assignment 顶层输出正文 content 字段'));
+  assert.ok(prompt.includes('每项的标题 content 仍须填写'));
+}
+
 // 跨小节来源可重叠，单节范围有序，长表格完整保留，拒绝遗漏和改写。
 function checkSourceValidation() {
   const source = restoration.createOriginalSource('项目背景\r\n实施内容😀\r\n<table>\r\n<tr><td>' + '参数'.repeat(4000) + '</td></tr>\r\n</table>\r\n签章');
   const range = (start_line, end_line) => ({ start_line, end_line });
-  const assignment = (node_id, start, end) => ({ node_id, source_ranges: [range(start, end)], heading_edits: [], content: restoration.readOriginalRange(source, range(start, end)) });
+  const assignment = (node_id, start, end) => ({ node_id, source_ranges: [range(start, end)], heading_edits: [] });
   const result = { assignments: [assignment('1', 1, 2), assignment('2', 3, 5)], unassigned: [{ ...range(6, 6), reason: '签章栏' }] };
   const validation = { source, allowedNodeIds: new Set(['1', '2']) };
-  restoration.validateOriginalRestoration(result, validation);
+  const validatedResult = restoration.validateOriginalRestoration(result, validation);
   const invalid = change => {
     const copy = structuredClone(result);
     change(copy);
@@ -35,11 +74,9 @@ function checkSourceValidation() {
   };
   const overlapping = structuredClone(result);
   overlapping.assignments[1].source_ranges.unshift(range(2, 2));
-  overlapping.assignments[1].content = restoration.restoredAssignmentContent(source, overlapping.assignments[1]);
   restoration.validateOriginalRestoration(overlapping, validation);
   assert.throws(invalid(value => value.assignments[0].source_ranges.push(range(2, 2))), /按原文顺序/);
   assert.throws(invalid(value => value.assignments[1].source_ranges[0].start_line = 4), /表格被切断/);
-  assert.throws(invalid(value => value.assignments[0].content += '额外扩写'), /逐字复制/);
   assert.throws(invalid(value => value.assignments[0].node_id = '未知节点'), /ID 无效/);
   assert.throws(invalid(value => value.unassigned = []), /未交代去向/);
   assert.throws(invalid(value => value.unassigned[0].reason = ''), /说明原因/);
@@ -47,10 +84,10 @@ function checkSourceValidation() {
   assert.throws(invalid(value => value.unassigned.push({ ...range(2, 2), reason: '未采用' })), /已覆盖/);
   assert.throws(invalid(value => value.assignments.push(value.assignments[0])), /ID 无效或重复/);
   const markdownTable = restoration.createOriginalSource('| 名称 | 参数 |\n| --- | --- |\n| 设备 | 内容 |');
-  assert.throws(() => restoration.validateOriginalRestoration({ assignments: [{ node_id: '1', source_ranges: [range(1, 2)], heading_edits: [], content: '' }], unassigned: [] }, { source: markdownTable, allowedNodeIds: new Set(['1']) }), /表格被切断/);
+  assert.throws(() => restoration.validateOriginalRestoration({ assignments: [{ node_id: '1', source_ranges: [range(1, 2)], heading_edits: [] }], unassigned: [] }, { source: markdownTable, allowedNodeIds: new Set(['1']) }), /表格被切断/);
   const stats = restoration.calculateOriginalRestoration(source, [range(1, 5)], 'hash');
   assert.equal(stats.total_words, countReadableWords(source.content));
-  assert.equal(stats.restored_words, countReadableWords(result.assignments.map(item => item.content).join('\n\n')));
+  assert.equal(stats.restored_words, countReadableWords(validatedResult.assignments.map(item => item.content).join('\n\n')));
   assert.deepEqual(restoration.calculateOriginalRestoration(source, overlapping.assignments.flatMap(item => item.source_ranges), 'hash'), stats);
   assert.equal(restoration.calculateOriginalRestoration(source, [range(1, 6)], 'hash').rate, 100);
   assert.equal(restoration.calculateOriginalRestoration(source, [], 'hash').rate, 0);
@@ -66,7 +103,6 @@ function checkSingleColumnTables() {
       assert.deepEqual(source.tables, [{ start_line: 1, end_line: 4 }]);
       const assignment = (node_id, start_line, end_line) => ({
         node_id, source_ranges: [{ start_line, end_line }], heading_edits: [],
-        content: restoration.readOriginalRange(source, { start_line, end_line }),
       });
       const validation = { source, allowedNodeIds: new Set(['1', '2']) };
       restoration.validateOriginalRestoration({ assignments: [assignment('1', 1, 4)], unassigned: [] }, validation);
@@ -148,6 +184,7 @@ async function checkOriginalRestore() {
           assert.equal(options.auto_validate_json, true);
           assert.equal(options.json_validation_schemas['original-restore-result.json'], restoration.ORIGINAL_RESTORATION_JSON_SCHEMA);
           assert.equal(options.files.find(file => file.path === 'original-plan.md').content, originalPlanMarkdown);
+          assert.equal(options.files.find(file => file.path === 'original-plan-numbered.md').content, numberMarkdownLines(originalPlanMarkdown));
           assert.ok(!options.files.some(file => ['original-segments.md', 'reserved-ranges.json', 'original-restore-result.json'].includes(file.path)), '恢复时不得覆盖已有输出文件');
           const coveredRanges = JSON.parse(options.files.find(file => file.path === 'covered-ranges.json').content);
           assert.equal(coveredRanges.length, mode === 'partial' ? 1 : 0);
@@ -158,18 +195,18 @@ async function checkOriginalRestore() {
             assert.equal(options.signal.aborted, true);
             throw options.signal.reason;
           }
-          const result = { assignments: [{ node_id: '1', source_ranges: [{ start_line: 1, end_line: 3 }], heading_edits: [{ line: 1, content: '**实施方案**' }], content: targetMarkdown.replace('# 实施方案', '**实施方案**') }], unassigned: [] };
+          const result = { assignments: [{ node_id: '1', source_ranges: [{ start_line: 1, end_line: 3 }], heading_edits: [{ line: 1, content: '**实施方案**' }] }], unassigned: [] };
           if (mode === 'repair') {
             const bad = structuredClone(result);
             bad.assignments[0].source_ranges[0].start_line = '1';
             assert.equal(validator.validateContent('original-restore-result.json', JSON.stringify(bad)).details.valid, false);
             assert.throws(() => validator.assertValid(), /尚未通过校验/);
             bad.assignments[0].source_ranges[0].start_line = 1;
-            bad.assignments[0].content = '改写后的内容';
-            assert.throws(() => options.validateOutput({ output_content: JSON.stringify(bad) }), /逐字复制/);
+            bad.assignments[0].source_ranges[0].end_line = 2;
+            assert.throws(() => options.validateOutput({ output_content: JSON.stringify(bad) }), /未交代去向/);
             assert.equal(options.max_retries, 1, '保留同一 Session 内的业务校验修正机会');
           }
-          if (mode === 'invalid-output') result.assignments[0].content = '压缩摘要';
+          if (mode === 'invalid-output') result.assignments[0].source_ranges[0].end_line = 2;
           const outputContent = JSON.stringify(result);
           assert.equal(validator.validateContent('original-restore-result.json', outputContent).details.valid, true);
           validator.assertValid();
@@ -221,7 +258,7 @@ async function checkOriginalRestore() {
       assert.equal(calls, completedCalls, '完成阶段继续不得重跑还原');
       assert.equal(scope.sections['1'].content, '已经扩写的正文');
     } else {
-      await assert.rejects(scope.restoreOriginalMaterialsIfNeeded([target]), /失败|CONTENT_GENERATION_PAUSED|逐字复制/);
+      await assert.rejects(scope.restoreOriginalMaterialsIfNeeded([target]), /失败|CONTENT_GENERATION_PAUSED|未交代去向/);
       assert.equal(saved.length, 0);
     }
     assert.ok(tick == null, '本轮结束清除暂停定时器');
@@ -243,9 +280,9 @@ function checkHeadingsAndImages() {
   const second = 'yibiao-asset://imported-images/方案/image-2.png';
   const raw = `2.2所投核心产品检测报告\n![第一页](${first})\n![第二页](${second})`;
   const source = restoration.createOriginalSource(raw);
-  const assignment = { node_id: '15.4.4', source_ranges: [{ start_line: 1, end_line: 3 }], heading_edits: [{ line: 1, content: '**15.4.4.1 所投核心产品检测报告**' }], content: raw.replace('2.2所投核心产品检测报告', '**15.4.4.1 所投核心产品检测报告**') };
+  const assignment = { node_id: '15.4.4', source_ranges: [{ start_line: 1, end_line: 3 }], heading_edits: [{ line: 1, content: '**15.4.4.1 所投核心产品检测报告**' }] };
   const input = { source, allowedNodeIds: new Set(['15.4.4']) };
-  restoration.validateOriginalRestoration({ assignments: [assignment], unassigned: [] }, input);
+  const restoredAssignment = restoration.validateOriginalRestoration({ assignments: [assignment], unassigned: [] }, input).assignments[0];
   const shared = { ...assignment, node_id: '15.5.1' };
   restoration.validateOriginalRestoration({ assignments: [assignment, shared], unassigned: [] }, { ...input, allowedNodeIds: new Set([assignment.node_id, shared.node_id]) });
   const stats = restoration.calculateOriginalRestoration(source, assignment.source_ranges, 'hash');
@@ -253,10 +290,9 @@ function checkHeadingsAndImages() {
   assert.equal(stats.restored_images, 2);
   assert.deepEqual(restoration.calculateOriginalRestoration(source, [...assignment.source_ranges, ...shared.source_ranges], 'hash'), stats);
   assert.throws(() => restoration.validateOriginalRestoration({ assignments: [], unassigned: [{ start_line: 1, end_line: 3, reason: '不要图片' }] }, input), /图片不得遗漏/);
-  assert.throws(() => restoration.validateOriginalRestoration({ assignments: [{ ...assignment, content: assignment.content.replace('报告', '新报告') }], unassigned: [] }, input), /逐字复制/);
   assert.throws(() => restoration.validateOriginalRestoration({ assignments: [{ ...assignment, heading_edits: [...assignment.heading_edits, { line: 2, content: '' }] }], unassigned: [] }, input), /独立文字标题/);
   const item = { id: '15.4.4', title: '产品技术支持材料' };
-  const section = { status: 'success', content: assignment.content };
+  const section = { status: 'success', content: restoredAssignment.content };
   const plan = { original_material: { source_hash: 'hash', source_ranges: assignment.source_ranges } };
   const scope = { ...context.module.exports, ...restoration,
     hasOriginalPlan: true, originalSource: source, originalPlanSourceHash: 'hash',
@@ -269,12 +305,12 @@ function checkHeadingsAndImages() {
   const auditEnd = taskSource.indexOf('  function applyAgentConsistencySections(', auditStart);
   vm.createContext(scope);
   vm.runInContext(taskSource.slice(start, end) + taskSource.slice(auditStart, auditEnd), scope);
-  scope.validateSectionOriginalImages(item.id, assignment.content + '\n补充说明');
+  scope.validateSectionOriginalImages(item.id, restoredAssignment.content + '\n补充说明');
   const bad = `![第一页](${first})`;
   assert.throws(() => scope.saveSection(item, { content: bad }, bad), /图片遗漏/);
   assert.equal(scope.sections[item.id], section, '拒绝保存之前不能修改内存正文');
-  assert.throws(() => scope.validateSectionOriginalImages(item.id, assignment.content + `\n![重复](${first})`), /图片遗漏、重复/);
-  assert.throws(() => scope.validateAgentConsistencySections(new Map([[item.id, bad]]), new Map([[item.id, { originalContent: assignment.content }]])), /图片遗漏/);
+  assert.throws(() => scope.validateSectionOriginalImages(item.id, restoredAssignment.content + `\n![重复](${first})`), /图片遗漏、重复/);
+  assert.throws(() => scope.validateAgentConsistencySections(new Map([[item.id, bad]]), new Map([[item.id, { originalContent: restoredAssignment.content }]])), /图片遗漏/);
   scope.hasOriginalPlan = false;
   scope.validateSectionOriginalImages(item.id, '没有原方案时不做图片检查');
 }
@@ -288,11 +324,12 @@ function checkAgentHeadingEdits() {
   ]) {
     const source = restoration.createOriginalSource(`${original}\n工期为30天。`);
     const assignment = { node_id: '15.4.4', source_ranges: [{ start_line: 1, end_line: 2 }],
-      heading_edits: [{ line: 1, content: edited }], content: edited ? `${edited}\n工期为30天。` : '工期为30天。' };
+      heading_edits: [{ line: 1, content: edited }] };
+    const expected = edited ? `${edited}\n工期为30天。` : '工期为30天。';
     const input = { source, allowedNodeIds: new Set(['15.4.4']) };
-    restoration.validateOriginalRestoration({ assignments: [assignment], unassigned: [] }, input);
-    assert.equal(restoration.restoredAssignmentContent(source, assignment), assignment.content);
-    assert.throws(() => restoration.validateOriginalRestoration({ assignments: [{ ...assignment, content: assignment.content.replace('30天', '60天') }], unassigned: [] }, input), /逐字复制/);
+    const validated = restoration.validateOriginalRestoration({ assignments: [assignment], unassigned: [] }, input);
+    assert.equal(validated.assignments[0].content, expected);
+    assert.equal(restoration.restoredAssignmentContent(source, assignment), expected);
     assert.throws(() => restoration.restoredAssignmentContent(source, { ...assignment, heading_edits: [assignment.heading_edits[0], assignment.heading_edits[0]] }), /标题行无效/);
     assert.throws(() => restoration.restoredAssignmentContent(source, { ...assignment, heading_edits: [{ line: 3, content: edited }] }), /标题行无效/);
     assert.throws(() => restoration.restoredAssignmentContent(source, { ...assignment, heading_edits: [{ line: 1, content: '标题\n额外正文' }] }), /单行文字/);
@@ -449,6 +486,7 @@ async function checkRestorationStatsPage() {
 
 // 顺序执行一组聚焦检查，不调用真实 AI 或写入用户业务数据库。
 async function main() {
+  checkNumberedInputAndSchema();
   checkSourceValidation();
   checkSingleColumnTables();
   checkHeadingsAndImages();
