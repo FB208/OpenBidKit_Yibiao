@@ -10,6 +10,7 @@ import { downloadOfflineLicense, generateOfflineLicense, loadLicenseConfig, save
 import { bindNoticeEvents, loadNotices } from './pages/notice.js';
 import { loadOverview } from './pages/overview.js';
 import { bindResourceEvents, loadResources } from './pages/resources.js';
+import { bindSystemSettingsEvents, loadSystemSettings } from './pages/systemSettings.js';
 import { loadPlugins, setupPluginsPage } from './pages/plugins.js';
 import { loadTraffic } from './pages/traffic.js';
 import { setError, setStatus, updateClientsPager, updateIpPager, updateLatestPager } from './render.js';
@@ -25,6 +26,7 @@ const tabLoaders = {
   models: () => loadModelUsage(),
   agent: (options = {}) => Promise.all([loadAgentRuntime(), loadAgentErrors({ resetPage: options.resetAgentErrorPage })]),
   latest: (options = {}) => loadLatest(options),
+  'system-settings': () => loadSystemSettings(),
   'ip-blocks': () => Promise.all([loadIpBlocks(), loadVersionBlocksSafely()]),
   notice: () => loadNotices(),
   license: () => loadLicenseConfig(),
@@ -128,6 +130,7 @@ async function refreshActiveTab(options = {}) {
 
 function bindEvents() {
   state.refreshButton.addEventListener('click', () => refreshActiveTab({ resetClientsPage: true, resetLatestPage: true, resetIpPage: true, forceRefresh: true }));
+  bindSystemSettingsEvents();
   bindNoticeEvents();
   state.loadLicenseConfigButton.addEventListener('click', () => loadLicenseConfig().catch(() => undefined));
   state.saveLicenseConfigButton.addEventListener('click', saveLicenseConfig);

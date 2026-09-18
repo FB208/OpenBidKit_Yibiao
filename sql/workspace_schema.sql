@@ -4,7 +4,7 @@
 -- 1. 本文件用于开源开发者阅读、评审和排查问题，展示 workspace/yibiao.sqlite 的目标完整表结构。
 -- 2. 用户运行客户端时不需要手动执行本文件。
 -- 3. 客户端运行时建表和升级以 Electron Main 侧 migration 代码为准。
--- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17、目录字数控制 v18、全局事实补全模式 v22、可行性研究报告 v23、统一生成配置 v24、单企业资信库 v25、导出模板样式范围 v31 目标结构。
+-- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17、目录字数控制 v18、全局事实补全模式 v22、可行性研究报告 v23、官方 API 开票信息 v24、统一生成配置 v25、单企业资信库 v26、导出模板样式范围 v32 目标结构。
 -- 5. 每次表结构调整后，需要同步更新本文件和 runtime migration 版本。
 -- 6. 本文件不保存历史版本，每次更新都写入最新目标完整结构。
 
@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 31;
+PRAGMA user_version = 33;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   updated_at TEXT NOT NULL
 );
 
--- v24 当前项目统一生成配置；只保留一行 id = 1。
+-- v25 当前项目统一生成配置；只保留一行 id = 1。
 CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   bid_analysis_mode TEXT NOT NULL DEFAULT 'key',
@@ -85,10 +85,9 @@ CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
   section_words INTEGER NOT NULL DEFAULT 0,
   strict_section_words INTEGER NOT NULL DEFAULT 0,
   global_facts_mode TEXT NOT NULL DEFAULT 'fabricate',
-  -- v27 正文生成模板，仅保存选择，当前不参与正文任务。
-  -- v28 当前项目明确选择的 Word 导出模板。
+  -- v29 当前项目明确选择的 Word 导出模板。
   export_template_id TEXT NOT NULL DEFAULT '',
-  -- v31 模板样式范围：ai-only 仅 AI 生成目录，document 整个文件；页面基础布局始终全文件。
+  -- v32 模板样式范围：ai-only 仅 AI 生成目录，document 整个文件；页面基础布局始终全文件。
   export_template_scope TEXT NOT NULL DEFAULT 'ai-only',
   use_ai_images INTEGER NOT NULL DEFAULT 1,
   max_ai_images INTEGER NOT NULL DEFAULT 6,
@@ -103,7 +102,7 @@ CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
   updated_at TEXT NOT NULL
 );
 
--- v24 统一配置中选择的招标解析项。
+-- v25 统一配置中选择的招标解析项。
 CREATE TABLE IF NOT EXISTS technical_plan_generation_bid_tasks (
   task_id TEXT PRIMARY KEY,
   sort_order INTEGER NOT NULL DEFAULT 0
@@ -112,7 +111,7 @@ CREATE TABLE IF NOT EXISTS technical_plan_generation_bid_tasks (
 CREATE INDEX IF NOT EXISTS idx_technical_plan_generation_bid_tasks_order
 ON technical_plan_generation_bid_tasks(sort_order);
 
--- v24 统一配置中选择的参考知识库文档。
+-- v25 统一配置中选择的参考知识库文档。
 CREATE TABLE IF NOT EXISTS technical_plan_generation_reference_docs (
   document_id TEXT PRIMARY KEY,
   sort_order INTEGER NOT NULL DEFAULT 0
@@ -858,7 +857,7 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_match_batches_status
 ON knowledge_match_batches(document_id, status, batch_index);
 
 -- ============================================================================
--- 单企业资信库 credential_library_*（v25 已落地）
+-- 单企业资信库 credential_library_*（v26 已落地）
 -- ============================================================================
 
 -- 企业基础、介绍、财务、开户行和水印配置单例。
@@ -969,7 +968,7 @@ CREATE INDEX IF NOT EXISTS idx_credential_library_images_owner
 ON credential_library_images(owner_type, owner_id, field_key, sort_order, created_at);
 
 -- ============================================================================
--- 导出模板 export_templates（v15 建表，v30 增加系统预设标记）
+-- 导出模板 export_templates（v15 建表，v31 增加系统预设标记）
 -- ============================================================================
 
 -- 标书导出模板库。
@@ -1043,3 +1042,12 @@ ON feasibility_report_outline_nodes(parent_node_id, sort_order);
 
 CREATE INDEX IF NOT EXISTS idx_feasibility_report_outline_level
 ON feasibility_report_outline_nodes(level);
+
+-- 官方 API 开票信息（v24）：当前工作区保存一份。
+CREATE TABLE IF NOT EXISTS official_invoice_info (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  title_type TEXT NOT NULL DEFAULT 'enterprise',
+  buyer TEXT NOT NULL DEFAULT '',
+  tax_number TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT ''
+);

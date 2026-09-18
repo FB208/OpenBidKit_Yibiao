@@ -911,6 +911,36 @@ button:disabled {
 }
 
 /* ===== 公告管理 ===== */
+.system-settings-form {
+  display: grid;
+  gap: 12px;
+  max-width: 520px;
+  margin-top: 12px;
+}
+
+.system-settings-image-preview {
+  display: grid;
+  width: min(360px, 100%);
+  min-height: 180px;
+  place-items: center;
+  padding: 12px;
+  color: var(--muted);
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.system-settings-image-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.system-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .notice-panel {
   margin-bottom: 14px;
 }

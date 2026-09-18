@@ -15,7 +15,6 @@ const CLOUDFLARE_RELEASE_BASE_URL = 'https://openbidkit-oss.agnet.top/release';
 const CLOUDFLARE_LATEST_JSON_URL = `${CLOUDFLARE_RELEASE_BASE_URL}/latest.json`;
 const ATOMGIT_REPOSITORY_URL = 'https://atomgit.com/FB208/OpenBidKit_Yibiao';
 const ATOMGIT_RELEASE_API_BASE_URL = 'https://api.atomgit.com/api/v5/repos/FB208/OpenBidKit_Yibiao/releases';
-const ATOMGIT_LATEST_RELEASE_API = `${ATOMGIT_RELEASE_API_BASE_URL}/latest`;
 
 let autoUpdaterInstance = null;
 let downloadedUpdateVersion = '';
@@ -87,8 +86,17 @@ function compareVersions(a, b) {
   return 0;
 }
 
+// 三个更新源共用正式版规则，不依赖 latest 接口或更新组件过滤测试版。
+function isStableRelease(release) {
+  const version = String(release.version || release.tag_name || release.tagName || '').trim();
+  return /^v?\d+\.\d+\.\d+(?:\+[0-9A-Za-z.-]+)?$/i.test(version)
+    && !release.prerelease && !release.isPrerelease
+    && !release.draft && !release.isDraft
+    && release.release_status !== 'pre' && release.release_status !== 'draft';
+}
+
 function normalizeUpdateChannel(value) {
-  if (value === 'cloudflare' || value === 'atomgit') {
+  if (value === 'github' || value === 'cloudflare' || value === 'atomgit') {
     return value;
   }
   return 'atomgit';
@@ -136,6 +144,7 @@ function requestJson(url, label, headers = {}) {
 
 async function fetchGithubLatestRelease() {
   const release = await requestJson(GITHUB_RELEASE_API, 'GitHub API ');
+  if (!isStableRelease(release)) return null;
   const files = Array.isArray(release.assets)
     ? release.assets.map((asset) => ({
       name: asset.name || '',
@@ -200,6 +209,7 @@ function pickPlatformInstallerFile(files = []) {
 
 async function fetchCloudflareLatestRelease() {
   const release = await requestJson(CLOUDFLARE_LATEST_JSON_URL, 'Cloudflare 更新源 ');
+  if (!isStableRelease(release)) return null;
   const files = Array.isArray(release.files)
     ? release.files.map((file) => ({
       name: file.name || '',
@@ -226,9 +236,20 @@ function createAtomGitAssetDownloadUrl(tagName, fileName) {
   return `${ATOMGIT_RELEASE_API_BASE_URL}/${encodeURIComponent(tagName)}/attach_files/${encodeURIComponent(fileName)}/download`;
 }
 
-// 获取 AtomGit 最新 Release 及可下载附件。
+// 遍历 AtomGit Release 分页，按版本号选择最新正式版及其附件。
 async function fetchAtomGitLatestRelease() {
-  const release = await requestJson(ATOMGIT_LATEST_RELEASE_API, 'AtomGit API ');
+  let release = null;
+  const pageSize = 100;
+  for (let page = 1; ; page += 1) {
+    const releases = await requestJson(`${ATOMGIT_RELEASE_API_BASE_URL}?page=${page}&per_page=${pageSize}`, 'AtomGit API ');
+    for (const candidate of releases) {
+      if (isStableRelease(candidate) && (!release || compareVersions(candidate.tag_name, release.tag_name) > 0)) {
+        release = candidate;
+      }
+    }
+    if (releases.length < pageSize) break;
+  }
+  if (!release) return null;
   const tagName = String(release.tag_name || '');
   const files = Array.isArray(release.assets)
     ? release.assets.map((asset) => {
@@ -255,10 +276,12 @@ async function fetchAtomGitLatestRelease() {
   };
 }
 
-function fetchLatestRelease(channel) {
-  if (channel === 'cloudflare') return fetchCloudflareLatestRelease();
-  if (channel === 'atomgit') return fetchAtomGitLatestRelease();
-  return fetchGithubLatestRelease();
+// 所有查询入口共享正式版选择；空版本表示当前源没有可用正式版。
+async function fetchLatestRelease(channel) {
+  const release = channel === 'cloudflare' ? await fetchCloudflareLatestRelease()
+    : channel === 'atomgit' ? await fetchAtomGitLatestRelease()
+      : await fetchGithubLatestRelease();
+  return release || { channel, version: '', name: '', body: '', published_at: '', html_url: '', files: [] };
 }
 
 async function getLatestVersion(options = {}) {
@@ -270,7 +293,7 @@ async function getUpdateDownloadUrl(options = {}) {
   const channel = getUpdateChannel(options.configStore);
   if (channel === 'cloudflare') {
     try {
-      const release = await fetchCloudflareLatestRelease();
+      const release = await fetchLatestRelease(channel);
       return release.download_url || CLOUDFLARE_RELEASE_BASE_URL;
     } catch (error) {
       console.warn('[update] Cloudflare 下载地址获取失败，回退到 GitHub Release', error);
@@ -279,14 +302,15 @@ async function getUpdateDownloadUrl(options = {}) {
   }
   if (channel === 'atomgit') {
     try {
-      const release = await fetchAtomGitLatestRelease();
+      const release = await fetchLatestRelease(channel);
       return release.download_url || ATOMGIT_REPOSITORY_URL;
     } catch (error) {
       console.warn('[update] AtomGit 下载地址获取失败', error);
       return ATOMGIT_REPOSITORY_URL;
     }
   }
-  return GITHUB_RELEASE_DOWNLOAD_URL;
+  const release = await fetchLatestRelease(channel);
+  return release.download_url || GITHUB_RELEASE_DOWNLOAD_URL;
 }
 
 function configureAutoUpdater(channel) {
@@ -540,6 +564,12 @@ async function runUpdateCheck(options = {}) {
     if (!result) {
       throw new Error('未找到可下载的更新包');
     }
+    // 更新组件会再次读取清单，下载前也必须满足同一正式版规则。
+    if (!result.isUpdateAvailable || !isStableRelease(result.updateInfo)
+      || compareVersions(result.updateInfo.version, app.getVersion()) <= 0) {
+      return { enabled: true, updateAvailable: false, channel };
+    }
+    downloadedVersion = result.updateInfo.version;
 
     await autoUpdaterInstance.downloadUpdate();
     downloadedUpdateVersion = downloadedVersion;

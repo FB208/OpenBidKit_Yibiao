@@ -18,7 +18,7 @@
 | Analytics Engine `agnet_analytics` | `ANALYTICS` | 详细事件、今天/7天/30天查询、最近事件、Cron 汇总来源 |
 | D1 `openbidkit-analytics` | `ANALYTICS_DB` | 新版 `stats_*` 长期统计表和全局 IP 封禁状态 |
 | D1 `openbidkit-resources` | `RESOURCE_DB` | 资源管理元数据 |
-| R2 `openbidkit` | `RESOURCE_BUCKET` | 资源图片、插件当前版与上一版安装包 |
+| R2 `openbidkit` | `RESOURCE_BUCKET` | 资源图片、系统设置图片、插件当前版与上一版安装包 |
 | R2 `openbidkit-agent-errors` | `AGENT_ERROR_BUCKET` | gzip Agent 完整失败诊断包，保留 7 天 |
 | KV | `NOTICE_STORE` | 公告、授权配置、GitHub stats 缓存和模型信息精简索引；旧 IP 封禁列表仅用于一次性迁移 |
 
@@ -57,6 +57,8 @@
 | `GET/POST /api/license-config` | KV | `ADMIN_TOKEN` | 授权配置后台管理 |
 | `GET /resources` | `RESOURCE_DB` + AE | 无 | 客户端资源列表，点击量为 D1 累计 + AE 今天 |
 | `GET/POST/DELETE /api/resources` | `RESOURCE_DB` + R2 + AE | `ADMIN_TOKEN` | 资源管理 |
+| `GET /system-settings` | R2 | 无 | 返回客户端当前加群二维码地址；未配置时返回空地址 |
+| `POST /api/system-settings` | R2 | `ADMIN_TOKEN` | 覆盖上传当前加群二维码 |
 | `GET /plugins` | `RESOURCE_DB` + R2 | 无 | 插件市场列表，当前版作为升级目标，同时返回保留的上一版信息和地址 |
 | `POST /plugins/download` | `RESOURCE_DB` | 无 | 累计插件成功下载次数 |
 | `GET/POST/DELETE /api/plugins` | `RESOURCE_DB` + R2 | `ADMIN_TOKEN` | 插件管理；新增、更新和删除会同步维护 R2 安装包 |

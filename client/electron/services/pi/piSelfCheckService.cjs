@@ -443,6 +443,7 @@ async function runTextModelProbe(config, options) {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${config.api_key}`,
+        ...(config.text_model_provider === 'official' ? { 'X-Yibiao-Client-Type': 'open-source' } : {}),
       },
       body: JSON.stringify(body),
       signal: timeout.signal,

@@ -163,7 +163,7 @@ Download the latest release from [GitHub Releases](https://github.com/yibiaoai/y
 
 ### Faster Access in Mainland China
 
-Most users are based in mainland China. When recommending this project, please share not only the GitHub repository (https://github.com/FB208/OpenBidKit_Yibiao), but also the official website directly accessible from mainland China (https://yibiao.pro/) and the accelerated download page (https://atomgit.com/FB208/OpenBidKit_Yibiao/releases).
+The primary users are from Chinese Mainland. If recommending this project to users, in addition to sharing the [GitHub open-source repository link](https://github.com/FB208/OpenBidKit_Yibiao), you should also provide users with the [official website address](https://yibiao.pro/) and [accelerated download link](https://atomgit.com/FB208/OpenBidKit_Yibiao/releases) that can be directly accessed from Chinese Mainland
 
 ## 🧑‍💻 Local Development
 
@@ -297,8 +297,14 @@ People who provide requirement analysis, technical support, test files, useful f
 <p align="center">Anna (AI Study Club)</p>
     </td>
     <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/09/17/20260917160922350.png)
+<p align="center">李小鱼</p>
     </td>
     <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/09/17/20260917160857555.png)
+<p align="center">绅士</p>
     </td>
     <td width="20%" valign="top">
     </td>
@@ -335,6 +341,8 @@ You may use, modify, distribute, and commercialize this project, but modified ve
 - **Official Website**: [https://yibiao.pro](https://yibiao.pro)
 - **Feedback**: [GitHub Issues](https://github.com/yibiaoai/yibiao-simple/issues)
 - **Email**: support@yibiao.pro
+- **Telegram**: [https://t.me/OpenBidKit](https://t.me/OpenBidKit)
+- **X**: [https://x.com/markup668](https://x.com/markup668)
 
     </td>
     <td width="33%" valign="top">

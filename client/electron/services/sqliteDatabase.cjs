@@ -3,7 +3,20 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 32;
+const schemaVersion = 33;
+
+// 保存当前工作区的一份开票信息。
+function createOfficialInvoiceSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS official_invoice_info (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      title_type TEXT NOT NULL DEFAULT 'enterprise',
+      buyer TEXT NOT NULL DEFAULT '',
+      tax_number TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT ''
+    );
+  `);
+}
 
 function createInitialSchema(db) {
   db.exec(`
@@ -284,7 +297,7 @@ function addTechnicalPlanOutlineWordControl(db) {
   addColumnIfMissing(db, 'technical_plan_meta', 'outline_word_control_snapshot_json', 'TEXT');
 }
 
-// v24 不迁移旧配置值，直接启用新的统一配置表并移除旧存储位置。
+// v25 不迁移旧配置值，直接启用新的统一配置表并移除旧存储位置。
 function unifyTechnicalPlanGenerationConfig(db) {
   createTechnicalPlanGenerationConfigSchema(db);
   db.exec('DROP TABLE IF EXISTS technical_plan_reference_docs;');
@@ -1318,13 +1331,14 @@ const schemaHealthTableGroups = [
     tables: ['feasibility_report_meta', 'feasibility_report_tasks', 'feasibility_report_outline_nodes'],
     repair: createFeasibilityReportSchema,
   },
+  { version: 24, tables: ['official_invoice_info'], repair: createOfficialInvoiceSchema },
   {
-    version: 24,
+    version: 25,
     tables: ['technical_plan_generation_config', 'technical_plan_generation_bid_tasks', 'technical_plan_generation_reference_docs'],
     repair: createTechnicalPlanGenerationConfigSchema,
   },
   {
-    version: 25,
+    version: 26,
     tables: [
       'credential_library_profile',
       'credential_library_certificates',
@@ -1471,7 +1485,7 @@ const schemaHealthColumnGroups = [
     },
   },
   {
-    version: 24,
+    version: 25,
     table: 'technical_plan_generation_config',
     columns: {
       bid_analysis_mode: "TEXT NOT NULL DEFAULT 'key'",
@@ -1496,35 +1510,35 @@ const schemaHealthColumnGroups = [
     },
   },
   {
-    version: 26,
+    version: 27,
     table: 'credential_library_employees',
     columns: {
       id_validity_mode: 'TEXT',
     },
   },
   {
-    version: 28,
+    version: 29,
     table: 'technical_plan_generation_config',
     columns: {
       export_template_id: "TEXT NOT NULL DEFAULT ''",
     },
   },
   {
-    version: 30,
+    version: 31,
     table: 'export_templates',
     columns: {
       is_system: 'INTEGER NOT NULL DEFAULT 0',
     },
   },
   {
-    version: 31,
+    version: 32,
     table: 'technical_plan_generation_config',
     columns: {
       export_template_scope: "TEXT NOT NULL DEFAULT 'ai-only'",
     },
   },
   {
-    version: 32,
+    version: 33,
     table: 'technical_plan_generation_config',
     columns: {
       image_quantity: "TEXT NOT NULL DEFAULT 'light'",
@@ -1709,48 +1723,49 @@ const migrations = [
     description: '新增可行性研究报告工作区表结构',
     up: createFeasibilityReportSchema,
   },
+  { version: 24, description: '新增官方 API 开票信息', up: createOfficialInvoiceSchema },
   {
-    version: 24,
+    version: 25,
     description: '统一技术方案生成配置存储',
     up: unifyTechnicalPlanGenerationConfig,
   },
   {
-    version: 25,
+    version: 26,
     description: '新增单企业资信库表结构',
     up: createCredentialLibrarySchema,
   },
   {
-    version: 26,
+    version: 27,
     description: '员工档案新增身份证有效期模式',
     up: addCredentialEmployeeIdValidityMode,
   },
   {
-    version: 27,
+    version: 28,
     description: '技术方案新增正文生成模板配置',
     up: addTechnicalPlanContentGenerationTemplate,
   },
   {
-    version: 28,
+    version: 29,
     description: '技术方案新增 Word 导出模板配置',
     up: addTechnicalPlanExportTemplate,
   },
   {
-    version: 29,
+    version: 30,
     description: '技术方案移除正文生成模板配置',
     up: removeTechnicalPlanContentGenerationTemplate,
   },
   {
-    version: 30,
+    version: 31,
     description: '导出模板新增系统预设标记',
     up: addExportTemplateIsSystem,
   },
   {
-    version: 31,
+    version: 32,
     description: '技术方案新增导出模板样式范围配置',
     up: addTechnicalPlanExportTemplateScope,
   },
   {
-    version: 32,
+    version: 33,
     description: '技术方案新增图片数量配置',
     up: addTechnicalPlanImageQuantity,
   },

@@ -1,5 +1,5 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
-import { useState, type ComponentType, type ReactElement, type SVGProps } from 'react';
+import { useEffect, useState, type ComponentType, type ReactElement, type SVGProps } from 'react';
 import { getAppMenuItems, getParentMenuItemBySection } from '../app/menuConfig';
 import type { AppMenuItem, SectionId } from '../shared/types/navigation';
 import { AppDialog, useToast } from '../shared/ui';
@@ -41,13 +41,37 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
 };
 
 const USER_GUIDE_URL = 'https://wiki.agnet.top/';
+const SYSTEM_SETTINGS_URL = 'https://analytics.agnet.top/system-settings';
 
 function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [groupChatOpen, setGroupChatOpen] = useState(false);
+  const [groupChatQrSource, setGroupChatQrSource] = useState(groupChatQrUrl);
   const { showToast } = useToast();
   const menuItems = getAppMenuItems(developerMode);
   const activeParent = getParentMenuItemBySection(activeSection, developerMode);
+
+  useEffect(() => {
+    let active = true;
+
+    // 远程二维码完整加载后再替换，查询或图片失败时继续使用内置图片。
+    void fetch(SYSTEM_SETTINGS_URL)
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => new Promise<string>((resolve, reject) => {
+        const url = String(data?.settings?.groupChatQrUrl || '');
+        if (!url) return reject();
+        const image = new Image();
+        image.onload = () => resolve(url);
+        image.onerror = reject;
+        image.src = url;
+      }))
+      .then((url) => {
+        if (active) setGroupChatQrSource(url);
+      })
+      .catch(() => undefined);
+
+    return () => { active = false; };
+  }, []);
 
   const handleMenuItemClick = (item: AppMenuItem) => {
     if (!item.notice) {
@@ -134,7 +158,7 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
         cardClassName="group-chat-dialog"
         actions={<button type="button" className="secondary-action" onClick={() => setGroupChatOpen(false)}>关闭</button>}
       >
-        <img className="group-chat-qr" src={groupChatQrUrl} alt="易标用户交流群二维码" />
+        <img className="group-chat-qr" src={groupChatQrSource} alt="易标用户交流群二维码" />
       </AppDialog>
     </aside>
   );

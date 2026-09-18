@@ -1,12 +1,14 @@
-import type { ComponentsConfig, ImageModelConfig, ImageModelProfiles, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../shared/types';
+import type { ClientConfig, ComponentsConfig, ImageModelConfig, ImageModelProfiles, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../shared/types';
 
 export interface SettingsPageState {
-  textModel: Omit<TextModelConfig, 'context_length_limit' | 'concurrency_limit'> & {
+  textModel: Omit<TextModelConfig, 'context_length_limit' | 'output_token_limit' | 'concurrency_limit'> & {
     context_length_limit: number | '';
+    output_token_limit: number | '';
     concurrency_limit: number | '';
     provider: TextModelProvider;
   };
   textModelProfiles: TextModelProfiles;
+  officialApiModelType: ClientConfig['official_api_model_type'];
   imageModel: Omit<ImageModelConfig, 'concurrency_limit'> & {
     concurrency_limit: number | '';
   };

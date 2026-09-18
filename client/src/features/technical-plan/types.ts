@@ -105,6 +105,7 @@ export interface BackgroundTaskState {
         outline_mode?: OutlineMode;
         outline_expansion_mode?: OutlineExpansionMode;
         word_control_options?: OutlineWordControlOptions;
+        no_technical_score_mode?: boolean;
       };
     };
     outline_selection?: OutlineSelectionState;

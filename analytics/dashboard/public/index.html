@@ -32,6 +32,7 @@
         </div>
         <div class="nav-group">
           <span class="nav-group-label">系统管理</span>
+          <button class="nav-item" type="button" data-tab-button="system-settings">系统设置</button>
           <button class="nav-item" type="button" data-tab-button="ip-blocks">封禁规则</button>
           <button class="nav-item" type="button" data-tab-button="notice">公告管理</button>
           <button class="nav-item" type="button" data-tab-button="license">授权管理</button>
@@ -573,6 +574,31 @@
               </div>
             </div>
             <div id="licenseStatus" class="notice-status"></div>
+          </section>
+        </section>
+
+        <!-- 系统设置 -->
+        <section id="tab-system-settings" class="tab-panel" data-tab-panel="system-settings">
+          <section class="panel section notice-panel">
+            <div class="section-head">
+              <div>
+                <h2>系统设置</h2>
+                <p>配置客户端左下角“加群”弹窗展示的二维码。</p>
+              </div>
+              <button id="loadSystemSettingsButton" type="button">读取设置</button>
+            </div>
+
+            <form id="systemSettingsForm" class="system-settings-form">
+              <label>
+                加群二维码
+                <input id="systemGroupChatQr" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
+              </label>
+              <div id="systemGroupChatQrPreview" class="system-settings-image-preview">尚未配置远程二维码</div>
+              <div class="system-settings-actions">
+                <button id="saveSystemSettingsButton" type="submit">保存二维码</button>
+              </div>
+            </form>
+            <div id="systemSettingsStatus" class="notice-status"></div>
           </section>
         </section>
 

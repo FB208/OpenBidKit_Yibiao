@@ -17,6 +17,14 @@ export function isMissingBidAnalysisResult(task: BidAnalysisTaskDefinition | und
   return task?.output === 'markdown' && String(content || '').trim() === BID_ANALYSIS_MISSING_RESULT;
 }
 
+// 按解析协议识别整项缺失或仅技术评分项缺失；与 Main 的同名判断保持一致。
+export function isMissingTechnicalScoreItems(content: string | undefined) {
+  const text = String(content || '').trim();
+  if (text === BID_ANALYSIS_MISSING_RESULT) return true;
+  const section = text.match(/^##[\t ]+技术评分项[\t ]*\r?\n([\s\S]*?)(?=^#{1,2}[\t ]|$(?![\s\S]))/m);
+  return section?.[1].trim() === '没有提及';
+}
+
 function jsonTask(title: string, goals: string, outputJson: string) {
   return `任务：${title}
 

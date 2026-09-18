@@ -7,7 +7,7 @@ import OutlineEditPage from './OutlineEditPage';
 import GlobalFactsPage from './GlobalFactsPage';
 import ContentEditPage from './ContentEditPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
-import { bidAnalysisTasks, getBidAnalysisTasks, isMissingBidAnalysisResult } from '../services/bidAnalysisWorkflow';
+import { bidAnalysisTasks, getBidAnalysisTasks, isMissingBidAnalysisResult, isMissingTechnicalScoreItems } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
@@ -313,8 +313,11 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const bidSectionReady = state.bidSectionMode !== 'multiple'
     || (state.bidSectionExtractionStatus === 'success' && !isBidSectionExtractionRunning && selectedBidSectionValid);
   const bidAnalysisReady = requiredBidAnalysisReady && !isBidAnalysisTaskRunning && bidSectionReady;
+  const technicalScoreMissing = state.bidAnalysisTasks.techRequirements?.status === 'success'
+    && isMissingTechnicalScoreItems(state.bidAnalysisTasks.techRequirements.content);
   const firstMissingBidAnalysisTask = bidAnalysisTasks.find((task) => (
-    state.bidAnalysisSelectedTaskIds.includes(task.id)
+    task.id !== 'techRequirements'
+    && state.bidAnalysisSelectedTaskIds.includes(task.id)
     && isMissingBidAnalysisResult(task, state.bidAnalysisTasks[task.id]?.content)
   ));
   const globalFactsReady = state.globalFacts.length > 0 && state.globalFactsTask?.status === 'success';
@@ -1210,6 +1213,8 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           stepNumber={activeStepNumber}
           hasOriginalPlan={Boolean(state.originalPlanFile)}
           projectOverview={state.projectOverview}
+          bidAnalysisReady={bidAnalysisReady && !firstMissingBidAnalysisTask}
+          technicalScoreMissing={technicalScoreMissing}
           outlineMode={state.outlineMode}
           outlineModeRequiresRegeneration={outlineModeRequiresRegeneration}
           outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}

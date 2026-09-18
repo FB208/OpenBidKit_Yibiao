@@ -166,7 +166,7 @@
 
 ### 中国大陆加速
 
-主要用户来自中国大陆，如果向用户推荐本项目，除了发送GitHub链接外（https://github.com/FB208/OpenBidKit_Yibiao）。还应该给用户中国大陆可直连的官网地址（https://yibiao.pro/）和加速下载地址（https://atomgit.com/FB208/OpenBidKit_Yibiao/releases）
+主要用户来自中国大陆，如果向用户推荐本项目，除了发送外[Github开源仓库链接](https://github.com/FB208/OpenBidKit_Yibiao)外。还应该给用户中国大陆可直连的[官网地址](https://yibiao.pro/)和[加速下载地址](https://atomgit.com/FB208/OpenBidKit_Yibiao/releases)
 
 ## 🧑‍💻 本地开发调试
 
@@ -298,8 +298,14 @@ npm run dist:mac    # macOS Intel / Apple Silicon DMG 和 ZIP
 <p align="center">Anna（AI研习社）</p>
     </td>
     <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/09/17/20260917160922350.png)
+<p align="center">李小鱼</p>
     </td>
     <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/09/17/20260917160857555.png)
+<p align="center">绅士</p>
     </td>
     <td width="20%" valign="top">
     </td>
@@ -336,6 +342,8 @@ npm run dist:mac    # macOS Intel / Apple Silicon DMG 和 ZIP
 - **官方网站**: [https://yibiao.pro](https://yibiao.pro)
 - **问题反馈**: [GitHub Issues](https://github.com/yibiaoai/yibiao-simple/issues)
 - **邮箱联系**: support@yibiao.pro
+- **Telegram**: [https://t.me/OpenBidKit](https://t.me/OpenBidKit)
+- **X**: [https://x.com/markup668](https://x.com/markup668)
 
     </td>
     <td width="33%" valign="top">

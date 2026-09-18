@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { ProgressBar, useToast } from '../../../shared/ui';
+import { AppDialog, ProgressBar, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, OutlineSelectionItem, SaveOutlineRequest, SaveOutlineSelectionRequest } from '../types';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
@@ -14,6 +14,8 @@ interface OutlineEditPageProps {
   stepNumber: string;
   hasOriginalPlan: boolean;
   projectOverview: string;
+  bidAnalysisReady: boolean;
+  technicalScoreMissing: boolean;
   outlineMode: OutlineMode;
   outlineModeRequiresRegeneration: boolean;
   outlineExpansionMode: OutlineExpansionMode;
@@ -241,6 +243,8 @@ function OutlineEditPage({
   stepNumber,
   hasOriginalPlan,
   projectOverview,
+  bidAnalysisReady,
+  technicalScoreMissing,
   outlineMode,
   outlineModeRequiresRegeneration,
   outlineExpansionMode,
@@ -262,6 +266,7 @@ function OutlineEditPage({
   const [editTitle, setEditTitle] = useState('');
   const [startingOutline, setStartingOutline] = useState(false);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
+  const [noScoreConfirmationOpen, setNoScoreConfirmationOpen] = useState(false);
   const [localStartAt, setLocalStartAt] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [sorting, setSorting] = useState(false);
@@ -378,13 +383,21 @@ function OutlineEditPage({
     }
   }, [progressLogs.length]);
 
-  const generateOutline = async () => {
+  const generateOutline = async (noTechnicalScoreMode = false) => {
     const lockMessage = getMutationLockMessage();
     if (lockMessage) {
       throw new Error(lockMessage);
     }
     if (!projectOverview) {
       showToast('请先完成招标文件解析', 'info');
+      return;
+    }
+    if (!bidAnalysisReady) {
+      showToast('请先完成必填招标文件解析项', 'info');
+      return;
+    }
+    if (technicalScoreMissing && !noTechnicalScoreMode) {
+      setNoScoreConfirmationOpen(true);
       return;
     }
 
@@ -399,6 +412,7 @@ function OutlineEditPage({
         outline_mode: outlineMode,
         outline_expansion_mode: nextOutlineExpansionMode,
         word_control_options: outlineWordControlOptions,
+        no_technical_score_mode: noTechnicalScoreMode,
       });
       trackConfigUsage({
         outline_mode: outlineMode,
@@ -789,7 +803,7 @@ function OutlineEditPage({
               打开投标模版
             </button>
           )}
-          <button type="button" className="primary-action" onClick={() => void generateOutline()} disabled={generating || sorting || contentMutationLocked || !projectOverview}>
+          <button type="button" className="primary-action" onClick={() => void generateOutline()} disabled={generating || sorting || contentMutationLocked || !projectOverview || !bidAnalysisReady}>
             {generating ? 'AI 正在生成目录' : outlineData ? '重新生成目录' : '生成目录'}
           </button>
         </div>
@@ -943,6 +957,24 @@ function OutlineEditPage({
         />
       )}
 
+      <AppDialog
+        open={noScoreConfirmationOpen}
+        onOpenChange={setNoScoreConfirmationOpen}
+        kicker="生成目录"
+        title="确认无技术评分项模式"
+        description="未解析到技术评分项，请您确认是否以无技术评分项模式开始编写投标文件？"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => {
+              setNoScoreConfirmationOpen(false);
+            }}>取消</button>
+            <button type="button" className="primary-action" onClick={() => {
+              setNoScoreConfirmationOpen(false);
+              void generateOutline(true);
+            }}>确认</button>
+          </>
+        )}
+      />
     </div>
   );
 }

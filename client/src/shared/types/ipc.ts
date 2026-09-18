@@ -1,4 +1,5 @@
 import type { AiHttpErrorPayload, ChatCompletionRequest, JsonCompletionRequest } from './ai';
+import type { OfficialTransactionsPage, OfficialInvoiceApplicationInput, OfficialInvoiceInfo, OfficialAccountState, OfficialEmailCredentials, OfficialEmailPurpose, OfficialRechargeOption, OfficialRechargeOrder } from './officialAccount';
 import type { DuplicateCheckWorkspacePatch, DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelInfoResult, ModelListResult, UpdateChannel } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMutationResult, KnowledgeBaseSearchRequest, KnowledgeBaseSearchPage, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
@@ -8,6 +9,13 @@ import type { FeasibilityProjectInfo, FeasibilityReportState, FeasibilityReportS
 import type { CredentialCertificate, CredentialEmployee, CredentialImageFieldKey, CredentialLibraryImportResult, CredentialLibraryMutationResult, CredentialLibraryProfile, CredentialLibrarySnapshot, CredentialOtherMaterial, CredentialProject, CredentialRecordSavePayload } from '../../features/credential-library/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
 import type { OutlineData } from './outline';
+
+/** 配置保存只更新提交字段，文本服务商档案也支持局部更新。 */
+export type ClientConfigPatch = Partial<Omit<ClientConfig, 'text_model_profiles'>> & {
+  text_model_profiles?: {
+    [Provider in keyof ClientConfig['text_model_profiles']]?: Partial<ClientConfig['text_model_profiles'][Provider]>;
+  };
+};
 
 export interface TaskEventTask {
   task_id: string;
@@ -599,7 +607,7 @@ export interface YibiaoBridge {
   };
   config: {
     load: () => Promise<ClientConfig>;
-    save: (config: ClientConfig) => Promise<ConfigSaveResult>;
+    save: (config: ClientConfigPatch) => Promise<ConfigSaveResult>;
     listModels: (config?: ClientConfig) => Promise<ModelListResult>;
     getModelInfo: (modelName: string) => Promise<ModelInfoResult>;
     openConfigFolder: () => Promise<{ success: boolean; path: string }>;
@@ -609,6 +617,25 @@ export interface YibiaoBridge {
     refresh: () => Promise<LicenseRuntimeStatus>;
     importOfflineFile: () => Promise<LicenseOfflineActivationResult>;
     activateOfflineCode: (code: string) => Promise<LicenseOfflineActivationResult>;
+  };
+  officialAccount: {
+    redeemCode: (input: { code: string; requestNo: string }) => Promise<{ redeemedPoint: string }>;
+    createInvoiceApplication: (input: OfficialInvoiceApplicationInput) => Promise<void>;
+    getInvoiceInfo: () => Promise<OfficialInvoiceInfo>;
+    saveInvoiceInfo: (input: OfficialInvoiceInfo) => Promise<void>;
+    getState: () => Promise<OfficialAccountState>;
+    refreshBalance: () => Promise<OfficialAccountState>;
+    getRechargeOptions: () => Promise<OfficialRechargeOption[]>;
+    createRechargeOrder: (input: { optionId: string }) => Promise<OfficialRechargeOrder>;
+    getRechargeOrders: () => Promise<OfficialRechargeOrder[]>;
+    getTransactions: (page: number) => Promise<OfficialTransactionsPage>;
+    getRechargeOrder: (id: string) => Promise<OfficialRechargeOrder>;
+    closeRechargeOrder: (id: string) => Promise<OfficialRechargeOrder>;
+    onRechargeOrderChanged: (callback: (order: OfficialRechargeOrder) => void) => () => void;
+    onStateChanged: (callback: (state: OfficialAccountState) => void) => () => void;
+    sendEmailCode: (input: { email: string; purpose: OfficialEmailPurpose }) => Promise<boolean>;
+    loginWithEmail: (input: OfficialEmailCredentials) => Promise<OfficialAccountState>;
+    bindEmail: (input: OfficialEmailCredentials) => Promise<OfficialAccountState>;
   };
   ai: {
     chat: (request: ChatCompletionRequest) => Promise<string>;

@@ -4,7 +4,7 @@ const { getConfigFilePath } = require('../utils/paths.cjs');
 const { createAnalyticsClientId } = require('../utils/machineIdentity.cjs');
 const { defaultExportFormat, normalizeExportFormat } = require('./exportFormatDefaults.cjs');
 
-const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
+const textModelProviders = ['official', 'jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
 const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'agnes', 'custom', 'comfyui'];
 const aiRequestModes = ['normal', 'stream'];
 const updateChannels = ['github', 'cloudflare', 'atomgit'];
@@ -21,6 +21,7 @@ const googleImageSizes = ['512', '1K', '2K', '4K'];
 const agnesImageRatios = ['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9'];
 
 const textProviderBaseUrls = {
+  official: 'https://v3.yibiao.pro/qhp-yibiao/anonymous/yibiao/openai/v1',
   jinlong: 'https://jlaudeapi.com/v1',
   volcengine: 'https://ark.cn-beijing.volces.com/api/v3',
   deepseek: 'https://api.deepseek.com',
@@ -29,6 +30,19 @@ const textProviderBaseUrls = {
 };
 
 const defaultTextModelProfiles = {
+  official: {
+    api_key: '',
+    base_url: textProviderBaseUrls.official,
+    model_name: 'yibiao-text',
+    multimodal_enabled: true,
+    reasoning_effort: '',
+    context_length_limit: 258000,
+    output_token_limit: 128000,
+    concurrency_limit: 50,
+    temperature_enabled: false,
+    temperature: DEFAULT_TEXT_TEMPERATURE,
+    request_mode: 'stream',
+  },
   jinlong: {
     api_key: '',
     base_url: textProviderBaseUrls.jinlong,
@@ -36,6 +50,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    output_token_limit: 0,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -48,6 +63,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    output_token_limit: 0,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -60,6 +76,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    output_token_limit: 0,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -72,6 +89,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    output_token_limit: 0,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -84,6 +102,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    output_token_limit: 0,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -169,18 +188,10 @@ const defaultImageModelProfiles = {
 };
 
 const defaultConfig = {
-  text_model_provider: 'jinlong',
+  text_model_provider: 'official',
+  official_api_model_type: 'cost-effective',
   text_model_profiles: defaultTextModelProfiles,
-  api_key: '',
-  base_url: textProviderBaseUrls.jinlong,
-  model_name: 'gpt-3.5-turbo',
-  multimodal_enabled: false,
-  reasoning_effort: '',
-  context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
-  concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
-  temperature_enabled: false,
-  temperature: DEFAULT_TEXT_TEMPERATURE,
-  request_mode: 'stream',
+  ...defaultTextModelProfiles.official,
   image_model: {
     ...defaultImageModelProfiles.jinlong,
   },
@@ -312,6 +323,7 @@ function normalizeTextModelProfile(provider, profile) {
     multimodal_enabled: normalizeTextMultimodalEnabled(source.multimodal_enabled, defaults.multimodal_enabled),
     reasoning_effort: normalizeReasoningEffort(source.reasoning_effort, defaults.reasoning_effort),
     context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit, defaults.context_length_limit),
+    output_token_limit: Number(source.output_token_limit ?? defaults.output_token_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(source.concurrency_limit, defaults.concurrency_limit),
     temperature_enabled: normalizeTextTemperatureEnabled(source.temperature_enabled, defaults.temperature_enabled),
     temperature: normalizeTextTemperature(source.temperature, defaults.temperature),
@@ -341,6 +353,7 @@ function textProfileFromFlatConfig(source, fallback, provider) {
     multimodal_enabled: normalizeTextMultimodalEnabled(source.multimodal_enabled, fallback.multimodal_enabled),
     reasoning_effort: normalizeReasoningEffort(source.reasoning_effort, fallback.reasoning_effort),
     context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit !== undefined ? source.context_length_limit : fallback.context_length_limit, fallback.context_length_limit),
+    output_token_limit: Number(source.output_token_limit ?? fallback.output_token_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(source.concurrency_limit !== undefined ? source.concurrency_limit : fallback.concurrency_limit, fallback.concurrency_limit),
     temperature_enabled: normalizeTextTemperatureEnabled(source.temperature_enabled, fallback.temperature_enabled),
     temperature: normalizeTextTemperature(source.temperature !== undefined ? source.temperature : fallback.temperature, fallback.temperature),
@@ -455,6 +468,7 @@ function normalizeConfig(config) {
   } else if (textModelProvider === 'custom' && !hasTextModelProfileData(textModelProfiles.custom)) {
     textModelProfiles.custom = textProfileFromUnknownProvider(source, rawTextProvider, textModelProfiles.custom);
   }
+  const officialApiModelType = source.official_api_model_type ?? defaultConfig.official_api_model_type;
   const activeTextProfile = textModelProfiles[textModelProvider];
   const sourceImageModel = source.image_model && typeof source.image_model === 'object' ? source.image_model : {};
   const imageModelProvider = isImageModelProvider(sourceImageModel.provider) ? sourceImageModel.provider : defaultConfig.image_model.provider;
@@ -473,6 +487,7 @@ function normalizeConfig(config) {
   return {
     ...defaultConfig,
     text_model_provider: textModelProvider,
+    official_api_model_type: officialApiModelType,
     text_model_profiles: textModelProfiles,
     api_key: activeTextProfile.api_key,
     base_url: activeTextProfile.base_url,
@@ -480,6 +495,7 @@ function normalizeConfig(config) {
     multimodal_enabled: activeTextProfile.multimodal_enabled,
     reasoning_effort: activeTextProfile.reasoning_effort,
     context_length_limit: activeTextProfile.context_length_limit,
+    output_token_limit: activeTextProfile.output_token_limit,
     concurrency_limit: activeTextProfile.concurrency_limit,
     temperature_enabled: activeTextProfile.temperature_enabled,
     temperature: activeTextProfile.temperature,
@@ -566,13 +582,18 @@ function createConfigStore(app) {
         const currentConfig = fs.existsSync(configFile)
           ? normalizeConfig(JSON.parse(fs.readFileSync(configFile, 'utf-8')))
           : normalizeConfig();
+        // 各服务商按字段合并；省略的字段保留磁盘最新值，切换时从目标档案读取。
+        const textModelProfiles = Object.fromEntries(textModelProviders.map((provider) => [provider, {
+          ...currentConfig.text_model_profiles[provider],
+          ...config?.text_model_profiles?.[provider],
+        }]));
+        const provider = config?.text_model_provider ?? currentConfig.text_model_provider;
+        const activeTextProfile = textProfileFromFlatConfig(config || {}, textModelProfiles[provider], provider);
         const nextConfig = withAnalyticsIdentity(normalizeConfig({
           ...currentConfig,
           ...config,
-          text_model_profiles: {
-            ...currentConfig.text_model_profiles,
-            ...(config && config.text_model_profiles ? config.text_model_profiles : {}),
-          },
+          ...activeTextProfile,
+          text_model_profiles: textModelProfiles,
           image_model_profiles: {
             ...currentConfig.image_model_profiles,
             ...(config && config.image_model_profiles ? config.image_model_profiles : {}),
