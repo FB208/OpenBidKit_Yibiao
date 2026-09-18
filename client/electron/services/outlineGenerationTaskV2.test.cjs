@@ -34,9 +34,12 @@ test('无评分任务首次生成和恢复时均遵守原方案来源限制，�
             checkMaterials(options.files);
             if (options.initial_stage === 'initial-outline') {
               if (originalOnly) assert.match(options.prompt, /目录来源仅限原方案.md/);
-              return result;
+              assert.equal(options.max_retries, 1);
+              return { ...result, validation_result: options.validateOutput(result) };
             }
             assert.equal(options.initial_stage, 'children_generation');
+            assert.equal(options.max_retries, 0);
+            assert.equal(options.validateOutput, undefined);
             if (originalOnly) assert.match(options.prompt, /目录来源仅限原方案.md/);
             assert.equal(options.auto_validate_json, true);
             assert.equal(options.summary_enabled, false);
@@ -84,6 +87,43 @@ test('无评分任务首次生成和恢复时均遵守原方案来源限制，�
       assert.equal(knowledgeReads, originalOnly ? 0 : 1);
     }
   }
+});
+
+test('首次一级目录在修复回调中拒绝空内容、损坏 JSON 和错误结构，通过后返回解析结果', async () => {
+  const finished = new Error('校验检查完成');
+  let task = { task_id: 'test-initial-outline-validation', stats: {} };
+  await assert.rejects(runOutlineGenerationTaskV2({
+    agentService: {
+      updatePersistentTask() {},
+      async runTask(options) {
+        assert.equal(options.initial_stage, 'initial-outline');
+        assert.equal(options.max_retries, 1);
+        const validate = (output_content) => options.validateOutput({ output_content });
+        for (const content of [undefined, '', ' \n\t']) {
+          assert.throws(() => validate(content), /outline\.json 未生成或内容为空/);
+        }
+        assert.throws(() => validate('{"outline":['), /outline\.json不是合法 JSON/);
+        for (const value of [null, {}, { outline: [] }, { outline: [{ id: '1', title: '实施方案' }] }]) {
+          assert.throws(() => validate(JSON.stringify(value)), /outline\.json 不符合目录结构要求/);
+        }
+        const valid = { outline: [{ id: '1', title: '实施方案', description: '实施安排', attr: '技术', content_mode: 'ai-generate' }] };
+        assert.deepEqual(validate(JSON.stringify(valid)), valid);
+        throw finished;
+      },
+    },
+    workspaceStore: {
+      loadTechnicalPlan: () => ({
+        bidAnalysisTasks: { techRequirements: { status: 'success', content: '未提取到' } },
+      }),
+    },
+    updateTask: (patch) => { task = { ...task, ...patch }; return task; },
+    checkpointTask: (patch) => { task = { ...task, ...patch }; return { task }; },
+    taskControl: {
+      signal: new AbortController().signal,
+      waitForOutlineSelection: async () => assert.fail('校验通过前不得进入一级目录确认'),
+    },
+    payload: { no_technical_score_mode: true },
+  }), (error) => error === finished);
 });
 
 test('前后端均识别仅缺少技术评分项，且不误判局部字段缺失', () => {
