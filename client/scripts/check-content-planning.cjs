@@ -12,7 +12,7 @@ const context = { module: { exports: {} }, require: createRequire(taskFile), Set
 const taskSource = fs.readFileSync(taskFile, 'utf8');
 vm.runInNewContext(`${taskSource}\nmodule.exports = {
   CONTENT_PLANNING_JSON_SCHEMA, extractContentPlanningPlans, createStoredContentPlan,
-  normalizeStoredContentPlan, buildContentPlanningOutline, formatContentPlanForPrompt,
+  normalizeStoredContentPlan, buildContentPlanningOutline,
   selectContentImageTargets, pruneContentGenerationPlans, now,
 };`, context, { filename: taskFile });
 const runtime = context.module.exports;
@@ -27,7 +27,6 @@ function checkContentPlanning() {
     ],
   }];
   const basePlan = { writing_focus: '说明各阶段实施步骤与交接关系。', knowledge: { item_ids: [] }, table: { needed: false, purpose: '' } };
-  const promptBefore = runtime.formatContentPlanForPrompt(basePlan);
   for (const score of [0, 5, 10, undefined, null, -1, 11, 2.5, '8']) {
     const output = { outline: structuredClone(source) };
     const plan = { ...basePlan, ...(score === undefined ? {} : { image_suitability_score: score }) };
@@ -48,7 +47,6 @@ function checkContentPlanning() {
     assert.equal(Object.hasOwn(rebuilt[0], 'content_plan'), false);
     assert.equal(Object.hasOwn(rebuilt[0].children[1], 'content_plan'), false);
     assert.equal(validateSchema({ outline: rebuilt }), true);
-    assert.equal(runtime.formatContentPlanForPrompt(stored.plan), promptBefore, '评分不得改变后续正文提示词');
   }
   const oldPlan = runtime.createStoredContentPlan(basePlan, 'none');
   assert.equal(Object.hasOwn(JSON.parse(JSON.stringify(oldPlan)).plan, 'image_suitability_score'), false);
@@ -56,7 +54,7 @@ function checkContentPlanning() {
   assert.equal(Object.hasOwn(rebuiltOld[0].children[0], 'content_plan'), false, '缺少评分的旧编排不复用');
   const partial = { outline: structuredClone(source) };
   assert.equal(runtime.extractContentPlanningPlans(partial, source, new Set(), new Set()).size, 0);
-  console.log('正文编排评分：边界检查、保存回读、再次编排、旧编排不复用及后续提示词不变，全部通过。');
+  console.log('正文编排评分：边界检查、保存回读、再次编排、旧编排不复用，全部通过。');
 }
 
 checkContentPlanning();
@@ -168,7 +166,7 @@ async function checkPlanningPauseOrder() {
     const saveStart = taskSource.indexOf('  function persistContentPlans(');
     const allEnd = taskSource.indexOf('  async function restoreOriginalMaterialsIfNeeded(', saveStart);
     const singleStart = taskSource.indexOf('  async function prepareSingleSectionPlan(');
-    const singleEnd = taskSource.indexOf('  async function runOne(', singleStart);
+    const singleEnd = taskSource.indexOf('  async function runContentGeneration(', singleStart);
     vm.createContext(scope);
     vm.runInContext(taskSource.slice(saveStart, allEnd) + taskSource.slice(singleStart, singleEnd)
       + '\nthis.run = ' + (single ? 'prepareSingleSectionPlan' : 'planAll') + ';', scope);

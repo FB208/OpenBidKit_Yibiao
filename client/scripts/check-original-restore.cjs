@@ -17,8 +17,6 @@ vm.runInNewContext(`${taskSource}\nmodule.exports = {
   formatRestoreTargetsForPrompt, formatBidKeyInfoForPrompt, normalizeLeafContentForSave,
   withSection, updateOutlineItemContent, pruneContentGenerationPlans, createStoredContentPlan,
   normalizeContentGenerationRuntime, CONTENT_PHASE_LABELS, createContentGenerationPausedError, isPauseLikeError,
-  buildChapterContentMessages, buildRestoredChapterContentMessages,
-  buildAgentRestoredChapterContentPrompt, buildAgentRestoredChapterContentFiles,
 };`, context, { filename: taskFile });
 
 // 行号视图直接供 Agent 定位；Agent 只声明范围，程序从无行号原文重建正文。
@@ -407,19 +405,10 @@ function checkAgentHeadingEdits() {
     source_ranges: [{ start_line: 1, end_line: 1 }], heading_edits: [{ line: 1, content: '**标题**' }],
   }), /仅有标题/);
 
-  const args = { chapter: { id: '15.4.4', title: '产品技术支持材料' }, wordControl: {}, restoredContent: '**15.4.4.1 检测报告**\n原文' };
-  const ordinary = context.module.exports.buildChapterContentMessages(args).map(message => message.content).join('\n');
-  const expanded = context.module.exports.buildRestoredChapterContentMessages(args).map(message => message.content).join('\n');
-  const agentPrompt = context.module.exports.buildAgentRestoredChapterContentPrompt();
-  assert.ok(ordinary.includes('加粗引导语只允许写简短主题词，禁止使用任何形式的编号。'), '普通生成规则保持不变');
-  for (const prompt of [restoration.buildOriginalRestorationPrompt(), expanded, agentPrompt]) {
-    assert.ok(prompt.includes(restoration.ORIGINAL_PLAN_HEADING_INSTRUCTION));
-    assert.ok(!/无编号内部标题|这些只作为章节定位线索|禁止使用任何形式的编号|不要包含标题或说明/.test(prompt), '原方案相关提示不能与标题重新编号冲突');
-  }
-  const chapterContext = context.module.exports.buildAgentRestoredChapterContentFiles(args)[0].content;
-  assert.ok(chapterContext.includes('内部层级和编号应合理连贯'));
-  assert.ok(!chapterContext.includes('不要重复输出章节标题、Markdown 标题或编号标题'));
-  console.log('Agent 标题处理：年份/型号保留、重新编号、删除、正文及图片保护、扩写提示一致性检查通过。');
+  const prompt = restoration.buildOriginalRestorationPrompt();
+  assert.ok(prompt.includes(restoration.ORIGINAL_PLAN_HEADING_INSTRUCTION));
+  assert.ok(!/无编号内部标题|这些只作为章节定位线索|禁止使用任何形式的编号|不要包含标题或说明/.test(prompt), '还原提示不能与标题重新编号冲突');
+  console.log('Agent 标题处理：年份/型号保留、重新编号、删除、正文及图片保护、还原提示一致性检查通过。');
 }
 
 // 使用正式输入与统计恢复代码，验证无原方案不读文件、同源续跑保留统计。
@@ -442,7 +431,7 @@ function checkRestorationStatsResume() {
   }
 }
 
-// 执行正式阶段衔接分支，验证进入预热/工作池之前已落库并推送生成阶段。
+// 执行正式阶段衔接分支，验证进入统一生成入口之前已落库并推送生成阶段。
 async function checkGenerationStageTransition() {
   const helpersStart = taskSource.indexOf('  function syncRuntime(');
   const helpersEnd = taskSource.indexOf('  // 所有正文请求结束后存在失败时', helpersStart);
@@ -464,15 +453,15 @@ async function checkGenerationStageTransition() {
         completedStages: new Set(completed), touchedItemIds: new Set(), logs: [],
         developerModeEnabled: mode === 'developer-gate', hasOriginalPlan: mode !== 'no-original',
         targetItemId, runOnlyIllustrationStage: false, tasksToRun: [{ item: { id: '1' } }],
-        leaves: [], sections: {}, outlineData: {}, storedContentPlans: {}, contentConcurrency: 1,
+        leaves: [], sections: {}, outlineData: {}, storedContentPlans: {},
         progressFor: () => 25, isUnresolvedContentSection: () => false,
-        pauseIfRequested() {}, runOne() {},
+        pauseIfRequested() {},
         planAll() {}, prepareSingleSectionPlan() {},
         restoreOriginalMaterialsIfNeeded() { restorationCalls += 1; scope.contentStats.phase = 'restoring'; },
         statsSnapshot: () => ({ content: { ...scope.contentStats } }),
         checkpointTask(task, patch, event) { checkpoints.push(structuredClone({ task, patch, event })); },
       };
-      // 两种生成入口均在第一次调用时检查持久化值和页面事件，避免只测辅助函数。
+      // 全文和单节均在统一入口第一次调用时检查持久化值和页面事件。
       const generate = () => {
         generationCalls += 1;
         const last = checkpoints.at(-1);
@@ -483,23 +472,22 @@ async function checkGenerationStageTransition() {
         scope.persistPausedContentGeneration();
         assert.equal(checkpoints.at(-1).patch.contentGenerationRuntime.phase, 'generating', '生成中暂停须保存生成阶段');
       };
-      scope.runItemsWithWorkerPool = generate;
-      scope.runContentTargetsWithWarmup = generate;
+      scope.runContentGeneration = generate;
       vm.createContext(scope);
       vm.runInContext(taskSource.slice(helpersStart, helpersEnd), scope);
-      const run = () => vm.runInContext(`(async () => {${taskSource.slice(flowStart, flowEnd)}})()`, scope);
+      const run = () => vm.runInContext(`(async () => {${taskSource.slice(flowStart, flowEnd)}throw new Error("不得进入后续流程");})()`, scope);
       if (mode === 'developer-gate') {
         await assert.rejects(run(), /CONTENT_GENERATION_PAUSED/);
         assert.equal(generationCalls, 0, '还原检查点不可提前启动生成');
         assert.equal(checkpoints.at(-1).task.status, 'paused');
         assert.equal(checkpoints.at(-1).patch.contentGenerationRuntime.phase, 'restoring');
         assert.equal(checkpoints.at(-1).patch.contentGenerationRuntime.developer_stage_gate, 'restoring');
-        // 继续时还原已完成，只运行生成入口；生成结束仍保留原有开发者检查点。
-        await assert.rejects(run(), /CONTENT_GENERATION_PAUSED/);
+        // 继续时还原已完成；HTML 生成完成后本轮直接结束。
+        await run();
       } else {
         await run();
       }
-      assert.equal(generationCalls, mode === 'completed' ? 0 : 1);
+      assert.equal(generationCalls, 1);
       if (mode === 'new-leaf') {
         assert.equal(restorationCalls, 0, '新增叶子跳过原方案还原');
         assert.ok(!scope.completedStages.has('restoring'), '跳过的还原阶段不产生检查点');

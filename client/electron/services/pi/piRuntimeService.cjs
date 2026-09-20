@@ -793,6 +793,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           if (!activeController.signal.aborted) activeController.abort(error);
         },
         openXmlTool: payload.open_xml_tool,
+        createTools: payload.create_tools,
       });
       session = created.session;
       sessionSnapshot = created.snapshot;

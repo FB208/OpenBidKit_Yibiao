@@ -966,6 +966,9 @@ function GenerationSettingsPage({
                         ...draftIllustrationOptions,
                         tableRequirement: draftTableRequirement,
                         imageQuantity: event.target.value as ContentImageQuantity,
+                        useAiImages: event.target.value !== 'none' && imageModelAvailable,
+                        useMermaidImages: event.target.value !== 'none',
+                        useHtmlImages: event.target.value !== 'none',
                       })}
                     >
                       <option value="none">无图</option>

@@ -48,7 +48,7 @@ function normalizeOutputLimit(contextLength) {
 }
 
 // 创建隔离的 Pi Session；持久任务可在后续完整执行中重新打开原 Session。
-async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, reportTaskFailure, openXmlTool, summaryEnabled = true, isFinalToolCall, autoValidateJson = false }) {
+async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, reportTaskFailure, openXmlTool, createTools, summaryEnabled = true, isFinalToolCall, autoValidateJson = false }) {
   const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
@@ -153,7 +153,9 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     : sessionsDir
       ? codingAgent.SessionManager.create(workspaceDir, sessionsDir)
       : codingAgent.SessionManager.inMemory(workspaceDir);
-  let customTools = [bashTool, jsonValidationTool, userQuestionTool, taskFailureTool, ...(openXmlCustomTool ? [openXmlCustomTool] : [])];
+  // 业务工具按调用注入，公共 Pi 层不依赖业务服务。
+  const taskTools = (createTools?.({ Type: typebox.Type, workspaceDir }) || []).map(tool => codingAgent.defineTool(tool));
+  let customTools = [bashTool, jsonValidationTool, userQuestionTool, taskFailureTool, ...(openXmlCustomTool ? [openXmlCustomTool] : []), ...taskTools];
   if (autoValidateJson) {
     customTools.push(
       withAutomaticJsonValidation(codingAgent.createWriteToolDefinition, workspaceDir, jsonValidator),
@@ -175,7 +177,7 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     model,
     modelRuntime,
     thinkingLevel: 'off',
-    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user', AGENT_TASK_FAILURE_TOOL_NAME, ...(openXmlCustomTool ? [OPENXML_TOOL_NAME] : [])],
+    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user', AGENT_TASK_FAILURE_TOOL_NAME, ...(openXmlCustomTool ? [OPENXML_TOOL_NAME] : []), ...taskTools.map(tool => tool.name)],
     customTools,
     resourceLoader,
     settingsManager,

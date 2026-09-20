@@ -13,6 +13,7 @@ const {
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { CONTENT_PLANNING_AGENT_TASK_KEY } = require('./contentPlanningAgentConfig.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
+const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
 const {
@@ -314,7 +315,7 @@ function createTask(type, payload) {
   };
 }
 
-function createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService }) {
+function createTaskService({ templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService }) {
   const subscribers = new Set();
   const callbackSubscribers = new Set();
   const activeTasks = new Map();
@@ -893,7 +894,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         signal: taskControl.signal,
       },
     );
-    runner({ aiService: runnerAiService, agentService: runnerAgentService, ordinaryAgentService: runnerOrdinaryAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, openXmlHelperService, updateTask, checkpointTask, payload, taskControl, previousState }).catch((error) => {
+    runner({ templateStore, aiService: runnerAiService, agentService: runnerAgentService, ordinaryAgentService: runnerOrdinaryAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, openXmlHelperService, updateTask, checkpointTask, payload, taskControl, previousState }).catch((error) => {
       if (!taskControl.signal.aborted) {
         checkpointTask({ status: 'error', error: error.message || '任务执行失败' });
       }
@@ -1438,6 +1439,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
           agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
           agentService.deletePersistentTask(CONTENT_PLANNING_AGENT_TASK_KEY);
           agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
+          agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
           technicalPlanStore.clearBidTemplate();
         },
       });
@@ -1483,6 +1485,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
             'retryContentCorrection', 'retry_content_correction', 'retryFailedSections', 'retry_failed_sections',
             'continuePostProcessing', 'continue_post_processing', 'rerunIllustrations', 'rerun_illustrations',
           ].some(field => taskPayload?.[field]);
+          if (!continuing) agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
           if (technicalPlan.originalPlanFile?.markdownPath && !continuing) {
             agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
           }
