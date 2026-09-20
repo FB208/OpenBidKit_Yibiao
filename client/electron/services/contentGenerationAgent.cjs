@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { countReadableWords } = require('../utils/wordCount.cjs');
+const { originalImageReferences } = require('./originalPlanRestoration.cjs');
 const { createContentGenerationImageTools, validateContentImageReferences } = require('./contentGenerationImageTools.cjs');
 
 const CONTENT_GENERATION_AGENT_TASK_KEY = 'technical-plan-content-generation';
@@ -61,18 +62,38 @@ function imageInstructions(options) {
   return `${mode}\n允许使用的类型：AI 图片（aiImage）${options.useAiImages ? '允许' : '不允许'}；HTML 图片（htmlImage）${options.useHtmlImages ? '允许' : '不允许'}；Mermaid 图片（mermaid）${options.useMermaidImages ? '允许' : '不允许'}。无图要求优先于类型开关；有图模式下仅使用允许的类型，三类均不允许时不安排配图或占位。\nHTML 图片允许的类型：${options.htmlImageTypes}。\n参考本节 image_needed 和 image_suitability_score：image_needed=false 时不安排配图；true 时结合正文判断具体需要。张数是指导范围，不是必须凑足的配额；评分高的小节可以适当多配，但高分不等于必须多图。由你结合上下文决定实际张数、类型和排版，不为凑数量重复配图，也不为套用图组凑图。\n开启某类图片只表示允许使用，不要求每节或全文覆盖所有类型。内容适合时建议优先 AI 图片 > HTML 图片 > Mermaid 图片，不设比例或强制顺序。`;
 }
 
-// 输入快照只在新会话创建时写入；参考知识库保留选中文档的全文。
-function buildContentGenerationFiles({ outline, targets, plans, projectOverview, globalFacts, globalFactsMode, wordControl, generationOptions, requirement, template, knowledgeBaseService, documentIds }) {
+// 将整理扩写规则和当前字数交给模型，不增加程序缩写或内容审计流程。
+function restorationInstructions(control, existingTotalWords) {
+  return `有 restored_content 的小节必须先完整阅读对应底稿，以其为基础对齐当前项目、目录及编排重点，整理为受限 HTML，不得忽略底稿另写一份。没有底稿的小节按正常流程生成，不搬用其他小节材料。\n本次启动时全文已有正文共 ${existingTotalWords} 字，全文上限 ${control.maximumWords || '不限制'}；每小节目标 ${control.sectionWords || '不限制'} 字，本节还原字数见 restored_content.words。若本节还原字数已超过小节目标，或全文已有正文已超过全文上限，则本节只整理，不扩写，不为压字数删除实质内容；未超过时按现有要求适当扩写。没有设置的目标不参与判断，不将全文目标分摊给本节。\n保留底稿中的实质信息、技术参数、措施和承诺；与全局事实设定冲突时，以全局事实设定为准，必要时读取并核对相关事实，无依据时不擅自改动。\n保留所有原表格的数据及含义，并保留本节原图片和引用顺序。表格编排和配图设置只指导新增内容：原表格不受 table.needed 限制，原图不受无图、image_needed、类型开关限制，也不计入新增配图建议张数。原图按 restored_content.images 中的对应关系直接使用 asset_ref，不重新生成，不留待生图占位。原图 figure 必须保留 data-yb-generation="aiImage" 以及唯一、非空的 template data-yb-role="prompt"，模板写“复用原方案图片，不重新生成”并可补充图片说明。此处 aiImage 仅满足现有受限 HTML 结构，不表示原图由 AI 生成；是否复用以原图对应关系为准，不得因该属性调用生图工具。保留 img、图注及其他必需属性。`;
+}
+
+// 输入快照只在新会话创建时写入；还原底稿按节保存，知识库保留选中文档的全文。
+function buildContentGenerationFiles({ outline, targets, plans, projectOverview, globalFacts, globalFactsMode, wordControl, generationOptions, hasOriginalPlan, restoredContents, existingTotalWords, requirement, template, knowledgeBaseService, documentIds }) {
   if (!template) throw new Error('请先在“长嘛样”选择有效的正文模板');
   const targetIds = new Set(targets.map(({ item }) => item.id));
   const sections = [];
+  const restoredFiles = [];
   function visit(items, parents = []) {
     return items.map(item => {
       const node = { id: item.id, title: item.title, description: item.description || '', content_mode: item.content_mode };
       if (item.children?.length) node.children = visit(item.children, [...parents, item.title]);
       else if (item.content_mode === 'ai-generate') {
         node.content_plan = plans[item.id]?.plan;
-        if (targetIds.has(item.id)) sections.push({ ...node, chapter_path: [...parents, item.title].join(' > '), file: sectionFile(item.id) });
+        if (targetIds.has(item.id)) {
+          const content = hasOriginalPlan && restoredContents[item.id];
+          if (content) {
+            const file = `已还原内容/${encodeURIComponent(item.id)}.md`;
+            restoredFiles.push({ path: file, content });
+            node.restored_content = {
+              file, words: countReadableWords(content),
+              images: [...new Set(originalImageReferences(content))].map(source_ref => ({
+                source_ref,
+                asset_ref: `原图/${crypto.createHash('sha256').update(source_ref).digest('hex')}${path.posix.extname(decodeURIComponent(new URL(source_ref).pathname))}`,
+              })),
+            };
+          }
+          sections.push({ ...node, chapter_path: [...parents, item.title].join(' > '), file: sectionFile(item.id) });
+        }
       }
       return node;
     });
@@ -80,11 +101,12 @@ function buildContentGenerationFiles({ outline, targets, plans, projectOverview,
   const tree = visit(outline);
   const files = [
     { path: INPUT_FILES.overview, content: projectOverview || '未提供项目概述。' },
-    { path: INPUT_FILES.decisions, content: JSON.stringify({ outline: tree, targets: sections, has_knowledge_base: documentIds.length > 0, word_requirements: wordInstructions(wordControl), image_requirements: imageInstructions(generationOptions), global_facts_mode: globalFactsMode, user_requirement: requirement || '' }, null, 2) },
+    { path: INPUT_FILES.decisions, content: JSON.stringify({ outline: tree, targets: sections, has_knowledge_base: documentIds.length > 0, word_requirements: wordInstructions(wordControl), image_requirements: imageInstructions(generationOptions), ...(hasOriginalPlan ? { restoration_requirements: restorationInstructions(wordControl, existingTotalWords) } : {}), global_facts_mode: globalFactsMode, user_requirement: requirement || '' }, null, 2) },
     { path: INPUT_FILES.rules, content: fs.readFileSync(path.join(RESOURCE_DIR, INPUT_FILES.rules), 'utf8') },
     { path: INPUT_FILES.template, content: fs.readFileSync(path.join(RESOURCE_DIR, INPUT_FILES.template), 'utf8') },
     { path: INPUT_FILES.config, content: JSON.stringify(template, null, 2) },
     { path: INPUT_FILES.facts, content: globalFacts.map(group => `## ${group.title}\n${group.content}`).join('\n\n') || '未设定全局事实。' },
+    ...restoredFiles,
   ];
   if (!documentIds.length) return files;
   const references = knowledgeBaseService.readReferences(documentIds, { includeMarkdown: true, includeItems: true });
@@ -98,6 +120,21 @@ function buildContentGenerationFiles({ outline, targets, plans, projectOverview,
   }
   files.push({ path: '知识库/索引.json', content: JSON.stringify(index, null, 2) });
   return files;
+}
+
+// 首次创建会话时复制原图；恢复沿用工作区副本，不依赖原文件再次读取。
+function copyRestoredImages(workspaceDir, resolveOriginalImagePath) {
+  const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, INPUT_FILES.decisions), 'utf8'));
+  const copied = new Set();
+  for (const section of decisions.targets) {
+    for (const { source_ref, asset_ref } of section.restored_content?.images || []) {
+      if (copied.has(asset_ref)) continue;
+      const target = path.join(workspaceDir, asset_ref);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(resolveOriginalImagePath(source_ref), target);
+      copied.add(asset_ref);
+    }
+  }
 }
 
 // 输出边界只检查文件类型与有效正文，具体 HTML 结构按输入规范生成。
@@ -149,11 +186,14 @@ function createContentGenerationTools({ aiService, signal, onProgress = () => {}
         const section = targets.get(job.section_id);
         try {
           combinedSignal.throwIfAborted();
+          const restoredContext = section.restored_content
+            ? `\n\n本节已还原底稿（完整内容）：\n${read(section.restored_content.file)}\n\n全局事实设定（发生冲突时以此为准）：\n${read(INPUT_FILES.facts)}`
+            : '';
           const html = checkSectionHtml(await aiService.chat({
             signal: combinedSignal, logTitle: `Agent HTML正文-${section.id}-${section.title}`,
             messages: [
-              { role: 'system', content: `${writingInstructions(decisions.global_facts_mode, decisions.has_knowledge_base)}\n\n${rules}\n\n本次配图要求：\n${decisions.image_requirements}` },
-              { role: 'user', content: `项目概述：\n${overview}\n\n本节编排决策：\n${JSON.stringify(section, null, 2)}\n\n字数要求：\n${decisions.word_requirements}\n\n用户额外要求：\n${decisions.user_requirement}\n\n受限 HTML 模板：\n${template}\n\n所选模板配置：\n${config}\n\n本节写作要求：\n${job.instructions}\n\n参考资料与事实摘录：\n${job.references || '未提供'}\n\n按本节 content_plan 执行：table.needed=false 时不生成数据表格；结合本次配图要求与 image_needed 判断是否安排图片；无图、无允许类型或 image_needed=false 时不留配图块，需要配图时先留占位并给出具体用途，图片资源由主 Agent 调用工具生成后填写；你仅负责本节正文，不虚构图片路径。` },
+              { role: 'system', content: `${writingInstructions(decisions.global_facts_mode, decisions.has_knowledge_base)}\n\n${rules}\n\n本次配图要求：\n${decisions.image_requirements}${section.restored_content ? `\n\n本节还原处理要求（原表格、原图保留规则优先于新增限制）：\n${decisions.restoration_requirements}` : ''}` },
+              { role: 'user', content: `项目概述：\n${overview}\n\n本节编排决策：\n${JSON.stringify(section, null, 2)}\n\n字数要求：\n${decisions.word_requirements}\n\n用户额外要求：\n${decisions.user_requirement}\n\n受限 HTML 模板：\n${template}\n\n所选模板配置：\n${config}\n\n本节写作要求：\n${job.instructions}\n\n参考资料与事实摘录：\n${job.references || '未提供'}\n\n按本节 content_plan 执行：table.needed=false 时不新增数据表格；结合本次配图要求与 image_needed 判断是否新增图片；无图、无允许类型或 image_needed=false 时不留新增配图块，需要配图时先留占位并给出具体用途，图片资源由主 Agent 调用工具生成后填写；你仅负责本节正文，不虚构图片路径。${restoredContext}` },
             ],
           }));
           combinedSignal.throwIfAborted();
@@ -177,11 +217,11 @@ function createContentGenerationTools({ aiService, signal, onProgress = () => {}
 }
 
 // 单个持久 Agent 负责阅读、检索、批量调度及最终文件清单。
-function buildContentGenerationPrompt(resuming, hasKnowledgeBase) {
+function buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPlan) {
   return `你负责本次投标文件受限 HTML 正文生成，使用一个持久会话完成任务。
 1. 项目概述.md、正文编排决策.json、受限HTML生成规范.md 三个文件必须完整阅读；参考正文模板.html和所选模板配置.json。模板只是结构示例，不照抄示例正文，不要求每节套用全部元素。
 2. ${hasKnowledgeBase ? '知识库/包含用户选中的全部文档，索引提供编排知识条目与文件的对应关系；知识库和' : ''}全局事实设定.md是参考项，用到时再用 rg、read 搜索和读取相关内容，不要求全文通读。具体事实以全局事实设定为准，并遵守 global_facts_mode；不能仅因没有阅读就认定事实缺失。
-3. 只生成正文编排决策.json中targets列出的AI生成叶子小节，其他目录作上下文；遵守写作重点、表格和配图标记、全文及每小节字数要求、用户额外要求。每节输出路径已给定，禁止修改输入文件和业务数据库。
+3. 只生成正文编排决策.json中targets列出的AI生成叶子小节，其他目录作上下文；遵守写作重点、表格和配图标记、全文及每小节字数要求、用户额外要求。每节输出路径已给定，禁止修改输入文件和业务数据库。${hasOriginalPlan ? '本次使用已还原底稿：阅读 restoration_requirements，并在生成每节前完整阅读其 restored_content.file；工具会自动加入本节完整底稿、原图引用对应关系和全局事实。已超过生效字数要求的底稿只整理、不扩写；冲突以全局事实设定为准。保留原表格和原图，以下配图与表格限制仅用于新增内容；原图直接引用已复制文件，不重新生图。无底稿小节按正常流程生成。' : ''}
 4. 检索需要的参考资料后，调用 generate-sections，一次提交多个相互独立的小节以真正并发生成；工具会自动加入本节编排、项目概述、HTML规范、模板、字数及配图要求，你负责提供各节写作要求及准确的参考摘录。文本并发遵循用户现有模型配置，不要使用bash或脚本直接调用外部模型。
 5. 阅读并遵守正文编排决策.json 的 image_requirements（用户配图要求）。无图不安排图片或占位，不调用配图工具；有图时参考 image_needed、image_suitability_score 和实际正文，自主判断张数、允许的生成类型及排版。张数范围与类型优先级仅作建议，不凑数、不要求三类齐全。在当前会话中完成所需图片：AI 图调用 generate-image；HTML 图先用 write 编写独立配图 HTML 文件再调用 render-html-image；Mermaid 图先编写 .mmd 源文件再调用 render-mermaid-image。源码保存在图片/目录，配图 HTML 可使用 CSS，不受正文受限 HTML 标签限制。将工具返回的 asset_ref 原样写入对应 img 的 data-yb-asset-ref，不填写 src，不虚构文件路径，不把配图源码嵌入小节正文。图组中每张图片均须生成。渲染错误或 HTML layout_issues 交回当前会话修改源码并重新转图；失败不得默认为成功或改换生成方式。
 6. ${resuming ? '本次继续原会话。先检查正文/已完成文件，保留有效正文、图片和源码，复用已存在且符合内容的图片引用；只补齐未完成、失败或明确需要修正的小节及图片。' : '每个小节保存为正文/下的独立HTML文件。'} 工具返回每节文件、字数和错误；对失败小节修正要求后重试，可用read/edit检查和修正已有HTML。不要删除已完成的小节。
@@ -191,18 +231,21 @@ function buildContentGenerationPrompt(resuming, hasKnowledgeBase) {
 }
 
 // 新建或恢复正文 Session；暂停保留工作区，完成后只返回文件产物。
-async function runContentGenerationAgent({ agentService, aiService, resume, hasKnowledgeBase, signal, buildFiles, onCheckpoint = () => {}, onActivity, onProgress }) {
+async function runContentGenerationAgent({ agentService, aiService, resume, hasKnowledgeBase, hasOriginalPlan, resolveOriginalImagePath, signal, buildFiles, onCheckpoint = () => {}, onActivity, onProgress }) {
   const resuming = Boolean(resume && agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY));
   const runId = crypto.randomUUID();
   if (resuming) agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { run_id: runId, status: 'running', agent_connection: 'running', error: null });
   const result = await agentService.runTask({
     task_id: runId, title: '投标文件正文生成', primary_session: true, summary_enabled: false,
-    prompt: buildContentGenerationPrompt(resuming, hasKnowledgeBase), output_file: RESULT_FILE,
+    prompt: buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPlan), output_file: RESULT_FILE,
     files: resuming ? [] : buildFiles(), signal,
     persistent_task: { task_key: CONTENT_GENERATION_AGENT_TASK_KEY, mode: resuming ? 'resume' : 'create' },
     initial_stage: 'generating', max_retries: 1, timeout_ms: 30 * 60 * 1000,
     json_validation_schemas: { [RESULT_FILE]: RESULT_SCHEMA }, auto_validate_json: true,
-    create_tools: context => createContentGenerationTools({ aiService, signal, onProgress }, context),
+    create_tools: context => {
+      if (hasOriginalPlan && !resuming) copyRestoredImages(context.workspaceDir, resolveOriginalImagePath);
+      return createContentGenerationTools({ aiService, signal, onProgress }, context);
+    },
     validateOutput: (_result, context) => readContentGenerationResult(context.workspace_dir),
     onCheckpoint: checkpoint => onCheckpoint({ ...checkpoint, task_key: CONTENT_GENERATION_AGENT_TASK_KEY, run_id: runId }),
     onActivity,

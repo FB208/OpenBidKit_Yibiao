@@ -2709,17 +2709,21 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     });
   }
 
-  // 校验原图资源实际存在；只读取导入图片目录，不触发图片下载或生成。
-  function assertOriginalImageFiles(markdown) {
+  // 定位已导入的原图，供正文 Agent 复制资源及原方案存在性检查复用。
+  function resolveOriginalImagePath(reference) {
     const root = path.resolve(getImportedImagesDir(app));
-    for (const reference of new Set(originalImageReferences(markdown))) {
-      const url = new URL(reference);
-      const filePath = path.resolve(root, decodeURIComponent(url.pathname.slice(1)));
-      const relative = path.relative(root, filePath);
-      if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || !fs.existsSync(filePath)) {
-        throw new Error(`原方案图片资源缺失，请重新导入原 Word：${reference}`);
-      }
+    const url = new URL(reference);
+    const filePath = path.resolve(root, decodeURIComponent(url.pathname.slice(1)));
+    const relative = path.relative(root, filePath);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || !fs.existsSync(filePath)) {
+      throw new Error(`原方案图片资源缺失，请重新导入原 Word：${reference}`);
     }
+    return filePath;
+  }
+
+  // 校验原图资源实际存在，不触发图片下载或生成。
+  function assertOriginalImageFiles(markdown) {
+    for (const reference of new Set(originalImageReferences(markdown))) resolveOriginalImagePath(reference);
   }
 
   // 原方案或正文变化、任务结束后回收未引用批次；活动/暂停任务退出后由状态提交再次触发。
@@ -2963,6 +2967,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     readOriginalTenderMarkdown,
     readOriginalPlanMarkdown,
     assertOriginalImageFiles,
+    resolveOriginalImagePath,
     readIllustrationHtml,
     findIllustrationHtml,
     readOriginalOutlineRuntime,

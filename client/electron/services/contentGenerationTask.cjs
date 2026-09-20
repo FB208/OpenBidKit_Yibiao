@@ -3235,11 +3235,18 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       const result = await runContentGenerationAgent({
         agentService, aiService, resume: resume || retryFailedSections,
         hasKnowledgeBase: referenceKnowledgeDocumentIds.length > 0,
+        hasOriginalPlan, resolveOriginalImagePath: workspaceStore.resolveOriginalImagePath,
         signal: AbortSignal.any([taskControl.signal, controller.signal]),
         buildFiles: () => buildContentGenerationFiles({
           outline: outlineData.outline, targets, plans: storedContentPlans,
           projectOverview, globalFacts, globalFactsMode, wordControl,
           generationOptions: storedPlan.contentGenerationOptions,
+          hasOriginalPlan,
+          restoredContents: hasOriginalPlan ? Object.fromEntries(targets.flatMap(({ item }) => {
+            const state = getOriginalMaterialRuntimeState(item);
+            return state.validRestored ? [[item.id, state.content]] : [];
+          })) : {},
+          existingTotalWords: hasOriginalPlan ? leaves.reduce((sum, { item }) => sum + countReadableWords(sections[item.id]?.content || item.content || ''), 0) : 0,
           requirement: regenerateRequirement,
           template: templateStore.getTemplate(storedPlan.exportTemplateId),
           knowledgeBaseService, documentIds: referenceKnowledgeDocumentIds,

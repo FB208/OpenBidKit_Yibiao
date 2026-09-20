@@ -54,6 +54,7 @@ async function main() {
         return [{ document: { id: 'doc', file_name: '完整知识库' }, markdown: '选中条目和未选中条目全文', items: [{ id: 'k1', title: '准备工作', resume: '准备摘要' }] }];
       } },
     };
+    await checkRestoredContent({ Type, workspaceDir, fileOptions, signal });
     // 未选知识库：不读取服务、不创建目录，主会话和并发正文提示只保留全局事实。
     const noKnowledgeDir = path.join(workspaceDir, '无知识库任务');
     const noKnowledgeFiles = buildContentGenerationFiles({ ...fileOptions, documentIds: [], knowledgeBaseService: {
@@ -105,6 +106,9 @@ async function main() {
       fs.writeFileSync(target, file.content, 'utf8');
     }
     const input = JSON.parse(files.find(file => file.path === '正文编排决策.json').content);
+    assert.equal(input.restoration_requirements, undefined);
+    assert.equal(input.targets.some(section => section.restored_content), false);
+    assert.equal(files.some(file => file.path.startsWith('已还原内容/')), false);
     assert.equal(input.has_knowledge_base, true);
     assert.deepEqual(input.targets.map(item => item.id), ['1.1', '1.2']);
     assert.equal(input.outline[1].content_mode, 'manual-fill');
@@ -290,6 +294,7 @@ async function main() {
             assert.equal(payload.auto_validate_json, true);
             assert.equal(payload.files.length, resume ? 0 : files.length);
             assert.match(payload.prompt, /三个文件必须完整阅读/);
+            assert.doesNotMatch(payload.prompt, /本次使用已还原底稿/);
             assert.match(payload.prompt, /知识库\/包含用户选中的全部文档/);
             assert.match(payload.prompt, /image_requirements（用户配图要求）/);
             assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
@@ -304,9 +309,154 @@ async function main() {
     }
     fs.unlinkSync(firstFile);
     assert.throws(() => readContentGenerationResult(workspaceDir), /ENOENT/);
-    console.log('正文 Agent：知识库有无选择、页面图片设置联动、配图需求传递、输入、并发、暂停恢复、三类图片工具、源码保留及最终图片引用检查通过。');
+    console.log('正文 Agent：还原底稿及原图、知识库有无选择、页面图片设置联动、配图需求传递、输入、并发、暂停恢复、三类图片工具及最终图片引用检查通过。');
   } finally {
     fs.rmSync(workspaceDir, { recursive: true, force: true });
+  }
+}
+
+// 原图样例供正文请求模拟和真实受限 HTML 校验共同使用。
+function restoredFigure(assetRef) {
+  return `<!-- yibiao:block -->\n<figure id="restored_image" data-yb-generation="aiImage" data-yb-size="square"><template data-yb-role="prompt">复用原方案现场图片，不重新生成。</template><img alt="现场" data-yb-asset-ref="${assetRef}"><figcaption>现场</figcaption></figure>`;
+}
+
+// 使用混合小节检查底稿全文传递、只整理要求、原图字节及恢复时不再读取原文件。
+async function checkRestoredContent({ Type, workspaceDir, fileOptions, signal }) {
+  const reference = 'yibiao-asset://imported-images/原方案批次/现场.png';
+  const imagePath = path.join(workspaceDir, '原方案现场.png');
+  const imageBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=', 'base64');
+  fs.writeFileSync(imagePath, imageBytes);
+  const source = `工期三十天。保留设备编号ABC-123。\n\n|设备|数量|\n|---|---|\n|服务器|2|\n\n![现场](${reference})\n\n末尾验收措施必须完整传递。`;
+  const { countReadableWords } = require('../electron/utils/wordCount.cjs');
+  const restoredDir = path.join(workspaceDir, '还原输入检查');
+  const options = { ...fileOptions, hasOriginalPlan: true, restoredContents: { '1.1': source }, existingTotalWords: 2100,
+    generationOptions: { ...fileOptions.generationOptions, imageQuantity: 'none', useAiImages: false, useHtmlImages: false, useMermaidImages: false },
+    wordControl: { ...fileOptions.wordControl, sectionWords: 10, sectionMinimumWords: 8, sectionMaximumWords: 12 },
+  };
+  const files = buildContentGenerationFiles(options);
+  const decisions = JSON.parse(files.find(file => file.path === '正文编排决策.json').content);
+  const restored = decisions.targets[0].restored_content;
+  assert.equal(restored.words, countReadableWords(source));
+  assert.equal(restored.words > options.wordControl.sectionWords, true);
+  assert.equal(decisions.targets[1].restored_content, undefined);
+  assert.equal(files.filter(file => file.path.startsWith('已还原内容/')).length, 1);
+  assert.equal(files.find(file => file.path === restored.file).content, source);
+  assert.match(decisions.restoration_requirements, /2100 字，全文上限 2000/);
+  assert.match(decisions.restoration_requirements, /只整理，不扩写/);
+  assert.match(decisions.restoration_requirements, /以全局事实设定为准/);
+  assert.match(decisions.restoration_requirements, /原图不受无图/);
+  assert.match(decisions.restoration_requirements, /data-yb-generation="aiImage"/);
+  assert.match(decisions.restoration_requirements, /唯一、非空的 template/);
+  assert.match(decisions.restoration_requirements, /不得因该属性调用生图工具/);
+  const underLimit = JSON.parse(buildContentGenerationFiles({ ...options, existingTotalWords: 100, wordControl: fileOptions.wordControl }).find(file => file.path === '正文编排决策.json').content);
+  assert.match(underLimit.restoration_requirements, /100 字，全文上限 2000/);
+  assert.match(underLimit.restoration_requirements, /每小节目标 800/);
+  assert.match(underLimit.restoration_requirements, /未超过时按现有要求适当扩写/);
+  let copied = 0;
+  for (const resume of [false, true]) {
+    await runContentGenerationAgent({
+      resume, hasOriginalPlan: true, hasKnowledgeBase: true, signal,
+      buildFiles: () => { assert.equal(resume, false); return files; },
+      resolveOriginalImagePath(ref) { assert.equal(resume, false); assert.equal(ref, reference); copied++; return imagePath; },
+      aiService: { async chat(request) {
+        const [system, user] = request.messages;
+        if (request.logTitle.includes('1.1')) {
+          assert.ok(user.content.includes(source));
+          assert.match(user.content, /六十天/);
+          assert.match(user.content, /原图\//);
+          assert.match(system.content, /只整理，不扩写/);
+          assert.match(system.content, /以全局事实设定为准/);
+          return `<!-- yibiao:block -->\n<p id="restored_p">工期六十天。设备编号ABC-123。</p>\n<!-- yibiao:block -->\n<table id="restored_table" data-yb-preset="plain"><caption>设备</caption><tbody><tr><td>服务器</td><td>2</td></tr></tbody></table>\n${restoredFigure(restored.images[0].asset_ref)}`;
+        }
+        assert.doesNotMatch(user.content, /本节已还原底稿|ABC-123/);
+        assert.doesNotMatch(system.content, /本节还原处理要求/);
+        return '<!-- yibiao:block -->\n<p id="normal_p">正常生成交付措施</p>';
+      } },
+      agentService: {
+        hasPersistentTaskSession: () => resume,
+        updatePersistentTask() {},
+        async runTask(payload) {
+          assert.match(payload.prompt, /本次使用已还原底稿/);
+          assert.equal(payload.files.length, resume ? 0 : files.length);
+          for (const file of payload.files) {
+            const target = path.join(restoredDir, file.path);
+            fs.mkdirSync(path.dirname(target), { recursive: true });
+            fs.writeFileSync(target, file.content, 'utf8');
+          }
+          const [tool] = payload.create_tools({ Type, workspaceDir: restoredDir });
+          assert.deepEqual(fs.readFileSync(path.join(restoredDir, restored.images[0].asset_ref)), imageBytes);
+          if (!resume) {
+            const result = await tool.execute('restored', { sections: decisions.targets.map(section => ({ section_id: section.id, instructions: '落实责任', references: '' })) });
+            assert.deepEqual(result.details.results.map(section => section.status), ['success', 'success']);
+            fs.writeFileSync(path.join(restoredDir, '正文生成结果.json'), JSON.stringify({ sections: result.details.results.map(({ section_id, file, words }) => ({ section_id, file, words })) }), 'utf8');
+          }
+          payload.validateOutput({}, { workspace_dir: restoredDir });
+          return { workspace_dir: restoredDir };
+        },
+      },
+    });
+    assert.equal(fs.readFileSync(path.join(restoredDir, restored.file), 'utf8'), source);
+    if (!resume) fs.unlinkSync(imagePath);
+  }
+  assert.equal(copied, 1);
+}
+
+// Electron Node 模式下验证真实 Store 的原图定位，数据库与图片均放临时目录。
+function checkOriginalImageStore() {
+  const { EventEmitter } = require('node:events');
+  const { createSqliteDatabase } = require('../electron/services/sqliteDatabase.cjs');
+  const { createTechnicalPlanStore } = require('../electron/services/technicalPlanStore.cjs');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), '原图定位检查-'));
+  let database;
+  try {
+    const app = Object.assign(new EventEmitter(), { getPath: () => directory });
+    database = createSqliteDatabase(app);
+    const store = createTechnicalPlanStore({ app, db: database.db });
+    const image = path.join(directory, 'workspace', 'imported-images', '原图批次', '现场 图片.png');
+    fs.mkdirSync(path.dirname(image), { recursive: true });
+    fs.writeFileSync(image, Buffer.from('原图字节'));
+    const reference = 'yibiao-asset://imported-images/原图批次/现场%20图片.png';
+    assert.equal(store.resolveOriginalImagePath(reference), image);
+    store.assertOriginalImageFiles(`![现场](${reference})`);
+    fs.unlinkSync(image);
+    assert.throws(() => store.resolveOriginalImagePath(reference), /原方案图片资源缺失/);
+    assert.throws(() => store.assertOriginalImageFiles(`![现场](${reference})`), /原方案图片资源缺失/);
+    console.log('真实 Store：原图定位、中文路径及缺失原图检查通过。');
+  } finally {
+    database?.close();
+    assert.equal(path.dirname(directory), os.tmpdir());
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+// 在隐藏 Electron 窗口中执行现有校验器，覆盖原图结构及缺失、空白、重复模板。
+async function checkRestrictedHtml() {
+  const { BrowserWindow } = require('electron');
+  const ts = require('typescript');
+  const source = fs.readFileSync(path.join(__dirname, '../src/shared/bodyHtml/restrictedHtml.ts'), 'utf8');
+  const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const html = restoredFigure('原图/现场.png');
+  const prompt = '<template data-yb-role="prompt">复用原方案现场图片，不重新生成。</template>';
+  const rules = fs.readFileSync(path.join(__dirname, '../electron/resources/content-generation/受限HTML生成规范.md'), 'utf8');
+  const example = [...rules.matchAll(/```html\s*([\s\S]*?)```/g)].map(match => match[1]).find(fragment => fragment.includes('original_fig_001'));
+  assert.ok(example);
+  const cases = [html, example, html.replace(' data-yb-generation="aiImage"', ''), html.replace(prompt, ''), html.replace(prompt, '<template data-yb-role="prompt"> </template>'), html.replace(prompt, prompt + prompt)];
+  const window = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } });
+  try {
+    await window.loadURL('about:blank');
+    const results = await window.webContents.executeJavaScript(`(() => { const exports = {}; ${code}\n return ${JSON.stringify(cases)}.map(html => exports.parseRestrictedHtml(html)); })()`);
+    for (const result of results.slice(0, 2)) {
+      assert.notEqual(result.normalizedHtml, null, JSON.stringify(result.issues));
+      assert.equal(result.issues.filter(issue => issue.level === 'error').length, 0);
+      assert.match(result.normalizedHtml, /data-yb-asset-ref="原图\//);
+    }
+    for (const [index, message] of [[2, /data-yb-generation/], [3, /必须包含一个配图提示 template/], [4, /非空文字/], [5, /必须包含一个配图提示 template/]]) {
+      assert.equal(results[index].normalizedHtml, null);
+      assert.ok(results[index].issues.some(issue => issue.level === 'error' && message.test(issue.message)));
+    }
+    console.log('真实受限 HTML 校验：原图样例和规范示例通过，缺少类型或模板、空白或重复模板均正确报错。');
+  } finally {
+    window.destroy();
   }
 }
 
@@ -333,7 +483,9 @@ async function checkLocalRendering(workspaceDir) {
   }
 }
 
-if (!process.argv.includes('--render-images')) {
+if (process.argv.includes('--original-store')) {
+  checkOriginalImageStore();
+} else if (!process.argv.includes('--render-images') && !process.argv.includes('--validate-html')) {
   main().catch(error => { console.error(error); process.exitCode = 1; });
 } else if (!process.versions.electron) {
   const { spawnSync } = require('node:child_process');
@@ -341,7 +493,7 @@ if (!process.argv.includes('--render-images')) {
   const env = { ...process.env, YIBIAO_CONTENT_IMAGE_TEST_DIR: directory };
   delete env.ELECTRON_RUN_AS_NODE;
   try {
-    const result = spawnSync(require('electron'), [__filename, '--render-images'], { env, windowsHide: true, stdio: 'inherit' });
+    const result = spawnSync(require('electron'), [__filename, process.argv.includes('--validate-html') ? '--validate-html' : '--render-images'], { env, windowsHide: true, stdio: 'inherit' });
     if (result.error) throw result.error;
     process.exitCode = result.status ?? 1;
   } finally {
@@ -353,5 +505,5 @@ if (!process.argv.includes('--render-images')) {
   const directory = process.env.YIBIAO_CONTENT_IMAGE_TEST_DIR;
   app.setPath('userData', path.join(directory, 'electron-data'));
   app.on('window-all-closed', () => {});
-  app.whenReady().then(() => checkLocalRendering(directory)).then(() => app.exit(0), error => { console.error(error); app.exit(1); });
+  app.whenReady().then(() => process.argv.includes('--validate-html') ? checkRestrictedHtml() : checkLocalRendering(directory)).then(() => app.exit(0), error => { console.error(error); app.exit(1); });
 }
