@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { getBidAnalysisTasks } = require('./bidAnalysisTask.cjs');
 const {
+  getTechnicalPlanDir,
   getTechnicalPlanBidTemplatePath,
   getTechnicalPlanBidTemplateSourcePath,
   getTechnicalPlanBidTemplateFieldsPath,
@@ -2984,6 +2985,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     saveContentGenerationOptions,
     saveChapterContent,
     clearBidTemplate,
+    // 正文 Word 直接保存到技术方案业务目录，独立于 Agent 会话。
+    getContentWordOutputDir() {
+      return getTechnicalPlanDir(app);
+    },
     listTenderSourceDocxRelativePaths() {
       return loadTenderSourceFiles()
         .map((file) => String(file.sourceDocxPath || '').trim())

@@ -32,9 +32,13 @@ function createFixture(directory) {
 }
 
 // 手动推进真实任务注册的十秒回调，无需等待或调用外部 AI。
-async function checkTask(directory) {
+async function checkTask(directory, outputDir) {
   const { Type } = await import('typebox');
   const { outline, targets } = createFixture(directory);
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.writeFileSync(path.join(outputDir, '1.2.docx'), '第一节原结果');
+  fs.writeFileSync(path.join(outputDir, '1.10.docx'), '第二节原结果');
+  fs.writeFileSync(path.join(outputDir, 'other.docx'), '其他文件');
   const timers = new Map();
   const originalSet = global.setInterval;
   const originalClear = global.clearInterval;
@@ -62,7 +66,7 @@ async function checkTask(directory) {
   let pauseGeneration = false;
   const args = {
     aiService: { chat: async () => body },
-    workspaceStore: { loadTechnicalPlan: () => state },
+    workspaceStore: { loadTechnicalPlan: () => state, getContentWordOutputDir: () => outputDir },
     taskControl: { signal: new AbortController().signal, isPauseRequested: () => pauseRequested },
     updateTask: checkpoint, checkpointTask: checkpoint,
     agentService: {
@@ -117,6 +121,10 @@ async function checkTask(directory) {
     assert.equal(timers.size, 0);
     assert.equal(state.contentGenerationRuntime.html_output.word_sections.length, 1);
     assert.equal(state.contentGenerationTask.progress, 85);
+    assert.equal(state.contentGenerationRuntime.html_output.word_output_dir, outputDir);
+    assert.equal(fs.readFileSync(path.join(outputDir, '1.2.docx'), 'utf8'), 'mock-docx', '成功覆盖原结果');
+    assert.equal(fs.readFileSync(path.join(outputDir, '1.10.docx'), 'utf8'), '第二节原结果', '失败保留原结果');
+    assert.equal(fs.existsSync(path.join(directory, 'Word')), false, '会话目录不再保存 Word');
     failConversion = false;
     const failedState = structuredClone(state);
     // 正式 taskService 先保存新任务初始状态，再把原状态通过 previousState 传入。
@@ -124,6 +132,9 @@ async function checkTask(directory) {
     await runContentGenerationTask({ ...args, previousState: failedState, payload: { retryFailedSections: true } });
     assert.equal(aiRuns, 1, '转换重试不得再次调用 Agent');
     assert.equal(conversions, 3, '已完成的第一节不得重复转换');
+    assert.equal(fs.readFileSync(path.join(outputDir, '1.10.docx'), 'utf8'), 'mock-docx');
+    assert.equal(fs.readFileSync(path.join(outputDir, 'other.docx'), 'utf8'), '其他文件');
+    assert.ok(state.contentGenerationTask.logs.includes(`输出目录：${outputDir}`));
     assert.equal(timers.size, 0);
     assert.equal(state.contentGenerationTask.status, 'success');
     assert.equal(state.contentGenerationTask.progress, 90);
@@ -135,13 +146,13 @@ async function checkTask(directory) {
     assert.deepEqual(fs.readFileSync(path.join(directory, '原图/现场 图片.png')), png);
     checkProgressView(state.contentGenerationTask);
     // 模拟转换中暂停：不保存刚返回的文件，继续时不调用 AI。
-    fs.unlinkSync(path.join(directory, 'Word/1.10.docx'));
+    fs.unlinkSync(path.join(outputDir, '1.10.docx'));
     state.contentGenerationRuntime.html_output.word_sections = state.contentGenerationRuntime.html_output.word_sections.slice(0, 1);
     state.contentGenerationTask.status = 'paused';
     pauseConversion = true;
     await runContentGenerationTask({ ...args, previousState: structuredClone(state), payload: { resume: true } });
     assert.equal(state.contentGenerationTask.status, 'paused');
-    assert.equal(fs.existsSync(path.join(directory, 'Word/1.10.docx')), false);
+    assert.equal(fs.existsSync(path.join(outputDir, '1.10.docx')), false);
     assert.equal(timers.size, 0);
     pauseConversion = pauseRequested = false;
     await runContentGenerationTask({ ...args, previousState: structuredClone(state), payload: { resume: true } });
@@ -183,20 +194,21 @@ function checkProgressView(task) {
 }
 
 // 调用真实助手服务，解包确认正文、表格、图片及中转目录清理。
-async function checkRealWord(directory) {
+async function checkRealWord(directory, outputDir) {
   const { EventEmitter } = require('node:events');
   const { createOpenXmlHelperService } = require('../electron/services/openXmlHelperService.cjs');
   const AdmZip = require('adm-zip');
   const app = new EventEmitter();
-  app.isPackaged = false;
-  app.getPath = () => path.join(directory, '独立用户数据');
+  // 可使用独立助手构建目录，避免测试重编译占用中的开发版程序。
+  app.isPackaged = Boolean(process.env.YIBIAO_OPENXML_HELPER_DIR);
+  app.getPath = () => path.dirname(path.dirname(outputDir));
   app.getAppPath = () => path.resolve(__dirname, '..');
   const service = createOpenXmlHelperService({ app, configStore: { load: () => ({}) } });
   try {
     const result = readContentGenerationResult(directory);
-    const outputs = await convertContentSections({ result, openXmlHelperService: service, signal: new AbortController().signal });
+    const outputs = await convertContentSections({ result, outputDir, openXmlHelperService: service, signal: new AbortController().signal });
     for (const output of outputs) {
-      const zip = new AdmZip(path.join(directory, output.file));
+      const zip = new AdmZip(path.join(outputDir, output.file));
       const xml = zip.readAsText('word/document.xml');
       assert.match(xml, /施工准备与检查/);
       assert.match(xml, /<w:tbl[ >]/);
@@ -216,8 +228,16 @@ async function checkRealWord(directory) {
 async function main() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), '正文转Word检查-'));
   try {
-    await checkTask(directory);
-    if (process.argv.includes('--real-word')) await checkRealWord(directory);
+    const agentDir = path.join(directory, 'agent-runtime', '正文会话');
+    const outputDir = path.join(directory, '独立用户数据', 'workspace', 'technical-plan');
+    await checkTask(agentDir, outputDir);
+    if (process.argv.includes('--real-word')) await checkRealWord(agentDir, outputDir);
+    // 删除的仅是本检查创建的会话目录，正式输出目录必须位于它之外。
+    assert.equal(path.dirname(agentDir), path.join(directory, 'agent-runtime'));
+    fs.rmSync(agentDir, { recursive: true, force: true });
+    assert.ok(fs.statSync(path.join(outputDir, '1.2.docx')).size > 0);
+    assert.ok(fs.statSync(path.join(outputDir, '1.10.docx')).size > 0);
+    console.log('Word 新保存位置、成功覆盖、失败保留、重试复用及删除会话后文件保留通过。');
   } finally {
     if (path.dirname(directory) === path.resolve(os.tmpdir()) && path.basename(directory).startsWith('正文转Word检查-')) fs.rmSync(directory, { recursive: true, force: true });
   }

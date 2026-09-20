@@ -3314,7 +3314,11 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
           },
         });
         clearInterval(scanTimer);
-        contentRuntime.html_output = { workspace_dir: result.workspaceDir, word_sections: [] };
+        contentRuntime.html_output = {
+          workspace_dir: result.workspaceDir,
+          word_output_dir: workspaceStore.getContentWordOutputDir(),
+          word_sections: [],
+        };
         contentStats.phase = 'sections-completed';
         logs = [...logs, `小节全部完成，共 ${result.sections.length} 节。`];
       }
@@ -3332,7 +3336,8 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       logs = [...logs, '开始批量转换 Word，每个小节生成一个文件。'];
       checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime() });
       await convertContentSections({
-        result, openXmlHelperService, signal, completed: contentRuntime.html_output.word_sections,
+        result, outputDir: contentRuntime.html_output.word_output_dir,
+        openXmlHelperService, signal, completed: contentRuntime.html_output.word_sections,
         onProgress(wordSections) {
           contentRuntime.html_output.word_sections = wordSections;
           contentStats.word_conversion_completed = wordSections.length;
@@ -3343,7 +3348,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       abortOnPause();
       signal.throwIfAborted();
       contentStats.phase = 'word-completed';
-      logs = [...logs, `转换完成，共 ${result.sections.length} 个 Word 文件。`, `输出目录：${path.join(result.workspaceDir, 'Word')}`];
+      logs = [...logs, `转换完成，共 ${result.sections.length} 个 Word 文件。`, `输出目录：${contentRuntime.html_output.word_output_dir}`];
       const runtime = syncRuntime({ developer_stage_gate: '' });
       checkpointTask({ status: 'success', logs, stats: statsSnapshot(), pause_requested: false }, {
         contentGenerationRuntime: runtime,

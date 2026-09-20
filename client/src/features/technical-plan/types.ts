@@ -291,9 +291,10 @@ export interface ContentIllustrationPlanState {
 }
 
 export interface ContentGenerationRuntimeState {
-  /** 本轮 Agent 已交付的 HTML 工作区，以及已成功保存的 Word 文件。 */
+  /** HTML 位于 Agent 会话目录；Word 文件相对于独立的业务输出目录。 */
   html_output?: {
     workspace_dir: string;
+    word_output_dir: string;
     word_sections: Array<{ section_id: string; file: string }>;
   };
   generation_started?: boolean;

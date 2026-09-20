@@ -15,7 +15,7 @@ function scanGeneratedSections(workspaceDir, targets) {
 }
 
 // 按本次目录顺序逐节转换；只复用明确记录为成功且仍存在的 Word 文件。
-async function convertContentSections({ result, openXmlHelperService, signal, completed = [], onProgress = () => {} }) {
+async function convertContentSections({ result, outputDir, openXmlHelperService, signal, completed = [], onProgress = () => {} }) {
   const { workspaceDir, sections } = result;
   const template = JSON.parse(fs.readFileSync(path.join(workspaceDir, '所选模板配置.json'), 'utf8'));
   const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
@@ -28,13 +28,13 @@ async function convertContentSections({ result, openXmlHelperService, signal, co
     }
   }
   visit(decisions.outline);
-  const saved = new Map(completed.filter(item => fs.existsSync(path.join(workspaceDir, item.file))
-    && fs.statSync(path.join(workspaceDir, item.file)).size > 0).map(item => [item.section_id, item]));
-  fs.mkdirSync(path.join(workspaceDir, 'Word'), { recursive: true });
+  const saved = new Map(completed.filter(item => fs.existsSync(path.join(outputDir, item.file))
+    && fs.statSync(path.join(outputDir, item.file)).size > 0).map(item => [item.section_id, item]));
+  fs.mkdirSync(outputDir, { recursive: true });
   for (const section of sections) {
     signal.throwIfAborted();
-    const file = `Word/${encodeURIComponent(section.section_id)}.docx`;
-    const target = path.join(workspaceDir, file);
+    const file = `${encodeURIComponent(section.section_id)}.docx`;
+    const target = path.join(outputDir, file);
     try {
       if (saved.get(section.section_id)?.file !== file) {
         const { title, level } = headings.get(section.section_id);
