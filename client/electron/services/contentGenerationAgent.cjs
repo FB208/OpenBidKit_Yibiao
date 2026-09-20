@@ -231,7 +231,7 @@ function buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPla
 }
 
 // 新建或恢复正文 Session；暂停保留工作区，完成后只返回文件产物。
-async function runContentGenerationAgent({ agentService, aiService, resume, hasKnowledgeBase, hasOriginalPlan, resolveOriginalImagePath, signal, buildFiles, onCheckpoint = () => {}, onActivity, onProgress }) {
+async function runContentGenerationAgent({ agentService, aiService, resume, hasKnowledgeBase, hasOriginalPlan, resolveOriginalImagePath, signal, buildFiles, onCheckpoint = () => {}, onActivity, onProgress, onWorkspaceReady = () => {} }) {
   const resuming = Boolean(resume && agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY));
   const runId = crypto.randomUUID();
   if (resuming) agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { run_id: runId, status: 'running', agent_connection: 'running', error: null });
@@ -244,6 +244,7 @@ async function runContentGenerationAgent({ agentService, aiService, resume, hasK
     json_validation_schemas: { [RESULT_FILE]: RESULT_SCHEMA }, auto_validate_json: true,
     create_tools: context => {
       if (hasOriginalPlan && !resuming) copyRestoredImages(context.workspaceDir, resolveOriginalImagePath);
+      onWorkspaceReady(context.workspaceDir);
       return createContentGenerationTools({ aiService, signal, onProgress }, context);
     },
     validateOutput: (_result, context) => readContentGenerationResult(context.workspace_dir),

@@ -1,4 +1,6 @@
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 const { AI_QUEUE_SCOPE_PAUSED } = require('../utils/aiRequestQueue.cjs');
 const { createNoopDeveloperLogger } = require('../utils/developerLog.cjs');
 const {
@@ -25,7 +27,8 @@ const {
 const { countReadableWords } = require('../utils/wordCount.cjs');
 const { CONTENT_PLANNING_AGENT_TASK_KEY } = require('./contentPlanningAgentConfig.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
-const { CONTENT_GENERATION_AGENT_TASK_KEY, buildContentGenerationFiles, runContentGenerationAgent } = require('./contentGenerationAgent.cjs');
+const { CONTENT_GENERATION_AGENT_TASK_KEY, buildContentGenerationFiles, runContentGenerationAgent, readContentGenerationResult } = require('./contentGenerationAgent.cjs');
+const { scanGeneratedSections, convertContentSections } = require('./contentGenerationOutput.cjs');
 
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
@@ -1612,6 +1615,7 @@ function normalizeContentGenerationRuntime(value) {
     regenerate_requirement: String(source.regenerate_requirement || '').trim(),
     simulate_partial_failures: Boolean(source.simulate_partial_failures),
     awaiting_content_decision: Boolean(source.awaiting_content_decision),
+    html_output: source.html_output,
     updated_at: source.updated_at || now(),
   };
 }
@@ -1730,6 +1734,9 @@ const CONTENT_PHASE_LABELS = {
   planning: '正文编排',
   restoring: '原方案还原',
   generating: '正文生成',
+  'sections-completed': '小节全部完成',
+  'word-converting': '批量转换',
+  'word-completed': '转换完成',
   'section-word-adjusting': '小节字数调整',
   'original-auditing': '原方案覆盖检查',
   auditing: '全文一致性检查',
@@ -1742,6 +1749,14 @@ const CONTENT_PHASE_LABELS = {
 };
 
 const CONTENT_PROGRESS_PROFILES = {
+  html: {
+    planning: [0, 12], restoring: [12, 18], generating: [18, 80],
+    'sections-completed': [80, 80], 'word-converting': [80, 90], 'word-completed': [90, 90],
+  },
+  'html-single': {
+    planning: [0, 15], restoring: [15, 25], generating: [25, 80],
+    'sections-completed': [80, 80], 'word-converting': [80, 90], 'word-completed': [90, 90],
+  },
   full: {
     planning: [0, 12],
     restoring: [12, 18],
@@ -1816,9 +1831,13 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
     completed = stats.restoration_completed;
     total = stats.restoration_total;
     phaseProgress = percentageFor(completed, total);
-  } else if (phase === 'generating') {
+  } else if (phase === 'generating' || phase === 'sections-completed') {
     completed = stats.generation_completed;
     total = stats.generation_total;
+    phaseProgress = percentageFor(completed, total);
+  } else if (phase === 'word-converting' || phase === 'word-completed') {
+    completed = stats.word_conversion_completed;
+    total = stats.word_conversion_total;
     phaseProgress = percentageFor(completed, total);
   } else if (phase === 'section-word-adjusting' || phase === 'final-section-word-adjusting') {
     completed = Math.max(0, Number(stats.section_adjustment_completed) || 0);
@@ -1887,7 +1906,7 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
 
 // 按当前任务模式把阶段内进度映射为单调递增的正文生成累计进度。
 function buildContentOverallProgress(progressMode, detail, status) {
-  if (status === 'success' || detail.phase === 'done') return 100;
+  if (!['html', 'html-single'].includes(progressMode) && (status === 'success' || detail.phase === 'done')) return 100;
   const profile = CONTENT_PROGRESS_PROFILES[progressMode] || CONTENT_PROGRESS_PROFILES.full;
   const range = profile[detail.phase];
   if (!range) return 0;
@@ -1927,7 +1946,7 @@ function withSection(sections, item, partial) {
   };
 }
 
-async function runContentGenerationTask({ aiService, agentService, ordinaryAgentService, workspaceStore, knowledgeBaseService, templateStore, updateTask: updateManagedTask, checkpointTask: checkpointManagedTask, payload, taskControl, previousState }) {
+async function runContentGenerationTask({ aiService, agentService, ordinaryAgentService, workspaceStore, knowledgeBaseService, templateStore, openXmlHelperService, updateTask: updateManagedTask, checkpointTask: checkpointManagedTask, payload, taskControl, previousState }) {
   const resume = Boolean(payload.resume);
   const storedPlan = resume ? (previousState || {}) : (workspaceStore.loadTechnicalPlan() || {});
   const wordControl = normalizeOutlineWordControlSnapshot(storedPlan.outlineWordControlSnapshot);
@@ -1983,7 +2002,8 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     || (retryContentCorrection && previousState?.contentGenerationTask?.stats?.content?.phase === 'illustration-generating');
   const runOnlyIllustrationStage = runOnlyIllustrationPlanning || runOnlyIllustrationGeneration;
   const regenerate = !resume && !retryContentCorrection && !rerunIllustrations && !retryFailedSections && !continuePostProcessing && Boolean(payload.regenerate);
-  const targetItemId = resume ? contentRuntime.target_item_id : String(payload.targetItemId || '').trim();
+  const targetItemId = resume || (retryFailedSections && contentRuntime.html_output)
+    ? contentRuntime.target_item_id : String(payload.targetItemId || '').trim();
   if (retryContentCorrection && targetItemId) {
     throw new Error('单小节重新生成不支持重试内容矫正');
   }
@@ -2202,6 +2222,8 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     logs = [...logs, `原方案覆盖审计为必做阶段，本次将使用 Agent 检查并补回${targetItemId ? '当前小节' : '正文'}的原文保留情况。`];
   }
 
+  const htmlWorkflow = !runOnlyIllustrationStage && !retryContentCorrection && !continuePostProcessing
+    && (!resume || !contentRuntime.phase || ['planning', 'restoring', 'generating', 'sections-completed', 'word-converting', 'word-completed'].includes(contentRuntime.phase));
   const progressMode = resume && storedPlan.contentGenerationTask?.progress_detail?.mode
     ? storedPlan.contentGenerationTask.progress_detail.mode
     : runOnlyIllustrationGeneration
@@ -2211,22 +2233,25 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
         : retryContentCorrection
           ? 'correction'
           : targetItemId
-            ? 'single'
-            : 'full';
-  let lastTaskProgress = resume ? Math.max(0, Number(storedPlan.contentGenerationTask?.progress) || 0) : 0;
+            ? (htmlWorkflow ? 'html-single' : 'single')
+            : (htmlWorkflow ? 'html' : 'full');
+  let lastTaskProgress = resume || (retryFailedSections && contentRuntime.html_output)
+    ? Math.max(0, Number(previousState?.contentGenerationTask?.progress) || 0) : 0;
 
   // 所有正文任务更新都在这里补充累计进度和当前阶段明细。
   function buildTaskUpdate(partial = {}) {
     const latestLog = (partial.logs || logs || []).at(-1) || '';
     const progressDetail = buildContentPhaseProgress(contentStats, latestLog, progressMode);
     const calculatedProgress = buildContentOverallProgress(progressMode, progressDetail, partial.status);
-    lastTaskProgress = partial.status === 'success'
-      ? 100
-      : Math.max(lastTaskProgress, calculatedProgress);
+    lastTaskProgress = Math.max(lastTaskProgress, calculatedProgress);
     return {
       ...partial,
       progress: lastTaskProgress,
       progress_detail: progressDetail,
+      // Task 的独立明细字段不落库；本流程随既有 stats 保存，重开页面仍能显示转换进度。
+      ...(['html', 'html-single'].includes(progressMode) && partial.stats?.content ? {
+        stats: { ...partial.stats, content: { ...partial.stats.content, output_progress: progressDetail } },
+      } : {}),
     };
   }
 
@@ -3221,70 +3246,127 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
   }
 
-  // 正文生成只产出持久工作区内的 HTML 文件，本轮结束于此，不写回 Markdown 正文。
+  // 每十秒统计已保存正文，Agent 完成后由程序逐节转换，不再请求 AI。
   async function runContentGeneration(targets) {
     const controller = new AbortController();
     const abortOnPause = () => {
       if (isPauseRequested() && !controller.signal.aborted) controller.abort(createContentGenerationPausedError());
     };
     const watcher = setInterval(abortOnPause, 500);
+    const signal = AbortSignal.any([taskControl.signal, controller.signal]);
+    let scanTimer;
+    let scanError;
     contentStats.generation_total = targets.length;
     contentStats.generation_completed = 0;
     try {
       abortOnPause();
-      const result = await runContentGenerationAgent({
-        agentService, aiService, resume: resume || retryFailedSections,
-        hasKnowledgeBase: referenceKnowledgeDocumentIds.length > 0,
-        hasOriginalPlan, resolveOriginalImagePath: workspaceStore.resolveOriginalImagePath,
-        signal: AbortSignal.any([taskControl.signal, controller.signal]),
-        buildFiles: () => buildContentGenerationFiles({
-          outline: outlineData.outline, targets, plans: storedContentPlans,
-          projectOverview, globalFacts, globalFactsMode, wordControl,
-          generationOptions: storedPlan.contentGenerationOptions,
-          hasOriginalPlan,
-          restoredContents: hasOriginalPlan ? Object.fromEntries(targets.flatMap(({ item }) => {
-            const state = getOriginalMaterialRuntimeState(item);
-            return state.validRestored ? [[item.id, state.content]] : [];
-          })) : {},
-          existingTotalWords: hasOriginalPlan ? leaves.reduce((sum, { item }) => sum + countReadableWords(sections[item.id]?.content || item.content || ''), 0) : 0,
-          requirement: regenerateRequirement,
-          template: templateStore.getTemplate(storedPlan.exportTemplateId),
-          knowledgeBaseService, documentIds: referenceKnowledgeDocumentIds,
-        }),
-        onCheckpoint: checkpoint => updateContentAgentState(checkpoint),
-        onActivity(event = {}) {
-          if (event.visible === false || !event.message) return;
-          publishTaskUpdate({ status: 'running', logs: [...logs, `正文生成 Agent：${event.message}`], stats: statsSnapshot() });
-        },
-        onProgress(result) {
-          contentStats.generation_completed = result.completed;
-          logs = [...logs, `正文文件已保存：${result.section_id}，${result.words} 字（${result.completed}/${result.total}）。`];
-          publishTaskUpdate({ status: 'running', logs, stats: statsSnapshot() });
-        },
-      });
-      abortOnPause();
-      controller.signal.throwIfAborted();
+      signal.throwIfAborted();
+      let result;
+      if (contentRuntime.html_output) {
+        result = readContentGenerationResult(contentRuntime.html_output.workspace_dir);
+      } else {
+        result = await runContentGenerationAgent({
+          agentService, aiService, resume: resume || retryFailedSections,
+          hasKnowledgeBase: referenceKnowledgeDocumentIds.length > 0,
+          hasOriginalPlan, resolveOriginalImagePath: workspaceStore.resolveOriginalImagePath,
+          signal,
+          buildFiles: () => buildContentGenerationFiles({
+            outline: outlineData.outline, targets, plans: storedContentPlans,
+            projectOverview, globalFacts, globalFactsMode, wordControl,
+            generationOptions: storedPlan.contentGenerationOptions,
+            hasOriginalPlan,
+            restoredContents: hasOriginalPlan ? Object.fromEntries(targets.flatMap(({ item }) => {
+              const state = getOriginalMaterialRuntimeState(item);
+              return state.validRestored ? [[item.id, state.content]] : [];
+            })) : {},
+            existingTotalWords: hasOriginalPlan ? leaves.reduce((sum, { item }) => sum + countReadableWords(sections[item.id]?.content || item.content || ''), 0) : 0,
+            requirement: regenerateRequirement,
+            template: templateStore.getTemplate(storedPlan.exportTemplateId),
+            knowledgeBaseService, documentIds: referenceKnowledgeDocumentIds,
+          }),
+          onWorkspaceReady(workspaceDir) {
+            const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
+            contentStats.generation_total = decisions.targets.length;
+            clearInterval(scanTimer);
+            // 文件保存只是进度依据；只有 Agent 最终结果检查通过才能开始转换。
+            const scan = () => {
+              try {
+                const count = scanGeneratedSections(workspaceDir, decisions.targets);
+                if (count <= contentStats.generation_completed) return;
+                contentStats.generation_completed = count;
+                publishTaskUpdate({ status: 'running', stats: statsSnapshot() });
+              } catch (error) {
+                scanError = error;
+                controller.abort(error);
+              }
+            };
+            scan();
+            scanTimer = setInterval(scan, 10000);
+          },
+          onCheckpoint: checkpoint => updateContentAgentState(checkpoint),
+          onActivity(event = {}) {
+            if (event.visible === false || !event.message) return;
+            publishTaskUpdate({ status: 'running', logs: [...logs, `正文生成 Agent：${event.message}`], stats: statsSnapshot() });
+          },
+          onProgress(result) {
+            logs = [...logs, `正文文件已保存：${result.section_id}，${result.words} 字（${result.completed}/${result.total}）。`];
+            publishTaskUpdate({ status: 'running', logs, stats: statsSnapshot() });
+          },
+        });
+        clearInterval(scanTimer);
+        contentRuntime.html_output = { workspace_dir: result.workspaceDir, word_sections: [] };
+        contentStats.phase = 'sections-completed';
+        logs = [...logs, `小节全部完成，共 ${result.sections.length} 节。`];
+      }
+      contentStats.generation_total = result.sections.length;
       contentStats.generation_completed = result.sections.length;
       contentStats.generated_html_words = result.sections.reduce((sum, section) => sum + section.words, 0);
       contentStats.generated_html_workspace = result.workspaceDir;
+      contentStats.word_conversion_total = result.sections.length;
+      contentStats.word_conversion_completed = contentRuntime.html_output.word_sections.length;
       updateContentAgentState({ task_key: CONTENT_GENERATION_AGENT_TASK_KEY, status: 'success', agent_connection: 'idle' }, false);
-      logs = [...logs, `正文 HTML 文件生成完成，共 ${result.sections.length} 节、${contentStats.generated_html_words} 字。`, `输出目录：${result.workspaceDir}`, '本轮仅生成文件，未进入后续处理。'];
-      const runtime = syncRuntime({ phase: 'generating', developer_stage_gate: '' });
-      checkpointTask({ status: 'success', progress: 100, logs, stats: statsSnapshot(), pause_requested: false }, {
+      checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime() });
+      abortOnPause();
+      signal.throwIfAborted();
+      contentStats.phase = 'word-converting';
+      logs = [...logs, '开始批量转换 Word，每个小节生成一个文件。'];
+      checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime() });
+      await convertContentSections({
+        result, openXmlHelperService, signal, completed: contentRuntime.html_output.word_sections,
+        onProgress(wordSections) {
+          contentRuntime.html_output.word_sections = wordSections;
+          contentStats.word_conversion_completed = wordSections.length;
+          logs = [...logs, `Word 已保存：${wordSections.at(-1).file}（${wordSections.length}/${result.sections.length}）。`];
+          checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime() });
+        },
+      });
+      abortOnPause();
+      signal.throwIfAborted();
+      contentStats.phase = 'word-completed';
+      logs = [...logs, `转换完成，共 ${result.sections.length} 个 Word 文件。`, `输出目录：${path.join(result.workspaceDir, 'Word')}`];
+      const runtime = syncRuntime({ developer_stage_gate: '' });
+      checkpointTask({ status: 'success', logs, stats: statsSnapshot(), pause_requested: false }, {
         contentGenerationRuntime: runtime,
       }, { contentRuntime: runtime });
     } catch (error) {
+      error = scanError || error;
       const paused = isPauseRequested() || isPauseLikeError(error);
-      updateContentAgentState({ task_key: CONTENT_GENERATION_AGENT_TASK_KEY, status: paused ? 'paused' : 'error', agent_connection: 'idle' }, false);
+      if (!contentRuntime.html_output) {
+        updateContentAgentState({ task_key: CONTENT_GENERATION_AGENT_TASK_KEY, status: paused ? 'paused' : 'error', agent_connection: 'idle' }, false);
+      }
       if (paused) {
-        if (agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY)) {
+        if (!contentRuntime.html_output && agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY)) {
           agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { status: 'paused', agent_connection: 'idle' });
         }
-        persistPausedContentGeneration('正文生成已暂停，已完成的 HTML 文件和 Agent 会话已保留，继续后接着生成。');
+        persistPausedContentGeneration(contentRuntime.html_output
+          ? 'Word 转换已暂停，已完成文件保留，继续时只转换剩余小节。'
+          : '正文生成已暂停，已完成的 HTML 文件和 Agent 会话已保留，继续后接着生成。');
         throw createContentGenerationPausedError();
       }
+      checkpointTask({ status: 'error', error: error.message, logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime() });
       throw error;
     } finally {
+      clearInterval(scanTimer);
       clearInterval(watcher);
     }
   }
@@ -4694,6 +4776,12 @@ workspace 文件说明：
   }
 
   try {
+    // 本轮已交付 HTML 后，暂停继续或失败重试直接续转 Word，不再启动 Agent。
+    if (htmlWorkflow && (resume || retryFailedSections) && contentRuntime.html_output) {
+      contentStats.phase = 'word-converting';
+      await runContentGeneration([]);
+      return;
+    }
     if (continuePostProcessing) {
       const ignoredContexts = leaves.filter(({ item }) => isUnresolvedContentSection(sections[item.id]));
       for (const { item } of ignoredContexts) {

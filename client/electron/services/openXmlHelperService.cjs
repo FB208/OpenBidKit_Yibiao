@@ -533,45 +533,68 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     startPreview(next).then(next.resolve, next.reject);
   }
 
-  /** 执行一次样张生成任务；同配置的多个预览实例共用上层缓存。 */
+  /** 生成 Word；外部工作区图片按需中转到助手工作区，原始图片不改动。 */
   async function createRestrictedHtmlDocx(html, exportFormat, options = {}) {
-    const assetRoot = options.assetRoot?.trim() || await syncPreviewAssets();
-    // 页眉页脚装饰：SVG 栅格化成 PNG 落工作区，C# 侧嵌成锚定浮动图。
-    // 段落底纹画不出渐变和斜切，装饰必须走图片。
-    const chrome = await buildChromeAssets(app, exportFormat?.page);
-    pruneChromeAssets(app, [chrome.header, chrome.footer]);
-    const result = await previewRunner.runJob({
-      action: 'render-restricted-html-docx',
-      request: {
-        html,
-        export_format: exportFormat,
-        asset_root: assetRoot,
-        chrome_assets: {
-          root: chrome.assetRoot,
-          header: chrome.header,
-          footer: chrome.footer,
-          header_height_cm: chrome.layout.headerHeightCm,
-          footer_height_cm: chrome.layout.footerHeightCm,
-          footer_top_cm: chrome.layout.footerTopCm,
-          footer_distance_cm: chrome.layout.footerDistanceCm,
-          header_distance_cm: chrome.layout.headerDistanceCm,
-          margin_top_cm: chrome.layout.marginTopCm,
-          margin_bottom_cm: chrome.layout.marginBottomCm,
-          text_layout: chrome.textLayout,
-        },
-      },
-      timeoutMs: TEMPLATE_PREVIEW_TIMEOUT_MS,
-    });
-
+    let assetRoot = options.assetRoot?.trim() || await syncPreviewAssets();
+    let temporaryAssets;
+    let result;
     try {
+      if (options.copyAssets) {
+        const workspace = getWorkspaceDir(app);
+        fs.mkdirSync(workspace, { recursive: true });
+        temporaryAssets = fs.mkdtempSync(path.join(workspace, 'restricted-html-assets-'));
+        const $ = require('cheerio').load(html, null, false);
+        const references = new Set($('img').toArray().map(element => $(element).attr('data-yb-asset-ref')));
+        for (const reference of references) {
+          if (!reference || reference.includes('\\') || path.isAbsolute(reference) || reference.includes(':') || reference.split('/').includes('..')) {
+            throw new Error('Word 配图引用必须是图片根目录内的相对路径');
+          }
+          const target = path.join(temporaryAssets, reference);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.copyFileSync(path.join(assetRoot, reference), target);
+        }
+        assetRoot = path.basename(temporaryAssets);
+      }
+      // 页眉页脚装饰：SVG 栅格化成 PNG 落工作区，C# 侧嵌成锚定浮动图。
+      // 段落底纹画不出渐变和斜切，装饰必须走图片。
+      const chrome = await buildChromeAssets(app, exportFormat?.page);
+      pruneChromeAssets(app, [chrome.header, chrome.footer]);
+      result = await previewRunner.runJob({
+        action: 'render-restricted-html-docx',
+        request: {
+          html,
+          export_format: exportFormat,
+          asset_root: assetRoot,
+          chrome_assets: {
+            root: chrome.assetRoot,
+            header: chrome.header,
+            footer: chrome.footer,
+            header_height_cm: chrome.layout.headerHeightCm,
+            footer_height_cm: chrome.layout.footerHeightCm,
+            footer_top_cm: chrome.layout.footerTopCm,
+            footer_distance_cm: chrome.layout.footerDistanceCm,
+            header_distance_cm: chrome.layout.headerDistanceCm,
+            margin_top_cm: chrome.layout.marginTopCm,
+            margin_bottom_cm: chrome.layout.marginBottomCm,
+            text_layout: chrome.textLayout,
+          },
+        },
+        timeoutMs: TEMPLATE_PREVIEW_TIMEOUT_MS,
+      });
+
       return {
         bytes: new Uint8Array(fs.readFileSync(path.join(result.jobDir, TEMPLATE_PREVIEW_FILE))),
         roles: Array.isArray(result.paragraphRoles) ? result.paragraphRoles : [],
       };
     } finally {
       const jobsRoot = path.resolve(getOpenXmlJobsDir(app));
-      const jobDir = path.resolve(result.jobDir);
-      if (path.dirname(jobDir) === jobsRoot) fs.rmSync(jobDir, { recursive: true, force: true });
+      if (result) {
+        const jobDir = path.resolve(result.jobDir);
+        if (path.dirname(jobDir) === jobsRoot) fs.rmSync(jobDir, { recursive: true, force: true });
+      }
+      if (temporaryAssets && path.dirname(temporaryAssets) === path.resolve(getWorkspaceDir(app))) {
+        fs.rmSync(temporaryAssets, { recursive: true, force: true });
+      }
     }
   }
 

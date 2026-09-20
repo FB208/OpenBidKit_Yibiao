@@ -8,7 +8,7 @@ export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error
 export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error' | 'ignored';
-export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'section-word-adjusting' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'final-section-word-adjusting' | 'total-word-adjusting' | 'illustration-planning' | 'illustration-generating' | 'done';
+export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'sections-completed' | 'word-converting' | 'word-completed' | 'section-word-adjusting' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'final-section-word-adjusting' | 'total-word-adjusting' | 'illustration-planning' | 'illustration-generating' | 'done';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 export type SaveOutlineReason = 'sort' | 'edit' | 'delete' | 'add-root' | 'add-child' | 'replace';
 export type OutlineAttribute = '通用' | '商务/资信' | '技术' | '其他' | '目录' | '报价' | '业绩';
@@ -72,7 +72,7 @@ export interface TechnicalPlanGenerationConfig {
 }
 
 export interface ContentGenerationProgressDetail {
-  mode: 'full' | 'single' | 'correction' | 'illustration' | 'illustration-generation';
+  mode: 'full' | 'single' | 'html' | 'html-single' | 'correction' | 'illustration' | 'illustration-generation';
   phase: ContentGenerationPhase;
   phase_label: string;
   phase_progress: number;
@@ -137,6 +137,11 @@ export interface BackgroundTaskState {
       };
       generation_total: number;
       generation_completed: number;
+      generated_html_words?: number;
+      generated_html_workspace?: string;
+      word_conversion_total?: number;
+      word_conversion_completed?: number;
+      output_progress?: ContentGenerationProgressDetail;
       minimum_words?: number;
       maximum_words?: number;
       section_words?: number;
@@ -286,6 +291,11 @@ export interface ContentIllustrationPlanState {
 }
 
 export interface ContentGenerationRuntimeState {
+  /** 本轮 Agent 已交付的 HTML 工作区，以及已成功保存的 Word 文件。 */
+  html_output?: {
+    workspace_dir: string;
+    word_sections: Array<{ section_id: string; file: string }>;
+  };
   generation_started?: boolean;
   direct_generation_item_ids?: string[];
   pending_item_ids?: string[];

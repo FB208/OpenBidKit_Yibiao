@@ -231,7 +231,7 @@ function ContentEditPage({
   const originalRestoration = hasOriginalPlan && typeof contentStats?.original_restoration?.total_words === 'number' && contentStats.original_restoration.source_hash === originalPlanContentHash
     ? contentStats?.original_restoration : undefined;
   const developerStageGate = developerMode && paused ? contentStats?.developer_stage_gate : undefined;
-  const progressDetail = task?.progress_detail;
+  const progressDetail = task?.progress_detail || contentStats?.output_progress;
   const illustrationStats = useMemo(() => {
     const stats: Record<ContentIllustrationKind, { planned: number; success: number }> = {
       html: { planned: 0, success: 0 },
@@ -310,6 +310,7 @@ function ContentEditPage({
     && resolvedCount === leaves.length
     && ['original-auditing', 'auditing', 'table-cleaning', 'final-section-word-adjusting', 'total-word-adjusting', 'illustration-planning', 'illustration-generating'].includes(String(contentStats?.phase || ''));
   const awaitingContentDecision = taskFailed && Boolean(contentStats?.awaiting_content_decision);
+  const retryingWordConversion = taskFailed && ['sections-completed', 'word-converting'].includes(contentStats?.phase || '');
   const retryingIllustrationPlanning = canRetryContentCorrection && contentStats?.phase === 'illustration-planning';
   const retryingIllustrationGeneration = canRetryContentCorrection && contentStats?.phase === 'illustration-generating';
   const contentRetryTargetLabel = retryingIllustrationGeneration
@@ -358,10 +359,13 @@ function ContentEditPage({
   const wordAdjusting = sectionWordAdjusting || finalSectionWordAdjusting || totalWordAdjusting;
   const sectionAdjustmentProgress = sectionAdjustmentTotal ? Math.round((sectionAdjustmentCompleted / sectionAdjustmentTotal) * 100) : 0;
   const totalAdjustmentProgress = Math.min(100, Math.round((((Math.max(1, totalAdjustmentRound) - 1) + (totalAdjustmentBatchTotal ? totalAdjustmentBatchCompleted / totalAdjustmentBatchTotal : 0)) / totalAdjustmentRoundTotal) * 100));
-  const currentProgressDetail = phaseVisible && progressDetail?.phase === contentStats?.phase ? progressDetail : undefined;
-  const displayProgress = currentProgressDetail ? currentProgressDetail.phase_progress : planning ? planningProgress : sectionWordAdjusting || finalSectionWordAdjusting ? sectionAdjustmentProgress : totalWordAdjusting ? totalAdjustmentProgress : contentCorrecting ? contentCorrectionProgress : illustrationPlanning ? illustrationPlanningProgress : illustrationGenerating ? illustrationGenerationProgress : progress;
+  const htmlOutputProgress = progressDetail?.mode === 'html' || progressDetail?.mode === 'html-single';
+  const currentProgressDetail = (phaseVisible || htmlOutputProgress) && progressDetail?.phase === contentStats?.phase ? progressDetail : undefined;
+  const displayProgress = htmlOutputProgress ? task?.progress || 0 : currentProgressDetail ? currentProgressDetail.phase_progress : planning ? planningProgress : sectionWordAdjusting || finalSectionWordAdjusting ? sectionAdjustmentProgress : totalWordAdjusting ? totalAdjustmentProgress : contentCorrecting ? contentCorrectionProgress : illustrationPlanning ? illustrationPlanningProgress : illustrationGenerating ? illustrationGenerationProgress : progress;
   const displayProgressLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '编排统计' : restoring ? '原方案还原' : sectionWordAdjusting ? '小节字数调整' : finalSectionWordAdjusting ? '最终小节复核' : totalWordAdjusting ? '全文字数调整' : contentCorrecting ? '内容矫正' : illustrationPlanning ? '图片编排' : illustrationGenerating ? '图片生成' : '生成统计';
-  const displayProgressCount = planning
+  const displayProgressCount = htmlOutputProgress && currentProgressDetail
+    ? `${currentProgressDetail.completed}/${currentProgressDetail.total}`
+    : planning
     ? `${planningCompleted}/${planningTotal}`
     : restoring && currentProgressDetail
       ? `${currentProgressDetail.completed}/${currentProgressDetail.total}`
@@ -386,11 +390,13 @@ function ContentEditPage({
         : illustrationPlanning || illustrationGenerating
           ? 'violet'
           : 'primary';
-  const progressActive = taskInFlight && (planning || restoring || wordAdjusting || contentCorrecting || illustrationPlanning || illustrationGenerating);
+  const progressActive = taskInFlight && (htmlOutputProgress || planning || restoring || wordAdjusting || contentCorrecting || illustrationPlanning || illustrationGenerating);
   const progressDescription = developerStageGate
     ? `${progressPhaseLabel}阶段已完成。可继续下一阶段，或从正文编排重新执行全部阶段。`
     : taskFailed
     ? taskErrorMessage
+    : htmlOutputProgress && currentProgressDetail && ['generating', 'sections-completed', 'word-converting', 'word-completed'].includes(currentProgressDetail.phase)
+    ? `${paused ? '已暂停：' : ''}${currentProgressDetail.phase_label}，${currentProgressDetail.phase === 'generating' ? '已保存' : '已完成'} ${currentProgressDetail.completed}/${currentProgressDetail.total} 个小节。`
     : planning
     ? paused ? `正文生成已暂停在编排阶段，已完成 ${planningCompleted}/${planningTotal} 个小节。` : `正在编排正文结构，已完成 ${planningCompleted}/${planningTotal} 个小节。`
     : restoring
@@ -457,6 +463,8 @@ function ContentEditPage({
       ? '暂停'
       : paused
         ? '继续'
+        : retryingWordConversion
+          ? '重试 Word 转换'
         : canRetryContentCorrection
           ? `重试${contentRetryTargetLabel}`
           : resolvedCount === leaves.length && leaves.length
@@ -589,13 +597,13 @@ function ContentEditPage({
     }
   };
 
-  // 只重新生成当前失败的正文小节，全部成功后由 Main 自动进入后续流程。
+  // 复用失败重试入口；已交付 HTML 的任务由 Main 直接继续 Word 转换。
   const retryFailedSections = async () => {
-    if (!awaitingContentDecision || !unresolvedCount || taskBlocksGeneration) return;
+    if (taskBlocksGeneration || (!retryingWordConversion && (!awaitingContentDecision || !unresolvedCount))) return;
     try {
       await window.yibiao?.tasks.startContentGeneration({ retryFailedSections: true });
       trackConfigUsage({ content_generation_action: 'retry_failed_sections' });
-      showToast('失败小节重试任务已在后台启动', 'success');
+      showToast(retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动失败小节重试失败', 'error');
     }
@@ -635,6 +643,10 @@ function ContentEditPage({
     }
     if (paused) {
       void resumeGeneration();
+      return;
+    }
+    if (retryingWordConversion) {
+      void retryFailedSections();
       return;
     }
     if (canRetryContentCorrection) {
