@@ -285,10 +285,10 @@ function mergeGlobalFactPatches(groups, patches) {
 
 function formatOutlineForPrompt(items, level = 1, lines = []) {
   for (const item of items || []) {
-    const id = singleLine(item?.id || 'unknown');
+    const number = singleLine(item.number);
     const title = singleLine(item?.title || '未命名章节');
     const description = singleLine(item?.description || '');
-    lines.push(`${'  '.repeat(Math.max(0, level - 1))}- ${id} ${title}${description ? `：${description}` : ''}`);
+    lines.push(`${'  '.repeat(Math.max(0, level - 1))}- ${number} ${title}${description ? `：${description}` : ''}`);
     if (item?.children?.length) formatOutlineForPrompt(item.children, level + 1, lines);
   }
   return lines.join('\n');

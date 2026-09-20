@@ -35,11 +35,11 @@ async function main() {
       }
     }
     const outline = [
-      { id: '1', title: '实施', content_mode: 'ai-generate', children: [
-        { id: '1.1', title: '准备', content_mode: 'ai-generate' },
-        { id: '1.2', title: '交付', content_mode: 'ai-generate' },
+      { id: '10000000-0000-4000-8000-000000000001', number: '1', title: '实施', content_mode: 'ai-generate', children: [
+        { id: 'e0000000-0000-4000-8000-000000000011', number: '1.1', title: '准备', content_mode: 'ai-generate' },
+        { id: 'f0000000-0000-4000-8000-000000000012', number: '1.2', title: '交付', content_mode: 'ai-generate' },
       ] },
-      { id: '2', title: '报价', content_mode: 'manual-fill' },
+      { id: '20000000-0000-4000-8000-000000000002', number: '2', title: '报价', content_mode: 'manual-fill' },
     ];
     const targets = outline[0].children.map(item => ({ item }));
     const fileOptions = {
@@ -110,7 +110,7 @@ async function main() {
     assert.equal(input.targets.some(section => section.restored_content), false);
     assert.equal(files.some(file => file.path.startsWith('已还原内容/')), false);
     assert.equal(input.has_knowledge_base, true);
-    assert.deepEqual(input.targets.map(item => item.id), ['1.1', '1.2']);
+    assert.deepEqual(input.targets.map(item => item.id), ['e0000000-0000-4000-8000-000000000011', 'f0000000-0000-4000-8000-000000000012']);
     assert.equal(input.outline[1].content_mode, 'manual-fill');
     assert.match(input.word_requirements, /1000.*2000/);
     assert.match(input.word_requirements, /640～960.*800/);
@@ -141,7 +141,7 @@ async function main() {
         return '<!-- yibiao:block -->\n<p id="scenario">项目实施内容</p>';
       } } }, { Type, workspaceDir });
       assert.deepEqual(scenarioTools.map(tool => tool.name), ['generate-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
-      const result = await scenarioTools[0].execute('settings', { sections: [{ section_id: '1.1', instructions: '落实责任', references: '' }] });
+      const result = await scenarioTools[0].execute('settings', { sections: [{ section_id: 'e0000000-0000-4000-8000-000000000011', instructions: '落实责任', references: '' }] });
       assert.ok(received);
       assert.equal(result.details.results[0].status, 'success');
       fs.unlinkSync(path.join(workspaceDir, input.targets[0].file));
@@ -252,7 +252,7 @@ async function main() {
     const firstFile = path.join(workspaceDir, first[0].file);
     assert.equal(fs.readFileSync(firstFile, 'utf8'), html);
     assert.equal(progress[0].completed, 1);
-    await assert.rejects(tool.execute('invalid', { sections: [{ ...jobs[0], section_id: '2' }] }), /只能提交/);
+    await assert.rejects(tool.execute('invalid', { sections: [{ ...jobs[0], section_id: '20000000-0000-4000-8000-000000000002' }] }), /只能提交/);
 
     // 暂停时未完成的请求不得落盘；上一批成功文件继续保留。
     const cancel = new AbortController();
@@ -329,7 +329,7 @@ async function checkRestoredContent({ Type, workspaceDir, fileOptions, signal })
   const source = `工期三十天。保留设备编号ABC-123。\n\n|设备|数量|\n|---|---|\n|服务器|2|\n\n![现场](${reference})\n\n末尾验收措施必须完整传递。`;
   const { countReadableWords } = require('../electron/utils/wordCount.cjs');
   const restoredDir = path.join(workspaceDir, '还原输入检查');
-  const options = { ...fileOptions, hasOriginalPlan: true, restoredContents: { '1.1': source }, existingTotalWords: 2100,
+  const options = { ...fileOptions, hasOriginalPlan: true, restoredContents: { 'e0000000-0000-4000-8000-000000000011': source }, existingTotalWords: 2100,
     generationOptions: { ...fileOptions.generationOptions, imageQuantity: 'none', useAiImages: false, useHtmlImages: false, useMermaidImages: false },
     wordControl: { ...fileOptions.wordControl, sectionWords: 10, sectionMinimumWords: 8, sectionMaximumWords: 12 },
   };
@@ -360,7 +360,7 @@ async function checkRestoredContent({ Type, workspaceDir, fileOptions, signal })
       resolveOriginalImagePath(ref) { assert.equal(resume, false); assert.equal(ref, reference); copied++; return imagePath; },
       aiService: { async chat(request) {
         const [system, user] = request.messages;
-        if (request.logTitle.includes('1.1')) {
+        if (request.logTitle.includes('准备')) {
           assert.ok(user.content.includes(source));
           assert.match(user.content, /六十天/);
           assert.match(user.content, /原图\//);

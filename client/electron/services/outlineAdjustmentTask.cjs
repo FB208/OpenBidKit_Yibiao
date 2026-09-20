@@ -1,9 +1,9 @@
+const { collectOutlineIds } = require('./technicalPlanOutline.cjs');
 const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
 const {
   OUTLINE_OUTPUT_FILE,
   OUTLINE_JSON_SCHEMA,
   buildFinalOutline,
-  stripOutlineInternalFields,
   readJson,
   formatProgressTitle,
 } = require('./outlineGenerationTaskV2.cjs');
@@ -13,7 +13,8 @@ function buildAgentOutlineInput(outlineData) {
   const strip = (items, root) => (items || []).map((item) => {
     const hasChildren = Array.isArray(item?.children) && item.children.length;
     return {
-      id: String(item?.id || ''),
+      id: item.id,
+      number: item.number,
       title: String(item?.title || '').trim(),
       description: String(item?.description || '').trim() || String(item?.title || '').trim(),
       ...(root ? { attr: item?.attr } : {}),
@@ -38,7 +39,7 @@ ${requirement}
 
 请按以下要求完成目录调整：
 1. 先读取 ${OUTLINE_OUTPUT_FILE}，理解当前目录结构，再严格按照用户的调整要求修改目录；与要求无关的目录保持原样，不要顺带重写。
-2. 修改后仍须保持完整根结构 {"outline":[一级目录节点]}：一级目录包含 attr（从"通用""商务/资信""技术""其他""目录""报价""业绩"中选择），子目录不包含 attr；所有 id 使用与父子位置一致的层级点号编号（一级为 1、2，二级为 2.1、2.2，依此类推）。
+2. 修改后仍须保持完整根结构 {"outline":[一级目录节点]}：一级目录包含 attr（从"通用""商务/资信""技术""其他""目录""报价""业绩"中选择），子目录不包含 attr；已有节点 id 原样保留，新节点 id 填 null，由程序分配唯一 ID；数组顺序决定排序，number 是程序计算的显示编号，不得填入 id。
 3. 每个最终叶子节点必须填写 content_mode：技术方案正文为 ai-generate；商务/资信和业绩材料为 template-fill；投标文件目录为 directory-generate；报价为 manual-fill；其他特殊内容为 other，并用 content_mode_note 说明。父节点只包含 children，不包含 content_mode 或 content_mode_note。
 4. 任意非叶子节点的 children 至少包含两个节点，目录最多六级；title 只写纯标题，不包含章节编号或 Markdown 标记。
 5. 如果用户要求含糊或存在多种理解，选择最符合投标文件专业惯例的做法直接执行，不要调用 ask-user 反复确认；只有当要求明显违反上述结构规则且无法合理变通时，才在最终回复中说明未执行的部分及原因。
@@ -86,6 +87,7 @@ async function runOutlineAdjustmentTask({ agentService, workspaceStore, updateTa
     error: null,
   });
 
+  let adjustedOutline;
   const agentResult = await agentService.runTask({
     task_id: task.task_id,
     title: '技术方案目录 AI 调整',
@@ -104,16 +106,22 @@ async function runOutlineAdjustmentTask({ agentService, workspaceStore, updateTa
     json_validation_schemas: { [OUTLINE_OUTPUT_FILE]: OUTLINE_JSON_SCHEMA },
     max_retries: 0,
     onActivity: publishAgentActivity,
+    validateOutput(candidate) {
+      adjustedOutline = buildFinalOutline(readJson(candidate.output_content, OUTLINE_OUTPUT_FILE), collectOutlineIds(storedPlan.outlineData.outline));
+      return adjustedOutline;
+    },
+    async continueTask(_candidate, meta) {
+      await meta.writeFiles([{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(adjustedOutline, null, 2) }]);
+      return { complete: true };
+    },
   });
 
-  const adjustedOutline = buildFinalOutline(readJson(agentResult.output_content, OUTLINE_OUTPUT_FILE));
-  const persistedOutline = stripOutlineInternalFields(adjustedOutline);
   const summary = String(agentResult.assistant_text || '').trim() || '目录已按要求调整完成。';
 
   // 目录调整属于目录变更，saveOutline(replace) 会按既有规则清空旧正文与生成缓存。
   const saved = workspaceStore.saveOutline({
     outlineData: {
-      ...persistedOutline,
+      ...adjustedOutline,
       project_name: storedPlan.outlineData.project_name,
       project_overview: storedPlan.outlineData.project_overview,
     },

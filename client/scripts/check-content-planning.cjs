@@ -21,9 +21,9 @@ const validateSchema = new Ajv().compile(runtime.CONTENT_PLANNING_JSON_SCHEMA);
 // 覆盖真实结果提取、JSON 保存回读及再次提交给 Agent 的链路。
 function checkContentPlanning() {
   const source = [{
-    id: '1', title: '实施方案', description: '项目实施方案', attr: '技术', children: [
-      { id: '1.1', title: '实施流程', description: '说明实施步骤', content_mode: 'ai-generate' },
-      { id: '1.2', title: '报价', description: '填写报价', content_mode: 'manual-fill' },
+    id: '10000000-0000-4000-8000-000000000001', number: '1', title: '实施方案', description: '项目实施方案', attr: '技术', children: [
+      { id: 'e0000000-0000-4000-8000-000000000011', number: '1.1', title: '实施流程', description: '说明实施步骤', content_mode: 'ai-generate' },
+      { id: 'f0000000-0000-4000-8000-000000000012', number: '1.2', title: '报价', description: '填写报价', content_mode: 'manual-fill' },
     ],
   }];
   const basePlan = { writing_focus: '说明各阶段实施步骤与交接关系。', knowledge: { item_ids: [] }, table: { needed: false, purpose: '' } };
@@ -40,9 +40,9 @@ function checkContentPlanning() {
     }
     const extracted = runtime.extractContentPlanningPlans(output, source, new Set());
     assert.equal(extracted.size, 1);
-    const stored = JSON.parse(JSON.stringify(runtime.createStoredContentPlan(extracted.get('1.1'), 'none')));
+    const stored = JSON.parse(JSON.stringify(runtime.createStoredContentPlan(extracted.get('e0000000-0000-4000-8000-000000000011'), 'none')));
     assert.equal(runtime.normalizeStoredContentPlan(stored).plan.image_suitability_score, score);
-    const rebuilt = runtime.buildContentPlanningOutline(source, { '1.1': stored });
+    const rebuilt = runtime.buildContentPlanningOutline(source, { 'e0000000-0000-4000-8000-000000000011': stored });
     assert.equal(rebuilt[0].children[0].content_plan.image_suitability_score, score);
     assert.equal(Object.hasOwn(rebuilt[0], 'content_plan'), false);
     assert.equal(Object.hasOwn(rebuilt[0].children[1], 'content_plan'), false);
@@ -50,7 +50,7 @@ function checkContentPlanning() {
   }
   const oldPlan = runtime.createStoredContentPlan(basePlan, 'none');
   assert.equal(Object.hasOwn(JSON.parse(JSON.stringify(oldPlan)).plan, 'image_suitability_score'), false);
-  const rebuiltOld = runtime.buildContentPlanningOutline(source, { '1.1': oldPlan });
+  const rebuiltOld = runtime.buildContentPlanningOutline(source, { 'e0000000-0000-4000-8000-000000000011': oldPlan });
   assert.equal(Object.hasOwn(rebuiltOld[0].children[0], 'content_plan'), false, '缺少评分的旧编排不复用');
   const partial = { outline: structuredClone(source) };
   assert.equal(runtime.extractContentPlanningPlans(partial, source, new Set(), new Set()).size, 0);
@@ -82,7 +82,7 @@ function checkImageSelection() {
 // 直接执行正式编排保存函数，验证单小节只更新自己的编排和标记，保留其他节点。
 function checkImageSelectionPersistence() {
   const leaves = Array.from({ length: 10 }, (_, index) => ({ item: {
-    id: String(index), title: '小节' + index, description: '小节说明', content_mode: 'ai-generate', attr: '技术',
+    id: String(index), number: String(index + 1), title: '小节' + index, description: '小节说明', content_mode: 'ai-generate', attr: '技术',
   } }));
   const storedPlans = Object.fromEntries(leaves.map(({ item }, index) => [item.id, runtime.createStoredContentPlan({
     writing_focus: item.title, image_suitability_score: 9 - index, image_needed: index < 5,
@@ -131,7 +131,7 @@ checkImageSelectionPersistence();
 // 模拟 Agent 完成时已请求暂停，确认全文和单小节均先保存全部配图标记。
 async function checkPlanningPauseOrder() {
   const leaves = [0, 5, 10, 9, 8].map((score, index) => ({ item: {
-    id: String(index), title: '小节' + index, description: '小节说明', content_mode: 'ai-generate',
+    id: String(index), number: String(index + 1), title: '小节' + index, description: '小节说明', content_mode: 'ai-generate',
   } }));
   const generatedPlans = new Map(leaves.map(({ item }, index) => [item.id, {
     writing_focus: item.title, image_suitability_score: [0, 5, 10, 9, 8][index],

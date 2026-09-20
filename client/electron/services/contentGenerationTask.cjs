@@ -88,11 +88,12 @@ const CONTENT_PLAN_SCHEMA = {
 function createContentPlanningNodeSchema(level, root = false) {
   const baseProperties = {
     id: { type: 'string', minLength: 1 },
+    number: { type: 'string', minLength: 1 },
     title: { type: 'string', minLength: 1 },
     description: { type: 'string', minLength: 1 },
     ...(root ? { attr: { type: 'string', enum: ['通用', '商务/资信', '技术', '其他', '目录', '报价', '业绩'] } } : {}),
   };
-  const baseRequired = ['id', 'title', 'description', ...(root ? ['attr'] : [])];
+  const baseRequired = ['id', 'number', 'title', 'description', ...(root ? ['attr'] : [])];
   const aiLeafSchema = {
     type: 'object',
     required: [...baseRequired, 'content_mode'],
@@ -728,7 +729,7 @@ function buildTableCleanupMessages({ chapter, tables }) {
     },
     {
       role: 'user',
-      content: `当前小节：${chapter?.id || 'unknown'} ${chapter?.title || '未命名章节'}
+      content: `当前小节：${chapter?.number} ${chapter?.title || '未命名章节'}
 小节描述：${chapter?.description || '无'}`,
     },
     {
@@ -782,7 +783,8 @@ function buildContentPlanningOutline(items, storedContentPlans, root = true) {
     const children = normalizeChildren(item);
     const title = singleLine(item?.title) || '未命名章节';
     const node = {
-      id: String(item?.id || '').trim(),
+      id: item.id,
+      number: item.number,
       title,
       description: String(item?.description || '').trim() || title,
       ...(root ? { attr: singleLine(item?.attr) || '其他' } : {}),
@@ -833,6 +835,7 @@ function extractContentPlanningPlans(value, sourceItems, allowedKnowledgeItemIds
       const expectedTitle = singleLine(expected?.title) || '未命名章节';
       const expectedDescription = String(expected?.description || '').trim() || expectedTitle;
       if (String(actual.id || '').trim() !== String(expected?.id || '').trim()
+        || actual.number !== expected.number
         || String(actual.title || '').trim() !== expectedTitle
         || String(actual.description || '').trim() !== expectedDescription) {
         throw new Error(`正文编排结果修改了目录节点：${expected?.id || 'unknown'}`);
@@ -916,18 +919,19 @@ ${requirementText}
 6. ${tableLimitInstruction}
 7. 表格仅在能明显提升职责、步骤、参数、风险、措施或成果等内容的表达清晰度时使用；需要时准确填写用途，不需要时 purpose 留空。
 8. image_suitability_score 是本节配图适配性评分，必须为 0-10 的整数：0 表示不适合配图，10 表示非常适合配图。结合本节标题、说明、写作重点和项目背景，判断图片能否帮助读者理解流程、结构、关系或设备、场景示意等内容；图片带来的理解帮助越明显，评分越高，仅起装饰作用时不应给高分。
-9. 不得修改目录节点数量、顺序、父子关系、id、title、description、attr、content_mode 或 content_mode_note。
+9. id 是稳定身份，number 仅是显示编号；所有结果引用节点时必须使用 id。不得修改目录节点数量、顺序、父子关系、id、number、title、description、attr、content_mode 或 content_mode_note。
 10. 将完整结果覆盖写回 ${CONTENT_PLANNING_OUTPUT_FILE}。程序已为该文件预置 Schema，写入后调用 json-validation，只传 {"file_path":"${CONTENT_PLANNING_OUTPUT_FILE}"}；失败后先修改文件再重新校验。`;
 }
 
 function formatRestoreTargetsForPrompt(targets) {
   return (targets || []).map(({ item, parentChapters, siblingChapters }) => {
-    const parentPath = (parentChapters || []).map((parent) => `${parent.id || 'unknown'} ${parent.title || '未命名章节'}`).join(' > ') || '无';
+    const parentPath = (parentChapters || []).map((parent) => `${parent.number} ${parent.title || '未命名章节'}`).join(' > ') || '无';
     const siblings = (siblingChapters || [])
       .filter((sibling) => sibling.id !== item.id)
-      .map((sibling) => `${sibling.id || 'unknown'} ${sibling.title || '未命名章节'}`)
+      .map((sibling) => `${sibling.number} ${sibling.title || '未命名章节'}`)
       .join('；') || '无';
-    return `- node_id: ${item.id || 'unknown'}
+    return `- node_id: ${item.id}
+  显示编号: ${item.number}
   标题: ${item.title || '未命名章节'}
   描述: ${item.description || ''}
   上级章节: ${parentPath}
@@ -1067,7 +1071,7 @@ function parseAgentJsonContent(content) {
 
 function formatChapterPath(context) {
   return [...(context.parentChapters || []), context.item]
-    .map((chapter) => `${chapter.id || 'unknown'} ${chapter.title || '未命名章节'}`)
+    .map((chapter) => `${chapter.number} ${chapter.title || '未命名章节'}`)
     .join(' > ');
 }
 
@@ -1342,16 +1346,16 @@ function stripRepeatedChapterTitle(content, chapter) {
     return content;
   }
 
-  const chapterId = String(chapter?.id || '').trim();
+  const chapterNumber = String(chapter?.number || '').trim();
   const firstLine = unwrapMarkdownTitle(rawLines[firstContentLine]);
   let comparable = firstLine;
 
-  if (chapterId) {
-    comparable = comparable.replace(new RegExp(`^${escapeRegExp(chapterId)}\\s+`), '').trim();
+  if (chapterNumber) {
+    comparable = comparable.replace(new RegExp(`^${escapeRegExp(chapterNumber)}\\s+`), '').trim();
   }
   comparable = comparable.replace(/^[一二三四五六七八九十]+[、.．]\s*/, '').trim();
 
-  if (comparable !== title && firstLine !== `${chapterId} ${title}`.trim()) {
+  if (comparable !== title && firstLine !== `${chapterNumber} ${title}`.trim()) {
     return content;
   }
 
@@ -1443,8 +1447,8 @@ function buildWordAdjustmentRepairMessages({ invalidContent, issues }, expectedM
 
 function buildWordAdjustmentMessages({ context, currentContent, currentWords, targetWords, mode, granularity, selectedFactsText, maximumChangeWords, totalRemainingWords, totalWords, minimumWords, maximumWords, globalFactsMode }) {
   const { item, parentChapters, siblingChapters } = context;
-  const chapterPath = [...(parentChapters || []), item].map((chapter) => `${chapter.id} ${chapter.title}`).join(' > ');
-  const siblings = (siblingChapters || []).filter((chapter) => chapter.id !== item.id).map((chapter) => `${chapter.id} ${chapter.title}`).join('；') || '无';
+  const chapterPath = [...(parentChapters || []), item].map((chapter) => `${chapter.number} ${chapter.title}`).join(' > ');
+  const siblings = (siblingChapters || []).filter((chapter) => chapter.id !== item.id).map((chapter) => `${chapter.number} ${chapter.title}`).join('；') || '无';
   const adjustmentBudgetText = totalRemainingWords === undefined
     ? `当前小节本次最多允许${mode === 'expand' ? '增加' : '减少'} ${maximumChangeWords} 字。`
     : mode === 'expand'
@@ -3219,13 +3223,13 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     if (resumedPlan) {
       contentPlans.set(context.item.id, resumedPlan.plan);
       contentStats.planning_completed = 1;
-      logs = [...logs, `继续当前小节任务，复用本次任务已完成的编排：${context.item.id} ${context.item.title || '未命名章节'}。`];
+      logs = [...logs, `继续当前小节任务，复用本次任务已完成的编排：${context.item.number} ${context.item.title || '未命名章节'}。`];
       publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
       contentStats.phase = 'generating';
       return;
     }
 
-    logs = [...logs, `开始重新编排当前小节：${context.item.id} ${context.item.title || '未命名章节'}。`];
+    logs = [...logs, `开始重新编排当前小节：${context.item.number} ${context.item.title || '未命名章节'}。`];
     publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
     const targetIds = [context.item.id];
     const generatedPlans = await runContentPlanningAgent(targetIds, [context.item.id]);
@@ -3239,7 +3243,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     contentStats.planning_completed = 1;
     persistContentPlans([context], generatedPlans);
     pauseIfRequested('正文生成已在小节编排后暂停，可导出当前已完成内容，稍后继续。');
-    logs = [...logs, `当前小节编排已保存：${context.item.id} ${context.item.title || '未命名章节'}。`];
+    logs = [...logs, `当前小节编排已保存：${context.item.number} ${context.item.title || '未命名章节'}。`];
 
     pauseIfRequested('正文生成已在小节编排阶段暂停，可导出当前已完成内容，稍后继续。');
     contentStats.phase = 'generating';
@@ -3413,7 +3417,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
         maximumWords: targetItemId ? 0 : wordControl.maximumWords,
         globalFactsMode,
       }),
-      logTitle: `正文${options.mode === 'expand' ? '扩写' : '缩写'}-${item.id}-${item.title || '未命名章节'}`,
+      logTitle: `正文${options.mode === 'expand' ? '扩写' : '缩写'}-${item.number}-${item.title || '未命名章节'}`,
       progressLabel: '正文字数调整',
       failureMessage: '模型返回的正文字数调整结果格式无效',
       max_retries: 0,
@@ -3476,7 +3480,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       contentStats.section_adjustment_round = rounds;
       itemRounds[item.id] = rounds - 1;
       setWordAdjustmentRuntime(stage, item.id, rounds - 1, completedItemIds, itemRounds);
-      logs = [...logs, `调整小节字数：${item.id} ${item.title || '未命名章节'}，第 ${rounds}/${MAX_WORD_ADJUSTMENT_ROUNDS} 轮，当前 ${currentWords} 字。`];
+      logs = [...logs, `调整小节字数：${item.number} ${item.title || '未命名章节'}，第 ${rounds}/${MAX_WORD_ADJUSTMENT_ROUNDS} 轮，当前 ${currentWords} 字。`];
       publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
       try {
         await requestWordAdjustment(context, {
@@ -3489,7 +3493,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
         });
       } catch (error) {
         if (isPauseLikeError(error)) throw error;
-        logs = [...logs, `小节字数第 ${rounds} 轮调整未应用：${item.id}，${error.message || String(error)}。`];
+        logs = [...logs, `小节字数第 ${rounds} 轮调整未应用：${item.number}，${error.message || String(error)}。`];
       }
       itemRounds[item.id] = rounds;
       setWordAdjustmentRuntime(stage, item.id, rounds, completedItemIds, itemRounds);
@@ -3726,8 +3730,8 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
           contentStats.total_adjustment_active_count = activeItemIds.size;
           contentStats.total_adjustment_item_id = candidate.item.id;
           logs = [...logs, direction.mode === 'expand'
-            ? `全文扩写已提交：${candidate.item.id} ${candidate.item.title || '未命名章节'}，当前 ${candidate.words} 字，内部指导 ${guidanceWords} 字，本次预算 ${budget} 字。`
-            : `全文缩写已提交：${candidate.item.id} ${candidate.item.title || '未命名章节'}，本次预算 ${budget} 字。`];
+            ? `全文扩写已提交：${candidate.item.number} ${candidate.item.title || '未命名章节'}，当前 ${candidate.words} 字，内部指导 ${guidanceWords} 字，本次预算 ${budget} 字。`
+            : `全文缩写已提交：${candidate.item.number} ${candidate.item.title || '未命名章节'}，本次预算 ${budget} 字。`];
           publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
           let failed = false;
           try {
@@ -3743,7 +3747,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
           } catch (error) {
             if (isPauseLikeError(error)) throw error;
             failed = true;
-            logs = [...logs, `全文字数调整未应用：${candidate.item.id}，${error.message || String(error)}。`];
+            logs = [...logs, `全文字数调整未应用：${candidate.item.number}，${error.message || String(error)}。`];
           }
           completedItemIds.push(candidate.item.id);
           completedItemIdSet.add(candidate.item.id);
@@ -4350,7 +4354,7 @@ workspace 文件说明：
       try {
         const response = await aiService.collectJsonResponse({
           messages: buildTableCleanupMessages({ chapter: item, tables: batch }),
-          logTitle: `正文去表格-${item.id}-${item.title || '未命名章节'}`,
+          logTitle: `正文去表格-${item.number}-${item.title || '未命名章节'}`,
           progressLabel: '正文去表格',
           failureMessage: '模型返回的表格转换结果格式无效',
           normalizer: (value) => normalizeTableCleanupResponse(value, allowedTableIds),
@@ -4415,7 +4419,7 @@ workspace 文件说明：
         }
         skippedCount += batch.length;
         contentStats.table_cleanup_completed += batch.length;
-        logs = [...logs, `正文去表格跳过：${item.id} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}。`];
+        logs = [...logs, `正文去表格跳过：${item.number} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}。`];
         writeDeveloperLog('table_cleanup.batch.error', {
           section_id: item.id,
           title: item.title || '未命名章节',
@@ -4974,7 +4978,7 @@ workspace 文件说明：
         continue;
       }
       const message = '正文最终结果没有有效可读内容';
-      logs = [...logs, `正文有效性检查失败：${item.id} ${item.title || '未命名章节'}，${message}。`];
+      logs = [...logs, `正文有效性检查失败：${item.number} ${item.title || '未命名章节'}，${message}。`];
       saveSection(item, { status: 'error', content, error: message }, content, { logs });
     }
     rebuildContentWordCounts();

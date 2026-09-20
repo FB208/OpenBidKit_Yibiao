@@ -1,4 +1,4 @@
-import type { ExportTemplateScope, OutlineContentMode, OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../shared/types';
+import type { ExportTemplateScope, OutlineContentMode, TechnicalPlanOutlineData as OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../shared/types';
 
 export type TechnicalPlanStep = 'document-analysis' | 'generation-settings' | 'bid-analysis' | 'outline-generation' | 'global-facts' | 'content-edit' | 'expand';
 export type BidAnalysisMode = 'key' | 'full' | 'custom';
@@ -17,12 +17,12 @@ export type GlobalFactsMode = 'fabricate' | 'omit' | 'placeholder';
 export interface SaveOutlineRequest {
   outlineData: OutlineData;
   reason: SaveOutlineReason;
-  idMap?: Record<string, string>;
   affectedNodeIds?: string[];
 }
 
 export interface OutlineSelectionItem {
   id: string;
+  number: string;
   title: string;
   description: string;
   attr: OutlineAttribute;

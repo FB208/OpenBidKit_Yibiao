@@ -3,6 +3,7 @@
  * 每个标题级别独立选择编号格式：Word 多级编号或自定义模板
  */
 
+import type { TechnicalPlanOutlineItem } from '../types/outline';
 import type { HeadingStyleConfig } from '../types/exportFormat';
 
 /**
@@ -68,10 +69,10 @@ function numberToRoman(num: number, upper = false): string {
 }
 
 /**
- * 将 outline id 拆成有效数字层级。
+ * 将 目录显示编号 拆成有效数字层级。
  */
-export function outlineNumberParts(id: string): number[] {
-  return String(id || '')
+export function outlineNumberParts(number: string): number[] {
+  return String(number || '')
     .split('.')
     .map((part) => parseInt(part, 10))
     .filter((part) => Number.isFinite(part) && part > 0);
@@ -80,10 +81,10 @@ export function outlineNumberParts(id: string): number[] {
 type HeadingNumberingConfig = Pick<HeadingStyleConfig, 'numbering_format' | 'numbering_template'>;
 
 /**
- * 根据 outline id 和标题编号配置生成编号前缀。
+ * 根据 目录显示编号 和标题编号配置生成编号前缀。
  */
-export function formatOutlineNumber(id: string, heading: HeadingNumberingConfig | null | undefined): string {
-  const parts = outlineNumberParts(id);
+export function formatOutlineNumber(number: string, heading: HeadingNumberingConfig | null | undefined): string {
+  const parts = outlineNumberParts(number);
   if (!parts.length) return '';
 
   if (heading?.numbering_format === 'outline-decimal') {
@@ -118,10 +119,18 @@ function shouldInsertSpaceAfterNumber(prefix: string): boolean {
 }
 
 /**
- * 将目录项 id + title 按指定编号格式拼接为完整标题文本。
+ * 将目录项 number + title 按指定编号格式拼接为完整标题文本。
  */
-export function formatOutlineTitle(id: string, title: string, heading: HeadingNumberingConfig | null | undefined): string {
-  const prefix = formatOutlineNumber(id, heading);
+export function formatOutlineTitle(number: string, title: string, heading: HeadingNumberingConfig | null | undefined): string {
+  const prefix = formatOutlineNumber(number, heading);
   if (!prefix) return String(title || '');
   return `${prefix}${shouldInsertSpaceAfterNumber(prefix) ? ' ' : ''}${title || ''}`;
+}
+
+/** 排序草稿即时更新显示编号，节点 ID 和选择状态保持不变。 */
+export function numberTechnicalPlanOutline(items: TechnicalPlanOutlineItem[], prefix = ''): TechnicalPlanOutlineItem[] {
+  return items.map((item, index) => {
+    const number = prefix ? `${prefix}.${index + 1}` : String(index + 1);
+    return { ...item, number, ...(item.children?.length ? { children: numberTechnicalPlanOutline(item.children, number) } : {}) };
+  });
 }

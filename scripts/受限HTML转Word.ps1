@@ -172,11 +172,11 @@ function Test-Conversion([string]$Exe) {
         $bitmap = New-Object Drawing.Bitmap(16, 16)
         try { $bitmap.Save((Join-Path $fixture '图片/示意.png'), [Drawing.Imaging.ImageFormat]::Png) } finally { $bitmap.Dispose() }
         $first = '<!-- yibiao:block --><p id="p1">先读正文甲</p><!-- yibiao:block --><table id="t1" data-yb-preset="plain"><tbody><tr><td>表格验证</td></tr></tbody></table><!-- yibiao:block --><figure id="f1" data-yb-generation="htmlImage" data-yb-size="square"><template data-yb-role="prompt">不进入正文的配图提示词</template><img alt="示意" data-yb-asset-ref="图片/示意.png"><figcaption>示意图注</figcaption></figure>'
-        [IO.File]::WriteAllText((Join-Path $fixture '正文/1.2.html'), $first, $utf8)
-        [IO.File]::WriteAllText((Join-Path $fixture '正文/1.10.html'), '<!-- yibiao:block --><p id="p2">后读正文乙</p>', $utf8)
+        [IO.File]::WriteAllText((Join-Path $fixture '正文/f0000000-0000-4000-8000-000000000012.html'), $first, $utf8)
+        [IO.File]::WriteAllText((Join-Path $fixture '正文/a0000000-0000-4000-8000-000000000010.html'), '<!-- yibiao:block --><p id="p2">后读正文乙</p>', $utf8)
         [IO.File]::WriteAllText((Join-Path $fixture '图片/不应读取.html'), '不应进入Word的配图源代码', $utf8)
-        [IO.File]::WriteAllText((Join-Path $fixture '正文生成结果.json'), '{"sections":[{"section_id":"1.10","file":"正文/1.10.html"},{"section_id":"1.2","file":"正文/1.2.html"}]}', $utf8)
-        [IO.File]::WriteAllText((Join-Path $fixture '正文编排决策.json'), '{"outline":[{"id":"1","title":"父章节","children":[{"id":"1.2","title":"前小节"},{"id":"1.10","title":"后小节"}]},{"id":"2","title":"未生成章节"}]}', $utf8)
+        [IO.File]::WriteAllText((Join-Path $fixture '正文生成结果.json'), '{"sections":[{"section_id":"a0000000-0000-4000-8000-000000000010","file":"正文/a0000000-0000-4000-8000-000000000010.html"},{"section_id":"f0000000-0000-4000-8000-000000000012","file":"正文/f0000000-0000-4000-8000-000000000012.html"}]}', $utf8)
+        [IO.File]::WriteAllText((Join-Path $fixture '正文编排决策.json'), '{"outline":[{"id":"10000000-0000-4000-8000-000000000001","number":"1","title":"父章节","children":[{"id":"f0000000-0000-4000-8000-000000000012","number":"1.1","title":"前小节"},{"id":"a0000000-0000-4000-8000-000000000010","number":"1.2","title":"后小节"}]},{"id":"20000000-0000-4000-8000-000000000002","number":"2","title":"未生成章节"}]}', $utf8)
         [IO.File]::WriteAllText((Join-Path $fixture '所选模板配置.json'), '{"config":{"page":{"paper_size":"a4"},"body_text":{"font":"宋体","size":"小四"}}}', $utf8)
         foreach ($directory in @($fixture, (Join-Path $fixture '正文'))) {
             $docx = Join-Path $fixture ([guid]::NewGuid().ToString('N') + '.docx')
@@ -191,7 +191,7 @@ function Test-Conversion([string]$Exe) {
                 if (@($zip.Entries | Where-Object { $_.FullName -match '(^|/)media/' }).Count -ne 1) { throw '检查失败：图片没有正确嵌入。' }
             } finally { $zip.Dispose() }
         }
-        if ([IO.File]::ReadAllText((Join-Path $fixture '正文/1.2.html'), $utf8) -ne $first) { throw '检查失败：原始正文被修改。' }
+        if ([IO.File]::ReadAllText((Join-Path $fixture '正文/f0000000-0000-4000-8000-000000000012.html'), $utf8) -ne $first) { throw '检查失败：原始正文被修改。' }
         [IO.File]::Delete((Join-Path $fixture '图片/示意.png'))
         $failed = $false
         try { Convert-RestrictedHtml $Exe $fixture (Join-Path $fixture '缺失图.docx') }

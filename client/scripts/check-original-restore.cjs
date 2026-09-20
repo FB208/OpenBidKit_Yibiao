@@ -185,8 +185,8 @@ async function checkOriginalRestore() {
     const targetMarkdown = '# 实施方案\n原文内容\n<table><tr><td>参数</td></tr></table>';
     const originalPlanMarkdown = targetMarkdown + (mode === 'partial' ? '\n![已覆盖图片](yibiao-asset://imported-images/方案/现场.png)' : '');
     const originalSource = restoration.createOriginalSource(originalPlanMarkdown);
-    const target = { item: { id: '1', title: '实施方案' } };
-    const existing = { item: { id: '2', title: '现场服务' } };
+    const target = { item: { id: '1', number: '1', title: '实施方案' } };
+    const existing = { item: { id: '2', number: '2', title: '现场服务' } };
     const existingContent = originalSource.lines.slice(1).join('\n');
     const existingPlan = { original_material: { restored: true, optimized: false, source_hash: 'hash', source_ranges: [{ start_line: 2, end_line: 4 }] } };
     const saved = [];
@@ -354,7 +354,7 @@ function checkHeadingsAndImages() {
   assert.deepEqual(restoration.calculateOriginalRestoration(source, [...assignment.source_ranges, ...shared.source_ranges], 'hash'), stats);
   assert.throws(() => restoration.validateOriginalRestoration({ assignments: [], unassigned: [{ start_line: 1, end_line: 3, reason: '不要图片' }] }, input), /图片不得遗漏/);
   assert.throws(() => restoration.validateOriginalRestoration({ assignments: [{ ...assignment, heading_edits: [...assignment.heading_edits, { line: 2, content: '' }] }], unassigned: [] }, input), /独立文字标题/);
-  const item = { id: '15.4.4', title: '产品技术支持材料' };
+  const item = { id: '15.4.4', number: '15.4.4', title: '产品技术支持材料' };
   const section = { status: 'success', content: restoredAssignment.content };
   const plan = { original_material: { source_hash: 'hash', source_ranges: assignment.source_ranges } };
   const scope = { ...context.module.exports, ...restoration,
@@ -539,6 +539,12 @@ async function checkRestorationStatsPage() {
 
 // 顺序执行一组聚焦检查，不调用真实 AI 或写入用户业务数据库。
 async function main() {
+  // 还原提示分别携带身份和显示编号；去除外层标题也只比较显示编号。
+  const node = { id: '10000000-0000-4000-8000-000000000001', number: '3.2', title: '实施安排' };
+  const prompt = context.module.exports.formatRestoreTargetsForPrompt([{ item: node, parentChapters: [], siblingChapters: [] }]);
+  assert.ok(prompt.includes(`node_id: ${node.id}`));
+  assert.ok(prompt.includes('显示编号: 3.2'));
+  assert.equal(context.module.exports.normalizeLeafContentForSave('## 3.2 实施安排\n\n实际正文', node), '实际正文');
   checkNumberedInputAndSchema();
   checkSourceValidation();
   checkSingleColumnTables();

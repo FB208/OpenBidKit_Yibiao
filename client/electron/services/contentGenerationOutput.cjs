@@ -53,7 +53,7 @@ async function convertContentSections({ result, outputDir, openXmlHelperService,
       }
     } catch (error) {
       if (signal.aborted) throw signal.reason;
-      throw new Error(`小节 ${section.section_id} 转 Word 失败：${error.message}`, { cause: error });
+      throw new Error(`小节 ${section.number} ${section.title} 转 Word 失败：${error.message}`, { cause: error });
     }
   }
   return sections.map(section => saved.get(section.section_id));

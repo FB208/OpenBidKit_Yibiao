@@ -75,7 +75,7 @@ function buildContentGenerationFiles({ outline, targets, plans, projectOverview,
   const restoredFiles = [];
   function visit(items, parents = []) {
     return items.map(item => {
-      const node = { id: item.id, title: item.title, description: item.description || '', content_mode: item.content_mode };
+      const node = { id: item.id, number: item.number, title: item.title, description: item.description || '', content_mode: item.content_mode };
       if (item.children?.length) node.children = visit(item.children, [...parents, item.title]);
       else if (item.content_mode === 'ai-generate') {
         node.content_plan = plans[item.id]?.plan;
@@ -156,7 +156,7 @@ function readContentGenerationResult(workspaceDir) {
     if (entries.get(section.id)?.file !== section.file) throw new Error(`正文结果缺少小节或文件路径不匹配：${section.id}`);
     const html = checkSectionHtml(fs.readFileSync(path.join(workspaceDir, section.file), 'utf8'));
     validateContentImageReferences(workspaceDir, html);
-    return { section_id: section.id, title: section.title, file: section.file, words: countHtmlWords(html) };
+    return { section_id: section.id, number: section.number, title: section.title, file: section.file, words: countHtmlWords(html) };
   });
   return { workspaceDir, sections };
 }
@@ -190,7 +190,7 @@ function createContentGenerationTools({ aiService, signal, onProgress = () => {}
             ? `\n\n本节已还原底稿（完整内容）：\n${read(section.restored_content.file)}\n\n全局事实设定（发生冲突时以此为准）：\n${read(INPUT_FILES.facts)}`
             : '';
           const html = checkSectionHtml(await aiService.chat({
-            signal: combinedSignal, logTitle: `Agent HTML正文-${section.id}-${section.title}`,
+            signal: combinedSignal, logTitle: `Agent HTML正文-${section.number}-${section.title}`,
             messages: [
               { role: 'system', content: `${writingInstructions(decisions.global_facts_mode, decisions.has_knowledge_base)}\n\n${rules}\n\n本次配图要求：\n${decisions.image_requirements}${section.restored_content ? `\n\n本节还原处理要求（原表格、原图保留规则优先于新增限制）：\n${decisions.restoration_requirements}` : ''}` },
               { role: 'user', content: `项目概述：\n${overview}\n\n本节编排决策：\n${JSON.stringify(section, null, 2)}\n\n字数要求：\n${decisions.word_requirements}\n\n用户额外要求：\n${decisions.user_requirement}\n\n受限 HTML 模板：\n${template}\n\n所选模板配置：\n${config}\n\n本节写作要求：\n${job.instructions}\n\n参考资料与事实摘录：\n${job.references || '未提供'}\n\n按本节 content_plan 执行：table.needed=false 时不新增数据表格；结合本次配图要求与 image_needed 判断是否新增图片；无图、无允许类型或 image_needed=false 时不留新增配图块，需要配图时先留占位并给出具体用途，图片资源由主 Agent 调用工具生成后填写；你仅负责本节正文，不虚构图片路径。${restoredContext}` },
@@ -225,6 +225,7 @@ function buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPla
 4. 检索需要的参考资料后，调用 generate-sections，一次提交多个相互独立的小节以真正并发生成；工具会自动加入本节编排、项目概述、HTML规范、模板、字数及配图要求，你负责提供各节写作要求及准确的参考摘录。文本并发遵循用户现有模型配置，不要使用bash或脚本直接调用外部模型。
 5. 阅读并遵守正文编排决策.json 的 image_requirements（用户配图要求）。无图不安排图片或占位，不调用配图工具；有图时参考 image_needed、image_suitability_score 和实际正文，自主判断张数、允许的生成类型及排版。张数范围与类型优先级仅作建议，不凑数、不要求三类齐全。在当前会话中完成所需图片：AI 图调用 generate-image；HTML 图先用 write 编写独立配图 HTML 文件再调用 render-html-image；Mermaid 图先编写 .mmd 源文件再调用 render-mermaid-image。源码保存在图片/目录，配图 HTML 可使用 CSS，不受正文受限 HTML 标签限制。将工具返回的 asset_ref 原样写入对应 img 的 data-yb-asset-ref，不填写 src，不虚构文件路径，不把配图源码嵌入小节正文。图组中每张图片均须生成。渲染错误或 HTML layout_issues 交回当前会话修改源码并重新转图；失败不得默认为成功或改换生成方式。
 6. ${resuming ? '本次继续原会话。先检查正文/已完成文件，保留有效正文、图片和源码，复用已存在且符合内容的图片引用；只补齐未完成、失败或明确需要修正的小节及图片。' : '每个小节保存为正文/下的独立HTML文件。'} 工具返回每节文件、字数和错误；对失败小节修正要求后重试，可用read/edit检查和修正已有HTML。不要删除已完成的小节。
+小节 id 是固定身份，number 才是显示编号。generate-sections 的 section_id、结果清单及文件名均使用 id；不得根据显示编号改写文件路径。
 7. 检查小节覆盖、字数及所有 img 的 data-yb-asset-ref 对应图片文件已存在，图片占位全部完成后将所有本次目标写入正文生成结果.json，格式为{"sections":[{"section_id":"小节ID","file":"正文/小节ID.html","words":实际正文统计字数}]}。该JSON已预置Schema并开启自动校验；用write/edit完成，无需重复独立JSON校验。HTML正文留在小节文件中，不塞进清单。最后完成标记放在清单写入上。
 8. 本阶段到正文 HTML、图片及源码文件产出为止，不启动既有后续全文审计、字数调整、全文图片编排和生图流程。
 以下写作规则仅适用于小节 HTML 文件，不适用于结果清单：\n${writingInstructions('', hasKnowledgeBase)}`;

@@ -1,3 +1,4 @@
+const { numberOutline } = require('./technicalPlanOutline.cjs');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -453,29 +454,10 @@ function normalizeOutlineSaveReason(value) {
   return outlineSaveReasons.has(value) ? value : 'replace';
 }
 
-function normalizeStringMap(value) {
-  const entries = value && typeof value === 'object' ? Object.entries(value) : [];
-  const map = new Map();
-  for (const [from, to] of entries) {
-    const fromId = String(from || '').trim();
-    const toId = String(to || '').trim();
-    if (fromId && toId) map.set(fromId, toId);
-  }
-  return map;
-}
-
 function normalizeStringSet(value) {
   return new Set((Array.isArray(value) ? value : [])
     .map((item) => String(item || '').trim())
     .filter(Boolean));
-}
-
-function reverseIdMap(idMap) {
-  const reversed = new Map();
-  for (const [oldId, newId] of idMap.entries()) {
-    reversed.set(newId, oldId);
-  }
-  return reversed;
 }
 
 function mapOutlineItems(items, mapper) {
@@ -486,41 +468,6 @@ function mapOutlineItems(items, mapper) {
     }
     return nextItem;
   });
-}
-
-function remapStringId(value, idMap) {
-  const id = String(value || '').trim();
-  return idMap.get(id) || id;
-}
-
-function remapContentRuntimeIds(runtime, idMap) {
-  if (!runtime || typeof runtime !== 'object') return runtime;
-  const remapIds = (value) => Array.isArray(value) ? value.map((id) => remapStringId(id, idMap)) : value;
-  const itemRounds = runtime.word_adjustment_item_rounds && typeof runtime.word_adjustment_item_rounds === 'object'
-    ? Object.fromEntries(Object.entries(runtime.word_adjustment_item_rounds).map(([id, rounds]) => [remapStringId(id, idMap), rounds]))
-    : runtime.word_adjustment_item_rounds;
-  return {
-    ...runtime,
-    touched_item_ids: remapIds(runtime.touched_item_ids),
-    direct_generation_item_ids: remapIds(runtime.direct_generation_item_ids),
-    pending_item_ids: remapIds(runtime.pending_item_ids),
-    word_adjustment_item_id: remapStringId(runtime.word_adjustment_item_id, idMap),
-    word_adjustment_item_rounds: itemRounds,
-    word_adjustment_completed_item_ids: remapIds(runtime.word_adjustment_completed_item_ids),
-    target_item_id: remapStringId(runtime.target_item_id, idMap),
-  };
-}
-
-function remapContentTaskStats(stats, idMap) {
-  if (!stats?.content) return stats;
-  return {
-    ...stats,
-    content: {
-      ...stats.content,
-      section_adjustment_item_id: remapStringId(stats.content.section_adjustment_item_id, idMap),
-      total_adjustment_item_id: remapStringId(stats.content.total_adjustment_item_id, idMap),
-    },
-  };
 }
 
 function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogStore, configStore }) {
@@ -965,6 +912,17 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       return '';
     }
     return fs.readFileSync(filePath, 'utf-8');
+  }
+
+  // 读取独立保存的小节 Word；缺失与读取失败分别交给展示页处理。
+  async function readContentWord(sectionId) {
+    const filePath = path.join(getTechnicalPlanDir(app), `${encodeURIComponent(sectionId)}.docx`);
+    try {
+      return await fs.promises.readFile(filePath);
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    }
   }
 
   function loadTenderSourceFiles(meta = readMetaRow()) {
@@ -1440,7 +1398,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     }
 
     return {
-      outline: roots.map(cleanup),
+      outline: numberOutline(roots.map(cleanup)),
       project_name: meta.outline_project_name || undefined,
       project_overview: meta.outline_project_overview || undefined,
     };
@@ -1888,7 +1846,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     }
   }
 
-  function clearDownstreamFromTender() {
+  function clearDownstreamFromTender(wordChanges) {
+    stageContentWordRemoval(wordChanges);
     deleteOutlineAgentTask();
     deleteGlobalFactsAgentTask();
     db.prepare('DELETE FROM technical_plan_tasks').run();
@@ -1920,7 +1879,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     notifyAgentWorkspaceChange({ force: true });
   }
 
-  function clearDownstreamFromBidSectionChange() {
+  function clearDownstreamFromBidSectionChange(wordChanges) {
+    stageContentWordRemoval(wordChanges);
     clearBidTemplate();
     deleteOutlineAgentTask();
     deleteGlobalFactsAgentTask();
@@ -1945,7 +1905,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     notifyAgentWorkspaceChange({ force: true });
   }
 
-  function clearContentGenerationState() {
+  function clearContentGenerationState(wordChanges) {
+    stageContentWordRemoval(wordChanges);
     agentService.deletePersistentTask(CONTENT_PLANNING_AGENT_TASK_KEY);
     agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
     agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
@@ -1984,19 +1945,18 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     }
   }
 
-  function shouldClearSavedNode({ clearAll, oldId, newId, affectedIds }) {
-    return clearAll || affectedIds.has(oldId) || (!oldId && affectedIds.has(newId));
+  function shouldClearSavedNode({ clearAll, id, affectedIds }) {
+    return clearAll || affectedIds.has(id);
   }
 
-  function buildOutlineWithPersistedContent(outlineData, { snapshot, reverseMap, affectedIds, clearAll }) {
+  function buildOutlineWithPersistedContent(outlineData, { snapshot, affectedIds, clearAll }) {
     if (!outlineData?.outline?.length) return outlineData;
     return {
       ...outlineData,
       outline: mapOutlineItems(outlineData.outline, (item) => {
-        const newId = String(item?.id || '').trim();
-        const oldId = reverseMap.get(newId) || newId;
-        const clearContent = shouldClearSavedNode({ clearAll, oldId, newId, affectedIds });
-        const oldContent = snapshot.nodes[oldId]?.content;
+        const id = item.id;
+        const clearContent = shouldClearSavedNode({ clearAll, id, affectedIds });
+        const oldContent = snapshot.nodes[id]?.content;
         return {
           ...item,
           content: clearContent ? '' : String(oldContent ?? item?.content ?? ''),
@@ -2005,7 +1965,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     };
   }
 
-  function restoreMappedContentRows({ snapshot, idMap, affectedIds, nextIds, clearAll }) {
+  function restoreRetainedContentRows({ snapshot, affectedIds, nextIds, clearAll }) {
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
 
@@ -2017,13 +1977,12 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     `);
     const seenSections = new Set();
     for (const row of snapshot.sections) {
-      const oldId = String(row.node_id || '').trim();
-      const newId = idMap.get(oldId) || oldId;
-      if (!newId || !nextIds.has(newId) || seenSections.has(newId)) continue;
-      if (shouldClearSavedNode({ clearAll, oldId, newId, affectedIds })) continue;
-      seenSections.add(newId);
+      const id = row.node_id;
+      if (!id || !nextIds.has(id) || seenSections.has(id)) continue;
+      if (shouldClearSavedNode({ clearAll, id, affectedIds })) continue;
+      seenSections.add(id);
       insertSection.run({
-        node_id: newId,
+        node_id: id,
         status: normalizeStatus(row.status, ['idle', 'running', 'success', 'error', 'ignored'], 'idle'),
         error: row.error || null,
         updated_at: row.updated_at || now(),
@@ -2036,82 +1995,92 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     `);
     const seenPlans = new Set();
     for (const row of snapshot.plans) {
-      const oldId = String(row.node_id || '').trim();
-      const newId = idMap.get(oldId) || oldId;
-      if (!newId || !nextIds.has(newId) || seenPlans.has(newId)) continue;
-      if (shouldClearSavedNode({ clearAll, oldId, newId, affectedIds })) continue;
+      const id = row.node_id;
+      if (!id || !nextIds.has(id) || seenPlans.has(id)) continue;
+      if (shouldClearSavedNode({ clearAll, id, affectedIds })) continue;
       if (!row.plan_json) continue;
-      seenPlans.add(newId);
+      seenPlans.add(id);
       insertPlan.run({
-        node_id: newId,
+        node_id: id,
         plan_json: row.plan_json,
         updated_at: row.updated_at || now(),
       });
     }
   }
 
-  // 目录排序时使用临时编号同步主键和外键，避免删除重建正文状态与计划。
-  function saveSortedOutline(outlineData, idMap) {
-    const rows = flattenOutlineItems(outlineData?.outline || []);
-    const rowOrder = new Map(rows.map((row, index) => [row.node_id, index]));
-    const changedIds = [...idMap.entries()].filter(([oldId, newId]) => oldId !== newId);
-    const temporaryIds = new Map(changedIds.map(([oldId], index) => [oldId, `__outline_sort_${crypto.randomUUID()}_${index}`]));
-    db.pragma('defer_foreign_keys = ON');
+  // 将 Word 移动与数据库修改放在同一业务操作中，提交失败时逆序恢复文件。
+  function createContentWordTransaction(callback) {
+    const transaction = db.transaction(callback);
+    return (...args) => {
+      const changes = { moves: [], removed: [] };
+      let result;
+      try {
+        result = transaction(changes, ...args);
+      } catch (error) {
+        const restoreErrors = [];
+        for (const [source, target] of changes.moves.reverse()) {
+          try {
+            if (fs.existsSync(source)) throw new Error(`恢复 Word 时原位置被占用：${source}`);
+            fs.renameSync(target, source);
+          } catch (restoreError) {
+            restoreErrors.push(restoreError);
+          }
+        }
+        if (restoreErrors.length) throw new AggregateError([error, ...restoreErrors], '正文变更失败，部分 Word 未能恢复，请保留目录中的临时文件。');
+        throw error;
+      }
+      // 到此数据库已提交，暂存文件已失效且不能再按小节 ID 读取。
+      for (const temporary of changes.removed) fs.unlinkSync(temporary);
+      return result;
+    };
+  }
 
-    for (const [oldId] of changedIds) {
-      const temporaryId = temporaryIds.get(oldId);
-      db.prepare('UPDATE technical_plan_outline_nodes SET node_id = ? WHERE node_id = ?').run(temporaryId, oldId);
-      db.prepare('UPDATE technical_plan_content_sections SET node_id = ? WHERE node_id = ?').run(temporaryId, oldId);
-      db.prepare('UPDATE technical_plan_content_plans SET node_id = ? WHERE node_id = ?').run(temporaryId, oldId);
+  // 只暂存小节 Word，绝不按 *.docx 清空业务目录中的投标模板或原件。
+  function stageContentWordRemoval(changes, sectionIds) {
+    const directory = getTechnicalPlanDir(app);
+    let files;
+    if (sectionIds) {
+      files = [...sectionIds].map(id => `${encodeURIComponent(id)}.docx`);
+    } else {
+      files = db.prepare('SELECT node_id FROM technical_plan_outline_nodes').all()
+        .map(row => `${encodeURIComponent(row.node_id)}.docx`);
     }
-    for (const [oldId] of changedIds) {
-      db.prepare('UPDATE technical_plan_outline_nodes SET parent_node_id = ? WHERE parent_node_id = ?').run(temporaryIds.get(oldId), oldId);
-    }
-    for (const [oldId, newId] of changedIds) {
-      const temporaryId = temporaryIds.get(oldId);
-      db.prepare('UPDATE technical_plan_outline_nodes SET node_id = ? WHERE node_id = ?').run(newId, temporaryId);
-      db.prepare('UPDATE technical_plan_content_sections SET node_id = ? WHERE node_id = ?').run(newId, temporaryId);
-      db.prepare('UPDATE technical_plan_content_plans SET node_id = ? WHERE node_id = ?').run(newId, temporaryId);
-      db.prepare('UPDATE technical_plan_outline_nodes SET parent_node_id = ? WHERE parent_node_id = ?').run(newId, temporaryId);
-    }
-
-    const updateNode = db.prepare(`
-      UPDATE technical_plan_outline_nodes
-      SET parent_node_id = @parent_node_id,
-        sort_order = @sort_order,
-        level = @level,
-        updated_at = @updated_at
-      WHERE node_id = @node_id
-    `);
-    const timestamp = now();
-    rows.forEach((row) => updateNode.run({ ...row, updated_at: timestamp }));
-    updateMeta({
-      outline_project_name: outlineData?.project_name || null,
-      outline_project_overview: outlineData?.project_overview || null,
-    });
-
-    const updateIllustration = db.prepare('UPDATE technical_plan_illustration_items SET section_ids_json = ?, updated_at = ? WHERE item_id = ?');
-    for (const item of db.prepare('SELECT item_id, section_ids_json FROM technical_plan_illustration_items').all()) {
-      const sectionIds = safeJsonParse(item.section_ids_json, [])
-        .map((sectionId) => idMap.get(String(sectionId)) || String(sectionId))
-        .sort((left, right) => (rowOrder.get(left) ?? Number.MAX_SAFE_INTEGER) - (rowOrder.get(right) ?? Number.MAX_SAFE_INTEGER));
-      updateIllustration.run(JSON.stringify(sectionIds), timestamp, item.item_id);
-    }
-
-    const meta = readMetaRow();
-    if (meta.content_generation_runtime_json) {
-      const runtime = remapContentRuntimeIds(safeJsonParse(meta.content_generation_runtime_json, {}), idMap);
-      db.prepare('UPDATE technical_plan_meta SET content_generation_runtime_json = ?, updated_at = ? WHERE id = 1')
-        .run(JSON.stringify(runtime), timestamp);
-    }
-    const contentTask = db.prepare("SELECT stats_json FROM technical_plan_tasks WHERE type = 'content-generation'").get();
-    if (contentTask?.stats_json) {
-      const stats = remapContentTaskStats(safeJsonParse(contentTask.stats_json, {}), idMap);
-      db.prepare("UPDATE technical_plan_tasks SET stats_json = ? WHERE type = 'content-generation'").run(JSON.stringify(stats));
+    for (const file of files) {
+      const source = path.join(directory, file);
+      if (!fs.existsSync(source)) continue;
+      const temporary = path.join(directory, `__content_word_${crypto.randomUUID()}.tmp`);
+      fs.renameSync(source, temporary);
+      changes.moves.push([source, temporary]);
+      changes.removed.push(temporary);
     }
   }
 
-  function applyPartial(partial) {
+  // 与目录正文使用同一失效范围，稳定 ID 无需给有效文件换名。
+  function reconcileContentWords(changes, { snapshot, affectedIds, nextIds, clearAll }) {
+    if (clearAll || !nextIds.size) {
+      stageContentWordRemoval(changes);
+      return;
+    }
+    const removed = Object.keys(snapshot.nodes).filter(id => !nextIds.has(id) || affectedIds.has(id));
+    stageContentWordRemoval(changes, removed);
+  }
+
+  // 排序只更新位置，不修改节点身份、正文及任务中的引用。
+  function saveSortedOutline(outlineData) {
+    const updateNode = db.prepare(`
+      UPDATE technical_plan_outline_nodes
+      SET parent_node_id = @parent_node_id, sort_order = @sort_order, level = @level, updated_at = @updated_at
+      WHERE node_id = @node_id
+    `);
+    const timestamp = now();
+    flattenOutlineItems(outlineData.outline).forEach(row => updateNode.run({ ...row, updated_at: timestamp }));
+    updateMeta({
+      outline_project_name: outlineData.project_name || null,
+      outline_project_overview: outlineData.project_overview || null,
+    });
+  }
+
+  function applyPartial(partial, wordChanges) {
     ensureMetaRow();
     const metaUpdates = {};
     const generationConfigPatch = {};
@@ -2154,7 +2123,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       replaceGlobalFacts(partial.globalFacts);
     }
 
-    if (invalidatesContentGeneration) clearContentGenerationState();
+    if (invalidatesContentGeneration) clearContentGenerationState(wordChanges);
 
     for (const [field, type] of Object.entries(taskFieldTypes)) {
       if (invalidatesContentGeneration && field === 'contentGenerationTask') continue;
@@ -2162,6 +2131,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     }
 
     if (hasOwn(partial, 'outlineData')) {
+      if (!partial.outlineData?.outline?.length) stageContentWordRemoval(wordChanges);
       if (partial.outlineData === null) {
         db.prepare('DELETE FROM technical_plan_outline_nodes').run();
         updateMeta({
@@ -2257,8 +2227,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     };
   }
 
-  const updateTechnicalPlanTransaction = db.transaction((partial) => {
-    applyPartial(partial || {});
+  const updateTechnicalPlanTransaction = createContentWordTransaction((wordChanges, partial) => {
+    applyPartial(partial || {}, wordChanges);
   });
 
   // 应用技术方案局部更新，但不重新加载完整工作区状态。
@@ -2298,7 +2268,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   function saveGenerationConfig(partial = {}) {
     let saved;
     let sectionModeChanged = false;
-    const transaction = db.transaction(() => {
+    const transaction = createContentWordTransaction((wordChanges) => {
       const current = loadGenerationConfig();
       const nextSectionMode = hasOwn(partial, 'bidSectionMode')
         ? normalizeBidSectionMode(partial.bidSectionMode)
@@ -2306,7 +2276,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       sectionModeChanged = nextSectionMode !== current.bidSectionMode;
 
       if (sectionModeChanged) {
-        clearDownstreamFromBidSectionChange();
+        clearDownstreamFromBidSectionChange(wordChanges);
         resetTenderWorkingCopyToOriginal();
         updateMeta({
           bid_sections_json: null,
@@ -2370,8 +2340,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function prepareBidSectionExtraction() {
-    const transaction = db.transaction(() => {
-      clearDownstreamFromBidSectionChange();
+    const transaction = createContentWordTransaction((wordChanges) => {
+      clearDownstreamFromBidSectionChange(wordChanges);
       resetTenderWorkingCopyToOriginal();
       updateGenerationConfig({ bidSectionMode: 'multiple' });
       updateMeta({
@@ -2390,8 +2360,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const request = payload?.outlineData ? payload : { outlineData: payload, reason: 'replace' };
     const outlineData = request?.outlineData;
     const reason = normalizeOutlineSaveReason(request?.reason);
-    const idMap = normalizeStringMap(request?.idMap);
-    const reverseMap = reverseIdMap(idMap);
     const affectedIds = normalizeStringSet(request?.affectedNodeIds);
     const clearAll = reason === 'replace';
     const preservesContentTask = reason === 'sort' || reason === 'edit';
@@ -2399,7 +2367,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
     let savedOutlineData = outlineData;
     let savedIllustrationPlan;
-    const transaction = db.transaction(() => {
+    const transaction = createContentWordTransaction((wordChanges) => {
       assertOutlineMutationAllowed();
       if (preservesContentTask) {
         if (reason === 'edit') {
@@ -2408,7 +2376,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
           const timestamp = now();
           for (const row of flattenOutlineItems(outlineData?.outline || [])) updateTitle.run(row.title, timestamp, row.node_id, row.title);
         } else {
-          saveSortedOutline(outlineData, idMap);
+          saveSortedOutline(outlineData);
         }
         savedOutlineData = loadOutlineData(readMetaRow());
         savedIllustrationPlan = loadContentIllustrationPlan();
@@ -2422,37 +2390,36 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       const nextParents = new Set(rowsBeforeSave.map(row => row.parent_node_id).filter(Boolean));
       const newLeafIds = [];
       for (const row of rowsBeforeSave) {
-        const oldId = reverseMap.get(row.node_id) || row.node_id;
-        const wasBranch = previousParents.has(oldId);
+        const id = row.node_id;
+        const wasBranch = previousParents.has(id);
         const isBranch = nextParents.has(row.node_id);
-        if (wasBranch !== isBranch && snapshot.nodes[oldId]) affectedIds.add(oldId);
-        if (!isBranch && row.content_mode === 'ai-generate' && (!snapshot.nodes[oldId] || wasBranch)) newLeafIds.push(row.node_id);
+        if (wasBranch !== isBranch && snapshot.nodes[id]) affectedIds.add(id);
+        if (!isBranch && row.content_mode === 'ai-generate' && (!snapshot.nodes[id] || wasBranch)) newLeafIds.push(row.node_id);
       }
-      const outlineToSave = buildOutlineWithPersistedContent(outlineData, { snapshot, reverseMap, affectedIds, clearAll });
-      savedOutlineData = outlineToSave;
+      const outlineToSave = buildOutlineWithPersistedContent(outlineData, { snapshot, affectedIds, clearAll });
+      const nextIds = new Set(flattenOutlineItems(outlineToSave?.outline || []).map(row => row.node_id));
+      reconcileContentWords(wordChanges, { snapshot, affectedIds, nextIds, clearAll });
+      savedOutlineData = outlineToSave ? { ...outlineToSave, outline: numberOutline(outlineToSave.outline) } : outlineToSave;
       saveOutlineData(outlineToSave);
       if (!outlineToSave?.outline?.length) {
         updateMeta({ outline_word_control_snapshot_json: null });
       }
-      const rows = flattenOutlineItems(outlineToSave?.outline || []);
-      const nextIds = new Set(rows.map((row) => row.node_id));
-      restoreMappedContentRows({ snapshot, idMap, affectedIds, nextIds, clearAll });
+      restoreRetainedContentRows({ snapshot, affectedIds, nextIds, clearAll });
       if (invalidatesContentTask) {
         db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'content-generation'").run();
         clearTechnicalPlanMermaidCache();
         // 结构变化清除本轮进度，保留锁定及局部生成范围；完整替换则重置。
-        const survivingIds = ids => (ids || []).filter(id => idMap.has(id) && !affectedIds.has(id));
-        const mappedRuntime = remapContentRuntimeIds({
-          ...previousRuntime,
+        const survivingIds = ids => (ids || []).filter(id => nextIds.has(id) && !affectedIds.has(id));
+        const retainedRuntime = {
           direct_generation_item_ids: survivingIds(previousRuntime.direct_generation_item_ids),
           pending_item_ids: survivingIds(previousRuntime.pending_item_ids),
-        }, idMap);
+        };
         const leafIds = new Set(rowsBeforeSave.filter(row => !nextParents.has(row.node_id) && row.content_mode === 'ai-generate').map(row => row.node_id));
         const keepLeafIds = ids => [...new Set(ids)].filter(id => leafIds.has(id));
         updateMeta({ content_generation_runtime_json: clearAll ? null : JSON.stringify({
           generation_started: generationStarted,
-          direct_generation_item_ids: keepLeafIds([...(mappedRuntime.direct_generation_item_ids || []), ...newLeafIds]),
-          pending_item_ids: keepLeafIds([...(mappedRuntime.pending_item_ids || []), ...(generationStarted ? newLeafIds : [])]),
+          direct_generation_item_ids: keepLeafIds([...(retainedRuntime.direct_generation_item_ids || []), ...newLeafIds]),
+          pending_item_ids: keepLeafIds([...(retainedRuntime.pending_item_ids || []), ...(generationStarted ? newLeafIds : [])]),
         }) });
       }
       clearContentIllustrationPlan();
@@ -2479,9 +2446,9 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   function saveGlobalFacts(globalFacts) {
     const normalizedGlobalFacts = normalizeGlobalFactGroups(globalFacts);
     let savedTask;
-    const transaction = db.transaction(() => {
+    const transaction = createContentWordTransaction((wordChanges) => {
       replaceGlobalFacts(normalizedGlobalFacts);
-      clearContentGenerationState();
+      clearContentGenerationState(wordChanges);
       const timestamp = now();
       savedTask = {
         task_id: `manual-global-facts-${Date.now()}`,
@@ -2670,8 +2637,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       clearTenderSourceFiles('remove-last-tender');
       removeWorkspacePathSync(tenderMarkdownPath);
       removeWorkspacePathSync(tenderOriginalMarkdownPath);
-      const transaction = db.transaction(() => {
-        clearDownstreamFromTender();
+      const transaction = createContentWordTransaction((wordChanges) => {
+        clearDownstreamFromTender(wordChanges);
         updateMeta({
           tender_file_name: null,
           tender_markdown_path: null,
@@ -2850,8 +2817,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     }
 
     const timestamp = now();
-    const transaction = db.transaction(() => {
-      clearDownstreamFromTender();
+    const transaction = createContentWordTransaction((wordChanges) => {
+      clearDownstreamFromTender(wordChanges);
       updateMeta({
         tender_file_name: fileName || '未命名文件',
         tender_markdown_path: tenderMarkdownRelativePath,
@@ -2890,8 +2857,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       const workingMarkdown = buildSelectedSectionMarkdown(originalMarkdown, aiSections, matched.id);
       clearBidTemplate();
       writeMarkdownFile(tenderMarkdownPath, workingMarkdown, 'tender');
-      const transaction = db.transaction(() => {
-        clearDownstreamFromBidSectionChange();
+      const transaction = createContentWordTransaction((wordChanges) => {
+        clearDownstreamFromBidSectionChange(wordChanges);
         updateGenerationConfig({ bidSectionMode: 'multiple' });
         updateMeta({
           tender_markdown_path: tenderMarkdownRelativePath,
@@ -2913,15 +2880,11 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     throw new Error('请先完成多标段识别，再选择投标范围');
   }
 
+  // 全流程重置按业务目录与表整体清空，包含没有节点记录的 Word 和暂存文件。
   function clearTechnicalPlan() {
-    clearTenderSourceFiles();
-    cleanupPendingTenderSelection();
-    removeWorkspacePathSync(tenderMarkdownPath);
-    removeWorkspacePathSync(tenderOriginalMarkdownPath);
-    removeWorkspacePathSync(originalPlanMarkdownPath);
-    clearOriginalOutlineRuntime();
+    removeWorkspacePathSync(getTechnicalPlanDir(app), undefined, { deferOnFailure: false });
+    removeWorkspacePathSync(path.join(getGeneratedImagesDir(app), 'technical-plan'), undefined, { deferOnFailure: false });
     clearTechnicalPlanMermaidCache();
-    clearIllustrationFiles();
     deleteImportedImageBatches(app, 'technical-plan');
     deleteOutlineAgentTask();
     deleteGlobalFactsAgentTask();
@@ -2940,7 +2903,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     });
     transaction();
     notifyAgentWorkspaceChange({ force: true });
-    return { success: true, message: '技术方案缓存已清空' };
+    return { success: true, message: '技术方案已重置' };
   }
 
   ensureGenerationConfigRow();
@@ -2964,6 +2927,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     prepareBidSectionExtraction,
     selectBidSection,
     readTenderMarkdown,
+    readContentWord,
     readTenderSourceMarkdown,
     readOriginalTenderMarkdown,
     readOriginalPlanMarkdown,

@@ -44,3 +44,13 @@ export interface OutlineData {
   project_name?: string;
   project_overview?: string;
 }
+
+/** 技术方案节点：身份固定，编号由当前树顺序计算。 */
+export interface TechnicalPlanOutlineItem extends OutlineItem {
+  number: string;
+  children?: TechnicalPlanOutlineItem[];
+}
+
+export interface TechnicalPlanOutlineData extends OutlineData {
+  outline: TechnicalPlanOutlineItem[];
+}

@@ -141,7 +141,7 @@ function OutlineSelectionDialog({
                 const selected = selectedIds.includes(item.id);
                 return (
                   <div className={`outline-selection-row${selected ? ' is-selected' : ''}`} key={item.id}>
-                    <span className="outline-selection-id">{item.id}</span>
+                    <span className="outline-selection-id">{item.number}</span>
                     <strong title={item.title}>{item.title}</strong>
                     <select
                       value={item.attr}

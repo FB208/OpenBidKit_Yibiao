@@ -1,7 +1,7 @@
 const { countReadableWords } = require('../utils/wordCount.cjs');
 const { numberMarkdownLines } = require('../utils/markdownLineView.cjs');
 
-const ORIGINAL_PLAN_HEADING_INSTRUCTION = '方案中的编号应该遵循新生成的目录结构，原方案中的标题根据实际情况保留或去除，保留的话要注意重新编号，以保证序号合理连贯。当前小节的外层标题由程序生成，不要重复输出。年份、型号及“3D”等属于标题含义的文字必须保留，不得当作编号删除。保留的内部标题用单行加粗文字表示。';
+const ORIGINAL_PLAN_HEADING_INSTRUCTION = 'node_id 只用于关联结果，不是章节编号；方案中的编号应该遵循新目录提供的显示编号 number 和目录结构，原方案中的标题根据实际情况保留或去除，保留的话要注意重新编号，以保证序号合理连贯。当前小节的外层标题由程序生成，不要重复输出。年份、型号及“3D”等属于标题含义的文字必须保留，不得当作编号删除。保留的内部标题用单行加粗文字表示。';
 const NUMBERED_VIEW_PART_MAX_BYTES = 40 * 1024;
 const NUMBERED_VIEW_PART_PREFIX = 'original-plan-numbered-part-';
 
@@ -216,7 +216,7 @@ covered-ranges.json 仅用于核对全文覆盖情况。所有非空原文行须
 纯空白签字、职务、日期、盖章栏以及不属于方案正文的评标提示，可列入 unassigned 并说明原因；其中包含实际授权、资质信息、证书标题或图片时，仍须作为实质内容还原。
 完成必要阅读和语义判断后，优先直接写入 original-restore-result.json；无需在 write 前逐行复述原文、展开完整文字版映射，或只为确认程序已生成的首尾行号额外运行 bash。发现读取异常、索引或行号冲突、判断存疑，或 write/业务校验失败时，仍可使用 read、find 或 bash 复核并自行修正。
 最终写入 original-restore-result.json，格式：
-{"assignments":[{"node_id":"1.1","source_ranges":[{"start_line":1,"end_line":8}],"heading_edits":[{"line":1,"content":"**1.1.1 实施安排**"}]}],"unassigned":[{"start_line":9,"end_line":10,"reason":"不适用于正文的签章栏"}]}
+{"assignments":[{"node_id":"从目标清单复制节点ID","source_ranges":[{"start_line":1,"end_line":8}],"heading_edits":[{"line":1,"content":"**1.1.1 实施安排**"}]}],"unassigned":[{"start_line":9,"end_line":10,"reason":"不适用于正文的签章栏"}]}
 程序已为 original-restore-result.json 预置 JSON Schema，write/edit 会自动校验。工具返回校验通过后无需再调用 json-validation；失败时按工具反馈修正文件并重新写入。
 不要修改输入文件或业务数据库。JSON 格式通过后，程序还会检查原文、表格、图片和覆盖范围；如有错误，按反馈在当前会话中修正输出文件。`;
 }

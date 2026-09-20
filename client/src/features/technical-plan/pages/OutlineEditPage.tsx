@@ -4,10 +4,10 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppDialog, ProgressBar, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, OutlineSelectionItem, SaveOutlineRequest, SaveOutlineSelectionRequest } from '../types';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
-import type { OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
+import type { TechnicalPlanOutlineData as OutlineData, OutlineExpansionMode, TechnicalPlanOutlineItem as OutlineItem, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
-import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
+import { formatOutlineTitle, numberTechnicalPlanOutline } from '../../../shared/utils/outlineNumbering';
 import OutlineSelectionDialog from '../components/OutlineSelectionDialog';
 
 interface OutlineEditPageProps {
@@ -36,11 +36,6 @@ interface OutlineSortGuard {
   hasUnsavedSort: () => boolean;
   saveSort: () => Promise<void>;
   discardSort: () => void;
-}
-
-interface RenumberResult {
-  outline: OutlineItem[];
-  idMap: Record<string, string>;
 }
 
 interface OutlineLocation {
@@ -86,25 +81,6 @@ function formatDuration(milliseconds: number) {
   return `${minutes}:${seconds}`;
 }
 
-function renumberOutlineItemsWithIdMap(items: OutlineItem[], parentPrefix = ''): RenumberResult {
-  const idMap: Record<string, string> = {};
-  const outline = items.map((item, index) => {
-    const id = parentPrefix ? `${parentPrefix}.${index + 1}` : `${index + 1}`;
-    const childResult = item.children?.length ? renumberOutlineItemsWithIdMap(item.children, id) : null;
-    idMap[item.id] = id;
-    if (childResult) {
-      Object.assign(idMap, childResult.idMap);
-    }
-    return {
-      ...item,
-      id,
-      children: childResult?.outline,
-    };
-  });
-
-  return { outline, idMap };
-}
-
 // 父节点不保存处理模式，叶子保留已经明确选择的处理模式。
 function normalizeOutlineContentModes(items: OutlineItem[]): OutlineItem[] {
   return items.map((item) => {
@@ -135,20 +111,6 @@ function assertLeafContentModes(items: OutlineItem[]) {
       throw new Error(`目录“${item.title}”缺少内容处理模式，请重新生成目录`);
     }
   });
-}
-
-function createIdentityIdMap(items: OutlineItem[], idMap: Record<string, string> = {}) {
-  items.forEach((item) => {
-    idMap[item.id] = item.id;
-    if (item.children?.length) {
-      createIdentityIdMap(item.children, idMap);
-    }
-  });
-  return idMap;
-}
-
-function composeIdMap(baseMap: Record<string, string>, stepMap: Record<string, string>) {
-  return Object.fromEntries(Object.entries(baseMap).map(([oldId, currentId]) => [oldId, stepMap[currentId] || currentId]));
 }
 
 function findOutlineLocation(items: OutlineItem[], itemId: string, parentId: string | null = null, level = 0): OutlineLocation | null {
@@ -279,7 +241,6 @@ function OutlineEditPage({
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTargetState | null>(null);
   const logListRef = useRef<HTMLDivElement | null>(null);
-  const sortIdMapRef = useRef<Record<string, string>>({});
   const shownTaskErrorIdRef = useRef<string | null>(null);
   const { showToast } = useToast();
   const activeOutlineData = sorting ? draftOutlineData : outlineData;
@@ -469,11 +430,10 @@ function OutlineEditPage({
 
     const normalizedOutline = normalizeOutlineContentModes(outline);
     assertLeafContentModes(normalizedOutline);
-    const renumbered = renumberOutlineItemsWithIdMap(normalizedOutline);
+    const renumbered = numberTechnicalPlanOutline(normalizedOutline);
     await onOutlineSaved({
-      outlineData: { ...outlineData, outline: renumbered.outline },
+      outlineData: { ...outlineData, outline: renumbered },
       reason,
-      idMap: renumbered.idMap,
       affectedNodeIds,
     });
   };
@@ -510,7 +470,8 @@ function OutlineEditPage({
     }
 
     const newItem: OutlineItem = {
-      id: `${outlineData.outline.length + 1}`,
+      id: crypto.randomUUID(),
+      number: String(outlineData.outline.length + 1),
       title: '新目录项',
       description: '请编辑描述',
       content_mode: 'ai-generate',
@@ -534,7 +495,8 @@ function OutlineEditPage({
     const parent = findOutlineItem(outlineData.outline, parentId);
     const nextIndex = (parent?.children?.length || 0) + 1;
     const newItem: OutlineItem = {
-      id: `${parentId}.${nextIndex}`,
+      id: crypto.randomUUID(),
+      number: `${parent?.number}.${nextIndex}`,
       title: '新目录项',
       description: '请编辑描述',
       content_mode: 'ai-generate',
@@ -608,7 +570,6 @@ function OutlineEditPage({
     }
 
     setDraftOutlineData(outlineData);
-    sortIdMapRef.current = createIdentityIdMap(outlineData.outline);
     setSorting(true);
     setSortDirty(false);
     setEditingItemId(null);
@@ -624,7 +585,6 @@ function OutlineEditPage({
     setSavingSort(false);
     setDraggingItemId(null);
     setDropTarget(null);
-    sortIdMapRef.current = {};
   };
 
   const saveSorting = async () => {
@@ -646,7 +606,6 @@ function OutlineEditPage({
       await onOutlineSaved({
         outlineData: draftOutlineData,
         reason: 'sort',
-        idMap: sortIdMapRef.current,
       });
       discardSorting();
       showToast('目录排序已保存', 'success');
@@ -719,11 +678,8 @@ function OutlineEditPage({
 
     const position = dropTarget?.itemId === item.id ? dropTarget.position : getDropPosition(event);
     const reordered = reorderOutlineSiblings(draftOutlineData.outline, sourceLocation.parentId, draggingItemId, item.id, position);
-    const renumbered = renumberOutlineItemsWithIdMap(reordered);
-    sortIdMapRef.current = composeIdMap(sortIdMapRef.current, renumbered.idMap);
-    setDraftOutlineData({ ...draftOutlineData, outline: renumbered.outline });
-    setExpandedItems((prev) => new Set([...prev].map((id) => renumbered.idMap[id] || id)));
-    setSelectedItemId((prev) => (prev ? renumbered.idMap[prev] || prev : prev));
+    const renumbered = numberTechnicalPlanOutline(reordered);
+    setDraftOutlineData({ ...draftOutlineData, outline: renumbered });
     setSortDirty(true);
     setDraggingItemId(null);
     setDropTarget(null);
@@ -772,7 +728,7 @@ function OutlineEditPage({
             onClick={() => setSelectedItemId(item.id)}
             onDoubleClick={() => hasChildren && toggleExpanded(item.id)}
           >
-            <strong>{formatOutlineTitle(item.id, item.title, exportFormat.headings[Math.min(item.id.split('.').length - 1, 5)])}</strong>
+            <strong>{formatOutlineTitle(item.number, item.title, exportFormat.headings[Math.min(level, 5)])}</strong>
             {!hasChildren && item.content_mode && (
               <span className={`outline-content-mode-badge is-${item.content_mode}`}>{OUTLINE_CONTENT_MODE_LABELS[item.content_mode]}</span>
             )}

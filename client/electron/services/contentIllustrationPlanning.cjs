@@ -63,7 +63,7 @@ function buildIllustrationPlanningContext({ outlineData, sections, options, aiIm
         && sections?.[id]?.status === 'success');
       const order = eligibleSectionIds.length;
 
-      markdownLines.push(`${'#'.repeat(Math.min(depth + 1, 6))} ${id} ${title}`.trim());
+      markdownLines.push(`${'#'.repeat(Math.min(depth + 1, 6))} ${item.number} ${title}`.trim());
       markdownLines.push('');
       if (isLeaf) {
         markdownLines.push(`<!-- yibiao-section-start id="${id}" -->`);
@@ -84,6 +84,7 @@ function buildIllustrationPlanningContext({ outlineData, sections, options, aiIm
 
       return {
         id,
+        number: item.number,
         title,
         description,
         leaf: isLeaf,
@@ -159,7 +160,7 @@ function buildIllustrationPlanningPrompt() {
 9. HTML 多节说明类图片使用 before，表示插入组内第一节正文前；总结类图片使用 after，表示插入组内最后一节正文后。
 10. priority 只能是 1-5 的整数，5 表示最值得配图。
 11. 同一小节只允许编排一张图片，包含在html多节图组中，也算该小节已编排，三种图片优先级html>AI生成图片>mermaid，如果一个小节同时适配多种图片，按以上优先级执行。
-12. 输出前必须重新读取 outline-tree.json，确认所有 section_ids 真实存在、属于可编排叶子，并确认 HTML 多节组同父且连续；同时通读全部 title，确认没有重复标题或仅替换章节名称的相似主题。
+12. section_ids 使用稳定节点 id，number 只供阅读，不能用于关联。输出前必须重新读取 outline-tree.json，确认所有 section_ids 真实存在、属于可编排叶子，并确认 HTML 多节组同父且连续；同时通读全部 title，确认没有重复标题或仅替换章节名称的相似主题。
 13. 只创建 illustration-plan.json，不要修改输入文件，不要输出其他结果文件。
 
 illustration-plan.json 只能使用以下结构：
@@ -169,7 +170,7 @@ illustration-plan.json 只能使用以下结构：
       "kind": "html",
       "image_type": "进度网络图",
       "title": "核心业务上线实施进度网络图",
-      "section_ids": ["3.2.1", "3.2.2"],
+      "section_ids": ["从目录复制的小节ID", "另一个小节ID"],
       "placement": "before",
       "priority": 5
     }

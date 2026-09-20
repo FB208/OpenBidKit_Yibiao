@@ -1403,15 +1403,15 @@ function numberToRoman(num, upper = false) {
   return upper ? value.toUpperCase() : value;
 }
 
-function outlineNumberParts(id) {
-  return String(id || '')
+function outlineNumberParts(number) {
+  return String(number || '')
     .split('.')
     .map((part) => parseInt(part, 10))
     .filter((part) => Number.isFinite(part) && part > 0);
 }
 
-function formatOutlineNumber(id, headingStyle) {
-  const parts = outlineNumberParts(id);
+function formatOutlineNumber(number, headingStyle) {
+  const parts = outlineNumberParts(number);
   if (!parts.length) return '';
 
   if (headingStyle?.numbering_format === 'outline-decimal') {
@@ -1445,8 +1445,8 @@ function shouldInsertSpaceAfterNumber(prefix) {
   return !/[、，。；：）)】\]》〉]$/.test(prefix);
 }
 
-function formatOutlineTitle(id, title, headingStyle) {
-  const prefix = formatOutlineNumber(id, headingStyle);
+function formatOutlineTitle(number, title, headingStyle) {
+  const prefix = formatOutlineNumber(number, headingStyle);
   if (!prefix) return String(title || '');
   return `${prefix}${shouldInsertSpaceAfterNumber(prefix) ? ' ' : ''}${title || ''}`;
 }
@@ -2454,7 +2454,7 @@ function buildFeasibilityAppendixParagraphs(feasibility) {
 function buildOutlineHeadingParagraph(item, context, level) {
   const style = getHeadingStyle(context.exportFormat, level);
   const nativeHeadingNumbering = usesNativeHeadingNumbering(style);
-  const displayTitle = nativeHeadingNumbering ? String(item.title || '') : formatOutlineTitle(item.id, item.title, style);
+  const displayTitle = nativeHeadingNumbering ? String(item.title || '') : formatOutlineTitle(item.number, item.title, style);
 
   const runOptions = { bold: false };
   if (style) {
@@ -2492,9 +2492,11 @@ function buildOutlineHeadingParagraph(item, context, level) {
 }
 
 /** 展开目录并计算样式范围；只有全部后代都为 AI 生成时，父标题才套用模板。 */
-function collectOutlineExportEntries(items, aiOnly, level = 1) {
-  return (items || []).flatMap((item) => {
-    const descendants = collectOutlineExportEntries(item.children, aiOnly, level + 1);
+function collectOutlineExportEntries(items, aiOnly, level = 1, prefix = '') {
+  return (items || []).flatMap((source, index) => {
+    const number = prefix ? `${prefix}.${index + 1}` : String(index + 1);
+    const item = { ...source, number };
+    const descendants = collectOutlineExportEntries(item.children, aiOnly, level + 1, number);
     const useTemplate = !aiOnly || (descendants.length
       ? descendants.every((entry) => entry.useTemplate)
       : item.content_mode === 'ai-generate');

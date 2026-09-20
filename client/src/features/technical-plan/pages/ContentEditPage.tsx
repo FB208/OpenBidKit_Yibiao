@@ -4,9 +4,10 @@ import { memo, useCallback, useEffect, useMemo, useState, type CSSProperties, ty
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
-import type { ClientConfig, OutlineContentMode, OutlineData, OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
+import type { ClientConfig, OutlineContentMode, TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
-import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationSectionStatus, ContentGenerationSections, ContentIllustrationKind, ContentIllustrationPlanState } from '../types';
+import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationRuntimeState, ContentGenerationSectionStatus, ContentGenerationSections, ContentIllustrationKind, ContentIllustrationPlanState } from '../types';
+import ContentWordPreview from '../components/ContentWordPreview';
 import { normalizeContentGenerationOptions } from '../contentGenerationOptions';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
@@ -20,6 +21,7 @@ interface ContentEditPageProps {
   outlineWordControlSnapshot?: OutlineWordControlOptions;
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
+  contentGenerationRuntime?: ContentGenerationRuntimeState;
   contentGenerationOptions?: ContentGenerationOptions;
   contentIllustrationPlan?: ContentIllustrationPlanState;
   sections: ContentGenerationSections;
@@ -190,6 +192,7 @@ function ContentEditPage({
   outlineWordControlSnapshot,
   outlineData,
   task,
+  contentGenerationRuntime,
   contentGenerationOptions,
   contentIllustrationPlan,
   sections,
@@ -218,6 +221,13 @@ function ContentEditPage({
   const firstLeafId = allLeaves[0]?.id || '';
   const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
+  const selectedIsWord = selectedIsLeaf && selectedItem?.content_mode === 'ai-generate';
+  // 只在当前小节的转换记录改变时刷新，其他小节的进度不重复加载 Word。
+  const selectedWordConverted = Boolean(contentGenerationRuntime?.html_output?.word_sections.some((section) => section.section_id === selectedItemId));
+  const wordRefreshKey = `${task?.task_id || ''}:${selectedWordConverted}`;
+  // 清空任务或目录快照变化时使旧预览失效；普通转换进度沿用当前文档。
+  const hasContentTask = Boolean(task || contentGenerationRuntime?.html_output);
+  const wordContentContext = useMemo(() => ({}), [outlineData, hasContentTask]);
   const selectedContent = selectedItem && selectedIsLeaf ? getLeafContent(selectedItem, sections) : '';
   const exportFormatPreviewStyle = useMemo<CSSProperties>(() => buildExportFormatCssVars(exportFormat), [exportFormat]);
   const running = task?.status === 'running';
@@ -291,6 +301,7 @@ function ContentEditPage({
   const sectionAdjustmentCompleted = contentStats?.section_adjustment_completed || 0;
   const sectionAdjustmentActiveCount = contentStats?.section_adjustment_active_count || 0;
   const sectionAdjustmentItemId = contentStats?.section_adjustment_item_id || '';
+  const sectionAdjustmentNumber = findItem(outlineData?.outline || [], sectionAdjustmentItemId)?.number;
   const sectionAdjustmentRound = contentStats?.section_adjustment_round || 0;
   const sectionAdjustmentRoundTotal = contentStats?.section_adjustment_round_total || 3;
   const sectionAdjustmentCurrentWords = sectionAdjustmentItemId ? outlineMeta.get(sectionAdjustmentItemId)?.words || 0 : 0;
@@ -304,6 +315,7 @@ function ContentEditPage({
   const totalAdjustmentBatchFailed = contentStats?.total_adjustment_batch_failed || 0;
   const totalAdjustmentActiveCount = contentStats?.total_adjustment_active_count || 0;
   const totalAdjustmentItemId = contentStats?.total_adjustment_item_id || '';
+  const totalAdjustmentNumber = findItem(outlineData?.outline || [], totalAdjustmentItemId)?.number;
   const totalAdjustmentRemainingWords = contentStats?.total_adjustment_remaining_words || 0;
   const canRetryContentCorrection = taskFailed
     && leaves.length > 0
@@ -408,17 +420,17 @@ function ContentEditPage({
         ? `小节字数调整已暂停，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
         : sectionAdjustmentActiveCount > 1
           ? `正在并发调整 ${sectionAdjustmentActiveCount} 个小节，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
-          : `正在进行小节字数调整：${sectionAdjustmentItemId || '当前小节'}，第 ${sectionAdjustmentRound}/${sectionAdjustmentRoundTotal} 轮，当前约 ${sectionAdjustmentCurrentWords} 字。`
+          : `正在进行小节字数调整：${sectionAdjustmentNumber || '当前小节'}，第 ${sectionAdjustmentRound}/${sectionAdjustmentRoundTotal} 轮，当前约 ${sectionAdjustmentCurrentWords} 字。`
       : finalSectionWordAdjusting
         ? paused
           ? `最终小节复核已暂停，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
           : sectionAdjustmentActiveCount > 1
             ? `正在并发进行最终小节复核，当前处理 ${sectionAdjustmentActiveCount} 个，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
-            : `正在进行最终小节复核：${sectionAdjustmentItemId || '当前小节'}，第 ${sectionAdjustmentRound}/${sectionAdjustmentRoundTotal} 轮。`
+            : `正在进行最终小节复核：${sectionAdjustmentNumber || '当前小节'}，第 ${sectionAdjustmentRound}/${sectionAdjustmentRoundTotal} 轮。`
         : totalWordAdjusting
           ? paused
             ? `全文字数调整已暂停，当前 ${currentWords} 字，目标 ${wordTargetText}，${totalAdjustmentRoundText}已完成 ${totalAdjustmentBatchCompleted}/${totalAdjustmentBatchTotal} 个小节。`
-            : `正在进行全文字数调整，当前 ${currentWords} 字，目标 ${wordTargetText}，${totalAdjustmentRoundText}已完成 ${totalAdjustmentBatchCompleted}/${totalAdjustmentBatchTotal} 个小节，正在处理 ${totalAdjustmentActiveCount} 个${totalAdjustmentItemId ? `（最近：${totalAdjustmentItemId}）` : ''}${totalAdjustmentBatchFailed ? `，失败 ${totalAdjustmentBatchFailed} 个` : ''}${totalAdjustmentRemainingWords ? `，仍需调整约 ${totalAdjustmentRemainingWords} 字` : ''}。`
+            : `正在进行全文字数调整，当前 ${currentWords} 字，目标 ${wordTargetText}，${totalAdjustmentRoundText}已完成 ${totalAdjustmentBatchCompleted}/${totalAdjustmentBatchTotal} 个小节，正在处理 ${totalAdjustmentActiveCount} 个${totalAdjustmentNumber ? `（最近：${totalAdjustmentNumber}）` : ''}${totalAdjustmentBatchFailed ? `，失败 ${totalAdjustmentBatchFailed} 个` : ''}${totalAdjustmentRemainingWords ? `，仍需调整约 ${totalAdjustmentRemainingWords} 字` : ''}。`
         : originalAuditing
             ? paused
               ? `内容矫正已暂停在原方案覆盖 Agent 修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
@@ -841,8 +853,8 @@ function ContentEditPage({
         >
           <span className="content-outline-dot" aria-hidden="true" />
           <span className="content-outline-text">
-            <strong>{formatOutlineTitle(item.id, item.title, exportFormat.headings[Math.min(item.id.split('.').length - 1, 5)])}</strong>
-            <small>{isLeaf ? `${modeLabel || '未标记'} · ${statusLabels[status]} · ${words} 字` : `${statusLabels[status]} · ${leafCount} 个小节 · ${words} 字`}</small>
+            <strong>{formatOutlineTitle(item.number, item.title, exportFormat.headings[Math.min(level, 5)])}</strong>
+            <small>{isLeaf ? item.content_mode === 'ai-generate' ? `${modeLabel} · Word 预览` : `${modeLabel || '未标记'} · ${statusLabels[status]} · ${words} 字` : `${leafCount} 个小节`}</small>
           </span>
           {isLeaf && item.content_mode === 'ai-generate' && (status === 'success' || status === 'error') ? (
             <Popover.Root
@@ -855,7 +867,7 @@ function ContentEditPage({
                   onClick={(event) => {
                     event.stopPropagation();
                   }}
-                >{statusLabels[status]}</em>
+                >重新生成</em>
               </Popover.Trigger>
               <Popover.Portal>
                 <Popover.Content className="content-regenerate-popover" side="top" align="end" sideOffset={8}>
@@ -879,7 +891,7 @@ function ContentEditPage({
               </Popover.Portal>
             </Popover.Root>
           ) : (
-            <em>{statusLabels[status]}</em>
+            <em>{isLeaf && item.content_mode === 'ai-generate' ? '查看 Word' : statusLabels[status]}</em>
           )}
         </button>
         {item.children?.length ? renderTree(item.children, level + 1) : null}
@@ -908,10 +920,9 @@ function ContentEditPage({
         </div>
         <div className="content-generation-stats" aria-label="正文生成统计">
           <span><strong>{leaves.length}</strong> 个 AI 小节</span>
-          <span><strong>{completedCount}</strong> 已生成</span>
+          {typeof contentStats?.word_conversion_completed === 'number' && <span><strong>{contentStats.word_conversion_completed}</strong> 本次 Word 已转换</span>}
           {ignoredCount > 0 && <span><strong>{ignoredCount}</strong> 已忽略</span>}
           <span title={`模板填写 ${modeCounts['template-fill']}，目录生成 ${modeCounts['directory-generate']}，人工填写 ${modeCounts['manual-fill']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
-          <span><strong>{totalWords}</strong> 字</span>
           {hasOriginalPlan && (
             <span title="按原方案导入的图片引用统计，回填时同时核对本地资源；原图不受新增配图数量设置影响。">
               原方案图片 <strong>{originalRestoration && typeof originalRestoration.total_images === 'number'
@@ -1035,12 +1046,12 @@ function ContentEditPage({
           <div className="content-reader-head">
             <div>
               <span className="section-kicker">正文内容</span>
-              <strong>{selectedItem ? `${selectedItem.id} ${selectedItem.title}` : '选择小节'}</strong>
+              <strong>{selectedItem ? `${selectedItem.number} ${selectedItem.title}` : '选择小节'}</strong>
               <p>{selectedItem?.description || '选择左侧目录项查看生成正文。'}</p>
             </div>
             <div className="content-reader-actions">
-              <span className={`content-status-badge is-${selectedStatus}`}>{statusLabels[selectedStatus]}</span>
-              {editing ? (
+              <span className={`content-status-badge is-${selectedIsWord ? 'pending' : selectedStatus}`}>{selectedIsWord ? 'Word 只读预览' : statusLabels[selectedStatus]}</span>
+              {selectedIsWord ? null : editing ? (
                 <>
                   <button type="button" className={isPreviewing ? 'secondary-action' : 'primary-action'} onClick={togglePreview}>
                     {isPreviewing ? '编辑' : '预览'}
@@ -1054,7 +1065,9 @@ function ContentEditPage({
             </div>
           </div>
 
-          {selectedItem && selectedIsLeaf && editing && !isPreviewing ? (
+          {selectedItem && selectedIsWord ? (
+            <ContentWordPreview key={selectedItem.id} sectionId={selectedItem.id} refreshKey={wordRefreshKey} contentContext={wordContentContext} />
+          ) : selectedItem && selectedIsLeaf && editing && !isPreviewing ? (
             <MarkdownEditor
               value={draftContent}
               onChange={setDraftContent}
@@ -1070,7 +1083,7 @@ function ContentEditPage({
               )}
             </MarkdownFullscreenViewer>
           ) : selectedItem && selectedIsLeaf && selectedContent.trim() ? (
-            <MarkdownFullscreenViewer className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle} title={`${selectedItem.id} ${selectedItem.title}全屏查看`}>
+            <MarkdownFullscreenViewer className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle} title={`${selectedItem.number} ${selectedItem.title}全屏查看`}>
               <MarkdownContent content={selectedContent} onPreviewImage={handlePreviewImage} />
             </MarkdownFullscreenViewer>
           ) : selectedItem && selectedIsLeaf ? (
@@ -1167,7 +1180,7 @@ function ContentEditPage({
           <Dialog.Content className="content-regenerate-card">
             <div className="content-regenerate-card-head">
               <span className="section-kicker">重新生成</span>
-              <Dialog.Title>{requirementItem?.id} {requirementItem?.title}</Dialog.Title>
+              <Dialog.Title>{requirementItem?.number} {requirementItem?.title}</Dialog.Title>
               <Dialog.Description>输入本次重新生成的具体要求，AI 会只覆盖当前小节正文。</Dialog.Description>
             </div>
             <textarea

@@ -146,6 +146,7 @@ const workspaceDatabaseChannels = [
   'technical-plan:check-bid-sections',
   'technical-plan:select-bid-section',
   'technical-plan:read-tender-markdown',
+  'technical-plan:read-content-word',
   'technical-plan:read-tender-source-markdown',
   'technical-plan:update-step',
   'technical-plan:save-bid-analysis-config',

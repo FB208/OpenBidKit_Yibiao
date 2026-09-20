@@ -11,8 +11,7 @@ import { bidAnalysisTasks, getBidAnalysisTasks, isMissingBidAnalysisResult, isMi
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
-import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
-import type { OutlineData, OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
+import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportFormatConfig, ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
 import { countReadableWords } from '../../../shared/utils/wordCount';
 import { ExportTemplateEditorDialog } from '../../export-format/pages/ExportFormatPage';
@@ -35,6 +34,7 @@ interface WordControlWarningMetric {
 
 interface WordControlWarningSection {
   id: string;
+  number: string;
   title: string;
   words: number;
 }
@@ -67,46 +67,6 @@ const stepLabels: Record<TechnicalPlanStep, string> = {
   'global-facts': '全局事实设定',
   'content-edit': '生成正文',
   expand: '扩写改写',
-};
-
-const resetState: TechnicalPlanState = {
-  step: 'document-analysis' as TechnicalPlanStep,
-  tenderFile: null,
-  tenderFiles: [],
-  originalPlanFile: null,
-  projectOverview: '',
-  techRequirements: '',
-  bidAnalysisMode: 'key' as const,
-  bidAnalysisSelectedTaskIds: [] as string[],
-  bidAnalysisTasks: {},
-  bidAnalysisProgress: 0,
-  bidSectionMode: 'single' as const,
-  bidSections: [],
-  bidSectionExtractionStatus: 'idle' as const,
-  bidSectionExtractionError: undefined,
-  outlineMode: 'response-file' as const,
-  outlineExpansionMode: 'ai-complement' as const,
-  outlineWordControlOptions: { ...DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS },
-  outlineWordControlSnapshot: undefined,
-  referenceKnowledgeDocumentIds: [] as string[],
-  bidSectionExtractionTask: undefined,
-  bidAnalysisTask: undefined,
-  outlineGenerationTask: undefined,
-  outlineAdjustmentTask: undefined,
-  globalFactsMode: 'fabricate' as GlobalFactsMode,
-  globalFactsTask: undefined,
-  globalFactsAdjustmentTask: undefined,
-  globalFacts: [] as GlobalFactGroupState[],
-  contentGenerationTask: undefined,
-  exportTemplateId: '',
-  exportTemplateScope: 'ai-only',
-  contentGenerationOptions: undefined,
-  contentGenerationSections: {},
-  contentGenerationPlans: {},
-  contentIllustrationPlan: undefined,
-  contentGenerationRuntime: undefined,
-  bidTemplateExists: false,
-  outlineData: null,
 };
 
 function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
@@ -224,17 +184,18 @@ function buildWordControlWarningDialog(task: BackgroundTaskState, state: Technic
   const sectionSources = orderedLeaves.length
     ? orderedLeaves.map((item) => ({
         id: item.id,
+        number: item.number,
         title: item.title || state.contentGenerationSections[item.id]?.title || '未命名章节',
         status: state.contentGenerationSections[item.id]?.status,
         content: state.contentGenerationSections[item.id]?.content ?? item.content ?? '',
       }))
-    : Object.values(state.contentGenerationSections);
+    : [];
   const sections = contentStats.strict_section_words && sectionWords > 0
     ? sectionSources
         .filter((section) => section.status === 'success')
         .map((section) => ({ ...section, words: countReadableWords(section.content) }))
         .filter((section) => section.words < sectionMinimumWords || section.words > sectionMaximumWords)
-        .map(({ id, title, words }) => ({ id, title, words }))
+        .map(({ id, number, title, words }) => ({ id, number, title, words }))
     : [];
   const metrics: WordControlWarningMetric[] = [];
   if (minimumWords > 0 || maximumWords > 0) {
@@ -860,6 +821,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       ...state.contentGenerationSections,
       [item.id]: {
         id: item.id,
+        number: item.number,
         title: item.title || '未命名章节',
         status: content.trim() ? 'success' as const : 'idle' as const,
         content,
@@ -876,6 +838,28 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     if (saved) setState((prev) => ({ ...prev, ...saved }));
   };
 
+  // 无论操作成功或失败，都读取后台完整快照，让正文及 Word 缓存跟随实际状态。
+  const runAndRefreshTechnicalPlan = async <T,>(action: () => Promise<T>): Promise<T> => {
+    let operationFailed = false;
+    try {
+      return await action();
+    } catch (error) {
+      operationFailed = true;
+      throw error;
+    } finally {
+      try {
+        const latestState = await window.yibiao!.technicalPlan.loadState();
+        setState(latestState);
+      } catch (error) {
+        const message = `刷新技术方案状态失败：${error instanceof Error ? error.message : String(error)}`;
+        // 刷新失败不能覆盖原操作异常；操作成功时则阻止调用方继续提示成功。
+        if (!operationFailed) throw new Error(message);
+        showToast(message, 'error');
+      }
+    }
+  };
+
+  // 重置整个投标流程，并在成功、失败时同步后台实际状态。
   const resetTechnicalPlan = async () => {
     if (isResetting) return;
     if (!window.confirm('会清空整个技术方案编写进度，是否确认？')) {
@@ -885,10 +869,12 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     setIsResetting(true);
     showToast('正在重置技术方案，将停止后台任务并清理工作区文件，请稍候…', 'info');
     try {
-      const result = await window.yibiao?.technicalPlan.clear();
-      setState(resetState);
-      setTenderMarkdown('');
-      showToast(result?.message || '技术方案已重置', 'success');
+      const result = await runAndRefreshTechnicalPlan(async () => {
+        const response = await window.yibiao!.technicalPlan.clear();
+        if (!response.success) throw new Error(response.message || '重置技术方案失败');
+        return response;
+      });
+      showToast(result.message || '技术方案已重置', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '重置技术方案失败', 'error');
     } finally {
@@ -901,20 +887,19 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     setState((prev) => ({ ...prev, ...(saved || {}), contentGenerationOptions }));
   };
 
-  // 重置正文阶段并用 Main 返回的最新工作区替换当前状态。
+  // 重置正文阶段；清理报错后也同步已提交的正文状态。
   const resetContentGeneration = async () => {
-    const saved = await window.yibiao!.technicalPlan.resetContentGeneration();
-    setState(saved);
+    await runAndRefreshTechnicalPlan(() => window.yibiao!.technicalPlan.resetContentGeneration());
   };
 
+  // 保存全局事实后同步快照，包含已失效的正文与任务。
   const saveGlobalFacts = async (globalFacts: GlobalFactGroupState[]) => {
-    const saved = await window.yibiao?.technicalPlan.saveGlobalFacts(globalFacts);
-    setState((prev) => ({ ...prev, ...(saved || {}), globalFacts }));
+    await runAndRefreshTechnicalPlan(() => window.yibiao!.technicalPlan.saveGlobalFacts(globalFacts));
   };
 
+  // 保存目录后同步快照，不用提交前的目录覆盖后台实际结果。
   const saveOutline = async (request: SaveOutlineRequest) => {
-    const saved = await window.yibiao?.technicalPlan.saveOutline(request);
-    setState((prev) => ({ ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData }));
+    await runAndRefreshTechnicalPlan(() => window.yibiao!.technicalPlan.saveOutline(request));
   };
 
   const saveOutlineSelection = async (request: SaveOutlineSelectionRequest) => {
@@ -1254,6 +1239,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           outlineData={state.outlineData}
           task={state.contentGenerationTask}
+          contentGenerationRuntime={state.contentGenerationRuntime}
           contentGenerationOptions={state.contentGenerationOptions}
           contentIllustrationPlan={state.contentIllustrationPlan}
           sections={state.contentGenerationSections}
@@ -1327,7 +1313,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
                   <div className="word-control-result-section-list">
                     {wordControlWarningDialog.sections.map((section) => (
                       <div className="word-control-result-section" key={section.id}>
-                        <span>{section.id} {section.title}</span>
+                        <span>{section.number} {section.title}</span>
                         <strong>{section.words.toLocaleString('zh-CN')} 字</strong>
                       </div>
                     ))}

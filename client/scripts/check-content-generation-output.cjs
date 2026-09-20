@@ -11,9 +11,9 @@ const body = '<!-- yibiao:block -->\n<p>施工准备与检查</p>\n<!-- yibiao:b
 
 // 使用真实 Agent 输入格式，目录顺序刻意与文件名排序不同。
 function createFixture(directory) {
-  const outline = [{ id: '1', title: '施工', content_mode: 'ai-generate', children: [
-    { id: '1.2', title: '准备 & 检查', content_mode: 'ai-generate' },
-    { id: '1.10', title: '交付', content_mode: 'ai-generate' },
+  const outline = [{ id: '10000000-0000-4000-8000-000000000001', number: '1', title: '施工', content_mode: 'ai-generate', children: [
+    { id: 'f0000000-0000-4000-8000-000000000012', number: '1.1', title: '准备 & 检查', content_mode: 'ai-generate' },
+    { id: 'a0000000-0000-4000-8000-000000000010', number: '1.2', title: '交付', content_mode: 'ai-generate' },
   ] }];
   const inputs = buildContentGenerationFiles({
     outline, targets: outline[0].children.map(item => ({ item })), plans: {},
@@ -36,8 +36,8 @@ async function checkTask(directory, outputDir) {
   const { Type } = await import('typebox');
   const { outline, targets } = createFixture(directory);
   fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(path.join(outputDir, '1.2.docx'), '第一节原结果');
-  fs.writeFileSync(path.join(outputDir, '1.10.docx'), '第二节原结果');
+  fs.writeFileSync(path.join(outputDir, 'f0000000-0000-4000-8000-000000000012.docx'), '第一节原结果');
+  fs.writeFileSync(path.join(outputDir, 'a0000000-0000-4000-8000-000000000010.docx'), '第二节原结果');
   fs.writeFileSync(path.join(outputDir, 'other.docx'), '其他文件');
   const timers = new Map();
   const originalSet = global.setInterval;
@@ -81,8 +81,8 @@ async function checkTask(directory, outputDir) {
           payload.signal.throwIfAborted();
         }
         fs.writeFileSync(path.join(directory, '正文/other.html'), body);
-        fs.writeFileSync(path.join(directory, '正文/1.10.html.tmp'), body);
-        fs.writeFileSync(path.join(directory, '正文/1.10.html'), '  \n');
+        fs.writeFileSync(path.join(directory, '正文/a0000000-0000-4000-8000-000000000010.html.tmp'), body);
+        fs.writeFileSync(path.join(directory, '正文/a0000000-0000-4000-8000-000000000010.html'), '  \n');
         assert.equal(scanGeneratedSections(directory, targets), 0);
         for (const [index, section] of targets.entries()) {
           await generate.execute('generate', { sections: [{ section_id: section.id, instructions: '施工', references: '' }] });
@@ -113,26 +113,31 @@ async function checkTask(directory, outputDir) {
       if (conversions === 1) assert.match(html, /<h2>准备 &amp; 检查<\/h2>/);
       if (conversions === 2 && failConversion) throw new Error('模拟转换失败');
       if (pauseConversion) { pauseRequested = true; tick(500); }
-      return { bytes: Buffer.from('mock-docx') };
+      return { bytes: Buffer.from(html.includes('交付') ? '交付 Word' : '准备 Word') };
     } },
   };
   try {
-    await assert.rejects(runContentGenerationTask({ ...args, previousState: structuredClone(state), payload: { resume: true } }), /小节 1.10 转 Word 失败/);
+    await assert.rejects(runContentGenerationTask({ ...args, previousState: structuredClone(state), payload: { resume: true } }), /小节 1.2 交付 转 Word 失败/);
     assert.equal(timers.size, 0);
     assert.equal(state.contentGenerationRuntime.html_output.word_sections.length, 1);
     assert.equal(state.contentGenerationTask.progress, 85);
     assert.equal(state.contentGenerationRuntime.html_output.word_output_dir, outputDir);
-    assert.equal(fs.readFileSync(path.join(outputDir, '1.2.docx'), 'utf8'), 'mock-docx', '成功覆盖原结果');
-    assert.equal(fs.readFileSync(path.join(outputDir, '1.10.docx'), 'utf8'), '第二节原结果', '失败保留原结果');
+    assert.equal(fs.readFileSync(path.join(outputDir, 'f0000000-0000-4000-8000-000000000012.docx'), 'utf8'), '准备 Word', '成功覆盖原结果');
+    assert.equal(fs.readFileSync(path.join(outputDir, 'a0000000-0000-4000-8000-000000000010.docx'), 'utf8'), '第二节原结果', '失败保留原结果');
     assert.equal(fs.existsSync(path.join(directory, 'Word')), false, '会话目录不再保存 Word');
     failConversion = false;
+    // 转换失败后交换目录顺序：会话快照和已转换记录仍引用原稳定 ID。
+    state.outlineData.outline[0].children.reverse();
+    state.outlineData.outline[0].children.forEach((item, index) => { item.number = `1.${index + 1}`; });
     const failedState = structuredClone(state);
     // 正式 taskService 先保存新任务初始状态，再把原状态通过 previousState 传入。
     state.contentGenerationTask = { status: 'running', progress: 0 };
     await runContentGenerationTask({ ...args, previousState: failedState, payload: { retryFailedSections: true } });
     assert.equal(aiRuns, 1, '转换重试不得再次调用 Agent');
+    assert.equal(fs.readFileSync(path.join(outputDir, `${targets[0].id}.docx`), 'utf8'), '准备 Word', '排序重试不能覆盖另一小节');
+    assert.equal(state.outlineData.outline[0].children[0].id, targets[1].id);
     assert.equal(conversions, 3, '已完成的第一节不得重复转换');
-    assert.equal(fs.readFileSync(path.join(outputDir, '1.10.docx'), 'utf8'), 'mock-docx');
+    assert.equal(fs.readFileSync(path.join(outputDir, 'a0000000-0000-4000-8000-000000000010.docx'), 'utf8'), '交付 Word');
     assert.equal(fs.readFileSync(path.join(outputDir, 'other.docx'), 'utf8'), '其他文件');
     assert.ok(state.contentGenerationTask.logs.includes(`输出目录：${outputDir}`));
     assert.equal(timers.size, 0);
@@ -142,17 +147,17 @@ async function checkTask(directory, outputDir) {
     assert.ok(updates.every(update => update.progress <= 90));
     assert.ok(updates.slice(1).every((update, index) => update.progress >= updates[index].progress));
     assert.ok(updates.some(update => update.progress_detail.phase === 'sections-completed'));
-    assert.deepEqual(state.contentGenerationRuntime.html_output.word_sections.map(item => item.section_id), ['1.2', '1.10']);
+    assert.deepEqual(state.contentGenerationRuntime.html_output.word_sections.map(item => item.section_id), ['f0000000-0000-4000-8000-000000000012', 'a0000000-0000-4000-8000-000000000010']);
     assert.deepEqual(fs.readFileSync(path.join(directory, '原图/现场 图片.png')), png);
     checkProgressView(state.contentGenerationTask);
     // 模拟转换中暂停：不保存刚返回的文件，继续时不调用 AI。
-    fs.unlinkSync(path.join(outputDir, '1.10.docx'));
+    fs.unlinkSync(path.join(outputDir, 'a0000000-0000-4000-8000-000000000010.docx'));
     state.contentGenerationRuntime.html_output.word_sections = state.contentGenerationRuntime.html_output.word_sections.slice(0, 1);
     state.contentGenerationTask.status = 'paused';
     pauseConversion = true;
     await runContentGenerationTask({ ...args, previousState: structuredClone(state), payload: { resume: true } });
     assert.equal(state.contentGenerationTask.status, 'paused');
-    assert.equal(fs.existsSync(path.join(outputDir, '1.10.docx')), false);
+    assert.equal(fs.existsSync(path.join(outputDir, 'a0000000-0000-4000-8000-000000000010.docx')), false);
     assert.equal(timers.size, 0);
     pauseConversion = pauseRequested = false;
     await runContentGenerationTask({ ...args, previousState: structuredClone(state), payload: { resume: true } });
@@ -224,10 +229,26 @@ async function checkRealWord(directory, outputDir) {
   }
 }
 
+// 运行正式导出编号逻辑，UUID 的字典顺序不能影响自定义标题编号。
+function checkExportNumbering() {
+  const { createRequire } = require('node:module');
+  const vm = require('node:vm');
+  const sourcePath = path.resolve(__dirname, '../electron/services/exportService.cjs');
+  const scope = { module: { exports: {} }, require: createRequire(sourcePath), __dirname: path.dirname(sourcePath) };
+  vm.runInNewContext(`${fs.readFileSync(sourcePath, 'utf8')}\nmodule.exports = { collectOutlineExportEntries, formatOutlineTitle };`, scope);
+  const outline = [{ id: 'ffffffff-0000-4000-8000-000000000001', title: '甲', children: [{ id: 'aaaaaaaa-0000-4000-8000-000000000002', title: '乙', content_mode: 'ai-generate' }] }];
+  const entries = scope.module.exports.collectOutlineExportEntries(outline, true);
+  assert.equal(entries[0].item.id, outline[0].id);
+  assert.equal(entries[1].item.number, '1.1');
+  assert.equal(entries[1].level, 2);
+  assert.equal(scope.module.exports.formatOutlineTitle(entries[1].item.number, '乙', { numbering_format: 'custom', numbering_template: '{full}' }), '1.1 乙');
+}
+
 // 所有产物位于独立中文临时目录，不读取或修改用户项目数据。
 async function main() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), '正文转Word检查-'));
   try {
+    checkExportNumbering();
     const agentDir = path.join(directory, 'agent-runtime', '正文会话');
     const outputDir = path.join(directory, '独立用户数据', 'workspace', 'technical-plan');
     await checkTask(agentDir, outputDir);
@@ -235,8 +256,8 @@ async function main() {
     // 删除的仅是本检查创建的会话目录，正式输出目录必须位于它之外。
     assert.equal(path.dirname(agentDir), path.join(directory, 'agent-runtime'));
     fs.rmSync(agentDir, { recursive: true, force: true });
-    assert.ok(fs.statSync(path.join(outputDir, '1.2.docx')).size > 0);
-    assert.ok(fs.statSync(path.join(outputDir, '1.10.docx')).size > 0);
+    assert.ok(fs.statSync(path.join(outputDir, 'f0000000-0000-4000-8000-000000000012.docx')).size > 0);
+    assert.ok(fs.statSync(path.join(outputDir, 'a0000000-0000-4000-8000-000000000010.docx')).size > 0);
     console.log('Word 新保存位置、成功覆盖、失败保留、重试复用及删除会话后文件保留通过。');
   } finally {
     if (path.dirname(directory) === path.resolve(os.tmpdir()) && path.basename(directory).startsWith('正文转Word检查-')) fs.rmSync(directory, { recursive: true, force: true });
