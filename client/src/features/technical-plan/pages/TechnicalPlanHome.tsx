@@ -198,6 +198,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const [installingPetPlugin, setInstallingPetPlugin] = useState(false);
   const [bidAnalysisFocusRequest, setBidAnalysisFocusRequest] = useState<{ taskId: string } | null>(null);
   const [globalFactsFocusRequest, setGlobalFactsFocusRequest] = useState<{ groupId: string } | null>(null);
+  const [generationSettingsInitialTab, setGenerationSettingsInitialTab] = useState<'content' | 'appearance'>('content');
   const [isResetting, setIsResetting] = useState(false);
   const sortGuardRef = useRef<OutlineSortGuard | null>(null);
   const sortLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
@@ -391,6 +392,10 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         const continueAnyway = await confirmOutlineWordControlLeave();
         if (!continueAnyway) return;
       }
+    }
+
+    if (state.step === 'generation-settings') {
+      setGenerationSettingsInitialTab('content');
     }
 
     setState((prev) => ({ ...prev, step }));
@@ -1063,6 +1068,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
 
       {state.step === 'generation-settings' && (
         <GenerationSettingsPage
+          initialTab={generationSettingsInitialTab}
           originalPlanFile={state.originalPlanFile}
           outlineMode={state.outlineMode}
           outlineModeRequiresRegeneration={outlineModeRequiresRegeneration}
@@ -1170,7 +1176,12 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           task={state.contentGenerationTask}
           contentGenerationRuntime={state.contentGenerationRuntime}
           contentGenerationOptions={state.contentGenerationOptions}
+          exportTemplateId={state.exportTemplateId}
           sections={state.contentGenerationSections}
+          onOpenGenerationSettingsAppearance={() => {
+            setGenerationSettingsInitialTab('appearance');
+            void switchStep('generation-settings');
+          }}
           onContentGenerationReset={resetContentGeneration}
           onContentSaved={saveChapterContent}
         />

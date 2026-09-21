@@ -13,6 +13,7 @@ import htmlImageExampleUrl from '../../../../assets/generate_img_example/html.pn
 type GenerationSettingsTab = 'content' | 'existing-plan' | 'knowledge' | 'length' | 'illustration' | 'writing' | 'appearance';
 
 interface GenerationSettingsPageProps {
+  initialTab?: GenerationSettingsTab;
   originalPlanFile: TechnicalPlanOriginalPlanFile | null;
   outlineMode: OutlineMode;
   outlineModeRequiresRegeneration: boolean;
@@ -208,6 +209,7 @@ function normalizeGlobalFactsMode(value: GlobalFactsMode | undefined): GlobalFac
 
 // 汇总生成前配置，并管理已有方案与参考知识库。
 function GenerationSettingsPage({
+  initialTab = 'content',
   originalPlanFile,
   outlineMode,
   outlineModeRequiresRegeneration,
@@ -237,7 +239,7 @@ function GenerationSettingsPage({
   onCreateExportTemplate,
   onContentGenerationOptionsChange,
 }: GenerationSettingsPageProps) {
-  const [activeTab, setActiveTab] = useState<GenerationSettingsTab>('content');
+  const [activeTab, setActiveTab] = useState<GenerationSettingsTab>(initialTab);
   const [originalPlanBusy, setOriginalPlanBusy] = useState(false);
   const [outlineModeBusy, setOutlineModeBusy] = useState(false);
   const [outlineExpansionModeBusy, setOutlineExpansionModeBusy] = useState(false);

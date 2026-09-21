@@ -2,7 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import * as Popover from '@radix-ui/react-popover';
 import { memo, useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
+import { AppDialog, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { ClientConfig, OutlineContentMode, TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
@@ -23,7 +23,9 @@ interface ContentEditPageProps {
   task?: BackgroundTaskState;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   contentGenerationOptions?: ContentGenerationOptions;
+  exportTemplateId: string;
   sections: ContentGenerationSections;
+  onOpenGenerationSettingsAppearance: () => void;
   onContentGenerationReset: () => Promise<void>;
   onContentSaved: (item: OutlineItem, content: string) => Promise<void> | void;
 }
@@ -185,7 +187,9 @@ function ContentEditPage({
   task,
   contentGenerationRuntime,
   contentGenerationOptions,
+  exportTemplateId,
   sections,
+  onOpenGenerationSettingsAppearance,
   onContentGenerationReset,
   onContentSaved,
 }: ContentEditPageProps) {
@@ -206,6 +210,7 @@ function ContentEditPage({
   const [developerStageActionPending, setDeveloperStageActionPending] = useState<'continue' | 'restart' | null>(null);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [resetPending, setResetPending] = useState(false);
+  const [templateRequiredDialogOpen, setTemplateRequiredDialogOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const [developerMode, setDeveloperMode] = useState(false);
   const firstLeafId = allLeaves[0]?.id || '';
@@ -430,11 +435,20 @@ function ContentEditPage({
     }
   };
 
+  // 新建正文会话前确认“长嘛样”中保存的模板仍然存在。
+  const ensureValidContentTemplate = async () => {
+    const template = exportTemplateId ? await window.yibiao?.templates.get(exportTemplateId) : null;
+    if (template) return true;
+    setTemplateRequiredDialogOpen(true);
+    return false;
+  };
+
   // 开发者阶段停点直接复用全量重新生成，不保留当前阶段产物。
   const restartContentGeneration = async () => {
     if (!developerStageGate || developerStageActionPending) return;
-    setDeveloperStageActionPending('restart');
     try {
+      if (!await ensureValidContentTemplate()) return;
+      setDeveloperStageActionPending('restart');
       setEditingItemId(null);
       setIsPreviewing(false);
       setDraftContent('');
@@ -581,6 +595,7 @@ function ContentEditPage({
     }
 
     try {
+      if (!await ensureValidContentTemplate()) return;
       const config = await window.yibiao?.config.load();
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
@@ -603,6 +618,7 @@ function ContentEditPage({
     }
 
     try {
+      if (!await ensureValidContentTemplate()) return;
       const config = await window.yibiao?.config.load();
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
@@ -932,6 +948,26 @@ function ContentEditPage({
           )}
         </article>
       </section>
+
+      <AppDialog
+        open={templateRequiredDialogOpen}
+        onOpenChange={setTemplateRequiredDialogOpen}
+        kicker="正文生成"
+        title="未选择有效的正文模板"
+        description="正文生成前，请先在 STEP 02“长嘛样”中选择有效的正文模板。"
+        actions={(
+          <button
+            type="button"
+            className="primary-action"
+            onClick={() => {
+              setTemplateRequiredDialogOpen(false);
+              onOpenGenerationSettingsAppearance();
+            }}
+          >
+            确定
+          </button>
+        )}
+      />
 
       <Dialog.Root
         open={resetDialogOpen}
