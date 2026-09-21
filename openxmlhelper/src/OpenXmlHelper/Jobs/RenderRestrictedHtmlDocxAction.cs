@@ -10,6 +10,10 @@ sealed class RenderRestrictedHtmlDocxRequest
     public string Html { get; set; } = "";
     public string Output { get; set; } = "preview.docx";
 
+    /// <summary>整本导出按程序标记的样式范围排版，普通小节和样张保持原路径。</summary>
+    [JsonPropertyName("whole_document")]
+    public bool WholeDocument { get; set; }
+
     /// <summary>配图所在目录，相对工作区；留空时使用任务目录。</summary>
     [JsonPropertyName("asset_root")]
     public string AssetRoot { get; set; } = "";
@@ -69,7 +73,8 @@ static class RenderRestrictedHtmlDocxAction
                 outputPath,
                 request.Html,
                 request.ExportFormat,
-                chrome);
+                chrome,
+                request.WholeDocument);
             var result = JobResult.Success(Name, outputName, rendered.BlockCount);
             result.ParagraphRoles = rendered.ParagraphRoles;
             return result;

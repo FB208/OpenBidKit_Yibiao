@@ -535,7 +535,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
 
   /** 生成 Word；外部工作区图片按需中转到助手工作区，原始图片不改动。 */
   async function createRestrictedHtmlDocx(html, exportFormat, options = {}) {
-    let assetRoot = options.assetRoot?.trim() || await syncPreviewAssets();
+    let assetRoot = options.assetRoot?.trim() || (options.copyAssets ? getWorkspaceDir(app) : await syncPreviewAssets());
     let temporaryAssets;
     let result;
     try {
@@ -551,7 +551,9 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
           }
           const target = path.join(temporaryAssets, reference);
           fs.mkdirSync(path.dirname(target), { recursive: true });
-          fs.copyFileSync(path.join(assetRoot, reference), target);
+          const bytes = options.assets?.get(reference);
+          if (bytes) fs.writeFileSync(target, bytes);
+          else fs.copyFileSync(path.join(assetRoot, reference), target);
         }
         assetRoot = path.basename(temporaryAssets);
       }
@@ -559,10 +561,11 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
       // 段落底纹画不出渐变和斜切，装饰必须走图片。
       const chrome = await buildChromeAssets(app, exportFormat?.page);
       pruneChromeAssets(app, [chrome.header, chrome.footer]);
-      result = await previewRunner.runJob({
+      result = await (options.wholeDocument ? runner : previewRunner).runJob({
         action: 'render-restricted-html-docx',
         request: {
           html,
+          whole_document: Boolean(options.wholeDocument),
           export_format: exportFormat,
           asset_root: assetRoot,
           chrome_assets: {
@@ -579,7 +582,8 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
             text_layout: chrome.textLayout,
           },
         },
-        timeoutMs: TEMPLATE_PREVIEW_TIMEOUT_MS,
+        // 整本转换使用正式任务队列，避免占用样张预览队列及其两分钟时限。
+        timeoutMs: options.wholeDocument ? 30 * 60 * 1000 : TEMPLATE_PREVIEW_TIMEOUT_MS,
       });
 
       return {

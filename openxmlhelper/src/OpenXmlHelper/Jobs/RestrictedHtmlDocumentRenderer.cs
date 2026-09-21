@@ -66,9 +66,11 @@ static class RestrictedHtmlDocumentRenderer
         string outputPath,
         string html,
         JsonElement exportFormat,
-        ChromeAssets? chrome = null)
+        ChromeAssets? chrome = null,
+        bool wholeDocument = false)
     {
         chrome ??= ChromeAssets.Empty;
+        if (wholeDocument) return RenderWholeDocument(assetRoot, outputPath, html, exportFormat, chrome);
         var format = new FormatReader(exportFormat);
         var prepared = PrepareHtml(html, format);
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
@@ -87,6 +89,136 @@ static class RestrictedHtmlDocumentRenderer
             cacheAssets: true);
         ApplyFormatting(document, format, prepared.Tables);
         return new RenderResult(blockCount, CollectParagraphRoles(document));
+    }
+
+    /// <summary>在同一 Word 包内转换各样式范围，共享图片关系；仅在页面范围切换时分节。</summary>
+    static RenderResult RenderWholeDocument(string assetRoot, string outputPath, string html, JsonElement exportFormat, ChromeAssets chrome)
+    {
+        var format = new FormatReader(exportFormat);
+        var basicPage = new Dictionary<string, JsonElement>();
+        foreach (var name in new[] { "paper_size", "orientation", "two_column", "margin_top_cm", "margin_bottom_cm", "margin_left_cm", "margin_right_cm" })
+        {
+            if (format.Section("page").TryGetProperty(name, out var value)) basicPage[name] = value;
+        }
+        var basic = new FormatReader(JsonSerializer.SerializeToElement(new { page = basicPage }));
+        var ranges = ParseHtml(html).Body!.Children.ToList();
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+        using var document = WordprocessingDocument.Create(outputPath, WordprocessingDocumentType.Document);
+        // 默认样式保持基础值，模板字体由选中的段落直接格式承载。
+        CreateSkeleton(document, basic, ChromeAssets.Empty);
+        var mainPart = document.MainDocumentPart!;
+        var body = mainPart.Document!.Body!;
+        var result = new List<OpenXmlElement>();
+        var blockCount = 0;
+        var index = 0;
+        while (index < ranges.Count)
+        {
+            var pageTemplate = ranges[index].GetAttribute("data-yb-export-page-template") == "true";
+            var pageFormat = pageTemplate ? format : basic;
+            // 首页不同为封面预留；整本导出尚未接入封面，暂不应用该设置。
+            var section = CreateSectionProperties(mainPart, pageFormat, pageTemplate ? chrome : ChromeAssets.Empty, firstPageDifferent: false);
+            AddEmptyChromeReferences(mainPart, section);
+            section.RemoveAllChildren<Wp.PageNumberType>();
+            if (result.Count == 0 && format.Bool(format.Section("page"), "page_number_enabled", false))
+                section.AddChild(new Wp.PageNumberType { Start = Math.Max(1, format.Integer(format.Section("page"), "page_number_start", 1)) }, true);
+            var pageElements = new List<OpenXmlElement>();
+            do
+            {
+                var range = ranges[index++];
+                var rangeFormat = range.GetAttribute("data-yb-export-template") == "true" ? format : basic;
+                body.RemoveAllChildren();
+                body.AppendChild(section.CloneNode(true));
+                var prepared = PrepareHtml(range.InnerHtml, rangeFormat, outlineOnly: true);
+                blockCount += RestrictedHtmlWordInserter.InsertIntoContent(assetRoot, mainPart, body,
+                    rangeFormat.Number(rangeFormat.Section("image"), "max_width_percent", 90), prepared.Document, cacheAssets: true);
+                ApplyFormatting(document, rangeFormat, prepared.Tables, rangeOnly: true);
+                foreach (var element in body.ChildElements.Where(item => item is not Wp.SectionProperties).ToList())
+                {
+                    element.Remove();
+                    pageElements.Add(element);
+                }
+            }
+            while (index < ranges.Count && (ranges[index].GetAttribute("data-yb-export-page-template") == "true") == pageTemplate);
+
+            body.RemoveAllChildren();
+            body.Append(pageElements);
+            body.AppendChild(section);
+            if (!ChapterFrameEnabled(pageFormat)) ApplyTwoColumnHeadingSections(mainPart, body, pageFormat);
+            RemoveLeadingPageBreak(body);
+            // 同一页面范围内的父标题和正文连续；仅在模板页面切换时另起一页。
+            if (index < ranges.Count)
+            {
+                section.Remove();
+                SetSingleChild(section, new Wp.SectionType { Val = Wp.SectionMarkValues.NextPage });
+                body.AppendChild(new Wp.Paragraph(new Wp.ParagraphProperties(section)));
+            }
+            foreach (var element in body.ChildElements.ToList())
+            {
+                element.Remove();
+                result.Add(element);
+            }
+        }
+        body.Append(result);
+        // 分范围转换时图片编号从各范围起算；合成后统一文档及页眉页脚的绘图编号。
+        uint drawingId = 1;
+        var roots = new OpenXmlElement[] { mainPart.Document }
+            .Concat(mainPart.HeaderParts.Select(part => (OpenXmlElement)part.Header))
+            .Concat(mainPart.FooterParts.Select(part => (OpenXmlElement)part.Footer));
+        foreach (var root in roots)
+        {
+            foreach (var drawing in root.Descendants<DW.DocProperties>()) drawing.Id = drawingId++;
+        }
+        mainPart.Document.Save();
+        foreach (var part in mainPart.HeaderParts) part.Header.Save();
+        foreach (var part in mainPart.FooterParts) part.Footer.Save();
+        return new RenderResult(blockCount, CollectParagraphRoles(document));
+    }
+
+    /// <summary>无装饰范围明确引用空页眉页脚，避免 Word 自动沿用上一节。</summary>
+    static void AddEmptyChromeReferences(MainDocumentPart mainPart, Wp.SectionProperties section)
+    {
+        if (!section.Elements<Wp.HeaderReference>().Any())
+        {
+            var part = mainPart.AddNewPart<HeaderPart>();
+            part.Header = new Wp.Header(new Wp.Paragraph());
+            part.Header.Save();
+            section.PrependChild(new Wp.HeaderReference { Id = mainPart.GetIdOfPart(part), Type = Wp.HeaderFooterValues.Default });
+        }
+        if (!section.Elements<Wp.FooterReference>().Any())
+        {
+            var part = mainPart.AddNewPart<FooterPart>();
+            part.Footer = new Wp.Footer(new Wp.Paragraph());
+            part.Footer.Save();
+            section.InsertBefore(new Wp.FooterReference { Id = mainPart.GetIdOfPart(part), Type = Wp.HeaderFooterValues.Default },
+                section.ChildElements.FirstOrDefault(item => item is not Wp.HeaderReference));
+        }
+    }
+
+    /// <summary>为当前范围复制列表编号定义，模板调整不会污染其他范围共用的编号。</summary>
+    static HashSet<int> IsolateNumbering(MainDocumentPart mainPart, Wp.Body body)
+    {
+        var numbering = mainPart.NumberingDefinitionsPart?.Numbering;
+        var abstractIds = new HashSet<int>();
+        if (numbering is null) return abstractIds;
+        var nextAbstract = numbering.Elements<Wp.AbstractNum>().Select(item => item.AbstractNumberId!.Value).DefaultIfEmpty(-1).Max() + 1;
+        var nextNumber = numbering.Elements<Wp.NumberingInstance>().Select(item => item.NumberID!.Value).DefaultIfEmpty(0).Max() + 1;
+        foreach (var group in body.Descendants<Wp.NumberingId>().GroupBy(item => item.Val!.Value).ToList())
+        {
+            var instance = numbering.Elements<Wp.NumberingInstance>().First(item => item.NumberID!.Value == group.Key);
+            var source = numbering.Elements<Wp.AbstractNum>().First(item => item.AbstractNumberId!.Value == instance.AbstractNumId!.Val!.Value);
+            var clone = (Wp.AbstractNum)source.CloneNode(true);
+            clone.AbstractNumberId = nextAbstract++;
+            // HtmlToOpenXml 用名称索引内置列表；副本不能继续占用 disc/decimal 名称。
+            clone.AbstractNumDefinitionName = new Wp.AbstractNumDefinitionName { Val = $"yibiao-range-{clone.AbstractNumberId}" };
+            numbering.InsertBefore(clone, numbering.Elements<Wp.NumberingInstance>().First());
+            var number = (Wp.NumberingInstance)instance.CloneNode(true);
+            number.NumberID = nextNumber++;
+            number.AbstractNumId!.Val = clone.AbstractNumberId;
+            numbering.AppendChild(number);
+            abstractIds.Add(clone.AbstractNumberId!.Value);
+            foreach (var reference in group) reference.Val = number.NumberID;
+        }
+        return abstractIds;
     }
 
     /// <summary>
@@ -123,7 +255,7 @@ static class RestrictedHtmlDocumentRenderer
     }
 
     /// <summary>给标题、列表和图表标题加入临时标记，供 Word 后处理精确识别。</summary>
-    static PreparedHtml PrepareHtml(string html, FormatReader format)
+    static PreparedHtml PrepareHtml(string html, FormatReader format, bool outlineOnly = false)
     {
         var document = ParseHtml(html);
         var counters = new int[6];
@@ -132,7 +264,11 @@ static class RestrictedHtmlDocumentRenderer
             var level = int.Parse(heading.LocalName[1..], CultureInfo.InvariantCulture);
             counters[level - 1] += 1;
             Array.Clear(counters, level, counters.Length - level);
-            var number = FormatHeadingNumber(counters[..level], format.Heading(level));
+            var outlineNumber = heading.GetAttribute("data-yb-outline-number");
+            var number = outlineOnly
+                ? (outlineNumber is null ? "" : FormatHeadingNumber(outlineNumber.Split('.').Select(int.Parse).ToArray(), format.Heading(level)))
+                : FormatHeadingNumber(counters[..level], format.Heading(level));
+            if (outlineOnly && outlineNumber is not null && format.Heading(level).ValueKind == JsonValueKind.Undefined) number = outlineNumber;
             var separator = number.Length > 0 && NeedsSpace(number) ? " " : "";
             heading.InsertBefore(
                 document.CreateTextNode($"{HeadingMarker}{level}:{number}{separator}"),
@@ -268,9 +404,11 @@ static class RestrictedHtmlDocumentRenderer
     static Wp.SectionProperties CreateSectionProperties(
         MainDocumentPart mainPart,
         FormatReader format,
-        ChromeAssets chrome)
+        ChromeAssets chrome,
+        bool? firstPageDifferent = null)
     {
         var page = format.Section("page");
+        var useDifferentFirstPage = firstPageDifferent ?? format.Bool(page, "first_page_different", false);
         var paper = PaperSizes.TryGetValue(format.Text(page, "paper_size", "a4"), out var found)
             ? found
             : PaperSizes["a4"];
@@ -279,8 +417,8 @@ static class RestrictedHtmlDocumentRenderer
         var height = MmToTwips(landscape ? paper.Width : paper.Height);
         var section = new Wp.SectionProperties();
 
-        AddHeaderReferences(mainPart, section, format, chrome);
-        AddFooterReferences(mainPart, section, format, chrome);
+        AddHeaderReferences(mainPart, section, format, chrome, useDifferentFirstPage);
+        AddFooterReferences(mainPart, section, format, chrome, useDifferentFirstPage);
         section.Append(
             new Wp.PageSize
             {
@@ -316,7 +454,7 @@ static class RestrictedHtmlDocumentRenderer
         {
             section.AppendChild(new Wp.Columns { ColumnCount = 2, Space = "720" });
         }
-        if (format.Bool(page, "first_page_different", false)) section.AppendChild(new Wp.TitlePage());
+        if (useDifferentFirstPage) section.AppendChild(new Wp.TitlePage());
         return section;
     }
 
@@ -325,7 +463,8 @@ static class RestrictedHtmlDocumentRenderer
         MainDocumentPart mainPart,
         Wp.SectionProperties section,
         FormatReader format,
-        ChromeAssets chrome)
+        ChromeAssets chrome,
+        bool firstPageDifferent)
     {
         var page = format.Section("page");
         if (!format.Bool(page, "header_enabled", false)) return;
@@ -339,7 +478,7 @@ static class RestrictedHtmlDocumentRenderer
             Id = mainPart.GetIdOfPart(headerPart),
         });
 
-        if (!format.Bool(page, "first_page_different", false)) return;
+        if (!firstPageDifferent) return;
         var firstPart = mainPart.AddNewPart<HeaderPart>();
         firstPart.Header = new Wp.Header(new Wp.Paragraph());
         firstPart.Header.Save();
@@ -355,7 +494,8 @@ static class RestrictedHtmlDocumentRenderer
         MainDocumentPart mainPart,
         Wp.SectionProperties section,
         FormatReader format,
-        ChromeAssets chrome)
+        ChromeAssets chrome,
+        bool firstPageDifferent)
     {
         var page = format.Section("page");
         if (!format.Bool(page, "footer_enabled", false)
@@ -370,7 +510,7 @@ static class RestrictedHtmlDocumentRenderer
             Id = mainPart.GetIdOfPart(footerPart),
         });
 
-        if (!format.Bool(page, "first_page_different", false)) return;
+        if (!firstPageDifferent) return;
         var firstPart = mainPart.AddNewPart<FooterPart>();
         firstPart.Footer = new Wp.Footer(new Wp.Paragraph());
         firstPart.Footer.Save();
@@ -764,7 +904,7 @@ static class RestrictedHtmlDocumentRenderer
     }
 
     /// <summary>打开已转换文档，对各类块应用模板中的直接格式。</summary>
-    static void ApplyFormatting(WordprocessingDocument document, FormatReader format, IReadOnlyList<TableSpec> tableSpecs)
+    static void ApplyFormatting(WordprocessingDocument document, FormatReader format, IReadOnlyList<TableSpec> tableSpecs, bool rangeOnly = false)
     {
         var mainPart = document.MainDocumentPart ?? throw new InvalidOperationException("Word 缺少正文部件");
         var content = mainPart.Document.Body ?? throw new InvalidOperationException("Word 缺少正文");
@@ -775,12 +915,11 @@ static class RestrictedHtmlDocumentRenderer
             ApplyParagraph(paragraph, format);
         }
         ApplyTables(content, format, tableSpecs);
-        ApplyNumbering(mainPart, format);
-        // 章节页框会把整章塞进一个表格，一级标题不再是 Body 的直接子元素，
-        // 通栏分节那套就落不了地，两者只能二选一。
-        if (ChapterFrameEnabled(format)) ApplyChapterParagraphFrames(content, format);
-        else ApplyTwoColumnHeadingSections(mainPart, content, format);
-        RemoveLeadingPageBreak(content);
+        ApplyNumbering(mainPart, format, rangeOnly ? IsolateNumbering(mainPart, content) : null);
+        // 页框和一级标题通栏沿用现有互斥规则；整本导出的分栏在页面范围合并后应用。
+        if (ChapterFrameEnabled(format)) ApplyChapterParagraphFrames(content, format, includeLeading: rangeOnly);
+        else if (!rangeOnly) ApplyTwoColumnHeadingSections(mainPart, content, format);
+        if (!rangeOnly) RemoveLeadingPageBreak(content);
         mainPart.Document.Save();
     }
 
@@ -1045,7 +1184,7 @@ static class RestrictedHtmlDocumentRenderer
     }
 
     /// <summary>将转换器生成的列表编号统一改成模板选择的项目符号和序号。</summary>
-    static void ApplyNumbering(MainDocumentPart mainPart, FormatReader format)
+    static void ApplyNumbering(MainDocumentPart mainPart, FormatReader format, HashSet<int>? abstractIds = null)
     {
         var numbering = mainPart.NumberingDefinitionsPart?.Numbering;
         if (numbering is null) return;
@@ -1056,6 +1195,7 @@ static class RestrictedHtmlDocumentRenderer
 
         foreach (var abstractNumber in numbering.Elements<Wp.AbstractNum>())
         {
+            if (abstractIds is not null && !abstractIds.Contains(abstractNumber.AbstractNumberId!.Value)) continue;
             foreach (var level in abstractNumber.Elements<Wp.Level>())
             {
                 var levelIndex = Math.Clamp(level.LevelIndex?.Value ?? 0, 0, 8);
@@ -1372,7 +1512,7 @@ static class RestrictedHtmlDocumentRenderer
     }
 
     /// <summary>按一级标题把正文切成章；一级标题之前的内容（封面、目录等）不进页框。</summary>
-    static List<List<OpenXmlElement>> CollectChapters(Wp.Body content)
+    static List<List<OpenXmlElement>> CollectChapters(Wp.Body content, bool includeLeading = false)
     {
         // 先固定住分组，后面要替换节点，不能边遍历边改
         var elements = content.ChildElements
@@ -1382,7 +1522,7 @@ static class RestrictedHtmlDocumentRenderer
         List<OpenXmlElement>? current = null;
         foreach (var element in elements)
         {
-            if (HeadingLevelOf(element) == 1)
+            if (HeadingLevelOf(element) == 1 || (includeLeading && current is null && HeadingLevelOf(element) > 0))
             {
                 current = [];
                 chapters.Add(current);
@@ -1410,7 +1550,7 @@ static class RestrictedHtmlDocumentRenderer
     const uint ChapterFrameLineSpacePt = 1;
 
     /// <summary>用段落边框给每个一级章节画连续页框。</summary>
-    static void ApplyChapterParagraphFrames(Wp.Body content, FormatReader format)
+    static void ApplyChapterParagraphFrames(Wp.Body content, FormatReader format, bool includeLeading = false)
     {
         var border = format.Section("heading_border");
         var color = Color(format.Text(border, "border_color", "#cfd8ee"), "CFD8EE");
@@ -1420,7 +1560,7 @@ static class RestrictedHtmlDocumentRenderer
             fills[level - 1] = Color(format.ArrayText(border, "level_cell_colors", level - 1, "#ffffff"), "FFFFFF");
         }
 
-        foreach (var chapter in CollectChapters(content))
+        foreach (var chapter in CollectChapters(content, includeLeading))
         {
             if (chapter.Count == 0) continue;
             foreach (var element in chapter)

@@ -202,6 +202,19 @@ function countOutlineStats(items = []) {
 /** 生成待填写提示；仅在当前节点应用模板时接续章节页框。 */
 function buildPendingContentModeParagraph(item, context) {
   if (String(item?.content || '').trim()) return null;
+  const message = getPendingContentModeMessage(item);
+  return message
+    ? paragraph([textRun(`[${message}]`, {
+      font: context.bodyRunFont,
+      size: context.bodyRunSize,
+      color: '8A650B',
+      italics: true,
+    })], { ...chapterFrameParagraphOptions(context), after: 120 })
+    : null;
+}
+
+/** 各导出路径共用尚未填写的节点提示。 */
+function getPendingContentModeMessage(item) {
   let message = '';
   if (item?.content_mode === 'template-fill') {
     message = '待模板填写：后续将从招标文件提取并填充内容。';
@@ -212,14 +225,7 @@ function buildPendingContentModeParagraph(item, context) {
   } else if (item?.content_mode === 'other') {
     message = `待处理：${String(item?.content_mode_note || '').trim() || '该小节采用其他特殊处理模式。'}`;
   }
-  return message
-    ? paragraph([textRun(`[${message}]`, {
-      font: context.bodyRunFont,
-      size: context.bodyRunSize,
-      color: '8A650B',
-      italics: true,
-    })], { ...chapterFrameParagraphOptions(context), after: 120 })
-    : null;
+  return message;
 }
 
 function collectOutlineContents(items = []) {
@@ -2889,9 +2895,38 @@ async function buildDocxBuffer(payload, options = {}) {
   return result.buffer;
 }
 
-function createExportService({ configStore, openXmlHelperService } = {}) {
+/** 非 AI 节点仍读取已有 Markdown；复用现有图片解析和本地 Mermaid 渲染。 */
+async function renderMarkdownForRestrictedHtml(content, assets, context = {}) {
+  const $ = cheerio.load(await renderMarkdownHtml(content, { allowRawHtml: true, enableGfm: true }), null, false);
+  for (const code of $('pre > code').toArray()) {
+    if (!isMermaidCodeElement($, code)) continue;
+    const rendered = await resolveMermaidImageForExport($(code).text(), context);
+    const img = $('<img>').attr('src', rendered.source).attr('alt', '流程图');
+    $(code).parent().replaceWith(img);
+  }
+  for (const img of $('img').toArray()) {
+    const loaded = normalizeImageForDocx(await loadImage($(img).attr('src'), context));
+    if (!loaded?.buffer?.length) throw new Error(`无法读取图片：${$(img).attr('src') || '空引用'}`);
+    const ref = `export-images/${assets.size}.${loaded.type || 'png'}`;
+    assets.set(ref, loaded.buffer);
+    const figure = $('<figure data-yb-size="wide" data-yb-fit="contain"></figure>');
+    figure.append($('<img>').attr('data-yb-asset-ref', ref));
+    if ($(img).attr('alt')) figure.append($('<figcaption>').text($(img).attr('alt')));
+    // 块级 figure 不能放在 Markdown 图片默认的 p 中。
+    if ($(img).parent().is('p') && $(img).parent().contents().length === 1) $(img).parent().replaceWith(figure);
+    else $(img).replaceWith(figure);
+  }
+  return $.html();
+}
+
+function createExportService({ configStore, openXmlHelperService, getTechnicalPlanExport } = {}) {
   return {
     async exportWord(payload = {}, onProgress) {
+      const technicalExport = payload.source === 'technical-plan' ? getTechnicalPlanExport?.() : null;
+      if (payload.source === 'technical-plan') {
+        if (!technicalExport) throw new Error('本地数据库尚未就绪');
+        payload = technicalExport.prepare();
+      }
       const stats = countOutlineStats(Array.isArray(payload.outline) ? payload.outline : []);
       const developerLogger = createDeveloperLogger({
         app,
@@ -2935,7 +2970,9 @@ function createExportService({ configStore, openXmlHelperService } = {}) {
       try {
         const warnings = [];
         // 模板样张复用预览生成器，但不参与预览请求合并，固定使用本次导出的设置。
-        const buildResult = payload.template_html
+        const buildResult = technicalExport
+          ? await technicalExport.build(payload, { onProgress, stats, developerLogger })
+          : payload.template_html
           ? {
             buffer: Buffer.from((await openXmlHelperService.createRestrictedHtmlDocx(payload.template_html, payload.export_format)).bytes),
             warnings,
@@ -2977,6 +3014,9 @@ module.exports = {
   buildDocxBuffer,
   buildDocxResult,
   createExportService,
+  collectOutlineExportEntries,
+  getPendingContentModeMessage,
+  renderMarkdownForRestrictedHtml,
 };
 
 // 独立运行本文件可检查原生间距、章节页框和样式范围，不读写用户文件。

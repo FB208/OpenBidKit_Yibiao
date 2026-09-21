@@ -12,7 +12,7 @@ import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
 import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
-import type { ExportFormatConfig, ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
+import type { ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
 import { ExportTemplateEditorDialog } from '../../export-format/pages/ExportFormatPage';
 
 interface TechnicalPlanHomeProps {
@@ -75,23 +75,12 @@ function isOutlineLeafCountOutsideRange(outlineData: OutlineData, options: Outli
     || (maximumLeafCount !== null && leafCount > maximumLeafCount);
 }
 
-function countMermaidDiagrams(content: string) {
-  const mermaidBlocks = (String(content || '').match(/```mermaid[\s\S]*?```/gi) || []).length;
-  const mermaidInkImages = (String(content || '').match(/https:\/\/mermaid\.ink\/img\//gi) || []).length;
-  return mermaidBlocks + mermaidInkImages;
-}
-
-function countOutlineMermaidDiagrams(items: OutlineItem[]) {
-  return collectLeafItems(items).reduce((sum, item) => sum + countMermaidDiagrams(item.content || ''), 0);
-}
-
 interface ExportProgressState {
   open: boolean;
   running: boolean;
   progress: number;
   message: string;
   warnings: string[];
-  mermaidCount: number;
   filePath?: string;
   error?: string;
 }
@@ -102,7 +91,6 @@ const initialExportProgress: ExportProgressState = {
   progress: 0,
   message: '',
   warnings: [],
-  mermaidCount: 0,
 };
 
 const MAX_UI_TASK_LOGS = 80;
@@ -636,14 +624,13 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     if (state.step === 'generation-settings') void loadExportTemplates();
   }, [loadExportTemplates, state.step]);
 
-  const runExportWord = async (latestExportFormat: ExportFormatConfig) => {
+  const runExportWord = async () => {
     if (!state.outlineData?.outline?.length) {
       showToast('请先生成目录', 'info');
       return;
     }
 
     const requestId = `export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const mermaidCount = countOutlineMermaidDiagrams(state.outlineData.outline);
     let unsubscribe: (() => void) | undefined;
 
     try {
@@ -651,11 +638,8 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         open: true,
         running: true,
         progress: 2,
-        message: mermaidCount
-          ? `检测到 ${mermaidCount} 张 Mermaid 图，导出时会转换为 Word 图片，可能需要稍等。`
-          : '正在准备导出 Word。',
+        message: '正在准备导出 Word。',
         warnings: [],
-        mermaidCount,
       });
 
       unsubscribe = window.yibiao?.export.onWordExportProgress((event: WordExportProgressEvent) => {
@@ -676,10 +660,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
 
       const result = await window.yibiao?.export.exportWord({
         requestId,
-        project_name: state.outlineData.project_name,
-        outline: state.outlineData.outline,
-        export_format: latestExportFormat,
-        export_template_scope: state.exportTemplateScope,
+        source: 'technical-plan',
       });
       if (result?.canceled) {
         setExportProgress(initialExportProgress);
@@ -730,16 +711,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       showToast('请先到生成设置的“长嘛样”选择导出模板', 'info');
       return;
     }
-    try {
-      const template = await window.yibiao?.templates.get(templateId);
-      if (!template) {
-        showToast('已选择的导出模板不存在，请回到“长嘛样”重新选择', 'error');
-        return;
-      }
-      await runExportWord(template.config);
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '读取导出模板失败', 'error');
-    }
+    await runExportWord();
   };
 
   const createExportTemplate = () => {
@@ -1291,9 +1263,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
               <span className="section-kicker">Word 导出</span>
               <Dialog.Title>{exportProgress.running ? '正在导出 Word' : exportProgress.error ? '导出失败' : '导出完成'}</Dialog.Title>
               <Dialog.Description>
-                {exportProgress.mermaidCount > 0
-                  ? `本次包含 ${exportProgress.mermaidCount} 张 Mermaid 图，导出时会在本地转换成 Word 图片。`
-                  : '正在将正文、表格和图片写入 Word 文档。'}
+                正在按当前模板将正文、表格和图片写入整本 Word 文档。
               </Dialog.Description>
             </div>
             <div className="export-progress-body">
