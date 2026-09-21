@@ -905,7 +905,9 @@ function applyOutputTokenLimit(body, config) {
 
 // 构造普通、流式及 JSON 文本请求。
 function createChatRequestBody(config, request, options = {}) {
-  const modelName = JINLONG_DEPRECATED_MODEL_MAP[config.model_name] || config.model_name;
+  const modelName = config.text_model_provider === 'jinlong'
+    ? (JINLONG_DEPRECATED_MODEL_MAP[config.model_name] || config.model_name)
+    : config.model_name;
   const body = {
     model: modelName,
     messages: request.messages,
@@ -2647,12 +2649,13 @@ function createAiService({ app, configStore }) {
         throw error;
       }
 
+      const models = Array.isArray(data.data) ? data.data.map((item) => item.id).filter(Boolean) : [];
       return {
         success: true,
         message: '模型列表已更新',
-        models: Array.isArray(data.data) 
-          ? data.data.map((item) => item.id).filter(Boolean).filter(id => !Object.keys(JINLONG_DEPRECATED_MODEL_MAP).includes(id))
-          : [],
+        models: config.text_model_provider === 'jinlong'
+          ? models.filter((id) => !Object.keys(JINLONG_DEPRECATED_MODEL_MAP).includes(id))
+          : models,
       };
     },
 
