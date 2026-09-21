@@ -721,7 +721,9 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       }
     }
     const transientTaskDir = path.join(layout.tasksRoot, safeTaskSegment(taskId));
-    const workspaceDir = persistentTask?.paths.workspaceDir || path.join(transientTaskDir, 'workspace');
+    // 借用已有工作区的子任务只拥有自己的会话目录，不能清空父任务文件。
+    const sharedWorkspace = Boolean(payload.workspace_dir);
+    const workspaceDir = payload.workspace_dir || persistentTask?.paths.workspaceDir || path.join(transientTaskDir, 'workspace');
     const persistentSessionFile = persistentConfig?.mode === 'resume'
       ? getPersistentAgentSessionPath(app, persistentConfig.task_key, persistentTask.state.session_file)
       : '';
@@ -771,12 +773,12 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     const watchdog = startWatchdog(activeController, timeoutMs, taskToken);
 
     try {
-      if (!persistentTask) await clearDirectoryAsync(workspaceDir);
+      if (!persistentTask && !sharedWorkspace) await clearDirectoryAsync(workspaceDir);
       await writeWorkspaceFilesAsync(workspaceDir, payload.files || []);
       await ensureStarted();
       const created = await createPiSession({
         workspaceDir,
-        sessionsDir: persistentTask?.paths.sessionsDir,
+        sessionsDir: persistentTask?.paths.sessionsDir || (sharedWorkspace ? path.join(transientTaskDir, 'sessions') : undefined),
         sessionFile: persistentSessionFile,
         environment,
         proxyInfo,
@@ -794,6 +796,9 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         },
         openXmlTool: payload.open_xml_tool,
         createTools: payload.create_tools,
+        activeTools: payload.active_tools,
+        beforeToolCall: payload.before_tool_call,
+        beforeFileWrite: payload.before_file_write,
       });
       session = created.session;
       sessionSnapshot = created.snapshot;

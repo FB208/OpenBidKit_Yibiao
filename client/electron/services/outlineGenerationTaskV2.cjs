@@ -265,7 +265,6 @@ function normalizeWordControlOptions(value) {
     minimumWords: integer(raw.minimumWords),
     maximumWords: integer(raw.maximumWords),
     sectionWords: integer(raw.sectionWords),
-    strictSectionWords: Boolean(raw.strictSectionWords) && integer(raw.sectionWords) > 0,
   };
 }
 
@@ -284,20 +283,10 @@ function deriveTargetLeafCount(options) {
 }
 
 // 独立成册时每个技术分支至少保留根节点作为正文叶子；字数允许时再推荐向下展开。
-function enforceMinimumLeafTarget(targetLeafCount, fixedAiLeafCount, technicalBranchCount, wordControlOptions = {}) {
+function enforceMinimumLeafTarget(targetLeafCount, fixedAiLeafCount, technicalBranchCount) {
   if (targetLeafCount === null) return null;
   const minimumLeafCount = fixedAiLeafCount + technicalBranchCount;
   const adjustedTarget = Math.max(targetLeafCount, minimumLeafCount);
-  if (wordControlOptions.strictSectionWords && wordControlOptions.maximumWords > 0) {
-    const sectionMinimumWords = Math.ceil(wordControlOptions.sectionWords * 0.8);
-    const maximumLeafCount = Math.floor(wordControlOptions.maximumWords / sectionMinimumWords);
-    if (maximumLeafCount < minimumLeafCount) {
-      throw new Error(
-        `当前严格字数配置最多容纳 ${maximumLeafCount} 个 AI 生成小节，但独立成册目录至少需要 ${minimumLeafCount} 个。请提高全文最大字数、降低单节字数或减少技术评分分支后重新生成目录。`,
-      );
-    }
-    return Math.min(adjustedTarget, maximumLeafCount);
-  }
   return adjustedTarget;
 }
 
@@ -1176,10 +1165,9 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
             targetLeafCount,
             fixedAiLeafCount,
             technicalBranches.length,
-            wordControlOptions,
           );
           if (requestedLeafTarget !== null && targetLeafCount !== requestedLeafTarget) {
-            publish(`已按技术分支结构与严格字数上限将 AI 生成叶子目标从 ${requestedLeafTarget} 调整为 ${targetLeafCount}`, 50);
+            publish(`已按技术分支结构将 AI 生成叶子目标从 ${requestedLeafTarget} 调整为 ${targetLeafCount}`, 50);
           }
         }
         allocatedAiLeafCount = targetLeafCount === null ? null : targetLeafCount - fixedAiLeafCount;

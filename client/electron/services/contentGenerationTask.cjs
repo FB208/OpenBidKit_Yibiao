@@ -18,7 +18,7 @@ const {
   generateMermaidIllustration,
   stripGeneratedIllustrationsFromDocument,
 } = require('./contentIllustrationGeneration.cjs');
-const { applyRangeEdits, findTextMatches } = require('../utils/textEdit.cjs');
+const { applyRangeEdits } = require('../utils/textEdit.cjs');
 const {
   createOriginalSource, readOriginalRange, buildOriginalRestorationFiles,
   buildOriginalRestorationPrompt, validateOriginalRestoration, calculateOriginalRestoration,
@@ -33,16 +33,6 @@ const { scanGeneratedSections, convertContentSections } = require('./contentGene
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
 const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
-const MAX_WORD_ADJUSTMENT_ROUNDS = 3;
-// 全文扩写不限制有效轮数，仅在连续多轮没有增加字数时退出。
-const MAX_EXPANSION_NO_PROGRESS_ROUNDS = 3;
-const TOTAL_WORD_ADJUSTMENT_BATCH_SIZE = 10;
-const DEFAULT_SECTION_WORD_GUIDANCE = 3000;
-const TOTAL_WORD_SHRINK_SECTION_RATIO = 0.25;
-// 全文缩写阶段筛选候选小节时，可缩空间至少要达到本轮单节平均预算的比例，低于此值的小节直接跳过以免空占批次名额。
-const TOTAL_WORD_SHRINK_MIN_CAPACITY_RATIO = 0.3;
-const CONTENT_WORD_CONTROL_WARNING = '经多轮修复，字数仍未达预期，请您人工核对';
-const SECTION_WORD_CONTROL_WARNING = '字数未达预期，请您人工核对';
 const TABLE_CLEANUP_CONTEXT_CHARS = 600;
 const TABLE_CLEANUP_BATCH_CHAR_LIMIT = 30000;
 const CONTENT_GENERATION_PAUSED = 'CONTENT_GENERATION_PAUSED';
@@ -475,9 +465,6 @@ function normalizeOutlineWordControlSnapshot(value) {
     minimumWords: normalizeInteger(source.minimumWords),
     maximumWords: normalizeInteger(source.maximumWords),
     sectionWords,
-    strictSectionWords: sectionWords > 0 && Boolean(source.strictSectionWords),
-    sectionMinimumWords: sectionWords > 0 ? Math.ceil(sectionWords * 0.8) : 0,
-    sectionMaximumWords: sectionWords > 0 ? Math.floor(sectionWords * 1.2) : 0,
   });
 }
 
@@ -1397,168 +1384,6 @@ function normalizeLeafContentForSave(content, chapter) {
   );
 }
 
-function normalizeWordAdjustmentResponse(value) {
-  const source = value?.result && typeof value.result === 'object' ? value.result : value || {};
-  const mode = String(source.mode || '').trim();
-  const granularity = String(source.granularity || '').trim();
-  const operations = (Array.isArray(source.operations) ? source.operations : []).map((operation) => ({
-    operation: String(operation?.operation || '').trim().toLowerCase(),
-    anchor: normalizeNewlines(operation?.anchor || '').trim(),
-    target_text: normalizeNewlines(operation?.target_text || '').trim(),
-    content: normalizeGeneratedMarkdown(operation?.content || '').trim(),
-  }));
-  return { mode, granularity, operations };
-}
-
-function validateWordAdjustmentResponse(value) {
-  if (!['expand', 'shrink'].includes(value?.mode)) throw new Error('字数调整 mode 只能是 expand 或 shrink');
-  if (!['paragraph', 'sentence'].includes(value?.granularity)) throw new Error('字数调整 granularity 只能是 paragraph 或 sentence');
-  if (!Array.isArray(value?.operations) || !value.operations.length) throw new Error('字数调整 operations 不能为空');
-  for (const operation of value.operations) {
-    const allowed = value.mode === 'expand' ? ['insert', 'replace'] : ['replace', 'delete'];
-    if (!allowed.includes(operation.operation)) throw new Error(`当前调整方向不允许 ${operation.operation || '空'} 操作`);
-    if (operation.operation === 'insert' && !operation.anchor) throw new Error('字数调整 insert anchor 不能为空');
-    if (operation.operation !== 'insert' && !operation.target_text) throw new Error('字数调整 target_text 不能为空');
-    if (operation.operation !== 'delete' && !operation.content) throw new Error('字数调整 content 不能为空');
-    if (/^\s{0,3}#{1,6}\s/m.test(operation.content)
-      || /!\[[^\]]*\]\([^)]*\)/.test(operation.content)
-      || /<img\b/i.test(operation.content)
-      || /```|~~~|\bmermaid\b/i.test(operation.content)
-      || containsContentTable(operation.content)) {
-      throw new Error('字数调整 content 不能包含标题、图片、Mermaid、代码块或表格');
-    }
-  }
-}
-
-function buildWordAdjustmentRepairMessages({ invalidContent, issues }, expectedMode, expectedGranularity, currentContent) {
-  const operationRule = expectedMode === 'expand'
-    ? '扩写只允许 insert/replace。insert 的 anchor 必须逐字复制当前正文中的唯一完整原文块，或使用 start/end；replace 的 target_text 必须逐字复制当前正文中的唯一完整目标。'
-    : '缩写只允许 replace/delete，target_text 必须逐字复制当前正文中的唯一完整目标。';
-  const responseFormat = expectedMode === 'expand'
-    ? `{"mode":"expand","granularity":"${expectedGranularity}","operations":[{"operation":"insert","anchor":"完整唯一原文块或 start/end","target_text":"","content":"新增正文"}]}`
-    : `{"mode":"shrink","granularity":"${expectedGranularity}","operations":[{"operation":"replace","target_text":"完整唯一原文块","content":"缩写后的正文"}]}`;
-  return [
-    { role: 'user', content: `请把待修复内容整理为正文局部字数调整 JSON。mode 必须是 ${expectedMode}，granularity 必须是 ${expectedGranularity}，operations 至少一项。${operationRule} content 不得包含标题、图片、Mermaid、代码块或表格，不得破坏列表层级、事实参数和服务承诺。返回格式：${responseFormat}。只返回 JSON。` },
-    { role: 'user', content: `错误列表：\n${(issues || []).map((item, index) => `${index + 1}. ${item}`).join('\n')}` },
-    { role: 'user', content: `当前正文：\n${String(currentContent || '').slice(0, 60000)}` },
-    { role: 'user', content: `待修复内容：\n${String(invalidContent || '').slice(0, 60000)}` },
-  ];
-}
-
-function buildWordAdjustmentMessages({ context, currentContent, currentWords, targetWords, mode, granularity, selectedFactsText, maximumChangeWords, totalRemainingWords, totalWords, minimumWords, maximumWords, globalFactsMode }) {
-  const { item, parentChapters, siblingChapters } = context;
-  const chapterPath = [...(parentChapters || []), item].map((chapter) => `${chapter.number} ${chapter.title}`).join(' > ');
-  const siblings = (siblingChapters || []).filter((chapter) => chapter.id !== item.id).map((chapter) => `${chapter.number} ${chapter.title}`).join('；') || '无';
-  const adjustmentBudgetText = totalRemainingWords === undefined
-    ? `当前小节本次最多允许${mode === 'expand' ? '增加' : '减少'} ${maximumChangeWords} 字。`
-    : mode === 'expand'
-      ? `本轮全文最多还需增加 ${totalRemainingWords} 字，当前小节本次最多允许增加 ${maximumChangeWords} 字。`
-      : `本轮全文至少还需减少 ${totalRemainingWords} 字，当前小节本次最多允许减少 ${maximumChangeWords} 字。`;
-  const totalWordText = totalWords === undefined
-    ? ''
-    : `当前全文 ${totalWords} 字，最少 ${minimumWords || '不限制'} 字，最多 ${maximumWords || '不限制'} 字。`;
-  const responseFormat = mode === 'expand'
-    ? `{"mode":"expand","granularity":"${granularity}","operations":[{"operation":"insert","anchor":"逐字复制当前正文中的唯一完整段落，或 start/end","target_text":"","content":"需要插入的新增正文"},{"operation":"replace","anchor":"","target_text":"逐字复制当前正文中的唯一完整原文块","content":"替换并扩写后的正文块"}]}`
-    : `{"mode":"shrink","granularity":"${granularity}","operations":[{"operation":"replace","target_text":"逐字复制当前正文中的唯一完整${granularity === 'paragraph' ? '段落' : '句子'}","content":"缩写后的正文"}]}`;
-  const operationRules = mode === 'expand'
-    ? `2. 扩写只允许 insert、replace，优先使用 insert；可以返回多个操作，把新增内容按不同技术主题插入最相关的位置。
-3. insert 的 anchor 必须逐字复制当前正文中的唯一完整原文段落或 Markdown 块；仅需插入开头或末尾时可写 start/end。锚点未命中时不会自动追加到末尾。
-4. replace 的 target_text 必须逐字复制当前正文中的唯一完整原文块；多个操作的锚点和替换范围不能重复或重叠。
-5. 新增正文的实际总字数应尽量接近但不得超过本次允许增加的字数；额度较大时应拆成多个 insert，禁止返回完整重写正文。`
-    : `2. 缩写只允许 replace、delete。
-3. target_text 必须逐字复制当前正文中的唯一完整目标，多项操作不能重叠。
-4. 缩写优先删除重复、空泛、同义反复和不影响事实的修饰表达。
-5. 不得返回完整重写正文。`;
-  return [
-    {
-      role: 'user',
-      content: `你是投标技术方案正文局部编辑助手。请对当前小节执行${mode === 'expand' ? '扩写' : '缩写'}，只返回 JSON，不返回完整重写正文。
-
-JSON 格式：${responseFormat}
-
-要求：
-1. mode 和 granularity 必须与给定值一致。
-${operationRules}
-6. 不改变核心意思，不修改参数、数量、日期、周期和标准，不删除技术路线、职责、流程、风险措施、人员安排、验收要求、售后和服务承诺。
-7. 不新增未提供的品牌、型号、人员、承诺和服务期限。
-8. 不修改图片、Mermaid、代码块、表格结构、列表编号层级和资源路径，不生成 Markdown 标题或伪目录标题。
-9. 不把其他目录应承载的内容移动到当前小节。${buildContentFactCompletenessInstruction(globalFactsMode) ? `\n\n${buildContentFactCompletenessInstruction(globalFactsMode)}` : ''}`,
-    },
-    { role: 'user', content: `当前章节路径：${chapterPath}\n章节描述：${item.description || ''}\n同级章节：${siblings}` },
-    ...(String(selectedFactsText || '').trim() ? [{ role: 'user', content: `本章节全局事实变量：\n${selectedFactsText}` }] : []),
-    { role: 'user', content: `当前小节正文：\n${currentContent}` },
-    {
-      role: 'user',
-      content: `当前小节 ${currentWords} 字，目标约 ${targetWords} 字；${adjustmentBudgetText}${totalWordText}`,
-    },
-  ];
-}
-
-function collectProtectedContentRanges(content) {
-  const ranges = collectFencedCodeRanges(content);
-  ranges.push(...extractContentTableBlocks(content).map((table) => ({ start: table.start, end: table.end })));
-  const patterns = [/!\[[^\]]*\]\([^)]*\)/g, /<img\b[^>]*>/gi];
-  for (const pattern of patterns) {
-    let match;
-    while ((match = pattern.exec(content))) ranges.push({ start: match.index, end: match.index + match[0].length });
-  }
-  return ranges;
-}
-
-function applyWordAdjustmentOperations(content, adjustment) {
-  const source = String(content || '');
-  const protectedRanges = collectProtectedContentRanges(source);
-  const usedRanges = new Set();
-  const edits = adjustment.operations.map((operation) => {
-    if (operation.operation === 'insert') {
-      const anchorKey = operation.anchor.trim().toLowerCase();
-      let position;
-      if (anchorKey === 'start') {
-        position = 0;
-      } else if (anchorKey === 'end') {
-        position = source.length;
-      } else {
-        const anchorResult = findTextMatches(source, operation.anchor);
-        if (!anchorResult.unique || anchorResult.strategy !== 'exact') {
-          throw new Error('字数调整 insert anchor 未在当前正文中精确唯一命中');
-        }
-        const anchorMatch = anchorResult.matches[0];
-        if (rangeOverlaps(anchorMatch.start, anchorMatch.end, protectedRanges)) {
-          throw new Error('字数调整不能在图片、Mermaid、代码块或表格内部插入内容');
-        }
-        position = anchorMatch.end;
-      }
-      const rangeKey = `${position}:${position}`;
-      if (usedRanges.has(rangeKey)) throw new Error('字数调整 insert anchor 重复');
-      usedRanges.add(rangeKey);
-      const newText = position === 0 ? `${operation.content}\n\n` : `\n\n${operation.content}`;
-      return { start: position, end: position, newText };
-    }
-
-    const matchResult = findTextMatches(source, operation.target_text);
-    if (!matchResult.unique || matchResult.strategy !== 'exact') {
-      throw new Error('字数调整 target_text 未在当前正文中精确唯一命中');
-    }
-    const match = matchResult.matches[0];
-    if (rangeOverlaps(match.start, match.end, protectedRanges)) {
-      throw new Error('字数调整不能修改图片、Mermaid、代码块或表格');
-    }
-    const rangeKey = `${match.start}:${match.end}`;
-    if (usedRanges.has(rangeKey)) throw new Error('字数调整 target_text 范围重复');
-    usedRanges.add(rangeKey);
-    return {
-      start: match.start,
-      end: match.end,
-      newText: operation.operation === 'delete' ? '' : operation.content,
-    };
-  });
-  const result = applyRangeEdits(source, edits);
-  if (!result.changed || result.errors.length) {
-    throw new Error(result.errors[0] || '字数调整没有产生有效修改');
-  }
-  return result.content;
-}
-
 function pickDistributedTableTargets(plannedItems, limit) {
   if (limit <= 0 || !plannedItems.length) {
     return new Set();
@@ -1608,13 +1433,6 @@ function normalizeContentGenerationRuntime(value) {
     touched_item_ids: normalizeStringArray(source.touched_item_ids),
     completed_stages: normalizeStringArray(source.completed_stages),
     developer_stage_gate: String(source.developer_stage_gate || '').trim(),
-    word_adjustment_stage: ['section', 'final-section', 'total'].includes(source.word_adjustment_stage) ? source.word_adjustment_stage : undefined,
-    word_adjustment_item_id: String(source.word_adjustment_item_id || '').trim(),
-    word_adjustment_round: Math.max(0, Math.round(Number(source.word_adjustment_round) || 0)),
-    word_adjustment_item_rounds: { ...(source.word_adjustment_item_rounds || {}) },
-    word_adjustment_completed_item_ids: normalizeStringArray(source.word_adjustment_completed_item_ids),
-    word_adjustment_no_progress_rounds: Math.max(0, Math.round(Number(source.word_adjustment_no_progress_rounds) || 0)),
-    word_adjustment_round_start_words: Math.max(0, Math.round(Number(source.word_adjustment_round_start_words) || 0)),
     target_item_id: String(source.target_item_id || '').trim(),
     regenerate_requirement: String(source.regenerate_requirement || '').trim(),
     simulate_partial_failures: Boolean(source.simulate_partial_failures),
@@ -1622,79 +1440,6 @@ function normalizeContentGenerationRuntime(value) {
     html_output: source.html_output,
     updated_at: source.updated_at || now(),
   };
-}
-
-function orderExpansionCandidates(candidates) {
-  if (!candidates.length) return [];
-
-  const middle = Math.floor(candidates.length / 2);
-  const ordered = [candidates[middle]];
-  const maxOffset = Math.max(middle, candidates.length - 1 - middle);
-  for (let offset = 1; offset <= maxOffset; offset += 1) {
-    if (middle - offset >= 0) {
-      ordered.push(candidates[middle - offset]);
-    }
-    if (middle + offset < candidates.length) {
-      ordered.push(candidates[middle + offset]);
-    }
-  }
-  return ordered;
-}
-
-async function runWorkerPool({ limit, getNextItem, worker, shouldStop, onItemStart, onItemComplete }) {
-  const workerCount = Math.max(1, Math.floor(Number(limit) || 1));
-  let activeCount = 0;
-  let firstError = null;
-
-  async function runWorker() {
-    while (true) {
-      if (firstError || shouldStop?.()) {
-        return;
-      }
-      const item = getNextItem();
-      if (!item) {
-        return;
-      }
-
-      activeCount += 1;
-      onItemStart?.(item, activeCount);
-      try {
-        const result = await worker(item);
-        activeCount -= 1;
-        await onItemComplete?.(item, result, activeCount);
-      } catch (error) {
-        activeCount -= 1;
-        if (!firstError) {
-          firstError = error;
-        }
-        return;
-      }
-    }
-  }
-
-  await Promise.all(Array.from({ length: workerCount }, runWorker));
-  if (firstError) {
-    throw firstError;
-  }
-}
-
-async function runItemsWithWorkerPool(items, limit, worker, shouldStop) {
-  const workerCount = Math.min(Math.max(1, Math.floor(Number(limit) || 1)), Math.max(1, items.length));
-  let nextIndex = 0;
-
-  await runWorkerPool({
-    limit: workerCount,
-    shouldStop,
-    getNextItem() {
-      if (nextIndex >= items.length) {
-        return null;
-      }
-      const item = items[nextIndex];
-      nextIndex += 1;
-      return item;
-    },
-    worker,
-  });
 }
 
 function createInitialSections(leaves, existingSections) {
@@ -1741,12 +1486,9 @@ const CONTENT_PHASE_LABELS = {
   'sections-completed': '小节全部完成',
   'word-converting': '批量转换',
   'word-completed': '转换完成',
-  'section-word-adjusting': '小节字数调整',
   'original-auditing': '原方案覆盖检查',
   auditing: '全文一致性检查',
   'table-cleaning': '表格清理',
-  'final-section-word-adjusting': '最终小节复核',
-  'total-word-adjusting': '全文字数调整',
   'illustration-planning': '全文图片编排',
   'illustration-generating': '全文图片生成',
   done: '已完成',
@@ -1765,12 +1507,9 @@ const CONTENT_PROGRESS_PROFILES = {
     planning: [0, 12],
     restoring: [12, 18],
     generating: [18, 58],
-    'section-word-adjusting': [58, 66],
     'original-auditing': [66, 73],
     auditing: [73, 81],
     'table-cleaning': [81, 85],
-    'final-section-word-adjusting': [85, 90],
-    'total-word-adjusting': [90, 95],
     'illustration-planning': [95, 98],
     'illustration-generating': [98, 99],
     done: [100, 100],
@@ -1782,15 +1521,12 @@ const CONTENT_PROGRESS_PROFILES = {
     'original-auditing': [65, 75],
     auditing: [75, 85],
     'table-cleaning': [85, 90],
-    'section-word-adjusting': [90, 99],
     done: [100, 100],
   },
   correction: {
     'original-auditing': [0, 18],
     auditing: [18, 42],
     'table-cleaning': [42, 50],
-    'final-section-word-adjusting': [50, 68],
-    'total-word-adjusting': [68, 85],
     'illustration-planning': [85, 94],
     'illustration-generating': [94, 99],
     done: [100, 100],
@@ -1843,13 +1579,6 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
     completed = stats.word_conversion_completed;
     total = stats.word_conversion_total;
     phaseProgress = percentageFor(completed, total);
-  } else if (phase === 'section-word-adjusting' || phase === 'final-section-word-adjusting') {
-    completed = Math.max(0, Number(stats.section_adjustment_completed) || 0);
-    total = Math.max(0, Number(stats.section_adjustment_total) || 0);
-    const activeCount = Math.min(Math.max(0, total - completed), Math.max(0, Number(stats.section_adjustment_active_count) || 0));
-    const roundProgress = percentageFor(stats.section_adjustment_round, stats.section_adjustment_round_total) / 100;
-    phaseProgress = total ? percentageFor(completed + activeCount * roundProgress, total) : 0;
-    step = 'adjusting';
   } else if (phase === 'original-auditing' || phase === 'auditing') {
     completed = stats.audit_agent_step_completed;
     total = stats.audit_agent_step_total;
@@ -1861,22 +1590,6 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
     total = stats.table_cleanup_total;
     phaseProgress = percentageFor(completed, total);
     step = 'cleaning';
-  } else if (phase === 'total-word-adjusting') {
-    if (stats.total_adjustment_mode === 'expand') {
-      const minimumWords = Math.max(0, Number(stats.minimum_words) || 0);
-      const currentWords = Math.max(0, Number(stats.current_words) || 0);
-      completed = Math.min(currentWords, minimumWords);
-      total = minimumWords;
-      phaseProgress = percentageFor(completed, total);
-    } else {
-      const round = Math.max(1, Number(stats.total_adjustment_round) || 1);
-      const roundTotal = Math.max(1, Number(stats.total_adjustment_round_total) || 1);
-      completed = stats.total_adjustment_batch_completed;
-      total = stats.total_adjustment_batch_total;
-      const batchProgress = total ? Math.max(0, Number(completed) || 0) / Math.max(1, Number(total) || 1) : 0;
-      phaseProgress = clampPercentage((((round - 1) + batchProgress) / roundTotal) * 100);
-    }
-    step = 'adjusting';
   } else if (phase === 'illustration-planning') {
     completed = stats.illustration_planning_step_completed;
     total = stats.illustration_planning_step_total;
@@ -2050,24 +1763,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     minimum_words: wordControl.minimumWords,
     maximum_words: wordControl.maximumWords,
     section_words: wordControl.sectionWords,
-    strict_section_words: wordControl.strictSectionWords,
     current_words: 0,
-    section_adjustment_total: 0,
-    section_adjustment_completed: 0,
-    section_adjustment_active_count: 0,
-    section_adjustment_item_id: '',
-    section_adjustment_round: 0,
-    section_adjustment_round_total: MAX_WORD_ADJUSTMENT_ROUNDS,
-    total_adjustment_round: 0,
-    total_adjustment_round_total: 0,
-    total_adjustment_mode: '',
-    total_adjustment_batch_total: 0,
-    total_adjustment_batch_completed: 0,
-    total_adjustment_batch_failed: 0,
-    total_adjustment_active_count: 0,
-    total_adjustment_item_id: '',
-    total_adjustment_remaining_words: 0,
-    word_control_warning: undefined,
     audit_agent_step_total: 0,
     audit_agent_step_completed: 0,
     audit_agent_step_label: '',
@@ -2218,7 +1914,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       ? '表格需求：不要，本次正文编排不会安排表格。'
       : `表格需求：${TABLE_REQUIREMENT_LABELS[tableRequirement]}，全文最多 ${maxTables} 个表格，本轮最多新增 ${runLimits.maxTablesForRun} 个。`];
   if (wordControl.minimumWords > 0 || wordControl.maximumWords > 0 || wordControl.sectionWords > 0) {
-    logs = [...logs, `目录生效字数配置：最少 ${wordControl.minimumWords || '不限制'} 字，最多 ${wordControl.maximumWords || '不限制'} 字，每小节 ${wordControl.sectionWords || '不控制'} 字。`];
+    logs = [...logs, `目录生效字数配置：最少 ${wordControl.minimumWords || '不限制'} 字，最多 ${wordControl.maximumWords || '不限制'} 字，每小节建议 ${wordControl.sectionWords || '不控制'} 字。`];
   }
   logs = [...logs, '全文一致性审计为必做阶段，正文扩写完成后将使用 Agent 检查并修复事实冲突。'];
   if (hasOriginalPlan) {
@@ -2580,22 +2276,10 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     }
   }
 
-  function getLeafWordCount(item) {
-    return contentWordCounts.get(item.id) || 0;
-  }
-
   rebuildContentWordCounts();
 
   function countTotalContentWords() {
     return totalContentWords;
-  }
-
-  function leafWordStats() {
-    return leaves.map((context) => ({
-      ...context,
-      content: getLeafContentForWords(context.item),
-      words: getLeafWordCount(context.item),
-    }));
   }
 
   function statsSnapshot() {
@@ -2603,7 +2287,6 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     contentStats.minimum_words = wordControl.minimumWords;
     contentStats.maximum_words = wordControl.maximumWords;
     contentStats.section_words = wordControl.sectionWords;
-    contentStats.strict_section_words = wordControl.strictSectionWords;
     contentStats.ignored_section_count = leaves.filter(({ item }) => sections[item.id]?.status === 'ignored').length;
     return {
       ...(contentAgentState ? { agent: { ...contentAgentState } } : {}),
@@ -2813,7 +2496,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   if (!tasksToRun.length && !runOnlyIllustrationStage) {
     logs = [...logs, retryContentCorrection
       ? '正文已全部生成，将直接重试内容矫正和后续处理。'
-      : continuePostProcessing ? '正文已全部生成，将执行内容复核和字数控制。' : '本次没有待生成的 AI 小节。'];
+      : continuePostProcessing ? '正文已全部生成，将执行内容复核。' : '本次没有待生成的 AI 小节。'];
   }
 
   // 原图属于已有方案，保存任何后续改写前核对引用，失败时不覆盖旧正文。
@@ -3276,6 +2959,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
           signal,
           buildFiles: () => buildContentGenerationFiles({
             outline: outlineData.outline, targets, plans: storedContentPlans,
+            checkTotalWords: !targetItemId && targets.length === leaves.length,
             projectOverview, globalFacts, globalFactsMode, wordControl,
             generationOptions: storedPlan.contentGenerationOptions,
             hasOriginalPlan,
@@ -3377,418 +3061,6 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     } finally {
       clearInterval(scanTimer);
       clearInterval(watcher);
-    }
-  }
-
-  function setWordAdjustmentRuntime(stage, itemId = '', round = 0, completedItemIds = [], itemRounds = {}, noProgressRounds = 0, roundStartWords = 0) {
-    const runtime = syncRuntime({
-      word_adjustment_stage: stage,
-      word_adjustment_item_id: itemId,
-      word_adjustment_round: round,
-      word_adjustment_item_rounds: itemRounds,
-      word_adjustment_completed_item_ids: completedItemIds,
-      word_adjustment_no_progress_rounds: noProgressRounds,
-      word_adjustment_round_start_words: roundStartWords,
-    });
-    checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
-      contentGenerationRuntime: runtime,
-    }, { contentRuntime: runtime });
-  }
-
-  async function requestWordAdjustment(context, options) {
-    const { item } = context;
-    const currentContent = getLeafContentForWords(item);
-    const currentWords = getLeafWordCount(item);
-    const selectedFactsText = resolveSelectedFactsText(getContentPlanForItem(item.id), globalFacts);
-    pauseIfRequested('正文生成已在字数调整请求前暂停，继续后将重新执行本轮。');
-    const adjustment = await aiService.collectJsonResponse({
-      messages: buildWordAdjustmentMessages({
-        context,
-        currentContent,
-        currentWords,
-        targetWords: options.targetWords,
-        mode: options.mode,
-        granularity: options.granularity,
-        selectedFactsText,
-        maximumChangeWords: options.maximumChangeWords,
-        totalRemainingWords: options.totalRemainingWords,
-        totalWords: targetItemId ? undefined : countTotalContentWords(),
-        minimumWords: targetItemId ? 0 : wordControl.minimumWords,
-        maximumWords: targetItemId ? 0 : wordControl.maximumWords,
-        globalFactsMode,
-      }),
-      logTitle: `正文${options.mode === 'expand' ? '扩写' : '缩写'}-${item.number}-${item.title || '未命名章节'}`,
-      progressLabel: '正文字数调整',
-      failureMessage: '模型返回的正文字数调整结果格式无效',
-      max_retries: 0,
-      normalizer: normalizeWordAdjustmentResponse,
-      validator: (value) => {
-        validateWordAdjustmentResponse(value);
-        if (value.mode !== options.mode || value.granularity !== options.granularity) {
-          throw new Error('模型返回的调整方向或粒度与当前要求不一致');
-        }
-      },
-      repairMessagesBuilder: (repairContext) => buildWordAdjustmentRepairMessages(repairContext, options.mode, options.granularity, currentContent),
-    });
-    pauseIfRequested('正文生成已在字数调整结果应用前暂停，继续后将重新执行本轮。');
-    const nextContent = normalizeLeafContentForSave(applyWordAdjustmentOperations(currentContent, adjustment), item);
-    const nextWords = countContentWords(nextContent);
-    if (nextWords <= 0) throw new Error('字数调整后正文没有有效可读内容');
-    if (options.mode === 'expand' && nextWords <= currentWords) throw new Error('扩写后字数没有增加');
-    if (options.mode === 'shrink' && nextWords >= currentWords) throw new Error('缩写后字数没有减少');
-    if (Math.abs(nextWords - currentWords) > options.maximumChangeWords) {
-      throw new Error('本轮实际调整字数超过允许额度');
-    }
-    if (Math.abs(nextWords - options.targetWords) >= Math.abs(currentWords - options.targetWords)) {
-      throw new Error('字数调整后与目标的差距没有缩小');
-    }
-    if (options.enforceSectionBounds && wordControl.strictSectionWords) {
-      if (nextWords < wordControl.sectionMinimumWords || nextWords > wordControl.sectionMaximumWords) {
-        throw new Error('本轮调整会使小节超出强控范围');
-      }
-    }
-    if (options.enforceTotalBounds !== false) {
-      const nextTotalWords = countTotalContentWords() - currentWords + nextWords;
-      if (wordControl.maximumWords > 0 && options.mode === 'expand' && nextTotalWords > wordControl.maximumWords) {
-        throw new Error('本轮扩写会使全文超过最多字数');
-      }
-      if (wordControl.minimumWords > 0 && options.mode === 'shrink' && nextTotalWords < wordControl.minimumWords) {
-        throw new Error('本轮缩写会使全文低于最少字数');
-      }
-    }
-    rememberTouchedItem(item.id);
-    saveSection(item, { status: 'success', content: nextContent, error: undefined }, nextContent, { logs });
-    return { currentWords, nextWords };
-  }
-
-  function isSectionWordsOutsideRange(words) {
-    return wordControl.strictSectionWords
-      && (words < wordControl.sectionMinimumWords || words > wordControl.sectionMaximumWords);
-  }
-
-  async function adjustSectionToRange(context, stage, itemRounds, completedItemIds) {
-    const { item } = context;
-    let rounds = Math.min(MAX_WORD_ADJUSTMENT_ROUNDS, Math.max(0, Number(itemRounds[item.id]) || 0));
-    while (rounds < MAX_WORD_ADJUSTMENT_ROUNDS) {
-      const currentWords = getLeafWordCount(item);
-      if (!isSectionWordsOutsideRange(currentWords)) return true;
-      rounds += 1;
-      const mode = currentWords < wordControl.sectionMinimumWords ? 'expand' : 'shrink';
-      const differenceRatio = Math.abs(currentWords - wordControl.sectionWords) / wordControl.sectionWords;
-      const granularity = differenceRatio > 0.2 ? 'paragraph' : 'sentence';
-      contentStats.section_adjustment_item_id = item.id;
-      contentStats.section_adjustment_round = rounds;
-      itemRounds[item.id] = rounds - 1;
-      setWordAdjustmentRuntime(stage, item.id, rounds - 1, completedItemIds, itemRounds);
-      logs = [...logs, `调整小节字数：${item.number} ${item.title || '未命名章节'}，第 ${rounds}/${MAX_WORD_ADJUSTMENT_ROUNDS} 轮，当前 ${currentWords} 字。`];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      try {
-        await requestWordAdjustment(context, {
-          mode,
-          granularity,
-          targetWords: wordControl.sectionWords,
-          maximumChangeWords: Math.abs(currentWords - wordControl.sectionWords),
-          enforceSectionBounds: false,
-          enforceTotalBounds: !targetItemId,
-        });
-      } catch (error) {
-        if (isPauseLikeError(error)) throw error;
-        logs = [...logs, `小节字数第 ${rounds} 轮调整未应用：${item.number}，${error.message || String(error)}。`];
-      }
-      itemRounds[item.id] = rounds;
-      setWordAdjustmentRuntime(stage, item.id, rounds, completedItemIds, itemRounds);
-      pauseIfRequested('正文生成已在字数调整结果处理后暂停，可稍后继续。');
-    }
-    return !isSectionWordsOutsideRange(getLeafWordCount(item));
-  }
-
-  async function runSectionWordAdjustments(targets, stage) {
-    if (!wordControl.strictSectionWords) return [];
-    const candidates = (targets || []).filter(({ item }) => sections[item.id]?.status === 'success' && getLeafWordCount(item) > 0);
-    const violations = candidates.filter(({ item }) => isSectionWordsOutsideRange(getLeafWordCount(item)));
-    const resumingStage = resume && contentRuntime.word_adjustment_stage === stage;
-    const completedItemIds = resumingStage ? [...contentRuntime.word_adjustment_completed_item_ids] : [];
-    const completedItemIdSet = new Set(completedItemIds);
-    const itemRounds = resumingStage ? { ...contentRuntime.word_adjustment_item_rounds } : {};
-    const activeItemIds = new Set();
-    const pendingViolations = violations.filter(({ item }) => !completedItemIdSet.has(item.id));
-    contentStats.phase = stage === 'final-section' ? 'final-section-word-adjusting' : 'section-word-adjusting';
-    contentStats.section_adjustment_total = completedItemIds.length + pendingViolations.length;
-    contentStats.section_adjustment_completed = completedItemIds.length;
-    contentStats.section_adjustment_active_count = 0;
-    if (!resumingStage) setWordAdjustmentRuntime(stage, '', 0, completedItemIds, itemRounds);
-    const unresolved = new Set(violations.filter(({ item }) => completedItemIdSet.has(item.id)).map(({ item }) => item.id));
-    await runItemsWithWorkerPool(pendingViolations, contentConcurrency, async (context) => {
-      activeItemIds.add(context.item.id);
-      contentStats.section_adjustment_active_count = activeItemIds.size;
-      contentStats.section_adjustment_item_id = context.item.id;
-      contentStats.section_adjustment_round = Number(itemRounds[context.item.id]) || 0;
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-
-      if (!await adjustSectionToRange(context, stage, itemRounds, completedItemIds)) unresolved.add(context.item.id);
-      completedItemIds.push(context.item.id);
-      completedItemIdSet.add(context.item.id);
-      activeItemIds.delete(context.item.id);
-      const nextActiveItemId = activeItemIds.values().next().value || '';
-      contentStats.section_adjustment_active_count = activeItemIds.size;
-      contentStats.section_adjustment_completed = completedItemIds.length;
-      contentStats.section_adjustment_item_id = nextActiveItemId;
-      contentStats.section_adjustment_round = nextActiveItemId ? Number(itemRounds[nextActiveItemId]) || 0 : 0;
-      setWordAdjustmentRuntime(stage, nextActiveItemId, contentStats.section_adjustment_round, completedItemIds, itemRounds);
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-    }, isPauseRequested);
-    contentStats.section_adjustment_item_id = '';
-    contentStats.section_adjustment_round = 0;
-    contentStats.section_adjustment_active_count = 0;
-    return [...unresolved];
-  }
-
-  function getTotalWordDirection() {
-    if (!wordControl.minimumWords && !wordControl.maximumWords) return null;
-    const currentWords = countTotalContentWords();
-    if (wordControl.minimumWords > 0 && currentWords < wordControl.minimumWords) {
-      return { mode: 'expand', currentWords, targetWords: wordControl.minimumWords };
-    }
-    if (wordControl.maximumWords > 0 && currentWords > wordControl.maximumWords) {
-      return { mode: 'shrink', currentWords, targetWords: wordControl.maximumWords };
-    }
-    return null;
-  }
-
-  // 扩写先按小节指导缺口分配，剩余额度再均摊；3000 仅是 sectionWords 为 0 时的内部指导值，不构成小节上限。
-  function buildTotalWordExpansionBatch(selected, direction) {
-    const guidanceWords = wordControl.sectionWords > 0 ? wordControl.sectionWords : DEFAULT_SECTION_WORD_GUIDANCE;
-    const entries = selected.map((candidate, index) => {
-      const capacity = wordControl.strictSectionWords
-        ? Math.max(0, wordControl.sectionMaximumWords - candidate.words)
-        : Number.POSITIVE_INFINITY;
-      return {
-        context: candidate,
-        index,
-        guidanceWords,
-        guidanceGap: Math.min(Math.max(0, guidanceWords - candidate.words), capacity),
-        capacity,
-        budget: 0,
-      };
-    });
-    let unallocatedWords = Math.abs(direction.currentWords - direction.targetWords);
-    const totalGuidanceGap = entries.reduce((sum, entry) => sum + entry.guidanceGap, 0);
-    const guidanceBudget = Math.min(unallocatedWords, totalGuidanceGap);
-
-    if (guidanceBudget > 0 && totalGuidanceGap > 0) {
-      const allocations = entries.map((entry) => {
-        const rawBudget = (guidanceBudget * entry.guidanceGap) / totalGuidanceGap;
-        return {
-          entry,
-          budget: Math.floor(rawBudget),
-          remainder: rawBudget - Math.floor(rawBudget),
-        };
-      });
-      let remainderWords = guidanceBudget - allocations.reduce((sum, allocation) => sum + allocation.budget, 0);
-      const remainderOrder = [...allocations]
-        .filter((allocation) => allocation.budget < allocation.entry.guidanceGap)
-        .sort((left, right) => right.remainder - left.remainder || left.entry.index - right.entry.index);
-      for (const allocation of remainderOrder) {
-        if (remainderWords <= 0) break;
-        allocation.budget += 1;
-        remainderWords -= 1;
-      }
-      for (const allocation of allocations) {
-        allocation.entry.budget = allocation.budget;
-      }
-      unallocatedWords -= guidanceBudget;
-    }
-
-    while (unallocatedWords > 0) {
-      const available = entries.filter((entry) => entry.budget < entry.capacity);
-      if (!available.length) break;
-      const fairShare = Math.ceil(unallocatedWords / available.length);
-      let allocatedThisPass = 0;
-      for (const entry of available) {
-        const capacity = entry.capacity - entry.budget;
-        const addition = Math.max(0, Math.min(unallocatedWords, fairShare, capacity));
-        if (addition <= 0) continue;
-        entry.budget += addition;
-        unallocatedWords -= addition;
-        allocatedThisPass += addition;
-      }
-      if (!allocatedThisPass) break;
-    }
-
-    return entries
-      .filter((entry) => entry.budget > 0)
-      .map(({ context, budget, guidanceWords: itemGuidanceWords }) => ({
-        context,
-        budget,
-        guidanceWords: itemGuidanceWords,
-      }));
-  }
-
-  // 强控缩写限制单次最多减少 25%；非强控只受全文差额和正文可读空间限制。
-  function buildTotalWordShrinkBatch(selected, direction) {
-    let unallocatedWords = Math.abs(direction.currentWords - direction.targetWords);
-    const batch = [];
-    for (let index = 0; index < selected.length && unallocatedWords > 0; index += 1) {
-      const candidate = selected[index];
-      const remainingSlots = selected.length - index;
-      const fairShare = Math.ceil(unallocatedWords / remainingSlots);
-      const ratioCapacity = Math.max(1, Math.floor(candidate.words * TOTAL_WORD_SHRINK_SECTION_RATIO));
-      const readableCapacity = Math.max(0, candidate.words - 1);
-      const sectionCapacity = wordControl.strictSectionWords
-        ? Math.min(ratioCapacity, candidate.words - wordControl.sectionMinimumWords, readableCapacity)
-        : readableCapacity;
-      const budget = Math.max(0, Math.min(unallocatedWords, fairShare, sectionCapacity));
-      if (budget <= 0) continue;
-      batch.push({ context: candidate, budget, guidanceWords: 0 });
-      unallocatedWords -= budget;
-    }
-    return batch;
-  }
-
-  // 每轮最多选择十个小节，批次总预算不超过当前全文差额。
-  function buildTotalWordAdjustmentBatch(candidates, direction, slotCount) {
-    const selected = candidates.slice(0, slotCount);
-    return direction.mode === 'expand'
-      ? buildTotalWordExpansionBatch(selected, direction)
-      : buildTotalWordShrinkBatch(selected, direction);
-  }
-
-  async function runTotalWordAdjustments() {
-    if (!wordControl.minimumWords && !wordControl.maximumWords || targetItemId || runOnlyIllustrationStage) return;
-    contentStats.phase = 'total-word-adjusting';
-    const resumingStage = resume && contentRuntime.word_adjustment_stage === 'total';
-    const initialRound = resumingStage
-      ? Math.max(1, Number(contentRuntime.word_adjustment_round) || 1)
-      : 1;
-    if (!resumingStage) setWordAdjustmentRuntime('total', '', 0, [], {}, 0, 0);
-    let lastItemId = resumingStage ? contentRuntime.word_adjustment_item_id : '';
-    let noProgressRounds = resumingStage
-      ? Math.max(0, Number(contentRuntime.word_adjustment_no_progress_rounds) || 0)
-      : 0;
-    let round = initialRound;
-    while (true) {
-      let direction = getTotalWordDirection();
-      if (!direction) return;
-      const isExpansion = direction.mode === 'expand';
-      if (!isExpansion && round > MAX_WORD_ADJUSTMENT_ROUNDS) return;
-      const resumingRound = resumingStage && round === initialRound;
-      const persistedRoundStartWords = Math.max(0, Number(contentRuntime.word_adjustment_round_start_words) || 0);
-      const roundStartWords = resumingRound && persistedRoundStartWords > 0
-        ? persistedRoundStartWords
-        : direction.currentWords;
-      contentStats.total_adjustment_mode = direction.mode;
-      contentStats.total_adjustment_round = round;
-      contentStats.total_adjustment_round_total = isExpansion ? 0 : MAX_WORD_ADJUSTMENT_ROUNDS;
-      const completedItemIds = resumingRound
-        ? [...contentRuntime.word_adjustment_completed_item_ids]
-        : [];
-      const completedItemIdSet = new Set(completedItemIds);
-      setWordAdjustmentRuntime('total', lastItemId, round, completedItemIds, {}, noProgressRounds, roundStartWords);
-      const differenceRatio = Math.abs(direction.currentWords - direction.targetWords) / direction.targetWords;
-      const granularity = differenceRatio > 0.2 ? 'paragraph' : 'sentence';
-      // 本轮单节平均预算，用于缩写时过滤可缩空间过小的小节，避免它们占用批次名额却几乎缩不动。
-      const averageBudget = Math.abs(direction.currentWords - direction.targetWords) / TOTAL_WORD_ADJUSTMENT_BATCH_SIZE;
-      let candidates = leafWordStats().filter(({ item, words }) => {
-        if (sections[item.id]?.status !== 'success' || words <= 0) return false;
-        if (completedItemIdSet.has(item.id)) return false;
-        if (!wordControl.strictSectionWords) return true;
-        if (direction.mode === 'expand') return words < wordControl.sectionMaximumWords;
-        // 缩写：仅保留可缩空间不小于平均预算 30% 的小节，集中资源到真正缩得动的小节上。
-        const shrinkableWords = words - wordControl.sectionMinimumWords;
-        return shrinkableWords >= averageBudget * TOTAL_WORD_SHRINK_MIN_CAPACITY_RATIO;
-      }).sort((left, right) => direction.mode === 'expand' ? left.words - right.words : right.words - left.words);
-      if (candidates.length > 1 && candidates[0].item.id === lastItemId) candidates = [...candidates.slice(1), candidates[0]];
-      const remainingSlots = Math.max(0, TOTAL_WORD_ADJUSTMENT_BATCH_SIZE - completedItemIds.length);
-      const batch = buildTotalWordAdjustmentBatch(candidates, direction, remainingSlots);
-      const previousContentStats = storedPlan.contentGenerationTask?.stats?.content;
-      contentStats.total_adjustment_batch_total = completedItemIds.length + batch.length;
-      contentStats.total_adjustment_batch_completed = completedItemIds.length;
-      contentStats.total_adjustment_batch_failed = resumingRound
-        ? Number(previousContentStats?.total_adjustment_batch_failed) || 0
-        : 0;
-      contentStats.total_adjustment_active_count = 0;
-      contentStats.total_adjustment_item_id = '';
-      contentStats.total_adjustment_remaining_words = Math.abs(direction.currentWords - direction.targetWords);
-      if (!batch.length && !completedItemIds.length) {
-        if (isExpansion) {
-          logs = [...logs, '全文扩写没有可继续调整的小节，停止自动扩写。'];
-          publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-          return;
-        }
-        round += 1;
-        setWordAdjustmentRuntime('total', '', round, [], {}, noProgressRounds, 0);
-        continue;
-      }
-
-      if (batch.length) {
-        const roundLabel = isExpansion ? `第 ${round} 轮` : `第 ${round}/${MAX_WORD_ADJUSTMENT_ROUNDS} 轮`;
-        logs = [...logs, `全文字数调整${roundLabel}：提交 ${batch.length} 个小节，当前还需${direction.mode === 'expand' ? '增加' : '减少'} ${contentStats.total_adjustment_remaining_words} 字。`];
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-        const activeItemIds = new Set();
-        const batchResults = await Promise.allSettled(batch.map(async ({ context: candidate, budget, guidanceWords }) => {
-          activeItemIds.add(candidate.item.id);
-          contentStats.total_adjustment_active_count = activeItemIds.size;
-          contentStats.total_adjustment_item_id = candidate.item.id;
-          logs = [...logs, direction.mode === 'expand'
-            ? `全文扩写已提交：${candidate.item.number} ${candidate.item.title || '未命名章节'}，当前 ${candidate.words} 字，内部指导 ${guidanceWords} 字，本次预算 ${budget} 字。`
-            : `全文缩写已提交：${candidate.item.number} ${candidate.item.title || '未命名章节'}，本次预算 ${budget} 字。`];
-          publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-          let failed = false;
-          try {
-            await requestWordAdjustment(candidate, {
-              mode: direction.mode,
-              granularity,
-              targetWords: direction.mode === 'expand' ? candidate.words + budget : Math.max(1, candidate.words - budget),
-              maximumChangeWords: budget,
-              totalRemainingWords: contentStats.total_adjustment_remaining_words,
-              enforceSectionBounds: wordControl.strictSectionWords,
-            });
-            lastItemId = candidate.item.id;
-          } catch (error) {
-            if (isPauseLikeError(error)) throw error;
-            failed = true;
-            logs = [...logs, `全文字数调整未应用：${candidate.item.number}，${error.message || String(error)}。`];
-          }
-          completedItemIds.push(candidate.item.id);
-          completedItemIdSet.add(candidate.item.id);
-          activeItemIds.delete(candidate.item.id);
-          const nextActiveItemId = activeItemIds.values().next().value || '';
-          const nextDirection = getTotalWordDirection();
-          contentStats.total_adjustment_batch_completed = completedItemIds.length;
-          if (failed) contentStats.total_adjustment_batch_failed += 1;
-          contentStats.total_adjustment_active_count = activeItemIds.size;
-          contentStats.total_adjustment_item_id = nextActiveItemId;
-          contentStats.total_adjustment_remaining_words = nextDirection
-            ? Math.abs(nextDirection.currentWords - nextDirection.targetWords)
-            : 0;
-          setWordAdjustmentRuntime('total', candidate.item.id, round, completedItemIds, {}, noProgressRounds, roundStartWords);
-          publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-          pauseIfRequested('正文生成已在全文字数调整后暂停，可稍后继续。');
-        }));
-        const rejected = batchResults.find((result) => result.status === 'rejected');
-        if (rejected) throw rejected.reason;
-      }
-
-      const currentWords = countTotalContentWords();
-      if (isExpansion) {
-        if (currentWords > roundStartWords) {
-          noProgressRounds = 0;
-        } else {
-          noProgressRounds += 1;
-          logs = [...logs, `全文扩写第 ${round} 轮未增加有效字数，连续无进展 ${noProgressRounds}/${MAX_EXPANSION_NO_PROGRESS_ROUNDS} 轮。`];
-        }
-      }
-      const nextDirection = getTotalWordDirection();
-      contentStats.total_adjustment_remaining_words = nextDirection
-        ? Math.abs(nextDirection.currentWords - nextDirection.targetWords)
-        : 0;
-      round += 1;
-      setWordAdjustmentRuntime('total', '', round, [], {}, noProgressRounds, 0);
-      if (isExpansion && noProgressRounds >= MAX_EXPANSION_NO_PROGRESS_ROUNDS) {
-        logs = [...logs, `全文扩写连续 ${MAX_EXPANSION_NO_PROGRESS_ROUNDS} 轮没有增加有效字数，停止自动扩写。`];
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-        return;
-      }
     }
   }
 
@@ -4861,12 +4133,6 @@ workspace 文件说明：
       }, { contentRuntime });
     }
 
-    if (!runOnlyIllustrationStage && !targetItemId && !retryContentCorrection && !completedStages.has('section-word-adjusting')) {
-      await runSectionWordAdjustments(leaves, 'section');
-      markStageCompleted('section-word-adjusting', { pauseForDeveloper: wordControl.strictSectionWords });
-      pauseIfRequested('正文生成已在小节字数调整后暂停，可导出当前已完成内容，稍后继续。');
-    }
-
     if (!runOnlyIllustrationStage && !targetItemId) {
       if (retryContentCorrection) {
         logs = [...logs, '本次为内容矫正重试，跳过正文生成，直接进入内容矫正阶段。'];
@@ -4886,20 +4152,6 @@ workspace 文件说明：
         markStageCompleted('table-cleaning', { pauseForDeveloper: Boolean(result?.ran) });
       }
       pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
-      const unresolvedSections = completedStages.has('final-section-word-adjusting')
-        ? leaves.filter(({ item }) => sections[item.id]?.status === 'success' && isSectionWordsOutsideRange(getLeafWordCount(item))).map(({ item }) => item.id)
-        : await runSectionWordAdjustments(leaves, 'final-section');
-      markStageCompleted('final-section-word-adjusting', { pauseForDeveloper: wordControl.strictSectionWords });
-      if (!completedStages.has('total-word-adjusting')) {
-        await runTotalWordAdjustments();
-        markStageCompleted('total-word-adjusting', { pauseForDeveloper: Boolean(wordControl.minimumWords || wordControl.maximumWords) });
-      }
-      const postAdjustmentSectionViolations = wordControl.strictSectionWords
-        ? leaves.filter(({ item }) => sections[item.id]?.status === 'success' && isSectionWordsOutsideRange(getLeafWordCount(item)))
-        : [];
-      if (unresolvedSections.length && !postAdjustmentSectionViolations.length) {
-        logs = [...logs, '全文调整已同时修复此前未达标的小节字数。'];
-      }
     } else if (!runOnlyIllustrationStage) {
       if (!completedStages.has('original-auditing')) {
         const result = await runAgentOriginalCoverageRepair({ targetItemId });
@@ -4915,31 +4167,6 @@ workspace 文件说明：
         markStageCompleted('table-cleaning', { pauseForDeveloper: Boolean(result?.ran) });
       }
       pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
-      const targetContext = leaves.find(({ item }) => item.id === targetItemId);
-      if (targetContext && wordControl.strictSectionWords && !completedStages.has('section-word-adjusting')) {
-        contentStats.phase = 'section-word-adjusting';
-        contentStats.section_adjustment_total = 1;
-        contentStats.section_adjustment_completed = 0;
-        contentStats.section_adjustment_active_count = 1;
-        const resumingSectionAdjustment = resume
-          && contentRuntime.word_adjustment_stage === 'section';
-        const itemRounds = resumingSectionAdjustment ? { ...contentRuntime.word_adjustment_item_rounds } : {};
-        const completedItemIds = resumingSectionAdjustment ? [...contentRuntime.word_adjustment_completed_item_ids] : [];
-        if (!resumingSectionAdjustment) setWordAdjustmentRuntime('section', targetItemId, 0, completedItemIds, itemRounds);
-        await adjustSectionToRange(
-          targetContext,
-          'section',
-          itemRounds,
-          completedItemIds,
-        );
-        if (!completedItemIds.includes(targetItemId)) completedItemIds.push(targetItemId);
-        contentStats.section_adjustment_completed = 1;
-        contentStats.section_adjustment_active_count = 0;
-        contentStats.section_adjustment_item_id = '';
-        contentStats.section_adjustment_round = 0;
-        setWordAdjustmentRuntime('section', '', 0, completedItemIds, itemRounds);
-        markStageCompleted('section-word-adjusting');
-      }
     } else if (runOnlyIllustrationPlanning) {
       logs = [...logs, rerunIllustrations
         ? '开始仅重新配图：清除旧配图后，重新执行全文图片编排和生成阶段。'
@@ -4982,13 +4209,6 @@ workspace 文件说明：
       saveSection(item, { status: 'error', content, error: message }, content, { logs });
     }
     rebuildContentWordCounts();
-    const finalSectionViolations = wordControl.strictSectionWords
-      ? statusLeaves.filter(({ item }) => sections[item.id]?.status === 'success' && isSectionWordsOutsideRange(getLeafWordCount(item)))
-      : [];
-    const finalTotalDirection = targetItemId ? null : getTotalWordDirection();
-    contentStats.word_control_warning = finalSectionViolations.length || finalTotalDirection
-      ? (targetItemId ? SECTION_WORD_CONTROL_WARNING : CONTENT_WORD_CONTROL_WARNING)
-      : undefined;
     const failedCount = statusLeaves.filter(({ item }) => sections[item.id]?.status === 'error').length;
     const finalProgress = progressFor(leaves, sections);
     const finalStatus = taskStatusFor(statusLeaves, sections);
@@ -4996,7 +4216,6 @@ workspace 文件说明：
     logs = [...logs, targetItemId
       ? (failedCount ? `小节重新生成结束，当前整体进度 ${finalProgress}%，${failedCount} 个小节失败。` : `小节重新生成完成，当前整体进度 ${finalProgress}%。`)
       : (failedCount ? `正文生成完成，${failedCount} 个小节失败。` : '正文生成完成。')];
-    if (contentStats.word_control_warning) logs = [...logs, contentStats.word_control_warning];
     writeDeveloperLog('content.task.completed', {
       status: finalStatus,
       progress: finalProgress,

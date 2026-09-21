@@ -13,7 +13,6 @@ import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarA
 import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
 import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportFormatConfig, ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
-import { countReadableWords } from '../../../shared/utils/wordCount';
 import { ExportTemplateEditorDialog } from '../../export-format/pages/ExportFormatPage';
 
 interface TechnicalPlanHomeProps {
@@ -32,19 +31,11 @@ interface WordControlWarningMetric {
   actual: string;
 }
 
-interface WordControlWarningSection {
-  id: string;
-  number: string;
-  title: string;
-  words: number;
-}
-
 interface WordControlWarningDialogState {
   taskId: string;
   title: string;
   message: string;
   metrics: WordControlWarningMetric[];
-  sections: WordControlWarningSection[];
 }
 
 const PET_PLUGIN_ID = 'openbidkit-pet';
@@ -137,7 +128,7 @@ function formatCountRange(minimum: number, maximum: number, unit: string) {
 }
 
 // 根据任务最终统计构建需要用户处理的字数警告弹窗。
-function buildWordControlWarningDialog(task: BackgroundTaskState, state: TechnicalPlanState): WordControlWarningDialogState | null {
+function buildWordControlWarningDialog(task: BackgroundTaskState): WordControlWarningDialogState | null {
   const outlineStats = task.stats?.outline;
   if (outlineStats?.word_adjustment_warning) {
     // 质量类：叶子数量已达标，仅二审发现可优化点，不展示会误导的叶子数对比。
@@ -147,7 +138,6 @@ function buildWordControlWarningDialog(task: BackgroundTaskState, state: Technic
         title: '目录已生成，建议人工核对',
         message: outlineStats.word_adjustment_warning,
         metrics: [],
-        sections: [],
       };
     }
     // 数量类：叶子数量未进入区间，展示预期与实际对比。
@@ -166,60 +156,10 @@ function buildWordControlWarningDialog(task: BackgroundTaskState, state: Technic
           : formatCountRange(minimumLeafCount, maximumLeafCount, '个'),
         actual: `${currentLeafCount.toLocaleString('zh-CN')} 个`,
       }],
-      sections: [],
     };
   }
 
-  const contentStats = task.stats?.content;
-  if (!contentStats?.word_control_warning) return null;
-
-  const minimumWords = contentStats.minimum_words || 0;
-  const maximumWords = contentStats.maximum_words || 0;
-  const sectionWords = contentStats.section_words || 0;
-  const sectionMinimumWords = sectionWords > 0 ? Math.ceil(sectionWords * 0.8) : 0;
-  const sectionMaximumWords = sectionWords > 0 ? Math.floor(sectionWords * 1.2) : 0;
-  const orderedLeaves = state.outlineData?.outline?.length
-    ? collectLeafItems(state.outlineData.outline).filter((item) => item.content_mode === 'ai-generate')
-    : [];
-  const sectionSources = orderedLeaves.length
-    ? orderedLeaves.map((item) => ({
-        id: item.id,
-        number: item.number,
-        title: item.title || state.contentGenerationSections[item.id]?.title || '未命名章节',
-        status: state.contentGenerationSections[item.id]?.status,
-        content: state.contentGenerationSections[item.id]?.content ?? item.content ?? '',
-      }))
-    : [];
-  const sections = contentStats.strict_section_words && sectionWords > 0
-    ? sectionSources
-        .filter((section) => section.status === 'success')
-        .map((section) => ({ ...section, words: countReadableWords(section.content) }))
-        .filter((section) => section.words < sectionMinimumWords || section.words > sectionMaximumWords)
-        .map(({ id, number, title, words }) => ({ id, number, title, words }))
-    : [];
-  const metrics: WordControlWarningMetric[] = [];
-  if (minimumWords > 0 || maximumWords > 0) {
-    metrics.push({
-      label: '全文字数',
-      expected: formatCountRange(minimumWords, maximumWords, '字'),
-      actual: `${(contentStats.current_words || 0).toLocaleString('zh-CN')} 字`,
-    });
-  }
-  if (contentStats.strict_section_words && sectionWords > 0) {
-    metrics.push({
-      label: '单个小节',
-      expected: `${sectionMinimumWords.toLocaleString('zh-CN')} 至 ${sectionMaximumWords.toLocaleString('zh-CN')} 字（目标 ${sectionWords.toLocaleString('zh-CN')} 字）`,
-      actual: `${sections.length.toLocaleString('zh-CN')} 个小节未达标`,
-    });
-  }
-
-  return {
-    taskId: task.task_id,
-    title: '正文字数未达到预期',
-    message: contentStats.word_control_warning,
-    metrics,
-    sections,
-  };
+  return null;
 }
 
 function areRequiredBidAnalysisTasksReady(tasks: BidAnalysisTasks) {
@@ -406,7 +346,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           .find((candidate) => candidate?.task_id === pendingWordControlWarningTaskId)
       : currentStepTask;
     if (!task || task.status !== 'success' || shownWordControlWarningTaskIdsRef.current.has(task.task_id)) return;
-    const dialog = buildWordControlWarningDialog(task, state);
+    const dialog = buildWordControlWarningDialog(task);
     if (!dialog) return;
     shownWordControlWarningTaskIdsRef.current.add(task.task_id);
     setPendingWordControlWarningTaskId(null);
@@ -481,7 +421,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       }
 
       if (latestTask?.status === 'success' && !shownWordControlWarningTaskIdsRef.current.has(latestTask.task_id)) {
-        const warning = latestTask.stats?.outline?.word_adjustment_warning || latestTask.stats?.content?.word_control_warning;
+        const warning = latestTask.stats?.outline?.word_adjustment_warning;
         if (warning) {
           setPendingWordControlWarningTaskId(latestTask.task_id);
         }
@@ -1304,22 +1244,6 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
                   </section>
                 ))}
               </div>
-              {wordControlWarningDialog?.sections.length ? (
-                <section className="word-control-result-sections">
-                  <div className="word-control-result-sections-head">
-                    <strong>未达标小节</strong>
-                    <span>{wordControlWarningDialog.sections.length} 个</span>
-                  </div>
-                  <div className="word-control-result-section-list">
-                    {wordControlWarningDialog.sections.map((section) => (
-                      <div className="word-control-result-section" key={section.id}>
-                        <span>{section.number} {section.title}</span>
-                        <strong>{section.words.toLocaleString('zh-CN')} 字</strong>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              ) : null}
         </div>
       </AppDialog>
 

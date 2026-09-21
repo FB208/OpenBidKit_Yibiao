@@ -37,7 +37,6 @@ function labelConfigValue(groupKey, value) {
     consistencyRepairModes: { normal: '普通修复', agent: 'Agent 修复' },
     enableOriginalPlanCoverageAudit: { true: '开启', false: '关闭' },
     wordControlEnabled: { true: '开启', false: '关闭' },
-    strictSectionWords: { true: '开启', false: '关闭' },
     contentGenerationActions: {
       start: '首次生成',
       'continue': '继续生成',
@@ -66,7 +65,6 @@ const configUsageGroups = [
   ['minimumWords', '最少字数'],
   ['maximumWords', '最多字数'],
   ['sectionWords', '每小节字数'],
-  ['strictSectionWords', '强控小节字数'],
   ['contentConcurrencies', '正文生成并发速度'],
     ['contentGenerationActions', '正文生成动作'],
     ['enableConsistencyAudit', '全文一致性审计'],

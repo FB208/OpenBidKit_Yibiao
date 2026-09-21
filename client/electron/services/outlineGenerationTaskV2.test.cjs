@@ -296,19 +296,7 @@ test('独立成册末级小节目标至少覆盖每个技术分支', () => {
   assert.equal(enforceMinimumLeafTarget(4, 0, 6), 6);
   assert.equal(enforceMinimumLeafTarget(10, 2, 5), 10);
   assert.equal(enforceMinimumLeafTarget(null, 0, 6), null);
-  assert.equal(enforceMinimumLeafTarget(2, 0, 1, {
-    maximumWords: 4000,
-    sectionWords: 3000,
-    strictSectionWords: true,
-  }), 1);
-  assert.throws(
-    () => enforceMinimumLeafTarget(4, 0, 6, {
-      maximumWords: 4000,
-      sectionWords: 1000,
-      strictSectionWords: true,
-    }),
-    /最多容纳 5 个 AI 生成小节，但独立成册目录至少需要 6 个/,
-  );
+  assert.equal(enforceMinimumLeafTarget(2, 0, 1), 2);
 });
 
 test('最终审核直接收到四份完整最新材料，与写回文件一致，覆盖直接审核及数量确认后的审核', async () => {

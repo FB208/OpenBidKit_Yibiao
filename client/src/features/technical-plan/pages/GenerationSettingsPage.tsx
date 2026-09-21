@@ -48,7 +48,6 @@ interface WordControlDraft {
   minimumWords: string;
   maximumWords: string;
   sectionWords: string;
-  strictSectionWords: boolean;
 }
 
 const tabs: Array<{ id: GenerationSettingsTab; label: string }> = [
@@ -163,7 +162,6 @@ function normalizeWordControlDraft(values: WordControlDraft) {
     minimumWords,
     maximumWords,
     sectionWords,
-    strictSectionWords: sectionWords > 0 && values.strictSectionWords,
   };
   if (minimumWords > 0 && maximumWords > 0 && maximumWords < minimumWords) {
     throw new Error('最多字数不能低于最少字数');
@@ -191,8 +189,7 @@ function areWordControlOptionsEqual(left?: OutlineWordControlOptions, right?: Ou
   return Boolean(left && right
     && left.minimumWords === right.minimumWords
     && left.maximumWords === right.maximumWords
-    && left.sectionWords === right.sectionWords
-    && left.strictSectionWords === right.strictSectionWords);
+    && left.sectionWords === right.sectionWords);
 }
 
 function getInitialExpandedKnowledgeFolders(index: KnowledgeBaseIndex) {
@@ -249,7 +246,6 @@ function GenerationSettingsPage({
   const [draftMinimumWords, setDraftMinimumWords] = useState(formatWordCountDraft(outlineWordControlOptions.minimumWords));
   const [draftMaximumWords, setDraftMaximumWords] = useState(formatWordCountDraft(outlineWordControlOptions.maximumWords));
   const [draftSectionWords, setDraftSectionWords] = useState(formatWordCountDraft(outlineWordControlOptions.sectionWords));
-  const [draftStrictSectionWords, setDraftStrictSectionWords] = useState(outlineWordControlOptions.strictSectionWords);
   const [wordControlBusy, setWordControlBusy] = useState(false);
   const [draftKnowledgeDocumentIds, setDraftKnowledgeDocumentIds] = useState<string[]>(referenceKnowledgeDocumentIds);
   const [knowledgeSearch, setKnowledgeSearch] = useState('');
@@ -283,7 +279,6 @@ function GenerationSettingsPage({
     minimumWords: parsedDraftMinimumWords,
     maximumWords: parsedDraftMaximumWords,
     sectionWords: parsedDraftSectionWords,
-    strictSectionWords: parsedDraftSectionWords > 0 && draftStrictSectionWords,
   };
   const wordControlRequiresRegeneration = Boolean(
     hasOutlineData && !areWordControlOptionsEqual(normalizedDraftOptions, outlineWordControlSnapshot),
@@ -301,7 +296,6 @@ function GenerationSettingsPage({
     setDraftMinimumWords(formatWordCountDraft(outlineWordControlOptions.minimumWords));
     setDraftMaximumWords(formatWordCountDraft(outlineWordControlOptions.maximumWords));
     setDraftSectionWords(formatWordCountDraft(outlineWordControlOptions.sectionWords));
-    setDraftStrictSectionWords(outlineWordControlOptions.strictSectionWords);
   }, [outlineWordControlOptions]);
 
   useEffect(() => {
@@ -444,7 +438,6 @@ function GenerationSettingsPage({
       minimumWords: draftMinimumWords,
       maximumWords: draftMaximumWords,
       sectionWords: draftSectionWords,
-      strictSectionWords: draftStrictSectionWords,
       ...overrides,
     };
     let options: OutlineWordControlOptions;
@@ -458,7 +451,6 @@ function GenerationSettingsPage({
     setDraftMinimumWords(formatWordCountDraft(options.minimumWords));
     setDraftMaximumWords(formatWordCountDraft(options.maximumWords));
     setDraftSectionWords(formatWordCountDraft(options.sectionWords));
-    setDraftStrictSectionWords(options.strictSectionWords);
     if (areWordControlOptionsEqual(options, outlineWordControlOptions)) return;
 
     try {
@@ -469,7 +461,6 @@ function GenerationSettingsPage({
       setDraftMinimumWords(formatWordCountDraft(outlineWordControlOptions.minimumWords));
       setDraftMaximumWords(formatWordCountDraft(outlineWordControlOptions.maximumWords));
       setDraftSectionWords(formatWordCountDraft(outlineWordControlOptions.sectionWords));
-      setDraftStrictSectionWords(outlineWordControlOptions.strictSectionWords);
       showToast(error instanceof Error ? error.message : '保存篇幅设置失败', 'error');
     } finally {
       setWordControlBusy(false);
@@ -884,34 +875,22 @@ function GenerationSettingsPage({
                     }} />
                   </label>
                   <label>
-                    <span>每小节字数（万）</span>
+                    <span>每小节建议字数（万）</span>
                     <input inputMode="decimal" value={draftSectionWords} disabled={outlineConfigLocked || wordControlBusy} onChange={(event) => {
                       if (!/^\d*(?:\.\d{0,4})?$/.test(event.target.value)) return;
                       setDraftSectionWords(event.target.value);
                     }} onKeyDown={blurInputOnEnter} onBlur={() => {
                       const sectionWords = parseWordCountDraft(draftSectionWords) ?? 0;
                       const value = formatWordCountDraft(sectionWords);
-                      const strictSectionWords = sectionWords > 0 && draftStrictSectionWords;
                       setDraftSectionWords(value);
-                      setDraftStrictSectionWords(strictSectionWords);
-                      void saveWordControlOptions({ sectionWords: value, strictSectionWords });
+                      void saveWordControlOptions({ sectionWords: value });
                     }} />
                   </label>
                 </div>
                 <small className="outline-word-control-help">
-                  <span>填2代表20000字，0.15代表1500字，默认0表示不控制，AI默认生成多少就是多少。</span>
-                  <span>如果<strong className="outline-word-control-highlight">您使用的不是gpt-5.6-sol</strong>，推荐按照您模型的能力上限填写每小节字数，否则扩写过程会非常漫长。</span>
+                  <span>填2代表20000字，0.15代表1500字，默认0表示不限制；每小节字数仅作为目录估算和写作建议。</span>
+
                 </small>
-                <div className="content-generation-config-row">
-                  <span>
-                    <strong>强控小节字数</strong>
-                    <small>{draftStrictSectionWords ? '强制控制每小节字数必须是预设值的正负 20%' : '仅控制总字数'}</small>
-                  </span>
-                  <AppSwitch checked={draftStrictSectionWords} onCheckedChange={(checked) => {
-                    setDraftStrictSectionWords(checked);
-                    void saveWordControlOptions({ strictSectionWords: checked });
-                  }} disabled={outlineConfigLocked || wordControlBusy || parsedDraftSectionWords === 0} aria-label="强控小节字数，允许范围为预设值的正负 20%" />
-                </div>
                 <div className="outline-word-control-estimate">
                   <div className="outline-word-control-estimate-label">预估页数</div>
                   <div className="outline-word-control-estimate-value">

@@ -51,7 +51,6 @@ export const CONFIG_USAGE_FIELDS = [
   { key: 'minimumWords' },
   { key: 'maximumWords' },
   { key: 'sectionWords' },
-  { key: 'strictSectionWords' },
   { key: 'contentConcurrencies' },
   { key: 'contentGenerationActions' },
   { key: 'enableConsistencyAudit' },

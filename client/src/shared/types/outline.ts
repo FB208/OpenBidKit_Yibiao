@@ -29,14 +29,12 @@ export interface OutlineWordControlOptions {
   minimumWords: number;
   maximumWords: number;
   sectionWords: number;
-  strictSectionWords: boolean;
 }
 
 export const DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS: OutlineWordControlOptions = {
   minimumWords: 0,
   maximumWords: 0,
   sectionWords: 0,
-  strictSectionWords: false,
 };
 
 export interface OutlineData {

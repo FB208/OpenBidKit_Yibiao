@@ -1,7 +1,7 @@
 const {
   createPiJsonValidationTool,
   createPiJsonValidator,
-  withAutomaticJsonValidation,
+  withFileWriteHooks,
 } = require('./piJsonValidationTool.cjs');
 const {
   createPiUserQuestionTool,
@@ -48,7 +48,7 @@ function normalizeOutputLimit(contextLength) {
 }
 
 // 创建隔离的 Pi Session；持久任务可在后续完整执行中重新打开原 Session。
-async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, reportTaskFailure, openXmlTool, createTools, summaryEnabled = true, isFinalToolCall, autoValidateJson = false }) {
+async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, reportTaskFailure, openXmlTool, createTools, activeTools, beforeToolCall, beforeFileWrite, summaryEnabled = true, isFinalToolCall, autoValidateJson = false }) {
   const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
@@ -154,35 +154,51 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
       ? codingAgent.SessionManager.create(workspaceDir, sessionsDir)
       : codingAgent.SessionManager.inMemory(workspaceDir);
   // 业务工具按调用注入，公共 Pi 层不依赖业务服务。
-  const taskTools = (createTools?.({ Type: typebox.Type, workspaceDir }) || []).map(tool => codingAgent.defineTool(tool));
+  let session;
+  let requestedTools;
+  // 恢复任务可在创建时设定权限；运行中切换使用 Pi 的工具列表接口。
+  const setActiveTools = toolNames => {
+    requestedTools = toolNames;
+    session?.setActiveToolsByName(toolNames);
+  };
+  const taskTools = (createTools?.({ Type: typebox.Type, workspaceDir, setActiveTools }) || []).map(tool => codingAgent.defineTool(tool));
   let customTools = [bashTool, jsonValidationTool, userQuestionTool, taskFailureTool, ...(openXmlCustomTool ? [openXmlCustomTool] : []), ...taskTools];
-  if (autoValidateJson) {
+  if (autoValidateJson || beforeFileWrite) {
+    const hooks = { validator: autoValidateJson ? jsonValidator : undefined, beforeWrite: beforeFileWrite };
     customTools.push(
-      withAutomaticJsonValidation(codingAgent.createWriteToolDefinition, workspaceDir, jsonValidator),
-      withAutomaticJsonValidation(codingAgent.createEditToolDefinition, workspaceDir, jsonValidator),
+      withFileWriteHooks(codingAgent.createWriteToolDefinition, workspaceDir, hooks),
+      withFileWriteHooks(codingAgent.createEditToolDefinition, workspaceDir, hooks),
     );
   }
   if (summaryEnabled === false && !isFinalToolCall) {
     customTools = [
       codingAgent.createReadToolDefinition(workspaceDir, { autoResizeImages: false }),
-      ...(!autoValidateJson ? [codingAgent.createEditToolDefinition(workspaceDir), codingAgent.createWriteToolDefinition(workspaceDir)] : []),
+      ...(!autoValidateJson && !beforeFileWrite ? [codingAgent.createEditToolDefinition(workspaceDir), codingAgent.createWriteToolDefinition(workspaceDir)] : []),
       codingAgent.createFindToolDefinition(workspaceDir),
       codingAgent.createLsToolDefinition(workspaceDir),
       ...customTools,
     ].map(withTaskCompletionParameter);
   }
-  const { session } = await codingAgent.createAgentSession({
+  ({ session } = await codingAgent.createAgentSession({
     cwd: workspaceDir,
     agentDir: environment.layout.agentDir,
     model,
     modelRuntime,
     thinkingLevel: 'off',
-    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user', AGENT_TASK_FAILURE_TOOL_NAME, ...(openXmlCustomTool ? [OPENXML_TOOL_NAME] : []), ...taskTools.map(tool => tool.name)],
+    tools: requestedTools || activeTools || ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user', AGENT_TASK_FAILURE_TOOL_NAME, ...(openXmlCustomTool ? [OPENXML_TOOL_NAME] : []), ...taskTools.map(tool => tool.name)],
     customTools,
     resourceLoader,
     settingsManager,
     sessionManager,
-  });
+  }));
+  if (beforeToolCall) {
+    // 列表切换只影响下一轮；逐次执行前还须拦住当前轮已排定的禁用调用。
+    const previousBeforeToolCall = session.agent.beforeToolCall;
+    session.agent.beforeToolCall = async (context, signal) => {
+      await beforeToolCall(context, signal);
+      return previousBeforeToolCall?.(context, signal);
+    };
+  }
   if (autoValidateJson) {
     // Pi 默认仅把抛出的异常标为失败；转发校验失败标记，同时保留工具内容和编辑差异。
     const previousAfterToolCall = session.agent.afterToolCall;

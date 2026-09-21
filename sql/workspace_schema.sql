@@ -83,7 +83,6 @@ CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
   minimum_words INTEGER NOT NULL DEFAULT 0,
   maximum_words INTEGER NOT NULL DEFAULT 0,
   section_words INTEGER NOT NULL DEFAULT 0,
-  strict_section_words INTEGER NOT NULL DEFAULT 0,
   global_facts_mode TEXT NOT NULL DEFAULT 'fabricate',
   -- v29 当前项目明确选择的 Word 导出模板。
   export_template_id TEXT NOT NULL DEFAULT '',

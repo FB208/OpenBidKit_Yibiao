@@ -572,7 +572,9 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
       .catch((error) => {
         const normalizedError = normalizeRunError(error);
         const persistentTask = Boolean(taskKey);
-        const shouldReport = !runtimePayload.signal?.aborted
+        // 可恢复子任务由父 Agent 接收错误；运行统计保留，最终失败诊断由父任务上报。
+        const shouldReport = runtimePayload.failure_handled_by_parent !== true
+          && !runtimePayload.signal?.aborted
           && !['AGENT_DISCONNECTED', 'TASK_CANCELLED'].includes(normalizedError?.code);
         if (shouldReport) {
           void agentErrorReporter.reportFailure({
@@ -678,7 +680,8 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
         return startTask({
           ...payload,
           ...(queueScopeId && !payload.queueScopeId && !payload.queue_scope_id ? { queue_scope_id: queueScopeId } : {}),
-          ...((payload.primary_session === true || primarySessionRequested) ? { primary_session: true } : {}),
+          // 子任务可以显式拒绝继承主会话身份，队列和取消作用域仍照常继承。
+          primary_session: payload.primary_session ?? primarySessionRequested,
           ...(taskSignal ? { signal: taskSignal } : {}),
         }, userTaskContextProvider);
       },

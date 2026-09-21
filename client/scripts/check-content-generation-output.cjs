@@ -71,6 +71,7 @@ async function checkTask(directory, outputDir) {
     updateTask: checkpoint, checkpointTask: checkpoint,
     agentService: {
       hasPersistentTaskSession: () => true, updatePersistentTask() {},
+      loadPersistentTask: () => ({ state: {} }),
       async runTask(payload) {
         aiRuns++;
         const [generate] = payload.create_tools({ Type, workspaceDir: directory });

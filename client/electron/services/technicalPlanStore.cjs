@@ -46,7 +46,6 @@ const defaultOutlineWordControlOptions = Object.freeze({
   minimumWords: 0,
   maximumWords: 0,
   sectionWords: 0,
-  strictSectionWords: false,
 });
 const defaultHtmlImageTypes = '甘特图、进度网络图、组织架构图、泳道图、RACI 职责矩阵、风险矩阵、系统架构与拓扑图、WBS 工作分解结构图、鱼骨图、柱状图、折线图、饼图';
 const defaultExportTemplateId = '';
@@ -195,7 +194,6 @@ function normalizeOutlineWordControlOptions(value) {
     minimumWords: normalizeNonNegativeInteger(value?.minimumWords),
     maximumWords: normalizeNonNegativeInteger(value?.maximumWords),
     sectionWords,
-    strictSectionWords: sectionWords > 0 && Boolean(value?.strictSectionWords),
   };
 }
 
@@ -748,13 +746,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     db.prepare(`
       INSERT INTO technical_plan_generation_config (
         id, bid_analysis_mode, bid_section_mode, outline_mode, outline_expansion_mode,
-        minimum_words, maximum_words, section_words, strict_section_words, global_facts_mode, export_template_id, export_template_scope,
+        minimum_words, maximum_words, section_words, global_facts_mode, export_template_id, export_template_scope,
         use_ai_images, max_ai_images, use_mermaid_images, max_mermaid_images,
         use_html_images, max_html_images, html_image_types, table_requirement, image_quantity,
         created_at, updated_at
       ) VALUES (
         1, @bid_analysis_mode, @bid_section_mode, @outline_mode, @outline_expansion_mode,
-        @minimum_words, @maximum_words, @section_words, @strict_section_words, @global_facts_mode, @export_template_id, @export_template_scope,
+        @minimum_words, @maximum_words, @section_words, @global_facts_mode, @export_template_id, @export_template_scope,
         @use_ai_images, @max_ai_images, @use_mermaid_images, @max_mermaid_images,
         @use_html_images, @max_html_images, @html_image_types, @table_requirement, @image_quantity,
         @created_at, @updated_at
@@ -767,7 +765,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       minimum_words: defaults.outlineWordControlOptions.minimumWords,
       maximum_words: defaults.outlineWordControlOptions.maximumWords,
       section_words: defaults.outlineWordControlOptions.sectionWords,
-      strict_section_words: toDbBool(defaults.outlineWordControlOptions.strictSectionWords),
       global_facts_mode: defaults.globalFactsMode,
       export_template_id: defaults.exportTemplateId,
       export_template_scope: defaults.exportTemplateScope,
@@ -813,7 +810,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         minimumWords: row.minimum_words,
         maximumWords: row.maximum_words,
         sectionWords: row.section_words,
-        strictSectionWords: fromDbBool(row.strict_section_words),
       },
       referenceKnowledgeDocumentIds: loadGenerationReferenceDocumentIds(),
       globalFactsMode: row.global_facts_mode,
@@ -847,7 +843,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         minimum_words = @minimum_words,
         maximum_words = @maximum_words,
         section_words = @section_words,
-        strict_section_words = @strict_section_words,
         global_facts_mode = @global_facts_mode,
         export_template_id = @export_template_id,
         export_template_scope = @export_template_scope,
@@ -870,7 +865,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       minimum_words: wordControl.minimumWords,
       maximum_words: wordControl.maximumWords,
       section_words: wordControl.sectionWords,
-      strict_section_words: toDbBool(wordControl.strictSectionWords),
       global_facts_mode: normalized.globalFactsMode,
       export_template_id: normalized.exportTemplateId,
       export_template_scope: normalized.exportTemplateScope,

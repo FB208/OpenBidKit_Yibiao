@@ -153,22 +153,28 @@ function createPiJsonValidator({ workspaceDir, validationSchemas = {}, trackFail
   };
 }
 
-// 复用 Pi 文件操作及其同文件队列，在写入回调内校验，保留 edit 的差异结果。
-function withAutomaticJsonValidation(createTool, workspaceDir, validator) {
+// 复用 Pi 原生编辑及同文件队列：业务保护在落盘前，JSON 自动校验在落盘后。
+function withFileWriteHooks(createTool, workspaceDir, { validator, beforeWrite } = {}) {
   const tool = createTool(workspaceDir);
   return {
     ...tool,
-    description: `${tool.description}\n本次任务已开启 JSON 自动校验：有预置 Schema 的文件写入或修改后立即校验；失败时文件仍已修改，请继续修复。已通过自动校验的内容无需再调用 json-validation。`,
+    description: `${tool.description}${validator ? '\n本次任务已开启 JSON 自动校验：有预置 Schema 的文件写入或修改后立即校验；失败时文件仍已修改，请继续修复。已通过自动校验的内容无需再调用 json-validation。' : ''}`,
     execute: async (...args) => {
       let validationResult;
+      let originalContent;
       const operationTool = createTool(workspaceDir, {
         operations: {
           mkdir: (directory) => fs.promises.mkdir(directory, { recursive: true }),
-          readFile: (filePath) => fs.promises.readFile(filePath),
+          readFile: async (filePath) => {
+            const buffer = await fs.promises.readFile(filePath);
+            originalContent = buffer.toString('utf8');
+            return buffer;
+          },
           access: (filePath) => fs.promises.access(filePath, fs.constants.R_OK | fs.constants.W_OK),
           writeFile: async (filePath, content) => {
+            await beforeWrite?.({ filePath, content, originalContent, toolName: tool.name });
             await fs.promises.writeFile(filePath, content, 'utf8');
-            if (validator.hasPreset(filePath)) validationResult = validator.validateContent(filePath, content);
+            if (validator?.hasPreset(filePath)) validationResult = validator.validateContent(filePath, content);
           },
         },
       });
@@ -215,5 +221,5 @@ module.exports = {
   JSON_VALIDATION_TOOL_NAME,
   createPiJsonValidator,
   createPiJsonValidationTool,
-  withAutomaticJsonValidation,
+  withFileWriteHooks,
 };

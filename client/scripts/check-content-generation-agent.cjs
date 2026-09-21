@@ -46,7 +46,7 @@ async function main() {
       outline, targets, plans: Object.fromEntries(targets.map(({ item }) => [item.id, { plan: { writing_focus: '落实责任', knowledge: { item_ids: ['doc::k1'] }, table: { needed: false, purpose: '' }, image_needed: true, image_suitability_score: 8 } }])),
       generationOptions: { imageQuantity: 'light', useAiImages: true, useHtmlImages: true, useMermaidImages: false, htmlImageTypes: '甘特图、风险矩阵' },
       projectOverview: '某地建设项目', globalFacts: [{ title: '工期', content: '六十天' }], globalFactsMode: 'placeholder',
-      wordControl: { minimumWords: 1000, maximumWords: 2000, sectionWords: 800, sectionMinimumWords: 640, sectionMaximumWords: 960, strictSectionWords: true },
+      wordControl: { minimumWords: 1000, maximumWords: 2000, sectionWords: 800 },
       requirement: '突出交付', template: { template_id: 'chosen', config: { paper_size: 'A3' } }, documentIds: ['doc'],
       knowledgeBaseService: { readReferences(ids, options) {
         assert.deepEqual(ids, ['doc']);
@@ -78,6 +78,7 @@ async function main() {
         } },
         agentService: {
           hasPersistentTaskSession: () => resume,
+          loadPersistentTask: () => ({ state: {} }),
           updatePersistentTask() {},
           async runTask(payload) {
             assert.doesNotMatch(payload.prompt, /知识库|索引|编排知识条目/);
@@ -113,7 +114,7 @@ async function main() {
     assert.deepEqual(input.targets.map(item => item.id), ['e0000000-0000-4000-8000-000000000011', 'f0000000-0000-4000-8000-000000000012']);
     assert.equal(input.outline[1].content_mode, 'manual-fill');
     assert.match(input.word_requirements, /1000.*2000/);
-    assert.match(input.word_requirements, /640～960.*800/);
+    assert.match(input.word_requirements, /建议约 800 字.*不设小节硬性上下限/);
     assert.equal(input.targets[0].content_plan.image_suitability_score, 8);
     assert.match(input.image_requirements, /少图.*1～3/);
     assert.match(input.image_requirements, /Mermaid 图片（mermaid）不允许/);
@@ -140,7 +141,7 @@ async function main() {
         assert.ok(request.messages[0].content.includes(decisions.image_requirements));
         return '<!-- yibiao:block -->\n<p id="scenario">项目实施内容</p>';
       } } }, { Type, workspaceDir });
-      assert.deepEqual(scenarioTools.map(tool => tool.name), ['generate-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
+      assert.deepEqual(scenarioTools.map(tool => tool.name), ['generate-sections', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
       const result = await scenarioTools[0].execute('settings', { sections: [{ section_id: 'e0000000-0000-4000-8000-000000000011', instructions: '落实责任', references: '' }] });
       assert.ok(received);
       assert.equal(result.details.results[0].status, 'success');
@@ -287,6 +288,7 @@ async function main() {
         resume, hasKnowledgeBase: true, signal, aiService, buildFiles: () => { built++; return files; },
         agentService: {
           hasPersistentTaskSession: () => resume,
+          loadPersistentTask: () => ({ state: {} }),
           updatePersistentTask() { updates++; },
           async runTask(payload) {
             assert.equal(payload.persistent_task.mode, resume ? 'resume' : 'create');
@@ -297,7 +299,7 @@ async function main() {
             assert.doesNotMatch(payload.prompt, /本次使用已还原底稿/);
             assert.match(payload.prompt, /知识库\/包含用户选中的全部文档/);
             assert.match(payload.prompt, /image_requirements（用户配图要求）/);
-            assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
+            assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
             payload.validateOutput({}, { workspace_dir: workspaceDir });
             return { workspace_dir: workspaceDir };
           },
@@ -307,12 +309,82 @@ async function main() {
       assert.equal(updates, resume ? 2 : 1);
       assert.equal(result.sections[0].words, 6);
     }
+    await checkImageProtectionLifecycle({ Type, workspaceDir, files, signal });
     fs.unlinkSync(firstFile);
     assert.throws(() => readContentGenerationResult(workspaceDir), /ENOENT/);
     console.log('正文 Agent：还原底稿及原图、知识库有无选择、页面图片设置联动、配图需求传递、输入、并发、暂停恢复、三类图片工具及最终图片引用检查通过。');
   } finally {
     fs.rmSync(workspaceDir, { recursive: true, force: true });
   }
+}
+
+// 使用真实正文适配器核对保护启用、提前提交及暂停恢复，不启动模型或改动输入快照。
+async function checkImageProtectionLifecycle({ Type, workspaceDir, files, signal }) {
+  const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
+  const sectionFile = path.join(workspaceDir, decisions.targets[0].file);
+  const original = fs.readFileSync(sectionFile, 'utf8');
+  const pauseError = new Error('模拟暂停');
+  let state = {};
+  let activeTools;
+  let action;
+  const agentService = {
+    hasPersistentTaskSession: () => true,
+    loadPersistentTask: () => ({ state }),
+    updatePersistentTask(_key, partial) { state = { ...state, ...partial }; },
+    async runTask(payload) {
+      const tools = payload.create_tools({ Type, workspaceDir, setActiveTools: names => { activeTools = names; } });
+      await action(payload, tools);
+      return { workspace_dir: workspaceDir };
+    },
+  };
+  const run = resume => runContentGenerationAgent({ resume, hasKnowledgeBase: true, signal, aiService: {}, agentService, buildFiles: () => files });
+  const checkBlocked = payload => {
+    for (const name of ['bash', 'generate-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']) {
+      assert.equal(activeTools.includes(name), false);
+      assert.throws(() => payload.before_tool_call({ toolCall: { name }, args: {} }), /扩缩写期间不能/);
+    }
+    assert.throws(() => payload.before_file_write({ toolName: 'write', filePath: sectionFile, content: '<p>覆盖正文</p>' }), /扩缩写只能/);
+  };
+  action = async (payload, tools) => {
+    // 生成阶段没有图片写入限制；未完成配图不能提前锁定工具。
+    payload.before_tool_call({ toolCall: { name: 'generate-image' }, args: {} });
+    payload.before_file_write({ toolName: 'write', filePath: sectionFile, content: '<p>仍在生成</p>' });
+    const check = tools.find(tool => tool.name === 'check-word-count');
+    fs.writeFileSync(sectionFile, `${original}<img alt="未完成图片">`, 'utf8');
+    try {
+      await assert.rejects(check.execute(), /尚未生成/);
+      assert.equal(state.word_adjustment_started, undefined);
+      assert.equal(activeTools, undefined);
+    } finally { fs.writeFileSync(sectionFile, original, 'utf8'); }
+    await check.execute();
+    assert.equal(state.word_adjustment_started, true);
+    checkBlocked(payload);
+    throw pauseError;
+  };
+  await assert.rejects(run(false), error => error === pauseError);
+  action = async payload => {
+    assert.equal(payload.files.length, 0);
+    assert.match(payload.prompt, /本次恢复时已处于图片保护阶段/);
+    checkBlocked(payload);
+    payload.validateOutput({}, { workspace_dir: workspaceDir });
+  };
+  await run(true);
+  assert.equal(state.word_adjustment_started, true);
+  assert.equal(fs.readFileSync(sectionFile, 'utf8'), original);
+
+  // 未调用字数工具便提前提交，程序要求继续调整时也必须先启用保护。
+  state = {};
+  activeTools = undefined;
+  action = async payload => {
+    payload.validateOutput({}, { workspace_dir: workspaceDir });
+    assert.equal(state.word_adjustment_started, undefined);
+    const continuation = payload.continueTask({}, { workspace_dir: workspaceDir });
+    assert.ok(continuation.prompt);
+    assert.equal(state.word_adjustment_started, true);
+    checkBlocked(payload);
+    throw pauseError;
+  };
+  await assert.rejects(run(false), error => error === pauseError);
 }
 
 // 原图样例供正文请求模拟和真实受限 HTML 校验共同使用。
@@ -331,7 +403,7 @@ async function checkRestoredContent({ Type, workspaceDir, fileOptions, signal })
   const restoredDir = path.join(workspaceDir, '还原输入检查');
   const options = { ...fileOptions, hasOriginalPlan: true, restoredContents: { 'e0000000-0000-4000-8000-000000000011': source }, existingTotalWords: 2100,
     generationOptions: { ...fileOptions.generationOptions, imageQuantity: 'none', useAiImages: false, useHtmlImages: false, useMermaidImages: false },
-    wordControl: { ...fileOptions.wordControl, sectionWords: 10, sectionMinimumWords: 8, sectionMaximumWords: 12 },
+    wordControl: { ...fileOptions.wordControl, sectionWords: 10 },
   };
   const files = buildContentGenerationFiles(options);
   const decisions = JSON.parse(files.find(file => file.path === '正文编排决策.json').content);
@@ -374,6 +446,7 @@ async function checkRestoredContent({ Type, workspaceDir, fileOptions, signal })
       } },
       agentService: {
         hasPersistentTaskSession: () => resume,
+          loadPersistentTask: () => ({ state: {} }),
         updatePersistentTask() {},
         async runTask(payload) {
           assert.match(payload.prompt, /本次使用已还原底稿/);

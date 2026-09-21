@@ -263,9 +263,6 @@ function ContentEditPage({
   const showIllustrationStats = developerMode && Boolean(contentIllustrationPlan);
   const planning = phaseVisible && contentStats?.phase === 'planning';
   const restoring = phaseVisible && contentStats?.phase === 'restoring';
-  const sectionWordAdjusting = phaseVisible && contentStats?.phase === 'section-word-adjusting';
-  const finalSectionWordAdjusting = phaseVisible && contentStats?.phase === 'final-section-word-adjusting';
-  const totalWordAdjusting = phaseVisible && contentStats?.phase === 'total-word-adjusting';
   const originalAuditing = phaseVisible && contentStats?.phase === 'original-auditing';
   const auditing = phaseVisible && contentStats?.phase === 'auditing';
   const tableCleaning = phaseVisible && contentStats?.phase === 'table-cleaning';
@@ -297,30 +294,10 @@ function ContentEditPage({
   const minimumWords = contentStats?.minimum_words ?? outlineWordControlSnapshot?.minimumWords ?? 0;
   const maximumWords = contentStats?.maximum_words ?? outlineWordControlSnapshot?.maximumWords ?? 0;
   const currentWords = contentStats?.current_words ?? totalWords;
-  const sectionAdjustmentTotal = contentStats?.section_adjustment_total || 0;
-  const sectionAdjustmentCompleted = contentStats?.section_adjustment_completed || 0;
-  const sectionAdjustmentActiveCount = contentStats?.section_adjustment_active_count || 0;
-  const sectionAdjustmentItemId = contentStats?.section_adjustment_item_id || '';
-  const sectionAdjustmentNumber = findItem(outlineData?.outline || [], sectionAdjustmentItemId)?.number;
-  const sectionAdjustmentRound = contentStats?.section_adjustment_round || 0;
-  const sectionAdjustmentRoundTotal = contentStats?.section_adjustment_round_total || 3;
-  const sectionAdjustmentCurrentWords = sectionAdjustmentItemId ? outlineMeta.get(sectionAdjustmentItemId)?.words || 0 : 0;
-  const totalAdjustmentRound = contentStats?.total_adjustment_round || 0;
-  const totalAdjustmentRoundTotal = contentStats?.total_adjustment_round_total || 3;
-  const totalAdjustmentRoundText = contentStats?.total_adjustment_mode === 'expand'
-    ? `第 ${totalAdjustmentRound} 轮`
-    : `第 ${totalAdjustmentRound}/${totalAdjustmentRoundTotal} 轮`;
-  const totalAdjustmentBatchTotal = contentStats?.total_adjustment_batch_total || 0;
-  const totalAdjustmentBatchCompleted = contentStats?.total_adjustment_batch_completed || 0;
-  const totalAdjustmentBatchFailed = contentStats?.total_adjustment_batch_failed || 0;
-  const totalAdjustmentActiveCount = contentStats?.total_adjustment_active_count || 0;
-  const totalAdjustmentItemId = contentStats?.total_adjustment_item_id || '';
-  const totalAdjustmentNumber = findItem(outlineData?.outline || [], totalAdjustmentItemId)?.number;
-  const totalAdjustmentRemainingWords = contentStats?.total_adjustment_remaining_words || 0;
   const canRetryContentCorrection = taskFailed
     && leaves.length > 0
     && resolvedCount === leaves.length
-    && ['original-auditing', 'auditing', 'table-cleaning', 'final-section-word-adjusting', 'total-word-adjusting', 'illustration-planning', 'illustration-generating'].includes(String(contentStats?.phase || ''));
+    && ['original-auditing', 'auditing', 'table-cleaning', 'illustration-planning', 'illustration-generating'].includes(String(contentStats?.phase || ''));
   const awaitingContentDecision = taskFailed && Boolean(contentStats?.awaiting_content_decision);
   const retryingWordConversion = taskFailed && ['sections-completed', 'word-converting'].includes(contentStats?.phase || '');
   const retryingIllustrationPlanning = canRetryContentCorrection && contentStats?.phase === 'illustration-planning';
@@ -368,41 +345,32 @@ function ContentEditPage({
   const illustrationGenerationStepLabel = contentStats?.illustration_generation_step_label || '';
   const illustrationGenerationCount = `HTML ${contentStats?.illustration_generation_html_completed || 0}/${contentStats?.illustration_generation_html_total || 0}，Mermaid ${contentStats?.illustration_generation_mermaid_completed || 0}/${contentStats?.illustration_generation_mermaid_total || 0}，AI ${contentStats?.illustration_generation_ai_completed || 0}/${contentStats?.illustration_generation_ai_total || 0}`;
   const wordTargetText = minimumWords > 0 && maximumWords > 0 ? `${minimumWords} 至 ${maximumWords} 字` : minimumWords > 0 ? `不少于 ${minimumWords} 字` : maximumWords > 0 ? `不超过 ${maximumWords} 字` : '未限制';
-  const wordAdjusting = sectionWordAdjusting || finalSectionWordAdjusting || totalWordAdjusting;
-  const sectionAdjustmentProgress = sectionAdjustmentTotal ? Math.round((sectionAdjustmentCompleted / sectionAdjustmentTotal) * 100) : 0;
-  const totalAdjustmentProgress = Math.min(100, Math.round((((Math.max(1, totalAdjustmentRound) - 1) + (totalAdjustmentBatchTotal ? totalAdjustmentBatchCompleted / totalAdjustmentBatchTotal : 0)) / totalAdjustmentRoundTotal) * 100));
   const htmlOutputProgress = progressDetail?.mode === 'html' || progressDetail?.mode === 'html-single';
   const currentProgressDetail = (phaseVisible || htmlOutputProgress) && progressDetail?.phase === contentStats?.phase ? progressDetail : undefined;
-  const displayProgress = htmlOutputProgress ? task?.progress || 0 : currentProgressDetail ? currentProgressDetail.phase_progress : planning ? planningProgress : sectionWordAdjusting || finalSectionWordAdjusting ? sectionAdjustmentProgress : totalWordAdjusting ? totalAdjustmentProgress : contentCorrecting ? contentCorrectionProgress : illustrationPlanning ? illustrationPlanningProgress : illustrationGenerating ? illustrationGenerationProgress : progress;
-  const displayProgressLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '编排统计' : restoring ? '原方案还原' : sectionWordAdjusting ? '小节字数调整' : finalSectionWordAdjusting ? '最终小节复核' : totalWordAdjusting ? '全文字数调整' : contentCorrecting ? '内容矫正' : illustrationPlanning ? '图片编排' : illustrationGenerating ? '图片生成' : '生成统计';
+  const displayProgress = htmlOutputProgress ? task?.progress || 0 : currentProgressDetail ? currentProgressDetail.phase_progress : planning ? planningProgress : contentCorrecting ? contentCorrectionProgress : illustrationPlanning ? illustrationPlanningProgress : illustrationGenerating ? illustrationGenerationProgress : progress;
+  const displayProgressLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '编排统计' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : illustrationPlanning ? '图片编排' : illustrationGenerating ? '图片生成' : '生成统计';
   const displayProgressCount = htmlOutputProgress && currentProgressDetail
     ? `${currentProgressDetail.completed}/${currentProgressDetail.total}`
     : planning
     ? `${planningCompleted}/${planningTotal}`
     : restoring && currentProgressDetail
       ? `${currentProgressDetail.completed}/${currentProgressDetail.total}`
-    : sectionWordAdjusting || finalSectionWordAdjusting
-      ? `${sectionAdjustmentCompleted}/${sectionAdjustmentTotal}`
-      : totalWordAdjusting
-        ? `${currentWords} 字`
-        : contentCorrecting
-          ? contentCorrectionCount
-          : illustrationPlanning
-            ? `${illustrationPlanningStepCompleted}/${illustrationPlanningStepTotal}`
-            : illustrationGenerating
-              ? `${illustrationGenerationCompleted}/${illustrationGenerationTotal}`
-            : `${resolvedCount}/${leaves.length}`;
-  const progressPhaseLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '正文编排' : restoring ? '原方案还原' : sectionWordAdjusting ? '小节字数调整' : finalSectionWordAdjusting ? '最终小节复核' : totalWordAdjusting ? '全文字数调整' : contentCorrecting ? '内容矫正' : illustrationPlanning ? '全文图片编排' : illustrationGenerating ? '全文图片生成' : '正文生成';
+    : contentCorrecting
+      ? contentCorrectionCount
+      : illustrationPlanning
+        ? `${illustrationPlanningStepCompleted}/${illustrationPlanningStepTotal}`
+        : illustrationGenerating
+          ? `${illustrationGenerationCompleted}/${illustrationGenerationTotal}`
+          : `${resolvedCount}/${leaves.length}`;
+  const progressPhaseLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '正文编排' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : illustrationPlanning ? '全文图片编排' : illustrationGenerating ? '全文图片生成' : '正文生成';
   const progressTone = planning
     ? 'success'
-    : wordAdjusting
-      ? 'warning'
-      : contentCorrecting
-        ? 'sky'
-        : illustrationPlanning || illustrationGenerating
-          ? 'violet'
-          : 'primary';
-  const progressActive = taskInFlight && (htmlOutputProgress || planning || restoring || wordAdjusting || contentCorrecting || illustrationPlanning || illustrationGenerating);
+    : contentCorrecting
+      ? 'sky'
+      : illustrationPlanning || illustrationGenerating
+        ? 'violet'
+        : 'primary';
+  const progressActive = taskInFlight && (htmlOutputProgress || planning || restoring || contentCorrecting || illustrationPlanning || illustrationGenerating);
   const progressDescription = developerStageGate
     ? `${progressPhaseLabel}阶段已完成。可继续下一阶段，或从正文编排重新执行全部阶段。`
     : taskFailed
@@ -415,59 +383,43 @@ function ContentEditPage({
       ? paused
         ? `正文生成已暂停在原方案还原阶段，已完成 ${progressDetail?.completed || 0}/${progressDetail?.total || 0} 个小节。`
         : `${progressDetail?.step_label || '正在还原原方案内容'}，已完成 ${progressDetail?.completed || 0}/${progressDetail?.total || 0} 个小节。`
-    : sectionWordAdjusting
+    : originalAuditing
       ? paused
-        ? `小节字数调整已暂停，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
-        : sectionAdjustmentActiveCount > 1
-          ? `正在并发调整 ${sectionAdjustmentActiveCount} 个小节，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
-          : `正在进行小节字数调整：${sectionAdjustmentNumber || '当前小节'}，第 ${sectionAdjustmentRound}/${sectionAdjustmentRoundTotal} 轮，当前约 ${sectionAdjustmentCurrentWords} 字。`
-      : finalSectionWordAdjusting
+        ? `内容矫正已暂停在原方案覆盖 Agent 修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
+        : auditAgentFailedSections
+          ? `原方案覆盖 Agent 修复未完成：${auditAgentFailedSections} 个小节未完成审计。`
+          : auditAgentStepCompleted >= auditAgentStepTotal && auditAgentChangedSections
+            ? `原方案覆盖 Agent 修复完成：已回写 ${auditAgentChangedSections} 个小节。`
+            : `正在内容矫正：${auditAgentStepLabel || 'Agent 正在检查并补回原方案内容'}，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal || 5}。`
+    : auditing
+      ? paused
+        ? `内容矫正已暂停在 Agent 全文一致性修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
+        : auditAgentStepCompleted >= auditAgentStepTotal && auditAgentChangedSections
+          ? `Agent 一致性修复完成：已回写 ${auditAgentChangedSections} 个小节。`
+          : `正在内容矫正：${auditAgentStepLabel || 'Agent 正在审计并修复全文'}，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal || 5}。`
+      : tableCleaning
         ? paused
-          ? `最终小节复核已暂停，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
-          : sectionAdjustmentActiveCount > 1
-            ? `正在并发进行最终小节复核，当前处理 ${sectionAdjustmentActiveCount} 个，已完成 ${sectionAdjustmentCompleted}/${sectionAdjustmentTotal} 个小节。`
-            : `正在进行最终小节复核：${sectionAdjustmentNumber || '当前小节'}，第 ${sectionAdjustmentRound}/${sectionAdjustmentRoundTotal} 轮。`
-        : totalWordAdjusting
+          ? `内容矫正已暂停在表格清理阶段，已处理 ${tableCleanupCompleted}/${tableCleanupTotal} 个表格。`
+          : tableCleanupTotal
+            ? `正在内容矫正：将表格转换为普通文字描述，已处理 ${tableCleanupCompleted}/${tableCleanupTotal} 个表格，已转换 ${tableCleanupRewritten} 个${tableCleanupSkipped ? `，跳过 ${tableCleanupSkipped} 个` : ''}。`
+            : '正在内容矫正：检查正文中是否存在需要转换的表格。'
+        : illustrationPlanning
           ? paused
-            ? `全文字数调整已暂停，当前 ${currentWords} 字，目标 ${wordTargetText}，${totalAdjustmentRoundText}已完成 ${totalAdjustmentBatchCompleted}/${totalAdjustmentBatchTotal} 个小节。`
-            : `正在进行全文字数调整，当前 ${currentWords} 字，目标 ${wordTargetText}，${totalAdjustmentRoundText}已完成 ${totalAdjustmentBatchCompleted}/${totalAdjustmentBatchTotal} 个小节，正在处理 ${totalAdjustmentActiveCount} 个${totalAdjustmentNumber ? `（最近：${totalAdjustmentNumber}）` : ''}${totalAdjustmentBatchFailed ? `，失败 ${totalAdjustmentBatchFailed} 个` : ''}${totalAdjustmentRemainingWords ? `，仍需调整约 ${totalAdjustmentRemainingWords} 字` : ''}。`
-        : originalAuditing
+            ? `正文生成已暂停在全文图片编排阶段，步骤 ${illustrationPlanningStepCompleted}/${illustrationPlanningStepTotal}。${illustrationPlanningStepLabel}`
+            : `${illustrationPlanningStepLabel || 'Agent 正在阅读全文并编排图片'}，步骤 ${illustrationPlanningStepCompleted}/${illustrationPlanningStepTotal}${illustrationCandidateTotal ? `，候选 ${illustrationCandidateTotal} 项，保留 ${illustrationSelectedTotal} 项` : ''}。`
+          : illustrationGenerating
             ? paused
-              ? `内容矫正已暂停在原方案覆盖 Agent 修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
-              : auditAgentFailedSections
-                ? `原方案覆盖 Agent 修复未完成：${auditAgentFailedSections} 个小节未完成审计。`
-                : auditAgentStepCompleted >= auditAgentStepTotal && auditAgentChangedSections
-                  ? `原方案覆盖 Agent 修复完成：已回写 ${auditAgentChangedSections} 个小节。`
-                  : `正在内容矫正：${auditAgentStepLabel || 'Agent 正在检查并补回原方案内容'}，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal || 5}。`
-          : auditing
-            ? paused
-              ? `内容矫正已暂停在 Agent 全文一致性修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
-              : auditAgentStepCompleted >= auditAgentStepTotal && auditAgentChangedSections
-                ? `Agent 一致性修复完成：已回写 ${auditAgentChangedSections} 个小节。`
-                : `正在内容矫正：${auditAgentStepLabel || 'Agent 正在审计并修复全文'}，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal || 5}。`
-            : tableCleaning
-              ? paused
-                ? `内容矫正已暂停在表格清理阶段，已处理 ${tableCleanupCompleted}/${tableCleanupTotal} 个表格。`
-                : tableCleanupTotal
-                  ? `正在内容矫正：将表格转换为普通文字描述，已处理 ${tableCleanupCompleted}/${tableCleanupTotal} 个表格，已转换 ${tableCleanupRewritten} 个${tableCleanupSkipped ? `，跳过 ${tableCleanupSkipped} 个` : ''}。`
-                  : '正在内容矫正：检查正文中是否存在需要转换的表格。'
-              : illustrationPlanning
-                ? paused
-                  ? `正文生成已暂停在全文图片编排阶段，步骤 ${illustrationPlanningStepCompleted}/${illustrationPlanningStepTotal}。${illustrationPlanningStepLabel}`
-                  : `${illustrationPlanningStepLabel || 'Agent 正在阅读全文并编排图片'}，步骤 ${illustrationPlanningStepCompleted}/${illustrationPlanningStepTotal}${illustrationCandidateTotal ? `，候选 ${illustrationCandidateTotal} 项，保留 ${illustrationSelectedTotal} 项` : ''}。`
-                : illustrationGenerating
-                  ? paused
-                    ? `正文生成已暂停在图片生成阶段，已完成 ${illustrationGenerationCompleted}/${illustrationGenerationTotal} 项。${illustrationGenerationCount}`
-                    : `${illustrationGenerationStepLabel || '正在根据最终正文生成图片'}，已完成 ${illustrationGenerationCompleted}/${illustrationGenerationTotal} 项。${illustrationGenerationCount}`
-                : pausing
-                  ? '正在暂停正文生成，已发出的 AI 请求完成后会停止调度新任务。'
-                  : running
-                    ? latestTaskLog || '正文生成任务正在运行。'
-                    : paused
-                      ? '正文生成已暂停，可导出当前已完成内容或点击继续。'
-                      : resolvedCount
-                        ? `已生成 ${completedCount} 个小节${ignoredCount ? `，已忽略 ${ignoredCount} 个小节` : ''}，共 ${totalWords} 字。`
-                        : '点击生成正文后，目录会实时显示每个小节状态。';
+              ? `正文生成已暂停在图片生成阶段，已完成 ${illustrationGenerationCompleted}/${illustrationGenerationTotal} 项。${illustrationGenerationCount}`
+              : `${illustrationGenerationStepLabel || '正在根据最终正文生成图片'}，已完成 ${illustrationGenerationCompleted}/${illustrationGenerationTotal} 项。${illustrationGenerationCount}`
+          : pausing
+            ? '正在暂停正文生成，已发出的 AI 请求完成后会停止调度新任务。'
+            : running
+              ? latestTaskLog || '正文生成任务正在运行。'
+              : paused
+                ? '正文生成已暂停，可导出当前已完成内容或点击继续。'
+                : resolvedCount
+                  ? `已生成 ${completedCount} 个小节${ignoredCount ? `，已忽略 ${ignoredCount} 个小节` : ''}，共 ${totalWords} 字。`
+                  : '点击生成正文后，目录会实时显示每个小节状态。';
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
   const generationButtonLabel = pausing
     ? '正在暂停中...'
@@ -621,7 +573,7 @@ function ContentEditPage({
     }
   };
 
-  // 用户确认后忽略剩余失败或未完成小节，直接执行检查、字数调整和配图。
+  // 用户确认后忽略剩余失败或未完成小节，直接执行检查和配图。
   const continuePostProcessing = async () => {
     if (!awaitingContentDecision || taskBlocksGeneration) return;
     try {
@@ -1094,7 +1046,7 @@ function ContentEditPage({
                   ? '该小节已按用户选择忽略'
                   : selectedItem.content_mode === 'ai-generate' ? '正文待生成' : '该小节等待后续处理'}</strong>
               <p>{getLeafStatus(selectedItem, sections) === 'ignored'
-                ? '该小节不参与一致性检查、字数调整和图片编排；如需补充，可直接编辑正文。'
+                ? '该小节不参与一致性检查和图片编排；如需补充，可直接编辑正文。'
                 : selectedItem.content_mode && selectedItem.content_mode !== 'ai-generate'
                 ? `${pendingModeDescriptions[selectedItem.content_mode]}${selectedItem.content_mode === 'other' && selectedItem.content_mode_note ? ` ${selectedItem.content_mode_note}` : ''}`
                 : taskInFlight ? '如果该小节正在生成，模型返回内容后会实时显示在这里。' : paused ? '任务已暂停，可先导出当前内容或点击继续。' : '点击生成正文后，后台会按 AI 生成小节生成内容。'}</p>
@@ -1148,8 +1100,7 @@ function ContentEditPage({
                     <strong>确认继续后：</strong>
                     <ul>
                       <li>这些小节将标记为“已忽略”</li>
-                      <li>不再参与一致性检查、字数调整和图片编排</li>
-                      <li>全文最少字数可能会分配到其余成功小节</li>
+                      <li>不再参与一致性检查和图片编排</li>
                     </ul>
                   </div>
                   <p className="content-incomplete-decision-warning">

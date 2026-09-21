@@ -382,7 +382,6 @@ function OutlineEditPage({
         minimum_words: outlineWordControlOptions.minimumWords,
         maximum_words: outlineWordControlOptions.maximumWords,
         section_words: outlineWordControlOptions.sectionWords,
-        strict_section_words: outlineWordControlOptions.strictSectionWords,
       });
       showToast('目录生成任务已在后台启动', 'success');
     } catch (error) {
