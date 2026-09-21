@@ -1359,7 +1359,6 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     contentGenerationSections: {},
     contentGenerationPlans: {},
     contentGenerationRuntime: undefined,
-    contentIllustrationPlan: undefined,
   });
   task = finalCheckpoint.task;
   agentService.updatePersistentTask(OUTLINE_AGENT_TASK_KEY, {

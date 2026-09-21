@@ -354,7 +354,6 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
           'contentGenerationOptions',
           'contentGenerationSections',
           'contentGenerationPlans',
-          'contentIllustrationPlan',
           'contentGenerationRuntime',
         ]);
       }
@@ -383,7 +382,6 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         'contentGenerationOptions',
         'contentGenerationSections',
         'contentGenerationPlans',
-        'contentIllustrationPlan',
         'contentGenerationRuntime',
       ]);
     }
@@ -409,7 +407,6 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
           'contentGenerationTask',
           'contentGenerationSections',
           'contentGenerationPlans',
-          'contentIllustrationPlan',
           'contentGenerationRuntime',
         ]);
       }
@@ -421,7 +418,6 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         'contentGenerationTask',
         'contentGenerationSections',
         'contentGenerationPlans',
-        'contentIllustrationPlan',
         'contentGenerationRuntime',
       ]);
     }
@@ -432,19 +428,17 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         'contentGenerationTask',
         'contentGenerationSections',
         'contentGenerationPlans',
-        'contentIllustrationPlan',
         'contentGenerationRuntime',
       ]);
     }
 
     if (task.type === 'content-generation') {
-      copyPatchFields(patch, state, ['outlineWordControlSnapshot', 'contentIllustrationPlan', 'contentGenerationRuntime']);
+      copyPatchFields(patch, state, ['outlineWordControlSnapshot', 'contentGenerationRuntime']);
       if (!isActiveTaskStatus(task.status)) {
         copyPatchFields(patch, state, [
           'outlineData',
           'contentGenerationSections',
           'contentGenerationPlans',
-          'contentIllustrationPlan',
           'contentGenerationRuntime',
         ]);
       }
@@ -1401,7 +1395,6 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         contentGenerationOptions: undefined,
         contentGenerationSections: {},
         contentGenerationPlans: {},
-        contentIllustrationPlan: undefined,
         contentGenerationRuntime: undefined,
       });
     },
@@ -1430,7 +1423,6 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         contentGenerationTask: undefined,
         contentGenerationSections: {},
         contentGenerationPlans: {},
-        contentIllustrationPlan: undefined,
         contentGenerationRuntime: undefined,
       }, {
         primarySession: true,
@@ -1457,7 +1449,6 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         contentGenerationTask: undefined,
         contentGenerationSections: {},
         contentGenerationPlans: {},
-        contentIllustrationPlan: undefined,
         contentGenerationRuntime: undefined,
       }, {
         primarySession: true,
@@ -1483,7 +1474,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
           // 新一轮正文生成清理还原现场；暂停继续及后续阶段重试保留 Session。
           const continuing = taskPayload?.resume || [
             'retryContentCorrection', 'retry_content_correction', 'retryFailedSections', 'retry_failed_sections',
-            'continuePostProcessing', 'continue_post_processing', 'rerunIllustrations', 'rerun_illustrations',
+            'continuePostProcessing', 'continue_post_processing',
           ].some(field => taskPayload?.[field]);
           if (!continuing) agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
           if (technicalPlan.originalPlanFile?.markdownPath && !continuing) {

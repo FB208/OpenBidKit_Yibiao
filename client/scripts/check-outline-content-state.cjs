@@ -67,6 +67,25 @@ if (!process.versions.electron) {
     const save = (outline, reason, affectedNodeIds = []) => store.saveOutline({ outlineData: { outline }, reason, affectedNodeIds });
     open();
     try {
+      // 新数据库和再次打开都不创建旧配图表；已存在的历史表不触发读写或清理。
+      const retiredTables = ['technical_plan_illustration_plans', 'technical_plan_illustration_items'];
+      const assertRetiredSchemaAbsent = () => {
+        for (const table of retiredTables) assert.equal(database.db.prepare('SELECT name FROM sqlite_master WHERE name = ?').get(table), undefined);
+        const columns = database.db.prepare('PRAGMA table_info(technical_plan_generation_config)').all().map(row => row.name);
+        for (const column of ['max_ai_images', 'max_mermaid_images', 'max_html_images']) assert.equal(columns.includes(column), false);
+        assert.equal(database.db.prepare("SELECT name FROM sqlite_master WHERE name = 'task_logs'").get().name, 'task_logs');
+      };
+      assertRetiredSchemaAbsent();
+      database.close();
+      open();
+      assertRetiredSchemaAbsent();
+      for (const table of retiredTables) database.db.exec('CREATE TABLE ' + table + ' (marker TEXT); INSERT INTO ' + table + " VALUES ('保留历史数据')");
+      database.close();
+      open();
+      for (const table of retiredTables) assert.equal(database.db.prepare('SELECT marker FROM ' + table).get().marker, '保留历史数据');
+      // 移除测试专门构造的历史表，余下用例继续验证当前正式表的完整重置。
+      for (const table of retiredTables) database.db.exec('DROP TABLE ' + table);
+
       // Word 读取只依赖业务目录，不依赖当前任务清单；每次读取都取得最新文件。
       const wordSectionId = '读取检查 中文';
       const wordPath = path.join(store.getContentWordOutputDir(), `${encodeURIComponent(wordSectionId)}.docx`);
@@ -616,7 +635,7 @@ if (!process.versions.electron) {
     const source = fs.readFileSync(path.join(__dirname, '../electron/services/taskService.cjs'), 'utf8');
     const start = source.indexOf('    startContentGeneration(payload) {');
     const end = source.indexOf('    pauseContentGeneration()', start);
-    for (const [payload, hasOriginal, expectedDeletes] of [[{}, true, 1], [{ regenerate: true }, true, 1], [{ resume: true }, true, 0], [{ retryContentCorrection: true }, true, 0], [{ rerunIllustrations: true }, true, 0], [{}, false, 0]]) {
+    for (const [payload, hasOriginal, expectedDeletes] of [[{}, true, 1], [{ regenerate: true }, true, 1], [{ resume: true }, true, 0], [{ retryContentCorrection: true }, true, 0], [{}, false, 0]]) {
       let deletes = 0;
       const scope = {
         ORIGINAL_RESTORATION_AGENT_TASK_KEY: 'technical-plan-original-restoration',

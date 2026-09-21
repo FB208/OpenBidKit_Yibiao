@@ -71,10 +71,6 @@ function collectGeneratedImageReferences(db) {
   };
 
   db.prepare(`
-    SELECT generation_asset_url AS value
-    FROM technical_plan_illustration_items
-    WHERE generation_asset_url IS NOT NULL AND generation_asset_url <> ''
-    UNION ALL
     SELECT content AS value
     FROM technical_plan_outline_nodes
     WHERE content LIKE '%yibiao-asset://generated-images/%'

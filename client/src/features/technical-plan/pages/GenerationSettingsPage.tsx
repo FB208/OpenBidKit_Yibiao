@@ -26,7 +26,6 @@ interface GenerationSettingsPageProps {
   exportTemplates: ExportTemplateRecord[];
   exportTemplatesLoading: boolean;
   contentGenerationOptions?: ContentGenerationOptions;
-  contentLeafCount: number;
   hasOutlineData: boolean;
   outlineConfigLocked: boolean;
   globalFactsConfigLocked: boolean;
@@ -222,7 +221,6 @@ function GenerationSettingsPage({
   exportTemplates,
   exportTemplatesLoading,
   contentGenerationOptions,
-  contentLeafCount,
   hasOutlineData,
   outlineConfigLocked,
   globalFactsConfigLocked,
@@ -258,10 +256,10 @@ function GenerationSettingsPage({
   const [exportTemplateScopeBusy, setExportTemplateScopeBusy] = useState(false);
   const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
   const [draftTableRequirement, setDraftTableRequirement] = useState<ContentTableRequirement>(() => (
-    normalizeContentGenerationOptions(contentGenerationOptions, false, contentLeafCount).tableRequirement
+    normalizeContentGenerationOptions(contentGenerationOptions, false).tableRequirement
   ));
   const [draftIllustrationOptions, setDraftIllustrationOptions] = useState<ContentGenerationOptions>(() => (
-    normalizeContentGenerationOptions(contentGenerationOptions, false, contentLeafCount)
+    normalizeContentGenerationOptions(contentGenerationOptions, false)
   ));
   const [contentOptionsBusy, setContentOptionsBusy] = useState(false);
   const [htmlImageTypesDialogOpen, setHtmlImageTypesDialogOpen] = useState(false);
@@ -288,7 +286,6 @@ function GenerationSettingsPage({
   const currentContentGenerationOptions = normalizeContentGenerationOptions(
     contentGenerationOptions,
     imageModelAvailable,
-    contentLeafCount,
   );
   const selectedExportTemplate = exportTemplates.find((template) => template.template_id === exportTemplateId) || null;
 
@@ -314,11 +311,10 @@ function GenerationSettingsPage({
     const nextOptions = normalizeContentGenerationOptions(
       contentGenerationOptions,
       imageModelAvailable,
-      contentLeafCount,
     );
     setDraftTableRequirement(nextOptions.tableRequirement);
     setDraftIllustrationOptions(nextOptions);
-  }, [contentGenerationOptions, contentLeafCount, imageModelAvailable]);
+  }, [contentGenerationOptions, imageModelAvailable]);
 
   useEffect(() => {
     if (activeTab !== 'knowledge') return;
@@ -549,7 +545,7 @@ function GenerationSettingsPage({
   // 保存表格及三类配图设置，不改变已有正文和配图结果。
   const saveContentOptions = async (value: ContentGenerationOptions) => {
     if (generationConfigLocked || contentOptionsBusy) return false;
-    const nextOptions = normalizeContentGenerationOptions(value, imageModelAvailable, contentLeafCount);
+    const nextOptions = normalizeContentGenerationOptions(value, imageModelAvailable);
     setDraftTableRequirement(nextOptions.tableRequirement);
     setDraftIllustrationOptions(nextOptions);
     if (JSON.stringify(nextOptions) === JSON.stringify(currentContentGenerationOptions)) return true;

@@ -115,7 +115,6 @@ async function runGlobalFactsAdjustmentTask({ agentService, workspaceStore, upda
     contentGenerationTask: undefined,
     contentGenerationSections: {},
     contentGenerationPlans: {},
-    contentIllustrationPlan: undefined,
     contentGenerationRuntime: undefined,
   });
   agentService.updatePersistentTask(GLOBAL_FACTS_AGENT_TASK_KEY, {

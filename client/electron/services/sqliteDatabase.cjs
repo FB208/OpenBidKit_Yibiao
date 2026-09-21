@@ -157,11 +157,8 @@ function createTechnicalPlanGenerationConfigSchema(db) {
       global_facts_mode TEXT NOT NULL DEFAULT 'fabricate',
       export_template_id TEXT NOT NULL DEFAULT '',
       use_ai_images INTEGER NOT NULL DEFAULT 1,
-      max_ai_images INTEGER NOT NULL DEFAULT 6,
       use_mermaid_images INTEGER NOT NULL DEFAULT 1,
-      max_mermaid_images INTEGER NOT NULL DEFAULT 5,
       use_html_images INTEGER NOT NULL DEFAULT 1,
-      max_html_images INTEGER NOT NULL DEFAULT 10,
       html_image_types TEXT NOT NULL DEFAULT '',
       table_requirement TEXT NOT NULL DEFAULT 'heavy',
       created_at TEXT NOT NULL,
@@ -325,7 +322,7 @@ function addTechnicalPlanOutlineContentMode(db) {
   addColumnIfMissing(db, 'technical_plan_outline_nodes', 'content_mode_note', 'TEXT');
 }
 
-function createTaskLogsAndIllustrationItemsSchema(db) {
+function createTaskLogsSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -384,35 +381,6 @@ function createTaskLogsAndIllustrationItemsSchema(db) {
       WHERE task_domain = 'duplicate-check' AND task_type = OLD.type AND task_id = OLD.task_id;
     END;
 
-    CREATE TABLE IF NOT EXISTS technical_plan_illustration_plans (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      plan_version INTEGER NOT NULL,
-      revision TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS technical_plan_illustration_items (
-      item_id TEXT PRIMARY KEY,
-      kind TEXT NOT NULL,
-      image_type TEXT NOT NULL,
-      title TEXT NOT NULL,
-      section_ids_json TEXT NOT NULL,
-      placement TEXT NOT NULL,
-      priority INTEGER NOT NULL DEFAULT 0,
-      generation_status TEXT,
-      generation_mode TEXT,
-      generation_code TEXT,
-      generation_source_path TEXT,
-      generation_asset_url TEXT,
-      generation_attempts INTEGER,
-      generation_error TEXT,
-      generation_updated_at TEXT,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_technical_plan_illustration_items_order
-    ON technical_plan_illustration_items(sort_order);
   `);
 }
 
@@ -1322,8 +1290,8 @@ const schemaHealthTableGroups = [
   },
   {
     version: 20,
-    tables: ['task_logs', 'technical_plan_illustration_plans', 'technical_plan_illustration_items'],
-    repair: createTaskLogsAndIllustrationItemsSchema,
+    tables: ['task_logs'],
+    repair: createTaskLogsSchema,
   },
   {
     version: 23,
@@ -1496,11 +1464,8 @@ const schemaHealthColumnGroups = [
       section_words: 'INTEGER NOT NULL DEFAULT 0',
       global_facts_mode: "TEXT NOT NULL DEFAULT 'fabricate'",
       use_ai_images: 'INTEGER NOT NULL DEFAULT 1',
-      max_ai_images: 'INTEGER NOT NULL DEFAULT 6',
       use_mermaid_images: 'INTEGER NOT NULL DEFAULT 1',
-      max_mermaid_images: 'INTEGER NOT NULL DEFAULT 5',
       use_html_images: 'INTEGER NOT NULL DEFAULT 1',
-      max_html_images: 'INTEGER NOT NULL DEFAULT 10',
       html_image_types: "TEXT NOT NULL DEFAULT ''",
       table_requirement: "TEXT NOT NULL DEFAULT 'heavy'",
       created_at: 'TEXT',
@@ -1703,8 +1668,8 @@ const migrations = [
   },
   {
     version: 20,
-    description: '任务日志按行存储并拆分全文图片计划项目',
-    up: createTaskLogsAndIllustrationItemsSchema,
+    description: '任务日志按行存储',
+    up: createTaskLogsSchema,
   },
   {
     version: 21,

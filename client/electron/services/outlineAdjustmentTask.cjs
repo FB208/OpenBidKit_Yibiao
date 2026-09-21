@@ -145,7 +145,6 @@ async function runOutlineAdjustmentTask({ agentService, workspaceStore, updateTa
       contentGenerationTask: undefined,
       contentGenerationSections: {},
       contentGenerationPlans: {},
-      contentIllustrationPlan: undefined,
       contentGenerationRuntime: undefined,
     },
   });

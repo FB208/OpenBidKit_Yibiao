@@ -126,13 +126,12 @@ async function main() {
 
     // 各档位和单独类型开关只改变模型需求，不裁剪工具；并发正文模型收到同一份需求。
     for (const [imageQuantity, enabled, expected] of [['none', true, /无图：不安排配图、不留图片占位、不调用配图工具/], ['light', false, /少图.*1～3/], ['heavy', true, /多图.*1～6/]]) {
-      const scenarioFiles = buildContentGenerationFiles({ ...fileOptions, generationOptions: { ...fileOptions.generationOptions, imageQuantity, useAiImages: enabled, useHtmlImages: enabled, useMermaidImages: enabled, maxAiImages: 999 } });
+      const scenarioFiles = buildContentGenerationFiles({ ...fileOptions, generationOptions: { ...fileOptions.generationOptions, imageQuantity, useAiImages: enabled, useHtmlImages: enabled, useMermaidImages: enabled } });
       const decisionFile = scenarioFiles.find(file => file.path === '正文编排决策.json');
       const decisions = JSON.parse(decisionFile.content);
       assert.match(decisions.image_requirements, expected);
       assert.match(decisions.image_requirements, /高分不等于必须多图/);
       assert.match(decisions.image_requirements, /不设比例或强制顺序/);
-      assert.equal(decisions.image_requirements.includes('999'), false);
       if (!enabled) assert.match(decisions.image_requirements, /AI 图片（aiImage）不允许；HTML 图片（htmlImage）不允许；Mermaid 图片（mermaid）不允许/);
       fs.writeFileSync(path.join(workspaceDir, decisionFile.path), decisionFile.content, 'utf8');
       let received = false;

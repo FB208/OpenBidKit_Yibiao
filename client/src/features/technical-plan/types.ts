@@ -8,7 +8,7 @@ export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error
 export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error' | 'ignored';
-export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'sections-completed' | 'word-converting' | 'word-completed' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'illustration-planning' | 'illustration-generating' | 'done';
+export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'sections-completed' | 'word-converting' | 'word-completed' | 'auditing' | 'table-cleaning' | 'done';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 export type SaveOutlineReason = 'sort' | 'edit' | 'delete' | 'add-root' | 'add-child' | 'replace';
 export type OutlineAttribute = '通用' | '商务/资信' | '技术' | '其他' | '目录' | '报价' | '业绩';
@@ -48,11 +48,8 @@ export type ContentImageQuantity = 'none' | 'light' | 'heavy';
 export interface ContentGenerationOptions {
   imageQuantity: ContentImageQuantity;
   useAiImages: boolean;
-  maxAiImages: number;
   useMermaidImages: boolean;
-  maxMermaidImages: number;
   useHtmlImages: boolean;
-  maxHtmlImages: number;
   htmlImageTypes: string;
   tableRequirement: ContentTableRequirement;
 }
@@ -72,7 +69,7 @@ export interface TechnicalPlanGenerationConfig {
 }
 
 export interface ContentGenerationProgressDetail {
-  mode: 'full' | 'single' | 'html' | 'html-single' | 'correction' | 'illustration' | 'illustration-generation';
+  mode: 'full' | 'single' | 'html' | 'html-single' | 'correction';
   phase: ContentGenerationPhase;
   phase_label: string;
   phase_progress: number;
@@ -155,24 +152,6 @@ export interface BackgroundTaskState {
       table_cleanup_completed?: number;
       table_cleanup_rewritten?: number;
       table_cleanup_skipped?: number;
-      illustration_planning_step_total?: number;
-      illustration_planning_step_completed?: number;
-      illustration_planning_step_label?: string;
-      illustration_candidate_ai?: number;
-      illustration_candidate_mermaid?: number;
-      illustration_candidate_html?: number;
-      illustration_selected_ai?: number;
-      illustration_selected_mermaid?: number;
-      illustration_selected_html?: number;
-      illustration_generation_total?: number;
-      illustration_generation_completed?: number;
-      illustration_generation_ai_total?: number;
-      illustration_generation_ai_completed?: number;
-      illustration_generation_mermaid_total?: number;
-      illustration_generation_mermaid_completed?: number;
-      illustration_generation_html_total?: number;
-      illustration_generation_html_completed?: number;
-      illustration_generation_step_label?: string;
       awaiting_content_decision?: boolean;
       ignored_section_count?: number;
       developer_stage_gate?: ContentGenerationPhase;
@@ -210,7 +189,6 @@ export type ContentGenerationSections = Record<string, ContentGenerationSectionS
 
 export type ContentMermaidDiagramType = 'process' | 'hierarchy' | 'responsibility';
 export type ContentIllustrationKind = 'ai' | 'mermaid' | 'html';
-export type ContentIllustrationPlacement = 'before' | 'after';
 
 export interface ContentGenerationPlanData {
   writing_focus?: string;
@@ -245,33 +223,6 @@ export interface ContentGenerationPlanState {
 }
 
 export type ContentGenerationPlans = Record<string, ContentGenerationPlanState>;
-
-export interface ContentIllustrationPlanItem {
-  item_id: string;
-  kind: ContentIllustrationKind;
-  image_type: string;
-  title: string;
-  section_ids: string[];
-  placement: ContentIllustrationPlacement;
-  priority: number;
-  generation?: {
-    status: 'pending' | 'running' | 'success' | 'error';
-    mode?: 'normal' | 'agent';
-    code?: string;
-    source_path?: string;
-    asset_url?: string;
-    attempts?: number;
-    error?: string;
-    updated_at?: string;
-  };
-}
-
-export interface ContentIllustrationPlanState {
-  plan_version: number;
-  revision: string;
-  items: ContentIllustrationPlanItem[];
-  updated_at?: string;
-}
 
 export interface ContentGenerationRuntimeState {
   /** HTML 位于 Agent 会话目录；Word 文件相对于独立的业务输出目录。 */
@@ -382,7 +333,6 @@ export interface TechnicalPlanState {
   contentGenerationOptions?: ContentGenerationOptions;
   contentGenerationSections: ContentGenerationSections;
   contentGenerationPlans: ContentGenerationPlans;
-  contentIllustrationPlan?: ContentIllustrationPlanState;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   bidTemplateExists?: boolean;
   outlineData: OutlineData | null;

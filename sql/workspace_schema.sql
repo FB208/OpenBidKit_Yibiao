@@ -89,11 +89,8 @@ CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
   -- v32 模板样式范围：ai-only 仅 AI 生成目录，document 整个文件；页面基础布局始终全文件。
   export_template_scope TEXT NOT NULL DEFAULT 'ai-only',
   use_ai_images INTEGER NOT NULL DEFAULT 1,
-  max_ai_images INTEGER NOT NULL DEFAULT 6,
   use_mermaid_images INTEGER NOT NULL DEFAULT 1,
-  max_mermaid_images INTEGER NOT NULL DEFAULT 5,
   use_html_images INTEGER NOT NULL DEFAULT 1,
-  max_html_images INTEGER NOT NULL DEFAULT 10,
   html_image_types TEXT NOT NULL DEFAULT '',
   table_requirement TEXT NOT NULL DEFAULT 'heavy',
   image_quantity TEXT NOT NULL DEFAULT 'light',
@@ -146,35 +143,6 @@ CREATE INDEX IF NOT EXISTS idx_task_logs_task
 ON task_logs(task_domain, task_type, task_id, id DESC);
 
 -- 全文图片计划头与图片项目按行存储，单张图片状态变化只更新对应项目。
-CREATE TABLE IF NOT EXISTS technical_plan_illustration_plans (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  plan_version INTEGER NOT NULL,
-  revision TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS technical_plan_illustration_items (
-  item_id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,
-  image_type TEXT NOT NULL,
-  title TEXT NOT NULL,
-  section_ids_json TEXT NOT NULL,
-  placement TEXT NOT NULL,
-  priority INTEGER NOT NULL DEFAULT 0,
-  generation_status TEXT,
-  generation_mode TEXT,
-  generation_code TEXT,
-  generation_source_path TEXT,
-  generation_asset_url TEXT,
-  generation_attempts INTEGER,
-  generation_error TEXT,
-  generation_updated_at TEXT,
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  updated_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_technical_plan_illustration_items_order
-ON technical_plan_illustration_items(sort_order);
 
 -- 技术方案招标文件解析项。
 CREATE TABLE IF NOT EXISTS technical_plan_bid_items (

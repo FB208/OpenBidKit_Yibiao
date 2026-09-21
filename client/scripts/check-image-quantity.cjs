@@ -17,7 +17,7 @@ function checkImageQuantity() {
     let store = createTechnicalPlanStore({ app: testApp, db: database.db });
     const initial = store.loadGenerationConfig().contentGenerationOptions;
     assert.equal(initial.imageQuantity, 'light');
-    const settings = { ...initial, useAiImages: false, useMermaidImages: true, useHtmlImages: false, maxAiImages: 2, maxMermaidImages: 3, maxHtmlImages: 4 };
+    const settings = { ...initial, useAiImages: false, useMermaidImages: true, useHtmlImages: false };
     for (const imageQuantity of ['none', 'light', 'heavy']) {
       const expected = { ...settings, imageQuantity };
       assert.deepEqual(store.saveContentGenerationOptions(expected).contentGenerationOptions, expected);

@@ -199,6 +199,32 @@ function checkProgressView(task) {
   assert.deepEqual(evaluate(reloaded), [90, '转换完成', '2/2']);
 }
 
+// 已删除阶段不能留下进度空档，覆盖审计埋点也必须固定为关闭。
+function checkRetiredStageCleanup() {
+  const taskSource = fs.readFileSync(path.join(__dirname, '../electron/services/contentGenerationTask.cjs'), 'utf8').replace(/\r\n/g, '\n');
+  const profileStart = taskSource.indexOf('const CONTENT_PROGRESS_PROFILES = ');
+  const profileEnd = taskSource.indexOf('\n\nfunction clampPercentage', profileStart);
+  assert.ok(profileStart >= 0 && profileEnd > profileStart);
+  const profiles = new Function(`${taskSource.slice(profileStart, profileEnd)}\nreturn CONTENT_PROGRESS_PROFILES;`)();
+  const phaseOrders = {
+    full: ['planning', 'restoring', 'generating', 'auditing', 'table-cleaning'],
+    single: ['planning', 'restoring', 'generating', 'auditing', 'table-cleaning'],
+    correction: ['auditing', 'table-cleaning'],
+  };
+  for (const [mode, phases] of Object.entries(phaseOrders)) {
+    assert.equal(profiles[mode][phases[0]][0], 0, `${mode} 首阶段必须从 0 开始`);
+    for (let index = 1; index < phases.length; index++) {
+      assert.equal(profiles[mode][phases[index - 1]][1], profiles[mode][phases[index]][0], `${mode} 进度阶段不能留空档`);
+    }
+    assert.equal(profiles[mode]['table-cleaning'][1], 99, `${mode} 完成前最多到 99%`);
+    assert.deepEqual(profiles[mode].done, [100, 100]);
+  }
+
+  const pageSource = fs.readFileSync(path.join(__dirname, '../src/features/technical-plan/pages/ContentEditPage.tsx'), 'utf8');
+  assert.equal((pageSource.match(/enable_original_plan_coverage_audit:\s*false/g) || []).length, 2);
+  assert.equal(pageSource.includes('original_plan_coverage_repair_mode:'), false);
+}
+
 // 调用真实助手服务，解包确认正文、表格、图片及中转目录清理。
 async function checkRealWord(directory, outputDir) {
   const { EventEmitter } = require('node:events');
@@ -249,6 +275,7 @@ function checkExportNumbering() {
 async function main() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), '正文转Word检查-'));
   try {
+    checkRetiredStageCleanup();
     checkExportNumbering();
     const agentDir = path.join(directory, 'agent-runtime', '正文会话');
     const outputDir = path.join(directory, '独立用户数据', 'workspace', 'technical-plan');

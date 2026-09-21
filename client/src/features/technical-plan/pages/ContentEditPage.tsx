@@ -6,7 +6,7 @@ import { MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { ClientConfig, OutlineContentMode, TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
-import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationRuntimeState, ContentGenerationSectionStatus, ContentGenerationSections, ContentIllustrationKind, ContentIllustrationPlanState } from '../types';
+import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationRuntimeState, ContentGenerationSectionStatus, ContentGenerationSections } from '../types';
 import ContentWordPreview from '../components/ContentWordPreview';
 import { normalizeContentGenerationOptions } from '../contentGenerationOptions';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
@@ -23,7 +23,6 @@ interface ContentEditPageProps {
   task?: BackgroundTaskState;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   contentGenerationOptions?: ContentGenerationOptions;
-  contentIllustrationPlan?: ContentIllustrationPlanState;
   sections: ContentGenerationSections;
   onContentGenerationReset: () => Promise<void>;
   onContentSaved: (item: OutlineItem, content: string) => Promise<void> | void;
@@ -56,14 +55,6 @@ const pendingModeDescriptions: Record<Exclude<OutlineContentMode, 'ai-generate'>
   'manual-fill': '该小节已标记为人工填写，请在导出后补充内容。',
   other: '该小节采用其他处理模式，暂不进入 AI 正文生成流程。',
 };
-
-const illustrationKindLabels: Record<ContentIllustrationKind, string> = {
-  html: 'HTML 图片',
-  mermaid: 'Mermaid 图片',
-  ai: 'AI 图片',
-};
-
-const illustrationKinds: ContentIllustrationKind[] = ['html', 'mermaid', 'ai'];
 
 function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
   return items.flatMap((item) => item.children?.length ? collectLeafItems(item.children) : [item]);
@@ -194,7 +185,6 @@ function ContentEditPage({
   task,
   contentGenerationRuntime,
   contentGenerationOptions,
-  contentIllustrationPlan,
   sections,
   onContentGenerationReset,
   onContentSaved,
@@ -242,33 +232,11 @@ function ContentEditPage({
     ? contentStats?.original_restoration : undefined;
   const developerStageGate = developerMode && paused ? contentStats?.developer_stage_gate : undefined;
   const progressDetail = task?.progress_detail || contentStats?.output_progress;
-  const illustrationStats = useMemo(() => {
-    const stats: Record<ContentIllustrationKind, { planned: number; success: number }> = {
-      html: { planned: 0, success: 0 },
-      mermaid: { planned: 0, success: 0 },
-      ai: { planned: 0, success: 0 },
-    };
-
-    contentIllustrationPlan?.items.forEach((item) => {
-      stats[item.kind].planned += 1;
-      if (item.generation?.status === 'success') {
-        stats[item.kind].success += 1;
-      }
-    });
-
-    return stats;
-  }, [contentIllustrationPlan]);
-  const illustrationPlannedTotal = illustrationKinds.reduce((sum, kind) => sum + illustrationStats[kind].planned, 0);
-  const illustrationSuccessTotal = illustrationKinds.reduce((sum, kind) => sum + illustrationStats[kind].success, 0);
-  const showIllustrationStats = developerMode && Boolean(contentIllustrationPlan);
   const planning = phaseVisible && contentStats?.phase === 'planning';
   const restoring = phaseVisible && contentStats?.phase === 'restoring';
-  const originalAuditing = phaseVisible && contentStats?.phase === 'original-auditing';
   const auditing = phaseVisible && contentStats?.phase === 'auditing';
   const tableCleaning = phaseVisible && contentStats?.phase === 'table-cleaning';
-  const contentCorrecting = originalAuditing || auditing || tableCleaning;
-  const illustrationPlanning = phaseVisible && contentStats?.phase === 'illustration-planning';
-  const illustrationGenerating = phaseVisible && contentStats?.phase === 'illustration-generating';
+  const contentCorrecting = auditing || tableCleaning;
   const outlineMeta = useMemo(() => outlineData?.outline ? buildOutlineMeta(outlineData.outline, sections, planning) : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections]);
   const contentSummary = useMemo(() => leaves.reduce((summary, item) => {
     const status = getLeafStatus(item, sections);
@@ -297,23 +265,16 @@ function ContentEditPage({
   const canRetryContentCorrection = taskFailed
     && leaves.length > 0
     && resolvedCount === leaves.length
-    && ['original-auditing', 'auditing', 'table-cleaning', 'illustration-planning', 'illustration-generating'].includes(String(contentStats?.phase || ''));
+    && ['auditing', 'table-cleaning'].includes(String(contentStats?.phase || ''));
   const awaitingContentDecision = taskFailed && Boolean(contentStats?.awaiting_content_decision);
   const retryingWordConversion = taskFailed && ['sections-completed', 'word-converting'].includes(contentStats?.phase || '');
-  const retryingIllustrationPlanning = canRetryContentCorrection && contentStats?.phase === 'illustration-planning';
-  const retryingIllustrationGeneration = canRetryContentCorrection && contentStats?.phase === 'illustration-generating';
-  const contentRetryTargetLabel = retryingIllustrationGeneration
-    ? '图片生成'
-    : retryingIllustrationPlanning
-      ? '全文图片编排'
-      : '内容矫正';
+  const contentRetryTargetLabel = '内容矫正';
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
   const auditAgentStepTotal = contentStats?.audit_agent_step_total || 0;
   const auditAgentStepCompleted = contentStats?.audit_agent_step_completed || 0;
   const auditAgentStepLabel = contentStats?.audit_agent_step_label || '';
   const auditAgentChangedSections = contentStats?.audit_agent_changed_sections || 0;
-  const auditAgentFailedSections = contentStats?.audit_agent_failed_sections || 0;
   const auditProgress = auditAgentStepTotal
     ? Math.round((auditAgentStepCompleted / auditAgentStepTotal) * 100)
     : 0;
@@ -329,26 +290,11 @@ function ContentEditPage({
   const contentCorrectionCount = tableCleaning
     ? tableCleanupTotal ? `${tableCleanupCompleted}/${tableCleanupTotal}` : '检查中'
     : auditCorrectionCount;
-  const illustrationPlanningStepTotal = contentStats?.illustration_planning_step_total || 3;
-  const illustrationPlanningStepCompleted = contentStats?.illustration_planning_step_completed || 0;
-  const illustrationPlanningStepLabel = contentStats?.illustration_planning_step_label || '';
-  const illustrationCandidateTotal = (contentStats?.illustration_candidate_html || 0)
-    + (contentStats?.illustration_candidate_mermaid || 0)
-    + (contentStats?.illustration_candidate_ai || 0);
-  const illustrationSelectedTotal = (contentStats?.illustration_selected_html || 0)
-    + (contentStats?.illustration_selected_mermaid || 0)
-    + (contentStats?.illustration_selected_ai || 0);
-  const illustrationPlanningProgress = Math.round((illustrationPlanningStepCompleted / illustrationPlanningStepTotal) * 100);
-  const illustrationGenerationTotal = contentStats?.illustration_generation_total || 0;
-  const illustrationGenerationCompleted = contentStats?.illustration_generation_completed || 0;
-  const illustrationGenerationProgress = illustrationGenerationTotal ? Math.round((illustrationGenerationCompleted / illustrationGenerationTotal) * 100) : 0;
-  const illustrationGenerationStepLabel = contentStats?.illustration_generation_step_label || '';
-  const illustrationGenerationCount = `HTML ${contentStats?.illustration_generation_html_completed || 0}/${contentStats?.illustration_generation_html_total || 0}，Mermaid ${contentStats?.illustration_generation_mermaid_completed || 0}/${contentStats?.illustration_generation_mermaid_total || 0}，AI ${contentStats?.illustration_generation_ai_completed || 0}/${contentStats?.illustration_generation_ai_total || 0}`;
   const wordTargetText = minimumWords > 0 && maximumWords > 0 ? `${minimumWords} 至 ${maximumWords} 字` : minimumWords > 0 ? `不少于 ${minimumWords} 字` : maximumWords > 0 ? `不超过 ${maximumWords} 字` : '未限制';
   const htmlOutputProgress = progressDetail?.mode === 'html' || progressDetail?.mode === 'html-single';
   const currentProgressDetail = (phaseVisible || htmlOutputProgress) && progressDetail?.phase === contentStats?.phase ? progressDetail : undefined;
-  const displayProgress = htmlOutputProgress ? task?.progress || 0 : currentProgressDetail ? currentProgressDetail.phase_progress : planning ? planningProgress : contentCorrecting ? contentCorrectionProgress : illustrationPlanning ? illustrationPlanningProgress : illustrationGenerating ? illustrationGenerationProgress : progress;
-  const displayProgressLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '编排统计' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : illustrationPlanning ? '图片编排' : illustrationGenerating ? '图片生成' : '生成统计';
+  const displayProgress = htmlOutputProgress ? task?.progress || 0 : currentProgressDetail ? currentProgressDetail.phase_progress : planning ? planningProgress : contentCorrecting ? contentCorrectionProgress : progress;
+  const displayProgressLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '编排统计' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '生成统计';
   const displayProgressCount = htmlOutputProgress && currentProgressDetail
     ? `${currentProgressDetail.completed}/${currentProgressDetail.total}`
     : planning
@@ -357,20 +303,14 @@ function ContentEditPage({
       ? `${currentProgressDetail.completed}/${currentProgressDetail.total}`
     : contentCorrecting
       ? contentCorrectionCount
-      : illustrationPlanning
-        ? `${illustrationPlanningStepCompleted}/${illustrationPlanningStepTotal}`
-        : illustrationGenerating
-          ? `${illustrationGenerationCompleted}/${illustrationGenerationTotal}`
           : `${resolvedCount}/${leaves.length}`;
-  const progressPhaseLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '正文编排' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : illustrationPlanning ? '全文图片编排' : illustrationGenerating ? '全文图片生成' : '正文生成';
+  const progressPhaseLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '正文编排' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '正文生成';
   const progressTone = planning
     ? 'success'
     : contentCorrecting
       ? 'sky'
-      : illustrationPlanning || illustrationGenerating
-        ? 'violet'
-        : 'primary';
-  const progressActive = taskInFlight && (htmlOutputProgress || planning || restoring || contentCorrecting || illustrationPlanning || illustrationGenerating);
+      : 'primary';
+  const progressActive = taskInFlight && (htmlOutputProgress || planning || restoring || contentCorrecting);
   const progressDescription = developerStageGate
     ? `${progressPhaseLabel}阶段已完成。可继续下一阶段，或从正文编排重新执行全部阶段。`
     : taskFailed
@@ -383,14 +323,6 @@ function ContentEditPage({
       ? paused
         ? `正文生成已暂停在原方案还原阶段，已完成 ${progressDetail?.completed || 0}/${progressDetail?.total || 0} 个小节。`
         : `${progressDetail?.step_label || '正在还原原方案内容'}，已完成 ${progressDetail?.completed || 0}/${progressDetail?.total || 0} 个小节。`
-    : originalAuditing
-      ? paused
-        ? `内容矫正已暂停在原方案覆盖 Agent 修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
-        : auditAgentFailedSections
-          ? `原方案覆盖 Agent 修复未完成：${auditAgentFailedSections} 个小节未完成审计。`
-          : auditAgentStepCompleted >= auditAgentStepTotal && auditAgentChangedSections
-            ? `原方案覆盖 Agent 修复完成：已回写 ${auditAgentChangedSections} 个小节。`
-            : `正在内容矫正：${auditAgentStepLabel || 'Agent 正在检查并补回原方案内容'}，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal || 5}。`
     : auditing
       ? paused
         ? `内容矫正已暂停在 Agent 全文一致性修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
@@ -403,14 +335,6 @@ function ContentEditPage({
           : tableCleanupTotal
             ? `正在内容矫正：将表格转换为普通文字描述，已处理 ${tableCleanupCompleted}/${tableCleanupTotal} 个表格，已转换 ${tableCleanupRewritten} 个${tableCleanupSkipped ? `，跳过 ${tableCleanupSkipped} 个` : ''}。`
             : '正在内容矫正：检查正文中是否存在需要转换的表格。'
-        : illustrationPlanning
-          ? paused
-            ? `正文生成已暂停在全文图片编排阶段，步骤 ${illustrationPlanningStepCompleted}/${illustrationPlanningStepTotal}。${illustrationPlanningStepLabel}`
-            : `${illustrationPlanningStepLabel || 'Agent 正在阅读全文并编排图片'}，步骤 ${illustrationPlanningStepCompleted}/${illustrationPlanningStepTotal}${illustrationCandidateTotal ? `，候选 ${illustrationCandidateTotal} 项，保留 ${illustrationSelectedTotal} 项` : ''}。`
-          : illustrationGenerating
-            ? paused
-              ? `正文生成已暂停在图片生成阶段，已完成 ${illustrationGenerationCompleted}/${illustrationGenerationTotal} 项。${illustrationGenerationCount}`
-              : `${illustrationGenerationStepLabel || '正在根据最终正文生成图片'}，已完成 ${illustrationGenerationCompleted}/${illustrationGenerationTotal} 项。${illustrationGenerationCount}`
           : pausing
             ? '正在暂停正文生成，已发出的 AI 请求完成后会停止调度新任务。'
             : running
@@ -573,7 +497,7 @@ function ContentEditPage({
     }
   };
 
-  // 用户确认后忽略剩余失败或未完成小节，直接执行检查和配图。
+  // 用户确认后忽略剩余失败或未完成小节，直接执行剩余内容检查。
   const continuePostProcessing = async () => {
     if (!awaitingContentDecision || taskBlocksGeneration) return;
     try {
@@ -583,20 +507,6 @@ function ContentEditPage({
       showToast('后续处理任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动后续处理失败', 'error');
-    }
-  };
-
-  const rerunIllustrations = async () => {
-    if (!contentIllustrationPlan || taskBlocksGeneration) {
-      return;
-    }
-
-    try {
-      await window.yibiao?.tasks.startContentGeneration({ rerunIllustrations: true });
-      trackConfigUsage({ content_generation_action: 'rerun_illustrations' });
-      showToast('仅重新配图任务已在后台启动', 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '启动仅重新配图任务失败', 'error');
     }
   };
 
@@ -651,11 +561,8 @@ function ContentEditPage({
       simulatePartialFailures,
       generationOptions: {
         useAiImages: nextImageModelAvailable && savedGenerationOptions.useAiImages,
-        maxAiImages: savedGenerationOptions.maxAiImages,
         useMermaidImages: savedGenerationOptions.useMermaidImages,
-        maxMermaidImages: savedGenerationOptions.maxMermaidImages,
         useHtmlImages: savedGenerationOptions.useHtmlImages,
-        maxHtmlImages: savedGenerationOptions.maxHtmlImages,
         htmlImageTypes: savedGenerationOptions.htmlImageTypes,
         tableRequirement: savedGenerationOptions.tableRequirement,
       },
@@ -667,8 +574,7 @@ function ContentEditPage({
       content_generation_action: contentGenerationAction,
       enable_consistency_audit: true,
       consistency_repair_mode: 'agent',
-      enable_original_plan_coverage_audit: hasOriginalPlan,
-      original_plan_coverage_repair_mode: hasOriginalPlan ? 'agent' : undefined,
+      enable_original_plan_coverage_audit: false,
     }, config);
     showToast(simulatePartialFailures
       ? '随机失败模式正文生成任务已在后台启动'
@@ -685,7 +591,7 @@ function ContentEditPage({
       const config = await window.yibiao?.config.load();
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
-      const savedGenerationOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length);
+      const savedGenerationOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable);
       const regenerate = leaves.length > 0 && resolvedCount === leaves.length;
       const contentGenerationAction: ContentGenerationAction = regenerate
           ? 'regenerate'
@@ -707,18 +613,15 @@ function ContentEditPage({
       const config = await window.yibiao?.config.load();
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
-      const savedGenerationOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable, leaves.length);
+      const savedGenerationOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable);
       await window.yibiao?.tasks.startContentGeneration({
         regenerate: true,
         targetItemId: requirementItem.id,
         requirement: regenerateRequirement,
         generationOptions: {
           useAiImages: nextImageModelAvailable && savedGenerationOptions.useAiImages,
-          maxAiImages: savedGenerationOptions.maxAiImages,
           useMermaidImages: savedGenerationOptions.useMermaidImages,
-          maxMermaidImages: savedGenerationOptions.maxMermaidImages,
           useHtmlImages: savedGenerationOptions.useHtmlImages,
-          maxHtmlImages: savedGenerationOptions.maxHtmlImages,
           htmlImageTypes: savedGenerationOptions.htmlImageTypes,
           tableRequirement: savedGenerationOptions.tableRequirement,
         },
@@ -730,8 +633,7 @@ function ContentEditPage({
         content_generation_action: 'regenerate_section',
         enable_consistency_audit: true,
         consistency_repair_mode: 'agent',
-        enable_original_plan_coverage_audit: hasOriginalPlan,
-        original_plan_coverage_repair_mode: hasOriginalPlan ? 'agent' : undefined,
+        enable_original_plan_coverage_audit: false,
       }, config);
       setSelectedItemId(requirementItem.id);
       setRequirementItem(null);
@@ -863,7 +765,7 @@ function ContentEditPage({
   }
 
   return (
-    <div className={`plan-step-body content-generation-page${showIllustrationStats ? ' has-dev-stats' : ''}`}>
+    <div className="plan-step-body content-generation-page">
       <section className="content-generation-command-bar">
         <div>
           <span className="section-kicker">STEP {stepNumber}</span>
@@ -947,28 +849,6 @@ function ContentEditPage({
         </div>
       </section>
 
-      {showIllustrationStats && (
-        <aside className="content-dev-stats-panel" aria-label="开发者配图统计">
-          <div className="content-dev-stats-summary">
-            <strong>配图统计</strong>
-            <span>共编排 <b>{illustrationPlannedTotal}</b>，成功 <b>{illustrationSuccessTotal}</b></span>
-          </div>
-          {illustrationKinds.map((kind) => (
-            <span className="content-dev-image-stat" key={kind}>
-              <strong>{illustrationKindLabels[kind]}</strong>
-              编排 <b>{illustrationStats[kind].planned}</b>
-              成功 <b>{illustrationStats[kind].success}</b>
-            </span>
-          ))}
-          <button
-            type="button"
-            className="secondary-action content-dev-stats-action"
-            disabled={taskBlocksGeneration}
-            onClick={() => void rerunIllustrations()}
-          >仅重新配图</button>
-        </aside>
-      )}
-
       <section className="content-generation-workspace">
         <aside className="content-outline-panel">
           <div className="analysis-result-head">
@@ -1046,7 +926,7 @@ function ContentEditPage({
                   ? '该小节已按用户选择忽略'
                   : selectedItem.content_mode === 'ai-generate' ? '正文待生成' : '该小节等待后续处理'}</strong>
               <p>{getLeafStatus(selectedItem, sections) === 'ignored'
-                ? '该小节不参与一致性检查和图片编排；如需补充，可直接编辑正文。'
+                ? '该小节不参与一致性检查；如需补充，可直接编辑正文。'
                 : selectedItem.content_mode && selectedItem.content_mode !== 'ai-generate'
                 ? `${pendingModeDescriptions[selectedItem.content_mode]}${selectedItem.content_mode === 'other' && selectedItem.content_mode_note ? ` ${selectedItem.content_mode_note}` : ''}`
                 : taskInFlight ? '如果该小节正在生成，模型返回内容后会实时显示在这里。' : paused ? '任务已暂停，可先导出当前内容或点击继续。' : '点击生成正文后，后台会按 AI 生成小节生成内容。'}</p>
@@ -1072,7 +952,7 @@ function ContentEditPage({
             <div className="content-regenerate-card-head">
               <Dialog.Title>重置正文阶段？</Dialog.Title>
               <Dialog.Description>
-                将停止当前正文任务，并清空已生成正文、生成进度、正文编排缓存和配图计划。目录、全局事实及 Step 02 生成设置会保留。
+                将停止当前正文任务，并清空已生成正文、生成进度、正文编排缓存。目录、全局事实及 Step 02 生成设置会保留。
               </Dialog.Description>
             </div>
             <div className="content-regenerate-actions">
@@ -1100,7 +980,7 @@ function ContentEditPage({
                     <strong>确认继续后：</strong>
                     <ul>
                       <li>这些小节将标记为“已忽略”</li>
-                      <li>不再参与一致性检查和图片编排</li>
+                      <li>不再参与一致性检查</li>
                     </ul>
                   </div>
                   <p className="content-incomplete-decision-warning">
