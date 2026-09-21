@@ -150,24 +150,6 @@ function normalizeGlobalFactsMode(value) {
   return value === 'omit' || value === 'placeholder' ? value : 'fabricate';
 }
 
-function buildContentFactCompletenessInstruction(mode) {
-  if (mode === 'omit') {
-    return `事实补全规则（别招欠模式）：
-1. 严禁虚拟、杜撰任何未在本章节全局事实变量和参考材料中明确给出的具体信息。
-2. 全局事实变量中已经给出的笼统口径必须沿用，不得自行补成具体工艺、人名、日期、地点、业绩、证书、规格型号或实施细节。
-3. 如果有不确定的，尽量使用笼统的方式表达，不涉及不确定的时间、地点、人员、业绩、证书、规格型号等任何事实项内容。
-4. 不要为了写得具体而编造人名、日期、地点、业绩、证书编号、规格型号。`;
-  }
-  if (mode === 'placeholder') {
-    return `事实补全规则（放着我来模式）：
-1. 严禁虚拟、杜撰任何未在本章节全局事实变量和参考材料中明确给出的具体信息。
-2. 任何不确定项必须使用【待填写】作为占位符，不要改写成“待定”或其他说法。
-3. 如果全局事实变量中已有【待填写】，正文必须原样沿用，不得改成具体值。
-4. 不要杜撰不确定的时间、地点、人员、业绩、证书、规格型号等任何事实项内容。`;
-  }
-  return '';
-}
-
 function formatGlobalFactsForPrompt(globalFacts) {
   const groups = (Array.isArray(globalFacts) ? globalFacts : [])
     .map((group, index) => {
@@ -1030,60 +1012,6 @@ function parseAgentJsonContent(content) {
   throw new Error(`Agent 未返回可解析的 JSON：${lastError?.message || '内容为空'}`);
 }
 
-function escapeSectionAttribute(value) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function parseAgentSectionMarkdown(markdown) {
-  const sections = new Map();
-  const lines = normalizeNewlines(markdown).split('\n');
-  let currentId = '';
-  let buffer = [];
-
-  for (const line of lines) {
-    const startMatch = /^\s*<!--\s*yibiao-section-start\s+id="([^"]+)"[^>]*-->\s*$/.exec(line);
-    if (startMatch) {
-      if (currentId) {
-        throw new Error(`Agent 输出的小节标记嵌套：${currentId} 内出现 ${startMatch[1]}`);
-      }
-      currentId = String(startMatch[1] || '').trim();
-      buffer = [];
-      continue;
-    }
-
-    const endMatch = /^\s*<!--\s*yibiao-section-end\s+id="([^"]+)"\s*-->\s*$/.exec(line);
-    if (endMatch) {
-      const endId = String(endMatch[1] || '').trim();
-      if (!currentId) {
-        throw new Error(`Agent 输出存在未配对的小节结束标记：${endId}`);
-      }
-      if (endId !== currentId) {
-        throw new Error(`Agent 输出小节标记不匹配：${currentId} / ${endId}`);
-      }
-      if (sections.has(currentId)) {
-        throw new Error(`Agent 输出重复小节：${currentId}`);
-      }
-      sections.set(currentId, buffer.join('\n').trim());
-      currentId = '';
-      buffer = [];
-      continue;
-    }
-
-    if (currentId) {
-      buffer.push(line);
-    }
-  }
-
-  if (currentId) {
-    throw new Error(`Agent 输出小节未闭合：${currentId}`);
-  }
-  return sections;
-}
-
 function normalizeChildren(item) {
   return Array.isArray(item.children) ? item.children : [];
 }
@@ -1452,11 +1380,11 @@ const CONTENT_PHASE_LABELS = {
 
 const CONTENT_PROGRESS_PROFILES = {
   html: {
-    planning: [0, 12], restoring: [12, 18], generating: [18, 80],
+    planning: [0, 12], restoring: [12, 18], generating: [18, 70], auditing: [70, 80],
     'sections-completed': [80, 80], 'word-converting': [80, 90], 'word-completed': [90, 90],
   },
   'html-single': {
-    planning: [0, 15], restoring: [15, 25], generating: [25, 80],
+    planning: [0, 15], restoring: [15, 25], generating: [25, 70], auditing: [70, 80],
     'sections-completed': [80, 80], 'word-converting': [80, 90], 'word-completed': [90, 90],
   },
   full: {
@@ -1520,11 +1448,11 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
     total = stats.word_conversion_total;
     phaseProgress = percentageFor(completed, total);
   } else if (phase === 'auditing') {
-    completed = stats.audit_agent_step_completed;
-    total = stats.audit_agent_step_total;
+    completed = stats.consistency_status === 'completed' ? 3 : Math.max(0, (stats.consistency_round || 1) - (stats.consistency_status === 'running' ? 1 : 0));
+    total = 3;
     phaseProgress = percentageFor(completed, total);
     step = 'agent';
-    stepLabel = stats.audit_agent_step_label || stepLabel;
+    stepLabel = stats.consistency_status === 'completed' ? '一致性审计及修复完成' : `第 ${stats.consistency_round || 1}/3 轮一致性审计及修复`;
   } else if (phase === 'table-cleaning') {
     completed = stats.table_cleanup_completed;
     total = stats.table_cleanup_total;
@@ -1591,7 +1519,7 @@ function withSection(sections, item, partial) {
   };
 }
 
-async function runContentGenerationTask({ aiService, agentService, ordinaryAgentService, workspaceStore, knowledgeBaseService, templateStore, openXmlHelperService, updateTask: updateManagedTask, checkpointTask: checkpointManagedTask, payload, taskControl, previousState }) {
+async function runContentGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, templateStore, openXmlHelperService, updateTask: updateManagedTask, checkpointTask: checkpointManagedTask, payload, taskControl, previousState }) {
   const resume = Boolean(payload.resume);
   const storedPlan = resume ? (previousState || {}) : (workspaceStore.loadTechnicalPlan() || {});
   const wordControl = normalizeOutlineWordControlSnapshot(storedPlan.outlineWordControlSnapshot);
@@ -1639,8 +1567,9 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       direct_generation_item_ids: storedPlan.contentGenerationRuntime?.direct_generation_item_ids,
       pending_item_ids: storedPlan.contentGenerationRuntime?.pending_item_ids,
     });
+  const continuingConsistency = Boolean((resume || retryFailedSections) && contentRuntime.phase === 'auditing');
   const regenerate = !resume && !retryContentCorrection && !retryFailedSections && !continuePostProcessing && Boolean(payload.regenerate);
-  const targetItemId = resume || (retryFailedSections && contentRuntime.html_output)
+  const targetItemId = resume || (retryFailedSections && (contentRuntime.html_output || continuingConsistency))
     ? contentRuntime.target_item_id : String(payload.targetItemId || '').trim();
   if (retryContentCorrection && targetItemId) {
     throw new Error('单小节重新生成不支持重试内容矫正');
@@ -1673,7 +1602,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   let maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
   const contentStats = {
-    phase: 'planning',
+    phase: continuingConsistency ? 'auditing' : 'planning',
     planning_total: 0,
     planning_completed: 0,
     restoration_total: 0,
@@ -1684,11 +1613,10 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     maximum_words: wordControl.maximumWords,
     section_words: wordControl.sectionWords,
     current_words: 0,
-    audit_agent_step_total: 0,
-    audit_agent_step_completed: 0,
-    audit_agent_step_label: '',
-    audit_agent_changed_sections: 0,
-    audit_agent_failed_sections: 0,
+    consistency_round: continuingConsistency ? previousState?.contentGenerationTask?.stats?.content?.consistency_round || 1 : 0,
+    consistency_status: continuingConsistency ? 'running' : '',
+    consistency_summary: '',
+    consistency_remaining_issues: [],
     table_cleanup_total: 0,
     table_cleanup_completed: 0,
     table_cleanup_rewritten: 0,
@@ -1767,6 +1695,8 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     regenerate_requirement: regenerateRequirement,
   });
 
+  if (continuingConsistency) tasksToRun = [];
+
   for (const { item } of tasksToRun) {
     const existing = sections[item.id] || {};
     const content = existing.content || item.content || '';
@@ -1824,7 +1754,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
   }
 
   const htmlWorkflow = !retryContentCorrection && !continuePostProcessing
-    && (!resume || !contentRuntime.phase || ['planning', 'restoring', 'generating', 'sections-completed', 'word-converting', 'word-completed'].includes(contentRuntime.phase));
+    && (!resume || !contentRuntime.phase || ['planning', 'restoring', 'generating', 'auditing', 'sections-completed', 'word-converting', 'word-completed'].includes(contentRuntime.phase));
   const progressMode = resume && storedPlan.contentGenerationTask?.progress_detail?.mode
     ? storedPlan.contentGenerationTask.progress_detail.mode
         : retryContentCorrection
@@ -1832,7 +1762,7 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
           : targetItemId
             ? (htmlWorkflow ? 'html-single' : 'single')
             : (htmlWorkflow ? 'html' : 'full');
-  let lastTaskProgress = resume || (retryFailedSections && contentRuntime.html_output)
+  let lastTaskProgress = resume || (retryFailedSections && (contentRuntime.html_output || contentRuntime.phase === 'auditing'))
     ? Math.max(0, Number(previousState?.contentGenerationTask?.progress) || 0) : 0;
 
   // 所有正文任务更新都在这里补充累计进度和当前阶段明细。
@@ -1912,10 +1842,6 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     };
   }
 
-  function isAgentBusyResult(result) {
-    return result?.status === 'busy' || result?.skipped === true;
-  }
-
   function createAgentActivityProgressHandler(updateProgress, step, fallbackLabel) {
     let lastKey = '';
     return (event = {}) => {
@@ -1927,88 +1853,6 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
       logs = [...logs, `Agent 实时进度：${message}`];
       updateProgress(step, message || fallbackLabel);
     };
-  }
-
-  async function runAgentTaskWithRecoveredOutput(payload, eventPrefix) {
-    function normalizeAgentFilePath(value) {
-      return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/^(\.\/)+/, '').toLowerCase();
-    }
-
-    function findSeededOutputContent() {
-      const outputPath = normalizeAgentFilePath(payload.output_file || '');
-      if (!outputPath) {
-        return null;
-      }
-      const seededOutput = (Array.isArray(payload.files) ? payload.files : [])
-        .find((file) => normalizeAgentFilePath(file?.path) === outputPath);
-      return seededOutput ? String(seededOutput.content || '') : null;
-    }
-
-    try {
-      const result = await (ordinaryAgentService || agentService).runTask(payload);
-      if (isAgentBusyResult(result)) {
-        writeDeveloperLog(`${eventPrefix}.agent.busy`, {
-          message: result?.message || 'Agent 正在处理其他任务',
-          active_task: result?.active_task || null,
-        });
-        return result;
-      }
-      writeDeveloperLog(`${eventPrefix}.agent.done`, {
-        agent_runtime: result?.runtime_id || '',
-        agent_task_id: result?.task_id || '',
-        agent_session_id: result?.session_id || '',
-        agent_workspace_dir: result?.workspace_dir || '',
-        agent_runtime_root: result?.runtime_root || '',
-        output_file: result?.output_file || '',
-        output_metrics: textMetrics(result?.output_content || ''),
-        agent_diagnostics: result?.diagnostics || {},
-      });
-      return result;
-    } catch (error) {
-      if (isPauseRequested() || isPauseLikeError(error)) {
-        throw error;
-      }
-      const diagnostics = agentErrorDiagnostics(error);
-      writeDeveloperLog(`${eventPrefix}.agent.error`, diagnostics);
-      if (error?.agentValidationFailed) {
-        throw error;
-      }
-      const recoveredOutput = String(error?.agentPartialOutput || '').trim();
-      if (!recoveredOutput) {
-        throw error;
-      }
-      const seededOutputContent = findSeededOutputContent();
-      if (seededOutputContent !== null
-        && normalizeNewlines(recoveredOutput).trim() === normalizeNewlines(seededOutputContent).trim()) {
-        writeDeveloperLog(`${eventPrefix}.output.recovered_rejected`, {
-          ...diagnostics,
-          reason: 'same_as_seeded_output',
-          output_metrics: textMetrics(recoveredOutput),
-        });
-        throw error;
-      }
-      writeDeveloperLog(`${eventPrefix}.output.recovered`, {
-        ...diagnostics,
-        output_metrics: textMetrics(recoveredOutput),
-      });
-      return {
-        success: true,
-        recovered: true,
-        runtime_id: error?.agentRuntimeId || '',
-        task_id: error?.agentTaskId || '',
-        title: error?.agentTitle || payload.title || 'Agent 任务',
-        workspace_dir: error?.agentWorkspaceDir || '',
-        runtime_root: error?.agentRuntimeRoot || '',
-        output_file: error?.agentOutputFile || payload.output_file || '',
-        output_content: recoveredOutput,
-        assistant_text: '',
-        diff: [],
-        session_id: '',
-        retry_count: diagnostics.agent_retry_attempts.length,
-        retry_attempts: diagnostics.agent_retry_attempts,
-        diagnostics: diagnostics.agent_diagnostics,
-      };
-    }
   }
 
   writeDeveloperLog('content.task.started', {
@@ -2805,6 +2649,19 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
             scan();
             scanTimer = setInterval(scan, 10000);
           },
+          onConsistencyProgress(state) {
+            contentStats.phase = 'auditing';
+            contentStats.consistency_round = state.round;
+            contentStats.consistency_status = state.status;
+            contentStats.consistency_summary = state.summary || '';
+            contentStats.consistency_remaining_issues = state.remaining_issues;
+            if (state.status === 'completed') {
+              logs = [...logs, state.remaining_issues.length
+                ? `一致性审计已达三轮上限，仍有 ${state.remaining_issues.length} 项未解决：${state.remaining_issues.join('；')}`
+                : '本次目标小节一致性审计及修复完成，未发现尚未解决的矛盾。'];
+            }
+            checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime({ phase: 'auditing' }) });
+          },
           onCheckpoint: checkpoint => updateContentAgentState(checkpoint),
           onActivity(event = {}) {
             if (event.visible === false || !event.message) return;
@@ -2867,7 +2724,9 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
         }
         persistPausedContentGeneration(contentRuntime.html_output
           ? 'Word 转换已暂停，已完成文件保留，继续时只转换剩余小节。'
-          : '正文生成已暂停，已完成的 HTML 文件和 Agent 会话已保留，继续后接着生成。');
+          : contentStats.phase === 'auditing'
+            ? '一致性审计已暂停，当前轮次及正文已保留，继续后在同一会话接着处理。'
+            : '正文生成已暂停，已完成的 HTML 文件和 Agent 会话已保留，继续后接着生成。');
         throw createContentGenerationPausedError();
       }
       checkpointTask({ status: 'error', error: error.message, logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime() });
@@ -2875,302 +2734,6 @@ async function runContentGenerationTask({ aiService, agentService, ordinaryAgent
     } finally {
       clearInterval(scanTimer);
       clearInterval(watcher);
-    }
-  }
-
-  function buildConsistencyTargets(targetItemIdForAudit = '') {
-    const normalizedTargetId = String(targetItemIdForAudit || '').trim();
-    return leaves
-      .filter(({ item }) => !normalizedTargetId || item.id === normalizedTargetId)
-      .map((context) => {
-        const content = sections[context.item.id]?.content || context.item.content || '';
-        return {
-          ...context,
-          content,
-        };
-      })
-      .filter(({ item, content }) => sections[item.id]?.status === 'success' && String(content || '').trim());
-  }
-
-  function buildAgentConsistencySectionIndex(targets) {
-    const index = new Map();
-    for (const context of targets || []) {
-      const id = String(context.item?.id || '').trim();
-      const content = String(context.content || '').trim();
-      if (!id || !content) {
-        continue;
-      }
-      index.set(id, {
-        ...context,
-        originalContent: content,
-        originalHash: textHash(content),
-      });
-    }
-    return index;
-  }
-
-  function renderAgentTechnicalPlanOutline(items, sectionIndex, level = 1, lines = []) {
-    for (const item of items || []) {
-      const id = String(item?.id || '').trim();
-      const title = singleLine(item?.title || '未命名章节');
-      const headingLevel = Math.min(level + 1, 6);
-      lines.push(`${'#'.repeat(headingLevel)} ${id ? `${id} ` : ''}${title}`.trim());
-
-      if (item?.children?.length) {
-        renderAgentTechnicalPlanOutline(item.children, sectionIndex, level + 1, lines);
-        continue;
-      }
-
-      const section = sectionIndex.get(id);
-      if (!section) {
-        continue;
-      }
-      lines.push(`<!-- yibiao-section-start id="${escapeSectionAttribute(id)}" title="${escapeSectionAttribute(title)}" -->`);
-      lines.push(section.originalContent);
-      lines.push(`<!-- yibiao-section-end id="${escapeSectionAttribute(id)}" -->`);
-    }
-    return lines;
-  }
-
-  function buildAgentTechnicalPlanMarkdown(sectionIndex) {
-    const lines = ['# 技术方案正文', ''];
-    renderAgentTechnicalPlanOutline(outlineData.outline || [], sectionIndex, 1, lines);
-    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
-  }
-
-  function buildAgentGlobalFactsMarkdown() {
-    return [
-      '# 全局事实变量',
-      globalFactsText || '未提供',
-      '# 招标文件关键解析结果',
-      bidAnalysisFactsText || '未提供',
-    ].join('\n\n');
-  }
-
-  function buildAgentConsistencyRepairPrompt() {
-    return `请在当前工作目录中完成全文一致性修复，让 technical-plan.md 成为程序可继续解析和回写的最终正文文件。
-
-workspace 文件说明：
-- global-facts.md：全局事实变量、招标文件关键解析结果和需要保持一致的项目信息。
-- technical-plan.md：当前技术方案正文全文，包含章节标题、section id 和 yibiao-section-start / yibiao-section-end 标记。
-
-任务目标：
-审计并修复 technical-plan.md，使正文不与 global-facts.md 中的全局事实变量冲突，并尽量消除正文前后矛盾。
-
-工作方式由你自行决定。可以搜索、分段读取、建立索引、创建草稿或中间文件，并多轮编辑 technical-plan.md；不需要按固定顺序读取文件，也不需要在单次模型输出中完成全部修复。
-
-最终 technical-plan.md 需要满足：
-- 保留所有章节编号、章节标题、HTML 注释标记和 section id。
-- 每个小节已有原方案图片必须原样保留引用及顺序，不能移到其他小节、删除、重复或替换成新图；证书和报告图片是原方案实质内容。
-- 保留原章节结构，不新增、删除或重排章节。
-- 正文修改范围限定在 yibiao-section-start 和 yibiao-section-end 标记之间。
-- 修复事实冲突、前后矛盾、同一信息多处表达不一致等问题。
-- 优先以 global-facts.md 中的事实变量和关键项目信息为准。${buildContentFactCompletenessInstruction(globalFactsMode) ? `\n\n${buildContentFactCompletenessInstruction(globalFactsMode)}\n不得把【待填写】改成具体值，也不得为缺失项杜撰事实。` : ''}`;
-  }
-
-  function updateAgentConsistencyProgress(step, label, extra = {}) {
-    contentStats.phase = 'auditing';
-    contentStats.audit_agent_step_total = 5;
-    contentStats.audit_agent_step_completed = Math.max(0, Math.min(5, Number(step) || 0));
-    contentStats.audit_agent_step_label = label || '';
-    Object.assign(contentStats, extra || {});
-    const runtime = syncRuntime({ phase: 'auditing' });
-    checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
-      contentGenerationRuntime: runtime,
-    }, { contentRuntime: runtime });
-    return runtime;
-  }
-
-  function validateAgentConsistencySections(parsedSections, sectionIndex) {
-    for (const id of parsedSections.keys()) {
-      if (!sectionIndex.has(id)) {
-        throw new Error(`Agent 输出包含未知小节：${id}`);
-      }
-    }
-    for (const [id, section] of sectionIndex.entries()) {
-      if (!parsedSections.has(id)) {
-        throw new Error(`Agent 输出缺少小节：${id}`);
-      }
-      const nextContent = String(parsedSections.get(id) || '').trim();
-      validateSectionOriginalImages(id, nextContent);
-      if (String(section.originalContent || '').trim() && !nextContent) {
-        throw new Error(`Agent 输出把非空小节改为空：${id}`);
-      }
-    }
-  }
-
-  function applyAgentConsistencySections(parsedSections, sectionIndex, writableIds) {
-    // 先检查完整输出，避免后面某节丢图时前面小节已被写回。
-    validateAgentConsistencySections(parsedSections, sectionIndex);
-    let changedCount = 0;
-    let skippedCount = 0;
-    const changedIds = [];
-    for (const [id, section] of sectionIndex.entries()) {
-      if (writableIds instanceof Set && !writableIds.has(id)) {
-        skippedCount += 1;
-        continue;
-      }
-      const nextContent = String(parsedSections.get(id) || '').trim();
-      const currentContent = String(section.originalContent || '').trim();
-      if (normalizeNewlines(nextContent).trim() === normalizeNewlines(currentContent).trim()) {
-        skippedCount += 1;
-        continue;
-      }
-      changedCount += 1;
-      changedIds.push(id);
-      rememberTouchedItem(id);
-      saveSection(section.item, { status: 'success', content: nextContent, error: undefined }, nextContent, { logs });
-    }
-    return { changedCount, skippedCount, changedIds };
-  }
-
-  async function runAgentConsistencyRepair(options = {}) {
-    if (!agentService?.runTask) {
-      throw new Error('Agent 服务尚未初始化，无法执行 Agent 一致性修复');
-    }
-
-    const allTargets = buildConsistencyTargets('');
-    const sectionIndex = buildAgentConsistencySectionIndex(allTargets);
-    if (!sectionIndex.size) {
-      writeDeveloperLog('consistency.agent.skipped', { reason: 'no_targets', target_item_id: options.targetItemId || targetItemId || '' });
-      logs = [...logs, 'Agent 一致性修复跳过：没有可审计的成功正文小节。'];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      return { ran: false, fixedCount: 0, failedCount: 0 };
-    }
-
-    const normalizedTargetId = String(options.targetItemId || targetItemId || '').trim();
-    const writableIds = normalizedTargetId ? new Set([normalizedTargetId]) : new Set(sectionIndex.keys());
-    if (normalizedTargetId && !sectionIndex.has(normalizedTargetId)) {
-      logs = [...logs, `Agent 一致性修复跳过：目标小节 ${normalizedTargetId} 当前没有成功正文。`];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      return { ran: false, fixedCount: 0, failedCount: 0 };
-    }
-
-    contentStats.audit_agent_changed_sections = 0;
-    contentStats.audit_agent_failed_sections = 0;
-    logs = [...logs, `开始 Agent 全文一致性修复：共 ${sectionIndex.size} 个正文小节${normalizedTargetId ? `，仅回写目标小节 ${normalizedTargetId}` : ''}。`];
-    writeDeveloperLog('consistency.agent.start', {
-      target_item_id: normalizedTargetId,
-      section_count: sectionIndex.size,
-      writable_ids: [...writableIds],
-      sections: Array.from(sectionIndex.values()).map((section) => ({
-        id: section.item.id,
-        title: section.item.title || '未命名章节',
-        content_metrics: textMetrics(section.originalContent),
-      })),
-    });
-
-    updateAgentConsistencyProgress(1, '准备 Agent 输入文件');
-    const files = [
-      { path: 'global-facts.md', content: buildAgentGlobalFactsMarkdown() },
-      { path: 'technical-plan.md', content: buildAgentTechnicalPlanMarkdown(sectionIndex) },
-    ];
-    pauseIfRequested('正文生成已在 Agent 全文一致性修复开始前暂停，本次 Agent 未启动；继续后将重新执行 Agent 修复。');
-
-    updateAgentConsistencyProgress(2, 'Agent 正在审计并修复全文');
-    const agentAbortController = new AbortController();
-    let pauseWatcher = null;
-    let pauseLogged = false;
-    function abortAgentIfPauseRequested() {
-      if (!isPauseRequested()) {
-        return;
-      }
-      if (!pauseLogged) {
-        pauseLogged = true;
-        logs = [...logs, '已请求暂停 Agent 一致性修复，正在取消本轮 Agent 任务。'];
-        updateAgentConsistencyProgress(0, '正在取消本轮 Agent 修复，继续后将重新执行');
-      }
-      if (!agentAbortController.signal.aborted) {
-        agentAbortController.abort(createContentGenerationPausedError());
-      }
-    }
-    pauseWatcher = setInterval(abortAgentIfPauseRequested, 1000);
-
-    try {
-      abortAgentIfPauseRequested();
-      pauseIfRequested('正文生成已在 Agent 全文一致性修复开始前暂停，本次 Agent 未启动；继续后将重新执行 Agent 修复。');
-      const agentResult = await runAgentTaskWithRecoveredOutput({
-        title: '全文一致性 Agent 修复',
-        prompt: buildAgentConsistencyRepairPrompt(),
-        output_file: 'technical-plan.md',
-        files,
-        timeout_ms: 30 * 60 * 1000,
-        max_retries: 1,
-        signal: agentAbortController.signal,
-        validateOutput: (resultForValidation) => {
-          const repairedMarkdownForValidation = String(resultForValidation?.output_content || '').trim();
-          if (!repairedMarkdownForValidation) {
-            throw new Error('Agent 未返回修复后的 technical-plan.md');
-          }
-          const parsedSectionsForValidation = parseAgentSectionMarkdown(repairedMarkdownForValidation);
-          validateAgentConsistencySections(parsedSectionsForValidation, sectionIndex);
-          return { section_count: parsedSectionsForValidation.size };
-        },
-        onActivity: createAgentActivityProgressHandler(updateAgentConsistencyProgress, 2, 'Agent 正在审计并修复全文'),
-      }, 'consistency.agent');
-      if (isAgentBusyResult(agentResult)) {
-        writeDeveloperLog('consistency.agent.busy', { active_task: agentResult?.active_task || null });
-        throw new Error('Agent 正在处理其他任务，无法执行必做的全文一致性审计');
-      }
-      pauseIfRequested('正文生成已在 Agent 全文一致性修复结果回写前暂停，本次 Agent 输出未回写；继续后将重新执行 Agent 修复。');
-
-      updateAgentConsistencyProgress(3, '读取 Agent 修复后的全文');
-      const repairedMarkdown = String(agentResult?.output_content || '').trim();
-      if (!repairedMarkdown) {
-        writeDeveloperLog('consistency.agent.empty_output', { agent_result: agentResult });
-        throw new Error('Agent 未返回修复后的 technical-plan.md');
-      }
-
-      updateAgentConsistencyProgress(4, '解析并校验 Agent 修复结果');
-      const parsedSections = parseAgentSectionMarkdown(repairedMarkdown);
-      validateAgentConsistencySections(parsedSections, sectionIndex);
-      pauseIfRequested('正文生成已在 Agent 全文一致性修复结果回写前暂停，本次 Agent 输出未回写；继续后将重新执行 Agent 修复。');
-
-      updateAgentConsistencyProgress(5, '回写 Agent 修改的小节');
-      const applyResult = applyAgentConsistencySections(parsedSections, sectionIndex, writableIds);
-      contentStats.audit_agent_changed_sections = applyResult.changedCount;
-      logs = [...logs, applyResult.changedCount
-        ? `Agent 一致性修复完成：已回写 ${applyResult.changedCount} 个小节（${applyResult.changedIds.join('、')}）。`
-        : 'Agent 一致性修复完成：未发现需要回写的小节。'];
-      writeDeveloperLog('consistency.agent.done', {
-        changed_count: applyResult.changedCount,
-        skipped_count: applyResult.skippedCount,
-        changed_ids: applyResult.changedIds,
-        agent_task_id: agentResult?.task_id || '',
-        agent_session_id: agentResult?.session_id || '',
-      });
-      updateAgentConsistencyProgress(5, 'Agent 一致性修复完成', { audit_agent_changed_sections: applyResult.changedCount });
-      return { ran: true, fixedCount: applyResult.changedCount, failedCount: 0 };
-    } catch (error) {
-      if (isPauseRequested() || isPauseLikeError(error)) {
-        contentStats.audit_agent_changed_sections = 0;
-        contentStats.audit_agent_failed_sections = 0;
-        logs = [...logs, 'Agent 一致性修复已暂停：本轮 Agent 已取消并清理，继续后将重新执行。'];
-        writeDeveloperLog('consistency.agent.paused', {
-          target_item_id: normalizedTargetId,
-          section_count: sectionIndex.size,
-          error: error.message || String(error),
-        });
-        updateAgentConsistencyProgress(0, 'Agent 修复已暂停，继续后将重新执行', {
-          audit_agent_changed_sections: 0,
-          audit_agent_failed_sections: 0,
-        });
-        pauseIfRequested('正文生成已在 Agent 全文一致性修复阶段暂停，本次 Agent 已取消；继续后将重新执行 Agent 修复。');
-      }
-      const failedCount = normalizedTargetId ? 1 : sectionIndex.size;
-      contentStats.audit_agent_failed_sections = failedCount;
-      logs = [...logs, `Agent 一致性修复失败：${error.message || '未知错误'}。已保留原正文，全文一致性审计未完成。`];
-      writeDeveloperLog('consistency.agent.failed', {
-        target_item_id: normalizedTargetId,
-        failed_count: failedCount,
-        ...agentErrorDiagnostics(error),
-      });
-      updateAgentConsistencyProgress(contentStats.audit_agent_step_completed || 2, 'Agent 一致性修复失败', {
-        audit_agent_failed_sections: failedCount,
-      });
-      throw error;
-    } finally {
-      if (pauseWatcher) clearInterval(pauseWatcher);
     }
   }
 
@@ -3367,6 +2930,10 @@ workspace 文件说明：
   }
 
   try {
+    if (continuingConsistency) {
+      await runContentGeneration([]);
+      return;
+    }
     // 本轮已交付 HTML 后，暂停继续或失败重试直接续转 Word，不再启动 Agent。
     if (htmlWorkflow && (resume || retryFailedSections) && contentRuntime.html_output) {
       contentStats.phase = 'word-converting';
@@ -3448,20 +3015,12 @@ workspace 文件说明：
         logs = [...logs, '本次为内容矫正重试，跳过正文生成，直接进入内容矫正阶段。'];
         publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
       }
-      if (!completedStages.has('auditing')) {
-        const result = await runAgentConsistencyRepair();
-        markStageCompleted('auditing', { pauseForDeveloper: Boolean(result?.ran) });
-      }
       if (!completedStages.has('table-cleaning')) {
         const result = await removeContentTables();
         markStageCompleted('table-cleaning', { pauseForDeveloper: Boolean(result?.ran) });
       }
       pauseIfRequested('正文生成已在去表格阶段暂停，可导出当前已完成内容，稍后继续。');
     } else {
-      if (!completedStages.has('auditing')) {
-        const result = await runAgentConsistencyRepair({ targetItemId });
-        markStageCompleted('auditing', { pauseForDeveloper: Boolean(result?.ran) });
-      }
       if (!completedStages.has('table-cleaning')) {
         const result = await removeContentTables({ targetItemId });
         markStageCompleted('table-cleaning', { pauseForDeveloper: Boolean(result?.ran) });

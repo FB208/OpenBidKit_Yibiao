@@ -4,7 +4,8 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
-const { checkWordCount, countHtmlWords, createContentImageProtection, createContentGenerationWordTools } = require('../electron/services/contentGenerationWordTools.cjs');
+const { createContentImageProtection } = require('../electron/services/contentGenerationEditTools.cjs');
+const { checkWordCount, countHtmlWords, createContentGenerationWordTools } = require('../electron/services/contentGenerationWordTools.cjs');
 const { createContentGenerationTools, runContentGenerationAgent } = require('../electron/services/contentGenerationAgent.cjs');
 const { createPiSession, loadPiModules } = require('../electron/services/pi/piSessionFactory.cjs');
 
@@ -62,7 +63,7 @@ async function checkImageProtection(root, piAi) {
     fs.writeFileSync(secondFile, '<p>其他小节</p>', 'utf8');
     for (const target of ['正文/小节二.html', '图片/0.png']) {
       const oldText = fs.readFileSync(path.join(workspaceDir, target), 'utf8');
-      await assert.rejects(edit.execute('other-file', { path: target, edits: [{ oldText, newText: '修改' }] }), /扩缩写只能/);
+      await assert.rejects(edit.execute('other-file', { path: target, edits: [{ oldText, newText: '修改' }] }), /正文编辑只能/);
     }
     assert.equal(fs.readFileSync(secondFile, 'utf8'), '<p>其他小节</p>');
     assert.deepEqual(fs.readFileSync(path.join(workspaceDir, '图片/0.png')), Buffer.from([0, 0, 255]));
@@ -115,7 +116,7 @@ async function checkImageProtection(root, piAi) {
     assert.equal(badJson.isError, true, '图片写入保护不能覆盖原有 JSON 自动校验');
     await write.execute('good-json', { path: '正文生成结果.json', content: '{"sections":[]}' });
     main.assertJsonValidationPassed();
-    await assert.rejects(write.execute('input', { path: '正文编排决策.json', content: '{}' }), /扩缩写只能/);
+    await assert.rejects(write.execute('input', { path: '正文编排决策.json', content: '{}' }), /正文编辑只能/);
   } finally { main.session.dispose(); }
 }
 
@@ -197,7 +198,7 @@ async function main() {
         assert.ok(options.sessionsDir.startsWith(layout.tasksRoot));
         fs.mkdirSync(options.sessionsDir, { recursive: true });
         fs.writeFileSync(path.join(options.sessionsDir, 'session.jsonl'), '{}', 'utf8');
-        options.createTools?.({ Type, workspaceDir, setActiveTools() {} });
+        options.businessTools = options.createTools?.({ Type, workspaceDir, setActiveTools() {} });
         const session = { sessionId: `session-${sessions.length}`, messages: [], subscribe: () => () => {}, dispose() {}, async abort() {},
           prompt: prompt => promptAction(options, prompt) };
         sessions.push(session);
@@ -276,7 +277,11 @@ async function main() {
     decisions.word_control = { minimumWords: 35, maximumWords: 35, checkTotalWords: true };
     saveDecisions();
     let rounds = 0;
-    promptAction = async () => {
+    promptAction = async (options, prompt) => {
+      if (prompt.includes('现在执行第')) {
+        await options.businessTools.find(tool => tool.name === 'complete-consistency-round').execute('done', { summary: '无矛盾', remaining_issues: [] });
+        return;
+      }
       const oldText = '文'.repeat(15 + rounds);
       rounds += 1;
       await edit.execute('round', { path: targets[0].file, edits: [{ oldText, newText: `${oldText}文` }] });

@@ -265,27 +265,22 @@ function ContentEditPage({
   const canRetryContentCorrection = taskFailed
     && leaves.length > 0
     && resolvedCount === leaves.length
-    && ['auditing', 'table-cleaning'].includes(String(contentStats?.phase || ''));
+    && contentStats?.phase === 'table-cleaning';
   const awaitingContentDecision = taskFailed && Boolean(contentStats?.awaiting_content_decision);
   const retryingWordConversion = taskFailed && ['sections-completed', 'word-converting'].includes(contentStats?.phase || '');
+  const retryingConsistency = taskFailed && contentStats?.phase === 'auditing';
   const contentRetryTargetLabel = '内容矫正';
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
-  const auditAgentStepTotal = contentStats?.audit_agent_step_total || 0;
-  const auditAgentStepCompleted = contentStats?.audit_agent_step_completed || 0;
-  const auditAgentStepLabel = contentStats?.audit_agent_step_label || '';
-  const auditAgentChangedSections = contentStats?.audit_agent_changed_sections || 0;
-  const auditProgress = auditAgentStepTotal
-    ? Math.round((auditAgentStepCompleted / auditAgentStepTotal) * 100)
-    : 0;
+  const consistencyRound = contentStats?.consistency_round || 1;
+  const consistencyComplete = contentStats?.consistency_status === 'completed';
+  const auditProgress = consistencyComplete ? 100 : Math.round(((consistencyRound - 1) / 3) * 100);
   const tableCleanupTotal = contentStats?.table_cleanup_total || 0;
   const tableCleanupCompleted = contentStats?.table_cleanup_completed || 0;
   const tableCleanupRewritten = contentStats?.table_cleanup_rewritten || 0;
   const tableCleanupSkipped = contentStats?.table_cleanup_skipped || 0;
   const tableCleanupProgress = tableCleanupTotal ? Math.round((tableCleanupCompleted / tableCleanupTotal) * 100) : 0;
-  const auditCorrectionCount = auditAgentStepTotal
-    ? `${auditAgentStepCompleted}/${auditAgentStepTotal}`
-    : '检查中';
+  const auditCorrectionCount = `第 ${consistencyRound}/3 轮`;
   const contentCorrectionProgress = tableCleaning ? tableCleanupProgress : auditProgress;
   const contentCorrectionCount = tableCleaning
     ? tableCleanupTotal ? `${tableCleanupCompleted}/${tableCleanupTotal}` : '检查中'
@@ -295,7 +290,7 @@ function ContentEditPage({
   const currentProgressDetail = (phaseVisible || htmlOutputProgress) && progressDetail?.phase === contentStats?.phase ? progressDetail : undefined;
   const displayProgress = htmlOutputProgress ? task?.progress || 0 : currentProgressDetail ? currentProgressDetail.phase_progress : planning ? planningProgress : contentCorrecting ? contentCorrectionProgress : progress;
   const displayProgressLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '编排统计' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '生成统计';
-  const displayProgressCount = htmlOutputProgress && currentProgressDetail
+  const displayProgressCount = auditing ? auditCorrectionCount : htmlOutputProgress && currentProgressDetail
     ? `${currentProgressDetail.completed}/${currentProgressDetail.total}`
     : planning
     ? `${planningCompleted}/${planningTotal}`
@@ -324,11 +319,7 @@ function ContentEditPage({
         ? `正文生成已暂停在原方案还原阶段，已完成 ${progressDetail?.completed || 0}/${progressDetail?.total || 0} 个小节。`
         : `${progressDetail?.step_label || '正在还原原方案内容'}，已完成 ${progressDetail?.completed || 0}/${progressDetail?.total || 0} 个小节。`
     : auditing
-      ? paused
-        ? `内容矫正已暂停在 Agent 全文一致性修复阶段，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal}。${auditAgentStepLabel}`
-        : auditAgentStepCompleted >= auditAgentStepTotal && auditAgentChangedSections
-          ? `Agent 一致性修复完成：已回写 ${auditAgentChangedSections} 个小节。`
-          : `正在内容矫正：${auditAgentStepLabel || 'Agent 正在审计并修复全文'}，步骤 ${auditAgentStepCompleted}/${auditAgentStepTotal || 5}。`
+      ? `${paused ? '已暂停：' : ''}主 Agent 一致性审计及修复，第 ${consistencyRound}/3 轮。${contentStats?.consistency_summary || ''}`
       : tableCleaning
         ? paused
           ? `内容矫正已暂停在表格清理阶段，已处理 ${tableCleanupCompleted}/${tableCleanupTotal} 个表格。`
@@ -351,6 +342,8 @@ function ContentEditPage({
       ? '暂停'
       : paused
         ? '继续'
+        : retryingConsistency
+          ? '继续一致性审计'
         : retryingWordConversion
           ? '重试 Word 转换'
         : canRetryContentCorrection
@@ -485,13 +478,13 @@ function ContentEditPage({
     }
   };
 
-  // 复用失败重试入口；已交付 HTML 的任务由 Main 直接继续 Word 转换。
+  // 复用失败重试入口：恢复原审计会话，或继续已交付 HTML 的 Word 转换。
   const retryFailedSections = async () => {
-    if (taskBlocksGeneration || (!retryingWordConversion && (!awaitingContentDecision || !unresolvedCount))) return;
+    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && (!awaitingContentDecision || !unresolvedCount))) return;
     try {
       await window.yibiao?.tasks.startContentGeneration({ retryFailedSections: true });
       trackConfigUsage({ content_generation_action: 'retry_failed_sections' });
-      showToast(retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
+      showToast(retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动失败小节重试失败', 'error');
     }
@@ -519,7 +512,7 @@ function ContentEditPage({
       void resumeGeneration();
       return;
     }
-    if (retryingWordConversion) {
+    if (retryingWordConversion || retryingConsistency) {
       void retryFailedSections();
       return;
     }

@@ -143,11 +143,10 @@ export interface BackgroundTaskState {
       maximum_words?: number;
       section_words?: number;
       current_words?: number;
-      audit_agent_step_total?: number;
-      audit_agent_step_completed?: number;
-      audit_agent_step_label?: string;
-      audit_agent_changed_sections?: number;
-      audit_agent_failed_sections?: number;
+      consistency_round?: number;
+      consistency_status?: '' | 'running' | 'round-completed' | 'completed';
+      consistency_summary?: string;
+      consistency_remaining_issues?: string[];
       table_cleanup_total?: number;
       table_cleanup_completed?: number;
       table_cleanup_rewritten?: number;

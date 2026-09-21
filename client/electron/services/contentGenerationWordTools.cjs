@@ -2,78 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 
-const WORD_ADJUSTMENT_TOOLS = ['read', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user', 'check-word-count', 'adjust-sections', 'report-failure'];
-const WORD_ADJUSTMENT_CHILD_TOOLS = ['read', 'edit', 'report-failure'];
-
-// 只提取图片及其承载结构；表格里的普通说明文字不属于图片保护范围。
-function imageStructure(html) {
-  const $ = require('cheerio').load(String(html).replace(/\r\n/g, '\n'), null, false);
-  // template 内有独立 Document 节点，沿真实父链遍历才能识别图片被移入不可见容器。
-  function parents(node) {
-    const result = [];
-    for (let parent = node.parent; parent; parent = parent.parent) {
-      if (parent.name) result.push(parent);
-    }
-    return result;
-  }
-  const images = $('figure, img').toArray().filter(node => !parents(node).some(parent => parent.name === 'figure'));
-  const attributes = node => Object.fromEntries(Object.entries(node.attribs || {}).sort(([a], [b]) => a.localeCompare(b)));
-  const tableTags = new Set(['table', 'caption', 'colgroup', 'col', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th']);
-  // 保留表格布局和图片所在单元格，忽略普通文字及其段落/列表包装。
-  function layout(node) {
-    const imageIndex = images.indexOf(node);
-    if (imageIndex >= 0) return [{ image: imageIndex }];
-    const children = (node.children || []).flatMap(layout);
-    return tableTags.has(node.name) ? [{ tag: node.name, attributes: attributes(node), children }] : children;
-  }
-  return JSON.stringify({
-    images: images.map(node => ({
-      html: $.html(node),
-      parents: parents(node).map(parent => ({ tag: parent.name, attributes: attributes(parent) })),
-    })),
-    tables: $('table').toArray().filter(node => $(node).find('figure, img').length).map(layout),
-  });
-}
-
-// 图片保护只控制扩缩写可写目标和图片结构，不参与 Pi 的文字匹配或替换。
-function createContentImageProtection({ workspaceDir, files, active = false, allowManifest = false, setActiveTools = () => {}, onEnter = () => {} }) {
-  const fileKey = file => {
-    const absolute = path.resolve(workspaceDir, file);
-    return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
-  };
-  const sectionFiles = new Set(files.map(fileKey));
-  const manifest = allowManifest ? fileKey('正文生成结果.json') : '';
-  const toolNames = allowManifest ? WORD_ADJUSTMENT_TOOLS : WORD_ADJUSTMENT_CHILD_TOOLS;
-  if (active) setActiveTools(toolNames);
-
-  // 与工具执行前和文件落盘前共用，防止路径别名或直接工具执行绕过目标限制。
-  function assertWritable(toolName, filePath) {
-    const key = fileKey(filePath);
-    if (key === manifest) return;
-    if (toolName !== 'edit' || !sectionFiles.has(key)) throw new Error('扩缩写只能用 edit 修改分配的正文小节；不能覆盖正文、图片或输入资料，write 仅可保存主任务结果清单。');
-  }
-  return {
-    enter() {
-      if (active) return;
-      onEnter();
-      active = true;
-      setActiveTools(toolNames);
-    },
-    beforeToolCall({ toolCall, args }) {
-      if (!active) return;
-      if (!toolNames.includes(toolCall.name)) throw new Error(`扩缩写期间不能调用 ${toolCall.name}，请使用 read/edit 调整文字并保留图片。`);
-      if (toolCall.name === 'edit' || toolCall.name === 'write') assertWritable(toolCall.name, args.path);
-    },
-    beforeWrite({ filePath, content, originalContent, toolName }) {
-      if (!active) return;
-      assertWritable(toolName, filePath);
-      if (fileKey(filePath) === manifest) return;
-      if (typeof originalContent !== 'string' || imageStructure(originalContent) !== imageStructure(content)) {
-        throw new Error('本次编辑修改了受保护图片或图片布局，文件未写入。请原样保留图片块、引用、数量和顺序，只调整普通文字。');
-      }
-    },
-  };
-}
+const { createContentImageProtection, editContentSections } = require('./contentGenerationEditTools.cjs');
 
 // 统计实际 HTML 中的可读正文，排除图片提示词。
 function countHtmlWords(html) {
@@ -141,39 +70,12 @@ function createContentGenerationWordTools({ agentService, signal, activity, vali
     async execute(_callId, params, toolSignal) {
       if (activity.pending) throw new Error('请等待上一批生成或编辑任务全部结束');
       if (!enterAdjustment().complete) throw new Error('请先完成全部目标小节及配图，再进行扩缩写');
-      const ids = params.sections.map(section => section.section_id);
-      if (new Set(ids).size !== ids.length || ids.some(id => !targets.has(id))) throw new Error('只能编辑本次目标小节，一批不能重复提交同一小节');
-      const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
-      activity.pending += 1;
-      try {
-        const results = await Promise.all(params.sections.map(async job => {
-          const section = targets.get(job.section_id);
-          try {
-            combinedSignal.throwIfAborted();
-            const childProtection = createContentImageProtection({ workspaceDir, files: [section.file], active: true });
-            await agentService.runTask({
-              title: `正文扩缩写-${section.number}-${section.title}`, primary_session: false,
-              failure_handled_by_parent: true,
-              workspace_dir: workspaceDir, active_tools: WORD_ADJUSTMENT_CHILD_TOOLS,
-              before_tool_call: childProtection.beforeToolCall, before_file_write: childProtection.beforeWrite,
-              output_file: section.file, summary_enabled: false, signal: combinedSignal,
-              max_retries: 1, timeout_ms: 30 * 60 * 1000,
-              prompt: `你负责编辑小节 ${section.number} ${section.title}，文件为 ${section.file}。先完整读取该文件及受限HTML生成规范.md，再按以下要求扩缩写：\n${job.instructions}\n只使用原生 edit 修改这一个小节文件；不要改其他小节、输入资料或结果清单。已有图片块（含图注与提示词）、图片引用和顺序、图片表格布局均受写入前保护，不得删除、替换或修改；可以调整图文表格中的普通说明文字。图片保护拒绝编辑时文件没有写入，应重读后仅修改文字。保留受限 HTML 结构、原有图片及引用、原表格、实质信息、事实参数和承诺。精简重复冗余文字，扩写应具体且不重复凑字；事实冲突以全局事实设定.md为准，按需读取。不得为压字数删去必须保留的实质内容，无法完成时调用 report-failure。编辑未命中时读取最新原文再修正；不要输出补丁让主 Agent 执行。完成本次要求后在最后一次成功 edit 上标记 task_complete=true，不承担全文达标或修改其他小节的任务。`,
-              validateOutput: output => validateHtml(workspaceDir, output.output_content),
-              onActivity,
-            });
-            return { section_id: section.id, status: 'success' };
-          } catch (error) {
-            return { section_id: section.id, status: 'error', error: error.message };
-          }
-        }));
-        combinedSignal.throwIfAborted();
-        return result({ results });
-      } finally {
-        activity.pending -= 1;
-      }
+      return result({ results: await editContentSections({
+        jobs: params.sections, targets, workspaceDir, agentService, signal, toolSignal, activity, validateHtml, onActivity,
+        title: '正文扩缩写', instructions: '精简重复冗余文字，扩写应具体且不重复凑字；不得为压字数删去必须保留的实质内容。',
+      }) });
     },
   }];
 }
 
-module.exports = { countHtmlWords, checkWordCount, createContentImageProtection, createContentGenerationWordTools };
+module.exports = { countHtmlWords, checkWordCount, createContentGenerationWordTools };

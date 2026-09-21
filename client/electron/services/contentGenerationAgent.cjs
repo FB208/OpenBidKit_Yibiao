@@ -4,7 +4,9 @@ const crypto = require('node:crypto');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 const { originalImageReferences } = require('./originalPlanRestoration.cjs');
 const { createContentGenerationImageTools, validateContentImageReferences } = require('./contentGenerationImageTools.cjs');
-const { countHtmlWords, checkWordCount, createContentImageProtection, createContentGenerationWordTools } = require('./contentGenerationWordTools.cjs');
+const { countHtmlWords, checkWordCount, createContentGenerationWordTools } = require('./contentGenerationWordTools.cjs');
+const { createContentImageProtection } = require('./contentGenerationEditTools.cjs');
+const { CONSISTENCY_TOOLS, buildConsistencyPrompt, createContentGenerationConsistencyTools } = require('./contentGenerationConsistencyTools.cjs');
 
 const CONTENT_GENERATION_AGENT_TASK_KEY = 'technical-plan-content-generation';
 const RESULT_FILE = '正文生成结果.json';
@@ -158,7 +160,7 @@ function readContentGenerationResult(workspaceDir) {
 }
 
 // Agent 批量提交写作任务；复用 scoped AI 队列实现真实并发和统一取消。
-function createContentGenerationTools({ aiService, agentService, signal, onActivity, imageProtection, onProgress = () => {} }, { Type, workspaceDir, setActiveTools }) {
+function createContentGenerationTools({ aiService, agentService, signal, onActivity, imageProtection, consistency, onProgress = () => {} }, { Type, workspaceDir, setActiveTools }) {
   const activity = { pending: 0 };
   const read = file => fs.readFileSync(path.join(workspaceDir, file), 'utf8');
   const decisions = JSON.parse(read(INPUT_FILES.decisions));
@@ -168,6 +170,7 @@ function createContentGenerationTools({ aiService, agentService, signal, onActiv
   const rules = read(INPUT_FILES.rules);
   const template = read(INPUT_FILES.template);
   const config = read(INPUT_FILES.config);
+  const validateHtml = (root, html) => { checkSectionHtml(html); validateContentImageReferences(root, html); };
   return [{
     name: 'generate-sections', label: '批量生成正文小节',
     description: `一次提交多个目标小节并发生成受限 HTML，各节独立落盘。先检索相关${decisions.has_knowledge_base ? '知识库和' : ''}全局事实，把需要的参考原文摘录传入。失败小节可单独重试。`,
@@ -213,7 +216,10 @@ function createContentGenerationTools({ aiService, agentService, signal, onActiv
         return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }], details: { results } };
       } finally { activity.pending -= 1; }
     },
-  }, ...createContentGenerationWordTools({ agentService, signal, activity, onActivity, imageProtection, validateHtml: (root, html) => { checkSectionHtml(html); validateContentImageReferences(root, html); } }, { Type, workspaceDir, setActiveTools }), ...createContentGenerationImageTools({ aiService, signal }, { Type, workspaceDir })];
+  },
+  ...createContentGenerationConsistencyTools({ agentService, signal, activity, onActivity, consistency, validateHtml, validateResult: () => readContentGenerationResult(workspaceDir) }, { Type, workspaceDir }),
+  ...createContentGenerationWordTools({ agentService, signal, activity, onActivity, imageProtection, validateHtml }, { Type, workspaceDir, setActiveTools }),
+  ...createContentGenerationImageTools({ aiService, signal }, { Type, workspaceDir })];
 }
 
 // 单个持久 Agent 负责阅读、检索、批量调度及最终文件清单。
@@ -229,42 +235,74 @@ function buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPla
 7. 所有并发生成任务及配图全部完成后，再调用 check-word-count 统一检查实际字数，不能一边生成一边按部分结果调整。完整检查后进入图片保护阶段：只用 edit 调整正文文字，write 仅可保存正文生成结果.json；不能再调用命令、正文生成或配图工具。已插入的所有图片块（包括原图、新图、图注及提示词）、图片顺序和图片表格布局不可修改；图文表格中的普通说明文字可以调整。图片保护拒绝编辑时文件未写入，重新读取后仅修改文字。word_control.checkTotalWords=false 表示本次是单节或局部生成，只统计本次字数，不要求本次小节满足全文上下限；两个边界都未设置时不做字数调整。
 检查完整且尚未达标时，按距离要求范围的差额选择：大于10000字，调用 adjust-sections 并发安排不同小节扩缩写；小于等于10000字，由你直接使用原生 read/edit 微调，不调用并发扩缩写。增减目标由你按内容安排，不要让每个子任务都承担全文差额。并发编辑期间你不得同时修改这些文件；等本轮所有任务结束后再调用 check-word-count。可以多轮调整，每轮按最新差额重新选择方式，直到进入要求范围，不设固定轮数。不删除原表格、原图、实质信息或承诺来凑字数；无法在保留要求下达标时明确调用 report-failure，不得伪报完成。不要再使用 generate-sections 重写整节进行字数调整。
 8. 检查小节覆盖、字数及所有 img 的 data-yb-asset-ref 对应图片文件已存在，图片占位全部完成后将所有本次目标写入正文生成结果.json，格式为{"sections":[{"section_id":"小节ID","file":"正文/小节ID.html","words":实际正文统计字数}]}。该JSON已预置Schema并开启自动校验；用write/edit完成，无需重复独立JSON校验。HTML正文留在小节文件中，不塞进清单。最后完成标记放在清单写入上。
-9. 本阶段到正文 HTML、图片及源码文件产出为止，不启动既有后续全文审计、全文图片编排和生图流程。
+9. 提交本阶段结果后，程序会在同一会话中发出一致性审计任务；等待下一阶段要求，不自行转换 Word。
 以下写作规则仅适用于小节 HTML 文件，不适用于结果清单：\n${writingInstructions('', hasKnowledgeBase)}`;
 }
 
 // 新建或恢复正文 Session；暂停保留工作区，完成后只返回文件产物。
-async function runContentGenerationAgent({ agentService, aiService, resume, hasKnowledgeBase, hasOriginalPlan, resolveOriginalImagePath, signal, buildFiles, onCheckpoint = () => {}, onActivity, onProgress, onWorkspaceReady = () => {} }) {
+async function runContentGenerationAgent({ agentService, aiService, resume, hasKnowledgeBase, hasOriginalPlan, resolveOriginalImagePath, signal, buildFiles, onCheckpoint = () => {}, onActivity, onProgress, onConsistencyProgress = () => {}, onWorkspaceReady = () => {} }) {
   const resuming = Boolean(resume && agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY));
-  const protectionActive = resuming && agentService.loadPersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY).state.word_adjustment_started === true;
+  const savedState = resuming ? agentService.loadPersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY).state : {};
+  const protectionActive = savedState.word_adjustment_started === true;
+  let consistencyState = savedState.consistency || null;
+  const consistency = {
+    get: () => consistencyState,
+    save(state) {
+      agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { consistency: state });
+      consistencyState = state;
+      onConsistencyProgress(state);
+    },
+  };
   let imageProtection;
   const runId = crypto.randomUUID();
   if (resuming) agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { run_id: runId, status: 'running', agent_connection: 'running', error: null });
   const result = await agentService.runTask({
     task_id: runId, title: '投标文件正文生成', primary_session: true, summary_enabled: false,
-    prompt: `${buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPlan)}${protectionActive ? '\n本次恢复时已处于图片保护阶段，正文和配图已经就绪，只继续文字调整及结果清单保存，不重新生成正文或图片。' : ''}`, output_file: RESULT_FILE,
+    prompt: consistencyState ? buildConsistencyPrompt(consistencyState, hasKnowledgeBase, hasOriginalPlan) : `${buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPlan)}${protectionActive ? '\n本次恢复时已处于图片保护阶段，正文和配图已经就绪，只继续文字调整及结果清单保存，不重新生成正文或图片。' : ''}`, output_file: RESULT_FILE,
     files: resuming ? [] : buildFiles(), signal,
     persistent_task: { task_key: CONTENT_GENERATION_AGENT_TASK_KEY, mode: resuming ? 'resume' : 'create' },
-    initial_stage: 'generating', max_retries: 1, timeout_ms: 30 * 60 * 1000,
+    initial_stage: consistencyState ? 'auditing' : 'generating', max_retries: 1, timeout_ms: 30 * 60 * 1000,
     json_validation_schemas: { [RESULT_FILE]: RESULT_SCHEMA }, auto_validate_json: true,
-    before_tool_call: context => imageProtection.beforeToolCall(context),
+    before_tool_call: context => {
+      if (consistencyState && consistencyState.status !== 'running' && ['edit', 'write', 'repair-sections'].includes(context.toolCall.name)) {
+        throw new Error('本轮审计结论已经提交，请标记任务完成并等待程序进入下一阶段');
+      }
+      imageProtection.beforeToolCall(context);
+    },
     before_file_write: context => imageProtection.beforeWrite(context),
     create_tools: context => {
       if (hasOriginalPlan && !resuming) copyRestoredImages(context.workspaceDir, resolveOriginalImagePath);
       const decisions = JSON.parse(fs.readFileSync(path.join(context.workspaceDir, INPUT_FILES.decisions), 'utf8'));
       imageProtection = createContentImageProtection({
         workspaceDir: context.workspaceDir, files: decisions.targets.map(section => section.file),
-        active: protectionActive, allowManifest: true, setActiveTools: context.setActiveTools,
+        active: protectionActive || Boolean(consistencyState), ...(consistencyState ? { toolNames: CONSISTENCY_TOOLS } : {}), allowManifest: true, setActiveTools: context.setActiveTools,
         onEnter: () => agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { word_adjustment_started: true }),
       });
       onWorkspaceReady(context.workspaceDir);
-      return createContentGenerationTools({ aiService, agentService, signal, onProgress, onActivity, imageProtection }, context);
+      if (consistencyState) onConsistencyProgress(consistencyState);
+      return createContentGenerationTools({ aiService, agentService, signal, onProgress, onActivity, imageProtection, consistency }, context);
     },
     validateOutput: (_result, context) => readContentGenerationResult(context.workspace_dir),
     // 字数不达标时继续同一主会话，不使用旧调整阶段或固定重试轮数。
     continueTask: (_result, context) => {
+      // 审计分支必须先于字数检查，修复后绝不再次检查字数范围。
+      if (consistencyState) {
+        if (consistencyState.status === 'completed') return { complete: true };
+        if (consistencyState.status === 'round-completed') {
+          if (!consistencyState.remaining_issues.length || consistencyState.round >= 3) {
+            consistency.save({ ...consistencyState, status: 'completed' });
+            return { complete: true };
+          }
+          consistency.save({ ...consistencyState, round: consistencyState.round + 1, status: 'running', summary: '' });
+        }
+        return { stage: 'auditing', prompt: buildConsistencyPrompt(consistencyState, hasKnowledgeBase, hasOriginalPlan) };
+      }
       const words = checkWordCount(context.workspace_dir);
-      if (words.in_range) return { complete: true };
+      if (words.in_range) {
+        consistency.save({ round: 1, status: 'running', remaining_issues: [], failed_sections: [], summary: '' });
+        imageProtection.enter(CONSISTENCY_TOOLS);
+        return { stage: 'auditing', prompt: buildConsistencyPrompt(consistencyState, hasKnowledgeBase, hasOriginalPlan) };
+      }
       imageProtection.enter();
       return { stage: 'generating', prompt: `正文尚未满足总字数要求：${JSON.stringify(words)}。所有并发任务结束后复查；差额大于10000字调用 adjust-sections，小于等于10000字由你用原生 edit 微调。继续调整并更新结果清单；不得改变输入要求或删除实质内容，确实无法满足时调用 report-failure。` };
     },

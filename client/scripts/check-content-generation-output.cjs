@@ -74,7 +74,8 @@ async function checkTask(directory, outputDir) {
       loadPersistentTask: () => ({ state: {} }),
       async runTask(payload) {
         aiRuns++;
-        const [generate] = payload.create_tools({ Type, workspaceDir: directory });
+        const tools = payload.create_tools({ Type, workspaceDir: directory });
+        const [generate] = tools;
         assert.equal([...timers.values()].filter(timer => timer.interval === 10000).length, 1);
         if (pauseGeneration) {
           pauseRequested = true;
@@ -94,12 +95,18 @@ async function checkTask(directory, outputDir) {
           tick(10000);
           assert.equal(state.contentGenerationTask.progress, progress);
         }
-        assert.equal(state.contentGenerationTask.progress, 80);
+        assert.equal(state.contentGenerationTask.progress, 70);
         assert.equal(conversions, 0, '仅有 HTML 文件时不能触发转换');
         fs.mkdirSync(path.join(directory, '原图'), { recursive: true });
         fs.writeFileSync(path.join(directory, '原图/现场 图片.png'), png);
         fs.writeFileSync(path.join(directory, '正文生成结果.json'), JSON.stringify({ sections: targets.map(section => ({ section_id: section.id, file: section.file, words: 10 })) }));
         payload.validateOutput(null, { workspace_dir: directory });
+        assert.equal(payload.continueTask({}, { workspace_dir: directory }).stage, 'auditing');
+        assert.equal(state.contentGenerationTask.stats.content.consistency_round, 1);
+        assert.equal(conversions, 0, '审计完成前不得转 Word');
+        await tools.find(tool => tool.name === 'complete-consistency-round').execute('done', { summary: '无矛盾', remaining_issues: [] });
+        assert.equal(payload.continueTask({}, { workspace_dir: directory }).complete, true);
+        assert.equal(state.contentGenerationTask.progress, 80);
         agentFinished = true;
         return { workspace_dir: directory };
       },
@@ -174,7 +181,35 @@ async function checkTask(directory, outputDir) {
     assert.equal(state.contentGenerationTask.status, 'paused');
     assert.equal(timers.size, 0);
     assert.equal(conversions, convertedBeforePause);
-    console.log('扫描、十秒回调、进度封顶、页面重开、定时器清理、生成/转换暂停及失败续跑通过。');
+    // 已有正文的小节审计失败时，即使没有待生成项，也必须恢复原主会话。
+    pauseGeneration = pauseRequested = false;
+    state.contentGenerationSections = Object.fromEntries(targets.map(section => [section.id, { id: section.id, status: 'success', content: '已有正文' }]));
+    state.contentGenerationRuntime = { generation_started: true, phase: 'auditing', target_item_id: targets[0].id, completed_stages: ['planning'] };
+    state.contentGenerationTask = { status: 'error', progress: 74, stats: { content: { phase: 'auditing', consistency_round: 2 } } };
+    let resumedAudit = false;
+    const persistent = { word_adjustment_started: true, consistency: { round: 2, status: 'running', remaining_issues: ['核实工期'], failed_sections: [] } };
+    const previous = structuredClone(state);
+    state.contentGenerationTask = { status: 'running', progress: 0 };
+    await runContentGenerationTask({ ...args, previousState: previous, payload: { retryFailedSections: true }, agentService: {
+      hasPersistentTaskSession: () => true,
+      loadPersistentTask: () => ({ state: persistent }),
+      updatePersistentTask(_key, partial) { Object.assign(persistent, partial); },
+      async runTask(payload) {
+        resumedAudit = true;
+        assert.equal(payload.initial_stage, 'auditing');
+        assert.match(payload.prompt, /第 2\/3 轮/);
+        const tools = payload.create_tools({ Type, workspaceDir: directory });
+        assert.equal(state.contentGenerationTask.stats.content.consistency_round, 2);
+        assert.equal(state.contentGenerationRuntime.target_item_id, targets[0].id);
+        await tools.find(tool => tool.name === 'complete-consistency-round').execute('done', { summary: '复核通过', remaining_issues: [] });
+        assert.equal(payload.continueTask({}, { workspace_dir: directory }).complete, true);
+        return { workspace_dir: directory };
+      },
+    } });
+    assert.equal(resumedAudit, true);
+    assert.equal(state.contentGenerationTask.status, 'success');
+    assert.equal(timers.size, 0);
+    console.log('扫描、十秒回调、进度封顶、页面重开、定时器清理、生成/转换暂停、审计原会话重试及失败续跑通过。');
   } finally {
     global.setInterval = originalSet;
     global.clearInterval = originalClear;
@@ -193,7 +228,7 @@ function checkProgressView(task) {
     ts.forEachChild(node, visit);
   }
   visit(ast);
-  const evaluate = new Function('task', `const phaseVisible = false; ${names.map(name => statements.get(name)).join('\n')} return [displayProgress, displayProgressLabel, displayProgressCount];`);
+  const evaluate = new Function('task', `const phaseVisible = false; const auditing = false; ${names.map(name => statements.get(name)).join('\n')} return [displayProgress, displayProgressLabel, displayProgressCount];`);
   const reloaded = { ...task };
   delete reloaded.progress_detail;
   assert.deepEqual(evaluate(reloaded), [90, '转换完成', '2/2']);

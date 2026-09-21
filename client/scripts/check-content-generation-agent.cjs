@@ -140,7 +140,7 @@ async function main() {
         assert.ok(request.messages[0].content.includes(decisions.image_requirements));
         return '<!-- yibiao:block -->\n<p id="scenario">项目实施内容</p>';
       } } }, { Type, workspaceDir });
-      assert.deepEqual(scenarioTools.map(tool => tool.name), ['generate-sections', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
+      assert.deepEqual(scenarioTools.map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
       const result = await scenarioTools[0].execute('settings', { sections: [{ section_id: 'e0000000-0000-4000-8000-000000000011', instructions: '落实责任', references: '' }] });
       assert.ok(received);
       assert.equal(result.details.results[0].status, 'success');
@@ -298,7 +298,7 @@ async function main() {
             assert.doesNotMatch(payload.prompt, /本次使用已还原底稿/);
             assert.match(payload.prompt, /知识库\/包含用户选中的全部文档/);
             assert.match(payload.prompt, /image_requirements（用户配图要求）/);
-            assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
+            assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
             payload.validateOutput({}, { workspace_dir: workspaceDir });
             return { workspace_dir: workspaceDir };
           },
@@ -340,9 +340,9 @@ async function checkImageProtectionLifecycle({ Type, workspaceDir, files, signal
   const checkBlocked = payload => {
     for (const name of ['bash', 'generate-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']) {
       assert.equal(activeTools.includes(name), false);
-      assert.throws(() => payload.before_tool_call({ toolCall: { name }, args: {} }), /扩缩写期间不能/);
+      assert.throws(() => payload.before_tool_call({ toolCall: { name }, args: {} }), /正文编辑期间不能/);
     }
-    assert.throws(() => payload.before_file_write({ toolName: 'write', filePath: sectionFile, content: '<p>覆盖正文</p>' }), /扩缩写只能/);
+    assert.throws(() => payload.before_file_write({ toolName: 'write', filePath: sectionFile, content: '<p>覆盖正文</p>' }), /正文编辑只能/);
   };
   action = async (payload, tools) => {
     // 生成阶段没有图片写入限制；未完成配图不能提前锁定工具。
