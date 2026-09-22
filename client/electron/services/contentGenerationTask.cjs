@@ -1280,7 +1280,7 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
 
 // 按当前任务模式把阶段内进度映射为单调递增的正文生成累计进度。
 function buildContentOverallProgress(progressMode, detail, status) {
-  if (!['html', 'html-single'].includes(progressMode) && (status === 'success' || detail.phase === 'done')) return 100;
+  if (status === 'success' || detail.phase === 'done') return 100;
   const profile = CONTENT_PROGRESS_PROFILES[progressMode] || CONTENT_PROGRESS_PROFILES.full;
   const range = profile[detail.phase];
   if (!range) return 0;

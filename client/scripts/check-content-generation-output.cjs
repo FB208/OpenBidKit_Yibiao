@@ -162,9 +162,9 @@ async function checkTask(directory, outputDir) {
     assert.deepEqual(state.contentGenerationRuntime.section_words, Object.fromEntries(targets.map(section => [section.id, 16])));
     assert.deepEqual(state.contentGenerationRuntime.pending_item_ids, []);
     assert.equal(state.contentGenerationTask.stats.content.current_words, 32);
-    assert.equal(state.contentGenerationTask.progress, 90);
+    assert.equal(state.contentGenerationTask.progress, 100);
     assert.equal(state.contentGenerationTask.stats.content.output_progress.phase, 'word-completed');
-    assert.ok(updates.every(update => update.progress <= 90));
+    assert.ok(updates.every(update => update.status === 'success' ? update.progress === 100 : update.progress < 100));
     assert.ok(updates.slice(1).every((update, index) => update.progress >= updates[index].progress));
     assert.ok(updates.some(update => update.progress_detail.phase === 'sections-completed'));
     assert.deepEqual(state.contentGenerationRuntime.html_output.word_sections.map(item => item.section_id), ['f0000000-0000-4000-8000-000000000012', 'a0000000-0000-4000-8000-000000000010']);
@@ -521,7 +521,7 @@ function checkProgressView(task) {
   const evaluate = new Function('task', `const phaseVisible = false; const auditing = false; ${names.map(name => statements.get(name)).join('\n')} return [displayProgress, displayProgressLabel, displayProgressCount];`);
   const reloaded = { ...task };
   delete reloaded.progress_detail;
-  assert.deepEqual(evaluate(reloaded), [90, '转换完成', '2/2']);
+  assert.deepEqual(evaluate(reloaded), [100, '转换完成', '2/2']);
 }
 
 // 已删除阶段不能留下进度空档，覆盖审计埋点也必须固定为关闭。

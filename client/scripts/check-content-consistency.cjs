@@ -59,6 +59,8 @@ async function check() {
       const start = next();
       assert.equal(start.stage, 'auditing');
       assert.match(start.prompt, /小节内部/);
+      assert.match(start.prompt, /global_facts_requirements（当前事实模式的中文要求）/);
+      assert.match(start.prompt, /不能在审计时重新猜一个值解决冲突或覆盖已有设定/);
       assert.doesNotMatch(start.prompt, /知识库/);
       assert.equal(savedState.consistency.round, 1);
       assert.equal(next().stage, 'auditing', '提前结束不能跳过本轮结论');
@@ -126,6 +128,11 @@ async function check() {
       assert.equal(payload.failure_handled_by_parent, true);
       assert.equal(payload.workspace_dir, workspaceDir);
       assert.deepEqual(payload.active_tools, ['read', 'edit', 'report-failure']);
+      const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
+      assert.ok(payload.prompt.includes(decisions.global_facts_requirements));
+      assert.match(payload.prompt, /不确定事实使用【待填写】/);
+      assert.match(payload.prompt, /不扩大本次编辑范围/);
+      assert.match(payload.prompt, /只修复主 Agent 指定的矛盾/);
       started++;
       if (started === 2) bothStarted();
       await gate;

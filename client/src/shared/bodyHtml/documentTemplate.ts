@@ -1,148 +1,21 @@
-import coreTemplateHtml from '../../../electron/resources/content-generation/正文模板.html?raw';
+import templateHtml from '../../../electron/resources/content-generation/正文模板.html?raw';
 import standardQualityControlUrl from '../../../assets/content-template-preview/standard-quality-control.webp';
 import visualMasterPlanSceneUrl from '../../../assets/content-template-preview/visual-master-plan-scene.webp';
 import visualQualityClosedLoopUrl from '../../../assets/content-template-preview/visual-quality-closed-loop.webp';
 import visualTechnicalArchitectureUrl from '../../../assets/content-template-preview/visual-technical-architecture.webp';
 import visualWbsMindmapUrl from '../../../assets/content-template-preview/visual-wbs-mindmap.webp';
 
-/**
- * 展示模板：模板设置右侧预览使用的唯一样张。
- * 标题只写纯标题名，编号由导出模板的标题样式配置生成；图片使用已打包的本地地址。
- * 每一项模板设置都要能在样张里看到效果，因此保留六级标题、段落、有序与无序列表、
- * 独立图片、图文混排表格、并列图组以及带表头行与首列的表格各一处；
- * 样张每改一次配置就要重新生成并重新排版，所以控制在三到四页，不做同类元素的重复堆叠；
- * 图片块之间必须有正文过渡，不允许图接图。
- */
-export const DOCUMENT_DISPLAY_TEMPLATE_HTML = `<!-- yibiao:block -->
-<h1 id="tpl_h_001">项目实施总体方案</h1>
+/** 共用样张的示例图片地址，预览时替换为 Vite 打包后的本地资源地址。 */
+const previewImages: Record<string, string> = {
+  'assets/standard-quality-control.webp': standardQualityControlUrl,
+  'assets/visual-master-plan-scene.webp': visualMasterPlanSceneUrl,
+  'assets/visual-quality-closed-loop.webp': visualQualityClosedLoopUrl,
+  'assets/visual-technical-architecture.webp': visualTechnicalArchitectureUrl,
+  'assets/visual-wbs-mindmap.webp': visualWbsMindmapUrl,
+};
 
-<!-- yibiao:block -->
-<p id="tpl_p_001">我方充分理解本项目建设目标和招标要求，将坚持<strong>统筹规划、分步实施、质量受控、服务持续</strong>的原则，建立覆盖准备、实施、检查、验收和运维支持的全过程管理体系。</p>
-
-<!-- yibiao:block -->
-<h2 id="tpl_h_002">实施组织与工作路径</h2>
-
-<!-- yibiao:block -->
-<p id="tpl_p_002">项目启动后，我方首先完成现场条件核查、需求确认和接口梳理，并据此细化工作计划。进入实施阶段后，严格执行技术交底、过程检查和问题闭环制度；在交付阶段完成联调测试、用户培训、成果验收及资料移交。</p>
-
-<!-- yibiao:block -->
-<ol id="tpl_ol_001"><li>准备阶段：明确项目范围、实施条件、接口关系和责任分工。</li><li>实施阶段：按计划组织资源进场、现场作业、过程检查和阶段复核。</li><li>交付阶段：完成联调测试、问题整改、验收培训和资料移交。</li></ol>
-
-<!-- yibiao:block -->
-<h3 id="tpl_h_003">阶段成果要求</h3>
-
-<!-- yibiao:block -->
-<p id="tpl_p_003">每项阶段成果均明确责任人、完成时限和检查要求。项目资料与现场工作同步形成，确保过程记录真实完整、成果状态清晰可追溯。</p>
-
-<!-- yibiao:block -->
-<ul id="tpl_ul_001"><li>建立项目启动、过程检查和验收交付的闭环机制。</li><li>按周同步风险、进度和资源需求，确保实施节奏可控。</li><li>保留关键过程记录，便于后续审查和复盘。</li></ul>
-
-<!-- yibiao:block -->
-<h4 id="tpl_h_004">资料同步要求</h4>
-
-<!-- yibiao:block -->
-<p id="tpl_p_004">整理招标文件、现状资料和接口清单，随现场工作同步形成过程记录，支撑后续方案细化与成果复核。</p>
-
-<!-- yibiao:block -->
-<h5 id="tpl_h_005">记录归档要求</h5>
-
-<!-- yibiao:block -->
-<p id="tpl_p_005">按项目阶段整理归档目录、会议纪要、问题闭环记录和验收支撑材料，保证版本统一、状态可查。</p>
-
-<!-- yibiao:block -->
-<h6 id="tpl_h_006">过程复核要点</h6>
-
-<!-- yibiao:block -->
-<p id="tpl_p_006">对关键节点的确认材料、实施记录和交付清单进行复核，确保过程资料完整一致、责任可追溯。</p>
-
-<!-- yibiao:block -->
-<table id="tpl_tbl_001" data-yb-preset="headerRowAndColumn">
-  <caption>项目岗位责任与协同界面</caption>
-  <thead>
-    <tr><th scope="col">责任岗位</th><th scope="col">核心职责</th><th scope="col">协同界面</th><th scope="col">过程记录</th></tr>
-  </thead>
-  <tbody>
-    <tr><th scope="row">项目经理</th><td>统筹目标、资源和重大事项决策</td><td>采购人、监理及各专业负责人</td><td>会议纪要、决策清单</td></tr>
-    <tr><th scope="row">技术负责人</th><td>深化设计、技术复核和接口协调</td><td>设计、设备供应与现场实施</td><td>图纸会审、技术交底</td></tr>
-    <tr><th scope="row">施工负责人</th><td>作业面组织、工序穿插和资源调配</td><td>专业班组、物资设备与安全管理</td><td>施工日志、工序交接</td></tr>
-  </tbody>
-</table>
-
-<!-- yibiao:block -->
-<h1 id="tpl_h_007">质量保障与图表展示</h1>
-
-<!-- yibiao:block -->
-<p id="tpl_p_007">质量管理贯穿项目实施全过程。我方以质量策划为先导，以样板确认和工序检查为抓手，以成果复核和问题闭环为保障，执行编制、复核、批准三级审查制度；对关键工序设置质量控制点，未经检查确认不得转入下一阶段。</p>
-
-<!-- yibiao:block -->
-<figure id="tpl_fig_001" data-yb-generation="htmlImage" data-yb-size="wide">
-  <template data-yb-role="prompt">生成 3:2 横向项目全过程质量管控架构图，展示质量策划、样板确认、工序检查、成果复核、问题整改和闭环验证之间的关系；采用专业工程蓝图风格，不使用文字，仅用清晰图形、箭头和层级表达，关键内容置于画面安全区域，无水印。</template>
-  <img src="${standardQualityControlUrl}" data-yb-asset-ref="assets/standard-quality-control.webp" alt="项目全过程质量管控架构图">
-  <figcaption>项目全过程质量管控架构</figcaption>
-</figure>
-
-<!-- yibiao:block -->
-<p id="tpl_p_009">上述管控架构在项目中逐层落地：质量策划阶段明确各分项的验收标准与检验批划分，实施阶段以样板先行、工序报验和旁站见证控制过程质量，成果阶段由项目部与技术负责人分级复核。检查中发现的问题统一登记、限期整改并复核销项，形成可追溯的闭环记录。</p>
-
-<!-- yibiao:block -->
-<h2 id="tpl_h_008">图文混排与图组展示</h2>
-
-<!-- yibiao:block -->
-<p id="tpl_p_013">为将全过程质量要求落实到现场组织与资源配置中，我方建立项目实施总控模型，统筹施工区域、作业分区、物流通道及关键管理节点，直观呈现各专业之间的空间关系和协同界面。模型以总体进度计划为主线，关联人员设备、材料供应与工序验收要求，为现场部署和动态调度提供依据。实施过程中，结合现场进展定期更新模型，重点核查作业面移交、交叉施工和运输组织等制约因素，及时协调资源冲突与进度偏差，确保现场布置与实施节奏一致。下图展示总控场景及配套管理要点。</p>
-
-<!-- yibiao:block -->
-<table id="tpl_tbl_002" data-yb-preset="imageText">
-  <caption>项目实施总控模型</caption>
-  <tbody>
-    <tr>
-      <td><figure id="tpl_fig_002" data-yb-generation="aiImage" data-yb-size="tall"><template data-yb-role="prompt">生成 3:4 竖向大型工程项目实施总控数字孪生场景图，以轴测视角展示施工区域、临建设施、物流通道、作业分区和管理节点；主体集中在画面中央安全区域，蓝灰工程视觉，无文字、标志和水印。</template><img src="${visualMasterPlanSceneUrl}" data-yb-asset-ref="assets/visual-master-plan-scene.webp" alt="项目实施总控数字孪生场景图"><figcaption>项目实施总控场景</figcaption></figure></td>
-      <td><p><strong>计划、资源、质量一体化控制</strong></p><p>以批准的合同目标和实施基线为依据，将进度安排、专业穿插、人员设备投入、材料供应及质量检查纳入统一管理。项目团队通过计划分级、动态跟踪和定期协调，及时识别影响关键节点的制约条件。</p><ol><li>按 WBS 分解工作包、责任岗位、接口条件和阶段成果。</li><li>以合同节点和关键里程碑为牵引，逐级落实月度和周作业计划。</li><li>结合作业强度配置人员、机械及材料，避免资源闲置或投入不足。</li></ol></td>
-    </tr>
-  </tbody>
-</table>
-
-<!-- yibiao:block -->
-<h3 id="tpl_h_009">总控模型的分解与支撑</h3>
-
-<!-- yibiao:block -->
-<p id="tpl_p_010">总控模型解决的是全局布置问题，落到执行层还需要进一步分解。我方以工作分解结构为骨架，将合同范围拆解为可独立交付、可单独计量、可明确责任的工作包，并为每个工作包配置进度窗口、资源需求、前置条件和验收标准，使总控计划与周作业计划之间保持可追踪的对应关系。</p>
-
-<!-- yibiao:block -->
-<p id="tpl_p_011">在此基础上，质量控制闭环、工作分解结构和分层技术架构共同构成实施阶段的支撑体系：质量闭环解决成果是否合格的判定，工作分解明确由谁在什么时间完成，技术架构确定依托何种系统和接口实现。三者在项目例会上统一复盘，任何一项出现偏差都会同步触发另外两项的复核。</p>
-
-<!-- yibiao:block -->
-<table id="tpl_tbl_003" data-yb-preset="threeImages">
-  <caption>质量、工作分解与技术架构</caption>
-  <tbody>
-    <tr>
-      <td><figure id="tpl_fig_003" data-yb-generation="htmlImage" data-yb-size="square"><template data-yb-role="prompt">生成 1:1 方形全过程质量控制闭环信息图，展示输入审查、样板确认、工序检查、问题整改、复核销项和持续改进的循环关系；采用专业蓝白信息图风格，不使用文字，仅用图标、节点和箭头表达，无水印。</template><img src="${visualQualityClosedLoopUrl}" data-yb-asset-ref="assets/visual-quality-closed-loop.webp" alt="全过程质量控制闭环信息图"><figcaption>全过程质量控制闭环</figcaption></figure></td>
-      <td><figure id="tpl_fig_004" data-yb-generation="mermaid" data-yb-size="square"><template data-yb-role="prompt">生成 1:1 方形项目工作分解结构思维导图，以项目目标为中心，向外展开项目管理、深化设计、采购供应、现场实施、调试验收和资料移交六个一级分支；不使用文字，仅用层级色块、图标和连线表达，无水印。</template><img src="${visualWbsMindmapUrl}" data-yb-asset-ref="assets/visual-wbs-mindmap.webp" alt="项目工作分解结构思维导图"><figcaption>WBS 工作分解结构</figcaption></figure></td>
-      <td><figure id="tpl_fig_005" data-yb-generation="htmlImage" data-yb-size="square"><template data-yb-role="prompt">生成 1:1 方形项目技术架构图，分层展示基础设施层、设备接入层、数据传输层、平台服务层和业务应用层，体现上下行数据流和安全边界；采用专业蓝图风格，不使用文字，仅用模块、图标和连线表达，无水印。</template><img src="${visualTechnicalArchitectureUrl}" data-yb-asset-ref="assets/visual-technical-architecture.webp" alt="项目分层技术架构图"><figcaption>分层技术架构</figcaption></figure></td>
-    </tr>
-  </tbody>
-</table>
-
-<!-- yibiao:block -->
-<p id="tpl_p_012">上述三项支撑体系在实施过程中同步运行，其运行状态由项目部按周汇总，形成偏差清单并纳入风险台账。对可能影响关键节点的事项，按影响程度分级响应，明确处置措施、责任岗位和关闭标准，确保问题在本阶段内闭合。</p>
-
-<!-- yibiao:block -->
-<table id="tpl_tbl_004" data-yb-preset="plain">
-  <caption>重点风险分级响应要点</caption>
-  <tbody>
-    <tr><th scope="row">计划偏差</th><td>核对关键路径和剩余工作量，优先通过作业面释放、资源增补和工序穿插追回节点。</td></tr>
-    <tr><th scope="row">质量缺陷</th><td>立即标识隔离并分析原因，明确整改责任、完成时限和复核标准，未经销项不得转序。</td></tr>
-    <tr><th scope="row">供应异常</th><td>联动设计、采购和施工专业评估影响，启动催交、替代或调整施工顺序的处置方案。</td></tr>
-  </tbody>
-</table>
-
-<!-- yibiao:block -->
-<p id="tpl_p_008">我方将以明确的组织体系、可执行的进度计划和严格的质量控制措施保障项目顺利实施，并接受采购人对全过程工作的监督与考核。</p>`;
-
-/**
- * 核心模板：供后续正文生成链路使用，删除全部标题块且图片不含 src。
- * 与 Main 正文 Agent 共用资源文件，避免两份核心模板发生漂移。
- */
-export const DOCUMENT_CORE_TEMPLATE_HTML = coreTemplateHtml;
-
-/** 正文生成时描述本模板排版要求的指导语。 */
-export const DOCUMENT_TEMPLATE_GUIDANCE = '按照竖版 A4 单栏正文组织内容。以标题、连续段落和少量列表为主，只在需要对比或归纳时使用标准表格；图片少量穿插并独立排版，图例紧贴图片下方，不把图片嵌入表格。';
+/** 模板设置读取共用 HTML，仅补入预览图片地址，正文结构保持一致。 */
+export const DOCUMENT_DISPLAY_TEMPLATE_HTML = Object.entries(previewImages).reduce(
+  (html, [assetRef, url]) => html.replaceAll(`src="${assetRef}"`, `src="${url}"`),
+  templateHtml,
+);

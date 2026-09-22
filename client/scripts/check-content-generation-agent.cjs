@@ -5,6 +5,84 @@ const path = require('node:path');
 const { buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, readContentGenerationResult } = require('../electron/services/contentGenerationAgent.cjs');
 const { createContentGenerationImageTools } = require('../electron/services/contentGenerationImageTools.cjs');
 
+// 三种事实模式经真实输入构建与工具调用传给并发写作和扩缩写，不依赖主 Agent 手动转述。
+async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal }) {
+  for (const [mode, expected] of [['fabricate', /允许结合项目补充编造/], ['omit', /不确定事实使用笼统表达/], ['placeholder', /不确定事实使用【待填写】/]]) {
+    const directory = path.join(workspaceDir, `事实模式-${mode}`);
+    const files = buildContentGenerationFiles({ ...fileOptions, globalFactsMode: mode,
+      targets: fileOptions.targets.slice(0, 1), wordControl: { minimumWords: 20000 }, documentIds: [],
+    });
+    for (const file of files) {
+      const target = path.join(directory, file.path);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, file.content, 'utf8');
+    }
+    const decisions = JSON.parse(files.find(file => file.path === '正文编排决策.json').content);
+    assert.equal(decisions.global_facts_mode, mode);
+    assert.match(decisions.global_facts_requirements, expected);
+    assert.match(decisions.global_facts_requirements, /不能用补充内容覆盖已有设定/);
+    let generated = false;
+    let edited = false;
+    const tools = createContentGenerationTools({ signal,
+      aiService: { async chat(request) {
+        assert.ok(request.messages[0].content.includes(decisions.global_facts_requirements));
+        generated = true;
+        return '<!-- yibiao:block -->\n<p id="facts">项目实施内容</p>';
+      } },
+      agentService: { async runTask(request) {
+        assert.ok(request.prompt.includes(decisions.global_facts_requirements));
+        assert.match(request.prompt, /不扩大本次编辑范围/);
+        edited = true;
+      } },
+    }, { Type, workspaceDir: directory });
+    const params = { sections: [{ section_id: decisions.targets[0].id, instructions: '补充实施措施', references: '' }] };
+    const generatedResult = await tools.find(tool => tool.name === 'generate-sections').execute('generate', params);
+    assert.equal(generatedResult.details.results[0].status, 'success');
+    const editedResult = await tools.find(tool => tool.name === 'adjust-sections').execute('adjust', params);
+    assert.equal(editedResult.details.results[0].status, 'success');
+    assert.ok(generated && edited);
+    const rules = files.find(file => file.path === '受限HTML生成规范.md').content;
+    assert.match(rules, /square 为 1:1.*wide 为 3:2.*tall 为 3:4.*panorama 为 16:9/);
+    assert.match(rules, /省略时 Word 转换默认按 cover/);
+    assert.match(rules, /需要完整保留的原方案图片应明确使用 contain/);
+    assert.match(tools.find(tool => tool.name === 'generate-image').parameters.properties.size.description, /不知道.*省略.*不猜测/);
+  }
+  console.log('事实模式：三种中文要求、并发正文与扩缩写传递，以及图片比例、裁剪和尺寸说明检查通过。');
+}
+
+// 执行预览模块，确认与 Agent 共用样张，且只有预览版本带示例图片引用。
+function checkSharedTemplate(files) {
+  const ts = require('typescript');
+  const { load } = require('cheerio');
+  const sourceFile = path.join(__dirname, '../src/shared/bodyHtml/documentTemplate.ts');
+  const code = ts.transpileModule(fs.readFileSync(sourceFile, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const exports = {};
+  new Function('require', 'exports', code)(specifier => {
+    const file = path.resolve(path.dirname(sourceFile), specifier.replace(/\?raw$/, ''));
+    assert.ok(fs.existsSync(file), `样张资源不存在：${file}`);
+    return { default: specifier.endsWith('?raw') ? fs.readFileSync(file, 'utf8') : `/preview/${path.basename(file)}` };
+  }, exports);
+  const preview = load(exports.DOCUMENT_DISPLAY_TEMPLATE_HTML, {}, false);
+  const agent = load(files.find(file => file.path === '正文模板.html').content, {}, false);
+  assert.equal(preview('img').length, 5);
+  preview('img').each((_, img) => {
+    const image = preview(img);
+    assert.equal(image.attr('src'), `/preview/${path.posix.basename(image.attr('data-yb-asset-ref'))}`);
+  });
+  assert.equal(agent('img[src], img[data-yb-asset-ref]').length, 0);
+  assert.equal(agent('figure > template[data-yb-role="prompt"]').length, 5);
+  agent('figure > template').each((_, element) => assert.ok(agent(element).text().trim()));
+  assert.equal(agent('figcaption').length, 5);
+  for (let level = 1; level <= 6; level++) assert.ok(agent(`h${level}`).length);
+  for (const preset of ['imageText', 'threeImages']) assert.equal(agent(`table[data-yb-preset="${preset}"]`).length, 1);
+  preview('img').removeAttr('src').removeAttr('data-yb-asset-ref');
+  assert.equal(agent.html(), preview.html(), '移除示例图片引用后，两端样张结构和内容必须完全一致');
+  assert.deepEqual(JSON.parse(files.find(file => file.path === '所选模板配置.json').content), { template_id: 'chosen', config: { paper_size: 'A3' } });
+  console.log('共用样张：预览图片、Agent 图片引用移除、标题和图组结构及所选模板配置检查通过。');
+}
+
 // 主 Agent 的决策使用模拟，子任务实际执行 Pi edit，检查并发、原表格转换和图片保护。
 async function checkTableCleanup({ Type, workspaceDir, fileOptions, signal }) {
   const { createPiSession } = require('../electron/services/pi/piSessionFactory.cjs');
@@ -50,6 +128,9 @@ async function checkTableCleanup({ Type, workspaceDir, fileOptions, signal }) {
       }
       assert.equal(payload.failure_handled_by_parent, true);
       assert.match(payload.prompt, /包括原方案表格/);
+      assert.ok(payload.prompt.includes(JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8')).global_facts_requirements));
+      assert.match(payload.prompt, /不扩大本次编辑范围/);
+      assert.match(payload.prompt, /只改变表达形式，不作无关改写/);
       assert.doesNotMatch(payload.prompt, /引用、原表格、/);
       childrenStarted++;
       if (childrenStarted === 2) bothStarted();
@@ -178,6 +259,7 @@ async function main() {
       } },
     };
     await checkRestoredContent({ Type, workspaceDir, fileOptions, signal });
+    await checkFactsRequirements({ Type, workspaceDir, fileOptions, signal });
     // 未选知识库：不读取服务、不创建目录，主会话和并发正文提示只保留全局事实。
     const noKnowledgeDir = path.join(workspaceDir, '无知识库任务');
     const noKnowledgeFiles = buildContentGenerationFiles({ ...fileOptions, documentIds: [], knowledgeBaseService: {
@@ -224,6 +306,7 @@ async function main() {
       assert.equal(fs.existsSync(path.join(noKnowledgeDir, '知识库')), false);
     }
     const files = buildContentGenerationFiles(fileOptions);
+    checkSharedTemplate(files);
     for (const file of files) {
       const target = path.join(workspaceDir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -418,6 +501,7 @@ async function main() {
             assert.equal(payload.auto_validate_json, true);
             assert.equal(payload.files.length, resume ? 0 : files.length);
             assert.match(payload.prompt, /三个文件必须完整阅读/);
+            assert.match(payload.prompt, /global_facts_requirements（当前事实模式的中文要求）/);
             assert.doesNotMatch(payload.prompt, /本次使用已还原底稿/);
             assert.match(payload.prompt, /知识库\/包含用户选中的全部文档/);
             assert.match(payload.prompt, /image_requirements（用户配图要求）/);

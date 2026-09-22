@@ -44,7 +44,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
       prompt: Type.String({ minLength: 1, description: '图片生成提示词' }),
       title: Type.Optional(Type.String({ description: '图片标题' })),
       style: Type.Optional(Type.Union([Type.Literal('engineering_diagram'), Type.Literal('realistic_photo')], { description: '工程图示或专业实景照片风格' })),
-      size: Type.Optional(Type.String({ description: '当前生图服务支持的尺寸；省略时沿用主程序配置' })),
+      size: Type.Optional(Type.String({ description: '当前生图服务支持的尺寸；不知道服务支持哪些尺寸时省略，沿用主程序配置，不猜测尺寸值。' })),
     }, { additionalProperties: false }),
     // 沿用现有生图队列、重试及统计，只增加工作区内的图片副本。
     async execute(_callId, params, toolSignal) {

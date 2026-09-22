@@ -50,13 +50,14 @@
 
 - 所有 figure（包括原图）必须有唯一 id、合法的 data-yb-generation 和 data-yb-size。
 - data-yb-generation：aiImage（实景示意）、mermaid（流程关系）、htmlImage（信息图）。新增图片的类型与实际调用的生成工具一致；原图按上述规则使用 aiImage，不触发生图。
-- data-yb-size：square、wide、tall、panorama；可选 data-yb-fit=contain 或 cover。
+- data-yb-size 表示图片画框比例：square 为 1:1 方形，wide 为 3:2 横向，tall 为 3:4 纵向，panorama 为 16:9 横向；这是正文排版画框，不是生图服务的 size 参数。
+- data-yb-fit="contain" 保持原图比例、完整显示、不裁剪；data-yb-fit="cover" 铺满画框，比例不一致时会裁剪。省略时 Word 转换默认按 cover 处理。流程图、信息图及需要完整保留的原方案图片应明确使用 contain；实景示意图仅在允许裁剪边缘时使用 cover。
 - 所有 figure 必须且仅包含一个 template data-yb-role="prompt"，只写非空文字，不嵌入 HTML 或 Mermaid 源码；新增图片填写配图要求，原图填写复用说明。所有 figure 包含一个 img，带非空 alt；独立图和图组内的图带 figcaption。
 - 配图块之间用正文衔接，不连续堆图。不要照抄模板示例的配图内容。
 
 ```html
 <!-- yibiao:block -->
-<figure id="s_1_2_fig001" data-yb-generation="mermaid" data-yb-size="wide">
+<figure id="s_1_2_fig001" data-yb-generation="mermaid" data-yb-size="wide" data-yb-fit="contain">
   <template data-yb-role="prompt">本项目实施阶段及交接关系。</template>
   <img alt="实施阶段及交接关系示意图" data-yb-asset-ref="图片/实施阶段.png">
   <figcaption>实施阶段与交接关系</figcaption>
@@ -69,7 +70,7 @@
 
 ```html
 <!-- yibiao:block -->
-<figure id="original_fig_001" data-yb-generation="aiImage" data-yb-size="wide">
+<figure id="original_fig_001" data-yb-generation="aiImage" data-yb-size="wide" data-yb-fit="contain">
   <template data-yb-role="prompt">复用原方案现场图片，不重新生成。</template>
   <img alt="现场图片" data-yb-asset-ref="原图/xxx.png">
   <figcaption>现场图片</figcaption>
@@ -78,7 +79,7 @@
 
 ## 三类图片工具
 
-- AI 生图：调用 generate-image，提供提示词和可选风格、标题、服务支持的尺寸。沿用主程序生图配置，返回的 asset_ref 已指向当前工作区内的图片副本。
+- AI 生图：调用 generate-image，提供提示词和可选风格、标题、服务支持的尺寸。不知道当前服务支持哪些尺寸时省略 size，沿用主程序配置，不猜测尺寸值。返回的 asset_ref 已指向当前工作区内的图片副本。
 - HTML 图片：主 Agent 用 write 将独立配图 HTML 保存到图片/下，再调用 render-html-image，参数 source_file 为该文件相对路径。源文件可包含 html/head/body、style、div、SVG 等绘图结构，与受限正文分开；不依赖外部资源。按 1240px 设计宽度布局，正文和节点文字不小于24px，建议高度不超过1800px，避免溢出、遮挡、裁切。工具返回 PNG 及 layout_issues，出现问题时修改源文件后重新转图。
 - Mermaid 图片：主 Agent 将无 Markdown 围栏的 Mermaid 代码保存为图片/下的 .mmd 文件，再调用 render-mermaid-image。优先使用清晰简短的 flowchart，中文节点标签使用双引号，避免图过密；语法或渲染报错时修改源文件后重试。
 
@@ -87,6 +88,8 @@
 ## 模板与字数
 
 正文模板.html 是结构参考，所选模板配置.json 是用户排版设置。参考模板组织段落、列表和表格，按内容选择合适的结构，不要求每个小节包含所有元素，也不复制示例正文。
+
+样张与模板设置页面共用，包含用于展示标题样式的 h1～h6；这些标题不是正文生成要求，小节正文仍不得使用 h1～h6 或输出外层章节标题。样张中的图片仅示范布局、提示词和图注，示例图片引用已移除；不要照抄示例图注或提示词，应结合本节内容和配图要求生成，并使用配图工具返回的真实图片引用。
 
 字数要求以正文编排决策.json 为准。统计可读正文，排除 HTML 标签和 template 中的图片用途文字。控制各节篇幅并关注全文合计，不把全文字数目标当成单节目标。
 
