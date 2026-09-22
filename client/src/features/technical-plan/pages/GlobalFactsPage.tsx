@@ -11,6 +11,7 @@ interface GlobalFactsPageProps {
   task?: BackgroundTaskState;
   aiAdjustmentRunning?: boolean;
   contentTaskStatus?: BackgroundTaskState['status'];
+  hasGeneratedBody: boolean;
   focusGroupRequest?: { groupId: string } | null;
   onGlobalFactsSaved: (globalFacts: GlobalFactGroupState[]) => Promise<void> | void;
 }
@@ -48,6 +49,7 @@ function GlobalFactsPage({
   task,
   aiAdjustmentRunning = false,
   contentTaskStatus,
+  hasGeneratedBody,
   focusGroupRequest,
   onGlobalFactsSaved,
 }: GlobalFactsPageProps) {
@@ -63,7 +65,7 @@ function GlobalFactsPage({
   const running = starting || task?.status === 'running';
   const mutationLocked = running || aiAdjustmentRunning || ['running', 'pausing', 'paused'].includes(contentTaskStatus || '');
   const hasContent = (items: OutlineData['outline']): boolean => items.some(item => Boolean(item.content?.trim()) || hasContent(item.children || []));
-  const needsClearConfirmation = hasContent(outlineData?.outline || []);
+  const needsClearConfirmation = hasGeneratedBody || hasContent(outlineData?.outline || []);
   const taskFailed = task?.status === 'error';
   const activeGroup = globalFacts.find((group) => group.id === selectedGroupId) || globalFacts[0] || null;
   const progress = getProgress(task, globalFacts.length > 0);

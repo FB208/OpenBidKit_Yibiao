@@ -12,12 +12,17 @@ function isActiveTaskStatus(status) {
   return status === 'running' || status === 'pausing';
 }
 
-function countGeneratedLeaves(items) {
-  return (items || []).reduce((total, item) => (
-    Array.isArray(item?.children) && item.children.length
-      ? total + countGeneratedLeaves(item.children)
-      : total + (String(item?.content || '').trim() ? 1 : 0)
-  ), 0);
+// 技术方案 AI 正文使用生成记录判断；底稿、非 AI 正文和可研仍读取 content。
+function hasGeneratedBody(items, plan = {}) {
+  return Boolean(plan.contentGenerationTask?.stats?.content?.generation_completed) || (items || []).some(item => (
+    item?.children?.length
+      ? hasGeneratedBody(item.children, plan)
+      : Boolean(String(item?.content || '').trim()) || (item?.content_mode === 'ai-generate' && (
+        plan.contentGenerationSections?.[item.id]?.status === 'success'
+        || Object.hasOwn(plan.contentGenerationRuntime?.section_words || {}, item.id)
+        || plan.contentGenerationRuntime?.html_output?.word_sections.some(section => section.section_id === item.id)
+      ))
+  ));
 }
 
 const STEP_WORKSPACE_IDS = Object.freeze({
@@ -157,7 +162,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
         : contentPaused
           ? '正文生成已暂停，请先在主界面继续或重置正文任务'
           : '';
-      const hasGeneratedContent = countGeneratedLeaves(plan.outlineData.outline) > 0;
+      const hasGeneratedContent = hasGeneratedBody(plan.outlineData.outline, plan);
       return {
         id: this.id,
         title: '目录生成',
@@ -204,7 +209,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
         : contentPaused
           ? '正文生成已暂停，请先在主界面继续或重置正文任务'
           : '';
-      const hasGeneratedContent = countGeneratedLeaves(plan.outlineData?.outline) > 0;
+      const hasGeneratedContent = hasGeneratedBody(plan.outlineData?.outline, plan);
       return {
         id: this.id,
         title: '全局事实设定',
@@ -250,7 +255,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
         title: '正文编排',
         status: 'busy',
         busy_reason: taskReason,
-        has_generated_content: countGeneratedLeaves(plan.outlineData?.outline) > 0,
+        has_generated_content: hasGeneratedBody(plan.outlineData?.outline, plan),
         empty_hint: '正文编排工作空间已保留，暂不支持继续调整。',
       };
     },
@@ -288,7 +293,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
         : contentPaused
           ? '正文生成已暂停，请先在主界面继续或重置正文任务'
           : '';
-      const hasGeneratedContent = countGeneratedLeaves(report.outlineData.outline) > 0;
+      const hasGeneratedContent = hasGeneratedBody(report.outlineData.outline);
       return {
         id: this.id,
         title: '可研报告目录',

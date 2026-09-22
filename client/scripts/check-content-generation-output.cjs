@@ -195,6 +195,55 @@ async function checkTask(directory, outputDir) {
     assert.equal(state.contentGenerationTask.status, 'paused');
     assert.equal(timers.size, 0);
     assert.equal(conversions, convertedBeforePause);
+    // 写作、配图和扩缩写失败后，执行页面实际重试请求，检查同一会话及文件继续使用。
+    pauseGeneration = pauseRequested = false;
+    const retainedFiles = ['正文编排决策.json', ...targets.map(section => section.file), '原图/现场 图片.png'];
+    const retainedBytes = retainedFiles.map(file => fs.readFileSync(path.join(directory, file)));
+    for (const stage of ['写作', '配图', '扩缩写']) {
+      const persistentState = { word_adjustment_started: stage === '扩缩写' };
+      state.contentGenerationSections = {};
+      state.contentGenerationRuntime = { generation_started: true, phase: 'generating', completed_stages: ['planning'], pending_item_ids: targets.map(section => section.id) };
+      state.contentGenerationTask = { status: 'paused' };
+      const failure = new Error(`模拟${stage}最终失败`);
+      const retryAgent = { ...args.agentService,
+        loadPersistentTask: () => ({ state: persistentState }),
+        updatePersistentTask(_key, partial) { Object.assign(persistentState, partial); },
+        async runTask() { throw failure; },
+      };
+      await assert.rejects(runContentGenerationTask({ ...args, agentService: retryAgent,
+        previousState: structuredClone(state), payload: { resume: true } }), error => error === failure);
+      assert.equal(state.contentGenerationTask.status, 'error');
+      assert.equal(state.contentGenerationRuntime.phase, 'generating');
+      const request = await checkGenerationRetryButton(state.contentGenerationTask, state.contentGenerationRuntime, '重试正文生成');
+      const failed = structuredClone(state);
+      state.contentGenerationTask = { status: 'running', progress: 0 };
+      let resumed = false;
+      await runContentGenerationTask({ ...args, previousState: failed, payload: request, agentService: { ...retryAgent,
+        async runTask(payload) {
+          resumed = true;
+          assert.equal(payload.persistent_task.mode, 'resume');
+          assert.equal(payload.initial_stage, 'generating');
+          assert.deepEqual(payload.files, [], '重试不得重写输入快照');
+          assert.match(payload.prompt, /本次继续原会话/);
+          assert.doesNotMatch(payload.prompt, /新一轮局部生成/);
+          assert.equal(persistentState.word_adjustment_started, stage === '扩缩写', '重试不得重置扩缩写保护状态');
+          if (stage === '扩缩写') assert.match(payload.prompt, /本次恢复时已处于图片保护阶段/);
+          const tools = payload.create_tools({ Type, workspaceDir: directory });
+          assert.equal(payload.continueTask({}, { workspace_dir: directory }).stage, 'auditing');
+          await tools.find(tool => tool.name === 'complete-consistency-round').execute('done', { summary: '复核通过', remaining_issues: [] });
+          assert.equal(payload.continueTask({}, { workspace_dir: directory }).complete, true);
+          return { workspace_dir: directory };
+        },
+      } });
+      assert.ok(resumed);
+      assert.equal(state.contentGenerationTask.status, 'success');
+      retainedFiles.forEach((file, index) => assert.deepEqual(fs.readFileSync(path.join(directory, file)), retainedBytes[index], file));
+      assert.equal(timers.size, 0);
+    }
+    for (const [phase, target, label] of [['generating', targets[0].id, '重试小节修改'], ['auditing', '', '继续一致性审计'], ['word-converting', '', '重试 Word 转换']]) {
+      await checkGenerationRetryButton({ status: 'error', stats: { content: { phase } } }, { target_item_id: target }, label);
+    }
+    console.log('全文写作、配图、扩缩写失败后，页面原会话重试、输入及文件保留、图片保护恢复检查通过。');
     // 已有正文的小节审计失败时，即使没有待生成项，也必须恢复原主会话。
     pauseGeneration = pauseRequested = false;
     state.contentGenerationSections = Object.fromEntries(targets.map(section => [section.id, { id: section.id, status: 'success', content: '已有正文' }]));
@@ -326,6 +375,39 @@ async function checkTask(directory, outputDir) {
     global.setInterval = originalSet;
     global.clearInterval = originalClear;
   }
+}
+
+// 执行页面真实按钮文案、点击分支和重试函数，普通生成分支会被检查捕获。
+async function checkGenerationRetryButton(task, contentGenerationRuntime, expectedLabel) {
+  const ts = require('typescript');
+  const source = fs.readFileSync(path.join(__dirname, '../src/features/technical-plan/pages/ContentEditPage.tsx'), 'utf8');
+  const ast = ts.createSourceFile('page.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const names = ['retryingWordConversion', 'retryingConsistency', 'retryingSectionModification', 'retryingBodyGeneration', 'generationButtonLabel', 'retryFailedSections', 'handleGenerationButtonClick'];
+  const statements = new Map();
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && names.includes(node.name.getText(ast))) statements.set(node.name.getText(ast), `const ${node.getText(ast)};`);
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  assert.equal(statements.size, names.length);
+  const calls = [];
+  const evaluate = new Function('task', 'contentGenerationRuntime', 'calls', ts.transpile(`
+    const taskFailed = task.status === 'error', contentStats = task.stats.content;
+    const pausing = false, running = false, paused = false, taskBlocksGeneration = false;
+    const canRetryContentCorrection = false, awaitingContentDecision = false, unresolvedCount = 0;
+    const resolvedCount = 0, completedCount = 0, leaves = [{}], contentRetryTargetLabel = '';
+    const window = { yibiao: { tasks: { startContentGeneration: async request => { calls.push(request); } } } };
+    const trackConfigUsage = () => {}, showToast = () => {};
+    const startGeneration = () => calls.push({ ordinary: true });
+    ${names.map(name => statements.get(name)).join('\n')}
+    return { label: generationButtonLabel, click: handleGenerationButtonClick };
+  `, { target: ts.ScriptTarget.ES2022 }));
+  const button = evaluate(task, contentGenerationRuntime, calls);
+  assert.equal(button.label, expectedLabel);
+  button.click();
+  await Promise.resolve();
+  assert.deepEqual(calls, [{ retryFailedSections: true }]);
+  return calls[0];
 }
 
 // 执行页面实际进度表达式，模拟从数据库重载后没有独立 progress_detail 的状态。

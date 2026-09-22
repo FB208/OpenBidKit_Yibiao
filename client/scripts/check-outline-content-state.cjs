@@ -813,6 +813,18 @@ if (!process.versions.electron) {
   async function checkFactsConfirmation() {
     const ts = require('typescript');
     const source = fs.readFileSync(path.join(__dirname, '../src/features/technical-plan/pages/GlobalFactsPage.tsx'), 'utf8');
+    const homeSource = fs.readFileSync(path.join(__dirname, '../src/features/technical-plan/pages/TechnicalPlanHome.tsx'), 'utf8');
+    const ast = ts.createSourceFile('home.tsx', homeSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let collectLeaves;
+    let hasBody;
+    function visit(node) {
+      if (ts.isFunctionDeclaration(node) && node.name?.text === 'collectLeafItems') collectLeaves = node.getText(ast);
+      if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'hasGeneratedBody') hasBody = node.initializer.getText(ast);
+      ts.forEachChild(node, visit);
+    }
+    visit(ast);
+    assert.ok(collectLeaves && hasBody);
+    const readHasBody = new Function('state', ts.transpile(`${collectLeaves}\nreturn ${hasBody};`, { target: ts.ScriptTarget.ES2022 }));
     const start = source.indexOf('  const saveFacts = async');
     const end = source.indexOf('  const saveActiveGroup =', start);
     let writes = 0;
@@ -836,6 +848,58 @@ if (!process.versions.electron) {
     scope.needsClearConfirmation = false;
     await scope.saveFacts([]);
     assert.equal(writes, 2, '无正文时直接保存');
+
+    // 同一组状态同时检查页面确认和真实 Agent 工作区提示，不能只注入固定 true。
+    let plan;
+    const { createAgentWorkspaceService } = require('../electron/services/agentWorkspaceService.cjs');
+    const workspace = createAgentWorkspaceService({
+      agentService: { hasPersistentTaskSession: () => true, onPrimarySessionChanged() {} },
+      taskService: { getActiveTasks: () => [], subscribeCallback() {} },
+      technicalPlanStore: { loadTechnicalPlan: () => plan },
+    });
+    const confirmationSource = source.slice(source.indexOf('  const hasContent ='), source.indexOf('  const taskFailed ='));
+    const readConfirmation = new Function('outlineData', 'hasGeneratedBody', ts.transpile(`${confirmationSource}\nreturn needsClearConfirmation;`, { target: ts.ScriptTarget.ES2022 }));
+    let starts = 0;
+    Object.assign(scope, { hasOutline: true, globalFactsMode: 'placeholder', setStarting() {},
+      window: { yibiao: { tasks: { startGlobalFactsGeneration: async () => { starts++; } } } } });
+    vm.runInContext(ts.transpile(source.slice(source.indexOf('  const startGeneration ='), source.indexOf('  useEffect('))
+      + '\nthis.startGeneration = startGeneration;', { target: ts.ScriptTarget.ES2022 }), scope);
+    for (const [label, patch, content, expected] of [
+      ['只有目录', {}, '', false],
+      ['仅编排已启动', { contentGenerationRuntime: { generation_started: true } }, '', false],
+      ['小节成功但数据库正文为空', { contentGenerationSections: { leaf: { status: 'success' } } }, '', true],
+      ['已有HTML字数', { contentGenerationRuntime: { section_words: { leaf: 0 } } }, '', true],
+      ['已有Word登记', { contentGenerationRuntime: { html_output: { word_sections: [{ section_id: 'leaf' }] } } }, '', true],
+      ['生成失败但已有部分HTML', { contentGenerationTask: { status: 'error', stats: { content: { generation_completed: 1 } } } }, '', true],
+      ['孤儿记录不算当前正文', { contentGenerationSections: { deleted: { status: 'success' } }, contentGenerationRuntime: { section_words: { deleted: 100 }, html_output: { word_sections: [{ section_id: 'deleted' }] } } }, '', false],
+      ['原方案还原底稿', {}, '施工底稿', true],
+      ['非AI正文', { outlineData: { outline: [{ id: 'manual', content_mode: 'manual-fill', content: '人工正文' }] } }, '', true],
+    ]) {
+      plan = { outlineData: { outline: [{ id: 'root', children: [{ id: 'leaf', content_mode: 'ai-generate', content }] }] }, globalFacts: [{ id: 'facts' }], ...patch };
+      scope.needsClearConfirmation = readConfirmation(plan.outlineData, readHasBody(plan));
+      assert.equal(scope.needsClearConfirmation, expected, label);
+      const descriptors = workspace.listAgentWorkspaces();
+      for (const id of [require('../electron/services/outlineGenerationAgentV2Config.cjs').OUTLINE_AGENT_TASK_KEY,
+        require('../electron/services/globalFactsAgentV2Config.cjs').GLOBAL_FACTS_AGENT_TASK_KEY]) {
+        const descriptor = descriptors.find(entry => entry.id === id);
+        assert.ok(descriptor, id);
+        assert.equal(Boolean(descriptor.send_warning), expected, `${label}: ${id}`);
+      }
+      writes = starts = 0;
+      pending = null;
+      await scope.saveFacts([]);
+      assert.equal(writes, expected ? 0 : 1, label);
+      await scope.startGeneration();
+      assert.equal(starts, expected ? 0 : 1, label);
+      if (expected) {
+        assert.equal(pending, 'generate');
+        await scope.saveFacts([], '已保存', true);
+        await scope.startGeneration(true);
+        assert.equal(writes, 1);
+        assert.equal(starts, 1);
+      }
+    }
+    console.log('清空确认：新正文状态、字数、Word、部分生成、底稿及非AI正文覆盖页面保存/解析和 Agent 调整提示。');
   }
 
   app.whenReady().then(check).then(() => app.exit(0), error => { console.error(error); app.exit(1); });

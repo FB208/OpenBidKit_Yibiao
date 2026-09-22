@@ -278,6 +278,7 @@ function ContentEditPage({
   const retryingWordConversion = taskFailed && ['sections-completed', 'word-converting'].includes(contentStats?.phase || '');
   const retryingConsistency = taskFailed && contentStats?.phase === 'auditing';
   const retryingSectionModification = taskFailed && Boolean(contentGenerationRuntime?.target_item_id) && contentStats?.phase === 'generating';
+  const retryingBodyGeneration = taskFailed && !contentGenerationRuntime?.target_item_id && contentStats?.phase === 'generating';
   const contentRetryTargetLabel = '内容矫正';
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
@@ -353,6 +354,8 @@ function ContentEditPage({
         ? '继续'
         : retryingSectionModification
           ? '重试小节修改'
+        : retryingBodyGeneration
+          ? '重试正文生成'
         : retryingConsistency
           ? '继续一致性审计'
         : retryingWordConversion
@@ -498,13 +501,13 @@ function ContentEditPage({
     }
   };
 
-  // 复用失败重试入口：恢复原审计会话，或继续已交付 HTML 的 Word 转换。
+  // 复用失败重试入口：续接原正文/审计会话，或继续已交付 HTML 的 Word 转换。
   const retryFailedSections = async () => {
-    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && (!awaitingContentDecision || !unresolvedCount))) return;
+    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && (!awaitingContentDecision || !unresolvedCount))) return;
     try {
       await window.yibiao?.tasks.startContentGeneration({ retryFailedSections: true });
       trackConfigUsage({ content_generation_action: 'retry_failed_sections' });
-      showToast(retryingSectionModification ? '小节修改已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
+      showToast(retryingSectionModification ? '小节修改已从原会话继续' : retryingBodyGeneration ? '正文生成已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动失败小节重试失败', 'error');
     }
@@ -532,7 +535,7 @@ function ContentEditPage({
       void resumeGeneration();
       return;
     }
-    if (retryingWordConversion || retryingConsistency || retryingSectionModification) {
+    if (retryingWordConversion || retryingConsistency || retryingSectionModification || retryingBodyGeneration) {
       void retryFailedSections();
       return;
     }

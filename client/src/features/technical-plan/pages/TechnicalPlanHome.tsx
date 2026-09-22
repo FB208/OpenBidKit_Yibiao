@@ -215,6 +215,13 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const globalFactsHasPlaceholder = Boolean(firstGlobalFactWithPlaceholder);
   const isGlobalFactsAdjusting = state.globalFactsAdjustmentTask?.status === 'running' || state.globalFactsAdjustmentTask?.status === 'pausing';
   const contentTaskStatus = state.contentGenerationTask?.status;
+  // AI 正文在会话 HTML 中；已完成记录及生成中保存的进度都需要清空确认。
+  const hasGeneratedBody = Boolean(state.contentGenerationTask?.stats?.content?.generation_completed)
+    || collectLeafItems(state.outlineData?.outline || []).some(item => item.content_mode === 'ai-generate' && (
+      state.contentGenerationSections?.[item.id]?.status === 'success'
+      || Object.hasOwn(state.contentGenerationRuntime?.section_words || {}, item.id)
+      || state.contentGenerationRuntime?.html_output?.word_sections.some(section => section.section_id === item.id)
+    ));
   const contentBlocksExport = contentTaskStatus === 'running' || contentTaskStatus === 'pausing' || contentTaskStatus === 'paused';
   const isExporting = exportProgress.running;
   const generatedOutlineMode = state.outlineGenerationTask?.stats?.agent?.resume_payload?.outline_mode;
@@ -1130,6 +1137,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           task={state.globalFactsTask}
           aiAdjustmentRunning={isGlobalFactsAdjusting}
           contentTaskStatus={contentTaskStatus}
+          hasGeneratedBody={hasGeneratedBody}
           focusGroupRequest={globalFactsFocusRequest}
           onGlobalFactsSaved={saveGlobalFacts}
         />
