@@ -68,7 +68,7 @@ async function checkTask(directory, outputDir) {
   let pauseConversion = false;
   let pauseGeneration = false;
   const args = {
-    aiService: { chat: async () => body },
+    aiService: { chat: async ({ logTitle }) => logTitle.includes('交付') ? body.replace('施工准备与检查', '交付准备与检查') : body },
     workspaceStore: { loadTechnicalPlan: () => state, getContentWordOutputDir: () => outputDir },
     taskControl: { signal: new AbortController().signal, isPauseRequested: () => pauseRequested },
     updateTask: checkpoint, checkpointTask: checkpoint,
@@ -121,7 +121,7 @@ async function checkTask(directory, outputDir) {
       assert.equal(options.assetRoot, directory);
       assert.equal(config.page.size, 'A4');
       conversions++;
-      if (conversions === 1) assert.match(html, /<h2>准备 &amp; 检查<\/h2>/);
+      assert.ok([body, body.replace('施工准备与检查', '交付准备与检查')].includes(html), '小节转换应直接使用正文，不附加目录标题');
       if (conversions === 2 && failConversion) throw new Error('模拟转换失败');
       if (pauseConversion) { pauseRequested = true; tick(500); }
       return { bytes: Buffer.from(html.includes('交付') ? '交付 Word' : '准备 Word') };
@@ -471,7 +471,8 @@ async function checkRealWord(directory, outputDir) {
     for (const output of outputs) {
       const zip = new AdmZip(path.join(outputDir, output.file));
       const xml = zip.readAsText('word/document.xml');
-      assert.match(xml, /施工准备与检查/);
+      assert.match(xml, /(?:施工|交付)准备与检查/);
+      assert.doesNotMatch(xml, /准备 &amp; 检查|<w:t\b[^>]*>交付<\/w:t>/, '小节 Word 不应带目录标题');
       assert.match(xml, /<w:tbl[ >]/);
       assert.match(xml, /<w:drawing[ >]/);
       assert.ok(zip.getEntries().some(entry => /(^|\/)media\/.+\.png$/i.test(entry.entryName)));

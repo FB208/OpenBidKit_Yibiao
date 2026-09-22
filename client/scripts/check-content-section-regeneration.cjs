@@ -115,7 +115,7 @@ async function main() {
     }, rejectionCheckStore: { loadRejectionCheck: () => ({}) }, duplicateCheckStore: { loadDuplicateCheck: () => ({}) },
     openXmlHelperService: { async createRestrictedHtmlDocx(html, config, options) {
       conversions++;
-      assert.match(html, /<h2>改名后的目标<\/h2>/);
+      assert.equal(html, fs.readFileSync(path.join(workspaceDir, file), 'utf8'), '单节转换应直接使用正文，不附加新旧目录标题');
       assert.equal(options.assetRoot, workspaceDir);
       if (failConversion) throw new Error('模拟转换失败');
       return realHelper ? realHelper.createRestrictedHtmlDocx(html, config, options) : { bytes: Buffer.from(html) };
@@ -152,6 +152,7 @@ async function main() {
     if (realHelper) {
       const zip = new (require('adm-zip'))(path.join(outputDir, `${first}.docx`));
       assert.match(zip.readAsText('word/document.xml'), /修改后的说明1/);
+      assert.doesNotMatch(zip.readAsText('word/document.xml'), /改名后的目标|旧标题/, '小节 Word 不插入目录标题');
     }
     const previousWord = fs.readFileSync(path.join(outputDir, `${first}.docx`));
     failConversion = true;

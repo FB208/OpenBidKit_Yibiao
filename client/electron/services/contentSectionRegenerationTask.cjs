@@ -137,7 +137,7 @@ async function runContentSectionRegenerationTask({ agentService, aiService, work
     runtime.phase = 'word-converting';
     publish('running');
     await convertContentSections({ result, outputDir: runtime.html_output.word_output_dir,
-      openXmlHelperService, signal, outline: stored.outlineData.outline, completed: runtime.html_output.word_sections,
+      openXmlHelperService, signal, completed: runtime.html_output.word_sections,
       onProgress(converted) {
         runtime.html_output.word_sections = [...runtime.html_output.word_sections.filter(item => item.section_id !== id), ...converted];
         runtime.phase = 'word-completed';
