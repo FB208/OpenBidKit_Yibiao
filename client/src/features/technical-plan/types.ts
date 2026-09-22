@@ -237,7 +237,6 @@ export interface ContentGenerationRuntimeState {
   developer_stage_gate?: ContentGenerationPhase | '';
   target_item_id?: string;
   regenerate_requirement?: string;
-  simulate_partial_failures?: boolean;
   updated_at?: string;
 }
 

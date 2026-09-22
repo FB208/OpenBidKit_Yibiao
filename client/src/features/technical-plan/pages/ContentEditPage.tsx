@@ -502,14 +502,12 @@ function ContentEditPage({
     config,
     regenerate,
     contentGenerationAction,
-    simulatePartialFailures = false,
   }: {
     savedGenerationOptions: ContentGenerationOptions;
     nextImageModelAvailable: boolean;
     config?: ClientConfig | null;
     regenerate: boolean;
     contentGenerationAction: ContentGenerationAction;
-    simulatePartialFailures?: boolean;
   }) => {
     if (!outlineData?.outline?.length) {
       showToast('请先生成目录', 'info');
@@ -524,7 +522,6 @@ function ContentEditPage({
 
     await window.yibiao?.tasks.startContentGeneration({
       regenerate,
-      simulatePartialFailures,
       generationOptions: {
         useAiImages: nextImageModelAvailable && savedGenerationOptions.useAiImages,
         useMermaidImages: savedGenerationOptions.useMermaidImages,
@@ -542,12 +539,10 @@ function ContentEditPage({
       consistency_repair_mode: 'agent',
       enable_original_plan_coverage_audit: false,
     }, config);
-    showToast(simulatePartialFailures
-      ? '随机失败模式正文生成任务已在后台启动'
-      : regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
+    showToast(regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
   };
 
-  const startGeneration = async (simulatePartialFailures = false) => {
+  const startGeneration = async () => {
     if (!outlineData?.outline?.length) {
       showToast('请先生成目录', 'info');
       return;
@@ -565,7 +560,7 @@ function ContentEditPage({
           : completedCount > 0
             ? 'continue'
             : 'start';
-      await launchContentGeneration({ savedGenerationOptions, nextImageModelAvailable, config, regenerate, contentGenerationAction, simulatePartialFailures });
+      await launchContentGeneration({ savedGenerationOptions, nextImageModelAvailable, config, regenerate, contentGenerationAction });
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动正文生成任务失败', 'error');
     }
@@ -759,21 +754,14 @@ function ContentEditPage({
         </div>
         <div className="content-generation-actions">
           {developerMode && (
-            <>
-              {!paused && (
-                <button type="button" className="secondary-action" onClick={() => void startGeneration(true)} disabled={taskBlocksGeneration || leaves.length < 2}>
-                  以随机失败模式开始
-                </button>
-              )}
-              <button
-                type="button"
-                className="danger-action"
-                onClick={() => setResetDialogOpen(true)}
-                disabled={resetPending}
-              >
-                {resetPending ? '正在重置...' : '重置正文阶段'}
-              </button>
-            </>
+            <button
+              type="button"
+              className="danger-action"
+              onClick={() => setResetDialogOpen(true)}
+              disabled={resetPending}
+            >
+              {resetPending ? '正在重置...' : '重置正文阶段'}
+            </button>
           )}
           {developerStageGate ? (
             <>

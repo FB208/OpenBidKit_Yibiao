@@ -1102,7 +1102,6 @@ function normalizeContentGenerationRuntime(value) {
     developer_stage_gate: String(source.developer_stage_gate || '').trim(),
     target_item_id: String(source.target_item_id || '').trim(),
     regenerate_requirement: String(source.regenerate_requirement || '').trim(),
-    simulate_partial_failures: Boolean(source.simulate_partial_failures),
     html_output: source.html_output,
     updated_at: source.updated_at || now(),
   };
@@ -1148,7 +1147,6 @@ function prepareContentGenerationStart(state, payload = {}) {
       section_words: previous.section_words,
       html_output: previous.html_output,
       regenerate_requirement: String(payload.requirement || '').trim(),
-      simulate_partial_failures: Boolean(payload.simulatePartialFailures ?? payload.simulate_partial_failures),
     }),
   };
   if (fullRegenerate && state.outlineData) {
@@ -1427,9 +1425,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     target_item_id: targetItemId,
     regenerate_requirement: regenerateRequirement,
     developer_stage_gate: resume && payload.developerStageAction === 'continue' ? '' : contentRuntime.developer_stage_gate,
-    simulate_partial_failures: resume
-      ? contentRuntime.simulate_partial_failures
-      : Boolean(payload.simulatePartialFailures ?? payload.simulate_partial_failures),
   });
   const completedStages = new Set(contentRuntime.completed_stages);
   let contentAgentState = resume ? storedPlan.contentGenerationTask?.stats?.agent : undefined;
