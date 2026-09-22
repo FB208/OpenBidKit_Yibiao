@@ -110,6 +110,25 @@ if (!process.versions.electron) {
       await checkWordInvalidation(store, database.db);
       await checkWorkflowRefresh(store);
       checkWholeWorkflowReset(store, database.db);
+      // 删除忽略状态后，现有四种状态仍能保存、重开并随目录排序保留。
+      seed();
+      const statusId = '00000000-0000-4000-8000-000000000004';
+      for (const status of ['idle', 'running', 'success', 'error']) {
+        const snapshot = store.loadTechnicalPlan();
+        store.updateTechnicalPlanWithoutReload({ contentGenerationSections: {
+          ...snapshot.contentGenerationSections,
+          [statusId]: { ...snapshot.contentGenerationSections[statusId], status, error: status === 'error' ? '生成失败，可重试' : undefined },
+        } });
+        database.close();
+        open();
+        const reloaded = store.loadTechnicalPlan();
+        assert.equal(reloaded.contentGenerationSections[statusId].status, status);
+        reloaded.outlineData.outline[0].children.reverse();
+        const sorted = save(reloaded.outlineData.outline, 'sort');
+        assert.equal(sorted.contentGenerationSections[statusId].status, status);
+        assert.equal(sorted.contentGenerationSections[statusId].content, '正文甲');
+        assert.equal(sorted.contentGenerationSections[statusId].error || '', status === 'error' ? '生成失败，可重试' : '');
+      }
       // 真实 SQLite 与持久会话：局部增删保留旧正文，父子身份变化才删除对应 HTML。
       seed();
       const bodyTask = createPersistentAgentTask(app, CONTENT_GENERATION_AGENT_TASK_KEY, { session_file: 'session.jsonl' });

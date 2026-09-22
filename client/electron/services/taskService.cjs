@@ -1475,13 +1475,11 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
       }
       const continuing = taskPayload?.resume || [
         'retryContentCorrection', 'retry_content_correction', 'retryFailedSections', 'retry_failed_sections',
-        'continuePostProcessing', 'continue_post_processing',
       ].some(field => taskPayload?.[field]);
       // 普通生成没有待办时直接返回已有结果，避免 beforeStart 删除产物会话。
       function hasPendingSections(items) {
         return items.some(item => item.children?.length ? hasPendingSections(item.children)
           : item.content_mode === 'ai-generate'
-            && technicalPlan.contentGenerationSections?.[item.id]?.status !== 'ignored'
             && (technicalPlan.contentGenerationSections?.[item.id]?.status !== 'success'
               || !Object.hasOwn(technicalPlan.contentGenerationRuntime?.section_words || {}, item.id)));
       }

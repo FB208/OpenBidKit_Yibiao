@@ -7,7 +7,7 @@ export type BidSectionMode = 'single' | 'multiple';
 export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error';
 export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
-export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error' | 'ignored';
+export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
 export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'sections-completed' | 'word-converting' | 'word-completed' | 'auditing' | 'table-cleaning' | 'done';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 export type SaveOutlineReason = 'sort' | 'edit' | 'delete' | 'add-root' | 'add-child' | 'replace';
@@ -149,8 +149,6 @@ export interface BackgroundTaskState {
       consistency_remaining_issues?: string[];
       table_cleanup_total?: number;
       table_cleanup_completed?: number;
-      awaiting_content_decision?: boolean;
-      ignored_section_count?: number;
       developer_stage_gate?: ContentGenerationPhase;
     };
   };
@@ -240,7 +238,6 @@ export interface ContentGenerationRuntimeState {
   target_item_id?: string;
   regenerate_requirement?: string;
   simulate_partial_failures?: boolean;
-  awaiting_content_decision?: boolean;
   updated_at?: string;
 }
 

@@ -332,21 +332,18 @@ async function checkTask(directory, outputDir) {
       assert.equal(conversions, converted, '不能读取上一轮转换记录继续转换');
       assert.equal(timers.size, 0);
     }
-    // 实际生成输入应合计 HTML 字数与还原底稿，排除孤儿、忽略项和非 AI 正文。
+    // 实际生成输入应合计 HTML 字数与还原底稿，排除孤儿和非 AI 正文。
     const restored = '施工底稿';
     const zeroId = '00000000-0000-4000-8000-000000000031';
-    const ignoredId = '00000000-0000-4000-8000-000000000032';
     const manualId = '00000000-0000-4000-8000-000000000033';
     state.outlineData = { outline: [...targets.map(section => ({ id: section.id, title: section.title, content_mode: 'ai-generate' })),
       { id: zeroId, title: '零字数记录', content_mode: 'ai-generate', content: '不应重复统计旧底稿' },
-      { id: ignoredId, title: '忽略小节', content_mode: 'ai-generate', content: '不应统计' },
       { id: manualId, title: '非AI内容', content_mode: 'manual', content: '不应统计' }] };
     state.originalPlanFile = { markdownPath: '原方案.md' };
     state.contentGenerationSections = {
       [targets[0].id]: { status: 'idle', content: restored },
       [targets[1].id]: { status: 'success', content: '' },
       [zeroId]: { status: 'success', content: '不应重复统计旧底稿' },
-      [ignoredId]: { status: 'ignored', content: '不应统计' },
     };
     state.contentGenerationPlans = { [targets[0].id]: { plan_version: 5, plan: {
       writing_focus: '施工', image_suitability_score: 0, table: { needed: false },
@@ -354,7 +351,7 @@ async function checkTask(directory, outputDir) {
         source_ranges: [{ start_line: 1, end_line: 1 }] },
     } } };
     state.contentGenerationRuntime = { phase: 'planning', completed_stages: ['planning', 'restoring'],
-      pending_item_ids: [targets[0].id], section_words: { [targets[1].id]: 10000, [zeroId]: 0, [ignoredId]: 200, deleted: 300 } };
+      pending_item_ids: [targets[0].id], section_words: { [targets[1].id]: 10000, [zeroId]: 0, deleted: 300 } };
     state.contentGenerationTask = { status: 'paused' };
     const stopAfterInput = new Error('已检查传给正文 Agent 的字数');
     await assert.rejects(runContentGenerationTask({ ...args, previousState: structuredClone(state), payload: { resume: true },
@@ -494,8 +491,7 @@ async function checkGenerationRetryButton(task, contentGenerationRuntime, expect
   const evaluate = new Function('task', 'contentGenerationRuntime', 'calls', ts.transpile(`
     const taskFailed = task.status === 'error', contentStats = task.stats.content;
     const pausing = false, running = false, paused = false, taskBlocksGeneration = false;
-    const awaitingContentDecision = false, unresolvedCount = 0;
-    const resolvedCount = 0, completedCount = 0, leaves = [{}];
+    const completedCount = 0, leaves = [{}];
     const window = { yibiao: { tasks: { startContentGeneration: async request => { calls.push(request); } } } };
     const trackConfigUsage = () => {}, showToast = () => {};
     const startGeneration = () => calls.push({ ordinary: true });

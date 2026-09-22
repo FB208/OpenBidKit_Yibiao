@@ -40,7 +40,7 @@ async function runContentSectionRegenerationTask({ agentService, aiService, work
     ...previousRuntime, generation_started: true, target_item_id: id,
     section_words: { ...(previousRuntime.section_words || {}) },
     regenerate_requirement: continuing ? previousRuntime.regenerate_requirement : String(payload.requirement || '').trim(),
-    phase: continuing ? previousRuntime.phase : 'generating', developer_stage_gate: '', awaiting_content_decision: false,
+    phase: continuing ? previousRuntime.phase : 'generating', developer_stage_gate: '',
     html_output: {
       workspace_dir: workspaceDir, word_output_dir: workspaceStore.getContentWordOutputDir(),
       word_sections: (previousRuntime.html_output?.word_sections || []).filter(item => continuing || item.section_id !== id),
@@ -60,7 +60,7 @@ async function runContentSectionRegenerationTask({ agentService, aiService, work
   // 只汇总当前目录的 AI 叶子，单节修改不把全文统计替换为本节字数。
   function totalWords(items) {
     return items.reduce((sum, item) => sum + (item.children?.length ? totalWords(item.children)
-      : item.content_mode === 'ai-generate' && stored.contentGenerationSections?.[item.id]?.status !== 'ignored'
+      : item.content_mode === 'ai-generate'
         ? runtime.section_words[item.id] || 0 : 0), 0);
   }
 

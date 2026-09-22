@@ -45,7 +45,6 @@ const statusLabels: Record<TreeStatus, string> = {
   running: '生成中',
   success: '已生成',
   error: '失败',
-  ignored: '已忽略',
   partial: '部分生成',
   planning: '编排中',
   pending: '待处理',
@@ -112,16 +111,13 @@ function getTreeStatus(item: OutlineItem, sections: ContentGenerationSections): 
   if (childStatuses.every((status) => status === 'success')) {
     return 'success';
   }
-  if (childStatuses.every((status) => status === 'ignored')) {
-    return 'ignored';
-  }
   if (childStatuses.every((status) => status === 'pending')) {
     return 'pending';
   }
   if (childStatuses.some((status) => status === 'error')) {
     return 'error';
   }
-  if (childStatuses.some((status) => status === 'success' || status === 'ignored' || status === 'partial' || status === 'pending')) {
+  if (childStatuses.some((status) => status === 'success' || status === 'partial' || status === 'pending')) {
     return 'partial';
   }
 
@@ -131,10 +127,9 @@ function getTreeStatus(item: OutlineItem, sections: ContentGenerationSections): 
 function getParentStatus(childStatuses: TreeStatus[]): TreeStatus {
   if (childStatuses.some((status) => status === 'running')) return 'running';
   if (childStatuses.every((status) => status === 'success')) return 'success';
-  if (childStatuses.every((status) => status === 'ignored')) return 'ignored';
   if (childStatuses.every((status) => status === 'pending')) return 'pending';
   if (childStatuses.some((status) => status === 'error')) return 'error';
-  if (childStatuses.some((status) => status === 'success' || status === 'ignored' || status === 'partial' || status === 'pending')) return 'partial';
+  if (childStatuses.some((status) => status === 'success' || status === 'partial' || status === 'pending')) return 'partial';
   if (childStatuses.some((status) => status === 'planning')) return 'planning';
   return 'idle';
 }
@@ -147,7 +142,7 @@ function buildOutlineMeta(items: OutlineItem[], sections: ContentGenerationSecti
       const baseStatus = getLeafStatus(item, sections);
       const status: TreeStatus = planning && item.content_mode === 'ai-generate' && baseStatus === 'idle' ? 'planning' : baseStatus;
       const words = item.content_mode === 'ai-generate' ? sectionWords[item.id] || 0 : countWords(getLeafContent(item, sections));
-      const nodeMeta: OutlineNodeMeta = { status, leafCount: 1, words: status === 'ignored' ? 0 : words };
+      const nodeMeta: OutlineNodeMeta = { status, leafCount: 1, words };
       meta.set(item.id, nodeMeta);
       return nodeMeta;
     }
@@ -205,7 +200,6 @@ function ContentEditPage({
   const [requirementItem, setRequirementItem] = useState<OutlineItem | null>(null);
   const [regenerateRequirement, setRegenerateRequirement] = useState('');
   const [statsCollapsed, setStatsCollapsed] = useState(false);
-  const [continuePostProcessingDialogOpen, setContinuePostProcessingDialogOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [pausePending, setPausePending] = useState(false);
   const [developerStageActionPending, setDeveloperStageActionPending] = useState<'continue' | 'restart' | null>(null);
@@ -251,19 +245,16 @@ function ContentEditPage({
     return {
       completedCount: summary.completedCount + (status === 'success' ? 1 : 0),
       failedCount: summary.failedCount + (status === 'error' ? 1 : 0),
-      ignoredCount: summary.ignoredCount + (status === 'ignored' ? 1 : 0),
-      totalWords: summary.totalWords + (status === 'ignored' ? 0 : (outlineMeta.get(item.id)?.words || 0)),
+      totalWords: summary.totalWords + (outlineMeta.get(item.id)?.words || 0),
     };
-  }, { completedCount: 0, failedCount: 0, ignoredCount: 0, totalWords: 0 }), [leaves, outlineMeta, sections]);
-  const { completedCount, failedCount, ignoredCount, totalWords } = contentSummary;
-  const resolvedCount = completedCount + ignoredCount;
-  const unresolvedCount = Math.max(0, leaves.length - resolvedCount);
+  }, { completedCount: 0, failedCount: 0, totalWords: 0 }), [leaves, outlineMeta, sections]);
+  const { completedCount, failedCount, totalWords } = contentSummary;
   const modeCounts = allLeaves.reduce<Record<OutlineContentMode, number>>((counts, item) => {
     if (item.content_mode) counts[item.content_mode] += 1;
     return counts;
   }, { 'ai-generate': 0, 'template-fill': 0, 'directory-generate': 0, 'manual-fill': 0, other: 0 });
   const pendingCount = modeCounts['template-fill'] + modeCounts['directory-generate'] + modeCounts['manual-fill'] + modeCounts.other;
-  const progress = leaves.length ? Math.round((resolvedCount / leaves.length) * 100) : 0;
+  const progress = leaves.length ? Math.round((completedCount / leaves.length) * 100) : 0;
   const planningTotal = contentStats?.planning_total || leaves.length;
   const planningCompleted = contentStats?.planning_completed || 0;
   const planningProgress = planningTotal ? Math.round((planningCompleted / planningTotal) * 100) : 0;
@@ -271,7 +262,6 @@ function ContentEditPage({
   const maximumWords = contentStats?.maximum_words ?? outlineWordControlSnapshot?.maximumWords ?? 0;
   const currentWords = contentStats?.current_words ?? totalWords;
   const retryingTableCleanup = taskFailed && contentStats?.phase === 'table-cleaning';
-  const awaitingContentDecision = taskFailed && Boolean(contentStats?.awaiting_content_decision);
   const retryingWordConversion = taskFailed && ['sections-completed', 'word-converting'].includes(contentStats?.phase || '');
   const retryingConsistency = taskFailed && contentStats?.phase === 'auditing';
   const retryingSectionModification = taskFailed && Boolean(contentGenerationRuntime?.target_item_id) && contentStats?.phase === 'generating';
@@ -302,7 +292,7 @@ function ContentEditPage({
       ? `${currentProgressDetail.completed}/${currentProgressDetail.total}`
     : contentCorrecting
       ? contentCorrectionCount
-          : `${resolvedCount}/${leaves.length}`;
+          : `${completedCount}/${leaves.length}`;
   const progressPhaseLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '正文编排' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '正文生成';
   const progressTone = planning
     ? 'success'
@@ -332,8 +322,8 @@ function ContentEditPage({
               ? latestTaskLog || '正文生成任务正在运行。'
               : paused
                 ? '正文生成已暂停，可点击继续。'
-                : resolvedCount
-                  ? `已生成 ${completedCount} 个小节${ignoredCount ? `，已忽略 ${ignoredCount} 个小节` : ''}，共 ${totalWords} 字。`
+                : completedCount
+                  ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。`
                   : '点击生成正文后，目录会实时显示每个小节状态。';
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
   const generationButtonLabel = pausing
@@ -352,7 +342,7 @@ function ContentEditPage({
           ? '重试 Word 转换'
         : retryingTableCleanup
           ? '重试去表格'
-          : resolvedCount === leaves.length && leaves.length
+          : completedCount === leaves.length && leaves.length
               ? '重新生成正文'
               : completedCount > 0
                 ? '继续生成正文'
@@ -480,26 +470,13 @@ function ContentEditPage({
 
   // 失败重试续接原正文会话及后处理阶段，转换失败则只续转 Word。
   const retryFailedSections = async () => {
-    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && (!awaitingContentDecision || !unresolvedCount))) return;
+    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup)) return;
     try {
       await window.yibiao?.tasks.startContentGeneration({ retryFailedSections: true });
       trackConfigUsage({ content_generation_action: 'retry_failed_sections' });
       showToast(retryingTableCleanup ? '去表格已从原会话继续' : retryingSectionModification ? '小节修改已从原会话继续' : retryingBodyGeneration ? '正文生成已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动失败小节重试失败', 'error');
-    }
-  };
-
-  // 用户确认后忽略剩余失败或未完成小节，直接执行剩余内容检查。
-  const continuePostProcessing = async () => {
-    if (!awaitingContentDecision || taskBlocksGeneration) return;
-    try {
-      await window.yibiao?.tasks.startContentGeneration({ continuePostProcessing: true });
-      trackConfigUsage({ content_generation_action: 'continue_with_ignored_sections' });
-      setContinuePostProcessingDialogOpen(false);
-      showToast('后续处理任务已在后台启动', 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '启动后续处理失败', 'error');
     }
   };
 
@@ -582,10 +559,10 @@ function ContentEditPage({
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
       const savedGenerationOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable);
-      const regenerate = leaves.length > 0 && resolvedCount === leaves.length;
+      const regenerate = leaves.length > 0 && completedCount === leaves.length;
       const contentGenerationAction: ContentGenerationAction = regenerate
           ? 'regenerate'
-          : resolvedCount > 0
+          : completedCount > 0
             ? 'continue'
             : 'start';
       await launchContentGeneration({ savedGenerationOptions, nextImageModelAvailable, config, regenerate, contentGenerationAction, simulatePartialFailures });
@@ -763,7 +740,6 @@ function ContentEditPage({
         <div className="content-generation-stats" aria-label="正文生成统计">
           <span><strong>{leaves.length}</strong> 个 AI 小节</span>
           {typeof contentStats?.word_conversion_completed === 'number' && <span><strong>{contentStats.word_conversion_completed}</strong> 本次 Word 已转换</span>}
-          {ignoredCount > 0 && <span><strong>{ignoredCount}</strong> 已忽略</span>}
           <span title={`模板填写 ${modeCounts['template-fill']}，目录生成 ${modeCounts['directory-generate']}，人工填写 ${modeCounts['manual-fill']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
           {hasOriginalPlan && (
             <span title="按原方案导入的图片引用统计，回填时同时核对本地资源；原图不受新增配图数量设置影响。">
@@ -816,17 +792,6 @@ function ContentEditPage({
                 disabled={Boolean(developerStageActionPending)}
               >
                 {developerStageActionPending === 'continue' ? '正在继续...' : '继续下一阶段'}
-              </button>
-            </>
-          ) : awaitingContentDecision ? (
-            <>
-              {unresolvedCount > 0 && (
-                <button type="button" className="primary-action" onClick={() => void retryFailedSections()} disabled={taskBlocksGeneration}>
-                  重试失败小节
-                </button>
-              )}
-              <button type="button" className="secondary-action" onClick={() => setContinuePostProcessingDialogOpen(true)} disabled={taskBlocksGeneration}>
-                继续后续流程
               </button>
             </>
           ) : (
@@ -910,12 +875,8 @@ function ContentEditPage({
             <div className="markdown-empty-state content-generation-empty">
               <strong>{getLeafStatus(selectedItem, sections) === 'error'
                 ? sections[selectedItem.id]?.error || '正文生成失败'
-                : getLeafStatus(selectedItem, sections) === 'ignored'
-                  ? '该小节已按用户选择忽略'
-                  : selectedItem.content_mode === 'ai-generate' ? '正文待生成' : '该小节等待后续处理'}</strong>
-              <p>{getLeafStatus(selectedItem, sections) === 'ignored'
-                ? '该小节不参与一致性检查；如需补充，可直接编辑正文。'
-                : selectedItem.content_mode && selectedItem.content_mode !== 'ai-generate'
+                : selectedItem.content_mode === 'ai-generate' ? '正文待生成' : '该小节等待后续处理'}</strong>
+              <p>{selectedItem.content_mode && selectedItem.content_mode !== 'ai-generate'
                 ? `${pendingModeDescriptions[selectedItem.content_mode]}${selectedItem.content_mode === 'other' && selectedItem.content_mode_note ? ` ${selectedItem.content_mode_note}` : ''}`
                 : taskInFlight ? '如果该小节正在生成，模型返回内容后会实时显示在这里。' : paused ? '任务已暂停，可点击继续。' : '点击生成正文后，后台会按 AI 生成小节生成内容。'}</p>
             </div>
@@ -968,38 +929,6 @@ function ContentEditPage({
               <button type="button" className="danger-action" onClick={() => void resetContentGeneration()} disabled={resetPending}>
                 {resetPending ? '正在重置...' : '确认重置'}
               </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-
-      <Dialog.Root open={continuePostProcessingDialogOpen} onOpenChange={setContinuePostProcessingDialogOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="content-regenerate-card content-incomplete-decision-card">
-            <div className="content-regenerate-card-head">
-              <Dialog.Title>忽略未完成小节并继续？</Dialog.Title>
-              <Dialog.Description asChild>
-                <div className="content-incomplete-decision-copy">
-                  <p className="content-incomplete-decision-summary">
-                    仍有 <strong>{unresolvedCount} 个</strong>正文小节失败或未完成。
-                  </p>
-                  <div className="content-incomplete-decision-impact">
-                    <strong>确认继续后：</strong>
-                    <ul>
-                      <li>这些小节将标记为“已忽略”</li>
-                      <li>不再参与一致性检查</li>
-                    </ul>
-                  </div>
-                  <p className="content-incomplete-decision-warning">
-                    完成后将不再提供失败小节重试入口。
-                  </p>
-                </div>
-              </Dialog.Description>
-            </div>
-            <div className="content-regenerate-actions">
-              <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
-              <button type="button" className="primary-action" onClick={() => void continuePostProcessing()}>确认并继续</button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
