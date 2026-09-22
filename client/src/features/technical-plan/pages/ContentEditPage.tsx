@@ -139,14 +139,15 @@ function getParentStatus(childStatuses: TreeStatus[]): TreeStatus {
   return 'idle';
 }
 
-function buildOutlineMeta(items: OutlineItem[], sections: ContentGenerationSections, planning: boolean) {
+function buildOutlineMeta(items: OutlineItem[], sections: ContentGenerationSections, planning: boolean, sectionWords: Record<string, number> = {}) {
   const meta = new Map<string, OutlineNodeMeta>();
 
   function visit(item: OutlineItem): OutlineNodeMeta {
     if (!item.children?.length) {
       const baseStatus = getLeafStatus(item, sections);
       const status: TreeStatus = planning && item.content_mode === 'ai-generate' && baseStatus === 'idle' ? 'planning' : baseStatus;
-      const nodeMeta: OutlineNodeMeta = { status, leafCount: 1, words: countWords(getLeafContent(item, sections)) };
+      const words = item.content_mode === 'ai-generate' ? sectionWords[item.id] || 0 : countWords(getLeafContent(item, sections));
+      const nodeMeta: OutlineNodeMeta = { status, leafCount: 1, words: status === 'ignored' ? 0 : words };
       meta.set(item.id, nodeMeta);
       return nodeMeta;
     }
@@ -210,6 +211,7 @@ function ContentEditPage({
   const [developerStageActionPending, setDeveloperStageActionPending] = useState<'continue' | 'restart' | null>(null);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [resetPending, setResetPending] = useState(false);
+  const [sectionSubmitting, setSectionSubmitting] = useState(false);
   const [templateRequiredDialogOpen, setTemplateRequiredDialogOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const [developerMode, setDeveloperMode] = useState(false);
@@ -231,7 +233,7 @@ function ContentEditPage({
   const taskFailed = task?.status === 'error';
   const taskInFlight = running || pausing;
   const phaseVisible = taskInFlight || paused || taskFailed;
-  const taskBlocksGeneration = taskInFlight || paused;
+  const taskBlocksGeneration = taskInFlight || paused || sectionSubmitting;
   const contentStats = task?.stats?.content;
   const originalRestoration = hasOriginalPlan && typeof contentStats?.original_restoration?.total_words === 'number' && contentStats.original_restoration.source_hash === originalPlanContentHash
     ? contentStats?.original_restoration : undefined;
@@ -242,7 +244,8 @@ function ContentEditPage({
   const auditing = phaseVisible && contentStats?.phase === 'auditing';
   const tableCleaning = phaseVisible && contentStats?.phase === 'table-cleaning';
   const contentCorrecting = auditing || tableCleaning;
-  const outlineMeta = useMemo(() => outlineData?.outline ? buildOutlineMeta(outlineData.outline, sections, planning) : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections]);
+  const sectionWords = contentGenerationRuntime?.section_words;
+  const outlineMeta = useMemo(() => outlineData?.outline ? buildOutlineMeta(outlineData.outline, sections, planning, sectionWords) : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections, sectionWords]);
   const contentSummary = useMemo(() => leaves.reduce((summary, item) => {
     const status = getLeafStatus(item, sections);
     return {
@@ -274,6 +277,7 @@ function ContentEditPage({
   const awaitingContentDecision = taskFailed && Boolean(contentStats?.awaiting_content_decision);
   const retryingWordConversion = taskFailed && ['sections-completed', 'word-converting'].includes(contentStats?.phase || '');
   const retryingConsistency = taskFailed && contentStats?.phase === 'auditing';
+  const retryingSectionModification = taskFailed && Boolean(contentGenerationRuntime?.target_item_id) && contentStats?.phase === 'generating';
   const contentRetryTargetLabel = '内容矫正';
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
@@ -336,7 +340,7 @@ function ContentEditPage({
             : running
               ? latestTaskLog || '正文生成任务正在运行。'
               : paused
-                ? '正文生成已暂停，可导出当前已完成内容或点击继续。'
+                ? '正文生成已暂停，可点击继续。'
                 : resolvedCount
                   ? `已生成 ${completedCount} 个小节${ignoredCount ? `，已忽略 ${ignoredCount} 个小节` : ''}，共 ${totalWords} 字。`
                   : '点击生成正文后，目录会实时显示每个小节状态。';
@@ -347,6 +351,8 @@ function ContentEditPage({
       ? '暂停'
       : paused
         ? '继续'
+        : retryingSectionModification
+          ? '重试小节修改'
         : retryingConsistency
           ? '继续一致性审计'
         : retryingWordConversion
@@ -494,11 +500,11 @@ function ContentEditPage({
 
   // 复用失败重试入口：恢复原审计会话，或继续已交付 HTML 的 Word 转换。
   const retryFailedSections = async () => {
-    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && (!awaitingContentDecision || !unresolvedCount))) return;
+    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && (!awaitingContentDecision || !unresolvedCount))) return;
     try {
       await window.yibiao?.tasks.startContentGeneration({ retryFailedSections: true });
       trackConfigUsage({ content_generation_action: 'retry_failed_sections' });
-      showToast(retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
+      showToast(retryingSectionModification ? '小节修改已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动失败小节重试失败', 'error');
     }
@@ -526,7 +532,7 @@ function ContentEditPage({
       void resumeGeneration();
       return;
     }
-    if (retryingWordConversion || retryingConsistency) {
+    if (retryingWordConversion || retryingConsistency || retryingSectionModification) {
       void retryFailedSections();
       return;
     }
@@ -613,12 +619,12 @@ function ContentEditPage({
   };
 
   const startSectionRegeneration = async () => {
-    if (!outlineData?.outline?.length || !requirementItem) {
+    if (taskBlocksGeneration || !outlineData?.outline?.length || !requirementItem) {
       return;
     }
 
+    setSectionSubmitting(true);
     try {
-      if (!await ensureValidContentTemplate()) return;
       const config = await window.yibiao?.config.load();
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
@@ -627,20 +633,13 @@ function ContentEditPage({
         regenerate: true,
         targetItemId: requirementItem.id,
         requirement: regenerateRequirement,
-        generationOptions: {
-          useAiImages: nextImageModelAvailable && savedGenerationOptions.useAiImages,
-          useMermaidImages: savedGenerationOptions.useMermaidImages,
-          useHtmlImages: savedGenerationOptions.useHtmlImages,
-          htmlImageTypes: savedGenerationOptions.htmlImageTypes,
-          tableRequirement: savedGenerationOptions.tableRequirement,
-        },
       });
       trackConfigUsage({
         table_requirement: savedGenerationOptions.tableRequirement,
         use_mermaid_images: savedGenerationOptions.useMermaidImages,
         use_ai_images: nextImageModelAvailable && savedGenerationOptions.useAiImages,
         content_generation_action: 'regenerate_section',
-        enable_consistency_audit: true,
+        enable_consistency_audit: false,
         consistency_repair_mode: 'agent',
         enable_original_plan_coverage_audit: false,
       }, config);
@@ -650,6 +649,8 @@ function ContentEditPage({
       showToast('小节重新生成任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动小节重新生成失败', 'error');
+    } finally {
+      setSectionSubmitting(false);
     }
   };
 
@@ -721,14 +722,16 @@ function ContentEditPage({
           </span>
           {isLeaf && item.content_mode === 'ai-generate' && (status === 'success' || status === 'error') ? (
             <Popover.Root
-              open={confirmRegenerateItem?.id === item.id}
-              onOpenChange={(open) => setConfirmRegenerateItem(open ? item : null)}
+              open={!taskBlocksGeneration && confirmRegenerateItem?.id === item.id}
+              onOpenChange={(open) => setConfirmRegenerateItem(open && !taskBlocksGeneration ? item : null)}
             >
               <Popover.Trigger asChild>
                 <em
-                  className="is-clickable"
+                  className={taskBlocksGeneration ? undefined : 'is-clickable'}
+                  aria-disabled={taskBlocksGeneration}
                   onClick={(event) => {
                     event.stopPropagation();
+                    if (taskBlocksGeneration) event.preventDefault();
                   }}
                 >重新生成</em>
               </Popover.Trigger>
@@ -851,7 +854,7 @@ function ContentEditPage({
               </button>
             </>
           ) : (
-            <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={pausing || !leaves.length}>
+            <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={sectionSubmitting || pausing || !leaves.length}>
               {generationButtonLabel}
             </button>
           )}
@@ -938,7 +941,7 @@ function ContentEditPage({
                 ? '该小节不参与一致性检查；如需补充，可直接编辑正文。'
                 : selectedItem.content_mode && selectedItem.content_mode !== 'ai-generate'
                 ? `${pendingModeDescriptions[selectedItem.content_mode]}${selectedItem.content_mode === 'other' && selectedItem.content_mode_note ? ` ${selectedItem.content_mode_note}` : ''}`
-                : taskInFlight ? '如果该小节正在生成，模型返回内容后会实时显示在这里。' : paused ? '任务已暂停，可先导出当前内容或点击继续。' : '点击生成正文后，后台会按 AI 生成小节生成内容。'}</p>
+                : taskInFlight ? '如果该小节正在生成，模型返回内容后会实时显示在这里。' : paused ? '任务已暂停，可点击继续。' : '点击生成正文后，后台会按 AI 生成小节生成内容。'}</p>
             </div>
           ) : (
             <div className="markdown-empty-state content-generation-empty">

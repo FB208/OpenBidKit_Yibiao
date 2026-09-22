@@ -106,6 +106,8 @@ async function main() {
     fs.writeFileSync(path.join(workspaceDir, '原图/现场 图片.png'), png);
     fs.writeFileSync(path.join(workspaceDir, `正文/${firstId}.html`), body, 'utf8');
     fs.writeFileSync(path.join(workspaceDir, `正文/${secondId}.html`), '<p>交付验收正文</p><ul><li>交付检查清单</li></ul>', 'utf8');
+    fs.writeFileSync(path.join(workspaceDir, '正文/已删除小节.html'), '<p>不能导出的孤儿正文</p><img data-yb-asset-ref="不存在.png">', 'utf8');
+    fs.writeFileSync(path.join(workspaceDir, '正文/parent.html'), '<p>父章节不应带出的旧正文</p>', 'utf8');
     // 清单只有最后一次任务的一节；整本导出必须仍包含全部当前目录。
     fs.writeFileSync(path.join(workspaceDir, '正文生成结果.json'), JSON.stringify({ sections: [{ section_id: secondId }] }), 'utf8');
     for (const scope of ['ai-only', 'document']) {
@@ -116,6 +118,8 @@ async function main() {
       for (const expected of ['1 混合父标题', '1.1 施工 & 安全', '1.2 人工资料', '1.3 交付节点', '2 模板节点', '待模板填写', '现场图注', '设备表题', '人工正文']) assert.ok(text.includes(expected), expected);
       assert.ok(text.indexOf('施工 & 安全') < text.indexOf('交付节点'));
       assert.ok(!text.includes('数据库陈旧正文'));
+      assert.ok(!text.includes('不能导出的孤儿正文'));
+      assert.ok(!text.includes('父章节不应带出的旧正文'));
       assert.ok(!text.includes('YIBIAO'));
       assert.equal($('w\\:drawing').length, 2);
       const drawingIds = $('wp\\:docPr').toArray().map(element => $(element).attr('id'));

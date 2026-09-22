@@ -224,6 +224,8 @@ export interface ContentGenerationPlanState {
 export type ContentGenerationPlans = Record<string, ContentGenerationPlanState>;
 
 export interface ContentGenerationRuntimeState {
+  /** 已确认的 HTML 实际字数，按稳定小节 ID 保存，不保存 HTML 正文。 */
+  section_words?: Record<string, number>;
   /** HTML 位于 Agent 会话目录；Word 文件相对于独立的业务输出目录。 */
   html_output?: {
     workspace_dir: string;

@@ -1,7 +1,8 @@
 const crypto = require('node:crypto');
 const { runBidSectionExtractionTask } = require('./bidSectionExtractionTask.cjs');
 const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
-const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
+const { runContentGenerationTask, prepareContentGenerationStart } = require('./contentGenerationTask.cjs');
+const { runContentSectionRegenerationTask } = require('./contentSectionRegenerationTask.cjs');
 const { runGlobalFactsTaskV2 } = require('./globalFactsTaskV2.cjs');
 const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
 const { runOutlineAdjustmentTask } = require('./outlineAdjustmentTask.cjs');
@@ -1466,17 +1467,40 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         throw new Error('当前目录没有字数控制生效快照，请重新生成目录');
       }
       const taskPayload = payload?.developerRestart ? { ...payload, regenerate: true } : payload;
-      return startManagedTask('content-generation', taskPayload, runContentGenerationTask, {
-        contentGenerationRuntime: { ...technicalPlan.contentGenerationRuntime, generation_started: true },
-      }, {
+      const sectionRegeneration = !taskPayload?.developerRestart && Boolean(taskPayload?.targetItemId
+        || ((taskPayload?.resume || taskPayload?.retryFailedSections || taskPayload?.retry_failed_sections)
+          && technicalPlan.contentGenerationRuntime?.target_item_id));
+      if (sectionRegeneration && isActiveTaskStatus(activeTasks.get('content-generation')?.status)) {
+        throw new Error('当前正文任务正在执行，请等待完成后再修改小节');
+      }
+      const continuing = taskPayload?.resume || [
+        'retryContentCorrection', 'retry_content_correction', 'retryFailedSections', 'retry_failed_sections',
+        'continuePostProcessing', 'continue_post_processing',
+      ].some(field => taskPayload?.[field]);
+      // 普通生成没有待办时直接返回已有结果，避免 beforeStart 删除产物会话。
+      function hasPendingSections(items) {
+        return items.some(item => item.children?.length ? hasPendingSections(item.children)
+          : item.content_mode === 'ai-generate'
+            && technicalPlan.contentGenerationSections?.[item.id]?.status !== 'ignored'
+            && (technicalPlan.contentGenerationSections?.[item.id]?.status !== 'success'
+              || !Object.hasOwn(technicalPlan.contentGenerationRuntime?.section_words || {}, item.id)));
+      }
+      if (!sectionRegeneration && !continuing && !taskPayload?.regenerate
+        && technicalPlan.contentGenerationTask?.status === 'success'
+        && !hasPendingSections(technicalPlan.outlineData?.outline || [])) {
+        const task = technicalPlan.contentGenerationTask;
+        emit(task, { technicalPlanPatch: technicalPlan });
+        return task;
+      }
+      const initialState = sectionRegeneration || continuing
+        ? { contentGenerationRuntime: { ...technicalPlan.contentGenerationRuntime, generation_started: true } }
+        : prepareContentGenerationStart(technicalPlan, taskPayload);
+      return startManagedTask('content-generation', taskPayload, sectionRegeneration ? runContentSectionRegenerationTask : runContentGenerationTask, initialState, {
         primarySession: true,
         beforeStart: () => {
-          // 新一轮正文生成清理还原现场；暂停继续及后续阶段重试保留 Session。
-          const continuing = taskPayload?.resume || [
-            'retryContentCorrection', 'retry_content_correction', 'retryFailedSections', 'retry_failed_sections',
-            'continuePostProcessing', 'continue_post_processing',
-          ].some(field => taskPayload?.[field]);
-          if (!continuing) agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+          if (sectionRegeneration) return;
+          // 只有明确全文重生才删除正文会话；局部新增继续使用原 Session。
+          if (!continuing && taskPayload?.regenerate) agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
           if (technicalPlan.originalPlanFile?.markdownPath && !continuing) {
             agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
           }

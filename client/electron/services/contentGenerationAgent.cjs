@@ -65,7 +65,7 @@ function restorationInstructions(control, existingTotalWords) {
   return `有 restored_content 的小节必须先完整阅读对应底稿，以其为基础对齐当前项目、目录及编排重点，整理为受限 HTML，不得忽略底稿另写一份。没有底稿的小节按正常流程生成，不搬用其他小节材料。\n本次启动时全文已有正文共 ${existingTotalWords} 字，全文上限 ${control.maximumWords || '不限制'}；每小节目标 ${control.sectionWords || '不限制'} 字，本节还原字数见 restored_content.words。若本节还原字数已超过小节目标，或全文已有正文已超过全文上限，则本节只整理，不扩写，不为压字数删除实质内容；未超过时按现有要求适当扩写。没有设置的目标不参与判断，不将全文目标分摊给本节。\n保留底稿中的实质信息、技术参数、措施和承诺；与全局事实设定冲突时，以全局事实设定为准，必要时读取并核对相关事实，无依据时不擅自改动。\n保留所有原表格的数据及含义，并保留本节原图片和引用顺序。表格编排和配图设置只指导新增内容：原表格不受 table.needed 限制，原图不受无图、image_needed、类型开关限制，也不计入新增配图建议张数。原图按 restored_content.images 中的对应关系直接使用 asset_ref，不重新生成，不留待生图占位。原图 figure 必须保留 data-yb-generation="aiImage" 以及唯一、非空的 template data-yb-role="prompt"，模板写“复用原方案图片，不重新生成”并可补充图片说明。此处 aiImage 仅满足现有受限 HTML 结构，不表示原图由 AI 生成；是否复用以原图对应关系为准，不得因该属性调用生图工具。保留 img、图注及其他必需属性。`;
 }
 
-// 输入快照只在新会话创建时写入；还原底稿按节保存，知识库保留选中文档的全文。
+// 每轮新目标更新输入快照；暂停恢复不重写，已有小节 HTML 和图片始终保留。
 function buildContentGenerationFiles({ outline, targets, plans, projectOverview, globalFacts, globalFactsMode, wordControl, generationOptions, hasOriginalPlan, restoredContents, existingTotalWords, requirement, template, knowledgeBaseService, documentIds, checkTotalWords = true }) {
   if (!template) throw new Error('请先在“长嘛样”选择有效的正文模板');
   const targetIds = new Set(targets.map(({ item }) => item.id));
@@ -239,9 +239,11 @@ function buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPla
 以下写作规则仅适用于小节 HTML 文件，不适用于结果清单：\n${writingInstructions('', hasKnowledgeBase)}`;
 }
 
-// 新建或恢复正文 Session；暂停保留工作区，完成后只返回文件产物。
+// 新一轮目标也复用正文 Session；仅暂停恢复时继承本轮字数调整与审计进度。
 async function runContentGenerationAgent({ agentService, aiService, resume, hasKnowledgeBase, hasOriginalPlan, resolveOriginalImagePath, signal, buildFiles, onCheckpoint = () => {}, onActivity, onProgress, onConsistencyProgress = () => {}, onWorkspaceReady = () => {} }) {
-  const resuming = Boolean(resume && agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY));
+  const reuseSession = agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY);
+  const resuming = Boolean(resume && reuseSession);
+  const files = resuming ? [] : buildFiles();
   const savedState = resuming ? agentService.loadPersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY).state : {};
   const protectionActive = savedState.word_adjustment_started === true;
   let consistencyState = savedState.consistency || null;
@@ -255,12 +257,15 @@ async function runContentGenerationAgent({ agentService, aiService, resume, hasK
   };
   let imageProtection;
   const runId = crypto.randomUUID();
-  if (resuming) agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { run_id: runId, status: 'running', agent_connection: 'running', error: null });
+  if (reuseSession) agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, {
+    run_id: runId, status: 'running', agent_connection: 'running', error: null,
+    ...(!resuming ? { phase: 'generating', word_adjustment_started: false, consistency: null } : {}),
+  });
   const result = await agentService.runTask({
     task_id: runId, title: '投标文件正文生成', primary_session: true, summary_enabled: false,
-    prompt: consistencyState ? buildConsistencyPrompt(consistencyState, hasKnowledgeBase, hasOriginalPlan) : `${buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPlan)}${protectionActive ? '\n本次恢复时已处于图片保护阶段，正文和配图已经就绪，只继续文字调整及结果清单保存，不重新生成正文或图片。' : ''}`, output_file: RESULT_FILE,
-    files: resuming ? [] : buildFiles(), signal,
-    persistent_task: { task_key: CONTENT_GENERATION_AGENT_TASK_KEY, mode: resuming ? 'resume' : 'create' },
+    prompt: consistencyState ? buildConsistencyPrompt(consistencyState, hasKnowledgeBase, hasOriginalPlan) : `${reuseSession && !resuming ? '目录已变更，本次是在原会话中开始新一轮局部生成。重新阅读程序更新的输入文件，以当前 targets 为唯一生成、调整和修复范围；上一轮完成结论不适用于本轮。保留其他小节的 HTML、图片及源码，新增配图源码使用新文件名，不覆盖已有文件。\n' : ''}${buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPlan)}${protectionActive ? '\n本次恢复时已处于图片保护阶段，正文和配图已经就绪，只继续文字调整及结果清单保存，不重新生成正文或图片。' : ''}`, output_file: RESULT_FILE,
+    files, signal,
+    persistent_task: { task_key: CONTENT_GENERATION_AGENT_TASK_KEY, mode: reuseSession ? 'resume' : 'create' },
     initial_stage: consistencyState ? 'auditing' : 'generating', max_retries: 1, timeout_ms: 30 * 60 * 1000,
     json_validation_schemas: { [RESULT_FILE]: RESULT_SCHEMA }, auto_validate_json: true,
     before_tool_call: context => {
@@ -317,4 +322,4 @@ async function runContentGenerationAgent({ agentService, aiService, resume, hasK
   return output;
 }
 
-module.exports = { CONTENT_GENERATION_AGENT_TASK_KEY, buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, readContentGenerationResult };
+module.exports = { CONTENT_GENERATION_AGENT_TASK_KEY, buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, readContentGenerationResult, checkSectionHtml };

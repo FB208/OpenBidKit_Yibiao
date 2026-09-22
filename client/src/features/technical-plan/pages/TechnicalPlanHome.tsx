@@ -215,8 +215,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const globalFactsHasPlaceholder = Boolean(firstGlobalFactWithPlaceholder);
   const isGlobalFactsAdjusting = state.globalFactsAdjustmentTask?.status === 'running' || state.globalFactsAdjustmentTask?.status === 'pausing';
   const contentTaskStatus = state.contentGenerationTask?.status;
-  const isContentGenerating = contentTaskStatus === 'running' || contentTaskStatus === 'pausing';
-  const isContentPaused = contentTaskStatus === 'paused';
+  const contentBlocksExport = contentTaskStatus === 'running' || contentTaskStatus === 'pausing' || contentTaskStatus === 'paused';
   const isExporting = exportProgress.running;
   const generatedOutlineMode = state.outlineGenerationTask?.stats?.agent?.resume_payload?.outline_mode;
   const outlineModeRequiresRegeneration = Boolean(
@@ -868,9 +867,6 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     }
   };
 
-  const generatedContentCount = state.outlineData?.outline
-    ? collectLeafItems(state.outlineData.outline).filter((item) => item.content?.trim()).length
-    : 0;
   const outlineGenerationStatus = state.outlineGenerationTask?.status;
   const isOutlineGenerating = outlineGenerationStatus === 'running' || outlineGenerationStatus === 'pausing';
   const outlineAdjustmentStatus = state.outlineAdjustmentTask?.status;
@@ -958,8 +954,8 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         label: isExporting ? '导出中...' : '导出 Word',
         icon: <ToolbarDocumentIcon />,
         variant: 'primary' as const,
-        disabled: isContentGenerating || isExporting || !state.outlineData,
-        tooltip: isContentGenerating ? '正文生成或暂停处理中，完成暂停后再导出' : isExporting ? 'Word 正在导出，请稍候' : isContentPaused ? '正文生成已暂停，可导出当前已完成内容' : generatedContentCount ? '导出当前技术方案正文' : '可导出空目录文档，建议先生成正文',
+        disabled: contentBlocksExport || isExporting || !state.outlineData,
+        tooltip: contentTaskStatus === 'paused' ? '正文任务已暂停，请继续完成后导出' : contentBlocksExport ? '正文生成或暂停处理中，暂不能导出' : isExporting ? 'Word 正在导出，请稍候' : '导出整本 Word，需要全部 AI 小节正文及引用图片齐全',
         onClick: () => { void exportWordWithConfiguredTemplate(); },
       },
     ]

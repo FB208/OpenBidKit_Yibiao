@@ -352,7 +352,7 @@ async function checkImageProtectionLifecycle({ Type, workspaceDir, files, signal
     fs.writeFileSync(sectionFile, `${original}<img alt="未完成图片">`, 'utf8');
     try {
       await assert.rejects(check.execute(), /尚未生成/);
-      assert.equal(state.word_adjustment_started, undefined);
+      assert.equal(state.word_adjustment_started, false);
       assert.equal(activeTools, undefined);
     } finally { fs.writeFileSync(sectionFile, original, 'utf8'); }
     await check.execute();
@@ -376,7 +376,7 @@ async function checkImageProtectionLifecycle({ Type, workspaceDir, files, signal
   activeTools = undefined;
   action = async payload => {
     payload.validateOutput({}, { workspace_dir: workspaceDir });
-    assert.equal(state.word_adjustment_started, undefined);
+    assert.equal(state.word_adjustment_started, false);
     const continuation = payload.continueTask({}, { workspace_dir: workspaceDir });
     assert.ok(continuation.prompt);
     assert.equal(state.word_adjustment_started, true);
@@ -384,6 +384,21 @@ async function checkImageProtectionLifecycle({ Type, workspaceDir, files, signal
     throw pauseError;
   };
   await assert.rejects(run(false), error => error === pauseError);
+  // 上一轮已完成：相同 Session 的新目标必须从生成开始，不能继承审计完成或编辑保护。
+  state = { word_adjustment_started: true, consistency: { round: 3, status: 'completed', remaining_issues: [] } };
+  activeTools = undefined;
+  action = async (payload, tools) => {
+    assert.equal(payload.persistent_task.mode, 'resume');
+    assert.equal(payload.initial_stage, 'generating');
+    assert.equal(payload.files.length, files.length);
+    assert.match(payload.prompt, /重新阅读程序更新的输入文件/);
+    assert.equal(state.word_adjustment_started, false);
+    assert.equal(state.consistency, null);
+    payload.before_tool_call({ toolCall: { name: 'generate-sections' }, args: {} });
+    payload.before_tool_call({ toolCall: { name: 'generate-image' }, args: {} });
+    assert.ok(tools.some(tool => tool.name === 'generate-sections'));
+  };
+  await run(false);
 }
 
 // 原图样例供正文请求模拟和真实受限 HTML 校验共同使用。

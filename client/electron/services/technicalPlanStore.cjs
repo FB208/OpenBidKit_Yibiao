@@ -1727,7 +1727,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     }
   }
 
-  // 将 Word 移动与数据库修改放在同一业务操作中，提交失败时逆序恢复文件。
+  // 将正文文件移动与数据库修改放在同一业务操作中，提交失败时逆序恢复文件。
   function createContentWordTransaction(callback) {
     const transaction = db.transaction(callback);
     return (...args) => {
@@ -1739,19 +1739,28 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         const restoreErrors = [];
         for (const [source, target] of changes.moves.reverse()) {
           try {
-            if (fs.existsSync(source)) throw new Error(`恢复 Word 时原位置被占用：${source}`);
+            if (fs.existsSync(source)) throw new Error(`恢复正文文件时原位置被占用：${source}`);
             fs.renameSync(target, source);
           } catch (restoreError) {
             restoreErrors.push(restoreError);
           }
         }
-        if (restoreErrors.length) throw new AggregateError([error, ...restoreErrors], '正文变更失败，部分 Word 未能恢复，请保留目录中的临时文件。');
+        if (restoreErrors.length) throw new AggregateError([error, ...restoreErrors], '正文变更失败，部分正文文件未能恢复，请保留目录中的临时文件。');
         throw error;
       }
       // 到此数据库已提交，暂存文件已失效且不能再按小节 ID 读取。
       for (const temporary of changes.removed) fs.unlinkSync(temporary);
       return result;
     };
+  }
+
+  // 先移出正式文件名；复用事务的回滚和提交后清理，HTML 与 Word 一致失效。
+  function stageContentFileRemoval(changes, source) {
+    if (!fs.existsSync(source)) return;
+    const temporary = path.join(path.dirname(source), `__content_word_${crypto.randomUUID()}.tmp`);
+    fs.renameSync(source, temporary);
+    changes.moves.push([source, temporary]);
+    changes.removed.push(temporary);
   }
 
   // 只暂存小节 Word，绝不按 *.docx 清空业务目录中的投标模板或原件。
@@ -1765,23 +1774,25 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         .map(row => `${encodeURIComponent(row.node_id)}.docx`);
     }
     for (const file of files) {
-      const source = path.join(directory, file);
-      if (!fs.existsSync(source)) continue;
-      const temporary = path.join(directory, `__content_word_${crypto.randomUUID()}.tmp`);
-      fs.renameSync(source, temporary);
-      changes.moves.push([source, temporary]);
-      changes.removed.push(temporary);
+      stageContentFileRemoval(changes, path.join(directory, file));
     }
   }
 
   // 与目录正文使用同一失效范围，稳定 ID 无需给有效文件换名。
   function reconcileContentWords(changes, { snapshot, affectedIds, nextIds, clearAll }) {
-    if (clearAll || !nextIds.size) {
+    if (clearAll) {
       stageContentWordRemoval(changes);
       return;
     }
-    const removed = Object.keys(snapshot.nodes).filter(id => !nextIds.has(id) || affectedIds.has(id));
+    // 被删节点的文件允许留存；仍在目录中的身份变化节点才需要清空。
+    const removed = Object.keys(snapshot.nodes).filter(id => nextIds.has(id) && affectedIds.has(id));
     stageContentWordRemoval(changes, removed);
+    if (removed.length) {
+      const workspaceDir = agentService.loadPersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY)?.paths.workspaceDir;
+      if (workspaceDir) {
+        for (const id of removed) stageContentFileRemoval(changes, path.join(workspaceDir, '正文', `${encodeURIComponent(id)}.html`));
+      }
+    }
   }
 
   // 排序只更新位置，不修改节点身份、正文及任务中的引用。
@@ -2130,8 +2141,15 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         };
         const leafIds = new Set(rowsBeforeSave.filter(row => !nextParents.has(row.node_id) && row.content_mode === 'ai-generate').map(row => row.node_id));
         const keepLeafIds = ids => [...new Set(ids)].filter(id => leafIds.has(id));
+        const keepResult = id => leafIds.has(id) && !affectedIds.has(id);
         updateMeta({ content_generation_runtime_json: clearAll ? null : JSON.stringify({
           generation_started: generationStarted,
+          section_words: Object.fromEntries(Object.entries(previousRuntime.section_words || {}).filter(([id]) => keepResult(id))),
+          ...(previousRuntime.html_output ? { html_output: {
+            ...previousRuntime.html_output,
+            word_sections: previousRuntime.html_output.word_sections.filter(section => keepResult(section.section_id)),
+          } } : {}),
+          phase: 'planning',
           direct_generation_item_ids: keepLeafIds([...(retainedRuntime.direct_generation_item_ids || []), ...newLeafIds]),
           pending_item_ids: keepLeafIds([...(retainedRuntime.pending_item_ids || []), ...(generationStarted ? newLeafIds : [])]),
         }) });
@@ -2141,7 +2159,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (invalidatesContentTask) {
       agentService.deletePersistentTask(CONTENT_PLANNING_AGENT_TASK_KEY);
       agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
-      agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+      if (clearAll) agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
       cleanupOriginalImageBatches();
     }
     const savedContentRuntime = safeJsonParse(readMetaRow().content_generation_runtime_json, undefined);

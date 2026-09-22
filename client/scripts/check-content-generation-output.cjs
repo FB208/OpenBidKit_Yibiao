@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { buildContentGenerationFiles, readContentGenerationResult } = require('../electron/services/contentGenerationAgent.cjs');
-const { runContentGenerationTask } = require('../electron/services/contentGenerationTask.cjs');
+const { runContentGenerationTask, prepareContentGenerationStart } = require('../electron/services/contentGenerationTask.cjs');
 const { scanGeneratedSections, convertContentSections } = require('../electron/services/contentGenerationOutput.cjs');
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=', 'base64');
@@ -48,13 +48,16 @@ async function checkTask(directory, outputDir) {
   let state = {
     outlineData: { outline }, globalFacts: [{ title: '工期', content: '六十天' }], globalFactsTask: { status: 'success' },
     contentGenerationOptions: { imageQuantity: 'none' }, contentGenerationSections: {},
-    contentGenerationRuntime: { generation_started: true, completed_stages: ['planning'] },
+    contentGenerationRuntime: { generation_started: true, phase: 'generating', completed_stages: ['planning'], pending_item_ids: targets.map(section => section.id) },
     contentGenerationTask: { status: 'paused', progress: 18 },
   };
   const updates = [];
   // 模拟 Store 的即时快照，防止后续对象修改掩盖当时的状态。
-  const checkpoint = (task, patch) => {
+  const checkpoint = (task, patch, event) => {
     updates.push(structuredClone(task));
+    if (patch?.contentGenerationSections && task.status === 'running' && patch.contentGenerationRuntime?.phase === 'word-converting') {
+      assert.deepEqual(event?.technicalPlanPatch?.contentGenerationSections, patch.contentGenerationSections, '转换中的成功状态也要推送页面');
+    }
     state = { ...state, ...structuredClone(patch || {}), contentGenerationTask: { ...state.contentGenerationTask, ...structuredClone(task) } };
   };
   let aiRuns = 0;
@@ -128,6 +131,10 @@ async function checkTask(directory, outputDir) {
     await assert.rejects(runContentGenerationTask({ ...args, previousState: structuredClone(state), payload: { resume: true } }), /小节 1.2 交付 转 Word 失败/);
     assert.equal(timers.size, 0);
     assert.equal(state.contentGenerationRuntime.html_output.word_sections.length, 1);
+    assert.equal(state.contentGenerationSections[targets[0].id].status, 'success');
+    assert.equal(state.contentGenerationSections[targets[1].id].status, 'idle');
+    assert.deepEqual(state.contentGenerationRuntime.pending_item_ids, [targets[1].id]);
+    assert.equal(state.contentGenerationTask.stats.content.current_words, 32);
     assert.equal(state.contentGenerationTask.progress, 85);
     assert.equal(state.contentGenerationRuntime.html_output.word_output_dir, outputDir);
     assert.equal(fs.readFileSync(path.join(outputDir, 'f0000000-0000-4000-8000-000000000012.docx'), 'utf8'), '准备 Word', '成功覆盖原结果');
@@ -150,6 +157,11 @@ async function checkTask(directory, outputDir) {
     assert.ok(state.contentGenerationTask.logs.includes(`输出目录：${outputDir}`));
     assert.equal(timers.size, 0);
     assert.equal(state.contentGenerationTask.status, 'success');
+    assert.ok(targets.every(section => state.contentGenerationSections[section.id].status === 'success'));
+    assert.ok(targets.every(section => state.contentGenerationSections[section.id].content === ''), 'HTML 不写入数据库正文');
+    assert.deepEqual(state.contentGenerationRuntime.section_words, Object.fromEntries(targets.map(section => [section.id, 16])));
+    assert.deepEqual(state.contentGenerationRuntime.pending_item_ids, []);
+    assert.equal(state.contentGenerationTask.stats.content.current_words, 32);
     assert.equal(state.contentGenerationTask.progress, 90);
     assert.equal(state.contentGenerationTask.stats.content.output_progress.phase, 'word-completed');
     assert.ok(updates.every(update => update.progress <= 90));
@@ -174,6 +186,8 @@ async function checkTask(directory, outputDir) {
     // 生成中暂停也必须清理十秒扫描；已有 HTML 不触发转换。
     state.contentGenerationRuntime.html_output = undefined;
     state.contentGenerationRuntime.phase = 'generating';
+    state.contentGenerationSections = {};
+    state.contentGenerationRuntime.section_words = {};
     state.contentGenerationTask.status = 'paused';
     const convertedBeforePause = conversions;
     pauseGeneration = true;
@@ -209,6 +223,104 @@ async function checkTask(directory, outputDir) {
     assert.equal(resumedAudit, true);
     assert.equal(state.contentGenerationTask.status, 'success');
     assert.equal(timers.size, 0);
+    // 仅一个小节待生成：已完成小节即使数据库正文为空，也不重新进入目标。
+    state.contentGenerationRuntime = { generation_started: true, phase: 'planning', completed_stages: ['planning'],
+      pending_item_ids: [targets[0].id], section_words: { [targets[1].id]: 16 },
+      html_output: { workspace_dir: directory, word_output_dir: outputDir, word_sections: [{ section_id: targets[1].id, file: `${targets[1].id}.docx` }] } };
+    state.contentGenerationSections = Object.fromEntries(targets.map((section, index) => [section.id,
+      { id: section.id, status: index === 0 ? 'idle' : 'success', content: '' }]));
+    state.contentGenerationTask = { status: 'paused' };
+    const decisionsPath = path.join(directory, '正文编排决策.json');
+    const decisions = fs.readFileSync(decisionsPath, 'utf8');
+    const manifestPath = path.join(directory, '正文生成结果.json');
+    const manifest = fs.readFileSync(manifestPath, 'utf8');
+    fs.writeFileSync(decisionsPath, JSON.stringify({ ...JSON.parse(decisions), targets: [targets[0]] }), 'utf8');
+    fs.writeFileSync(manifestPath, JSON.stringify({ sections: [{ section_id: targets[0].id, file: targets[0].file, words: 16 }] }), 'utf8');
+    const retainedWord = fs.readFileSync(path.join(outputDir, `${targets[1].id}.docx`));
+    const retainedHtml = fs.readFileSync(path.join(directory, targets[1].file));
+    await runContentGenerationTask({ ...args, previousState: structuredClone(state), payload: { resume: true },
+      templateStore: { getTemplate: () => ({ config: { page: { size: 'A4' } } }) }, agentService: {
+      ...args.agentService, async runTask(payload) {
+        assert.equal(payload.persistent_task.mode, 'resume');
+        assert.match(payload.prompt, /新一轮局部生成/);
+        const input = JSON.parse(payload.files.find(file => file.path === '正文编排决策.json').content);
+        assert.deepEqual(input.targets.map(section => section.id), [targets[0].id]);
+        for (const file of payload.files) fs.writeFileSync(path.join(directory, file.path), file.content, 'utf8');
+        assert.equal(state.contentGenerationSections[targets[1].id].status, 'success', '不能把已完成小节改回 idle');
+        return { workspace_dir: directory };
+      },
+    } });
+    assert.equal(state.contentGenerationTask.stats.content.current_words, 32, '局部生成保留其他小节字数');
+    assert.equal(state.contentGenerationTask.stats.content.generation_total, 1);
+    assert.deepEqual(state.contentGenerationRuntime.pending_item_ids, []);
+    assert.equal(state.contentGenerationSections[targets[0].id].status, 'success');
+    assert.equal(state.contentGenerationRuntime.html_output.word_sections.length, 2);
+    assert.equal(state.contentGenerationTask.stats.content.word_conversion_completed, 1, '本轮进度只统计本轮目标');
+    assert.deepEqual(fs.readFileSync(path.join(outputDir, `${targets[1].id}.docx`)), retainedWord);
+    assert.deepEqual(fs.readFileSync(path.join(directory, targets[1].file)), retainedHtml);
+    fs.writeFileSync(decisionsPath, decisions, 'utf8');
+    fs.writeFileSync(manifestPath, manifest, 'utf8');
+    // 新任务首次落库后立即中断：恢复必须重新编排正确目标，不能续转上一轮 HTML。
+    for (const regenerate of [false, true]) {
+      state.contentGenerationSections[targets[0].id].status = 'idle';
+      state.contentGenerationRuntime = { ...state.contentGenerationRuntime,
+        target_item_id: targets[1].id, phase: 'word-converting', completed_stages: ['planning', 'restoring'],
+        pending_item_ids: [targets[0].id], section_words: { [targets[1].id]: 16 } };
+      state = { ...state, ...prepareContentGenerationStart(state, { regenerate }), contentGenerationTask: { status: 'paused' } };
+      const converted = conversions;
+      let enteredPlanning = false;
+      const stop = new Error('检查到恢复后正确进入编排');
+      await assert.rejects(runContentGenerationTask({ ...args, previousState: structuredClone(state), payload: { resume: true },
+        agentService: { ...args.agentService, async runTask(payload) {
+          enteredPlanning = true;
+          assert.equal(payload.initial_stage, 'content-planning');
+          assert.equal(state.contentGenerationRuntime.target_item_id, '');
+          assert.equal(state.contentGenerationTask.stats.content.planning_total, regenerate ? 2 : 1);
+          throw stop;
+        } },
+      }), error => error === stop);
+      assert.ok(enteredPlanning);
+      assert.equal(conversions, converted, '不能读取上一轮转换记录继续转换');
+      assert.equal(timers.size, 0);
+    }
+    // 实际生成输入应合计 HTML 字数与还原底稿，排除孤儿、忽略项和非 AI 正文。
+    const restored = '施工底稿';
+    const zeroId = '00000000-0000-4000-8000-000000000031';
+    const ignoredId = '00000000-0000-4000-8000-000000000032';
+    const manualId = '00000000-0000-4000-8000-000000000033';
+    state.outlineData = { outline: [...targets.map(section => ({ id: section.id, title: section.title, content_mode: 'ai-generate' })),
+      { id: zeroId, title: '零字数记录', content_mode: 'ai-generate', content: '不应重复统计旧底稿' },
+      { id: ignoredId, title: '忽略小节', content_mode: 'ai-generate', content: '不应统计' },
+      { id: manualId, title: '非AI内容', content_mode: 'manual', content: '不应统计' }] };
+    state.originalPlanFile = { markdownPath: '原方案.md' };
+    state.contentGenerationSections = {
+      [targets[0].id]: { status: 'idle', content: restored },
+      [targets[1].id]: { status: 'success', content: '' },
+      [zeroId]: { status: 'success', content: '不应重复统计旧底稿' },
+      [ignoredId]: { status: 'ignored', content: '不应统计' },
+    };
+    state.contentGenerationPlans = { [targets[0].id]: { plan_version: 5, plan: {
+      writing_focus: '施工', image_suitability_score: 0, table: { needed: false },
+      original_material: { restored: true, source_hash: require('node:crypto').createHash('sha256').update(restored).digest('hex'),
+        source_ranges: [{ start_line: 1, end_line: 1 }] },
+    } } };
+    state.contentGenerationRuntime = { phase: 'planning', completed_stages: ['planning', 'restoring'],
+      pending_item_ids: [targets[0].id], section_words: { [targets[1].id]: 10000, [zeroId]: 0, [ignoredId]: 200, deleted: 300 } };
+    state.contentGenerationTask = { status: 'paused' };
+    const stopAfterInput = new Error('已检查传给正文 Agent 的字数');
+    await assert.rejects(runContentGenerationTask({ ...args, previousState: structuredClone(state), payload: { resume: true },
+      workspaceStore: { ...args.workspaceStore, readOriginalPlanMarkdown: () => restored, assertOriginalImageFiles() {} },
+      templateStore: { getTemplate: () => ({ config: {} }) },
+      agentService: { ...args.agentService, async runTask(payload) {
+        assert.equal(payload.initial_stage, 'generating');
+        const input = JSON.parse(payload.files.find(file => file.path === '正文编排决策.json').content);
+        assert.equal(input.targets[0].restored_content.words, 4);
+        assert.match(input.restoration_requirements, /全文已有正文共 10004 字/);
+        throw stopAfterInput;
+      } },
+    }), error => error === stopAfterInput);
+    assert.equal(timers.size, 0);
+    console.log('已有 HTML 字数与还原底稿汇总、零值及无效节点排除检查通过。');
     console.log('扫描、十秒回调、进度封顶、页面重开、定时器清理、生成/转换暂停、审计原会话重试及失败续跑通过。');
   } finally {
     global.setInterval = originalSet;

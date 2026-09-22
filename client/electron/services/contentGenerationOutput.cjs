@@ -15,10 +15,9 @@ function scanGeneratedSections(workspaceDir, targets) {
 }
 
 // 按本次目录顺序逐节转换；只复用明确记录为成功且仍存在的 Word 文件。
-async function convertContentSections({ result, outputDir, openXmlHelperService, signal, completed = [], onProgress = () => {} }) {
+async function convertContentSections({ result, outputDir, openXmlHelperService, signal, completed = [], outline, onProgress = () => {} }) {
   const { workspaceDir, sections } = result;
   const template = JSON.parse(fs.readFileSync(path.join(workspaceDir, '所选模板配置.json'), 'utf8'));
-  const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
   const headings = new Map();
   // 小节独立成册，但保留原目录中的标题级别和对应模板样式。
   function visit(nodes, level = 1) {
@@ -27,7 +26,7 @@ async function convertContentSections({ result, outputDir, openXmlHelperService,
       visit(node.children || [], level + 1);
     }
   }
-  visit(decisions.outline);
+  visit(outline || JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8')).outline);
   const saved = new Map(completed.filter(item => fs.existsSync(path.join(outputDir, item.file))
     && fs.statSync(path.join(outputDir, item.file)).size > 0).map(item => [item.section_id, item]));
   fs.mkdirSync(outputDir, { recursive: true });

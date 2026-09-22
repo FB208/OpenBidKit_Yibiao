@@ -32,7 +32,8 @@ if (!process.versions.electron) {
     const { createTechnicalPlanStore } = require('../electron/services/technicalPlanStore.cjs');
     const { createTaskLogStore } = require('../electron/services/taskLogStore.cjs');
     const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('../electron/services/originalPlanRestorationAgentConfig.cjs');
-    const { createPersistentAgentTask, deletePersistentAgentTask } = require('../electron/services/pi/piPersistentTaskStore.cjs');
+    const { createPersistentAgentTask, deletePersistentAgentTask, loadPersistentAgentTask } = require('../electron/services/pi/piPersistentTaskStore.cjs');
+    const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('../electron/services/contentGenerationAgent.cjs');
     const { clearStalePiTaskArchives } = require('../electron/services/storageCleanupService.cjs');
     // 在隔离 userData 创建真实任务目录，检查启动保留和业务重置清理。
     const seedRestorationSession = () => {
@@ -47,7 +48,10 @@ if (!process.versions.electron) {
       database = createSqliteDatabase(app);
       store = createTechnicalPlanStore({
         app, db: database.db, fileService: {}, configStore: { load: () => ({}) },
-        taskLogStore: createTaskLogStore({ db: database.db }), agentService: { deletePersistentTask(key) { deletePersistentAgentTask(app, key); } },
+        taskLogStore: createTaskLogStore({ db: database.db }), agentService: {
+          deletePersistentTask(key) { deletePersistentAgentTask(app, key); },
+          loadPersistentTask(key) { return loadPersistentAgentTask(app, key); },
+        },
       });
     };
     const leaf = (id, content = '') => ({ id, title: `小节${id}`, description: '原说明', content_mode: 'ai-generate', content });
@@ -106,6 +110,48 @@ if (!process.versions.electron) {
       await checkWordInvalidation(store, database.db);
       await checkWorkflowRefresh(store);
       checkWholeWorkflowReset(store, database.db);
+      // 真实 SQLite 与持久会话：局部增删保留旧正文，父子身份变化才删除对应 HTML。
+      seed();
+      const bodyTask = createPersistentAgentTask(app, CONTENT_GENERATION_AGENT_TASK_KEY, { session_file: 'session.jsonl' });
+      fs.writeFileSync(path.join(bodyTask.paths.sessionsDir, 'session.jsonl'), '{}\n', 'utf8');
+      const bodyIds = ['00000000-0000-4000-8000-000000000004', '00000000-0000-4000-8000-000000000005', '00000000-0000-4000-8000-000000000002'];
+      const htmlFile = id => path.join(bodyTask.paths.workspaceDir, '正文', `${id}.html`);
+      fs.mkdirSync(path.dirname(htmlFile(bodyIds[0])), { recursive: true });
+      for (const id of bodyIds) fs.writeFileSync(htmlFile(id), '<!-- yibiao:block --><p>保留的正文</p>', 'utf8');
+      const sectionWords = Object.fromEntries(bodyIds.map(id => [id, 5]));
+      store.updateTechnicalPlanWithoutReload({ contentGenerationRuntime: { generation_started: true, phase: 'word-completed', section_words: sectionWords,
+        html_output: { workspace_dir: bodyTask.paths.workspaceDir, word_output_dir: store.getContentWordOutputDir(), word_sections: bodyIds.map(id => ({ section_id: id, file: `${id}.docx` })) } } });
+      let changed = store.loadTechnicalPlan().outlineData.outline;
+      const addedId = '00000000-0000-4000-8000-000000000009';
+      changed.push(leaf(addedId));
+      let local = save(changed, 'add-root');
+      assert.deepEqual(local.contentGenerationRuntime.section_words, sectionWords);
+      assert.equal(local.contentGenerationRuntime.html_output.word_sections.length, 3);
+      assert.ok(bodyIds.every(id => local.contentGenerationSections[id].status === 'success' && fs.existsSync(htmlFile(id))));
+      assert.ok(fs.existsSync(path.join(bodyTask.paths.sessionsDir, 'session.jsonl')));
+      changed = local.outlineData.outline;
+      changed[0].children = [changed[0].children[1]];
+      local = save(changed, 'delete', [bodyIds[0]]);
+      assert.ok(fs.existsSync(htmlFile(bodyIds[0])), '删除节点留下的孤儿 HTML 不主动回收');
+      assert.equal(local.contentGenerationRuntime.section_words[bodyIds[0]], undefined);
+      assert.equal(local.contentGenerationRuntime.section_words[bodyIds[1]], 5);
+      changed = local.outlineData.outline;
+      changed[1].children = [leaf('00000000-0000-4000-8000-000000000007')];
+      local = save(changed, 'add-child', [bodyIds[2]]);
+      assert.equal(fs.existsSync(htmlFile(bodyIds[2])), false, '叶子变父章节必须清空自己的 HTML');
+      assert.equal(local.contentGenerationRuntime.section_words[bodyIds[2]], undefined);
+      assert.equal(local.contentGenerationSections[bodyIds[2]], undefined);
+      // 即使父章节下残留旧 HTML，变回叶子也不能复用。
+      fs.writeFileSync(htmlFile(bodyIds[2]), '<p>旧父章节正文</p>', 'utf8');
+      changed = local.outlineData.outline;
+      changed[1] = leaf(bodyIds[2]);
+      local = save(changed, 'delete', ['00000000-0000-4000-8000-000000000007']);
+      assert.equal(fs.existsSync(htmlFile(bodyIds[2])), false);
+      assert.ok(local.contentGenerationRuntime.pending_item_ids.includes(bodyIds[2]));
+      database.close(); open();
+      assert.equal(store.loadTechnicalPlan().contentGenerationRuntime.section_words[bodyIds[1]], 5);
+      assert.ok(fs.existsSync(htmlFile(bodyIds[1])));
+      assert.ok(fs.existsSync(path.join(bodyTask.paths.sessionsDir, 'session.jsonl')));
       seed();
       let restorationRoot = seedRestorationSession();
       clearStalePiTaskArchives(app);
@@ -185,6 +231,8 @@ if (!process.versions.electron) {
       assert.equal(store.loadTechnicalPlan().contentGenerationRuntime, undefined, '正文重置清除锁定');
       await checkFactsConfirmation();
       checkRestorationStart();
+      checkContentStartupRecovery(store);
+      checkPausedExportButton();
       if (process.argv.includes('--word-preview')) await checkWordPreview(store);
       console.log('目录状态：改名保留、增删局部影响、父子转换、稳定身份排序、重启锁定及清空确认检查通过。');
     } finally {
@@ -284,7 +332,7 @@ if (!process.versions.electron) {
       }
       seed();
       const remaining = save([leaf('00000000-0000-4000-8000-000000000002')], 'delete', ['00000000-0000-4000-8000-000000000001']);
-      assert.equal(await store.readContentWord('00000000-0000-4000-8000-000000000001'), null);
+      assert.ok(fs.existsSync(file('00000000-0000-4000-8000-000000000001')), '删除节点允许留下孤儿 Word');
       assert.equal((await store.readContentWord('00000000-0000-4000-8000-000000000002')).toString(), 'Word 00000000-0000-4000-8000-000000000002');
       assert.equal(remaining.outlineData.outline[0].number, '1');
       save([leaf('00000000-0000-4000-8000-000000000003'), leaf('00000000-0000-4000-8000-000000000002')], 'add-root');
@@ -297,7 +345,7 @@ if (!process.versions.electron) {
       assert.equal((await store.readContentWord('00000000-0000-4000-8000-000000000002')).toString(), 'Word 00000000-0000-4000-8000-000000000002');
       fs.writeFileSync(file('00000000-0000-4000-8000-000000000004'), '子节 Word', 'utf8');
       save([leaf('00000000-0000-4000-8000-000000000001'), leaf('00000000-0000-4000-8000-000000000002')], 'delete', ['00000000-0000-4000-8000-000000000004']);
-      assert.equal(await store.readContentWord('00000000-0000-4000-8000-000000000004'), null);
+      assert.ok(fs.existsSync(file('00000000-0000-4000-8000-000000000004')), '被删子节的文件无需回收');
       assert.equal(await store.readContentWord('00000000-0000-4000-8000-000000000001'), null, '重新成为叶子后等待生成，不能复用旧 Word');
 
       seed();
@@ -369,7 +417,7 @@ if (!process.versions.electron) {
     for (const action of [
       () => actions.resetContentGeneration(),
       () => actions.saveGlobalFacts([{ id: 'facts', title: '事实', content: '新事实' }]),
-      () => actions.saveOutline({ outlineData: { outline: [] }, reason: 'delete', affectedNodeIds: [id] }),
+      () => actions.saveOutline({ outlineData: { outline: [{ id, title: '变成父章节', children: [{ id: `${id}-child`, title: '子节', content_mode: 'ai-generate' }] }] }, reason: 'add-child', affectedNodeIds: [id] }),
     ]) {
       seed();
       const oldOutline = pageState.outlineData;
@@ -639,9 +687,13 @@ if (!process.versions.electron) {
       let deletes = 0;
       const scope = {
         ORIGINAL_RESTORATION_AGENT_TASK_KEY: 'technical-plan-original-restoration',
-        CONTENT_GENERATION_AGENT_TASK_KEY: 'technical-plan-content-generation', runContentGenerationTask() {},
+        CONTENT_GENERATION_AGENT_TASK_KEY: 'technical-plan-content-generation', runContentGenerationTask() {}, runContentSectionRegenerationTask() {},
+        prepareContentGenerationStart: require('../electron/services/contentGenerationTask.cjs').prepareContentGenerationStart,
         technicalPlanStore: { loadTechnicalPlan: () => ({ outlineWordControlSnapshot: {}, originalPlanFile: hasOriginal ? { markdownPath: 'original.md' } : null }) },
-        agentService: { deletePersistentTask(key) { if (key === scope.ORIGINAL_RESTORATION_AGENT_TASK_KEY) deletes += 1; } },
+        agentService: { deletePersistentTask(key) {
+          if (key === scope.ORIGINAL_RESTORATION_AGENT_TASK_KEY) deletes += 1;
+          if (key === scope.CONTENT_GENERATION_AGENT_TASK_KEY) assert.equal(payload.regenerate, true, '普通局部生成不删除正文会话');
+        } },
         startManagedTask(_type, _payload, _runner, _initial, options) { options.beforeStart(); },
       };
       vm.createContext(scope);
@@ -649,6 +701,112 @@ if (!process.versions.electron) {
       scope.service.startContentGeneration(payload);
       assert.equal(deletes, expectedDeletes);
     }
+  }
+
+  // 停在 runner 首次 checkpoint 前，重新装配任务服务，以真实 SQLite 初始记录恢复。
+  function checkContentStartupRecovery(store) {
+    const { createRequire } = require('node:module');
+    const filename = path.resolve(__dirname, '../electron/services/taskService.cjs');
+    const realRequire = createRequire(filename);
+    const first = '00000000-0000-4000-8000-000000000021';
+    const second = '00000000-0000-4000-8000-000000000022';
+    let selectedRunner;
+    const scope = { module: { exports: {} }, AbortController, console, require(request) {
+      const original = realRequire(request);
+      if (request === './contentGenerationTask.cjs') return { ...original, runContentGenerationTask() {
+        selectedRunner = 'full'; return new Promise(() => {});
+      } };
+      if (request === './contentSectionRegenerationTask.cjs') return { ...original, runContentSectionRegenerationTask() {
+        selectedRunner = 'single'; return new Promise(() => {});
+      } };
+      return original;
+    } };
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8'), scope, { filename });
+    for (const regenerate of [false, true]) {
+      const oldRuntime = { generation_started: true, target_item_id: first, regenerate_requirement: '上一轮修改要求',
+        phase: 'word-converting', completed_stages: ['planning', 'restoring'], touched_item_ids: [first],
+        section_words: { [first]: 50 }, pending_item_ids: [second], direct_generation_item_ids: [second],
+        html_output: { workspace_dir: '已删除的旧会话', word_output_dir: '旧Word目录', word_sections: [{ section_id: first, file: `${first}.docx` }] } };
+      store.updateTechnicalPlanWithoutReload({
+        outlineData: { outline: [{ id: first, title: '已有小节', content_mode: 'ai-generate', content: '旧底稿' }, { id: second, title: '新增小节', content_mode: 'ai-generate' }] },
+        outlineWordControlSnapshot: { minimumWords: 100 },
+        contentGenerationSections: { [first]: { id: first, status: 'success', content: '旧底稿' } },
+        contentGenerationRuntime: oldRuntime,
+        contentGenerationTask: { task_id: 'old-single', type: 'content-generation', status: 'success' },
+      });
+      let bodyDeletes = 0;
+      const agentService = { bindTaskContext() { return this; }, deletePersistentTask(key) {
+        if (key === 'technical-plan-content-generation') bodyDeletes++;
+      } };
+      const createService = () => scope.module.exports.createTaskService({
+        technicalPlanStore: store, agentService, aiService: {},
+        rejectionCheckStore: { loadRejectionCheck: () => ({}) }, duplicateCheckStore: { loadDuplicateCheck: () => ({}) },
+      });
+      createService().startContentGeneration({ regenerate });
+      assert.equal(selectedRunner, 'full');
+      let state = store.loadTechnicalPlan();
+      assert.equal(state.contentGenerationTask.status, 'running');
+      assert.equal(state.contentGenerationRuntime.target_item_id, '');
+      assert.equal(state.contentGenerationRuntime.regenerate_requirement, '');
+      assert.equal(state.contentGenerationRuntime.phase, 'planning');
+      assert.deepEqual(state.contentGenerationRuntime.completed_stages, []);
+      assert.equal(bodyDeletes, regenerate ? 1 : 0);
+      if (regenerate) {
+        assert.equal(state.contentGenerationRuntime.html_output, undefined);
+        assert.deepEqual(state.contentGenerationRuntime.section_words, {});
+        assert.deepEqual(state.contentGenerationPlans, {});
+        assert.ok(Object.values(state.contentGenerationSections).every(section => section.status === 'idle' && !section.content));
+      } else {
+        assert.deepEqual(state.contentGenerationRuntime.html_output, oldRuntime.html_output);
+        assert.deepEqual(state.contentGenerationRuntime.section_words, oldRuntime.section_words);
+        assert.equal(state.contentGenerationSections[first].status, 'success');
+      }
+      const restarted = createService();
+      state = store.loadTechnicalPlan();
+      assert.equal(state.contentGenerationTask.status, 'paused');
+      assert.equal(state.contentGenerationRuntime.phase, 'planning');
+      restarted.startContentGeneration({ resume: true });
+      assert.equal(selectedRunner, 'full', '恢复不能误入上一轮单节修改');
+      assert.equal(bodyDeletes, regenerate ? 1 : 0, '恢复不得再次删除 Session');
+      // 已有单节任务的继续/重试仍保留目标、转换阶段与工作区。
+      for (const retry of [false, true]) {
+        store.updateTechnicalPlanWithoutReload({ contentGenerationRuntime: oldRuntime,
+          contentGenerationTask: { task_id: 'single', type: 'content-generation', status: retry ? 'error' : 'paused' } });
+        createService().startContentGeneration(retry ? { retryFailedSections: true } : { resume: true });
+        assert.equal(selectedRunner, 'single');
+        assert.deepEqual(store.loadTechnicalPlan().contentGenerationRuntime, oldRuntime);
+      }
+    }
+    store.updateTechnicalPlanWithoutReload({ contentGenerationTask: undefined });
+    console.log('启动恢复：新任务初始落库即清除旧单节状态，全文清空、局部保留及单节继续/重试检查通过。');
+  }
+
+  // 执行页面真实禁用条件和提示表达式，暂停必须与运行/暂停中一样禁止整本导出。
+  function checkPausedExportButton() {
+    const ts = require('typescript');
+    const source = fs.readFileSync(path.join(__dirname, '../src/features/technical-plan/pages/TechnicalPlanHome.tsx'), 'utf8');
+    const ast = ts.createSourceFile('home.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let blocked;
+    let disabled;
+    let tooltip;
+    function visit(node) {
+      if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'contentBlocksExport') blocked = node.initializer.getText(ast);
+      if (ts.isObjectLiteralExpression(node) && node.properties.some(property => property.name?.getText(ast) === 'id' && property.initializer?.text === 'export-word')) {
+        disabled = node.properties.find(property => property.name?.getText(ast) === 'disabled').initializer.getText(ast);
+        tooltip = node.properties.find(property => property.name?.getText(ast) === 'tooltip').initializer.getText(ast);
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(ast);
+    assert.ok(blocked && disabled && tooltip);
+    const evaluate = new Function('contentTaskStatus', 'isExporting', 'state', `const contentBlocksExport = ${blocked}; return { disabled: ${disabled}, tooltip: ${tooltip} };`);
+    for (const status of ['running', 'pausing', 'paused', 'success', 'error', undefined]) {
+      const result = evaluate(status, false, { outlineData: {} });
+      assert.equal(result.disabled, ['running', 'pausing', 'paused'].includes(status));
+      if (status === 'paused') assert.equal(result.tooltip, '正文任务已暂停，请继续完成后导出');
+    }
+    assert.equal(evaluate('success', true, { outlineData: {} }).disabled, true);
+    assert.equal(evaluate('success', false, { outlineData: null }).disabled, true);
   }
 
   // 直接执行页面保存入口，确认有正文时先询问，取消不写入，确认后才保存。
