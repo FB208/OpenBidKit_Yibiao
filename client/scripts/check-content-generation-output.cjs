@@ -135,7 +135,7 @@ async function checkTask(directory, outputDir) {
     assert.equal(state.contentGenerationSections[targets[1].id].status, 'idle');
     assert.deepEqual(state.contentGenerationRuntime.pending_item_ids, [targets[1].id]);
     assert.equal(state.contentGenerationTask.stats.content.current_words, 32);
-    assert.equal(state.contentGenerationTask.progress, 85);
+    assert.equal(state.contentGenerationTask.progress, 88);
     assert.equal(state.contentGenerationRuntime.html_output.word_output_dir, outputDir);
     assert.equal(fs.readFileSync(path.join(outputDir, 'f0000000-0000-4000-8000-000000000012.docx'), 'utf8'), '准备 Word', '成功覆盖原结果');
     assert.equal(fs.readFileSync(path.join(outputDir, 'a0000000-0000-4000-8000-000000000010.docx'), 'utf8'), '第二节原结果', '失败保留原结果');
@@ -377,12 +377,112 @@ async function checkTask(directory, outputDir) {
   }
 }
 
+// 从审计接入去表格，实际 runner 检查失败重试、暂停继续及转换所用的最新 HTML。
+async function checkTableCleanupTask(directory, outputDir) {
+  const { Type } = await import('typebox');
+  const { countHtmlWords } = require('../electron/services/contentGenerationWordTools.cjs');
+  const { outline, targets } = createFixture(directory);
+  const decisionsFile = path.join(directory, '正文编排决策.json');
+  const decisions = JSON.parse(fs.readFileSync(decisionsFile, 'utf8'));
+  decisions.table_requirement = 'none';
+  fs.writeFileSync(decisionsFile, JSON.stringify(decisions), 'utf8');
+  for (const target of targets) fs.writeFileSync(path.join(directory, target.file), body, 'utf8');
+  fs.mkdirSync(path.join(directory, '原图'), { recursive: true });
+  fs.writeFileSync(path.join(directory, '原图/现场 图片.png'), png);
+  fs.writeFileSync(path.join(directory, '正文生成结果.json'), JSON.stringify({ sections: targets.map(section => ({ section_id: section.id, file: section.file, words: 1 })) }), 'utf8');
+  let state = {
+    outlineData: { outline }, globalFacts: [{ title: '工期', content: '六十天' }], globalFactsTask: { status: 'success' },
+    contentGenerationOptions: { tableRequirement: 'none', imageQuantity: 'none' }, contentGenerationSections: {},
+    contentGenerationRuntime: { generation_started: true, phase: 'auditing', pending_item_ids: targets.map(section => section.id) },
+    contentGenerationTask: { status: 'paused', progress: 80 },
+  };
+  let persistent = { word_adjustment_started: true, consistency: { status: 'completed', round: 1, remaining_issues: [] } };
+  let pauseRequested = false;
+  let mode = 'fail';
+  let conversions = 0;
+  const childCalls = [];
+  const updates = [];
+  const save = (task, patch) => {
+    updates.push(structuredClone(task));
+    state = { ...state, ...structuredClone(patch || {}), contentGenerationTask: { ...state.contentGenerationTask, ...structuredClone(task) } };
+  };
+  const args = {
+    aiService: {}, workspaceStore: { loadTechnicalPlan: () => state, getContentWordOutputDir: () => outputDir },
+    updateTask: save, checkpointTask: save,
+    taskControl: { signal: new AbortController().signal, isPauseRequested: () => pauseRequested },
+    agentService: {
+      hasPersistentTaskSession: () => true, loadPersistentTask: () => ({ state: persistent }),
+      updatePersistentTask(_key, patch) { persistent = { ...persistent, ...structuredClone(patch) }; },
+      async runTask(payload) {
+        if (!payload.primary_session) {
+          childCalls.push(payload.output_file);
+          if (mode === 'fail' && payload.output_file === targets[0].file) throw new Error('模拟表格改写失败');
+          const file = path.join(directory, payload.output_file);
+          const original = fs.readFileSync(file, 'utf8');
+          const html = original.replace(/<table>.*?<\/table>/s, '<p>本节责任由项目组承担。</p>');
+          payload.before_file_write({ filePath: file, content: html, originalContent: original, toolName: 'edit' });
+          fs.writeFileSync(file, html, 'utf8');
+          payload.validateOutput({ output_content: html });
+          return {};
+        }
+        assert.equal(payload.persistent_task.mode, 'resume');
+        assert.deepEqual(payload.files, []);
+        const tools = payload.create_tools({ Type, workspaceDir: directory });
+        assert.equal(payload.continueTask({}, { workspace_dir: directory }).stage, 'table-cleaning');
+        assert.equal(state.contentGenerationRuntime.phase, 'table-cleaning');
+        assert.equal(conversions, 0, '去表格完成前不能转换');
+        if (mode === 'pause') {
+          pauseRequested = true;
+          throw Object.assign(new Error('模拟去表格暂停'), { name: 'AbortError' });
+        }
+        const pending = targets.filter(section => !persistent.table_cleanup.completed_section_ids.includes(section.id));
+        await tools.find(tool => tool.name === 'remove-section-tables').execute('clean', { sections: pending.map(section => ({ section_id: section.id, instructions: '完整转成普通文字' })) });
+        if (mode === 'fail') throw new Error('主 Agent 本次去表格最终失败');
+        await tools.find(tool => tool.name === 'complete-table-cleanup').execute();
+        assert.equal(payload.continueTask({}, { workspace_dir: directory }).complete, true);
+        assert.equal(persistent.consistency.round, 1);
+        return { workspace_dir: directory };
+      },
+    },
+    openXmlHelperService: { async createRestrictedHtmlDocx(html) {
+      assert.equal(persistent.table_cleanup.status, 'completed');
+      assert.doesNotMatch(html, /<table/);
+      assert.match(html, /本节责任由项目组承担/);
+      conversions++;
+      return { bytes: Buffer.from('已去表格 Word') };
+    } },
+  };
+  const run = payload => runContentGenerationTask({ ...args, payload, previousState: structuredClone(state) });
+  await assert.rejects(run({ resume: true }), /最终失败/);
+  assert.equal(state.contentGenerationTask.status, 'error');
+  assert.equal(state.contentGenerationTask.stats.content.table_cleanup_completed, 1);
+  assert.equal(state.contentGenerationTask.stats.content.table_cleanup_total, 2);
+  const retry = await checkGenerationRetryButton(state.contentGenerationTask, state.contentGenerationRuntime, '重试去表格');
+  const retained = fs.readFileSync(path.join(directory, targets[1].file));
+  mode = 'pause';
+  await run(retry);
+  assert.equal(state.contentGenerationTask.status, 'paused');
+  assert.equal(state.contentGenerationRuntime.phase, 'table-cleaning');
+  mode = 'success';
+  pauseRequested = false;
+  await run({ resume: true });
+  assert.equal(conversions, 2);
+  assert.equal(state.contentGenerationTask.status, 'success');
+  assert.equal(childCalls.filter(file => file === targets[1].file).length, 1);
+  assert.deepEqual(fs.readFileSync(path.join(directory, targets[1].file)), retained);
+  const expectedWords = targets.reduce((sum, section) => sum + countHtmlWords(fs.readFileSync(path.join(directory, section.file), 'utf8')), 0);
+  assert.equal(state.contentGenerationTask.stats.content.current_words, expectedWords);
+  assert.deepEqual(state.contentGenerationRuntime.pending_item_ids, []);
+  assert.ok(updates.some(task => task.progress_detail?.phase === 'table-cleaning' && task.progress > 80 && task.progress < 100));
+  console.log('去表格 runner：阶段衔接、页面重试、暂停续接、成功小节复用、最新字数和转换输入通过。');
+}
+
 // 执行页面真实按钮文案、点击分支和重试函数，普通生成分支会被检查捕获。
 async function checkGenerationRetryButton(task, contentGenerationRuntime, expectedLabel) {
   const ts = require('typescript');
   const source = fs.readFileSync(path.join(__dirname, '../src/features/technical-plan/pages/ContentEditPage.tsx'), 'utf8');
   const ast = ts.createSourceFile('page.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const names = ['retryingWordConversion', 'retryingConsistency', 'retryingSectionModification', 'retryingBodyGeneration', 'generationButtonLabel', 'retryFailedSections', 'handleGenerationButtonClick'];
+  const names = ['retryingWordConversion', 'retryingConsistency', 'retryingSectionModification', 'retryingBodyGeneration', 'retryingTableCleanup', 'generationButtonLabel', 'retryFailedSections', 'handleGenerationButtonClick'];
   const statements = new Map();
   function visit(node) {
     if (ts.isVariableDeclaration(node) && names.includes(node.name.getText(ast))) statements.set(node.name.getText(ast), `const ${node.getText(ast)};`);
@@ -394,8 +494,8 @@ async function checkGenerationRetryButton(task, contentGenerationRuntime, expect
   const evaluate = new Function('task', 'contentGenerationRuntime', 'calls', ts.transpile(`
     const taskFailed = task.status === 'error', contentStats = task.stats.content;
     const pausing = false, running = false, paused = false, taskBlocksGeneration = false;
-    const canRetryContentCorrection = false, awaitingContentDecision = false, unresolvedCount = 0;
-    const resolvedCount = 0, completedCount = 0, leaves = [{}], contentRetryTargetLabel = '';
+    const awaitingContentDecision = false, unresolvedCount = 0;
+    const resolvedCount = 0, completedCount = 0, leaves = [{}];
     const window = { yibiao: { tasks: { startContentGeneration: async request => { calls.push(request); } } } };
     const trackConfigUsage = () => {}, showToast = () => {};
     const startGeneration = () => calls.push({ ordinary: true });
@@ -455,7 +555,7 @@ function checkRetiredStageCleanup() {
 }
 
 // 调用真实助手服务，解包确认正文、表格、图片及中转目录清理。
-async function checkRealWord(directory, outputDir) {
+async function checkRealWord(directory, outputDir, hasTables = true) {
   const { EventEmitter } = require('node:events');
   const { createOpenXmlHelperService } = require('../electron/services/openXmlHelperService.cjs');
   const AdmZip = require('adm-zip');
@@ -473,14 +573,18 @@ async function checkRealWord(directory, outputDir) {
       const xml = zip.readAsText('word/document.xml');
       assert.match(xml, /(?:施工|交付)准备与检查/);
       assert.doesNotMatch(xml, /准备 &amp; 检查|<w:t\b[^>]*>交付<\/w:t>/, '小节 Word 不应带目录标题');
-      assert.match(xml, /<w:tbl[ >]/);
+      if (hasTables) assert.match(xml, /<w:tbl[ >]/);
+      else {
+        assert.doesNotMatch(xml, /<w:tbl[ >]/);
+        assert.match(xml, /本节责任由项目组承担/);
+      }
       assert.match(xml, /<w:drawing[ >]/);
       assert.ok(zip.getEntries().some(entry => /(^|\/)media\/.+\.png$/i.test(entry.entryName)));
     }
     await assert.rejects(service.createRestrictedHtmlDocx(body.replace('原图/现场 图片.png', '原图/不存在.png'), { page: {} }, { assetRoot: directory, copyAssets: true }));
     assert.equal(fs.readdirSync(path.join(app.getPath(), 'workspace')).some(name => name.startsWith('restricted-html-assets-')), false);
     assert.deepEqual(fs.readFileSync(path.join(directory, '原图/现场 图片.png')), png);
-    console.log('真实 OpenXmlHelper：两个独立 Word、表格、图片、中文路径及成功/失败中转清理通过。');
+    console.log(`真实 OpenXmlHelper：两个独立 Word、${hasTables ? '数据表格保留' : '数据表格已转为普通文字'}、图片、中文路径及成功/失败中转清理通过。`);
   } finally {
     await service.close();
   }
@@ -511,6 +615,10 @@ async function main() {
     const outputDir = path.join(directory, '独立用户数据', 'workspace', 'technical-plan');
     await checkTask(agentDir, outputDir);
     if (process.argv.includes('--real-word')) await checkRealWord(agentDir, outputDir);
+    const cleanupDir = path.join(directory, '去表格会话');
+    const cleanupOutput = path.join(directory, '去表格用户数据', 'workspace', 'technical-plan');
+    await checkTableCleanupTask(cleanupDir, cleanupOutput);
+    if (process.argv.includes('--real-word')) await checkRealWord(cleanupDir, cleanupOutput, false);
     // 删除的仅是本检查创建的会话目录，正式输出目录必须位于它之外。
     assert.equal(path.dirname(agentDir), path.join(directory, 'agent-runtime'));
     fs.rmSync(agentDir, { recursive: true, force: true });

@@ -270,16 +270,12 @@ function ContentEditPage({
   const minimumWords = contentStats?.minimum_words ?? outlineWordControlSnapshot?.minimumWords ?? 0;
   const maximumWords = contentStats?.maximum_words ?? outlineWordControlSnapshot?.maximumWords ?? 0;
   const currentWords = contentStats?.current_words ?? totalWords;
-  const canRetryContentCorrection = taskFailed
-    && leaves.length > 0
-    && resolvedCount === leaves.length
-    && contentStats?.phase === 'table-cleaning';
+  const retryingTableCleanup = taskFailed && contentStats?.phase === 'table-cleaning';
   const awaitingContentDecision = taskFailed && Boolean(contentStats?.awaiting_content_decision);
   const retryingWordConversion = taskFailed && ['sections-completed', 'word-converting'].includes(contentStats?.phase || '');
   const retryingConsistency = taskFailed && contentStats?.phase === 'auditing';
   const retryingSectionModification = taskFailed && Boolean(contentGenerationRuntime?.target_item_id) && contentStats?.phase === 'generating';
   const retryingBodyGeneration = taskFailed && !contentGenerationRuntime?.target_item_id && contentStats?.phase === 'generating';
-  const contentRetryTargetLabel = '内容矫正';
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
   const consistencyRound = contentStats?.consistency_round || 1;
@@ -287,8 +283,6 @@ function ContentEditPage({
   const auditProgress = consistencyComplete ? 100 : Math.round(((consistencyRound - 1) / 3) * 100);
   const tableCleanupTotal = contentStats?.table_cleanup_total || 0;
   const tableCleanupCompleted = contentStats?.table_cleanup_completed || 0;
-  const tableCleanupRewritten = contentStats?.table_cleanup_rewritten || 0;
-  const tableCleanupSkipped = contentStats?.table_cleanup_skipped || 0;
   const tableCleanupProgress = tableCleanupTotal ? Math.round((tableCleanupCompleted / tableCleanupTotal) * 100) : 0;
   const auditCorrectionCount = `第 ${consistencyRound}/3 轮`;
   const contentCorrectionProgress = tableCleaning ? tableCleanupProgress : auditProgress;
@@ -331,11 +325,7 @@ function ContentEditPage({
     : auditing
       ? `${paused ? '已暂停：' : ''}主 Agent 一致性审计及修复，第 ${consistencyRound}/3 轮。${contentStats?.consistency_summary || ''}`
       : tableCleaning
-        ? paused
-          ? `内容矫正已暂停在表格清理阶段，已处理 ${tableCleanupCompleted}/${tableCleanupTotal} 个表格。`
-          : tableCleanupTotal
-            ? `正在内容矫正：将表格转换为普通文字描述，已处理 ${tableCleanupCompleted}/${tableCleanupTotal} 个表格，已转换 ${tableCleanupRewritten} 个${tableCleanupSkipped ? `，跳过 ${tableCleanupSkipped} 个` : ''}。`
-            : '正在内容矫正：检查正文中是否存在需要转换的表格。'
+        ? `${paused ? '已暂停：' : ''}将数据表格转换为普通文字，保留图片表格。${tableCleanupTotal ? `已处理 ${tableCleanupCompleted}/${tableCleanupTotal} 个小节。` : '正在检查本次正文。'}`
           : pausing
             ? '正在暂停正文生成，已发出的 AI 请求完成后会停止调度新任务。'
             : running
@@ -360,8 +350,8 @@ function ContentEditPage({
           ? '继续一致性审计'
         : retryingWordConversion
           ? '重试 Word 转换'
-        : canRetryContentCorrection
-          ? `重试${contentRetryTargetLabel}`
+        : retryingTableCleanup
+          ? '重试去表格'
           : resolvedCount === leaves.length && leaves.length
               ? '重新生成正文'
               : completedCount > 0
@@ -488,26 +478,13 @@ function ContentEditPage({
     }
   };
 
-  const retryContentCorrection = async () => {
-    if (!canRetryContentCorrection) {
-      return;
-    }
-
-    try {
-      await window.yibiao?.tasks.startContentGeneration({ retryContentCorrection: true });
-      showToast(`${contentRetryTargetLabel}重试任务已在后台启动`, 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : `重试${contentRetryTargetLabel}失败`, 'error');
-    }
-  };
-
-  // 复用失败重试入口：续接原正文/审计会话，或继续已交付 HTML 的 Word 转换。
+  // 失败重试续接原正文会话及后处理阶段，转换失败则只续转 Word。
   const retryFailedSections = async () => {
-    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && (!awaitingContentDecision || !unresolvedCount))) return;
+    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && (!awaitingContentDecision || !unresolvedCount))) return;
     try {
       await window.yibiao?.tasks.startContentGeneration({ retryFailedSections: true });
       trackConfigUsage({ content_generation_action: 'retry_failed_sections' });
-      showToast(retryingSectionModification ? '小节修改已从原会话继续' : retryingBodyGeneration ? '正文生成已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
+      showToast(retryingTableCleanup ? '去表格已从原会话继续' : retryingSectionModification ? '小节修改已从原会话继续' : retryingBodyGeneration ? '正文生成已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动失败小节重试失败', 'error');
     }
@@ -535,12 +512,8 @@ function ContentEditPage({
       void resumeGeneration();
       return;
     }
-    if (retryingWordConversion || retryingConsistency || retryingSectionModification || retryingBodyGeneration) {
+    if (retryingWordConversion || retryingConsistency || retryingSectionModification || retryingBodyGeneration || retryingTableCleanup) {
       void retryFailedSections();
-      return;
-    }
-    if (canRetryContentCorrection) {
-      void retryContentCorrection();
       return;
     }
     void startGeneration();

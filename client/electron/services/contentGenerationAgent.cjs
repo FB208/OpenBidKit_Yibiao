@@ -7,6 +7,7 @@ const { createContentGenerationImageTools, validateContentImageReferences } = re
 const { countHtmlWords, checkWordCount, createContentGenerationWordTools } = require('./contentGenerationWordTools.cjs');
 const { createContentImageProtection } = require('./contentGenerationEditTools.cjs');
 const { CONSISTENCY_TOOLS, buildConsistencyPrompt, createContentGenerationConsistencyTools } = require('./contentGenerationConsistencyTools.cjs');
+const { TABLE_CLEANUP_TOOLS, buildTableCleanupPrompt, createContentGenerationTableTools } = require('./contentGenerationTableTools.cjs');
 
 const CONTENT_GENERATION_AGENT_TASK_KEY = 'technical-plan-content-generation';
 const RESULT_FILE = '正文生成结果.json';
@@ -99,7 +100,7 @@ function buildContentGenerationFiles({ outline, targets, plans, projectOverview,
   const tree = visit(outline);
   const files = [
     { path: INPUT_FILES.overview, content: projectOverview || '未提供项目概述。' },
-    { path: INPUT_FILES.decisions, content: JSON.stringify({ outline: tree, targets: sections, has_knowledge_base: documentIds.length > 0, word_requirements: wordInstructions(wordControl), word_control: { minimumWords: wordControl.minimumWords, maximumWords: wordControl.maximumWords, checkTotalWords }, image_requirements: imageInstructions(generationOptions), ...(hasOriginalPlan ? { restoration_requirements: restorationInstructions(wordControl, existingTotalWords) } : {}), global_facts_mode: globalFactsMode, user_requirement: requirement || '' }, null, 2) },
+    { path: INPUT_FILES.decisions, content: JSON.stringify({ outline: tree, targets: sections, has_knowledge_base: documentIds.length > 0, table_requirement: generationOptions.tableRequirement, word_requirements: wordInstructions(wordControl), word_control: { minimumWords: wordControl.minimumWords, maximumWords: wordControl.maximumWords, checkTotalWords }, image_requirements: imageInstructions(generationOptions), ...(hasOriginalPlan ? { restoration_requirements: restorationInstructions(wordControl, existingTotalWords) } : {}), global_facts_mode: globalFactsMode, user_requirement: requirement || '' }, null, 2) },
     { path: INPUT_FILES.rules, content: fs.readFileSync(path.join(RESOURCE_DIR, INPUT_FILES.rules), 'utf8') },
     { path: INPUT_FILES.template, content: fs.readFileSync(path.join(RESOURCE_DIR, INPUT_FILES.template), 'utf8') },
     { path: INPUT_FILES.config, content: JSON.stringify(template, null, 2) },
@@ -160,7 +161,7 @@ function readContentGenerationResult(workspaceDir) {
 }
 
 // Agent 批量提交写作任务；复用 scoped AI 队列实现真实并发和统一取消。
-function createContentGenerationTools({ aiService, agentService, signal, onActivity, imageProtection, consistency, onProgress = () => {} }, { Type, workspaceDir, setActiveTools }) {
+function createContentGenerationTools({ aiService, agentService, signal, onActivity, imageProtection, consistency, tableCleanup, onProgress = () => {} }, { Type, workspaceDir, setActiveTools }) {
   const activity = { pending: 0 };
   const read = file => fs.readFileSync(path.join(workspaceDir, file), 'utf8');
   const decisions = JSON.parse(read(INPUT_FILES.decisions));
@@ -218,6 +219,7 @@ function createContentGenerationTools({ aiService, agentService, signal, onActiv
     },
   },
   ...createContentGenerationConsistencyTools({ agentService, signal, activity, onActivity, consistency, validateHtml, validateResult: () => readContentGenerationResult(workspaceDir) }, { Type, workspaceDir }),
+  ...createContentGenerationTableTools({ agentService, signal, activity, onActivity, tableCleanup, validateHtml, validateResult: () => readContentGenerationResult(workspaceDir) }, { Type, workspaceDir }),
   ...createContentGenerationWordTools({ agentService, signal, activity, onActivity, imageProtection, validateHtml }, { Type, workspaceDir, setActiveTools }),
   ...createContentGenerationImageTools({ aiService, signal }, { Type, workspaceDir })];
 }
@@ -239,8 +241,8 @@ function buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPla
 以下写作规则仅适用于小节 HTML 文件，不适用于结果清单：\n${writingInstructions('', hasKnowledgeBase)}`;
 }
 
-// 新一轮目标也复用正文 Session；仅暂停恢复时继承本轮字数调整与审计进度。
-async function runContentGenerationAgent({ agentService, aiService, resume, hasKnowledgeBase, hasOriginalPlan, resolveOriginalImagePath, signal, buildFiles, onCheckpoint = () => {}, onActivity, onProgress, onConsistencyProgress = () => {}, onWorkspaceReady = () => {} }) {
+// 新一轮目标也复用正文 Session；仅暂停恢复时继承本轮字数调整、审计与去表格进度。
+async function runContentGenerationAgent({ agentService, aiService, resume, hasKnowledgeBase, hasOriginalPlan, resolveOriginalImagePath, signal, buildFiles, onCheckpoint = () => {}, onActivity, onProgress, onConsistencyProgress = () => {}, onTableCleanupProgress = () => {}, onWorkspaceReady = () => {} }) {
   const reuseSession = agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY);
   const resuming = Boolean(resume && reuseSession);
   const files = resuming ? [] : buildFiles();
@@ -255,21 +257,41 @@ async function runContentGenerationAgent({ agentService, aiService, resume, hasK
       onConsistencyProgress(state);
     },
   };
+  let tableCleanupState = savedState.table_cleanup || null;
+  const tableCleanup = {
+    get: () => tableCleanupState,
+    save(state) {
+      agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { table_cleanup: state });
+      tableCleanupState = state;
+      onTableCleanupProgress(state);
+    },
+  };
   let imageProtection;
+  // 审计之后按用户设置续接去表格；不再返回字数调整分支。
+  function finishConsistency(workspaceDir) {
+    const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, INPUT_FILES.decisions), 'utf8'));
+    if (decisions.table_requirement !== 'none') return { complete: true };
+    tableCleanup.save({ status: 'running', section_ids: [], completed_section_ids: [] });
+    imageProtection.enter(TABLE_CLEANUP_TOOLS);
+    return { stage: 'table-cleaning', prompt: buildTableCleanupPrompt(tableCleanupState) };
+  }
   const runId = crypto.randomUUID();
   if (reuseSession) agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, {
     run_id: runId, status: 'running', agent_connection: 'running', error: null,
-    ...(!resuming ? { phase: 'generating', word_adjustment_started: false, consistency: null } : {}),
+    ...(!resuming ? { phase: 'generating', word_adjustment_started: false, consistency: null, table_cleanup: null } : {}),
   });
   const result = await agentService.runTask({
     task_id: runId, title: '投标文件正文生成', primary_session: true, summary_enabled: false,
-    prompt: consistencyState ? buildConsistencyPrompt(consistencyState, hasKnowledgeBase, hasOriginalPlan) : `${reuseSession && !resuming ? '目录已变更，本次是在原会话中开始新一轮局部生成。重新阅读程序更新的输入文件，以当前 targets 为唯一生成、调整和修复范围；上一轮完成结论不适用于本轮。保留其他小节的 HTML、图片及源码，新增配图源码使用新文件名，不覆盖已有文件。\n' : ''}${buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPlan)}${protectionActive ? '\n本次恢复时已处于图片保护阶段，正文和配图已经就绪，只继续文字调整及结果清单保存，不重新生成正文或图片。' : ''}`, output_file: RESULT_FILE,
+    prompt: tableCleanupState ? buildTableCleanupPrompt(tableCleanupState) : consistencyState ? buildConsistencyPrompt(consistencyState, hasKnowledgeBase, hasOriginalPlan) : `${reuseSession && !resuming ? '目录已变更，本次是在原会话中开始新一轮局部生成。重新阅读程序更新的输入文件，以当前 targets 为唯一生成、调整和修复范围；上一轮完成结论不适用于本轮。保留其他小节的 HTML、图片及源码，新增配图源码使用新文件名，不覆盖已有文件。\n' : ''}${buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPlan)}${protectionActive ? '\n本次恢复时已处于图片保护阶段，正文和配图已经就绪，只继续文字调整及结果清单保存，不重新生成正文或图片。' : ''}`, output_file: RESULT_FILE,
     files, signal,
     persistent_task: { task_key: CONTENT_GENERATION_AGENT_TASK_KEY, mode: reuseSession ? 'resume' : 'create' },
-    initial_stage: consistencyState ? 'auditing' : 'generating', max_retries: 1, timeout_ms: 30 * 60 * 1000,
+    initial_stage: tableCleanupState ? 'table-cleaning' : consistencyState ? 'auditing' : 'generating', max_retries: 1, timeout_ms: 30 * 60 * 1000,
     json_validation_schemas: { [RESULT_FILE]: RESULT_SCHEMA }, auto_validate_json: true,
     before_tool_call: context => {
-      if (consistencyState && consistencyState.status !== 'running' && ['edit', 'write', 'repair-sections'].includes(context.toolCall.name)) {
+      if (tableCleanupState?.status === 'completed' && ['edit', 'write', 'remove-section-tables'].includes(context.toolCall.name)) {
+        throw new Error('去表格已经完成，请标记任务完成，不再修改正文');
+      }
+      if (!tableCleanupState && consistencyState && consistencyState.status !== 'running' && ['edit', 'write', 'repair-sections'].includes(context.toolCall.name)) {
         throw new Error('本轮审计结论已经提交，请标记任务完成并等待程序进入下一阶段');
       }
       imageProtection.beforeToolCall(context);
@@ -280,23 +302,28 @@ async function runContentGenerationAgent({ agentService, aiService, resume, hasK
       const decisions = JSON.parse(fs.readFileSync(path.join(context.workspaceDir, INPUT_FILES.decisions), 'utf8'));
       imageProtection = createContentImageProtection({
         workspaceDir: context.workspaceDir, files: decisions.targets.map(section => section.file),
-        active: protectionActive || Boolean(consistencyState), ...(consistencyState ? { toolNames: CONSISTENCY_TOOLS } : {}), allowManifest: true, setActiveTools: context.setActiveTools,
+        active: protectionActive || Boolean(consistencyState) || Boolean(tableCleanupState), ...(tableCleanupState ? { toolNames: TABLE_CLEANUP_TOOLS } : consistencyState ? { toolNames: CONSISTENCY_TOOLS } : {}), allowManifest: true, setActiveTools: context.setActiveTools,
         onEnter: () => agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { word_adjustment_started: true }),
       });
       onWorkspaceReady(context.workspaceDir);
-      if (consistencyState) onConsistencyProgress(consistencyState);
-      return createContentGenerationTools({ aiService, agentService, signal, onProgress, onActivity, imageProtection, consistency }, context);
+      if (tableCleanupState) onTableCleanupProgress(tableCleanupState);
+      else if (consistencyState) onConsistencyProgress(consistencyState);
+      return createContentGenerationTools({ aiService, agentService, signal, onProgress, onActivity, imageProtection, consistency, tableCleanup }, context);
     },
     validateOutput: (_result, context) => readContentGenerationResult(context.workspace_dir),
     // 字数不达标时继续同一主会话，不使用旧调整阶段或固定重试轮数。
     continueTask: (_result, context) => {
-      // 审计分支必须先于字数检查，修复后绝不再次检查字数范围。
+      // 后处理分支必须先于字数检查，修复和去表格之后不再调整字数。
+      if (tableCleanupState) {
+        if (tableCleanupState.status === 'completed') return { complete: true };
+        return { stage: 'table-cleaning', prompt: buildTableCleanupPrompt(tableCleanupState) };
+      }
       if (consistencyState) {
-        if (consistencyState.status === 'completed') return { complete: true };
+        if (consistencyState.status === 'completed') return finishConsistency(context.workspace_dir);
         if (consistencyState.status === 'round-completed') {
           if (!consistencyState.remaining_issues.length || consistencyState.round >= 3) {
             consistency.save({ ...consistencyState, status: 'completed' });
-            return { complete: true };
+            return finishConsistency(context.workspace_dir);
           }
           consistency.save({ ...consistencyState, round: consistencyState.round + 1, status: 'running', summary: '' });
         }

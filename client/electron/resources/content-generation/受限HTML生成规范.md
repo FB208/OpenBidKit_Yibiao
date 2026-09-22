@@ -20,6 +20,8 @@
 
 ## 数据表格
 
+后处理例外：用户选择“不要表格”（table_requirement=none）时，一致性审计完成后将所有数据表格（包括原方案表格）转换为普通段落或列表，完整保留数据、表头对应关系、单位、条件及备注。imageText、threeImages、fourImages 图片表格整块保留，不参与去表格。此例外仅用于去表格阶段，不改变生成、扩缩写和审计阶段的表格保留规则。
+
 新增表格遵守本节编排的 table.needed：为 false 时不新增数据表格；为 true 时围绕 table.purpose 使用表格，不为凑版式硬插。已还原底稿中的原表格仍须保留其数据和含义，整理为受限 HTML，不受该标记限制；内容冲突以全局事实设定为准。
 
 - table 使用 data-yb-preset：plain、headerRow、headerColumn、headerRowAndColumn。

@@ -5,6 +5,129 @@ const path = require('node:path');
 const { buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, readContentGenerationResult } = require('../electron/services/contentGenerationAgent.cjs');
 const { createContentGenerationImageTools } = require('../electron/services/contentGenerationImageTools.cjs');
 
+// 主 Agent 的决策使用模拟，子任务实际执行 Pi edit，检查并发、原表格转换和图片保护。
+async function checkTableCleanup({ Type, workspaceDir, fileOptions, signal }) {
+  const { createPiSession } = require('../electron/services/pi/piSessionFactory.cjs');
+  const { hasDataTables } = require('../electron/services/contentGenerationTableTools.cjs');
+  const files = buildContentGenerationFiles({ ...fileOptions, wordControl: {}, generationOptions: { tableRequirement: 'none', imageQuantity: 'none' }, documentIds: [] });
+  for (const file of files) {
+    const target = path.join(workspaceDir, file.path);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, file.content, 'utf8');
+  }
+  const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
+  assert.equal(decisions.table_requirement, 'none');
+  const targets = decisions.targets;
+  const table = '<table id="data" data-yb-preset="headerRow"><caption>设备配置</caption><thead><tr><th>设备</th><th>数量</th></tr></thead><tbody><tr><td>服务器</td><td>2台（备用）</td></tr></tbody></table>';
+  const text = '<p id="data">设备配置：服务器数量为2台，用途为备用。</p>';
+  const figure = '<figure id="photo" data-yb-generation="aiImage" data-yb-size="wide"><template data-yb-role="prompt">复用原图</template><img alt="原图" data-yb-asset-ref="原图.png"><figcaption>原图说明</figcaption></figure>';
+  const layouts = ['imageText', 'threeImages', 'fourImages'].map((preset, index) => `<table id="image${index}" data-yb-preset="${preset}"><caption>图片</caption><tbody>${Array.from({ length: preset === 'fourImages' ? 2 : 1 }, (_, row) => `<tr>${Array.from({ length: preset === 'threeImages' ? 3 : 2 }, (_, col) => `<td>${preset === 'imageText' && col === 1 ? '<p>原图说明文字</p>' : figure.replace('id="photo"', `id="photo${index}_${row}_${col}"`)}</td>`).join('')}</tr>`).join('')}</tbody></table>`).join('\n<!-- yibiao:block -->\n');
+  fs.writeFileSync(path.join(workspaceDir, '原图.png'), Buffer.from([1]));
+  fs.mkdirSync(path.join(workspaceDir, '正文'), { recursive: true });
+  for (const target of targets) fs.writeFileSync(path.join(workspaceDir, target.file), `<!-- yibiao:block -->\n${table}\n<!-- yibiao:block -->\n${layouts}`, 'utf8');
+  fs.writeFileSync(path.join(workspaceDir, '正文/孤儿.html'), table, 'utf8');
+  fs.writeFileSync(path.join(workspaceDir, '正文生成结果.json'), JSON.stringify({ sections: targets.map(section => ({ section_id: section.id, file: section.file, words: 1 })) }), 'utf8');
+  assert.equal(hasDataTables(layouts), false);
+  assert.equal(hasDataTables(table), true);
+  let savedState = {};
+  let mainAction;
+  let activeTools;
+  let childrenStarted = 0;
+  let release;
+  let bothStarted;
+  const gate = new Promise(resolve => { release = resolve; });
+  const startedGate = new Promise(resolve => { bothStarted = resolve; });
+  let failFirst = true;
+  const service = {
+    hasPersistentTaskSession: () => true,
+    loadPersistentTask: () => ({ state: savedState }),
+    updatePersistentTask(_key, patch) { savedState = { ...savedState, ...structuredClone(patch) }; },
+    async runTask(payload) {
+      if (payload.primary_session) {
+        const tools = payload.create_tools({ Type, workspaceDir, setActiveTools: names => { activeTools = names; } });
+        await mainAction(payload, tools, () => payload.continueTask({}, { workspace_dir: workspaceDir }));
+        return { workspace_dir: workspaceDir };
+      }
+      assert.equal(payload.failure_handled_by_parent, true);
+      assert.match(payload.prompt, /包括原方案表格/);
+      assert.doesNotMatch(payload.prompt, /引用、原表格、/);
+      childrenStarted++;
+      if (childrenStarted === 2) bothStarted();
+      await gate;
+      if (failFirst && payload.output_file === targets[0].file) throw new Error('模拟子任务失败');
+      const created = await createPiSession({ workspaceDir, environment: { shellPath: process.env.ComSpec, layout: { agentDir: path.join(workspaceDir, 'agent') }, instructions: '测试去表格', env: {} },
+        config: {}, timeoutMs: 60000, summaryEnabled: false, proxyInfo: { baseUrl: 'http://127.0.0.1:1', token: 'test' },
+        activeTools: payload.active_tools, beforeFileWrite: payload.before_file_write, beforeToolCall: payload.before_tool_call,
+      });
+      try {
+        const edit = created.session.agent.state.tools.find(tool => tool.name === 'edit');
+        const file = path.join(workspaceDir, payload.output_file);
+        const before = fs.readFileSync(file, 'utf8');
+        await assert.rejects(edit.execute('image', { path: payload.output_file, edits: [{ oldText: layouts, newText: '<p>图片已删除</p>' }] }), /受保护图片/);
+        assert.equal(fs.readFileSync(file, 'utf8'), before);
+        await edit.execute('table', { path: payload.output_file, edits: [{ oldText: table, newText: text }] });
+        const html = fs.readFileSync(file, 'utf8');
+        assert.equal(html, before.replace(table, text));
+        payload.validateOutput({ output_content: html });
+      } finally { created.session.dispose(); }
+      return {};
+    },
+  };
+  const run = resume => runContentGenerationAgent({ agentService: service, aiService: {}, resume, signal, buildFiles: () => files });
+  const interrupted = new Error('模拟暂停主会话');
+  mainAction = async (payload, tools, next) => {
+    const remove = tools.find(tool => tool.name === 'remove-section-tables');
+    const finish = tools.find(tool => tool.name === 'complete-table-cleanup');
+    await assert.rejects(remove.execute('early', { sections: [] }), /不在去表格/);
+    assert.equal(next().stage, 'auditing');
+    await tools.find(tool => tool.name === 'complete-consistency-round').execute('audit', { summary: '无冲突', remaining_issues: [] });
+    assert.equal(next().stage, 'table-cleaning');
+    assert.ok(activeTools.includes('remove-section-tables'));
+    assert.ok(!activeTools.includes('check-word-count'));
+    payload.before_tool_call({ toolCall: { name: 'edit' }, args: { path: targets[0].file } });
+    await assert.rejects(finish.execute(), /仍有数据表格/);
+    const batch = remove.execute('batch', { sections: targets.map(section => ({ section_id: section.id, instructions: '转成普通文字' })) });
+    await startedGate;
+    await assert.rejects(finish.execute(), /等待全部/);
+    release();
+    assert.deepEqual((await batch).details.results.map(item => item.status), ['error', 'success']);
+    assert.deepEqual(savedState.table_cleanup.completed_section_ids, [targets[1].id]);
+    await assert.rejects(finish.execute(), /尚未成功/);
+    throw interrupted;
+  };
+  await assert.rejects(run(false), error => error === interrupted);
+  failFirst = false;
+  mainAction = async (payload, tools, next) => {
+    assert.equal(payload.initial_stage, 'table-cleaning');
+    assert.deepEqual(payload.files, []);
+    assert.equal(next().stage, 'table-cleaning');
+    const result = await tools.find(tool => tool.name === 'remove-section-tables').execute('retry', { sections: [{ section_id: targets[0].id, instructions: '重试未完成小节' }] });
+    assert.equal(result.details.results[0].status, 'success');
+    // 去表格完成后不因字数不满足而返回扩缩写。
+    decisions.word_control = { minimumWords: 999999, checkTotalWords: true };
+    fs.writeFileSync(path.join(workspaceDir, '正文编排决策.json'), JSON.stringify(decisions), 'utf8');
+    await tools.find(tool => tool.name === 'complete-table-cleanup').execute();
+    assert.equal(next().complete, true);
+    assert.throws(() => payload.before_tool_call({ toolCall: { name: 'edit' }, args: { path: targets[0].file } }), /已经完成/);
+  };
+  const result = await run(true);
+  assert.equal(childrenStarted, 3, '只重试失败小节');
+  assert.ok(result.sections.every(section => section.words > 1));
+  assert.equal(fs.readFileSync(path.join(workspaceDir, '正文/孤儿.html'), 'utf8'), table);
+  // 已完成阶段恢复不再次清理；无表格时无需启动子任务。
+  mainAction = async (payload, _tools, next) => { assert.match(payload.prompt, /已经完成/); assert.equal(next().complete, true); };
+  await run(true);
+  savedState.table_cleanup = null;
+  mainAction = async (_payload, tools, next) => {
+    assert.equal(next().stage, 'table-cleaning');
+    await tools.find(tool => tool.name === 'complete-table-cleanup').execute();
+    assert.equal(next().complete, true);
+  };
+  await run(true);
+  assert.equal(childrenStarted, 3);
+  console.log('去表格：真实并发 Pi edit、原表格数据保留、三类图片表格保护、失败续接、无表格跳过、无二次字数调整通过。');
+}
+
 // 在中文临时目录验证输入、真实并发、失败隔离、取消和原会话恢复，不调用外部模型。
 async function main() {
   const { Type } = await import('typebox');
@@ -140,7 +263,7 @@ async function main() {
         assert.ok(request.messages[0].content.includes(decisions.image_requirements));
         return '<!-- yibiao:block -->\n<p id="scenario">项目实施内容</p>';
       } } }, { Type, workspaceDir });
-      assert.deepEqual(scenarioTools.map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
+      assert.deepEqual(scenarioTools.map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
       const result = await scenarioTools[0].execute('settings', { sections: [{ section_id: 'e0000000-0000-4000-8000-000000000011', instructions: '落实责任', references: '' }] });
       assert.ok(received);
       assert.equal(result.details.results[0].status, 'success');
@@ -298,7 +421,7 @@ async function main() {
             assert.doesNotMatch(payload.prompt, /本次使用已还原底稿/);
             assert.match(payload.prompt, /知识库\/包含用户选中的全部文档/);
             assert.match(payload.prompt, /image_requirements（用户配图要求）/);
-            assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
+            assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
             payload.validateOutput({}, { workspace_dir: workspaceDir });
             return { workspace_dir: workspaceDir };
           },
@@ -309,6 +432,7 @@ async function main() {
       assert.equal(result.sections[0].words, 6);
     }
     await checkImageProtectionLifecycle({ Type, workspaceDir, files, signal });
+    await checkTableCleanup({ Type, workspaceDir: path.join(workspaceDir, '去表格'), fileOptions, signal });
     fs.unlinkSync(firstFile);
     assert.throws(() => readContentGenerationResult(workspaceDir), /ENOENT/);
     console.log('正文 Agent：还原底稿及原图、知识库有无选择、页面图片设置联动、配图需求传递、输入、并发、暂停恢复、三类图片工具及最终图片引用检查通过。');

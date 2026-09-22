@@ -3,7 +3,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { AI_QUEUE_SCOPE_PAUSED } = require('../utils/aiRequestQueue.cjs');
 const { createNoopDeveloperLogger } = require('../utils/developerLog.cjs');
-const { applyRangeEdits } = require('../utils/textEdit.cjs');
 const {
   createOriginalSource, readOriginalRange, buildOriginalRestorationFiles,
   buildOriginalRestorationPrompt, validateOriginalRestoration, calculateOriginalRestoration,
@@ -17,8 +16,6 @@ const { scanGeneratedSections, convertContentSections } = require('./contentGene
 
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
-const TABLE_CLEANUP_CONTEXT_CHARS = 600;
-const TABLE_CLEANUP_BATCH_CHAR_LIMIT = 30000;
 const CONTENT_GENERATION_PAUSED = 'CONTENT_GENERATION_PAUSED';
 const CONTENT_PLAN_VERSION = 5;
 const CONTENT_PLANNING_OUTPUT_FILE = '正文编排目录.json';
@@ -263,145 +260,6 @@ function splitLinesWithRanges(content) {
   return lines;
 }
 
-function collectFencedCodeRanges(content) {
-  const ranges = [];
-  const lines = splitLinesWithRanges(content);
-  let fence = null;
-  let start = 0;
-  for (const line of lines) {
-    const match = /^(?: {0,3})(`{3,}|~{3,})(.*)$/.exec(line.text);
-    if (!match) {
-      continue;
-    }
-    const marker = match[1][0];
-    const length = match[1].length;
-    const rest = match[2] || '';
-    if (!fence) {
-      if (marker === '`' && rest.includes('`')) {
-        continue;
-      }
-      fence = { marker, length };
-      start = line.start;
-      continue;
-    }
-    if (marker === fence.marker && length >= fence.length && /^[ \t]*$/.test(rest)) {
-      ranges.push({ start, end: line.newlineEnd });
-      fence = null;
-    }
-  }
-  if (fence) {
-    ranges.push({ start, end: String(content || '').length });
-  }
-  return ranges;
-}
-
-function rangeOverlaps(start, end, ranges) {
-  return (ranges || []).some((range) => start < range.end && end > range.start);
-}
-
-function isMarkdownTableRow(line) {
-  const trimmed = String(line || '').trim();
-  return trimmed.includes('|') && trimmed.replace(/\\\|/g, '').includes('|');
-}
-
-function isMarkdownTableSeparator(line) {
-  const trimmed = String(line || '').trim();
-  if (!isMarkdownTableRow(trimmed)) return false;
-  const rawCells = trimmed.replace(/^\|/, '').replace(/\|$/, '').split('|');
-  const cells = rawCells.map((cell) => cell.trim()).filter(Boolean);
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
-}
-
-function extractMarkdownTableBlocks(content, fencedRanges) {
-  const lines = splitLinesWithRanges(content);
-  const tables = [];
-  let index = 0;
-  while (index < lines.length - 1) {
-    const header = lines[index];
-    const separator = lines[index + 1];
-    if (rangeOverlaps(header.start, separator.end, fencedRanges) || !isMarkdownTableRow(header.text) || !isMarkdownTableSeparator(separator.text)) {
-      index += 1;
-      continue;
-    }
-
-    let endLine = index + 1;
-    while (endLine + 1 < lines.length && !rangeOverlaps(lines[endLine + 1].start, lines[endLine + 1].end, fencedRanges) && isMarkdownTableRow(lines[endLine + 1].text)) {
-      endLine += 1;
-    }
-    const start = header.start;
-    const end = lines[endLine].end;
-    tables.push({ type: 'markdown', start, end, text: String(content || '').slice(start, end) });
-    index = endLine + 1;
-  }
-  return tables;
-}
-
-function extractHtmlTableBlocks(content, fencedRanges) {
-  const text = String(content || '');
-  const tables = [];
-  const pattern = /<table\b[\s\S]*?<\/table>/gi;
-  let match;
-  while ((match = pattern.exec(text))) {
-    const start = match.index;
-    const end = start + match[0].length;
-    if (rangeOverlaps(start, end, fencedRanges)) {
-      continue;
-    }
-    tables.push({ type: 'html', start, end, text: match[0] });
-  }
-  return tables;
-}
-
-function addTableContext(content, tables) {
-  const text = String(content || '');
-  return (tables || []).map((table, index) => ({
-    id: `T${String(index + 1).padStart(3, '0')}`,
-    ...table,
-    before: text.slice(Math.max(0, table.start - TABLE_CLEANUP_CONTEXT_CHARS), table.start).trim(),
-    after: text.slice(table.end, Math.min(text.length, table.end + TABLE_CLEANUP_CONTEXT_CHARS)).trim(),
-  }));
-}
-
-function extractContentTableBlocks(content) {
-  const fencedRanges = collectFencedCodeRanges(content);
-  const tables = [
-    ...extractMarkdownTableBlocks(content, fencedRanges),
-    ...extractHtmlTableBlocks(content, fencedRanges),
-  ].sort((a, b) => a.start - b.start || a.end - b.end);
-  const nonOverlapping = [];
-  for (const table of tables) {
-    if (nonOverlapping.some((existing) => table.start < existing.end && table.end > existing.start)) {
-      continue;
-    }
-    nonOverlapping.push(table);
-  }
-  return addTableContext(content, nonOverlapping);
-}
-
-function containsContentTable(content) {
-  return extractContentTableBlocks(content).length > 0;
-}
-
-function createTableCleanupBatches(tables) {
-  const batches = [];
-  let current = [];
-  let currentSize = 0;
-  for (const table of tables || []) {
-    const size = String(table.text || '').length + String(table.before || '').length + String(table.after || '').length;
-    if (current.length && currentSize + size > TABLE_CLEANUP_BATCH_CHAR_LIMIT) {
-      batches.push(current);
-      current = [];
-      currentSize = 0;
-    }
-    current.push(table);
-    currentSize += size;
-  }
-  if (current.length) {
-    batches.push(current);
-  }
-  return batches;
-}
-
 function normalizeTableRequirement(value) {
   const text = String(value || '').trim();
   if (['none', 'light', 'moderate', 'heavy'].includes(text)) {
@@ -630,85 +488,6 @@ function validateContentPlan(plan) {
   }
   if (!plan.table || typeof plan.table.needed !== 'boolean') {
     throw new Error('正文编排决策缺少 table.needed');
-  }
-}
-
-function formatTablesForCleanupPrompt(tables) {
-  return (tables || []).map((table) => `<table_block id="${table.id}" type="${table.type}">
-上文片段：
-${table.before || '无'}
-
-待转换表格：
-${table.text || ''}
-
-下文片段：
-${table.after || '无'}
-</table_block>`).join('\n\n');
-}
-
-function buildTableCleanupMessages({ chapter, tables }) {
-  const allowedIds = (tables || []).map((table) => table.id).join('、') || '无';
-  return [
-    {
-      role: 'user',
-      content: `你是投标技术方案正文编辑助手。请把指定小节中的表格转换为普通文字描述。
-
-要求：
-1. 只返回 JSON，不要输出解释、总结或 Markdown 代码围栏。
-2. 必须逐个处理输入中的 table_id；允许按表格内容改写为普通段落或普通列表。
-3. 不改变原文意思，不删除数字、参数、工期、标准、职责、流程、承诺、验收要求、频次和数量。
-4. replacement_text 只写用于替换该表格块的正文片段，不返回完整小节正文。
-5. replacement_text 严禁包含 Markdown 表格、HTML <table>、代码块、章节标题或伪目录标题。
-6. 如表格本身为空或无法理解，也要用一句普通文字概括其表达意图，不要返回空字符串。
-
-返回格式：
-{
-  "replacements": [
-    { "table_id": "T001", "replacement_text": "普通文字描述" }
-  ]
-}
-
-允许的 table_id：${allowedIds}`,
-    },
-    {
-      role: 'user',
-      content: `当前小节：${chapter?.number} ${chapter?.title || '未命名章节'}
-小节描述：${chapter?.description || '无'}`,
-    },
-    {
-      role: 'user',
-      content: `待转换表格块：
-${formatTablesForCleanupPrompt(tables)}`,
-    },
-  ];
-}
-
-function normalizeTableCleanupResponse(value, allowedTableIds) {
-  const source = value?.result && typeof value.result === 'object' ? value.result : value || {};
-  const rawReplacements = Array.isArray(source)
-    ? source
-    : Array.isArray(source.replacements)
-      ? source.replacements
-      : Array.isArray(source.items)
-        ? source.items
-        : [];
-  const seen = new Set();
-  const replacements = [];
-  for (const item of rawReplacements) {
-    const tableId = String(item?.table_id || item?.tableId || item?.id || '').trim();
-    const replacementText = normalizeGeneratedMarkdown(String(item?.replacement_text || item?.replacementText || item?.text || item?.content || '')).trim();
-    if (!tableId || seen.has(tableId) || (allowedTableIds instanceof Set && !allowedTableIds.has(tableId)) || !replacementText) {
-      continue;
-    }
-    replacements.push({ table_id: tableId, replacement_text: replacementText });
-    seen.add(tableId);
-  }
-  return { replacements };
-}
-
-function validateTableCleanupResponse(value) {
-  if (!value || !Array.isArray(value.replacements)) {
-    throw new Error('表格转换结果缺少 replacements 数组');
   }
 }
 
@@ -1405,12 +1184,12 @@ const CONTENT_PHASE_LABELS = {
 
 const CONTENT_PROGRESS_PROFILES = {
   html: {
-    planning: [0, 12], restoring: [12, 18], generating: [18, 70], auditing: [70, 80],
-    'sections-completed': [80, 80], 'word-converting': [80, 90], 'word-completed': [90, 90],
+    planning: [0, 12], restoring: [12, 18], generating: [18, 70], auditing: [70, 80], 'table-cleaning': [80, 85],
+    'sections-completed': [85, 85], 'word-converting': [85, 90], 'word-completed': [90, 90],
   },
   'html-single': {
-    planning: [0, 15], restoring: [15, 25], generating: [25, 70], auditing: [70, 80],
-    'sections-completed': [80, 80], 'word-converting': [80, 90], 'word-completed': [90, 90],
+    planning: [0, 15], restoring: [15, 25], generating: [25, 70], auditing: [70, 80], 'table-cleaning': [80, 85],
+    'sections-completed': [85, 85], 'word-converting': [85, 90], 'word-completed': [90, 90],
   },
   full: {
     planning: [0, 12],
@@ -1590,7 +1369,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   const continuePostProcessing = !resume && Boolean(payload.continuePostProcessing ?? payload.continue_post_processing);
   let contentRuntime = normalizeContentGenerationRuntime(storedPlan.contentGenerationRuntime || previousState?.contentGenerationRuntime);
   const continuingConsistency = Boolean((resume || retryFailedSections) && contentRuntime.phase === 'auditing');
-  const continuingBody = Boolean((resume || retryFailedSections) && ['generating', 'auditing'].includes(contentRuntime.phase));
+  const continuingTableCleanup = Boolean((resume || retryFailedSections) && contentRuntime.phase === 'table-cleaning');
+  const continuingBody = Boolean((resume || retryFailedSections) && ['generating', 'auditing', 'table-cleaning'].includes(contentRuntime.phase));
   const continuingConversion = Boolean((resume || retryFailedSections)
     && ['sections-completed', 'word-converting', 'word-completed'].includes(contentRuntime.phase) && contentRuntime.html_output);
   const regenerate = !resume && !retryContentCorrection && !retryFailedSections && !continuePostProcessing && Boolean(payload.regenerate);
@@ -1622,7 +1402,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   let maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
   const contentStats = {
-    phase: continuingConsistency ? 'auditing' : 'planning',
+    phase: continuingTableCleanup ? 'table-cleaning' : continuingConsistency ? 'auditing' : 'planning',
     planning_total: 0,
     planning_completed: 0,
     restoration_total: 0,
@@ -1639,8 +1419,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     consistency_remaining_issues: [],
     table_cleanup_total: 0,
     table_cleanup_completed: 0,
-    table_cleanup_rewritten: 0,
-    table_cleanup_skipped: 0,
     awaiting_content_decision: false,
     ignored_section_count: leaves.filter(({ item }) => storedPlan.contentGenerationSections?.[item.id]?.status === 'ignored').length,
   };
@@ -1713,7 +1491,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     regenerate_requirement: regenerateRequirement,
   });
 
-  if (continuingConsistency) tasksToRun = [];
+  if (continuingConsistency || continuingTableCleanup) tasksToRun = [];
 
   for (const { item } of tasksToRun) {
     const existing = sections[item.id] || {};
@@ -1772,7 +1550,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   const htmlWorkflow = !retryContentCorrection && !continuePostProcessing
-    && (!resume || !contentRuntime.phase || ['planning', 'restoring', 'generating', 'auditing', 'sections-completed', 'word-converting', 'word-completed'].includes(contentRuntime.phase));
+    && (!resume || !contentRuntime.phase || ['planning', 'restoring', 'generating', 'auditing', 'table-cleaning', 'sections-completed', 'word-converting', 'word-completed'].includes(contentRuntime.phase));
   const progressMode = resume && storedPlan.contentGenerationTask?.progress_detail?.mode
     ? storedPlan.contentGenerationTask.progress_detail.mode
         : retryContentCorrection
@@ -1780,7 +1558,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           : targetItemId
             ? (htmlWorkflow ? 'html-single' : 'single')
             : (htmlWorkflow ? 'html' : 'full');
-  let lastTaskProgress = resume || (retryFailedSections && (contentRuntime.html_output || contentRuntime.phase === 'auditing'))
+  let lastTaskProgress = resume || (retryFailedSections && (contentRuntime.html_output || continuingConsistency || continuingTableCleanup))
     ? Math.max(0, Number(previousState?.contentGenerationTask?.progress) || 0) : 0;
 
   // 所有正文任务更新都在这里补充累计进度和当前阶段明细。
@@ -2643,6 +2421,13 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
             }
             checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime({ phase: 'auditing' }) });
           },
+          onTableCleanupProgress(state) {
+            contentStats.phase = 'table-cleaning';
+            contentStats.table_cleanup_total = state.section_ids.length;
+            contentStats.table_cleanup_completed = state.completed_section_ids.length;
+            if (state.status === 'completed') logs = [...logs, `去表格完成，已处理 ${state.completed_section_ids.length} 个小节，图片表格保留。`];
+            checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime({ phase: 'table-cleaning' }) });
+          },
           onCheckpoint: checkpoint => updateContentAgentState(checkpoint),
           onActivity(event = {}) {
             if (event.visible === false || !event.message) return;
@@ -2724,6 +2509,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         }
         persistPausedContentGeneration(['sections-completed', 'word-converting', 'word-completed'].includes(contentStats.phase)
           ? 'Word 转换已暂停，已完成文件保留，继续时只转换剩余小节。'
+          : contentStats.phase === 'table-cleaning'
+            ? '去表格已暂停，正文和处理进度已保留，继续后在原会话中接着处理。'
           : contentStats.phase === 'auditing'
             ? '一致性审计已暂停，当前轮次及正文已保留，继续后在同一会话接着处理。'
             : '正文生成已暂停，已完成的 HTML 文件和 Agent 会话已保留，继续后接着生成。');
@@ -2737,200 +2524,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     }
   }
 
-  function getCurrentSuccessfulContent(item) {
-    const section = sections[item.id] || {};
-    return section.status === 'success' ? String(section.content || '') : '';
-  }
-
-  function buildTableCleanupTargets(cleanupTargetItemId = '') {
-    const normalizedTargetId = String(cleanupTargetItemId || '').trim();
-    return leaves
-      .filter(({ item }) => !normalizedTargetId || item.id === normalizedTargetId)
-      .map((context) => {
-        const content = getCurrentSuccessfulContent(context.item);
-        return {
-          ...context,
-          content,
-          tables: extractContentTableBlocks(content),
-        };
-      })
-      .filter(({ content, tables }) => String(content || '').trim() && tables.length);
-  }
-
-  async function cleanupTablesForSection(target) {
-    const { item } = target;
-    let currentContent = target.content;
-    const originalTables = extractContentTableBlocks(currentContent);
-    let rewrittenCount = 0;
-    let skippedCount = 0;
-    if (!originalTables.length) {
-      return { rewrittenCount, skippedCount };
-    }
-
-    const batches = createTableCleanupBatches(originalTables).reverse();
-    writeDeveloperLog('table_cleanup.section.start', {
-      section_id: item.id,
-      title: item.title || '未命名章节',
-      table_count: originalTables.length,
-      batch_count: batches.length,
-      content_metrics: textMetrics(currentContent),
-    });
-
-    for (const batch of batches) {
-      pauseIfRequested('正文生成已在去表格阶段暂停，可点击继续。');
-      const allowedTableIds = new Set(batch.map((table) => table.id));
-      const tableById = new Map(batch.map((table) => [table.id, table]));
-      try {
-        const response = await aiService.collectJsonResponse({
-          messages: buildTableCleanupMessages({ chapter: item, tables: batch }),
-          logTitle: `正文去表格-${item.number}-${item.title || '未命名章节'}`,
-          progressLabel: '正文去表格',
-          failureMessage: '模型返回的表格转换结果格式无效',
-          normalizer: (value) => normalizeTableCleanupResponse(value, allowedTableIds),
-          validator: validateTableCleanupResponse,
-          max_retries: 1,
-        });
-        const edits = [];
-        const returnedIds = new Set();
-        for (const replacement of response.replacements || []) {
-          const table = tableById.get(replacement.table_id);
-          returnedIds.add(replacement.table_id);
-          if (!table) {
-            continue;
-          }
-          if (containsContentTable(replacement.replacement_text)) {
-            skippedCount += 1;
-            writeDeveloperLog('table_cleanup.replacement.skipped', {
-              section_id: item.id,
-              table_id: table.id,
-              reason: 'replacement_still_contains_table',
-              replacement_metrics: textMetrics(replacement.replacement_text),
-            });
-            continue;
-          }
-          edits.push({ start: table.start, end: table.end, newText: replacement.replacement_text });
-        }
-
-        const missingCount = batch.filter((table) => !returnedIds.has(table.id)).length;
-        skippedCount += missingCount;
-        if (!edits.length) {
-          contentStats.table_cleanup_completed += batch.length;
-          publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-          continue;
-        }
-
-        const editResult = applyRangeEdits(currentContent, edits);
-        if (editResult.errors.length) {
-          skippedCount += edits.length;
-          writeDeveloperLog('table_cleanup.apply.failed', {
-            section_id: item.id,
-            errors: editResult.errors,
-            edit_count: edits.length,
-          });
-        } else {
-          currentContent = editResult.content;
-          rewrittenCount += editResult.edits.length;
-          contentStats.table_cleanup_rewritten += editResult.edits.length;
-          rememberTouchedItem(item.id);
-          saveSection(item, { status: 'success', content: currentContent, error: undefined }, currentContent, { logs });
-          writeDeveloperLog('table_cleanup.apply.success', {
-            section_id: item.id,
-            applied_count: editResult.edits.length,
-            edit_results: editResult.edits,
-            content_metrics: textMetrics(currentContent),
-          });
-        }
-        contentStats.table_cleanup_completed += batch.length;
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      } catch (error) {
-        if (isPauseLikeError(error)) {
-          throw error;
-        }
-        skippedCount += batch.length;
-        contentStats.table_cleanup_completed += batch.length;
-        logs = [...logs, `正文去表格跳过：${item.number} ${item.title || '未命名章节'}，${error.message || '模型返回无效'}。`];
-        writeDeveloperLog('table_cleanup.batch.error', {
-          section_id: item.id,
-          title: item.title || '未命名章节',
-          table_ids: batch.map((table) => table.id),
-          error: error.message || '模型返回无效',
-          stack: error.stack || '',
-        });
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      }
-    }
-
-    const remainingTables = extractContentTableBlocks(currentContent).length;
-    if (remainingTables) {
-      writeDeveloperLog('table_cleanup.section.remaining', {
-        section_id: item.id,
-        title: item.title || '未命名章节',
-        remaining_tables: remainingTables,
-      });
-    }
-    return { rewrittenCount, skippedCount: Math.max(0, originalTables.length - rewrittenCount) };
-  }
-
-  async function removeContentTables(options = {}) {
-    if (tableRequirement !== 'none') {
-      return { ran: false, rewrittenCount: 0, skippedCount: 0 };
-    }
-
-    contentStats.phase = 'table-cleaning';
-    contentStats.table_cleanup_total = 0;
-    contentStats.table_cleanup_completed = 0;
-    contentStats.table_cleanup_rewritten = 0;
-    contentStats.table_cleanup_skipped = 0;
-    const runtime = syncRuntime({ phase: 'table-cleaning' });
-    checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
-      contentGenerationRuntime: runtime,
-    }, { contentRuntime: runtime });
-
-    const targets = buildTableCleanupTargets(options.targetItemId || targetItemId);
-    const tableTotal = targets.reduce((sum, target) => sum + target.tables.length, 0);
-    contentStats.table_cleanup_total = tableTotal;
-
-    if (!tableTotal) {
-      logs = [...logs, '正文去表格检查完成：未发现需要转换的表格。'];
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      return { ran: true, rewrittenCount: 0, skippedCount: 0 };
-    }
-
-    logs = [...logs, `开始正文去表格：发现 ${targets.length} 个小节、${tableTotal} 个表格，将按小节并发转换为普通文字描述。`];
-    writeDeveloperLog('table_cleanup.start', {
-      target_item_id: options.targetItemId || targetItemId || '',
-      section_count: targets.length,
-      table_count: tableTotal,
-      sections: targets.map(({ item, tables }) => ({ id: item.id, title: item.title || '未命名章节', table_count: tables.length })),
-    });
-    publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-
-    let rewrittenCount = 0;
-    let skippedCount = 0;
-    pauseIfRequested('正文生成已在去表格阶段暂停，可点击继续。');
-    const settled = await Promise.allSettled(targets.map(async (target) => {
-      const result = await cleanupTablesForSection(target);
-      rewrittenCount += result.rewrittenCount;
-      skippedCount += result.skippedCount;
-      contentStats.table_cleanup_skipped = skippedCount;
-      publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-    }));
-    const rejected = settled.find((result) => result.status === 'rejected');
-    if (rejected) throw rejected.reason;
-
-    pauseIfRequested('正文生成已在去表格阶段暂停，可点击继续。');
-    logs = [...logs, `正文去表格完成：成功转换 ${rewrittenCount} 个表格，跳过 ${skippedCount} 个。`];
-    writeDeveloperLog('table_cleanup.done', {
-      table_count: tableTotal,
-      rewritten_count: rewrittenCount,
-      skipped_count: skippedCount,
-    });
-    publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-    return { ran: true, rewrittenCount, skippedCount };
-  }
-
   try {
-    if (continuingConsistency) {
+    if (continuingConsistency || continuingTableCleanup) {
       await runContentGeneration([]);
       return;
     }
@@ -2994,23 +2589,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       }, { contentRuntime });
     }
 
-    if (!targetItemId) {
-      if (retryContentCorrection) {
-        logs = [...logs, '本次为内容矫正重试，跳过正文生成，直接进入内容矫正阶段。'];
-        publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-      }
-      if (!completedStages.has('table-cleaning')) {
-        const result = await removeContentTables();
-        markStageCompleted('table-cleaning', { pauseForDeveloper: Boolean(result?.ran) });
-      }
-      pauseIfRequested('正文生成已在去表格阶段暂停，可点击继续。');
-    } else {
-      if (!completedStages.has('table-cleaning')) {
-        const result = await removeContentTables({ targetItemId });
-        markStageCompleted('table-cleaning', { pauseForDeveloper: Boolean(result?.ran) });
-      }
-      pauseIfRequested('正文生成已在去表格阶段暂停，可点击继续。');
-    }
     pauseIfRequested('正文生成已在完成前暂停，可点击继续。');
 
     const statusLeaves = targetItemId ? leaves.filter(({ item }) => item.id === targetItemId) : leaves;

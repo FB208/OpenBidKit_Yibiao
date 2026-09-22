@@ -149,8 +149,6 @@ export interface BackgroundTaskState {
       consistency_remaining_issues?: string[];
       table_cleanup_total?: number;
       table_cleanup_completed?: number;
-      table_cleanup_rewritten?: number;
-      table_cleanup_skipped?: number;
       awaiting_content_decision?: boolean;
       ignored_section_count?: number;
       developer_stage_gate?: ContentGenerationPhase;

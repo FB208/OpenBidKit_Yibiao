@@ -72,8 +72,8 @@ function createContentImageProtection({ workspaceDir, files, active = false, all
   };
 }
 
-// 扩缩写与一致性修复共用并发执行、原生 edit、图片保护和错误回传。
-async function editContentSections({ jobs, targets, workspaceDir, agentService, signal, toolSignal, activity, validateHtml, onActivity, title, instructions }) {
+// 扩缩写、一致性修复与去表格共用并发执行、原生 edit、图片保护和错误回传。
+async function editContentSections({ jobs, targets, workspaceDir, agentService, signal, toolSignal, activity, validateHtml, onActivity, title, instructions, preserveDataTables = true, onResult = () => {} }) {
   if (activity.pending) throw new Error('请等待上一批生成或编辑任务全部结束');
   const ids = jobs.map(section => section.section_id);
   if (new Set(ids).size !== ids.length || ids.some(id => !targets.has(id))) throw new Error('只能编辑本次目标小节，一批不能重复提交同一小节');
@@ -92,11 +92,14 @@ async function editContentSections({ jobs, targets, workspaceDir, agentService, 
           before_tool_call: childProtection.beforeToolCall, before_file_write: childProtection.beforeWrite,
           output_file: section.file, summary_enabled: false, signal: combinedSignal,
           max_retries: 1, timeout_ms: 30 * 60 * 1000,
-          prompt: `你负责编辑小节 ${section.number} ${section.title}，文件为 ${section.file}。先完整读取该文件及受限HTML生成规范.md，再按以下要求${title}：\n${job.instructions}\n只使用原生 edit 修改这一个小节文件；不要改其他小节、输入资料或结果清单。已有图片块（含图注与提示词）、图片引用和顺序、图片表格布局均受写入前保护，不得删除、替换或修改；可以调整图文表格中的普通说明文字。图片保护拒绝编辑时文件没有写入，应重读后仅修改文字。保留受限 HTML 结构、原有图片及引用、原表格、实质信息、事实参数和承诺。${instructions} 事实冲突以全局事实设定.md为准，按需读取。无法完成时调用 report-failure。编辑未命中时读取最新原文再修正；不要输出补丁让主 Agent 执行。完成本次要求后在最后一次成功 edit 上标记 task_complete=true，不承担全文达标或修改其他小节的任务。`,
+          prompt: `你负责编辑小节 ${section.number} ${section.title}，文件为 ${section.file}。先完整读取该文件及受限HTML生成规范.md，再按以下要求${title}：\n${job.instructions}\n只使用原生 edit 修改这一个小节文件；不要改其他小节、输入资料或结果清单。已有图片块（含图注与提示词）、图片引用和顺序、图片表格布局均受写入前保护，不得删除、替换或修改；可以调整图文表格中的普通说明文字。图片保护拒绝编辑时文件没有写入，应重读后仅修改文字。保留受限 HTML 结构、原有图片及引用、${preserveDataTables ? '原表格、' : '表格中的全部数据和含义、'}实质信息、事实参数和承诺。${instructions} 事实冲突以全局事实设定.md为准，按需读取。无法完成时调用 report-failure。编辑未命中时读取最新原文再修正；不要输出补丁让主 Agent 执行。完成本次要求后在最后一次成功 edit 上标记 task_complete=true${preserveDataTables ? '' : '；重试时若已无数据表格，核实信息完整后可以在 read 上标记完成'}，不承担全文达标或修改其他小节的任务。`,
           validateOutput: output => validateHtml(workspaceDir, output.output_content),
           onActivity,
         });
-        return { section_id: section.id, status: 'success' };
+        combinedSignal.throwIfAborted();
+        const result = { section_id: section.id, status: 'success' };
+        onResult(result);
+        return result;
       } catch (error) {
         return { section_id: section.id, status: 'error', error: error.message };
       }
