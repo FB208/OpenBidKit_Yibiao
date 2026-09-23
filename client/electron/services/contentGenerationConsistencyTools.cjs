@@ -8,10 +8,10 @@ const CONSISTENCY_TOOLS = ['read', 'edit', 'write', 'find', 'ls', 'json-validati
 function buildConsistencyPrompt(state, hasKnowledgeBase, hasOriginalPlan) {
   if (state.status === 'completed') return '一致性审计已经结束。保留现有正文及结果清单，读取正文生成结果.json并标记 task_complete=true；不要重新生成、调整字数或开始新一轮审计。';
   return `正文与图片生成、总字数调整已完成，现在执行第 ${state.round}/3 轮一致性审计及修复。
-主 Agent 负责审计判断。完整阅读正文编排决策.json中本次 targets 对应的全部小节 HTML，检查正文与项目概述、全局事实设定${hasOriginalPlan ? '、已还原材料' : ''}是否冲突，同时检查小节内部及目标小节之间的事实、参数、时间、职责、范围和承诺是否存在矛盾。审计结论仅覆盖本次目标，不将局部检查表述为全文审计通过。${hasKnowledgeBase ? '知识库按需检索核实来源。' : ''}
-完整阅读全局事实设定，冲突以全局事实设定为准，并阅读编排决策中的 global_facts_requirements（当前事实模式的中文要求）。审计阶段只修复矛盾，依据全局事实和已有材料确定统一值。生成阶段允许补充设定，不代表审计阶段可以通过新增无依据的值消除冲突；缺少确定依据的问题应保留在未解决问题清单中，不将【待填写】替换为猜测值。判断矛盾前，核对相关表述的对象、适用条件和时间范围。因对象、条件或阶段不同而产生的合理差异不属于矛盾；仅修复确认存在的冲突，不进行与审计无关的润色。上一轮尚未解决的问题：${JSON.stringify(state.remaining_issues || [])}。
-调用 repair-sections 前，主 Agent 应确定冲突依据、受影响小节和统一修改结论。各子任务的指令须包含相关证据、需要修改的位置及统一结论，子任务按该结论修复，不独立选择另一套事实口径。小范围修改也可直接用原生 edit。子任务失败必须重新安排修复，不能当作完成。等待全部子任务结束后，重读修改位置与关联小节，确认修复结果及已知矛盾是否消除。
-已插入的图片块、图注、提示词、引用、顺序和图片表格布局受写入前保护；普通文字可改，原表格和实质信息应保留，仅修正有依据的冲突。不要生成或替换图片，不使用命令或脚本绕过 edit。
+主 Agent 负责审计判断。完整阅读正文编排决策.json中本次 targets 对应的全部小节 HTML，检查正文与项目概述、全局事实设定${hasOriginalPlan ? '、已还原材料' : ''}是否冲突，同时检查小节内部及目标小节之间的事实、参数、时间、职责、范围和承诺是否存在矛盾。检查并修复没有实际依据的引用。禁止生成没有实际依据的引用。审计结论仅覆盖本次目标，不将局部检查表述为全文审计通过。${hasKnowledgeBase ? '知识库按需检索核实来源。' : ''}
+完整阅读全局事实设定，冲突以全局事实设定为准，并阅读编排决策中的 global_facts_requirements（当前事实模式的中文要求）。审计阶段只修复本次审计发现的问题，依据全局事实和已有材料确定统一值。生成阶段允许补充设定，不代表审计阶段可以通过新增无依据的值消除冲突；缺少确定依据的问题应保留在未解决问题清单中，不将【待填写】替换为猜测值。判断矛盾前，核对相关表述的对象、适用条件和时间范围。因对象、条件或阶段不同而产生的合理差异不属于矛盾；仅修复本次审计确认的问题，不进行与审计无关的润色。上一轮尚未解决的问题：${JSON.stringify(state.remaining_issues || [])}。
+调用 repair-sections 前，主 Agent 应明确问题及其依据、受影响小节和统一修改结论。各子任务的指令须包含相关证据、需要修改的位置及统一结论，子任务按该结论修复，不独立选择另一套事实口径。小范围修改也可直接用原生 edit。子任务失败必须重新安排修复，不能当作完成。等待全部子任务结束后，重读修改位置与关联小节，确认修复结果及已知问题是否消除。
+已插入的图片块、图注、提示词、引用、顺序和图片表格布局受写入前保护；普通文字可改，原表格和实质信息应保留，仅修复本次审计确认的问题。不要生成或替换图片，不使用命令或脚本绕过 edit。
 本轮无问题可立即结束；否则完成本轮修复及核实后，调用 complete-consistency-round，提交本轮结论和仍未解决的问题。最多三轮，第三轮后保留未解决问题说明，不再开展第四轮。完成标记放在该工具调用上；程序会决定结束或继续下一轮。若本轮结论已经提交，不重复修复，读取结果清单并标记完成即可。
 审计及修复之后不再检查总字数范围、不调用扩缩写，不为满足字数删改内容。正文直接留在原小节 HTML 文件中，不输出合并 Markdown 或补丁，不修改输入资料、其他小节或业务数据库。`;
 }
@@ -39,7 +39,7 @@ function createContentGenerationConsistencyTools({ agentService, signal, activit
       if (new Set(ids).size !== ids.length || ids.some(id => !targets.has(id))) throw new Error('只能修复本次目标小节，一批不能重复提交同一小节');
       consistency.save({ ...state, failed_sections: [...failed] });
       const results = await editContentSections({ jobs: params.sections, targets, workspaceDir, agentService, signal, toolSignal, activity, validateHtml, onActivity,
-        title: '一致性修复', instructions: '只修复主 Agent 指定的矛盾，遵循其统一事实口径与证据，不作无关改写，不检查或调整总字数。',
+        title: '一致性修复', instructions: '只修复主 Agent 指定的问题，遵循其修改结论、统一事实口径与证据，不作无关改写，不检查或调整总字数。',
       });
       for (const item of results) if (item.status === 'success') failed.delete(item.section_id);
       consistency.save({ ...state, failed_sections: [...failed] });
@@ -47,7 +47,7 @@ function createContentGenerationConsistencyTools({ agentService, signal, activit
     },
   }, {
     name: 'complete-consistency-round', label: '提交本轮一致性审计结论', executionMode: 'sequential',
-    description: '全部修复完成并核实后提交本轮结论。remaining_issues 为空表示本次目标内无已知未解决矛盾；有问题则列出小节、证据及原因，最多三轮。',
+    description: '全部修复完成并核实后提交本轮结论。remaining_issues 为空表示本次目标内无已知未解决问题；有问题则列出小节、证据及原因，最多三轮。',
     parameters: Type.Object({ summary: Type.String(), remaining_issues: Type.Array(Type.String()) }),
     async execute(_callId, params) {
       const state = requireRound();
