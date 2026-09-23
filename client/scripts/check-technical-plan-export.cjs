@@ -142,6 +142,37 @@ function checkHeadings(document, included, baseline) {
   }
 }
 
+/** 独立有序列表使用各自的计数器，同一列表连续，显式起始值保留。 */
+async function checkOrderedListRestart(helper, directory) {
+  // 实际正文先出现无序列表时，转换库默认会复用后续有序列表实例；纯 ol 样例不能覆盖该问题。
+  const html = '<ul><li>前置无序条目</li></ul><ol><li>甲组首项</li><li>甲组次项</li></ol><p>两个独立列表之间的正文</p><ul><li>中间无序条目</li></ul>'
+    + '<ol><li>乙组首项</li><li>乙组次项</li></ol>'
+    + '<ol start="7"><li>指定首项</li><li>指定次项</li></ol>';
+  for (const wholeDocument of [false, true]) {
+    for (const framed of [false, true]) {
+      const config = cloneDefaultExportFormat();
+      config.heading_border.enabled = framed;
+      const input = wholeDocument ? `<section data-yb-export-template="true" data-yb-export-page-template="true">${html}</section>` : html;
+      const output = await helper.createRestrictedHtmlDocx(input, config, { assetRoot: directory, copyAssets: true, wholeDocument });
+      const { zip, paragraph } = readWord(Buffer.from(output.bytes));
+      const numbering = cheerio.load(zip.readAsText('word/numbering.xml'), { xmlMode: true });
+      const id = label => paragraph(label).find('w\\:numId').attr('w:val');
+      const starts = ['甲组首项', '乙组首项', '指定首项'];
+      assert.ok(starts.every(label => id(label)), '有序列表必须保留 Word 原生编号');
+      assert.equal(new Set(starts.map(id)).size, 3, '独立 ol 不能共用同一个计数器');
+      for (const group of ['甲组', '乙组', '指定']) assert.equal(id(`${group}首项`), id(`${group}次项`), '同一列表内必须递增');
+      const start = label => {
+        const instance = numbering(`w\\:num[w\\:numId="${id(label)}"]`);
+        const override = instance.find('w\\:lvlOverride[w\\:ilvl="0"] w\\:startOverride').attr('w:val');
+        const abstract = instance.find('w\\:abstractNumId').attr('w:val');
+        return Number(override ?? numbering(`w\\:abstractNum[w\\:abstractNumId="${abstract}"] w\\:lvl[w\\:ilvl="0"] w\\:start`).attr('w:val'));
+      };
+      assert.deepEqual(starts.map(start), [1, 1, 7]);
+    }
+  }
+  console.log('有序列表：整本/小节、页框开关、独立重启、组内递增及显式起始值通过。');
+}
+
 /** 检查混合范围、排序编号、图片表格、错误定位，以及源文件不受导出影响。 */
 async function main() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), '整本Word导出检查-'));
@@ -204,6 +235,7 @@ async function main() {
   const progress = [];
   const build = () => exporter.build(exporter.prepare(), { onProgress: event => progress.push(event.progress), stats: {} });
   try {
+    await checkOrderedListRestart(helper, directory);
     fs.mkdirSync(path.join(workspaceDir, '正文'), { recursive: true });
     fs.mkdirSync(path.join(workspaceDir, '原图'), { recursive: true });
     fs.writeFileSync(path.join(workspaceDir, '原图/现场 图片.png'), png);

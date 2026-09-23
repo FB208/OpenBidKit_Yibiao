@@ -136,7 +136,8 @@ static partial class RestrictedHtmlWordInserter
         bool cacheAssets = false)
     {
         var prepared = PrepareHtml(workspace, imageMaxWidthPercent, htmlDocument, cacheAssets);
-        var converter = new HtmlConverter(mainPart);
+        // 每个 ol 独立计数，不能沿用前一个列表；显式 start 仍由转换器处理。
+        var converter = new HtmlConverter(mainPart) { ContinueNumbering = false };
         var blocks = converter.Parse(prepared.Html);
         var section = content.GetFirstChild<Wp.SectionProperties>();
         content.RemoveAllChildren();
